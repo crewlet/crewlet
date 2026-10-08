@@ -74,6 +74,7 @@ import { onTokenRequested } from "~/protocol/index.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
 import type { FleetAnswer } from "~/protocol/index.ts";
 import { useKeymap } from "./keymap.ts";
+import { runningTarget } from "~/lib/turns.ts";
 import { focusSearchTarget } from "./searchTarget.ts";
 import { KeyLegend } from "./KeyLegend.tsx";
 import { FillRequest } from "./fill.tsx";
@@ -231,8 +232,8 @@ export function usePublishFleet(answer: FleetAnswer | null): void {
  *
  * ONE PAGE ASKS FOR IT, the way the approved Main artboard draws it: the
  * company's pulse belongs at the head of the page a reader opens to see how
- * the company is. Everywhere else the sidebar's Agents badge already carries
- * the count, and the chip drawn in every bar was a second copy of it — on a
+ * the company is. Everywhere else the sidebar's Live row already carries the
+ * count, and the chip drawn in every bar was a second copy of it — on a
  * task page or a profile it sat between the trail and the page's own actions,
  * and at a phone's width it pushed them past the edge. Cleared when the screen
  * goes, for the reason [usePageLabels] gives: the frame outlives it.
@@ -323,7 +324,7 @@ function Frame({ children }: { children: ReactNode }) {
   const route = useRoute();
   const peek = usePeek();
   const nav = useNavigator();
-  const { socket } = useClient();
+  const { socket, store } = useClient();
   const { connected, authRejected } = useConnection();
   const viewer = useViewer();
   const engine = useEngineHealth();
@@ -385,6 +386,14 @@ function Frame({ children }: { children: ReactNode }) {
     },
     keys: () => setLegendOpen(true),
     ...Object.fromEntries(WORKSPACES.map((ws) => [`go.${ws.key}`, () => nav.to(ws.path)])),
+    // READ AT THE PRESS, off the store, rather than through `useAgents`: the
+    // agents push lands twice per tool-loop round, and a subscription here
+    // would re-render the whole frame on every one of them for a key pressed
+    // once in a while.
+    running: () => {
+      const target = runningTarget(store.state.agents);
+      nav.to(target.path, target.query);
+    },
   });
 
   // THE PALETTE CLOSES whenever the route moves: picking a row closes it on

@@ -235,7 +235,7 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 	//
 	// Both halves were wrong in the same way, at opposite ends: armed
 	// before the lookup while saying "created", and left armed across the
-	// read-back and the alignment after it. Either way the line names a
+	// read-back after it. Either way the line names a
 	// step this member is not on, which is the one thing it exists to get
 	// right.
 	//
@@ -614,36 +614,12 @@ func (c *DomainConsumer) resumeAt(ctx context.Context, cons jetstream.Consumer,
 		}
 	}
 	if drift == driftNone {
-		// THE IN-FLIGHT CEILING IS BROUGHT UP TO DATE on a consumer that
-		// is kept, because it is the count bound on every pull and a
-		// consumer created by an earlier build carries the broker's own
-		// default. A rebuilt one needs nothing: it was made from this
-		// build's configuration.
-		//
-		// ITS OWN BUDGET, derived here from the caller's context rather
-		// than taken from it or from what the read above left, because
-		// none of those is right for it. The per-create context may be the
-		// deadline that just expired — that is what puts the read-back
-		// path here at all, and handed it this call fails instantly on a
-		// consumer that was just found. The boot's has no deadline of its
-		// own, so it would reach nats.go under the client's five-second
-		// default, which is what every other replicated call on this path
-		// was fixed for: an UpdateConsumer is a write against the same
-		// metadata group as the create. And what a read leaves is sized
-		// for a read, not for a write.
-		//
-		// So the caller passes the context that bounds the BOOT and this
-		// owns the term, which is [jsprovision.Settle]'s arrangement for
-		// the same reason. The rebuild below takes the boot's context too,
-		// because [DomainConsumer.Reset] owns its terms the same way.
-		alignCtx, cancel := context.WithTimeout(ctx, c.q.provisionBudget())
-		defer cancel()
-		aligned, err := c.q.alignDomainConsumer(alignCtx, c.stream, cons, info.Config)
-		if err != nil {
-			return err
-		}
+		// KEPT AS IT IS: every consumer of this name was made from
+		// [domainConsumerConfig], so its in-flight ceiling and ack wait are
+		// already this build's. The rebuild below takes the boot's context,
+		// because [DomainConsumer.Reset] owns its terms.
 		c.mu.Lock()
-		c.cons = aligned
+		c.cons = cons
 		c.mu.Unlock()
 		return nil
 	}
@@ -725,12 +701,8 @@ func (c *DomainConsumer) afterFailedRebuild(ctx context.Context, drift consumerD
 		// WHICHEVER CONSUMER THE BROKER HOLDS UNDER THIS NAME, and the
 		// name carries the node id, so it is one of two: the old one, when
 		// the delete was refused, or the rebuilt one, when the create
-		// placed it before reporting failure. Neither gives a record away.
-		//
-		// NOT ALIGNED: its ceiling is raised by an UpdateConsumer, a write
-		// to the metadata group that has just refused this node one, and a
-		// ceiling left at an earlier build's default makes a pull smaller
-		// rather than wrong. The next open or reset makes it this build's.
+		// placed it before reporting failure. Neither gives a record away,
+		// and both were made from [domainConsumerConfig].
 		c.mu.Lock()
 		c.cons = held
 		c.mu.Unlock()
@@ -960,30 +932,6 @@ func (q *Queue) askRead(ctx context.Context, read func(context.Context) error) e
 	readCtx, cancel := context.WithTimeout(ctx, q.lookupBudget())
 	defer cancel()
 	return jsprovision.Ask(readCtx, q.Clustered().AskTerm(), read, nil)
-}
-
-// alignDomainConsumer updates a kept consumer's updatable bounds to this
-// build's, leaving its position alone.
-//
-// It is handed the configuration the consumer REPORTED rather than building
-// one from this build's defaults, because the update carries every field: a
-// config built fresh would reset the start policy, which the broker refuses to
-// move and which is the checkpoint's to decide.
-func (q *Queue) alignDomainConsumer(ctx context.Context, stream string,
-	cons jetstream.Consumer, config jetstream.ConsumerConfig) (jetstream.Consumer, error) {
-
-	if config.MaxAckPending == domainConsumerMaxAckPending &&
-		config.AckWait == domainConsumerAckWait {
-		return cons, nil
-	}
-	config.MaxAckPending = domainConsumerMaxAckPending
-	config.AckWait = domainConsumerAckWait
-	updated, err := q.js.UpdateConsumer(ctx, stream, config)
-	if err != nil {
-		return nil, fmt.Errorf("raise the consumer's in-flight ceiling to %d: %w",
-			domainConsumerMaxAckPending, err)
-	}
-	return updated, nil
 }
 
 // domainConsumerName is what this node's reader is called on the broker.

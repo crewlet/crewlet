@@ -308,13 +308,13 @@ func TestTheWakeEnvelopeCarriesBothKeys(t *testing.T) {
 	// THE SECOND COPY IS WHAT THE LEDGER KEYS ON. The regression above
 	// shipped once with one copy of one key; there are two keys and two
 	// copies now, and a stamp that wrote only the partition would leave
-	// every ledger entry filed on the fallback of the partition field.
+	// every ledger entry filed on its own event's fallback.
 	if got := notify.ConversationIdentityOf(woken[0]); got != "tracker:u-1" {
 		t.Errorf("the ledger would key this turn on %q", got)
 	}
 	if _, present := woken[0].Payload[notify.ConversationField]; !present {
-		t.Error("the identity reached the envelope only through the partition fallback, " +
-			"so a producer that stopped stamping it would look correct")
+		t.Error("the identity is not on the envelope: the wake names no " +
+			"conversation for the ledger to file it under")
 	}
 }
 

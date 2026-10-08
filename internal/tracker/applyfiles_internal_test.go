@@ -12,10 +12,9 @@ import (
 // the first would leave the arbitrated path held by nothing, the second a row
 // the backup refuses to read, stopping every backup for good.
 //
-// AND A RECORD NAMING NO OBJECT APPLIES: a removal names none, and nor does a
-// put an earlier build wrote naming chunks — which every node must apply
-// alike, as a live file whose content this build cannot read, or the log
-// stops at it.
+// AND A LIVE FILE NAMES ITS OBJECT: only a removal names none. Every put
+// this build writes names one, so a live row naming nothing would be a file
+// listed with content nobody can read.
 func TestTheApplierRefusesAFileThatIsNotItsSubject(t *testing.T) {
 	t.Parallel()
 	h := objstore.HashOf([]byte("content"))
@@ -24,11 +23,9 @@ func TestTheApplierRefusesAFileThatIsNotItsSubject(t *testing.T) {
 	id := FileSubject("ENG", "a/b.md").ID
 	removed := time.Date(2026, 10, 6, 1, 0, 0, 0, time.UTC)
 	for name, f := range map[string]File{
-		"a put":              good,
-		"a removal":          {Project: "ENG", Path: "a/b.md", RemovedAt: &removed},
-		"a chunk-era put":    {Project: "ENG", Path: "a/b.md", Hash: h, Size: 7},
-		"an empty file":      {Project: "ENG", Path: "a/b.md", Hash: objstore.HashOf(nil), Object: key},
-		"a chunk-era, empty": {Project: "ENG", Path: "a/b.md"},
+		"a put":         good,
+		"a removal":     {Project: "ENG", Path: "a/b.md", RemovedAt: &removed},
+		"an empty file": {Project: "ENG", Path: "a/b.md", Hash: objstore.HashOf(nil), Object: key},
 	} {
 		if err := fileMatches(applyContext{}, id, f); err != nil {
 			t.Errorf("%s was refused: %v", name, err)
@@ -44,6 +41,8 @@ func TestTheApplierRefusesAFileThatIsNotItsSubject(t *testing.T) {
 			Size: 7, Object: key},
 		"an object of negative size": {Project: "ENG", Path: "a/b.md", Hash: h,
 			Size: -1, Object: key},
+		"a live file naming no object":   {Project: "ENG", Path: "a/b.md", Hash: h, Size: 7},
+		"a live, empty file naming none": {Project: "ENG", Path: "a/b.md"},
 	} {
 		if err := fileMatches(applyContext{}, id, f); err == nil {
 			t.Errorf("%s was applied", name)

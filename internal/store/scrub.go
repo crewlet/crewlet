@@ -18,12 +18,11 @@ var ErrScrubTable = errors.New("store: unscrubbable table")
 //
 // # What it is for
 //
-// A node that donates a snapshot ships a copy of its own database, and some
-// of what that database holds is THIS NODE'S rather than the fleet's: its
-// audit event log, its scheduled-run history, its own retry ledger, its record
-// of what it last adopted. None of that is state a recipient should inherit,
-// and some of it — the event log, with every phase's prompt in its payload —
-// is the largest thing in the file.
+// A node that donates a snapshot ships a copy of its replicated estate, and a
+// few tables in it are THIS NODE'S rather than the fleet's: each domain's
+// deferred records and their scope index, which hold the records this node's
+// build could not decode. A recipient on another build decodes a different
+// set, so it must not inherit them.
 //
 // THE DONOR SCRUBS, NOT THE RECIPIENT, and the difference is the whole
 // argument for the transfer being safe at all: an offered artefact carries no

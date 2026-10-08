@@ -143,10 +143,7 @@ func SandboxRecords(runs []sandbox.PendingRun) []livestate.SandboxRecord {
 		if !status.Valid() {
 			continue
 		}
-		started := run.CreatedAt
-		if launch := run.LaunchFacts(); !launch.StartedAt.IsZero() {
-			started = launch.StartedAt
-		}
+		started := run.Launch.StartedAt
 		entry := livestate.SandboxEntry{
 			TurnID: run.TurnID, Role: run.Role, AgentHandle: run.AgentHandle,
 			AgentID: run.AgentID, CodingAgent: run.CodingAgent, SandboxID: run.SandboxID,

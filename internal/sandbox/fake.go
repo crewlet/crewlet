@@ -375,12 +375,6 @@ type FakeRunner struct {
 	// before it answers — a box that takes a while to read.
 	LiveGate chan struct{}
 
-	// Layout is the output layout every Start declares on its handle
-	// ([RunHandle.Layout]); handed is every handle a Poll, a Collect or a
-	// Follow was given, in order — what a test asserts the row carried.
-	Layout int
-	handed []RunHandle
-
 	// The job's live account: what it has said, under which origin and
 	// from which source. See [FakeRunner.Say].
 	account string
@@ -418,20 +412,12 @@ func (r *FakeRunner) Start(ctx context.Context, box Sandbox, req RunRequest) (Ru
 	}
 	req.Env = maps.Clone(req.Env)
 	r.started = append(r.started, req)
-	return RunHandle{CommandID: fmt.Sprintf("cmd-%d", len(r.started)), PID: 4242, Layout: r.Layout}, nil
-}
-
-// Handed is every handle a Poll, a Collect or a Follow was given, in order.
-func (r *FakeRunner) Handed() []RunHandle {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return slices.Clone(r.handed)
+	return RunHandle{CommandID: fmt.Sprintf("cmd-%d", len(r.started)), PID: 4242}, nil
 }
 
 // Poll reports done only once [FakeRunner.Finish] has been called.
 func (r *FakeRunner) Poll(ctx context.Context, box Sandbox, handle RunHandle) (bool, error) {
 	r.mu.Lock()
-	r.handed = append(r.handed, handle)
 	poll := r.PollFunc
 	r.mu.Unlock()
 	if poll != nil {
@@ -449,7 +435,6 @@ func (r *FakeRunner) Poll(ctx context.Context, box Sandbox, handle RunHandle) (b
 func (r *FakeRunner) Collect(ctx context.Context, box Sandbox, handle RunHandle) (Result, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.handed = append(r.handed, handle)
 	if r.CollectErr != nil {
 		return Result{}, r.CollectErr
 	}
@@ -472,7 +457,6 @@ func (r *FakeRunner) Collect(ctx context.Context, box Sandbox, handle RunHandle)
 func (r *FakeRunner) Follow(handle RunHandle) LiveReading {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.handed = append(r.handed, handle)
 	return &fakeReading{runner: r}
 }
 

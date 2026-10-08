@@ -147,12 +147,6 @@ type Options struct {
 	// project, which is the safe direction.
 	LeadsProject builtin.LeadsProject
 
-	// Fleet reads what each node's build can carry out, off the presence
-	// heartbeat, so a verb carried out by the node holding a seat is
-	// refused `peer_upgrading` while that node cannot. Nil refuses those
-	// verbs as unavailable.
-	Fleet builtin.Fleet
-
 	// Runs is the parked coding runs a person may answer by turn
 	// (`answer_run`), and who is answering. A zero value serves no such tool.
 	Runs builtin.RunDeps
@@ -258,7 +252,7 @@ func New(opts Options) (*Server, error) {
 	callables := builtin.OperatorTools(builtin.OperatorDeps{
 		Work: opts.Work, Pages: opts.Pages, Knowledge: opts.Knowledge,
 		Org: opts.Org, Leads: opts.Leads, LeadsProject: opts.LeadsProject,
-		Fleet: opts.Fleet, Runs: opts.Runs, Pauses: opts.Pauses, Steer: opts.Steer,
+		Runs: opts.Runs, Pauses: opts.Pauses, Steer: opts.Steer,
 		Answer: opts.Answer,
 	})
 	if len(callables) == 0 {

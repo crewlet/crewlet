@@ -260,7 +260,7 @@ func TestAReadmissionIsRefusedBelowTheFloor(t *testing.T) {
 // A writer about to publish a kind an older build cannot even defer waits for
 // every node that applies the log — so the set it asks is exactly the one the
 // trim counts. A joiner holding a lease and no row yet is about to replay and
-// reads as zero, a node whose row predates the advertisement reads as zero,
+// reads as zero, a node advertising a lower version reads as that version,
 // and an operator's eviction, once its fence window has passed, releases the
 // writer exactly as it releases the trim.
 func TestTheReadersAreTheTrimsCountedSet(t *testing.T) {
@@ -268,7 +268,7 @@ func TestTheReadersAreTheTrimsCountedSet(t *testing.T) {
 	now := time.Now()
 	reported := []statelog.NodePosition{
 		{NodeID: "new", Generation: 1, Seq: 9_000, RecordVersion: 2},
-		{NodeID: "old", Generation: 1, Seq: 8_000},
+		{NodeID: "lower", Generation: 1, Seq: 8_000, RecordVersion: 1},
 		{NodeID: "gone", Generation: 1, Seq: 10, RecordVersion: 1},
 	}
 	readers := statelog.Readers(statelog.CountedSet(now, reported,
@@ -276,7 +276,7 @@ func TestTheReadersAreTheTrimsCountedSet(t *testing.T) {
 		[]statelog.Tombstone{{NodeID: "gone",
 			At: now.Add(-statelog.EvictionFenceWindow - time.Second)}}))
 
-	want := map[string]int{"new": 2, "old": 0, "joiner": 0}
+	want := map[string]int{"new": 2, "lower": 1, "joiner": 0}
 	if len(readers) != len(want) {
 		t.Fatalf("readers %v, want %v", readers, want)
 	}

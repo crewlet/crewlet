@@ -18,10 +18,14 @@ import (
 // THE DELTA IS THE APPLIER'S, computed inside the apply's own transaction from
 // the two states that frame holds: the object as this node stored it, and the
 // object the record says it should be. [Applier.writeHistory] states the same
-// thing from the other end, and it is why the notification's own `Fields` is a
-// compatibility rung rather than a second producer — a delta derived from a
-// wake is a delta only a LOUD commit has, and a quiet commit is one that
-// happened without an audience rather than one that did not happen.
+// thing from the other end, and it is why the notification's own `Fields` is
+// never a second producer — a delta derived from a wake is a delta only a LOUD
+// commit has, a quiet commit is one that happened without an audience rather
+// than one that did not happen, and a wake is built from the snapshot its
+// writer read outside the write's transaction, so it can name a move another
+// writer had already made. The wake's fields are consulted only where the apply
+// has no comparison at all, a record the version guard skipped
+// ([statedDeltas]).
 //
 // It follows that every history row says what changed, not only the rows for
 // the kinds somebody was told about. Until this file existed only a task's

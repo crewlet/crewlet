@@ -192,45 +192,6 @@ func TestAVectorsModelTravelsWithIt(t *testing.T) {
 	}
 }
 
-// A ROW FROM A BUILD THAT PREDATES THE COLUMN ARRIVES IN NO SPACE: its JSON
-// has no embedding_model key, so the column takes its default, NULL — which
-// no recall compares against — rather than the row being refused or guessed
-// into the space this node is configured for now.
-func TestAnOlderBuildsVectorArrivesNamingNoModel(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	source := openStore(t)
-	seedMemory(t, source)
-	target := openStore(t)
-	diary := tables[0]
-	rows, _, err := export(ctx, source.SQL(), diary, seat, 0)
-	if err != nil || len(rows) != 1 {
-		t.Fatalf("export = %d rows, %v", len(rows), err)
-	}
-	delete(rows[0].Values, "embedding_model")
-	body, err := encode(rows[0])
-	if err != nil {
-		t.Fatalf("encode: %v", err)
-	}
-	decoded, spec, known, err := decode(body)
-	if err != nil || !known {
-		t.Fatalf("decode: known=%v err=%v", known, err)
-	}
-	if err := target.Tx(ctx, func(tx *sql.Tx) error {
-		return upsert(ctx, tx, spec, decoded)
-	}); err != nil {
-		t.Fatalf("upsert an older build's row: %v", err)
-	}
-	var model sql.NullString
-	if err := target.SQL().QueryRowContext(ctx,
-		"SELECT embedding_model FROM agent_diary WHERE id = 'd1'").Scan(&model); err != nil {
-		t.Fatalf("read the carried row: %v", err)
-	}
-	if model.Valid {
-		t.Errorf("an untagged vector arrived naming model %q", model.String)
-	}
-}
-
 // Hydration is repeatable: a seat re-acquired, a redelivered message, a node
 // that restarts mid-replay must not leave the seat remembering everything
 // twice.
@@ -368,21 +329,6 @@ func TestEveryAgentKeyedTableTravels(t *testing.T) {
 			"and a peer's copy would claim this node had seen it too",
 		"scheduled_runs": "this node's dispatch history; the claim that stops a " +
 			"double fire is the fleet's, in coordination",
-		// THE EXEMPTION THAT WAS WRONG ONCE, and is right now for a
-		// different reason. It used to read "re-asserted by the next
-		// mention, so it self-heals faster than replication would carry
-		// it" — an argument about a seat MOVING node, where the question
-		// was a delivery landing on a different node each time. Node
-		// migration 0028 answered that by moving the state to
-		// coordination. What is left in this table is not memory and not
-		// state: it is the handoff's SOURCE, drained at the next boot by
-		// internal/notify/followsync and empty for ever after. Carrying
-		// it on the changelog would replicate rows whose whole purpose
-		// is to stop existing.
-		"chat_thread_follows": "not a seat's memory and no longer this node's " +
-			"state — the follows are coordination's since node migration 0028, " +
-			"and this table survives only as that move's one-time handoff " +
-			"source, drained at boot by internal/notify/followsync",
 	}
 
 	rows, err := db.SQL().QueryContext(t.Context(),

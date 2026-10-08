@@ -38,9 +38,9 @@ func TestAnUnsetLimitComesFromTheModel(t *testing.T) {
 // The knowledge corpus embeds a source's first 8 KiB and digests what it sent
 // into a replicated vector record. A bound a byte under that would move the
 // opening of every long document, change every one of those digests and
-// re-embed the corpus — and during a rolling upgrade the duty moving between
-// builds would do it on every lease move. So the bound for the default
-// provider's models is pinned here, at the value that keeps it where it is.
+// re-embed the corpus — a provider bill for every document, for nothing. So the
+// bound for the default provider's models is pinned here, at the value that
+// keeps it where it is.
 func TestOpenAIsInputBoundKeepsTheCorpusOpeningWhereItIs(t *testing.T) {
 	t.Parallel()
 	for _, model := range []string{"text-embedding-3-large", "text-embedding-3-small"} {

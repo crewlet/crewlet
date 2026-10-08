@@ -618,10 +618,7 @@ func statusScope(op OpKind, container string) ScopeSet {
 //
 // A LATER ACTIVATION OVER UNCHANGED SETTINGS IS WRITTEN TOO — a re-stamp —
 // because a row left at the older stamp is open to any activation between the
-// two. It carries the stamp, so it goes out at record version 2 like every
-// container record ([versionedFields] says why a re-stamp is not exempt), and
-// during a rolling upgrade a node still on a build reading 1 holds it back,
-// with the page writes in that space, until it is upgraded.
+// two.
 //
 // A FRESH OPERATION PER CALL, on the reasoning [tracker.Writer.ApplyChart]
 // gives for its own: this is a reconcile decided from the row, so a second
@@ -680,8 +677,8 @@ func (s *Store) EnsureContainer(ctx context.Context, activatedAt time.Time,
 					// A LATER CONFIGURATION ALREADY WON. Two nodes
 					// applying two revisions is ordinary during a
 					// rollout, and the newer one must not be walked
-					// back by the older node's own apply arriving
-					// second.
+					// back by the apply of a node holding the older
+					// activation arriving second.
 					out = held
 					return statelog.Decision{}, nil
 				case held.ChartEpoch == epoch && held.Name == name &&
@@ -697,10 +694,8 @@ func (s *Store) EnsureContainer(ctx context.Context, activatedAt time.Time,
 			}
 			changed = true
 			// A LATER ACTIVATION OVER THE SAME SETTINGS IS STILL WRITTEN,
-			// stamp and all — a re-stamp — and it goes out at the version
-			// that carries the stamp like every other container record
-			// ([versionedFields]): a build that dropped the stamp would
-			// keep a row this guard cannot defend after its upgrade.
+			// stamp and all — a re-stamp — because a row at the older
+			// stamp is open to any activation between the two.
 			return s.decide(stamp, Actor{Handle: "system", Kind: AuthorOperator},
 				subject, OpPatch, ScopeSet{Subject: true}, opID,
 				ContainerPayload{

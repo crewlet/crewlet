@@ -18,19 +18,6 @@ import (
 // a coord.Lease.
 const claimingEpoch int64 = 0
 
-// layoutDutyLane is the storage layout of a build that keeps duty leases in the
-// duty bucket rather than in the seat lease bucket, and every record this build
-// writes carries it.
-//
-// A LAYOUT RATHER THAN A PROTOCOL BUMP. What moved is where a duty is written,
-// not what holding any lease means, and coord.ProtocolVersion's gate refuses
-// SEAT claims beside an older peer: bumping it would have stalled seat
-// placement for a whole rolling upgrade to fix a duty. The layout gates only
-// duty claims, and only while a record by an older build is live. A record
-// written before the field existed reads as zero, which is the fail-closed
-// reading. See the package doc's rolling-upgrade rule.
-const layoutDutyLane = 1
-
 // leaseValue is the JSON body of a key in the leases or the duties bucket, the
 // EPHEMERAL half of a resource's state. Its deadline, or on the seat lease
 // bucket the bucket's MaxAge, ends it, which is exactly what makes a dead
@@ -39,7 +26,8 @@ const layoutDutyLane = 1
 //
 // Schema evolution here is additive-only, for the reason coord.ProtocolVersion
 // states: a rolling upgrade has two builds reading each other's records, and a
-// field an older build requires is a crash rather than a missing feature.
+// field one build requires that the other does not write is a crash rather
+// than a missing feature.
 type leaseValue struct {
 	// Resource is redundant with the key, which is escaped and therefore
 	// not immediately readable. It is here for the operator running
@@ -85,20 +73,15 @@ type leaseValue struct {
 
 	// AcquiredAt is the store's timestamp of the write that WON this
 	// tenure — the claiming record's own revision — and is carried
-	// unchanged by every renewal; see coord.Lease.AcquiredAt. Absent on a
-	// record from a build that predates it, which decodes as the zero
-	// time and reads as unknown. omitzero keeps it that way on the wire
-	// rather than writing Go's zero instant, which an older reader would
-	// ignore and a newer one would have to special-case.
+	// unchanged by every renewal; see coord.Lease.AcquiredAt. A record
+	// still in the claiming state carries none (the commit stamps it), and
+	// is never handed out as a lease; omitzero keeps Go's zero instant off
+	// the wire for it.
 	AcquiredAt time.Time `json:"acquired_at,omitzero"`
 
 	Preferred string         `json:"preferred,omitempty"`
 	Protocol  int            `json:"protocol"`
 	Meta      map[string]any `json:"meta,omitempty"`
-
-	// Layout is the storage layout of the build that wrote the record; see
-	// layoutDutyLane. Zero on a record from a build that predates it.
-	Layout int `json:"layout,omitempty"`
 }
 
 func (v leaseValue) ttl() time.Duration { return time.Duration(v.TTLNanos) }
@@ -144,7 +127,7 @@ func (e entry) lease() *coord.Lease {
 		ExpiresAt:  e.created.Add(e.value.ttl()).UTC(),
 		AcquiredAt: e.value.AcquiredAt,
 		Preferred:  e.value.Preferred,
-		Protocol:   coord.StoredProtocol(e.value.Protocol),
+		Protocol:   e.value.Protocol,
 		Meta:       e.value.Meta,
 	}
 }

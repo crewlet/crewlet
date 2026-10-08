@@ -8,8 +8,8 @@ import (
 )
 
 // A stored revision is not a submitted document. It was valid under the build
-// that wrote it, and a later build, or an older peer still activating during a
-// rolling upgrade, can leave one in the store that this build refuses. Every
+// that wrote it, and a later build — a newer peer during a rolling upgrade —
+// can leave one in the store that this build refuses. Every
 // case here pins one half of the same rule: such a revision stays READABLE and
 // REPLACEABLE through this surface, and nothing that would RUN it accepts it.
 
@@ -138,8 +138,8 @@ func TestReloadAndRevertRefuseARevisionThisBuildCannotRun(t *testing.T) {
 
 // duplicateNamesDoc breaks both admission rules and no runnable one: two units
 // called "Platform" in different departments, each holding a seat called
-// "Engineer" on its own explicit handle. A build before those rules admitted
-// it, and a company running on it runs.
+// "Engineer" on its own explicit handle. A newer peer may admit it under
+// rules this build does not share, and a company running on it runs.
 const duplicateNamesDoc = companyDoc + `
 units:
   - name: Engineering
@@ -164,9 +164,10 @@ const correctedUnits = `{"units": [
 // A STORED REVISION WITH DUPLICATE NAMES IS SERVED, AND A NEW WRITE KEEPING
 // THEM IS REFUSED, WHILE ONE CORRECTING THEM IS ACCEPTED.
 //
-// The admission rules are the rules a company written before them breaks.
-// Such a company has to stay readable and repairable, and nothing may add a
-// fresh duplicate or carry an old one forward through a write.
+// The admission rules are the rules an applied revision may break: a newer
+// peer can admit one under rules this build does not share. Such a company
+// has to stay readable and repairable, and nothing may add a fresh duplicate
+// or carry one forward through a write to this build.
 func TestDuplicateNamesAreServedStoredAndRefusedOnAWrite(t *testing.T) {
 	t.Parallel()
 
@@ -237,7 +238,7 @@ func TestDuplicateNamesAreServedStoredAndRefusedOnAWrite(t *testing.T) {
 	})
 
 	// A reload and a revert are applies, held to the runnable rules only: a
-	// credential rotation on a company carrying an old duplicate must work.
+	// credential rotation on a company carrying a duplicate must work.
 	t.Run("a reload and a revert of it are accepted", func(t *testing.T) {
 		t.Parallel()
 		s := newSurface(t, nil)

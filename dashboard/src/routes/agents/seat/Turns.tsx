@@ -71,7 +71,7 @@ export const TURN_PAGE = 50;
 
 const pickTurns = (a: TurnsAnswer) => a.turns ?? [];
 const turnRowId = (t: TurnRow) => t.turn_id;
-/** The turn list's cursor is `next`, on the turn's START — see `usePaged`. */
+/** The turn list's cursor is `next`, an opaque token handed back as `before` — see `usePaged`. */
 const turnsBefore = (a: TurnsAnswer) => a.next ?? "";
 
 /** The window "Where its tokens go" sums: the week the Overview counts. */
@@ -94,10 +94,15 @@ export function Turns({
   // be on.
   const running = useMemo(() => (agent ? [agent] : []), [agent]);
   const { connected } = useConnection();
-  // The ROLE NAME, which is what a phase record carries. Empty for a seat
-  // that resolves to nothing, and the stream filter below reads it as "match
-  // no phase" rather than "match every phase that named no role".
-  const role = agent?.role ?? seat.name;
+  // THE SEAT'S OWN ID — the one every node derives for its handle, which a
+  // durable phase record carries as `agent_id` and the agents push names on
+  // this seat's row — and what a streamed phase is matched on, as Live's
+  // recent phases match it. It was the ROLE NAME, which two unit seats
+  // stamped from one template share and a rename changes, so a sibling's
+  // phases streamed into this seat's transcripts. Empty while the push has
+  // named no id, and the filter below reads that as "match no phase" rather
+  // than "match every phase that named no id".
+  const agentId = agent?.agent_id ?? "";
   const { socket } = useClient();
   // EVERY DAY THE STORE KEEPS: named, because the read's default is a week,
   // and a seat's record is the whole of what can still be read.
@@ -133,11 +138,11 @@ export function Turns({
     // The query is answered ONCE, at mount. Every phase that finishes after
     // it — every phase of the turn a reader opened this tab to watch —
     // reaches the tab only here.
-    const streamed = streamedPhases(phaseEvents, (r) => role !== "" && r.role === role);
+    const streamed = streamedPhases(phaseEvents, (r) => agentId !== "" && r.agentId === agentId);
     const live = agent?.live_call ? [fromLiveCall(agent.live_call, agent.role, agent.turn)] : [];
     // Streamed FIRST so the query's own copy of the same phase wins the key.
     return mergePhases([...streamed, ...stored], live);
-  }, [history.data, phaseEvents, agent, role]);
+  }, [history.data, phaseEvents, agent, agentId]);
   const turns = useMemo(() => groupTurns(phases), [phases]);
   // WHICH OF THESE ARE THE SAME WORK: a turn id names one run, so a trigger
   // that failed without acting and came back is several cards.
@@ -145,16 +150,41 @@ export function Turns({
   // THE ENGINE'S OWN ROW FOR EACH CARD, so a card and the list above it read
   // one turn's start and length off one record.
   const rows = useMemo(() => new Map(list.items.map((t) => [t.turn_id, t])), [list.items]);
-  const liveTurns = useMemo(() => turns.filter((g) => g.live), [turns]);
-  const doneTurns = useMemo(() => turns.filter((g) => !g.live), [turns]);
+  // A TURN IS RUNNING FOR AS LONG AS THE SEAT'S OWN TURN RECORD SAYS IT IS ON
+  // IT — the rule the turn's page reads (`routes/live/Turn.tsx`'s `running`)
+  // — and not only while one of its phases is in flight. Between a phase's
+  // completion and the next one's start the turn has no live phase: the
+  // record lands, then the push clears the call, and only then does the next
+  // phase begin. Split on the phases alone, the card left Running now for the
+  // settled list and came back at every boundary, remounting each time, and
+  // the transcript the reader was following shut under them. A group that is
+  // between phases is drawn as the running turn it is.
+  const onTurn = agent?.turn?.stage ? agent.turn.turn_id : "";
+  const liveTurns = useMemo(
+    () =>
+      turns
+        .filter((g) => g.live || g.turnId === onTurn)
+        .map((g) => (g.live ? g : { ...g, live: true })),
+    [turns, onTurn],
+  );
+  const doneTurns = useMemo(
+    () => turns.filter((g) => !g.live && g.turnId !== onTurn),
+    [turns, onTurn],
+  );
   const liveKeys = useMemo(() => liveTurns.map(turnKey), [liveTurns]);
-  // The turns this reader has watched RUN. A card is remounted when it
-  // crosses from the live region into the settled list, and its open state
-  // goes with it — so the transcript a reader had open collapsed the moment
-  // its last phase landed. Written during render, as `useSettled` does:
+  // The turns this reader has watched RUN, and the phases they watched live.
+  // A card is remounted when it crosses from the live region into the
+  // settled list — once now, as the turn ends — and its open state goes with
+  // it, every phase card's included; so the transcript a reader had open
+  // collapsed the moment its last phase landed. Both carry what was open
+  // across that crossing. Written during render, as `useSettled` does:
   // adding to a set is idempotent, so a discarded render leaves the same set.
   const watched = useRef<Set<string>>(new Set());
   for (const key of liveKeys) watched.current.add(key);
+  const watchedPhases = useRef<Set<string>>(new Set());
+  for (const g of liveTurns) {
+    for (const p of g.phases) if (p.live) watchedPhases.current.add(p.key);
+  }
   const settled = useSettled(doneTurns, turnKey, liveKeys);
 
   return (
@@ -178,6 +208,7 @@ export function Turns({
                 row={rows.get(g.turnId)}
                 attempt={attempt.get(g.turnId)}
                 defaultOpen
+                openPhases={watchedPhases.current}
               />
             ))}
           </div>
@@ -404,6 +435,7 @@ export function Turns({
               row={rows.get(g.turnId)}
               attempt={attempt.get(g.turnId)}
               defaultOpen={(i === 0 && !liveTurns.length) || watched.current.has(g.turnId)}
+              openPhases={watchedPhases.current}
             />
           ))}
         </div>

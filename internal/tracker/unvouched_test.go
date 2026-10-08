@@ -17,12 +17,11 @@ import (
 //
 // A move re-run finds its root already in the target and asks the ledger
 // whether THIS operation put it there: the root step's row answers it, and a
-// decision that runs at all means somebody else did. But a ledger that lost
-// the row — its retention sweep, or an adoption from a donor that scrubbed its
-// ledger — cannot say that. The refusal was returned before the ledger's
-// watermark was ever asked, so the retry was told "already in OPS, and no
-// record of this move putting it there" about the project its own first copy
-// moved it into.
+// decision that runs at all means somebody else did. But a ledger that lost the
+// row to its retention sweep cannot say that. The refusal was returned before
+// the ledger's watermark was ever asked, so the retry was told "already in OPS,
+// and no record of this move putting it there" about the project its own first
+// copy moved it into.
 func TestARetryOfAMoveTheLedgerLostIsUnknownRatherThanRefused(t *testing.T) {
 	t.Parallel()
 	r := moveFixture(t, "m-kid")
@@ -105,8 +104,8 @@ func TestARetriedCreateTheLedgerCannotVouchForFilesNothing(t *testing.T) {
 // A CREATE THIS NODE'S LEDGER CANNOT VOUCH FOR IS ANSWERED FROM ITS OWN TASK
 // ROW, AND NEVER AS "NOT MADE".
 //
-// A seat re-running a turn whose trigger was queued before its node adopted a
-// snapshot carries an operation minted before the ledger's loss. Its counter
+// A seat re-running a turn whose trigger predates the ledger's thirty-day sweep
+// carries an operation minted before the ledger's loss. Its counter
 // step was answered unknown, which the create turned into ErrUnavailable and
 // the tool into "The change was NOT made" — about a task its first run filed.
 // The seat then rephrased (a new operation) and filed a duplicate. The task's

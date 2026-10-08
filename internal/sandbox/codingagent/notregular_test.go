@@ -84,7 +84,7 @@ func TestAPieceThatIsNotARegularFileDegradesOnlyItself(t *testing.T) {
 			}
 			answered := make(chan collected, 1)
 			go func() {
-				res, err := runner.Collect(t.Context(), box, sandbox.RunHandle{Layout: runner.Layout()})
+				res, err := runner.Collect(t.Context(), box, sandbox.RunHandle{})
 				answered <- collected{res, err}
 			}()
 			var got collected

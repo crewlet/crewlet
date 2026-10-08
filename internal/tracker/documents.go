@@ -188,29 +188,23 @@ func readPerson(ctx context.Context, tx *sql.Tx, handle string) (Person, bool, e
 // So the identities are tried in order, the seat first, and the first that has
 // a record is the one this person's state IS.
 //
-// # Why there can be a second record at all, and what the loop is for NOW
+// # Why there can be a second record at all
 //
-// The person tools used to address the write by the CREDENTIAL — `mark_inbox`
-// and `set_pins` wrote on behalf of `actor.Handle`, which through the operator
-// MCP is the token's own id — so a founder whose assistant had been marking
-// their inbox read had one record, named `founder`, and a read of the seat
-// alone showed them an inbox where nothing had ever been read.
+// A person write is keyed on [Writer.Record]: the seat the credential is bound
+// to, or — for a token nobody bound — the token's own id. So a token that
+// marked an inbox, set pins or reordered priorities while it was unbound left
+// that state under the CREDENTIAL, and binding it later to a seat
+// (`contact.crewlet_operator_id`, an ordinary configuration edit) leaves the
+// record there. It was never attribution — a record's author stays the token,
+// which is the audit trail — it is WHOSE STATE the document holds, and that is
+// the person.
 //
-// THAT IS FIXED AT THE WRITE, which is the only place it could be: a person
-// write is keyed on [Writer.Record], the seat the credential is bound to, so
-// every new record is the person's and there is at most one per person from
-// here on. It was never attribution — a record's author stays the token, which
-// is the audit trail — it is WHOSE STATE the document holds, and that is the
-// person.
-//
-// So this loop is NOT a second opinion about the write: it is the READER of
-// the records written BEFORE that fix, which are permanent (nothing rewrites a
-// person's row, and a company that ran an earlier build has them). The seat
+// So this loop is NOT a second opinion about the write: it is the READER of the
+// record written while the token was unbound, which nothing rewrites. The seat
 // leads, so the moment anything writes the person's own record it is the one
 // that answers and the credential's is never read again. Delete the fallback
-// and a founder loses every mark, pin and priority their assistant made before
-// the upgrade; keep it and it costs one extra lookup for a person who has no
-// old record, on the read path only.
+// and a person loses every mark, pin and priority made before their token was
+// bound; keep it and it costs one extra lookup, on the read path only.
 func readPartyRecord(ctx context.Context, tx *sql.Tx, who Party) (
 	Person, bool, error) {
 

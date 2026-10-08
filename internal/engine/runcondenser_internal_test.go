@@ -13,7 +13,6 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/workkey"
 )
 
 // A COLLECTED RUN'S CONDENSATION IS THE TURN'S, AND IT FITS THE RECORD.
@@ -27,20 +26,18 @@ import (
 // from the turn's cost on every screen; past the budget, the sandbox refuses
 // the rewrite and every long report falls back to whole lines.
 //
-// A row an older build parked carries no work key, so its unit of work is the
-// derived turn id, as every other record of that run files it. And what the
-// rewrite cost is answered with it, exactly as its record states it, for the
-// segment that resumes from the collection to pay.
+// The unit of work is the row's own work key, distinct from its turn id. And
+// what the rewrite cost is answered with it, exactly as its record states it,
+// for the segment that resumes from the collection to pay.
 //
 // Driven through the real compactor and the real ledger, with a model that
 // answers exactly as long as it is asked to be.
 //
-// Mutations: file the call under the background stage, drop the turn id, read
-// the raw work key, hand the compactor the whole budget rather than the budget
-// less the label, or answer no cost — each turns this red.
+// Mutations: file the call under the background stage, drop the turn id, file
+// the turn id as the unit of work, hand the compactor the whole budget rather
+// than the budget less the label, or answer no cost — each turns this red.
 func TestARunsCondensationIsFiledUnderItsTurnAndFitsItsBudget(t *testing.T) {
 	t.Parallel()
-	derived := workkey.Derive([]string{"evt-1"})
 	for _, tc := range []struct {
 		name string
 		run  sandbox.PendingRun
@@ -49,9 +46,6 @@ func TestARunsCondensationIsFiledUnderItsTurnAndFitsItsBudget(t *testing.T) {
 		{name: "a run with a work key",
 			run:  sandbox.PendingRun{TurnID: "run-7", WorkKey: "wk-7", AgentHandle: "swe"},
 			unit: "wk-7"},
-		{name: "a row parked with no work key",
-			run:  sandbox.PendingRun{TurnID: derived, AgentHandle: "swe"},
-			unit: derived},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

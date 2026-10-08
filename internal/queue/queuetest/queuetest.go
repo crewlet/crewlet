@@ -31,9 +31,23 @@
 //     own sentence, which says every return that puts a message back spends a
 //     delivery. The twin spends one now and the flag is gone; what the case
 //     certifies on both backends is the contract's number.
-//   - It required a nak to replay from the head. JetStream returns redelivered
-//     messages behind never-delivered ones, so only the twin does this. Now
-//     HeadReplayOnNak.
+//   - It required a nak to replay from the head. JetStream returns a FAILED
+//     delivery behind never-delivered ones, so only the twin did this, and it
+//     became the HeadReplayOnNak capability — the FreeDeferral mistake again:
+//     a flag the twin declared and the shipped broker did not, so every
+//     engine and node test run on the twin certified a seat that retried a
+//     failure ahead of the conversation's newer mail. The twin returns a
+//     failure behind them now, the flag is gone, and
+//     a_failure_returns_behind_waiting_mail_and_a_deferral_at_the_head
+//     asserts the one order on both backends.
+//   - It required a FAILED delivery and a newer event of its conversation to
+//     reach one handler call. The contract orders a partition, never the
+//     calls a conversation is spread across, and a failure waits out its
+//     redelivery backoff while the newer event is dispatched without it. Two
+//     cases met the requirement only because the JetStream harness cut that
+//     backoff to half their window, and a loaded runner lost the race. They
+//     hand back by deferral now, which no backend spaces — see
+//     handBackLinger.
 //   - It required a stopped queue to restart. The contract does not say, and two
 //     backends answered differently. Now Restartable.
 //   - It required a publish to `crewlet.events` — a subject the grammar cannot
@@ -326,21 +340,6 @@ type Capabilities struct {
 	// is the part every broker owes.
 	StrictRoundRobin bool
 
-	// HeadReplayOnNak declares that a negatively acknowledged event
-	// returns to the FRONT of the mailbox, ahead of events already queued
-	// behind it.
-	//
-	// A capability rather than a requirement, and deliberately so:
-	// measured, the twin replays from the head while JetStream returns a
-	// redelivered message BEHIND never-delivered ones. The engine no
-	// longer depends on either — within-conversation order comes from
-	// event timestamps, which
-	// within_a_partition_events_are_ordered_by_timestamp certifies for
-	// every backend. This flag only asks a backend that DOES replay from
-	// the head to keep doing it, so the property cannot rot unnoticed on
-	// the twin the fleet suite runs against.
-	HeadReplayOnNak bool
-
 	// RequiresStart declares that this backend's publish, subscription and
 	// attachment verbs refuse on a queue that has not been started or has
 	// been stopped.
@@ -555,23 +554,36 @@ const (
 	// observable should find another way to observe it.
 	lingerFor = 50 * time.Millisecond
 
-	// mixedCountLinger is the window the mixed-delivery-count case needs,
-	// and it is longer than lingerFor for one specific reason.
+	// handBackLinger is the window a case opens when the drain it waits for
+	// has to carry a HANDED-BACK message beside fresh ones — the two cases
+	// that build a partition out of a redelivery and never-delivered mail
+	// (a_redelivered_event_rejoins_its_conversation_in_timestamp_order and
+	// a_partition_at_mixed_counts_tells_each_message_its_own_headroom).
 	//
-	// That case has to put a REDELIVERED message and a NEVER-DELIVERED one
-	// in the same drain, which is the only way to build a partition whose
-	// messages sit at different delivery counts. The redelivered half comes
-	// back on the backend's own nak spacing (25ms seed doubling to a 50ms
-	// ceiling in the JetStream harness), so the window a fresh publish
-	// opens has to outlast that spacing — and lingerFor is the SAME ORDER
-	// as it, which makes whether the two meet a coin toss rather than a
-	// property.
+	// WHAT IT BOUNDS IS A BROKER TAKING A RETURN IT HAS ALREADY BEEN SENT,
+	// and nothing else. Both cases hand their message back by DEFERRAL,
+	// which every backend returns at once, and let the attachment fetch
+	// again only once the deferral has been applied, with the fresh mail
+	// already in the mailbox. On the in-memory twin the return has landed
+	// by then, synchronously. On JetStream it is a message nothing
+	// acknowledges, taken by a broker goroutine separate from the one that
+	// serves fetches — so the fetch the window opens on can be served
+	// first, and the return then has to land inside the window. That is
+	// one internal hop, cheaper than the publish round trip racingWindow
+	// is sized against (200-330ms worst measured under a parallel -race
+	// suite), and this sits above that measurement rather than at it.
 	//
-	// 400ms is about eight times the harness's ceiling, so the meeting is
-	// determined by the backend's ordering rather than by the scheduler,
-	// and the case still costs well under settleFor. It is nowhere near
-	// queue.MaxLingerSeconds, so no backend has to refuse it.
-	mixedCountLinger = 400 * time.Millisecond
+	// IT USED TO BOUND A REDELIVERY SPACING, as mixedCountLinger, and that
+	// was the defect rather than the margin. Both cases handed their
+	// message back as a FAILURE, which returns on the backend's backoff
+	// (25ms doubling to 50ms in the JetStream harness, a second doubling
+	// to thirty in production), so "the two meet in one drain" was a race
+	// between a broker timer and a constant — one the shipped spacing
+	// never wins, and one the contract never promised anybody would: see
+	// queue.OrderForDispatch.
+	//
+	// Nowhere near queue.MaxLingerSeconds, so no backend has to refuse it.
+	handBackLinger = 400 * time.Millisecond
 
 	// racingWindow is the linger a case gets when its SETUP has to complete
 	// while the window is still open — the pause and stop cases, where the
@@ -669,11 +681,15 @@ func (j *journal) awaitLabels(t *testing.T, what string, want ...string) {
 // awaitLabelsInAnyOrder waits for exactly these labels, in whatever sequence.
 //
 // For the cases whose subject is WHAT was delivered rather than in what
-// order — chiefly anything involving a redelivery, since [Caps.HeadReplayOnNak]
-// says the backends genuinely differ there and the engine no longer depends
-// on either answer. A case that asserted the sequence anyway would pass on
-// one backend, pass on the other whenever the timing happened to favour it,
-// and fail under load: a flake that reads as a broker bug.
+// order — chiefly a redelivery that races a fresh publish, where the order
+// rests on a backoff window the shipped broker measures in wall-clock time.
+// The order the contract DOES state (a failure behind the mail waiting when it
+// failed, a hand-back at the head) is certified where it belongs, by
+// a_failure_returns_behind_waiting_mail_and_a_deferral_at_the_head, which
+// holds the mail before it is published so nothing races. A case that
+// asserted a sequence the contract does not state would pass on one backend,
+// pass on the other whenever the timing happened to favour it, and fail
+// under load: a flake that reads as a broker bug.
 //
 // The expectation is still passed down, so a timeout can report a delivery
 // that CONTRADICTS rather than merely lags — a missing event and a surplus

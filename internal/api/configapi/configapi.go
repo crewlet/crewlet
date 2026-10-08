@@ -804,9 +804,10 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 		// naming the field, where the open used to fold it into the keyring
 		// hint above.
 		//
-		// The RUNNABLE rules only, like every apply: an old revision that
-		// breaks an admission rule added since still runs, and reverting to
-		// a working company must not be refused over a rule it predates.
+		// The RUNNABLE rules only, like every apply: an admission rule is
+		// one an apply does not enforce, since a newer peer may have
+		// admitted the revision under rules this build does not share, and
+		// reverting to a company that runs must not be refused over one.
 		// The answer's warnings name each one, and each node warns about
 		// it when it applies the epoch.
 		rules: (*config.Company).ValidateRunnable,
@@ -1032,9 +1033,9 @@ func meta(revision store.Revision) map[string]any {
 		"revision_id": revision.ID,
 		"created_at":  revision.CreatedAt.Format(time.RFC3339Nano),
 		"created_by":  revision.CreatedBy,
-		// WHAT created_by names, which the label alone cannot say. Empty
-		// only on a revision adopted from a pointer that did not record
-		// it — the reader shows "not recorded" rather than a guess.
+		// WHAT created_by names, which the label alone cannot say: every
+		// writer of a revision records whether it was a person or the
+		// engine.
 		"created_by_kind": string(revision.CreatedByKind),
 		"source":          revision.Source,
 		"summary":         revision.Summary,

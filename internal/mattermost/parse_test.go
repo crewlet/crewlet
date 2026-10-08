@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/notify"
@@ -520,4 +522,43 @@ func TestTheParserDeclaresItsSource(t *testing.T) {
 		t.Fatalf("Source = %q", p.Source())
 	}
 	var _ notify.Parser = p
+}
+
+// THE WAKE'S ID IS THE POST'S, PER SEAT — the second dedupe layer.
+//
+// Every node reads every seat's socket and the fleet's claim fails open, so
+// two nodes can both publish one post. With a random id per copy the inbox and
+// the completion ledger saw two wakes and the seat answered twice; derived
+// from (seat, post) the copies are one wake. Per seat, because one post wakes
+// every bot in its channel, and its instant is the post's own, which every
+// copy carries alike.
+//
+// Mutation: drop WakeID from the routed notification, and two parses of one
+// post produce no id to pair them by.
+func TestTheWakeIDIsThePostsPerSeat(t *testing.T) {
+	p, _ := parser(t, nil)
+	stamped := func(body, post map[string]any) {
+		post["create_at"] = float64(t0.Add(-time.Minute).UnixMilli())
+	}
+	first, ok := parseOne(t, p, post(stamped))
+	if !ok {
+		t.Fatal("the post was dropped")
+	}
+	again, _ := parseOne(t, p, post(stamped))
+	if first.WakeID == uuid.Nil || first.WakeID != again.WakeID {
+		t.Fatalf("two copies of one post woke with %v and %v, want one derived id",
+			first.WakeID, again.WakeID)
+	}
+	if first.WakeID != mattermost.WakeID("swe", "p1") {
+		t.Errorf("WakeID = %v, want mattermost.WakeID(swe, p1)", first.WakeID)
+	}
+	if mattermost.WakeID("pm", "p1") == first.WakeID {
+		t.Error("two seats woken by one post share a wake id, so the second is deduplicated away")
+	}
+	if mattermost.WakeID("swe", "p2") == first.WakeID {
+		t.Error("two posts to one seat share a wake id")
+	}
+	if want := t0.Add(-time.Minute).Truncate(time.Millisecond); !first.WakeAt.Equal(want) {
+		t.Errorf("WakeAt = %v, want the post's own create_at %v", first.WakeAt, want)
+	}
 }

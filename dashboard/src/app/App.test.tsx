@@ -20,6 +20,9 @@ import { PAGE_ACTIONS_SLOT } from "./frame/PageActions.tsx";
 import { buildHash } from "./router.tsx";
 import { resetForTest as resetStarsForTest } from "~/lib/starred.ts";
 import { CHUNKS, loadChunk } from "./lazyScreen.ts";
+import { healthFrame } from "~/test/health.ts";
+import { withDerived } from "~/test/org.ts";
+import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -46,7 +49,7 @@ function mount() {
 /** The frame, over a socket that answers the viewer and refuses the rest. */
 function mountAs(viewer: Promise<unknown>) {
   const store = new Store();
-  store.applyHealth({ status: "ok", nodes: 1, applied_epoch: 2 });
+  store.applyHealth(healthFrame({ nodes: 1, applied_epoch: 2 }));
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
     return what === "viewer" ? viewer : Promise.reject(new QueryError("unauthorized"));
@@ -134,7 +137,7 @@ describe("routing", () => {
   // remembered to add to it — so a new destination that renders a blank ships
   // green, which is the one failure this test exists to catch.
   // WHO IS WORKING IS HOME'S, as the Main artboard draws it — the sidebar's
-  // Agents badge carries the count everywhere else. Drawn in every bar it sat
+  // Live row carries the count everywhere else. Drawn in every bar it sat
   // between a task's trail and its actions, and pushed a profile's controls
   // past a phone's edge.
   test("the working chip is in Home's page bar and in no other", () => {
@@ -450,10 +453,12 @@ describe("live state reaches the screen", () => {
     // synchronously renders the screen the reader was on before.
     location.hash = "#/agents/roster";
     const { store, view } = mount();
-    store.applyOrg({
-      name: "Acme",
-      roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
-    });
+    store.applyOrg(
+      withDerived({
+        name: "Acme",
+        roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
+      }),
+    );
     store.applyAgents([{ role: "CEO", activity: "working" }]);
     view.rerender(
       <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
@@ -472,10 +477,12 @@ describe("live state reaches the screen", () => {
     resetStarsForTest();
     location.hash = "#/agents/seats/ceo";
     const { store, view } = mount();
-    store.applyOrg({
-      name: "Acme",
-      roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
-    });
+    store.applyOrg(
+      withDerived({
+        name: "Acme",
+        roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
+      }),
+    );
     view.rerender(
       <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
         <Router>
@@ -500,10 +507,12 @@ describe("live state reaches the screen", () => {
   test("a seat whose handle is a reserved word opens its own page", () => {
     location.hash = "#/agents/seats/roster";
     const { store, view } = mount();
-    store.applyOrg({
-      name: "Acme",
-      roles: [{ name: "Rota Keeper", handle: "roster", goal: "Keep the rota" }],
-    });
+    store.applyOrg(
+      withDerived({
+        name: "Acme",
+        roles: [{ name: "Rota Keeper", handle: "roster", goal: "Keep the rota" }],
+      }),
+    );
     view.rerender(
       <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
         <Router>
@@ -532,10 +541,12 @@ describe("live state reaches the screen", () => {
     // match no branch: the header and the strip, and then nothing.
     location.hash = "#/agents/seats/ceo?tab=zzz";
     const { store, view } = mount();
-    store.applyOrg({
-      name: "Acme",
-      roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
-    });
+    store.applyOrg(
+      withDerived({
+        name: "Acme",
+        roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
+      }),
+    );
     store.applyAgents([{ role: "CEO", activity: "working" }]);
     view.rerender(
       <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
@@ -590,6 +601,8 @@ describe("a turn watched to its end", () => {
       phase,
       iteration: phase === "onboarding" ? 0 : 1,
       role: "CEO",
+      // THE SEAT'S OWN ID, which a streamed phase is matched to its seat on.
+      agent_id: "a-ceo",
       model: "claude-sonnet-5",
       total_tokens: 100,
     },
@@ -598,7 +611,7 @@ describe("a turn watched to its end", () => {
   function seatView() {
     location.hash = "#/agents/seats/ceo?tab=turns";
     const { store, view } = mount();
-    store.applyOrg(seat);
+    store.applyOrg(withDerived(seat));
     const redraw = () =>
       view.rerender(
         <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
@@ -619,8 +632,10 @@ describe("a turn watched to its end", () => {
     store.applyAgents([
       {
         role: "CEO",
+        agent_id: "a-ceo",
         activity: "working",
         live_call: {
+          versions: ZERO_VERSIONS,
           turn_id: "t1",
           phase: "review",
           iteration: 1,
@@ -664,8 +679,10 @@ describe("a turn watched to its end", () => {
     store.applyAgents([
       {
         role: "CEO",
+        agent_id: "a-ceo",
         activity: "working",
         live_call: {
+          versions: ZERO_VERSIONS,
           turn_id: "t1",
           phase: "execute",
           iteration: 1,
@@ -743,7 +760,7 @@ test("a node named `backups` keeps its page, and a domain keeps its own", async 
 test("the page bar's More holds the star, the link and what the screen folded", async () => {
   location.hash = "#/work/ENG";
   const store = new Store();
-  store.applyHealth({ status: "ok", nodes: 1, applied_epoch: 2 });
+  store.applyHealth(healthFrame({ nodes: 1, applied_epoch: 2 }));
   const socket = new LiveSocket(store);
   const project = {
     key: "ENG",

@@ -497,7 +497,7 @@ function ModelPage({
             name="seats"
             rows={uses}
             rowKey={(u) => u.seat.key}
-            rowHref={(u) => (u.seat.handle ? href(["agents", "seats", u.seat.handle]) : "")}
+            rowHref={(u) => href(["agents", "seats", u.seat.handle])}
             columns={[
               {
                 key: "seat",

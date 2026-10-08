@@ -33,8 +33,8 @@ import (
 //
 // A saved view carrying `view=` would expand into itself, and one carrying
 // `cursor=` would resume a page the caller never asked for. Both are refused
-// at the SAVE — see [checkView] — and stripped here too, because a row written
-// by an older build is a row this one still has to read.
+// at the SAVE — see [checkView] — which is the only writer of a view's
+// parameters, so no stored view carries one.
 
 // The presets, and there are exactly five: each is a question a person asks
 // often enough that a screen puts it on a tab.
@@ -117,8 +117,8 @@ type Viewer struct {
 	//
 	// IT IS AN ALIAS AND NEVER AN ADDRESS. Nothing expands to it and
 	// nothing renders it: what it reaches is the person's OWN STATE
-	// written before their credential was keyed on their seat, which is
-	// the one thing in this grammar a person can hold under two names.
+	// written while the credential was not yet bound to their seat, which
+	// is the one thing in this grammar a person can hold under two names.
 	// See [Party] and [Query.PriorityListOf].
 	OperatorID string
 
@@ -201,17 +201,11 @@ func mergeExpansion(caller map[string]any, preset, view MapParams,
 }
 
 // savedDefaults is what a saved view's own parameters contribute to an
-// expansion: every key but the ones [expansionRefused] names.
-//
-// A ROW AN OLDER BUILD WROTE may carry one, since the save refuses these —
-// dropped rather than honoured, because a saved cursor would resume a page
-// nobody asked for.
+// expansion: a COPY of them, so nothing the expansion does to its inputs
+// reaches the decoded row.
 func savedDefaults(params map[string]string) MapParams {
 	out := make(MapParams, len(params))
 	for key, value := range params {
-		if slices.Contains(expansionRefused, key) {
-			continue
-		}
 		out[key] = value
 	}
 	return out

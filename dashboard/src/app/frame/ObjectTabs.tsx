@@ -28,10 +28,21 @@
  * The drawn row is the kit's tablist, one tab stop with the arrows inside it,
  * and "More" is the button after it; a tab picked from the menu is selected
  * exactly as a click on it would select it, and it is then drawn on the strip.
+ *
+ * # A tab with something running behind it says so
+ *
+ * A seat's Turns tab while it is working: the kit's pulsing info dot before
+ * the word — the steady-state pulse of a state that is still happening, which
+ * holds still under reduced motion — AND the words, because a dot is never
+ * the only carrier (the kit's `StatusDot` is `aria-hidden` for exactly that
+ * reason). On the strip they are read after the tab's name ("Turns, running
+ * now"); folded into "More" they are the item's second line, where a sighted
+ * reader sees them too. `live` is the WORDS rather than a flag, so a tab
+ * cannot be marked without saying what the mark means.
  */
 
 import { useLayoutEffect, useRef, useState, type RefObject } from "react";
-import { Menu, Tabs, cx } from "@crewlethq/ui";
+import { Menu, StatusDot, Tabs, cx } from "@crewlethq/ui";
 import { ChevronDownGlyph } from "@crewlethq/icons/glyphs";
 import { foldTabs } from "./tabFit.ts";
 
@@ -40,6 +51,12 @@ export interface ObjectTab {
   label: string;
   /** How many things are behind the tab, where the object counted them. */
   count?: number;
+  /**
+   * What is happening behind the tab right now, in words ("running now") —
+   * drawn as the kit's pulsing dot and read with the tab's name. Absent while
+   * nothing is. See the file's doc.
+   */
+  live?: string;
 }
 
 export function ObjectTabs({
@@ -69,7 +86,15 @@ export function ObjectTabs({
   );
   const kit = (t: ObjectTab) => ({
     value: t.value,
-    label: t.label,
+    label: t.live ? (
+      <>
+        {t.label}
+        <span className="sr-only">{`, ${t.live}`}</span>
+      </>
+    ) : (
+      t.label
+    ),
+    ...(t.live ? { icon: <StatusDot tone="info" pulse /> } : {}),
     ...(t.count !== undefined ? { count: t.count } : {}),
   });
   const out = items.filter((t) => folded.includes(t.value));
@@ -103,6 +128,9 @@ export function ObjectTabs({
               key: t.value,
               label: t.label,
               ...(t.count !== undefined ? { hint: t.count.toLocaleString() } : {}),
+              // THE SAME MARK AND THE SAME WORDS, folded: the words as the
+              // item's second line, read with it and seen beside the dot.
+              ...(t.live ? { icon: <StatusDot tone="info" pulse />, description: t.live } : {}),
               onSelect: () => onValueChange(t.value),
             }))}
           />

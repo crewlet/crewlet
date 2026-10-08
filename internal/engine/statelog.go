@@ -529,17 +529,6 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 		return nil, err
 	}
 
-	// AN ADOPTION A BUILD FROM BEFORE THE LEDGER TRAVELLED RECORDED is one
-	// whose ledger was scrubbed, on a file whose watermark does not say so
-	// — carried into that watermark here, once, before the join below can
-	// replace the file and before anything publishes. See
-	// [statelog.FoldLegacyAdoptions].
-	if err := statelog.FoldLegacyAdoptions(ctx, e.backends.Store, s.estate(),
-		registeredDomains()); err != nil {
-		s.Stop()
-		return nil, err
-	}
-
 	// ADOPT BEFORE ANY APPLIER RUNS, because a join REPLACES the
 	// replicated database file — and it can only do that while nothing
 	// holds a transaction open on it. An applier started first would be
@@ -1592,18 +1581,6 @@ func (s *stateLog) logDiverged(ctx context.Context, domain string, runner *state
 			"rows with a peer's")
 }
 
-// identityDomains is every running log whose domain claims identity, in the
-// register's order.
-func (s *stateLog) identityDomains() []*runningLog {
-	var out []*runningLog
-	for _, running := range s.running() {
-		if running.domain.ClaimsIdentity() {
-			out = append(out, running)
-		}
-	}
-	return out
-}
-
 // Established reports whether every domain whose health gates seat admission
 // has one.
 //
@@ -2226,7 +2203,7 @@ func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 // THE ADOPTION ROW IS LEFT AS THE FAILED JOIN LEFT IT: incomplete, because the
 // adoption did not complete. Nothing on the write path reads it: whichever
 // file the reopen finds carries its own ledger and that ledger's watermark
-// (see [statelog.RecordLedgerLoss]). So a restore that finds the donor's file
+// (see [statelog.Rows.LostBefore]). So a restore that finds the donor's file
 // current is a recovery, not an adoption to finish.
 //
 // A failed reopen is [statelog.ErrEstateNotRestored], so every outcome that
@@ -2614,9 +2591,9 @@ func passedByAReanchor(domain statelog.Domain, at statelog.Position, found bool,
 // carries is still above the floor.
 //
 // THE HOLD IS THE MECHANISM AND THIS IS THE BELT. A fleet that trimmed past
-// the artefact anyway — a peer on a build that does not honour holds, an
-// operator forcing one — is one this node must not follow into a hole, and the
-// only moment it can still refuse is before the install.
+// the artefact anyway — a hold that went stale while the transfer ran, an
+// operator purging the stream by hand — is one this node must not follow into
+// a hole, and the only moment it can still refuse is before the install.
 func (s *stateLog) stillUsable(ctx context.Context, logs map[string]*jetstream.DomainLog,
 	m statelog.Manifest) error {
 
@@ -3264,11 +3241,11 @@ func stampSnapshot(row *coord.NodePositions, held *snapshotHeld) {
 	}
 	row.SnapshotBytes = held.Manifest.Bytes
 	for name, at := range held.Manifest.Domains {
-		// ONLY A DOMAIN THIS NODE STILL RUNS. An artefact taken by an
-		// older build names domains this one does not register, and a
-		// snapshot position under a domain with no committed position
-		// beside it is a row the trim reads as a node holding that
-		// log back at zero.
+		// ONLY A DOMAIN THIS NODE RUNS. An artefact written by another
+		// build of this node (a newer one, before a rollback) can name a
+		// domain this build does not register, and a snapshot position
+		// under a domain with no committed position beside it is a row
+		// the trim reads as a node holding that log back at zero.
 		pos, runs := row.Domains[name]
 		if !runs {
 			continue

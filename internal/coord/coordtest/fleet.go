@@ -84,6 +84,14 @@ type fleetCase struct {
 	fn   func(h *fleetHarness)
 }
 
+// anOrigin is the revision origin every activation in the suite carries but
+// the cases about the origin itself: a backend refuses an activation without
+// one, so a case about something else states one and moves on.
+var anOrigin = coord.RevisionOrigin{
+	Author: "suite", AuthorKind: "operator", Source: "api",
+	CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+}
+
 // fleetHarness is a backend plus the assertions the cases are written in.
 type fleetHarness struct {
 	t   *testing.T
@@ -261,6 +269,42 @@ var claimCases = []fleetCase{{
 		}
 		if !h.claim("plane|xyz", time.Minute, at) {
 			h.t.Fatal("a released delivery could not be claimed again")
+		}
+	},
+}, {
+	// EACH CLAIM LAPSES AT ITS OWN TTL. A webhook claims for five minutes
+	// and a Mattermost socket for thirty, in one store; a backend that
+	// held every claim for its bucket's age swallowed a webhook replay for
+	// the socket's window, and one that held every claim for the shortest
+	// let a reconnecting seat deliver a post twice.
+	name: "a claim lapses at its own ttl and can then be taken again once",
+	fn: func(h *fleetHarness) {
+		at := h.now()
+		if !h.claim("mattermost|alice|p1", time.Minute, at) {
+			h.t.Fatal("the first claim was refused")
+		}
+		if h.claim("mattermost|alice|p1", time.Minute, at.Add(59*time.Second)) {
+			h.t.Fatal("a claim was taken again inside its own ttl")
+		}
+		later := at.Add(time.Minute + time.Second)
+		if !h.claim("mattermost|alice|p1", time.Minute, later) {
+			h.t.Fatal("a claim past its own ttl could not be taken again")
+		}
+		if h.claim("mattermost|alice|p1", time.Minute, later) {
+			h.t.Fatal("a lapsed claim was taken over by two callers")
+		}
+	},
+}, {
+	// REFUSED, never clamped: a claim the store cannot keep for as long as
+	// it was asked lets through the duplicate it was sized to stop.
+	name: "a claim longer than the store can keep is refused",
+	fn: func(h *fleetHarness) {
+		won, err := h.f.Claim(h.ctx, "gitlab|forever", 1000*time.Hour, h.now())
+		if !errors.Is(err, coord.ErrTTLTooLong) {
+			h.t.Fatalf("Claim(1000h) = (%v, %v), want an error wrapping coord.ErrTTLTooLong", won, err)
+		}
+		if won {
+			h.t.Fatal("a refused claim reported a win")
 		}
 	},
 }, {
@@ -446,7 +490,7 @@ var planeCases = []fleetCase{{
 }, {
 	name: "an activation is readable with the epoch the store assigned",
 	fn: func(h *fleetHarness) {
-		published, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: "rev-1", Summary: "first", Payload: []byte(`{"name":"Acme"}`), At: h.now()})
+		published, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: "rev-1", Summary: "first", Payload: []byte(`{"name":"Acme"}`), At: h.now(), Origin: anOrigin})
 		if err != nil {
 			h.t.Fatalf("Activate: %v", err)
 		}
@@ -493,13 +537,50 @@ var planeCases = []fleetCase{{
 		}
 	},
 }, {
+	// A POINTER NAMING NOBODY IS REFUSED, and leaves nothing behind. Every
+	// writer knows who it is, how it made the revision and when; a pointer
+	// that left any of them out would put the revision on every peer with
+	// an author, a source or an instant somebody would have to guess.
+	name: "an activation without its revision's origin is refused",
+	fn: func(h *fleetHarness) {
+		for name, origin := range map[string]coord.RevisionOrigin{
+			"no origin at all": {},
+			"no author kind":   {Author: "maya", Source: "api", CreatedAt: h.now()},
+			"no source":        {Author: "maya", AuthorKind: "operator", CreatedAt: h.now()},
+			"no creation":      {Author: "maya", AuthorKind: "operator", Source: "api"},
+		} {
+			_, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+				RevisionID: "rev-1", Payload: []byte("{}"), At: h.now(), Origin: origin,
+			})
+			if !errors.Is(err, coord.ErrIncompleteOrigin) {
+				h.t.Fatalf("%s: Activate = %v, want coord.ErrIncompleteOrigin", name, err)
+			}
+		}
+		if got, found, err := h.f.Target(h.ctx); err != nil || found {
+			h.t.Fatalf("Target = (%+v, %v, %v) after refused activations, want unset",
+				got, found, err)
+		}
+		if _, found, err := h.f.Payload(h.ctx, "rev-1"); err != nil || found {
+			h.t.Fatalf("Payload(rev-1) = (found=%v, %v): a refused activation left its body",
+				found, err)
+		}
+		// The author's LABEL alone may be empty: the kind still says what
+		// wrote it.
+		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-1", Payload: []byte("{}"), At: h.now(),
+			Origin: coord.RevisionOrigin{AuthorKind: "operator", Source: "api", CreatedAt: h.now()},
+		}); err != nil {
+			h.t.Fatalf("an origin with no author label: %v", err)
+		}
+	},
+}, {
 	// The epoch is a FENCING token: a counter that went backwards would
 	// hand a node a number an older revision already used.
 	name: "the epoch only ever moves forward",
 	fn: func(h *fleetHarness) {
 		var last int64
 		for i := range 4 {
-			got, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: fmt.Sprintf("rev-%d", i), Payload: []byte("{}"), At: h.now()})
+			got, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: fmt.Sprintf("rev-%d", i), Payload: []byte("{}"), At: h.now(), Origin: anOrigin})
 			if err != nil {
 				h.t.Fatalf("Activate: %v", err)
 			}
@@ -518,20 +599,20 @@ var planeCases = []fleetCase{{
 	name: "an activation expecting a revision the fleet has left is refused",
 	fn: func(h *fleetHarness) {
 		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{
-			RevisionID: "rev-1", Payload: []byte(`{"v":1}`), At: h.now()}); err != nil {
+			RevisionID: "rev-1", Payload: []byte(`{"v":1}`), At: h.now(), Origin: anOrigin}); err != nil {
 			h.t.Fatalf("Activate: %v", err)
 		}
 		// Somebody else moves the pointer, the way a second node's API
 		// would: expecting what this caller also read.
 		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{
 			RevisionID: "rev-2", Payload: []byte(`{"v":2}`), At: h.now(),
-			Expect: "rev-1"}); err != nil {
+			Expect: "rev-1", Origin: anOrigin}); err != nil {
 			h.t.Fatalf("the second write was refused: %v", err)
 		}
 		// And now the first caller's edit, built on rev-1, arrives.
 		_, err := h.f.Activate(h.ctx, coord.ActivationRequest{
 			RevisionID: "rev-3", Payload: []byte(`{"v":3}`), At: h.now(),
-			Expect: "rev-1"})
+			Expect: "rev-1", Origin: anOrigin})
 		if !errors.Is(err, coord.ErrActivationRaced) {
 			h.t.Fatalf("err = %v, want coord.ErrActivationRaced", err)
 		}
@@ -556,12 +637,12 @@ var planeCases = []fleetCase{{
 	name: "an activation expecting the current revision succeeds",
 	fn: func(h *fleetHarness) {
 		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{
-			RevisionID: "rev-1", Payload: []byte(`{"v":1}`), At: h.now()}); err != nil {
+			RevisionID: "rev-1", Payload: []byte(`{"v":1}`), At: h.now(), Origin: anOrigin}); err != nil {
 			h.t.Fatalf("Activate: %v", err)
 		}
 		got, err := h.f.Activate(h.ctx, coord.ActivationRequest{
 			RevisionID: "rev-2", Summary: "second", Payload: []byte(`{"v":2}`),
-			At: h.now(), Expect: "rev-1"})
+			At: h.now(), Expect: "rev-1", Origin: anOrigin})
 		if err != nil {
 			h.t.Fatalf("a matching expectation was refused: %v", err)
 		}
@@ -583,7 +664,7 @@ var planeCases = []fleetCase{{
 	fn: func(h *fleetHarness) {
 		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{
 			RevisionID: "rev-1", Payload: []byte("{}"), At: h.now(),
-			Expect: "rev-0"}); err != nil {
+			Expect: "rev-0", Origin: anOrigin}); err != nil {
 			h.t.Fatalf("Activate: %v", err)
 		}
 		target, found, err := h.f.Target(h.ctx)
@@ -600,11 +681,11 @@ var planeCases = []fleetCase{{
 	name: "an activation with no expectation overwrites whatever is there",
 	fn: func(h *fleetHarness) {
 		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{
-			RevisionID: "rev-1", Payload: []byte("{}"), At: h.now()}); err != nil {
+			RevisionID: "rev-1", Payload: []byte("{}"), At: h.now(), Origin: anOrigin}); err != nil {
 			h.t.Fatalf("Activate: %v", err)
 		}
 		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{
-			RevisionID: "rev-2", Payload: []byte("{}"), At: h.now()}); err != nil {
+			RevisionID: "rev-2", Payload: []byte("{}"), At: h.now(), Origin: anOrigin}); err != nil {
 			h.t.Fatalf("an unconditional activation was refused: %v", err)
 		}
 		target, found, err := h.f.Target(h.ctx)
@@ -619,7 +700,7 @@ var planeCases = []fleetCase{{
 	fn: func(h *fleetHarness) {
 		got, err := h.f.Activate(h.ctx, coord.ActivationRequest{
 			RevisionID: "rev-1", Payload: []byte(`{"v":1}`), At: h.now(),
-			ExpectAbsent: true})
+			ExpectAbsent: true, Origin: anOrigin})
 		if err != nil {
 			h.t.Fatalf("a create-only activation on an empty store was refused: %v", err)
 		}
@@ -640,12 +721,12 @@ var planeCases = []fleetCase{{
 	name: "an activation expecting no activation is refused when one exists",
 	fn: func(h *fleetHarness) {
 		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{
-			RevisionID: "the-fleets", Payload: []byte(`{"v":1}`), At: h.now()}); err != nil {
+			RevisionID: "the-fleets", Payload: []byte(`{"v":1}`), At: h.now(), Origin: anOrigin}); err != nil {
 			h.t.Fatalf("Activate: %v", err)
 		}
 		_, err := h.f.Activate(h.ctx, coord.ActivationRequest{
 			RevisionID: "a-second-company", Payload: []byte(`{"v":2}`), At: h.now(),
-			ExpectAbsent: true})
+			ExpectAbsent: true, Origin: anOrigin})
 		if !errors.Is(err, coord.ErrActivationRaced) {
 			h.t.Fatalf("err = %v, want coord.ErrActivationRaced", err)
 		}
@@ -678,7 +759,7 @@ var planeCases = []fleetCase{{
 				id := fmt.Sprintf("company-%d", i)
 				_, err := h.f.Activate(h.ctx, coord.ActivationRequest{
 					RevisionID: id, Payload: []byte("{}"), At: h.now(),
-					ExpectAbsent: true})
+					ExpectAbsent: true, Origin: anOrigin})
 				switch {
 				case err == nil:
 					won <- id
@@ -715,7 +796,7 @@ var planeCases = []fleetCase{{
 	fn: func(h *fleetHarness) {
 		_, err := h.f.Activate(h.ctx, coord.ActivationRequest{
 			RevisionID: "rev-1", Payload: []byte("{}"), At: h.now(),
-			Expect: "rev-0", ExpectAbsent: true})
+			Expect: "rev-0", ExpectAbsent: true, Origin: anOrigin})
 		if err == nil {
 			h.t.Fatal("an activation expecting a revision and no revision was accepted")
 		}
@@ -734,7 +815,7 @@ var planeCases = []fleetCase{{
 	name: "concurrent edits on one base leave exactly one winner",
 	fn: func(h *fleetHarness) {
 		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{
-			RevisionID: "base", Payload: []byte("{}"), At: h.now()}); err != nil {
+			RevisionID: "base", Payload: []byte("{}"), At: h.now(), Origin: anOrigin}); err != nil {
 			h.t.Fatalf("Activate: %v", err)
 		}
 		var wg sync.WaitGroup
@@ -745,7 +826,7 @@ var planeCases = []fleetCase{{
 				id := fmt.Sprintf("edit-%d", i)
 				_, err := h.f.Activate(h.ctx, coord.ActivationRequest{
 					RevisionID: id, Payload: []byte("{}"), At: h.now(),
-					Expect: "base"})
+					Expect: "base", Origin: anOrigin})
 				switch {
 				case err == nil:
 					won <- id
@@ -775,7 +856,7 @@ var planeCases = []fleetCase{{
 		epochs := make(chan int64, 8)
 		for i := range 8 {
 			wg.Go(func() {
-				got, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: fmt.Sprintf("rev-%d", i), Payload: []byte("{}"), At: h.now()})
+				got, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: fmt.Sprintf("rev-%d", i), Payload: []byte("{}"), At: h.now(), Origin: anOrigin})
 				if err == nil {
 					epochs <- got.Epoch
 				}
@@ -818,7 +899,7 @@ var planeCases = []fleetCase{{
 			}
 			return got
 		}
-		if got := activate(coord.ActivationRequest{RevisionID: "rev-1", At: first}); !got.At.Equal(first) {
+		if got := activate(coord.ActivationRequest{RevisionID: "rev-1", At: first, Origin: anOrigin}); !got.At.Equal(first) {
 			h.t.Fatalf("the first activation is at %s, want the %s it asked for", got.At, first)
 		}
 		for _, c := range []struct {
@@ -826,11 +907,11 @@ var planeCases = []fleetCase{{
 			req  coord.ActivationRequest
 		}{
 			{"an unconditional one from a clock behind",
-				coord.ActivationRequest{RevisionID: "rev-2", At: first.Add(-time.Hour)}},
+				coord.ActivationRequest{RevisionID: "rev-2", At: first.Add(-time.Hour), Origin: anOrigin}},
 			{"an expecting one at the same instant",
-				coord.ActivationRequest{RevisionID: "rev-3", At: first, Expect: "rev-2"}},
+				coord.ActivationRequest{RevisionID: "rev-3", At: first, Expect: "rev-2", Origin: anOrigin}},
 			{"one later by less than the stamp's resolution",
-				coord.ActivationRequest{RevisionID: "rev-4", At: first.Add(2*time.Millisecond + 400*time.Microsecond)}},
+				coord.ActivationRequest{RevisionID: "rev-4", At: first.Add(2*time.Millisecond + 400*time.Microsecond), Origin: anOrigin}},
 		} {
 			before, _, err := h.f.Target(h.ctx)
 			if err != nil {
@@ -844,7 +925,7 @@ var planeCases = []fleetCase{{
 		}
 		// AND A GENUINELY LATER ONE IS PUBLISHED AS IT ASKED.
 		later := first.Add(time.Minute)
-		if got := activate(coord.ActivationRequest{RevisionID: "rev-5", At: later}); !got.At.Equal(later) {
+		if got := activate(coord.ActivationRequest{RevisionID: "rev-5", At: later, Origin: anOrigin}); !got.At.Equal(later) {
 			h.t.Fatalf("a later activation is at %s, want the %s it asked for", got.At, later)
 		}
 	},
@@ -863,7 +944,7 @@ var planeCases = []fleetCase{{
 		for i := range 8 {
 			wg.Go(func() {
 				got, err := h.f.Activate(h.ctx, coord.ActivationRequest{
-					RevisionID: fmt.Sprintf("rev-%d", i), Payload: []byte("{}"), At: h.now()})
+					RevisionID: fmt.Sprintf("rev-%d", i), Payload: []byte("{}"), At: h.now(), Origin: anOrigin})
 				if err != nil {
 					h.t.Errorf("Activate: %v", err)
 					return
@@ -1719,7 +1800,7 @@ var payloadCases = []fleetCase{{
 	name: "the revision a peer activated is readable by every node",
 	fn: func(h *fleetHarness) {
 		body := []byte(`{"name":"Acme","agents":{}}`)
-		published, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: "rev-1", Summary: "first", Payload: body, At: h.now()})
+		published, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: "rev-1", Summary: "first", Payload: body, At: h.now(), Origin: anOrigin})
 		if err != nil {
 			h.t.Fatalf("Activate: %v", err)
 		}
@@ -1740,10 +1821,10 @@ var payloadCases = []fleetCase{{
 	// revision the fleet is not pointed at, and report success.
 	name: "a superseded revision's payload is absent, not stale",
 	fn: func(h *fleetHarness) {
-		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: "rev-1", Summary: "first", Payload: []byte(`{"v":1}`), At: h.now()}); err != nil {
+		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: "rev-1", Summary: "first", Payload: []byte(`{"v":1}`), At: h.now(), Origin: anOrigin}); err != nil {
 			h.t.Fatalf("Activate: %v", err)
 		}
-		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: "rev-2", Summary: "second", Payload: []byte(`{"v":2}`), At: h.now()}); err != nil {
+		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: "rev-2", Summary: "second", Payload: []byte(`{"v":2}`), At: h.now(), Origin: anOrigin}); err != nil {
 			h.t.Fatalf("Activate: %v", err)
 		}
 		if _, found, err := h.f.Payload(h.ctx, "rev-1"); err != nil || found {
@@ -1773,7 +1854,7 @@ var payloadCases = []fleetCase{{
 	// handed to a decoder that unseals in place on some paths.
 	name: "a caller mutating a payload cannot reach the store",
 	fn: func(h *fleetHarness) {
-		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: "rev-1", Payload: []byte(`{"v":1}`), At: h.now()}); err != nil {
+		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: "rev-1", Payload: []byte(`{"v":1}`), At: h.now(), Origin: anOrigin}); err != nil {
 			h.t.Fatalf("Activate: %v", err)
 		}
 		got, _, _ := h.f.Payload(h.ctx, "rev-1")
@@ -2192,116 +2273,6 @@ var followCases = []fleetCase{{
 		if _, ok := h.following("slack", "agent-swe", "C1", "C2.t-1"); ok {
 			h.t.Fatal("two different (channel, thread) pairs composed one key, " +
 				"so one seat's follow answers for a thread it never joined")
-		}
-	},
-}, {
-	// CREATE-ONLY, because the one-time handoff runs while chat is live.
-	//
-	// The rows it carries are OLDER than anything the fleet may already
-	// hold, so a plain write would downgrade a fresh mention's reason to a
-	// stale one and resurrect a follow somebody dropped after the move
-	// began. It is also what makes two nodes handing off at once correct
-	// with nothing agreed between them.
-	name: "a create-only follow does not overwrite one the fleet already has",
-	fn: func(h *fleetHarness) {
-		at := h.now()
-		h.follow("slack", "agent-swe", "C1", "t-abs", "app_mention")
-
-		created, err := h.f.FollowIfAbsent(h.ctx, "slack", "agent-swe", "C1", "t-abs",
-			"collective", at.Add(-time.Hour))
-		if err != nil {
-			h.t.Fatalf("FollowIfAbsent: %v", err)
-		}
-		if created {
-			h.t.Error("reported it created a follow the fleet already held")
-		}
-		if reason, ok := h.following("slack", "agent-swe", "C1", "t-abs"); !ok || reason != "app_mention" {
-			h.t.Errorf("after a create-only write: following=%v reason=%q, want the "+
-				"fleet's own record untouched", ok, reason)
-		}
-	},
-}, {
-	name: "a create-only follow records one that is absent, and says it did",
-	fn: func(h *fleetHarness) {
-		at := h.now()
-		created, err := h.f.FollowIfAbsent(h.ctx, "slack", "agent-swe", "C1", "t-new", "mention", at)
-		if err != nil {
-			h.t.Fatalf("FollowIfAbsent: %v", err)
-		}
-		if !created {
-			h.t.Fatal("reported it created nothing for a thread nobody followed")
-		}
-		if reason, ok := h.following("slack", "agent-swe", "C1", "t-new"); !ok || reason != "mention" {
-			h.t.Errorf("the created follow reads back as following=%v reason=%q", ok, reason)
-		}
-		// AND IT IS NOT A PUT: a second call reports it created nothing.
-		if again, err := h.f.FollowIfAbsent(h.ctx, "slack", "agent-swe", "C1", "t-new",
-			"mention", at); err != nil || again {
-			h.t.Errorf("the second create-only write reported created=%v err=%v", again, err)
-		}
-	},
-}, {
-	// AN INCOMPLETE IDENTITY IS REFUSED HERE TOO, on [Follows.Follow]'s
-	// reasoning: a record under a key missing a segment is one no read can
-	// ever find, and the handoff must not turn a malformed local row into
-	// one.
-	// EXACTLY ONE CREATE WINS, and this is the case the handoff's
-	// concurrency argument rests on.
-	//
-	// Two nodes booting at once hold their own local tables with overlapping
-	// keys, and internal/notify/followsync relies on the backend to arbitrate
-	// with nothing agreed between them — no lock, no lease, no ordering. That
-	// claim is load-bearing in three package docs and was certified only
-	// against an in-process fake until this case existed.
-	name: "exactly one of many concurrent create-only follows wins",
-	fn: func(h *fleetHarness) {
-		const callers = 8
-		at := h.now()
-		start := make(chan struct{})
-		var wg sync.WaitGroup
-		made := make([]bool, callers)
-		failed := make([]error, callers)
-		for i := range callers {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				<-start
-				made[i], failed[i] = h.f.FollowIfAbsent(h.ctx, "slack", "agent-swe",
-					"C1", "t-boot", "mention", at)
-			}()
-		}
-		close(start)
-		wg.Wait()
-
-		winners := 0
-		for i, err := range failed {
-			if err != nil {
-				h.t.Fatalf("concurrent FollowIfAbsent %d: %v", i, err)
-			}
-			if made[i] {
-				winners++
-			}
-		}
-		if winners != 1 {
-			h.t.Errorf("%d of %d concurrent create-only writes reported they "+
-				"created the follow, want exactly 1 — two nodes handing off at "+
-				"once would each count a record only one of them wrote", winners, callers)
-		}
-		if _, ok := h.following("slack", "agent-swe", "C1", "t-boot"); !ok {
-			h.t.Error("none of the concurrent creates left a follow behind")
-		}
-	},
-}, {
-	name: "a create-only follow refuses an incomplete identity",
-	fn: func(h *fleetHarness) {
-		if _, err := h.f.FollowIfAbsent(h.ctx, "", "agent-swe", "C1", "t-1", "mention", h.now()); err == nil {
-			h.t.Error("a create-only follow with no backend was accepted")
-		}
-		if _, err := h.f.FollowIfAbsent(h.ctx, "slack", "", "C1", "t-1", "mention", h.now()); err == nil {
-			h.t.Error("a create-only follow with no handle was accepted")
-		}
-		if _, err := h.f.FollowIfAbsent(h.ctx, "slack", "agent-swe", "C1", "", "mention", h.now()); err == nil {
-			h.t.Error("a create-only follow with no thread was accepted")
 		}
 	},
 }, {

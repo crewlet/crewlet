@@ -30,10 +30,13 @@ import type {
   LiveTurn,
   PartialRound,
   PromptMessage,
+  PromptSection,
   ToolExecution,
   TurnStage,
 } from "~/protocol/index.ts";
+import type { StopReason } from "~/contract/stops.ts";
 import { fmtBytes, fmtExact, plural, tsKey } from "./format.ts";
+import { decodeSections } from "./promptmap.ts";
 import type { Tone } from "~/ui/primitives.tsx";
 
 export interface ToolCall {
@@ -77,6 +80,39 @@ export interface TimedRound {
   outputTokens: number;
   cacheReadTokens: number;
   toolCalls: number;
+  /** Why the model stopped writing this round — `rounds[].stop_reason` — or
+   *  "" where its backend reported none. See [stopNote]. */
+  stopReason: string;
+}
+
+/**
+ * What a round that did NOT finish is drawn with: the sentence under its words,
+ * keyed on the engine's stop reason. `end` and `tool_use` are a round that
+ * finished and have none; each of the others ENDED the phase, and the phase's
+ * own error says the rest.
+ *
+ * Typed over the contract's union, so a stop reason the engine starts
+ * recording is a type error here until it has its sentence — the gate behind
+ * `contract/stops.ts` is what makes the union the engine's.
+ */
+const STOP_NOTES: Record<Exclude<StopReason, "end" | "tool_use">, string> = {
+  max_tokens:
+    "The response was cut off at the model's output cap, so the phase ended here — " +
+    "any tool call it was writing was not run.",
+  refusal:
+    "The model declined this request, so the phase ended here. A refusal is not " +
+    "asked again, and the turn's trigger is not redelivered.",
+  context_exceeded: "The conversation filled the model's context window, so the phase ended here.",
+  paused:
+    "The provider paused this turn for the engine to continue, which it never asks " +
+    "for, so the phase ended here.",
+};
+
+/** The sentence for a round that stopped without finishing, or null for a
+ *  round that finished, one whose backend said nothing, and a reason this
+ *  build does not know. */
+export function stopNote(reason: string): string | null {
+  return Object.hasOwn(STOP_NOTES, reason) ? STOP_NOTES[reason as keyof typeof STOP_NOTES] : null;
 }
 
 /** One round's model turn: what it reasoned, and what it said out loud. */
@@ -84,6 +120,14 @@ export interface Narration {
   round: number;
   reasoning: string;
   content: string;
+  /**
+   * The round ANSWERED IN PROSE where the phase had to end in a tool call —
+   * `round_narration[].declined`, set by the engine when a phase that finishes
+   * only by its submission (`submit_work`, `submit_review`, `mark_onboarded`,
+   * a worker's `submit_result`) got words and no call. False on every other
+   * round: the field is absent there, since the engine writes only `true`.
+   */
+  declined: boolean;
 }
 
 export interface Round {
@@ -97,6 +141,30 @@ export interface Round {
   streaming: boolean;
   /** Attempts a provider gave up on partway through, oldest first. */
   abandoned: Narration[];
+  /**
+   * The model wrote this round's answer as prose and called no tool, in a
+   * phase that finishes only by a call — see [Narration.declined]. WHAT
+   * HAPPENED NEXT is not on the wire and needs no field: a later round means
+   * the engine asked again, and a declined LAST round of a settled phase
+   * means the bound was spent and the phase ended without its submission.
+   */
+  declined: boolean;
+  /** Why the model stopped writing this round ([TimedRound.stopReason]), ""
+   *  where nothing said — read with [stopNote]. */
+  stopReason: string;
+}
+
+/**
+ * A model DECLINING the phase's request on policy grounds — the record's
+ * `refusal`. A named outcome rather than a breakage: the phase failed, but
+ * nothing went wrong that an operator can fix by rotating a key, and the
+ * engine neither rescued it nor will run the turn again.
+ */
+export interface Refusal {
+  /** The vendor's policy category (`cyber`, `bio`, …), "" where it named none. */
+  category: string;
+  /** The vendor's own account, "" where it gave none. Not stable wording. */
+  explanation: string;
 }
 
 export interface PhaseRecord {
@@ -106,7 +174,8 @@ export interface PhaseRecord {
       unique per execution. See `adr/0017`. */
   turnId: string;
   /** The unit of work behind that run: what groups a redelivered trigger's
-      attempts. Empty on a record an engine from before the split wrote. */
+      attempts. Empty for a run with no ledgerable trigger (a scheduled fire,
+      a sub-agent). */
   workKey: string;
   phase: string;
   iteration: number;
@@ -128,12 +197,26 @@ export interface PhaseRecord {
   failed: boolean;
   error: string;
   errorKind: string;
+  /** Set when the phase ended because its model declined — see [Refusal].
+   *  Null on every other phase, and always on a live one: a refusal ends the
+   *  phase, so it arrives on the settled record. */
+  refusal: Refusal | null;
   systemPrompt: string;
   userPrompt: string;
+  /**
+   * Where each prompt's parts begin and end, as the builder that wrote it said
+   * (`system_sections` / `user_sections` on the record, a prompt message's
+   * `sections` on a live call) — null where the engine sent no map. Read
+   * through `lib/promptmap.ts`, which trusts a map only when it tiles its
+   * prompt and otherwise derives the outline from the prompt's headings.
+   */
+  systemSections: PromptSection[] | null;
+  userSections: PromptSection[] | null;
   response: string;
   tools: ToolCall[];
-  /** Per-round model turns. Empty on a phase recorded before the engine
-      sent them — see `ledgerOf`. */
+  /** Per-round model turns: one entry per round that wrote reasoning or
+      text. Empty until a round comes back, on a phase whose rounds only
+      called tools, and on a coding run, whose rounds happened in its box. */
   narration: Narration[];
   /** The round being written right now. Live phases only. */
   partial: PartialRound | null;
@@ -165,6 +248,12 @@ export interface PhaseRecord {
    * only when the phase publishes its record.
    */
   emptyAnswerRounds: number;
+  /**
+   * The phase ENDED without its submission succeeding, so the engine wrote its
+   * decision in its place — `incomplete` for an executor, `self_iterate` for a
+   * reviewer. Not "it was re-asked": asking again happens inside the phase, a
+   * round at a time, and shows as a declined round followed by another one.
+   */
   rescueFired: boolean;
   decision: string;
   notes: string;
@@ -235,7 +324,7 @@ export interface PhaseRecord {
   } | null;
   /**
    * Each round's model call as the loop timed it, oldest first; empty on a
-   * phase an engine that did not time rounds recorded, and on a coding run.
+   * phase that ran no loop in this process, and on a coding run.
    */
   timedRounds: TimedRound[];
   /**
@@ -323,24 +412,21 @@ function num(v: unknown): number {
 /** Normalise the loose `tool_executions` map into something typed. */
 export function toolCalls(raw: unknown): ToolCall[] {
   if (!Array.isArray(raw)) return [];
-  return (raw as ToolExecution[]).map((ex, i) => {
-    const rec = ex as Record<string, unknown>;
+  return (raw as ToolExecution[]).map((ex) => {
+    const rec = ex as Partial<Record<keyof ToolExecution, unknown>>;
     return {
-      name: String(rec.name ?? rec.tool ?? "tool"),
-      // A producer that never set `round` still gets a stable ledger: the
-      // array's own order is the sequence, and it only appends. ONE-BASED,
-      // because the engine's own `round` is (it is `roundsUsed`), and a
-      // fallback numbering from 0 would put two producers' rounds on
-      // different scales in the same list.
-      round: typeof rec.round === "number" ? rec.round : i + 1,
-      args: str(rec.arguments ?? rec.args),
-      result: str(rec.result ?? rec.output ?? rec.error),
-      failed: rec.success === false || rec.failed === true || Boolean(rec.error),
+      name: String(rec.name ?? "tool"),
+      // ONE-BASED, because the engine's own `round` is (it is `roundsUsed`).
+      round: num(rec.round),
+      args: str(rec.arguments),
+      result: str(rec.result),
+      failed: rec.success === false || Boolean(rec.error),
       // How long the call took, and who answered it: the tool loop times
       // every call and the surface names the origin that served it. Absent
-      // on a row nothing timed (an older engine's, an agent-mode run's
-      // bridged call), which reads as 0 / "" — "not recorded", never
-      // "instant" or "the engine's own".
+      // on a row nothing timed (a call whose arguments did not parse, which
+      // was answered rather than run, and an agent-mode run's bridged call,
+      // whose rounds ran inside somebody else's loop), which reads as 0 /
+      // "" — "not recorded", never "instant" or "the engine's own".
       durationMs: typeof rec.duration_ms === "number" ? rec.duration_ms : 0,
       origin: typeof rec.origin === "string" ? rec.origin : "",
       server: typeof rec.server === "string" ? rec.server : "",
@@ -362,6 +448,7 @@ export function timedRounds(raw: unknown): TimedRound[] {
       outputTokens: num(rec.output_tokens),
       cacheReadTokens: num(rec.cache_read_tokens),
       toolCalls: num(rec.tool_calls),
+      stopReason: typeof rec.stop_reason === "string" ? rec.stop_reason : "",
     }))
     .filter((r) => r.round > 0)
     .sort((a, b) => a.round - b.round);
@@ -375,6 +462,9 @@ export function narrations(raw: unknown): Narration[] {
       round: typeof rec.round === "number" ? rec.round : i + 1,
       reasoning: typeof rec.reasoning === "string" ? rec.reasoning : "",
       content: typeof rec.content === "string" ? rec.content : "",
+      // `=== true`, never truthiness: the engine omits the key on every
+      // round that is not one, and anything else says nothing this build reads.
+      declined: rec.declined === true,
     }))
     .filter((n) => n.reasoning.trim() !== "" || n.content.trim() !== "");
 }
@@ -390,12 +480,22 @@ export function rounds(
   calls: ToolCall[],
   narration: Narration[] = [],
   partial?: PartialRound | null,
+  timed: TimedRound[] = [],
 ): Round[] {
   const byRound = new Map<number, Round>();
   const at = (round: number): Round => {
     let r = byRound.get(round);
     if (!r) {
-      r = { round, reasoning: "", content: "", tools: [], streaming: false, abandoned: [] };
+      r = {
+        round,
+        reasoning: "",
+        content: "",
+        tools: [],
+        streaming: false,
+        abandoned: [],
+        declined: false,
+        stopReason: "",
+      };
       byRound.set(round, r);
     }
     return r;
@@ -407,13 +507,25 @@ export function rounds(
     const r = at(n.round);
     r.reasoning = n.reasoning;
     r.content = n.content;
+    r.declined = n.declined;
   }
   for (const call of calls) at(call.round).tools.push(call);
+  // Each round's stop reason, off the loop's own timing of it. A round that
+  // did NOT finish gets a slot even when it said nothing and ran nothing — a
+  // refusal with no text is exactly that round, and it is the one that
+  // explains why the phase ended; a round that finished and left no trace
+  // stays out, as it always has.
+  for (const t of timed) {
+    if (byRound.has(t.round) || stopNote(t.stopReason) !== null)
+      at(t.round).stopReason = t.stopReason;
+  }
   // The round in flight. The engine clears it the instant that round's real
   // narration exists, so the two can never describe one round at once.
   if (partial && typeof partial.round === "number") {
     const r = at(partial.round);
     r.streaming = true;
+    // Arriving text has not ended its round, so it has declined nothing yet.
+    r.declined = false;
     r.reasoning = partial.reasoning ?? "";
     r.content = partial.content ?? "";
     r.abandoned = narrations(partial.abandoned);
@@ -421,40 +533,18 @@ export function rounds(
   return [...byRound.values()].sort((a, b) => a.round - b.round);
 }
 
-/**
- * The phase's rounds, however this build's engine described them.
- *
- * A phase recorded before the engine sent `round_narration` has only the
- * joined `response`, and those events are already in the store — an applied
- * write is history, not source, so they have to keep rendering. The join
- * cannot be undone (its parts are separated by a blank line and prose
- * contains blank lines), so the fallback does not try: it puts the whole
- * response in one trailing pseudo-round, which is what the reader used to
- * get, and every round that DOES have narration renders properly.
- */
-export function ledgerOf(record: {
-  tools: ToolCall[];
-  narration: Narration[];
-  partial?: PartialRound | null;
-  response: string;
-}): {
-  ledger: Round[];
-  legacy: { thinking: string; answer: string } | null;
-} {
-  const ledger = rounds(record.tools, record.narration, record.partial);
-  if (record.narration.length > 0 || record.partial) return { ledger, legacy: null };
-  const legacy = splitThinking(record.response);
-  if (!legacy.thinking && !legacy.answer.trim()) return { ledger, legacy: null };
-  return { ledger, legacy };
-}
-
-/** The content of the first message with this role, or "". */
-function promptRole(messages: PromptMessage[] | null | undefined, role: string): string {
-  if (!Array.isArray(messages)) return "";
+/** The first message with this role that carries text, or null. */
+function promptRole(
+  messages: PromptMessage[] | null | undefined,
+  role: string,
+): { content: string; sections: PromptSection[] | null } | null {
+  if (!Array.isArray(messages)) return null;
   for (const m of messages) {
-    if (m && m.role === role && typeof m.content === "string") return m.content;
+    if (m && m.role === role && typeof m.content === "string") {
+      return { content: m.content, sections: decodeSections(m.sections) };
+    }
   }
-  return "";
+  return null;
 }
 
 /**
@@ -492,6 +582,13 @@ export function phaseKey(
  * which is where the stage is kept.
  */
 export function fromLiveCall(call: LiveCall, role: string, turn?: LiveTurn | null): PhaseRecord {
+  const system = promptRole(call.prompt_messages, "system");
+  // THE TEXT AND ITS MAP FROM ONE MESSAGE. This read `call.prompt` first and
+  // the message only when `prompt` was null — which it never is on the wire
+  // (an absent one decodes as ""), so the user message was never read, and a
+  // map read off the message would have described text taken from somewhere
+  // else. `prompt` is the same text, carried for a frame that has no message.
+  const user = promptRole(call.prompt_messages, "user");
   return {
     key: phaseKey(call.turn_id, call.phase, call.iteration),
     turnId: call.turn_id,
@@ -506,12 +603,17 @@ export function fromLiveCall(call: LiveCall, role: string, turn?: LiveTurn | nul
     failed: !!call.failed,
     error: call.error?.message ?? "",
     errorKind: call.error?.kind ?? "",
+    // A refusal ends the phase, so it is on the settled record and never a
+    // running one's.
+    refusal: null,
     // Read off `prompt_messages`, which the engine has always sent and
     // nothing read. Hardcoding "" here meant a RUNNING phase could never
     // show the system prompt it was given — the one moment an operator
     // most wants to know what the model was actually told.
-    systemPrompt: promptRole(call.prompt_messages, "system"),
-    userPrompt: call.prompt ?? promptRole(call.prompt_messages, "user"),
+    systemPrompt: system?.content ?? "",
+    userPrompt: user ? user.content : (call.prompt ?? ""),
+    systemSections: system?.sections ?? null,
+    userSections: user?.sections ?? null,
     response: call.response ?? "",
     tools: toolCalls(call.tool_executions),
     narration: narrations(call.round_narration),
@@ -573,6 +675,17 @@ export function fromLiveCall(call: LiveCall, role: string, turn?: LiveTurn | nul
   };
 }
 
+/** The record's `refusal`, or null where it carries none (or something this
+ *  build cannot read as one). */
+function refusalOf(raw: unknown): Refusal | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  return {
+    category: typeof r.category === "string" ? r.category : "",
+    explanation: typeof r.explanation === "string" ? r.explanation : "",
+  };
+}
+
 /** A finished phase, from its durable `agent_phase_completed` event. */
 export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
   const p = ev.payload as Record<string, unknown> | undefined;
@@ -586,9 +699,8 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     key: phaseKey(turnId, phase, iteration, taskId, launchId),
     turnId,
     // THE ROW'S OWN COLUMN FIRST, the payload only as what a live frame
-    // carries. The stored column is backfilled across the split
-    // (migration 0029) and the payload is not, so a payload-only read
-    // reports no unit of work for every turn older than the split.
+    // carries: the column is the authority for a stored record, and a frame
+    // pushed on the socket has not been stored yet, so it has no column.
     workKey: String(ev.work_key ?? p.work_key ?? ""),
     phase,
     iteration,
@@ -600,8 +712,11 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     failed: p.failed === true,
     error: String(p.error ?? ""),
     errorKind: String(p.error_kind ?? ""),
+    refusal: refusalOf(p.refusal),
     systemPrompt: String(p.system_prompt ?? ""),
     userPrompt: String(p.user_prompt ?? ""),
+    systemSections: decodeSections(p.system_sections),
+    userSections: decodeSections(p.user_sections),
     response: String(p.response ?? ""),
     tools: toolCalls(p.tool_executions),
     narration: narrations(p.round_narration),
@@ -635,8 +750,8 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     // is one a component is a single line away from drawing.
     sandboxId: String(p.sandbox_id ?? ""),
     deliveredRefs: Array.isArray(p.delivered_refs) ? (p.delivered_refs as string[]) : [],
-    // ABSENT ON A WHOLE RECORD, and on an older engine's: both read as
-    // nothing left out, which is what such a record is.
+    // ABSENT ON A WHOLE RECORD — the engine omits a count of zero — which
+    // reads as nothing left out, which is what such a record is.
     deliveredRefsElided: num(p.delivered_refs_elided),
     launchId,
     transcript: String(p.activity_transcript ?? ""),
@@ -887,9 +1002,8 @@ export function mergePhases(stored: PhaseRecord[], live: PhaseRecord[]): PhaseRe
 export interface TurnGroup {
   turnId: string;
   /** The unit of work this run was an attempt at. Empty when its phases carry
-      none — a trigger with no ledgerable id, or records an engine from before
-      the split wrote. Two groups sharing one of these are two attempts at the
-      same trigger; see `adr/0017`. */
+      none — a trigger with no ledgerable id. Two groups sharing one of these
+      are two attempts at the same trigger; see `adr/0017`. */
   workKey: string;
   role: string;
   /** The turn's OWN phases, in the order they ran. A nested call is not
@@ -1022,10 +1136,8 @@ export function groupTurns(phases: PhaseRecord[]): TurnGroup[] {
       const startedAt = from > 0 ? new Date(from).toISOString() : "";
       return {
         turnId,
-        // OFF THE PHASES, and the first that HAS one rather than the first
-        // phase: a record written before the identities were split carries
-        // none, and a turn whose opening phase is such a record still belongs
-        // to whatever unit of work its later phases name.
+        // OFF THE PHASES: every phase of one run carries the run's key, so
+        // the first that has one names it.
         workKey: ordered.find((r) => r.workKey)?.workKey ?? "",
         role: ordered[0]?.role ?? "",
         phases: own,
@@ -1066,20 +1178,6 @@ export function triggerHeadline(trigger: PhaseRecord["trigger"]): string {
 }
 
 /**
- * Split the model's reasoning off the front of its answer.
- *
- * The engine keeps a phase's reasoning as a `<think>` prefix of `Response`, so
- * this is a documented shape rather than a guess. Reasoning is collapsed by
- * default: it is long, it is not the answer, and a reader scanning a turn for
- * what it DID should not have to scroll past what it considered.
- */
-export function splitThinking(response: string): { thinking: string; answer: string } {
-  const m = /^\s*<think(?:ing)?>([\s\S]*?)<\/think(?:ing)?>\s*/i.exec(response ?? "");
-  if (!m) return { thinking: "", answer: response ?? "" };
-  return { thinking: (m[1] ?? "").trim(), answer: (response ?? "").slice(m[0].length) };
-}
-
-/**
  * What each decision MEANS: the words a reader sees, and whether it is something
  * they have to act on.
  *
@@ -1107,7 +1205,9 @@ export function splitThinking(response: string): { thinking: string; answer: str
  * such, because a reader who cannot tell an engine-written outcome from a
  * model's own is reading a claim as a commitment.
  */
-const DECISIONS: Record<string, Record<string, { label: string; tone: Tone }>> = {
+type Meaning = { label: string; tone: Tone };
+
+const DECISIONS: Record<string, Record<string, Meaning>> = {
   execute: {
     delivered: { label: "delivered the work", tone: "positive" },
     no_action: { label: "nothing to do — ended silently", tone: "neutral" },
@@ -1130,31 +1230,54 @@ const DECISIONS: Record<string, Record<string, { label: string; tone: Tone }>> =
 };
 
 /**
+ * What a decision means when the ENGINE wrote it — `rescue_fired`: the phase
+ * ended without its submission succeeding, so the engine decided in its place.
+ *
+ * Only the reviewer needs a row of its own. The executor's rescue always writes
+ * `incomplete`, whose sentence already says the engine wrote it; the reviewer's
+ * writes `self_iterate`, the same word a reviewer chooses on purpose, and
+ * "sent the turn back" said the REVIEWER judged the round when nothing judged
+ * it at all. Same tone: the turn does go round again either way.
+ */
+const RESCUED: Record<string, Record<string, Meaning>> = {
+  review: {
+    self_iterate: {
+      label: "never decided — the engine sent the turn back for another round",
+      tone: "caution",
+    },
+  },
+};
+
+/**
  * The row for one decision, or nothing for a decision this build has never heard
  * of.
  *
  * The THIRD value matters to one caller: the turn header says "the executor said
  * <word>" for a word it cannot gloss, which a label falling through verbatim
  * could not tell it.
+ *
+ * `rescued` is the record's `rescue_fired`. A caller that has no record (an
+ * episode's stored review outcome) leaves it off and gets the model's reading.
  */
 export function decisionMeaning(
   phase: string,
   decision: string,
-): { label: string; tone: Tone } | undefined {
+  rescued = false,
+): Meaning | undefined {
   if (!decision) return undefined;
-  return DECISIONS[(phase || "").toLowerCase()]?.[decision];
+  const key = (phase || "").toLowerCase();
+  return (rescued ? RESCUED[key]?.[decision] : undefined) ?? DECISIONS[key]?.[decision];
 }
 
 /**
  * What a phase's decision means, said in words rather than left as an enum.
  *
  * An unknown value falls through verbatim rather than being dropped, which is
- * what keeps a row written by a build this bundle predates readable: the retired
- * `plan` phase's `plan` / `direct` / `skip` still render as themselves.
+ * what keeps a newer build's decision readable: it renders as itself.
  */
-export function decisionLabel(phase: string, decision: string): string {
+export function decisionLabel(phase: string, decision: string, rescued = false): string {
   if (!decision) return "";
-  return decisionMeaning(phase, decision)?.label ?? decision;
+  return decisionMeaning(phase, decision, rescued)?.label ?? decision;
 }
 
 /**
@@ -1168,6 +1291,6 @@ export function decisionLabel(phase: string, decision: string): string {
  * their own off the record's `failed` flag, so toning their decision too would
  * report one stop twice, side by side.
  */
-export function decisionTone(phase: string, decision: string): Tone {
-  return decisionMeaning(phase, decision)?.tone ?? "neutral";
+export function decisionTone(phase: string, decision: string, rescued = false): Tone {
+  return decisionMeaning(phase, decision, rescued)?.tone ?? "neutral";
 }

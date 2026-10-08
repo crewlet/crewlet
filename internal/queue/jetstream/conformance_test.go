@@ -19,6 +19,28 @@ func TestConformance(t *testing.T) {
 	queuetest.RunWith(t, newConformanceQueue, capabilities())
 }
 
+// TestInspectionClientsEndWithTheirTest pins that the inspection registry
+// holds a queue only while the test that opened it runs. Each entry holds a
+// whole broker, so one that outlives its test is a broker the binary keeps
+// until it exits — which is how a -count=20 run of this package reached
+// 12 GB and was killed.
+func TestInspectionClientsEndWithTheirTest(t *testing.T) {
+	var q *Queue
+	t.Run("open", func(t *testing.T) {
+		q = openForTest(t, Config{})
+		if inspector(q) == q {
+			t.Fatal("no inspection client was registered for the queue")
+		}
+	})
+
+	adminMu.Lock()
+	_, held := admins[q]
+	adminMu.Unlock()
+	if held {
+		t.Fatal("the inspection registry still holds a queue whose test has ended, and through it the queue's whole broker")
+	}
+}
+
 // newConformanceQueue returns a fresh queue on its own embedded broker.
 //
 // Own broker per queue, not per test binary: the suite asserts things like
@@ -60,6 +82,12 @@ func testTimings(cfg Config) Config {
 	if cfg.FetchWait == 0 {
 		cfg.FetchWait = 25 * time.Millisecond
 	}
+	// 25 ms, and it is what queuetest's return-order case stands on: a
+	// failure is returned with NakWithDelay and the consumer serves the
+	// never-delivered mail while it waits, so it comes back BEHIND it, while
+	// a hand-back is a plain Nak whose redelivery the broker serves before
+	// new mail. Measured 100 of 100 each way, 60 of them under CPU pressure,
+	// at this value (76ad6f656).
 	if cfg.NakDelay == 0 {
 		cfg.NakDelay = 25 * time.Millisecond
 	}
@@ -96,11 +124,27 @@ func clientUnderTest(t *testing.T, srv, inspect *Server, opts ...queue.Option) *
 	adminMu.Lock()
 	admins[q] = admin
 	adminMu.Unlock()
+	// Registered after both Stops so it runs before them, and after every
+	// cleanup the case itself registers — those may still read through the
+	// inspector.
+	t.Cleanup(func() {
+		adminMu.Lock()
+		delete(admins, q)
+		adminMu.Unlock()
+	})
 
 	return q
 }
 
-// admins maps a queue under test to the inspection client for its broker.
+// admins maps a queue under test to the inspection client for its broker,
+// for as long as the test that opened the queue runs.
+//
+// THE ENTRY GOES WITH THE TEST, because both keys hold the whole broker: a
+// Queue keeps its embeddedServer, and with it the nats-server and every
+// stream, buffer and subscription list it allocated. A package-level map that
+// is never pruned keeps every broker the package ever started — about 50 MB
+// of heap per conformance run, 240 MB of resident memory under -race — and a
+// run at -count=20 was OOM-killed at 12 GB.
 var (
 	adminMu sync.Mutex
 	admins  = map[*Queue]*Queue{}
@@ -195,11 +239,6 @@ func capabilitiesFor(open func(*testing.T, Config) *Queue) queuetest.Capabilitie
 		// StrictRoundRobin — JetStream serves whichever member asks
 		// first. Each event still reaches exactly one member, which is
 		// the part every broker owes.
-		//
-		// HeadReplayOnNak — measured false: a redelivered message returns
-		// BEHIND never-delivered ones. This is precisely why
-		// within-conversation order comes from event timestamps rather
-		// than from the broker.
 		//
 		// History — this backend has no ledger of everything ever
 		// published; interest retention deliberately drops what no

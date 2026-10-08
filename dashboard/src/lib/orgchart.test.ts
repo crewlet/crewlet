@@ -50,17 +50,6 @@ test("the seats of a unit its lead leads from outside are boxed, with the unit's
   ]);
 });
 
-// AN ENGINE THAT REPORTS NO HIERARCHY leaves nobody reporting to anybody:
-// every seat is a root, and no unit has a lead to box it under. The chart
-// draws that rather than a hierarchy this client made up.
-test("with no derived hierarchy every seat is a root and nothing is boxed", () => {
-  const { derived: _drop, ...flat } = CHART_ORG as OrgProjection & { derived: unknown };
-  const chart = buildOrgChart(indexOrg(flat as OrgProjection), PROJECTS);
-  expect(chart.nodes.every((n) => !n.children)).toBe(true);
-  expect(chart.nodes).toHaveLength(7);
-  expect(chart.groups).toEqual([]);
-});
-
 // THE LEGEND IS THE ENGINE'S WORD, COUNTED — and a seat with no row yet is
 // counted nowhere, because "no state yet" is not idle. A human is never
 // counted: the engine runs no human seat.

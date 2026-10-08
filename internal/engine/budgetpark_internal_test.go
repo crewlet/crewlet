@@ -127,7 +127,9 @@ func newParkRig(t *testing.T, dayCeiling string) *parkRig {
 	r := &parkRig{q: q, fleet: coordmem.NewFleet(), alarms: &fakeAlarms{}, now: parkedAt}
 	r.e = &Engine{backends: &Backends{Queue: q, Fleet: r.fleet}}
 	r.e.epoch.current.Store(companyFor(t, strings.Replace(leadDoc, "%d", dayCeiling, 1)))
-	r.e.budgetParks.now = r.clock
+	// THE ENGINE'S CLOCK, which the park's question, its alarm and the
+	// meter the question is asked through all read.
+	r.e.clock = r.clock
 	r.e.budgetParks.after = r.alarms.after
 
 	d := &Dispatcher{
@@ -369,7 +371,8 @@ func TestATurnRefusedMidFlightParksTheSeat(t *testing.T) {
 	r.turnFn = func() (turn.Result, error) {
 		// The round that did not fit: the counter stamps the window.
 		r.spend(t, 100)
-		return turn.Result{}, &toolloop.BudgetError{Scope: "agent", Used: 100, Limit: 100}
+		return turn.Result{}, &toolloop.BudgetError{Scope: "agent", Used: 100, Limit: 100,
+			Period: period.Day, Window: "2026-09-23", ResetsAt: time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)}
 	}
 	r.mu.Unlock()
 	r.deliver(t)

@@ -198,13 +198,8 @@ of a coding run's report are told apart on every breakdown.
 their questions, or a pass resolved on the chain of a unit they lead — names no
 agent seat, so the per-seat breakdowns draw it as the person's row
 (`person: true`), with no turns. It reaches the named windows as the `usage`
-domain's person record, which a node publishes only once every node applying
-the usage log runs a build that reads it; during a rolling upgrade from one
-that does not, a person's spend is on the live window and the counter, and
-joins the named windows when the last node is upgraded. The node keeps those
-days in its own store until then (`usage_held`), so a node restarted
-mid-upgrade still publishes a held day older than yesterday — a day no process
-derives again — once every node reads it.
+domain's person record, which a node publishes with the rest of its day, as
+it publishes a seat's.
 
 **Coalesced, a flush behind.** A node's ledger keeps one record per (stage,
 seat or person, turn, purpose, model, provider entry, company day) and
@@ -263,11 +258,6 @@ known size:
   company's counter and then failed on the seat's keeps the call on the
   company and leaves only that seat's counter short of it, logged as
   `coord_kv_budget_spend_uncounted`.
-- **A person's day during a rolling upgrade** — above.
-- **Upgrade order.** A node without `data` hands its records to a data node
-  (custody), and a data node on an older build drops a type its build does
-  not know. **Upgrade the data nodes first**, so the records of a node without
-  `data` that is already upgraded are kept.
 
 ## Cache share
 

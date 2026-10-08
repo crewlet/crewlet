@@ -173,6 +173,9 @@ type threadBlock struct {
 	// stoppedShort says the answer stops short of the thread's newest
 	// message. See [notify.Transcript.StoppedShort].
 	stoppedShort bool
+	// answered are the messages the block showed that were waiting for this
+	// turn. See [Blocks.ThreadContextAnswered].
+	answered []string
 }
 
 // threadContext renders the block.
@@ -225,8 +228,19 @@ func (f *Fetcher) threadContext(ctx context.Context, r Request) threadBlock {
 //
 // This is the rule [ledger.RenderHistory] implements, applied to the one block
 // whose items are somebody else's prose.
+//
+// AND IT SAYS WHICH WAITING MESSAGES IT SHOWED ([Blocks.ThreadContextAnswered])
+// — the ones after this seat's own last reply and before the message that
+// woke the turn — kept in step with the lines through every bound. Only a
+// message rendered VERBATIM counts: one left out was never seen, and one
+// condensed into the middle's account was seen as a model's paraphrase, and a
+// message recorded as answered is one a later delivery of it is dropped for.
 func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Transcript, backend string) threadBlock {
 	lines := make([]string, 0, len(read.Messages))
+	// waiting runs beside lines: the id of the message a line rendered when
+	// that message was waiting for this turn, and "" for every other line.
+	waiting := make([]string, 0, len(read.Messages))
+	waitingFor := waitingMessages(read, r.Message)
 	// rootSlot says the read carried a root at all; rootShown says it
 	// rendered as a message rather than as its stand-in. The two are apart
 	// because the message count reports what was HANDED OVER, and a notice
@@ -237,6 +251,7 @@ func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Trans
 		if i == 0 {
 			if line == "" {
 				lines = append(lines, UnrenderableRootLine)
+				waiting = append(waiting, "")
 				continue
 			}
 			rootShown = true
@@ -244,6 +259,7 @@ func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Trans
 			continue
 		}
 		lines = append(lines, line)
+		waiting = append(waiting, waitingFor[i])
 	}
 	posts := len(lines)
 	if rootSlot && !rootShown {
@@ -273,6 +289,13 @@ func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Trans
 	// seat one message is missing twice.
 	dropped := read.Older
 	lines, middle := splitThread(lines)
+	// The same split, beside the lines: splitThread keeps the root's slot
+	// and the newest, so a middle is lines[1 : 1+len(middle)].
+	var waitingMiddle []string
+	if len(middle) > 0 {
+		waitingMiddle = waiting[1 : 1+len(middle)]
+		waiting = append(append([]string{}, waiting[0]), waiting[1+len(middle):]...)
+	}
 	posts = len(lines)
 	if rootSlot && !rootShown {
 		posts--
@@ -294,6 +317,7 @@ func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Trans
 			// verbatim, unlabelled. Calling it condensed would be a lie
 			// about text nobody rewrote.
 			lines = append(append(append([]string{}, lines[0]), middle...), lines[1:]...)
+			waiting = append(append(append([]string{}, waiting[0]), waitingMiddle...), waiting[1:]...)
 			posts += len(middle)
 			middle = nil
 		case err == nil:
@@ -335,10 +359,53 @@ func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Trans
 	for _, line := range lines[1:] {
 		b.WriteString("\n" + line)
 	}
+	var answered []string
+	for _, id := range waiting {
+		if id != "" {
+			answered = append(answered, id)
+		}
+	}
 	return threadBlock{
 		text: b.String(), posts: posts,
 		read: true, stoppedShort: read.StoppedShort,
+		answered: answered,
 	}
+}
+
+// waitingMessages marks, by position in the read, the messages that were
+// waiting for the turn trigger woke: somebody else's, after this seat's own
+// last reply, before the trigger itself.
+//
+// NOTHING, unless the read reached the trigger: a read that stopped short is
+// missing the newest messages — the trigger among them — and a trigger the
+// read does not contain says nothing about which messages came before it.
+// Every message up to the seat's own last reply is excluded because that
+// reply is where the seat last answered the thread: what came before it is
+// not waiting for anybody.
+func waitingMessages(read notify.Transcript, trigger string) map[int]string {
+	if trigger == "" || read.StoppedShort {
+		return nil
+	}
+	at := -1
+	for i, m := range read.Messages {
+		if m.ID == trigger {
+			at = i
+		}
+	}
+	if at < 0 {
+		return nil
+	}
+	out := map[int]string{}
+	for i := at - 1; i >= 0; i-- {
+		m := read.Messages[i]
+		if m.Own {
+			break
+		}
+		if m.ID != "" && m.ID != trigger {
+			out[i] = m.ID
+		}
+	}
+	return out
 }
 
 // splitThread divides rendered lines into what renders verbatim — the root's

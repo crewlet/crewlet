@@ -264,8 +264,7 @@ func TestALaterAttemptInheritsTheRebaseWhileItCan(t *testing.T) {
 // A RUN WITH NO WORK KEY IS JUDGED AND RECORDED BY ITS OWN RUN.
 //
 // Its ids are seeded from the run and minted at the run's start, which a resume
-// forty days on is exactly as far past the ledger as a keyed run's work — and a
-// run id an older build minted with no instant in it is further still. So the
+// forty days on is exactly as far past the ledger as a keyed run's work. So the
 // rule is judged against the instant the ids WOULD carry, whichever identity it
 // is the start of, and the record is kept under the seed they are derived
 // from: a rule reading WorkSince alone would never rebase these.
@@ -281,8 +280,6 @@ func TestARunWithNoWorkKeyIsRebasedByItsRun(t *testing.T) {
 		{"a run a week on", statelog.NewOpID(started, ""), 7 * 24 * time.Hour,
 			func(time.Time) time.Time { return time.Time{} }},
 		{"a run forty days on", statelog.NewOpID(started, ""), 40 * 24 * time.Hour,
-			func(at time.Time) time.Time { return at }},
-		{"a run whose id carries no instant, an hour on", "run-from-an-older-build", time.Hour,
 			func(at time.Time) time.Time { return at }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -549,7 +546,7 @@ func TestAResumeThatCannotReadItsRebaseIsHandedBack(t *testing.T) {
 	seat := rig.company.Org.Roles[0]
 	run := sandbox.PendingRun{
 		TurnID: statelog.NewOpID(began, ""), WorkKey: "wk-parked", WorkSince: began,
-		AgentHandle: "swe",
+		AgentHandle: "swe", Reply: "none",
 	}
 	err := e.resumeTurn(context.Background(), resumeInput{
 		Company: rig.company, Run: run, Turn: resumedTurn(run, seat, rig.company.Org),

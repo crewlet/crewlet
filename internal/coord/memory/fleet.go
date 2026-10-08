@@ -157,6 +157,13 @@ func (f *Fleet) Claim(_ context.Context, key string, ttl time.Duration, now time
 	if ttl <= 0 {
 		return false, errors.New("coord/memory: a claim needs a positive ttl")
 	}
+	// REFUSED as the KV backend refuses it, whose claims bucket keeps a
+	// record for coord.MaxClaimTTL and no longer: a twin that honoured any
+	// ttl would certify a dedupe window production cannot keep.
+	if ttl > coord.MaxClaimTTL {
+		return false, fmt.Errorf("coord/memory: a %v claim exceeds coord.MaxClaimTTL (%v): %w",
+			ttl, coord.MaxClaimTTL, coord.ErrTTLTooLong)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -249,6 +256,9 @@ func (f *Fleet) Since(_ context.Context, now time.Time) (map[string]time.Time, e
 func (f *Fleet) Activate(_ context.Context, req coord.ActivationRequest) (coord.Activation, error) {
 	if req.RevisionID == "" {
 		return coord.Activation{}, errors.New("coord/memory: an activation needs a revision id")
+	}
+	if err := req.Origin.Check(); err != nil {
+		return coord.Activation{}, fmt.Errorf("coord/memory: activate %s: %w", req.RevisionID, err)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -546,12 +556,6 @@ func (f *Fleet) Usage(_ context.Context, windows coord.Windows) ([]coord.Usage, 
 		return nil, nil
 	}
 	return out, nil
-}
-
-// RetireLifetimeCounters has nothing to retire: the twin lives and dies with
-// its process, so no earlier build's counters can exist in it.
-func (f *Fleet) RetireLifetimeCounters(context.Context) (bool, error) {
-	return false, nil
 }
 
 // ---- the agent-to-agent channels --------------------------------------- //
@@ -957,25 +961,6 @@ func (f *Fleet) Following(_ context.Context, backend, handle, channel, thread st
 		return "", false, nil
 	}
 	return entry.reason, true, nil
-}
-
-// FollowIfAbsent records a follow only where none exists, reporting whether
-// this call created it.
-//
-// ONE MUTEX ACROSS THE CHECK AND THE WRITE, which is what the KV backend buys
-// with Create — see [coord.Follows.FollowIfAbsent] for what depends on it.
-func (f *Fleet) FollowIfAbsent(_ context.Context, backend, handle, channel, thread, reason string, at time.Time) (bool, error) {
-	if backend == "" || handle == "" || thread == "" {
-		return false, errors.New("coord/memory: a follow needs a backend, a handle and a thread")
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	key := followKey(backend, handle, channel, thread)
-	if _, held := f.follows[key]; held {
-		return false, nil
-	}
-	f.follows[key] = followEntry{reason: reason, at: at.UTC()}
-	return true, nil
 }
 
 // Unfollow drops a follow, reporting whether one was there.

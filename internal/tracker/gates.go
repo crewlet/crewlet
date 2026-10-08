@@ -319,10 +319,10 @@ func markedTask(subj statelog.Subject) (string, bool) {
 // build can honour it: applied the old way it leaves rows every newer node
 // does not hold, and deferred it is the licence described above. So such a
 // record is written at a RECORD version above every build that predates the
-// change — the purge at [rewriteVersion] — and the framework halts that build
-// at it, while every record written before it keeps the rule it was applied
-// by. The halt needs the older build to know the record for a gate, and it
-// does, because [Domain.InstallsGate] is answered from the envelope: an
+// change — a row in [versionedFields] carrying [statelog.VersionedField.Gate]
+// — and the framework halts that build at it, while every record written
+// before it keeps the rule it was applied by. The halt needs the older build
+// to know the record for a gate, and it does, because [Domain.InstallsGate] is answered from the envelope: an
 // eviction by its kind and a purge by its op. That is also why a changed gate
 // is NOT given a new kind or a new op: one an older build does not know is not
 // a gate to it, so at a raised version it would be deferred — the licence
@@ -330,9 +330,7 @@ func markedTask(subj statelog.Subject) (string, bool) {
 // place for ever rather than a stop.
 const GateRecordVersion = 1
 
-// purgeMutation is a purge's payload. Nothing in it is what stamps the record
-// at [rewriteVersion]: the purge's op is, through its row in [versionedFields],
-// because what changed at that version is the purge's apply and not its shape.
+// purgeMutation is a purge's payload.
 type purgeMutation struct {
 	V      int    `json:"v"`
 	Reason string `json:"reason,omitempty"`

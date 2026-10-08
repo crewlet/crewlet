@@ -443,6 +443,41 @@ func TestSecondReleaseIsANoOp(t *testing.T) {
 	}
 }
 
+// RELEASE IS AN ABSTENTION. It returns the key without a verdict: nothing is
+// benched, and an auth backoff a real call earned survives it — a success on a
+// route that says nothing about the key must not forgive a key the messages
+// route refused, or the next refusal there is benched for the base TTL again
+// instead of the doubled one.
+func TestReleaseReturnsTheKeyWithoutAVerdict(t *testing.T) {
+	t.Parallel()
+	const ttl = time.Minute
+	p, clock := newTestPool(t, []string{"k"}, Policy{Auth: ttl})
+
+	lease, _ := p.Acquire()
+	lease.Release()
+	if s := p.Stats()[0]; s.InFlight != 0 || s.Cooling != 0 {
+		t.Fatalf("after Release: InFlight %d, Cooling %v; want the key back and unbenched", s.InFlight, s.Cooling)
+	}
+
+	lease, _ = p.Acquire()
+	lease.Fail(t.Context(), llm.KindAuth, 0)
+	clock.advance(ttl)
+	lease, ok := p.Acquire()
+	if !ok {
+		t.Fatal("the key did not come back after its bench")
+	}
+	lease.Release()
+	lease.Release() // a second release is a no-op, as for the verdicts
+	if got := p.Stats()[0].InFlight; got != 0 {
+		t.Fatalf("InFlight = %d after a double Release, want 0", got)
+	}
+	lease, _ = p.Acquire()
+	lease.Fail(t.Context(), llm.KindAuth, 0)
+	if got := coolingOf(t, p, Hint("k")); got != 2*ttl {
+		t.Fatalf("second auth failure benched for %v, want %v: Release forgave the first", got, 2*ttl)
+	}
+}
+
 func TestSucceedReleasesTheInFlightCount(t *testing.T) {
 	t.Parallel()
 	p, _ := newTestPool(t, []string{"k"}, Policy{})

@@ -38,8 +38,7 @@
  *
  * Three more are properties of the function rather than of these records,
  * because the engine marshals a Go map before it writes the text: a resolved
- * `\u003c` (only in a record written before `tools.RecordArgs` stopped
- * escaping those), a dropped duplicate key, and integer-like keys sorted to
+ * `\u003c`, a dropped duplicate key, and integer-like keys sorted to
  * the front. None of them is the reason — they are what it costs nothing to
  * be right about once the text is walked rather than decoded.
  *

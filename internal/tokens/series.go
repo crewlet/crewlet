@@ -71,9 +71,9 @@ func (g Group) Valid() bool { return slices.Contains(Groups, g) }
 
 // Band is one of the four bands a phase breakdown is drawn in.
 //
-// FOUR, folded ONCE, here: the engine has seven phase values (and a retired
-// eighth still in the history), a chart has four data hues, and a phase band a
-// screen folded itself would be the fold that disagreed with the next screen's.
+// FOUR, folded ONCE, here: the engine has seven phase values, a chart has four
+// data hues, and a phase band a screen folded itself would be the fold that
+// disagreed with the next screen's.
 type Band string
 
 // The four bands, in the order a chart stacks them.
@@ -101,15 +101,12 @@ var Bands = []Band{BandExecute, BandReview, BandWorkers, BandAuxiliary}
 
 // PhaseBand is the band a phase value is drawn in.
 //
-// The retired `plan` phase folds into Execute: it was a leg of the turn itself
-// — the frame that decides is the frame that acts now — and a pre-redesign
-// node's records still carry it inside the usage horizon. Any other value this
-// build does not know (a newer peer's phase, or none at all) is AUXILIARY,
-// never dropped: it is spend, and "not the turn's own recognised work" is the
-// one honest thing this build can say about it.
+// A value this build does not know (a newer peer's phase, or none at all) is
+// AUXILIARY, never dropped: it is spend, and "not the turn's own recognised
+// work" is the one honest thing this build can say about it.
 func PhaseBand(phase string) Band {
 	switch phase {
-	case "execute", "sandbox", "plan":
+	case "execute", "sandbox":
 		return BandExecute
 	case "review":
 		return BandReview

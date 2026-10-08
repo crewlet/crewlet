@@ -452,20 +452,15 @@ func (p *Provider) probeVersion(ctx context.Context) string {
 // — and still not produce a parseable tool call, because the envelope
 // contract is a request to a model rather than a schema the vendor enforces.
 // That failure only shows up on the first turn of a real seat otherwise.
+//
+// THE PRODUCTION SHAPE, and nothing stronger: tools offered, no call forced,
+// and the instruction naming the tool in the conversation — which is exactly
+// what a phase that finishes by a call sends, its corrective round included.
+// It used to force a call, which rendered the envelope's "you MUST request a
+// tool call" contract that no phase ever receives; a CLI that only called a
+// tool when told it must would have passed here and failed every seat.
 func (p *Provider) smokeTest(ctx context.Context) string {
-	comp, err := p.Complete(ctx, llm.Request{
-		Messages: []llm.Message{{Role: llm.RoleUser, Content: smokePrompt}},
-		Tools: []llm.ToolDef{{
-			Name:        "crewlet_smoke",
-			Description: "Confirm the tool channel works.",
-			Parameters: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{"ok": map[string]any{"type": "boolean"}},
-				"required":   []any{"ok"},
-			},
-		}},
-		ToolChoice: llm.ToolChoiceRequired,
-	})
+	comp, err := p.Complete(ctx, smokeRequest())
 	if err != nil {
 		return "failed — " + err.Error()
 	}
@@ -481,16 +476,35 @@ func (p *Provider) smokeTest(ctx context.Context) string {
 			return fmt.Sprintf(
 				"failed — the CLI exited 0 and answered with nothing at all (%d output "+
 					"tokens billed), so it spent its whole answer on hidden reasoning. "+
-					"Seats on this provider will burn a corrective round and then "+
-					"produce nothing: point this entry at a stronger model",
+					"Every phase a seat runs on this provider will spend corrective rounds "+
+					"asking again and then end without its submission: point this entry "+
+					"at a stronger model",
 				comp.OutputTokens)
 		}
 		return fmt.Sprintf(
-			"failed — the CLI answered but produced no parseable tool call, so seats on "+
-				"this provider will burn a corrective round every turn. It said: %q",
+			"failed — the CLI answered but produced no parseable tool call, so every phase "+
+				"a seat runs on this provider will spend a corrective round asking again, and "+
+				"end without its submission whenever the model never manages one. It said: %q",
 			strings.TrimSpace(comp.Content))
 	}
 	return fmt.Sprintf("ok — %d in / %d out", comp.InputTokens, comp.OutputTokens)
+}
+
+// smokeRequest is the one call [Provider.smokeTest] makes: the crewlet_smoke
+// tool offered, and the instruction that names it.
+func smokeRequest() llm.Request {
+	return llm.Request{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: smokePrompt}},
+		Tools: []llm.ToolDef{{
+			Name:        "crewlet_smoke",
+			Description: "Confirm the tool channel works.",
+			Parameters: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"ok": map[string]any{"type": "boolean"}},
+				"required":   []any{"ok"},
+			},
+		}},
+	}
 }
 
 // Healthy reports whether the diagnosis found nothing wrong.

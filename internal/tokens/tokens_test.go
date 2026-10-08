@@ -13,14 +13,14 @@ func rec(role, phase, model, turn, at string, in, out int) tokens.Record {
 		EventID: at + role + phase, Timestamp: at,
 		AgentRole: role, AgentID: "id-" + role,
 		Phase: phase, Model: model, TurnID: turn,
-		InputTokens: in, OutputTokens: out, TotalTokens: in + out,
+		InputTokens: in, OutputTokens: out, TotalTokens: in + out, Calls: 1,
 	}
 }
 
 func TestOneTurnFoldsIntoEveryDimension(t *testing.T) {
 	t.Parallel()
 	got := tokens.Aggregate([]tokens.Record{
-		rec("CEO", "plan", "sonnet", "t1", "2026-06-14T12:00:00Z", 60, 20),
+		rec("CEO", "onboarding", "sonnet", "t1", "2026-06-14T12:00:00Z", 60, 20),
 		rec("CEO", "execute", "sonnet", "t1", "2026-06-14T12:00:05Z", 90, 30),
 		rec("CEO", "review", "haiku", "t1", "2026-06-14T12:00:09Z", 40, 10),
 	}, tokens.Options{Handles: map[string]string{"CEO": "ceo"}, Since: since, Until: until})
@@ -37,8 +37,8 @@ func TestOneTurnFoldsIntoEveryDimension(t *testing.T) {
 	if len(got.ByAgent) != 1 || got.ByAgent[0].Handle != "ceo" {
 		t.Errorf("by_agent = %+v", got.ByAgent)
 	}
-	if n := got.ByAgent[0].ByPhase["plan"].TotalTokens; n != 80 {
-		t.Errorf("the agent's plan bucket = %d, want 80", n)
+	if n := got.ByAgent[0].ByPhase["onboarding"].TotalTokens; n != 80 {
+		t.Errorf("the agent's onboarding bucket = %d, want 80", n)
 	}
 	if len(got.ByTurn) != 1 {
 		t.Fatalf("by_turn = %+v", got.ByTurn)
@@ -60,9 +60,9 @@ func TestOrderOfArrivalDoesNotChangeTheAnswer(t *testing.T) {
 	// orders — and a rollup that depended on order would make the live
 	// number and the queried one disagree for no visible reason.
 	forward := []tokens.Record{
-		rec("CEO", "plan", "sonnet", "t1", "2026-06-14T12:00:00Z", 60, 20),
+		rec("CEO", "onboarding", "sonnet", "t1", "2026-06-14T12:00:00Z", 60, 20),
 		rec("CEO", "execute", "sonnet", "t1", "2026-06-14T12:00:05Z", 90, 30),
-		rec("CTO", "plan", "haiku", "t2", "2026-06-14T12:00:07Z", 10, 5),
+		rec("CTO", "onboarding", "haiku", "t2", "2026-06-14T12:00:07Z", 10, 5),
 	}
 	backward := []tokens.Record{forward[2], forward[1], forward[0]}
 
@@ -79,7 +79,7 @@ func TestTiesBreakOnANameRatherThanOnMapOrder(t *testing.T) {
 	// differently on every call — which makes a diff of two captures
 	// unreadable and a golden test impossible.
 	records := []tokens.Record{
-		rec("A", "plan", "m", "t1", "2026-06-14T12:00:00Z", 5, 5),
+		rec("A", "onboarding", "m", "t1", "2026-06-14T12:00:00Z", 5, 5),
 		rec("B", "execute", "m", "t2", "2026-06-14T12:00:00Z", 5, 5),
 		rec("C", "review", "m", "t3", "2026-06-14T12:00:00Z", 5, 5),
 	}
@@ -118,7 +118,7 @@ func TestARecordWithNoTurnStillCountsTowardEverythingElse(t *testing.T) {
 	// It is real spend. Dropping it would understate the totals; inventing
 	// a turn key for it would make one row per phase in the turn table.
 	got := tokens.Aggregate([]tokens.Record{
-		rec("CEO", "plan", "sonnet", "", "2026-06-14T12:00:00Z", 60, 20),
+		rec("CEO", "onboarding", "sonnet", "", "2026-06-14T12:00:00Z", 60, 20),
 	}, tokens.Options{})
 
 	if got.Totals.TotalTokens != 80 {
@@ -156,7 +156,7 @@ func TestTurnsAreNewestFirstAndCapped(t *testing.T) {
 	for i, at := range []string{
 		"2026-06-14T12:00:01Z", "2026-06-14T12:00:02Z", "2026-06-14T12:00:03Z",
 	} {
-		records = append(records, rec("CEO", "plan", "m", string(rune('a'+i)), at, 100-i*10, 0))
+		records = append(records, rec("CEO", "onboarding", "m", string(rune('a'+i)), at, 100-i*10, 0))
 	}
 	got := tokens.Aggregate(records, tokens.Options{RecentTurns: 2})
 	if len(got.ByTurn) != 2 {
@@ -187,7 +187,7 @@ func TestTurnOrderIsByInstantNotByBytes(t *testing.T) {
 		"2026-06-14T12:00:05.5Z",
 		"2026-06-14T12:00:05Z", // the oldest instant, the highest bytes
 	} {
-		records = append(records, rec("CEO", "plan", "m", string(rune('a'+i)), at, 10, 0))
+		records = append(records, rec("CEO", "onboarding", "m", string(rune('a'+i)), at, 10, 0))
 	}
 
 	got := tokens.Aggregate(records, tokens.Options{RecentTurns: 3})
@@ -261,7 +261,7 @@ func TestTheWireKeysAreTheOnesTheClientReads(t *testing.T) {
 	// These are the exact keys views/spend.js and store.js index by name —
 	// a renamed field here is a blank panel there, with no error anywhere.
 	raw, _ := json.Marshal(tokens.Aggregate([]tokens.Record{
-		rec("CEO", "plan", "sonnet", "t1", "2026-06-14T12:00:00Z", 60, 20),
+		rec("CEO", "onboarding", "sonnet", "t1", "2026-06-14T12:00:00Z", 60, 20),
 	}, tokens.Options{Handles: map[string]string{"CEO": "ceo"}, Since: since, Until: until}))
 
 	var body map[string]any

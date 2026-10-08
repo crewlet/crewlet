@@ -77,9 +77,9 @@ func TestAssigneeHistoryCarriesReassignmentsAfter(t *testing.T) {
 		}
 	}
 
-	// THE BACKFILL EQUALS THE REPLAY: a node upgrading onto rows its
-	// predecessor wrote without the column re-derives exactly what the apply
-	// maintained.
+	// THE BACKFILL EQUALS THE REPLAY: a node whose checkpoint's rule set
+	// differs (a reanchored cursor, or a later rule set) re-derives exactly
+	// what the apply maintained.
 	if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(t.Context(),
 			`UPDATE tracker_history SET reassignments = NULL`); err != nil {
@@ -92,14 +92,9 @@ func TestAssigneeHistoryCarriesReassignmentsAfter(t *testing.T) {
 	}
 	rederived, _ := handOffsOnHistory(t, r, task.ID)
 	if fmt.Sprint(rederived) != fmt.Sprint(assignee) {
-		t.Errorf("the re-derivation gives %v and the apply maintained %v — an "+
-			"upgraded node would disagree with one that applied the records",
+		t.Errorf("the re-derivation gives %v and the apply maintained %v — a "+
+			"re-derived node would disagree with one that applied the records",
 			rederived, assignee)
-	}
-	if tracker.DerivationVersion < 4 {
-		t.Error("the applier derives the history hand-off count and its " +
-			"derivation version does not say so — an upgraded node would never " +
-			"fill the column")
 	}
 }
 

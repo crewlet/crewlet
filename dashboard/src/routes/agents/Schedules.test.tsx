@@ -33,6 +33,7 @@ import { CHART_ORG } from "~/test/orgchart.ts";
 import { Router } from "~/app/router.tsx";
 import { setZone } from "~/lib/prefs.ts";
 import type { ScheduleRow } from "~/protocol/index.ts";
+import { healthFrame } from "~/test/health.ts";
 
 beforeEach(() => {
   // The READER's zone, which is what each instant is rendered in and is a
@@ -216,7 +217,7 @@ async function mountScreen(scope?: string[]) {
     },
   });
   const store = new Store();
-  store.applyHealth({ status: "healthy" });
+  store.applyHealth(healthFrame());
   store.applyOrg(CHART_ORG);
   const socket = new LiveSocket(store);
   const fire = {

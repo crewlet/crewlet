@@ -458,7 +458,9 @@ func coerceDay(what, text string, zone *time.Location) (day, warning string, err
 // THE ID IS WHAT IS STORED, which is what keeps every task that chose an
 // option when somebody renames it — and resolving here rather than at the
 // apply is what lets the write REFUSE a value no option matches. The applier
-// resolves too, and must: a record from an older build carries the spelling.
+// resolves too, and must: a value written while its project declared no field
+// under that key is stored as written, and becomes this field's value,
+// re-exploded on the task's next write, once a declaration covers it.
 func coerceOption(field FieldDef, raw json.RawMessage) (coerced, error) {
 	var text string
 	if err := json.Unmarshal(raw, &text); err != nil {

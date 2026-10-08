@@ -16,8 +16,47 @@
 // the inbox batch the question arrived in. A person answers where they are
 // talking, and the engine's own chat prompt routinely puts their reply in a
 // finer partition than the question was asked from — so a match on the batch
-// lost the answer outright. The rule, and what it does with a row parked
-// before a conversation identity was written, is [ConversationRef.Answers].
+// lost the answer outright. The rule is [ConversationRef.Answers], and
+// [ConversationRef.Best] chooses between the runs it admits.
+//
+// AND BY WHEN IT WAS WRITTEN, against when the question was asked
+// ([PendingRun.AskedAt]): the first reply posted after the question is the
+// answer, and it is RECORDED on the run ([StatusAnswered]) before anything is
+// done with it. Resuming with it is then this package's job, retried on its
+// own schedule with the seat's inbox held behind it, never the inbox's — a
+// person's message handed back to the broker returns behind their next one,
+// which then took the question. See answerowed.go.
+//
+// AND IT REACHES THE SEAT ONCE, whatever becomes of the run. A recorded reply
+// is either TAKEN by a resumed turn — written on the row at the last moment
+// before the turn runs ([RecordedAnswer.TakenAt], [ResumeRequest.Begin]) — or
+// LET GO back to the seat's inbox through an outbox on the row
+// ([PendingRun.HandBack]): after its attempts are spent, by an ending no turn
+// reached, or by the seat's next holder reaping a claim whose node stopped
+// before its turn took it ([Coordinator.RecoverSeat]) once the claims of that
+// answer have died too often or for too long. Short of that, such a claim is
+// REVIVED — the answer given back to the run and the run resumed with it
+// ([PendingStore.ReviveAnswer], [Coordinator.revivable]) — because a claim that
+// never reached its turn used nothing. The take is exclusive with both, in the
+// store's own compare-and-set: an ending is DECIDED on the row before any of
+// it is done ([RecordedEnding]), no turn takes an answer from a row whose
+// ending is decided ([ErrRunEnding]) or from a revived run, which holds no
+// claim, and a take that landed first is seen by the decision or the revival
+// and the reply goes with the run as used — whichever lands first wins,
+// whatever any lease says. And no ending deletes a row still
+// holding a reply it owes the seat ([ErrAnswerOwed]). The reply's delivery is
+// recorded as worked when the reply leaves the run, either way
+// ([CoordinatorOptions.Spent]).
+//
+// AND A LOST RUN IS ANNOUNCED ONCE: the announcement goes out before the record
+// is deleted, under the identity its decided ending recorded, so whichever node
+// finishes the ending publishes the same event ([Coordinator.announceEnding]).
+//
+// The reap fences the row to its lease before it revives or lets go of
+// anything — and the revival stamps that lease on the row itself — and a take
+// under an older lease — or under none — is refused, which holds because every
+// claim stamps the CLAIMANT's lease on the row ([PendingStore.ClaimForResume])
+// and every launch the lease that launched it ([CoordinatorOptions.Lease]).
 //
 // See docs/concepts/code-sandbox.md.
 package sandbox
@@ -182,21 +221,6 @@ type RunHandle struct {
 	CommandID string
 	PID       int
 	SessionID string
-
-	// Layout is which of its runner's OUTPUT LAYOUTS the job was launched
-	// with — where its stdout landed and how its result is read back — as
-	// the runner that started it declares it, recorded on the job's own
-	// record ([LaunchRecord.Layout]) and handed back to every read of it.
-	//
-	// THE LAUNCH SAYS, BECAUSE THE BOX CANNOT. A rolling upgrade puts jobs
-	// launched by two builds into boxes both reuse, and a build that wrote
-	// its stdout somewhere else leaves the file this one streams to as the
-	// PREVIOUS job's: read by layout rather than by what the box holds, a
-	// stale stream was collected as the new job's transcript and shown on
-	// its live view. Each runner numbers its own layouts from ZERO, which is
-	// the layout every build before the declaration launched with, so a job
-	// whose record declares none is read the way it was written.
-	Layout int
 }
 
 // Result is one coding run's outcome.

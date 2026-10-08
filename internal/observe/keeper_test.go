@@ -59,7 +59,7 @@ func newDataNode(t *testing.T, name string, c *claims) *dataNode {
 // holds reports whether this node's log has the event.
 func (n *dataNode) holds(t *testing.T, id string) bool {
 	t.Helper()
-	_, err := n.log.ByID(t.Context(), id)
+	_, err := n.log.ByID(t.Context(), id, time.Now())
 	switch {
 	case err == nil:
 		return true
@@ -319,5 +319,72 @@ func writeOnly(t *testing.T, n *dataNode, batch *events.Event) {
 		ID: batch.ID.String(), Origin: batch.Node, Records: records,
 	}, time.Now()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A STATELESS NODE'S DELIVERY REACHES A DATA NODE, FILED AS A DELIVERY.
+//
+// The Mattermost socket runs on every node, and a node without `data` keeps no
+// event log: a delivery row written straight into its own store vanished with
+// its scratch database, which is why the socket PUBLISHES its record. Through
+// custody that record crosses the wire inside a batch and is filed by the data
+// node keeping it — under the delivery's label, with the bytes that arrived,
+// tagged with who it was for and where it came in — exactly as the node that
+// published it would have filed it.
+//
+// Mutation: file the record under its event type in observe.Record, and the
+// row reads `inbound_delivery` rather than what the socket called it.
+func TestAStatelessNodesDeliveryIsKeptAsADelivery(t *testing.T) {
+	t.Parallel()
+	broker := memory.NewBroker()
+	start := func(node string) *memory.Queue {
+		q := broker.Client(memory.Contract(queue.WithNode(node)))
+		if err := q.Start(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = q.Stop(context.Background()) })
+		return q
+	}
+	data := newDataNode(t, "data-a", &claims{inner: coordmem.NewFleet()})
+	if err := data.keeper.Start(t.Context(), start("data-a")); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(data.keeper.Stop)
+	seats := start("seats-1")
+	custody := observe.NewCustody(seats)
+	seats.AddPublishListener(custody.Listen())
+	custody.Start(t.Context())
+
+	body := []byte(`{"event":"posted","post":{"id":"p1","channel_id":"C1"}}`)
+	ev := events.New(types.InboundDelivery{
+		Label: "socket:posted", Route: "mattermost", Text: "post for @agent-swe in channel C1",
+		Recipient: "swe", DeliveryKey: "p1", Channel: "C1", Body: body,
+	}, events.TraceContext{})
+	ev.Source = "mattermost"
+	if err := seats.Publish(t.Context(), "crewlet.events.inbound_delivery", ev); err != nil {
+		t.Fatal(err)
+	}
+	custody.Stop(context.Background())
+
+	deadline := time.Now().Add(10 * time.Second)
+	for !data.holds(t, ev.ID.String()) {
+		if time.Now().After(deadline) {
+			t.Fatal("the stateless node's delivery never reached the data node")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	row, err := data.log.ByID(t.Context(), ev.ID.String(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Type != "socket:posted" || row.Category != events.WebhookCategory || row.Source != "mattermost" {
+		t.Errorf("row filed as (%q, %q, %q), want (socket:posted, %s, mattermost)",
+			row.Type, row.Category, row.Source, events.WebhookCategory)
+	}
+	if string(row.Payload) != string(body) {
+		t.Errorf("row payload = %s, want the post as it arrived %s", row.Payload, body)
+	}
+	if row.Tags["recipient"] != "swe" || row.Tags["delivery_key"] != "p1" || row.Tags["route"] != "mattermost" {
+		t.Errorf("row tags = %v, want the seat, the post id and the socket route", row.Tags)
 	}
 }

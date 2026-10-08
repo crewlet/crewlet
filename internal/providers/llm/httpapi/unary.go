@@ -30,8 +30,10 @@ import (
 // it arrives, which is the price of reading it to find out.
 //
 // Read WHOLE, as the SDKs' own unary path reads a 2xx body: the answer is
-// bounded by the request's own max_tokens, and the read by the request's
-// timeout. One per call: a UnaryAnswer is not safe to share between requests.
+// bounded by the request's own max_tokens, and the read by its silence — a
+// backend installs its [IdleWatchdog] INSIDE this middleware, so the body read
+// here is the watched one. One per call: a UnaryAnswer is not safe to share
+// between requests.
 type UnaryAnswer struct {
 	accept func(body []byte) bool
 	taken  bool

@@ -154,8 +154,8 @@ comes from the node's `stream` block — never from its roles:
 
 Every node advertises its kind on its presence lease, beside its roles and
 labels, and **Settings › Nodes** and `crewlet fleet broker list` show it. A node
-running a build older than the field shows as `unknown`, and is counted as a
-member wherever that is the safe reading.
+advertising a kind this build does not know — a newer build's — shows as
+`unknown`, and is counted as a member wherever that is the safe reading.
 
 **The broker is a fixed few members.** Three survive one member lost; five
 survive two, and five is the recommendation for a fleet whose company runs
@@ -490,8 +490,8 @@ finish, releases each seat as it goes idle, gives back every fleet duty it
 holds once its duty loops have finished their last tick, and exits. Peers
 pick the seats and the duties up. A node that is killed instead releases
 nothing: its seats move after the lease TTL, and its duties after their own
-TTL, which for the retention sweep is 45 minutes and for the skill curator
-three hours. Point load-balancer readiness at `/ready` (`503` while
+TTL, which for the retention sweep is 45 minutes and for the learning
+passes three hours. Point load-balancer readiness at `/ready` (`503` while
 draining) and liveness at `/health` (stays `200` through a drain), and
 give the orchestrator a termination grace period longer than your longest
 turn. The engine does not impose its own cutoff, because that would be a
@@ -523,11 +523,11 @@ describes, and the broker re-places its copies of every stream — the files'
 included — on the members that remain, where there are enough of them. On `s3` it held no object. See
 [Taking a data node away](../concepts/object-store.md#taking-a-data-node-away).
 
-**Upgrade one node at a time, and let each one finish.** Seat leases
+**Upgrade one node at a time, and let each one finish.** Leases
 carry a protocol version, and a node refuses to claim seats while any
-live lease is held at an older one. The rule is asymmetric on purpose:
-older nodes keep working, newer ones wait — visibly, with
-`seat_claims_blocked_by_older_protocol` — until the last old lease lapses
+live presence or seat lease is held at a lower one. The rule is asymmetric on purpose:
+lower-protocol nodes keep working, higher ones wait — visibly, with
+`seat_claims_blocked_by_older_protocol` — until the last lower lease lapses
 or is released. A rolling deploy converges because that is what a rolling
 deploy does.
 
@@ -535,36 +535,14 @@ The consequences worth stating plainly:
 
 - **A stalled rollout stalls placement.** If you leave one old node
   running, the new ones hold nothing. The log line says so; watch for it.
-- **Rolling *back* across a protocol bump needs a full stop.** An older
-  build has no protocol check at all, so it will happily take over a
-  newer node's expired leases. Nothing in the table can stop it.
-- **A stalled rollout stalls the fleet duties too, on upgrades that move
-  them.** Upgrading from a build that kept the `worker:` leases beside the
-  seat leases, newer nodes run no scheduler tick, retention sweep,
-  integration reconcile or curator pass while any older node is live, and
-  say so once with `coord_kv_duties_wait_for_older_build` (and
-  `coord_kv_duties_resumed` when it ends). See
-  [Coordination](../concepts/coordination.md#the-rolling-upgrade-across-the-duty-bucket).
-- **Upgrading to the windowed token budgets (protocol 4) splits the
-  counters until the last old node leaves.** The old nodes run every seat
-  and charge the old lifetime counter; the new ones charge the windowed
-  counters once they hold seats, which is exactly when the old ones have
-  gone. Until then only the old nodes publish a live budget meter — the old
-  `budget_reported` frame, which a dashboard served by a new node does not
-  read, so it draws no meter for the rollout rather than a wrong one — and a
-  new node's `GET /budgets` reads windowed counters that start empty. The
-  old counters are not carried over: each window starts from zero at the
-  upgrade, and the retention sweep deletes the old bucket once no old node
-  is live. See
-  [Coordination](../concepts/coordination.md#the-rolling-upgrade-across-the-token-windows).
-- **A gesture a newer build carries out for a person is refused
-  `peer_upgrading` until the node that would carry it out has that
-  build.** Each node advertises what its build can do on its heartbeat,
-  and a gesture another node carries out asks first — so mid-rollout it is
-  refused by name rather than accepted by an older node that never acts on
-  it. A read that cannot conclude (a store blip, a node mid-drain) refuses
-  `unavailable` instead, which a retry clears. See
-  [Coordination](../concepts/coordination.md#why-a-gesture-asks-the-fleet-first).
+- **An old node that crashes holds nothing up for long.** Its presence
+  and seat leases lapse within a lease TTL, and the duties it held do
+  not count, though they stay live for up to three hours. See
+  [Mixed-version fleets](../concepts/seat-ownership.md#mixed-version-fleets).
+- **Rolling *back* across a protocol bump needs a full stop.** The check
+  only ever looks down, so a lower-protocol build is never refused and
+  takes over a higher node's expired leases unchecked. Nothing in the table
+  can stop it.
 - **A node that leaves takes its turn-level history with it.** Every node's
   event store holds the events it published, and the dashboard's turns,
   traces and event log are read from every live node at query time. A node
@@ -577,25 +555,6 @@ The consequences worth stating plainly:
   protocol.** The history scatter carries a version, and a node on a build
   that reshaped it answers with its own version and nothing else, which
   the answer's `coverage` names rather than merging rows it cannot read.
-- **Mid-rollout across the upgrade that stores each file as one object,
-  files are served by nodes of their own build.** A file's read and write
-  are operations the router sends to a data node, and the two builds name
-  them differently, so each node's file reads and writes go to a data node of
-  its own build — and are refused `unavailable` (`503` on the API) while
-  there is none, which a retry clears once there is. A file a new node
-  writes is held back, not applied, on an old data node until it is
-  upgraded, and that node declines to take a snapshot meanwhile. A file an
-  old node wrote during the rollout, or any file written before it, kept its
-  content in chunks this build no longer reads: it stays listed, its
-  download answers `410 content_retired`, and the remedy is to upload it
-  again (or remove it). The chunks themselves are left in the store until
-  every node the tracker log counts runs the new build — the *chunk era* is
-  then over — and the object store's collector deletes them a day after they
-  were written (counted as `retired` in `crewlet objects status`), while the
-  maintenance duty deletes the bucket of chunk locks the old build kept
-  (`retired_chunk_locks`). Evicting a node that will not come back ends the
-  era without it. A downgrade across this upgrade is not supported: the older
-  build cannot read the replicated schema it migrated.
 
 ## Watching a fleet
 
@@ -614,8 +573,8 @@ The consequences worth stating plainly:
 - **`/health`** carries this node's seats, its in-flight count and its
   config posture; the dashboard's **Settings › Nodes** screen puts every node's
   side by side, with seat ownership and per-node config epoch.
-- **Each node's heartbeat** also carries what its build can carry out and
-  how each of its MCP servers started — one row per server, counting the
+- **Each node's heartbeat** also carries how each of its MCP servers
+  started — one row per server, counting the
   instances that started and failed, with one failure's reason. See
   [What a node says about itself](../concepts/coordination.md#what-a-node-says-about-itself).
 

@@ -175,7 +175,7 @@
           "actions": [
             "other_node"
           ],
-          "hint": "this node cannot tell whether the record landed: its operation ledger may have lost the record of this operation, which was minted before it adopted a snapshot or swept its ledger, so the same gesture here answers the same way every time. Run it through a node whose ledger reaches back that far, under the same operation id"
+          "hint": "this node cannot tell whether the record landed: its operation ledger may have lost the record of this operation, which was minted before the cutoff of the ledger's thirty-day sweep, so the same gesture here answers the same way every time. Run it through a node whose ledger reaches back that far, under the same operation id"
         }
       ]
     }

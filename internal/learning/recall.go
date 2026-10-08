@@ -37,8 +37,7 @@ type RecallQuery struct {
 	// Model is the model Embedding came from, and REQUIRED: a recall
 	// compares only rows of the same model, because two models of one
 	// width are two spaces and the width filter alone admits both. A row
-	// from another model — or from before vectors named theirs — is not
-	// a worse match, it is no match at all.
+	// from another model is not a worse match, it is no match at all.
 	Model string
 
 	// Limit is how many hits to return. 0 takes a small default: recall

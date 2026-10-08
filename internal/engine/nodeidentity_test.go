@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
@@ -136,7 +137,7 @@ func TestWhatANodePublishesNamesThatNode(t *testing.T) {
 	if err := back.Queue.Publish(t.Context(), topics.Event(sent.Type), sent); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
-	row, err := back.Store.Events().ByID(t.Context(), sent.ID.String())
+	row, err := back.Store.Events().ByID(t.Context(), sent.ID.String(), time.Now())
 	if err != nil {
 		t.Fatalf("the event store holds no row for what this node published: %v", err)
 	}

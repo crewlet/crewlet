@@ -250,23 +250,20 @@ func (fs *LiveFeeds) Forget(turnID, launchID string) {
 }
 
 // Answer is what this node says about one running launch it owns, to one
-// request: a cursor answer when cursor is set (an empty one included), and the
-// window shape an asker with no cursor reads otherwise.
+// request: what the asker's cursor lacks, or a reset (the zero cursor's
+// answer included).
 //
 // It waits for the reading at most until ctx ends — which a caller sets from
 // the asker's budget — and then answers with the last read there was, stamped
 // with when it was taken. A reading that has never read anything by then is an
 // error saying so.
-func (fs *LiveFeeds) Answer(ctx context.Context, run PendingRun, cursor *TailCursor) (Output, error) {
+func (fs *LiveFeeds) Answer(ctx context.Context, run PendingRun, cursor TailCursor) (Output, error) {
 	feed := fs.feed(run)
 	snap, err := feed.current(ctx)
 	if err != nil {
 		return Output{}, err
 	}
-	if cursor == nil {
-		return snap.window(), nil
-	}
-	return snap.cursored(*cursor), nil
+	return snap.cursored(cursor), nil
 }
 
 // feed is the reading of one launch, made on its first request and kept for as
@@ -481,37 +478,23 @@ func (s liveSnapshot) digestAt(at int64) (string, bool) {
 }
 
 // cursored answers a viewer holding through c: what it lacks, or a RESET.
-// Both offsets are set whichever it is — see [Output.Start].
+// Both offsets are stated whichever it is — see [Output.Start].
 func (s liveSnapshot) cursored(c TailCursor) Output {
 	out := Output{
-		Source: s.source, AsOf: s.asOf, Finished: s.done, Cursor: true,
-		Epoch: s.origin, End: offset(s.end), Front: s.front, Held: s.held, WindowBytes: MaxRunTextBytes,
+		Source: s.source, AsOf: s.asOf, Finished: s.done,
+		Epoch: s.origin, End: s.end, Front: s.front, Held: s.held,
 	}
 	out.Digest, _ = s.digestAt(s.end)
 	if digest, ok := s.digestAt(c.Offset); ok && c.Epoch == s.origin && c.Digest == digest &&
 		s.end-c.Offset <= MaxRunTextBytes {
-		out.Start = offset(c.Offset)
+		out.Start = c.Offset
 		out.Text = s.text[c.Offset-s.base:]
 		return out
 	}
 	out.Reset = true
 	text, at := KeepEnd(s.text, MaxRunTextBytes)
 	start := s.base + int64(at)
-	out.Text, out.Start = text, offset(start)
+	out.Text, out.Start = text, start
 	out.Cut = start > 0 || s.front
 	return out
-}
-
-// offset is an [Output] offset, which a cursor answer always states.
-func offset(n int64) *int64 { return &n }
-
-// window answers an asker that reads no cursor: the last [MaxLiveOutputBytes]
-// in whole lines, replaced on every poll — the shape every asker read before
-// cursors, which an older build and the REST route's existing callers still do.
-func (s liveSnapshot) window() Output {
-	text, at := KeepEnd(s.text, MaxLiveOutputBytes)
-	return Output{
-		Text: text, Source: s.source, AsOf: s.asOf, Finished: s.done,
-		Cut: at > 0 || s.base > 0 || s.front, WindowBytes: MaxLiveOutputBytes,
-	}
 }

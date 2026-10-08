@@ -163,11 +163,11 @@ const everythingPath = ""
 
 // Op answers where an operation was applied on this node.
 //
-// CONCLUSIVE ONLY at or below this node's applied position and only above its
-// own adoption instant: the ops table is this node's applier's own record, so
-// "absent" below the checkpoint means "not applied here YET" and "absent"
-// below an adoption means "scrubbed out of the snapshot I arrived with".
-// Either read as "somebody else won" republishes a write that already landed.
+// CONCLUSIVE ONLY at or below this node's applied position and only for an
+// operation minted at or after [Rows.LostBefore]: "absent" below the
+// checkpoint means "not applied here YET", and "absent" before the watermark
+// may mean "swept". Either read as "somebody else won" republishes a write
+// that already landed.
 func (r *SnapshotRows) Op(ctx context.Context, opID string) (OpEntry, bool, error) {
 	if r.tables.ops == "" {
 		// A DOMAIN WITH NO LEDGER CANNOT ANSWER, and saying so is not the

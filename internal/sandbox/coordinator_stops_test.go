@@ -171,7 +171,7 @@ var coordinatorEntries = map[string][]entryDrive{
 		name: "a person's reply on the run's own conversation",
 		call: func(t *testing.T, rig *coordRig) {
 			if _, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe",
-				answerOnTheDM, "the release branch", nil); err != nil {
+				chatReply(answerOnTheDM, "the release branch", nil)); err != nil {
 				t.Logf("TryResumeFromAnswer: %v", err)
 			}
 		},
@@ -194,6 +194,14 @@ var coordinatorEntries = map[string][]entryDrive{
 			call: answersByTurn,
 		},
 	},
+	"Launch": {{
+		name: "a run_sandbox call on the run's own turn",
+		call: func(t *testing.T, rig *coordRig) {
+			if _, err := rig.coordinator.Launch(t.Context(), rig.manager, launchReq("t1")); err != nil {
+				t.Logf("Launch: %v", err)
+			}
+		},
+	}},
 	"FailRun": {{
 		name: "a suspension that never reached the row",
 		call: func(t *testing.T, rig *coordRig) {
@@ -228,6 +236,17 @@ var coordinatorEntries = map[string][]entryDrive{
 		name: "the busy half of it",
 		call: func(_ *testing.T, rig *coordRig) { rig.coordinator.SeatHeldBySandbox("swe") },
 	}},
+	"HoldSeat": {{
+		name: "a delivery that reached a seat this node counts as held",
+		call: func(t *testing.T, rig *coordRig) { rig.coordinator.HoldSeat(t.Context(), "swe") },
+	}},
+	"Readmit": {{
+		name: "a signal that a seat's conditions may have cleared",
+		call: func(_ *testing.T, rig *coordRig) {
+			rig.coordinator.Readmit("paused", "swe")
+			rig.fireRetries()
+		},
+	}},
 	"Manager": {{
 		name: "the manager a caller mints a box through",
 		call: func(_ *testing.T, rig *coordRig) { rig.coordinator.Manager() },
@@ -235,6 +254,10 @@ var coordinatorEntries = map[string][]entryDrive{
 	"SetManager": {{
 		name: "a live reload of providers.sandbox",
 		call: func(_ *testing.T, rig *coordRig) { rig.coordinator.SetManager(rig.manager) },
+	}},
+	"Stop": {{
+		name: "a node shutting down, whose recorded answers its successor drives",
+		call: func(_ *testing.T, rig *coordRig) { rig.coordinator.Stop() },
 	}},
 }
 
@@ -267,13 +290,25 @@ var placements = map[string]func(t *testing.T, rig *coordRig){
 		// cannot actually take.
 		run := rig.get("t1")
 		if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1",
-			CompletionTail(run.LaunchID)); err != nil || !won {
+			CompletionTail(run.LaunchID), rigLease); err != nil || !won {
 			t.Fatalf("ClaimForResume = %v, %v", won, err)
 		}
 	},
 	StatusAwaiting: func(_ *testing.T, rig *coordRig) {
 		rig.launch("t1")
 		rig.park("t1")
+	},
+	StatusAnswered: func(t *testing.T, rig *coordRig) {
+		rig.launch("t1")
+		rig.park("t1")
+		// A person's reply recorded against the question, its resume
+		// still owed — which a node that stopped between the two leaves
+		// for the seat's next holder.
+		run := rig.get("t1")
+		if _, won, err := rig.pending.RecordAnswer(t.Context(), "t1", run.LaunchID,
+			chatReply(answerOnTheDM, "the release branch", nil).answerOf(rig.now), rigLease); err != nil || !won {
+			t.Fatalf("RecordAnswer = %v, %v", won, err)
+		}
 	},
 	StatusReseed: func(t *testing.T, rig *coordRig) {
 		rig.launch("t1")
@@ -358,8 +393,10 @@ func resumeAbandoned(t *testing.T, rig *coordRig) {
 	rig.resumer.err = fmt.Errorf("%w: the reviewer's provider went away", ErrResumeAbandoned)
 }
 
-// noConversation is a row with nothing to resume INTO: what a build predating
-// [StatusLaunching] wrote, read by this one across a rolling upgrade.
+// noConversation is a row with nothing to resume INTO: a row with no
+// suspension, which the launch path never writes — a run holds
+// [StatusLaunching] until its conversation is written — so it is written here
+// directly.
 //
 // [PendingStore.BeginLaunch] is the one write that drops a suspension, so the
 // status [place] chose is put back after it.
@@ -426,9 +463,15 @@ func completesUnreadable(t *testing.T, rig *coordRig) {
 // the run, as the dispatcher does off the seat's inbox.
 func answersByTurn(t *testing.T, rig *coordRig) {
 	t.Helper()
+	// THE QUESTION THE ROW IS ON NOW, as answer_run names it off the row it
+	// checked — whatever status the row was placed in.
+	run, _, _ := rig.pending.Get(t.Context(), "t1")
 	given := types.SandboxAnswerGiven{
 		TurnID: "t1", AgentHandle: "swe", Answer: "the release branch",
-		AnsweredBy: "founder-token", AnsweredBySeat: "founder",
+		AnsweredBy: "founder-token", AnsweredBySeat: "founder", LaunchID: run.LaunchID,
+	}
+	if given.LaunchID == "" {
+		given.LaunchID = "launch-of-a-run-with-no-record"
 	}
 	if _, err := rig.coordinator.AnswerByTurn(t.Context(), given,
 		events.New(given, events.TraceContext{})); err != nil {
@@ -439,7 +482,7 @@ func answersByTurn(t *testing.T, rig *coordRig) {
 // recovers takes the seat under a fresh lease, as a node claiming it does.
 func recovers(t *testing.T, rig *coordRig) {
 	t.Helper()
-	if err := rig.coordinator.RecoverSeat(t.Context(), "swe", "node-b:1", 9); err != nil {
+	if err := rig.recoverSeat(t.Context(), "node-b:1", 9); err != nil {
 		t.Logf("RecoverSeat: %v", err)
 	}
 }
@@ -559,14 +602,19 @@ func (d entryDrive) run(t *testing.T, status, refused string) []string {
 // changes this answer with it rather than leaving a second, older opinion here.
 // [StatusLaunching] counts although nothing claims it: its turn has not
 // suspended yet, so the frame that raised whatever is held up is still on the
-// stack and ends it itself.
+// stack and ends it itself. A run whose ending is decided comes back to nothing
+// whatever its status says: the row takes no write but the ending's own.
 func willComeBack(run PendingRun, found bool) bool {
-	return found && (slices.Contains(Claimable, run.Status) || run.Status == StatusLaunching)
+	return found && run.Ending == nil &&
+		(slices.Contains(Claimable, run.Status) || run.Status == StatusLaunching)
 }
 
 func describeRow(run PendingRun, found bool) string {
-	if !found {
+	switch {
+	case !found:
 		return "no record at all"
+	case run.Ending != nil:
+		return "status " + run.Status + ", its ending decided"
 	}
 	return "status " + run.Status
 }
@@ -624,9 +672,9 @@ func (s *refusingStore) calls() []string {
 	return append([]string(nil), s.seen...)
 }
 
-func (s *refusingStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fence) (LaunchRecord, error) {
+func (s *refusingStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fence) (PendingRun, error) {
 	if s.called("BeginLaunch") {
-		return LaunchRecord{}, errRefusedCall
+		return PendingRun{}, errRefusedCall
 	}
 	return s.inner.BeginLaunch(ctx, run, fence)
 }
@@ -638,11 +686,12 @@ func (s *refusingStore) Get(ctx context.Context, turnID string) (PendingRun, boo
 	return s.inner.Get(ctx, turnID)
 }
 
-func (s *refusingStore) ClaimForResume(ctx context.Context, turnID string, tail Tail) (PendingRun, bool, error) {
+func (s *refusingStore) ClaimForResume(ctx context.Context, turnID string, tail Tail, fence Fence,
+) (PendingRun, bool, error) {
 	if s.called("ClaimForResume") {
 		return PendingRun{}, false, errRefusedCall
 	}
-	return s.inner.ClaimForResume(ctx, turnID, tail)
+	return s.inner.ClaimForResume(ctx, turnID, tail, fence)
 }
 
 func (s *refusingStore) ReleaseClaim(ctx context.Context, turnID string, r Release) (bool, error) {
@@ -673,12 +722,19 @@ func (s *refusingStore) SetStatus(ctx context.Context, turnID, status string, fe
 	return s.inner.SetStatus(ctx, turnID, status, fence)
 }
 
-func (s *refusingStore) Finish(ctx context.Context, turnID string, fence Fence, whileIn []string,
+func (s *refusingStore) DecideEnding(ctx context.Context, turnID string, d Decision,
 ) (PendingRun, bool, error) {
+	if s.called("DecideEnding") {
+		return PendingRun{}, false, errRefusedCall
+	}
+	return s.inner.DecideEnding(ctx, turnID, d)
+}
+
+func (s *refusingStore) Finish(ctx context.Context, turnID, ending string) (PendingRun, bool, error) {
 	if s.called("Finish") {
 		return PendingRun{}, false, errRefusedCall
 	}
-	return s.inner.Finish(ctx, turnID, fence, whileIn)
+	return s.inner.Finish(ctx, turnID, ending)
 }
 
 func (s *refusingStore) ExpirePause(ctx context.Context, turnID string) (bool, error) {
@@ -737,11 +793,50 @@ func (s *refusingStore) ListActiveForSeat(ctx context.Context, handle string) ([
 	return s.inner.ListActiveForSeat(ctx, handle)
 }
 
-func (s *refusingStore) FindAwaitingByConversation(ctx context.Context, handle string,
-	conv ConversationRef,
+func (s *refusingStore) RecordAnswer(ctx context.Context, turnID, launch string,
+	answer RecordedAnswer, fence Fence,
 ) (PendingRun, bool, error) {
-	if s.called("FindAwaitingByConversation") {
+	if s.called("RecordAnswer") {
 		return PendingRun{}, false, errRefusedCall
 	}
-	return s.inner.FindAwaitingByConversation(ctx, handle, conv)
+	return s.inner.RecordAnswer(ctx, turnID, launch, answer, fence)
+}
+
+func (s *refusingStore) DeclineAnswer(ctx context.Context, turnID, launch string,
+	answer []string, handBack []HandedBack, fence Fence,
+) (PendingRun, bool, error) {
+	if s.called("DeclineAnswer") {
+		return PendingRun{}, false, errRefusedCall
+	}
+	return s.inner.DeclineAnswer(ctx, turnID, launch, answer, handBack, fence)
+}
+
+func (s *refusingStore) OweHandBack(ctx context.Context, turnID string, letGo LetGo,
+) (PendingRun, bool, error) {
+	if s.called("OweHandBack") {
+		return PendingRun{}, false, errRefusedCall
+	}
+	return s.inner.OweHandBack(ctx, turnID, letGo)
+}
+
+func (s *refusingStore) ReviveAnswer(ctx context.Context, turnID string, revival Revival,
+) (PendingRun, bool, error) {
+	if s.called("ReviveAnswer") {
+		return PendingRun{}, false, errRefusedCall
+	}
+	return s.inner.ReviveAnswer(ctx, turnID, revival)
+}
+
+func (s *refusingStore) TakeAnswer(ctx context.Context, turnID, launch string, fence Fence) (bool, error) {
+	if s.called("TakeAnswer") {
+		return false, errRefusedCall
+	}
+	return s.inner.TakeAnswer(ctx, turnID, launch, fence)
+}
+
+func (s *refusingStore) ClearHandBack(ctx context.Context, turnID string, ids []string) (bool, error) {
+	if s.called("ClearHandBack") {
+		return false, errRefusedCall
+	}
+	return s.inner.ClearHandBack(ctx, turnID, ids)
 }

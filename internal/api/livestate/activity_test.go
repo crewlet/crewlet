@@ -92,6 +92,14 @@ func TestNeedsIsReadFromTheRunRecordNotTheParkedTurn(t *testing.T) {
 	}, fixtureNow.Add(time.Second))
 	wantState(t, s, "Coder", livestate.ActivityNeeds, "")
 
+	// AN ANSWERED RUN IS WORK AGAIN: the person's reply is recorded and the
+	// engine is driving the resume it owes, so nobody is waited on — a
+	// seat still shown as needing someone would ask them to answer twice.
+	s.ReconcileSandboxes([]livestate.SandboxRecord{
+		codingRun("tn-1", "Coder", livestate.SandboxAnswered, fixtureNow.Add(-time.Minute)),
+	}, fixtureNow.Add(1500*time.Millisecond))
+	wantState(t, s, "Coder", livestate.ActivityWorking, "")
+
 	// And a park whose run the record no longer holds is not work: the
 	// turn is ended only by events, and a run lost without one would
 	// otherwise keep the seat busy for good.

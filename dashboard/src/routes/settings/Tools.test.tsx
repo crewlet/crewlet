@@ -10,7 +10,7 @@
  *    neighbours cost no request. They used to read the active configuration
  *    twice per tool and re-derive the `mcp_env` rule from it.
  *  - Each server's state and its per-node cells are the ENGINE'S; a node
- *    whose build does not report is unknown, never "none".
+ *    whose last heartbeat carried no status is unknown, never "none".
  *  - The servers are operator-only and the catalogue is not: a refused
  *    reader sees the refusal in the servers' place and every tool around it.
  *  - An add is the create-only PUT, checked first with the company's own
@@ -30,6 +30,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, QueryError, Store } from "~/protocol/index.ts";
 import type { ToolAnnotations, ToolRow } from "~/protocol/index.ts";
 import type { McpServersStatusAnswer } from "~/contract/mcp.ts";
+import { withDerived } from "~/test/org.ts";
 
 // What the registry advertises for a tool whose server sent no hints: four
 // `unknown`s, which is what the engine writes rather than leaving the object
@@ -238,7 +239,7 @@ function mount(
 ) {
   const store = new Store();
   store.applyTools(tools);
-  store.applyOrg(roster as never);
+  store.applyOrg(withDerived(roster) as never);
   store.setConnected(true);
   const socket = new LiveSocket(store);
   const query = vi.fn((what: string) => {
@@ -313,16 +314,6 @@ test("a server granted to nobody says no seat can call it", async () => {
   expect(screen.getByText(/No seat can call this/)).toBeDefined();
 });
 
-// UNKNOWN IS NOT NOBODY: a roster with no grant on it came from an older node.
-test("a roster that carries no grant is unknown, not nobody", async () => {
-  mount(<ToolPeek name="create_issue" />, {
-    roster: { name: "Acme", roles: [{ name: "PM", handle: "pm" }] },
-  });
-  await settle();
-  expect(screen.queryByText(/No seat can call this/)).toBeNull();
-  expect(screen.getByText(/is not on the roster/)).toBeDefined();
-});
-
 // THE LIST IS FOR FINDING A TOOL. A description is written for a model and
 // runs to a paragraph, and unclamped every row of the catalogue was a column of
 // prose. It is clamped, and the whole sentence stays reachable.
@@ -335,8 +326,9 @@ test("the catalogue clamps a description and keeps the whole of it in reach", as
 });
 
 // PER-SERVER, PER-NODE, AS THE ENGINE SENT IT — the state its word, each node
-// its cell, the failing node's reason and seat under it, and the node that
-// does not report named once and drawn unknown rather than as "none".
+// its cell, the failing node's reason and seat under it, and the node whose
+// last heartbeat carried no status named once and drawn unknown rather than as
+// "none".
 test("each server is drawn with the engine's state and a cell per node", async () => {
   mount(<Tools />);
   await settle();
@@ -349,7 +341,7 @@ test("each server is drawn with the engine's state and a cell per node", async (
   const docs = screen.getByText("Running").closest(".grid-row") as HTMLElement;
   expect(within(docs).getByText("Running")).toBeDefined();
   expect(within(docs).getByText("Every agent seat")).toBeDefined();
-  expect(screen.getByText(/runs a build that does not report its MCP servers/)).toBeDefined();
+  expect(screen.getByText(/did not publish its MCP report on the last heartbeat/)).toBeDefined();
 });
 
 test("a node's cell never reads an unreported node as none", () => {
@@ -380,16 +372,13 @@ test("a node's failure sits under its chip without repeating the node", async ()
   expect(reason.textContent?.startsWith("node-b")).toBe(false);
 });
 
-// UNKNOWN IS NOT NOBODY, in the servers' grid too: a per-seat server on a
-// roster with no grant on it is unknown, while a shared one reaches every
-// agent seat by the engine's own rule whatever the roster carries.
-test("a per-seat server's reach on a roster without the grant is unknown", async () => {
-  mount(<Tools />, { roster: { name: "Acme", roles: [{ name: "PM", handle: "pm" }] } });
+// THE SERVERS' GRID NAMES EACH SERVER'S REACH off the grant on the pushed
+// org: a per-seat server granted to one seat, a shared one to every agent seat.
+test("each server's reach in the grid is the seats the engine grants it", async () => {
+  mount(<Tools />);
   await settle();
   const github = screen.getByText("Partly failing").closest(".grid-row") as HTMLElement;
-  const reach = within(github).getByText("Unknown: this node's roster does not say");
-  expect(reach.classList.contains("muted")).toBe(true);
-  expect(within(github).queryByText(/Not on this roster|No seat/)).toBeNull();
+  expect(within(github).getByText("1 seat")).toBeDefined();
   const docs = screen.getByText("Running").closest(".grid-row") as HTMLElement;
   expect(within(docs).getByText("Every agent seat")).toBeDefined();
 });

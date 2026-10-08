@@ -138,12 +138,13 @@ type Indexer struct {
 // IndexDerivation is what the indexer derives from a document's text, as a
 // number a row records beside the source version it was built from.
 //
-// BUMPED WHEN THE DERIVATION CHANGES and the text did not — the first bump is
-// the backlinks (node migration 0036): every row indexed before them matched
-// its source's version and would never have been looked at again, so no page
-// written before the upgrade would ever have listed a link. A row below this
-// is stale exactly as a moved source is, and the next ordinary lap re-derives
-// it: that is the whole backfill.
+// BUMPED WHEN THE DERIVATION CHANGES and the text did not. A node's index is
+// its own and survives the upgrade that changes the derivation, and a row it
+// indexed under the one before still matches its source's version — so the
+// version walk alone would never look at it again, and nothing the new
+// derivation adds would ever reach a document that did not move. A row below
+// this is stale exactly as a moved source is, and the next ordinary lap
+// re-derives it: that is the whole backfill. Derivation 1 is the backlinks.
 const IndexDerivation = 1
 
 // WithLinks has this index derive the backlinks from every body it indexes,

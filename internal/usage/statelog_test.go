@@ -2,7 +2,6 @@ package usage_test
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -27,10 +26,12 @@ func TestTheUsageDomainIsACertifiedDomain(t *testing.T) {
 			// already has them — a schema created from test code would
 			// be one the suite proved and the migration did not.
 			Encode: encodeSuiteRecord,
-			// THE PERSON KIND, at version 2: the one field the domain
-			// gained, carried by a person's record.
-			Fields:   usage.VersionedFields(),
-			Carrying: carryingSuiteField,
+			// THE VERSIONED-FIELD TABLE. It is empty — every kind this
+			// domain writes, a person's day included, is in the base
+			// format — so there is no record to carry; a kind this
+			// build's successor adds brings a Carrying case, which the
+			// suite refuses to run without.
+			Fields: usage.VersionedFields(),
 			Kinds: []string{string(usage.KindSeat), string(usage.KindSchedule),
 				string(usage.KindPerson)},
 			Rows:  usage.NewRows,
@@ -62,12 +63,6 @@ type oneSeatDay struct{}
 func (oneSeatDay) UsageMark(context.Context, store.UsageWindow) (store.UsageMark, error) {
 	return store.UsageMark{Events: 1, LastEvent: 1}, nil
 }
-
-// The holds: none. This node's day holds no person, and the suite's publisher
-// has no older reader to wait for, so nothing is ever held back.
-func (oneSeatDay) HoldUsage(context.Context, store.UsageHeld, time.Time) error { return nil }
-func (oneSeatDay) HeldUsage(context.Context) ([]store.UsageHeld, error)        { return nil, nil }
-func (oneSeatDay) ReleaseUsage(context.Context, string, string) error          { return nil }
 
 func (oneSeatDay) UsageForDay(context.Context, store.UsageWindow) (store.UsageDay, error) {
 	return store.UsageDay{Seats: []store.UsageSeat{{
@@ -107,13 +102,4 @@ func encodeSuiteRecord(kind, id, opID string, version int) ([]byte, error) {
 	}
 	rec.Subject = subject
 	return rec.Encode()
-}
-
-// carryingSuiteField is a record carrying one versioned field: the person
-// kind, through a person's day.
-func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
-	if field.Name == "Subject.Kind=person" {
-		return encodeSuiteRecord(string(usage.KindPerson), "maya", "", 0)
-	}
-	return nil, fmt.Errorf("no suite record carries %s — add a case that sets it", field.Name)
 }

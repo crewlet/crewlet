@@ -366,20 +366,16 @@ func TestABadNameIsRefusedBeforeTheValueIsRead(t *testing.T) {
 	}
 }
 
-// READING AND REMOVING TAKE THE NAME AS GIVEN. Only the write checks the
-// grammar: a row that predates the check must stay removable, and a delete
-// that refused the name would strand it forever.
-func TestRemovingANameTheWritePathWouldRefuseStillWorks(t *testing.T) {
-	h, fleet := surface(t, cipherFor(t, "k1"), "k1")
-	// Written past the API, the way a build without the guard wrote it.
-	if err := fleet.PutSecret(t.Context(), coord.SecretRecord{
-		Name: "gitlab-token", Value: "enc:v1:k1:not-openable", KeyID: "k1",
-		UpdatedAt: clock, UpdatedBy: "ops", Source: "cli",
-	}); err != nil {
-		t.Fatalf("PutSecret: %v", err)
+// A NAME OUTSIDE THE GRAMMAR NAMES NO SECRET. Only the write checks it, so a
+// read or a delete of one is answered as the absent name it is — not_found
+// and removed:false — rather than as a malformed request.
+func TestANameTheWritePathWouldRefuseNamesNoSecret(t *testing.T) {
+	h, _ := surface(t, cipherFor(t, "k1"), "k1")
+	if code, body := call(t, h, http.MethodGet, "/secrets/gitlab-token", ""); code != http.StatusNotFound {
+		t.Errorf("GET = %d %s, want 404", code, body)
 	}
 	code, body := call(t, h, http.MethodDelete, "/secrets/gitlab-token", "")
-	if code != http.StatusOK || !strings.Contains(body, `"removed":true`) {
-		t.Fatalf("DELETE = %d %s, want 200 with removed:true", code, body)
+	if code != http.StatusOK || !strings.Contains(body, `"removed":false`) {
+		t.Fatalf("DELETE = %d %s, want 200 with removed:false", code, body)
 	}
 }

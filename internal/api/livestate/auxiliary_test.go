@@ -31,8 +31,8 @@ func auxiliaryEnv(t *testing.T, rec types.AuxiliarySpend, opts ...func(*livestat
 // It is the one spend record a seat's reflection files AFTER its turn ended,
 // and the phase record it replaced the plan for would have reopened that turn
 // — the projection takes any phase event newer than a turn's end as the turn
-// going on — and cleared a held provider stop, on every node, older ones
-// included. This record is no state event: arriving after the end, with a
+// going on — and cleared a held provider stop, on every node. This record is
+// no state event: arriving after the end, with a
 // failed call on it, it leaves the turn ended, the hold held and the last
 // turn as it was.
 func TestAnAuxiliaryRecordMovesNoSeat(t *testing.T) {

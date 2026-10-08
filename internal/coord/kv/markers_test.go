@@ -141,11 +141,8 @@ func TestTheSweepNeverRemovesAValueWrittenAfterItsPassSawTheMarker(t *testing.T)
 // The set is DERIVED from the retention each bucket is opened with, and this
 // holds it against the broker's own account of every stream the store made —
 // so a bucket added without an age is swept without anybody remembering to
-// list it, and a bucket with one is left to its age. A hand-kept list is how
-// the lifetime token counters, which purged on every reset, were missing from
-// the first account of which buckets keep markers — and a hand-kept list is
-// what would have kept sweeping their windowed successor once it took an age
-// of its own.
+// list it, and a bucket with one is left to its age. A hand-kept list would
+// miss an ageless bucket and keep sweeping one that took an age.
 func TestEveryBucketTheBrokerNeverAgesIsSwept(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

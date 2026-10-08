@@ -111,8 +111,7 @@ func episodeAccount(ctx context.Context, ep Episode, fit compact.Bound, bytes in
 
 // episodeAsk is what a past turn was ASKED, by the rule [episodeAccount]
 // states: whole within bytes, rewritten past them, named by its size where no
-// rewrite can be had — and "" for a turn asked nothing, or one written before
-// its ask was stored (node migration 0042).
+// rewrite can be had — and "" for a turn asked nothing.
 //
 // SHOWN BESIDE THE LABEL, never in its place: the label is the waking event's
 // one line, and a seat that read it as the question it was asked learned

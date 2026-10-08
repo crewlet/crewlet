@@ -221,9 +221,33 @@ describe("a seat", () => {
     ]);
   });
 
+  // A STORED CEILING THIS FORM REFUSES IS SHOWN AND CAN BE REMOVED. The
+  // engine holds an int64, so YAML can store a ceiling above 2^53-1, which
+  // the reader refuses. Read as "no value" it would equal an emptied box, and
+  // emptying the box could never remove it.
+  test("a stored ceiling above 2^53-1 is shown, and emptying its box removes it", () => {
+    const huge = 2 ** 60;
+    const data: ConfigRole = { name: "Dev", token_budget: { month: huge } };
+    const initial = seatForm(data, "");
+    expect(initial.tokenBudget.month).toBe(String(huge));
+    expect(
+      seatParts(
+        "seat:dev",
+        data,
+        initial,
+        { ...initial, tokenBudget: { ...initial.tokenBudget, month: "" } },
+        { editableHandle: false },
+      ),
+    ).toEqual([
+      { type: "updateSeat", target: "seat:dev", set: [{ path: ["token_budget", "month"] }] },
+    ]);
+    // And left alone, it writes nothing.
+    expect(seatParts("seat:dev", data, initial, initial, { editableHandle: false })).toEqual([]);
+  });
+
   test("a ceiling of 0 or a malformed one is refused before Apply, naming the window", () => {
-    // A stored 0 is SHOWN, not hidden as an empty box: it is the one value
-    // the engine refuses, and a form that hid it could never correct it.
+    // A typed 0 is refused before Apply, whatever the document holds:
+    // whatever number it holds is shown, so it can be corrected.
     expect(seatForm({ name: "X", token_budget: { day: 0 } }, "").tokenBudget.day).toBe("0");
     expect(tokenBudgetError("day", "0")).toBe(
       "A ceiling of 0 is refused: leave it empty for no daily ceiling.",

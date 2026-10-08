@@ -88,7 +88,9 @@ type TaskTurn struct {
 	Phases []string `json:"phases"`
 
 	// Summary, Review and Tools are what it did — see [TurnRecord].
-	// Absent on a turn recorded by a build before the record carried them.
+	// Each is absent when nothing wrote it: Summary when the turn failed or
+	// parked before any segment wrote an account, Review when no review sent
+	// the work back, Tools when it called none.
 	Summary string     `json:"summary,omitempty"`
 	Review  string     `json:"review,omitempty"`
 	Tools   []TurnTool `json:"tools,omitempty"`
@@ -194,11 +196,6 @@ func (r *Reader) TurnsOf(ctx context.Context, idOrKey, cursor string, limit int,
 	return out, nil
 }
 
-// turnKey is the SQL a turn row is grouped by: its run id, or — for a row with
-// none, which no current writer produces — the row's own id, so two such rows
-// are never folded into one turn nobody ran.
-const turnKey = `CASE WHEN turn_id = '' THEN id ELSE turn_id END`
-
 // readTaskTurns is the page inside the caller's transaction.
 func readTaskTurns(ctx context.Context, tx *sql.Tx, task string, below int64,
 	limit int) ([]TaskTurn, string, error) {
@@ -207,7 +204,7 @@ func readTaskTurns(ctx context.Context, tx *sql.Tx, task string, below int64,
 	// more than the page, so the cursor is only handed out when a page
 	// past this one exists.
 	rows, err := tx.QueryContext(ctx, `
-		SELECT `+turnKey+`, MIN(log_seq)
+		SELECT turn_id, MIN(log_seq)
 		  FROM tracker_turns
 		 WHERE task_id = ?
 		 GROUP BY 1
@@ -257,11 +254,11 @@ func readTaskTurns(ctx context.Context, tx *sql.Tx, task string, below int64,
 		args = append(args, key)
 	}
 	segs, err := tx.QueryContext(ctx, `
-		SELECT `+turnKey+`, seat, turn_id, trigger, input_tokens, output_tokens,
+		SELECT turn_id, seat, turn_id, trigger, input_tokens, output_tokens,
 		       cache_read, phases_json, rounds, wall_ms, outcome, effective_at,
 		       document
 		  FROM tracker_turns
-		 WHERE task_id = ? AND `+turnKey+` IN (`+placeholders(len(keys))+`)
+		 WHERE task_id = ? AND turn_id IN (`+placeholders(len(keys))+`)
 		 ORDER BY log_seq`, args...)
 	if err != nil {
 		return nil, "", fmt.Errorf("tracker: read the segments of task %s's turns: %w", task, err)
@@ -339,7 +336,7 @@ func readTaskTurns(ctx context.Context, tx *sql.Tx, task string, below int64,
 // where [TurnSpend.Turns] lives.
 func turnOrdinals(ctx context.Context, tx *sql.Tx, task string) (map[string]int, error) {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT `+turnKey+`
+		SELECT turn_id
 		  FROM tracker_turns
 		 WHERE task_id = ? AND COALESCE(json_extract(document, '$.spend.turns'), 0) > 0
 		 ORDER BY log_seq`, task)

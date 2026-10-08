@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
@@ -449,7 +450,7 @@ func TestATurnThatEngagedWithNothingIsSkippedButStillAnnounced(t *testing.T) {
 	}{
 		// The turn recognised the trigger was for somebody else.
 		{"the turn opted out", func(x *types.TurnCompleted) {
-			x.PlanDecision = types.PlanDecisionSkip
+			x.ReviewOutcome = string(phase.Skipped)
 		}, false},
 		// It MEANT to opt out and never said so, so the turn finished
 		// `done` having touched nothing outside the engine.
@@ -457,7 +458,7 @@ func TestATurnThatEngagedWithNothingIsSkippedButStillAnnounced(t *testing.T) {
 			x.ToolSequence = nil
 		}, false},
 		{"it opted out having called tools anyway", func(x *types.TurnCompleted) {
-			x.PlanDecision = types.PlanDecisionSkip
+			x.ReviewOutcome = string(phase.Skipped)
 			x.ToolSequence = []string{"slack_post"}
 		}, false},
 		// A failed turn that called nothing failed AT something, and that
@@ -466,9 +467,7 @@ func TestATurnThatEngagedWithNothingIsSkippedButStillAnnounced(t *testing.T) {
 			x.ToolSequence = nil
 			x.ReviewOutcome = "failed"
 		}, true},
-		{"no plan artifact at all, but it acted", func(x *types.TurnCompleted) {
-			x.PlanDecision = ""
-		}, true},
+		{"it acted and finished done", func(*types.TurnCompleted) {}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -669,7 +668,7 @@ func TestTheDeciderRunsUnderTheDispatcher(t *testing.T) {
 	// suppresses the duplicate if the model recognises its own paraphrase.
 	self := settledTurn()
 	self.TurnID = "t2"
-	self.PlanToolSequence = []string{learning.ReflectTool}
+	self.AllToolNames = []string{learning.ReflectTool}
 	out = reflectOnce(r, self)
 	if out.Skipped["persist_decider"] != "self_persisted" {
 		t.Errorf("pass = %+v, want the decider skipped", out)
@@ -684,7 +683,7 @@ func TestTheDeciderRunsUnderTheDispatcher(t *testing.T) {
 	// Counterfactual: a turn naming some OTHER tool is not self-persisted.
 	third := settledTurn()
 	third.TurnID = "t3"
-	third.PlanToolSequence = []string{"query_episodes"}
+	third.AllToolNames = []string{"query_episodes"}
 	if out := reflectOnce(r, third); len(out.Ran) != 1 {
 		t.Errorf("pass = %+v, want the decider to run", out)
 	}

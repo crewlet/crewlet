@@ -36,6 +36,7 @@ import {
   stateLine,
   staleness,
   toneOf,
+  turnItemKey,
   STALE_MS,
   STALLED_MS,
   unitDirectLabel,
@@ -43,6 +44,7 @@ import {
   unitSettings,
   unitTally,
   UNIT_TOTAL_HINT,
+  workingLongestFirst,
 } from "./seats.ts";
 import type {
   AgentRow,
@@ -146,15 +148,8 @@ const org: OrgProjection = {
 
 const index = indexOrg(org);
 
-/** The same company, from an engine that reports no derived hierarchy. */
-const { derived: _omitted, ...older } = org;
-const authored = indexOrg(older);
-
 // A LEAD IS ANYBODY ABOVE IN THE CHART, as the engine reads "somebody in
-// their line" (`leadsOf` walks every ancestor): a founder leads everybody. And
-// WITHOUT THE ENGINE'S HIERARCHY THE ANSWER IS UNKNOWN, never "no" — a screen
-// that turned an undescribed chart into a refusal would tell a founder they do
-// not lead their own company.
+// their line" (`leadsOf` walks every ancestor): a founder leads everybody.
 describe("who leads whom", () => {
   test("a direct manager and every manager above are in the line", () => {
     expect(leadsInLine(index, "ceo", "dev-a")).toBe(true);
@@ -166,10 +161,6 @@ describe("who leads whom", () => {
     expect(leadsInLine(index, "dev-a", "dev-b")).toBe(false);
     expect(leadsInLine(index, "dev-a", "ceo")).toBe(false);
     expect(leadsInLine(index, "ceo", "ceo")).toBe(false);
-  });
-
-  test("a chart the engine did not derive answers unknown, not no", () => {
-    expect(leadsInLine(authored, "jane-founder", "dev-a")).toBeNull();
   });
 
   // A CONFIG CAN EXPRESS A CYCLE, which the engine's own walk ends; so does
@@ -192,7 +183,6 @@ describe("who leads whom", () => {
         ],
       },
     });
-    expect(loop.hierarchy).toBe(true);
     expect(leadsInLine(loop, "c", "a")).toBe(false);
     expect(leadsInLine(loop, "b", "a")).toBe(true);
   });
@@ -208,27 +198,25 @@ describe("the engine's hierarchy", () => {
       "Jane Founder",
       "VP Engineering",
     ]);
-    expect(index.hierarchy).toBe(true);
   });
 
   // THE HANDLE IS THE ENGINE'S AND IS NEVER DERIVED HERE. The copy this
   // replaced lower-cased "İlker" into `i-lker` where Go derives `ilker`, and
   // the handle keys a seat's memory — so a link pinning the client's version
   // pointed at nothing.
-  test("a handle is the engine's, and is unknown where it did not say", () => {
+  test("a handle is the engine's, declared or not", () => {
+    // Dev A's document entry declares none: the handle is the derived one.
     expect(index.byName.get("Dev A")?.handle).toBe("dev-a");
     expect(index.byName.get("CEO")?.handle).toBe("ceo");
-    // Without the block, only a DECLARED handle is known.
-    expect(authored.byName.get("CEO")?.handle).toBe("ceo");
-    expect(authored.byName.get("Dev A")?.handle).toBe("");
-    expect(authored.hierarchy).toBe(false);
+    expect(index.byName.get("Dev A")?.key).toBe("dev-a");
   });
 
-  // A LINK STILL REACHES A SEAT WITH NO REPORTED HANDLE: the seat screen
-  // resolves a name as well as a handle, and the rule lives in one place.
-  test("a seat with no reported handle is addressed by name", () => {
+  // A LINK STILL REACHES A SEAT ADDRESSED FROM A DOCUMENT ENTRY THAT DECLARES
+  // NO HANDLE: the seat screen resolves a name as well as a handle, and the
+  // rule lives in one place.
+  test("a seat is addressed by its handle, or by name where none is known", () => {
     expect(seatPath(index.byName.get("Dev A")!)).toEqual(["agents", "seats", "dev-a"]);
-    expect(seatPath(authored.byName.get("Dev A")!)).toEqual(["agents", "seats", "Dev A"]);
+    expect(seatPath({ handle: "", name: "Dev A" })).toEqual(["agents", "seats", "Dev A"]);
   });
 
   // ONLY THE ENGINE KNOWS WHERE A ROOT SEAT SITS. The document wrote Designer
@@ -238,9 +226,6 @@ describe("the engine's hierarchy", () => {
     expect(designer.unit?.name).toBe("Backend");
     expect(designer.placedByRef).toBe(true);
     expect(index.rootSeats.map((s) => s.name).sort()).toEqual(["CEO", "Jane Founder"]);
-    // Without the block it sits where it was WRITTEN, and nothing claims more.
-    expect(authored.byName.get("Designer")!.unit).toBeNull();
-    expect(authored.byName.get("Designer")!.placedByRef).toBe(false);
   });
 
   test("a unit with no lead of its own takes the inherited one, marked", () => {
@@ -256,15 +241,9 @@ describe("the engine's hierarchy", () => {
       "Engineering",
       "Backend",
     ]);
-    // An INHERITED lead is the engine's conclusion, so without the block the
-    // unit has none rather than one this client cascaded.
-    expect(authored.units.find((u) => u.name === "Backend")!.effectiveLead).toBeNull();
-    expect(authored.units.find((u) => u.name === "Engineering")!.effectiveLead?.name).toBe(
-      "VP Engineering",
-    );
   });
 
-  test("reporting lines are the engine's, and unknown without them", () => {
+  test("reporting lines are the engine's", () => {
     expect(
       index.byName
         .get("CEO")!
@@ -273,47 +252,64 @@ describe("the engine's hierarchy", () => {
     ).toEqual(["Dev A", "Dev B", "VP Engineering"]);
     expect(index.byName.get("Dev A")!.manager?.name).toBe("CEO");
     expect(index.byName.get("CEO")!.manager?.name).toBe("Jane Founder");
-    // NOT NOBODY: the engine did not say.
-    expect(authored.byName.get("Dev A")!.manager).toBeNull();
-    expect(authored.byName.get("CEO")!.reports).toEqual([]);
   });
 
-  // A BLOCK THAT DOES NOT DESCRIBE THIS TREE IS NOT HALF A HIERARCHY. A chart
-  // drawn from one that disagrees with its own seats is a chart that lies.
-  test("a derived block that does not match the tree is refused whole", () => {
-    const mismatched = indexOrg({
-      ...org,
-      derived: { ...org.derived!, seats: (org.derived!.seats ?? []).slice(0, 2) },
-    });
-    expect(mismatched.hierarchy).toBe(false);
-    expect(mismatched.byName.get("Dev A")!.manager).toBeNull();
-
-    // And one naming a handle that belongs to no seat in it.
+  // THE BLOCK IS READ, NEVER REFUSED: the engine derives it from the same
+  // document as the tree in the same call, so there is no mismatch to guard,
+  // and the index is built in the sidebar, outside every error boundary — so
+  // a handle the block mentions without listing is skipped, never thrown on.
+  test("a handle the block does not list is skipped rather than thrown on", () => {
     const dangling = indexOrg({
       ...org,
       derived: {
         ...org.derived!,
         seats: (org.derived!.seats ?? []).map((d) =>
-          d.handle === "dev-a" ? { ...d, manager: "nobody-here" } : d,
+          d.handle === "dev-a" ? { ...d, manager: "nobody-here", managers: ["nobody-here"] } : d,
         ),
-      },
-    });
-    expect(dangling.hierarchy).toBe(false);
-
-    // A UNIT'S MEMBERSHIP IS THE SAME KIND OF CLAIM, and it has its own guard:
-    // a unit naming a handle no seat in the block carries would otherwise
-    // leave that unit a member short and every seat placed from it wrong,
-    // silently.
-    const phantom = indexOrg({
-      ...org,
-      derived: {
-        ...org.derived!,
         units: (org.derived!.units ?? []).map((u) =>
           u.name === "Backend" ? { ...u, seats: [...(u.seats ?? []), "ghost"] } : u,
         ),
       },
     });
-    expect(phantom.hierarchy).toBe(false);
+    expect(dangling.byName.get("Dev A")!.manager).toBeNull();
+    expect(dangling.byName.get("Dev A")!.managers).toEqual([]);
+    expect(dangling.units.find((u) => u.name === "Backend")!.seats.map((s) => s.handle)).toEqual([
+      "dev-a",
+      "dev-b",
+      "designer",
+    ]);
+  });
+
+  // A NAME HELD TWICE IS TWO SEATS, each with its own document entry: unique
+  // names are an admission rule an apply does not refuse, so a revision a
+  // newer node activated can carry two. A declared handle pairs first.
+  test("two seats with one name each pair with their own entry", () => {
+    const twice = indexOrg({
+      name: "Twice",
+      roles: [
+        { name: "Ops", handle: "ops-night", goal: "nights" },
+        { name: "Ops", goal: "days" },
+      ],
+      units: [],
+      derived: {
+        units: [],
+        seats: [seat({ handle: "ops", name: "Ops" }), seat({ handle: "ops-night", name: "Ops" })],
+      },
+    });
+    expect(twice.seats.map((s) => [s.handle, s.goal])).toEqual([
+      ["ops", "days"],
+      ["ops-night", "nights"],
+    ]);
+  });
+
+  // NOTHING YET IS AN EMPTY COMPANY. Before the projection arrives, and on
+  // `{}` (a node running no company), there is no tree and no block.
+  test("an org not read yet, and a node with no company, are an empty hierarchy", () => {
+    for (const nothing of [undefined, null, {}]) {
+      const empty = indexOrg(nothing);
+      expect(empty.seats).toEqual([]);
+      expect(empty.units).toEqual([]);
+    }
   });
 
   test("a human seat holds a place in the hierarchy", () => {
@@ -381,9 +377,9 @@ describe("what only the company document says", () => {
     expect(seatSettings(null, index.byName.get("CEO")!).state).toBe("missing");
   });
 
-  // TWO SEATS WITH ONE NAME can only come from a revision stored before names
-  // had to be unique, and attributing either one's settings to the page would
-  // be a guess.
+  // TWO SEATS WITH ONE NAME: unique names are an admission rule an apply does
+  // not refuse, so a revision a newer node activated can hold them, and
+  // attributing either one's settings to the page would be a guess.
   test("a name held by two seats is ambiguous rather than the first match", () => {
     const twice: CompanyDocument = { ...doc, roles: [...(doc.roles ?? []), { name: "CEO" }] };
     expect(seatSettings(twice, index.byName.get("CEO")!).state).toBe("ambiguous");
@@ -927,4 +923,48 @@ test("a call whose first round has not come back is on round one", () => {
     hint: "the first model round is in flight and has not come back",
   });
   expect(roundOf(null)).toBe(0);
+});
+
+// THE ITEM THE TURN IS CHARGED TO — the call's, then the turn's — and nothing
+// for a turn on none, never a work key a trigger happened to name.
+test("a turn's item key is its call's, then its turn's, else none", () => {
+  const item = (key: string) => ({ backend: "native", id: key, key, project: "ENG" });
+  const row = (call: string, turn: string) =>
+    ({
+      id: "a",
+      role: "SWE",
+      live_call: call ? { turn_id: "t", work_item: item(call), work_key: "slack:x" } : null,
+      turn: turn ? { turn_id: "t", work_item: item(turn) } : null,
+    }) as unknown as AgentRow;
+  expect(turnItemKey(row("ENG-2", "ENG-1"))).toBe("ENG-2");
+  expect(turnItemKey(row("", "ENG-1"))).toBe("ENG-1");
+  expect(turnItemKey(row("", ""))).toBe("");
+  expect(turnItemKey(undefined)).toBe("");
+});
+
+// LONGEST-RUNNING FIRST, AND A SEAT WITH NO READABLE START LAST. The engine
+// calls a seat working while its coding run is out even when no turn record
+// names it, and the record that arrives on resume is stamped with the resume
+// instant — the newest — so last is where it lands. Read as 0, it led every
+// list of running turns and then jumped to the bottom.
+test("working seats run oldest first, and one with no readable start sorts after every timed one", () => {
+  const seat = (id: string, startedAt: string | null, activity = "working") =>
+    ({
+      id,
+      role: id,
+      activity,
+      turn:
+        startedAt === null ? null : { turn_id: `t-${id}`, stage: "phase", started_at: startedAt },
+      live_call: null,
+    }) as unknown as AgentRow;
+  const order = workingLongestFirst([
+    seat("none", null),
+    seat("late", "2026-09-21T10:09:00Z"),
+    seat("garbled", "not a time"),
+    seat("idle", "2026-09-21T09:00:00Z", "idle"),
+    seat("early", "2026-09-21T10:01:00Z"),
+  ]).map((r) => r.id);
+  // THE TWO UNKNOWNS TIE, so they keep the push's order rather than whatever
+  // a NaN comparison happens to leave.
+  expect(order).toEqual(["early", "late", "none", "garbled"]);
 });

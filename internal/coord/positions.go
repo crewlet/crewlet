@@ -50,8 +50,10 @@ type DomainPosition struct {
 	// stream read as one caught up on the live one, and no node of a
 	// fleet could ever re-anchor.
 	//
-	// ZERO IS UNKNOWN, never "no stream": a row written by a build that
-	// did not publish it, which a reader weighs conservatively.
+	// ZERO IS UNKNOWN, never "no stream": this build always publishes it (a
+	// node whose broker reports no creation instant does not run the
+	// domain), so a zero is only the type's zero value — a row nothing can
+	// place on a stream, which a reader never counts as on its own.
 	StreamCreatedAt time.Time `json:"stream_created_at,omitzero"`
 
 	// CheckpointStoredAt is the broker's instant for the record at this
@@ -68,9 +70,8 @@ type DomainPosition struct {
 	// against a reanchoring node's own position
 	// ([statelog.ReanchorInputs.Highest]).
 	//
-	// ZERO IS UNKNOWN — a checkpoint naming no record, or a build that did
-	// not publish it — and a reader weighs it as history the log may not
-	// hold.
+	// ZERO IS UNKNOWN — a checkpoint naming no record — and a reader weighs
+	// it as history the log may not hold.
 	CheckpointStoredAt time.Time `json:"checkpoint_stored_at,omitzero"`
 
 	// Snapshot is the newest VERIFIED snapshot this node holds, and its
@@ -96,9 +97,10 @@ type DomainPosition struct {
 	// writer about to publish such a kind reads this across every node the
 	// log counts, and waits for the last to advertise a build that reads it.
 	//
-	// ZERO IS "NOT ADVERTISED" — a row written by a build that predates the
-	// field — and a reader weighs it as a build that reads nothing newer
-	// than the field, never as one that reads everything.
+	// ZERO IS "NOT ADVERTISED" — what a reader holds for a node it counts
+	// from its presence before that node's first report — and a reader
+	// weighs it as a build that reads nothing newer, never as one that
+	// reads everything.
 	RecordVersion int `json:"record_version,omitempty"`
 
 	// LogDiverged reports that the log holds, at this node's checkpoint,

@@ -21,21 +21,10 @@ import (
 // line to this map.
 func TestAClosedRecordVersionGainsNoField(t *testing.T) {
 	t.Parallel()
-	closed := map[int][]string{
-		2:  {"TurnSpend.SentBack", "TurnSpend.Workers"},
-		3:  {"Person.SeenThrough.Generation"},
-		4:  {"Comment.Choice", "Comment.Decision"},
-		5:  {"MutationRecord.ActorSeat"},
-		6:  {"TaskCreate.Comment"},
-		7:  {"Project.TargetDate"},
-		8:  {"MutationRecord.KeepsPlace"},
-		9:  {"TaskCreate.Origin"},
-		10: {"TurnRecord.FailedIn", "TurnRecord.Review", "TurnRecord.Summary", "TurnRecord.Tools"},
-		11: {"TaskPatch.Moving"},
-		12: {"Subject.Kind=file"},
-		13: {"Op=purge", "RankOrder.Placements"},
-		14: {"File.Object"},
-	}
+	// EMPTY: every field the tracker writes is in the base format, so no
+	// version above it has been closed yet. The first field this build's
+	// successor adds lists its version here.
+	closed := map[int][]string{}
 	got := map[int][]string{}
 	for _, field := range tracker.VersionedFields() {
 		got[field.Since] = append(got[field.Since], field.Name)

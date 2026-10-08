@@ -227,3 +227,41 @@ func TestSubagentsAreNotSteered(t *testing.T) {
 		t.Error("the note reached a worker's prompt")
 	}
 }
+
+// A RESUMED EXECUTOR READS A NOTE AT ITS ROUND BOUNDARY, as the pass it
+// continues would have. The engine hands a resumed segment the turn's note box
+// ("a resumed segment is steerable like any other"), and a phase that drained
+// nothing left the note in the box: the executor finished the parked work
+// without the correction and only the reviewer read it.
+//
+// The round the delivery is announced at is on the PHASE's scale — the
+// re-entry's first round is the phase's third, after the two it ran before it
+// parked — so the record sits beside the round that read it.
+func TestAResumedExecutorReadsANoteAtItsRoundBoundary(t *testing.T) {
+	t.Parallel()
+	box := steer.New()
+	pub := newCapture()
+	prov := &scriptedProvider{execute: []llm.Completion{submitWork(t)}}
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
+		steer: box, pub: pub,
+		resume: &runner.Resume{State: suspendedAfterTwoRounds(), Answer: "the run succeeded"},
+	})
+	// Sent while the turn's coding run was collected, before the re-entered
+	// loop's first round.
+	box.Offer(founderNote)
+	if _, _, err := r.Resume(t.Context(), nil); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	exec := prov.requestsFor("execute")
+	if len(exec) == 0 || !holds(exec[0]) {
+		t.Fatal("the resumed executor did not read the note at its first round")
+	}
+	got := pub.steered()
+	if len(got) != 1 {
+		t.Fatalf("published %d agent_turn_steered, want 1: %+v", len(got), got)
+	}
+	if got[0].Outcome != types.SteerDelivered || got[0].Phase != types.Phase(phase.Execute) ||
+		got[0].Round != 3 {
+		t.Errorf("the delivery record is %+v, want delivered at execute round 3", got[0])
+	}
+}

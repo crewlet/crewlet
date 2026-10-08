@@ -329,7 +329,7 @@ func knowledgeReadVia(t *testing.T, n *node, via types.KnowledgeReadVia) *types.
 			return false
 		}
 		for _, row := range rows {
-			full, err := n.engine.Backends().Store.Events().ByID(t.Context(), row.ID)
+			full, err := n.engine.Backends().Store.Events().ByID(t.Context(), row.ID, time.Now())
 			if err != nil {
 				return false
 			}

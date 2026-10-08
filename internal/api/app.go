@@ -24,7 +24,6 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/static"
 )
 
@@ -108,7 +107,7 @@ type routeMounter interface {
 //
 // # What is required, and why a nil is refused rather than served around
 //
-// Runtime, EventLog, Sources.Company, Sources.Events, Sources.NodeID, the Inbound edge's
+// Runtime, Sources.Company, Sources.Events, Sources.NodeID, the Inbound edge's
 // Publisher, Claims, Secrets and AppFlow, Config, Secrets, Setup,
 // Retention, Capacity, FleetBroker, Backup and Audit are REQUIRED, and [New]
 // refuses a missing one by name.
@@ -139,13 +138,6 @@ type Options struct {
 
 	// State is the projection to serve. Nil builds an empty one.
 	State *livestate.LiveState
-
-	// EventLog is this node's OWN event store, which the webhook edge writes
-	// every delivery it accepts into. Not the read surface's history, which
-	// is the fleet's (Sources.Events): a write goes to this node and nowhere
-	// else, and a read of one node's store is a third of a three-node
-	// fleet's.
-	EventLog *store.EventLog
 
 	// Sources are what the read surface answers from. Company, Events and
 	// NodeID are required; see above. NodeID is the node's RESOLVED id, and
@@ -414,7 +406,7 @@ func New(opts Options) (*App, error) {
 	// The inbound edge. Exempt from the guard by prefix (see the auth
 	// package) because each route authenticates by provider credential,
 	// which is why every one of them verifies before it does anything.
-	if err := a.mountWebhooks(mux, opts.Inbound, opts.EventLog, now); err != nil {
+	if err := a.mountWebhooks(mux, opts.Inbound, now); err != nil {
 		return nil, err
 	}
 	// The SANDBOX TELEMETRY edge, exempt by the same prefix rule and for
@@ -476,7 +468,6 @@ func (o Options) missing() error {
 	}{
 		{"Runtime", o.Runtime == nil},
 		{"Sources.Company", o.Sources.Company == nil},
-		{"EventLog", o.EventLog == nil},
 		{"Sources.Events", o.Sources.Events == nil},
 		{"Sources.NodeID", strings.TrimSpace(o.Sources.NodeID) == ""},
 		{"Sources.Coord", o.Sources.Coord == nil},
@@ -509,9 +500,11 @@ func (o Options) missing() error {
 // has: somewhere to republish a delivery, the epoch's verification material,
 // and the cross-process dedupe.
 //
-// The rest of what the edge needs (the event log, the live stream, whether a
-// revision is active, the clock) comes from the app itself, so those cannot be
-// wired differently here than they are everywhere else on this node.
+// The rest of what the edge needs (whether a revision is active, the clock)
+// comes from the app itself, so those cannot be wired differently here than
+// they are everywhere else on this node. It needs no event log and no live
+// stream: a delivery's row and its live envelope both come from the record it
+// PUBLISHES, through the node's publish listener and every node's projection.
 //
 // Publisher, Claims, Secrets and AppFlow are required; see [Options]. The edge
 // is mounted on every node that serves the API, because every such node runs
@@ -540,7 +533,7 @@ type Inbound struct {
 }
 
 // mountWebhooks registers the inbound edge.
-func (a *App) mountWebhooks(mux *http.ServeMux, in Inbound, events *store.EventLog, now func() time.Time) error {
+func (a *App) mountWebhooks(mux *http.ServeMux, in Inbound, now func() time.Time) error {
 	receiver, err := webhooks.New(webhooks.Options{
 		Secrets:    in.Secrets,
 		Publisher:  in.Publisher,
@@ -548,8 +541,6 @@ func (a *App) mountWebhooks(mux *http.ServeMux, in Inbound, events *store.EventL
 		Keys:       in.Keys,
 		AppFlow:    in.AppFlow,
 		Recheck:    in.Recheck,
-		Events:     events,
-		Stream:     a.stream,
 		Configured: a.Configured,
 		Now:        now,
 	})

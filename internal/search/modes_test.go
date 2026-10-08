@@ -142,9 +142,9 @@ func TestTheQueryVectorReachesEveryParticipant(t *testing.T) {
 // EACH MODE FUSES EXACTLY THE RANKERS IT NAMES.
 //
 // Hybrid is both lists by reciprocal rank fusion; keyword is the words alone;
-// semantic is meaning alone. A participant on an older build runs both halves
-// whatever it is asked — so the coordinator, not the participant, is what
-// keeps a keyword search from quietly becoming a hybrid one.
+// semantic is meaning alone. What goes into the answer is the coordinator's
+// decision rather than a participant's — so even a slice carrying both halves
+// whatever it was asked cannot turn a keyword search into a hybrid one.
 func TestEachModeFusesExactlyTheRankersItNames(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -157,8 +157,8 @@ func TestEachModeFusesExactlyTheRankersItNames(t *testing.T) {
 	} {
 		t.Run(string(tc.mode), func(t *testing.T) {
 			t.Parallel()
-			// BOTH HALVES IN EVERY SLICE, as an older participant
-			// that ignores Methods would send them.
+			// BOTH HALVES IN EVERY SLICE, whatever the query asked
+			// for, so only the coordinator's own filter decides.
 			local := &recordingScan{slice: bothHalves("n1", search.Everything())}
 			fan := &search.FanOut{Self: "n1", Local: local,
 				Vectors: search.NewQueryVectors(newProvider().read)}

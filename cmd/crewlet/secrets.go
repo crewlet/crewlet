@@ -44,7 +44,8 @@ import (
 // When the engine is STOPPED there is no KV to reach and no API to call, so
 // the command writes this node's own table. That is the bootstrap path: the
 // engine migrates those rows onto the fleet at its next start and removes
-// them. Which of the two is in play is not a guess — the store's file lock
+// them, the later of its value and the fleet's winning a name both hold
+// (fleetsecrets.Migrate). Which of the two is in play is not a guess — the store's file lock
 // makes "the engine holds this database" an answer with a pid on it — and
 // the command says which one it used after every write.
 //
@@ -410,7 +411,8 @@ func setSecret(ctx context.Context, sv *secretTarget, name, value string,
 // stopped and saw nothing propagate would reasonably conclude the write
 // failed, and the fix — start the node, or point -api at one that is up — is
 // not guessable.
-const secretsLocalNote = "This node will put it on the fleet at its next start. " +
+const secretsLocalNote = "This node will put it on the fleet at its next start, " +
+	"unless the fleet holds a value written after this one. " +
 	"To reach a RUNNING fleet now, re-run against a node that is up."
 
 // getSecret is the ONLY read-back, and it is break-glass.

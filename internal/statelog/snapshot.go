@@ -170,12 +170,9 @@ var SkipReasons = []SkipReason{
 // Valid reports whether a skip reason off the wire is one this build knows.
 func (s SkipReason) Valid() bool { return slices.Contains(SkipReasons, s) }
 
-// ManifestVersion is the artefact format this build writes.
-//
-// TWO SINCE THE MANIFEST NAMES ITS OWN FILE. Before that the name was DERIVED
-// from the positions, in three places independently, and an artefact whose
-// manifest does not name its file is one this build cannot find — so it is
-// refused as a version it does not read rather than resolved to an empty path.
+// ManifestVersion is the artefact format this build writes and the only one it
+// reads: a manifest of any other version is nobody's artefact here. Fields are
+// added within a version, so a later build reads what this one took.
 const ManifestVersion = 2
 
 // DomainPosition is what a manifest says about one registered domain.
@@ -210,9 +207,7 @@ type DomainPosition struct {
 	// WHAT THE ROWS HOLD, never what the donor's build could read. A build
 	// that reads a new version publishes nothing at it until something needs
 	// it, so the build's version refused every upgraded donor for the whole of
-	// a rolling upgrade over records that did not exist. Where the row cannot
-	// say — one that predates the record — it is the donor build's own highest
-	// decodable version, which bounds what that build applied.
+	// a rolling upgrade over records that did not exist.
 	RecordVersion int `json:"record_version"`
 
 	// Replay is the protocol the donor's build declares. A recipient whose
@@ -591,22 +586,15 @@ func (s *Snapshotter) positionsIn(ctx context.Context, path string) (map[string]
 		// matched the file, its identity matched the recipient's live
 		// stream, and what it carried was a dead history.
 		at := cursors[spec.Name]
-		// WHAT THE ROWS WERE APPLIED FROM, where the file records it —
-		// and the build's own bound where it does not. A domain with no
-		// row at all has applied nothing.
-		applied := 0
-		switch {
-		case at.AppliedVersion != nil:
-			applied = *at.AppliedVersion
-		case at.Position != (Position{}):
-			applied = reg.Domain.RecordVersion()
-		}
+		// WHAT THE ROWS WERE APPLIED FROM, as the file records it. A
+		// domain with no row at all has applied nothing, which is the
+		// zero the missing entry reads as.
 		pos := DomainPosition{
 			Stream:          spec.Name,
 			Generation:      at.Position.Generation,
 			StreamCreatedAt: at.StreamCreatedAt,
 			Seq:             at.Position.Seq,
-			RecordVersion:   applied,
+			RecordVersion:   at.AppliedVersion,
 			Replay:          spec.Replay,
 		}
 		// The stream's own bounds at the take are ADVISORY, for the

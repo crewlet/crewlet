@@ -163,12 +163,13 @@ func TestAnUnencodableSchemaNamesTheToolItBelongsTo(t *testing.T) {
 // A PARKED TURN'S REASONING AND TOOL CALLS ARE IN THE FIGURE, AND THE
 // REASONING IS IN IT ONCE.
 //
-// `reasoning: true` is a shipped config field with a four-figure default
-// thinking allowance per round, the tool loop stores what comes back on every
+// Every current Claude model thinks on every call, and its summarized thinking
+// comes back on every round; the tool loop stores what comes back on every
 // assistant message it appends, and execstate serialises all of it into the
 // parked row — so on a resumed executor this is routinely the largest term the
-// prompt carries. The Anthropic backend puts every thinking block straight back
-// into the request's content blocks and is billed for them, and it ALSO renders
+// prompt carries. The Anthropic backend puts the thinking blocks straight back
+// into the request's content blocks and is billed for them (all of them unless
+// a re-rendered tool definition shed the older ones), and it ALSO renders
 // the same thinking text into ReasoningContent as prose, so a meter that summed
 // both fields would double exactly that term on exactly that backend.
 func TestAParkedConversationCountsItsReasoningOnceAndItsArguments(t *testing.T) {
@@ -180,7 +181,6 @@ func TestAParkedConversationCountsItsReasoningOnceAndItsArguments(t *testing.T) 
 		toolResult    = "the box says it compiles now"
 		thinkingText  = "the build is red because the module is untidy"
 		redactedData  = "0pAqUeBlOb"
-		signature     = "sig-the-provider-minted-not-the-model"
 		arguments     = `{"task":"go mod tidy"}`
 	)
 	seed := []llm.Message{
@@ -190,7 +190,7 @@ func TestAParkedConversationCountsItsReasoningOnceAndItsArguments(t *testing.T) 
 			Role:    llm.RoleAssistant,
 			Content: assistantText,
 			ThinkingBlocks: []llm.ThinkingBlock{
-				{Type: "thinking", Thinking: thinkingText, Signature: signature},
+				{Type: "thinking", Thinking: thinkingText},
 				{Type: "redacted_thinking", Data: redactedData},
 			},
 			// What the Anthropic backend sets BESIDE the blocks: the same
@@ -223,10 +223,6 @@ func TestAParkedConversationCountsItsReasoningOnceAndItsArguments(t *testing.T) 
 	if m.messages == want-len(thinkingText)-len(redactedData) {
 		t.Error("the thinking was dropped: Anthropic hands every block back into the " +
 			"request and is billed for it")
-	}
-	if m.messages == want+len(signature) {
-		t.Error("the block's signature was counted: it is a fixed-size opaque token the " +
-			"provider mints, so counting it moves this figure with a vendor's token format")
 	}
 }
 

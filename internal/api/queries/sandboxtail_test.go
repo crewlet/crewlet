@@ -54,16 +54,13 @@ func TestASandboxTailNeedsTheTurnAndTheJob(t *testing.T) {
 	}
 }
 
-// NO CURSOR IS NOT A CURSOR AT NOTHING. An asker that never said it reads
-// cursors — the dashboard an older node serves, a REST caller written against
-// this route before cursors — replaces what it shows with each answer, so it
-// must be answered the window it always was; one that says it reads cursors and
-// holds nothing yet is answered a reset. The two used to be indistinguishable
-// on the wire, which is the whole reason the flag is explicit.
+// EVERY REQUEST IS A CURSOR: what the asker holds, read off `epoch`, `after`
+// and `digest`, and a request naming none of them holds nothing yet — the zero
+// cursor, answered with a reset.
 //
-// Mutation: read a cursor from `after` alone, and a REST caller passing an
-// offset for some other reason is sent deltas it replaces its screen with.
-func TestACursorIsAskedForExplicitly(t *testing.T) {
+// Mutation: drop `after` from the cursor, and a REST caller holding 4096 bytes
+// is sent everything again.
+func TestATailIsAskedByCursor(t *testing.T) {
 	t.Parallel()
 	tails := &recordingTails{answer: sandbox.TailAnswer{Outcome: sandbox.TailRunning}}
 	r := queries.NewRegistry()
@@ -76,28 +73,23 @@ func TestACursorIsAskedForExplicitly(t *testing.T) {
 		return tails.asked[len(tails.asked)-1]
 	}
 
-	if q := ask(map[string]any{"turn_id": "t1", "launch_id": "l1", "after": "40"}); q.Cursor != nil {
-		t.Errorf("a request with no cursor flag was read as a cursor: %+v", q.Cursor)
-	}
-	if q := ask(map[string]any{"turn_id": "t1", "launch_id": "l1", "cursor": true}); q.Cursor == nil ||
-		*q.Cursor != (sandbox.TailCursor{}) {
-		t.Errorf("a cursor holding nothing = %+v; want the empty cursor", q.Cursor)
+	if q := ask(map[string]any{"turn_id": "t1", "launch_id": "l1"}); q.Cursor != (sandbox.TailCursor{}) {
+		t.Errorf("a request holding nothing = %+v; want the empty cursor", q.Cursor)
 	}
 	// A socket frame's numbers are float64s; a whole one is the offset.
-	if q := ask(map[string]any{"turn_id": "t1", "launch_id": "l1", "cursor": true, "after": float64(4096)}); q.Cursor == nil ||
-		q.Cursor.Offset != 4096 {
+	if q := ask(map[string]any{"turn_id": "t1", "launch_id": "l1", "after": float64(4096)}); q.Cursor.Offset != 4096 {
 		t.Errorf("a socket frame's whole offset = %+v; want 4096", q.Cursor)
 	}
-	// Over REST every value is a string, the flag included.
+	// Over REST every value is a string.
 	rest := queries.FromQuery(url.Values{
-		"turn_id": {"t1"}, "launch_id": {"l1"}, "cursor": {"true"},
+		"turn_id": {"t1"}, "launch_id": {"l1"},
 		"epoch": {"transcript@0"}, "after": {"4096"}, "digest": {"ab12"},
 	})
 	if _, err := r.Answer(t.Context(), "sandbox_tail", rest.Values(), "operator"); err != nil {
 		t.Fatalf("sandbox_tail over REST: %v", err)
 	}
 	want := sandbox.TailCursor{Epoch: "transcript@0", Offset: 4096, Digest: "ab12"}
-	if got := tails.asked[len(tails.asked)-1].Cursor; got == nil || *got != want {
+	if got := tails.asked[len(tails.asked)-1].Cursor; got != want {
 		t.Errorf("a REST cursor = %+v; want %+v", got, want)
 	}
 
@@ -106,7 +98,7 @@ func TestACursorIsAskedForExplicitly(t *testing.T) {
 	// answered as though it were the one asked.
 	for _, after := range []any{"-1", "the end", float64(-3), 12.5, "12.5", 1e300, true} {
 		_, err := r.Answer(t.Context(), "sandbox_tail",
-			map[string]any{"turn_id": "t1", "launch_id": "l1", "cursor": true, "after": after}, "operator")
+			map[string]any{"turn_id": "t1", "launch_id": "l1", "after": after}, "operator")
 		if !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("after=%v = %v; want a bad-params refusal naming the offset", after, err)
 		}

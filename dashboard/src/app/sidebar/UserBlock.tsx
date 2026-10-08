@@ -229,9 +229,9 @@ export function Preferences({
  * Every IANA zone this runtime can format in.
  *
  * `Intl.supportedValuesOf` is the runtime's own list, so every entry offered
- * is one `setZone` will accept. A runtime without it (an older engine's
- * embedded browser, a test environment) offers the browser's own zone and
- * UTC, which is every zone it can promise.
+ * is one `setZone` will accept. A runtime without it (an older browser or
+ * webview, a test environment) offers the browser's own zone and UTC, which
+ * is every zone it can promise.
  *
  * UTC IS ADDED, NOT ASSUMED. The runtime's list is its CANONICAL zones, and
  * V8's does not name `UTC` among them — it lists `Etc/…` and the cities — so

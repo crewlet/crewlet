@@ -282,27 +282,3 @@ func TestARetryOpensItsOwnCallRatherThanReusingTheFailedOnes(t *testing.T) {
 		t.Errorf("work key = %q, want the trigger both attempts share", got.LiveCall.WorkKey)
 	}
 }
-
-// AND THE KEY SURVIVES THE ROUNDS. A progress round rebuilds the live call
-// WHOLESALE, so a field the rebuild forgets is blank for the rest of the call
-// — and blank on every row a reader sees, because a phase publishes many
-// rounds and the opening frame is one of them.
-func TestTheWorkKeyOutlivesTheRoundsThatRebuildTheCall(t *testing.T) {
-	t.Parallel()
-	s := livestate.New()
-	s.Apply(env("agent_phase_started", map[string]any{
-		"role": "CEO", "turn_id": "run-1", "work_key": "wk-1",
-		"phase": "execute", "iteration": 1,
-	}, at("2026-06-14T12:00:00Z")))
-	// A round from a node that predates the field carries no work key. It
-	// must not blank what the opening frame established.
-	s.Apply(env("agent_turn_progress", map[string]any{
-		"role": "CEO", "turn_id": "run-1",
-		"phase": "execute", "iteration": 1, "round_num": 0,
-	}, at("2026-06-14T12:00:02Z"), id("e2"), streamOnly))
-
-	got := overlayOf(t, s, "CEO")
-	if got.LiveCall == nil || got.LiveCall.WorkKey != "wk-1" {
-		t.Errorf("work key = %+v, want it carried across the round", got.LiveCall)
-	}
-}

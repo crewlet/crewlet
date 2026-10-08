@@ -11,11 +11,9 @@ import (
 
 // Source is the notification source name this tracker registers under.
 //
-// BARE, and the same word the engine's earlier tracker used: it appears in
-// every log line, every event's source column and every dashboard filter, and
-// a first-party source has nothing to disambiguate itself from. Keeping the
-// spelling is also what lets a company's existing notification rules go on
-// meaning what they meant.
+// BARE: it appears in every log line, every event's source column and every
+// dashboard filter, and a first-party source has nothing to disambiguate
+// itself from.
 const Source = "work"
 
 // FeedGroup is the durable consumer's name, and it is STABLE for the

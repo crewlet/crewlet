@@ -60,15 +60,15 @@ func TestAnUnknownReadViaIsAValueNotAPanic(t *testing.T) {
 	}
 }
 
-// A SKILL LOAD AN OLDER BUILD WROTE STILL DECODES, naming no page — which is
-// the honest reading of a record from before a load could say where its skill
-// came from — and re-encodes without inventing one.
-func TestASkillUsedFromBeforeItNamedItsPageStillDecodes(t *testing.T) {
+// A SYNTHESIZED SKILL'S LOAD NAMES NO PAGE, because it lives in the node's own
+// store rather than in the knowledge base — and it decodes and re-encodes
+// without one being invented.
+func TestASynthesizedSkillUsedNamesNoPage(t *testing.T) {
 	t.Parallel()
 	const raw = `{"id":"6f1c3d2e-0000-4000-8000-000000000032","type":"skill_used",` +
 		`"timestamp":"2026-09-24T09:00:00Z","source":"cto","agent_id":"a",` +
 		`"agent_handle":"cto","role":"CTO","turn_id":"run-1","skill_name":"deploys",` +
-		`"skill_id":"","source_kind":"registry","file_loaded":""}`
+		`"skill_id":"sk-1","source_kind":"synthesized"}`
 	var ev events.Event
 	if err := json.Unmarshal([]byte(raw), &ev); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -77,7 +77,8 @@ func TestASkillUsedFromBeforeItNamedItsPageStillDecodes(t *testing.T) {
 	if !ok {
 		t.Fatalf("decoded as %T", ev.Data)
 	}
-	if used.SourcePageID != "" || used.SourceContainer != "" || used.SkillName != "deploys" {
+	if used.SourcePageID != "" || used.SourceContainer != "" || used.SkillName != "deploys" ||
+		used.SourceKind != SkillSourceSynthesized {
 		t.Errorf("decoded %+v", *used)
 	}
 	out, err := json.Marshal(&ev)
@@ -85,7 +86,7 @@ func TestASkillUsedFromBeforeItNamedItsPageStillDecodes(t *testing.T) {
 		t.Fatalf("re-encode: %v", err)
 	}
 	if strings.Contains(string(out), "source_page_id") || strings.Contains(string(out), "source_container") {
-		t.Errorf("re-encoding an old record invented a page: %s", out)
+		t.Errorf("re-encoding a synthesized load invented a page: %s", out)
 	}
 }
 

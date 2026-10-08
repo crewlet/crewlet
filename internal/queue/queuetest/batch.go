@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -71,14 +73,32 @@ func (s *suite) runBatch(t *testing.T) {
 
 	t.Run("linger_coalesces_same_key_events_into_one_batch", func(t *testing.T) {
 		t.Parallel()
-		// The property inbox batching exists for: events that queued
-		// while an agent was busy must arrive as ONE turn, not N.
+		// What a POSITIVE window is for: a burst reaching an IDLE seat —
+		// somebody typing several messages, a webhook cluster — joins the
+		// batch its first event opened, so it costs one turn rather than
+		// one per event.
+		//
+		// THE SECOND EVENT ARRIVES AFTER THE WINDOW OPENED, deliberately
+		// and by a margin. Published back to back, a pull backend's drain
+		// collects both in the one short tail fetch it runs at ANY window,
+		// zero included, so a backend that ignored the linger passed this
+		// case. The gap is quietFor because what it has to outlast is the
+		// collection a zero window still does, which is the question a
+		// negative assertion's window answers.
+		//
+		// AND THE WINDOW IS racingWindow, because that arrival is SETUP
+		// which has to land while the window is still open — the rule
+		// racingWindow states. At lingerFor the case was already a race
+		// with nothing but the second publish's round trip in it, and a
+		// loaded runner's round trip outlasts fifty milliseconds (see
+		// max_batch_chunks_oversized_buffers, which lost the same race).
 		q := s.start(ctx, t)
 		batches := newBatchJournal()
 		subscribeBatch(ctx, t, q, "t", "g", recordingBatchHandler(batches),
-			queue.NewBatchOptions(lingerFor.Seconds(), 20))
+			queue.NewBatchOptions(racingWindow.Seconds(), 20))
 
 		publish(ctx, t, q, "t", newConvEvent("a", "c1"))
+		time.Sleep(quietFor)
 		publish(ctx, t, q, "t", newConvEvent("b", "c1"))
 
 		batches.await(t, "one coalesced batch", func(got [][]string) bool {
@@ -88,14 +108,21 @@ func (s *suite) runBatch(t *testing.T) {
 
 	t.Run("linger_partitions_by_key_preserving_arrival_order", func(t *testing.T) {
 		t.Parallel()
+		// What a drain does with the mail it holds: one partition per key,
+		// each in arrival order, dispatched oldest-constituent-first.
+		//
+		// QUEUED BEFORE THE ATTACHMENT, never published to one, because
+		// nothing in that depends on WHEN the mail arrived. Published to an
+		// attached consumer, the three events had to land inside one
+		// lingerFor window — three round trips on a loaded runner — and
+		// the split the batcher is right to make then read as a
+		// partitioning defect. See queueBacklog.
 		q := s.start(ctx, t)
+		queueBacklog(ctx, t, q, "t", "g",
+			newConvEvent("a", "c1"), newConvEvent("b", "c2"), newConvEvent("c", "c1"))
 		batches := newBatchJournal()
 		subscribeBatch(ctx, t, q, "t", "g", recordingBatchHandler(batches),
 			queue.NewBatchOptions(lingerFor.Seconds(), 20))
-
-		publish(ctx, t, q, "t", newConvEvent("a", "c1"))
-		publish(ctx, t, q, "t", newConvEvent("b", "c2"))
-		publish(ctx, t, q, "t", newConvEvent("c", "c1"))
 
 		// Two partitions, dispatched oldest-constituent-first (here the
 		// same as first arrival, since timestamps follow publish order),
@@ -111,14 +138,22 @@ func (s *suite) runBatch(t *testing.T) {
 		t.Parallel()
 		// A pathological backlog is delivered as successive capped
 		// batches rather than one unbounded one.
+		//
+		// The backlog is a real one: it queues in the mailbox BEFORE the
+		// handler attaches. Published to an attached consumer instead,
+		// the five publishes race the 50 ms linger, and a loaded runner
+		// closed the window after the first ([0] [1 2] [3 4]) — a split
+		// the batcher is right to make and this case wrongly refused.
 		q := s.start(ctx, t)
+		backlog := make([]*events.Event, 0, 5)
+		for i := range 5 {
+			backlog = append(backlog, newConvEvent(string(rune('0'+i)), "c1"))
+		}
+		queueBacklog(ctx, t, q, "t", "g", backlog...)
+
 		batches := newBatchJournal()
 		subscribeBatch(ctx, t, q, "t", "g", recordingBatchHandler(batches),
 			queue.NewBatchOptions(lingerFor.Seconds(), 2))
-
-		for i := range 5 {
-			publish(ctx, t, q, "t", newConvEvent(string(rune('0'+i)), "c1"))
-		}
 		batches.awaitSizes(t, "the backlog to arrive as capped batches", 2, 2, 1)
 	})
 
@@ -178,22 +213,31 @@ func (s *suite) runBatch(t *testing.T) {
 		// spent message stays in the partition. See
 		// internal/sandbox.MayOfferAnswer.
 		//
-		// HOW THE MIXED PARTITION IS BUILT, since the previous round of
-		// this work recorded that it could not be. It needs a redelivery
-		// and a never-delivered message to meet in ONE drain, and the two
-		// halves that make that deterministic are:
+		// HOW THE MIXED PARTITION IS BUILT. It needs a message that has
+		// gone back to the broker and one that has never been delivered to
+		// meet in ONE drain, and it builds that meeting the way
+		// a_redelivered_event_rejoins_its_conversation_in_timestamp_order
+		// does, for the reason given there:
 		//
 		//   - the fresh message is published BY THE HANDLER, on its first
 		//     invocation, before that invocation hands the first message
-		//     back. On an inline-dispatch twin that is the only ordering
-		//     that works at all: nothing else runs between the nak and
-		//     the next chunk, so a publish from the test goroutine can
-		//     never land in between. On a fetching backend it puts the
-		//     fresh message in the stream before the nak, so it is
-		//     already available when the next drain opens its window.
-		//   - the linger window is [mixedCountLinger] rather than
-		//     lingerFor, so it outlasts the nak spacing the redelivered
-		//     half comes back on instead of racing it.
+		//     back — so it is in the mailbox before the return is.
+		//   - the first message goes back by DEFERRAL, which spends a
+		//     delivery exactly as a failure does (queue.OutcomeDefer) and
+		//     is all this case needs of it, but which every backend
+		//     returns at once and which stops the attachment: nothing is
+		//     fetched until the case resumes it with both waiting.
+		//
+		// IT USED TO HAND THE FIRST ONE BACK AS A FAILURE, which comes
+		// back on the backend's redelivery backoff, so whether the two met
+		// was a race between a broker timer and this case's window. A
+		// handler that saw them apart handed BOTH back and tried again,
+		// spending the fresh message's budget on the way. Measured with
+		// the harness at the shipped one-second spacing: three runs in
+		// four never paired them inside settleFor, and the fourth paired
+		// them only after the fresh one had gone round too, at EQUAL
+		// counts — the very reading this case exists to refuse. A retry
+		// loop is not a construction.
 		//
 		// The assertion is RELATIONAL rather than two literals, because
 		// a backend is entitled to an extra redelivery on the way here
@@ -201,6 +245,7 @@ func (s *suite) runBatch(t *testing.T) {
 		// DIFFER, and the partition's must be the smaller. On the common
 		// path the numbers are attempts-2 and attempts-1.
 		newQueueWithAttempts := s.needAttempts(t)
+		quiescing := s.needQuiescing(t)
 		const attempts = 6
 		q := startQueue(ctx, t, newQueueWithAttempts(t, attempts))
 
@@ -209,12 +254,12 @@ func (s *suite) runBatch(t *testing.T) {
 		fresher := newConvEvent("fresher", conv)
 
 		var (
-			mu                 sync.Mutex
-			seeded             bool
-			rounds             int
-			readings           map[string]int
-			partLeft           int
-			partKnown, missing bool
+			mu                  sync.Mutex
+			seeded, came        bool
+			carried             []string
+			readings            map[string]int
+			partLeft            int
+			partKnown, unstated bool
 		)
 		j := newJournal()
 		subscribeBatch(ctx, t, q, topic, group,
@@ -222,8 +267,6 @@ func (s *suite) runBatch(t *testing.T) {
 				mu.Lock()
 				first := !seeded
 				seeded = true
-				rounds++
-				round := rounds
 				mu.Unlock()
 
 				if first {
@@ -234,52 +277,60 @@ func (s *suite) runBatch(t *testing.T) {
 						j.record("publish failed: " + err.Error())
 						return queue.Ack()
 					}
-					return queue.Nak(errors.New("hand the first one back"))
-				}
-				if len(evs) < 2 {
-					// They have not met yet. Hand it back and let
-					// the next drain try, bounded by the budget so
-					// a backend that never pairs them fails loudly
-					// instead of hanging.
-					if round < attempts-1 {
-						return queue.Nak(errors.New("still waiting for the pair"))
-					}
-					mu.Lock()
-					missing = true
-					mu.Unlock()
-					j.record("never met")
-					return queue.Ack()
+					j.record("handed back")
+					return queue.Defer("hand the first one back")
 				}
 
 				got := make(map[string]int, len(evs))
-				var unstated bool
+				var missing bool
 				for _, ev := range evs {
 					left, known := queue.DeliveriesLeftFor(hctx, ev.ID)
 					if !known {
-						unstated = true
+						missing = true
 						continue
 					}
 					got[labelOf(ev)] = left
 				}
 				left, known := queue.DeliveriesLeft(hctx)
 
+				// The FIRST call after the hand-back is the one this
+				// case is about; a later one would mean the two came
+				// round apart, which the assertions below report.
 				mu.Lock()
-				readings, partLeft, partKnown, missing = got, left, known, unstated
+				if !came {
+					came = true
+					carried = labelsOf(evs)
+					readings, partLeft, partKnown, unstated = got, left, known, missing
+				}
 				mu.Unlock()
-				j.record("paired")
+				j.record("came round")
 				return queue.Ack()
-			}, queue.NewBatchOptions(mixedCountLinger.Seconds(), 20))
+			}, queue.NewBatchOptions(handBackLinger.Seconds(), 20))
 
 		publish(ctx, t, q, topic, older)
-		j.await(t, "a redelivery and a fresh publish to reach one handler together",
-			func(seen []string) bool { return len(seen) == 1 })
+		j.awaitLabels(t, "the first message to be handed back", "handed back")
+		awaitState(t, "the deferral to quiesce the attachment", func() bool {
+			return quiescing(q, topic, group)
+		})
+		if resumed, err := q.Unquiesce(ctx, topic, group); err != nil || !resumed {
+			t.Fatalf("Unquiesce = (%v, %v), want (true, nil)", resumed, err)
+		}
+		j.await(t, "the partition to come round",
+			func(seen []string) bool { return len(seen) >= 2 })
 
 		mu.Lock()
 		defer mu.Unlock()
-		if missing {
-			t.Fatalf("the partition never carried both messages with both counts "+
-				"stated (saw %v): a handler cannot ask what one message has left "+
-				"if the backend states nothing for it", j.all())
+		if len(carried) != 2 {
+			t.Fatalf("the first handler call after the hand-back carried %v, want both "+
+				"messages: they were both in the mailbox before the attachment could "+
+				"fetch again, so either the drain left behind mail the broker already "+
+				"held, or the broker took longer than handBackLinger (%s) to take back "+
+				"a message it had already been sent", carried, handBackLinger)
+		}
+		if unstated {
+			t.Fatalf("the partition carried %v without a count for each message: a "+
+				"handler cannot ask what one message has left if the backend states "+
+				"nothing for it", carried)
 		}
 		olderLeft, olderOK := readings["older"]
 		fresherLeft, fresherOK := readings["fresher"]
@@ -373,8 +424,23 @@ func (s *suite) runBatch(t *testing.T) {
 	t.Run("live_options_mutation_takes_effect_next_cycle", func(t *testing.T) {
 		t.Parallel()
 		// A hot config reload changes linger and batch size with no
-		// re-subscription: the consume loop re-reads the options every
-		// cycle.
+		// re-subscription: the consume loop re-reads the options for every
+		// batch.
+		//
+		// THE NEXT BATCH, ON A SUBSCRIPTION THAT WAS IDLE WHEN THE RELOAD
+		// LANDED — the ordinary case, and the one that was wrong. A pull
+		// backend's idle cycle waits in a fetch for its first event, and
+		// JetStream read the options BEFORE that wait, so a reload made
+		// during it opened the next batch's window at the old length. See
+		// queue.BatchOptions.
+		//
+		// WHY THE GAP, and why that case could not see it: published back
+		// to back, the two events land in the one tail fetch a pull drain
+		// runs at any window, zero included, so the old length collected
+		// both and this passed with the reload ignored. The gap puts the
+		// third event past what a zero window collects — the same
+		// construction as linger_coalesces_same_key_events_into_one_batch,
+		// with the window at racingWindow for the reason given there.
 		q := s.start(ctx, t)
 		batches := newBatchJournal()
 		opts := queue.NewBatchOptions(0, 20)
@@ -383,8 +449,9 @@ func (s *suite) runBatch(t *testing.T) {
 		publish(ctx, t, q, "t", newConvEvent("a", "c1"))
 		batches.awaitSizes(t, "the un-lingered first event", 1)
 
-		opts.Set(lingerFor.Seconds(), 20)
+		opts.Set(racingWindow.Seconds(), 20)
 		publish(ctx, t, q, "t", newConvEvent("b", "c1"))
+		time.Sleep(quietFor)
 		publish(ctx, t, q, "t", newConvEvent("c", "c1"))
 		batches.awaitSizes(t, "the next cycle to honour the new linger", 1, 2)
 	})
@@ -500,9 +567,6 @@ func (s *suite) runBatch(t *testing.T) {
 		// that partitions correctly and dispatches in receive order passes
 		// the whole suite without this case.
 		q := s.start(ctx, t)
-		batches := newBatchJournal()
-		subscribeBatch(ctx, t, q, "topic.age", "grp", recordingBatchHandler(batches),
-			queue.DefaultBatchOptions())
 
 		now := time.Now().UTC()
 		hot := newConvEvent("hot", "hot")
@@ -510,16 +574,21 @@ func (s *suite) runBatch(t *testing.T) {
 		quiet := newConvEvent("quiet", "quiet")
 		quiet.Timestamp = now.Add(-time.Minute)
 
-		// Held so both land in one batch as two partitions; delivered one
-		// at a time there is no dispatch order to observe.
-		if err := q.PauseTopic(ctx, "topic.age", "grp", "queuetest-fill"); err != nil {
-			t.Fatalf("PauseTopic: %v", err)
-		}
-		publish(ctx, t, q, "topic.age", hot)
-		publish(ctx, t, q, "topic.age", quiet)
-		if err := q.ResumeTopic(ctx, "topic.age", "grp", "queuetest-fill"); err != nil {
-			t.Fatalf("ResumeTopic: %v", err)
-		}
+		// Queued before anything attaches, so both are in one drain as two
+		// partitions; delivered one at a time there is no dispatch order
+		// to observe. See queueBacklog.
+		//
+		// This took a hold AFTER subscribing, the shape holdForOneBatch
+		// documents as unable to promise what it reads as promising: an
+		// attachment already in a long poll is served the first publish
+		// and hands it back, so `hot` reached the next drain as a
+		// redelivery racing its own return — and when the return lost,
+		// `quiet` went alone and `hot` after it, which this case accepted
+		// without ever having ordered two partitions.
+		queueBacklog(ctx, t, q, "topic.age", "grp", hot, quiet)
+		batches := newBatchJournal()
+		subscribeBatch(ctx, t, q, "topic.age", "grp", recordingBatchHandler(batches),
+			queue.NewBatchOptions(lingerFor.Seconds(), 20))
 
 		batches.await(t, "the conversation that has waited longest to go first",
 			func(got [][]string) bool {
@@ -531,20 +600,20 @@ func (s *suite) runBatch(t *testing.T) {
 
 	t.Run("within_a_partition_events_are_ordered_by_timestamp", func(t *testing.T) {
 		t.Parallel()
-		// A conversation must read in its own chronological order no
-		// matter how the broker handed the events over. Measured, the
-		// backends disagree: JetStream returns a redelivered message
-		// BEHIND never-delivered ones, where the twin replays it from the
-		// head. So within-
-		// conversation order comes from the timestamps the engine already
-		// trusts and already preserves across requeue — never from
-		// delivery order. This subtest is what certifies a backend
-		// against its own replay semantics, so it makes arrival order and
-		// timestamp order deliberately disagree.
+		// A partition must read in its own chronological order no matter
+		// how the broker handed the events over, because the broker's
+		// order is not chronological: a message that went back returns at
+		// the head on one backend and behind fresh mail on the other —
+		// a_redelivered_event_rejoins_its_conversation_in_timestamp_order
+		// is that interleaving. So the order inside a partition comes from
+		// the timestamps the engine already trusts and already preserves
+		// across requeue — never from delivery order — and this case makes
+		// arrival order and timestamp order deliberately disagree.
+		//
+		// QUEUED BEFORE THE ATTACHMENT. The subject is what a backend does
+		// with two events it holds, not whether two publishes land in one
+		// window; see queueBacklog.
 		q := s.start(ctx, t)
-		batches := newBatchJournal()
-		subscribeBatch(ctx, t, q, "t", "g", recordingBatchHandler(batches),
-			queue.NewBatchOptions(lingerFor.Seconds(), 20))
 
 		t0 := time.Now().UTC()
 		late := newConvEvent("late", "c1")
@@ -552,10 +621,12 @@ func (s *suite) runBatch(t *testing.T) {
 		early := newConvEvent("early", "c1")
 		early.Timestamp = t0
 
-		// Published newest-first: arrival order is the reverse of
+		// Queued newest-first: arrival order is the reverse of
 		// chronological order.
-		publish(ctx, t, q, "t", late)
-		publish(ctx, t, q, "t", early)
+		queueBacklog(ctx, t, q, "t", "g", late, early)
+		batches := newBatchJournal()
+		subscribeBatch(ctx, t, q, "t", "g", recordingBatchHandler(batches),
+			queue.NewBatchOptions(lingerFor.Seconds(), 20))
 
 		batches.await(t, "the conversation to arrive in timestamp order", func(got [][]string) bool {
 			return len(got) == 1 && equalStrings(got[0], []string{"early", "late"})
@@ -564,38 +635,103 @@ func (s *suite) runBatch(t *testing.T) {
 
 	t.Run("a_redelivered_event_rejoins_its_conversation_in_timestamp_order", func(t *testing.T) {
 		t.Parallel()
-		// The scenario the measurement came from: an event is redelivered
-		// while a newer one from the same conversation is already
-		// waiting. Whichever end of the mailbox the backend returns it to,
-		// the handler must see them oldest-first.
+		// A message that went back to the broker and comes round again
+		// takes its CHRONOLOGICAL place among the fresh mail of its
+		// conversation that it shares a partition with — whichever end of
+		// the mailbox the backend returned it to, and with the stamp it
+		// was published with, since a hand-back is the same message and
+		// not a republish.
+		//
+		// THREE EVENTS, SO THE REDELIVERY BELONGS IN THE MIDDLE. It is
+		// handed back while two more of its conversation arrive, one
+		// stamped before it and one after — and all three stamped in the
+		// past, so a redelivery stamped afresh would sort LAST. A backend
+		// that put it at the head without sorting, at the tail without
+		// sorting, or stamped it as it went round hands over a different
+		// list, and no arrival order makes the sort unnecessary — which
+		// with two events one of the backends always did: the twin
+		// returned the older one to the head, already in order.
+		//
+		// WHAT THIS NO LONGER ASSERTS: that a FAILED delivery and a newer
+		// event of its conversation reach one handler call. The contract
+		// does not promise it — a failure waits out its redelivery
+		// backoff and the newer event is dispatched without it, see
+		// queue.OrderForDispatch — and the case only ever saw it because
+		// the JetStream harness cuts that backoff to 25ms against a 50ms
+		// window: a race between a broker timer and a constant, which a
+		// loaded runner lost, and which the shipped spacing (a second,
+		// against a default window of zero) never wins at all.
+		//
+		// SO THE MESSAGE GOES BACK BY DEFERRAL, which every backend
+		// returns at once rather than on a timer, and which quiesces the
+		// attachment: nothing is fetched until the case resumes it, by
+		// which time the two fresh events are in the mailbox and the
+		// return has been sent. The window bounds only the broker TAKING
+		// that return — see handBackLinger.
+		quiescing := s.needQuiescing(t)
 		q := s.start(ctx, t)
+		const topic, group, conv = "t.rejoin", "g", "c1"
+
+		t0 := time.Now().UTC()
+		before := newConvEvent("before", conv)
+		before.Timestamp = t0.Add(-2 * time.Minute)
+		returned := newConvEvent("returned", conv)
+		returned.Timestamp = t0.Add(-time.Minute)
+		after := newConvEvent("after", conv)
+		after.Timestamp = t0.Add(-30 * time.Second)
+
+		var handedBack atomic.Bool
+		first := newJournal()
 		batches := newBatchJournal()
-		var deliveries int
-		if err := q.SubscribeBatch(ctx, "t", "g",
+		subscribeBatch(ctx, t, q, topic, group,
 			func(hctx context.Context, evs []*events.Event) queue.Result {
-				deliveries++
-				if deliveries == 1 {
-					// A newer event for the same conversation lands
-					// while this one is in flight, so the backend has to
-					// interleave a redelivery with a fresh arrival.
-					newer := newConvEvent("newer", "c1")
-					newer.Timestamp = time.Now().UTC().Add(time.Minute)
-					_ = q.Publish(hctx, "t", newer)
-					return queue.Nak(errors.New("redeliver me"))
+				if !handedBack.CompareAndSwap(false, true) {
+					batches.record(evs)
+					return queue.Ack()
 				}
-				batches.record(evs)
-				return queue.Ack()
-			}, convKey, queue.NewBatchOptions(lingerFor.Seconds(), 20)); err != nil {
-			t.Fatalf("SubscribeBatch: %v", err)
+				// The rest of the conversation lands while this one is
+				// in flight. A failure is recorded rather than fataled:
+				// this is not the test goroutine.
+				for _, ev := range []*events.Event{before, after} {
+					if err := q.Publish(hctx, topic, ev); err != nil {
+						first.record("publish failed: " + err.Error())
+						return queue.Ack()
+					}
+				}
+				first.record(strings.Join(labelsOf(evs), ","))
+				return queue.Defer("hand it back while its conversation moves on")
+			}, queue.NewBatchOptions(handBackLinger.Seconds(), 20))
+
+		publish(ctx, t, q, topic, returned)
+		first.awaitLabels(t, "the first delivery to be handed back", "returned")
+		awaitState(t, "the deferral to quiesce the attachment", func() bool {
+			return quiescing(q, topic, group)
+		})
+		if resumed, err := q.Unquiesce(ctx, topic, group); err != nil || !resumed {
+			t.Fatalf("Unquiesce = (%v, %v), want (true, nil)", resumed, err)
 		}
 
-		older := newConvEvent("older", "c1")
-		older.Timestamp = time.Now().UTC()
-		publish(ctx, t, q, "t", older)
-
-		batches.await(t, "the redelivered event to lead its conversation", func(got [][]string) bool {
-			return len(got) >= 1 && equalStrings(got[0], []string{"older", "newer"})
+		batches.await(t, "the conversation to come round again", func(got [][]string) bool {
+			return len(got) >= 1
 		})
+		got := batches.all()[0]
+		want := []string{"before", "returned", "after"}
+		switch {
+		case equalStrings(got, want):
+		case len(got) != len(want):
+			t.Fatalf("the first handler call after the hand-back carried %v, want all of "+
+				"%v: the handed-back event and the two that arrived while it was in "+
+				"flight were all in the mailbox before the attachment could fetch "+
+				"again, so either the drain left behind mail the broker already held, "+
+				"or the broker took longer than handBackLinger (%s) to take back a "+
+				"message it had already been sent", got, want, handBackLinger)
+		default:
+			t.Fatalf("the conversation came round as %v, want %v: a partition is ordered "+
+				"by event timestamp, and the handed-back event belongs between the two "+
+				"that arrived while it was in flight — this is the order the backend "+
+				"returned them in, or a redelivery stamped as though it were new",
+				got, want)
+		}
 	})
 
 	t.Run("a_deferral_stops_the_rest_of_a_batch", func(t *testing.T) {
@@ -1060,6 +1196,32 @@ func holdForOneBatch(ctx context.Context, t *testing.T, q queue.EventQueue, topi
 		if err := q.ResumeTopic(ctx, topic, group, "queuetest-fill"); err != nil {
 			t.Fatalf("ResumeTopic: %v", err)
 		}
+	}
+}
+
+// queueBacklog puts events in a subscription's mailbox before anything is
+// attached to it, so the first drain finds them ALREADY AVAILABLE.
+//
+// For a case whose subject is what a drain does with the mail it holds — the
+// partitioning, the order, the cap — rather than how an arrival joins a window
+// that is already open. Published to an attached consumer instead, such a case
+// asserts that every publish lands inside one linger window, which is a
+// property of the runner's round trips rather than of the backend, and a loaded
+// runner loses it. The mail waits in the mailbox, which retains what is
+// published while nothing is attached; the subscription is created first
+// because a publish to a topic with no subscription is dropped (see
+// queue.EventQueue.EnsureSubscription).
+//
+// What the drain still has to do is collect mail the broker already holds, and
+// nothing here can say how fast a backend does that: the window the case opens
+// is the bound on it, as it always was for max_batch_chunks_oversized_buffers.
+func queueBacklog(ctx context.Context, t *testing.T, q queue.EventQueue, topic, group string, evs ...*events.Event) {
+	t.Helper()
+	if _, err := q.EnsureSubscription(ctx, topic, group); err != nil {
+		t.Fatalf("EnsureSubscription(%s, %s): %v", topic, group, err)
+	}
+	for _, ev := range evs {
+		publish(ctx, t, q, topic, ev)
 	}
 }
 

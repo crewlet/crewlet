@@ -604,7 +604,7 @@ func TestAChildWithNoDiscoveryStaysFrozen(t *testing.T) {
 	// A catalogue is rendered only for a child that can act on it: listing
 	// tools to a worker with no activate is an invitation to call a name it
 	// was never offered.
-	if strings.Contains(res.SystemPrompt, "## Available tools") {
+	if strings.Contains(res.SystemPrompt.Text, "## Available tools") {
 		t.Error("a frozen child was shown a catalogue it cannot use")
 	}
 }
@@ -617,10 +617,10 @@ func TestADiscoveryCapableChildIsShownTheSafeCatalogue(t *testing.T) {
 	cfg.Discovery = discovery
 
 	res := one(t, cfg, request("read_file"))
-	if !strings.Contains(res.SystemPrompt, "## Available tools") {
-		t.Fatalf("no catalogue in a discovery-capable child's prompt:\n%s", res.SystemPrompt)
+	if !strings.Contains(res.SystemPrompt.Text, "## Available tools") {
+		t.Fatalf("no catalogue in a discovery-capable child's prompt:\n%s", res.SystemPrompt.Text)
 	}
-	if !strings.Contains(res.SystemPrompt, "research") {
+	if !strings.Contains(res.SystemPrompt.Text, "research") {
 		t.Error("the catalogue does not name the MCP server the child may discover")
 	}
 	// The CATALOGUE section only: the preamble legitimately says "do not
@@ -629,7 +629,7 @@ func TestADiscoveryCapableChildIsShownTheSafeCatalogue(t *testing.T) {
 	// The CATALOGUE SECTION ONLY: it is followed by the preamble, which
 	// legitimately says "do not delegate further", and matching to the end
 	// of the prompt would read that prohibition as an advertisement.
-	catalogue := res.SystemPrompt[strings.Index(res.SystemPrompt, "## Available tools"):]
+	catalogue := res.SystemPrompt.Text[strings.Index(res.SystemPrompt.Text, "## Available tools"):]
 	catalogue, _, _ = strings.Cut(catalogue, "You are a short-lived worker")
 	for _, denied := range []string{"slack_post", subagent.ToolName} {
 		if strings.Contains(catalogue, denied) {
@@ -654,16 +654,16 @@ func TestSkillsCoverWhatTheChildMayLaterActivate(t *testing.T) {
 	cfg.Skills = skillFor{tool: "web_search", key: "research-etiquette"}
 
 	res := one(t, cfg, request("read_file"))
-	if !strings.Contains(res.SystemPrompt, "research-etiquette") {
-		t.Errorf("a skill for a discoverable tool was left out:\n%s", res.SystemPrompt)
+	if !strings.Contains(res.SystemPrompt.Text, "research-etiquette") {
+		t.Errorf("a skill for a discoverable tool was left out:\n%s", res.SystemPrompt.Text)
 	}
 
 	// The counterfactual: a skill for a tool the grant refuses stays out,
 	// so this is scope and not "every skill in the registry".
 	cfg.Skills = skillFor{tool: "slack_post", key: "posting-etiquette"}
 	res = one(t, cfg, request("read_file"))
-	if strings.Contains(res.SystemPrompt, "posting-etiquette") {
-		t.Errorf("a skill for a denied tool reached the prompt:\n%s", res.SystemPrompt)
+	if strings.Contains(res.SystemPrompt.Text, "posting-etiquette") {
+		t.Errorf("a skill for a denied tool reached the prompt:\n%s", res.SystemPrompt.Text)
 	}
 }
 
@@ -798,7 +798,7 @@ func TestATimedOutChildReportsWhatItAlreadyDid(t *testing.T) {
 	if len(res.Executions) != 1 {
 		t.Errorf("the tool the child ran is missing: %+v", res.Executions)
 	}
-	if res.SystemPrompt == "" || res.UserPrompt == "" {
+	if res.SystemPrompt.Text == "" || res.UserPrompt.Text == "" {
 		t.Error("a cut-off child left no prompt record for the phase event")
 	}
 }
@@ -1451,7 +1451,7 @@ func TestAChildBeyondMaxParallelSaysItNeverStarted(t *testing.T) {
 			if r.Status != subagent.StatusNeverStarted || !r.Failed() || r.TimedOut() {
 				t.Errorf("a queued worker was not reported as never started: %+v", r)
 			}
-			if r.Rounds != 0 || r.SystemPrompt != "" {
+			if r.Rounds != 0 || r.SystemPrompt.Text != "" {
 				t.Errorf("a child that never started left a record of running: %+v", r)
 			}
 		}
@@ -1873,8 +1873,8 @@ func TestATemplateSuppliesThePersonaAndTheAnswerShape(t *testing.T) {
 	res := one(t, cfg, subagent.Request{Tasks: []subagent.Task{
 		{ID: "a", Worker: "auditor", Prompt: "check the deploy"},
 	}})
-	if !strings.Contains(res.SystemPrompt, "meticulous auditor") {
-		t.Errorf("the template's persona is not in the prompt:\n%s", res.SystemPrompt)
+	if !strings.Contains(res.SystemPrompt.Text, "meticulous auditor") {
+		t.Errorf("the template's persona is not in the prompt:\n%s", res.SystemPrompt.Text)
 	}
 	if res.Status != subagent.StatusOK {
 		t.Fatalf("status = %q: %+v", res.Status, res)
@@ -2048,6 +2048,64 @@ func TestADependentTaskWaitsAndIsGivenTheAnswer(t *testing.T) {
 	}
 }
 
+// A DEPENDENT'S USER MESSAGE CARRIES ITS OUTLINE: the preamble, one section per
+// answer it was given, and its own task — tiling the text exactly, which is
+// pinned byte for byte here because the outline must never change what the
+// worker is sent.
+func TestADependentsPromptIsOutlinedAroundTheAnswersItWasGiven(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	p := &provider{name: "sub", reply: func(_ context.Context, _ int, req llm.Request) (*llm.Completion, error) {
+		switch body := userText(req); {
+		case strings.Contains(body, "gather A"):
+			return answer("A says yes — ✅", 1, 1), nil
+		case strings.Contains(body, "gather B"):
+			return answer("B says no", 1, 1), nil
+		}
+		return answer("they disagree", 1, 1), nil
+	}}
+	results := run(t, baseConfig(t, w, p), subagent.Request{Tasks: []subagent.Task{
+		{ID: "a", SystemPrompt: "s", Prompt: "gather A"},
+		{ID: "b", SystemPrompt: "s", Prompt: "gather B"},
+		{ID: "synth", SystemPrompt: "s", Prompt: "reconcile them\n\n## Output\none line", After: []string{"a", "b"}},
+	}})
+	user := results[2].UserPrompt
+	const want = "## Results you were given\n\n" +
+		"These are the answers from the tasks this one waited for. They are the input to your work.\n" +
+		"\n### a\n{\"result\":\"A says yes — ✅\"}\n" +
+		"\n### b\n{\"result\":\"B says no\"}\n" +
+		"\n---\n\n" +
+		"reconcile them\n\n## Output\none line"
+	if user.Text != want {
+		t.Fatalf("user message =\n%q\nwant\n%q", user.Text, want)
+	}
+	if !user.Valid() {
+		t.Fatalf("the outline does not tile the message: %+v", user.Sections)
+	}
+	var keys, titles []string
+	for _, s := range user.Sections {
+		keys, titles = append(keys, s.Key), append(titles, s.Title)
+	}
+	if !slices.Equal(keys, []string{"dependencies", "dependency_1", "dependency_2", "task"}) ||
+		!slices.Equal(titles, []string{"Results you were given", "a", "b", "Task"}) {
+		t.Errorf("sections = %v %v", keys, titles)
+	}
+	// The task's own "## Output" stays inside the task.
+	if last := user.Sections[len(user.Sections)-1]; !strings.Contains(
+		user.Text[len(user.Text)-last.Bytes:], "## Output") {
+		t.Errorf("the task's own heading escaped its section: %+v", user.Sections)
+	}
+	// A task with nothing to wait for is all task.
+	if first := results[0].UserPrompt; first.Text != "gather A" || len(first.Sections) != 1 ||
+		first.Sections[0].Key != "task" {
+		t.Errorf("an independent task's message = %+v", first)
+	}
+	// And the system prompt's outline travels with it.
+	if !results[2].SystemPrompt.Valid() || len(results[2].SystemPrompt.Sections) == 0 {
+		t.Errorf("the worker's system prompt has no outline: %+v", results[2].SystemPrompt.Sections)
+	}
+}
+
 // A TASK WHOSE INPUT NEVER ARRIVED IS SKIPPED, not run on nothing. Feeding a
 // dependent a missing answer produces a confident wrong one.
 func TestADependentIsSkippedWhenItsInputDidNotSucceed(t *testing.T) {
@@ -2083,16 +2141,15 @@ func TestADependentIsSkippedWhenItsInputDidNotSucceed(t *testing.T) {
 	if results[2].Status != subagent.StatusOK {
 		t.Errorf("an unrelated task was skipped too: %+v", results[2])
 	}
-	// The skipped task never reached a model. Asserted on what was ASKED
-	// rather than on a count of calls: how many rounds the gather task took
-	// to give up is the tool loop's business — it is reminded once that
-	// prose is not a submission — and a count would make this a test of
-	// that rather than of the skip.
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	// The skipped task never reached a model. The other two did: `unrelated`
+	// once, and `gather` three times — its prose was not a submission, so
+	// the loop asked it twice more to finish before it ended `no_result`.
+	if p.count() != 4 {
+		t.Errorf("%d model calls, want 4 — a skipped task must cost nothing", p.count())
+	}
 	for _, req := range p.seen {
 		if strings.Contains(userText(req), "reconcile") {
-			t.Error("the skipped task reached a model — a skipped task must cost nothing")
+			t.Error("the skipped dependent reached a model")
 		}
 	}
 }
@@ -2154,11 +2211,46 @@ func TestAWorkerThatNeverSubmittedIsNotGivenAnAnswer(t *testing.T) {
 		t.Errorf("an answer was synthesised: %+v", res.Output)
 	}
 	// The prose is still handed back: rounds the parent paid for are worth
-	// reading even when the last step was skipped. Contained rather than
-	// equal, because the loop reminds the worker once that prose is not a
-	// submission and its answer to that is part of the same transcript.
-	if !strings.Contains(res.Text, "here is my thinking, at length") {
-		t.Errorf("the worker's prose was discarded: %q", res.Text)
+	// reading even when the last step was skipped. ONCE — the answer the
+	// worker gave its task, and not the two copies the finishing
+	// correctives drew out, which answered "call the tool" instead and
+	// would hand the parent the same report three times.
+	if n := strings.Count(res.Text, "here is my thinking, at length"); n != 1 {
+		t.Errorf("the worker's prose appears %d times, want once: %q", n, res.Text)
+	}
+	if res.Rounds != 3 {
+		t.Errorf("rounds = %d, want 3 — one answer plus the two correctives' bound", res.Rounds)
+	}
+}
+
+// A WORKER THAT WROTE ITS ANSWER AS TEXT IS ASKED TO SUBMIT IT, rather than
+// handed back as `no_result`. Its loop finishes by `submit_result`, so prose is
+// not a finish there however complete it reads — and a parent whose worker
+// answered in the wrong channel would otherwise re-run the whole task.
+func TestAWorkerThatWroteItsAnswerAsTextIsAskedToSubmitIt(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	p := &provider{name: "sub", reply: func(_ context.Context, n int, _ llm.Request) (*llm.Completion, error) {
+		if n == 1 {
+			return say("```json\n{\"result\":\"the incident was a bad deploy\"}\n```", 1, 1), nil
+		}
+		return answer("the incident was a bad deploy", 1, 1), nil
+	}}
+	res := one(t, baseConfig(t, w, p), request())
+	if res.Status != subagent.StatusOK || res.Output["result"] != "the incident was a bad deploy" {
+		t.Fatalf("status = %q output = %+v, want the submitted answer", res.Status, res.Output)
+	}
+	if p.count() != 2 || res.Rounds != 2 {
+		t.Fatalf("%d model calls over %d rounds, want 2", p.count(), res.Rounds)
+	}
+	second := p.seen[1].Messages
+	if last := second[len(second)-1]; last.Role != llm.RoleUser ||
+		!strings.Contains(last.Content, "`"+subagent.SubmitTool+"`") {
+		t.Errorf("the second round opened on %+v, want the corrective naming %s",
+			last, subagent.SubmitTool)
+	}
+	if len(res.Narration) == 0 || !res.Narration[0].Declined {
+		t.Errorf("narration = %+v, want the prose round marked declined", res.Narration)
 	}
 }
 
@@ -2608,7 +2700,7 @@ func TestEveryChildIsReportedOnce(t *testing.T) {
 	if len(seen) != 1 {
 		t.Fatalf("one worker produced %d telemetry calls", len(seen))
 	}
-	if seen[0].SystemPrompt == "" || seen[0].UserPrompt == "" {
+	if seen[0].SystemPrompt.Text == "" || seen[0].UserPrompt.Text == "" {
 		t.Error("the reported result carries no prompts, so a dashboard shows an empty phase")
 	}
 }
@@ -2673,11 +2765,8 @@ func TestAWorkerThatTimedOutStillReportsHowLongItTook(t *testing.T) {
 //
 // The Result carries Executions and Narration keyed on the SAME round number,
 // which is the whole contract a consumer interleaves them on. Publishing the
-// executions alone left every delegated worker's card as bare tool rows with
-// nothing that asked for them, and pushed the worker's reasoning into the
-// dashboard's pre-narration fallback — where it renders under a heading
-// claiming the record predates rounds being kept apart, which is false: it is
-// what this build publishes for every worker.
+// executions alone would leave every delegated worker's card as bare tool rows
+// with nothing that asked for them, and the worker's reasoning nowhere on it.
 func TestAWorkersNarrationSharesItsRoundsWithItsToolCalls(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)

@@ -120,7 +120,6 @@ var refusalStatus = map[crewletmcp.Refusal]int{
 	crewletmcp.RefusalSteerUnsupported:   http.StatusConflict,
 	crewletmcp.RefusalBudgetExhausted:    http.StatusConflict,
 	crewletmcp.RefusalUnavailable:        http.StatusServiceUnavailable,
-	crewletmcp.RefusalPeerUpgrading:      http.StatusServiceUnavailable,
 }
 
 // RefusalStatus is the status the act transport answers a refusal class

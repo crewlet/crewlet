@@ -30,31 +30,25 @@ import (
 // [versionedFields] names, which the conformance suite holds it to.
 //
 // A record above it is RETAINED at its position rather than skipped, so a
-// newer peer's shape survives a rolling upgrade in both directions. Version 2
-// is the PERSON kind. A record is stamped with the LOWEST version that reads
-// it ([statelog.RecordFields.Minimum]), so a seat's or a schedule's record is
-// version 1 still and every older peer applies it as before.
-const RecordVersion = 2
+// newer peer's shape survives a rolling upgrade in both directions. Every
+// kind this build writes — a seat's, a schedule's and a person's day — is the
+// base format, version 1.
+const RecordVersion = 1
 
-// versionedFields is every field the record gained since the base format.
+// versionedFields is every field the record has gained since the base format,
+// and the version a reader must be at to apply a record carrying it — today
+// none. A record is stamped with the LOWEST version that reads it
+// ([statelog.RecordFields.Minimum]), so a field or a kind a later build adds
+// takes a row here at the next version, and a record of an existing shape
+// stays readable by every build that reads that shape.
 //
-// A NEW KIND IS A VALUE of a field every record has carried, so its row names
-// the key and the value: a person's record is `subject.kind` equal to
-// "person". A build reading 1 has no applier for it — and, before
-// [Subject.validateFor], no envelope either — which is why [Publisher] holds a
-// person's record back until every node applying the log reads version 2
-// (PublisherDeps.Readers).
-var versionedFields = statelog.RecordFields{
-	{Name: "Subject.Kind=person", Since: 2,
-		Path: []string{"subject", "kind"}, Equals: string(KindPerson)},
-}
+// A NEW KIND IS A VALUE of a field every record carries, so its row names the
+// key and the value (`subject.kind` equal to the new kind's name): a row
+// naming only the key would stamp every record the domain writes.
+var versionedFields = statelog.RecordFields{}
 
 // VersionedFields is the table, for the conformance suite.
 func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFields) }
-
-// PersonVersion is the record version that introduced [KindPerson]: what every
-// node applying the log must read before a person's record is published.
-const PersonVersion = 2
 
 // Kind is what a usage record is about.
 //
@@ -78,7 +72,7 @@ const (
 	// surface, a background pass on a unit a person leads. A person is no
 	// seat: no agent id to key a seat's record on, no turns and no reads,
 	// so its spend was in no seat's day and therefore in no named spend
-	// window. Introduced at [PersonVersion].
+	// window.
 	KindPerson Kind = "person"
 )
 
@@ -536,9 +530,10 @@ func (r Record) minimumVersion() (int, error) {
 
 // Encode writes a record, stamped with the lowest version that reads it.
 //
-// A RECORD STAMPED BELOW ITS FIELDS IS REFUSED: a person's record at version
-// 1 is one a version-1 peer would read as a writer fault on every redelivery
-// rather than defer, which is the opposite of what a rolling upgrade promises.
+// A RECORD STAMPED BELOW ITS FIELDS IS REFUSED: a record carrying a field a
+// build at that version does not read would be one that build reads as a
+// writer fault on every redelivery rather than defers, which is the opposite
+// of what a rolling upgrade promises.
 func (r Record) Encode() ([]byte, error) {
 	want, stampErr := r.minimumVersion()
 	if stampErr != nil {
@@ -548,8 +543,8 @@ func (r Record) Encode() ([]byte, error) {
 		r.V = want
 	}
 	if r.V < want {
-		return nil, fmt.Errorf("usage: the %s record on %s is version %d, and that "+
-			"kind was introduced at version %d", r.Subject.Kind, r.Subject, r.V, want)
+		return nil, fmt.Errorf("usage: the %s record on %s is version %d, and it "+
+			"carries a field introduced at version %d", r.Subject.Kind, r.Subject, r.V, want)
 	}
 	if err := r.Subject.Validate(); err != nil {
 		return nil, err

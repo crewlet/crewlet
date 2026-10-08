@@ -34,11 +34,8 @@
 // node's scheduler recorded. A person-day: what the seats' auxiliary model
 // spent for a human seat — a question answered on the operator surface, a pass
 // on a unit a person leads — by the same cells, and nothing else, since a
-// person has no agent id, no turns and no reads ([KindPerson]); it is record
-// version 2, and the publisher holds it until every node applying the log
-// reads that version, because a build from before the kind stops on it
-// rather than deferring it. A record is always the cumulative value; an apply
-// REPLACES.
+// person has no agent id, no turns and no reads ([KindPerson]). A record is
+// always the cumulative value; an apply REPLACES.
 //
 // # What it deliberately is not
 //

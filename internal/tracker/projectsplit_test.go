@@ -130,11 +130,12 @@ func TestTheActiveCountIsExactAcrossMoveRemoveRestoreAndPurge(t *testing.T) {
 
 // THE BACKFILL EQUALS A RECOUNT.
 //
-// A node upgrading onto rows its predecessor wrote meets `active_count` at the
-// migration's zero, and the derivation version's bump runs [Applier.Rederive]
-// once. What it computes has to be exactly what the incremental rule reached
-// by applying the same records, or the upgraded node and one that applied them
-// disagree on a table the fleet compares byte for byte.
+// A node whose checkpoint's rule set differs from this build's — a cursor a
+// reanchor created at derivation 0, or rows adopted from a build with different
+// rules — runs [Applier.Rederive] once. What it computes has to be exactly what
+// the incremental rule reached by applying the same records, or the re-derived
+// node and one that applied them disagree on a table the fleet compares byte
+// for byte.
 func TestTheActiveBackfillEqualsTheMaintainedCount(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -161,7 +162,7 @@ func TestTheActiveBackfillEqualsTheMaintainedCount(t *testing.T) {
 		t.Fatalf("the maintained census is %+v, want one started in each", maintained)
 	}
 
-	// THE PREDECESSOR'S ROWS: the column as the migration left it.
+	// ROWS A DIFFERENT RULE SET DERIVED: the column at zero.
 	if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(t.Context(),
 			`UPDATE tracker_projects SET active_count = 0`); err != nil {
@@ -174,14 +175,10 @@ func TestTheActiveBackfillEqualsTheMaintainedCount(t *testing.T) {
 	}
 	for key, want := range maintained {
 		if got := census(t, r, key); got != want {
-			t.Errorf("%s re-derives to %+v and the apply maintained %+v — a node "+
-				"upgrading onto old rows would disagree with one that applied them",
+			t.Errorf("%s re-derives to %+v and the apply maintained %+v — a "+
+				"re-derived node would disagree with one that applied them",
 				key, got, want)
 		}
-	}
-	if tracker.DerivationVersion < 3 {
-		t.Error("the applier derives active_count and its derivation version " +
-			"does not say so — an upgraded node would never fill the column")
 	}
 }
 

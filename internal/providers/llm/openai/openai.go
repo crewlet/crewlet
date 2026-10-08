@@ -30,10 +30,12 @@
 package openai
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -42,6 +44,7 @@ import (
 	sdk "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/param"
+	"github.com/openai/openai-go/v3/packages/ssestream"
 	"github.com/openai/openai-go/v3/shared"
 
 	"github.com/crewlet/crewlet/internal/logging"
@@ -52,11 +55,20 @@ import (
 
 var log = logging.Get("llm.openai")
 
-// Defaults. The timeout matches the config layer's defaultLLMTimeoutSeconds.
+// wireName is this backend's type: the default label for its errors, and what
+// a completion records as its [llm.Origin.Provider] whatever the label.
+const wireName = "openai"
+
+// Defaults. The timeout matches the config layer's defaultLLMTimeoutSeconds,
+// which is what the engine passes; this one serves a Config built without it.
+//
+// There is deliberately NO default temperature. The engine's phases never
+// chose one, so a provider-side default was a number nobody picked, sent on
+// every round in place of the vendor's own; a call that wants one names it on
+// the request.
 const (
-	DefaultBaseURL     = "https://api.openai.com/v1"
-	DefaultTimeout     = 120 * time.Second
-	DefaultTemperature = 0.7
+	DefaultBaseURL = "https://api.openai.com/v1"
+	DefaultTimeout = 600 * time.Second
 )
 
 // Config builds a provider.
@@ -82,7 +94,9 @@ type Config struct {
 	// company's traffic to somewhere its operator never configured.
 	BaseURL string
 
-	// Timeout caps one HTTP attempt. Zero takes DefaultTimeout.
+	// Timeout bounds one HTTP attempt. Zero takes DefaultTimeout. A unary
+	// call is bounded in total; a streamed one by its SILENCE, never its
+	// length — see [httpapi.IdleWatchdog] for why the two differ.
 	Timeout time.Duration
 
 	// Cooldowns is the credential bench policy. Zero fields take defaults.
@@ -93,16 +107,12 @@ type Config struct {
 	// context window needs.
 	MaxTokens int
 
-	// Temperature is used for a request that names none (see llm.Request:
-	// its zero value cannot be told apart from an unset field). Ignored
-	// when Reasoning is set — the reasoning models reject it.
-	Temperature float64
-
 	// Reasoning turns on the reasoning-effort budget.
 	Reasoning bool
 
 	// ReasoningEffort is the budget selector: low, medium, high, max.
-	// Empty takes the endpoint's own default.
+	// Empty takes the endpoint's own default. A request's
+	// [llm.Request.Effort] lowers it for that call, and never raises it.
 	ReasoningEffort string
 
 	// HTTPClient overrides the transport. Nil builds one through
@@ -115,14 +125,15 @@ type Config struct {
 
 // Provider is an OpenAI-wire-format backend.
 type Provider struct {
-	name        string
-	model       string
-	client      sdk.Client
-	pool        *credential.Pool
-	maxTokens   int64
-	temperature float64
-	reasoning   bool
-	effort      shared.ReasoningEffort
+	name      string
+	model     string
+	client    sdk.Client
+	pool      *credential.Pool
+	maxTokens int64
+	reasoning bool
+	effort    shared.ReasoningEffort
+	// timeout is a unary call's total bound and a streamed call's idle one.
+	timeout time.Duration
 
 	// noStream latches once this endpoint has answered a streaming request
 	// without streaming. Atomic: one Provider serves every seat
@@ -150,17 +161,15 @@ func New(cfg Config) (*Provider, error) {
 	}
 	name := cfg.Name
 	if strings.TrimSpace(name) == "" {
-		name = "openai"
-	}
-	temperature := cfg.Temperature
-	if temperature <= 0 {
-		temperature = DefaultTemperature
+		name = wireName
 	}
 
 	// NOTHING FROM THE PROCESS ENVIRONMENT, first — see
 	// [WithoutAmbientEnvironment]. The key is set per request, after these.
 	opts := append(WithoutAmbientEnvironment(),
 		option.WithBaseURL(baseURL),
+		// A unary call's total bound. A streamed attempt replaces it with
+		// none and bounds its silence instead (see [Provider.streamOnce]).
 		option.WithRequestTimeout(timeout),
 		// See the package doc. Not negotiable.
 		option.WithMaxRetries(0),
@@ -175,14 +184,14 @@ func New(cfg Config) (*Provider, error) {
 	}
 
 	return &Provider{
-		name:        name,
-		model:       cfg.Model,
-		client:      sdk.NewClient(opts...),
-		pool:        credential.New(credential.Options{Keys: keys, Policy: cfg.Cooldowns, Clock: cfg.Clock}),
-		maxTokens:   int64(cfg.MaxTokens),
-		temperature: temperature,
-		reasoning:   cfg.Reasoning,
-		effort:      shared.ReasoningEffort(cfg.ReasoningEffort),
+		name:      name,
+		model:     cfg.Model,
+		client:    sdk.NewClient(opts...),
+		pool:      credential.New(credential.Options{Keys: keys, Policy: cfg.Cooldowns, Clock: cfg.Clock}),
+		maxTokens: int64(cfg.MaxTokens),
+		reasoning: cfg.Reasoning,
+		effort:    shared.ReasoningEffort(cfg.ReasoningEffort),
+		timeout:   timeout,
 	}, nil
 }
 
@@ -285,6 +294,11 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 // streamOnce runs one streamed attempt, forwarding fragments as they land and
 // returning the same accumulated shape the unary path returns.
 //
+// BOUNDED BY SILENCE, NOT LENGTH: the client's per-attempt timeout is lifted
+// for this request and an [httpapi.IdleWatchdog] of the same duration ends it
+// only when nothing has arrived for that long, because the per-attempt deadline
+// would cover the whole body and kill a long reasoning round half-way through.
+//
 // The SDK's accumulator rebuilds exactly the [sdk.ChatCompletion] that
 // [Provider.completion] already consumes, so the two paths converge on one
 // interpretation of a response rather than growing a second.
@@ -301,6 +315,9 @@ func (p *Provider) streamOnce(
 	ctx context.Context, req llm.Request,
 	params sdk.ChatCompletionNewParams, opt option.RequestOption,
 ) (out *sdk.ChatCompletion, reasoning string, unary bool, err error) {
+	ctx, watch := httpapi.WatchIdle(ctx, p.timeout)
+	defer watch.Stop()
+	var done doneWatch
 	var answer sdk.ChatCompletion
 	whole := httpapi.NewUnaryAnswer(func(body []byte) bool {
 		var c sdk.ChatCompletion
@@ -312,16 +329,28 @@ func (p *Provider) streamOnce(
 		answer = c
 		return true
 	})
-	stream := p.client.Chat.Completions.NewStreaming(ctx, params, opt, option.WithMiddleware(whole.Middleware))
+	// The watchdog and the sentinel watch INSIDE the unary reader, so a
+	// whole body read to find out whether it is a completion is bounded by
+	// its silence as a stream is, and a stream it hands back has already
+	// been seen for its `[DONE]`.
+	stream := p.client.Chat.Completions.NewStreaming(ctx, params, opt,
+		option.WithRequestTimeout(0),
+		option.WithMiddleware(whole.Middleware, watch.Middleware, done.Middleware))
 	defer func() { _ = stream.Close() }()
 
 	var acc sdk.ChatCompletionAccumulator
 	var thinking strings.Builder
 	events := 0
+	finished := false
 	for stream.Next() {
 		events++
 		chunk := stream.Current()
 		acc.AddChunk(chunk)
+		for _, choice := range chunk.Choices {
+			if choice.FinishReason != "" {
+				finished = true
+			}
+		}
 		if len(chunk.Choices) == 0 {
 			// A usage-only or keep-alive chunk. Accumulated, not shown.
 			continue
@@ -335,8 +364,9 @@ func (p *Provider) streamOnce(
 		// Classified by the caller exactly as a unary failure is. A stream
 		// that dies MID-BODY is a failure of the call, not a short answer:
 		// returning what accumulated would hand the loop a truncated
-		// response as though the model had finished.
-		return nil, "", false, err
+		// response as though the model had finished. A stream the watchdog
+		// ended is reported as the stall it was.
+		return nil, "", false, watch.Err(err)
 	}
 	if events == 0 {
 		if whole.Taken() {
@@ -347,6 +377,20 @@ func (p *Provider) streamOnce(
 		// a phase over a capability.
 		return nil, "", false, errNoStream
 	}
+	if !finished && !done.seen.Load() {
+		// A BODY THAT ENDED CLEANLY IS NOT A FINISHED ANSWER. The SDK's
+		// decoder reports an orderly EOF — a gateway or proxy closing the
+		// response mid-answer — as no error at all, and the stop-reason
+		// mapping reads an absent finish_reason as an ordinary end, so a
+		// round cut after its first deltas was taken as the whole answer.
+		// What says the model finished is the stream's own terminal
+		// evidence: a finish_reason on some choice, or the `[DONE]`
+		// sentinel (a host that names no reason still ends its stream).
+		// Neither means the call failed, and it is retried like the
+		// server failure it is. The ""-is-an-end reading stays for unary
+		// responses, which arrive whole or not at all.
+		return nil, "", false, errStreamCut
+	}
 	assembled := acc.ChatCompletion
 	return &assembled, thinking.String(), false, nil
 }
@@ -354,6 +398,65 @@ func (p *Provider) streamOnce(
 // errNoStream reports an endpoint that accepted a streaming request and
 // answered with neither a stream nor a completion.
 var errNoStream = errors.New("endpoint did not stream")
+
+// errStreamCut reports a stream whose body ended before its terminal event:
+// no choice carried a finish_reason and no `[DONE]` arrived.
+var errStreamCut = errors.New("stream ended before its terminal event (no finish_reason and no [DONE])")
+
+// doneWatch notes whether a streamed body carried the `[DONE]` sentinel.
+//
+// The SDK consumes the sentinel and reports it exactly as it reports a body
+// that simply stopped — Next is false and Err is nil either way — so it is
+// read off the bytes on their way in, through the same middleware hook the
+// idle watchdog uses.
+type doneWatch struct{ seen atomic.Bool }
+
+// Middleware wraps the response body in a [doneBody].
+func (d *doneWatch) Middleware(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+	resp, err := next(req)
+	if err == nil && resp != nil && resp.Body != nil {
+		resp.Body = &doneBody{ReadCloser: resp.Body, watch: d, tail: []byte("\n")}
+	}
+	return resp, err
+}
+
+// doneBody scans an SSE body for a `data: [DONE]` line.
+//
+// Matched at the START OF A LINE — a newline before `data:` — and never as a
+// bare `[DONE]`, which a model may write inside its own content; a JSON
+// payload cannot carry a raw newline, so a line start is the event's own
+// field. A read may split the marker, so the last bytes of each read are kept
+// and prefixed to the next.
+type doneBody struct {
+	io.ReadCloser
+	watch *doneWatch
+	tail  []byte
+}
+
+// doneMarkers are the two spellings SSE allows: a space after the colon is
+// optional, and the SDK accepts both.
+var doneMarkers = [][]byte{[]byte("\ndata: [DONE]"), []byte("\ndata:[DONE]")}
+
+// doneKeep is how many trailing bytes a read carries into the next: one fewer
+// than the longest marker, so a marker split anywhere is still seen whole.
+const doneKeep = len("\ndata: [DONE]") - 1
+
+func (b *doneBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if n > 0 && !b.watch.seen.Load() {
+		b.tail = append(b.tail, p[:n]...)
+		for _, marker := range doneMarkers {
+			if bytes.Contains(b.tail, marker) {
+				b.watch.seen.Store(true)
+				break
+			}
+		}
+		if len(b.tail) > doneKeep {
+			b.tail = append(b.tail[:0], b.tail[len(b.tail)-doneKeep:]...)
+		}
+	}
+	return n, err
+}
 
 // classify turns an SDK failure into the contract's error.
 //
@@ -371,10 +474,94 @@ func (p *Provider) classify(err error) *llm.Error {
 		classified.Detail = Detail(apiErr)
 		return classified
 	}
+	if errors.Is(err, errStreamCut) {
+		// The response opened with 200 and stopped short: the server's
+		// failure, retried and handed down the chain like one.
+		return &llm.Error{Kind: llm.KindServer, Provider: p.name, Model: p.model, Err: err}
+	}
+	var streamErr *ssestream.StreamError
+	if errors.As(err, &streamErr) {
+		// WITH WHAT THE ENDPOINT SAID, as an API error is, and never the
+		// SDK's text: its StreamError pastes the error chunk raw, which is
+		// the endpoint's own words unredacted.
+		return &llm.Error{Kind: streamErrorKind(streamErr), Provider: p.name, Model: p.model,
+			Err: &streamFailure{err: err}, Detail: streamDetail(streamErr)}
+	}
 	return httpapi.FromTransport(err, p.name, p.model)
 }
 
+// streamErrorKind classifies an `{"error":…}` chunk that ended a stream already
+// under way.
+//
+// The SDK raises it as a [ssestream.StreamError] carrying no status — the
+// response opened with 200 — so it is neither an API error nor a transport
+// one, and handed to [httpapi.FromTransport] it was fatal: an OpenAI
+// server_error half-way through a round stopped the fallback chain dead.
+//
+// A failure on a response that had already begun is the SERVER's: the
+// endpoint accepted the request, authenticated it and started answering, so
+// it cannot be a request it refused or a key it rejected. The one structured
+// fact some hosts add is an HTTP-shaped `code` — vLLM's error body carries
+// the status it would have sent — and where that is present it decides,
+// because it is the endpoint's own classification rather than this backend's
+// guess. OpenAI's own `code` is a string or null and does not.
+func streamErrorKind(se *ssestream.StreamError) llm.ErrorKind {
+	var body struct {
+		Error struct {
+			Code json.RawMessage `json:"code"`
+		} `json:"error"`
+	}
+	var status int
+	if json.Unmarshal(se.Event.Data, &body) == nil &&
+		json.Unmarshal(body.Error.Code, &status) == nil && status >= 400 && status < 600 {
+		return llm.KindForStatus(status)
+	}
+	return llm.KindServer
+}
+
+// streamFailure is an error chunk inside a stream as this engine shows it: a
+// line of its own, with the SDK's error behind it for errors.Is and errors.As
+// and never printed — the chunk's own words travel as [llm.Error.Detail],
+// redacted ([streamDetail]).
+type streamFailure struct{ err error }
+
+func (e *streamFailure) Error() string { return "the response stream carried an error" }
+
+func (e *streamFailure) Unwrap() error { return e.err }
+
+// streamDetail is what an error chunk SAID — its message and the fields it
+// filed it under — as one redacted, bounded line, read the way [Detail] reads
+// an API error's body: the OpenAI envelope first, and otherwise whatever the
+// chunk's data can honestly yield.
+func streamDetail(se *ssestream.StreamError) string {
+	var body struct {
+		Error struct {
+			Message string          `json:"message"`
+			Type    string          `json:"type"`
+			Code    json.RawMessage `json:"code"`
+			Param   string          `json:"param"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(se.Event.Data, &body) == nil {
+		code := strings.Trim(string(body.Error.Code), `"`)
+		if code == "null" {
+			code = ""
+		}
+		if said := httpapi.Said(body.Error.Message,
+			httpapi.Filed{Name: "type", Value: body.Error.Type},
+			httpapi.Filed{Name: "code", Value: code},
+			httpapi.Filed{Name: "param", Value: body.Error.Param}); said != "" {
+			return said
+		}
+	}
+	return httpapi.SaidBody("application/json", se.Event.Data)
+}
+
 func (p *Provider) params(req llm.Request) (sdk.ChatCompletionNewParams, error) {
+	if !req.Effort.Valid() {
+		return sdk.ChatCompletionNewParams{}, fmt.Errorf("request effort %q is not a level (want one of low, "+
+			"medium, high, xhigh, max, or empty)", req.Effort)
+	}
 	messages, err := formatMessages(req.Messages)
 	if err != nil {
 		return sdk.ChatCompletionNewParams{}, err
@@ -390,21 +577,35 @@ func (p *Provider) params(req llm.Request) (sdk.ChatCompletionNewParams, error) 
 	}
 
 	if p.reasoning {
-		if p.effort != "" {
-			params.ReasoningEffort = p.effort
+		// THE LOWER of the entry's level and the call's ceiling. An entry
+		// with no level sends none, ceiling or not: the endpoint's default
+		// is not a level this can compare, and some models default BELOW
+		// low (`none` on GPT-5.1), so sending the ceiling could raise the
+		// effort it exists to bound.
+		if effort := llm.Effort(p.effort).AtMost(req.Effort); effort != "" {
+			params.ReasoningEffort = shared.ReasoningEffort(effort)
 		}
 		// The reasoning models reject max_tokens outright and reject any
 		// temperature but their own default. Sending max_tokens here too
 		// 400s every o-series call the moment a caller sets a cap.
-		if maxTokens > 0 {
-			params.MaxCompletionTokens = param.NewOpt(maxTokens)
+		//
+		// And the CALLER'S cap is not sent at all: it sizes an answer
+		// (llm.Request.MaxTokens), and max_completion_tokens bounds the
+		// reasoning as well, so a cap sized for a one-line answer is spent
+		// reasoning and the call comes back empty. Only the entry's own
+		// cap applies here; the call's effort is what keeps it short.
+		if p.maxTokens > 0 {
+			params.MaxCompletionTokens = param.NewOpt(p.maxTokens)
 		}
 	} else {
-		// TemperatureOr, not a zero test: an explicit 0.0 is a real request
-		// — a judge asking for a reproducible answer — and it must reach
-		// the wire, while a request that named nothing takes the
-		// provider's configured default.
-		params.Temperature = param.NewOpt(req.TemperatureOr(p.temperature))
+		// Only a temperature the CALL named, and then exactly — an explicit
+		// 0.0 is a real request, a judge asking for a reproducible answer.
+		// A call that named none sends none and runs at the endpoint's own
+		// default: a substitute chosen here would be a number nobody picked,
+		// and every compatible host has a default of its own to apply.
+		if req.Temperature != nil {
+			params.Temperature = param.NewOpt(*req.Temperature)
+		}
 		// max_tokens rather than max_completion_tokens: the compatible
 		// endpoints this backend also serves are years behind the rename.
 		if maxTokens > 0 {
@@ -412,17 +613,13 @@ func (p *Provider) params(req llm.Request) (sdk.ChatCompletionNewParams, error) 
 		}
 	}
 
+	// No tool_choice: with tools present the API's default is auto, which
+	// is the only choice the contract has (see [llm.Request.Tools]) — and
+	// leaving it out is also what every compatible endpoint this backend
+	// serves understands, where an explicit value is one more field an
+	// older server can refuse.
 	if len(req.Tools) > 0 {
 		params.Tools = formatTools(req.Tools)
-		if choice, ok := toolChoice(req.ToolChoice); ok {
-			// OfAuto is the SDK's name for the BARE STRING variant of the
-			// union, which carries "auto", "required" or "none" — not a
-			// field that means auto. The alternatives are the
-			// named-tool forms, which nothing here uses.
-			params.ToolChoice = sdk.ChatCompletionToolChoiceOptionUnionParam{
-				OfAuto: param.NewOpt(choice),
-			}
-		}
 	}
 	return params, nil
 }
@@ -531,21 +728,6 @@ func toolSchema(params map[string]any) shared.FunctionParameters {
 	return shared.FunctionParameters(params)
 }
 
-// toolChoice maps the contract's values onto the wire strings. The second
-// return is false when nothing should be sent.
-func toolChoice(choice llm.ToolChoice) (string, bool) {
-	switch choice {
-	case "", llm.ToolChoiceAuto:
-		return string(llm.ToolChoiceAuto), true
-	case llm.ToolChoiceRequired, llm.ToolChoiceNone:
-		// OpenAI's spelling matches the contract's for both.
-		return string(choice), true
-	default:
-		log.Warn("unknown_tool_choice", "value", string(choice))
-		return "", false
-	}
-}
-
 func (p *Provider) completion(resp *sdk.ChatCompletion) (*llm.Completion, error) {
 	if len(resp.Choices) == 0 {
 		// Returning an empty completion with finish_reason "error" here
@@ -566,13 +748,14 @@ func (p *Provider) completion(resp *sdk.ChatCompletion) (*llm.Completion, error)
 		// The CONFIGURED model id, not the one the response echoes: an
 		// alias resolving to a dated snapshot would re-key the per-model
 		// breakdown the day the alias moves.
-		Model:            p.model,
+		Model: p.model,
+		// The wire format, never p.name: an openai-compatible entry
+		// relabels its errors with its key, and a key may be any word —
+		// `anthropic` included — while a turn's origin has to say which
+		// backend's shape it is in. See [llm.Origin].
+		Provider:         wireName,
 		Content:          choice.Message.Content,
 		ReasoningContent: reasoningText(choice.Message.RawJSON()),
-		FinishReason:     choice.FinishReason,
-	}
-	if out.FinishReason == "" {
-		out.FinishReason = "stop"
 	}
 
 	for _, tc := range choice.Message.ToolCalls {
@@ -584,11 +767,19 @@ func (p *Provider) completion(resp *sdk.ChatCompletion) (*llm.Completion, error)
 			log.Warn("custom_tool_call_ignored", "model", p.model, "id", tc.ID)
 			continue
 		}
-		out.ToolCalls = append(out.ToolCalls, llm.ToolCall{
-			ID:        tc.ID,
-			Name:      tc.Function.Name,
-			Arguments: httpapi.DecodeArgs([]byte(tc.Function.Arguments), tc.Function.Name),
-		})
+		args, argErr := httpapi.DecodeArgs([]byte(tc.Function.Arguments), tc.Function.Name)
+		call := llm.ToolCall{ID: tc.ID, Name: tc.Function.Name, Arguments: args}
+		if argErr != nil {
+			call.ArgumentsError = argErr.Error()
+		}
+		out.ToolCalls = append(out.ToolCalls, call)
+	}
+	out.StopReason = stopReason(choice.FinishReason, len(out.ToolCalls) > 0)
+	if choice.Message.Refusal != "" {
+		// The model's own refusal message, which the API puts beside the
+		// content rather than in it — a refusal whatever finish_reason
+		// says, and the one place OpenAI gives an account of it.
+		out.StopReason = llm.StopRefusal
 	}
 
 	// See the package doc: prompt_tokens is ALREADY the full prompt count
@@ -604,8 +795,50 @@ func (p *Provider) completion(resp *sdk.ChatCompletion) (*llm.Completion, error)
 		"output_tokens", out.OutputTokens,
 		"cache_read_tokens", out.CacheRead,
 		"tool_calls", len(out.ToolCalls),
-		"finish_reason", out.FinishReason)
+		"finish_reason", choice.FinishReason)
+	if out.StopReason == llm.StopRefusal {
+		// A refusal is an error, not an answer — see [llm.StopRefusal] —
+		// and it is returned here, after the credential rotation, because
+		// the call succeeded on a healthy key. OpenAI names no policy
+		// category; the refusal message, where there is one, is its
+		// account of why.
+		log.Warn("llm_refused", "model", p.model,
+			"input_tokens", out.InputTokens, "output_tokens", out.OutputTokens)
+		return nil, llm.Refused(p.name, p.model, &llm.Refusal{
+			Explanation: choice.Message.Refusal,
+			Completion:  out,
+		})
+	}
 	return out, nil
+}
+
+// stopReason maps a finish_reason onto the contract's.
+//
+// `length` is the output cap and `content_filter` the host's policy filter,
+// which is a refusal whatever produced it. A MISSING one is read from the
+// response — a tool call means it stopped for its tools — because a compatible
+// host that omits the field has not said the response was cut short; an
+// UNKNOWN one is logged and read the same way, since a value newer than this
+// build is the host's and failing every round over a word fails a working seat.
+// `function_call` is the deprecated spelling of `tool_calls`.
+func stopReason(raw string, calls bool) llm.StopReason {
+	switch raw {
+	case "stop":
+		return llm.StopEnd
+	case "tool_calls", "function_call":
+		return llm.StopToolUse
+	case "length":
+		return llm.StopMaxTokens
+	case "content_filter":
+		return llm.StopRefusal
+	case "":
+	default:
+		log.Warn("finish_reason_unknown", "finish_reason", raw)
+	}
+	if calls {
+		return llm.StopToolUse
+	}
+	return llm.StopEnd
 }
 
 // reasoningText pulls a reasoning trace off the raw message JSON.

@@ -272,7 +272,7 @@ func (d *DB) UsageForDay(ctx context.Context, w UsageWindow) (UsageDay, error) {
 // auxiliary records — into (phase, worker, model, provider key) cells per seat,
 // off the columns node/0015, node/0032 and node/0040 promoted, never the
 // payload. An auxiliary record's cell is phase `auxiliary` with its purpose as
-// the worker, which is the cell shape every build already reads.
+// the worker, so it takes no cell shape of its own.
 //
 // CALLS ARE PROVIDER CALLS — the `calls` column's sum, not a count of rows —
 // since one coalesced auxiliary row stands for many (node/0040).

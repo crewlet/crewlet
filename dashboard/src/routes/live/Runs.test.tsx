@@ -28,6 +28,8 @@ import { SANDBOX_TAIL_POLL_MS } from "~/contract/sandbox.ts";
 import { overflowing } from "~/testing.tsx";
 import { BridgeLog, RunScreen } from "./Runs.tsx";
 import type { SandboxRun } from "~/protocol/index.ts";
+import { healthFrame } from "~/test/health.ts";
+import { withDerived } from "~/test/org.ts";
 
 afterEach(() => {
   cleanup();
@@ -272,8 +274,8 @@ function mountPage(answers: Record<string, unknown>, outcome = "pending") {
     }),
   );
   const store = new Store();
-  store.applyHealth({ status: "healthy" } as never);
-  store.applyOrg(ORG as never);
+  store.applyHealth(healthFrame());
+  store.applyOrg(withDerived(ORG) as never);
   const socket = new LiveSocket(store);
   socket.query = ((what: string, params?: Record<string, unknown>) => {
     asked.push({ what, params: params ?? {} });
@@ -367,20 +369,13 @@ test("a running run's page polls the live output of the job it holds", async () 
       turn_id: "turn-1",
       launch_id: "job-2",
       node: "node-a",
-      output: {
-        text: "running the tests",
-        source: "transcript",
-        cut: false,
-        as_of: new Date().toISOString(),
-        finished: false,
-      },
+      output: liveOutput("running the tests"),
     },
   });
   await settle();
   expect(asked.find((a) => a.what === "sandbox_tail")?.params).toEqual({
     turn_id: "turn-1",
     launch_id: "job-2",
-    cursor: true,
   });
   expect(await screen.findByText("running the tests")).toBeTruthy();
 });
@@ -466,7 +461,7 @@ test("a run's page follows a later job into a view of its own", async () => {
   vi.useRealTimers();
 });
 
-/** A cursor-shaped output that is the whole of what a job has said. */
+/** An output that is the whole of what a job has said: a reset at its start. */
 function liveOutput(text: string) {
   return {
     text,
@@ -474,13 +469,11 @@ function liveOutput(text: string) {
     cut: false,
     as_of: new Date().toISOString(),
     finished: false,
-    cursor: true,
     reset: true,
     epoch: "transcript@0",
     start: 0,
     end: text.length,
     digest: "d",
-    window_bytes: 262_144,
   };
 }
 

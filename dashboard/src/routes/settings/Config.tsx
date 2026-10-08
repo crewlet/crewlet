@@ -40,7 +40,7 @@ import {
   ClockGlyph,
   SlidersVerticalGlyph,
 } from "@crewlethq/icons/glyphs";
-import { QueryState, RECORD_MAX_HEIGHT } from "~/components/common.tsx";
+import { QueryState } from "~/components/common.tsx";
 // OURS, DELIBERATELY. uilet's `SegmentedControl` has no manual-activation
 // mode: with `semantics="radio"` its arrow keys COMMIT the option they land
 // on, and every group on this screen drives a `useParam` — the lens pushes a
@@ -122,25 +122,21 @@ const NO_REVISION = {
  * THE KIND IS THE REVISION'S OWN WORD, never inferred from the label: the name
  * spaces overlap (an operator token may be called `node`), and a label alone
  * drew a node's boot seed and the reconcile loop's reloads as a person's
- * writes. A revision nobody recorded an author for — adopted from an older
- * engine's pointer — says so, which is different from "the engine wrote it".
+ * writes. Every revision carries its kind; the label may be empty (a write
+ * made with no operator identity), which is said as such.
  */
 export function RevisionAuthor({ revision }: { revision: RevisionMeta }) {
   const name = revision.created_by;
   const kind = revision.created_by_kind;
-  if (!name && !kind) return <EmptyValue label="Not recorded" />;
   return (
     // THE NAME OUTRANKS ITS KIND. In a narrow By column the name was cut to
     // "n…" beside a whole `operator` chip, which is the half of the fact a
     // reader can least do without. In a revisions table (`.grid-cell >
     // .revision-author`) the chip wraps onto a line the cell does not draw
     // before the name gives up a character; the title keeps both.
-    <span
-      className="row gap-1 revision-author"
-      title={kind && name ? `${name} · ${kind}` : undefined}
-    >
+    <span className="row gap-1 revision-author" title={name ? `${name} · ${kind}` : undefined}>
       {name ? <TextCell>{name}</TextCell> : <EmptyValue label="No name recorded" />}
-      {kind && <Tag appearance="outline">{kind}</Tag>}
+      <Tag appearance="outline">{kind}</Tag>
     </span>
   );
 }
@@ -738,14 +734,14 @@ export function ConfigScreen({
                     (`gap-2`): at `gap-1` it sat almost flush on the code
                     block's edge and read as part of the record. */}
                 <div className="col gap-2">
-                  {/* BOUNDED, like every other record block. A whole company
-                      configuration runs to hundreds of lines, and it is one of
-                      the two records `RECORD_MAX_HEIGHT` is written down for
-                      by name — unbounded, it pushes the caption under it and
-                      the entity lens below that off the screen. */}
+                  {/* BOUNDED, like every other record block, by the ceiling the
+                      shell declares once (`--record-ceiling`, frame.css). A
+                      whole company configuration runs to hundreds of lines,
+                      and it is one of the records that ceiling is written
+                      down for by name — unbounded, it pushes the caption
+                      under it and the entity lens below that off the screen. */}
                   <CodeBlock
                     plain
-                    maxHeight={RECORD_MAX_HEIGHT}
                     selectable
                     label="The active company configuration, as JSON"
                     code={pretty}
@@ -859,7 +855,6 @@ export function ConfigScreen({
                     {one.data ? (
                       <CodeBlock
                         plain
-                        maxHeight={RECORD_MAX_HEIGHT}
                         selectable
                         label={`${entity}, as JSON`}
                         code={JSON.stringify(one.data.entity, null, 2)}

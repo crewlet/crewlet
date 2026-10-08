@@ -22,6 +22,7 @@ import { POOL_STATE_WORDS } from "~/lib/models.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, QueryError, Store } from "~/protocol/index.ts";
 import type { CredentialPoolAnswer } from "~/contract/credentials.ts";
+import { withDerived } from "~/test/org.ts";
 
 const inMinutes = (m: number) => new Date(Date.now() + m * 60_000).toISOString();
 
@@ -133,7 +134,7 @@ class InertWebSocket {
 
 function mount(id?: string, { refuse = false, answer = pool() } = {}) {
   const store = new Store();
-  store.applyOrg(org as never);
+  store.applyOrg(withDerived(org) as never);
   store.setConnected(true);
   const socket = new LiveSocket(store);
   const query = vi.fn((what: string) => {
@@ -360,7 +361,7 @@ const entity = {
   type: "anthropic",
   model: "claude-sonnet-5",
   api_keys: ["${ANTHROPIC_KEY_A}", "__redacted__"],
-  reasoning: true,
+  reasoning_effort: "high",
   timeout_seconds: 300,
 };
 

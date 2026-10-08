@@ -32,19 +32,27 @@
  *     round had neither. The rail is a bracket around each round now and the
  *     round's content shares one left edge; see `.round` in screens.css.
  *
- *  4. **The model's words are set as prose, not as code.** Its reasoning and
- *     its speech are natural language and get a proportional face, a real
- *     line height and a bounded measure. Monospace stays where it means
+ *  4. **The model's words are set as prose, not as code — and as the markdown
+ *     they are.** Its reasoning, its speech and a coding run's report get a
+ *     proportional face, a real line height and a bounded measure, and are
+ *     rendered as markdown read by a model's habits (`Words`): its fenced
+ *     JSON is a code block rather than three backticks and a wall of braces,
+ *     its single newlines are line breaks, and its headings are styled lines
+ *     rather than headings of the page. Monospace stays where it means
  *     something: tool arguments and tool results, which are JSON.
  *  5. **The header says the same things in the same places, always** — phase,
  *     model, rounds, tokens, decision — so a live phase and a finished one are
  *     the same shape and the row does not change height when it completes.
  *  6. **The prompt is a document, not a wall of text.** Every prompt this
- *     engine builds is markdown, so the Prompt fold folds each half on the
- *     headings the builders wrote, renders each section as the markdown it is,
- *     and keeps the verbatim record as its other view — see `PromptDoc.tsx`.
- *     It was one 30 kB scroller, which is where a reader went to answer "what
- *     was this phase told about X" and scrolled looking for a heading.
+ *     engine builds is markdown with parts its builder can name, so the Prompt
+ *     fold reads it through a map of the whole request, an outline of its
+ *     sections (the builder's own map where the record carries one, the
+ *     headings otherwise) and ONE section at a time rendered as the markdown it
+ *     is, with a find over all of it — and keeps the verbatim record as its
+ *     other view. See `PromptDoc.tsx`. It was one 30 kB scroller, which is
+ *     where a reader went to answer "what was this phase told about X" and
+ *     scrolled looking for a heading; then a stack of folds cut at every `##`,
+ *     including the ones inside the content a prompt quotes.
  *  7. **The body reads in the order the phase happened**: what it was given
  *     (Prompt, Tool surface), then what it did (the rounds), then what it
  *     delegated. The transcript used to come first and its two inputs sat
@@ -74,22 +82,33 @@ import {
 // porting it THERE moves this card, the turn card and the seat screen in one
 // change rather than leaving three inlined copies of one variant table behind.
 import { PhaseTag, uiletTone } from "~/ui/primitives.tsx";
-import { fmtCount, fmtDateTime, fmtDuration, fmtElapsed, relTime, tsKey } from "~/lib/format.ts";
+import {
+  fmtBytes,
+  fmtCount,
+  fmtDateTime,
+  fmtDuration,
+  fmtElapsed,
+  relTime,
+  tsKey,
+  utf8Bytes,
+} from "~/lib/format.ts";
 import {
   decisionLabel,
   decisionTone,
-  ledgerOf,
   phaseDuration,
   transcriptLength,
   type PhaseRecord,
+  type Refusal,
   type Round,
+  rounds,
+  stopNote,
 } from "~/lib/phases.ts";
 import { indentJSON } from "~/lib/jsontext.ts";
+import { MODEL_WORDS, renderMarkdown } from "~/lib/markdown.ts";
 import { staleness } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
 import { href, useIsCurrent } from "~/app/router.tsx";
 import { pathOf } from "~/app/frame/objects.ts";
-import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 import { PromptRecord } from "~/components/PromptDoc.tsx";
 
 /**
@@ -152,20 +171,17 @@ function ToolRecords({
           which is exactly uilet's own case for wrapping, a line nobody finds
           the end of.
 
-          `maxHeight` is our own `RECORD_MAX_HEIGHT`, and it has to be stated:
-          without one a 900-line record pushes the rest of the round off the
-          screen. */}
-      <CodeBlock
-        plain
-        maxHeight={RECORD_MAX_HEIGHT}
-        selectable
-        label={`${name} — arguments`}
-        code={prettyArgs || "{}"}
-      />
+          NO `maxHeight` HERE, and that is the ceiling working: the record
+          ceiling is declared once in the cascade (`--record-ceiling`,
+          frame.css) as what the view allows, and a running ledger narrows it
+          to what its box allows (`.tail-scroll.tailing`), because a record
+          taller than the box that scrolls it is the transcript's own trap one
+          level down — the wheel inside the record while its bottom is below
+          the box's. */}
+      <CodeBlock plain selectable label={`${name} — arguments`} code={prettyArgs || "{}"} />
       <div className="t-label">{failed ? "Error" : "Result"}</div>
       <CodeBlock
         plain
-        maxHeight={RECORD_MAX_HEIGHT}
         selectable
         label={`${name} — ${failed ? "error" : "result"}`}
         code={prettyResult || "(empty)"}
@@ -229,18 +245,24 @@ function ToolRow({
  * worse than not following at all; one that never follows makes a running
  * phase look frozen. So "am I still tailing?" is a piece of reader state, set
  * by where they last left the scroll.
+ *
+ * Returned as a CALLBACK REF, and the element is state. A ref object only says
+ * where the box is once something re-runs the effect, and the box is mounted
+ * conditionally — the rounds section exists only once a round does — so a live
+ * phase opened before its first round came back mounted the box AFTER the
+ * effect had run against nothing and never followed at all.
  */
 function useTail(active: boolean) {
-  // A ref to the SCROLLER itself, not to a marker inside it. The scroller is
-  // conditionally a scroller — it only bounds its height while the phase is
-  // live — so resolving it by `closest()` at mount found whatever happened to
-  // exist then, and the listener outlived the element it was attached to.
-  const box = useRef<HTMLDivElement | null>(null);
+  const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
   const following = useRef(true);
 
   useEffect(() => {
-    const scroller = box.current;
     if (!scroller || !active) return;
+    // EVERY ACTIVATION STARTS AT THE TAIL. The flag outlives the element — a
+    // reader who scrolled up, closed the card and opened it again got a NEW
+    // box that inherited "not following" from the old one and never stuck
+    // again. Opening a live phase is asking to watch it.
+    following.current = true;
 
     const onScroll = () => {
       const slack = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
@@ -263,32 +285,147 @@ function useTail(active: boolean) {
     // THINKING block grew for a minute without the effect ever re-running,
     // and the box sat still while text poured into it. A size observer fires
     // for every reason the content can get taller: a fragment landing, a new
-    // round, a disclosure opening, the window narrowing and text rewrapping.
+    // round, a disclosure opening, text rewrapping.
+    //
+    // THE BOX ITSELF AS WELL AS WHAT IT HOLDS. Its bound is the scroller's
+    // view (`.tail-scroll.tailing` in screens.css), so a window made shorter
+    // or taller resizes the BOX while its content stays the size it was —
+    // and a tail measured only on the children came unstuck by the
+    // difference, leaving the newest round below the box's new bottom.
+    //
     // Guarded because jsdom has no ResizeObserver: the box then simply does
     // not follow, which is the same as a phase that is not live.
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(stick);
     if (observer) {
+      observer.observe(scroller);
       for (const child of Array.from(scroller.children)) observer.observe(child);
     }
     return () => {
       scroller.removeEventListener("scroll", onScroll);
       observer?.disconnect();
     };
-  }, [active]);
+  }, [scroller, active]);
 
-  return box;
+  return setScroller;
+}
+
+/**
+ * What became of a round that answered in prose where the phase had to end in
+ * a tool call — derived from the ledger rather than carried on the wire,
+ * because the ledger already says it: a later round means the engine asked
+ * again, and a settled phase whose LAST round declined spent its bound there.
+ * `open` is the one case nothing can say yet: the newest round of a phase still
+ * running, which may be asked again or may have been the last.
+ */
+type Declined = "asked" | "spent" | "open";
+
+/**
+ * The sentence under a declined round's words.
+ *
+ * IN WORDS, NOT ONLY A COLOUR, and it names the mechanism, because what a
+ * reader sees without it is a model printing its own submission — a fenced
+ * `{"outcome": "delivered", …}` block — as though that were the answer, and
+ * nothing saying why the engine did not take it: prose is not a call, and
+ * this phase finishes only by one.
+ */
+function DeclinedNote({ fate, rescued }: { fate: Declined; rescued: boolean }) {
+  const said = "It answered in prose and called no tool";
+  if (fate === "asked") {
+    return (
+      <p className="round-note">
+        {said}. This phase finishes only by calling a tool — its submission — so the engine asked it
+        again; the next round is the answer to that.
+      </p>
+    );
+  }
+  if (fate === "open") {
+    return (
+      <p className="round-note">
+        {said}. This phase finishes only by calling a tool — its submission.
+      </p>
+    );
+  }
+  // CAUTION, NOT CRITICAL: the turn goes on — a rescued executor is still
+  // judged by the reviewer, a rescued reviewer sends the turn round again. The
+  // glyph carries the hue's meaning to a reader who cannot see the hue.
+  return (
+    <p className="round-note caution">
+      <TriangleAlertGlyph size="xs" /> {said}, and this was its last round: the phase ended without
+      its submission
+      {rescued ? ", so the engine wrote its outcome in its place (“rescued”, above)." : "."}
+    </p>
+  );
+}
+
+/**
+ * A model's words — its speech, its thinking, a coding run's report — as the
+ * markdown it wrote.
+ *
+ * MARKDOWN, because that is what models write: the design doc said a model's
+ * speech "is not markdown" and a round's fenced ```json block was printed as
+ * three backticks, a language tag and a wall of braces. Read by a MODEL'S
+ * habits rather than a document's (`MODEL_WORDS`): every newline is the line
+ * break it meant, and a "## Summary" is a styled line rather than an `h2` in
+ * the turn page's outline — a transcript item is not a section of the page,
+ * the rule a tool row's `headingLevel="none"` keeps one level up. `.prose`'s
+ * measure and leading stay; `.md` hands line breaking to the renderer.
+ *
+ * Memoised on the text, because a live phase re-renders on every streamed
+ * frame and an open round's words are re-parsed only when they changed.
+ */
+function Words({ text, muted, streaming }: { text: string; muted?: boolean; streaming?: boolean }) {
+  const nodes = useMemo(() => renderMarkdown(text, MODEL_WORDS), [text]);
+  return <div className={cx("prose md", muted && "muted", streaming && "stream")}>{nodes}</div>;
+}
+
+/**
+ * What a refused phase's body says in place of its error: that the model
+ * DECLINED, under which policy category, in the vendor's own words where it
+ * gave any — and what the engine did about it, which is the half a reader
+ * would otherwise go looking for (no rescue, no second ask, no redelivery).
+ */
+function RefusalNote({ refusal }: { refusal: Refusal }) {
+  return (
+    <span>
+      The model declined this request
+      {refusal.category && (
+        <>
+          {" "}
+          (<span className="mono">{refusal.category}</span>)
+        </>
+      )}
+      {refusal.explanation ? `: ${refusal.explanation}` : "."} The phase ended here; the engine does
+      not ask it again, and the turn&apos;s trigger is recorded rather than redelivered.
+    </span>
+  );
 }
 
 /** One round: thinking, speech, then the calls that round asked for. */
-function RoundBlock({ round, live }: { round: Round; live: boolean }) {
+function RoundBlock({
+  round,
+  live,
+  declined,
+  rescued,
+}: {
+  round: Round;
+  live: boolean;
+  /** What became of this round when it declined to call a tool; absent otherwise. */
+  declined?: Declined;
+  rescued: boolean;
+}) {
   const said = round.content.trim();
   const thinking = round.reasoning.trim();
+  // A round that DID NOT FINISH — cut off at the output cap, refused, out of
+  // context, paused — says so under its words: it is the round that ended the
+  // phase, and nothing else on it does (its words read like any round's, and
+  // a call the cap cut off was never run, so it has no failed row).
+  const stopped = stopNote(round.stopReason);
   // Marked on the ROUND, not just on the row inside it: "which round went
   // wrong" is the question a reader brings to a stuck turn, and the answer
   // used to be an icon inside a collapsed row they had to open to find.
-  const errored = round.tools.some((t) => t.failed);
+  const errored = round.tools.some((t) => t.failed) || stopped !== null;
   return (
-    <li className={cx("round", errored && "errored", live && "live")}>
+    <li className={cx("round", errored && "errored", declined && "declined", live && "live")}>
       <div className="round-rail">
         {/* The numeral is decorative — the rail draws it as a node — but WHICH
             round this is is the only thing tying the blocks below together,
@@ -305,7 +442,15 @@ function RoundBlock({ round, live }: { round: Round; live: boolean }) {
             erased: a reader has already seen this text, and making it vanish
             reads as a glitch — while "this model wrote four hundred
             characters and then died" is exactly what an operator debugging a
-            flaky provider needs. */}
+            flaky provider needs.
+
+            PLAIN TEXT, unlike every other block of a model's words here: it
+            is EVIDENCE of a failure, cut wherever the provider died, and it
+            never becomes the round's answer. Rendered, a cut mid-construct
+            would be formatted into something the model never finished; the
+            streaming text below is rendered because it IS about to become
+            the committed answer, and rendering it now keeps the block from
+            reshaping at the moment it commits. */}
         {round.abandoned.map((a, i) => (
           <div key={i} className="abandoned">
             <div className="t-caption">
@@ -324,7 +469,7 @@ function RoundBlock({ round, live }: { round: Round; live: boolean }) {
             // so the block does not shift sideways when the round commits.
             <div className="col gap-1 round-thinking">
               <div className="t-label">Thinking</div>
-              <p className="prose muted stream">{thinking}</p>
+              <Words text={thinking} muted streaming />
             </div>
           ) : (
             // `aside` IS our `tone="reasoning"`, and uilet describes it in our
@@ -341,10 +486,19 @@ function RoundBlock({ round, live }: { round: Round; live: boolean }) {
               headingLevel="none"
               lazy
             >
-              <p className="prose muted">{thinking}</p>
+              <Words text={thinking} muted />
             </Disclosure>
           ))}
-        {said && <p className={cx("prose", round.streaming && "stream")}>{said}</p>}
+        {said && <Words text={said} streaming={round.streaming} />}
+        {declined && <DeclinedNote fate={declined} rescued={rescued} />}
+        {/* CRITICAL, unlike a declined round's caution: this round ended the
+            phase, and the turn with it. The glyph carries the hue's meaning to
+            a reader who cannot see it. */}
+        {stopped && (
+          <p className="round-note critical">
+            <TriangleAlertGlyph size="xs" /> {stopped}
+          </p>
+        )}
         {round.tools.length > 0 && (
           <div className="round-tools">
             {round.tools.map((t, i) => (
@@ -376,11 +530,11 @@ export function PhaseCard({
   // completing is not a reason to hide it.
   const [open, setOpen] = useState(!!defaultOpen);
   const now = useNow();
-  const { ledger, legacy } = ledgerOf(record);
+  const ledger = rounds(record.tools, record.narration, record.partial, record.timedRounds);
   // A CODING RUN IS NOT A MODEL CALL. Its record has no rounds because the
-  // engine drove none — the run's own loop happened in a box — so what the
-  // legacy fallback would label "recorded before rounds were kept apart" is
-  // the report the run wrote back, and it carries an activity log instead.
+  // engine drove none — the run's own loop happened in a box — so its
+  // `response` is the report the run wrote back, and it carries an activity
+  // log instead.
   const codingRun = record.phase === "sandbox";
   const streaming = ledger.some((r) => r.streaming);
   // A PARKED TURN'S CALL IS SILENT ON PURPOSE: the executor suspended into a
@@ -399,6 +553,25 @@ export function PhaseCard({
   // The last round is the live one while the phase runs: rounds only append,
   // so "newest" and "last" are the same row and stay the same row.
   const tailRef = useTail(open && record.live);
+  const promptSize = useMemo(
+    () =>
+      [
+        record.systemPrompt && `${fmtBytes(utf8Bytes(record.systemPrompt))} system`,
+        record.userPrompt && `${fmtBytes(utf8Bytes(record.userPrompt))} user`,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    [record.systemPrompt, record.userPrompt],
+  );
+  // Rounds that answered in prose where a call was owed. Counted on the
+  // ledger, live and settled alike, so the chip and the per-round notes are
+  // one reading of one list.
+  const declined = ledger.filter((r) => r.declined).length;
+  const fateOf = (i: number): Declined | undefined => {
+    if (!ledger[i]?.declined) return undefined;
+    if (i < ledger.length - 1) return "asked";
+    return record.live ? "open" : "spent";
+  };
 
   return (
     <article
@@ -456,8 +629,8 @@ export function PhaseCard({
             in lib/phases.ts beside the words, because a decision's sentence and
             its hue are one fact. */}
         {record.decision && (
-          <Tag variant={uiletTone(decisionTone(record.phase, record.decision))}>
-            {decisionLabel(record.phase, record.decision)}
+          <Tag variant={uiletTone(decisionTone(record.phase, record.decision, record.rescueFired))}>
+            {decisionLabel(record.phase, record.decision, record.rescueFired)}
           </Tag>
         )}
         {record.exhaustedRounds && (
@@ -473,8 +646,37 @@ export function PhaseCard({
             {record.emptyAnswerRounds} empty
           </Tag>
         )}
+        {/* "ANSWERED IN PROSE", not the wire's `declined`: the word a reader
+            needs is what the model DID — wrote its answer as text, often the
+            submission itself as a JSON block — rather than a verb that reads
+            as the model refusing the work. Beside `empty`, its sibling: both
+            are rounds that ended without the call the phase needed, one with
+            words and one without. */}
+        {declined > 0 && (
+          <Tag
+            variant="warning"
+            title={
+              "rounds where the model wrote its answer as text and called no tool, in a phase " +
+              "that finishes only by a tool call — each says below its words what happened next"
+            }
+          >
+            {declined} answered in prose
+          </Tag>
+        )}
+        {/* THE TITLE SAYS WHAT RESCUED MEANS. It said "did not submit on its
+            first run and was re-asked", and both halves were wrong: nothing
+            re-asks a phase as a whole, and the flag is set when the phase has
+            ENDED without its submission succeeding — the engine then writes
+            the decision itself, which is what the decision chip beside this
+            one is reporting. */}
         {record.rescueFired && (
-          <Tag variant="warning" title="the phase did not submit on its first run and was re-asked">
+          <Tag
+            variant="warning"
+            title={
+              "the phase ended without its submission, so the engine wrote its decision in its " +
+              "place — incomplete for an executor, another round for a reviewer"
+            }
+          >
             rescued
           </Tag>
         )}
@@ -483,7 +685,24 @@ export function PhaseCard({
             {record.codingAgent || "sandbox"}
           </Tag>
         )}
-        {record.failed && <Tag variant="danger">{record.errorKind || "failed"}</Tag>}
+        {/* A REFUSAL IS NAMED AS ONE: the model declined, which is a decision
+            rather than a fault, and the word a reader needs is what it did —
+            not the error kind's `refusal`, which reads as the engine refusing.
+            Still danger: the phase, and its turn, ended there. */}
+        {record.failed && record.refusal ? (
+          <Tag
+            variant="danger"
+            title={
+              "the model declined this request" +
+              (record.refusal.category ? ` (${record.refusal.category})` : "") +
+              " — the phase ended there, without a rescue, and the turn is not run again"
+            }
+          >
+            declined by model
+          </Tag>
+        ) : (
+          record.failed && <Tag variant="danger">{record.errorKind || "failed"}</Tag>
+        )}
         {record.live && (
           <Tag variant={stale === "stalled" ? "danger" : stale ? "warning" : "info"} dot>
             {parked
@@ -565,7 +784,13 @@ export function PhaseCard({
 
       {open && (
         <div className="phase-body">
-          {record.failed && record.error && <Callout variant="danger">{record.error}</Callout>}
+          {record.failed && record.refusal ? (
+            <Callout variant="danger">
+              <RefusalNote refusal={record.refusal} />
+            </Callout>
+          ) : (
+            record.failed && record.error && <Callout variant="danger">{record.error}</Callout>
+          )}
           {record.notes && <Callout variant="neutral">{record.notes}</Callout>}
 
           {(record.systemPrompt || record.userPrompt) && (
@@ -574,17 +799,23 @@ export function PhaseCard({
             // what ours did: a closed fold mounted nothing, and a seat's system
             // prompt is tens of kilobytes nobody asked for.
             //
-            // What is INSIDE it is a document rather than a wall of text now:
-            // `PromptRecord` folds each half on its own markdown headings and
-            // renders each one, so "what was this phase told about X" is one
+            // What is INSIDE it is a document rather than a wall of text:
+            // `PromptRecord` draws the request as a map and an outline and
+            // shows one section, so "what was this phase told about X" is one
             // click rather than a scroll through 30 kB. It keeps the verbatim
             // record as its other view — the tallest block on the page by a
             // wide margin, and the one that most needed to stay one selection.
-            <Disclosure title="Prompt" count={`${record.phase} phase`} lazy>
+            //
+            // THE COUNT IS ITS SIZE, in the bytes the Turn screen's Context tab
+            // counts. It was the phase's name, which the tag at the head of
+            // this same card already says.
+            <Disclosure title="Prompt" count={promptSize} lazy>
               <PromptRecord
                 phase={record.phase}
                 system={record.systemPrompt}
                 user={record.userPrompt}
+                systemSections={record.systemSections}
+                userSections={record.userSections}
               />
             </Disclosure>
           )}
@@ -652,6 +883,8 @@ export function PhaseCard({
                       key={r.round}
                       round={r}
                       live={record.live && i === ledger.length - 1}
+                      declined={fateOf(i)}
+                      rescued={record.rescueFired}
                     />
                   ))}
                 </ol>
@@ -659,16 +892,13 @@ export function PhaseCard({
             </section>
           )}
 
-          {/* A phase recorded before the engine sent per-round narration. The
-              join cannot be undone, so it is shown whole rather than guessed
-              apart — see `ledgerOf`. */}
           {codingRun && record.response.trim() && (
             <section className="col gap-1">
               <div className="t-label">
                 Report
                 <span className="muted"> · what the coding run wrote back</span>
               </div>
-              <p className="prose">{record.response.trim()}</p>
+              <Words text={record.response.trim()} />
             </section>
           )}
           {codingRun && record.transcript && (
@@ -680,38 +910,13 @@ export function PhaseCard({
             </Disclosure>
           )}
 
-          {legacy && !codingRun && (
-            <>
-              {legacy.thinking && (
-                <Disclosure
-                  title="Thinking"
-                  count={`${legacy.thinking.length} chars`}
-                  variant="aside"
-                  headingLevel="none"
-                  lazy
-                >
-                  <p className="prose muted">{legacy.thinking}</p>
-                </Disclosure>
-              )}
-              {legacy.answer.trim() && (
-                <section className="col gap-1">
-                  <div className="t-label">
-                    Transcript
-                    <span className="muted"> · recorded before rounds were kept apart</span>
-                  </div>
-                  <p className="prose">{legacy.answer.trim()}</p>
-                </section>
-              )}
-            </>
-          )}
-
           {/* The only genuinely empty state. A ROUND is never empty —
               `narrations()` drops an entry blank in both fields and a round
               built from a tool call has tools — so a per-round placeholder
               was unsatisfiable. A PHASE with no rounds yet is real: the
               provider call has not returned, and until the engine streams
               tokens there is nothing else to show for it. */}
-          {record.live && !ledger.length && !legacy && (
+          {record.live && !ledger.length && (
             <div className="row gap-2">
               <span className="waiting-dot" aria-hidden="true" />
               <span className="t-caption">

@@ -70,8 +70,9 @@ type fakeNode struct {
 	// release, when set, holds a floor wait until it is closed.
 	release chan struct{}
 
-	// refusesLagging is a build from before a request could say "answer
-	// anyway": it answers every request that its copy lags.
+	// refusesLagging refuses every request while its copy lags, one that
+	// says "answer anyway" included: a server that does not honour the
+	// request's say-so, which the router must still not circle.
 	refusesLagging bool
 
 	// hang, when set, is a node that takes a request and never answers it
@@ -988,10 +989,9 @@ func TestASearchWithEveryCopyLaggingRunsOnce(t *testing.T) {
 	}
 }
 
-// A COPY TOLD TO ANSWER ANYWAY THAT REFUSES AGAIN IS NOT ASKED A THIRD TIME —
-// a build that ignores the request's say-so — so a search whose only data node
-// is one ends saying it did not run rather than circling it until the caller's
-// deadline.
+// A COPY TOLD TO ANSWER ANYWAY THAT REFUSES AGAIN IS NOT ASKED A THIRD TIME,
+// whatever made it refuse, so a search whose only data node is one ends saying
+// it did not run rather than circling it until the caller's deadline.
 func TestALaggingCopyThatRefusesTheLastResortIsNotAskedAgain(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")

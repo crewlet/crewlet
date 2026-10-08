@@ -293,8 +293,7 @@ func (a *applier) Op(_ context.Context, opID string) (statelog.OpEntry, bool, er
 	return entry, ok, nil
 }
 
-// LostBefore answers the instant [harness.sweep] or
-// [harness.adoptFromAScrubbingDonor] last lost rows before.
+// LostBefore answers the instant [harness.sweep] last lost rows before.
 func (a *applier) LostBefore(context.Context) (time.Time, bool, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -562,17 +561,6 @@ func (r *faultyRecords) fail(err error) {
 // sweep is this node's retention sweep deleting every ledger row, as a sweep
 // whose cutoff is after all of them does, and recording that cutoff.
 func (h *harness) sweep(cutoff time.Time) { h.lose(cutoff) }
-
-// adoptFromAScrubbingDonor is what installing a snapshot from a donor that
-// scrubbed its ledger — a build from before the ledger travelled — does to
-// this node's: the artefact arrives with none of the ledger's rows, and the
-// join writes its own start `at` into it as the watermark.
-//
-// AN ADOPTION FROM ANY OTHER DONOR HAS NO HELPER HERE, because it changes
-// nothing this harness models: the ledger and its watermark travel with the
-// rows, so the adopter answers exactly as its donor would have. The real
-// transfer is exercised end to end in adopt_test.go.
-func (h *harness) adoptFromAScrubbingDonor(at time.Time) { h.lose(at) }
 
 // lose empties the ledger and moves its watermark to at, never backwards.
 func (h *harness) lose(at time.Time) {

@@ -32,6 +32,7 @@ import { COMPANY_KEY, type KeySource } from "./model/keys.ts";
 import type { DraftStorage } from "./model/persistence.ts";
 import { fixtureDerived } from "./model/testkit.ts";
 import { builderSurfaces } from "./surfaces.ts";
+import { healthFrame } from "~/test/health.ts";
 
 export class InertWebSocket {
   static CONNECTING = 0;
@@ -64,7 +65,7 @@ export const json = (payload: unknown, status = 200, headers: Record<string, str
 export function company(): CompanyDocument {
   return {
     name: "Acme",
-    providers: { llm: { default: { type: "anthropic", model: "claude-sonnet-5" } } },
+    providers: { llm: { default: { type: "anthropic", model: "claude-sonnet-5-5" } } },
     roles: [
       { name: "CEO", goal: "Lead", manages: ["Engineering"] },
       { name: "Designer", goal: "Design" },
@@ -392,7 +393,7 @@ export function mountBuilder({
   location.hash = hash;
   engine.install();
   const store = new Store();
-  if (connected) store.applyHealth({ status: "ok" });
+  if (connected) store.applyHealth(healthFrame());
   if (org) store.applyOrg(org);
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>

@@ -103,7 +103,7 @@ providers:
   llm:
     default:
       type: anthropic
-      model: claude-sonnet-5
+      model: claude-sonnet-5-5
       api_keys:
         - "${ANTHROPIC_API_KEY}"
   embeddings:
@@ -203,7 +203,7 @@ providers:
     # Anthropic (official SDK)
     default:
       type: anthropic
-      model: claude-sonnet-5
+      model: claude-sonnet-5-5
       api_keys: ["${ANTHROPIC_API_KEY}"]
 
     # OpenAI (official SDK)
@@ -248,8 +248,11 @@ another's sessions or memory — that and the auth options are covered in
 [Subscription LLM Backends](../concepts/subscription-llm-backends.md).
 
 Useful knobs on every entry: `api_keys` accepts **multiple** keys (the
-provider rotates on rate-limit/auth errors), `reasoning: true` enables
-extended thinking / reasoning where the model supports it, and different
+provider rotates on rate-limit/auth errors), `reasoning_effort` sets how
+hard the model thinks (`low` to `max`; an `anthropic` entry thinks on every
+call and defaults to `high`, an `openai` one sends it once `reasoning: true`
+— see [Claude models](configuration.md#claude-models-thinking-effort-and-sampling)
+for what each Claude model accepts), and different
 roles can use different entries (e.g. executives on a frontier model, junior
 agents on a cheaper one). A role's `llm` also accepts a **list** — 
 `llm: [subscription, default]` runs on the flat-rate CLI and falls through
@@ -377,6 +380,12 @@ raised takes over the sentence under the greeting.
 The sidebar is the product in nine rows — Home, Inbox, My work, Work, Agents,
 Live, Knowledge, Spend, Settings — and each workspace's sections are tabs in
 its page header. `g` then a letter jumps between them, and `?` lists every key.
+While an agent is working, the Live row counts the seats at work and a
+**Running** group under the sidebar's shortcuts (after Projects, Pinned and
+Starred) lists up to four running turns. Press one to watch it — its
+transcript, with the phase it is on open, or the coding run it is parked on
+drawn live above its phases. `g r` does the same for the one running turn, and
+opens Live's *Now running* when several are running (or none).
 
 Within five minutes the `hello-crewlet` schedule fires a `TaskAssigned` at the
 CEO. **Live** shows it: *Now running* has the seat working, and **Turns**

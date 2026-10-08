@@ -1,9 +1,6 @@
 package prompts
 
-import (
-	"slices"
-	"strings"
-)
+import "slices"
 
 // ExecutorHeader is the executor's contract: decide and act in one pass, then
 // account for it.
@@ -190,7 +187,7 @@ const workersPreamble = "Short-lived workers you can hand narrowly-scoped work "
 	"so you still finish the job yourself. They are not colleagues: work that " +
 	"belongs to another seat goes to that seat."
 
-// BuildExecutor renders the executor's system prompt.
+// BuildExecutor renders the executor's system prompt, and its outline.
 //
 // The executor gets the whole static picture inline — identity, mission,
 // policies, unit, roster — because an employee does not look up what their
@@ -202,29 +199,53 @@ const workersPreamble = "Short-lived workers you can hand narrowly-scoped work "
 // frame that decided WHAT to do was thrown away before anything was done: the
 // actor met an unforeseen choice with no policy, no roster and no mission to
 // make it against.
-func BuildExecutor(seat Seat, in ExecutorInput) string {
-	body := joinSections(
-		BuildIdentitySection(seat),
-		BuildOrgMissionVisionSection(seat),
-		BuildRoleProfileSection(seat),
-		BuildUnitContextSection(seat),
-		BuildPoliciesSection(seat),
-		BuildRosterSection(seat),
-		BuildHumanColleaguesNote(seat),
-	)
+//
+// Every block is its own section of the outline, under a key that does not
+// move between prompts. The prefetched blocks are keyed on the
+// [github.com/crewlet/crewlet/internal/events/types.PrefetchSummary] fields
+// that measured each one (`thread_context`, `personal_memory`, …), so a reader
+// can put a block beside what the prefetch recorded about it.
+func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
+	b := NewBuilder("\n")
+	identity := []struct {
+		key   string
+		lines []string
+	}{
+		{"identity", BuildIdentitySection(seat)},
+		{"company_context", BuildOrgMissionVisionSection(seat)},
+		{"background", buildBackgroundSection(seat)},
+		{"responsibilities", buildResponsibilitiesSection(seat)},
+		{"behavioral_guidelines", buildGuidelinesSection(seat)},
+		{"unit", BuildUnitContextSection(seat)},
+		{"policies", BuildPoliciesSection(seat)},
+		{"team", BuildRosterSection(seat)},
+		{"human_colleagues", BuildHumanColleaguesNote(seat)},
+	}
+	empty := true
+	for _, section := range identity {
+		b.Heading(section.key, section.lines...)
+		empty = empty && len(section.lines) == 0
+	}
+	if empty {
+		// THE EMPTY BODY STILL TAKES ITS PLACE. The prompt has always been
+		// the identity body and the contract joined by a newline, so a seat
+		// that renders no identity at all opens on a blank line — kept,
+		// because the outline never changes a byte of the text.
+		b.Add("")
+	}
 
 	header := ExecutorHeader
 	if in.RelevantKnowledge != "" {
 		header += executorKnowledgeNote
 	}
-	parts := []string{body, header}
+	b.Heading("your_turn", header)
 	// RIGHT AFTER THE CONTRACT, because it is part of how a turn ends:
 	// the header says finish the arc, and this says the one case where
 	// finishing means stopping on a branch until somebody answers.
-	parts = append(parts, BuildEscalationSection(in.AvailableTools)...)
+	b.Heading("escalation", BuildEscalationSection(in.AvailableTools)...)
 
 	if seat.ok() && seat.Role.Sandbox != nil && seat.Role.Sandbox.Enabled {
-		parts = append(parts, executorSandboxSection)
+		b.Heading("sandbox", executorSandboxSection)
 	}
 
 	// FIRST of the prefetched blocks, because it is the trigger's own
@@ -239,46 +260,62 @@ func BuildExecutor(seat Seat, in ExecutorInput) string {
 	// sections under one heading saying different things is a model reading
 	// whichever it saw last.
 	if in.ThreadContext != "" {
-		parts = append(parts, "\n## The thread so far", in.ThreadContext)
+		b.Heading(KeyThreadContext, "\n## The thread so far", in.ThreadContext)
 	}
 	// The onboarding hint gates on the tool as well as the marker: the
 	// same rule the memory / skill blocks follow, so a prompt never tells
 	// the model to call something that is not registered.
 	if in.OnboardingHint != "" && slices.Contains(in.AvailableTools, "mark_onboarded") {
-		parts = append(parts, "\n## First-turn onboarding", in.OnboardingHint)
+		b.Heading(KeyOnboardingHint, "\n## First-turn onboarding", in.OnboardingHint)
 	}
 	if in.PersonalMemory != "" {
-		parts = append(parts, "\n## Personal memory", in.PersonalMemory)
+		b.Heading(KeyPersonalMemory, "\n## Personal memory", in.PersonalMemory)
 	}
 	if in.SynthesizedSkills != "" {
-		parts = append(parts, "\n## Synthesized skills you've learned", in.SynthesizedSkills)
+		b.Heading(KeySynthesizedSkills, "\n## Synthesized skills you've learned", in.SynthesizedSkills)
 	}
 	if in.RelevantKnowledge != "" {
-		parts = append(parts, "\n## Relevant knowledge", in.RelevantKnowledge)
+		b.Heading(KeyRelevantKnowledge, "\n## Relevant knowledge", in.RelevantKnowledge)
 	}
 	if in.EpisodeRecall != "" {
-		parts = append(parts, "\n## Similar prior work", in.EpisodeRecall)
+		b.Heading(KeyEpisodeRecall, "\n## Similar prior work", in.EpisodeRecall)
 	}
 	if in.CounterpartyProfile != "" {
-		parts = append(parts, "\n## Known counterparty", in.CounterpartyProfile)
+		b.Heading(KeyCounterparty, "\n## Known counterparty", in.CounterpartyProfile)
 	}
 	// BEFORE the tool sections, because choosing a worker is a decision
 	// about how to do the work rather than about which tool to call, and
 	// the executor reads this prompt top-down: what it is, what it knows,
 	// who it can hand work to, then what it can call itself.
 	if in.Workers != "" && slices.Contains(in.AvailableTools, "delegate") {
-		parts = append(parts, "\n## Your workers", workersPreamble, in.Workers)
+		b.Heading("workers", "\n## Your workers", workersPreamble, in.Workers)
 	}
 
 	// The tool-skills catalogue lands adjacent to the tool catalogue so the
 	// executor reads "here is how to use these tools" immediately before
 	// "here are the tools" — the two are conceptually one section.
-	parts = injectSkillCatalogue(parts, in.Skills, PhaseExecute, Surface{
+	b.Heading("tool_skills", skillCatalogue(in.Skills, PhaseExecute, Surface{
 		Tools:      in.AvailableTools,
 		MCPServers: seat.mcpServers(),
-	})
+	})...)
 	if in.ToolCatalogue != "" {
-		parts = append(parts, "\n## Available tools", in.ToolCatalogue)
+		b.Heading("available_tools", "\n## Available tools", in.ToolCatalogue)
 	}
-	return strings.Join(parts, "\n")
+	return b.Build()
 }
+
+// The keys of the executor's PREFETCHED blocks: the prefixes of the
+// [github.com/crewlet/crewlet/internal/events/types.PrefetchSummary] fields
+// that measure each block (`thread_context_hit`, `thread_context_bytes`, …).
+// One name for one block across the two records, so a reader joins them
+// without a table — and a test reads the summary's own tags and holds these to
+// them, rather than a second list here drifting from it.
+const (
+	KeyThreadContext     = "thread_context"
+	KeyOnboardingHint    = "onboarding_hint"
+	KeyPersonalMemory    = "personal_memory"
+	KeySynthesizedSkills = "synthesized_skills"
+	KeyRelevantKnowledge = "relevant_knowledge"
+	KeyEpisodeRecall     = "episode_recall"
+	KeyCounterparty      = "counterparty"
+)

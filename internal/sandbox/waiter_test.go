@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -136,6 +137,14 @@ func (r *waiterRig) launch(turnID string) PendingRun {
 // re-enters. Nothing may poll or claim a run here.
 func (r *waiterRig) launching(turnID string) PendingRun {
 	r.t.Helper()
+	return r.launchingUnder(turnID, rigLease)
+}
+
+// launchingUnder is [waiterRig.launching] under a lease of the case's choosing —
+// the zero one for a run a node that held no lease launched, which a row stays
+// at until something re-stamps it.
+func (r *waiterRig) launchingUnder(turnID string, lease Fence) PendingRun {
+	r.t.Helper()
 	ctx := r.t.Context()
 	box, err := r.provider.Create(ctx, Spec{})
 	if err != nil {
@@ -153,18 +162,19 @@ func (r *waiterRig) launching(turnID string) PendingRun {
 		TraceID:         "tr-1", SpanID: "sp-1", CreatedAt: r.now,
 		// The item the launching turn was on, so every case runs over a
 		// row that carries one — and a write that dropped it would show.
-		WorkItem: &rigItem,
+		// The unit of work likewise.
+		WorkItem: &rigItem, WorkKey: rigWorkKey,
 		// The model the launch pointed its agent at, which the run's own
 		// phase record is filed under.
 		Launch: LaunchRecord{Model: "claude-sonnet-5"},
 	}
-	if _, err := r.pending.BeginLaunch(ctx, run, Fence{}); err != nil {
+	if _, err := r.pending.BeginLaunch(ctx, run, lease); err != nil {
 		r.t.Fatalf("BeginLaunch: %v", err)
 	}
 	if err := r.pending.AttachSandbox(ctx, turnID, BoxRef{
 		SandboxID: box.ID(), CommandID: "cmd-1",
 		CodingAgent: "claude-code", PauseTTLSec: DefaultPauseTTL.Seconds(),
-	}, Fence{}); err != nil {
+	}, lease); err != nil {
 		r.t.Fatalf("AttachSandbox: %v", err)
 	}
 	return r.get(turnID)
@@ -174,18 +184,44 @@ func (r *waiterRig) launching(turnID string) PendingRun {
 // so a record that fell back to a default would show.
 const rigIteration = 2
 
+// rigLease is the seat lease every rig launch is made under, which the row is
+// stamped with as a real launch's is ([PendingStore.BeginLaunch]): its node's
+// writes carry it, and a seat's next holder — every successor a case hands the
+// seat to recovers it at a higher epoch — fences them out.
+var rigLease = Fence{Owner: "node-a:1", Epoch: 1}
+
+// leased is a coordinator's lease seam for a node that holds every seat under
+// fence ([CoordinatorOptions.Lease]).
+func leased(fence Fence) func(string) (Fence, bool) {
+	return func(string) (Fence, bool) { return fence, true }
+}
+
+// notLeased is the lease seam of a node that has a seat host and holds none of
+// its seats: it has noticed it lost them.
+func notLeased(string) (Fence, bool) { return Fence{}, false }
+
 // rigItem is the work item every rig launch is charged to.
 var rigItem = types.WorkItem{Backend: types.WorkNative, ID: "task-1", Key: "ENG-1", Project: "ENG"}
+
+// rigWorkKey is the unit of work every rig launch was dispatched for —
+// distinct from every turn id a case launches under, so an announcement that
+// carried one in place of the other shows.
+const rigWorkKey = "0123456789abcdef0123456789abcdef"
 
 // suspend writes the execute_state a real suspending turn would have written,
 // which is what opens the run to the completion poll.
 func (r *waiterRig) suspend(turnID string) {
 	r.t.Helper()
-	suspended, err := r.pending.MarkSuspended(r.t.Context(), turnID, Suspension{State: map[string]any{
-		"version":              float64(1),
-		"pending_tool_call_id": "call-1",
-		"pending_tool_name":    "run_sandbox",
-	}, Iteration: rigIteration})
+	r.suspendIn(r.t.Context(), turnID)
+}
+
+// suspendIn is suspend from inside a call the coordinator made — a resumed
+// turn's own work — under that call's context.
+func (r *waiterRig) suspendIn(ctx context.Context, turnID string) {
+	r.t.Helper()
+	suspended, err := r.pending.MarkSuspended(ctx, turnID, Suspension{State: json.RawMessage(
+		`{"version":1,"pending_tool_call_id":"call-1","pending_tool_name":"run_sandbox"}`),
+		Iteration: rigIteration})
 	if err != nil {
 		r.t.Fatalf("MarkSuspended: %v", err)
 	}
@@ -196,7 +232,14 @@ func (r *waiterRig) suspend(turnID string) {
 
 func (r *waiterRig) get(turnID string) PendingRun {
 	r.t.Helper()
-	run, ok, err := r.pending.Get(r.t.Context(), turnID)
+	return r.getIn(r.t.Context(), turnID)
+}
+
+// getIn is get from inside a call the coordinator made, under that call's
+// context.
+func (r *waiterRig) getIn(ctx context.Context, turnID string) PendingRun {
+	r.t.Helper()
+	run, ok, err := r.pending.Get(ctx, turnID)
 	if err != nil || !ok {
 		r.t.Fatalf("Get %s = %v, %v", turnID, ok, err)
 	}
@@ -467,7 +510,7 @@ func TestThePollNeverWakesABoxItsRunHasMovedOnFrom(t *testing.T) {
 
 	// The collection claimed the run off running, read the box and paused
 	// it, between the poll's listing and its reach.
-	if _, ok, err := rig.pending.ClaimForResume(t.Context(), "t1", CompletionTail(listed.LaunchID)); err != nil || !ok {
+	if _, ok, err := rig.pending.ClaimForResume(t.Context(), "t1", CompletionTail(listed.LaunchID), rigLease); err != nil || !ok {
 		t.Fatalf("claim = %v, %v", ok, err)
 	}
 	if err := box.Pause(t.Context()); err != nil {
@@ -518,6 +561,7 @@ func TestAParkedRunIsNeitherPolledNorHeartBeaten(t *testing.T) {
 	box := rig.provider.Box(run.SandboxID)
 	if err := rig.pending.MarkAwaiting(t.Context(), "t1", Clarification{
 		Question: "which branch?", Audience: "requester",
+		AskedAt: rig.now,
 	}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
@@ -585,6 +629,7 @@ func (r *waiterRig) park(turnID string) {
 	ctx := r.t.Context()
 	if err := r.pending.MarkAwaiting(ctx, turnID, Clarification{
 		Question: "which branch?", Audience: "requester", Branch: "wip/t1",
+		AskedAt: r.now,
 	}); err != nil {
 		r.t.Fatalf("MarkAwaiting: %v", err)
 	}
@@ -637,6 +682,33 @@ func TestAnExpiredPauseIsReclaimedAndTheRunReseeds(t *testing.T) {
 	}
 	if got.Branch != "wip/t1" {
 		t.Fatalf("branch = %q — the durable half of the work was lost", got.Branch)
+	}
+}
+
+// A recorded answer waits on its resume, and on a seat no node holds that
+// wait is as open-ended as the question's was. Skipping answered rows left
+// exactly those boxes paused and billed; the answer itself must survive the
+// reap, since the resume re-seeds from the branch.
+func TestTheReaperReclaimsTheBoxOfAnAnswerStillWaitingOnItsResume(t *testing.T) {
+	rig := newWaiterRig(t)
+	run := rig.launch("t1")
+	rig.park("t1")
+	if _, ok, err := rig.pending.RecordAnswer(t.Context(), "t1", rig.get("t1").LaunchID, RecordedAnswer{
+		Text: "use main", Via: types.AnswerViaChat, EventIDs: []string{"r1"}, RecordedAt: rig.now,
+	}, rigLease); err != nil || !ok {
+		t.Fatalf("RecordAnswer = %v, %v", ok, err)
+	}
+
+	rig.now = rig.now.Add(DefaultPauseTTL + time.Second)
+	rig.tick()
+
+	if killed := rig.provider.KilledIDs(); len(killed) != 1 || killed[0] != run.SandboxID {
+		t.Fatalf("killed %v, want the answered run's box %q reclaimed", killed, run.SandboxID)
+	}
+	got := rig.get("t1")
+	if got.Status != StatusAnswered || got.Answer == nil || got.SandboxID != "" {
+		t.Fatalf("run = %q answer %+v box %q, want the answer kept and the box forgotten",
+			got.Status, got.Answer, got.SandboxID)
 	}
 }
 
@@ -711,7 +783,7 @@ func TestAnAnsweredRunIsNotReclaimedUnderTheResume(t *testing.T) {
 	rig.park("t1")
 
 	// The answer arrives between the reaper's snapshot and its flip.
-	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", AnswerTail(rig.get("t1").LaunchID)); err != nil || !won {
+	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", Tail{Launch: rig.get("t1").LaunchID, From: Awaiting}, rigLease); err != nil || !won {
 		t.Fatalf("ClaimForResume = %v, %v", won, err)
 	}
 	rig.now = rig.now.Add(DefaultPauseTTL + time.Second)
@@ -739,6 +811,7 @@ func TestAParkedBoxWhosePauseWasNeverRecordedIsStillReaped(t *testing.T) {
 	// The park lands; the stamp that would have dated it does not.
 	if err := rig.pending.MarkAwaiting(t.Context(), "t1", Clarification{
 		Question: "which branch?", Audience: "requester", Branch: "wip/t1",
+		AskedAt: rig.now,
 	}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
@@ -1036,15 +1109,12 @@ func TestAWaiterNeedsItsCollaborators(t *testing.T) {
 }
 
 // A COMPLETION CARRIES THE UNIT OF WORK TOO, by the same rule and for the same
-// reason: see TestAnAnnouncementCarriesTheUnitOfWorkOfAPreSplitRun. This is
-// the announcement the dashboard's board reads and the one that routes the
-// resume, so a blank key here is a resumed turn whose writes dedupe against
-// nothing.
-func TestACompletionCarriesTheUnitOfWorkOfAPreSplitRun(t *testing.T) {
-	const preSplit = "0123456789abcdef0123456789abcdef"
-
+// reason: see TestAnAnnouncementCarriesTheRunsUnitOfWork. This is the
+// announcement the dashboard's board reads and the one that routes the resume,
+// so a blank key here is a resumed turn whose writes dedupe against nothing.
+func TestACompletionCarriesTheRunsUnitOfWork(t *testing.T) {
 	rig := newWaiterRig(t)
-	rig.launch(preSplit)
+	rig.launch("turn-1")
 	rig.runner.Finish(Result{Success: true})
 	rig.tick()
 
@@ -1054,8 +1124,7 @@ func TestACompletionCarriesTheUnitOfWorkOfAPreSplitRun(t *testing.T) {
 	if !ok {
 		t.Fatalf("payload is %T", rig.queue.published[0].event.Data)
 	}
-	if payload.WorkKey != preSplit {
-		t.Errorf("WorkKey = %q, want the pre-split run's unit of work %q",
-			payload.WorkKey, preSplit)
+	if payload.WorkKey != rigWorkKey {
+		t.Errorf("WorkKey = %q, want the run's unit of work %q", payload.WorkKey, rigWorkKey)
 	}
 }

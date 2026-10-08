@@ -99,18 +99,18 @@ func judgeParent(ctx context.Context, tx *sql.Tx, pageID, container,
 	if parent.Container != container {
 		return parentElsewhere, parent, nil
 	}
-	// THE WALK UP FROM THE PARENT, looking for the page itself. A visited
-	// set rather than a depth bound, for the tracker's reason: a chain that
-	// already loops somewhere above — the residue of an older build, since
-	// nothing this one applies can leave one — terminates here instead of
-	// walking the loop until a bound, and that loop is not this write's to
-	// refuse.
-	seen := map[string]bool{parentID: true}
-	for at := parent.ParentID; at != "" && !seen[at]; {
+	// THE WALK UP FROM THE PARENT, looking for the page itself, to the top.
+	// It ends because the tree is acyclic, by induction over the strict log:
+	// every write of a parent keeps it so — a create and a move are judged
+	// here at their own position, on rows identical on every node, so the
+	// second of two crossing moves finds the page above its new parent and
+	// keeps the old one ([salvageParent]); a purge re-parents its children
+	// onto its own parent, which in an acyclic tree is never beneath them;
+	// and a patch writes back the parent its own transaction read.
+	for at := parent.ParentID; at != ""; {
 		if at == pageID {
 			return parentBeneath, parent, nil
 		}
-		seen[at] = true
 		var next string
 		err := tx.QueryRowContext(ctx,
 			`SELECT parent_id FROM pages_heads WHERE id = ?`, at).Scan(&next)

@@ -100,6 +100,30 @@ func TestTheWriterAndApplierShareOneTurnShape(t *testing.T) {
 	}
 }
 
+// A TURN NAMING NO RUN IS REFUSED AT THE WRITE.
+//
+// A task's turn list groups segments by their run, so a segment that names
+// none belongs to no turn: two of them would fold into one turn nobody ran.
+// Refused where the fact is known, every row the applier stores names one,
+// and the reader groups by it with nothing to fall back to.
+func TestATurnNamingNoRunIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if _, err := r.writer.CreateTask(t.Context(), "op-1", newTask("t-1"), nil); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	r.drain()
+	turn := sampleTurn("t-1")
+	turn.TurnID = ""
+	_, err := r.writer.RecordTurn(t.Context(), "turn/none/dispatch", turn)
+	if !errors.Is(err, tracker.ErrInvalid) || !strings.Contains(err.Error(), "names no run") {
+		t.Fatalf("a turn naming no run was answered %v, want it refused as invalid", err)
+	}
+	if got := r.taskSpend("t-1"); got["spend_turns"] != 0 {
+		t.Fatalf("a refused turn charged its task: %v", got)
+	}
+}
+
 // A REDELIVERED TURN COUNTS ONCE.
 //
 // The op id is the turn row's own id, so a segment recorded twice — a retried
@@ -270,11 +294,12 @@ func TestAReopenIsCountedOnlyWhenFinishedWorkIsUnfinished(t *testing.T) {
 
 // THE BACKFILL EQUALS THE REPLAY.
 //
-// A build that adds a derived column meets rows written without it, and fills
-// them by re-deriving from the history rows. The column is only fleet-identical
-// if what the re-derivation computes is exactly what the incremental rule
-// would have reached by applying the same records — so rows zeroed as a
-// predecessor left them must come back to the value the replay wrote.
+// A node whose checkpoint's rule set differs from this build's — a cursor a
+// reanchor created at derivation 0, or a later rule set — re-derives its
+// columns from the history rows. The column is only fleet-identical if what the
+// re-derivation computes is exactly what the incremental rule would have
+// reached by applying the same records — so zeroed rows must come back to the
+// value the replay wrote.
 func TestTheReopenBackfillEqualsAReplay(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -309,7 +334,7 @@ func TestTheReopenBackfillEqualsAReplay(t *testing.T) {
 		t.Fatalf("the replay counted %v, want t-1=2 t-2=0 t-3=1", replayed)
 	}
 
-	// THE PREDECESSOR'S ROWS: the column as a build without it left it.
+	// ROWS A DIFFERENT RULE SET DERIVED: the column at zero.
 	if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(t.Context(), `UPDATE tracker_tasks SET reopens = 0`); err != nil {
 			return err
@@ -322,8 +347,8 @@ func TestTheReopenBackfillEqualsAReplay(t *testing.T) {
 	for id, want := range replayed {
 		if got := r.taskSpend(id)["reopens"]; got != want {
 			t.Errorf("%s re-derives to %d reopens and the replay counted %d — a "+
-				"node upgrading onto old rows would disagree with one that applied "+
-				"them", id, got, want)
+				"re-derived node would disagree with one that applied them",
+				id, got, want)
 		}
 	}
 	if tracker.DerivationVersion < 1 {

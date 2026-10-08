@@ -384,9 +384,9 @@ func (w *Writer) origin() *Origin {
 // signing it `founder`: one gesture with two different correct answers, rather
 // than one answer used for both.
 //
-// The actor answered both, so a bound founder grew a SECOND person record
-// under their credential's name — reachable only through [readPartyRecord]'s
-// fallback, and invisible to somebody who also had a record under their seat.
+// An UNBOUND token's writes key on the credential, since there is no seat to
+// key them on — and binding the token later leaves that record under the
+// credential's name, reachable only through [readPartyRecord]'s fallback.
 func (w *Writer) Record() string {
 	if w == nil {
 		return ""
@@ -1309,7 +1309,8 @@ type TurnRecord struct {
 	// Seat is the handle of the seat whose turn it was.
 	Seat string `json:"seat"`
 	// TurnID is the run the segment belongs to (ADR-0017), which a task's
-	// turn list groups segments by.
+	// turn list groups segments by. REQUIRED: [Writer.RecordTurn] refuses a
+	// segment that names none, since it would belong to no turn.
 	TurnID string `json:"turn_id"`
 	// Trigger is what woke the turn — the trigger type a reader filters by.
 	Trigger string `json:"trigger"`
@@ -1323,8 +1324,8 @@ type TurnRecord struct {
 
 	// Summary is what the segment did, in the agent's own words — the
 	// reviewer's account of what landed, or the executor's artifact — cut
-	// to [MaxTurnSummary]. Empty for a segment that parked before either
-	// was written.
+	// to [MaxTurnSummary]. Empty for a segment that failed or parked before
+	// either was written.
 	//
 	// ON THE RECORD, not read back from the event history at query time,
 	// because a task's turn list is the one account of its work that has
@@ -1444,6 +1445,9 @@ func (w *Writer) RecordTurn(ctx context.Context, opID string, turn TurnRecord) (
 			"makes a segment recorded twice count once", turn.Task)
 	case turn.Task == "":
 		return WriteResult{}, invalid("a turn names no task")
+	case turn.TurnID == "":
+		return WriteResult{}, invalid("a turn on task %s names no run — the "+
+			"run is what its task's turn list groups segments by", turn.Task)
 	case len(turn.Summary) > MaxTurnSummary, len(turn.Review) > MaxTurnSummary:
 		// REFUSED, NOT CUT: the caller is the engine, which cuts its own
 		// prose to the bound before it writes, so an overlong one here is
@@ -1573,10 +1577,8 @@ func missingTask(ctx context.Context, tx *sql.Tx, id, refused string) error {
 // and a purge: those are the same operation on different subjects, and the
 // operation is all the applier has.
 //
-// It used to guess, from the operation and the moved fields, whenever a record
-// carried no [Notify]. The guess is still there for records an older build
-// wrote ([fallbackKind]) and it is no longer allowed to answer with a
-// non-[ChangeKind]; but a build that can state the fact states it.
+// The applier stores the kind verbatim and guesses nothing, so a record
+// reaching it without one is refused here, where the fact is known.
 //
 // THE THIRD RULE IS THE ONE WORTH THE FUNCTION: when a record carries both a
 // kind and a notification, they must AGREE. One fact with two carriers is one
@@ -1665,16 +1667,9 @@ func (w *Writer) decide(stamp statelog.Stamp, subject Subject, op OpKind,
 		// [Provenance.Seat]. Empty for every writer that is already a
 		// seat, which is every in-engine caller.
 		ActorSeat: w.Seat,
-		// EVERY TASK WRITE THAT MERGES INTO A HELD ROW keeps the place
-		// the project's order gave it, and says so — which is what
-		// stamps it at a version a build still re-writing the filed rank
-		// retains rather than applies. See [keepsPlaceVersion]. A create
-		// mints its rank and a purge removes the row, so neither carries
-		// it.
-		KeepsPlace: mergesIntoRow(subject, op),
-		TurnID:     w.TurnID,
-		Chain:      w.Chain,
-		Notify:     notify,
+		TurnID:    w.TurnID,
+		Chain:     w.Chain,
+		Notify:    notify,
 	}
 	encoded, err := record.Encode()
 	if err != nil {

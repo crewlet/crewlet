@@ -31,7 +31,7 @@
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useNavigator } from "~/app/router.tsx";
-import { QueryState, RECORD_MAX_HEIGHT } from "~/components/common.tsx";
+import { QueryState } from "~/components/common.tsx";
 import {
   Button,
   Callout,
@@ -106,6 +106,9 @@ const STATUS_TONE: Record<SandboxStatus, "success" | "warning" | "danger" | "inf
   // question survives.
   awaiting_clarification: "warning",
   reseed: "warning",
+  // A person's reply is recorded as the answer and the engine is resuming
+  // the run with it: nobody is waited on any more.
+  answered: "info",
 };
 
 /** The statuses that mean a person is being waited on — `sandbox.Awaiting`. */
@@ -321,6 +324,8 @@ function doingLine(run: SandboxRun): string {
       return "The box is being provisioned. Nothing has run in it yet.";
     case "running":
       return "A box is up and the coding agent is working in it.";
+    case "answered":
+      return "A person answered its question. The answer is recorded on the run and the engine is resuming it.";
     case "resumed":
       return "An answer came back and the suspended Execute phase is running again.";
     default:
@@ -878,9 +883,8 @@ export function RunScreen({ turnId }: { turnId: string }) {
               />
             ) : RUNNING.includes(run.status) ? (
               <span className="t-caption">
-                {run.owner
-                  ? "This run's record names no job, so its live output cannot be asked for — it arrives on the turn when the run is collected."
-                  : "The run's durable record has not been written yet; its live output can be asked for once it has."}
+                The run&rsquo;s durable record has not been written yet; its live output can be
+                asked for once it has.
               </span>
             ) : (
               <p className="t-body">{doingLine(run)}</p>
@@ -996,14 +1000,7 @@ function CollectedRun({
           </div>
         )}
         {record.transcript ? (
-          <CodeBlock
-            plain
-            selectable
-            copyable
-            maxHeight={RECORD_MAX_HEIGHT}
-            label="What the run did"
-            code={record.transcript}
-          />
+          <CodeBlock plain selectable copyable label="What the run did" code={record.transcript} />
         ) : (
           <span className="t-caption">The run&rsquo;s record carries no transcript.</span>
         )}
@@ -1115,7 +1112,6 @@ function BridgeCallRecords({ call }: { call: BridgeCall }) {
             about this call. */}
         <CodeBlock
           plain
-          maxHeight={RECORD_MAX_HEIGHT}
           focusWhenScrollable
           label={`${call.name} arguments`}
           code={args || "(none)"}
@@ -1125,7 +1121,6 @@ function BridgeCallRecords({ call }: { call: BridgeCall }) {
         <div className="t-label">{call.failed ? "Error" : "Result"}</div>
         <CodeBlock
           plain
-          maxHeight={RECORD_MAX_HEIGHT}
           focusWhenScrollable
           label={`${call.name} ${call.failed ? "error" : "result"}`}
           code={output || "(nothing returned)"}

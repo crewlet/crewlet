@@ -200,10 +200,8 @@ var reasonDecisions = map[statelog.Reason]reasonDecision{
 	statelog.ReasonEvicted:   {gate: true, blames: true},
 	statelog.ReasonAbandoned: {gate: true, blames: true},
 	statelog.ReasonOvertaken: {gate: true, blames: true},
-	// Gates every writer's record meets alike: the object's marker, a kind
-	// no build applies.
+	// A gate every writer's record meets alike: the object's marker.
 	statelog.ReasonDeleted: {gate: true},
-	statelog.ReasonRetired: {gate: true},
 	// Not a gate's at all: refusals made before or instead of an append,
 	// about this node, the log or the operation.
 	statelog.ReasonDeferred:     {},

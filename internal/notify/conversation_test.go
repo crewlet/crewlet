@@ -169,80 +169,21 @@ func TestBothKeysRoundTripIndependently(t *testing.T) {
 	}
 }
 
-// AN OLDER PEER'S EVENT CARRIES ONE FIELD, and the identity read has to fall
-// back to it. CREWLET_AGENT is interest retention with no maxAge and a parked
-// seat republishes for hours, so an event stamped by a build from before the
-// split reaches this one whenever — and reading the absence as "no
-// conversation" would refuse to record the turn at all, losing history a
-// person can see, where the fallback merely reproduces that build's own
-// answer.
-func TestAnEventFromBeforeTheSplitStillNamesAConversation(t *testing.T) {
+// THE PARTITION IS NEVER READ AS THE IDENTITY. The partition function reads
+// its own field and nothing else, and the identity read reads ITS own field
+// and nothing else: an event that states a partition and no identity names no
+// conversation, and falls back per event rather than being filed under a batch
+// key its next turn would never look up.
+func TestThePartitionIsNeverReadAsTheIdentity(t *testing.T) {
 	ev := evOf(t, map[string]any{notify.PartitionField: "chat:D1:root-1"})
-	if got := notify.ConversationIdentityOf(ev); got != "chat:D1:root-1" {
-		t.Errorf("a single-field event resolved to %q, want the field it carries", got)
-	}
-	if got := notify.ConversationIdentityOfAll([]*events.Event{ev}); got != "chat:D1:root-1" {
-		t.Errorf("the partition resolved to %q", got)
-	}
-	// And the PARTITION read is untouched by the split, which is the half a
-	// mixed fleet cannot afford to get wrong: an unkeyed wake is a partition
-	// of one, so ten comments on one thread wake a seat ten times.
 	if got := notify.KeyOf(ev); got != "chat:D1:root-1" {
 		t.Errorf("the partition function reads %q", got)
 	}
-}
-
-// THE NEW FIELD WINS WHERE BOTH ARE PRESENT, or the fallback above would make
-// the split unobservable on every event that carries it.
-func TestTheStampedIdentityBeatsTheFallback(t *testing.T) {
-	ev := evOf(t, map[string]any{
-		notify.PartitionField:    "chat:D1:root-1",
-		notify.ConversationField: "chat:D1",
-	})
-	if got := notify.ConversationIdentityOf(ev); got != "chat:D1" {
-		t.Fatalf("identity = %q, want the stamped one rather than the partition", got)
+	if got, want := notify.ConversationIdentityOf(ev), notify.Fallback(ev.ID.String()); got != want {
+		t.Errorf("identity = %q, want the event's own fallback %q", got, want)
 	}
-}
-
-// A PARTITION THAT MIXES PRODUCERS IS FILED UNDER THE STATED IDENTITY, not
-// under whichever constituent happened to arrive first.
-//
-// A rolling upgrade puts both shapes on one stream — the retention that
-// carries a seat's wakes has no maxAge, and a parked seat republishes its
-// deliveries for hours — so one partition really can hold an old peer's event
-// with only a partition key beside a new one carrying the identity. Resolved
-// per event, the first constituent decided: an old event in front re-filed the
-// whole turn under the partition key, which for a direct message is exactly
-// the batch its next turn never looks up — the miss this pair of fields was
-// split apart to end.
-//
-// Preferring a STATED identity to an INFERRED one can never disagree with a
-// correct producer, because every event in a partition carries the same
-// identity: it is choosing between two spellings of one answer.
-func TestAMixedPartitionIsFiledUnderTheStatedIdentity(t *testing.T) {
-	older := evOf(t, map[string]any{notify.PartitionField: "chat:D1:root-1"})
-	newer := evOf(t, map[string]any{
-		notify.PartitionField:    "chat:D1:root-1",
-		notify.ConversationField: "chat:D1",
-	})
-	for _, tc := range []struct {
-		name string
-		evs  []*events.Event
-	}{
-		{"the old peer's event arrived first", []*events.Event{older, newer}},
-		{"and the other way round", []*events.Event{newer, older}},
-	} {
-		if got := notify.ConversationIdentityOfAll(tc.evs); got != "chat:D1" {
-			t.Errorf("%s: the partition resolved to %q, want the identity one of "+
-				"its events states", tc.name, got)
-		}
-	}
-	// AND THE INFERENCE STILL HAPPENS when nothing states one, which is the
-	// half a mixed fleet cannot lose: a partition of old events must not
-	// read as having no conversation at all.
-	if got := notify.ConversationIdentityOfAll([]*events.Event{older, older}); got != "chat:D1:root-1" {
-		t.Errorf("a partition of old events resolved to %q, want the one field "+
-			"they carry", got)
+	if got := notify.ConversationIdentityOfAll([]*events.Event{ev}); got != "" {
+		t.Errorf("the partition resolved to %q, want no identity", got)
 	}
 }
 

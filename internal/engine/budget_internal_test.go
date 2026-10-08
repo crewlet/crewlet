@@ -15,6 +15,39 @@ import (
 	"github.com/crewlet/crewlet/internal/period"
 )
 
+// budgetNow is the instant every case that charges through an engine pins the
+// engine's clock to ([Engine.clock]), and the one it cuts the windows it reads
+// back in at.
+//
+// PINNED, because a charge and the read that checks it are two clock reads,
+// and with each on the wall clock a midnight between them put the charge in
+// one day and the read in the next — which reads the charge's day as unspent.
+var budgetNow = time.Date(2026, time.June, 14, 12, 0, 0, 0, time.UTC)
+
+// fixedClock is a clock that always reads at.
+func fixedClock(at time.Time) func() time.Time { return func() time.Time { return at } }
+
+// spentIn is what scope has spent in the p window of windows, failing the case
+// when the counter is on a different window of that period.
+//
+// THE WINDOW AS WELL AS THE FIGURE. A counter never rolls back, so a read of an
+// EARLIER window than the one a charge landed in answers the later window with
+// its spend (coord.Tally.Usage): a charge cut on any clock but the pinned one
+// lands on today's real date and still reads back as the right number.
+func spentIn(t *testing.T, fleet *coordmem.Fleet, scope string, windows coord.Windows, p period.Period) int {
+	t.Helper()
+	u, err := fleet.Used(t.Context(), scope, windows)
+	if err != nil {
+		t.Fatalf("Used(%s): %v", scope, err)
+	}
+	slot, want := u.In(p), coord.Unspent(scope, windows).In(p).Window
+	if slot.Window.Label != want.Label {
+		t.Errorf("%s's %s counter is on window %q, want %q: the charge was cut on "+
+			"another clock than the one the case pinned", scope, p, slot.Window.Label, want.Label)
+	}
+	return slot.Used
+}
+
 // counters is a token counter whose reads the test controls: one figure per
 // scope and period, read against whatever windows the meter asks about.
 type counters struct {
@@ -89,7 +122,7 @@ func TestTheHeadroomIsTheTightestCappedWindow(t *testing.T) {
 			t.Parallel()
 			m := &meter{
 				budgets: counters{used: tc.used}, agentScope: "agent:x",
-				basis: budgetBasis{org: tc.org, seat: tc.seat, zone: time.UTC}, now: time.Now,
+				basis: budgetBasis{org: tc.org, seat: tc.seat, zone: time.UTC}, now: fixedClock(budgetNow),
 			}
 			got, err := m.Remaining(t.Context())
 			if err != nil {
@@ -113,7 +146,7 @@ func TestAnUnreachableCounterRefusesRatherThanReportingZero(t *testing.T) {
 	m := &meter{
 		budgets:    counters{err: errors.New("the coordination store is unreachable")},
 		agentScope: "agent:x", basis: budgetBasis{org: coord.Caps{period.Day: 1000}, zone: time.UTC},
-		now: time.Now,
+		now: fixedClock(budgetNow),
 	}
 	if _, err := m.Remaining(t.Context()); err == nil {
 		t.Fatal("an unreadable counter reported a headroom")
@@ -127,7 +160,7 @@ func TestAnUncappedSeatNeedsNoCounterRead(t *testing.T) {
 	t.Parallel()
 	m := &meter{
 		budgets:    counters{err: errors.New("this must not be called")},
-		agentScope: "agent:x", basis: budgetBasis{zone: time.UTC}, now: time.Now,
+		agentScope: "agent:x", basis: budgetBasis{zone: time.UTC}, now: fixedClock(budgetNow),
 	}
 	got, err := m.Remaining(t.Context())
 	if err != nil || got != 0 {
@@ -201,7 +234,7 @@ func TestAnUncappedCompanyIsCounted(t *testing.T) {
 	fleet := coordmem.NewFleet()
 	free := &org.Role{Name: "Free"}
 	c := meteredCompany(config.TokenBudget{}, free)
-	e := &Engine{backends: &Backends{Fleet: fleet}}
+	e := &Engine{backends: &Backends{Fleet: fleet}, clock: fixedClock(budgetNow)}
 
 	m := e.meterFor(c, free.Handle())
 	if m == nil {
@@ -210,11 +243,13 @@ func TestAnUncappedCompanyIsCounted(t *testing.T) {
 	if got, err := m.Spend(ctx, 250); err != nil || !got.OK {
 		t.Fatalf("Spend = (%+v, %v), want admitted: nothing caps it", got, err)
 	}
-	windows := coord.WindowsAt(time.Now(), time.UTC)
+	windows := coord.WindowsAt(budgetNow, time.UTC)
 	for _, scope := range []string{coord.OrgScope, scopeOf(t, c, free)} {
-		u, err := fleet.Used(ctx, scope, windows)
-		if err != nil || u.In(period.Day).Used != 250 || u.In(period.Month).Used != 250 {
-			t.Errorf("%s = (%+v, %v), want the 250 in the day and the month", scope, u, err)
+		day := spentIn(t, fleet, scope, windows, period.Day)
+		month := spentIn(t, fleet, scope, windows, period.Month)
+		if day != 250 || month != 250 {
+			t.Errorf("%s spent %d in the day and %d in the month, want the 250 in each",
+				scope, day, month)
 		}
 	}
 	// And a fan-out is told the seat is uncapped, not that it has 0 left.
@@ -233,7 +268,15 @@ func TestAMeterPinsItsTurnsCapsAndClock(t *testing.T) {
 	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 100}}
 	pinned := meteredCompany(config.TokenBudget{}, lead)
 	pinned.Config.Timezone = "Asia/Tokyo"
-	e := &Engine{backends: &Backends{Fleet: fleet}}
+	// AN INSTANT WHOSE TOKYO DATE IS NOT ITS UTC DATE — 20:00 on the 22nd in
+	// UTC is 05:00 on the 23rd in Tokyo — so a day cut on the wrong zone
+	// names the wrong date. Pinned on the engine, because the two charges
+	// and the expectation below are three clock reads, and on the wall
+	// clock Tokyo's midnight (15:00 UTC) between any two of them put the
+	// refused charge in a fresh day or named a day the expectation was not
+	// in.
+	at := time.Date(2026, time.September, 22, 20, 0, 0, 0, time.UTC)
+	e := &Engine{backends: &Backends{Fleet: fleet}, clock: fixedClock(at)}
 	m := e.meterFor(pinned, lead.Handle())
 
 	// The revision that lands mid-turn, current from here on.
@@ -252,7 +295,7 @@ func TestAMeterPinsItsTurnsCapsAndClock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	day := period.At(period.Day, time.Now(), tokyo)
+	day := period.At(period.Day, at, tokyo)
 	if got.Period != period.Day || got.Window != day.Label || !got.ResetsAt.Equal(day.End) {
 		t.Errorf("refusal = %s %q resets %v, want Tokyo's day %q resetting %v",
 			got.Period, got.Window, got.ResetsAt, day.Label, day.End)

@@ -295,9 +295,8 @@ func (g *gatedNode) sendTo(handle, partition, work string) *events.Event {
 		// one conversation identity while its partition key names the
 		// thread. That is a direct message's own shape — two threads on
 		// one DM line — and it is what lets these cases FAIL. Stamped with
-		// the partition alone, the identity read falls back to it and a
-		// node that partitioned on the wrong one of the two would group
-		// identically and go green.
+		// one value in both fields, a node that partitioned on the wrong
+		// one of the two would group identically and go green.
 		ev.Payload = map[string]any{
 			notify.PartitionField:    partition,
 			notify.ConversationField: "chat:D1",

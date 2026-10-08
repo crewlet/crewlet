@@ -117,14 +117,10 @@ type embedDuty struct {
 	metrics   *metrics.Recorder
 
 	// log is the vector log this duty embeds into, whose runner and stream
-	// the index step's standing is read from, and counted the reading of
-	// its counted set — the vector log carries no eviction of its own, so
-	// the identity logs' are what take a node out of it.
-	log     *runningLog
-	counted countedReaders
-
-	// db is the node whose replicated estate the corpora are read from.
-	db *store.DB
+	// the index step's standing is read from, and db the node whose
+	// replicated estate the corpora are read from.
+	log *runningLog
+	db  *store.DB
 
 	// renewEvery is how often a running tick renews the duty's lease:
 	// [search.EmbedInterval], the cadence the lease is claimed on anyway,
@@ -202,7 +198,6 @@ func (e *Engine) newEmbedDuty(s *stateLog) *embedDuty {
 		claim:      e.workerDuty(embedDutyName, embedDutyTTL),
 		metrics:    e.metrics,
 		log:        running,
-		counted:    e.countedReadersOf(s),
 		db:         e.backends.Store,
 		renewEvery: search.EmbedInterval,
 		budget:     embedTickBudget,
@@ -437,17 +432,13 @@ func (d *embedDuty) keepClaimed(ctx context.Context, cancel context.CancelFunc) 
 }
 
 // standing is the vector log as the index step must know it
-// ([search.LogStanding]): whether this node has applied all of it, and which
-// build every node applying it reads.
+// ([search.LogStanding]): whether this node has applied all of it.
 //
 // THE END IS READ BEFORE THE CHECKPOINT, which is the only order in which a
 // checkpoint at or past it means this node applied everything the log held
 // when the step began; the other order reads a record that landed between the
 // two as one this node missed. A node holding a deferred record is not
 // current either: its rows are the log's minus that record.
-//
-// THE READERS ARE THE COUNTED SET ([countedReaders]): every node that applies
-// the log, less every node the fleet has evicted.
 func (d *embedDuty) standing(ctx context.Context) (search.LogStanding, error) {
 	var out search.LogStanding
 	stats, err := d.log.log.Stats(ctx)
@@ -456,12 +447,6 @@ func (d *embedDuty) standing(ctx context.Context) (search.LogStanding, error) {
 	}
 	_, deferring := d.log.runner.Deferred()
 	out.Current = d.log.runner.Committed().Seq >= stats.LastSeq && !deferring
-
-	readers, err := d.counted.readers(ctx, d.log.domain.Name())
-	if err != nil {
-		return out, err
-	}
-	out.Readers = readers
 	return out, nil
 }
 

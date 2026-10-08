@@ -386,8 +386,10 @@ function RunRow({ run, index, now }: { run: SandboxRun; index: OrgIndex; now: nu
 /**
  * WHO THE QUESTION IS PUT TO, as the chart names them: the handles the engine
  * resolved when the run parked — the seat's lead chain, where the audience
- * the run wrote named nobody the chart has — or that audience as written
- * before any were resolved. Nothing where it named no audience at all.
+ * the run wrote named nobody the chart has. Where that resolved to nobody
+ * either (a seat with no lead chain, a park on a node holding no company), or
+ * the row reached this screen before its durable record was read, the
+ * audience as the run wrote it. Nothing where it named no audience at all.
  */
 export function audienceOf(run: SandboxRun, index: OrgIndex): string {
   const handles = run.audience_handles ?? [];

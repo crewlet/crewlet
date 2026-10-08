@@ -4,14 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/queue"
 	queuemem "github.com/crewlet/crewlet/internal/queue/memory"
@@ -33,20 +31,6 @@ const (
 	askerOwner = "n1:asker"
 	boxOwner   = "n2:owner"
 )
-
-// fleetBuilds is what each incarnation's build advertises; one it does not
-// name advertises everything this build does.
-type fleetBuilds map[string][]coord.Feature
-
-func (f fleetBuilds) OwnerFeatures(_ context.Context, owner string) ([]coord.Feature, error) {
-	if features, known := f[owner]; known {
-		return features, nil
-	}
-	return coord.Features, nil
-}
-
-// everyBuildServes is a fleet on this build.
-var everyBuildServes = fleetBuilds{}
 
 func newTailRig(t *testing.T) *tailRig {
 	t.Helper()
@@ -76,7 +60,7 @@ func newTailRig(t *testing.T) *tailRig {
 	if _, err := rig.pending.BeginLaunch(ctx, run, Fence{}); err != nil {
 		t.Fatalf("begin launch: %v", err)
 	}
-	if ok, err := rig.pending.MarkSuspended(ctx, "t1", Suspension{State: map[string]any{"x": 1}}); err != nil || !ok {
+	if ok, err := rig.pending.MarkSuspended(ctx, "t1", Suspension{State: json.RawMessage(`{"x":1}`)}); err != nil || !ok {
 		t.Fatalf("mark suspended: %v %v", ok, err)
 	}
 	if ok, err := rig.pending.ClaimOwnership(ctx, "t1", boxOwner, 1); err != nil || !ok {
@@ -133,17 +117,17 @@ func (rig *tailRig) serveWith(t *testing.T, owner string, q TailServer, feeds *L
 // race-enabled run — the owner's reply was simply later than that, and the
 // case read it as a silent owner. The one case that waits the budget OUT sets
 // its own ([TestASilentOwnerIsNamedNotEmpty]).
-func (rig *tailRig) reader(t *testing.T, features TailFeatures) *TailReader {
+func (rig *tailRig) reader(t *testing.T) *TailReader {
 	return &TailReader{
 		Owner: askerOwner, Pending: rig.pending, Queue: rig.client(t),
-		Features: features, Budget: 30 * time.Second,
+		Budget: 30 * time.Second,
 		// The ASKER has no readings of its own: an answer that came from
 		// here instead of from the owner would fail loudly.
 	}
 }
 
 // tail asks for the rig's launch.
-func (rig *tailRig) tail(t *testing.T, r *TailReader, cursor *TailCursor) TailAnswer {
+func (rig *tailRig) tail(t *testing.T, r *TailReader, cursor TailCursor) TailAnswer {
 	t.Helper()
 	got, err := r.Tail(t.Context(), TailQuery{TurnID: "t1", LaunchID: rig.launch, Cursor: cursor})
 	if err != nil {
@@ -161,22 +145,19 @@ type held struct {
 
 func (h *held) take(t *testing.T, a TailAnswer) *Output {
 	t.Helper()
-	if a.Outcome != TailRunning || a.Output == nil || !a.Output.Cursor {
-		t.Fatalf("answer = %+v; want a cursor-shaped tail", a)
+	if a.Outcome != TailRunning || a.Output == nil {
+		t.Fatalf("answer = %+v; want a tail", a)
 	}
 	out := a.Output
-	if out.Start == nil || out.End == nil {
-		t.Fatalf("a cursor answer without its offsets: start %v, end %v", out.Start, out.End)
-	}
 	if out.Reset {
 		h.text = out.Text
 	} else {
-		if *out.Start != h.cursor.Offset {
-			t.Fatalf("a delta starts at %d; the viewer holds through %d", *out.Start, h.cursor.Offset)
+		if out.Start != h.cursor.Offset {
+			t.Fatalf("a delta starts at %d; the viewer holds through %d", out.Start, h.cursor.Offset)
 		}
 		h.text += out.Text
 	}
-	h.cursor = TailCursor{Epoch: out.Epoch, Offset: *out.End, Digest: out.Digest}
+	h.cursor = TailCursor{Epoch: out.Epoch, Offset: out.End, Digest: out.Digest}
 	return out
 }
 
@@ -199,7 +180,7 @@ func TestOnlyTheOwnerAnswersATailRequest(t *testing.T) {
 	rig.serveWith(t, "n3:bystander", bystander, rig.feeds(t))
 	rig.serve(t, boxOwner)
 
-	got := rig.tail(t, rig.reader(t, everyBuildServes), nil)
+	got := rig.tail(t, rig.reader(t), TailCursor{})
 	if got.Outcome != TailRunning || got.Output == nil {
 		t.Fatalf("outcome = %q with output %v; want the owner's tail", got.Outcome, got.Output)
 	}
@@ -249,26 +230,11 @@ func TestASilentOwnerIsNamedNotEmpty(t *testing.T) {
 	rig.runner.Say(SourceTranscript, "never read\n")
 
 	// Nobody answers, so this case waits the whole budget out: a short one.
-	reader := rig.reader(t, everyBuildServes)
+	reader := rig.reader(t)
 	reader.Budget = 200 * time.Millisecond
-	got := rig.tail(t, reader, nil)
+	got := rig.tail(t, reader, TailCursor{})
 	if got.Outcome != TailOwnerSilent || got.Node != "n2" || got.Output != nil {
 		t.Errorf("answer = %+v; want owner_silent naming n2 and no output", got)
-	}
-}
-
-// AN OWNER ON AN OLDER BUILD IS NOT ASKED, and is not called silent: asking
-// would wait out the budget on every poll for a reply that can never come.
-func TestAnOwnerThatCannotAnswerIsNotAsked(t *testing.T) {
-	t.Parallel()
-	rig := newTailRig(t)
-	rig.serve(t, boxOwner)
-	got := rig.tail(t, rig.reader(t, fleetBuilds{boxOwner: {coord.FeatureSteer}}), nil)
-	if got.Outcome != TailOwnerUpgrading || got.Node != "n2" {
-		t.Errorf("answer = %+v; want owner_upgrading naming n2", got)
-	}
-	if rig.runner.Reads() != 0 {
-		t.Errorf("an owner that serves no tail was asked anyway (%d reads)", rig.runner.Reads())
 	}
 }
 
@@ -278,7 +244,7 @@ func TestATailOfAJobThatIsNotRunningSaysWhy(t *testing.T) {
 	t.Parallel()
 	rig := newTailRig(t)
 	rig.serve(t, boxOwner)
-	reader := rig.reader(t, everyBuildServes)
+	reader := rig.reader(t)
 	got, err := reader.Tail(t.Context(), TailQuery{TurnID: "t1", LaunchID: "an-earlier-job"})
 	if err != nil || got.Outcome != TailNotRunning || got.Status != StatusReplaced {
 		t.Errorf("answer = %+v, %v; want not_running, replaced", got, err)
@@ -312,7 +278,7 @@ func TestALaunchingJobIsLaunchingNotStopped(t *testing.T) {
 		t.Fatal(err)
 	}
 	rig.serve(t, boxOwner)
-	got, err := rig.reader(t, everyBuildServes).Tail(t.Context(),
+	got, err := rig.reader(t).Tail(t.Context(),
 		TailQuery{TurnID: "t2", LaunchID: launching.LaunchID})
 	if err != nil || got.Outcome != TailLaunching || got.Status != StatusLaunching {
 		t.Errorf("a launching job = %+v, %v; want the launching outcome", got, err)
@@ -326,7 +292,7 @@ func TestAnOwnerThatCannotReadTheBoxSaysSo(t *testing.T) {
 	rig := newTailRig(t)
 	rig.runner.LiveErr = errFakeBox
 	rig.serve(t, boxOwner)
-	_, err := rig.reader(t, everyBuildServes).Tail(t.Context(), TailQuery{TurnID: "t1", LaunchID: rig.launch})
+	_, err := rig.reader(t).Tail(t.Context(), TailQuery{TurnID: "t1", LaunchID: rig.launch})
 	if err == nil || !strings.Contains(err.Error(), "n2 owns run t1") ||
 		!strings.Contains(err.Error(), errFakeBox.Error()) {
 		t.Errorf("Tail err = %v; want the owner's own failure, naming it", err)
@@ -340,9 +306,9 @@ func TestTheOwnerReadsItsOwnBoxDirectly(t *testing.T) {
 	rig.runner.Say(SourceStderr, "local\n")
 	reader := &TailReader{
 		Owner: boxOwner, Pending: rig.pending, Queue: rig.client(t),
-		Features: everyBuildServes, Feeds: rig.feeds(t),
+		Feeds: rig.feeds(t),
 	}
-	got := rig.tail(t, reader, nil)
+	got := rig.tail(t, reader, TailCursor{})
 	if got.Outcome != TailRunning || got.Output.Text != "local\n" || got.Output.AsOf.IsZero() {
 		t.Errorf("answer = %+v; want the local box's output, stamped", got)
 	}
@@ -369,7 +335,7 @@ func TestAPeekNeverWakesAPausedBox(t *testing.T) {
 	rig.serve(t, boxOwner)
 	local := &TailReader{Owner: boxOwner, Pending: rig.pending, Feeds: rig.feeds(t)}
 	for name, reader := range map[string]*TailReader{
-		"across the fleet": rig.reader(t, everyBuildServes),
+		"across the fleet": rig.reader(t),
 		"on the owner":     local,
 	} {
 		got, err := reader.Tail(t.Context(), TailQuery{TurnID: "t1", LaunchID: rig.launch})
@@ -396,9 +362,9 @@ func TestAStoppedLaunchsReadingIsLetGo(t *testing.T) {
 	served := rig.serve(t, boxOwner)
 	own := rig.feeds(t)
 	local := &TailReader{Owner: boxOwner, Pending: rig.pending, Feeds: own}
-	remote := rig.reader(t, everyBuildServes)
+	remote := rig.reader(t)
 	for name, reader := range map[string]*TailReader{"across the fleet": remote, "on the owner": local} {
-		if got := rig.tail(t, reader, &TailCursor{}); got.Outcome != TailRunning {
+		if got := rig.tail(t, reader, TailCursor{}); got.Outcome != TailRunning {
 			t.Fatalf("%s: answer = %+v; want a tail", name, got)
 		}
 	}
@@ -410,7 +376,7 @@ func TestAStoppedLaunchsReadingIsLetGo(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, reader := range map[string]*TailReader{"across the fleet": remote, "on the owner": local} {
-		if got := rig.tail(t, reader, &TailCursor{}); got.Outcome != TailNotRunning {
+		if got := rig.tail(t, reader, TailCursor{}); got.Outcome != TailNotRunning {
 			t.Fatalf("%s: answer = %+v; want not_running", name, got)
 		}
 	}
@@ -452,15 +418,15 @@ func TestAReadingNobodyAsksAboutIsLetGoOnItsOwnClock(t *testing.T) {
 	}, ticks)
 	t.Cleanup(owner.Stop)
 	rig.serveWith(t, boxOwner, rig.client(t), owner)
-	asker := rig.reader(t, everyBuildServes)
+	asker := rig.reader(t)
 
-	if got := rig.tail(t, asker, &TailCursor{}); got.Outcome != TailRunning {
+	if got := rig.tail(t, asker, TailCursor{}); got.Outcome != TailRunning {
 		t.Fatalf("answer = %+v; want a tail", got)
 	}
 	if err := rig.pending.SetStatus(t.Context(), "t1", StatusAwaiting, Fence{}); err != nil {
 		t.Fatal(err)
 	}
-	if got := rig.tail(t, asker, &TailCursor{}); got.Outcome != TailNotRunning {
+	if got := rig.tail(t, asker, TailCursor{}); got.Outcome != TailNotRunning {
 		t.Fatalf("answer = %+v; want not_running", got)
 	}
 	if readings(owner) != 1 {
@@ -573,7 +539,7 @@ func readings(feeds *LiveFeeds) int {
 
 // A VIEWER IS SENT WHAT IT LACKS. The first answer is a reset carrying what
 // there is; every later one carries only what was written since, starting
-// where the viewer holds through — never the window again.
+// where the viewer holds through — never what it already holds again.
 //
 // Mutation: answer every cursor with a reset, and the second answer re-sends
 // the first line.
@@ -581,25 +547,22 @@ func TestAViewerIsSentOnlyWhatItLacks(t *testing.T) {
 	t.Parallel()
 	rig := newTailRig(t)
 	feeds := rig.serve(t, boxOwner)
-	reader := rig.reader(t, everyBuildServes)
+	reader := rig.reader(t)
 	rig.runner.Say(SourceTranscript, "[tool] bash: go test ./...\n")
 
 	var view held
-	first := view.take(t, rig.tail(t, reader, &view.cursor))
+	first := view.take(t, rig.tail(t, reader, view.cursor))
 	if !first.Reset || view.text != "[tool] bash: go test ./...\n" {
 		t.Fatalf("the first answer = %+v; want a reset carrying what there is", first)
 	}
 	rig.runner.Say(SourceTranscript, "the suite passed\n")
 	waitPastReuse(feeds)
-	second := view.take(t, rig.tail(t, reader, &view.cursor))
+	second := view.take(t, rig.tail(t, reader, view.cursor))
 	if second.Reset || second.Text != "the suite passed\n" {
 		t.Errorf("the second answer = %+v; want only the new line", second)
 	}
 	if view.text != "[tool] bash: go test ./...\nthe suite passed\n" {
 		t.Errorf("the viewer holds %q; want both lines once each", view.text)
-	}
-	if second.WindowBytes != MaxRunTextBytes {
-		t.Errorf("window_bytes = %d; want the record's bound, which a viewer holds", second.WindowBytes)
 	}
 }
 
@@ -607,16 +570,15 @@ func TestAViewerIsSentOnlyWhatItLacks(t *testing.T) {
 // carries it. A reading that has settled nothing yet answers at end 0 and is
 // followed from start 0; with the offsets dropped as empty, a screen compared a
 // missing start with the 0 it held through, threw the delta away and asked for
-// a reset a poll later — and a REST caller told to send `end` back had none. A
-// window carries no cursor field at all.
+// a reset a poll later — and a REST caller told to send `end` back had none.
 //
-// Mutation: tag the offsets `omitempty` on plain integers again, and the
-// answers at zero carry neither.
+// Mutation: tag the offsets `omitempty` again, and the answers at zero carry
+// neither.
 func TestACursorAnswerAlwaysStatesItsOffsets(t *testing.T) {
 	t.Parallel()
 	rig := newTailRig(t)
 	rig.serve(t, boxOwner)
-	reader := rig.reader(t, everyBuildServes)
+	reader := rig.reader(t)
 	wire := func(a TailAnswer) map[string]any {
 		t.Helper()
 		raw, err := json.Marshal(a)
@@ -633,9 +595,9 @@ func TestACursorAnswerAlwaysStatesItsOffsets(t *testing.T) {
 	}
 
 	var view held
-	first := rig.tail(t, reader, &view.cursor)
+	first := rig.tail(t, reader, view.cursor)
 	view.take(t, first)
-	next := rig.tail(t, reader, &view.cursor)
+	next := rig.tail(t, reader, view.cursor)
 	view.take(t, next)
 	if next.Output.Reset {
 		t.Fatalf("a cursor at the reading's end 0 was answered %+v; want a delta", next.Output)
@@ -649,13 +611,6 @@ func TestACursorAnswerAlwaysStatesItsOffsets(t *testing.T) {
 		}
 		if out["start"] != float64(0) || out["end"] != float64(0) {
 			t.Errorf("%s = start %v, end %v; want both 0", name, out["start"], out["end"])
-		}
-	}
-
-	window := wire(rig.tail(t, reader, nil))
-	for _, key := range []string{"cursor", "epoch", "start", "end", "digest", "reset"} {
-		if _, present := window[key]; present {
-			t.Errorf("a window carries the cursor field %q: %v", key, window)
 		}
 	}
 }
@@ -682,10 +637,10 @@ func TestACursorThatDoesNotMatchIsAReset(t *testing.T) {
 	t.Parallel()
 	rig := newTailRig(t)
 	rig.serve(t, boxOwner)
-	reader := rig.reader(t, everyBuildServes)
+	reader := rig.reader(t)
 	rig.runner.Say(SourceTranscript, "one\ntwo\n")
 	var view held
-	view.take(t, rig.tail(t, reader, &view.cursor))
+	view.take(t, rig.tail(t, reader, view.cursor))
 
 	for name, cursor := range map[string]TailCursor{
 		"another epoch":  {Epoch: "transcript@99", Offset: view.cursor.Offset, Digest: view.cursor.Digest},
@@ -696,7 +651,7 @@ func TestACursorThatDoesNotMatchIsAReset(t *testing.T) {
 		// out of range in the owner's answer.
 		"before the start": {Epoch: view.cursor.Epoch, Offset: -1, Digest: view.cursor.Digest},
 	} {
-		got := rig.tail(t, reader, &cursor)
+		got := rig.tail(t, reader, cursor)
 		if got.Output == nil || !got.Output.Reset || got.Output.Text != "one\ntwo\n" {
 			t.Errorf("%s: answer = %+v; want a reset carrying the reading's text", name, got.Output)
 		}
@@ -715,15 +670,15 @@ func TestAnOwnerMoveContinuesOnTheSameBuildAndResetsOnAnother(t *testing.T) {
 	const nextOwner = "n4:next"
 	first := rig.serve(t, boxOwner)
 	rig.serve(t, nextOwner)
-	reader := rig.reader(t, everyBuildServes)
+	reader := rig.reader(t)
 	var view held
-	view.take(t, rig.tail(t, reader, &view.cursor))
+	view.take(t, rig.tail(t, reader, view.cursor))
 
 	if ok, err := rig.pending.ClaimOwnership(t.Context(), "t1", nextOwner, 2); err != nil || !ok {
 		t.Fatalf("move the run: %v %v", ok, err)
 	}
 	rig.runner.Say(SourceTranscript, "second\n")
-	moved := view.take(t, rig.tail(t, reader, &view.cursor))
+	moved := view.take(t, rig.tail(t, reader, view.cursor))
 	if moved.Reset || moved.Text != "second\n" {
 		t.Errorf("after a move on the same build = %+v; want only the new line", moved)
 	}
@@ -736,84 +691,9 @@ func TestAnOwnerMoveContinuesOnTheSameBuildAndResetsOnAnother(t *testing.T) {
 	// differently.
 	first.Forget("t1", rig.launch)
 	rig.runner.Rewrite("FIRST\nSECOND\nthird\n")
-	got := view.take(t, rig.tail(t, reader, &view.cursor))
+	got := view.take(t, rig.tail(t, reader, view.cursor))
 	if !got.Reset || view.text != "FIRST\nSECOND\nthird\n" {
 		t.Errorf("after a move onto another derivation = %+v; want a reset", got)
-	}
-}
-
-// AN OWNER THAT READS NO CURSOR IS ASKED FOR ITS WINDOW. An older build ignores
-// a cursor and answers its window, which a viewer reading by cursor would
-// append to what it holds as though it followed it; so the cursor is sent only
-// to an owner that advertises it, and the answer from any other is a window —
-// carrying no cursor of its own, so the screen knows to replace.
-//
-// Mutation: send the cursor regardless, and the request the old owner sees
-// carries one.
-func TestAnOwnerThatReadsNoCursorIsAskedForItsWindow(t *testing.T) {
-	t.Parallel()
-	rig := newTailRig(t)
-	rig.runner.Say(SourceTranscript, "a line\n")
-	seen := &recordingServer{TailServer: rig.client(t)}
-	rig.serveWith(t, boxOwner, seen, rig.feeds(t))
-	older := fleetBuilds{boxOwner: {coord.FeatureSandboxTail}}
-
-	got := rig.tail(t, rig.reader(t, older), &TailCursor{})
-	if got.Output == nil || got.Output.Cursor || got.Output.Text != "a line\n" {
-		t.Errorf("an older owner's answer = %+v; want its window, cursorless", got.Output)
-	}
-	if req := seen.last(); req.Cursor != nil {
-		t.Errorf("an owner that reads no cursor was sent one: %+v", req.Cursor)
-	}
-}
-
-// recordingServer keeps every request a node was asked.
-type recordingServer struct {
-	TailServer
-	mu   sync.Mutex
-	reqs []tailRequest
-}
-
-func (s *recordingServer) Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error) {
-	return s.TailServer.Serve(ctx, subject, func(ctx context.Context, raw []byte) ([]byte, error) {
-		var req tailRequest
-		if json.Unmarshal(raw, &req) == nil {
-			s.mu.Lock()
-			s.reqs = append(s.reqs, req)
-			s.mu.Unlock()
-		}
-		return h(ctx, raw)
-	})
-}
-
-func (s *recordingServer) last() tailRequest {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.reqs[len(s.reqs)-1]
-}
-
-// A REQUEST WITH NO CURSOR IS ANSWERED THE WINDOW IT ALWAYS WAS: the last
-// [MaxLiveOutputBytes] in whole lines, cut where earlier output exists, and no
-// cursor field at all — what an older asker, and the REST route's existing
-// callers, replace their screen with on every poll.
-func TestARequestWithNoCursorIsAnsweredTheWindow(t *testing.T) {
-	t.Parallel()
-	rig := newTailRig(t)
-	for i := range 400 {
-		rig.runner.Say(SourceTranscript, fmt.Sprintf("[tool] bash: step %03d of a long run\n", i))
-	}
-	rig.serve(t, boxOwner)
-	got := rig.tail(t, rig.reader(t, everyBuildServes), nil).Output
-	if got.Cursor || got.Epoch != "" || got.Reset {
-		t.Errorf("a cursorless answer carries cursor fields: %+v", got)
-	}
-	if len(got.Text) > MaxLiveOutputBytes || !got.Cut || !strings.HasPrefix(got.Text, "[tool] bash: step") ||
-		!strings.HasSuffix(got.Text, "step 399 of a long run\n") {
-		t.Errorf("the window is %d bytes, cut=%v, %.30q…; want the last 8 KiB in whole lines, cut",
-			len(got.Text), got.Cut, got.Text)
-	}
-	if got.WindowBytes != MaxLiveOutputBytes {
-		t.Errorf("window_bytes = %d; want %d", got.WindowBytes, MaxLiveOutputBytes)
 	}
 }
 
@@ -824,21 +704,21 @@ func TestAViewerTooFarBehindIsReset(t *testing.T) {
 	t.Parallel()
 	rig := newTailRig(t)
 	feeds := rig.serve(t, boxOwner)
-	reader := rig.reader(t, everyBuildServes)
+	reader := rig.reader(t)
 	rig.runner.Say(SourceTranscript, "start\n")
 	var view held
-	view.take(t, rig.tail(t, reader, &view.cursor))
+	view.take(t, rig.tail(t, reader, view.cursor))
 
 	line := strings.Repeat("x", 99) + "\n"
 	for range (MaxRunTextBytes / len(line)) + 50 {
 		rig.runner.Say(SourceTranscript, line)
 	}
 	waitPastReuse(feeds)
-	got := view.take(t, rig.tail(t, reader, &view.cursor))
+	got := view.take(t, rig.tail(t, reader, view.cursor))
 	if !got.Reset || len(got.Text) > MaxRunTextBytes || !strings.HasPrefix(got.Text, "xxx") ||
-		strings.Contains(got.Text, "start") || !got.Cut || *got.Start == 0 {
+		strings.Contains(got.Text, "start") || !got.Cut || got.Start == 0 {
 		t.Errorf("a viewer far behind = reset %v, %d bytes from %d, cut %v; want the last %d in whole lines",
-			got.Reset, len(got.Text), *got.Start, got.Cut, MaxRunTextBytes)
+			got.Reset, len(got.Text), got.Start, got.Cut, MaxRunTextBytes)
 	}
 }
 
@@ -855,14 +735,14 @@ func TestManyViewersCostOneReadOfTheBox(t *testing.T) {
 	gate := make(chan struct{})
 	rig.runner.LiveGate = gate
 	rig.serve(t, boxOwner)
-	reader := rig.reader(t, everyBuildServes)
+	reader := rig.reader(t)
 
 	const viewers = 8
 	var wg sync.WaitGroup
 	answers := make(chan TailAnswer, viewers)
 	for range viewers {
 		wg.Go(func() {
-			got, err := reader.Tail(t.Context(), TailQuery{TurnID: "t1", LaunchID: rig.launch, Cursor: &TailCursor{}})
+			got, err := reader.Tail(t.Context(), TailQuery{TurnID: "t1", LaunchID: rig.launch, Cursor: TailCursor{}})
 			if err != nil {
 				t.Errorf("Tail: %v", err)
 			}
@@ -910,7 +790,7 @@ func TestAnAbandonedRequestFreesItsAnswerSlot(t *testing.T) {
 
 	req, err := json.Marshal(tailRequest{
 		Version: tailWireVersion, TurnID: "t1", LaunchID: rig.launch, Owner: boxOwner,
-		Cursor: &TailCursor{}, BudgetMS: 400,
+		Cursor: TailCursor{}, BudgetMS: 400,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -943,15 +823,15 @@ func TestAnAbandonedRequestFreesItsAnswerSlot(t *testing.T) {
 	}
 	close(gate)
 	eventually(t, func() bool { return rig.runner.Reads() == 1 }, "the read did not go on")
-	got := rig.tail(t, rig.reader(t, everyBuildServes), &TailCursor{})
+	got := rig.tail(t, rig.reader(t), TailCursor{})
 	if got.Output == nil || got.Output.Text != "slow\n" || rig.runner.Reads() != 1 {
 		t.Errorf("the next request = %+v after %d reads; want what the read found, read once",
 			got.Output, rig.runner.Reads())
 	}
 }
 
-// THE OWNER ANSWERS INSIDE THE BUDGET ITS ASKER SENT, falling back to the fleet
-// read budget for an asker on a build that sent none.
+// THE OWNER ANSWERS INSIDE THE BUDGET ITS ASKER SENT, and inside the fleet read
+// budget for a request that names none — the zero value's meaning.
 func TestTheOwnerAnswersInsideTheAskersBudget(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
@@ -959,7 +839,7 @@ func TestTheOwnerAnswersInsideTheAskersBudget(t *testing.T) {
 		want     time.Duration
 	}{
 		"an asker's own": {budgetMS: 1000, want: 750 * time.Millisecond},
-		"an older asker": {budgetMS: 0, want: time.Duration(float64(TailReadBudget) * answerShare)},
+		"none named":     {budgetMS: 0, want: time.Duration(float64(TailReadBudget) * answerShare)},
 	} {
 		if got := (tailRequest{BudgetMS: c.budgetMS}).answerBudget(); got != c.want {
 			t.Errorf("%s: answer budget = %v; want %v", name, got, c.want)

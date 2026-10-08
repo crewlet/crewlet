@@ -175,18 +175,18 @@ func TestABridgedSessionsFirstCallOutlivingItsJobIsNotTheNextJobs(t *testing.T) 
 	next, err := run.pending.BeginLaunch(t.Context(), sandbox.PendingRun{
 		TurnID: "t-late", AgentHandle: "swe", Role: "SWE",
 	}, sandbox.Fence{})
-	if err != nil || next.ID == first {
-		t.Fatalf("relaunch = %q, %v (first job %q)", next.ID, err, first)
+	if err != nil || next.LaunchID == first {
+		t.Fatalf("relaunch = %q, %v (first job %q)", next.LaunchID, err, first)
 	}
 	close(delegate.release)
 	<-answered
 
 	row := run.row(t, "t-late")
-	if row.LaunchID != next.ID {
-		t.Fatalf("the row holds job %q, want the relaunch's %q", row.LaunchID, next.ID)
+	if row.LaunchID != next.LaunchID {
+		t.Fatalf("the row holds job %q, want the relaunch's %q", row.LaunchID, next.LaunchID)
 	}
-	if len(row.BridgeCalls) != 0 || row.LaunchFacts().Bridged != (sandbox.EngineSpend{}) {
+	if len(row.BridgeCalls) != 0 || row.Launch.Bridged != (sandbox.EngineSpend{}) {
 		t.Fatalf("the next job took the last one's late call: calls %+v, spend %+v",
-			row.BridgeCalls, row.LaunchFacts().Bridged)
+			row.BridgeCalls, row.Launch.Bridged)
 	}
 }

@@ -44,7 +44,6 @@ import {
   type RefObject,
 } from "react";
 import {
-  Callout,
   EmptyState,
   StatusDot,
   Tag,
@@ -148,7 +147,7 @@ export function OrgChart() {
     return out;
   }, [chart]);
   usePeekNeighbours(
-    useMemo(() => order.map((s) => ({ kind: "seat" as const, id: s.handle || s.name })), [order]),
+    useMemo(() => order.map((s) => ({ kind: "seat" as const, id: s.handle })), [order]),
   );
   const step = usePeekStep();
 
@@ -169,7 +168,7 @@ export function OrgChart() {
   }, [peekId]);
   const peekSeat = useCallback(
     (seat: Seat) => {
-      const id = seat.handle || seat.name;
+      const id = seat.handle;
       if (asked.current === id) return;
       asked.current = id;
       const ref = { kind: "seat" as const, id };
@@ -258,15 +257,6 @@ export function OrgChart() {
       {/* A SAVE IS NOT AN APPLY: until this node applies the revision the
           builder saved, the projection the chart draws is the previous one. */}
       <PreviousRevisionNote />
-      {/* A HIERARCHY NOBODY DERIVED IS NOT A HIERARCHY. Without the engine's
-          `derived` block nobody reports to anybody as far as this client can
-          say, so every seat is a root and no unit has a lead to box it under. */}
-      {!index.hierarchy && (
-        <Callout variant="info">
-          This engine did not report its derived hierarchy, so the chart cannot say who reports to
-          whom: every seat is drawn on its own, and no unit is boxed under its lead.
-        </Callout>
-      )}
       {phone ? (
         <OrgOutline
           chart={chart}
@@ -424,7 +414,7 @@ function SeatRowCell({
   const human = seat.kind === "human";
   const state = human ? undefined : activityOf(agent);
   const ring = human ? undefined : ringOf(state);
-  const ref = { kind: "seat" as const, id: seat.handle || seat.name };
+  const ref = { kind: "seat" as const, id: seat.handle };
   return (
     <span className="oc-row" data-state={state}>
       <SeatAvatar
@@ -450,7 +440,7 @@ function SeatRowCell({
         </span>
         <span className="oc-place">
           {placeLine(seat)}
-          {seat.handle && <span className="sr-only"> {handleLabel(seat.handle)}</span>}
+          <span className="sr-only"> {handleLabel(seat.handle)}</span>
         </span>
         <span className="oc-state">
           <StatusDot tone={human ? "neutral" : toneOf(state)} pulse={state === "working"} />
@@ -715,7 +705,7 @@ function SeatCardNode({
           </Tag>
         </span>
         <span className="oc-place-text">{placeLine(seat)}</span>
-        {seat.handle && <span className="sr-only"> {handleLabel(seat.handle)}</span>}
+        <span className="sr-only"> {handleLabel(seat.handle)}</span>
       </span>
       <span className="oc-state">
         <StatusDot tone={human ? "neutral" : toneOf(state)} pulse={state === "working"} />

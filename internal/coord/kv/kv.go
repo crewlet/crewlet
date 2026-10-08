@@ -79,45 +79,6 @@
 // duty, and the broker then reaps a live duty early. An age longer than a
 // duty's TTL costs nothing, because no duty record is judged by the age.
 //
-// # The rolling upgrade across the duty bucket
-//
-// A build that predates the duty bucket claims duties in crewlet_leases, and
-// cannot be taught to look anywhere else. Two builds locking one duty in two
-// buckets would both hold it and both run it. So the rule, enforced here:
-//
-//	A duty claim is refused while any live record in the seat lease bucket
-//	was written by a build that predates the duty bucket.
-//
-// Every record this build writes carries its layout (record.go); a record by an
-// older build carries none. An older node renews its presence in that bucket
-// for as long as it is alive, so while any older node is up, the newer nodes
-// run no duties and the older ones run the duties they can; once the last
-// older record lapses, the newer nodes take them in the duty bucket. The older
-// build's own duty record lapses in that same bucket, so the two holdings
-// never overlap.
-//
-// The check is judged by the gates' view of both lease buckets (gate.go), once
-// per duty claim — once per tick of each duty — at the cost of a gate rather
-// than of a listing of every lease in the fleet.
-//
-// The shape is check, claim, RE-CHECK, give back, the same degradation as the
-// protocol gate below, because a KV cannot put a predicate over a second
-// bucket inside a compare-and-swap. What it cannot close is an older node that
-// was INVISIBLE when a newer node claimed (no live record at all, so already
-// treated by the fleet as dead) and then comes back and claims the duty in its
-// own bucket: the newer holder's next claim is refused and it stops, so the
-// overlap is bounded by one tick of the duty. A downgrade across this layout
-// needs a full drain, for the reason coord.ProtocolVersion gives.
-//
-// The wait is logged when it starts (coord_kv_duties_wait_for_older_build) and
-// when it ends (coord_kv_duties_resumed), because to the duty helpers above
-// this store a refusal is indistinguishable from a peer holding the duty.
-//
-// Reads follow the same rule rather than hiding the older build: Get,
-// ListLive and ListOwned report a duty an older node holds in the seat lease
-// bucket, so the fleet view shows who is actually running it during the
-// upgrade.
-//
 // # A claim is three writes, and the order carries the invariant
 //
 // The epoch must be committed to the untimed bucket BEFORE ownership is
@@ -162,13 +123,16 @@
 // shape here is check -> claim -> RE-CHECK -> release on violation. The window
 // shrinks to the interval between our check and our claim, and its consequence
 // changes from silent mixed-protocol operation to a claim we immediately give
-// back. Combined with the gate's existing asymmetry — only newer nodes wait,
-// older ones were never gated — that is a faithful degradation and a
-// deliberate difference, not an oversight. The gate judges both lease buckets,
-// because the contract counts every live lease — through a view of them kept
-// by a watch and made exact by a sequence barrier, never a listing per claim:
-// gate.go is where that is argued, with the three cheaper shapes that break
-// it.
+// back. Combined with the gate's existing asymmetry — only higher-protocol
+// nodes wait, lower ones are never gated — that is a faithful degradation and a
+// deliberate difference, not an oversight. The gate judges the seat lease
+// bucket alone, because the contract counts presence and seat leases and
+// nothing else (coord.ProtocolGateCounts) — a duty lease outlives a crashed
+// holder by up to coord.MaxDutyTTL, and counted, it kept a fleet from placing
+// a seat for that long after the last older node died mid-upgrade. It judges
+// it through a view kept by a watch and made exact by a sequence barrier,
+// never a listing per claim: gate.go is where that is argued, with the three
+// cheaper shapes that break it.
 //
 // # Every listing is ONE CERTIFIED PASS, and never the client's ListKeys
 //
@@ -277,7 +241,6 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -438,8 +401,7 @@ type lane struct {
 type Store struct {
 	js jetstream.JetStream
 
-	// leases holds seat and presence leases, and a duty an older build
-	// claimed before the duty bucket existed.
+	// leases holds seat and presence leases.
 	leases *lane
 	// duties holds every duty lease this build claims.
 	duties *lane
@@ -450,14 +412,9 @@ type Store struct {
 
 	ttl time.Duration
 
-	// dutiesWaiting is whether this store's last layout check found a node of
-	// an older build live, so the wait is reported when it starts and when it
-	// ends rather than on every claim. See olderLayoutHolds.
-	dutiesWaiting atomic.Bool
-
-	// gate is the two gates' view of both lease buckets (gate.go), which
-	// is what every gated claim, every duty claim and FleetProtocolFloor
-	// judge instead of listing the fleet's leases.
+	// gate is the protocol gate's view of the seat lease bucket (gate.go),
+	// which is what every gated claim and FleetProtocolFloor judge instead
+	// of listing the fleet's leases.
 	gate *gateView
 }
 
@@ -615,7 +572,7 @@ func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Store, erro
 // create-else-observe handling of a peer that won the race, and the same
 // refusal of a bucket replicated below what this node is configured for.
 //
-// # The one value this store still applies to a bucket that exists
+// # The one value this store applies to a bucket that exists
 //
 // Adoption is the rule everywhere else because every other difference is a
 // PREFERENCE, and the node that booted last does not get to redefine one. This
@@ -638,13 +595,26 @@ func openDuties(ctx context.Context, js jetstream.JetStream, cfg Config) (jetstr
 	if err != nil {
 		return nil, fmt.Errorf("coord/kv: open %s: %w", name, err)
 	}
+	return raiseAge(ctx, js, cfg.Clustered, bucket, want, "duty lease")
+}
+
+// raiseAge raises a bucket's age to want.TTL when it is younger, and never
+// lowers it — the ONE value this store applies to a bucket that already
+// exists, and only to the duty leases, whose records each carry a deadline of
+// their own: the age is not a preference there but the CEILING on the
+// deadlines the bucket can honour (see [openDuties]), and an age longer than
+// any one record's deadline costs nothing, because no record is judged by the
+// age. `holds` names what the bucket keeps, for the error and the log.
+func raiseAge(ctx context.Context, js jetstream.JetStream, clustered bool,
+	bucket jetstream.KeyValue, want jetstream.KeyValueConfig, holds string) (jetstream.KeyValue, error) {
+
 	facts, err := readBucket(ctx, bucket)
 	if err != nil {
 		return nil, err
 	}
-	// An age of zero is no age at all, which already outlives every duty:
+	// An age of zero is no age at all, which already outlives every record:
 	// raising it would SHORTEN it.
-	if facts.age == 0 || facts.age >= coord.MaxDutyTTL {
+	if facts.age == 0 || facts.age >= want.TTL {
 		return bucket, nil
 	}
 	// THE REPLICA COUNT IN FORCE, never this node's. openBucket has already
@@ -659,10 +629,10 @@ func openDuties(ctx context.Context, js jetstream.JetStream, cfg Config) (jetstr
 	// neither, so it ran under nats.go's undeclared five-second default
 	// while its siblings had minutes.
 	writeCtx, cancelWrite := context.WithTimeout(ctx,
-		jsprovision.Clustered(cfg.Clustered).Budget())
+		jsprovision.Clustered(clustered).Budget())
 	defer cancelWrite()
 	var updated jetstream.KeyValue
-	err = jsprovision.Place(writeCtx, jsprovision.Clustered(cfg.Clustered).AskTerm(),
+	err = jsprovision.Place(writeCtx, jsprovision.Clustered(clustered).AskTerm(),
 		func(ctx context.Context) error {
 			var e error
 			updated, e = js.UpdateKeyValue(ctx, want)
@@ -670,10 +640,10 @@ func openDuties(ctx context.Context, js jetstream.JetStream, cfg Config) (jetstr
 		}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("coord/kv: raise the age of %s from %v to %v so it can hold a "+
-			"duty lease for its full TTL: %w", name, facts.age, coord.MaxDutyTTL, err)
+			"%s for its full TTL: %w", want.Bucket, facts.age, want.TTL, holds, err)
 	}
-	log.InfoContext(ctx, "coord_kv_duty_bucket_age_raised", "bucket", name,
-		"from", facts.age, "to", coord.MaxDutyTTL)
+	log.InfoContext(ctx, "coord_kv_bucket_age_raised", "bucket", want.Bucket,
+		"holds", holds, "from", facts.age, "to", want.TTL)
 	return updated, nil
 }
 
@@ -775,20 +745,15 @@ func (s *Store) laneFor(resource string) *lane {
 	return s.leases
 }
 
-// lanesFor is the buckets a listing of one class has to read, in the order a
-// resource listed twice is resolved by.
-//
-// Only the duty class is in two: the duty bucket, where this build writes one,
-// and the seat lease bucket after it, where a node of an older build still
-// holds one during the rolling upgrade the package doc describes. Every other
-// class — seats and presence — lives in the seat
-// lease bucket alone, so each membership read on a heartbeat costs what it did
+// laneOf is the one bucket a listing of one class reads: the class lives
+// wherever laneFor writes it. Seats and presence live in the seat lease
+// bucket alone, so each membership read on a heartbeat costs what it did
 // before duties had a bucket of their own.
-func (s *Store) lanesFor(class coord.Class) []*lane {
+func (s *Store) laneOf(class coord.Class) *lane {
 	if class == coord.ClassWorker {
-		return []*lane{s.duties, s.leases}
+		return s.duties
 	}
-	return []*lane{s.leases}
+	return s.leases
 }
 
 // --- the lease surface ----------------------------------------------------
@@ -823,12 +788,12 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 			// seats its peers hold from starting the gate view at all.
 			return nil, coord.RefusedHeld, nil
 		}
-		// The gate, fleet-wide: refuse while ANY live lease is held at an
-		// older protocol. The disagreement is about what HOLDING A LEASE
-		// means, so it is not scoped to the resource being claimed.
+		// The gate, fleet-wide: refuse while any live presence or seat
+		// lease (coord.ProtocolGateCounts) is held at a lower protocol.
+		// The disagreement is about what HOLDING A SEAT means, so it is
+		// not scoped to the resource being claimed.
 		// Asymmetric by construction — it only ever looks for a LOWER
-		// protocol, so an older node (which has no such check to run) is
-		// never blocked.
+		// protocol, so a lower-protocol node is never blocked.
 		if !opts.Ungated {
 			blocked, gateErr := s.gate.blocked(ctx, protocol)
 			if gateErr != nil {
@@ -851,18 +816,6 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 			// owner's lease, and the next call takes it.
 			continue
 		}
-		if l == s.duties {
-			// Checked only once no peer holds the duty here, so a node
-			// that lost the duty to a peer judges no gate for it.
-			waiting, layoutErr := s.olderLayoutHolds(ctx)
-			if layoutErr != nil {
-				return nil, "", layoutErr
-			}
-			if waiting {
-				return nil, coord.RefusedLayout, nil
-			}
-		}
-
 		value := leaseValue{
 			Resource:  resource,
 			Owner:     opts.Owner,
@@ -870,7 +823,6 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 			Protocol:  protocol,
 			Preferred: opts.Preferred,
 			Meta:      opts.Meta,
-			Layout:    layoutDutyLane,
 		}
 		if mine != nil {
 			// An empty payload keeps what is there — a rule about the
@@ -1058,15 +1010,15 @@ func (s *Store) claimedAt(ctx context.Context, l *lane, resource string, rev uin
 	return kve.Created().UTC(), false, nil
 }
 
-// settle reads the record back and re-runs the gates.
+// settle reads the record back and re-runs the protocol gate.
 //
 // The read-back is not paranoia: coord.Lease.ExpiresAt must be the STORE's
 // deadline, and the write only returns a revision number. Reading the record
 // we just wrote is how the server's own timestamp for it reaches the caller.
-// On the gated path the protocol gate is judged again AFTER the write, and on
-// a duty the layout gate is too — each through the view's barrier (gate.go),
-// which waits for every write before this re-check to be in the view, so a
-// record an older node wrote before our claim cannot be missed by it.
+// On the gated path the protocol gate is judged again AFTER the write, through
+// the view's barrier (gate.go), which waits for every write before this
+// re-check to be in the view, so a record a lower-protocol node wrote before
+// our claim cannot be missed by it.
 func (s *Store) settle(
 	ctx context.Context,
 	l *lane,
@@ -1094,45 +1046,34 @@ func (s *Store) settle(
 			return nil, "", err
 		}
 		if blocked {
-			if err := s.yield(ctx, resource, want, protocol, fresh, "coord_kv_claim_yielded_to_older_peer"); err != nil {
+			if err := s.yield(ctx, resource, want, protocol, fresh); err != nil {
 				return nil, "", err
 			}
 			return nil, coord.RefusedProtocol, nil
 		}
 	}
-	if l == s.duties {
-		waiting, err := s.olderLayoutHolds(ctx)
-		if err != nil {
-			return nil, "", err
-		}
-		if waiting {
-			if err := s.yield(ctx, resource, want, protocol, fresh, "coord_kv_duty_yielded_to_older_build"); err != nil {
-				return nil, "", err
-			}
-			return nil, coord.RefusedLayout, nil
-		}
-	}
 	return mine.lease(), "", nil
 }
 
-// yield gives back a claim a gate's re-check refused, when the claim is new.
+// yield gives back a claim the protocol gate's re-check refused, when the
+// claim is new.
 //
 // This is the whole difference from Postgres's atomic subquery: the window did
 // not close, it just changed what happens in it.
 //
-// A re-claim of a lease this owner already held is NOT released: the gates
-// exist to stop a newer node TAKING work beside an older one, and dropping a
-// seat mid-turn would not prevent anything. The refusal still propagates,
-// which is what stops the next sweep, and the next tick of a duty.
-func (s *Store) yield(ctx context.Context, resource string, want leaseValue, protocol int, fresh bool, event string) error {
+// A re-claim of a lease this owner already held is NOT released: the protocol
+// gate exists to stop a higher-protocol node TAKING work beside a lower one,
+// and dropping a seat mid-turn would not prevent anything. The refusal still
+// propagates, which is what stops the next sweep.
+func (s *Store) yield(ctx context.Context, resource string, want leaseValue, protocol int, fresh bool) error {
 	if !fresh {
 		return nil
 	}
 	if _, err := s.Release(ctx, resource, want.Owner, want.Epoch); err != nil {
 		return err
 	}
-	log.InfoContext(ctx, event, "resource", resource, "owner", want.Owner, "epoch", want.Epoch,
-		"protocol", protocol)
+	log.InfoContext(ctx, "coord_kv_claim_yielded_to_older_peer", "resource", resource, "owner", want.Owner,
+		"epoch", want.Epoch, "protocol", protocol)
 	return nil
 }
 
@@ -1225,7 +1166,6 @@ func (s *Store) giveBack(ctx context.Context, l *lane, resource string, claiming
 			return false, nil
 		}
 		tomb.Owner, tomb.Claim = "", ""
-		tomb.Layout = layoutDutyLane
 		tomb.TTLNanos = int64(l.maxTTL)
 		data, err := encodeValue(tomb)
 		if err != nil {
@@ -1285,7 +1225,6 @@ func (s *Store) Renew(ctx context.Context, resource, owner string, epoch int64, 
 		}
 		value := e.value
 		value.TTLNanos = int64(ttl)
-		value.Layout = layoutDutyLane
 		data, err := encodeValue(value)
 		if err != nil {
 			return false, err
@@ -1337,7 +1276,6 @@ func (s *Store) Release(ctx context.Context, resource, owner string, epoch int64
 		}
 		tomb := e.value
 		tomb.Owner = ""
-		tomb.Layout = layoutDutyLane
 		// The tombstone claims the bucket's full TTL so no reader needs a
 		// clock to judge it — it is unheld because its owner is empty, and
 		// the bucket's MaxAge reaps it in its own time. Keeping the hint
@@ -1366,29 +1304,15 @@ func (s *Store) Release(ctx context.Context, resource, owner string, epoch int64
 // lets a caller act on one without re-checking a deadline against its own wall
 // clock. So a lapsed or released record reads as nil, exactly as an unclaimed
 // one does.
-//
-// A duty nobody holds in the duty bucket is also looked for in the seat lease
-// bucket, where a node of an older build holds it during a rolling upgrade:
-// answering nil there would report a duty free that another node is running.
 func (s *Store) Get(ctx context.Context, resource string) (*coord.Lease, error) {
 	if err := coord.CheckResource(resource); err != nil {
 		return nil, err
 	}
-	l := s.laneFor(resource)
-	clk := s.newClock()
-	lease, err := s.getFrom(ctx, l, resource, clk)
-	if err != nil || lease != nil || l != s.duties {
-		return lease, err
-	}
-	return s.getFrom(ctx, s.leases, resource, clk)
-}
-
-func (s *Store) getFrom(ctx context.Context, l *lane, resource string, clk *clock) (*coord.Lease, error) {
-	e, err := s.readOne(ctx, l, resource)
+	e, err := s.readOne(ctx, s.laneFor(resource), resource)
 	if err != nil || e == nil {
 		return nil, err
 	}
-	live, err := s.tenure(ctx, *e, clk)
+	live, err := s.tenure(ctx, *e, s.newClock())
 	if err != nil || !live {
 		return nil, err
 	}
@@ -1413,20 +1337,17 @@ func (s *Store) ListOwned(ctx context.Context, owner string) ([]coord.Lease, err
 // and therefore a subject token of its key, so each scan asks for that class
 // and nothing else, where it used to read every lease in the bucket (seats and
 // duties alike) to count the nodes. And only the duty class opens the duty
-// bucket at all; see [Store.lanesFor].
+// bucket at all; see [Store.laneOf].
 func (s *Store) ListLive(ctx context.Context, class coord.Class) ([]coord.Lease, error) {
 	scan := func(ctx context.Context, l *lane) ([]entry, error) { return s.scanIn(ctx, l, class) }
 	// Nothing is filtered here: the broker has already answered with this
 	// class and no other, which is the whole point of narrowing it there.
-	return s.listLive(ctx, s.lanesFor(class), scan, func(entry) bool { return true })
+	return s.listLive(ctx, []*lane{s.laneOf(class)}, scan, func(entry) bool { return true })
 }
 
-// listLive reads the live leases kept by keep across lanes.
-//
-// Lanes are read in order and a resource already listed is skipped, so the
-// duty bucket, read first, wins over an older build's record of the same duty
-// in the seat lease bucket. Both can be live only inside the one-tick window
-// the package doc describes, and the duty bucket's holder is this build's.
+// listLive reads the live leases kept by keep across lanes. The lanes hold
+// disjoint classes — a resource is written only where laneFor puts it — so
+// no resource is listed twice.
 //
 // `scan` is how each lane is read, because the two callers narrow differently:
 // a class listing asks the broker for that class alone, and a listing by owner
@@ -1434,7 +1355,6 @@ func (s *Store) ListLive(ctx context.Context, class coord.Class) ([]coord.Lease,
 func (s *Store) listLive(ctx context.Context, lanes []*lane,
 	scan func(context.Context, *lane) ([]entry, error), keep func(entry) bool) ([]coord.Lease, error) {
 	clk := s.newClock()
-	seen := map[string]bool{}
 	var out []coord.Lease
 	for _, l := range lanes {
 		all, err := scan(ctx, l)
@@ -1442,7 +1362,7 @@ func (s *Store) listLive(ctx context.Context, lanes []*lane,
 			return nil, err
 		}
 		for _, e := range all {
-			if seen[e.resource] || !keep(e) {
+			if !keep(e) {
 				continue
 			}
 			live, err := s.tenure(ctx, e, clk)
@@ -1450,7 +1370,6 @@ func (s *Store) listLive(ctx context.Context, lanes []*lane,
 				return nil, err
 			}
 			if live {
-				seen[e.resource] = true
 				out = append(out, *e.lease())
 			}
 		}
@@ -1475,8 +1394,7 @@ func (s *Store) listLive(ctx context.Context, lanes []*lane,
 // writes that record BEFORE the lease record, so the epochs bucket is never
 // behind.
 //
-// ONE bucket whichever lane the lease itself is in, which is also what keeps a
-// duty's epoch monotonic across the move into the duty bucket.
+// ONE bucket whichever lane the lease itself is in.
 func (s *Store) PreferredResources(ctx context.Context, class coord.Class, nodeID string) (map[string]struct{}, error) {
 	records, err := s.scanResourcesIn(ctx, class)
 	if err != nil {
@@ -1491,20 +1409,22 @@ func (s *Store) PreferredResources(ctx context.Context, class coord.Class, nodeI
 	return out, nil
 }
 
-// FleetProtocolFloor returns the lowest protocol among live leases, and
-// whether there were any. It is the observability half of the gate: a claim
+// FleetProtocolFloor returns the lowest protocol among the live leases the
+// gate counts (presence and seats, coord.ProtocolGateCounts), and whether
+// there were any. It is the observability half of the gate: a claim
 // refused [coord.RefusedProtocol] says a lease at a lower protocol stopped it,
 // and this names that protocol. It is asked after such a refusal and never
 // otherwise — a sweep whose seats were merely held learns that from the
 // refusal ([coord.RefusedHeld]) and judges no gate.
 //
-// It counts what the GATE counts (held records in both lease buckets,
-// including one still in the claiming state) rather than what Get returns.
+// It counts what the GATE counts (held presence and seat records, including
+// one still in the claiming state) rather than what Get or a listing returns.
 // The two questions differ, and this one exists to explain a refusal: a floor
 // that omitted the very record that caused one would send an operator looking
-// for a peer that is not there.
+// for a peer that is not there, and one that counted a duty the gate passes
+// over would name an older build nothing is being refused for.
 //
-// Judged by the gates' view (gate.go), so it costs what a gate costs rather
+// Judged by the gate's view (gate.go), so it costs what a gate costs rather
 // than a listing of the fleet's leases.
 func (s *Store) FleetProtocolFloor(ctx context.Context) (int, bool, error) {
 	return s.gate.floor(ctx)
@@ -1525,10 +1445,6 @@ func (s *Store) FleetProtocolFloor(ctx context.Context) (int, bool, error) {
 // last DELIBERATE placement, not who happens to hold the resource. That is also
 // how a hint outlives the lease key it was set through — this record has no
 // TTL, and the lease bucket's does the reaping.
-//
-// A duty's counter is the same record whichever lease bucket the duty was
-// claimed in, so a duty that moves from an older build's bucket to the duty
-// bucket keeps a monotonic epoch across the move.
 func (s *Store) bumpEpoch(ctx context.Context, resource, preferred string) (int64, string, error) {
 	key := encodeResource(resource)
 
@@ -1638,46 +1554,14 @@ type snapshot struct {
 // it, so it must be the newest the quorum holds: a copy one write behind
 // hands settle the claiming record this very call replaced, which read as
 // "superseded" and answered a refusal for a lease the store held under this
-// owner until its TTL. What the gates judge is not in the snapshot at all: the
-// gates' view answers them (gate.go).
+// owner until its TTL. What the gate judges is not in the snapshot at all: the
+// gate's view answers it (gate.go).
 func (s *Store) readForClaim(ctx context.Context, l *lane, resource string) (snapshot, error) {
 	mine, err := s.readOne(ctx, l, resource)
 	if err != nil {
 		return snapshot{}, err
 	}
 	return snapshot{mine: mine, clock: s.newClock()}, nil
-}
-
-// olderLayoutHolds reports whether a record written by a build that predates
-// the duty bucket is live in the seat lease bucket, which is the rolling-
-// upgrade rule in the package doc.
-//
-// THE WAIT IS REPORTED, once when it starts and once when it ends. To a duty
-// helper a refusal reads exactly like a peer holding the duty, so without this
-// a rollout left with one older node running would have every newer node run
-// no scheduler tick, no retention sweep, no integration pass and no curator
-// pass, and say nothing. The seat host's
-// seat_claims_blocked_by_older_protocol is the same warning for seats, and it
-// repeats on every placement sweep. A duty cannot afford that: it is claimed
-// per tick, and the integration loop claims once per surface.
-func (s *Store) olderLayoutHolds(ctx context.Context) (bool, error) {
-	waiting, err := s.gate.olderLayout(ctx)
-	if err != nil {
-		return false, err
-	}
-	switch {
-	case waiting && s.dutiesWaiting.CompareAndSwap(false, true):
-		log.WarnContext(ctx, "coord_kv_duties_wait_for_older_build",
-			"detail", "a node of a build that keeps fleet duties in the seat lease bucket is still "+
-				"live, so this node runs no fleet duty (scheduler, sandbox waiter, maintenance, "+
-				"integration reconcile, skill curator) until that node stops and its leases lapse. "+
-				"Finish the rolling upgrade; do not roll back without stopping every newer node first.")
-	case !waiting && s.dutiesWaiting.CompareAndSwap(true, false):
-		log.InfoContext(ctx, "coord_kv_duties_resumed",
-			"detail", "no node of an older build is live any more; fleet duties are claimed in the "+
-				"duty bucket again")
-	}
-	return waiting, nil
 }
 
 // readOne reads a single lease record from a bucket, as the stream LEADER holds

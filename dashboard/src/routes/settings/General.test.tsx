@@ -15,6 +15,7 @@ import { General } from "./General.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+import { withDerived } from "~/test/org.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -58,7 +59,7 @@ describe("the charter", () => {
 
   test("says what the chart says once it has, the empty parts included", () => {
     const store = mount();
-    act(() => store.applyOrg({ name: "Acme", mission: "Ship it", roles: [] }));
+    act(() => store.applyOrg(withDerived({ name: "Acme", mission: "Ship it", roles: [] })));
     expect(screen.getByText("Ship it")).toBeDefined();
     expect(screen.getByText("No policies are set")).toBeDefined();
     expect(screen.queryByText("Loading the company's charter")).toBeNull();

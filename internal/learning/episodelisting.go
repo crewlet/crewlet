@@ -12,20 +12,19 @@ import (
 
 // A seat's episodes LISTED, and one of them READ WHOLE.
 //
-// Two of an episode's texts are bounded by nothing a row holds to: what the turn
-// was ASKED, stored whole since node migration 0042 and bounded only by the
-// event that delivered it, and what it DID, a review's account or the turn's
-// whole final answer. A listing shows each as one line, and a listing that read
-// them whole read megabytes from the store, and sent them across the fleet, to
-// draw one — and fifty of them, one page, could be more than the transport
-// carries, so the page itself was refused. So a listing reads each as its
-// OPENING with the whole text's size beside it ([Episodes.Listing]), and the
-// whole row is one read of its own ([Episodes.Get]): the record keeps every
-// byte, and only the render is bounded. The opening is a PREVIEW of what the
-// reader can open, which is textcut's one case for such a cut; it carries no
-// marker in its text because the size beside it is the marker, and a screen
-// draws it from that rather than from a character that would read as the
-// turn's own.
+// Two of an episode's texts are bounded by nothing a row holds to: what the
+// turn was ASKED, stored whole and bounded only by the event that delivered it,
+// and what it DID, a review's account or the turn's whole final answer. A
+// listing shows each as one line, and a listing that read them whole read
+// megabytes from the store, and sent them across the fleet, to draw one — and
+// fifty of them, one page, could be more than the transport carries, so the
+// page itself was refused. So a listing reads each as its OPENING with the
+// whole text's size beside it ([Episodes.Listing]), and the whole row is one
+// read of its own ([Episodes.Get]): the record keeps every byte, and only the
+// render is bounded. The opening is a PREVIEW of what the reader can open,
+// which is textcut's one case for such a cut; it carries no marker in its text
+// because the size beside it is the marker, and a screen draws it from that
+// rather than from a character that would read as the turn's own.
 
 // ListedEpisode is one episode as a listing reads it: the row, but its vector,
 // with its ask and its account cut to an opening, and the size of each whole.

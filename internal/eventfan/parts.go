@@ -3,8 +3,9 @@ package eventfan
 import (
 	"context"
 	"errors"
+	"slices"
+	"time"
 
-	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
@@ -19,6 +20,12 @@ var logger = logging.Get("eventfan")
 // node's rows stop being known), a trace and a turn say how many rows the node
 // HOLDS (so the merged view can say it is cut), and a turn carries its newest
 // rows beside its oldest (so a long turn keeps its ending).
+//
+// EVERY PART IS READ AT ONE INSTANT, the asker's: every read a part makes is
+// floored at it, so a count asked beside the rows it counts is floored where
+// they are — read at two instants, a row crossing the floor between the two
+// made the count come back short of the rows beside it, and a long turn
+// whose count fell to the cap was reported whole and lost its ending.
 
 // listPart is one node's page of a keyset listing, newest first.
 type listPart struct {
@@ -59,42 +66,13 @@ func listPartOf(ctx context.Context, log *store.EventLog, q store.ListQuery) (li
 	return listPart{Rows: rows, Full: len(rows) >= q.Limit}, nil
 }
 
-// seriesPart is one node's time axis, and which types it left out of it.
-//
-// THE AXIS'S OWN FIELDS AT THE TOP LEVEL, by embedding, so the reply is the
-// histogram an older asker decodes, with one field beside it that it ignores.
-type seriesPart struct {
-	store.EventHistogram
-
-	// KeptOut is every type this node's own build keeps out of the feed —
-	// what it left out of an axis asked for the feed's rows, and nothing on
-	// one that was not. ABSENT IS AN ANSWER: a build that does not send it
-	// does not know `feed_only` and left nothing out, which is exactly what
-	// its bars count. The asker takes out of them every type IT keeps out
-	// that this does not list ([Fleet.Histogram]), so a peer is narrowed by
-	// the asker's rule whichever build it runs.
-	KeptOut []string `json:"kept_out,omitempty"`
-}
-
-func seriesPartOf(ctx context.Context, log *store.EventLog, q store.HistogramQuery) (seriesPart, error) {
-	h, err := log.Histogram(ctx, q)
-	if err != nil {
-		return seriesPart{}, err
-	}
-	part := seriesPart{EventHistogram: h}
-	if q.FeedOnly {
-		part.KeptOut = events.Unfed()
-	}
-	return part, nil
-}
-
 // eventPart is one node's copy of one event, or nothing.
 type eventPart struct {
 	Event *store.EventRecord `json:"event,omitempty"`
 }
 
-func eventPartOf(ctx context.Context, log *store.EventLog, id string) (eventPart, error) {
-	rec, err := log.ByID(ctx, id)
+func eventPartOf(ctx context.Context, log *store.EventLog, id string, at time.Time) (eventPart, error) {
+	rec, err := log.ByID(ctx, id, at)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		// NOT HELD HERE is an answer, and the ordinary one: an event
@@ -106,51 +84,117 @@ func eventPartOf(ctx context.Context, log *store.EventLog, id string) (eventPart
 	return eventPart{Event: &rec}, nil
 }
 
-// tracePart is one node's rows of one trace, oldest first, and how many it
-// holds.
+// tracePart is one node's rows of one trace, oldest first, how many of them it
+// keeps, and the ones it holds unsettled.
 type tracePart struct {
 	Rows []store.EventRecord `json:"rows"`
 
-	// Total is how many rows this node holds of the trace, whatever the
-	// read returned — asked only when the read filled, since a read that
-	// did not fill holds every row there is.
+	// Total is how many rows of the trace this node KEEPS, whatever the read
+	// returned — the rows it holds, asked only when the read filled, since a
+	// read that did not fill holds every row there is, less the Unsettled
+	// ones.
 	Total int `json:"total"`
+
+	// Unsettled is the trace's rows this node holds of a custody batch it
+	// has written and not settled, named rather than counted (see the
+	// package doc).
+	Unsettled []store.UnsettledRow `json:"unsettled,omitempty"`
 }
+
+// held is how many rows of the trace the node holds, kept or not.
+func (p tracePart) held() int { return p.Total + len(p.Unsettled) }
 
 func (p tracePart) rows() int { return len(p.Rows) }
 
 func (p tracePart) keep(n int) any {
-	return tracePart{Rows: p.Rows[:n], Total: p.Total}
+	return tracePart{Rows: p.Rows[:n], Total: p.Total, Unsettled: p.Unsettled}
 }
 
-func tracePartOf(ctx context.Context, log *store.EventLog, id string) (tracePart, error) {
-	rows, err := log.Trace(ctx, id)
+// unsent reports whether the node holds rows of the trace it did not send —
+// its read stopped at the cap, or its reply was cut to fit the transport —
+// and, when it does, the last row it sent, after which every one of them
+// lies: nil when it sent none, which is what [MergeTrace] needs to place
+// nothing past it.
+func (p tracePart) unsent() (last *store.EventRecord, held bool) {
+	if p.held() <= len(p.Rows) {
+		return nil, false
+	}
+	return lastOf(p.Rows), true
+}
+
+// lastOf is the last of some rows, or nil when there are none.
+func lastOf(rows []store.EventRecord) *store.EventRecord {
+	if len(rows) == 0 {
+		return nil
+	}
+	last := rows[len(rows)-1]
+	return &last
+}
+
+// tracePartOf reads one node's part of a trace from ONE SNAPSHOT of its log:
+// the rows, how many it holds, and which of those are unsettled — read apart, a
+// custody batch settled between two of them is counted by one and named by the
+// other (see internal/store's unsettled.go).
+func tracePartOf(ctx context.Context, log *store.EventLog, id string, at time.Time) (tracePart, error) {
+	var part tracePart
+	err := log.Snapshot(ctx, func(s store.EventSnapshot) error {
+		rows, err := s.Trace(ctx, id, at)
+		if err != nil {
+			return err
+		}
+		part = tracePart{Rows: rows, Total: len(rows)}
+		if len(rows) >= store.MaxTraceEvents {
+			// ASKED, NOT INFERRED: a trace of exactly the cap holds every
+			// row it has. DEGRADES, because the rows are in hand and a
+			// missing caution badge beats a missing screen.
+			total, countErr := s.TraceEventCount(ctx, id, at)
+			if countErr != nil {
+				logger.WarnContext(ctx, "trace_extent_unavailable", "trace", id, "error", countErr)
+			} else {
+				part.Total = total
+			}
+		}
+		named, err := s.Unsettled(ctx, "trace_id", id, at)
+		if err != nil {
+			return err
+		}
+		if len(named) > 0 {
+			part.Total = max(part.Total-len(named), 0)
+			part.Unsettled = named
+		}
+		return nil
+	})
 	if err != nil {
 		return tracePart{}, err
-	}
-	part := tracePart{Rows: rows, Total: len(rows)}
-	if len(rows) >= store.MaxTraceEvents {
-		// ASKED, NOT INFERRED: a trace of exactly the cap holds every
-		// row it has. DEGRADES, because the rows are in hand and a
-		// missing caution badge beats a missing screen.
-		total, err := log.TraceEventCount(ctx, id)
-		if err != nil {
-			logger.WarnContext(ctx, "trace_extent_unavailable", "trace", id, "error", err)
-		} else {
-			part.Total = total
-		}
 	}
 	return part, nil
 }
 
 // turnPart is one node's share of one turn: its oldest rows, its newest ones
-// when the oldest did not reach them, how many it holds, and the traces it
+// when the oldest did not reach them, how many it keeps and the ones it holds
+// unsettled ([tracePart]'s two fields, for its reason), and the traces it
 // touched with when.
 type turnPart struct {
-	Head    []store.EventRecord `json:"head"`
-	Closing []store.EventRecord `json:"closing,omitempty"`
-	Total   int                 `json:"total"`
-	Traces  []store.TurnTrace   `json:"traces"`
+	Head      []store.EventRecord  `json:"head"`
+	Closing   []store.EventRecord  `json:"closing,omitempty"`
+	Total     int                  `json:"total"`
+	Traces    []store.TurnTrace    `json:"traces"`
+	Unsettled []store.UnsettledRow `json:"unsettled,omitempty"`
+}
+
+// held is how many rows of the turn the node holds, kept or not.
+func (p turnPart) held() int { return p.Total + len(p.Unsettled) }
+
+// unsent reports whether the node holds rows of the turn it sent in neither
+// its opening nor its ending — its read stopped at the cap with a gap before
+// the ending, or its reply was cut to fit the transport — and, when it does,
+// the last row of the opening it sent, after which every one of them lies:
+// nil when it sent no opening, for [tracePart.unsent]'s reason.
+func (p turnPart) unsent() (last *store.EventRecord, held bool) {
+	if p.held() <= len(union(p.Head, p.Closing)) {
+		return nil, false
+	}
+	return lastOf(p.Head), true
 }
 
 // rows counts the HEAD only: the closing rows are the turn's ending — where
@@ -215,8 +259,24 @@ func (p turnPart) keep(n int) any {
 // numbers.
 const TurnClosingEvents = 32
 
-func turnPartOf(ctx context.Context, log *store.EventLog, id string) (turnPart, error) {
-	head, err := log.Turn(ctx, id)
+// turnPartOf reads one node's share of a turn from ONE SNAPSHOT of its log, for
+// [tracePartOf]'s reason.
+func turnPartOf(ctx context.Context, log *store.EventLog, id string, at time.Time) (turnPart, error) {
+	var part turnPart
+	err := log.Snapshot(ctx, func(s store.EventSnapshot) error {
+		var err error
+		part, err = readTurnPart(ctx, s, id, at)
+		return err
+	})
+	if err != nil {
+		return turnPart{}, err
+	}
+	return part, nil
+}
+
+// readTurnPart is [turnPartOf] inside its snapshot.
+func readTurnPart(ctx context.Context, log store.EventSnapshot, id string, at time.Time) (turnPart, error) {
+	head, err := log.Turn(ctx, id, at)
 	if err != nil {
 		return turnPart{}, err
 	}
@@ -230,13 +290,13 @@ func turnPartOf(ctx context.Context, log *store.EventLog, id string) (turnPart, 
 	// rows are in hand, and failing them over a count turns the largest
 	// turns into `query_failed`.
 	if len(head) >= store.MaxTurnEvents {
-		total, countErr := log.TurnEventCount(ctx, id)
+		total, countErr := log.TurnEventCount(ctx, id, at)
 		switch {
 		case countErr != nil:
 			logger.WarnContext(ctx, "turn_extent_unavailable", "turn", id, "error", countErr)
 		case total > len(head):
 			part.Total = total
-			closing, closingErr := log.TurnClosing(ctx, id, TurnClosingEvents)
+			closing, closingErr := log.TurnClosing(ctx, id, TurnClosingEvents, at)
 			if closingErr != nil {
 				logger.WarnContext(ctx, "turn_ending_unavailable", "turn", id, "error", closingErr)
 			} else {
@@ -246,29 +306,76 @@ func turnPartOf(ctx context.Context, log *store.EventLog, id string) (turnPart, 
 	}
 	// EVERY TRACE THIS TURN TOUCHED, asked rather than derived from rows a
 	// cap may have dropped. Degrades like the reads above.
-	traces, tracesErr := log.TurnTraces(ctx, id)
+	traces, tracesErr := log.TurnTraces(ctx, id, at)
 	if tracesErr != nil {
 		logger.WarnContext(ctx, "turn_traces_unavailable", "turn", id, "error", tracesErr)
 	} else {
 		part.Traces = traces
 	}
+	named, err := log.Unsettled(ctx, "turn_id", id, at)
+	if err != nil {
+		return turnPart{}, err
+	}
+	if len(named) > 0 {
+		part.Total = max(part.Total-len(named), 0)
+		part.Unsettled = named
+	}
 	return part, nil
 }
 
 // turnsPart is one node's page of turn partials — or, on the second scatter,
-// its share of exactly the turns named.
+// its share of exactly the turns named, and which of them its page lists.
 type turnsPart struct {
 	Turns []store.TurnPartial `json:"turns"`
 	Full  bool                `json:"full"`
+
+	// Listed is, on the second scatter, which of the named turns this node's
+	// PAGE selects — its share starts in the window and passes the page's
+	// turn-level filters ([store.EventLog.ListedTurns]) — so the asker can
+	// page each turn by a start some node's listing reaches ([Fleet.Turns]).
+	Listed []string `json:"listed,omitempty"`
+
+	// Unsettled is, on the second scatter, the named turns' rows this node
+	// holds of a custody batch it has written and not settled — which the
+	// shares' sums leave out, and name instead (see the package doc).
+	Unsettled []store.UnsettledRow `json:"unsettled,omitempty"`
 }
 
 func (p turnsPart) rows() int { return len(p.Turns) }
 
+// keep cuts the turns and keeps the judgement: which named turns the page
+// lists is the same answer whichever shares fit the transport. The rows named
+// for a turn that was cut go with it: the merge has no share of that turn from
+// this node to add them to.
 func (p turnsPart) keep(n int) any {
-	return turnsPart{Turns: p.Turns[:n], Full: true}
+	kept := map[string]bool{}
+	for _, t := range p.Turns[:n] {
+		kept[t.TurnID] = true
+	}
+	names := slices.DeleteFunc(slices.Clone(p.Unsettled), func(r store.UnsettledRow) bool {
+		return !kept[r.TurnID]
+	})
+	if len(names) == 0 {
+		names = nil
+	}
+	return turnsPart{Turns: p.Turns[:n], Full: true, Listed: p.Listed, Unsettled: names}
 }
 
 func turnsPartOf(ctx context.Context, log *store.EventLog, q store.TurnQuery) (turnsPart, error) {
+	if len(q.IDs) > 0 {
+		// THE SECOND SCATTER: this node's share of the named turns, which
+		// of them its page lists, and the rows of them it holds unsettled,
+		// from one snapshot ([store.EventLog.TurnShares]).
+		shares, err := log.TurnShares(ctx, q)
+		if err != nil {
+			return turnsPart{}, err
+		}
+		part := turnsPart{Turns: shares.Partials, Listed: shares.Listed}
+		if len(shares.Unsettled) > 0 {
+			part.Unsettled = shares.Unsettled
+		}
+		return part, nil
+	}
 	// FULL ONLY WHERE THE LOG SAID SO. A page that merely filled was read as
 	// one with more behind it, so a seat whose history is a multiple of the
 	// page got a cursor onto an empty page — the store asks one row past the

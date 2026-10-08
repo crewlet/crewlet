@@ -827,6 +827,113 @@ func TestARecordDeliveredToARequestTheClientGaveUpOnIsTakenByTheNext(t *testing.
 	}
 }
 
+// A STATUS ENDS ONLY THE REQUEST IT NAMES, never the request standing after it.
+//
+// The server answers a request it has finished with a status the client may
+// already have stopped counting the request for: a `409 Batch Completed`
+// follows the record that filled a byte-bounded batch, and a `408` reaches a
+// request presumed gone. Counted against the oldest request, a status that
+// arrived once the next fetch had sent its own ended THAT one, the fetch sent
+// a third, and the server served two — TestAPullHonoursBothOfItsBounds found
+// five records in flight after pulls that returned four.
+//
+// The interleaving is made here rather than waited for: the pull's lock is
+// held while a no-wait request is sent and counted out, as if already ended,
+// and the next is sent, so the server's `404` for the first reaches the
+// callback only after the second is standing. The second must still be
+// counted, and serve the next record.
+func TestAStatusEndsOnlyTheRequestItNames(t *testing.T) {
+	t.Parallel()
+	q, log := openDomain(t, "CREWLET_NAMED_LOG", "crewlet.named.log")
+	cons, err := q.DomainConsumer(t.Context(), "CREWLET_NAMED_LOG", "node-a", 0)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if got, err := cons.Fetch(t.Context(), 1, 0, 10*time.Millisecond); err != nil || len(got) != 0 {
+		t.Fatalf("an empty log answered %d record(s), %v", len(got), err)
+	}
+	p, err := cons.standing()
+	if err != nil {
+		t.Fatalf("the standing pull: %v", err)
+	}
+	statusesBefore, err := p.sub.Delivered()
+	if err != nil {
+		t.Fatalf("the inbox's count: %v", err)
+	}
+	p.mu.Lock()
+	select {
+	case <-p.wake:
+	default:
+	}
+	// A request the server ends at once with a `404`, counted out here
+	// before that status arrives...
+	if err := p.request(1, 0, 0); err != nil {
+		p.mu.Unlock()
+		t.Fatalf("a no-wait request: %v", err)
+	}
+	p.requests = p.requests[:len(p.requests)-1]
+	// ...and the request that follows it, standing when the status lands.
+	if err := p.request(1, 0, 20*time.Second); err != nil {
+		p.mu.Unlock()
+		t.Fatalf("the next request: %v", err)
+	}
+	next := p.requests[len(p.requests)-1]
+	// The `404` is at the inbox, its callback waiting on the lock held here.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		pending, _, err := p.sub.Pending()
+		if err != nil {
+			p.mu.Unlock()
+			t.Fatalf("the inbox's pending count: %v", err)
+		}
+		delivered, err := p.sub.Delivered()
+		if err != nil {
+			p.mu.Unlock()
+			t.Fatalf("the inbox's count: %v", err)
+		}
+		if pending > 0 || delivered > statusesBefore {
+			break
+		}
+		if time.Now().After(deadline) {
+			p.mu.Unlock()
+			t.Fatal("the server's 404 for a no-wait request never reached the inbox")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	p.mu.Unlock()
+	select {
+	case <-p.wake:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the inbox's callback did not take the 404")
+	}
+	p.mu.Lock()
+	standing := len(p.requests) == 1 && p.requests[0] == next
+	counted := len(p.requests)
+	p.mu.Unlock()
+	if !standing {
+		t.Fatalf("the client counts %d request(s) after a status for one it had "+
+			"already counted out — the status ended the request standing after "+
+			"it, so the next fetch sends another while the server still serves "+
+			"this one", counted)
+	}
+
+	appendN(t, log, "crewlet.named.log.task", 2)
+	got, err := cons.Fetch(t.Context(), 1, 0, 5*time.Second)
+	if err != nil || len(got) != 1 || seqOf(got) != 1 {
+		t.Fatalf("the next fetch returned %d record(s) from %d, %v, want sequence 1",
+			len(got), seqOf(got), err)
+	}
+	info, err := consumerInfo(t, cons)
+	if err != nil {
+		t.Fatalf("consumer info: %v", err)
+	}
+	if info.NumAckPending != 1 {
+		t.Fatalf("the consumer holds %d records in flight after a fetch that "+
+			"returned 1 — a second request was sent beside the one standing",
+			info.NumAckPending)
+	}
+}
+
 // standPhantom makes the client count a request the server never received —
 // which is what a request looks like once the connection it was served on
 // has dropped, or once its ending status was lost: nothing will ever end it

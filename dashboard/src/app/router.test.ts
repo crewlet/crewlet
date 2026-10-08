@@ -79,8 +79,8 @@ describe("navigation identity", () => {
 
   // A ROUTE NOTHING OWNS RESOLVES TO NOTHING rather than to the first row: a
   // sidebar that marked a workspace for a path it does not hold would tell the
-  // reader they are somewhere they are not. The retired heads are exactly that.
-  test("an unowned route marks no workspace, the retired heads included", () => {
+  // reader they are somewhere they are not — whatever the head is.
+  test("an unowned route marks no workspace, whatever its head", () => {
     for (const head of ["nowhere", "company", "activity", "cost", "admin", "pages"]) {
       expect(workspaceOf([head]), head).toBe("");
     }
@@ -245,10 +245,10 @@ describe("the resolver", () => {
     expect(resolve(["pages", uuid]).resolved).toBe(false);
   });
 
-  // THE RETIRED HEADS ARE NOT FOUND, and there is no redirect table: a
-  // redirect whose old path becomes a live route sends every reader of it
+  // A HEAD NO ROUTE OWNS IS NOT FOUND, and there is no redirect table: a
+  // redirect whose path becomes a live route sends every reader of it
   // somewhere else, permanently.
-  test("an address from before the one-sidebar rebuild is Not Found", () => {
+  test("an address under a head no route owns is Not Found", () => {
     for (const path of [
       ["company"],
       ["company", "people", "pm"],

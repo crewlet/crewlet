@@ -82,7 +82,7 @@ func TestQueryEpisodesSaysWhatEachTurnWasAskedAndDid(t *testing.T) {
 		PlanSummary:   "Rolled staging back to v41 and\nposted the runbook fix in #ops.",
 		ReviewOutcome: "done",
 	}, {
-		// A turn from before the ask was stored says nothing it cannot.
+		// A turn that was told nothing says nothing it cannot.
 		Kind: learning.KindRaw, StartedAt: whenever.Add(-time.Hour),
 		TaskSummary: "cto asked a colleague on ch-1", PlanSummary: "answered",
 	}}}}, builtin.QueryEpisodesTool)

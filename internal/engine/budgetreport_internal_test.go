@@ -12,93 +12,60 @@ import (
 )
 
 // meteringReporter is a meter loop over a company capped at 1 000 tokens a
-// day that has spent 250 today, with the given lease store — everything a
-// frame reads, and nothing a publish adds.
-func meteringReporter(t *testing.T, leases coord.Backend, now time.Time) *budgetReporter {
+// day that has spent 250 today, and the fleet store it reads — everything a
+// frame reads, and nothing a publish adds — on an engine whose clock reads
+// now, the instant the 250 were charged at.
+func meteringReporter(t *testing.T, now time.Time) (*budgetReporter, *coordmem.Fleet) {
 	t.Helper()
 	fleet := coordmem.NewFleet()
 	windows := coord.WindowsAt(now, time.UTC)
 	if _, err := fleet.PostCharge(t.Context(), coord.AgentScope("x"), 250, windows); err != nil {
 		t.Fatalf("PostCharge: %v", err)
 	}
-	e := &Engine{backends: &Backends{Coord: leases, Fleet: fleet}}
+	e := &Engine{backends: &Backends{Fleet: fleet}, clock: fixedClock(now)}
+	r := &budgetReporter{engine: e}
 	e.epoch.current.Store(meteredCompany(config.TokenBudget{Day: ceiling(1000)}))
-	return &budgetReporter{engine: e}
+	return r, fleet
 }
 
-// THE METER WAITS FOR THE LAST NODE THAT CHARGES THE LIFETIME COUNTER.
-//
-// During the rolling upgrade that windowed the counters, the older nodes run
-// every seat and charge the lifetime counter, and a newer node claims no seat
-// beside them — so the windowed counters it reads stay empty. Its frames would
-// read the company as having spent nothing, and every dashboard folds each
-// node's frame over the last, so the header would flicker between the two
-// readings for the whole rollout. It publishes nothing until the fleet's floor
-// reaches the windowed protocol, and once it has, it stops asking.
+// A CAPPED COMPANY'S FRAME IS WHAT THE SHARED COUNTERS READ, from the first
+// frame on: every node of a fleet charges the windowed counters, so there is
+// no reading to wait for before this node's is the fleet's.
 //
 // Asked of [budgetReporter.frame], the decision [budgetReporter.publish]
-// sends or does not send, rather than of the gate alone: a gate nothing
-// consults passes every test of the gate.
-func TestTheMeterWaitsForTheLastLifetimeCounterNode(t *testing.T) {
+// sends or does not send.
+func TestACappedCompanyPublishesWhatItsCountersRead(t *testing.T) {
 	t.Parallel()
-	ctx := t.Context()
 	now := time.Date(2026, time.September, 23, 12, 0, 0, 0, time.UTC)
-	leases := coordmem.New()
-	r := meteringReporter(t, leases, now)
-
-	older, _, err := leases.TryAcquire(ctx, coord.NodeResource("older"), coord.AcquireOptions{
-		Owner: "older:1", TTL: time.Hour, Ungated: true,
-		Protocol: coord.WindowedCountersProtocol - 1,
-	})
-	if err != nil || older == nil {
-		t.Fatalf("claim the older node's presence = (%v, %v)", older, err)
-	}
-	if _, _, err := leases.TryAcquire(ctx, coord.NodeResource("newer"), coord.AcquireOptions{
-		Owner: "newer:1", TTL: time.Hour, Ungated: true,
-	}); err != nil {
-		t.Fatalf("claim this node's presence: %v", err)
-	}
-	if frame, sent := r.frame(ctx, now); sent {
-		t.Fatalf("the meter would publish %+v from the windowed counters while a node "+
-			"of the lifetime counters' build is live and charging the other one", frame)
-	}
-
-	if released, err := leases.Release(ctx, coord.NodeResource("older"), "older:1", older.Epoch); err != nil || !released {
-		t.Fatalf("release the older node = (%v, %v)", released, err)
-	}
-	frame, sent := r.frame(ctx, now)
+	r, _ := meteringReporter(t, now)
+	frame, sent := r.frame(t.Context())
 	if !sent {
-		t.Fatal("the meter still publishes nothing after the last older node has gone")
+		t.Fatal("a capped company whose counters can be read published nothing")
 	}
 	if w := frame.Org.Windows; len(w) != 1 || w[0].Used != 250 || w[0].Limit == nil || *w[0].Limit != 1000 {
 		t.Fatalf("frame = %+v, want the company's day at 250 of its 1000", w)
 	}
-	// LATCHED: a floor that has reached the windowed protocol falls again
-	// only by a downgrade, which needs the whole fleet stopped, so the
-	// meter stops paying a lease listing per frame for it.
-	r.engine.backends.Coord = unreadableFloor{leases}
-	if _, sent := r.frame(ctx, now); !sent {
-		t.Fatal("the meter asked the lease store again after it had seen the fleet current")
-	}
 }
 
-// A FLOOR THAT CANNOT BE READ IS NOT YET: a frame skipped costs one interval of
-// a meter that keeps its last reading, while a frame published from the wrong
-// counter is a reading that is wrong.
-func TestAnUnreadableFloorPublishesNoFrame(t *testing.T) {
+// A COUNTER THAT CANNOT BE READ PUBLISHES NOTHING, rather than a frame of
+// zeroes: the consumer replaces what it holds on every frame, so a zeroed one
+// would draw a company that is spending as one that has spent nothing.
+func TestAnUnreadableCounterPublishesNoFrame(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, time.September, 23, 12, 0, 0, 0, time.UTC)
-	r := meteringReporter(t, unreadableFloor{coordmem.New()}, now)
-	if frame, sent := r.frame(t.Context(), now); sent {
-		t.Fatalf("the meter published %+v on a protocol floor nobody could read", frame)
+	r, fleet := meteringReporter(t, now)
+	r.engine.backends.Fleet = unreadableUsage{fleet}
+	if frame, sent := r.frame(t.Context()); sent {
+		t.Fatalf("the meter published %+v on a counter nobody could read", frame)
 	}
 }
 
-// unreadableFloor is a lease store whose protocol floor cannot be read.
-type unreadableFloor struct{ coord.Backend }
+// unreadableUsage is a fleet store whose counters cannot be read, embedded
+// through [fleetStore] for the reason that alias gives.
+type unreadableUsage struct{ *fleetStore }
 
-func (unreadableFloor) FleetProtocolFloor(context.Context) (int, bool, error) {
-	return 0, false, errors.New("the lease store is unreachable")
+func (unreadableUsage) Usage(context.Context, coord.Windows) ([]coord.Usage, error) {
+	return nil, errors.New("the coordination store is unreachable")
 }
 
 // A COMPANY THAT CAPS NOTHING IS PUBLISHED, AND READS NOTHING TO SAY SO.
@@ -107,15 +74,16 @@ func (unreadableFloor) FleetProtocolFloor(context.Context) (int, bool, error) {
 // from "no node has reported yet" — so it is sent, where it used to be
 // withheld and the two collapsed into one empty meter that told the operator
 // of a CAPPED company, for the first interval after every start, that it had
-// no budget. And it is sent whatever the protocol floor says, because an empty
-// list of windows holds no figure the floor could make wrong: the lease store
+// no budget. And it is sent without reading the counters, because an empty
+// list of windows holds no figure a reading could make wrong: the counters
 // here cannot be read at all.
 func TestAnUncappedCompanyPublishesItsNoCeilingWithoutAReading(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, time.September, 23, 12, 0, 0, 0, time.UTC)
-	r := meteringReporter(t, unreadableFloor{coordmem.New()}, now)
+	r, fleet := meteringReporter(t, now)
+	r.engine.backends.Fleet = unreadableUsage{fleet}
 	r.engine.epoch.current.Store(meteredCompany(config.TokenBudget{}))
-	frame, sent := r.frame(t.Context(), now)
+	frame, sent := r.frame(t.Context())
 	if !sent {
 		t.Fatal("an uncapped company published nothing, which a reader cannot tell from no report")
 	}

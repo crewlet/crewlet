@@ -13,7 +13,7 @@
  * is where page and rail agree: `ObjectHeader` takes this list on both.
  */
 
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { BrokerCell, Fleet, HeldSince, NodePeek, nodeFacts } from "./Fleet.tsx";
@@ -26,7 +26,7 @@ import type { FleetNode } from "~/protocol/types.ts";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
 
 function node(over: Partial<FleetNode> = {}): FleetNode {
-  return { id: "n1", roles: [], seats: 0, config_epoch: 3, ...over };
+  return { id: "n1", roles: [], broker: "member", seats: 0, config_epoch: 3, ...over };
 }
 
 function fact(n: FleetNode, label: string) {
@@ -38,8 +38,7 @@ describe("the broker column", () => {
 
   // WHAT EACH NODE'S BROKER IS, off the engine's own row: `unknown` is a value
   // the engine sends for a presence that does not say, and it is the one kind
-  // marked, because a capacity seal counts it as a member. An engine older
-  // than the field sends nothing, which is no value rather than an empty tag.
+  // marked, because a capacity seal counts it as a member.
   test("each kind is a tag, and unknown is the one marked", () => {
     for (const kind of ["member", "leaf", "client"]) {
       const { container } = render(<BrokerCell broker={kind} />);
@@ -51,10 +50,6 @@ describe("the broker column", () => {
     expect(within(container).getByText("unknown").closest(".crewlet-tag")!.className).toContain(
       "crewlet-tag--warning",
     );
-    cleanup();
-    render(<BrokerCell />);
-    expect(screen.queryByText("unknown")).toBeNull();
-    expect(screen.getByText("This engine predates the broker kind")).toBeTruthy();
   });
 
   test("the peek names the broker, since the column gives way under it", () => {
@@ -166,11 +161,9 @@ describe("the fleet, refused before any reading", () => {
   });
 });
 
-// SINCE IS THE TENURE'S START, and unknown is said as unknown. The lease's
-// `acquired_at` is stamped when the epoch is minted and carried through every
-// renewal, so it is the answer to "when did this seat last move". A lease an
-// older build wrote carries none — and the grid's own date cell says "Never"
-// for an absent date, which would claim a seat was never acquired.
+// SINCE IS THE TENURE'S START. The lease's `acquired_at` is stamped when the
+// epoch is minted and carried through every renewal, so it is the answer to
+// "when did this seat last move" — and never the lease's end.
 describe("the seat's held-since column", () => {
   afterEach(cleanup);
   const now = Date.parse("2031-05-01T10:02:00Z");
@@ -191,12 +184,6 @@ describe("the seat's held-since column", () => {
     expect(cell.getAttribute("title")).not.toBe(
       fmtDateTime(new Date(now + 3600_000).toISOString()),
     );
-  });
-
-  test("an unstamped lease is not recorded, never 'Never'", () => {
-    const view = render(<HeldSince lease={{ handle: "swe", node: "n1" }} now={now} />);
-    expect(view.container.textContent).not.toContain("Never");
-    expect(screen.getByText(/Not recorded/)).toBeDefined();
   });
 });
 
@@ -278,13 +265,13 @@ describe("the lease tables", () => {
     target_epoch: 3,
   };
 
-  function mountFleet(id?: string) {
+  function mountFleet(id?: string, answer: typeof placed = placed) {
     Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
     location.hash = id ? `#/settings/nodes/${id}` : "#/settings/nodes";
     const store = new Store();
     const socket = new LiveSocket(store);
     (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
-      what === "fleet" ? Promise.resolve(placed) : new Promise(() => {});
+      what === "fleet" ? Promise.resolve(answer) : new Promise(() => {});
     return render(
       <ClientContext.Provider value={{ store, socket }}>
         <Router>
@@ -314,6 +301,44 @@ describe("the lease tables", () => {
     const since = relTime(ACQUIRED, Date.now());
     expect(seats?.rows).toHaveLength(1);
     expect(seats?.rows[0]?.textContent).toContain(since);
+  });
+
+  // SINCE SORTS BY THE INSTANT, NOT ITS SPELLING. The engine writes the stamp
+  // with as many fractional digits as it has, so within one second
+  // "…:00.5Z" spells LOWER than "…:00Z" while it is half a second later: read
+  // as text, ascending put the newer tenure first. Both lease tables sort it.
+  test("Since sorts oldest first by the instant in both lease tables", async () => {
+    const answer = {
+      ...placed,
+      nodes: [node({ id: "harness-0", seats: 2 })],
+      seats: [
+        {
+          handle: "seat-later",
+          node: "harness-0",
+          acquired_at: "2020-05-01T08:02:00.5Z",
+          expires_in: 33,
+        },
+        {
+          handle: "seat-earlier",
+          node: "harness-0",
+          acquired_at: "2020-05-01T08:02:00Z",
+          expires_in: 33,
+        },
+      ],
+    };
+    for (const id of [undefined, "harness-0"]) {
+      const view = mountFleet(id, answer);
+      expect(await screen.findByText("integration-reconciler")).toBeDefined();
+      const seats = [...view.container.querySelectorAll<HTMLElement>(".grid-wrap")].find((g) =>
+        [...g.querySelectorAll(".grid-head > .grid-th")].some((h) => h.textContent === "Seat"),
+      )!;
+      fireEvent.click(within(seats).getByRole("button", { name: "Since" }));
+      const order = [...seats.querySelectorAll<HTMLElement>(".grid-row")].map((r) =>
+        r.textContent?.includes("seat-earlier") ? "earlier" : "later",
+      );
+      expect(order, id ?? "the fleet").toEqual(["earlier", "later"]);
+      cleanup();
+    }
   });
 
   test("a node's own Leases table says since when it has held each seat", async () => {

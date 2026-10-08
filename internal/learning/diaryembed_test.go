@@ -121,7 +121,7 @@ func TestAWriteWaitsNoLongerThanItsBudgetForAVector(t *testing.T) {
 }
 
 // THE FILL FINDS EXACTLY WHAT RECALL CANNOT REACH: a seat's live notes with no
-// vector, or with one of another model, or of no model — newest first, and
+// vector, or with one of another model — newest first, and
 // never a note of the current model, an expired one, another seat's, or one
 // with nothing to embed.
 func TestUnfilledIsWhatRecallCannotReach(t *testing.T) {
@@ -135,10 +135,6 @@ func TestUnfilledIsWhatRecallCannotReach(t *testing.T) {
 	old := longEntry("old-model", "a", "embedded under the old model", at(2))
 	old.Embedding, old.EmbeddingModel = []float32{1, 0, 0, 0}, "old-model"
 	write(old)
-	legacy := longEntry("legacy", "a", "embedded before vectors named a model", at(3))
-	legacy.Embedding = []float32{1, 0, 0, 0}
-	write(legacy)
-	untag(t, db, "agent_diary", "legacy")
 	current := longEntry("current", "a", "embedded under this model", at(4))
 	current.Embedding = []float32{1, 0, 0, 0}
 	write(current)
@@ -160,23 +156,23 @@ func TestUnfilledIsWhatRecallCannotReach(t *testing.T) {
 	for _, e := range got {
 		ids = append(ids, e.ID)
 	}
-	if want := []string{"legacy", "old-model", "bare"}; !slices.Equal(ids, want) {
+	if want := []string{"old-model", "bare"}; !slices.Equal(ids, want) {
 		t.Fatalf("unfilled = %v, want %v", ids, want)
 	}
-	if got[0].Text != "embedded before vectors named a model" {
+	if got[0].Text != "embedded under the old model" {
 		t.Errorf("a note's fill text is %q, want its content", got[0].Text)
 	}
 
 	// THE WALK PAGES PAST WHAT IT READ: a page starts strictly after the
 	// last row of the one before, so a row no fill changes is read once a
 	// pass rather than at the front of every page.
-	first, err := d.Unfilled(context.Background(), "a", testModel, at(10), learning.FillCursor{}, 2)
-	if err != nil || len(first) != 2 {
-		t.Fatalf("a page of 2 = %d, %v", len(first), err)
+	first, err := d.Unfilled(context.Background(), "a", testModel, at(10), learning.FillCursor{}, 1)
+	if err != nil || len(first) != 1 {
+		t.Fatalf("a page of 1 = %d, %v", len(first), err)
 	}
-	rest, err := d.Unfilled(context.Background(), "a", testModel, at(10), first[1].Cursor, 2)
+	rest, err := d.Unfilled(context.Background(), "a", testModel, at(10), first[0].Cursor, 2)
 	if err != nil || len(rest) != 1 || rest[0].ID != "bare" {
-		t.Fatalf("the page after %v = %v, %v; want only the note past it", first[1].Cursor, rest, err)
+		t.Fatalf("the page after %v = %v, %v; want only the note past it", first[0].Cursor, rest, err)
 	}
 }
 

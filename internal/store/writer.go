@@ -110,13 +110,22 @@ var tagKeys = map[string]string{
 	"target":    "target",
 	"recipient": "recipient",
 	"closed_by": "closed_by",
+	// An INBOUND DELIVERY's two identities beside its recipient: the
+	// provider's own id for it (what an operator has in front of them in
+	// the provider's console — a delivery header, a Mattermost post id),
+	// and the ROUTE that authenticated it, which is not always the
+	// integration it belongs to: a Forge-relayed Jira event is source
+	// `jira`, route `forge`. Tags because a deliveries listing never
+	// selects the payload, and the integration counts read the route to
+	// say what arrived through the relay.
+	"delivery_key": "delivery_key",
+	"route":        "route",
 	// Which THIRD-PARTY APP a notification event concerns. A tag rather than a
 	// payload read for the same reason as `failed` below: a listing
 	// deliberately never selects the payload column, so the Integrations
 	// room aggregating "how many of this third-party app's deliveries were
-	// dropped by the routing gate" has no other way to read it. Rows written
-	// before this tag existed read back without it — a real discontinuity
-	// at that point in the timeline, not a bug to paper over.
+	// dropped by the routing gate" has no other way to read it. A row whose
+	// event names no app carries none.
 	"notification_source": "notification_source",
 	// WHICH NODE PUBLISHED THE EVENT — the envelope's own `node`, which the
 	// queue stamps on the way out and which is therefore the node whose
@@ -224,15 +233,14 @@ func SpendFor(eventType string, payload []byte) *Spend {
 	}
 	if spend.Model == "" {
 		// An entry that names no model is identified by the provider
-		// slot it ran on. The backfill in schema/0015 does the same, so
-		// history and new rows agree on what "model" means.
+		// slot it ran on, so the rollup always has a model to group by.
 		spend.Model = jsonString(body["provider_key"])
 	}
 	return spend
 }
 
 // phaseCalls is a phase record's provider calls, by [tokens.PhaseCalls] — the
-// rule node/0040 backfilled history with.
+// rule the live projection counts by too.
 //
 // The list is counted, never decoded: a phase can run a hundred rounds and this
 // runs on the publishing goroutine of every LLM call.
@@ -306,17 +314,6 @@ func ExtractTags(payload []byte) map[string]string {
 			tags["work_item"] = types.WorkItem{
 				Backend: types.WorkBackend(item.Backend), ID: item.ID,
 			}.Ref()
-		}
-	}
-	// Turns triggered by A2A carry their channel one level down, so the
-	// cross-reference from a turn back to the conversation that caused it
-	// needs this one nested read.
-	if raw, ok := flat["a2a_context"]; ok {
-		var ctxObj struct {
-			ChannelID string `json:"channel_id"`
-		}
-		if json.Unmarshal(raw, &ctxObj) == nil && ctxObj.ChannelID != "" {
-			tags["a2a_channel_id"] = ctxObj.ChannelID
 		}
 	}
 	return tags

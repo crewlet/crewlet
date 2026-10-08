@@ -124,13 +124,16 @@ function valid(row: unknown): row is Recent {
     r.path.length > 0 &&
     r.path.every((p) => typeof p === "string") &&
     typeof r.label === "string" &&
-    // A ROW WITH NO WORKSPACE is a shape an older build wrote, and one the
-    // palette has no hint for — see [Recent.workspace].
+    // A ROW WITH NO WORKSPACE is not one this build writes (`remember()`
+    // refuses it): a hand-edited or corrupt value, which the palette has no
+    // hint for — see [Recent.workspace]. Dropped.
     typeof r.workspace === "string" &&
     r.workspace !== "" &&
-    // A PATH THE ROUTE TABLE NO LONGER HAS IS DROPPED ON READ. Storage
-    // outlives every build: a row kept before a route moved would be drawn
-    // as a row that leads to Not Found, forever, with nothing to say why.
+    // A PATH THE ROUTE TABLE DOES NOT RESOLVE IS DROPPED ON READ. Storage at
+    // this origin is untrusted input — editable, and not written only by this
+    // tab's gestures — and such a path would be drawn as a row that leads to
+    // Not Found, forever, with nothing to say why. This build never stores
+    // one: Shell remembers no Not Found page.
     resolves(r.path)
   );
 }

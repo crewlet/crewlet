@@ -12,8 +12,9 @@
 import { expect, test } from "vitest";
 
 import { heldBy } from "./seats.ts";
+import { healthFrame } from "~/test/health.ts";
 
-const health = { status: "ok", node: "node-a", seats: ["agent-cto"] };
+const health = healthFrame({ node: "node-a", seats: ["agent-cto"] });
 
 test("a seat this node holds says so, idle or not", () => {
   expect(heldBy("agent-cto", { id: "a", role: "CTO", activity: "idle" }, health)).toBe(
@@ -34,9 +35,9 @@ test("a seat held elsewhere is a peer's, and one nobody holds is said", () => {
   ).toBe("no node — not placed");
 });
 
-// UNKNOWN IS NOT "ELSEWHERE": with no push, or an older node that sends no
-// list, this node has said nothing about what it holds.
+// UNKNOWN IS NOT "ELSEWHERE": with no push this node has said nothing about
+// what it holds — and a node holding nothing says so with an empty list.
 test("a node that has not said what it holds claims nothing", () => {
   expect(heldBy("agent-cto", undefined, null)).toBe("not reported by this node");
-  expect(heldBy("agent-cto", undefined, { status: "ok" })).toBe("not reported by this node");
+  expect(heldBy("agent-cto", undefined, healthFrame({ seats: [] }))).toBe("another node");
 });

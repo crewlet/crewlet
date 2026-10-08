@@ -223,7 +223,8 @@ Usage:
                               or resume it, as the person your token is bound to
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
   crewlet config <cmd>        Import, inspect and activate company revisions
-  crewlet llm <cmd>           Log in, verify and export the subscription CLI backends
+  crewlet llm <cmd>           Log in, verify and export the subscription CLI backends;
+                              doctor also checks anthropic entries against their model
   crewlet search eval         Measure the semantic search against the exact scan,
                               on the vectors a store file actually holds
   crewlet gitlab <cmd>        Reconcile the company's seats into a GitLab instance
@@ -963,15 +964,11 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 		return loadErr
 	}
 	// AND NOW THE FILE, which is what makes Tier A's `logging:` block mean
-	// anything. Its ancestor `debug: true` was a declared field nothing
-	// ever read: the quickstart told an operator to write it and the
-	// deployment guide said it "raises the log level to DEBUG", and for the
-	// life of the field it did nothing at all. It is retired now rather
-	// than wired up — a file still carrying it is REFUSED, and pointed at
-	// `logging.level` (see config.retiredBootstrapFields) — so this line is
-	// what keeps its replacement from repeating the bug. Lines emitted
-	// BEFORE this point came out under the flags alone, which is the best a
-	// process can do about a file it has not opened yet.
+	// anything: a declared setting nothing reads is one an operator writes
+	// and that does nothing at all, so this line is what makes
+	// `logging.level` take effect. Lines emitted BEFORE this point came out
+	// under the flags alone, which is the best a process can do about a
+	// file it has not opened yet.
 	logging.SetVerbosity(logSettings(boot, fs, *logLevel, *logFormat, *debug))
 	// AND THE LOG FILE, the moment the document that names it has been
 	// read. Everything that can still fail below — a keyring that will not
@@ -1604,9 +1601,6 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// comes off an HTTP request's own credential.
 		Operator:     operators,
 		QueueBackend: e.Backends().Queue.Backend(),
-		// THIS NODE'S OWN event store, which the webhook edge writes the
-		// deliveries it accepts into.
-		EventLog: e.Backends().Store.Events(),
 		// A question the read surface has no source for comes back
 		// unknown rather than empty, which is the difference between
 		// "this node has no event log" and "the company has done
@@ -2214,9 +2208,8 @@ func formatNames() []string {
 //
 // A flag carries its default whether or not anyone typed it, so applying
 // `*logLevel` unconditionally would pin every node at info and make
-// `logging.level: warn` in the file dead on arrival — the same class of bug
-// as the retired `debug:` field, which was declared in Tier A and read by
-// nothing for the whole of its life. isFlagSet is what separates "the
+// `logging.level: warn` in the file dead on arrival: a setting declared in
+// Tier A and read by nothing. isFlagSet is what separates "the
 // operator asked for info" from "nobody said anything", and it is the same
 // idiom [overrideNode] uses for the three node overrides.
 //
@@ -2287,10 +2280,8 @@ func logFileSettings(boot *config.Bootstrap, fs *flag.FlagSet, logFile string,
 // Every other bad logging value in this binary resolves to a default,
 // because a misspelled log level must never be why a company will not boot.
 // A path is not one of those. An operator who configured a durable record
-// and silently did not get one has nothing anywhere pointing at why — the
-// exact shape of the retired `debug: true` field, which was declared for the
-// whole of its life and read by nothing. The error names the path and the
-// permission that has to change.
+// and silently did not get one has nothing anywhere pointing at why. The
+// error names the path and the permission that has to change.
 //
 // # Detached before it is closed, in that order
 //

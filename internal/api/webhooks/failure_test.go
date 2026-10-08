@@ -86,7 +86,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 		t.Fatal("a receiver wired to nothing was built")
 	}
 	for _, field := range []string{
-		"Secrets", "Publisher", "Events", "Claims", "Stream", "Configured", "AppFlow",
+		"Secrets", "Publisher", "Claims", "Configured", "AppFlow",
 	} {
 		if !strings.Contains(err.Error(), "Options."+field) {
 			t.Errorf("the refusal does not name Options.%s: %v", field, err)

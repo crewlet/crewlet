@@ -267,7 +267,7 @@ func TestTheTurnCursorPagesWithoutRepeating(t *testing.T) {
 		t.Fatalf("the first page has %d turns", len(first))
 	}
 	second, err := log.Turns(t.Context(), store.TurnQuery{
-		Limit: 2, Before: first[len(first)-1].StartedAt,
+		Limit: 2, Before: &store.TurnCursor{Start: first[len(first)-1].StartedAt, TurnID: first[len(first)-1].TurnID},
 	})
 	if err != nil {
 		t.Fatalf("Turns: %v", err)
@@ -281,6 +281,60 @@ func TestTheTurnCursorPagesWithoutRepeating(t *testing.T) {
 				t.Fatalf("%s is on both pages", a.TurnID)
 			}
 		}
+	}
+}
+
+// TWO TURNS THAT START AT ONE MICROSECOND ARE BOTH ON THE WALK, once each,
+// whichever side of a page's cut they fall — and in one order on every read.
+//
+// A webhook that wakes two seats starts two turns at one instant. A cursor on
+// the start alone resumed strictly below it, so a page of one that listed the
+// first of them sent the walk past the second for good; and with no tie-break
+// in the order, which of the two that page listed was the planner's choice.
+// The order is (start, turn id) newest first and the cursor names both, so the
+// walk lists the higher id first and then the other, every time.
+//
+// Mutation: drop `turn_id` from [store.TurnSort]'s ORDER BY or from the
+// keyset's HAVING, and the walk either lists one of the two twice or loses it.
+func TestTwoTurnsAtOneMicrosecondAreBothOnTheWalk(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	// Written in the order the ids do NOT sort in, so an order the planner
+	// chose by insertion is not mistaken for the tie-break.
+	for _, turn := range []string{"t-a", "t-c", "t-b"} {
+		seedTurn(t, log, turn, at, "PM", nil)
+	}
+	seedTurn(t, log, "t-early", at.Add(-time.Minute), "PM", nil)
+
+	var walked []string
+	q := store.TurnQuery{Limit: 1}
+	for range 10 {
+		page, more, err := log.TurnPartials(t.Context(), q)
+		if err != nil {
+			t.Fatalf("TurnPartials: %v", err)
+		}
+		for _, p := range page {
+			walked = append(walked, p.TurnID)
+		}
+		if !more {
+			break
+		}
+		last := page[len(page)-1]
+		q.Before = &store.TurnCursor{Start: last.StartedAt, TurnID: last.TurnID}
+	}
+	if want := []string{"t-c", "t-b", "t-a", "t-early"}; !slices.Equal(walked, want) {
+		t.Errorf("walking pages of one listed %v, want %v — the three at one instant by id, "+
+			"newest first, then the earlier one, each once", walked, want)
+	}
+	// A CURSOR WITH NO ID resumes strictly below its start — what an asker
+	// before the id sent, and what it cut its own page by.
+	page, _, err := log.TurnPartials(t.Context(), store.TurnQuery{Before: &store.TurnCursor{Start: at}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page) != 1 || page[0].TurnID != "t-early" {
+		t.Errorf("below the instant alone the page is %+v, want t-early", page)
 	}
 }
 
@@ -329,7 +383,7 @@ func TestASeatFilterWithOneIdentifierDoesNotMatchEverything(t *testing.T) {
 	// AND THE SAME TRAP ONE FUNCTION OVER. `AgentPhases` bound both
 	// identifiers the same way, so a handle that resolved to no role was
 	// answered every seatless phase in the window.
-	phases, _, err := log.AgentPhases(t.Context(), "", "PM", nil)
+	phases, _, err := log.AgentPhases(t.Context(), "", "PM", nil, time.Now())
 	if err != nil {
 		t.Fatalf("AgentPhases: %v", err)
 	}
@@ -641,6 +695,45 @@ func TestATurnThatBeganBeforeTheWindowIsNotInIt(t *testing.T) {
 	t.Fatalf("the wider window lost the straddling turn: %+v", wide)
 }
 
+// A PINNED WINDOW IS FLOORED AT ITS OWN INSTANT, page and share alike.
+//
+// A fleet cuts the turns window on the asker's clock and sends the instant with
+// it ([store.TurnQuery.At]), and by the time a peer reads, that instant is in
+// the peer's past. The read floored the window and every share at its own
+// clock's history horizon instead, so a turn that began between the asker's
+// horizon and the reader's was missing from the reader's page — and from the
+// share that asked for it by id. The turn here began a minute above the pinned
+// horizon: below the clock's, and still on disk, since retention keeps a day
+// past the floor.
+//
+// Mutation: read `now()` in [store.EventLog.TurnPartials] rather than the
+// query's instant, and the page lists nothing and the share is empty.
+func TestAPinnedTurnWindowIsFlooredAtItsOwnInstant(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	at := time.Now().UTC().Add(-time.Hour)
+	horizon := at.Add(-store.EventHistory)
+	seedTurn(t, log, "at-the-horizon", horizon.Add(time.Minute), "PM", nil)
+
+	page, err := log.Turns(t.Context(), store.TurnQuery{SinceDays: store.MaxTurnDays, At: at})
+	if err != nil {
+		t.Fatalf("Turns: %v", err)
+	}
+	if len(page) != 1 || page[0].TurnID != "at-the-horizon" || page[0].Phases != 2 || !page[0].Complete {
+		t.Errorf("the page is %+v, want the whole turn that began above the pinned horizon", page)
+	}
+	share, _, err := log.TurnPartials(t.Context(), store.TurnQuery{
+		At: at, IDs: []string{"at-the-horizon"},
+	})
+	if err != nil {
+		t.Fatalf("TurnPartials: %v", err)
+	}
+	if len(share) != 1 || share[0].Phases != 2 {
+		t.Errorf("the share is %+v, want the whole turn — a share is bounded by the "+
+			"pinned horizon, not by this log's clock", share)
+	}
+}
+
 // A SHARE IGNORES THE WINDOW: it is the rest of a turn somebody else already
 // selected, and the half a resumed turn ran before the window is the half
 // that says when it began.
@@ -658,5 +751,66 @@ func TestATurnShareIsNotCutByTheWindow(t *testing.T) {
 	}
 	if len(parts) != 1 || parts[0].Phases != 2 || !parts[0].StartedAt.Before(since) {
 		t.Fatalf("the share is %+v, want the whole turn from its first phase", parts)
+	}
+}
+
+// A LOG SAYS WHICH NAMED TURNS ITS PAGE LISTS, by the page's own window and
+// turn-level filters and by neither its cursor nor its size.
+//
+// A fleet asks it beside a turn's shares: a turn resumed across nodes is
+// selected by each node on its own half, so the node that holds the half where
+// the turn began may not list it at all — a clean half of a turn that failed
+// later — and the fleet pages a turn by the start a node's page DOES reach.
+// The answer is the page's statement with the names added: a turn that began
+// before the window is not listed, one the filters reject is not, and a cursor
+// below every turn or a page of one changes nothing.
+//
+// Mutation: answer the share's turns rather than the page's, and the turn that
+// began before the window and the ones the filters reject are listed; apply
+// the cursor or the page size, and the named turns past them are not.
+func TestALogSaysWhichNamedTurnsItsPageLists(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	since := time.Now().UTC().Add(-time.Hour)
+	withModel := func(model string) func(*store.EventRecord, int) {
+		return func(rec *store.EventRecord, _ int) {
+			payload, _ := json.Marshal(map[string]any{"turn_id": rec.Tags["turn_id"], "model": model})
+			rec.Payload = payload
+		}
+	}
+	seedTurn(t, log, "t-clean", since.Add(time.Minute), "PM", withModel("m-cheap"))
+	seedTurn(t, log, "t-failed", since.Add(2*time.Minute), "PM", func(rec *store.EventRecord, i int) {
+		withModel("m-dear")(rec, i)
+		if i == 0 {
+			rec.Tags["failed"] = "true"
+		}
+	})
+	seedTurn(t, log, "t-early", since.Add(-2*time.Second), "PM", withModel("m-cheap"))
+	named := []string{"t-clean", "t-failed", "t-early", "t-absent"}
+
+	yes := true
+	for name, c := range map[string]struct {
+		q    store.TurnQuery
+		want []string
+	}{
+		"the window":          {store.TurnQuery{Since: since}, []string{"t-clean", "t-failed"}},
+		"the failures":        {store.TurnQuery{Since: since, Failed: &yes}, []string{"t-failed"}},
+		"one model":           {store.TurnQuery{Since: since, Model: "m-cheap"}, []string{"t-clean"}},
+		"a cursor below them": {store.TurnQuery{Since: since, Before: &store.TurnCursor{Start: since}}, []string{"t-clean", "t-failed"}},
+		"a page of one":       {store.TurnQuery{Since: since, Limit: 1}, []string{"t-clean", "t-failed"}},
+		"an edge above one":   {store.TurnQuery{Since: since, Until: since.Add(90 * time.Second)}, []string{"t-clean"}},
+	} {
+		c.q.IDs = named
+		got, err := log.ListedTurns(t.Context(), c.q)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		slices.Sort(got)
+		if !slices.Equal(got, c.want) {
+			t.Errorf("%s: the page lists %v of the named turns, want %v", name, got, c.want)
+		}
+	}
+	if none, err := log.ListedTurns(t.Context(), store.TurnQuery{Since: since}); err != nil || none == nil || len(none) != 0 {
+		t.Errorf("naming nothing answered %v (%v), want an empty list", none, err)
 	}
 }

@@ -33,13 +33,17 @@ func (d AnswerDesk) Run(ctx context.Context, turnID string) (PendingRun, bool, e
 	return d.Pending.Get(ctx, turnID)
 }
 
-// Deliver puts one answer on the inbox of the seat it names.
+// Deliver puts one answer on the inbox of the seat it names, refusing one that
+// names no run or no question ([types.SandboxAnswerGiven.LaunchID]) before
+// anything is published.
 //
 // A PUBLISH THAT ERRORED MAY HAVE LANDED, and the caller is told so rather
-// than told it failed: a second answer to the same run is harmless — the first
-// to be consumed resumes it and the other is announced not_awaiting — while
-// telling a person their answer was refused when it is on its way would have
-// them give it somewhere else.
+// than told it failed: a second answer to the same question is harmless — the
+// first to be consumed resumes the run and the other is announced
+// not_awaiting, because each names the question it answers
+// ([types.SandboxAnswerGiven.LaunchID]) and the run is no longer waiting on it
+// whatever it waits on by then — while telling a person their answer was
+// refused when it is on its way would have them give it somewhere else.
 func (d AnswerDesk) Deliver(ctx context.Context, given types.SandboxAnswerGiven) error {
 	inbox := topics.AgentInbox(given.AgentHandle)
 	if inbox == "" {
@@ -47,6 +51,11 @@ func (d AnswerDesk) Deliver(ctx context.Context, given types.SandboxAnswerGiven)
 	}
 	if strings.TrimSpace(given.TurnID) == "" {
 		return errors.New("sandbox: an answer names no run")
+	}
+	if given.LaunchID == "" {
+		// The node holding the seat would only spend it: an answer naming
+		// no question is never resumed with ([Coordinator.AnswerByTurn]).
+		return fmt.Errorf("sandbox: the answer for run %s names no question it answers", given.TurnID)
 	}
 	ev := events.New(given, events.TraceContext{})
 	ev.Source = types.OperatorSource

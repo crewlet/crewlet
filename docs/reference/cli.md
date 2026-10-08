@@ -24,8 +24,8 @@ subcommand below is served by it.
 | `crewlet retention reanchor -stream NAME -confirm <created_at> [-force] [-discard]` | Adopt a recreated stream, or a broker restored from an older copy: move that one log to its next generation, declaring every position below it comparable and safely stale, and resume its applier with no restart. A recreated log is followed from its first surviving record, a restored one from its end, and one continuing in a generation only an evicted peer held from this node's own checkpoint, that generation's records void. A restored log holding records written after the restore that this node's rows do not hold is refused unless `-discard` accepts that they are applied on no node |
 | `crewlet retention verify --restore -dir DIR` | Restore the newest artefact and open the copy. **Exits non-zero past its cadence** — the cron hook that turns a lapsed restore test into a failing check. Talks to no node |
 | `crewlet work purge <task-id> -project KEY -reason TEXT -confirm <task-key>` | Destroy a task and every row it produced, on every node. The one operation with no inverse, restricted to a person or an operator token. Its children move onto its own parent rather than being destroyed with it |
-| `crewlet objects status [config] [-json]` | Where the company's files are kept — the [object store's](../concepts/object-store.md) backend, `nats` or an S3 bucket — read from a running node, the node that ran the collector's last passes, and what each found: objects listed and deleted, chunks of an earlier build retired and unfinished uploads abandoned by the last collection; files named, **missing** and **damaged** by the last audit to finish, with those files listed. `-json` prints the fleet view's `objects` block as the node answered it |
-| `crewlet fleet broker list [config] [-json]` | The fleet broker's membership: each live node's broker kind (`member`, `leaf`, `client`, or `unknown` for a build older than the field) beside how the JetStream metadata group counts it — read through a member — and, in words, every disagreement: a member gone for good that the group still counts in every election, with the command that removes it |
+| `crewlet objects status [config] [-json]` | Where the company's files are kept — the [object store's](../concepts/object-store.md) backend, `nats` or an S3 bucket — read from a running node, the node that ran the collector's last passes, and what each found: objects listed and deleted and unfinished uploads abandoned by the last collection; files named, **missing** and **damaged** by the last audit to finish, with those files listed. `-json` prints the fleet view's `objects` block as the node answered it |
+| `crewlet fleet broker list [config] [-json]` | The fleet broker's membership: each live node's broker kind (`member`, `leaf`, `client`, or `unknown` for a kind this build does not know) beside how the JetStream metadata group counts it — read through a member — and, in words, every disagreement: a member gone for good that the group still counts in every election, with the command that removes it |
 | `crewlet fleet broker remove <node> -confirm <node> [-force]`, or `-peer <peer> -confirm <peer>` | Stop the metadata group counting a member that is gone for good, through a live member's system account — by node id, or by the peer id `list` shows for a voter no member can name. Refused while the node holds a live presence lease as a member; `-force` is for a member wedged in a way that still renews it |
 | `crewlet seats pause <handle> [-stop] [-reason TEXT]` | Pause an agent seat: it starts no new turn, its mail waits in order and its scheduled runs are skipped. `-stop` also ends the turn it is on at its next round. As the person the token is bound to |
 | `crewlet seats resume <handle>` | Lift the pause; what waited is delivered first, in order |
@@ -46,7 +46,7 @@ subcommand below is served by it.
 | `crewlet secrets rekey [-dry-run]` | Re-encrypt stored secrets under the active keyring key |
 | `crewlet search eval [-store PATH]` | Measure the two-stage semantic search against the exact scan, on the vectors a store file actually holds. Ground truth is the exact scan's own top-K, so nobody authors a judgement; exits non-zero below the floor for that corpus size |
 | `crewlet llm list` | Every `cli-agent` provider the company declares, with its CLI, model and login state |
-| `crewlet llm doctor [KEY]` | Verify a subscription backend end to end — the CLI is installed, the login answers, a real completion returns, the CLI's own shell is refused and its web tool reaches the network (`-no-smoke` stops before all three real calls) |
+| `crewlet llm doctor [KEY]` | Verify a subscription backend end to end — the CLI is installed, the login answers, a real completion returns, the CLI's own shell is refused and its web tool reaches the network — and an `anthropic` entry against its model: the Models API's record compared with the request shape the engine sends, and one real round that must come back as a tool call (`-no-smoke` stops before every real completion) |
 | `crewlet llm login <KEY>` | Establish the vendor's own login for a provider: brokered interactively, `-from-host` to adopt one this machine already has, `-capture-token` to mint a headless token into the [secret store](../concepts/secret-store.md) (add `-print-token` to send it to stdout and store nothing), `-token-stdin` for one you already hold |
 | `crewlet llm status <KEY>` | Ask the CLI who it is currently logged in as |
 | `crewlet llm logout <KEY>` | Revoke locally and delete the provider's credential files |
@@ -111,7 +111,7 @@ the [admission rules](../concepts/configuration.md#what-a-stored-revision-is-hel
 only when it is actually written as a new revision (`-company` into an empty
 store, `-import-company` over a different company): a file that is already the
 active revision, or a bootstrap the store's own company outranks, starts the
-node even when it carries a duplicate name stored before the rule existed.
+node even when it carries a duplicate name.
 To change a **running** fleet with no restart at all, use
 [`crewlet config import`](#crewlet-config-import), which goes through the
 node's API. The path comes from the
@@ -335,7 +335,7 @@ Prints a fresh base64 32-byte encryption key plus a copy-pasteable `crewlet.yaml
 
 The remaining subcommands operate on the [secret store](../concepts/secret-store.md) — the company's encrypted credentials, one sealed value per `${VAR}` name, which the engine consults **ahead of** the process environment. All of them read the Tier A bootstrap (`-config`, default `./crewlet.yaml`) for the keyring, and all of them need one: the store has no plaintext mode, so a config declaring no `secrets.keys` is refused with a pointer at `keygen` rather than silently storing plaintext.
 
-**Which store they reach depends on whether the engine is running**, and the command says which it used. The rows live on the coordination KV so every node reads them, and on the default topology that KV is inside the engine's own process — so a running node is written through its authenticated `/secrets` API, and a stopped one falls back to its own local table, which the engine migrates onto the fleet at its next start. The engine's exclusive database lock is what tells the two apart, with a pid attached.
+**Which store they reach depends on whether the engine is running**, and the command says which it used. The rows live on the coordination KV so every node reads them, and on the default topology that KV is inside the engine's own process — so a running node is written through its authenticated `/secrets` API, and a stopped one falls back to its own local table, which the engine migrates onto the fleet at its next start — replacing a name the fleet already holds only when the fleet's value was written earlier (see [Secret Store](../concepts/secret-store.md#operational-notes)). The engine's exclusive database lock is what tells the two apart, with a pid attached.
 
 `-api URL` names the node to write through, for running the command from a machine that is not the node. The bearer token comes from `CREWLET_API_TOKEN` when set, and otherwise from the first `api.auth.tokens` entry in the Tier A config; the token's id is recorded as the author of the write.
 
@@ -702,8 +702,7 @@ three five-second waits a write can make — so a purge the node never answered,
 which may well have landed, still prints the `-op-id` to run it again with.
 Pass the id exactly as printed: it carries the instant it was minted, and a
 node whose operation ledger may have lost the first purge's row since — to the
-ledger's thirty-day sweep, or to a snapshot adopted from a peer on an older
-build — judges the retry by it, answering `unknown` again rather than purging
+ledger's thirty-day sweep — judges the retry by it, answering `unknown` again rather than purging
 twice. An id the engine did not print is refused (`op_id_invalid`), and so is
 one altered on the way back — trimmed, spaced or over 128 bytes — since the
 broker would carry it as a different id.
@@ -734,9 +733,8 @@ the node that ran the last passes of the `object-collector` duty, and one line
 for each pass:
 
 - **Last collection** — how many objects it listed in the store, how many it
-  deleted for being older than a day with no row naming them, how many chunks
-  an earlier build stored it retired once no node of that build was left, and
-  how many uploads begun more than a day ago and never finished it abandoned.
+  deleted for being older than a day with no row naming them, and how many
+  uploads begun more than a day ago and never finished it abandoned.
   A collection that stopped judging says why (`stopped judging: …` — the
   node's view of the estate was incomplete, so a row it could not read might
   name any object) beside what it had deleted before it stopped; one that
@@ -869,8 +867,6 @@ request id to send again with `-request-id`, so the retry is the same request.
 The id is a UUIDv7 — the node reads the instant it carries to decide whether it
 can still vouch for a retry — and the command mints one when `-request-id` is
 not given; an id of another version is refused `invalid_request_id`.
-A fleet mid-upgrade refuses both `peer_upgrading` until every live node runs a
-build that can carry a pause.
 
 ## `crewlet retention`
 
@@ -1466,7 +1462,9 @@ a `providers.llm` entry of `type: cli-agent` drives a vendor's own CLI under
 the operator's Pro/Max plan instead of an API key, and the login that makes
 that work is established here rather than in the config document. `KEY` is the
 `providers.llm` key; commands that take one and are given none act on the only
-`cli-agent` provider when there is exactly one.
+`cli-agent` provider when there is exactly one. `doctor` also examines every
+`type: anthropic` entry; the other subcommands are `cli-agent` only, since an
+API entry has no login to broker, list or export.
 
 **`list`** is the inventory — provider key, CLI, model and whether it is
 logged in. **`doctor`** is the one to run before a company's first turn: it
@@ -1480,6 +1478,33 @@ seat reading whatever the engine user can read) and that its **web tool
 reaches the network** (the one local tool every profile deliberately keeps
 on). Both are believed only on evidence a model cannot invent — the current
 clock, read by the tool.
+
+On an **`anthropic` entry** `doctor` checks the two things that make every
+call on it a 400 while the config validates clean. The request is
+[shaped from the model](../getting-started/configuration.md#claude-models-thinking-effort-and-sampling)
+by a capability table compiled into this build, so `doctor` reads the model's
+record from the vendor's Models API (`GET /v1/models/{id}`, under the id the
+table reads — a Bedrock or dated spelling is the model it spells) and compares
+the thinking types, the effort levels and the output ceiling with what the
+entry sends. A disagreement that puts a field the model refuses on the wire is
+a **problem**, naming what to change: a `claude_model` for an alias the table
+does not know, the row a `claude_model` names, or — for a model the table reads
+itself — a Crewlet whose table matches the API. One where the table is merely
+more cautious than the model is a note. A gateway that does not serve
+`/v1/models` (a 404, 405 or 501, or a 200 that is not a model record) is
+reported as *not served* and is not a problem; any other failure of that read
+is. That read is made on one key and benches nothing, whatever it is answered:
+`/v1/models` is not the route a phase calls, and a gateway that refuses a key
+there (or rate-limits that route alone) while its messages route takes it
+would otherwise leave the round below with every key cooling. Then, unless you
+pass `-no-smoke`, it sends **one real round** in the shape
+a phase sends — a tool offered, no tool choice forced, the instruction naming
+it, the entry's own thinking, streamed, at effort `low` — and certifies that a
+call to that tool came back. The Models API read bills nothing, so it runs
+under `-no-smoke` too. `doctor` exits non-zero when any entry has a problem,
+and an entry that does not build at all (a `${VAR}` model that resolved to
+nothing, a dial its resolved model refuses) is reported as one beside the
+others. `openai` entries are not examined.
 
 **`login`** has four shapes because the vendors do:
 

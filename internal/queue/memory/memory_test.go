@@ -79,28 +79,18 @@ func TestConformance(t *testing.T) {
 			// backend with real fetch latency cannot promise.
 			InlineDispatch:   true,
 			StrictRoundRobin: true,
-			// A property of a mutex over a map rather than a choice: a
-			// NAK puts the event back at the head of the slice it came
-			// from.
-			//
-			// IT IS MORE FORGIVING THAN THE ONLY SHIPPED BROKER, and
-			// that is the thing to know when reading a test that passes
-			// here. JetStream returns a redelivery BEHIND
-			// never-delivered messages. Nothing above internal/queue may
-			// depend on either answer: conversation order comes from
-			// event timestamps (see queue.OrderForDispatch) precisely so
-			// that it does not.
-			//
-			// THE DEFERRAL COST IS NOT ON THIS LIST ANY MORE, and that
-			// is the difference between a degradation and a divergence.
-			// This twin used to declare a free deferral, so the one case
-			// certifying what a handoff costs ran against the twin alone
-			// — while the contract's own DeliveriesLeft said every
-			// return that puts a message back spends one. The twin
-			// spends one now, for the same reason the broker does, and
-			// the capability is gone.
-			HeadReplayOnNak: true,
-			RequiresStart:   true,
+			// NEITHER THE DEFERRAL COST NOR THE NAK ORDER IS ON THIS LIST
+			// ANY MORE, and that is the difference between a degradation
+			// and a divergence. This twin used to declare a free deferral,
+			// and then a failure replayed from the head (HeadReplayOnNak)
+			// — two properties the only shipped broker does not have, so
+			// the engine and node suites that run here certified a seat
+			// production does not run: one whose handoffs were free, and
+			// one that retried a failed message before its conversation's
+			// newer mail. The twin spends a delivery on every return and
+			// puts a failure behind the mail that was waiting, as
+			// JetStream does, and both capabilities are gone.
+			RequiresStart: true,
 			// Stop is a client disconnect, not a teardown: the broker and
 			// its mail outlive it, so Start serves again.
 			Restartable: true,
@@ -317,5 +307,91 @@ func TestHistoryTrimKeepsTheNewestEntries(t *testing.T) {
 		t.Errorf("history kept %v, want the NEWEST %d (%v); a trim that drops the newest "+
 			"entries satisfies the size check while inverting what the buffer is for",
 			types, ceiling, want)
+	}
+}
+
+// TestABlockedDrainRestoresBeforeAFailureNotBehindIt pins the one twin
+// mechanism the shared return-order case cannot reach: a batch drain whose
+// earlier partition FAILED and whose later partition DEFERRED, on a mailbox
+// that held nothing else.
+//
+// The deferral stops the drain, and what the drain never dispatched goes back
+// as a hand-back — at the head, behind the deferred partition. The failure is
+// a retry, which goes BEHIND everything that was waiting. The splice that puts
+// the undispatched partitions back finds the deferral's run by scanning the
+// mailbox's leading events for this chunk's own, and with nothing else in the
+// mailbox the failed partition was the next of them: counted into the run, it
+// put the undispatched partition behind a retry the broker serves after it.
+//
+// Three conversations, one event each, published while held so one chunk
+// carries all three: a fails, b defers, c is never dispatched. The mailbox
+// must then hold b (the deferral, at the head), c (handed back behind it), a
+// (the retry, behind both).
+func TestABlockedDrainRestoresBeforeAFailureNotBehindIt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	q := memory.New()
+	if err := q.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Stop(ctx) })
+
+	key := func(ev *events.Event) string { return ev.Type }
+	var mu sync.Mutex
+	var seen []string
+	first := map[string]bool{}
+	err := q.SubscribeBatch(ctx, "topic", "grp", func(_ context.Context, evs []*events.Event) queue.Result {
+		mu.Lock()
+		defer mu.Unlock()
+		label := evs[0].Type
+		seen = append(seen, label)
+		if first[label] {
+			return queue.Ack()
+		}
+		first[label] = true
+		switch label {
+		case "a":
+			return queue.Nak(errors.New("a fails once"))
+		case "b":
+			return queue.Defer("b is handed back once")
+		}
+		return queue.Ack()
+	}, key, queue.NewBatchOptions(0, 10))
+	if err != nil {
+		t.Fatalf("SubscribeBatch: %v", err)
+	}
+	if err := q.PauseTopic(ctx, "topic", "grp", "test"); err != nil {
+		t.Fatalf("PauseTopic: %v", err)
+	}
+	base := time.Now().UTC()
+	for i, label := range []string{"a", "b", "c"} {
+		if err := q.Publish(ctx, "topic", &events.Event{
+			ID: uuid.New(), Type: label, Source: "memory_test",
+			// Oldest first, so the drain dispatches a, then b, then c.
+			Timestamp: base.Add(time.Duration(i) * time.Millisecond),
+		}); err != nil {
+			t.Fatalf("Publish(%s): %v", label, err)
+		}
+	}
+	if err := q.ResumeTopic(ctx, "topic", "grp", "test"); err != nil {
+		t.Fatalf("ResumeTopic: %v", err)
+	}
+	if got := q.Backlog("topic", "grp"); !slices.EqualFunc(got, []string{"b", "c", "a"},
+		func(ev *events.Event, label string) bool { return ev.Type == label }) {
+		labels := make([]string, 0, len(got))
+		for _, ev := range got {
+			labels = append(labels, ev.Type)
+		}
+		t.Fatalf("mailbox after the deferral = %v, want [b c a]: the deferral at the head, "+
+			"the undispatched partition handed back behind it, and the failure behind both", labels)
+	}
+	if _, err := q.Unquiesce(ctx, "topic", "grp"); err != nil {
+		t.Fatalf("Unquiesce: %v", err)
+	}
+	// The next drain carries all three in ONE call each, ordered by their
+	// own timestamps (queue.OrderForDispatch) — the mailbox order above is
+	// what decides which DRAIN a message is in, not which call goes first.
+	if got := q.Backlog("topic", "grp"); len(got) != 0 {
+		t.Fatalf("%d message(s) still waiting after the attachment resumed", len(got))
 	}
 }

@@ -42,21 +42,10 @@ type CLI interface {
 	// the report instruction is appended by the base.
 	Command(req sandbox.RunRequest, paths Paths, configPath string) string
 
-	// Layout is the output layout this build launches the CLI's jobs with:
-	// a number the CLI raises whenever where a job's output lands changes,
-	// counted from zero — the layout every build before the number existed
-	// launched with. It is written on each job's handle at the start
-	// ([sandbox.RunHandle.Layout]).
-	Layout() int
-
-	// Output is where a job launched with layout writes its stdout and how
-	// its result is read back — DECLARED, so the shared wrapper and the
-	// shared reads follow it rather than knowing which CLI they are
-	// driving. It answers every layout a job may still be running under:
-	// this build's own, which it launches with, and each one an earlier
-	// build did, which a rolling upgrade leaves in boxes this build
-	// collects. A layout past this build's own is read as its own.
-	Output(paths Paths, layout int) Output
+	// Output is where the CLI's stdout lands and how its result is read
+	// back — DECLARED, so the shared wrapper and the shared reads follow it
+	// rather than knowing which CLI they are driving.
+	Output(paths Paths) Output
 
 	// Events is a new decoder for one of this CLI's event streams, read
 	// whole or followed across many reads ([Decoder]). Asked only when
@@ -114,10 +103,6 @@ func New(cli CLI) *Runner { return &Runner{cli: cli} }
 // Name is the coding agent's config name.
 func (r *Runner) Name() string { return r.cli.Name() }
 
-// Layout is the output layout this build launches the CLI's jobs with — what
-// every handle [Runner.Start] returns declares.
-func (r *Runner) Layout() int { return r.cli.Layout() }
-
 // Install prepares the box: the artefact directory and the ask shim.
 //
 // The CLI itself is NOT installed here — it ships in the image, which is what
@@ -148,14 +133,11 @@ func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 // reuse a box.
 func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error {
 	p := PathsFor(box)
-	out := r.cli.Output(p, r.cli.Layout())
+	out := r.cli.Output(p)
 	targets := []string{p.Done(), p.ExitCode(), p.Result(), p.Findings(), p.Ask()}
 	// The stream too, where it lives apart from the result: it is only
 	// truncated when the next job starts, and a peek between the clear and
-	// the start would show the previous job's stream as this one's. A build
-	// that predates the stream leaves it in place, which is why a read
-	// follows the layout the job DECLARED rather than what the box holds
-	// ([sandbox.RunHandle.Layout]).
+	// the start would show the previous job's stream as this one's.
 	if out.Stdout != p.Result() {
 		targets = append(targets, out.Stdout)
 	}
@@ -193,8 +175,7 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	}
 	req.Brief = finalBrief(req.Brief, paths)
 	inner := withShimPath(r.cli.Command(req, paths, configPath), paths)
-	layout := r.cli.Layout()
-	script := wrapperScript(inner, r.cli.Output(paths, layout), paths)
+	script := wrapperScript(inner, r.cli.Output(paths), paths)
 
 	// A LOGIN SHELL, and the -l is load-bearing: a coding CLI is commonly
 	// installed through nvm, asdf or a similar version manager, whose PATH
@@ -210,8 +191,8 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	if err != nil {
 		return sandbox.RunHandle{}, fmt.Errorf("codingagent: starting %s: %w", r.cli.Name(), err)
 	}
-	log.InfoContext(ctx, "coding_agent_started", "agent", r.cli.Name(), "pid", pid, "output_layout", layout)
-	return sandbox.RunHandle{CommandID: pid, Layout: layout}, nil
+	log.InfoContext(ctx, "coding_agent_started", "agent", r.cli.Name(), "pid", pid)
+	return sandbox.RunHandle{CommandID: pid}, nil
 }
 
 // wrapperScript is the shell line a job runs under: the CLI with its stdout
@@ -300,7 +281,7 @@ const terminalWindow = 256 << 10
 // without a timer, and imposing one is exactly what this design refuses.
 func (r *Runner) Poll(ctx context.Context, box sandbox.Sandbox, handle sandbox.RunHandle) (bool, error) {
 	paths := PathsFor(box)
-	out := r.cli.Output(paths, handle.Layout)
+	out := r.cli.Output(paths)
 	marker, readErr := box.ReadFile(ctx, paths.Done())
 	if readErr == nil && len(marker) > 0 {
 		return true, nil
@@ -374,10 +355,7 @@ const stderrKeep = sandbox.MaxFailureBytes
 // lines — in one place ([sandbox.MaxRunTextBytes]).
 func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbox.RunHandle) (sandbox.Result, error) {
 	paths := PathsFor(box)
-	// THE LAYOUT THE JOB WAS LAUNCHED WITH, never this build's: a box is
-	// reused across a turn's jobs by whichever build holds the seat, and a
-	// file this build streams to may be the previous job's.
-	out := r.cli.Output(paths, handle.Layout)
+	out := r.cli.Output(paths)
 	var refused []string
 
 	var (

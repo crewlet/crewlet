@@ -70,8 +70,7 @@ func init() {
 // and nothing in the engine read that key: the turn's ask was assembled by
 // [Briefer]-less fallback and the target seat was woken with the literal
 // string "(a2a_request)" instead of the question. A registered payload is what
-// makes the ask reachable — and what makes it survive a round-trip through a
-// build that predates it.
+// makes the ask reachable.
 type A2ARequest struct {
 	ChannelID string `json:"channel_id"`
 	Requester string `json:"requester"`

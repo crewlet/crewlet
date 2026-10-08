@@ -2,6 +2,7 @@ package seat
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -11,6 +12,34 @@ import (
 )
 
 // --- the tri-state ---------------------------------------------------------
+
+// AN ACQUIRED SEAT SAYS WHEN IT IS ESTABLISHED, once, and as a seat that already
+// admits turns: whatever its acquire hook was refused while it established
+// waits on exactly this edge, which no renew reports. A seat whose acquisition
+// failed was never established, and says nothing.
+func TestAnAcquiredSeatReportsItIsEstablishedOnceItAdmits(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	hooks := &hookLog{acquireErr: func(handle string, _ int) error {
+		if handle == "eng" {
+			return errors.New("the MCP child would not start")
+		}
+		return nil
+	}}
+	h := f.newHost("node-a", Config{Seats: seatsNamed("ceo", "eng"), Hooks: hooks})
+	hooks.admits = func(handle string) bool {
+		_, ok := h.MayStart(handle)
+		return ok
+	}
+	h.renewNodePresence(f.ctx)
+	h.Sweep(f.ctx)
+	wantStrings(t, hooks.establishedSeats(), []string{"ceo:admitting"}, "established")
+
+	// A renew is not an establishment: it reports nothing again.
+	h.Heartbeat(f.ctx)
+	h.Sweep(f.ctx)
+	wantStrings(t, hooks.establishedSeats(), []string{"ceo:admitting"}, "established after a renew")
+}
 
 // Invariant 1: renew reporting FALSE means the lease is definitively gone.
 func TestADefiniteFalseDropsTheSeatImmediately(t *testing.T) {

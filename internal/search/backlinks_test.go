@@ -106,17 +106,16 @@ func TestABacklinkLeavesWithTheEditOrTheSourceThatCarriedIt(t *testing.T) {
 	}
 }
 
-// THE DERIVATION BUMP IS THE BACKFILL. A row indexed before the backlinks
-// existed matches its source's version, so the version walk alone would never
-// look at it again and no page written before the upgrade would ever list a
+// THE DERIVATION BUMP IS THE BACKFILL. A row indexed under an earlier
+// derivation matches its source's version, so the version walk alone would
+// never look at it again and a page that did not move would never list a
 // link. The row's derivation is what brings it back into the walk.
-func TestARowIndexedBeforeTheBacklinksIsRederived(t *testing.T) {
+func TestARowIndexedUnderAnEarlierDerivationIsRederived(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
 
-	// AN INDEX FROM BEFORE: built with no link grammar, and stamped with the
-	// derivation that predates it — what migration 0036 leaves every
-	// existing row at.
+	// AN INDEX FROM BEFORE THE BUMP: built with no link grammar, and stamped
+	// with a derivation below this build's.
 	page(t, db, runbookID, "ENG", "Provisioner runbook", "The runbook.", 1)
 	page(t, db, oncallID, "ENG", "Scheduler on-call", "See /pages/"+runbookID, 1)
 	indexAll(t, search.NewIndexer(db, db.Replicated().Reader()))
@@ -127,7 +126,7 @@ func TestARowIndexedBeforeTheBacklinksIsRederived(t *testing.T) {
 	x := search.NewIndexer(db, db.Replicated().Reader()).WithLinks(pages.Links)
 	indexAll(t, x)
 	if got := linkedFrom(t, x, runbookID); got.PagesTotal != 1 {
-		t.Errorf("after an upgrade's first laps: %+v, want the on-call page — the "+
+		t.Errorf("after the bump's first laps: %+v, want the on-call page — the "+
 			"row matched its source's version and was never re-derived", got)
 	}
 }

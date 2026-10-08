@@ -502,10 +502,12 @@ func (a Actor) OperationSeed() string {
 // its call's clock is one a re-run after a loss decides a second time. See
 // [statelog.OpMintedAt].
 //
-// The zero instant where neither is known — a run parked by a build whose run
-// ids carried none — which reads as older than every loss: a node whose ledger
-// ever lost a row answers such a write `unknown`, unless it holds its row,
-// rather than risking it twice.
+// The zero instant where neither is known — a keyed turn whose trigger carried
+// no timestamp, or a turn whose id carries no instant, which the engine never
+// mints (every run id is time-ordered), so only a hand-built turn such as a
+// test's — which reads as older than every loss: a node whose ledger ever lost
+// a row answers such a write `unknown`, unless it holds its row, rather than
+// risking it twice.
 //
 // UNLESS THE TURN WAS REBASED ([Actor.RebasedTo]), which outranks both: a turn
 // whose identity started before what the ledger may have swept mints at the
@@ -1836,7 +1838,7 @@ func joinDepend(outcome statelog.Outcome, at statelog.Position, version int64,
 // "unknown" is read as the item's key, and the seat reports the work filed —
 // under a number that is a gap if the task step never landed. And where this
 // node's operation ledger cannot vouch for the operation (a seat re-running a
-// turn queued before its node adopted a snapshot), the create used to be
+// turn whose trigger predates the ledger's sweep), the create used to be
 // refused outright, which the default failure text renders as "the change was
 // NOT made": the seat then reworded the call and filed a duplicate of the item
 // its first run had filed.
@@ -1865,7 +1867,7 @@ func createUnknown(actor Actor, opID string, got tracker.WriteResult) string {
 // version, and the seat reports the change made — when nothing may have been
 // published at all: an operation this node's ledger cannot vouch for is
 // answered `unknown` WITHOUT publishing, which is exactly the answer a seat
-// woken by a backlog trigger just after its node adopted a snapshot gets.
+// re-running a turn whose trigger predates the ledger's sweep gets.
 //
 // # Which operation it names
 //
@@ -2173,7 +2175,7 @@ func handles(all ...string) []string {
 // re-run that makes the same calls in the same order reproduces every count.
 //
 // A COUNT OF ZERO ADDS NOTHING to the identity, so a run's first call of each
-// kind — every call, before this existed — derives the id it always did.
+// kind derives the id of the call alone.
 //
 // tool is the calling tool's own name, which is what the count is kept by.
 //

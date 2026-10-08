@@ -208,7 +208,7 @@ func TestAGiveBackLeavesASiblingsClaim(t *testing.T) {
 	sibling := leaseValue{
 		Resource: resource, Owner: "node-a/1", Epoch: claimingEpoch,
 		TTLNanos: int64(coordtest.LongTTL), Protocol: coord.ProtocolVersion,
-		Layout: layoutDutyLane, Claim: "the-sibling",
+		Claim: "the-sibling",
 	}
 	data, err := encodeValue(sibling)
 	if err != nil {

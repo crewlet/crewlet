@@ -832,7 +832,7 @@ func TestASettledRunTakesItsIndicatorDown(t *testing.T) {
 	// The double, which is the whole catalogue this case needs: the run is
 	// settled before it ever has a box.
 	company.Config.Providers.Sandbox = &config.SandboxProvider{Fake: true}
-	manager, err := buildSandbox(company.Config, e.resolver(), e.sandboxOtel, e.sandboxFleet())
+	manager, err := buildSandbox(company.Config, e.resolver(), e.sandboxOtel)
 	if err != nil {
 		t.Fatalf("buildSandbox: %v", err)
 	}

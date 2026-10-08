@@ -1,12 +1,16 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/config"
@@ -14,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -290,5 +295,116 @@ func TestAResumeThatCannotRunAnnouncesNothing(t *testing.T) {
 	}
 	if evs := p.published(); len(startsOf(evs)) != 0 {
 		t.Errorf("a resume that will be retried announced a segment (%s)", typesOf(evs))
+	}
+}
+
+// begins is a [sandbox.ResumeRequest.Begin] that records each call, how many
+// segment starts had been published when it came, and answers err.
+type begins struct {
+	mu     sync.Mutex
+	calls  int
+	starts []int
+	p      *pub
+	err    error
+}
+
+func (b *begins) begin(context.Context) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.calls++
+	b.starts = append(b.starts, len(startsOf(b.p.published())))
+	return b.err
+}
+
+// A RESUME BEGINS ITS TURN BEFORE ANY OF IT RUNS, and once: the coordinator's
+// commit — for a recorded answer, the record that this turn took it — is made
+// after every check that can still send the resume back, and before the
+// segment is so much as announced. Through the engine's own resumer, so the
+// commit the coordinator hands over is the one the frame calls.
+func TestAResumeBeginsItsTurnBeforeAnyOfItRuns(t *testing.T) {
+	t.Parallel()
+	e, p := starting(t, refusingModels(t))
+	state, err := execstate.Encode(execstate.State{
+		Messages: []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
+			ID: "call-1", Name: builtin.RunSandboxTool,
+		}}}},
+		PendingCallID: "call-1", PendingCallName: builtin.RunSandboxTool,
+	})
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	b := &begins{p: p}
+	err = (&resumer{engine: e}).Resume(t.Context(), sandbox.ResumeRequest{
+		Run: sandbox.PendingRun{
+			TurnID: "run-4", AgentHandle: "swe", Reply: "tool",
+			TaskDescription: "fix the failing test", DelegationDepth: 3,
+			ExecuteState: state,
+		},
+		Answer: "use main",
+		Begin:  b.begin,
+	})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if b.calls != 1 {
+		t.Fatalf("Begin called %d times, want once for the one segment", b.calls)
+	}
+	if b.starts[0] != 0 {
+		t.Errorf("Begin came after %d segment starts, want before the first: a turn on the "+
+			"record before its commit is one a crash can leave untaken", b.starts[0])
+	}
+	if starts := startsOf(p.published()); len(starts) != 1 {
+		t.Errorf("published %d starts, want the segment's one", len(starts))
+	}
+}
+
+// A COMMIT THAT CANNOT BE MADE STOPS THE TURN: the resume returns Begin's own
+// failure — a retry, as every early return of the resume is — and nothing of
+// the segment runs or is announced. A turn that ran without it would be read,
+// by whoever reaps its row after a crash, as one that never got the answer.
+func TestAResumeWhoseBeginIsRefusedDoesNotRun(t *testing.T) {
+	t.Parallel()
+	e, p := starting(t, refusingModels(t))
+	company := e.Company()
+	seat := company.Org.AgentSeatByHandle("swe")
+	refused := errors.New("the claim no longer holds the answer")
+	b := &begins{p: p, err: refused}
+	err := e.resumeTurn(t.Context(), resumeInput{
+		Company: company,
+		Run: sandbox.PendingRun{
+			TurnID: "run-5", AgentHandle: "swe", Reply: "tool",
+			TaskDescription: "fix the failing test", DelegationDepth: 3,
+		},
+		Turn:  &turnctx.Turn{RunID: "run-5", Seat: seat, Org: company.Org},
+		Begin: b.begin,
+	})
+	if !errors.Is(err, refused) || errors.Is(err, sandbox.ErrResumeAbandoned) {
+		t.Fatalf("err = %v, want Begin's refusal handed back as a retry", err)
+	}
+	if evs := p.published(); len(evs) != 0 {
+		t.Errorf("a turn whose commit was refused published %s", typesOf(evs))
+	}
+}
+
+// A RESUME THAT CANNOT RUN NEVER BEGINS: the runner could not be built, so the
+// resume is a retry and nothing took the answer.
+func TestAResumeThatCannotRunNeverBegins(t *testing.T) {
+	t.Parallel()
+	e, p := starting(t, nil)
+	company := e.Company()
+	seat := company.Org.AgentSeatByHandle("swe")
+	b := &begins{p: p}
+	if err := e.resumeTurn(t.Context(), resumeInput{
+		Company: company,
+		Run: sandbox.PendingRun{
+			TurnID: "run-6", AgentHandle: "swe", Reply: "tool", TaskDescription: "fix it",
+		},
+		Turn:  &turnctx.Turn{RunID: "run-6", Seat: seat, Org: company.Org},
+		Begin: b.begin,
+	}); !errors.Is(err, phase.ErrNoProviders) {
+		t.Fatalf("err = %v, want the build's own refusal", err)
+	}
+	if b.calls != 0 {
+		t.Fatalf("Begin called %d times by a resume that never reached its turn", b.calls)
 	}
 }

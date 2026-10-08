@@ -17,8 +17,7 @@
  * engine's `sandbox.MaxRunTextBytes`): every answer is appended to it — or, on
  * a reset, replaces it — and once it is past that, its FRONT is dropped on a
  * line and counted, so the screen says how much earlier output it no longer
- * holds. An owner on a build that reads no cursor answers a WINDOW instead,
- * which replaces what is shown each time, exactly as the screen did before.
+ * holds.
  *
  * # When it stops
  *
@@ -42,9 +41,6 @@ export interface LiveView {
   answer: SandboxTailAnswer | null;
   /** What the view shows. */
   text: string;
-  /** "cursor" while the owner sends what the view lacks, "window" while an
-   *  older owner sends its window to replace it, null before an answer. */
-  mode: "cursor" | "window" | null;
   /** The cursor: the reading the view holds, how far, and the owner's digest
    *  there. An empty epoch asks for a reset. */
   epoch: string;
@@ -57,8 +53,6 @@ export interface LiveView {
   front: boolean;
   /** Bytes written but not shown yet, until their redaction is settled. */
   held: number;
-  /** The most the last answer's shape carries. */
-  windowBytes: number;
   /** The job is not running: the view has stopped asking. */
   final: boolean;
 }
@@ -66,21 +60,20 @@ export interface LiveView {
 export const EMPTY_VIEW: LiveView = {
   answer: null,
   text: "",
-  mode: null,
   epoch: "",
   end: 0,
   digest: "",
   dropped: 0,
   front: false,
   held: 0,
-  windowBytes: 0,
   final: false,
 };
 
-/** What a view asks with: its cursor, or a cursor at nothing for a reset. */
+/** What a view asks with: its cursor, or none — a cursor at nothing, which is
+ *  answered with a reset. */
 export function cursorParams(view: LiveView): Record<string, unknown> {
-  if (view.mode !== "cursor" || !view.epoch) return { cursor: true };
-  return { cursor: true, epoch: view.epoch, after: view.end, digest: view.digest };
+  if (!view.epoch) return {};
+  return { epoch: view.epoch, after: view.end, digest: view.digest };
 }
 
 /**
@@ -97,28 +90,13 @@ export function foldTail(view: LiveView, answer: SandboxTailAnswer): LiveView {
   const kept: SandboxTailAnswer = out ? { ...answer, output: { ...out, text: "" } } : answer;
   const next: LiveView = { ...view, answer: kept, final: answer.outcome === "not_running" };
   if (answer.outcome !== "tail" || !out) return next;
-  if (!out.cursor) {
-    // A WINDOW, from an owner that reads no cursor: it replaces.
-    return {
-      ...next,
-      text: out.text,
-      mode: "window",
-      epoch: "",
-      end: 0,
-      digest: "",
-      dropped: 0,
-      front: false,
-      held: 0,
-      windowBytes: out.window_bytes ?? 8 << 10,
-    };
-  }
   next.front = out.front ?? false;
   next.held = out.held ?? 0;
-  // `start` IS ALWAYS A NUMBER on a cursor answer, 0 included: compared with
-  // an offset left out at 0, a delta from the start of a reading that had
+  // `start` IS ALWAYS A NUMBER on an answer, 0 included: compared with an
+  // offset left out at 0, a delta from the start of a reading that had
   // settled nothing read as one that did not follow.
   const follows =
-    !out.reset && view.mode === "cursor" && out.epoch === view.epoch && out.start === view.end;
+    !out.reset && view.epoch !== "" && out.epoch === view.epoch && out.start === view.end;
   if (!out.reset && !follows) {
     return { ...next, epoch: "", end: 0, digest: "" };
   }
@@ -126,12 +104,10 @@ export function foldTail(view: LiveView, answer: SandboxTailAnswer): LiveView {
   return {
     ...next,
     text: trimmed.text,
-    mode: "cursor",
     epoch: out.epoch,
     end: out.end,
     digest: out.digest,
     dropped: (follows ? view.dropped : out.start) + trimmed.dropped,
-    windowBytes: out.window_bytes ?? LIVE_OUTPUT_MAX_BYTES,
   };
 }
 

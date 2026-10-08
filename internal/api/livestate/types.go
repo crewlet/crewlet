@@ -170,7 +170,9 @@ type LiveCall struct {
 	// Rounds is the per-round timing the loop recorded — when each provider
 	// call was made, how long it took, its tokens and how many tools it
 	// asked for — as the progress frame carries it ([types.PhaseRound]).
-	// Empty on a frame from a build that predates it.
+	// Empty on the opening frame, before the phase's first provider call —
+	// and for the whole of an agent-mode executor, whose rounds run inside
+	// the coding CLI.
 	Rounds []any `json:"rounds"`
 
 	// MaxRounds is the round cap currently GRANTED to this phase, which an
@@ -207,8 +209,7 @@ type LiveCall struct {
 	CacheWriteTokens int `json:"cache_write_tokens"`
 
 	// WorkItem is the item the turn is charged to, when it is on one — the
-	// same `{backend, id, key, project}` the turn's start named. Carried
-	// like WorkKey, because a frame from an older build names none.
+	// same `{backend, id, key, project}` the turn's start named.
 	WorkItem *types.WorkItem `json:"work_item,omitempty"`
 
 	// Node is the node that published the call's frames: the node running
@@ -485,12 +486,18 @@ const (
 	// SandboxReseed — the box was reclaimed past its pause TTL while the
 	// run waited. The question survives and an answer relaunches it.
 	SandboxReseed SandboxStatus = "reseed"
+	// SandboxAnswered — a person's reply is recorded as the answer to the
+	// question, and the resume it drives is owed: the engine is working on
+	// it, and nobody is being waited on any more.
+	SandboxAnswered SandboxStatus = "answered"
 )
 
 // SandboxStatuses is the closed set a live entry can carry. The record's
 // `resumed` is deliberately not in it: the run itself is over and the turn
 // that launched it has taken its result back, so it is not a run in flight.
-var SandboxStatuses = []SandboxStatus{SandboxLaunching, SandboxRunning, SandboxAwaiting, SandboxReseed}
+var SandboxStatuses = []SandboxStatus{
+	SandboxLaunching, SandboxRunning, SandboxAwaiting, SandboxReseed, SandboxAnswered,
+}
 
 // Valid reports whether s is a status a live entry can carry.
 func (s SandboxStatus) Valid() bool { return slices.Contains(SandboxStatuses, s) }

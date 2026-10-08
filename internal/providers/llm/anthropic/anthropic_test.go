@@ -1,6 +1,7 @@
 package anthropic
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -26,6 +27,8 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/credential"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/anthropic/claudemodel"
+	"github.com/crewlet/crewlet/internal/providers/llm/httpapi"
 
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 )
@@ -50,6 +53,10 @@ type attempt struct {
 	authorization string
 	path          string
 	body          map[string]any
+	// raw is the body as it arrived, for the assertions that are about
+	// BYTES — a replayed turn is held to what the API sent, and a decoded
+	// map would hide every difference a vendor's history check can see.
+	raw []byte
 }
 
 // fakeAPI is an Anthropic endpoint that records what reached it. Everything
@@ -72,11 +79,114 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		authorization: r.Header.Get("Authorization"),
 		path:          r.URL.Path,
 		body:          body,
+		raw:           raw,
 	})
 	n := len(f.attempts)
 	f.mu.Unlock()
 
-	f.handle(w, n)
+	if body["stream"] != true {
+		f.handle(w, n)
+		return
+	}
+	// Every call streams, so a case that wrote its answer as one JSON
+	// message is answered in the form that was asked for (see [asStream]).
+	sw := &streamingWriter{ResponseWriter: w}
+	f.handle(sw, n)
+	sw.finish()
+}
+
+// unaryHeader marks a response a case wants sent exactly as written to a
+// streaming request: an endpoint that does not stream. Never sent on.
+const unaryHeader = "X-Fake-Unary"
+
+// writeUnary answers as an endpoint that serves only the unary route does,
+// whatever the request asked for.
+func writeUnary(w http.ResponseWriter, status int, body string) {
+	w.Header().Set(unaryHeader, "1")
+	writeJSON(w, status, body)
+}
+
+// streamingWriter turns a successful JSON message a case wrote into the
+// Messages stream a streaming request is answered with. Anything else — an
+// error status, a stream the case wrote itself, a [writeUnary] answer — goes
+// through untouched and as it is written, so a case that times its events
+// still times them.
+type streamingWriter struct {
+	http.ResponseWriter
+	buffer *bytes.Buffer // non-nil once the response is a message to convert
+}
+
+func (s *streamingWriter) WriteHeader(status int) {
+	h := s.Header()
+	if status == http.StatusOK && h.Get(unaryHeader) == "" &&
+		strings.HasPrefix(h.Get("Content-Type"), "application/json") {
+		s.buffer = &bytes.Buffer{}
+		return
+	}
+	h.Del(unaryHeader)
+	s.ResponseWriter.WriteHeader(status)
+}
+
+func (s *streamingWriter) Write(b []byte) (int, error) {
+	if s.buffer != nil {
+		return s.buffer.Write(b)
+	}
+	return s.ResponseWriter.Write(b)
+}
+
+func (s *streamingWriter) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok && s.buffer == nil {
+		f.Flush()
+	}
+}
+
+func (s *streamingWriter) finish() {
+	if s.buffer == nil {
+		return
+	}
+	writeStream(s.ResponseWriter, asStream(s.buffer.Bytes())...)
+}
+
+// asStream is a whole Messages response as the events a stream of it is made
+// of. Each block arrives WHOLE in its start event rather than spelled out in
+// deltas, which the SDK's accumulator reads the same way, so the block a
+// case wrote is the block the provider keeps, byte for byte; the delta
+// spelling is the streaming cases' own business (writeStream).
+func asStream(message []byte) []sseEvent {
+	// One line per event: an SSE data field ends at a newline.
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, message); err != nil {
+		panic(fmt.Sprintf("asStream: %v in %s", err, message))
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(compact.Bytes(), &m); err != nil {
+		panic(fmt.Sprintf("asStream: %v in %s", err, message))
+	}
+	var blocks []json.RawMessage
+	_ = json.Unmarshal(m["content"], &blocks)
+	orNull := func(raw json.RawMessage) string {
+		if len(raw) == 0 {
+			return "null"
+		}
+		return string(raw)
+	}
+	stop, details, usage := orNull(m["stop_reason"]), orNull(m["stop_details"]), orNull(m["usage"])
+	m["content"], m["stop_reason"] = json.RawMessage(`[]`), json.RawMessage(`null`)
+	delete(m, "stop_details")
+	start, _ := json.Marshal(map[string]any{"type": "message_start", "message": m})
+
+	out := []sseEvent{{"message_start", string(start)}}
+	for i, block := range blocks {
+		out = append(out,
+			sseEvent{"content_block_start", fmt.Sprintf(
+				`{"type":"content_block_start","index":%d,"content_block":%s}`, i, block)},
+			sseEvent{"content_block_stop", fmt.Sprintf(`{"type":"content_block_stop","index":%d}`, i)})
+	}
+	return append(out,
+		sseEvent{"message_delta", fmt.Sprintf(
+			`{"type":"message_delta","delta":{"stop_reason":%s,"stop_details":%s},"usage":%s}`,
+			stop, details, usage)},
+		sseEvent{"message_stop", `{"type":"message_stop"}`})
 }
 
 func (f *fakeAPI) seen() []attempt {
@@ -372,25 +482,44 @@ func TestSDKRetriesAreDisabled(t *testing.T) {
 
 // --- classification ----------------------------------------------------
 
+// Every pair is one the API documents (its errors page lists the status and
+// the type together), so on a status response the type and the status agree
+// and either would do. The rows WITHOUT a type are the fallback: a gateway's
+// own HTML 503, or a type this build does not know, is still classified — by
+// the status, as it always was. The case where the two DISAGREE is the
+// stream's, below.
 func TestStatusClassification(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		status int
+		typ    string // "" sends a body naming no type
 		want   llm.ErrorKind
 	}{
-		{400, llm.KindFatal},
-		{401, llm.KindAuth},
-		{403, llm.KindAuth},
-		{404, llm.KindFatal},
-		{408, llm.KindTimeout},
-		{429, llm.KindRateLimit},
-		{500, llm.KindServer},
-		{529, llm.KindServer},
+		{400, "invalid_request_error", llm.KindFatal},
+		{401, "authentication_error", llm.KindAuth},
+		{402, "billing_error", llm.KindRateLimit},
+		{403, "permission_error", llm.KindAuth},
+		{404, "not_found_error", llm.KindFatal},
+		{413, "request_too_large", llm.KindFatal},
+		{429, "rate_limit_error", llm.KindRateLimit},
+		{500, "api_error", llm.KindServer},
+		{504, "timeout_error", llm.KindTimeout},
+		{529, "overloaded_error", llm.KindServer},
+
+		{400, "", llm.KindFatal},
+		{401, "", llm.KindAuth},
+		{408, "", llm.KindTimeout},
+		{429, "", llm.KindRateLimit},
+		{503, "", llm.KindServer},
 	} {
-		t.Run(fmt.Sprint(tc.status), func(t *testing.T) {
+		t.Run(fmt.Sprint(tc.status, "/", tc.typ), func(t *testing.T) {
 			t.Parallel()
 			_, url := serve(t, func(w http.ResponseWriter, _ int) {
-				writeJSON(w, tc.status, apiError("api_error"))
+				body := apiError(tc.typ)
+				if tc.typ == "" {
+					body = `<html>bad gateway</html>`
+				}
+				writeJSON(w, tc.status, body)
 			})
 			p := newProvider(t, url, nil)
 			_, err := p.Complete(context.Background(), userTurn("hi"))
@@ -558,21 +687,24 @@ func TestAClassifiedFailureShowsNoneOfTheSDKsText(t *testing.T) {
 	t.Parallel()
 	const password = "s3cretpass"
 	key := "sk-ant-api03-" + strings.Repeat("Kv4", 12)
-	body := `{"type":"error","error":{"type":"authentication_error","message":"invalid key ` +
-		key + `"},"request_id":"req_011CSHoEeqs5C35K2UUqR7Fy"}`
+	// The failure's type is the one its status means, because the type is
+	// what classifies it (see kindOf) and this case is about the text.
 	for _, tc := range []struct {
-		name   string
-		status int
-		kind   llm.ErrorKind
-		keys   []string
-		stream bool
+		name    string
+		status  int
+		errType string
+		kind    llm.ErrorKind
+		keys    []string
+		stream  bool
 	}{
-		{"a single classified failure", 400, llm.KindFatal, []string{"k1"}, false},
-		{"an exhausted pool", 401, llm.KindAuth, []string{"k1", "k2"}, false},
-		{"an exhausted pool, streamed", 401, llm.KindAuth, []string{"k1"}, true},
+		{"a single classified failure", 400, "invalid_request_error", llm.KindFatal, []string{"k1"}, false},
+		{"an exhausted pool", 401, "authentication_error", llm.KindAuth, []string{"k1", "k2"}, false},
+		{"an exhausted pool, streamed", 401, "authentication_error", llm.KindAuth, []string{"k1"}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+			body := `{"type":"error","error":{"type":"` + tc.errType + `","message":"invalid key ` +
+				key + `"},"request_id":"req_011CSHoEeqs5C35K2UUqR7Fy"}`
 			_, url := serve(t, func(w http.ResponseWriter, _ int) {
 				w.Header().Set("request-id", "req_011CSHoEeqs5C35K2UUqR7Fy")
 				writeJSON(w, tc.status, body)
@@ -599,7 +731,7 @@ func TestAClassifiedFailureShowsNoneOfTheSDKsText(t *testing.T) {
 			for _, want := range []string{
 				fmt.Sprintf("HTTP %d %s", tc.status, http.StatusText(tc.status)),
 				"(request req_011CSHoEeqs5C35K2UUqR7Fy)",
-				"invalid key [REDACTED:api-key] (type authentication_error)",
+				"invalid key [REDACTED:api-key] (type " + tc.errType + ")",
 			} {
 				if !strings.Contains(text, want) {
 					t.Errorf("the error does not say %q: %s", want, text)
@@ -765,60 +897,142 @@ func TestToolsCarryTheirSchemaAndACacheBreakpointOnTheLast(t *testing.T) {
 	}
 }
 
-func TestToolChoiceMapping(t *testing.T) {
+// countBreakpoints counts every cache_control marker anywhere in a body.
+func countBreakpoints(v any) int {
+	n := 0
+	switch x := v.(type) {
+	case map[string]any:
+		for key, child := range x {
+			if key == "cache_control" {
+				n++
+			}
+			n += countBreakpoints(child)
+		}
+	case []any:
+		for _, child := range x {
+			n += countBreakpoints(child)
+		}
+	}
+	return n
+}
+
+// A TOOL LOOP'S CONVERSATION IS CACHED, NOT ONLY ITS PREFIX. The system and
+// tool breakpoints cache the static prefix and nothing after it, so without a
+// breakpoint at the conversation's end every round re-billed the whole history
+// at the full input price. It is set only where a next round exists — a call
+// offering tools — because a one-shot call's tail is written at a premium and
+// never read. Three breakpoints, inside the API's cap of four, all on the
+// default TTL, since a longer one may not follow a shorter.
+//
+// AND IT IS EXPLICIT, on the last block of the final message — never the
+// request's top-level `cache_control`, the API's "automatic" form, which the
+// legacy Bedrock integration (Opus 4.6 and earlier) answers with a 400 that no
+// fallback retries. A Bedrock spelling of such a model is one this backend
+// reads, behind any gateway that forwards the body, so the one form every
+// platform accepts is the one sent, on every model.
+func TestAToolLoopCachesItsConversation(t *testing.T) {
 	t.Parallel()
+	results := []llm.Message{
+		{Role: llm.RoleSystem, Content: "frame"},
+		{Role: llm.RoleUser, Content: "do it"},
+		{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "c1", Name: "a"}, {ID: "c2", Name: "b"}}},
+		{Role: llm.RoleTool, ToolCallID: "c1", Name: "a", Content: "first"},
+		{Role: llm.RoleTool, ToolCallID: "c2", Name: "b", Content: "second"},
+	}
+	// A person's note to a running turn joins the results' user turn after
+	// them (appendUser), so it is the conversation's last block.
+	steered := append(slices.Clone(results), llm.Message{Role: llm.RoleUser, Content: "and hurry"})
+	tools := []llm.ToolDef{{Name: "a"}, {Name: "b"}}
 	for _, tc := range []struct {
-		choice llm.ToolChoice
-		want   string // "" means the field must be absent
+		name     string
+		model    string
+		tools    []llm.ToolDef
+		messages []llm.Message
+		want     int    // breakpoints in the body
+		tail     string // the type of the final message's last block, "" for no marker
 	}{
-		{"", "auto"},
-		{"auto", "auto"},
-		{"required", "any"}, // Anthropic spells it `any`
-		{"none", "none"},
-		{"nonsense", ""},
+		{"a tool loop's round", "claude-test", tools, results, 3, "tool_result"},
+		{"a round a note was steered into", "claude-test", tools, steered, 3, "text"},
+		{"a legacy Bedrock model", "us.anthropic.claude-opus-4-6-v1", tools, results, 3, "tool_result"},
+		{"a one-shot call", "claude-test", nil, results, 1, ""},
 	} {
-		t.Run("choice="+string(tc.choice), func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
-			p := newProvider(t, url, nil)
-			req := userTurn("hi")
-			req.Tools = []llm.ToolDef{{Name: "t"}}
-			req.ToolChoice = tc.choice
-			if _, err := p.Complete(context.Background(), req); err != nil {
+			p := newProvider(t, url, func(c *Config) { c.Model = tc.model })
+			if _, err := p.Complete(context.Background(), llm.Request{Tools: tc.tools, Messages: tc.messages}); err != nil {
 				t.Fatalf("Complete: %v", err)
 			}
 			body := api.seen()[0].body
-			got, present := body["tool_choice"]
-			if tc.want == "" {
-				if present {
-					t.Fatalf("tool_choice = %v, want the field absent", got)
+			if top, present := body["cache_control"]; present {
+				t.Fatalf("top-level cache_control = %v, want none: legacy Bedrock refuses it", top)
+			}
+			messages := body["messages"].([]any)
+			final := messages[len(messages)-1].(map[string]any)
+			blocks := final["content"].([]any)
+			for i, b := range blocks {
+				block := b.(map[string]any)
+				marker, marked := block["cache_control"]
+				last := i == len(blocks)-1
+				switch {
+				case last && tc.tail != "":
+					if block["type"] != tc.tail || !marked {
+						t.Fatalf("final block = %v, want a %s carrying the breakpoint", block, tc.tail)
+					}
+					m := marker.(map[string]any)
+					if m["type"] != "ephemeral" {
+						t.Fatalf("tail breakpoint = %v, want ephemeral", m)
+					}
+					if ttl, set := m["ttl"]; set {
+						t.Fatalf("tail ttl = %v, want the default the other markers carry", ttl)
+					}
+				case marked:
+					t.Fatalf("block %d of the final message carries a breakpoint: %v", i, block)
 				}
-				return
 			}
-			if !present {
-				t.Fatal("tool_choice missing")
+			for i, m := range messages[:len(messages)-1] {
+				if n := countBreakpoints(m); n != 0 {
+					t.Fatalf("message %d carries %d breakpoints, want them all on the final one", i, n)
+				}
 			}
-			if kind := got.(map[string]any)["type"]; kind != tc.want {
-				t.Fatalf("tool_choice type = %v, want %v", kind, tc.want)
+			if got := countBreakpoints(body); got != tc.want || got > 4 {
+				t.Fatalf("%d breakpoints, want %d (the API allows four)", got, tc.want)
 			}
 		})
 	}
 }
 
-func TestToolChoiceIsOmittedWithoutTools(t *testing.T) {
+// TOOLS ARE OFFERED, NEVER FORCED. With tools present the API's default
+// choice is auto, so none is sent — and a forced `any` is a 400 on Opus 5.5,
+// Sonnet 5.5, Fable 5.1 and Mythos 5.1, and on every Claude model while it is
+// thinking, which the fallback chain does not retry.
+func TestToolsAreOfferedWithNoToolChoice(t *testing.T) {
 	t.Parallel()
-	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
-	p := newProvider(t, url, nil)
-	req := userTurn("hi")
-	req.ToolChoice = "required"
-	if _, err := p.Complete(context.Background(), req); err != nil {
-		t.Fatalf("Complete: %v", err)
-	}
-	if _, present := api.seen()[0].body["tool_choice"]; present {
-		t.Fatal("tool_choice sent with no tools to choose from")
+	for _, tools := range [][]llm.ToolDef{nil, {{Name: "t"}}} {
+		api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
+		p := newProvider(t, url, nil)
+		req := userTurn("hi")
+		req.Tools = tools
+		if _, err := p.Complete(context.Background(), req); err != nil {
+			t.Fatalf("Complete: %v", err)
+		}
+		body := api.seen()[0].body
+		if got, present := body["tool_choice"]; present {
+			t.Errorf("%d tools: tool_choice = %v, want the field absent", len(tools), got)
+		}
+		if _, present := body["tools"]; present != (len(tools) > 0) {
+			t.Errorf("%d tools: tools present = %v", len(tools), present)
+		}
 	}
 }
 
+// A TURN THIS BACKEND DID NOT WRITE IS REBUILT FROM THE NEUTRAL VIEW, and
+// rebuilt WITHOUT ITS THINKING. Here it is another backend's turn carrying
+// signed blocks: another vendor's reasoning has no Anthropic signature, and a
+// block rebuilt from the neutral view is not the block that was signed — its
+// order and the text around it are the rebuild's — so sending it is the edit
+// the vendor's history check rejects. A turn with no thinking is what any
+// non-Claude turn looks like, and is always accepted.
 func TestConversationTranslation(t *testing.T) {
 	t.Parallel()
 	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
@@ -828,8 +1042,9 @@ func TestConversationTranslation(t *testing.T) {
 		{
 			Role:           llm.RoleAssistant,
 			Content:        "working",
-			ThinkingBlocks: []llm.ThinkingBlock{{Type: "thinking", Thinking: "hmm", Signature: "sig"}},
+			ThinkingBlocks: []llm.ThinkingBlock{{Type: "thinking", Thinking: "hmm"}},
 			ToolCalls:      []llm.ToolCall{{ID: "call_1", Name: "run", Arguments: map[string]any{"a": 1}}},
+			Origin:         llm.Origin{Provider: "openai", Model: "gpt-test"},
 		},
 		{Role: llm.RoleTool, ToolCallID: "call_1", Name: "run", Content: "done"},
 	}})
@@ -846,19 +1061,13 @@ func TestConversationTranslation(t *testing.T) {
 		t.Fatalf("role = %v", assistant["role"])
 	}
 	blocks := assistant["content"].([]any)
-	if len(blocks) != 3 {
-		t.Fatalf("assistant blocks = %v, want thinking, text, tool_use", blocks)
+	if len(blocks) != 2 {
+		t.Fatalf("assistant blocks = %v, want text then tool_use and no thinking", blocks)
 	}
-	// Thinking goes back FIRST and verbatim, signature included:
-	// Anthropic validates it against the turn it belongs to.
-	thinking := blocks[0].(map[string]any)
-	if thinking["type"] != "thinking" || thinking["thinking"] != "hmm" || thinking["signature"] != "sig" {
-		t.Fatalf("thinking block = %v", thinking)
+	if blocks[0].(map[string]any)["text"] != "working" {
+		t.Fatalf("text block = %v", blocks[0])
 	}
-	if blocks[1].(map[string]any)["text"] != "working" {
-		t.Fatalf("text block = %v", blocks[1])
-	}
-	use := blocks[2].(map[string]any)
+	use := blocks[1].(map[string]any)
 	if use["type"] != "tool_use" || use["id"] != "call_1" || use["name"] != "run" {
 		t.Fatalf("tool_use block = %v", use)
 	}
@@ -877,25 +1086,352 @@ func TestConversationTranslation(t *testing.T) {
 	}
 }
 
-func TestRedactedThinkingIsHandedBackOpaquely(t *testing.T) {
+// --- replay ------------------------------------------------------------
+
+// sentBlocks is the content of message i of a request body, one block per
+// element, as the bytes that crossed the wire.
+func sentBlocks(t *testing.T, raw []byte, i int) []json.RawMessage {
+	t.Helper()
+	var body struct {
+		Messages []struct {
+			Role    string            `json:"role"`
+			Content []json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatalf("request body: %v", err)
+	}
+	if i >= len(body.Messages) {
+		t.Fatalf("the request carries %d messages, want message %d", len(body.Messages), i)
+	}
+	if body.Messages[i].Role != "assistant" {
+		t.Fatalf("message %d is %q, want the assistant turn", i, body.Messages[i].Role)
+	}
+	return body.Messages[i].Content
+}
+
+// encoded is a block in the one form every request body puts it in: the SDK
+// encodes a body with Go's JSON encoder, which drops the whitespace BETWEEN
+// tokens and writes <, > and & inside a string as \u escapes. Neither changes
+// a token — the same keys in the same order, every number in the digits it was
+// written in, every string the same string — and what the vendor compares is
+// the tokens, so this is the strongest equality a request can be held to and
+// still be sent through the SDK.
+func encoded(t *testing.T, block []byte) string {
+	t.Helper()
+	var compact, escaped bytes.Buffer
+	if err := json.Compact(&compact, block); err != nil {
+		t.Fatalf("block %s is not JSON: %v", block, err)
+	}
+	json.HTMLEscape(&escaped, compact.Bytes())
+	return escaped.String()
+}
+
+// replayedAsWritten fails unless the assistant turn at message i of a request
+// is exactly the blocks the model wrote, in the order it wrote them.
+func replayedAsWritten(t *testing.T, raw []byte, i int, written []string) {
+	t.Helper()
+	sent := sentBlocks(t, raw, i)
+	if len(sent) != len(written) {
+		t.Fatalf("replayed %d blocks, want the %d the model wrote:\n%s", len(sent), len(written), raw)
+	}
+	for j := range written {
+		if got, want := encoded(t, sent[j]), encoded(t, []byte(written[j])); got != want {
+			t.Errorf("block %d replayed as\n  %s\nwant it as the model wrote it\n  %s", j, got, want)
+		}
+	}
+}
+
+// interleaved is a turn the neutral view cannot rebuild: two thinking blocks
+// with text between them, then a call. Every block is written the way a
+// re-encoder would NOT write it — keys out of the SDK's order, a field this
+// engine does not model (`citations`, `caller`), a number past 2^53, a 1.0, and
+// markup a string escaper touches — so a replay that went through a decode and
+// an encode anywhere fails on at least one of them.
+var interleaved = []string{
+	`{"signature":"sig-A","type":"thinking","thinking":"Weighing <it> & the rest.\n  Indented."}`,
+	`{"type":"text","text":"  First, <this>.  ","citations":null}`,
+	`{"type":"thinking","thinking":"Now the call.","signature":"sig-B"}`,
+	`{"type":"tool_use","id":"toolu_1","name":"lookup",` +
+		`"input":{"z":1.0,"id":12345678901234567890,"q":"a<b>"},"caller":{"type":"direct"}}`,
+}
+
+func messageOf(blocks []string, stop string) string {
+	return `{"id":"msg_1","type":"message","role":"assistant","model":"claude-test",` +
+		`"content":[` + strings.Join(blocks, ",") + `],"stop_reason":"` + stop + `",` +
+		`"usage":{"input_tokens":10,"output_tokens":5}}`
+}
+
+// AN ASSISTANT TURN IS REPLAYED AS THE MODEL WROTE IT. Opus 5.5, Sonnet 5.5
+// and Fable 5.1 bind each thinking block to everything before it, byte for
+// byte, and an earlier turn that comes back different invalidates every block
+// after it — a 400 the chain does not retry, on an account the vendor
+// enforces. The rebuild this replaced put both thinking blocks first, joined
+// the texts, re-encoded the call's input from a decoded map and dropped every
+// field it did not model.
+func TestAnAssistantTurnIsReplayedAsTheModelWroteIt(t *testing.T) {
+	t.Parallel()
+	api, url := serve(t, func(w http.ResponseWriter, n int) {
+		if n == 1 {
+			writeJSON(w, 200, messageOf(interleaved, "tool_use"))
+			return
+		}
+		writeJSON(w, 200, okMessage("done"))
+	})
+	p := newProvider(t, url, nil)
+	out, err := p.Complete(context.Background(), userTurn("look it up"))
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	// The neutral view is still the engine's to read.
+	if len(out.ToolCalls) != 1 || len(out.ThinkingBlocks) != 2 || out.Content != "  First, <this>.  " {
+		t.Fatalf("neutral view = %+v", out)
+	}
+	turn := out.Message()
+	if turn.Origin != (llm.Origin{Provider: "anthropic", Model: "claude-test"}) {
+		t.Fatalf("origin = %+v, want this backend and its model", turn.Origin)
+	}
+
+	if _, err := p.Complete(context.Background(), llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: "look it up"},
+		turn,
+		{Role: llm.RoleTool, ToolCallID: "toolu_1", Name: "lookup", Content: "found"},
+	}}); err != nil {
+		t.Fatalf("second Complete: %v", err)
+	}
+	replayedAsWritten(t, api.seen()[1].raw, 1, interleaved)
+}
+
+// A STREAMED TURN IS REPLAYED AS THE MODEL WROTE IT TOO. A streamed block
+// arrives as a start and a run of deltas, and the copy kept for the replay is
+// the FINISHED block: the thinking with its streamed signature, the call with
+// the input exactly as its fragments spelled it.
+func TestAStreamedTurnIsReplayedAsTheModelWroteIt(t *testing.T) {
+	t.Parallel()
+	api, url := serve(t, func(w http.ResponseWriter, n int) {
+		if n > 1 {
+			writeJSON(w, 200, okMessage("done"))
+			return
+		}
+		writeStream(w, streamOf(
+			streamStart(),
+			sseEvent{"content_block_start", `{"type":"content_block_start","index":0,` +
+				`"content_block":{"type":"thinking","thinking":"","signature":""}}`},
+			sseEvent{"content_block_delta", `{"type":"content_block_delta","index":0,` +
+				`"delta":{"type":"thinking_delta","thinking":"Weighing it."}}`},
+			sseEvent{"content_block_delta", `{"type":"content_block_delta","index":0,` +
+				`"delta":{"type":"signature_delta","signature":"sig-1"}}`},
+			sseEvent{"content_block_stop", `{"type":"content_block_stop","index":0}`},
+			textBlock(1, "Hel", "lo"),
+			sseEvent{"content_block_start", `{"type":"content_block_start","index":2,` +
+				`"content_block":{"type":"thinking","thinking":"","signature":""}}`},
+			sseEvent{"content_block_delta", `{"type":"content_block_delta","index":2,` +
+				`"delta":{"type":"thinking_delta","thinking":"Then the call."}}`},
+			sseEvent{"content_block_delta", `{"type":"content_block_delta","index":2,` +
+				`"delta":{"type":"signature_delta","signature":"sig-2"}}`},
+			sseEvent{"content_block_stop", `{"type":"content_block_stop","index":2}`},
+			sseEvent{"content_block_start", `{"type":"content_block_start","index":3,` +
+				`"content_block":{"type":"tool_use","id":"tu_1","name":"lookup","input":{}}}`},
+			sseEvent{"content_block_delta", `{"type":"content_block_delta","index":3,` +
+				`"delta":{"type":"input_json_delta","partial_json":"{\"id\": 1234567890"}}`},
+			sseEvent{"content_block_delta", `{"type":"content_block_delta","index":3,` +
+				`"delta":{"type":"input_json_delta","partial_json":"123456789, \"q\":\"x\"}"}}`},
+			sseEvent{"content_block_stop", `{"type":"content_block_stop","index":3}`},
+			streamEnd("tool_use"),
+		)...)
+	})
+	p := newProvider(t, url, nil)
+	var got []llm.Delta
+	out, err := p.Complete(context.Background(), streamingTurn("hi", &got))
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if _, err := p.Complete(context.Background(), llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: "hi"},
+		out.Message(),
+		{Role: llm.RoleTool, ToolCallID: "tu_1", Content: "found"},
+	}}); err != nil {
+		t.Fatalf("second Complete: %v", err)
+	}
+	replayedAsWritten(t, api.seen()[1].raw, 1, []string{
+		`{"type":"thinking","thinking":"Weighing it.","signature":"sig-1"}`,
+		`{"type":"text","text":"Hello"}`,
+		`{"type":"thinking","thinking":"Then the call.","signature":"sig-2"}`,
+		`{"type":"tool_use","id":"tu_1","name":"lookup","input":{"id": 1234567890123456789, "q":"x"}}`,
+	})
+}
+
+// ANOTHER CLAUDE MODEL'S TURN IS REPLAYED WHOLE, thinking included. A chain's
+// fallback member, or a parked run resumed after the entry's model changed,
+// hands this model turns another one wrote; the vendor decides which model
+// reads which block and drops the ones it cannot, unbilled and without failing
+// the call. Stripping them here would remove blocks from the MIDDLE of the
+// conversation's sequence — the one removal that fails every block after it
+// once the conversation is back on the model that wrote them.
+func TestAnotherClaudeModelsTurnIsReplayedWithItsThinking(t *testing.T) {
+	t.Parallel()
+	api, url := serve(t, func(w http.ResponseWriter, n int) {
+		if n == 1 {
+			writeJSON(w, 200, messageOf(interleaved, "tool_use"))
+			return
+		}
+		writeJSON(w, 200, okMessage("ok"))
+	})
+	// The turn is the primary's; the next round is the fallback's, over
+	// the same tools and the same system prompt.
+	primary := newProvider(t, url, func(c *Config) { c.Model = "claude-opus-5-5" })
+	fallback := newProvider(t, url, func(c *Config) { c.Model = "claude-sonnet-5-5" })
+	tools := []llm.ToolDef{{Name: "lookup", Description: "Look a thing up."}}
+	out, err := primary.Complete(context.Background(), llm.Request{Tools: tools, Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: "look it up"},
+	}})
+	if err != nil {
+		t.Fatalf("primary Complete: %v", err)
+	}
+	if _, err := fallback.Complete(context.Background(), llm.Request{Tools: tools, Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: "look it up"},
+		out.Message(),
+		{Role: llm.RoleTool, ToolCallID: "toolu_1", Content: "found"},
+	}}); err != nil {
+		t.Fatalf("fallback Complete: %v", err)
+	}
+	replayedAsWritten(t, api.seen()[1].raw, 1, interleaved)
+}
+
+// RAW IS REPLAYED ONLY BY THE BACKEND WHOSE FORMAT IT IS. A turn some other
+// backend recorded blocks for, or one with blocks and no origin at all, is
+// rebuilt from the neutral view — never sent as Anthropic content it is not.
+func TestOnlyThisBackendsBlocksAreReplayed(t *testing.T) {
+	t.Parallel()
+	for name, origin := range map[string]llm.Origin{
+		"another backend": {Provider: "openai", Model: "gpt-test"},
+		"no origin":       {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
+			p := newProvider(t, url, nil)
+			if _, err := p.Complete(context.Background(), llm.Request{Messages: []llm.Message{
+				{Role: llm.RoleUser, Content: "hi"},
+				{
+					Role: llm.RoleAssistant, Content: "working",
+					ToolCalls: []llm.ToolCall{{ID: "c", Name: "t"}},
+					Origin:    origin,
+					Raw:       []json.RawMessage{json.RawMessage(`{"type":"foreign","x":1}`)},
+				},
+				{Role: llm.RoleTool, ToolCallID: "c", Content: "done"},
+			}}); err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+			var types []string
+			for _, b := range sentBlocks(t, api.seen()[0].raw, 1) {
+				var head struct{ Type string }
+				_ = json.Unmarshal(b, &head)
+				types = append(types, head.Type)
+			}
+			if !slices.Equal(types, []string{"text", "tool_use"}) {
+				t.Fatalf("assistant blocks = %v, want the neutral rebuild", types)
+			}
+		})
+	}
+}
+
+// Redacted thinking and a block type this engine has never heard of are both
+// replayed exactly as they came: neither has anything the neutral view could
+// rebuild them from, and leaving either out is an edit.
+func TestOpaqueBlocksAreHandedBackAsTheyCame(t *testing.T) {
+	t.Parallel()
+	written := []string{
+		`{"type":"redacted_thinking","data":"opaque"}`,
+		`{"type":"from_a_later_api","anything":{"at":["all"]}}`,
+		`{"type":"tool_use","id":"c","name":"t","input":{}}`,
+	}
+	api, url := serve(t, func(w http.ResponseWriter, n int) {
+		if n == 1 {
+			writeJSON(w, 200, messageOf(written, "tool_use"))
+			return
+		}
+		writeJSON(w, 200, okMessage("ok"))
+	})
+	p := newProvider(t, url, nil)
+	out, err := p.Complete(context.Background(), userTurn("hi"))
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if _, err := p.Complete(context.Background(), llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: "hi"},
+		out.Message(),
+		{Role: llm.RoleTool, ToolCallID: "c", Content: "done"},
+	}}); err != nil {
+		t.Fatalf("second Complete: %v", err)
+	}
+	replayedAsWritten(t, api.seen()[1].raw, 1, written)
+}
+
+// A TEXT BLOCK OF NOTHING BUT WHITESPACE IS LEFT OUT of a replayed turn. A
+// model writes one — a newline between its thinking and its call — and the
+// API refuses one on input; the vendor's history check ignores them by rule,
+// so leaving one out is not an edit. A turn that held nothing else is dropped
+// whole, as any turn with nothing in it is.
+func TestWhitespaceTextIsLeftOutOfAReplayedTurn(t *testing.T) {
+	t.Parallel()
+	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
+	p := newProvider(t, url, nil)
+	blocks := func(b ...string) []json.RawMessage {
+		out := make([]json.RawMessage, len(b))
+		for i := range b {
+			out[i] = json.RawMessage(b[i])
+		}
+		return out
+	}
+	thinking := `{"type":"thinking","thinking":"t","signature":"s"}`
+	call := `{"type":"tool_use","id":"c","name":"t","input":{}}`
+	origin := llm.Origin{Provider: "anthropic", Model: "claude-test"}
+	// Written under this request's own (empty) system prompt and tools, so
+	// the thinking is the request's to replay.
+	bound := boundTo(t, "", nil)
+	if _, err := p.Complete(context.Background(), llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: "hi"},
+		{Role: llm.RoleAssistant, Origin: origin, Binding: bound, Raw: blocks(`{"type":"text","text":" \n\t"}`)},
+		{Role: llm.RoleUser, Content: "go on"},
+		{
+			Role: llm.RoleAssistant, Origin: origin, Binding: bound, ToolCalls: []llm.ToolCall{{ID: "c", Name: "t"}},
+			Raw: blocks(thinking, `{"type":"text","text":"\n\n"}`, call),
+		},
+		{Role: llm.RoleTool, ToolCallID: "c", Content: "done"},
+	}}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	raw := api.seen()[0].raw
+	if n := len(api.seen()[0].body["messages"].([]any)); n != 3 {
+		t.Fatalf("sent %d messages, want the whitespace-only turn dropped and the two user turns joined: %s", n, raw)
+	}
+	replayedAsWritten(t, raw, 1, []string{thinking, call})
+}
+
+// A replayed block that is not JSON is a parked conversation corrupted in
+// storage. Refused naming the message, before the network, rather than left
+// to fail inside the SDK's encoder with an error naming nothing.
+func TestACorruptReplayedBlockIsRefusedBeforeTheCall(t *testing.T) {
 	t.Parallel()
 	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
 	p := newProvider(t, url, nil)
 	_, err := p.Complete(context.Background(), llm.Request{Messages: []llm.Message{
 		{Role: llm.RoleUser, Content: "hi"},
 		{
-			Role:           llm.RoleAssistant,
-			ThinkingBlocks: []llm.ThinkingBlock{{Type: "redacted_thinking", Data: "opaque"}},
-			ToolCalls:      []llm.ToolCall{{ID: "c", Name: "t"}},
+			Role: llm.RoleAssistant, Origin: llm.Origin{Provider: "anthropic"},
+			Raw: []json.RawMessage{json.RawMessage(`{"type":"thinking"`)},
 		},
+		{Role: llm.RoleUser, Content: "go on"},
 	}})
-	if err != nil {
-		t.Fatalf("Complete: %v", err)
+	if got := llm.KindOf(err); got != llm.KindFatal {
+		t.Fatalf("classified %s (%v), want fatal", got, err)
 	}
-	messages := api.seen()[0].body["messages"].([]any)
-	block := messages[1].(map[string]any)["content"].([]any)[0].(map[string]any)
-	if block["type"] != "redacted_thinking" || block["data"] != "opaque" {
-		t.Fatalf("redacted block = %v", block)
+	if !strings.Contains(err.Error(), "message 1") {
+		t.Fatalf("error %v does not name the message", err)
+	}
+	if api.count() != 0 {
+		t.Fatal("an unsendable request still reached the network")
 	}
 }
 
@@ -968,103 +1504,335 @@ func TestARequestWithNothingToSayIsRefusedBeforeTheCall(t *testing.T) {
 	}
 }
 
-func TestReasoningSendsAThinkingBudgetAndPinsTemperature(t *testing.T) {
+// --- the request shape, per model --------------------------------------
+
+// shapeFacts is what the API reference says one model accepts, written out
+// HERE rather than read from claudemodel: the test holds the wire to the
+// reference, so a table row edited away from it goes red as a body that
+// changed rather than passing because both sides moved together.
+type shapeFacts struct {
+	name        string
+	model       string
+	claudeModel string
+	adaptive    bool     // false: the budget generation
+	efforts     []string // nil: takes no effort at all
+	sampling    bool
+	maxOutput   float64
+}
+
+var (
+	everyLevel = []string{"low", "medium", "high", "xhigh", "max"}
+	noXHigh    = []string{"low", "medium", "high", "max"}
+)
+
+var shapeModels = []shapeFacts{
+	{"fable 5.1", "claude-fable-5-1", "", true, everyLevel, false, 128000},
+	{"mythos 5.1", "claude-mythos-5-1", "", true, everyLevel, false, 128000},
+	{"fable 5", "claude-fable-5", "", true, everyLevel, false, 128000},
+	{"mythos 5", "claude-mythos-5", "", true, everyLevel, false, 128000},
+	{"opus 5.5", "claude-opus-5-5", "", true, everyLevel, false, 128000},
+	{"opus 5", "claude-opus-5", "", true, everyLevel, false, 128000},
+	{"opus 4.8", "claude-opus-4-8", "", true, everyLevel, false, 128000},
+	{"opus 4.7", "claude-opus-4-7", "", true, everyLevel, false, 128000},
+	{"opus 4.6", "claude-opus-4-6", "", true, noXHigh, true, 128000},
+	{"sonnet 5.5", "claude-sonnet-5-5", "", true, everyLevel, false, 128000},
+	{"sonnet 5", "claude-sonnet-5", "", true, everyLevel, false, 128000},
+	{"sonnet 4.6", "claude-sonnet-4-6", "", true, noXHigh, true, 128000},
+	{"haiku 4.5", "claude-haiku-4-5", "", false, nil, true, 64000},
+	{"haiku 4.5 snapshot", "claude-haiku-4-5-20251001", "", false, nil, true, 64000},
+	// An id the table has never seen is a model released after it: the
+	// current generation's shape, at the smallest current output cap.
+	{"unknown id", "claude-opus-5-7", "", true, everyLevel, false, 64000},
+	// The deployment spellings shape as the model they spell.
+	{"bedrock", "anthropic.claude-opus-5-5", "", true, everyLevel, false, 128000},
+	{"bedrock profile", "us.anthropic.claude-sonnet-4-5-20250929-v1:0", "", false, nil, true, 64000},
+	{"vertex", "claude-opus-4-5@20251101", "", false, []string{"low", "medium", "high"}, true, 64000},
+	// A gateway alias for an OLDER model, the one case Modern gets wrong,
+	// named by claude_model.
+	{"alias with claude_model", "gateway-fast", "claude-haiku-4-5", false, nil, true, 64000},
+}
+
+// wireShape is every field of a request body the model decides.
+type wireShape struct {
+	ThinkingType    string // "" when the field is absent
+	ThinkingDisplay string
+	Budget          float64
+	Effort          string // "" when output_config is absent
+	Temperature     *float64
+	MaxTokens       float64
+	ToolChoice      bool
+}
+
+func (w wireShape) String() string {
+	temp := "absent"
+	if w.Temperature != nil {
+		temp = fmt.Sprint(*w.Temperature)
+	}
+	return fmt.Sprintf("thinking=%q display=%q budget=%v effort=%q temperature=%s max_tokens=%v tool_choice=%v",
+		w.ThinkingType, w.ThinkingDisplay, w.Budget, w.Effort, temp, w.MaxTokens, w.ToolChoice)
+}
+
+func shapeOf(t *testing.T, body map[string]any) wireShape {
+	t.Helper()
+	var w wireShape
+	if thinking, ok := body["thinking"].(map[string]any); ok {
+		w.ThinkingType, _ = thinking["type"].(string)
+		w.ThinkingDisplay, _ = thinking["display"].(string)
+		w.Budget, _ = thinking["budget_tokens"].(float64)
+	}
+	if out, ok := body["output_config"].(map[string]any); ok {
+		w.Effort, _ = out["effort"].(string)
+		if w.Effort == "" {
+			t.Fatalf("output_config sent with no effort: %v", out)
+		}
+	}
+	if temp, ok := body["temperature"].(float64); ok {
+		w.Temperature = &temp
+	}
+	w.MaxTokens, _ = body["max_tokens"].(float64)
+	_, w.ToolChoice = body["tool_choice"]
+	return w
+}
+
+// TestRequestShapeForEveryModel is the whole of what this backend decides per
+// model, asserted on the WIRE for every id the reference names, an id it does
+// not, the Bedrock and Vertex spellings and an alias that names its model —
+// across the entry's effort and budget and the call's effort, temperature and
+// output cap. Every expectation below is derived from shapeFacts alone:
+//
+//   - thinking is {adaptive, summarized} on every call to an adaptive model,
+//     {enabled, budget_tokens} on a budget-era one only when the entry gives
+//     a budget, and absent otherwise;
+//   - effort is the entry's level (high when it names none) lowered to the
+//     call's, and absent on a model that takes none;
+//   - a temperature is sent only when the model samples, the call is not
+//     thinking and the caller named one;
+//   - max_tokens is the model's ceiling, and a caller's own cap only on a
+//     call that is not thinking and only below the ceiling — a cap above it
+//     is a 400 the chain does not retry, so it is lowered to the ceiling;
+//   - tool_choice is never sent.
+func TestRequestShapeForEveryModel(t *testing.T) {
 	t.Parallel()
-	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
-	p := newProvider(t, url, func(c *Config) {
-		c.Reasoning = true
-		c.ThinkingBudget = 4096
-		c.MaxTokens = 1000
-	})
-	if _, err := p.Complete(context.Background(), userTurn("hi")); err != nil {
-		t.Fatalf("Complete: %v", err)
+	type scenario struct {
+		name    string
+		effort  llm.Effort
+		budget  int
+		request func(llm.Request) llm.Request
 	}
-	body := api.seen()[0].body
-	if dig(t, body, "thinking", "type") != "enabled" {
-		t.Fatalf("thinking = %v", body["thinking"])
+	scenarios := []scenario{
+		{name: "defaults", request: func(r llm.Request) llm.Request { return r }},
+		{name: "entry xhigh, call low", effort: llm.EffortXHigh,
+			request: func(r llm.Request) llm.Request { r.Effort = llm.EffortLow; return r }},
+		{name: "caller temperature 0 and cap 400",
+			request: func(r llm.Request) llm.Request {
+				r.Temperature, r.MaxTokens = llm.Temp(0), 400
+				return r
+			}},
+		{name: "budget 2048 with temperature 0 and cap 400", budget: 2048,
+			request: func(r llm.Request) llm.Request {
+				r.Temperature, r.MaxTokens = llm.Temp(0), 400
+				return r
+			}},
+		// Above every model's ceiling: the cap the caller named is one
+		// the model answers with a 400.
+		{name: "caller cap above the ceiling",
+			request: func(r llm.Request) llm.Request { r.MaxTokens = 1 << 20; return r }},
 	}
-	if dig(t, body, "thinking", "budget_tokens") != float64(4096) {
-		t.Fatalf("budget = %v", dig(t, body, "thinking", "budget_tokens"))
-	}
-	// Anthropic requires max_tokens strictly greater than the budget and
-	// rejects any temperature but 1 while thinking.
-	if body["max_tokens"] != float64(4096+1000) {
-		t.Fatalf("max_tokens = %v, want the budget plus the cap", body["max_tokens"])
-	}
-	if body["temperature"] != float64(1) {
-		t.Fatalf("temperature = %v, want 1", body["temperature"])
+	for _, m := range shapeModels {
+		for _, sc := range scenarios {
+			t.Run(m.name+"/"+sc.name, func(t *testing.T) {
+				t.Parallel()
+				api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
+				p, err := New(Config{
+					Model: m.model, ClaudeModel: m.claudeModel, APIKeys: []string{"k"},
+					BaseURL: url, Timeout: 5 * time.Second,
+					Effort: sc.effort, ThinkingBudget: sc.budget,
+				})
+
+				// The entry settings the model refuses are refused at
+				// construction, by name, rather than sent as a 400 on
+				// every call.
+				switch {
+				case sc.effort != "" && !slices.Contains(m.efforts, string(sc.effort)):
+					if err == nil || !strings.Contains(err.Error(), "Effort") {
+						t.Fatalf("New with effort %s on %s = %v, want a refusal naming Effort",
+							sc.effort, m.model, err)
+					}
+					return
+				case sc.budget > 0 && m.adaptive:
+					if !errors.Is(err, claudemodel.ErrTakesNoBudget) || !strings.Contains(err.Error(), "ThinkingBudget") {
+						t.Fatalf("New with a budget on adaptive %s = %v, want ErrTakesNoBudget naming ThinkingBudget",
+							m.model, err)
+					}
+					return
+				case err != nil:
+					t.Fatalf("New: %v", err)
+				}
+
+				req := sc.request(llm.Request{
+					Messages: userTurn("hi").Messages,
+					Tools:    []llm.ToolDef{{Name: "ok", Parameters: map[string]any{"type": "object"}}},
+				})
+				if _, err := p.Complete(context.Background(), req); err != nil {
+					t.Fatalf("Complete: %v", err)
+				}
+
+				thinking := m.adaptive || sc.budget > 0
+				want := wireShape{MaxTokens: m.maxOutput}
+				switch {
+				case m.adaptive:
+					want.ThinkingType, want.ThinkingDisplay = "adaptive", "summarized"
+				case sc.budget > 0:
+					want.ThinkingType, want.Budget = "enabled", float64(sc.budget)
+				}
+				if m.efforts != nil {
+					want.Effort = "high"
+					if sc.effort != "" {
+						want.Effort = string(sc.effort)
+					}
+					if req.Effort != "" {
+						want.Effort = string(req.Effort) // every case lowers
+					}
+				}
+				if req.Temperature != nil && m.sampling && !thinking {
+					want.Temperature = req.Temperature
+				}
+				if req.MaxTokens > 0 && !thinking && float64(req.MaxTokens) < m.maxOutput {
+					want.MaxTokens = float64(req.MaxTokens)
+				}
+
+				got := shapeOf(t, api.seen()[0].body)
+				if got.String() != want.String() {
+					t.Fatalf("%s\n got  %s\n want %s", m.model, got, want)
+				}
+				if body := api.seen()[0].body; body["model"] != m.model {
+					t.Fatalf("model sent as %v, want %q as configured", body["model"], m.model)
+				}
+			})
+		}
 	}
 }
 
-func TestThinkingBudgetIsRaisedToTheVendorMinimum(t *testing.T) {
-	t.Parallel()
-	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
-	p := newProvider(t, url, func(c *Config) {
-		c.Reasoning = true
-		c.ThinkingBudget = 10 // below Anthropic's floor of 1024
-	})
-	if _, err := p.Complete(context.Background(), userTurn("hi")); err != nil {
-		t.Fatalf("Complete: %v", err)
-	}
-	if got := dig(t, api.seen()[0].body, "thinking", "budget_tokens"); got != float64(minThinkingBudget) {
-		t.Fatalf("budget = %v, want it raised to %d", got, minThinkingBudget)
-	}
-}
-
-func TestTemperatureAndMaxTokensDefaultsAndOverrides(t *testing.T) {
+// A call's ceiling may fall on a level the model skips — `xhigh` on Opus 4.6,
+// `max` on Opus 4.5 — and lowering it to the next level the model takes is
+// the only reading that neither raises the effort nor sends a 400.
+func TestAnEffortTheModelSkipsIsLoweredToOneItTakes(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name            string
-		configure       func(*Config)
-		request         llm.Request
-		wantTemperature float64
-		wantMaxTokens   float64
+		model         string
+		entry, call   llm.Effort
+		wantOnTheWire string
 	}{
-		{
-			// The tool loop sends neither field on any call it makes, so
-			// "unset" is what the whole engine runs on: a nil temperature
-			// must reach the provider's configured default, not 0.0.
-			name: "request says nothing", request: userTurn("hi"),
-			wantTemperature: DefaultTemperature, wantMaxTokens: DefaultMaxTokens,
-		},
-		{
-			name:            "config overrides the default",
-			configure:       func(c *Config) { c.Temperature = 0.2; c.MaxTokens = 512 },
-			request:         userTurn("hi"),
-			wantTemperature: 0.2, wantMaxTokens: 512,
-		},
-		{
-			name:            "request overrides the config",
-			request:         llm.Request{Messages: userTurn("hi").Messages, Temperature: llm.Temp(0.9), MaxTokens: 77},
-			configure:       func(c *Config) { c.Temperature = 0.2; c.MaxTokens = 512 },
-			wantTemperature: 0.9, wantMaxTokens: 77,
-		},
-		{
-			// The whole reason Temperature is a pointer. A judge asking
-			// for a reproducible answer says 0.0 and MUST get it; a
-			// backend testing `> 0` silently substitutes its default and
-			// the judge is non-deterministic with nothing to show for it.
-			name:            "an explicit zero reaches the wire",
-			request:         llm.Request{Messages: userTurn("hi").Messages, Temperature: llm.Temp(0)},
-			configure:       func(c *Config) { c.Temperature = 0.2 },
-			wantTemperature: 0, wantMaxTokens: DefaultMaxTokens,
-		},
+		{"claude-opus-4-6", llm.EffortMax, llm.EffortXHigh, "high"},
+		{"claude-opus-4-6", llm.EffortMax, "", "max"},
+		{"claude-opus-4-5", llm.EffortHigh, llm.EffortMax, "high"},
+		{"claude-opus-4-5", "", llm.EffortMedium, "medium"},
+		// A ceiling ABOVE the entry never raises it.
+		{"claude-opus-5-5", llm.EffortMedium, llm.EffortMax, "medium"},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
-			p := newProvider(t, url, tc.configure)
-			if _, err := p.Complete(context.Background(), tc.request); err != nil {
-				t.Fatalf("Complete: %v", err)
-			}
-			body := api.seen()[0].body
-			if body["temperature"] != tc.wantTemperature {
-				t.Fatalf("temperature = %v, want %v", body["temperature"], tc.wantTemperature)
-			}
-			if body["max_tokens"] != tc.wantMaxTokens {
-				t.Fatalf("max_tokens = %v, want %v", body["max_tokens"], tc.wantMaxTokens)
-			}
-		})
+		api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
+		p := newProvider(t, url, func(c *Config) { c.Model, c.Effort = tc.model, tc.entry })
+		req := userTurn("hi")
+		req.Effort = tc.call
+		if _, err := p.Complete(context.Background(), req); err != nil {
+			t.Fatalf("%s: Complete: %v", tc.model, err)
+		}
+		if got := dig(t, api.seen()[0].body, "output_config", "effort"); got != tc.wantOnTheWire {
+			t.Errorf("%s entry %q call %q: effort = %v, want %q",
+				tc.model, tc.entry, tc.call, got, tc.wantOnTheWire)
+		}
+	}
+}
+
+// Every combination that would be a 400 on every call is refused when the
+// provider is built, naming the field — the config tier refuses the same
+// combinations for a model written literally, and this is what catches one
+// written as a `${VAR}` that only resolved at build.
+func TestNewRefusesASettingTheModelWouldAnswerWithA400(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		cfg   Config
+		field string
+		is    error
+	}{
+		{"claude_model not in the table",
+			Config{Model: "gw", ClaudeModel: "claude-haiku-4"}, "ClaudeModel", claudemodel.ErrNotInTable},
+		{"claude_model beside a model the table reads",
+			Config{Model: "claude-opus-5-5", ClaudeModel: "claude-haiku-4-5"}, "ClaudeModel", claudemodel.ErrOverrideNotNeeded},
+		{"effort on a model that takes none",
+			Config{Model: "claude-haiku-4-5", Effort: llm.EffortLow}, "Effort", claudemodel.ErrTakesNoEffort},
+		{"xhigh before Opus 4.7",
+			Config{Model: "claude-sonnet-4-6", Effort: llm.EffortXHigh}, "Effort", claudemodel.ErrEffortLevel},
+		{"an effort that is not a level",
+			Config{Model: "claude-opus-5-5", Effort: "extreme"}, "Effort", claudemodel.ErrEffortLevel},
+		{"a budget on an adaptive model",
+			Config{Model: "claude-opus-5-5", ThinkingBudget: 4096}, "ThinkingBudget", claudemodel.ErrTakesNoBudget},
+		{"a budget on an unknown id",
+			Config{Model: "gw", ThinkingBudget: 4096}, "ThinkingBudget", claudemodel.ErrTakesNoBudget},
+		{"a budget below the minimum",
+			Config{Model: "claude-haiku-4-5", ThinkingBudget: 10}, "ThinkingBudget", claudemodel.ErrBudgetRange},
+		{"a budget the output cap cannot hold",
+			Config{Model: "claude-haiku-4-5", ThinkingBudget: 64000}, "ThinkingBudget", claudemodel.ErrBudgetRange},
+		{"a negative budget",
+			Config{Model: "claude-haiku-4-5", ThinkingBudget: -1}, "ThinkingBudget", claudemodel.ErrBudgetRange},
+	} {
+		_, err := New(tc.cfg)
+		if !errors.Is(err, tc.is) || !strings.Contains(err.Error(), tc.field) {
+			t.Errorf("%s: New = %v, want %v naming %s", tc.name, err, tc.is, tc.field)
+		}
+	}
+	// The controls: the same fields where the model takes them.
+	for _, cfg := range []Config{
+		{Model: "gw", ClaudeModel: "claude-haiku-4-5", ThinkingBudget: 1024},
+		{Model: "claude-haiku-4-5", ThinkingBudget: 63999},
+		{Model: "claude-opus-4-7", Effort: llm.EffortXHigh},
+		{Model: "claude-opus-4-5", Effort: llm.EffortHigh, ThinkingBudget: 2048},
+	} {
+		if _, err := New(cfg); err != nil {
+			t.Errorf("New(%+v) = %v, want it built", cfg, err)
+		}
+	}
+}
+
+func TestAnInvalidCallEffortIsRefusedBeforeTheCall(t *testing.T) {
+	t.Parallel()
+	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
+	p := newProvider(t, url, nil)
+	req := userTurn("hi")
+	req.Effort = "extreme"
+	_, err := p.Complete(context.Background(), req)
+	if llm.KindOf(err) != llm.KindFatal || !strings.Contains(err.Error(), `"extreme"`) {
+		t.Fatalf("Complete = %v, want a fatal error naming the level", err)
+	}
+	if api.count() != 0 {
+		t.Fatal("a request with an invalid effort still reached the network")
+	}
+}
+
+// NO PREFILL: a conversation ending on the assistant's turn is a 400 on every
+// model from 4.6 on. Nothing in the engine sends one, and this keeps it so.
+func TestAPrefillIsRefusedBeforeTheCall(t *testing.T) {
+	t.Parallel()
+	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
+	p := newProvider(t, url, nil)
+	_, err := p.Complete(context.Background(), llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: "start"},
+		{Role: llm.RoleAssistant, Content: "Sure, here is"},
+	}})
+	if !errors.Is(err, ErrPrefill) || llm.KindOf(err) != llm.KindFatal {
+		t.Fatalf("Complete = %v, want ErrPrefill", err)
+	}
+	if api.count() != 0 {
+		t.Fatal("a prefill still reached the network")
+	}
+	// The control: the same assistant turn followed by the user's answer.
+	if _, err := p.Complete(context.Background(), llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: "start"},
+		{Role: llm.RoleAssistant, Content: "Sure, here is"},
+		{Role: llm.RoleUser, Content: "go on"},
+	}}); err != nil {
+		t.Fatalf("a conversation ending on the user: %v", err)
 	}
 }
 
@@ -1101,15 +1869,18 @@ func TestResponseTranslation(t *testing.T) {
 	if len(out.ThinkingBlocks) != 2 {
 		t.Fatalf("ThinkingBlocks = %v, want the redacted one carried too", out.ThinkingBlocks)
 	}
-	if out.ThinkingBlocks[0].Signature != "sig1" || out.ThinkingBlocks[1].Data != "opaque" {
+	if out.ThinkingBlocks[0].Thinking != "first thought" || out.ThinkingBlocks[1].Data != "opaque" {
 		t.Fatalf("ThinkingBlocks = %+v", out.ThinkingBlocks)
+	}
+	if len(out.Raw) == 0 || !strings.Contains(string(out.Raw[0]), `"sig1"`) {
+		t.Fatalf("Raw = %s, want the thinking block's signature kept for the next round", out.Raw)
 	}
 	if len(out.ToolCalls) != 1 || out.ToolCalls[0].ID != "call_1" ||
 		out.ToolCalls[0].Arguments["path"] != "/tmp" {
 		t.Fatalf("ToolCalls = %+v", out.ToolCalls)
 	}
-	if out.FinishReason != "tool_use" {
-		t.Fatalf("FinishReason = %q", out.FinishReason)
+	if out.StopReason != llm.StopToolUse {
+		t.Fatalf("StopReason = %q, want tool_use", out.StopReason)
 	}
 	// The per-model token breakdown is built from completions, so every
 	// answer has to name the model that produced it. An empty one files the
@@ -1191,19 +1962,166 @@ func TestInputTokensSumTheCacheComponents(t *testing.T) {
 	}
 }
 
-func TestAMissingStopReasonGetsADefault(t *testing.T) {
+// A MISSING STOP REASON IS READ FROM THE RESPONSE, never invented as a
+// truncation: a gateway that omits the field has not said the response was cut
+// short, so a round with calls stopped for them and one without ended.
+func TestAMissingStopReasonIsReadFromTheResponse(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		content string
+		want    llm.StopReason
+	}{
+		{"no calls", `[]`, llm.StopEnd},
+		{"a call", `[{"type":"tool_use","id":"c","name":"run","input":{}}]`, llm.StopToolUse},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, url := serve(t, func(w http.ResponseWriter, _ int) {
+				writeJSON(w, 200, `{"id":"m","type":"message","role":"assistant",
+					"model":"claude-test","content":`+tc.content+`,
+					"usage":{"input_tokens":1,"output_tokens":1}}`)
+			})
+			out, err := newProvider(t, url, nil).Complete(context.Background(), userTurn("hi"))
+			if err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+			if out.StopReason != tc.want {
+				t.Fatalf("StopReason = %q, want %q", out.StopReason, tc.want)
+			}
+		})
+	}
+}
+
+// EVERY STOP REASON THE API DOCUMENTS IS MAPPED, onto the one vocabulary the
+// tool loop decides on — and an unknown one is an ordinary end, because a word
+// newer than this build is not a truncation this build can name.
+func TestEveryStopReasonIsMapped(t *testing.T) {
+	t.Parallel()
+	for raw, want := range map[sdk.StopReason]llm.StopReason{
+		sdk.StopReasonEndTurn:                    llm.StopEnd,
+		sdk.StopReasonStopSequence:               llm.StopEnd,
+		sdk.StopReasonToolUse:                    llm.StopToolUse,
+		sdk.StopReasonMaxTokens:                  llm.StopMaxTokens,
+		sdk.StopReasonRefusal:                    llm.StopRefusal,
+		sdk.StopReasonModelContextWindowExceeded: llm.StopContextExceeded,
+		sdk.StopReasonPauseTurn:                  llm.StopPaused,
+		"a_reason_from_the_future":               llm.StopEnd,
+	} {
+		if got := stopReason(raw, false); got != want {
+			t.Errorf("stopReason(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}
+
+// A REFUSAL IS AN ERROR, NOT AN ANSWER — and it is the API's answer, not a
+// failure of the key. It arrives with 200, so the call succeeded: the key is
+// not benched, the chain is not asked to try another model (KindRefusal is not
+// retryable), and the refused completion rides the error so the frame that
+// meters spend still sees what the call cost.
+func TestARefusalIsAClassifiedErrorThatBenchesNoKey(t *testing.T) {
+	t.Parallel()
+	api, url := serve(t, func(w http.ResponseWriter, _ int) {
+		writeJSON(w, 200, `{"id":"m","type":"message","role":"assistant",
+			"model":"claude-test","content":[{"type":"text","text":"I can"}],
+			"stop_reason":"refusal",
+			"stop_details":{"type":"refusal","category":"cyber","explanation":"exploit development"},
+			"usage":{"input_tokens":40,"output_tokens":3}}`)
+	})
+	p := newProvider(t, url, func(c *Config) { c.APIKeys = []string{"k1", "k2"} })
+	out, err := p.Complete(context.Background(), userTurn("hi"))
+	if err == nil {
+		t.Fatalf("Complete answered %+v — a refusal must not read as an answer", out)
+	}
+	if llm.KindOf(err) != llm.KindRefusal {
+		t.Fatalf("kind = %s, want refusal", llm.KindOf(err))
+	}
+	var refusal *llm.Refusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("no *llm.Refusal under %v", err)
+	}
+	if refusal.Category != "cyber" || refusal.Explanation != "exploit development" {
+		t.Fatalf("refusal = %+v, want the stop_details", refusal)
+	}
+	if c := refusal.Completion; c == nil || c.InputTokens != 40 || c.OutputTokens != 3 ||
+		c.StopReason != llm.StopRefusal || c.Model != "claude-test" {
+		t.Fatalf("refused completion = %+v, want its usage, model and stop reason", refusal.Completion)
+	}
+	if n := api.count(); n != 1 {
+		t.Fatalf("%d attempts, want 1 — a refusal is not rotated onto the next key", n)
+	}
+	for _, s := range p.Pool().Stats() {
+		if s.Cooling != 0 {
+			t.Fatalf("key %+v is cooling — a refusal benched a healthy key", s)
+		}
+	}
+}
+
+// A TOOL CALL THE OUTPUT CAP CUT OFF ARRIVES LOOKING WHOLE, and only the stop
+// reason says otherwise. Streamed, the arguments arrive in fragments and a
+// max_tokens stop leaves half an object behind — which the SDK's accumulator
+// REPLACES with `{}` so the block marshals, so nothing in the call itself is
+// left to notice. That is why the round's stop reason has to reach the tool
+// loop: it is the one signal that this call was never finished, and running
+// it is a write with no arguments the model never asked for.
+func TestAToolCallCutByTheCapIsReportedByItsStopReason(t *testing.T) {
 	t.Parallel()
 	_, url := serve(t, func(w http.ResponseWriter, _ int) {
-		writeJSON(w, 200, `{"id":"m","type":"message","role":"assistant",
-			"model":"claude-test","content":[],"usage":{"input_tokens":1,"output_tokens":1}}`)
+		writeStream(w, streamOf(
+			streamStart(),
+			sseEvent{"content_block_start", `{"type":"content_block_start","index":0,` +
+				`"content_block":{"type":"tool_use","id":"tu_1","name":"post","input":{}}}`},
+			sseEvent{"content_block_delta", `{"type":"content_block_delta","index":0,` +
+				`"delta":{"type":"input_json_delta","partial_json":"{\"body\":\"Refunds are"}}`},
+			sseEvent{"content_block_stop", `{"type":"content_block_stop","index":0}`},
+			streamEnd("max_tokens"),
+		)...)
 	})
-	p := newProvider(t, url, nil)
-	out, err := p.Complete(context.Background(), userTurn("hi"))
+	var got []llm.Delta
+	out, err := newProvider(t, url, nil).Complete(context.Background(), streamingTurn("hi", &got))
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
-	if out.FinishReason != "end_turn" {
-		t.Fatalf("FinishReason = %q, want the default", out.FinishReason)
+	if out.StopReason != llm.StopMaxTokens {
+		t.Fatalf("StopReason = %q, want max_tokens", out.StopReason)
+	}
+	// The premise the stop reason is load-bearing for: the call itself
+	// looks complete. If the SDK ever starts handing the fragment through,
+	// DecodeArgs will name it instead and this premise check says so.
+	if len(out.ToolCalls) != 1 || len(out.ToolCalls[0].Arguments) != 0 ||
+		out.ToolCalls[0].ArgumentsError != "" {
+		t.Fatalf("tool calls = %+v, want the cut call emptied to {} by the accumulator", out.ToolCalls)
+	}
+}
+
+// A FAILED TOOL RESULT SAYS SO IN THE API'S OWN FIELD. The content carries the
+// sentence; is_error is the structured flag beside it, and a result that did
+// not fail must not carry it.
+func TestAFailedToolResultIsSentAsAnError(t *testing.T) {
+	t.Parallel()
+	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
+	req := llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: "go"},
+		{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{
+			{ID: "a", Name: "run", Arguments: map[string]any{}},
+			{ID: "b", Name: "run", Arguments: map[string]any{}},
+		}},
+		{Role: llm.RoleTool, ToolCallID: "a", Name: "run", Content: "refused", Failed: true},
+		{Role: llm.RoleTool, ToolCallID: "b", Name: "run", Content: "fine"},
+	}}
+	if _, err := newProvider(t, url, nil).Complete(context.Background(), req); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	msgs := dig(t, api.seen()[0].body, "messages").([]any)
+	results := msgs[len(msgs)-1].(map[string]any)["content"].([]any)
+	if len(results) != 2 {
+		t.Fatalf("results = %v, want both answers in one user turn", results)
+	}
+	if got := results[0].(map[string]any)["is_error"]; got != true {
+		t.Errorf("failed result is_error = %v, want true", got)
+	}
+	if got := results[1].(map[string]any)["is_error"]; got == true {
+		t.Errorf("successful result is_error = %v, want it absent or false", got)
 	}
 }
 
@@ -1321,9 +2239,135 @@ func TestAUserMessageAfterToolResultsJoinsTheirTurnAfterThem(t *testing.T) {
 	}
 }
 
-// --- streaming --------------------------------------------------------------
+// --- streaming ---------------------------------------------------------
 
-// AN ENDPOINT THAT CANNOT STREAM IS ASKED ONCE, AND ITS ANSWER IS KEPT.
+// sseEvent is one server-sent event of a Messages stream. The SDK dispatches
+// on the `event:` line, so the name matters as much as the data.
+type sseEvent struct{ name, data string }
+
+// writeStream answers a request as a Messages stream, flushing each event so
+// the client sees them as separate arrivals rather than one buffered body.
+func writeStream(w http.ResponseWriter, events ...sseEvent) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.WriteHeader(http.StatusOK)
+	for _, e := range events {
+		_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", e.name, e.data)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+	}
+}
+
+func streamStart() sseEvent {
+	return sseEvent{"message_start", `{"type":"message_start","message":{"id":"msg_1","type":"message",` +
+		`"role":"assistant","model":"claude-test","content":[],"stop_reason":null,` +
+		`"usage":{"input_tokens":10,"output_tokens":1}}}`}
+}
+
+// textBlock is a text content block at index, written in parts.
+func textBlock(index int, parts ...string) []sseEvent {
+	out := []sseEvent{{"content_block_start", fmt.Sprintf(
+		`{"type":"content_block_start","index":%d,"content_block":{"type":"text","text":""}}`, index)}}
+	for _, part := range parts {
+		out = append(out, sseEvent{"content_block_delta", fmt.Sprintf(
+			`{"type":"content_block_delta","index":%d,"delta":{"type":"text_delta","text":%q}}`, index, part)})
+	}
+	return append(out, sseEvent{"content_block_stop", fmt.Sprintf(
+		`{"type":"content_block_stop","index":%d}`, index)})
+}
+
+func streamEnd(stop string) []sseEvent {
+	return []sseEvent{
+		{"message_delta", fmt.Sprintf(
+			`{"type":"message_delta","delta":{"stop_reason":%q},"usage":{"output_tokens":5}}`, stop)},
+		{"message_stop", `{"type":"message_stop"}`},
+	}
+}
+
+// streamError is the `error` event the API sends when a response that has
+// already begun fails — after the 200, so the type in its body is the only
+// thing that says what went wrong.
+func streamError(kind string) sseEvent { return sseEvent{"error", apiError(kind)} }
+
+// streamOf joins events and event lists in order.
+func streamOf(parts ...any) []sseEvent {
+	var out []sseEvent
+	for _, part := range parts {
+		switch v := part.(type) {
+		case sseEvent:
+			out = append(out, v)
+		case []sseEvent:
+			out = append(out, v...)
+		}
+	}
+	return out
+}
+
+// streamingTurn is userTurn asking to be streamed, recording every delta.
+func streamingTurn(text string, got *[]llm.Delta) llm.Request {
+	req := userTurn(text)
+	req.OnDelta = func(d llm.Delta) { *got = append(*got, d) }
+	return req
+}
+
+// A STREAMED ROUND IS SHOWN AS IT IS WRITTEN AND ANSWERS AS A UNARY ONE DOES.
+// Text and thinking are forwarded fragment by fragment; a half-written JSON
+// argument and a signature are not (neither is readable); and the completion
+// is the accumulated message — signature, tool arguments and usage included —
+// because one interpretation of a response is all [Provider.completion] has.
+func TestAStreamedCallForwardsFragmentsAndStillAnswers(t *testing.T) {
+	t.Parallel()
+	api, url := serve(t, func(w http.ResponseWriter, _ int) {
+		writeStream(w, streamOf(
+			streamStart(),
+			sseEvent{"content_block_start", `{"type":"content_block_start","index":0,` +
+				`"content_block":{"type":"thinking","thinking":"","signature":""}}`},
+			sseEvent{"content_block_delta", `{"type":"content_block_delta","index":0,` +
+				`"delta":{"type":"thinking_delta","thinking":"Weighing it."}}`},
+			sseEvent{"content_block_delta", `{"type":"content_block_delta","index":0,` +
+				`"delta":{"type":"signature_delta","signature":"sig-1"}}`},
+			sseEvent{"content_block_stop", `{"type":"content_block_stop","index":0}`},
+			textBlock(1, "Hel", "lo"),
+			sseEvent{"content_block_start", `{"type":"content_block_start","index":2,` +
+				`"content_block":{"type":"tool_use","id":"tu_1","name":"lookup","input":{}}}`},
+			sseEvent{"content_block_delta", `{"type":"content_block_delta","index":2,` +
+				`"delta":{"type":"input_json_delta","partial_json":"{\"q\":"}}`},
+			sseEvent{"content_block_delta", `{"type":"content_block_delta","index":2,` +
+				`"delta":{"type":"input_json_delta","partial_json":"\"x\"}"}}`},
+			sseEvent{"content_block_stop", `{"type":"content_block_stop","index":2}`},
+			streamEnd("tool_use"),
+		)...)
+	})
+	p := newProvider(t, url, nil)
+	var got []llm.Delta
+	out, err := p.Complete(context.Background(), streamingTurn("hi", &got))
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if stream := api.seen()[0].body["stream"]; stream != true {
+		t.Fatalf("stream = %v, want the request to ask for a stream", stream)
+	}
+	want := []llm.Delta{{Reasoning: "Weighing it."}, {Content: "Hel"}, {Content: "lo"}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("deltas = %+v, want %+v — each readable fragment as it arrived, nothing else", got, want)
+	}
+	if out.Content != "Hello" || out.ReasoningContent != "Weighing it." {
+		t.Fatalf("content %q / reasoning %q, want the assembled message", out.Content, out.ReasoningContent)
+	}
+	if len(out.ThinkingBlocks) != 1 || len(out.Raw) == 0 || !strings.Contains(string(out.Raw[0]), `"sig-1"`) {
+		t.Fatalf("thinking blocks = %+v, raw %s — want the streamed signature kept for the next round",
+			out.ThinkingBlocks, out.Raw)
+	}
+	if len(out.ToolCalls) != 1 || out.ToolCalls[0].Arguments["q"] != "x" {
+		t.Fatalf("tool calls = %+v, want the argument assembled from its fragments", out.ToolCalls)
+	}
+	if out.InputTokens != 10 || out.OutputTokens != 5 || out.StopReason != llm.StopToolUse {
+		t.Fatalf("tokens %d/%d, stop %q", out.InputTokens, out.OutputTokens, out.StopReason)
+	}
+}
+
+// AN ENDPOINT THAT CANNOT STREAM IS ASKED ONCE, AND ITS ANSWER IS KEPT, on the
+// same key, and it is never asked to stream again.
 //
 // "Anthropic-compatible" is a de-facto standard with real variance: a local
 // shim or a gateway may take `stream: true` and answer with a whole message.
@@ -1333,16 +2377,11 @@ func TestAUserMessageAfterToolResultsJoinsTheirTurnAfterThem(t *testing.T) {
 // It is read as the message it is now, and the capability is latched.
 func TestAnEndpointThatCannotStreamIsAskedOnceAndItsAnswerKept(t *testing.T) {
 	t.Parallel()
-	api, url := serve(t, func(w http.ResponseWriter, _ int) {
-		writeJSON(w, http.StatusOK, okMessage("Hello"))
-	})
+	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeUnary(w, 200, okMessage("Hello")) })
 	p := newProvider(t, url, nil)
-	req := llm.Request{
-		Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
-		OnDelta:  func(llm.Delta) {},
-	}
-
-	out, err := p.Complete(t.Context(), req)
+	var got []llm.Delta
+	req := streamingTurn("hi", &got)
+	out, err := p.Complete(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
@@ -1350,64 +2389,274 @@ func TestAnEndpointThatCannotStreamIsAskedOnceAndItsAnswerKept(t *testing.T) {
 		t.Errorf("completion = %q with %d/%d tokens, want the endpoint's answer and the "+
 			"10/5 it billed", out.Content, out.InputTokens, out.OutputTokens)
 	}
-	if got := api.count(); got != 1 {
-		t.Errorf("the first call cost %d requests, want 1: the endpoint's answer was "+
-			"thrown away and asked for again", got)
+	seen := api.seen()
+	if len(seen) != 1 || seen[0].body["stream"] != true {
+		t.Fatalf("the first call cost %d requests, want one streaming ask: the endpoint's "+
+			"answer was thrown away and asked for again", len(seen))
 	}
-	if stream, _ := api.seen()[0].body["stream"].(bool); !stream {
-		t.Error("the first request did not ask to stream, so nothing was negotiated")
+	for _, s := range p.Pool().Stats() {
+		if s.Cooling != 0 {
+			t.Fatal("a missing capability benched the credential")
+		}
 	}
 
-	// LATCHED: the next call goes unary without asking to stream.
-	if _, err := p.Complete(t.Context(), req); err != nil {
+	// LATCHED: discovered once per process, never re-probed.
+	if _, err := p.Complete(context.Background(), req); err != nil {
 		t.Fatalf("second Complete: %v", err)
 	}
-	if got := api.count(); got != 2 {
-		t.Errorf("the second call cost %d requests, want 1", got-1)
+	seen = api.seen()
+	if len(seen) != 2 || seen[1].body["stream"] != nil {
+		t.Fatalf("the second call made %d requests (stream %v), want one unary request",
+			len(seen)-1, seen[len(seen)-1].body["stream"])
 	}
-	if stream, _ := api.seen()[1].body["stream"].(bool); stream {
-		t.Error("the second request asked to stream again: the capability was not latched")
+	if seen[1].apiKey != "k1" {
+		t.Fatalf("the unary call went out on %q, want the same key — a capability is not a key failure", seen[1].apiKey)
 	}
 }
 
-// A STREAM IS STILL A STREAM: fragments forwarded as they land, and the
-// accumulated message the same shape the unary path returns.
-func TestAStreamedCallForwardsFragmentsAndStillAnswers(t *testing.T) {
+// A ROTATION IS A RESTART, and a RATE LIMIT INSIDE A STREAM IS A RATE LIMIT.
+// The first key streams half an answer and the API then ends the response
+// with a rate_limit_error — after the 200, so only the body's type says so.
+// Read by its status that is fatal and the call dies with half an answer;
+// read by its type the key is benched, the next key answers, and the consumer
+// is told the first half was abandoned rather than shown two halves as one.
+func TestARateLimitInsideAStreamRotatesAndRestarts(t *testing.T) {
 	t.Parallel()
-	_, url := serve(t, func(w http.ResponseWriter, _ int) {
-		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
-		for _, ev := range []struct{ name, data string }{
-			{"message_start", `{"type":"message_start","message":{"id":"msg_1","type":"message",` +
-				`"role":"assistant","model":"claude-test","content":[],"stop_reason":null,` +
-				`"usage":{"input_tokens":10,"output_tokens":1}}}`},
-			{"content_block_start", `{"type":"content_block_start","index":0,` +
-				`"content_block":{"type":"text","text":""}}`},
-			{"content_block_delta", `{"type":"content_block_delta","index":0,` +
-				`"delta":{"type":"text_delta","text":"Hel"}}`},
-			{"content_block_delta", `{"type":"content_block_delta","index":0,` +
-				`"delta":{"type":"text_delta","text":"lo"}}`},
-			{"content_block_stop", `{"type":"content_block_stop","index":0}`},
-			{"message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"},` +
-				`"usage":{"output_tokens":5}}`},
-			{"message_stop", `{"type":"message_stop"}`},
-		} {
-			_, _ = io.WriteString(w, "event: "+ev.name+"\ndata: "+ev.data+"\n\n")
+	api, url := serve(t, func(w http.ResponseWriter, n int) {
+		if n == 1 {
+			writeStream(w, streamOf(streamStart(),
+				sseEvent{"content_block_start", `{"type":"content_block_start","index":0,` +
+					`"content_block":{"type":"text","text":""}}`},
+				sseEvent{"content_block_delta", `{"type":"content_block_delta","index":0,` +
+					`"delta":{"type":"text_delta","text":"Hel"}}`},
+				streamError("rate_limit_error"))...)
+			return
 		}
+		writeStream(w, streamOf(streamStart(), textBlock(0, "Hello"), streamEnd("end_turn"))...)
 	})
-	var got []string
-	p := newProvider(t, url, nil)
-	out, err := p.Complete(t.Context(), llm.Request{
-		Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
-		OnDelta:  func(d llm.Delta) { got = append(got, d.Content) },
-	})
+	p := newProvider(t, url, func(c *Config) { c.APIKeys = []string{"k1", "k2"} })
+	var got []llm.Delta
+	out, err := p.Complete(context.Background(), streamingTurn("hi", &got))
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
-	if len(got) != 2 || got[0] != "Hel" || got[1] != "lo" {
-		t.Errorf("fragments = %#v, want each piece as it arrived", got)
+	if out.Content != "Hello" {
+		t.Fatalf("content = %q, want the second key's whole answer, not the halves joined", out.Content)
 	}
-	if out.Content != "Hello" || out.InputTokens != 10 || out.OutputTokens != 5 {
-		t.Errorf("completion = %q with %d/%d tokens, want the assembled answer at 10/5",
-			out.Content, out.InputTokens, out.OutputTokens)
+	want := []llm.Delta{{Content: "Hel"}, {Restart: true, Model: "claude-test"}, {Content: "Hello"}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("deltas = %+v, want %+v", got, want)
+	}
+	if seen := api.seen(); len(seen) != 2 || seen[0].apiKey != "k1" || seen[1].apiKey != "k2" {
+		t.Fatalf("attempts = %d, want k1 then k2", len(seen))
+	}
+	if stats := p.Pool().Stats(); stats[0].Cooling == 0 || stats[1].Cooling != 0 {
+		t.Fatalf("pool = %+v, want only the rate-limited key benched", stats)
+	}
+}
+
+// AN OVERLOAD INSIDE A STREAM IS THE SERVER'S, not a fatal refusal of the
+// request: the chain may try its next model, and no key is benched for a
+// capacity blip. Before the type was read this was a 200 and therefore fatal.
+// And what streamed before the failure is NOT an answer — handing it back
+// would give the loop a truncated round as though the model had finished.
+func TestAnOverloadInsideAStreamIsAServerFailure(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		typ  string
+		want llm.ErrorKind
+	}{
+		{"overloaded_error", llm.KindServer},
+		{"api_error", llm.KindServer},
+		{"timeout_error", llm.KindTimeout},
+		// A type this build does not know, on a response the API had
+		// already accepted: it cannot be a request the API refused.
+		{"some_future_error", llm.KindServer},
+		{"invalid_request_error", llm.KindFatal},
+	} {
+		t.Run(tc.typ, func(t *testing.T) {
+			t.Parallel()
+			_, url := serve(t, func(w http.ResponseWriter, _ int) {
+				writeStream(w, streamOf(streamStart(),
+					sseEvent{"content_block_start", `{"type":"content_block_start","index":0,` +
+						`"content_block":{"type":"text","text":""}}`},
+					sseEvent{"content_block_delta", `{"type":"content_block_delta","index":0,` +
+						`"delta":{"type":"text_delta","text":"half an ans"}}`},
+					streamError(tc.typ))...)
+			})
+			p := newProvider(t, url, nil)
+			var got []llm.Delta
+			out, err := p.Complete(context.Background(), streamingTurn("hi", &got))
+			if out != nil {
+				t.Fatalf("a stream that failed mid-body answered %q", out.Content)
+			}
+			var classified *llm.Error
+			if !errors.As(err, &classified) {
+				t.Fatalf("err = %v, want a classified failure", err)
+			}
+			if classified.Kind != tc.want {
+				t.Fatalf("classified %s, want %s (status %d, err %v)", classified.Kind, tc.want, classified.Status, err)
+			}
+			for _, s := range p.Pool().Stats() {
+				if s.Cooling != 0 {
+					t.Fatal("a failure of the server benched the credential")
+				}
+			}
+		})
+	}
+}
+
+// writeSlowStream answers as a Messages stream, pausing before every event.
+func writeSlowStream(w http.ResponseWriter, gap time.Duration, events ...sseEvent) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.WriteHeader(http.StatusOK)
+	for _, e := range events {
+		time.Sleep(gap)
+		_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", e.name, e.data)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+	}
+}
+
+// A STREAMED ROUND IS BOUNDED BY SILENCE, NOT LENGTH. This one runs several
+// times the entry's timeout in total and is never silent for as long as it,
+// which is what a round thinking at a high effort looks like — the per-attempt
+// deadline used to cover the whole body and cut such a round off half-way.
+func TestALongStreamedRoundIsNotCutOffByTheTimeout(t *testing.T) {
+	t.Parallel()
+	const timeout = 200 * time.Millisecond
+	_, url := serve(t, func(w http.ResponseWriter, _ int) {
+		writeSlowStream(w, timeout/4, streamOf(
+			streamStart(), textBlock(0, "a", "b", "c", "d", "e", "f"), streamEnd("end_turn"))...)
+	})
+	p := newProvider(t, url, func(c *Config) { c.Timeout = timeout })
+	var got []llm.Delta
+	start := time.Now()
+	out, err := p.Complete(context.Background(), streamingTurn("hi", &got))
+	if err != nil {
+		t.Fatalf("Complete after %v: %v", time.Since(start), err)
+	}
+	if elapsed := time.Since(start); elapsed < 2*timeout {
+		t.Fatalf("the round took %v; it must outlast the %v timeout to prove anything", elapsed, timeout)
+	}
+	if out.Content != "abcdef" {
+		t.Fatalf("content = %q, want the whole round", out.Content)
+	}
+}
+
+// A STREAM THAT GOES SILENT IS ENDED AFTER THE TIMEOUT, as a TIMEOUT — before
+// its first byte or part-way through — so the chain may try its next model
+// and no key is benched. Lifting the total bound must not leave a dead
+// connection holding a seat for ever.
+func TestASilentStreamIsATimeout(t *testing.T) {
+	t.Parallel()
+	const timeout = 100 * time.Millisecond
+	for _, tc := range []struct {
+		name   string
+		handle func(w http.ResponseWriter)
+	}{
+		{"before the first byte", func(w http.ResponseWriter) {
+			time.Sleep(10 * timeout)
+			writeStream(w, streamOf(streamStart(), textBlock(0, "late"), streamEnd("end_turn"))...)
+		}},
+		{"part-way through", func(w http.ResponseWriter) {
+			writeStream(w, streamStart())
+			time.Sleep(10 * timeout)
+			writeStream(w, streamOf(textBlock(0, "late"), streamEnd("end_turn"))...)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, url := serve(t, func(w http.ResponseWriter, _ int) { tc.handle(w) })
+			p := newProvider(t, url, func(c *Config) { c.Timeout = timeout })
+			var got []llm.Delta
+			start := time.Now()
+			out, err := p.Complete(context.Background(), streamingTurn("hi", &got))
+			if out != nil {
+				t.Fatalf("a silent stream answered %q after %v", out.Content, time.Since(start))
+			}
+			if !errors.Is(err, httpapi.ErrStalled) || llm.KindOf(err) != llm.KindTimeout {
+				t.Fatalf("err = %v (kind %s), want a stall classified as a timeout", err, llm.KindOf(err))
+			}
+			if elapsed := time.Since(start); elapsed > 5*timeout {
+				t.Fatalf("gave up after %v, want about the %v bound", elapsed, timeout)
+			}
+			for _, s := range p.Pool().Stats() {
+				if s.Cooling != 0 {
+					t.Fatal("a silent stream benched the credential")
+				}
+			}
+		})
+	}
+}
+
+// A CALL NOBODY IS WATCHING STILL STREAMS. Every call sends the model's own
+// output cap, and a unary call is bounded only in total: a worker or a judge
+// that thinks past the timeout used to die half-way and be paid for again on
+// the chain's next member. Streamed with nowhere to send the fragments, it is
+// bounded by its silence like any round — so this one, several times the
+// timeout long and never silent for as long as it, answers.
+func TestACallNobodyWatchesStillStreams(t *testing.T) {
+	t.Parallel()
+	const timeout = 200 * time.Millisecond
+	api, url := serve(t, func(w http.ResponseWriter, _ int) {
+		writeSlowStream(w, timeout/4, streamOf(
+			streamStart(), textBlock(0, "a", "b", "c", "d", "e", "f"), streamEnd("end_turn"))...)
+	})
+	p := newProvider(t, url, func(c *Config) { c.Timeout = timeout })
+	start := time.Now()
+	out, err := p.Complete(context.Background(), userTurn("hi"))
+	if err != nil {
+		t.Fatalf("Complete after %v: %v", time.Since(start), err)
+	}
+	if elapsed := time.Since(start); elapsed < 2*timeout {
+		t.Fatalf("the round took %v; it must outlast the %v timeout to prove anything", elapsed, timeout)
+	}
+	if out.Content != "abcdef" {
+		t.Fatalf("content = %q, want the whole round", out.Content)
+	}
+	if seen := api.seen(); len(seen) != 1 || seen[0].body["stream"] != true {
+		t.Fatalf("%d requests, stream = %v; want one request asking for a stream", len(seen), seen[0].body["stream"])
+	}
+}
+
+// A STREAM THAT ENDS BEFORE message_stop IS A FAILURE, NOT AN ANSWER. A
+// gateway or a proxy that closes the response in an orderly way mid-answer
+// ends the SDK's stream with no error at all, and what accumulated has no stop
+// reason — which reads as an ordinary end, handing the loop half an answer as
+// the model's last word. It is the server's failure instead: the chain may try
+// again, and no key is benched for it.
+func TestAStreamCutBeforeItsEndIsAServerFailure(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		events []sseEvent
+	}{
+		{"after a delta", streamOf(streamStart(),
+			sseEvent{"content_block_start", `{"type":"content_block_start","index":0,` +
+				`"content_block":{"type":"text","text":""}}`},
+			sseEvent{"content_block_delta", `{"type":"content_block_delta","index":0,` +
+				`"delta":{"type":"text_delta","text":"half an ans"}}`})},
+		{"after the stop reason", streamOf(streamStart(), textBlock(0, "nearly"), streamEnd("end_turn")[0])},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, url := serve(t, func(w http.ResponseWriter, _ int) { writeStream(w, tc.events...) })
+			p := newProvider(t, url, nil)
+			var got []llm.Delta
+			out, err := p.Complete(context.Background(), streamingTurn("hi", &got))
+			if out != nil {
+				t.Fatalf("a stream cut short answered %q (stop %q)", out.Content, out.StopReason)
+			}
+			if !errors.Is(err, errCutShort) || llm.KindOf(err) != llm.KindServer {
+				t.Fatalf("err = %v (kind %s), want the cut classified as the server's", err, llm.KindOf(err))
+			}
+			for _, s := range p.Pool().Stats() {
+				if s.Cooling != 0 {
+					t.Fatal("a stream cut short benched the credential")
+				}
+			}
+		})
 	}
 }

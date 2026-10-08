@@ -119,8 +119,16 @@ func conformanceCases() []scenario {
 			},
 			bridged: []ledger.Call{{Name: "slack_history", Result: "read"}},
 			text:    "I looked around and ran out of road",
+			// THE SAME TEXT FROM BOTH. The native loop asks a phase that
+			// ended in prose to finish twice more before the rescue, and
+			// the model answers each corrective with its report again;
+			// those answers are to the corrective, not the task, so the
+			// text keeps the first — which is what an agent run's one
+			// closing reply is. A reviewer reads the same thing whichever
+			// runtime the executor ran on.
 			want: turn.Work{
 				Outcome: turn.OutcomeIncomplete,
+				Text:    "I looked around and ran out of road",
 				Rescued: true,
 			},
 		},

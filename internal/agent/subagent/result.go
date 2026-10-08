@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 )
@@ -299,9 +300,11 @@ type Result struct {
 	// tags and all. It is the same contract the turn's own phases publish.
 	Narration []toolloop.Narration
 
-	// SystemPrompt and UserPrompt are what the worker was actually sent.
-	SystemPrompt string
-	UserPrompt   string
+	// SystemPrompt and UserPrompt are what the worker was actually sent,
+	// each with the outline its builder recorded (see [prompts.Prompt]),
+	// which the worker's phase record carries beside the text.
+	SystemPrompt prompts.Prompt
+	UserPrompt   prompts.Prompt
 
 	// Error is why it stopped, when it did. Empty on ok and on no_result.
 	Error string

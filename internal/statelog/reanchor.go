@@ -191,8 +191,7 @@ type ReanchorInputs struct {
 	// Position is this node's own committed sequence at the OLD
 	// generation, and Highest is the highest any peer published at that
 	// same generation ON THE SAME STREAM — the one this node's rows are
-	// keyed to, or one a peer's row does not name (a build that did not
-	// publish it, weighed conservatively) — among the peers holding history
+	// keyed to — among the peers holding history
 	// the LOG DOES NOT: whose checkpoint record the log does not hold, past
 	// its end or with another record at the sequence, or which name no
 	// record ([coord.DomainPosition.CheckpointStoredAt]). A sequence at
@@ -451,8 +450,8 @@ func (in ReanchorInputs) Discarding() error {
 func unheldCaveat(r TailRecord) string {
 	if !r.LedgerLostBefore.IsZero() {
 		return fmt.Sprintf("(This node's operation ledger may have lost rows from "+
-			"before %s — to its %s sweep, or with a snapshot from a peer on an "+
-			"older build — and this record's operation was minted before that, so "+
+			"before %s to its %s sweep, and this record's operation was minted "+
+			"before that, so "+
 			"its rows may hold the record after all: if they do, the discard flag "+
 			"discards nothing.)", r.LedgerLostBefore.UTC().Format(time.RFC3339Nano),
 			OpsRetention)

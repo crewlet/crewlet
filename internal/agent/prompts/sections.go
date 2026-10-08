@@ -282,28 +282,43 @@ func BuildPoliciesSection(s Seat) []string {
 	return parts
 }
 
-// BuildRoleProfileSection renders the agent's own backstory, responsibilities
-// and behavioral guidelines. Goal is already covered by
-// [BuildIdentitySection] and is not repeated here.
-func BuildRoleProfileSection(s Seat) []string {
-	if !s.ok() {
+// The agent's own role profile, as three sections: its backstory, its
+// responsibilities and its behavioral guidelines. Goal is already covered by
+// [BuildIdentitySection] and is not repeated.
+//
+// Three builders rather than one returning all three, because each is a
+// section of the prompt's outline under its own heading, and a builder that
+// returned them as one list of lines would leave the outline to find the
+// second and third headings by reading the text — the guess the outline exists
+// to replace.
+
+func buildBackgroundSection(s Seat) []string {
+	if !s.ok() || s.Role.Backstory == "" {
 		return nil
 	}
-	var parts []string
-	if s.Role.Backstory != "" {
-		parts = append(parts, "\n## Your Background", s.Role.Backstory)
+	return []string{"\n## Your Background", s.Role.Backstory}
+}
+
+func buildResponsibilitiesSection(s Seat) []string {
+	if !s.ok() || len(s.Role.Responsibilities) == 0 {
+		return nil
 	}
-	if len(s.Role.Responsibilities) > 0 {
-		parts = append(parts, "\n## Your Responsibilities")
-		for _, item := range s.Role.Responsibilities {
-			parts = append(parts, "- "+item)
-		}
+	return bulleted("\n## Your Responsibilities", s.Role.Responsibilities)
+}
+
+func buildGuidelinesSection(s Seat) []string {
+	if !s.ok() || len(s.Role.BehavioralGuidelines) == 0 {
+		return nil
 	}
-	if len(s.Role.BehavioralGuidelines) > 0 {
-		parts = append(parts, "\n## Behavioral Guidelines")
-		for _, item := range s.Role.BehavioralGuidelines {
-			parts = append(parts, "- "+item)
-		}
+	return bulleted("\n## Behavioral Guidelines", s.Role.BehavioralGuidelines)
+}
+
+// bulleted is a heading followed by one "- " line per item.
+func bulleted(heading string, items []string) []string {
+	parts := make([]string, 0, len(items)+1)
+	parts = append(parts, heading)
+	for _, item := range items {
+		parts = append(parts, "- "+item)
 	}
 	return parts
 }

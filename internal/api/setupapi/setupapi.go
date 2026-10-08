@@ -1994,10 +1994,7 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	// ON THE INGRESS, not on whether this build runs a pass. Today that
 	// admits Slack alone: its Request URL is a field on a settings page with
 	// no write API behind it, so it holds whatever address a person last
-	// typed, however much of Slack's provisioning a pass does converge.
-	// Datadog used to be here too and is not any more — its webhook
-	// definition is writable through the organization credentials its block
-	// already carries, so no person holds that address. See
+	// typed, however much of Slack's provisioning a pass does converge. See
 	// [integration.Kind.Ingress].
 	if after != nil && kind.Ingress() == integration.IngressOperator {
 		s.recordEndpoint(r.Context(), kind, after.Integrations.WebhookBase(s.resolve))

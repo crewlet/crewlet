@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -48,12 +47,6 @@ type joinHarness struct {
 	// the row really written sets it to [statelog.RecordAdoption].
 	record func(ctx context.Context, began time.Time, donor string,
 		m statelog.Manifest, phase statelog.AdoptionPhase) error
-	// answered is when the harness's donor first answered an ask since the
-	// adopter was built, in Unix nanoseconds: the latest instant it can
-	// have finished the artefact it offered the join. Cleared when the
-	// adopter is built, because the harness's own readiness probes are asks
-	// too; a later call is the transfer's, which re-reads what to send.
-	answered atomic.Int64
 
 	// stillUsable is step 7's re-check, nil by default. A case sets it to
 	// stage the one thing the hold is a belt against: a fleet that
@@ -91,26 +84,13 @@ type joinHarness struct {
 
 func newJoinHarness(t *testing.T) *joinHarness {
 	t.Helper()
-	return newJoinHarnessFrom(t, joinDonor{domain: probeDomain{}})
+	return newJoinHarnessFrom(t, joinDonor{})
 }
 
-// joinDonor is how the harness's donor is built: the domain it declares — the
-// probe as this build declares it, or as a build from before the ledger
-// travelled did — and anything written into its estate before the snapshot.
+// joinDonor is how the harness's donor is built: anything written into its
+// estate before the snapshot.
 type joinDonor struct {
-	domain statelog.Domain
-	seed   func(t *testing.T, estate store.ReplicatedHandle)
-}
-
-// scrubbingProbe is the probe domain as a build from before the ledger
-// travelled declared it: its operation ledger classed as this node's own, and
-// so scrubbed out of every snapshot it takes.
-type scrubbingProbe struct{ probeDomain }
-
-func (scrubbingProbe) Tables() map[string]statelog.TableClass {
-	tables := probeDomain{}.Tables()
-	tables["probe_ops"] = statelog.Local
-	return tables
+	seed func(t *testing.T, estate store.ReplicatedHandle)
 }
 
 func newJoinHarnessFrom(t *testing.T, from joinDonor) *joinHarness {
@@ -144,8 +124,8 @@ func newJoinHarnessFrom(t *testing.T, from joinDonor) *joinHarness {
 		}
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO statelog_cursor
-				(stream, generation, seq, stream_created_at, updated_at)
-				VALUES (?, 1, 4200, 0, 0)`, probeStream)
+				(stream, generation, seq, stream_created_at, updated_at, applied_version)
+				VALUES (?, 1, 4200, 0, 0, 0)`, probeStream)
 		return err
 	}); err != nil {
 		t.Fatalf("seed the donor: %v", err)
@@ -159,7 +139,7 @@ func newJoinHarnessFrom(t *testing.T, from joinDonor) *joinHarness {
 	lag := uint64(0)
 	snapper, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
 		Domains: []statelog.Registered{{
-			Domain: from.domain, Spec: specOf(from.domain),
+			Domain: probeDomain{}, Spec: specOf(probeDomain{}),
 			Health: func() statelog.Health {
 				return statelog.Health{
 					Position: statelog.Position{Stream: probeStream, Generation: 1, Seq: 4_200},
@@ -192,11 +172,8 @@ func newJoinHarnessFrom(t *testing.T, from joinDonor) *joinHarness {
 	donor, err := statelog.NewDonor(statelog.DonorDeps{
 		NodeID: "donor",
 		Dial:   func(context.Context) (*nats.Conn, error) { return q.Conn(), nil },
-		Newest: func() (statelog.Manifest, bool) {
-			h.answered.CompareAndSwap(0, time.Now().UnixNano())
-			return h.manifest, true
-		},
-		Path: func(statelog.Manifest) string { return h.snapPath },
+		Newest: func() (statelog.Manifest, bool) { return h.manifest, true },
+		Path:   func(statelog.Manifest) string { return h.snapPath },
 	})
 	if err != nil {
 		t.Fatalf("NewDonor: %v", err)
@@ -218,7 +195,6 @@ func newJoinHarnessFrom(t *testing.T, from joinDonor) *joinHarness {
 
 func (h *joinHarness) adopter(t *testing.T) *statelog.Adopter {
 	t.Helper()
-	h.answered.Store(0)
 	a, err := statelog.NewAdopter(statelog.AdoptDeps{
 		Domains:  map[string]statelog.Registered{"probe": {Domain: probeDomain{}, Spec: specOf(probeDomain{})}},
 		LivePath: h.joinPath,
@@ -271,18 +247,6 @@ func (h *joinHarness) adopter(t *testing.T) *statelog.Adopter {
 		t.Fatalf("NewAdopter: %v", err)
 	}
 	return a
-}
-
-// answeredAt is when the harness's donor answered the join's ask, at the
-// precision the store keeps an instant.
-func (h *joinHarness) answeredAt(t *testing.T) time.Time {
-	t.Helper()
-	n := h.answered.Load()
-	if n == 0 {
-		t.Fatal("the donor never answered an ask, so this case has no answer " +
-			"to hold the adoption's start against")
-	}
-	return time.Unix(0, n).UTC().Truncate(time.Microsecond)
 }
 
 // debris is every file of the fetched artefact's set beside the live file: the
@@ -391,19 +355,12 @@ func TestANodeBelowTheFloorAdoptsAVerifiedArtefact(t *testing.T) {
 			t.Fatalf("the adoption recorded %v, want %v", h.phases, want)
 		}
 	}
-	// ALL UNDER ONE START, so one join is one row — and a start that
-	// follows the donor's answer, which is what makes it the bound for a
-	// join that stops partway: see
-	// TestAJoinThatStoppedAfterItsInstallStillBoundsTheLedger.
+	// ALL UNDER ONE START, so one join is one row.
 	for _, began := range h.began {
 		if !began.Equal(h.began[0]) {
 			t.Fatalf("one join recorded its phases under the starts %v — each "+
 				"is a row of its own", h.began)
 		}
-	}
-	if asked := h.answeredAt(t); h.began[0].Before(asked) {
-		t.Fatalf("the adoption starts at %s, before its donor answered at %s",
-			h.began[0], asked)
 	}
 	// AND NOTHING OF THE PART FILE SURVIVES, the lock its inspection took
 	// included.
@@ -661,87 +618,6 @@ func TestALiveDatabaseThatDidNotComeBackIsNeverAnEmptyFleet(t *testing.T) {
 	}
 }
 
-// A DONOR THAT SCRUBBED ITS LEDGER LEAVES THE ARTEFACT WITH A WATERMARK, WRITTEN
-// BEFORE THE INSTALL, AT A START THAT FOLLOWS ITS ANSWER.
-//
-// A build from before the ledger travelled scrubs it out of every snapshot,
-// and a rolling upgrade puts such a donor in front of this build's joiner. Its
-// artefact holds none of the ledger's rows, so the adopter has to say how far
-// back that ledger may have lost them — and say it IN THE FILE, before the
-// rename: written into the live estate after the reopen, it would leave a
-// window in which a publisher reads the empty ledger's silence as conclusive,
-// and a join that installed and then failed to reopen would leave the file
-// with no watermark at all. The start is the bound because it follows the
-// moment the donor answered: the donor offers what it holds when it answers,
-// so it may have finished the artefact an instant before, and an operation
-// this node published earlier than THAT can be inside it with its row
-// scrubbed.
-func TestADonorThatScrubbedItsLedgerLeavesTheArtefactAWatermark(t *testing.T) {
-	t.Parallel()
-
-	t.Run("an adoption that completes", func(t *testing.T) {
-		t.Parallel()
-		h := newJoinHarnessFrom(t, joinDonor{domain: scrubbingProbe{}})
-		if !slices.Contains(h.manifest.Scrubbed, "probe_ops") {
-			t.Fatalf("the scrubbing donor's manifest lists %v scrubbed, without "+
-				"its ledger — the case is not staging a donor that scrubs",
-				h.manifest.Scrubbed)
-		}
-		if _, err := h.adopter(t).Join(t.Context()); err != nil {
-			t.Fatalf("Join: %v", err)
-		}
-		if ops := h.joinerOps(t); ops != 0 {
-			t.Fatalf("the adopted ledger holds %d row(s) from a donor that "+
-				"scrubbed it", ops)
-		}
-		before, lost := h.joinerLostBefore(t)
-		if !lost || !before.Equal(h.began[0].Truncate(time.Microsecond)) {
-			t.Fatalf("the adopted ledger's watermark = (%s, %v), want the join's "+
-				"own start %s — without it the empty ledger's silence reads as "+
-				"conclusive, and every retry of an operation the donor applied is "+
-				"decided a second time", before, lost, h.began[0])
-		}
-		if asked := h.answeredAt(t); before.Before(asked) {
-			t.Fatalf("the watermark is %s, before the donor answered at %s — an "+
-				"operation minted between the two can be inside the artefact with "+
-				"its row scrubbed, and is re-decided", before, asked)
-		}
-	})
-
-	// AND ONE THAT STOPPED AFTER ITS INSTALL: whatever opens the estate next
-	// finds the donor's file current, with the watermark already in it,
-	// because it was written before the rename rather than after the reopen
-	// that never happened.
-	t.Run("an adoption that stopped after its install", func(t *testing.T) {
-		t.Parallel()
-		h := newJoinHarnessFrom(t, joinDonor{domain: scrubbingProbe{}})
-		h.reopenErr = errors.New("the artefact did not open")
-		if _, err := h.adopter(t).Join(t.Context()); !errors.Is(err, statelog.ErrEstateNotRestored) {
-			t.Fatalf("Join = %v, want the installed artefact not opening", err)
-		}
-		if _, err := h.joiner.OpenReplicated(t.Context(), 1); err != nil {
-			t.Fatalf("open the node's replicated estate again: %v", err)
-		}
-		at, _, _, err := statelog.CursorFor(t.Context(), h.joinEstate, probeStream)
-		if err != nil {
-			t.Fatalf("read the reopened estate's checkpoint: %v", err)
-		}
-		if at.Seq != 4_200 {
-			t.Fatalf("the reopened estate is at %d, want the artefact's 4200 — the "+
-				"case did not reach an installed artefact", at.Seq)
-		}
-		before, lost := h.joinerLostBefore(t)
-		if !lost {
-			t.Fatal("the installed artefact carries no watermark — its ledger is " +
-				"the donor's scrubbed one, and every operation minted before the " +
-				"join would be decided again")
-		}
-		if asked := h.answeredAt(t); before.Before(asked) {
-			t.Fatalf("the watermark is %s, before the donor answered at %s", before, asked)
-		}
-	})
-}
-
 // A DONOR'S OWN WATERMARK TRAVELS WITH ITS LEDGER.
 //
 // The donor's sweep deleted every row it applied more than the ledger's
@@ -753,12 +629,8 @@ func TestADonorsWatermarkTravelsWithItsLedger(t *testing.T) {
 	t.Parallel()
 	swept := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	h := newJoinHarnessFrom(t, joinDonor{
-		domain: probeDomain{},
 		seed: func(t *testing.T, estate store.ReplicatedHandle) {
-			if err := statelog.RecordLedgerLoss(t.Context(), estate,
-				probeDomain{}, swept); err != nil {
-				t.Fatalf("record the donor's sweep: %v", err)
-			}
+			markLedgerLost(t, estate, swept)
 		},
 	})
 	if _, err := h.adopter(t).Join(t.Context()); err != nil {
@@ -767,6 +639,25 @@ func TestADonorsWatermarkTravelsWithItsLedger(t *testing.T) {
 	if before, lost := h.joinerLostBefore(t); !lost || !before.Equal(swept) {
 		t.Fatalf("the adopted ledger's watermark = (%s, %v), want the donor's %s",
 			before, lost, swept)
+	}
+}
+
+// markLedgerLost records, in estate, that the probe's operation ledger may
+// have lost every row applied before before — the watermark a sweep leaves,
+// written as [tables.markLost] writes it, never backwards.
+func markLedgerLost(t *testing.T, estate interface {
+	Tx(ctx context.Context, fn func(*sql.Tx) error) error
+}, before time.Time) {
+	t.Helper()
+	if err := estate.Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `
+			INSERT INTO statelog_ops_lost (ops_table, lost_before) VALUES (?, ?)
+			ON CONFLICT (ops_table) DO UPDATE SET
+				lost_before = MAX(lost_before, excluded.lost_before)`,
+			probeDomain{}.OpsTable(), store.EncodeTime(before))
+		return err
+	}); err != nil {
+		t.Fatalf("move the operation ledger's watermark: %v", err)
 	}
 }
 

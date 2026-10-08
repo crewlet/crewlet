@@ -232,18 +232,13 @@ type SkillUsed struct {
 	// SkillID is empty for a registry-loaded skill.
 	SkillID    string          `json:"skill_id"`
 	SourceKind SkillSourceKind `json:"source_kind"`
-	// FileLoaded was meant to name a bundled file a load read instead of
-	// the body. No skill in any build carries bundled files, so nothing
-	// writes it and it is always empty; it stays on the wire because
-	// ADR-0006 never removes a key a peer may still send.
-	FileLoaded string `json:"file_loaded"`
 
 	// SourcePageID and SourceContainer name the knowledge-base page a
 	// REGISTRY skill was read from, so a load is attributable to the page
 	// an author edits rather than only to a key — a key is inside the page
 	// and moves when the page is edited, and two pages can declare one.
-	// Empty for a synthesized skill, which lives in this node's own store
-	// and has no page, and absent on a record an older build wrote.
+	// Empty, and absent on the wire, for a synthesized skill, which lives
+	// in this node's own store and has no page.
 	SourcePageID    string `json:"source_page_id,omitempty"`
 	SourceContainer string `json:"source_container,omitempty"`
 }
@@ -321,8 +316,7 @@ type PrefetchSummary struct {
 	// between a turn announcing itself and its first phase opening — it
 	// reads a diary, a thread and a knowledge base, and calls an auxiliary
 	// model for two of them — and without its own measurement a turn's
-	// timeline had a gap there nothing on the record could explain. Absent
-	// on an older peer's summary.
+	// timeline had a gap there nothing on the record could explain.
 	StartedAt              time.Time `json:"started_at,omitzero"`
 	DurationMS             int       `json:"duration_ms"`
 	CounterpartyHit        bool      `json:"counterparty_hit"`
@@ -386,8 +380,7 @@ type PrefetchSummary struct {
 	// that tells "the embedder failed, so nothing was searched" from
 	// "searched, and nothing was similar": both leave the episode block
 	// empty. Absent where no search asked for a vector — a thin trigger,
-	// an empty ask, a seat with neither store — and on an older peer's
-	// summary.
+	// an empty ask, a seat with neither store.
 	TurnEmbedding EmbedOutcome `json:"turn_embedding,omitempty"`
 }
 

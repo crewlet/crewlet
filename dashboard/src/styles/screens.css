@@ -13,17 +13,27 @@
   background: var(--color-surface-subtle);
   overflow: hidden;
 }
+/* A RUNNING TURN IS A STATE, so it is drawn in the working hue — info, the
+   ring a working seat's avatar wears — and never the accent, which says what
+   to DO. It was two rules: this inset rail, and a second further down that
+   drew an accent ring and, being later, silently replaced the rail's
+   box-shadow, so the rail never showed and the one colour on the card meant
+   "act here" rather than "running". One rule, both marks: the rail says which
+   card, the soft ring makes it readable at a glance. */
 .turn-card.live {
   border-color: var(--color-feedback-info-soft);
-  box-shadow: inset 2px 0 0 var(--color-feedback-info);
+  box-shadow:
+    inset 2px 0 0 var(--color-feedback-info),
+    0 0 0 3px color-mix(in srgb, var(--color-feedback-info) 7%, transparent);
 }
 .turn-card.failed {
   box-shadow: inset 2px 0 0 var(--color-feedback-danger);
 }
 /* A HEAD WRAPS, which is rule 15 of the design doc and the one place in this
-   file that was not keeping it. A phase's head is up to fifteen items — the
+   file that was not keeping it. A phase's head is up to sixteen items — the
    phase tag, the iteration, a delegated task id, a worker template, a role,
-   then the decision, the round cap, the empty-answer count, the rescue, the
+   then the decision, the round cap, the empty-answer count, the count of
+   rounds answered in prose, the rescue, the
    sandbox, the failure, the live dot, the model, the rounds, the tokens, the
    duration and the time — and every one of them is a tag or a `nowrap` figure
    that cannot break its own label.
@@ -205,8 +215,316 @@
    other half of "these do not belong together". */
 .round-body > .prose,
 .round-body > .abandoned,
-.round-body > .round-thinking {
+.round-body > .round-thinking,
+.round-body > .round-note {
   margin-inline: var(--spacing-2);
+}
+/* WHAT BECAME OF A ROUND THAT ANSWERED IN PROSE where the phase had to end in
+   a call (`DeclinedNote` in PhaseCard.tsx). Under the words it explains, at
+   caption size, NEUTRAL while the phase carried on — the engine asked again and
+   the next round is right below, which is the loop working — and CAUTION only
+   on the round that spent the bound, where the phase ended without its
+   submission. Never the danger hue: the turn goes on either way. The words say
+   it; the hue and, on the caution line, the glyph repeat it. */
+.round-note {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  line-height: var(--font-line-height-normal);
+  color: var(--color-text-secondary);
+  max-width: 78ch;
+}
+.round-note.caution {
+  color: var(--color-feedback-warning-ink);
+}
+/* A ROUND THAT DID NOT FINISH — cut off at the output cap, refused, out of
+   context, paused. DANGER, unlike a declined round: this round ended the phase
+   and its turn, and nothing follows it. */
+.round-note.critical {
+  color: var(--color-feedback-danger-ink);
+}
+
+/* ---- A phase's prompt: a map, an outline and one section -----------------
+   `PromptDoc.tsx`. The view measures ITSELF (`container: prompt`) rather than
+   the window: the card it sits in is as wide as the turn page's column, which
+   the sidebar and a peek narrow without the window changing at all.
+
+   NOTHING HERE SCROLLS OR STICKS. The card hides its overflow and a box that
+   scrolls inside the page is a second thing under the wheel; showing one
+   section at a time is what keeps the page short instead. */
+.prompt-doc {
+  container: prompt / inline-size;
+  min-width: 0;
+}
+.prompt-reading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+
+/* THE MAP: one bar for the request, a section per segment, each as wide as its
+   bytes, the two halves apart by a visible gap. NEUTRAL in two alternating
+   steps so neighbours stay apart, and the accent on the section being read —
+   the one thing the accent marks in this product. A segment is never narrower
+   than a hairline it can be pointed at; `flex-basis: 0` so the grow factor
+   (the bytes) is the whole of its width.
+
+   THE TWO STEPS ARE TWO VALUES. They were `--color-border-strong` and
+   `--color-border-hover`, which hold the SAME colour in both palettes (#2d3448
+   dark, #c9cfdc light) — so the alternation was invisible, and in the dark
+   palette the whole bar sat about 1.2:1 off the card. `--color-text-muted`
+   (decoration, 2.4:1 dark and 3:1 light on the card) and
+   `--color-text-tertiary` beside it make each segment a shape on the card and
+   each neighbour a different one; hovering lifts a segment to the secondary
+   step, which is never either.
+
+   A HALF IS NEVER NARROWER THAN ITS SEGMENTS. `min-width: 0` let a small half
+   (a 600 B user message beside a 50 kB system prompt) take its byte share —
+   4px at a phone's width — while its three segments needed 11px, so they
+   spilled past the map's edge. Its automatic minimum is its content's. */
+.prompt-map {
+  display: flex;
+  gap: var(--spacing-2);
+  height: var(--spacing-2);
+}
+.prompt-map-half {
+  display: flex;
+  gap: 1px;
+  flex-basis: 0;
+}
+.prompt-map-seg {
+  flex-basis: 0;
+  min-width: 3px;
+  border-radius: 1px;
+  background: var(--color-text-muted);
+  cursor: pointer;
+}
+.prompt-map-seg:nth-child(even) {
+  background: var(--color-text-tertiary);
+}
+.prompt-map-seg:hover {
+  background: var(--color-text-secondary);
+}
+.prompt-map-seg.is-dim {
+  opacity: 0.35;
+}
+.prompt-map-seg.is-selected {
+  background: var(--color-brand-accent);
+  opacity: 1;
+}
+
+.prompt-find {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+/* NARROW BY DEFAULT: the picker above the reader, the outline not drawn. At
+   720px of the view's own width the outline has room for a title beside a
+   reader at a readable measure, and takes the first track. */
+.prompt-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--spacing-3) var(--spacing-4);
+  align-items: start;
+}
+.prompt-toc {
+  display: none;
+}
+@container prompt (width >= 720px) {
+  .prompt-layout {
+    grid-template-columns: minmax(200px, 30%) minmax(0, 1fr);
+  }
+  .prompt-toc {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-3);
+  }
+  .prompt-picker {
+    display: none;
+  }
+}
+
+.prompt-toc-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.prompt-toc-head {
+  padding: 0 var(--spacing-2) var(--spacing-1);
+}
+/* A ROW IS ITS TITLE, ITS SIZE AND ITS WEIGHT: the title wraps rather than
+   truncating (it is prose, and the words cut would be the ones that tell two
+   sections apart), the size sits on its first line, and the weight bar runs
+   under both — the same share the map draws, at the row it belongs to. */
+.prompt-toc-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "title meta"
+    "weight weight";
+  gap: 2px var(--spacing-2);
+  padding: var(--spacing-1) var(--spacing-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-compact);
+  line-height: var(--font-line-height-snug);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+.prompt-toc-row:hover {
+  background: var(--color-surface-hover);
+}
+.prompt-toc-row.is-selected {
+  background: var(--color-brand-accent-soft);
+  color: var(--color-brand-accent-ink);
+}
+/* INSIDE ITS OWN BOX, because the outline's rows sit edge to edge and an outset
+   ring would be cut by its neighbour's ground. */
+.prompt-toc-row:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: -2px;
+}
+/* WHILE A FIND IS OPEN, A ROW THAT MATCHES LIFTS AND ONE THAT DOES NOT RECEDES,
+   rather than leaving: a find annotates the outline, it does not filter it, so
+   the sections around a match stay where they were.
+
+   It used to be one step of text colour, secondary to tertiary — and in the
+   dark palette those are #a9b0c3 and #9fa7bc, the same grey to anyone's eye.
+   Dimming further (opacity, the muted step) would take the title under the
+   4.5:1 a row's words owe, and a row with no match is still a row somebody
+   may choose. So both ends move instead: a matching row's title goes to the
+   primary step (12:1 dark, 16:1 light) and its count sits on the find's own
+   ground — the colour the matches are marked with in the reader — while the
+   rest take tertiary (still over 5.7:1) and their weight bars fade, which is
+   decoration and owes no contrast. A shape and a ground as well as a hue, so
+   it does not rest on telling two greys apart. */
+.prompt-toc-row.is-hit:not(.is-selected) {
+  color: var(--color-text-primary);
+}
+.prompt-toc-row.is-dim {
+  color: var(--color-text-tertiary);
+}
+.prompt-toc-row.is-dim .prompt-toc-weight {
+  opacity: 0.4;
+}
+.prompt-toc-title {
+  grid-area: title;
+  overflow-wrap: anywhere;
+}
+.prompt-toc-meta {
+  grid-area: meta;
+  display: inline-flex;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+.prompt-toc-hits {
+  padding: 0 var(--spacing-1);
+  border-radius: var(--radius-sm);
+  background: var(--color-brand-accent-soft-strong);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+/* THE WEIGHT BARS ARE NEUTRAL, the selected row's included. The row's own
+   ground already says which one is selected, and an accent bar on a row whose
+   section is a hundredth of its half was a dot of the accent with nothing
+   around it — a stray mark rather than a weight. The map's own neutral step,
+   so a bar and its segment read as one quantity. (The count beside a matching
+   row is on the find's ground rather than the accent's meaning of "here": it
+   is the colour the matches it counts are marked with in the reader.) */
+.prompt-toc-weight {
+  grid-area: weight;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--color-border-default);
+  overflow: hidden;
+}
+.prompt-toc-weight > span {
+  display: block;
+  height: 100%;
+  background: var(--color-text-muted);
+}
+
+.prompt-reader {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.prompt-reader-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+/* SET LIKE A HEADING AND NOT ONE: a quoted prompt's headings are not this
+   page's, so the title is a styled line and the region takes its name from it. */
+.prompt-reader-title {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  line-height: var(--font-line-height-tight);
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+/* PREVIOUS AND NEXT EACH OWN HALF THE ROW. As a wrapping flex row, two long
+   destinations ("Previous: Human colleagues", "Next: When a decision is not
+   yours to make") did not fit side by side on a phone, so Next wrapped onto a
+   line of its own under Previous, both against the left edge — two stacked
+   buttons that no longer read as a pair. Two tracks keep Previous at the
+   start and Next at the end however long either is, and a destination that
+   does not fit wraps INSIDE its own half (the kit's button is `nowrap`; its
+   height is a minimum, so a second line is read rather than clipped). */
+.prompt-reader-nav {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--spacing-2);
+}
+.prompt-reader-nav .prompt-step {
+  justify-self: start;
+  max-width: 100%;
+  white-space: normal;
+  text-align: start;
+}
+.prompt-reader-nav .prompt-step.is-next {
+  justify-self: end;
+  text-align: end;
+}
+/* A match the find takes the reader to lands clear of the sticky band, and of
+   the view's bottom edge, rather than flush against either. */
+.prompt-reader * {
+  scroll-margin-block: calc(var(--sticky-top) + var(--spacing-4)) var(--spacing-4);
+}
+.prompt-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+/* A HEADING INSIDE THE SECTION — a ledger's entry, a quoted thread's own
+   section — drawn in place under its parent, indented by its depth with a rule
+   down its edge so where it ends is visible, and titled with a styled line. */
+.prompt-sub {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  padding-inline-start: var(--spacing-3);
+  border-inline-start: 2px solid var(--color-border-default);
+}
+.prompt-sub-title {
+  font-size: var(--font-size-compact);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+
+/* WHAT A FIND MATCHED, in the section being read: the CSS Custom Highlight API
+   (`Marked` in PromptDoc.tsx), so no element is added around a match. The
+   accent's soft ground, because a match is where the reader asked to be. */
+::highlight(prompt-find) {
+  background-color: var(--color-brand-accent-soft-strong);
+  color: var(--color-text-primary);
 }
 .round-tools {
   display: flex;
@@ -215,15 +533,28 @@
   min-width: 0;
 }
 
-/* A round that CALLED SOMETHING THAT FAILED. The one other colour a round
-   carries, and it is earned: scanning nine rounds for where it went wrong is
-   the actual question a reader brings to a stuck turn, and the answer was
-   previously a small icon inside a collapsed row. Three node states in total
-   — normal, failed, live — not one per round. */
+/* A round that CALLED SOMETHING THAT FAILED, or that DID NOT FINISH (its stop
+   reason ended the phase — the note under its words says which). A colour a round carries only
+   when it is earned: scanning nine rounds for where it went wrong is the
+   actual question a reader brings to a stuck turn, and the answer was
+   previously a small icon inside a collapsed row. Four node states in total
+   — normal, failed, answered in prose, live — not one per round. */
 .round.errored .round-node {
   border-color: color-mix(in srgb, var(--color-feedback-danger) 55%, transparent);
   background: var(--color-feedback-danger-soft);
   color: var(--color-feedback-danger-ink);
+}
+/* A round that ANSWERED IN PROSE where the phase needed a call — the other
+   answer to "which round went wrong". Its note says so under its words, at
+   caption size, and that alone was easy to read past: the node looked like
+   every other round's, so nothing at the round caught the eye. CAUTION, never
+   danger — the engine asks again, or rescues the phase, and the turn goes on
+   either way — and on the node whatever the note's own tone, because the
+   node is where a reader scanning the rail looks. */
+.round.declined .round-node {
+  border-color: color-mix(in srgb, var(--color-feedback-warning) 55%, transparent);
+  background: var(--color-feedback-warning-soft);
+  color: var(--color-feedback-warning-ink);
 }
 
 /* The round in flight. The accent is doing real work here — it is the one
@@ -296,11 +627,59 @@
   padding: var(--spacing-1) var(--spacing-2);
 }
 /* Tailing. A running phase's ledger is bounded and scrolls itself; a finished
-   one is a document and simply flows, because there is nothing to follow. */
+   one is a document and simply flows, because there is nothing to follow.
+
+   BOUNDED BY THE SCROLLER'S VIEW, and the wheel is the page's at either end.
+   It was `max-height: 620px` with `overscroll-behavior: contain`, and the two
+   together were a trap: 620px is unrelated to the view (the page bar wraps,
+   and the object header, the tabs, the turn's head and the phase's head all
+   sit above the box), so on most windows the box's own bottom was below the
+   fold — and `useTail` keeps a following box pinned at its END, where
+   containment swallowed every wheel-down. The reader scrolled, nothing moved,
+   and half the transcript stayed out of sight until the pointer left the box.
+
+   THE BOUND IS DERIVED FROM ONE REQUIREMENT: once the page is scrolled to it,
+   the WHOLE box fits in the view. So it is the view (`100cqb`, the scroller
+   — see `.app .crewlet-app-shell__main` in frame.css) less what covers its
+   top (`--sticky-top`), less the phase body's own inset below it
+   (`--spacing-3`), so the box's bottom border clears the view's edge by the
+   same margin the card gives it. THE BOX ALONE: its caption above it
+   ("Rounds · what the model thought, said and called, in order") is not
+   counted, because it is an uppercase label in a column a sidebar and a peek
+   narrow, and it wraps — a bound that subtracted one line of it promised a
+   fit that held only while the caption did. Scrolled until the box's top
+   meets the band, the box fits whatever the caption does. The FLOOR is for a
+   window too short for that to leave a transcript at all: four rows
+   (`--size-row-md` each) — a round's line of speech and three tool rows — is
+   the least that reads as a transcript rather than as a slot; below it the
+   box is taller than the view, and since nothing contains the wheel, the
+   page simply carries on past it.
+
+   A RECORD INSIDE IT is the same requirement one level down: a tool's
+   arguments and result are scrollers of their own, and one taller than the
+   box that scrolls it is this trap again. So inside a tailing box the record
+   ceiling (`--record-ceiling`, declared once in frame.css) narrows to the box
+   less its padding and border (`--spacing-1` and 1px, top and bottom) and
+   the record's own label line and gap — "Arguments", "Result", "Error", one
+   word each, so that line cannot wrap — and never past `--record-max`. It is
+   re-declared for the kit as well as named, because a custom property's
+   `var()` resolves where it is declared: the shell's value was settled on
+   `main`. */
 .tail-scroll.tailing {
-  max-height: 620px;
+  --tail-bound: max(
+    calc(var(--size-row-md) * 4),
+    calc(100cqb - var(--sticky-top) - var(--spacing-3))
+  );
+  --record-ceiling: min(
+    var(--record-max),
+    calc(
+      var(--tail-bound) - 2 * var(--spacing-1) - 2px - var(--font-size-2xs) *
+        var(--font-line-height-normal) - var(--spacing-1)
+    )
+  );
+  --crewlet-codeblock-max-height: var(--record-ceiling);
+  max-height: var(--tail-bound);
   overflow-y: auto;
-  overscroll-behavior: contain;
 }
 
 /* PROSE. The model's reasoning and its speech are natural language, and were
@@ -829,6 +1208,13 @@ a.oc-key:hover {
 .seat-peek-facts {
   font-size: var(--font-size-xs);
   color: var(--color-text-secondary);
+}
+/* WATCH LIVE, at the state card's end: as wide as its words — a column's
+   child stretches to the card's width, which made the whole tinted line one
+   link — and in the facts' size, the line it follows. */
+.seat-peek-watch {
+  align-self: flex-start;
+  font-size: var(--font-size-xs);
 }
 .seat-peek-facts-grid {
   display: grid;
@@ -2044,7 +2430,12 @@ a.prof-row:hover {
   gap: var(--spacing-4);
   align-items: start;
 }
-@media (width < 640px) {
+/* STACKED BY THE SCREEN'S WIDTH, NOT THE WINDOW'S (`@container page`): the
+   sidebar and a peek each take a share of the window it does not report, so a
+   window media query kept two columns in a screen too narrow to hold them —
+   at 760px with the sidebar open the list's 220px floor and the detail shared
+   about 480px. */
+@container page (width < 640px) {
   .split {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -2054,18 +2445,31 @@ a.prof-row:hover {
    Memory tab). Drawn whole, the list was 1,700px and the detail beside it sat
    at the grid row's top — so a thread chosen near the list's end opened a
    screen above the row that was pressed, with its highlight the only sign
-   anything happened. Beside each other, the list is BOUNDED to the scroller's
-   view (the viewport less the page bar, and a gap above and below) and scrolls
-   inside itself, and the detail STICKS under the scroller's top, below
-   whatever band already sticks there (`--sticky-top`). Stacked, neither
-   applies: the detail is revealed by scrolling to it instead (`reveal`),
-   because a sticky box as tall as a phone's screen would cover the list. */
-@media (width >= 640px) {
+   anything happened. Beside each other, the list is BOUNDED and scrolls inside
+   itself, and the detail STICKS under the scroller's top, below whatever band
+   already sticks there (`--sticky-top`). Stacked, neither applies: the detail
+   is revealed by scrolling to it instead (`reveal`), because a sticky box as
+   tall as a phone's screen would cover the list.
+
+   THE LIST'S BOUND IS THE BAND THE DETAIL STICKS IN: the scroller's view
+   (`100cqb` — see `.app .crewlet-app-shell__main` in frame.css) less the
+   sticky band and the `--spacing-4` the detail rests below it, and the same
+   gap again at the bottom, so once scrolled to, the whole list fits in the
+   view beside a detail drawn over the same band. It was a `100dvh` sum that
+   subtracted the page bar once and a guessed 8rem, and counted neither the
+   sheet's inset nor a wrapped bar nor a banner. The 12rem floor is for a
+   window too short for that: three thread entries (a key line and a facts
+   line each), the least that is still a list to choose from rather than a
+   slot.
+
+   AND THE WHEEL IS THE PAGE'S AT EITHER END. It carried
+   `overscroll-behavior: contain`, which held a wheel over the list at its end
+   even while the page around it had more to show. */
+@container page (width >= 640px) {
   .thread-split .thread-list {
-    max-height: calc(100dvh - var(--page-bar-h) - var(--sticky-top) - 8rem);
+    max-height: calc(100cqb - var(--sticky-top) - 2 * var(--spacing-4));
     min-height: 12rem;
     overflow-y: auto;
-    overscroll-behavior: contain;
   }
   .thread-split .thread-detail-card {
     position: sticky;
@@ -3370,22 +3774,25 @@ textarea.kpage-editor-body {
 
 /* A phase whose text is arriving right now. The ring is what the seat page
    needed: a running turn that looks different from a finished one at a
-   glance, rather than only by reading its badge. */
+   glance, rather than only by reading its badge. In the WORKING hue, like the
+   running turn card's (see `.turn-card.live`): streaming is a state. */
 .phase-card.streaming {
-  border-color: color-mix(in srgb, var(--color-brand-accent) 45%, var(--color-border-hover));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-brand-accent) 9%, transparent);
-}
-.turn-card.live {
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-brand-accent) 7%, transparent);
+  border-color: color-mix(in srgb, var(--color-feedback-info) 45%, var(--color-border-hover));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-feedback-info) 9%, transparent);
 }
 
 /* Text that is being written. The transition is on COLOR only — never on
    height: animating the height of a growing block makes every append a
-   reflow the reader can feel, which is the opposite of the point. */
+   reflow the reader can feel, which is the opposite of the point.
+
+   THE CARET ENDS THE LAST BLOCK, not the container. A model's words are
+   rendered markdown (`Words` in PhaseCard.tsx), so the container holds
+   blocks, and a caret after the container would sit alone on a line below
+   the text it is writing. */
 .prose.stream {
   transition: color var(--motion-duration-slow) var(--motion-easing-default);
 }
-.prose.stream::after {
+.prose.md.stream > :last-child::after {
   content: "";
   display: inline-block;
   width: 2px;
@@ -3418,7 +3825,7 @@ textarea.kpage-editor-body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .prose.stream::after {
+  .prose.md.stream > :last-child::after {
     animation: none;
   }
 }
@@ -4870,7 +5277,9 @@ details > summary.int-summary::-webkit-details-marker {
   display: flex;
   align-items: center;
   gap: var(--spacing-2);
-  height: 28px;
+  /* The row token rather than a literal, because `.work-col-body`'s bound
+     subtracts this height and the two must be one value. */
+  height: var(--size-row-sm);
   padding: 0 var(--spacing-1);
   font-size: var(--font-size-compact);
   color: var(--color-text-primary);
@@ -4887,10 +5296,23 @@ details > summary.int-summary::-webkit-details-marker {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-2);
-  /* THE COLUMN SCROLLS, NOT THE PAGE — see the section head. The ceiling is
-     what keeps every lane's head, where the counts are, on one screen. */
+  /* A LANE'S BODY SCROLLS INSIDE THE PAGE, so it is bounded by the scroller's
+     view (see "The document does not scroll" in the design doc): once the page
+     is scrolled to it, the lane's head and its whole body fit under the sticky
+     band, so the lane's counts and its last card are on one screen. That is
+     the view (`100cqb`) less the band (`--sticky-top`), the head
+     (`--size-row-sm`, its height above) and its gap to the body, and the
+     board's own bottom inset — with a floor of four rows for a window too
+     short for that, where the page carries on past it. It was
+     `min(70dvh, 760px)`: a guess at the view that counted neither the page
+     bar nor the toolbar, so on a short window the lane's bottom sat below the
+     fold, and on a tall one the cap stopped it short for no reason the view
+     gave. */
   overflow-y: auto;
-  max-height: min(70dvh, 760px);
+  max-height: max(
+    calc(var(--size-row-md) * 4),
+    calc(100cqb - var(--sticky-top) - var(--size-row-sm) - var(--spacing-2) - var(--spacing-2))
+  );
   /* Room for a card's shadow and focus ring, which the scroll box would clip. */
   padding: 2px;
   margin: -2px;
@@ -6627,12 +7049,12 @@ a.work-cal-chip {
   }
 }
 
-/* RENDERED MARKDOWN. `.prose` on its own is a plain `pre-wrap` block, which is
-   right for a model's speech — its own line breaks are load-bearing there and
-   it is not markdown. A page body and a work item's description ARE markdown
-   by contract, so they carry `.md` beside it: the whitespace rule goes back to
-   normal (the renderer decides what a break is) and the block elements it
-   emits get the spacing a document needs. */
+/* RENDERED MARKDOWN. `.prose` on its own is a plain `pre-wrap` block, for text
+   whose every space and break is the record — a coding run's activity log. A
+   page body, a work item's description and a model's own words ARE markdown,
+   so they carry `.md` beside it: the whitespace rule goes back to normal (the
+   renderer decides what a break is — every newline, for a model's words) and
+   the block elements it emits get the spacing a document needs. */
 .prose.md {
   white-space: normal;
   overflow-wrap: break-word;
@@ -6770,6 +7192,26 @@ a.work-cal-chip {
 .prose.md img {
   max-width: 100%;
   border-radius: var(--radius-sm);
+}
+
+/* A HEADING THAT IS NOT A SECTION (`headings: "text"` in lib/markdown.ts): a
+   model's "## Summary" inside its own words. Set like a heading — the weight,
+   the tight leading, the primary ink, more air above than a paragraph — at the
+   body's size, because a transcript item has no outline of its own to rank,
+   and a size per level would be ranking one. */
+.prose.md .md-heading {
+  font-weight: 600;
+  line-height: var(--font-line-height-tight);
+  color: var(--color-text-primary);
+}
+.prose.md > * + .md-heading {
+  margin-top: var(--spacing-4);
+}
+/* Inside dimmed words — a round's thinking — it keeps the dimming: emphasis
+   within a block the reader can skip by its shape, never a line louder than
+   the block it is in. */
+.prose.md.muted .md-heading {
+  color: var(--color-text-secondary);
 }
 
 /* A TABLE SCROLLS RATHER THAN OVERFLOWING ITS PANEL. A page's own table is

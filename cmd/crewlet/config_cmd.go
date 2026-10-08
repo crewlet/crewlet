@@ -232,9 +232,9 @@ func openConfigStore(ctx context.Context, bootstrapPath string) (*configStore, f
 			"and activates it on every node, this one included."); err != nil {
 		return nil, nil, err
 	}
-	// A NIL CIPHER IS VALID HERE, unlike for `secrets`: company_config
-	// supports a plaintext mode so pre-encryption deployments keep working,
-	// and secrets.Open passes an unsealed payload straight through.
+	// A NIL CIPHER IS VALID HERE, unlike for `secrets`: company_config is
+	// stored in the clear when Tier A configures no keyring, and
+	// secrets.Open passes an unsealed payload straight through.
 	var cipher secrets.Cipher
 	if len(boot.Secrets.Keys) > 0 {
 		if cipher, err = boot.Secrets.Cipher(); err != nil {

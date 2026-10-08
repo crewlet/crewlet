@@ -26,20 +26,20 @@ func auxRec(stage, purpose, turn, at string, calls, total int) tokens.Record {
 // A bucket counted RECORDS, so a forty-round executor was "1 call" beside a
 // coalesced auxiliary record of seventy rewrites that would have been "1 call"
 // too — two units under one word on the same card. A record states its calls,
-// and one that states none (an older peer's) is the one call that produced it.
+// and a bucket sums them.
 func TestABucketCountsProviderCallsNotRecords(t *testing.T) {
 	t.Parallel()
 	exec := rec("CEO", "execute", "sonnet", "t1", "2026-06-14T12:00:05Z", 90, 30)
 	exec.Calls = 4
-	older := rec("CEO", "review", "sonnet", "t1", "2026-06-14T12:00:08Z", 10, 5)
+	review := rec("CEO", "review", "sonnet", "t1", "2026-06-14T12:00:08Z", 10, 5)
 	got := tokens.Aggregate([]tokens.Record{
-		exec, older,
+		exec, review,
 		auxRec(tokens.StageTurn, "condense_produced", "t1", "2026-06-14T12:00:09Z", 70, 7000),
 	}, tokens.Options{Since: since, Until: until})
 
 	if got.Totals.Calls != 4+1+70 {
-		t.Errorf("calls = %d, want 75: four rounds, the one call an older record "+
-			"stands for, and seventy coalesced rewrites", got.Totals.Calls)
+		t.Errorf("calls = %d, want 75: four rounds, the review's one call and "+
+			"seventy coalesced rewrites", got.Totals.Calls)
 	}
 	if len(got.ByWorker) != 1 || got.ByWorker[0].Worker != "condense_produced" ||
 		got.ByWorker[0].Calls != 70 {

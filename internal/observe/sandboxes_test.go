@@ -30,6 +30,7 @@ func TestTheLiveStatusesAreTheRunRecordsWords(t *testing.T) {
 		livestate.SandboxRunning:   sandbox.StatusRunning,
 		livestate.SandboxAwaiting:  sandbox.StatusAwaiting,
 		livestate.SandboxReseed:    sandbox.StatusReseed,
+		livestate.SandboxAnswered:  sandbox.StatusAnswered,
 	}
 	for live, record := range pairs {
 		if string(live) != record {
@@ -63,7 +64,7 @@ func TestARecordRendersAsTheEntryItsRunWouldHaveAnnounced(t *testing.T) {
 			SandboxID: "sb-1", Status: sandbox.StatusAwaiting, Owner: "core-2",
 			TaskDescription: "Add retry to the webhook client\nand the rest of the brief",
 			Question:        "which ceiling?", Audience: "founder", WorkItem: item,
-			LaunchID: "l-1", Launch: sandbox.LaunchRecord{ID: "l-1", StartedAt: launched},
+			LaunchID: "l-1", Launch: sandbox.LaunchRecord{StartedAt: launched},
 			CreatedAt: created, UpdatedAt: written,
 		},
 		{TurnID: "tn-over", Role: "Coder", Status: sandbox.StatusResumed},

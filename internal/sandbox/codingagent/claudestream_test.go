@@ -261,59 +261,12 @@ func TestARunWhoseWrapperDiedIsReadFromItsStream(t *testing.T) {
 			}
 			// No result file, no exit status, no done marker: the poll
 			// ended the run on the wrapper's liveness alone.
-			res, err := runner.Collect(t.Context(), b, launched(runner))
+			res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
 			if err != nil {
 				t.Fatalf("Collect: %v", err)
 			}
 			tc.check(t, res)
 		})
-	}
-}
-
-// A JOB IS READ BY THE LAYOUT ITS LAUNCH DECLARED, never by what the box
-// holds. A build that ran Claude Code with `--output-format json` wrote its
-// stdout to the result file and cleared no stream file, so a box this build
-// used before carries the PREVIOUS job's stream when such a build reuses it —
-// and collected by this build's layout, that job's commands were the new
-// job's transcript, and its live view showed them for the whole run.
-//
-// Mutation: read every job by this build's own layout, and the stale stream's
-// tool lines are the json job's transcript.
-func TestAJobIsReadByTheLayoutItsLaunchDeclared(t *testing.T) {
-	t.Parallel()
-	runner := codingagent.NewClaudeCode()
-	if handle, err := runner.Start(t.Context(), box(t, runner), sandbox.RunRequest{Brief: "fix it"}); err != nil ||
-		handle.Layout != runner.Layout() || handle.Layout == 0 {
-		t.Fatalf("Start = %+v, %v; want the stream layout declared on the handle", handle, err)
-	}
-
-	b := box(t, runner)
-	p := paths(b)
-	// The previous job's stream, left where this build streams to.
-	b.Put(p.Stream(), strings.Join(claudeRunStream, "\n")+"\n")
-	// The json job: its one result object, and what it said on stderr.
-	b.Put(p.Result(), `{"type":"result","subtype":"success","is_error":false,"result":"Renamed the flag",`+
-		`"usage":{"input_tokens":10,"output_tokens":5}}`)
-	b.Put(p.Err(), "warning: a deprecated flag")
-	b.Put(p.ExitCode(), "0")
-	b.Put(p.Done(), "0")
-
-	json := sandbox.RunHandle{} // launched by a build that declared no layout
-	res, err := runner.Collect(t.Context(), b, json)
-	if err != nil {
-		t.Fatalf("Collect: %v", err)
-	}
-	if !res.Success || res.Text != "Renamed the flag" || res.OutputTokens != 5 {
-		t.Errorf("result = %+v; want the json job's own result", res)
-	}
-	if strings.Contains(res.Transcript, "[tool]") || res.Transcript != "warning: a deprecated flag" {
-		t.Errorf("transcript = %q; want the json job's stderr, never the previous job's stream", res.Transcript)
-	}
-
-	live := read(t, runner.Follow(json), b)
-	if strings.Contains(live.Text, "[tool]") || live.Source != sandbox.SourceStderr {
-		t.Errorf("the live view = %q from %q; want the job's stderr, never the previous job's stream",
-			live.Text, live.Source)
 	}
 }
 

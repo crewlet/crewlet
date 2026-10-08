@@ -74,37 +74,6 @@ func (f *FleetStore) Follow(ctx context.Context, backend, handle, channel, threa
 	return nil
 }
 
-// FollowIfAbsent records a follow only where none exists, reporting whether
-// this call created it.
-//
-// CREATE, NOT PUT, and the difference is the whole method: [FleetStore.Follow]
-// rewrites unconditionally because rewriting is how a re-assert moves the
-// bucket's age forward, and that is exactly wrong for a caller carrying rows
-// that are OLDER than whatever the fleet may already hold. See
-// [coord.Follows] for what depends on it.
-//
-// `false` with no error means the fleet already has this follow, which is a
-// success for every caller this exists for.
-func (f *FleetStore) FollowIfAbsent(ctx context.Context, backend, handle, channel, thread, reason string, at time.Time) (bool, error) {
-	if backend == "" || handle == "" || thread == "" {
-		return false, errors.New("coord/kv: a follow needs a backend, a handle and a thread")
-	}
-	raw, err := json.Marshal(followRecord{Reason: reason, At: at.UTC()})
-	if err != nil {
-		return false, fmt.Errorf("coord/kv: encode the follow: %w", err)
-	}
-	_, err = f.create(ctx, f.follows, followKey(backend, handle, channel, thread), raw)
-	switch {
-	case err == nil:
-		return true, nil
-	case errors.Is(err, jetstream.ErrKeyExists):
-		return false, nil
-	default:
-		return false, unavailable(
-			fmt.Sprintf("record the follow on %s thread %s for %s", backend, thread, handle), err)
-	}
-}
-
 // Following reports why a seat follows a thread, and whether it does.
 //
 // THREE ANSWERS. A missing key is definitively not following; an unreadable

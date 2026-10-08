@@ -93,7 +93,12 @@ Each agent, when triggered (by event or task assignment), executes a **turn** th
    └── Ends by calling submit_work: outcome, summary, deliveries,
          checked against the engine's own record of the turn — every
          round of it, so a delivery an earlier round made is citable.
-         Prose before it is answered with one reminder, not accepted
+         A round that ends in prose instead is not an end: the loop
+         asks again, naming submit_work, at most twice in a row, before
+         the phase is rescued as incomplete. A round that did not FINISH
+         never gets that far: a refusal, a response cut off at the output
+         cap, a full context window or a paused turn ends the phase by
+         name, with nothing rescued and nothing re-asked
 
 3. Engine check (no model call), over the whole turn's record
    ├── no_action nobody asked for and nothing acted on -> the turn ends
@@ -145,7 +150,10 @@ flowchart TD
     S2 --> LLM
     LLM --> S3
     S6 -->|"LLM responds without tool_calls"| DONE["phase ends"]
+    S3 -->|"stop reason: refusal, max_tokens,<br/>context_exceeded or paused"| FAIL["phase fails by name<br/>(its calls are not run)"]
 ```
+
+Step 3 reads **why the model stopped** before anything else reads the response. Every backend normalises its own stop reason (`end_turn`, `length`, `content_filter`, …) onto one vocabulary, and a round the output cap cut off, one that filled the context window, a turn the provider paused, or a model that **declined** the request ends the phase with that reason as its `error_kind` — the tools that round asked for are not run, and no corrective is sent. A refusal is never handed to the next model in the fallback chain and its turn is not redelivered. A tool call whose arguments did not parse is answered with a failed result saying why rather than run with none. See [A round that did not finish](turn-engine.md#a-round-that-did-not-finish).
 
 Both builtin and MCP tools produce identical tool definition schemas. From the LLM's perspective, `lookup_colleague` (builtin) and an MCP server's issue-creation tool look the same: a function it can ask the engine to call.
 
@@ -162,6 +170,8 @@ Under the two-stage [Turn Engine](turn-engine.md), each phase builds its own nar
 | **Worker** (`delegate`) | The worker's persona (a `workers:` template or the parent's inline prompt), the [Tool Skills](tool-skills.md) catalogue scoped to the tools the worker was granted, the slim tool catalogue, then the mandated runtime preamble (no further delegation, no colleague contact, read-only discovery only, and end by calling `submit_result`). |
 
 Why the split: the executor is the frame making every ownership / delegation / policy-sensitive decision AND acting on it, so it gets the whole picture — the two-prompt engine's real cost was never the tokens saved by splitting them, it was sending the identity scaffold twice and throwing away everything the planner had read. The reviewer's question is narrower: is this round's work right, given what the record says it did. Standing memory, the team's docs and the requester's traits are what the executor needed to DO the work; in front of a reviewer they compete with the evidence it is meant to judge.
+
+Every builder returns its prompt with an **outline** beside it — the parts it appended, each with a stable key, a title and its length — and the phase record publishes both, so a screen shows a prompt as the parts the engine assembled rather than guessing them from `##` lines that embedded content brings with it. The outline never changes a byte of the prompt. See [a prompt carries its outline](turn-engine.md#what-streams-during-a-turn).
 
 ### Built-in engine scaffolding
 
@@ -188,6 +198,8 @@ What lands in the prompt:
 - **Senders resolved through the party registry**, so a colleague reads as `Tech Lead (lead)` rather than an opaque platform id; a stranger renders as whatever the backend volunteered and then as the raw id, and never as a blank.
 - **The seat's own earlier replies marked `**you**`**, resolved by the transport from the identity it learned at connect. On Slack that takes *both* the bot user id and the app id, because a `bot_message` echo of the seat's own post carries the app id and no user id at all.
 - **A thread too long to read says so, in place of the claim it would otherwise make.** Slack pages `conversations.replies` from the *oldest* end, 100 messages at a time, up to 10 pages — so a thread past ~1000 messages cannot be reached at its newest end at all. The walk keeps the root and the newest of what it did reach rather than the oldest of the thread, and the block then drops its ordinary "the newest messages are what woke you" framing for one that says it stops short and tells the seat to read the rest with its chat tools: on that path the newest message is exactly what is missing, so the ordinary sentence would be guaranteed false. Everything either end dropped is in the count. The page size is 100 rather than the 200 Slack recommends because the client reads at most 1 MiB of a response before decoding it, and 200 messages carrying blocks, attachments or unfurls exceed that — which fails the read outright rather than shortening it. Mattermost has no such bound: `GET /api/v4/posts/{root}/thread` answers the whole thread in one response.
+
+**It says which waiting messages it showed.** A message in the thread that was still waiting for this seat — somebody else's, after the seat's own last reply, before the message that woke the turn — is one the turn answers whether it was woken for it or not, because it answers the thread as the block shows it. That matters when the earlier message's own turn failed: a failed delivery comes back *behind* its conversation's newer mail, so the newer message's turn runs first. The block reports those messages (by the chat backend's own ids — never one a bound dropped, and none at all when the read stopped short or did not reach the trigger), and when the turn completes they are recorded in the [completion ledger](seat-ownership.md#the-completion-ledger) as worked through, so the earlier message is dropped when it comes round instead of being answered a second time, out of order.
 
 **It is best effort, always.** A thread that could not be read — a node in maintenance mode runs no chat transport, a chat instance unreachable at boot leaves the company running without its chat surface, a seat whose token was refused has no client, a channel the bot is not in — renders a *different* sentence from a thread that was read and had nothing in it. "There is nothing earlier" says answer the trigger as it stands; "it could not be read from this node" tells the seat to go and read the thread itself, which is the one case where the old instruction was right. Neither ever fails a turn.
 
@@ -266,7 +278,7 @@ The engine runs **genuinely parallel** work within a single process:
 
 **A turn past the ceiling waits, in this process.** It is not handed back for the broker to redeliver on the broker's own schedule — for a chat message someone is waiting on, that turns a busy moment into a visible stall. The waiting turn starts the instant a slot frees. The one exception is a drain, below.
 
-**What it does not gate, and why that is not an oversight.** Post-turn [reflection](agent-learning.md) does not take a slot. It does not need one: it consumes `turn_completed` through a single durable subscription whose handler runs one delivery at a time, so a node runs at most one reflection pass at a time however many turns finish at once. Making it compete for turn slots instead would let a backlog of completed turns starve live seats — a company under load would stop answering people in order to finish learning from what it already answered — and the reverse, learning starved indefinitely by traffic, is what the separate consumer group exists to prevent. Auxiliary spend is bounded where it belongs, by the [token budget](../guides/deployment.md), and every learning worker resolves its model through the engine's one auxiliary seam, so that counter sees it and every spend figure records it ([Budgets and spend § Auxiliary spend](../guides/budgets-and-spend.md#auxiliary-spend)).
+**What it does not gate, and why that is not an oversight.** Post-turn [reflection](agent-learning.md) does not take a slot. It does not need one: it consumes `turn_completed` through a single durable subscription whose handler runs one delivery at a time, so a node runs at most one reflection pass at a time however many turns finish at once. Making it compete for turn slots instead would let a backlog of completed turns starve live seats — a company under load would stop answering people in order to finish learning from what it already answered — and the reverse, learning starved indefinitely by traffic, is what the separate consumer group exists to prevent. Auxiliary spend is bounded where it belongs, by the [token budget](../guides/deployment.md), and every learning worker resolves its model through the engine's one auxiliary seam, so that counter sees it and every spend figure records it ([Budgets and spend § Auxiliary spend](../guides/budgets-and-spend.md#auxiliary-spend)) — a pass the model **refused** included: a refusal returns no answer, but the response the vendor billed travels with it and is recorded like any other (`llm.Billed` is the one reading every meter uses).
 
 **Sizing it.** It is per *node*, so a fleet's ceiling is N × the value — see [Scaling Out](scaling.md#what-stays-per-process-deliberately). The default of 32 is above the seat count of a single-node company (the example company runs a handful of seats; a large one runs tens) so it changes nothing for a company running today, while still bounding a node that has been handed far more seats than its host can serve. Raise it on a bigger host; lower it on a satellite running one agent. There is no "unbounded" — `0` means "take the default", and effectively-no-limit is a large number you can see in your config. Note this is a *different* knob from a cli-agent provider's own `max_concurrent`, which caps that provider's subprocesses; see [Subscription LLM backends](subscription-llm-backends.md).
 
@@ -404,14 +416,13 @@ stateDiagram-v2
   by design — but the turn that resumes it is, and ends there with the run.
 - **Answers wait too.** An answer to a parked coding run, by chat or by turn,
   is held behind the pause like the seat's other mail: resuming a run is work.
+  A chat reply already recorded as a run's answer before the pause waits the
+  same way — the coordinator does not retry its resume while the seat is
+  paused, and charges the wait to none of the answer's attempts.
 - **Scheduled runs are skipped, not queued.** A fire that comes due on a paused
   seat is recorded `skipped_paused` in the dispatch ledger and not sent — a
   standup held behind a week's pause would otherwise run once for every day of
   it. See [Scheduling](scheduling.md).
-
-A pause is refused `peer_upgrading` while any live node runs a build that
-cannot carry it: any of them may be the next to hold the seat. See
-[Coordination](coordination.md#what-a-node-says-about-itself).
 
 ### Steering a running turn
 

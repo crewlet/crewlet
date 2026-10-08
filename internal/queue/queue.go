@@ -18,7 +18,10 @@
 //     replays in order when someone attaches. Publishing to a topic with no
 //     subscription drops the event silently — hence EnsureSubscription.
 //   - Handlers have three outcomes, not two. Ack, Nak, and Defer (leave it
-//     unacked, stop consuming) — see Result.
+//     unacked, stop consuming) — see Result. The two returns keep different
+//     places, on every backend: a Nak comes back BEHIND the mail that was
+//     waiting when it failed, a Defer at the HEAD. A handler whose message
+//     must keep its place in its conversation does not Nak.
 //   - A handler is told how many deliveries are LEFT before the backend
 //     dead-letters a message, because every outcome that puts one back spends
 //     one and the count rides on the message rather than on the process
@@ -143,6 +146,19 @@ const (
 	// OutcomeNak negatively acknowledges: the handler failed and the
 	// message should be redelivered, spending one unit of its
 	// dead-letter budget.
+	//
+	// IT RETURNS BEHIND THE MAIL THAT WAS WAITING, on every backend. The
+	// shipped broker SPACES a failure — a second, doubling to thirty — and
+	// serves never-delivered messages meanwhile, so the retry comes after
+	// every message already queued when the handler failed, newer mail on
+	// the same partition key included, each in a call of its own. The
+	// in-memory twin models that backoff virtually (behind what was
+	// waiting, no timer), and queuetest's
+	// a_failure_returns_behind_waiting_mail_and_a_deferral_at_the_head
+	// holds both to it. A consumer that needs its message to keep its place
+	// does not want a Nak: it wants [OutcomeDefer], for a condition of the
+	// node, or to settle the message durably and retry the work itself. See
+	// OrderForDispatch for why the contract does not hold newer mail back.
 	OutcomeNak
 
 	// OutcomeDefer leaves the delivery unacked AND quiesces the
@@ -173,6 +189,15 @@ const (
 	// capability used to protect: a deferral must not kill a HEALTHY event.
 	// That is answered by sizing the budget so handoffs cannot exhaust it,
 	// not by making the handoff free.
+	//
+	// IT RETURNS AT THE HEAD, on every backend: a hand-back is a plain,
+	// unspaced Nak, and the broker serves a redelivery before new mail —
+	// so a deferred message keeps its place ahead of its conversation's
+	// newer mail, which a failure ([OutcomeNak]) does not. That is the
+	// outcome for a delivery that failed on a condition of the NODE or its
+	// store rather than of the message: the attachment stops, the message
+	// waits at the head, and whatever resumes the attachment (the seat
+	// host's next renew, for a seat inbox) brings it back first.
 	//
 	// When the consumer closes, the broker returns the message to
 	// whoever attaches next, in order. Never substitute a republish: that
@@ -364,11 +389,15 @@ type EventQueue interface {
 	// RUNNING handler is the exception, and not because it is cheaper:
 	// the handler runs to completion and its own outcome settles it.
 	//
-	// A message that goes back may return BEHIND events that were never
-	// delivered rather than at the head. The backends genuinely differ
-	// there (queuetest.Caps.HeadReplayOnNak), so nothing above this
-	// package may depend on either answer — within-conversation order
-	// comes from event timestamps, which is what OrderForDispatch is for.
+	// A message a detach returns is a HAND-BACK, so it returns at the head
+	// as a deferral's does (see OutcomeDefer) — but a re-attaching
+	// consumer races whatever is published while it starts, so nothing
+	// above this package may depend on it being handled before a message
+	// published after the detach. Event timestamps restore the order of
+	// what ONE handler call carries, which is what OrderForDispatch is for
+	// — and only that: a message returned behind its conversation's newer
+	// mail is handled after it whenever the two are not drained together,
+	// and no backend owes that they are.
 	//
 	// Releases this attachment's pause holds — a hold that outlived a
 	// detach would leave a re-attaching node silently deaf.
@@ -547,8 +576,11 @@ type EventQueue interface {
 	// PAIR, so a second subsystem gating the same inbox cannot release
 	// the first one's hold by lifting its own, and a hold on one group
 	// does not gate every other group on a shared subject. The engine
-	// takes one reason today: a seat whose node has no turn engine
-	// pauses before requeuing, so the copies buffer rather than loop.
+	// holds a seat's inbox under four, each lifted only by the subsystem
+	// that took it: a company with no turn engine, a person's pause, a
+	// spent budget window, and a detached coding run holding the seat
+	// (or an answer's resume it owes) — see internal/agent/inbox's Hold
+	// and the engine's budget park.
 	PauseTopic(ctx context.Context, topic, group, reason string) error
 
 	// ResumeTopic releases one reason's hold, flushing when none remain.
@@ -587,11 +619,15 @@ type EventQueue interface {
 
 // BatchOptions carries the live-mutable knobs for batched delivery.
 //
-// The consume loop re-reads these at the start of every collection cycle, so
-// a hot config reload takes effect on the next batch with no
-// re-subscription. Mutable and read concurrently is a data race unless it is
-// guarded, so it is: this is safe to write from another goroutine while a loop
-// is reading it.
+// The consume loop re-reads these for every batch, at the moment the batch's
+// FIRST event is in hand — which is also the moment its linger window opens —
+// so a hot config reload takes effect on the next batch with no
+// re-subscription. Not when a cycle starts: a cycle on an idle subscription
+// starts by waiting for that first event, and options read before the wait
+// applied a reload that landed during it to the batch after the next one.
+//
+// Mutable and read concurrently is a data race unless it is guarded, so it
+// is: this is safe to write from another goroutine while a loop is reading it.
 type BatchOptions struct {
 	mu            sync.RWMutex
 	lingerSeconds float64
@@ -716,13 +752,31 @@ func eventType(ev *events.Event) string {
 // has waited longest dispatches first.
 //
 // Within a partition: event timestamp, not delivery order. This is what
-// makes a partition read correctly regardless of how a broker interleaves
-// redeliveries with fresh arrivals — measured, JetStream returns a
-// redelivered message BEHIND never-delivered ones, where the in-memory twin
-// replays it from the head. Relying
-// on the timestamps the engine already trusts, rather than on one broker's
-// replay semantics, removes a correctness dependency that would otherwise
-// have to be re-verified for every backend.
+// makes a partition read correctly however redeliveries interleave with fresh
+// arrivals — a hand-back (a deferral, a hold, a stop) returns at the head and
+// a FAILED delivery is withheld for its redelivery backoff behind
+// never-delivered mail (see OutcomeNak and OutcomeDefer), and a drain that
+// carries both a returned message and newer ones has them in that order, not
+// in the order they were written. Relying on the timestamps the engine
+// already trusts removes a correctness dependency on how one drain happened
+// to be assembled.
+//
+// IT ORDERS ONE HANDLER CALL, AND NOTHING ACROSS TWO. A drain is what was
+// available when it opened plus what arrived inside its linger window, so a
+// failed delivery still waiting out its backoff is not in the drain that
+// carries its conversation's newer events: on the shipped broker the backoff
+// is a second, doubling to thirty, against a default window of zero, so a
+// newer event of the same conversation that arrives meanwhile is dispatched
+// FIRST, in a call of its own, and the failed one follows in a later one.
+// No sort reaches a call that has already returned, and the contract
+// deliberately does not hold a conversation's newer mail back behind a
+// failure instead. That would stall the conversation for the whole backoff
+// schedule, hand a poison message's failures to the healthy ones held back
+// with it (a partition takes one outcome, so every failure is charged to every
+// message in it), and still not be a guarantee: the hold would be one
+// attachment's memory, gone at a seat handoff, and a group with two members
+// redelivers to either. A consumer that cares whether an event is older than
+// one it already handled has the timestamp to ask.
 //
 // Both levels are stable sorts, so ties keep arrival order, and both fall
 // back to arrival order rather than failing: ordering is a fairness and

@@ -3,6 +3,7 @@ package eventfan
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math/rand/v2"
 	"slices"
 	"strings"
@@ -135,7 +136,8 @@ func TestSeriesSumsAcrossNodes(t *testing.T) {
 	skewed := axis(9, 9, 9)
 	skewed.Since = "2026-09-01T01:00:00Z"
 
-	got, refused := MergeSeries(a, []store.EventHistogram{b, skewed})
+	got, refused := MergeSeries(store.HistogramQuery{Bucket: store.BucketHour},
+		named(a, b, skewed))
 	if want := []int{3, 3, 4}; !slices.Equal(counts(got), want) {
 		t.Errorf("bars = %v, want %v — each bar is the sum of the same bar on every node",
 			counts(got), want)
@@ -143,8 +145,8 @@ func TestSeriesSumsAcrossNodes(t *testing.T) {
 	if got.Total != 10 || got.ByCategory["task"] != 10 {
 		t.Errorf("total %d, task facet %d; want both 10", got.Total, got.ByCategory["task"])
 	}
-	if !slices.Equal(refused, []int{1}) {
-		t.Errorf("refused %v, want the skewed window (index 1) and only it — adding "+
+	if !slices.Equal(refused, []string{"node-2"}) {
+		t.Errorf("refused %v, want the skewed window (node-2) and only it — adding "+
 			"a node's bars to another's next hour is a chart nobody can read", refused)
 	}
 	if counts(a)[0] != 1 {
@@ -152,69 +154,18 @@ func TestSeriesSumsAcrossNodes(t *testing.T) {
 	}
 }
 
-// AN AXIS IS TAKEN BACK OUT OF ANOTHER BAR BY BAR — the counts, the failed
-// split, the totals and the category counts, a category left with no rows
-// dropped as the store drops it — and a subtraction that is not of one window,
-// or would leave anything below zero, is refused rather than answered: the two
-// reads then disagree about what the node holds.
-//
-// Mutations: subtract the counts and not the failed split or the facets, keep
-// a category at zero, or answer a negative bar, and this goes red.
-func TestAnAxisIsTakenBackOutOfAnotherBarByBar(t *testing.T) {
-	t.Parallel()
-	axis := func(cat map[string]int, bars ...[2]int) store.EventHistogram {
-		h := store.EventHistogram{Bucket: store.BucketHour, Since: "2026-09-01T00:00:00Z",
-			Until: "2026-09-01T03:00:00Z", ByCategory: cat}
-		for i, b := range bars {
-			h.Bars = append(h.Bars, store.EventBar{
-				At: fmt.Sprintf("2026-09-01T%02d:00:00Z", i), Count: b[0], Failed: b[1]})
-			h.Total += b[0]
-			h.Failed += b[1]
-		}
-		return h
+// named is several nodes' parts, node-0 first, none of them naming a row
+// another holds.
+func named[T any](parts ...T) []Counted[T] {
+	out := make([]Counted[T], 0, len(parts))
+	for i, p := range parts {
+		out = append(out, Counted[T]{Node: fmt.Sprintf("node-%d", i), Part: p})
 	}
-	whole := axis(map[string]int{"agent": 6, "system": 3}, [2]int{4, 1}, [2]int{0, 0}, [2]int{5, 2})
-	unfed := axis(map[string]int{"system": 3}, [2]int{1, 0}, [2]int{0, 0}, [2]int{2, 1})
-
-	got, ok := subtractSeries(whole, unfed)
-	if !ok {
-		t.Fatal("an axis of rows the first counted was refused")
-	}
-	if want := []int{3, 0, 3}; !slices.Equal(counts(got), want) {
-		t.Errorf("bars = %v, want %v", counts(got), want)
-	}
-	var failed []int
-	for _, b := range got.Bars {
-		failed = append(failed, b.Failed)
-	}
-	if want := []int{1, 0, 1}; !slices.Equal(failed, want) {
-		t.Errorf("failed split = %v, want %v", failed, want)
-	}
-	if got.Total != 6 || got.Failed != 2 {
-		t.Errorf("total %d with %d failed, want 6 with 2", got.Total, got.Failed)
-	}
-	if _, left := got.ByCategory["system"]; left || got.ByCategory["agent"] != 6 {
-		t.Errorf("facets = %v, want agent 6 and no system key — a category with no rows is absent",
-			got.ByCategory)
-	}
-	if whole.Bars[0].Count != 4 || whole.ByCategory["system"] != 3 {
-		t.Error("the subtraction wrote through to the axis it was taken from")
-	}
-
-	skewed := unfed
-	skewed.Since = "2026-09-01T01:00:00Z"
-	if _, ok := subtractSeries(whole, skewed); ok {
-		t.Error("an axis of another window was taken out bar by bar")
-	}
-	more := axis(map[string]int{"system": 3}, [2]int{5, 0}, [2]int{0, 0}, [2]int{0, 0})
-	if _, ok := subtractSeries(whole, more); ok {
-		t.Error("a subtraction leaving a bar below zero was answered")
-	}
-	facet := axis(map[string]int{"system": 4}, [2]int{1, 0}, [2]int{0, 0}, [2]int{2, 1})
-	if _, ok := subtractSeries(whole, facet); ok {
-		t.Error("a subtraction leaving a category below zero was answered")
-	}
+	return out
 }
+
+// alone is [named] for the merges that are about something else.
+func alone[T any](parts ...T) []Counted[T] { return named(parts...) }
 
 func counts(h store.EventHistogram) []int {
 	out := make([]int, 0, len(h.Bars))
@@ -242,9 +193,9 @@ func TestAMergedTurnKeepsBothEndsAndCountsTheMiddle(t *testing.T) {
 	for i := 400; i < 700; i++ {
 		b = append(b, row(i))
 	}
-	rows, total, _ := MergeTurn([]turnPart{
-		{Head: a, Total: len(a)}, {Head: b, Total: len(b)},
-	})
+	rows, total, _ := MergeTurn(alone(
+		turnPart{Head: a, Total: len(a)}, turnPart{Head: b, Total: len(b)},
+	))
 	if total != 700 {
 		t.Fatalf("total = %d, want 700", total)
 	}
@@ -299,6 +250,37 @@ func TestAnOversizedReplyIsCutAndKeepsTheTurnsEnding(t *testing.T) {
 	}
 	if _, _, why := decodeReply[listPart](body, 1); why != ErrTooLarge.Error() {
 		t.Errorf("a row larger than the limit answered %q, want %q", why, ErrTooLarge)
+	}
+}
+
+// A SHARE CUT TO FIT THE TRANSPORT STILL SAYS WHICH TURNS ITS PAGE LISTS.
+//
+// The second scatter's reply carries a node's shares and which of the named
+// turns its page lists; the shares are what a cut gives up, and the listing is
+// the same answer whichever of them fit. Dropped with them, the node would read
+// as listing none of the turns, and a turn its page lists would be paged by a
+// start no page reaches.
+//
+// Mutation: rebuild a cut part from its turns alone, and the listing is gone.
+func TestACutShareStillSaysWhatItsPageLists(t *testing.T) {
+	t.Parallel()
+	var turns []store.TurnPartial
+	for i := range 100 {
+		turns = append(turns, store.TurnPartial{TurnID: fmt.Sprintf("t-%03d", i),
+			Summary: strings.Repeat("x", 1000)})
+	}
+	const limit = 40 << 10
+	body, err := fit("node-b", turnsPart{Turns: turns, Listed: []string{"t-007"}}, limit, Protocol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, part, why := decodeReply[turnsPart](body, Protocol)
+	if why != "" || len(part.Turns) >= 100 || !part.Full {
+		t.Fatalf("the reply holds %d shares, full %v (%q) — want it cut and saying so",
+			len(part.Turns), part.Full, why)
+	}
+	if !slices.Equal(part.Listed, []string{"t-007"}) {
+		t.Errorf("the cut reply says listed %v — want the node's judgement kept", part.Listed)
 	}
 }
 
@@ -378,5 +360,205 @@ func TestMergeSpendStopsWhereAFullPartStopped(t *testing.T) {
 	}
 	if _, more := MergeSpend([]spendPart{whole}, 10); more {
 		t.Error("a merge of one whole part says more lies past it")
+	}
+}
+
+// A SPEND RECORD IS ONE ROW BY THE LOG'S OWN IDENTITY — its instant and its id
+// together.
+//
+// A stateless node's phase is in two data nodes' stores while its custody batch
+// is in flight, and both send it: one row, however its instant is spelled. And
+// the log's key lets one id stand at two instants, which are two rows a sum has
+// to count both of.
+//
+// Mutation: key the union by the id alone, and the second instant's row is
+// dropped from the sum; key it by the stamp's text, and one row spelled two
+// ways is counted twice.
+func TestASpendRecordIsOneRowByItsInstantAndItsID(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
+	got, _ := MergeSpend([]spendPart{
+		{Records: []tokens.Record{{EventID: "p-1", Timestamp: at.Format(time.RFC3339Nano), TotalTokens: 5}}},
+		{Records: []tokens.Record{
+			{EventID: "p-1", Timestamp: at.In(time.FixedZone("x", 3600)).Format(time.RFC3339Nano), TotalTokens: 5},
+			{EventID: "p-1", Timestamp: at.Add(time.Microsecond).Format(time.RFC3339Nano), TotalTokens: 7},
+		}},
+	}, 0)
+	total := 0
+	for _, r := range got {
+		total += r.TotalTokens
+	}
+	if len(got) != 2 || total != 12 {
+		t.Errorf("merged %d records of %d tokens, want the one row two nodes sent once and the "+
+			"id's row at another instant: 2 of 12", len(got), total)
+	}
+}
+
+// rowsAt is n rows named prefix0001…, one second apart from a start.
+func rowsAt(prefix string, start time.Time, n int) []store.EventRecord {
+	out := make([]store.EventRecord, 0, n)
+	for i := range n {
+		out = append(out, store.EventRecord{ID: fmt.Sprintf("%s%04d", prefix, i+1),
+			Time: start.Add(time.Duration(i) * time.Second)})
+	}
+	return out
+}
+
+// A MERGED TRACE STOPS WHERE A NODE'S UNSENT ROWS BEGIN.
+//
+// Each node sends its own oldest rows up to the cap, so the fleet's oldest are
+// among them — until a node sends FEWER than the cap and holds more. Its rows
+// past the last one it sent are older than the other node's rows here, and
+// the obvious merge filled the cap with those instead: a view that presents
+// itself as the trace's opening, with a hole inside it that `truncated` did
+// not say was there. A part comes to send fewer than it holds when its reply
+// is cut to fit the transport, beside another node's newer rows.
+//
+// Mutation: drop the cut at the oldest last sent row from [MergeTrace], and
+// the other node's rows are placed past the hole.
+func TestAMergedTraceStopsWhereANodesUnsentRowsBegin(t *testing.T) {
+	t.Parallel()
+	base := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	// The peer holds 520 rows of the trace, a0001 … a0520; the asker ten,
+	// each newer than the peer's 300th — inside the peer's unsent rows.
+	peer := rowsAt("a", base, 520)
+	mine := tracePart{Rows: rowsAt("b", base.Add(303*time.Second+500*time.Millisecond), 10), Total: 10}
+	// A reply cut to its first 300 rows.
+	cut := tracePart{Rows: peer[:store.MaxTraceEvents], Total: len(peer)}.keep(300).(tracePart)
+	rows, total := MergeTrace(alone(mine, cut))
+	if len(rows) != 300 || rows[len(rows)-1].ID != "a0300" {
+		t.Fatalf("the merged trace shows %d rows ending at %v, want 300 ending at a0300 — "+
+			"the peer's last sent row, with nothing past its unsent rows", len(rows),
+			ids(rows[max(0, len(rows)-3):]))
+	}
+	if total != 520+10 {
+		t.Errorf("total = %d over %d rows, want 530 — the gap still reported", total, len(rows))
+	}
+	// A NODE THAT SENT NOTHING while holding rows leaves nothing placeable.
+	rows, total = MergeTrace(alone(mine, tracePart{Total: len(peer)}))
+	if len(rows) != 0 || total != 520+10 {
+		t.Errorf("beside a peer that sent none of its rows, the merge shows %v of %d, "+
+			"want nothing placeable of 530", ids(rows), total)
+	}
+	// AND A NODE HOLDING NOTHING IT DID NOT SEND BOUNDS NOTHING: two whole
+	// parts are merged whole, oldest first, up to the cap.
+	rows, total = MergeTrace(alone(mine, tracePart{Rows: peer[:5], Total: 5}))
+	if len(rows) != 15 || total != 15 {
+		t.Errorf("two whole parts merged to %d rows of %d, want all 15", len(rows), total)
+	}
+}
+
+// A MERGED TURN'S OPENING STOPS WHERE A NODE'S UNSENT ROWS BEGIN, for
+// [MergeTrace]'s reason — and its ending is still the turn's last rows.
+//
+// The peer holds 600 rows of the turn and sends its opening and its ending,
+// the rows between unsent — or, cut to fit the transport, more; the asker holds
+// ten rows in that gap. Shown in the opening, they would sit past a hole the
+// opening does not admit to, and they are not in the ending either, which is
+// the peer's last [TurnClosingEvents].
+//
+// Mutation: drop the cut at the oldest last sent row from [MergeTurn], and
+// both cases show the asker's rows past the peer's opening.
+func TestAMergedTurnsOpeningStopsWhereANodesUnsentRowsBegin(t *testing.T) {
+	t.Parallel()
+	base := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	peer := rowsAt("a", base, 600)
+	whole := turnPart{Head: peer[:store.MaxTurnEvents], Closing: peer[len(peer)-TurnClosingEvents:],
+		Total: len(peer), Traces: []store.TurnTrace{}}
+	mine := turnPart{Head: rowsAt("b", base.Add(530*time.Second+500*time.Millisecond), 10), Total: 10,
+		Traces: []store.TurnTrace{}}
+	for name, c := range map[string]struct {
+		part  turnPart
+		last  string
+		total int
+	}{
+		"a capped read": {part: whole, last: "a0500", total: 600 + 10},
+		"cut to fit the transport": {
+			part: whole.keep(200).(turnPart), last: "a0200", total: 600 + 10,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rows, total, _ := MergeTurn(alone(mine, c.part))
+			var shown []string
+			for _, r := range rows {
+				if strings.HasPrefix(r.ID, "b") {
+					shown = append(shown, r.ID)
+				}
+			}
+			if len(shown) > 0 {
+				t.Fatalf("the merged turn shows %v from inside the peer's unsent rows", shown)
+			}
+			opening := rows[:len(rows)-TurnClosingEvents]
+			if opening[len(opening)-1].ID != c.last {
+				t.Errorf("the opening ends at %s, want the peer's last sent row %s",
+					opening[len(opening)-1].ID, c.last)
+			}
+			first := fmt.Sprintf("a%04d", len(peer)-TurnClosingEvents+1)
+			if ending := rows[len(rows)-TurnClosingEvents:]; ending[0].ID != first ||
+				ending[len(ending)-1].ID != "a0600" {
+				t.Errorf("the ending runs %s … %s, want the turn's last %d, %s … a0600",
+					ending[0].ID, ending[len(ending)-1].ID, TurnClosingEvents, first)
+			}
+			if total != c.total {
+				t.Errorf("total = %d, want %d — the gap still reported", total, c.total)
+			}
+		})
+	}
+}
+
+// EVERY OUTCOME ROW IS COUNTED ONCE, whichever data nodes hold it.
+//
+// A node counts the rows it keeps and names the rows of a custody batch it has
+// written and not settled; the same batch can sit on a second data node, kept
+// or not yet settled either. So the merge sums the counts and adds every named
+// row once — unless a node that keeps it and did not name it counted it
+// already, which is the batch's keeper having settled first. A node that named
+// a row and keeps it by the second question settled between the two, and
+// counted it in neither, so the row is still added. And a row is its instant
+// and its id together: the same id at another instant is another row.
+//
+// Mutation: add every named row whatever the second question answered, and the
+// row its keeper counted is counted twice; add each once per node naming it,
+// and the row two nodes hold unsettled is; skip a row any node keeps, and the
+// row settled between the two questions is in no count; key the rows by id
+// alone, and the two instants of one id are one row.
+func TestEveryOutcomeRowIsCountedOnce(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
+	skip := func(id string, at time.Time) store.UnsettledRow {
+		return store.UnsettledRow{Time: at, ID: id, Type: "notification_skipped", App: "gitlab"}
+	}
+	merge := func(id string, at time.Time) store.UnsettledRow {
+		return store.UnsettledRow{Time: at, ID: id, Type: "notifications_coalesced", App: "slack"}
+	}
+	counted := func(skipped, coalesced map[string]int, unsettled ...store.UnsettledRow) store.NotificationOutcomes {
+		return store.NotificationOutcomes{Skipped: skipped, Coalesced: coalesced, Unsettled: unsettled}
+	}
+	twice, keptAtB, settledBetween := skip("twice", at), skip("kept-at-b", at), merge("settled-between", at)
+	sameID, laterSameID := skip("same-id", at), skip("same-id", at.Add(time.Microsecond))
+
+	got := MergeOutcomes([]Counted[store.NotificationOutcomes]{
+		{Node: "node-a", Part: counted(map[string]int{"gitlab": 2}, map[string]int{},
+			twice, keptAtB, settledBetween, sameID),
+			Kept: []store.UnsettledRow{settledBetween.Identity()}},
+		{Node: "node-b", Part: counted(map[string]int{"gitlab": 1}, map[string]int{"slack": 1},
+			twice, laterSameID),
+			Kept: []store.UnsettledRow{keptAtB.Identity()}},
+		{Node: "node-c", Part: counted(map[string]int{}, map[string]int{"slack": 2})},
+	})
+	// gitlab: a's 2 and b's 1 counted (b's being kept-at-b), plus twice once,
+	// and same-id at both its instants; slack: b's 1 and c's 2, plus the row
+	// settled between the questions.
+	if want := map[string]int{"gitlab": 6}; !maps.Equal(got.Skipped, want) {
+		t.Errorf("skipped = %v, want %v", got.Skipped, want)
+	}
+	if want := map[string]int{"slack": 4}; !maps.Equal(got.Coalesced, want) {
+		t.Errorf("coalesced = %v, want %v", got.Coalesced, want)
+	}
+	if len(got.Unsettled) != 0 {
+		t.Errorf("the merge still names %v, want every row counted", got.Unsettled)
+	}
+	if none := MergeOutcomes(nil); none.Skipped == nil || none.Coalesced == nil {
+		t.Errorf("an empty merge is %+v, want two empty maps", none)
 	}
 }

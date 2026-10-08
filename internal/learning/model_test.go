@@ -16,8 +16,8 @@ import (
 // both, and a company that switched between them ranked a query from one
 // space against rows from the other.
 
-// learningStore is a node store at width 4, for tests that also write rows
-// the learning API cannot: a row from before vectors named their model.
+// learningStore is a node store at width 4, the width of every vector these
+// tests write.
 func learningStore(t *testing.T) *store.DB {
 	t.Helper()
 	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "m.db"),
@@ -27,16 +27,6 @@ func learningStore(t *testing.T) *store.DB {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	return db
-}
-
-// untag erases a row's model, which is what every row written before node
-// migration 0039 holds.
-func untag(t *testing.T, db *store.DB, table, id string) {
-	t.Helper()
-	if _, err := db.SQL().ExecContext(t.Context(),
-		"UPDATE "+table+" SET embedding_model = NULL WHERE id = ?", id); err != nil {
-		t.Fatalf("untag %s %s: %v", table, id, err)
-	}
 }
 
 func TestEpisodeRecallComparesOnlyVectorsOfTheQuerysModel(t *testing.T) {
@@ -49,12 +39,9 @@ func TestEpisodeRecallComparesOnlyVectorsOfTheQuerysModel(t *testing.T) {
 	// cosine, and no match at all.
 	other := ep("other", "ceo", base)
 	other.Embedding, other.EmbeddingModel = []float32{1, 0, 0, 0}, "another-model"
-	legacy := ep("legacy", "ceo", base)
-	legacy.Embedding = []float32{1, 0, 0, 0}
-	for _, x := range []learning.Episode{same, other, legacy} {
+	for _, x := range []learning.Episode{same, other} {
 		mustAppend(t, e, x)
 	}
-	untag(t, db, "episodes", "legacy")
 
 	hits, err := e.Recall(context.Background(), learning.RecallQuery{
 		Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Model: testModel,
@@ -78,12 +65,9 @@ func TestDiaryRecallComparesOnlyVectorsOfTheQuerysModel(t *testing.T) {
 	same.Embedding = []float32{1, 0, 0, 0}
 	other := longEntry("other", "a", "the release train is thursdays", base)
 	other.Embedding, other.EmbeddingModel = []float32{1, 0, 0, 0}, "another-model"
-	legacy := longEntry("legacy", "a", "the release train is thursdays", base)
-	legacy.Embedding = []float32{1, 0, 0, 0}
-	for _, x := range []learning.DiaryEntry{same, other, legacy} {
+	for _, x := range []learning.DiaryEntry{same, other} {
 		mustWrite(t, d, x)
 	}
-	untag(t, db, "agent_diary", "legacy")
 
 	hits, err := d.Recall(context.Background(), "a", learning.RecallQuery{
 		Embedding: []float32{1, 0, 0, 0}, Model: testModel,

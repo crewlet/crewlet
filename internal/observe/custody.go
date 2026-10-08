@@ -55,6 +55,13 @@ import (
 // crash leaves is a written copy whose keeper this node never learned —
 // remembered in its own store ([store.EventLog.WriteCustody]) and settled by
 // [Keeper.Reconcile] the same way, at its next boot and on every pass after.
+//
+// Until the node that lost the claim has settled its copy, both logs hold the
+// batch's rows. That is the one moment two stores share a row, and the fleet's
+// history reads are built for it: every count a node answers is of the rows it
+// KEEPS, with the rows of a batch it has not settled named beside it, and the
+// asker counts each named row once (internal/eventfan, and internal/store's
+// unsettled.go).
 
 // CustodyGroup is the data nodes' fleet-wide group on [topics.CustodyRecords].
 const CustodyGroup = "event-custody"

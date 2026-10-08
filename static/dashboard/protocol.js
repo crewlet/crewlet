@@ -69,8 +69,8 @@ function mergeLiveCall(held, next) {
 	const versions = {};
 	let stale = false;
 	for (const [detail, fields] of Object.entries(LIVE_CALL_DETAIL)) {
-		const pushed = next.versions?.[detail] ?? 0;
-		const have = same ? held.versions?.[detail] ?? 0 : 0;
+		const pushed = next.versions[detail];
+		const have = same ? held.versions[detail] : 0;
 		const carried = fields.every((f) => f in next);
 		if (carried && pushed >= have) {
 			versions[detail] = pushed;
@@ -106,8 +106,8 @@ function newerDetail(held, older) {
 	let merged = null;
 	const versions = { ...held.versions };
 	for (const [detail, fields] of Object.entries(LIVE_CALL_DETAIL)) {
-		const version = older.versions?.[detail] ?? 0;
-		if (version <= (held.versions?.[detail] ?? 0) || !fields.every((f) => f in older)) continue;
+		const version = older.versions[detail];
+		if (version <= held.versions[detail] || !fields.every((f) => f in older)) continue;
 		merged ??= { ...held };
 		for (const f of fields) merged[f] = older[f];
 		versions[detail] = version;
@@ -135,7 +135,7 @@ function emptyState() {
 		sandboxes: [],
 		org: null,
 		tools: [],
-		health: { status: "unknown" },
+		health: null,
 		tokens: null,
 		budget: null,
 		schedules: null,
@@ -284,12 +284,12 @@ var Store = class {
 			if (a.role !== answer.role) return a;
 			const heldSeq = a.live_call_seq ?? 0;
 			const seq = answer.live_call_seq;
-			if (seq === void 0 || seq >= heldSeq) {
+			if (seq >= heldSeq) {
 				moved = true;
 				return {
 					...a,
 					live_call: mergeLiveCall(a.live_call, answer.live_call).call,
-					live_call_seq: seq ?? heldSeq
+					live_call_seq: seq
 				};
 			}
 			current = false;
@@ -350,13 +350,13 @@ var Store = class {
 		this.emit("tools");
 	}
 	applyHealth(health) {
-		this.state.health = health ?? { status: "unknown" };
-		this.state.connected = !!health && health.status !== "unknown";
+		this.state.health = health ?? null;
+		this.state.connected = !!health;
 		this.emit("health");
 	}
 	setConnected(value) {
 		this.state.connected = value;
-		if (!value) this.state.health = { status: "unknown" };
+		if (!value) this.state.health = null;
 		this.emit("health");
 	}
 	setAuthRejected(value) {
@@ -1466,10 +1466,10 @@ function newGateOpID(verb, node, now = Date.now(), random = (bytes) => crypto.ge
 * How a node's broker takes part in the fleet's — `placement.BrokerKind`, as
 * `String()` renders it.
 *
-* `unknown` IS A VALUE, not an absence: a node running a build older than the
-* field says nothing, and the engine renders that as `unknown` so the cell is
-* never empty — an empty cell reads as nothing to look at, and this one is
-* counted as a member wherever that is the safe reading.
+* `unknown` IS A VALUE, not an absence: a presence advertising a kind this build
+* does not know (a newer build's) is rendered `unknown` so the cell is never
+* empty — an empty cell reads as nothing to look at, and this one is counted
+* as a member wherever that is the safe reading.
 */
 var BROKER_KINDS = [
 	"member",
@@ -1771,8 +1771,7 @@ var ACT_ERRORS = {
 	not_running: "It is not running any more.",
 	steer_unsupported: "That turn cannot take a note: it runs in a coding agent's own loop.",
 	budget_exhausted: "The token budget for this window is spent. Raise it, or wait for the window to reset.",
-	unavailable: "This node could not make the change just now. Try again in a moment.",
-	peer_upgrading: "The node that would make this change is mid-upgrade. Try again in a moment."
+	unavailable: "This node could not make the change just now. Try again in a moment."
 };
 //#endregion
 //#region src/contract/domains.ts
@@ -2002,15 +2001,10 @@ var ROWS = ACTIONS;
 var ENGINE_5XX = /* @__PURE__ */ new Set([
 	"draining",
 	"unavailable",
-	"peer_upgrading",
 	"internal_error"
 ]);
 /** The refusal classes a later attempt may clear: the node, not the request. */
-var RETRYABLE = /* @__PURE__ */ new Set([
-	"draining",
-	"unavailable",
-	"peer_upgrading"
-]);
+var RETRYABLE = /* @__PURE__ */ new Set(["draining", "unavailable"]);
 /** Whether a code off the wire is one this build knows. */
 function isActErrorCode(code) {
 	return Object.hasOwn(ACT_ERRORS, code);

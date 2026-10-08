@@ -210,11 +210,9 @@ func (t table) subject(handle string, values map[string]any) string {
 // WHAT THE CONFLICT DOES IS THE TABLE'S OWN ANSWER, and it is the same split
 // table.wholeEachCycle already makes. An append-only row is immutable once
 // written, so a row already here is that row and DO NOTHING is exact — but for
-// what a carried copy can be ahead of it on ([table.catchUp]): the one column
-// pair a holder fills afterwards, a diary note's or an episode's vector, which
-// the carry takes over a stored vector of no model or another
-// (table.fillsVector), and a column a copy from an older build lost, which the
-// carry takes back from a copy that has it (table.heals). A wholeEachCycle row is one
+// the one column pair a holder fills afterwards, a diary note's or an
+// episode's vector, which the carry takes over a stored vector of no model or
+// another (table.fillsVector, [table.fillVector]). A wholeEachCycle row is one
 // whose UPDATE IS THE CONTENT — a counterparty profile rewritten as the seat
 // learns, a skill archived, an onboarding marker flipped — and DO NOTHING
 // there discards precisely what the table is republished every cycle to
@@ -225,10 +223,7 @@ func (t table) subject(handle string, values map[string]any) string {
 // Last writer wins is safe rather than merely convenient: a seat is held by
 // ONE node at a time, so the changelog's latest value for a subject is by
 // construction the value its current owner wrote. There is no second writer
-// to lose to — only an owner on an OLDER BUILD, which republishes what it
-// hydrated without the columns it does not know, and which is why an
-// append-only row's catch-up takes a column back rather than trusting the
-// latest copy for it.
+// to lose to.
 func upsert(ctx context.Context, tx *sql.Tx, t table, row Row) error {
 	columns := make([]string, 0, len(t.columns))
 	values := make([]any, 0, len(t.columns))
@@ -236,9 +231,10 @@ func upsert(ctx context.Context, tx *sql.Tx, t table, row Row) error {
 		cell, present := row.Values[column]
 		if !present {
 			// A row written by a build that did not have this column
-			// yet. Omitted so the column's own default applies, which
-			// is the additive-evolution rule the event envelope holds
-			// to: an older peer's row is readable, not rejected.
+			// yet — this one's, read by a successor that adds it.
+			// Omitted so the column's own default applies, which is the
+			// additive-evolution rule the event envelope holds to: the
+			// row is readable, not rejected.
 			continue
 		}
 		decoded, err := decodeCell(cell)
@@ -314,8 +310,9 @@ func decode(body []byte) (Row, table, bool, error) {
 //
 // See upsert for why the two tables of answer differ on the NATURAL key. The
 // SET list is built from the columns actually CARRIED rather than from the
-// registry, so a row written by an older build updates what it knew and
-// leaves the rest alone instead of nulling columns it never had.
+// registry, so a row written by a build whose table had fewer columns — this
+// one's, read by a successor that adds one — updates what it knew and leaves
+// the rest alone instead of nulling columns it never had.
 //
 // The TRAILING BARE CLAUSE is the other half, and it is not decoration.
 // SQLite's upsert only handles the constraint its target names — a carried
@@ -332,7 +329,7 @@ func decode(body []byte) (Row, table, bool, error) {
 func (t table) onConflict(carried []string) string {
 	skip := " ON CONFLICT DO NOTHING"
 	if !t.wholeEachCycle {
-		return t.catchUp(carried) + skip
+		return t.fillVector(carried) + skip
 	}
 	assignments := make([]string, 0, len(carried))
 	for _, column := range carried {
@@ -351,89 +348,28 @@ func (t table) onConflict(carried []string) string {
 		strings.Join(assignments, ", ") + skip
 }
 
-// catchUp is the one update an append-only row takes on import: what a carried
-// copy can be AHEAD of the stored row on, and nothing else. Empty for a table
-// with neither, and for a row that carries neither.
+// fillVector is the one update an append-only row takes on import: the vector
+// the holder filled, over a stored row whose vector is of no model or of
+// another (see [table.fillsVector]). Empty for a table that fills none.
 //
-//   - THE VECTOR the holder filled ([table.fillsVector]), taken over a stored
-//     vector of no model or of another. It is taken only when it is a whole
-//     one: the row must carry both columns, so a row from a build that
-//     predates the model column (no `embedding_model` key at all) never
-//     overwrites a tagged vector with an untagged one, and both must be set,
-//     so a carried copy written before the fill never erases the vector the
-//     fill gave this node. ONLY A DIFFERENT SPACE is a change — another model,
-//     or the same model at another width, which a restart can leave behind:
-//     the same model's vector of the same immutable text at the same width is
-//     the same vector, and rewriting it would be churn.
-//   - A COLUMN AN OLDER BUILD DROPPED ([table.heals]): taken where the stored
-//     row holds the empty string and the carried one a value, never the
-//     other way.
-//
-// AND THE TWO ARE ONE DECISION, because a healed column is part of the text the
-// vector is of. A vector belongs to the text it was made from, so a carried
-// vector is taken only where the carried row's text is the stored one's — a
-// copy that lost the ask carries a vector made without it, which is not this
-// row's vector however much newer its space — and a row that takes a value it
-// lacked takes the carried vector with it, which was made from the same text,
-// or none, so the holder's fill makes it again from the whole text rather than
-// keep one made without the ask.
-//
-// EVERYTHING ELSE ABOUT THE ROW STAYS WHAT IS HERE — its retrieval bookkeeping
-// is this node's. Every assignment reads the stored row as it was before the
-// update, which is SQL's rule for SET and the one this store keeps.
-func (t table) catchUp(carried []string) string {
-	stored := t.name + "."
-	var (
-		heals, healed, same []string
-	)
-	for _, column := range t.heals {
-		if !slices.Contains(carried, column) {
-			// A row from a build that predates the column: nothing
-			// to take, and its text is not known to differ.
-			continue
-		}
-		heals = append(heals, column)
-		healed = append(healed, "("+stored+column+" = '' AND excluded."+column+" <> '')")
-		same = append(same, "excluded."+column+" = "+stored+column)
-	}
-	vector := t.fillsVector && slices.Contains(carried, "embedding") &&
-		slices.Contains(carried, "embedding_model")
-	if !vector && len(heals) == 0 {
+// EVERYTHING ELSE ABOUT THE ROW STAYS WHAT IS HERE — its retrieval
+// bookkeeping is this node's — and the carried vector is taken only when it is
+// a whole one: the row must carry both columns, set, so a carried copy written
+// before the fill never erases the vector the fill gave this node. ONLY A
+// DIFFERENT SPACE is a change — another model, or the same model at another
+// width, which a restart can leave behind: the same model's vector of the same
+// immutable text at the same width is the same vector, and rewriting it would
+// be churn.
+func (t table) fillVector(carried []string) string {
+	if !t.fillsVector || !slices.Contains(carried, "embedding") ||
+		!slices.Contains(carried, "embedding_model") {
 		return ""
 	}
-	update := " ON CONFLICT (" + strings.Join(t.key, ", ") + ") DO UPDATE SET "
-	newSpace := "(" + stored + "embedding IS NULL OR " + stored + "embedding_model IS NULL" +
+	stored := t.name + "."
+	return " ON CONFLICT (" + strings.Join(t.key, ", ") + ") DO UPDATE SET" +
+		" embedding = excluded.embedding, embedding_model = excluded.embedding_model" +
+		" WHERE excluded.embedding IS NOT NULL AND excluded.embedding_model IS NOT NULL" +
+		" AND (" + stored + "embedding IS NULL OR " + stored + "embedding_model IS NULL" +
 		" OR " + stored + "embedding_model <> excluded.embedding_model" +
 		" OR length(" + stored + "embedding) <> length(excluded.embedding))"
-	whole := "excluded.embedding IS NOT NULL AND excluded.embedding_model IS NOT NULL"
-	if len(heals) == 0 {
-		return update + "embedding = excluded.embedding, embedding_model = excluded.embedding_model" +
-			" WHERE " + whole + " AND " + newSpace
-	}
-	heal := "(" + strings.Join(healed, " OR ") + ")"
-	var assignments []string
-	where := heal
-	if t.fillsVector {
-		// take: the carried vector replaces the stored one — a new
-		// space over the same text, or the text the row now takes.
-		take := "0"
-		if vector {
-			take = "(" + whole + " AND ((" + strings.Join(same, " AND ") + " AND " + newSpace +
-				") OR " + heal + "))"
-		}
-		for _, column := range []string{"embedding", "embedding_model"} {
-			carriedValue := "NULL"
-			if vector {
-				carriedValue = "excluded." + column
-			}
-			assignments = append(assignments, column+" = CASE WHEN "+take+" THEN "+carriedValue+
-				" WHEN "+heal+" THEN NULL ELSE "+stored+column+" END")
-		}
-		where = "(" + take + " OR " + heal + ")"
-	}
-	for i, column := range heals {
-		assignments = append(assignments, column+" = CASE WHEN "+healed[i]+" THEN excluded."+column+
-			" ELSE "+stored+column+" END")
-	}
-	return update + strings.Join(assignments, ", ") + " WHERE " + where
 }

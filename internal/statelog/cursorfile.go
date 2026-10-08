@@ -26,16 +26,18 @@ type FileCursor struct {
 	Position Position
 
 	// StreamCreatedAt is the broker's creation instant for the stream the
-	// applier was reading when it committed that position. Zero where the
-	// row predates the column, which is a claim about nothing rather than
-	// a claim about a stream created at the epoch.
+	// applier was reading when it committed that position. Zero only where
+	// that applier was built with no creation instant
+	// ([RunnerDeps].StreamCreatedAt's zero, which the engine never passes)
+	// — a claim about nothing rather than a claim about a stream created
+	// at the epoch.
 	StreamCreatedAt time.Time
 
 	// AppliedVersion is the highest record version the copy's rows on the
-	// stream were applied from, and NIL where nothing recorded it — a row
-	// that predates the record (migration 0035) — which is unknown rather
-	// than "applied nothing": zero is that, and a real value.
-	AppliedVersion *int
+	// stream were applied from — zero where they were applied from none.
+	// Every writer of the row sets it, so a row holding none is refused
+	// rather than read as some version.
+	AppliedVersion int
 }
 
 // CursorsInFile reads every domain's committed checkpoint out of a COPY of the
@@ -77,22 +79,17 @@ func CursorsInFile(ctx context.Context, path string) (map[string]FileCursor, err
 		defer func() { _ = rows.Close() }()
 		for rows.Next() {
 			var stream string
-			var generation, seq, created int64
-			var applied sql.NullInt64
+			var generation, seq, created, applied int64
 			if err := rows.Scan(&stream, &generation, &seq, &created, &applied); err != nil {
 				return err
 			}
-			cursor := FileCursor{
+			out[stream] = FileCursor{
 				Position: Position{
 					Stream: stream, Generation: uint32(generation), Seq: uint64(seq),
 				},
 				StreamCreatedAt: store.DecodeTime(created),
+				AppliedVersion:  int(applied),
 			}
-			if applied.Valid {
-				v := int(applied.Int64)
-				cursor.AppliedVersion = &v
-			}
-			out[stream] = cursor
 		}
 		return rows.Err()
 	}); err != nil {

@@ -175,3 +175,45 @@ func TestAnAnswerPastTheCapIsRefusedNamingWhatLanded(t *testing.T) {
 		t.Errorf("an over-long answer = %v, want it refused, saying the write landed", err)
 	}
 }
+
+// A 404 AT PUT /config IS A MISSING SURFACE, and which one it is decides where
+// the operator goes next.
+//
+// The route answers no 404 of its own. So the engine router's `no_route` is a
+// Crewlet node without the ingress role — one that binds api.port for its tool
+// bridge alone — and a 404 carrying no engine code is something that is not a
+// node's API at all. Each is named for what it is: a node missing a role is
+// never called "not a Crewlet node", and a proxy is never sent looking for a
+// role.
+func TestA404AtConfigNamesWhatAnswered(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		body    string
+		want    string
+		mustNot string
+	}{
+		{"a node without ingress", `{"error":"no_route","detail":"this node serves nothing at PUT /config"}`,
+			"without the ingress role", "not a Crewlet node"},
+		{"something else at the address", "404 page not found",
+			"not a Crewlet node's API", "without the ingress role"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c := answering(t, http.StatusNotFound, []byte(tt.body))
+			_, _, err := c.Import(t.Context(), []byte("name: Nimbus\n"), "test")
+			if err == nil {
+				t.Fatalf("a 404 at PUT /config answered no error")
+			}
+			if !strings.Contains(err.Error(), "no /config surface") ||
+				!strings.Contains(err.Error(), tt.want) {
+				t.Errorf("the 404 was reported as %q, want the missing surface and %q",
+					err, tt.want)
+			}
+			if strings.Contains(err.Error(), tt.mustNot) {
+				t.Errorf("the 404 was reported as %q, which says %q", err, tt.mustNot)
+			}
+		})
+	}
+}

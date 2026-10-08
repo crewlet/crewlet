@@ -92,9 +92,12 @@ type budgetParks struct {
 	// armed after [Engine.stopBudgetParks] would fire into a closed queue.
 	stopped bool
 
-	// now and after are the clock and the alarm, injectable for tests; nil
-	// is the wall clock and time.AfterFunc.
-	now   func() time.Time
+	// after is the alarm, injectable for tests; nil is time.AfterFunc.
+	//
+	// THE ALARM AND NOT THE CLOCK. What it waits for is measured against
+	// the engine's clock ([Engine.now]), the one the meter that decided the
+	// park cut its windows on: a park with a clock of its own could arm its
+	// alarm for the end of a window the meter beside it was not in.
 	after func(d time.Duration, f func()) alarm
 }
 
@@ -104,13 +107,6 @@ type budgetParking struct {
 	basis    budgetBasis
 	resetsAt time.Time
 	alarm    alarm
-}
-
-func (p *budgetParks) clock() time.Time {
-	if p.now != nil {
-		return p.now()
-	}
-	return time.Now()
 }
 
 func (p *budgetParks) arm(d time.Duration, f func()) alarm {
@@ -127,7 +123,9 @@ func (p *budgetParks) arm(d time.Duration, f func()) alarm {
 // lets the delivery through, logged, because the turn's own meter is the gate
 // and fails closed — parking on a read that failed would hold a seat's mail on
 // a store blip that the meter would have ridden out. The error it returns is
-// the hold that could not be taken, which the dispatcher NAKs.
+// the hold that could not be taken, which the dispatcher DEFERS (see
+// [Dispatcher.parkOnBudget]): the refusal is the node's, and a deferral keeps
+// the delivery's place at the head of the seat's inbox.
 func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, error) {
 	c := e.Company()
 	m := e.meterFor(c, handle)
@@ -135,7 +133,6 @@ func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, e
 		// No counter, or nothing to refuse with.
 		return "", false, nil
 	}
-	m.now = e.budgetParks.clock
 	r, refusing, err := m.refusing(ctx)
 	if err != nil {
 		log.WarnContext(ctx, "budget_park_unknown", "seat", handle, "error", err,
@@ -188,6 +185,26 @@ func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, e
 	return reason, true, nil
 }
 
+// budgetRefusing reports whether one of a seat's capped windows is refusing,
+// the reason naming it and the instant that window turns over — the budget
+// stage's question, ASKED WITHOUT PARKING. For a caller that is not a delivery
+// (a retried resume) and so has no mail of its own to hold: it waits for the
+// window's end rather than parks, and a delivery that arrives meanwhile takes
+// the park itself. An unreadable counter is not a refusal, for the reason
+// [Engine.budgetPark] gives.
+func (e *Engine) budgetRefusing(ctx context.Context, handle string) (string, time.Time, bool) {
+	m := e.meterFor(e.Company(), handle)
+	if m == nil || !m.basis.capped() {
+		return "", time.Time{}, false
+	}
+	r, refusing, err := m.refusing(ctx)
+	if err != nil || !refusing {
+		return "", time.Time{}, false
+	}
+	return fmt.Sprintf("budget: %s window %s resets %s",
+		r.Window.Period, r.Window.Label, rfc3339(r.Window.End)), r.Window.End, true
+}
+
 // recordBudgetParkLocked records a park and arms its reset. The caller holds
 // e.budgetParks.mu.
 //
@@ -213,12 +230,12 @@ func (e *Engine) recordBudgetParkLocked(ctx context.Context, handle string, basi
 	if p.stopped {
 		return
 	}
-	// Never a negative wait: a window cut on this clock contains the moment
-	// it was cut at, so its end is ahead of it, but the alarm is measured on
-	// the monotonic clock and a wall clock stepped forward between the two
-	// reads must not arm an alarm that has already passed as though it had
-	// not.
-	wait := max(resetsAt.Sub(p.clock()), 0)
+	// Never a negative wait: a window cut on the engine's clock contains the
+	// moment it was cut at, so its end is ahead of it, but the alarm is
+	// measured on the monotonic clock and a wall clock stepped forward
+	// between the two reads must not arm an alarm that has already passed as
+	// though it had not.
+	wait := max(resetsAt.Sub(e.now()), 0)
 	released := context.WithoutCancel(ctx)
 	parking.alarm = p.arm(wait, func() {
 		e.releaseBudgetParking(released, handle, parking, "the window turned over")

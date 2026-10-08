@@ -15,10 +15,9 @@ import (
 // The usage day was folded from phase records alone, so the replicated history
 // every named spend window reads understated each seat by its prefetch, its
 // compactions and its reflection — spend the counters had charged. An
-// auxiliary record is a cell of the shape every build already reads (phase
-// `auxiliary`, its purpose as the worker), its calls are the ones it
-// coalesced, and landing one moves the day's fingerprint so the publisher
-// re-derives it.
+// auxiliary record is a cell of the shape a phase's is (phase `auxiliary`, its
+// purpose as the worker), its calls are the ones it coalesced, and landing one
+// moves the day's fingerprint so the publisher re-derives it.
 func TestAnAuxiliaryRecordIsPartOfItsSeatsDay(t *testing.T) {
 	t.Parallel()
 	db := open(t)

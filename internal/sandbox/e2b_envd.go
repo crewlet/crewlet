@@ -173,7 +173,7 @@ type envdClient struct {
 	http *http.Client
 
 	// token is the box's envd access token ([e2bBox.EnvdAccessToken]),
-	// sent on every request; empty for a box made without secured access.
+	// sent on every request.
 	token string
 
 	// fileIdle is [e2bFileIdleTimeout], held on the value so a test can
@@ -711,13 +711,11 @@ func (c *envdClient) authorize(req *http.Request) {
 	// read it from both across versions and a mismatch between the box's
 	// envd and this build shows up as a permission error naming no user.
 	req.Header.Set("X-User", e2bEnvdUser)
-	if c.token != "" {
-		// envd's own header for it (packages/envd/internal/api/auth.go in
-		// e2b-dev/infra). A secured box refuses a process call without it
-		// and a file call without it or a signature; a header is the
-		// form both accept, and the one E2B's SDKs send.
-		req.Header.Set("X-Access-Token", c.token)
-	}
+	// envd's own header for the token (packages/envd/internal/api/auth.go
+	// in e2b-dev/infra). A secured box refuses a process call without it
+	// and a file call without it or a signature; a header is the form both
+	// accept, and the one E2B's SDKs send.
+	req.Header.Set("X-Access-Token", c.token)
 }
 
 // baseName is the last path element, without importing path/filepath for a

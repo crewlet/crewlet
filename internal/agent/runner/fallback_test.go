@@ -217,7 +217,7 @@ func TestAPhaseMeasuresTheFinalPromptItSends(t *testing.T) {
 	// A fresh phase opens the conversation, so there is nothing seeded to
 	// measure. Zero here is the fact that separates it from a resume.
 	if m.MessageBytes != 0 {
-		t.Errorf("message_chars = %d on a phase that opened its own conversation, want 0",
+		t.Errorf("message_bytes = %d on a phase that opened its own conversation, want 0",
 			m.MessageBytes)
 	}
 	// AND THE TOOL ARRAY, which both HTTP vendors bill as input and the
@@ -327,8 +327,8 @@ func seedChars(t *testing.T, msgs []llm.Message) int {
 // every tool and asked nothing.
 //
 // The parked rounds here carry REASONING AND TOOL-CALL ARGUMENTS, which is what
-// a real one carries — `reasoning: true` gives every round a four-figure
-// thinking allowance by default, the tool loop stores the blocks on each
+// a real one carries — every current Claude model thinks on every round and
+// returns its summarized thinking, the tool loop stores the blocks on each
 // assistant message and execstate serialises them into the row — and they were
 // the next term to go missing after the two above: text alone under-reported a
 // resumed executor by the largest thing in its prompt.
@@ -352,7 +352,7 @@ func TestAResumedPhaseMeasuresTheConversationItReEnters(t *testing.T) {
 		}
 		state.Messages[i].ReasoningContent = thought
 		state.Messages[i].ThinkingBlocks = []llm.ThinkingBlock{
-			{Type: "thinking", Thinking: thought, Signature: "provider-minted"},
+			{Type: "thinking", Thinking: thought},
 		}
 	}
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
@@ -388,14 +388,14 @@ func TestAResumedPhaseMeasuresTheConversationItReEnters(t *testing.T) {
 			"zero is a term this case is not holding", text, reasoned, args)
 	}
 	if m.MessageBytes != messages {
-		t.Errorf("message_chars = %d, the provider received %d characters of conversation",
+		t.Errorf("message_bytes = %d, the provider received %d bytes of conversation",
 			m.MessageBytes, messages)
 	}
 	// The double count, named: on this backend's shape ReasoningContent is a
 	// rendering of the blocks beside it, so summing both would report the
 	// prompt's largest term twice.
 	if m.MessageBytes == messages+reasoned {
-		t.Error("message_chars counted the reasoning twice — the blocks and the prose " +
+		t.Error("message_bytes counted the reasoning twice — the blocks and the prose " +
 			"rendering of the same thinking are one term")
 	}
 	// The two a resume does NOT prepend. Reporting them would report bytes

@@ -183,6 +183,36 @@ func TestAUnitColumnIsOneColumnPerTeam(t *testing.T) {
 	}
 }
 
+// AN ID WINS THE AMBIGUITY ON A BOARD TOO. A unit whose NAME is another
+// unit's id is refused on a submitted document, but a revision applied under
+// the runnable rules can carry the pair, and resolution settles it for the
+// unit whose id it is. The column must agree: the rows filed under that id are
+// that unit's, and folding them onto the unit that merely shares the word as
+// a name drew one team's work in another team's column.
+func TestAUnitColumnLetsAnIDWinOverAnotherUnitsName(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	ambiguous := chart{
+		{Key: "ops", Name: "Operations"},
+		{Key: "infra", Name: "ops"},
+	}
+	unitTask(t, r, "mine", "ops")
+
+	answer := r.askWith(ambiguous, map[string]any{
+		"container": "project:ENG", "group_by": "unit",
+	})
+	if ops := groupOf(t, answer, "ops"); ops.Count != 1 || ops.Label != "Operations" {
+		t.Errorf("the row filed under the id \"ops\" is drawn as %+v, want it in "+
+			"Operations' own column", ops)
+	}
+	for _, group := range answer.Groups {
+		if group.Key == "infra" {
+			t.Errorf("the row filed under Operations' id was folded into the unit "+
+				"merely named ops: %+v", group)
+		}
+	}
+}
+
 // AND A NARROWING TO THAT COLUMN TAKES EITHER SPELLING, because a caller
 // writes the one it has: a board's own column hands back the key, and a person
 // or a model types the name.

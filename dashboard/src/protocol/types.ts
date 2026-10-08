@@ -37,6 +37,7 @@ import type { McpServersStatusAnswer } from "../contract/mcp.ts";
 import type { CredentialPoolAnswer } from "../contract/credentials.ts";
 import type { Coverage } from "../contract/coverage.ts";
 import type { EngineHealth } from "../contract/health.ts";
+import type { StopReason } from "../contract/stops.ts";
 import type {
   IntegrationsAnswer,
   ReconcileFinding,
@@ -135,13 +136,9 @@ export interface EventRecord {
   failed?: boolean;
   /**
    * The unit of work this row's run was an attempt at — see `adr/0017`.
-   *
-   * OFF THE PROMOTED COLUMN server-side, and it is the one promoted value that
-   * is not a copy of a tag: migration `0029` backfilled the column from
-   * `turn_id`, which is where the work key lived before the split, and
-   * deliberately left the stored payloads and tags blobs alone. So a reader
-   * going through `payload.work_key` answers nothing for every turn written
-   * before the split, while this field answers for all of them.
+   * Off the promoted column server-side. Absent on an event no run published,
+   * and on one from a run with no ledgerable trigger (a scheduled fire, a
+   * sub-agent).
    */
   work_key?: string;
 }
@@ -186,16 +183,16 @@ export interface ErrorInfo {
 
 /** One tool the model called, as the phase event records it. */
 export interface ToolExecution {
-  name?: string;
-  tool?: string;
-  /** The round this call belongs to. THE ordering key — see `roundsOf`. */
-  round?: number;
-  arguments?: unknown;
-  args?: unknown;
-  result?: unknown;
-  output?: unknown;
+  name: string;
+  /** The round this call belongs to. THE ordering key — see `rounds()`. */
+  round: number;
+  arguments: unknown;
+  /** What the tool returned — or, on a failed call, what it failed with. */
+  result: string;
+  /** False on a call that failed. */
+  success: boolean;
+  /** Present only on a failed call, repeating its `result`. */
   error?: string;
-  failed?: boolean;
   /** When the call was handed to the tool (RFC 3339, UTC), and how long it
    *  took. Both absent on a row nothing timed. */
   started_at?: string;
@@ -206,10 +203,37 @@ export interface ToolExecution {
   server?: string;
 }
 
+/**
+ * One part of a prompt as the builder that wrote it marked it out
+ * (`types.PromptSection`): a stable snake_case key, the title a reader sees,
+ * and how many UTF-8 BYTES of the prompt it spans.
+ *
+ * A prompt's sections TILE it exactly, in order: their bytes add up to the
+ * prompt's length in UTF-8, every boundary falls between two characters, and a
+ * headed span starts with its own heading line. A reader that finds a map
+ * breaking any of that derives the outline from the headings instead
+ * (`lib/promptmap.ts`), because a map that does not tile would mis-slice.
+ */
+export interface PromptSection {
+  key: string;
+  title: string;
+  bytes: number;
+  /**
+   * The span begins with its own heading line, whose text is `title` — what
+   * the builder's `Heading` writes. False or absent for a part that opens
+   * with no heading of its own (a `Lead`: a persona, a task, a trigger's
+   * text), whose first line may still be a heading somebody else wrote and
+   * the span QUOTES. The engine writes it only when true.
+   */
+  headed?: boolean;
+}
+
 /** One message of the prompt a phase was given. */
 export interface PromptMessage {
   role?: string;
   content?: string;
+  /** This message's own section map; absent from an engine that wrote none. */
+  sections?: PromptSection[] | null;
 }
 
 /**
@@ -230,6 +254,14 @@ export interface RoundNarration {
   round?: number;
   reasoning?: string;
   content?: string;
+  /**
+   * The model answered this round in prose and called no tool, in a phase
+   * that had to end in a tool call (a submission tool, or a required call).
+   * Absent means false. A later round means the engine asked again; a
+   * declined last round of a settled phase means it ended without its
+   * submission.
+   */
+  declined?: boolean;
 }
 
 /** One round of a phase's tool loop, as the engine timed it (`types.PhaseRound`). */
@@ -244,6 +276,12 @@ export interface PhaseRound {
   cache_read_tokens: number;
   cache_write_tokens: number;
   tool_calls: number;
+  /**
+   * Why the model stopped writing this round's response. Absent where its
+   * backend reported none — "not reported", never "ended normally". `max_tokens`, `refusal`, `context_exceeded` and
+   * `paused` each END the phase; see `contract/stops.ts`.
+   */
+  stop_reason?: StopReason;
 }
 
 /** The tool call a phase is running right now (`types.RunningCall`). */
@@ -314,8 +352,8 @@ export interface LiveCall {
   turn_id: string;
   /**
    * The unit of work behind that run — what groups a trigger's attempts.
-   * Absent on a row an engine from before the split wrote, where `turn_id`
-   * carries it instead.
+   * Absent for a run with no ledgerable trigger (a scheduled fire, a
+   * sub-agent).
    */
   work_key?: string;
   phase: string;
@@ -391,9 +429,9 @@ export interface LiveCall {
    * The version of the copy this call holds of each heavy field
    * (`LIVE_CALL_DETAIL`). A push names every one and carries a field only
    * when its version moved; the store fills in the rest from what it holds.
-   * Absent from an engine that versions nothing, whose pushes are whole.
+   * Always present, on every surface that carries a call.
    */
-  versions?: CallVersions;
+  versions: CallVersions;
 }
 
 /** A live call's heavy-field versions, keyed as `LIVE_CALL_DETAIL` is. */
@@ -409,7 +447,7 @@ export interface LiveCallAnswer {
    *  dropped when the slot has since been cleared or taken by another call,
    *  and otherwise brings only the heavy fields it holds at a newer version
    *  (`Store.applyLiveCall`). */
-  live_call_seq?: number;
+  live_call_seq: number;
 }
 
 /** One calendar window of one scope's token counter — the day, the ISO week or
@@ -504,7 +542,7 @@ export interface SandboxEntry {
   sandbox_id: string;
   task: string;
   /** The run record's own word: `launching`, `running`,
-   *  `awaiting_clarification` or `reseed`. */
+   *  `awaiting_clarification`, `reseed` or `answered`. */
   status: string;
   started_at: string;
   question?: string;
@@ -518,7 +556,7 @@ export interface SandboxEntry {
 }
 
 /**
- * The five statuses a run record can hold.
+ * The six statuses a run record can hold.
  *
  * THERE IS NO `done` OR `failed` HERE, and that is the engine's shape rather
  * than an omission: a run's record is DELETED once the run settles and its box
@@ -528,7 +566,7 @@ export interface SandboxEntry {
  * reason — never on this row.
  */
 export type SandboxStatus =
-  "launching" | "running" | "awaiting_clarification" | "resumed" | "reseed";
+  "launching" | "running" | "awaiting_clarification" | "reseed" | "answered" | "resumed";
 
 /** One durable coding run, as the `sandbox_runs` query answers it. */
 export interface SandboxRun {
@@ -536,11 +574,11 @@ export interface SandboxRun {
    *  record's own key. See `adr/0017`. */
   turn_id: string;
   /** The job the row holds NOW — a turn can launch more than one — and what
-   *  `sandbox_tail` is asked by. Empty on a row an older build wrote, and on
-   *  a run the live projection knows of before its durable row is read. */
+   *  `sandbox_tail` is asked by. Empty on a run the live projection knows of
+   *  before its durable row is read. */
   launch_id?: string;
-  /** The unit of work behind that run. Absent on a row written before the
-   *  identities were split. */
+  /** The unit of work behind that run. Absent on a turn with no ledgerable
+   *  trigger, and on a live entry whose durable row has not been read yet. */
   work_key?: string;
   agent_handle: string;
   role: string;
@@ -796,7 +834,10 @@ export interface EventBar {
  */
 export interface EventSeries {
   bucket: "minute" | "hour" | "day";
-  /** The window COVERED, snapped outward to whole buckets. */
+  /** The window COVERED, snapped outward to whole buckets — and never below
+   *  the first whole bucket inside the engine's 30-day history, so a window
+   *  the history clips starts later than it was asked to, and one lying wholly
+   *  below that bucket comes back empty (`since` equal to `until`, no bars). */
   since: string;
   until: string;
   /** Every bucket in the window, INCLUDING the empty ones. */
@@ -1173,10 +1214,10 @@ export interface OrgUnit {
  * and units in the positions the document wrote them, and the hierarchy the
  * ENGINE derived from that document.
  *
- * `derived` is optional because an engine older than the field serves the
- * projection without it. A screen reading one without `derived` has the
- * authored tree and nothing else: it may show what the document says, and it
- * must not reconstruct what the engine would conclude from it.
+ * `derived` is absent only on `{}`, a node running no company, and comes from
+ * the same document as the tree beside it in the same call, so the two pair
+ * by construction. A screen never reconstructs what it says from the
+ * authored tree: `lib/seats.ts` lays it over the tree as the authority.
  */
 export interface OrgProjection {
   name?: string;
@@ -1411,10 +1452,10 @@ export interface FleetNode {
   roles: string[];
   /**
    * How the node's broker takes part in the fleet's — derived from its own
-   * `stream` block, never from its roles. `unknown` for a node running a build
-   * older than the field; absent only from an engine older still.
+   * `stream` block, never from its roles. `unknown` for a node advertising a
+   * kind this build does not know (a newer build's).
    */
-  broker?: BrokerKind | string;
+  broker: BrokerKind | string;
   labels?: Record<string, string> | null;
   /** The lease's fencing token — node id plus a per-process suffix. */
   owner?: string;
@@ -1482,9 +1523,6 @@ export interface ObjectCollect {
   aged: number;
   deleted: number;
   referenced: number;
-  /** Objects an earlier build stored as content-addressed chunks, deleted once
-   *  no node of that build is left. */
-  retired: number;
   /** Uploads begun more than a day ago and never finished, abandoned. */
   abandoned: number;
   /** Why the pass stopped judging; absent when it ran in full. Its counts stand either way. */
@@ -1845,11 +1883,9 @@ export interface FleetSeatLease {
   expires_in?: number;
   /**
    * Since when `node` has held it: the tenure's start (RFC 3339, UTC, the
-   * coordination store's clock), which a renewal does not move. Absent for a
-   * lease written by a build older than the stamp — its start was never
-   * recorded, and absent is not "now".
+   * coordination store's clock), which a renewal does not move.
    */
-  acquired_at?: string;
+  acquired_at: string;
 }
 
 export interface FleetDutyLease {
@@ -2637,7 +2673,7 @@ export interface WorkPersonState {
   version: number;
   /** How far ahead a snooze may be set, in SECONDS — the engine's bound, so a
    *  screen offers only the presets the write accepts. */
-  max_snooze_ahead?: number;
+  max_snooze_ahead: number;
   held: boolean;
   read_level?: ReadLevel;
   log_seq?: number;
@@ -2734,8 +2770,8 @@ export interface WorkItemTurn {
    *  `phases` lists it too — it ran — so a card marks that chip rather than
    *  ticking every phase beside a pill that names none. */
   failed_in?: string;
-  /** What it did, in the agent's own words. Absent on a turn an older build
-   *  recorded. */
+  /** What it did, in the agent's own words. Absent when the turn failed or
+   *  parked before any segment wrote one. */
   summary?: string;
   /** What the newest review that sent the work back asked for. */
   review?: string;
@@ -3242,19 +3278,24 @@ export interface TurnAnswer {
    *  part. */
   coverage?: Coverage;
   /** Which of them RAN it: the nodes whose own store held any of its events,
-   *  sorted. Absent from an older node's answer. */
-  nodes?: string[];
+   *  sorted — empty when no answering node held them yet. */
+  nodes: string[];
 }
 
 /**
  * What a running coding run has said, read from its box by the node that owns
- * it (`sandbox.Output`), redacted by the engine — in one of two shapes, told
- * apart by `cursor`.
+ * it (`sandbox.Output`), redacted by the engine: what the asker's CURSOR lacks
+ * — the text after the offset it holds through (`start`), or on `reset` the
+ * last 256 KiB (what the record will hold) in whole lines, which replaces what
+ * it held. Offsets are UTF-8 bytes of the reading named `epoch`; `end` and
+ * `digest` go back on the next request.
+ *
+ * `epoch`, `start`, `end` and `digest` are ALWAYS PRESENT, 0 included — a
+ * reading that has settled nothing yet answers at end 0 and is followed from
+ * start 0, and an offset the engine left out at 0 once read as absent, so a
+ * delta from 0 was taken for one that did not follow and thrown away.
  */
-export type SandboxOutput = SandboxWindow | SandboxCursorAnswer;
-
-/** What both shapes of a live output carry. */
-interface SandboxOutputBase {
+export interface SandboxOutput {
   text: string;
   /** Which of the job's two accounts of itself this is. */
   source: "transcript" | "stderr" | "none";
@@ -3264,34 +3305,6 @@ interface SandboxOutputBase {
   as_of: string;
   /** The job is over and waiting to be collected; it will not grow again. */
   finished: boolean;
-  /** The most this shape carries, so a caption says the bound from the answer.
-   *  Absent from an older owner's window, which was 8 KiB. */
-  window_bytes?: number;
-}
-
-/**
- * A WINDOW, for a request that asked by no cursor or an owner that reads none:
- * the last `window_bytes` (8 KiB) in whole lines, replacing what was shown. It
- * carries no cursor field at all.
- */
-export interface SandboxWindow extends SandboxOutputBase {
-  cursor?: undefined;
-}
-
-/**
- * What a CURSOR lacks: the text after the offset the asker holds through
- * (`start`), or on `reset` the last `window_bytes` (256 KiB, what the record
- * will hold) in whole lines, which replaces what it held. Offsets are UTF-8
- * bytes of the reading named `epoch`; `end` and `digest` go back on the next
- * request.
- *
- * `epoch`, `start`, `end` and `digest` are ALWAYS PRESENT here, 0 included —
- * a reading that has settled nothing yet answers at end 0 and is followed from
- * start 0, and an offset the engine left out at 0 once read as absent, so a
- * delta from 0 was taken for one that did not follow and thrown away.
- */
-export interface SandboxCursorAnswer extends SandboxOutputBase {
-  cursor: true;
   epoch: string;
   start: number;
   end: number;
@@ -3309,8 +3322,7 @@ export interface SandboxCursorAnswer extends SandboxOutputBase {
  * tail of that job while it runs, `launching` while its box is still being
  * made, `not_running` with the record's own status once it is not,
  * `box_paused` for a running record whose box is paused (never woken to be
- * read), or the owning node NAMED where it did not answer (`owner_silent`) or
- * runs a build that cannot (`owner_upgrading`).
+ * read), or the owning node NAMED where it did not answer (`owner_silent`).
  */
 export interface SandboxTailAnswer {
   outcome: (typeof SANDBOX_TAIL_OUTCOMES)[number];
@@ -3358,11 +3370,9 @@ export interface RevisionMeta {
   /**
    * WHAT `created_by` names: `operator` for a person's credential (an API
    * token, or the login running the CLI), `node` for the engine's own write
-   * (a boot seed, the reconcile loop). EMPTY when nobody recorded it — a
-   * revision a node adopted from a pointer an older build published — and a
-   * screen shows that as "not recorded" rather than picking a kind. A kind a
-   * newer engine adds arrives as itself, so this is a string rather than a
-   * closed union a newer value would silently fall outside of.
+   * (a boot seed, the reconcile loop). Always present. A kind a newer engine
+   * adds arrives as itself, so this is a string rather than a closed union a
+   * newer value would silently fall outside of.
    */
   created_by_kind: string;
   created_at: string;
@@ -3551,7 +3561,7 @@ export interface SetupToolState {
    * satisfied and has nothing left to type: both acts that produce an app
    * happen at GitHub, from that agent's own row.
    */
-  form_complete?: boolean;
+  form_complete: boolean;
   inbound_path?: string;
   public_url?: string;
   /** This build runs a provisioning pass for this vendor. */
@@ -3946,7 +3956,7 @@ export interface WorkMyWork {
   /** Every block counted in FULL, by the predicate that drew its page and in
    *  the same transaction. A block is a page of at most twenty rows; its total
    *  is the claim — so a count is drawn from here, never from a length. */
-  totals?: WorkMyWorkTotals;
+  totals: WorkMyWorkTotals;
   read_level?: ReadLevel;
   log_seq?: number;
   applied_through?: number;
@@ -4050,9 +4060,8 @@ export interface WorkRanked {
   type: string;
   status: string;
   assignee?: string;
-  /** The item's own priority, drawn as the Board draws it. Optional: an
-   *  older node's hit does not carry it. */
-  priority?: string;
+  /** The item's own priority, drawn as the Board draws it. */
+  priority: string;
   /** A PLACE, 1-based, and deliberately NOT a score. The arithmetic that
    *  ordered these — score within a method, reciprocal rank fusion across
    *  methods, per slice of the corpus — is finished before a coordinator sees
@@ -4145,8 +4154,8 @@ export interface TurnRow {
   turn_id: string;
   /**
    * The unit of work behind that run — what groups a trigger's attempts.
-   * Absent on a row an engine from before the split wrote, where `turn_id`
-   * carries it instead.
+   * Absent for a run with no ledgerable trigger (a scheduled fire, a
+   * sub-agent).
    */
   work_key?: string;
   agent_id?: string;
@@ -4208,10 +4217,12 @@ export interface TurnWorkItem {
 
 export interface TurnsAnswer {
   turns: TurnRow[];
-  /** The cursor to resume from, on the turn's START, and `null` on the last
-   *  page — present only while more turns lie past this one. The fleet's, so
-   *  it can be present on an empty page: where a node's page stopped, with
-   *  nothing above it left to show. */
+  /** The cursor to resume from — an OPAQUE token, handed back as `before`
+   *  exactly as it came and never built from a row, since it names where the
+   *  page's last turn is listed and that turn's id rather than any field a row
+   *  carries — and `null` on the last page, present only while more turns lie
+   *  past this one. The fleet's, so it can be present on an empty page: where
+   *  a node's page stopped, with nothing above it left to show. */
   next: string | null;
   /** Which nodes the page was merged from. */
   coverage?: Coverage;
@@ -4231,12 +4242,11 @@ export interface Viewer {
   /** The tools `POST /operator/act/{tool}` serves this caller: every write
    *  the operator catalogue holds for a token bound to a seat, and EMPTY for
    *  an anonymous or unbound caller, who may not act (ADR-0024). */
-  acts?: string[];
+  acts: string[];
   /** The project this person's create lands in when it names none — the
    *  engine's own default for their seat, which `create_work_item` applies.
-   *  "" when their team and every team above it owns none. Optional: an
-   *  older node does not send it. */
-  project?: string;
+   *  "" when their team and every team above it owns none. */
+  project: string;
 }
 
 /** One seat a name could mean, and why. */

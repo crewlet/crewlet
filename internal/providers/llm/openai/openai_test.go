@@ -12,19 +12,23 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	sdk "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/packages/ssestream"
 
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/credential"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/httpapi"
 
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 )
@@ -751,65 +755,47 @@ func TestUnserialisableArgumentsAreRefusedBeforeTheCall(t *testing.T) {
 	}
 }
 
-func TestToolsAndToolChoice(t *testing.T) {
+// TOOLS ARE OFFERED, NEVER FORCED: no tool_choice goes on the wire, so the
+// API's own default with tools present — auto — is the choice, and an older
+// compatible server has one less field to refuse.
+func TestToolsAreOfferedWithNoToolChoice(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct {
-		choice llm.ToolChoice
-		want   any // nil means the field must be absent
-	}{
-		{"", "auto"},
-		{"auto", "auto"},
-		{"required", "required"},
-		{"none", "none"},
-		{"nonsense", nil},
-	} {
-		t.Run("choice="+string(tc.choice), func(t *testing.T) {
-			t.Parallel()
-			api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okCompletion("ok")) })
-			p := newProvider(t, url, nil)
-			req := userTurn("hi")
-			req.ToolChoice = tc.choice
-			req.Tools = []llm.ToolDef{
-				{Name: "with_schema", Description: "d", Parameters: map[string]any{
-					"type":       "object",
-					"properties": map[string]any{"x": map[string]any{"type": "string"}},
-					"required":   []any{"x"},
-				}},
-				{Name: "no_schema"},
-			}
-			if _, err := p.Complete(context.Background(), req); err != nil {
-				t.Fatalf("Complete: %v", err)
-			}
-			body := api.seen()[0].body
+	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okCompletion("ok")) })
+	p := newProvider(t, url, nil)
+	req := userTurn("hi")
+	req.Tools = []llm.ToolDef{
+		{Name: "with_schema", Description: "d", Parameters: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"x": map[string]any{"type": "string"}},
+			"required":   []any{"x"},
+		}},
+		{Name: "no_schema"},
+	}
+	if _, err := p.Complete(context.Background(), req); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	body := api.seen()[0].body
 
-			got, present := body["tool_choice"]
-			if tc.want == nil {
-				if present {
-					t.Fatalf("tool_choice = %v, want the field absent", got)
-				}
-			} else if got != tc.want {
-				t.Fatalf("tool_choice = %v, want %v", got, tc.want)
-			}
+	if got, present := body["tool_choice"]; present {
+		t.Fatalf("tool_choice = %v, want the field absent", got)
+	}
 
-			tools := body["tools"].([]any)
-			if len(tools) != 2 {
-				t.Fatalf("sent %d tools", len(tools))
-			}
-			first := tools[0].(map[string]any)
-			if first["type"] != "function" || dig(t, first, "function", "name") != "with_schema" {
-				t.Fatalf("first tool = %v", first)
-			}
-			if _, ok := dig(t, first, "function", "parameters", "properties").(map[string]any); !ok {
-				t.Fatalf("schema lost: %v", first)
-			}
-			// A tool with no schema still declares an object: several
-			// compatible endpoints reject a function whose parameters are
-			// missing or untyped.
-			second := tools[1].(map[string]any)
-			if dig(t, second, "function", "parameters", "type") != "object" {
-				t.Fatalf("empty schema = %v", second)
-			}
-		})
+	tools := body["tools"].([]any)
+	if len(tools) != 2 {
+		t.Fatalf("sent %d tools", len(tools))
+	}
+	first := tools[0].(map[string]any)
+	if first["type"] != "function" || dig(t, first, "function", "name") != "with_schema" {
+		t.Fatalf("first tool = %v", first)
+	}
+	if _, ok := dig(t, first, "function", "parameters", "properties").(map[string]any); !ok {
+		t.Fatalf("schema lost: %v", first)
+	}
+	// A tool with no schema still declares an object: several compatible
+	// endpoints reject a function whose parameters are missing or untyped.
+	second := tools[1].(map[string]any)
+	if dig(t, second, "function", "parameters", "type") != "object" {
+		t.Fatalf("empty schema = %v", second)
 	}
 }
 
@@ -841,43 +827,134 @@ func TestReasoningChangesTheTokenCapAndDropsTemperature(t *testing.T) {
 	}
 }
 
+// A CALL'S CAP SIZES ITS ANSWER, and a reasoning model spends its reasoning
+// from max_completion_tokens too — so a classifier's 400 is spent reasoning
+// and the call comes back empty. On a reasoning call it is not sent; the
+// entry's own cap still is.
+func TestAReasoningCallIsNotGivenTheCallersAnswerCap(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		entry int
+		want  any // nil: absent
+	}{
+		{"no entry cap", 0, nil},
+		{"an entry cap", 9000, float64(9000)},
+	} {
+		api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okCompletion("ok")) })
+		p := newProvider(t, url, func(c *Config) {
+			c.Reasoning, c.ReasoningEffort, c.MaxTokens = true, "high", tc.entry
+		})
+		req := userTurn("hi")
+		req.MaxTokens = 400
+		if _, err := p.Complete(context.Background(), req); err != nil {
+			t.Fatalf("%s: Complete: %v", tc.name, err)
+		}
+		if got := api.seen()[0].body["max_completion_tokens"]; got != tc.want {
+			t.Errorf("%s: max_completion_tokens = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// A CALL'S EFFORT IS A CEILING ON THE ENTRY'S, never a level of its own: the
+// lower of the two is sent, an entry with no level sends none whatever the
+// call asks (the endpoint's default may be below `low`), and an entry that is
+// not reasoning sends none at all.
+func TestARequestEffortOnlyEverLowersTheEntrys(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name      string
+		reasoning bool
+		entry     string
+		request   llm.Effort
+		want      any // nil: the field must be absent
+	}{
+		{"a low call on a high entry", true, "high", llm.EffortLow, "low"},
+		{"a max call on a medium entry", true, "medium", llm.EffortMax, "medium"},
+		{"no ceiling", true, "high", "", "high"},
+		{"an entry with no level", true, "", llm.EffortLow, nil},
+		{"an entry that is not reasoning", false, "high", llm.EffortLow, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okCompletion("ok")) })
+			p := newProvider(t, url, func(c *Config) {
+				c.Reasoning = tc.reasoning
+				c.ReasoningEffort = tc.entry
+			})
+			req := userTurn("hi")
+			req.Effort = tc.request
+			if _, err := p.Complete(context.Background(), req); err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+			got, present := api.seen()[0].body["reasoning_effort"]
+			if tc.want == nil {
+				if present {
+					t.Fatalf("reasoning_effort = %v, want the field absent", got)
+				}
+				return
+			}
+			if got != tc.want {
+				t.Fatalf("reasoning_effort = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A level the contract does not define is the caller's bug, refused before it
+// reaches the network rather than sent for the endpoint to guess at.
+func TestAnUnknownRequestEffortIsRefused(t *testing.T) {
+	t.Parallel()
+	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okCompletion("ok")) })
+	p := newProvider(t, url, func(c *Config) { c.Reasoning, c.ReasoningEffort = true, "high" })
+	req := userTurn("hi")
+	req.Effort = "x-high"
+	_, err := p.Complete(context.Background(), req)
+	var llmErr *llm.Error
+	if !errors.As(err, &llmErr) || llmErr.Kind != llm.KindFatal || !strings.Contains(err.Error(), "x-high") {
+		t.Fatalf("err = %v, want a fatal refusal naming the level", err)
+	}
+	if api.count() != 0 {
+		t.Fatal("a request with an unknown effort still reached the network")
+	}
+}
+
+// ONLY A TEMPERATURE THE CALL NAMED IS SENT. The phases of a turn name none,
+// so "unset" is what the whole engine runs on, and it must reach the wire as
+// no field at all — the endpoint's own default — rather than a number the
+// provider chose for everybody: that was a 0.7 nobody picked, sent on every
+// executor round. A named one is sent exactly, a 0 included, because a judge
+// asking for a reproducible answer must get it.
 func TestTemperatureAndMaxTokensDefaultsAndOverrides(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name            string
 		configure       func(*Config)
 		request         llm.Request
-		wantTemperature float64
+		wantTemperature any // nil means absent
 		wantMaxTokens   any // nil means absent
 	}{
 		{
-			// The tool loop sends neither field on any call it makes, so
-			// "unset" is what the whole engine runs on: a nil temperature
-			// must reach the provider's configured default, not 0.0.
 			name: "request says nothing", request: userTurn("hi"),
-			wantTemperature: DefaultTemperature, wantMaxTokens: nil,
+			wantTemperature: nil, wantMaxTokens: nil,
 		},
 		{
 			name:            "config supplies a cap",
-			configure:       func(c *Config) { c.Temperature = 0.2; c.MaxTokens = 512 },
+			configure:       func(c *Config) { c.MaxTokens = 512 },
 			request:         userTurn("hi"),
-			wantTemperature: 0.2, wantMaxTokens: float64(512),
+			wantTemperature: nil, wantMaxTokens: float64(512),
 		},
 		{
 			name:            "request overrides the config",
-			configure:       func(c *Config) { c.Temperature = 0.2; c.MaxTokens = 512 },
+			configure:       func(c *Config) { c.MaxTokens = 512 },
 			request:         llm.Request{Messages: userTurn("hi").Messages, Temperature: llm.Temp(0.9), MaxTokens: 77},
 			wantTemperature: 0.9, wantMaxTokens: float64(77),
 		},
 		{
-			// The whole reason Temperature is a pointer. A judge asking
-			// for a reproducible answer says 0.0 and MUST get it; a
-			// backend testing `> 0` silently substitutes its default and
-			// the judge is non-deterministic with nothing to show for it.
+			// The whole reason Temperature is a pointer.
 			name:            "an explicit zero reaches the wire",
-			configure:       func(c *Config) { c.Temperature = 0.2 },
 			request:         llm.Request{Messages: userTurn("hi").Messages, Temperature: llm.Temp(0)},
-			wantTemperature: 0, wantMaxTokens: nil,
+			wantTemperature: float64(0), wantMaxTokens: nil,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -888,18 +965,20 @@ func TestTemperatureAndMaxTokensDefaultsAndOverrides(t *testing.T) {
 				t.Fatalf("Complete: %v", err)
 			}
 			body := api.seen()[0].body
-			if body["temperature"] != tc.wantTemperature {
-				t.Fatalf("temperature = %v, want %v", body["temperature"], tc.wantTemperature)
-			}
-			got, present := body["max_tokens"]
-			if tc.wantMaxTokens == nil {
-				if present {
-					t.Fatalf("max_tokens = %v, want the field absent", got)
+			for _, field := range []struct {
+				key  string
+				want any
+			}{{"temperature", tc.wantTemperature}, {"max_tokens", tc.wantMaxTokens}} {
+				got, present := body[field.key]
+				if field.want == nil {
+					if present {
+						t.Errorf("%s = %v, want the field absent", field.key, got)
+					}
+					continue
 				}
-				return
-			}
-			if got != tc.wantMaxTokens {
-				t.Fatalf("max_tokens = %v, want %v", got, tc.wantMaxTokens)
+				if got != field.want {
+					t.Errorf("%s = %v, want %v", field.key, got, field.want)
+				}
 			}
 		})
 	}
@@ -1010,17 +1089,26 @@ func TestToolCallsAreTranslated(t *testing.T) {
 					{"id":"call_2","type":"function",
 					 "function":{"name":"broken","arguments":"{\"n\":1e1000}"}},
 					{"id":"call_3","type":"function",
-					 "function":{"name":"empty","arguments":""}}
+					 "function":{"name":"empty","arguments":""}},
+					{"id":"call_4","type":"function",
+					 "function":{"name":"cut","arguments":"{\"body\":\"Refunds are"}}
 				]}}],
 			"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}
 		}`)
 	})
-	p := newProvider(t, url, nil)
+	// An openai-compatible entry labels itself with its KEY, and a key may
+	// be any word. What the turn records is the wire format, whatever the
+	// label — a turn recorded as `anthropic` would have its blocks handed
+	// to a backend whose format they are not.
+	p := newProvider(t, url, func(c *Config) { c.Name = "anthropic" })
 	out, err := p.Complete(context.Background(), userTurn("hi"))
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
-	if len(out.ToolCalls) != 3 {
+	if out.Provider != "openai" {
+		t.Fatalf("Provider = %q, want the wire format openai whatever the entry's label", out.Provider)
+	}
+	if len(out.ToolCalls) != 4 {
 		t.Fatalf("ToolCalls = %+v", out.ToolCalls)
 	}
 	if out.ToolCalls[0].Arguments["path"] != "/tmp" {
@@ -1035,8 +1123,16 @@ func TestToolCallsAreTranslated(t *testing.T) {
 			t.Fatalf("call %d arguments cannot be re-serialised: %v", i, err)
 		}
 	}
-	if out.FinishReason != "tool_calls" {
-		t.Fatalf("FinishReason = %q", out.FinishReason)
+	// Arguments that are not a JSON object are REPORTED on the call, never
+	// decoded to {} and run: the tool loop answers the call with the reason.
+	// The other three parsed, the empty string as a call with no arguments.
+	for i, call := range out.ToolCalls {
+		if bad := call.ArgumentsError != ""; bad != (i == 3) {
+			t.Errorf("call %d (%s): ArgumentsError = %q", i, call.Name, call.ArgumentsError)
+		}
+	}
+	if out.StopReason != llm.StopToolUse {
+		t.Fatalf("StopReason = %q, want tool_use", out.StopReason)
 	}
 	// The per-model token breakdown is built from completions, so every
 	// answer has to name the model that produced it.
@@ -1115,7 +1211,9 @@ func TestNoChoicesIsAServerFailureNotAnEmptyAnswer(t *testing.T) {
 	}
 }
 
-func TestAMissingFinishReasonGetsADefault(t *testing.T) {
+// A MISSING FINISH REASON IS READ FROM THE RESPONSE: a compatible host that
+// omits it has not said the answer was cut short.
+func TestAMissingFinishReasonIsReadFromTheResponse(t *testing.T) {
 	t.Parallel()
 	_, url := serve(t, func(w http.ResponseWriter, _ int) {
 		writeJSON(w, 200, `{"id":"c","object":"chat.completion","created":1,"model":"gpt-test",
@@ -1127,8 +1225,79 @@ func TestAMissingFinishReasonGetsADefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
-	if out.FinishReason != "stop" {
-		t.Fatalf("FinishReason = %q, want the default", out.FinishReason)
+	if out.StopReason != llm.StopEnd {
+		t.Fatalf("StopReason = %q, want end", out.StopReason)
+	}
+}
+
+// EVERY FINISH REASON IS MAPPED onto the one vocabulary the tool loop decides
+// on: `length` is the output cap and `content_filter` a refusal.
+func TestEveryFinishReasonIsMapped(t *testing.T) {
+	t.Parallel()
+	for raw, want := range map[string]llm.StopReason{
+		"stop":            llm.StopEnd,
+		"tool_calls":      llm.StopToolUse,
+		"function_call":   llm.StopToolUse,
+		"length":          llm.StopMaxTokens,
+		"content_filter":  llm.StopRefusal,
+		"from_the_future": llm.StopEnd,
+	} {
+		if got := stopReason(raw, false); got != want {
+			t.Errorf("stopReason(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}
+
+// A REFUSAL IS AN ERROR, NOT AN ANSWER, by either of the two ways the API
+// says it: the content filter's finish_reason, and the model's own refusal
+// message beside an ordinary stop. Neither benches the key or is rotated
+// onto the next one, and the refused completion rides the error so its cost
+// is still metered.
+func TestARefusalIsAClassifiedErrorThatBenchesNoKey(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, choice, explanation string
+	}{
+		{"content filter", `{"index":0,"finish_reason":"content_filter",
+			"message":{"role":"assistant","content":""}}`, ""},
+		{"refusal message", `{"index":0,"finish_reason":"stop",
+			"message":{"role":"assistant","content":null,"refusal":"I can't help with that."}}`,
+			"I can't help with that."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			api, url := serve(t, func(w http.ResponseWriter, _ int) {
+				writeJSON(w, 200, `{"id":"c","object":"chat.completion","created":1,
+					"model":"gpt-test","choices":[`+tc.choice+`],
+					"usage":{"prompt_tokens":30,"completion_tokens":2,"total_tokens":32}}`)
+			})
+			p := newProvider(t, url, func(c *Config) { c.APIKeys = []string{"k1", "k2"} })
+			out, err := p.Complete(context.Background(), userTurn("hi"))
+			if err == nil {
+				t.Fatalf("Complete answered %+v — a refusal must not read as an answer", out)
+			}
+			if llm.KindOf(err) != llm.KindRefusal {
+				t.Fatalf("kind = %s, want refusal", llm.KindOf(err))
+			}
+			var refusal *llm.Refusal
+			if !errors.As(err, &refusal) {
+				t.Fatalf("no *llm.Refusal under %v", err)
+			}
+			if refusal.Explanation != tc.explanation {
+				t.Errorf("explanation = %q, want %q", refusal.Explanation, tc.explanation)
+			}
+			if c := refusal.Completion; c == nil || c.InputTokens != 30 || c.StopReason != llm.StopRefusal {
+				t.Fatalf("refused completion = %+v, want its usage and stop reason", refusal.Completion)
+			}
+			if n := api.count(); n != 1 {
+				t.Fatalf("%d attempts, want 1 — a refusal is not rotated onto the next key", n)
+			}
+			for _, s := range p.Pool().Stats() {
+				if s.Cooling != 0 {
+					t.Fatalf("key %+v is cooling — a refusal benched a healthy key", s)
+				}
+			}
+		})
 	}
 }
 
@@ -1265,6 +1434,242 @@ func TestAnEndpointThatCannotStreamStillAnswers(t *testing.T) {
 	}
 	if extra := api.count() - before; extra != 1 {
 		t.Errorf("the second call cost %d requests, want 1 — the probe repeats", extra)
+	}
+}
+
+// writeChunks answers as a chat-completions stream, pausing before every chunk
+// — and, when done, before the closing [DONE] too.
+func writeChunks(w http.ResponseWriter, gap time.Duration, done bool, parts ...string) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.WriteHeader(http.StatusOK)
+	if done {
+		parts = append(parts, "")
+	}
+	for _, part := range parts {
+		time.Sleep(gap)
+		data := "[DONE]"
+		if part != "" {
+			data = `{"id":"1","object":"chat.completion.chunk","created":1,"model":"gpt-test",` +
+				`"choices":[{"index":0,"delta":{"content":` + strconv.Quote(part) + `}}]}`
+		}
+		_, _ = io.WriteString(w, "data: "+data+"\n\n")
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+	}
+}
+
+// A STREAMED CALL IS BOUNDED BY SILENCE, NOT LENGTH: a reasoning round that
+// writes for longer than the entry's timeout, never pausing for as long, runs
+// to the end. A stream that does go silent is ended at about the timeout as a
+// timeout, so lifting the total bound leaves no dead connection holding a seat.
+func TestAStreamIsBoundedBySilenceNotLength(t *testing.T) {
+	t.Parallel()
+	const timeout = 200 * time.Millisecond
+	t.Run("long but talking", func(t *testing.T) {
+		t.Parallel()
+		_, url := serve(t, func(w http.ResponseWriter, _ int) {
+			writeChunks(w, timeout/4, true, strings.Split("abcdefghijkl", "")...)
+		})
+		p := newProvider(t, url, func(c *Config) { c.Timeout = timeout })
+		start := time.Now()
+		out, err := p.Complete(t.Context(), llm.Request{
+			Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+			OnDelta:  func(llm.Delta) {},
+		})
+		if err != nil {
+			t.Fatalf("Complete after %v: %v", time.Since(start), err)
+		}
+		if elapsed := time.Since(start); elapsed < 2*timeout || out.Content != "abcdefghijkl" {
+			t.Fatalf("took %v and answered %q; want past the %v bound, whole", elapsed, out.Content, timeout)
+		}
+	})
+	t.Run("silent", func(t *testing.T) {
+		t.Parallel()
+		_, url := serve(t, func(w http.ResponseWriter, _ int) {
+			writeChunks(w, 0, false, "a")
+			time.Sleep(5 * timeout)
+		})
+		p := newProvider(t, url, func(c *Config) { c.Timeout = timeout })
+		start := time.Now()
+		_, err := p.Complete(t.Context(), llm.Request{
+			Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+			OnDelta:  func(llm.Delta) {},
+		})
+		if !errors.Is(err, httpapi.ErrStalled) || llm.KindOf(err) != llm.KindTimeout {
+			t.Fatalf("err = %v (kind %s), want a stall classified as a timeout", err, llm.KindOf(err))
+		}
+		if elapsed := time.Since(start); elapsed > 4*timeout {
+			t.Fatalf("gave up after %v, want about the %v bound", elapsed, timeout)
+		}
+	})
+}
+
+// A STREAM THAT STOPS SHORT IS NOT AN ANSWER. A gateway closing the body in an
+// orderly way after some deltas is a clean EOF to the SDK — no error — and an
+// absent finish_reason maps to an ordinary end, so the cut round used to be
+// read as the whole answer. Only the stream's own terminal evidence (a
+// finish_reason, or `[DONE]`) says the model finished; without either the call
+// fails as the server failure it is. A `[DONE]` the model WROTE inside its
+// content is not the sentinel, and a sentinel split across two writes still is.
+func TestAStreamThatEndsBeforeItsTerminalEventFails(t *testing.T) {
+	t.Parallel()
+	chunk := func(content string) string {
+		return `data: {"id":"1","object":"chat.completion.chunk","created":1,"model":"gpt-test",` +
+			`"choices":[{"index":0,"delta":{"content":` + strconv.Quote(content) + `}}]}` + "\n\n"
+	}
+	for _, tc := range []struct {
+		name   string
+		writes []string
+		ok     bool
+	}{
+		{"cut after its deltas", []string{chunk("Hel"), chunk("lo")}, false},
+		{"cut after content naming the sentinel", []string{chunk("data: [DONE]"), chunk("more")}, false},
+		{"a finish_reason and no [DONE]", []string{chunk("Hel"),
+			`data: {"id":"1","object":"chat.completion.chunk","created":1,"model":"gpt-test",` +
+				`"choices":[{"index":0,"delta":{"content":"lo"},"finish_reason":"stop"}]}` + "\n\n"}, true},
+		{"a [DONE] split across two writes", []string{chunk("Hel"), chunk("lo"), "data: [DO", "NE]\n\n"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, url := serve(t, func(w http.ResponseWriter, _ int) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.WriteHeader(http.StatusOK)
+				for _, part := range tc.writes {
+					_, _ = io.WriteString(w, part)
+					if f, ok := w.(http.Flusher); ok {
+						f.Flush()
+					}
+				}
+			})
+			p := newProvider(t, url, nil)
+			out, err := p.Complete(t.Context(), llm.Request{
+				Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+				OnDelta:  func(llm.Delta) {},
+			})
+			if tc.ok {
+				if err != nil || out == nil || out.Content != "Hello" {
+					t.Fatalf("Complete = %+v, %v; want the finished answer", out, err)
+				}
+				return
+			}
+			if out != nil {
+				t.Fatalf("a stream cut before its terminal event answered %q", out.Content)
+			}
+			if llm.KindOf(err) != llm.KindServer {
+				t.Fatalf("err = %v (kind %s), want a server failure the chain retries",
+					err, llm.KindOf(err))
+			}
+		})
+	}
+}
+
+// THE SENTINEL IS SEEN WHEREVER A READ SPLITS IT — one byte at a time is the
+// worst split there is — and only at the start of a line.
+func TestTheDoneSentinelIsSeenAcrossReads(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, body string
+		want       bool
+	}{
+		{"spaced", "data: {}\n\ndata: [DONE]\n\n", true},
+		{"unspaced", "data: {}\n\ndata:[DONE]\n\n", true},
+		{"first line", "data: [DONE]\n\n", true},
+		{"inside content", `data: {"content":"data: [DONE]"}` + "\n\n", false},
+		{"absent", "data: {}\n\n", false},
+	} {
+		var watch doneWatch
+		body := &doneBody{ReadCloser: io.NopCloser(iotest.OneByteReader(strings.NewReader(tc.body))),
+			watch: &watch, tail: []byte("\n")}
+		if _, err := io.ReadAll(body); err != nil {
+			t.Fatalf("%s: ReadAll: %v", tc.name, err)
+		}
+		if got := watch.seen.Load(); got != tc.want {
+			t.Errorf("%s: seen = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// AN ERROR INSIDE A STREAM IS THE SERVER'S. The response opened with 200, so
+// the SDK raises the `{"error":…}` chunk with no status at all; read as a
+// transport failure it was fatal, and a server_error half-way through a round
+// stopped the fallback chain. A host that names an HTTP-shaped code (vLLM)
+// is classified by it, because that is the endpoint's own answer; OpenAI's
+// string code is not a status. Whatever streamed before is not an answer.
+func TestAnErrorInsideAStreamIsClassified(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		event string
+		want  llm.ErrorKind
+	}{
+		{"openai server_error", `{"error":{"message":"x","type":"server_error","code":null}}`, llm.KindServer},
+		{"a string code", `{"error":{"message":"x","type":"server_error","code":"overloaded"}}`, llm.KindServer},
+		{"a host's 503", `{"error":{"message":"x","type":"ServiceUnavailableError","code":503}}`, llm.KindServer},
+		{"a host's 400", `{"error":{"message":"x","type":"BadRequestError","code":400}}`, llm.KindFatal},
+		{"a host's 429", `{"error":{"message":"x","type":"RateLimitError","code":429}}`, llm.KindRateLimit},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, url := serve(t, func(w http.ResponseWriter, _ int) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(w, `data: {"id":"1","object":"chat.completion.chunk","created":1,`+
+					`"model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant","content":"half"}}]}`+"\n\n")
+				_, _ = io.WriteString(w, "data: "+tc.event+"\n\n")
+			})
+			p := newProvider(t, url, nil)
+			out, err := p.Complete(t.Context(), llm.Request{
+				Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+				OnDelta:  func(llm.Delta) {},
+			})
+			if out != nil {
+				t.Fatalf("a stream that failed mid-body answered %q", out.Content)
+			}
+			var classified *llm.Error
+			if !errors.As(err, &classified) || classified.Kind != tc.want {
+				t.Fatalf("err = %v, want a %s failure", err, tc.want)
+			}
+			if classified.Provider != "openai" || classified.Model != "gpt-test" {
+				t.Fatalf("error names %s/%s", classified.Provider, classified.Model)
+			}
+		})
+	}
+}
+
+// AN ERROR INSIDE A STREAM SAYS WHAT THE ENDPOINT SAID, REDACTED, AND NOTHING
+// THE SDK DOES. The SDK's StreamError pastes the chunk raw — an endpoint that
+// rejects a key can echo it — so the classified error carries a line of its
+// own and the chunk's words as Detail, redacted, as an API error does.
+//
+// Mutation: put the SDK's error on the classified error unwrapped, and the
+// key is in its text.
+func TestAnErrorInsideAStreamShowsNoneOfTheSDKsText(t *testing.T) {
+	t.Parallel()
+	key := "sk-proj-" + strings.Repeat("Kv4", 16)
+	_, url := serve(t, func(w http.ResponseWriter, _ int) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, `data: {"error":{"message":"Incorrect API key provided: `+key+
+			`","type":"server_error","code":null}}`+"\n\n")
+	})
+	p := newProvider(t, url, nil)
+	_, err := p.Complete(t.Context(), llm.Request{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+		OnDelta:  func(llm.Delta) {},
+	})
+	var classified *llm.Error
+	if !errors.As(err, &classified) {
+		t.Fatalf("err = %v, want a classified failure", err)
+	}
+	if text := err.Error(); strings.Contains(text, key) || strings.Contains(text, "while streaming") {
+		t.Errorf("the SDK's text reached the classified error: %s", text)
+	}
+	if !strings.Contains(classified.Detail, "Incorrect API key provided") ||
+		!strings.Contains(classified.Detail, "(type server_error)") {
+		t.Errorf("Detail = %q, want the endpoint's own words and type", classified.Detail)
+	}
+	var streamErr *ssestream.StreamError
+	if !errors.As(err, &streamErr) {
+		t.Error("errors.As no longer reaches the SDK's error behind the classified one")
 	}
 }
 

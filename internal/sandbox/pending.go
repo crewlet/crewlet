@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/workkey"
 )
 
 // The durable state of a detached coding job.
@@ -62,7 +61,28 @@ const (
 	// one would stop every other thing that seat does.
 	StatusAwaiting = "awaiting_clarification"
 
+	// StatusAnswered — a person's reply to the question is RECORDED on the
+	// row and the resume it drives is owed. Nobody is being waited on any
+	// more, so it is not [Awaiting]; nothing is running yet, so it does not
+	// hold the seat either — what keeps the seat's later mail behind the
+	// resume is an inbox hold the coordinator takes for as long as the
+	// answer is owed (see [Coordinator.TryResumeFromAnswer]).
+	//
+	// ITS OWN STATUS rather than a field on an awaiting row, because the
+	// fact it records — this question has its answer — is what every reader
+	// that matches, reaps or lists questions has to see: the answer match
+	// lists [Awaiting] rows only, so it can never take a later reply as the
+	// answer to a question that already has one, without each reader having
+	// to remember a field beside the status.
+	StatusAnswered = "answered"
+
 	// StatusResumed — the tail has been claimed. THE AT-MOST-ONCE GATE.
+	//
+	// A claim is not a resume: the row reads resumed from the claim to its
+	// settle, and a turn may or may not have run in between. For a claimed
+	// ANSWER the row says which ([RecordedAnswer.TakenAt]), because that is
+	// what decides whether the reply is still owed to the seat when the
+	// claim dies with its process.
 	StatusResumed = "resumed"
 
 	// StatusReseed — a paused box was reaped past its pause TTL. The run is
@@ -79,7 +99,12 @@ const (
 // LAUNCHING IS DELIBERATELY ABSENT. A claim is the promise that a resume can
 // follow it, and a launching row has no conversation to resume — claiming one
 // is exactly the mistake [StatusLaunching] exists to make impossible.
-var Claimable = []string{StatusRunning, StatusAwaiting, StatusReseed}
+//
+// ANSWERED IS HERE because recording an answer is not resuming with it: the
+// resume claims the row out of [StatusAnswered], and a resume that fails hands
+// the claim back there, for the coordinator's own retry rather than for a
+// redelivery of the person's message.
+var Claimable = []string{StatusRunning, StatusAwaiting, StatusReseed, StatusAnswered}
 
 // Tail is what a claim expects to find on a run: the job the signal is about,
 // and the statuses that signal may take the tail out of.
@@ -112,9 +137,12 @@ func CompletionTail(launch string) Tail {
 	return Tail{Launch: launch, From: []string{StatusRunning}}
 }
 
-// AnswerTail is what an answer claims: the job that asked, while it waits.
-func AnswerTail(launch string) Tail {
-	return Tail{Launch: launch, From: Awaiting}
+// RecordedAnswerTail is what the resume of a RECORDED answer claims: the job
+// that asked, once its reply is on the row. See [StatusAnswered]. It is the one
+// tail an answer claims, on either route: a chat reply and an answer by turn are
+// both recorded on the run before anything is done with them.
+func RecordedAnswerTail(launch string) Tail {
+	return Tail{Launch: launch, From: []string{StatusAnswered}}
 }
 
 // Release is how a claimed tail is handed back for its signal's retry: the
@@ -172,6 +200,188 @@ type Release struct {
 	Fence Fence
 }
 
+// License is what an ending may be DECIDED under ([PendingStore.DecideEnding]):
+// the lease, the statuses and the job it was decided on.
+//
+// A LICENSE, NOT A FILTER. It is what this ending is entitled to end, and a run
+// that has moved off it — to a newer lease, another status, another job — is
+// somebody else's to end. An ending decided on a row its caller has READ takes
+// the widest statuses and jobs there are, because the caller has seen the run
+// is over ([Coordinator.finish]); the narrow one belongs to the ending whose
+// decision is made without having read the row — a claim's own
+// ([Coordinator.endClaim]). Every one of them keeps its fence, which the store
+// checks against the row as it stands — and since the box is reclaimed only
+// after the decision ([Decision.Reclaim]), that check guards the kill as well
+// as the delete.
+type License struct {
+	// Fence is the lease the ending is made under; a newer one owns the
+	// run.
+	Fence Fence
+
+	// WhileIn is the statuses the run may be ended from. [Active] — every
+	// status a record can hold — is the widest. An empty set licenses
+	// nothing and deletes nothing, which is the safe way round for a zero
+	// value.
+	WhileIn []string
+
+	// Launch is the job the ending was decided on, and the run is ended
+	// only while it still holds that job — or whatever job it holds, for
+	// [EveryLaunch]. A claim's own ending names its job, because a status
+	// alone does not tell the claim apart from the next one: the resumed
+	// turn can relaunch on the row, and that job's own completion claims
+	// it in the same status. The zero value names no job — every launch
+	// mints one — so it ends nothing rather than a run the caller did not
+	// mean.
+	Launch string
+
+	// Unused says the run's recorded answer went unused even where a turn
+	// took it: the claim's own ending, after its turn gave the claim back as
+	// a retry — which says nothing it did reached anybody — and the release
+	// could not land. Recorded on the ending ([RecordedEnding.Unused]): the
+	// run is then not deleted while it holds a recorded answer at all
+	// ([ErrAnswerOwed]), and every other ending deletes one a turn took with
+	// the run, because it has been used.
+	Unused bool
+}
+
+// EveryLaunch licenses an ending whatever job its run holds — see
+// [License.Launch]. Never a launch id: the store mints those as UUIDs.
+const EveryLaunch = "*"
+
+// LetGo is how a decided ending lets go of the recorded answer its run still
+// holds ([PendingStore.OweHandBack]): which ending, which answer, and the copies
+// it owes the seat for it.
+//
+// NO LEASE AND NO STATUSES, which the let-go used to carry so that it did not do
+// what the delete after it would refuse. It is a step of an ending that is
+// already DECIDED ([PendingRun.Ending]): the license was the decision's, and
+// the row takes no other write from then on, so nothing can have moved it off
+// that license since.
+type LetGo struct {
+	// Ending is the [RecordedEnding.ID] the let-go is a step of.
+	Ending string
+
+	// Answer is the deliveries the answer was made of
+	// ([RecordedAnswer.EventIDs]); the run must hold exactly that answer.
+	Answer []string
+
+	// HandBack is the copies the seat is owed for them ([handBackOf]).
+	HandBack []HandedBack
+}
+
+// Decision is an ending, as [PendingStore.DecideEnding] records it: the license
+// it is decided under, what it announces, and whether the box is reclaimed by
+// whichever attempt finishes it.
+type Decision struct {
+	License License
+
+	// Reason and Detail are what the ending announces
+	// ([types.SandboxRunFailed]); an empty Reason announces nothing.
+	Reason, Detail string
+
+	// Reclaim is whether the box the row names is reclaimed by the attempt
+	// that finishes the ending, before the row is deleted: every ending that
+	// has not reclaimed a box of its own, because a box killed before the
+	// decision is killed on the caller's snapshot, which a newer lease may
+	// have overtaken ([Coordinator.finish]).
+	Reclaim bool
+}
+
+// RecordedEnding is an ending DECIDED on a run and not yet finished: what it
+// announces and under which identity, what it hands back, and what it reclaims.
+//
+// THE DECISION IS THE COMMITMENT, and it is recorded because an ending is
+// several effects in several systems — a reply handed back to an inbox, a box
+// reclaimed, an announcement published, a record deleted — and a process can
+// stop between any two. Decided only in the moment of the delete, as an ending
+// was, its announcement could be made only after it, and a node that stopped
+// between the two — or a delete that landed and reported a failure — left a
+// run lost with no account of it; a seat's next holder, finding the row the
+// delete had not taken, announced a reason of its own. Recorded first, every
+// step after it is the SAME ending's, finished by whoever reads the row next —
+// this node's retry, or the seat's next holder — and the announcement goes out
+// BEFORE the delete under the identity recorded here ([RecordedEnding.ID],
+// [RecordedEnding.At]), so a repeat after a crash is the same event to every
+// store that keeps it ((event_time, event_id) is the event store's key, and the
+// fleet's reads merge on it), never a second one.
+//
+// AND IT FREEZES THE RUN: from the decision on, the store refuses every write
+// but the ending's own steps ([ErrRunEnding]) — no claim, no take of the
+// answer, no release, no relaunch, no record of a new answer. That is what
+// makes publishing the announcement before the delete safe: nothing can move
+// the run off the ending once it is announced, so a run is never announced as
+// lost and then resumed.
+type RecordedEnding struct {
+	// ID names the ending, and with the run's turn it derives the id its
+	// announcement is published under ([endingEventID]).
+	ID string `json:"id"`
+
+	// At is when the ending was decided, on the store's clock, and the
+	// instant its announcement carries.
+	At time.Time `json:"at"`
+
+	// Reason and Detail are what it announces; an empty Reason announces
+	// nothing (an ordinary ending, whose turn came back).
+	Reason string `json:"reason,omitempty"`
+	Detail string `json:"detail,omitempty"`
+
+	// Returned is whether the ending hands a person's answer back to the
+	// seat — one the run held no turn took (or that went [Unused]), or copies
+	// it already owed — decided with the ending, so the announcement says so
+	// whichever attempt makes it.
+	Returned bool `json:"returned,omitempty"`
+
+	// Unused is the license's ([License.Unused]): the recorded answer goes
+	// back to the seat even though a turn took it.
+	Unused bool `json:"unused,omitempty"`
+
+	// Reclaim is the decision's ([Decision.Reclaim]).
+	Reclaim bool `json:"reclaim,omitempty"`
+}
+
+// answerOwed reports whether a run whose ending is decided still holds a
+// person's answer that has to go back to the seat before its record is deleted:
+// one no turn took, or one the ending says went unused.
+func (r PendingRun) answerOwed() bool {
+	if r.Answer == nil {
+		return false
+	}
+	return !r.Answer.Taken() || (r.Ending != nil && r.Ending.Unused)
+}
+
+// Revival is how a claim of a recorded answer that no resume holds is given
+// back to the run it answers ([PendingStore.ReviveAnswer]): which job, which
+// answer, the lease the reviving node holds the seat under, and whether the
+// claim was LOST.
+type Revival struct {
+	// Launch is the job the claim took, matched exactly.
+	Launch string
+
+	// Answer is the deliveries the answer was made of
+	// ([RecordedAnswer.EventIDs]); the run must hold exactly that answer.
+	Answer []string
+
+	// Fence is the reviving node's lease, stamped on the row by the revival.
+	Fence Fence
+
+	// Lost says the claim DIED: its node stopped, or the seat moved, between
+	// the claim and the turn that would have taken the answer, and the seat's
+	// next holder revives it ([Coordinator.reapTail]). The revival COUNTS a
+	// lost claim on the answer ([RecordedAnswer.LostClaims],
+	// [RecordedAnswer.FirstLostAt]), which is what bounds a resume that takes
+	// its node down.
+	//
+	// FALSE IS A CLAIM NOBODY LOST: one a node made itself, whose write
+	// reported a failure and landed, given back by the series that made it
+	// under the lease it was taken under ([Coordinator.suspectClaim]). No node
+	// stopped, so nothing is counted — counted, a coordination store that
+	// answered a few of a healthy node's claims with errors ended the run as
+	// an abandoned tail, announced as a node that stopped. That series is
+	// bounded by its own attempts ([MaxAnswerAttempts], [answerWindow]),
+	// which end in a decline rather than an ending.
+	Lost bool
+}
+
 // Holding are the statuses in which a run holds its seat, so the seat takes no
 // new turn while it is in one.
 //
@@ -202,8 +412,13 @@ var Awaiting = []string{StatusAwaiting, StatusReseed}
 // LAUNCHING is here for the same reason and only that reason — it is never
 // polled, but a node that died mid-launch left a box behind, and a row nobody
 // lists is a box nobody reclaims.
+//
+// ANSWERED is here because the resume it owes has to be found again by
+// whichever node holds the seat next: an answer recorded on a node that then
+// stopped is re-driven by the successor's recovery pass, not by the person
+// sending it a second time.
 var Active = []string{
-	StatusLaunching, StatusRunning, StatusAwaiting, StatusReseed, StatusResumed,
+	StatusLaunching, StatusRunning, StatusAwaiting, StatusReseed, StatusAnswered, StatusResumed,
 }
 
 // BridgeCall is one tool call a bridged run made.
@@ -240,74 +455,6 @@ type BridgeAppend struct {
 	Spent EngineSpend
 }
 
-// UnitOfWork is the identity this run's once-per-unit-of-work writes collapse
-// on, or "" when the run has none.
-//
-// NOT the raw field, because nothing rewrites a parked row: a run suspended by
-// a build from before ADR-0017 carries no work key at all, and its TurnID IS
-// one. A resume days later reads that row and has no trigger left to
-// re-derive from, so without this its conversation entry and its tracker
-// writes would dedupe against an empty key.
-//
-// ON SHAPE rather than on absence, for the reason [workkey.IsDerived] gives:
-// a post-split run with no ledgerable trigger is also missing the field, and
-// answering it with a run id would arm a dedupe guard with a value that means
-// nothing.
-func (r PendingRun) UnitOfWork() string {
-	if r.WorkKey != "" {
-		return r.WorkKey
-	}
-	if workkey.IsDerived(r.TurnID) {
-		return r.TurnID
-	}
-	return ""
-}
-
-// WorkBegan is the instant every operation id this run derives from its unit
-// of work ([PendingRun.UnitOfWork]) carries, or the zero instant when the run
-// has no unit of work.
-//
-// THE ROW'S OWN work_since WHERE IT HAS ONE, which is the instant the first
-// half of the turn derived its ids with, so the resumed half derives the same.
-//
-// THE START, NOT NECESSARILY WHERE THE RESUMED HALF MINTS: a resume so long
-// after this instant that the operation ledger may have swept it mints its
-// writes at the instant the engine rebases it onto instead, because every
-// operation minted here would then be one no node can vouch for. That rule is
-// the engine's, judged at every attempt against the attempt's own clock and
-// recorded in the fleet's coordination store rather than on this row — it is
-// a rule about the ledger and about the unit of work, which outlives any one
-// run's row; this is the instant it starts from.
-//
-// A FIXED INSTANT OFF THE ROW WHERE IT HAS NOT. Nothing rewrites a parked row,
-// so a run parked by a build from before that field carries a unit of work and
-// no instant, and the zero instant reads as older than every loss the
-// operation ledger has recorded: on any node whose ledger had swept once, every
-// write the resumed turn made answered `unknown`, and the run's whole second
-// half was lost. Such a row answers its own CreatedAt — when the launch wrote
-// it — which is safe on every count the instant has to meet:
-//
-//   - it is FIXED, so every resume of the row derives the same ids, and a
-//     resume that is itself retried is idempotent against the first;
-//   - it cannot collide with the first half, whose ids the older build derived
-//     another way, so a write repeated across the upgrade is a second write
-//     rather than a lost one — the same cost as a crash re-run with no ledger;
-//   - it is no LATER than any write made under it, since every such write is
-//     the resume's, after the launch — which is all the ledger's vouching needs
-//     of an operation's instant (see statelog's Publisher.vouches).
-//
-// Zero where the row has no unit of work either, which is the documented
-// "nothing to collapse" case: those ids are fresh anyway.
-func (r PendingRun) WorkBegan() time.Time {
-	switch {
-	case !r.WorkSince.IsZero():
-		return r.WorkSince.UTC()
-	case r.UnitOfWork() == "":
-		return time.Time{}
-	}
-	return r.CreatedAt.UTC()
-}
-
 // MaxBridgeCalls bounds the durable log of a bridged run.
 //
 // The row is ONE VALUE in the coordination store, read and written whole on
@@ -336,9 +483,9 @@ type PendingRun struct {
 	// WorkKey is the unit of work that run was dispatched for. It rides
 	// the row so a resumed turn keeps the identity its writes have to be
 	// idempotent against — the resume re-enters the loop mid-round, with
-	// no trigger left to re-derive it from. Empty on a row written before
-	// this field existed, and on a turn with no ledgerable trigger, which
-	// is the documented "nothing to collapse" case.
+	// no trigger left to re-derive it from. Empty on a turn with no
+	// ledgerable trigger, which is the documented "nothing to collapse"
+	// case.
 	WorkKey string `json:"work_key,omitempty"`
 
 	// WorkSince is when that unit of work began, and it rides the row for
@@ -346,9 +493,21 @@ type PendingRun struct {
 	// key carries this instant as its mint time, so a resumed turn that
 	// could not reproduce it would derive DIFFERENT ids for the same
 	// writes, and the state log reads it to refuse deciding again an
-	// operation minted before its node adopted a donated snapshot.
-	// Zero on a row written before this field existed — read it through
-	// [PendingRun.WorkBegan], never raw.
+	// operation minted before its node's operation ledger may have lost
+	// rows to the ledger's sweep.
+	//
+	// THE START, NOT NECESSARILY WHERE THE RESUMED HALF MINTS: a resume so
+	// long after this instant that the operation ledger may have swept it
+	// mints its writes at the instant the engine rebases it onto instead,
+	// because every operation minted here would then be one no node can
+	// vouch for. That rule is the engine's, judged at every attempt against
+	// the attempt's own clock and recorded in the fleet's coordination
+	// store rather than on this row — it is a rule about the ledger and
+	// about the unit of work, which outlives any one run's row.
+	//
+	// Zero where there is no work key, or where the trigger carried no
+	// timestamp; a zero start is rebased by the engine like any start past
+	// the horizon, identically in both halves of the turn.
 	WorkSince time.Time `json:"work_since,omitzero"`
 
 	AgentHandle string `json:"agent_handle"`
@@ -366,8 +525,8 @@ type PendingRun struct {
 	// configuration may have been applied again in between. Reconnecting to
 	// a remote box through the local backend does not error usefully — it
 	// reports a box that has vanished, and a run that is still going is
-	// abandoned as gone. A row written before this field existed decodes
-	// empty, which the manager reads as the provider default.
+	// abandoned as gone. Always resolved at launch ([Manager.BuildSpec]
+	// fills the default).
 	Placement string `json:"placement,omitempty"`
 	CommandID string `json:"command_id"`
 	Status    string `json:"status"`
@@ -382,15 +541,14 @@ type PendingRun struct {
 	// See [Tail].
 	//
 	// Minted by the store and never by the caller, for the reason the
-	// status is: a caller that could choose it could reuse one. Empty on a
-	// row a build that predates it wrote, and a completion from such a
-	// build carries none, so the two still match each other and nothing
-	// else.
+	// status is: a caller that could choose it could reuse one. Never
+	// empty on a row: the store mints it in the write that creates the row
+	// and again in every relaunch.
 	LaunchID string `json:"launch_id,omitempty"`
 
 	// Launch is what the run's own phase record needs about the job named
-	// by LaunchID — see [LaunchRecord]. Read only through
-	// [PendingRun.LaunchFacts], which refuses a record kept for another job.
+	// by LaunchID — see [LaunchRecord]. Written with LaunchID, whole, on
+	// every launch.
 	Launch LaunchRecord `json:"launch_record,omitzero"`
 
 	// Owner is the process INCARNATION that owns this run's seat, and
@@ -414,8 +572,9 @@ type PendingRun struct {
 	//
 	// It has to be persisted rather than re-derived: the resumed turn does
 	// not see the trigger, so without this a turn somebody was waiting on
-	// would come back from its coding run free to end in silence. An empty
-	// value decodes as "nobody is waiting", which is the safe half — see
+	// would come back from its coding run free to end in silence. Every
+	// launch writes a kind — `none` when nobody is waiting — so a resume
+	// refuses a row that names none rather than guessing; see
 	// [turn.Reply].
 	Reply string `json:"reply,omitempty"`
 
@@ -437,22 +596,9 @@ type PendingRun struct {
 	// this is the only field that says which thread each was asked in. See
 	// [ConversationRef.Best].
 	//
-	// It is also written for two PEER reasons of its own. It is the only
-	// conversation value a row from before the split carries, so it is what
-	// such a row degrades to matching on; and a node still running that
-	// build matches every row — including the ones written here — on it by
-	// equality, so dropping it would strand a run whose answer lands on the
-	// other half of a mixed fleet.
-	//
-	// THE GO NAME MOVED WITH THE CONCEPT; THE WIRE STRING DID NOT. This
-	// field was ConversationKey and its column is still "conversation_key",
-	// because the value is what two builds exchange through one
-	// coordination record while the name is only what this build calls it:
-	// a peer that predates the split writes and matches on that column, and
-	// a parked row outlives any upgrade window by design, since it is
-	// waiting for a person. Same trade [notify.PartitionField] makes for
-	// the event payload's copy of it.
-	PartitionKey string `json:"conversation_key"`
+	// Empty on a run launched by a wake that named no conversation (a
+	// schedule tick, an A2A ask).
+	PartitionKey string `json:"partition_key,omitempty"`
 
 	// ConversationKey is the durable conversation this run belongs
 	// to: what the resumed turn's ledger entry is filed under, and — since
@@ -468,19 +614,11 @@ type PendingRun struct {
 	// ledger row the next turn never looked up, and matching on it lost
 	// the answer outright.
 	//
-	// ITS COLUMN IS conversation_identity, which is the name the split gave
-	// it on the wire and the one a peer already writes; only the Go name
-	// moved, onto the concept it holds and away from the partition beside
-	// it. See [PartitionKey], which made the same trade in the other
-	// direction.
-	//
-	// ADDITIVE on this row, which is what a coordination-KV record needs:
-	// nothing rewrites a parked run, so a run launched by an older build
-	// decodes with this empty and BOTH readers fall back to the field that
-	// is there — [PendingRun.Conversation] for the report-back and
-	// [ConversationRef.Answers] for the match. Omitted when empty for the
-	// same reason.
-	ConversationKey string `json:"conversation_identity,omitempty"`
+	// Spelled `conversation_key` on the row as it is on every event that
+	// carries the identity — the two sandbox events, both turn completions
+	// and the phase record — and empty on a run launched by a wake that
+	// named no conversation.
+	ConversationKey string `json:"conversation_key,omitempty"`
 
 	// Branch is the pushed WIP branch: the durable half of the work, and
 	// what a re-seeded run starts from when its snapshot is gone.
@@ -502,12 +640,89 @@ type PendingRun struct {
 	// item includes the job's tokens exactly as a completion's resume does
 	// (ADR-0022). Without these the answer's resume charged the task for
 	// the collection and never for the coding run that asked.
-	//
-	// ADDITIVE, for the reason every field here is: a row parked by a
-	// build without them decodes to zero, and its resume charges what that
-	// build would have — nothing for the job.
 	ParkedInputTokens  int `json:"parked_input_tokens,omitempty"`
 	ParkedOutputTokens int `json:"parked_output_tokens,omitempty"`
+
+	// AskedAt is the instant the question was put — taken before it was
+	// announced, so it precedes the moment anybody could have read it.
+	//
+	// THE ANCHOR EVERY ANSWER IS MEASURED AGAINST. A reply qualifies only if
+	// it was posted at or after this instant ([Reply.Posted]): a message
+	// written before the question existed cannot be its answer, however it
+	// is threaded. Without it the match was purely positional — "the next
+	// inbound on the conversation" — so a reply that answered an EARLIER
+	// question, held back by a failed resume and redelivered behind the
+	// conversation's newer mail, was spliced into the run as the answer to
+	// whatever it asked next, and a message sent while the job was still
+	// running was taken as the answer the moment it parked.
+	//
+	// REQUIRED on every park ([PendingStore.MarkAwaiting]): a question with
+	// no anchor is one no reply could be shown to answer.
+	AskedAt time.Time `json:"asked_at,omitzero"`
+
+	// Answer is the reply recorded as this question's answer, set exactly
+	// while the run is [StatusAnswered] and while that answer's resume is
+	// claimed — until a turn takes it, or the run's ending lets it go back
+	// to the seat ([PendingStore.OweHandBack]). A row holding one no turn
+	// took is never deleted ([ErrAnswerOwed]). See [RecordedAnswer].
+	Answer *RecordedAnswer `json:"answer,omitempty"`
+
+	// DeclinedAnswers are the deliveries this question was recorded with
+	// and then let go of — every attempt to resume with them failed, so they
+	// went on to the seat's ordinary route instead (see
+	// [Coordinator.declineAnswer]) — by event id, and the ids of the copies
+	// handed back. Neither is ever recorded as this question's answer
+	// again, which is what stops a copy circling the run it already failed
+	// to reach. Bounded by [maxDeclinedAnswers]; cleared with the question.
+	DeclinedAnswers []string `json:"declined_answers,omitempty"`
+
+	// HandBack is what an answer let go of still owes the seat's inbox: the
+	// copies of its deliveries, under the ids they are published with,
+	// written IN THE SAME WRITE that lets the answer go
+	// ([PendingStore.DeclineAnswer], or [PendingStore.OweHandBack] for a
+	// run that ends before any turn took the answer) and removed once they
+	// are published ([PendingStore.ClearHandBack]).
+	//
+	// AN OUTBOX ON THE ROW, because the decline is two effects in two
+	// systems — a compare-and-set here and a publish to the broker — and
+	// neither order of the two survives a crash between them on its own.
+	// Published first, a crash before the write left the answer recorded
+	// AND its copy on the inbox, so the reply was delivered twice: once as
+	// the answer a later resume used, once as an ordinary message. Written
+	// first with nothing beside it, a crash before the publish would lose the
+	// reply outright. Written first WITH the copies, the write is the
+	// decision and the copies are its durable consequence: whichever node
+	// reads the row next publishes them, under ids derived from the
+	// originals, so a publish repeated after a crash is the same message
+	// twice — collapsed by the inbox's same-id dedupe and the completion
+	// ledger — and never a second one.
+	//
+	// It is the row's and survives everything the row does — a new question,
+	// a relaunch, a recorded answer — because what it owes is owed to the
+	// seat rather than to any question. A run that ENDS publishes what it
+	// still carries BEFORE its record is deleted, and the delete refuses
+	// while anything is owed ([PendingStore.Finish], [Coordinator.endRecord]):
+	// published after, a crash between the delete and the publish lost the
+	// copies with the only record of them.
+	//
+	// BOUNDED BY ONE DECLINE. A write that adds copies lands only on a row
+	// that owes none ([ErrHandBackOwed]), so the row never carries more than
+	// one let-go answer's deliveries — at most one inbox batch
+	// ([queue.DefaultBatchOptions], 20 events by default) — which is the size
+	// of the [PendingRun.Answer] the copies were made from. Unbounded, a
+	// broker that kept refusing the publishes while answers kept being
+	// recorded and let go grew the row by one batch each time. Past the
+	// bound nothing is lost: the refused decline leaves the answer recorded
+	// and owed, the seat's inbox stays held behind it, and the retry
+	// publishes the copies already owed before it decides again
+	// ([Coordinator.retryOwed]).
+	HandBack []HandedBack `json:"hand_back,omitempty"`
+
+	// Ending is the run's ending once one is DECIDED, nil while the run is
+	// live. From the decision on, the row takes no write but the ending's
+	// own steps, and whoever reads it next finishes that ending on the terms
+	// recorded here — see [RecordedEnding].
+	Ending *RecordedEnding `json:"ending,omitempty"`
 
 	// WorkItem is the one work item the launching turn was charged to, nil
 	// when it was on nothing.
@@ -533,12 +748,10 @@ type PendingRun struct {
 	// read because the label is about the moment it was asked: who the
 	// requester's manager WAS then is who was asked.
 	//
-	// DECLARED WITH THE ITEM AND WITH [PendingRun.Extra], in one change,
-	// because all three answer the same hazard: a key an older build does
-	// not know is a key its compare-and-swap drops. Empty on a row parked by
-	// a build that did not resolve them, which every reader takes as "the
-	// audience string is all there is". Cleared with the question when a
-	// new job opens on the row ([PendingStore.BeginLaunch]).
+	// Empty until the run parks on a question, and cleared with the
+	// question when a new job opens on the row ([PendingStore.BeginLaunch]).
+	// A key a NEWER build adds beside these survives this build's
+	// compare-and-swap through [PendingRun.Extra].
 	AudienceHandles  []string `json:"audience_handles,omitempty"`
 	AudienceFallback bool     `json:"audience_fallback,omitempty"`
 
@@ -550,9 +763,8 @@ type PendingRun struct {
 	// ON THE ROW because the park that resolves the audience is not the
 	// frame that saw the trigger: it runs when the job finishes, possibly
 	// days later and on another node, with nothing of the dispatch left.
-	// ADDITIVE, and carried through an older build's write by
-	// [PendingRun.Extra]; a row without it resolves "requester" to the
-	// fallback, which is what a run whose requester nobody recorded is.
+	// A row without it resolves "requester" to the fallback, which is what
+	// a run whose requester nobody recorded is.
 	Requester string `json:"requester,omitempty"`
 
 	// TraceID and SpanID are the trace the run started under, so the
@@ -573,10 +785,18 @@ type PendingRun struct {
 	// the state that says so: the launch starts the job, and the turn
 	// writes this when its frame unwinds. Nothing polls or claims a run in
 	// that window, so a claimed run always has one — and a claimed run
-	// WITHOUT one can now only mean the row was written by a build that
-	// predates the launching state, which the coordinator fails rather
-	// than resuming into nothing.
-	ExecuteState map[string]any `json:"execute_state"`
+	// WITHOUT one is a row the launch path did not write, which the
+	// coordinator fails rather than resuming into nothing.
+	//
+	// RAW BYTES, because this package carries the conversation and never
+	// reads it. Held as a decoded map it was decoded twice on every
+	// suspension — once for the row and once more off the coordination
+	// record — and each decode read every number as a float64, so an id
+	// longer than 2^53 a model had passed as a tool argument came back from
+	// the row as a different id. Bytes are carried, not decoded, and a JSON
+	// null (what a launching run writes) is read back as none at all — see
+	// decodeRun.
+	ExecuteState json.RawMessage `json:"execute_state"`
 
 	// BridgeCalls is what a run made through the MCP bridge, in order.
 	//
@@ -633,10 +853,7 @@ type PendingRun struct {
 	// seat's share alone rather than counting the company twice; a resume
 	// that succeeds leaves only the seat short, by this run.
 	//
-	// Written and cleared exactly as Charged is. An OLDER build reading a
-	// row that carries it ignores the field and charges both counters
-	// again on such a retry: the company is then counted twice for this
-	// one run, which trips its cap early rather than late.
+	// Written and cleared exactly as Charged is.
 	CompanyCharged bool `json:"company_charged,omitempty"`
 
 	PauseTTLSeconds float64 `json:"pause_ttl_seconds"`
@@ -724,6 +941,10 @@ func (r PendingRun) HasBox() bool { return r.SandboxID != "" }
 // wrong in: the box is held a moment longer rather than reclaimed out from
 // under a person who is still typing.
 //
+// AN ANSWERED RUN TAKES THE SAME FALLBACK, for the same reason: its box is
+// still the park's, held while the recorded answer waits on its resume, and
+// its last write is the record of that answer — later still than the park.
+//
 // A RUN THE ENGINE IS DRIVING TAKES NO FALLBACK. Every other pause in the
 // lifecycle lasts one dispatch and is settled by the tail that made it, so
 // there the stamp is the whole answer and its absence means the box is live —
@@ -736,7 +957,7 @@ func (r PendingRun) HeldSince() (time.Time, bool) {
 	if r.Paused() {
 		return r.PausedAt, true
 	}
-	if !slices.Contains(Awaiting, r.Status) || r.UpdatedAt.IsZero() {
+	if (!slices.Contains(Awaiting, r.Status) && r.Status != StatusAnswered) || r.UpdatedAt.IsZero() {
 		return time.Time{}, false
 	}
 	return r.UpdatedAt, true
@@ -767,17 +988,29 @@ type PendingStore interface {
 	// could not tell it from a finished turn, and it tore down the box the
 	// new job was running in.
 	//
-	// ANSWERS THE RECORD OF THE JOB IT OPENED — its name, minted here, and
-	// the instant it began — because the store is the one party that knows
+	// THE ROW IS OWNED BY THE LEASE THAT LAUNCHED IT: a fenced launch stamps
+	// its fence as the row's [PendingRun.Owner] and [PendingRun.OwnerEpoch],
+	// and every later write the launching node makes carries that fence back
+	// off the row. Unstamped, a row stayed at the zero epoch until a seat's
+	// next holder recovered it, and the zero fence constrains nothing — so a
+	// node that had lost the seat could still release, take and end its runs
+	// under the next holder's feet, which is the one write the fence exists
+	// to refuse.
+	//
+	// ANSWERS THE ROW AS IT OPENED THE JOB — the job's name, minted here
+	// ([PendingRun.LaunchID]), and the instant it began
+	// ([LaunchRecord.StartedAt]) — because the store is the one party that knows
 	// the name, and something has to hold it before the job's box can act:
 	// an agent-mode run's bridge session records every call under its own
 	// job ([BridgeAppend.Launch]), and a session that learned the name from
 	// the row later would learn whichever job the row held by then.
 	//
-	// A row a NEWER LEASE holds is refused with an error rather than left
-	// alone with none: a launch told nothing went on to start a job on a row
-	// that never named it, in a box nothing would reclaim.
-	BeginLaunch(ctx context.Context, run PendingRun, fence Fence) (LaunchRecord, error)
+	// A RESET THE ROW REFUSES IS AN ERROR, never a launch that went ahead: a
+	// newer lease owns the run, or its ending is decided ([ErrRunEnding]). A
+	// launch told nothing went on to start a job on a row that never named
+	// it, in a box nothing would reclaim. A row that went between the create
+	// and the reset is created again.
+	BeginLaunch(ctx context.Context, run PendingRun, fence Fence) (PendingRun, error)
 
 	Get(ctx context.Context, turnID string) (PendingRun, bool, error)
 
@@ -788,7 +1021,27 @@ type PendingStore interface {
 	// the reason a claim names its launch (see [Tail]). The returned row
 	// carries ClaimedFrom, so a failed dispatch can put it back exactly
 	// where it was.
-	ClaimForResume(ctx context.Context, turnID string, tail Tail) (PendingRun, bool, error)
+	//
+	// TAKEN UNDER THE CLAIMANT'S LEASE. A claim is refused where a newer
+	// lease than the fence owns the run, and a fenced one stamps the fence
+	// on the row as its [PendingRun.Owner] and [PendingRun.OwnerEpoch]:
+	// every write the claim makes afterwards — the take of its answer, its
+	// release, its ending — carries that lease back off the row it returns,
+	// so the seat's next holder fences the CLAIMANT out, whatever lease the
+	// row was stamped with before. Carried off a row stamped by somebody
+	// else, the fence fenced out nobody: a row launched under no lease, or
+	// one that no recovery re-stamped, sat at the zero epoch, which
+	// constrains nothing.
+	//
+	// SUPERSEDED, NOT OUTRANKED, as a take is ([PendingStore.TakeAnswer]): a
+	// ZERO fence claims only a row no lease has ever owned, and leaves its
+	// owner as it stands. Exempted as a write that holds no lease elsewhere
+	// is, a node that had noticed it lost the seat — whose lease it then
+	// answered as the zero fence — claimed the answer on a row its successor
+	// had fenced, took it and ran the turn on a seat it did not hold. Nothing
+	// that claims holds no lease where a lease exists: a recovery fences
+	// under the lease it took the seat with.
+	ClaimForResume(ctx context.Context, turnID string, tail Tail, fence Fence) (PendingRun, bool, error)
 
 	// ReleaseClaim hands a claimed run back to the status it was claimed
 	// from, reporting whether THIS call did.
@@ -802,12 +1055,23 @@ type PendingStore interface {
 	// by one: a run is reopened to a retry with its record or not at all
 	// (see [PendingRun.Charged]).
 	//
+	// AND A RECORDED ANSWER THE CLAIM'S TURN TOOK IS THE RUN'S AGAIN
+	// ([RecordedAnswer.TakenAt] cleared): a resume whose turn gives its
+	// claim back has reported that nothing it did reached anybody, which is
+	// what makes the retry safe, and the retry hands the same answer to a
+	// turn of its own. A claim whose answer an ending has already let go of
+	// is not released to [StatusAnswered] at all: an answered run carries
+	// its answer, and one that did not would be owed a resume nobody could
+	// make.
+	//
 	// FALSE IS NOT AN ERROR: it is a run that moved on, or a row that is
 	// gone. A release to a status outside [Claimable] is an error, because
 	// no claim ever takes a run out of one.
 	ReleaseClaim(ctx context.Context, turnID string, release Release) (bool, error)
 
-	// MarkAwaiting parks a run on a question, freeing the seat.
+	// MarkAwaiting parks a run on a question, freeing the seat. A
+	// question with no [Clarification.AskedAt] is refused: it is the anchor
+	// every answer is measured against ([PendingRun.AskedAt]).
 	MarkAwaiting(ctx context.Context, turnID string, q Clarification) error
 
 	// ClaimOwnership takes the run for a node, reporting whether it won.
@@ -815,35 +1079,48 @@ type PendingStore interface {
 	ClaimOwnership(ctx context.Context, turnID, owner string, epoch int64) (bool, error)
 
 	// SetStatus moves a run between the live states, fenced on the epoch.
-	// Ending a run is not a status; see Finish.
+	// Ending a run is not a status; see DecideEnding.
 	SetStatus(ctx context.Context, turnID, status string, fence Fence) error
 
-	// Finish ends a run by deleting its record — while its status is one of
-	// whileIn and no newer lease outranks the fence — and hands back the
-	// record it deleted, so a caller acts on what the store held rather
-	// than on a snapshot taken before the tail ran.
+	// DecideEnding records that a run is ENDING, on the terms of d — while
+	// its license holds, see [License] — and hands back the row as it now
+	// stands, its [PendingRun.Ending] the one this call recorded or the one
+	// already there. See [RecordedEnding] for why an ending is decided before
+	// any of it is done.
 	//
-	// The caller reclaims the box FIRST. A record naming a box that is
-	// already gone is harmless (recovery reaps it and a kill of a gone box
-	// is a no-op), while a live box whose record was deleted is named by
-	// nothing and billed until its provider's TTL. The one caller that
-	// inverts that is the one whose LICENSE is the decision — see
-	// [Coordinator.settleClaimed].
+	// ONE DECISION PER RUN: a run whose ending is already decided keeps it,
+	// and a second decider is handed that one to finish rather than deciding
+	// its own — the first decider's reason, detail and identity are the ones
+	// every attempt announces. And from the decision on, the row refuses every
+	// write but the ending's own steps ([ErrRunEnding]).
 	//
-	// WHILEIN IS A LICENSE, NOT A FILTER: it is the set of statuses this
-	// ending is entitled to end a run from. [Active] — every status a
-	// record can hold — is what a settle that has already reclaimed the box
-	// takes, and a narrower set is how a caller that could NOT read the row
-	// still refuses to end one that has moved on under it. An empty set
-	// licenses nothing and deletes nothing, which is the safe way round for
-	// a zero value.
+	// FALSE IS NOT AN ERROR: the run is gone, a newer lease than the
+	// license's owns it, or it is not what the license entitles this ending
+	// to end. An error is a decision that may or may not have landed; the
+	// caller decides again, and finds it recorded if it did.
+	DecideEnding(ctx context.Context, turnID string, d Decision) (PendingRun, bool, error)
+
+	// Finish deletes the record of a run whose ending is decided — the
+	// ending named, and only once it owes the seat nothing — and hands back
+	// the record it deleted.
 	//
-	// Conditional on the version it read and re-decided on a lost race, so
-	// a delete racing a write sees that write before it deletes. FALSE IS
-	// NOT AN ERROR: the run is already gone, which is the ordinary shape of
-	// two parties reaching the end of one run, or a newer lease owns it, or
-	// its status is not one this ending was licensed for.
-	Finish(ctx context.Context, turnID string, fence Fence, whileIn []string) (PendingRun, bool, error)
+	// The ending's other steps come FIRST ([Coordinator.finishEnding]): its
+	// box reclaimed where it says so, the reply it lets go of handed back, and
+	// its announcement published, because nothing reads a deleted row again
+	// and a step left for after the delete is lost to a crash between the
+	// two. FALSE IS NOT AN ERROR: the run is already gone — two parties
+	// finishing one ending — or it is not that ending's.
+	//
+	// A ROW THAT STILL OWES THE SEAT COPIES IS NOT DELETED ([ErrHandBackOwed],
+	// with the row as it stands): the copies are the seat's, and a delete
+	// before their publish loses them. NOR IS A ROW THAT STILL HOLDS A
+	// PERSON'S REPLY NO TURN TOOK ([ErrAnswerOwed], with the row as it
+	// stands) — or, for an ending whose reply went unused, any reply at all:
+	// the reply's delivery was spent when it was recorded, so the row is the
+	// only thing still carrying it. The caller lets it go
+	// ([PendingStore.OweHandBack]), hands it back and finishes again. A reply
+	// a turn took has been used, and goes with the run.
+	Finish(ctx context.Context, turnID, ending string) (PendingRun, bool, error)
 
 	// ExpirePause flips a run parked on a clarification to reseed AND
 	// clears its box record, reporting whether THIS call won.
@@ -854,8 +1131,20 @@ type PendingStore interface {
 	// arrived since — ClaimForResume has already moved the row and an
 	// Execute loop is reconnecting to that very box. Killing the box before
 	// this returns true destroys it underneath that resume. Conditional on
-	// StatusAwaiting alone: a run already reseeded has no snapshot left to
-	// expire, and any other status means somebody else owns the tail.
+	// StatusAwaiting or [StatusAnswered]: a run already reseeded has no
+	// snapshot left to expire, and any other status means somebody else
+	// owns the tail.
+	//
+	// AN ANSWERED RUN EXPIRES TOO, because its box is held for exactly as
+	// open-ended a wait as a parked one's: the answer is recorded, but its
+	// resume waits on the seat's holder and its conditions, and a seat no
+	// node holds may wait for days. It keeps its status and its answer —
+	// the run is still owed its resume, which re-seeds from the branch as
+	// a reseeded run's does — and the answer's From becomes
+	// [StatusReseed], so an answer that is let go of reopens the question
+	// on a run with no box rather than one naming the box just destroyed.
+	// The flip is still the authority over the box: a resume that claimed
+	// the row first moved it out of answered, and this loses.
 	//
 	// It clears the box IN THE SAME WRITE rather than leaving that to a
 	// following ReleaseBox, because the gap between two writes is a state a
@@ -930,33 +1219,132 @@ type PendingStore interface {
 	// ListActiveForSeat is the "is this seat busy?" read.
 	ListActiveForSeat(ctx context.Context, handle string) ([]PendingRun, error)
 
-	// FindAwaitingByConversation matches a person's answer back to the run
-	// that asked, on the CONVERSATION the question was asked in.
+	// RecordAnswer records a person's reply as the answer to the question a
+	// run is parked on, flipping it to [StatusAnswered], and hands back the
+	// row IFF THIS CALL WON.
 	//
-	// The rule is [ConversationRef.Best] and lives there rather than in an
-	// implementation, because it is a statement about two VALUES that every
-	// store has to make the same way — which rows a delivery may answer,
-	// which of them it answers when several may, and what either does with a
-	// row written before the conversation identity existed. A store lists
-	// the seat's parked runs and decides none of it.
-	FindAwaitingByConversation(ctx context.Context, handle string, conv ConversationRef) (PendingRun, bool, error)
-}
+	// A COMPARE-AND-SET, because the first qualifying reply is the answer
+	// and every later one is not: the run must still be [Awaiting], on the
+	// launch the caller matched, with no answer recorded and none of the
+	// reply's deliveries among [PendingRun.DeclinedAnswers]. Two replies
+	// racing for one question — on two nodes across a seat handoff, or a
+	// chat reply and an answer by turn — resolve here, and the loser reads
+	// false. FALSE IS NOT AN ERROR.
+	//
+	// UNDER THE RECORDING NODE'S LEASE, superseded rather than outranked as
+	// a claim is ([PendingStore.ClaimForResume]): a row a newer lease than
+	// the fence owns — the zero fence included, on a row any lease owns — is
+	// refused with [ErrSeatNotHeld], because the answer is the seat holder's
+	// to record and drive. Unfenced, a node that lost the seat recorded an
+	// answer on a run its successor had recovered as awaiting, and nothing
+	// drove it until the seat moved again. The lease is not stamped:
+	// recording is not a claim of the run.
+	RecordAnswer(ctx context.Context, turnID, launch string, answer RecordedAnswer, fence Fence,
+	) (PendingRun, bool, error)
 
-// Conversation is the durable conversation this run reports back to.
-//
-// FALLS BACK to the partition key, for the peer reason
-// [notify.ConversationIdentityOf] gives about the event it mirrors: a row
-// parked by a build from before the split carries only conversation_key, and
-// that value is what such a build would have reported back under. Reading the
-// absence as "no conversation" instead would make a resumed turn record
-// nothing at all — the very gap [Engine.recordResume] exists to close — and a
-// parked run outlives any upgrade window by design, because it waits for a
-// person to answer.
-func (r PendingRun) Conversation() string {
-	if r.ConversationKey != "" {
-		return r.ConversationKey
-	}
-	return r.PartitionKey
+	// DeclineAnswer lets go of a recorded answer the run could not be
+	// resumed with, IN ONE WRITE: the run goes back to the status the record
+	// took it out of, the answer is cleared, its deliveries and the ids of
+	// the copies handed back for them join [PendingRun.DeclinedAnswers], and
+	// the copies themselves join [PendingRun.HandBack] for the caller to
+	// publish. Only while the run is still [StatusAnswered] on that launch,
+	// holding exactly the answer made of the deliveries named, and no newer
+	// lease outranks the fence. Returns the row as written IFF THIS CALL
+	// DID. FALSE IS NOT AN ERROR.
+	//
+	// AND ONLY ON A ROW THAT OWES THE SEAT NOTHING YET: one that still
+	// carries an earlier decline's unpublished copies refuses with
+	// [ErrHandBackOwed], which is what bounds [PendingRun.HandBack] — see
+	// there.
+	DeclineAnswer(ctx context.Context, turnID, launch string, answer []string,
+		handBack []HandedBack, fence Fence) (PendingRun, bool, error)
+
+	// TakeAnswer records that the resumed turn a claim drives TOOK the
+	// recorded answer it was claimed for ([RecordedAnswer.TakenAt]),
+	// reporting whether the run is still that claim.
+	//
+	// The write a resume makes at the last moment before its turn runs
+	// ([ResumeRequest.Begin]), and a resume that cannot make it does not
+	// run: a turn that ran without it would be read, by whoever reaps the
+	// row after a crash, as one that never got the answer — and the reply
+	// handed back to the seat a second time.
+	//
+	// Only while the run is [StatusResumed] on that launch, still carrying
+	// the answer, its ending not yet decided ([PendingStore.DecideEnding],
+	// which is what makes an ending's let-go of the answer certain) — and
+	// the fence is the row's own lease or a newer one: a seat's next
+	// holder fences the row to its own lease ([PendingStore.ClaimOwnership])
+	// before an ending lets the reply go, so a process that lost the seat
+	// can never take an answer the holder is about to return. That holds
+	// because the fence is the CLAIMANT's — the lease its claim stamped on
+	// the row ([PendingStore.ClaimForResume]) — and because, UNLIKE EVERY
+	// OTHER WRITE HERE, A ZERO FENCE IS NOT EXEMPT: a take under no lease is
+	// refused on a row any lease owns. A zero fence constrains nothing
+	// elsewhere so a recovery that holds no lease yet can still write, and
+	// no recovery takes an answer; exempted here, a stalled claimant that
+	// held no lease took the answer on a row its successor had fenced, and
+	// the person was answered by its turn and by the copy. FALSE IS NOT AN
+	// ERROR. A run whose answer is already taken answers true and is not
+	// written again.
+	TakeAnswer(ctx context.Context, turnID, launch string, fence Fence) (bool, error)
+
+	// ReviveAnswer gives a claim no resume holds back to the recorded answer
+	// it was taken for: the run returns to [StatusAnswered], owed the resume
+	// the answer drives, and the reviving node drives it. In the same write
+	// the row is FENCED to the reviving node's lease and — for a claim whose
+	// node stopped before its turn took the answer ([Revival.Lost]) — the loss
+	// COUNTED on the answer ([RecordedAnswer.LostClaims],
+	// [RecordedAnswer.FirstLostAt]); a claim its own node made and could not
+	// confirm is given back uncounted. Returns the row as written IFF THIS
+	// CALL DID.
+	//
+	// Only while the run is still that claim — [StatusResumed] on that
+	// launch, holding exactly that answer, its ending not decided — and no
+	// newer lease outranks the fence. FALSE IS NOT AN ERROR.
+	//
+	// EXCLUSIVE WITH THE TAKE, as an ending's let-go is: an answer a turn
+	// already took has been used, and is refused with [ErrAnswerTaken] and the
+	// row as it stands — the caller reaps the claim as spent — while a take
+	// after the revival finds no claim to take it under.
+	ReviveAnswer(ctx context.Context, turnID string, revival Revival) (PendingRun, bool, error)
+
+	// OweHandBack LETS GO of the recorded answer a run whose ending is
+	// decided still holds: in one write, the answer leaves the row and the
+	// copies of its deliveries are recorded as owed to the seat's inbox
+	// ([PendingRun.HandBack]), for the ending to publish before it deletes the
+	// row ([PendingStore.Finish]). Returns the row as written IFF THIS CALL
+	// DID.
+	//
+	// It is the decline's outbox for the other ways a recorded answer is
+	// let go of: a run that ends before any turn took the reply — no
+	// conversation to re-enter, a claim that could not be given back, a
+	// resume that broke before its turn began, a claim the seat's next holder
+	// reaps because the run cannot be resumed with it, a seat that left the
+	// company. Every one of them has nowhere to send the reply but the seat's
+	// inbox, because the delivery that brought it was spent when the answer
+	// was recorded.
+	//
+	// ONLY A STEP OF THE ENDING NAMED ([LetGo.Ending]), on the answer named,
+	// and FALSE IS NOT AN ERROR otherwise. The ending was licensed when it was
+	// decided, and the row has taken no other write since — in particular no
+	// TAKE of the answer ([PendingStore.TakeAnswer]), which the decision
+	// fences off — so whether the answer goes back is settled by the decision
+	// itself: one no turn took before it does, and one a turn took does not,
+	// unless the ending says it went unused ([RecordedEnding.Unused]). A taken
+	// answer the ending must not let go is refused with [ErrAnswerTaken].
+	//
+	// A row that already owes copies refuses with [ErrHandBackOwed] and the
+	// row as it stands, for the bound [PendingRun.HandBack] states. An answer
+	// none of whose deliveries could be carried owes no copy, and is let go
+	// of with nothing to hand back — what its decline does too.
+	OweHandBack(ctx context.Context, turnID string, letGo LetGo) (PendingRun, bool, error)
+
+	// ClearHandBack removes the copies a decline owed the seat's inbox that
+	// have now been published, by their ids, and reports whether it removed
+	// any. Unconditioned on status, launch or lease: what it records is a
+	// fact about the broker, true whoever published them. FALSE IS NOT AN
+	// ERROR — a run that is gone, or copies a peer already cleared.
+	ClearHandBack(ctx context.Context, turnID string, ids []string) (bool, error)
 }
 
 // ConversationRef is where an arriving delivery came from, as a parked run is
@@ -964,12 +1352,12 @@ func (r PendingRun) Conversation() string {
 // partition it arrived in.
 //
 // TWO VALUES, AND EACH DECIDES A DIFFERENT HALF. The identity decides WHICH
-// runs a delivery may answer, because that is where a person answers and it is
-// the only value a row from before the split can be read as. The partition
-// decides WHICH OF THEM it answers when several may: the identity is coarse on
-// purpose — every run parked on one direct message shares it — so without the
-// batch the two halves of a DM's clarification are told apart by nothing but
-// creation time. See [ConversationRef.Best], which is the whole rule.
+// runs a delivery may answer, because that is where a person answers. The
+// partition decides WHICH OF THEM it answers when several may: the identity is
+// coarse on purpose — every run parked on one direct message shares it — so
+// without the batch the two halves of a DM's clarification are told apart by
+// nothing but creation time. See [ConversationRef.Best], which is the whole
+// rule.
 //
 // A struct rather than two arguments because both are strings and a swapped
 // pair fails silently — as a run nobody can answer, which is the defect this
@@ -1013,78 +1401,20 @@ type ConversationRef struct {
 // — and admitting is not choosing: [ConversationRef.Best] picks between what
 // this admits, on the partition first and recency second.
 //
-// A ROW WITH NO IDENTITY IS A ROW FROM BEFORE THE SPLIT, and it degrades to
-// today's behaviour rather than to a run nobody can answer: its one value is
-// compared against the PARTITION, which is what the build that wrote it
-// derived and compared. It is compared against the identity too, and that is
-// not a second spelling of one rule — such a row launched from a top-level DM
-// holds the bare channel, which is precisely what this build calls the
-// identity, so reading it that way is what repairs the rows already stranded
-// by the defect. Nothing rewrites a parked run and one waits for a person, so
-// this row shape outlives any upgrade window.
-//
-// A DELIVERY WITH NO IDENTITY IS AN EVENT FROM BEFORE THE SPLIT, which is the
-// third peer direction and the one neither field's doc covers: a wake
-// published by a peer that predates it carries only the partition, so
-// [notify.ConversationIdentityOf] falls back to that value and this ref
-// arrives with both fields holding the one string that peer derived.
-//
-// IT IS NEVER NARROWER than the match that peer would have made, and that is
-// the fallback earning its place: against a pre-split row both clauses
-// compare that string to the row's one value, which is the old equality
-// exactly, so reading the absence as "no conversation" instead would refuse
-// every one of those answers and leave the box waiting out its pause TTL with
-// the reply sitting in the seat's inbox.
-//
-// IT IS SOMETIMES WIDER, and where it widens it repairs. A peer that predates
-// the split derives the bare channel for a TOP-LEVEL direct message — that is
-// the partition rule both builds share — and the bare channel is precisely
-// what this build calls the identity of that line. So such a delivery answers
-// a run this build parked from a thread on it, which its own publisher could
-// never have matched. What it cannot repair is that peer's DM THREAD REPLY:
-// it stamped the thread and derived no identity for anyone to read, so this
-// build reads the thread as the identity and only a run parked in that same
-// thread matches. That is the pre-split behaviour, and it is unreachable from
-// this end however the reader is written.
-//
-// It never widens ACROSS conversations either way: every clause compares
-// against a value that peer derived from the same channel, so a reply on a
-// different line still fails all of them.
-//
 // AN EMPTY VALUE NEVER MATCHES, on either side. A run launched by a schedule
 // tick or an A2A wake stored no conversation, and a wake that could not name
 // one carries none — so the one explicit check below is the one place two
 // absences would otherwise compare equal and make every such delivery the
-// answer to every such run. Everywhere else an empty value simply fails the
-// comparison, which is why there is no second guard: a clause that cannot
-// decide anything is a claim, not a check.
-//
-// THE IDENTITY BRANCH ALSO ACCEPTS THE PARTITION, which admits nothing new for
-// a well-formed row and rescues one that is not. A row this build wrote from a
-// delivery whose partition refines its identity is matched by the identity
-// already — equal partitions imply equal identities there, so the second
-// clause never decides anything. What it rescues is a row whose stored
-// identity is PARTITION-GRAINED: a pre-split row this build resumed and
-// re-parked carries the value that build derived in a field this one reads as
-// the identity, so a reply in the very thread the question was asked in would
-// otherwise match nothing at all — strictly worse than the equality this
-// replaced, which would still have found it.
+// answer to every such run.
 func (c ConversationRef) Answers(run PendingRun) bool {
-	if run.ConversationKey != "" {
-		return run.ConversationKey == c.Identity || c.sameBatch(run)
-	}
-	if run.PartitionKey == "" {
-		return false
-	}
-	return run.PartitionKey == c.Identity || run.PartitionKey == c.Partition
+	return run.ConversationKey != "" && run.ConversationKey == c.Identity
 }
 
 // sameBatch reports whether this delivery arrived in the very batch the run
 // was launched from.
 //
 // The empty check is the one [ConversationRef.Answers] explains: two absences
-// comparing equal would make every conversation-less delivery the answer to
-// every conversation-less run.
+// comparing equal would prefer every partition-less run alike.
 func (c ConversationRef) sameBatch(run PendingRun) bool {
 	return c.Partition != "" && run.PartitionKey == c.Partition
 }
@@ -1159,6 +1489,144 @@ type Clarification struct {
 	// Answerers is who the question may be answered by, resolved from
 	// Audience against the chart — see [PendingRun.AudienceHandles].
 	Answerers Audience
+
+	// AskedAt is when the question was put, taken before it was announced
+	// — see [PendingRun.AskedAt]. Required.
+	AskedAt time.Time
+}
+
+// RecordedAnswer is a person's reply, recorded on the run it answers before
+// anything is done with it — on either route: a chat reply matched on its
+// conversation, or an answer by turn that named the run ([RecordedAnswer.Via]).
+//
+// RECORDING IS NOT RESUMING, and splitting the two is the whole point. The
+// reply used to be held by its inbox delivery until a resume succeeded: a
+// resume that failed handed the MESSAGE back to the queue, which on the only
+// broker this engine ships returns a failure BEHIND the conversation's newer
+// mail — so the person's next message reached the still-waiting run first
+// and was spliced in as the answer, and the first one came round afterwards
+// to answer whatever the run asked next. Recorded here, by a compare-and-set
+// that only the first qualifying reply wins, the answer is durable the moment
+// the delivery is acknowledged, and retrying the resume is the coordinator's
+// job ([Coordinator.retryOwed]) rather than the inbox's.
+type RecordedAnswer struct {
+	// Text is the reply as the resumed turn is handed it.
+	Text string `json:"text"`
+
+	// Via is the route the answer came by: a chat reply matched on its
+	// conversation, or an answer by turn that named the run. Required, and
+	// refused by [PendingStore.RecordAnswer] when it is not one of the two:
+	// it decides how the resumed turn is told who answered, what the
+	// answer's record says, and what a copy of it becomes when it is let go
+	// of — a chat reply becomes the ordinary message it is, while an answer
+	// by turn has no ordinary form, and its copy is spent by the node holding
+	// the seat as an answer the run no longer takes.
+	Via types.AnswerVia `json:"via"`
+
+	// By is who gave it: the chat sender as the delivery's envelope names
+	// them, or the operator credential an answer by turn was given under.
+	By string `json:"by,omitempty"`
+
+	// BySeat is the person an answer by turn's credential is bound to, empty
+	// for a chat reply and for a credential nobody bound.
+	BySeat string `json:"by_seat,omitempty"`
+
+	// EventIDs are the deliveries the answer was made of. A copy of one of
+	// them reaching the seat again is the same answer, already recorded —
+	// never a second one, and never an ordinary message.
+	EventIDs []string `json:"event_ids"`
+
+	// Events are those deliveries, encoded, oldest first: the resume raises
+	// the working indicator off the newest one, and an answer this node gives
+	// up on hands them back to the seat's ordinary route as what they are.
+	Events []json.RawMessage `json:"events,omitempty"`
+
+	// PostedAt is when the newest of them was posted, the instant the
+	// question's [PendingRun.AskedAt] was compared against.
+	PostedAt time.Time `json:"posted_at,omitzero"`
+
+	// RecordedAt is when the answer was recorded.
+	RecordedAt time.Time `json:"recorded_at"`
+
+	// From is the status the record took the run out of — awaiting, or
+	// reseed when the pause reaper had already reclaimed the box — and the
+	// one an answer that is let go of puts it back to.
+	From string `json:"from"`
+
+	// TakenAt is when a resumed turn TOOK this answer: the instant the claim
+	// holding it handed it to a turn that was certain to run
+	// ([PendingStore.TakeAnswer], at [ResumeRequest.Begin]). Zero while the
+	// answer is still the run's — recorded and owed, or claimed by a resume
+	// that has not reached its turn yet — and cleared again by a release
+	// that gives the claim back for a retry ([PendingStore.ReleaseClaim]).
+	//
+	// THE ONE FACT A CLAIM THAT DIED CANNOT TELL ANY OTHER WAY. A claimed
+	// row reads [StatusResumed] from the instant of the claim to the
+	// instant of its settle, and between the two lie both a resume that
+	// never got as far as the turn (a crash, a node stopped, a seat moved)
+	// and a turn that ran with the answer and died mid-round. The first
+	// still owes the person's reply to the seat — its delivery was spent
+	// when the answer was recorded, so nothing else will ever bring it back
+	// — and the second has used it. The seat's next holder finds both rows
+	// as tails nobody drives ([Coordinator.RecoverSeat]), and this is what
+	// tells them apart: the first it REVIVES, the answer given back to the
+	// run ([PendingStore.ReviveAnswer]) — or, past the revival's bounds,
+	// reaps, and the store will not delete it while it holds the reply
+	// ([ErrAnswerOwed]), so the reap hands it back — while the second's the
+	// store will neither revive nor let go ([ErrAnswerTaken]), so the reap
+	// spends it. Without it, every such reply was read as spent and lost.
+	//
+	// WRITTEN AT THE LAST MOMENT BEFORE THE TURN, never at the claim: every
+	// step between the claim and the turn can fail or stop the process, and
+	// a marker written earlier would read a reply nobody acted on as used.
+	// And the reply's delivery is recorded as worked at the same moment
+	// ([CoordinatorOptions.Spent]), because from here a copy of it reaching
+	// the seat is the reply a turn already has.
+	TakenAt time.Time `json:"taken_at,omitzero"`
+
+	// LostClaims counts the claims of this answer whose node stopped before
+	// their turn took it, each revived by the seat's next holder so that the
+	// answer reaches the run it answered ([PendingStore.ReviveAnswer]), and
+	// FirstLostAt is when the first of them was revived. A claim its own node
+	// made, could not confirm and gave back is none of them ([Revival.Lost]):
+	// no node stopped. ON THE ROW, because
+	// what they bound is a series no one node sees: a claim that dies is a
+	// node that stopped, and the count a node keeps of its own attempts
+	// resets with exactly that ([MaxAnswerAttempts]). See [MaxAnswerRevivals].
+	LostClaims  int       `json:"lost_claims,omitempty"`
+	FirstLostAt time.Time `json:"first_lost_at,omitzero"`
+}
+
+// Taken reports whether a resumed turn took this answer — see
+// [RecordedAnswer.TakenAt].
+func (a RecordedAnswer) Taken() bool { return !a.TakenAt.IsZero() }
+
+// attribution is who the resumed turn is told gave this answer: the person an
+// answer by turn names — or its credential, where nobody is bound to it — and
+// nobody for a chat reply, whose sender is already in the conversation the
+// resumed turn reports back to.
+func (a RecordedAnswer) attribution() string {
+	if a.Via != types.AnswerViaOperator {
+		return ""
+	}
+	if a.BySeat != "" {
+		return a.BySeat
+	}
+	return a.By
+}
+
+// HandedBack is one copy of a declined answer's delivery, owed to the seat's
+// inbox as the ordinary message it is — see [PendingRun.HandBack].
+type HandedBack struct {
+	// ID is the copy's own id, derived from the original's, so publishing it
+	// twice is one message to every reader that dedupes on ids.
+	ID string `json:"id"`
+
+	// Original is the delivery it is a copy of.
+	Original string `json:"original"`
+
+	// Event is the copy as it is published, encoded.
+	Event json.RawMessage `json:"event"`
 }
 
 // Audience is who a parked question may be answered by: the seats, and
@@ -1181,19 +1649,19 @@ type BoxRef struct {
 	CodingAgent string
 	SessionID   string
 	PauseTTLSec float64
-
-	// Layout is the job's output layout, from its handle ([RunHandle.Layout]):
-	// written onto the job's own record, since a box attached before its job
-	// starts has none to name.
-	Layout int
 }
 
 // Fence is the ownership token a mutation carries.
 //
 // A ZERO FENCE MEANS UNFENCED and is deliberate rather than a default: recovery
-// writes and the boot pass legitimately have no lease yet. What must never
-// happen is a node writing under a lease it has LOST, and that is the case a
-// non-zero fence closes.
+// writes and the boot pass legitimately have no lease yet, and a node with no
+// seat host has no next holder to be fenced out by. What must never happen is a
+// node writing under a lease it has LOST, and that is the case a non-zero fence
+// closes. So the writes only a seat's holder makes — a claim, the take of an
+// answer, the record of one — refuse the zero fence too on a run any lease owns
+// ([PendingStore.ClaimForResume]), and a node that knows it does not hold the
+// seat never reaches them: its lease seam says so rather than answering the zero
+// fence ([CoordinatorOptions.Lease], [ErrSeatNotHeld]).
 type Fence struct {
 	Owner string
 	Epoch int64
@@ -1212,7 +1680,7 @@ func (f Fence) Fenced() bool { return f.Epoch > 0 }
 // does not own. The run's phase record is keyed on it (see [LaunchRecord]).
 type Suspension struct {
 	// State is the serialized loop, [PendingRun.ExecuteState].
-	State map[string]any
+	State json.RawMessage
 
 	// Iteration is the turn iteration the executor suspended in, which is
 	// the iteration the run's own phase record is filed under.
@@ -1223,22 +1691,15 @@ type Suspension struct {
 // the row says: when it started, which executor iteration launched it, the
 // model it ran on, and whether that record has already been published.
 //
-// KEYED ON THE JOB, by [LaunchRecord.ID], and every reader goes through
-// [PendingRun.LaunchFacts], which answers the zero record for any other job.
-// The row is the TURN's and outlives each job on it, and it is shared by every
-// build in a rolling upgrade: a build that predates this field carries it
-// through its own read-modify-write untouched ([PendingRun.Extra]) — including
-// across the relaunch it performs itself, which it cannot know to clear. A
-// record that named no job would then tell the NEXT job it had been launched
-// at the previous one's instant and already published. Keyed, a stale record
-// is simply not this job's.
+// THE JOB'S, NOT THE TURN'S. The row is the turn's and outlives each job on
+// it, so [PendingStore.BeginLaunch] replaces this record WHOLE on every launch,
+// in the same write that names the job ([PendingRun.LaunchID]): a record that
+// survived a relaunch would tell the next job it had been launched at the
+// previous one's instant and already published.
 //
-// ONE FIELD RATHER THAN FOUR for the same reason: there is one key to check,
-// and a fact added here later is scoped to its job by construction.
+// ONE FIELD RATHER THAN FOUR for the same reason: a fact added here later is
+// replaced with its job by construction.
 type LaunchRecord struct {
-	// ID is the [PendingRun.LaunchID] this record belongs to.
-	ID string `json:"launch_id"`
-
 	// StartedAt is when the job was launched, on the store's clock —
 	// written by [PendingStore.BeginLaunch], the moment the launch exists.
 	StartedAt time.Time `json:"started_at,omitzero"`
@@ -1276,10 +1737,6 @@ type LaunchRecord struct {
 	// after a restart, so a count held in memory would grant every node a
 	// fresh allowance. WRITTEN BY THE RELEASE ([Release.CollectFailedAt]),
 	// the one write through which a retry reaches the collection again.
-	// An older build that knows the record but not these two drops them
-	// on its own rewrite, which only restarts the allowance; it cannot
-	// extend it past one more window, since the build that counts is the
-	// one that retries.
 	CollectFailures     int       `json:"collect_failures,omitempty"`
 	CollectFailingSince time.Time `json:"collect_failing_since,omitzero"`
 
@@ -1292,10 +1749,7 @@ type LaunchRecord struct {
 	//
 	// ON THE JOB'S RECORD for the reason every fact here is: the resume may
 	// run on another node, after a restart, and a relaunch must not hand
-	// one job's spend to the next. An older build that knows the record
-	// but not this field drops it on its own rewrite, which leaves the
-	// item short of it — the direction a charge that cannot be vouched for
-	// errs in — and never charges it twice.
+	// one job's spend to the next.
 	Bridged EngineSpend `json:"bridged_spend,omitzero"`
 
 	// Condensed is what condensing the collection that PARKED this job on
@@ -1303,20 +1757,6 @@ type LaunchRecord struct {
 	// written with the question ([PendingStore.MarkAwaiting]) and paid by
 	// the resume the answer drives, as [PendingRun.ParkedInputTokens] is.
 	Condensed AuxTokens `json:"parked_condensed,omitzero"`
-
-	// Layout is which of its runner's output layouts the job was launched
-	// with ([RunHandle.Layout]), written by [PendingStore.AttachSandbox]
-	// once the job has started.
-	//
-	// ON THE JOB'S RECORD, and that is what makes it safe to read: a box is
-	// reused across the jobs of a turn, by whichever build holds the seat,
-	// and a layout that named no job would tell the next one — launched by
-	// a build that writes elsewhere — to read a file this job left behind.
-	// An older build that knows the record but not this field drops it on
-	// its own rewrite, and the job then reads as layout zero: its result
-	// still parses, from the file every layout writes it to, and only its
-	// transcript is lost — never another job's shown as its own.
-	Layout int `json:"output_layout,omitempty"`
 }
 
 // AuxTokens is what calls to a seat's AUXILIARY model cost, split the way
@@ -1382,16 +1822,7 @@ func (s EngineSpend) Newest(o EngineSpend) EngineSpend {
 }
 
 // Handle is the job this row holds now, as every read of its box is handed
-// it: its command, its session and the output layout it was launched with.
+// it: its command and its session.
 func (r PendingRun) Handle() RunHandle {
-	return RunHandle{CommandID: r.CommandID, SessionID: r.SessionID, Layout: r.LaunchFacts().Layout}
-}
-
-// LaunchFacts is the [LaunchRecord] of the job this row holds now, and the
-// zero record when what the row carries belongs to another job or to none.
-func (r PendingRun) LaunchFacts() LaunchRecord {
-	if r.Launch.ID == "" || r.Launch.ID != r.LaunchID {
-		return LaunchRecord{}
-	}
-	return r.Launch
+	return RunHandle{CommandID: r.CommandID, SessionID: r.SessionID}
 }

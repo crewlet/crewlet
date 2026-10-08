@@ -1213,12 +1213,10 @@ func (w *Worker) scheduleNow() Schedule {
 //
 //   - IngressEngine — a pass registers the delivery here, so the address it
 //     ran against is the address the registration points at.
-//   - IngressNone — nothing delivers to an address at all, so carrying one is
-//     a claim waiting to become a false alarm: the moment the public base
-//     moves, a stale value compares unequal and reports an action nobody can
-//     take on a surface with no address to change. CLEARED rather than merely
-//     not written, so a row an earlier build stamped converges on the next
-//     pass.
+//   - IngressNone — nothing delivers to an address at all, so none is
+//     recorded: one would be a claim waiting to become a false alarm the
+//     moment the public base moved, reporting an action nobody can take on a
+//     surface with no address to change.
 //   - IngressOperator — a person typed the address at the third-party app.
 //     Stamping it would report the base this deployment listens on as though
 //     the third-party app had been told, which turns the one warning an
@@ -1228,15 +1226,10 @@ func (w *Worker) scheduleNow() Schedule {
 // pass an operator runs from the dashboard. The rule lived inside the loop
 // and the dashboard's pass stamped every surface unconditionally — so the
 // same row meant one thing when a tick wrote it and another when a button
-// did, and Datadog, whose webhook URL is a field on a settings page, was
-// reported current by the button and left alone by the tick.
+// did.
 func StampEndpoint(state *State, kind Kind, current string) {
-	switch kind.Ingress() {
-	case IngressEngine:
+	if kind.Ingress() == IngressEngine {
 		state.Endpoint = current
-	case IngressNone:
-		state.Endpoint = ""
-	case IngressOperator:
 	}
 }
 

@@ -139,11 +139,8 @@ func withRequired(t *testing.T, opts api.Options) api.Options {
 	if opts.Sources.Company == nil {
 		opts.Sources.Company = func() *config.Company { return nil }
 	}
-	if opts.EventLog == nil {
-		opts.EventLog = sharedEvents
-	}
 	if opts.Sources.Events == nil {
-		opts.Sources.Events = eventfan.Solo(config.DefaultNodeID, opts.EventLog)
+		opts.Sources.Events = eventfan.Solo(config.DefaultNodeID, sharedEvents)
 	}
 	if opts.Sources.NodeID == "" {
 		opts.Sources.NodeID = config.DefaultNodeID
@@ -219,7 +216,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 		t.Fatal("an app wired to nothing was built")
 	}
 	for _, field := range []string{
-		"Runtime", "EventLog", "Sources.Company", "Sources.Events", "Sources.NodeID",
+		"Runtime", "Sources.Company", "Sources.Events", "Sources.NodeID",
 		"Inbound.Publisher", "Inbound.Claims", "Inbound.Secrets", "Inbound.AppFlow",
 		"Config", "Secrets", "Setup", "Retention", "Capacity", "FleetBroker", "Backup",
 		"Audit",

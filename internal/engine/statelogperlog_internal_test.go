@@ -20,24 +20,25 @@ import (
 	"github.com/crewlet/crewlet/internal/usage"
 )
 
-// THE RUNNING ESTATE IS TODAY'S ESTATE: its streams, its keys and its
-// coordination records are the ones every fleet already holds, byte for byte.
+// THE RUNNING ESTATE IS THE DECLARED ESTATE: its streams, its keys and its
+// coordination records are the ones the domain declarations, the topics
+// constants and the register name, byte for byte.
 //
 // Each surface here is named in more than one place — the domain's own
 // declaration, the topics constants, the positions register, the floors — and
-// a node whose answer drifted from the fleet's provisions a second, empty
+// a node whose answer drifted from the declarations provisions a second, empty
 // stream beside the real one, publishes a register row nobody else's trim
 // reads, or writes a floor under a key the fleet's fences never look at. So
 // this boots a node the way `crewlet run` does and reads each surface back:
 // the logs it runs and their order, each log's stream on the broker, the
 // consumer each is applied through, the row its heartbeat writes and the floor
 // its trim publishes.
-func TestTheRunningEstateIsTodaysEstate(t *testing.T) {
+func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)
 	s := e.native.Load().log
 
-	today := map[string][3]string{
+	declared := map[string][3]string{
 		tracker.Domain{}.Name(): {topics.TrackerLogStream, topics.TrackerLogPrefix, topics.TrackerLogWildcard},
 		search.Domain{}.Name():  {topics.TrackerVectorsStream, topics.TrackerVectorsPrefix, topics.TrackerVectorsWildcard},
 		pages.Domain{}.Name():   {topics.PagesLogStream, topics.PagesLogPrefix, topics.PagesLogWildcard},
@@ -52,22 +53,22 @@ func TestTheRunningEstateIsTodaysEstate(t *testing.T) {
 	}
 	for _, running := range s.running() {
 		name := running.domain.Name()
-		want := today[name]
+		want := declared[name]
 		if running.spec.Name != want[0] || running.spec.SubjectPrefix != want[1] ||
 			!slices.Equal(running.spec.Subjects, []string{want[2]}) {
-			t.Errorf("the %s log runs on (%q, %q, %v); the fleet's stream is (%q, %q, %q)",
+			t.Errorf("the %s log runs on (%q, %q, %v); the declared stream is (%q, %q, %q)",
 				name, running.spec.Name, running.spec.SubjectPrefix, running.spec.Subjects,
 				want[0], want[1], want[2])
 		}
 		// THE CEILING TIER A SIZED THE DOMAIN AT, whole: one log carries
-		// the domain's whole budget, as its one stream always did.
+		// the domain's whole budget.
 		if budget := s.ceilings[name].Bytes; running.spec.MaxBytes != budget {
 			t.Errorf("the %s log's ceiling is %d, and Tier A sized its domain at %d",
 				name, running.spec.MaxBytes, budget)
 		}
 		stream, err := js.Stream(t.Context(), want[0])
 		if err != nil {
-			t.Fatalf("the fleet's %s stream is not on the broker: %v", name, err)
+			t.Fatalf("the declared %s stream is not on the broker: %v", name, err)
 		}
 		info, err := stream.Info(t.Context())
 		if err != nil {
@@ -86,7 +87,7 @@ func TestTheRunningEstateIsTodaysEstate(t *testing.T) {
 	// one of the state logs' families is one of the four, so nothing beside
 	// them holds a second copy of a domain's records.
 	logStreams := []string{}
-	for _, names := range today {
+	for _, names := range declared {
 		logStreams = append(logStreams, names[0])
 	}
 	names := js.StreamNames(t.Context())
@@ -101,9 +102,8 @@ func TestTheRunningEstateIsTodaysEstate(t *testing.T) {
 		t.Fatalf("list the broker's streams: %v", err)
 	}
 
-	// THE REGISTER ROW, keyed by the domains, and carrying nothing a divided
-	// estate ever added: as written, the row's fields are exactly the ones a
-	// fleet's rows have always carried.
+	// THE REGISTER ROW, keyed by the domains: as written, the row's fields
+	// are exactly the fields listed here, which a peer build reads.
 	s.publishPositions(t.Context())
 	rows, err := e.backends.Fleet.Positions(t.Context())
 	if err != nil {
@@ -122,15 +122,15 @@ func TestTheRunningEstateIsTodaysEstate(t *testing.T) {
 		"snapshot_bytes", "snapshot_skip"}
 	for _, key := range jsonKeys(t, *mine) {
 		if !slices.Contains(rowFields, key) {
-			t.Errorf("the node's row carries %q, which a fleet's rows do not: %v",
+			t.Errorf("the node's row carries %q, which the listed fields do not: %v",
 				key, rowFields)
 		}
 	}
-	// AND ITS DUTIES AND ITS ARTEFACTS ARE WHERE THEY ALWAYS WERE: the trim
-	// and the embedding are one fleet singleton each, on the lease every
-	// earlier build claims — so a node on this build and one on the build
-	// before it contend for ONE lease rather than both running the duty —
-	// and the snapshots stay in their directory.
+	// AND ITS DUTIES AND ITS ARTEFACTS ARE WHERE THEY ARE DECLARED: the trim
+	// and the embedding are one fleet singleton each, on the lease named
+	// here, which the next build must claim too — so two builds sharing a
+	// fleet in a rolling upgrade contend for ONE lease rather than both
+	// running the duty — and the snapshots are in their directory.
 	for duty, resource := range map[string]string{
 		retentionDutyName: "worker:retention", embedDutyName: "worker:embeddings",
 	} {
@@ -160,11 +160,11 @@ func TestTheRunningEstateIsTodaysEstate(t *testing.T) {
 	slices.Sort(keys)
 	sortedRegistered := slices.Sorted(slices.Values(registered))
 	if !slices.Equal(keys, sortedRegistered) {
-		t.Errorf("the row names the logs %v, and a fleet's rows name %v", keys, sortedRegistered)
+		t.Errorf("the row names the logs %v, and the register declares %v", keys, sortedRegistered)
 	}
 
 	// THE FLOOR THE TRIM PUBLISHES: under the domain's key, carrying the
-	// fields a floor always has and nothing else.
+	// fields listed here and nothing else.
 	r := &retention{fleet: e.backends.Fleet, state: s, nodeID: e.id,
 		cfg: config.TrackerRetention{MinAgeRaw: "1ns"}}
 	shared, err := r.read(t.Context())

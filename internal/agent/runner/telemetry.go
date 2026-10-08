@@ -9,9 +9,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/agent/extension"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/agent/subagent"
@@ -396,7 +398,7 @@ func (e emitter) on() bool { return e.pub != nil }
 // it is still answering. Consumers read RoundNum+1 as "rounds so far", which
 // is why the sentinel is -1 and not 0 — a 0 would claim a round had finished.
 func (e emitter) started(ctx context.Context, ph phase.Phase, iteration int,
-	system, user string, seed []llm.Message, surface *tools.Surface, caps roundCaps,
+	system, user prompts.Prompt, seed []llm.Message, surface *tools.Surface, caps roundCaps,
 ) {
 	// BEFORE THE PUBLISHER GATE, and off the same `ph` the event below
 	// carries. The working indicator is not telemetry: a runner whose phases
@@ -429,10 +431,13 @@ func (e emitter) started(ctx context.Context, ph phase.Phase, iteration int,
 		Phase:     types.Phase(ph),
 		Iteration: iteration,
 		Trigger:   e.turn.Trigger,
-		Prompt:    user,
+		Prompt:    user.Text,
+		// EACH MESSAGE WITH ITS OUTLINE, so the live view draws the
+		// prompt's parts from the frame that assembled them rather than
+		// from the text's own headings — see [types.PromptSection].
 		PromptMessages: []types.PromptMessage{
-			{Role: string(llm.RoleSystem), Content: system},
-			{Role: string(llm.RoleUser), Content: user},
+			{Role: string(llm.RoleSystem), Content: system.Text, Sections: promptSections(ctx, ph, system)},
+			{Role: string(llm.RoleUser), Content: user.Text, Sections: promptSections(ctx, ph, user)},
 		},
 		RoundNum: openingRound,
 		// The cap from the first frame, so a live row can say "of 8"
@@ -442,7 +447,7 @@ func (e emitter) started(ctx context.Context, ph phase.Phase, iteration int,
 		WorkItem:     e.workItem(),
 	}, e.traceFor(ctx)))
 
-	e.promptSize(ctx, ph, iteration, system, user, seed, surface)
+	e.promptSize(ctx, ph, iteration, system.Text, user.Text, seed, surface)
 }
 
 // skillsInjected records what a prompt's tool-skill catalogue offered: one
@@ -551,9 +556,8 @@ func (e emitter) workItem() *types.WorkItem {
 // anyone comparing builds can apply their own ratio rather than inheriting
 // this one.
 //
-// MEASURED IN BYTES, which is what len() of a Go string is and what the Go
-// fields are named for. The WIRE KEYS still say chars and deliberately do not
-// move — see [types.PromptSize], which carries the whole reason.
+// MEASURED IN BYTES, which is what len() of a Go string is — see
+// [types.PromptSize] for why bytes rather than characters.
 func (e emitter) promptSize(ctx context.Context, ph phase.Phase, iteration int,
 	system, user string, seed []llm.Message, surface *tools.Surface,
 ) {
@@ -576,7 +580,7 @@ func (e emitter) promptSize(ctx context.Context, ph phase.Phase, iteration int,
 		// encoded here is what the provider call after it is about to
 		// reject for the same reason. The log line is the only place that
 		// says WHICH term came up short, because the row itself cannot:
-		// a tool_chars of 0 beside a non-zero tool_count is visible, but
+		// a tool_bytes of 0 beside a non-zero tool_count is visible, but
 		// a conversation measured short of its own tool-call arguments
 		// reads as a perfectly ordinary figure.
 		log.WarnContext(ctx, "prompt_size_measure_failed", "phase", ph,
@@ -665,8 +669,9 @@ func measurePrompt(system, user string, seed []llm.Message, defs []llm.ToolDef) 
 // THE THINKING TERM IS COUNTED ONCE PER MESSAGE, and that is the whole of the
 // arithmetic here. [llm.Message] carries a model's reasoning in two shapes and
 // a backend sets either or both: the Anthropic backend fills ThinkingBlocks —
-// which it hands straight back into the next call's content blocks and is
-// billed for — and ALSO renders that same thinking text into ReasoningContent
+// the neutral copy of the blocks it hands straight back into the next call
+// (verbatim, from llm.Message.Raw) and is billed for — and ALSO renders that
+// same thinking text into ReasoningContent
 // as prose, while the OpenAI backend fills ReasoningContent alone and the
 // cli-agent text backend writes exactly that prose into the prompt it builds.
 // So summing both would double the largest term a parked Anthropic turn
@@ -675,11 +680,9 @@ func measurePrompt(system, user string, seed []llm.Message, defs []llm.ToolDef) 
 // blocks win wherever there are blocks; the prose stands in where there are
 // none.
 //
-// Signature is deliberately out of the sum: it is a fixed-size opaque token
-// the provider mints per block rather than anything a model wrote, so counting
-// it would make this figure move with a vendor's token format instead of with
-// the prompt. A tool call's id and name are out for the same reason — bounded
-// identifiers beside arguments that run to kilobytes.
+// A tool call's id and name are out of the sum: bounded identifiers beside
+// arguments that run to kilobytes, which would make this figure move with a
+// vendor's id format instead of with the prompt.
 func seedBytes(seed []llm.Message) (int, error) {
 	total := 0
 	for _, msg := range seed {
@@ -866,8 +869,10 @@ func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, re
 type phaseRecord struct {
 	Phase     phase.Phase
 	Iteration int
-	System    string
-	User      string
+	// System and User are the phase's opening prompts with their
+	// outlines; both zero on a phase that re-entered a conversation.
+	System    prompts.Prompt
+	User      prompts.Prompt
 	Result    toolloop.Result
 	Exhausted bool
 
@@ -1057,8 +1062,10 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		Model:          res.Model,
 		ProviderKey:    res.ProviderKey,
 		Trigger:        e.turn.Trigger,
-		SystemPrompt:   res.SystemPrompt,
-		UserPrompt:     res.UserPrompt,
+		SystemPrompt:   res.SystemPrompt.Text,
+		UserPrompt:     res.UserPrompt.Text,
+		SystemSections: promptSections(ctx, phase.Subagent, res.SystemPrompt),
+		UserSections:   promptSections(ctx, phase.Subagent, res.UserPrompt),
 		Response:       res.Text,
 		ToolExecutions: toolExecutions(res.Executions),
 		// Published beside the executions, on the round number they share.
@@ -1136,8 +1143,10 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		Model:            rec.Result.Model,
 		ProviderKey:      rec.Result.ProviderKey,
 		Trigger:          e.turn.Trigger,
-		SystemPrompt:     rec.System,
-		UserPrompt:       rec.User,
+		SystemPrompt:     rec.System.Text,
+		UserPrompt:       rec.User.Text,
+		SystemSections:   promptSections(ctx, rec.Phase, rec.System),
+		UserSections:     promptSections(ctx, rec.Phase, rec.User),
 		Response:         rec.Result.Text,
 		ToolExecutions:   toolExecutions(rec.Result.Executions),
 		RoundNarration:   roundNarration(rec.Result.Narration),
@@ -1197,7 +1206,8 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		// logs and moves on, so an unbounded error would reach the
 		// operator not shortened but ABSENT. See events.MaxDiagnosticBytes.
 		ev.Error = events.ClipDiagnostic(rec.Err.Error())
-		ev.ErrorKind = classifyError(rec.Err)
+		ev.ErrorKind = ErrorKind(rec.Err)
+		ev.Refusal = phaseRefusal(rec.Err)
 	}
 	e.publish(ctx, events.New(ev, e.traceFor(ctx)))
 }
@@ -1207,8 +1217,10 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 // no failure.
 const StoppedKind = "stopped"
 
-// classifyError names a failure's CLASS, for the one-word reason a dashboard
-// prints beside a failed phase.
+// ErrorKind names a failure's CLASS, for the one-word reason a dashboard
+// prints beside a failed phase or turn — ONE classifier for both records, so a
+// turn that died of its phase's refusal says `refusal` on both rather than the
+// turn's record falling back to a generic word the phase's never uses.
 //
 // The classified kinds are the ones an operator can act on: rotate a key,
 // raise a cap, wait out a provider. Everything else is "error", deliberately.
@@ -1217,11 +1229,17 @@ const StoppedKind = "stopped"
 // underneath, so the field would carry the same meaningless token for every
 // unclassified failure while looking specific. One honest generic beats a
 // specific-looking constant.
-func classifyError(err error) string {
+func ErrorKind(err error) string {
 	var provider *llm.Error
+	var stop *toolloop.StopError
 	switch {
 	case errors.As(err, &provider):
 		return provider.Kind.String()
+	case errors.As(err, &stop):
+		// The stop reason itself — `max_tokens`, `context_exceeded`,
+		// `paused` — because each sends an operator somewhere different,
+		// and none of them is the provider failing.
+		return string(stop.Reason)
 	case errors.Is(err, toolloop.ErrBudgetExhausted):
 		return "budget_exhausted"
 	case turn.Stopped(err):
@@ -1234,6 +1252,17 @@ func classifyError(err error) string {
 		return "canceled"
 	}
 	return "error"
+}
+
+// phaseRefusal is the refusal a phase ended on, in its wire shape, or nil for
+// every other failure. Read off the error rather than carried beside it, so a
+// refusal that reached the record by any path says so the same way.
+func phaseRefusal(err error) *types.PhaseRefusal {
+	var refusal *llm.Refusal
+	if !errors.As(err, &refusal) {
+		return nil
+	}
+	return &types.PhaseRefusal{Category: refusal.Category, Explanation: refusal.Explanation}
 }
 
 // publish sends one event, or logs why it could not.
@@ -1282,12 +1311,12 @@ func toolExecutions(execs []toolloop.Execution) []types.ToolExecution {
 			"success":   !ex.Failed,
 			"round":     ex.Round,
 		}
-		// ONLY WHAT WAS MEASURED. An execution nobody timed — a
-		// pre-suspend row an older build wrote, an agent-mode run's
-		// bridged call — has no start, and writing `duration_ms: 0` for
-		// it would state an instant call. Absent is the honest spelling of
-		// "not recorded", and it is the one every reader already treats
-		// that way.
+		// ONLY WHAT WAS MEASURED. An execution nobody timed — a call
+		// whose arguments did not parse, answered rather than run, or an
+		// agent-mode run's bridged call — has no start, and writing
+		// `duration_ms: 0` for it would state an instant call. Absent is
+		// the honest spelling of "not recorded", and it is the one every
+		// reader already treats that way.
 		if !ex.StartedAt.IsZero() {
 			row["started_at"] = ex.StartedAt.UTC().Format(time.RFC3339Nano)
 			row["duration_ms"] = int(ex.Duration / time.Millisecond)
@@ -1325,6 +1354,7 @@ func phaseRounds(rounds []toolloop.Round) []types.PhaseRound {
 			CacheReadTokens:  r.CacheRead,
 			CacheWriteTokens: r.CacheWrite,
 			ToolCalls:        r.ToolCalls,
+			StopReason:       string(r.StopReason),
 		})
 	}
 	return out
@@ -1391,23 +1421,63 @@ func utcOrZero(t time.Time) time.Time {
 	return t.UTC()
 }
 
+// promptSections renders a prompt's outline in its wire shape, or nil.
+//
+// NIL FOR A MAP THAT DOES NOT TILE ITS TEXT: the wire contract is that every
+// map a reader receives can be sliced by, and a reader that finds none falls
+// back to the prompt's own headings. Publishing a broken one would hand every
+// reader the obligation to check it, and would publish a map this node already
+// knows is wrong.
+//
+// AND SAID SO, at warn. No builder in this tree produces a map that fails to
+// tile; the one way a valid build fails the check is text that is not UTF-8
+// (external content a vendor sent), and either way every screen silently drew
+// this prompt from its headings instead — a builder regression that degraded
+// them all would otherwise have no symptom anybody could find.
+func promptSections(ctx context.Context, ph phase.Phase, p prompts.Prompt) []types.PromptSection {
+	if len(p.Sections) == 0 {
+		return nil
+	}
+	if !p.Valid() {
+		log.WarnContext(ctx, "prompt_outline_withheld", "phase", ph,
+			"sections", len(p.Sections), "bytes", len(p.Text),
+			"valid_utf8", utf8.ValidString(p.Text))
+		return nil
+	}
+	out := make([]types.PromptSection, 0, len(p.Sections))
+	for _, s := range p.Sections {
+		out = append(out, types.PromptSection{
+			Key: s.Key, Title: s.Title, Bytes: s.Bytes, Headed: s.Headed,
+		})
+	}
+	return out
+}
+
 // roundNarration renders the loop's per-round model turns in the wire shape
-// consumers read: round, reasoning, content.
+// consumers read: round, reasoning, content, and `declined` on a round that
+// answered in prose where the phase had to end in a call.
 //
 // The round number matches the one on that round's tool executions, which is
 // the whole contract — it is what lets a reader interleave the two lists into
 // one chronological ledger without a second ordering rule.
+//
+// `declined` is written only when true, so absent means no — the reading every
+// reader gives an omitted flag.
 func roundNarration(narr []toolloop.Narration) []types.RoundNarration {
 	if len(narr) == 0 {
 		return nil
 	}
 	out := make([]types.RoundNarration, 0, len(narr))
 	for _, n := range narr {
-		out = append(out, types.RoundNarration{
+		row := types.RoundNarration{
 			"round":     n.Round,
 			"reasoning": n.Reasoning,
 			"content":   n.Content,
-		})
+		}
+		if n.Declined {
+			row["declined"] = true
+		}
+		out = append(out, row)
 	}
 	return out
 }

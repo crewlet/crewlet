@@ -278,8 +278,9 @@ func (f *LogFile) validate(path Path) error {
 			*f.MaxBackups, logging.MaxBackupsCeiling)
 	}
 	// A SHAPE, A LEVEL OR A CAP WITH NO PATH WRITES NOTHING, and reads in
-	// review as a node that logs to a file. Refused rather than ignored:
-	// the same rule the retired `debug:` field is the scar from.
+	// review as a node that logs to a file. Refused rather than ignored,
+	// because a setting that quietly does nothing runs that way for as long
+	// as nobody looks.
 	if f.Path == "" && (f.Format != "" || f.Level != "" || f.MaxSizeMB != nil || f.MaxBackups != nil) {
 		p.add(at(path, "path"), ErrMissing,
 			"the file block sets a shape, a level or a cap but names no file, so "+
@@ -337,11 +338,10 @@ func (l *Logging) StderrEnabled() bool { return l.Stderr == nil || *l.Stderr }
 // LogSettings is what this file asks the process to log at, and in what
 // shape, with every default applied.
 //
-// ONE WAY TO SAY IT. There was a `debug: true` boolean beside this block —
-// retired rather than wired up, because two keys setting one value is a
-// state where they disagree and something has to arbitrate. `logging.level`
-// says everything it said and three things it could not. The CLI's flags are
-// layered on top of this by `crewlet run`, and only when actually given.
+// ONE WAY TO SAY IT. `logging.level` is the only key that sets the level,
+// because two keys setting one value is a state where they disagree and
+// something has to arbitrate. The CLI's flags are layered on top of this by
+// `crewlet run`, and only when actually given.
 func (b *Bootstrap) LogSettings() (slog.Level, logging.Format) {
 	level := slog.LevelInfo
 	if b.Logging.Level != "" {
@@ -1107,11 +1107,7 @@ const DefaultStorePath = "crewlet.db"
 //
 // # There is no driver field
 //
-// There was one — `driver: turso | sqlite` — and it is retired. Turso is the
-// database and the only driver, so the field selected between two
-// implementations of which one exists. A file that still
-// carries it is answered by name rather than as a misspelling; see
-// retiredBootstrapFields in load.go.
+// Turso is the only driver, so there is no field to choose one (ADR-0007).
 type Store struct {
 	// Path is the database file. Created if absent, along with its parent.
 	Path string `yaml:"path,omitempty" json:"path,omitempty" desc:"Local database file this node owns exclusively."`

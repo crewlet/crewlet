@@ -41,9 +41,10 @@ type Units interface {
 	// exactly the split-column defect this removes and is invisible in the
 	// answer. One method on one seam is a compile error instead.
 	//
-	// The order is the chart's own walk. Nothing here depends on it: the
-	// arms of one CASE are mutually exclusive by construction, since a
-	// unit key is unique across the company by admission rule.
+	// The order is the chart's own walk, which is the order resolution
+	// answers two units of one name in: a submitted document is refused for
+	// the pair, but a revision applied under the runnable rules can carry
+	// one, and the first arm of a CASE that matches is the one it takes.
 	AllUnits() []ChartUnit
 }
 

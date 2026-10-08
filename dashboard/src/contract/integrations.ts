@@ -36,8 +36,10 @@ export interface ReconcileFinding {
    * not do and cannot undo, on an integration that is working. A reader that
    * treats every finding as a fault reports those as broken; one that keeps
    * its own list of which kinds are advisory reports a kind it has not heard
-   * of as fine, which is worse. Optional because a node older than the field
-   * sends neither — treat an absent phase as "cannot say", never as ready.
+   * of as fine, which is worse. Optional because a setup pass's own findings
+   * (`SetupRun.findings`) are marshalled without a verdict — only the
+   * integrations rows carry one. Treat an absent phase as "cannot say",
+   * never as ready.
    */
   phase?: string;
   actor?: string;
@@ -78,8 +80,10 @@ export interface ReconcileStatus {
   /**
    * The phase in a reader's words, from [integration.Phase.Label] in Go.
    *
-   * Optional because a node older than the field sends none, not because a
-   * screen may skip it: derive nothing from `phase` that this can answer.
+   * Optional because a setup pass's own report (`SetupRun.report`) is
+   * marshalled without one — the integrations rows always carry it — not
+   * because a screen may skip it: derive nothing from `phase` that this can
+   * answer.
    */
   phase_label?: string;
   /**
@@ -119,8 +123,15 @@ export interface ReconcileStatus {
 export interface IntegrationRow {
   key: string;
   configured: boolean;
-  /** Deliveries the edge accepted. */
-  inbound?: number | null;
+  /**
+   * Deliveries that arrived at this row's own ingress — one delivery presented
+   * to one seat, counted once across the fleet: a verified webhook, or a
+   * Mattermost post its socket claimed. Counted by INGRESS rather than by
+   * integration, so a Forge-relayed Jira event counts once, under `forge`, and
+   * a card summing its surfaces counts it once. Zero when nothing was
+   * measured, which `traffic_known` says.
+   */
+  inbound?: number;
   /**
    * The two OUTCOME counts, three-valued: a number, or null when this process
    * could not read its event log. Reporting that as 0 would claim every
@@ -129,7 +140,8 @@ export interface IntegrationRow {
    * They are read together with `inbound` and are misleading apart: "128
    * arrived" alone cannot tell a working integration from one whose every
    * delivery reaches nobody, and a seat draining a thread's backlog as one
-   * turn looks like a seat that ignored twelve messages.
+   * turn looks like a seat that ignored twelve messages. All three are
+   * counted over the one window `traffic_since` names.
    */
   skipped?: number | null;
   coalesced?: number | null;
@@ -202,8 +214,13 @@ export interface IntegrationsAnswer {
   /** One roll-up per tool in `INTEGRATION_TOOLS`, whether configured or not. */
   tools?: IntegrationTool[];
   traffic_known: boolean;
-  /** The oldest delivery counted, or null when nothing was: the page is
-   *  capped rather than time-bounded, so there is no fixed window to name. */
+  /** Where the ONE window every count covers starts — `inbound`, `skipped`,
+   *  `coalesced` and `last_at` alike — which ends when the answer was read:
+   *  the 30-day history floor when no delivery lies past the delivery page
+   *  (an empty page included: nothing delivered in 30 days is a count, and
+   *  the drops and merges of those 30 days are counted beside it), or just
+   *  after the oldest delivery a capped page reached. Null only when no event
+   *  log could be read. RFC 3339 to the microsecond, as `last_at` is. */
   traffic_since: string | null;
   /** Which nodes the traffic counts were read from — a delivery is stored on
    *  whichever node received it — or null when no store could be read. */

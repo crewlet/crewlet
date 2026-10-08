@@ -208,15 +208,12 @@ func openCodeMCP(servers map[string]sandbox.MCPServer) map[string]any {
 	return out
 }
 
-// Layout is OpenCode's one layout, the one it has always been launched with.
-func (OpenCode) Layout() int { return 0 }
-
-// Output is OpenCode's layout, whatever the job declared — it has only ever
-// had one: its stdout IS its event stream and its result is derived from it,
-// and the stream's end can say the agent is done before the process exits —
-// which is the hang [OpenCode.Finished] exists for. The stream is the file
-// every build's clear removes, so a reused box never shows a job another's.
-func (OpenCode) Output(paths Paths, _ int) Output {
+// Output is where OpenCode writes: its stdout IS its event stream and its
+// result is derived from it, and the stream's end can say the agent is done
+// before the process exits — which is the hang [OpenCode.Finished] exists for.
+// The stream is the result file the clear removes, so a reused box never shows
+// a job another's.
+func (OpenCode) Output(paths Paths) Output {
 	return Output{Stdout: paths.Result(), Events: true, Terminal: true}
 }
 

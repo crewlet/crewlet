@@ -541,7 +541,9 @@ func TestThePromptSurvivesRoundsThatDoNotCarryIt(t *testing.T) {
 		"round_num": -1,
 		"prompt":    "post the weekly summary",
 		"prompt_messages": []any{
-			map[string]any{"role": "system", "content": "you are the Lead"},
+			map[string]any{"role": "system", "content": "you are the Lead", "sections": []any{
+				map[string]any{"key": "identity", "title": "Identity", "bytes": 16},
+			}},
 			map[string]any{"role": "user", "content": "post the weekly summary"},
 		},
 	}), streamOnly, at("2026-06-14T12:00:01+00:00")))
@@ -554,8 +556,15 @@ func TestThePromptSurvivesRoundsThatDoNotCarryIt(t *testing.T) {
 		t.Errorf("prompt = %q — a round that did not carry it blanked it", call.Prompt)
 	}
 	if len(call.PromptMessages) != 2 {
-		t.Errorf("prompt_messages = %v, want the system message the phase was given",
+		t.Fatalf("prompt_messages = %v, want the system message the phase was given",
 			call.PromptMessages)
+	}
+	// AND EACH MESSAGE'S OUTLINE WITH IT, verbatim: the dashboard draws the
+	// prompt's parts from the map its builder recorded, and a live view that
+	// dropped it would fall back to guessing them from the text's headings.
+	system, _ := call.PromptMessages[0].(map[string]any)
+	if sections, _ := system["sections"].([]any); len(sections) != 1 {
+		t.Errorf("the system message's sections did not reach live_call: %v", system)
 	}
 }
 
@@ -612,9 +621,9 @@ func TestTheRunningCallAppearsAndClears(t *testing.T) {
 		t.Errorf("call = %+v, want every field the frame stated", call)
 	}
 
-	// The call returned: the next frame names none, and names no item or
-	// node either, as a frame from an older build would not.
-	s.Apply(env("agent_turn_progress", with(planCall(), map[string]any{
+	// The call returned: the next frame names none, and names the item and
+	// the node as every frame of the call does.
+	s.Apply(env("agent_turn_progress", with(base, map[string]any{
 		"round_num": 0, "rounds": []any{map[string]any{"round": 1}},
 	}), streamOnly, at("2026-06-14T12:00:03Z")))
 	call = liveCallOf(t, s, "Lead")
@@ -622,7 +631,7 @@ func TestTheRunningCallAppearsAndClears(t *testing.T) {
 		t.Errorf("running call = %+v, want it cleared once the frame stopped naming it", call.RunningCall)
 	}
 	if call.Node != "core-1" || call.WorkItem == nil {
-		t.Errorf("node %q item %+v, want both carried from the frame that named them",
+		t.Errorf("node %q item %+v, want both as the frame named them",
 			call.Node, call.WorkItem)
 	}
 }

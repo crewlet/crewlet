@@ -999,6 +999,7 @@ func TestTheFleetAnswersOneSearchBetweenItsMembers(t *testing.T) {
 		answers, err := search.Broker{Queue: n.engine.Backends().Queue}.Scatter(
 			deadline, search.FanQuery{
 				Text: "rollback drain node", Sources: []string{"page"},
+				Methods: []search.Method{search.MethodLexical},
 			}, peers)
 		cancel()
 		if err != nil {
@@ -1341,7 +1342,8 @@ func TestAPartitionedMemberIsSilentRatherThanSlow(t *testing.T) {
 		t.Fatalf("a fleet of %d left %d peers to ask", fleetSize, len(peers))
 	}
 
-	query := search.FanQuery{Text: "rollback drain node", Sources: []string{"page"}}
+	query := search.FanQuery{Text: "rollback drain node", Sources: []string{"page"},
+		Methods: []search.Method{search.MethodLexical}}
 	scatter := func(budget time.Duration) ([]search.Slice, time.Duration) {
 		t.Helper()
 		started := time.Now()

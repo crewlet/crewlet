@@ -217,6 +217,9 @@ var contract = []Entry{
 	{"LIVE_OUTPUT_MAX_BYTES", ReadScalar, "internal/sandbox.TestTheDashboardHoldsWhatTheRecordWillHold"},
 	{"SANDBOX_TAIL_POLL_MS", ReadScalar, "internal/sandbox.TestTheDashboardPollsPastTheOwnersReuse"},
 
+	// stops.ts
+	{"StopReason", ReadUnion, "internal/providers/llm.TestTheDashboardKnowsEveryStopReason"},
+
 	// fleet.ts
 	{"BROKER_KINDS", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryBrokerKind"},
 	{"BROKER_FINDING_KINDS", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryBrokerFinding"},

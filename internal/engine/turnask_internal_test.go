@@ -37,10 +37,10 @@ func TestTheTurnsAskIsWhatWasAskedNotTheWrapping(t *testing.T) {
 			wantNot: []string{"Slack message", "## Triage"},
 		},
 		{
-			// An event from a build that predates the stamp decodes with
-			// a subject that is content, which is how that build read
-			// every subject.
-			name: "a notification from an older build keeps its subject",
+			// A subject NOT marked a label is content and is kept, even
+			// one that reads like a surface's name: only the stamp
+			// decides, never the words.
+			name: "a subject not marked a label is kept",
 			event: events.New(types.ExternalNotification{
 				NotificationSource: "slack", Sender: "U0FOUNDER",
 				Subject: "Slack message", Body: scaffold, SalientBody: &salient,

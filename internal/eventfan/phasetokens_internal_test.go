@@ -31,6 +31,17 @@ func spendNode(t *testing.T, b *memory.Broker, id string) (*store.EventLog, queu
 	return db.Events(), q
 }
 
+// memberQueue is one member's client of a shared in-memory broker.
+func memberQueue(t *testing.T, b *memory.Broker) queue.EventQueue {
+	t.Helper()
+	q := b.Client()
+	if err := q.Start(t.Context()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(t.Context())) })
+	return q
+}
+
 func spendRow(t *testing.T, log *store.EventLog, id string, at time.Time) {
 	t.Helper()
 	if err := log.Append(t.Context(), store.EventRecord{

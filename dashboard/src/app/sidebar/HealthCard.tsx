@@ -117,16 +117,12 @@ export function healthReading(input: {
   if (!health) {
     return { tone: "warning", title: "Waiting for the engine", detail: "No health report yet" };
   }
-  const epoch = health.applied_epoch;
   return {
     tone: "success",
     // HEALTHY ONLY WITH NOTHING TO REFUTE IT: an alarm line — standing, or a
     // table not evaluated yet — is exactly what the word would contradict.
     title: alarms ? "Engine serving" : "Engine healthy",
-    detail:
-      epoch !== undefined
-        ? `${nodeCountLabel(health.nodes)} · config epoch ${epoch}`
-        : nodeCountLabel(health.nodes),
+    detail: `${nodeCountLabel(health.nodes)} · config epoch ${health.applied_epoch}`,
     ...(alarms ? { alarms } : {}),
   };
 }

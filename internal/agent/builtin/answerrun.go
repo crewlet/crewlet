@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -63,16 +62,25 @@ type RunDeps struct {
 //
 // It answers `pending`: the answer is on the seat's inbox and the node holding
 // the seat will resume the run with it — but that node is the only one that
-// can, and it may be paused, restarting or mid-upgrade. What the answer became
-// is announced there as `sandbox_run_answered` (`resumed`, `not_awaiting` or
-// `gone`). What it refuses up front is what this node can know: a run that is
-// not waiting for an answer (`not_running`), and a fleet whose node holding the
-// seat runs a build that cannot route the answer (`peer_upgrading`) — an older
-// build would read it as an ordinary wake and run a turn about nothing while
-// the run waited on.
+// can, and it may be paused, busy with another of the seat's coding runs
+// (which it finishes or parks before it takes this answer, as it would a chat
+// reply), or restarting. What the answer became is announced there
+// as `sandbox_run_answered` (`resumed`, `not_awaiting`, `gone` or `declined`).
+// What it refuses up front is what this node can know: a run that is not waiting for an
+// answer (`not_running`).
+//
+// # It answers the question it was given against
+//
+// The answer names the QUESTION as well as the run — the job the run held when
+// it asked, off the row read here — because it reaches the seat
+// some time after it was given, and by then the run may have been resumed by
+// somebody else's answer and parked on a new question. An answer that named
+// only the run resumed it a second time, as the answer to a question this
+// person never saw. Carrying the question, it resumes the run only while the
+// run still waits on that one, and is announced `not_awaiting` otherwise
+// ([sandbox.Coordinator.AnswerByTurn]).
 type answerRun struct {
-	deps  RunDeps
-	fleet Fleet
+	deps RunDeps
 }
 
 var _ tools.SeatCallable = (*answerRun)(nil)
@@ -82,7 +90,8 @@ func (t *answerRun) Name() string { return AnswerRunTool }
 func (t *answerRun) Description() string {
 	return "Answer a coding run that stopped to ask a person a question, by " +
 		"naming the run's turn. The run resumes with your answer as the reply " +
-		"to its question, on the node that holds its seat. Use this for any " +
+		"to the question it is waiting on now, on the node that holds its seat, " +
+		"once that seat is free of any other coding run. Use this for any " +
 		"parked run — including one started by a schedule, an assignment or a " +
 		"colleague, which has no conversation to reply in. Find parked runs " +
 		"and their questions on the sandbox-runs board."
@@ -156,21 +165,20 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"waiting for an answer — there is no question for this to answer.",
 			clip(turnID), run.Status)), nil
 	}
-	if refusal := seatCanCarry(ctx, t.fleet, AnswerRunTool, run.AgentHandle,
-		coord.FeatureAnswerRunByTurn); refusal != nil {
-		return *refusal, nil
-	}
-
 	given := types.SandboxAnswerGiven{
 		TurnID: run.TurnID, AgentHandle: run.AgentHandle, Answer: answer,
 		AnsweredBy: actor.Handle, AnsweredBySeat: actor.Seat,
+		// THE QUESTION THIS ANSWERS, off the row just checked as waiting:
+		// the answer resumes the run only while it still waits on it.
+		LaunchID: run.LaunchID,
 	}
 	outcome := statelog.OutcomePending
 	if err := t.deps.Desk.Deliver(ctx, given); err != nil {
 		// THE PUBLISH MAY HAVE LANDED, so this is `unknown` rather than a
 		// refusal — see [sandbox.AnswerDesk.Deliver]. Answering it again is
-		// safe: whichever copy is consumed second finds the run no longer
-		// waiting.
+		// safe: both copies name the question they answer, so whichever is
+		// consumed second finds that question no longer waiting — even when
+		// the run has moved on to another question by then.
 		log.WarnContext(ctx, "answer_run_delivery_unknown",
 			"turn_id", run.TurnID, "seat", run.AgentHandle, "error", err.Error())
 		outcome = statelog.OutcomeUnknown

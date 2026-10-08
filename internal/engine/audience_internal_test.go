@@ -170,7 +170,8 @@ func TestTheDispatcherHandsAnAnswerByTurnToTheCoordinator(t *testing.T) {
 	if d.AnswerByTurn == nil {
 		t.Fatal("the dispatcher has no route for an answer by turn on a node with a coordinator")
 	}
-	given := types.SandboxAnswerGiven{TurnID: "no-such-run", AgentHandle: "swe", Answer: "main"}
+	given := types.SandboxAnswerGiven{TurnID: "no-such-run", AgentHandle: "swe", Answer: "main",
+		LaunchID: "launch-1"}
 	disposition, err := d.AnswerByTurn(t.Context(), given, events.New(given, events.TraceContext{}))
 	if err != nil || disposition != sandbox.AnswerNotMine {
 		t.Fatalf("an answer to a run with no record = %q, %v, want the coordinator's not_mine",

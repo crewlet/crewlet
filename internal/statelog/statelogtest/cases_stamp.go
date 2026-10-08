@@ -140,8 +140,8 @@ func seedCheckpoint(ctx context.Context, db store.ReplicatedHandle, at statelog.
 		now := store.EncodeTime(time.Unix(1_700_000_000, 0).UTC())
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO statelog_cursor
-				(stream, generation, seq, stream_created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?)`,
+				(stream, generation, seq, stream_created_at, updated_at, applied_version)
+			VALUES (?, ?, ?, ?, ?, 0)`,
 			at.Stream, int64(at.Generation), int64(at.Seq), now, now)
 		return err
 	})

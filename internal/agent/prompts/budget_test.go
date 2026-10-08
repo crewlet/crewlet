@@ -69,7 +69,7 @@ func TestTheExecutorPromptStaysUnderBudgetWithABigCatalogue(t *testing.T) {
 	for i := range lines {
 		lines[i] = fmt.Sprintf("- tool_%d: Short description of tool number %d.", i, i)
 	}
-	p := BuildExecutor(lead(), ExecutorInput{ToolCatalogue: strings.Join(lines, "\n")})
+	p := BuildExecutor(lead(), ExecutorInput{ToolCatalogue: strings.Join(lines, "\n")}).Text
 	withinBudget(t, "executor", p, 2200)
 }
 
@@ -109,7 +109,7 @@ func TestTheExecutorPromptStaysUnderBudgetWithABigCatalogue(t *testing.T) {
 // left before the split — the raise pays for the rule, not for room.
 func TestReviewPromptIsSmall(t *testing.T) {
 	t.Parallel()
-	withinBudget(t, "review", BuildReview(lead(), ReviewInput{}), 800)
+	withinBudget(t, "review", BuildReview(lead(), ReviewInput{}).Text, 800)
 }
 
 // THE WHOLE TURN, which is the number that actually bills.
@@ -126,7 +126,7 @@ func TestTheWholeTurnStaysUnderBudget(t *testing.T) {
 	for i := range lines {
 		lines[i] = fmt.Sprintf("- tool_%d: Short description of tool number %d.", i, i)
 	}
-	whole := BuildExecutor(lead(), ExecutorInput{ToolCatalogue: strings.Join(lines, "\n")}) +
-		BuildReview(lead(), ReviewInput{})
+	whole := BuildExecutor(lead(), ExecutorInput{ToolCatalogue: strings.Join(lines, "\n")}).Text +
+		BuildReview(lead(), ReviewInput{}).Text
 	withinBudget(t, "turn", whole, 3000)
 }

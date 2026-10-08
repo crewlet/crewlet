@@ -15,9 +15,9 @@ type Envelope struct {
 	ToolCalls []EnvelopeCall
 	// Parsed is false when nothing in the reply was an envelope. The
 	// caller then hands the whole reply back as assistant content with no
-	// tool calls, and the tool loop's own tool_choice="required"
-	// corrective re-prompt takes over: a malformed reply costs one round,
-	// it never fails a turn.
+	// tool calls, and the tool loop's finishing corrective takes over in
+	// every phase that finishes by a call, naming its submission: a
+	// malformed reply costs one round, it never fails a turn.
 	Parsed bool
 }
 
@@ -25,6 +25,13 @@ type Envelope struct {
 type EnvelopeCall struct {
 	Name      string
 	Arguments map[string]any
+	// ArgumentsError is why the arguments the model wrote could not be read
+	// — a string holding no single JSON object, a number, a list — and
+	// empty when they could, or when it wrote none. Arguments is then
+	// EMPTY, and the call is KEPT rather than dropped: it is what the model
+	// asked for, and [llm.ToolCall.ArgumentsError] is how the tool loop
+	// answers it with this reason instead of running it with nothing.
+	ArgumentsError string
 }
 
 // messageKeys are the synonyms accepted for the prose field.
@@ -197,9 +204,29 @@ func fromDocument(doc map[string]any) (Envelope, bool) {
 		if !ok {
 			continue
 		}
-		calls, isList := v.([]any)
-		if !isList {
-			continue
+		var calls []any
+		switch typed := v.(type) {
+		case []any:
+			calls = typed
+		case map[string]any:
+			// ONE CALL WRITTEN WITHOUT ITS LIST. A model asked for a
+			// list of one routinely drops the brackets, and the object
+			// is as runnable as the list holding it — so it is read as
+			// that list, and the rule below decides it exactly as it
+			// would have decided `[obj]`.
+			calls = []any{typed}
+		case nil:
+			// `null` is the model saying "no calls", the same answer as
+			// an empty list, as an argument list's `null` is no
+			// arguments in [readArguments].
+		default:
+			// A STRING, A NUMBER, A BOOLEAN: a call key the model
+			// filled with something no call can be read from. The same
+			// verdict as the unreadable list below, for the same reason
+			// — skipping it here left `found` to the message synonym, so
+			// the reply parsed as an envelope that asked for no tools
+			// and the call was dropped without a word.
+			return Envelope{}, false
 		}
 		for _, raw := range calls {
 			call, ok := readCall(raw)
@@ -209,12 +236,13 @@ func fromDocument(doc map[string]any) (Envelope, bool) {
 		}
 		// A NON-EMPTY LIST NOTHING COULD BE READ FROM IS NOT AN ENVELOPE.
 		// An EMPTY list is: the model saying "no calls, here is my note",
-		// which is an ordinary final answer.
+		// which is an ordinary final answer — whether a reply with no call
+		// may END the phase is the tool loop's question, not the parser's.
 		//
 		// The difference matters because of what happens next. A document
-		// that is not an envelope becomes assistant prose and the tool
-		// loop's `tool_choice="required"` corrective re-prompt asks again
-		// — one round, and the model reliably fixes it. Accepting this
+		// that is not an envelope becomes assistant prose, and in a phase
+		// that has to end in a call the tool loop's corrective re-prompt
+		// asks again — one round, and the model reliably fixes it. Accepting this
 		// one instead reported that the model requested NO tools when it
 		// had requested several, so the turn ended on a message like
 		// "I'll post it now" with nothing delivered and nothing to say
@@ -248,16 +276,30 @@ func readCall(raw any) (EnvelopeCall, bool) {
 		// reject it one layer later with a worse message.
 		return EnvelopeCall{}, false
 	}
+	// The first synonym that READS wins. When one is present and none
+	// reads, the call is still the model's — but it must not run on an
+	// empty map standing in for arguments it never wrote, which would be a
+	// search over everything or a post with no body. So the first
+	// unreadable synonym's reason is kept and the tool loop answers the call
+	// with it, a failed result the model can read and correct.
+	var unreadable error
 	for _, key := range argumentKeys {
 		v, ok := obj[key]
 		if !ok {
 			continue
 		}
-		args, ok := readArguments(v)
-		if ok {
+		args, err := readArguments(v)
+		if err == nil {
 			call.Arguments = args
+			unreadable = nil
 			break
 		}
+		if unreadable == nil {
+			unreadable = fmt.Errorf("%q %w", key, err)
+		}
+	}
+	if unreadable != nil {
+		call.ArgumentsError = unreadable.Error()
 	}
 	if call.Arguments == nil {
 		call.Arguments = map[string]any{}
@@ -266,29 +308,36 @@ func readCall(raw any) (EnvelopeCall, bool) {
 }
 
 // readArguments reads one call's arguments, accepting both an object and a
-// JSON string holding one.
+// JSON string holding one, and says what it found when it is neither.
 //
 // The string form is not a model quirk to tolerate grudgingly: it is what the
 // OpenAI tool-call wire format uses, so a model that has seen that format
 // reproduces it faithfully. Rejecting it would fail the calls from the models
 // that had learned the convention best.
-func readArguments(v any) (map[string]any, bool) {
+func readArguments(v any) (map[string]any, error) {
 	switch typed := v.(type) {
 	case map[string]any:
-		return typed, true
+		return typed, nil
 	case string:
 		trimmed := strings.TrimSpace(typed)
 		if trimmed == "" {
-			return map[string]any{}, true
+			return map[string]any{}, nil
 		}
 		if args, ok := decodeEnvelopeObject(trimmed); ok {
-			return args, true
+			return args, nil
 		}
-		return nil, false
+		return nil, errors.New("is a string that does not hold exactly one complete JSON object")
 	case nil:
-		return map[string]any{}, true
+		return map[string]any{}, nil
+	case json.Number:
+		// Numbers decode through json.Number (see decodeEnvelopeObject).
+		return nil, errors.New("is a number, not a JSON object")
+	case []any:
+		return nil, errors.New("is a list, not a JSON object")
+	case bool:
+		return nil, errors.New("is a boolean, not a JSON object")
 	default:
-		return nil, false
+		return nil, fmt.Errorf("is a %T, not a JSON object", typed)
 	}
 }
 
@@ -296,7 +345,11 @@ func readArguments(v any) (map[string]any, bool) {
 // tools. A call with NO tools gets no contract at all: auxiliary work
 // (summarisation, the relevance filter) sends a plain prompt and reads a plain
 // answer, with no envelope to get wrong.
-func RenderContract(required bool) string {
+//
+// ONE FORM, the permissive one, because a request never forces a call (see
+// [llm.Request.Tools]): a phase that must end in a call names it in the
+// conversation, and the tool loop asks again when a round ends without it.
+func RenderContract() string {
 	var b strings.Builder
 	b.WriteString("## Response contract\n\n")
 	b.WriteString("Reply with ONE fenced json block and nothing outside it:\n\n")
@@ -304,12 +357,7 @@ func RenderContract(required bool) string {
 	b.WriteString(`{"message": "a short note for the operator, or an empty string", `)
 	b.WriteString(`"tool_calls": [{"name": "tool_name", "arguments": {"argument": "value"}}]}`)
 	b.WriteString("\n```\n\n")
-	if required {
-		b.WriteString("You MUST request at least one tool call. " +
-			"An empty tool_calls list is not an acceptable answer to this turn.\n")
-	} else {
-		b.WriteString("Use an empty tool_calls list when no tool is needed.\n")
-	}
+	b.WriteString("Use an empty tool_calls list when no tool is needed.\n")
 	return b.String()
 }
 

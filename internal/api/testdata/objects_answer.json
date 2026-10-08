@@ -11,7 +11,6 @@
         "aged": 1702,
         "deleted": 12,
         "referenced": 1690,
-        "retired": 3,
         "abandoned": 1
       },
       "audit": {
@@ -52,7 +51,6 @@
         "aged": 1702,
         "deleted": 12,
         "referenced": 1690,
-        "retired": 3,
         "abandoned": 1
       },
       "audit": {
@@ -95,7 +93,6 @@
         "aged": 1702,
         "deleted": 12,
         "referenced": 1690,
-        "retired": 3,
         "abandoned": 1
       },
       "audit": {
@@ -124,7 +121,6 @@
         "aged": 1702,
         "deleted": 500,
         "referenced": 0,
-        "retired": 0,
         "abandoned": 0,
         "skipped": "a record this node could not apply may refer to objects in the store",
         "sweep_error": "s3obj: list the uploads under \"acme/\": AccessDenied"

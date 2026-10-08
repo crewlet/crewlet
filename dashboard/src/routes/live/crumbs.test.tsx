@@ -35,6 +35,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { resetForTest } from "~/lib/recents.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { EventRecord, OrgProjection } from "~/protocol/index.ts";
+import { withDerived } from "~/test/org.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -81,7 +82,7 @@ function mount(
 ) {
   location.hash = hash;
   const store = new Store();
-  if (org) store.applyOrg(org);
+  if (org) store.applyOrg(withDerived(org));
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
     Promise.resolve(answers[what] ?? {});
@@ -138,7 +139,12 @@ function turnRecord(planSummary: string): EventRecord {
 // prose and the segment is a uuid.
 test("a turn is named by what it did, in the trail, the tab and the recents", async () => {
   mount(`#/live/turns/${TURN}`, <TurnScreen turnId={TURN} />, {
-    turn: { turn_id: TURN, truncated: false, events: [turnRecord("Cut the 0.2.0 release.")] },
+    turn: {
+      turn_id: TURN,
+      truncated: false,
+      nodes: [],
+      events: [turnRecord("Cut the 0.2.0 release.")],
+    },
   });
   await settle();
 
@@ -155,6 +161,7 @@ test("a turn's label is the lead of its summary, not the whole account", async (
     turn: {
       turn_id: TURN,
       truncated: false,
+      nodes: [],
       events: [
         turnRecord("Replied in the thread. Then activated mattermost_post_message to confirm."),
       ],
@@ -170,7 +177,7 @@ test("a turn's label is the lead of its summary, not the whole account", async (
 // names no turn and two of them in the recents are one row twice.
 test("a turn nothing has named keeps its id rather than taking a placeholder", async () => {
   mount(`#/live/turns/${TURN}`, <TurnScreen turnId={TURN} />, {
-    turn: { turn_id: TURN, truncated: false, events: [] },
+    turn: { turn_id: TURN, truncated: false, nodes: [], events: [] },
   });
   await settle();
 
@@ -186,6 +193,7 @@ test("a turn on a task is named by its place on the task, under its seat", async
     turn: {
       turn_id: TURN,
       truncated: false,
+      nodes: [],
       events: [
         event({
           id: "opening",

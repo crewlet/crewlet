@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
@@ -47,26 +46,13 @@ import (
 // node that owns the run did not answer inside the fleet read budget — NAMED,
 // because "the run said nothing" and "the node that could ask it did not
 // answer" send a reader to opposite places, and collapsing the second into an
-// empty tail is exactly the lie a screen that polls cannot recover from.
-// `owner_upgrading{node}` is the owner's BUILD saying it serves no such
-// question — what a rolling upgrade looks like — which is neither silence
-// (retrying cannot help) nor a run that stopped. `box_paused` is a running
-// record whose box is paused, which a reader never wakes.
+// empty tail is exactly the lie a screen that polls cannot recover from. An
+// owner with no presence — draining, or its heartbeat lapsed — is asked like
+// any other, and its silence is that same `owner_silent`. `box_paused` is a
+// running record whose box is paused, which a reader never wakes.
 //
 // A box that the owner could not read is an ERROR rather than an outcome: it
 // clears by asking again, and the reader shows the owner's own sentence.
-
-// MaxLiveOutputBytes is how much of a running job's account of itself one
-// answer carries in the WINDOW shape: the last 8 KiB, in whole lines, replaced
-// on every poll.
-//
-// That is the shape every asker read before cursors, kept for the askers that
-// still do — a node on an older build mid-upgrade, the dashboard it serves, and
-// the REST route's existing callers — because a window is re-sent whole on
-// every poll, and 8 KiB is a size a poll can repeat indefinitely. An asker
-// that reads by cursor ([TailCursor]) holds what the record will hold instead,
-// [MaxRunTextBytes], and is sent only what it lacks.
-const MaxLiveOutputBytes = 8 << 10
 
 // TailReadBudget is how long a tail request waits for the owning node to
 // answer: the fleet read budget every other scatter in this engine answers
@@ -106,26 +92,23 @@ func (s OutputSource) Valid() bool {
 	return s == SourceTranscript || s == SourceStderr || s == SourceNone
 }
 
-// Output is what a job has said about itself, as one answer carries it: a
-// WINDOW, for an asker that reads no cursor, or what a CURSOR lacks.
+// Output is what a job has said about itself, as one answer carries it: what
+// the asker's CURSOR lacks ([TailCursor]).
 //
-// The cursor fields are ADDITIVE and absent from a window: an asker on an
-// older build reads the five fields it always read, and a window from an older
-// owner reads, here, as a window. On a cursor answer the ones a reader
-// compares against what it holds — Epoch, Start, End and Digest — are ALWAYS
-// present.
+// The fields a reader compares against what it holds — Epoch, Start, End and
+// Digest — are ALWAYS present, and an asker holds at most what the run's record
+// will hold, [MaxRunTextBytes]: an answer is sent only what it lacks, so how
+// much a view holds costs nothing per poll.
 type Output struct {
 	// Text is the output, REDACTED — the box's environment holds the
-	// seat's credentials, and this reaches a screen. In a window, the last
-	// [MaxLiveOutputBytes] in whole lines; by cursor, what follows the
+	// seat's credentials, and this reaches a screen: what follows the
 	// asker's offset, or — on a Reset — the last [MaxRunTextBytes] in whole
 	// lines, which replaces what it held.
 	Text string `json:"text"`
 	// Source says which account Text is.
 	Source OutputSource `json:"source"`
 	// Cut is whether output came before what this answer carries and is
-	// not in it: lost to the window, or — on a reset — before the reset's
-	// start.
+	// not in it: on a reset, before the reset's start.
 	Cut bool `json:"cut"`
 	// AsOf is when the box was read, on the owning node's clock.
 	AsOf time.Time `json:"as_of"`
@@ -134,34 +117,24 @@ type Output struct {
 	// output will not grow again.
 	Finished bool `json:"finished"`
 
-	// WindowBytes is the most output this shape carries: [MaxLiveOutputBytes]
-	// for a window, [MaxRunTextBytes] for what a cursor holds — so a screen
-	// says the bound from the answer rather than spelling it itself.
-	WindowBytes int `json:"window_bytes,omitempty"`
-
-	// Cursor is whether this answer is cursor-shaped: the owner read the
-	// asker's cursor. False from an owner that reads none, whatever was
-	// asked — the asker then holds a window.
-	Cursor bool `json:"cursor,omitempty"`
 	// Epoch names the reading the offsets count in; a cursor naming
 	// another is answered with a Reset.
-	Epoch string `json:"epoch,omitempty"`
+	Epoch string `json:"epoch"`
 	// Start and End are the offsets of Text's first byte and of the byte
 	// after its last, in the epoch's text (UTF-8 bytes). End is what the
 	// asker holds through once it has this answer — its next offset.
 	//
-	// POINTERS, set on every cursor answer and nil on a window, because
-	// ZERO IS AN OFFSET: a reading that has settled nothing yet answers at
-	// end 0 and is followed from start 0, and `omitempty` on a plain integer
-	// folded both into "absent". A screen comparing a delta's start with
-	// what it held through then compared a missing field with 0, threw a
-	// valid delta away and asked for a reset; a REST caller told to send
-	// `end` back had no `end` to send.
-	Start *int64 `json:"start,omitempty"`
-	End   *int64 `json:"end,omitempty"`
+	// NEVER OMITTED, because ZERO IS AN OFFSET: a reading that has settled
+	// nothing yet answers at end 0 and is followed from start 0, and
+	// `omitempty` folded both into "absent". A screen comparing a delta's
+	// start with what it held through then compared a missing field with 0,
+	// threw a valid delta away and asked for a reset; a REST caller told to
+	// send `end` back had no `end` to send.
+	Start int64 `json:"start"`
+	End   int64 `json:"end"`
 	// Digest covers the window an asker holding through End holds; it goes
 	// back on the next request, beside End.
-	Digest string `json:"digest,omitempty"`
+	Digest string `json:"digest"`
 	// Reset is whether Text REPLACES what the asker holds rather than
 	// following it: its cursor named another reading, more than it may hold
 	// was written since, or its digest did not match.
@@ -178,8 +151,8 @@ type Output struct {
 
 // TailCursor is how much of a reading an asker holds: through Offset of the
 // reading named Epoch, with the Digest the owner gave it there. The zero
-// cursor holds nothing, and is answered with a Reset — which is what tells an
-// asker reading by cursor from one reading windows, who sends none at all.
+// cursor holds nothing, and is answered with a Reset — a first request, and a
+// view that lost step with its owner.
 type TailCursor struct {
 	Epoch  string `json:"epoch"`
 	Offset int64  `json:"offset"`
@@ -190,9 +163,8 @@ type TailCursor struct {
 type TailQuery struct {
 	TurnID   string
 	LaunchID string
-	// Cursor is set for an asker that reads by cursor (an empty one
-	// included), nil for one that reads windows.
-	Cursor *TailCursor
+	// Cursor is what the asker holds; the zero cursor holds nothing.
+	Cursor TailCursor
 }
 
 // TailOutcome is what one tail request concluded.
@@ -210,9 +182,6 @@ const (
 	// TailOwnerSilent is an owning node that did not answer inside the
 	// budget, or a run no node holds right now.
 	TailOwnerSilent TailOutcome = "owner_silent"
-	// TailOwnerUpgrading is an owning node whose build serves no tail
-	// request ([coord.FeatureSandboxTail]).
-	TailOwnerUpgrading TailOutcome = "owner_upgrading"
 	// TailBoxPaused is a running record whose box is PAUSED, which its
 	// backend cannot read without waking it ([ErrBoxPaused]) — and a peek
 	// never wakes a box. Its job has finished: only a collection pauses a
@@ -224,7 +193,7 @@ const (
 
 // TailOutcomes is every outcome this build answers.
 var TailOutcomes = []TailOutcome{
-	TailRunning, TailLaunching, TailNotRunning, TailOwnerSilent, TailOwnerUpgrading, TailBoxPaused,
+	TailRunning, TailLaunching, TailNotRunning, TailOwnerSilent, TailBoxPaused,
 }
 
 // Valid reports whether this build knows the outcome.
@@ -298,14 +267,6 @@ type TailAsker interface {
 	Ask(ctx context.Context, subject string, request []byte, want int) ([][]byte, error)
 }
 
-// TailFeatures says what one incarnation's build can do — the half of
-// [coord.FeatureReader] a tail needs. One read answers both questions a tail
-// asks of the owner, whether it serves tails and whether it reads cursors, so a
-// poll costs one read of the fleet's presence rather than one per question.
-type TailFeatures interface {
-	OwnerFeatures(ctx context.Context, owner string) ([]coord.Feature, error)
-}
-
 // TailServer makes a process one of a subject's answerers.
 type TailServer interface {
 	Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error)
@@ -327,13 +288,6 @@ type TailReader struct {
 	// Queue asks a peer. Nil is a node with no broker, which is the whole
 	// fleet: every run is its own.
 	Queue TailAsker
-
-	// Features says whether the owning incarnation's build answers a tail
-	// request at all, and whether it reads a cursor. Required with Queue,
-	// for internal/learning/memread's reason: asking an older build waits
-	// out the whole budget for a reply that can never come, on every poll,
-	// and then reports an owner that "did not answer".
-	Features TailFeatures
 
 	// Budget bounds a peer's answer; zero is [TailReadBudget].
 	Budget time.Duration
@@ -382,7 +336,7 @@ func (r *TailReader) Tail(ctx context.Context, q TailQuery) (TailAnswer, error) 
 
 // local answers from this node's own reading, inside the share of the budget
 // an owner answering a peer would have.
-func (r *TailReader) local(ctx context.Context, run PendingRun, cursor *TailCursor, answer TailAnswer) (TailAnswer, error) {
+func (r *TailReader) local(ctx context.Context, run PendingRun, cursor TailCursor, answer TailAnswer) (TailAnswer, error) {
 	if r.Feeds == nil {
 		return TailAnswer{}, errors.New("sandbox: this node owns the run and has no sandbox " +
 			"backend to reach its box with — providers.sandbox was removed by an apply")
@@ -402,22 +356,7 @@ func (r *TailReader) local(ctx context.Context, run PendingRun, cursor *TailCurs
 }
 
 // ask puts the request to the incarnation the record names.
-func (r *TailReader) ask(ctx context.Context, run PendingRun, cursor *TailCursor, answer TailAnswer) (TailAnswer, error) {
-	features, err := r.Features.OwnerFeatures(ctx, run.Owner)
-	if err != nil {
-		return TailAnswer{}, fmt.Errorf("sandbox: whether %s, which owns run %s, can answer "+
-			"could not be read: %w", answer.Node, run.TurnID, err)
-	}
-	if !slices.Contains(features, coord.FeatureSandboxTail) {
-		answer.Outcome = TailOwnerUpgrading
-		return answer, nil
-	}
-	if !slices.Contains(features, coord.FeatureSandboxTailCursor) {
-		// An owner that reads no cursor is asked for a window, which is
-		// what it answers anyway — and the answer says so by carrying no
-		// cursor of its own.
-		cursor = nil
-	}
+func (r *TailReader) ask(ctx context.Context, run PendingRun, cursor TailCursor, answer TailAnswer) (TailAnswer, error) {
 	raw, err := json.Marshal(tailRequest{
 		Version: tailWireVersion, TurnID: run.TurnID, LaunchID: run.LaunchID, Owner: run.Owner,
 		Cursor: cursor, BudgetMS: r.budget().Milliseconds(),
@@ -532,25 +471,16 @@ const tailWireVersion = 1
 var errTailNotAddressed = errors.New("sandbox: the tail request is addressed to another incarnation")
 
 // tailRequest is one request on the wire.
-//
-// TWO BUILDS READ IT, and both added fields are safe across them. An older
-// owner decodes past them — json.Unmarshal ignores what it does not know — and
-// answers a window, which the asker reads as one; that is also why a cursor is
-// sent only to an owner whose build advertises
-// [coord.FeatureSandboxTailCursor], so a cursor nobody reads is never in
-// flight. An older ASKER sends neither, and is answered the window it always
-// read, inside the budget it always had.
 type tailRequest struct {
 	Version  int    `json:"v"`
 	TurnID   string `json:"turn_id"`
 	LaunchID string `json:"launch_id"`
 	Owner    string `json:"owner"`
 
-	// Cursor is what the asker holds; absent is an asker reading windows,
-	// which is not the same thing as one holding nothing yet.
-	Cursor *TailCursor `json:"cursor,omitempty"`
+	// Cursor is what the asker holds; the zero cursor holds nothing.
+	Cursor TailCursor `json:"cursor"`
 	// BudgetMS is how long the asker waits for the reply; zero is
-	// [TailReadBudget], which every asker that sent none waited.
+	// [TailReadBudget].
 	BudgetMS int64 `json:"budget_ms,omitempty"`
 }
 
@@ -573,7 +503,5 @@ type tailReply struct {
 	Error   string  `json:"error,omitempty"`
 
 	// Paused is [TailBoxPaused]: the box is paused and was left so.
-	// ADDITIVE: an older asker reads a reply with nothing else on it as a
-	// launch that stopped running, which is what it nearly always is.
 	Paused bool `json:"paused,omitempty"`
 }

@@ -145,8 +145,9 @@ func (c *configClient) refusal(status int, contentType string, raw []byte) error
 	_ = json.Unmarshal(raw, &body)
 	switch {
 	case status == http.StatusNotFound:
-		return fmt.Errorf("%s has no /config surface: it is running a build "+
-			"from before this route existed, or it is not an engine node", c.base)
+		// PUT /config answers no 404 of its own, so any 404 is the surface
+		// missing rather than something under it.
+		return missingSurface(c.base, "/config", body.Error)
 	case status == http.StatusUnauthorized:
 		return fmt.Errorf("%s refused the bearer token: set %s to one of its "+
 			"api.auth.tokens", c.base, apiTokenEnv)

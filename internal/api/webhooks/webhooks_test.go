@@ -22,6 +22,9 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/observe"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -51,25 +54,42 @@ import (
 // to a second, which is exactly the quantity the window cases measure.
 var pinned = time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
 
-// recorder is a queue.Publisher that keeps what it was given, and can be made
-// to fail.
+// recorder is a queue.Publisher that keeps the WAKES it was given, and can be
+// made to fail.
+//
+// A delivery's RECORD it hands to `node` instead — what a real node does with
+// a published event: its publish listener files the row, and the projection
+// hears the envelope. So a case reads rows and live envelopes exactly as a
+// node would produce them, and the record is never mistaken for a wake.
 type recorder struct {
 	mu   sync.Mutex
 	sent []*events.Event
 	err  error
+	node func(context.Context, *events.Event)
 }
 
-func (r *recorder) Publish(_ context.Context, topic string, ev *events.Event) error {
+func (r *recorder) Publish(ctx context.Context, topic string, ev *events.Event) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.err != nil {
+		r.mu.Unlock()
 		return r.err
 	}
-	if topic != "crewlet.notifications.inbound" {
+	switch topic {
+	case topics.NotificationsInbound:
+		r.sent = append(r.sent, ev)
+		r.mu.Unlock()
+		return nil
+	case topics.Event(types.InboundDelivery{}.EventType()):
+		node := r.node
+		r.mu.Unlock()
+		if node != nil {
+			node(ctx, ev)
+		}
+		return nil
+	default:
+		r.mu.Unlock()
 		return errors.New("published onto " + topic + ", which nothing consumes")
 	}
-	r.sent = append(r.sent, ev)
-	return nil
 }
 
 func (r *recorder) count() int {
@@ -93,7 +113,7 @@ func (r *recorder) fail(err error) {
 	r.err = err
 }
 
-// sink is an Emitter that keeps every envelope.
+// sink is a live projection that keeps every envelope.
 type sink struct {
 	mu   sync.Mutex
 	seen []livestate.Envelope
@@ -153,12 +173,20 @@ func newEdge(t *testing.T, opts ...func(*webhooks.Options)) *edge {
 		secrets:    secrets,
 		configured: &configured,
 	}
+	// THE NODE: its publish listener writes the row into its own store, and
+	// its projection hears the envelope — the two consumers of a published
+	// record, wired as a real node wires them.
+	writer := observe.NewWriter(e.events).Listen()
+	e.published.node = func(ctx context.Context, ev *events.Event) {
+		writer(ctx, topics.Event(ev.Type), ev)
+		if env, ok := observe.Envelope(ev); ok {
+			e.stream.Ingest(env)
+		}
+	}
 	options := webhooks.Options{
 		Secrets:    func() webhooks.Secrets { return *secrets },
 		Publisher:  e.published,
-		Events:     e.events,
 		Claims:     e.claims,
-		Stream:     e.stream,
 		Configured: func() bool { return configured },
 		// A flow that completes nothing. The landing cases that are about
 		// a creation hand in their own.
@@ -524,7 +552,7 @@ func TestTheStoredPayloadIsWhatTheProviderSent(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("%d rows", len(rows))
 	}
-	rec, err := e.events.ByID(t.Context(), rows[0].ID)
+	rec, err := e.events.ByID(t.Context(), rows[0].ID, time.Now())
 	if err != nil {
 		t.Fatalf("ByID: %v", err)
 	}
@@ -828,13 +856,10 @@ func TestAClientThatHangsUpStillLeavesARecord(t *testing.T) {
 // secret among them is a secret at rest in the audit log — readable by
 // everyone who can read an event, and impossible to un-write.
 //
-// `x-gitlab-token` is here because of what put it there. The provisioner
-// registered the minted signing key in GitLab's plaintext `token` attribute
-// rather than `signing_token`, so GitLab echoed a 32-byte HMAC key back on
-// every single delivery, and it was copied verbatim into the stored headers.
-// The provisioning bug is fixed and this engine no longer sets that field,
-// but a hook created by an older version still carries the old value and
-// still sends it.
+// `x-gitlab-token` is one of them: GitLab sends a hook's plaintext secret
+// token verbatim in it on every delivery whenever one is set — by hand, by
+// another tool, or by a provisioner that put a signing key in `token` rather
+// than `signing_token` — and a stored delivery would keep it at rest.
 func TestCredentialHeadersAreRedactedBeforeADeliveryIsStored(t *testing.T) {
 	t.Parallel()
 	e := newEdge(t)
@@ -848,7 +873,7 @@ func TestCredentialHeadersAreRedactedBeforeADeliveryIsStored(t *testing.T) {
 		"webhook-signature": gitlabSignature(t, gitlabSecret, id, ts, body),
 		"X-Gitlab-Event":    "Issue Hook",
 		// The three shapes a credential arrives in.
-		"X-Gitlab-Token": "whsec_the-key-an-old-hook-still-echoes",
+		"X-Gitlab-Token": "whsec_the-key-a-plaintext-hook-echoes",
 		"Authorization":  "Bearer a-real-looking-token",
 		"Cookie":         "session=abc123",
 	}
@@ -865,7 +890,7 @@ func TestCredentialHeadersAreRedactedBeforeADeliveryIsStored(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	for _, secret := range []string{
-		"whsec_the-key-an-old-hook-still-echoes",
+		"whsec_the-key-a-plaintext-hook-echoes",
 		"a-real-looking-token",
 		"session=abc123",
 	} {

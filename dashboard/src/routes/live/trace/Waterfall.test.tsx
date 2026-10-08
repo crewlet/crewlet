@@ -21,6 +21,7 @@ import type { EventRecord, SandboxTailAnswer } from "~/protocol/index.ts";
 import { phaseRecord } from "~/test/phaseRecord.ts";
 import { SANDBOX_TAIL_POLL_MS } from "~/contract/sandbox.ts";
 import { Waterfall, liveState, steerMarks } from "./Waterfall.tsx";
+import { withDerived } from "~/test/org.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -88,7 +89,7 @@ function mount(
   } = {},
 ) {
   const store = new Store();
-  if (org) store.applyOrg(org as never);
+  if (org) store.applyOrg(withDerived(org) as never);
   const socket = new LiveSocket(store);
   const asked: Record<string, unknown>[] = [];
   (socket as unknown as { query: (what: string, p: unknown) => Promise<unknown> }).query = (
@@ -146,6 +147,11 @@ const RUNNING: SandboxTailAnswer = {
     cut: false,
     as_of: iso(59_000),
     finished: false,
+    reset: true,
+    epoch: "transcript@0",
+    start: 0,
+    end: 21,
+    digest: "d21",
   },
 };
 
@@ -160,8 +166,8 @@ describe("a running coding run's live output", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Coding run/ }));
     await flush();
-    // BY CURSOR, holding nothing yet: the owner answers what there is.
-    expect(asked).toEqual([{ turn_id: "turn-1", launch_id: "L1", cursor: true }]);
+    // HOLDING NOTHING YET, it names no cursor: the owner answers what there is.
+    expect(asked).toEqual([{ turn_id: "turn-1", launch_id: "L1" }]);
     expect(screen.getByText("running go test ./...")).toBeTruthy();
 
     // IT POLLS while open…
@@ -226,13 +232,11 @@ describe("a running coding run's live output", () => {
           cut: false,
           as_of: iso(59_000),
           finished: false,
-          cursor: true,
           reset: n === 1,
           epoch: "transcript@0",
           start,
           end,
           digest: `d${end}`,
-          window_bytes: 262_144,
         },
       };
     };
@@ -251,7 +255,6 @@ describe("a running coding run's live output", () => {
     expect(asked[1]).toEqual({
       turn_id: "turn-1",
       launch_id: "L1",
-      cursor: true,
       epoch: "transcript@0",
       after: lines[0]!.length,
       digest: `d${lines[0]!.length}`,

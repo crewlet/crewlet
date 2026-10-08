@@ -9,8 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/coord"
-	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 )
@@ -40,9 +38,9 @@ func TestACollectionThatCouldNotReadTheBoxIsAskedAgain(t *testing.T) {
 		t.Fatalf("OnCompleted = %v; want the failure handed back so the completion is retried", err)
 	}
 	row := rig.get("t1")
-	if row.Status != StatusRunning || row.LaunchFacts().CollectFailures != 1 {
+	if row.Status != StatusRunning || row.Launch.CollectFailures != 1 {
 		t.Fatalf("row %s with %d failures; want running again with the failure counted",
-			row.Status, row.LaunchFacts().CollectFailures)
+			row.Status, row.Launch.CollectFailures)
 	}
 	if !rig.coordinator.SeatHeldBySandbox("swe") {
 		t.Error("the seat was freed under a run that is still being collected")
@@ -95,7 +93,7 @@ func TestACollectionThatKeepsFailingIsGivenUpAfterThePollsWindow(t *testing.T) {
 	if err := collect(); err == nil {
 		t.Fatal("a failure inside the window was not handed back")
 	}
-	if got := rig.get("t1").LaunchFacts(); got.CollectFailures != 2 || !got.CollectFailingSince.Equal(start.UTC()) {
+	if got := rig.get("t1").Launch; got.CollectFailures != 2 || !got.CollectFailingSince.Equal(start.UTC()) {
 		t.Fatalf("record %+v; want two failures dated from the first", got)
 	}
 	// Past it: given up, announced as unreachable, the seat freed.
@@ -148,7 +146,7 @@ func TestACollectionThatReadTheBoxEndsTheRunOfFailures(t *testing.T) {
 	if err := collect(); err == nil {
 		t.Fatal("a failed resume was not handed back for a retry")
 	}
-	if got := rig.get("t1").LaunchFacts(); got.CollectFailures != 0 || !got.CollectFailingSince.IsZero() {
+	if got := rig.get("t1").Launch; got.CollectFailures != 0 || !got.CollectFailingSince.IsZero() {
 		t.Fatalf("record %+v after a collection that read the box; want the run of failures ended", got)
 	}
 
@@ -163,7 +161,7 @@ func TestACollectionThatReadTheBoxEndsTheRunOfFailures(t *testing.T) {
 		t.Fatalf("a box that answered %s earlier was given up: %+v",
 			ConnectGiveUp-5*time.Second, failed)
 	}
-	if got := rig.get("t1").LaunchFacts(); got.CollectFailures != 1 ||
+	if got := rig.get("t1").Launch; got.CollectFailures != 1 ||
 		!got.CollectFailingSince.Equal(rig.now.UTC()) {
 		t.Errorf("record %+v; want one failure dated from now", got)
 	}
@@ -200,7 +198,7 @@ func TestACollectionThisNodeCancelledIsHandedBackUncounted(t *testing.T) {
 		t.Fatal("an interrupted collection was not handed back for a retry")
 	}
 	row := rig.get("t1")
-	if got := row.LaunchFacts(); row.Status != StatusRunning || got.CollectFailures != 0 || !got.CollectFailingSince.IsZero() {
+	if got := row.Launch; row.Status != StatusRunning || got.CollectFailures != 0 || !got.CollectFailingSince.IsZero() {
 		t.Fatalf("row %s, record %+v; want running again with nothing counted", row.Status, got)
 	}
 	if len(rig.failures()) != 0 {
@@ -217,7 +215,7 @@ func TestACollectionThisNodeCancelledIsHandedBackUncounted(t *testing.T) {
 	defer stop()
 	payload, ev = rig.completion("t1")
 	_ = rig.coordinator.OnCompleted(short, payload, ev)
-	if got := rig.get("t1").LaunchFacts(); got.CollectFailures != 1 {
+	if got := rig.get("t1").Launch; got.CollectFailures != 1 {
 		t.Errorf("record %+v after a collection that ran out of time; want it counted", got)
 	}
 	rig.runner.CollectFunc = nil
@@ -304,9 +302,7 @@ func e2bAnswering(t *testing.T, status int) *E2BProvider {
 	t.Cleanup(server.Close)
 	provider, err := NewE2B(E2BOptions{
 		APIKey: "k", Domain: "test.invalid",
-		// Never asked: nothing here creates a box.
-		Fleet: coord.FeatureReader{Leases: coordmem.New()},
-		HTTP:  &http.Client{Transport: httpxtest.Rewrite(t, server)},
+		HTTP: &http.Client{Transport: httpxtest.Rewrite(t, server)},
 	})
 	if err != nil {
 		t.Fatal(err)

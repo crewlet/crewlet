@@ -1,10 +1,8 @@
 package statelog_test
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -639,100 +637,27 @@ func TestAnArtefactNamingALogThisBuildDoesNotRegisterIsRefused(t *testing.T) {
 	}
 }
 
-// THE TRANSFER SPEAKS AN EARLIER BUILD'S SHAPE, IN BOTH DIRECTIONS.
+// A FETCH THAT NAMES NO ARTEFACT IS REFUSED BEFORE IT STREAMS.
 //
-// A donor and a joiner of two builds share one fleet through a rolling upgrade,
-// and the offer request, the offer and the fetch are payloads they exchange: a
-// node that falls below a trimmed log's floor mid-upgrade must be able to adopt
-// from a donor of either build, since the trim counts both builds' artefacts
-// toward its two donors. An earlier build asks naming nothing but its needs and
-// fetches with a body that is the deliver subject and no header; this build's
-// donor offers it the artefact and streams it the newest. And this build's
-// fetch is one a donor reading only the body — the earlier build's — streams
-// to.
-func TestTheTransferSpeaksAnEarlierBuildsShapeInBothDirections(t *testing.T) {
+// The joiner chose an artefact from an offer, and the name is how the donor
+// streams that copy rather than whatever it holds by the time the fetch
+// arrives. A fetch naming none chose nothing, so streaming the newest would be
+// the very race the name closes — and the joiner would learn it only from a
+// checksum it could never match, after the whole transfer.
+func TestAFetchThatNamesNoArtefactIsRefused(t *testing.T) {
 	t.Parallel()
 	h := newTransferHarness(t, 4096)
-	want, err := os.ReadFile(h.artefact)
-	if err != nil {
-		t.Fatal(err)
+	offers, err := statelog.CollectOffers(t.Context(), h.nc, statelog.OfferRequest{
+		NodeID: "joiner",
+	}, statelog.OfferWindow)
+	if err != nil || len(offers) != 1 {
+		t.Fatalf("CollectOffers = (%d, %v)", len(offers), err)
 	}
-
-	ask := []byte(`{"node_id":"old","need":{"probe":1},"generations":{"probe":1}}`)
-	reply, err := h.nc.Request(statelog.SubjectOffer, ask, 5*time.Second)
-	if err != nil {
-		t.Fatalf("an earlier build's offer request went unanswered: %v", err)
-	}
-	var offer statelog.Offer
-	if err := json.Unmarshal(reply.Data, &offer); err != nil {
-		t.Fatalf("the offer does not decode: %v", err)
-	}
-	if offer.Manifest.V != statelog.ManifestVersion || offer.Manifest.Artifact != h.manifest.Artifact {
-		t.Fatalf("an earlier build was offered %+v, want the donor's artefact", offer.Manifest)
-	}
-	if got := fetchWithBodyAlone(t, h.nc, offer.Fetch); !bytes.Equal(got, want) {
-		t.Errorf("a fetch naming no artefact was streamed %d byte(s), want the newest's %d",
-			len(got), len(want))
-	}
-
-	// A DONOR THAT READS THE BODY AND NOTHING ELSE, as an earlier build's
-	// does.
-	fetchSubject := statelog.SubjectFetchPrefix + "old-donor"
-	fetches, err := h.nc.Subscribe(fetchSubject, func(msg *nats.Msg) {
-		deliver := string(msg.Data)
-		chunk := nats.NewMsg(deliver)
-		chunk.Data = want
-		_ = h.nc.PublishMsg(chunk)
-		end := nats.NewMsg(deliver)
-		end.Header.Set("Status", "204")
-		_ = h.nc.PublishMsg(end)
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = fetches.Unsubscribe() })
-	old := statelog.Offer{Manifest: h.manifest, Fetch: fetchSubject}
-	dest := filepath.Join(t.TempDir(), "adopt.part")
-	if n, err := statelog.FetchArtefact(t.Context(), h.nc, old, dest); err != nil || n != int64(len(want)) {
-		t.Fatalf("this build's fetch from a donor reading only the body = (%d, %v)", n, err)
-	}
-	if got, err := os.ReadFile(dest); err != nil || !bytes.Equal(got, want) {
-		t.Errorf("fetched (%d byte(s), %v), want the artefact's %d", len(got), err, len(want))
-	}
-}
-
-// fetchWithBodyAlone fetches from subject as an earlier build does — the body
-// is the subject to deliver to, and there is no header — and returns what was
-// streamed, failing unless the donor ends the transfer with 204.
-func fetchWithBodyAlone(t *testing.T, nc *nats.Conn, subject string) []byte {
-	t.Helper()
-	deliver := nats.NewInbox()
-	sub, err := nc.SubscribeSync(deliver)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = sub.Unsubscribe() }()
-	if err := nc.PublishRequest(subject, nats.NewInbox(), []byte(deliver)); err != nil {
-		t.Fatal(err)
-	}
-	var got []byte
-	for {
-		msg, err := sub.NextMsg(5 * time.Second)
-		if err != nil {
-			t.Fatalf("the transfer stopped: %v", err)
-		}
-		if status := msg.Header.Get("Status"); status != "" {
-			if status != "204" {
-				t.Fatalf("the transfer ended %s: %s", status, msg.Header.Get("Description"))
-			}
-			return got
-		}
-		got = append(got, msg.Data...)
-		if msg.Reply != "" {
-			if err := nc.Publish(msg.Reply, nil); err != nil {
-				t.Fatal(err)
-			}
-		}
+	chosen := offers[0]
+	chosen.Manifest.Artifact = ""
+	_, err = statelog.FetchArtefact(t.Context(), h.nc, chosen, filepath.Join(t.TempDir(), "adopt.part"))
+	if err == nil || !strings.Contains(err.Error(), "400") {
+		t.Fatalf("a fetch naming no artefact answered %v, want its refusal", err)
 	}
 }
 

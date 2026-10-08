@@ -12,6 +12,8 @@ import {
   HUMAN_TABS,
   feedRows,
   fortnight,
+  liveRow,
+  seatRun,
   pillWord,
   placementWords,
   sandboxWords,
@@ -25,6 +27,7 @@ import type {
   AgentRow,
   BudgetWindow,
   ConfigRole,
+  SandboxEntry,
   ScheduleRow,
   SeatActivityRow,
   TurnRow,
@@ -44,10 +47,49 @@ describe("the tabs", () => {
   test("a person has no runtime tab, and every tab of theirs is an agent's too", () => {
     expect(HUMAN_TABS).toEqual(["overview", "work", "settings"]);
     for (const tab of HUMAN_TABS) expect(AGENT_TABS).toContain(tab);
-    // THE TABS AN EARLIER BUILD HAD are gone, so a link naming one is stale.
-    for (const gone of ["model", "cost", "access", "threads"]) {
-      expect(AGENT_TABS as readonly string[]).not.toContain(gone);
-    }
+  });
+});
+
+describe("which live row is the seat's", () => {
+  const seat = { name: "SWE", handle: "swe-platform" } as Parameters<typeof liveRow>[2];
+  const row = (id: string, role: string, handle: string) => ({ id, role, handle }) as AgentRow;
+
+  // A ROLE NAME IS SHARED by two unit seats stamped from one template, so the
+  // sibling listed first under it is not this seat's row — the handle says
+  // which one is.
+  test("the seat's own handle wins over an earlier sibling sharing its role name", () => {
+    const agents = [row("a", "SWE", "swe-core"), row("b", "SWE", "swe-platform")];
+    expect(liveRow(agents, "swe-platform", seat)?.id).toBe("b");
+  });
+
+  // A LINK MINTED FROM A CONFIG FIELD addresses the seat by its NAME, and the
+  // resolved seat's handle still finds its own row.
+  test("a seat addressed by name is found by the handle it resolved to", () => {
+    const agents = [row("a", "SWE", "swe-core"), row("b", "SWE", "swe-platform")];
+    expect(liveRow(agents, "SWE", seat)?.id).toBe("b");
+  });
+
+  test("a row the engine named no handle on is matched by role, and only then", () => {
+    expect(liveRow([row("a", "SWE", "")], "swe-platform", seat)?.id).toBe("a");
+    expect(liveRow([row("a", "CTO", "")], "swe-platform", seat)).toBeUndefined();
+    expect(liveRow([row("a", "SWE", "")], "swe-platform", null)).toBeUndefined();
+  });
+});
+
+describe("which coding run is the seat's", () => {
+  const seat = { name: "SWE", handle: "swe-platform" } as Parameters<typeof seatRun>[1];
+  const run = (turn: string, role: string, handle: string) =>
+    ({ turn_id: turn, role, agent_handle: handle }) as SandboxEntry;
+
+  // A SIBLING'S RUN parked on a question is not this seat's question.
+  test("a run is the seat's by its handle, never a sibling's by the shared role name", () => {
+    expect(seatRun([run("t-core", "SWE", "swe-core")], seat)).toBeNull();
+    const runs = [run("t-core", "SWE", "swe-core"), run("t-mine", "SWE", "swe-platform")];
+    expect(seatRun(runs, seat)?.turn_id).toBe("t-mine");
+  });
+
+  test("the role name is never read", () => {
+    expect(seatRun([run("t-nameless", "SWE", "")], seat)).toBeNull();
   });
 });
 
@@ -115,6 +157,8 @@ describe("the current turn's calls", () => {
           name: `tool.${i}`,
           round: i,
           arguments: { i: String(i) },
+          result: "",
+          success: true,
           started_at: "2026-09-21T09:48:02Z",
           duration_ms: 300,
         })),
@@ -142,6 +186,22 @@ describe("the current turn's calls", () => {
   test("reads each call's time and duration off the engine's own record", () => {
     const [first] = feedRows(row(1, false));
     expect(first).toMatchObject({ at: "2026-09-21T09:48:02Z", tookMs: 300, words: "i 0" });
+  });
+
+  // A FAILED CALL THAT SAID NOTHING IS STILL A FAILURE: the engine writes
+  // `success: false` on every one, and `error` only repeats its words.
+  test("reads a failure off success, whether or not the call said anything", () => {
+    const failing = (result: string): AgentRow => {
+      const r = row(1, false);
+      const ex = r.live_call!.tool_executions![0]!;
+      r.live_call!.tool_executions = [
+        { ...ex, result, success: false, ...(result ? { error: result } : {}) },
+      ];
+      return r;
+    };
+    expect(feedRows(failing(""))[0]?.failed).toBe(true);
+    expect(feedRows(failing("exit status 1"))[0]?.failed).toBe(true);
+    expect(feedRows(row(1, false))[0]?.failed).toBe(false);
   });
 
   test("counts the turn's tokens as its recorded phases and the one running", () => {

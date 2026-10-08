@@ -70,7 +70,7 @@ describe("keeping a shortcut", () => {
 });
 
 describe("a store that will not cooperate", () => {
-  it("drops a row a previous build wrote in a shape this one cannot use", () => {
+  it("drops a stored row in a shape this build cannot use", () => {
     localStorage.setItem(
       "crewlet_starred",
       JSON.stringify([{ label: "no path" }, { path: ["work", "ENG-1"], label: "ENG-1", at: 1 }]),
@@ -81,16 +81,15 @@ describe("a store that will not cooperate", () => {
     expect(stored().map((s) => s.label)).toEqual(["ENG-1", "ENG-2"]);
   });
 
-  // A STAR ON AN ADDRESS THIS BUILD DOES NOT HAVE IS DROPPED ON READ. The
-  // routes moved — `#/company` is `#/agents`, `#/pages/…` is
-  // `#/knowledge/pages/…` — and a star kept before the move would be a
-  // sidebar row leading to Not Found for ever.
-  it("drops a star whose route this build does not have", () => {
+  // A STORED STAR WHOSE PATH DOES NOT RESOLVE IS DROPPED ON READ. Storage is
+  // editable, and such a star would be a sidebar row leading to Not Found for
+  // ever.
+  it("drops a stored star whose path does not resolve", () => {
     localStorage.setItem(
       "crewlet_starred",
       JSON.stringify([
-        { path: ["company"], label: "Company", at: 1 },
-        { path: ["pages", "ENG", "Runbook"], label: "Runbook", at: 2 },
+        { path: ["nowhere"], label: "Nowhere", at: 1 },
+        { path: ["nowhere", "at", "all"], label: "Nowhere at all", at: 2 },
         {
           path: ["knowledge", "pages", "0f0f0f0f-1111-4222-8333-444455556666"],
           label: "Runbook",
@@ -99,7 +98,7 @@ describe("a store that will not cooperate", () => {
       ]),
     );
     resetForTest();
-    expect(isStarred(["company"])).toBe(false);
+    expect(isStarred(["nowhere"])).toBe(false);
     expect(isStarred(["knowledge", "pages", "0f0f0f0f-1111-4222-8333-444455556666"])).toBe(true);
     star("ENG-2", "work", "ENG-2");
     expect(stored().map((s) => s.label)).toEqual(["Runbook", "ENG-2"]);

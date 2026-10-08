@@ -57,6 +57,7 @@ const tool: SetupToolState = {
   configured: false,
   enabled: false,
   satisfied: false,
+  form_complete: false,
   inbound_path: "/webhooks/datadog",
   public_url: "https://engine.example.com/webhooks/datadog",
   requirements: [
@@ -1554,6 +1555,7 @@ const perSeatTool: SetupToolState = {
   configured: false,
   enabled: false,
   satisfied: false,
+  form_complete: false,
   seats_required: true,
   can_provision: false,
   requirements: [

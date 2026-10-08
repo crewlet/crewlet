@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 )
 
@@ -35,7 +36,7 @@ func TestTheStreamIsSaidToStandInForTheResultFileOnlyWhereItDid(t *testing.T) {
 	exited.Put(p.Result(), "")
 	exited.Put(p.ExitCode(), "127")
 	exited.Put(p.Err(), "sh: 1: claude: not found")
-	if _, err := runner.Collect(t.Context(), exited, launched(runner)); err != nil {
+	if _, err := runner.Collect(t.Context(), exited, sandbox.RunHandle{}); err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
 	if got := logs.String(); strings.Contains(got, "coding_agent_result_from_stream") {
@@ -46,7 +47,7 @@ func TestTheStreamIsSaidToStandInForTheResultFileOnlyWhereItDid(t *testing.T) {
 	p = paths(died)
 	died.Put(p.Stream(), strings.Join(claudeRunStream[:len(claudeRunStream)-1], "\n")+"\n")
 	died.Put(p.Result(), "")
-	if _, err := runner.Collect(t.Context(), died, launched(runner)); err != nil {
+	if _, err := runner.Collect(t.Context(), died, sandbox.RunHandle{}); err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
 	if got := logs.String(); !strings.Contains(got, "coding_agent_result_from_stream") ||

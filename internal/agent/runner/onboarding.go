@@ -10,7 +10,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/logging"
-	llm "github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -243,20 +242,20 @@ func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error)
 		Hint:          learning.Hint(r.cfg.Seat.Org, r.cfg.Seat.Role),
 		ToolCatalogue: r.cfg.Registry.Catalogue(),
 	})
-	const user = "Complete your onboarding now."
+	user := prompts.BuildOnboardingUserMessage()
 
 	phaseCtx, res, err := r.runPhase(ctx, phaseRun{
 		phase: phase.Onboarding, surface: surface, system: system, user: user,
 		rounds: r.cfg.Onboarding.Rounds, ceiling: r.cfg.Onboarding.Ceiling,
-		iteration:      onboardingIteration,
-		terminateAfter: []string{MarkOnboardedTool},
+		iteration: onboardingIteration,
 		// A pass that thinks and stops never marks, so it re-fires on every
 		// turn this seat ever takes — the most expensive silent failure in
 		// the engine, and one a corrective re-prompt fixes for one round.
-		// Forcing a call is compatible with what onboarding does anyway:
-		// every round of it discovers, activates, reads or reflects, and
-		// the round with nothing left to call is the round that marks.
-		toolChoice: llm.ToolChoiceRequired,
+		// Naming mark_onboarded here is what arms that corrective, and it
+		// names this tool rather than the whole catalogue the pass carries.
+		// Never forced, like every phase: see phaseRun.terminateAfter for
+		// why a forced tool choice is not asked for as well.
+		terminateAfter: []string{MarkOnboardedTool},
 	})
 	if err != nil {
 		return false, fmt.Errorf("runner: onboarding: %w", err)

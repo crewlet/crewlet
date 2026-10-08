@@ -417,12 +417,7 @@ shared records — the object store's backend record and its collector's report
 among them — and, on the default `nats` object store, the `crewlet_files`
 object store bucket (its stream is `OBJ_crewlet_files`). A credential
 scoped to publishing and consuming fails at boot, on the first stream it
-tries to create. The maintenance duty also **deletes** two buckets an earlier
-build kept once no node of that build is left (`crewlet_budgets`, see
-[Coordination](../concepts/coordination.md#token-budgets-are-windows), and
-`crewlet_chunk_locks`, see
-[Coordination](../concepts/coordination.md#a-bucket-an-earlier-build-kept)),
-which takes the stream-delete API on those two.
+tries to create.
 
 **A coordination read costs one ordered pass certified against the stream's
 key index, and an account needs the consumer, stream-info, message-get and
@@ -789,7 +784,7 @@ What a fleet gets right, each of which was a real defect before:
 - *Live coding sandboxes torn down mid-run.* Recovery is a per-seat step inside the acquire hook, fenced on the claiming node's epoch, instead of a fleet-wide scan that treated every in-flight run as abandoned.
 - *Config activation.* Delivered by the [control plane](../concepts/control-plane.md) — a shared activation pointer whose own revision is the epoch, polled by every node — rather than the competing-consumer subscription that used to let exactly one replica apply a revision while the rest ran the previous company.
 - *Token budgets.* Shared counters in the coordination slot, one slot per calendar window, so an org cap of 500 k a day is 500 k a day across the fleet — and they cover **every** completion the engine makes on a seat's behalf, the turn loop (the round-cap extension judge included), the coding sandbox, the turn-start context assembly and the auxiliary learning passes alike.
-- *Duplicate auto-drafted skill pages and N× LLM spend on synthesis.* Skill clustering, skill curation and episode compaction are [singleton duties](../concepts/seat-ownership.md#singleton-duties) (they share one `worker:` lease, so a fleet runs each of them on exactly one node), along with the scheduler tick, the sandbox waiter, the seat-subscription walk and the retention sweeps. Each lease is claimed per tick: a node that stops gracefully gives its duties back as it exits, and one that dies mid-duty hands them back by lapsing, which for the longer duties takes up to their TTL (45 minutes for the retention sweep, three hours for the curator).
+- *Duplicate auto-drafted skill pages and N× LLM spend on synthesis.* Skill clustering, skill curation and episode compaction are [singleton duties](../concepts/seat-ownership.md#singleton-duties) (they share one `worker:` lease, so a fleet runs each of them on exactly one node), along with the scheduler tick, the sandbox waiter, the seat-subscription walk and the retention sweeps. Each lease is claimed per tick: a node that stops gracefully gives its duties back as it exits, and one that dies mid-duty hands them back by lapsing, which for the longer duties takes up to their TTL (45 minutes for the retention sweep, three hours for the learning passes).
 - *Unbounded table growth.* `scheduled_runs` and `conversation_sessions` both answer a short-horizon question and are written on every event that asks it. The migrations always said they were swept on a TTL; the sweep exists, behind the `maintenance` duty. Most fleet-shared records — the delivery dedupe, the rate valve, the completion ledger, the credential cooldowns and each node's apply status — are not swept here at all: each lives in a [coordination](../concepts/coordination.md) bucket whose own age is its retention, so the broker expires them. Agent-to-agent channels are the exception and *are* swept by the duty, because a bucket age cannot tell an open ask from an answered one — and so are the removal markers every bucket with no age keeps, which the duty sweeps after three hours so a listing never re-reads every record the company has ever removed. The apply status is the one that hides: it is keyed by *node* rather than by event, so it does not look short-horizon — but a node that is scaled in, redeployed or crashed would leave its last report behind, which under generated pod names is one per pod that ever ran, and the bucket's one-minute age is what makes that node *vanish* instead.
 
 The one thing that is still per-process: `max_concurrent`. Tier A's
@@ -805,12 +800,9 @@ and where the constants come from — see
 
 ## The store
 
-One local file per node, opened by **Turso** — the only driver. There was a
-second, mainline SQLite behind `store.driver` / `CREWLET_STORE_DRIVER`, and
-both the field and the variable are retired: a config that still sets the field
-is refused with a message saying so, and the variable is read by nothing. The
-file format did not change, so an existing store opens untouched and any
-SQLite-compatible client still reads it.
+One local file per node, opened by **Turso** — the only driver, so there is no
+setting that chooses one. The file is in the SQLite format, so any
+SQLite-compatible client can read it.
 
 **Turso keeps a native library cache, and the engine prepares it before the
 first query.** The driver is pure Go in the sense that matters — no cgo, no C
@@ -827,7 +819,7 @@ re-extracts a cache entry that will not verify. Two consequences worth knowing:
   start; a cache root that cannot be created at all fails the store open with an
   error naming the directory.
 - **A cache that cannot be repaired names the way out**, and there is no
-  second driver to fall back to any more: delete that directory by hand, or
+  second driver to fall back to: delete that directory by hand, or
   point `TURSO_GO_CACHE_DIR` at a writable directory of its own.
 - **The linux binaries need glibc, and there is no musl build.** The database
   engine is a native library loaded with `dlopen`, which makes the binary
@@ -933,13 +925,21 @@ That last step is what keeps every figure derived from a node's own log
 honest: the `usage` domain sums each node's day, so a batch two data nodes
 kept would bill a stateless node's spend twice.
 
+Until the node that lost the claim has settled its copy — at once when its
+claim is answered, and otherwise at its next pass, a minute later or as soon
+as it can reach the coordination store again — both logs hold the batch's
+rows. The fleet's history reads hold such a row once, wherever they list rows
+and wherever they count them — the event axis's bars and category counts, a
+trace's or a turn's total, a page of turns' tokens, and the integrations' drop
+and merge counts: each data node counts the rows it keeps and names the ones it
+has not settled, and the node you asked counts each named row once
+([Reading the fleet's history](../concepts/event-system.md#reading-the-fleets-history)).
+
 **Upgrade the data nodes first.** A data node writes each event in a batch by
-its own build's category map, and drops a type its build does not place — so a
-node without `data` on a newer build hands an older data node events it
-cannot keep. The one such type today is `auxiliary_spend`: a stateless node's
-auxiliary spend kept by an older data node is on the budget counter and in no
-spend figure. With every data node upgraded before the nodes without `data`,
-nothing is dropped.
+its own build's category map, and leaves out a type its build does not place —
+so a node without `data` on a newer build can hand a data node still on this
+one events it cannot keep, and they reach no event log. With every data node
+upgraded before the nodes without `data`, nothing is left out.
 
 #### What gets stored, and under which category
 
@@ -957,7 +957,7 @@ from that map — a guard test fails if the two drift.
 | `notification` | `external_notification`, `notification_skipped`, `notifications_coalesced`, `turn_trigger_skipped` |
 | `system` | `agent_phase_completed`, `agent_phase_started`, `agent_turn_completed`, `agent_turn_started`, `agent_turn_steered`, `agent_turn_stopped`, `auxiliary_spend`, `budget_exhausted`, `llm_unavailable`, `phase.tool_skill_blocked`, `prompt.size`, `provider_fallback`, `skill_telemetry_write_failed`, `subagent_batched`, `turn.guard_breach` |
 | `task` | `sandbox_clarification_requested`, `sandbox_run_answered`, `sandbox_run_completed`, `sandbox_run_failed`, `sandbox_run_started`, `scheduled_task_fired`, `task_assigned` |
-| `webhook` | *No event type.* The [webhook receiver](../reference/api-endpoints.md) writes the delivery's row itself, under its own id with the provider's exact bytes as the payload |
+| `webhook` | `inbound_delivery` — one row per delivery presented to one seat, from a [webhook route](../reference/api-endpoints.md) or a [Mattermost socket](../integrations/mattermost.md#running-on-a-fleet). The row is filed under the delivery's own label (`webhook:<event>`, `forge:<event>`, `socket:posted`) rather than under `inbound_delivery`, with the provider's exact bytes as its payload |
 
 **The map is also the admission list.** A type that is not in it is not written
 and does not reach the activity feed — so the exclusions below are
@@ -969,7 +969,7 @@ test rather than vanishing quietly.
 | `agent_turn_progress` | Fires as each LLM round opens, answers and runs its tools, as a live-only signal; the matching `agent_phase_completed` is its durable record, so persisting this would fill the log with intermediate states of rows it also holds finished. It still drives the live projection. |
 | `agent_spawned` | Placement moves a seat between nodes on every rebalance, so a durable row per claim would fill the log with a fact about **scheduling** rather than about the company. It still drives the live projection, which is what asks "is this seat running, and where". |
 | `agent_terminated` | The counterpart, excluded for the same reason. It is what takes a released instance's call off a live screen rather than leaving it showing whatever it last did; whether the seat still runs anywhere is the seat leases' to say. |
-| `raw_webhook` | The delivery is **already** a row (the `webhook` category above). This event is the wake the receiver publishes onto a seat's inbox, so categorising it too would store every delivery twice — once as what arrived and once as what was forwarded. |
+| `raw_webhook` | The delivery is **already** a row (`inbound_delivery`, in the `webhook` category above). This event is the wake an inbound edge publishes for the transports to route, so categorising it too would store every delivery twice — once as what arrived and once as what was forwarded. |
 | `a2a_request` | The ask is **already** a row: `a2a_channel_opened` and `a2a_message_sent` record the same exchange under the ids the audit trail is keyed on. This event is the wake it puts on the target seat's inbox — same reason as `raw_webhook`. |
 | `a2a_message` | The answer is **already** a row (`a2a_message_sent`). This event is the wake it puts on the requester's inbox. |
 | `sandbox_answer_given` | The wake an [answer by turn](../concepts/code-sandbox.md#answering-a-parked-run) puts on the seat's inbox, and never a turn. What the answer became is **already** a row (`sandbox_run_answered`), and that a person gave it is their `operator_acted` row — same reason as `a2a_request`. |
@@ -1123,11 +1123,7 @@ logging:
     max_backups: 5      # rotated files kept beside the live one (default 5)
 ```
 
-That block is the only way the file says it. A `debug: true` boolean used to
-sit beside it; it was retired rather than wired up, because two keys setting
-one value is a state where they can disagree and something has to arbitrate.
-A file that still carries it is refused with the line that replaces it, not
-with a spelling check.
+That block is the only way the file says it.
 
 The same settings, on the command line, for one run:
 
@@ -1179,7 +1175,7 @@ level is an enum with a sane default; a path is not. A node that could not
 open the file it was told to write *refuses to start*, naming the path and the
 error, rather than running on stderr alone — an operator who configured a
 durable record and silently did not get one has nothing anywhere pointing at
-why, which is exactly how the retired `debug:` field spent its life. The same
+why. The same
 applies to `$CREWLET_LOG_FILE` on the other commands. Once the node is up, a
 file that *becomes* unwritable — a full disk, a volume pulled away — is the
 opposite case and is handled the opposite way: the failure is announced on
@@ -1523,10 +1519,10 @@ No model call can be checked by its own size first, because its size is known
 only once it has happened. A turn's round is judged when it is charged, as
 above, because a verdict still has something to stop: the tools it asked for
 and every model call of the turn after it, each refused before it is sent
-rather than billed and refused in turn. Four other spends have nothing left to stop by the
-time their size is known, so each is **post-charged** — added to the counters
-in the windows it is recorded in, without a verdict — behind a gate that reads
-the room left *before* it starts:
+rather than billed and refused in turn. Four other spends have nothing left to
+stop by the time their size is known, so each is **post-charged** — added to
+the counters in the windows it is recorded in, without a verdict — behind a
+gate that reads the room left *before* it starts:
 
 - **A coding run.** Its box spends while the turn is suspended, so its tokens
   are known only when the run is collected, and they reach both the seat's

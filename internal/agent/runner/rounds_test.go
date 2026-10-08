@@ -189,6 +189,19 @@ func extendableRunner(
 	meter ...toolloop.BudgetMeter,
 ) *runner.Runner {
 	t.Helper()
+	return cappedRunner(t, prov, pub, judge, runner.Caps{
+		ExecutorRounds: 2, ExecutorCeiling: 8,
+		ExtensionOn: true, ExtensionStep: 4,
+	}, meter...)
+}
+
+// cappedRunner is extendableRunner under caps a case states itself — the
+// extension switch off, or a ceiling equal to the budget.
+func cappedRunner(
+	t *testing.T, prov llm.Provider, pub queue.Publisher, judge extension.Judge,
+	caps runner.Caps, meter ...toolloop.BudgetMeter,
+) *runner.Runner {
+	t.Helper()
 	models, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: prov}})
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
@@ -202,10 +215,7 @@ func extendableRunner(
 	r, err := runner.New(runner.Config{
 		Seat:     prompts.Seat{Org: &org.Organization{Name: "Acme", Roles: []*org.Role{role}}, Role: role},
 		Registry: reg, Models: models,
-		Caps: runner.Caps{
-			ExecutorRounds: 2, ExecutorCeiling: 8,
-			ExtensionOn: true, ExtensionStep: 4,
-		},
+		Caps:      caps,
 		Task:      "read the files",
 		Publisher: pub,
 		Judge:     judge,
@@ -328,6 +338,91 @@ func TestAResumedPhasePublishesTheWholePhase(t *testing.T) {
 		t.Errorf("total_tokens = %d, want 700 (500 before the suspend, 200 after)",
 			done.TotalTokens)
 	}
+}
+
+// WHY A PARKED ROUND STOPPED SURVIVES THE RESUME — AND THE NEXT SUSPEND.
+//
+// The parked row carries each round's stop reason, and the resume rebuilds the
+// loop's rounds from it field by field. A field left out of that rebuild is
+// blank on the resumed record (which reads as "the backend reported none"),
+// and because a second suspend re-encodes the rounds from the rebuilt ones,
+// it is gone from every later record too. Both ends are asserted: the record
+// the resume publishes, and the row a second suspension would persist.
+func TestAParkedRoundsStopReasonSurvivesTheResume(t *testing.T) {
+	t.Parallel()
+	parked := func() execstate.State {
+		state := suspendedAfterTwoRounds()
+		state.Rounds = []types.PhaseRound{
+			{Round: 1, Model: "earlier", StopReason: string(llm.StopToolUse)},
+			{Round: 2, Model: "earlier", StopReason: string(llm.StopToolUse)},
+		}
+		// Through JSON, as the pending-run row hands it back.
+		blob, err := execstate.Encode(state)
+		if err != nil {
+			t.Fatalf("Encode: %v", err)
+		}
+		out, _, err := execstate.Decode(blob)
+		if err != nil {
+			t.Fatalf("Decode: %v", err)
+		}
+		return out
+	}
+	wantParked := func(t *testing.T, rounds []types.PhaseRound) {
+		t.Helper()
+		if len(rounds) < 2 {
+			t.Fatalf("rounds = %+v, want the two parked rounds first", rounds)
+		}
+		for _, r := range rounds[:2] {
+			if r.StopReason != string(llm.StopToolUse) {
+				t.Errorf("parked round %d stop_reason = %q, want %q",
+					r.Round, r.StopReason, llm.StopToolUse)
+			}
+		}
+	}
+
+	t.Run("the resumed record", func(t *testing.T) {
+		t.Parallel()
+		prov := &scriptedProvider{execute: []llm.Completion{
+			submitCall(t, runner.SubmitWorkTool,
+				`{"outcome":"delivered","summary":"shipped it","evidence":"the box did the work"}`),
+		}}
+		pub := newCapture()
+		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
+			pub:    pub,
+			resume: &runner.Resume{State: parked(), Answer: "the run succeeded"},
+		})
+		if _, _, err := r.Resume(context.Background(), nil); err != nil {
+			t.Fatalf("Resume: %v", err)
+		}
+		wantParked(t, completedPhase(t, pub, "execute").Rounds)
+	})
+
+	t.Run("a second suspension", func(t *testing.T) {
+		t.Parallel()
+		state := parked()
+		state.ActiveTools = append(state.ActiveTools, "run_sandbox")
+		prov := &scriptedProvider{execute: []llm.Completion{
+			submitCall(t, "run_sandbox", `{"task":"and the follow-up"}`),
+		}}
+		r, reg := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
+			resume: &runner.Resume{State: state, Answer: "the run succeeded"},
+		})
+		if err := reg.RegisterWith(suspendingTool{}, tools.Origin("sandbox"), tools.Annotations{}); err != nil {
+			t.Fatalf("Register: %v", err)
+		}
+		w, _, err := r.Resume(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("Resume: %v", err)
+		}
+		if !w.Suspended {
+			t.Fatal("the resumed phase did not suspend again, so there is no second row to read")
+		}
+		again, ok := r.Suspended()
+		if !ok {
+			t.Fatal("no second suspension was recorded")
+		}
+		wantParked(t, again.State.Rounds)
+	})
 }
 
 // suspendedAfterTwoRounds is a phase parked on run_sandbox, two rounds in.
@@ -651,18 +746,19 @@ func phasesOfKind(t *testing.T, c *capture, ph string) []*types.AgentPhaseComple
 
 // A REVIEWER THAT THINKS AND STOPS IS ASKED AGAIN, not rescued.
 //
-// The tool loop's corrective re-prompt is gated on the caller requiring a tool
-// call, and no caller did — so `maxForcedToolRetries` and
-// `forcedToolCorrective` were unreachable and the package doc's claim that a
-// forced tool call is ENFORCED held for no phase the engine runs. A reviewer
-// that answered with prose fell straight through to the rescue, which sends
-// the whole turn back for another executor round: a whole extra turn spent on
-// the one failure a model reliably fixes when it is simply asked again.
+// The tool loop's corrective re-prompt was once gated on the caller requiring
+// a tool call, and no caller did — so it was unreachable and the package doc's
+// claim that a forced tool call is ENFORCED held for no phase the engine ran. A
+// reviewer that answered with prose fell straight through to the rescue, which
+// sends the whole turn back for another executor round: a whole extra turn
+// spent on the one failure a model reliably fixes when it is simply asked
+// again. The reviewer's loop finishes by `submit_review`, so the corrective it
+// gets now is the FINISHING one, naming that tool.
 func TestAReviewerThatAnswersWithProseIsRePromptedRatherThanRescued(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{review: []llm.Completion{
-		// Round 1: thinks, calls nothing. Some endpoints ignore tool_choice
-		// and some models think-then-stop; this is that round.
+		// Round 1: thinks, calls nothing. Nothing forces a call and
+		// some models think-then-stop; this is that round.
 		text("The work looks fine to me."),
 		submitCall(t, runner.SubmitReviewTool,
 			`{"decision":"done","notes":"the delivery matches the ask"}`),

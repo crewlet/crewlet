@@ -614,7 +614,7 @@ func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends,
 func openFleet(ctx context.Context, js natsjs.JetStream, replicas int, clustered bool) (coord.Fleet, error) {
 	return kv.OpenFleet(ctx, js, kv.FleetConfig{
 		RateWindow:       coord.RateWindow,
-		ClaimTTL:         coord.ClaimTTL,
+		MaxClaimTTL:      coord.MaxClaimTTL,
 		LedgerRetention:  coord.LedgerRetention,
 		FireRetention:    coord.FireRetention,
 		FollowRetention:  coord.FollowRetention,

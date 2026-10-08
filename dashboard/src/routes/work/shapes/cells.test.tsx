@@ -19,6 +19,7 @@ import { ViewerProvider } from "~/lib/viewer.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { WorkSummary } from "~/protocol/index.ts";
+import { healthFrame } from "~/test/health.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -85,7 +86,7 @@ afterEach(() => {
 
 function mount(viewer: Record<string, unknown> = JANE, answers: Record<string, unknown> = {}) {
   const store = new Store();
-  store.applyHealth({ status: "healthy", nodes: 1 } as never);
+  store.applyHealth(healthFrame({ nodes: 1 }));
   const socket = new LiveSocket(store);
   const all: Record<string, unknown> = { viewer, ...answers };
   socket.query = ((what: string) => Promise.resolve(all[what] ?? {})) as typeof socket.query;

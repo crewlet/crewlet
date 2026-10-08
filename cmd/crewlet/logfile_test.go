@@ -149,8 +149,7 @@ func TestAttachingTheLogFileAddsASinkAndDetachesIt(t *testing.T) {
 // Every other bad logging value in this binary resolves to a default,
 // because a misspelled log level must never be why a company will not boot.
 // A path is not one of those: an operator who configured a durable record
-// and silently did not get one has nothing pointing at why — which is the
-// retired `debug: true` field's whole biography.
+// and silently did not get one has nothing pointing at why.
 func TestAnUnopenableLogFileFailsTheCommand(t *testing.T) {
 	// A file where a directory has to be: every path under it is refused
 	// by the kernel, on every platform this ships to.

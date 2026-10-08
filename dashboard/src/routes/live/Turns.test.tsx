@@ -18,6 +18,8 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { TurnRow } from "~/protocol/index.ts";
 import { Turns } from "./Turns.tsx";
+import { healthFrame } from "~/test/health.ts";
+import { withDerived } from "~/test/org.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -84,8 +86,8 @@ function mountWith(
 ): { asked: Asked[] } {
   location.hash = hash;
   const store = new Store();
-  store.applyHealth({ status: "healthy" });
-  store.applyOrg(org as never);
+  store.applyHealth(healthFrame());
+  store.applyOrg(withDerived(org) as never);
   const socket = new LiveSocket(store);
   const asked: Asked[] = [];
   (
@@ -114,8 +116,8 @@ function mountWith(
 function mount(turns: TurnRow[], agents: unknown[] = []) {
   location.hash = "#/live/turns";
   const store = new Store();
-  store.applyHealth({ status: "healthy" });
-  store.applyOrg({ roles: [{ name: "CEO", handle: "ceo" }] });
+  store.applyHealth(healthFrame());
+  store.applyOrg(withDerived({ roles: [{ name: "CEO", handle: "ceo" }] }));
   if (agents.length) store.applyAgents(agents);
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
@@ -184,8 +186,8 @@ test("a parked turn is marked parked, and an open one running or not settled by 
 test("the seat in the address is sent to the engine as its handle", async () => {
   location.hash = "#/live/turns?seat=ceo";
   const store = new Store();
-  store.applyHealth({ status: "healthy" });
-  store.applyOrg({ roles: [{ name: "CEO", handle: "ceo" }] });
+  store.applyHealth(healthFrame());
+  store.applyOrg(withDerived({ roles: [{ name: "CEO", handle: "ceo" }] }));
   const socket = new LiveSocket(store);
   const asked: Record<string, unknown>[] = [];
   (
@@ -416,7 +418,7 @@ test("with a failure filter the axis says it counts every turn", async () => {
  * THE SEAT MENU OFFERS EVERY AGENT, wherever the chart puts it.
  *
  * The org as `/org` answers it: the seats ABOVE every unit are the founders —
- * humans, named without a handle — and every agent sits in a unit. The menu
+ * humans — and every agent sits in a unit. The menu
  * was built from the top-level roles alone, so on a real company it offered
  * "Every seat" and nothing else, and a `?seat=` from a link drew the bare
  * handle because no option matched it.
@@ -427,8 +429,8 @@ test("the seat menu offers every agent in every unit, by name", async () => {
   const org = {
     name: "Nimbus",
     roles: [
-      { name: "Jane Founder", kind: "human" },
-      { name: "Maya Ops", kind: "human" },
+      { name: "Jane Founder", handle: "jane-founder", kind: "human" },
+      { name: "Maya Ops", handle: "maya-ops", kind: "human" },
     ],
     units: [
       {

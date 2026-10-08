@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
@@ -129,6 +130,7 @@ func transport(t *testing.T, inst *instance, mutate func(*mattermost.TransportOp
 			Seats: []mattermost.SeatConfig{{Handle: "swe", Token: "tok-swe"}},
 		},
 		Publisher: &recorder{},
+		Claims:    coordmemory.NewFleet(),
 		Backoff:   fastBackoff,
 		Connect: func(context.Context, mattermost.Seat, *mattermost.Client) (mattermost.Socket, error) {
 			return newSocket(), nil
@@ -488,6 +490,12 @@ func TestASeatsThreadComesBackMarkedWithItsOwnPosts(t *testing.T) {
 	}
 	if got.Messages[0].SenderID != "U-ana" {
 		t.Errorf("the sender id was lost: %+v", got.Messages[0])
+	}
+	// EACH CARRIES ITS POST ID — what a chat trigger's metadata names it by
+	// on this backend — so the dispatch can record which messages a turn
+	// was shown.
+	if got.Messages[0].ID != "root" || got.Messages[1].ID == "" {
+		t.Errorf("the post ids were lost: %+v", got.Messages)
 	}
 	// AND NOTHING IS CLAIMED MISSING. This endpoint answers the WHOLE
 	// thread in one response — no cursor, no page size — so a transcript

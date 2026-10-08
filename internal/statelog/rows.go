@@ -77,9 +77,10 @@ type Rows interface {
 	// may have lost rows, reporting false when it has lost none: every row
 	// it no longer holds was applied before it, so "absent" is conclusive
 	// only for an operation minted at or after it. It travels with the
-	// ledger inside a snapshot; the sweep, an adoption from a donor that
-	// scrubbed its ledger and the boot's fold of such an adoption are what
-	// move it — see ledgerloss.go and [Publisher.vouches].
+	// ledger inside a snapshot, and only a sweep moves it — this node's, or
+	// its donor's, inherited with the ledger when an adoption installs that
+	// file; an adoption itself loses nothing — see ledgerloss.go and
+	// [Publisher.vouches].
 	LostBefore(ctx context.Context) (time.Time, bool, error)
 }
 

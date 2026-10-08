@@ -17,9 +17,7 @@
  * A card hangs under its PRIMARY MANAGER, which is the engine's derived
  * `manager` — the one line the engine routes escalation up. Every seat has at
  * most one, so the chart is a forest rather than a graph, and a seat the
- * engine gave none is a root. Nothing here re-derives a reporting line: an
- * engine that sends no derived hierarchy leaves every seat a root, and the
- * screen says why (`OrgIndex.hierarchy`).
+ * engine gave none is a root. Nothing here re-derives a reporting line.
  *
  * # A box is a unit under the lead it reports to
  *

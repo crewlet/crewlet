@@ -22,6 +22,8 @@ import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { PAGE_TITLE_MAX_BYTES, type PageReadsAnswer } from "~/contract/pages.ts";
 import type { PageDetail } from "~/protocol/index.ts";
+import { healthFrame } from "~/test/health.ts";
+import { withDerived } from "~/test/org.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -151,8 +153,8 @@ afterEach(() => {
 
 function mount(children: ReactNode, answers: Record<string, Answer>) {
   const store = new Store();
-  store.applyHealth({ status: "healthy", nodes: 1 } as never);
-  store.applyOrg(ORG as never);
+  store.applyHealth(healthFrame({ nodes: 1 }));
+  store.applyOrg(withDerived(ORG) as never);
   const socket = new LiveSocket(store);
   const asked: { kind: string; params: Record<string, unknown> }[] = [];
   socket.query = ((what: string, params?: Record<string, unknown>) => {

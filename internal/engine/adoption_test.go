@@ -45,37 +45,11 @@ func TestAnAdoptedRevisionKeepsItsAuthor(t *testing.T) {
 		t.Errorf("adopted with source %q at %s, want api at %s — how and when it was "+
 			"written, not when this node met it", got.Source, got.CreatedAt, written)
 	}
-}
-
-// AN OLDER BUILD'S POINTER NAMES NOBODY, AND THE ADOPTION SAYS SO.
-//
-// A pointer published before the origin travelled carries no author. The row
-// records the author as NOT RECORDED — never this node, and never the `peer`
-// placeholder, which read on the audit screen as a writer that does not exist.
-// What the pointer does say still holds of this node's copy: it came from the
-// fleet, activated then.
-func TestAnOlderPointerIsAdoptedWithNoAuthor(t *testing.T) {
-	t.Parallel()
-	p := newPlane(t)
-	if _, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{
-		RevisionID: "from-an-older-build", Summary: "s",
-		Payload: yamlToJSON(t, grownCompanyDoc), At: pinnedNow,
-	}); err != nil {
-		t.Fatalf("activate: %v", err)
-	}
-	if err := p.recon.Tick(t.Context()); err != nil {
-		t.Fatalf("tick: %v", err)
-	}
-	got, found, err := p.store.Configs().Get(t.Context(), "from-an-older-build")
-	if err != nil || !found {
-		t.Fatalf("get: found=%v err=%v", found, err)
-	}
-	if got.CreatedBy != "" || got.CreatedByKind != "" {
-		t.Errorf("adopted as written by (%q, %q), want no author: nothing said who",
-			got.CreatedBy, got.CreatedByKind)
-	}
-	if got.Source != "fleet" || !got.CreatedAt.Equal(pinnedNow) {
-		t.Errorf("source %q at %s, want fleet at the activation %s",
-			got.Source, got.CreatedAt, pinnedNow)
+	// And it was ACTIVATED when the pointer says, which is not when it was
+	// written: the instant this node boots its chart with next time and the
+	// one its config history shows.
+	if !got.Active || !got.ActivatedAt.Equal(pinnedNow) {
+		t.Errorf("adopted active=%v at %s, want active at the pointer's %s",
+			got.Active, got.ActivatedAt, pinnedNow)
 	}
 }

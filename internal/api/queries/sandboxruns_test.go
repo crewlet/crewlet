@@ -2,6 +2,7 @@ package queries_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -104,7 +105,13 @@ func TestASettledRunLeavesTheBoard(t *testing.T) {
 	store := seedRuns(t, sandbox.PendingRun{
 		TurnID: "t1", AgentHandle: "swe", Status: sandbox.StatusRunning, CreatedAt: runBase,
 	})
-	if _, _, err := store.Finish(t.Context(), "t1", sandbox.Fence{}, sandbox.Active); err != nil {
+	decided, ok, err := store.DecideEnding(t.Context(), "t1", sandbox.Decision{
+		License: sandbox.License{WhileIn: sandbox.Active, Launch: sandbox.EveryLaunch},
+	})
+	if err != nil || !ok {
+		t.Fatalf("DecideEnding = %v, %v", ok, err)
+	}
+	if _, _, err := store.Finish(t.Context(), "t1", decided.Ending.ID); err != nil {
 		t.Fatalf("Finish: %v", err)
 	}
 	if rows := askRuns(t, store); len(rows) != 0 {
@@ -121,9 +128,8 @@ func TestTheSuspendedConversationIsNotShipped(t *testing.T) {
 	// The write that carries the conversation is also the one that moves
 	// the run to running, so this leaves the row exactly as a suspended
 	// turn leaves it.
-	suspended, err := store.MarkSuspended(t.Context(), "t1", sandbox.Suspension{State: map[string]any{
-		"messages": []any{map[string]any{"content": "a very long system prompt"}},
-	}})
+	suspended, err := store.MarkSuspended(t.Context(), "t1", sandbox.Suspension{State: json.RawMessage(
+		`{"messages":[{"content":"a very long system prompt"}]}`)})
 	if err != nil || !suspended {
 		t.Fatalf("MarkSuspended: suspended=%v err=%v", suspended, err)
 	}
@@ -189,6 +195,7 @@ func TestAParkedBoxWithNoPauseStampStillReadsAsHeld(t *testing.T) {
 	// The park lands; the stamp that would have dated it does not.
 	if err := store.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{
 		Question: "which branch?", Audience: "requester",
+		AskedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
@@ -224,20 +231,13 @@ func TestARunNoChatCanAnswerSaysSo(t *testing.T) {
 		// stored.
 		sandbox.PendingRun{TurnID: "none", AgentHandle: "swe", Status: sandbox.StatusAwaiting,
 			CreatedAt: runBase.Add(2 * time.Minute)},
-		// A ROW FROM BEFORE THE SPLIT carries only the partition key, and
-		// the column is answered off the conversation — so the identity
-		// read has to fall back to it or every parked run written by an
-		// older build is reported unanswerable while a person is in fact
-		// waiting in that thread.
-		sandbox.PendingRun{TurnID: "presplit", AgentHandle: "swe", Status: sandbox.StatusAwaiting,
-			PartitionKey: "chat:D1:1699.9", CreatedAt: runBase.Add(3 * time.Minute)},
 	)
-	for _, id := range []string{"chat", "eventkey", "none", "presplit"} {
+	for _, id := range []string{"chat", "eventkey", "none"} {
 		if err := store.SetStatus(t.Context(), id, sandbox.StatusAwaiting, sandbox.Fence{}); err != nil {
 			t.Fatalf("SetStatus: %v", err)
 		}
 	}
-	want := map[string]bool{"chat": true, "eventkey": false, "none": false, "presplit": true}
+	want := map[string]bool{"chat": true, "eventkey": false, "none": false}
 	for _, row := range askRuns(t, store) {
 		id := row["turn_id"].(string)
 		if row["answerable_in_chat"] != want[id] {
@@ -278,23 +278,18 @@ func TestAnUnreachableRunRecordIsUnavailableRatherThanFailed(t *testing.T) {
 // WHERE A RUN IS RUNNING IS AN OPERATOR QUESTION now that providers.sandbox is
 // a catalogue: one company runs some seats on the engine host and others in a
 // remote box, and this board is the only surface that could answer it.
-//
-// A row written before the field existed answers empty rather than failing —
-// a rolling upgrade has one build writing the placement and another not.
 func TestTheBoardSaysWhereEachRunIs(t *testing.T) {
 	store := seedRuns(t,
 		sandbox.PendingRun{TurnID: "t1", AgentHandle: "swe", Role: "SWE",
 			Placement: "e2b", Status: sandbox.StatusRunning, CreatedAt: runBase},
 		sandbox.PendingRun{TurnID: "t2", AgentHandle: "swe", Role: "SWE",
 			Placement: "direct", Status: sandbox.StatusRunning, CreatedAt: runBase},
-		sandbox.PendingRun{TurnID: "t3", AgentHandle: "swe", Role: "SWE",
-			Status: sandbox.StatusRunning, CreatedAt: runBase},
 	)
 	where := make(map[string]any)
 	for _, row := range askRuns(t, store) {
 		where[row["turn_id"].(string)] = row["placement"]
 	}
-	for turn, want := range map[string]string{"t1": "e2b", "t2": "direct", "t3": ""} {
+	for turn, want := range map[string]string{"t1": "e2b", "t2": "direct"} {
 		if got := where[turn]; got != want {
 			t.Errorf("run %s reports placement %v, want %q", turn, got, want)
 		}
@@ -384,6 +379,7 @@ func TestSandboxRunsNarrowsToOnePersonsAudience(t *testing.T) {
 	} {
 		if err := store.MarkAwaiting(t.Context(), turnID, sandbox.Clarification{
 			Question: "which branch?", Audience: "team", Answerers: answerers,
+			AskedAt: time.Now().UTC(),
 		}); err != nil {
 			t.Fatalf("MarkAwaiting %s: %v", turnID, err)
 		}
@@ -426,6 +422,25 @@ func TestSandboxRunsNarrowsToOnePersonsAudience(t *testing.T) {
 	}
 	if got, ok := all["to-nobody"]["audience_handles"].([]string); !ok || len(got) != 0 {
 		t.Errorf("an unresolved run's audience_handles = %#v, want an empty list", all["to-nobody"]["audience_handles"])
+	}
+
+	// AND A QUESTION THAT HAS ITS ANSWER IS NOT WAITING ON ANYBODY: the run
+	// keeps the audience it asked, but listing it under "waiting on me" would
+	// put a question ana already answered back in front of her.
+	run, _, err := store.Get(t.Context(), "to-ana")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if _, won, err := store.RecordAnswer(t.Context(), "to-ana", run.LaunchID, sandbox.RecordedAnswer{
+		Text: "use main", Via: types.AnswerViaChat, EventIDs: []string{"reply-1"},
+	}, sandbox.Fence{Owner: run.Owner, Epoch: run.OwnerEpoch}); err != nil || !won {
+		t.Fatalf("RecordAnswer = %v, %v", won, err)
+	}
+	if mine := ask(map[string]any{"audience": "ana"}); len(mine) != 0 {
+		t.Fatalf("audience=ana answered %v after she answered, want nothing waiting on her", keysOf(mine))
+	}
+	if all := ask(nil); all["to-ana"]["status"] != sandbox.StatusAnswered {
+		t.Fatalf("the board shows to-ana as %v, want %q", all["to-ana"]["status"], sandbox.StatusAnswered)
 	}
 }
 

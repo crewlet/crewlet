@@ -88,21 +88,10 @@ type NodeStatus struct {
 	ProjectionsReady int
 	ProjectionsTotal int
 
-	// Features is every [Feature] this node's build honours — see
-	// features.go for why a gesture asks the fleet before it is offered.
-	//
-	// EMPTY IS "HONOURS NONE", and that is the reading an older peer has
-	// to get: a build that predates the field publishes a status without
-	// it, and a gate reading that as "unknown" would refuse the gesture as
-	// retryable for as long as the older node runs, instead of saying why.
-	// A node that published NO STATUS at all is the other case, and
-	// [StatusFromMeta] already reports it as absent.
-	Features []Feature
-
 	// MCP is what this node's MCP servers did when it last started them,
-	// one row per configured server. Nil is "this node started none"
-	// ONLY where [FeatureMCPStatus] is advertised; on an older peer it is
-	// "did not say".
+	// one row per configured server. Nil is "this node started none": a
+	// node that did not say is one whose heartbeat carried no status at
+	// all, which [StatusFromMeta] reports as absent.
 	//
 	// On the heartbeat rather than asked for, for the reason the rest of
 	// this struct is: every node already re-sends it, every peer already
@@ -179,13 +168,6 @@ func (s NodeStatus) Meta() map[string]any {
 		out["projections_ready"] = s.ProjectionsReady
 		out["projections_total"] = s.ProjectionsTotal
 	}
-	if len(s.Features) > 0 {
-		features := make([]string, len(s.Features))
-		for i, f := range s.Features {
-			features[i] = string(f)
-		}
-		out["features"] = features
-	}
 	if len(s.MCP) > 0 {
 		rows := make([]map[string]any, len(s.MCP))
 		for i, m := range s.MCP {
@@ -214,10 +196,16 @@ func (s NodeStatus) Meta() map[string]any {
 //
 // # Absent is not zero
 //
-// A node that publishes no status (a peer running a build older than the
-// field) is not a node with no work in flight. Reporting it as 0 would draw an
-// idle row for a process that is simply not saying, which is the confident-zero
-// mistake the whole surface is written to avoid.
+// A node that publishes no status — its status hook overran its budget on
+// that beat, so its heartbeat carried the placement half alone — is not a node
+// with no work in flight. Reporting it as 0 would draw an idle row for a
+// process that is simply not saying, which is the confident-zero mistake the
+// whole surface is written to avoid.
+//
+// A key this build does not know is IGNORED rather than refused: a successor
+// sharing the fleet publishes what it adds beside what this build reads, and a
+// status that failed to decode over it would read as absent for as long as the
+// successor ran.
 func StatusFromMeta(meta map[string]any) (NodeStatus, bool) {
 	raw, ok := meta[StatusKey].(map[string]any)
 	if !ok {
@@ -232,11 +220,6 @@ func StatusFromMeta(meta map[string]any) (NodeStatus, bool) {
 	status.Draining, _ = raw["draining"].(bool)
 	if at, err := time.Parse(time.RFC3339, stringFromMeta(raw["started_at"])); err == nil {
 		status.StartedAt = at
-	}
-	for _, f := range listFromMeta(raw["features"]) {
-		if name := stringFromMeta(f); name != "" {
-			status.Features = append(status.Features, Feature(name))
-		}
 	}
 	for _, r := range listFromMeta(raw["mcp"]) {
 		row, ok := r.(map[string]any)
@@ -263,18 +246,12 @@ func StatusFromMeta(meta map[string]any) (NodeStatus, bool) {
 	return status, true
 }
 
-// listFromMeta accepts the typed slices this build writes and the []any a JSON
+// listFromMeta accepts the typed slice this build writes and the []any a JSON
 // round trip returns, for the reason [intFromMeta] accepts both numbers.
 func listFromMeta(v any) []any {
 	switch l := v.(type) {
 	case []any:
 		return l
-	case []string:
-		out := make([]any, len(l))
-		for i, s := range l {
-			out[i] = s
-		}
-		return out
 	case []map[string]any:
 		out := make([]any, len(l))
 		for i, m := range l {

@@ -74,9 +74,8 @@ const MintHorizon = OpsRetention - 24*time.Hour
 // THE ATTEMPT'S OWN INSTANT ONCE IT IS NOT, truncated to the millisecond an id
 // keeps (a UUIDv7's time bits, see [OpMintedAt]), so the instant recorded is
 // exactly the one every id carries and a reader comparing the two finds them
-// equal. The zero instant — a seed whose start is not known, such as a run id
-// an older build minted with no instant in it — is behind every horizon, and
-// is rebased.
+// equal. The zero instant — a seed whose start cannot be read from it — is
+// behind every horizon, and is rebased.
 func MintAt(carried, at time.Time) (time.Time, bool) {
 	if at.Sub(carried) > MintHorizon {
 		return at.UTC().Truncate(time.Millisecond), true

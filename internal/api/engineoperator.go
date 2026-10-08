@@ -7,7 +7,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/api/operator"
-	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/knowledge"
@@ -72,10 +71,6 @@ func EngineOperatorOptions(e *engine.Engine) operator.Options {
 	// EVERY CALL THAT MAY WRITE is audited onto this node's own queue, so
 	// the event store here holds who did what through either transport.
 	opts := operator.Options{Audit: e.Backends().Queue}
-	// WHAT EACH NODE CAN CARRY OUT, read off the same lease table the seat
-	// host heartbeats into, so a verb the node holding a seat has not been
-	// upgraded to carry is refused rather than accepted and never done.
-	opts.Fleet = coord.FeatureReader{Leases: e.Backends().Coord}
 	if c := e.Company(); c != nil && c.Config != nil {
 		opts.Company = c.Config.Name
 	}

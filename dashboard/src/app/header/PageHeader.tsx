@@ -162,7 +162,8 @@ export function PageHeader({
 /**
  * Who is working right now: their faces, and how many — the company's pulse,
  * one click from what they are running. Drawn on Home only (`useWorkingNow`):
- * everywhere else the sidebar's Agents badge carries the same count.
+ * everywhere else the sidebar's Live row carries the same count, and its
+ * Running group names each turn.
  *
  * THE ENGINE'S WORD, off the agents push. Nothing is drawn while nobody is
  * working: a header reading "0 agents working" is a line a reader learns to

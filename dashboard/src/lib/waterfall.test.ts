@@ -48,6 +48,7 @@ function settledTurn() {
         outputTokens: 0,
         cacheReadTokens: 0,
         toolCalls: 2,
+        stopReason: "",
       },
       {
         round: 2,
@@ -58,6 +59,7 @@ function settledTurn() {
         outputTokens: 0,
         cacheReadTokens: 0,
         toolCalls: 0,
+        stopReason: "",
       },
     ],
     tools: [
@@ -125,6 +127,7 @@ describe("buildWaterfall", () => {
           outputTokens: 0,
           cacheReadTokens: 0,
           toolCalls: 2,
+          stopReason: "",
         },
       ],
       tools: [toolCall({ name: "a", durationMs: 200 }), toolCall({ name: "b", durationMs: 300 })],
@@ -194,6 +197,7 @@ describe("buildWaterfall", () => {
           outputTokens: 0,
           cacheReadTokens: 0,
           toolCalls: 1,
+          stopReason: "",
         },
       ],
       roundStartedAt: iso(15_000),
@@ -229,6 +233,7 @@ describe("buildWaterfall", () => {
       outputTokens: 0,
       cacheReadTokens: 0,
       toolCalls: 1,
+      stopReason: "",
     });
     const now = T0 + 237_000;
     const tools = phaseRecord({
@@ -326,10 +331,10 @@ describe("buildWaterfall", () => {
   });
 
   test("a record with no instants is listed as untimed, never drawn at an invented place", () => {
-    const legacy = phaseRecord({ key: "turn-1|execute|1", at: "", startedAt: "", durationMs: 0 });
+    const untimed = phaseRecord({ key: "turn-1|execute|1", at: "", startedAt: "", durationMs: 0 });
     const w = buildWaterfall({
       events: [],
-      phases: [legacy],
+      phases: [untimed],
       now: T0,
       running: false,
       parked: false,
@@ -356,6 +361,7 @@ describe("buildWaterfall", () => {
           outputTokens: 0,
           cacheReadTokens: 0,
           toolCalls: 1,
+          stopReason: "",
         },
         {
           round: 2,
@@ -366,6 +372,7 @@ describe("buildWaterfall", () => {
           outputTokens: 0,
           cacheReadTokens: 0,
           toolCalls: 0,
+          stopReason: "",
         },
       ],
     });

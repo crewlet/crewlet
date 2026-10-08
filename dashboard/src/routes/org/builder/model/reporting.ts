@@ -23,9 +23,10 @@
  *   in the engine's seat order, and each member is marked with the cycle it
  *   belongs to.
  *
- * Seats are identified by their position in the derivation, not by handle:
- * a stored revision from before handles had to be unique can list one handle
- * twice, and two seats must still be two nodes. A manager handle held by
+ * Seats are identified by their position in the derivation, not by handle: a
+ * draft the engine refused can still carry its derivation, and a refused draft
+ * can list one handle twice (org.ErrDuplicateHandle), so two seats must still
+ * be two nodes. A manager handle held by
  * several seats resolves to the first, as a name does everywhere else in the
  * engine.
  */

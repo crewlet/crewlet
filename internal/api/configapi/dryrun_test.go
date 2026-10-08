@@ -372,8 +372,8 @@ func TestADryRunIsRefusedForWhatTheWriteIsRefusedFor(t *testing.T) {
 //
 // A reload and a revert re-activate a stored company under the runnable rules
 // only, so theirs is the answer that can carry an admission warning: a company
-// stored before a rule, which runs and which a write keeping it would be
-// refused for.
+// a newer peer admitted under other rules, which runs and which a write
+// keeping it would be refused for.
 func TestEveryWriteAnswersItsWarningsAndDerivedHierarchy(t *testing.T) {
 	t.Parallel()
 	s := newCountedSurface(t)

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
@@ -135,8 +134,7 @@ func (e *Engine) migrateSecrets(ctx context.Context) {
 	}
 	_, err := fleetsecrets.Migrate(ctx,
 		e.backends.Store.SecretValues(e.cipher),
-		fleetsecrets.New(e.backends.Fleet, e.cipher),
-		time.Now().UTC())
+		fleetsecrets.New(e.backends.Fleet, e.cipher))
 	if err != nil {
 		log.ErrorContext(ctx, "secret_migration_incomplete", "error", err,
 			"detail", "this node's own secret rows are still local and no peer "+
@@ -171,10 +169,9 @@ func (e *Engine) secretSnapshot(ctx context.Context) (map[string]string, error) 
 
 	// THE LOCAL ROWS FIRST, so the fleet's win. In steady state there are
 	// none — [Engine.migrateSecrets] emptied the table at boot — and this
-	// read costs one query against an empty table. It is here for the two
-	// states where the table is NOT empty: a node booting for the first
-	// time after the upgrade, and one whose migration could not finish.
-	// Either way the fleet's copy is what every node agrees on, so a
+	// read costs one query against an empty table. It is here for the one
+	// state where the table is NOT empty: a node whose migration could not
+	// finish. The fleet's copy is then what every node agrees on, so a
 	// surviving local row must never shadow it.
 	merged := map[string]string{}
 	if local != nil {

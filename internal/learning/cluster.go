@@ -161,6 +161,7 @@ func (s *Synthesizer) draftFromCluster(ctx context.Context, seat *org.Role,
 			{Role: llm.RoleUser, Content: buildClusterPrompt(cluster)},
 		},
 		Temperature: llm.Temp(auxTemperature),
+		Effort:      auxEffort,
 		MaxTokens:   s.maxTokens,
 	})
 	if err != nil {

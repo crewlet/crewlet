@@ -213,11 +213,11 @@ func TestEveryProblemInAFileIsReported(t *testing.T) {
 }
 
 // TIER A IS PLACED THE SAME WAY, after its references are resolved in place:
-// a retired key keeps its own advice and gains its path and line.
+// a misspelled key gains its path and line.
 func TestABootstrapParserFailureIsReportedWhereItWasWritten(t *testing.T) {
 	t.Parallel()
-	_, err := config.ParseBootstrap([]byte("# node\n\nstore:\n  driver: sqlite\n"), config.EnvOnly())
-	if got, want := faultsOf(err), []found{{"store.driver", 4, "unknown_field"}}; !reflect.DeepEqual(got, want) {
+	_, err := config.ParseBootstrap([]byte("# node\n\nstore:\n  paht: x.db\n"), config.EnvOnly())
+	if got, want := faultsOf(err), []found{{"store.paht", 4, "unknown_field"}}; !reflect.DeepEqual(got, want) {
 		t.Errorf("faults = %+v, want %+v\nerror: %v", got, want, err)
 	}
 }

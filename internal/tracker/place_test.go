@@ -1,8 +1,6 @@
 package tracker_test
 
 import (
-	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -267,11 +265,11 @@ func TestAMoveWithinALaneReordersOnlyThatItem(t *testing.T) {
 
 // AN EDIT AFTER A DRAG KEEPS THE CARD WHERE IT WAS DRAGGED.
 //
-// The order moves a task's rank column and never its document, and every task
-// write re-upserts the row from a document — so a task write that took its
-// rank from the document put the card back at the key it was filed at, and a
-// board's manual order lasted until somebody next touched the card. The detail
-// read answered the same stale key as the card's place.
+// The order writes a task's place into its document and its rank column alike,
+// and every task write re-upserts the row from a document merged against that
+// place — so a write carries the dragged key through rather than putting the
+// card back at the key it was filed at, and the detail read answers the same
+// place the board draws.
 func TestAnEditAfterADragKeepsTheCardsPlace(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -437,132 +435,6 @@ func TestADropThatNamesNoGapIsRefused(t *testing.T) {
 		Task: "t-1", Project: "OPS", Before: "t-2",
 	}, nil); err == nil {
 		t.Error("a drop of a card into a board it is not on was placed")
-	}
-}
-
-// A TASK RECORD FROM AN OLDER BUILD APPLIES ITS RANK AS THAT BUILD DID.
-//
-// A build reading record version 7 merges every task write into the task's
-// DOCUMENT and upserts the row from it, so after a drag it re-writes the key
-// the task was filed at. This build carries the ROW's key through instead —
-// but only for a record at the version that says so. Were the new rule applied
-// to an older build's record, the nodes of one rolling upgrade would write
-// different rows for the same log position, permanently, on a table the fleet
-// compares byte for byte. So a version-7 edit after a drag puts the card back
-// on every node (as it always did), and the version-8 edit this build writes
-// keeps it where it was dragged on every node.
-func TestATaskRecordFromAnOlderBuildAppliesItsRankAsThatBuildDid(t *testing.T) {
-	t.Parallel()
-	h := newApplyHarness(t)
-	at := time.Unix(1_700_000_100, 0).UTC()
-	if _, err := h.apply(taskRecord("t-1", tracker.OpCreate, newTask("t-1"), nil), at); err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	dragged, err := tracker.MoveKeys(tracker.RankOrigin, "", 1)
-	if err != nil {
-		t.Fatalf("MoveKeys: %v", err)
-	}
-	drag := func(opID string) {
-		t.Helper()
-		body, _ := json.Marshal(tracker.RankOrder{
-			V: tracker.DocumentVersion, Project: "ENG",
-			Placements: []tracker.Placement{{Task: "t-1", Rank: dragged[0]}},
-		})
-		if _, err := h.apply(tracker.MutationRecord{
-			RecordEnvelope: tracker.RecordEnvelope{
-				V: 1, OpID: opID, Subject: tracker.RankOrderSubject("ENG"),
-				Op: tracker.OpPatch, CreatedAt: at, Writer: "node-a",
-				Scope: tracker.ScopeSet{Terms: []tracker.ScopeTerm{{
-					Kind: tracker.TermContainer, ID: "ENG"}}},
-			},
-			Mutation: body, Actor: "ana", ActorKind: tracker.AuthorHuman,
-		}, at); err != nil {
-			t.Fatalf("drag: %v", err)
-		}
-	}
-	edit := func(opID string, v int, keeps bool) {
-		t.Helper()
-		high := tracker.PriorityHigh
-		record := taskRecord("t-1", tracker.OpPatch, tracker.TaskPatch{Priority: &high}, nil)
-		record.OpID, record.V, record.KeepsPlace = opID, v, keeps
-		record.Kind = tracker.ChangeFields
-		if _, err := h.apply(record, at); err != nil {
-			t.Fatalf("edit at version %d: %v", v, err)
-		}
-	}
-	place := func() (tracker.Rank, tracker.Rank) {
-		t.Helper()
-		var column string
-		var document []byte
-		if err := h.db.Read(t.Context(), func(tx *sql.Tx) error {
-			return tx.QueryRowContext(t.Context(),
-				`SELECT rank, document FROM tracker_tasks WHERE id = 't-1'`).
-				Scan(&column, &document)
-		}); err != nil {
-			t.Fatalf("read t-1: %v", err)
-		}
-		var task tracker.Task
-		if err := json.Unmarshal(document, &task); err != nil {
-			t.Fatalf("decode t-1: %v", err)
-		}
-		return tracker.Rank(column), task.Rank
-	}
-
-	drag("drag-1")
-	edit("edit-old", 7, false)
-	if column, document := place(); column != tracker.RankOrigin || document != tracker.RankOrigin {
-		t.Fatalf("a version-7 edit after a drag left the row at %q and the "+
-			"document at %q; the build that wrote it re-files the card at %q, "+
-			"and a node applying it any other way disagrees with that build "+
-			"about this row for good", column, document, tracker.RankOrigin)
-	}
-
-	drag("drag-2")
-	edit("edit-new", tracker.RecordVersion, true)
-	if column, document := place(); column != dragged[0] || document != dragged[0] {
-		t.Fatalf("a version-%d edit after a drag left the row at %q and the "+
-			"document at %q, want the dragged key %q on both",
-			tracker.RecordVersion, column, document, dragged[0])
-	}
-}
-
-// EVERY TASK EDIT THIS BUILD WRITES SAYS IT KEEPS ITS PLACE — and is therefore
-// stamped at a version a build still re-filing the rank retains rather than
-// applies by its own rule.
-func TestEveryTaskEditIsStampedToKeepItsPlace(t *testing.T) {
-	t.Parallel()
-	r := newRoundTrip(t)
-	fourCards(t, r)
-	high := tracker.PriorityHigh
-	res, err := r.writer.UpdateTask(t.Context(), "op-edit", "t-1", "ENG",
-		tracker.NoIfMatch, tracker.TaskPatch{Priority: &high}, tracker.ChangeFields, nil)
-	if err != nil {
-		t.Fatalf("UpdateTask: %v", err)
-	}
-	_, payload, _, ok, err := r.log.At(t.Context(), res.Position.Seq)
-	if err != nil || !ok {
-		t.Fatalf("read the edit back: ok=%v err=%v", ok, err)
-	}
-	record, err := tracker.Decode(payload)
-	if err != nil {
-		t.Fatalf("decode the edit: %v", err)
-	}
-	// THE VERSION THE FIELD CLOSED ON, read off the table rather than the
-	// build's own `RecordVersion`: the build reads later versions for later
-	// fields, and an edit carrying none of them is stamped at this one.
-	since := 0
-	for _, field := range tracker.VersionedFields() {
-		if field.Name == "MutationRecord.KeepsPlace" {
-			since = field.Since
-		}
-	}
-	if since == 0 {
-		t.Fatal("the field table names no MutationRecord.KeepsPlace")
-	}
-	if !record.KeepsPlace || record.V < since {
-		t.Fatalf("a task edit was written at version %d with keeps_place=%v — "+
-			"a build reading %d would apply it by re-filing the card's rank",
-			record.V, record.KeepsPlace, since-1)
 	}
 }
 

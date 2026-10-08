@@ -17,7 +17,7 @@ import (
 func TestTheReviewerIsToldTheTriggerIsNotANewRequest(t *testing.T) {
 	t.Parallel()
 	const trigger = "Can you open a task for test purpose?"
-	framed := reviewTask(trigger)
+	framed := reviewTask(trigger).Text
 
 	if framed == trigger {
 		t.Fatal("the reviewer is handed the trigger bare, so it reads as a request that has just arrived")

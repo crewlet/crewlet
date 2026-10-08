@@ -4,9 +4,11 @@
 // The rule it exists to hold is the contract's, not its own. A backend
 // classifies a failure and this decides what the classification means for the
 // NEXT model: [llm.ErrorKind.Retryable] says whether another member is worth
-// trying at all, and a fatal is where the walk stops — a malformed request or
-// a content refusal will be refused identically by every member, so trying
-// them is two more seconds and another log line saying the same thing.
+// trying at all. A fatal is where the walk stops — a malformed request will be
+// refused identically by every member, so trying them is two more seconds and
+// another log line saying the same thing — and so is a model's REFUSAL, for a
+// different reason: the next member might well answer, and walking a refused
+// request round the models until one does is circumventing the decision.
 //
 // Fallback is per CALL, not per round. A member that fails is dropped along
 // with whatever it produced, and the next one starts the call from scratch,
@@ -185,9 +187,24 @@ func (c *Chain) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 
 		kind := llm.KindOf(err)
 		if !kind.Retryable() {
+			// A REFUSAL'S COMPLETION IS BILLED like an answer's, so it
+			// is named like one: the frame that meters it reads which
+			// model and which entry served the call off it, and only
+			// this loop knows the entry.
+			var refusal *llm.Refusal
+			if errors.As(err, &refusal) && refusal.Completion != nil {
+				if refusal.Completion.Model == "" {
+					refusal.Completion.Model = m.Provider.Model()
+				}
+				if refusal.Completion.ProviderKey == "" {
+					refusal.Completion.ProviderKey = m.Key
+				}
+			}
 			// Returned as it came, so errors.As still reaches the
 			// backend's own *llm.Error with its provider, model and
-			// status intact.
+			// status intact. A refusal stops here too — see
+			// [llm.KindRefusal]: handing a refused request to the next
+			// model until one answers is circumventing the decision.
 			return nil, err
 		}
 

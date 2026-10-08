@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -118,7 +120,15 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 		// A resumed executor can suspend AGAIN: it may call run_sandbox a
 		// second time to continue in the same box.
 		allowSuspend: true,
-		prior:        priorRounds(state),
+		// A RESUMED EXECUTOR IS STEERABLE like the pass it continues. The
+		// engine hands this runner the turn's note box for exactly this
+		// segment (internal/engine's resume), and a phase that drains
+		// nothing leaves a note offered while it runs waiting in the box
+		// until the reviewer — which then grades work the executor never
+		// got the chance to correct — or until the turn ends and the note
+		// is reported `expired`, unread by the phase it was sent to.
+		steerable: true,
+		prior:     priorRounds(state),
 		// What the pre-suspend half already spent, so this phase's record
 		// reports the whole of it.
 		priorElapsed: time.Duration(state.ElapsedMS) * time.Millisecond,
@@ -245,6 +255,12 @@ func priorRounds(state execstate.State) toolloop.Result {
 			CacheRead:    r.CacheReadTokens,
 			CacheWrite:   r.CacheWriteTokens,
 			ToolCalls:    r.ToolCalls,
+			// Why each parked round stopped travels like its timing does:
+			// the resumed record is the only account this phase will ever
+			// have, and a second suspend re-encodes these rows from here —
+			// so a field dropped on this side is lost for good, not merely
+			// for one record.
+			StopReason: llm.StopReason(r.StopReason),
 		})
 	}
 	for _, exec := range state.ToolExecutions {
@@ -266,8 +282,9 @@ func priorRounds(state execstate.State) toolloop.Result {
 		// THE TIMING AND THE ORIGIN TRAVEL TOO, or the resumed record
 		// states every pre-suspend call as untimed and unattributed — the
 		// run_sandbox call that parked the phase first among them. A row
-		// that carries no start (an older build wrote it) stays untimed
-		// rather than acquiring a zero duration.
+		// that carries no start (a call whose arguments did not parse,
+		// which never ran) stays untimed rather than acquiring a zero
+		// duration.
 		if at, ok := exec["started_at"].(string); ok {
 			if parsed, err := time.Parse(time.RFC3339Nano, at); err == nil {
 				ex.StartedAt = parsed
@@ -287,16 +304,23 @@ func priorRounds(state execstate.State) toolloop.Result {
 		}
 		reasoning, _ := narr["reasoning"].(string)
 		content, _ := narr["content"].(string)
-		out.Narration = append(out.Narration,
-			toolloop.Narration{Round: round, Reasoning: reasoning, Content: content})
+		// A declined round before the suspend stays one after it, or the
+		// resumed record says the model answered in prose where the phase
+		// allowed it.
+		declined, _ := narr["declined"].(bool)
+		out.Narration = append(out.Narration, toolloop.Narration{
+			Round: round, Reasoning: reasoning, Content: content, Declined: declined,
+		})
 	}
 	return out
 }
 
-// intField reads a number that has been through JSON, where every one of them
-// is a float64 — and out of a Go map that never was, where it is still an int.
-// Both shapes reach here: a state serialized to the pending-run row and back,
-// and one handed straight over in the process that wrote it.
+// intField reads a number that has been through JSON, where the state's
+// reader keeps every one of them as the json.Number it was written as — and
+// out of a Go map that never was, where it is still an int. Both shapes reach
+// here: a state serialized to the pending-run row and back, and one handed
+// straight over in the process that wrote it. A float64 is accepted too,
+// because that is what any other plain JSON decode of the same row produces.
 func intField(v any) (int, bool) {
 	switch n := v.(type) {
 	case int:
@@ -305,6 +329,9 @@ func intField(v any) (int, bool) {
 		return int(n), true
 	case float64:
 		return int(n), true
+	case json.Number:
+		i, err := n.Int64()
+		return int(i), err == nil
 	}
 	return 0, false
 }

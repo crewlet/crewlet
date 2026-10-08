@@ -784,9 +784,6 @@ func TestTheIndexStepFollowsTheCorpus(t *testing.T) {
 			search.IndexState{Sources: search.IVFMinCorpus}, search.IndexTrain},
 		{"a node behind the log decides nothing from its rows",
 			search.IndexState{Sources: search.IVFMinCorpus, Behind: true}, search.IndexKeep},
-		{"a node the log counts that cannot read the index holds it back",
-			search.IndexState{Sources: search.IVFMinCorpus, Held: []string{"old"}},
-			search.IndexKeep},
 		{"an index in another embedding space is no index",
 			search.IndexState{Indexed: true, Sources: 5000, Head: search.IndexHead{
 				Generation: 9, Model: "old", Dim: dim, Lists: 64, Probes: 4,

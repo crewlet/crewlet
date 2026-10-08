@@ -83,7 +83,7 @@ func TestAnAnswerReachesTheSeatThatAsked(t *testing.T) {
 func TestATriggerWithNoBodyStillNamesItself(t *testing.T) {
 	t.Parallel()
 	// A BODY-LESS ENVELOPE — which is exactly what an event of a type this
-	// build does not know decodes to: no typed payload, nothing in the bag.
+	// build does not know decodes to: no typed payload.
 	bare := &events.Event{ID: uuid.New(), Type: types.A2ARequestType}
 	if got := DescribeTrigger([]*events.Event{bare}); got != "(a2a_request)" {
 		t.Errorf("trigger = %q", got)

@@ -120,9 +120,7 @@ that no earlier attempt of that same call made is refused, as somebody else's.
 A project nobody has filed work into reports **no last change at all**, rather
 than an instant borrowed from its own creation: "nothing has ever been filed
 here" is the answer, and a made-up date would make an untouched project look
-freshly active. A company upgrading to this gets both columns filled from the
-change history it already holds, so no project reads as untouched because of
-when the engine was updated.
+freshly active.
 
 ### A project's target date
 
@@ -341,11 +339,9 @@ many times — each account at most 600 bytes and at most sixteen tools, bounds
 the writer refuses to exceed. An account longer than that is **condensed** for
 the card by the seat's auxiliary model and marked `(condensed)`, never cut; where
 no rewrite can be had the card says how long the account is and to open the
-turn for it — and, for a segment
-that failed because one of its phases did, which phase that was. They are record
-version 10: a node on an older build holds such a record back until it is
-upgraded rather than applying it without them. The arguments and results of
-every call stay on the turn's trace, which a task's turn card links to.
+turn for it — and, for a segment that failed because one of its phases did,
+which phase that was. The arguments and results of every call stay on the
+turn's trace, which a task's turn card links to.
 
 The counters are `spend_turns`, `spend_rounds`, `spend_input`, `spend_output`,
 `spend_cache_read`, `spend_cache_write`, `spend_wall_ms`, `spend_tokens`
@@ -932,11 +928,6 @@ leaves it in the lane it went to and says the place was not taken. `Alt` with
 an arrow key moves a focused card the same way — up and down past its
 neighbours of the same project, left and right to the top of the next lane.
 
-During a rolling upgrade a card keeps its dragged place only through edits
-written by an upgraded node; an edit an older node writes puts it back where it
-was filed, on every node alike — see
-[Which records an upgrade holds back](replication.md#which-records-an-upgrade-holds-back).
-
 Repeated insertion at the same point makes keys grow, and a drop that would
 mint a key past 64 characters re-spreads the cards around it in the same
 record instead — widening the window until the keys are short again, up to 256
@@ -1287,9 +1278,8 @@ turns, and whether a reviewer ever sent it back), work **filed**, work **handed
 on** (the task's hand-off count against its budget), pages published and
 schedules run. A create says where it was filed from — its **origin**, the chat
 surface and conversation the filing turn was woken on ("from Slack") — which
-the create record states for itself (record version 9), so an older build
-holds such a create back rather than applying it without the field. One
-cursor resumes every source exactly where the last page stopped.
+the create record states for itself. One cursor resumes every source exactly
+where the last page stopped.
 
 A schedule's entries are its **runs** — the ticks the scheduler dispatched. A
 tick it deliberately skipped (a missed run outside the catch-up window, or one
@@ -1654,11 +1644,6 @@ the seat has since lost every tool on that surface, there is nothing it could
 post with and the obligation falls back to any delivery, like every other
 surface the seat cannot reach.
 
-A record carrying a decision or a choice on a comment is **record version 4**,
-and a create carrying the question it was filed as is **version 6**: a node
-still reading an older version retains it rather than applying it with the
-options — or the whole question — dropped, until it is upgraded.
-
 A comment from somebody who is not the assignee, naming nobody and asking
 nobody, still wakes the assignee — unaddressed, which a turn may absorb without
 replying. The result says so in a `warnings` line, because a commenter
@@ -1729,9 +1714,10 @@ they left. The record carries the seat beside the author for that reader, and
 the author field is untouched: an operator's change is still authored by the
 token, which is the audit trail. What a notice or a feed row *draws* is the
 seat — `actor_seat` beside `actor` — so a founder's own change reads as the
-founder rather than as a credential's id. It is stored on the history row from
-records at version 5; a change applied from an older record carries none, on
-every node alike, and a screen falls back to the author.
+founder rather than as a credential's id. It is stored on the history row
+whenever the change carries one — every change written through an operator's
+token that a seat claims — and where a change carries none (an agent's, an
+unbound token's or the system's) a screen falls back to the author.
 
 The single exception is **`unblocked`**, and it is the exception because it is
 about a *different* task: closing a blocker is exactly the moment to be told
@@ -1970,9 +1956,7 @@ theirs to answer — the engine refuses anybody else — and their work is chang
 from the work screens. The one exception is the authority the tracker grants
 across people: somebody **above them in the chart** may reorder their queue,
 and the page says before the press that the reorder is stamped with the
-reader's name and tells them what is now first. Where the engine did not
-report its hierarchy, who leads whom is unknown and the page says that rather
-than refusing a lead.
+reader's name and tells them what is now first.
 
 **The Queue is the work list, narrowed to one person.** It is the same
 screen `#/work` is — the five shapes, the Filter and Display menus, the
@@ -2257,9 +2241,7 @@ project — each holding its kind, its instant and those three changes and
 nothing else, no title, no body, no comment and no excerpt. They are what
 [the flow](#how-the-work-has-moved) walks backward to answer the past, and a purge takes a
 task out of that series only from the moment it happened: a board two weeks
-ago held the task, and the chart still says so. That is a purge this build
-writes; one an earlier build wrote keeps those rows whole on every node, as
-that build applied it ([Retention](retention.md#removal-deletion-and-what-a-purge-does-not-reach)).
+ago held the task, and the chart still says so.
 
 **Every other task that named it stops naming it**, for good: a task that
 waited on it is no longer blocked by it, a task it waited on no longer lists it

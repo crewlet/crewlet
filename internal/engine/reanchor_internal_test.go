@@ -97,10 +97,16 @@ func TestAReanchorsHighWaterMarkIsReadInItsOwnGeneration(t *testing.T) {
 			Generation: own.Generation, Seq: own.Seq + 900,
 			StreamCreatedAt: running.runner.KeyedTo().Add(time.Hour),
 		}},
-		// THIS GENERATION, further along than this node, on a row that
-		// names no stream — a build that did not publish one — which is
-		// weighed as though it could be this node's.
-		{"ahead", coord.DomainPosition{Generation: own.Generation, Seq: own.Seq + 50}},
+		// THIS GENERATION, further along than this node, on this node's
+		// own stream. Its checkpoint names no record, so it holds history
+		// the log may not.
+		{"ahead", coord.DomainPosition{
+			Generation: own.Generation, Seq: own.Seq + 50,
+			StreamCreatedAt: running.runner.KeyedTo(),
+		}},
+		// A ROW PLACED ON NO STREAM is on none, however far along: every
+		// row this build publishes names its instant.
+		{"unplaced", coord.DomainPosition{Generation: own.Generation, Seq: own.Seq + 700}},
 	} {
 		if err := e.backends.Fleet.PutPositions(t.Context(), coord.NodePositions{
 			NodeID: row.node, At: time.Now().UTC(),
@@ -115,8 +121,32 @@ func TestAReanchorsHighWaterMarkIsReadInItsOwnGeneration(t *testing.T) {
 	}
 	if in.Highest != own.Seq+50 {
 		t.Fatalf("the high-water mark is %d, want %d — the peer at generation %d, "+
-			"and the one on another stream at this generation, report sequences in "+
-			"another number space", in.Highest, own.Seq+50, own.Generation+1)
+			"the one on another stream at this generation and the one on no stream "+
+			"report sequences in another number space", in.Highest, own.Seq+50,
+			own.Generation+1)
+	}
+}
+
+// A PEER IS ON THIS NODE'S STREAM ONLY WHERE ITS ROW SAYS SO — and a node whose
+// own rows name no stream (a domain with no checkpoint) counts every peer as on
+// it, because it cannot place itself and the comparison feeds a refusal.
+func TestAPeerIsOnThisStreamOnlyWhereItsRowSaysSo(t *testing.T) {
+	t.Parallel()
+	keyed := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
+	for name, tc := range map[string]struct {
+		peer, keyed time.Time
+		want        bool
+	}{
+		"the same instant":              {keyed, keyed, true},
+		"within the stamp's resolution": {keyed.Add(400 * time.Nanosecond), keyed, true},
+		"another stream":                {keyed.Add(time.Hour), keyed, false},
+		"a row placed on no stream":     {time.Time{}, keyed, false},
+		"this node keyed to no stream":  {keyed, time.Time{}, true},
+		"neither placed on any stream":  {time.Time{}, time.Time{}, true},
+	} {
+		if got := sameStream(tc.peer, tc.keyed); got != tc.want {
+			t.Errorf("%s: sameStream(%v, %v) = %v, want %v", name, tc.peer, tc.keyed, got, tc.want)
+		}
 	}
 }
 

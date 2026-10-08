@@ -98,7 +98,7 @@ export function Settings({
     () => (settings && !human ? mcpEnvOf(settings, seat.kind) : {}),
     [settings, human, seat.kind],
   );
-  const edit = href(["agents", "edit"], { seat: seat.handle || seat.name });
+  const edit = href(["agents", "edit"], { seat: seat.handle });
   // THE COMPANY'S CEILINGS, as written on the public chart: a seat with none
   // of its own in a window is still bound by the company's there.
   const company = useOrg()?.token_budget;
@@ -116,7 +116,7 @@ export function Settings({
   const identity: Property[] = [
     {
       label: "Handle",
-      value: seat.handle ? <code className="inline">{handleLabel(seat.handle)}</code> : undefined,
+      value: <code className="inline">{handleLabel(seat.handle)}</code>,
     },
     { label: "Kind", value: human ? "person — never run by the engine" : "agent" },
     { label: "Email", value: <ConfigValue value={role?.email} /> },

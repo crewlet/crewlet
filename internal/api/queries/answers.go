@@ -415,7 +415,7 @@ func Register(r *Registry, s Sources) {
 		r.Register("trace", s.trace)
 		// A turn is its own question, not a slice of the trace: one trace
 		// can span several turns and one turn several traces. See the
-		// answer, and migration 0014 which made it askable at all.
+		// answer, and migration 0015 which made it askable at all.
 		r.Register("turn", s.turn)
 		// AND THE LIST OF THEM, which did not exist: a turn is the unit
 		// of work this engine does and every other surface is a
@@ -902,17 +902,13 @@ func (s Sources) events(ctx context.Context, p Params) (any, error) {
 		// The cursor the caller pages with next, echoed rather than left
 		// for a client to assemble: (time, id) is the table's key and a
 		// client that built it from the last row's fields would be
-		// reimplementing the one thing that must not drift — and it is
-		// NOT always the last row's, because a page the fleet narrowed
-		// itself covered the rows it dropped ([eventfan.Listing.Next]).
-		"next": cursorAt(listing.Next),
+		// reimplementing the one thing that must not drift.
+		"next": cursorOf(rows),
 		// A page shorter than the limit does NOT mean history is
-		// exhausted: a related-agent filter over-fetches and post-filters,
-		// and a page narrowed by the asker drops rows a peer sent. So only
-		// a page that covered nothing ends the walk — one whose rows were
-		// all dropped still has a cursor. Saying so beats a client
-		// inferring it wrongly.
-		"exhausted": listing.Next == nil,
+		// exhausted when a related-agent filter is set: that filter
+		// over-fetches and post-filters, so only a zero-row page ends
+		// the walk. Saying so beats a client inferring it wrongly.
+		"exhausted": len(rows) == 0,
 		// WHICH NODES THE PAGE WAS MERGED FROM. A node that did not answer
 		// is named here, because its rows are simply absent from the page
 		// and nothing else on it could say so.
@@ -972,7 +968,7 @@ func (s Sources) eventFilters(p Params) (store.ListQuery, error) {
 		ChannelID:    strings.TrimSpace(p.String("channel_id")),
 		Actor:        p.String("actor"),
 		RelatedAgent: p.String("agent"),
-		// TURN_ID WAS DECLARED, DOCUMENTED AGAINST MIGRATION 0014, AND
+		// TURN_ID WAS DECLARED, DOCUMENTED AGAINST MIGRATION 0015, AND
 		// DEAD: the column exists, the reader filters on it, and no
 		// surface ever passed one — so "every event of this turn" was
 		// answerable by the store and unaskable from anywhere.
@@ -1135,15 +1131,15 @@ func instantParam(p Params, name string) (time.Time, error) {
 	return at.UTC(), nil
 }
 
-// cursorAt is the position a caller resumes from, as it sends it back, or nil
-// at the end.
-func cursorAt(c *store.Cursor) any {
-	if c == nil {
+// cursorOf is the position a caller resumes from, or nil at the end.
+func cursorOf(rows []store.EventRecord) any {
+	if len(rows) == 0 {
 		return nil
 	}
+	last := rows[len(rows)-1]
 	return map[string]any{
-		"before_time": c.Time.UTC().Format(time.RFC3339Nano),
-		"before_id":   c.ID,
+		"before_time": last.Time.UTC().Format(time.RFC3339Nano),
+		"before_id":   last.ID,
 	}
 }
 
@@ -1186,7 +1182,6 @@ func (s Sources) trace(ctx context.Context, p Params) (any, error) {
 	// SAYS WHEN IT CUT. A trace stops at store.MaxTraceEvents — and one
 	// shown short with no note reads as a complete causal chain that simply
 	// ends, which is the one thing a reader must not conclude from it.
-	// Additive, so a client that predates the field is unaffected.
 	//
 	// ASKED, NOT INFERRED: each node counts what it holds when its read
 	// filled (see internal/eventfan), because a trace of exactly the cap

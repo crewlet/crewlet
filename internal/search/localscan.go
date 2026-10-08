@@ -33,6 +33,9 @@ func (n NodeScanner) Scan(ctx context.Context, q FanQuery, shards Assignment) (S
 	if n.Index == nil {
 		return Slice{}, fmt.Errorf("search: scan a bucket range with no index")
 	}
+	if len(q.Methods) == 0 {
+		return Slice{}, ErrNoMethods
+	}
 	// BEFORE THE SCAN, because a scan over an index that has not finished
 	// its first lap answers almost nothing and is indistinguishable from a
 	// range with almost nothing in it. The whole corpus is on this node —

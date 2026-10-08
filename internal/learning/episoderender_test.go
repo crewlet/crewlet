@@ -110,9 +110,9 @@ func TestPastTurnsCondensesEachAskAndAccountAsWhatItIs(t *testing.T) {
 	}
 }
 
-// A TEXT THAT FITS COSTS NOTHING, and a turn asked nothing says nothing: a
-// turn recorded before its ask was stored has an empty ask, and the reader is
-// shown no "asked" line rather than an invented one.
+// A TEXT THAT FITS COSTS NOTHING, and a turn asked nothing says nothing: its
+// ask is empty, and the reader is shown no "asked" line rather than an
+// invented one.
 func TestPastTurnsCarriesAShortAskAndAccountWhole(t *testing.T) {
 	t.Parallel()
 	model := newPastTurnModel()

@@ -40,8 +40,11 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     failed: false,
     error: "",
     errorKind: "",
+    refusal: null,
     systemPrompt: "",
     userPrompt: "",
+    systemSections: null,
+    userSections: null,
     response: "",
     tools: [],
     narration: [],
@@ -168,6 +171,36 @@ test("a live turn counts from the start the turns table prints", () => {
   expect(container.querySelector("time")?.getAttribute("datetime")).toBe("2026-09-13T10:00:00Z");
 });
 
+// A RUNNING TURN HAS ONE FIGURE FOR HOW LONG: how long it has been running.
+// The window across the phases reported so far sat beside that clock with no
+// label — "1m 40s 1m 53s" — two answers to one question.
+test("a running turn's header gives one duration, the running clock", () => {
+  const live = groupTurns([
+    phase({ key: "t1|onboarding|1", phase: "onboarding", at: "2026-09-13T10:01:40Z" }),
+    phase({ live: true, startedAt: "2026-09-13T10:01:40Z", at: "2026-09-13T10:01:40Z" }),
+  ])[0]!;
+  const { container } = draw(<TurnCard group={live} />);
+  const durations = [...container.querySelectorAll(".turn-head .phase-meta")].filter((el) =>
+    /^\d+[hms]/.test(el.textContent ?? ""),
+  );
+  expect(durations).toHaveLength(1);
+  expect(durations[0]?.tagName).toBe("TIME");
+  expect(durations[0]?.getAttribute("title")).toMatch(/^running since /);
+});
+
+// A CARD REMOUNTED AS ITS TURN ENDS OPENS THE PHASES ITS READER WATCHED: the
+// seat's Turns tab moves the card to the settled list, and every phase card's
+// latch goes with the remount.
+test("a turn card opens the phases it is told were watched", () => {
+  const { container } = draw(
+    <TurnCard group={turn()} defaultOpen openPhases={new Set(["t1|review|1"])} />,
+  );
+  const open = [...container.querySelectorAll(".phase-card")].map(
+    (c) => !!c.querySelector(".phase-body"),
+  );
+  expect(open).toEqual([false, true]);
+});
+
 const SUMMARY =
   "Message from founder: a task created: Write the quarterly plan for the platform team";
 
@@ -184,4 +217,28 @@ test("the trigger line clamps rather than being cut at one line", () => {
     ".truncate is the cell rule — on a card it cuts the sentence with room underneath",
   ).not.toContain("truncate");
   expect(line.getAttribute("title")).toBe(SUMMARY);
+});
+
+// A RUNNING TURN OPENS THE PHASE IT IS ON. "Running now" on a seat's Turns tab
+// is where a reader comes to watch, and a turn of two phases opened none of
+// them, so what was moving was a closed row inside an open card.
+test("an open running turn opens the phase it is on, and not the settled one", () => {
+  const group = groupTurns([
+    phase({ key: "t1|onboarding|1", phase: "onboarding" }),
+    phase({
+      key: "t1|execute|1",
+      phase: "execute",
+      live: true,
+      startedAt: "2026-09-13T10:03:00Z",
+      at: "2026-09-13T10:05:00Z",
+    }),
+  ])[0]!;
+  const { container } = draw(<TurnCard group={group} defaultOpen />);
+  const cards = [...container.querySelectorAll(".phase-card")].map((c) => ({
+    live: c.classList.contains("live"),
+    open: !!c.querySelector(".phase-body"),
+  }));
+  expect(cards).toHaveLength(2);
+  expect(cards.find((c) => c.live)?.open, "the running phase is open").toBe(true);
+  expect(cards.find((c) => !c.live)?.open, "the settled one stays closed").toBe(false);
 });

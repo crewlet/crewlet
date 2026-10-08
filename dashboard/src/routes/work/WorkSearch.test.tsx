@@ -75,7 +75,18 @@ function mount(
     socket as unknown as { query: (w: string, p: Record<string, unknown>) => Promise<unknown> }
   ).query = (_what, params) => {
     asked.push(params);
-    return Promise.resolve({ hits, available: true, mode: params.mode ?? "hybrid", ...outcome });
+    const mode = params.mode ?? "hybrid";
+    // THE WIRE SHAPE: every search answer carries its whole outcome.
+    return Promise.resolve({
+      hits,
+      available: true,
+      mode,
+      served_mode: mode,
+      modes: ["hybrid", "keyword", "semantic"],
+      degraded: "",
+      coverage: { nodes: [], complete: true, buckets_missing: 0 },
+      ...outcome,
+    });
   };
   return render(
     <ClientContext.Provider value={{ store, socket }}>

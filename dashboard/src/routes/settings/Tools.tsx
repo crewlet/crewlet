@@ -34,7 +34,7 @@ import {
   SearchGlyph,
   TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
-import { RECORD_MAX_HEIGHT, Section, SeatChip } from "~/components/common.tsx";
+import { Section, SeatChip } from "~/components/common.tsx";
 import { uiletTone } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { NumberCell, KeyCell } from "~/app/frame/cells.tsx";
@@ -180,10 +180,6 @@ function hintRows(ann: ToolAnnotations | undefined): { label: string; value: str
  * walk it replaced asked for the active configuration twice per addressed tool
  * (the server's entity and the whole document) and was a second copy of the
  * `mcp_env` inheritance rule.
- *
- * NULL IS UNKNOWN: a roster whose agent seats carry no `tool_sources` came
- * from a node older than the field, and a tool whose holders are unknown must
- * not be drawn as a tool nobody holds.
  */
 interface Holders {
   /** The seats granted it. */
@@ -194,7 +190,7 @@ interface Holders {
   why: string;
 }
 
-function holdersOf(tool: ToolRow, seats: Seat[]): Holders | null {
+function holdersOf(tool: ToolRow, seats: Seat[]): Holders {
   const agents = seats.filter((s) => s.kind === "agent");
   const server = mcpServerOf(tool.source);
   if (!server) {
@@ -208,7 +204,6 @@ function holdersOf(tool: ToolRow, seats: Seat[]): Holders | null {
     };
   }
   const granted = grantedSeats(seats, server);
-  if (granted === null) return null;
   return {
     seats: granted,
     everyone: agents.length > 0 && granted.length === agents.length,
@@ -347,13 +342,13 @@ function ToolBody({ name }: { name: string }) {
               ]}
             />
             <Disclosure title="The schema as JSON" mono>
-              {/* BOUNDED, like every other record block. A large MCP server's
-                  tool takes a schema of hundreds of lines, and an unbounded
-                  block pushes the rest of the screen off under it — which is
-                  the case `RECORD_MAX_HEIGHT` is written down for. */}
+              {/* BOUNDED, like every other record block, by the ceiling the
+                  shell declares once (`--record-ceiling`, frame.css). A large
+                  MCP server's tool takes a schema of hundreds of lines, and an
+                  unbounded block pushes the rest of the screen off under it —
+                  which is the case that ceiling is written down for. */}
               <CodeBlock
                 plain
-                maxHeight={RECORD_MAX_HEIGHT}
                 selectable
                 label={`${tool.name}'s input schema, as JSON`}
                 code={JSON.stringify(tool.input_schema, null, 2)}
@@ -365,12 +360,7 @@ function ToolBody({ name }: { name: string }) {
 
       <section className="col gap-2">
         <div className="t-label">Which seats hold it</div>
-        {holders === null ? (
-          <p className="t-body muted">
-            Which seats are granted <span className="mono">{server}</span> is not on the roster this
-            engine sent: the node serving it is older than the grant.
-          </p>
-        ) : holders.everyone ? (
+        {holders.everyone ? (
           <>
             <p className="t-body">
               Every agent seat — {plural(holders.seats.length, "seat")} in this company.

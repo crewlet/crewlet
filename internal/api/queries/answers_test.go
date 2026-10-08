@@ -154,7 +154,7 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 		{"the live projection alone", queries.Sources{State: state},
 			[]string{"agent", "live_call", "tokens", "viewer"}},
 		// `turn` is what made "everything that happened in this unit of
-		// work" askable at all (see migration 0014); `turns` is the list
+		// work" askable at all (see migration 0015); `turns` is the list
 		// of them, which the dashboard used to fake by paging the raw
 		// feed; `phases` is the company-wide phase record WITH its
 		// payloads, which the event listing deliberately cannot serve;

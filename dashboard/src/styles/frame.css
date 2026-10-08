@@ -37,13 +37,85 @@
 }
 
 /* ---- The page column's own furniture -------------------------------------
-   The ONE scroll container is the kit's `main`; the toolbar a screen puts its
-   own controls in and the command palette are ours. */
+   The PAGE'S scroll container is the kit's `main` on every screen that
+   scrolls as a page; the toolbar a screen puts its own controls in and the
+   command palette are ours. A FULL-HEIGHT screen (`useFillScreen`: a task,
+   the Inbox, a knowledge page) holds `main` still and lets its own columns
+   scroll instead — each exactly `main`'s height, so they are the page's
+   scrollers there and `100cqb` is their view too. A box INSIDE the page may
+   still scroll its own content (a running phase's transcript, a seat's thread
+   list, the Settings column, a board lane, a long record), and each of those
+   is held to the rules under "The document does not scroll" in
+   docs/reference/dashboard-design.md: bounded to the scroller's view, and
+   handing the wheel back, at either end, to whichever of those scrolls it. */
 
 /* THE SCROLLER IS THE KIT'S, and the router restores a position on it per
    history entry. Smooth scrolling would animate every restore. */
 .crewlet-app-shell__main {
   scroll-behavior: auto;
+}
+
+/* AND IT IS EVERY SCREEN'S BLOCK MEASURE. A box that scrolls inside the page
+   has to be bounded by what the reader can SEE — the scroller's view: the
+   window less the page bar (which wraps, so it is not one number), the
+   sheet's inset and border, and whatever banner is showing, none of which a
+   descendant can count. A size container is the one thing CSS lets a
+   descendant ask that of, as `100cqb`.
+
+   It was scoped to Settings, the one frame that asked, and every other inner
+   scroller fell back to a literal: the running transcript to `620px`, the
+   thread list to a `100dvh` sum that counted the bar once and the inset not
+   at all. A literal is unrelated to the view in both directions — taller than
+   a short window, so the box's own bottom sat below the fold, and shorter
+   than a tall one for nothing. Every screen is asked now, because any screen
+   can hold such a box, and the containment costs nothing: size containment
+   takes the scroller's height from the shell's flex column rather than from
+   what it holds, which is already how the kit sizes it (`flex: 1 1 auto;
+   min-height: 0`), and the page container on the content column is
+   `inline-size`, so `cqb` reaches past it to this one. */
+.app .crewlet-app-shell__main {
+  container: scroller / size;
+}
+
+/* THE RECORD CEILING, declared ONCE for every block of machine text the
+   shell draws — a tool's arguments and result, a phase's verbatim prompt, an
+   event's payload, a configuration, a run's transcript. The kit's CodeBlock
+   reads `--crewlet-codeblock-max-height` from the cascade, and a ceiling
+   every call site had to pass was one most of them passed as the bare 460:
+   bounded by a literal, so on a window whose view was shorter than 460px and
+   a label, a record's bottom sat below the fold while the wheel was inside
+   it — the trap "The document does not scroll" removes.
+
+   It is the requirement every in-page scroller is held to — once scrolled
+   to, the record fits in the view — as the view (`100cqb`) less the sticky
+   band and a one-line label above it with its gap; capped at
+   `--record-max`, the height these records have always had where the view
+   allows it; and floored at four rows for a window too short for that, where
+   the page simply carries on past it. `--record-ceiling` names it so a caller
+   that genuinely differs can DERIVE from it (the trace's paired Input and
+   Output take half each) rather than restate it.
+
+   ON THE TWO SCROLLERS a record can sit in, `main` and the peek's body,
+   because a custom property's `var()` resolves where it is DECLARED: declared
+   once at the shell's root, `--sticky-top` would be the root's 0 and a
+   toolbar's band would be counted nowhere. The `100cqb` stays a token and
+   resolves at each record against the nearest size container — `main`, or
+   the peek's body, which is one for exactly this. A running ledger narrows it
+   further (`.tail-scroll.tailing` in screens.css). Outside both — a dialog,
+   portaled to the document — a block states its own ceiling. */
+.app .crewlet-app-shell__main,
+.app .peek-body {
+  --record-ceiling: min(
+    var(--record-max),
+    max(
+      calc(var(--size-row-md) * 4),
+      calc(
+        100cqb - var(--sticky-top) - var(--font-size-2xs) * var(--font-line-height-normal) -
+          var(--spacing-1)
+      )
+    )
+  );
+  --crewlet-codeblock-max-height: var(--record-ceiling);
 }
 
 /* THE TOOLBAR OWNS THE TOP OF THE SCROLLER, so everything else that sticks
@@ -1115,18 +1187,6 @@ a.user-block-who:focus-visible {
   padding: 0;
 }
 
-/* THE SCROLLER IS THE COLUMN'S MEASURE, so it is made one. What the column
-   has to be as tall as is the scroller's VIEW — the window less the page bar,
-   the sheet's inset and whatever banner is showing, none of which the column
-   can count — and a size container is the one thing CSS lets a descendant ask
-   that of. Scoped to the frame that needs it: size containment reads the
-   scroller's height from the shell's flex column rather than from what it
-   holds, which is already how the kit sizes it (`flex: 1 1 auto;
-   min-height: 0`), but no other screen has a reason to be asked. */
-.app .crewlet-app-shell__main:has(> .crewlet-app-shell__content > .section-frame) {
-  container: scroller / size;
-}
-
 .section-frame {
   display: grid;
   flex: 1 1 auto;
@@ -1144,7 +1204,17 @@ a.user-block-who:focus-visible {
    to stick to and a wheel over Nodes carried Company and Connect off the top.
    At the view's height it sticks for the whole scroll, its hairline runs the
    height of the window at every scroll position, and a list longer than a
-   short window scrolls inside itself rather than below the fold. */
+   short window scrolls inside itself rather than below the fold.
+
+   THE ONE IN-PAGE SCROLLER THAT KEEPS THE WHEEL AT ITS ENDS
+   (`overscroll-behavior: contain`), and it is the exception the rule against
+   containment names (`styles/scrollers.test.ts`). The trap containment sets
+   elsewhere is a box whose own bottom is below the fold: pinned at its end,
+   it swallows the wheel while half of it is out of sight. This box cannot be
+   in that state — it sticks, and it is exactly the view, so all of it is on
+   screen at every scroll position. What chaining would do here is the
+   opposite surprise: a wheel over the section list, at its end, would move
+   the SECTION beside it, which is not what the pointer is over. */
 .section-column {
   position: sticky;
   top: 0;
@@ -1385,7 +1455,14 @@ a.user-block-who:focus-visible {
   flex: 0 0 auto;
 }
 
+/* THE PEEK'S OWN SCROLLER, and a SIZE container for the reason `main` is one:
+   a record inside a peek is bounded by what the peek shows (`100cqb`, the
+   record ceiling above), and with no size container between it and the root
+   `cqb` falls back to the small viewport, which counts the peek's bar as view.
+   Containment costs it nothing: its height is the flex column's, never its
+   content's. */
 .peek-body {
+  container: peek / size;
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;

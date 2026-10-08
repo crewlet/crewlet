@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -140,6 +139,12 @@ type Engine struct {
 	// token window is refusing, each with the alarm that releases it when
 	// the window turns over. See budgetpark.go.
 	budgetParks budgetParks
+
+	// clock is the instant every token-budget window this engine cuts is
+	// read at, and nil is the wall clock — which is what every engine [New]
+	// builds runs on. See [Engine.now] for why there is one and why it is
+	// not an [Options] field.
+	clock func() time.Time
 
 	// pauses is this node's watched copy of every seat a person paused,
 	// and the inbox holds it took because of them. See seatpause.go.
@@ -1018,12 +1023,6 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		return nil, err
 	}
 
-	// AND THE FOLLOWS, on the same reasoning and in the same window: before
-	// the epoch below builds the chat transports, so nothing is matching an
-	// inbound message against the bucket while it is being filled. See
-	// [Engine.migrateFollows].
-	e.migrateFollows(ctx)
-
 	// A NIL COMPANY IS THE UNCONFIGURED NODE, not a caller's mistake.
 	//
 	// The store is authoritative at runtime and a fleet's first revision
@@ -1162,6 +1161,13 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 			return e.prepareSeat(ctx, handle, lease.Epoch, lease.Owner)
 		},
 		SeatDone: e.releaseSeat,
+		// A seat that starts admitting turns re-checks at once what was
+		// refused for want of one: an answer whose resume the seat's
+		// preparation inherited waits on exactly this, not on the next
+		// renew. See [Engine.mayResumeAnswer].
+		SeatAdmitted: func(_ context.Context, handle string) {
+			e.readmitAnswers(waitOwnership, handle)
+		},
 		// A SEAT A PERSON PAUSED is attached already held, so placement
 		// moving it here does not deliver the mail it is holding: the
 		// release on the node it left dropped that node's hold with the
@@ -1389,6 +1395,11 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.Pause == nil {
 		d.Pause = e.holdInbox
 	}
+	if d.HoldSandbox == nil {
+		// LIVE, for the reason Answer is below: the coordinator a seat's
+		// sandbox hold belongs to may arrive by apply.
+		d.HoldSandbox = e.holdSandboxSeat
+	}
 	if d.Budget == nil {
 		d.Budget = e.budgetPark
 	}
@@ -1462,12 +1473,12 @@ func (e *Engine) Start(ctx context.Context) error {
 	}
 	// THE LIVE TOKEN METERS, which the dashboard's header pushes from and
 	// which nothing published — so every header carried zeroes. AFTER the
-	// host is running, because its first frame is published at once and
-	// asks the fleet's protocol floor, which reads the presence lease
-	// node.Start has just claimed: armed before it, that first frame was
-	// declined and every dashboard waited out a whole interval knowing
-	// nothing about the company's budget. Detached, like everything else
-	// here — see [Engine.startBudgetReports].
+	// host is running, because its first frame is published at once onto
+	// the queue node.Start starts, and a backend that requires Start
+	// refuses a publish before it: that first frame would be lost and every
+	// dashboard would wait out a whole interval knowing nothing about the
+	// company's budget. Detached, like everything else here — see
+	// [Engine.startBudgetReports].
 	e.startBudgetReports(ctx)
 	// THE AUXILIARY-SPEND LEDGER'S TIMER, detached like the meters beside
 	// it and on their cadence (auxspend.FlushInterval). Calls made before
@@ -2160,6 +2171,13 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	if !refused {
 		res, err = turn.Run(ctx, r, company.TurnSettings(req.TimeoutSeconds),
 			turnInputFor(req, reply))
+		// WHAT THE TURN ANSWERED WITHOUT BEING WOKEN FOR IT: the waiting
+		// messages its thread block showed it, which the dispatch records as
+		// worked through beside its own triggers. Off the block this frame
+		// assembled, because the loop never knew what a prompt showed — see
+		// workedthrough.go. Only for a turn that RAN: a refused onboarding
+		// showed nothing to a model, so nothing was worked through.
+		res.WorkedThrough = workedThroughKeys(threadOf(req.Ask()), blocks.ThreadContextAnswered)
 	}
 	// THE BOX CLOSES THE MOMENT THE TURN RETURNS: no later round will read
 	// a note, and one offered from here on is answered `closed`.
@@ -2205,13 +2223,10 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 // carrying this fleet-wide is that an operator can see where the work
 // actually is right now.
 func (e *Engine) nodeStatus(ctx context.Context) coord.NodeStatus {
-	// FEATURES FIRST and unconditionally: they are what this BUILD honours,
-	// fixed at compile time, so no read below can change them. The MCP rows
-	// are this process's own record of what it started, read under a lock
-	// and never from a child.
+	// The MCP rows are this process's own record of what it started, read
+	// under a lock and never from a child.
 	status := coord.NodeStatus{
 		StartedAt: e.startedAt,
-		Features:  slices.Clone(coord.Features),
 		MCP:       e.mcpStatus(),
 	}
 	if b := e.backends; b != nil && b.Queue != nil {
@@ -2386,8 +2401,9 @@ func (e *Engine) observe(ctx context.Context, ev *events.Event) {
 // copy included. A floor a turn raises is one every seat on the node then reads
 // past, which is conservative rather than wrong — never a read from before it.
 //
-// A token this build cannot read is logged and skipped: the turn still runs,
-// and reads exactly as one woken by an older build's wake, which carries none.
+// A token this build cannot read (a newer build's) is logged and skipped: the
+// turn still runs, and reads exactly as one woken by a wake no change feed
+// derived, which carries none.
 func (e *Engine) observeTriggers(ctx context.Context, evs []*events.Event) {
 	if e.router == nil {
 		return

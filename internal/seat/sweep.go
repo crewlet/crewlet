@@ -430,10 +430,17 @@ func (h *Host) tryClaim(ctx context.Context, handle string) (took bool, refused 
 	}
 
 	h.mu.Lock()
-	if entry := h.held[handle]; entry != nil {
+	entry := h.held[handle]
+	if entry != nil {
 		entry.establishing = false
 	}
 	h.mu.Unlock()
+	// THE EDGE INTO ADMISSION, said out loud: nothing else reports it, and
+	// whatever the acquire hook was refused while the seat established is
+	// waiting on exactly this. See [Hooks.OnEstablished].
+	if entry != nil {
+		h.notifyEstablished(ctx, handle, *lease)
+	}
 
 	// Counted as claimed only once the seat is ESTABLISHED. The hook gives
 	// a failed takeover straight back — a bad MCP command, a credential
@@ -524,7 +531,7 @@ func (h *Host) claimOrder(ctx context.Context, seats []string) []string {
 // has just judged the same view, so the floor is read from a view that is
 // already running rather than one started to answer it.
 func (h *Host) protocolBlock(ctx context.Context) int {
-	const hint = "an older-protocol node still holds leases; this node will claim nothing " +
+	const hint = "an older-protocol node is still live or still holds seats; this node will claim nothing " +
 		"until it drains. Finish the rolling upgrade — do NOT roll back across a protocol " +
 		"bump without stopping the fleet first."
 	floor, found, err := h.backend.FleetProtocolFloor(ctx)
@@ -612,9 +619,9 @@ func (h *Host) plan(ctx context.Context, seats []placement.Seat) (placement.Plan
 // compare-and-set — so a wrong answer costs time or reads and never a seat
 // held twice. It errs toward TRYING. Each seat is held by one node at most, so
 // the counts sum to at most the seats held, and a sum that reaches every
-// placeable seat says every one of them is held. A node that says nothing (a
-// build that predates the count) adds nothing to the sum, which can only make
-// it read "something may be free" — the answer that tries; a node whose
+// placeable seat says every one of them is held. A count a row does not carry
+// readably reads as zero and adds nothing to the sum, which can only make it
+// read "something may be free" — the answer that tries; a node whose
 // presence lapsed is not listed, so its seats read as free the moment it goes;
 // and a roster this pass could not read concludes nothing. It can read FULL
 // while a seat is free only for as long as some node's advertised count
@@ -632,10 +639,10 @@ func (h *Host) fleetHoldsEverySeat(seats []placement.Seat, plan placement.Plan,
 	}
 	held := h.heldCount()
 	for _, p := range peers {
-		if p.ID == h.nodeID || !p.RunsSeats() || p.Held == nil {
+		if p.ID == h.nodeID || !p.RunsSeats() {
 			continue
 		}
-		held += *p.Held
+		held += p.Held
 	}
 	return held >= len(seats)-len(plan.Unplaceable)
 }

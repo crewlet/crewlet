@@ -3,6 +3,8 @@ package coord
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/textcut"
@@ -81,6 +83,23 @@ const (
 	// Too long is visible in one direction only: a deliberate replay ten
 	// minutes later vanishes into a claim nothing will clear.
 	ClaimTTL = 5 * time.Minute
+
+	// MaxClaimTTL is the longest TTL a [Claims] claim may ask for, and so
+	// the claims bucket's age: a backend that expires a claim by its
+	// bucket can only keep one for as long as the bucket keeps records, and
+	// each claim shorter than that lapses at its own deadline. A claim
+	// asking for more is refused with [ErrTTLTooLong] rather than clamped,
+	// because a clamped dedupe window lets through the very duplicate it
+	// was sized to stop.
+	//
+	// THIRTY MINUTES, set by the longest claim anybody takes: the
+	// Mattermost socket's (mattermost.ClaimTTL), which must outlive the
+	// window a reconnecting seat replays — mattermost.MaxBackfill, fifteen
+	// minutes — plus the reconnect backoff ceiling and clock margin, and is
+	// twice the window. This package cannot import that one, so its own
+	// tests hold the two together. Longer costs only records nobody reads
+	// again: every claim key names one delivery.
+	MaxClaimTTL = 30 * time.Minute
 
 	// LedgerRetention is how long a turn completion is remembered. It has
 	// to outlast both the queue's redelivery horizon and the scheduler's
@@ -262,6 +281,12 @@ type Claims interface {
 	// PROCESS the delivery. A third-party app's push suppressed because the
 	// store blinked is a wake that never happens, and nothing else will
 	// notice; a duplicated wake is a turn the completion ledger collapses.
+	//
+	// The claim lapses at now+ttl, judged against the `now` the NEXT
+	// caller passes, so two callers sharing one key share one window
+	// whatever else the store keeps. A ttl beyond [MaxClaimTTL] — or beyond
+	// a backend's own ceiling where that is shorter — is an error wrapping
+	// [ErrTTLTooLong], never a silent clamp.
 	Claim(ctx context.Context, key string, ttl time.Duration, now time.Time) (bool, error)
 
 	// Release drops a claim, so a deliberate replay of the same delivery
@@ -335,13 +360,12 @@ type Activation struct {
 // had a different author on every node and the audit screen's answer depended
 // on which node served it.
 //
-// ADDITIVE ON THE WIRE, and both directions are ordinary. An older build
-// decodes a pointer carrying this and ignores it; this build reads an older
-// pointer as a zero origin, which the adopting node records as an author NOT
-// RECORDED rather than inventing one. The fields are plain strings rather than
-// the store's kind type for the reason [NodeApply.Status] gives: this package
-// is where the engine's layers meet, and a backend should not import the
-// store to carry a word.
+// REQUIRED: every writer knows who it is, how it made the revision and when,
+// and [RevisionOrigin.Check] is what both backends hold an activation to, so
+// no pointer reaches a peer naming nobody. The fields are plain strings rather
+// than the store's kind type for the reason [NodeApply.Status] gives: this
+// package is where the engine's layers meet, and a backend should not import
+// the store to carry a word.
 //
 // The PARENT is deliberately not here. It names a revision the adopting node
 // may never have held — a node that joined after it was superseded — and the
@@ -357,6 +381,35 @@ type RevisionOrigin struct {
 	// CreatedAt is when it was written, which a re-activation of an old
 	// revision makes very different from [Activation.At].
 	CreatedAt time.Time
+}
+
+// ErrIncompleteOrigin reports an activation whose origin leaves out what a
+// peer adopting the revision records: the author's kind, the source or the
+// creation instant. The author's label may be empty — a write made with no
+// operator identity still says it was an operator's — but nothing else may.
+var ErrIncompleteOrigin = errors.New("coord: an activation needs its revision's origin")
+
+// Check reports whether the origin carries everything a peer records, as an
+// error wrapping [ErrIncompleteOrigin] naming each field that is missing.
+//
+// THE BACKEND ENFORCES IT, both of them, so the rule cannot be one a caller
+// forgot: a pointer that named nobody would put a revision on every peer with
+// no author and no source, which is the guess the origin exists to remove.
+func (o RevisionOrigin) Check() error {
+	var missing []string
+	if o.AuthorKind == "" {
+		missing = append(missing, "AuthorKind")
+	}
+	if o.Source == "" {
+		missing = append(missing, "Source")
+	}
+	if o.CreatedAt.IsZero() {
+		missing = append(missing, "CreatedAt")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%w: missing %s", ErrIncompleteOrigin, strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 // MaxApplyErrorLength bounds the failure text a node publishes.
@@ -463,8 +516,8 @@ type ActivationRequest struct {
 	At time.Time
 
 	// Origin is the revision's own record, so a peer that adopts it keeps
-	// its author. Every writer has one; a zero origin publishes a pointer
-	// every peer records as "author not recorded".
+	// its author. Every writer has one, and an activation whose origin
+	// fails [RevisionOrigin.Check] is refused.
 	Origin RevisionOrigin
 
 	// Expect is the revision the caller read before building this one.
@@ -1134,7 +1187,6 @@ type Fleet interface {
 	Ledger
 	Cooldowns
 	Budgets
-	LifetimeCounters
 	Plane
 	Channels
 	Follows
@@ -1174,8 +1226,7 @@ type Fleet interface {
 // A deletion from the store takes no lock (ADR-0027): an object is stored
 // under a key minted for its one upload and named by that upload's write
 // alone, so no writer is ever re-using an object the collector could be
-// deleting. The bucket of chunk locks a build that kept files in chunks
-// opened is RETIRED rather than opened ([ObjectStores.RetireChunkLocks]).
+// deleting.
 type ObjectStores interface {
 	// AgreeObjectBackend records identity as the fleet's object backend
 	// unless one is recorded, and answers the recorded one: identity
@@ -1192,20 +1243,6 @@ type ObjectStores interface {
 	// ObjectCollection reads the last report, false when none was ever
 	// written.
 	ObjectCollection(ctx context.Context) ([]byte, bool, error)
-
-	// RetireChunkLocks deletes the bucket of chunk locks a build that kept
-	// files in content-addressed chunks opened, reporting whether it was
-	// there. Retiring what is not there is not an error, so every later
-	// call is a no-op.
-	//
-	// A DECISION, NEVER A BOOT STEP, for [LifetimeCounters]' reason: a node
-	// of that build takes a chunk's lock around every write of a chunk the
-	// store already holds and fails the write when the bucket is gone, so
-	// the bucket goes only once no such node is left to write a chunk —
-	// the maintenance duty takes it then (internal/maintenance.
-	// RetiredChunkLockJobs), and takes it again if one comes back and
-	// opens the bucket anew.
-	RetireChunkLocks(ctx context.Context) (bool, error)
 }
 
 // Follows is which chat threads each seat is following.
@@ -1265,20 +1302,4 @@ type Follows interface {
 	// re-assert loses by a nanosecond — and the next mention re-follows
 	// through the ordinary path.
 	Unfollow(ctx context.Context, backend, handle, channel, thread string) (bool, error)
-
-	// FollowIfAbsent records a follow only where none exists, reporting
-	// whether this call created it.
-	//
-	// THE ONE-TIME HANDOFF'S WRITE — see internal/notify/followsync — and
-	// create-only is what makes it safe to run while inbound chat is live.
-	// A plain Follow would overwrite whatever the fleet already holds: a
-	// stale local row landing on top of a fresh mention downgrades the
-	// reason an operator reads, and one whose fleet copy was unfollowed
-	// after the move began would be resurrected by a node that booted late.
-	//
-	// It is also what makes two nodes handing off at once correct with
-	// nothing agreed between them: both hold their own local table, the
-	// keys overlap, exactly one create wins, and the loser removes its own
-	// row having learned the fleet already has the record.
-	FollowIfAbsent(ctx context.Context, backend, handle, channel, thread, reason string, at time.Time) (bool, error)
 }

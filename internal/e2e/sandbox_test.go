@@ -395,7 +395,7 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 	// row and the record are written by different processes' worth of code.
 	var launch string
 	waitFor(t, "the resumed phase's record to name its launch", func() bool {
-		rows, _, err := n.engine.Backends().Store.Events().Phases(t.Context(), "", 60, nil)
+		rows, _, err := n.engine.Backends().Store.Events().Phases(t.Context(), "", 60, nil, time.Now())
 		if err != nil {
 			t.Fatalf("phases: %v", err)
 		}
@@ -421,7 +421,7 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 	// the record's publisher, and each compiles without the others.
 	var record map[string]any
 	waitFor(t, "the run's own phase record", func() bool {
-		rows, _, err := n.engine.Backends().Store.Events().Phases(t.Context(), "", 60, nil)
+		rows, _, err := n.engine.Backends().Store.Events().Phases(t.Context(), "", 60, nil, time.Now())
 		if err != nil {
 			t.Fatalf("phases: %v", err)
 		}

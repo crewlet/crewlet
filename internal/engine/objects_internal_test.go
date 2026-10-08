@@ -282,7 +282,7 @@ func TestTheCollectorNeverStartsOnceStopped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the references: %v", err)
 	}
-	if err := e.startObjectCollector(t.Context(), refs, nil); err != nil {
+	if err := e.startObjectCollector(t.Context(), refs); err != nil {
 		t.Fatalf("startObjectCollector on a stopped node: %v", err)
 	}
 	e.objects.collectorMu.Lock()
@@ -419,29 +419,5 @@ func TestAnUnknownClaimKeepsTheAlarm(t *testing.T) {
 	if f := rec.Status.Audit.Found; f == nil || f.Missing != 2 || len(f.MissingFiles) != 2 {
 		t.Fatalf("the pass after an unknown claim recorded findings %+v; "+
 			"want the two files the holder in between found lost", f)
-	}
-}
-
-// THE CHUNK ERA IS OVER ONLY WHEN EVERY NODE THE TRACKER LOG COUNTS READS
-// THE RECORD THAT NAMES A FILE'S OBJECT — and a census of nobody is not over,
-// since it cannot see an older node either while a chunk deleted under one
-// cannot be put back.
-func TestTheChunkEraIsOverOnlyWhenEveryCountedNodeReadsObjects(t *testing.T) {
-	t.Parallel()
-	v := tracker.FileObjectVersion
-	for _, tc := range []struct {
-		name    string
-		readers map[string]int
-		over    bool
-	}{
-		{"nobody is counted", nil, false},
-		{"a node still reads chunks", map[string]int{"a": v, "b": v - 1}, false},
-		{"a node has not reported", map[string]int{"a": v, "b": 0}, false},
-		{"every node reads objects", map[string]int{"a": v, "b": v}, true},
-		{"a later build still counts", map[string]int{"a": v, "b": v + 1}, true},
-	} {
-		if got := chunkEraOver(tc.readers); got != tc.over {
-			t.Errorf("%s: over = %v, want %v", tc.name, got, tc.over)
-		}
 	}
 }

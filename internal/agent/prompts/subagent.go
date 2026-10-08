@@ -71,19 +71,29 @@ type SubagentInput struct {
 // No identity section and no policies — a sub-agent is a short-lived worker,
 // not a teammate — but it gets the same MCP scaffolding a regular agent has
 // when calling and discovering those tools.
-func BuildSubagent(seat Seat, in SubagentInput) string {
-	parts := []string{in.ParentSystemPrompt}
-	parts = injectSkillCatalogue(parts, in.Skills, PhaseSubagent, Surface{
+//
+// The parent's task prompt is ONE section of the outline, headings and all:
+// it is a model's or a template author's document, and its "## Steps" are its
+// own. The mandated rules have no heading in the text, so the outline names
+// them — they are the part of a worker's prompt nobody but the engine wrote.
+func BuildSubagent(seat Seat, in SubagentInput) Prompt {
+	b := NewBuilder("\n")
+	b.Lead("task", "Task", in.ParentSystemPrompt)
+	b.Heading("tool_skills", skillCatalogue(in.Skills, PhaseSubagent, Surface{
 		Tools:      in.AvailableTools,
 		MCPServers: seat.mcpServers(),
-	})
+	})...)
 	if strings.TrimSpace(in.ToolCatalogue) != "" {
-		parts = append(parts, "", "## Available tools", in.ToolCatalogue)
+		// The empty part is the blank line before the heading, and it stays
+		// with the section before it.
+		b.Add("")
+		b.Heading("available_tools", "## Available tools", in.ToolCatalogue)
 	}
 	ending := SubagentProseRule
 	if in.Submits {
 		ending = SubagentSubmitRule
 	}
-	parts = append(parts, "", SubagentPreamble+" "+ending)
-	return strings.Join(parts, "\n")
+	b.Add("")
+	b.Lead("worker_rules", "Worker rules", SubagentPreamble+" "+ending)
+	return b.Build()
 }

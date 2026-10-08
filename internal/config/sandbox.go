@@ -183,8 +183,8 @@ type SandboxProvider struct {
 	// the box is torn down as soon as it blocks and the work always
 	// re-seeds, for zero snapshot cost. A negative value is refused rather
 	// than read as "no expiry" — an unbounded pause is exactly the leak
-	// this knob exists to prevent, and a seat that wants the provider
-	// default says so with role.sandbox.pause_ttl_seconds: -1.
+	// this knob exists to prevent — and a seat that wants the provider
+	// default omits role.sandbox.pause_ttl_seconds.
 	// A POINTER, because 0 is a valid SETTING here rather than an absent
 	// field: unset means "take the 1800s default" and 0 means "never
 	// pause". A plain float64 cannot hold both, and read as one it mapped
@@ -418,15 +418,13 @@ func (s *SandboxProvider) validate(path Path) error {
 		p.add(at(path, "default_max_turns"), ErrOutOfRange,
 			"%d (a round cap cannot be negative; 0 means uncapped)", s.DefaultMaxTurns)
 	}
-	// The NEGATIVE refusal stays: an unbounded pause is the leak this knob
-	// exists to prevent, and -1 is a SEAT's spelling of "inherit the
-	// provider default", which is meaningless on the provider itself.
+	// A NEGATIVE value is refused: an unbounded pause is the leak this knob
+	// exists to prevent.
 	if s.DefaultPauseTTLSeconds != nil && *s.DefaultPauseTTLSeconds < 0 {
 		p.add(at(path, "default_pause_ttl_seconds"), ErrOutOfRange,
 			"must not be negative: an unbounded pause is the snapshot leak "+
 				"this knob exists to prevent. Use 0 to never pause, or omit "+
-				"the field for the 1800s default; a SEAT asks for the "+
-				"provider default with -1")
+				"the field for the 1800s default")
 	}
 	for i := range s.Setup {
 		p.wrap(s.Setup[i].validate(idx(at(path, "setup"), i)))

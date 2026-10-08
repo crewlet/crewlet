@@ -13,9 +13,9 @@ import (
 
 // AN EPISODE'S VECTOR CAN BE MADE AGAIN, AS IT WAS MADE: the row stores what
 // the turn was asked, so the text the fill is handed for a row with no vector
-// of the current model is byte for byte the text the episodist embedded. Before
-// the ask was stored a row that missed its vector, or had one of a model the
-// company left, was out of similarity search for good.
+// of the current model is byte for byte the text the episodist embedded. With
+// no ask stored, a row that missed its vector, or had one of a model the
+// company left, would be out of similarity search for good.
 func TestAnEpisodesFillTextIsTheTextItWasEmbeddedFrom(t *testing.T) {
 	t.Parallel()
 	e := episodes(t, func(o *store.Options) { o.EmbeddingDim = 4 })
@@ -92,10 +92,7 @@ func TestAnEpisodeFillReadsWhatRecallCannotReach(t *testing.T) {
 	// Blank to the embedder too, which drops every space unicode.IsSpace
 	// names — a no-break space and an ideographic one among them.
 	add("wide-blank", "ceo", 8, func(x *learning.Episode) { x.TaskSummary = "\u00a0\u3000\u2028" })
-	add("legacy", "ceo", 7, func(x *learning.Episode) {
-		x.Embedding, x.EmbeddingModel = []float32{1, 0, 0, 0}, testModel
-	})
-	untag(t, db, "episodes", "legacy")
+	add("later", "ceo", 7, nil)
 
 	first, err := e.Unfilled(context.Background(), "ceo", testModel, learning.FillCursor{}, 2)
 	if err != nil {
@@ -109,7 +106,7 @@ func TestAnEpisodeFillReadsWhatRecallCannotReach(t *testing.T) {
 	for _, row := range append(first, rest...) {
 		ids = append(ids, row.ID)
 	}
-	if want := []string{"legacy", "old-model", "bare"}; !slices.Equal(ids, want) {
+	if want := []string{"later", "old-model", "bare"}; !slices.Equal(ids, want) {
 		t.Fatalf("unfilled = %v, want %v", ids, want)
 	}
 

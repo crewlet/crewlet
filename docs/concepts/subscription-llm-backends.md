@@ -203,6 +203,16 @@ it, and the *same turn* resumes — possibly in another process on another
 node, days later. Nothing about that is new for agent mode; see
 [Code Sandbox](code-sandbox.md#how-a-coding-task-runs).
 
+**The engine's correctives do not reach an agent-mode run.** The rounds
+are the CLI's own, so the engine's tool loop never sees one end in prose
+and cannot ask the model again: a run whose model writes its report as
+text instead of calling `submit_work` over the bridge comes back with no
+submission, and the phase is rescued as `incomplete` straight away. In
+text mode the same reply is a round the engine's loop re-prompts, naming
+`submit_work`, up to twice (see [Turn Engine](turn-engine.md#round-cap-extension-judge)).
+What an agent-mode run has instead is its brief, which tells it the run
+ends with that call.
+
 #### The tool bridge
 
 The seat's tools cannot be shipped into the box: most are MCP children
@@ -636,11 +646,22 @@ rides in the prompt:
    `Completion.ToolCalls`.
 
 The parser is deliberately forgiving — it accepts the last fenced block,
-a bare object, `arguments` as a JSON string, and `message` / `content` /
-`text` / `response` as synonyms. When nothing parses, the whole reply
-becomes assistant content with no tool calls, and the tool loop's
-existing `tool_choice="required"` corrective re-prompt takes over. A
-malformed reply costs a round; it never crashes a turn.
+a bare object, `arguments` as a JSON string, one call object written
+without its list, `null` for no calls, and `message` / `content` /
+`text` / `response` as synonyms. It is strict in the other direction: a
+call list it can read no call from — strings for entries, nameless
+objects, a string or a number where the list belongs — makes the reply
+not an envelope at all, because reading it as one would report a model
+that asked for no tools when it asked for some. When nothing parses, the whole reply
+becomes assistant content with no tool calls, and in every phase that
+has to end in a call the tool loop's corrective re-prompt takes over —
+the finishing corrective naming the phase's submission. A request never
+forces a call, so there is one contract and it is the permissive one —
+"use an empty `tool_calls` list when no tool is needed" — on every phase
+and on `crewlet llm doctor`'s smoke test alike, which therefore certifies
+the shape a seat actually sends: the tool offered, the instruction naming
+it, and nothing demanding the call. A malformed reply costs a round; it
+never crashes a turn.
 
 **A call with no tools gets no contract.** Auxiliary work
 (summarisation, the relevance filter) sends a plain prompt and reads a
@@ -735,12 +756,15 @@ as an answer of nothing rather than dressing it as an outage:
 
 - **The round is charged.** An empty answer costs tokens, and it used to
   be the one outcome that spent them without ever reaching a budget.
-- **The tool loop asks again, once.** A round that produced neither prose
-  nor a tool call gets one corrective re-prompt naming what went wrong.
-  One and not two: unlike a declined tool call, a second identical nudge
-  is just the same prompt against the same model. A phase that required a
-  tool call gets that corrective instead — `call one of these tools` is
-  the better instruction and already covers it.
+- **The tool loop asks again.** In every phase that finishes by a call —
+  the executor, the reviewer, onboarding, a worker — the round gets the
+  finishing corrective naming the phase's submission, up to twice in a
+  row on one allowance with a round that answered in prose: there, a
+  round without the call ends the phase only into its rescue, so a
+  second identical send is worth its round. A loop that does not finish
+  by a call gets a single corrective naming what went wrong instead:
+  there a prose answer is a legitimate finish, whatever the model writes
+  next is the result, and there is no rescue for a second nudge to beat.
 - **It is counted.** `empty_answer_rounds` on the phase record is the
   number of rounds that reached nobody. A seat whose model habitually
   answers nothing shows up there, and in `crewlet llm doctor`, which
@@ -1143,7 +1167,8 @@ providers:
 
 **`timeout_seconds` is separate from the entry's own
 `timeout_seconds`** because the transports are not comparable: that one
-is an HTTP client timeout (default 120 s), while this covers a process
+bounds an HTTP attempt (default 600 s; a streamed call's silence rather
+than its length), while this covers a process
 launch — a Node runtime costs seconds before the first byte — plus the
 model call and the CLI's internal retries. On breach the process *group*
 is terminated (so the runtime's helpers go too) and the call is reported
@@ -1258,7 +1283,7 @@ providers:
       cli: { agent: claude-code }
     metered:
       type: anthropic
-      model: claude-sonnet-5
+      model: claude-sonnet-5-5
       api_keys: ["${ANTHROPIC_API_KEY}"]
 
 roles:
@@ -1312,7 +1337,7 @@ providers:
     # The proxy speaks the Anthropic Messages API.
     subscription-proxy:
       type: anthropic
-      model: claude-sonnet-5
+      model: claude-sonnet-5-5
       base_url: "${LLM_PROXY_URL}"      # e.g. http://127.0.0.1:8317
       api_keys: ["${LLM_PROXY_KEY}"]    # the proxy's OWN inbound key
 
@@ -1339,6 +1364,15 @@ because each backend sends its vendor's native one:
 | `anthropic` | `x-api-key` — and only that. The backend builds its client with `WithoutEnvironmentDefaults`, which deliberately disables the SDK's own bearer-token path so an ambient `ANTHROPIC_AUTH_TOKEN` cannot redirect a company's auth |
 | `openai`, `openai-compatible` | `Authorization: Bearer` — and nothing else from the engine's environment. The SDK would add `OpenAI-Organization`, `OpenAI-Project` and every `OPENAI_CUSTOM_HEADERS` line from the process it runs in; the backend undoes each, so a proxy never receives headers an operator exported for some other tool. The OpenAI embeddings provider builds its client the same way |
 
+**The request is shaped for the model the entry names.** An `anthropic`
+entry sends what its Claude model accepts — adaptive thinking and an effort
+level on the current generation, never a temperature there — read from the
+[Claude model table](../getting-started/configuration.md#claude-models-thinking-effort-and-sampling).
+A proxy that answers to its own alias (`model: sonnet`) rather than a Claude
+id is shaped as the current generation; if that alias is an older model,
+name it with `claude_model: claude-haiku-4-5` (or whichever it is), or the
+fields only newer models take will be refused through the proxy.
+
 The `api_keys` value is the credential for **the proxy**, not for the
 vendor: the vendor login lives inside the proxy. Rotation, cooldowns and
 the fleet-shared credential bench all apply to that inbound key as they
@@ -1360,10 +1394,13 @@ you:
   one process serving every seat, so whatever session, cache or history
   it keeps is shared across your whole company — that is the proxy's
   design to answer, not Crewlet's.
-- **`crewlet llm` does not see it.** `list`, `doctor`, `login` and the
+- **`crewlet llm` sees only the HTTP half of it.** `list`, `login` and the
   rest build `cli-agent` providers only, so there is no login state to
-  report and no smoke test to run. Keeping the proxy authenticated is a
-  separate operational job.
+  report and keeping the proxy authenticated is a separate operational
+  job. `doctor` does examine an `anthropic` entry pointed at a proxy — it
+  sends one real round and certifies a tool call comes back — but a proxy
+  rarely serves `/v1/models`, so the model check reads *not served* there,
+  and an `openai` entry is not examined at all.
 - **A spent window is not translated.** The [prose sentinel](#falling-back-to-a-metered-key)
   that turns "Usage limit reached" into a retryable `rate_limit` is the
   CLI backend's. Over HTTP you get whatever status the proxy returns, and
@@ -1401,8 +1438,8 @@ key you were issued. That is just an endpoint.
 
 ```bash
 crewlet llm list                      # providers, agent, model, login state
-crewlet llm doctor                    # verify all of them, end to end
-crewlet llm doctor default -no-smoke # skip the real completion
+crewlet llm doctor                    # verify them all, anthropic entries too
+crewlet llm doctor default -no-smoke # skip the real completions
 crewlet llm status default            # ask the CLI who it's logged in as
 crewlet llm logout default            # revoke locally + delete credentials
 ```
@@ -1468,6 +1505,38 @@ One caveat worth stating plainly: `doctor` spends three real completions.
 On a subscription that is a few thousand tokens of your plan's allowance,
 which is why `-no-smoke` exists for a scripted health check that runs
 often — it skips all three and says so on each line.
+
+**The metered key behind it is examined too.** A role written
+`llm: [subscription, default]` falls through to an `anthropic` entry
+exactly when the plan is spent, which is the worst moment to learn that
+entry is refused on every call. So `doctor` reports on every `anthropic`
+entry beside the `cli-agent` ones:
+
+```
+provider      : default
+type          : anthropic
+model         : claude-sonnet-5-5
+profile       : claude-sonnet-5-5
+endpoint      : https://api.anthropic.com
+keys          : 1 (3f9a0c1b2d4e)
+request       : thinking adaptive (summarized), effort high, max_tokens 128000, never a temperature, reasoning before a tool change shed
+models api    : served — Claude Sonnet 5.5 (claude-sonnet-5-5), max_tokens 128000, input …
+smoke test    : ok — called crewlet_smoke (streamed), 1204 in / 61 out
+problems      : none
+```
+
+The **request** line is what a phase sends, read from the [Claude model
+table](../getting-started/configuration.md#claude-models-thinking-effort-and-sampling)
+— on a model that binds its thinking to the tools it was written under, that
+includes [shedding the reasoning from before a tool change](turn-engine.md#the-conversation-only-grows);
+the **models api** line is the vendor's own record of the model, and any
+disagreement between the two is listed under **drift** — a *problem* when
+it puts a field the model refuses on every call, a *note* when the table is
+only more cautious than the model. The **smoke test** is one round in a
+phase's shape (no tool choice forced, effort `low`), billed to the entry's
+key, and `-no-smoke` skips it; the Models API read bills nothing and runs
+either way. The full rules are in the [CLI
+reference](../reference/cli.md#crewlet-llm).
 
 ---
 

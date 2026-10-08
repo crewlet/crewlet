@@ -1,7 +1,6 @@
 package tracker_test
 
 import (
-	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -128,7 +127,7 @@ func TestTheFeedCursorContinuesWithoutRepeatOrGap(t *testing.T) {
 }
 
 // A TASK FILED FROM A CHAT THREAD SAYS WHERE; one filed from nowhere says
-// nothing, and a create written before the field decodes the same way.
+// nothing.
 func TestACreateFromAChatThreadSaysWhere(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -152,43 +151,5 @@ func TestACreateFromAChatThreadSaysWhere(t *testing.T) {
 	}
 	if got := origins["from-nowhere"]; got != nil {
 		t.Errorf("a create nothing on a chat surface caused carries origin %+v", got)
-	}
-}
-
-// A CREATE CARRYING AN ORIGIN IS STAMPED AT THE VERSION THAT READS IT, and one
-// without stays below it — so a node that cannot read the field holds back
-// only the records that carry it.
-func TestAnOriginIsStampedAtTheVersionThatReadsIt(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		origin *tracker.Origin
-		want   func(int) bool
-	}{
-		{&tracker.Origin{Surface: "slack"}, func(v int) bool { return v == 9 }},
-		{nil, func(v int) bool { return v < 9 }},
-	} {
-		body, err := json.Marshal(tracker.TaskCreate{Task: newTask("t"), Origin: tc.origin})
-		if err != nil {
-			t.Fatal(err)
-		}
-		encoded, err := tracker.MutationRecord{
-			RecordEnvelope: tracker.RecordEnvelope{
-				OpID: "op", Subject: tracker.TaskSubject("t"), Op: tracker.OpCreate,
-				CreatedAt: wednesday, Writer: "n",
-				Scope: tracker.ScopeSet{Subject: true, Container: "ENG"},
-			},
-			Kind: tracker.ChangeCreated, Mutation: body,
-			Actor: "pm", ActorKind: tracker.AuthorAgent,
-		}.Encode()
-		if err != nil {
-			t.Fatalf("encode: %v", err)
-		}
-		env, err := tracker.DecodeEnvelope(encoded)
-		if err != nil {
-			t.Fatalf("decode: %v", err)
-		}
-		if !tc.want(env.V) {
-			t.Errorf("a create with origin %+v is stamped at version %d", tc.origin, env.V)
-		}
 	}
 }

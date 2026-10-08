@@ -39,13 +39,30 @@ type OnboardingInput struct {
 // discovery catalogue. No policies, no roster, no phase plumbing — onboarding
 // is a fixed read → persist → mark workflow, and it runs on its own budget so
 // that nothing it does can starve the executor that follows.
-func BuildOnboarding(seat Seat, in OnboardingInput) string {
-	parts := []string{BuildIdentityLine(seat), OnboardingHeader}
+//
+// It returns the prompt's outline beside the text — see [Prompt].
+func BuildOnboarding(seat Seat, in OnboardingInput) Prompt {
+	b := NewBuilder("\n")
+	b.Lead("identity", "Identity", BuildIdentityLine(seat))
+	b.Heading("onboarding_phase", OnboardingHeader)
 	if in.Hint != "" {
-		parts = append(parts, "\n## What to do", in.Hint)
+		b.Heading("what_to_do", "\n## What to do", in.Hint)
 	}
 	if strings.TrimSpace(in.ToolCatalogue) != "" {
-		parts = append(parts, "\n## Available tools", in.ToolCatalogue)
+		b.Heading("available_tools", "\n## Available tools", in.ToolCatalogue)
 	}
-	return strings.Join(parts, "\n")
+	return b.Build()
+}
+
+// OnboardingUserMessage is the onboarding pass's whole user message: the pass
+// is a fixed workflow its system prompt describes, so the ask is one line.
+const OnboardingUserMessage = "Complete your onboarding now."
+
+// BuildOnboardingUserMessage renders [OnboardingUserMessage] with its outline,
+// so the pass's record carries a map for each of its two prompts like every
+// other phase's.
+func BuildOnboardingUserMessage() Prompt {
+	b := NewBuilder("")
+	b.Lead("instruction", "Instruction", OnboardingUserMessage)
+	return b.Build()
 }

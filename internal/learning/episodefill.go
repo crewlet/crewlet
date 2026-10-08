@@ -8,8 +8,8 @@ import (
 
 // An episode's vector, FILLED by the node holding its seat when the row has
 // none of the current model — the diary's arrangement ([Diary.Unfilled]), and
-// possible since the row stores the one part of its text nothing else on it
-// held, the ask (node migration 0042).
+// possible because the row stores the one part of its text nothing else on it
+// holds, the ask.
 //
 // Without it a row whose vector was missing, or was of a model the company has
 // since left, was out of similarity search for good: recall compares only rows
@@ -93,7 +93,7 @@ func (e *Episodes) FillEmbeddings(ctx context.Context, fills []VectorFill) (int,
 // model at this store's width, and with text to make one of ([hasTextSQL]).
 // Its binds are [Episodes.unfilledArgs].
 var unfilledEpisode = `agent_handle = ? AND kind = ?
-	AND (embedding IS NULL OR embedding_model IS NULL OR embedding_model <> ?
+	AND (embedding IS NULL OR embedding_model <> ?
 	     OR (? > 0 AND length(embedding) <> ?))
 	AND ` + hasTextSQL("task_summary || ask || plan_summary")
 

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -31,8 +32,6 @@ import (
 func TestTheSeatsPauseOverrideDistinguishesInheritFromNever(t *testing.T) {
 	never := 0.0
 	held := 600.0
-	legacy := -1.0
-	longhand := -30.0
 
 	cases := []struct {
 		name string
@@ -42,11 +41,6 @@ func TestTheSeatsPauseOverrideDistinguishesInheritFromNever(t *testing.T) {
 		{"unset inherits", config.RoleSandbox{}, nil},
 		{"an explicit zero never pauses", config.RoleSandbox{PauseTTLSeconds: &never}, dur(0)},
 		{"a set value is used", config.RoleSandbox{PauseTTLSeconds: &held}, dur(600 * time.Second)},
-		// -1 is the field's earlier spelling of "inherit"; any negative
-		// value reads the same way, because none of them can mean a
-		// duration and "no expiry" is the leak the knob exists to prevent.
-		{"the legacy -1 inherits", config.RoleSandbox{PauseTTLSeconds: &legacy}, nil},
-		{"any negative inherits", config.RoleSandbox{PauseTTLSeconds: &longhand}, nil},
 	}
 	for _, c := range cases {
 		got := pauseTTL(&c.gate)
@@ -338,7 +332,7 @@ func TestEveryConfiguredPlacementCanBeBuilt(t *testing.T) {
 		// NO RESOLVER: this asks whether each backend can be CONSTRUCTED,
 		// and a nil resolver hands the literal through, which is what an
 		// in-process caller wrote.
-		provider, err := buildSandboxProvider(spec, nil, placement, coord.FeatureReader{Leases: memory.New()})
+		provider, err := buildSandboxProvider(spec, nil, placement)
 		if err != nil {
 			t.Errorf("run_in %q is accepted by the config and cannot be "+
 				"built: %v", placement, err)
@@ -371,7 +365,7 @@ func TestTheDoubleAnswersEveryPlacement(t *testing.T) {
 	t.Parallel()
 	spec := &config.SandboxProvider{Fake: true}
 	for _, placement := range config.BackendPlacements() {
-		provider, err := buildSandboxProvider(spec, nil, placement, coord.FeatureReader{Leases: memory.New()})
+		provider, err := buildSandboxProvider(spec, nil, placement)
 		if err != nil {
 			t.Fatalf("the double cannot serve %q: %v", placement, err)
 		}
@@ -588,9 +582,8 @@ func newChargeRig(t *testing.T, tokens, orgCap, seatCap int, resume sandbox.Resu
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
-	if suspended, err := store.MarkSuspended(ctx, "t1", sandbox.Suspension{State: map[string]any{
-		"pending_tool_name": "run_sandbox",
-	}}); err != nil || !suspended {
+	if suspended, err := store.MarkSuspended(ctx, "t1", sandbox.Suspension{State: json.RawMessage(
+		`{"pending_tool_name":"run_sandbox"}`)}); err != nil || !suspended {
 		t.Fatalf("MarkSuspended = %v, %v", suspended, err)
 	}
 	runner.Finish(sandbox.Result{Success: true, Text: "done", InputTokens: tokens})

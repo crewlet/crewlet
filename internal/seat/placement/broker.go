@@ -24,10 +24,11 @@ import "slices"
 //
 // # Three values and an absence
 //
-// The zero value is [BrokerUnknown]: a presence row that says nothing about
-// its broker, which is what a build older than the field writes. It is NOT a
-// leaf and not a client. A reader that has to count members treats it as one,
-// because leaving out a node that might be a member is the reading that can
+// The zero value is [BrokerUnknown]: a presence row advertising no kind this
+// build knows — a kind a newer build added, a value it cannot read, or a
+// profile nobody derived a kind for. It is NOT a leaf and not a client. A
+// reader that has to count members treats it as one, because leaving out a
+// node that might be a member is the reading that can
 // pass a seal it should hold, while counting one that is not merely waits for
 // an acknowledgement an operator can exclude.
 type BrokerKind string

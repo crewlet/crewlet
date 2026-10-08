@@ -3,7 +3,7 @@
  * do — without a refused request and within three reads.
  */
 
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test } from "vitest";
 
 import { SeatPeek, budgetLine, turnOrdinal } from "./SeatPeek.tsx";
@@ -15,6 +15,9 @@ import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { CHART_ORG } from "~/test/orgchart.ts";
 import { LiveSocket, Store, type AgentRow, type OrgProjection } from "~/protocol/index.ts";
 import type { BudgetWindow } from "~/protocol/types.ts";
+import type { EngineHealth } from "~/contract/health.ts";
+import { healthFrame } from "~/test/health.ts";
+import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -70,6 +73,7 @@ const SWE: AgentRow = {
     work_item: { key: "ENG-412" },
   },
   live_call: {
+    versions: ZERO_VERSIONS,
     turn_id: "turn-2",
     phase: "execute",
     model: "claude-sonnet-5",
@@ -91,16 +95,16 @@ async function mount(
     projection = org(),
     agents = [SWE],
     handle = "swe",
-    health = { status: "healthy" },
+    health = healthFrame(),
   }: {
     projection?: OrgProjection;
     agents?: AgentRow[];
     handle?: string;
-    health?: Record<string, unknown>;
+    health?: EngineHealth;
   } = {},
 ) {
   const store = new Store();
-  store.applyHealth(health as never);
+  store.applyHealth(health);
   store.applyOrg(projection);
   store.applyAgents(agents);
   const socket = new LiveSocket(store);
@@ -157,7 +161,7 @@ const OPERATOR = {
 // The peek said "Shown to operators" over the same fact.
 test("an anonymous reader sees what the health push says of the node, and sends no guarded read", async () => {
   const { asked } = await mount(ANONYMOUS, {
-    health: { status: "healthy", node: "node-1", seats: ["swe"] },
+    health: healthFrame({ node: "node-1", seats: ["swe"] }),
   });
   // IN WORDS ON THE ROW, where a sighted reader reads them.
   const running = screen.getByText("Running on").nextElementSibling;
@@ -170,7 +174,7 @@ test("an anonymous reader sees what the health push says of the node, and sends 
 
 // NEVER WHICH PEER: that is the fleet read's, and the push does not say it.
 test("an anonymous reader is told a seat another node holds is another node's", async () => {
-  await mount(ANONYMOUS, { health: { status: "healthy", node: "node-1", seats: ["cto"] } });
+  await mount(ANONYMOUS, { health: healthFrame({ node: "node-1", seats: ["cto"] }) });
   expect(screen.getByText("Running on").nextElementSibling?.textContent).toBe("another node");
 });
 
@@ -195,6 +199,26 @@ test("the state card names the turn on the task and the round", async () => {
   expect(screen.getByText(/Executing ENG-412/)).toBeTruthy();
   expect(screen.getByText("Turn 2 · round 7 of 25")).toBeTruthy();
   expect(screen.getByText(/serving now: claude-sonnet-5/)).toBeTruthy();
+});
+
+// THE CHART TO THE TURN IN TWO PRESSES: the card opens this peek, and its state
+// card watches the running turn — its Transcript, the phase it is on open. A
+// seat that is not working has no such link, and neither has one whose turn
+// has published no id yet.
+test("the state card watches the running turn, and only a running one", async () => {
+  await mount(OPERATOR);
+  const state = screen.getByRole("region", { name: "Doing now" });
+  expect(within(state).getByRole("link", { name: "Watch live" }).getAttribute("href")).toBe(
+    "#/live/turns/turn-2?tab=transcript",
+  );
+  cleanup();
+  await mount(OPERATOR, {
+    agents: [{ ...SWE, activity: "idle", turn: null, live_call: null } as AgentRow],
+  });
+  expect(screen.queryByRole("link", { name: "Watch live" })).toBeNull();
+  cleanup();
+  await mount(OPERATOR, { agents: [{ ...SWE, turn: null, live_call: null } as AgentRow] });
+  expect(screen.queryByRole("link", { name: "Watch live" })).toBeNull();
 });
 
 // A BUDGET IS LABELLED BY ITS OWN WINDOW, never by a period the screen
@@ -243,15 +267,11 @@ test("Message is pressable for a reader who can file", async () => {
   expect(message.getAttribute("aria-disabled")).not.toBe("true");
 });
 
-// NOT REPORTED IS NOT NOBODY: without the engine's derived block the peek
-// cannot say who a seat reports to, and says that.
-test("with no derived hierarchy the peek does not claim the seat reports to nobody", async () => {
-  const { derived: _drop, ...flat } = org() as OrgProjection & { derived: unknown };
-  // The founder declares her handle, which is what a document-only index can
-  // address a seat by.
-  await mount(ANONYMOUS, { projection: flat as OrgProjection, handle: "jane" });
-  expect(screen.getByText("Not reported by this engine")).toBeTruthy();
-  expect(screen.queryByText(/Nobody/)).toBeNull();
+// A SEAT THE ENGINE GAVE NO MANAGER is the top of the chart, and says so
+// rather than leaving the line blank.
+test("a seat with no manager reports to nobody, at the top of the chart", async () => {
+  await mount(ANONYMOUS, { handle: "jane" });
+  expect(screen.getByText("Nobody — the top of the chart")).toBeTruthy();
 });
 
 test("the tools name their source, and more than three fold into a count", async () => {

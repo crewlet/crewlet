@@ -58,9 +58,9 @@ type Episode struct {
 
 	// Ask is what the turn was asked ([Turn.Ask]), whole — the one part of
 	// the text the episode's vector is of ([episodeText]) that nothing else
-	// on the row holds, stored so the vector can be made again (node
-	// migration 0042). Empty on a compacted row, and on a row written before
-	// the column, whose vector is then of its label and what it did.
+	// on the row holds, stored so the vector can be made again. Empty on a
+	// compacted row, and on a turn that was told nothing, whose vector is
+	// then of its label and what it did.
 	Ask string
 
 	ToolSequence  []string
@@ -77,9 +77,8 @@ type Episode struct {
 	Embedding []float32
 
 	// EmbeddingModel is the model whose space Embedding is in, and empty
-	// exactly when there is no vector — or when the row was written before
-	// vectors named their model (node migration 0039), which recall then
-	// excludes: a vector in no known space compares with nothing.
+	// exactly when there is no vector: a vector in no known space compares
+	// with nothing, so one that names no model is never stored.
 	EmbeddingModel string
 
 	Kind  Kind
@@ -439,9 +438,9 @@ func jsonList(v []string) string {
 
 // parseList reads a JSON array column, tolerating anything else.
 //
-// A row written by a different version, or hand-edited, costs its list rather
-// than the whole episode: the plan summary and the outcome are what recall is
-// for, and they are still readable.
+// A malformed value — a hand edit, a damaged row — costs its list rather than
+// the whole episode: the plan summary and the outcome are what recall is for,
+// and they are still readable.
 func parseList(raw string) []string {
 	if raw == "" || raw == "[]" {
 		return nil

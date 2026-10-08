@@ -38,11 +38,6 @@ type Phase string
 // without a host phase around them. PhaseSandbox is a detached coding run the
 // executor launched, published once when the run is collected. PhaseAuxiliary
 // is the odd one out: no phase record carries it — see its own comment.
-//
-// The retired `plan` value has NO CONSTANT here, and that is not an oversight:
-// Phase is a plain string precisely so a value this build does not produce
-// still decodes, round-trips and renders. Every event a pre-redesign node
-// wrote carries it, and nothing in this build switches on it.
 const (
 	// PhaseOnboarding is the dedicated first-turn pass, at iteration 0,
 	// before the executor's first round.
@@ -83,37 +78,59 @@ const (
 	BackendSandbox ExecuteBackend = "sandbox"
 )
 
-// PlanDecision is the turn-level opt-out, on the wire under `plan_decision`.
-//
-// ONE VALUE SURVIVES. It used to carry a planner's three-way verdict; with no
-// planner the only fact a reader still gates on is whether the turn opted out
-// entirely, and that is derived from the turn's own decision rather than from
-// anything a model wrote. The type and the wire name are kept because the
-// field is a column in the episode store, and renaming it would migrate a
-// value to buy a better word.
-type PlanDecision string
-
-// PlanDecisionSkip opts the turn out entirely — nobody was asking this seat to
-// do anything, which is why learning short-circuits on it. A pre-redesign node
-// also wrote `plan` and `direct` here; both decode as an unrecognised value,
-// which is exactly how every reader already treats anything that is not skip.
-const PlanDecisionSkip PlanDecision = "skip"
-
 // PromptMessage is one message of the conversation a phase sent to the model.
 type PromptMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+	// Sections is Content's outline, as the builder that wrote it recorded
+	// it — see [PromptSection]. Absent on a message no builder outlined (a
+	// resumed phase's).
+	Sections []PromptSection `json:"sections,omitempty"`
+}
+
+// PromptSection is one part of a prompt, as the frame that assembled the
+// prompt recorded it: a stable snake_case `key`, the `title` a reader shows it
+// under (its heading text without the #'s, or a name the builder chose for a
+// part with no heading), its length in `bytes` of UTF-8, and `headed: true`
+// when the part begins with its own heading line, whose text is `title`.
+//
+// `headed` is absent, never `false`, on a part with no heading of its own,
+// and absent means exactly that. A part that is not headed may still BEGIN
+// with a heading: a worker's persona, a task prompt the executor wrote and a
+// trigger's body are somebody else's markdown, and often open with one ("##
+// Goal"). That heading is the content's, nested under the part's title, not
+// the part's own — a reader that took it for the part's own drew the
+// builder's title in its place and lost the heading's words.
+//
+// It exists because the only outline a reader can otherwise derive is the
+// prompt's own `##` lines, and a heading INSIDE embedded content — a chat
+// trigger's "## Triage", a pull request's "# Title", a model's "## Summary"
+// quoted back as evidence — escapes its section or swallows the rest of the
+// prompt. Only the builder knows where its parts begin and end.
+//
+// A prompt's sections TILE it exactly and in order: their bytes sum to the
+// prompt's length, every boundary falls on a rune boundary, every section is
+// at least one byte, and no key repeats. A prompt whose text is not valid
+// UTF-8 carries no map at all, since JSON delivers such text with each bad
+// byte rewritten to three. A reader that finds a map breaking
+// any of that must fall back to the prompt's own headings rather than slice by
+// it — the map is a broken producer's, and the text is still the text.
+type PromptSection struct {
+	Key    string `json:"key"`
+	Title  string `json:"title"`
+	Bytes  int    `json:"bytes"`
+	Headed bool   `json:"headed,omitempty"`
 }
 
 // ToolExecution records one tool call a phase made: name, arguments (a JSON
-// string), result and success, the round that asked for it, and — from a build
-// that timed it — `started_at` (RFC 3339, UTC), `duration_ms`, and `origin`
+// string), result and success, the round that asked for it, and — where the
+// call was timed — `started_at` (RFC 3339, UTC), `duration_ms`, and `origin`
 // (`builtin` or `mcp:<server>`) with `server` (the bare MCP server name) for
-// the tool that answered. The last four are ABSENT on a row nothing timed —
-// an older peer's, an agent-mode run's bridged call — and `origin`/`server`
-// are absent on a call no tool answered (an unknown name, one not offered, one
-// a guard refused): absent means "not recorded", never "instant" or "the
-// engine's own".
+// the tool that answered. The last four are ABSENT on a row nothing timed — a
+// call whose arguments did not parse, an agent-mode run's bridged call — and
+// `origin`/`server` are absent on a call no tool answered (an unknown name, one
+// not offered, one a guard refused): absent means "not recorded", never
+// "instant" or "the engine's own".
 //
 // Deliberately an open map rather than a struct, and the one place in this
 // catalogue that stays loose. Its consumers pass it through verbatim, precisely
@@ -123,12 +140,22 @@ type PromptMessage struct {
 type ToolExecution = map[string]any
 
 // RoundNarration records one round's model turn: `round`, `reasoning` and
-// `content`.
+// `content` — and `declined: true` on a round that answered with prose and NO
+// tool call in a phase that had to end in one (its loop declares a submission
+// tool that finishes it — `submit_work`, `submit_review`, `mark_onboarded`, a
+// worker's `submit_result`). Absent otherwise, never `false`. Whether the
+// engine asked again needs no second key: a later round exists exactly when it
+// did, and a declined round that is the phase's last is one the corrective's
+// bound or the round budget left unanswered — the phase ended without its
+// submission, which the executor's and the reviewer's `rescue_fired` then says
+// (a worker has no such flag: its status is `no_result`, and onboarding simply
+// ends unmarked).
 //
-// It exists because `response` is the JOIN of every round's turn, and a join
-// cannot be undone: the parts are separated by a blank line and prose contains
-// blank lines, so a consumer handed only the blob cannot say which round said
-// what. A dashboard splitting it on the leading `<think>` tag showed the first
+// It exists because `response` is the JOIN of the rounds' turns — every round
+// but a corrective's repeats, which this list keeps and `response` leaves out
+// (see toolloop's assistantText) — and a join cannot be undone: the parts are
+// separated by a blank line and prose contains blank lines, so a consumer
+// handed only the blob cannot say which round said what. A dashboard splitting it on the leading `<think>` tag showed the first
 // round's thinking as "the reasoning" and every later round's thinking as
 // "the answer", tags and all.
 //
@@ -172,6 +199,24 @@ type PhaseRound struct {
 	CacheWriteTokens int `json:"cache_write_tokens"`
 	// ToolCalls is how many calls the model asked for this round.
 	ToolCalls int `json:"tool_calls"`
+	// StopReason is why the model stopped writing this round's response:
+	// `end`, `tool_use`, `max_tokens` (cut off at the output cap),
+	// `refusal`, `context_exceeded` (the context window filled) or
+	// `paused`. The last four end the phase. Absent where the backend
+	// reported none — absent is "not reported", never "ended normally" as a
+	// fact.
+	StopReason string `json:"stop_reason,omitempty"`
+}
+
+// PhaseRefusal is a model declining the phase's request on policy grounds —
+// see [AgentPhaseCompleted.Refusal].
+type PhaseRefusal struct {
+	// Category is the vendor's policy category (`cyber`, `bio`, …), absent
+	// where it named none.
+	Category string `json:"category,omitempty"`
+	// Explanation is the vendor's own account, absent where it gave none.
+	// Not stable wording, so a reader shows it and never matches on it.
+	Explanation string `json:"explanation,omitempty"`
 }
 
 // RunningCall is the tool call a phase is running RIGHT NOW, on the live
@@ -289,20 +334,12 @@ type AgentTurnCompleted struct {
 	OutputTokens   int             `json:"output_tokens"`
 	TotalTokens    int             `json:"total_tokens"`
 	ToolExecutions []ToolExecution `json:"tool_executions,omitempty"`
-	// A2AContext is set when the turn answered an agent-to-agent ask. Absent
-	// and empty are the same fact — not an A2A turn — so no pointer.
-	A2AContext map[string]any `json:"a2a_context,omitempty"`
 
 	// The turn engine's own summary of the loop.
 	TurnID string `json:"turn_id"`
 	// WorkKey is the unit of work this run was dispatched for — see
 	// [AgentPhaseCompleted.WorkKey] and ADR-0017.
-	WorkKey string `json:"work_key,omitempty"`
-	// PlanModel is NO LONGER WRITTEN: there is no plan phase. It stays on
-	// the type because the event store holds rows an earlier build wrote,
-	// and a reader that dropped the field would render those turns as
-	// though the model that served their planning had never been recorded.
-	PlanModel      string `json:"plan_model,omitempty"`
+	WorkKey        string `json:"work_key,omitempty"`
 	ExecuteModel   string `json:"execute_model"`
 	ReviewModel    string `json:"review_model"`
 	SubagentCount  int    `json:"subagent_count"`
@@ -348,8 +385,10 @@ type AgentTurnCompleted struct {
 	// Error is the failure's message, truncated. Empty unless Failed or
 	// Stopped.
 	Error string `json:"error"`
-	// ErrorKind is the machine-readable failure class: the classified provider
-	// error, or the guard-breach kind — or `stopped` for a turn a person
+	// ErrorKind is the machine-readable failure class: the guard-breach kind
+	// where a guard ended the turn, otherwise the same class the failed
+	// phase's [AgentPhaseCompleted.ErrorKind] carries (`refusal`,
+	// `max_tokens`, `rate_limit`, …) — or `stopped` for a turn a person
 	// ended, which is the one kind that is not a failure.
 	ErrorKind string `json:"error_kind"`
 	// ConversationKey is which conversation the turn served, "{source}:{local}".
@@ -372,24 +411,23 @@ func (e AgentTurnCompleted) AgentID() string { return e.Agent }
 
 // SummaryFor renders a failed turn as failed, with the error KIND rather than
 // the message: the kind is short enough for a line and is what an operator
-// scans a feed for. A2A turns keep their channel tag either way.
+// scans a feed for.
 func (e AgentTurnCompleted) SummaryFor(actor string) string {
-	tag := a2aTag(e.A2AContext)
 	if e.Stopped {
-		return lead(actor, "turn stopped by a person"+tag)
+		return lead(actor, "turn stopped by a person")
 	}
 	if e.Failed {
 		reason := e.ErrorKind
 		if reason == "" {
 			reason = "error"
 		}
-		return lead(actor, "turn failed ("+reason+")"+tag)
+		return lead(actor, "turn failed ("+reason+")")
 	}
 	if e.Model != "" {
-		return lead(actor, fmt.Sprintf("completed LLM turn (%s, %d tokens)%s",
-			e.Model, e.TotalTokens, tag))
+		return lead(actor, fmt.Sprintf("completed LLM turn (%s, %d tokens)",
+			e.Model, e.TotalTokens))
 	}
-	return lead(actor, "completed a turn"+tag)
+	return lead(actor, "completed a turn")
 }
 
 // TurnCompleted is the turn-shaped record the learning subsystem consumes to
@@ -438,16 +476,13 @@ type TurnCompleted struct {
 	// payload for nothing.
 	//
 	// No larger than the trigger it was read from, which crossed the queue
-	// in one message already. An older build leaves it empty, and an
-	// episode written from such a turn is embedded as its label and what
-	// it did.
+	// in one message already.
 	Ask string `json:"ask,omitempty"`
 	// PlanSummary is what the turn DID, in the agent's words: the last
 	// review's account of what had landed where it wrote one — which a
 	// review sending the turn back for another round does — and otherwise
-	// the turn's final answer. It keeps its wire name: it is a column in the
-	// episode store and every learning worker reads it, and renaming it
-	// would migrate a value to buy a better word.
+	// the turn's final answer. It is the episode store's `plan_summary`
+	// column, and every learning worker reads it.
 	PlanSummary string `json:"plan_summary"`
 	// ToolSequence is the tools called during the FINAL executor round.
 	// Last-round-scoped by design: the reflect engine's no-action gate and
@@ -461,31 +496,18 @@ type TurnCompleted struct {
 	// reads this to skip the post-turn persist decision when the agent
 	// already self-persisted in flight.
 	AllToolNames []string `json:"all_tool_names,omitempty"`
-	// PlanToolSequence is NO LONGER WRITTEN — it was the Plan phase's own
-	// calls, and there is no Plan phase. AllToolNames replaces it. It stays
-	// on the type, and the reflect engine keeps reading it, because the
-	// event store holds rows an earlier build wrote and a mixed fleet is
-	// still writing them: dropping it would make a turn that self-persisted
-	// look like one that did not, and run the persist decision twice.
-	PlanToolSequence []string `json:"plan_tool_sequence,omitempty"`
-	SkillsUsed       []string `json:"skills_used,omitempty"`
-	ReviewOutcome    string   `json:"review_outcome"`
-	Iterations       int      `json:"iterations"`
+	SkillsUsed   []string `json:"skills_used,omitempty"`
+	// ReviewOutcome is the turn's decision: `done`, `failed`,
+	// `self_iterate`, or `skipped` for a turn that decided nobody was
+	// asking this seat to do anything — which learning reads as no
+	// engagement, since a fact read off a trigger meant for somebody else
+	// would teach the seat a directive it never received.
+	ReviewOutcome string `json:"review_outcome"`
+	Iterations    int    `json:"iterations"`
 	// Outcome is the executor's own last word on the turn — `delivered`,
 	// `no_action`, `blocked`, or the engine-written `incomplete`. Empty on
 	// a turn that never reached an executor at all.
 	Outcome string `json:"outcome,omitempty"`
-	// PlanDecision now carries only PlanDecisionSkip, and only for a turn
-	// that ended having decided nobody was asking it to do anything —
-	// which is the one thing every reader of this field gates on.
-	//
-	// Kept rather than replaced by Outcome because a mixed fleet writes
-	// both: an older node still publishes plan/direct/skip here, and a
-	// reader switched to Outcome alone would treat those turns as having
-	// no outcome. Learning short-circuits on PlanDecisionSkip: nothing the
-	// agent engaged with, so persisting facts read off the trigger would
-	// teach it things directed at someone else.
-	PlanDecision PlanDecision `json:"plan_decision"`
 	// Interactions carries each trigger message's sender and body when
 	// identifiable. Usually one entry; a coalesced trigger carries one per
 	// constituent, possibly from several senders. Empty for internal triggers.
@@ -598,8 +620,8 @@ type AgentPhaseCompleted struct {
 	// the host ran before it asked for more. HostIteration names the turn
 	// iteration, which a phase of forty rounds spans whole, so it could
 	// place a worker under its phase but not under the call that made it.
-	// Absent on every other phase, and on a nested phase an older peer
-	// published.
+	// Absent on every other phase, and on a worker spawned outside a tool
+	// loop.
 	HostRound int `json:"host_round,omitempty"`
 	// Worker names the worker behind this call: the delegate template on
 	// a PhaseSubagent event. Empty on every other phase, and on an ad-hoc
@@ -616,8 +638,14 @@ type AgentPhaseCompleted struct {
 	Trigger     Trigger `json:"trigger"`
 	// The prompt and response are VERBATIM, not truncated: this telemetry is
 	// what shows the operator what the model actually saw. Only Error is capped.
-	SystemPrompt   string          `json:"system_prompt"`
-	UserPrompt     string          `json:"user_prompt"`
+	SystemPrompt string `json:"system_prompt"`
+	UserPrompt   string `json:"user_prompt"`
+	// SystemSections and UserSections are the outlines of SystemPrompt and
+	// UserPrompt — see [PromptSection]. Absent where the phase opened no
+	// conversation of its own (a resumed executor re-enters one, and its
+	// prompts are empty).
+	SystemSections []PromptSection `json:"system_sections,omitempty"`
+	UserSections   []PromptSection `json:"user_sections,omitempty"`
 	Response       string          `json:"response"`
 	ToolExecutions []ToolExecution `json:"tool_executions,omitempty"`
 	// RoundNarration is Response split back into the rounds that produced
@@ -626,7 +654,7 @@ type AgentPhaseCompleted struct {
 	RoundNarration []RoundNarration `json:"round_narration,omitempty"`
 	// Rounds is one entry per provider call the phase made, keyed on the
 	// round number the two lists above share — see [PhaseRound]. Absent on
-	// a phase that ran no loop in this process, and on an older peer's.
+	// a phase that ran no loop in this process.
 	Rounds []PhaseRound `json:"rounds,omitempty"`
 	// Steers is every person's note this phase read, with the round that
 	// first read it — see [PhaseSteer]. Absent on a phase nobody steered.
@@ -648,7 +676,7 @@ type AgentPhaseCompleted struct {
 	// it could ever have been granted. RoundsUsed against MaxRounds is
 	// "how far into its allowance", and MaxRounds against RoundCeiling is
 	// "how much more it could have asked for". Zero on a phase that runs
-	// no loop of its own (a judge) and on an older peer's.
+	// no loop of its own (a judge).
 	MaxRounds    int `json:"max_rounds,omitempty"`
 	RoundCeiling int `json:"round_ceiling,omitempty"`
 	// StartedAt is when THIS SEGMENT of the phase began, on the publishing
@@ -657,7 +685,8 @@ type AgentPhaseCompleted struct {
 	// "published minus duration": that instant is when the first segment
 	// began, possibly days earlier and on another node, and the gap
 	// between the two segments was a coding run rather than this phase.
-	// Absent on an older peer's record.
+	// Absent on a record that measured no start (a coding run whose launch
+	// instant its row does not hold).
 	StartedAt time.Time `json:"started_at,omitzero"`
 	// WorkItem is the item the turn is charged to, as the turn knew it
 	// when this record was published — see [AgentTurnStarted.WorkItem].
@@ -704,9 +733,14 @@ type AgentPhaseCompleted struct {
 	// explanation, and the fix is the entry's `model`.
 	EmptyAnswerRounds int    `json:"empty_answer_rounds,omitempty"`
 	Decision          string `json:"decision"`
-	// RescueFired is true when the phase's submit tool was not called on the
-	// first run of the loop, prompting a constrained rescue call. The
-	// executor and the reviewer both can; sub-agent phases never set this.
+	// RescueFired is true when the phase ended without its submission
+	// having succeeded — the tool loop's finishing correctives spent, or
+	// its round budget — so the ENGINE wrote the decision rather than the
+	// model: the executor's outcome is `incomplete`, the reviewer's is
+	// `self_iterate`. There is no rescue model call; the decision is a
+	// fixed one, and this flag is what tells it from one a model chose.
+	// The executor and the reviewer both can; the onboarding pass and
+	// sub-agent phases never set it.
 	RescueFired bool `json:"rescue_fired"`
 	// Notes is free text kept short: review's notes, rejected sub-agent tools,
 	// missing tool names from Execute.
@@ -740,8 +774,7 @@ type AgentPhaseCompleted struct {
 	// DeliveredRefs lists: refs are scraped from the whole report by a
 	// pattern with no count to it, and the record lists them up to a bound,
 	// deduplicated, counting the rest here rather than dropping them unsaid.
-	// ADDITIVE: zero on a record that lists them all and on an older build's,
-	// which listed every match; an older reader ignores it.
+	// Zero on a record that lists them all.
 	DeliveredRefsElided int `json:"delivered_refs_elided,omitempty"`
 	// ActivityTranscript is a coding run's own account of what it did —
 	// what it said, its tool calls and what they ran, or its stderr where
@@ -754,10 +787,7 @@ type AgentPhaseCompleted struct {
 	// ActivityTranscriptElidedLines and ActivityTranscriptElidedBytes count
 	// what that bound left out of the transcript's middle — whole lines, and
 	// every byte not kept — so a screen can say the record is not the whole
-	// log without parsing the note. ADDITIVE: zero on a transcript kept
-	// whole, and on every record an older build published, which kept the
-	// transcript's last 256 KiB marked only by a leading "…"; an older
-	// reader ignores both.
+	// log without parsing the note. Zero on a transcript kept whole.
 	ActivityTranscriptElidedLines int `json:"activity_transcript_elided_lines,omitempty"`
 	ActivityTranscriptElidedBytes int `json:"activity_transcript_elided_bytes,omitempty"`
 	// Failed is true when the phase died instead of finishing.
@@ -770,9 +800,21 @@ type AgentPhaseCompleted struct {
 	Failed bool `json:"failed"`
 	// Error is the failure's message, truncated. Empty unless Failed.
 	Error string `json:"error"`
-	// ErrorKind is the classified LLM error for an exhausted provider chain,
-	// otherwise the exception's type name.
+	// ErrorKind is the failure's class: a classified provider error
+	// (`rate_limit`, `auth`, `timeout`, `server`, `fatal`, `refusal`), a
+	// round whose stop reason ended the phase (`max_tokens`,
+	// `context_exceeded`, `paused`), `budget_exhausted`, `stopped` for a
+	// phase a person ended, and `error` for anything unclassified.
 	ErrorKind string `json:"error_kind"`
+	// Refusal is set when the phase ended because its model DECLINED the
+	// request on policy grounds — a failed phase whose ErrorKind is
+	// `refusal` — with what the vendor said about why. A named outcome
+	// rather than a rescue: the executor is not marked `incomplete` and the
+	// reviewer does not send the turn round again, because re-running a
+	// refused request is asking the model to reconsider a decision, and the
+	// turn's trigger is recorded rather than redelivered. Absent on every
+	// other phase.
+	Refusal *PhaseRefusal `json:"refusal,omitempty"`
 	// ConversationKey is which conversation this phase's turn served.
 	//
 	// This event is where the model's reasoning is durably kept, as the <think>
@@ -808,6 +850,13 @@ func (e AgentPhaseCompleted) SummaryFor(actor string) string {
 		parts = append(parts, "[sandbox:"+agent+"]")
 	}
 	switch {
+	case e.Failed && e.Refusal != nil:
+		// Said as what it is: a model's decision, not a breakage.
+		what := "✗ refused by the model"
+		if e.Refusal.Category != "" {
+			what += " (" + e.Refusal.Category + ")"
+		}
+		parts = append(parts, what)
 	case e.Failed:
 		kind := e.ErrorKind
 		if kind == "" {
@@ -899,7 +948,6 @@ type AgentTurnProgress struct {
 	// round is open, and only on this live-only event: nothing persists a
 	// half-written sentence.
 	PartialRound map[string]any `json:"partial_round,omitempty"`
-	A2AContext   map[string]any `json:"a2a_context,omitempty"`
 }
 
 // EventType is the "agent_turn_progress" wire type. Live only — nothing
@@ -916,7 +964,6 @@ func (e AgentTurnProgress) AgentID() string { return e.Agent }
 // the round-by-round bits are context for a line whose real content is that the
 // seat is still alive.
 func (e AgentTurnProgress) SummaryFor(actor string) string {
-	tag := a2aTag(e.A2AContext)
 	var bits []string
 	if e.Phase != "" {
 		bits = append(bits, string(e.Phase))
@@ -931,9 +978,9 @@ func (e AgentTurnProgress) SummaryFor(actor string) string {
 		bits = append(bits, fmt.Sprintf("round %d", e.RoundNum+1))
 	}
 	if len(bits) > 0 {
-		return lead(actor, "working ("+strings.Join(bits, ", ")+")"+tag)
+		return lead(actor, "working ("+strings.Join(bits, ", ")+")")
 	}
-	return lead(actor, "working"+tag)
+	return lead(actor, "working")
 }
 
 // SubagentBatched fires once per delegate call, so a dashboard can count
@@ -958,8 +1005,8 @@ type SubagentBatched struct {
 	// `tool_executions[].round` scale. Together with each worker record's
 	// `host_round` they place a fan-out under the call that spawned it,
 	// which the turn iteration alone cannot: one Execute phase spans every
-	// round of the iteration. Absent on an older peer's event, and Round
-	// on a call made outside a tool loop.
+	// round of the iteration. Round is absent on a call made outside a
+	// tool loop.
 	StartedAt time.Time `json:"started_at,omitzero"`
 	Round     int       `json:"round,omitempty"`
 

@@ -26,6 +26,7 @@ import { Audit, auditCsv, writerOf } from "./Audit.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import type { QueryName } from "~/protocol/index.ts";
+import { withDerived } from "~/test/org.ts";
 
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
@@ -81,13 +82,15 @@ function serving(answers: Partial<Record<QueryName, unknown>> = {}) {
   const query = vi.fn(async (what: string) => answers[what as QueryName] ?? {});
   vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
   vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
-  vi.mocked(useOrg).mockReturnValue({
-    name: "Acme",
-    roles: [
-      { name: "Ada Okonkwo", handle: "ada", kind: "agent" },
-      { name: "Jane Founder", handle: "jane", kind: "human" },
-    ],
-  } as never);
+  vi.mocked(useOrg).mockReturnValue(
+    withDerived({
+      name: "Acme",
+      roles: [
+        { name: "Ada Okonkwo", handle: "ada", kind: "agent" },
+        { name: "Jane Founder", handle: "jane", kind: "human" },
+      ],
+    }) as never,
+  );
   return query;
 }
 
@@ -353,19 +356,13 @@ test("writerOf: the kind an operator is drawn with is a person's", () => {
     as: "system",
     name: "node-a",
   });
-  // AND A RECORD THAT SAYS NOTHING IS NOT THE ENGINE.
-  expect(writerOf({ actor: "", actorKind: "", unrecorded: true }, who)).toEqual({
-    as: "unrecorded",
-  });
 });
 
 // A CONFIG REVISION SAYS WHAT WROTE IT, AND THE ROW BELIEVES IT.
 //
 // The row used to be labelled `operator` whatever wrote the revision — so a
 // node's boot seed and the reconcile loop's reload after sealing a credential
-// read as a person's writes. The kind is the revision's own now, and one with
-// no recorded author (adopted from an older engine's pointer) says so rather
-// than being drawn as the engine.
+// read as a person's writes. The kind is the revision's own now.
 test("a config revision is labelled with the kind it recorded, not with operator", async () => {
   serving({
     config_audit: [
@@ -385,14 +382,6 @@ test("a config revision is labelled with the kind it recorded, not with operator
         created_by_kind: "node",
         created_at: RECENTLY,
       },
-      {
-        revision_id: "rev-oldpeer1",
-        summary: "adopted from an older engine",
-        source: "fleet",
-        created_by: "",
-        created_by_kind: "",
-        created_at: RECENTLY,
-      },
     ],
   });
   mount();
@@ -402,7 +391,6 @@ test("a config revision is labelled with the kind it recorded, not with operator
   expect(screen.getAllByText("node")).toHaveLength(2);
   // NO ROW IS AN OPERATOR'S: none of these was a person's write.
   expect(screen.queryByText("operator")).toBeNull();
-  expect(screen.getByText("Not recorded")).toBeTruthy();
   expect(screen.queryByText("the engine")).toBeNull();
 });
 

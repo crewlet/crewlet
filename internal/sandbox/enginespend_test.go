@@ -91,12 +91,12 @@ func TestAParkedJobsEngineSpendReachesTheAnswersResume(t *testing.T) {
 	if got := len(rig.resumer.calls()); got != 0 {
 		t.Fatalf("a job that asked a question resumed %d times before any answer", got)
 	}
-	if got := rig.get("asks").LaunchFacts().Condensed; got != condensing {
+	if got := rig.get("asks").Launch.Condensed; got != condensing {
 		t.Fatalf("the parked job's record holds condensation %+v, want %+v", got, condensing)
 	}
 
 	disposition, err := rig.coordinator.TryResumeFromAnswer(
-		t.Context(), "swe", answerOnTheDM, "use main", nil)
+		t.Context(), "swe", chatReply(answerOnTheDM, "use main", nil))
 	if err != nil || disposition != AnswerConsumed {
 		t.Fatalf("TryResumeFromAnswer = %q, %v", disposition, err)
 	}

@@ -11,11 +11,11 @@
  */
 
 import { useRef, type ReactNode } from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useSearchTarget } from "./searchTarget.ts";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { Shell, usePageCoverage, usePublishFleet, useSectionCounts } from "./Shell.tsx";
-import { Router } from "./router.tsx";
+import { Router, buildHash } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store, type FleetAnswer } from "~/protocol/index.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
@@ -25,6 +25,10 @@ import { Inbox } from "~/routes/inbox/Inbox.tsx";
 import { installWindow } from "~/testing.tsx";
 import { PAGE_ACTIONS_SLOT, PAGE_LENSES_SLOT } from "./frame/PageActions.tsx";
 import { Project } from "~/routes/work/Project.tsx";
+import { healthFrame } from "~/test/health.ts";
+import { emptyDay } from "~/test/myWork.ts";
+import { withDerived } from "~/test/org.ts";
+import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -181,6 +185,7 @@ const EMPTY: Record<string, unknown> = {
   work_views: { complete: true, views: [] },
   work_saved_views: { complete: true, views: [] },
   work_projects: { projects: [] },
+  work_my_work: emptyDay("ada"),
   fleet: { nodes: [], seats: [], duties: [], target_epoch: 0 },
   retention: { domains: [], nodes: [], snapshots: [], alarms: [], register_readable: true },
   integrations: { integrations: [], tools: [], traffic_known: true, traffic_since: null },
@@ -296,19 +301,225 @@ describe("the Inbox badge", () => {
 
 describe("the sidebar's figures", () => {
   // THE ENGINE'S WORD, and only it: two seats working, one idle, one parked on
-  // a question — the count is two, whatever a live call says.
-  test("the Agents count is the seats the engine calls working", async () => {
+  // a question — the count is two, whatever a live call says. AND IT IS ON
+  // LIVE, which holds the running turns: on Agents it sent a reader looking
+  // for one to the org chart.
+  test("the Live count is the seats the engine calls working, and Agents carries none", async () => {
     const { store, socket } = answering({});
     mountShell(store, socket);
     act(() =>
       store.applyAgents([
         { role: "A", activity: "working" },
         { role: "B", activity: "working" },
-        { role: "C", activity: "idle", live_call: { in_progress: true } },
+        { role: "C", activity: "idle", live_call: { in_progress: true, versions: ZERO_VERSIONS } },
         { role: "D", activity: "needs" },
       ] as never),
     );
-    expect(screen.getByRole("link", { name: /^Agents/ }).textContent).toContain("2");
+    expect(screen.getByRole("link", { name: /^Live/ }).textContent).toContain("2");
+    expect(screen.getByRole("link", { name: /^Agents/ }).textContent).toBe("Agents");
+  });
+
+  // ---------------------------------------------------------------------------
+  // The running turns, from every screen
+  // ---------------------------------------------------------------------------
+
+  /** A seat the engine calls working, on `turn`, started at minute `at`. */
+  function workingSeat(role: string, turn: string, at: number, item = "") {
+    return {
+      role,
+      handle: role.toLowerCase(),
+      activity: "working",
+      turn: {
+        turn_id: turn,
+        started_at: `2026-09-21T10:${String(at).padStart(2, "0")}:00Z`,
+        stage: "phase",
+        ...(item ? { work_item: { backend: "native", id: item, key: item, project: "ENG" } } : {}),
+      },
+    };
+  }
+
+  /** The sidebar's Running group: its rows, as each one reads and where it goes. */
+  function runningRows() {
+    const nav = screen.getByRole("navigation", { name: "Navigation" });
+    const heading = within(nav).queryByText("Running", { exact: true });
+    if (!heading) return [];
+    const group = heading.closest(".crewlet-nav-group") as HTMLElement;
+    return [...group.querySelectorAll("a")].map((a) => ({
+      text: a.textContent ?? "",
+      href: a.getAttribute("href") ?? "",
+    }));
+  }
+
+  const watching = (turn: string) => buildHash(["live", "turns", turn], { tab: "transcript" });
+
+  // EACH RUNNING TURN IS A ROW THAT WATCHES IT, from any screen: the reader
+  // looking for one went Agents, the chart, a card, the profile and a tab.
+  // OLDEST FIRST, so the turn that starts is appended and nothing a reader is
+  // reaching for moves; a seat waiting on a person runs nothing and is not here.
+  test("the Running group is a row per working seat, oldest first, each watching its turn", async () => {
+    const { store, socket } = answering({});
+    mountShell(store, socket);
+    expect(runningRows(), "no group while nothing runs").toEqual([]);
+    act(() =>
+      store.applyAgents([
+        workingSeat("CTO", "t-late", 9),
+        workingSeat("SWE", "t-early", 1, "ENG-412"),
+        { role: "PM", handle: "pm", activity: "needs" },
+        { role: "QA", handle: "qa", activity: "idle" },
+      ] as never),
+    );
+    const rows = runningRows();
+    expect(rows.map((r) => r.href)).toEqual([watching("t-early"), watching("t-late")]);
+    // THE SEAT'S NAME, AND THE ITEM ITS TURN IS CHARGED TO as the row's lead.
+    expect(rows[0]!.text).toContain("SWE");
+    expect(rows[0]!.text).toContain("ENG-412");
+    expect(rows[1]!.text).toContain("CTO");
+    // A TURN THAT STARTS IS APPENDED; the rows above it hold their places.
+    act(() => store.applyAgents([workingSeat("Ops", "t-new", 20)] as never));
+    expect(runningRows().map((r) => r.href)).toEqual([
+      watching("t-early"),
+      watching("t-late"),
+      watching("t-new"),
+    ]);
+  });
+
+  // FOUR, HOME'S OWN NUMBER, then ONE row to Now running for the rest — which
+  // also counts a working seat whose turn has published no id yet, rather than
+  // linking it to nothing.
+  test("past four the rest are one row to Now running, a seat with no turn id among them", async () => {
+    const { store, socket } = answering({});
+    mountShell(store, socket);
+    act(() =>
+      store.applyAgents([
+        workingSeat("A", "t-a", 1),
+        { role: "Fresh", handle: "fresh", activity: "working", turn: null, live_call: null },
+        workingSeat("B", "t-b", 2),
+        workingSeat("C", "t-c", 3),
+        workingSeat("D", "t-d", 4),
+        workingSeat("E", "t-e", 5),
+      ] as never),
+    );
+    const rows = runningRows();
+    expect(rows.map((r) => r.href)).toEqual([
+      watching("t-a"),
+      watching("t-b"),
+      watching("t-c"),
+      watching("t-d"),
+      "#/live",
+    ]);
+    expect(rows[4]!.text).toContain("2 more running");
+    // AND THE COUNT ON LIVE IS THE WHOLE SET, the group's five rows' worth.
+    expect(screen.getByRole("link", { name: /^Live/ }).textContent).toContain("6");
+  });
+
+  // HOME'S LIVE NOW AND THE RUNNING GROUP NAME THE SAME SEATS IN THE SAME
+  // ORDER, on one screen, over one roster. They were two selections under one
+  // cap: the seat with no turn id sorted FIRST (its start read as 0) and Home
+  // drew it while the sidebar skipped it, so the two lists differed by two
+  // seats beside each other.
+  test("Home's Live now names the seats the Running group names, in its order", async () => {
+    location.hash = "#/home";
+    const { store, socket } = answering({
+      work_workload: { rows: [] },
+      sandbox_runs: { runs: [] },
+      work_projects: { projects: [], complete: true },
+    });
+    mountShell(store, socket, <Home key="home" />);
+    act(() =>
+      store.applyAgents([
+        workingSeat("A", "t-a", 1),
+        { role: "Fresh", handle: "fresh", activity: "working", turn: null, live_call: null },
+        workingSeat("B", "t-b", 2),
+        workingSeat("C", "t-c", 3),
+        workingSeat("D", "t-d", 4),
+        workingSeat("E", "t-e", 5),
+      ] as never),
+    );
+    await settle();
+    const turnOf = (hash: string) => /#\/live\/turns\/([^?]+)/.exec(hash)?.[1] ?? "";
+    const sidebar = runningRows()
+      .map((r) => turnOf(r.href))
+      .filter(Boolean);
+    const home = [...document.querySelectorAll(".live-list .live-row")].map((row) =>
+      turnOf(row.getAttribute("href") ?? ""),
+    );
+    expect(sidebar).toEqual(["t-a", "t-b", "t-c", "t-d"]);
+    expect(home).toEqual(sidebar);
+    // AND UNDER THE CAP, where the id-less seat is not crowded out by four
+    // others: it is counted on both and drawn on neither. (A push carries the
+    // rows that changed, so the three that stopped are pushed idle.)
+    act(() =>
+      store.applyAgents(
+        ["C", "D", "E"].map((role) => ({
+          role,
+          handle: role.toLowerCase(),
+          activity: "idle",
+          turn: null,
+          live_call: null,
+        })) as never,
+      ),
+    );
+    const homeRows = () =>
+      [...document.querySelectorAll(".live-list .live-row")].map((row) =>
+        turnOf(row.getAttribute("href") ?? ""),
+      );
+    expect(runningRows().map((r) => turnOf(r.href))).toEqual(["t-a", "t-b", ""]);
+    expect(homeRows()).toEqual(["t-a", "t-b"]);
+  });
+
+  // "MORE" THAN NOTHING READS AS ROWS THAT FAILED TO DRAW: with no working
+  // seat's turn named yet, the group's one row says how many run, plainly.
+  test("with no running turn named yet, the one row says how many run, not how many more", async () => {
+    const { store, socket } = answering({});
+    mountShell(store, socket);
+    act(() =>
+      store.applyAgents([
+        { role: "P", handle: "p", activity: "working", turn: null, live_call: null },
+        { role: "Q", handle: "q", activity: "working", turn: null, live_call: null },
+      ] as never),
+    );
+    const rows = runningRows();
+    expect(rows.map((r) => r.href)).toEqual(["#/live"]);
+    expect(rows[0]!.text).toContain("2 running");
+    expect(rows[0]!.text).not.toContain("more");
+  });
+
+  // THE ONE ROW THE READER IS WATCHING is the current one, as every sidebar row
+  // is the screen the reader is on.
+  test("the running turn the reader is watching is the current row", async () => {
+    location.hash = watching("t-b");
+    const { store, socket } = answering({});
+    mountShell(store, socket);
+    act(() => store.applyAgents([workingSeat("A", "t-a", 1), workingSeat("B", "t-b", 2)] as never));
+    const nav = screen.getByRole("navigation", { name: "Navigation" });
+    const current = [...nav.querySelectorAll('a[aria-current="page"]')].map((a) =>
+      a.getAttribute("href"),
+    );
+    expect(current).toContain(watching("t-b"));
+    expect(current).not.toContain(watching("t-a"));
+  });
+
+  // `g r` IS "TAKE ME TO THE RUNNING TURN": the one turn's watch link when one
+  // seat is working, and Now running — every one of them — when several are,
+  // or none.
+  test("g then r watches the one running turn, and opens Now running otherwise", async () => {
+    const { store, socket } = answering({});
+    mountShell(store, socket);
+    const chord = () =>
+      act(() => {
+        window.dispatchEvent(new KeyboardEvent("keydown", { key: "g", bubbles: true }));
+        window.dispatchEvent(new KeyboardEvent("keydown", { key: "r", bubbles: true }));
+      });
+    chord();
+    expect(location.hash).toBe("#/live");
+    location.hash = "#/";
+    act(() => store.applyAgents([workingSeat("A", "t-a", 1)] as never));
+    chord();
+    expect(location.hash).toBe(watching("t-a"));
+    location.hash = "#/";
+    act(() => store.applyAgents([workingSeat("B", "t-b", 2)] as never));
+    chord();
+    expect(location.hash).toBe("#/live");
   });
 
   // A PIN IS A PERSON'S, so every saved view is asked for WITH the viewer —
@@ -781,7 +992,7 @@ describe("the page header", () => {
     location.hash = "#/settings";
     const { store, socket } = answering({});
     mountShell(store, socket);
-    act(() => store.applyHealth({ status: "ok", applied_epoch: 2, nodes: 1 }));
+    act(() => store.applyHealth(healthFrame({ applied_epoch: 2, nodes: 1 })));
     await settle();
     const column = screen.getByRole("navigation", { name: "Settings sections" });
     const config = Array.from(column.querySelectorAll("a")).find((a) =>
@@ -798,8 +1009,8 @@ describe("the page header", () => {
   test("while a screen publishes the fleet answer the column draws it and asks none", async () => {
     const answer: FleetAnswer = {
       nodes: [
-        { id: "n1", roles: [], seats: 1, config_epoch: 3 },
-        { id: "n2", roles: [], seats: 1, config_epoch: 2 },
+        { id: "n1", roles: [], broker: "member", seats: 1, config_epoch: 3 },
+        { id: "n2", roles: [], broker: "member", seats: 1, config_epoch: 2 },
       ],
       seats: [],
       duties: [],
@@ -816,7 +1027,7 @@ describe("the page header", () => {
     const asked: { what: string }[] = [];
     const { store, socket } = answering({}, asked);
     mountShell(store, socket, <Publishing />);
-    act(() => store.applyHealth({ status: "ok", applied_epoch: 3, nodes: 2 }));
+    act(() => store.applyHealth(healthFrame({ applied_epoch: 3, nodes: 2 })));
     await settle();
     expect(asked.filter((a) => a.what === "fleet")).toEqual([]);
     const column = screen.getByRole("navigation", { name: "Settings sections" });
@@ -872,7 +1083,7 @@ test("the lockup is the company's name beside the product's mark, and goes home"
     document.querySelector<HTMLAnchorElement>(".crewlet-app-shell a[href='#/home']");
   // Before the company is known the product stands in.
   expect(home()?.textContent).toContain("Crewlet");
-  act(() => store.applyOrg({ name: "Nimbus", roles: [], units: [] }));
+  act(() => store.applyOrg(withDerived({ name: "Nimbus", roles: [], units: [] })));
   expect(home()?.textContent).toContain("Nimbus");
   expect(home()?.textContent).not.toContain("Crewlet");
   expect(home()?.querySelector("img")?.getAttribute("src")).toBe(
@@ -885,13 +1096,7 @@ test("the health card reads the push and links to the nodes", async () => {
   mountShell(store, socket);
   act(() => {
     store.setConnected(true);
-    store.applyHealth({
-      status: "healthy",
-      configured: true,
-      nodes: 3,
-      applied_epoch: 42,
-      alarms: { count: 0 },
-    });
+    store.applyHealth(healthFrame({ nodes: 3, applied_epoch: 42, alarms: { count: 0 } }));
   });
   const card = document.querySelector<HTMLAnchorElement>("a.health-card");
   expect(card?.getAttribute("href")).toBe("#/settings/nodes");

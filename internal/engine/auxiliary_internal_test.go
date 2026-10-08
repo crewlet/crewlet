@@ -283,6 +283,34 @@ func TestAFailedCallIsRecordedAndChargedWhatItReported(t *testing.T) {
 	}
 }
 
+// A REFUSED CALL IS CHARGED AND RECORDED. A refusal comes back as an error
+// with no completion, so nobody can act on its text — but the prompt was read
+// and billed, and the response the vendor charged for travels inside the
+// error ([llm.Billed]). A seam that charged only a non-nil completion counted
+// every refused reflection, compaction and prefetch call as free, and a
+// company whose transcripts the model kept declining spent tokens no gate saw.
+//
+// Mutation: read the bare completion instead of llm.Billed, and the refused
+// call charges nothing.
+func TestARefusedAuxiliaryCallIsChargedAndRecorded(t *testing.T) {
+	t.Parallel()
+	meter := &countingMeter{}
+	refusal := llm.Refused("anthropic", "test-model", &llm.Refusal{Category: "cyber",
+		Completion: &llm.Completion{Model: "test-model", InputTokens: 900, OutputTokens: 12,
+			StopReason: llm.StopRefusal}})
+	r := newSeamRig(&answeringProvider{err: refusal}, meter)
+	got, err := r.complete(t, dev, turnUse)
+	if llm.KindOf(err) != llm.KindRefusal || got != nil {
+		t.Fatalf("Complete = %+v, %v; want the provider's refusal returned as it came", got, err)
+	}
+	if meter.spent != 912 {
+		t.Errorf("charged %d tokens, want the refused response's 912", meter.spent)
+	}
+	if recs := r.flushed(t); len(recs) != 1 || recs[0].FailedCalls != 1 || recs[0].TotalTokens != 912 {
+		t.Fatalf("recorded %+v, want one failed call of the refused response's 912 tokens", recs)
+	}
+}
+
 // THE TURN'S TALLY HEARS ITS OWN CALLS. A call made with the turn's tally adds
 // what it cost there — which is what the turn's work item is charged from
 // (ADR-0022) — and a call made without one adds to nothing.
@@ -449,7 +477,8 @@ func TestWhoseCounterAnAuxiliaryCallIsChargedTo(t *testing.T) {
 	}
 	c.Models = registry
 	pub := &capturedEvents{}
-	e := &Engine{backends: &Backends{Fleet: fleet}, auxSpend: auxspend.NewLedger(pub)}
+	e := &Engine{backends: &Backends{Fleet: fleet}, auxSpend: auxspend.NewLedger(pub),
+		clock: fixedClock(budgetNow)}
 	seam := e.auxiliaryFor(c)
 
 	call := func(role *org.Role, use auxspend.Use) {
@@ -462,7 +491,7 @@ func TestWhoseCounterAnAuxiliaryCallIsChargedTo(t *testing.T) {
 			t.Fatalf("Complete: %v", err)
 		}
 	}
-	windows := coord.WindowsAt(time.Now(), time.UTC)
+	windows := coord.WindowsAt(budgetNow, time.UTC)
 	day := func(scope string) int {
 		u, err := fleet.Used(ctx, scope, windows)
 		if err != nil {
@@ -512,9 +541,9 @@ func TestAnUncappedSeatsAuxiliarySpendIsCounted(t *testing.T) {
 	fleet := coordmem.NewFleet()
 	free := &org.Role{Name: "Free"}
 	c := meteredCompany(config.TokenBudget{}, free)
-	e := &Engine{backends: &Backends{Fleet: fleet}}
+	e := &Engine{backends: &Backends{Fleet: fleet}, clock: fixedClock(budgetNow)}
 	seam := auxiliarySeam{heads: staticHeads{provider: &answeringProvider{in: 30, out: 12}},
-		org: c.Org, zone: time.UTC, charge: e.auxiliaryCharge(c), now: time.Now}
+		org: c.Org, zone: time.UTC, charge: e.auxiliaryCharge(c), now: e.now}
 	member, err := seam.Auxiliary(free, turnUse)
 	if err != nil {
 		t.Fatalf("Auxiliary: %v", err)
@@ -522,7 +551,7 @@ func TestAnUncappedSeatsAuxiliarySpendIsCounted(t *testing.T) {
 	if _, err := member.Provider.Complete(ctx, llm.Request{}); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
-	windows := coord.WindowsAt(time.Now(), time.UTC)
+	windows := coord.WindowsAt(budgetNow, time.UTC)
 	for _, scope := range []string{coord.OrgScope, scopeOf(t, c, free)} {
 		u, err := fleet.Used(ctx, scope, windows)
 		if err != nil || u.In(period.Day).Used != 42 {
@@ -574,7 +603,8 @@ func TestThePrefetchsAuxiliaryCompletionsAreChargedAndRecorded(t *testing.T) {
 	}
 	c.Models = models
 	pub := &capturedEvents{}
-	e := &Engine{backends: &Backends{Fleet: fleet}, auxSpend: auxspend.NewLedger(pub)}
+	e := &Engine{backends: &Backends{Fleet: fleet}, auxSpend: auxspend.NewLedger(pub),
+		clock: fixedClock(budgetNow)}
 
 	src := e.prefetchSources(c)
 	src.Knowledge = searchableKnowledge{}
@@ -587,7 +617,7 @@ func TestThePrefetchsAuxiliaryCompletionsAreChargedAndRecorded(t *testing.T) {
 		t.Fatalf("the auxiliary model was called %d times, want the one knowledge "+
 			"query — the case exercises nothing otherwise", provider.calls)
 	}
-	windows := coord.WindowsAt(time.Now(), time.UTC)
+	windows := coord.WindowsAt(budgetNow, time.UTC)
 	for _, scope := range []string{coord.OrgScope, scopeOf(t, c, seat)} {
 		u, err := fleet.Used(ctx, scope, windows)
 		if err != nil || u.In(period.Day).Used != 325 {

@@ -6,8 +6,9 @@
 import { expect, test } from "vitest";
 import { NAME_EXAMPLES, nameExample, reachOf, serversUpLine } from "./mcpServers.ts";
 import { indexOrg } from "./seats.ts";
+import { withDerived } from "~/test/org.ts";
 
-const seatsOf = (roles: unknown[]) => indexOrg({ name: "Acme", roles } as never).seats;
+const seatsOf = (roles: unknown[]) => indexOrg(withDerived({ name: "Acme", roles }) as never).seats;
 
 // AN EXAMPLE IS SOMETHING A READER COPIES, so it is never a name the company
 // already has — copying one walked straight into "already exists".
@@ -18,27 +19,15 @@ test("the name example is never a taken name", () => {
   expect(all.has(nameExample(all))).toBe(false);
 });
 
-// UNKNOWN IS NOT NOBODY: a per-seat server on a roster with no grant on it is
-// unknown; a shared one reaches every agent seat by the engine's own rule.
-test("a reach the roster cannot say is unknown, never nobody", () => {
-  const old = seatsOf([{ name: "PM", handle: "pm" }]);
-  expect(reachOf({ name: "github", shared: false }, old)).toEqual({
-    text: "Unknown: this node's roster does not say",
-    known: false,
-  });
-  expect(reachOf({ name: "docs", shared: true }, old)).toEqual({
-    text: "Every agent seat",
-    known: true,
-  });
+// A REACH IS THE ENGINE'S GRANT, counted off each agent seat's `tool_sources`.
+test("a reach counts the agent seats the engine grants the server", () => {
   const granted = seatsOf([
-    { name: "Dev", handle: "dev", tool_sources: ["mcp:github"] },
-    { name: "PM", handle: "pm", tool_sources: [] },
+    { name: "Dev", handle: "dev", tool_sources: ["mcp:github", "mcp:docs"] },
+    { name: "PM", handle: "pm", tool_sources: ["mcp:docs"] },
   ]);
-  expect(reachOf({ name: "github", shared: false }, granted)).toEqual({
-    text: "1 seat",
-    known: true,
-  });
-  expect(reachOf({ name: "linear", shared: false }, granted).text).toBe("No seat");
+  expect(reachOf({ name: "github" }, granted)).toBe("1 seat");
+  expect(reachOf({ name: "docs" }, granted)).toBe("Every agent seat");
+  expect(reachOf({ name: "linear" }, granted)).toBe("No seat");
 });
 
 // UP MEANS AN INSTANCE STARTED, which `running` and `partial` both are.

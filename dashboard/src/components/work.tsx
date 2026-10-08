@@ -1027,8 +1027,8 @@ export function TaskBlock({
   /**
    * The engine's count of the WHOLE claim (`WorkMyWork.totals`), which is what
    * the header draws — never `rows.length`, which is the page: a block holds at
-   * most twenty rows of however many the claim has. Absent (an engine that
-   * counts none) draws no figure rather than the page's.
+   * most twenty rows of however many the claim has. Absent while the answer
+   * has not arrived, which draws no figure rather than the page's.
    */
   total: WorkClaimTotal | undefined;
   rows: WorkSummary[];

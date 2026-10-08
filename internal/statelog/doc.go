@@ -113,17 +113,16 @@
 // # An operation id carries the instant it was minted
 //
 // Layer 1 has a hole the other two cannot fill: the ops table can LOSE ROWS.
-// The retention sweep deletes every row applied more than [OpsRetention] ago,
-// and a snapshot adopted from a donor that scrubbed its ledger — every build
-// before the ledger travelled — arrives with none of the donor's. A retry of
-// such an operation — a turn re-run under its derived id, a caller repeating
-// an `unknown` — finds no row, decides again on rows that already hold the
-// first application, and publishes a second copy the broker has no reason to
-// refuse: the expectation is current and the duplicate window long past.
+// The retention sweep deletes every row applied more than [OpsRetention] ago. A
+// retry of such an operation — a turn re-run under its derived id, a caller
+// repeating an `unknown` — finds no row, decides again on rows that already
+// hold the first application, and publishes a second copy the broker has no
+// reason to refuse: the expectation is current and the duplicate window long
+// past.
 //
 // So the ledger keeps a WATERMARK, beside it in the same file: the instant
 // before which it may have lost rows ([Rows.LostBefore], ledgerloss.go), moved
-// only forward, by whatever loses them and in the same transaction or file.
+// only forward, by the sweep that loses them and in the same transaction.
 // Before a decision is published the publisher asks whether the ledger can
 // VOUCH for the operation (Publisher.vouches): it cannot for one minted before
 // the watermark whose row it does not hold, and such a write is answered
@@ -140,9 +139,9 @@
 // the adopter holds a row for every operation its donor applied, so a retry of
 // one is answered from it, and an operation neither holds never applied — so a
 // turn woken by a trigger from before the join, whose ids carry that trigger's
-// instant, has its first attempts published like anyone's. Scrubbed, the
-// ledger could vouch for nothing minted before the adoption, and a recovering
-// node answered its own backlog `unknown`.
+// instant, has its first attempts published like anyone's. Scrubbed out of
+// the snapshot, the ledger could vouch for nothing minted before the adoption,
+// and a recovering node would answer its own backlog `unknown`.
 //
 // The instant is the operation id's OWN — a UUIDv7 whose leading bits are its
 // mint time, recovered with [OpMintedAt] and minted only by [NewOpID],
@@ -185,8 +184,9 @@
 // the highest record version its build reads ([NodePosition].RecordVersion),
 // and [Readers] reads it across the trim's own counted set: a writer about to
 // publish such a kind waits until every node that applies the log reads it —
-// a node that says nothing being one that predates the question. The vector
-// log's index records are the first such kind (internal/search, ADR-0028).
+// a node that has not reported yet reading as one that reads nothing newer.
+// No record this build writes is such a kind: the advertisement is what a
+// successor's writer of one reads.
 //
 // # A record is stamped with the lowest version that reads it
 //
@@ -384,11 +384,10 @@
 // restarted node would have nothing to compare, so the verdict is recorded in
 // the node estate when it is reached and recalled while the checkpoint names
 // the same record ([NodeEstate]): only a reanchor or an adoption, which move
-// the checkpoint, ends it. A checkpoint that names NO record — committed before
-// checkpoints named theirs — is named from this node's own ledgers, never from
-// the log's record, which is the thing in question; where nothing names it,
-// that is said and the applier goes on until its next batch names one
-// ([Runner.nameCheckpoint]).
+// the checkpoint, ends it. A checkpoint that names NO record — one a reanchor
+// placed where the log held none — has nothing to compare, and the first batch
+// the node commits names its own; it is never named from the log's record,
+// which is the thing in question.
 // The nodes whose rows are the copy's age see none of it — the log is their
 // own history — so what stops them writing records the restored reanchor of a
 // newer peer would apply nowhere is that peer's published position or flag

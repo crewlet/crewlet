@@ -329,12 +329,12 @@ A unit key is compared **folded**, and an `id` is measured against other units' 
 duplicate unit name "Platform": 2 units carry it (under unit "Engineering"; under unit "Product"). ...
 ```
 
-#### Companies stored before the name rules
+#### The name rules are admission rules
 
-Handle uniqueness has always been enforced. Seat name and unit name uniqueness are **admission rules**: they were added after companies existed, and a company that breaks one still runs exactly as it did before. The same holds for a [`unit:` reference on a seat declared inside another unit](#a-seats-unit-reference). So they are enforced where a document is *submitted* and reported where a stored one is *applied*:
+Handle uniqueness is a runnable rule: two seats on one handle share one inbox. Seat name and unit name uniqueness are **admission rules**: authoring hygiene that a company breaking one still runs under, and the part of the rule set a later build may add to or relax. The same holds for a [`unit:` reference on a seat declared inside another unit](#a-seats-unit-reference). So they are enforced where a document is *submitted* and reported where a revision is *applied* — during a rolling upgrade a newer peer may activate a revision it admitted under rules this build does not share, and refusing it would split the fleet's epoch:
 
 - **Refused on every write.** `PUT /config`, `PATCH /config`, a per-entity write, a `/setup` submission that changes the document, `crewlet config import`, `crewlet validate` and a company file `crewlet run` imports as a new revision (`-company` into an empty store, `-import-company` over a different company) all refuse a document with a duplicate seat or unit name, including a write to a company whose stored revision already carries one and a write that does not touch the duplicates. The write that corrects them is accepted.
-- **Applied with a warning.** A stored revision carrying a duplicate name (written by an earlier build, or activated by an older peer during a rolling upgrade) is applied by every node, a node boots on it (including one started with `-company` or `-import-company` naming a file that is that revision, or a `-company` file the store's own company outranks), and `POST /config/reload`, a `/setup` credential rotation (which reloads) and a revert to it still work. The vendor commands that act on a company file without storing it (`crewlet gitlab provision`, `crewlet slack provision` and their siblings, `crewlet llm status`) read such a file too. Each node logs `org_admission_warning` once for every violation when it applies the epoch, naming the revision and the entities, with the document path of each under `paths`.
+- **Applied with a warning.** A stored revision carrying a duplicate name (activated by a newer peer whose rules differ, during a rolling upgrade) is applied by every node, a node boots on it (including one started with `-company` or `-import-company` naming a file that is that revision, or a `-company` file the store's own company outranks), and `POST /config/reload`, a `/setup` credential rotation (which reloads) and a revert to it still work. The vendor commands that act on a company file without storing it (`crewlet gitlab provision`, `crewlet slack provision` and their siblings, `crewlet llm status`) read such a file too. Each node logs `org_admission_warning` once for every violation when it applies the epoch, naming the revision and the entities, with the document path of each under `paths`.
 - **Always readable.** `GET /config`, the revision reads, diffs, `crewlet config show` and `crewlet config export` serve the stored document as it is, so the duplicates can be seen and corrected.
 
 ### A unit's id is what survives a rename
@@ -361,8 +361,8 @@ resolved** — a `unit` on `create_work_item`, a `routing_unit`, every `unit=`
 filter, a project listing, a workload, a view strip's container. So
 `unit: engineering` reaches `Engineering`, and so does `unit: eng`. Where a
 reference is one unit's id and another unit's name, the **id wins**; that pair
-is refused as a duplicate key on any document you submit, so it can only reach
-a running company through a revision stored before the rule.
+is refused as a duplicate key on any document you submit, and it reaches a
+running company only through a revision applied under the runnable rules.
 
 The references *inside the org chart itself* — a unit's `lead`, a `manages`
 entry, a root seat's `unit:` — are the exception: each names a unit by its
@@ -517,7 +517,7 @@ units:
 
 A seat declared at the **root** can name the unit it belongs to with `unit:`, which is how the per-entity configuration API adds a seat to a unit. The engine moves such a seat into that unit before anything else is derived, so it inherits the unit's tool credentials and is auto-managed by the unit's lead exactly as a seat written inside the unit is. A seat moved this way is still reported, and edited, where it was written.
 
-The reference places a root seat and nothing else. A seat declared **inside** a unit is never moved by one, so a `unit:` on it that names a different unit reads as a placement and does nothing: the seat stays where it is written while the document says it belongs elsewhere. A document carrying one is refused at that seat's `unit`; repeating the name of the unit the seat is declared in is accepted. This is an [admission rule](#companies-stored-before-the-name-rules): a stored company that already carries such a reference still runs exactly as it did.
+The reference places a root seat and nothing else. A seat declared **inside** a unit is never moved by one, so a `unit:` on it that names a different unit reads as a placement and does nothing: the seat stays where it is written while the document says it belongs elsewhere. A document carrying one is refused at that seat's `unit`; repeating the name of the unit the seat is declared in is accepted. This is an [admission rule](#the-name-rules-are-admission-rules): a revision being applied that carries such a reference still runs, with a warning.
 
 ### Dangling references
 

@@ -13,6 +13,7 @@ import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { BudgetWindow, BudgetsAnswer } from "~/protocol/index.ts";
+import { healthFrame } from "~/test/health.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -53,7 +54,7 @@ const BUDGETS: BudgetsAnswer = {
 
 function mount(own: BudgetWindow | undefined, orgRefusing: boolean, budgets = BUDGETS) {
   const store = new Store();
-  store.applyHealth({ status: "healthy" });
+  store.applyHealth(healthFrame());
   store.setConnected(true);
   store.applyBudget({
     meter_id: "n:1",

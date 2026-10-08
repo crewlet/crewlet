@@ -64,7 +64,6 @@ import { ClockGlyph, CircleAlertGlyph, SquareTerminalGlyph, XGlyph } from "@crew
 import { NowLine } from "~/components/time/NowLine.tsx";
 import { SpanBar } from "~/components/time/SpanBar.tsx";
 import { TimeAxis } from "~/components/time/TimeAxis.tsx";
-import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 import {
   fmtBytes,
   fmtCount,
@@ -576,12 +575,15 @@ function ToolDetail({ span, record, agent }: { span: Span; record: PhaseRecord; 
         )}
       </div>
       {(call?.args || running?.arguments) && <span className="t-label">Input</span>}
+      {/* HALF THE RECORD CEILING EACH, derived from the one the shell declares
+          (`--record-ceiling`, frame.css) rather than restated: Input and
+          Output are read as a pair, so both fit on one screen together. */}
       {(call?.args || running?.arguments) && (
         <CodeBlock
           plain
           selectable
           copyable={false}
-          maxHeight={RECORD_MAX_HEIGHT / 2}
+          maxHeight="calc(var(--record-ceiling) / 2)"
           label="Input"
           code={call?.args || running?.arguments || ""}
         />
@@ -594,7 +596,7 @@ function ToolDetail({ span, record, agent }: { span: Span; record: PhaseRecord; 
               plain
               selectable
               copyable={false}
-              maxHeight={RECORD_MAX_HEIGHT / 2}
+              maxHeight="calc(var(--record-ceiling) / 2)"
               label="Output"
               code={call.result}
             />
@@ -656,23 +658,27 @@ function RunDetail({
       {span.open && span.launchId ? (
         <LiveOutput turnId={turnId} launchId={span.launchId} now={now} />
       ) : span.open ? (
-        <span className="t-caption">
-          This run&rsquo;s announcement names no job, so its live output cannot be asked for — it
-          arrives on the run&rsquo;s record when the run is collected.
-        </span>
+        <NoJobCaption />
       ) : record?.transcript ? (
-        <CodeBlock
-          plain
-          selectable
-          copyable
-          maxHeight={RECORD_MAX_HEIGHT}
-          label="What the run did"
-          code={record.transcript}
-        />
+        <CodeBlock plain selectable copyable label="What the run did" code={record.transcript} />
       ) : (
         <span className="t-caption">The run&rsquo;s record carries no transcript.</span>
       )}
     </>
+  );
+}
+
+/**
+ * What stands where a running coding run's live output would, when its
+ * announcement names no job to ask for: the Timeline's span detail and a
+ * parked turn's Transcript say it in the same words.
+ */
+export function NoJobCaption() {
+  return (
+    <span className="t-caption">
+      This run&rsquo;s announcement names no job, so its live output cannot be asked for — it
+      arrives on the run&rsquo;s record when the run is collected.
+    </span>
   );
 }
 
@@ -751,13 +757,6 @@ export function LiveOutput({
           : "No node holds this run right now — it is being recovered by the seat's next owner."}
       </Callout>
     );
-  } else if (answer.outcome === "owner_upgrading") {
-    notice = (
-      <Callout variant="info">
-        {answer.node ?? "The node that owns this run"} runs an older build that cannot show a run
-        live. Its output arrives on the run&rsquo;s record when it is collected.
-      </Callout>
-    );
   } else if (answer.outcome === "launching") {
     notice = (
       <span className="t-caption">
@@ -820,7 +819,6 @@ export function LiveOutput({
             plain
             selectable
             copyable
-            maxHeight={RECORD_MAX_HEIGHT}
             label={out?.source === "stderr" ? "Live output (its error stream)" : "Live output"}
             code={tail.text}
           />
@@ -852,10 +850,6 @@ const FOLLOW_SLACK_PX = 24;
  * here.
  */
 export function holdingLine(view: LiveView): string {
-  if (view.mode === "window") {
-    return view.answer?.output?.cut ? `the last ${fmtBytes(view.windowBytes)}` : "";
-  }
-  if (view.mode !== "cursor") return "";
   const parts: string[] = [];
   if (view.dropped > 0) {
     parts.push(
@@ -877,8 +871,6 @@ export function liveState(answer: SandboxTailAnswer | null | undefined, failed: 
   switch (answer.outcome) {
     case "owner_silent":
       return "The node that owns this run did not answer.";
-    case "owner_upgrading":
-      return "The node that owns this run cannot show it live.";
     case "launching":
       return "The job is being set up.";
     case "box_paused":

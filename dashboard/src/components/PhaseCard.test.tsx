@@ -10,8 +10,8 @@
  * grouped and the rendering did not say so.
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test } from "vitest";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { PhaseCard } from "./PhaseCard.tsx";
 import type { PhaseRecord } from "~/lib/phases.ts";
 import { Router } from "~/app/router.tsx";
@@ -36,8 +36,11 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     failed: false,
     error: "",
     errorKind: "",
+    refusal: null,
     systemPrompt: "",
     userPrompt: "",
+    systemSections: null,
+    userSections: null,
     response: "",
     tools: [],
     narration: [],
@@ -89,8 +92,8 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
 const TWO_ROUNDS = phase({
   roundsUsed: 2,
   narration: [
-    { round: 1, reasoning: "the file first", content: "Reading the file." },
-    { round: 2, reasoning: "that is enough", content: "Posted it." },
+    { round: 1, reasoning: "the file first", content: "Reading the file.", declined: false },
+    { round: 2, reasoning: "that is enough", content: "Posted it.", declined: false },
   ],
   tools: [
     {
@@ -212,7 +215,7 @@ describe("a round is one block", () => {
       <PhaseCard
         record={phase({
           roundsUsed: 2,
-          narration: [{ round: 2, reasoning: "", content: "Done." }],
+          narration: [{ round: 2, reasoning: "", content: "Done.", declined: false }],
           tools: [
             {
               name: "read_file",
@@ -254,7 +257,7 @@ describe("a round is one block", () => {
 describe("a failed tool call", () => {
   const withFailure = phase({
     roundsUsed: 1,
-    narration: [{ round: 1, reasoning: "", content: "Trying." }],
+    narration: [{ round: 1, reasoning: "", content: "Trying.", declined: false }],
     tools: [
       {
         name: "read_file",
@@ -403,6 +406,30 @@ describe("the phase body reads in the order the phase happened", () => {
     expect(ledger).toBeLessThan(delegated);
   });
 
+  // THE FOLD SAYS HOW BIG THE REQUEST WAS, in the bytes the Context tab counts.
+  // It said the phase's name, which the tag at the head of the card already
+  // says — and opened, it reads by the builder's map where the record has one.
+  test("the Prompt fold counts the request's size and reads it by the builder's map", () => {
+    const system = "Lead.\n\n## Quoted\nfrom a thread";
+    render(
+      <PhaseCard
+        record={phase({
+          ...FULL,
+          systemPrompt: system,
+          systemSections: [{ key: "whole", title: "The whole turn", bytes: system.length }],
+        })}
+        defaultOpen
+      />,
+    );
+    const fold = screen.getByRole("button", { name: /^Prompt/ });
+    expect(fold.textContent).toContain(`${system.length} B system`);
+    expect(fold.textContent).toContain("24 B user");
+    expect(fold.textContent).not.toContain("execute phase");
+    fireEvent.click(fold);
+    const toc = screen.getByRole("listbox", { name: /Sections of/ });
+    expect(within(toc).getAllByRole("option")[0]!.textContent).toMatch(/^The whole turn/);
+  });
+
   // AND THE FAILURE STAYS AT THE TOP, above the inputs. It is a banner rather
   // than a section — the reason the reader opened the card at all — so it is
   // the one thing that does not wait its turn in the chronology.
@@ -433,7 +460,7 @@ describe("a tool call's arguments", () => {
   function withArgs(args: string): PhaseRecord {
     return phase({
       roundsUsed: 1,
-      narration: [{ round: 1, reasoning: "", content: "Working." }],
+      narration: [{ round: 1, reasoning: "", content: "Working.", declined: false }],
       tools: [
         {
           name: "read_file",
@@ -478,10 +505,9 @@ describe("a tool call's arguments", () => {
 });
 
 // A CODING RUN IS NOT A MODEL CALL, and its card says what it is. It has no
-// rounds because the engine drove none, so the fallback that labels a joined
-// response "recorded before rounds were kept apart" would misname the report
-// the run wrote back — and the run's activity log, the whole account of what
-// an agent with no telemetry did, has to be reachable from the card.
+// rounds because the engine drove none, so its response is the report the run
+// wrote back — and the run's activity log, the whole account of what an agent
+// with no telemetry did, has to be reachable from the card.
 describe("a coding run's card", () => {
   const RUN = phase({
     key: "turn-1|sandbox|1|job-1",
@@ -493,11 +519,10 @@ describe("a coding run's card", () => {
     transcript: "[tool] bash: git clone\n[tool] bash: go test ./...",
   });
 
-  test("shows the report and the activity, never the legacy transcript", () => {
+  test("shows the report and the activity", () => {
     render(<PhaseCard record={RUN} defaultOpen />);
     expect(screen.getByText("Report")).toBeDefined();
     expect(screen.getByText(/Fixed the flake/)).toBeDefined();
-    expect(screen.queryByText(/recorded before rounds were kept apart/)).toBeNull();
     const activity = screen.getByRole("button", { name: /^Activity/ });
     fireEvent.click(activity);
     expect(screen.getByText(/go test \.\/\.\.\./)).toBeDefined();
@@ -576,5 +601,375 @@ describe("a live call's staleness", () => {
     // Drawn as the work in progress it is — never the stalled danger, nor the
     // amber that is kept for a seat that needs a person.
     expect(tag?.className).toContain("crewlet-tag--info");
+  });
+});
+
+/**
+ * A ROUND THAT ANSWERED IN PROSE SAYS WHAT BECAME OF IT.
+ *
+ * The screenshot that prompted it: an executor's second round was a fenced
+ * ```json block — `{"summary":…,"outcome":"delivered",…}` — the `submit_work`
+ * payload written as TEXT, followed by "never said what it did" and "rescued"
+ * on the header and nothing connecting the two. Prose is not a call, and the
+ * phase finishes only by one.
+ */
+describe("a round that answered in prose", () => {
+  const call = (name: string, round: number) => ({
+    name,
+    round,
+    args: "{}",
+    result: "ok",
+    failed: false,
+    durationMs: 0,
+    origin: "builtin",
+    server: "",
+    startedAt: "",
+  });
+  const SUBMISSION = '```json\n{"outcome": "delivered"}\n```';
+
+  test("before a later round, says the engine asked again", () => {
+    const { container } = render(
+      <PhaseCard
+        record={phase({
+          roundsUsed: 2,
+          narration: [
+            { round: 1, reasoning: "", content: SUBMISSION, declined: true },
+            { round: 2, reasoning: "", content: "", declined: false },
+          ],
+          tools: [call("submit_work", 2)],
+        })}
+        defaultOpen
+      />,
+    );
+    const [first, second] = [...container.querySelectorAll(".round")];
+    expect(first!.querySelector(".round-note")?.textContent).toMatch(/asked it again/);
+    // Neutral: the loop working is not a caution.
+    expect(first!.querySelector(".round-note.caution")).toBeNull();
+    // THE CONTROL: a round that called its tool carries no note.
+    expect(second!.querySelector(".round-note")).toBeNull();
+    expect(screen.getByText("1 answered in prose")).toBeDefined();
+    // The node on the rail says it too, where a reader scanning for the round
+    // that went wrong looks — the note alone, at caption size, was easy to miss.
+    expect(first!.classList.contains("declined")).toBe(true);
+    expect(second!.classList.contains("declined")).toBe(false);
+  });
+
+  test("as the last round of a settled phase, says the phase ended without its submission", () => {
+    const { container } = render(
+      <PhaseCard
+        record={phase({
+          roundsUsed: 2,
+          decision: "incomplete",
+          rescueFired: true,
+          narration: [
+            { round: 1, reasoning: "", content: "Commenting.", declined: false },
+            { round: 2, reasoning: "", content: SUBMISSION, declined: true },
+          ],
+          tools: [call("comment_on_work_item", 1)],
+        })}
+        defaultOpen
+      />,
+    );
+    const note = container.querySelectorAll(".round")[1]!.querySelector(".round-note.caution");
+    expect(note?.textContent).toMatch(/last round/);
+    expect(note?.textContent).toMatch(/without its submission/);
+    expect(note?.textContent).toMatch(/rescued/);
+  });
+
+  test("as the newest round of a running phase, claims neither outcome", () => {
+    const { container } = render(
+      <PhaseCard
+        record={phase({
+          live: true,
+          roundsUsed: 1,
+          narration: [{ round: 1, reasoning: "", content: SUBMISSION, declined: true }],
+        })}
+        defaultOpen
+      />,
+    );
+    const note = container.querySelector(".round-note")?.textContent ?? "";
+    expect(note).toMatch(/finishes only by calling a tool/);
+    expect(note).not.toMatch(/asked it again|last round/);
+  });
+
+  test("the rescue chip says the phase ended without its submission, not that it was re-asked", () => {
+    render(<PhaseCard record={phase({ rescueFired: true, decision: "incomplete" })} />);
+    const title = screen.getByText("rescued").closest("[title]")?.getAttribute("title") ?? "";
+    expect(title).toMatch(/ended without its submission/);
+    expect(title).not.toMatch(/re-asked/);
+  });
+});
+
+/**
+ * A MODEL'S WORDS ARE THE MARKDOWN IT WROTE — its speech, its thinking, a
+ * coding run's report — read by a model's habits rather than a document's.
+ */
+describe("a model's words", () => {
+  const SAID = [
+    "## Summary",
+    "Name: the fix",
+    "Status: posted",
+    "",
+    "```json",
+    '{"outcome": "delivered"}',
+    "```",
+  ].join("\n");
+
+  test("a round's speech renders its fence as code and its lines as lines", () => {
+    const { container } = render(
+      <PhaseCard
+        record={phase({
+          roundsUsed: 1,
+          narration: [{ round: 1, reasoning: "", content: SAID, declined: false }],
+        })}
+        defaultOpen
+      />,
+    );
+    const round = container.querySelector(".round")!;
+    // The fence is a block of code holding the exact bytes, not three
+    // backticks and a language tag in a paragraph.
+    expect(round.querySelector("pre.md-code")?.textContent).toBe('{"outcome": "delivered"}');
+    expect(round.textContent).not.toContain("```");
+    // Each single newline the model wrote is a line of its own.
+    expect(round.querySelectorAll("br").length).toBeGreaterThanOrEqual(1);
+  });
+
+  test("its headings are styled lines, never headings of the turn page", () => {
+    // A transcript item is not a section of the page — the rule a tool row's
+    // disclosure keeps by rendering no heading either.
+    const { container } = render(
+      <PhaseCard
+        record={phase({
+          roundsUsed: 1,
+          narration: [{ round: 1, reasoning: "## Weighing it", content: SAID, declined: false }],
+        })}
+        defaultOpen
+      />,
+    );
+    const ledger = container.querySelector(".round-ledger")!;
+    expect(ledger.querySelectorAll("h1, h2, h3, h4, h5, h6")).toHaveLength(0);
+    expect(ledger.querySelector(".md-heading")?.textContent).toBe("Summary");
+  });
+
+  test("a coding run's report renders the same way", () => {
+    render(
+      <PhaseCard
+        record={phase({
+          key: "turn-1|sandbox|1|job-1",
+          phase: "sandbox",
+          backend: "sandbox",
+          launchId: "job-1",
+          response: "Opened **the pull request**.",
+        })}
+        defaultOpen
+      />,
+    );
+    expect(screen.getByText("the pull request").closest("strong")).not.toBeNull();
+  });
+});
+
+/**
+ * A RUNNING PHASE'S TRANSCRIPT FOLLOWS ITS NEWEST ROUND — and keeps following
+ * through everything that changes the box rather than what is in it.
+ *
+ * jsdom lays nothing out and has no ResizeObserver, so the observer is a stub
+ * this suite fires by hand and the box's geometry is defined on the element.
+ * What is asserted is the wiring the layout depends on: WHICH elements are
+ * observed, and where the box is left after an observation.
+ */
+describe("a running phase's transcript", () => {
+  class Watching {
+    static live: Watching[] = [];
+    observed: Element[] = [];
+    constructor(readonly report: ResizeObserverCallback) {
+      Watching.live.push(this);
+    }
+    observe(el: Element) {
+      this.observed.push(el);
+    }
+    unobserve() {}
+    disconnect() {
+      Watching.live = Watching.live.filter((w) => w !== this);
+    }
+  }
+  const real = globalThis.ResizeObserver;
+  beforeEach(() => {
+    Watching.live = [];
+    globalThis.ResizeObserver = Watching as unknown as typeof ResizeObserver;
+  });
+  afterEach(() => {
+    globalThis.ResizeObserver = real;
+  });
+
+  /** Whatever is observing right now reports a change of size. */
+  const resize = () => {
+    for (const w of [...Watching.live]) w.report([], w as unknown as ResizeObserver);
+  };
+
+  /** A box holding 1000px of transcript in a 200px view, so its end is 800. */
+  function geometry(box: HTMLElement): HTMLElement {
+    let top = 0;
+    Object.defineProperty(box, "scrollHeight", { configurable: true, get: () => 1000 });
+    Object.defineProperty(box, "clientHeight", { configurable: true, get: () => 200 });
+    Object.defineProperty(box, "scrollTop", {
+      configurable: true,
+      get: () => top,
+      set: (v: number) => {
+        top = Math.min(v, 800);
+      },
+    });
+    return box;
+  }
+
+  const LIVE = phase({ ...TWO_ROUNDS, live: true });
+  const box = (container: HTMLElement) => container.querySelector<HTMLElement>(".tail-scroll");
+
+  test("is bounded only while it runs; a finished one flows", () => {
+    const live = render(<PhaseCard record={LIVE} defaultOpen />);
+    expect(box(live.container)?.classList.contains("tailing")).toBe(true);
+    cleanup();
+    const settled = render(<PhaseCard record={TWO_ROUNDS} defaultOpen />);
+    // THE CONTROL: the box is there, with the same frame, and is not bounded.
+    expect(box(settled.container)).not.toBeNull();
+    expect(box(settled.container)?.classList.contains("tailing")).toBe(false);
+  });
+
+  test("observes the box itself, so a window that changes its height re-sticks the tail", () => {
+    // The box's bound is the scroller's view, so a resized window resizes the
+    // BOX while its content stays put — and a tail measured only on the
+    // content came unstuck by the difference.
+    const { container } = render(<PhaseCard record={LIVE} defaultOpen />);
+    const scroller = box(container)!;
+    const observed = Watching.live.flatMap((w) => w.observed);
+    expect(observed).toContain(scroller);
+    expect(observed).toContain(scroller.querySelector(".round-ledger"));
+    geometry(scroller);
+    resize();
+    expect(scroller.scrollTop).toBe(800);
+  });
+
+  test("a reader who scrolled up is left where they are", () => {
+    const { container } = render(<PhaseCard record={LIVE} defaultOpen />);
+    const scroller = geometry(box(container)!);
+    resize();
+    scroller.scrollTop = 100;
+    fireEvent.scroll(scroller);
+    resize();
+    expect(scroller.scrollTop).toBe(100);
+  });
+
+  test("and is following again once they close the card and open it", () => {
+    // The flag outlived the element: the reopened card's NEW box inherited
+    // "not following" from the one the reader had scrolled, and never stuck.
+    const { container } = render(<PhaseCard record={LIVE} defaultOpen />);
+    const first = geometry(box(container)!);
+    resize();
+    first.scrollTop = 100;
+    fireEvent.scroll(first);
+    const head = container.querySelector(".phase-head")!;
+    fireEvent.click(head);
+    expect(box(container)).toBeNull();
+    fireEvent.click(head);
+    const second = geometry(box(container)!);
+    expect(second).not.toBe(first);
+    resize();
+    expect(second.scrollTop).toBe(800);
+  });
+
+  test("follows from its first round when it was opened before there was one", () => {
+    // The rounds section exists only once a round does, so the box is mounted
+    // AFTER the phase went live — and an effect keyed on liveness alone had
+    // already run against nothing, and never attached to it.
+    const opening = phase({ live: true, roundsUsed: 0 });
+    const { container, rerender } = render(<PhaseCard record={opening} defaultOpen />);
+    expect(box(container)).toBeNull();
+    rerender(<PhaseCard record={LIVE} defaultOpen />);
+    const scroller = box(container)!;
+    expect(Watching.live.flatMap((w) => w.observed)).toContain(scroller);
+    geometry(scroller);
+    resize();
+    expect(scroller.scrollTop).toBe(800);
+  });
+});
+
+/**
+ * A ROUND THAT DID NOT FINISH, AND A MODEL THAT DECLINED, ARE SAID IN WORDS.
+ *
+ * The engine ends a phase on a round its output cap cut off, one that filled
+ * the context window, and one its model refused — and none of them looks
+ * different on the round itself: the words read like any round's, and a call
+ * the cap cut off was never run, so there is no failed row to catch the eye.
+ * The round's stop reason is what says which, and a refusal is a decision the
+ * header names as one rather than an error kind that reads as the engine
+ * refusing.
+ */
+describe("a phase a round did not finish", () => {
+  const timed = (round: number, stopReason: string) => ({
+    round,
+    startedAt: "",
+    durationMs: 0,
+    model: "m",
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    toolCalls: 0,
+    stopReason,
+  });
+
+  test("a round the cap cut off says so, and the round that finished does not", () => {
+    const { container } = render(
+      <PhaseCard
+        record={phase({
+          failed: true,
+          errorKind: "max_tokens",
+          error: "cut off",
+          roundsUsed: 2,
+          narration: [
+            { round: 1, reasoning: "", content: "Reading.", declined: false },
+            { round: 2, reasoning: "", content: "Posting the summ", declined: false },
+          ],
+          timedRounds: [timed(1, "tool_use"), timed(2, "max_tokens")],
+        })}
+        defaultOpen
+      />,
+    );
+    const [first, second] = [...container.querySelectorAll(".round")];
+    expect(second!.querySelector(".round-note.critical")?.textContent).toMatch(/output cap/);
+    expect(second!.classList.contains("errored")).toBe(true);
+    // THE CONTROL: a round that finished carries no note and no mark.
+    expect(first!.querySelector(".round-note")).toBeNull();
+    expect(first!.classList.contains("errored")).toBe(false);
+    expect(screen.getByText("max_tokens")).toBeDefined();
+  });
+
+  test("a refused phase is named as declined, with what the vendor said, even with no words", () => {
+    const { container } = render(
+      <PhaseCard
+        record={phase({
+          failed: true,
+          errorKind: "refusal",
+          error: "llm anthropic/m: refusal: the model declined the request (cyber)",
+          refusal: { category: "cyber", explanation: "exploit development" },
+          roundsUsed: 1,
+          narration: [],
+          tools: [],
+          timedRounds: [timed(1, "refusal")],
+        })}
+        defaultOpen
+      />,
+    );
+    expect(screen.getByText("declined by model")).toBeDefined();
+    // Not the error kind's word, which reads as the engine refusing.
+    expect(screen.queryByText("refusal")).toBeNull();
+    const body = container.querySelector(".phase-body")!.textContent ?? "";
+    expect(body).toMatch(/declined this request/);
+    expect(body).toMatch(/cyber/);
+    expect(body).toMatch(/exploit development/);
+    expect(body).toMatch(/not ask it again|does not ask it again/);
+    // The refused round said nothing and ran nothing, and it still has its
+    // place on the rail — it is the round that explains why the phase ended.
+    const rounds = container.querySelectorAll(".round");
+    expect(rounds.length).toBe(1);
+    expect(rounds[0]!.querySelector(".round-note.critical")?.textContent).toMatch(/declined/);
   });
 });

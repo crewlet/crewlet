@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -232,10 +231,7 @@ func TestAChartOlderThanTheLedgerIsStillDecided(t *testing.T) {
 	// activation is older than that. A minute rather than now, so the
 	// apply's own mint, which an id resolves to the millisecond, is
 	// unambiguously after it.
-	if err := statelog.RecordLedgerLoss(t.Context(), r.db,
-		tracker.Domain{}, time.Now().Add(-time.Minute)); err != nil {
-		t.Fatalf("record the ledger's watermark: %v", err)
-	}
+	r.markLedgerLost(time.Now().Add(-time.Minute))
 	wrote, err := r.writer.ApplyChart(t.Context(), activation(0), []tracker.ChartProject{
 		{Key: "ENG", Name: "Engineering", Unit: "Eng"},
 	})
@@ -299,10 +295,7 @@ func TestAnUnknownChartWriteIsAnError(t *testing.T) {
 	r := newRoundTripWithoutProject(t)
 	// THE LEDGER HAS LOST ROWS UP TO AN HOUR FROM NOW, so it can vouch for
 	// no operation minted before then — which is every one this apply mints.
-	if err := statelog.RecordLedgerLoss(t.Context(), r.db,
-		tracker.Domain{}, time.Now().Add(time.Hour)); err != nil {
-		t.Fatalf("record the ledger's watermark: %v", err)
-	}
+	r.markLedgerLost(time.Now().Add(time.Hour))
 	wrote, err := r.writer.ApplyChart(t.Context(), activation(0), []tracker.ChartProject{
 		{Key: "ENG", Name: "Engineering", Unit: "Eng"},
 	})

@@ -229,7 +229,7 @@ function FindSeat({ index, onFound }: { index: OrgIndex; onFound?: (seat: Seat) 
         onCommit={(option) => {
           const seat = found.find((s) => s.key === option.value);
           if (!seat) return;
-          const ref = { kind: "seat" as const, id: seat.handle || seat.name };
+          const ref = { kind: "seat" as const, id: seat.handle };
           // A PEEK ALREADY OPEN IS MOVED, not stacked: Back from the found
           // seat leaves the list, as `[` and `]` do.
           if (peek) move(ref);

@@ -37,7 +37,7 @@ func TestTheDutyTrainsAnIndexAndItsRolloutConverges(t *testing.T) {
 	// measurement, which TestAMeasurementThatMissesTheFloorRetrains is not.
 	embedder := topicalEmbedder{width: 384, topics: 16}
 	now := time.Unix(1_700_000_000, 0).UTC()
-	duty := indexDuty(t, h, embedder, h.standing(map[string]int{"node-a": search.RecordVersion}),
+	duty := indexDuty(t, h, embedder, h.standing(),
 		func() time.Time { return now })
 	// ENOUGH THAT AN ANSWER IS A SMALL SHARE OF ITS TOPIC: the shipped
 	// answer is 150 documents deep, and a topic much smaller than that is
@@ -100,16 +100,11 @@ func TestTheDutyTrainsAnIndexAndItsRolloutConverges(t *testing.T) {
 			measured.Head, measured.Head.MeasuredAt, state.Head.Generation, now)
 	}
 
-	// AND EVERY RECORD THE DUTY PUBLISHED IS AT THE VERSION ITS KINDS WERE
-	// INTRODUCED AT: a document's at 1, which every build reads, and the
-	// index's at 2.
+	// AND EVERY RECORD THE DUTY PUBLISHED IS AT THE BASE VERSION: every kind
+	// it writes, the index's included, is in the base format.
 	for version, kinds := range publishedVersions(t, h) {
 		for kind := range kinds {
-			want := 1
-			if kind == search.IndexSource {
-				want = search.IndexRecordVersion()
-			}
-			if version != want {
+			if want := 1; version != want {
 				t.Fatalf("the duty published %s records at version %d, want %d",
 					kind, version, want)
 			}
@@ -140,7 +135,7 @@ func TestAMeasurementThatMissesTheFloorRetrains(t *testing.T) {
 	h := newEmbedHarness(t)
 	embedder := topicalEmbedder{width: 384, topics: 8, noise: 0.8, drifted: 1}
 	now := time.Unix(1_700_000_000, 0).UTC()
-	duty := indexDuty(t, h, embedder, h.standing(map[string]int{"node-a": search.RecordVersion}),
+	duty := indexDuty(t, h, embedder, h.standing(),
 		func() time.Time { return now })
 	bodies := taskBodies(2_200)
 	for i := 2_048; i < 2_200; i++ {
@@ -173,27 +168,19 @@ func TestAMeasurementThatMissesTheFloorRetrains(t *testing.T) {
 	}
 }
 
-// NOTHING ABOUT THE INDEX IS PUBLISHED WHILE A NODE APPLYING THE LOG CANNOT
-// READ IT — AND NOTHING IS DECIDED FROM A NODE THAT HAS NOT APPLIED THE LOG.
+// NOTHING IS DECIDED FROM A NODE THAT HAS NOT APPLIED THE LOG.
 //
-// A build older than the index's records stops its applier at the first one:
-// its envelope decode refuses a subject kind it does not know, and the
-// framework stops rather than defers on an envelope it cannot read. So while
-// the log counts a node advertising no build that reads them — or one that
-// reads below [search.IndexRecordVersion] — the duty embeds as ever and
-// publishes nothing about the index, and the corpus keeps the full scan.
-// The moment the last such node is upgraded, the next tick trains.
-//
-// And a duty on a node that has not applied the whole log decides nothing from
-// its rows: it would see the index the log already replaced, or none, and
-// train over a healthy one.
-func TestTheIndexWaitsForEveryReaderAndForTheLog(t *testing.T) {
+// A duty on a node that has not applied the whole log would see the index the
+// log already replaced, or none, and train over a healthy one. So while the
+// node is behind, the duty embeds as ever and publishes nothing about the
+// index, and the corpus keeps the full scan; the moment it has applied the
+// log, the next tick trains.
+func TestTheIndexWaitsForTheLog(t *testing.T) {
 	t.Parallel()
 	h := newEmbedHarness(t)
 	embedder := topicalEmbedder{width: 128, topics: 8}
-	readers := map[string]int{"node-a": search.RecordVersion, "node-old": 0}
-	behind := false
-	standing := h.standing(readers)
+	behind := true
+	standing := h.standing()
 	duty := indexDuty(t, h, embedder, func(ctx context.Context) (search.LogStanding, error) {
 		s, err := standing(ctx)
 		if behind {
@@ -205,159 +192,17 @@ func TestTheIndexWaitsForEveryReaderAndForTheLog(t *testing.T) {
 
 	state, _ := runToRest(t, h, duty, embedder.width)
 	if state.Sources != 2_000 || state.Indexed {
-		t.Fatalf("with a node on a build that cannot read the index, the duty "+
-			"came to rest over %d sources with an index row %+v — that node's "+
-			"applier stops on the first index record", state.Sources, state.Head)
+		t.Fatalf("a duty that had not applied the log came to rest over %d sources "+
+			"with an index row %+v", state.Sources, state.Head)
 	}
 	if kinds := publishedKinds(t, h); kinds[search.IndexSource] != 0 {
-		t.Fatalf("the log carries %d record(s) about the index while a node "+
-			"cannot read one", kinds[search.IndexSource])
-	}
-
-	readers["node-old"] = search.IndexRecordVersion() - 1
-	if state, _ = runToRest(t, h, duty, embedder.width); state.Indexed {
-		t.Fatalf("a node reading below the index's version held nothing back: %+v",
-			state.Head)
-	}
-
-	// BEHIND THE LOG, with every reader upgraded: still nothing.
-	readers["node-old"] = search.IndexRecordVersion()
-	behind = true
-	if state, _ = runToRest(t, h, duty, embedder.width); state.Indexed {
-		t.Fatalf("a duty that had not applied the log trained an index: %+v",
-			state.Head)
+		t.Fatalf("the log carries %d record(s) about the index from a node behind it",
+			kinds[search.IndexSource])
 	}
 	behind = false
 	if state, _ = runToRest(t, h, duty, embedder.width); !state.Indexed || state.Head.Lists == 0 {
-		t.Fatalf("with every reader upgraded and the log applied, the duty came "+
-			"to rest with %+v", state.Head)
+		t.Fatalf("with the log applied, the duty came to rest with %+v", state.Head)
 	}
-}
-
-// A NODE COUNTED WHILE A STEP RAN HOLDS WHAT THE STEP WOULD PUBLISH.
-//
-// The step is decided from the readers read at the tick's start, and a
-// training publishes minutes later — on a slow node many, its arithmetic
-// exempt from the tick's bound. A node that begins counting on the log in
-// between — an old binary booted as a new data node, a node rolled back
-// mid-upgrade — stops its applier on the first index record rather than
-// deferring it. So the readers are read again beside every index append: a
-// node counted during the training's arithmetic holds the centroids record,
-// one counted after the first batch of a rollout holds the rest, one counted
-// during a measurement holds its record, and once it is upgraded the duty
-// takes each step again and finishes.
-func TestAReaderCountedWhileAStepRunsHoldsWhatItWouldPublish(t *testing.T) {
-	t.Parallel()
-	h := newEmbedHarness(t)
-	embedder := topicalEmbedder{width: 128, topics: 8}
-	standing := h.standing(map[string]int{"node-a": search.RecordVersion})
-	var (
-		mu     sync.Mutex
-		joined bool
-		// joinOn is the step whose progress counts an old node in.
-		joinOn string
-		now    = time.Unix(1_700_000_000, 0).UTC()
-	)
-	join := func(on string) {
-		mu.Lock()
-		defer mu.Unlock()
-		if joinOn == on {
-			joined = true
-		}
-	}
-	duty := boundedDuty(t, h, embedder, func(ctx context.Context) (search.LogStanding, error) {
-		s, err := standing(ctx)
-		mu.Lock()
-		defer mu.Unlock()
-		if joined {
-			s.Readers = maps.Clone(s.Readers)
-			s.Readers["node-old"] = 0
-		}
-		return s, err
-	}, func() time.Time {
-		mu.Lock()
-		defer mu.Unlock()
-		return now
-	}, hookedBudget{advanced: func() { join("rollout") }, exempt: func() { join("arithmetic") }})
-	h.seedTasks(taskBodies(2_000))
-	arm := func(on string, counted bool) {
-		mu.Lock()
-		defer mu.Unlock()
-		joinOn, joined = on, counted
-	}
-
-	// THE TRAINING: its arithmetic counts the old node in, after the tick
-	// decided to train with every reader upgraded.
-	arm("arithmetic", false)
-	state, _ := runToRest(t, h, duty, embedder.width)
-	if state.Sources != 2_000 || state.Indexed {
-		t.Fatalf("a node counted while the index trained did not hold it: the duty "+
-			"came to rest over %d sources with %+v", state.Sources, state.Head)
-	}
-	if kinds := publishedKinds(t, h); kinds[search.IndexSource] != 0 {
-		t.Fatalf("the log carries %d record(s) about the index, published past a "+
-			"node counted while the training ran", kinds[search.IndexSource])
-	}
-
-	// UPGRADED: the next tick trains again and publishes its centroids.
-	arm("", false)
-	if published, err := duty.Tick(t.Context()); err != nil || published != 1 {
-		t.Fatalf("the training tick published %d record(s) (%v), want its centroids", published, err)
-	}
-	h.drain()
-	if state, _ = search.IndexStateOf(t.Context(), duty, embedder.width); !state.Indexed ||
-		state.Stale() == 0 {
-		t.Fatalf("after the training the index reads %+v with %d rows unfiled, want "+
-			"an installed index whose rollout is still to come", state.Head, state.Stale())
-	}
-
-	// THE ROLLOUT: its first batch counts the old node in, and the rest wait.
-	arm("rollout", false)
-	published, err := duty.Tick(t.Context())
-	if err != nil || published != 1 {
-		t.Fatalf("a rollout that counted a node after its first batch published %d "+
-			"batch(es) (%v), want that first one alone", published, err)
-	}
-	h.drain()
-	if state, _ = search.IndexStateOf(t.Context(), duty, embedder.width); state.Stale() == 0 {
-		t.Fatal("the whole rollout landed past a node counted after its first batch")
-	}
-	arm("", false)
-	if state, _ = runToRest(t, h, duty, embedder.width); !state.Indexed || state.Stale() != 0 {
-		t.Fatalf("once every reader was upgraded the duty came to rest with %d rows "+
-			"unfiled (%+v)", state.Stale(), state.Head)
-	}
-
-	// A DAY ON, THE MEASUREMENT: its arithmetic counts the old node in, and
-	// its record waits for the upgrade too.
-	mu.Lock()
-	now = now.Add(search.IVFMeasureInterval)
-	mu.Unlock()
-	arm("arithmetic", false)
-	if published, err := duty.Tick(t.Context()); err != nil || published != 0 {
-		t.Fatalf("a measurement that counted a node while it ran published %d "+
-			"record(s) (%v), want none", published, err)
-	}
-	arm("", false)
-	if published, err := duty.Tick(t.Context()); err != nil || published != 1 {
-		t.Fatalf("the upgraded fleet's measurement published %d record(s) (%v), "+
-			"want its one", published, err)
-	}
-	h.drain()
-	if measured, _ := search.IndexStateOf(t.Context(), duty, embedder.width); !measured.Head.MeasuredAt.Equal(now) {
-		t.Fatalf("the measurement is dated %v, want %v", measured.Head.MeasuredAt, now)
-	}
-}
-
-// hookedBudget is a budget that runs a hook on each report — the progress a
-// step shows, and the arithmetic it exempts — and bounds nothing.
-type hookedBudget struct{ advanced, exempt func() }
-
-func (b hookedBudget) Advanced() { b.advanced() }
-
-func (b hookedBudget) Exempt() func() {
-	b.exempt()
-	return func() {}
 }
 
 // indexDuty is a duty over the harness's tasks, embedding with embedder and
@@ -568,7 +413,7 @@ func TestATrainingShowsTheTicksBoundItsProgress(t *testing.T) {
 	embedder := topicalEmbedder{width: 384, topics: 16}
 	now := time.Unix(1_700_000_000, 0).UTC()
 	budget := &watchedBudget{advanced: map[string]int{}}
-	duty := boundedDuty(t, h, embedder, h.standing(map[string]int{"node-a": search.RecordVersion}),
+	duty := boundedDuty(t, h, embedder, h.standing(),
 		func() time.Time { return now }, budget)
 	h.seedTasks(taskBodies(2_200))
 	ctx := &arithmeticWatch{Context: t.Context(), budget: budget}

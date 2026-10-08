@@ -120,11 +120,11 @@ type PutMeta struct {
 //
 // A backend keeps bytes under whatever name it is handed and hands every name
 // back verbatim. It parses none: what a name means — an object's key under
-// the engine's namespace ([Key.Name]), a chunk an earlier build stored, or
-// somebody else's object entirely — is this package's grammar and the
-// collector's judgement, so it is written once, here, rather than once per
-// backend, and a backend can never hide an object from the collector by
-// declining to list a name it did not understand.
+// the engine's namespace ([Key.Name]) or somebody else's object entirely —
+// is this package's grammar and the collector's judgement, so it is written
+// once, here, rather than once per backend, and a backend can never hide an
+// object from the collector by declining to list a name it did not
+// understand.
 //
 // A NAME IS PUT ONCE. The store never reuses one ([Key]), so what a second put
 // of a held name does is no backend's promise, and nothing here depends on

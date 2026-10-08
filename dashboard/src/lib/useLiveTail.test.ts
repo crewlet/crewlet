@@ -8,7 +8,7 @@
 
 import { describe, expect, test } from "vitest";
 import { LIVE_OUTPUT_MAX_BYTES } from "~/contract/sandbox.ts";
-import type { SandboxOutput, SandboxTailAnswer, SandboxWindow } from "~/protocol/index.ts";
+import type { SandboxOutput, SandboxTailAnswer } from "~/protocol/index.ts";
 import { EMPTY_VIEW, cursorParams, foldTail, trimFront, type LiveView } from "./useLiveTail.ts";
 import { utf8Bytes } from "./format.ts";
 
@@ -16,19 +16,7 @@ function answered(output: SandboxOutput): SandboxTailAnswer {
   return { outcome: "tail", turn_id: "t", launch_id: "L", output };
 }
 
-/** A window, from an owner that reads no cursor. */
-function tail(output: Partial<SandboxWindow>): SandboxTailAnswer {
-  return answered({
-    text: "",
-    source: "transcript",
-    cut: false,
-    as_of: "2026-10-06T09:00:00Z",
-    finished: false,
-    ...output,
-  });
-}
-
-/** A cursor answer: a reset carrying `text` from `start`, or a delta after it. */
+/** An answer: a reset carrying `text` from `start`, or a delta after it. */
 function cursored(
   text: string,
   start: number,
@@ -41,13 +29,11 @@ function cursored(
     cut: false,
     as_of: "2026-10-06T09:00:00Z",
     finished: false,
-    cursor: true,
     reset,
     epoch,
     start,
     end: start + utf8Bytes(text),
     digest: `d${start + utf8Bytes(text)}`,
-    window_bytes: LIVE_OUTPUT_MAX_BYTES,
   });
 }
 
@@ -58,16 +44,11 @@ describe("a live view", () => {
   // Mutation: replace on every answer, and the second line is all it holds.
   test("holds what it was sent, and asks from where it holds through", () => {
     let view: LiveView = EMPTY_VIEW;
-    expect(cursorParams(view)).toEqual({ cursor: true });
+    expect(cursorParams(view)).toEqual({});
     view = foldTail(view, cursored("one\n", 0, true));
     view = foldTail(view, cursored("two\n", 4, false));
     expect(view.text).toBe("one\ntwo\n");
-    expect(cursorParams(view)).toEqual({
-      cursor: true,
-      epoch: "transcript@0",
-      after: 8,
-      digest: "d8",
-    });
+    expect(cursorParams(view)).toEqual({ epoch: "transcript@0", after: 8, digest: "d8" });
     expect(view.dropped).toBe(0);
   });
 
@@ -86,12 +67,11 @@ describe("a live view", () => {
       EMPTY_VIEW,
       wire(
         `{"text":"","source":"none","cut":false,"as_of":"2026-10-06T09:00:00Z","finished":false,` +
-          `"window_bytes":262144,"cursor":true,"epoch":"stderr@0","start":0,"end":0,` +
+          `"epoch":"stderr@0","start":0,"end":0,` +
           `"digest":"e3b0c44298fc1c149afbf4c8996fb924","reset":true}`,
       ),
     );
     expect(cursorParams(view)).toEqual({
-      cursor: true,
       epoch: "stderr@0",
       after: 0,
       digest: "e3b0c44298fc1c149afbf4c8996fb924",
@@ -100,12 +80,11 @@ describe("a live view", () => {
       view,
       wire(
         `{"text":"cloning\\n","source":"stderr","cut":false,"as_of":"2026-10-06T09:00:03Z",` +
-          `"finished":false,"window_bytes":262144,"cursor":true,"epoch":"stderr@0","start":0,` +
-          `"end":8,"digest":"d8"}`,
+          `"finished":false,"epoch":"stderr@0","start":0,"end":8,"digest":"d8"}`,
       ),
     );
     expect(view.text).toBe("cloning\n");
-    expect(cursorParams(view)).toEqual({ cursor: true, epoch: "stderr@0", after: 8, digest: "d8" });
+    expect(cursorParams(view)).toEqual({ epoch: "stderr@0", after: 8, digest: "d8" });
   });
 
   // A RESET REPLACES what the view held, and says where it begins.
@@ -124,7 +103,7 @@ describe("a live view", () => {
     let view = foldTail(EMPTY_VIEW, cursored("one\n", 0, true));
     view = foldTail(view, cursored("elsewhere\n", 40, false));
     expect(view.text).toBe("one\n");
-    expect(cursorParams(view)).toEqual({ cursor: true });
+    expect(cursorParams(view)).toEqual({});
   });
 
   // IT HOLDS AT MOST WHAT THE RECORD WILL, dropping its FRONT on a line and
@@ -144,20 +123,10 @@ describe("a live view", () => {
     expect(view.end).toBe(at);
   });
 
-  // AN OLDER OWNER'S WINDOW REPLACES, and the view says it holds a window.
-  test("holds a window as a window", () => {
-    let view = foldTail(EMPTY_VIEW, cursored("held\n", 0, true));
-    view = foldTail(view, tail({ text: "the window\n", cut: true }));
-    expect(view.text).toBe("the window\n");
-    expect(view.mode).toBe("window");
-    expect(view.windowBytes).toBe(8 << 10);
-    expect(cursorParams(view)).toEqual({ cursor: true });
-  });
-
   // ONLY `not_running` ENDS THE ASKING, and what the view holds stays.
   test("stops on a job that is not running, and on nothing else", () => {
     const held = foldTail(EMPTY_VIEW, cursored("output\n", 0, true));
-    for (const outcome of ["launching", "box_paused", "owner_silent", "owner_upgrading"] as const) {
+    for (const outcome of ["launching", "box_paused", "owner_silent"] as const) {
       const view = foldTail(held, { outcome, turn_id: "t", launch_id: "L" });
       expect(view.final, outcome).toBe(false);
       expect(view.text, outcome).toBe("output\n");

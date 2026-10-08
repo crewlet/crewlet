@@ -50,15 +50,10 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 			"owner":      lease.Owner,
 			"epoch":      lease.Epoch,
 			"expires_in": secondsLeft(lease.ExpiresAt, now),
-		}
-		// SINCE WHEN this node has held it: the tenure's start, which a
-		// renewal does not move, so "node-2 since 08:02" means the seat
-		// has not moved since 08:02. ABSENT when the lease was written by
-		// a build older than the stamp — that tenure's start was never
-		// recorded, and an empty string or the zero instant would render
-		// as a time.
-		if !lease.AcquiredAt.IsZero() {
-			row["acquired_at"] = isoOrEmpty(lease.AcquiredAt)
+			// SINCE WHEN this node has held it: the tenure's start, which
+			// a renewal does not move, so "node-2 since 08:02" means the
+			// seat has not moved since 08:02.
+			"acquired_at": isoOrEmpty(lease.AcquiredAt),
 		}
 		seatRows = append(seatRows, row)
 	}
@@ -76,9 +71,9 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 			"id":    id,
 			"roles": profile.Roles.Names(),
 			// HOW ITS BROKER TAKES PART — member, leaf, client, or
-			// `unknown` for a row that does not say (a build older than
-			// the field) — which the roles no longer imply: a node's
-			// broker is what its stream block makes it.
+			// `unknown` for a kind this build does not know (a newer
+			// build's) — which the roles no longer imply: a node's broker
+			// is what its stream block makes it.
 			"broker":     profile.Broker.String(),
 			"labels":     profile.Labels,
 			"owner":      lease.Owner,
@@ -106,9 +101,10 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 		// one an operator is looking for.
 		row["config_reported_at"] = isoOrEmpty(status.UpdatedAt)
 		// WHAT THAT NODE IS DOING, off its own presence heartbeat.
-		// Absent when the node published none (a peer running a build
-		// older than the field), and absent is NOT zero: a confident 0
-		// would draw an idle row for a process that is simply not saying.
+		// Absent when the node's heartbeat carried no status (a host
+		// built without a Status hook, or a status read that overran its
+		// share of the beat), and absent is NOT zero: a confident 0 would
+		// draw an idle row for a process that is simply not saying.
 		if live, ok := coord.StatusFromMeta(lease.Meta); ok {
 			row["in_flight"] = live.InFlight
 			row["draining"] = live.Draining

@@ -21,6 +21,29 @@ import { KeyLegend } from "./KeyLegend.tsx";
 import { WORKSPACES } from "./nav.ts";
 import { focusSearchTarget, useSearchTarget } from "./searchTarget.ts";
 import { modules, parse, stringValue, walk, type Node } from "~/test/source.ts";
+import { Shell } from "./Shell.tsx";
+import { Router } from "./router.tsx";
+import { ClientContext } from "~/lib/store-hooks.ts";
+import { LiveSocket, Store } from "~/protocol/index.ts";
+
+/**
+ * EVERY ROW A COMPONENT BINDS, recorded as it binds it. `useKeymap` is passed
+ * through untouched — every case below still exercises the real one — and the
+ * ids it was handed are kept, which is the only way to know a row is bound:
+ * the frame's go-rows are bound from a spread over `nav.ts`, which no reading
+ * of the source can evaluate.
+ */
+const bound = vi.hoisted(() => new Set<string>());
+vi.mock("./keymap.ts", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./keymap.ts")>();
+  return {
+    ...real,
+    useKeymap: (handlers: Record<string, unknown>) => {
+      for (const id of Object.keys(handlers)) bound.add(id);
+      return real.useKeymap(handlers as Parameters<typeof real.useKeymap>[0]);
+    },
+  };
+});
 
 afterEach(cleanup);
 
@@ -84,6 +107,38 @@ describe("the table", () => {
     for (const ws of WORKSPACES) {
       expect(keyRow(`go.${ws.key}`).presses).toEqual([{ after: "g", key: ws.chord }]);
     }
+  });
+
+  // A ROW NOBODY BINDS IS A KEY THE LEGEND OFFERS AND NOTHING ANSWERS. The
+  // collision check and the legend both read the table, so a row declared
+  // and never bound passed both and did nothing when pressed. The frame's rows
+  // are the ones that can be checked whole: they are bound by the frame alone
+  // (the shell, and the sidebar inside it), which is mounted on every screen.
+  test("every frame row the dashboard binds is bound by the frame", () => {
+    class InertWebSocket {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSED = 3;
+      readyState = InertWebSocket.CONNECTING;
+      send(): void {}
+      close(): void {}
+    }
+    vi.stubGlobal("WebSocket", InertWebSocket);
+    bound.clear();
+    const store = new Store();
+    render(
+      <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
+        <Router>
+          <Shell>{null}</Shell>
+        </Router>
+      </ClientContext.Provider>,
+    );
+    vi.unstubAllGlobals();
+    const frame = KEYMAP.filter((r) => r.scope === "frame" && r.by === "dashboard").map(
+      (r) => r.id,
+    );
+    expect(frame).toContain("running");
+    expect(frame.filter((id) => !bound.has(id))).toEqual([]);
   });
 
   test("every scope a row names has a heading in the legend", () => {

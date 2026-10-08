@@ -238,31 +238,34 @@ func TestAMissingSecretIsTheNotFoundSentinel(t *testing.T) {
 	}
 }
 
-// A 404 WITH NO not_found BODY IS AN OLD NODE, not a missing secret.
+// A 404 WITH NO not_found BODY IS A MISSING SURFACE, not a missing secret.
 //
-// A binary from before secrets moved onto the fleet serves no /secrets at
-// all, and reporting that as "no such secret" would have an operator set a
-// value over and over against a node that will never hold it.
+// A bare 404 — no code of the engine's at all — came from something in front
+// of the node or from another service at the address, and reporting that as
+// "no such secret" would have an operator set a value over and over against a
+// server that will never hold it.
 func TestA404WithoutTheBodyIsReportedAsAMissingSurface(t *testing.T) {
 	t.Parallel()
 	node := newFakeSecretsNode(t)
 	node.status, node.body = http.StatusNotFound, `{}`
 
 	_, err := node.client(t).Get(t.Context(), "TOKEN")
-	if errors.Is(err, secrets.ErrNotFound) {
+	if err == nil || errors.Is(err, secrets.ErrNotFound) {
 		t.Fatalf("a node with no /secrets surface was reported as a missing "+
 			"secret: %v", err)
 	}
-	if !strings.Contains(err.Error(), "/secrets") {
-		t.Errorf("the refusal does not say what is missing: %v", err)
+	if !strings.Contains(err.Error(), "not a Crewlet node's API") {
+		t.Errorf("the refusal does not say what answered: %v", err)
 	}
 }
 
-// A NODE WHOSE ROUTER HAS NO /secrets IS A MISSING SURFACE TOO, now that the
-// router's own 404 is JSON with a code. That code is `no_route` and never
-// `not_found` — the one this client reads as "no such secret" — so a node that
-// serves no /secrets at all is not taken for a store holding nothing, which
-// the provisioning sink would answer by minting a value it could never write.
+// A NODE WHOSE ROUTER HAS NO /secrets IS A MISSING SURFACE TOO, and it is
+// named for what it is. A node without the ingress role binds api.port for
+// its tool bridge alone ([api.BridgeOnly]), and its router answers every other
+// path `no_route` — never `not_found`, the one this client reads as "no such
+// secret" — so it is not taken for a store holding nothing, which the
+// provisioning sink would answer by minting a value it could never write. And
+// it is not told it is "not a Crewlet node" either: it is one, missing a role.
 func TestTheRoutersOwn404IsAMissingSurfaceNotAMissingSecret(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(httpjson.Mux(http.NewServeMux()))
@@ -276,8 +279,13 @@ func TestTheRoutersOwn404IsAMissingSurfaceNotAMissingSecret(t *testing.T) {
 		t.Fatalf("a node with no /secrets route answered %v, want the missing "+
 			"surface", err)
 	}
-	if !strings.Contains(err.Error(), "no /secrets surface") {
-		t.Errorf("the refusal does not say what is missing: %v", err)
+	if !strings.Contains(err.Error(), "no /secrets surface") ||
+		!strings.Contains(err.Error(), "ingress") {
+		t.Errorf("the refusal does not name the missing surface and the role "+
+			"that serves it: %v", err)
+	}
+	if strings.Contains(err.Error(), "not a Crewlet node") {
+		t.Errorf("a Crewlet node's own router was called something else: %v", err)
 	}
 }
 

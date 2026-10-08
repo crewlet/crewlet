@@ -18,8 +18,9 @@ import (
 
 // THE TRIM AND THE GATE COUNT ONLY THE NODES THAT HOLD DATA. A node without it
 // applies no log and publishes no position, so a trim that counted it at zero
-// would never advance again — and a presence row with no roles at all is an
-// older build's, which held data, so it still counts.
+// would never advance again — and a presence row whose roles this build
+// cannot read (a role a newer build added) reads as every role, data
+// included, so it still counts: leaving it out would trim past its rows.
 func TestTheTrimAndTheGateCountOnlyDataNodes(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -27,7 +28,7 @@ func TestTheTrimAndTheGateCountOnlyDataNodes(t *testing.T) {
 	for id, meta := range map[string]map[string]any{
 		"data-a":  {"roles": []string{"data", "seats"}},
 		"agent-1": {"roles": []string{"seats"}},
-		"older":   nil,
+		"newer":   {"roles": []string{"data", "seats", "a-future-role"}},
 	} {
 		if _, _, err := backend.TryAcquire(ctx, coord.NodeResource(id), coord.AcquireOptions{
 			Owner: id + ":1", TTL: time.Minute, Meta: meta,
@@ -44,7 +45,7 @@ func TestTheTrimAndTheGateCountOnlyDataNodes(t *testing.T) {
 		got = append(got, p.NodeID)
 	}
 	slices.Sort(got)
-	if want := []string{"data-a", "older"}; !slices.Equal(got, want) {
+	if want := []string{"data-a", "newer"}; !slices.Equal(got, want) {
 		t.Fatalf("counted %v, want %v", got, want)
 	}
 }

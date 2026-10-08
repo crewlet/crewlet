@@ -297,8 +297,8 @@ export interface EntryState {
    * grid now, and a tile with no pill under its name is a hole in a row of
    * them that a reader has to explain to themself; the engine's "Not in use"
    * is drawn in the neutral outline, which is the one register on this
-   * screen that reports nothing wrong. EMPTY only when the answer carries no
-   * roll-up for an unconfigured tool, which is a node too old to send one.
+   * screen that reports nothing wrong. EMPTY only while no roll-up for an
+   * unconfigured tool is in hand — before the integrations answer arrives.
    */
   tag: string;
   tone: Tone;
@@ -489,16 +489,18 @@ export function integrationFacts(
       value: (
         <NumberCell
           value={counted((r) => r.inbound)}
-          title="deliveries this engine verified and stored"
+          title="deliveries that reached a seat here: verified webhooks, and chat posts read off a socket — each counted once, where it arrived"
         />
       ),
       note: covered,
     },
     {
-      // NO NOTE ON THE OTHER TWO, although the same window covers them: a
-      // fact line whose every value carries the same footnote is one nobody
-      // reads, which is what `Fact.note` says about itself. The three counts
-      // are read together and the first one states what they all cover.
+      // NO NOTE ON THE OTHER TWO, although the same window covers them — the
+      // engine counts the drops and merges over exactly the window
+      // `traffic_since` names, never over a page of its own: a fact line
+      // whose every value carries the same footnote is one nobody reads,
+      // which is what `Fact.note` says about itself. The three counts are
+      // read together and the first one states what they all cover.
       label: "Dropped",
       value: (
         <NumberCell
@@ -534,12 +536,13 @@ export function integrationFacts(
 /**
  * The findings the report did NOT summarise.
  *
- * The engine promotes the reported finding to index 0 (integration.Promote),
- * so dropping element zero would usually be right — and "usually" is the
- * problem: a row written by a peer on an older build carries the vendor's own
- * order, and a rolling upgrade puts exactly those rows here. Matching by
- * identity is correct for both, and it removes the positional assumption
- * rather than depending on it.
+ * BY IDENTITY, NOT BY POSITION. A pass's findings are stored with the reported
+ * one first (integration.Promote), but the report a row carries is not always
+ * the one they were classified from: while a disconnect is pending,
+ * State.Reported substitutes "this integration is being removed", and the
+ * findings beside it are the last pass's, none of them the headline. Dropping
+ * element zero would then hide a real finding; matching the detail the
+ * headline carries drops exactly the one it stands for, or none.
  *
  * The report's detail can carry a count suffix, because Classify appends
  * "(and 2 more)" when several findings share the winning kind, so that is
@@ -608,12 +611,12 @@ export function Reconcile({
   // next and the findings say what is actually wrong, so an operator who
   // fixes the first should not wait a full pass to learn there was a second.
   //
-  // BY IDENTITY, NOT BY POSITION. This dropped element zero, on the
-  // assumption that the reported finding is first — which the engine now
-  // guarantees (integration.Promote) but a row written by a peer on an
-  // older build does not, and a rolling upgrade puts exactly those rows on
-  // this screen. Whenever the worst finding was not already first, a real
-  // finding was hidden and the headline was re-printed as "1 more finding".
+  // BY IDENTITY, NOT BY POSITION. A pass's findings are stored with the
+  // reported one first (integration.Promote), but while a disconnect is
+  // pending the report is State.Reported's "this integration is being
+  // removed" and the findings beside it are the last pass's, none of them the
+  // headline — so dropping element zero would hide a real finding and
+  // re-print the headline as "1 more finding". See withoutHeadline.
   //
   // Matched on the DETAIL, which is what the report carries and what this
   // list renders, so the comparison is between the two strings actually on
@@ -1075,12 +1078,12 @@ export function actionFor(
   const configured = tools.filter((t) => t.configured);
   if (configured.length === 0) return MANAGE;
   // `form_complete` is the engine's own count of unanswered requirements,
-  // company block and seats together. `satisfied` folds the seats' OWN acts
-  // in too — a GitHub seat whose app is created at GitHub, from its row on
-  // the tool's page — so it is only the fallback for a node too old to send
-  // the first: a Continue that opens a form with nothing in it to answer is a
-  // smaller fault than a form nobody can reach.
-  if (configured.some((t) => (t.form_complete ?? t.satisfied) === false)) return CONTINUE;
+  // company block and seats together, and it decides — never `satisfied`,
+  // which folds the seats' OWN acts in too (a GitHub seat whose app is
+  // created at GitHub, from its row on the tool's page): a Continue that
+  // opened a form with nothing in it to answer would offer work there is no
+  // box for.
+  if (configured.some((t) => !t.form_complete)) return CONTINUE;
   if (tools.some((t) => !t.configured)) return CONTINUE;
   return MANAGE;
 }
@@ -1832,8 +1835,8 @@ function seatFindings(present: Present[]): Map<string, ReconcileFinding> {
  * direction is the bad one — a kind this build had not heard of would be
  * treated as an advisory and could then hide a broken agent.
  *
- * An ABSENT phase is not an advisory. A node older than the field sends none,
- * and "cannot say" must read as a fault so the badge stays honest.
+ * An ABSENT phase is not an advisory: "cannot say" must read as a fault so the
+ * badge stays honest.
  */
 function advisory(f: ReconcileFinding): boolean {
   return f.phase === "ready";
@@ -1967,6 +1970,15 @@ function stuckDisconnecting(entry: Entry, rows: Map<string, IntegrationRow>): st
  * one of them is a click to the event's own page. The `#/model` screen fetched
  * a payload per row and paid sixty-one round trips for one screen.
  */
+/**
+ * A delivery row's event, as the provider named it: the row's type without the
+ * engine's own filing prefix, which says which edge it came in on — a webhook
+ * route, the Forge relay, or a chat socket.
+ */
+export function deliveryEvent(type: string): string {
+  return type.replace(/^(webhook|forge|socket):/, "");
+}
+
 function SurfaceDeliveries({ surface, name }: { surface: string; name: string }) {
   const nav = useNavigator();
   const now = useNow();
@@ -2046,12 +2058,11 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
                 header: "Event",
                 shrink: true,
                 sortValue: (e) => e.type,
-                // `webhook:` and `forge:` are the engine's own filing
-                // prefixes, and the provider's event name is what an
-                // operator is matching against their own console.
-                cell: (e) => (
-                  <code className="inline nowrap">{e.type.replace(/^(webhook|forge):/, "")}</code>
-                ),
+                // `webhook:`, `forge:` and `socket:` are the engine's own
+                // filing prefixes — which edge a delivery came in on — and
+                // the provider's event name is what an operator is matching
+                // against their own console.
+                cell: (e) => <code className="inline nowrap">{deliveryEvent(e.type)}</code>,
               },
               {
                 key: "summary",
@@ -2859,7 +2870,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
                         <div className="int-row-badges">
                           {row?.reconcile?.phase && (
                             <Tag variant={phaseTone(row.reconcile.phase)} appearance="outline">
-                              {row.reconcile.phase_label || row.reconcile.phase.replace(/_/g, " ")}
+                              {row.reconcile.phase_label}
                             </Tag>
                           )}
                           {row && <SurfaceBadges row={row} />}

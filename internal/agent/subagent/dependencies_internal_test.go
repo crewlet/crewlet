@@ -34,7 +34,7 @@ func TestDependencyAnswersAreWholeWithinTheBudget(t *testing.T) {
 		{ID: "b", Status: StatusOK, Output: map[string]any{"files": []any{"x.go"}}},
 	}
 	fit := &answerFitter{}
-	got := withDependencies(context.Background(), fit, "do the thing", deps)
+	got := withDependencies(context.Background(), fit, "do the thing", deps).Text
 	if !strings.Contains(got, big) || !strings.Contains(got, `{"files":["x.go"]}`) {
 		t.Fatal("an answer within the budget was not carried whole")
 	}
@@ -53,7 +53,7 @@ func TestAFanInPastTheBudgetIsCondensedNotCut(t *testing.T) {
 		{ID: "small", Status: StatusOK, Text: "three files changed"},
 	}
 	fit := &answerFitter{}
-	got := withDependencies(context.Background(), fit, "merge them", deps)
+	got := withDependencies(context.Background(), fit, "merge them", deps).Text
 	if strings.Contains(got, huge[:1000]+"…") || strings.Contains(got, huge) {
 		t.Fatal("the over-share answer was carried whole or cut, not condensed")
 	}
@@ -74,7 +74,7 @@ func TestAnAnswerThatCannotBeCondensedIsCarriedWhole(t *testing.T) {
 	t.Parallel()
 	huge := strings.Repeat("row of results\n", 9000)
 	got := withDependencies(context.Background(), &answerFitter{err: compact.ErrUnavailable},
-		"merge", []Result{{ID: "wide", Status: StatusOK, Text: huge}})
+		"merge", []Result{{ID: "wide", Status: StatusOK, Text: huge}}).Text
 	if !strings.Contains(got, huge) {
 		t.Fatal("an answer that could not be condensed was not carried whole")
 	}

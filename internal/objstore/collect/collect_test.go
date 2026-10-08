@@ -177,40 +177,17 @@ func (b *backend) pendingIDs() []string {
 	return out
 }
 
-// era is a chunk era a case can end.
-type era struct {
-	mu   sync.Mutex
-	over bool
-	err  error
-	asks int
-}
-
-func (e *era) Over(context.Context) (bool, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.asks++
-	return e.over, e.err
-}
-
-func (e *era) end() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.over = true
-}
-
 type harness struct {
 	t       *testing.T
 	clock   *clock
 	backend *backend
 	store   *objstore.Store
 	source  *fakeSource
-	era     *era
 	c       *Collector
 }
 
 // newHarness is a collector over an in-memory store whose writes are dated,
-// and whose keys are minted, at one settable clock, in a chunk era that is
-// open until a case ends it.
+// and whose keys are minted, at one settable clock.
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	clk := &clock{now: time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)}
@@ -220,12 +197,11 @@ func newHarness(t *testing.T) *harness {
 		t.Fatal(err)
 	}
 	src := &fakeSource{named: map[objstore.Key]Reference{}}
-	e := &era{}
-	c, err := New(Options{Store: store, References: References{src}, ChunkEra: e, Now: clk.Now})
+	c, err := New(Options{Store: store, References: References{src}, Now: clk.Now})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &harness{t: t, clock: clk, backend: b, store: store, source: src, era: e, c: c}
+	return &harness{t: t, clock: clk, backend: b, store: store, source: src, c: c}
 }
 
 func (h *harness) put(content string) objstore.Key { return h.putObject(content).Key }
@@ -370,17 +346,16 @@ func TestAnObjectIsJudgedByBothItsInstants(t *testing.T) {
 // A NAME THAT IS NOT AN OBJECT'S KEY IS NEVER THE COLLECTOR'S: a backend lists
 // every name it holds, and the collector — the one reader of the grammar —
 // neither counts nor judges nor deletes an object it did not name, however
-// old. That includes the chunks an earlier build stored, which wait for the
-// chunk era to be over, and a bare UUID outside the engine's namespace, which
-// is what another application sharing an S3 bucket under an empty prefix
-// names its own objects with.
+// old. That includes a bare digest, which is no key the engine mints, and a
+// bare UUID outside the engine's namespace, which is what another application
+// sharing an S3 bucket under an empty prefix names its own objects with.
 func TestANameThatIsNotAKeyIsLeftAlone(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	old := objstore.KeyAt(h.clock.Now())
 	foreign := []string{
 		"somebody-elses.txt",
-		string(objstore.HashOf([]byte("a chunk an earlier build stored"))),
+		string(objstore.HashOf([]byte("a digest"))),
 		old.String(),
 		"files/" + strings.ToUpper(old.String()),
 		"files/" + uuid.New().String(),
@@ -510,97 +485,22 @@ func TestACollectorWithNoReferencesIsRefused(t *testing.T) {
 	}
 }
 
-// A CHUNK AN EARLIER BUILD STORED IS KEPT WHILE THE CHUNK ERA IS OPEN, and
-// retired — deleted, and counted apart from the objects — once it is over and
-// the chunk is past the grace; a chunk inside the grace, or an era nobody can
-// read, keeps it. A data node of the build that kept chunks reads its files'
-// chunks until it is gone, so the era, and never the estate, is what may end
-// them.
-func TestAChunkIsRetiredOnlyOnceTheChunkEraIsOver(t *testing.T) {
-	t.Parallel()
-	h := newHarness(t)
-	chunk := string(objstore.HashOf([]byte("a chunk an earlier build stored")))
-	if err := h.backend.Put(t.Context(), chunk, strings.NewReader("chunk"), objstore.PutMeta{}); err != nil {
-		t.Fatal(err)
-	}
-	h.clock.advance(PendingGrace + time.Hour)
-	young := string(objstore.HashOf([]byte("a chunk stored a moment ago")))
-	if err := h.backend.Put(t.Context(), young, strings.NewReader("young"), objstore.PutMeta{}); err != nil {
-		t.Fatal(err)
-	}
-	stored := func(name string) bool {
-		_, err := h.backend.Backend.Stat(t.Context(), name)
-		return err == nil
-	}
-
-	r, err := h.c.Collect(t.Context())
-	if err != nil || r.Retired != 0 || !stored(chunk) {
-		t.Fatalf("a pass in an open era = %+v, %v; the chunk must stay", r, err)
-	}
-	h.era.err = errors.New("the census is unreadable")
-	h.era.over = true
-	if r, err = h.c.Collect(t.Context()); err != nil || r.Retired != 0 || !stored(chunk) {
-		t.Fatalf("a pass whose era could not be read = %+v, %v; the chunk must stay", r, err)
-	}
-	h.era.err = nil
-	r, err = h.c.Collect(t.Context())
-	if err != nil || r.Retired != 1 || r.Listed != 0 || r.Deleted != 0 || !r.Completed {
-		t.Fatalf("a pass once the era is over = %+v, %v; want the one old chunk retired", r, err)
-	}
-	if stored(chunk) {
-		t.Fatal("a chunk past the grace outlived the chunk era")
-	}
-	if !stored(young) {
-		t.Fatal("a chunk inside the grace was retired")
-	}
-}
-
-// THE ERA IS ASKED ONLY WHEN A CHUNK IS MET, and once a pass: it is a census
-// of the fleet, and a store holding no chunk has no question for it.
-func TestTheChunkEraIsAskedOnlyAboutAChunk(t *testing.T) {
-	t.Parallel()
-	h := newHarness(t)
-	h.put("an object")
-	h.clock.advance(PendingGrace + time.Hour)
-	if _, err := h.c.Collect(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if h.era.asks != 0 {
-		t.Fatalf("a pass over no chunk asked the era %d times", h.era.asks)
-	}
-	for i := range 3 {
-		name := string(objstore.HashOf(fmt.Appendf(nil, "chunk %d", i)))
-		if err := h.backend.Put(t.Context(), name, strings.NewReader("c"), objstore.PutMeta{}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	h.clock.advance(PendingGrace + time.Hour)
-	if _, err := h.c.Collect(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if h.era.asks != 1 {
-		t.Fatalf("a pass over three chunks asked the era %d times, want once", h.era.asks)
-	}
-}
-
 // AN UPLOAD THAT NEVER FINISHED IS ABANDONED ONCE IT BEGAN MORE THAN THE GRACE
-// AGO — when nothing names it, or a key also minted past the grace does, or a
-// chunk does once the chunk era is over — and never when somebody else's name
-// does. Every upload in flight is pending too, which is what the grace is for.
+// AGO — when nothing names it, or a key also minted past the grace does — and
+// never when somebody else's name does. Every upload in flight is pending
+// too, which is what the grace is for.
 func TestAnUnfinishedUploadIsAbandonedOnlyAfterTheGrace(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	start := h.clock.Now()
 	oldKey := objstore.KeyAt(start)
 	freshKey := objstore.KeyAt(start.Add(PendingGrace))
-	chunk := string(objstore.HashOf([]byte("a chunk")))
 	for _, p := range []objstore.Pending{
 		{ID: "nameless", Started: start},
 		{ID: "old-key", Name: oldKey.Name(), Started: start},
 		// BEGUN LONG AGO BY THE BACKEND'S CLOCK, under a key a fast
 		// clock minted: its key is inside the grace.
 		{ID: "fresh-key", Name: freshKey.Name(), Started: start},
-		{ID: "chunk", Name: chunk, Started: start},
 		{ID: "theirs", Name: "somebody-elses/upload.bin", Started: start},
 	} {
 		h.backend.begin(p)
@@ -616,14 +516,13 @@ func TestAnUnfinishedUploadIsAbandonedOnlyAfterTheGrace(t *testing.T) {
 	if err != nil || r.Abandoned != 2 {
 		t.Fatalf("a sweep past the grace = %+v, %v; want the nameless upload and the old key's", r, err)
 	}
-	if got, want := h.backend.pendingIDs(), []string{"chunk", "fresh-key", "in-flight", "theirs"}; !slices.Equal(got, want) {
+	if got, want := h.backend.pendingIDs(), []string{"fresh-key", "in-flight", "theirs"}; !slices.Equal(got, want) {
 		t.Fatalf("pending after the sweep = %q, want %q", got, want)
 	}
-	h.era.end()
 	h.clock.advance(PendingGrace)
-	if r, err = h.c.Collect(t.Context()); err != nil || r.Abandoned != 3 {
-		t.Fatalf("a sweep once the era is over = %+v, %v; want the chunk's, the fresh key's "+
-			"and the one that was in flight", r, err)
+	if r, err = h.c.Collect(t.Context()); err != nil || r.Abandoned != 2 {
+		t.Fatalf("a later sweep = %+v, %v; want the fresh key's and the one that was "+
+			"in flight", r, err)
 	}
 	if got := h.backend.pendingIDs(); !slices.Equal(got, []string{"theirs"}) {
 		t.Fatalf("pending = %q; somebody else's upload is never abandoned", got)
@@ -750,8 +649,7 @@ func TestAFailedAuditKeepsTheLastFindings(t *testing.T) {
 }
 
 // A NODE TAKING THE DUTY PICKS UP WHAT THE LAST HOLDER RECORDED, each half
-// where it is newer than its own — and a record from the build before, which
-// kept no findings beside the attempt, gives its attempt's findings as found.
+// where it is newer than its own.
 func TestRestoreKeepsTheNewerOfEachHalf(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -780,12 +678,5 @@ func TestRestoreKeepsTheNewerOfEachHalf(t *testing.T) {
 	if again := h.c.Status(); again.Audit.Error != "stopped" || again.Audit.Found == nil ||
 		again.Audit.Found.Missing != 1 {
 		t.Fatalf("a newer failed attempt took the findings with it: %+v", again.Audit)
-	}
-
-	// A RECORD THE BUILD BEFORE WROTE, with no findings of its own.
-	old := newHarness(t)
-	old.c.Restore(Status{Audit: AuditReport{Completed: true, Referenced: 4, Missing: 2, At: at}})
-	if f := old.c.Status().Audit.Found; f == nil || f.Missing != 2 || f.Referenced != 4 || !f.At.Equal(at) {
-		t.Fatalf("an older build's audit restored as findings %+v", f)
 	}
 }

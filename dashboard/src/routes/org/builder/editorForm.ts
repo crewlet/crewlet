@@ -166,9 +166,10 @@ export function llmChain(llm: PhaseLLM | undefined): string[] | null {
  * A `token_budget:` as the boxes show it: each window's ceiling as the digits
  * it holds, and empty where the document names none.
  *
- * WHATEVER NUMBER IS THERE, a 0 included. It is not "unlimited" any more, and
- * showing a box empty over a 0 the engine refuses would hide the one value the
- * form most needs the operator to see.
+ * WHATEVER NUMBER IS THERE, including one this form refuses (a ceiling above
+ * 2^53-1, which the engine's int64 accepts from YAML or another writer):
+ * showing a box empty over it would hide the value the operator has to see to
+ * correct it.
  */
 export function budgetForm(budget: unknown): BudgetForm {
   const windows = isRecord(budget) ? budget : {};
@@ -345,9 +346,10 @@ export function seatParts(
   // READ AS THE BUDGETS SCREEN READS IT (`lib/budget.ts`): `40M` is forty
   // million here too. A box the reader refuses is one of two things: a typed
   // value, which the form refuses before Apply so it never reaches here, or a
-  // STORED one the engine refuses (a 0 an older build wrote), which is taken
-  // as the number it is — read as "no value" it would equal an emptied box,
-  // and emptying the box could never remove it.
+  // STORED one this form refuses — a ceiling above 2^53-1 the engine's int64
+  // accepted from YAML or another writer — which is taken as the number it
+  // is: read as "no value" it would equal an emptied box, and emptying the
+  // box could never remove it.
   const ceiling = (period: BudgetWindow, typed: string) => {
     const read = readCeiling(period, typed);
     if (read.ok) return read.value ?? undefined;

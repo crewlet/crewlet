@@ -325,6 +325,12 @@ func TestTheAnswerNamesItsSources(t *testing.T) {
 	if rig.model.asked[0].Messages[0].Content != prompts.KnowledgeAnswerSystem {
 		t.Error("the answer ran without its contract")
 	}
+	// Extraction from the excerpts, with a person waiting: a thinking model
+	// at the entry's level spends AnswerMaxTokens reasoning and answers
+	// nothing.
+	if got := rig.model.asked[0].Effort; got != llm.EffortLow {
+		t.Errorf("effort = %q, want a ceiling of low", got)
+	}
 	if got := rig.search.asked[0]; got.Mode != knowledge.ModeHybrid ||
 		got.Limit != builtin.AnswerPageSources {
 		t.Errorf("searched pages with %+v, want hybrid for %d", got, builtin.AnswerPageSources)
@@ -459,6 +465,26 @@ func TestAnEmptyReplyIsRefusedAfterTheSeamSawIt(t *testing.T) {
 	}
 	if res, _, _ := ask(t, tool, "How do we deploy?"); !res.Failed || rig.model.calls != 2 {
 		t.Error("a refusal was cached")
+	}
+}
+
+// A REFUSED ANSWER IS REFUSED, and it was made through the seam. A refusal
+// returns no completion — its text is not an answer — but the response the
+// vendor billed travels in the error, and the seam charges and records it
+// from there (llm.Billed; the engine's own suite holds the seam to that).
+func TestARefusedAnswerIsRefusedAfterTheSeamSawIt(t *testing.T) {
+	t.Parallel()
+	rig := newAnswerRig()
+	rig.model.err = llm.Refused("anthropic", "aux-small", &llm.Refusal{Category: "bio",
+		Completion: &llm.Completion{Model: "aux-small", InputTokens: 640, OutputTokens: 9,
+			StopReason: llm.StopRefusal}})
+	res, _, _ := ask(t, rig.tool(t), "How do we deploy?")
+	if !res.Failed || res.Refusal != tools.RefusalUnavailable {
+		t.Fatalf("a refused answer was answered: %+v", res)
+	}
+	if len(rig.model.uses) != 1 || rig.model.uses[0].Purpose != types.AuxAnswerKnowledge {
+		t.Errorf("the refused answer was resolved as %+v, want through the seam as the answer",
+			rig.model.uses)
 	}
 }
 

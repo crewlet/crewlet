@@ -37,30 +37,17 @@ func TestTheVectorDomainIsACertifiedDomain(t *testing.T) {
 			// them. A domain that created its tables from test code
 			// would be a schema the suite proved and the migration
 			// did not.
-			Encode:   encodeSuiteRecord,
-			Fields:   search.VersionedFields(),
-			Carrying: carryingSuiteField,
-			Kinds:    suiteKinds(),
-			Rows:     search.NewRows,
-			Write:    suiteWrite,
+			Encode: encodeSuiteRecord,
+			// THE VERSIONED-FIELD TABLE. It is empty — every kind this
+			// domain writes is in the base format — so there is no record
+			// to carry; the kind this build's successor adds brings a
+			// Carrying case, which the suite refuses to run without.
+			Fields: search.VersionedFields(),
+			Kinds:  suiteKinds(),
+			Rows:   search.NewRows,
+			Write:  suiteWrite,
 		}
 	})
-}
-
-// carryingSuiteField is a record carrying one versioned field: each of the
-// index's operations, and its subject kind — which every one of them carries,
-// at the same version — through the centroids record.
-func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
-	switch field.Name {
-	case "Op=centroids", "Subject.Source=index":
-		return indexRecordOver("suite-embed", 8).Encode()
-	case "Op=reassign":
-		return reassignRecord(1, 0, 1).Encode()
-	case "Op=measure":
-		return measureRecord(1, 1).Encode()
-	}
-	return nil, fmt.Errorf("no suite record carries %s — add a case that sets it "+
-		"and nothing else versioned", field.Name)
 }
 
 // suiteWrite is one tick of the domain's own [search.Embedder] — the only
@@ -77,8 +64,7 @@ func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.Replicate
 		// one document, below the index's minimum, so the step decides
 		// nothing whatever it reads.
 		Standing: func(context.Context) (search.LogStanding, error) {
-			return search.LogStanding{Current: true,
-				Readers: map[string]int{"suite-node": search.RecordVersion}}, nil
+			return search.LogStanding{Current: true}, nil
 		},
 		Embedder: embeddings.NewFake(8), Model: "suite-embed",
 		Corpora:  []search.Corpus{oneStaleDocument{}},
@@ -294,9 +280,8 @@ func TestAnUnfiledSourceDoesNotScopeToTheWholeCompany(t *testing.T) {
 // retain the record under. So the envelope asks only whether the subject is a
 // subject; whether its KIND is one this build writes is the version-gated
 // second pass's question. Asked of the envelope, every kind a later build adds
-// — the index records of ADR-0028 were the first — stops every older node of
-// a rolling upgrade instead of being deferred, which is what [search.Source]
-// promises.
+// would stop every older node of a rolling upgrade instead of being deferred,
+// which is what [search.Source] promises.
 func TestAKindANewerBuildAddedIsDeferredNotStopped(t *testing.T) {
 	t.Parallel()
 	record := func(version int) []byte {

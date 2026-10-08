@@ -418,20 +418,15 @@ applied each record — and a node whose build reads less refuses it, since it
 would arrive past a record it could never apply. A build that merely *reads* a
 newer version does not make its snapshots unadoptable: until something
 publishes a record at that version the rows hold none, and a node still on the
-older build adopts them. A checkpoint from before the rows kept this states
-the donor build's own version instead, as every manifest used to.
+older build adopts them.
 
 **An adoption carries the operation ledger with it.** The ledger — the table
 that says which operations have already been applied — travels inside the
 snapshot, so the adopted node answers a retry of anything its donor applied
-from it, and files work that was queued before the join like any other. The one
-exception is a donor on an **older build**, which scrubbed its ledger out of the
-snapshot: the joining node records the join as the point before which its
-ledger may have lost rows, so a retry of older work there — a turn re-run
-whose work began before the join, an operator repeating an older `-op-id` —
-answers `unknown` (and logs `statelog_write_unvouched`) rather than risk
-applying it twice, until it is retried on a node that did not adopt from the
-older peer. Upgrading the fleet ends it. See [Replication](replication.md#what-a-retry-is-judged-by-the-instant-its-operation-was-minted).
+from it, and files work that was queued before the join like any other. The
+point before which the ledger may have lost rows to its thirty-day sweep travels
+with it, so the joining node answers a retry exactly as its donor would have.
+See [Replication](replication.md#what-a-retry-is-judged-by-the-instant-its-operation-was-minted).
 
 ### A node a peer re-anchored past
 
@@ -534,12 +529,8 @@ It is also what stops an absent node's position counting anywhere else: an
 evicted node's row — and any trim floor it published — counts toward neither
 the generation the fleet is on nor a reanchor's guards, which is how a fleet
 stranded by a node that re-anchored and then vanished is released ([a node a
-peer re-anchored past](#a-node-a-peer-re-anchored-past)). And it is what
-releases the [semantic index](../concepts/knowledge-system.md#the-first-stage-is-an-index-over-the-codes)
-a node on an older build holds back: the index is published only once every
-node applying the vector log reads its records, and a node evicted on both logs
-below is no longer one of them. The row itself stays: a readmission is judged
-by it.
+peer re-anchored past](#a-node-a-peer-re-anchored-past)). The row itself
+stays: a readmission is judged by it.
 
 The trim counts nodes **per log**, so an eviction is a record on every log it
 counts nodes on: the tracker's log and the pages log. (The vector log counts
@@ -639,8 +630,8 @@ restarted, and the first id would answer `superseded` to anyone finishing it.
   has passed, run the gesture again with the same `-op-id` through the same
   node.
 - `unknown` that **this node cannot tell** — its operation ledger may have
-  lost the row the operation needs, because the id was minted before the node
-  adopted a peer's snapshot or before the ledger's sweep reached it. The node
+  lost the row the operation needs, because the id was minted before the
+  ledger's sweep reached it. The node
   published nothing and answers the same gesture the same way every time, so
   it is not offered as a retry: run it, under the same `-op-id`, through a node
   whose ledger reaches back that far (`-url`). The dashboard says the same and
@@ -844,9 +835,7 @@ own appends still in flight, so what can land past the soft ceiling is only
 what other nodes have in flight at that instant — at most one maximum record
 (8 MiB) each. At the smallest ceiling a log may have, a gibibyte, the reserve
 is 64 MiB: seven other nodes' maximum records with room to spare for the gate
-records themselves, and every larger ceiling holds more. While a rolling
-upgrade runs, a node on an older build keeps no reserve, so the reserve
-holds once every node counts its own.
+records themselves, and every larger ceiling holds more.
 
 If a gate record is refused even there, the refusal says so and points at
 `crewlet retention set-capacity` rather than suggesting a retry; the
@@ -955,8 +944,8 @@ that every **publisher** was admitted. So the operation's participants are:
   it should hold — because a data node publishes records;
 - every live **broker member**, whatever its roles, because its broker holds
   queued requests whether or not the node keeps data;
-- every live node whose presence does not say what its broker is — a node
-  running a build older than the field — because leaving out a node that may
+- every live node whose presence advertises no broker kind this build knows —
+  a newer build's — because leaving out a node that may
   be a member could pass a seal it should hold, while waiting on one that is
   not costs only an acknowledgement you can `exclude`;
 - and the coordinator itself.
@@ -1077,28 +1066,17 @@ checkpoint is then not past the end at all, and the record is the only thing
 that shows it — and when a broker is restored under it while it runs. It is
 compared for equality, so no clock is ever ordered against another.
 
-A checkpoint written before checkpoints named their record — or placed by a
-reanchor where the log held none — names nothing, and the next batch the node
-commits names its own. An **idle** domain commits no batch, so the node names
-such a checkpoint itself, at boot, from what it kept when it consumed that
-record and **never** from the log's record, which is exactly the thing in
-question: its operation ledger's row at the checkpoint (by the record's own
-instant, or — for a row older than that — by the operation being the one the
-log's record carries), or its retained copy of a record it could not decode. It
-writes the name back and logs `statelog_checkpoint_named` with the evidence
-(`ledger_instant`, `ledger_operation` or `retained`), and compares from then on
-like any other. A ledger row there naming **another** operation than the log's
-record carries is a divergence, logged as `statelog_checkpoint_other_operation`
-and then refused like one. Where nothing names it — the ledger's retention swept
-the row, or the record there wrote none (a read barrier, a repeated operation, a
-record a gate kept out of the rows) — the node logs
-`statelog_checkpoint_unnamed` (`WARN`) once and carries on: refusing would stop
-every idle domain on its first boot of this build over a question that almost
-always has the ordinary answer, but it is the one state in which a restored log
-written past these rows goes unnoticed until the next batch names a record. If
-the broker behind such a node was restored from an older copy, re-anchor or
-replace it rather than waiting for that batch. A checkpoint the log holds no
-record at is neither named nor said, since there is nothing to compare it with.
+A checkpoint a reanchor placed where the log held no record — below a rebuilt
+stream's first record, or at a sequence the log skipped — names nothing, and
+there is nothing on the log to compare it with: the node carries on, and the
+first batch it commits names its own record. It is never named from the log's
+record, which is exactly the thing in question. Past the log's end it is
+treated like any other checkpoint there, and nothing past it is applied until
+the log reaches it. The one thing such a checkpoint cannot show is a broker
+restored afterwards from a copy that put a record back at its sequence; that
+goes unnoticed until the next batch names a record, so after restoring a broker
+behind a node that has not committed since its reanchor, re-anchor or replace
+it rather than waiting for that batch.
 
 **The rest of the fleet stops writing to it too.** A node whose rows were the
 copy's age sees a log that is its own history, so nothing about its own log
@@ -1152,9 +1130,9 @@ There are two ways out, and only you can choose between them:
 The walk vouches for a record through the operation ledger, which travels
 inside every snapshot — so a record this node holds because the peer it adopted
 from applied it counts as held, exactly as one it applied itself. It cannot
-vouch where the ledger has lost the record's row: to the ledger's thirty-day
-sweep, or with a snapshot from a peer on an older build, which arrived without
-its ledger. The ledger records how far back it may have lost rows, and when the
+vouch where the ledger has lost the record's row to its thirty-day sweep —
+this node's, or the donor's it inherited with an adopted snapshot. The ledger
+records how far back it may have lost rows, and when the
 named record's operation is older than that the refusal says so — the rows may
 hold the record after all. A record a gate dropped writes no row and reads as
 not held too. In each of those cases the verb can refuse when nothing was
@@ -1388,17 +1366,6 @@ cut to its kind, its instant and those three changes, because the work flow
 answers the past by walking them backward and a purge takes the task out of
 that series only from the moment it happened.
 
-That is what a purge **this build writes** does (a task purge at record version
-13 — see [what a rolling upgrade blocks](replication.md#what-a-rolling-upgrade-blocks)).
-A purge written by an earlier build is applied, on every node and on every
-replay, exactly as that build applied it: the object rows go, and the task's
-history, notices, turn records and mirror rows stay, because every node that
-applied it at the time kept them and a node applying it differently would hold
-rows its peers do not. This build has no gesture that reaches them: the task is
-already gone, so purging it again is refused as already purged — only a retry
-of the purge that did it, under its own operation id, is answered, with that
-purge's outcome.
-
 The confirmation is the task's **key**, not its id: the id is already on the
 command line, so repeating it confirms nothing, while the key has to be looked
 up — which is the point of asking. The **reason is required** because it is the
@@ -1415,9 +1382,8 @@ may already have destroyed — and when it did, the retry answers `applied`, at
 the first purge's position, rather than finding the task gone and refusing.
 Pass it back exactly as printed: the id carries the
 instant it was minted, which is what a node judges the retry by once its
-operation ledger may have lost the first purge's row — to the ledger's
-thirty-day sweep, or to a snapshot adopted from a peer on an older build —
-and there it answers `unknown` again rather than purging twice. An id of your
+operation ledger may have lost the first purge's row to the ledger's
+thirty-day sweep, and there it answers `unknown` again rather than purging twice. An id of your
 own making is refused (`op_id_invalid`): it carries no instant, so no node
 could tell whether it already ran. So is a printed one altered on the way back
 — trimmed, spaced, or grown past 128 bytes — because the broker carries the id

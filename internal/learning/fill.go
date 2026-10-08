@@ -123,8 +123,8 @@ func cursorArgs(after FillCursor) []any {
 // ([staleVector]): two passes, or a pass racing the row's own write, fill it
 // once. An episode's fill touches raw rows only, the rows recall searches.
 const (
-	staleVector = ` AND (embedding IS NULL OR embedding_model IS NULL
-		OR embedding_model <> ? OR length(embedding) <> ?)`
+	staleVector = ` AND (embedding IS NULL OR embedding_model <> ?
+		OR length(embedding) <> ?)`
 
 	diaryFillSQL = `UPDATE agent_diary SET embedding = ?, embedding_model = ?
 		WHERE id = ?` + staleVector

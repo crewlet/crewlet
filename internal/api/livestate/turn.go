@@ -24,8 +24,8 @@ import "github.com/crewlet/crewlet/internal/events/types"
 // touchTurn records that an event of turn `turnID` happened on this seat, at
 // `stage`.
 //
-// It creates the turn when the seat is on none — the start may have been missed,
-// or the turn may predate a build that announces one — and replaces a turn the
+// It creates the turn when the seat is on none — the start may have been missed
+// or overtaken — and replaces a turn the
 // seat was on only with a NEWER one: an event of an older turn arriving late is
 // not the seat moving back to it.
 func (s *LiveState) touchTurn(agent *agentLive, env Envelope, payload map[string]any, stage Stage) {

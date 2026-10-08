@@ -90,7 +90,7 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 	// DEGRADES rather than failing the answer: the rows are what the caller
 	// came for, and a follow-up that could not be read costs the attempt
 	// count rather than the screen.
-	key, siblings := s.attemptsOf(ctx, id, records)
+	key, siblings := s.attemptsOf(ctx, id, records, detail.At)
 	return map[string]any{
 		"turn_id": id,
 		// The unit of work this run was an attempt at, and every run of it
@@ -100,10 +100,9 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 		"work_key": key,
 		"attempts": siblings,
 		"events":   records,
-		// SAYS WHAT IS MISSING, exactly as `trace` does. Additive, so a
-		// client that predates the field is unaffected — and one that has it
-		// can say the gap is the middle rather than warning that the page
-		// cannot answer its own headline question.
+		// SAYS WHAT IS MISSING, exactly as `trace` does, so a client can say
+		// the gap is the middle rather than warning that the page cannot
+		// answer its own headline question.
 		"truncated": truncated,
 		"trace_ids": traces,
 		// WHICH NODES THE TURN WAS ASSEMBLED FROM. A node that did not
@@ -129,20 +128,28 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 // tags blob nor off [store.EventRecord.Spend]. Spend is set by the WRITE path
 // and never by a read — `finishRecord` does not populate it — so a reader
 // reaching through it would find nil on every row and quietly answer "no
-// attempts" for every turn in the company. The tags blob is populated on
-// read, but only from what the WRITER extracted: schema/0029 backfilled the
-// column for history and could not rewrite every stored blob, so a tag read
-// answers nothing for every turn written before the split. See the field.
+// attempts" for every turn in the company. The column is the one authority
+// every work-key reader uses — the turns list's grouping, the phase-token
+// rollup, the `work_key` filter. See the field.
 //
 // THE WINDOW IS THE DETAIL READ'S, not the turns list's default. [store.Turn]
 // is a listing type and its query takes DefaultTurnDays — a week — when asked
 // for nothing, while the rows above came from [store.EventLog.Turn], which
 // floors at [store.EventHistory]. Left implicit, opening a turn between eight
 // and thirty days old found its work key and then reported no attempt at all,
-// including the one being read. MaxTurnDays is that same horizon, so the two
-// halves of this answer describe one window.
+// including the one being read. MaxTurnDays is that same horizon.
+//
+// AND THE INSTANT IS THE DETAIL READ'S: `at` is the one the turn was asked at
+// ([eventfan.TurnDetail.At]), and the listing is pinned to it. Asked at a
+// fresh reading of the clock — a whole fleet scatter later, up to its read
+// budget when a node is slow — the listing's horizon sat above the detail's,
+// so a turn whose first rows lay between the two was shown whole and then
+// listed as starting later with part of its tokens, or, when all of it lay
+// there, not listed at all: the same "no attempt, not even this one" the
+// window above was widened to end. One window AND one instant, so the two
+// halves of this answer describe the same rows.
 func (s Sources) attemptsOf(ctx context.Context, id string,
-	records []store.EventRecord,
+	records []store.EventRecord, at time.Time,
 ) (string, []store.Turn) {
 	key := ""
 	for _, rec := range records {
@@ -166,6 +173,7 @@ func (s Sources) attemptsOf(ctx context.Context, id string,
 		WorkKey:   key,
 		SinceDays: store.MaxTurnDays,
 		Limit:     store.MaxTurnPage,
+		At:        at,
 	})
 	if err != nil {
 		log.WarnContext(ctx, "turn_attempts_unavailable", "turn", id,
@@ -173,9 +181,15 @@ func (s Sources) attemptsOf(ctx context.Context, id string,
 		return key, []store.Turn{}
 	}
 	rows := page.Turns
-	// OLDEST FIRST, which the listing is not: "attempt 2 of 3" has to count
-	// from the one that ran first, whatever order the list was built in.
-	slices.Reverse(rows)
+	// OLDEST FIRST BY START, which the listing is not: "attempt 2 of 3" has to
+	// count from the one that ran first, whatever order the list was built in.
+	// Not the listing reversed — a fleet's list is ordered by where each turn
+	// is LISTED ([eventfan.Fleet.Turns]), which is not where it began for a
+	// turn whose earliest half no node lists, so reversed it could count a
+	// later attempt first.
+	slices.SortStableFunc(rows, func(a, b store.Turn) int {
+		return cmp.Or(a.StartedAt.Compare(b.StartedAt), cmp.Compare(a.TurnID, b.TurnID))
+	})
 	return key, rows
 }
 

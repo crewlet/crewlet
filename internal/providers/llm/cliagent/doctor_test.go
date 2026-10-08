@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
 // The CLI runs on the ENGINE host. A provider whose binary is missing there
@@ -113,8 +115,9 @@ func TestDoctorSaysWhenTokenCountsAreEstimated(t *testing.T) {
 }
 
 // The one failure nothing else catches: the CLI answers, and answers with
-// PROSE. A seat on such a provider burns a corrective round every single
-// turn, and the config looks perfect.
+// PROSE. Every phase a seat runs on such a provider spends corrective rounds
+// asking again — and ends without its submission when the model never manages
+// one — while the config looks perfect.
 func TestTheSmokeTestCatchesACLIThatCannotProduceAToolCall(t *testing.T) {
 	dir := t.TempDir()
 	t.Cleanup(func() { forgetWorkspace(dir) })
@@ -208,6 +211,33 @@ func TestTheSmokeTestPassesOnAWorkingEnvelope(t *testing.T) {
 	d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
 	if !strings.HasPrefix(d.Smoke, "ok") {
 		t.Fatalf("Smoke = %q", d.Smoke)
+	}
+}
+
+// THE SMOKE TEST ASKS THE WAY A PHASE ASKS. It certifies that a call arrives
+// when the conversation names the tool and nothing forces it — the shape every
+// phase, and the tool loop's finishing corrective, relies on. It used to force
+// the call, which rendered the envelope's "MUST" contract no phase receives,
+// so a CLI that called a tool only when told it must passed here.
+func TestTheSmokeTestAsksTheWayAPhaseAsks(t *testing.T) {
+	t.Parallel()
+	req := smokeRequest()
+	prompt, err := RenderPrompt(req)
+	if err != nil {
+		t.Fatalf("RenderPrompt: %v", err)
+	}
+	if !strings.Contains(prompt, RenderContract()) {
+		t.Errorf("the smoke prompt does not carry the contract a phase gets:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "MUST") {
+		t.Errorf("the smoke prompt demands a call no phase demands:\n%s", prompt)
+	}
+	last := req.Messages[len(req.Messages)-1]
+	if last.Role != llm.RoleUser || !strings.Contains(last.Content, "crewlet_smoke") {
+		t.Errorf("the instruction does not name the tool: %+v", last)
+	}
+	if len(req.Tools) != 1 || req.Tools[0].Name != "crewlet_smoke" {
+		t.Errorf("tools = %+v, want crewlet_smoke offered", req.Tools)
 	}
 }
 

@@ -39,8 +39,18 @@ type statelessPair struct {
 
 func startStatelessPair(t *testing.T) statelessPair {
 	t.Helper()
+	return startStatelessPairWith(t, nil)
+}
+
+// startStatelessPairWith is [startStatelessPair] over a company document the
+// caller may amend first.
+func startStatelessPairWith(t *testing.T, amend func(doc string) string) statelessPair {
+	t.Helper()
 	model := newScriptedModel(t)
 	doc := fmt.Sprintf(companyDoc, model.url)
+	if amend != nil {
+		doc = amend(doc)
+	}
 	// PINNED, so the one agent seat runs where the data is not: a turn that
 	// happened to land on the data node would test nothing here.
 	doc = strings.Replace(doc, "    handle: ceo\n    llm: scripted\n",

@@ -66,6 +66,18 @@ func (p *auxProvider) request(t *testing.T, i int) llm.Request {
 	return p.seen[i]
 }
 
+// wantLowEffort fails unless req caps its effort at low. EVERY LEARNING PASS
+// is extraction — a short classification or a draft the next pass refines —
+// and on a thinking model the thinking is spent out of the same cap as the
+// answer, so a pass at its entry's level comes back empty and reads as
+// "nothing to learn".
+func wantLowEffort(t *testing.T, req llm.Request) {
+	t.Helper()
+	if req.Effort != llm.EffortLow {
+		t.Errorf("effort = %q, want a ceiling of low", req.Effort)
+	}
+}
+
 // prompt returns the user prompt of the i-th request.
 func (p *auxProvider) prompt(t *testing.T, i int) string {
 	t.Helper()
@@ -404,8 +416,8 @@ func TestAMalformedResponseWritesNothingAndFailsNothing(t *testing.T) {
 func TestAnUnknownTierIsTreatedAsNothingDurable(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ name, body string }{
-		// The shape an older three-scope prompt asked for. "org" must not
-		// be read as anything writable.
+		// A scope where a tier goes: "org" must not be read as anything
+		// writable.
 		{"a scope instead of a tier", `{"scope": "org", "content": "Anything."}`},
 		{"an invented tier", `{"kind": "UNIT", "content": "Anything."}`},
 		{"an empty tier", `{"kind": "", "content": "Anything."}`},
@@ -695,6 +707,7 @@ func TestTheClassifierCallIsToollessBoundedAndNearlyDeterministic(t *testing.T) 
 	if got := *req.Temperature; got != 0.2 {
 		t.Errorf("temperature = %v, want 0.2", got)
 	}
+	wantLowEffort(t, req)
 	if req.MaxTokens != learning.DefaultAuxTokens {
 		t.Errorf("max tokens = %d, want %d — a tighter cap is spent thinking and returns empty content",
 			req.MaxTokens, learning.DefaultAuxTokens)
@@ -811,10 +824,19 @@ func TestTheDeciderSkipsTheTurnsItMustNotClassify(t *testing.T) {
 	}{
 		{"mid-turn", func(x *learning.Turn) { x.Event.ReviewOutcome = "self_iterate" }, "non_terminal"},
 		{"no outcome at all", func(x *learning.Turn) { x.Event.ReviewOutcome = "" }, "non_terminal"},
-		{"already self-persisted in an older build's planning phase",
-			func(x *learning.Turn) { x.Event.PlanToolSequence = []string{"reflect_and_persist"} }, "self_persisted"},
-		{"already self-persisted in Execute",
-			func(x *learning.Turn) { x.Event.ToolSequence = []string{"reflect_and_persist"} }, "self_persisted"},
+		{"already self-persisted in the final executor iteration",
+			func(x *learning.Turn) {
+				x.Event.ToolSequence = []string{"reflect_and_persist"}
+				x.Event.AllToolNames = []string{"reflect_and_persist"}
+			}, "self_persisted"},
+		// The reviewer sent the first attempt back with self_iterate after
+		// it had written the memory; the final iteration did not call the
+		// tool again, so only the whole-turn list still names it.
+		{"already self-persisted in an iteration the reviewer sent back",
+			func(x *learning.Turn) {
+				x.Event.ToolSequence = []string{"send_message"}
+				x.Event.AllToolNames = []string{"reflect_and_persist", "send_message"}
+			}, "self_persisted"},
 		{"done", func(*learning.Turn) {}, ""},
 		{"failed", func(x *learning.Turn) { x.Event.ReviewOutcome = "failed" }, ""},
 	} {

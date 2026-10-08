@@ -24,9 +24,8 @@ import (
 // written for an `agent_phase_completed` with `phase: auxiliary` that nothing
 // ever published, and publishing one would have been wrong: that type DRIVES
 // the live seat state, so a reflection call stamped after its turn ended
-// reopened the turn on every node (older ones included) and cleared a held
-// provider stop. A record of spend must move no seat, so it is a type no state
-// machine reads.
+// reopened the turn on every node and cleared a held provider stop. A record
+// of spend must move no seat, so it is a type no state machine reads.
 //
 // # Coalesced, never one per call
 //

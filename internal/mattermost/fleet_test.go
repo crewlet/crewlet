@@ -12,17 +12,23 @@ import (
 	"testing"
 	"time"
 
+	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
-// recorder collects what the fleet republished.
+// recorder collects what the fleet republished: the wakes in sent, and the
+// delivery records beside them in recorded.
 type recorder struct {
-	mu   sync.Mutex
-	sent []*events.Event
-	fail error
+	mu       sync.Mutex
+	sent     []*events.Event
+	recorded []*events.Event
+	fail     error
+	// failures is how many of the next publishes fail, before every later
+	// one succeeds: a broker that blinks rather than one that is down.
+	failures int
 }
 
 func (r *recorder) Publish(_ context.Context, topic string, ev *events.Event) error {
@@ -31,11 +37,32 @@ func (r *recorder) Publish(_ context.Context, topic string, ev *events.Event) er
 	if r.fail != nil {
 		return r.fail
 	}
-	if topic != topics.NotificationsInbound {
+	if r.failures > 0 {
+		r.failures--
+		return errors.New("the broker blinked")
+	}
+	switch topic {
+	case topics.NotificationsInbound:
+		r.sent = append(r.sent, ev)
+	case topics.Event(types.InboundDelivery{}.EventType()):
+		r.recorded = append(r.recorded, ev)
+	default:
 		return errors.New("published onto " + topic)
 	}
-	r.sent = append(r.sent, ev)
 	return nil
+}
+
+// records are the delivery records the fleet published.
+func (r *recorder) records() []*types.InboundDelivery {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []*types.InboundDelivery
+	for _, ev := range r.recorded {
+		if d, ok := events.DataAs[*types.InboundDelivery](ev); ok {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 func (r *recorder) posts() []map[string]any {
@@ -155,8 +182,8 @@ func TestEachPostIsRepublishedAsAWebhook(t *testing.T) {
 	rec := &recorder{}
 	sock := newSocket(frame("p1", "hello", nil))
 	f, err := mattermost.NewFleet(mattermost.FleetOptions{
-		Publisher: rec,
-		Backoff:   fastBackoff,
+		Publisher: rec, Claims: coordmemory.NewFleet(),
+		Backoff: fastBackoff,
 		Connect: func(context.Context, mattermost.Seat, *mattermost.Client) (mattermost.Socket, error) {
 			return sock, nil
 		},
@@ -203,8 +230,8 @@ func TestNonPostFramesAreIgnored(t *testing.T) {
 		frame("p1", "hello", nil),
 	)
 	f, _ := mattermost.NewFleet(mattermost.FleetOptions{
-		Publisher: rec,
-		Backoff:   fastBackoff,
+		Publisher: rec, Claims: coordmemory.NewFleet(),
+		Backoff: fastBackoff,
 		Connect: func(context.Context, mattermost.Seat, *mattermost.Client) (mattermost.Socket, error) {
 			return sock, nil
 		},
@@ -275,7 +302,7 @@ func TestTheBackfillWindowIsBounded(t *testing.T) {
 	}
 	var dials atomic.Int32
 	f, _ := mattermost.NewFleet(mattermost.FleetOptions{
-		Publisher: rec, Backoff: fastBackoff,
+		Publisher: rec, Claims: coordmemory.NewFleet(), Backoff: fastBackoff,
 		// A window far shorter than the outage.
 		Backfill: time.Minute,
 		Connect: func(context.Context, mattermost.Seat, *mattermost.Client) (mattermost.Socket, error) {
@@ -322,8 +349,8 @@ func TestADuplicatePostIsPublishedOnce(t *testing.T) {
 		frame("p2", "again", nil),
 	)
 	f, _ := mattermost.NewFleet(mattermost.FleetOptions{
-		Publisher: rec,
-		Backoff:   fastBackoff,
+		Publisher: rec, Claims: coordmemory.NewFleet(),
+		Backoff: fastBackoff,
 		Connect: func(context.Context, mattermost.Seat, *mattermost.Client) (mattermost.Socket, error) {
 			return sock, nil
 		},
@@ -343,7 +370,10 @@ func TestADuplicatePostIsPublishedOnce(t *testing.T) {
 // itself — and the cursor it resumes from is the SERVER's clock.
 func TestAReconnectReplaysTheGapInOrder(t *testing.T) {
 	s := newServer(t)
-	serverNow := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+	// THE SERVER'S CLOCK READS A MINUTE BEFORE THE POSTS, so the first
+	// connect's anchor sits behind them and the gap holds what was
+	// created after the drop — as a real gap does.
+	serverNow := time.UnixMilli(1718003000000).UTC().Add(-time.Minute)
 	var backfilled atomic.Int32
 	s.responds(func(w http.ResponseWriter, r *http.Request) bool {
 		w.Header().Set("Date", serverNow.Format(http.TimeFormat))
@@ -383,8 +413,8 @@ func TestAReconnectReplaysTheGapInOrder(t *testing.T) {
 	second := newSocket()
 	var dials atomic.Int32
 	f, _ := mattermost.NewFleet(mattermost.FleetOptions{
-		Publisher: rec,
-		Backoff:   fastBackoff,
+		Publisher: rec, Claims: coordmemory.NewFleet(),
+		Backoff: fastBackoff,
 		Connect: func(context.Context, mattermost.Seat, *mattermost.Client) (mattermost.Socket, error) {
 			if dials.Add(1) == 1 {
 				return first, nil
@@ -432,8 +462,8 @@ func TestAFirstConnectReplaysNothing(t *testing.T) {
 	rec := &recorder{}
 	sock := newSocket(frame("p1", "hello", nil))
 	f, _ := mattermost.NewFleet(mattermost.FleetOptions{
-		Publisher: rec,
-		Backoff:   fastBackoff,
+		Publisher: rec, Claims: coordmemory.NewFleet(),
+		Backoff: fastBackoff,
 		Connect: func(context.Context, mattermost.Seat, *mattermost.Client) (mattermost.Socket, error) {
 			return sock, nil
 		},
@@ -455,8 +485,8 @@ func TestAFailingConnectionIsRetried(t *testing.T) {
 	var dials atomic.Int32
 	sock := newSocket(frame("p1", "at last", nil))
 	f, _ := mattermost.NewFleet(mattermost.FleetOptions{
-		Publisher: rec,
-		Backoff:   fastBackoff,
+		Publisher: rec, Claims: coordmemory.NewFleet(),
+		Backoff: fastBackoff,
 		Connect: func(context.Context, mattermost.Seat, *mattermost.Client) (mattermost.Socket, error) {
 			if dials.Add(1) < 3 {
 				return nil, errors.New("connection refused")
@@ -483,8 +513,8 @@ func TestAddingASeatTwiceReplacesItsSocket(t *testing.T) {
 	second := newSocket(frame("p2", "on the new socket", nil))
 	var dials atomic.Int32
 	f, _ := mattermost.NewFleet(mattermost.FleetOptions{
-		Publisher: rec,
-		Backoff:   fastBackoff,
+		Publisher: rec, Claims: coordmemory.NewFleet(),
+		Backoff: fastBackoff,
 		Connect: func(context.Context, mattermost.Seat, *mattermost.Client) (mattermost.Socket, error) {
 			if dials.Add(1) == 1 {
 				return first, nil
@@ -525,8 +555,8 @@ func TestRemovingASeatStopsItsLoop(t *testing.T) {
 	rec := &recorder{}
 	sock := newSocket()
 	f, _ := mattermost.NewFleet(mattermost.FleetOptions{
-		Publisher: rec,
-		Backoff:   fastBackoff,
+		Publisher: rec, Claims: coordmemory.NewFleet(),
+		Backoff: fastBackoff,
 		Connect: func(context.Context, mattermost.Seat, *mattermost.Client) (mattermost.Socket, error) {
 			return sock, nil
 		},
@@ -544,11 +574,17 @@ func TestRemovingASeatStopsItsLoop(t *testing.T) {
 	f.Stop()
 }
 
-func TestAFleetNeedsAPublisherAndItsSeatsNeedClients(t *testing.T) {
+func TestAFleetNeedsAPublisherAndClaimsAndItsSeatsNeedClients(t *testing.T) {
 	if _, err := mattermost.NewFleet(mattermost.FleetOptions{}); err == nil {
 		t.Fatal("a fleet was built with no publisher")
 	}
-	f, _ := mattermost.NewFleet(mattermost.FleetOptions{Publisher: &recorder{}})
+	if _, err := mattermost.NewFleet(mattermost.FleetOptions{Publisher: &recorder{}}); err == nil {
+		t.Fatal("a fleet was built with no claim registry, which wakes a seat once per node " +
+			"for every post")
+	}
+	f, _ := mattermost.NewFleet(mattermost.FleetOptions{
+		Publisher: &recorder{}, Claims: coordmemory.NewFleet(),
+	})
 	s := newServer(t)
 	if err := f.Add(t.Context(), mattermost.Seat{Username: "x"}, client(t, s)); err == nil {
 		t.Fatal("a seat with no handle was attached")
@@ -607,7 +643,7 @@ func TestTheCursorNeverRegresses(t *testing.T) {
 	}
 	var dials atomic.Int32
 	f, _ := mattermost.NewFleet(mattermost.FleetOptions{
-		Publisher: rec, Backoff: fastBackoff,
+		Publisher: rec, Claims: coordmemory.NewFleet(), Backoff: fastBackoff,
 		Connect: func(context.Context, mattermost.Seat, *mattermost.Client) (mattermost.Socket, error) {
 			return sockets[min(int(dials.Add(1))-1, len(sockets)-1)], nil
 		},
@@ -615,10 +651,15 @@ func TestTheCursorNeverRegresses(t *testing.T) {
 	f.Add(t.Context(), seat, client(t, s))
 	defer f.Stop()
 
+	backfills := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(cursors)
+	}
 	waitFor(t, 1, func() int { return len(rec.posts()) })
 	sockets[0].Close() // the first drop: backfill hands back an OLDER post
 
-	waitFor(t, 2, func() int { return len(rec.posts()) })
+	waitFor(t, 1, backfills)
 	sockets[1].Close() // the second drop: the cursor must not have regressed
 
 	deadline := time.Now().Add(3 * time.Second)
@@ -643,6 +684,13 @@ func TestTheCursorNeverRegresses(t *testing.T) {
 			t.Fatalf("backfill %d resumed from %s, want the newest seen (%s)", i, c, want)
 		}
 	}
+	// AND THE OLDER POST IS NOT REPLAYED AT ALL. The read is update-based,
+	// so a post created before the gap comes back only because something
+	// touched it — a reaction, a deleted reply — and replaying it woke the
+	// seat to answer a message it had answered already.
+	if ids := strings.Join(rec.ids(), ","); ids != "p1" {
+		t.Fatalf("published %q, want only the live post — g1 was created before the gap", ids)
+	}
 }
 
 // A seat in three teams should still hear two of them: one team's channel
@@ -659,7 +707,7 @@ func TestOneUnreadableTeamDoesNotLoseTheRest(t *testing.T) {
 				"posts": map[string]any{"g1": map[string]any{
 					"id": "g1", "channel_id": "C2", "user_id": "u-ana",
 					"message":   "from the healthy team",
-					"create_at": float64(serverNow.Add(-time.Minute).UnixMilli()),
+					"create_at": float64(serverNow.Add(time.Minute).UnixMilli()),
 				}},
 			})
 		case strings.Contains(r.URL.Path, "/teams/broken/channels"):
@@ -680,7 +728,7 @@ func TestOneUnreadableTeamDoesNotLoseTheRest(t *testing.T) {
 	sockets := []*fakeSocket{newSocket(frame("p1", "live", nil)), newSocket()}
 	var dials atomic.Int32
 	f, _ := mattermost.NewFleet(mattermost.FleetOptions{
-		Publisher: rec, Backoff: fastBackoff,
+		Publisher: rec, Claims: coordmemory.NewFleet(), Backoff: fastBackoff,
 		Connect: func(context.Context, mattermost.Seat, *mattermost.Client) (mattermost.Socket, error) {
 			return sockets[min(int(dials.Add(1))-1, len(sockets)-1)], nil
 		},
@@ -714,7 +762,7 @@ func TestASeatWhoseServerStopsAnsweringIsReconnected(t *testing.T) {
 
 	var dials atomic.Int64
 	f, err := mattermost.NewFleet(mattermost.FleetOptions{
-		Publisher:    rec,
+		Publisher: rec, Claims: coordmemory.NewFleet(),
 		Backoff:      fastBackoff,
 		PingInterval: 5 * time.Millisecond,
 		PongTimeout:  50 * time.Millisecond,
@@ -751,7 +799,7 @@ func TestAQuietButHealthySocketIsNotReconnected(t *testing.T) {
 
 	var dials atomic.Int64
 	f, err := mattermost.NewFleet(mattermost.FleetOptions{
-		Publisher:    rec,
+		Publisher: rec, Claims: coordmemory.NewFleet(),
 		Backoff:      fastBackoff,
 		PingInterval: 2 * time.Millisecond,
 		PongTimeout:  time.Second,

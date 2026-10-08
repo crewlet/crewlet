@@ -26,6 +26,7 @@ import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { calendarWeeks, dayKey, dayLabel, filterPatchForGroup } from "~/lib/work.ts";
 import type { QueryName, WorkGroup, WorkProjectRow, WorkSummary } from "~/protocol/index.ts";
+import { withDerived } from "~/test/org.ts";
 
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
@@ -584,10 +585,12 @@ function serving(
   });
   vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
   vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
-  vi.mocked(useOrg).mockReturnValue({
-    name: "Acme",
-    roles: [{ name: "Ada Okonkwo", handle: "ada", kind: "agent" }],
-  } as never);
+  vi.mocked(useOrg).mockReturnValue(
+    withDerived({
+      name: "Acme",
+      roles: [{ name: "Ada Okonkwo", handle: "ada", kind: "agent" }],
+    }) as never,
+  );
   return query;
 }
 
@@ -1872,7 +1875,7 @@ test("rows past the first page are reachable", async () => {
   );
   vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
   vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
-  vi.mocked(useOrg).mockReturnValue({ name: "Acme", roles: [] } as never);
+  vi.mocked(useOrg).mockReturnValue(withDerived({ name: "Acme", roles: [] }) as never);
   mountWork();
   await waitFor(() => expect(screen.getByText("a task called 2")).toBeTruthy());
   expect(screen.queryByText("a task called 3")).toBeNull();

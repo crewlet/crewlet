@@ -30,6 +30,14 @@
  * public projection, so a per-peek read of the whole guarded configuration
  * (on every `[`/`]` step through a list) would buy nothing.
  *
+ * # Watch live, from the chart in two presses
+ *
+ * While the seat is working the state card ends with "Watch live" — the turn's
+ * watch link, its Transcript with the phase it is on open. In the card, not on
+ * the chart: a chart card is a tree item, and a link inside a tree item is a
+ * control nested in a control, which neither a keyboard nor a screen reader
+ * can reach as itself. So it is the chart's card, then this link.
+ *
  * # Message is a task that asks
  *
  * There is no person-to-seat chat channel. Message opens the one New task
@@ -64,10 +72,11 @@ import {
 import { unitPath } from "~/lib/orgchart.ts";
 import type { AgentRow, BudgetWindow, LiveCall, LiveTurn } from "~/protocol/types.ts";
 import { useSandboxes } from "~/lib/store-hooks.ts";
+import { turnIdOf, watchHref } from "~/lib/turns.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { PERIOD_WORDS } from "~/lib/budget.ts";
 import { renderInline } from "~/lib/markdown.ts";
-import { companyCeilings } from "./seat/profile.ts";
+import { companyCeilings, liveRow, seatRun } from "./seat/profile.ts";
 
 /** How many tool sources the peek names before "+n". */
 const TOOL_CHIPS = 3;
@@ -146,24 +155,17 @@ export function SeatPeek({ handle }: { handle: string }) {
     );
   }
   return (
-    <SeatPeekBody
-      seat={seat}
-      agent={agents.find((a) => a.role === seat.name)}
-      hierarchy={index.hierarchy}
-      nameOf={nameOfIn(index)}
-    />
+    <SeatPeekBody seat={seat} agent={liveRow(agents, handle, seat)} nameOf={nameOfIn(index)} />
   );
 }
 
 function SeatPeekBody({
   seat,
   agent,
-  hierarchy,
   nameOf,
 }: {
   seat: Seat;
   agent: AgentRow | undefined;
-  hierarchy: boolean;
   nameOf: (key: string) => string;
 }) {
   const now = useNow();
@@ -199,7 +201,7 @@ function SeatPeekBody({
   const windows = agent?.budget?.windows ?? [];
   const chain = seat.raw.llm?.["execute"] ?? [];
   const tools = seat.raw.tool_sources ?? [];
-  const sandbox = sandboxes.find((s) => s.role === seat.name) ?? null;
+  const sandbox = seatRun(sandboxes, seat);
   const place = unitPath(seat.unit);
 
   return (
@@ -231,6 +233,11 @@ function SeatPeekBody({
           </span>
         </span>
         {state === "working" && facts && <span className="seat-peek-facts">{facts}</span>}
+        {state === "working" && turnIdOf(agent) && (
+          <a className="t-link seat-peek-watch" href={watchHref(turnIdOf(agent))}>
+            Watch live
+          </a>
+        )}
         {human && (
           <span className="seat-peek-facts">
             The engine never runs a human seat, so there is no turn, model or token budget here.
@@ -264,10 +271,8 @@ function SeatPeekBody({
               />
               {seat.manager.name}
             </a>
-          ) : hierarchy ? (
-            "Nobody — the top of the chart"
           ) : (
-            <EmptyValue label="Not reported by this engine" />
+            "Nobody — the top of the chart"
           )}
         </dd>
 
@@ -321,7 +326,7 @@ function SeatPeekBody({
                 <span className="seat-peek-node">
                   <StatusDot tone="success" />
                   {lease.node}
-                  {lease.acquired_at && ` · since ${sinceWords(lease.acquired_at, now)}`}
+                  {` · since ${sinceWords(lease.acquired_at, now)}`}
                 </span>
               ) : fleet.data ? (
                 "No node holds it"

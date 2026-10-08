@@ -15,11 +15,15 @@ import { CommandPalette } from "./Palette.tsx";
 import { forgetAnswersForTest } from "./answer.ts";
 import { ANSWER_IDLE_MS } from "./hits.ts";
 import { COLLEAGUE_QUERY_MAX, SEARCH_QUERY_MAX } from "~/contract/wire.ts";
-import { Router } from "../router.tsx";
+import { Router, href } from "../router.tsx";
+import { DESTINATIONS } from "../nav.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
+import { remember } from "~/lib/recents.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+import { withDerived } from "~/test/org.ts";
+import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 
 vi.mock("~/lib/viewer.ts", () => ({ useViewer: vi.fn() }));
 
@@ -151,7 +155,7 @@ function mount({
   vi.mocked(useViewer).mockReturnValue(viewer);
   const store = new Store();
   store.setConnected(true);
-  store.applyOrg(ORG as never);
+  store.applyOrg(withDerived(ORG) as never);
   store.applyAgents(agents as never);
   const socket = new LiveSocket(store);
   socket.query = ((kind: string, params?: Record<string, unknown>) => {
@@ -174,6 +178,7 @@ function mount({
   );
   const input = screen.getByRole("combobox");
   return {
+    store,
     closed,
     keys,
     input,
@@ -253,6 +258,125 @@ describe("scopes and sigils", () => {
     expect(screen.getByText("Teams")).toBeDefined();
     expect(screen.getByText("Platform")).toBeDefined();
     expect(screen.getByText("SWE")).toBeDefined();
+  });
+});
+
+// THE TURNS RUNNING AS IT OPENED SIT UNDER RECENT IN AN EMPTY PALETTE, each
+// going to the turn's watch link — its Transcript, the phase it is on open.
+// Oldest first, as every list of running turns is; a seat waiting on a person,
+// or one whose turn has no id yet, is not offered as a way to a running turn.
+describe("running now", () => {
+  const working = (role: string, handle: string, turn: string, minute: number, item = "") => ({
+    role,
+    handle,
+    activity: "working",
+    turn: {
+      turn_id: turn,
+      started_at: `2026-09-21T10:0${minute}:00Z`,
+      stage: "phase",
+      ...(item ? { work_item: { backend: "native", id: item, key: item, project: "ENG" } } : {}),
+    },
+    live_call: {
+      turn_id: turn,
+      phase: "execute",
+      round_num: 0,
+      rounds_used: 1,
+      max_rounds: 25,
+      versions: ZERO_VERSIONS,
+    },
+  });
+  const agents = [
+    working("SRE", "sre", "t-late", 9),
+    working("SWE", "swe", "t-early", 1, "ENG-412"),
+    { role: "Jane Founder", handle: "jane", activity: "needs" },
+    { ...working("SWE 2", "swe-2", "", 3), turn: null, live_call: null },
+  ];
+
+  /** The group a heading names, by its rendered label. */
+  const group = (label: string) => screen.getByText(label).closest('[role="group"]') as HTMLElement;
+  /** The option the listbox holds active — the one Enter commits. */
+  const highlighted = () => {
+    const id = screen.getByRole("combobox").getAttribute("aria-activedescendant") ?? "";
+    return document.getElementById(id)?.textContent ?? "";
+  };
+
+  test("sits under Recent in the empty All scope, oldest first, saying what each is doing", () => {
+    remember({ path: ["inbox"], label: "Inbox", workspace: "Inbox" }, true);
+    mount({ agents });
+    // UNDER RECENT, ahead of Go to: the first row is still where the reader was.
+    expect(screen.getAllByRole("option")[0]?.textContent).toContain("Inbox");
+    const rows = within(group("Running now")).getAllByRole("option");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.textContent).toContain("SWE");
+    expect(rows[0]?.textContent).toContain("Executing ENG-412");
+    expect(rows[1]?.textContent).toContain("SRE");
+    const order = (a: Node, b: Node) =>
+      Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(order(group("Recent"), group("Running now")), "Recent comes first").toBe(true);
+    expect(order(group("Running now"), group("Go to")), "Go to follows it").toBe(true);
+  });
+
+  // "⌘K, ENTER" REOPENS WHERE THE READER WAS, whether or not the company is
+  // working — a group above Recent made that habit open a running turn.
+  test("Enter on an empty palette still reopens the most recent place while turns run", async () => {
+    remember({ path: ["inbox"], label: "Inbox", workspace: "Inbox" }, true);
+    const p = mount({ agents });
+    await p.press("Enter");
+    expect(location.hash).toBe("#/inbox");
+  });
+
+  // THE SET IS READ AS THE PALETTE OPENS. The kit holds the highlight by
+  // index, so a turn that ended while the palette was open took its row out
+  // from under every row below it, and Enter opened the row after the one
+  // highlighted. The finished turn keeps its row and says so.
+  test("a turn ending while it is open moves no row, and Enter opens the one highlighted", async () => {
+    const p = mount({ agents });
+    // PAST BOTH RUNNING ROWS, onto a Go to row whose index the group's size decides.
+    for (let i = 0; i < 3; i++) await p.press("ArrowDown");
+    const before = highlighted();
+    expect(before, "the highlight is on a row under the group").not.toContain("SRE");
+    act(() =>
+      p.store.applyAgents([
+        { role: "SWE", handle: "swe", activity: "idle", turn: null, live_call: null },
+        agents[0]!,
+      ] as never),
+    );
+    expect(highlighted()).toBe(before);
+    const rows = within(group("Running now")).getAllByRole("option");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.textContent).toContain("Finished");
+    // THE SCREEN THE HIGHLIGHTED ROW NAMES — the longest label it starts
+    // with, so a label that prefixes another cannot answer for it.
+    const dest = DESTINATIONS.filter((d) => before.startsWith(d.label)).sort(
+      (a, b) => b.label.length - a.label.length,
+    )[0];
+    expect(dest, `no destination is labelled like "${before}"`).toBeTruthy();
+    await p.press("Enter");
+    expect(location.hash).toBe(href(dest!.path));
+  });
+
+  // AND A TURN THAT STARTS while it is open is not offered until the next ⌘K.
+  test("a turn starting while it is open adds no row", () => {
+    const p = mount({ agents });
+    act(() => p.store.applyAgents([...agents, working("CTO", "cto", "t-new", 5)] as never));
+    expect(within(group("Running now")).getAllByRole("option")).toHaveLength(2);
+  });
+
+  test("a row goes to the turn's watch link", () => {
+    const p = mount({ agents });
+    const running = screen.getByText("Running now").closest('[role="group"]') as HTMLElement;
+    fireEvent.click(within(running).getAllByRole("option")[0]!);
+    expect(location.hash).toBe("#/live/turns/t-early?tab=transcript");
+    expect(p.closed).toHaveBeenCalled();
+  });
+
+  test("is not drawn once something is typed, or while nothing runs", async () => {
+    const p = mount({ agents });
+    await p.type("deploy");
+    expect(screen.queryByText("Running now")).toBeNull();
+    cleanup();
+    mount({ agents: [{ role: "SWE", activity: "idle" }] });
+    expect(screen.queryByText("Running now")).toBeNull();
   });
 });
 

@@ -76,6 +76,10 @@ type TransportOptions struct {
 	Config    Config
 	Publisher Publisher
 
+	// Claims is the fleet-wide registry each post is claimed in before it
+	// is published — see [FleetOptions.Claims]. Required.
+	Claims Claims
+
 	// Follows persists thread-follow state. Nil turns thread routing off,
 	// which is the pre-follow behaviour and legitimate for a single-agent
 	// workspace where there is no second bot for a reply to belong to.
@@ -142,7 +146,7 @@ func NewTransport(opts TransportOptions) (*Transport, error) {
 	}
 
 	fleet, err := NewFleet(FleetOptions{
-		Publisher: opts.Publisher, Connect: opts.Connect,
+		Publisher: opts.Publisher, Claims: opts.Claims, Connect: opts.Connect,
 		Backoff: opts.Backoff, Backfill: opts.Backfill, Now: t.now,
 	})
 	if err != nil {
@@ -189,8 +193,11 @@ func (t *Transport) lookup(handle string) (Seat, bool) {
 // config holds — that one is usually a ${VAR}.
 func (t *Transport) URL() string { return t.cfg.URL }
 
-// Start connects every configured seat, opening the websocket fleet that
-// delivers to the seats this node holds.
+// Start connects every configured seat — every one, on every node, whatever
+// seats this node holds. The fleet claims each post before it publishes it, so
+// exactly one node delivers a post however many read it (see the "Every node
+// listens" section of fleet.go): a node restarting or losing a seat leaves it
+// heard by the rest, with no gap and no handover.
 //
 // A SEAT THAT FAILS DOES NOT STOP THE OTHERS. One bot's token being revoked
 // is an ordinary state — an operator rotating credentials one at a time —
@@ -466,6 +473,9 @@ func (t *Transport) ReadThread(ctx context.Context, handle, channel, root string
 		rootSeen = rootSeen || isRoot
 		out.Messages = append(out.Messages, notify.Message{
 			SenderID: post.UserID,
+			// THE POST ID, which is what the trigger's `ts` is on this
+			// backend — see [notify.Message.ID].
+			ID: post.ID,
 			// NO NAME. A Mattermost post carries a user id and nothing
 			// else, so the party registry is the only thing that can
 			// turn one into a colleague — and a miss renders the raw

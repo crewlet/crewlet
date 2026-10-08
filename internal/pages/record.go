@@ -27,10 +27,9 @@ import (
 //
 // # What each version added
 //
-//   - 1: every shape this domain has.
-//   - 2: a container's settings carry the chart epoch they were written from
-//     ([ContainerPayload.ChartEpoch]).
-const RecordVersion = 2
+//   - 1: every shape this domain has, a container's chart epoch
+//     ([ContainerPayload.ChartEpoch]) included.
+const RecordVersion = 1
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped at.
@@ -55,33 +54,7 @@ const baseRecordVersion = 1
 // framework's ([statelog.VersionedField]). A field no tag has shipped is still
 // a field two builds of one rolling upgrade disagree about, so "nothing has
 // been released" does not exempt a new field from its row.
-var versionedFields = statelog.RecordFields{
-	// A CONTAINER'S ACTIVATION STAMP, at version 2. A build reading 1
-	// decodes a container's settings around it and applies the rest: its
-	// row then says nothing about which configuration wrote it, so on that
-	// node the epoch guard ([Store.EnsureContainer]) has nothing to refuse
-	// an older activation with — the walk-back the stamp exists to stop,
-	// open on the very node that could not read it — and its document
-	// differs from every upgraded node's.
-	//
-	// EVERY RECORD THAT CARRIES ONE, A RE-STAMP INCLUDED. A later
-	// activation over the settings a row already holds carries nothing new
-	// but the stamp, and it was once written at 1 so that an older node
-	// would apply it rather than hold back the page writes in that space.
-	// Applied there, it leaves the row unstamped on that node AFTER its
-	// upgrade — while every peer holds the stamp — so the first stale
-	// activation that node applies before re-stamping walks the settings
-	// back for the whole fleet, because appliers apply what a writer
-	// decided. Retained, it is applied with its stamp the moment the node
-	// reads version 2. The price is the one every row here states: an
-	// older node holds back that container, and the page writes nested in
-	// it, until it is upgraded.
-	//
-	// Scoped to the patch op, which is the one a container's settings ride;
-	// no page patch carries `chart_epoch`.
-	{Name: "ContainerPayload.ChartEpoch", Since: 2, Op: string(OpPatch),
-		Path: []string{"mutation", "chart_epoch"}},
-}
+var versionedFields = statelog.RecordFields{}
 
 // VersionedFields is the table, for the conformance suite.
 func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFields) }

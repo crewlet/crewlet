@@ -21,19 +21,12 @@
  * key on the org screen (`#/org?unit=`), which meant a team could not be
  * linked to, could not carry its own tabs, and was one filter away from being
  * lost.
- *
- * # Not reported is not nothing
- *
- * An engine that sends no derived hierarchy cannot say who inherits a lead,
- * so a unit declaring none has an UNKNOWN lead rather than none — every place
- * a lead is drawn says "not reported by this engine" in that case rather than
- * leaving a blank that reads as an unmanaged team.
  */
 
 import { useMemo, type CSSProperties } from "react";
 import { href } from "~/app/router.tsx";
 import { StateBadge } from "~/components/common.tsx";
-import { Card, EmptyState, EmptyValue, Skeleton, Tag } from "@crewlethq/ui";
+import { Card, EmptyState, Skeleton, Tag } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import {
   NetworkGlyph,
@@ -66,9 +59,6 @@ import { AgentsHeader, useAgentsCounts } from "./header.tsx";
 
 /** The project page the unit keys are read from: every live project. */
 const PROJECT_PAGE = 200;
-
-/** A lead this engine did not report: never drawn as "no lead". */
-export const LEAD_NOT_REPORTED = "Lead not reported by this engine";
 
 /**
  * Every live project filed to each unit, by unit name, from the tracker. A
@@ -128,13 +118,10 @@ function SeatLinks({ seats, style }: { seats: Seat[]; style?: CSSProperties }) {
           />
           <span className="col" style={{ gap: 0, minWidth: 0, flex: 1 }}>
             <span className="truncate t-cell">{seat.name}</span>
-            {/* ONLY A HANDLE THE ENGINE REPORTED. An engine that sends no
-                derived hierarchy leaves the handle of a seat that declares
-                none unknown, and deriving one here is the second
-                implementation `lib/seats.ts` exists to have removed. */}
-            {seat.handle && (
-              <span className="truncate t-caption mono">{handleLabel(seat.handle)}</span>
-            )}
+            {/* THE HANDLE THE ENGINE DERIVED, never one worked out here: that
+                would be the second implementation `lib/seats.ts` exists to
+                have removed. */}
+            <span className="truncate t-caption mono">{handleLabel(seat.handle)}</span>
           </span>
           {seat.kind === "human" ? (
             // THE CIRCLE SAYS IT. A tag reading "human" beside a person's
@@ -205,16 +192,11 @@ function unitView(
       { label: "Type", value: unit.type || "unit" },
       {
         label: "Lead",
-        // NOT REPORTED IS NOT NOBODY. Without the engine's derived block an
-        // inherited lead is a question this client cannot answer, and an
-        // empty cell there would read as a unit nobody leads.
         value: lead ? (
           <>
             {lead.name}
             {unit.leadInherited && <span className="muted"> (inherited)</span>}
           </>
-        ) : !index.hierarchy && !unit.lead ? (
-          <EmptyValue label={LEAD_NOT_REPORTED} />
         ) : (
           ""
         ),
@@ -263,12 +245,9 @@ const NO_SEATS_HINT =
  */
 export function UnitBlock({
   unit,
-  hierarchy = true,
   projects = new Map(),
 }: {
   unit: Unit;
-  /** Whether the engine reported the derived hierarchy (`OrgIndex.hierarchy`). */
-  hierarchy?: boolean;
   /** Project keys by unit name. */
   projects?: ReadonlyMap<string, readonly string[]>;
 }) {
@@ -299,10 +278,6 @@ export function UnitBlock({
             {lead.name}
             {unit.leadInherited && <span className="muted"> (inherited)</span>}
           </Tag>
-        ) : !hierarchy && !unit.lead ? (
-          <Tag appearance="outline" leadingIcon={<CrownGlyph size="xs" />}>
-            {LEAD_NOT_REPORTED}
-          </Tag>
         ) : null}
         <span className="spacer" />
         {/* THE SUBTREE FIRST, and the direct count only where the two differ —
@@ -326,7 +301,7 @@ export function UnitBlock({
       {unit.children.length > 0 && (
         <div className="org-children">
           {unit.children.map((child) => (
-            <UnitBlock key={child.key} unit={child} hierarchy={hierarchy} projects={projects} />
+            <UnitBlock key={child.key} unit={child} projects={projects} />
           ))}
         </div>
       )}
@@ -378,7 +353,7 @@ export function Teams() {
             </section>
           )}
           {index.topUnits.map((unit) => (
-            <UnitBlock key={unit.key} unit={unit} hierarchy={index.hierarchy} projects={projects} />
+            <UnitBlock key={unit.key} unit={unit} projects={projects} />
           ))}
         </div>
       )}

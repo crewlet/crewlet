@@ -221,6 +221,7 @@ func TestTheReconcilerAppliesTheChartAtThePointersInstant(t *testing.T) {
 	}
 	if _, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{
 		RevisionID: id, Summary: "revision", Payload: document, At: activated,
+		Origin: anOrigin,
 	}); err != nil {
 		t.Fatalf("activate: %v", err)
 	}

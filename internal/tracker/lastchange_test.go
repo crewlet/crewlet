@@ -3,11 +3,9 @@ package tracker_test
 import (
 	"database/sql"
 	"encoding/json"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -300,65 +298,6 @@ func TestEditingAProjectIsNotAChangeToItsWork(t *testing.T) {
 	}
 }
 
-// THE MIGRATION BACKFILLS FROM THE HISTORY THE ESTATE ALREADY HOLDS.
-//
-// A deployment that upgrades has every task commit it has ever applied sitting
-// in `tracker_history`, so the columns arrive populated rather than blank on
-// every project until somebody touches it. Without this a directory would open
-// on a company whose every project reads "no activity ever" — which is the one
-// answer this column must never give wrongly.
-//
-// THE STATEMENT UNDER TEST IS READ OUT OF THE SHIPPED MIGRATION rather than
-// restated here: a copy of it in a test is a second source of truth that can
-// agree with itself while disagreeing with what an operator's database runs.
-func TestTheMigrationBackfillsTheLastChangeFromTheHistory(t *testing.T) {
-	t.Parallel()
-	r := newRoundTrip(t)
-	filedTask(t, r, "t-1")
-	seedProject(t, r, tracker.Project{Key: "OPS", Name: "Operations"})
-
-	stamped := onlyRow(t, r, "ENG")
-	if stamped.LastChange == nil {
-		t.Fatal("the seeded work left no last change to compare a backfill against")
-	}
-
-	// THE PRE-MIGRATION STATE, which is what every column this file adds
-	// held the instant before its UPDATE ran.
-	writeReplicated(t, r, `UPDATE tracker_projects SET last_change_at = NULL,
-		last_change_actor = '', last_change_actor_kind = '', last_change_seq = 0`)
-	if onlyRow(t, r, "ENG").LastChange != nil {
-		t.Fatal("clearing the columns left a last change, so the backfill " +
-			"below would pass without doing anything")
-	}
-
-	for _, statement := range backfillStatements(t,
-		"0016_a_project_says_when_its_work_last_changed.sql") {
-		writeReplicated(t, r, statement)
-	}
-
-	back := onlyRow(t, r, "ENG")
-	if back.LastChange == nil {
-		t.Fatal("the backfill left ENG with no last change, although every " +
-			"commit about its tasks is in tracker_history")
-	}
-	if !back.LastChange.At.Equal(stamped.LastChange.At) ||
-		back.LastChange.Actor != stamped.LastChange.Actor ||
-		back.LastChange.ActorKind != stamped.LastChange.ActorKind {
-		t.Errorf("the backfill answered %+v and the apply had written %+v — "+
-			"they are the same function of the same rows, so an upgraded "+
-			"database and a fresh one must not disagree",
-			back.LastChange, stamped.LastChange)
-	}
-
-	// AND A PROJECT WITH NO WORK STAYS ABSENT. A backfill that stamped
-	// every row — with a zero, or with the project's own creation — would
-	// report a company of untouched projects as uniformly active.
-	if got := onlyRow(t, r, "OPS"); got.LastChange != nil {
-		t.Errorf("the backfill gave a project with no task commits a last "+
-			"change of %+v", got.LastChange)
-	}
-}
-
 // ---- helpers ------------------------------------------------------------ //
 
 // onlyProject is the single project the round-trip harness seeds.
@@ -408,65 +347,9 @@ func seedApplyProject(t *testing.T, h *applyHarness) {
 			Subject: tracker.ProjectSubject("ENG"), Op: tracker.OpCreate,
 			Writer: "node-a", Scope: tracker.ScopeSet{Subject: true},
 		},
+		Kind:     tracker.ChangeProjectCreated,
 		Mutation: body,
 	}, time.Unix(1_700_000_050, 0).UTC()); err != nil {
 		t.Fatalf("seed the project: %v", err)
 	}
-}
-
-// writeReplicated runs one statement against the replicated estate.
-//
-// A TEST IS NOT AN APPLIER, and this is the one thing in this file that writes
-// the estate without a record behind it: it is standing in for the MIGRATOR,
-// which is the other writer the estate has and which runs before any applier
-// does.
-func writeReplicated(t *testing.T, r *roundTrip, statement string) {
-	t.Helper()
-	if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(), statement)
-		return err
-	}); err != nil {
-		t.Fatalf("run %q: %v", statement, err)
-	}
-}
-
-// backfillStatements is every UPDATE the named replicated migration carries.
-//
-// Read out of the SHIPPED file, so the case exercises the statement an
-// operator's database runs rather than a copy of it that can drift.
-func backfillStatements(t *testing.T, name string) []string {
-	t.Helper()
-	body, err := store.SchemaFile(store.EstateReplicated, name)
-	if err != nil {
-		t.Fatalf("read the migration: %v", err)
-	}
-	// COMMENTS FIRST, then statements: a migration's prose is free to
-	// contain a semicolon, and splitting before stripping cuts a comment in
-	// two and hands its tail to the statement that follows — which then no
-	// longer starts with UPDATE and is silently not run.
-	var out []string
-	for _, statement := range strings.Split(stripSQLComments(string(body)), ";") {
-		trimmed := strings.TrimSpace(statement)
-		if strings.HasPrefix(trimmed, "UPDATE ") {
-			out = append(out, trimmed)
-		}
-	}
-	if len(out) == 0 {
-		t.Fatalf("%s carries no UPDATE at all, so this case certifies "+
-			"nothing — a backfill somebody removed is exactly what it is "+
-			"here to notice", name)
-	}
-	return out
-}
-
-// stripSQLComments drops the `--` lines a migration is mostly made of.
-func stripSQLComments(in string) string {
-	var kept []string
-	for _, line := range strings.Split(in, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "--") {
-			continue
-		}
-		kept = append(kept, line)
-	}
-	return strings.Join(kept, "\n")
 }

@@ -41,8 +41,7 @@ type TurnRef struct {
 	// ConversationKey the durable conversation it belongs to. BOTH travel,
 	// and both are written onto the row: the conversation is what matches a
 	// person's answer back to this run and where the resumed turn reports,
-	// the partition tells two runs parked on one direct message apart and
-	// is all a peer predating the conversation field can match on. See
+	// the partition tells two runs parked on one direct message apart. See
 	// [PendingRun].
 	//
 	// NAMED AS [turnctx.Turn] NAMES THEM, field for field, because that is
@@ -50,8 +49,8 @@ type TurnRef struct {
 	// one after the other. They were ConversationKey and
 	// ConversationIdentity here, holding the partition and the conversation
 	// respectively — so each assignment read as its own opposite and a
-	// swapped pair looked exactly like a correct one. The wire names did
-	// not move with them; see [PendingRun].
+	// swapped pair looked exactly like a correct one. [PendingRun] spells
+	// them the same way, on the row and on the wire.
 	//
 	// Two fields where there was one, and the miss this guards against is
 	// now available twice: this struct's partition was empty at its only
@@ -111,9 +110,6 @@ type LaunchRequest struct {
 	// provisions a fresh box, and the work re-seeds from the pushed branch.
 	ReuseBox string
 
-	// Fence is the ownership token every mutation on the row carries.
-	Fence Fence
-
 	// Opened is told the job's name the moment the store has opened it
 	// ([PendingStore.BeginLaunch]) and BEFORE ANY BOX EXISTS, for what must
 	// name the job before its box can act: an agent-mode run's bridge
@@ -137,7 +133,8 @@ type LaunchResult struct {
 }
 
 // Launch provisions a box, starts the coding agent detached, and persists the
-// row that outlives the turn.
+// row that outlives the turn — and HOLDS THE SEAT from the moment that row is
+// written.
 //
 // THE ORDER IS THE CONTRACT. The row is created and the box attached to it
 // BEFORE the job starts: a crash in that window leaves a row naming a box
@@ -147,7 +144,32 @@ type LaunchResult struct {
 // On any failure after the box exists, the box is reclaimed before the error
 // propagates — an unreferenced box is billed for until its TTL and collected
 // by nobody.
-func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, req LaunchRequest) (LaunchResult, error) {
+//
+// # The seat is held from the row, not from the announcement
+//
+// A run is counted into the seat's [Holding] set, and the seat's inbox hold
+// taken ([SeatHold]), in the step that writes its row — before the box is
+// provisioned, and so before the launching turn can return and its seat's
+// consumer go on to the next thing it has. It used to be counted when its
+// [types.SandboxRunStarted] was processed off the seat's control topic, which
+// is a separate subscription the launching turn does not wait for: mail
+// already drained beside the launching delivery (the next partition of the
+// same batch) and mail fetched after the turn returned both reached a seat the
+// screening called free, and ran a turn beside the job. The announcement still
+// RECOUNTS the seat from the store wherever it is processed — that is what
+// carries a held seat across a restart or a handoff — but nothing waits for it.
+//
+// A launch that fails after the row is written gives the count back as it
+// abandons the row ([Coordinator.abandon]); one that fails to suspend into the
+// row is settled by [Coordinator.FailRun], whose ending gives it back the same
+// way.
+//
+// m is the manager the request's [Spec] was built with ([Manager.BuildSpec]),
+// passed rather than read off the coordinator here: an apply landing between
+// the two swaps the coordinator's, and a spec resolved against one catalogue
+// is launched on that catalogue.
+func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest) (LaunchResult, error) {
+	store, q := c.pending, c.queue
 	now := req.Now
 	if now == nil {
 		now = time.Now
@@ -158,13 +180,21 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 	if strings.TrimSpace(req.Brief) == "" {
 		return LaunchResult{}, fmt.Errorf("sandbox: a launch needs a brief")
 	}
+	// THE SEAT'S LEASE, which the row is stamped with and every write below
+	// carries — see [CoordinatorOptions.Lease]. A seat this node does not
+	// hold launches nothing: the turn asking is one its lease no longer
+	// stands behind.
+	fence, held := c.leaseOf(req.Turn.AgentHandle)
+	if !held {
+		return LaunchResult{}, notHeld(ctx, req.Turn.AgentHandle, req.Turn.TurnID, "launching a run")
+	}
 
 	// The row FIRST, so a crash between here and the box leaves a record
 	// rather than nothing. It opens in [StatusLaunching] and stays there
 	// until the turn writes the conversation a resume re-enters: nothing
 	// polls or claims a run in that window, which is what stops a job that
 	// finishes before the turn unwinds from being collected into nothing.
-	launch, err := store.BeginLaunch(ctx, PendingRun{
+	opened, err := store.BeginLaunch(ctx, PendingRun{
 		TurnID: req.Turn.TurnID, WorkKey: req.Turn.WorkKey,
 		WorkSince:   req.Turn.WorkSince,
 		AgentHandle: req.Turn.AgentHandle,
@@ -192,14 +222,18 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 		// the rest of that record on the launch it mints.
 		Launch:    LaunchRecord{Model: launchModel(req.LLM)},
 		CreatedAt: now(),
-	}, req.Fence)
+	}, fence)
 	if err != nil {
 		return LaunchResult{}, fmt.Errorf("sandbox: recording the run: %w", err)
 	}
+	// HELD FROM HERE, before anything below can fail or the turn can
+	// return — see [Coordinator.Launch]. Every failure past this point
+	// gives it back through [Coordinator.abandon].
+	c.countRun(req.Turn.AgentHandle, StatusLaunching)
 	// THE JOB IS NAMED BEFORE ITS BOX EXISTS, so nothing the box does can be
 	// filed under a job that is not its own — see [LaunchRequest.Opened].
 	if req.Opened != nil {
-		req.Opened(launch.ID)
+		req.Opened(opened.LaunchID)
 	}
 
 	box, runner, reused, err := acquire(ctx, m, req)
@@ -208,7 +242,7 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 		// point closes it: a run left LAUNCHING is polled by nothing and
 		// claimed by nothing, so it sits on its seat's busy count and its
 		// box until the seat happens to move to another node.
-		abandon(ctx, m, store, req, "")
+		c.abandon(ctx, m, req, fence, "")
 		return LaunchResult{}, err
 	}
 
@@ -216,8 +250,8 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 	if err = store.AttachSandbox(ctx, req.Turn.TurnID, BoxRef{
 		SandboxID: box.ID(), CodingAgent: req.Spec.CodingAgent,
 		PauseTTLSec: req.Spec.PauseTTLSec,
-	}, req.Fence); err != nil {
-		abandon(ctx, m, store, req, box.ID())
+	}, fence); err != nil {
+		c.abandon(ctx, m, req, fence, box.ID())
 		return LaunchResult{}, fmt.Errorf("sandbox: attaching the box: %w", err)
 	}
 
@@ -234,7 +268,7 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 		MCPServers: req.MCPServers,
 	})
 	if err != nil {
-		abandon(ctx, m, store, req, box.ID())
+		c.abandon(ctx, m, req, fence, box.ID())
 		return LaunchResult{}, fmt.Errorf("sandbox: starting the coding agent: %w", err)
 	}
 
@@ -244,9 +278,9 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 	if err := store.AttachSandbox(ctx, req.Turn.TurnID, BoxRef{
 		SandboxID: box.ID(), CommandID: handle.CommandID,
 		CodingAgent: req.Spec.CodingAgent, SessionID: handle.SessionID,
-		PauseTTLSec: req.Spec.PauseTTLSec, Layout: handle.Layout,
-	}, req.Fence); err != nil {
-		abandon(ctx, m, store, req, box.ID())
+		PauseTTLSec: req.Spec.PauseTTLSec,
+	}, fence); err != nil {
+		c.abandon(ctx, m, req, fence, box.ID())
 		return LaunchResult{}, fmt.Errorf("sandbox: recording the job: %w", err)
 	}
 
@@ -256,7 +290,7 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 	// row back, which could fail and cost the pairing — and which could, in
 	// principle, find a later job than this one.
 	started := types.SandboxRunStarted{
-		LaunchID: launch.ID, StartedAt: launch.StartedAt,
+		LaunchID: opened.LaunchID, StartedAt: opened.Launch.StartedAt,
 		Agent: req.Turn.AgentID, AgentHandle: req.Turn.AgentHandle,
 		RoleName: req.Turn.Role, TurnID: req.Turn.TurnID, WorkKey: req.Turn.WorkKey,
 		SandboxID: box.ID(), CodingAgent: req.Spec.CodingAgent,
@@ -275,9 +309,11 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 
 	// TWO PUBLISHES, as for a completion. The events copy is the
 	// announcement the dashboard's running-sandboxes panel reads; the
-	// per-seat control copy is what marks the seat busy on the node that
-	// owns it — which is this one, but the event is what makes that true
-	// after a restart as well.
+	// per-seat control copy RECOUNTS the seat from the store on whichever
+	// node holds it when the copy is processed. The seat is already held
+	// here — the row's write counted it — so nothing waits for this; what
+	// the copy adds is the store's own answer, after a restart or a handoff
+	// as much as now.
 	if err := q.Publish(ctx, topics.Event(started.EventType()), ev); err != nil {
 		log.WarnContext(ctx, "sandbox_started_publish_failed",
 			"turn_id", req.Turn.TurnID, "error", err.Error())
@@ -323,22 +359,29 @@ func acquire(ctx context.Context, m *Manager, req LaunchRequest) (Sandbox, Runne
 	return box, runner, false, nil
 }
 
-// abandon closes out a launch that could not finish: the box is reclaimed and
-// then the run is finished, which deletes its record.
+// abandon closes out a launch that could not finish: the box is reclaimed, then
+// the run is ended, which deletes its record, and the seat the launch held is
+// given back.
 //
-// BOTH, EVERY TIME, and the second attempted whether or not the first
-// succeeded: they are separate calls that fail separately, and neither failing
-// is a reason to leave the other undone. Three of the four failure paths used
+// ALL OF IT, EVERY TIME, and each step attempted whether or not the one before
+// it succeeded: they are separate calls that fail separately, and none failing
+// is a reason to leave the others undone. Three of the four failure paths used
 // to do none of it and simply return, which left the row OPEN: a launching run
-// is polled by nothing and claimed by nothing, so it held its seat's busy
-// count and, on two of those paths, a box, until the seat happened to move to
-// another node and recovery reaped it. The box goes first, so a record that
-// cannot be deleted names a box that is already gone rather than the reverse.
+// is polled by nothing and claimed by nothing, so it held its seat and, on two
+// of those paths, a box, until the seat happened to move to another node and
+// recovery reaped it. The box goes first, so a record that cannot be deleted
+// names a box that is already gone rather than the reverse.
+//
+// THE ENDING EVERY OTHER PATH MAKES ([Coordinator.endRecord]), not a delete of
+// its own: that is the one place a run's record is deleted, so it is the one
+// place a stop is reported and the one place what the row still owes the seat
+// goes out before the row does (see [PendingRun.HandBack]) — a relaunch is
+// opened on a row that has carried a whole run's history.
 //
 // A context of its own, because the failure that got us here is often the
 // caller's context expiring — and a teardown skipped for that reason leaves a
 // box running to its TTL with nobody to collect it, and a row nobody settles.
-func abandon(ctx context.Context, m *Manager, store PendingStore, req LaunchRequest, sandboxID string) {
+func (c *Coordinator) abandon(ctx context.Context, m *Manager, req LaunchRequest, fence Fence, sandboxID string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
 	defer cancel()
 	if sandboxID != "" {
@@ -352,12 +395,33 @@ func abandon(ctx context.Context, m *Manager, store PendingStore, req LaunchRequ
 				"sandbox_id", sandboxID, "error", err.Error())
 		}
 	}
-	// Every live status, like every other settle that has already reclaimed
-	// the box: this launch is abandoned whatever the row reached.
-	if _, _, err := store.Finish(ctx, req.Turn.TurnID, req.Fence, Active); err != nil {
-		log.WarnContext(ctx, "sandbox_launch_finish_failed",
-			"turn_id", req.Turn.TurnID, "error", err.Error())
+	// Every live status and every job: this launch is abandoned whatever the
+	// row reached. TWO BOXES CAN BE OWED A RECLAIM, and each is reclaimed by
+	// the one party that can name it. The launch's own is killed above,
+	// because the launch may never have attached it to the row. The box the
+	// ROW names is reclaimed by the ending, after its decision: a relaunch
+	// that never got a box of its own leaves the row naming the previous
+	// job's paused one, and the ending deletes the only record of it — so a
+	// box left to the turn's own settle was named by nothing once the turn
+	// came back, and was killed only off that settle's stale snapshot, which
+	// a settle may no longer act on ([Coordinator.finish]). Where the two are
+	// one box — the attach landed — it is killed twice, which every provider
+	// answers as the reclaim it wanted: a kill of a box already gone succeeds.
+	run := PendingRun{TurnID: req.Turn.TurnID, AgentHandle: req.Turn.AgentHandle}
+	if _, err := c.endRecord(ctx, run, ending{
+		fence: fence, whileIn: Active, launch: EveryLaunch, reclaim: true,
+	}); err != nil {
+		log.WarnContext(ctx, "sandbox_launch_finish_kept",
+			"turn_id", req.Turn.TurnID, "error", err.Error(),
+			"detail", "the abandoned launch's record is not deleted yet; this node finishes "+
+				"the ending, and the seat's next recovery pass reaps the row if the seat "+
+				"moves first")
 	}
+	// AND THE SEAT GOES BACK whether or not the record could be deleted:
+	// the launch is over and its box reclaimed, so nothing is driving a job
+	// the seat's mail must wait behind. A record that survived the delete is
+	// a launching row whose ending this node keeps and retries.
+	c.uncountRun(req.Turn.AgentHandle, StatusLaunching)
 }
 
 // Summarise is a brief's first line, WHOLE: the label a running-runs panel

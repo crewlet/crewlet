@@ -23,16 +23,10 @@
 //
 // What a name in the store MEANS is read here, never by a backend: a backend
 // lists every name it holds, verbatim, and this package sorts each into one
-// of three kinds.
+// of two kinds.
 //
 //   - AN OBJECT'S KEY under the engine's namespace (objstore.KeyOfName) is
 //     the collector's to judge, by the rule below.
-//   - A CHUNK an earlier build stored — sixty-four hex digits, the grammar
-//     of a content address (objstore.Hash) — is RETIRED: deleted once it is
-//     past [PendingGrace] AND THE CHUNK ERA IS OVER ([ChunkEra]). No row
-//     this build writes names a chunk, but a data node of the build that
-//     kept them still reads its files' chunks until it is gone, so they
-//     wait for the last such node rather than for the estate.
 //   - ANYTHING ELSE is left where it is, and never counted: another
 //     application's object under a shared prefix, something an operator
 //     put in the bucket.
@@ -59,9 +53,9 @@
 //
 // NO LOCK, NO SECOND LOOK. A key is minted for one upload and named only by
 // the write that uploaded it, so there is no writer re-using an object the
-// collector could be deleting — the race the chunk-era lock existed for has
-// nothing left to race. Two collectors at once are safe too: deleting an
-// object that is gone is not an error.
+// collector could be deleting, and so nothing for a lock to guard. Two
+// collectors at once are safe too: deleting an object that is gone is not an
+// error.
 //
 // # The sweep: what no listing shows
 //
@@ -72,10 +66,9 @@
 // so every collection also asks the backend for them (objstore.Backend's
 // Pending) and abandons the ones begun more than [PendingGrace] ago — every
 // upload still in flight is pending too, and none takes that long — that are
-// named by no name, by a key also minted past the grace, or by a chunk once
-// the chunk era is over; never one under somebody else's name. It needs no
-// estate: an upload that never finished is named by no row. A sweep the
-// backend refuses — an S3 identity without the right to list or abort
+// named by no name or by a key also minted past the grace; never one under
+// somebody else's name. It needs no estate: an upload that never finished is
+// named by no row. A sweep the backend refuses — an S3 identity without the right to list or abort
 // uploads — is reported beside the collection rather than failing it.
 //
 // # Audit: what the store has lost
@@ -167,16 +160,6 @@ const judgeBatch = 500
 // always whole, and the list is what an operator restores first.
 const MissingShown = 100
 
-// ChunkEra is whether any node that may still read or write a file in
-// content-addressed chunks is left in the fleet — the engine's census of the
-// tracker log's readers.
-type ChunkEra interface {
-	// Over is true once no such node is left. An error is UNKNOWN, and a
-	// pass reads it as "not yet": a chunk deleted under a node still
-	// reading it cannot be put back.
-	Over(ctx context.Context) (bool, error)
-}
-
 // Status is what the collector last found, for the alarm, the status surface
 // and the next duty holder.
 type Status struct {
@@ -200,10 +183,8 @@ type CollectionReport struct {
 	Deleted    int `json:"deleted"`
 	Referenced int `json:"referenced"`
 
-	// Retired is how many chunks an earlier build stored the pass deleted
-	// once the chunk era was over, and Abandoned how many uploads begun
-	// and never finished it abandoned.
-	Retired   int `json:"retired"`
+	// Abandoned is how many uploads begun and never finished the pass
+	// abandoned.
 	Abandoned int `json:"abandoned"`
 
 	// Skipped says why the pass stopped judging, empty when it ran in
@@ -222,10 +203,10 @@ type CollectionReport struct {
 // AuditReport is the last audit attempt, and what the last one that ran to its
 // end found.
 //
-// THE ATTEMPT'S FIELDS ARE WHERE THEY HAVE ALWAYS BEEN — `at`, `completed`,
-// `referenced`, `missing`, `error` — because this record is the fleet's and a
-// node of the build before reads it during a rolling upgrade; the findings
-// that must outlive a failed attempt are [AuditReport.Found], beside them.
+// The attempt's fields describe that attempt whatever became of it — a failed
+// one's counts are floors — and the findings that must outlive a failed
+// attempt are [AuditReport.Found], beside them. The record is the fleet's, so
+// it evolves additively: a successor build reads it during a rolling upgrade.
 type AuditReport struct {
 	// Completed is whether the attempt asked about every object the estate
 	// names, in an estate that was complete; Referenced how many it asked
@@ -245,18 +226,6 @@ type AuditReport struct {
 	// has. It is what the alarm counts, so a failed attempt never clears
 	// it.
 	Found *AuditFindings `json:"found,omitempty"`
-}
-
-// Findings is what the last audit to run to its end found, nil before any has:
-// [AuditReport.Found] — or, in a record from a build that kept no findings
-// beside the attempt, the attempt itself where it did not fail, which is what
-// that build's attempt was.
-func (a AuditReport) Findings() *AuditFindings {
-	if a.Found != nil || a.Error != "" || a.At.IsZero() {
-		return a.Found.clone()
-	}
-	return &AuditFindings{At: a.At, Completed: a.Completed, Referenced: a.Referenced,
-		Missing: a.Missing, Damaged: a.Damaged}
 }
 
 // AuditFindings is what an audit that ran to its end found.
@@ -306,9 +275,6 @@ type Options struct {
 	Store *objstore.Store
 	// References is every source of object references ([Sources]).
 	References References
-	// ChunkEra says when the chunks an earlier build stored may go. Nil is
-	// an era that never ends: they are kept.
-	ChunkEra ChunkEra
 	// Now is the clock the grace is measured on, injected for tests.
 	Now func() time.Time
 }
@@ -356,13 +322,7 @@ func (c *Collector) Status() Status {
 // recorded would carry the other half empty: the last audit's findings gone
 // from the fleet's record, and its alarm with them, an hour after the duty
 // moved.
-//
-// A record from a build that kept no [AuditReport.Found] restores its
-// attempt's findings as found when that attempt did not fail
-// ([AuditReport.Findings]), so the move across a rolling upgrade keeps what
-// the last audit found too.
 func (c *Collector) Restore(s Status) {
-	s.Audit.Found = s.Audit.Findings()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if s.Collect.At.After(c.status.Collect.At) {
@@ -378,17 +338,15 @@ func (c *Collector) Restore(s Status) {
 	}
 }
 
-// Collect deletes the objects nothing refers to past their grace, retires the
-// chunks an earlier build stored once their era is over, and abandons the
-// uploads that never finished. See the package doc for why each of its rules
-// is needed, and why none is a lock.
+// Collect deletes the objects nothing refers to past their grace and abandons
+// the uploads that never finished. See the package doc for why each of its
+// rules is needed, and why none is a lock.
 func (c *Collector) Collect(ctx context.Context) (CollectionReport, error) {
 	var r CollectionReport
 	cutoff := c.opts.Now().Add(-PendingGrace)
-	era := c.era(ctx)
-	err := c.collect(ctx, &r, cutoff, era)
+	err := c.collect(ctx, &r, cutoff)
 	if ctx.Err() == nil {
-		c.sweep(ctx, &r, cutoff, era)
+		c.sweep(ctx, &r, cutoff)
 	}
 	r.At = c.opts.Now().UTC()
 	if err != nil {
@@ -397,37 +355,20 @@ func (c *Collector) Collect(ctx context.Context) (CollectionReport, error) {
 	c.mu.Lock()
 	c.status.Collect = r
 	c.mu.Unlock()
-	if r.Deleted > 0 || r.Retired > 0 || r.Abandoned > 0 || r.Skipped != "" ||
+	if r.Deleted > 0 || r.Abandoned > 0 || r.Skipped != "" ||
 		r.SweepError != "" || err != nil {
 		log.InfoContext(ctx, "objects_collected", "listed", r.Listed, "aged", r.Aged,
-			"deleted", r.Deleted, "retired", r.Retired, "abandoned", r.Abandoned,
+			"deleted", r.Deleted, "abandoned", r.Abandoned,
 			"skipped", r.Skipped, "sweep_error", r.SweepError,
 			"completed", r.Completed, "error", r.Error)
 	}
 	return r, err
 }
 
-// era answers, once per pass and only when first asked, whether the chunk era
-// is over — false when there is no era to ask or it cannot say.
-func (c *Collector) era(ctx context.Context) func() bool {
-	return sync.OnceValue(func() bool {
-		if c.opts.ChunkEra == nil {
-			return false
-		}
-		over, err := c.opts.ChunkEra.Over(ctx)
-		if err != nil {
-			log.WarnContext(ctx, "objects_chunk_era_unknown", "error", err,
-				"detail", "the chunks an earlier build stored are kept until the next pass")
-			return false
-		}
-		return over
-	})
-}
-
 // errIncomplete stops a pass that met an estate it cannot call complete.
 var errIncomplete = errors.New("a record this node could not apply may refer to objects in the store")
 
-func (c *Collector) collect(ctx context.Context, r *CollectionReport, cutoff time.Time, era func() bool) error {
+func (c *Collector) collect(ctx context.Context, r *CollectionReport, cutoff time.Time) error {
 	v, err := c.opts.References.pin(ctx)
 	if err != nil {
 		r.Skipped = err.Error()
@@ -461,16 +402,9 @@ func (c *Collector) collect(ctx context.Context, r *CollectionReport, cutoff tim
 	backend := c.opts.Store.Backend()
 	err = backend.List(ctx, func(info objstore.Info) error {
 		// THE GRAMMAR IS READ HERE, not by the backend: see the package
-		// doc for the three kinds of name.
+		// doc for the two kinds of name.
 		k, ours := keyNamed(info.Name)
 		if !ours {
-			if !chunkNamed(info.Name) || !info.Written.Before(cutoff) || !era() {
-				return nil
-			}
-			if derr := backend.Delete(ctx, info.Name); derr != nil {
-				return fmt.Errorf("retire the chunk %s: %w", info.Name, derr)
-			}
-			r.Retired++
 			return nil
 		}
 		r.Listed++
@@ -508,7 +442,7 @@ func (c *Collector) collect(ctx context.Context, r *CollectionReport, cutoff tim
 
 // sweep abandons the uploads begun more than the grace ago and never
 // finished: see the package doc. A failure is the report's, never the pass's.
-func (c *Collector) sweep(ctx context.Context, r *CollectionReport, cutoff time.Time, era func() bool) {
+func (c *Collector) sweep(ctx context.Context, r *CollectionReport, cutoff time.Time) {
 	backend := c.opts.Store.Backend()
 	err := backend.Pending(ctx, func(p objstore.Pending) error {
 		if !p.Started.Before(cutoff) {
@@ -523,10 +457,6 @@ func (c *Collector) sweep(ctx context.Context, r *CollectionReport, cutoff time.
 			// A KEY'S UPLOAD, past the grace by its key's own instant
 			// too, for the rule a finished object is judged by.
 			if !k.Minted().Before(cutoff) {
-				return nil
-			}
-		case chunkNamed(p.Name):
-			if !era() {
 				return nil
 			}
 		default:
@@ -653,8 +583,3 @@ func keyNamed(name string) (objstore.Key, bool) {
 	k, err := objstore.KeyOfName(name)
 	return k, err == nil
 }
-
-// chunkNamed is whether a listed name is a chunk an earlier build stored: the
-// bare sixty-four hex digits of a content address, which no other kind of
-// name the engine writes can spell.
-func chunkNamed(name string) bool { return objstore.Hash(name).Valid() }

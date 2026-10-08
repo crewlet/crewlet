@@ -6,20 +6,19 @@
  * Browser storage outlives every build. A key a module stops reading is not
  * deleted by deleting the module: it sits in every reader's profile forever,
  * and the next module to pick a similar name reads somebody else's stale value
- * as its own. The rail's `crewlet.rail.collapsed` is the case that made this a
- * table — the rail it collapsed is gone, and nothing but a list of every key
- * would have said so.
+ * as its own. Only a list of every key says which ones a build still reads.
  *
  * So a key is declared HERE, with who owns it and what it holds, and a reader
  * imports it by name. `storage.test.ts` holds the other half: no source file
  * outside this one spells a `crewlet_…` or `crewlet.…` key literal, so a new
  * key cannot be added without being written down.
  *
- * AND A KEY NOTHING READS ANY MORE IS DELETED, not left behind. It moves to
- * [RETIRED_STORAGE_KEYS], and `main.tsx` removes each at boot — so a stale
- * value leaves a reader's profile the first time they open a build that no
- * longer reads it, and a later module that picks the same name starts from
- * nothing rather than from somebody else's value.
+ * AND A KEY NOTHING READS ANY MORE IS DELETED, not left behind. When a build
+ * stops reading one of these keys it moves to [RETIRED_STORAGE_KEYS], and
+ * `main.tsx` removes each at boot — so a stale value leaves a reader's profile
+ * the first time they open a build that no longer reads it, and a later module
+ * that picks the same name starts from nothing rather than from somebody
+ * else's value.
  *
  * # What storage is for in this product
  *
@@ -56,23 +55,26 @@ export const STORAGE_KEYS = {
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];
 
 /**
- * Keys an earlier build wrote and this one never reads, removed at boot.
- *
- * `crewlet.rail.collapsed` was whether the app rail was folded to its icons;
- * the rail is gone — the sidebar is the kit's `AppShell`, which is a drawer
- * below its breakpoint and never folds.
+ * Keys a released build wrote and this one never reads, removed at boot.
+ * Empty until a build stops reading a key a release declared in
+ * [STORAGE_KEYS]; that build moves the key here, with what it held.
  */
-export const RETIRED_STORAGE_KEYS: readonly string[] = ["crewlet.rail.collapsed"];
+export const RETIRED_STORAGE_KEYS: readonly string[] = [];
 
 /**
- * Remove every retired key. NEVER THROWS: a private window, blocked site data
- * or a sandboxed frame makes the accessor itself throw, and a stale key is not
- * a reason for the dashboard not to boot.
+ * Remove every retired key — `retired` is [RETIRED_STORAGE_KEYS] at boot, and
+ * a parameter so the sweep can be held to what it removes while the list is
+ * empty. NEVER THROWS: a private window, blocked site data or a sandboxed frame
+ * makes the accessor itself throw, and a stale key is not a reason for the
+ * dashboard not to boot.
  */
-export function forgetRetiredKeys(storage: () => Pick<Storage, "removeItem">): void {
+export function forgetRetiredKeys(
+  storage: () => Pick<Storage, "removeItem">,
+  retired: readonly string[] = RETIRED_STORAGE_KEYS,
+): void {
   try {
     const store = storage();
-    for (const key of RETIRED_STORAGE_KEYS) store.removeItem(key);
+    for (const key of retired) store.removeItem(key);
   } catch {
     // Storage is refused; there is nothing to clean and nothing to stale.
   }

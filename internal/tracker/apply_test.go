@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -134,9 +135,21 @@ func (h *applyHarness) value(query string, args ...any) int64 {
 	return n.Int64
 }
 
+// taskRecord hand-builds a task record in the shape the writer gives one: its
+// change kind stated ([tracker.MutationRecord.Kind]), and agreeing with its
+// wake's where it has one.
 func taskRecord(id string, op tracker.OpKind, payload any, notify *tracker.Notify) tracker.MutationRecord {
 	body, _ := json.Marshal(payload)
+	kind := map[tracker.OpKind]tracker.ChangeKind{
+		tracker.OpCreate: tracker.ChangeCreated, tracker.OpPatch: tracker.ChangeFields,
+		tracker.OpTombstone: tracker.ChangeRemoved, tracker.OpRestore: tracker.ChangeRestored,
+		tracker.OpPurge: tracker.ChangePurged,
+	}[op]
+	if notify != nil {
+		kind = notify.Kind
+	}
 	return tracker.MutationRecord{
+		Kind: kind,
 		RecordEnvelope: tracker.RecordEnvelope{
 			V: tracker.RecordVersion, OpID: id + "-" + string(op),
 			Subject: tracker.TaskSubject(id), Op: op,
@@ -223,8 +236,8 @@ func TestATurnsSpendCannotBeCountedTwice(t *testing.T) {
 		t.Fatalf("after one turn the input spend is %d, want 1000", got)
 	}
 	// THE SAME TURN AGAIN, at a higher position — which is what a
-	// redelivery after an adoption scrubbed the operation ledger looks
-	// like.
+	// redelivery the ledger no longer collapses, because its retention
+	// sweep removed the row, looks like.
 	if _, err := h.apply(turn, time.Unix(1_700_000_200, 0).UTC()); err != nil {
 		t.Fatalf("redelivered turn: %v", err)
 	}
@@ -523,6 +536,103 @@ func TestAQuietCommitIsRecordedAndAnnouncedToNobody(t *testing.T) {
 	}
 }
 
+// A CHANGE ANOTHER WRITER ALREADY MADE RECORDS NO MOVE.
+//
+// A wake is built from the snapshot the writer's tool read OUTSIDE the write's
+// transaction, so two writers setting one status from one stale read both
+// publish a wake claiming todo→done. Only the first apply moves anything; the
+// second compares the row it holds, finds it already done, and its history row
+// must say so — `{}` — rather than store the wake's claim of a move this apply
+// never made, beside the row of the record that did make it.
+func TestAChangeAnotherWriterAlreadyMadeRecordsNoMove(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	if _, err := h.apply(taskRecord("t-1", tracker.OpCreate, newTask("t-1"), nil),
+		time.Unix(1_700_000_100, 0).UTC()); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	done := tracker.StatusDone
+	claim := func(op string) tracker.MutationRecord {
+		rec := taskRecord("t-1", tracker.OpPatch, tracker.TaskPatch{Status: &done},
+			&tracker.Notify{
+				Kind:     tracker.ChangeStatus,
+				Fields:   map[string]tracker.Delta{"status": {From: "todo", To: "done"}},
+				Snapshot: tracker.Snapshot{Key: "ENG-1"},
+			})
+		rec.OpID = op
+		return rec
+	}
+	if _, err := h.apply(claim("first"), time.Unix(1_700_000_200, 0).UTC()); err != nil {
+		t.Fatalf("the first status change: %v", err)
+	}
+	if _, err := h.apply(claim("second"), time.Unix(1_700_000_300, 0).UTC()); err != nil {
+		t.Fatalf("the second status change: %v", err)
+	}
+	var first, second string
+	if err := h.db.Read(t.Context(), func(tx *sql.Tx) error {
+		if err := tx.QueryRowContext(t.Context(),
+			`SELECT fields_json FROM tracker_history WHERE id = 'first'`).Scan(&first); err != nil {
+			return err
+		}
+		return tx.QueryRowContext(t.Context(),
+			`SELECT fields_json FROM tracker_history WHERE id = 'second'`).Scan(&second)
+	}); err != nil {
+		t.Fatalf("read the history rows: %v", err)
+	}
+	if !strings.Contains(first, `"status"`) {
+		t.Fatalf("the change that moved the status recorded %s — the apply's own "+
+			"comparison names the move", first)
+	}
+	if second != "{}" {
+		t.Fatalf("a change another writer had already made recorded %s — its "+
+			"apply moved nothing, and the wake's claim is a read taken before "+
+			"the first writer's change landed", second)
+	}
+}
+
+// A RECORD THE VERSION GUARD SKIPPED STORES ITS WRITER'S OWN DELTAS.
+//
+// Reprocessed below a successor this node already applied — a record deferred
+// here and read once it could be — it has no document of its own to compare
+// against: the one it would have moved is its successor's. The writer's
+// statement is the only account of what it moved, so that is what its row
+// says, where a comparison against the successor's document would name a move
+// it never made and an empty one would lose it.
+func TestARecordTheVersionGuardSkippedStoresItsWritersOwnDeltas(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	if _, err := h.applyAt(taskRecord("t-1", tracker.OpCreate, newTask("t-1"), nil),
+		time.Unix(1_700_000_100, 0).UTC(), 1); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	ahead := taskRecord("t-1", tracker.OpPatch, tracker.TaskPatch{Title: ptr("third")}, nil)
+	ahead.OpID = "ahead"
+	if _, err := h.applyAt(ahead, time.Unix(1_700_000_300, 0).UTC(), 3); err != nil {
+		t.Fatalf("the successor: %v", err)
+	}
+	late := taskRecord("t-1", tracker.OpPatch, tracker.TaskPatch{Title: ptr("second")},
+		&tracker.Notify{
+			Kind:     tracker.ChangeFields,
+			Fields:   map[string]tracker.Delta{"title": {From: "a task", To: "second"}},
+			Snapshot: tracker.Snapshot{Key: "ENG-1"},
+		})
+	late.OpID = "late"
+	if _, err := h.applyAt(late, time.Unix(1_700_000_200, 0).UTC(), 2); err != nil {
+		t.Fatalf("the late record: %v", err)
+	}
+	var fields string
+	if err := h.db.Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(),
+			`SELECT fields_json FROM tracker_history WHERE id = 'late'`).Scan(&fields)
+	}); err != nil {
+		t.Fatalf("read the late record's history row: %v", err)
+	}
+	if !strings.Contains(fields, `"second"`) {
+		t.Fatalf("a record the version guard skipped recorded %s — the writer's "+
+			"own statement is the only account of what it moved", fields)
+	}
+}
+
 // THE PROJECT COUNTS ARE MAINTAINED BY THE COMMIT THAT MOVES THEM.
 //
 // An aggregate over every task in every project on every poll is half a
@@ -537,6 +647,7 @@ func TestTheProjectCountsAreMaintainedRatherThanScanned(t *testing.T) {
 			Subject: tracker.ProjectSubject("ENG"), Op: tracker.OpCreate,
 			Writer: "node-a", Scope: tracker.ScopeSet{Subject: true},
 		},
+		Kind: tracker.ChangeProjectCreated,
 		Mutation: mustJSON(tracker.Project{
 			V: tracker.DocumentVersion, Key: "ENG", Name: "Engineering",
 		}),
@@ -586,6 +697,7 @@ func TestATaskCreatedFinishedIsStampedAndCountedFromItsFirstRow(t *testing.T) {
 			Subject: tracker.ProjectSubject("ENG"), Op: tracker.OpCreate,
 			Writer: "node-a", Scope: tracker.ScopeSet{Subject: true},
 		},
+		Kind: tracker.ChangeProjectCreated,
 		Mutation: mustJSON(tracker.Project{
 			V: tracker.DocumentVersion, Key: "ENG", Name: "Engineering",
 		}),
@@ -758,5 +870,33 @@ func TestAHistoryRowWithNoDeltasStoresAnEmptyObject(t *testing.T) {
 			"`{}` — every other row in this column spells an empty delta set "+
 			"that way, and a second spelling is one a reader comparing them "+
 			"cannot tell from a real difference", got[0])
+	}
+}
+
+// A KIND NOBODY DECLARED FAULTS THE APPLY, rather than applying as nothing.
+//
+// A record of a kind this build has no case for, at a version it can read, is a
+// writer that published a kind it never declared: the dispatch has nothing to
+// hand it to, and the applier's unconditional return after the switch is what
+// makes that mistake visible. It is not a gate — a gate drops a record
+// knowingly — and nothing is written.
+func TestAKindNobodyDeclaredFaults(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	rec := taskRecord("t-1", tracker.OpCreate, newTask("t-1"), nil)
+	rec.Subject.Kind = "nonesuch"
+	rec.OpID = "nonesuch-1"
+
+	_, err := h.apply(rec, time.Unix(1_700_000_100, 0).UTC())
+	var gate *gateError
+	if asGate(err, &gate) {
+		t.Fatalf("a kind nobody declared was GATED as %q, which drops it knowingly; "+
+			"a writer's undeclared kind must fault", gate.reason)
+	}
+	if err == nil || !strings.Contains(err.Error(), "nonesuch") {
+		t.Fatalf("applying a kind nobody declared = %v, want a fault naming the kind", err)
+	}
+	if got := h.count("tracker_tasks"); got != 0 {
+		t.Errorf("the estate holds %d task(s) after a record that faulted", got)
 	}
 }

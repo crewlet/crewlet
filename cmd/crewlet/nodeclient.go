@@ -11,8 +11,10 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
 // Talking to a running node.
@@ -228,8 +230,8 @@ func (c *nodeClient) send(ctx context.Context, method, path string, payload []by
 // none — which no refusal the engine writes does: every one is JSON with an
 // `error` code, the guard's 401 included, and so are its router's own
 // `no_route` and `method_not_allowed` for a route or a method the node does
-// not serve ([httpjson.Mux]) — a route an older node lacks is a refusal, not a
-// gateway.
+// not serve ([httpjson.Mux]) — a route this node does not serve is a refusal,
+// not a gateway.
 func engineCode(body []byte) string {
 	var payload struct {
 		Error string `json:"error"`
@@ -238,6 +240,30 @@ func engineCode(body []byte) string {
 		return ""
 	}
 	return payload.Error
+}
+
+// missingSurface is the refusal for a 404 at a REST surface the command needs,
+// given the code the body carried.
+//
+// Only a node with the ingress role mounts the REST surface. A node without
+// it binds api.port for its tool bridge alone ([api.BridgeOnly]), and its
+// router answers every other path with the engine's own `no_route`
+// ([httpjson.CodeNoRoute]) — so that code is a Crewlet node missing a role,
+// and a 404 carrying no code of the engine's is not a node's API at all: a
+// proxy or gateway in front of it, or another service at the address. Each
+// is told where to point instead, because "no such route" alone sends an
+// operator looking for a build that lacks one.
+func missingSurface(base, surface, code string) error {
+	if code == string(httpjson.CodeNoRoute) {
+		return fmt.Errorf("%s serves no %s surface: it is a node without the "+
+			"%s role, which serves only the tool bridge — point -api at a node "+
+			"whose node.roles include %s", base, surface,
+			placement.RoleIngress, placement.RoleIngress)
+	}
+	return fmt.Errorf("%s has no %s surface: whatever answered is not a "+
+		"Crewlet node's API — point -api (or api.host and api.port) at a node "+
+		"with the %s role rather than at a proxy or another service",
+		base, surface, placement.RoleIngress)
 }
 
 // notTheNode is a non-200 that is not the node's own answer: no engine error

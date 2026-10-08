@@ -3,13 +3,50 @@
 // It implements [llm.Provider] over the official anthropic-sdk-go, and it is
 // deliberately thin: it translates the neutral request into Anthropic's wire
 // shape, makes exactly one HTTP attempt per credential, and translates the
-// answer back. Everything about what a failure MEANS is the contract's
-// (llm.KindForStatus), everything about which credential to use next is the
-// pool's, and everything about which model to try next is the chain's.
+// answer back. What a failure MEANS is the contract's vocabulary (the
+// llm.ErrorKind), read from the error type the API names in its body and from
+// the status only where it names none ([kindOf] says why); which credential to
+// use next is the pool's, and which model to try next is the chain's.
 //
-// Two details here are the ones worth checking against the vendor rather than
-// against intuition:
+// Six details here are the ones worth checking against the vendor rather
+// than against intuition:
 //
+//   - THE REQUEST SHAPE IS THE MODEL'S, read from [claudemodel] once at
+//     construction. Thinking is adaptive with a summarized display on every
+//     model that has that mode and a budget only on the ones that predate
+//     it; effort is the entry's level lowered to the call's ceiling, sent
+//     only where the model takes it; a temperature only where the model
+//     samples and the call is not thinking; max_tokens is the model's own
+//     ceiling. No knob is sent that the model in front of it would answer
+//     with a 400, because a 400 is fatal and the chain does not retry it.
+//   - AN ASSISTANT TURN GOES BACK AS IT CAME. Every response's content blocks
+//     are kept verbatim ([llm.Message.Raw]) and replayed unchanged on every
+//     later call, to whichever Claude model is serving it: Opus 5.5, Sonnet
+//     5.5 and Fable 5.1 bind each thinking block to the conversation before
+//     it, and a turn rebuilt from the neutral view — reordered, its texts
+//     joined, its call's input re-encoded — is an edit they refuse. Which
+//     model may read which block is the vendor's call, made by dropping what
+//     it cannot read; this backend never strips a block for the MODEL in
+//     front of it. Only a turn some other backend wrote is rebuilt, without
+//     thinking ([formatMessages]).
+//   - EXCEPT THE REASONING A CHANGED TOOL SET INVALIDATED. Those models bind
+//     a thinking block to the system prompt and the tools of the request
+//     that wrote it too, and an executor's tools change mid-conversation —
+//     `activate_tool` adds one, a resumed run renders them again. On a model
+//     that checks, every turn up to the last one written under another tool
+//     set is replayed WITHOUT its thinking: a run shed from the front, which
+//     is the one removal the check accepts, and what remains was written
+//     under exactly this request's tools (binding.go has the proof).
+//   - EVERY CALL STREAMS, whether or not anybody is watching it. max_tokens
+//     is the model's ceiling (128K on the current models), and the vendor
+//     requires a stream for a response that large: a unary call is bounded
+//     only IN TOTAL, so a worker or a judge that thinks at the entry's effort
+//     for longer than the timeout dies half-way and the chain pays for the
+//     whole call again on its next member. A streamed one is bounded by its
+//     SILENCE ([Provider.streamOnce]), and a stream that ends without its
+//     `message_stop` is a failure rather than a short answer. The unary route
+//     is only the fallback for an endpoint that answered a stream without
+//     streaming.
 //   - MAX RETRIES IS ZERO. The SDK retries twice by default, and its retry
 //     predicate (internal/requestconfig: shouldRetry) fires on exactly what
 //     the layers above need to see first — 408, 409, 429, every 5xx and every
@@ -48,6 +85,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/credential"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/anthropic/claudemodel"
 	"github.com/crewlet/crewlet/internal/providers/llm/httpapi"
 )
 
@@ -56,21 +94,36 @@ var log = logging.Get("llm.anthropic")
 // providerName labels errors and log lines. It is the config's type name.
 const providerName = "anthropic"
 
-// Defaults. The timeout matches the config layer's defaultLLMTimeoutSeconds.
+// Defaults. The timeout matches the config layer's defaultLLMTimeoutSeconds,
+// which is what the engine passes; this one serves a Config built without it.
+//
+// There is deliberately NO default temperature, max_tokens or thinking budget.
+// A temperature is a 400 on every current model and the engine's own phases
+// never chose one; the output cap is the model's own ceiling (see
+// [Provider.params]); and a budget is something a budget-era entry asks for
+// rather than something every entry is given.
 const (
 	DefaultBaseURL         = "https://api.anthropic.com"
-	DefaultTimeout         = 120 * time.Second
-	DefaultMaxTokens       = 4096
-	DefaultThinkingBudget  = 10000
-	DefaultTemperature     = 0.7
-	minThinkingBudget      = 1024
+	DefaultTimeout         = 600 * time.Second
 	emptyToolResultContent = "(no output)"
 )
 
 // Config builds a provider.
 type Config struct {
-	// Model is the model id this provider serves. Required.
+	// Model is the model id this provider serves. Required. It is sent as
+	// written; the request SHAPE is read from the capability table under
+	// [claudemodel.Normalize], so a Bedrock or Vertex spelling of a known
+	// model is shaped as that model.
 	Model string
+
+	// ClaudeModel names the table row whose request shape this entry uses,
+	// when Model is a gateway alias the table cannot read. It must be one
+	// of the table's own ids exactly ([claudemodel.Known]), and it is
+	// refused beside a Model the table already reads: one entry may not
+	// carry two answers to "which model is this". Empty reads the shape
+	// from Model, and an id the table does not know gets
+	// [claudemodel.Modern].
+	ClaudeModel string
 
 	// APIKeys are the credentials, in declaration order. Several rotate.
 	// These are THE WHOLE BAG: nothing here reads a variable. Which key an
@@ -86,27 +139,42 @@ type Config struct {
 	// redirect a company's traffic.
 	BaseURL string
 
-	// Timeout caps one HTTP attempt. Zero takes DefaultTimeout.
+	// Timeout bounds one HTTP attempt. Zero takes DefaultTimeout.
+	//
+	// Every call streams, and a streamed call is bounded by its SILENCE —
+	// the longest gap with nothing arriving, the wait for the first byte
+	// included — and never by its length, because a round that thinks at a
+	// high effort writes for many minutes and every one of them is the model
+	// working (see [httpapi.IdleWatchdog]). Only on an endpoint that does not
+	// stream, where the call falls back to the unary route, is it a bound IN
+	// TOTAL, request to last byte.
 	Timeout time.Duration
 
 	// Cooldowns is the credential bench policy. Zero fields take defaults.
 	Cooldowns credential.Policy
 
-	// MaxTokens is the output cap for a request that names none. Zero takes
-	// DefaultMaxTokens.
-	MaxTokens int
+	// Effort is how hard the model thinks on this entry, sent as
+	// `output_config.effort`. Empty takes [claudemodel.DefaultEffort].
+	// Refused on a model that takes no effort (Sonnet 4.5, Haiku 4.5 and
+	// older) and at a level the model does not accept (`xhigh` before Opus
+	// 4.7), because either is a 400 on every call. A call lowers it with
+	// [llm.Request.Effort] and never raises it.
+	//
+	// It is the ONLY depth control on a model that thinks adaptively. There
+	// is no "off": Opus 5.5, Fable and Mythos refuse it outright, Sonnet
+	// 5.5 only at the lower efforts, and Opus 4.8 and 5 with thinking off
+	// are documented to write a tool call into their prose instead of
+	// making it — the very failure the tool loop's correctives exist for.
+	Effort llm.Effort
 
-	// Temperature is used for a request that names none (see llm.Request:
-	// its zero value cannot be told apart from an unset field).
-	Temperature float64
-
-	// Reasoning turns on extended thinking.
-	Reasoning bool
-
-	// ThinkingBudget is the thinking allowance. Zero takes
-	// DefaultThinkingBudget. Anthropic requires at least 1024 and strictly
-	// less than max_tokens; both are enforced here rather than discovered
-	// as a 400 on the first turn of a live company.
+	// ThinkingBudget is the thinking allowance on a BUDGET-ERA model (Haiku
+	// 4.5, Sonnet 4.5, Opus 4.5 and older), the only models that take one.
+	// Zero means that model does not think. Refused on an adaptive model,
+	// where `budget_tokens` is a 400 or deprecated, and below
+	// [claudemodel.MinThinkingBudget] or at or above the model's output
+	// cap, where it is a 400 too — refused here rather than silently raised
+	// to fit, which is how a configured 10 used to become a 1024 nobody
+	// chose.
 	ThinkingBudget int
 
 	// HTTPClient overrides the transport. Nil builds one through
@@ -119,13 +187,23 @@ type Config struct {
 
 // Provider is an Anthropic Messages backend.
 type Provider struct {
-	model       string
-	client      sdk.Client
-	pool        *credential.Pool
-	maxTokens   int64
-	temperature float64
-	reasoning   bool
-	budget      int64
+	model  string
+	client sdk.Client
+	pool   *credential.Pool
+	// baseURL is the endpoint every call goes to, kept for the doctor's
+	// report: "not served" means nothing until it says by whom.
+	baseURL string
+
+	// profile is what this entry's model accepts, decided once at
+	// construction: every request is shaped from it.
+	profile claudemodel.Profile
+	// effort is the entry's level, "" on a model that takes none.
+	effort llm.Effort
+	// budget is the thinking allowance on a budget-era model, 0 for none.
+	budget int64
+	// timeout is a streamed call's idle bound, and the total one of a unary
+	// call on an endpoint that does not stream.
+	timeout time.Duration
 
 	// noStream latches once this endpoint has answered a streaming request
 	// without streaming. Atomic because one Provider serves every seat
@@ -135,10 +213,33 @@ type Provider struct {
 
 var _ llm.Provider = (*Provider)(nil)
 
-// New builds a provider.
+// New builds a provider. It refuses a configuration that would be a 400 on
+// every call, naming the field — a combination the config tier already
+// refuses when the model is written literally, and checked again here because
+// a model written as a `${VAR}` is only known once it resolves.
 func New(cfg Config) (*Provider, error) {
 	if strings.TrimSpace(cfg.Model) == "" {
 		return nil, errors.New("anthropic: Model is required")
+	}
+	profile, err := claudemodel.Resolve(cfg.Model, cfg.ClaudeModel)
+	if err != nil {
+		return nil, fmt.Errorf("anthropic: ClaudeModel: %w", err)
+	}
+	if err := profile.CheckEffort(cfg.Model, claudemodel.Effort(cfg.Effort)); err != nil {
+		return nil, fmt.Errorf("anthropic: Effort: %w", err)
+	}
+	if err := profile.CheckBudget(cfg.Model, cfg.ThinkingBudget); err != nil {
+		return nil, fmt.Errorf("anthropic: ThinkingBudget: %w", err)
+	}
+	// The entry's level: what it named, or the default, on a model that
+	// takes one at all — and nothing on one that does not, where any value
+	// is a 400.
+	effort := cfg.Effort
+	switch {
+	case len(profile.Efforts) == 0:
+		effort = ""
+	case effort == "":
+		effort = llm.Effort(claudemodel.DefaultEffort)
 	}
 
 	keys := cfg.APIKeys
@@ -160,7 +261,10 @@ func New(cfg Config) (*Provider, error) {
 		// dutifully rotated keys nothing was using.
 		option.WithoutEnvironmentDefaults(),
 		option.WithBaseURL(baseURL),
-		option.WithRequestTimeout(timeout),
+		// NO CLIENT-WIDE REQUEST TIMEOUT: every call streams and is bounded
+		// by its silence ([Provider.streamOnce]); a total bound here would
+		// cut a long round off half-way. The unary fallback sets its own
+		// ([Provider.unary]).
 		// See the package doc. Not negotiable.
 		option.WithMaxRetries(0),
 	}
@@ -173,32 +277,27 @@ func New(cfg Config) (*Provider, error) {
 		opts = append(opts, option.WithHTTPClient(httpapi.NewHTTPClient()))
 	}
 
-	maxTokens := cfg.MaxTokens
-	if maxTokens <= 0 {
-		maxTokens = DefaultMaxTokens
-	}
-	budget := cfg.ThinkingBudget
-	if budget <= 0 {
-		budget = DefaultThinkingBudget
-	}
-	if cfg.Reasoning && budget < minThinkingBudget {
-		log.Warn("thinking_budget_raised",
-			"model", cfg.Model, "configured", budget, "applied", minThinkingBudget)
-		budget = minThinkingBudget
-	}
-	temperature := cfg.Temperature
-	if temperature <= 0 {
-		temperature = DefaultTemperature
+	if profile.ID == "" {
+		// Not a refusal: an id the table has never seen is most likely a
+		// model released after it, and Modern is what those accept. Said
+		// once per build so an alias for an OLDER model — the one case
+		// Modern gets wrong — has a line to find.
+		log.Warn("model_profile_unknown",
+			"model", cfg.Model,
+			"hint", "shaped as the current generation (adaptive thinking, no "+
+				"temperature); if this id is a gateway alias for an older Claude "+
+				"model, name that model with claude_model")
 	}
 
 	return &Provider{
-		model:       cfg.Model,
-		client:      sdk.NewClient(opts...),
-		pool:        credential.New(credential.Options{Keys: keys, Policy: cfg.Cooldowns, Clock: cfg.Clock}),
-		maxTokens:   int64(maxTokens),
-		temperature: temperature,
-		reasoning:   cfg.Reasoning,
-		budget:      int64(budget),
+		model:   cfg.Model,
+		baseURL: baseURL,
+		client:  sdk.NewClient(opts...),
+		pool:    credential.New(credential.Options{Keys: keys, Policy: cfg.Cooldowns, Clock: cfg.Clock}),
+		profile: profile,
+		effort:  effort,
+		budget:  int64(cfg.ThinkingBudget),
+		timeout: timeout,
 	}, nil
 }
 
@@ -210,8 +309,12 @@ func (p *Provider) Model() string { return p.model }
 func (p *Provider) Pool() *credential.Pool { return p.pool }
 
 // Complete calls the Messages API once per live credential until one answers.
+//
+// It STREAMS whether or not the request asked to watch the answer arrive
+// ([llm.Request.OnDelta]): with no listener the fragments go nowhere, and the
+// call is still bounded by its silence rather than its length.
 func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
-	params, err := p.params(req)
+	params, bound, err := p.params(req)
 	if err != nil {
 		return nil, &llm.Error{
 			Kind: llm.KindFatal, Provider: providerName, Model: p.model, Err: err,
@@ -221,14 +324,14 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	// Per-call local, never a provider field: ONE Provider serves every
 	// concurrent caller.
 	attempt := 0
-	streaming := req.Streaming() && !p.noStream.Load()
+	streaming := !p.noStream.Load()
 	msg, err := credential.Rotate(ctx, p.pool,
 		credential.Identity{Provider: providerName, Model: p.model},
 		p.classify,
 		func(key string) (*sdk.Message, error) {
 			opt := option.WithAPIKey(key)
 			if !streaming {
-				return p.client.Messages.New(ctx, params, opt)
+				return p.unary(ctx, params, opt)
 			}
 			// A ROTATION IS A RESTART: the previous key may have died
 			// after streaming half an answer, and appending this attempt
@@ -251,7 +354,8 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 				log.WarnContext(ctx, "provider_does_not_stream",
 					"provider", providerName, "model", p.model,
 					"hint", "the endpoint answered a streaming request without streaming; "+
-						"live phase text will appear per round instead of as it is written")
+						"live phase text will appear per round instead of as it is written, and "+
+						"every call is bounded by the timeout in total rather than by its silence")
 				if unary {
 					// THE ANSWER IT GAVE IS THE ANSWER. It was processed
 					// and billed, and asking again would pay twice for a
@@ -260,21 +364,54 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 				}
 				// Answered with nothing a message could be read from, so
 				// there is no answer to keep: asked again, unary.
-				return p.client.Messages.New(ctx, params, opt)
+				return p.unary(ctx, params, opt)
 			}
 			return msg, sErr
 		})
 	if err != nil {
 		return nil, err
 	}
-	return p.completion(msg), nil
+	out := p.completion(msg, bound)
+	if err := p.refused(msg, out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // errNoStream reports an endpoint that accepted a streaming request and
 // answered with neither a stream nor a message.
 var errNoStream = errors.New("endpoint did not stream")
 
+// errCutShort reports a stream that ended cleanly before its `message_stop`.
+// [Provider.classify] reads it as the server's failure.
+var errCutShort = errors.New(
+	"the response stream ended before message_stop, so the answer is incomplete")
+
+// unary is one attempt on the unary route, which only an endpoint that does
+// not stream is sent. Its bound is IN TOTAL — nothing arrives until the answer
+// is whole, so there is no silence to measure — and it is explicit, because
+// the SDK otherwise REFUSES a unary call whose max_tokens it estimates at over
+// ten minutes, and every call here sends the model's own cap.
+func (p *Provider) unary(
+	ctx context.Context, params sdk.MessageNewParams, opt option.RequestOption,
+) (*sdk.Message, error) {
+	return p.client.Messages.New(ctx, params, opt, option.WithRequestTimeout(p.timeout))
+}
+
 // streamOnce runs one streamed attempt, forwarding fragments as they land.
+//
+// BOUNDED BY SILENCE, NOT LENGTH: there is no per-attempt deadline, and an
+// [httpapi.IdleWatchdog] of the entry's timeout ends the attempt only when
+// nothing has arrived for that long. A deadline would cover the whole streamed
+// body, and a round that thinks for longer than it — a Fable round, anything
+// at xhigh — would die half-way through every time it did its best work.
+//
+// FINISHED ONLY AT `message_stop`. A gateway or a proxy that closes the
+// response in an orderly way mid-answer ends the SDK's stream with no error,
+// and what accumulated reads as a round with no stop reason — which
+// [stopReason] would take for an ordinary end, handing the loop half an
+// answer as the model's last word. So a stream that never sent its terminal
+// event is [errCutShort], the server's failure, and the chain tries again.
 //
 // The SDK accumulates into exactly the [sdk.Message] the unary path returns —
 // signatures on thinking blocks included, which must survive verbatim or the
@@ -288,6 +425,8 @@ func (p *Provider) streamOnce(
 	ctx context.Context, req llm.Request,
 	params sdk.MessageNewParams, opt option.RequestOption,
 ) (msg *sdk.Message, unary bool, err error) {
+	ctx, watch := httpapi.WatchIdle(ctx, p.timeout)
+	defer watch.Stop()
 	var answer sdk.Message
 	whole := httpapi.NewUnaryAnswer(func(body []byte) bool {
 		var m sdk.Message
@@ -299,16 +438,22 @@ func (p *Provider) streamOnce(
 		answer = m
 		return true
 	})
-	stream := p.client.Messages.NewStreaming(ctx, params, opt, option.WithMiddleware(whole.Middleware))
+	// The watchdog INSIDE the unary reader, so a whole body read to find
+	// out whether it is a message is bounded by its silence as a stream is.
+	stream := p.client.Messages.NewStreaming(ctx, params, opt,
+		option.WithMiddleware(whole.Middleware, watch.Middleware))
 	defer func() { _ = stream.Close() }()
 
 	var streamed sdk.Message
-	events := 0
+	events, stopped := 0, false
 	for stream.Next() {
 		events++
 		event := stream.Current()
 		if err := streamed.Accumulate(event); err != nil {
 			return nil, false, err
+		}
+		if event.Type == "message_stop" {
+			stopped = true
 		}
 		switch d := event.Delta; d.Type {
 		case "text_delta":
@@ -323,8 +468,9 @@ func (p *Provider) streamOnce(
 	if err := stream.Err(); err != nil {
 		// A stream that dies MID-BODY is a failure of the call, not a
 		// short answer: handing back what accumulated would give the loop
-		// a truncated response as though the model had finished.
-		return nil, false, err
+		// a truncated response as though the model had finished. A stream
+		// the watchdog ended is reported as the stall it was.
+		return nil, false, watch.Err(err)
 	}
 	if events == 0 {
 		if whole.Taken() {
@@ -334,6 +480,9 @@ func (p *Provider) streamOnce(
 		// Distinguished from a failure so the caller can fall back rather
 		// than fail a phase over a capability.
 		return nil, false, errNoStream
+	}
+	if !stopped {
+		return nil, false, errCutShort
 	}
 	return &streamed, false, nil
 }
@@ -346,17 +495,60 @@ func (p *Provider) streamOnce(
 // the raw body, so [httpapi.FromStatus] shows a status line of its own and the
 // endpoint's reason travels on the classified error, redacted.
 func (p *Provider) classify(err error) *llm.Error {
+	if errors.Is(err, errCutShort) {
+		// The API accepted the request and began answering, so the one
+		// thing a cut can never be is a request it refused: the chain may
+		// try again, and no key is benched for it.
+		return &llm.Error{Kind: llm.KindServer, Provider: providerName, Model: p.model, Err: err}
+	}
 	var apiErr *sdk.Error
 	if errors.As(err, &apiErr) {
 		var header http.Header
 		if apiErr.Response != nil {
 			header = apiErr.Response.Header
 		}
-		classified := httpapi.FromStatus(err, providerName, p.model, apiErr.StatusCode, header)
+		classified := httpapi.FromKind(err, providerName, p.model, kindOf(apiErr), apiErr.StatusCode, header)
 		classified.Detail = detail(apiErr)
 		return classified
 	}
 	return httpapi.FromTransport(err, providerName, p.model)
+}
+
+// kindOf classifies an API error by the TYPE its body names first and by its
+// status only when the body names none this backend knows.
+//
+// The type first, because the status is not always the API's answer. An
+// `error` event inside a stream reaches the SDK after the response opened
+// with 200, and the SDK attaches THAT status to it — so an `overloaded_error`
+// half-way through a round classified by status is a 200, which is fatal: no
+// other member of the chain is tried and the turn fails over a capacity blip
+// the next model would have absorbed. The type is the API's own structured
+// classification — the body of every Anthropic error carries one, a status
+// response's as much as a stream's — so reading it is not prose matching, and
+// on a status response the two agree.
+//
+// The status decides only when the type is absent or new. An unrecognised
+// type on a response that had already succeeded is a SERVER failure rather
+// than whatever 200 maps to: the API accepted the request, authenticated it
+// and began answering, so the one thing the failure cannot be is a request it
+// refused.
+func kindOf(apiErr *sdk.Error) llm.ErrorKind {
+	switch apiErr.Type() {
+	case sdk.ErrorTypeRateLimitError, sdk.ErrorTypeBillingError:
+		return llm.KindRateLimit
+	case sdk.ErrorTypeAuthenticationError, sdk.ErrorTypePermissionError:
+		return llm.KindAuth
+	case sdk.ErrorTypeOverloadedError, sdk.ErrorTypeAPIError:
+		return llm.KindServer
+	case sdk.ErrorTypeTimeoutError:
+		return llm.KindTimeout
+	case sdk.ErrorTypeInvalidRequestError, sdk.ErrorTypeNotFoundError:
+		return llm.KindFatal
+	}
+	if apiErr.StatusCode >= 200 && apiErr.StatusCode < 300 {
+		return llm.KindServer
+	}
+	return llm.KindForStatus(apiErr.StatusCode)
 }
 
 // detail is what the Anthropic endpoint SAID about failing a request — its own
@@ -391,68 +583,199 @@ func detail(apiErr *sdk.Error) string {
 	return httpapi.SaidBody(contentType, []byte(raw))
 }
 
-// params renders the neutral request into Anthropic's wire shape.
-func (p *Provider) params(req llm.Request) (sdk.MessageNewParams, error) {
+// params renders the neutral request into Anthropic's wire shape, and says
+// what the turn it answers with is bound to: the request's [binding], or ""
+// when the request replays reasoning a model that checks would have shed (see
+// binding.go, whose premise such a turn breaks).
+func (p *Provider) params(req llm.Request) (sdk.MessageNewParams, string, error) {
 	system, rest := splitSystem(req.Messages)
-	messages, err := formatMessages(rest)
+	var tools []sdk.ToolUnionParam
+	if len(req.Tools) > 0 {
+		tools = formatTools(req.Tools)
+	}
+	bound, err := binding(system, tools)
 	if err != nil {
-		return sdk.MessageNewParams{}, err
+		return sdk.MessageNewParams{}, "", err
+	}
+	// The reasoning a changed system prompt or tool set invalidated, oldest
+	// first. Shed only where the model checks: elsewhere every block is
+	// still valid, and a turn written there while such a block was replayed
+	// records no binding, so a checking model sheds it later (binding.go).
+	cut, err := shedThrough(rest, bound)
+	if err != nil {
+		return sdk.MessageNewParams{}, "", err
+	}
+	shed, writes := 0, bound
+	switch {
+	case p.profile.PrefixBinding:
+		shed = cut
+	case cut > 0:
+		writes = ""
+	}
+	if shed > 0 {
+		log.Debug("thinking_shed", "model", p.model, "messages", shed,
+			"hint", "the tool set or system prompt changed since this reasoning was written, "+
+				"and the model refuses reasoning replayed under another")
+	}
+	messages, err := formatMessages(rest, shed)
+	if err != nil {
+		return sdk.MessageNewParams{}, "", err
 	}
 	if len(messages) == 0 {
 		// Anthropic requires a non-empty messages array. Refusing here
 		// names the actual problem; the API's 400 names a field.
-		return sdk.MessageNewParams{}, errors.New(
+		return sdk.MessageNewParams{}, "", errors.New(
 			"anthropic: request carries no non-system message with content")
 	}
 
-	maxTokens := p.maxTokens
-	if req.MaxTokens > 0 {
-		maxTokens = int64(req.MaxTokens)
+	if !req.Effort.Valid() {
+		return sdk.MessageNewParams{}, "", fmt.Errorf(
+			"anthropic: request effort %q is not a level (want low, medium, high, xhigh, max, or empty)",
+			req.Effort)
 	}
 	params := sdk.MessageNewParams{
 		Model:    p.model,
 		Messages: messages,
 	}
 
-	if p.reasoning {
-		// Anthropic requires max_tokens strictly greater than the thinking
-		// budget, and rejects any temperature but 1 while thinking.
-		if maxTokens <= p.budget {
-			maxTokens = p.budget + maxTokens
-		}
+	// THE SHAPE IS THE MODEL'S. Every field below is sent only where the
+	// profile says the model accepts it, because a field it does not is a
+	// 400, and a 400 is fatal to the call — the chain never tries the next
+	// member on it.
+	thinking := p.profile.Thinks(int(p.budget))
+	switch {
+	case p.profile.Thinking == claudemodel.ThinkingAdaptive:
+		// Explicit, on every call: omitting it means "think" on some of
+		// these models and "do not" on others (Opus 4.6–4.8 and Sonnet
+		// 4.6). SUMMARIZED, because the default display on every current
+		// model is `omitted` — an empty thinking text, so the round's
+		// reasoning, the live thinking stream and the dashboard's thinking
+		// disclosure would all be blank. A summary is billed the same.
+		params.Thinking = sdk.ThinkingConfigParamUnion{OfAdaptive: &sdk.ThinkingConfigAdaptiveParam{
+			Display: sdk.ThinkingConfigAdaptiveDisplaySummarized,
+		}}
+	case thinking:
 		params.Thinking = sdk.ThinkingConfigParamUnion{
 			OfEnabled: &sdk.ThinkingConfigEnabledParam{BudgetTokens: p.budget},
 		}
-		params.Temperature = param.NewOpt(1.0)
-	} else {
-		// TemperatureOr, not a zero test: an explicit 0.0 is a real request
-		// — a judge asking for a reproducible answer — and it must reach
-		// the wire, while a request that named nothing takes the
-		// provider's configured default.
-		params.Temperature = param.NewOpt(req.TemperatureOr(p.temperature))
 	}
-	params.MaxTokens = maxTokens
+
+	// The entry's level lowered to the call's ceiling, and then to the
+	// highest level at or below that the model takes: a call asking for
+	// `xhigh` on a model whose levels skip it gets `high`, not a 400.
+	if effort := fit(p.effort.AtMost(req.Effort), p.profile.Efforts); effort != "" {
+		params.OutputConfig = sdk.OutputConfigParam{Effort: sdk.OutputConfigEffort(effort)}
+	}
+
+	// A caller's temperature reaches the wire only where it can mean
+	// something: a model that takes sampling at all, on a call that is not
+	// thinking (the API takes nothing but 1 while it is). Anywhere else it
+	// is dropped rather than refused — a model with no sampling parameter
+	// cannot honour a 0, and the caller asked for reproducibility, not for
+	// a failed call.
+	if req.Temperature != nil && p.profile.Sampling && !thinking {
+		params.Temperature = param.NewOpt(*req.Temperature)
+	}
+
+	// max_tokens is the MODEL'S OWN CEILING. An unused cap costs nothing,
+	// and runaway spend is bounded by the token budgets rather than here;
+	// a smaller one truncates an executor round mid-call, and on a thinking
+	// model the thinking is spent from the same cap as the answer, so a cap
+	// sized for a short answer is spent before the answer starts — the
+	// empty-answer failure the judge and the knowledge passes describe. A
+	// caller's own cap is therefore honoured only on a call that is not
+	// thinking, and never above the ceiling.
+	params.MaxTokens = int64(p.profile.MaxOutput)
+	if req.MaxTokens > 0 && !thinking && req.MaxTokens < p.profile.MaxOutput {
+		params.MaxTokens = int64(req.MaxTokens)
+	}
 
 	if system != "" {
 		params.System = systemBlocks(system)
 	}
-	if len(req.Tools) > 0 {
-		params.Tools = formatTools(req.Tools)
-		if choice, ok := toolChoice(req.ToolChoice); ok {
-			params.ToolChoice = choice
-		}
+	// No tool_choice: the API's default with tools present is auto, which
+	// is the only choice the contract has (see [llm.Request.Tools]). A
+	// forced `any` is a 400 on Opus 5.5, Sonnet 5.5, Fable 5.1 and Mythos
+	// 5.1, and on every Claude model while it is thinking.
+	if len(tools) > 0 {
+		params.Tools = tools
+		// THE CONVERSATION IS CACHED TOO, on a call that will be continued.
+		// The breakpoints on the system block and the last tool cache the
+		// static prefix and nothing after it, so every round of a tool loop
+		// re-billed the whole history it had grown so far at the full input
+		// price — and by round twenty that history, not the prefix, is most
+		// of what a round sends. So the last block of the conversation
+		// carries a breakpoint too ([markTail]), which moves forward with
+		// it: round N writes what round N+1 reads.
+		//
+		// ONLY WITH TOOLS, because only then is there a next round: a call
+		// that offers tools is a tool loop's, and its answer comes back as
+		// this same prefix plus the results. A call with none — a judge, a
+		// knowledge or learning pass — is asked once, and caching its tail
+		// would pay the write premium on every one of them for a read that
+		// never comes.
+		markTail(messages)
 	}
-	return params, nil
+	return params, writes, nil
 }
 
-// cacheBreakpoint marks the (tools + system) prefix cacheable.
+// fit is effort at or below the highest level the model takes: effort itself
+// when the model takes it, the next level down it does take otherwise, and ""
+// when it takes no level at or below it — or none at all, or effort is empty.
+// accepted is lowest first, as every profile's levels are.
+func fit(effort llm.Effort, accepted []claudemodel.Effort) llm.Effort {
+	var out llm.Effort
+	for _, level := range accepted {
+		// level is at or below effort exactly when lowering effort to it
+		// gives it back.
+		if l := llm.Effort(level); effort != "" && effort.AtMost(l) == l {
+			out = l
+		}
+	}
+	return out
+}
+
+// cacheBreakpoint is one prompt-cache breakpoint, on the default 5-minute TTL.
 //
-// That prefix is the large static part of every executor and reviewer
-// round: without the breakpoint it is re-billed in full on every round of
-// every turn. Anthropic silently ignores a breakpoint on a prefix below the
-// cacheable minimum, so setting it is always safe.
+// Three are set, inside the API's cap of four and all on the one TTL (a
+// longer one may not follow a shorter): on the system block and the last
+// tool, which cache the (tools + system) prefix — the large static part of
+// every executor and reviewer round, re-billed in full on every round without
+// them — and, on a call that offers tools, on the conversation's last block
+// ([markTail]). Anthropic silently ignores a breakpoint on a prefix below the
+// cacheable minimum, so setting one is always safe.
 func cacheBreakpoint() sdk.CacheControlEphemeralParam {
 	return sdk.NewCacheControlEphemeralParam()
+}
+
+// markTail sets a cache breakpoint on the last block of the final message that
+// can carry one, so a tool loop's conversation is cached up to where it ends.
+//
+// EXPLICIT, ON THE BLOCK, and never the request's top-level `cache_control`
+// (the API's "automatic" breakpoint, which lands on the same block): the
+// legacy Bedrock integration (Opus 4.6 and earlier) answers the top-level
+// field with a 400, and this backend reaches Bedrock through any gateway that
+// forwards the body — a Bedrock spelling of the model is one it reads. A 400
+// is fatal and the chain does not retry it, so the one marker every platform
+// accepts is the one written.
+//
+// The final message is always the user's — a prefill is refused before this
+// runs ([ErrPrefill]) — and is built here from text and tool results, both of
+// which take a marker. The walk backwards is for a block that does not (one
+// that cannot carry `cache_control` has no slot to set), and the automatic
+// form does the same walk; a message with no such block is left unmarked
+// rather than marked somewhere earlier, where the cache would stop short.
+func markTail(messages []sdk.MessageParam) {
+	if len(messages) == 0 {
+		return
+	}
+	tail := messages[len(messages)-1].Content
+	for i := len(tail) - 1; i >= 0; i-- {
+		if marker := tail[i].GetCacheControl(); marker != nil {
+			*marker = cacheBreakpoint()
+			return
+		}
+	}
 }
 
 func systemBlocks(system string) []sdk.TextBlockParam {
@@ -476,10 +799,26 @@ func splitSystem(messages []llm.Message) (string, []llm.Message) {
 	return strings.Join(system, "\n"), rest
 }
 
-func formatMessages(messages []llm.Message) ([]sdk.MessageParam, error) {
+// formatMessages renders the conversation. An assistant turn this backend
+// wrote is REPLAYED from its own blocks ([replay]) — without its thinking when
+// it is one of the first shed messages ([shedThrough]); every other turn is
+// built from the neutral view.
+func formatMessages(messages []llm.Message, shed int) ([]sdk.MessageParam, error) {
 	out := make([]sdk.MessageParam, 0, len(messages))
-	for _, m := range messages {
+	for i, m := range messages {
 		switch {
+		case replayed(m):
+			blocks, err := replay(m.Raw, i < shed)
+			if err != nil {
+				return nil, fmt.Errorf("anthropic: message %d: %w", i, err)
+			}
+			if len(blocks) == 0 {
+				// Nothing but whitespace text, or nothing but shed
+				// thinking: see [replay].
+				continue
+			}
+			out = append(out, sdk.NewAssistantMessage(blocks...))
+
 		case m.Role == llm.RoleTool:
 			content := m.Content
 			if strings.TrimSpace(content) == "" {
@@ -490,22 +829,23 @@ func formatMessages(messages []llm.Message) ([]sdk.MessageParam, error) {
 				// different message entirely.
 				content = emptyToolResultContent
 			}
-			out = appendUser(out, sdk.NewToolResultBlock(m.ToolCallID, content, false))
+			// is_error from the message's own flag: the content says why
+			// the call failed, and the flag is the API's structured way of
+			// saying THAT it did, which the model reads differently from a
+			// tool that ran and returned the same words.
+			out = appendUser(out, sdk.NewToolResultBlock(m.ToolCallID, content, m.Failed))
 
-		case len(m.ToolCalls) > 0 || len(m.ThinkingBlocks) > 0:
-			blocks := make([]sdk.ContentBlockParamUnion, 0,
-				len(m.ThinkingBlocks)+len(m.ToolCalls)+1)
-			// Thinking blocks go back FIRST and verbatim, signature
-			// included: Anthropic validates them against the turn they
-			// belong to and rejects a conversation that reordered or
-			// paraphrased them.
-			for _, tb := range m.ThinkingBlocks {
-				if tb.Type == "redacted_thinking" {
-					blocks = append(blocks, sdk.NewRedactedThinkingBlock(tb.Data))
-					continue
-				}
-				blocks = append(blocks, sdk.NewThinkingBlock(tb.Signature, tb.Thinking))
-			}
+		case len(m.ToolCalls) > 0:
+			// A turn another backend wrote, rebuilt from the neutral view
+			// WITHOUT ITS THINKING. Another vendor's reasoning has no
+			// Anthropic signature to carry, and a block rebuilt here is not
+			// the block that was signed: the order and the text around it
+			// are this function's rather than the model's, which is the
+			// edit that invalidates it. Leaving it out is never a 400: such
+			// a turn never had a block to lose — a turn with no thinking is
+			// what every non-Claude turn looks like, and the vendor accepts
+			// one anywhere.
+			blocks := make([]sdk.ContentBlockParamUnion, 0, len(m.ToolCalls)+1)
 			if strings.TrimSpace(m.Content) != "" {
 				blocks = append(blocks, sdk.NewTextBlock(m.Content))
 			}
@@ -544,8 +884,63 @@ func formatMessages(messages []llm.Message) ([]sdk.MessageParam, error) {
 			out = appendUser(out, sdk.NewTextBlock(m.Content))
 		}
 	}
+	// NO PREFILL. A conversation ending on the assistant's turn asks the
+	// model to continue it, which every model from Opus 4.6 and Sonnet 4.6
+	// on answers with a 400. Nothing in the engine sends one — the tool
+	// loop always follows an assistant turn with the results or a user
+	// note — so this is the invariant ENFORCED rather than assumed, refused
+	// here where it can be named rather than discovered as a fatal 400 that
+	// no fallback retries.
+	if n := len(out); n > 0 && out[n-1].Role == sdk.MessageParamRoleAssistant {
+		return nil, ErrPrefill
+	}
 	return out, nil
 }
+
+// replay is an assistant turn this backend wrote, as the blocks it was written
+// in: each one the API's own JSON, sent back as it arrived — never decoded into
+// the SDK's param types and re-encoded, which would drop any field this SDK
+// version does not model and any block type newer than it, and an edit is an
+// edit whether or not it was meant.
+//
+// One kind of block is left out: a TEXT block holding nothing but whitespace.
+// The API refuses one on input, though a model writes them (a newline between
+// its thinking and a tool call), and the vendor's history check ignores them by
+// rule, so leaving one out changes nothing it compares. A turn that held only
+// such blocks comes back empty, and the caller drops it as it drops any turn
+// with nothing in it.
+//
+// With shed set, the turn's THINKING is left out too — every thinking and
+// redacted_thinking block, and nothing else: the text and the calls are the
+// conversation, and only the reasoning is bound to the tools it was written
+// under (see binding.go). A turn that was nothing but reasoning comes back
+// empty and is dropped the same way.
+//
+// A block that is not JSON at all is refused, naming its place: it can only be
+// a parked conversation corrupted in storage, and sent as it is the SDK would
+// fail to encode the request with an error naming nothing.
+func replay(raw []json.RawMessage, shed bool) ([]sdk.ContentBlockParamUnion, error) {
+	blocks := make([]sdk.ContentBlockParamUnion, 0, len(raw))
+	for i, block := range raw {
+		head, err := headOf(block)
+		if err != nil {
+			return nil, fmt.Errorf("replayed content block %d: %w", i, err)
+		}
+		if head.Type == "text" && strings.TrimSpace(head.Text) == "" {
+			continue
+		}
+		if shed && isThinking(head.Type) {
+			continue
+		}
+		blocks = append(blocks, param.Override[sdk.ContentBlockParamUnion](block))
+	}
+	return blocks, nil
+}
+
+// ErrPrefill is a request whose conversation ends on the assistant's turn.
+var ErrPrefill = errors.New(
+	"anthropic: the conversation ends on an assistant turn (a prefill), which " +
+		"current Claude models refuse; end it on a user turn or a tool result")
 
 // appendUser adds user-side blocks to the conversation, JOINING the previous
 // turn when it is also the user's.
@@ -653,45 +1048,29 @@ func stringList(value any) []string {
 	}
 }
 
-// toolChoice maps the contract's four values onto Anthropic's union. The
-// second return is false when nothing should be sent.
-func toolChoice(choice llm.ToolChoice) (sdk.ToolChoiceUnionParam, bool) {
-	switch choice {
-	case "", llm.ToolChoiceAuto:
-		return sdk.ToolChoiceUnionParam{OfAuto: &sdk.ToolChoiceAutoParam{}}, true
-	case llm.ToolChoiceRequired:
-		// Anthropic spells "you must call one of these" as `any`.
-		return sdk.ToolChoiceUnionParam{OfAny: &sdk.ToolChoiceAnyParam{}}, true
-	case llm.ToolChoiceNone:
-		return sdk.ToolChoiceUnionParam{OfNone: &sdk.ToolChoiceNoneParam{}}, true
-	default:
-		// An unrecognised value is the caller's mistake, and guessing at
-		// it would be worse than letting the model decide.
-		log.Warn("unknown_tool_choice", "value", string(choice))
-		return sdk.ToolChoiceUnionParam{}, false
-	}
-}
-
-// completion translates the response.
-func (p *Provider) completion(msg *sdk.Message) *llm.Completion {
+// completion translates the response, written under the request binding
+// bound ([Provider.params]).
+func (p *Provider) completion(msg *sdk.Message, bound string) *llm.Completion {
 	// The CONFIGURED model id, not the one the response echoes. A vendor
 	// alias resolving to a dated snapshot would otherwise re-key the
 	// per-model breakdown the day the alias moves, splitting one model's
 	// spend across two names that nothing in the config mentions.
-	out := &llm.Completion{Model: p.model, FinishReason: string(msg.StopReason)}
-	if out.FinishReason == "" {
-		out.FinishReason = "end_turn"
-	}
+	out := &llm.Completion{Model: p.model, Provider: providerName, Binding: bound}
 
 	var content, reasoning strings.Builder
 	for _, block := range msg.Content {
+		// EVERY block, verbatim and in order, whatever its type — the copy
+		// the next call replays ([llm.Message.Raw]). RawJSON is the bytes
+		// the API sent; on a streamed response the SDK's accumulator
+		// rewrites each block's raw JSON from its deltas when the block
+		// stops, so it is the finished block either way.
+		out.Raw = append(out.Raw, json.RawMessage(block.RawJSON()))
 		switch block.Type {
 		case "thinking":
 			reasoning.WriteString(block.Thinking)
 			out.ThinkingBlocks = append(out.ThinkingBlocks, llm.ThinkingBlock{
-				Type:      "thinking",
-				Thinking:  block.Thinking,
-				Signature: block.Signature,
+				Type:     "thinking",
+				Thinking: block.Thinking,
 			})
 		case "redacted_thinking":
 			// Carried opaquely and handed back verbatim; there is nothing
@@ -703,15 +1082,17 @@ func (p *Provider) completion(msg *sdk.Message) *llm.Completion {
 		case "text":
 			content.WriteString(block.Text)
 		case "tool_use":
-			out.ToolCalls = append(out.ToolCalls, llm.ToolCall{
-				ID:        block.ID,
-				Name:      block.Name,
-				Arguments: httpapi.DecodeArgs(block.Input, block.Name),
-			})
+			args, argErr := httpapi.DecodeArgs(block.Input, block.Name)
+			call := llm.ToolCall{ID: block.ID, Name: block.Name, Arguments: args}
+			if argErr != nil {
+				call.ArgumentsError = argErr.Error()
+			}
+			out.ToolCalls = append(out.ToolCalls, call)
 		}
 	}
 	out.Content = content.String()
 	out.ReasoningContent = reasoning.String()
+	out.StopReason = stopReason(msg.StopReason, len(out.ToolCalls) > 0)
 
 	// See the package doc: input_tokens is the uncached remainder, so the
 	// full prompt count — the figure a budget is charged — is the sum.
@@ -727,8 +1108,61 @@ func (p *Provider) completion(msg *sdk.Message) *llm.Completion {
 		"cache_read_tokens", out.CacheRead,
 		"cache_write_tokens", out.CacheWrite,
 		"tool_calls", len(out.ToolCalls),
-		"stop_reason", out.FinishReason)
+		"stop_reason", string(msg.StopReason))
 	return out
+}
+
+// stopReason maps the API's stop_reason onto the contract's.
+//
+// A MISSING ONE is read from the response itself — a tool call means the
+// round stopped for its tools, anything else that it ended — because an
+// Anthropic-compatible gateway that omits the field has not said the response
+// was cut short. An UNKNOWN one is logged and read the same way: a value newer
+// than this build is the vendor's, and refusing every round that carries it
+// would fail a working seat over a word.
+//
+// `stop_sequence` is an ordinary end: the engine sets no stop sequences, and a
+// caller that did would have asked for exactly that stop.
+func stopReason(raw sdk.StopReason, calls bool) llm.StopReason {
+	switch raw {
+	case sdk.StopReasonEndTurn, sdk.StopReasonStopSequence:
+		return llm.StopEnd
+	case sdk.StopReasonToolUse:
+		return llm.StopToolUse
+	case sdk.StopReasonMaxTokens:
+		return llm.StopMaxTokens
+	case sdk.StopReasonRefusal:
+		return llm.StopRefusal
+	case sdk.StopReasonModelContextWindowExceeded:
+		return llm.StopContextExceeded
+	case sdk.StopReasonPauseTurn:
+		return llm.StopPaused
+	case "":
+	default:
+		log.Warn("stop_reason_unknown", "stop_reason", string(raw))
+	}
+	if calls {
+		return llm.StopToolUse
+	}
+	return llm.StopEnd
+}
+
+// refused reports a refusal as the classified error the contract asks for,
+// or nil when the response was not one. Outside the credential rotation on
+// purpose: the call succeeded, the key is healthy, and a refusal benches
+// nothing.
+func (p *Provider) refused(msg *sdk.Message, out *llm.Completion) error {
+	if out.StopReason != llm.StopRefusal {
+		return nil
+	}
+	refusal := &llm.Refusal{
+		Category:    string(msg.StopDetails.Category),
+		Explanation: msg.StopDetails.Explanation,
+		Completion:  out,
+	}
+	log.Warn("llm_refused", "model", p.model, "category", refusal.Category,
+		"input_tokens", out.InputTokens, "output_tokens", out.OutputTokens)
+	return llm.Refused(providerName, p.model, refusal)
 }
 
 // String is the provider's identity in a log line.

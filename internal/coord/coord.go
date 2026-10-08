@@ -25,7 +25,7 @@
 //     not merely idle — it raises everyone else's share.
 //
 // What belongs here rather than in a node's own database is ADR-0003, the
-// tri-state below is ADR-0005, why [ProtocolVersion] REFUSES an older
+// tri-state below is ADR-0005, why [ProtocolVersion] REFUSES a lower-protocol
 // peer where an event envelope round-trips one is ADR-0016, and why a token
 // budget is counted per calendar window — rolled inside the charge that
 // crosses a boundary, with no reset — is ADR-0019 (budget.go).
@@ -154,27 +154,58 @@ import (
 // and jointly wrong.
 //
 // So the rule is asymmetric, deliberately: a node refuses to claim anything
-// while a live lease is held at a LOWER protocol. Older nodes keep working
-// (they cannot know about a check that postdates them); newer ones wait,
-// visibly, until the last old lease lapses. A rolling deploy converges
-// because that is what a rolling deploy does.
+// while a live PRESENCE OR SEAT lease is held at a LOWER protocol — the two
+// classes that say a node of that build is alive or still running seats
+// ([ProtocolGateCounts], which says why a duty is not one). The check only
+// ever looks down, so the lower-protocol nodes keep working and are never
+// refused; the higher ones wait, visibly, until the last lower lease lapses.
+// A rolling deploy converges because that is what a rolling deploy does.
 //
 // Two consequences worth stating plainly. Schema evolution here is
-// additive-only: a field the older build ignores is invisible to it, one it
-// requires is a crash. And a downgrade across a bump needs a full drain,
-// because an older build has no protocol check at all and will happily take
-// over a newer node's expired leases.
+// additive-only: a field the lower-protocol build does not know is invisible
+// to it, one it requires is a crash. And a downgrade across a bump needs a full drain,
+// because the gate only ever refuses a HIGHER-protocol claim beside a lower
+// lease, so a lower-protocol build takes over a higher node's expired leases
+// unchecked.
 //
 // Bump this when the MEANING of holding a lease changes, never when
-// something merely gains a field. The history: v2 = holding a seat means
-// consulting the completion ledger; v3 = claiming a seat means this node
-// satisfies the role's placement; v4 = running a seat means charging its
-// rounds to the WINDOWED token counters ([WindowedCountersProtocol]). Every
-// one was silent corruption in a mixed fleet, which is the bar: a v3 node and
-// a v4 node running seats side by side would each charge a different counter,
-// so each would see only its own share of the company's spend and every cap
-// would bind late — by as much as the other build had spent.
+// something merely gains a field. At this version, holding a seat means
+// consulting the completion ledger before a delivery, claiming one means
+// this node satisfies the role's placement, and running one means charging
+// its rounds to the WINDOWED token counters. The bar is silent corruption in
+// a mixed fleet: two builds running seats side by side that charged
+// different counters would each see only their own share of the company's
+// spend, and every cap would bind late — by as much as the other build had
+// spent.
 const ProtocolVersion = 4
+
+// ProtocolGateCounts reports whether a lease on resource is one the protocol
+// gate judges — and so one [Backend.FleetProtocolFloor] counts. Every backend
+// asks this one function, so the twin and the store cannot disagree about it.
+//
+// PRESENCE AND SEATS, AND NOTHING ELSE, because the gate's question is "is a
+// node of a lower protocol live, or still running seats", and those two
+// classes are the whole answer. A `node:` lease is what says a node is alive:
+// it lapses one seat lease TTL after the node stops. A `seat:` lease is the
+// thing whose MEANING [ProtocolVersion] versions, and it is held past
+// presence — a drain gives presence up at its first step and keeps serving
+// its seats until each is handed over — so presence alone would let a newer
+// node claim beside a draining older one.
+//
+// A DUTY (`worker:`) IS NOT COUNTED, and counting it was a fleet-wide stall:
+// a duty is claimed ungated (see [AcquireOptions.Ungated]) and outlives its
+// holder by its TTL, which runs to [MaxDutyTTL]. When the last node of the
+// older build crashed mid-upgrade, its presence and seats lapsed within one
+// seat lease TTL while its duty leases stayed live for up to three hours, and
+// every newer node's seat claim was refused for all of it — a fleet that could
+// not place a seat for hours after a crash, over a lease that says nothing
+// presence does not already say while its holder lives. The same holds for
+// every other class a claim takes — the tracker's walk claims, held for as
+// long as the walk runs — none of which is the seat-host protocol and each of
+// which is held by a node whose presence or seats already speak for it.
+func ProtocolGateCounts(resource string) bool {
+	return ClassNode.Holds(resource) || ClassSeat.Holds(resource)
+}
 
 // ErrUnavailable is the canonical "store could not answer" error. Backends
 // wrap their transport failures in it. Callers should not switch on it —
@@ -219,22 +250,10 @@ var ErrTTLTooLong = errors.New("coord: ttl exceeds what the store can honour")
 // both halves on every backend: a duty at exactly this TTL is honoured, one
 // beyond it is an error wrapping [ErrTTLTooLong].
 //
-// # The rolling upgrade a duty ceiling costs
-//
-// A backend that stores duties apart from seats (the embedded KV does) meets a
-// build that stored them together, and two builds locking one duty in two
-// places would both hold it. The rule every such backend follows: a duty claim
-// is REFUSED, [RefusedLayout], while any node of a build that predates the move
-// is live, and a holder's own re-claim is refused with it so
-// the duty stops at its next tick. An older node never looks for the newer
-// record, so this is the only side that can wait. See the kv package doc for
-// how a backend tells the two builds apart, and for the one window the check
-// cannot close.
-//
 // # Why three hours
 //
-// The longest duty the engine claims: the learning passes tick hourly and the
-// skill curator's lease survives three of those ticks, the same
+// The longest duty the engine claims: the learning passes tick hourly and
+// their lease survives three of those ticks, the same
 // "one missed tick must not move the duty" ratio every other duty follows. An
 // engine test asserts that this is exactly the longest duty TTL, so the number
 // cannot drift away from the duty that justifies it. Raising it is safe on a
@@ -287,11 +306,9 @@ type Lease struct {
 	// reading a tenure, and a stamp that followed the heartbeat would say
 	// "since a few seconds ago" about a seat that has not moved all day.
 	//
-	// ZERO MEANS UNKNOWN, never "the epoch of time": a record written by a
-	// build that predates the field carries none, and its tenure began at a
-	// moment nobody wrote down. A reader renders zero as absent. A renewal
-	// does not invent one either, since the moment it would stamp is the
-	// renewal's and not the claim's.
+	// Every lease a backend returns carries one — the contract suite
+	// asserts it on every read path — and a renewal never restamps it,
+	// since the moment it would stamp is the renewal's and not the claim's.
 	//
 	// Nothing decides ownership by it. It is a fact for a person to read,
 	// and the fencing token is still Epoch alone.
@@ -308,9 +325,9 @@ type Lease struct {
 	// Meta is what the holder IS, beyond that it holds this. Node presence
 	// carries the node's roles and labels here so a peer can answer "is
 	// this node eligible for this seat" with no membership service. Empty
-	// for everything else. A record written by a build that predates a
-	// field reads as absent, which callers treat as the old behaviour
-	// rather than as a node with no roles.
+	// for everything else. A key the holder did not write reads as absent,
+	// and each reader states what absent means for its question (placement
+	// reads absent roles as every role, never as a node with no roles).
 	//
 	// A CALLER MAY NOT DEPEND ON THE GO TYPE OF A META VALUE, only on the
 	// value. Backends are free to store it however they like, and the
@@ -338,17 +355,6 @@ func (o AcquireOptions) EffectiveProtocol() int {
 		return ProtocolVersion
 	}
 	return o.Protocol
-}
-
-// StoredProtocol normalises the protocol read back from a record. A record
-// written before the field existed reads as the OLDEST protocol, which is
-// the fail-closed reading: it holds newer nodes back rather than letting
-// them claim beside a build whose meaning of ownership they cannot know.
-func StoredProtocol(raw int) int {
-	if raw <= 0 {
-		return 1
-	}
-	return raw
 }
 
 // Live reports whether the lease is unexpired relative to a store-supplied
@@ -382,10 +388,6 @@ type AcquireOptions struct {
 	// engine would hold a live lease below every newer node's floor and
 	// stall the fleet's claims — looking exactly like a rolling upgrade
 	// that never finishes.
-	//
-	// A STORED record with no protocol is the opposite case and still
-	// reads as 1: that record genuinely predates the concept, so the
-	// oldest reading is the honest one. Backends normalise on read.
 	Protocol int
 	// Meta rides with the record; see Lease.Meta.
 	Meta map[string]any
@@ -399,10 +401,17 @@ type AcquireOptions struct {
 	// seats by a count that excludes it and each take a larger share,
 	// while its own capacity also excludes itself.
 	//
-	// Singleton duties: a duty record left at protocol 1 by a build that
-	// predates the gate would block every seat claim fleet-wide the moment
-	// the version moved. Duty claims still carry THIS build's protocol, so
-	// they never become the thing that blocks.
+	// Singleton duties: the protocol is the SEAT-host protocol, and a duty
+	// is not a seat. A fleet singleton keeps running through a rolling
+	// upgrade on whichever build takes it rather than stalling until the
+	// last lower-protocol lease lapses — and for the same reason a duty
+	// lease holds no claim back ([ProtocolGateCounts]).
+	//
+	// Ungated skips the check, never the stamp: the lease carries the
+	// claiming build's protocol like any other. On presence the stamp is
+	// what the gate reads, so a presence lease holds a newer claim back
+	// while a build at that protocol holds it; on a duty it is a fact for a
+	// reader of the lease and holds nothing back.
 	Ungated bool
 }
 
@@ -477,12 +486,11 @@ type Backend interface {
 	// on a same-owner re-acquire after expiry.
 	//
 	// Refuses [RefusedHeld] while another owner holds a live lease on the
-	// resource, WHATEVER THE GATES WOULD SAY: a claim that cannot write
+	// resource, WHATEVER THE GATE WOULD SAY: a claim that cannot write
 	// judges no gate. Otherwise refuses [RefusedProtocol] while any live
-	// lease is held at a lower protocol, unless Ungated, and a duty claim
-	// [RefusedLayout], Ungated or not, during the storage-layout upgrade
-	// [MaxDutyTTL] describes. See [Refusal] for why the reason is part of
-	// the answer.
+	// lease the gate counts ([ProtocolGateCounts]: presence and seats) is
+	// held at a lower protocol, unless Ungated. See [Refusal] for why the
+	// reason is part of the answer.
 	//
 	// A duty (a `worker:` resource) is honoured at any TTL up to
 	// [MaxDutyTTL] whatever TTL the backend's seat leases run on, and
@@ -517,9 +525,13 @@ type Backend interface {
 	// purpose is to bring a restarted node's own seats back to it.
 	PreferredResources(ctx context.Context, class Class, nodeID string) (map[string]struct{}, error)
 
-	// FleetProtocolFloor returns the lowest protocol among live leases,
-	// and whether there were any. The observability half of the gate: a
-	// claim refused [RefusedProtocol] asks it for the floor to name.
+	// FleetProtocolFloor returns the lowest protocol among the live leases
+	// the gate counts ([ProtocolGateCounts]), and whether there were any.
+	// The observability half of the gate: a claim refused [RefusedProtocol]
+	// asks it for the floor to name, so it counts EXACTLY what the gate
+	// counts — a duty left out of one and counted in the other would name a
+	// protocol nothing is being refused over, and send an operator looking
+	// for an older node that is not there.
 	FleetProtocolFloor(ctx context.Context) (int, bool, error)
 }
 
@@ -530,37 +542,34 @@ type Backend interface {
 // It was not: every refusal was the same (nil, nil), and a caller that needed
 // to tell "a peer holds it" from "the mixed-version gate stopped me" was told
 // to ask [Backend.FleetProtocolFloor] once per claim sweep. That read looks
-// cheap and is not — a gate is a question about EVERY live lease, which a
-// backend answers from a standing view of the fleet's lease writes (the KV
-// backend's gate view) — so a node with room to claim whose every candidate
-// was held by a peer asked it on every five-second sweep, and its view took in
-// every lease write the fleet made for as long as the node stayed below its
-// share: at ten thousand seats, about 670 messages a second on each such node,
-// for a question whose answer the claims already knew. The backend knows at
-// the moment it refuses which rule refused, at no cost, so it says so.
+// cheap and is not — a gate is a question about EVERY live presence and seat
+// lease, which a backend answers from a standing view of the fleet's lease
+// writes (the KV backend's gate view) — so a node with room to claim whose
+// every candidate was held by a peer asked it on every five-second sweep, and
+// its view took in every lease write the fleet made for as long as the node
+// stayed below its share: at ten thousand seats, about 670 messages a second
+// on each such node, for a question whose answer the claims already knew. The
+// backend knows at the moment it refuses which rule refused, at no cost, so it
+// says so.
 //
 // The zero value is "not refused": a granted claim, or an unknown one.
 type Refusal string
 
 const (
 	// RefusedHeld is the refusal of a claim on a resource another owner
-	// holds a live lease on. It takes precedence over the gates, because a
+	// holds a live lease on. It takes precedence over the gate, because a
 	// claim that cannot write has nothing for a gate to stop — and because
 	// it is what lets a claim on a held resource judge no gate at all.
 	RefusedHeld Refusal = "held"
-	// RefusedProtocol is the refusal of a claim while a live lease is held
-	// at a lower protocol than the claim's (ADR-0016). Every gated claim
-	// this node makes is refused the same way until that lease goes, which
-	// is what a caller reports.
+	// RefusedProtocol is the refusal of a claim while a live presence or
+	// seat lease ([ProtocolGateCounts]) is held at a lower protocol than the
+	// claim's (ADR-0016). Every gated claim this node makes is refused the
+	// same way until that lease goes, which is what a caller reports.
 	RefusedProtocol Refusal = "protocol"
-	// RefusedLayout is the refusal of a duty claim while a node of a build
-	// that keeps duties in the seat lease bucket is live — see
-	// [MaxDutyTTL].
-	RefusedLayout Refusal = "layout"
 )
 
-// Refusals are the three.
-var Refusals = []Refusal{RefusedHeld, RefusedProtocol, RefusedLayout}
+// Refusals are the two.
+var Refusals = []Refusal{RefusedHeld, RefusedProtocol}
 
 // Valid reports whether a refusal is one this build knows.
 func (r Refusal) Valid() bool { return slices.Contains(Refusals, r) }

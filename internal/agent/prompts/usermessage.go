@@ -103,20 +103,27 @@ const taskHeader = "## Task"
 // ask arrived) — so the most recent context sits nearest the model's answer.
 // All three are top-level headings: they are peers, and a reader that nests
 // them gets the ask wrong.
-func BuildPhaseUserMessage(m UserMessage) string {
+//
+// The TASK IS ONE SECTION of the outline, whatever it carries. It is a
+// trigger's whole body — a chat notification with the engine's own "## Triage"
+// and "## Thread context" written into it, a pull request whose description
+// opens on its own "# Title" — and every heading in it belongs to the ask, not
+// beside it. The ledgers are one section each for the same reason: their
+// entries are "###" lines, and a reply quoted in one can hold anything.
+func BuildPhaseUserMessage(m UserMessage) Prompt {
 	task := m.TaskDescription
 	if task == "" {
 		task = "(no description)"
 	}
-	var parts []string
+	b := NewBuilder("\n\n")
 	if m.ConversationHistory != "" {
-		parts = append(parts, ConversationHistoryHeader+"\n"+m.ConversationHistory)
+		b.Heading("conversation_history", ConversationHistoryHeader+"\n"+m.ConversationHistory)
 	}
-	parts = append(parts, taskHeader+"\n"+task)
+	b.Heading("task", taskHeader+"\n"+task)
 	if m.PriorWork != "" {
-		parts = append(parts, PriorWorkHeader+"\n"+m.PriorWork)
+		b.Heading("prior_work", PriorWorkHeader+"\n"+m.PriorWork)
 	}
-	return strings.Join(parts, "\n\n")
+	return b.Build()
 }
 
 // SteerMessage is a person's note to a running turn, as the model reads it.

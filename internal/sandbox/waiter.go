@@ -839,7 +839,9 @@ func (w *Waiter) succeed(turnID string) {
 // unstamped row instead made a run whose pause record failed — one warn-only
 // store write — a remote box billed until a person noticed.
 func pauseExpired(run PendingRun, now time.Time) bool {
-	if run.Status != StatusAwaiting {
+	// An ANSWERED run's box is held for as long as its resume waits, which
+	// on a seat nobody holds is open-ended — see [PendingStore.ExpirePause].
+	if run.Status != StatusAwaiting && run.Status != StatusAnswered {
 		return false
 	}
 	heldSince, held := run.HeldSince()
@@ -921,12 +923,7 @@ func (w *Waiter) publishCompletion(ctx context.Context, run PendingRun) error {
 		AgentHandle: run.AgentHandle,
 		RoleName:    run.Role,
 		TurnID:      run.TurnID,
-		// [PendingRun.UnitOfWork] rather than the raw field: a run parked
-		// by a build from before ADR-0017 carries its work key in TurnID
-		// and nothing rewrites a parked row, so the raw field would
-		// announce an empty unit of work for every run that outlived the
-		// upgrade.
-		WorkKey: run.UnitOfWork(),
+		WorkKey:     run.WorkKey,
 		// The job this tick saw finish, and the only one the completion
 		// may claim: see [Tail].
 		LaunchID:    run.LaunchID,

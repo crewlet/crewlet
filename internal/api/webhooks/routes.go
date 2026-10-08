@@ -160,23 +160,21 @@ func (r *Receiver) gitlab(w http.ResponseWriter, req *http.Request) {
 			req.Header.Get("webhook-id"), req.Header.Get("webhook-timestamp"),
 			signature, now)
 	}
-	// ONE SCHEME. A delivery without a valid signature is refused —
+	// ONE SCHEME. A delivery without a valid signature is refused, and
+	// there is NO FALLBACK TO THE PLAINTEXT X-Gitlab-Token. A delivery that
+	// carries no `webhook-signature` comes from a hook given its key in
+	// GitLab's `token` attribute rather than `signing_token`, so the
+	// instance is doing exactly as asked: GitLab signs from 19.1 onward
+	// whenever a hook has a signing token, and this engine's provisioner
+	// sets one.
 	//
-	//
-	// There used to be a fallback to the plaintext X-Gitlab-Token, on the
-	// measured premise that gitlab-ee 19.3.0 sent no `webhook-signature`
-	// at all. The measurement was real and the conclusion was wrong: the
-	// hook had been provisioned with GitLab's `token` attribute instead of
-	// `signing_token`, so the instance was doing exactly as asked. GitLab
-	// signs from 19.1 onward whenever a hook has a signing token, and this
-	// engine's provisioner now sets one.
-	//
-	// So the fallback authenticated the sender with a bearer string
+	// A fallback would authenticate the sender with a bearer string
 	// GitLab's own documentation calls weaker and not recommended, over a
-	// payload it said nothing about — and it was reachable by an attacker
-	// simply omitting the signature header, which is the shape a
+	// payload it says nothing about — and it would be reachable by an
+	// attacker simply omitting the signature header, which is the shape a
 	// downgrade attack takes. Its absence is the point: there is no path
 	// here that verifies anything but an HMAC over the body.
+	//
 	// A SECRET THAT CANNOT BE A KEY IS NOTHING TO VERIFY WITH.
 	//
 	// GitLab's signing token is whsec_<standard base64>, and it always keys

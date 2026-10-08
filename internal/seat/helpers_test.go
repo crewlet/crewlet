@@ -184,6 +184,11 @@ type hookLog struct {
 	releases   []string
 	admissions []string
 
+	// established records each OnEstablished, with whether the host
+	// admitted turns on the seat at that moment (see [hookLog.admits]).
+	established []string
+	admits      func(handle string) bool
+
 	// acquireErr and releaseErr decide, per call, whether the hook fails.
 	acquireErr func(handle string, calls int) error
 	releaseErr func(handle string, reason ReleaseReason, calls int) error
@@ -207,6 +212,19 @@ func (l *hookLog) OnAcquire(_ context.Context, handle string, _ coord.Lease) err
 		return fail(handle, n)
 	}
 	return nil
+}
+
+func (l *hookLog) OnEstablished(_ context.Context, handle string, _ coord.Lease) {
+	l.mu.Lock()
+	admits := l.admits
+	l.mu.Unlock()
+	entry := handle
+	if admits != nil && admits(handle) {
+		entry += ":admitting"
+	}
+	l.mu.Lock()
+	l.established = append(l.established, entry)
+	l.mu.Unlock()
 }
 
 func (l *hookLog) OnRelease(_ context.Context, handle string, _ coord.Lease, reason ReleaseReason) error {
@@ -236,6 +254,9 @@ func (l *hookLog) OnAdmission(_ context.Context, handle string, admitted bool) e
 func (l *hookLog) acquired() []string    { return l.copyOf(&l.acquires) }
 func (l *hookLog) released() []string    { return l.copyOf(&l.releases) }
 func (l *hookLog) admissioned() []string { return l.copyOf(&l.admissions) }
+func (l *hookLog) establishedSeats() []string {
+	return l.copyOf(&l.established)
+}
 
 func (l *hookLog) copyOf(field *[]string) []string {
 	l.mu.Lock()

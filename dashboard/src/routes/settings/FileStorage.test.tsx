@@ -69,7 +69,7 @@ describe("file storage", () => {
     expect(screen.getByText("data-a")).toBeTruthy();
     expect(
       screen.getByText(
-        /deleted 12 objects no file names, of 1,840 stored.*; retired 3 chunks of an earlier build, abandoned 1 unfinished upload$/,
+        /deleted 12 objects no file names, of 1,840 stored.*; abandoned 1 unfinished upload$/,
       ),
     ).toBeTruthy();
     expect(screen.getByText("1,828 named, none missing")).toBeTruthy();
@@ -153,7 +153,6 @@ describe("file storage", () => {
         aged: 0,
         deleted: 0,
         referenced: 0,
-        retired: 0,
         abandoned: 0,
         error: "the bucket did not answer",
       }),

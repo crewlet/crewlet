@@ -84,12 +84,18 @@ func (q *Queue) SubscribeBatch(
 
 // drain collects one cycle's worth of deliveries.
 //
-// Options are read HERE, at the start of every cycle, which is what makes a
-// live config reload take effect on the next batch with no re-subscription.
+// Options are read HERE, once per cycle, which is what makes a live config
+// reload take effect on the next batch with no re-subscription — and they are
+// read once the cycle's FIRST MESSAGE IS IN HAND, not when the cycle starts.
+//
+// An idle cycle spends up to a whole poll window ([Queue.fetchWait], a second
+// at the shipped value) parked in that first fetch. Read before it, the
+// options belonged to whenever the loop last went round, so a reload landing
+// while an idle seat waited was applied to the batch AFTER the next one — and
+// the next one is exactly the burst an operator who just opened the window
+// was expecting it to absorb. The window is measured from the first message,
+// so the instant that opens it is the instant that says how long it is.
 func (a *attachment) drain(ctx context.Context, opts *queue.BatchOptions) []delivery {
-	maxBatch := opts.EffectiveMaxBatch()
-	linger := opts.EffectiveLinger()
-
 	first, err := a.cons.Fetch(1, jetstream.FetchMaxWait(a.q.fetchWait()))
 	if err != nil {
 		a.logFetchErr(ctx, err)
@@ -104,6 +110,8 @@ func (a *attachment) drain(ctx context.Context, opts *queue.BatchOptions) []deli
 	if len(batch) == 0 {
 		return nil
 	}
+	maxBatch := opts.EffectiveMaxBatch()
+	linger := opts.EffectiveLinger()
 
 	// The linger window is measured from the FIRST message and is fixed,
 	// not sliding: a steady trickle must not be able to delay dispatch

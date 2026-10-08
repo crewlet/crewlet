@@ -68,8 +68,8 @@ func TestAnApplierThatStopsIsWrittenOnceAndByTheStateLog(t *testing.T) {
 	if err := back.Store.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO statelog_cursor
-				(stream, generation, seq, stream_created_at, updated_at)
-			VALUES (?, 0, 0, ?, ?)
+				(stream, generation, seq, stream_created_at, updated_at, applied_version)
+			VALUES (?, 0, 0, ?, ?, 0)
 			ON CONFLICT (stream) DO UPDATE SET stream_created_at = excluded.stream_created_at`,
 			stream, store.EncodeTime(created), store.EncodeTime(time.Now().UTC()))
 		return err

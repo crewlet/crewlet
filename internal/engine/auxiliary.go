@@ -205,13 +205,18 @@ func (p recordedProvider) Complete(ctx context.Context, req llm.Request) (*llm.C
 	completion, err := p.inner.Complete(ctx, req)
 	ended := p.now()
 
+	// What was BILLED, which is not only an answer: a refused call returns no
+	// completion and a refusal error carrying the response the vendor charged
+	// for ([llm.Billed]). Recorded all the same, or every refusal would be a
+	// call no gate ever heard about. The caller still gets exactly what the
+	// provider returned.
 	spent := auxspend.Spent{Calls: 1}
 	model := p.inner.Model()
-	if completion != nil {
-		spent.Input, spent.Output = completion.InputTokens, completion.OutputTokens
-		spent.CacheRead, spent.CacheWrite = completion.CacheRead, completion.CacheWrite
-		if completion.Model != "" {
-			model = completion.Model
+	if billed := llm.Billed(completion, err); billed != nil {
+		spent.Input, spent.Output = billed.InputTokens, billed.OutputTokens
+		spent.CacheRead, spent.CacheWrite = billed.CacheRead, billed.CacheWrite
+		if billed.Model != "" {
+			model = billed.Model
 		}
 	}
 	if tokens := spent.Tokens(); tokens > 0 && p.meter != nil {
@@ -332,7 +337,7 @@ func (e *Engine) auxiliaryFor(c *Company) auxiliaryModels {
 	}
 	return auxiliarySeam{
 		heads: c.Models, org: c.Org, zone: basisOf(c, nil).zone, ledger: e.auxSpend,
-		charge: e.auxiliaryCharge(c), now: time.Now,
+		charge: e.auxiliaryCharge(c), now: e.now,
 	}
 }
 

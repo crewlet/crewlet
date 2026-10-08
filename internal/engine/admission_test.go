@@ -18,7 +18,8 @@ import (
 // duplicateNamesRevision is a stored company that breaks both admission rules
 // and none of the runnable ones: two units called "Platform" in different
 // departments, each with a seat called "Engineer" on its own explicit handle.
-// A build before those rules admitted it, and it runs.
+// A newer peer may admit it under rules this build does not share, and it
+// runs.
 var duplicateNamesRevision = json.RawMessage(`{"name":"Acme",
   "providers":{"llm":{"zulu":{"type":"anthropic","model":"m","api_keys":["${K}"]}}},
   "units":[
@@ -60,16 +61,16 @@ func (b *logBuffer) records(t *testing.T, msg string) []map[string]any {
 	return out
 }
 
-// A REVISION AN OLDER PEER ACTIVATED IS APPLIED, AND WARNED ABOUT ONCE.
+// A REVISION ADMITTED UNDER OTHER RULES IS APPLIED, AND WARNED ABOUT ONCE.
 //
-// The rolling-upgrade shape: an older node, which has no admission rules,
-// activates a company with duplicate names. The payload reaches this node
-// only through the coordination store, never through its own database. When
-// applying validated every rule, the newer half of the fleet refused the
-// company the older half was running, and every upgrade of a company carrying
-// a duplicate was an outage. It runs, and each violation is logged once for
-// the epoch rather than once per tick.
-func TestARevisionAnOlderPeerActivatedIsAppliedWithAdmissionWarnings(t *testing.T) {
+// The rolling-upgrade shape: a newer peer, whose admission rules differ from
+// this build's, activates a company with duplicate names. The payload reaches
+// this node only through the coordination store, never through its own
+// database. Were applying to validate every rule, this half of the fleet
+// would refuse the company the other half is running, splitting the fleet's
+// epoch. It runs, and each violation is logged once for the epoch rather than
+// once per tick.
+func TestARevisionAdmittedUnderOtherRulesIsAppliedWithAdmissionWarnings(t *testing.T) {
 	t.Parallel()
 	logs := &logBuffer{}
 	p := newPlane(t, func(o *engine.ReconcilerOptions) {
@@ -77,8 +78,9 @@ func TestARevisionAnOlderPeerActivatedIsAppliedWithAdmissionWarnings(t *testing.
 	})
 
 	published, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{
-		RevisionID: "from-an-older-peer", Summary: "written before the rule",
+		RevisionID: "from-a-newer-peer", Summary: "admitted under other rules",
 		Payload: duplicateNamesRevision, At: pinnedNow,
+		Origin: anOrigin,
 	})
 	if err != nil {
 		t.Fatalf("activate: %v", err)
@@ -106,7 +108,7 @@ func TestARevisionAnOlderPeerActivatedIsAppliedWithAdmissionWarnings(t *testing.
 	// config package located it at: both seats, and both units.
 	placed := map[string][]string{}
 	for _, w := range warnings {
-		if w["revision"] != "from-an-older-peer" {
+		if w["revision"] != "from-a-newer-peer" {
 			t.Errorf("a warning does not name the revision: %v", w)
 		}
 		detail, _ := w["detail"].(string)
@@ -143,9 +145,9 @@ func TestARevisionAnOlderPeerActivatedIsAppliedWithAdmissionWarnings(t *testing.
 
 // A NODE BOOTS ON A STORED COMPANY THAT BREAKS AN ADMISSION RULE.
 //
-// Building an epoch is the other half of applying one. A store holding such a
-// revision is the ordinary state of a company written before the rule, and a
-// node that refused to build it would not start at all after an upgrade.
+// Building an epoch is the other half of applying one. A store can hold such a
+// revision when a newer peer admitted it under rules this build does not
+// share, and a node that refused to build it would not start at all.
 func TestAnEngineBootsOnAStoredCompanyThatBreaksAnAdmissionRule(t *testing.T) {
 	t.Parallel()
 	company, err := config.DecodeCompany(duplicateNamesRevision)

@@ -134,8 +134,7 @@ func mergeClaim(task string) string  { return classMerge.Resource(task) }
 // gesture's mint instant: the ledger's vouching reads it off the step's id,
 // and a step spelled here in a shape that grammar did not recognise would be
 // read as minted at the zero instant — answered `unknown` on any node whose
-// ledger ever lost a row, to its sweep or to a snapshot from a donor that
-// scrubbed it.
+// ledger's sweep ever lost a row.
 func stepID(opID, step string) string { return statelog.StepOpID(opID, step) }
 
 // ErrStepUnresolved reports a walking sequence that stopped at a step whose
@@ -372,8 +371,8 @@ func (w *Writer) createTask(ctx context.Context, opID string, task Task,
 // # Why it is not "not made"
 //
 // The operation was minted before the ledger may have lost rows — a seat
-// re-running a turn whose trigger was queued before its node adopted a
-// snapshot, a caller finishing a month-old `unknown` — so its first run may
+// re-running a turn whose trigger predates the ledger's thirty-day sweep, a
+// caller finishing a month-old `unknown` — so its first run may
 // well have filed the task, on this node or another. An unknown counter was
 // turned into ErrUnavailable, which every caller read as "the change was NOT
 // made": the seat then rephrased and filed a duplicate under a new operation,
@@ -1341,14 +1340,14 @@ func (w *Writer) hold(ctx context.Context, resource string) (*held, error) {
 			"node or a peer, so this walk is already running: %w", resource,
 			statelog.ErrUnavailable)
 	case lease == nil:
-		// NOT "another walk": the mixed-version gate refuses every claim
-		// this build makes while a node of an older one is live, and a
+		// NOT "another walk": the protocol gate refuses every claim this
+		// node makes while a node on a lower lease protocol is live, and a
 		// walk is refused with them — it fails closed for the reason
-		// above. Told it was already running, a caller waited for a walk
-		// nobody had started, for the whole rolling upgrade.
-		return nil, fmt.Errorf("tracker: %s was refused (%s): a node of an "+
-			"older build is live in this fleet and this build takes no claim "+
-			"beside it, so the walk waits for the rolling upgrade to finish: %w",
+		// above. Told it was already running, a caller would wait for a
+		// walk nobody had started, for as long as that node stayed.
+		return nil, fmt.Errorf("tracker: %s was refused (%s): a node on a "+
+			"lower lease protocol is live in this fleet and this node takes no "+
+			"claim beside it, so the walk waits until that node has left: %w",
 			resource, refused, statelog.ErrUnavailable)
 	}
 	h := &held{
@@ -2328,12 +2327,12 @@ func (w *Writer) admit(ctx context.Context, rows int) (func(), error) {
 		//nolint:nilerr // Deliberate fail-open: see the paragraph above.
 		return func() {}, nil
 	case lease == nil && refused != coord.RefusedHeld:
-		// FAIL OPEN, for the unknown's reason: the mixed-version gate
-		// refused the claim, which says an older build is live and
-		// nothing about a colleague editing. Refused as a bulk in
-		// flight, every seat's bulk edit was told to retry "in about a
-		// second" — the hint read the remaining time off a holder there
-		// was none of — for as long as the rolling upgrade took.
+		// FAIL OPEN, for the unknown's reason: the protocol gate refused
+		// the claim, which says a node on a lower lease protocol is live
+		// and nothing about a colleague editing. Refused as a bulk in
+		// flight, every seat's bulk edit would be told to retry "in about
+		// a second" — the hint reading the remaining time off a holder
+		// there is none of — for as long as that node stayed.
 		return func() {}, nil
 	case lease == nil:
 		remaining := time.Duration(0)

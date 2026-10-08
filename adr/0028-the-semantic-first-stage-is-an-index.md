@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/search`
-- **Enforced-by:** `internal/search.TestIVFRecallMeetsTheFloorCurve`, `internal/search.TestEveryHolderBuildsTheSameIndex`, `internal/search.TestAPartialRepublicationStillFilesEveryRow`, `internal/search.TestTheIndexWaitsForEveryReaderAndForTheLog`
+- **Enforced-by:** `internal/search.TestIVFRecallMeetsTheFloorCurve`, `internal/search.TestEveryHolderBuildsTheSameIndex`, `internal/search.TestAPartialRepublicationStillFilesEveryRow`, `internal/search.TestTheIndexWaitsForTheLog`
 - **Measured:** at 40 000 sources of the topical fixture at 3 072 dimensions, the index — trained, measured and installed as the embedding duty installs it — probed half its lists and answered at 73 ms p95 with one reader and 219 ms with eight, against 116 ms and 294 ms for the full scan on the same corpus and queries, at recall 0.992 against the scan's 0.994 (`BenchmarkSemanticIVFUnderLoad`): 1.84 and 5.48 µs a source against 2.90 and 7.34. At 10 000 sources the same training found no probe count below every list that met the floor, and installed nothing. The share a training needs is the CORPUS's answer, not the index's: at 20 000 sources the isotropic fixture needed every list (declined) and the topical one half (`TestIVFRecallMeetsTheFloorCurve`); at 120 000 the topical fixture needed an eighth (recall 0.985) and the isotropic one half (0.966, installed); at 500 000 the isotropic fixture needed every list (0.948, declined) and the topical one half (0.993) — where aggregate recall met the 0.88 floor at 8 of 2 048 lists and a single head miss on 25 held-out queries persisted to 512 (`BenchmarkIVFRecallAtScale`). A NARROWED search reading the unfiltered count of lists lost its answer: at 20 000 topical sources, with the index installed at half its lists, recall was 0.949 with three head misses narrowed to the tenth of the corpus that is pages, and 0.68 to 0.74 narrowed to one container, against 1.000 for the full scan. A training tick reads about 120 µs a source (every code, the sampled documents and one exact pass, `BenchmarkIndexTraining`) and runs a k-means that grows with the square of the list count: 33 s over 2 048 lists at 500 000 sources and 19 s filing every code, against 126 s and 39 s over 4 096, on four shared cores with every one of them working — the duty runs both on half the cores (`internal/search`), where the same pair measured 42 s and 27 s. 40 sampled rows a centroid measured within one standard error of training on every row, and ten k-means rounds within noise of twenty.
 - **Cost-when-tried:** the full scan. At 2.90 µs a source with one reader and 7.34 µs with eight, a thousand seats' first-year corpus — a third of it per data node under the fan-out — is 0.97 s idle and about 2.4 s under load against the one-second interactive target, and the only remedy the scan had was another data node holding another whole copy.
 - **Tag-status:** unreleased
@@ -52,13 +52,9 @@ mean AND doubled its share since the training filed it. Below
 a space the index was not trained in, the first stage is the full scan it
 always was.
 
-Nothing about the index is published until EVERY node the vector log counts
-advertises a build that reads its records (the position heartbeat carries each
-log's record version; an evicted node is not counted), and the duty decides
-nothing from a node that has not applied the whole log. A build older than the
-index's records cannot even defer them — its envelope refuses their kind and
-its applier stops — so publishing on the rolling upgrade's usual contract
-would stop every old node at the first one.
+The duty decides nothing from a node that has not applied the whole log: a
+node still catching up would see the index the log has already replaced, or
+none, and train over a healthy one.
 
 ## Why the obvious alternatives are wrong
 
@@ -107,11 +103,6 @@ k-means cannot balance: identical codes are nearest the same centroid whatever
 the seed, and 2 000 copies of one code in 22 000 sources left a list of ≈ 2 020
 against a mean of 85 after every training — a retrain, a new generation and a
 full rollout every two ticks.
-
-**Publishing on the deferral contract** — a later kind at a higher version, as
-every other new kind is — stops, rather than defers, every build whose
-envelope validates the subject's kind, which every build before the index
-does.
 
 **Relaxing "no head miss"** would buy far more than any list count. At five
 hundred thousand topical sources the aggregate floor is met at 8 of 2 048

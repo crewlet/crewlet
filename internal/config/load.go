@@ -125,12 +125,12 @@ func LoadCompany(path string) (*Company, error) {
 // Its callers are `crewlet run`'s `-company` and `-import-company` seed, and
 // the vendor commands (`crewlet gitlab provision` and its siblings) that act
 // on the company the file describes. The difference from [LoadCompany] is
-// the admission rules (see [Company.ValidateRunnable]). A company file that
-// ran yesterday and breaks an admission rule added since must still start
-// the node that runs it and still be provisionable, or every upgrade of a
-// file-based deployment carrying an old duplicate is an outage. Most boots
-// never write the file anywhere: it is byte for byte the revision the store
-// already holds, or a bootstrap seed the store's own company outranks. The
+// the admission rules (see [Company.ValidateRunnable]): running a company
+// depends on none of them, so a file that breaks one must still start the
+// node that runs it when the store already holds it, and still be
+// provisionable. Most boots never write the file anywhere: it is byte for
+// byte the revision the store already holds, or a bootstrap seed the store's
+// own company outranks. The
 // admission rules apply where the file IS written as a revision, which the
 // seed decides and checks with [Company.ValidateAdmission] before it imports,
 // and `crewlet config import` and `crewlet validate` use [LoadCompany].
@@ -298,8 +298,8 @@ func ParseMemberNode(doc *yaml.Node, out any) error {
 // # It does not validate, and every caller decides what to hold it to
 //
 // A stored revision was valid under the rules of the build that WROTE it,
-// which is not necessarily this one: a later build adds a rule, and a peer on
-// an older build keeps activating documents that break it. A reader that
+// which is not necessarily this one: during a rolling upgrade a newer peer
+// can store a document this build's rules would refuse. A reader that
 // validated here made such a revision unreadable to every caller at once,
 // including the ones that could repair it. GET /config answered 500, a PUT
 // and a PATCH failed opening their own merge base, and export refused, so the
@@ -397,180 +397,9 @@ func decodeNode(node *yaml.Node, out any) error {
 	dec := yaml.NewDecoder(bytes.NewReader(buf.Bytes()))
 	dec.KnownFields(true)
 	if err := dec.Decode(out); err != nil && !errors.Is(err, io.EOF) {
-		faults = append(faults, leafErrors(decodeError(err, retiredFor(out), indexBuffer(buf.Bytes(), node)))...)
+		faults = append(faults, leafErrors(decodeError(err, indexBuffer(buf.Bytes(), node)))...)
 	}
 	return faults.err()
-}
-
-// retiredFor is the retired-key table that applies to the type being
-// decoded, and nil for every type that has retired nothing.
-//
-// A KEY IS RETIRED FROM A TIER, NOT FROM THE PACKAGE. `debug` was Tier A's,
-// and decodeError is the one translation both tiers and every nested
-// sub-document go through — so an ungated table answers a `debug:` in a
-// COMPANY document with advice about a `logging:` block that does not exist
-// there, sending its author to edit a file they are not in. An unknown key
-// somewhere that never had one is an ordinary typo and has to read like one.
-//
-// A TIER B MEMBER SENT ON ITS OWN IS STILL TIER B, which is why the member
-// types [ParseMember] reads answer the company's table. The tier picks the
-// table; the block inside it is picked one level down by [retiredKey], out of
-// the Go type name yaml puts in its own message. So an `integrations:` on a
-// unit reads the same whether it arrived inside a whole document or as the
-// body of a per-entity write, and the entries that can only ever appear on a
-// seat or a unit stay reachable from the surface most likely to carry them.
-func retiredFor(out any) map[string]string {
-	switch out.(type) {
-	case *Bootstrap:
-		return retiredBootstrapFields
-	case *Company, *Role, *Unit, *LLMProvider, *MCPServer:
-		return retiredCompanyFields
-	}
-	return nil
-}
-
-// retiredKey is how a retired-field table is addressed: the block the key
-// belonged to, then the key. yaml.v3 names the Go type it was decoding
-// ("config.Store"), and the package qualifier is dropped so the table reads
-// as the document does.
-//
-// KEYED ON THE BLOCK, not on the bare name, because the same word means
-// different things in different blocks. `driver` under `store:` was the
-// storage engine and is retired; a `driver:` typed under `stream:` never
-// existed there and has to read as the ordinary typo it is — the same
-// distinction the two TIERS draw, one level down.
-func retiredKey(goType, field string) string {
-	if dot := strings.LastIndex(goType, "."); dot >= 0 {
-		goType = goType[dot+1:]
-	}
-	return goType + "." + strings.Trim(field, `"`)
-}
-
-// retiredBootstrapFields are TIER A keys this build no longer accepts, keyed
-// by the block they belonged to (see retiredKey) and mapped to what an
-// operator should write instead.
-//
-// # A removed key is not a typo, and must not be reported as one
-//
-// The loader refuses anything it does not define, which is right — a
-// misspelled setting that decoded to nothing is how a company boots with
-// half its configuration silently absent. But the same refusal turns a
-// key this project ITSELF told people to write into "check the spelling",
-// and there is no spelling of `debug` that works any more. Every entry here
-// is a name that shipped in a release, an example or the quickstart; nothing
-// belongs in this table that operators were never given.
-//
-// Entries are permanent. A file written against any past release stays
-// diagnosable, and the cost is one map entry.
-var retiredBootstrapFields = map[string]string{
-	"Bootstrap.debug": "`debug` is no longer a setting: it was a second way to say " +
-		"the log level and it is gone. Write `logging:` with `level: debug` " +
-		"under it (and `level: info` is the default, so a `debug: false` " +
-		"can simply be deleted)",
-	"Stream.tracker_snapshot_max_bytes": "`stream.tracker_snapshot_max_bytes` " +
-		"is retired: snapshots are files on this node's disk rather than " +
-		"objects in the broker, so what bounds them is where they are kept. " +
-		"Set `store.snapshot_dir`, and give that directory the space — the " +
-		"snapshot loop refuses rather than filling the volume the database " +
-		"is committing to",
-	"Store.driver": "`store.driver` is no longer a setting: it chose between " +
-		"two store implementations and there is one. Turso is the database; " +
-		"the mainline-SQLite fallback and the CREWLET_STORE_DRIVER variable " +
-		"that selected it are both gone. Delete the line; the file it names " +
-		"opens unchanged either way, because both drivers wrote the same " +
-		"SQLite file format",
-}
-
-// retiredCompanyFields are TIER B keys this build no longer accepts, on the
-// same terms as [retiredBootstrapFields]: every entry is a name that shipped
-// in the example company or the quickstart, and every entry is permanent.
-//
-// These are the keys the tracker and knowledge backends took over. The
-// company document gained a choice it never had — the engine now HOLDS work
-// items and pages rather than only reading somebody else's — and the identity
-// keys that named a Jira project and a Confluence space became vendor-neutral
-// in the same move, because a unit's project is the company's fact and not a
-// product's.
-var retiredCompanyFields = map[string]string{
-	// The four horizons the native tracker was going to carry, and does
-	// not. Each names what replaced it, and two of them say plainly that
-	// the replacement is not the same thing — which is the whole reason
-	// they are refused rather than ignored.
-	"TrackerNativeConfig.trash_retention_days": "`trash_retention_days` is " +
-		"retired: a removal on the native tracker has NO horizon at all. A " +
-		"removed item is marked removed and stays that way, because a " +
-		"tracker that quietly deleted what somebody removed by mistake is " +
-		"one nobody can undo a mistake in. Delete the line",
-	"TrackerNativeConfig.trash_compaction_days": "`trash_compaction_days` is " +
-		"retired, on the same terms as `trash_retention_days`: nothing " +
-		"compacts a removal, because the removal IS the record. Delete the line",
-	"TrackerNativeConfig.change_compaction_days": "`change_compaction_days` is " +
-		"retired. The nearest thing is `stream.tracker_retention.min_age` in " +
-		"the OPERATOR's config, and it is NOT the same thing: it is a safety " +
-		"floor on trimming the log's replay window, never a horizon after " +
-		"which history is deleted. The history is kept. See " +
-		"docs/getting-started/configuration.md",
-	"TrackerNativeConfig.turn_compaction_days": "`turn_compaction_days` is " +
-		"retired, on the same terms as `change_compaction_days`: " +
-		"`stream.tracker_retention.min_age` bounds the log's replay window " +
-		"and deletes no history. See `stream.tracker_retention` in " +
-		"docs/getting-started/configuration.md",
-	"Tracker.retention": "a `tracker.native.retention:` block is retired. " +
-		"Those settings describe the OPERATOR's estate rather than the " +
-		"company's policy — how they back up, how long their disk holds a " +
-		"replay window — so they live in Tier A under " +
-		"`stream.tracker_retention`",
-
-	// The working calendar, which was only ever a sprint's calendar. It
-	// shipped in the example company, so it is refused by name rather
-	// than as a misspelling.
-	"TrackerNativeConfig.non_working_weekdays": "`non_working_weekdays` is " +
-		"retired and NOTHING replaced it. It existed so a sprint's " +
-		"burndown guideline could skip the days nobody worked, and sprints " +
-		"are gone — no figure this engine computes is measured against a " +
-		"working week any more, so there is no setting to move it to. " +
-		"Delete the line",
-
-	// The two clocks the company's one clock replaced (ADR-0018). Both
-	// shipped in the example companies, so both are refused by name — and
-	// the refusal says the move CHANGES WHAT FIRES WHEN for one of them:
-	// a company that wrote `default_timezone: UTC` beside a Berlin tracker
-	// fired its zone-less schedules on UTC, and one clock at the top puts
-	// them on Berlin's.
-	"TrackerNativeConfig.timezone": "`tracker.native.timezone` is now the " +
-		"company's top-level `timezone`, one level up beside `name:`: it is " +
-		"the clock every calendar edge the engine cuts is on — the tracker's " +
-		"dates, a person's day and a schedule that names no zone — rather " +
-		"than the tracker's alone. Move the value there",
-	"Scheduling.default_timezone": "`scheduling.default_timezone` is retired: " +
-		"a schedule that names no `timezone` of its own fires on the company's " +
-		"top-level `timezone`, the one clock the tracker's dates and a " +
-		"person's day are cut on too. Delete the line, and write `timezone:` " +
-		"at the top of the document if the company is not on UTC — a company " +
-		"that also set `tracker.native.timezone` to another zone now fires " +
-		"its zone-less schedules on THAT zone, so give a schedule its own " +
-		"`timezone:` where it must keep the old one",
-	"Knowledge.confluence_spaces": "`knowledge.confluence_spaces` is now " +
-		"`knowledge.scope`, and it scopes whichever knowledge base the " +
-		"company runs rather than Confluence specifically. The values are " +
-		"unchanged — rename the key",
-	"Unit.integrations": "a unit's `integrations:` block is retired. Its two " +
-		"identities are now direct keys on the unit: write `project: ENG` " +
-		"where you wrote `integrations.jira.project`, and `space: ENG` where " +
-		"you wrote `integrations.confluence.space`. They name whichever " +
-		"tracker and knowledge base the company runs, so the org chart no " +
-		"longer changes when the backend does",
-	"RoleIntegrations.jira": "`integrations.jira.project` on a seat is now the " +
-		"seat's own `project:` key, one level up beside `handle:`. It names " +
-		"whichever tracker the company runs",
-	"RoleIntegrations.confluence": "`integrations.confluence.space` on a seat " +
-		"is now the seat's own `space:` key, one level up beside `handle:`. " +
-		"It names whichever knowledge base the company runs",
-	"Confluence.skills_space": "`integrations.confluence.skills_space` is now " +
-		"`knowledge.skills_container`, because tool skills live in whichever " +
-		"knowledge base the company runs. It is still three-valued: absent " +
-		"takes the reserved default, a name takes that container, and an " +
-		"explicit \"\" turns tool skills off",
 }
 
 // decodeError translates yaml's decode failures into faults on the nodes of
@@ -582,14 +411,14 @@ var retiredCompanyFields = map[string]string{
 // nested decodeKnown or a custom decoder already built, still placed in this
 // buffer, which is moved onto the input without being wrapped again, since a
 // second wrap would bury the sentinel a caller branches on.
-func decodeError(err error, retired map[string]string, idx *bufferIndex) error {
+func decodeError(err error, idx *bufferIndex) error {
 	var typeErr *yaml.TypeError
 	if !errors.As(err, &typeErr) {
 		return idx.relocate(err)
 	}
 	var out problems
 	for _, line := range typeErr.Errors {
-		out = append(out, idx.typeFault(line, retired))
+		out = append(out, idx.typeFault(line))
 	}
 	return out.err()
 }

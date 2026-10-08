@@ -21,6 +21,9 @@ import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { EventEnvelope } from "~/protocol/index.ts";
 import { LiveNow, stripOf } from "./LiveNow.tsx";
 import { PHASE_PAGE } from "./RecentPhases.tsx";
+import { healthFrame } from "~/test/health.ts";
+import { withDerived } from "~/test/org.ts";
+import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -105,8 +108,8 @@ function mount({
 } = {}) {
   location.hash = hash;
   const store = new Store();
-  store.applyHealth({ status: "healthy" } as never);
-  store.applyOrg(ORG as never);
+  store.applyHealth(healthFrame());
+  store.applyOrg(withDerived(ORG) as never);
   store.applyAgents(agents as never);
   const socket = new LiveSocket(store);
   const asked: { kind: string; params: Record<string, unknown> }[] = [];
@@ -203,6 +206,7 @@ test("a quiet round is marked on its row, and a parked turn is not", async () =>
     in_progress: true,
     started_at: ago(900_000),
     updated_at: ago(700_000),
+    versions: ZERO_VERSIONS,
   });
   mount({
     agents: [
@@ -254,6 +258,7 @@ test("a finished phase is held back under a reader, unless it was running above"
     activity: "working",
     turn: { turn_id: "t-watched", started_at: ago(60_000), stage: "execute" },
     live_call: {
+      versions: ZERO_VERSIONS,
       turn_id: "t-watched",
       phase: "execute",
       iteration: 1,
@@ -505,6 +510,7 @@ test("a running turn on no item names what woke it after the verb", async () => 
         activity: "working",
         turn: { turn_id: "t-free", started_at: ago(5_000), stage: "phase" },
         live_call: {
+          versions: ZERO_VERSIONS,
           turn_id: "t-free",
           phase: "execute",
           iteration: 1,

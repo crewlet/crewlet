@@ -361,9 +361,9 @@ func recordLeader(l boxLayout, leader procgroup.Leader) error {
 //
 // A record that does not parse is logged and read as no job. Only a direct
 // box has one, and its job runs as the engine's own user beside its records,
-// so the file's content is input rather than a fact; and a bare pid from a
-// build that recorded only that is exactly the identity with no start time
-// [procgroup.ParseLeader] refuses.
+// so the file's content is input rather than a fact; and a bare pid written
+// there is exactly the identity with no start time [procgroup.ParseLeader]
+// refuses.
 func jobGroup(l boxLayout) (procgroup.Leader, bool, error) {
 	leader, found, err := readJobRecord(l)
 	if err != nil || !found {

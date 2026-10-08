@@ -148,17 +148,6 @@ func TestARunThatReportsAnErrorIsNotASuccess(t *testing.T) {
 	}
 }
 
-// An older build's `json` layout put the CLI's whole stdout in the result
-// file, where a banner could come before the object — and a run such a build
-// launched may be collected by this one, so the object is still found last.
-func TestTheClaudeParserFindsTheEnvelopeAfterABanner(t *testing.T) {
-	res := claude().Parse("Welcome to Claude Code\nchecking for updates…\n" +
-		`{"type":"result","result":"done","subtype":"success"}`)
-	if !res.Success || res.Text != "done" {
-		t.Fatalf("the envelope after a banner was missed: %+v", res)
-	}
-}
-
 // A coding agent that crashed should surface as "did not deliver" and let the
 // turn continue, not blow the turn up.
 func TestUnparseableOutputIsAFailedResultNotAnError(t *testing.T) {

@@ -78,7 +78,71 @@ func buildProviders(c *config.Company, r *config.Resolver) (*phase.Registry, err
 // diagnose than a constructor that refused to exist and took the whole company
 // down at boot with a message about one key.
 func buildProvider(key string, spec config.LLMProvider, r *config.Resolver) (llm.Provider, error) {
-	timeout := time.Duration(spec.TimeoutSeconds * float64(time.Second))
+	e, err := resolveEndpoint(key, spec, r)
+	if err != nil {
+		return nil, err
+	}
+	switch spec.Type {
+	case config.LLMAnthropic:
+		return buildAnthropic(key, spec, e)
+	case config.LLMOpenAI, config.LLMOpenAICompatible:
+		// Name labels errors, logs and the chain's telemetry. An
+		// openai-compatible entry passes its CONFIG KEY so a failure names
+		// the endpoint that answered rather than claiming to be OpenAI;
+		// a plain openai entry leaves it empty and keeps the vendor's name.
+		name := ""
+		if spec.Type == config.LLMOpenAICompatible {
+			name = key
+		}
+		return openai.New(openai.Config{
+			Model: e.model, Name: name, APIKeys: e.keys, BaseURL: e.baseURL,
+			Timeout: e.timeout, Cooldowns: e.cooldowns,
+			Reasoning: spec.Reasoning, ReasoningEffort: string(spec.ReasoningEffort),
+		})
+	case config.LLMCLIAgent:
+		return buildCLIAgent(key, spec, r, e.keys)
+	default:
+		return nil, fmt.Errorf("engine: provider %q: unknown type %q", key, spec.Type)
+	}
+}
+
+// BuildAnthropic constructs one anthropic provider from its config entry.
+//
+// Exported for `crewlet llm doctor`, for the reason [BuildCLIAgent] is: a
+// doctor that constructed its own provider would diagnose a request shape no
+// seat sends — a different model resolution, a different endpoint, a
+// different effort — and the two would drift the first time a default
+// changed. This is the same resolution and the same constructor a running
+// node uses, so what the doctor certifies is what a seat gets.
+func BuildAnthropic(key string, spec config.LLMProvider, r *config.Resolver) (*anthropic.Provider, error) {
+	if spec.Type != config.LLMAnthropic {
+		return nil, fmt.Errorf("engine: provider %q is type %q, not %q", key, spec.Type, config.LLMAnthropic)
+	}
+	e, err := resolveEndpoint(key, spec, r)
+	if err != nil {
+		return nil, err
+	}
+	return buildAnthropic(key, spec, e)
+}
+
+// endpoint is what every entry resolves before its backend is built: the
+// values a Tier B document may write as a `${VAR}`, resolved, and the
+// config's defaults applied.
+type endpoint struct {
+	model     string
+	baseURL   string
+	keys      []string
+	timeout   time.Duration
+	cooldowns credential.Policy
+}
+
+// resolveEndpoint resolves an entry's references and refuses the two that
+// cannot be sent anywhere.
+func resolveEndpoint(key string, spec config.LLMProvider, r *config.Resolver) (endpoint, error) {
+	// The CONFIG's default applies, through Timeout(): the backends keep a
+	// default of their own only for a Config built without one, and the
+	// value an operator reads in the docs must be the one that runs.
+	timeout := time.Duration(spec.Timeout() * float64(time.Second))
 	// RESOLVED HERE, at the moment the provider is built, which is the only
 	// place a key value ever exists in this process. Tier B stores its
 	// references verbatim — that is what keeps an exported revision free of
@@ -114,7 +178,7 @@ func buildProvider(key string, spec config.LLMProvider, r *config.Resolver) (llm
 	// diagnose than a boot that died over one key. A missing MODEL has no
 	// such tell; the request is malformed rather than unauthorised.
 	if len(modelMissing) > 0 && strings.TrimSpace(model) == "" {
-		return nil, fmt.Errorf(
+		return endpoint{}, fmt.Errorf(
 			"engine: provider %q: model is %q and %s resolved to nothing. Set "+
 				"it in the environment, or with `crewlet secrets set`",
 			key, spec.Model, strings.Join(modelMissing, ", "))
@@ -133,45 +197,42 @@ func buildProvider(key string, spec config.LLMProvider, r *config.Resolver) (llm
 			where = fmt.Sprintf("base_url is %q and %s resolved to nothing",
 				spec.BaseURL, strings.Join(baseURLMissing, ", "))
 		}
-		return nil, fmt.Errorf(
+		return endpoint{}, fmt.Errorf(
 			"engine: provider %q: %s. An openai-compatible entry needs an endpoint "+
 				"— without one every request would go to api.openai.com under "+
 				"this entry's own key", key, where)
 	}
-	// Through the accessors, not the raw fields: those apply the bounds and
-	// the defaults, and reading the fields directly would send a zero
-	// cooldown for every provider that did not configure one.
-	cooldowns := credential.Policy{
-		RateLimit: time.Duration(spec.Cooldowns.RateLimit()) * time.Second,
-		Auth:      time.Duration(spec.Cooldowns.Auth()) * time.Second,
-	}
+	return endpoint{
+		model: model, baseURL: baseURL, keys: keys, timeout: timeout,
+		// Through the accessors, not the raw fields: those apply the bounds
+		// and the defaults, and reading the fields directly would send a
+		// zero cooldown for every provider that did not configure one.
+		cooldowns: credential.Policy{
+			RateLimit: time.Duration(spec.Cooldowns.RateLimit()) * time.Second,
+			Auth:      time.Duration(spec.Cooldowns.Auth()) * time.Second,
+		},
+	}, nil
+}
 
-	switch spec.Type {
-	case config.LLMAnthropic:
-		return anthropic.New(anthropic.Config{
-			Model: model, APIKeys: keys, BaseURL: baseURL,
-			Timeout: timeout, Cooldowns: cooldowns,
-			Reasoning: spec.Reasoning, ThinkingBudget: spec.ReasoningBudgetTokens,
-		})
-	case config.LLMOpenAI, config.LLMOpenAICompatible:
-		// Name labels errors, logs and the chain's telemetry. An
-		// openai-compatible entry passes its CONFIG KEY so a failure names
-		// the endpoint that answered rather than claiming to be OpenAI;
-		// a plain openai entry leaves it empty and keeps the vendor's name.
-		name := ""
-		if spec.Type == config.LLMOpenAICompatible {
-			name = key
-		}
-		return openai.New(openai.Config{
-			Model: model, Name: name, APIKeys: keys, BaseURL: baseURL,
-			Timeout: timeout, Cooldowns: cooldowns,
-			Reasoning: spec.Reasoning, ReasoningEffort: string(spec.ReasoningEffort),
-		})
-	case config.LLMCLIAgent:
-		return buildCLIAgent(key, spec, r, keys)
-	default:
-		return nil, fmt.Errorf("engine: provider %q: unknown type %q", key, spec.Type)
+// buildAnthropic constructs the Anthropic Messages backend.
+//
+// The request shape follows the MODEL (claudemodel), so the entry passes the
+// model's dials and nothing else — no temperature, no cap, no thinking switch.
+// New judges them against the resolved model, which is what catches a `${VAR}`
+// model validation could not see; its refusal names the backend field, so it
+// is said here in the operator's own field names too.
+func buildAnthropic(key string, spec config.LLMProvider, e endpoint) (*anthropic.Provider, error) {
+	p, err := anthropic.New(anthropic.Config{
+		Model: e.model, ClaudeModel: spec.ClaudeModel, APIKeys: e.keys, BaseURL: e.baseURL,
+		Timeout: e.timeout, Cooldowns: e.cooldowns,
+		Effort: llm.Effort(spec.ReasoningEffort), ThinkingBudget: spec.ReasoningBudgetTokens,
+	})
+	if err != nil {
+		return nil, fmt.Errorf(
+			"engine: provider %q (model %q; check claude_model, reasoning_effort and "+
+				"reasoning_budget_tokens against it): %w", key, e.model, err)
 	}
+	return p, nil
 }
 
 // log is the package logger.

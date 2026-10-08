@@ -563,11 +563,11 @@ func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation)
 	// mutated this node; refused here, it has touched nothing and the node
 	// is serving its previous epoch exactly as it was.
 	//
-	// The RUNNABLE rules only. A revision that breaks an admission rule was
-	// admitted by a build that did not have that rule (this node's own past,
-	// or an older peer mid-upgrade), and it runs exactly as it did before the
-	// rule existed; refusing it here is how a working company goes down on
-	// upgrade. It is applied, and warned about below.
+	// The RUNNABLE rules only. A revision activated by a peer whose
+	// admission rules differ from this build's — a newer peer mid-upgrade —
+	// runs on that peer, and refusing it here would take this half of the
+	// fleet off the epoch. It is applied, and its admission violations are
+	// warned about below.
 	cfg, err := config.DecodeCompany(document)
 	if err != nil {
 		return configplane.StatusError, nil, fmt.Errorf("engine: parse revision %s: %w",
@@ -686,28 +686,21 @@ func (r *Reconciler) fetchRevision(ctx context.Context, target coord.Activation)
 // revision, how and when, and a peer that stored `peer` from `fleet` at the
 // activation instant instead gave one revision a different author on every
 // node — so the audit screen's answer depended on which node served it, and
-// no node but the origin could say an operator had written it at all.
+// no node but the origin could say an operator had written it at all. Every
+// pointer carries a complete origin — the coordination store refuses one that
+// does not ([coord.RevisionOrigin.Check]) — so it maps straight onto the row.
 //
-// A pointer published by an older build carries no origin. Its author is
-// then EMPTY with an empty kind, which every reader shows as "not recorded":
-// naming this node, or the placeholder, would be a claim nobody made. The
-// source and the instant fall back to what the pointer does say — that the
-// revision came from the fleet, activated then — because those two are true
-// of this node's copy either way.
+// It is ACTIVE FROM THE POINTER'S INSTANT, never from its creation: the two
+// differ on every re-activation of an older revision, and activated_at is
+// what this node boots its chart with next time.
 func adopted(target coord.Activation, payload []byte) store.Revision {
 	origin := target.Origin
-	revision := store.Revision{
+	return store.Revision{
 		ID: target.RevisionID, Source: origin.Source, CreatedBy: origin.Author,
 		CreatedByKind: store.AuthorKind(origin.AuthorKind),
 		Summary:       target.Summary, Payload: payload, CreatedAt: origin.CreatedAt,
+		ActivatedAt: target.At,
 	}
-	if revision.Source == "" {
-		revision.Source = "fleet"
-	}
-	if revision.CreatedAt.IsZero() {
-		revision.CreatedAt = target.At
-	}
-	return revision
 }
 
 // record writes this node's outcome twice, to two surfaces with two
@@ -886,6 +879,13 @@ func (r *Reconciler) Run(ctx context.Context) {
 		if r.Posture(ctx).ServesTraffic() {
 			r.engine.resumeInbound(ctx)
 		}
+		// AND A RETRIED RESUME THE POSTURE REFUSED is re-checked on the
+		// tick that finds it admitting, which is the only place the
+		// posture moves. Only those: an answer waiting on anything else is
+		// not woken by a tick, so the tick is not a poll of it.
+		if r.engine.admits() {
+			r.engine.readmitAnswers(waitPosture)
+		}
 		// A full jittered interval after every tick, nudged or not: an
 		// activation storm must not become an apply storm.
 		timer.Reset(configplane.ReconcileDelay())
@@ -938,8 +938,7 @@ func nudgeRevision(ev *events.Event) string {
 	if payload, ok := ev.Data.(*types.ConfigRevisionActivated); ok {
 		return payload.RevisionID
 	}
-	id, _ := ev.Payload["revision_id"].(string)
-	return id
+	return ""
 }
 
 // peerHealth counts the PEERS that reported success at an epoch, and how many

@@ -49,7 +49,7 @@ export const SERVER_STATE_WORDS: Record<
   unreported: {
     label: "Not reported",
     tone: "neutral",
-    hint: "No live node reports its MCP servers — every one runs an older build — so whether it started is unknown.",
+    hint: "No live node's latest heartbeat carried its MCP report, so whether it started is unknown.",
   },
 };
 
@@ -60,45 +60,25 @@ export function serverOrigin(server: string): string {
 
 /**
  * The agent seats the engine GRANTS a server, from each seat's own
- * `tool_sources` — or null where that is unknown.
- *
- * NULL IS NOT "NOBODY". An agent seat with no `tool_sources` is one the engine
- * did not describe (a node older than the field serves the org), and an empty
- * list drawn over that reads as "nobody can call this", which is a claim
- * about somebody's company. A human seat runs no tools and is never counted.
+ * `tool_sources` — which the engine puts on every agent seat it pushes,
+ * resolved by `config.MCPServer.Grants`. A human seat runs no tools and is
+ * never counted.
  */
-export function grantedSeats(seats: readonly Seat[], server: string): Seat[] | null {
-  const agents = seats.filter((s) => s.kind === "agent");
-  if (agents.some((s) => !Array.isArray(s.raw.tool_sources))) return null;
+export function grantedSeats(seats: readonly Seat[], server: string): Seat[] {
   const origin = serverOrigin(server);
-  return agents.filter((s) => (s.raw.tool_sources ?? []).includes(origin));
+  return seats.filter((s) => s.kind === "agent" && (s.raw.tool_sources ?? []).includes(origin));
 }
 
 /**
- * Who a server reaches, in words — and whether that is KNOWN.
- *
- * ONE COPY for the servers' grid and a server's own page. A SHARED server
- * reaches every agent seat by the engine's rule (`config.MCPServer.Grants`
- * returns true for every agent when the server is shared), so its reach is
- * known even on a roster that carries no `tool_sources`. A per-seat server's
- * reach on such a roster is UNKNOWN, and is said as unknown: "not on this
- * roster" read as "nobody", which is the very collapse [grantedSeats] exists
- * to refuse.
+ * Who a server reaches, in words. ONE COPY for the servers' grid and a
+ * server's own page.
  */
-export function reachOf(
-  server: { name: string; shared: boolean },
-  seats: readonly Seat[],
-): { text: string; known: boolean } {
+export function reachOf(server: { name: string }, seats: readonly Seat[]): string {
   const granted = grantedSeats(seats, server.name);
-  if (granted === null) {
-    return server.shared
-      ? { text: "Every agent seat", known: true }
-      : { text: "Unknown: this node's roster does not say", known: false };
-  }
   const agents = seats.filter((s) => s.kind === "agent").length;
-  if (granted.length === 0) return { text: "No seat", known: true };
-  if (granted.length === agents) return { text: "Every agent seat", known: true };
-  return { text: `${granted.length} ${granted.length === 1 ? "seat" : "seats"}`, known: true };
+  if (granted.length === 0) return "No seat";
+  if (granted.length === agents) return "Every agent seat";
+  return `${granted.length} ${granted.length === 1 ? "seat" : "seats"}`;
 }
 
 /**

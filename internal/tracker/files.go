@@ -51,16 +51,6 @@ import (
 // redelivered put bring the file back. What a removal does take away is the
 // object, which is the whole point of removing a file from a store whose
 // bytes are the expensive part.
-//
-// # A file an earlier build kept in chunks
-//
-// A file record of version 12 named its content as a list of
-// content-addressed chunks, which this build reads no more of: decoded, the
-// chunk list is dropped, and the record applies as a LIVE ROW NAMING NO
-// OBJECT — on every node alike, so the rows still agree. Such a file is
-// listed and can be removed or written again; its content is gone
-// ([File.Content] answers false), and the surfaces say so in their own words
-// rather than calling it missing.
 
 // ErrNoFile reports a file this node has no row for, or holds removed.
 //
@@ -109,8 +99,8 @@ type File struct {
 	ContentType string `json:"content_type,omitempty"`
 
 	// Hash and Size are the whole content's, and Object the key of the
-	// object it was uploaded into. All three are empty on a removed file;
-	// Object is also empty on a file an earlier build kept in chunks.
+	// object it was uploaded into. All three are empty on a removed file,
+	// and only there: a live file always names its object.
 	Hash   objstore.Hash `json:"hash,omitempty"`
 	Size   int64         `json:"size"`
 	Object objstore.Key  `json:"object,omitzero"`
@@ -131,8 +121,8 @@ type File struct {
 func (f File) Removed() bool { return f.RemovedAt != nil }
 
 // Content is the object holding the file's bytes, as the object store reads
-// it back — and false for a file whose row names none: a removed file, or one
-// an earlier build kept in chunks, whose content this build cannot read.
+// it back — and false for a file whose row names none, which is a removed
+// file and nothing else.
 func (f File) Content() (objstore.Object, bool) {
 	if f.Object.IsZero() {
 		return objstore.Object{}, false

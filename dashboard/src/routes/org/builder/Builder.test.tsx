@@ -22,6 +22,7 @@ import {
   mountBuilder,
   refusal,
 } from "./testkit.tsx";
+import { withDerived } from "~/test/org.ts";
 
 beforeEach(() => {
   localStorage.clear();
@@ -631,7 +632,7 @@ describe("a revision saved by somebody else", () => {
     next.roles![1]!.goal = "Design things";
     engine.document = next;
     engine.revision = "r2";
-    act(() => store.applyOrg({ name: "Acme", roles: [], units: [] }));
+    act(() => store.applyOrg(withDerived({ name: "Acme", roles: [], units: [] })));
 
     await waitFor(() => expect(engine.checks().at(-1)!.headers["If-Match"]).toBe('"r2"'));
     expect(await screen.findByText("No problems")).toBeDefined();
@@ -649,7 +650,7 @@ describe("a revision saved by somebody else", () => {
     engine.document = company();
     engine.revision = "r2";
     const reads = engine.sent("GET").length;
-    act(() => store.applyOrg({ name: "Acme", roles: [], units: [] }));
+    act(() => store.applyOrg(withDerived({ name: "Acme", roles: [], units: [] })));
 
     expect(await screen.findByText("The configuration changed")).toBeDefined();
     expect(engine.sent("GET")).toHaveLength(reads);

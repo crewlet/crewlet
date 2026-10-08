@@ -49,7 +49,7 @@ func TestExecutorPromptCarriesCatalogueAndIdentity(t *testing.T) {
 	t.Parallel()
 	p := BuildExecutor(engineer(), ExecutorInput{
 		ToolCatalogue: "- foo: Does foo.\n- bar: Does bar.",
-	})
+	}).Text
 	contains(t, p, "## Your turn", "## Available tools", "- foo: Does foo.", "Engineer", "Acme")
 }
 
@@ -58,7 +58,7 @@ func TestExecutorPromptCarriesCatalogueAndIdentity(t *testing.T) {
 // Execute contract it replaces.
 func TestExecutorPromptSaysWritingIsNotDoing(t *testing.T) {
 	t.Parallel()
-	p := BuildExecutor(engineer(), ExecutorInput{})
+	p := BuildExecutor(engineer(), ExecutorInput{}).Text
 	contains(t, p,
 		"writing about an action does not perform it",
 		"`submit_work` exactly once",
@@ -71,7 +71,7 @@ func TestExecutorPromptSaysWritingIsNotDoing(t *testing.T) {
 // teach the two-step lookup rather than mention it.
 func TestExecutorPromptTeachesDiscovery(t *testing.T) {
 	t.Parallel()
-	p := BuildExecutor(engineer(), ExecutorInput{})
+	p := BuildExecutor(engineer(), ExecutorInput{}).Text
 	contains(t, p,
 		"`list_mcp_server_tools(server=...)`",
 		"`activate_tool(name=...)`",
@@ -91,7 +91,7 @@ func TestExecutorPromptTeachesDiscovery(t *testing.T) {
 // to a novel case.
 func TestExecutorPromptRequiresStayingReachable(t *testing.T) {
 	t.Parallel()
-	p := BuildExecutor(engineer(), ExecutorInput{})
+	p := BuildExecutor(engineer(), ExecutorInput{}).Text
 	contains(t, p,
 		"Stay reachable on the channel the trigger arrived on",
 		"ask a follow-up",
@@ -106,7 +106,7 @@ func TestExecutorPromptRequiresStayingReachable(t *testing.T) {
 // requester gets nothing back.
 func TestExecutorPromptRequiresVerboseDeclineForDirectAsk(t *testing.T) {
 	t.Parallel()
-	p := BuildExecutor(engineer(), ExecutorInput{})
+	p := BuildExecutor(engineer(), ExecutorInput{}).Text
 	contains(t, p,
 		`means "nobody was actually asking me to do anything"`,
 		"do NOT use `no_action`",
@@ -120,7 +120,7 @@ func TestExecutorPromptRequiresVerboseDeclineForDirectAsk(t *testing.T) {
 // turn ended with the model writing "I don't have write tools" as text.
 func TestExecutorPromptCallsOutTheFullArcRule(t *testing.T) {
 	t.Parallel()
-	p := BuildExecutor(engineer(), ExecutorInput{})
+	p := BuildExecutor(engineer(), ExecutorInput{}).Text
 	contains(t, p,
 		"Finish the arc in this pass",
 		// By capability, not by vendor tool name.
@@ -137,14 +137,14 @@ func TestExecutorPromptCallsOutTheFullArcRule(t *testing.T) {
 // does not know that names the tool it MEANT to call.
 func TestExecutorPromptSaysDeliveriesAreChecked(t *testing.T) {
 	t.Parallel()
-	contains(t, BuildExecutor(engineer(), ExecutorInput{}),
+	contains(t, BuildExecutor(engineer(), ExecutorInput{}).Text,
 		"`deliveries` must name calls you actually made",
 		"checks them against its own log")
 }
 
 func TestExecutorPromptInlinesFullPolicies(t *testing.T) {
 	t.Parallel()
-	p := BuildExecutor(engineer(), ExecutorInput{})
+	p := BuildExecutor(engineer(), ExecutorInput{}).Text
 	contains(t, p, "## Company policies", "Respect teammates.")
 
 	// No truncation, no "..." suffix, however long the policy runs.
@@ -152,20 +152,20 @@ func TestExecutorPromptInlinesFullPolicies(t *testing.T) {
 		"and meeting notes — search it before creating new docs."
 	o := acme()
 	o.Policies = []string{long}
-	contains(t, BuildExecutor(seatIn(o, "Engineer"), ExecutorInput{}), long)
+	contains(t, BuildExecutor(seatIn(o, "Engineer"), ExecutorInput{}).Text, long)
 }
 
 func TestExecutorPromptRostersOnlyForLeads(t *testing.T) {
 	t.Parallel()
-	contains(t, BuildExecutor(lead(), ExecutorInput{}), "## Your Team", "Engineer")
-	excludes(t, BuildExecutor(engineer(), ExecutorInput{}), "## Your Team")
+	contains(t, BuildExecutor(lead(), ExecutorInput{}).Text, "## Your Team", "Engineer")
+	excludes(t, BuildExecutor(engineer(), ExecutorInput{}).Text, "## Your Team")
 }
 
 // A lead's roster inlines each member's profile so the lead can reason about
 // assignment without a knowledge fetch.
 func TestExecutorPromptRosterInlinesMemberProfiles(t *testing.T) {
 	t.Parallel()
-	p := BuildExecutor(lead(), ExecutorInput{})
+	p := BuildExecutor(lead(), ExecutorInput{}).Text
 	contains(t, p, "## Your Team", "**Engineer**",
 		"Goal: Ship quality code.", "Responsibilities: Write tests.")
 }
@@ -174,11 +174,11 @@ func TestExecutorPromptSandboxSectionIsGatedOnTheRole(t *testing.T) {
 	t.Parallel()
 	// Absent for the ~all roles that are not sandbox-enabled, so it never
 	// bloats the common prompt.
-	excludes(t, BuildExecutor(engineer(), ExecutorInput{}), "Sandbox code work", "run_sandbox")
+	excludes(t, BuildExecutor(engineer(), ExecutorInput{}).Text, "Sandbox code work", "run_sandbox")
 
 	o := acme()
 	o.Role("Engineer").Sandbox = &org.RoleSandbox{Enabled: true, CodingAgent: "claude-code"}
-	p := BuildExecutor(seatIn(o, "Engineer"), ExecutorInput{})
+	p := BuildExecutor(seatIn(o, "Engineer"), ExecutorInput{}).Text
 	// The run is detached and the SAME turn resumes with the result, which
 	// is what stops the model ending the turn to "report later".
 	contains(t, p, "run_sandbox", "resumes", "SAME turn")
@@ -191,12 +191,12 @@ func TestExecutorPromptOmitsTheLearnedSkillsScaffold(t *testing.T) {
 	t.Parallel()
 	// Synthesized skills arrive as a prefetch block, never as a section of
 	// the static identity scaffold.
-	excludes(t, BuildExecutor(engineer(), ExecutorInput{}), "## Your Skills")
+	excludes(t, BuildExecutor(engineer(), ExecutorInput{}).Text, "## Your Skills")
 }
 
 func TestExecutorPromptRendersOrgAndRoleContextInline(t *testing.T) {
 	t.Parallel()
-	p := BuildExecutor(engineer(), ExecutorInput{})
+	p := BuildExecutor(engineer(), ExecutorInput{}).Text
 	contains(t, p,
 		"## Company Context",
 		"Build great things.", // mission
@@ -217,7 +217,7 @@ func TestExecutorPromptDropsEmptySections(t *testing.T) {
 	role.Backstory = ""
 	role.Responsibilities = nil
 	role.BehavioralGuidelines = nil
-	p := BuildExecutor(seatIn(o, "Engineer"), ExecutorInput{})
+	p := BuildExecutor(seatIn(o, "Engineer"), ExecutorInput{}).Text
 	// Empty bullet lists are visual noise; a section with nothing in it is
 	// dropped whole.
 	excludes(t, p, "## Company Context", "## Your Background",
@@ -236,7 +236,7 @@ func TestExecutorPromptPrefetchBlocks(t *testing.T) {
 		EpisodeRecall:       "- last month's latency spike",
 		CounterpartyProfile: "Subject: U0TESTUSER1",
 	}
-	p := BuildExecutor(engineer(), in)
+	p := BuildExecutor(engineer(), in).Text
 	// Ordered so the agent reads the conversation it was woken in, then the
 	// standing first-turn instruction, then memory, then what it learned,
 	// then the team's docs, then prior work, then who it is talking to. The
@@ -269,7 +269,7 @@ func TestExecutorPromptPrefetchBlocks(t *testing.T) {
 	// it saw last.
 	excludes(t, p, "## Thread context")
 	// Each block is dropped whole when empty — no stub headings.
-	excludes(t, BuildExecutor(engineer(), ExecutorInput{}),
+	excludes(t, BuildExecutor(engineer(), ExecutorInput{}).Text,
 		"\n## The thread so far\n", "\n## First-turn onboarding\n",
 		"\n## Personal memory\n", "\n## Synthesized skills you've learned\n",
 		"\n## Relevant knowledge\n", "\n## Similar prior work\n", "\n## Known counterparty\n")
@@ -283,8 +283,8 @@ func TestTheKnowledgeNoteOnlyAppearsWithABlock(t *testing.T) {
 	t.Parallel()
 	contains(t, BuildExecutor(engineer(), ExecutorInput{
 		RelevantKnowledge: "- **Runbook**: steps.",
-	}), "Relevant team documentation was surfaced")
-	excludes(t, BuildExecutor(engineer(), ExecutorInput{}),
+	}).Text, "Relevant team documentation was surfaced")
+	excludes(t, BuildExecutor(engineer(), ExecutorInput{}).Text,
 		"Relevant team documentation was surfaced")
 }
 
@@ -296,12 +296,12 @@ func TestExecutorPromptOnboardingHintGatesOnTheTool(t *testing.T) {
 	hint := "Read the 'Onboarding' pages on your chain."
 	withTool := BuildExecutor(engineer(), ExecutorInput{
 		OnboardingHint: hint, AvailableTools: []string{"mark_onboarded"},
-	})
+	}).Text
 	contains(t, withTool, "## First-turn onboarding", hint)
 
-	excludes(t, BuildExecutor(engineer(), ExecutorInput{OnboardingHint: hint}),
+	excludes(t, BuildExecutor(engineer(), ExecutorInput{OnboardingHint: hint}).Text,
 		"## First-turn onboarding")
-	excludes(t, BuildExecutor(engineer(), ExecutorInput{AvailableTools: []string{"mark_onboarded"}}),
+	excludes(t, BuildExecutor(engineer(), ExecutorInput{AvailableTools: []string{"mark_onboarded"}}).Text,
 		"## First-turn onboarding")
 }
 
@@ -314,15 +314,15 @@ func TestIdentityLineAndSectionAgreeOnATopLevelSeat(t *testing.T) {
 	o := &org.Organization{Name: "Acme", Roles: []*org.Role{{Name: "Engineer", Goal: "Ship."}}}
 	o.Normalize()
 	s := seatIn(o, "Engineer")
-	contains(t, BuildExecutor(s, ExecutorInput{}), "None (top-level)")
-	contains(t, BuildReview(s, ReviewInput{}), "None (top-level)")
+	contains(t, BuildExecutor(s, ExecutorInput{}).Text, "None (top-level)")
+	contains(t, BuildReview(s, ReviewInput{}).Text, "None (top-level)")
 }
 
 func TestTheReviewPromptIsSmallerThanTheExecutors(t *testing.T) {
 	t.Parallel()
 	s := lead()
-	exec := BuildExecutor(s, ExecutorInput{ToolCatalogue: "- foo: Does foo."})
-	if review := BuildReview(s, ReviewInput{}); len(review) >= len(exec) {
+	exec := BuildExecutor(s, ExecutorInput{ToolCatalogue: "- foo: Does foo."}).Text
+	if review := BuildReview(s, ReviewInput{}).Text; len(review) >= len(exec) {
 		t.Errorf("review prompt (%d) is not smaller than the executor's (%d)",
 			len(review), len(exec))
 	}
@@ -346,8 +346,8 @@ var forbiddenToolNames = []string{
 
 func TestPhaseContractsNameNoVendorTools(t *testing.T) {
 	t.Parallel()
-	excludes(t, BuildExecutor(engineer(), ExecutorInput{}), forbiddenToolNames...)
-	excludes(t, BuildReview(engineer(), ReviewInput{}), forbiddenToolNames...)
+	excludes(t, BuildExecutor(engineer(), ExecutorInput{}).Text, forbiddenToolNames...)
+	excludes(t, BuildReview(engineer(), ReviewInput{}).Text, forbiddenToolNames...)
 }
 
 // Config-derived identity (a unit's configured chat channel) is data and may

@@ -37,8 +37,7 @@
  * reload after sealing a credential as a person's write. The configuration is
  * the one source read WHOLE rather than narrowed to people: a revision the
  * engine made is a change to the company as much as one a person made, and
- * the row's kind says which it was. A revision whose writer nobody recorded —
- * adopted from an older engine's pointer — says exactly that.
+ * the row's kind says which it was.
  *
  * # The fifth source: what a person did at runtime
  *
@@ -186,13 +185,6 @@ export interface AuditEntry {
   kind: string;
   /** The handle or token label recorded on the write. */
   actor: string;
-  /**
-   * The record SAYS NOTHING about who wrote this, which is different from
-   * "the engine wrote it" — the reading an empty actor gets everywhere else.
-   * A config revision adopted from an older engine's pointer is the one row
-   * that can carry it.
-   */
-  unrecorded?: true;
   /** `operator`, `human`, `agent`, `system` — empty where none was recorded. */
   actorKind: string;
   /**
@@ -324,14 +316,12 @@ export type Writer =
   | { as: "seat"; handle: string; name: string; kind?: SeatKind; token?: string }
   | { as: "token"; name: string }
   | { as: "system"; name: string }
-  | { as: "engine" }
-  | { as: "unrecorded" };
+  | { as: "engine" };
 
 export function writerOf(
-  row: Pick<AuditEntry, "actor" | "actorKind" | "actorSeat" | "unrecorded">,
+  row: Pick<AuditEntry, "actor" | "actorKind" | "actorSeat">,
   who: (handle: string) => { name: string; kind?: SeatKind },
 ): Writer {
-  if (row.unrecorded) return { as: "unrecorded" };
   if (!row.actor) return { as: "engine" };
   if (row.actorKind === "operator") {
     if (!row.actorSeat) return { as: "token", name: row.actor };
@@ -385,10 +375,6 @@ function WriterCell({ writer }: { writer: Writer }) {
       // writers with no tool invisible on the one screen that exists to name
       // every writer.
       return <span className="muted">the engine</span>;
-    case "unrecorded":
-      // NOT THE ENGINE, AND NOT ANYBODY: the record does not say, and the
-      // cell says that rather than guessing.
-      return <EmptyValue label="Not recorded" />;
   }
 }
 
@@ -498,7 +484,6 @@ export function Audit() {
         // "operator", so a node's seed and the reconcile loop's reloads were
         // drawn as a person's writes.
         actorKind: revision.created_by_kind ?? "",
-        ...(!revision.created_by_kind && !revision.created_by ? { unrecorded: true as const } : {}),
         subject: revision.revision_id.slice(0, 8),
         path: ["settings", "config", "revisions", revision.revision_id],
         detail: revision.summary ?? "",

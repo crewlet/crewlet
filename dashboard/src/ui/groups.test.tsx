@@ -331,9 +331,9 @@ test("an option disappearing does not strand the tab stop", () => {
 // A VALUE THE GROUP DOES NOT OFFER STILL LEAVES ONE TAB STOP.
 //
 // `value` comes off the URL at seven of the nine call sites, and `useParam`
-// hands back whatever the query string says — so `?lens=bogus` (a link from an
-// older build, a typo, a renamed option) reaches this component as a value no
-// option carries. The stop fell back to `value` in that case, which is not in
+// hands back whatever the query string says — so `?lens=bogus` (a typo, a
+// hand-written link, an option a newer build offers) reaches this component as
+// a value no option carries. The stop fell back to `value` in that case, which is not in
 // the group either, so EVERY option rendered tabIndex=-1 and the whole control
 // left the page's tab order: unreachable by keyboard, and worse than the plain
 // buttons this replaced, which were each a stop of their own.

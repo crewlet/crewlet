@@ -79,8 +79,8 @@ func (d *Diary) embedNote(ctx context.Context, e DiaryEntry) Vector {
 }
 
 // Unfilled returns up to limit of a seat's live notes that have no vector of
-// model at this store's width — written before notes were embedded, written
-// while no provider answered, embedded under a model the company has since
+// model at this store's width — written while the company had no embedding
+// provider or none answered, embedded under a model the company has since
 // moved off, or at a width a restart left behind — newest first, strictly
 // after the cursor (see [FillCursor]).
 //
@@ -107,7 +107,7 @@ func (d *Diary) Unfilled(ctx context.Context, agentID, model string, now time.Ti
 		`SELECT `+diaryColumns+` FROM agent_diary
 		 WHERE agent_id = ?
 		   AND (ttl_until IS NULL OR ttl_until > ?)
-		   AND (embedding IS NULL OR embedding_model IS NULL OR embedding_model <> ?
+		   AND (embedding IS NULL OR embedding_model <> ?
 		        OR (? > 0 AND length(embedding) <> ?))
 		   AND `+hasTextSQL("content")+`
 		   AND (? = 0 OR created_at < ? OR (created_at = ? AND id < ?))

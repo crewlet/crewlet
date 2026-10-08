@@ -9,23 +9,22 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
-	"github.com/crewlet/crewlet/internal/workkey"
 )
 
 // ReflectTool is the in-flight builtin an agent calls to write its own memory.
 //
 // The dispatcher reads it as "the LLM already handled persistence this turn".
-// It is an executor builtin, so a call lands in the executor-scoped
-// [types.TurnCompleted.ToolSequence]. [Turn.SelfPersisted] reads
-// [types.TurnCompleted.PlanToolSequence] too, which this build never writes: an
-// older build recorded its planning phase's calls there, and a turn one of its
-// nodes completed during a rolling upgrade must not be persisted twice.
+// It is an executor builtin, so a call lands in the whole-turn
+// [types.TurnCompleted.AllToolNames], which [Turn.SelfPersisted] reads — never
+// the final-iteration [types.TurnCompleted.ToolSequence], which forgets a call
+// an earlier self_iterate attempt made.
 const ReflectTool = "reflect_and_persist"
 
 // ReflectSeen bounds the dispatcher's memory of turns it has already handled.
@@ -73,21 +72,7 @@ type Turn struct {
 // last KEYED unit of work precisely so an unkeyed observation cannot disarm
 // the next redelivery's dedupe, and a fabricated key walks straight through
 // that.
-//
-// FALLING BACK ONLY ON SHAPE. A `turn_completed` from a build before the split
-// carries no work key and its turn id IS one, and a rolling upgrade guarantees
-// some of those — but so does a post-split turn with no trigger key, and the
-// wire cannot tell the two apart because the field is `omitempty`. The GRAMMAR
-// can: see [workkey.IsDerived].
-func (t Turn) WorkKey() string {
-	if t.Event.WorkKey != "" {
-		return t.Event.WorkKey
-	}
-	if workkey.IsDerived(t.Event.TurnID) {
-		return t.Event.TurnID
-	}
-	return ""
-}
+func (t Turn) WorkKey() string { return t.Event.WorkKey }
 
 // Reflecting is the attribution a reflection worker states for its model call
 // on this turn: the REFLECTION stage — the seat's learning after the turn,
@@ -101,8 +86,7 @@ func (t Turn) Reflecting(purpose types.AuxPurpose) auxspend.Use {
 // Ask is what the turn was ASKED, in the trigger's own words: its
 // interactions' bodies, in the order they spoke, or — for a wake that has no
 // interactions (a colleague's question, a schedule's task, a resumed segment)
-// — [types.TurnCompleted.Ask]. "" when the turn was told neither, which is a
-// turn from a build that predates the field and woken by no notification.
+// — [types.TurnCompleted.Ask]. "" when the turn was told neither.
 //
 // NEVER the label ([types.TurnCompleted.TaskSummary]), which says what kind
 // of event woke the turn and nothing of what it said.
@@ -194,9 +178,14 @@ func Settled(outcome string) bool {
 func (t Turn) Settled() bool { return Settled(t.Event.ReviewOutcome) }
 
 // SelfPersisted reports whether the turn already wrote its own memory.
+//
+// It reads EVERY executor iteration's calls. A call in an iteration the
+// reviewer sent back with self_iterate still wrote the memory, and a later
+// iteration that did not call it again does not undo that — read off the
+// final iteration alone, such a turn ran the persist decision a second time
+// over a fact the agent had already written.
 func (t Turn) SelfPersisted() bool {
-	return slices.Contains(t.Event.PlanToolSequence, ReflectTool) ||
-		slices.Contains(t.Event.ToolSequence, ReflectTool)
+	return slices.Contains(t.Event.AllToolNames, ReflectTool)
 }
 
 // Engaged reports whether the agent actually acted on the trigger.
@@ -204,8 +193,8 @@ func (t Turn) SelfPersisted() bool {
 // Two routes to "it did not", and both produce phantom-directive learning if
 // they are not blocked:
 //
-//   - the turn opted out (plan_decision skip) — nobody was asking this seat
-//     to do anything, and the engine ended it silently;
+//   - the turn was skipped (review_outcome `skipped`) — nobody was asking
+//     this seat to do anything, and the engine ended it silently;
 //   - the turn engaged with nothing: it finished `done` having called no
 //     tool at all, which is what a seat that read the trigger, recognised it
 //     as somebody else's and then said so only to itself looks like.
@@ -221,7 +210,7 @@ func (t Turn) SelfPersisted() bool {
 // reflecting on; only a turn that finished done having called nothing claims
 // to have engaged with a trigger it did not touch.
 func (t Turn) Engaged() bool {
-	if t.Event.PlanDecision == types.PlanDecisionSkip {
+	if t.Event.ReviewOutcome == string(phase.Skipped) {
 		return false
 	}
 	return len(t.Event.ToolSequence) > 0 || t.Event.ReviewOutcome != "done"
@@ -612,7 +601,7 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 
 	if !turn.Engaged() {
 		log.InfoContext(ctx, "reflection_skipped_no_engagement", "turn_id", tc.TurnID,
-			"agent_handle", tc.AgentHandle, "plan_decision", string(tc.PlanDecision),
+			"agent_handle", tc.AgentHandle,
 			"tool_count", len(tc.ToolSequence), "review_outcome", tc.ReviewOutcome)
 		// The sentinel still fires. A turn the dispatcher DECIDED not to
 		// learn from and a turn reflection never reached look identical

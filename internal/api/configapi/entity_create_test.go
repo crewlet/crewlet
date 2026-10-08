@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/config"
 )
 
 // serversDoc declares one MCP server, so an add has something to keep in
@@ -212,5 +213,34 @@ func TestACreateOnlyWriteAddsAProviderUnderItsKey(t *testing.T) {
 	}
 	if !slices.Equal(ids, []string{"yankee", "zulu"}) {
 		t.Errorf("providers after the add = %v", ids)
+	}
+}
+
+// PROVIDERS ADDED ONE BY ONE RESOLVE IN THE ORDER THEY WERE ADDED. The order is
+// what an unpinned seat's last resort reads — "the first provider configured"
+// — so each create records the new key at the END of `llm_order`, in the
+// stored document as well as the struct. Left out of it, every key added
+// after the first fell into ProviderOrder's sorted tail: a company built
+// provider by provider resolved in alphabetical order, not in the order its
+// founder added them.
+func TestProvidersCreatedOneByOneKeepTheOrderTheyWereAdded(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	s.seed(t, serversDoc, nil)
+
+	for _, key := range []string{"yankee", "alpha"} {
+		res := s.do(t, http.MethodPut, "/config/llm-providers/"+key,
+			`{"type":"anthropic","model":"claude-sonnet-5","api_keys":["${KEY}"]}`,
+			createOnly("add "+key))
+		if res.Code != http.StatusCreated {
+			t.Fatalf("create %s = %d, want 201: %s", key, res.Code, res.Body.String())
+		}
+	}
+	company, err := config.DecodeCompany([]byte(s.activeDocument(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := company.Providers.ProviderOrder(), []string{"zulu", "yankee", "alpha"}; !slices.Equal(got, want) {
+		t.Errorf("provider order = %v, want %v: the order they were added in", got, want)
 	}
 }

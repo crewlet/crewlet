@@ -1117,9 +1117,9 @@ func TestARetirementThatCannotEndTheSeatsRunsIsRetried(t *testing.T) {
 	}
 }
 
-// A mailbox created by a node whose registration failed, or by a build that
-// predates the registry, is registered by the sweep while its seat is still in
-// the company, so it can be retired if the seat is ever removed.
+// A mailbox created by a node whose registration failed is registered by the
+// sweep while its seat is still in the company, so it can be retired if the
+// seat is ever removed.
 func TestASeatInTheRosterWithoutARecordIsRegistered(t *testing.T) {
 	h := newMailboxHarness(t, nil)
 	h.ensure("swe")
@@ -1131,8 +1131,8 @@ func TestASeatInTheRosterWithoutARecordIsRegistered(t *testing.T) {
 }
 
 // unregistered creates a seat's mailbox the way a node whose registration
-// failed did, or a build that predates the registry: the subscriptions named
-// and a letter if one is the inbox, and no record.
+// failed did: the subscriptions named and a letter if one is the inbox, and no
+// record.
 func (h *mailboxHarness) unregistered(handle string, subs ...[2]string) {
 	h.t.Helper()
 	for _, sub := range subs {

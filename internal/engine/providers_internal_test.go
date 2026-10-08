@@ -1,17 +1,20 @@
 package engine
 
 import (
-	"strings"
-
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/anthropic"
+	"github.com/crewlet/crewlet/internal/providers/llm/openai"
 )
 
 // storeSource stands in for the secret store: it answers by NAME, and nothing
@@ -45,10 +48,10 @@ const chatCompletion = `{
 // Both were unwired. base_url was handed to the backend verbatim, so
 // `base_url: "${LLM_BASE_URL}"` — the reference an openai-compatible entry is
 // documented to carry (docs/reference/environment-variables.md) — sent every
-// request to a URL that was the literal reference. And LookupEnv was never passed, so
-// the conventional-key fallback read the process environment and could not
-// see a value `crewlet secrets set OPENAI_API_KEY` had put in the store,
-// which is the case config.Resolver.LookupOK exists for.
+// request to a URL that was the literal reference. And the conventional-key
+// fallback read the process environment, so it could not see a value
+// `crewlet secrets set OPENAI_API_KEY` had put in the store — the case the
+// resolver exists for, and which config.LLMProvider.Keys now reads through.
 func TestBuildProviderResolvesBaseURLAndConventionalKey(t *testing.T) {
 	var gotAuth string
 	var calls int
@@ -93,19 +96,28 @@ func TestBuildProviderResolvesBaseURLAndConventionalKey(t *testing.T) {
 
 // TestBuildProviderResolvesAnthropicBaseURLAndConventionalKey is the same
 // invariant on the other HTTP backend. Anthropic sends its credential on
-// X-Api-Key rather than Authorization, and anthropic.Config.LookupEnv's own
-// doc promises "the engine passes a secret-store-aware resolver" — which it
-// did not.
+// X-Api-Key rather than Authorization, and anthropic.Config reads no variable
+// of its own — its APIKeys are the whole bag — so the conventional key reaches
+// it only if the engine resolved it through the store.
 func TestBuildProviderResolvesAnthropicBaseURLAndConventionalKey(t *testing.T) {
 	var gotKey string
 	var calls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		gotKey = r.Header.Get("X-Api-Key")
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"id":"msg_1","type":"message","role":"assistant",
-			"model":"claude-test","content":[{"type":"text","text":"ok"}],
-			"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+		// The backend streams every call, so the gateway answers as the
+		// vendor does: an SSE stream that ends at message_stop.
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, event := range []string{
+			`{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-test","content":[],"usage":{"input_tokens":1,"output_tokens":0}}}`,
+			`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"ok"}}`,
+			`{"type":"content_block_stop","index":0}`,
+			`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`,
+			`{"type":"message_stop"}`,
+		} {
+			kind := strings.SplitN(strings.TrimPrefix(event, `{"type":"`), `"`, 2)[0]
+			_, _ = io.WriteString(w, "event: "+kind+"\ndata: "+event+"\n\n")
+		}
 	}))
 	defer srv.Close()
 
@@ -309,5 +321,161 @@ func TestAMissingCredentialStillBuilds(t *testing.T) {
 		APIKeys: []string{"${NOBODY_SET_THIS}"},
 	}, r); err != nil {
 		t.Fatalf("a provider with no credential was refused: %v", err)
+	}
+}
+
+// An anthropic entry's request shape follows its MODEL, and the entry's dials
+// reach the backend: reasoning_effort as output_config.effort, claude_model as
+// the row an alias is shaped from, reasoning_budget_tokens as a budget-era
+// model's thinking. Asserted on the wire, because the wiring is the part that
+// can be dropped with everything still compiling.
+func TestAnAnthropicEntryIsShapedFromItsModel(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		spec config.LLMProvider
+		want map[string]any // body field -> its JSON
+	}{
+		{
+			name: "a referenced current model at the entry's effort",
+			spec: config.LLMProvider{Model: "${LLM_MODEL}", ReasoningEffort: config.EffortXHigh},
+			want: map[string]any{
+				"thinking":      map[string]any{"type": "adaptive", "display": "summarized"},
+				"output_config": map[string]any{"effort": "xhigh"},
+				"max_tokens":    float64(128000),
+			},
+		},
+		{
+			name: "an alias named by claude_model, thinking on its budget",
+			spec: config.LLMProvider{Model: "gw-fast", ClaudeModel: "claude-haiku-4-5", ReasoningBudgetTokens: 2048},
+			want: map[string]any{
+				"thinking":   map[string]any{"type": "enabled", "budget_tokens": float64(2048)},
+				"max_tokens": float64(64000),
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var body map[string]any
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				raw, _ := io.ReadAll(r.Body)
+				_ = json.Unmarshal(raw, &body)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"id":"msg_1","type":"message","role":"assistant",
+					"model":"m","content":[{"type":"text","text":"ok"}],
+					"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+			}))
+			defer srv.Close()
+			spec := tc.spec
+			spec.Type, spec.BaseURL, spec.APIKeys = config.LLMAnthropic, srv.URL, []string{"sk-ant-test"}
+			p, err := buildProvider("claude", spec, tierB(map[string]string{"LLM_MODEL": "claude-sonnet-5-5"}))
+			if err != nil {
+				t.Fatalf("buildProvider: %v", err)
+			}
+			if _, err := p.Complete(context.Background(), llm.Request{
+				Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+			}); err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+			for field, want := range tc.want {
+				if got := fmt.Sprint(body[field]); got != fmt.Sprint(want) {
+					t.Errorf("%s = %s, want %s", field, got, fmt.Sprint(want))
+				}
+			}
+			if _, sent := body["temperature"]; sent {
+				t.Errorf("temperature sent on a thinking call: %v", body["temperature"])
+			}
+		})
+	}
+}
+
+// A model written as a `${VAR}` is judged only once it resolves, so the
+// backend's refusal is the one an operator reads: it names the provider, the
+// model it resolved to and the field to change.
+func TestADialTheResolvedModelRefusesFailsTheBuildByName(t *testing.T) {
+	_, err := buildProvider("claude", config.LLMProvider{
+		Type: config.LLMAnthropic, Model: "${LLM_MODEL}", ReasoningBudgetTokens: 4096,
+	}, tierB(map[string]string{"LLM_MODEL": "claude-sonnet-5-5"}))
+	if err == nil {
+		t.Fatal("built a budget on an adaptive model, which every call would answer with a 400")
+	}
+	for _, want := range []string{`"claude"`, `"claude-sonnet-5-5"`, "reasoning_budget_tokens", "ThinkingBudget"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not name %s", err, want)
+		}
+	}
+}
+
+// The config's levels are the contract's, so a level the config admits is one
+// a backend can compare and lower.
+func TestEveryConfigEffortIsAContractEffort(t *testing.T) {
+	for _, level := range config.ReasoningEfforts {
+		if e := llm.Effort(level); e == "" || !e.Valid() {
+			t.Errorf("config admits reasoning_effort %q, which llm.Effort does not know", level)
+		}
+	}
+}
+
+// ONE TIMEOUT DEFAULT. The engine builds every HTTP backend with the config's
+// resolved timeout, and each backend keeps a default of its own for a Config
+// built without one; the two were "matched" by a comment, which is how one
+// moves and the other does not. The config's is the one that runs and the one
+// the docs state, so the backends' must equal it, and an entry naming its own
+// value must get exactly that.
+func TestTheLLMTimeoutDefaultIsOneNumber(t *testing.T) {
+	t.Parallel()
+	unset := (&config.LLMProvider{}).Timeout()
+	if unset != 600 {
+		t.Fatalf("an entry naming no timeout_seconds gets %v s, want 600", unset)
+	}
+	for name, d := range map[string]time.Duration{
+		"anthropic": anthropic.DefaultTimeout,
+		"openai":    openai.DefaultTimeout,
+	} {
+		if d != time.Duration(unset*float64(time.Second)) {
+			t.Errorf("%s.DefaultTimeout = %v, want the config's %v s", name, d, unset)
+		}
+	}
+	if got := (&config.LLMProvider{TimeoutSeconds: 45}).Timeout(); got != 45 {
+		t.Errorf("an entry naming 45 s gets %v", got)
+	}
+}
+
+// THE DOCTOR'S PROVIDER IS THE ENGINE'S. `crewlet llm doctor` builds an
+// anthropic entry through BuildAnthropic, so it must resolve what buildProvider
+// resolves — a `${VAR}` model and endpoint included — and refuse what it
+// refuses; one that built its own would certify a request no seat sends.
+func TestBuildAnthropicIsTheBuildASeatGets(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+	r := tierB(map[string]string{"LLM_MODEL": "claude-opus-4-1", "LLM_BASE_URL": srv.URL})
+	spec := config.LLMProvider{Type: config.LLMAnthropic, Model: "${LLM_MODEL}", BaseURL: "${LLM_BASE_URL}"}
+	built, err := BuildAnthropic("claude", spec, r)
+	if err != nil {
+		t.Fatalf("BuildAnthropic: %v", err)
+	}
+	seat, err := buildProvider("claude", spec, r)
+	if err != nil {
+		t.Fatalf("buildProvider: %v", err)
+	}
+	if built.Model() != "claude-opus-4-1" || built.Model() != seat.Model() {
+		t.Errorf("doctor builds %q, a seat %q", built.Model(), seat.Model())
+	}
+	if d := built.Diagnose(context.Background(), anthropic.DiagnoseOptions{Key: "claude"}); d.Endpoint != srv.URL {
+		t.Errorf("endpoint = %q, want the resolved base_url", d.Endpoint)
+	}
+
+	// The refusals too: a reference that resolved to nothing, and a dial
+	// the resolved model would answer with a 400.
+	if _, err := BuildAnthropic("claude", config.LLMProvider{
+		Type: config.LLMAnthropic, Model: "${LLM_MODEL}",
+	}, tierB(nil)); err == nil || !strings.Contains(err.Error(), "LLM_MODEL resolved to nothing") {
+		t.Errorf("an unresolved model: %v", err)
+	}
+	if _, err := BuildAnthropic("claude", config.LLMProvider{
+		Type: config.LLMAnthropic, Model: "claude-opus-5-5", ReasoningBudgetTokens: 4096,
+	}, r); err == nil || !strings.Contains(err.Error(), "reasoning_budget_tokens") {
+		t.Errorf("a budget on an adaptive model: %v", err)
+	}
+	if _, err := BuildAnthropic("gpt", config.LLMProvider{Type: config.LLMOpenAI, Model: "gpt-5"}, r); err == nil {
+		t.Error("built an openai entry as an anthropic provider")
 	}
 }

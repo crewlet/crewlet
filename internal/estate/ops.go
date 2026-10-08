@@ -432,8 +432,8 @@ type workSearchArgs struct {
 	Text  string
 	Limit int
 
-	// Mode is how to rank. EMPTY FROM AN OLDER BUILD, which ranked hybrid
-	// and is answered as it always was: the zero value is hybrid.
+	// Mode is how to rank. Empty is hybrid — what a caller that names no
+	// mode (a seat's search_work tool) sends.
 	Mode knowledge.Mode
 }
 
@@ -605,14 +605,10 @@ var opTurnPlaces = define("tracker.turn_places", opRead, trackerDomain, false,
 // fleet shares through its own client, and asks this service only for the row
 // that names them.
 //
-// THE TWO OPERATIONS WHOSE SHAPE NAMES THE OBJECT are named for it
-// (`tracker.read_file`, `tracker.write_file`) rather than keeping the names a
-// build that named chunks served: an operation's body decodes leniently, so a
-// peer of that build would read a write naming an object as one naming no
-// chunks, and a reader here would take its answer as a file with no content.
-// A name a node does not serve is answered `unserved`, which sends the router
-// on to a peer that does — so during a rolling upgrade each build's file
-// reads and writes reach a node of its own build, or none.
+// The two operations whose shape names the object are named for what they
+// carry (`tracker.read_file`, `tracker.write_file`). An operation a node does
+// not serve is answered `unserved`, which sends the router on to a node that
+// does.
 var opFiles = define("tracker.files", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q tracker.FileQuery) (tracker.FileListing, error) {
 		if b.Tracker == nil {
@@ -1217,8 +1213,8 @@ type knowledgeArgs struct {
 	Seat  string
 	Limit int
 
-	// Mode is how to rank. EMPTY FROM AN OLDER BUILD, which ranked hybrid
-	// and is answered as it always was: the zero value is hybrid.
+	// Mode is how to rank. Empty is hybrid — what a caller that names no
+	// mode (the prefetch, a seat's search_knowledge tool) sends.
 	Mode knowledge.Mode
 
 	// Scoped says the caller searched with an org, which is what supplies

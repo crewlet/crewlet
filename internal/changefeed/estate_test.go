@@ -32,7 +32,6 @@ type estate struct {
 	mu      sync.Mutex
 	pending []queued
 	waiting chan struct{}
-	acked   map[string]int
 	// naked counts a record's refusals. It is read only to CAP the
 	// redeliveries below, never as a witness: this queue blocks
 	// head-of-line, so a naked record sits at the front until its delay
@@ -55,7 +54,7 @@ const nakRedeliveries = 8
 func newEstate() *estate {
 	return &estate{
 		waiting: make(chan struct{}, 1024),
-		acked:   map[string]int{}, naked: map[string]int{},
+		naked:   map[string]int{},
 	}
 }
 
@@ -95,12 +94,7 @@ func (e *estate) Next(ctx context.Context) (*changefeed.Message, error) {
 			e.mu.Unlock()
 			return &changefeed.Message{
 				Record: rec,
-				Ack: func() error {
-					e.mu.Lock()
-					defer e.mu.Unlock()
-					e.acked[rec.ID]++
-					return nil
-				},
+				Ack:    func() error { return nil },
 				Nak: func(delay time.Duration) error {
 					e.mu.Lock()
 					defer e.mu.Unlock()
@@ -140,9 +134,3 @@ func (e *estate) Next(ctx context.Context) (*changefeed.Message, error) {
 }
 
 func (e *estate) Stop() error { return nil }
-
-func (e *estate) acks(id string) int {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.acked[id]
-}

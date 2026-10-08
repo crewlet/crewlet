@@ -41,12 +41,7 @@ export function collectSummary(c: ObjectCollect): string {
   // met an estate it could not read whole is gone, and saying "deleted
   // nothing" would tell the operator otherwise.
   if (c.skipped) return `${deleted}, then stopped: ${c.skipped}`;
-  const tidied = [
-    c.retired > 0 ? `retired ${plural(c.retired, "chunk")} of an earlier build` : "",
-    c.abandoned > 0 ? `abandoned ${plural(c.abandoned, "unfinished upload")}` : "",
-  ]
-    .filter(Boolean)
-    .join(", ");
+  const tidied = c.abandoned > 0 ? `abandoned ${plural(c.abandoned, "unfinished upload")}` : "";
   const done = c.completed ? `${deleted}, ${of}` : `${deleted} before it stopped, ${of}`;
   return tidied ? `${done}; ${tidied}` : done;
 }

@@ -76,9 +76,10 @@ func TestAChangeMovesTheTasksLastChangedInstant(t *testing.T) {
 }
 
 // THE BACKFILL EQUALS THE REPLAY, for the last-changed instant as for every
-// derived column: rows a build without the stamp wrote re-derive to exactly
-// what the incremental rule reached, and rows this build wrote re-derive to
-// themselves.
+// derived column: rows a different rule set derived — a checkpoint a reanchor
+// created at derivation 0, or rows adopted from a build with different rules —
+// re-derive to exactly what the incremental rule reached, and rows this build
+// wrote re-derive to themselves.
 func TestTheLastChangedBackfillEqualsAReplay(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -114,8 +115,8 @@ func TestTheLastChangedBackfillEqualsAReplay(t *testing.T) {
 		t.Errorf("re-deriving rows this build maintained repaired %d of them", n)
 	}
 
-	// THE PREDECESSOR'S ROWS: the stamp as a build without it left it — the
-	// create's, on the column and in the document alike.
+	// ROWS A DIFFERENT RULE SET DERIVED: a stale stamp, on the column and in
+	// the document alike.
 	if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(),
 			`UPDATE tracker_tasks SET updated_at = 1,
@@ -132,9 +133,6 @@ func TestTheLastChangedBackfillEqualsAReplay(t *testing.T) {
 		if column != want || document != want {
 			t.Errorf("%s re-derives to %d (document %d) and the replay wrote %d", id, column, document, want)
 		}
-	}
-	if tracker.DerivationVersion < 5 {
-		t.Error("the last-changed stamp is a derived column and the derivation version did not move")
 	}
 }
 

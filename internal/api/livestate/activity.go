@@ -190,7 +190,9 @@ func (s *LiveState) runsOf(role string) (running, waiting bool) {
 			continue
 		}
 		switch held.entry.Status {
-		case SandboxLaunching, SandboxRunning:
+		// AN ANSWERED RUN IS ENGINE WORK: its reply is recorded and its
+		// resume is being driven, so nobody is waited on.
+		case SandboxLaunching, SandboxRunning, SandboxAnswered:
 			running = true
 		case SandboxAwaiting, SandboxReseed:
 			waiting = true

@@ -38,16 +38,16 @@ func delivered(ns *server.Server) int64 {
 
 // A GATED CLAIM COSTS THE SAME WITH TWO THOUSAND LEASES HELD AS WITH TEN.
 //
-// The gates judged every lease in the fleet by LISTING both buckets, on every
-// gated claim twice, on every duty claim and in every FleetProtocolFloor —
-// so a claim's cost grew with the leases already held, and a fleet claiming
-// its seats from cold grew with their square (gate.go has the measurements).
+// The gate judged every lease in the fleet by LISTING both buckets, on every
+// gated claim twice and in every FleetProtocolFloor — so a claim's cost grew
+// with the leases already held, and a fleet claiming its seats from cold grew
+// with their square (gate.go has the measurements).
 // What a listing costs is its records, delivered to the claimant one by one,
 // and the broker counts every message it delivers: so the case holds a number
 // of seats, claims more gated, and compares what a claim was delivered at the
-// two sizes. The view's watch is started, and its load of the buckets paid,
-// by one claim BEFORE the ones counted — that load is the view's cost once
-// per run, not a claim's.
+// two sizes. The view's watch is started, and its load of the seat lease
+// bucket paid, by one claim BEFORE the ones counted — that load is the view's
+// cost once per run, not a claim's.
 func TestAGatedClaimCostsTheSameWhateverIsHeld(t *testing.T) {
 	t.Parallel()
 	const claims = 20
@@ -202,8 +202,8 @@ func BenchmarkAGatedClaim(b *testing.B) {
 			}
 			b.Cleanup(s.Close)
 			holdSeats(b, s, held)
-			// One claim first: the view's load of the buckets is paid once
-			// per run of it, not per claim.
+			// One claim first: the view's load of the seat lease bucket is
+			// paid once per run of it, not per claim.
 			if lease, _, err := s.TryAcquire(context.Background(), coord.ClassSeat.Resource("warm"),
 				coord.AcquireOptions{Owner: "node-a/1", TTL: coordtest.LongTTL}); err != nil || lease == nil {
 				b.Fatalf("warm the view: (%v, %v)", lease, err)
@@ -216,6 +216,59 @@ func BenchmarkAGatedClaim(b *testing.B) {
 				if err != nil || lease == nil {
 					b.Fatalf("gated claim: (%v, %v)", lease, err)
 				}
+			}
+		})
+	}
+}
+
+// THE POST-WRITE RE-CHECK GIVES BACK ONLY A NEW CLAIM. A claim judged clear
+// before its write is judged again after it, because a lower-protocol lease can
+// land in between; refused then, a FRESH claim is released at once, so the
+// newer node does not hold a seat beside a peer whose build means something
+// else by holding it — while a RE-claim, the holder renewing what it already
+// held, is kept, so a lower-protocol node appearing never pulls a seat out from
+// under a turn mid-flight. TryAcquire's own pre-check refuses before any write
+// whenever the gate is already blocked, so this is the one path that reaches
+// the give-back, and it is driven directly.
+func TestTheProtocolReCheckGivesBackOnlyANewClaim(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		fresh    bool
+		stillOwn bool
+	}{
+		{"a new claim is released", true, false},
+		{"a re-claim is kept", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			s := openStore(t, embeddedNATS(t), coordtest.LongTTL)
+			seat := coord.SeatResource("engineer")
+			opts := coord.AcquireOptions{Owner: "new:1", TTL: coordtest.LongTTL}
+			lease, refused, err := s.TryAcquire(ctx, seat, opts)
+			if err != nil || lease == nil {
+				t.Fatalf("claim = (%v, %q, %v)", lease, refused, err)
+			}
+			// A lower-protocol node becomes live after the claim was judged.
+			if older, _, err := s.TryAcquire(ctx, coord.NodeResource("old"), coord.AcquireOptions{
+				Owner: "old:1", TTL: coordtest.LongTTL,
+				Protocol: coord.ProtocolVersion - 1, Ungated: true,
+			}); err != nil || older == nil {
+				t.Fatalf("plant the lower-protocol presence = (%v, %v)", older, err)
+			}
+
+			want := leaseValue{Resource: seat, Owner: "new:1", Epoch: lease.Epoch}
+			got, refused, err := s.settle(ctx, s.leases, seat, want, opts, coord.ProtocolVersion, tc.fresh)
+			if err != nil || got != nil || refused != coord.RefusedProtocol {
+				t.Fatalf("settle beside a lower-protocol node = (%v, %q, %v), want a refusal %q",
+					got, refused, err, coord.RefusedProtocol)
+			}
+			current, err := s.Get(ctx, seat)
+			if err != nil {
+				t.Fatalf("Get: %v", err)
+			}
+			if own := current != nil && current.Owner == "new:1"; own != tc.stillOwn {
+				t.Fatalf("after the re-check the seat reads %v, want still held = %v", current, tc.stillOwn)
 			}
 		})
 	}

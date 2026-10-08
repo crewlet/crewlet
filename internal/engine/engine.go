@@ -124,10 +124,10 @@ func newCompany(c *config.Company, env *config.Resolver) (*Company, error) {
 	// seat walk needs no empty-handle guard.
 	//
 	// The RUNNABLE rules only. An epoch is built from stored revisions, and
-	// one that breaks an admission rule added after it was stored still runs
-	// as it always did; refusing to build it would take a working company
-	// down on upgrade. A submitted document met the admission rules at the
-	// door it came through. See [config.Company.ValidateRunnable].
+	// one a newer peer admitted under rules this build does not share still
+	// runs; refusing to build it would split the fleet's epoch. A document
+	// submitted to this build met its admission rules at the door it came
+	// through. See [config.Company.ValidateRunnable].
 	if err := c.ValidateRunnable(); err != nil {
 		return nil, fmt.Errorf("engine: invalid company config: %w", err)
 	}

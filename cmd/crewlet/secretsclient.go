@@ -236,9 +236,7 @@ func (c *secretsClient) refusal(status int, path, contentType string, raw []byte
 		return fmt.Errorf("%w: %s", secrets.ErrNotFound,
 			strings.TrimPrefix(strings.SplitN(path, "?", 2)[0], "/secrets/"))
 	case status == http.StatusNotFound:
-		return fmt.Errorf("%s has no /secrets surface: it is running a build "+
-			"from before secrets moved onto the fleet, or it cannot reach the "+
-			"coordination store", c.base)
+		return missingSurface(c.base, "/secrets", body.Error)
 	case status == http.StatusUnauthorized:
 		return fmt.Errorf("%s refused the bearer token: set %s to one of its "+
 			"api.auth.tokens", c.base, apiTokenEnv)

@@ -120,43 +120,14 @@ func claudeCodeMCP(s sandbox.MCPServer) map[string]any {
 	return out
 }
 
-// The layouts a Claude Code job has been launched with.
-const (
-	// claudeJSONLayout is `--output-format json`: ONE object, the result,
-	// printed when the run ends, the CLI's whole stdout in the result file
-	// and nothing streamed. Every build before the layouts were numbered.
-	claudeJSONLayout = 0
-
-	// claudeStreamLayout is stream-json: every message as it happens into
-	// its own file, the result its last line, copied out after the CLI
-	// exits.
-	claudeStreamLayout = 1
-)
-
-// Layout is stream-json's ([claudeStreamLayout]).
-func (ClaudeCode) Layout() int { return claudeStreamLayout }
-
-// Output is where a job of each layout wrote.
+// Output is where a job writes under stream-json.
 //
-// Under stream-json the EVENT STREAM goes to its own file, read as a stream
-// and from its end, and the RESULT is the stream's last line, which the
-// wrapper copies to the result file after the CLI exits — so the result is
-// read whole from a file of one line however long the stream grew. It exits
-// cleanly, so the done marker is its only completion signal and the poll
-// reads nothing of the stream.
-//
-// A `json` job wrote its stdout to the result file and streamed nothing, so
-// nothing is read as its stream: a build of that layout clears no stream
-// file, and the one in a box it reused is the previous job's.
-//
-// THE RESULT FILE KEEPS ITS NAME across the switch, and that is what a
-// rolling upgrade rests on: a run an older build launched has its one object
-// there, and a build that predates this layout collecting a run this one
-// launched reads its result line there, and both parse the same fields.
-func (ClaudeCode) Output(paths Paths, layout int) Output {
-	if layout <= claudeJSONLayout {
-		return Output{Stdout: paths.Result(), Result: paths.Result()}
-	}
+// The EVENT STREAM goes to its own file, read as a stream and from its end,
+// and the RESULT is the stream's last line, which the wrapper copies to the
+// result file after the CLI exits — so the result is read whole from a file of
+// one line however long the stream grew. It exits cleanly, so the done marker
+// is its only completion signal and the poll reads nothing of the stream.
+func (ClaudeCode) Output(paths Paths) Output {
 	return Output{Stdout: paths.Stream(), Events: true, Result: paths.Result()}
 }
 
@@ -166,8 +137,7 @@ func (ClaudeCode) Events() Decoder { return &claudeEvents{tools: map[string]stri
 // Finished is false: this CLI exits cleanly, so the done marker is the signal.
 func (ClaudeCode) Finished(string) bool { return false }
 
-// Parse maps the CLI's result — the stream's last line, or an older build's
-// whole `json` stdout — onto a result.
+// Parse maps the CLI's result — the stream's last line — onto a result.
 //
 // TOLERANT BY DESIGN: non-JSON or partial output yields a FAILED result
 // carrying an account of it, never an error. A coding agent that crashed should
@@ -179,9 +149,7 @@ func (ClaudeCode) Finished(string) bool { return false }
 // stream the result file holds the stream's LAST LINE, whatever it was: a run
 // that died part-way leaves an assistant message or a tool result there, and
 // an object of another type has no subtype and no is_error — read as a
-// result, it was a run that SUCCEEDED and said nothing. The `json` layout's
-// one object carries the same `"type": "result"`, so a run an older build
-// launched is read exactly as before.
+// result, it was a run that SUCCEEDED and said nothing.
 func (ClaudeCode) Parse(stdout string) sandbox.Result {
 	text := strings.TrimSpace(stdout)
 	if text == "" {
@@ -298,25 +266,19 @@ func (r claudeResult) failure() string {
 	return "it reported an error and said nothing about it"
 }
 
-// decodeClaudeResult reads the result message, falling back to the LAST line.
-//
-// An older build's `json` layout put the CLI's whole stdout in the result
-// file, where a banner or a warning could precede the object — and the
-// object is always last, because it is the thing the CLI prints when it is
-// done. Under the stream the file is one line already.
+// decodeClaudeResult reads the result message: the one line the result file
+// holds, which the wrapper copied from the end of the stream.
 func decodeClaudeResult(text string) (claudeResult, bool) {
-	for _, candidate := range []string{text, lastLine(text)} {
-		if !strings.HasPrefix(candidate, "{") {
-			continue
-		}
-		var msg claudeResult
-		err := json.Unmarshal([]byte(candidate), &msg)
-		var mismatch *json.UnmarshalTypeError
-		// A syntax error is reported before any field is decoded, so a
-		// mismatch means a whole object with one field of another type.
-		if err == nil || errors.As(err, &mismatch) {
-			return msg, true
-		}
+	if !strings.HasPrefix(text, "{") {
+		return claudeResult{}, false
+	}
+	var msg claudeResult
+	err := json.Unmarshal([]byte(text), &msg)
+	var mismatch *json.UnmarshalTypeError
+	// A syntax error is reported before any field is decoded, so a mismatch
+	// means a whole object with one field of another type.
+	if err == nil || errors.As(err, &mismatch) {
+		return msg, true
 	}
 	return claudeResult{}, false
 }

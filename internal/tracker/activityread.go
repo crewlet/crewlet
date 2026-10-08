@@ -75,9 +75,8 @@ type ActivityRecord struct {
 	// tracker whose author field is chosen by the writer is not an audit
 	// trail; this is the rendering the audit trail was missing.
 	//
-	// Empty for every writer that already IS a seat, for a token nobody
-	// bound, and for a change applied from a record older than version 5
-	// — see the history row's `actor_seat` in `apply_history.go`.
+	// Empty for every writer that already IS a seat and for a token nobody
+	// bound — see the history row's `actor_seat` in `apply_history.go`.
 	ActorSeat string `json:"actor_seat,omitempty"`
 
 	SubjectKind ObjectKind `json:"subject_kind"`

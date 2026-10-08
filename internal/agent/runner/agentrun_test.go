@@ -474,7 +474,7 @@ func TestAnAgentRunMeasuresTheToolsItAdvertisedOverTheBridge(t *testing.T) {
 			m.SystemBytes, m.UserBytes)
 	}
 	if m.MessageBytes != 0 {
-		t.Errorf("message_chars = %d on a launch that opens a phase rather than resuming one",
+		t.Errorf("message_bytes = %d on a launch that opens a phase rather than resuming one",
 			m.MessageBytes)
 	}
 }

@@ -96,10 +96,10 @@ var ErrUnknownRole = errors.New("unknown node role")
 // THE NIL SET MEANS EVERY ROLE, not none — the one place this package
 // deliberately breaks Go's "a nil map reads as empty". A node that declared
 // nothing does everything, and the alternative reading is an incident: a
-// peer whose presence row predates the field, or a profile built by a caller
-// that never set this, would drop out of the seat denominator and every
-// other node would compute too large a share of the seats. "Declared
-// nothing" and "does nothing" must never be the same answer.
+// peer whose row this build cannot read, or a profile built by a caller that
+// never set this, would drop out of the seat denominator and every other node
+// would compute too large a share of the seats. "Declared nothing" and "does
+// nothing" must never be the same answer.
 //
 // An empty non-nil set reads the same way for the same reason, and is also
 // not expressible on the wire: a "roles": [] row round-trips to every role.
@@ -287,10 +287,10 @@ type NodeProfile struct {
 
 	// Held is how many seat leases the node says it holds — the seats it
 	// runs and the ones whose teardown it could not prove — as of its last
-	// presence renewal. NIL WHEN ITS ROW SAYS NOTHING, which a build that
-	// predates the field writes, and which is not the node saying zero (see
-	// [HeldKey]).
-	Held *int
+	// presence renewal (see [HeldKey]). A count the row does not carry
+	// readably reads as zero, which errs toward trying: the sweep claims
+	// nothing on the counts, so a low sum costs a pass, never a seat.
+	Held int
 
 	// Broker is how this node's broker takes part in the fleet's. Read off
 	// a peer's row, [BrokerUnknown] means the row did not say — see
@@ -327,10 +327,10 @@ func (n NodeProfile) RunsIngress() bool { return n.Roles.Has(RoleIngress) }
 //
 // READ OFF A PEER'S ROW, it fails the way every role read does — an unknown
 // or unreadable set is every role — which is the safe reading for most
-// questions and a NARROW one here: a peer an older build describes is
-// counted as holding data, so a fleet mid-upgrade may wait on a node's
-// position it will not report. The alternative reading would trim past a
-// member's rows, which is the one thing a trim must never do.
+// questions and a NARROW one here: a peer whose row cannot be read is
+// counted as holding data, so the trim may wait on a position that node does
+// not report. The alternative reading would trim past a member's rows, which
+// is the one thing a trim must never do.
 func (n NodeProfile) HoldsData() bool { return n.Roles.Has(RoleData) }
 
 // Meta is the lease payload for this node's presence row, in the shape
@@ -355,16 +355,12 @@ func (n NodeProfile) Meta() map[string]any {
 // FromMeta reads a peer's profile back off its presence lease.
 //
 // It returns no error, deliberately. Every malformed shape has exactly one
-// correct reading — the old behaviour, a node that does everything and is
-// labelled with nothing — and a peer's bad row must not take down the
-// reader's sweep. An error return would create a branch whose only safe body
-// is "use that reading anyway", and the tempting wrong body (skip the peer)
-// is the incident: a live seat-running node missing from the denominator
-// makes every other node claim more than its share.
-//
-// The absent case is not hypothetical. A presence row written by a build
-// that predates this field has no meta at all, which is exactly what a
-// rolling upgrade puts in front of the new nodes.
+// correct reading — a node that does everything and is labelled with
+// nothing — and a peer's bad row must not take down the reader's sweep. An
+// error return would create a branch whose only safe body is "use that
+// reading anyway", and the tempting wrong body (skip the peer) is the
+// incident: a live seat-running node missing from the denominator makes every
+// other node claim more than its share.
 //
 // The broker follows the same rule with its own safe reading: anything this
 // build cannot read is [BrokerUnknown], which a question counting members
@@ -381,9 +377,10 @@ func FromMeta(nodeID string, meta map[string]any) NodeProfile {
 
 // heldFromMeta accepts the int this build writes and the float64 a JSON round
 // trip through the lease store returns, and reads anything else — absent, a
-// string, a negative or fractional count — as NOT SAYING. A reader that needs
-// a number decides what not saying means for its own question.
-func heldFromMeta(raw any) *int {
+// string, a negative or fractional count — as ZERO: the only reader sums the
+// counts to decide whether to try claiming at all, and a count too low only
+// sends it to try (see [NodeProfile.Held]).
+func heldFromMeta(raw any) int {
 	var n int
 	switch v := raw.(type) {
 	case int:
@@ -392,16 +389,13 @@ func heldFromMeta(raw any) *int {
 		n = int(v)
 	case float64:
 		if v != float64(int(v)) {
-			return nil
+			return 0
 		}
 		n = int(v)
 	default:
-		return nil
+		return 0
 	}
-	if n < 0 {
-		return nil
-	}
-	return &n
+	return max(n, 0)
 }
 
 // FromLease reads a peer's profile off a presence lease, reporting false for

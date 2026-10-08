@@ -401,7 +401,7 @@ func (x *identityIndex) entityOf(path Path) (seat, unit string) {
 //
 // "dangling_reference" is a name that resolves to nothing, with Ref naming
 // what carries it (lead, unit, manages, or gitlab_access_level). "admission"
-// is a rule a stored revision breaks that a new write would be refused for.
+// is a rule an applied revision breaks that a new write would be refused for.
 // "advisory" is a setting that is valid and carries a consequence, and it is
 // the one kind either tier can raise. Ref is empty on the last two, because
 // neither names a reference. From and To are display text: what holds the
@@ -421,7 +421,7 @@ type Warning struct {
 
 // WarningDanglingReference is the kind of a [Warning] about a reference that
 // resolves to nothing. WarningAdmission is the kind of one about an admission
-// rule a stored revision breaks. WarningAdvisory is the kind of one about a
+// rule an applied revision breaks. WarningAdvisory is the kind of one about a
 // setting that is valid and carries a consequence its author should hear
 // before production tells them.
 const (
@@ -450,8 +450,8 @@ func advisory(path Path, message string) Warning {
 //
 // A document that passed [Company.Validate] carries no admission warning, so
 // on a write that was admitted this is its references and its advisories. The
-// admission half is what a revision re-activated under the runnable rules
-// still says: a reload or a revert of a company stored before a rule existed.
+// admission half is what a revision applied under the runnable rules still
+// says: one a newer peer admitted under rules this build does not share.
 func (c *Company) Warnings() []Warning {
 	out := append(c.ReferenceWarnings(), c.AdmissionWarnings()...)
 	return append(out, c.AdvisoryWarnings()...)
@@ -547,7 +547,8 @@ func (c *Company) AdvisoryWarnings() []Warning {
 		w.Unit = u.Name
 		out = append(out, w)
 	}
-	return append(out, c.budgetWarnings()...)
+	out = append(out, c.budgetWarnings()...)
+	return append(out, c.Providers.llmWarnings()...)
 }
 
 // Warnings is everything valid about this bootstrap that its author should

@@ -97,7 +97,7 @@ func TestACollectedRunIsPublishedOnceWithItsTokens(t *testing.T) {
 	if rec.Model != "claude-sonnet-5" || rec.CodingAgent != "claude-code" || rec.SandboxID != launched.SandboxID {
 		t.Errorf("model/agent/box = %q/%q/%q", rec.Model, rec.CodingAgent, rec.SandboxID)
 	}
-	if rec.WorkItem == nil || *rec.WorkItem != rigItem || rec.WorkKey != launched.UnitOfWork() {
+	if rec.WorkItem == nil || *rec.WorkItem != rigItem || rec.WorkKey != launched.WorkKey {
 		t.Errorf("work item/key = %+v/%q, want the launch's", rec.WorkItem, rec.WorkKey)
 	}
 	if rec.Response != "fixed the flake" || len(rec.DeliveredRefs) != 1 || rec.Failed {
@@ -160,7 +160,7 @@ func TestTwoLaunchesInOneTurnAreTwoSpans(t *testing.T) {
 		req := launchReq(r.TurnID)
 		req.ReuseBox = r.SandboxID
 		req.LLM = &AgentLLM{Model: "claude-opus-5"}
-		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, req); err != nil {
+		if _, err := rig.launchVia(ctx, rig.manager, req); err != nil {
 			t.Errorf("relaunch: %v", err)
 		}
 	}
@@ -265,7 +265,7 @@ func TestARefusedPhasePublishIsNotRecorded(t *testing.T) {
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
 		t.Fatal("a failed resume was acked")
 	}
-	if got := rig.get("t1").LaunchFacts(); got.Published {
+	if got := rig.get("t1").Launch; got.Published {
 		t.Fatal("a publish the queue refused was recorded as published, so no retry would offer it again")
 	}
 
@@ -276,26 +276,6 @@ func TestARefusedPhasePublishIsNotRecorded(t *testing.T) {
 	}
 	if got := len(rig.phases()); got != 1 {
 		t.Fatalf("published %d phase records, want the retry's one", got)
-	}
-}
-
-// AN OLDER ROW NAMES NO START, and the record states none.
-//
-// A row a build that predates the launch record wrote has no start and no
-// iteration; the record then says so by omission rather than measuring a
-// duration from the year 1.
-func TestARunLaunchedByAnOlderBuildStatesNoClock(t *testing.T) {
-	run := PendingRun{TurnID: "t1", LaunchID: "job-2", Launch: LaunchRecord{
-		ID: "job-1", StartedAt: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), Iteration: 4, Published: true,
-	}}
-	facts := run.LaunchFacts()
-	if facts != (LaunchRecord{}) {
-		t.Fatalf("a record kept for job-1 answered for job-2: %+v", facts)
-	}
-	rec := runPhase(run, facts, Result{Success: true}, time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC))
-	if !rec.StartedAt.IsZero() || rec.DurationMS != 0 || rec.Iteration != 0 {
-		t.Errorf("a run with no launch record states start %s, %dms, iteration %d",
-			rec.StartedAt, rec.DurationMS, rec.Iteration)
 	}
 }
 

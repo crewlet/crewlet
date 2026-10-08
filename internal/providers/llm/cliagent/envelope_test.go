@@ -154,23 +154,26 @@ func TestArgumentsAreAlwaysAMap(t *testing.T) {
 	}
 }
 
-// The corrective re-prompt has to SAY it is corrective, or the model answers
-// with prose a second time and the round is wasted.
-func TestTheRequiredContractDemandsAToolCall(t *testing.T) {
+// THE CONTRACT NEVER DEMANDS A CALL. A request cannot force one, so a phase
+// that must end in a call names it in the conversation and the tool loop asks
+// again; a contract telling the model an empty list is unacceptable would be a
+// second, stricter protocol that only this backend speaks.
+func TestTheContractNeverDemandsAToolCall(t *testing.T) {
 	t.Parallel()
-	if strings.Contains(RenderContract(false), "MUST") {
-		t.Error("the permissive contract demands a tool call")
+	contract := RenderContract()
+	if strings.Contains(contract, "MUST") {
+		t.Errorf("the contract demands a tool call:\n%s", contract)
 	}
-	if !strings.Contains(RenderContract(true), "MUST") {
-		t.Error("the required contract does not demand a tool call")
+	if !strings.Contains(contract, "empty tool_calls list when no tool is needed") {
+		t.Errorf("the contract does not say a call may be omitted:\n%s", contract)
 	}
 }
 
 // A call list nothing could be read from is NOT an envelope.
 //
 // The distinction is what happens next. A document that is not an envelope
-// becomes assistant prose and the tool loop's forced-tool corrective asks
-// again — one round, and the model reliably fixes it. Accepted as an envelope
+// becomes assistant prose and, in a phase that has to end in a call, the tool
+// loop's corrective asks again — one round, and the model reliably fixes it. Accepted as an envelope
 // instead, the same reply reported that the model asked for NO tools when it
 // had asked for several, so the turn ended on a confident message with nothing
 // delivered.
@@ -181,6 +184,15 @@ func TestACallListNothingCouldBeReadFromIsNotAnEnvelope(t *testing.T) {
 			`{"message":"posting it now","tool_calls":["mattermost_post_message"]}`},
 		{"every entry is nameless",
 			`{"message":"posting it now","tool_calls":[{"arguments":{"channel":"c"}}]}`},
+		// A call key holding something that is neither a list nor an
+		// object. Skipped, it left the message to decide the verdict and
+		// the reply parsed as an envelope that asked for nothing.
+		{"the call key holds a string",
+			`{"message":"posting it now","tool_calls":"mattermost_post_message"}`},
+		{"the call key holds a number",
+			`{"message":"posting it now","tool_calls":1}`},
+		{"the call key holds one nameless object",
+			`{"message":"posting it now","tool_calls":{"arguments":{"channel":"c"}}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -209,8 +221,38 @@ func TestAnEmptyCallListIsStillAnEnvelope(t *testing.T) {
 	}
 }
 
+// ONE CALL WRITTEN WITHOUT ITS LIST IS THAT CALL. A model asked for a list of
+// one drops the brackets often enough, and the object names a runnable tool —
+// so dropping it would report a model that asked for nothing when it asked for
+// exactly one thing, the very shape the unreadable-list rule refuses.
+func TestASingleCallObjectIsReadAsAListOfOne(t *testing.T) {
+	t.Parallel()
+	env := ParseEnvelope(
+		`{"message":"posting it now","tool_calls":{"name":"slack_post","arguments":{"channel":"C1"}}}`)
+	if !env.Parsed {
+		t.Fatal("a single call object was refused")
+	}
+	if len(env.ToolCalls) != 1 || env.ToolCalls[0].Name != "slack_post" ||
+		env.ToolCalls[0].Arguments["channel"] != "C1" {
+		t.Errorf("calls = %+v, want the one slack_post call", env.ToolCalls)
+	}
+	if env.Message != "posting it now" {
+		t.Errorf("message = %q", env.Message)
+	}
+}
+
+// A NULL CALL LIST IS AN EMPTY ONE: the model saying "no calls", which is an
+// ordinary final answer exactly as `[]` is.
+func TestANullCallListIsAnEmptyOne(t *testing.T) {
+	t.Parallel()
+	env := ParseEnvelope(`{"message":"nothing to do here","tool_calls":null}`)
+	if !env.Parsed || env.Message != "nothing to do here" || len(env.ToolCalls) != 0 {
+		t.Errorf("env = %+v, want a parsed envelope with no calls", env)
+	}
+}
+
 // One unreadable entry beside a readable one keeps the readable one: the
-// forced-tool corrective is for a reply that requested nothing this build
+// tool loop's corrective is for a reply that requested nothing this build
 // could run, not for a reply with a stray element in its list.
 func TestAPartiallyReadableCallListKeepsWhatItCanRun(t *testing.T) {
 	t.Parallel()
@@ -263,5 +305,55 @@ func TestAnArgumentListWithATailIsRefused(t *testing.T) {
 	}
 	if got := env.ToolCalls[0].Arguments; len(got) != 0 {
 		t.Errorf("Arguments = %v, want none — the text had a tail", got)
+	}
+	if env.ToolCalls[0].ArgumentsError == "" {
+		t.Error("the refused arguments carry no reason, so the call would run with none")
+	}
+}
+
+// ARGUMENTS THAT DO NOT READ ARE A REASON, NOT AN EMPTY MAP.
+//
+// The call is kept — it is what the model asked for — but an empty map
+// standing in for arguments it wrote and nobody could read is a search over
+// everything or a post with no body. The reason travels instead, and the tool
+// loop answers the call with it rather than running it.
+func TestUnreadableArgumentsKeepTheCallAndSayWhy(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, reply, want string }{
+		{"truncated JSON string", `{"tool_calls":[{"name":"search","arguments":"{\"query\": \"x"}]}`, "JSON object"},
+		{"a number", `{"tool_calls":[{"name":"search","arguments":42}]}`, "number"},
+		{"a list", `{"tool_calls":[{"name":"search","arguments":["x"]}]}`, "list"},
+		{"a boolean", `{"tool_calls":[{"name":"search","args":true}]}`, "boolean"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := ParseEnvelope(tc.reply)
+			if len(env.ToolCalls) != 1 {
+				t.Fatalf("got %d calls, want the one the model asked for", len(env.ToolCalls))
+			}
+			call := env.ToolCalls[0]
+			if !strings.Contains(call.ArgumentsError, tc.want) {
+				t.Errorf("ArgumentsError = %q, want it to name a %s", call.ArgumentsError, tc.want)
+			}
+			if len(call.Arguments) != 0 {
+				t.Errorf("Arguments = %v, want none", call.Arguments)
+			}
+		})
+	}
+	// And a synonym that DOES read wins over one that does not, so a reply
+	// carrying both is the call it reads as, with no error.
+	env := ParseEnvelope(`{"tool_calls":[{"name":"search","arguments":42,"input":{"query":"x"}}]}`)
+	if len(env.ToolCalls) != 1 || env.ToolCalls[0].ArgumentsError != "" ||
+		env.ToolCalls[0].Arguments["query"] != "x" {
+		t.Errorf("calls = %+v, want the readable synonym's arguments and no error", env.ToolCalls)
+	}
+	// Absent, null and empty arguments are NO arguments, not unreadable ones.
+	for _, reply := range []string{
+		`{"tool_calls":[{"name":"a"}]}`,
+		`{"tool_calls":[{"name":"a","arguments":null}]}`,
+		`{"tool_calls":[{"name":"a","arguments":""}]}`,
+	} {
+		if got := ParseEnvelope(reply).ToolCalls[0].ArgumentsError; got != "" {
+			t.Errorf("%s: ArgumentsError = %q, want none", reply, got)
+		}
 	}
 }

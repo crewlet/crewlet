@@ -91,8 +91,8 @@ export type ActResult =
       /** The engine's own remedy, where it sent one. */
       hint: string;
       /**
-       * Whether sending it again may succeed: the node was busy, shutting
-       * down or mid-upgrade. A retry sends the same request id.
+       * Whether sending it again may succeed: the node was busy or shutting
+       * down. A retry sends the same request id.
        */
       retryable: boolean;
     };
@@ -116,10 +116,10 @@ export interface ActOptions {
  * beside its class, and is read before this), or a tool failed without a
  * class. Any other 5xx is somebody else's.
  */
-const ENGINE_5XX = new Set<string>(["draining", "unavailable", "peer_upgrading", "internal_error"]);
+const ENGINE_5XX = new Set<string>(["draining", "unavailable", "internal_error"]);
 
 /** The refusal classes a later attempt may clear: the node, not the request. */
-const RETRYABLE = new Set<string>(["draining", "unavailable", "peer_upgrading"]);
+const RETRYABLE = new Set<string>(["draining", "unavailable"]);
 
 /** Whether a code off the wire is one this build knows. */
 function isActErrorCode(code: string): code is ActErrorCode {

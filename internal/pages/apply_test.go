@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -704,5 +705,29 @@ func TestAPagesChildSetsCrossAChunkBoundaryUnchanged(t *testing.T) {
 			"%d at the probed one — the count is the apply transaction's "+
 			"budget input, so a limit that moves it moves where every node "+
 			"commits", chunked.rows, tight, probed.rows)
+	}
+}
+
+// A KIND NOBODY DECLARED FAULTS THE APPLY, rather than applying as nothing: the
+// dispatch has no case for it, and the applier's unconditional return after the
+// switch is what makes a writer's undeclared kind visible. It is not a gate,
+// and nothing is written.
+func TestAKindNobodyDeclaredFaults(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, nil)
+	rec := create("p-1", "ENG", "Runbook", "body")
+	rec.Subject.Kind = "nonesuch"
+	rec.OpID = "nonesuch-1"
+
+	_, gate, err := h.apply(rec)
+	if gate != "" {
+		t.Fatalf("a kind nobody declared was GATED as %q, which drops it knowingly; "+
+			"a writer's undeclared kind must fault", gate)
+	}
+	if err == nil || !strings.Contains(err.Error(), "nonesuch") {
+		t.Fatalf("applying a kind nobody declared = %v, want a fault naming the kind", err)
+	}
+	if got := h.count("pages_heads"); got != 0 {
+		t.Errorf("the estate holds %d page(s) after a record that faulted", got)
 	}
 }

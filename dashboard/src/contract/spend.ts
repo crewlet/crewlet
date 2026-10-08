@@ -55,7 +55,6 @@ export const BANDS = [
 export const PHASE_BANDS = {
   execute: "execute",
   sandbox: "execute",
-  plan: "execute",
   review: "review",
   subagent: "workers",
   auxiliary: "auxiliary",

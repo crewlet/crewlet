@@ -119,8 +119,9 @@ type Record struct {
 	// rounds, an auxiliary record's coalesced calls. ONE UNIT under one
 	// label everywhere a bucket says "N calls" — it counted RECORDS once,
 	// so a forty-round executor was one call beside a coalesced record of
-	// seventy rewrites. Zero is read as one: a record is at least the call
-	// that produced it, and an older peer's carries no count.
+	// seventy rewrites. Every producer states at least one — a phase's count
+	// is [PhaseCalls], and an auxiliary record coalesces at least the call
+	// that produced it — so a bucket sums what each record states.
 	Calls int `json:"calls,omitempty"`
 
 	InputTokens  int `json:"input_tokens"`
@@ -158,19 +159,16 @@ const StageTurn = "turn"
 // seat's learning rather than what the work cost.
 func (r Record) InTurn() bool { return r.Stage == "" || r.Stage == StageTurn }
 
-// calls is the record's provider calls, at least the one that produced it.
-func (r Record) calls() int { return max(r.Calls, 1) }
-
 // PhaseCalls is a phase record's provider calls, from the two counts the record
 // carries: its `rounds` list's length — one entry per provider call — where it
-// recorded one, its `rounds_used` where it predates the list, and one where
-// neither says (a judge's single call, a coding run collected whole, whose own
-// calls happened inside a CLI the engine does not see).
+// recorded one, its `rounds_used` where it lists no rounds (an agent-mode
+// executor, whose rounds are the CLI's), and one where neither says (a judge's
+// single call, a coding run collected whole, whose own calls happened inside a
+// CLI the engine does not see).
 //
 // ONE RULE FOR BOTH PRODUCERS — the event store's writer and the live
 // projection — so a phase counts the same calls on either side of the live
-// edge; node/0040's backfill states it a third time in SQL, held to this one
-// by that migration's test.
+// edge.
 func PhaseCalls(rounds, roundsUsed int) int {
 	switch {
 	case rounds > 0:
@@ -222,7 +220,7 @@ func (b *Bucket) add(r Record) {
 	b.TotalTokens += r.TotalTokens
 	b.CacheReadTokens += r.CacheReadTokens
 	b.CacheWriteTokens += r.CacheWriteTokens
-	b.Calls += r.calls()
+	b.Calls += r.Calls
 	// A NEGATIVE price is not a rebate, it is a bad payload, and summing it
 	// would silently reduce a company's reported spend. Only a positive one
 	// counts, and only a positive one is priced.
@@ -273,8 +271,8 @@ type ModelRow struct {
 // we pay for" and "which model answered" are two questions, and only this row
 // answers the first.
 type ProviderRow struct {
-	// ProviderKey is the configured entry, "unknown" on a call that named
-	// none (a record from before node/0032 promoted the column).
+	// ProviderKey is the configured entry, "unknown" on a call whose event
+	// named no provider entry.
 	ProviderKey string `json:"provider_key"`
 
 	// Models are every model this entry answered with in the window,

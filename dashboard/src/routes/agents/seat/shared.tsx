@@ -19,8 +19,9 @@ import type { CompanyDocument } from "~/protocol/index.ts";
  * banner with its Set token button. The three states after it are this
  * screen's own: no configuration is active, the document has no seat by this
  * name (the projection and the document can disagree for a moment either side
- * of an apply), and a name held by two seats in a revision stored before names
- * had to be unique.
+ * of an apply), and a name held by two seats — unique names are an admission
+ * rule an apply does not refuse, so a revision a newer node activated can hold
+ * two.
  *
  * NONE OF THEM IS AN EMPTY VALUE. "Not set" over a field nobody was allowed to
  * read is a statement about the company, and it is the wrong one.
@@ -70,7 +71,7 @@ export function SettingsState({
         size="compact"
         icon={<KeyGlyph size={32} />}
         title={`More than one seat is named ${seat.name}`}
-        description="This revision was stored before seat names had to be unique, so its settings cannot be attributed to one of them. Rename one of the seats to fix it."
+        description="The active revision holds two seats with this name, so its settings cannot be attributed to one of them. Rename one of the seats to fix it."
       />
     );
   }

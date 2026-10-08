@@ -738,8 +738,8 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 		Fence:       cfg.Fence,
 		Progress:    progress,
 		Messages: []llm.Message{
-			{Role: llm.RoleSystem, Content: res.SystemPrompt},
-			{Role: llm.RoleUser, Content: res.UserPrompt},
+			{Role: llm.RoleSystem, Content: res.SystemPrompt.Text},
+			{Role: llm.RoleUser, Content: res.UserPrompt.Text},
 		},
 		// THE SUBMISSION ENDS THE LOOP. Without this a worker that has
 		// answered keeps its remaining rounds and spends them narrating

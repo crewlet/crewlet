@@ -714,12 +714,14 @@ func resolveTaskID(ctx context.Context, tx *sql.Tx, idOrKey string) (string, err
 // puts a newer node's fields on the wire, and a reader that rebuilt a task
 // from its columns would hand a caller a task with the new field stripped.
 //
-// # `status_entered_at` and `rank` ARE THE TWO EXCEPTIONS, joined here
+// # `status_entered_at` and the spend ARE THE EXCEPTIONS, joined here
 //
-// `rank` because a task's place after its create is written by its project's
-// ORDER, which moves the column and never the task's document (see
-// [Applier.applyRankOrder]); the document's copy is only the key it was filed
-// at. The rest of this section is about the other one.
+// The spend because a turn adds to the task's columns and never its document
+// (see below). `rank` is read from its column too, though the two agree — the
+// project's ORDER writes a task's place into both ([Applier.applyRankOrder]) —
+// because the column is what every board orders by, so a detail read and a
+// board can never name two places for one card. The rest of this section is
+// about `status_entered_at`.
 //
 // Every other column is extracted from what the WRITER wrote, so the document
 // is the authority and the column is the copy. This one is DERIVED by the
@@ -764,16 +766,12 @@ func readTaskDocument(ctx context.Context, tx *sql.Tx, id string) (Task, error) 
 	if entered != 0 {
 		task.StatusEnteredAt = store.DecodeTime(entered)
 	}
-	// AND THE RANK, for the same reason: an order older than [rewriteVersion]
-	// moved the column and never the document, so the document's copy can be
-	// the key the task was filed or last re-homed at — which a detail read
-	// answered as the card's place long after a drag had moved it.
+	// AND THE RANK, from the column every board orders by — see the doc.
 	task.Rank = Rank(rank)
-	// AND THE SPEND, for the rank's reason exactly: a turn adds to the
-	// task's COLUMNS in the transaction that inserts its turn row
-	// ([Applier.applyTurn]) and never touches the document, so the
-	// document's copy is whatever the create wrote — zero. Read from the
-	// document, every task page said no agent had ever worked on it, beside
+	// AND THE SPEND, because a turn adds to the task's COLUMNS in the
+	// transaction that inserts its turn row ([Applier.applyTurn]) and
+	// never touches the document, so the document's copy is whatever the
+	// create wrote — zero. Read from the document, every task page said no agent had ever worked on it, beside
 	// a turn list and a board card counting the turns the columns hold.
 	task.Spend = spend
 	return task, nil

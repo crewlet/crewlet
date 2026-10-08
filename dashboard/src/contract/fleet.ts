@@ -15,10 +15,10 @@
  * How a node's broker takes part in the fleet's — `placement.BrokerKind`, as
  * `String()` renders it.
  *
- * `unknown` IS A VALUE, not an absence: a node running a build older than the
- * field says nothing, and the engine renders that as `unknown` so the cell is
- * never empty — an empty cell reads as nothing to look at, and this one is
- * counted as a member wherever that is the safe reading.
+ * `unknown` IS A VALUE, not an absence: a presence advertising a kind this build
+ * does not know (a newer build's) is rendered `unknown` so the cell is never
+ * empty — an empty cell reads as nothing to look at, and this one is counted
+ * as a member wherever that is the safe reading.
  */
 export const BROKER_KINDS = ["member", "leaf", "client", "unknown"] as const;
 

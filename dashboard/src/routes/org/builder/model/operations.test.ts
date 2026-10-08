@@ -162,9 +162,10 @@ describe("removing", () => {
   });
 
   test("a root seat whose unit reference another unit of that name still resolves is not placed in the removed one", () => {
-    // Before unit names had to be unique: the engine resolves `unit:` to the
-    // FIRST unit of that name, so removing a later twin neither takes the
-    // seat with it nor clears its reference.
+    // A draft holding two units of one name (a rename not yet resolved, or a
+    // raw edit): the engine resolves `unit:` to the FIRST unit of that name,
+    // so removing a later twin neither takes the seat with it nor clears its
+    // reference.
     const base: CompanyDocument = {
       name: "X",
       roles: [{ name: "Floater", unit: "Platform" }],
@@ -300,8 +301,9 @@ describe("renaming", () => {
   });
 
   test("a seat renamed away from a name another seat still holds leaves the references to that name alone", () => {
-    // A stored revision from before seat names had to be unique: "Dup" in a
-    // lead or a manages entry still names the seat that keeps the name.
+    // A draft holding two seats named Dup (a rename not yet resolved, or a raw
+    // edit): "Dup" in a lead or a manages entry still names the seat that keeps
+    // the name.
     const base: CompanyDocument = {
       name: "X",
       roles: [

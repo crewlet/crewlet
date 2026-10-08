@@ -14,6 +14,7 @@ import { afterEach, beforeEach, expect, test } from "vitest";
 import { useSeatSetup } from "./seats.ts";
 import { ClientContext } from "./store-hooks.ts";
 import { LiveSocket, Store, storeToken } from "~/protocol/index.ts";
+import { withDerived } from "~/test/org.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -36,7 +37,7 @@ afterEach(() => {
 
 function probe() {
   const store = new Store();
-  store.applyOrg({ name: "Acme", roles: [{ name: "PM", handle: "pm" }], units: [] });
+  store.applyOrg(withDerived({ name: "Acme", roles: [{ name: "PM", handle: "pm" }], units: [] }));
   const socket = new LiveSocket(store);
   const asked: string[] = [];
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {

@@ -165,14 +165,10 @@ flowchart LR
   fixed, published on the duty's next tick; until the last batch has applied,
   a search reads the rows not yet re-filed in full beside the lists it
   probes.
-- **It waits for the whole fleet.** A node on a build older than the index
-  cannot read its records — its vector applier would stop at the first one —
-  so nothing about the index is published while any node applying the vector
-  log advertises an older build, including one that is offline but has not
-  been evicted — checked when a tick decides what to do, and again beside every
-  record it publishes, so a node that starts counting while a training runs
-  still holds it. A rolling upgrade searches with the full scan until its last
-  node is upgraded, and a held step is logged as `search_index_held`.
+- **It is decided only from a node that has applied the whole log.** A node
+  still catching up would see the index the log has already replaced, or
+  none, and train over a healthy one, so the duty takes no step there and logs
+  `search_index_behind`.
 - **It costs a second copy of the narrow table** — a covering index, ≈ 450
   bytes a source, about 3 % of what the vectors themselves hold — which is
   what makes a list one sequential read.
@@ -647,19 +643,10 @@ Two properties differ from the vendor path and both are visible:
   activated earlier never overwrites one activated later — so a node
   restarting on a revision the fleet has since replaced leaves the newer names
   alone, exactly as the chart's projects do (see
-  [the work tracker](../guides/work-tracker.md#projects-and-keys)). A
-  container's settings are the one record this domain writes at record
-  version 2, a later activation that only **re-stamps** unchanged settings
-  included — and every activation re-stamps every container the chart names,
-  since each carries the instant its configuration was activated. So during a
-  rolling upgrade from a build that predates the stamp, a node still on that
-  build holds back every chart-named container, whether or not its settings
-  changed, rather than applying it without its stamp, and with it the page
-  writes in that container, until it is upgraded — and then applies it stamp
-  and all. A re-stamp is not exempt: applied without its stamp it would leave
-  that node's row the one unstamped copy in the fleet after its upgrade, open
-  to the next stale activation it applied, which would walk the container's
-  settings back on every node. Every other record is written at version 1.
+  [the work tracker](../guides/work-tracker.md#projects-and-keys)). A later
+  activation over unchanged settings is still written — a **re-stamp** —
+  because a row left at the older stamp is open to any activation between the
+  two.
 
   A page merely **names** its container, so a page can exist in a container
   with no document — it is reachable by address and by search, and it is
@@ -687,9 +674,9 @@ Two properties differ from the vendor path and both are visible:
   `save_page` tell a seat so on their `body` parameter, with an example a test
   holds against `pages.Links`: `[its title](#/knowledge/pages/<page id>)`. A
   `[[CONTAINER/Title]]` wiki link is not a grammar the engine reads; it is
-  drawn as the brackets it is and counts for nothing in "Linked from". An index built
-  before a node knew how to extract links is re-derived once, on its own
-  (`search.IndexDerivation`), with no rebuild command to remember.
+  drawn as the brackets it is and counts for nothing in "Linked from". A build
+  that changes what the index derives re-derives every older row once, on its
+  own (`search.IndexDerivation`), with no rebuild command to remember.
 - **THE DASHBOARD EDITS AS THE PERSON.** A save, a new page and a comment go
   through `/operator/act` bound to the signed-in seat, so the page's history
   names who wrote it — never "the dashboard". A save states the revision it
@@ -828,7 +815,9 @@ sequenceDiagram
 - **Charged to the company.** It runs on the asker's own seat's auxiliary model
   and is judged against the company's day, week and month — a person has no seat
   budget. A company window with no room refuses it before the call; after the
-  call, exactly what the reply spent is recorded on the company's counter.
+  call, exactly what the reply spent is recorded on the company's counter — a
+  reply the model **refused** included, since its prompt was billed even though
+  the answer is refused rather than shown.
 - **Cached at a corpus position.** Each node keeps 256 answers, keyed on the
   question (case and spacing folded) and where its tracker, pages and vector
   logs are applied through. Any write that could change an answer moves the

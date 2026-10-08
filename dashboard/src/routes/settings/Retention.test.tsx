@@ -243,8 +243,8 @@ test("an answer served at stale renders no banner at all", () => {
   expect(container.textContent).toBe("");
 
   cleanup();
-  // AND AN ABSENT LEVEL IS NOT AN ALARM. An older node that does not send the
-  // field must not paint this screen red.
+  // AND AN ABSENT LEVEL — the answer has not arrived — IS NOT AN ALARM: it
+  // must not paint this screen red.
   const missing = render(<ServedLevelBanner />);
   expect(missing.container.textContent).toBe("");
 });

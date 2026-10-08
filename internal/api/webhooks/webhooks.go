@@ -37,10 +37,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
 
-	"github.com/google/uuid"
-
 	"github.com/crewlet/crewlet/internal/api/httpjson"
-	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -48,7 +45,6 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/secrets"
-	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
@@ -84,17 +80,9 @@ type verified struct {
 	source string
 }
 
-// Emitter surfaces an accepted delivery on the live stream.
-//
-// Declared here rather than imported, so this package depends on the stream's
-// shape and not on the stream. Satisfied by *stream.Service.
-type Emitter interface {
-	Ingest(livestate.Envelope)
-}
-
 // Options wire the receiver.
 //
-// Secrets, Publisher, Events, Claims, Stream, Configured and AppFlow are
+// Secrets, Publisher, Claims, Configured and AppFlow are
 // REQUIRED, and [New] refuses a missing one by name. The API mounts this beside
 // an engine that supplies every one, so a nil is a wiring mistake, and a
 // receiver that quietly did less around it (refusing every delivery, recording
@@ -105,13 +93,12 @@ type Options struct {
 	// request; see [Secrets]. A route whose secret is unset answers 503.
 	Secrets func() Secrets
 
-	// Publisher republishes an accepted delivery for the transports. This
-	// is the wake; everything else here is observability.
+	// Publisher republishes an accepted delivery for the transports — the
+	// wake — and publishes its record, [types.InboundDelivery], which the
+	// node's publish listener files as the delivery's row and every node's
+	// live projection hears. A record that fails to publish is logged and
+	// does not fail the delivery.
 	Publisher queue.Publisher
-
-	// Events records the delivery for the dashboard's feed. A write that
-	// fails is logged and does not fail the delivery.
-	Events *store.EventLog
 
 	// AppFlow finishes a GitHub App creation begun on the setup surface.
 	// The redirect URL is baked into every app this engine creates, so the
@@ -136,9 +123,6 @@ type Options struct {
 	// cannot answer fails open; see [Receiver.claim].
 	Claims coord.Claims
 
-	// Stream surfaces the delivery live.
-	Stream Emitter
-
 	// Configured reports whether a company revision is active here. An
 	// unconfigured node cannot have the secrets a delivery is verified
 	// with, so it answers 503 and the provider retries.
@@ -156,9 +140,7 @@ type Options struct {
 type Receiver struct {
 	secrets    func() Secrets
 	publisher  queue.Publisher
-	events     *store.EventLog
 	claims     coord.Claims
-	stream     Emitter
 	configured func() bool
 	now        func() time.Time
 	forge      *forgeVerifier
@@ -183,9 +165,7 @@ func New(opts Options) (*Receiver, error) {
 	}{
 		{"Secrets", opts.Secrets == nil},
 		{"Publisher", opts.Publisher == nil},
-		{"Events", opts.Events == nil},
 		{"Claims", opts.Claims == nil},
-		{"Stream", opts.Stream == nil},
 		{"Configured", opts.Configured == nil},
 		{"AppFlow", opts.AppFlow == nil},
 	} {
@@ -203,9 +183,7 @@ func New(opts Options) (*Receiver, error) {
 		publisher:  opts.Publisher,
 		appFlow:    opts.AppFlow,
 		recheck:    opts.Recheck,
-		events:     opts.Events,
 		claims:     opts.Claims,
-		stream:     opts.Stream,
 		configured: opts.Configured,
 		now:        opts.Now,
 	}
@@ -448,7 +426,7 @@ func (r *Receiver) accept(w http.ResponseWriter, req *http.Request, v verified, 
 
 	log.Info("webhook_received", "source", d.source, "route", v.source,
 		"event", d.label, "handle", d.handle)
-	r.record(ctx, d, trace)
+	r.record(ctx, v, d)
 	writeJSON(w, http.StatusOK, answer)
 }
 
@@ -492,72 +470,85 @@ func (r *Receiver) release(ctx context.Context, d delivery) {
 // another collide far more easily than either third-party app's own ids do.
 func claimKey(d delivery) string { return d.source + "|" + d.key }
 
-// record writes the audit row and pushes the live one. Both are best effort:
-// they run after the wake is safely queued, and neither can fail the delivery.
-func (r *Receiver) record(ctx context.Context, d delivery, trace events.TraceContext) {
-	// WithoutCancel: the wake is already queued, so the row is owed
+// record publishes the delivery's record, best effort: it runs after the wake
+// is safely queued, and cannot fail the delivery.
+//
+// PUBLISHED, NOT APPENDED, though this node holds the store it would land in
+// (the API runs only on a node with `data`): the Mattermost socket fleet runs
+// on every node, stateless ones included, so a delivery reaches a data node's
+// store only by being published, and ONE record that both edges publish is one
+// rule for what a delivery row is — filed under its label, with the provider's
+// bytes, by internal/observe. Publishing is also what puts the delivery on
+// EVERY node's live projection rather than only on the one that took it, which
+// a direct ingest into this node's stream could not.
+func (r *Receiver) record(ctx context.Context, v verified, d delivery) {
+	// WithoutCancel: the wake is already queued, so the record is owed
 	// whatever the client does next. A caller that hangs up the instant it
-	// is answered would otherwise cancel the write and leave the delivery
+	// is answered would otherwise cancel the publish and leave the delivery
 	// invisible in the feed — work happening with no record of why.
 	ctx = context.WithoutCancel(ctx)
-	at := r.now()
-	id := uuid.NewString()
-	// The RAW bytes as the stored payload, not a re-serialization of the
-	// parsed body: this row is what the dashboard shows when somebody opens
-	// the delivery, and it should show what the provider actually sent.
-	if err := r.events.Append(ctx, store.EventRecord{
-		ID: id, Type: d.label, Source: d.source, Time: at,
-		Category: events.WebhookCategory, Summary: d.summary, Actor: d.source,
-		TraceID: trace.TraceID, SpanID: trace.SpanID,
-		Tags:    deliveryTags(d),
-		Payload: json.RawMessage(d.raw),
-	}); err != nil {
-		log.WarnContext(ctx, "event_store_write_failed", "source", d.source, "error", err)
+	ev := events.New(deliveryRecord(v.source, d), tracing.TraceOf(ctx))
+	ev.Source = d.source
+	if err := r.publisher.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
+		log.WarnContext(ctx, "webhook_delivery_unrecorded", "source", d.source,
+			"route", v.source, "event", d.label, "error", err,
+			"detail", "the delivery was queued and will wake its seat; only its "+
+				"row on the integrations screen and in the event log is missing")
 	}
-	// The engine never publishes these on crewlet.events.*, so the stream
-	// service would otherwise never see them and the activity feed would
-	// show a company that answered messages nobody sent.
-	r.stream.Ingest(livestate.Envelope{
-		ID: id, Type: d.label, Timestamp: at.Format(time.RFC3339Nano),
-		Source: d.source, Actor: d.source, Summary: d.summary,
-		Category: events.WebhookCategory, TraceID: trace.TraceID, SpanID: trace.SpanID,
-		Topic:   livestate.WebhookTopic(d.source),
-		Payload: d.body,
-	})
 }
 
-// deliveryTags are the filterable dimensions of one delivery.
+// deliveryRecord is one delivery's record.
 //
-// WHO IT WAS FOR, on the ROW rather than only inside the payload. The row is
-// what a listing returns — the payload deliberately is not — so without this a
-// deliveries screen could say a delivery arrived and not which seat it was
-// addressed to, and answering that for a page of rows meant fetching a payload
-// per row.
+// WHO IT WAS FOR is a field, and so a tag on the row, rather than only inside
+// the payload. The row is what a listing returns — the payload deliberately is
+// not — so without it a deliveries screen could say a delivery arrived and not
+// which seat it was addressed to. `recipient` rather than a name of this
+// package's own: it is one of the keys the event store indexes as a PARTY, so
+// it is also what makes `events?agent=<handle>` return what reached that seat
+// from outside.
 //
-// `recipient` rather than a name of this package's own: it is one of the four
-// keys the event store indexes as a PARTY, so tagging it here is also what
-// makes `events?agent=<handle>` return what reached that seat from outside —
-// the one question the party index exists for, and the one class of event it
-// was blind to.
+// THE ROUTE is the one that AUTHENTICATED, which the source is not on the
+// Forge relay: a relayed Jira event belongs to `jira` and arrived at `forge`,
+// and the relay's own row on the integrations screen counts by it.
 //
-// A nil map for a delivery that is neither addressed nor keyed, because an
-// empty tag is not the same as an absent one: a row carrying `recipient: ""`
-// reads as a delivery addressed to a seat whose handle went missing.
-func deliveryTags(d delivery) map[string]string {
-	tags := map[string]string{}
-	if d.handle != "" {
-		tags["recipient"] = d.handle
+// THE BODY is the provider's exact bytes — what opening the row shows — and
+// every route here has already parsed them as a JSON object; the parsed body
+// re-encoded is the fallback only for bytes that are not JSON at all, which no
+// route admits today and a raw message could not carry.
+func deliveryRecord(route string, d delivery) types.InboundDelivery {
+	body := json.RawMessage(d.raw)
+	if !json.Valid(body) {
+		body, _ = json.Marshal(d.body)
 	}
-	// The PROVIDER'S own delivery id, which is what an operator has in
-	// front of them in the provider's console when they come here asking
-	// what this engine did with it. Empty for the providers that send none.
-	if d.key != "" {
-		tags["delivery_key"] = d.key
+	return types.InboundDelivery{
+		Label: d.label, Route: route, Text: d.summary,
+		Recipient: d.handle,
+		// The PROVIDER'S own delivery id, which is what an operator has
+		// in front of them in the provider's console when they come here
+		// asking what this engine did with it. Empty for the providers
+		// that send none — a body hash is this edge's dedupe key, not
+		// the provider's identity for anything.
+		DeliveryKey: providerKey(d),
+		Body:        body,
 	}
-	if len(tags) == 0 {
-		return nil
+}
+
+// bodyKeyPrefix marks a dedupe key this edge derived from a body's bytes.
+const bodyKeyPrefix = "body:"
+
+// providerKey is the provider's own id for a delivery, or "" when it sent none.
+//
+// NOT the dedupe key whenever that is a hash of the body ([bodyKey]): the
+// Forge relay, Datadog and an Atlassian build without the identifier header
+// send no id, and this edge claims a hash of the bytes instead. Tagged as the
+// provider's id, that hash drew under "Provider id" on the deliveries panel as
+// though the provider had minted it, beside a dash that exists precisely to
+// say "this provider sent no delivery id".
+func providerKey(d delivery) string {
+	if strings.HasPrefix(d.key, bodyKeyPrefix) {
+		return ""
 	}
-	return tags
+	return d.key
 }
 
 // --- request plumbing ------------------------------------------------------
@@ -569,13 +560,11 @@ func deliveryTags(d delivery) map[string]string {
 // the audit log — readable by everyone who can read an event, and impossible
 // to un-write.
 //
-// `x-gitlab-token` is that, and it is here because of what put it there. The
-// provisioner registered the minted signing key in GitLab's plaintext
-// `token` attribute rather than `signing_token`, so GitLab echoed a 32-byte
-// HMAC key back on every single delivery — and it was copied verbatim into
-// the stored headers. The provisioning bug is fixed and this engine no longer
-// sets that field, but the header must be redacted regardless: a hook created
-// by an older version still carries the old value and still sends it.
+// `x-gitlab-token` is that. GitLab sends a hook's plaintext secret token
+// verbatim in this header whenever one is set — by hand, by another tool, or
+// by a provisioner that used `token` rather than `signing_token` — so it is a
+// secret at rest the moment it is stored. This engine's provisioner sets
+// `signing_token` only, and the route never authenticates on this header.
 //
 // SIGNATURE headers are deliberately NOT redacted, and the reason is not the
 // one that used to be written here. It said "a transport re-verifies against
@@ -724,6 +713,8 @@ func noSecret(w http.ResponseWriter, source string) {
 // third-party app, which is what keeps three routes from each growing their own
 // half-right field list.
 func bodyKey(raw []byte) string {
+	// Prefixed so a hash is never mistaken for the provider's own id —
+	// see [providerKey].
 	if len(raw) == 0 {
 		// NOT a key. An empty body is the same for every delivery, and
 		// keying on it would claim the first one and refuse every other
@@ -731,5 +722,5 @@ func bodyKey(raw []byte) string {
 		return ""
 	}
 	sum := sha256.Sum256(raw)
-	return "body:" + hex.EncodeToString(sum[:])
+	return bodyKeyPrefix + hex.EncodeToString(sum[:])
 }

@@ -3,6 +3,7 @@ package search
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -126,10 +127,8 @@ type Slice struct {
 	// hole was that the sentence was only ever true for a participant that
 	// did not reply.
 	//
-	// The zero value is "ready", which is what a peer on a build that
-	// predates this field sends, and it is the old behaviour: evolution
-	// here is additive and an unknown field is ignored, so a rolling
-	// upgrade degrades a ranking rather than a search.
+	// The zero value is "ready": a participant whose index has completed a
+	// lap over the named sources reports false.
 	Building bool
 }
 
@@ -156,11 +155,11 @@ type FanQuery struct {
 	// anything is scattered, so a participant never reads it.
 	Mode knowledge.Mode
 
-	// Methods are the rankers a participant runs. EMPTY IS BOTH, which is
-	// what a coordinator on a build that predates modes sends and what
-	// the zero value has always meant — so the field is additive on the
-	// wire in both directions: an older participant that ignores it runs
-	// both, and the coordinator fuses only the ones it asked for.
+	// Methods are the rankers a participant runs, and a query names at
+	// least one: [FanOut.Search] fills them from the mode it resolved, and
+	// a participant refuses a query naming none ([ErrNoMethods]) rather
+	// than guess which half was meant — the coordinator counts that as a
+	// missing assignment, never as a range scanned and empty.
 	Methods []Method
 
 	// Limit caps the fused answer. Zero takes [ReturnDepth].
@@ -168,9 +167,12 @@ type FanQuery struct {
 }
 
 // runs reports whether this query asks a participant to run method m.
-func (q FanQuery) runs(m Method) bool {
-	return len(q.Methods) == 0 || slices.Contains(q.Methods, m)
-}
+func (q FanQuery) runs(m Method) bool { return slices.Contains(q.Methods, m) }
+
+// ErrNoMethods is a scan of a query naming no ranker — a malformed request,
+// since a query that runs nothing answers a range with nothing in it and a
+// coordinator could not tell that from a range that matched nothing.
+var ErrNoMethods = errors.New("search: the query names no ranker to run")
 
 // Scanner answers one bucket range out of the corpus this process holds.
 //
@@ -636,9 +638,9 @@ func Divide(nodes []string) []Assigned {
 // merged against themselves and ranked above where they belong.
 //
 // ONLY THE RANKERS THE QUERY ASKED FOR ARE FUSED, whatever a participant sent
-// back: a peer on a build that predates [FanQuery.Methods] runs both, and
-// fusing the half nobody asked for would turn a keyword search into a hybrid
-// one on whichever buckets that peer happened to hold.
+// back: what goes into the answer is the coordinator's decision, on the same
+// untrusting terms as the coverage above, so a slice carrying a half nobody
+// asked for cannot turn a keyword search into a hybrid one.
 //
 // scatterErr is why the peers could not be asked at all, which becomes every
 // unanswered peer's own reason rather than a generic silence.

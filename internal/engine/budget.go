@@ -36,6 +36,38 @@ import (
 // ceiling set mid-window judges the spend the window already holds. And a seat
 // whose capped window refuses is not handed work it cannot run: it is PARKED
 // on its inbox until the window turns over (budgetpark.go).
+//
+// ONE CLOCK FOR EVERY WINDOW THE ENGINE CUTS ([Engine.now]). The ZONE is the
+// epoch's and the INSTANT is the engine's, and every site that turns the two
+// into windows reads the instant there: a round's charge and the headroom
+// reader (the meter), an auxiliary pass's record (built from that meter), the
+// park's question and the alarm it arms, the live meter's frame, a collected
+// coding run's charge and a person's answer. Each of them used to call
+// time.Now for itself, and the park carried a clock of its own beside them, so
+// no two could be held to one window: a case that charged through one and read
+// the windows back through another failed whenever a midnight fell between the
+// two reads, and a case that pinned the park's clock still had a meter reading
+// the wall's.
+
+// now is the instant the engine cuts its budget windows at: [Engine.clock], or
+// the wall clock where none is set.
+//
+// NOT AN [Options] FIELD, because the wall clock is the only calendar a running
+// engine can honestly be on. It shares its process with the API, whose budgets
+// answer and live projection judge the same windows on the wall clock, and with
+// the coordination store, which stamps a refusal with it — so an engine handed
+// another instant would cut the gate's day on one calendar while its own
+// process drew that day on a second, a node no deployment produces. The seam is
+// this package's cases', which pin it to put a charge and the read that checks
+// it in one window. A case that runs a whole node keeps the wall clock and moves
+// where the company's day falls instead, with the company's `timezone`, which
+// every reader of a window reads alike.
+func (e *Engine) now() time.Time {
+	if e.clock != nil {
+		return e.clock()
+	}
+	return time.Now()
+}
 
 // budgetCounter is the slice of the fleet's counters a meter calls.
 //
@@ -748,7 +780,10 @@ func (m *meter) auxiliary() auxspend.Budget {
 // is true when somebody sets a ceiling on it.
 //
 // The basis — the company's ceilings, the seat's own and the clock the windows
-// are cut on — is the epoch's c, which is the one the turn was PINNED to.
+// are cut on — is the epoch's c, which is the one the turn was PINNED to. The
+// instant each charge is cut at is the engine's ([Engine.now]), which every
+// reader built from the meter — [Engine.spendFor], [Engine.remainingFor], the
+// park — inherits with it.
 //
 // The concrete *meter, so a caller that needs its headroom or its windows has
 // them without an assertion; [meter.budget] and [meter.auxiliary] are how it
@@ -767,7 +802,7 @@ func (e *Engine) meterFor(c *Company, handle string) *meter {
 	}
 	return &meter{
 		budgets: e.backends.Fleet, agentScope: coord.AgentScope(agentID.String()),
-		basis: basisOf(c, seat), now: time.Now,
+		basis: basisOf(c, seat), now: e.now,
 	}
 }
 

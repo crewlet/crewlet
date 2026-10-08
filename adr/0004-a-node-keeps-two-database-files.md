@@ -3,7 +3,7 @@
 - **Status:** accepted
 - **Authority:** `internal/store`
 - **Enforced-by:** `internal/store.TestNoStatementSpansTwoFiles`, `internal/store.TestNoTableIsDeclaredInBothEstates`
-- **Measured:** 18 tables in the node estate, 59 in the replicated one — one of the eighteen, `chat_thread_follows`, is permanently empty and is a handoff source rather than state (node migration 0028)
+- **Measured:** 20 tables in the node estate, 65 in the replicated one
 - **Cost-when-tried:** taken from a single file, a snapshot is a copy of everything followed by a delete — and with no in-place `VACUUM`, the deleted pages ride along in the artefact, the transfer, the checksum and the integrity check anyway.
 - **Tag-status:** unreleased
 

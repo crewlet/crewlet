@@ -514,6 +514,13 @@ func (h *Host) NoteDeliveryDeferred(handle string) {
 // the shipped number — which is the drift [HeartbeatRatio] exists to name.
 func (h *Host) TTL() time.Duration { return h.ttl }
 
+// HeartbeatInterval is how often this host renews its leases — the EFFECTIVE interval
+// [New] resolved — and therefore how long a [Host.MayStart] refusal for want of
+// a fresh renew can last on a seat it still holds: the next renew is what
+// re-proves it. A caller waiting for MayStart to admit a seat again waits this
+// long, rather than re-asking on a clock of its own.
+func (h *Host) HeartbeatInterval() time.Duration { return h.heartbeat }
+
 // Held is the seats whose leases this node holds, sorted.
 //
 // It EXCLUDES the undead by design — nothing new starts on a seat whose
@@ -919,6 +926,21 @@ func (h *Host) notifyAcquire(ctx context.Context, handle string, lease coord.Lea
 		return nil
 	}
 	return callHook("on_acquire", handle, func() error { return h.hooks.OnAcquire(ctx, handle, lease) })
+}
+
+// notifyEstablished reports a seat established. A panic in the hook is logged
+// and contained, like every hook's: the seat is already serving, and the
+// sweep that established it is what keeps every other seat on this node.
+func (h *Host) notifyEstablished(ctx context.Context, handle string, lease coord.Lease) {
+	if h.hooks == nil {
+		return
+	}
+	if err := callHook("on_established", handle, func() error {
+		h.hooks.OnEstablished(ctx, handle, lease)
+		return nil
+	}); err != nil {
+		log.ErrorContext(ctx, "seat_established_hook_failed", "seat", handle, "error", err)
+	}
 }
 
 // notifyRelease runs the teardown hook, letting the caller see what

@@ -15,6 +15,7 @@ import { SeatScreen } from "./Seat.tsx";
 import { contactLabel } from "./seat/Settings.tsx";
 import { Shell } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
+import { PAGE_ACTIONS_SLOT } from "~/app/frame/PageActions.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { InboxCountsProvider } from "~/lib/useInboxCounts.ts";
@@ -26,6 +27,8 @@ import type {
   OrgProjection,
   ScheduleRow,
 } from "~/protocol/index.ts";
+import { emptyDay } from "~/test/myWork.ts";
+import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -195,6 +198,7 @@ const DEFAULTS: Record<string, unknown> = {
   turns: { turns: [], next: null },
   agent: { llm_history: [], next: "" },
   work_inbox: { handle: "", notices: [], primary_reasons: [], unread: 0, primary: 0 },
+  work_my_work: emptyDay("swe"),
   tokens: {
     since: "2026-09-15T00:00:00Z",
     until: "2026-09-22T00:00:00Z",
@@ -320,6 +324,7 @@ const WORKING: Partial<AgentRow> = {
     stage: "phase",
   },
   live_call: {
+    versions: ZERO_VERSIONS,
     turn_id: "t-7",
     phase: "execute",
     iteration: 1,
@@ -338,6 +343,8 @@ const WORKING: Partial<AgentRow> = {
         name: "knowledge.search",
         round: 1,
         arguments: { q: "PXE retry backoff" },
+        result: "",
+        success: true,
         started_at: "2026-09-21T09:48:02Z",
         duration_ms: 300,
       },
@@ -345,9 +352,11 @@ const WORKING: Partial<AgentRow> = {
         name: "sandbox.run",
         round: 5,
         arguments: { cmd: "go test ./provisioner/..." },
+        result: "exit status 1",
+        success: false,
+        error: "exit status 1",
         started_at: "2026-09-21T09:49:30Z",
         duration_ms: 85_000,
-        failed: true,
       },
     ],
     running_call: {
@@ -740,9 +749,65 @@ test("the phone's More holds every action but Message, and each opens what its b
   ).not.toBeNull();
   expect(screen.getByRole("button", { name: "Message" }).closest(".page-action-folds")).toBeNull();
   const names = pageMore();
-  expect(names.slice(0, 4)).toEqual(["Assign task", "Pause", "Events", "Edit in org"]);
+  // WATCH LIVE FIRST while it works, as it leads the bar.
+  expect(names.slice(0, 5)).toEqual([
+    "Watch live",
+    "Assign task",
+    "Pause",
+    "Events",
+    "Edit in org",
+  ]);
   fireEvent.click(screen.getByRole("menuitem", { name: "Pause" }));
   expect(await screen.findByRole("dialog", { name: "Pause SWE" })).toBeTruthy();
+});
+
+// WHILE IT WORKS THE BAR WATCHES ITS TURN — the turn's Transcript, the phase it
+// is on open — folded on a phone into the same More, which goes to the same
+// place. A seat that is not working has nothing to watch and draws no such
+// control.
+test("a working seat's page bar watches its turn, and an idle one's offers nothing to watch", async () => {
+  mount("#/agents/seats/swe", { shell: true, agents: [WORKING] });
+  await settle();
+  const bar = document.getElementById(PAGE_ACTIONS_SLOT) as HTMLElement;
+  const watch = within(bar).getByRole("link", { name: "Watch live" });
+  expect(watch.getAttribute("href")).toBe("#/live/turns/t-7?tab=transcript");
+  expect(watch.closest(".page-action-folds")).not.toBeNull();
+  pageMore();
+  fireEvent.click(screen.getByRole("menuitem", { name: "Watch live" }));
+  expect(location.hash).toBe("#/live/turns/t-7?tab=transcript");
+
+  cleanup();
+  mount("#/agents/seats/swe", {
+    shell: true,
+    agents: [{ ...WORKING, activity: "idle", turn: null, live_call: null }],
+  });
+  await settle();
+  const idle = document.getElementById(PAGE_ACTIONS_SLOT) as HTMLElement;
+  expect(within(idle).queryByRole("link", { name: "Watch live" })).toBeNull();
+  expect(pageMore()).not.toContain("Watch live");
+});
+
+// THE TURNS TAB SAYS A TURN IS RUNNING BEHIND IT — the pulsing dot, and the
+// words, since a dot is never the only carrier — while the engine says the seat
+// is working, and only then.
+test("the Turns tab carries a running mark, in words too, only while the seat works", async () => {
+  mount("#/agents/seats/swe", { agents: [WORKING] });
+  await settle();
+  const turns = screen.getByRole("tab", { name: /^Turns/ });
+  expect(turns.textContent).toBe("Turns, running now");
+  expect(turns.querySelector(".crewlet-status-dot")).not.toBeNull();
+  // NO OTHER TAB IS MARKED.
+  const marked = screen.getAllByRole("tab").filter((t) => t.querySelector(".crewlet-status-dot"));
+  expect(marked).toEqual([turns]);
+
+  cleanup();
+  mount("#/agents/seats/swe", {
+    agents: [{ ...WORKING, activity: "needs", live_call: null }],
+  });
+  await settle();
+  const quiet = screen.getByRole("tab", { name: /^Turns/ });
+  expect(quiet.textContent).toBe("Turns");
+  expect(quiet.querySelector(".crewlet-status-dot")).toBeNull();
 });
 
 // A PAUSED SEAT'S ONE ACTION IS RESUME, so that is the one kept in view.
@@ -1003,8 +1068,9 @@ test("the current turn names its round against the granted cap, its calls and th
   expect(rows[2]?.textContent).toContain("running");
   // The recorded phases are none yet, so the turn's tokens are the running phase's.
   expect(card.textContent).toContain("2,500 tokens");
+  // A WATCH LINK: the turn's Transcript, where the phase it is on is open.
   expect(within(card).getByRole("link", { name: "Watch live" }).getAttribute("href")).toBe(
-    "#/live/turns/t-7",
+    "#/live/turns/t-7?tab=transcript",
   );
 });
 
@@ -1353,6 +1419,144 @@ test("the turns tab leads with the running turn and titles the transcripts", asy
   expect(heads).not.toContain("");
 });
 
+// A PHASE STREAMED AFTER THE TAB OPENED IS THIS SEAT'S BY ITS ID, never by its
+// role name: two unit seats stamped from one template share "SWE", and matched
+// on that, a sibling's finished turn landed among this seat's transcripts.
+test("the turns tab takes a streamed phase by the seat's id, not a sibling's by its role", async () => {
+  const { store } = mount("#/agents/seats/swe?tab=turns", {
+    agents: [{ ...WORKING, activity: "idle", turn: null, live_call: null }],
+  });
+  await settle();
+  const streamed = (id: string, turn: string, agentId: string) => ({
+    id,
+    type: "agent_phase_completed",
+    source: "engine",
+    actor: "SWE",
+    summary: "",
+    category: "lifecycle",
+    trace_id: "",
+    span_id: "",
+    parent_span_id: "",
+    topic: "",
+    failed: false,
+    timestamp: "2026-09-21T09:50:00Z",
+    payload: { turn_id: turn, phase: "execute", iteration: 1, role: "SWE", agent_id: agentId },
+  });
+  act(() => {
+    store.applyEvent(streamed("ev-mine", "t-mine", "a-swe") as never);
+    store.applyEvent(streamed("ev-sibling", "t-sibling", "a-sibling") as never);
+  });
+  const transcripts = screen
+    .getByRole("heading", { name: "Transcripts · newest first" })
+    .closest("section") as HTMLElement;
+  expect(transcripts.querySelectorAll(".turn-card")).toHaveLength(1);
+});
+
+/** A phase of the running turn `t-7` completing, as the socket streams it. */
+const completed = (phase: string, at: string) => ({
+  id: `ev-${phase}`,
+  type: "agent_phase_completed",
+  source: "engine",
+  actor: "SWE",
+  summary: "",
+  category: "lifecycle",
+  trace_id: "",
+  span_id: "",
+  parent_span_id: "",
+  topic: "",
+  failed: false,
+  timestamp: at,
+  payload: {
+    turn_id: "t-7",
+    phase,
+    iteration: 1,
+    role: "SWE",
+    agent_id: "a-swe",
+    duration_ms: 30_000,
+  },
+});
+
+/** The turn card in a section of the tab, and each of its phases: name, open. */
+function turnCardIn(heading: string) {
+  const section = screen.getByRole("heading", { name: heading }).closest("section")!;
+  const card = section.querySelector<HTMLElement>(".turn-card");
+  const phases = card
+    ? [...card.querySelectorAll(".phase-card")].map((c) => ({
+        phase: c.querySelector(".phase-head")?.textContent ?? "",
+        open: c.querySelector(".phase-body") !== null,
+      }))
+    : [];
+  return { card, phases };
+}
+
+// A TURN BETWEEN PHASES IS STILL RUNNING. Its phase completes, the push clears
+// the call, and only then does the next phase start — and split on "has a live
+// phase", the card left Running now for the settled list in that gap and came
+// back, remounted, with the transcript the reader was following shut. The
+// seat's own turn record decides, as on the turn's page.
+test("a running turn's card stays put, its phases open, across a phase boundary", async () => {
+  const { store } = mount("#/agents/seats/swe?tab=turns", { agents: [WORKING] });
+  await screen.findByRole("heading", { name: "Running now" });
+  const before = turnCardIn("Running now");
+  expect(
+    before.phases.map((p) => p.open),
+    "the execute it is on is open",
+  ).toEqual([true]);
+  act(() => {
+    store.applyEvent(completed("execute", "2026-09-21T09:52:00Z") as never);
+    store.applyAgents([{ ...WORKING, live_call: null }] as never);
+  });
+  const between = turnCardIn("Running now");
+  expect(between.card, "the same card, in Running now, not remounted").toBe(before.card);
+  expect(
+    between.phases.map((p) => p.open),
+    "and its execute still open",
+  ).toEqual([true]);
+  act(() =>
+    store.applyAgents([
+      {
+        ...WORKING,
+        live_call: {
+          ...WORKING.live_call!,
+          phase: "review",
+          tool_executions: [],
+          running_call: null,
+          started_at: "2026-09-21T09:52:05Z",
+        },
+      },
+    ] as never),
+  );
+  const after = turnCardIn("Running now");
+  expect(after.card).toBe(before.card);
+  expect(
+    after.phases.map((p) => p.open),
+    "execute stays open, review opens",
+  ).toEqual([true, true]);
+});
+
+// AND WHEN THE TURN ENDS, the card moves to the settled transcripts — the one
+// remount left — with the phases the reader watched still open.
+test("a turn that ends keeps the phases its reader watched open in the transcripts", async () => {
+  const { store } = mount("#/agents/seats/swe?tab=turns", { agents: [WORKING] });
+  await screen.findByRole("heading", { name: "Running now" });
+  act(() => {
+    store.applyEvent(completed("execute", "2026-09-21T09:52:00Z") as never);
+    store.applyAgents([
+      {
+        ...WORKING,
+        live_call: { ...WORKING.live_call!, phase: "review", tool_executions: [] },
+      },
+    ] as never);
+  });
+  act(() => {
+    store.applyEvent(completed("review", "2026-09-21T09:53:00Z") as never);
+    store.applyAgents([{ ...WORKING, activity: "idle", turn: null, live_call: null }] as never);
+  });
+  expect(screen.queryByRole("heading", { name: "Running now" })).toBeNull();
+  const ended = turnCardIn("Transcripts · newest first");
+  expect(ended.phases.map((p) => p.open)).toEqual([true, true]);
+});
+
 // THE HEADER COUNTS WHAT IS LOADED, never the history: `.length` of the first
 // page read "50" under "the newest 50 this seat took" whether the seat had
 // fifty-one turns or four hundred, and nothing reached the fifty-first.
@@ -1364,7 +1568,8 @@ test("the turns list says it holds a page, and loads the one before it", async (
           ? { turns: [turnRow(50), turnRow(51)], next: null }
           : {
               turns: Array.from({ length: 50 }, (_, i) => turnRow(i)),
-              next: "2026-09-20T00:00:00Z",
+              // OPAQUE: whatever the engine hands out is handed back as is.
+              next: "MjAyNi0wOS0yMFQwMDowMDowMFogdC00OQ",
             },
     },
   });
@@ -1385,7 +1590,7 @@ test("the turns list says it holds a page, and loads the one before it", async (
   expect(askedFor("turns").find((a) => a.params.before)?.params).toMatchObject({
     seat: "swe",
     days: 30,
-    before: "2026-09-20T00:00:00Z",
+    before: "MjAyNi0wOS0yMFQwMDowMDowMFogdC00OQ",
   });
   expect(card.querySelector(".crewlet-card__header")?.textContent).toContain("52");
   expect(card.querySelector(".crewlet-card__header")?.textContent).not.toContain("52+");
@@ -1625,38 +1830,6 @@ test("a long ask is listed as its marked opening and read whole on demand", asyn
   fireEvent.click(screen.getByRole("button", { name: /^Read all/ }));
   await waitFor(() => expect(screen.getByText(/and then it stopped\./)).toBeTruthy());
   expect(askedFor("agent_episode")[0]?.params).toEqual({ id: "swe", episode: "e1" });
-});
-
-// A HOLDER THAT DOES NOT SAY WHAT A ROW FOLDED IS NOT A ROW THAT FOLDED
-// NOTHING. A node on an older build sends a compacted row with no compaction;
-// read as zero values it said "The compaction recorded no pattern" and "0 of 12
-// done" — statements about the data, where the holder had said nothing.
-test("a compacted row whose holder does not say what it folded says that, not zeros", async () => {
-  mount("#/agents/seats/swe?tab=memory", {
-    answers: {
-      agent_memory: memoryOf({
-        episodes: [
-          {
-            id: "c1",
-            turn_id: "",
-            compacted: true,
-            count: 12,
-            compaction: null,
-            review_outcome: "done",
-            created_at: "2026-08-01T07:00:00Z",
-          },
-        ],
-        episodes_total: 1,
-      }),
-    },
-  });
-  await waitFor(() => expect(screen.getByText("12 turns like this")).toBeTruthy());
-  const folded = screen.getByText("12 turns like this").closest(".grid-row") as HTMLElement;
-  const did = folded.querySelector('[data-label="What it did"]') as HTMLElement;
-  expect(did.textContent).toContain("Not reported");
-  expect(did.textContent).toContain("older build");
-  expect(document.body.textContent).not.toContain("recorded no pattern");
-  expect(document.body.textContent).not.toContain("0 of 12 done");
 });
 
 // THE CONVERSATION COLUMN IS CAPPED AND A UUID IS CUT TO ITS HEAD: printed

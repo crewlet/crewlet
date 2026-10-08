@@ -179,7 +179,7 @@ back what it wrote.
 | `worker:sandbox-waiter` | Polls detached runs and resumes the turns waiting on them, over the stream. The same tick is the box keepalive. |
 | `worker:maintenance` | The retention sweep over the records that answer "recently" rather than "ever", and the retirement of a removed seat's mailbox and coding runs. |
 | `worker:integration-reconcile` | The [integration reconcile](integration-reconcile.md) loop: every connected third-party app's pass, on a cadence set by who has to act. |
-| `worker:skill-curator` | Every learning background pass: skill ageing, episode compaction, clustering and cross-agent promotion. |
+| `worker:learning` | Every learning background pass: skill ageing, episode compaction, clustering and cross-agent promotion. |
 
 **Five more services run on every node, whatever the roles say.**
 
@@ -393,11 +393,14 @@ relay arrive as verified HTTP on `/webhooks/*` and take every step above — fiv
 of them verified by an HMAC over the body, and Datadog by a constant-time
 comparison of a shared token, because its provider attaches only fixed-value
 headers and so has nothing varying with the payload to sign.
-Mattermost does not: it holds **one websocket per seat**, outbound from this
-node, so it needs no public URL and no signing secret — and it joins the picture
-only at the republish onto `crewlet.notifications.inbound`, with its own
-per-socket dedupe instead of the fleet claim. Everything from that subject
-onward is identical for both.
+Mattermost does not: every node holds **one websocket per seat**, outbound,
+so it needs no public URL and no signing secret — and it joins the picture only
+at the republish onto `crewlet.notifications.inbound`, after the same kind of
+fleet-wide claim the webhook edge takes, because every node reads every seat's
+socket and only one may deliver each post
+([Running on a fleet](../integrations/mattermost.md#running-on-a-fleet)).
+Both edges record each delivery as an `inbound_delivery` event. Everything
+from that subject onward is identical for both.
 
 A schedule firing, an `a2a_ask` from a colleague and a sandbox run completing
 enter further down still: they publish straight to
@@ -549,11 +552,9 @@ What each of the four holds, in full:
 | `company_config` · `scheduled_runs` · `secret_values` | Revisions, cron bookkeeping, and the secret store's bootstrap half |
 | `kb_docs` · `kb_postings` | The **lexical** half of the knowledge search index over those rows, built asynchronously behind them and droppable wholesale when the analyzer changes. The semantic half is not here — an embedding costs a provider call, so it is derived once by the fleet and lives in the estate below |
 | `page_links` | Which pages and tasks link to which page — the **backlinks**, derived by the same indexer from the same bodies it tokenises (`pages.Links`), so a page answers "linked from" with no scan of anybody's text. Cascades from `kb_docs`, and rebuilt by the same local walk |
-| `statelog_adoption` | This node's own history of the peer snapshots it has adopted — which donor's artefact, when the join began and whether it completed. Nothing on the write path reads it: the operation ledger travels inside the snapshot with its own watermark, and the rows an older build wrote, whose adoptions scrubbed the ledger, are carried into that watermark once at boot |
-| `chat_thread_follows` | EMPTY, and kept for one reason: rows written before the follows moved to coordination are carried onto the fleet at the next start, and a migration cannot do that — a `.sql` file has no KV client, and it runs before any Go code on every boot. Nothing reads or writes it at runtime. See node migration 0028 |
-| `statelog_diverged` | This node's finding that a log **diverged** from its rows — the broker was restored from an older copy and another record now sits at the node's checkpoint — keyed to the stream, the checkpoint and both records' broker instants (the consumed one zero where the checkpoint names no record and the node's operation ledger named another operation there). Kept here rather than only in memory because the log can lose the record it was found by (an evicted node's checkpoint stops pinning the trim), and a restart must not then apply the other history on top of these rows. It holds while the checkpoint names the same record, so a reanchor or an adoption is what ends it |
+| `statelog_adoption` | This node's own history of the peer snapshots it has adopted — which donor's artefact, when the join began and whether it completed. Nothing on the write path reads it: the operation ledger travels inside the snapshot with its own watermark |
+| `statelog_diverged` | This node's finding that a log **diverged** from its rows — the broker was restored from an older copy and another record now sits at the node's checkpoint — keyed to the stream, the checkpoint and both records' broker instants. Kept here rather than only in memory because the log can lose the record it was found by (an evicted node's checkpoint stops pinning the trim), and a restart must not then apply the other history on top of these rows. It holds while the checkpoint names the same record, so a reanchor or an adoption is what ends it |
 | `stream_identity` | What this node last saw of each stream's identity, which is how it notices one that was recreated underneath it. A per-node **observation** rather than shared state: two nodes can legitimately have seen different generations, so one agreed value would destroy the comparison it exists to make |
-| `usage_held` | A person's day this node derived and has not published yet, because a node applying the usage log runs a build that cannot read a person's record. Kept here rather than in memory because no process derives a day older than yesterday again, so a restart during a rolling upgrade would lose it for good; published, and deleted, by the first flush that finds every reader upgraded. Empty outside an upgrade |
 
 **Every node, identically — the replicated store.**
 
@@ -580,7 +581,7 @@ to the adopted log.
 | **`pages_heads`** · `pages_revisions` · `pages_titles` · … | The company's knowledge base, derived from `CREWLET_PAGES_LOG`: a page's current body, the immutable revisions behind it, and the title claim that is what makes a name an address |
 | **`kb_vectors`** · `kb_vectors_bin` · `kb_ivf` · `kb_ivf_centroids` · `kb_ivf_rollout` · `kb_ivf_lists` | Page and task embeddings, their 1-bit codes, and the semantic index filing those codes in lists — its head, its centroids and the re-filing its training cut are a record on the same log, and the per-list counts are kept beside the rows they count ([ADR-0028](https://github.com/crewlet/crewlet/blob/main/adr/0028-the-semantic-first-stage-is-an-index.md)) — derived from `CREWLET_TRACKER_VECTORS`. The fleet pays the provider bill **once** and every node holds the answer, which is precisely why these are not in the node's own file |
 | **`usage_tokens`** · `usage_turns` · `usage_reads` · `usage_schedule_runs` · `usage_person_tokens` | What each node's seats, schedules and people did each company day — spend by phase, worker, model and provider slot; ended turns and how they ended; the pages seats read; every fire; and what the auxiliary model spent for a person (a question answered on the operator surface), who has no agent id to file it under a seat — derived from `CREWLET_USAGE_LOG`. Every node publishes its own days and applies everyone's, so spend history is answered fleet-wide and outlives the node that spent it (ADR-0020). Kept 181 days, aged out by the applier rather than a sweep |
-| `statelog_cursor` · each domain's operation ledger and deferred records · `statelog_ops_lost` | Where this node is on each log, which operations have already been applied — a record that travels inside a snapshot — and how far back that record may have lost rows, to the sweep or to a snapshot from an older build that scrubbed it, so a retry older than that is answered `unknown` rather than applied twice; and any record a newer build wrote that this one cannot decode |
+| `statelog_cursor` · each domain's operation ledger and deferred records · `statelog_ops_lost` | Where this node is on each log, which operations have already been applied — a record that travels inside a snapshot — and how far back that record may have lost rows, to the sweep, so a retry older than that is answered `unknown` rather than applied twice; and any record a newer build wrote that this one cannot decode |
 
 **The whole company — coordination KV.**
 

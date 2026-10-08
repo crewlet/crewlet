@@ -282,11 +282,38 @@ func TestAnEnvelopeReplyBecomesToolCalls(t *testing.T) {
 	if comp.ToolCalls[0].ID == "" {
 		t.Error("a tool call with no id cannot be paired with its result")
 	}
-	if comp.FinishReason != "tool_calls" {
-		t.Errorf("FinishReason = %q, want tool_calls", comp.FinishReason)
+	if comp.StopReason != llm.StopToolUse {
+		t.Errorf("StopReason = %q, want tool_use", comp.StopReason)
+	}
+	// Recorded so no other backend mistakes this turn for one of its own.
+	if comp.Provider != "cli-agent" {
+		t.Errorf("Provider = %q, want cli-agent", comp.Provider)
 	}
 	if comp.Content != "reading" {
 		t.Errorf("Content = %q", comp.Content)
+	}
+}
+
+// A CALL WHOSE ARGUMENTS DID NOT READ REACHES THE LOOP MARKED, not as a call
+// with no arguments: the tool loop answers a marked call with the reason and
+// runs an unmarked one, so the mark is the whole difference between a failed
+// result the model can fix and a search over everything.
+func TestACallWithUnreadableArgumentsIsMarkedForTheLoop(t *testing.T) {
+	reply := "```json\n{\"message\":\"searching\",\"tool_calls\":" +
+		"[{\"name\":\"search\",\"arguments\":\"{\\\"query\\\": \\\"x\"}]}\n```"
+	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": reply}, nil)
+	comp, err := ask(t, p, llm.Request{
+		Tools: []llm.ToolDef{{Name: "search", Description: "search"}},
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if len(comp.ToolCalls) != 1 || comp.ToolCalls[0].Name != "search" {
+		t.Fatalf("tool calls = %+v, want the one search call", comp.ToolCalls)
+	}
+	if comp.ToolCalls[0].ArgumentsError == "" {
+		t.Errorf("the call reached the loop unmarked with arguments %v, so it would run with none",
+			comp.ToolCalls[0].Arguments)
 	}
 }
 
@@ -505,15 +532,14 @@ func TestThePromptReachesTheCLIWithItsContract(t *testing.T) {
 			{Role: llm.RoleSystem, Content: "you are Dev"},
 			{Role: llm.RoleUser, Content: "read the file"},
 		},
-		Tools:      []llm.ToolDef{{Name: "read_file", Description: "read a file"}},
-		ToolChoice: "required",
+		Tools: []llm.ToolDef{{Name: "read_file", Description: "read a file"}},
 	})
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
 	prompt := decodePrompt(t, comp.Content)
 	for _, want := range []string{"## system", "you are Dev", "## user", "read the file",
-		"Available tools", "read_file", "Response contract", "MUST"} {
+		"Available tools", "read_file", "Response contract", "empty tool_calls list"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("the prompt is missing %q:\n%s", want, prompt)
 		}

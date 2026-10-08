@@ -113,9 +113,10 @@ const (
 	// in which case it rejoins as a voter at its next restart.
 	BrokerNotInGroup BrokerFindingKind = "not_in_group"
 
-	// BrokerUnknownKind is a live node whose presence does not say what its
-	// broker is — a build older than the field. It is counted as a member
-	// wherever that is the safe reading.
+	// BrokerUnknownKind is a live node whose presence advertises no kind
+	// this build knows — a kind a newer build added, or a profile nobody
+	// derived a kind for. It is counted as a member wherever that is the
+	// safe reading.
 	BrokerUnknownKind BrokerFindingKind = "unknown_kind"
 )
 
@@ -642,8 +643,8 @@ func brokerFindings(live map[string]placement.NodeProfile, group *jetstream.Meta
 		switch {
 		case profile.Broker == placement.BrokerUnknown:
 			out = append(out, BrokerFinding{Kind: BrokerUnknownKind, Node: id,
-				Detail: "its presence does not say what its broker is — a build " +
-					"older than the field — so it is counted as a member wherever " +
+				Detail: "its presence advertises no broker kind this build knows — " +
+					"a kind a newer build added — so it is counted as a member wherever " +
 					"that is the safe reading, a capacity seal included"})
 		case group != nil && profile.Broker == placement.BrokerMember &&
 			!group.Counts(jetstream.PeerIDOf(id)):

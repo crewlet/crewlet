@@ -322,24 +322,22 @@ func TestAMissingFileIsNamedAndAFailedReadIsNot(t *testing.T) {
 	}
 }
 
-// A FILE AN EARLIER BUILD KEPT IN CHUNKS IS LISTED AND CANNOT BE READ — and
-// the read says so as a file whose content is gone, which no retry changes,
-// never as a read that failed and might work next time.
-func TestAFileKeptInChunksIsRefusedAsGone(t *testing.T) {
+// A LIVE FILE NAMING NO OBJECT IS THE ENGINE'S FAULT, NOT A FILE THAT IS GONE:
+// the applier refuses to write one, so a read that meets one says the content
+// cannot be returned and a retry will not help — never not_found, which would
+// tell the seat the file does not exist while it is listed.
+func TestALiveFileNamingNoObjectIsNotReadAsGone(t *testing.T) {
 	t.Parallel()
 	files, objects := newFakeFiles(), newFakeObjects()
 	reg := workRegistry(t, fileDeps(files, objects))
-	files.files[files.key("ENG", "old.md")] = tracker.File{Project: "ENG", Path: "old.md",
-		Hash: objstore.HashOf([]byte("old")), Size: 3, Version: 1}
+	files.files[files.key("ENG", "odd.md")] = tracker.File{Project: "ENG", Path: "odd.md",
+		Hash: objstore.HashOf([]byte("odd")), Size: 3, Version: 1}
 
-	got := callWork(t, reg, tracker.ReadProjectFileTool, map[string]any{"path": "old.md"})
-	if !got.Failed || got.Refusal != tools.RefusalNotFound ||
-		!strings.Contains(got.Output, "earlier build that kept files in chunks") {
-		t.Fatalf("a read of a file kept in chunks answered %s (refusal %q)", got.Output, got.Refusal)
-	}
-	if listed := fileAnswer(t, callWork(t, reg, tracker.ListProjectFilesTool,
-		map[string]any{}).Output); listed["count"] != float64(1) {
-		t.Fatalf("the file kept in chunks is not listed: %v", listed)
+	got := callWork(t, reg, tracker.ReadProjectFileTool, map[string]any{"path": "odd.md"})
+	if !got.Failed || got.Refusal != tools.RefusalUnavailable ||
+		!strings.Contains(got.Output, "will not help") {
+		t.Fatalf("a read of a live file naming no object answered %s (refusal %q)",
+			got.Output, got.Refusal)
 	}
 }
 

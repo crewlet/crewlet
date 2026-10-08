@@ -408,13 +408,13 @@ func (t *queryEpisodes) render(ctx context.Context, turn *turnctx.Turn, found []
 //
 // A RAW TURN is what woke it, what it was asked, how it ended, and what it did.
 // What woke it is the label of the waking event, MARKED as that — the worker
-// prompts' "woken by" — because unmarked, after the date, a model read
-// "Message from Ana: Slack message" as the question it had been asked; what it
-// was asked is the ask the row stores (node migration 0042, so a turn from
-// before it has none). A COMPACTED ROW stands for a cluster of turns, so it is
-// the pattern, how many turns it stands for and how many of them ended done,
-// and what varied: it has no label and no account of its own, and rendered as
-// a turn it showed nothing but its date.
+// prompts' "woken by" — because unmarked, after the date, a model read "Message
+// from Ana: Slack message" as the question it had been asked; what it was asked
+// is the ask the row stores (none for a turn that was told nothing). A
+// COMPACTED ROW stands for a cluster of turns, so it is the pattern, how many
+// turns it stands for and how many of them ended done, and what varied: it has
+// no label and no account of its own, and rendered as a turn it showed nothing
+// but its date.
 func renderPastTurn(ep learning.Episode, past learning.PastTurn) string {
 	var b strings.Builder
 	if ep.Kind == learning.KindCompacted {

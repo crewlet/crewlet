@@ -176,19 +176,15 @@ type EpisodeRow struct {
 	AgentHandle string `json:"agent_handle"`
 	// TaskSummary is the label of the event that woke the turn.
 	TaskSummary string `json:"task_summary"`
-	// Ask is what the turn was asked — "" for a turn recorded before the ask
-	// was stored (node migration 0042), and on every compacted row — and
-	// AskBytes the size of the whole of it: on a listed row Ask is its
-	// opening, whole exactly when AskBytes is its length.
-	//
-	// ZERO FROM A HOLDER WHOSE BUILD SENDS NO SIZE, which sends no ask
-	// either; a reader takes a zero size for a text that is whole.
+	// Ask is what the turn was asked — "" for a turn that was told nothing,
+	// and on every compacted row — and AskBytes the size of the whole of it:
+	// on a listed row Ask is its opening, whole exactly when AskBytes is its
+	// length.
 	Ask      string `json:"ask"`
 	AskBytes int    `json:"ask_bytes"`
 	// PlanSummary is what the turn did — the review's account of what
 	// landed, or its final answer — and PlanSummaryBytes the size of the
-	// whole of it, as Ask's. A holder whose build sends no size sends the
-	// account whole.
+	// whole of it, as Ask's.
 	PlanSummary      string   `json:"plan_summary"`
 	PlanSummaryBytes int      `json:"plan_summary_bytes"`
 	ReviewOutcome    string   `json:"review_outcome"`
@@ -207,14 +203,9 @@ type EpisodeRow struct {
 	// Compaction is what a compacted row's turns had in common, how many of
 	// them ended done and what varied — the three things query_episodes
 	// answers a seat with — and null on a raw row, which says how its one
-	// turn ended in ReviewOutcome.
-	//
-	// NULL ON A COMPACTED ROW TOO, when the holder that answered runs a
-	// build from before the field, which sends none of the three: ONE
-	// OBJECT rather than three fields, because three zero values decoded
-	// from absent keys read as a compaction that recorded no pattern and
-	// none of its turns done, where the truth is that the holder did not
-	// say.
+	// turn ended in ReviewOutcome. ONE OBJECT rather than three fields,
+	// because three zero values on a raw row read as a compaction that
+	// recorded no pattern and none of its turns done.
 	Compaction *EpisodeCompaction `json:"compaction"`
 }
 

@@ -24,7 +24,7 @@ import (
 var dutyCases = []testCase{
 	{"a_duty_is_honoured_at_the_duty_ceiling", func(h *harness) {
 		// The regression the group exists for. The retention sweep asks for
-		// 45 minutes and the skill curator for three hours, and a backend
+		// 45 minutes and the learning passes for three hours, and a backend
 		// that refused either left that duty unrun on every fleet it
 		// served.
 		duty := coord.WorkerResource("maintenance")
@@ -86,7 +86,7 @@ var dutyCases = []testCase{
 		// A duty is judged by the deadline it asked for, not by whatever
 		// longer horizon the backend keeps duty records for. A dead holder's
 		// scheduler duty has to move within its 30 seconds, not within the
-		// three hours the curator needs.
+		// three hours the learning passes need.
 		duty := coord.WorkerResource("scheduler")
 		first := h.claim(duty, coord.AcquireOptions{Owner: "node-a:1", TTL: ShortTTL, Ungated: true})
 		h.lapse()

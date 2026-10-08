@@ -124,7 +124,7 @@ export function settingsFigures({
 
   // "epoch 2", not "e2": a figure beside a row says what it counts, and a
   // letter and a number is a code the reader has to be told.
-  if (health?.applied_epoch !== undefined) {
+  if (health) {
     figures.config = {
       count: {
         value: `epoch ${health.applied_epoch}`,

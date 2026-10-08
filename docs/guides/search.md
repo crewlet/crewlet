@@ -115,8 +115,8 @@ mode is still `hybrid`.
 
 A keyword search sends no vector at all, so a participant runs no vector scan
 for it; the rankers a query needs travel with it, and the asking node fuses
-only the ones it asked for even from a participant on an older build that ran
-both.
+only the ones it asked for.
+
 ## How big a corpus one node scans
 
 The semantic scan has a **one-second budget**, and how much fits inside it
@@ -309,9 +309,9 @@ which would read as "nothing links here" about a page that is linked.
 **An upgrade that changes what the index derives needs no rebuild command.**
 Every indexed row records the derivation it was built under (`kb_docs.derivation`,
 compared against the build's `search.IndexDerivation`), and a row built under an
-older one is re-derived on the next lap exactly as a row whose source moved.
-The upgrade that introduced backlinks is one: every row indexed before it is
-re-read once, and until that lap finishes the node reports `building`.
+older one is re-derived on the next lap exactly as a row whose source moved. A
+later build that bumps `search.IndexDerivation` re-reads each row once, and
+until that lap finishes the node reports `building`.
 
 ---
 
@@ -332,10 +332,7 @@ re-read once, and until that lap finishes the node reports `building`.
    training measured that no index reading half its lists or fewer meets the
    recall floor in every shape — which is a property of the corpus, and
    `ivf_recall_below_floor` says when it is the codes rather than the index
-   that fall short — and throughout a rolling upgrade, until every node
-   applying the vector log runs a build that reads the index's records (the
-   duty logs `search_index_held`, naming the nodes it waits for; an offline
-   node on an old build holds it until it returns upgraded or is evicted).
+   that fall short.
 
 There is nothing to tune: the index's list count follows the corpus, how many
 lists a search reads is its own training's measurement, and there is no shard

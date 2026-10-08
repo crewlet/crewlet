@@ -214,8 +214,8 @@ var skillVariableKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 //
 // It is the check for a document somebody SUBMITS: a PUT, a PATCH, a
 // per-entity write, a setup write, `crewlet config import` and `crewlet
-// validate`. A stored revision is not held to it, because the admission rules
-// were added after companies existed; see [Company.ValidateRunnable].
+// validate`. A revision being APPLIED is held to the runnable rules only; see
+// [Company.ValidateRunnable].
 //
 // It validates the ORG as well: building the hierarchy is where duplicate
 // handles, unrunnable schedules and human-seat rule violations surface, and
@@ -230,13 +230,15 @@ func (c *Company) Validate() error {
 //
 // It is the check for a revision about to be APPLIED (a node's reconcile
 // tick, a boot from the store, a reload and a revert) and for building an
-// epoch. A stored revision was admitted under the rules of the build that
-// wrote it, and one that breaks an admission rule added since still runs
-// exactly as it did before that rule existed. Refusing to apply it would take
-// a working company down on upgrade, or on the older half of a rolling one,
-// over a rule its author never saw. Its admission violations are reported by
-// [Company.ValidateAdmission] as warnings instead, and the next write that
-// keeps them is refused.
+// epoch. A revision is admitted under the rules of the build that wrote it,
+// and the admission set is the part of the rule set a build is free to
+// change: a later build may add a rule or relax one, and during a rolling
+// upgrade this build applies the revisions a newer peer admitted. Nothing
+// about RUNNING depends on an admission rule, so applying under the runnable
+// rules only is what keeps one build of a rolling upgrade from refusing a
+// revision its peer admitted — which would split the fleet's epoch. The
+// admission violations are reported by [Company.ValidateAdmission] as
+// warnings instead, and the next write that keeps them is refused.
 func (c *Company) ValidateRunnable() error {
 	o, index := c.organization()
 	return index.locate(c.validateRunnable(o))
@@ -271,9 +273,9 @@ func (c *Company) validateAdmission(o *org.Organization) error {
 //
 // CHECKED HERE rather than beside that rule in [org.Role.Validate], because
 // the org model carries no code-host identity for a seat and so cannot see
-// the block. And an ADMISSION rule rather than a runnable one: nothing
-// refused the block before, a stored company may carry it, and that company
-// runs exactly as it did.
+// the block. And an ADMISSION rule rather than a runnable one, because
+// nothing about running depends on it: every path that would act on the
+// block skips a human seat.
 func (c *Company) validateHumanSeatApps() error {
 	var p problems
 	for role, path := range c.EachRole() {
@@ -300,10 +302,10 @@ func (c *Company) validateHumanSeatApps() error {
 // on credentials nobody edited. A name is also what a setup failure and its
 // log line point at, and a duplicate points at two steps.
 //
-// An ADMISSION rule rather than a runnable one, because a stored company can
-// hold duplicate names from before the rule and its steps still apply exactly
-// as they did. Compared as the exact string the restore matches on, and a
-// blank name is skipped: the step's own rule already refuses it.
+// An ADMISSION rule rather than a runnable one, because nothing about running
+// depends on it: duplicate names still apply every step in order. Compared as
+// the exact string the restore matches on, and a blank name is skipped: the
+// step's own rule already refuses it.
 func (c *Company) validateSetupStepNames() error {
 	var p problems
 	if c.Providers.Sandbox != nil {
@@ -681,7 +683,7 @@ type Knowledge struct {
 
 	// KnowledgeScope narrows the search to these containers. Empty is
 	// unscoped — see the type doc for what that means per backend.
-	KnowledgeScope []string `yaml:"scope,omitempty" json:"scope,omitempty" desc:"Org-wide read scope. Empty = unscoped. Was knowledge.confluence_spaces."`
+	KnowledgeScope []string `yaml:"scope,omitempty" json:"scope,omitempty" desc:"Org-wide read scope. Empty = unscoped."`
 
 	// SkillsContainer is where tool-skill pages live.
 	//

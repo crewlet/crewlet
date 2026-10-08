@@ -78,17 +78,6 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// singleton they would be tidied on one node and grow for ever
 		// on the others.
 		"pages_ops",
-		// AND THE LIFETIME TOKEN COUNTERS an earlier build kept, which
-		// nothing in this build reads. Not a sweep: one bucket, deleted
-		// once no node of that build is live. Registered here because a
-		// retirement nothing runs is a bucket that holds a dead company's
-		// spend for the life of the deployment, and nothing else would
-		// ever say so.
-		"retired_budget_bucket",
-		// AND THE CHUNK LOCKS a build that kept files in chunks opened,
-		// for the same reason: one bucket, deleted once the tracker
-		// log's census counts no node of that build.
-		"retired_chunk_locks",
 		// NEITHER NATIVE BACKEND SWEEPS ANY MORE, and the absence of
 		// their entries is the point. The knowledge base had three —
 		// a change retention, a revision prune and an orphan collector
@@ -188,7 +177,7 @@ func TestTheEngineRegistersEverySeatMailboxWithTheFleet(t *testing.T) {
 // A GRACEFUL STOP GIVES EVERY FLEET DUTY BACK, AND ONLY THE DUTIES.
 //
 // A duty is claimed per tick and its lease outlives several ticks (45 minutes
-// for this sweep, three hours for the skill curator), and a restarted process
+// for this sweep, three hours for the learning passes), and a restarted process
 // is a new incarnation that cannot re-claim what the old one held. Kept, every
 // deploy that restarted the holder left the duty dark for its whole TTL. A
 // setup hold under the same prefix is different: it belongs to a pass that may
@@ -260,10 +249,9 @@ func TestAStoppedEngineGivesItsDutiesBackAndKeepsItsHolds(t *testing.T) {
 		}
 	}
 	// THE LEASE IS CHECKED, not just the error. A refused claim is the
-	// ordinary (nil, nil) here — a peer holding it, or the duty layout gate
-	// — so a precondition reading only err calls a refusal success and
-	// leaves the assertion below failing for a reason that is not the rule
-	// it is about.
+	// ordinary (nil, nil) here — a peer holding it — so a precondition
+	// reading only err calls a refusal success and leaves the assertion
+	// below failing for a reason that is not the rule it is about.
 	hold := coord.WorkerResource(holdName)
 	if got, _, err := leases.TryAcquire(ctx, hold, coord.AcquireOptions{
 		Owner: owner, TTL: 5 * time.Minute, Ungated: true,

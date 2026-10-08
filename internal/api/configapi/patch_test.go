@@ -298,6 +298,7 @@ func TestAWriteThatLostTheRaceIsRefused(t *testing.T) {
 	if _, err := s.plane.Activate(t.Context(), coord.ActivationRequest{
 		RevisionID: "from-a-peer", Summary: "a peer got there first",
 		Payload: []byte("{}"), At: pinned, Expect: base,
+		Origin: coord.RevisionOrigin{Author: "maya", AuthorKind: "operator", Source: "api", CreatedAt: pinned},
 	}); err != nil {
 		t.Fatalf("peer activate: %v", err)
 	}
@@ -412,7 +413,7 @@ func seedWithPeerField(t *testing.T, s *surface) {
 //
 // It is how a test holds what this build could not have written itself: a
 // field only a newer peer knows, or a document the validator refuses, which
-// an older build or a later rule leaves in a store. Nothing here validates
+// a newer peer's rules leave in a store. Nothing here validates
 // the document or the result, which is the point. It returns the revision id.
 func (s *surface) seedStored(t *testing.T, doc string, mutate func(map[string]any)) string {
 	t.Helper()

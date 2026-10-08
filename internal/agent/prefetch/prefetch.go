@@ -165,6 +165,27 @@ type Blocks struct {
 	// exactly the turn an operator is looking at when a seat answers
 	// something nobody asked it. See [notify.Transcript.StoppedShort].
 	ThreadContextStoppedShort bool
+
+	// ThreadContextAnswered are the messages — by the backend's own ids
+	// ([notify.Message.ID]) — that this block SHOWED the turn and that were
+	// waiting for it: posted by somebody else after this seat's own last
+	// reply in the thread and before the message that woke the turn.
+	//
+	// The turn answers them whether it was woken for them or not, because
+	// a turn answers its thread as the block shows it — so when one of them
+	// comes round on its own afterwards (a failed delivery returns BEHIND
+	// the conversation's newer mail, on the only broker the engine ships),
+	// running it as a turn would answer it a second time, out of order.
+	// The dispatch records these as worked through when the turn completes,
+	// and drops such a message as already worked.
+	//
+	// ONLY WHAT WAS SHOWN AND ONLY WHAT WAS WAITING: a message a bound
+	// dropped, the seat's own replies, and everything up to its last one
+	// are not here — the first is a message the turn never saw, the rest
+	// were answered already. Empty when the read stopped short or the
+	// trigger is not in it, because then nothing says which messages came
+	// before it.
+	ThreadContextAnswered []string
 }
 
 // Empty reports that nothing was surfaced at all.
@@ -243,6 +264,13 @@ type Request struct {
 	// notification layer already answers, free to disagree with the
 	// working indicator and the reply target about which thread this is.
 	Thread notify.Thread
+
+	// Message is the backend's own id for the NEWEST message that woke this
+	// turn — its trigger's `ts` — and empty where there is none. It is what
+	// [Blocks.ThreadContextAnswered] is measured from: the thread block can
+	// say which of the messages it showed came before the trigger only if
+	// it knows which one the trigger is.
+	Message string
 }
 
 // judgeable says there is something to judge relevance against: the trigger
@@ -499,6 +527,7 @@ func (f *Fetcher) Fetch(ctx context.Context, r Request) Blocks {
 		blocks.ThreadContext, blocks.ThreadContextPosts = block.text, block.posts
 		blocks.ThreadContextRead = block.read
 		blocks.ThreadContextStoppedShort = block.stoppedShort
+		blocks.ThreadContextAnswered = block.answered
 	})
 	wg.Wait()
 	blocks.TurnEmbedding = embedded
@@ -532,7 +561,7 @@ func recoverKnowledge(b *Blocks) {
 	}
 }
 
-// recoverThread is [recoverCounted] for the thread block, which reports three
+// recoverThread is [recoverCounted] for the thread block, which reports four
 // facts beside its prose.
 //
 // ALL OF THEM GO WITH IT. A render that panicked half way surfaced nothing,
@@ -544,6 +573,10 @@ func recoverThread(b *Blocks) {
 		log.Error("prefetch_block_panicked", "panic", r, "stack", string(debug.Stack()))
 		b.ThreadContext, b.ThreadContextPosts = "", 0
 		b.ThreadContextRead, b.ThreadContextStoppedShort = false, false
+		// And what it says the turn was shown: a panicked render showed
+		// nothing, and a message recorded as answered by a turn that never
+		// saw it would be dropped unanswered.
+		b.ThreadContextAnswered = nil
 	}
 }
 

@@ -27,6 +27,7 @@ import { WORKSPACES } from "~/app/nav.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 
 const had = Object.getOwnPropertyDescriptor(navigator, "clipboard");
 
@@ -229,7 +230,7 @@ describe("the breadcrumb", () => {
 });
 
 // WHO IS WORKING IS HOME'S, the way the Main artboard draws it: the sidebar's
-// Agents badge carries the count on every other page, and the chip drawn in
+// Live row carries the count on every other page, and the chip drawn in
 // every bar sat between a task's trail and its actions and pushed a profile's
 // controls past a phone's edge.
 describe("who is working", () => {
@@ -240,7 +241,7 @@ describe("who is working", () => {
         id: "a1",
         role: "Agent SWE",
         activity: "working",
-        live_call: { work_item: { key: "ENG-1", project: "ENG" } },
+        live_call: { work_item: { key: "ENG-1", project: "ENG" }, versions: ZERO_VERSIONS },
       },
       { id: "a2", role: "SRE", activity: "working" },
       { id: "a4", role: "CTO", activity: "idle" },

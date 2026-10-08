@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"strings"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/phase"
@@ -54,16 +53,17 @@ func AnswerBudget(e *Engine) builtin.AnswerBudget {
 	if e == nil || e.backends == nil || e.backends.Fleet == nil {
 		return nil
 	}
-	return answerBudget{engine: e, budgets: e.backends.Fleet, now: time.Now}
+	return answerBudget{engine: e, budgets: e.backends.Fleet}
 }
 
 // answerBudget reads the company's windows through the [budgetCounter] a
 // [meter] reads them through, so the gate is the very rule the budget park
-// applies, not a copy of it.
+// applies, not a copy of it — and cuts them at the engine's instant
+// ([Engine.now]), the gate's, so an answer is judged in the window a seat's
+// next round is charged in, never on a clock of its own.
 type answerBudget struct {
 	engine  *Engine
 	budgets budgetCounter
-	now     func() time.Time
 }
 
 // basis is the company's ceilings and clock off the current epoch.
@@ -81,7 +81,7 @@ func (b answerBudget) basis() budgetBasis { return basisOf(b.engine.Company(), n
 // background pass had filled used to refuse every question asked of it while
 // every screen said it had refused nothing.
 func (b answerBudget) Refusing(ctx context.Context) (builtin.BudgetRefusal, bool, error) {
-	m := &meter{budgets: b.budgets, basis: b.basis(), now: b.now}
+	m := &meter{budgets: b.budgets, basis: b.basis(), now: b.engine.now}
 	r, found, err := m.refusing(ctx)
 	if err != nil || !found {
 		return builtin.BudgetRefusal{}, false, err

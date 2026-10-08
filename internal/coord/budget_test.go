@@ -175,8 +175,8 @@ func TestAReadBehindALaterSlotIsThatSlot(t *testing.T) {
 }
 
 // A REQUEST THAT CANNOT BE COUNTED IS REFUSED BY NAME: no windows, windows out
-// of order, and a ceiling of 0 — which once meant unlimited here and means
-// nothing may be spent to anybody reading the word.
+// of order, and a ceiling of 0 — which reads as unlimited to some people and
+// as nothing may be spent to others.
 func TestAnUncountableRequestIsRefusedByName(t *testing.T) {
 	t.Parallel()
 	w := windowsOn(2026, time.March, 14)
@@ -195,17 +195,6 @@ func TestAnUncountableRequestIsRefusedByName(t *testing.T) {
 	if err := (coord.ChargeRequest{Seat: "agent:x", Tokens: 1, Windows: w,
 		OrgCaps: coord.Caps{period.Month: 1}}).Validate(); err != nil {
 		t.Errorf("a well-formed request was refused: %v", err)
-	}
-}
-
-// THE PROTOCOL THAT WINDOWED THE COUNTERS IS ONE THIS BUILD SPEAKS. The
-// lifetime counters are retired once no lease is held below it, so a build
-// whose own protocol were lower would retire them under its own feet.
-func TestTheWindowedCountersProtocolIsNotAheadOfThisBuild(t *testing.T) {
-	t.Parallel()
-	if coord.WindowedCountersProtocol > coord.ProtocolVersion {
-		t.Fatalf("WindowedCountersProtocol %d is ahead of ProtocolVersion %d",
-			coord.WindowedCountersProtocol, coord.ProtocolVersion)
 	}
 }
 

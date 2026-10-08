@@ -42,6 +42,17 @@
 // Assembly is deterministic for the same reason: map iteration order is not,
 // so every set that reaches a prompt (the role's MCP servers, the matched
 // skills) is sorted before it is rendered.
+//
+// # Every builder returns its outline beside its text
+//
+// A builder returns a [Prompt]: the text, and the sections it was assembled
+// from — a stable key, a title and a byte length each, tiling the text exactly
+// (see [Prompt] for the invariants). The phase record publishes both, so a
+// reader shows a prompt as the parts this package appended rather than
+// guessing them from the text's `##` lines, which embedded content — a
+// trigger's body, a quoted reply, review evidence — brings with it. The
+// [Builder] records a boundary where a part is appended and never changes a
+// byte of the join, because the text is the cache key and the behaviour.
 package prompts
 
 import (
@@ -176,7 +187,7 @@ type Surface struct {
 type SkillCatalogue interface {
 	// SkillsFor returns the skills whose trigger fires for surface and
 	// whose phases include phase. Order is not trusted — see
-	// injectSkillCatalogue.
+	// skillCatalogue.
 	SkillsFor(phase Phase, surface Surface) []Skill
 
 	// Render substitutes the registry's ${VAR} variables (operator-defined
@@ -193,7 +204,7 @@ const skillCatalogueHeader = "\n## Tool skills" +
 // skillCatalogueReviewHeader is the catalogue's header in Review, which has no
 // load_tool_skill: the loading instruction the other phases get would point
 // the reviewer at a tool it does not have, on a surface whose only tool is its
-// submission and whose tool choice forces that call.
+// submission and whose loop asks again until it makes that call.
 const skillCatalogueReviewHeader = "\n## Tool skills" +
 	"\nHow this company uses specific tools / MCP servers, one line per " +
 	"skill.  Weigh the work you are reviewing against these conventions."
@@ -205,8 +216,9 @@ const skillCatalogueRequiredNote = "\nEntries marked `(required — load before 
 
 const requiredMarker = " (required — load before use)"
 
-// injectSkillCatalogue appends a one-line-per-skill catalogue for the active
-// surface.
+// skillCatalogue is the one-line-per-skill catalogue section for the active
+// surface, or nil when no skill fires — the section's lines, heading first, for
+// a builder to open as one section of its outline.
 //
 // Bodies are NOT inlined: the model sees `key — summary` lines and decides
 // whether to load the full body via load_tool_skill, which is always
@@ -220,14 +232,15 @@ const requiredMarker = " (required — load before use)"
 // enforced there and the marker would point at a tool the reviewer does not
 // have. Required skills render unmarked in Review, under a header that asks
 // the reviewer to weigh the work against them rather than to load them.
-func injectSkillCatalogue(parts []string, cat SkillCatalogue, phase Phase, surface Surface) []string {
+func skillCatalogue(cat SkillCatalogue, phase Phase, surface Surface) []string {
 	if cat == nil {
-		return parts
+		return nil
 	}
 	skills := cat.SkillsFor(phase, surface)
 	if len(skills) == 0 {
-		return parts
+		return nil
 	}
+	var parts []string
 	// Sorted here rather than trusted from the catalogue. The registry
 	// contract says key-sorted, but the prompt's byte-stability is this
 	// package's promise to keep: a catalogue that answered in map order
@@ -260,15 +273,4 @@ func injectSkillCatalogue(parts []string, cat SkillCatalogue, phase Phase, surfa
 		parts = append(parts, "- `"+skill.Key+"`"+marker+" — "+summary)
 	}
 	return parts
-}
-
-// joinSections flattens section-lists into one string, skipping empty
-// sections. A section builder returns nil for "this section does not apply",
-// which is how an empty policy list leaves no heading behind.
-func joinSections(sections ...[]string) string {
-	var out []string
-	for _, section := range sections {
-		out = append(out, section...)
-	}
-	return strings.Join(out, "\n")
 }

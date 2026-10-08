@@ -46,12 +46,12 @@ describe("the legend", () => {
     const bands = bandsOf(
       series({
         by_group: [
-          { ...bucket(100), group: "plan", other: false, folded: 0 },
+          { ...bucket(100), group: "execute", other: false, folded: 0 },
           { ...bucket(999), group: "", other: true, folded: 12 },
         ],
       }),
     );
-    expect(bands.map((b) => b.label)).toEqual(["plan", "other (12)"]);
+    expect(bands.map((b) => b.label)).toEqual(["execute", "other (12)"]);
   });
 
   it("identifies the residual by its flag, never by its name", () => {

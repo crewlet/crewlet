@@ -125,8 +125,7 @@ function OneLine({ text, caption = false }: { text: string; caption?: boolean })
  * The listing carries an episode's ask and its account as their openings — a
  * page of them whole could be more than the engine's transport takes — with the
  * size of each whole text beside it, so the text is all of it exactly when that
- * size is its own length. A ZERO SIZE is a holder on a build that sends none,
- * which sent its account whole and no ask, so it is read as whole.
+ * size is its own length.
  */
 function isOpening(text: string, wholeBytes: number): boolean {
   return wholeBytes > utf8Bytes(text);
@@ -232,15 +231,6 @@ function EpisodeWokenCell({ seat, episode: e }: { seat: string; episode: Episode
 }
 
 /**
- * What a holder on an older build leaves out of a compacted row: it does not
- * send what the row folded, which is the holder not saying — never "the
- * compaction recorded nothing" or "none of its turns ended done", the two
- * statements about the data three zero values decoded as.
- */
-const COMPACTION_UNREPORTED =
-  "Not reported — the node holding this seat runs an older build that does not send what a compaction folded";
-
-/**
  * What a turn did — its account — or, for a compacted row, what its turns had
  * in common and what varied: a compacted row has no account of its own, and
  * drawn as a turn it read "The episode recorded no summary" in place of the
@@ -249,8 +239,7 @@ const COMPACTION_UNREPORTED =
 function EpisodeDidCell({ seat, episode: e }: { seat: string; episode: EpisodeRow }) {
   if (e.compacted) {
     const c = e.compaction;
-    if (!c) return <EmptyValue label={COMPACTION_UNREPORTED} />;
-    if (!c.common_task_pattern) return <EmptyValue label="The compaction recorded no pattern" />;
+    if (!c?.common_task_pattern) return <EmptyValue label="The compaction recorded no pattern" />;
     return (
       <span className="col" style={{ gap: 2 }}>
         <OneLine text={c.common_task_pattern} />

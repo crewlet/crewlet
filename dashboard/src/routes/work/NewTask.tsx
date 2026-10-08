@@ -716,10 +716,8 @@ function AssigneeField({
   fieldRef: RefObject<HTMLInputElement | null>;
   landing: string;
 }) {
-  // NO SEAT IS CHOSEN BY AN EMPTY VALUE, even one the chart lists without a
-  // handle — or the field would say a seat "is woken with it" while nothing
-  // is sent.
-  const chosen = value ? seats.find((s) => s.handle === value) : undefined;
+  // An empty value is "nobody", and no seat carries an empty handle.
+  const chosen = seats.find((s) => s.handle === value);
   const term = text.trim();
   const unchosen = value === "" && term !== "";
   // ONLY WHILE THE WORDS ARE NOT ALREADY THE CHOSEN SEAT: asking the engine
@@ -736,7 +734,7 @@ function AssigneeField({
   const options = useMemo<ComboboxOption[]>(() => {
     const needle = term.toLowerCase();
     const local = seats
-      .filter((s) => s.handle && s !== top)
+      .filter((s) => s !== top)
       .filter(
         (s) =>
           needle === "" ||

@@ -103,6 +103,12 @@ turn_engine:                            # optional — executor/reviewer turn co
     retention_days: 30                  # matches the event store's horizon; applied at next start
 
 learning:                               # optional — agent-learning subsystem
+                                        #   Every `*budget_tokens` / `*_max_tokens` cap here
+                                        #   bounds the ANSWER of a call that does not think. A
+                                        #   thinking model spends its thinking from the same cap,
+                                        #   so a call to one is sent the model's own output cap
+                                        #   instead, and these passes ask for `low` effort to keep
+                                        #   it short (see "Claude models" under Providers)
   enabled: true                         # master switch (auto-disables without DB + embeddings)
   episodic:
     retrieval_limit: 5                  # default hits query_episodes returns when the
@@ -342,14 +348,60 @@ providers:
                                         #   On `openai` / `anthropic` it is genuinely optional and
                                         #   points the vendor's own wire format at a gateway or
                                         #   proxy instead of the vendor host
-      timeout_seconds: 120              # optional — per-call HTTP timeout (default: 120); raise for slow / large-output reasoning models
+      timeout_seconds: 600              # optional — bounds one HTTP attempt (default: 600). A unary call IN TOTAL;
+                                        #   a streamed call (every anthropic call, and an executor's rounds
+                                        #   elsewhere) by its SILENCE — the longest
+                                        #   wait with nothing arriving, first byte included — never its length,
+                                        #   so a round thinking for many minutes is not cut off half-way
                                         #   (the cli-agent backend drives a subprocess and uses cli.timeout_seconds instead)
-      reasoning: false                  # optional — enable reasoning/extended thinking (default: false)
-      reasoning_effort: medium          # optional — OpenAI reasoning effort: low | medium | high | max (default: medium)
-      reasoning_budget_tokens: 10000    # optional — Anthropic thinking budget in tokens (default: 10000)
-                                        #   All three are REFUSED on a cli-agent entry: a coding CLI driven
-                                        #   headlessly takes no per-call reasoning flag and carries its own
-                                        #   configuration. Pick the reasoning model with `model` instead
+      reasoning: false                  # optional, openai only — send reasoning_effort to a reasoning
+                                        #   model (default: false). REFUSED on anthropic, where thinking is
+                                        #   not a switch (see "Claude models" below), and on openai-compatible.
+                                        #   gpt-4o is not a reasoning model, so this entry sets no
+                                        #   reasoning_effort: with reasoning off it is refused (see `reasoner`)
+                                        # There is NO temperature field, on any type: the phases of a turn
+                                        #   send none, so every round runs at the vendor's own default
+                                        #   (1.0 on OpenAI), and only a call that needs one names it — the
+                                        #   extension judge asks for 0, the knowledge answer and the auxiliary
+                                        #   passes for 0.2. openai sends it on a call that is not reasoning;
+                                        #   anthropic only where the model samples (see "Claude models" below)
+    reasoner:                           # an OpenAI reasoning model
+      type: openai
+      model: gpt-5
+      api_keys:
+        - "${OPENAI_API_KEY}"
+      reasoning: true
+      reasoning_effort: high            # optional — how hard the model thinks: low | medium | high | xhigh | max
+                                        #   openai: sent while `reasoning` is on (unset: nothing is sent, the
+                                        #     endpoint's own default, and no call can lower it, since that
+                                        #     default is not a level the engine can compare). Refused with
+                                        #     reasoning off, where it would do nothing
+                                        #   anthropic: output_config.effort on EVERY call (unset: high), on a
+                                        #     model that takes effort at all; a level the model does not take
+                                        #     is refused (see "Claude models" below)
+                                        #   A CEILING for every call on this entry: a call may ask for less (the
+                                        #   extension judge, the knowledge answer, the turn-start filters and every
+                                        #   learning pass ask for `low`) and never for more
+    claude:
+      type: anthropic
+      model: claude-sonnet-5-5          # the request SHAPE follows the model — see "Claude models" below
+      reasoning_effort: high            # optional (default: high)
+    claude-gateway:
+      type: anthropic
+      model: fast                       # a gateway's own alias for a model...
+      claude_model: claude-haiku-4-5    # optional, anthropic only — ...named here, so its requests are
+                                        #   shaped as that model's. An exact id from the table below;
+                                        #   refused beside a model the table already reads
+      base_url: "${CLAUDE_GATEWAY_URL}"
+      reasoning_budget_tokens: 8000     # optional, anthropic BUDGET-ERA models only (claude-haiku-4-5,
+                                        #   claude-sonnet-4-5, claude-opus-4-5 and older): the thinking
+                                        #   budget, at least 1024 and below the model's output cap.
+                                        #   Unset: that model does not think. Refused on every other model
+                                        #   and every other type
+                                        # reasoning, reasoning_effort and reasoning_budget_tokens are all
+                                        #   REFUSED on a cli-agent entry: a coding CLI driven headlessly takes
+                                        #   no per-call reasoning flag and carries its own configuration.
+                                        #   Pick the reasoning model with `model` instead
     budget:                             # multiple providers supported
       type: openai
       model: gpt-4o-mini
@@ -488,38 +540,13 @@ documented one, for a gateway or proxy in front of the model that accepts less;
 raising one is refused, naming the field, because the provider would refuse
 what the engine then sends.
 
-**Upgrading a company that needs them.** Two facts decide the order:
-
-- **A build older than these fields applies a revision that carries them, and
-  ignores them.** A stored revision is read leniently, so that a newer peer's
-  fields never take the older half of a fleet down — which means a limit you
-  state is enforced only by the nodes that know it, while an older node goes
-  on sending what it always sent. What an older node *does* refuse is a
-  document submitted to it: its `PUT` or `PATCH /config`, or an import that
-  goes through it, refuses keys it does not know.
-- **This build refuses a stored company that needs a limit and states none** —
-  one naming `gemini-embedding-001`, `embed-v4.0` or a model this build does
-  not know — at boot as well as at an apply, exactly as it refuses a model with
-  no known width — and, the same way, `embed-v4.0` at any `dimensions` but
-  1536, which its endpoint cannot produce. No node of this build starts on
-  that revision.
-
-So:
-
-- **On OpenAI's models**, an upgrade needs nothing: every limit is documented.
-  If you mean to *lower* one for a gateway, state it once every node runs this
-  build, because until then an older node does not enforce it.
-- **On any other model**, state the limits on the **first data node** you
-  upgrade — one with the `data` role, whose store is not scratch: with that
-  node stopped, import the corrected document offline
-  (`crewlet config import company.yaml`), then start it. It publishes the
-  revision as it boots, and the older nodes apply it — without the limits —
-  and keep running until each is upgraded in turn. A node **without** `data`
-  cannot be first: its store is scratch, so `crewlet config import` refuses
-  it, every older data node's `PUT /config` refuses the new keys, and started
-  with no company file it boots on the fleet's revision, which this build
-  refuses to run while it lacks the limits. Upgrade such a node only after a
-  data node has published the corrected revision.
+**A company that needs a limit states it.** A stored company naming
+`gemini-embedding-001`, `embed-v4.0` or a model this build does not know,
+without the limits it needs, is refused at boot as well as at an apply,
+exactly as a model with no known width is — and, the same way, `embed-v4.0`
+at any `dimensions` but 1536, which its endpoint cannot produce. No node
+starts on that revision, so state the limits in the same edit that names the
+model.
 
 The engine counts **bytes** against those token limits rather than shipping a
 tokenizer per vendor: every tokenizer these models use emits at most one token
@@ -603,6 +630,83 @@ the model's per-input window (`max_input_tokens`, or the model's own) — one
 input must fit one request, so a request total below the window is also the most
 one input may hold, and the knowledge corpus would then embed a shorter opening
 of every long source, each under a new digest and so embedded again.
+
+### Claude models: thinking, effort and sampling
+
+An `anthropic` request's SHAPE is a function of its model, because the Claude
+generations accept different requests and a field a model does not accept is
+an HTTP 400 — which the [fallback chain](../concepts/architecture.md#2-inside-one-node) does not
+retry, since a refusal of the request itself is not something another attempt
+fixes. So the engine reads what each model accepts from one table
+(`internal/providers/llm/anthropic/claudemodel`) and sends nothing the model in
+front of it would refuse:
+
+| Models | Thinking | `reasoning_effort` | `reasoning_budget_tokens` | Output cap |
+|---|---|---|---|---|
+| `claude-fable-5-1`, `claude-mythos-5-1`, `claude-fable-5`, `claude-mythos-5`, `claude-opus-5-5`, `claude-opus-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-sonnet-5-5`, `claude-sonnet-5` | adaptive, every call | low · medium · high · xhigh · max | refused | 128K |
+| `claude-opus-4-6`, `claude-sonnet-4-6` | adaptive, every call | low · medium · high · max | refused | 128K |
+| `claude-opus-4-5` | only with a budget | low · medium · high | 1024 to below the cap | 64K |
+| `claude-sonnet-4-5`, `claude-haiku-4-5` and older | only with a budget | refused | 1024 to below the cap | 64K (older: 32K–64K) |
+| any id the table does not know | adaptive, every call | every level | refused | 64K |
+
+- **There is no thinking switch.** On a model with adaptive thinking every
+  call sends `thinking: {type: adaptive, display: summarized}` — the summary
+  is what fills the round's reasoning and the live thinking text on the
+  dashboard, and it costs the same as the hidden default. Turning thinking off
+  is refused outright by Opus 5.5, Fable and Mythos, and on Opus 4.8 and 5 it
+  makes the model write a tool call into its prose instead of making it. How
+  hard the model thinks is `reasoning_effort`, which defaults to `high`: every
+  phase this engine runs is long-horizon agentic tool use, and Opus 5.5's own
+  default is `medium`, so an unset level would silently think less after a
+  model upgrade. The calls that need little — the round-cap judge, the
+  knowledge answer, the turn-start filters and the learning passes — ask for
+  `low` on their own, and no call can ask for more than the entry's level. A
+  call's level that falls on one the model skips (`xhigh` on Opus 4.6) is
+  sent as the next level down that it takes.
+- **A budget-era model thinks only with a budget.** `reasoning_budget_tokens`
+  turns thinking on with that many tokens; unset, it does not think.
+- **No temperature is sent by default.** A call that names one (the judge asks
+  for 0, the auxiliary passes for 0.2) gets it only on a model that takes a
+  sampling parameter and on a call that is not thinking — in practice a
+  budget-era model with no budget. Elsewhere it is dropped rather than
+  refused, because those models answer any temperature with a 400.
+- **`max_tokens` is the model's own cap.** Thinking is spent from the same
+  cap as the answer, so a smaller one truncates a round or empties it; an
+  unused cap costs nothing, and spend is bounded by
+  [token budgets](#token-budgets) instead. A call's own smaller cap is honoured
+  only on a call that is not thinking.
+- **No forced tool choice and no prefill** are ever sent: a phase that must
+  end in a call names it and is asked again when a round ends without it,
+  and a conversation always ends on a user turn or a tool result.
+- **Reasoning written under an earlier tool set is shed** on
+  `claude-fable-5-1`, `claude-opus-5-5`, `claude-sonnet-5-5` and any id the
+  table does not know. Those models bind each thinking block to the system
+  prompt and the tools of the request that wrote it, and refuse it with a 400
+  once either has changed. A phase's tools do change: `activate_tool` adds
+  one, and a resumed run renders them again. So the rounds before a change
+  are replayed without their thinking, while their text and calls are
+  replayed whole. Every other model is replayed every block, because it runs
+  no such check. See
+  [the conversation only grows](../concepts/turn-engine.md#the-conversation-only-grows).
+
+A Bedrock or Vertex spelling of a model (`anthropic.claude-opus-5-5`,
+`us.anthropic.claude-sonnet-4-5-20250929-v1:0`, `claude-opus-4-5@20251101`)
+and a dated snapshot are read as the model they spell. An id the table does
+not know — most likely a model released after this build — gets the current
+generation's shape, and `crewlet validate` warns about it at `claude_model`:
+if it is a gateway alias for an older model, name that model there, or its
+calls may be refused. Every rule above is checked when the config is
+validated, and again when the provider is built, where a model written as a
+`${VAR}` is first known.
+
+The table is compiled into the build and the models are not, so
+`crewlet llm doctor <key>` checks an entry against the live model: it reads
+the model's record from the vendor's Models API, reports every place the
+table disagrees with it — a **problem** when the disagreement puts a field the
+model refuses on every call — and sends one real round in a phase's shape,
+which must come back as a tool call. A gateway that does not serve
+`/v1/models` is reported as *not served* rather than as a failure. See the
+[CLI reference](../reference/cli.md#crewlet-llm).
 
 ## Tier A (`crewlet.yaml`)
 
@@ -1282,7 +1386,7 @@ units:
 | `project` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.Project` / `org.Role.Project`). The team's tracker project as identity: an item that names nobody in the org chart routes to the unit lead, it is the project the team files work under, and on the engine's own tracker it is what an item filed with no `unit` belongs to — whoever filed it (see [the work tracker](../guides/work-tracker.md#which-team-an-item-belongs-to)). **Vendor-neutral** — it names a native project or a Jira one, whichever [`tracker.backend`](#tracker) the company runs, so switching backends does not rewrite the org chart. **Not** an MCP credential, and it does **not** scope knowledge reads. Keys are an upper-case letter plus 1–9 upper-case letters or digits (`ENG`, `PROD`), which is the shape every backend accepts |
 | `space` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.Space` / `org.Role.Space`). The team's knowledge container as identity: a page change that names nobody routes to the unit lead, and it is where the team writes. Vendor-neutral and shaped like `project`, above. It does **not** scope reads — read scope is the org-wide `knowledge.scope` only. The reserved containers (`knowledge.skills_container`, default `TS`, and `knowledge.root_space`, default `HOME`) are refused here |
 | `workers` | list[string] | no | Which [worker templates](#worker-templates) this seat may delegate to. **Empty means every one** — a company that publishes three workers wants its seats using them, and requiring each seat to opt in turns a shared library into per-seat copy-paste. A name no template defines is refused at load |
-| `sandbox` | dict | no | The seat's [code sandbox](../concepts/code-sandbox.md#per-role-gate--rolesandbox) gate. **Absent means the seat is never offered the sandbox tool.** `enabled: true` offers it; `run_in` picks where its code work runs (`direct`, `container`, `e2b`, or `self` — inside its own agent-mode executor run; empty inherits `providers.sandbox.default_run_in`); `coding_agent` (`claude-code` or `opencode`) overrides the provider default; `pause_ttl_seconds` (unset inherits the provider's, `0` never holds a paused box) and `max_turns` (unset inherits, `0` uncapped, negative refused) tune its runs; `env` is the environment injected into them and where external-service tokens are declared; `mcp.servers` names which of the seat's MCP servers the coding agent gets; `setup` is per-seat provisioning applied after `providers.sandbox.setup`. A block with any of `run_in`, `env`, `mcp` or `setup` but `enabled` unset is refused, since none of it would be read |
+| `sandbox` | dict | no | The seat's [code sandbox](../concepts/code-sandbox.md#per-role-gate--rolesandbox) gate. **Absent means the seat is never offered the sandbox tool.** `enabled: true` offers it; `run_in` picks where its code work runs (`direct`, `container`, `e2b`, or `self` — inside its own agent-mode executor run; empty inherits `providers.sandbox.default_run_in`); `coding_agent` (`claude-code` or `opencode`) overrides the provider default; `pause_ttl_seconds` (unset inherits the provider's, `0` never holds a paused box, negative refused) and `max_turns` (unset inherits, `0` uncapped, negative refused) tune its runs; `env` is the environment injected into them and where external-service tokens are declared; `mcp.servers` names which of the seat's MCP servers the coding agent gets; `setup` is per-seat provisioning applied after `providers.sandbox.setup`. A block with any of `run_in`, `env`, `mcp` or `setup` but `enabled` unset is refused, since none of it would be read |
 | `placement` | dict | no | Which nodes may run this seat; absent means any node that runs seats (see [Placement](../guides/fleet.md#placement)). `node` pins it to one node id and `labels` names pairs a node must **all** carry under [`node.labels`](../concepts/configuration.md#nodelabels); give both and both must hold. Everything is compared exactly against what a node advertises, so each part takes the shape a node's own is held to. A **label key** follows the node-label grammar: not empty, at most 63 bytes, and no whitespace or unprintable character anywhere (`zone`, `topology.example.com/rack`). A **label value** may hold spaces inside it or be empty, but none around it, since a node's values are trimmed. **`node`** is a node id: it starts with a letter or digit and holds only letters, digits, `.`, `_` or `-`, at most 64 characters — and it is compared as written, so a `${VAR}` is not resolved here. A selector outside these shapes could never match a node, so it is refused at validation, naming the field, rather than left for the running fleet to report as `seats_unplaceable` |
 | `schedules` | list | no | Role-scoped recurring tasks — see [Schedules](#schedules) |
 

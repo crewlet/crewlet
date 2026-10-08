@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -127,7 +128,7 @@ func TestAnAnswerByTurnReachesACoordinatorTheApplyBroughtUp(t *testing.T) {
 	if answer == nil {
 		t.Fatal("the dispatcher has no route for an answer by turn")
 	}
-	given := types.SandboxAnswerGiven{TurnID: "t1", AgentHandle: "swe", Answer: "main"}
+	given := types.SandboxAnswerGiven{TurnID: "t1", AgentHandle: "swe", Answer: "main", LaunchID: "launch-1"}
 	trigger := events.New(given, events.TraceContext{})
 
 	disposition, err := answer(t.Context(), given, trigger)
@@ -308,42 +309,6 @@ roles:
 	}
 }
 
-// THE REMOTE BACKEND IS BUILT WITH THE FLEET TO ASK, on the boot of a company
-// that reaches it and on an apply of another: its create asks every live
-// node's build before it secures a box, and a backend handed nobody to ask is
-// refused — so a path that forgot it would fail this node's boot or its apply.
-func TestTheRemoteBackendIsBuiltWithTheFleetToAsk(t *testing.T) {
-	t.Parallel()
-	doc := func(template string) string {
-		return `
-name: Nimbus
-providers:
-  sandbox:
-    e2b:
-      api_key: e2b_test_key
-      template: ` + template + `
-roles:
-  - name: SWE
-    handle: swe
-    sandbox:
-      enabled: true
-      run_in: e2b
-`
-	}
-	e := sandboxNode(t, parseCompany(t, doc("crewlet-a")))
-	if e.sandbox.Load() == nil {
-		t.Fatal("a node booted on a remote catalogue brought no sandbox runtime up")
-	}
-	status, applied, err := e.Apply(t.Context(), parseCompany(t, doc("crewlet-b")),
-		time.Date(2026, 3, 2, 10, 0, 0, 0, time.UTC))
-	if err != nil || status == configplane.StatusError {
-		t.Fatalf("Apply = (%s, %v, %v), want the revision's remote backend built", status, applied, err)
-	}
-	if _, err := e.sandboxManager().Provider(sandbox.Placement(config.PlacementE2B)); err != nil {
-		t.Fatalf("the applied catalogue serves no remote backend: %v", err)
-	}
-}
-
 // A POLL INTERVAL NO DUTY CAN BE GRANTED FOR IS REFUSED AT BOOT, on a node with
 // no sandbox, as on one that has one.
 //
@@ -482,10 +447,8 @@ func seedRunningRun(t *testing.T, e *Engine, turnID, sandboxID string) {
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
-	suspended, err := store.MarkSuspended(ctx, turnID, sandbox.Suspension{State: map[string]any{
-		"version": float64(1), "pending_tool_call_id": "call-1",
-		"pending_tool_name": builtin.RunSandboxTool,
-	}})
+	suspended, err := store.MarkSuspended(ctx, turnID, sandbox.Suspension{State: json.RawMessage(
+		`{"version":1,"pending_tool_call_id":"call-1","pending_tool_name":"` + builtin.RunSandboxTool + `"}`)})
 	if err != nil || !suspended {
 		t.Fatalf("MarkSuspended = (%v, %v), want the run open to the poll", suspended, err)
 	}

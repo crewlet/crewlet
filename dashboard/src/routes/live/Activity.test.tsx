@@ -23,6 +23,7 @@ import { fmtDate } from "~/lib/format.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+import { withDerived } from "~/test/org.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -60,7 +61,7 @@ function mount() {
         events: [
           {
             id: "e-1",
-            type: "task_created",
+            type: "task_assigned",
             category: "task",
             source: "engine",
             actor: "CEO",
@@ -268,19 +269,21 @@ test("a seat's log asks for that seat and shows only its live rows", async () =>
   location.hash = "#/live/events?seat=swe";
   const asked: { what: string; params: Record<string, unknown> }[] = [];
   const store = new Store();
-  store.applyOrg({
-    roles: [
-      { name: "SWE", handle: "swe" },
-      { name: "CTO", handle: "cto" },
-    ],
-  });
+  store.applyOrg(
+    withDerived({
+      roles: [
+        { name: "SWE", handle: "swe" },
+        { name: "CTO", handle: "cto" },
+      ],
+    }),
+  );
   store.applyAgents([
     { role: "SWE", handle: "swe", agent_id: "a-swe" },
     { role: "CTO", handle: "cto", agent_id: "a-cto" },
   ]);
   const live = (id: string, agentId: string, summary: string) => ({
     id,
-    type: "task_created",
+    type: "task_assigned",
     category: "task",
     source: "engine",
     actor: "engine",

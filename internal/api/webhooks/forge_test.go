@@ -368,7 +368,7 @@ func TestAForgeJiraEventLosesTheRelaysOwnFields(t *testing.T) {
 	// The RAW bytes are untouched, though: they are what the store keeps
 	// and what a re-verification would need.
 	rows := e.rows(t)
-	rec, err := e.events.ByID(t.Context(), rows[0].ID)
+	rec, err := e.events.ByID(t.Context(), rows[0].ID, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -645,7 +645,7 @@ func TestBothSurfacesShowWhatTheProviderSentNotWhatWasRouted(t *testing.T) {
 	}
 
 	rows := e.rows(t)
-	rec, err := e.events.ByID(t.Context(), rows[0].ID)
+	rec, err := e.events.ByID(t.Context(), rows[0].ID, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

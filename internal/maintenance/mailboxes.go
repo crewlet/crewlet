@@ -34,10 +34,9 @@ import (
 //     mailboxes exist, but it has nowhere to keep when a seat was first seen
 //     missing or that a retirement is in flight.
 //   - THE BROKER IS THE BACKSTOP. A mailbox can exist with no record: a node
-//     whose registration failed creates the mailbox anyway, and a mailbox of a
-//     seat removed before the registry existed was never registered at all.
-//     Once such a seat is gone its handle is gone from the org, so nothing but
-//     the broker still knows the subscription is there. So every sweep also
+//     whose registration failed creates the mailbox anyway. Once such a seat
+//     is gone its handle is gone from the org, so nothing but the broker
+//     still knows the subscription is there. So every sweep also
 //     LISTS the seat mailboxes the broker holds ([queue.EventQueue]'s
 //     ListSubscriptions) and registers each one of a seat outside the roster
 //     that has no record, stamping its absence at once. From then on it is an
@@ -467,8 +466,8 @@ func (m *Mailboxes) sweep(ctx context.Context, now, cutoff time.Time) (int64, er
 	}
 	// A SEAT IN THE ROSTER WITH NO RECORD is a mailbox a node created before
 	// it could register it: a coordination store that refused the write, or
-	// a build that predates the registry. Registered here, so that if the
-	// seat is ever removed its mailbox is remembered.
+	// a registration that lost every compare-and-set. Registered here, so
+	// that if the seat is ever removed its mailbox is remembered.
 	for _, handle := range roster {
 		if registered[handle] {
 			continue
@@ -531,9 +530,8 @@ func (m *Mailboxes) discover(
 		}
 		log.WarnContext(ctx, "seat_mailbox_discovered", "handle", handle,
 			"detail", "the broker holds a mailbox for a seat that is not in the active revision and "+
-				"had no registry record (a registration that failed, or a seat removed before the "+
-				"registry existed); it is registered now and retired after the grace period like "+
-				"any other removed seat's")
+				"had no registry record (a registration that failed); it is registered now and "+
+				"retired after the grace period like any other removed seat's")
 		if _, err := m.judge(ctx, rec, clock, cutoff); err != nil {
 			errs = append(errs, err)
 		}
@@ -643,16 +641,16 @@ func (m *Mailboxes) retire(ctx context.Context, rec coord.MailboxRecord, clock s
 	if lease == nil {
 		// WHICH of the two the refusal says, rather than both: an
 		// operator reading "a node still holds it" goes looking for a
-		// node serving a stale revision, and one reading "an older
-		// build" finishes a rolling upgrade — and only one of them is
-		// true.
+		// node serving a stale revision, and one reading "a node on a
+		// lower lease protocol" waits for that node to leave — and only
+		// one of them is true.
 		detail := "the seat is absent from the active revision but a node still holds its " +
 			"lease — one still serving a revision that has the seat; the mailbox is kept and " +
 			"the claim retried on the next tick"
 		if refused != coord.RefusedHeld {
 			detail = "the seat is absent from the active revision but its lease could not be " +
-				"claimed because a node of an older build holds a lease in this fleet; the " +
-				"mailbox is kept until the rolling upgrade finishes"
+				"claimed because a node on a lower lease protocol holds a presence or seat " +
+				"lease in this fleet; the mailbox is kept until that node has left"
 		}
 		log.WarnContext(ctx, "seat_mailbox_retirement_held", "handle", handle,
 			"absent_since", rec.AbsentSince, "refused", string(refused), "detail", detail)

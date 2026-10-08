@@ -47,11 +47,9 @@
 // The company's top-level `timezone` is the one clock every calendar edge the
 // engine cuts is on — the tracker's days and weeks, a person's own day, a
 // relative or all-day date, and the wall clock a schedule naming no zone of
-// its own fires on — read through [Company.Location]. That is ADR-0018. The
-// tracker and the scheduler each held a clock of their own before it and
-// everything else assumed UTC, so "today" had one answer per subsystem; both
-// retired keys are refused by name rather than as misspellings, because the
-// example companies shipped them.
+// its own fires on — read through [Company.Location]. That is ADR-0018: one
+// clock rather than one per subsystem, because a clock per subsystem gives
+// "today" one answer per subsystem.
 //
 // # No validation framework
 //

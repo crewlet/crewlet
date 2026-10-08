@@ -6,8 +6,8 @@
  *
  * The STATE and the per-node counts are `mcp_servers_status`, which the engine
  * reads off every node's presence heartbeat — one listing, every node's answer,
- * so there is no node that "did not answer in time", only one whose build does
- * not report, drawn as unknown rather than as zero. WHO a server reaches is
+ * so there is no node that "did not answer in time", only one whose last
+ * heartbeat carried no status, drawn as unknown rather than as zero. WHO a server reaches is
  * each agent seat's `tool_sources` on the pushed org (`lib/mcpServers.ts`
  * `grantedSeats`). This component derives neither; it draws both.
  *
@@ -40,7 +40,7 @@ import type {
 /**
  * One node's cell for one server, in words and a tone.
  *
- * UNREPORTED IS NOT ZERO: a node on a build older than the report says
+ * UNREPORTED IS NOT ZERO: a node whose last heartbeat carried no status says
  * nothing, and "none" under its name would be a claim it never made.
  */
 export function nodeCellWords(cell: McpServerNode): {
@@ -179,8 +179,9 @@ export function McpServers({
 
 /**
  * The nodes whose cells are unknown, named once above the grid rather than
- * guessed at in every row: a build older than the report says nothing about
- * its MCP servers, and each of its cells reads "not reported" for that reason.
+ * guessed at in every row: a node whose last heartbeat carried no status said
+ * nothing about its MCP servers, and each of its cells reads "not reported"
+ * for that reason.
  */
 function SilentNodes({ nodes }: { nodes: McpStatusNode[] }) {
   return (
@@ -192,8 +193,8 @@ function SilentNodes({ nodes }: { nodes: McpStatusNode[] }) {
           <span className="mono">{n.id}</span>
         </span>
       ))}{" "}
-      {nodes.length === 1 ? "runs" : "run"} a build that does not report its MCP servers, so whether
-      they started there is unknown.
+      did not publish {nodes.length === 1 ? "its" : "their"} MCP report on the last heartbeat, so
+      whether the servers started there is unknown.
     </p>
   );
 }
@@ -213,13 +214,9 @@ export function ServerStateTag({ state }: { state: McpServerState }) {
   );
 }
 
-/**
- * Who a server reaches, and an unknown reach said AS unknown — in the muted
- * ink, so it never reads as the finding "no seat" does.
- */
+/** Who a server reaches. */
 function Reach({ server, seats }: { server: McpServerStatus; seats: Seat[] }) {
-  const reach = reachOf(server, seats);
-  return <span className={reach.known ? "t-caption" : "t-caption muted"}>{reach.text}</span>;
+  return <span className="t-caption">{reachOf(server, seats)}</span>;
 }
 
 /**
@@ -330,10 +327,7 @@ export function ServerHeader({
         facts={[
           { label: "Transport", value: server.transport || "unknown" },
           { label: "Instances", value: server.shared ? "one for the company" : "one per seat" },
-          {
-            label: "Reaches",
-            value: reach.known ? reach.text : <span className="muted">{reach.text}</span>,
-          },
+          { label: "Reaches", value: reach },
           { label: "Tools", value: <NumberCell value={toolsOf(server)} /> },
         ]}
       />

@@ -30,6 +30,7 @@ func laggingNode(t *testing.T) (*counted, string) {
 	published, err := s.plane.Activate(t.Context(), coord.ActivationRequest{
 		RevisionID: "the-fleets-company", Summary: "written on another node",
 		Payload: []byte(`{"name":"Acme"}`), At: pinned,
+		Origin: coord.RevisionOrigin{Author: "maya", AuthorKind: "operator", Source: "api", CreatedAt: pinned},
 	})
 	if err != nil {
 		t.Fatalf("the fleet's own activation: %v", err)

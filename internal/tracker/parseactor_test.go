@@ -126,9 +126,8 @@ func TestAnUnblockedNoticeStillReachesTheActorsOwnSeat(t *testing.T) {
 //
 // Every seat, every human at the dashboard and every token nobody bound is a
 // party of ONE — the author's own handle, which is what the exclusion
-// compared against before the field existed. The wire says so too: a record
-// with no bound seat carries no `actor_seat` key at all, so an older build
-// reading one sees the bytes it has always seen.
+// compares against. The wire says so too: a record with no bound seat carries
+// no `actor_seat` key at all, so it says nothing it has no value for.
 func TestAnUnboundWriterRoutesAsBefore(t *testing.T) {
 	t.Parallel()
 	// `ana` is [parseRecord]'s own author, and a watcher here.
@@ -148,8 +147,8 @@ func TestAnUnboundWriterRoutesAsBefore(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 	if _, held := wire["actor_seat"]; held {
-		t.Errorf("a record with no bound seat carries %s — an omitted field is "+
-			"what keeps the wire what every older build already reads", payload)
+		t.Errorf("a record with no bound seat carries %s — a field with no "+
+			"value is omitted from the wire", payload)
 	}
 	routed, err := tracker.NewParser(tracker.ParserOptions{}).Parse(
 		t.Context(), delivery(t, record), registry(t, "ana", "cy", "di"))

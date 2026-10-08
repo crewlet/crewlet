@@ -62,16 +62,15 @@ interface Episode {
   /** The LABEL of the event that woke the turn ("Message from Ana: Slack
    *  message") — what woke it, never what it did. */
   task_summary: string;
-  /** What the turn was asked: "" for a turn recorded before the ask was
-   *  stored, and on every compacted row. On a LISTED row this is its opening
+  /** What the turn was asked: "" for a turn that was told nothing, and on
+   *  every compacted row. On a LISTED row this is its opening
    *  — at most 600 bytes, the engine's `learning.EpisodeAccountBytes`: what a
    *  seat is shown of a past turn's words before they are condensed, so a text
    *  listed whole is one a seat was shown whole — and `agent_episode` reads it
    *  whole. */
   ask: string;
   /** The size of the whole ask in bytes: the ask above is all of it exactly
-   *  when this is its length. Zero from a holder on a build that sends no
-   *  size, which sends no ask either — read as a text that is whole. */
+   *  when this is its length. */
   ask_bytes: number;
   /** What the turn DID: the review's account of what landed, or its final
    *  answer — on a listed row its opening, as `ask` is. */
@@ -93,9 +92,8 @@ interface Episode {
   /** A compacted row stands for a cluster of turns rather than one. */
   compacted: boolean;
   count: number;
-  /** What a compacted row folded; null on a raw row — and on a compacted one
-   *  whose holder runs a build that does not say, which is the holder not
-   *  saying rather than a compaction that recorded nothing. */
+  /** What a compacted row folded — always present on one — and null on a raw
+   *  row, which says how its one turn ended in `review_outcome`. */
   compaction: EpisodeCompaction | null;
 }
 
@@ -203,10 +201,10 @@ export interface MemoryOverviewSeat {
   /** The node holding the seat, or `none` — then nothing is counted,
    *  because no copy anywhere is current. */
   held_by: string;
-  /** Why the holder's count is NOT here — it did not answer, runs a build
-   *  that cannot, or is still taking the seat — or "" when it is. A row
-   *  with a reason carries zeros that are not a count; never draw them as
-   *  one. */
+  /** Why the holder's count is NOT here — it did not answer (or its answer
+   *  could not be read), or it is still taking the seat — or "" when it is.
+   *  A row with a reason carries zeros that are not a count; never draw
+   *  them as one. */
   unavailable: string;
 }
 

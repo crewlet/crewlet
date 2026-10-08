@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,9 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/coord"
-	"github.com/crewlet/crewlet/internal/coord/coordtest"
-	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
@@ -67,7 +63,8 @@ type e2bStub struct {
 	// envdToken is the box's envd access token, answered by the create, a
 	// connect and a read of the box, and REQUIRED by envd on every request
 	// it serves, as a secured box's is. Empty is a box made without secured
-	// access — an older build's — whose envd requires nothing.
+	// access, whose envd requires nothing — what E2B makes for a create that
+	// does not ask for `secure`.
 	envdToken string
 	// refused counts the envd requests refused for their token.
 	refused int
@@ -345,42 +342,6 @@ func endEvent(exit int) any {
 		"end": map[string]any{"exitCode": exit}}}
 }
 
-// fleetOn is a fleet whose live nodes each run one build, read through the
-// presence leases and the [coord.FeatureReader] the engine hands the backend —
-// so the create's gate meets the real three-valued answer rather than a
-// boolean a test made up. A nil build is a node whose last heartbeat carried
-// no status at all.
-func fleetOn(t *testing.T, builds ...[]coord.Feature) coord.FeatureReader {
-	t.Helper()
-	return coord.FeatureReader{Leases: presence(t, builds...)}
-}
-
-// presence is the lease table fleetOn reads, for a case that breaks it.
-func presence(t *testing.T, builds ...[]coord.Feature) *coordmem.Backend {
-	t.Helper()
-	leases := coordmem.New()
-	for i, features := range builds {
-		node := fmt.Sprintf("n%d", i+1)
-		meta := map[string]any{"roles": []string{"seats"}}
-		if features != nil {
-			meta[coord.StatusKey] = coord.NodeStatus{Features: features}.Meta()
-		}
-		lease, refused, err := leases.TryAcquire(context.Background(), coord.NodeResource(node),
-			coord.AcquireOptions{Owner: node + ":a", TTL: time.Hour, Preferred: node, Ungated: true, Meta: meta})
-		if err != nil || lease == nil {
-			t.Fatalf("presence of %s: %v (refused %q)", node, err, refused)
-		}
-	}
-	return leases
-}
-
-// upgradedFleet is a fleet of one node, on this build.
-func upgradedFleet(t *testing.T) coord.FeatureReader { return fleetOn(t, coord.Features) }
-
-// olderBuild is a node from before the envd access token: it publishes a
-// status, so what it lacks is a definite no rather than a silence.
-var olderBuild = []coord.Feature{coord.FeatureMCPStatus, coord.FeatureSeatPause}
-
 // newE2B points a provider at the stub.
 //
 // THE ROUND-TRIPPER IS THE REDIRECTION, not a base-URL option, because the
@@ -393,8 +354,7 @@ func newE2B(t *testing.T, stub *e2bStub) (*sandbox.E2BProvider, *httptest.Server
 
 	provider, err := sandbox.NewE2B(sandbox.E2BOptions{
 		APIKey: "e2b_secret", Domain: "test.invalid",
-		Fleet: upgradedFleet(t),
-		HTTP:  &http.Client{Transport: httpxtest.Rewrite(t, server)},
+		HTTP: &http.Client{Transport: httpxtest.Rewrite(t, server)},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -460,83 +420,10 @@ func TestE2BCreateSendsTheDocumentedRequest(t *testing.T) {
 	if meta["crewlet"] == nil {
 		t.Errorf("a box was minted with nothing marking it as ours: %v", body["metadata"])
 	}
-	// SECURED, on a fleet every node of which can read a secured box:
-	// unasked, this endpoint makes a box whose envd requires no credential.
+	// SECURED: unasked, this endpoint makes a box whose envd requires no
+	// credential.
 	if body["secure"] != true {
 		t.Errorf("secure = %v; want a box created with secured envd access", body["secure"])
-	}
-}
-
-// A BOX IS SECURED ONLY ONCE EVERY LIVE NODE CAN READ IT. A secured box's envd
-// refuses every request without its token and an older build sends none, so
-// while one is live — it may hold the waiter or the run's seat next — a box is
-// created the shape it can read: `secure` absent, as an older build creates
-// it. A definite no from any node decides it; a fleet that could not say is
-// secured, because that is a blip of a fleet that has finished upgrading far
-// more often than it is a rollout.
-//
-// Mutation: secure every box, and the older-fleet cases fail; secure none,
-// and the rest do; read an unknown as "no", and the three unknown cases do.
-func TestE2BSecuresABoxOnlyOnceEveryLiveNodeCanReadIt(t *testing.T) {
-	t.Parallel()
-	broken := coordtest.NewFaulty(presence(t, coord.Features))
-	broken.Break(nil)
-	for _, tc := range []struct {
-		name   string
-		fleet  sandbox.FleetFeatures
-		secure bool
-	}{
-		{"every_node_upgraded", fleetOn(t, coord.Features, coord.Features), true},
-		{"one_node_older", fleetOn(t, coord.Features, olderBuild), false},
-		{"an_older_node_beside_a_silent_one", fleetOn(t, nil, olderBuild), false},
-		{"a_node_said_nothing", fleetOn(t, coord.Features, nil), true},
-		{"no_node_is_live", fleetOn(t), true},
-		{"the_store_could_not_be_read", coord.FeatureReader{Leases: broken}, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			stub := newE2BStub()
-			server := httptest.NewServer(stub)
-			t.Cleanup(server.Close)
-			provider, err := sandbox.NewE2B(sandbox.E2BOptions{
-				APIKey: "k", Domain: "test.invalid", Fleet: tc.fleet,
-				HTTP: &http.Client{Transport: httpxtest.Rewrite(t, server)},
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			box, err := provider.Create(context.Background(), sandbox.Spec{CodingAgent: "claude-code"})
-			if err != nil {
-				t.Fatal(err)
-			}
-			secure, sent := stub.body("/sandboxes")["secure"]
-			switch {
-			case tc.secure && secure != true:
-				t.Errorf("secure = %v; want a box created secured", secure)
-			case !tc.secure && sent:
-				// ABSENT rather than false: the request an older build
-				// sends, byte for byte.
-				t.Errorf("secure = %v; want it absent, as an older build creates a box", secure)
-			}
-			// AND THE BOX IS REACHED either way: with its token when it
-			// has one, without when it was made with none.
-			if err := box.WriteFile(context.Background(), "/home/user/.crewlet/done", []byte("0\n")); err != nil {
-				t.Fatalf("WriteFile: %v", err)
-			}
-			if got := stub.header("/files", "X-Access-Token") != ""; got != tc.secure {
-				t.Errorf("token sent = %v on a box created secure=%v", got, tc.secure)
-			}
-		})
-	}
-}
-
-// A PROVIDER WITH NOBODY TO ASK IS REFUSED AT CONSTRUCTION: either default it
-// could take for the fleet's answer is wrong on some fleet.
-func TestE2BRefusesToBuildWithoutAFleet(t *testing.T) {
-	t.Parallel()
-	_, err := sandbox.NewE2B(sandbox.E2BOptions{APIKey: "k"})
-	if err == nil || !strings.Contains(err.Error(), "Fleet") {
-		t.Fatalf("NewE2B with no fleet = %v; want a refusal naming E2BOptions.Fleet", err)
 	}
 }
 
@@ -598,30 +485,6 @@ func TestE2BSendsTheBoxsAccessTokenOnEveryEnvdRequest(t *testing.T) {
 	}
 }
 
-// A BOX MADE WITHOUT SECURED ACCESS IS STILL REACHED. An older build created
-// its boxes unsecured, and their envd asks for no token — so a box the control
-// plane answers none for is reached without one, which is what its envd
-// expects, rather than refused for lacking what it never had.
-func TestE2BReachesABoxMadeWithoutSecuredAccess(t *testing.T) {
-	t.Parallel()
-	stub := newE2BStub()
-	stub.envdToken = ""
-	provider, _ := newE2B(t, stub)
-	box, err := provider.Attach(context.Background(), "sbx1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	stub.mu.Lock()
-	stub.files["/home/user/.crewlet/done"] = []byte("0\n")
-	stub.mu.Unlock()
-	if got, err := box.ReadFile(context.Background(), "/home/user/.crewlet/done"); err != nil || string(got) != "0\n" {
-		t.Fatalf("ReadFile = %q, %v", got, err)
-	}
-	if got := stub.header("/files", "X-Access-Token"); got != "" {
-		t.Errorf("a token was sent to a box that has none: %q", got)
-	}
-}
-
 // THE TEMPLATE FALLS BACK IN ORDER: the company's, then the coding agent's
 // own.
 //
@@ -650,8 +513,7 @@ func TestE2BPicksATemplateInOrder(t *testing.T) {
 			t.Cleanup(server.Close)
 			provider, err := sandbox.NewE2B(sandbox.E2BOptions{
 				APIKey: "k", Domain: "test.invalid", Template: tc.company,
-				Fleet: upgradedFleet(t),
-				HTTP:  &http.Client{Transport: httpxtest.Rewrite(t, server)},
+				HTTP: &http.Client{Transport: httpxtest.Rewrite(t, server)},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -683,8 +545,7 @@ func TestE2BTalksToTheBoxOnItsDerivedHost(t *testing.T) {
 	transport := httpxtest.Rewrite(t, server)
 	provider, err := sandbox.NewE2B(sandbox.E2BOptions{
 		APIKey: "k", Domain: "test.invalid",
-		Fleet: upgradedFleet(t),
-		HTTP:  &http.Client{Transport: transport},
+		HTTP: &http.Client{Transport: transport},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -734,8 +595,7 @@ func TestE2BNormalisesTheDomain(t *testing.T) {
 		transport := httpxtest.Rewrite(t, server)
 		provider, err := sandbox.NewE2B(sandbox.E2BOptions{
 			APIKey: "k", Domain: domain,
-			Fleet: upgradedFleet(t),
-			HTTP:  &http.Client{Transport: transport},
+			HTTP: &http.Client{Transport: transport},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -890,8 +750,7 @@ func TestE2BRefusesAnImpossibleFrameLength(t *testing.T) {
 	t.Cleanup(server.Close)
 	provider, err := sandbox.NewE2B(sandbox.E2BOptions{
 		APIKey: "k", Domain: "test.invalid",
-		Fleet: upgradedFleet(t),
-		HTTP:  &http.Client{Transport: httpxtest.Rewrite(t, server)},
+		HTTP: &http.Client{Transport: httpxtest.Rewrite(t, server)},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1147,8 +1006,7 @@ func TestE2BConnectToAVanishedBoxFails(t *testing.T) {
 	t.Cleanup(server.Close)
 	provider, err := sandbox.NewE2B(sandbox.E2BOptions{
 		APIKey: "k", Domain: "test.invalid",
-		Fleet: upgradedFleet(t),
-		HTTP:  &http.Client{Transport: httpxtest.Rewrite(t, server)},
+		HTTP: &http.Client{Transport: httpxtest.Rewrite(t, server)},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1212,8 +1070,7 @@ func TestE2BCreateWithoutAnIDIsRefused(t *testing.T) {
 	t.Cleanup(server.Close)
 	provider, err := sandbox.NewE2B(sandbox.E2BOptions{
 		APIKey: "k", Domain: "test.invalid",
-		Fleet: upgradedFleet(t),
-		HTTP:  &http.Client{Transport: httpxtest.Rewrite(t, server)},
+		HTTP: &http.Client{Transport: httpxtest.Rewrite(t, server)},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1283,7 +1140,6 @@ func TestE2BACommandOutlivesTheControlPlaneTimeout(t *testing.T) {
 
 	provider, err := sandbox.NewE2B(sandbox.E2BOptions{
 		APIKey: "k", Domain: "test.invalid",
-		Fleet: upgradedFleet(t),
 		// A SMALL overall bound, standing in for the control plane's: the
 		// command below runs longer than it.
 		//

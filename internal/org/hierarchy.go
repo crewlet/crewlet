@@ -68,9 +68,10 @@ func (o *Organization) Ancestors(r *Role) []*Role {
 // root-level seat.
 //
 // BY THE SEAT, NOT BY ITS NAME. A seat is used by pointer everywhere (see
-// [Role]), and a stored revision can still hold two seats of one name: looked
-// up by name, the second seat was answered with the first one's unit, so its
-// prompt named a team it is not in.
+// [Role]), and an applied revision can still hold two seats of one name (an
+// admission rule an apply does not enforce): looked up by name, the second
+// seat would be answered with the first one's unit, so its prompt would name
+// a team it is not in.
 func (o *Organization) UnitFor(r *Role) *Unit {
 	for u := range o.AllUnits() {
 		if slices.Contains(u.Roles, r) {

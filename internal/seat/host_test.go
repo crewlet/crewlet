@@ -818,11 +818,12 @@ func (c *floorCounter) FleetProtocolFloor(ctx context.Context) (int, bool, error
 // A node whose share did not come out even has room for one more seat and
 // nothing free to take — the steady state of most of a fleet — and it used to
 // read the fleet's protocol floor on every sweep to rule the mixed-version
-// gate out. The floor is a question about every live lease, which the KV
-// backend answers from a view that takes in every lease write the fleet makes
-// while anybody asks it: asked every five seconds, the view never went idle,
-// and each such node took in the fleet's heartbeats — about 670 messages a
-// second at ten thousand seats — to learn what each refusal had already said.
+// gate out. The floor is a question about every live presence and seat lease,
+// which the KV backend answers from a view that takes in every write to the
+// seat lease bucket while anybody asks it: asked every five seconds, the view
+// never went idle, and each such node took in the fleet's heartbeats — about
+// 670 messages a second at ten thousand seats — to learn what each refusal had
+// already said.
 // So here every seat is held, by this node's peer and by a node that has
 // given up its presence (a drain's first step), this node has room, and its
 // sweeps must read no floor at all. And the gate half stands: once an
@@ -1311,15 +1312,16 @@ func TestASeatAPeerGivesBackIsTakenAtTheNextSweep(t *testing.T) {
 // A PEER THAT SAYS NOTHING ADDS NOTHING, so a fleet it holds seats in never
 // reads as full on its account.
 //
-// A build from before the count writes none, and the one thing its silence
-// must never do is make a free seat look held. It holds a seat here; the
-// others' counts do not cover the fleet, so a node with room goes on trying.
+// A row that carries no count readably reads as zero, and the one thing that
+// silence must never do is make a free seat look held. The silent peer holds a
+// seat here; the others' counts do not cover the fleet, so a node with room
+// goes on trying.
 func TestAPeerThatSaysNothingNeverMakesTheFleetFull(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
-	f.present("node-old", time.Hour, placement.NodeProfile{})
+	f.present("node-silent", time.Hour, placement.NodeProfile{})
 	if lease, _, err := f.store.TryAcquire(f.ctx, coord.SeatResource("ceo"), coord.AcquireOptions{
-		Owner: "node-old:1", TTL: time.Hour, Protocol: coord.ProtocolVersion,
+		Owner: "node-silent:1", TTL: time.Hour, Protocol: coord.ProtocolVersion,
 	}); err != nil || lease == nil {
 		t.Fatalf("stage the silent peer's seat: lease=%v err=%v", lease, err)
 	}

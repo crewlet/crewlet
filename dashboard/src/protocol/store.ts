@@ -104,8 +104,8 @@ export function mergeLiveCall(
     keyof CallVersions,
     readonly string[],
   ][]) {
-    const pushed = next.versions?.[detail] ?? 0;
-    const have = same ? (held.versions?.[detail] ?? 0) : 0;
+    const pushed = next.versions[detail];
+    const have = same ? held.versions[detail] : 0;
     const carried = fields.every((f) => f in next);
     if (carried && pushed >= have) {
       versions[detail] = pushed;
@@ -145,8 +145,8 @@ function newerDetail(held: LiveCall, older: LiveCall): LiveCall | null {
     keyof CallVersions,
     readonly string[],
   ][]) {
-    const version = older.versions?.[detail] ?? 0;
-    if (version <= (held.versions?.[detail] ?? 0) || !fields.every((f) => f in older)) continue;
+    const version = older.versions[detail];
+    if (version <= held.versions[detail] || !fields.every((f) => f in older)) continue;
     merged ??= { ...held };
     for (const f of fields) merged[f] = (older as unknown as Record<string, unknown>)[f];
     versions[detail] = version;
@@ -180,11 +180,10 @@ export interface StoreState {
   tools: ToolRow[];
   /**
    * The engine's own health: the `health` push, `api.Health` WHOLE, replaced
-   * by the snapshot and by every five-second tick. `{status: "unknown"}` while
-   * the socket is down — the one value here that is not a push, and asserts
-   * nothing beyond that it is not known.
+   * by the snapshot and by every five-second tick. `null` while it is not
+   * known — the socket is down, or no frame has arrived yet.
    */
-  health: EngineHealth;
+  health: EngineHealth | null;
   tokens: Rollup | null;
   /**
    * The company's live token meter as the last `budget` push stated it, and
@@ -231,7 +230,7 @@ function emptyState(): StoreState {
     sandboxes: [],
     org: null,
     tools: [],
-    health: { status: "unknown" },
+    health: null,
     tokens: null,
     budget: null,
     schedules: null,
@@ -405,12 +404,12 @@ export class Store {
       if (a.role !== answer.role) return a;
       const heldSeq = a.live_call_seq ?? 0;
       const seq = answer.live_call_seq;
-      if (seq === undefined || seq >= heldSeq) {
+      if (seq >= heldSeq) {
         moved = true;
         return {
           ...a,
           live_call: mergeLiveCall(a.live_call, answer.live_call).call,
-          live_call_seq: seq ?? heldSeq,
+          live_call_seq: seq,
         };
       }
       current = false;
@@ -479,8 +478,8 @@ export class Store {
   }
 
   applyHealth(health: EngineHealth | null | undefined): void {
-    this.state.health = health ?? { status: "unknown" };
-    this.state.connected = !!health && health.status !== "unknown";
+    this.state.health = health ?? null;
+    this.state.connected = !!health;
     this.emit("health");
   }
 
@@ -488,7 +487,7 @@ export class Store {
     this.state.connected = value;
     // A dropped socket CLEARS the health slice rather than freezing it. A stale
     // "healthy" is a lie with a timestamp nobody can see.
-    if (!value) this.state.health = { status: "unknown" };
+    if (!value) this.state.health = null;
     this.emit("health");
   }
 

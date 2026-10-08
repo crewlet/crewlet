@@ -11,16 +11,15 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
-// The two gates' view of the lease buckets.
+// The protocol gate's view of the seat lease bucket.
 //
-// Both gates in this package ask a question about EVERY live lease record:
-// the protocol gate whether any is held at a lower protocol than the claim
-// (coord.ProtocolVersion, ADR-0016), and the duty gate whether any in the
-// seat lease bucket was written by a build that predates the duty bucket
-// (layoutDutyLane). They asked it by LISTING both buckets — a certified walk
-// of every lease in the fleet — on every gated claim, twice (the check and
-// the re-check), on every duty claim and in every FleetProtocolFloor. So a
-// claim cost a function of the leases already held: measured on a
+// The protocol gate asks a question about EVERY live lease record of the
+// classes it counts — presence and seats, [coord.ProtocolGateCounts], which
+// says why a duty is not one: whether any is held at a lower protocol than the
+// claim (coord.ProtocolVersion, ADR-0016). It asked it by LISTING the lease
+// buckets — a certified walk of every lease in the fleet — on every gated
+// claim, twice (the check and the re-check), and in every FleetProtocolFloor.
+// So a claim cost a function of the leases already held: measured on a
 // three-member cluster with about 9,300 seats held, a gated seat claim took
 // 296–506 ms (p99 1.4–3.4 s), ten claimers managed 27 claims a second
 // between them, and a hundred nodes claiming ten thousand seats from cold
@@ -28,47 +27,52 @@ import (
 // the placement sweep claims seats one after another, each claim a walk of
 // everything the claims before it had written.
 //
-// # What the gates actually need, and what they cannot be told
+// # What the gate actually needs, and what it cannot be told
 //
-// The question is about VALUES — a record's protocol and layout are in its
-// body, not its key — and the builds it exists for are the OLDER ones, which
-// write nothing but their lease records. So nothing an older build writes can
-// be narrowed at the broker, and no record this build could add would be
-// written by the builds the gate is for. Three cheaper shapes were weighed and
-// each breaks the gate:
+// The question is about VALUES — a record's protocol is in its body, not its
+// key — and the builds it exists for are the LOWER-protocol ones, whose lease
+// records are all the gate can count on them writing. So nothing such a build
+// writes can be narrowed at the broker by protocol, and no record a higher
+// build could add would be written by the builds the gate is for. Three
+// cheaper shapes were weighed and each breaks the gate:
 //
-//   - GATING ON PRESENCE, a listing of the `node` class — O(nodes) — misses
-//     an older node that holds seats without presence, and that is not a
-//     corner: a drain gives presence up at its FIRST step (it is what moves
-//     the node's share to its peers) and goes on serving its seats until
-//     each is handed over. Every newer node would claim beside it for the
-//     whole drain, which is the mixed-protocol fleet the gate exists to
-//     prevent.
+//   - GATING ON PRESENCE ALONE, a listing of the `node` class — O(nodes) —
+//     misses a lower-protocol node that holds seats without presence, and
+//     that is not a corner: a drain gives presence up at its FIRST step (it
+//     is what moves the node's share to its peers) and goes on serving its
+//     seats until each is handed over. Every higher node would claim beside
+//     it for the whole drain, which is the mixed-protocol fleet the gate
+//     exists to prevent.
 //   - A FLOOR REFRESHED ON A CADENCE, by this node or published by a
-//     singleton, is as old as its cadence: an older node that joined inside
-//     it is missed by the check AND by the re-check, so the window the
+//     singleton, is as old as its cadence: a lower-protocol node that joined
+//     inside it is missed by the check AND by the re-check, so the window the
 //     re-check bounds to one claim widens to the cadence.
 //   - A PER-OWNER PROTOCOL RECORD, which a class listing could read in
-//     O(nodes), is written by this build and later ones — never by the older
-//     builds the gate is about.
+//     O(nodes), is written only by the builds that publish it — and the gate
+//     must stop for any lower build that does not.
 //
 // # So the view is incremental, and exact by a sequence barrier
 //
-// The view is a WATCH of both lease buckets: the newest record of every key,
-// kept as it arrives, indexed by the two facts the gates judge. The cost of a
-// gate is then the older-protocol records — none outside a rolling upgrade —
-// plus one BARRIER, and the barrier is what makes it exact rather than merely
-// recent. Before a gate is judged, each bucket's last sequence is read from
-// the stream LEADER (a stream info refused when it names no leader, as a
-// listing's index is), and the gate waits until the view has consumed through
-// it. Then the view holds the newest record of every key written before that
-// read — every key live from before the read until after it is in the view,
-// which is the certified listing's own guarantee (walk.go) — so the check
-// and the re-check see what a walk would have seen. The same read carries
-// the store's clock, so judging a record's deadline costs nothing more. A
-// view that cannot reach the leader, or does not catch up within the read
-// budget, answers UNKNOWN; its watch dying does too, and the next gate starts
-// it again.
+// The view is a WATCH of the seat lease bucket — the one holding `seat:` and
+// `node:` leases — keeping the newest record of every key of a counted class
+// as it arrives, indexed by the protocol the gate judges. The duty bucket is
+// not watched at all: no record in it is counted, and its writes are the
+// fleet's duty re-claims, which the view would only take in to throw away.
+// The bucket's other classes (the tracker's walk claims) are taken in, so the
+// view reaches the bucket's last sequence, and dropped as they arrive. The
+// cost of a gate is then the lower-protocol records — none outside a rolling
+// upgrade — plus one BARRIER, and the barrier is what makes it exact rather
+// than merely recent. Before a gate is judged, the bucket's last sequence is
+// read from the stream LEADER (a stream info refused when it names no leader,
+// as a listing's index is), and the gate waits until the view has consumed
+// through it. Then the view holds the newest record of every key written
+// before that read — every key live from before the read until after it is in
+// the view, which is the certified listing's own guarantee (walk.go) — so the
+// check and the re-check see what a walk would have seen. The same read
+// carries the store's clock, so judging a record's deadline costs nothing
+// more. A view that cannot reach the leader, or does not catch up within the
+// read budget, answers UNKNOWN; its watch dying does too, and the next gate
+// starts it again.
 //
 // The watch reads whichever member the broker places it on, which may be
 // behind; the barrier waits that out, which is why no copy's lag can hide a
@@ -76,22 +80,22 @@ import (
 //
 // # What it costs, and why it stops
 //
-// Per gate: two stream infos, where the listing it replaces was a watch
+// Per gate: one stream info, where the listing it replaces was a watch
 // consumer created and deleted per bucket (two metadata proposals each) and
 // every record in the fleet read, twice per claim. Measured on one embedded
 // member (BenchmarkAGatedClaim): a gated claim took 5.8 ms with ten leases
 // held and 231 ms with ten thousand; it takes about 1.0 ms at both, and the
-// view's load of ten thousand records, paid once per run, about 130 ms. What the view costs
-// INSTEAD is every lease write delivered to it while it runs — a fleet's
-// heartbeats, one per held lease per renew — so it runs only while this node
-// is judging gates and stops [gateViewIdle] after the last one. A node at its
-// share of seats claims nothing and pays nothing, and neither does one with
-// room whose every candidate a peer holds: a claim on a held resource is
-// refused [coord.RefusedHeld] before any gate, and the seat host reads the
-// fleet's floor only after a claim the gate refused. One converging from
-// cold pays one load of the buckets and then the writes of the minutes it
-// claims through; a node holding a fleet duty re-claims it every tick and
-// keeps its view for as long as it holds one.
+// view's load of ten thousand records, paid once per run, about 130 ms. What
+// the view costs INSTEAD is every write to the seat lease bucket delivered to
+// it while it runs — a fleet's heartbeats, one per held seat or presence
+// lease per renew — so it runs only while this node is judging gates and
+// stops [gateViewIdle] after the last one. A node at its share of seats
+// claims nothing and pays nothing, and neither does one with room whose
+// every candidate a peer holds: a claim on a held resource is refused
+// [coord.RefusedHeld] before any gate, and the seat host reads the fleet's
+// floor only after a claim the gate refused. One converging from cold pays
+// one load of the bucket and then the writes of the minutes it claims
+// through. A duty claim is ungated, so holding a duty starts no view.
 type gateView struct {
 	s *Store
 
@@ -109,20 +113,19 @@ type gateView struct {
 // gateRun is one start of the view: its watch and what the watch has taken
 // in. Every field but stop and exited is guarded by the view's mutex.
 type gateRun struct {
-	// records is the newest record of every key in both lease buckets,
-	// as far as applied reaches. A key whose newest message is a delete
-	// or purge marker, or a tombstone (no owner), holds nothing a gate
-	// judges and is not kept.
-	records map[gateKey]entry
-	// byProtocol and oldLayout index records by the two facts the gates
-	// judge, so neither ever iterates the current build's leases: the
-	// protocol gate reads the protocols BELOW the claim's, and the duty
-	// gate the seat lease bucket's records by an older layout.
-	byProtocol map[int]map[gateKey]struct{}
-	oldLayout  map[gateKey]struct{}
-	// applied is the highest stream sequence of each bucket this run has
-	// taken in.
-	applied map[*lane]uint64
+	// records is the newest record of every key of a counted class in the
+	// seat lease bucket, as far as applied reaches. A key whose newest
+	// message is a delete or purge marker, or a tombstone (no owner), or
+	// whose class the gate does not count, holds nothing a gate judges and
+	// is not kept.
+	records map[string]entry
+	// byProtocol indexes records by the protocol the gate judges, so the
+	// gate never iterates the current build's leases: it reads the
+	// protocols BELOW the claim's.
+	byProtocol map[int]map[string]struct{}
+	// applied is the highest stream sequence of the bucket this run has
+	// taken in, whatever class its message was.
+	applied uint64
 	// advanced is closed and replaced whenever applied moves or the run
 	// fails, so a barrier waits on it rather than polling.
 	advanced chan struct{}
@@ -134,31 +137,23 @@ type gateRun struct {
 	exited chan struct{}
 }
 
-// gateKey is one record's place: a bucket and a key in it.
-type gateKey struct {
-	lane *lane
-	key  string
-}
-
 // gateViewIdle is how long the view keeps running after the last gate it
 // judged.
 //
 // A MINUTE: twelve of the seat sweep's five-second passes, so a node that is
 // converging — claiming a share of seats a pass at a time — keeps one view
-// through all of it instead of loading the buckets again every pass; and
-// longer than the ticks of the fleet duties that re-claim often, so their
-// holder is not reloading either. Past it a node that has stopped claiming
-// stops receiving the fleet's lease writes, which is the whole of the view's
-// standing cost.
+// through all of it instead of loading the bucket again every pass. Past it a
+// node that has stopped claiming stops receiving the fleet's lease writes,
+// which is the whole of the view's standing cost.
 const gateViewIdle = time.Minute
 
 func newGateView(s *Store) *gateView {
 	return &gateView{s: s}
 }
 
-// blocked reports whether any live lease is held at a protocol below
-// protocol — the protocol gate's predicate, judged exactly (see the file
-// doc).
+// blocked reports whether any live presence or seat lease is held at a
+// protocol below protocol — the protocol gate's predicate, judged exactly
+// (see the file doc).
 func (v *gateView) blocked(ctx context.Context, protocol int) (bool, error) {
 	run, clk, err := v.settle(ctx)
 	if err != nil {
@@ -177,20 +172,9 @@ func (v *gateView) blocked(ctx context.Context, protocol int) (bool, error) {
 	return false, nil
 }
 
-// olderLayout reports whether any live record in the seat lease bucket was
-// written by a build that predates the duty bucket — the duty gate's
-// predicate.
-func (v *gateView) olderLayout(ctx context.Context) (bool, error) {
-	run, clk, err := v.settle(ctx)
-	if err != nil {
-		return false, err
-	}
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	return run.anyLive(run.oldLayout, clk), nil
-}
-
-// floor is the lowest protocol among live leases, and whether there were any.
+// floor is the lowest protocol among the live leases the gate counts, and
+// whether there were any — the same records [gateView.blocked] judges, so a
+// floor read after a refusal names the lease that refused it.
 func (v *gateView) floor(ctx context.Context) (int, bool, error) {
 	run, clk, err := v.settle(ctx)
 	if err != nil {
@@ -210,11 +194,11 @@ func (v *gateView) floor(ctx context.Context) (int, bool, error) {
 	return floor, found, nil
 }
 
-// anyLive reports whether any of keys is a record the gates count as held,
+// anyLive reports whether any of keys is a record the gate counts as held,
 // dropping the ones whose deadline has passed: a record past its deadline is
-// never held again — a renew is a new message — so the sets the gates
-// iterate stay the size of what is live. Held under the view's mutex.
-func (r *gateRun) anyLive(keys map[gateKey]struct{}, clk gateClock) bool {
+// never held again — a renew is a new message — so the sets the gate
+// iterates stay the size of what is live. Held under the view's mutex.
+func (r *gateRun) anyLive(keys map[string]struct{}, clk gateClock) bool {
 	for k := range keys {
 		e, ok := r.records[k]
 		if !ok {
@@ -229,40 +213,34 @@ func (r *gateRun) anyLive(keys map[gateKey]struct{}, clk gateClock) bool {
 	return false
 }
 
-// gateClock is each bucket's clock, read by the barrier with the sequence.
-type gateClock map[*lane]time.Time
+// gateClock is the bucket's clock, read by the barrier with the sequence.
+type gateClock time.Time
 
-// live is the gates' "held": a record naming an owner whose deadline, on its
+// live is the gate's "held": a record naming an owner whose deadline, on its
 // own bucket's clock, has not passed.
 //
 // Judged by the DEADLINE even on the seat lease bucket, where a record taken
 // at the bucket's full age is otherwise judged live for as long as it can be
 // read ([Store.held]): the bucket reaps such a record at that same deadline,
 // and a view — which learns of a write but never of an expiry — would keep a
-// reaped record for ever. A claiming record (epoch 0) is held, as the gates
-// have always counted it.
+// reaped record for ever. A claiming record (epoch 0) is held, as the gate
+// has always counted it.
 func (c gateClock) live(e entry) bool {
-	return e.value.Owner != "" && e.created.Add(e.value.ttl()).After(c[e.lane])
+	return e.value.Owner != "" && e.created.Add(e.value.ttl()).After(time.Time(c))
 }
 
-// settle is the barrier: it reads each lease bucket's last sequence and
+// settle is the barrier: it reads the seat lease bucket's last sequence and
 // clock from its stream leader, waits until the view has taken in every
 // message through that sequence, and hands back the run it waited on and the
-// clocks. The view is started if it is not running.
+// clock. The view is started if it is not running.
 func (v *gateView) settle(ctx context.Context) (*gateRun, gateClock, error) {
 	run, err := v.ensure(ctx)
 	if err != nil {
-		return nil, nil, err
+		return nil, gateClock{}, err
 	}
-	lanes := []*lane{v.s.leases, v.s.duties}
-	targets := make(map[*lane]uint64, len(lanes))
-	clk := make(gateClock, len(lanes))
-	for _, l := range lanes {
-		last, at, err := v.s.streamPoint(ctx, l)
-		if err != nil {
-			return nil, nil, err
-		}
-		targets[l], clk[l] = last, at
+	target, at, err := v.s.streamPoint(ctx, v.s.leases)
+	if err != nil {
+		return nil, gateClock{}, err
 	}
 	if _, bounded := ctx.Deadline(); !bounded {
 		var cancel context.CancelFunc
@@ -271,26 +249,20 @@ func (v *gateView) settle(ctx context.Context) (*gateRun, gateClock, error) {
 	}
 	for {
 		v.mu.Lock()
-		failed, advanced := run.failed, run.advanced
-		caught := true
-		for l, target := range targets {
-			if run.applied[l] < target {
-				caught = false
-			}
-		}
+		failed, advanced, caught := run.failed, run.advanced, run.applied >= target
 		v.mu.Unlock()
 		switch {
 		case failed != nil:
-			return nil, nil, unavailable("judge the lease gates", failed)
+			return nil, gateClock{}, unavailable("judge the protocol gate", failed)
 		case caught:
-			return run, clk, nil
+			return run, gateClock(at), nil
 		}
 		select {
 		case <-advanced:
 		case <-ctx.Done():
-			return nil, nil, unavailable("judge the lease gates", fmt.Errorf(
-				"the view did not catch up with the lease buckets' last writes: %w",
-				ctx.Err()))
+			return nil, gateClock{}, unavailable("judge the protocol gate", fmt.Errorf(
+				"the view did not catch up with %s's last write: %w",
+				v.s.leases.kv.Bucket(), ctx.Err()))
 		}
 	}
 }
@@ -311,33 +283,23 @@ func (v *gateView) ensure(ctx context.Context) (*gateRun, error) {
 	}
 	v.halt()
 	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	lanes := []*lane{v.s.leases, v.s.duties}
-	watchers := make([]jetstream.KeyWatcher, 0, len(lanes))
-	for _, l := range lanes {
-		w, err := l.kv.WatchAll(ctx)
-		if err != nil {
-			cancel()
-			return nil, unavailable("watch "+l.kv.Bucket()+" for the lease gates", err)
-		}
-		watchers = append(watchers, w)
+	l := v.s.leases
+	w, err := l.kv.WatchAll(ctx)
+	if err != nil {
+		cancel()
+		return nil, unavailable("watch "+l.kv.Bucket()+" for the protocol gate", err)
 	}
 	run := &gateRun{
-		records:    map[gateKey]entry{},
-		byProtocol: map[int]map[gateKey]struct{}{},
-		oldLayout:  map[gateKey]struct{}{},
-		applied:    map[*lane]uint64{},
+		records:    map[string]entry{},
+		byProtocol: map[int]map[string]struct{}{},
 		advanced:   make(chan struct{}),
 		stop:       cancel,
 		exited:     make(chan struct{}),
 	}
 	v.run = run
-	var wg sync.WaitGroup
-	for i, l := range lanes {
-		wg.Go(func() { v.consume(ctx, run, l, watchers[i]) })
-	}
 	go func() {
-		wg.Wait()
-		close(run.exited)
+		defer close(run.exited)
+		v.consume(ctx, run, l, w)
 	}()
 	if v.idle == nil {
 		v.idle = time.AfterFunc(gateViewIdle, v.stopIfIdle)
@@ -347,7 +309,7 @@ func (v *gateView) ensure(ctx context.Context) (*gateRun, error) {
 	return run, nil
 }
 
-// consume applies one bucket's watch to its run until the watch ends.
+// consume applies the bucket's watch to its run until the watch ends.
 func (v *gateView) consume(ctx context.Context, run *gateRun, l *lane, w jetstream.KeyWatcher) {
 	for kve := range w.Updates() {
 		if kve == nil {
@@ -370,9 +332,11 @@ func (v *gateView) consume(ctx context.Context, run *gateRun, l *lane, w jetstre
 	}
 }
 
-// apply takes one message of one bucket into a run.
+// apply takes one message of the bucket into a run. Every message advances
+// the run, whatever its class, because the barrier waits on the bucket's
+// sequence; only a live-owner record of a class the gate counts is kept.
 func (v *gateView) apply(ctx context.Context, run *gateRun, l *lane, kve jetstream.KeyValueEntry) {
-	k := gateKey{lane: l, key: kve.Key()}
+	k := kve.Key()
 	var (
 		e    entry
 		keep bool
@@ -384,7 +348,7 @@ func (v *gateView) apply(ctx context.Context, run *gateRun, l *lane, kve jetstre
 			// nothing a gate can judge.
 			log.WarnContext(ctx, "coord_kv_undecodable_record", "bucket", l.kv.Bucket(), "key", kve.Key())
 		}
-		keep = ok && e.value.Owner != ""
+		keep = ok && e.value.Owner != "" && coord.ProtocolGateCounts(e.resource)
 	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -395,17 +359,14 @@ func (v *gateView) apply(ctx context.Context, run *gateRun, l *lane, kve jetstre
 	run.forget(k)
 	if keep {
 		run.records[k] = e
-		p := coord.StoredProtocol(e.value.Protocol)
+		p := e.value.Protocol
 		if run.byProtocol[p] == nil {
-			run.byProtocol[p] = map[gateKey]struct{}{}
+			run.byProtocol[p] = map[string]struct{}{}
 		}
 		run.byProtocol[p][k] = struct{}{}
-		if l == v.s.leases && e.value.Layout < layoutDutyLane {
-			run.oldLayout[k] = struct{}{}
-		}
 	}
-	if kve.Revision() > run.applied[l] {
-		run.applied[l] = kve.Revision()
+	if kve.Revision() > run.applied {
+		run.applied = kve.Revision()
 		close(run.advanced)
 		run.advanced = make(chan struct{})
 	}
@@ -413,20 +374,19 @@ func (v *gateView) apply(ctx context.Context, run *gateRun, l *lane, kve jetstre
 
 // forget removes one key from a run and its indexes. Held under the view's
 // mutex.
-func (r *gateRun) forget(k gateKey) {
+func (r *gateRun) forget(k string) {
 	e, ok := r.records[k]
 	if !ok {
 		return
 	}
 	delete(r.records, k)
-	p := coord.StoredProtocol(e.value.Protocol)
+	p := e.value.Protocol
 	if keys := r.byProtocol[p]; keys != nil {
 		delete(keys, k)
 		if len(keys) == 0 {
 			delete(r.byProtocol, p)
 		}
 	}
-	delete(r.oldLayout, k)
 }
 
 // stopIfIdle stops the watch when no gate has been judged for gateViewIdle,
@@ -501,8 +461,8 @@ func (s *Store) streamPoint(ctx context.Context, l *lane) (uint64, time.Time, er
 	return last, info.TimeStamp.UTC(), nil
 }
 
-// Close stops what the store runs in the background — the gates' view of the
-// lease buckets — and waits for it. The store answers nothing after it that
+// Close stops what the store runs in the background — the gate's view of the
+// seat lease bucket — and waits for it. The store answers nothing after it that
 // needs the view without starting it again.
 func (s *Store) Close() {
 	s.gate.close()

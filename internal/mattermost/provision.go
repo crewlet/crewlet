@@ -111,10 +111,10 @@ type Bot struct {
 	// forgotten the moment a disconnect succeeds, and it does not survive a
 	// lost coordination store or a restore from backup. The account does.
 	//
-	// Empty on a bot an older build disabled, which compares unequal and is
-	// therefore reported rather than re-enabled. That is the safe
-	// direction: it asks a person about an account this engine cannot prove
-	// it turned off.
+	// Empty, or anything other than the marker, on a bot a person disabled
+	// at Mattermost, which compares unequal and is therefore reported rather
+	// than re-enabled. That is the safe direction: it asks a person about an
+	// account this engine cannot prove it turned off.
 	Description string `json:"description"`
 	// DisplayName is the bot's own, which lives on the BOT record rather
 	// than on its user: the user's nickname is a different field the bots

@@ -38,11 +38,12 @@ var SpendColumns = []string{
 // with a history table, a notification table and NO TASKS, because every one
 // of its record's caps was a routing cap.
 //
-// FIVE TABLES ARE DELIBERATELY ABSENT, and they are the log's own machinery
-// rather than state a record reproduces: the framework's checkpoint, the
-// operation ledger, the deferred records, their scope index and the adoption
-// row. A sixth, the binary vector table, is DERIVED — a pure function of a
-// table that is itself outside the identity claim.
+// THREE TABLES ARE DELIBERATELY ABSENT, and they are the log's own machinery
+// rather than state a record reproduces: the operation ledger, the deferred
+// records and their scope index ([MachineryTables]). The framework's own
+// tables — the checkpoint (`statelog_cursor`), the arbitration anchors
+// (`statelog_anchor`) and the ledger's loss record (`statelog_ops_lost`) — are
+// absent for the same reason and are not this domain's to name.
 var ReproducibleTables = []string{
 	// The object tables.
 	"tracker_tasks", "tracker_comments", "tracker_body_revisions",

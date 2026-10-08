@@ -270,8 +270,9 @@ func TestAResumedPhaseStatesItsOwnSegmentStart(t *testing.T) {
 	if parkedCall["name"] != "run_sandbox" || parkedCall["duration_ms"] != 3100 || parkedCall["origin"] != tools.OriginBuiltin {
 		t.Errorf("the call that parked the phase lost its timing: %v", parkedCall)
 	}
-	// And a row an OLDER build wrote stays untimed rather than acquiring a
-	// zero: absent is "not recorded", a zero is "instant".
+	// And an untimed row — a call whose arguments did not parse, which
+	// never ran — stays untimed rather than acquiring a zero: absent is
+	// "not recorded", a zero is "instant".
 	if _, timed := done.ToolExecutions[0]["duration_ms"]; timed {
 		t.Errorf("an untimed pre-suspend call acquired a duration: %v", done.ToolExecutions[0])
 	}

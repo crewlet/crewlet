@@ -40,18 +40,29 @@ const (
 
 	// JudgeMaxTokens caps the answer.
 	//
-	// The answer is a verdict word, a small integer and one sentence. This
-	// is deliberately several times that: a thinking model spends its cap
-	// reasoning and returns nothing visible if the cap is tight, which
-	// reads as a judge that refused rather than one that was cut off.
+	// The answer is a verdict word, a small integer and one sentence, and
+	// this is several times that. It applies only to a call that does not
+	// think: a thinking model spends its thinking from the same cap, so a
+	// tight one returns nothing visible — a judge that reads as refusing
+	// rather than as cut off — and a backend sends the model's own ceiling
+	// there instead (see llm.Request.MaxTokens). What keeps a thinking
+	// judge short is judgeEffort.
 	JudgeMaxTokens = 400
 
 	// judgeTemperature is zero because this is a classifier. The same
 	// evidence must produce the same verdict — an extension that depended
 	// on sampling would make a turn's cost non-reproducible, and a judge
 	// that says extend on one run and rescue on the next teaches nobody
-	// anything.
+	// anything. Honoured where the model takes a sampling parameter and the
+	// call is not thinking; the current Claude generation takes none, and
+	// there the two-word verdict at judgeEffort is what keeps it stable.
 	judgeTemperature = 0.0
+
+	// judgeEffort is the most thinking a verdict is worth. The judge
+	// classifies a round log into one of two words, and a thinking model
+	// at its entry's level spends JudgeMaxTokens reasoning and returns no
+	// verdict at all — which the policy reads as a refusal.
+	judgeEffort = llm.EffortLow
 
 	// judgeCallsShown bounds the tool log in the prompt, and it is a
 	// window, never a cut: the line says how many calls it shows of how
@@ -203,34 +214,41 @@ func (j *LLMJudge) Decide(ctx context.Context, req Request) (Decision, error) {
 		// NO TOOLS: the answer is two lines of text, and a tool on the
 		// surface invites a model to call it and answer nothing.
 		Temperature: llm.Temp(judgeTemperature),
+		Effort:      judgeEffort,
 		MaxTokens:   JudgeMaxTokens,
 	})
+	// The spend, on every path out of here: the call happened whatever the
+	// answer was, and the caller is the only frame that can charge it. A
+	// REFUSED judgement included — it arrives as an error with no
+	// completion, and its prompt was billed.
+	billed := llm.Billed(completion, err)
+	spent := Decision{Asked: true}
+	if billed != nil {
+		spent = Decision{
+			Asked: true,
+			Model: billed.Model,
+			// The completion's own entry when a chain named one, and the
+			// key this judge was built over otherwise — a single backend
+			// never knows the key it was configured under.
+			ProviderKey:  cmp.Or(billed.ProviderKey, j.key),
+			InputTokens:  billed.InputTokens,
+			OutputTokens: billed.OutputTokens,
+			CacheRead:    billed.CacheRead,
+			CacheWrite:   billed.CacheWrite,
+		}
+	}
 	if err != nil {
-		// Asked, with no model and no tokens: the call was made and the
-		// provider never answered, which is a different fact from the
-		// policy declining to ask at all.
-		return Decision{Asked: true}, fmt.Errorf("extension: judge %s: %w", j.key, err)
+		// Asked, and the provider never answered — which is a different
+		// fact from the policy declining to ask at all. What it billed, if
+		// anything, travels with the failure.
+		return spent, fmt.Errorf("extension: judge %s: %w", j.key, err)
 	}
 	if completion == nil {
 		// A provider answering (nil, nil) is a contract violation, and
 		// checked rather than dereferenced: the panic would surface as a
 		// failed turn on the phase this was trying to be generous to.
-		return Decision{Asked: true}, fmt.Errorf("extension: judge %s returned nothing: %w",
+		return spent, fmt.Errorf("extension: judge %s returned nothing: %w",
 			j.key, ErrNoVerdict)
-	}
-	// The spend, on every path out of here: the call happened whatever the
-	// answer was, and the caller is the only frame that can charge it.
-	spent := Decision{
-		Asked: true,
-		Model: completion.Model,
-		// The completion's own entry when a chain named one, and the key
-		// this judge was built over otherwise — a single backend never
-		// knows the key it was configured under.
-		ProviderKey:  cmp.Or(completion.ProviderKey, j.key),
-		InputTokens:  completion.InputTokens,
-		OutputTokens: completion.OutputTokens,
-		CacheRead:    completion.CacheRead,
-		CacheWrite:   completion.CacheWrite,
 	}
 	decision, err := ParseVerdict(completion.Content)
 	if err != nil {

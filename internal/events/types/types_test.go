@@ -62,7 +62,7 @@ func catalogue() []events.Payload {
 		// knowledge.go
 		KnowledgeRead{},
 		// webhook.go
-		RawWebhook{},
+		RawWebhook{}, InboundDelivery{},
 		// custody.go
 		CustodyBatch{},
 		ReflectionDue{},
@@ -117,6 +117,7 @@ var wireTypes = []string{
 	"prompt.size",
 	"provider_fallback",
 	"raw_webhook",
+	"inbound_delivery",
 	"reflection_completed",
 	"sandbox_answer_given",
 	"sandbox_clarification_requested",
@@ -271,16 +272,15 @@ func TestPayloadTagsAreDistinctAndSnakeCase(t *testing.T) {
 // wireTags is the OTHER HALF OF THE WIRE CONTRACT: the exact JSON keys each
 // registered type publishes. `wireTypes` above pins the type strings, and
 // nothing pinned the keys — so a renamed tag was as green as a comment
-// change, which is exactly how `prompt.size` lost `system_chars`/`user_chars`
-// to a tidier spelling for the length of one review cycle.
+// change.
 //
 // A KEY IS A PEER CONTRACT, AND A RENAME IS A SILENT DELETE. ADR-0006 is
-// additive-only and binds before any release, because a rolling upgrade runs
-// in both directions at once: a renamed tag is a dropped field on whichever
-// half has not upgraded, and every row already written keeps the old key
-// forever. The failure has no symptom a reviewer can see — the build is
-// green, the tests pass, and a reader of the dashboard gets a confidently
-// wrong `0` where the payload used to answer.
+// additive-only from the first build a successor runs beside, because a
+// rolling upgrade runs in both directions at once: a renamed tag is a dropped
+// field on whichever half has not upgraded, and every row already written
+// keeps the old key forever. The failure has no symptom a reviewer can see —
+// the build is green, the tests pass, and a reader of the dashboard gets a
+// confidently wrong `0` where the payload used to answer.
 //
 // GOLDEN, NOT DERIVED. Computing the expected keys from the struct is a test
 // that asserts the code equals itself; the whole value here is that the
@@ -320,15 +320,15 @@ var wireTags = map[string][]string{
 	"llm_unavailable":                 {"agent_id", "attempt_count", "last_error", "last_error_kind", "provider_chain", "role", "turn_id", "work_key"},
 	"provider_fallback":               {"agent_id", "error_kind", "from_provider_key", "iteration", "phase", "role", "to_provider_key", "turn_id", "work_key"},
 	"agent_turn_started":              {"agent_handle", "agent_id", "conversation_key", "resumed", "role", "started_at", "trigger", "turn_id", "work_item", "work_item_basis", "work_key"},
-	"agent_turn_completed":            {"a2a_context", "agent_id", "cache_read_tokens", "cache_write_tokens", "conversation_key", "decision", "error", "error_kind", "execute_model", "failed", "input_tokens", "iterations", "model", "output_tokens", "plan_model", "prompt", "prompt_messages", "response", "review_model", "role", "stopped", "subagent_count", "subagent_input_tokens", "subagent_output_tokens", "subagent_tokens", "suspended", "tool_executions", "total_tokens", "trigger", "turn_id", "work_item", "work_item_basis", "work_key"},
-	"turn_completed":                  {"agent_handle", "agent_id", "all_tool_names", "ask", "conversation_key", "duration_ms", "ended_at", "interactions", "iterations", "outcome", "plan_decision", "plan_summary", "plan_tool_sequence", "review_outcome", "role", "skills_used", "started_at", "suspended", "task_summary", "tool_sequence", "turn_id", "work_item", "work_item_basis", "work_key"},
+	"agent_turn_completed":            {"agent_id", "cache_read_tokens", "cache_write_tokens", "conversation_key", "decision", "error", "error_kind", "execute_model", "failed", "input_tokens", "iterations", "model", "output_tokens", "prompt", "prompt_messages", "response", "review_model", "role", "stopped", "subagent_count", "subagent_input_tokens", "subagent_output_tokens", "subagent_tokens", "suspended", "tool_executions", "total_tokens", "trigger", "turn_id", "work_item", "work_item_basis", "work_key"},
+	"turn_completed":                  {"agent_handle", "agent_id", "all_tool_names", "ask", "conversation_key", "duration_ms", "ended_at", "interactions", "iterations", "outcome", "plan_summary", "review_outcome", "role", "skills_used", "started_at", "suspended", "task_summary", "tool_sequence", "turn_id", "work_item", "work_item_basis", "work_key"},
 	"agent_phase_started":             {"agent_id", "iteration", "phase", "role", "trigger", "turn_id", "work_item", "work_key"},
-	"agent_phase_completed":           {"activity_transcript", "activity_transcript_elided_bytes", "activity_transcript_elided_lines", "agent_id", "backend", "cache_read_tokens", "cache_write_tokens", "coding_agent", "conversation_key", "cost_usd", "decision", "delivered_refs", "delivered_refs_elided", "duration_ms", "empty_answer_rounds", "error", "error_kind", "exhausted_rounds", "failed", "host_iteration", "host_phase", "host_round", "input_tokens", "iteration", "launch_id", "max_rounds", "model", "notes", "output_tokens", "phase", "provider_key", "rescue_fired", "response", "role", "round_ceiling", "round_narration", "rounds", "rounds_used", "sandbox_id", "started_at", "steers", "system_prompt", "task_id", "tool_catalogue", "tool_executions", "tools_available", "total_tokens", "trigger", "turn_id", "user_prompt", "work_item", "work_key", "worker"},
-	"agent_turn_progress":             {"a2a_context", "agent_id", "cache_read_tokens", "cache_write_tokens", "input_tokens", "iteration", "max_rounds", "model", "output_tokens", "partial_round", "phase", "prompt", "prompt_messages", "response", "role", "round_ceiling", "round_narration", "round_num", "round_started_at", "rounds", "running_call", "steers", "tool_executions", "total_tokens", "trigger", "turn_id", "work_item", "work_key"},
+	"agent_phase_completed":           {"activity_transcript", "activity_transcript_elided_bytes", "activity_transcript_elided_lines", "agent_id", "backend", "cache_read_tokens", "cache_write_tokens", "coding_agent", "conversation_key", "cost_usd", "decision", "delivered_refs", "delivered_refs_elided", "duration_ms", "empty_answer_rounds", "error", "error_kind", "exhausted_rounds", "failed", "host_iteration", "host_phase", "host_round", "input_tokens", "iteration", "launch_id", "max_rounds", "model", "notes", "output_tokens", "phase", "provider_key", "refusal", "rescue_fired", "response", "role", "round_ceiling", "round_narration", "rounds", "rounds_used", "sandbox_id", "started_at", "steers", "system_prompt", "system_sections", "task_id", "tool_catalogue", "tool_executions", "tools_available", "total_tokens", "trigger", "turn_id", "user_prompt", "user_sections", "work_item", "work_key", "worker"},
+	"agent_turn_progress":             {"agent_id", "cache_read_tokens", "cache_write_tokens", "input_tokens", "iteration", "max_rounds", "model", "output_tokens", "partial_round", "phase", "prompt", "prompt_messages", "response", "role", "round_ceiling", "round_narration", "round_num", "round_started_at", "rounds", "running_call", "steers", "tool_executions", "total_tokens", "trigger", "turn_id", "work_item", "work_key"},
 	"subagent_batched":                {"failures", "graph", "parent_handle", "round", "started_at", "statuses", "successes", "task_count", "total_tokens", "turn_id", "work_key"},
 	"episode_written":                 {"agent_handle", "agent_id", "duration_ms", "review_outcome", "role", "tool_count", "turn_id", "work_key"},
 	"persist_decider_completed":       {"agent_handle", "agent_id", "classification", "doc_id", "persisted", "review_outcome", "role", "scope", "ttl_until", "turn_id", "work_key"},
-	"skill_used":                      {"agent_handle", "agent_id", "file_loaded", "role", "skill_id", "skill_name", "source_container", "source_kind", "source_page_id", "turn_id", "work_key"},
+	"skill_used":                      {"agent_handle", "agent_id", "role", "skill_id", "skill_name", "source_container", "source_kind", "source_page_id", "turn_id", "work_key"},
 	"knowledge_read":                  {"agent_handle", "agent_id", "backend", "pages", "phase", "query", "role", "turn_id", "via", "work_key"},
 	"prefetch_summary":                {"agent_handle", "agent_id", "counterparty_bytes", "counterparty_hit", "duration_ms", "episode_recall_bytes", "episode_recall_hit", "onboarding_hint_bytes", "onboarding_hint_hit", "personal_memory_bytes", "personal_memory_hit", "relevant_knowledge_bytes", "relevant_knowledge_hit", "relevant_knowledge_selection_count", "role", "started_at", "synthesized_skills_bytes", "synthesized_skills_hit", "thread_context_bytes", "thread_context_hit", "thread_context_posts", "thread_context_read", "thread_context_stopped_short", "trigger_requires_recon", "turn_embedding", "turn_id", "work_key"},
 	"counterparty_profile_updated":    {"observer_handle", "role", "subject_external_id", "subject_handle", "subject_name", "subject_platform", "traits_patched", "turn_id", "work_key"},
@@ -350,13 +350,14 @@ var wireTags = map[string][]string{
 	"seat_resumed":                    {"agent_handle", "agent_id", "paused_at", "paused_by", "resumed_by", "resumed_by_seat", "role"},
 	"agent_turn_stopped":              {"agent_handle", "agent_id", "reason", "role", "stopped_by", "stopped_by_seat", "turn_id", "work_key"},
 	"agent_turn_steered":              {"agent_handle", "agent_id", "iteration", "note", "note_id", "outcome", "phase", "role", "round", "sent_at", "steered_by", "steered_by_seat", "turn_id", "work_key"},
-	"sandbox_answer_given":            {"agent_handle", "answer", "answered_by", "answered_by_seat", "turn_id"},
+	"sandbox_answer_given":            {"agent_handle", "answer", "answered_by", "answered_by_seat", "launch_id", "turn_id"},
 	"sandbox_run_answered":            {"agent_handle", "agent_id", "answered_by", "answered_by_seat", "outcome", "role", "turn_id", "via", "work_item", "work_key"},
 	"phase.tool_skill_blocked":        {"agent_id", "iteration", "phase", "role", "skill_keys", "tool_name", "turn_id", "work_key"},
-	"prompt.size":                     {"agent_id", "approximate_tokens", "iteration", "message_chars", "phase", "role", "system_chars", "tool_chars", "tool_count", "turn_id", "user_chars", "work_key"},
+	"prompt.size":                     {"agent_id", "approximate_tokens", "iteration", "message_bytes", "phase", "role", "system_bytes", "tool_bytes", "tool_count", "turn_id", "user_bytes", "work_key"},
 	"turn.guard_breach":               {"agent_id", "detail", "kind", "role", "turn_id", "work_key"},
 	"tool_skill_page_changed":         {"backend", "container", "page_id", "walk"},
 	"raw_webhook":                     {"body", "body_raw", "forge_atlassian_id", "handle", "headers", "trigger"},
+	"inbound_delivery":                {"body", "channel", "delivery_key", "label", "recipient", "replayed", "route", "summary"},
 }
 
 // TestPayloadTagsMatchTheWireContract pins every payload's keys, both ways: a
@@ -470,76 +471,6 @@ func TestUnknownTypeSurvivesIntact(t *testing.T) {
 	}
 	if !reflect.DeepEqual(before, after) {
 		t.Errorf("round trip through an older build was lossy\n got: %v\nwant: %v", after, before)
-	}
-}
-
-// retiredTypes are wire types an earlier build registered and this one does
-// not. Each one had no publisher and was removed from the registry, and every
-// one of them can still be on the wire: a node of that build publishes it
-// during a rolling upgrade, and a row an older build wrote is read back from
-// the store for as long as retention keeps it.
-var retiredTypes = []string{
-	"agent_reassigned", "role_updated",
-	"task_created", "task_started", "task_completed", "task_failed", "task_delegated",
-	"message_sent", "a2a_message_delivered",
-	"document_created", "document_updated",
-}
-
-// A RETIRED TYPE IS AN UNKNOWN TYPE, AND STAYS A LOSSLESS ONE.
-//
-// Removing a type from the registry is only safe because the envelope treats a
-// type this build does not know as data rather than as an error, which is the
-// invariant [TestUnknownTypeSurvivesIntact] pins with an invented name. This
-// pins it for the names that actually left, and pins the other half of the
-// retirement: none of them may come back registered or placed under a
-// category. A name reused for a different payload would try to decode every
-// row the old build wrote into a shape it never had.
-func TestARetiredTypeStillSurvivesAPeerThatStillPublishesIt(t *testing.T) {
-	t.Parallel()
-	for _, retired := range retiredTypes {
-		t.Run(retired, func(t *testing.T) {
-			t.Parallel()
-			if _, ok := events.PayloadFor(retired); ok {
-				t.Fatalf("%q is registered again: rows an older build wrote under "+
-					"it would decode into a payload they were never written as", retired)
-			}
-			if category, ok := events.Category(retired); ok {
-				t.Errorf("%q is placed under %q, so a filter offers a value nothing "+
-					"in this build publishes", retired, category)
-			}
-			raw := []byte(`{
-				"id":"6f1c3d2e-0000-4000-8000-0000000000aa",
-				"type":"` + retired + `",
-				"timestamp":"2026-08-01T09:08:07.654321Z",
-				"source":"engine",
-				"trace_id":"aaaa1111aaaa1111aaaa1111aaaa1111",
-				"span_id":"bbbb2222bbbb2222","parent_span_id":"",
-				"delegation_depth":0,"parent_turn_id":"",
-				"task_id":"T-1","agent_id":"a-1","role":"Engineer",
-				"detail":{"reason":"written by the build that published it"}
-			}`)
-			var event events.Event
-			if err := json.Unmarshal(raw, &event); err != nil {
-				t.Fatalf("a retired type failed to decode, so a mixed fleet drops it: %v", err)
-			}
-			if event.Data != nil || event.Type != retired {
-				t.Fatalf("decoded %q with a typed body %#v, want the envelope alone", event.Type, event.Data)
-			}
-			out, err := json.Marshal(&event)
-			if err != nil {
-				t.Fatalf("re-marshal: %v", err)
-			}
-			var before, after map[string]any
-			if err := json.Unmarshal(raw, &before); err != nil {
-				t.Fatalf("decode source: %v", err)
-			}
-			if err := json.Unmarshal(out, &after); err != nil {
-				t.Fatalf("decode result: %v", err)
-			}
-			if !reflect.DeepEqual(before, after) {
-				t.Errorf("re-publishing %q was lossy\n got: %v\nwant: %v", retired, after, before)
-			}
-		})
 	}
 }
 
@@ -815,6 +746,14 @@ func (f *filler) fill(v reflect.Value, name string) {
 			}
 		}
 	case reflect.Slice:
+		if v.Type() == reflect.TypeOf(json.RawMessage(nil)) {
+			// RAW JSON IS JSON, so it is filled as a document rather than
+			// as bytes: a delivery's body travels verbatim, and the round
+			// trip proves it arrives as the same document. Compact, since
+			// that is the form an encoder writes it back in.
+			v.SetBytes([]byte(`{"` + name + `":` + strconv.Itoa(f.next()) + `}`))
+			return
+		}
 		slice := reflect.MakeSlice(v.Type(), 2, 2)
 		for i := range 2 {
 			f.fill(slice.Index(i), name)

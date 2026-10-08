@@ -325,7 +325,7 @@ identity.
 
 Only `message` / `app_mention` events that carry **new user-visible content** are delivered: regular messages, `thread_broadcast` replies, file shares (a share without a comment renders as `(shared file: …)` so the body is never blank), and other bots' messages (legacy `bot_message` events resolve the sender from `username` / `bot_id`).
 
-Slack reuses `type: "message"` for channel **bookkeeping**, and those events are skipped with a recorded skip reason (`NotificationSkipped` event) instead of waking the agent with an empty notification:
+Slack reuses `type: "message"` for channel **bookkeeping**, and those events are skipped instead of waking the agent with an empty notification — logged at debug as `slack_event_skipped` with the reason, not recorded as a `NotificationSkipped` event, because they concern nobody and a skip row for each would bury the drops that do matter (a seat no recipient matches, the routing gate, the rate valve) under a busy channel's ordinary traffic:
 
 - `message_changed` — edits, **including Slack's own link-unfurl edits** of a message an agent just posted
 - `message_deleted` — deletions

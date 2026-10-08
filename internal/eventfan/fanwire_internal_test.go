@@ -1,131 +1,125 @@
 package eventfan
 
 import (
-	"reflect"
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/store"
 )
 
-// v1ListFields is every listing filter the base protocol carried. A field
-// outside it is one a v1 peer ignores.
-var v1ListFields = map[string]bool{
-	"Type": true, "Source": true, "Category": true, "TraceID": true, "Actor": true,
-	"TurnID": true, "WorkKey": true, "WorkItem": true, "RelatedAgent": true,
-	"Since": true, "Until": true, "Before": true, "Limit": true,
+// EVERY QUESTION THAT IS FLOORED CARRIES THE ASKER'S INSTANT, AND ONE THAT
+// CARRIES NONE IS REFUSED.
+//
+// Every node floors the history at the instant its asker sends, so a node that
+// answered a question carrying none as of its own clock would answer a
+// different question from its peers — a union of horizons, merged as one. No
+// asker on this protocol sends one, so a node refuses it and is named in the
+// coverage rather than answering around it. The one question asked at no
+// instant is [QuestionKept], which names rows a floored question already
+// found.
+//
+// Mutation: drop the instant check from any one question in [answer], and that
+// case is answered.
+func TestAQuestionWithNoInstantIsRefused(t *testing.T) {
+	t.Parallel()
+	floored := map[Question]any{
+		QuestionEvents:               listParams{Limit: 10},
+		QuestionSeries:               seriesParams{Bucket: store.BucketHour},
+		QuestionEvent:                idParams{ID: "e"},
+		QuestionTrace:                idParams{ID: "t"},
+		QuestionTurn:                 idParams{ID: "t"},
+		QuestionTurns:                turnsParams{SinceDays: 7},
+		QuestionPhases:               phasesParams{Limit: 10},
+		QuestionSeatPhases:           phasesParams{Role: "PM"},
+		QuestionTraceRows:            traceRowsParams{TraceIDs: []string{"t"}, Limit: 10},
+		QuestionPhaseTokens:          phaseTokenParams{},
+		QuestionNotificationOutcomes: outcomeParams{},
+	}
+	for _, q := range Questions {
+		if _, ok := floored[q]; !ok && q != QuestionKept {
+			t.Errorf("question %q is not in this case: decide whether it carries an instant", q)
+		}
+	}
+	for q, params := range floored {
+		raw, err := json.Marshal(params)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// NO STORE: a question refused for its instant never reaches one.
+		if _, err := answer(t.Context(), nil, q, raw, nil); err == nil ||
+			!strings.Contains(err.Error(), "no instant") {
+			t.Errorf("%s with no instant answered %v, want it refused", q, err)
+		}
+	}
 }
 
-// EVERY FILTER ADDED SINCE v1 RAISES THE VERSION A LISTING IS ASKED IN.
-//
-// A peer on an older build ignores a filter it does not know and answers a
-// wider question than was asked, so a listing carrying a newer filter has to go
-// out at that filter's version, which the older peer refuses. The failure this
-// guards is silent — a filter added to [listParams] and left out of
-// [listParams.version] answers correctly on every current node and merges an
-// older node's unfiltered rows into the page during every upgrade — so the
-// check is by reflection over the wire type rather than a list somebody keeps.
-//
-// Mutation: drop either field from [listParams.version].
-func TestEveryListingFilterSinceV1RaisesTheVersion(t *testing.T) {
+// THE TURNS CURSOR TRAVELS WHOLE: its start and its turn id go out together and
+// come back as the cursor that was sent, because a start alone puts the second
+// of two turns at one microsecond behind the cursor and on no page.
+func TestATurnCursorCrossesTheWireWhole(t *testing.T) {
 	t.Parallel()
-	if got := versionOf(QuestionEvents, listParams{Limit: 10}); got != 1 {
-		t.Errorf("a listing with only base filters is asked in v%d, want v1 — an "+
-			"older peer can answer it and must not be excluded", got)
+	cursor := &store.TurnCursor{Start: time.Now().UTC().Truncate(time.Microsecond), TurnID: "t-1"}
+	wire := turnsParamsOf(store.TurnQuery{SinceDays: 7, Before: cursor, At: time.Now()})
+	raw, err := json.Marshal(wire)
+	if err != nil {
+		t.Fatal(err)
 	}
-	typ := reflect.TypeFor[listParams]()
-	for name := range reapplied {
-		if _, ok := typ.FieldByName(name); !ok {
-			t.Errorf("reapplied names %s, which is no listing filter", name)
-		}
+	var back turnsParams
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatal(err)
 	}
-	for i := range typ.NumField() {
-		field := typ.Field(i)
-		if v1ListFields[field.Name] {
-			continue
-		}
-		var p listParams
-		v := reflect.ValueOf(&p).Elem().Field(i)
-		switch v.Kind() {
-		case reflect.String:
-			v.SetString("x")
-		case reflect.Pointer:
-			// A THREE-VALUED FILTER IS SET BY BEING PRESENT, and its zero
-			// value is a filter too: `suspended: false` narrows as much as
-			// `true` does, so it is the value an older peer must not drop.
-			v.Set(reflect.New(v.Type().Elem()))
-		case reflect.Bool:
-			// A TWO-VALUED ONE NARROWS WHEN TRUE, its zero value being the
-			// whole log.
-			v.SetBool(true)
-		default:
-			t.Fatalf("listParams.%s is a %s; teach this test to set it", field.Name, v.Kind())
-		}
-		if _, ok := reapplied[field.Name]; ok {
-			// A FILTER THE ASKER APPLIES AGAIN asks no version on a listing
-			// or an axis — a peer that drops it answers what the asker
-			// narrows, where raising it cost that peer's whole answer — and
-			// it must then actually be applied again: to a listing's rows
-			// (admits), and to an axis by [Fleet.narrowSeries], which
-			// TestAnOlderPeersFeedAxisIsNarrowedNotRefused drives.
-			if got := versionOf(QuestionEvents, p); got != 1 {
-				t.Errorf("listParams.%s is re-applied by the asker and the listing is "+
-					"asked in v%d, want v1 — every older peer is refused for nothing", field.Name, got)
-			}
-			if p.admits() == nil {
-				t.Errorf("listParams.%s is declared re-applied and admits re-applies nothing", field.Name)
-			}
-			if got := versionOf(QuestionSeries, seriesParams{List: p}); got != 2 {
-				t.Errorf("listParams.%s is set on an axis asked in v%d, want v2 — the asker "+
-					"narrows an older peer's bars, so refusing them costs the axis for nothing",
-					field.Name, got)
-			}
-			continue
-		}
-		if got := versionOf(QuestionEvents, p); got < 2 {
-			t.Errorf("listParams.%s is set and the listing is asked in v%d — a peer "+
-				"that ignores it answers a wider question than was asked", field.Name, got)
-		}
-		if got := versionOf(QuestionEvents, p); got > Protocol {
-			t.Errorf("listParams.%s asks v%d, beyond this build's v%d", field.Name, got, Protocol)
-		}
-		// AND ITS AXIS IS ASKED IN THE SAME VERSION: a histogram carries the
-		// listing's filters, and a peer that drops one sums a wider bar.
-		if got, want := versionOf(QuestionSeries, seriesParams{List: p}), max(2, p.version()); got != want {
-			t.Errorf("listParams.%s is set on an axis asked in v%d, want v%d", field.Name, got, want)
-		}
+	if got := back.query(nil).Before; got == nil || *got != *cursor {
+		t.Errorf("the cursor %+v came back off the wire as %+v", cursor, got)
 	}
-	// A HISTOGRAM IS ALWAYS AT LEAST v2, because its answer carries the
-	// failed split whatever it was asked.
-	if got := versionOf(QuestionSeries, seriesParams{At: time.Now()}); got < 2 {
-		t.Errorf("a histogram is asked in v%d; a v1 peer's bars carry no failed split", got)
+}
+
+// THE FEED'S FILTER AND THE SPEND PAGE'S CURSOR CROSS THE WIRE: a peer that
+// read a listing without `feed_only` would answer the accounting rows the feed
+// leaves out, and its axis would count them; one that read a spend page without
+// `before` would answer the FIRST page again, which the merge dedupes into a
+// page that stops where that one did.
+//
+// Mutation: drop FeedOnly from listParamsOf or query, or Before from
+// phaseTokenParamsOf or query, and its case fails.
+func TestTheFeedFilterAndTheSpendCursorCrossTheWire(t *testing.T) {
+	t.Parallel()
+	at := time.Now().UTC().Truncate(time.Microsecond)
+	list := store.ListQuery{FeedOnly: true, Limit: 10, At: at}
+	raw, err := json.Marshal(listParamsOf(list))
+	if err != nil {
+		t.Fatal(err)
 	}
-	// THE COMPANY'S PHASES NARROWED TO A SEAT are v3: an older peer reads
-	// only the role name that question used to carry and answers every seat.
-	if got := versionOf(QuestionPhases, phasesParams{AgentID: "agent-x"}); got != 3 {
-		t.Errorf("the company's phases narrowed to a seat are asked in v%d, want v3", got)
+	var listBack listParams
+	if err := json.Unmarshal(raw, &listBack); err != nil {
+		t.Fatal(err)
 	}
-	if got := versionOf(QuestionPhases, phasesParams{Limit: 10}); got != 1 {
-		t.Errorf("the company's phases, unnarrowed, are asked in v%d, want v1 — every build answers them", got)
+	if !listBack.query().FeedOnly {
+		t.Error("a feed-only listing came back off the wire asking for every row")
 	}
-	// A PAGE OF TURNS IN A WINDOW OF INSTANTS is v3: an older peer reads only
-	// `since_days` and answers the last week for a bar three days ago.
-	for name, p := range map[string]turnsParams{
-		"since": {Since: time.Now()},
-		"until": {Until: time.Now()},
-	} {
-		if got := versionOf(QuestionTurns, p); got != 3 {
-			t.Errorf("a page of turns carrying %s is asked in v%d, want v3", name, got)
-		}
+	raw, err = json.Marshal(seriesParamsOf(store.HistogramQuery{ListQuery: list, Bucket: store.BucketHour}))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := versionOf(QuestionTurns, turnsParams{SinceDays: 7}); got != 1 {
-		t.Errorf("a page of turns by days is asked in v%d, want v1", got)
+	var seriesBack seriesParams
+	if err := json.Unmarshal(raw, &seriesBack); err != nil {
+		t.Fatal(err)
 	}
-	// A LATER PAGE OF SPEND is v5: an older peer ignoring the cursor would
-	// answer the first page again. The first page is v1, so every build
-	// answers it.
-	if got := versionOf(QuestionPhaseTokens, phaseTokenParams{Before: &cursorWire{ID: "x"}}); got != 5 {
-		t.Errorf("a later page of spend is asked in v%d, want v5", got)
+	if !seriesBack.query().FeedOnly {
+		t.Error("a feed-only axis came back off the wire counting every row")
 	}
-	if got := versionOf(QuestionPhaseTokens, phaseTokenParams{Limit: 10}); got != 1 {
-		t.Errorf("the first page of spend is asked in v%d, want v1 — every build answers it", got)
+
+	cursor := &store.Cursor{Time: at, ID: "e-1"}
+	raw, err = json.Marshal(phaseTokenParamsOf(store.PhaseTokenQuery{Before: cursor, Limit: 10, At: at}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var spendBack phaseTokenParams
+	if err := json.Unmarshal(raw, &spendBack); err != nil {
+		t.Fatal(err)
+	}
+	if got := spendBack.query().Before; got == nil || *got != *cursor {
+		t.Errorf("the spend page's cursor %+v came back off the wire as %+v", cursor, got)
 	}
 }

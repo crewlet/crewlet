@@ -125,9 +125,10 @@ const (
 	// AnswerMaxTokens caps the answer the model writes.
 	//
 	// 1024: the contract asks for a few short paragraphs, which is a few
-	// hundred tokens, and the cap is the room a thinking model spends
-	// reasoning before it writes them — the empty answer at the cap is the
-	// failure a smaller one produces.
+	// hundred tokens, with room to finish the last one. It caps a call that
+	// does not think; a thinking model spends its thinking from the same
+	// cap, so there a backend sends the model's own ceiling instead (see
+	// llm.Request.MaxTokens) and answerEffort is what keeps it short.
 	AnswerMaxTokens = 1024
 
 	// AnswerTimeout bounds the one model call.
@@ -140,8 +141,15 @@ const (
 
 // answerTemperature keeps an answer to the same question at the same corpus
 // close to the one cached for it. Not zero, for the reason the auxiliary
-// passes give: greedy decoding on a small model loops.
+// passes give: greedy decoding on a small model loops. Honoured only where the
+// model takes a sampling parameter and the call is not thinking.
 const answerTemperature = 0.2
+
+// answerEffort is the most thinking an answer is worth. It restates what the
+// excerpts it is handed already say, which is extraction rather than
+// reasoning, a person is waiting for it, and on a thinking model the thinking
+// is spent out of AnswerMaxTokens — the empty answer this tool already logs.
+const answerEffort = llm.EffortLow
 
 // The source kinds an answer lists.
 const (
@@ -399,6 +407,7 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// No tools: the answer is the content, and a tool on the surface
 		// invites a model to call it and write nothing.
 		Temperature: llm.Temp(answerTemperature),
+		Effort:      answerEffort,
 		MaxTokens:   AnswerMaxTokens,
 	})
 	if err != nil || completion == nil {

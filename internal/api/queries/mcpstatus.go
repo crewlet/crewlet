@@ -35,9 +35,10 @@ const (
 	// per-seat template no seat on a live node declares credentials for,
 	// or a server no node has applied yet.
 	MCPNotStarted MCPServerState = "not_started"
-	// MCPUnreported — no live node publishes its MCP report: every one
-	// runs a build older than the report. Not "not started", which would
-	// be a claim about servers nobody was asked about.
+	// MCPUnreported — no live node's latest heartbeat carried its MCP
+	// report (its status hook overran the beat, or no node is live), so
+	// nothing can be said about any server. Not "not started", which would
+	// be a claim nobody made.
 	MCPUnreported MCPServerState = "unreported"
 )
 
@@ -61,9 +62,9 @@ type MCPStatusAnswer struct {
 // MCPStatusNode is one live node.
 type MCPStatusNode struct {
 	ID string `json:"id"`
-	// Reported is whether the node publishes its MCP report. False is a
-	// build older than the report, or a heartbeat that carried no status:
-	// its cells are UNKNOWN, never zero.
+	// Reported is whether the node's latest heartbeat carried its status.
+	// False when its status hook did not finish inside the beat's budget,
+	// and its cells are UNKNOWN, never zero.
 	Reported bool `json:"reported"`
 }
 
@@ -118,8 +119,8 @@ type MCPServerNode struct {
 // FROM THE HEARTBEATS, NOT A FAN-OUT. Every node re-publishes what its starts
 // concluded on its presence lease ([coord.NodeStatus.MCP]), so one listing of
 // the lease table is every node's answer at once — there is no node that did
-// not answer in time, only one whose build does not report, and that is a
-// column of its own rather than a row of zeros.
+// not answer in time, only one whose last heartbeat carried no status, and
+// that is a column of its own rather than a row of zeros.
 //
 // OPERATOR-ONLY, like `fleet`: it names the nodes, the launch commands and
 // the first line of each failure, which is the shape of the deployment rather
@@ -141,9 +142,10 @@ func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 	reports := make([]report, 0, len(leases))
 	for _, lease := range leases {
 		r := report{node: nameIn(coord.ClassNode, lease.Resource)}
-		if status, ok := coord.StatusFromMeta(lease.Meta); ok && slices.Contains(status.Features, coord.FeatureMCPStatus) {
-			// ADVERTISED, so an empty list is "started none" — the
-			// feature's own contract — rather than "did not say".
+		if status, ok := coord.StatusFromMeta(lease.Meta); ok {
+			// PUBLISHED, so an empty list is "started none" — the
+			// node always reports what it started beside its status —
+			// rather than "did not say".
 			r.reported = true
 			r.servers = make(map[string]coord.MCPServerStatus, len(status.MCP))
 			for _, m := range status.MCP {

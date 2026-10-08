@@ -49,7 +49,8 @@ import (
 
 var log = logging.Get("llm.cliagent")
 
-// providerName is what a classified failure calls this backend.
+// providerName is what a classified failure calls this backend, and what a
+// completion records as its [llm.Origin.Provider].
 const providerName = "cli-agent"
 
 // Config is one cli-agent provider entry, fully resolved.
@@ -204,6 +205,12 @@ func (p *Provider) String() string {
 }
 
 // Complete runs one CLI invocation and reads its answer.
+//
+// [llm.Request.Effort] is NOT applied, deliberately: a CLI reads its effort
+// from its own configuration in the seat's state directory, and no profile has
+// a per-invocation flag to carry a ceiling on. A ceiling it cannot carry is
+// not one it may fake — rewriting the CLI's settings per call would race every
+// concurrent call sharing the directory — so the call runs at the CLI's own level.
 func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
 	seat := llm.SeatOf(ctx)
 	callID := CallOf(ctx)
@@ -512,9 +519,10 @@ func (p *Provider) completion(
 	// them without ever reaching a budget.
 	env := ParseEnvelope(out.text)
 	comp := &llm.Completion{
-		Model:        p.model,
-		Content:      env.Message,
-		FinishReason: "stop",
+		Model:      p.model,
+		Provider:   providerName,
+		Content:    env.Message,
+		StopReason: llm.StopEnd,
 	}
 	if !env.Parsed {
 		comp.Content = out.text
@@ -527,10 +535,19 @@ func (p *Provider) completion(
 			ID:        fmt.Sprintf("cli_%d", i),
 			Name:      call.Name,
 			Arguments: call.Arguments,
+			// Arguments the envelope could not read: the tool loop
+			// answers the call with this instead of running it on an
+			// empty map, as it does for every other backend.
+			ArgumentsError: call.ArgumentsError,
 		})
 	}
 	if len(comp.ToolCalls) > 0 {
-		comp.FinishReason = "tool_calls"
+		// The CLI reports no stop reason of its own in text mode: the
+		// envelope it was asked for is either an answer or a set of
+		// calls, so those are the only two this backend can honestly
+		// name. A CLI that hit its own cap or refused returns that as
+		// prose or a failure the exit path classifies.
+		comp.StopReason = llm.StopToolUse
 	}
 
 	if out.reported {

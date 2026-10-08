@@ -176,12 +176,7 @@ type ContainerPayload struct {
 	// ChartEpoch is the configuration activation these settings were
 	// derived from ([configplane.ActivationStamp]), which the next
 	// EnsureContainer compares against so an older configuration applied
-	// late cannot walk a newer one back. Record version 2 onwards — the row
-	// in [versionedFields], which is why a record carrying it, a re-stamp
-	// of unchanged settings included, is held back by a build reading 1
-	// rather than applied without it. A version-1 record carries none, and
-	// applies as epoch 0 — older than every configuration this build
-	// stamps.
+	// late cannot walk a newer one back.
 	ChartEpoch int64 `json:"chart_epoch,omitempty"`
 }
 

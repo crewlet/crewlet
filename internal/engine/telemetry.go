@@ -72,8 +72,8 @@ type turnTelemetry struct {
 	// what matches a person's answer back to a detached run — while
 	// partKey is the inbox PARTITION the trigger arrived in, carried only
 	// so a detached coding run's row can also state the batch it was
-	// launched from, which is all a peer predating the identity can match
-	// on.
+	// launched from, which tells two runs parked on one direct message
+	// apart.
 	convKey string
 	partKey string
 	// transport is the chat surface the trigger arrived on — see
@@ -311,8 +311,7 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			//
 			// The partition rides along so the row can state the batch
 			// the run was launched from: it tells two runs parked on
-			// one direct message apart, and it is all a peer predating
-			// the conversation field has to match on.
+			// one direct message apart.
 			ConversationKey: t.convKey,
 			PartitionKey:    t.partKey,
 			// AND THE SURFACE, so a task this turn files says where it
@@ -487,8 +486,15 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		// logged and dropped, so an unbounded failure text costs the
 		// operator the whole record rather than its tail.
 		summary.Error = events.ClipDiagnostic(err.Error())
-		summary.ErrorKind = "error"
+		// The phase's own classifier, which is what the field's doc has
+		// always promised (the classified provider error) and what it
+		// never carried: every failed turn read `error`, so a turn whose
+		// model refused and one whose key was revoked were the same word
+		// on the Turn screen while their phase records said otherwise.
+		summary.ErrorKind = runner.ErrorKind(err)
 		if stopped {
+			// Whatever the error wraps, a turn a person ended is
+			// `stopped` — the one kind that is not a failure.
 			summary.ErrorKind = runner.StoppedKind
 		}
 	}
@@ -540,14 +546,9 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		// OPEN-LOOKING: an absent tool sequence reads
 		// as "the agent engaged with nothing", which silently skips every
 		// worker on exactly the successful turns worth learning from.
-		ToolSequence: spend.ExecuteTools,
-		AllToolNames: spend.AllTools,
-		Outcome:      spend.Outcome,
-		// SKIP OR NOTHING. The field's only surviving reader gates on
-		// PlanDecisionSkip, and a turn that skipped is exactly the one
-		// the loop reports as phase.Skipped — so it is derived from the
-		// turn's own decision rather than from anything a model wrote.
-		PlanDecision:    skipDecision(decision),
+		ToolSequence:    spend.ExecuteTools,
+		AllToolNames:    spend.AllTools,
+		Outcome:         spend.Outcome,
 		SkillsUsed:      t.skills,
 		Interactions:    t.interactions,
 		ConversationKey: t.convKey,
@@ -737,9 +738,8 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 		//
 		// OFF THE RESUMED TURN rather than the row, because the turn is
 		// where the row's identity was read into one shape (resumedTurn:
-		// the unit of work, and the instant it began even on a row an
-		// older build parked), and a second read of the row here is a
-		// second chance to read it differently.
+		// the unit of work, and the instant it began), and a second read
+		// of the row here is a second chance to read it differently.
 		runID:     in.Run.TurnID,
 		workKey:   in.Turn.WorkKey,
 		workSince: in.Turn.WorkSince,
@@ -759,7 +759,7 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 		// message apart: with no partition to agree with, both rows fall
 		// through to recency and the reply to the question in one thread
 		// resumes the run waiting in the other.
-		convKey:   in.Run.Conversation(),
+		convKey:   in.Run.ConversationKey,
 		partKey:   in.Run.PartitionKey,
 		startedAt: time.Now().UTC(),
 		role:      in.Run.Role,
@@ -844,20 +844,6 @@ func seatIdentity(company *Company, handle string) (role, agentID string) {
 		agentID = id.String()
 	}
 	return seat.Name, agentID
-}
-
-// skipDecision maps the turn's decision onto the one plan_decision value
-// anything still reads.
-//
-// A turn that decided nobody was asking is [types.PlanDecisionSkip]; every
-// other turn writes the empty string, which is what the field already meant
-// for a turn that produced no artifact. The learning gate reads exactly
-// one value, so writing a richer vocabulary here would be inventing consumers.
-func skipDecision(decision string) types.PlanDecision {
-	if decision == string(phase.Skipped) {
-		return types.PlanDecisionSkip
-	}
-	return ""
 }
 
 // requesterOf is the seat whose wake started a turn, or "" when no seat's did.

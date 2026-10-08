@@ -191,14 +191,6 @@ func TestTheCompletedTurnEventCarriesWhatReflectionGatesOn(t *testing.T) {
 			t.Error("no whole-turn tool list, so the self-persist gate cannot " +
 				"see a builtin the agent fired in an earlier round")
 		}
-		// AND THE SKIP FIELD IS EMPTY, which is the half that matters: it
-		// carries only PlanDecisionSkip now, and any other value on a turn
-		// that engaged would short-circuit every learning worker.
-		if tc.PlanDecision != "" {
-			t.Errorf("plan_decision = %q on a turn that engaged; only a skip "+
-				"may set it, and anything else silently disables learning",
-				tc.PlanDecision)
-		}
 		if len(tc.Interactions) == 0 {
 			t.Error("no interactions, so no counterparty can ever be profiled")
 		}

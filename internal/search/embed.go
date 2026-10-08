@@ -389,12 +389,11 @@ type EmbedDeps struct {
 
 	// Standing reads what the index step must know about the vector log
 	// before it may publish onto it: whether this node has applied all of
-	// it, and which build every node applying it reads ([LogStanding]).
+	// it ([LogStanding]).
 	//
-	// REQUIRED, never defaulted: a duty that could not ask would either
-	// publish the index's records onto a log a node cannot read — stopping
-	// that node's applier — or decide from rows a moment behind the log,
-	// and there is no safe answer to assume in its place.
+	// REQUIRED, never defaulted: a duty that could not ask would decide from
+	// rows a moment behind the log, and there is no safe answer to assume in
+	// its place.
 	Standing func(ctx context.Context) (LogStanding, error)
 
 	// Embedder is the provider. A batch embedder is required rather than
@@ -616,10 +615,7 @@ func NewEmbedder(d EmbedDeps) (*Embedder, error) {
 // vector is republished under the source's current version and container
 // ([Embedder.restamp]): one record, no provider call. What costs a provider
 // call is the TEXT changing, which is what the digest every record carries
-// was always documented to decide. A digest stored under the older definition
-// — over the raw cut, before the opening was prepared first — never equals
-// one taken now, so each such source is embedded once more the first time it
-// is selected: money, not correctness.
+// was always documented to decide.
 //
 // # Why a failure is counted rather than returned
 //

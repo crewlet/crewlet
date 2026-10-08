@@ -61,16 +61,6 @@ const OrgScope = "org"
 // inheriting the spend of whoever held the name before.
 func AgentScope(agentID string) string { return "agent:" + agentID }
 
-// WindowedCountersProtocol is the seat-host protocol that moved the token
-// counters from one lifetime figure per scope to a slot per calendar window.
-//
-// A CONSTANT OF ITS OWN rather than [ProtocolVersion], because the rule it
-// carries never moves again: the lifetime counters' bucket may be deleted once
-// no live lease is held below THIS protocol, and a later bump that raised
-// ProtocolVersion must not make the retirement wait for a protocol that has
-// nothing to do with the counters. See [LifetimeCounters].
-const WindowedCountersProtocol = 4
-
 // Windows is the window of each period a charge is counted in, or a read is
 // read against, in [period.Periods] order: the day, the week, the month.
 //
@@ -113,11 +103,10 @@ func (w Windows) Validate() error {
 // period, the most the scope may spend inside that period's current window.
 //
 // AN ABSENT PERIOD IS UNCAPPED, and that is the only way to leave one open. A
-// ceiling below 1 is REFUSED rather than read: 0 once meant "unlimited" to this
-// counter and means "nothing may be spent" to anybody reading the word
-// ceiling, so a value that two readers take two opposite ways is refused at
-// the store as it is at the config (config.TokenBudget). org.TokenCeilings
-// converts to it directly.
+// ceiling below 1 is REFUSED rather than read: 0 reads as "unlimited" to some
+// people and as "nothing may be spent" to others, so a value that two readers
+// take two opposite ways is refused at the store as it is at the config
+// (config.TokenBudget). org.TokenCeilings converts to it directly.
 type Caps map[period.Period]int
 
 // Validate refuses a period that is not one and a ceiling below one token.
@@ -603,11 +592,6 @@ type Budgets interface {
 	// nothing was spent. The answer is the scope's counter as the call left
 	// it, read against the windows given.
 	//
-	// ADDITIVE BETWEEN BUILDS: the stamp is the field a charge writes, in
-	// the record a charge writes, so a build that predates this verb reads
-	// it as it reads a charge's and never calls it — its own refusals of
-	// that kind simply go unrecorded, as every one did.
-	//
 	// An error is a counter that could not be reached or a request that
 	// does not validate — no scope, windows that are not the day, week and
 	// month, a ceiling below one — and never a refusal or an admission: the
@@ -629,23 +613,6 @@ type Budgets interface {
 	// at zero until its record ages out, which on the KV backend is
 	// [BudgetRetention] after its last write.
 	Usage(ctx context.Context, windows Windows) ([]Usage, error)
-}
-
-// LifetimeCounters is the retirement of the counters an earlier build kept: one
-// figure per scope for the life of a deployment, in a bucket with no age.
-//
-// Those counters are READ BY NOTHING in a build at [WindowedCountersProtocol]
-// or later, and they are not migrated — a lifetime total has no window to be
-// counted in. But a build before it charges them for as long as it runs, and a
-// store that deleted them under a live older node would fail its every charge
-// closed. So the retirement is a DECISION rather than a boot step: the
-// maintenance duty takes it once no live lease is held below
-// WindowedCountersProtocol (internal/maintenance.RetiredBudgetJobs).
-type LifetimeCounters interface {
-	// RetireLifetimeCounters deletes the lifetime counters, reporting
-	// whether there were any to delete. Retiring what is not there is not
-	// an error, so the duty's every later tick is a no-op.
-	RetireLifetimeCounters(ctx context.Context) (bool, error)
 }
 
 // ---- the arithmetic, shared by every backend ------------------------------ //

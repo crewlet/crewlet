@@ -292,10 +292,11 @@ func TestAMonitorIsTheConversation(t *testing.T) {
 	}
 }
 
-// A DEFINITION WRITTEN BEFORE THE TEMPLATE CARRIED THE ID still coalesces on
-// what it does send. An operator's hand-made webhook, and this engine's own
-// until the next pass rewrites it, deliver no monitor_id at all — and falling
-// through to nothing would give every such alert its own thread.
+// A DEFINITION THAT DOES NOT CARRY THE ID still coalesces on what it does
+// send. An operator's hand-made webhook, and this engine's own after somebody
+// edited its payload at Datadog until the next pass rewrites it, deliver no
+// monitor_id at all — and falling through to nothing would give every such
+// alert its own thread.
 func TestAnAlertWithNoMonitorIDFallsBackToTheTitle(t *testing.T) {
 	p := NewParser(ParserOptions{Fallback: "sre-lead"})
 	got := parse(t, p, alert(map[string]any{

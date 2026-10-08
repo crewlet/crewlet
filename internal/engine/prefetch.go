@@ -132,6 +132,11 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 		// indicator, the reply target and this block must never disagree
 		// about which thread a turn is in.
 		Thread: threadOf(req.Ask()),
+		// AND WHICH MESSAGE IN IT WOKE THE TURN, so the block can say
+		// which of the messages it shows were waiting for this turn —
+		// see [prefetch.Blocks.ThreadContextAnswered] and
+		// workedthrough.go.
+		Message: triggerMessageOf(req.Ask()),
 	}
 	// TIMED where it runs: the context assembly is the stretch between a
 	// turn announcing itself and its first phase opening, and nothing else
@@ -269,9 +274,7 @@ func (e *Engine) publishPrefetchSummary(ctx context.Context, seat *org.Role,
 //   - anything else that states an ask (a schedule's task, a colleague's
 //     question, their answer): its brief, which is already the ask itself —
 //     and for a colleague names who asked, the one sender a turn woken by a
-//     colleague has;
-//   - an event from a build that predates its typed payload: the body in its
-//     free-form bag, as DescribeTrigger reads it.
+//     colleague has.
 //
 // An event with none of those contributes nothing — not its type name, which
 // DescribeTrigger hands the executor so it is never given a blank ask, and
@@ -303,7 +306,7 @@ func eventAsk(ev *events.Event) string {
 			return b
 		}
 	}
-	return payloadBody(ev)
+	return ""
 }
 
 // requiresRecon reports that ANY constituent of the trigger is a bare

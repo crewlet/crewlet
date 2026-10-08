@@ -20,7 +20,6 @@ export const SANDBOX_TAIL_OUTCOMES = [
   "launching",
   "not_running",
   "owner_silent",
-  "owner_upgrading",
   "box_paused",
 ] as const;
 

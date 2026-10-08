@@ -36,6 +36,8 @@ import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, storeToken } from "~/protocol/index.ts";
 import { company, Engine, InertWebSocket } from "./testkit.tsx";
 import { clearSavedRevision, recordSavedRevision } from "./savedRevision.ts";
+import { healthFrame } from "~/test/health.ts";
+import { withDerived } from "~/test/org.ts";
 
 // The two chunks these addresses draw, in before a case starts, so a case
 // times what a section draws rather than a cold `import()`.
@@ -67,8 +69,8 @@ function mount(hash: string) {
   storeToken("t");
   new Engine(company()).install();
   const store = new Store();
-  store.applyHealth({ status: "ok" });
-  store.applyOrg({ name: "Acme", roles: [{ name: "CEO", handle: "ceo" }], units: [] });
+  store.applyHealth(healthFrame());
+  store.applyOrg(withDerived({ name: "Acme", roles: [{ name: "CEO", handle: "ceo" }], units: [] }));
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = () =>
     Promise.resolve(null);

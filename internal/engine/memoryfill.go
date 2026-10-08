@@ -15,13 +15,12 @@ import (
 
 // Filling the vectors a seat's memory is missing, on the node that holds it.
 //
-// A note is embedded as it is written ([learning.Diary.Write]). Three kinds of
+// A note is embedded as it is written ([learning.Diary.Write]). Two kinds of
 // note are left with no vector of the current model anyway, and nothing else
 // would ever give them one:
 //
-//   - every note written before notes were embedded at all — which is every
-//     note any build before this one wrote;
-//   - a note written while the provider did not answer inside its budget;
+//   - a note written while the provider did not answer inside its budget, or
+//     answered a vector with no direction;
 //   - every note written under a model the company has since moved off,
 //     which recall no longer compares (see learning.RecallQuery.Model).
 //
@@ -29,15 +28,14 @@ import (
 // durable fact older than the newest fifty is unreachable and — never
 // selected — is the first thing the 500-entry trim evicts.
 //
-// An EPISODE is the same story with a worse ending. Its vector is of the turn
-// whole — label, ask and what it did — and is made as the episode is written;
-// a turn written while the provider did not answer, and after a model change
-// every turn the seat ever took, has none that recall compares, and before the
-// row stored its ask nothing could make one again. Now it does (node migration
-// 0042), so the raw episodes are filled beside the notes
-// ([learning.Episodes.Unfilled]), and `## Similar prior work` and
-// `query_episodes` reach a seat's history again rather than only what it did
-// since the change.
+// An EPISODE is the same story. Its vector is of the turn whole — label, ask
+// and what it did — and is made as the episode is written; a turn written while
+// the provider did not answer, and after a model change every turn the seat
+// ever took, has none that recall compares. The row keeps its ask (node
+// migration 0042), which is what lets one be made again, so the raw episodes
+// are filled beside the notes ([learning.Episodes.Unfilled]), and `## Similar
+// prior work` and `query_episodes` reach the seat's whole history rather than
+// only what it did since the change.
 //
 // # The holder, and only once the seat is established
 //

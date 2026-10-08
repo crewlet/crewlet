@@ -2,13 +2,16 @@ package queries_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
@@ -119,6 +122,97 @@ func TestEventReadsGoThroughTheFleet(t *testing.T) {
 	}
 }
 
+// THE INTEGRATIONS' COUNTS ARE THE FLEET'S, deliveries and outcomes alike. A
+// delivery is stored on the node the load balancer handed it to, and the drop
+// it became on the node that routed it — here node-a and node-b — so a row
+// read from one store said a delivery arrived and nothing became of it.
+//
+// Mutation: count the outcomes from the asker's store alone, and gitlab's drop
+// is missing.
+func TestIntegrationCountsAreTheFleets(t *testing.T) {
+	t.Parallel()
+	fleet, a, b := twoNodes(t)
+	at := time.Now().UTC().Add(-time.Hour)
+	if err := a.Append(t.Context(), store.EventRecord{ID: "delivered", Type: "webhook:push",
+		Source: "gitlab", Category: "webhook", Tags: map[string]string{"route": "gitlab"}, Summary: "push", Time: at}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Append(t.Context(), store.EventRecord{ID: "dropped", Type: "notification_skipped",
+		Source: "engine", Category: "notification", Summary: "skipped", Time: at.Add(time.Second),
+		Tags: map[string]string{"notification_source": "gitlab"}}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := company(t)
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg }, Events: fleet,
+	}, "integrations", nil))
+	gitlab := surfacesOf(t, body)["gitlab"]
+	if gitlab["inbound"] != float64(1) || gitlab["skipped"] != float64(1) {
+		t.Errorf("gitlab inbound %v, skipped %v — want node-a's delivery and node-b's drop",
+			gitlab["inbound"], gitlab["skipped"])
+	}
+	raw, err := json.Marshal(body["coverage"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var coverage eventfan.Coverage
+	if err := json.Unmarshal(raw, &coverage); err != nil {
+		t.Fatal(err)
+	}
+	if !coverage.Complete || len(coverage.Nodes) != 2 {
+		t.Errorf("coverage %+v, want both nodes, complete", coverage)
+	}
+}
+
+// A PAGE OF EXACTLY THE PAGE'S SIZE CAN HOLD EVERY DELIVERY, and its window is
+// then the whole history.
+//
+// The window turns on whether the fleet may hold deliveries past the page,
+// never on the page's length: two nodes holding half a page each fill neither
+// node's own page, so the merged page — exactly [queries.MaxEventPage] long —
+// is every delivery the fleet has. The window is the month, and a drop older
+// than the oldest delivery is counted in it.
+//
+// Mutation: read a page of exactly the page's size as capped, and the window
+// starts a microsecond past the oldest delivery — which goes uncounted, with
+// the drop before it.
+func TestAFullPageFromTwoNodesIsTheWholeHistory(t *testing.T) {
+	t.Parallel()
+	fleet, a, b := twoNodes(t)
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	fleet.Clock = func() time.Time { return at }
+	oldest := at
+	for i := range queries.MaxEventPage {
+		log := a
+		if i%2 == 1 {
+			log = b
+		}
+		oldest = at.Add(-time.Duration(i+1) * time.Minute)
+		if err := log.Append(t.Context(), store.EventRecord{ID: fmt.Sprintf("w%03d", i),
+			Type: "webhook:push", Source: "gitlab", Category: "webhook", Tags: map[string]string{"route": "gitlab"}, Summary: "push",
+			Time: oldest}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := b.Append(t.Context(), store.EventRecord{ID: "dropped-early", Type: "notification_skipped",
+		Source: "engine", Category: "notification", Summary: "skipped", Time: oldest.Add(-time.Hour),
+		Tags: map[string]string{"notification_source": "gitlab"}}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := company(t)
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg }, Events: fleet,
+	}, "integrations", nil))
+	if got, want := body["traffic_since"], at.Add(-store.EventHistory).Format(time.RFC3339Nano); got != want {
+		t.Errorf("traffic_since = %v, want the history floor, %s — the page held every delivery", got, want)
+	}
+	gitlab := surfacesOf(t, body)["gitlab"]
+	if gitlab["inbound"] != float64(queries.MaxEventPage) || gitlab["skipped"] != float64(1) {
+		t.Errorf("gitlab inbound %v, skipped %v — want all %d deliveries and the drop before "+
+			"the oldest of them", gitlab["inbound"], gitlab["skipped"], queries.MaxEventPage)
+	}
+}
+
 func containsID(raw []byte, id string) bool {
 	return slices.Contains(idsIn(raw), id)
 }
@@ -156,7 +250,9 @@ func TestTurnsRefusesAnUnknownSortAndACursorOnARanking(t *testing.T) {
 	r := registryOver(t, queries.Sources{Events: fleetOf(openStore(t).Events())})
 	for _, params := range []map[string]any{
 		{"sort": "-cost"},
-		{"sort": "-tokens", "before": "2026-09-01T00:00:00Z"},
+		// A CURSOR AS A PAGE HANDS IT OUT, so the refusal is the ranking's.
+		{"sort": "-tokens", "before": base64.RawURLEncoding.EncodeToString(
+			[]byte("2026-09-01T00:00:00Z t-1"))},
 	} {
 		if _, err := r.Answer(t.Context(), "turns", params, ""); !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("turns %v answered %v, want %v", params, err, queries.ErrBadParams)

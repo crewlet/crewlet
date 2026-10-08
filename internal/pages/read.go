@@ -123,7 +123,7 @@ type Filter struct {
 // ErrBadCursor refuses an [Filter.After] this reader did not mint.
 var ErrBadCursor = errors.New("pages: that cursor is not one this listing minted")
 
-// DefaultLimit and MaxLimit bound a listing, on [work]'s reasoning.
+// DefaultLimit and MaxLimit bound a listing.
 const (
 	DefaultLimit = 50
 	MaxLimit     = 500
@@ -698,27 +698,13 @@ func (r *Reader) history(ctx context.Context, tx *sql.Tx, pageID string) ([]Revi
 
 // ancestorDepth bounds the parent walk.
 //
-// Sixteen. A page tree that deep is already unnavigable. The walk also keeps
-// a visited set, so a cycle terminates rather than hanging the read that found
-// it: nothing this build writes or applies can leave one — the decide refuses
-// a parent beneath the page and the applier salvages the race (see parent.go)
-// — but rows an older build applied may still hold one.
+// Sixteen. A page tree that deep is already unnavigable, so a breadcrumb stops
+// there.
 const ancestorDepth = 16
 
 func (r *Reader) ancestors(ctx context.Context, tx *sql.Tx, parentID string) ([]Summary, error) {
 	var chain []Summary
-	seen := map[string]bool{}
 	for id := parentID; id != "" && len(chain) < ancestorDepth; {
-		if seen[id] {
-			// A CYCLE. Reported rather than looped: the chain so far is
-			// still useful for a breadcrumb, and hanging the read would
-			// take the page down with the bad parent.
-			log.WarnContext(ctx, "pages_ancestor_cycle", "page", id,
-				"detail", "a page's parent chain reaches itself; the breadcrumb "+
-					"is truncated rather than walked forever")
-			break
-		}
-		seen[id] = true
 		var s Summary
 		var skill, onboarding int
 		var updated, revision int64

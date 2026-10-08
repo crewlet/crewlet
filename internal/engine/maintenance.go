@@ -121,12 +121,6 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 		// every listing that meets one pays a leader read for it. See
 		// [maintenance.MarkerJobs].
 		jobs = append(jobs, maintenance.MarkerJobs(fleet)...)
-		// AND THE LIFETIME TOKEN COUNTERS an earlier build kept, which
-		// nothing here reads any more. Deleted once, under the duty, and
-		// only when no node of that build is live to charge them — see
-		// [maintenance.RetiredBudgetJobs] for why the protocol floor is
-		// the gate and a boot step is not.
-		jobs = append(jobs, maintenance.RetiredBudgetJobs(fleet, e.backends.Coord)...)
 		// The NATIVE backends' own records, on the same edge and for a
 		// related reason: their family holds several classes under one
 		// grammar, and only some of them age out — so no bucket age can
@@ -138,13 +132,6 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 		// node's list runs per tick, and a node with no backend
 		// contributes nothing rather than an empty sweep.
 		if n := e.native.Load(); n != nil {
-			// AND THE CHUNK LOCKS a build that kept files in chunks
-			// opened, gated on that build being gone from the tracker
-			// log's census rather than on the protocol floor — see
-			// [maintenance.RetiredChunkLockJobs] and [chunkEra]. Here,
-			// where the native runtime is, because the census is of a
-			// log only it runs.
-			jobs = append(jobs, maintenance.RetiredChunkLockJobs(fleet, e.chunkEra(n))...)
 			if n.writer != nil {
 				// THE REPLICATED ESTATE WITH ITS WRITE SIDE, which is
 				// what the tracker's two exceptions to the applier-only

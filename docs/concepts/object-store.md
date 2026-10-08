@@ -105,6 +105,10 @@ logs survive, on the same members:
   cross.
 - **A node without `data` reaches the bucket across its leaf link**, with the
   rest of the fleet's JetStream API — it holds nothing.
+- **A delete marker another client left is no object.** The engine deletes by
+  purging, but `nats object rm` — or any other client of the format — leaves a
+  marker under the name. The engine reads the name as holding nothing, and
+  the collector lists it and clears it like any other object no row names.
 - **Quorum is the broker's.** Every message of an object is a replicated
   stream append, so it needs a majority of the stream's replicas, as a tracker
   write does: a three-member fleet keeps writing files with one member down,
@@ -244,11 +248,6 @@ every 128 KiB message before it — a few dozen bytes each rather than the bytes
 themselves, but still work that grows with the page's offset. A seat reads
 pages near the start of a file far more often than pages a gibibyte in.
 
-**A file saved by an earlier build** that kept files as content-addressed
-chunks has no object: it is still listed and can be written again or removed,
-but its content is gone — a download answers `410 content_retired`, and the
-seat's tool says the same.
-
 ---
 
 ## Collection and audit
@@ -297,26 +296,6 @@ long — unless it was being stored under somebody else's name. The count is
 `abandoned` in the report; a store that refuses the question (an S3 identity
 without `s3:ListBucketMultipartUploads` or `s3:AbortMultipartUpload`) is
 reported as `sweep_error` and does not fail the collection.
-
-### What an earlier build left
-
-A build before this one kept files as **content-addressed chunks**: objects
-named by the sixty-four hex digits of their own SHA-256, plus a coordination
-bucket of locks (`<prefix>_chunk_locks`) its writers and its collector took
-around them. No row this build writes names a chunk, but a data node of the
-earlier build still reads its own files' chunks until it is gone. So they are
-kept until **the chunk era is over** — every node the tracker's log counts runs
-a build that reads files as one object each — and then:
-
-- the collector deletes every chunk stored more than a day ago, counted as
-  `retired` in the report (on `nats` that also clears the delete markers the
-  earlier build left behind);
-- the maintenance duty deletes the lock bucket (job `retired_chunk_locks`), and
-  deletes it again should a node of the earlier build come back and recreate
-  it.
-
-Evicting a node that will not come back is what ends the era for a fleet that
-lost one before it upgraded (see [Fleet](../guides/fleet.md)).
 
 ### Why a deletion needs no lock
 

@@ -18,18 +18,19 @@ import {
   groupTurns,
   mergePhases,
   phaseKey,
-  ledgerOf,
   narrations,
   phaseDuration,
   phaseStart,
   rounds,
-  splitThinking,
+  stopNote,
   streamedPhases,
+  timedRounds,
   toolCalls,
   transcriptLength,
   type PhaseRecord,
 } from "./phases.ts";
 import type { EventRecord, LiveCall } from "~/protocol/index.ts";
+import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 
 function liveCall(over: Partial<LiveCall> = {}): LiveCall {
   return {
@@ -49,6 +50,7 @@ function liveCall(over: Partial<LiveCall> = {}): LiveCall {
     rounds_used: 0,
     in_progress: true,
     updated_at: "2026-01-01T00:00:05Z",
+    versions: ZERO_VERSIONS,
     ...over,
   };
 }
@@ -98,6 +100,57 @@ describe("a live call carries its turn's stage", () => {
 
   test("and nothing on a finished record", () => {
     expect(fromPhaseEvent(phaseEvent())?.stage).toBe("");
+  });
+});
+
+// A PROMPT'S SECTION MAP RIDES WITH THE TEXT IT DESCRIBES: the settled record's
+// `system_sections` / `user_sections`, and on a live call each prompt
+// message's own `sections` — read off the SAME message as the text, or a map
+// would be sizing bytes taken from somewhere else.
+describe("a prompt's section map", () => {
+  const MAP = [{ key: "task", title: "Task", bytes: 9 }];
+
+  test("is read off a settled record, beside the prompts it maps", () => {
+    const rec = fromPhaseEvent(
+      phaseEvent({ user_prompt: "## Task\nx", user_sections: MAP, system_sections: "junk" }),
+    )!;
+    expect(rec.userSections).toEqual(MAP);
+    // A map this build cannot read is no map, never a partial one.
+    expect(rec.systemSections).toBeNull();
+  });
+
+  test("is read off a live call's prompt messages, with the text from the same message", () => {
+    const rec = fromLiveCall(
+      liveCall({
+        prompt: "## Task\nx",
+        prompt_messages: [
+          {
+            role: "system",
+            content: "## Who\nyou",
+            sections: [{ key: "who", title: "Who", bytes: 10 }],
+          },
+          { role: "user", content: "## Task\nx", sections: MAP },
+        ],
+      }),
+      "PM",
+    );
+    expect(rec.systemPrompt).toBe("## Who\nyou");
+    expect(rec.systemSections).toEqual([{ key: "who", title: "Who", bytes: 10 }]);
+    expect(rec.userPrompt).toBe("## Task\nx");
+    expect(rec.userSections).toEqual(MAP);
+  });
+
+  test("a live call with no user message falls back to its prompt, unmapped", () => {
+    // `prompt` is "" rather than absent on the wire, so the old `prompt ??
+    // message` never reached the message at all.
+    const rec = fromLiveCall(liveCall({ prompt: "the ask", prompt_messages: null }), "PM");
+    expect(rec.userPrompt).toBe("the ask");
+    expect(rec.userSections).toBeNull();
+    const fromMessage = fromLiveCall(
+      liveCall({ prompt: "", prompt_messages: [{ role: "user", content: "from the message" }] }),
+      "PM",
+    );
+    expect(fromMessage.userPrompt).toBe("from the message");
   });
 });
 
@@ -162,9 +215,8 @@ describe("identity", () => {
     const done = fromPhaseEvent(phaseEvent({ work_key: "wk-7" }))!;
     expect(done.turnId).toBe("t1");
     expect(done.workKey).toBe("wk-7");
-    // Absent on a record an engine from before the split wrote, and EMPTY
-    // rather than undefined so nothing downstream has to test for two
-    // absences.
+    // Absent for a run with no ledgerable trigger, and EMPTY rather than
+    // undefined so nothing downstream has to test for two absences.
     expect(fromPhaseEvent(phaseEvent())!.workKey).toBe("");
   });
 });
@@ -321,19 +373,13 @@ describe("the round ledger", () => {
     expect(after.slice(0, 2)).toEqual(before);
   });
 
-  test("a producer that never set a round still gets a stable ledger", () => {
-    // The array's own order is the sequence, and it only appends. ONE-BASED,
-    // matching the engine's own `round` (which is `roundsUsed`) — numbering a
-    // fallback from 0 would put two producers on different scales in one list.
-    const ledger = rounds(toolCalls([{ name: "a" }, { name: "b" }]));
-    expect(ledger.map((r) => r.round)).toEqual([1, 2]);
-  });
-
-  test("a failure is read from any of the three ways the engine spells it", () => {
-    expect(toolCalls([{ name: "a", success: false }])[0]?.failed).toBe(true);
-    expect(toolCalls([{ name: "a", failed: true }])[0]?.failed).toBe(true);
-    expect(toolCalls([{ name: "a", error: "boom" }])[0]?.failed).toBe(true);
-    expect(toolCalls([{ name: "a", success: true }])[0]?.failed).toBe(false);
+  test("a failure is read off `success`", () => {
+    // The engine writes `success: false` on every failed call, beside the
+    // words it failed with in `result` (and again in `error`).
+    const [failed] = toolCalls([{ name: "a", success: false, result: "boom", error: "boom" }]);
+    expect(failed).toMatchObject({ failed: true, result: "boom" });
+    expect(toolCalls([{ name: "a", success: false, result: "" }])[0]?.failed).toBe(true);
+    expect(toolCalls([{ name: "a", success: true, result: "ok" }])[0]?.failed).toBe(false);
   });
 
   test("a call the engine timed and attributed is read as it was written", () => {
@@ -370,28 +416,14 @@ describe("a round that reached nobody", () => {
     expect(record.emptyAnswerRounds).toBe(2);
   });
 
-  test("a phase recorded before the field existed reads as zero, not NaN", () => {
-    // The envelope evolves additive-only and a rolling upgrade replays rows
-    // written by a build that had no such field.
+  test("a phase with no empty round reads as zero, not NaN", () => {
+    // The engine omits the field at zero (`omitempty`), so an ordinary phase
+    // carries no such key at all.
     expect(fromPhaseEvent(phaseEvent())!.emptyAnswerRounds).toBe(0);
   });
 });
 
 describe("presentation rules", () => {
-  test("reasoning is split off the front of the answer", () => {
-    // The engine keeps a phase's reasoning as a <think> prefix of Response,
-    // so this is a documented shape rather than a guess.
-    const { thinking, answer } = splitThinking("<think>weighing it up</think>\nShipped it.");
-    expect(thinking).toBe("weighing it up");
-    expect(answer.trim()).toBe("Shipped it.");
-  });
-
-  test("a response with no reasoning is left alone", () => {
-    const { thinking, answer } = splitThinking("Shipped it.");
-    expect(thinking).toBe("");
-    expect(answer).toBe("Shipped it.");
-  });
-
   test("a decision is rendered as what it MEANS", () => {
     // The outcome and the review decision are on the wire and rendered
     // nowhere else, so the single most useful fact about a phase — what it
@@ -411,10 +443,10 @@ describe("presentation rules", () => {
   });
 
   test("a decision this build does not know still renders as itself", () => {
-    // Store rows outlive the bundle that reads them: the retired plan phase's
-    // verdicts are in every event log written before the redesign, and a
-    // label that dropped them would blank the one column explaining the row.
-    expect(decisionLabel("plan", "direct")).toBe("direct");
+    // A newer build's phase or decision reaches this bundle on the same
+    // stream, and a label that dropped it would blank the one column
+    // explaining the row.
+    expect(decisionLabel("teleport", "beamed")).toBe("beamed");
     expect(decisionLabel("execute", "teleported")).toBe("teleported");
   });
 
@@ -490,31 +522,54 @@ describe("narration is kept beside the round that produced it", () => {
   });
 });
 
-describe("a phase recorded before narration existed still renders", () => {
-  // Those events are already in the store, and an applied write is history
-  // rather than source: they have to keep rendering.
-  const legacyRecord = {
-    tools: toolCalls([{ name: "search", round: 1 }]),
-    narration: [],
-    response: "<think>pondering</think>\nthe answer",
-  };
-
-  test("the joined response is shown whole rather than guessed apart", () => {
-    const { ledger, legacy } = ledgerOf(legacyRecord);
-    expect(ledger.map((r) => r.round)).toEqual([1]);
-    expect(legacy).toEqual({ thinking: "pondering", answer: "the answer" });
+describe("a round that answered in prose where a call was owed", () => {
+  // `round_narration[].declined`: the model wrote words and called no tool in
+  // a phase that finishes only by one — the executor printing its own
+  // `submit_work` payload as a fenced JSON block is the case that prompted it.
+  test("is read off the narration and kept on its round", () => {
+    const ledger = rounds(
+      toolCalls([{ name: "comment_on_work_item", round: 1 }]),
+      narrations([
+        { round: 1, content: "Commenting." },
+        { round: 2, content: '```json\n{"outcome":"delivered"}\n```', declined: true },
+      ]),
+    );
+    expect(ledger.map((r) => r.declined)).toEqual([false, true]);
   });
 
-  test("narration, when present, wins outright", () => {
-    const { legacy } = ledgerOf({
-      ...legacyRecord,
-      narration: narrations([{ round: 1, content: "proper" }]),
+  test("a round the engine did not flag, or one flagged oddly, declined nothing", () => {
+    const [plain, odd] = narrations([
+      { round: 1, content: "words" },
+      { round: 2, content: "words", declined: "yes" },
+    ]);
+    expect(plain!.declined).toBe(false);
+    expect(odd!.declined).toBe(false);
+  });
+
+  test("a round still being written has declined nothing yet", () => {
+    // The fragment replaces the round's text, and arriving text has not ended
+    // its round — so a flag from a stale narration of the same round must not
+    // ride along with it.
+    const ledger = rounds([], narrations([{ round: 1, content: "x", declined: true }]), {
+      round: 1,
+      content: "still writing",
     });
-    expect(legacy).toBeNull();
+    expect(ledger[0]!.declined).toBe(false);
   });
 
-  test("a phase with neither offers no empty transcript block", () => {
-    expect(ledgerOf({ tools: [], narration: [], response: "" }).legacy).toBeNull();
+  test("a rescued review says the engine decided, not the reviewer", () => {
+    // `self_iterate` is a word a reviewer chooses — and the word the engine
+    // writes when the reviewer never submitted. "Sent the turn back" claimed
+    // a judgement nobody made.
+    expect(decisionLabel("review", "self_iterate", true)).toContain("never decided");
+    expect(decisionLabel("review", "self_iterate", false)).toBe(
+      "sent the turn back for another round",
+    );
+    expect(decisionTone("review", "self_iterate", true)).toBe("caution");
+    // The executor's rescue word already says the engine wrote it.
+    expect(decisionLabel("execute", "incomplete", true)).toBe(
+      decisionLabel("execute", "incomplete"),
+    );
   });
 });
 
@@ -543,26 +598,18 @@ describe("a round being written is not a round that is finished", () => {
     expect(ledger[0]!.abandoned.map((a) => a.content)).toEqual(["first try died here"]);
   });
 
-  test("a live phase with only a partial is not treated as a legacy record", () => {
-    // Otherwise the joined `response` fallback would render alongside it and
-    // the same words would appear twice.
-    const { ledger, legacy } = ledgerOf({
-      tools: [],
-      narration: [],
-      partial: { round: 1, content: "writing" },
-      response: "writing",
-    });
-    expect(legacy).toBeNull();
+  test("a live phase with only a partial renders it once", () => {
+    const ledger = rounds([], [], { round: 1, content: "writing" });
     expect(ledger).toHaveLength(1);
+    expect(ledger[0]).toMatchObject({ round: 1, streaming: true, content: "writing" });
   });
 
   test("a finished phase has no partial at all", () => {
-    const { ledger } = ledgerOf({
-      tools: toolCalls([{ name: "a", round: 1 }]),
-      narration: narrations([{ round: 1, content: "done" }]),
-      partial: null,
-      response: "done",
-    });
+    const ledger = rounds(
+      toolCalls([{ name: "a", round: 1 }]),
+      narrations([{ round: 1, content: "done" }]),
+      null,
+    );
     expect(ledger.every((r) => !r.streaming)).toBe(true);
   });
 });
@@ -665,8 +712,8 @@ describe("delegated workers", () => {
       ),
     )!;
     expect(run.transcript).toBe("[tool] bash: go test");
-    // A WHOLE RECORD SAYS NOTHING WAS LEFT OUT, and so does an older
-    // engine's, which never wrote the counts.
+    // A WHOLE RECORD SAYS NOTHING WAS LEFT OUT: the engine omits a count of
+    // zero, so its absence is none.
     expect([run.transcriptElidedLines, run.transcriptElidedBytes, run.deliveredRefsElided]).toEqual(
       [0, 0, 0],
     );
@@ -910,11 +957,11 @@ describe("a decision carries its own tone", () => {
   });
 
   test("a decision this build cannot read takes no hue", () => {
-    // A row written by a build this bundle predates still renders, and a hue it
-    // was never given is not invented for it. `subagent` is deliberately in
+    // A newer build's decision still renders, and a hue it was never given is
+    // not invented for it. `subagent` is deliberately in
     // here: every status but `ok` already sets the record's `failed` flag and
     // draws a danger pill, so a second one beside it reports one stop twice.
-    expect(decisionTone("plan", "direct")).toBe("neutral");
+    expect(decisionTone("teleport", "beamed")).toBe("neutral");
     expect(decisionTone("subagent", "timed_out")).toBe("neutral");
     expect(decisionTone("execute", "")).toBe("neutral");
     expect(decisionTone("", "blocked")).toBe("neutral");
@@ -928,18 +975,14 @@ describe("a decision carries its own tone", () => {
   });
 });
 
-describe("a pre-split phase record's unit of work", () => {
-  // schema/0029 backfilled the `work_key` COLUMN from `turn_id` — which is
-  // where the work key lived before ADR-0017 split the two — and deliberately
-  // left the stored payloads alone: they record what that build published, and
-  // it published no such field. So a parser reading `payload.work_key` alone
-  // reports no unit of work for every turn older than the split, while the
-  // server answers the same question off the column for all of them. One
-  // authority, and it is the row's own field.
+describe("the row's column is the authority for a stored record, the payload for a live frame", () => {
+  // The server answers "which unit of work" off the stored row's `work_key`
+  // column, so the client reads the same field first: one authority for a
+  // stored record, and it is the row's own.
   test("comes off the row's column, which the payload does not carry", () => {
-    const rec: EventRecord = { ...phaseEvent(), work_key: "wk-backfilled" };
+    const rec: EventRecord = { ...phaseEvent(), work_key: "wk-column" };
     const done = fromPhaseEvent(rec)!;
-    expect(done.workKey).toBe("wk-backfilled");
+    expect(done.workKey).toBe("wk-column");
   });
 
   // AND A LIVE FRAME STILL WORKS: a phase event pushed on the socket carries
@@ -948,5 +991,52 @@ describe("a pre-split phase record's unit of work", () => {
   test("falls back to the payload for a frame nothing has stored", () => {
     const done = fromPhaseEvent(phaseEvent({ work_key: "wk-live" }))!;
     expect(done.workKey).toBe("wk-live");
+  });
+});
+
+describe("stop reasons and refusals", () => {
+  test("a round's stop reason is read off the record, and absent is unreported", () => {
+    const [a, b] = timedRounds([{ round: 1, stop_reason: "max_tokens" }, { round: 2 }]);
+    expect(a!.stopReason).toBe("max_tokens");
+    expect(b!.stopReason).toBe("");
+  });
+
+  test("only a round that did not finish has a note", () => {
+    for (const reason of ["max_tokens", "refusal", "context_exceeded", "paused"]) {
+      expect(stopNote(reason)).not.toBeNull();
+    }
+    for (const reason of ["end", "tool_use", "", "from_the_future", "toString"]) {
+      expect(stopNote(reason)).toBeNull();
+    }
+  });
+
+  test("a round that did not finish keeps its slot with nothing in it; one that finished does not", () => {
+    const ledger = rounds(
+      [],
+      [],
+      null,
+      timedRounds([
+        { round: 1, stop_reason: "tool_use" },
+        { round: 2, stop_reason: "refusal" },
+      ]),
+    );
+    expect(ledger.map((r) => [r.round, r.stopReason])).toEqual([[2, "refusal"]]);
+  });
+
+  test("the record's refusal is read, and its absence is null", () => {
+    const refused = fromPhaseEvent({
+      id: "e",
+      type: "agent_phase_completed",
+      timestamp: "2026-10-05T00:00:00Z",
+      payload: { phase: "execute", failed: true, refusal: { category: "bio" } },
+    } as unknown as EventRecord);
+    expect(refused!.refusal).toEqual({ category: "bio", explanation: "" });
+    const plain = fromPhaseEvent({
+      id: "e",
+      type: "agent_phase_completed",
+      timestamp: "2026-10-05T00:00:00Z",
+      payload: { phase: "execute", failed: true },
+    } as unknown as EventRecord);
+    expect(plain!.refusal).toBeNull();
   });
 });

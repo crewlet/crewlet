@@ -110,38 +110,14 @@ func (e ToolSkillGuardBlocked) SummaryFor(actor string) string {
 // and not every phase in the engine — a delegated worker and the round-cap
 // judge publish none of these at all.
 //
-// BYTES, NOT CHARACTERS, UNDER KEYS THAT SAY CHARS — and the split between
-// those two halves is the whole of it. The measurement is len() of a Go
-// string, which is bytes, and the wire keys have said `chars` since the event
-// was written. Nothing rounded that back: the dashboard renders both with a
-// byte formatter, so a panel headed "System" printed "24 KB" under a tooltip
-// asserting it had counted characters. The units coincide on ASCII and
-// diverge on exactly the prompts worth measuring — a roster of non-Latin
-// names, a Slack thread with emoji in it, a CJK knowledge block — where a
-// UTF-8 rune is two to four bytes and "the count" silently became a different
-// quantity per company. The byte is the honest one here anyway: it is what a
-// vendor bounds a request body in and what this engine can measure without a
-// tokenizer.
-//
-// So the Go names, the doc, the dashboard's labels and the docs say bytes,
-// and THE KEYS DO NOT MOVE. A key is an identifier rather than an assertion —
-// nothing decodes `system_chars` and divides by a rune width — so renaming it
-// corrects no arithmetic and costs every row already written. ADR-0006 is
-// additive-only and marked `Tag-status: unreleased`, which is to say it binds
-// before any release precisely because a rolling upgrade is a contract
-// between PEERS: a renamed tag is a dropped field on whichever half has not
-// upgraded yet. Here the drop would not even read as absence — the payload is
-// stored verbatim and read back raw by the Turn screen over a 30-day window,
-// where a missing key coerces to 0 and renders "0 B" beside a correct
-// `approximate_tokens`. A confidently wrong row, on every turn taken before
-// the upgrade, from one restart of one node. `plan_summary` and the `execute`
-// phase are frozen for the same reason, and say so where they are defined.
-//
-// Adding a second key instead is the other half of the trap: one integer with
-// two identities, undeletable under ADR-0006, and — since scalars here carry
-// no omitempty — a build relaying an older event would emit
-// `"system_bytes":0` beside a truthful `"system_chars":24000`, asserting zero
-// rather than saying nothing.
+// BYTES, NOT CHARACTERS, and the keys say so. The measurement is len() of a
+// Go string, which is bytes. The units coincide on ASCII and diverge on
+// exactly the prompts worth measuring — a roster of non-Latin names, a Slack
+// thread with emoji in it, a CJK knowledge block — where a UTF-8 rune is two
+// to four bytes, so a figure labelled as characters would silently become a
+// different quantity per company. The byte is the honest one here anyway: it
+// is what a vendor bounds a request body in and what this engine can measure
+// without a tokenizer.
 //
 // Addressed like every other phase event, so the size a turn actually paid is
 // readable on that turn rather than only in aggregate.
@@ -164,13 +140,8 @@ type PromptSize struct {
 	// SystemBytes and UserBytes are the two messages a phase OPENS a
 	// conversation with. Both are zero on a resumed phase, which prepends
 	// neither: what it sends is MessageBytes.
-	//
-	// A BYTE COUNT under a key that says chars. The Go name is what is
-	// honest; the key is frozen by ADR-0006 — see the note above, and grep
-	// for either spelling to land on it. The three counts below carry the
-	// same split for the same reason.
-	SystemBytes int `json:"system_chars"`
-	UserBytes   int `json:"user_chars"`
+	SystemBytes int `json:"system_bytes"`
+	UserBytes   int `json:"user_bytes"`
 
 	// MessageBytes is the conversation a RESUMED phase re-enters — its
 	// original system and user messages, the assistant rounds since, and
@@ -199,7 +170,7 @@ type PromptSize struct {
 	// per-message envelope a backend adds around all of it (role labels,
 	// content-block framing, the cli-agent transcript's own `## assistant`
 	// headings), so on any backend the real figure is larger than this one.
-	MessageBytes int `json:"message_chars"`
+	MessageBytes int `json:"message_bytes"`
 
 	// ToolBytes is the COMPACT JSON size of the tool-definition array
 	// offered with the prompt, in ONE CANONICAL SHAPE — `{name,
@@ -226,7 +197,7 @@ type PromptSize struct {
 	// every round precisely so a mid-phase activate_tool is offered on the
 	// next call, so a phase that promotes three MCP tools sends more than
 	// this says.
-	ToolBytes int `json:"tool_chars"`
+	ToolBytes int `json:"tool_bytes"`
 
 	// ToolCount is how many definitions those bytes are, because a
 	// forty-tool surface and a four-tool one at the same byte count are
@@ -244,35 +215,19 @@ func (e PromptSize) Role() string { return e.RoleName }
 func (e PromptSize) AgentID() string { return e.Agent }
 
 // SummaryFor reports the approximate token count and the tool term, and leaves
-// the character splits on the payload — the split is for someone comparing
-// builds, not for a feed.
+// the byte splits on the payload — the split is for someone comparing builds,
+// not for a feed.
 //
 // The tool term is on the line because it is the one component an operator can
 // act on from the feed alone, by trimming what a seat is granted; and because
 // a bare "prompt ~N tokens" is what made this meter read as authoritative for
-// as long as it was blind to the array.
-//
-// ONLY WHEN THE ROW CARRIES IT. ToolBytes and ToolCount are newer than this
-// event type, so a `prompt.size` published by a peer that predates them — an
-// ordinary state during a rolling upgrade — carries neither key and decodes
-// to zero. Rendered unconditionally that row reads "(0 tool definitions, 0
-// chars)" for a phase that certainly had some, which is a claim about that
-// build's prompt rather than an absence of data.
-//
-// WHICH ABSENCE IS THE SAFE HALF: a zero cannot be told from an unset key
-// here, so the two cases that produce one share an answer, and the honest
-// direction is to say nothing. A phase that genuinely offered no tools then
-// loses a clause reporting nothing, and an older peer's row reads exactly as
-// it did on the build that wrote it. The reverse — asserting a zero — is the
-// only one of the two that can be false, and every phase this row is
-// published for carries at least its own submission tool, so the tool-less
-// case is hypothetical while the older peer is not.
+// as long as it was blind to the array. It is rendered whatever it holds: the
+// publisher always measures the array, so a zero is a phase that was offered
+// no tools, which is worth saying rather than hiding.
 func (e PromptSize) SummaryFor(actor string) string {
-	line := fmt.Sprintf("prompt ~%d tokens", e.ApproximateTokens)
-	if e.ToolCount > 0 || e.ToolBytes > 0 {
-		line += fmt.Sprintf(" (%d tool definitions, %d chars)", e.ToolCount, e.ToolBytes)
-	}
-	return lead(subject(actor, e.Phase), line)
+	return lead(subject(actor, e.Phase), fmt.Sprintf(
+		"prompt ~%d tokens (%d tool definitions, %d bytes)",
+		e.ApproximateTokens, e.ToolCount, e.ToolBytes))
 }
 
 // TurnGuardBreach fires whenever a runtime-invariant guard trips during a turn,
