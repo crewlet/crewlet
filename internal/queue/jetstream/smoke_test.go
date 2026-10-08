@@ -65,6 +65,7 @@ func ev(n int) *events.Event {
 // built on: the subscription exists without a consumer, retains what is
 // published while nothing is attached, and replays it in order on attach.
 func TestMailIsRetainedWithNothingAttached(t *testing.T) {
+	t.Parallel()
 	q := newQueue(t)
 	ctx := t.Context()
 	topic, group := topics.AgentInbox("alice"), topics.AgentInboxGroup("alice")
@@ -122,6 +123,7 @@ func TestMailIsRetainedWithNothingAttached(t *testing.T) {
 // arrived within two seconds" spent two seconds on every run and proved only
 // that nothing arrived in them.
 func TestPublishWithNoSubscriptionIsDropped(t *testing.T) {
+	t.Parallel()
 	q := newQueue(t)
 	ctx := t.Context()
 	topic, group := topics.AgentInbox("ghost"), topics.AgentInboxGroup("ghost")
@@ -166,6 +168,7 @@ func TestPublishWithNoSubscriptionIsDropped(t *testing.T) {
 // lost the right to do the work must neither claim it (ack) nor condemn it
 // (an ordinary failure), and must stop taking more.
 func TestDeferReturnsWorkAndQuiesces(t *testing.T) {
+	t.Parallel()
 	q := newQueue(t)
 	ctx := t.Context()
 	topic, group := topics.AgentInbox("bob"), topics.AgentInboxGroup("bob")
@@ -230,6 +233,7 @@ func TestDeferReturnsWorkAndQuiesces(t *testing.T) {
 // TestBatchCoalescesByConversation is why ten comments on one issue cost one
 // agent turn instead of ten.
 func TestBatchCoalescesByConversation(t *testing.T) {
+	t.Parallel()
 	q := newQueue(t)
 	ctx := t.Context()
 	topic, group := topics.AgentInbox("carol"), topics.AgentInboxGroup("carol")
@@ -291,6 +295,7 @@ func TestBatchCoalescesByConversation(t *testing.T) {
 // an unroutable handle produces (crewlet.agent..inbox), a real subject
 // nobody subscribes to that would swallow events in silence.
 func TestMalformedSubjectsAreRefused(t *testing.T) {
+	t.Parallel()
 	q := newQueue(t)
 	for _, subject := range []string{"", "crewlet.agent..inbox", ".leading", "trailing.", "has space"} {
 		if err := q.Publish(t.Context(), subject, ev(1)); err == nil {
@@ -513,6 +518,7 @@ func selfSignedPEM(t *testing.T) (certPEM, keyPEM []byte) {
 // Measured rather than reasoned: a trickle published for five times the window
 // must not all land in the first batch.
 func TestTheLingerWindowDoesNotSlideWithArrivals(t *testing.T) {
+	t.Parallel()
 	q := newQueue(t)
 	ctx := t.Context()
 	topic, group := topics.AgentInbox("dora"), topics.AgentInboxGroup("dora")

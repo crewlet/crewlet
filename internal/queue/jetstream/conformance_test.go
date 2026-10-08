@@ -16,6 +16,7 @@ import (
 // engine is concerned — which is the whole reason the suite is separate from
 // any backend that passes it.
 func TestConformance(t *testing.T) {
+	t.Parallel()
 	queuetest.RunWith(t, newConformanceQueue, capabilities())
 }
 
@@ -25,6 +26,7 @@ func TestConformance(t *testing.T) {
 // until it exits — which is how a -count=20 run of this package reached
 // 12 GB and was killed.
 func TestInspectionClientsEndWithTheirTest(t *testing.T) {
+	t.Parallel()
 	var q *Queue
 	t.Run("open", func(t *testing.T) {
 		q = openForTest(t, Config{})

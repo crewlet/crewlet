@@ -23,6 +23,7 @@ import (
 // to know the queue it gets behaves identically is to run every case the
 // member's queue runs against it.
 func TestConformanceThroughALeaf(t *testing.T) {
+	t.Parallel()
 	queuetest.RunWith(t, func(t *testing.T, opts ...queue.Option) queue.EventQueue {
 		return openLeafForTest(t, Config{}, opts...)
 	}, capabilitiesFor(func(t *testing.T, cfg Config) *Queue { return openLeafForTest(t, cfg) }))

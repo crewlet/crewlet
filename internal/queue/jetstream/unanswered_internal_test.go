@@ -97,12 +97,14 @@ func (s *stallingJS) Consumer(ctx context.Context, stream, name string) (jetstre
 // one that reached CI was a deadline and the others come from the same client
 // on the same path.
 func TestAnUnansweredExistenceProbeStillProvisions(t *testing.T) {
+	t.Parallel()
 	for _, unanswered := range []error{
 		context.DeadlineExceeded,
 		nats.ErrTimeout,
 		nats.ErrNoResponders,
 	} {
 		t.Run(unanswered.Error(), func(t *testing.T) {
+			t.Parallel()
 			q := newQueue(t)
 			// A SHORT CEILING AND A SHORT PAUSE, because the branch
 			// under test is only reached once a probe has spent its
@@ -177,6 +179,7 @@ func TestAnUnansweredExistenceProbeStillProvisions(t *testing.T) {
 // round trip ending in a worse message. This is the half that makes the switch
 // a decision rather than a blanket retry.
 func TestAnAnsweredFailureStillFailsTheProbe(t *testing.T) {
+	t.Parallel()
 	q := newQueue(t)
 	ctx := t.Context()
 

@@ -405,28 +405,41 @@ type Factory func(t *testing.T, opts ...queue.Option) queue.EventQueue
 func RunWith(t *testing.T, newQueue Factory, caps Capabilities) {
 	t.Helper()
 	s := &suite{newQueue: newQueue, caps: caps}
-	t.Run("EventQueue", s.runCore)
-	t.Run("Wire", s.runWire)
-	t.Run("Attachment", s.runAttachment)
-	t.Run("Stream", s.runStream)
+	// EVERY GROUP RUNS IN PARALLEL WITH THE OTHERS, as every case inside
+	// each already does with its siblings: each case starts its own queue
+	// (on the real backend, its own broker), so nothing one group does is
+	// visible to another. Run one after another, each group cost its
+	// SLOWEST case before the next could start — eleven tails in a row
+	// where the cases fit four to a slot — while the concurrency stays the
+	// -parallel bound every case's racing window was measured under.
+	group := func(name string, run func(*testing.T)) {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			run(t)
+		})
+	}
+	group("EventQueue", s.runCore)
+	group("Wire", s.runWire)
+	group("Attachment", s.runAttachment)
+	group("Stream", s.runStream)
 	// The ephemeral pair, and the only verbs here that must leave
 	// nothing behind. See runScatter.
-	t.Run("Scatter", s.runScatter)
-	t.Run("Batch", s.runBatch)
+	group("Scatter", s.runScatter)
+	group("Batch", s.runBatch)
 	// Not a feature — the reason the engine carries no re-entrancy
 	// guard. See runReentrancy.
-	t.Run("Reentrancy", s.runReentrancy)
-	t.Run("Fleet", s.runFleet)
+	group("Reentrancy", s.runReentrancy)
+	group("Fleet", s.runFleet)
 	// Which mailboxes exist, asked of the broker rather than of any
 	// record. See runListing.
-	t.Run("Listing", s.runListing)
+	group("Listing", s.runListing)
 	// A "no" has two halves: the answer and the write that must not
 	// happen. See runNegativePaths.
-	t.Run("NegativePaths", s.runNegativePaths)
+	group("NegativePaths", s.runNegativePaths)
 	// Named for what it is: shared contract functions, not backend
 	// behaviour. See runContractPolicy for the scope this group does and
 	// does not cover.
-	t.Run("ContractPolicyFunctions", s.runContractPolicy)
+	group("ContractPolicyFunctions", s.runContractPolicy)
 }
 
 type suite struct {
