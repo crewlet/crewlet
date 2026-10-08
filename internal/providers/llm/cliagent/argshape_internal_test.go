@@ -21,6 +21,7 @@ import (
 // alone — the CLI stops for want of a credential, which is exactly far enough
 // to prove the flags were understood.
 func TestTheGrokProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
+	t.Parallel()
 	binary, err := exec.LookPath("grok")
 	if err != nil {
 		t.Skip("no grok on PATH")

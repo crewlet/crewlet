@@ -24,6 +24,7 @@ import (
 // parent reading the path afterwards would be reading a file the CLI never
 // saw.
 func TestASystemPromptFileTemplateWrapsTheSeatsIdentity(t *testing.T) {
+	t.Parallel()
 	p := fakeProvider(t, map[string]string{"FAKE_PROMPT_FILE": "--agent-file"}, map[string]any{
 		// The leading "--" is for the FAKE, not for any real profile:
 		// the fake CLI is this test binary and Go's flag package would
@@ -74,6 +75,7 @@ func TestASystemPromptFileTemplateWrapsTheSeatsIdentity(t *testing.T) {
 // calls that exist to prove the tools are off would be the calls that run
 // with the vendor's defaults and every tool it has.
 func TestThePromptFileChannelIsPassedEvenWithNoSystemPrompt(t *testing.T) {
+	t.Parallel()
 	p := fakeProvider(t, map[string]string{"FAKE_PROMPT_FILE": "--agent-file"}, map[string]any{
 		"system_prompt_args": []any{"--", "--agent-file", "{file}"},
 		"system_prompt_file": map[string]any{
@@ -250,6 +252,7 @@ func TestTheKimiProfilesAgentFileDeniesItsToolsAndKeepsTheWeb(t *testing.T) {
 // alone: without a credential the CLI stops at its own auth failure, which is
 // exactly far enough to prove the flags were understood.
 func TestTheKimiProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
+	t.Parallel()
 	binary, err := exec.LookPath("kimi")
 	if err != nil {
 		t.Skip("no kimi on PATH")

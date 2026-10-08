@@ -267,6 +267,7 @@ func ask(t *testing.T, p *Provider, req llm.Request) (*llm.Completion, error) {
 
 // The whole point of the backend: a CLI's prose comes back as a completion.
 func TestAPlainReplyBecomesACompletion(t *testing.T) {
+	t.Parallel()
 	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": "the answer"}, nil)
 	comp, err := ask(t, p, llm.Request{})
 	if err != nil {
@@ -287,6 +288,7 @@ func TestAPlainReplyBecomesACompletion(t *testing.T) {
 // The tool channel rides the prompt, and the reply parses back into real tool
 // calls — otherwise the turn engine sees prose and never runs a tool.
 func TestAnEnvelopeReplyBecomesToolCalls(t *testing.T) {
+	t.Parallel()
 	reply := "```json\n{\"message\":\"reading\",\"tool_calls\":" +
 		"[{\"name\":\"read_file\",\"arguments\":{\"path\":\"/etc/hostname\"}}]}\n```"
 	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": reply}, nil)
@@ -319,6 +321,7 @@ func TestAnEnvelopeReplyBecomesToolCalls(t *testing.T) {
 // runs an unmarked one, so the mark is the whole difference between a failed
 // result the model can fix and a search over everything.
 func TestACallWithUnreadableArgumentsIsMarkedForTheLoop(t *testing.T) {
+	t.Parallel()
 	reply := "```json\n{\"message\":\"searching\",\"tool_calls\":" +
 		"[{\"name\":\"search\",\"arguments\":\"{\\\"query\\\": \\\"x\"}]}\n```"
 	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": reply}, nil)
@@ -341,6 +344,7 @@ func TestACallWithUnreadableArgumentsIsMarkedForTheLoop(t *testing.T) {
 // RATE_LIMIT is what carries the role onto its metered fallback for the rest
 // of the window and back again afterwards, with no operator intervention.
 func TestASpentSubscriptionIsRateLimitedWithItsOwnResetTime(t *testing.T) {
+	t.Parallel()
 	reset := time.Now().Add(37 * time.Minute).Unix()
 	p := fakeProvider(t, map[string]string{
 		"FAKE_STDOUT": fmt.Sprintf("Claude AI usage limit reached|%d", reset),
@@ -369,6 +373,7 @@ func TestASpentSubscriptionIsRateLimitedWithItsOwnResetTime(t *testing.T) {
 // writes the phrase itself, and throwing that answer away as a spent plan is
 // the bug this classification is shaped to avoid.
 func TestAModelWritingAboutUsageLimitsIsNotASpentSubscription(t *testing.T) {
+	t.Parallel()
 	p := fakeProvider(t, map[string]string{
 		"FAKE_STDOUT": "A rate limit is when the usage limit for your plan is reached.",
 	}, map[string]any{
@@ -388,6 +393,7 @@ func TestAModelWritingAboutUsageLimitsIsNotASpentSubscription(t *testing.T) {
 // An expired login must classify AUTH, which is retryable — so the chain
 // keeps the seat working off a metered key while the operator re-logs in.
 func TestAnExpiredLoginIsClassifiedAuth(t *testing.T) {
+	t.Parallel()
 	p := fakeProvider(t, map[string]string{
 		"FAKE_STDERR": "Error: OAuth token has expired\n", "FAKE_EXIT": "1",
 	}, map[string]any{
@@ -406,6 +412,7 @@ func TestAnExpiredLoginIsClassifiedAuth(t *testing.T) {
 // the child eventually finishes: the cap exists so a wedged CLI cannot hold a
 // seat's concurrency slot.
 func TestTheWallClockCapEndsACall(t *testing.T) {
+	t.Parallel()
 	p := fakeProvider(t, map[string]string{"FAKE_SLEEP_MS": "60000"}, nil)
 	p.timeout = 300 * time.Millisecond
 
@@ -428,6 +435,7 @@ func TestTheWallClockCapEndsACall(t *testing.T) {
 // nothing about the request was refused, so the chain must be free to try
 // another member and the credential must not be cooled.
 func TestAnEmptyAnswerIsRetryableRatherThanFatal(t *testing.T) {
+	t.Parallel()
 	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": ""}, nil)
 	_, err := ask(t, p, llm.Request{})
 	if got := llm.KindOf(err); got != llm.KindServer {
@@ -472,6 +480,7 @@ func TestTheChildEnvironmentIsAnAllowlist(t *testing.T) {
 // put in cli.env — that is the flat-rate-plan-billed-anyway failure the mode
 // exists to prevent.
 func TestSubscriptionModeStripsAMeteredKey(t *testing.T) {
+	t.Parallel()
 	p := fakeProvider(t,
 		map[string]string{"FAKE_DUMP_ENV": "1", "ANTHROPIC_API_KEY": "sk-ant-oops"},
 		map[string]any{"api_key_env": "ANTHROPIC_API_KEY", "token_env": "CLAUDE_CODE_OAUTH_TOKEN"})
@@ -487,6 +496,7 @@ func TestSubscriptionModeStripsAMeteredKey(t *testing.T) {
 // api-key mode is the deliberate opposite, and must actually deliver the key
 // or the mode does nothing.
 func TestAPIKeyModeDeliversTheKey(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	t.Cleanup(func() { forgetWorkspace(dir) })
 	p, err := New(Config{
@@ -522,6 +532,7 @@ func TestAPIKeyModeDeliversTheKey(t *testing.T) {
 // made. os.Getwd() in the child is the only honest source, and it cannot be
 // unavailable.
 func TestTheWorkingDirectoryIsEmptyAndPerCall(t *testing.T) {
+	t.Parallel()
 	p := fakeProvider(t, map[string]string{"FAKE_DUMP_CWD": "1"}, nil)
 	comp, err := ask(t, p, llm.Request{})
 	if err != nil {
@@ -546,6 +557,7 @@ func TestTheWorkingDirectoryIsEmptyAndPerCall(t *testing.T) {
 // The prompt must actually reach the CLI, and the transcript must carry the
 // tool catalogue and the response contract or the model has no protocol.
 func TestThePromptReachesTheCLIWithItsContract(t *testing.T) {
+	t.Parallel()
 	p := fakeProvider(t, map[string]string{"FAKE_ECHO_STDIN": "1"}, nil)
 	comp, err := ask(t, p, llm.Request{
 		Messages: []llm.Message{
@@ -569,6 +581,7 @@ func TestThePromptReachesTheCLIWithItsContract(t *testing.T) {
 // A call with NO tools gets no contract: auxiliary work sends a plain prompt
 // and reads a plain answer, with no envelope to get wrong.
 func TestACallWithNoToolsGetsNoContract(t *testing.T) {
+	t.Parallel()
 	p := fakeProvider(t, map[string]string{"FAKE_ECHO_STDIN": "1"}, nil)
 	comp, err := ask(t, p, llm.Request{
 		Messages: []llm.Message{{Role: llm.RoleUser, Content: "summarise this"}},
@@ -588,6 +601,7 @@ func TestACallWithNoToolsGetsNoContract(t *testing.T) {
 // The cap is what keeps a fleet of seats starting their turns together from
 // exhausting the engine host — each CLI is a full runtime at 200-400 MB.
 func TestConcurrencyIsCapped(t *testing.T) {
+	t.Parallel()
 	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": "ok", "FAKE_SLEEP_MS": "250"}, nil)
 	if cap(p.slots) != 2 {
 		t.Fatalf("slots = %d, want the configured 2", cap(p.slots))
@@ -617,6 +631,7 @@ func TestConcurrencyIsCapped(t *testing.T) {
 // A caller that gave up while queueing must not go on to launch a process
 // nobody is waiting for.
 func TestACancelledCallerDoesNotLaunchAProcess(t *testing.T) {
+	t.Parallel()
 	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": "ok"}, nil)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()

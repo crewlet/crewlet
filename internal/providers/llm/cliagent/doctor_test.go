@@ -14,6 +14,7 @@ import (
 // must say exactly that, because the config looks correct and the failure
 // otherwise surfaces as an unexplained turn failure much later.
 func TestDoctorReportsAMissingBinary(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	t.Cleanup(func() { forgetWorkspace(dir) })
 	p, err := New(Config{
@@ -88,6 +89,7 @@ func TestDoctorNamesAnUnadoptedHostLogin(t *testing.T) {
 // vendor's own counts, so the report must not let the difference pass
 // silently.
 func TestDoctorSaysWhenTokenCountsAreEstimated(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	t.Cleanup(func() { forgetWorkspace(dir) })
 	p, err := New(Config{
@@ -123,6 +125,7 @@ func TestDoctorSaysWhenTokenCountsAreEstimated(t *testing.T) {
 // asking again — and ends without its submission when the model never manages
 // one — while the config looks perfect.
 func TestTheSmokeTestCatchesACLIThatCannotProduceAToolCall(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	t.Cleanup(func() { forgetWorkspace(dir) })
 	p, err := New(Config{
@@ -158,6 +161,7 @@ func TestTheSmokeTestCatchesACLIThatCannotProduceAToolCall(t *testing.T) {
 // that produced silence. Reporting silence as `It said: ""` sends them to the
 // envelope contract for a problem only a bigger model fixes.
 func TestTheSmokeTestNamesAnEmptyAnswerRatherThanQuotingIt(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	t.Cleanup(func() { forgetWorkspace(dir) })
 	p, err := New(Config{
@@ -195,6 +199,7 @@ func TestTheSmokeTestNamesAnEmptyAnswerRatherThanQuotingIt(t *testing.T) {
 
 // And it passes on one that can, or the check is a permanent red light.
 func TestTheSmokeTestPassesOnAWorkingEnvelope(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	t.Cleanup(func() { forgetWorkspace(dir) })
 	reply := "```json\n{\"message\":\"\",\"tool_calls\":" +

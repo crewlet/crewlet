@@ -35,6 +35,7 @@ func newWorkspace(t *testing.T) *Workspace {
 // The isolation the rest of the backend depends on: two seats must not share
 // a home, or seven seats on one subscription read each other's transcripts.
 func TestSeatsDoNotShareAHome(t *testing.T) {
+	t.Parallel()
 	ws := newWorkspace(t)
 	a, err := ws.Acquire("sarah-chen", "call-1")
 	if err != nil {
@@ -62,6 +63,7 @@ func TestSeatsDoNotShareAHome(t *testing.T) {
 // memory inside the CLI would make turns non-reproducible and carry one
 // task's context into the next.
 func TestVolatileStateIsPrunedAroundACall(t *testing.T) {
+	t.Parallel()
 	ws := newWorkspace(t)
 	first, err := ws.Acquire("dev", "call-1")
 	if err != nil {
@@ -102,6 +104,7 @@ func TestVolatileStateIsPrunedAroundACall(t *testing.T) {
 // second call into a seat must not prune under the first. Pruning there would
 // delete the parent's live session mid-call.
 func TestASecondCallIntoASeatDoesNotPruneUnderTheFirst(t *testing.T) {
+	t.Parallel()
 	ws := newWorkspace(t)
 	parent, err := ws.Acquire("dev", "parent")
 	if err != nil {
@@ -145,6 +148,7 @@ func TestASecondCallIntoASeatDoesNotPruneUnderTheFirst(t *testing.T) {
 // the file the CLI rewrote logs the whole fleet out at the next expiry,
 // because most vendors rotate the refresh token with the access token.
 func TestARefreshedLoginIsSyncedBackToTheSharedDirectory(t *testing.T) {
+	t.Parallel()
 	ws := newWorkspace(t)
 	shared := filepath.Join(ws.CredentialsDir(), "creds.json")
 	if err := os.MkdirAll(ws.CredentialsDir(), 0o700); err != nil {
@@ -188,6 +192,7 @@ func TestARefreshedLoginIsSyncedBackToTheSharedDirectory(t *testing.T) {
 // vendor's own "not authenticated", which names the CLI; refusing here would
 // take a company down at boot over one provider's credentials.
 func TestAMissingLoginDoesNotRefuseTheCheckout(t *testing.T) {
+	t.Parallel()
 	ws := newWorkspace(t)
 	checkout, err := ws.Acquire("dev", "call")
 	if err != nil {
@@ -220,6 +225,7 @@ func TestAVolatilePathCannotEscapeTheSeatHome(t *testing.T) {
 // the same CLI: two different ones disagree about which files are credentials
 // and each would prune the other's login.
 func TestTwoDifferentCLIsCannotShareAStateDirectory(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	t.Cleanup(func() { forgetWorkspace(dir) })
 	if _, err := Shared(dir, "claude-code", testProfile(t)); err != nil {
@@ -238,6 +244,7 @@ func TestTwoDifferentCLIsCannotShareAStateDirectory(t *testing.T) {
 // models work off a single login — and both entries must get the one
 // workspace, or each would prune the other's live seat homes.
 func TestTwoEntriesOnOneDirectoryShareOneWorkspace(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	t.Cleanup(func() { forgetWorkspace(dir) })
 	opus, err := Shared(dir, "claude-code", testProfile(t))
@@ -256,6 +263,7 @@ func TestTwoEntriesOnOneDirectoryShareOneWorkspace(t *testing.T) {
 // The in-flight count is read and written from several goroutines at once,
 // which is what -race is run against.
 func TestConcurrentCallsIntoOneSeatAreSafe(t *testing.T) {
+	t.Parallel()
 	ws := newWorkspace(t)
 	var wg sync.WaitGroup
 	for i := range 16 {
@@ -277,6 +285,7 @@ func TestConcurrentCallsIntoOneSeatAreSafe(t *testing.T) {
 // releasing twice must not drive the in-flight count negative and prune under
 // a live call.
 func TestReleaseIsIdempotent(t *testing.T) {
+	t.Parallel()
 	ws := newWorkspace(t)
 	checkout, err := ws.Acquire("dev", "call")
 	if err != nil {
