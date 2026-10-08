@@ -94,7 +94,7 @@ func TestTheEngineAnswersASeatItDoesNotHoldAsNotHeld(t *testing.T) {
 // revival stamped with anything else is one the claim's stalled node could
 // still take the answer under.
 func TestTheEngineRevivesAClaimThatDiedBeforeItsTurn(t *testing.T) {
-	t.Setenv("K", "sk-ant-test")
+	t.Parallel()
 	e := sandboxNode(t, nil)
 	applyOK(t, e, sandboxWithModelDoc)
 	waitHeld(t, e, "swe")

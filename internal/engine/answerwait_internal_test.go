@@ -23,8 +23,12 @@ import (
 )
 
 // sandboxWithModelDoc is [sandboxCompanyDoc] with a model, so a seat on it has
-// a turn engine and only the condition a case sets refuses its work. The key
-// is a `${K}` the case sets, as a company's credentials always are.
+// a turn engine and only the condition a case sets refuses its work.
+//
+// THE KEY IS A LITERAL, never called: how a `${VAR}` credential resolves is the
+// secrets and credential-pool cases' subject, and a reference here made every
+// case on this company set the variable through the process environment, which
+// forbids running it beside any other.
 const sandboxWithModelDoc = `
 name: Nimbus
 providers:
@@ -32,7 +36,7 @@ providers:
     zulu:
       type: anthropic
       model: claude-sonnet-5
-      api_keys: ["${K}"]
+      api_keys: ["sk-ant-fake-zulu-key"]
   sandbox:
     fake: true
 roles:
@@ -83,7 +87,7 @@ func TestTheEngineHoldsTheInboxOfASeatItsJobHolds(t *testing.T) {
 // screening — which defers it and asks the coordinator, current when the
 // delivery arrives, for the hold again.
 func TestADeliveryThatReachesAHeldSeatTakesTheHoldTheQueueRefused(t *testing.T) {
-	t.Setenv("K", "sk-ant-test")
+	t.Parallel()
 	e := sandboxNode(t, nil)
 	applyOK(t, e, sandboxWithModelDoc)
 	waitHeld(t, e, "swe")
@@ -146,7 +150,7 @@ func (h *refusedOnce) Release(ctx context.Context, handle string) error {
 // by the renew the host makes once a heartbeat, so ownership is re-checked one
 // heartbeat on; the rest are events the engine passes on.
 func TestMayResumeAnswerNamesWhatEachRefusalWaitsOn(t *testing.T) {
-	t.Setenv("K", "sk-ant-test")
+	t.Parallel()
 	e := sandboxNode(t, nil)
 	before := time.Now()
 	refusal, refused := e.mayResumeAnswer(t.Context(), "swe")
@@ -231,7 +235,7 @@ func (r *resumeSpy) count() int {
 // The engine's own admission refuses the retry while the seat is paused; the
 // pause watch hearing the resume is the signal, and the engine passes it on.
 func TestAPausedAnswerResumesWhenThePersonResumesTheSeat(t *testing.T) {
-	t.Setenv("K", "sk-ant-test")
+	t.Parallel()
 	e := sandboxNode(t, nil)
 	applyOK(t, e, sandboxWithModelDoc)
 	waitHeld(t, e, "swe")
@@ -294,7 +298,7 @@ func spyRuntime(t *testing.T, e *Engine) (*sandbox.Coordinator, *resumeSpy) {
 // AN ANSWER WAITING ON A MODEL RESUMES WITH THE APPLY THAT BRINGS ONE: the
 // apply is the event, and the engine passes it on.
 func TestAnAnswerWaitingOnAModelResumesWithTheApplyThatBringsOne(t *testing.T) {
-	t.Setenv("K", "sk-ant-test")
+	t.Parallel()
 	e := sandboxNode(t, nil)
 	applyOK(t, e, sandboxDoc(""))
 	waitHeld(t, e, "swe")
@@ -315,7 +319,7 @@ func TestAnAnswerWaitingOnAModelResumesWithTheApplyThatBringsOne(t *testing.T) {
 // AN ANSWER THE POSTURE HELD BACK RESUMES ON THE RECONCILE TICK THAT FINDS THE
 // NODE ADMITTING WORK AGAIN — the only place the posture moves.
 func TestAnAnswerThePostureHeldBackResumesOnTheTickThatAdmitsWork(t *testing.T) {
-	t.Setenv("K", "sk-ant-test")
+	t.Parallel()
 	e := sandboxNode(t, nil)
 	applyOK(t, e, sandboxWithModelDoc)
 	waitHeld(t, e, "swe")
@@ -364,7 +368,7 @@ func TestAnAnswerThePostureHeldBackResumesOnTheTickThatAdmitsWork(t *testing.T) 
 // acquisition — from the store call the recovery makes for the second — so it
 // is refused for establishing every time.
 func TestAnInheritedAnswerResumesAsItsSeatIsEstablished(t *testing.T) {
-	t.Setenv("K", "sk-ant-test")
+	t.Parallel()
 	e := sandboxNode(t, nil)
 	applyOK(t, e, sandboxWithModelDoc)
 	waitHeld(t, e, "swe")
@@ -496,7 +500,7 @@ func (c *capturedRetries) delays() []time.Duration {
 // shutting down, and the retry must not run against a node on its way out —
 // the answer is on the run, and the seat's next holder drives it.
 func TestStoppingTheSandboxStopsTheAnswersItWasRetrying(t *testing.T) {
-	t.Setenv("K", "sk-ant-test")
+	t.Parallel()
 	e := sandboxNode(t, nil)
 	applyOK(t, e, sandboxWithModelDoc)
 	waitHeld(t, e, "swe")
