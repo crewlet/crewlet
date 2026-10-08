@@ -50,6 +50,24 @@
 // applies it once to the context it passes down, and because
 // [context.WithTimeout] only ever shortens, each create inside then takes the
 // lesser of its own budget and what is left of the sequence's.
+//
+// # Every duration in one value, so the mechanism can be run at any scale
+//
+// [Timing] carries every duration this package decides, and [Clustered.Timing]
+// is the one place a topology is turned into them. [Settle], [Ask] and [Place]
+// are that value's methods at the production numbers; a caller that holds a
+// [Timing] of its own — a test, through the one seam its package keeps for it —
+// runs the same branches in milliseconds.
+//
+// It exists because the branches that matter most are the ones only an
+// EXHAUSTED budget reaches — a read-back after a create the server held, a
+// probe nobody answered for its whole ceiling — and at the production numbers
+// a case proving one waits out two minutes. The alternative was a seam per
+// number, each spelled by whichever package needed it first: one exported
+// field on the queue's configuration that nothing in the engine set, and
+// nothing at all for the rest, so their cases waited the numbers out. The
+// numbers themselves are pinned where they are decided, here, by tests that
+// read them rather than wait for them.
 package jsprovision
 
 import (
@@ -189,6 +207,94 @@ func SequenceBudget(clustered bool) time.Duration {
 // running, at ~120s each, on a different object every time.
 const LookupBudget = 30 * time.Second
 
+// Timing is every duration a provisioning call waits on, for one topology.
+//
+// [Clustered.Timing] is the production value; nothing else in the engine
+// builds one. A test builds its own to run [Timing.Settle], [Timing.Ask] and
+// [Timing.Place] — and the callers that sit on them — at a scale it can afford,
+// keeping the relations between the fields that the production numbers keep
+// (this package's tests hold both to the same ones).
+//
+// THE ZERO VALUE IS REFUSED rather than read as anything: a window of zero is
+// a read-back that never asks and a cadence of zero is a loop that never
+// waits, and neither is a setting anybody chose. Each method names the field
+// it found unset.
+type Timing struct {
+	// Budget bounds one create — see [Budget].
+	Budget time.Duration
+	// Sequence bounds a whole bring-up of many creates — see
+	// [SequenceBudget].
+	Sequence time.Duration
+	// Lookup is the ceiling over one existence probe, re-asks included —
+	// see [LookupBudget].
+	Lookup time.Duration
+	// AskTerm is how long one metadata request waits before it is presumed
+	// destroyed and re-issued — see [AskTerm].
+	AskTerm time.Duration
+	// ReAsk is the pause before a request nobody answered is sent again —
+	// see [ReAsk].
+	ReAsk time.Duration
+	// ReadBack bounds a whole read-back — see [ReadBack].
+	ReadBack time.Duration
+	// SettleAsk bounds one attempt of a read-back — see [SettleAsk].
+	SettleAsk time.Duration
+	// PlacementRetry is how often an answered refusal is asked again — see
+	// [PlacementRetry].
+	PlacementRetry time.Duration
+}
+
+// Timing is every provisioning duration for a broker of this topology.
+func (c Clustered) Timing() Timing {
+	return Timing{
+		Budget:         c.Budget(),
+		Sequence:       c.SequenceBudget(),
+		Lookup:         LookupBudget,
+		AskTerm:        c.AskTerm(),
+		ReAsk:          ReAsk,
+		ReadBack:       ReadBack,
+		SettleAsk:      SettleAsk,
+		PlacementRetry: PlacementRetry,
+	}
+}
+
+// span is one of a [Timing]'s durations, named for the refusal [refuseUnset]
+// gives when it is not set.
+type span struct {
+	name string
+	d    time.Duration
+}
+
+// refuseUnset names the first of spans that is not a positive duration — the
+// refusal every method gives a [Timing] nobody filled in.
+func refuseUnset(spans ...span) error {
+	for _, s := range spans {
+		if s.d <= 0 {
+			return fmt.Errorf("jsprovision: Timing.%s is %v — a provisioning timing "+
+				"is built by Clustered.Timing, and one built by hand sets every "+
+				"field the call it is handed to reads", s.name, s.d)
+		}
+	}
+	return nil
+}
+
+// withTerm is the production timing with term as one request's term, which is
+// what the package-level [Ask] and [Place] run at.
+//
+// EITHER TOPOLOGY'S, because nothing else those two read branches on one: the
+// cadences are the server's, and the term — the one duration that does — is
+// the caller's argument.
+func withTerm(term time.Duration) Timing {
+	t := Clustered(false).Timing()
+	t.AskTerm = term
+	return t
+}
+
+// Settle is [Timing.Settle] at the production cadences, which no topology
+// changes.
+func Settle(ctx context.Context, ask func(context.Context) error) error {
+	return Clustered(false).Timing().Settle(ctx, ask)
+}
+
 // Settle re-runs ask while it answers [NotYetVisible], for up to [ReadBack].
 //
 // # Why every read-back on this path needs it
@@ -255,18 +361,22 @@ const LookupBudget = 30 * time.Second
 // holds for the last attempt too — the one the window interrupts — so the
 // answer a caller wraps is what the object said, not what this function's
 // patience did.
-func Settle(ctx context.Context, ask func(context.Context) error) error {
-	window, cancel := context.WithTimeout(ctx, ReadBack)
+func (t Timing) Settle(ctx context.Context, ask func(context.Context) error) error {
+	if err := refuseUnset(span{"ReadBack", t.ReadBack}, span{"SettleAsk", t.SettleAsk},
+		span{"ReAsk", t.ReAsk}, span{"PlacementRetry", t.PlacementRetry}); err != nil {
+		return err
+	}
+	window, cancel := context.WithTimeout(ctx, t.ReadBack)
 	defer cancel()
 
 	var absent, unanswered error
 	for {
-		attempt, endAttempt := context.WithTimeout(window, SettleAsk)
+		attempt, endAttempt := context.WithTimeout(window, t.SettleAsk)
 		err := ask(attempt)
 		endAttempt()
 		// THE CADENCE FOLLOWS THE CONDITION, never the loop: see the
 		// section above, and [ReAsk] for why the two must not merge.
-		pause := PlacementRetry
+		pause := t.PlacementRetry
 		switch {
 		case err == nil:
 			return nil
@@ -277,7 +387,7 @@ func Settle(ctx context.Context, ask func(context.Context) error) error {
 			// second: re-asked at a destroyed request's own
 			// interval, and kept in case the window closes with the
 			// object never having said anything at all.
-			unanswered, pause = namedSilence(unanswered, err), ReAsk
+			unanswered, pause = namedSilence(unanswered, err), t.ReAsk
 		case heard(absent, unanswered) != nil && errors.Is(err, context.DeadlineExceeded):
 			// THE WINDOW CLOSED MID-ASK, so what came back describes
 			// this function's patience rather than the object. The
@@ -379,9 +489,13 @@ const SettleAsk = time.Second
 // THE ERROR IT RETURNS IS THE CREATE'S OWN, never the context's: "no suitable
 // peers" says what is wrong and names the condition to go and look at, and
 // "deadline exceeded" says neither.
-func Place(ctx context.Context, term time.Duration,
-	create func(context.Context) error, awaiting func()) error {
-
+//
+// Each attempt is [Timing.Ask]'d at t.AskTerm, and an answered refusal asked
+// again every t.PlacementRetry.
+func (t Timing) Place(ctx context.Context, create func(context.Context) error, awaiting func()) error {
+	if err := refuseUnset(span{"PlacementRetry", t.PlacementRetry}); err != nil {
+		return err
+	}
 	for attempt := 0; ; attempt++ {
 		// THROUGH [Ask], because a create is a metadata request like
 		// any other and the server drops those. Without it a create
@@ -390,7 +504,7 @@ func Place(ctx context.Context, term time.Duration,
 		// this loop waits for never arrived to be waited for — so the
 		// budget bought the create the same nothing the missing
 		// placement retry once bought the consumer.
-		err := Ask(ctx, term, create, nil)
+		err := t.Ask(ctx, create, nil)
 		if err == nil || !Unplaceable(err) {
 			return err
 		}
@@ -400,9 +514,17 @@ func Place(ctx context.Context, term time.Duration,
 		select {
 		case <-ctx.Done():
 			return err
-		case <-time.After(PlacementRetry):
+		case <-time.After(t.PlacementRetry):
 		}
 	}
+}
+
+// Place is [Timing.Place] at the production cadences, each attempt asked for
+// term.
+func Place(ctx context.Context, term time.Duration,
+	create func(context.Context) error, awaiting func()) error {
+
+	return withTerm(term).Place(ctx, create, awaiting)
 }
 
 // Ask runs one idempotent metadata request, RE-ISSUING it while the broker
@@ -445,11 +567,14 @@ func Place(ctx context.Context, term time.Duration,
 // requests already sent, so a caller can say which object is not being
 // answered. The error returned is the last attempt's own, never this
 // function's patience.
-func Ask(ctx context.Context, term time.Duration,
-	one func(context.Context) error, again func(asks int)) error {
-
+//
+// Each request waits t.AskTerm, and the next is sent t.ReAsk after it.
+func (t Timing) Ask(ctx context.Context, one func(context.Context) error, again func(asks int)) error {
+	if err := refuseUnset(span{"AskTerm", t.AskTerm}, span{"ReAsk", t.ReAsk}); err != nil {
+		return err
+	}
 	for asks := 1; ; asks++ {
-		attempt, cancel := context.WithTimeout(ctx, term)
+		attempt, cancel := context.WithTimeout(ctx, t.AskTerm)
 		err := one(attempt)
 		cancel()
 		if !Unanswered(ctx, err) {
@@ -461,9 +586,16 @@ func Ask(ctx context.Context, term time.Duration,
 		select {
 		case <-ctx.Done():
 			return err
-		case <-time.After(ReAsk):
+		case <-time.After(t.ReAsk):
 		}
 	}
+}
+
+// Ask is [Timing.Ask] at the production cadence, each request asked for term.
+func Ask(ctx context.Context, term time.Duration,
+	one func(context.Context) error, again func(asks int)) error {
+
+	return withTerm(term).Ask(ctx, one, again)
 }
 
 // AskTerm is how long ONE metadata request waits before it is presumed

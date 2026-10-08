@@ -13,6 +13,166 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
+// fast is a [Timing] at a scale a case can afford, for the mechanism's own
+// cases: each window, term and cadence a few hundred milliseconds or less, so
+// a branch that only an EXHAUSTED window reaches is reached in under a second
+// rather than after the production five.
+//
+// IT KEEPS EVERY RELATION THE PRODUCTION NUMBERS KEEP —
+// [TestEveryTimingKeepsTheRelationsTheMechanismRestsOn] holds both to the same
+// list — because the cases below discriminate on those relations and not on
+// the numbers: a hung ask plus its pause must fit twice in a read-back, and
+// the two cadences must be far enough apart to tell which one ran.
+//
+// THE CADENCES ARE FORTY TIMES APART, wider than production's four, and that
+// is the cadence case's margin rather than a taste: a timer that fires late on
+// a loaded runner stretches the 5 ms pause, and the case passes a swapped
+// cadence only if lateness alone carries 5 ms past 200.
+var fast = Timing{
+	Budget:         2 * time.Second,
+	Sequence:       5 * time.Second,
+	Lookup:         time.Second,
+	AskTerm:        40 * time.Millisecond,
+	ReAsk:          200 * time.Millisecond,
+	ReadBack:       600 * time.Millisecond,
+	SettleAsk:      40 * time.Millisecond,
+	PlacementRetry: 5 * time.Millisecond,
+}
+
+// relationsBroken lists every relation between a [Timing]'s fields that the
+// mechanism rests on and tm does not keep.
+func relationsBroken(tm Timing) []string {
+	var broken []string
+	check := func(ok bool, format string, args ...any) {
+		if !ok {
+			broken = append(broken, fmt.Sprintf(format, args...))
+		}
+	}
+	// ONE ATTEMPT IS BOUNDED WELL INSIDE ITS WINDOW, or a hung ask is the
+	// whole read-back — the single lookup the re-asking replaced.
+	check(tm.SettleAsk < tm.ReadBack,
+		"one attempt gets %v of a %v window, so a hung ask is the whole read-back",
+		tm.SettleAsk, tm.ReadBack)
+	// AT LEAST TWO UNANSWERED ASKS FIT, or the re-asking never happens on
+	// the condition it was written for: a hung ask costs SettleAsk and then
+	// waits ReAsk before the next one.
+	check(tm.SettleAsk+tm.ReAsk < tm.ReadBack,
+		"a hung ask plus its %v pause is %v of a %v window, leaving room for no "+
+			"second ask", tm.ReAsk, tm.SettleAsk+tm.ReAsk, tm.ReadBack)
+	// AN ANSWERED NOT-FOUND IS POLLED MANY TIMES OVER, which is the
+	// propagation delay the window was sized for.
+	check(tm.PlacementRetry*10 <= tm.ReadBack,
+		"a %v read-back holds fewer than ten %v polls", tm.ReadBack, tm.PlacementRetry)
+	// A DESTROYED REQUEST WAITS LONGER THAN AN ANSWERED REFUSAL — see
+	// [ReAsk]: re-sent at the placement cadence, a broker whose JetStream
+	// is not serving yet is asked four times a second for every object.
+	check(tm.ReAsk > tm.PlacementRetry,
+		"a destroyed request is re-sent after %v and an answered refusal after %v",
+		tm.ReAsk, tm.PlacementRetry)
+	// A READ-BACK IS FAR SHORTER THAN A CREATE, or it inherits the
+	// provisioning budget and multiplies a failing boot's time to say so.
+	check(tm.ReadBack < tm.Budget,
+		"a read-back gets %v against a create's %v", tm.ReadBack, tm.Budget)
+	return broken
+}
+
+// EVERY TIMING KEEPS THE RELATIONS THE MECHANISM RESTS ON — both topologies'
+// production timings and the scaled one the mechanism's cases run at — held
+// against each other rather than restated in a comment.
+//
+// [SettleAsk] bounds ONE attempt so a request that hangs cannot spend the whole
+// window, and [ReadBack] bounds the run of them. A term at or above the window
+// makes the first hung ask the entire read-back, which is the single lookup
+// this re-asking replaced. And the production numbers reach these timings
+// unchanged — [TestEachTopologysTimingCarriesTheNumbersThisPackageNames] — so
+// this is the relation test for the named numbers too.
+//
+// The scaled one is held to the same list because a case run at a timing that
+// broke one of them would be exercising some other mechanism: a read-back that
+// fits one ask cannot show the re-ask, and cadences that crossed cannot show
+// which one ran.
+func TestEveryTimingKeepsTheRelationsTheMechanismRestsOn(t *testing.T) {
+	t.Parallel()
+	for name, tm := range map[string]Timing{
+		"solo":      Clustered(false).Timing(),
+		"clustered": Clustered(true).Timing(),
+		"the cases": fast,
+	} {
+		for _, broken := range relationsBroken(tm) {
+			t.Errorf("%s: %s", name, broken)
+		}
+	}
+}
+
+// EACH TOPOLOGY'S TIMING CARRIES THE NUMBERS THIS PACKAGE NAMES, field by
+// field.
+//
+// THE CASE THE SCALED ONES CANNOT BE. The mechanism's cases run at [fast], and
+// the relation test above is symmetric in the names — so a [Clustered.Timing]
+// that handed ReAsk's second to PlacementRetry and PlacementRetry's quarter to
+// ReAsk would pass all of them, and every production read-back would re-send a
+// destroyed request four times a second. Only a comparison against the named
+// numbers sees which number reached which role.
+func TestEachTopologysTimingCarriesTheNumbersThisPackageNames(t *testing.T) {
+	t.Parallel()
+	for _, clustered := range []bool{false, true} {
+		want := Timing{
+			Budget:         Budget(clustered),
+			Sequence:       SequenceBudget(clustered),
+			Lookup:         LookupBudget,
+			AskTerm:        AskTerm(clustered),
+			ReAsk:          ReAsk,
+			ReadBack:       ReadBack,
+			SettleAsk:      SettleAsk,
+			PlacementRetry: PlacementRetry,
+		}
+		if got := Clustered(clustered).Timing(); got != want {
+			t.Errorf("clustered=%v: Timing() = %+v, want %+v", clustered, got, want)
+		}
+	}
+
+	// AND THE PACKAGE-LEVEL VERBS RUN AT ONE TOPOLOGY'S CADENCES FOR BOTH,
+	// which is right only while the cadences do not branch on one: what
+	// those verbs read is the cadences, the window, and the term their
+	// caller hands them.
+	solo, clustered := Clustered(false).Timing(), Clustered(true).Timing()
+	if solo.ReAsk != clustered.ReAsk || solo.ReadBack != clustered.ReadBack ||
+		solo.SettleAsk != clustered.SettleAsk || solo.PlacementRetry != clustered.PlacementRetry {
+		t.Errorf("the cadences now differ by topology (solo %+v, clustered %+v), and "+
+			"Settle, Ask and Place run every caller at the solo ones", solo, clustered)
+	}
+	if got := withTerm(time.Hour); got.AskTerm != time.Hour ||
+		got.ReAsk != ReAsk || got.PlacementRetry != PlacementRetry {
+		t.Errorf("Ask and Place run at %+v, want the production cadences and the "+
+			"caller's term", got)
+	}
+}
+
+// A TIMING NOBODY FILLED IN IS REFUSED, BY THE FIELD IT LACKS, and asks
+// nothing.
+//
+// Read as a setting, a zero window is a read-back that asks once into a
+// context already over and reports what that produced, and a zero cadence is
+// a loop that re-sends with no pause at all.
+func TestATimingNobodyFilledInIsRefused(t *testing.T) {
+	t.Parallel()
+	asked := 0
+	ask := func(context.Context) error { asked++; return nil }
+	for name, call := range map[string]func() error{
+		"ReadBack":       func() error { return Timing{}.Settle(t.Context(), ask) },
+		"AskTerm":        func() error { return Timing{}.Ask(t.Context(), ask, nil) },
+		"PlacementRetry": func() error { return Timing{}.Place(t.Context(), ask, nil) },
+	} {
+		err := call()
+		if err == nil || !strings.Contains(err.Error(), "Timing."+name) {
+			t.Errorf("a zero Timing answered %v, want a refusal naming Timing.%s", err, name)
+		}
+	}
+	if asked != 0 {
+		t.Errorf("a zero Timing asked %d time(s), want none", asked)
+	}
+}
+
 // A CLUSTER STILL FORMING is the one error worth waiting out, and telling it
 // from the rest is what keeps a config mistake from becoming a two-minute hang
 // with the same message at the end.
@@ -175,12 +335,14 @@ func TestTheBudgetsFollowWhetherTheBrokerHasPeers(t *testing.T) {
 // Four read-backs on the provisioning path had the one-shot form and all four
 // sit inside the window by construction — each is asking whether a create just
 // landed. A single lookup answers at one arbitrary instant inside it.
+//
+// AT [fast], because the last half waits out a whole window.
 func TestAReadBackReAsksWhileTheObjectIsNotVisibleYet(t *testing.T) {
 	t.Parallel()
 
 	// NOT VISIBLE, THEN VISIBLE: the answer is the later one.
 	calls := 0
-	err := Settle(t.Context(), func(context.Context) error {
+	err := fast.Settle(t.Context(), func(context.Context) error {
 		calls++
 		if calls < 3 {
 			return jetstream.ErrStreamNotFound
@@ -198,7 +360,7 @@ func TestAReadBackReAsksWhileTheObjectIsNotVisibleYet(t *testing.T) {
 	// would be waiting for something nobody is going to do.
 	calls = 0
 	placement := &jetstream.APIError{ErrorCode: errCodeNoPeers, Code: 400}
-	if err := Settle(t.Context(), func(context.Context) error {
+	if err := fast.Settle(t.Context(), func(context.Context) error {
 		calls++
 		return placement
 	}); !errors.Is(err, placement) {
@@ -210,7 +372,7 @@ func TestAReadBackReAsksWhileTheObjectIsNotVisibleYet(t *testing.T) {
 
 	// AND AN OBJECT THAT NEVER APPEARS reports the broker's own not-found,
 	// which names it, rather than a bare deadline.
-	err = Settle(t.Context(), func(context.Context) error { return jetstream.ErrStreamNotFound })
+	err = fast.Settle(t.Context(), func(context.Context) error { return jetstream.ErrStreamNotFound })
 	if !errors.Is(err, jetstream.ErrStreamNotFound) {
 		t.Errorf("an absent object reported %v, want the not-found that names it", err)
 	}
@@ -403,9 +565,10 @@ func TestTheWindowBoundsEachLookupAndTheAnswerStillNamesTheObject(t *testing.T) 
 	// blocks until the window closes and reports what its context says —
 	// which is the shape a real metadata read takes when the group is
 	// slow. The not-found is the last thing anything said about the
-	// stream, so it is what comes back.
+	// stream, so it is what comes back. At [fast], because the ask waits
+	// the whole window out.
 	calls := 0
-	err := Settle(t.Context(), func(ctx context.Context) error {
+	err := fast.Settle(t.Context(), func(ctx context.Context) error {
 		calls++
 		if calls == 1 {
 			return jetstream.ErrStreamNotFound
@@ -501,9 +664,10 @@ func TestAPlacementRefusalIsWaitedOut(t *testing.T) {
 
 	placement := &jetstream.APIError{ErrorCode: errCodeNoPeers, Code: 400}
 
-	// IT CLEARS: the members arrive and the create succeeds.
+	// IT CLEARS: the members arrive and the create succeeds. At [fast],
+	// because each refusal waits a placement cadence out.
 	calls, announced := 0, 0
-	err := Place(t.Context(), time.Minute, func(context.Context) error {
+	err := fast.Place(t.Context(), func(context.Context) error {
 		calls++
 		if calls < 3 {
 			return placement
@@ -527,7 +691,7 @@ func TestAPlacementRefusalIsWaitedOut(t *testing.T) {
 	// end.
 	calls = 0
 	bad := errors.New("invalid consumer config")
-	if err := Place(t.Context(), time.Minute, func(context.Context) error {
+	if err := fast.Place(t.Context(), func(context.Context) error {
 		calls++
 		return bad
 	}, nil); !errors.Is(err, bad) {
@@ -542,7 +706,7 @@ func TestAPlacementRefusalIsWaitedOut(t *testing.T) {
 	// at, and "deadline exceeded" names nothing.
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
-	err = Place(ctx, time.Minute, func(context.Context) error { return placement }, nil)
+	err = fast.Place(ctx, func(context.Context) error { return placement }, nil)
 	if errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("an exhausted budget reported its own deadline (%v) rather "+
 			"than the refusal that explains it", err)
@@ -711,8 +875,9 @@ func TestAnUnansweredRequestIsAskedAgain(t *testing.T) {
 
 	var asks atomic.Int64
 	// SILENT TWICE, then answered: the shape of a group that elects a
-	// leader while the caller is asking.
-	err := Ask(t.Context(), 20*time.Millisecond, func(ctx context.Context) error {
+	// leader while the caller is asking. At [fast], because each silence
+	// costs a term and a pause.
+	err := fast.Ask(t.Context(), func(ctx context.Context) error {
 		if asks.Add(1) <= 2 {
 			<-ctx.Done() // the reply never comes; the term expires
 			return ctx.Err()
@@ -804,14 +969,15 @@ func TestAPlacementLoopReissuesADestroyedCreate(t *testing.T) {
 	// attempt its own term fails here in seconds rather than hanging until
 	// the package timeout — a mutation that hangs is one nobody diagnoses.
 	//
-	// Five seconds because the run below really costs about 1.3: one
-	// destroyed attempt, a [ReAsk] second, a refusal, a [PlacementRetry]
-	// quarter-second, then the answer.
+	// Five seconds against a run that costs about a quarter of one at
+	// [fast]: one destroyed attempt (its term), a ReAsk pause, a refusal, a
+	// PlacementRetry pause, then the answer. The margin is a loaded
+	// runner's; an attempt with no term of its own outlives all of it.
 	outer, cancelOuter := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancelOuter()
 
 	var creates atomic.Int64
-	err := Place(outer, 20*time.Millisecond, func(ctx context.Context) error {
+	err := fast.Place(outer, func(ctx context.Context) error {
 		switch creates.Add(1) {
 		case 1: // destroyed: no reply at all
 			<-ctx.Done()
@@ -890,9 +1056,11 @@ func TestAnUnansweredReadBackIsReAskedAtItsOwnCadence(t *testing.T) {
 	t.Parallel()
 
 	// A REPLY THAT NEVER CAME, then the object. The answer is the later
-	// one: silence is not "absent".
+	// one: silence is not "absent". At [fast] throughout, whose cadences
+	// are forty times apart where production's are four — see it for why
+	// that margin is what keeps the half below biting on a loaded runner.
 	calls := 0
-	err := Settle(t.Context(), func(context.Context) error {
+	err := fast.Settle(t.Context(), func(context.Context) error {
 		calls++
 		if calls < 3 {
 			return nats.ErrNoResponders
@@ -906,23 +1074,23 @@ func TestAnUnansweredReadBackIsReAskedAtItsOwnCadence(t *testing.T) {
 		t.Errorf("asked %d times, want 3", calls)
 	}
 
-	// AND THE GAP IS [ReAsk], NOT [PlacementRetry]. Two unanswered asks
-	// that each return at once must still be at least one ReAsk apart:
-	// measured against the elapsed time rather than the constant, so
-	// swapping the cadence back is what turns this red.
+	// AND THE GAP IS ReAsk, NOT PlacementRetry. Two unanswered asks that
+	// each return at once must still be at least one ReAsk apart: measured
+	// against the elapsed time rather than the field, so swapping the
+	// cadence back is what turns this red.
 	calls = 0
 	start := time.Now()
-	_ = Settle(t.Context(), func(context.Context) error {
+	_ = fast.Settle(t.Context(), func(context.Context) error {
 		calls++
 		if calls < 2 {
 			return nats.ErrNoResponders
 		}
 		return nil
 	})
-	if waited := time.Since(start); waited < ReAsk {
+	if waited := time.Since(start); waited < fast.ReAsk {
 		t.Errorf("an unanswered ask was re-issued after %v, inside the %v a "+
 			"destroyed request gets; the placement cadence is for a refusal "+
-			"the server answered", waited, ReAsk)
+			"the server answered", waited, fast.ReAsk)
 	}
 }
 
@@ -942,7 +1110,7 @@ func TestAReadBackNobodyEverAnsweredNamesTheSilence(t *testing.T) {
 	// window's own deadline, which is not an answer and must not be
 	// reported as one.
 	calls := 0
-	err := Settle(t.Context(), func(ctx context.Context) error {
+	err := fast.Settle(t.Context(), func(ctx context.Context) error {
 		calls++
 		if calls <= 2 {
 			return nats.ErrNoResponders
@@ -960,39 +1128,11 @@ func TestAReadBackNobodyEverAnsweredNamesTheSilence(t *testing.T) {
 
 	// A NOT-FOUND STILL OUTRANKS IT: the object DID answer once, and what
 	// it said names it.
-	err = Settle(t.Context(), func(ctx context.Context) error {
+	err = fast.Settle(t.Context(), func(ctx context.Context) error {
 		return jetstream.ErrStreamNotFound
 	})
 	if !errors.Is(err, jetstream.ErrStreamNotFound) {
 		t.Errorf("an absent object reported %v, want its own not-found", err)
-	}
-}
-
-// THE READ-BACK'S OWN ARITHMETIC, held against the window rather than restated
-// in a comment.
-//
-// [SettleAsk] bounds ONE attempt so a request that hangs cannot spend the whole
-// window, and [ReadBack] bounds the run of them. A term at or above the window
-// makes the first hung ask the entire read-back, which is the single lookup
-// this re-asking replaced.
-func TestAReadBacksAttemptIsBoundedWellInsideItsWindow(t *testing.T) {
-	t.Parallel()
-	if SettleAsk >= ReadBack {
-		t.Errorf("one attempt gets %v of a %v window, so a hung ask is the "+
-			"whole read-back", SettleAsk, ReadBack)
-	}
-	// AT LEAST TWO UNANSWERED ASKS FIT, or the re-asking never happens on
-	// the condition it was written for: an ask that hangs costs SettleAsk
-	// and then waits ReAsk before the next one.
-	if SettleAsk+ReAsk >= ReadBack {
-		t.Errorf("a hung ask plus its %v pause is %v of a %v window, leaving "+
-			"room for no second ask", ReAsk, SettleAsk+ReAsk, ReadBack)
-	}
-	// AND AN ANSWERED NOT-FOUND IS POLLED MANY TIMES OVER, which is the
-	// propagation delay this window was sized for.
-	if PlacementRetry*10 > ReadBack {
-		t.Errorf("a %v read-back holds fewer than ten %v polls",
-			ReadBack, PlacementRetry)
 	}
 }
 
