@@ -748,19 +748,20 @@ func (h *Host) Stop(ctx context.Context) {
 	}
 	h.wg.Wait()
 
-	// A BUDGET OF ITS OWN, for the reason Node.Drain gives: Stop is reached
-	// on a shutdown path whose context is routinely already cancelled, and
-	// a give-back that inherits it releases nothing — every seat then sits
-	// dark for a full TTL instead of being taken over at once, and this
-	// node's presence lingers so peers keep reserving capacity for it.
+	// NOT THE CALLER'S CONTEXT, for the reason Node.Drain gives: Stop is
+	// reached on a shutdown path whose context is routinely already
+	// cancelled, and a give-back that inherits it releases nothing — every
+	// seat then sits dark for a full TTL instead of being taken over at
+	// once, and this node's presence lingers so peers keep reserving
+	// capacity for it.
 	//
-	// FROM THIS HOST'S TTL and not from [SeatLeaseTTL], for the reason
-	// [HeartbeatRatio] gives: a deployment that shortened its lease to ten
-	// seconds would otherwise spend fifteen giving the seats back, which
-	// is a budget strictly outside the lease it is racing.
-	releaseCtx, cancel2 := context.WithTimeout(
-		context.WithoutCancel(ctx), h.ttl/HeartbeatRatio)
-	defer cancel2()
+	// ON THE STOP'S ONE ALLOWANCE instead ([WithinStop]): the engine's, when
+	// its stop is what reached here, or one begun from THIS HOST'S TTL —
+	// never [SeatLeaseTTL], for the reason [HeartbeatRatio] gives: a
+	// deployment that shortened its lease to ten seconds would otherwise
+	// spend fifteen giving the seats back, an allowance strictly outside the
+	// lease it is racing. Every give-back below is a [StopStep] of it.
+	releaseCtx := WithinStop(context.WithoutCancel(ctx), h.ttl)
 	h.ReleaseAll(releaseCtx, ReasonDrain)
 	h.releaseNodePresence(releaseCtx)
 
@@ -780,15 +781,16 @@ func (h *Host) Stop(ctx context.Context) {
 	log.InfoContext(ctx, "seat_host_stopped", "node", h.nodeID)
 }
 
-// ReleaseAll hands every seat back — each one the moment IT goes idle.
+// ReleaseAll hands every seat back, all at once.
 //
 // Concurrently, not one after another, and the difference is the whole point
-// of a graceful drain. A voluntary release waits for that seat's in-flight
-// turn under a bounded timeout; run in sequence, a node holding a dozen
-// seats pays that timeout a dozen times over, and the eleventh seat stays
-// dark for the whole procession even though it went idle first. Released
-// together, each seat leaves as soon as its own turn finishes and the drain
-// costs one timeout rather than N.
+// of a graceful drain. A seat's teardown takes time of its own — its MCP
+// children's shutdown ladder, its last memory flush — so in sequence a node
+// holding a dozen seats pays it a dozen times over, and the eleventh seat
+// stays dark for the whole procession. Released together, the drain costs the
+// slowest teardown rather than the sum, and the give-backs, which share a
+// stop's one allowance ([StopBudget]), are charged once for the time they
+// overlap.
 //
 // Deliberately uncapped, unlike claiming. The claim-rate limit is sized by
 // the cost of an MCP SPAWN on the node taking a seat on; letting go costs a

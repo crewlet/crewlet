@@ -79,6 +79,24 @@ func WithStopBudget(ctx context.Context, b *StopBudget) context.Context {
 	return context.WithValue(ctx, stopBudgetKey{}, b)
 }
 
+// WithinStop is ctx carrying the allowance of the stop it is part of: the one
+// ctx already carries, where a caller further up began the stop, or a fresh
+// [StopAllowance] of ttl, where the stop begins here.
+//
+// For the layers that can each be where a stop begins — a node's drain and its
+// seat host's stop are reached from an engine's stop, which carries one, and
+// from callers that carry none — so that every give-back they make is a
+// [StopStep] whoever called them. Without it, a step outside any stop keeps its
+// caller's bound, which for a give-back is no bound at all: the teardown that
+// asks takes [context.WithoutCancel], because a caller's deadline has usually
+// passed by then and a release that inherited it would do nothing.
+func WithinStop(ctx context.Context, ttl time.Duration) context.Context {
+	if b, ok := ctx.Value(stopBudgetKey{}).(*StopBudget); ok && b != nil {
+		return ctx
+	}
+	return WithStopBudget(ctx, NewStopBudget(StopAllowance(ttl)))
+}
+
 // StopStep bounds one coordination round trip of a stop by what is left of
 // the budget ctx carries, and returns the context to make it on and the call
 // that ends the step, which the caller defers. A step begun with nothing left

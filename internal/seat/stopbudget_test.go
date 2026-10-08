@@ -85,6 +85,67 @@ func TestAStepOutsideAStopKeepsItsCallersBound(t *testing.T) {
 	}
 }
 
+// A LAYER JOINS THE STOP IT IS PART OF, OR BEGINS ONE INSIDE ITS LEASE. A
+// context carrying a stop's allowance keeps it, so the layer's give-backs draw
+// on what the stop's other steps draw on; one carrying none is handed
+// [StopAllowance] of the TTL, so a give-back made outside any stop is still
+// bounded — and bounded inside the lease it is racing.
+func TestWithinStopJoinsTheStopOrBeginsOneInsideTheLease(t *testing.T) {
+	t.Parallel()
+	const carried = 300 * time.Millisecond
+	joined := WithinStop(WithStopBudget(t.Context(), NewStopBudget(carried)), time.Hour)
+	if left := remaining(t, joined); left > carried {
+		t.Errorf("a step of a stop carrying %v may run %v: the layer began an "+
+			"allowance of its own beside the stop's", carried, left)
+	}
+
+	const ttl = 3 * time.Second
+	begun := remaining(t, WithinStop(t.Context(), ttl))
+	if want := StopAllowance(ttl); begun > want || begun < want-200*time.Millisecond {
+		t.Errorf("a stop begun at a %v lease allows %v, want one heartbeat "+
+			"interval (%v)", ttl, begun, want)
+	}
+}
+
+// A HOST STOPPED ON AN ENDED CONTEXT STILL GIVES ITS LEASES BACK, on an
+// allowance inside its own lease rather than none: Stop is reached on a
+// shutdown path whose context has routinely ended, and the store here answers
+// a release only when the context it was asked on ends.
+func TestAStopOnAnEndedContextSpendsOneAllowanceOfItsLease(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	stuck := &stuckReleases{Backend: f.store}
+	const ttl = 3 * time.Second
+	h := f.newHost("node-a", Config{
+		Backend: stuck, Seats: seatsNamed("ceo", "eng"), TTL: ttl,
+		SweepInterval: time.Hour, HeartbeatInterval: time.Hour,
+	})
+	h.Start(f.ctx)
+	wantHeld(t, h, "ceo", "eng")
+
+	ended, cancel := context.WithCancel(f.ctx)
+	cancel()
+	stuck.block()
+	started := time.Now()
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		h.Stop(ended)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(10 * time.Second):
+		t.Fatal("a stop against a store that never answers did not return: " +
+			"its give-backs are bounded by no allowance")
+	}
+	if took, allowance := time.Since(started), StopAllowance(ttl); took > allowance+2*time.Second {
+		t.Fatalf("the stop took %v against an allowance of %v", took, allowance)
+	}
+	if got := stuck.releases(); got != 3 {
+		t.Errorf("%d release(s) asked for, want both seats and the presence", got)
+	}
+}
+
 // A HOST THAT CANNOT REACH ITS STORE GIVES ITS LEASES BACK IN ONE ALLOWANCE.
 //
 // The store here answers a release only when the context it was asked on
