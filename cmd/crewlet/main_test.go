@@ -714,13 +714,23 @@ func testEngine(t *testing.T) *engine.Engine {
 // the bridge from the environment, as a node does.
 func testEngineWithBridge(t *testing.T, bridge *mcpbridge.Bridge) *engine.Engine {
 	t.Helper()
-	boot := bootstrapFor(t, 0)
-	seedEngineStore(t, boot)
-	company, err := config.ParseCompany([]byte(companyYAML))
-	if err != nil {
-		t.Fatalf("parse: %v", err)
+	return testEngineWith(t, engine.Options{Bridge: bridge})
+}
+
+// testEngineWith is testEngine built from opts, on a bootstrap of its own and
+// the [companyYAML] company where opts names none.
+func testEngineWith(t *testing.T, opts engine.Options) *engine.Engine {
+	t.Helper()
+	opts.Bootstrap = bootstrapFor(t, 0)
+	seedEngineStore(t, opts.Bootstrap)
+	if opts.Company == nil {
+		company, err := config.ParseCompany([]byte(companyYAML))
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		opts.Company = company
 	}
-	e, err := engine.New(t.Context(), engine.Options{Bootstrap: boot, Company: company, Bridge: bridge})
+	e, err := engine.New(t.Context(), opts)
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
 	}
