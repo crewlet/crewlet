@@ -2060,7 +2060,8 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 		// read from the watched view, which re-lists on a heartbeat: a
 		// donor the view has not seen yet is one the join could stop
 		// before hearing, and a join is rare enough that one listing is
-		// nothing. A listing that fails waits the window out.
+		// nothing — read while the offers arrive, inside the window, so a
+		// slow one costs nothing past it and one that fails waits it out.
 		Donors: func(ctx context.Context) ([]string, error) {
 			live, err := e.holdersOf().LiveData(ctx)
 			if err != nil {

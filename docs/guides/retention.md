@@ -381,6 +381,8 @@ below the published floor whose missing records the log still holds reports
    data node has answered — each runs a donor, the asking node's own among
    them, and one holding no artefact answers that it has none — or for five
    seconds at most, which is what a data node whose donor never answers costs.
+   Which data nodes are live is read while the offers arrive, so a
+   coordination store slow to say costs nothing past those five seconds.
    A running node that finds no donor stays as it is, refusing, and asks again
    on an interval that doubles up to five minutes. Stopping a node mid-join —
    a signal during its boot, or a shutdown while it is asking or fetching —

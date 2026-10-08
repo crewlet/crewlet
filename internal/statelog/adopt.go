@@ -43,7 +43,10 @@ type AdoptDeps struct {
 	// live data node, each of which runs one — so its collection ends once
 	// each has answered rather than at the [OfferWindow] ([CollectOffers]).
 	// Nil, or an error, waits out the window: an expectation is a way to
-	// stop early and never a reason not to ask.
+	// stop early and never a reason not to ask. It is called WHILE the
+	// offers are collected, on a context the window ends, and must return
+	// once that context does — a listing still running when the window
+	// closes is abandoned rather than waited for.
 	Donors func(ctx context.Context) ([]string, error)
 
 	// Need is this node's own acceptance test for an artefact, as the
@@ -231,19 +234,24 @@ func (a *Adopter) Join(ctx context.Context) (Manifest, error) {
 	}
 	req.NodeID = a.deps.NodeID
 
-	var donors []string
+	// THE DONORS IT EXPECTS ARE LISTED BESIDE THE COLLECTION, inside its
+	// window ([collectOffers]): listed first, a coordination store that was
+	// slow to answer held this node — refusing every read and write while it
+	// joins — for the whole listing and then the whole window.
+	var expect func(context.Context) ([]string, error)
 	if a.deps.Donors != nil {
-		named, err := a.deps.Donors(ctx)
-		if err != nil {
-			a.log.WarnContext(ctx, "statelog_donors_unknown",
-				"node", a.deps.NodeID, "error", err.Error(),
-				"detail", "which donors to wait for could not be read, so "+
-					"the join collects offers for the whole offer window")
-		} else {
-			donors = named
+		expect = func(listing context.Context) ([]string, error) {
+			named, err := a.deps.Donors(listing)
+			if err != nil && ctx.Err() == nil {
+				a.log.WarnContext(ctx, "statelog_donors_unknown",
+					"node", a.deps.NodeID, "error", err.Error(),
+					"detail", "which donors to wait for could not be read within "+
+						"the offer window, so the join collected offers for all of it")
+			}
+			return named, err
 		}
 	}
-	offers, err := CollectOffers(ctx, a.deps.Conn, req, OfferWindow, donors...)
+	offers, err := collectOffers(ctx, a.deps.Conn, req, OfferWindow, expect)
 	if err != nil {
 		return Manifest{}, err
 	}

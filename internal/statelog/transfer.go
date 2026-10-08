@@ -457,7 +457,9 @@ func (d *Donor) terminate(nc *nats.Conn, deliver string, status int, detail stri
 // did not name is still heard while the window is open, and one it named that
 // never answers — not up yet, or gone — costs the window and nothing more,
 // which is the most an expectation can cost: the window was what every join
-// paid before it.
+// paid before it. The expectation may also be READ while the collection runs
+// rather than handed in, which is how [Adopter.Join] names its donors — see
+// [collectOffers].
 //
 // # What the context means
 //
@@ -472,6 +474,31 @@ func (d *Donor) terminate(nc *nats.Conn, deliver string, status int, detail stri
 // that nobody can donate.
 func CollectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window time.Duration,
 	expect ...string) ([]Offer, error) {
+	var named func(context.Context) ([]string, error)
+	if len(expect) > 0 {
+		named = func(context.Context) ([]string, error) { return expect, nil }
+	}
+	return collectOffers(ctx, nc, req, window, named)
+}
+
+// collectOffers is [CollectOffers] with its expectation READ BESIDE the
+// collection rather than before it: expect runs once, on a context the window
+// bounds, while the offers arrive, and the collection ends once every donor it
+// names has answered — those that answered before it returned included. Nil
+// expects nobody, and the window decides.
+//
+// BESIDE AND NOT BEFORE, because the expectation [Adopter.Join] reads is a
+// listing of the fleet's live data nodes, which is a coordination read: run
+// first, a slow or unreachable store added all of its time in front of the
+// window, on a node refusing every read and write while it joins — for an
+// expectation that is only ever a way to stop early. Read beside, it costs
+// nothing the window does not: a listing still running when the window closes
+// is abandoned, and one that fails or names nobody leaves the window to decide.
+//
+// expect must return once its context ends, because the collection waits for
+// it: nothing a collection starts outlives the call.
+func collectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window time.Duration,
+	expect func(context.Context) ([]string, error)) ([]Offer, error) {
 	// A CALLER THAT HAS ALREADY GIVEN UP ASKS NOBODY: a request published
 	// now is one every donor answers for a joiner that will not read it.
 	if err := ctx.Err(); err != nil {
@@ -507,19 +534,59 @@ func CollectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window 
 				"within the %s offer window, so no donor was asked", window))
 	}
 
-	waiting := make(map[string]bool, len(expect))
-	for _, donor := range expect {
-		waiting[donor] = true
+	// THE EXPECTATION, read on a goroutine of its own under the window. Its
+	// answer INTERRUPTS the wait below (arrived), because every donor it
+	// names may have answered already, and a wait for a next answer that is
+	// never coming would hold the collection to the window regardless.
+	wait := collect
+	var expected chan []string
+	if expect != nil {
+		expected = make(chan []string, 1)
+		var arrived context.CancelFunc
+		wait, arrived = context.WithCancel(collect)
+		listed := make(chan struct{})
+		go func() {
+			defer close(listed)
+			defer arrived()
+			named, err := expect(collect)
+			if err != nil {
+				named = nil
+			}
+			expected <- named
+		}()
+		defer func() { cancel(); <-listed }()
 	}
+	// waiting is nil until the expectation is known, and from then the
+	// donors it names that have not answered.
+	var waiting map[string]bool
+	answered := map[string]bool{}
 	var out []Offer
-	for len(expect) == 0 || len(waiting) > 0 {
-		msg, err := sub.NextMsgWithContext(collect)
+	for waiting == nil || len(waiting) > 0 {
+		msg, err := sub.NextMsgWithContext(wait)
 		if err != nil {
 			// THE CALLER'S END FIRST, and tested on the PARENT: the
 			// child is done in both cases, so its own error cannot say
 			// whose end it was.
 			if ctx.Err() != nil {
 				return nil, fmt.Errorf("statelog: collect offers: %w", ctx.Err())
+			}
+			// THE EXPECTATION ARRIVING — its own interruption, with the
+			// window still open, and its answer sent before it: fold it
+			// in, less whoever has answered already, and go on waiting on
+			// the window alone. An answer that came in with it is still in
+			// the subscription, read on the next turn.
+			if expected != nil && wait.Err() != nil && collect.Err() == nil {
+				named := <-expected
+				expected, wait = nil, collect
+				if len(named) > 0 {
+					waiting = make(map[string]bool, len(named))
+					for _, donor := range named {
+						if !answered[donor] {
+							waiting[donor] = true
+						}
+					}
+				}
+				continue
 			}
 			// The window closed, or the broker reported that nothing
 			// subscribes to the subject at all — which is the same
@@ -538,6 +605,7 @@ func CollectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window 
 		if err := json.Unmarshal(msg.Data, &o); err != nil {
 			continue
 		}
+		answered[o.Donor] = true
 		delete(waiting, o.Donor)
 		if !o.Declined() {
 			out = append(out, o)
