@@ -45,7 +45,11 @@ func seededApp(t *testing.T, mutate func(*api.Options)) *api.App {
 		}
 	}
 
-	state := livestate.New()
+	// ON THE SUITE'S CLOCK, as the app is: the live spend window is aged
+	// and labelled by the projection's own clock, so a projection on the
+	// wall clock beside an app pinned to [clock] answers a REST call and a
+	// socket call either side of a second with two different windows.
+	state := livestate.New(livestate.WithClock(func() time.Time { return clock }))
 	state.Apply(&livestate.Envelope{
 		ID: "e1", Type: "agent_phase_started", Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 		Category: "task", Payload: map[string]any{"role": "Lead", "task_id": "t-1"},
