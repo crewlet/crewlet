@@ -63,14 +63,16 @@ func TestTursoIsTheOnlyDriverInTheBinary(t *testing.T) {
 // open builds a database on its own file. Each one is exclusive: the engine
 // owns its file, and sharing one between subtests would test an arrangement
 // nothing runs in.
+//
+// SEEDED from the binary's migrated image ([storetest.OpenNode]), because what
+// the cases that call this certify is the store's behaviour on a migrated
+// file, not the migration that produced it. The migrator is certified on
+// files of its own: the contract's schema cases, Pending's, and every case
+// here that opens through [store.OpenNode] directly.
 func open(t *testing.T) *store.DB {
 	t.Helper()
-	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "store.db"),
-		store.Options{})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	// Tolerant of a test that closed it already — the reopen case does.
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "store.db"), store.Options{})
+	// Tolerant of a test that closed it already.
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
