@@ -19,7 +19,8 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
-// helperEnv marks a re-execution of this test binary as the fake CLI.
+// helperEnv marks a re-execution of this test binary as the fake CLI rather
+// than the suite. [TestMain] reads it before the framework starts.
 //
 // The fake is this binary rather than a shell script because the two platforms
 // the engine ships for do not share a userland: what the fake reports — a
@@ -28,8 +29,6 @@ import (
 // about, so a script would test each machine's tools as much as the exec path.
 // Every mode is Go, defined here beside the cases that drive it, and every
 // fixture launches it through [fakeChildEnv].
-// helperEnv is what makes this binary the fake CLI instead of the suite. See
-// [TestMain], which reads it before the framework starts.
 //
 // The `-test.run=TestCLIAgentFakeCLI` the fixtures still pass now names no
 // test, and is kept deliberately as a FORK-BOMB GUARD rather than a selector:
