@@ -253,8 +253,8 @@ func (s scripted) Complete(_ context.Context, req llm.Request) (*llm.Completion,
 // depth before it opens a phase, so every case below drives the real runTurn —
 // its prefetch, its runner build, its completion event — without a model call
 // and without the network. What it cannot exercise is a turn that suspends;
-// that is [TestASuspendedTurnKeepsTheIndicatorUp], on the same rule the engine
-// drives keepAlive off.
+// that is [TestAnIndicatorSurvivesOnlyWhatIsStillWorking], on the same rule
+// the engine drives keepAlive off.
 func indicating(t *testing.T, mode notify.StatusMode) (*Engine, *workspace) {
 	t.Helper()
 	return indicatingWith(t, mode, refusingProvider{})
@@ -315,8 +315,8 @@ func indicatingWith(t *testing.T, mode notify.StatusMode, prov llm.Provider) (*E
 //
 // THE CHANNEL IS AN ARGUMENT because a session is keyed on (handle, channel,
 // thread): two triggers in one channel are one indicator that two turns hold,
-// which is the shape [TestASuspendedTurnKeepsTheIndicatorUp] has to keep apart
-// from two independent turns.
+// which is the shape [TestAnIndicatorSurvivesOnlyWhatIsStillWorking] has to
+// keep apart from two independent turns.
 func chatTrigger(channel string) *events.Event {
 	ev := events.New(types.ExternalNotification{
 		NotificationSource: slack.Backend, SourceEventType: "message",

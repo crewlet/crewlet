@@ -374,10 +374,11 @@ func TestNoEmbeddingProviderIsAWidthOfNoneNotADefault(t *testing.T) {
 // This was REFUSED while the width was fixed at open, and rightly: a store
 // stuck at the wrong width refuses every write from the right one, and recall
 // stops returning anything with no reason in the log. What makes it safe now
-// is that the width is re-stated by every apply (see
-// TestTheEmbeddingWidthFollowsAConfigApply), so the first revision this node
-// applies corrects it. If that ever stops being true, this has to go back to
-// being a refusal.
+// is that a store never told a width LEARNS it from the first revision this
+// node applies, and holds it from then on (see
+// TestTheEmbeddingWidthIsLearnedOnceAndHeld) — so 0 here is "not yet told",
+// which the first apply settles, never a width a write is checked against. If
+// that ever stops being true, this has to go back to being a refusal.
 func TestNoCompanyOpensAtWidthZero(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
