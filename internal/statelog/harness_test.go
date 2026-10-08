@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -145,6 +146,25 @@ type applier struct {
 	// passed it. voidedAsked is every question, in order.
 	rules       statelog.Voids
 	voidedAsked []voidedQuestion
+
+	// budgets is what was left of each wait's context when the wait began —
+	// the budget a write handed its applier — in order.
+	budgets []time.Duration
+}
+
+// noteBudget records what is left of ctx's deadline as a wait begins. The
+// caller holds mu.
+func (a *applier) noteBudget(ctx context.Context) {
+	if deadline, ok := ctx.Deadline(); ok {
+		a.budgets = append(a.budgets, time.Until(deadline))
+	}
+}
+
+// waitBudgets is every wait's budget so far.
+func (a *applier) waitBudgets() []time.Duration {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Clone(a.budgets)
 }
 
 // voidedQuestion is one question a resolution asked the reanchor rules: a
@@ -257,6 +277,7 @@ func (a *applier) Committed() statelog.Position {
 
 func (a *applier) WaitCommitted(ctx context.Context, p statelog.Position) error {
 	a.mu.Lock()
+	a.noteBudget(ctx)
 	stalled := a.stalled
 	if !a.frozen && a.committed.Packed() < p.Packed() {
 		a.committed = p
@@ -271,6 +292,7 @@ func (a *applier) WaitCommitted(ctx context.Context, p statelog.Position) error 
 
 func (a *applier) WaitApplied(ctx context.Context, _ statelog.ScopeSet, p statelog.Position) error {
 	a.mu.Lock()
+	a.noteBudget(ctx)
 	err, committed := a.applyErr, a.committed
 	a.mu.Unlock()
 	if err != nil {
@@ -670,6 +692,10 @@ type harness struct {
 	// reserve is the log's gate reserve, nil for a domain that keeps none.
 	reserve *statelog.Reserve
 	gen     atomic.Uint32
+
+	// deps is what pub was built from, for a case that builds a second
+	// publisher over the same seams with one of them changed.
+	deps statelog.Deps
 }
 
 func newHarness(t *testing.T) *harness { return newHarnessFor(t, probeDomain{}) }
@@ -777,6 +803,7 @@ func newHarnessLogging(t *testing.T, domain statelog.Domain, logger *slog.Logger
 		h.reserve = reserveOn(t, log)
 		deps.Admission = h.reserve
 	}
+	h.deps = deps
 	pub, err := statelog.NewPublisher(deps)
 	if err != nil {
 		t.Fatalf("NewPublisher: %v", err)

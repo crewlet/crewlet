@@ -484,6 +484,40 @@ type Publisher struct {
 // it answers pending. See [Publisher.resolveBudget].
 const DefaultResolveBudget = 5 * time.Second
 
+// resolveBudgetKey carries a per-call resolution budget ([WithResolveBudget]).
+type resolveBudgetKey struct{}
+
+// WithResolveBudget is ctx with every write made on it waiting at most d for
+// this node's applier — its own record's resolution, the caller's session and
+// a position it finds itself behind — in place of the publisher's
+// [Deps.ResolveBudget]. A non-positive d changes nothing.
+//
+// NO PRODUCTION CALLER SETS IT: how long a write waits is the publisher's
+// decision, made once for every caller ([Publisher.resolveBudget]). It exists
+// for a case that makes a write it KNOWS cannot resolve here — on a node whose
+// applier it has halted — and would otherwise spend the whole default learning
+// `pending`, which is all that budget's length buys there. PER CALL rather
+// than a shorter budget for the publisher, because the same case's other
+// writes resolve against appliers that are running or resuming, and a budget
+// short enough to hurry the first would turn those into a different answer on
+// a loaded runner.
+func WithResolveBudget(ctx context.Context, d time.Duration) context.Context {
+	if d <= 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, resolveBudgetKey{}, d)
+}
+
+// budget is how long a write made on ctx waits for this node's applier: the
+// call's own budget if it carries one ([WithResolveBudget]), the publisher's
+// otherwise.
+func (p *Publisher) budget(ctx context.Context) time.Duration {
+	if d, ok := ctx.Value(resolveBudgetKey{}).(time.Duration); ok {
+		return d
+	}
+	return p.resolveBudget
+}
+
 // Deps is everything a publisher needs that it does not own.
 type Deps struct {
 	Domain Domain
@@ -1450,7 +1484,7 @@ const (
 // asked of for the record this call's own append put at `at`; any other
 // record is asked by the generation it carries.
 func (p *Publisher) resolve(ctx context.Context, req Request, at Position, landed landing, gen uint32) (Result, error) {
-	waitCtx, cancel := context.WithTimeout(ctx, p.resolveBudget)
+	waitCtx, cancel := context.WithTimeout(ctx, p.budget(ctx))
 	defer cancel()
 
 	if err := p.waiter.WaitApplied(waitCtx, req.Scope, at); err != nil {
@@ -1933,7 +1967,8 @@ func (p *Publisher) waitSession(ctx context.Context, req Request) error {
 		return nil
 	}
 	started := time.Now()
-	waitCtx, cancel := context.WithTimeout(ctx, p.resolveBudget)
+	budget := p.budget(ctx)
+	waitCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	err := p.waiter.WaitCommitted(waitCtx, req.Session)
 	p.observeMillis(metrics.StatelogWriteSessionWait, started, metrics.Attrs{
@@ -1950,7 +1985,7 @@ func (p *Publisher) waitSession(ctx context.Context, req Request) error {
 		return &Unavailable{
 			Reason: ReasonBehind,
 			Detail: fmt.Sprintf("this node has not applied this caller's own "+
-				"write at %s within %s", req.Session, p.resolveBudget),
+				"write at %s within %s", req.Session, budget),
 			Position: req.Session,
 			OpID:     req.OpID,
 		}
@@ -1968,7 +2003,8 @@ func (p *Publisher) waitSession(ctx context.Context, req Request) error {
 // conflict a caller would otherwise be told after sixteen rounds — into a
 // number the caller can retry against.
 func (p *Publisher) waitBehind(ctx context.Context, req Request, at Position) error {
-	waitCtx, cancel := context.WithTimeout(ctx, p.resolveBudget)
+	budget := p.budget(ctx)
+	waitCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	if err := p.waiter.WaitCommitted(waitCtx, at); err != nil {
 		if ctx.Err() != nil {
@@ -1978,7 +2014,7 @@ func (p *Publisher) waitBehind(ctx context.Context, req Request, at Position) er
 			Reason: ReasonBehind,
 			Detail: fmt.Sprintf("%s is at %s on the log and this node has not "+
 				"applied it within %s, so a write against it would be decided "+
-				"from a state below it", req.Subject, at, p.resolveBudget),
+				"from a state below it", req.Subject, at, budget),
 			Position: at,
 			OpID:     req.OpID,
 		}
