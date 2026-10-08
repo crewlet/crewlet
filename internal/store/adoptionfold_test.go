@@ -10,9 +10,8 @@ import (
 // AN ADOPTION ROW CARRIES NO FOLD FLAG, and one is written without naming it.
 //
 // Node migration 0030 gave `statelog_adoption` a `ledger_folded` column for a
-// boot-time fold of adoptions an earlier build recorded; 0040 drops it,
-// because nothing reads it and the only value this build ever wrote was the
-// constant 1. The case runs the real migrator over a fresh node estate, which
+// boot-time fold this tree no longer has; 0040 drops it, because nothing
+// reads it and the only value this build ever wrote was the constant 1. The case runs the real migrator over a fresh node estate, which
 // is what proves the driver takes the DROP COLUMN, and writes the row the
 // adopter writes.
 func TestAnAdoptionRowCarriesNoFoldFlag(t *testing.T) {
