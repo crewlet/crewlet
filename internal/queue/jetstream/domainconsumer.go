@@ -228,7 +228,7 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 	//
 	// NOT SHADOWING ctx, for [jsprovision.Settle]'s reason: the read-back
 	// below must not inherit a deadline this create may have spent.
-	createCtx, cancel := context.WithTimeout(ctx, q.provisionBudget())
+	createCtx, cancel := context.WithTimeout(ctx, q.provisioning().Budget)
 	defer cancel()
 	// IT SPANS THE LOOKUP AND THE CREATE, AND SAYS SO — and it stops where
 	// the create ends rather than where this function does.
@@ -276,7 +276,7 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 		// gives: this consumer is placed by the same metadata group as
 		// the stream it reads, so "no suitable peers" is transient here
 		// too and the budget above is worth nothing without the retry.
-		err = jsprovision.Place(createCtx, q.Clustered().AskTerm(), func(ctx context.Context) error {
+		err = q.provisioning().Place(createCtx, func(ctx context.Context) error {
 			var e error
 			cons, e = q.js.CreateConsumer(ctx, stream, config)
 			return e
@@ -340,7 +340,7 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 			// consumer an earlier boot made is one whose position this
 			// node's rows may no longer agree with.
 			createErr := err
-			err = jsprovision.Settle(ctx, func(ctx context.Context) error {
+			err = q.provisioning().Settle(ctx, func(ctx context.Context) error {
 				var e error
 				cons, e = q.js.Consumer(ctx, stream, name)
 				return e
@@ -457,9 +457,9 @@ func (c *DomainConsumer) Reset(ctx context.Context, after uint64) error {
 	// dropped failed the reset when that expired rather than being asked
 	// again. Asking twice is safe — a delete that landed the first time is
 	// not-found the second, and not-found is the answer this wants.
-	deleteCtx, cancelDelete := context.WithTimeout(ctx, c.q.provisionBudget())
+	deleteCtx, cancelDelete := context.WithTimeout(ctx, c.q.provisioning().Budget)
 	defer cancelDelete()
-	if err := jsprovision.Ask(deleteCtx, c.q.Clustered().AskTerm(),
+	if err := c.q.provisioning().Ask(deleteCtx,
 		func(ctx context.Context) error {
 			err := c.q.js.DeleteConsumer(ctx, c.stream, c.name)
 			if errors.Is(err, jetstream.ErrConsumerNotFound) {
@@ -487,10 +487,10 @@ func (c *DomainConsumer) Reset(ctx context.Context, after uint64) error {
 	// is short of members, and a request the group never answers — and it
 	// met them with no budget at all, which is nats.go's undeclared
 	// five-second default on whatever context the applier happened to hold.
-	createCtx, cancelCreate := context.WithTimeout(ctx, c.q.provisionBudget())
+	createCtx, cancelCreate := context.WithTimeout(ctx, c.q.provisioning().Budget)
 	defer cancelCreate()
 	var cons jetstream.Consumer
-	err := jsprovision.Place(createCtx, c.q.Clustered().AskTerm(),
+	err := c.q.provisioning().Place(createCtx,
 		func(ctx context.Context) error {
 			var e error
 			cons, e = c.q.js.CreateConsumer(ctx, c.stream, config)
@@ -534,10 +534,10 @@ func (c *DomainConsumer) consumerFor(ctx context.Context) (jetstream.Consumer, e
 	// THE SAME BUDGET AND THE SAME RE-ASK as Reset's own create: this is
 	// the identical call, reached when that one failed, so it faces the
 	// identical transient conditions.
-	createCtx, cancelCreate := context.WithTimeout(ctx, c.q.provisionBudget())
+	createCtx, cancelCreate := context.WithTimeout(ctx, c.q.provisioning().Budget)
 	defer cancelCreate()
 	var cons jetstream.Consumer
-	err := jsprovision.Place(createCtx, c.q.Clustered().AskTerm(),
+	err := c.q.provisioning().Place(createCtx,
 		func(ctx context.Context) error {
 			var e error
 			cons, e = c.q.js.CreateConsumer(ctx, c.stream, c.want)
@@ -912,9 +912,9 @@ func (c *DomainConsumer) lookup(ctx context.Context) (jetstream.Consumer, error)
 	return cons, err
 }
 
-// askRead runs one metadata READ on a domain consumer's open: under
-// [Queue.lookupBudget] as its ceiling, re-issued by [jsprovision.Ask] while
-// nobody answers.
+// askRead runs one metadata READ on a domain consumer's open: under the
+// lookup ceiling of [Queue.provisioning], re-issued by [jsprovision.Timing.Ask]
+// while nobody answers.
 //
 // # Why a read on this path is not sized like the writes beside it
 //
@@ -931,9 +931,9 @@ func (c *DomainConsumer) lookup(ctx context.Context) (jetstream.Consumer, error)
 // what an earlier read or write left: each gets its own term, so no one of
 // them decides how long the next may take.
 func (q *Queue) askRead(ctx context.Context, read func(context.Context) error) error {
-	readCtx, cancel := context.WithTimeout(ctx, q.lookupBudget())
+	readCtx, cancel := context.WithTimeout(ctx, q.provisioning().Lookup)
 	defer cancel()
-	return jsprovision.Ask(readCtx, q.Clustered().AskTerm(), read, nil)
+	return q.provisioning().Ask(readCtx, read, nil)
 }
 
 // domainConsumerName is what this node's reader is called on the broker.

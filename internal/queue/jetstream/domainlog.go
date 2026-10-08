@@ -127,7 +127,7 @@ func (q *Queue) openProvisioned(ctx context.Context, stream string) (jetstream.S
 	// expired. ctx goes in undiminished, which is what lets an operator who
 	// cancels a boot be answered at once.
 	var s jetstream.Stream
-	err := jsprovision.Settle(ctx, func(ctx context.Context) error {
+	err := q.provisioning().Settle(ctx, func(ctx context.Context) error {
 		var e error
 		s, e = q.js.Stream(ctx, stream)
 		return e

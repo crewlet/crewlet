@@ -374,7 +374,7 @@ func (q *Queue) attach(ctx context.Context, topic, group string, loop func(conte
 	// there. Silence and not-yet-visible are different answers with
 	// different remedies, which is why neither verb subsumes the other.
 	name := consumerName(topic, group)
-	lookupCtx, cancelLookup := context.WithTimeout(ctx, q.lookupBudget())
+	lookupCtx, cancelLookup := context.WithTimeout(ctx, q.provisioning().Lookup)
 	stopLookup := jsprovision.WhenSlow(lookupCtx, func(after time.Duration) {
 		q.log.WarnContext(ctx, "jetstream_consumer_attach_slow", "stream", stream,
 			"consumer", name, "waited", after,
@@ -382,7 +382,7 @@ func (q *Queue) attach(ctx context.Context, topic, group string, loop func(conte
 				"on a fleet that is a metadata group that has not settled")
 	})
 	var cons jetstream.Consumer
-	err = jsprovision.Ask(lookupCtx, q.Clustered().AskTerm(),
+	err = q.provisioning().Ask(lookupCtx,
 		func(ctx context.Context) error {
 			var e error
 			cons, e = q.js.Consumer(ctx, stream, name)
@@ -394,7 +394,7 @@ func (q *Queue) attach(ctx context.Context, topic, group string, loop func(conte
 		// ON ctx, NOT lookupCtx, for the reason [jsprovision.Settle]
 		// gives: lookupCtx may be the deadline that just expired, and a
 		// read-back handed an expired context asks once and gives up.
-		err = jsprovision.Settle(ctx, func(ctx context.Context) error {
+		err = q.provisioning().Settle(ctx, func(ctx context.Context) error {
 			var e error
 			cons, e = q.js.Consumer(ctx, stream, name)
 			return e

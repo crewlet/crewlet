@@ -10,7 +10,6 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
@@ -33,7 +32,7 @@ import (
 // [jsprovision.Ask] re-asks, the second attempt reached the real broker and
 // answered "not found", and the caller took the ordinary absent path. The
 // probe has to go unanswered until its whole ceiling is spent, which is what
-// [Config.LookupBudget] exists to make affordable.
+// the queue's own timing ([Queue.timing]) exists to make affordable.
 type stallingJS struct {
 	jetstream.JetStream
 
@@ -104,23 +103,27 @@ func TestAnUnansweredExistenceProbeStillProvisions(t *testing.T) {
 		nats.ErrNoResponders,
 	} {
 		t.Run(unanswered.Error(), func(t *testing.T) {
-			// A SHORT CEILING, because the branch under test is
-			// only reached once a probe has spent its WHOLE one —
-			// see [Config.LookupBudget]. At the shipped thirty
-			// seconds this case would cost thirty seconds to
-			// prove; here it costs a couple, and proves the same
-			// thing, because what is exercised is the EXHAUSTION
-			// rather than the duration.
+			q := newQueue(t)
+			// A SHORT CEILING AND A SHORT PAUSE, because the branch
+			// under test is only reached once a probe has spent its
+			// WHOLE ceiling — see [Queue.timing]. At the shipped
+			// thirty seconds this case would cost thirty seconds to
+			// prove; here it costs a quarter of one, and proves the
+			// same thing, because what is exercised is the
+			// EXHAUSTION rather than the duration.
 			//
-			// DERIVED FROM [jsprovision.ReAsk] rather than a
-			// number of its own: the ceiling has to outlast the
-			// gap between attempts or only one attempt fits, and a
-			// literal here would silently stop testing the re-ask
-			// the day that gap changed. Room for two gaps and the
-			// attempts around them.
-			q := newQueueWith(t, Config{
-				LookupBudget: 2*jsprovision.ReAsk + 500*time.Millisecond,
-			})
+			// THE CEILING IS DERIVED FROM THE PAUSE rather than a
+			// number of its own: it has to outlast the gap between
+			// attempts or only one attempt fits, and the assertion
+			// below that more than one went out would then be
+			// measuring a single timeout. Room for four gaps and the
+			// attempts around them. Set after the open, so the
+			// engine's own streams were provisioned at production
+			// timing and only this case's probe runs at this one.
+			timing := q.Clustered().Timing()
+			timing.ReAsk = 50 * time.Millisecond
+			timing.Lookup = 5 * timing.ReAsk
+			q.timing = timing
 			ctx := t.Context()
 
 			topic := topics.AgentInbox("unanswered-" + sanitizeName(unanswered.Error()))
