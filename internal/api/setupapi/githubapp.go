@@ -85,6 +85,16 @@ const tokenDomain = "github-app-manifest"
 //
 // Each half is base64url, whose alphabet carries none of the separators the
 // signed token itself is split on.
+//
+// SIGNED, NOT SEALED: the state round-trips through github.com and the
+// browser's address bar and history, so whoever sees that URL can decode the
+// token id that began the creation. An id is a label, never a credential —
+// the value is what authenticates — and the alternative, keeping the
+// operator server-side under the state's nonce, would need a store every node
+// shares, because the callback may land on any node of the fleet. The
+// viewer's reticence about `config_managed_by` is about anonymous callers
+// reading the whole writer list on demand; this exposes one id, to the
+// people the operator's own browser shows the URL to.
 func stateSubject(handle, operator string) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(handle)) + "~" +
 		base64.RawURLEncoding.EncodeToString([]byte(operator))
