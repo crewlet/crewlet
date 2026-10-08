@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/iotest"
 	"time"
@@ -1097,16 +1098,18 @@ func memberClient(t *testing.T) jetstream.JetStream {
 // request nobody could answer yet — a second a case, where the member's own
 // cases take a tenth of one. Opening on a link that is NOT up is a case of its
 // own ([TestOpeningOnALeafWaitsOutItsLink]).
+//
+// The member binds [js.AnyPort] and names it afterwards, so nothing else can
+// take the port between its choosing and its binding.
 func leafClient(t *testing.T) jetstream.JetStream {
 	t.Helper()
-	port := unusedPort(t)
 	member, err := js.StartServer(t.Context(), js.Config{ServerName: "member",
-		LeafHost: "127.0.0.1", LeafPort: port, StoreDir: t.TempDir()})
+		LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("start the member: %v", err)
 	}
 	t.Cleanup(member.Shutdown)
-	leaf := startLeaf(t, port)
+	leaf := startLeaf(t, member.LeafPort())
 	c := client(t, leaf)
 	awaitLink(t, c)
 	return c
@@ -1156,10 +1159,15 @@ func awaitLink(t *testing.T, c jetstream.JetStream) {
 // What this case holds is the whole of it from the caller's side: the leaf is
 // started with no member at all, Open is left asking, and only then does the
 // member come up.
+//
+// THE LEAF DIALS A GATE THIS CASE HOLDS ([holdGate]), never the port its member
+// will bind: the address has to be named before the member exists, so it
+// cannot be the member's own [js.AnyPort], and a port reserved for the member
+// to bind later is released first, for anything else on the machine to take.
 func TestOpeningOnALeafWaitsOutItsLink(t *testing.T) {
 	t.Parallel()
-	port := unusedPort(t)
-	c := client(t, startLeaf(t, port))
+	gate := holdGate(t)
+	c := client(t, startLeaf(t, gate.port()))
 	type result struct {
 		b   *natsobj.Backend
 		err error
@@ -1175,11 +1183,12 @@ func TestOpeningOnALeafWaitsOutItsLink(t *testing.T) {
 	case <-time.After(300 * time.Millisecond):
 	}
 	member, err := js.StartServer(t.Context(), js.Config{ServerName: "member",
-		LeafHost: "127.0.0.1", LeafPort: port, StoreDir: t.TempDir()})
+		LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("start the member: %v", err)
 	}
 	t.Cleanup(member.Shutdown)
+	gate.open(fmt.Sprintf("127.0.0.1:%d", member.LeafPort()))
 	var r result
 	select {
 	case r = <-opened:
@@ -1217,12 +1226,93 @@ func client(t *testing.T, srv *js.Server) jetstream.JetStream {
 	return c
 }
 
-func unusedPort(t *testing.T) int {
+// gate is a loopback address a case holds for its whole life, standing in for
+// a member that is not up yet: until [gate.open], every connection to it is
+// closed as it arrives — which a leaf reads as it reads a refused dial, no
+// member to reach, and dials again — and after it each one is piped to the
+// member's own leaf listener.
+type gate struct {
+	ln     net.Listener
+	target atomic.Pointer[string]
+
+	mu    sync.Mutex
+	shut  bool
+	conns []net.Conn
+}
+
+// holdGate binds a gate on a port the OS picks and keeps it until the case
+// ends, when it closes the listener and every connection it carried.
+func holdGate(t *testing.T) *gate {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("find a free port: %v", err)
+		t.Fatalf("bind the gate: %v", err)
 	}
-	defer l.Close()
-	return l.Addr().(*net.TCPAddr).Port
+	g := &gate{ln: ln}
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for {
+			in, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			target := g.target.Load()
+			if target == nil || !g.track(in) {
+				_ = in.Close()
+				continue
+			}
+			wg.Go(func() { g.pipe(in, *target) })
+		}
+	})
+	t.Cleanup(func() {
+		_ = ln.Close()
+		g.mu.Lock()
+		g.shut = true
+		conns := g.conns
+		g.mu.Unlock()
+		for _, c := range conns {
+			_ = c.Close()
+		}
+		wg.Wait()
+	})
+	return g
+}
+
+func (g *gate) port() int { return g.ln.Addr().(*net.TCPAddr).Port }
+
+// open pipes every connection from now on to target.
+func (g *gate) open(target string) { g.target.Store(&target) }
+
+// track records c for the case's end to close, and refuses it once that end
+// has begun, so no connection outlives the gate.
+func (g *gate) track(c net.Conn) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.shut {
+		return false
+	}
+	g.conns = append(g.conns, c)
+	return true
+}
+
+// pipe copies in to a fresh connection to target and back, until either side
+// ends, then closes both.
+func (g *gate) pipe(in net.Conn, target string) {
+	out, err := net.Dial("tcp", target)
+	if err != nil {
+		_ = in.Close()
+		return
+	}
+	if !g.track(out) {
+		_ = in.Close()
+		_ = out.Close()
+		return
+	}
+	done := make(chan struct{}, 2)
+	go func() { _, _ = io.Copy(out, in); done <- struct{}{} }()
+	go func() { _, _ = io.Copy(in, out); done <- struct{}{} }()
+	<-done
+	_ = in.Close()
+	_ = out.Close()
+	<-done
 }
