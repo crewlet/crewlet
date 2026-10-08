@@ -265,10 +265,10 @@ var staticRef = regexp.MustCompile("[\"'`(](/static/[^\"'`)\\s]*[^/\"'`)\\s])[\"
 // Fetch /dashboard, then everything it names, then everything THOSE name —
 // static imports, lazy chunks, the preload lists beside them, the faces a
 // stylesheet asks for — all from the server rather than from disk
-// ([embeddedDashboard], crawled once for the suite). An asset missing from the embed, or served as the wrong
-// type, takes the page with it, or, for a lazy chunk, the one screen that
-// loads it while every other keeps working, which is the failure a reader
-// finds before a test does.
+// ([embeddedDashboard], crawled once for the suite). An asset missing from the
+// embed, or served as the wrong type, takes the page with it, or, for a lazy
+// chunk, the one screen that loads it while every other keeps working, which
+// is the failure a reader finds before a test does.
 func TestTheShellLoadsFromTheBinary(t *testing.T) {
 	t.Parallel()
 	c := embeddedDashboard.crawl
