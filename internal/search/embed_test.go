@@ -1781,8 +1781,11 @@ func (h *embedHarness) drain() {
 // log no longer holds.
 func (h *embedHarness) applyRecord(tx *sql.Tx, seq uint64) error {
 	_, payload, storedAt, ok, err := h.log.At(h.t.Context(), seq)
-	if err != nil || !ok {
-		return err
+	if err != nil {
+		return fmt.Errorf("read record %d: %w", seq, err)
+	}
+	if !ok {
+		return nil
 	}
 	env, err := search.Domain{}.Envelope(payload)
 	if err != nil {
