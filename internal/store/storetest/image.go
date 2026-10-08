@@ -68,12 +68,12 @@ func buildImage() (estateImage, error) {
 	if err != nil {
 		return estateImage{}, fmt.Errorf("migrate a fresh node estate: %w", err)
 	}
-	if _, err := node.OpenReplicated(ctx, 1); err != nil {
+	if _, err = node.OpenReplicated(ctx, 1); err != nil {
 		_ = node.Close()
 		return estateImage{}, fmt.Errorf("migrate a fresh replicated estate: %w", err)
 	}
 	replicatedPath := node.ReplicatedFile()
-	if err := node.Close(); err != nil {
+	if err = node.Close(); err != nil {
 		return estateImage{}, fmt.Errorf("close the migrated estates: %w", err)
 	}
 
@@ -85,7 +85,7 @@ func buildImage() (estateImage, error) {
 		path string
 		into *[]byte
 	}{{nodePath, &img.node}, {replicatedPath, &img.replicated}} {
-		if err := store.QuiesceCopy(ctx, f.path); err != nil {
+		if err = store.QuiesceCopy(ctx, f.path); err != nil {
 			return estateImage{}, fmt.Errorf("fold the migrated file: %w", err)
 		}
 		if *f.into, err = os.ReadFile(f.path); err != nil {
