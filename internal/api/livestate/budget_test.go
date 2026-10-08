@@ -525,13 +525,14 @@ func TestTheSeedFillsTheWindowFromWhatTheStoreAlreadyHolds(t *testing.T) {
 	}
 
 	// THE WINDOW STILL BINDS. A record older than the live window is
-	// pruned rather than seeded in, so a seed cannot widen the window the
-	// rollup claims to cover.
-	s.Seed(livestate.History{Spend: []tokens.Record{rec("old", now.Add(-livestate.LiveSpendWindow-3*time.Hour), 99)}})
-	for _, r := range s.SpendRecords() {
-		if r.EventID == "old" {
-			t.Error("a record from outside the live window survived the seed")
-		}
+	// refused rather than seeded in, so a seed cannot widen the window the
+	// rollup claims to cover — and it says it moved nothing. Asked of the
+	// seed's own report rather than of a read, which leaves aged records
+	// out whether or not the seed took them.
+	if old := s.Seed(livestate.History{Spend: []tokens.Record{
+		rec("old", now.Add(-livestate.LiveSpendWindow-3*time.Hour), 99),
+	}}); old.Tokens {
+		t.Error("a seed of a record from outside the live window reported the rollup moved")
 	}
 }
 
