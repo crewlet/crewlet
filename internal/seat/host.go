@@ -531,8 +531,9 @@ func (h *Host) NoteDeliveryDeferred(handle string) {
 //
 // Exported because every budget that races a lease has to be derived from the
 // lease it is racing, and the callers that derive one live in other packages:
-// the drain's give-back budget in [internal/node] and the watchdog threshold
-// in [internal/engine]. Written against the constant instead, each of them
+// the stop allowance a drain in [internal/node] begins through [WithinStop]
+// when its caller carries none, and the watchdog threshold in
+// [internal/engine]. Written against the constant instead, each of them
 // claimed in its own comment to follow the deployment's TTL while following
 // the shipped number — which is the drift [HeartbeatRatio] exists to name.
 func (h *Host) TTL() time.Duration { return h.ttl }
