@@ -1110,7 +1110,7 @@ func TestAClosedHandleHandsBackWhatItHeld(t *testing.T) {
 func TestAClosedHandlesStandingRequestDoesNotTakeTheNextRecord(t *testing.T) {
 	t.Parallel()
 	q := newQueueWith(t, Config{
-		ServerName: "member", LeafHost: "127.0.0.1", LeafPort: unusedPort(t),
+		ServerName: "member", LeafHost: "127.0.0.1", LeafPort: AnyPort,
 		StoreDir: t.TempDir(),
 	})
 	if err := q.EnsureDomainStream(t.Context(), DomainStream{

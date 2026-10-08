@@ -40,7 +40,7 @@ func openLeafForTest(t *testing.T, cfg Config, opts ...queue.Option) *Queue {
 	memberCfg := cfg
 	memberCfg.ServerName = "member"
 	memberCfg.LeafHost = "127.0.0.1"
-	memberCfg.LeafPort = unusedPort(t)
+	memberCfg.LeafPort = AnyPort
 	// A MEMBER THAT SERVES LEAVES PERSISTS — it is refused otherwise — and
 	// the leaf creates what it is first to use in the file store to match.
 	if memberCfg.StoreDir == "" {
@@ -54,7 +54,7 @@ func openLeafForTest(t *testing.T, cfg Config, opts ...queue.Option) *Queue {
 
 	leafCfg := cfg
 	leafCfg.ServerName = "leaf"
-	leafCfg.LeafURLs = []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", memberCfg.LeafPort)}
+	leafCfg.LeafURLs = []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", member.LeafPort())}
 	leaf, err := StartServer(t.Context(), leafCfg)
 	if err != nil {
 		t.Fatalf("start the leaf: %v", err)
@@ -63,8 +63,10 @@ func openLeafForTest(t *testing.T, cfg Config, opts ...queue.Option) *Queue {
 	return clientUnderTest(t, leaf, member, opts...)
 }
 
-// unusedPort is a loopback port nothing held a moment ago. The race to bind
-// it is the test's to lose, and the member's own probe names it if it does.
+// unusedPort is a loopback port nothing held a moment ago, for a leaf that has
+// to find NO member listening. A member is never started on one: it binds
+// [AnyPort] and is asked which port that was, because a port reserved here is
+// released before the member binds it and anything else may take it between.
 func unusedPort(t *testing.T) int {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -130,6 +132,44 @@ func TestEveryMemberServesTheFleetsDomain(t *testing.T) {
 			t.Errorf("a %s member serves domain %q, want %q", name,
 				opts.JetStreamDomain, jsapi.Domain)
 		}
+	}
+}
+
+// A MEMBER ASKED FOR ANY LEAF PORT BINDS ONE AND SAYS WHICH, and the port it
+// names is the one accepting. A member with no leaf listener names none, and a
+// negative port other than [AnyPort] is refused rather than handed to
+// nats-server as a port to bind.
+func TestAMemberOnAnyLeafPortSaysWhichItBound(t *testing.T) {
+	t.Parallel()
+	member, err := StartServer(t.Context(), testTimings(Config{ServerName: "member",
+		LeafHost: "127.0.0.1", LeafPort: AnyPort, StoreDir: t.TempDir()}))
+	if err != nil {
+		t.Fatalf("start a member on any leaf port: %v", err)
+	}
+	t.Cleanup(member.Shutdown)
+	port := member.LeafPort()
+	if port <= 0 {
+		t.Fatalf("a member asked for any leaf port names %d, so no leaf can be "+
+			"told where to join it", port)
+	}
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 5*time.Second)
+	if err != nil {
+		t.Fatalf("the leaf port the member named, %d, accepts nothing: %v", port, err)
+	}
+	_ = conn.Close()
+
+	plain, err := StartServer(t.Context(), testTimings(Config{}))
+	if err != nil {
+		t.Fatalf("start a member with no leaf listener: %v", err)
+	}
+	t.Cleanup(plain.Shutdown)
+	if got := plain.LeafPort(); got != 0 {
+		t.Errorf("a member with no leaf listener names leaf port %d", got)
+	}
+
+	if _, _, err := embeddedOptions(Config{ServerName: "member", LeafPort: -2,
+		StoreDir: t.TempDir()}, systemUser{}); err == nil {
+		t.Error("a leaf port of -2 was accepted")
 	}
 }
 

@@ -123,7 +123,8 @@ type Config struct {
 
 	// LeafPort opens a leaf LISTENER on this member, which is where the
 	// fleet's leaves dial in. Zero opens none, and a fleet with no member
-	// listening has nowhere for a stateless node to join.
+	// listening has nowhere for a stateless node to join. [AnyPort] binds
+	// whichever port the OS hands out, read back with [Server.LeafPort].
 	//
 	// It accepts any connection that reaches it, exactly as the route port
 	// does, and for the same reason: the fleet is one trust domain on a

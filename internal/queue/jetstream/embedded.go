@@ -294,6 +294,41 @@ func (s *Server) ClusterPort() int {
 	return addr.Port
 }
 
+// AnyPort, as [Config.LeafPort], binds the leaf listener on whichever port the
+// OS hands out — nats-server's own spelling of that request — and
+// [Server.LeafPort] reads back which one it was.
+//
+// It is for a member whose leaves are told its address AFTER it starts, which
+// is every test that joins a leaf to a member. Reserving a free port and naming
+// it instead means binding one, reading its number and letting it go before
+// the member binds it, and anything else on the machine — usually the rest of
+// this suite, starting brokers by the dozen — can take it in between: the
+// member then refuses to start ([ErrRoutePortTaken]) and the case fails for a
+// reason that has nothing to do with it. Bound by the OS, there is no window.
+//
+// Never a deployment's setting: a fleet's leaves are configured with the
+// member's address before either starts, so Tier A takes a port it can name
+// (`stream.leaf.port`, 0..65535) and refuses this.
+const AnyPort = -1
+
+// LeafPort is the port this member's LEAF listener bound, and 0 when it opened
+// none — what a leaf dials when the member was asked for [AnyPort].
+//
+// READ OFF THE SERVER'S OWN REPORT (Varz), the one place nats-server says it:
+// it writes the port it bound back into its options before it reports ready,
+// and offers no listener address for leaves the way it does for routes
+// ([Server.ClusterPort]).
+func (s *Server) LeafPort() int {
+	if s.embedded == nil {
+		return 0
+	}
+	varz, err := s.embedded.ns.Varz(nil)
+	if err != nil || varz.LeafNode.Port < 0 {
+		return 0
+	}
+	return varz.LeafNode.Port
+}
+
 // Shutdown stops the broker. Every client of it should be stopped first.
 func (s *Server) Shutdown() {
 	if s.embedded != nil {
@@ -340,6 +375,10 @@ func embeddedOptions(cfg Config, system systemUser) (*server.Options, string, er
 			return nil, "", errors.New("jetstream: a leaf runs no JetStream, " +
 				"so it has no store directory to keep")
 		}
+	}
+	if cfg.LeafPort < 0 && cfg.LeafPort != AnyPort {
+		return nil, "", fmt.Errorf("jetstream: leaf port %d is not a port — "+
+			"name one in 1..65535, 0 for no listener, or AnyPort", cfg.LeafPort)
 	}
 	if cfg.LeafPort != 0 && cfg.StoreDir == "" {
 		// A MEMBER THAT LETS LEAVES IN IS WHERE EVERYTHING THEY DO IS
@@ -580,8 +619,9 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	// covers the rest.
 	// THE LEAF LISTENER THE SAME WAY, and for the same reason: a member
 	// whose leaf port is taken logs the bind failure and never becomes
-	// ready, and the boot spends its budget reporting something else.
-	if opts.LeafNode.Port != 0 {
+	// ready, and the boot spends its budget reporting something else. Not
+	// [AnyPort], which names no port to probe: the OS hands out a free one.
+	if opts.LeafNode.Port > 0 {
 		free, probeErr := PortAvailable(ctx, opts.LeafNode.Host, opts.LeafNode.Port)
 		switch {
 		case probeErr != nil:
