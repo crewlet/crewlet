@@ -847,14 +847,22 @@ func TestTheIndexStepFollowsTheCorpus(t *testing.T) {
 // rollout re-filing the corpus on every holder, every two ticks for ever.
 // Judged against what its own training achieved, the index trained here is
 // kept, over three seeds.
+//
+// Five hundred copies among five thousand documents, at sixty-four lists: the
+// eleventh of the corpus the measured case's two thousand of twenty-two
+// thousand were, at a sixteenth of the k-means work. Neither half depends on
+// the scale — identical codes share a nearest centroid at any list count, and
+// the rule that keeps the index is a ratio — and the measured case's own
+// numbers stand in TestTheIndexStepFollowsTheCorpus, where they cost nothing.
 func TestAnIndexTrainedOverDuplicatesComesToRest(t *testing.T) {
 	t.Parallel()
+	const documents, copies = 5_000, 500
 	f := topicalGateFixture()
-	codes := search.NewCodes(len(f.Codes[0]), f.Len()+2000)
-	for _, code := range f.Codes {
+	codes := search.NewCodes(len(f.Codes[0]), documents+copies)
+	for _, code := range f.Codes[:documents] {
 		codes.Append(code)
 	}
-	for range 2000 {
+	for range copies {
 		codes.Append(f.Codes[7])
 	}
 	n := codes.Len()
