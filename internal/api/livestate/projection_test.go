@@ -556,7 +556,7 @@ func TestNumbersSurviveTheWireTheyActuallyArriveOn(t *testing.T) {
 	if err := json.Unmarshal(raw, &e); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	s := livestate.New()
+	s := stoppedAt(t, defaultTS)
 	s.Apply(&e)
 
 	records := s.SpendRecords()
@@ -570,7 +570,7 @@ func TestAMistypedNumberReadsAsZeroRatherThanPanicking(t *testing.T) {
 	// The payload comes off a wire this process does not control. A string
 	// where a count belongs is bad data, not a reason to take the
 	// projection down.
-	s := livestate.New()
+	s := stoppedAt(t, defaultTS)
 	s.Apply(env("agent_phase_completed", map[string]any{
 		"role": "Lead", "turn_id": "tn-1", "phase": "execute", "total_tokens": "lots",
 	}))

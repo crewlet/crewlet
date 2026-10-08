@@ -171,9 +171,8 @@ func (s *LiveState) seedSpend(records []tokens.Record) bool {
 	if len(records) == 0 {
 		return false
 	}
-	// Aged against the CLOCK rather than an event's own stamp: nothing is
-	// arriving here, and the window a seed has to respect is the one ending
-	// now.
+	// Aged against the CLOCK, as every arrival is: the window a seed has to
+	// respect is the one ending now.
 	now := s.clock()
 	moved := s.expireSpend(now)
 	cutoff := now.Add(-LiveSpendWindow)

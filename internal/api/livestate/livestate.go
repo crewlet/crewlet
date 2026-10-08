@@ -351,8 +351,9 @@ type LiveState struct {
 	// is ever handed out twice.
 	versions int
 
-	// now is injectable so a test can pin the clock the spend window and
-	// the sandbox reconcile read. Nil takes the wall clock.
+	// now is injectable so a test can pin the clock the spend window is
+	// aged and labelled by, the sandbox reconcile reads and a budget's
+	// windows are judged against. Nil takes the wall clock.
 	now func() time.Time
 }
 
@@ -386,7 +387,8 @@ func WithFeedLimit(n int) Option {
 	}
 }
 
-// WithClock pins the clock the spend window and the sandbox reconcile read.
+// WithClock pins the clock the spend window is aged and labelled by, the
+// sandbox reconcile reads and a budget's windows are judged against.
 func WithClock(now func() time.Time) Option {
 	return func(s *LiveState) { s.now = now }
 }

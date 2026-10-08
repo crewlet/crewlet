@@ -28,17 +28,26 @@ var spendTypes = map[string]bool{
 // auxiliarySpendType is the auxiliary record's wire type.
 const auxiliarySpendType = "auxiliary_spend"
 
-// foldSpend records one spend record, reporting whether it counted.
+// foldSpend records one spend record, reporting whether the rollup moved.
 //
 // Deduped by event id so a redelivered envelope cannot inflate the rollup, and
-// window-pruned so a long-lived process does not keep aggregating spend that
-// has aged out.
+// aged on the projection's CLOCK: every arrival first drops what the window
+// has aged past, and a record already outside it is not counted at all.
+//
+// THE CLOCK, NEVER THE ARRIVING RECORD'S OWN STAMP. The window used to be cut
+// at the arriving record's stamp minus a day, which made it a window only while
+// records kept arriving and only while every node's clock agreed: a quiet
+// company kept showing spend older than a day under a heading that said it was
+// the last one, and one record stamped ahead by a node with a fast clock moved
+// the cutoff forward, dropped every correctly stamped record a day behind it
+// and forgot their ids — so a redelivery of one of them counted it again.
 func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
+	now := s.clock()
+	moved := s.expireSpend(now)
 	if env.ID != "" {
 		if _, counted := s.spendIDs[env.ID]; counted {
-			return false
+			return moved
 		}
-		s.spendIDs[env.ID] = struct{}{}
 	}
 	// The stamp is PARSED ONCE, here, and carried with the record. The
 	// window is kept in the order its records age out, and re-parsing a
@@ -46,6 +55,15 @@ func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 	// projection's write lock, which is the mutex every /agents request and
 	// every websocket snapshot waits on.
 	at := newStamp(env.Timestamp)
+	if at.valid && at.t.Before(now.Add(-LiveSpendWindow)) {
+		// ALREADY AGED: the window it would have counted in has passed.
+		// Not indexed either, so a redelivery is refused the same way
+		// rather than held by an id no record in the window answers for.
+		return moved
+	}
+	if env.ID != "" {
+		s.spendIDs[env.ID] = struct{}{}
+	}
 	rec := tokens.Record{
 		EventID:      env.ID,
 		Timestamp:    env.Timestamp,
@@ -90,11 +108,6 @@ func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 	}
 	s.holdSpend(spendEntry{at: at, Record: rec})
 	s.capSpend()
-	// The cutoff cannot be computed from a timestamp that is not one, and
-	// ageing the window against a zero instant would empty it.
-	if at.valid {
-		s.expireSpend(at.t)
-	}
 	return true
 }
 
@@ -152,13 +165,20 @@ func (s *LiveState) holdSpend(e spendEntry) {
 // whether any left. Its work is the records it drops: they are the front of the
 // dated records, and it stops at the first that is still inside the window.
 func (s *LiveState) expireSpend(now time.Time) bool {
+	aged := s.agedSpend(now)
+	s.spend = s.dropSpend(s.spend, aged)
+	return aged > 0
+}
+
+// agedSpend is how many of the dated records the window has aged past as of
+// now: the length of the front they make up.
+func (s *LiveState) agedSpend(now time.Time) int {
 	cutoff := now.Add(-LiveSpendWindow)
 	aged := 0
 	for aged < len(s.spend) && s.spend[aged].at.t.Before(cutoff) {
 		aged++
 	}
-	s.spend = s.dropSpend(s.spend, aged)
-	return aged > 0
+	return aged
 }
 
 // capSpend holds the window to [SpendRecordLimit], dropping the OLDEST: the
@@ -217,17 +237,61 @@ type spendEntry struct {
 	at stamp
 }
 
-// SpendRecords returns the records inside the live window: the undateable ones
-// first, then the rest oldest first.
-func (s *LiveState) SpendRecords() []tokens.Record {
+// SpendWindow is the live window as one read: the records inside it, and the
+// two instants that bound it, read off the clock the window was aged against.
+//
+// ONE INSTANT for the eviction and the label. A rollup prints its window
+// beside its numbers, and a label taken from a second read of a second clock
+// is a heading over records that nothing ever cut to it.
+type SpendWindow struct {
+	// Records are the records inside the window: the undateable ones first,
+	// then the rest oldest first.
+	Records []tokens.Record
+
+	// Until is the projection's clock at the read, and Since is
+	// [LiveSpendWindow] before it.
+	Since, Until time.Time
+}
+
+// Spend reads the live window as of the projection's clock, leaving out what
+// the window has aged past — so a company that has published nothing for a day
+// reads an empty window, rather than the last day it was busy under the
+// heading of this one.
+//
+// A READ, NEVER AN EXPIRY. What leaves the window is reported once, by
+// whatever drops it ([LiveState.ExpireSpend], an arrival), and the stream
+// re-pushes the rollup on that report. A read that dropped the records first
+// would leave the report nothing to say: a tab connecting a moment after a
+// record aged out would take the report with it, and every tab already open
+// would keep the figure.
+func (s *LiveState) Spend() SpendWindow {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]tokens.Record, 0, len(s.undatedSpend)+len(s.spend))
+	now := s.clock()
+	inside := s.spend[s.agedSpend(now):]
+	out := make([]tokens.Record, 0, len(s.undatedSpend)+len(inside))
 	for i := range s.undatedSpend {
 		out = append(out, s.undatedSpend[i].Record)
 	}
-	for i := range s.spend {
-		out = append(out, s.spend[i].Record)
+	for i := range inside {
+		out = append(out, inside[i].Record)
 	}
-	return out
+	return SpendWindow{Records: out, Since: now.Add(-LiveSpendWindow), Until: now}
+}
+
+// SpendRecords returns the records inside the live window: [LiveState.Spend]'s,
+// for a reader that has no use for the window's bounds.
+func (s *LiveState) SpendRecords() []tokens.Record { return s.Spend().Records }
+
+// ExpireSpend drops what the live window has aged past as of the projection's
+// clock, reporting whether the rollup moved.
+//
+// For a caller that pushes the rollup only when it moves: a record ageing out
+// publishes nothing, so without this a screen holding the last push kept a
+// figure the window no longer holds until the next record arrived — on a quiet
+// company, indefinitely. Its work is the records it drops.
+func (s *LiveState) ExpireSpend() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.expireSpend(s.clock())
 }

@@ -1547,12 +1547,22 @@ of them, the WHOLE COMPANY's since every projection is fed fleet-wide (about
 than a day rather than a wrong total) and folds them with
 `internal/tokens`, which is the same aggregation the event store's wider
 windows are folded with, so changing the window on screen cannot change
-what a phase is counted as. It ships in the snapshot and is re-pushed on
-the shared 5-second tick after any phase completed, so the Spend screen
-and the overview widget stay live without a fetch and without a second
-implementation of the aggregation in the browser. What a seat has spent
-is that rollup's per-agent row: the projection keeps no second total of
-its own.
+what a phase is counted as. The window is a ROLLING one, aged on the
+serving node's clock — every read leaves out what the window has aged
+past, and every record that arrives and the shared tick drop it — and
+never on a record's own stamp: a record stamped
+before the window is not counted however late it arrives, one stamped
+ahead by a node whose clock runs fast is held until the window passes it
+rather than moving the window, and one whose stamp does not parse is kept
+(nothing can age it) and is the first the 24 000 cap drops. The rollup's
+`since` and `until` are the two instants the window was cut at. It ships
+in the snapshot and is re-pushed on the shared 5-second tick after any
+phase completed or any record aged out, so the Spend screen and the
+overview widget stay live without a fetch — and a company that has gone
+quiet sees its spend leave the window as it ages rather than keep its last
+busy day — without a second implementation of the aggregation in the
+browser. What a seat has spent is that rollup's per-agent row: the
+projection keeps no second total of its own.
 
 **The projection is seeded from the fleet's event stores when the process
 starts**, after the broadcast subscription is attached and before the HTTP
@@ -2281,7 +2291,7 @@ Server → client kinds:
 | `agents`   | After an event moved one or more agents — or a read moved their state: a run record reconcile, or the seat-lease read the five-second tick makes. | The changed agents' overlays, each with its `role`, its `activity` and its `stopped_reason` — the *result* of applying the change, so a client merges them rather than running its own state machine over the raw stream. A `live_call` carries its heavy fields only when their `versions` moved since the last push for the same call, and a client keeps the copy it holds of one left out; every row carries the seat's `live_call_seq`, a `null` call included, which orders the call slot against a `live_call` answer (see [What the projection carries, and what the wire sends](#what-the-projection-carries-and-what-the-wire-sends)). |
 | `seats`    | After a config revision changed the roster. | The COMPLETE seat list, replacing what the client holds. Distinct from `agents` on purpose: that one is a per-role merge, and a merge cannot express the deletion of a role a revision removed. |
 | `sandboxes`| After a detached sandbox run started, asked a question, finished or was lost, and after a reconcile against the durable run record changed the set. | The full in-flight sandbox list. |
-| `tokens`   | On the shared 5-second tick, when a phase completed since the last one. The fold runs on the tick rather than on the publish, so a busy company costs one aggregation every five seconds rather than one per phase. | The spend rollup, same shape as `GET /tokens/breakdown`. |
+| `tokens`   | On the shared 5-second tick, when a spend record arrived or one aged out of the live window since the last one. The fold runs on the tick rather than on the publish, so a busy company costs one aggregation every five seconds rather than one per phase. | The spend rollup, same shape as `GET /tokens/breakdown`. |
 | `budget`   | After a node's token meter report is applied (every node reports at start and every 15 seconds, a company that caps nothing included). | `{ meter_id, seq, timezone, org: { windows: [...] } }`, the org-wide half: one entry per capped calendar window, each with its span, spend, ceiling, refusal stamp and `state`. Per-seat figures ride on each agent's overlay in the `agents` push. See [the live token meter](#the-live-token-meter). |
 | `org` / `tools` / `schedules` | After a config revision is activated. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
 | `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection). | The whole [health envelope](#the-health-envelope), exactly what `GET /health` answers. There is no query for it. |

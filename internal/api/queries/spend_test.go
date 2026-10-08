@@ -65,7 +65,10 @@ func newSpendFixture(t *testing.T) *spendFixture {
 
 func (f *spendFixture) sources() queries.Sources {
 	return queries.Sources{
-		State:   livestate.New(),
+		// On the registry's clock: the live window is aged and labelled
+		// on the projection's own, and on the wall clock a record stamped
+		// beside spendNow left it long ago.
+		State:   livestate.New(livestate.WithClock(func() time.Time { return spendNow })),
 		Usage:   f.db.Replicated(),
 		Company: func() *config.Company { return f.company },
 		Now:     func() time.Time { return spendNow },
@@ -353,7 +356,6 @@ func TestAUnitSeatHasAHandleInTheRollup(t *testing.T) {
 			"role": "Site Reliability", "phase": "execute", "total_tokens": 9,
 		},
 	})
-	sources.Now = time.Now
 	got := rollupOf(t, registryOver(t, sources), nil)
 	if len(got.ByAgent) != 1 || got.ByAgent[0].Handle != "sre" {
 		t.Errorf("by_agent = %+v, want the unit seat under its handle sre", got.ByAgent)

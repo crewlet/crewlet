@@ -17,11 +17,7 @@ const seedNow = "2026-06-14T12:00:00Z"
 
 func seededState(t *testing.T) *livestate.LiveState {
 	t.Helper()
-	at, err := time.Parse(time.RFC3339Nano, seedNow)
-	if err != nil {
-		t.Fatalf("parse the pinned clock: %v", err)
-	}
-	return livestate.New(livestate.WithClock(func() time.Time { return at }))
+	return stoppedAt(t, seedNow)
 }
 
 func storedRow(id, ts string) livestate.FeedRow {

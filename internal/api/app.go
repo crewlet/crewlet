@@ -361,9 +361,10 @@ func New(opts Options) (*App, error) {
 	}
 	// ONE CLOCK for the surface. The app's own was pinned by a test and the
 	// answers' was the wall clock, so a question stamping "now" on its answer
-	// — the live spend window's edges — answered a REST call and a socket call
-	// a second apart with two different windows, and nothing but the call's
-	// timing said which.
+	// answered a REST call and a socket call a second apart with two
+	// different instants, and nothing but the call's timing said which. (The
+	// live spend window, where that showed, is labelled by the projection
+	// now, on the clock it was aged on.)
 	if sources.Now == nil {
 		sources.Now = now
 	}

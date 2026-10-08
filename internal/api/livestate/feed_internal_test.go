@@ -51,14 +51,17 @@ func TestTheFeedIndexForgetsWhatTheRingDrops(t *testing.T) {
 // projection that grows for the life of the process.
 func TestTheSpendIndexDropsWhatTheWindowDrops(t *testing.T) {
 	t.Parallel()
-	s := New()
-	aged := time.Now().UTC().Add(-LiveSpendWindow - time.Hour).Format(time.RFC3339Nano)
-	fresh := time.Now().UTC().Format(time.RFC3339Nano)
+	start := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
+	now := start
+	s := New(WithClock(func() time.Time { return now }))
+	fresh := start.Add(2 * time.Hour).Format(time.RFC3339Nano)
 
-	s.foldSpend(Envelope{ID: "aged", Timestamp: aged}, map[string]any{"total_tokens": 5})
+	s.foldSpend(Envelope{ID: "early", Timestamp: start.Format(time.RFC3339Nano)},
+		map[string]any{"total_tokens": 5})
 	s.foldSpend(Envelope{ID: "fresh", Timestamp: fresh}, map[string]any{"total_tokens": 5})
-	if got := len(s.spend); got != 1 {
-		t.Fatalf("holding %d records, want the aged one pruned", got)
+	now = start.Add(LiveSpendWindow + time.Hour) // early has aged, fresh has not
+	if !s.ExpireSpend() || len(s.spend) != 1 {
+		t.Fatalf("holding %d records, want the aged one expired", len(s.spend))
 	}
 	if got := len(s.spendIDs); got != 1 {
 		t.Errorf("the index holds %d ids for 1 record: it does not shrink with "+

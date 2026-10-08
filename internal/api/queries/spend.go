@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
@@ -233,13 +232,13 @@ func usageErr(err error) error {
 func (s Sources) tokens(ctx context.Context, p Params) (any, error) {
 	if !namesAWindow(p) {
 		// The window this rollup actually covers, reported rather than
-		// assumed: the projection evicts on a rolling window, so its top
-		// edge is this instant.
-		now := s.clock()
-		return tokens.Aggregate(s.State.SpendRecords(), tokens.Options{
+		// assumed: the projection ages its window on its own clock and
+		// names the two instants it cut it at.
+		window := s.State.Spend()
+		return tokens.Aggregate(window.Records, tokens.Options{
 			Handles: s.RoleHandles(),
-			Since:   now.Add(-livestate.LiveSpendWindow),
-			Until:   now,
+			Since:   window.Since,
+			Until:   window.Until,
 		}), nil
 	}
 	w, err := s.spendWindowOf(p)

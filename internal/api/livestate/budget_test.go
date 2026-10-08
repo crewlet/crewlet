@@ -3,6 +3,7 @@ package livestate_test
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -227,9 +228,18 @@ func phaseSpend(eventID, ts string, total int) *livestate.Envelope {
 	}, id(eventID), at(ts))
 }
 
+// spendIDs lists the records a read of the window holds, in its order.
+func spendIDs(s *livestate.LiveState) []string {
+	var ids []string
+	for _, record := range s.SpendRecords() {
+		ids = append(ids, record.EventID)
+	}
+	return ids
+}
+
 func TestRecordsInsideTheWindowAreKept(t *testing.T) {
 	t.Parallel()
-	s := livestate.New()
+	s := stoppedAt(t, "2026-06-14T14:00:00Z")
 	s.Apply(phaseSpend("p1", "2026-06-14T12:00:00Z", 10))
 	s.Apply(phaseSpend("p2", "2026-06-14T13:00:00Z", 20))
 
@@ -244,7 +254,7 @@ func TestRecordsInsideTheWindowAreKept(t *testing.T) {
 
 func TestARedeliveredPhaseIsNotCountedTwice(t *testing.T) {
 	t.Parallel()
-	s := livestate.New()
+	s := stoppedAt(t, "2026-06-14T14:00:00Z")
 	spend := phaseSpend("p1", "2026-06-14T12:00:00Z", 10)
 	if !s.Apply(spend).Tokens {
 		t.Fatal("the first delivery did not count")
@@ -257,55 +267,119 @@ func TestARedeliveredPhaseIsNotCountedTwice(t *testing.T) {
 	}
 }
 
-func TestRecordsOlderThanTheWindowAreDropped(t *testing.T) {
+// A RECORD STAMPED BEFORE THE WINDOW IS NOT COUNTED, whenever it arrives: first,
+// or late behind records inside the window — a cross-topic straggler, or a
+// node whose clock runs behind. Nor is it indexed, so a redelivery of it is
+// refused the same way rather than held by an id no record answers for.
+func TestARecordOlderThanTheWindowIsNotCounted(t *testing.T) {
 	t.Parallel()
-	s := livestate.New()
-	s.Apply(phaseSpend("old", "2026-06-13T00:00:00Z", 10))
+	s := stoppedAt(t, "2026-06-14T14:00:00Z")
+	if s.Apply(phaseSpend("old", "2026-06-13T00:00:00Z", 10)).Tokens {
+		t.Error("a record from before the window moved the rollup")
+	}
 	s.Apply(phaseSpend("new", "2026-06-14T12:00:00Z", 20))
+	if s.Apply(phaseSpend("late-old", "2026-06-12T00:00:00Z", 20)).Tokens {
+		t.Error("a late record from before the window moved the rollup")
+	}
+	if s.Apply(phaseSpend("old", "2026-06-13T00:00:00Z", 10)).Tokens {
+		t.Error("a redelivered record from before the window moved the rollup")
+	}
 
-	records := s.SpendRecords()
-	if len(records) != 1 || records[0].EventID != "new" {
-		t.Errorf("records = %+v, want only the recent one", records)
+	if ids := spendIDs(s); !slices.Equal(ids, []string{"new"}) {
+		t.Errorf("records = %v, want only the one inside the window", ids)
 	}
 }
 
-func TestPruningSurvivesAnOutOfOrderHead(t *testing.T) {
+// THE WINDOW AGES ON THE CLOCK, with nothing arriving to age it.
+//
+// It used to be cut only when a spend record arrived, at that record's own
+// stamp minus a day — so a company that went quiet kept showing its last busy
+// day under a heading that said it was this one, for as long as it stayed
+// quiet. A read leaves out what has aged on the projection's clock, and the
+// expiry a caller pushing the rollup runs on its tick reports it leaving —
+// ONCE, and never swallowed by a read in between, or the tick that should
+// re-push the rollup finds nothing to report.
+func TestTheWindowAgesOnTheClockWithNothingArriving(t *testing.T) {
 	t.Parallel()
-	// Popping from the front is only correct while the window is held in
-	// stamp order, and it is fed out of it: events on different topics
-	// arrive in no order between them, and a fleet's clocks disagree. Held
-	// in arrival order, one recent record at the head was enough to make a
-	// head-popping loop exit immediately and never prune again, and the
-	// window would silently stop being a window — so a late record has to
-	// land at its place, where the front is what ages.
-	s := livestate.New()
-	s.Apply(phaseSpend("live", "2026-06-14T12:00:00Z", 10))
-	s.Apply(phaseSpend("late-old", "2026-06-12T00:00:00Z", 20))
-	s.Apply(phaseSpend("trigger", "2026-06-14T12:30:00Z", 5))
-
-	for _, record := range s.SpendRecords() {
-		if record.EventID == "late-old" {
-			t.Error("a record behind a recent head was never pruned")
-		}
-	}
-}
-
-func TestAnUnparseableTimestampDoesNotPruneTheWindow(t *testing.T) {
-	t.Parallel()
-	// The cutoff cannot be computed from a timestamp that is not one, and
-	// pruning against a zero cutoff would empty the window.
-	s := livestate.New()
+	now := time.Date(2026, 6, 14, 14, 0, 0, 0, time.UTC)
+	s := livestate.New(livestate.WithClock(func() time.Time { return now }))
 	s.Apply(phaseSpend("p1", "2026-06-14T12:00:00Z", 10))
-	s.Apply(phaseSpend("p2", "not-a-timestamp", 20))
+	s.Apply(phaseSpend("p2", "2026-06-14T13:00:00Z", 20))
 
-	if got := len(s.SpendRecords()); got != 2 {
-		t.Errorf("records = %d, want both kept", got)
+	now = now.Add(livestate.LiveSpendWindow - 90*time.Minute) // p1 has aged, p2 has not
+	window := s.Spend()
+	if ids := spendIDs(s); !slices.Equal(ids, []string{"p2"}) {
+		t.Errorf("records = %v, want p1 aged out with nothing arriving", ids)
+	}
+	if !window.Until.Equal(now) || !window.Since.Equal(now.Add(-livestate.LiveSpendWindow)) {
+		t.Errorf("window = %s .. %s, want the day ending at the clock's %s",
+			window.Since, window.Until, now)
+	}
+	if !s.ExpireSpend() {
+		t.Error("the expiry found nothing to report after two reads: a read dropped p1 " +
+			"itself, so the tick that re-pushes the rollup would push nothing")
+	}
+	if s.ExpireSpend() {
+		t.Error("a second expiry with nothing left to age reported the rollup moving")
+	}
+
+	now = now.Add(time.Hour) // p2 has aged too
+	if ids := spendIDs(s); len(ids) != 0 {
+		t.Errorf("records = %v, want an empty window a day after the last record", ids)
+	}
+	if !s.ExpireSpend() {
+		t.Error("the expiry dropped p2 and reported that the rollup did not move")
+	}
+}
+
+// A RECORD STAMPED AHEAD AGES NOTHING. One node's fast clock used to move the
+// whole window's cutoff with the record it stamped, dropping every correctly
+// stamped record a day behind it; the cutoff is the projection's clock now,
+// and a record from the future is simply held until the clock passes it.
+func TestARecordStampedAheadAgesNothing(t *testing.T) {
+	t.Parallel()
+	s := stoppedAt(t, "2026-06-14T14:00:00Z")
+	s.Apply(phaseSpend("p1", "2026-06-14T01:00:00Z", 10))
+	s.Apply(phaseSpend("ahead", "2026-06-16T12:00:00Z", 20))
+	s.Apply(phaseSpend("p2", "2026-06-14T13:00:00Z", 5))
+
+	if ids := spendIDs(s); !slices.Equal(ids, []string{"p1", "p2", "ahead"}) {
+		t.Errorf("records = %v, want every one held, oldest stamp first", ids)
+	}
+}
+
+// RECORDS ARRIVING OUT OF ORDER AGE OUT IN STAMP ORDER. A broadcast
+// subscription reads across topics with no order between them and a fleet's
+// clocks disagree, so the window is fed out of order — and it is held in the
+// order its records age out regardless, so what leaves is always the oldest
+// stamped, never whatever happened to arrive first.
+func TestRecordsArrivingOutOfOrderAgeOutInStampOrder(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
+	s := livestate.New(livestate.WithClock(func() time.Time { return now }))
+	for _, r := range []struct{ id, ts string }{
+		{"b", "2026-06-14T10:00:00Z"},
+		{"d", "2026-06-14T11:30:00Z"},
+		{"a", "2026-06-14T09:00:00Z"},
+		{"c", "2026-06-14T11:00:00Z"},
+		{"c2", "2026-06-14T11:00:00Z"}, // shares c's instant: behind it, as it arrived
+		{"e", "2026-06-14T11:59:00Z"},
+	} {
+		s.Apply(phaseSpend(r.id, r.ts, 1))
+	}
+	if ids := spendIDs(s); !slices.Equal(ids, []string{"a", "b", "c", "c2", "d", "e"}) {
+		t.Fatalf("records = %v, want them held oldest stamp first", ids)
+	}
+
+	now = time.Date(2026, 6, 15, 10, 30, 0, 0, time.UTC) // a and b are a day old
+	if ids := spendIDs(s); !slices.Equal(ids, []string{"c", "c2", "d", "e"}) {
+		t.Errorf("records = %v, want exactly the two stamped before the window gone", ids)
 	}
 }
 
 func TestSpendRecordsDoNotAliasTheProjection(t *testing.T) {
 	t.Parallel()
-	s := livestate.New()
+	s := stoppedAt(t, "2026-06-14T14:00:00Z")
 	s.Apply(phaseSpend("p1", "2026-06-14T12:00:00Z", 10))
 	held := s.SpendRecords()
 	s.Apply(phaseSpend("p2", "2026-06-14T12:05:00Z", 20))
@@ -348,36 +422,29 @@ func TestANewMeterDropsASeatItDoesNotMention(t *testing.T) {
 	}
 }
 
+// A RECORD WITH NO USABLE TIMESTAMP IS KEPT — absent or unparseable — however
+// far the clock moves. The same rule the sandbox sweep follows: a record that
+// cannot be aged out on time must not be dropped on that basis, nor taken for
+// one stamped at the zero instant and so a day old. The count cap is what
+// bounds those.
 func TestASpendRecordWithNoUsableTimestampIsKept(t *testing.T) {
 	t.Parallel()
-	// The same rule the sandbox sweep follows: a record that cannot be
-	// aged out on time must not be dropped on that basis. The count cap is
-	// what bounds those.
-	s := livestate.New()
-	s.Apply(phaseSpend("undateable", "", 10))
-	s.Apply(phaseSpend("old", "2026-06-12T00:00:00Z", 5))
-	// Applied LAST because the sweep runs against the incoming event's own
-	// timestamp: an out-of-order old arrival computes an old cutoff and
-	// prunes nothing, and the next in-window event is what clears it.
+	now := time.Date(2026, 6, 14, 14, 0, 0, 0, time.UTC)
+	s := livestate.New(livestate.WithClock(func() time.Time { return now }))
 	s.Apply(phaseSpend("recent", "2026-06-14T12:00:00Z", 20))
+	if !s.Apply(phaseSpend("absent", "", 10)).Tokens {
+		t.Error("a record with no timestamp was not counted")
+	}
+	if !s.Apply(phaseSpend("garbled", "not-a-timestamp", 10)).Tokens {
+		t.Error("a record with an unparseable timestamp was not counted")
+	}
+	if ids := spendIDs(s); !slices.Equal(ids, []string{"absent", "garbled", "recent"}) {
+		t.Errorf("records = %v, want both undateable ones beside the recent one", ids)
+	}
 
-	var ids []string
-	for _, record := range s.SpendRecords() {
-		ids = append(ids, record.EventID)
-	}
-	if len(ids) != 2 {
-		t.Fatalf("records = %v, want the undateable one and the recent one", ids)
-	}
-	for _, want := range []string{"undateable", "recent"} {
-		found := false
-		for _, got := range ids {
-			if got == want {
-				found = true
-			}
-		}
-		if !found {
-			t.Errorf("records = %v, missing %q", ids, want)
-		}
+	now = now.Add(2 * livestate.LiveSpendWindow)
+	if ids := spendIDs(s); !slices.Equal(ids, []string{"absent", "garbled"}) {
+		t.Errorf("records = %v, want the undateable ones kept after the dated one aged", ids)
 	}
 }
 
@@ -387,7 +454,7 @@ func TestSpendRecordsAreCappedByCount(t *testing.T) {
 	// more than the cap in a day. Truncation drops the OLDEST records, so
 	// an org past the cap sees a rollup covering slightly less than a day
 	// rather than a wrong total.
-	s := livestate.New()
+	s := stoppedAt(t, "2026-06-14T13:00:00Z")
 	beyondCap := livestate.SpendRecordLimit + 100
 	for i := range beyondCap {
 		// All inside the window, so only the count cap can bind.

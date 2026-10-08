@@ -286,7 +286,8 @@ func TestAgentNeedsARole(t *testing.T) {
 
 func TestTokensAnswersTheLiveWindow(t *testing.T) {
 	t.Parallel()
-	state := livestate.New()
+	projected := time.Date(2026, 6, 14, 12, 30, 0, 0, time.UTC)
+	state := livestate.New(livestate.WithClock(func() time.Time { return projected }))
 	state.Apply(&livestate.Envelope{
 		ID: "p1", Type: "agent_phase_completed", Timestamp: "2026-06-14T12:00:00Z",
 		Category: "agent", Payload: map[string]any{
@@ -312,6 +313,12 @@ func TestTokensAnswersTheLiveWindow(t *testing.T) {
 	if width := windowWidth(t, got); width != livestate.LiveSpendWindow {
 		t.Errorf("window = %s .. %s (%s), want the live window %s",
 			got.Since, got.Until, width, livestate.LiveSpendWindow)
+	}
+	// And it is the window the projection AGED, ending at the projection's
+	// clock — never a second read of the registry's, which here is the wall
+	// clock four months on.
+	if want := projected.Format(time.RFC3339); got.Until != want {
+		t.Errorf("until = %s, want the projection's clock %s", got.Until, want)
 	}
 	// The high-water mark the client folds live events onto. Without it an
 	// event that is both in this baseline and redelivered on the stream is
