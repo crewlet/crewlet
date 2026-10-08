@@ -236,6 +236,6 @@ func TestTheBrokerAnswerFixtureIsTheEnginesOwn(t *testing.T) {
 }
 
 // brokerGolden is GET /fleet/broker's answer for a fleet with a dead member and
-// a node on an older build, committed, and read by the command line's and the
-// dashboard's own suites as their fixture.
+// a node advertising no broker kind this build knows, committed, and read by
+// the command line's and the dashboard's own suites as their fixture.
 const brokerGolden = "testdata/fleet_broker_answer.json"
