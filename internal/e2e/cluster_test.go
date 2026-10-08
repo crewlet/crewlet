@@ -1274,9 +1274,11 @@ func TestAFleetAgreesAboutOneCompany(t *testing.T) {
 	}
 
 	// (4) AND THE MEMBERS ARE TWINS, ROW FOR ROW — LAST, because it can
-	// only mean anything once every member has applied everything above.
-	// The board listing was one query's answer; this is every REPLICATED
-	// table of every registered domain, compared as a digest.
+	// only mean anything once every member has applied everything above,
+	// and on EVERY domain's log rather than the two this case wrote to
+	// ([cluster.digestsAtOneEnd]). The board listing was one query's
+	// answer; this is every REPLICATED table of every registered domain,
+	// compared as a digest.
 	//
 	// The class is what makes the comparison meaningful rather than
 	// merely strict: `Divergent` tables are written by an apply and still
@@ -1284,9 +1286,9 @@ func TestAFleetAgreesAboutOneCompany(t *testing.T) {
 	// ones are this node's own — so comparing every table would fail on a
 	// healthy fleet, and comparing only the board would pass on one whose
 	// domains had quietly diverged underneath it.
+	digests := c.digestsAtOneEnd(t)
 	twins := map[string]string{}
-	for i, n := range c.nodes {
-		digest := replicatedDigest(t, n)
+	for i, digest := range digests {
 		if len(digest) == 0 {
 			t.Fatalf("member %d reported no replicated tables — the comparison "+
 				"below would hold between two empty maps", i)
@@ -1311,6 +1313,79 @@ func TestAFleetAgreesAboutOneCompany(t *testing.T) {
 			}
 		}
 	}
+}
+
+// digestsAtOneEnd is every member's [replicatedDigest], taken once every member
+// has applied every registered domain's log to the same end — and taken again
+// should any log have grown while they were read.
+//
+// EVERY DOMAIN, NOT THE ONES A CASE WROTE TO. The digest covers every
+// replicated table of every domain the engine registers, and a member that
+// had not yet applied a record on a log the case never wrote — a node's usage
+// day, published at boot and whenever a fingerprint moves; an embedding the
+// duty filed — would differ from its peers for a reason that is timing rather
+// than divergence. The domain list is the engine's ([engine.Engine.Domains]),
+// for the reason [replicatedDigest] reads it there.
+//
+// AT ONE END, which is what makes the comparison a property of the rows: a
+// log that grew between the first member's read and the last's could hand two
+// healthy members different rows. So the ends are read before and after, and
+// the digests count only when nothing was appended in between.
+func (c *cluster) digestsAtOneEnd(t *testing.T) []map[string]string {
+	t.Helper()
+	var digests []map[string]string
+	waitFor(t, "every member to hold every log to one end", func() bool {
+		ends := c.logEnds(t)
+		for i, n := range c.nodes {
+			for _, end := range ends {
+				ctx, cancel := context.WithTimeout(t.Context(), waitBudget)
+				err := n.engine.WaitCommitted(ctx, end)
+				cancel()
+				if err != nil {
+					t.Fatalf("member %d never applied %s to its end %s: %v",
+						i, end.Stream, end, err)
+				}
+			}
+		}
+		digests = digests[:0]
+		for _, n := range c.nodes {
+			digests = append(digests, replicatedDigest(t, n))
+		}
+		return slices.Equal(ends, c.logEnds(t))
+	})
+	return digests
+}
+
+// logEnds is every registered domain's log end: its last sequence as the
+// stream's leader answers it, at the generation member 0's applier stands
+// at — the position a member has applied the whole log at.
+func (c *cluster) logEnds(t *testing.T) []statelog.Position {
+	t.Helper()
+	n := c.nodes[0]
+	js, err := n.engine.Backends().API().Client(n.engine.Backends().Conn())
+	if err != nil {
+		t.Fatalf("a JetStream client on member 0: %v", err)
+	}
+	var out []statelog.Position
+	for _, domain := range n.engine.Domains() {
+		name := domain.Stream().Name
+		stream, err := js.Stream(t.Context(), name)
+		if err != nil {
+			t.Fatalf("look up %s: %v", name, err)
+		}
+		info, err := stream.Info(t.Context())
+		if err != nil {
+			t.Fatalf("read %s's end: %v", name, err)
+		}
+		generation, err := n.engine.StreamGeneration(name)
+		if err != nil {
+			t.Fatalf("read %s's generation on member 0: %v", name, err)
+		}
+		out = append(out, statelog.Position{
+			Stream: name, Generation: generation, Seq: info.State.LastSeq,
+		})
+	}
+	return out
 }
 
 // replicatedDigest is one member's REPLICATED rows, per table, as a digest.
