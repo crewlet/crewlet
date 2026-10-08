@@ -842,7 +842,7 @@ func TestAHistoryRowWithNoDeltasStoresAnEmptyObject(t *testing.T) {
 
 	// THE NEWEST ROW, which is the re-statement. The first write is the
 	// one that moved the list onto an empty record and has a delta of its
-	// own — see TestEveryDocumentApplyRecordsWhatMoved.
+	// own — see TestAPersonsInboxIsCountedAndTheirQueueIsOrdered.
 	got := r.strings(`SELECT fields_json FROM tracker_history
 		WHERE subject_kind = ? AND kind = ?
 		ORDER BY log_seq DESC LIMIT 1`,

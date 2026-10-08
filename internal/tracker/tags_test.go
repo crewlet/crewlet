@@ -103,9 +103,9 @@ func TestTagRenameAndArchiveAreTheLeads(t *testing.T) {
 	}
 }
 
-// TestTagArchiveIsOneWay is the rule a field's archive follows, and for the
-// same reason: a tag that came back would re-admit work filed against a
-// meaning nobody has looked at in a year.
+// TestTagArchiveIsOneWayForNewWork is the rule a field's archive follows, and
+// for the same reason: a tag that came back would re-admit work filed against
+// a meaning nobody has looked at in a year.
 func TestTagArchiveIsOneWayForNewWork(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
