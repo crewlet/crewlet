@@ -226,7 +226,7 @@ func open(ctx context.Context, js jetstream.JetStream, cfg Config, timing jsprov
 	// rather than read once, because a bucket a peer has just made can still
 	// be not there on the member that answers.
 	var stream jetstream.Stream
-	if err := timing.Settle(ctx, func(ctx context.Context) error {
+	if err = timing.Settle(ctx, func(ctx context.Context) error {
 		var e error
 		stream, e = js.Stream(ctx, Stream)
 		return e
