@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -314,6 +315,55 @@ func TestEachRuntimeWriteEmitsOneAuditedEvent(t *testing.T) {
 					"content and already live in the history of what they changed")
 			}
 		})
+	}
+}
+
+// A BACKUP'S RECORD NAMES ITS TAKER THROUGH THE LOOKUP THE NODE HANDS IN. A
+// token's binding may be a `${VAR}`, resolved through this node's own chain
+// ([queries.Sources.Env]) as the act transport and the dashboard resolve it,
+// so the person who took a backup is named on its record rather than nobody.
+// The variable is set in no process.
+func TestABackupsRecordNamesItsTakerThroughTheHandedLookup(t *testing.T) {
+	t.Parallel()
+	const variable = "CREWLET_API_TEST_BOUND_BACKUP_TAKER"
+	if _, set := os.LookupEnv(variable); set {
+		t.Fatalf("the premise: %s is set in no process", variable)
+	}
+	company := &config.Company{
+		Name: "Nimbus",
+		Roles: []config.Role{
+			{Name: "Jane Founder", Kind: org.KindHuman,
+				Contact: &org.HumanContact{CrewletOperatorID: "${" + variable + "}"}},
+			{Name: "CTO"},
+		},
+	}
+	b := config.DefaultBootstrap()
+	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: "founder-secret"}}
+	audit := &recordedAudit{}
+	a := newApp(t, api.Options{
+		Bootstrap: &b,
+		Sources: queries.Sources{
+			Company: func() *config.Company { return company }, NodeID: "node-a",
+			Env: func(name string) (string, bool) {
+				if name == variable {
+					return "founder", true
+				}
+				return "", false
+			},
+		},
+		Backup: &fakeBackup{},
+		Audit:  audit,
+	})
+	if status, body := post(t, a, "/backup?dir=/var/backups/one", "founder-secret"); status != http.StatusOK {
+		t.Fatalf("POST /backup = %d: %v", status, body)
+	}
+	_, recorded := audit.take()
+	if len(recorded) != 1 {
+		t.Fatalf("a backup left %d audit records, want one", len(recorded))
+	}
+	if seat := decodeFlat(t, recorded[0])["actor_seat"]; seat != "jane-founder" {
+		t.Errorf("the backup's record names seat %v, want the person the handed "+
+			"lookup binds the token to", seat)
 	}
 }
 
