@@ -9,12 +9,28 @@
 // # What a solo package costs when it is not solo
 //
 // A package here stands up N engines, each embedding its OWN NATS server, in
-// ONE process. `go test ./...` runs package binaries in parallel at
-// -p=GOMAXPROCS, and a two-core runner under -race cannot form a multi-member
-// JetStream quorum inside the per-create budget [internal/jsprovision] gives
-// that. Measured on one commit: the dedicated job passed in 5m24s, while the
-// same cases inside `go test ./...` failed on all three of their cluster-start
-// attempts with `context deadline exceeded` creating streams and KV buckets.
+// ONE process, and every replicated object it creates — a stream, a KV bucket
+// — is a raft round trip a quorum of those servers has to answer. Starved of
+// CPU, that round trip does not merely slow down: it goes UNANSWERED, past
+// whatever deadline it was given. `go test ./...` runs package binaries in
+// parallel at -p=GOMAXPROCS, and the rest of this suite holds a four-vCPU
+// runner 90-99% busy for fifteen minutes under -race.
+//
+// Measured twice, under two different sets of budgets:
+//
+//   - When a clustered create had thirty seconds: the dedicated job passed in
+//     5m24s, while the same cases inside `go test ./...` failed on all three of
+//     their cluster-start attempts with `context deadline exceeded` creating
+//     streams and KV buckets.
+//   - At bee5152 (2026-10-08), after [internal/jsprovision] had raised a
+//     clustered create's budget to two minutes and the harness had come to
+//     hold each bring-up attempt to 45 seconds ([jetstreamtest]
+//     ClusterStartTerm) before retrying on fresh ports: run ALONE, at -p 1 on
+//     an otherwise idle four-vCPU machine, one internal/e2e fleet case whose
+//     own three members held it 85% busy lost a whole attempt — member 0's
+//     create of CREWLET_TRACKER_LOG went unanswered for all 45 seconds, and
+//     the attempt cost 73s with its teardown. One fleet's own load did that;
+//     the shared half is fifteen minutes of everybody else's.
 //
 // The broker harness records the same thing from the other end — see
 // [jetstreamtest] `ClusterStartAttempts`: "this harness passes in six seconds
@@ -23,11 +39,19 @@
 // internal/statelog green in the contended job before this package existed,
 // and a retry that usually wins is not the same thing as a partition.
 //
-// Raising the provisioning budget is NOT the fix and was considered: that 30s
-// is an operator's boot diagnostic, whose job is that a genuinely wedged
-// cluster fails rather than hanging a boot. Widening a production timeout to
-// survive CI CPU starvation moves the cost onto the one person it was written
-// for.
+// A longer deadline is NOT the fix, on either side of the harness. The
+// production budget is an operator's boot diagnostic, raised for an
+// operator's reason — a busy host's slow create should not fail a boot — and
+// its job is still that a genuinely wedged cluster is reported rather than
+// waited on; stretching it until CI's CPU starvation fits inside it moves the
+// cost onto the person it was written for. And the harness's term exists to
+// ABANDON a stuck attempt for a fresh one: lengthening it to outlast a
+// starved machine trades the retries for one long wait on the attempt that is
+// starving.
+//
+// So the solo half runs at -p 1, one package binary at a time, and in CI on
+// runners of its own; ci.yml cuts it into shards by measured duration, each a
+// separate machine, which takes contention away rather than adding any.
 //
 // # Why a marker rather than one of the obvious mechanisms
 //

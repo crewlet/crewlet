@@ -114,11 +114,14 @@ is `make vet` — a prerequisite of `make check` — and a step of CI's
 no longer vets: run `make vet` beside it, or `make check`.
 
 Some packages stand up N engines, each embedding its own NATS server, in ONE
-process. Sharing a two-core runner with everything else — `go test ./...` runs
-package binaries in parallel — their cluster cases cannot form a multi-member
-JetStream quorum inside the 30s stream-provisioning budget, and fail every
-cluster-start attempt with `context deadline exceeded`. Alone on a runner the
-same cases pass.
+process, and every stream or bucket they create is a round trip a quorum of
+those servers has to answer. Sharing a runner with everything else —
+`go test ./...` runs package binaries in parallel, and the rest of the suite
+holds a four-vCPU runner almost fully busy for its whole run — those round
+trips go unanswered past whatever deadline they are given, and the cluster
+cases fail their cluster-start attempts with `context deadline exceeded`.
+Alone on a runner the same cases pass. `go doc ./internal/solo` has the
+measurements, under the old budgets and the current ones.
 
 So those packages run in `make test-solo` and in CI's `end-to-end gates`
 jobs, and `make test` leaves them out. A contention split, not a coverage one

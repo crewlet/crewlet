@@ -65,18 +65,18 @@ BIN := crewlet
 # -timeout IS NOT A BUDGET, it is a HANG DETECTOR, and it has to be stated
 # because go's own default is 10 minutes PER PACKAGE and internal/e2e does not
 # fit in it: that package starts a real engine, a real broker and the real API
-# per test, and measured 776s here under -race. Left at the default the gate
-# does not merely flap — it cannot pass on a machine this speed, and the
+# per test, and has measured 776s under -race. Left at the default the gate
+# does not merely flap — it cannot pass on a machine that speed, and the
 # failure reads as a hung test rather than as a budget nobody set.
 #
 # Thirty minutes is a hang detector sized against the worst LEGITIMATE run,
 # not against the worst run ever seen. On CI's own four-vCPU runners
-# internal/e2e completes in 303-404s green; the pathological 1684.497s that
-# once came within 115s of this wall was a run that lost nine cluster-start
-# attempts to unanswered broker metadata requests, which is a defect that has
-# been fixed rather than a duration to budget for (see internal/jsprovision's
-# Ask). Against the green figure this is 4.5x, which is room for a runner a
-# quarter this speed.
+# internal/e2e completed green in 426.6s on main and 561.9s on a pull request
+# (both 2026-10-07); the pathological 1684.497s that once came within 115s of
+# this wall was a run that lost nine cluster-start attempts to unanswered
+# broker metadata requests, which is a defect that has been fixed rather than
+# a duration to budget for (see internal/jsprovision's Ask). Against the slower
+# green figure this is 3.2x, which is room for a runner a third that speed.
 #
 # It applies to every package because the flag is per test BINARY: a unit
 # package that hangs dies in thirty minutes rather than go's default ten,
@@ -90,12 +90,11 @@ BIN := crewlet
 # A ceiling in the workflow would have to sit ABOVE this one to keep that true,
 # which is most of the reason there is not one.
 #
-# TEST_TIMEOUT is ci.yml's value, and the two must not drift: the Makefile is
-# the same command CI runs or it is a lie. It is defined BEFORE GOTEST, and
-# that is load-bearing rather than tidy: `:=` expands immediately, so with the
-# assignment below the reference the flag was handed an EMPTY value and `go
-# test` parsed the package list as its argument — `invalid value "./..." for
-# flag -timeout`. `make test` and therefore `make check` could not run at all.
+# TEST_TIMEOUT is defined BEFORE GOTEST, and that is load-bearing rather than
+# tidy: `:=` expands immediately, so with the assignment below the reference
+# the flag was handed an EMPTY value and `go test` parsed the package list as
+# its argument — `invalid value "./..." for flag -timeout`. `make test` and
+# therefore `make check` could not run at all.
 TEST_TIMEOUT := 30m
 
 # -vet=off, because the vet `go test` runs by default is a DUPLICATE here and
@@ -141,11 +140,11 @@ SKIPGATE = $(GO) run ./internal/skipgate$(if $(TEST_REPORT), -report $(TEST_REPO
 #
 # NOT A COVERAGE CUT — `check` depends on both, and ci.yml runs both. It is a
 # CONTENTION cut: a solo package stands up N engines, each embedding its own
-# NATS server, in ONE process, and a two-core runner under the race detector
-# cannot form a multi-member JetStream quorum inside the 30s provisioning
-# budget while `./...` runs package binaries in parallel. `go doc ./internal/solo`
-# is the whole story — the measurement, and what every obvious alternative
-# (a build tag, -short, a flag, -skip, a nested module) cost when it was tried.
+# NATS server, in ONE process, and a replicated create that has to reach a
+# quorum of members starved of CPU goes unanswered past every deadline it is
+# given. `go doc ./internal/solo` is the whole story — the measurements, and
+# what every obvious alternative (a build tag, -short, a flag, -skip, a nested
+# module) cost when it was tried.
 #
 # This was a hand-written `go list ./... | grep -v '/internal/e2e…'` in two
 # files and a third, already divergent, copy in CONTRIBUTING.md. It named ONE
@@ -365,8 +364,9 @@ dashboard-check: $(UI)/node_modules ## fail if static/dashboard is not what dash
 # but that is GNU Make 4.4 and this repository pins no version (4.3 here).
 # Two lines in the recipe are portable, and they say the thing plainly.
 #
-# It also fails faster: formatting, vet, lint and the build are all ahead of a
-# six-minute test run rather than beside it.
+# It also fails faster: formatting, vet, lint and the build are all ahead of
+# the two test halves, which are by far the longest part of this gate, rather
+# than beside them.
 #
 # Measured, by doing it accidentally: `make test-solo` with a `make
 # test-cross` running beside it failed internal/e2e's
@@ -488,7 +488,7 @@ test: ## the suite, minus the packages that run alone (ci: test (race), one job 
 # The solo half: every package that needs the runner to itself.
 #
 # -p 1 is not decoration. `go test pkgA pkgB …` runs package BINARIES at
-# -p=GOMAXPROCS, so handing it four packages that each stand up a multi-member
+# -p=GOMAXPROCS, so handing it the packages that each stand up a multi-member
 # broker recreates precisely the contention this partition exists to remove.
 # The old target ran one package and did not need it.
 #
