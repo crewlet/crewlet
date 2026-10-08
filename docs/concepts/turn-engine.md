@@ -1045,9 +1045,8 @@ The event log promotes the item into a column (`work_item`, node migration
 `GET /turns?work_item=` answer "everything that happened on this item" with an
 index seek rather than a read of every payload in the window. It is a column
 of the node's own audit log, derived by the writer from each event it stores
-exactly as `turn_id` and `work_key` are, and the migration backfills it from
-the rows already stored. The episode memory files a turn under the same
-identity, in a column of the same name.
+exactly as `turn_id` and `work_key` are. The episode memory files a turn
+under the same identity, in a column of the same name.
 
 ---
 
