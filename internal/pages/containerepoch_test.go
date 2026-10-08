@@ -7,7 +7,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/pages"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // activation is the instant of the nth configuration activation of a case, in
