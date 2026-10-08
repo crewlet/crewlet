@@ -130,23 +130,42 @@ const completeBudget = 5 * time.Minute
 // and [objstore.MiBPace] for every mebibyte of its body.
 func sendBudget(n int64) time.Duration { return callBudget + objstore.PaceFor(n) }
 
-// parts recycles part buffers between uploads, so a node storing many small
-// objects does not allocate eight mebibytes for each.
-//
-// A BUFFER GOES BACK ONLY AFTER A PUT THAT SUCCEEDED. A request that failed
-// may still have its body read by the transport after it returns — the
-// standard library says so of RoundTrip — and a buffer handed straight to the
-// next upload would be written under that read.
-var parts = sync.Pool{New: func() any {
-	b := make([]byte, PartBytes)
-	return &b
-}}
-
 // Backend is the objects in a bucket.
 type Backend struct {
 	client *s3.Client
 	bucket string
 	prefix string
+
+	// partBytes is the size of every part of a multipart upload but its
+	// last: [PartBytes], which Open sets and nothing in the engine changes.
+	//
+	// A FIELD, and the one every use reads, so this package's own tests can
+	// run the multipart path at a size they can afford (export_test.go):
+	// every branch of it — one put below a part, equal parts above, the
+	// abort at or inside a part — turns on sizes RELATIVE to the part, and at
+	// eight mebibytes the cases moved hundreds of mebibytes through a fake
+	// bucket to reach them. A use that read the constant instead would run
+	// at one size under test and another in production.
+	partBytes int
+
+	// parts recycles part buffers of partBytes between uploads, so a node
+	// storing many small objects does not allocate a part for each.
+	//
+	// A BUFFER GOES BACK ONLY AFTER A PUT THAT SUCCEEDED. A request that
+	// failed may still have its body read by the transport after it returns
+	// — the standard library says so of RoundTrip — and a buffer handed
+	// straight to the next upload would be written under that read.
+	parts *sync.Pool
+}
+
+// cutParts sizes every part but the last at n bytes, and the buffers that
+// hold them.
+func (b *Backend) cutParts(n int) {
+	b.partBytes = n
+	b.parts = &sync.Pool{New: func() any {
+		buf := make([]byte, n)
+		return &buf
+	}}
 }
 
 // Open builds the client and checks the bucket is reachable with these
@@ -194,6 +213,7 @@ func Open(ctx context.Context, cfg Config) (*Backend, error) {
 		o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
 	})
 	b := &Backend{client: client, bucket: cfg.Bucket, prefix: cfg.Prefix}
+	b.cutParts(PartBytes)
 	headCtx, cancel := context.WithTimeout(ctx, callBudget)
 	defer cancel()
 	if _, err := client.HeadBucket(headCtx, &s3.HeadBucketInput{Bucket: aws.String(cfg.Bucket)}); err != nil {
@@ -207,10 +227,10 @@ func (b *Backend) key(name string) string { return b.prefix + name }
 // Put implements [objstore.Backend].
 func (b *Backend) Put(ctx context.Context, name string, r io.Reader, m objstore.PutMeta) (err error) {
 	r = objstore.ContextReader(ctx, r)
-	buf := parts.Get().(*[]byte)
+	buf := b.parts.Get().(*[]byte)
 	defer func() {
 		if err == nil {
-			parts.Put(buf)
+			b.parts.Put(buf)
 		}
 	}()
 	n, end, err := objstore.Fill(r, *buf)
@@ -288,7 +308,7 @@ func (b *Backend) putParts(ctx context.Context, name string, r io.Reader, buf []
 	for number := int32(1); size > 0; number++ {
 		if number > maxParts {
 			return fmt.Errorf("s3obj: %s is longer than the %d parts of %d bytes one "+
-				"upload can hold", name, maxParts, PartBytes)
+				"upload can hold", name, maxParts, b.partBytes)
 		}
 		part := buf[:size]
 		sent, perr := call(ctx, sendBudget(int64(size)),

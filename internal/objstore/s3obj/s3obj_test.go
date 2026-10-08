@@ -17,7 +17,20 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore/objstoretest"
 	"github.com/crewlet/crewlet/internal/objstore/s3obj"
 	"github.com/crewlet/crewlet/internal/objstore/s3obj/s3fake"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
+
+// part is the part size every case here runs the backend at.
+//
+// SIXTY-FOUR KIBIBYTES rather than the production [s3obj.PartBytes], because
+// every branch of a multipart upload — one put below a part, equal parts
+// above it, the abort at a part's end or inside one — turns on a body's size
+// RELATIVE to the part, and at eight mebibytes the cases moved hundreds of
+// mebibytes through the fake bucket to reach them. The fake does not enforce
+// S3's five-mebibyte floor on a part, so the small size is accepted here; the
+// production size and that floor are pinned on their own
+// ([TestEveryFileTheTrackerKeepsFitsOneUploadOfPartsS3Takes]).
+const part = 64 << 10
 
 func open(t *testing.T, srv *s3fake.Server, prefix string) *s3obj.Backend {
 	t.Helper()
@@ -28,7 +41,34 @@ func open(t *testing.T, srv *s3fake.Server, prefix string) *s3obj.Backend {
 	if err != nil {
 		t.Fatalf("open the bucket: %v", err)
 	}
+	s3obj.CutParts(b, part)
 	return b
+}
+
+// EVERY FILE THE TRACKER KEEPS FITS ONE UPLOAD OF PARTS S3 TAKES — the
+// production part size, held where the cases above run at another.
+//
+// Eight mebibytes: at or above S3's five-mebibyte floor on every part but the
+// last (a part under it is refused when the upload is completed, after every
+// byte has been sent), and with S3's ten thousand parts an upload holds eighty
+// gibibytes, past the largest file a project keeps. A part size that broke
+// either would fail only against a real bucket, and the fake this suite runs
+// against enforces neither.
+func TestEveryFileTheTrackerKeepsFitsOneUploadOfPartsS3Takes(t *testing.T) {
+	t.Parallel()
+	if s3obj.PartBytes != 8*objstore.MiB {
+		t.Errorf("a part is %d bytes; the size this suite and the docs reason "+
+			"about is eight mebibytes", s3obj.PartBytes)
+	}
+	const s3SmallestPart = 5 * objstore.MiB
+	if s3obj.PartBytes < s3SmallestPart {
+		t.Errorf("a part of %d bytes is under S3's %d-byte floor, so every "+
+			"multipart upload is refused at completion", s3obj.PartBytes, s3SmallestPart)
+	}
+	if most := int64(s3obj.MaxParts) * int64(s3obj.PartBytes); most < tracker.MaxFileBytes {
+		t.Errorf("one upload holds at most %d bytes and a project keeps files of %d",
+			most, int64(tracker.MaxFileBytes))
+	}
 }
 
 // AN S3 BUCKET PASSES THE SUITE, over the wire the SDK speaks, with listings
@@ -42,7 +82,7 @@ func TestContract(t *testing.T) {
 		b := open(t, srv, "crewlet/")
 		servers.Store(objstore.Backend(b), srv)
 		return b
-	}, objstoretest.Options{Piece: s3obj.PartBytes,
+	}, objstoretest.Options{Piece: part,
 		// A MULTIPART UPLOAD BEGUN AND NEVER COMPLETED, under the
 		// prefix: what a process killed mid-upload leaves, named by
 		// what follows the prefix.
@@ -195,12 +235,12 @@ func TestAnObjectLongerThanAPartGoesUpInParts(t *testing.T) {
 	t.Parallel()
 	srv := s3fake.Start(t, "files")
 	b := open(t, srv, "")
-	long := bytes.Repeat([]byte("in parts "), (2*s3obj.PartBytes+17)/9+1)
+	long := bytes.Repeat([]byte("in parts "), (2*part+17)/9+1)
 	if err := b.Put(t.Context(), "long", iotest.HalfReader(bytes.NewReader(long)), objstore.PutMeta{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := srv.Parts("long"); got != 3 {
-		t.Fatalf("%d bytes went up in %d parts, want 3 of at most %d", len(long), got, s3obj.PartBytes)
+		t.Fatalf("%d bytes went up in %d parts, want 3 of at most %d", len(long), got, part)
 	}
 	if err := b.Put(t.Context(), "short", bytes.NewReader([]byte("one request")), objstore.PutMeta{}); err != nil {
 		t.Fatal(err)
@@ -232,7 +272,7 @@ func TestAFailedUploadIsAbandoned(t *testing.T) {
 	t.Parallel()
 	srv := s3fake.Start(t, "files")
 	b := open(t, srv, "")
-	body := bytes.Repeat([]byte{7}, 3*s3obj.PartBytes)
+	body := bytes.Repeat([]byte{7}, 3*part)
 
 	srv.FailPart(2)
 	if err := b.Put(t.Context(), "refused", bytes.NewReader(body), objstore.PutMeta{}); err == nil {
@@ -245,9 +285,9 @@ func TestAFailedUploadIsAbandoned(t *testing.T) {
 		at   int
 		err  error
 	}{
-		{"stopped", 3 * s3obj.PartBytes / 2, errors.New("the client went away")},
-		{"cut-at-a-part", s3obj.PartBytes, io.ErrUnexpectedEOF},
-		{"cut-in-a-part", 3 * s3obj.PartBytes / 2, io.ErrUnexpectedEOF},
+		{"stopped", 3 * part / 2, errors.New("the client went away")},
+		{"cut-at-a-part", part, io.ErrUnexpectedEOF},
+		{"cut-in-a-part", 3 * part / 2, io.ErrUnexpectedEOF},
 	} {
 		stopped := io.MultiReader(bytes.NewReader(body[:stop.at]), iotest.ErrReader(stop.err))
 		if err := b.Put(t.Context(), stop.name, stopped, objstore.PutMeta{}); !errors.Is(err, stop.err) {
@@ -269,7 +309,7 @@ func TestTheContentTypeIsStored(t *testing.T) {
 	srv := s3fake.Start(t, "files")
 	b := open(t, srv, "acme/")
 	client := httpxtest.Pool(t)
-	for name, size := range map[string]int{"small": 10, "large": s3obj.PartBytes + 1} {
+	for name, size := range map[string]int{"small": 10, "large": part + 1} {
 		if err := b.Put(t.Context(), name, bytes.NewReader(make([]byte, size)),
 			objstore.PutMeta{ContentType: "text/csv"}); err != nil {
 			t.Fatal(err)
@@ -301,13 +341,13 @@ func TestAnObjectPutInPartsIsDatedByItsUploadsStart(t *testing.T) {
 	srv := s3fake.Start(t, "files")
 	b := open(t, srv, "")
 	before := time.Now().UTC().Truncate(time.Second)
-	body := &secondCrossingReader{r: bytes.NewReader(make([]byte, s3obj.PartBytes+1)), at: s3obj.PartBytes}
+	body := &secondCrossingReader{r: bytes.NewReader(make([]byte, part+1)), at: part}
 	if err := b.Put(t.Context(), "long", body, objstore.PutMeta{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := srv.Parts("long"); got != 2 {
 		t.Fatalf("%d bytes went up in %d parts, want 2: this case is about an object put in parts",
-			s3obj.PartBytes+1, got)
+			part+1, got)
 	}
 	if body.resumed.IsZero() {
 		t.Fatal("the upload never asked for the bytes past its first part")
