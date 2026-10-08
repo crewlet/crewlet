@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,8 +22,28 @@ import (
 // frames a second, committed with its narration, and followed by its tool
 // calls — announced as they start, listed as they return with their result's
 // tail.
+//
+// BUILT ONCE per test binary and shared by every case that replays it. The
+// 1,311 frames are the measurement detail.go cites, so they are not shrunk —
+// but building them is a JSON round trip of every frame's growing payload,
+// and three parallel cases each building their own spent most of their time
+// doing it three times over. Sharing is safe because nothing writes a frame:
+// [stream.Service.Ingest] takes the envelope by value and the projection
+// copies every list and map it keeps from a payload. It is also stricter than
+// a copy per case — a write to a shared payload map is a race the detector
+// reports, where a private copy would have hidden it.
 func longPhase(t *testing.T) []livestate.Envelope {
 	t.Helper()
+	frames, err := longPhaseFrames()
+	if err != nil {
+		t.Fatalf("build the long phase: %v", err)
+	}
+	return frames
+}
+
+var longPhaseFrames = sync.OnceValues(buildLongPhase)
+
+func buildLongPhase() ([]livestate.Envelope, error) {
 	const (
 		rounds      = 30
 		streamed    = 40 // frames a round streams: eight seconds at five a second
@@ -35,19 +56,26 @@ func longPhase(t *testing.T) []livestate.Envelope {
 	task := strings.Repeat("Fix the flaky test in the payments suite. ", 8_000/42)
 	start := time.Date(2026, 10, 6, 9, 0, 0, 0, time.UTC)
 	at := start
-	var out []livestate.Envelope
+	var (
+		out    []livestate.Envelope
+		failed error
+	)
 	seq := 0
 	frame := func(p types.AgentTurnProgress) {
-		t.Helper()
+		if failed != nil {
+			return
+		}
 		p.Agent, p.RoleName, p.TurnID, p.Phase, p.Iteration = "agent-1", "Lead", "turn-1", "execute", 0
 		p.Model, p.MaxRounds, p.RoundCeiling = "claude-sonnet-4-5", 40, 60
 		raw, err := json.Marshal(p)
 		if err != nil {
-			t.Fatal(err)
+			failed = fmt.Errorf("encode frame %d: %w", seq+1, err)
+			return
 		}
 		var payload map[string]any
 		if err := json.Unmarshal(raw, &payload); err != nil {
-			t.Fatal(err)
+			failed = fmt.Errorf("decode frame %d: %w", seq+1, err)
+			return
 		}
 		seq++
 		at = at.Add(200 * time.Millisecond)
@@ -107,7 +135,7 @@ func longPhase(t *testing.T) []livestate.Envelope {
 			frame(p)
 		}
 	}
-	return out
+	return out, failed
 }
 
 // A RUNNING PHASE'S PUSHES CARRY WHAT MOVED, and a tab that applies them holds
