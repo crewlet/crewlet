@@ -145,12 +145,17 @@ func (h *harness) inbox(t *testing.T, handle string) []*events.Event {
 	return h.settled(t, topics.AgentInbox(handle))
 }
 
-// quiet asserts a topic stays empty, which needs a real wait: "nothing
-// arrived" and "nothing has arrived YET" are the same observation until
-// enough time has passed.
+// quiet asserts a topic carried nothing, read the moment Handle has returned.
+//
+// NO WAIT, because nothing is left in flight to wait for. Handle publishes
+// everything it will before it returns — a wake's own publish failure IS its
+// result ([TestAFailedWakeIsRetried]), which a publish from a goroutine could
+// never be — and the memory twin hands a publish to every subscription, these
+// collectors among them, before Publish returns. "Nothing has arrived yet" is
+// therefore "nothing arrived"; the fifty-millisecond sleep this held before
+// every read guarded nothing.
 func (h *harness) quiet(t *testing.T, topic string) {
 	t.Helper()
-	time.Sleep(50 * time.Millisecond)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if got := h.seen[topic]; len(got) != 0 {
