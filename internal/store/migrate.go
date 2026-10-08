@@ -19,6 +19,13 @@ import (
 // the binary before its first migration is, so a name that does not resolve is
 // a read error at Open rather than a sequence that silently applies nothing.
 //
+// A NODE MIGRATION NEVER DROPS A COLUMN IN PLACE. The driver's
+// `ALTER TABLE … DROP COLUMN` re-parses every trigger in the file, and node
+// 0041's memory change-sequence triggers name `NEW.rowid`, which that re-parse
+// refuses ("no such column: rowid") whatever table the column is dropped
+// from. So a column leaves the node estate the way node 0045 takes one: copy
+// the table without it, drop the old one, rename the copy.
+//
 //go:embed all:schema
 var schemaFS embed.FS
 
