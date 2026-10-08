@@ -144,13 +144,23 @@ type Capabilities struct {
 	// round trip and a thousand on a batch this engine writes constantly.
 	//
 	// WHY IT IS PROBED AND NOT PICKED. The limit is the ENGINE's, not the
-	// dialect's, and the three candidate answers are all wrong somewhere:
-	// SQLite defaulted to 999 before 3.32 and 32 766 after it, and the
-	// driver pinned here reports NEITHER — it probes to 2 000. So a
-	// hardcoded 32 766 is a statement this engine refuses, and a hardcoded
-	// 999 is half the rows per statement that actually fit, which on a
-	// seven-column applier row is 285 rows a chunk against 142. The probe
-	// costs one prepare at open and is right on all three.
+	// dialect's: SQLite defaulted to 999 before 3.32 and 32 766 after it,
+	// and an engine in this family is free to pick a third. A hardcoded
+	// 32 766 is a statement such an engine refuses at the moment a batch is
+	// largest, and a hardcoded 999 is a fraction of the rows per statement
+	// that fit. The probe costs at most fifteen prepares, once per process
+	// ([driverMeasurement]), and is right on all of them.
+	//
+	// THE PINNED DRIVER HAS NO LIMIT THE PROBE CAN REACH: a statement
+	// binding 100 000 parameters prepares, and one binding 32 760 runs. So
+	// it reports the probe's own 32 766 ceiling, and what bounds an
+	// applier's statement is [RowsPerInsert]'s row cap instead. It used to
+	// report 2 000, which was not a parameter limit at all: the probe asked
+	// with `SELECT ?,?,…`, which returns a column per parameter, and the
+	// driver's refusal at 2 001 was "too many columns in result set".
+	// Every applier chunked to that number — 285 rows a statement at seven
+	// columns, 666 at three — while the driver would have taken the 1 000
+	// the row cap allows.
 	//
 	// A conservative 999 when the probe cannot tell: too small is slow,
 	// too large is a runtime failure on a statement the caller cannot
@@ -228,11 +238,11 @@ func (p *prober) heard(err error) error {
 }
 
 // parseRefusal is the fragment every refusal a probe here is ASKING for
-// carries, measured on the pinned driver: "too many columns in result set",
-// "no such function", "no such module", the experimental gate's "… is an
-// experimental feature" and "unknown module name" behind it all arrive as
-// `turso: error: Parse error: …`. Matching the message is not a choice: the
-// driver gives every one of them the same generic status.
+// carries, measured on the pinned driver: "no such function", "no such
+// module", and the experimental gate's "… is an experimental feature" and
+// "unknown module name" behind it all arrive as `turso: error: Parse error:
+// …`. Matching the message is not a choice: the driver gives every one of
+// them the same generic status.
 const parseRefusal = "Parse error"
 
 // answered reports whether err is the DRIVER ANSWERING a probe's question —
@@ -495,8 +505,10 @@ const conservativeMaxVariables = 999
 //
 // A prepare rather than an execution: the limit is a parser bound, so a
 // statement that prepares would run, and preparing touches no table and needs
-// no transaction. `SELECT ?,?,…` is the narrowest statement that carries N
-// parameters and nothing else.
+// no transaction. The statement ([selectParams]) carries N parameters and
+// returns ONE column, because the parameter limit is the only bound it may be
+// able to meet — see [Capabilities.MaxVariables] for the probe that met the
+// result-set width instead and reported that as the parameter limit.
 //
 // The search is bounded above by 32 766 — SQLite's own post-3.32 default and
 // the largest value any engine in this family reports — so the loop is at
@@ -533,17 +545,21 @@ func (p *prober) maxVariables() int {
 	return low
 }
 
-// selectParams builds `SELECT ?, ?, …` with n placeholders.
+// selectParams builds `SELECT 1 WHERE 1 IN (?, ?, …)` with n placeholders:
+// n parameters, one result column, and no table, so the only limit a prepare
+// of it can meet is the parameter limit.
 func selectParams(n int) string {
+	const head, tail = "SELECT 1 WHERE 1 IN (", ")"
 	var b strings.Builder
-	b.Grow(len("SELECT ") + 3*n)
-	b.WriteString("SELECT ")
+	b.Grow(len(head) + 2*n + len(tail))
+	b.WriteString(head)
 	for i := range n {
 		if i > 0 {
 			b.WriteString(",")
 		}
 		b.WriteString("?")
 	}
+	b.WriteString(tail)
 	return b.String()
 }
 

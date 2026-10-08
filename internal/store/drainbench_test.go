@@ -647,8 +647,8 @@ func settleAfter(t *testing.T, foreign *atomic.Int64, mark int64) {
 // So the invariant is asserted where it is exact. What the chunker controls is
 // how many statements a collection becomes, and that number is arithmetic —
 // identical on a laptop, on a loaded CI box, and under the detector. An 8 000-row
-// apply is 22 statements through [store.InsertRows] against 8 000 one per row:
-// a 364-fold difference that no amount of contention can blur into parity.
+// apply is 8 statements through [store.InsertRows] against 8 000 one per row:
+// a thousand-fold difference that no amount of contention can blur into parity.
 // A test that goes red when the chunker stops chunking is what the old margin
 // was reaching for; this one cannot be fooled by a busy afternoon.
 //

@@ -430,10 +430,12 @@ burst.
 That floor is deliberately conservative, and it is the number every figure
 below is derived from. An applier writes a record's child rows — tags,
 watchers, relations, dependency mirrors, the inverted index's postings — as
-**multi-row inserts chunked to the engine's probed bind-parameter limit**,
-rather than one statement per row. On the pinned driver that limit is 2 000
-parameters, so a seven-column row batches 285 to a statement and a
-three-column row 666: an 8 000-row apply is 22 statements rather than 8 000.
+**multi-row inserts chunked to the engine's probed bind-parameter limit**, and
+to at most 1 000 rows a statement, rather than one statement per row. The
+pinned driver accepts more parameters than the probe's own 32 766 ceiling, so
+the 1 000-row cap is what binds: a seven-column row and a three-column row both
+batch 1 000 to a statement, and an 8 000-row apply is 8 statements rather than
+8 000.
 Measured unloaded that shape drains about four times faster than one statement
 per row; measured on a loaded CI runner under the race detector, closer to
 1.5 times. The floor above is the loaded, contended figure, so a fleet sized

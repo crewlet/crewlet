@@ -58,7 +58,8 @@ func TestInsertRowsIssuesOneStatementPerChunk(t *testing.T) {
 	ctx := t.Context()
 
 	// A deliberately small limit, so the chunk boundary is exercised by a
-	// row count a test can read rather than by the probed limit's 285.
+	// row count a test can read rather than by the 1 000 rows a statement
+	// the row cap allows at the probed limit.
 	const limit, columns, rows = 10, 3, 17
 	size := store.RowsPerInsert(limit, columns) // 3
 	if size != 3 {

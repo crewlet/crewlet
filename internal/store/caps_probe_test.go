@@ -2,20 +2,31 @@ package store
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 // THE PARAMETER LIMIT IS MEASURED, and both halves of the answer are asserted:
 // that it clears the floor every engine in this family guarantees, and that a
-// statement AT the reported limit really does prepare while one past it does
-// not.
+// statement binding the reported number really does prepare while one binding
+// one more does not.
 //
 // The second half is what makes this a measurement rather than a constant with
-// a probe-shaped comment. A chunk size derived from a number nothing checked
-// is a refused statement at the moment a batch is largest.
+// a probe-shaped comment, and it is asked of the statement the number SIZES —
+// a multi-row INSERT, one parameter per row of a one-column table — never of
+// the probe's own. A probe held only to its own statement passes whatever
+// bound that statement happens to meet: `SELECT ?,?,…` met the result-set
+// width at 2 000 columns, the probe reported that as the parameter limit, this
+// case asked the same statement whether 2 001 prepared, and every applier
+// chunked to a sixteenth of the parameters the probe can report, with nothing
+// failing.
+//
+// Mutation: probe with a statement returning a column per parameter again,
+// and an insert binding one more than the reported limit prepares.
 func TestMaxVariablesIsMeasuredNotAssumed(t *testing.T) {
 	t.Parallel()
-	db, err := OpenNode(t.Context(), filepath.Join(t.TempDir(), "vars.db"), Options{})
+	ctx := t.Context()
+	db, err := OpenNode(ctx, filepath.Join(t.TempDir(), "vars.db"), Options{})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -27,24 +38,27 @@ func TestMaxVariablesIsMeasuredNotAssumed(t *testing.T) {
 			"family accepts", got, conservativeMaxVariables)
 	}
 
-	prepares := func(n int) bool {
-		stmt, err := db.SQL().PrepareContext(t.Context(), selectParams(n))
-		if err != nil {
-			return false
-		}
-		_ = stmt.Close()
-		return true
+	if _, err := db.SQL().ExecContext(ctx, `CREATE TABLE vars_probe (v INTEGER)`); err != nil {
+		t.Fatalf("create the table the inserts bind into: %v", err)
 	}
-	if !prepares(got) {
-		t.Errorf("a statement with the reported %d parameters does not prepare: "+
-			"the probe is reporting a limit the driver does not have", got)
+	binds := func(n int) error {
+		stmt, err := db.SQL().PrepareContext(ctx, "INSERT INTO vars_probe (v) VALUES "+
+			strings.TrimSuffix(strings.Repeat("(?),", n), ","))
+		if err != nil {
+			return err
+		}
+		return stmt.Close()
+	}
+	if err := binds(got); err != nil {
+		t.Errorf("an insert binding the reported %d parameters does not prepare: "+
+			"the probe is reporting a limit the driver does not have: %v", got, err)
 	}
 	// One past the limit must be refused — UNLESS the probe hit its own
 	// ceiling, where "one more" says nothing about the driver.
-	if got < 32766 && prepares(got+1) {
-		t.Errorf("a statement with %d parameters prepares but the probe reported "+
-			"%d as the limit: the search stopped short and every batch built "+
-			"from it is smaller than it needs to be", got+1, got)
+	if got < 32766 && binds(got+1) == nil {
+		t.Errorf("an insert binding %d parameters prepares but the probe reported "+
+			"%d as the limit: it measured some other bound, and every batch "+
+			"built from it is smaller than it needs to be", got+1, got)
 	}
 	t.Logf("driver parameter limit: %d", got)
 }
