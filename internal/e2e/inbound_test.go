@@ -125,7 +125,8 @@ func (b *inbox) settled(t *testing.T, want int) []*types.ExternalNotification {
 // (notification_skipped), in its own words (internal/notify): the reason is
 // how a case tells WHICH gate dropped a delivery, and a gate that stopped
 // dropping it, or another that started to, is a different engine. A reworded
-// reason fails the wait naming every reason that was recorded.
+// reason fails the case as soon as the delivery is decided, naming every reason
+// that was recorded ([skip.heldAs]).
 const (
 	reasonHumanSeat   = "human seat"
 	reasonSelfAction  = "self-action: the recipient caused this event"
@@ -201,19 +202,46 @@ func skipsFrom(t *testing.T, n *node, source string) []*types.NotificationSkippe
 // resolved), for reason.
 type skip struct{ source, handle, reason string }
 
-// recorded reports whether n holds the skip.
-func (want skip) recorded(t *testing.T, n *node) bool {
+// reasons is every reason n recorded for skipping a delivery from want's source
+// that names want's handle — WHATEVER THE REASON, so a wait on it ends the
+// moment the delivery is decided, and a reason other than want's fails the case
+// at once by name. Matched on the reason as well, a reason reworded in
+// internal/notify, or a different gate dropping the delivery, waited out the
+// whole budget and then reported only a timeout.
+func (want skip) reasons(t *testing.T, n *node) []string {
 	t.Helper()
+	var out []string
 	for _, got := range skipsFrom(t, n, want.source) {
-		if got.Handle == want.handle && got.Reason == want.reason {
-			return true
+		if got.Handle == want.handle {
+			out = append(out, got.Reason)
 		}
 	}
-	return false
+	return out
 }
 
 func (want skip) String() string {
 	return fmt.Sprintf("a %s delivery skipped for %q (%q)", want.source, want.handle, want.reason)
+}
+
+// skipsRecorded renders every skip n recorded from source, for a failure.
+func skipsRecorded(t *testing.T, n *node, source string) string {
+	t.Helper()
+	var recorded []string
+	for _, got := range skipsFrom(t, n, source) {
+		recorded = append(recorded, fmt.Sprintf("%q (%q)", got.Handle, got.Reason))
+	}
+	return fmt.Sprintf("skips recorded from %s: %v", source, recorded)
+}
+
+// heldAs holds that the delivery want describes was skipped for want's reason,
+// once its decision is recorded.
+func (want skip) heldAs(t *testing.T, n *node) {
+	t.Helper()
+	if reasons := want.reasons(t, n); !slices.Contains(reasons, want.reason) {
+		t.Fatalf("a %s delivery was skipped for %q as %q, want %q — a different gate "+
+			"dropped it, or internal/notify words that gate's reason differently now",
+			want.source, want.handle, reasons, want.reason)
+	}
 }
 
 // dropped waits for the delivery under test to end in want — its TERMINAL
@@ -226,18 +254,10 @@ func (want skip) String() string {
 func dropped(t *testing.T, n *node, handle string, want skip) {
 	t.Helper()
 	waitFor(t, want.String(), func() bool {
-		return want.recorded(t, n) || len(wakesFor(t, n, handle)) > 0
-	}, func() string {
-		var recorded []string
-		for _, got := range skipsFrom(t, n, want.source) {
-			recorded = append(recorded, fmt.Sprintf("%q (%q)", got.Handle, got.Reason))
-		}
-		return fmt.Sprintf("skips recorded from %s: %v", want.source, recorded)
-	})
+		return len(want.reasons(t, n)) > 0 || len(wakesFor(t, n, handle)) > 0
+	}, func() string { return skipsRecorded(t, n, want.source) })
 	nobodyWoken(t, n, handle)
-	if !want.recorded(t, n) {
-		t.Fatalf("no wake, and no record of %s either", want)
-	}
+	want.heldAs(t, n)
 }
 
 // settleInbound returns once every delivery published to n's inbound edge
@@ -267,8 +287,9 @@ func settleInbound(t *testing.T, n *node) {
 	}
 	settling := skip{source: source, reason: reasonUnparsed}
 	waitFor(t, "the settling delivery's record: "+settling.String(), func() bool {
-		return settling.recorded(t, n)
-	})
+		return len(settling.reasons(t, n)) > 0
+	}, func() string { return skipsRecorded(t, n, source) })
+	settling.heldAs(t, n)
 }
 
 // nobodyWoken holds that no wake for handle was published on n — called once
