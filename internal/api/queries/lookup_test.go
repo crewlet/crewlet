@@ -68,15 +68,23 @@ func TestTheViewerResolvesItsBindingThroughTheLookupTheNodeHandsIn(t *testing.T)
 		t.Fatalf("parse: %v", err)
 	}
 	work := &stubWork{}
-	answered, err := askAsOperator(t, queries.Sources{
+	sources := queries.Sources{
 		Company: func() *config.Company { return cfg },
 		Env:     handedOnly(t, variable, "ops-1"),
 		Work:    work,
-	}, "viewer", nil)
+	}
+	answered, err := askAsOperator(t, sources, "viewer", nil)
 	got := answerMap(t, answered, err)
 	if got["handle"] != "ana" {
 		t.Errorf("handle = %v, want ana, whom the handed lookup binds to ops-1", got["handle"])
 	}
+
+	// The other way round: her inbox is read by BOTH of her names, and the
+	// credential's is the half only the handed lookup can resolve.
+	if _, err := askAsOperator(t, sources, "work_inbox", nil); err != nil {
+		t.Fatalf("work_inbox: %v", err)
+	}
+	wantParty(t, work.inboxQuery.Who, "ana", "ops-1")
 }
 
 // A COLLEAGUE IS FOUND BY AN ID THE HANDED LOOKUP HOLDS, as the agent's own
