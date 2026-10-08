@@ -52,10 +52,19 @@ func TestTheEmbeddingTickIsBoundedByItsProgress(t *testing.T) {
 	// The node's own duty would race this test's ticks for the same sources.
 	e.stopEmbedding()
 	provider := &pacedEmbedder{Fake: embeddings.NewFake(64)}
+	// ONE INPUT A REQUEST, so three sources are three requests through the
+	// same packing a real model's limits drive. The packing itself — a
+	// batch of up to 128 split by count and by bytes — is the search
+	// package's to certify; what is under test here is the tick around
+	// it, and three requests are what make "longer than the budget in
+	// all" true without filing three hundred tasks to get there.
+	limits := provider.Limits()
+	limits.BatchInputs = 1
+	provider.SetLimits(limits)
 	var held embeddings.Embedder = provider
 	e.embeddings.Store(&held)
 
-	const sources = 300 // three batches of at most 128
+	const sources = 3 // three requests of one
 	seedTasks(t, e, sources)
 	duty := e.newEmbedDuty(e.native.Load().log)
 	if duty == nil {
