@@ -530,15 +530,15 @@ func TestAPeerOnAnotherProtocolIsNamedOnEveryQuestion(t *testing.T) {
 		Time: at, TraceID: "tr-1", Actor: "Lead",
 		Tags: map[string]string{"turn_id": "t-1", "agent_role": "Lead", "agent_id": "agent-a",
 			"channel_id": "ch-1"}})
-	servesAs(t, broker, "node-old", eventfan.Protocol-1, store.EventRecord{ID: "theirs",
+	servesAs(t, broker, "node-other", eventfan.Protocol-1, store.EventRecord{ID: "theirs",
 		Type: "agent_phase_completed", Category: "agent", Time: at.Add(time.Second), TraceID: "tr-1",
 		Tags: map[string]string{"turn_id": "t-1"}})
-	fan := fanFrom(a, "node-a", "node-old")
+	fan := fanFrom(a, "node-a", "node-other")
 	asked := fmt.Sprintf("v%d", eventfan.Protocol)
 	named := func(t *testing.T, c eventfan.Coverage) {
 		t.Helper()
-		if c.Complete || !missing(c, "node-old", asked) {
-			t.Errorf("coverage %+v does not name node-old as refusing %s", c, asked)
+		if c.Complete || !missing(c, "node-other", asked) {
+			t.Errorf("coverage %+v does not name node-other as refusing %s", c, asked)
 		}
 	}
 	mineOnly := func(t *testing.T, rows []store.EventRecord) {
@@ -1036,7 +1036,7 @@ func TestNotificationOutcomesAreSummedAcrossNodes(t *testing.T) {
 	t.Parallel()
 	broker := memory.NewBroker()
 	a, b := newNode(t, broker, "node-a"), newNode(t, broker, "node-b")
-	servesAs(t, broker, "node-old", 4, store.EventRecord{ID: "old", Type: "notification_skipped",
+	servesAs(t, broker, "node-other", 4, store.EventRecord{ID: "other", Type: "notification_skipped",
 		Category: "notification", Time: time.Now().UTC(),
 		Tags: map[string]string{"notification_source": "gitlab"}})
 	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
@@ -1051,7 +1051,7 @@ func TestNotificationOutcomesAreSummedAcrossNodes(t *testing.T) {
 	outcomeOn(t, b, "b-late", "notification_skipped", "gitlab", at)
 	outcomeOn(t, b, "b-horizon", "notification_skipped", "jira", horizon.Add(time.Second))
 
-	fan := fanFrom(a, "node-a", "node-b", "node-old", "node-gone")
+	fan := fanFrom(a, "node-a", "node-b", "node-other", "node-gone")
 	fan.Budget = 500 * time.Millisecond
 	fan.Clock = func() time.Time { return at }
 
@@ -1072,8 +1072,8 @@ func TestNotificationOutcomesAreSummedAcrossNodes(t *testing.T) {
 		if !missing(coverage, "node-gone", "budget") {
 			t.Errorf("coverage %+v does not name node-gone for the budget", coverage)
 		}
-		if !missing(coverage, "node-old", "v5") {
-			t.Errorf("coverage %+v does not name node-old for the version it was asked in", coverage)
+		if !missing(coverage, "node-other", "v5") {
+			t.Errorf("coverage %+v does not name node-other for the version it was asked in", coverage)
 		}
 		if missing(coverage, "node-b", "") {
 			t.Errorf("coverage %+v names node-b, which answered", coverage)
