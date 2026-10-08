@@ -80,6 +80,16 @@ func TestAManagedDocumentRefusesTheOfflineWrites(t *testing.T) {
 	if after, _, err := configCmd(t, managed, "revisions"); err != nil || after != before {
 		t.Errorf("a refused activate changed the history:\n%s\n%s", before, after)
 	}
+	// A MISSING OR UNKNOWN ID IS TOLD SO, not that the document is managed:
+	// there is no revision to judge.
+	if _, _, err := configCmd(t, managed, "activate"); err == nil ||
+		!strings.Contains(err.Error(), "needs a revision id") {
+		t.Errorf("activate with no id on a managed document = %v, want the missing id named", err)
+	}
+	if _, _, err := configCmd(t, managed, "activate", "no-such-revision"); err == nil ||
+		!strings.Contains(err.Error(), "no revision no-such-revision") {
+		t.Errorf("activate of an unknown id on a managed document = %v, want it named", err)
+	}
 	// AND READING IS UNTOUCHED.
 	shown, _, err := configCmd(t, managed, "show")
 	if err != nil || !strings.Contains(shown, "Nimbus Two") {

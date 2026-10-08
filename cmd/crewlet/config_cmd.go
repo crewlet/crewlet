@@ -191,14 +191,6 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	case "diff":
 		return diffRevisions(ctx, cs, subject, against, stdout)
 	case "activate":
-		// RE-POINTING THE FLEET AT ANOTHER REVISION IS A CHANGE OF DOCUMENT,
-		// and this route is offline: no credential, so a managed document
-		// refuses it. Re-activating the CURRENT revision changes nothing in
-		// the company — it is the offline twin of POST /config/reload, the
-		// gesture a rotated credential needs — and stays open.
-		if err := refuseManagedActivation(ctx, cs, subject); err != nil {
-			return err
-		}
 		return activateRevision(ctx, cs, subject, stdout)
 	case "seal":
 		return sealConfig(ctx, cs, *bootstrapPath, stdout)
@@ -532,6 +524,15 @@ func activateRevision(ctx context.Context, cs *configStore, revisionID string, s
 		return err
 	} else if !found {
 		return fmt.Errorf("no revision %s", revisionID)
+	}
+	// RE-POINTING THE FLEET AT ANOTHER REVISION IS A CHANGE OF DOCUMENT, and
+	// this route is offline: no credential, so a managed document refuses it.
+	// Re-activating the CURRENT revision changes nothing in the company — it
+	// is the offline twin of POST /config/reload, the gesture a rotated
+	// credential needs — and stays open. AFTER the lookups, so a missing or
+	// unknown id is told that, not that the document is managed.
+	if err := refuseManagedActivation(ctx, cs, revisionID); err != nil {
+		return err
 	}
 	if _, err := cs.configs.Activate(ctx, revisionID, time.Now().UTC()); err != nil {
 		return err
