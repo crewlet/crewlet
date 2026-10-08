@@ -72,3 +72,39 @@ func TestTheLockStampReadIsBounded(t *testing.T) {
 		t.Errorf("readHolder returned %d bytes, past its %d bound", len(got), maxHolderStamp)
 	}
 }
+
+// A DISCARD HOLDS ITS FILE ALONE, both ways, in the one step that claims it.
+//
+// A scratch open deletes the file before it opens it, so no handle in this
+// process may be open on the path while that runs: one already open must
+// refuse the discard, and one asking while the discard holds the path must be
+// refused rather than share a claim on a file being deleted. Checked and then
+// claimed in two steps, an open landing between them shared the claim and had
+// its database deleted under it.
+//
+// Mutation: let a discard's claim be shared, or let a discard share a held
+// one, and an open lands on a file being deleted.
+func TestADiscardHoldsItsFileAlone(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	discarding, err := claimStore(filepath.Join(dir, "discarding.db"), true)
+	if err != nil {
+		t.Fatalf("claim a path to discard: %v", err)
+	}
+	defer discarding.release()
+	if shared, err := lockStore(filepath.Join(dir, "discarding.db")); err == nil {
+		shared.release()
+		t.Error("an open shared the claim a discard holds while it deletes the file")
+	}
+
+	held, err := lockStore(filepath.Join(dir, "held.db"))
+	if err != nil {
+		t.Fatalf("claim a path to hold: %v", err)
+	}
+	defer held.release()
+	if alone, err := claimStore(filepath.Join(dir, "held.db"), true); err == nil {
+		alone.release()
+		t.Error("a discard claimed a path a handle in this process holds")
+	}
+}
