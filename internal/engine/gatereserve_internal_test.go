@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -21,6 +22,13 @@ import (
 // what is under test is what a log at its ceiling takes, not how it came to be
 // there; the reserve reads the ceiling from the broker on every admission, as
 // it would after any resize.
+//
+// A FEW PADDED BARRIERS AND A SMALL TOP-UP, because what a reserve admits is a
+// function of bytes alone ([statelog.OrdinaryCeiling], [statelog.GateReserve]):
+// filling with barriers of a few hundred bytes each was a thousand appends,
+// each one applied, for the same bytes four padded ones hold. Each padded
+// barrier leaves fillTopUp of the target, so the last bytes are still small
+// barriers and the log ends as close past minBytes as it always did.
 func fullForOrdinaryWrites(t *testing.T, identity []*runningLog, minBytes uint64,
 	ceiling func(held uint64) uint64) map[string]uint64 {
 
@@ -36,6 +44,10 @@ func fullForOrdinaryWrites(t *testing.T, identity []*runningLog, minBytes uint64
 			if stats.Bytes >= minBytes {
 				break
 			}
+			if left := minBytes - stats.Bytes; left > 2*fillTopUp {
+				paddedBarrierOn(t, running, int(min(left-fillTopUp, fillPad)))
+				continue
+			}
 			barrierOn(t, running)
 		}
 		waitApplied(t, running)
@@ -50,6 +62,55 @@ func fullForOrdinaryWrites(t *testing.T, identity []*runningLog, minBytes uint64
 		out[name] = limit
 	}
 	return out
+}
+
+const (
+	// fillPad is the most padding one barrier carries: 32 KiB, far under
+	// the broker's payload ceiling ([statelog.MaxAppendBytes]), so four of
+	// them fill the largest target a case here sets.
+	fillPad = 32 << 10
+
+	// fillTopUp is what the padded barriers leave of a fill for small ones:
+	// past a stored record's own overhead (subject, headers, envelope — a
+	// few hundred bytes), so padding never carries a log past its target.
+	fillTopUp = 2 << 10
+)
+
+// paddedBarrierOn is [barrierOn] carrying pad bytes in a field no build
+// reads: the domain's own barrier, from its own encoder, with one member
+// added to the record's JSON object — which every record decoder here
+// tolerates, as the envelope's evolution rule requires of them — so it
+// decodes, is applied and is dropped by no gate exactly as the small one is.
+func paddedBarrierOn(t *testing.T, running *runningLog, pad int) {
+	t.Helper()
+	encode := barrierEncoder(running.domain)
+	if encode == nil {
+		t.Fatalf("%s has no barrier encoding to put a record on its log with",
+			running.domain.Name())
+	}
+	body, err := encode(statelog.Envelope{
+		V: statelog.BarrierVersion, Kind: statelog.BarrierKind,
+		Subject: statelog.Subject{Kind: statelog.BarrierKind},
+		Gen:     running.runner.Committed().Generation,
+		Scope:   statelog.ScopeSet{Paths: []string{statelog.BarrierScope}},
+	})
+	if err != nil {
+		t.Fatalf("encode a barrier: %v", err)
+	}
+	var record map[string]json.RawMessage
+	if err := json.Unmarshal(body, &record); err != nil {
+		t.Fatalf("%s's barrier is not a JSON object to pad: %v", running.domain.Name(), err)
+	}
+	if record["fill_padding"], err = json.Marshal(strings.Repeat("x", pad)); err != nil {
+		t.Fatalf("encode the padding: %v", err)
+	}
+	if body, err = json.Marshal(record); err != nil {
+		t.Fatalf("re-encode the padded barrier: %v", err)
+	}
+	if _, _, err := running.log.Append(t.Context(),
+		running.spec.SubjectPrefix+"."+statelog.BarrierKind, "", nil, body); err != nil {
+		t.Fatalf("append a padded barrier: %v", err)
+	}
 }
 
 // ordinaryCeilingAt is the smallest ceiling whose ordinary writes are held to
