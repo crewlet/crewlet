@@ -137,8 +137,13 @@ a time too.
 variables set, and you can run exactly what one CI job ran:
 
 ```bash
-make test TEST_SHARD=2/2 TEST_WEIGHTS=test-weights.tsv TEST_REPORT=report
+make test TEST_SHARD=2/2 TEST_WEIGHTS=/tmp/test-weights.tsv TEST_REPORT=/tmp/report
 ```
+
+Both paths live outside the checkout, as they do in CI: the suite's own gates
+read the checkout as this repository's tree, the report is written before the
+first test starts, and neither path is ignored by git, so a file left there is
+one `git add -A` away from a commit.
 
 `TEST_WEIGHTS` is the seconds each package took on the last run on `main` —
 the CI run's `test-weights` artifact is the file its shards were cut by — and
