@@ -526,9 +526,10 @@ and so does the lookup that precedes it
 lookup is the first call to reach the metadata group, so a member stalled
 against a group that has not settled waits there, where nothing used to
 report it at all. The object store's bucket is looked up and created as one
-step, and writes one line over the two (`natsobj_bucket_slow`). A probe that went unanswered is named as such
-(`jetstream_stream_lookup_unanswered`, `jetstream_consumer_lookup_unanswered`,
-`coord_kv_bucket_lookup_unanswered`) rather than failing the boot.
+step, and writes one line over the two (`natsobj_bucket_slow`). A probe that
+went unanswered is named as such (`jetstream_stream_lookup_unanswered`,
+`jetstream_consumer_lookup_unanswered`, `coord_kv_bucket_lookup_unanswered`,
+`natsobj_bucket_lookup_unanswered`) rather than failing the boot.
 One line per object, deliberately: whether more lines follow is what tells a
 slow bring-up from a wedged one.
 

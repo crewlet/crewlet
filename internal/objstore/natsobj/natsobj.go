@@ -204,6 +204,17 @@ func open(ctx context.Context, js jetstream.JetStream, cfg Config, timing jsprov
 	case errors.Is(err, jetstream.ErrBucketNotFound), jsprovision.Unanswered(ctx, err):
 		// TOLD it is absent, or told nothing — and the create decides
 		// both: absent and it is made, present and it is read back.
+		if !errors.Is(err, jetstream.ErrBucketNotFound) {
+			// NAMED, as every other provisioning lookup nobody answered
+			// is: the boot carries on, and this is the one line that
+			// says the bucket's existence was decided by the create
+			// because the broker never said.
+			log.WarnContext(ctx, "natsobj_bucket_lookup_unanswered",
+				"bucket", Bucket, "error", err.Error(),
+				"detail", "the broker did not say whether this bucket exists, "+
+					"so the create below decides it: absent and it is made, "+
+					"present and it comes back as a peer's win and is read back")
+		}
 		if store, err = createBucket(ctx, js, timing, replicas); err != nil {
 			return nil, err
 		}
