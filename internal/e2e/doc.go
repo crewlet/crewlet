@@ -34,7 +34,10 @@
 //
 // A case asserting that something did NOT happen waits for the record that
 // says the thing was decided — a delivery's notification_skipped, or a later
-// delivery's, which the inbound edge handles in order — and never for a fixed
-// time: an absence read after a sleep holds only for as long as the sleep
-// happened to be long enough.
+// delivery's, which the inbound edge handles in order; for a Mattermost post,
+// each node's answer to a ping sent behind it, which a node's socket reads in
+// order — and never for a fixed time: an absence read after a sleep holds only
+// for as long as the sleep happened to be long enough. Each of those orders is
+// held by a case of its own, since a settle that stopped holding would let
+// every absence behind it pass without failing.
 package e2e
