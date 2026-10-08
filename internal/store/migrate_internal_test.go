@@ -29,6 +29,11 @@ import (
 // once the lock has answered is the second handle opened and the first let go,
 // and both must end with the sequence applied once.
 //
+// WHICH LOCK is part of the check: the claim's, because that is the lock two
+// handles on one file share. A process-wide lock would keep them apart too,
+// and fails here for holding the wrong lock rather than for letting them in —
+// the case below is the one that says what a process-wide lock costs.
+//
 // Mutation: drop the lock from [DB.migrate], or take one per handle rather
 // than the claim's, and the lock reads free while the first run is in it.
 func TestTwoHandlesOnOneFileMigrateItOnce(t *testing.T) {
@@ -49,9 +54,9 @@ func TestTwoHandlesOnOneFileMigrateItOnce(t *testing.T) {
 	}
 	if running := claim.migrations(); running.TryLock() {
 		running.Unlock()
-		t.Fatal("the first handle is part way through migrating the file and its " +
-			"migration lock is free: a second handle would read the same empty " +
-			"ledger and apply 0001 again")
+		t.Fatal("the first handle is part way through migrating the file and is not " +
+			"holding the file's claim lock ([fileLock.migrations]) — the lock a " +
+			"second handle on the file takes before it reads the ledger")
 	}
 
 	second := openAsync(ctx, path, Options{})
