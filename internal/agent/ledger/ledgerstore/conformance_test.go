@@ -11,16 +11,14 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 var base = time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
 
 func db(t *testing.T) *store.DB {
 	t.Helper()
-	d, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "l.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.OpenNode: %v", err)
-	}
+	d := storetest.OpenNode(t, filepath.Join(t.TempDir(), "l.db"), store.Options{})
 	t.Cleanup(func() { _ = d.Close() })
 	return d
 }
