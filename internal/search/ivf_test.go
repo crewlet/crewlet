@@ -60,6 +60,13 @@ import (
 // Twenty thousand sources, the smaller gate size, because training is the
 // cost: the hundred-and-twenty-thousand arm is BenchmarkIVFRecallAtScale, for
 // the reason the half-million recall arm is a benchmark.
+//
+// THE MEMBERS RUN IN TURN, NOT AS PARALLEL SUBTESTS: a parallel subtest of a
+// parallel test waits for a slot behind every top-level test released before
+// it, so the two trainings — about half a minute each under the race detector
+// — started when the rest of the package was finishing and were its last
+// half-minute. In turn they start when this test does, each training on its
+// own share of the cores ([search.TrainIVF]).
 func TestIVFRecallMeetsTheFloorCurve(t *testing.T) {
 	t.Parallel()
 	for _, member := range []struct {
@@ -72,7 +79,6 @@ func TestIVFRecallMeetsTheFloorCurve(t *testing.T) {
 		{"topical", topicalGateFixture, true},
 	} {
 		t.Run(member.name, func(t *testing.T) {
-			t.Parallel()
 			f := member.fixture()
 			c := gateCorpus(f)
 			lists := search.IVFLists(f.Len())
