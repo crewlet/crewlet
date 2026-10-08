@@ -240,7 +240,9 @@ func (c *countingHints) PreferredResources(ctx context.Context, class coord.Clas
 // sort a list of fewer than two elements — which has exactly one order — is
 // the whole of that cost for none of its benefit, and it lands hardest on a
 // node whose remaining candidates are all in acquire backoff, which is the
-// state the backoff exists to calm.
+// state the backoff exists to calm. The hint orders seats WITHIN a placement
+// group, so it is the groups' candidates that have to number two or more, not
+// the pass's.
 func TestTheSweepReadsNoHintsWhenThereIsNothingToOrder(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -279,6 +281,11 @@ func TestTheSweepReadsNoHintsWhenThereIsNothingToOrder(t *testing.T) {
 	full := append(group("ceo"), group("eng")...)
 	if got := h.claimOrder(f.ctx, full, []int{1, 0}); len(got) != 1 || got[0].handle != "ceo" {
 		t.Fatalf("claimOrder with one group full = %v, want only ceo", got)
+	}
+	// Two candidates in two groups of one: the groups' order is the plan's,
+	// and each group has one ordering, so the pass has one too.
+	if got := order(full); len(got) != 2 {
+		t.Fatalf("claimOrder over two groups of one = %v", got)
 	}
 	if counting.reads != 1 {
 		t.Errorf("a pass with nothing to order read the hints; reads = %d, want 1. "+

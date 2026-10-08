@@ -53,9 +53,17 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 	plan, liveNodes, peers := h.plan(ctx, seats)
 
 	byHandle := make(map[string]placement.Seat, len(seats))
+	placeable := make(map[string]struct{}, len(seats))
 	for _, s := range seats {
 		byHandle[s.Handle] = s
+		placeable[s.Handle] = struct{}{}
 	}
+	for _, handle := range plan.Unplaceable {
+		delete(placeable, handle)
+	}
+	h.mu.Lock()
+	h.placeable = placeable
+	h.mu.Unlock()
 	eligible := make(map[string]struct{}, len(plan.Eligible))
 	for _, handle := range plan.Eligible {
 		eligible[handle] = struct{}{}
@@ -143,27 +151,23 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 	// oldest member stays over-subscribed for as long as that takes.
 	withheld := !draining && (unfit || !h.admits(ctx))
 	if !draining && !withheld {
+		// ONE BOUND PER GROUP, and nothing else: room in one group is never
+		// room in another, or a node matching a pinned seat's group and the
+		// unpinned one fills up on unpinned seats and strands the pinned one.
+		// The undead seats are already in it — [placement.Plan.Room]
+		// charges them first and squeezes the least constrained groups —
+		// so there is no total beside it to disagree with (see the
+		// placement package doc).
 		h.mu.Lock()
-		// TWO BOUNDS, and a claim must fit both. Each group's room is its
-		// share less what this node holds of it: room in one group is
-		// never room in another, or a node matching a pinned seat's group
-		// and the unpinned one fills up on unpinned seats and strands the
-		// pinned one (see the placement package doc). The total bounds the
-		// whole holding, because undead seats count against capacity —
-		// this process may still be serving them, so taking on more work
-		// would over-subscribe a node already in trouble — including one
-		// whose role this node may no longer run and so sits in no group.
-		groupRoom := plan.Room(h.holdsLocked)
-		room := plan.Capacity - len(h.held) - len(h.undead)
+		groupRoom := h.roomLocked(plan)
 		h.mu.Unlock()
-		if room > h.claimLimit {
-			room = h.claimLimit
+		room := 0
+		for _, r := range groupRoom {
+			room += max(r, 0)
 		}
+		room = min(room, h.claimLimit)
 		switch {
 		case room <= 0:
-			// Every group being full is covered here too: the total is
-			// the groups' room less any holding outside them, so it is
-			// never above what they have left.
 		case h.fleetHoldsEverySeat(seats, plan, peers):
 			// NOTHING IS FREE, and the fleet's own counts say so: see
 			// [Host.fleetHoldsEverySeat]. Trying every seat to learn it
@@ -295,11 +299,14 @@ func (h *Host) pruneSeatLocks(seats map[string]placement.Seat) {
 // build that pooled the shares sheds the surplus here and claims its pinned
 // seat with the room that frees.
 //
-// THEN THE TOTAL, for the one holding no group accounts for: an undead seat
-// of a role this node may no longer run. It still counts against capacity —
-// this process may still be serving it — so once it outgrows the room the
-// groups leave unused, seats of the least constrained groups go first; a
-// pinned seat has the fewest other homes.
+// AND THE UNDEAD, through the same number. A seat whose teardown could not be
+// proven still counts against capacity — this process may still be serving
+// it — wherever it sits, a role this node may no longer run included, and
+// [placement.Plan.Room] charges it before handing the rest out most
+// constrained group first. So what an undead seat costs comes out of the
+// least constrained groups, and a pinned seat with no other home keeps its
+// room: a total kept beside the groups would read "full" there and shed
+// nothing, while the pinned seat waited.
 //
 // VOLUNTARY, so the seat is quiesced and its in-flight turn finishes before
 // the consumer detaches. A rebalance costs at most one turn boundary of
@@ -341,10 +348,11 @@ func (h *Host) shedToCapacity(ctx context.Context, plan placement.Plan) []string
 	return shed
 }
 
-// overCapacityLocked is every running seat this node holds beyond its
-// shares, in the order they are given back: each over-full group's surplus
-// (groups most constrained first), then whatever the total still exceeds
-// capacity by, least constrained groups first. The caller holds h.mu.
+// overCapacityLocked is every running seat this node holds beyond what
+// [placement.Plan.Room] lets it keep, in the order they are given back:
+// least constrained groups first, so when the release limit cuts a pass
+// short a pinned seat — the one with the fewest other homes — is the last
+// to go. The caller holds h.mu.
 //
 // Sorted within a group, and NOT ordered by the preferred hint the way
 // claiming is. The hint records the last node to claim a seat, which for
@@ -363,33 +371,24 @@ func (h *Host) overCapacityLocked(plan placement.Plan) []string {
 		slices.Sort(running[i])
 	}
 
+	room := h.roomLocked(plan)
 	var out []string
-	for i, room := range plan.Room(h.holdsLocked) {
-		// An undead seat of the group counts toward its share and cannot
-		// itself be given back again, so the surplus comes out of the
-		// running ones — as much of it as they cover.
-		take := min(max(-room, 0), len(running[i]))
-		out = append(out, running[i][:take]...)
-		running[i] = running[i][take:]
-	}
-
-	over := len(h.held) + len(h.undead) - len(out) - plan.Capacity
-	for i := len(running) - 1; i >= 0 && over > 0; i-- {
-		take := min(over, len(running[i]))
-		out = append(out, running[i][:take]...)
-		over -= take
+	for i := len(room) - 1; i >= 0; i-- {
+		// Room only ever reads negative by running seats of the group —
+		// the undead ones are what it charged first, not what it counts
+		// down — so the surplus is always theirs to give.
+		out = append(out, running[i][:max(-room[i], 0)]...)
 	}
 	return out
 }
 
-// holdsLocked reports whether this node holds handle's lease: a seat it runs,
-// or an undead one it is still renewing. The caller holds h.mu.
-func (h *Host) holdsLocked(handle string) bool {
-	if _, ok := h.held[handle]; ok {
-		return true
-	}
-	_, ok := h.undead[handle]
-	return ok
+// roomLocked is [placement.Plan.Room] over what this node holds: the seats it
+// runs, and the undead ones it cannot give back. The caller holds h.mu.
+func (h *Host) roomLocked(plan placement.Plan) []int {
+	return plan.Room(func(handle string) bool {
+		_, ok := h.held[handle]
+		return ok
+	}, slices.Collect(maps.Keys(h.undead)))
 }
 
 // claimUpTo takes at most room seats in all and at most groupRoom[i] of
@@ -572,6 +571,7 @@ func (h *Host) claimOrder(ctx context.Context, groups []placement.Group, groupRo
 	}
 	perGroup := make([][]string, len(groups))
 	total := 0
+	orderable := false
 	for i, g := range groups {
 		if groupRoom[i] <= 0 {
 			continue
@@ -590,11 +590,13 @@ func (h *Host) claimOrder(ctx context.Context, groups []placement.Group, groupRo
 		}
 		slices.Sort(perGroup[i])
 		total += len(perGroup[i])
+		orderable = orderable || len(perGroup[i]) >= 2
 	}
 	h.mu.Unlock()
 
-	// NOTHING TO ORDER, so nothing to read. Fewer than two candidates has
-	// exactly one ordering, and the hint read below is a walk of the epochs
+	// NOTHING TO ORDER, so nothing to read. The hint orders seats within a
+	// group, so a pass where no group has two candidates has exactly one
+	// ordering, and the hint read below is a walk of the epochs
 	// bucket — which has no TTL and is never pruned, so it holds a record
 	// for every resource the deployment has ever leased. Paying that on the
 	// five-second sweep to sort a list that cannot be sorted is waste in the
@@ -603,7 +605,7 @@ func (h *Host) claimOrder(ctx context.Context, groups []placement.Group, groupRo
 	// backoff. The second is the case the backoff exists to calm, so
 	// spending a full-bucket read there works directly against it.
 	var hinted map[string]struct{}
-	if total >= 2 {
+	if orderable {
 		got, err := h.backend.PreferredResources(ctx, coord.ClassSeat, h.nodeID)
 		if err == nil {
 			hinted = got
@@ -728,9 +730,20 @@ func (h *Host) plan(ctx context.Context, seats []placement.Seat) (placement.Plan
 // presence lapsed is not listed, so its seats read as free the moment it goes;
 // and a roster this pass could not read concludes nothing. It can read FULL
 // while a seat is free only for as long as some node's advertised count
-// outlives what it holds — a seat it lost and has not yet noticed, a seat
-// whose role it has not yet released — which that node's next renewal
-// corrects, and which a release corrects at once ([Host.finishRelease]).
+// outlives what it holds — a seat it lost and has not yet noticed — which
+// that node's next renewal corrects, and which a release corrects at once
+// ([Host.finishRelease]), or while two nodes' membership reads disagree about
+// which seats are placeable, which the next sweep's read settles.
+//
+// # Only leases on placeable seats count
+//
+// The sum is compared with the placeable seats, so it must count only leases
+// on them. A lease on any other seat — an undead one whose role is gone, or
+// whose placement now matches no live node — is held, and is not one of the
+// seats being counted to: added in, it stands in for a free seat. While its
+// teardown kept failing, every node read the fleet as full and the free seat
+// waited with nothing reported. So every node counts, and advertises, only
+// its leases on the seats its own plan calls placeable ([Host.placedCount]).
 //
 // OWN COUNT FROM MEMORY, never from this node's own row, which is a renewal
 // old.
@@ -740,7 +753,7 @@ func (h *Host) fleetHoldsEverySeat(seats []placement.Seat, plan placement.Plan,
 	if peers == nil {
 		return false
 	}
-	held := h.heldCount()
+	held := h.placedCount()
 	for _, p := range peers {
 		if p.ID == h.nodeID || !p.RunsSeats() {
 			continue
@@ -750,12 +763,21 @@ func (h *Host) fleetHoldsEverySeat(seats []placement.Seat, plan placement.Plan,
 	return held >= len(seats)-len(plan.Unplaceable)
 }
 
-// heldCount is how many seat leases this node holds: the seats it runs and
-// the undead ones it is still renewing.
-func (h *Host) heldCount() int {
+// placedCount is how many seat leases this node holds on seats some live node
+// may run ([Host.placeable]): the seats it runs and the undead ones it is
+// still renewing, less any lease on a seat outside that set.
+func (h *Host) placedCount() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return len(h.held) + len(h.undead)
+	n := 0
+	for handle := range h.placeable {
+		if _, ok := h.held[handle]; ok {
+			n++
+		} else if _, ok := h.undead[handle]; ok {
+			n++
+		}
+	}
+	return n
 }
 
 // checkFleetRoles says something when the fleet has nobody doing one of the
@@ -830,7 +852,7 @@ func (h *Host) presenceMeta(ctx context.Context) map[string]any {
 	// anything is free ([Host.fleetHoldsEverySeat]). Placement's own key,
 	// written unconditionally: it is the host's own fact, with no hook to
 	// overrun.
-	meta[placement.HeldKey] = h.heldCount()
+	meta[placement.HeldKey] = h.placedCount()
 	if h.status == nil {
 		return meta
 	}

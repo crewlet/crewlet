@@ -458,13 +458,29 @@ takes one of each. A node over its share of a group gives the surplus
 back even when its total is within capacity, and the groups with the
 fewest eligible nodes are claimed first.
 
+**A seat whose teardown failed still counts.** A node that could not
+prove a seat torn down keeps renewing its lease (see
+[Seat Ownership](../concepts/seat-ownership.md#establishing-a-seat-and-giving-it-back)),
+and that seat counts against its capacity wherever it sits. It is charged
+first, and what is left goes to the node's groups most constrained first,
+so the cost comes out of its unpinned seats — which go to a peer — before
+the pinned seat only it may run.
+
 **A seat no live node matches is not served.** The engine will not widen
 a selector to place a seat — widening it is exactly what the operator
 asked it not to do — so it logs `seats_unplaceable` with the handles and
-leaves them. It is the only seat the shares leave out: every group some
-live seat-running node matches is covered by those nodes' shares, and the
-warning is computed from the same shares the claims are bounded by. Expect this after a pinned node dies: the pin is a
-constraint, and a constraint has a cost.
+leaves them. Expect this after a pinned node dies: the pin is a
+constraint, and a constraint has a cost. The warning is computed from
+the same shares the claims are bounded by, so for nodes that are
+claiming it is the only seat the shares leave out: every group some live
+seat-running node matches is covered by those nodes' shares. Three
+states leave a share unclaimed for a while without it. A node that is not
+ready yet (catching up, `seat_claims_withheld`) still counts, because it
+keeps serving what it holds and takes its share once it is level. A node
+whose teardown keeps failing holds its share down by the stuck seats, and
+re-raises that alarm until the teardown succeeds or it is restarted. A
+node that cannot serve its seats at all gives them back and logs
+`seats_shed_unserviceable`, but still counts, so its share waits for it.
 
 **A seat that stops matching is handed back.** Narrow a selector under a
 node that holds the seat, or change that node's labels, and it releases

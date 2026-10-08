@@ -258,6 +258,11 @@ type Host struct {
 	running   bool
 	draining  bool
 
+	// placeable are the seats some live node may run, as of the last sweep:
+	// the company's seats less the unplaceable ones. The count this node
+	// advertises counts only its leases on these ([Host.placedCount]).
+	placeable map[string]struct{}
+
 	// lastBeat is when the heartbeat goroutine last proved it was turning.
 	// It is what the watchdog reads; see [Host.Beat].
 	lastBeat time.Time

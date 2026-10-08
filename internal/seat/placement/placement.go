@@ -38,12 +38,24 @@
 //
 // So a node holds at most its share OF EACH GROUP, and capacity is not
 // fungible across groups: [Plan.Room] is per group, and the host claims and
-// sheds against it. Every group is then covered on its own terms — its
-// eligible nodes' shares sum to at least its size, and nothing outside the
-// group can occupy them — which is also what lets [Plan.Unplaceable] be read
-// off the same arithmetic: a group is unplaceable exactly when its eligible
-// nodes' shares cannot reach its size, and the only way that happens is when
-// it has none.
+// sheds against it and against nothing else. Every group is then covered on
+// its own terms — its eligible nodes' shares sum to at least its size, and
+// nothing outside the group can occupy them — which is also what lets
+// [Plan.Unplaceable] be read off the same arithmetic: a group is unplaceable
+// exactly when its eligible nodes' shares cannot reach its size, and the only
+// way that happens is when it has none.
+//
+// # A total kept beside the groups strands the same seat
+//
+// A node also holds leases it cannot give back — a seat whose teardown it
+// could not prove — and those count against what it may hold, wherever they
+// sit. A second, pooled bound for them (capacity less everything held) is the
+// fungible capacity again by the back door: a satellite holding one unpinned
+// seat and one such lease is "full" while its pinned group has room, and
+// sheds nothing because no group is over. So there is no second bound. The
+// leases that cannot be given back are charged first, and what capacity is
+// left is handed to the groups most constrained first, each up to its share
+// — one number per group, which both the claim and the give-back read.
 package placement
 
 import (
@@ -304,11 +316,14 @@ type NodeProfile struct {
 	Roles  RoleSet
 	Labels map[string]string
 
-	// Held is how many seat leases the node says it holds — the seats it
-	// runs and the ones whose teardown it could not prove — as of its last
-	// presence renewal (see [HeldKey]). A count the row does not carry
-	// readably reads as zero, which errs toward trying: the sweep claims
-	// nothing on the counts, so a low sum costs a pass, never a seat.
+	// Held is how many seat leases the node says it holds on PLACEABLE
+	// seats — the seats it runs and the ones whose teardown it could not
+	// prove, less any lease on a seat its last plan found no live node may
+	// run — as of its last presence renewal (see [HeldKey]). The only
+	// reader compares the fleet's sum with the placeable seats, so a lease
+	// on any other seat would stand in for a free one. A count the row does
+	// not carry readably reads as zero, which errs toward trying: the sweep
+	// claims nothing on the counts, so a low sum costs a pass, never a seat.
 	Held int
 
 	// Broker is how this node's broker takes part in the fleet's. Read off
@@ -507,8 +522,8 @@ type Group struct {
 // Plan is what this node may claim, how much of it, and what nobody can.
 type Plan struct {
 	// Capacity is the sum of this node's per-group shares — how many seats
-	// it may hold in all. A total for logs and for the bound a node's whole
-	// holding is kept within; it is never room to spend on any one group.
+	// it may hold in all, leases it cannot give back included. Never room
+	// to spend on any one group: [Plan.Room] hands it out group by group.
 	// Zero for a node that does not run seats.
 	Capacity int
 
@@ -518,7 +533,9 @@ type Plan struct {
 	// nodes may serve has the fewest ways to be served, so when a pass can
 	// claim only so many seats (the per-sweep claim limit) its seats are
 	// the ones taken first. Coverage does not depend on this order —
-	// [Plan.Room] does that — only how soon it is reached.
+	// [Plan.Room] does that — only how soon it is reached. It is also the
+	// order [Plan.Room] hands out capacity in when a node holds leases it
+	// cannot give back, so those squeeze the least constrained groups.
 	Groups []Group
 
 	// Eligible are the seat handles this node is allowed to hold, in the
@@ -544,18 +561,47 @@ type Plan struct {
 }
 
 // Room is how many more seats this node may claim in each of [Plan.Groups],
-// index for index, given which seat leases it holds. NEGATIVE is a group it
-// holds more of than its share, by that many — what the host gives back.
+// index for index. NEGATIVE is how many of that group's running seats it
+// holds past what it may keep — exactly what the host gives back. It is the
+// ONE bound: claiming and giving back both read it, and there is no total
+// beside it (see the package doc for what a second, pooled bound strands).
 //
-// holds reports whether this node holds a seat's lease at all: one it runs,
-// and one whose teardown it could not prove and is still renewing, which
-// occupies the group's slot just the same — no peer can take it.
-func (p Plan) Room(holds func(handle string) bool) []int {
+// running reports a seat this node runs. stuck are the seat leases it holds
+// and cannot give back yet — a teardown it could not prove, still renewed so
+// no peer runs the seat twice — in a group or in none (a role it may no
+// longer run). They count against what it may hold because this process may
+// still be serving them, and they are charged FIRST, since they cannot be
+// put down. What is left of [Plan.Capacity] then goes to the groups in their
+// order, most constrained first, each up to its share less its own stuck
+// seats. So a stuck lease squeezes the least constrained group before the
+// pinned seat with no other home, and a group whose stuck seats alone reach
+// its share keeps none of its running ones.
+//
+// Once the node holds what Room allows, every group is within its share and
+// the whole holding within capacity, except where stuck leases alone exceed
+// them, which no give-back can mend.
+func (p Plan) Room(running func(handle string) bool, stuck []string) []int {
+	index := make(map[string]int)
+	for i, g := range p.Groups {
+		for _, h := range g.Handles {
+			index[h] = i
+		}
+	}
+	stuckIn := make([]int, len(p.Groups))
+	for _, h := range stuck {
+		if i, ok := index[h]; ok {
+			stuckIn[i]++
+		}
+	}
+
+	budget := max(p.Capacity-len(stuck), 0)
 	room := make([]int, len(p.Groups))
 	for i, g := range p.Groups {
-		room[i] = g.Share
+		keep := min(max(g.Share-stuckIn[i], 0), budget)
+		budget -= keep
+		room[i] = keep
 		for _, h := range g.Handles {
-			if holds(h) {
+			if running(h) {
 				room[i]--
 			}
 		}

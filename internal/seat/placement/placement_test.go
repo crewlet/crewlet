@@ -802,7 +802,7 @@ func TestGreedyClaimsBoundedPerGroupPlaceEveryPlaceableSeat(t *testing.T) {
 		}
 		for i, plan := range plans {
 			id := fleet[i].ID
-			for gi, room := range plan.Room(func(h string) bool { return held[h] == id }) {
+			for gi, room := range plan.Room(func(h string) bool { return held[h] == id }, nil) {
 				if room < 0 {
 					t.Fatalf("run %d: %s holds more than its share of %s", run, id, plan.Groups[gi].Placement)
 				}
@@ -819,7 +819,7 @@ func simulateClaims(rng *rand.Rand, fleet []NodeProfile, plans []Plan) map[strin
 		progress = false
 		for _, i := range rng.Perm(len(fleet)) {
 			id, plan := fleet[i].ID, plans[i]
-			room := plan.Room(func(h string) bool { return held[h] == id })
+			room := plan.Room(func(h string) bool { return held[h] == id }, nil)
 			for _, gi := range rng.Perm(len(plan.Groups)) {
 				handles := plan.Groups[gi].Handles
 				for _, hi := range rng.Perm(len(handles)) {
@@ -878,8 +878,10 @@ func randomCompany(rng *rand.Rand) ([]Seat, []NodeProfile) {
 	return seats, fleet
 }
 
-// Room is per group: what this node holds of one group never uses up another,
-// and a group held past its share reads negative by exactly the surplus.
+// Room is per group: what this node runs of one group never uses up another,
+// and a group held past what it may keep reads negative by exactly the
+// surplus. A lease it cannot give back is charged first, wherever it sits, and
+// squeezes the least constrained group — never the pinned one.
 func TestRoomIsCountedPerGroup(t *testing.T) {
 	t.Parallel()
 
@@ -900,20 +902,34 @@ func TestRoomIsCountedPerGroup(t *testing.T) {
 		return func(h string) bool { return slices.Contains(handles, h) }
 	}
 	tests := []struct {
-		name string
-		held []string
-		want []int // pinned group, unpinned group
+		name    string
+		running []string
+		stuck   []string
+		want    []int // pinned group, unpinned group
 	}{
-		{"nothing held", nil, []int{1, 1}},
+		{"nothing held", nil, nil, []int{1, 1}},
 		// The stranding: two unpinned seats fill the capacity of 2, and a
 		// pooled room would read zero everywhere. Per group, the pinned
 		// group still has its room and the unpinned one is over by one.
-		{"two unpinned seats", []string{"aaron", "bob"}, []int{1, -1}},
-		{"its own seats", []string{"zed", "carl"}, []int{0, 0}},
-		{"a seat outside every group", []string{"elsewhere"}, []int{1, 1}},
+		{"two unpinned seats", []string{"aaron", "bob"}, nil, []int{1, -1}},
+		{"its own seats", []string{"zed", "carl"}, nil, []int{0, 0}},
+		{"a running seat outside every group", []string{"elsewhere"}, nil, []int{1, 1}},
+		// A stuck lease outside every group takes one of the two: out of
+		// the unpinned group, so the pinned seat keeps its room.
+		{"a stuck seat outside every group", nil, []string{"elsewhere"}, []int{1, 0}},
+		// The same, with an unpinned seat running: total holding 2 of 2,
+		// and a pooled bound would read "full" and shed nothing while the
+		// pinned seat waits. Per group, the unpinned seat is the surplus.
+		{"a stuck seat outside every group and an unpinned one", []string{"aaron"}, []string{"elsewhere"},
+			[]int{1, -1}},
+		// A stuck seat of a group uses that group's own share first.
+		{"the pinned seat stuck", nil, []string{"zed"}, []int{0, 1}},
+		{"an unpinned seat stuck beside a running one", []string{"bob"}, []string{"aaron"}, []int{1, -1}},
+		// More stuck than capacity: nothing running may stay anywhere.
+		{"stuck past capacity", []string{"zed"}, []string{"aaron", "bob", "elsewhere"}, []int{-1, 0}},
 	}
 	for _, tc := range tests {
-		got := plan.Room(holding(tc.held...))
+		got := plan.Room(holding(tc.running...), tc.stuck)
 		if !slices.Equal(got, tc.want) {
 			t.Errorf("%s: room = %v, want %v", tc.name, got, tc.want)
 		}

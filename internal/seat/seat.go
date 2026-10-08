@@ -20,7 +20,10 @@
 //     and it bounds that group alone: a node holds at most its share OF EACH
 //     group it matches, claiming and shedding against each separately,
 //     because a total it could spend on any of them lets unpinned seats
-//     crowd out a pinned one. See [placement.Compute] and [placement.Plan.Room].
+//     crowd out a pinned one. Seats it cannot give back are charged first,
+//     against the least constrained groups, through the same per-group
+//     numbers — never a second, pooled bound. See [placement.Compute] and
+//     [placement.Plan.Room].
 //   - Converge in BOTH directions. Claiming alone only converges for a fleet
 //     that SHRINKS: a node that booted alone holds every seat, and a peer
 //     joining later computes a share it can never reach because the seats it
@@ -468,12 +471,11 @@ type SweepResult struct {
 	Lost []string
 	// Unplaceable are the seats whose placement matches no live
 	// seat-running node, read off the same per-group shares the claims are
-	// bounded by, so it cannot disagree with how much of each group the
-	// fleet's claims may take. Nothing this node can act on — a
-	// pin to a node that is down, a label nobody carries — but it is the
-	// one placement failure that is otherwise invisible: the seat is
-	// simply not served, and every node in the fleet reports a perfectly
-	// healthy sweep.
+	// bounded by. Nothing this node can act on — a pin to a node that is
+	// down, a label nobody carries — but it is the one
+	// placement failure that is otherwise invisible: the seat is simply
+	// not served, and every node in the fleet reports a perfectly healthy
+	// sweep.
 	Unplaceable []string
 	// BlockedByProtocol is the fleet's protocol floor when an
 	// older-protocol peer holds a presence or seat lease and this node is

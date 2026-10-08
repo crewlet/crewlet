@@ -726,13 +726,14 @@ nodes that actually run seats, and computed **per placement group** rather than
 once fleet-wide, because one global ratio strands the seats that are pinned
 somewhere. Each group's share bounds that group alone — a node may not spend
 room it has in one group on another's seats, or unpinned seats crowd out the
-pinned one only it can run. Every node computes the same numbers from the same
-table and stops there; two nodes racing for the last seat is settled by the
-lease, not by the arithmetic. It converges in **both** directions, because claiming alone
-only converges for a fleet that shrinks. A `preferred` hint *orders* the attempt
-and never gates it, so a rolling deploy tends to land seats back where their MCP
-children are already warm — and a seat whose preferred node is gone is still
-taken by somebody.
+pinned one only it can run — and a seat whose teardown failed is charged
+against the least constrained groups first. Every node computes the same
+numbers from the same table and stops there; two nodes racing for the last seat
+is settled by the lease, not by the arithmetic. It converges in **both**
+directions, because claiming alone only converges for a fleet that shrinks. A
+`preferred` hint *orders* the attempt and never gates it, so a rolling deploy
+tends to land seats back where their MCP children are already warm — and a seat
+whose preferred node is gone is still taken by somebody.
 
 **Acquire, equip, then attach — and release in reverse.** A seat is not
 serving until its instance is spawned, its budget loaded, its MCP children are
