@@ -274,7 +274,8 @@ func countFiled(ctx context.Context, tx *sql.Tx, list int, source Source, delta 
 		return fmt.Errorf("search: count %d row(s) out of list %d: %w", -delta, list, err)
 	}
 	if n, err := res.RowsAffected(); err != nil {
-		return err
+		return fmt.Errorf("search: read what counting %d row(s) out of list %d "+
+			"changed: %w", -delta, list, err)
 	} else if n != 1 {
 		return fmt.Errorf("search: list %d holds fewer than %d filed %s row(s) — "+
 			"kb_ivf_lists disagrees with kb_vectors_bin, which only the vector "+
@@ -541,7 +542,8 @@ func (a Applier) reassign(ctx context.Context, tx *sql.Tx, batch ReassignRecord)
 		var bits []byte
 		if err := rows.Scan(&row, &bits); err != nil {
 			_ = rows.Close()
-			return 0, err
+			return 0, fmt.Errorf("search: read a row reassign batch %d re-files: %w",
+				batch.Batch, err)
 		}
 		code, err := codeFromBits(bits, head.Dim)
 		if err != nil {
@@ -552,7 +554,8 @@ func (a Applier) reassign(ctx context.Context, tx *sql.Tx, batch ReassignRecord)
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
-		return 0, err
+		return 0, fmt.Errorf("search: read the rows reassign batch %d re-files: %w",
+			batch.Batch, err)
 	}
 	_ = rows.Close()
 	if len(moves) == 0 {
@@ -608,7 +611,8 @@ func refile(ctx context.Context, tx *sql.Tx, generation int64, batch int, moves 
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return err
+		return fmt.Errorf("search: count the rows re-filing batch %d moved: %w",
+			batch, err)
 	}
 	if n != int64(len(moves)) {
 		// EVERY ROW WAS READ IN THIS TRANSACTION, so a pair that moved
