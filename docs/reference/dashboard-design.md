@@ -293,7 +293,8 @@ share does not move.
 reader can go — nine **workspaces** — and the few objects they keep coming back
 to: the company's projects, the views they pinned, the pages they starred. A
 workspace's own **sections** are paths drawn as tabs in its page header
-(Settings draws its eight, and a cross-link to Budgets, as a grouped column),
+(Settings draws its eight, and cross-links to the reader's Account and to
+Budgets, as a grouped column),
 and its objects — a unit, a
 container, a node — are rows on the section that lists them.
 
@@ -726,11 +727,17 @@ the alarm line. Everything comes off the one health push; nothing polls.
 
 **The user block** is who this browser is — a principal the identity
 directory binds to a seat, which every person is (bound: their name, login and
-seat, linking to it), somebody resolved with no seat (unbound: the login, and
+seat), somebody resolved with no seat (unbound: the login, and
 *Not bound to a seat* — ordinary for an API token's session or a service
 account acting as itself; a person recorded before every person held a seat is
 the fault [People & access](#settings-the-frame-people-secrets-nodes-and-configuration)
-reports), or nobody (a **Sign in** button) — beside the theme
+reports), or nobody (a **Sign in** button) — and the name of anybody resolved
+**opens their own [Account](#account-the-readers-own-page)**, where the
+password, the second factor and the sessions are. It linked to the seat, which
+is the company's page about a place in the chart and has none of them: a
+person clicking their own name to find their account met a profile with no
+security on it, and concluded the dashboard had no two-step verification. The
+seat is one click on, from Account's Profile. Beside it are the theme
 flip and the **preferences**: theme (light, dark, match the system), density,
 the zone timestamps are drawn in (`Intl.supportedValuesOf` plus UTC, which the
 runtime's canonical list omits, or the browser's own) and how a date is
@@ -812,7 +819,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/settings/config` · `#/settings/config/revisions` · `#/settings/config/revisions/{id}` | **Configuration** *(needs `config:read`)* — `revisions` lands on the History lens; one revision's page draws no lenses | `lens=active\|entities\|audit\|diff` |
 | `#/settings/backups` · `#/settings/backups/{domain}` | **Backups & retention** — take a backup, what the fleet has backed up and the backup history, each state-log domain and what holds its trim; one domain *(needs `fleet:operate`)*. Domains live only under `backups/` | |
 | `#/settings/audit` | **Audit log** — every write a person or a token made, every call they made at runtime, and every configuration revision labelled with the kind of writer it recorded (`agent`, `human`, `operator` or `system`) *(needs `audit:read`)*. No detail route | `window=` · `actor=` · `kind=work\|knowledge\|config\|credentials\|runtime` |
-| `#/account` | **Account** — the signed-in reader's own page, opened from the user block's menu at the sidebar's foot (it has no sidebar row) or `g u`: the profile the directory holds (an administrator changes it), the password (changed with the current one, which ends every other session and personal token and keeps this browser), the second factor and recovery codes, where they are signed in (this browser marked, any other signed out by name, or everywhere), and their personal access tokens (minted — the value shown once — and revoked). A credential that is not a person's, a Tier A token's session, is told what it is and offered none of it | |
+| `#/account` | **Account** — the signed-in reader's own page, opened from the reader's own name in the user block at the sidebar's foot, from its menu, from Settings' **You** group (it has no sidebar row) or `g u`: the profile the directory holds (an administrator changes it), the password (changed with the current one, which ends every other session and personal token and keeps this browser), the second factor and recovery codes, where they are signed in (this browser marked, any other signed out by name, or everywhere), and their personal access tokens (minted — the value shown once — and revoked). A credential that is not a person's, a Tier A token's session, is told what it is and offered none of it | |
 | `#/login` | **Sign in** *(outside the frame)* — a login or address and a password, the second factor when the engine asks for it, or an API token exchanged for a one-hour session | `next=` — where to go once signed in: a hash route of this dashboard, and anything else lands on Home; `login=` fills the login, and `after=reset` says the password was just set — what a reset link's own **Sign in** sends. Neither is a credential |
 | `#/invite/{id}.{secret}` | **Invitation** *(outside the frame)* — who it is for, who sent it (a person, never a machine: an invitation a Tier A token or a service account issued names no sender) and the seat it binds — or, where the chart no longer holds that seat, that redeeming it will be refused — then a login, a name and a password, typed twice. The link the engine mints lands here | |
 | `#/reset/{id}.{secret}` | **Password link** *(outside the frame)* — whose password the link sets, then the password, typed twice, once: a RESET, which ends every session the person held, or the FIRST password of a person an administrator created on a seat, which ends nothing. Neither signs anybody in, so it ends on the sign-in form. The reset link an administrator issues, and the first password link a person's create hands back, land here | |
@@ -1500,7 +1507,7 @@ copy of it is how the two drift. What `dashboard/src/app/` owns:
 | Piece | What it is |
 |---|---|
 | `sidebar/` | the one sidebar — [The sidebar](#the-sidebar) — with the health card and the user block |
-| `sidebar/UserBlock` | who is signed in, at the sidebar's foot: bound (their name, login and seat, linking to the seat's page), unbound (their own name, as `GET /auth/session` answers it from their directory row, beside the login, and *Not bound to a seat* — ordinary for a token's session or a service account, and for a person the residue People & access reports, since every person holds a human seat; the login alone where the row holds no name) or nobody (a **Sign in** button back to the screen they are on), with the grants beside it. Its popover holds a link to the reader's [Account](#account-the-readers-own-page) (`place: "menu"` in `app/nav.ts`) — where the password, the second factor and recovery codes, the sessions and the personal access tokens are — and both sign-outs, which need only `GET /auth/session` to answer — the frame's one read of it (`lib/frameSession.ts`), never one of the block's own: while the socket's `viewer` question has not (it never does for a person the socket refuses, or never dials for), a session is offered the two sign-outs under its own login. See [Signing in](#signing-in-is-a-screen-outside-the-frame) |
+| `sidebar/UserBlock` | who is signed in, at the sidebar's foot: bound (their name, login and seat), unbound (their own name, as `GET /auth/session` answers it from their directory row, beside the login, and *Not bound to a seat* — ordinary for a token's session or a service account, and for a person the residue People & access reports, since every person holds a human seat; the login alone where the row holds no name) or nobody (a **Sign in** button back to the screen they are on), with the grants beside it. The name of anybody resolved is a link to the reader's own [Account](#account-the-readers-own-page) — never the seat, which holds none of what a person looks for there. Its popover holds the same link (`place: "menu"` in `app/nav.ts`) — where the password, the second factor and recovery codes, the sessions and the personal access tokens are — and both sign-outs, which need only `GET /auth/session` to answer — the frame's one read of it (`lib/frameSession.ts`), never one of the block's own: while the socket's `viewer` question has not (it never does for a person the socket refuses, or never dials for), a session is offered the two sign-outs under its own login. See [Signing in](#signing-in-is-a-screen-outside-the-frame) |
 | `header/PageHeader` + `Breadcrumb` | the page header: the kit's top bar with the trail (whose last crumb is the page's `h1`), who is working now (Home's bar only, `useWorkingNow`), the star and Copy link, and last the screen's own controls (portalled in by `PageActions`); then the workspace's SECTION TABS, as links in a labelled `nav` with `aria-current` on the section the reader is on, drawn only on a section's own page; then the `StateBar`. Settings draws its sections as a grouped COLUMN beside the screen instead (`SectionColumn`, the kit's `SidebarNav`), with a lock naming the grant on a section the reader holds none of the grants for (drawn only once the viewer has answered) and an arrow on a cross-link, and Knowledge draws a TREE there — its search, the search's mode and every space's pages (`KnowledgeTree`, out of the Knowledge chunk) |
 | `routes.ts` + `crumbs.ts` | the route table as a pure resolver, and the trail derived from it |
 | `layout.ts` | the frame's breakpoints, READ from the kit's tokens (`breakpoint.shell`, `breakpoint.phone`), and the one width the dashboard derives itself — where the peek becomes a column |
@@ -2770,7 +2777,11 @@ day — the holder line says "Held by you, as `jane.doe`", the work card "Nothin
 open is assigned to you", the Work tab "What you mean to do first" and "Waiting
 on your answer" — and **Message** is held, saying it is your own seat, because
 a message files an ask of the seat that only you could answer. **Assign task**
-stays: taking a task yourself is a hand-off like any other.
+stays: taking a task yourself is a hand-off like any other. And the side column
+leads with **Your account** — the seat is not the account, and a person who
+opened their own page to find their password or second factor found neither —
+linking to [Account](#account-the-readers-own-page); a colleague's seat draws
+no such card.
 
 **Turns** is the seat's own turns (`turns{seat}`, an `audit:read` question like
 every turn read — a reader without it is shown the engine's refusal naming
@@ -5757,10 +5768,16 @@ when it resets.
 
 ## Account: the reader's own page
 
-`#/account` is the signed-in reader's own page, opened from the user block's
-menu at the sidebar's foot, from the palette or with `g u`. It has **no
-sidebar row**: the user block already is the reader, and a row beside it would
-be the same person twice. **Every read and write on it names the caller and
+`#/account` is the signed-in reader's own page, opened from **their own name**
+in the user block at the sidebar's foot, from that block's menu, from
+Settings' **You** group, from the **Your account** card on their own seat's
+page, from the palette or with `g u`. It has **no sidebar row**: the user
+block already is the reader, and a row beside it would be the same person
+twice. **Every way a person looks for their own security leads here**, because
+the page was reached only through a text link inside the preferences popover:
+the name opened the seat, the seat said nothing of a password, and Settings
+was all locks to a reader holding no company grant — so a company's people
+reported that the dashboard had no two-step verification at all. **Every read and write on it names the caller and
 nobody else** — `GET /auth/session` for who this browser is, the self arm of
 `/iam/people/{id}` and its sessions, `GET /iam/credentials` and a token's mint
 and revocation with no `?person=` — so the page holds no id it could be talked
@@ -5821,9 +5838,14 @@ the engine would refuse.
 ## Settings: the frame, people, secrets, nodes and configuration
 
 Settings is the one workspace that draws its sections as a **column** beside
-the screen rather than as tabs in the page bar, in three groups: **Company**
-(General, People & access, and Budgets as a cross-link — it lives once, under Spend, and its
-arrow says pressing it leaves Settings), **Connect** (Integrations, Tools &
+the screen rather than as tabs in the page bar, in four groups: **You** (the
+reader's own Account, as a cross-link — it is a workspace of its own — and
+first, because Settings is where a person looks for their password and second
+factor and a reader holding no company grant otherwise found only locks here),
+**Company** (General, People & access, and Budgets as a cross-link — it lives
+once, under Spend, and its arrow says pressing it leaves Settings; a
+cross-link's spoken label says where it leads by name, "under Spend" or, for
+Account, "outside Settings"), **Connect** (Integrations, Tools &
 MCP, Models & keys, Secrets) and **Engine** (Nodes, Configuration, Backups & retention, Audit
 log). A guarded section draws a lock naming its grant and **is never
 hidden**: a section that vanished for a reader without its grant is one they

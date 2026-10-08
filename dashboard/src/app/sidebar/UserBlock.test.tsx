@@ -211,17 +211,41 @@ describe("who the block says this is", () => {
     ).toEqual({ name: "Erin Ng", detail: "erin.ng", grants: "Holds work:write" });
   });
 
-  test("only a person is a link, and it goes to their seat", () => {
+  // THE NAME IS THE WAY TO THE READER'S OWN ACCOUNT, where their password
+  // and second factor are. It went to the SEAT, which has neither, and a
+  // company's people clicking their own name concluded the dashboard had no
+  // two-step verification at all.
+  test("the reader's name opens their own Account, never their seat", () => {
     render(block(ada, "Founder"));
     const link = screen.getByRole("link", { name: /Ada Lovelace/ });
-    expect(link.getAttribute("href")).toBe("#/agents/seats/ada");
+    expect(link.getAttribute("href")).toBe("#/account");
     // THE GRANTS RIDE BESIDE THE NAME, where a reader asking "why can I not
     // open this" finds them.
     expect(link.getAttribute("title")).toBe("Holds state:read, work:write");
     cleanup();
+    // UNBOUND HAS AN ACCOUNT TOO — a token's session is told there what it
+    // is — so it is a link to the same page.
+    render(block({ ...nobody, login: "token:ops", unbound: true, grants: ["state:read"] }));
+    expect(screen.getByRole("link", { name: /token:ops/ }).getAttribute("href")).toBe("#/account");
+    cleanup();
+    // NOBODY has no account to open: the popover offers the sign-in.
     render(block({ ...nobody, anonymous: true }));
     expect(screen.queryByRole("link")).toBeNull();
     expect(screen.getByText("Not signed in")).toBeTruthy();
+  });
+
+  // A SESSION THE VIEWER HAS NOT ANSWERED FOR is somebody: it is named, and
+  // its name opens its Account as a settled viewer's does — while nothing at
+  // all has answered is not a link.
+  test("a session standing in for the viewer opens its Account", async () => {
+    render(block({ ...nobody, loading: true }));
+    const link = await screen.findByRole("link", { name: /ada\.lovelace/ });
+    expect(link.getAttribute("href")).toBe("#/account");
+    cleanup();
+    engine({ "GET /auth/session": "offline" });
+    render(block({ ...nobody, loading: true }));
+    expect(screen.getByText("Checking who you are")).toBeTruthy();
+    expect(screen.queryByRole("link")).toBeNull();
   });
 
   // THE ONE BADGE THAT IS THE READER carries the accent's ring — and a badge

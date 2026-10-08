@@ -1104,8 +1104,38 @@ function HumanOverview({ seat, index, work, nameOf, now }: OverviewProps) {
         <Reports seat={seat} index={index} />
       </div>
       <aside className="prof-side" aria-label={`About ${seat.name}`}>
+        {self && <YourAccount />}
         <About seat={seat} />
       </aside>
     </div>
+  );
+}
+
+/**
+ * The way from the reader's own seat to their own Account.
+ *
+ * THE SEAT IS NOT THE ACCOUNT, and from here it looked like one: a person
+ * opening their own page met their name, "Person" and a Settings tab, with no
+ * password, no second factor and no sessions on it — and concluded the
+ * dashboard had no two-step verification to set up. The seat is the company's
+ * page about a place in the chart; how the person in it signs in is theirs,
+ * and lives at `#/account`. Drawn only on the reader's OWN seat, because
+ * nobody manages another person's second factor from here.
+ */
+function YourAccount() {
+  return (
+    <Card padding="none" className="prof-card">
+      <Card.Header divided={false}>
+        <Card.Title as="h3">Your account</Card.Title>
+      </Card.Header>
+      <p className="prof-note">
+        This seat is yours. Your password, two-step verification, where you are signed in and your
+        personal access tokens are on your{" "}
+        <a className="t-link prose-link" href={href(["account"])}>
+          Account
+        </a>{" "}
+        page.
+      </p>
+    </Card>
   );
 }

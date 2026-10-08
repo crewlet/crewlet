@@ -1679,7 +1679,9 @@ has the whole of it.
 
 ### Your own account is `#/account`
 
-The user block's menu opens the signed-in person's **Account** page, where
+The signed-in person's own name at the foot of the sidebar opens their
+**Account** page — so do the user block's menu, Settings' **You** group and the
+**Your account** card on their own seat's page — where
 everything this page says a person does about *themselves* is a control, each
 asking about the caller and nobody else:
 

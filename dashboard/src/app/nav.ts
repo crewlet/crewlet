@@ -12,8 +12,9 @@
  *
  * The approved design keeps the trees and moves them: a workspace's own
  * SECTIONS are paths drawn as tabs in the page header (Settings draws them as
- * a column, because it has eight of its own and a cross-link to Budgets, in
- * three groups — a tab strip of nine is a row nobody reads to the end of), and its
+ * a column, because it has eight of its own and cross-links to the reader's
+ * Account and to Budgets, in four groups — a tab strip of ten is a row nobody
+ * reads to the end of), and its
  * OBJECTS — a unit, a container, a node — are rows on the section that lists
  * them. What is left for the sidebar is the part every workspace shares: where
  * you can go, and the few objects this reader keeps coming back to.
@@ -76,7 +77,7 @@ export type SectionRenderer = "tabs" | "column" | "tree" | "none";
 /**
  * Where a workspace's row sits in the sidebar — or `menu`, for the one with no
  * row: the reader's own Account, which the user block at the sidebar's foot
- * links from its menu, since that block already IS the reader.
+ * links from its name and its menu, since that block already IS the reader.
  */
 export type SidebarPlace = "you" | "workspace" | "foot" | "menu";
 
@@ -490,6 +491,21 @@ export const WORKSPACES: WorkspaceRow[] = [
     renderer: "column",
     sections: [
       {
+        // THE READER'S OWN, FIRST — the order argument above — and a
+        // CROSS-LINK, because Account has one address and it is not under
+        // Settings. Settings is where a person looks for their password and
+        // their second factor, and a reader holding none of the company's
+        // grants found only locks here and concluded there was no two-step
+        // verification to set up.
+        key: "account",
+        label: "Account",
+        icon: "user",
+        path: ["account"],
+        hint: "Your password, two-step verification, sessions and personal access tokens",
+        group: "You",
+        elsewhere: true,
+      },
+      {
         key: "general",
         label: "General",
         icon: "house",
@@ -594,10 +610,12 @@ export const WORKSPACES: WorkspaceRow[] = [
   },
   {
     // THE READER'S OWN, AND NO ROW: the user block at the sidebar's foot is
-    // the reader, and its menu is where this is opened — a row beside it would
-    // be the same person twice. A workspace all the same, so the palette and
-    // `g u` reach it. No grant: every signed-in reader has an account, and
-    // the page says what a credential that is not a person's can do there.
+    // the reader, and its name and its menu are where this is opened — a row
+    // beside it would be the same person twice. Settings lists it too, as a
+    // cross-link, since that is where a person looks for their own security.
+    // A workspace all the same, so the palette and `g u` reach it. No grant:
+    // every signed-in reader has an account, and the page says what a
+    // credential that is not a person's can do there.
     key: "account",
     label: "Account",
     icon: "user",

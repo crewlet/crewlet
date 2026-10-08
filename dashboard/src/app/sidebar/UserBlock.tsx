@@ -6,8 +6,8 @@
  *
  * The answer is the PRINCIPAL the engine resolved for this browser and the
  * seat the identity directory binds it to (`lib/viewer.ts`). BOUND: a person
- * the directory binds to a seat — their name, their login and their seat, and
- * the block links to the seat's page. UNBOUND: somebody resolved with no seat,
+ * the directory binds to a seat — their name, their login and their seat.
+ * UNBOUND: somebody resolved with no seat,
  * which is ORDINARY (an operator outside the chart, a pipeline), so the block
  * names the login and says it is not bound rather than reporting a fault.
  * NOBODY: the block says so and offers the sign-in. Each is a sentence, never
@@ -16,12 +16,25 @@
  * since they are what decides which of those writes and screens the reader
  * reaches.
  *
+ * # The name IS the way to the reader's own Account
+ *
+ * Somebody resolved — bound or not — is a link to `#/account`, the one
+ * workspace with no sidebar row (`place: "menu"` in `nav.ts`), because this
+ * block already IS the reader: their password, second factor, recovery codes,
+ * sessions and personal tokens are there. It linked to the SEAT, and the seat
+ * is the company's page about a place in the chart — a person clicking their
+ * own name to find their account landed on a profile with no password and no
+ * second factor on it, and the only way to either was a text link inside the
+ * preferences popover, so a company's people reported that the dashboard had
+ * no two-step verification at all. The seat is one click on from there,
+ * Account's Profile naming it. Nobody is not a link: there is no account to
+ * open, and the popover offers the sign-in.
+ *
  * # The popover holds the session's own gestures
  *
- * The way to the reader's own Account — the one workspace with no sidebar row
- * (`place: "menu"` in `nav.ts`), because this block already IS the reader —
- * where their password, second factor, recovery codes, sessions and personal
- * tokens are. And signing out, here or everywhere: the two ways a session ends
+ * The Account link again, beside the session's own gestures, because a
+ * popover is where a reader looks for "my account" too. And signing out, here
+ * or everywhere: the two ways a session ends
  * by its owner's hand, both of which end in a reload at the sign-in
  * (`lib/session.ts`), kept here because the Account page is a screen and this
  * menu is reached even by a person the socket refuses.
@@ -74,7 +87,7 @@ import { useClient } from "~/lib/store-hooks.ts";
 import { SignOutEverywhereDialog } from "~/components/SignOutEverywhere.tsx";
 import type { ViewerState } from "~/lib/viewer.ts";
 import type { SessionAnswer } from "~/protocol/index.ts";
-import { WORKSPACES } from "../nav.ts";
+import { WORKSPACES, workspaceRow } from "../nav.ts";
 import { preload } from "../lazyScreen.ts";
 
 /** The grants a principal carries, as one line. */
@@ -142,7 +155,6 @@ export function UserBlock({
   const session = useFrameSession().answer;
   const who = whoLine(viewer, seatName, session);
   const answered = !viewer.loading && !viewer.anonymous;
-  const person = answered && !viewer.unbound;
   // WHO THIS IS IS SETTLED by the viewer, or by the session while the viewer
   // has not answered (see [whoLine]).
   const resolved = answered || (!viewer.anonymous && session !== null);
@@ -171,12 +183,10 @@ export function UserBlock({
 
   return (
     <div className="user-block">
-      {person ? (
-        <a
-          className="user-block-who"
-          href={href(["agents", "seats", viewer.handle])}
-          title={who.grants}
-        >
+      {resolved ? (
+        // THE READER'S OWN ACCOUNT, for anybody resolved — see the file's
+        // doc: it was the seat's page, and nobody found their second factor.
+        <a className="user-block-who" href={href(ACCOUNT.path)} title={who.grants}>
           {identity}
         </a>
       ) : (
@@ -251,6 +261,9 @@ export function accountOf(viewer: ViewerState, session: SessionAnswer | null): A
 
 /** The menu's own rows: the workspaces no sidebar row draws (`place: "menu"`). */
 const MENU_ROWS = WORKSPACES.filter((ws) => ws.place === "menu");
+
+/** The reader's own Account, which the block's name opens. */
+const ACCOUNT = workspaceRow("account")!;
 
 /** The session's own gestures. Exported for its suite. */
 export function AccountActions({

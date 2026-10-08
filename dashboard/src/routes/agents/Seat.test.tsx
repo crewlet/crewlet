@@ -1232,6 +1232,33 @@ test("your own day's Unread is the sidebar badge's count, and the day is yours",
   expect(screen.queryByText(/Read-only here/)).toBeNull();
 });
 
+// YOUR OWN SEAT POINTS AT YOUR OWN ACCOUNT, where the password and the second
+// factor are: a person opening their own page looked for them here and found a
+// profile with neither. A colleague's seat says nothing of the kind.
+test("your own seat points to your Account, and a colleague's does not", async () => {
+  mount("#/agents/seats/jane", {
+    answers: {
+      viewer: { login: "jane.doe", handle: "jane", owner: "jane", name: "Jane", acts: [] },
+    },
+  });
+  await settle();
+  const card = screen.getByRole("heading", { name: "Your account" }).closest(".prof-card");
+  expect(card).not.toBeNull();
+  expect(within(card as HTMLElement).getByText(/two-step verification/)).toBeTruthy();
+  expect(
+    within(card as HTMLElement)
+      .getByRole("link", { name: "Account" })
+      .getAttribute("href"),
+  ).toBe("#/account");
+  cleanup();
+  mount("#/agents/seats/jane", {
+    answers: { viewer: { login: "t-cto", grants: [], handle: "cto", owner: "cto", acts: [] } },
+  });
+  await settle();
+  expect(screen.getByText("Their day")).toBeTruthy();
+  expect(screen.queryByRole("heading", { name: "Your account" })).toBeNull();
+});
+
 test("an operator reading a colleague's day asks that colleague's inbox", async () => {
   mount("#/agents/seats/jane", {
     answers: {

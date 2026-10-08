@@ -17,8 +17,9 @@
  * fourth kind of list.
  *
  * Settings draws its sections as a COLUMN instead (`SectionColumn`), because
- * it has eight of its own and a cross-link to Budgets, in three groups, and a
- * tab strip of nine is a row nobody reads to the end of.
+ * it has eight of its own and cross-links to the reader's Account and to
+ * Budgets, in four groups, and a tab strip of ten is a row nobody reads to the
+ * end of.
  *
  * # A section is a path
  *
@@ -68,7 +69,14 @@ import {
 import { href, samePath, useNavigator, useRoute } from "../router.tsx";
 import type { Crumb } from "../crumbs.ts";
 import { resolves } from "../routes.ts";
-import { grantWords, grantsOpen, sectionOf, type Section, type WorkspaceRow } from "../nav.ts";
+import {
+  grantWords,
+  grantsOpen,
+  sectionOf,
+  WORKSPACES,
+  type Section,
+  type WorkspaceRow,
+} from "../nav.ts";
 import type { SectionFigure } from "../sidebar/settingsFigures.tsx";
 import { PAGE_ACTIONS_SLOT, PAGE_LENSES_SLOT } from "../frame/PageActions.tsx";
 import { glyphFor } from "~/ui/glyph.tsx";
@@ -408,6 +416,19 @@ function useTabFit(
 }
 
 /**
+ * What a screen reader is told a CROSS-LINK leads to, after its label: the
+ * workspace it lives under by NAME — it read the raw path segment, so Budgets
+ * said "under spend" — or, for a cross-link to a workspace's own landing (the
+ * reader's Account, which is a workspace of its own), that it is outside this
+ * one, since "Account, under Account" says nothing.
+ */
+export function elsewhereWords(row: WorkspaceRow, s: Section): string {
+  if (s.path.length <= 1) return `, outside ${row.label}`;
+  const home = WORKSPACES.find((w) => w.key === s.path[0]);
+  return `, under ${home?.label ?? s.path[0]}`;
+}
+
+/**
  * Settings' sections, as a column of groups beside the screen.
  *
  * A SECTION THE READER HOLDS NONE OF THE GRANTS FOR DRAWS ITS LOCK AND STAYS,
@@ -416,8 +437,8 @@ function useTabFit(
  * the grant, because that is what the reader would ask somebody for — and it
  * is drawn only once the viewer has answered, since a lock on every section
  * while the first read is out claims a refusal nobody has made. A CROSS-LINK
- * (Budgets, which lives once, under Spend) draws an arrow, because pressing it
- * leaves Settings. A figure beside a section is handed in whole, in the
+ * (the reader's Account, and Budgets, which lives once, under Spend) draws an
+ * arrow, because pressing it leaves Settings. A figure beside a section is handed in whole, in the
  * column's own two shapes (`settingsFigures.tsx` decides them and asks for
  * what they need), so the column itself asks nothing.
  */
@@ -512,7 +533,7 @@ export function SectionColumn({
                         {s.elsewhere && (
                           <>
                             <ArrowUpRightGlyph size="xs" aria-hidden="true" />
-                            <span className="sr-only">, under {s.path[0]}</span>
+                            <span className="sr-only">{elsewhereWords(row, s)}</span>
                           </>
                         )}
                       </span>

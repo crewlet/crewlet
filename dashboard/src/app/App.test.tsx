@@ -8,7 +8,7 @@
  * sees, and it is the one least likely to be exercised by hand.
  */
 
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { App } from "./App.tsx";
 import { Router } from "./router.tsx";
@@ -452,6 +452,27 @@ describe("a section, for a reader holding none of its grants", () => {
       cleanup();
     }
     vi.unstubAllGlobals();
+  });
+
+  // SETTINGS IS WHERE A PERSON LOOKS FOR THEIR OWN SECURITY, and for a reader
+  // holding none of the company's grants it was nothing but locks — so a
+  // company's people concluded there was no two-step verification at all.
+  // Their Account is the column's FIRST row, never locked, and a cross-link
+  // out of Settings said by name: Budgets' said the path segment, "spend".
+  test("the Settings column offers a reader holding nothing their own Account, first", async () => {
+    location.hash = "#/settings";
+    mountAs(Promise.resolve(reader));
+    const column = await screen.findByRole("navigation", { name: "Settings sections" });
+    const rows = within(column).getAllByRole("link");
+    expect(rows[0]?.getAttribute("href")).toBe("#/account");
+    expect(rows[0]?.textContent).toBe("Account, outside Settings");
+    expect(within(column).getByText("You")).toBeDefined();
+    const budgets = rows.find((a) => a.getAttribute("href") === "#/spend/budgets");
+    expect(budgets?.textContent).toBe("Budgets, under Spend");
+    // AND THE LOCKS ARE STILL DRAWN, so this reader is not told everything
+    // is open to them.
+    const people = rows.find((a) => a.getAttribute("href") === "#/settings/people");
+    expect(people?.textContent).toMatch(/needs people:manage or audit:read/);
   });
 
   test("an operator is given the screen", async () => {

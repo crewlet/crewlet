@@ -483,10 +483,11 @@ is enrolled before anything
 else](../concepts/identity-and-access.md#a-required-second-factor-is-enrolled-before-anything-else).
 
 From now on the sign-in screen takes your login or address and your password.
-**The menu beside your name at the sidebar's foot** is your session's: your
-own **Account** — your password, second factor and recovery codes, where you
-are signed in and your personal access tokens — and signing out, here or
-everywhere at once. A gesture that changes who may do what, or how somebody
+**Your name at the sidebar's foot opens your own Account** — your password,
+two-step verification (an authenticator app, which you can set up there even
+where it is optional) and recovery codes, where you are signed in and your
+personal access tokens; Settings lists it too, under **You**. The menu beside
+your name holds the same link and signing out, here or everywhere at once. A gesture that changes who may do what, or how somebody
 proves who they are, asks you to confirm your password first, in one dialog,
 and then carries on. The founder token stays: it is what a pipeline uses, and
 the way back in when nobody who can sign in is available — a machine
