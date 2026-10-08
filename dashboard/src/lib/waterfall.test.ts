@@ -290,10 +290,10 @@ describe("buildWaterfall", () => {
   });
 
   test("a record with no instants is listed as untimed, never drawn at an invented place", () => {
-    const legacy = phaseRecord({ key: "turn-1|execute|1", at: "", startedAt: "", durationMs: 0 });
+    const untimed = phaseRecord({ key: "turn-1|execute|1", at: "", startedAt: "", durationMs: 0 });
     const w = buildWaterfall({
       events: [],
-      phases: [legacy],
+      phases: [untimed],
       now: T0,
       running: false,
       parked: false,
