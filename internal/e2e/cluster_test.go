@@ -212,7 +212,7 @@ func startMeshOnce(ctx context.Context, t *testing.T, relays *jetstreamtest.Rela
 	// peers this loop has not started yet and then fail naming a cluster
 	// nobody could have formed.
 	errs := make([]error, n)
-	stops := make([][]func(), n)
+	stops := make([]teardown, n)
 	var wg sync.WaitGroup
 	for i := range n {
 		wg.Add(1)
@@ -262,15 +262,51 @@ func startMeshOnce(ctx context.Context, t *testing.T, relays *jetstreamtest.Rela
 	return nil, fmt.Errorf("member %d: %w", failed, errs[failed])
 }
 
-// stopAll runs every member's teardown, in reverse order within each member.
+// teardown is one member's undo, in the three phases [stopAll] runs a fleet's
+// in: the API in front of the engine, the engine, and what the engine runs on
+// — its broker and store ([engine.Backends]) and its model server. Each
+// phase's pieces are in the order they came up.
+type teardown struct {
+	api, engine, backends []func()
+}
+
+// stopAll takes a fleet down, one phase at a time and each phase on every
+// member AT ONCE: every API, then every engine, then every broker and store.
+// It returns when all of it is down.
 //
-// REVERSE, because that is the order the pieces were built in and each one's
-// stop assumes the ones after it are still there: the projector reads the
-// queue the engine owns, and the server serves the app.
-func stopAll(stops [][]func()) {
-	for _, member := range stops {
-		stopInReverse(member)
+// THE BROKERS GO LAST, AFTER EVERY ENGINE HAS STOPPED, which is why a member's
+// backends are opened by the harness and lent to its engine rather than owned
+// by it ([engine.Options.Backends]). An engine's stop takes coordination steps
+// — the stop event, the presence release, the seat and duty releases — that
+// need a quorum of the fleet's brokers. Stopped one member after another, the
+// last always stopped alone, its peers' brokers already gone, and spent its
+// whole stop allowance on steps that could not succeed: measured, 10 to 25 s
+// per teardown. Stopped together but each closing its own broker on the way
+// out, whichever finished first still took its broker with it, and a slower
+// peer was stranded the same way in about half the runs (a case's teardown
+// took 1 s or 16 s). With every broker up until every engine is down, each
+// stop takes its steps against a fleet that can answer them.
+//
+// EVERY API BEFORE ANY ENGINE, so nothing serves a request into an engine that
+// is stopping. Within a member, each phase runs in REVERSE, because that is
+// the order the pieces were built in and each one's stop assumes the ones
+// after it are still there: the projector reads the queue the engine owns,
+// and the server serves the app.
+func stopAll(members []teardown) {
+	phase := func(of func(teardown) []func()) {
+		var wg sync.WaitGroup
+		for _, m := range members {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				stopInReverse(of(m))
+			}()
+		}
+		wg.Wait()
 	}
+	phase(func(m teardown) []func() { return m.api })
+	phase(func(m teardown) []func() { return m.engine })
+	phase(func(m teardown) []func() { return m.backends })
 }
 
 // clusterStartAttempts is how many times a fleet is stood up before the case
@@ -358,15 +394,15 @@ func memberBootstrap(t *testing.T, relays *jetstreamtest.Relays, i, n int) (conf
 // ctx is the ATTEMPT's, so the retry loop's wall-clock ceiling can interrupt a
 // bring-up rather than only refuse the next one — see [startMesh].
 func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i int) (
-	*node, []func(), error) {
+	*node, teardown, error) {
 
 	// THE TEARDOWN IS RETURNED, NOT REGISTERED WITH t.Cleanup, because an
 	// attempt that fails has to stop what it started BEFORE the next one
 	// starts — see [startMeshOnce]. It is built up as each piece comes up,
 	// so a member that fails halfway still hands back a way to undo the
 	// half that worked.
-	var stops []func()
-	fail := func(err error) (*node, []func(), error) { return nil, stops, err }
+	var stops teardown
+	fail := func(err error) (*node, teardown, error) { return nil, stops, err }
 
 	model := newScriptedModel(t)
 	// THE MODEL SERVER IS THIS ATTEMPT'S, not the test's. Its own
@@ -374,18 +410,26 @@ func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i in
 	// single-node cases — but a cluster case that retries three times would
 	// otherwise leave one live server per member per failed attempt running
 	// until the case ends. Close is idempotent, so both fire safely.
-	stops = append(stops, model.close)
+	stops.backends = append(stops.backends, model.close)
 	cfg, err := config.ParseCompany([]byte(fmt.Sprintf(companyDoc, model.url)))
 	if err != nil {
 		// THE SAME FILE PARSES THE SAME WAY on every attempt.
 		return fail(fmt.Errorf("%w: company config: %w", errNotRetryable, err))
 	}
 
-	// PROBED IMMEDIATELY BEFORE THE ENGINE BINDS IT, which is the guard
+	// TIER A'S OWN RULES, held — and the bootstrap normalized — before the
+	// broker is opened from it, as engine.New does before it opens its own:
+	// the backends below are opened HERE, so this is the first frame that
+	// reads the bootstrap. A refusal is the same on every attempt.
+	if err := boot.Validate(); err != nil {
+		return fail(fmt.Errorf("%w: bootstrap: %w", errNotRetryable, err))
+	}
+
+	// PROBED IMMEDIATELY BEFORE THE BROKER BINDS IT, which is the guard
 	// [jetstreamtest.Cluster.start] has and this path did not.
 	//
 	// It cannot close the race — nothing can, short of never letting the
-	// port go — but it shortens the window from however long engine.New
+	// port go — but it shortens the window from however long a broker
 	// takes to get there down to microseconds, and it names the CAUSE. Its
 	// partner is the engine's own post-bind check, which is what catches a
 	// port lost inside that window: together they turn a member that comes
@@ -409,35 +453,40 @@ func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i in
 			jetstream.ErrRoutePortTaken, port, i))
 	}
 
-	e, err := engine.New(ctx, engine.Options{
-		Bootstrap: boot, Company: cfg, ActivatedAt: harnessActivation,
-		Environment: nodeEnvironment(nil),
-	})
+	// THE BROKER AND STORE ARE THE HARNESS'S, LENT TO THE ENGINE
+	// ([engine.Options.Backends]), so they outlive it: a fleet's brokers go
+	// only once every member's engine has stopped — see [stopAll]. Opened by
+	// the call engine.New makes for an engine that owns them, so the member
+	// runs on what `crewlet run` would have opened.
+	backends, err := engine.OpenBackends(ctx, boot, cfg)
 	if err != nil {
-		// A CONFIG THE ENGINE REFUSED is refused identically on every
-		// attempt — the same file parses the same way — so a fresh mesh
-		// would spend the whole start budget re-asking a question already
-		// answered, and then report it as a cluster that never came up.
-		var fault *config.Fault
-		if errors.As(err, &fault) {
-			return fail(fmt.Errorf("%w: engine.New: %w", errNotRetryable, err))
-		}
-		return fail(fmt.Errorf("engine.New: %w", err))
+		return fail(refusal("open backends", err))
 	}
 	// ON WithoutCancel, like every teardown here: the attempt's context is
 	// cancelled the moment the attempt ends, and a stop that inherited it
 	// would be handed a dead context exactly when it has work to do — the
 	// rule internal/engine states for a rollback, applied to a harness.
-	stops = append(stops, func() { e.Stop(context.WithoutCancel(ctx)) })
+	stops.backends = append(stops.backends,
+		func() { backends.Close(context.WithoutCancel(ctx)) })
+
+	e, err := engine.New(ctx, engine.Options{
+		Bootstrap: boot, Company: cfg, ActivatedAt: harnessActivation,
+		Environment: nodeEnvironment(nil), Backends: backends,
+	})
+	if err != nil {
+		return fail(refusal("engine.New", err))
+	}
+	stops.engine = append(stops.engine, func() { e.Stop(context.WithoutCancel(ctx)) })
 	if err := e.Start(ctx); err != nil {
 		return fail(fmt.Errorf("engine.Start: %w", err))
 	}
 
 	// THROUGH wireAPI, NOT serveAPI: this runs off the test's goroutine,
 	// where t.Fatalf would end only this goroutine, and the API's teardown
-	// belongs in this member's list, after the engine's, so a failed
-	// attempt stops the listener, the projector and the app before the
-	// engine they read from, and before the next attempt starts.
+	// belongs in this member's own, in the phase [stopAll] runs before the
+	// engines', so a failed attempt stops the listener, the projector and
+	// the app before the engine they read from, and before the next
+	// attempt starts.
 	//
 	// THE SUPPRESSION BELOW: the context handed over is deliberately NOT
 	// this attempt's. `ctx` is cancelled the moment the bring-up ends, and
@@ -450,7 +499,7 @@ func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i in
 	// [tickInterval] for what that costs a fleet.
 	app, srv, apiStops, err := wireAPI(t.Context(), e, boot, //nolint:contextcheck // see above
 		func(opts *api.Options) { opts.HealthInterval = stream.HealthInterval })
-	stops = append(stops, apiStops...)
+	stops.api = apiStops
 	if err != nil {
 		return fail(fmt.Errorf("api: %w", err))
 	}
@@ -460,6 +509,19 @@ func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i in
 		id:          boot.Node.ID,
 		snapshotDir: boot.Store.SnapshotDirFor(),
 	}, stops, nil
+}
+
+// refusal names what failed to come up, and marks a refused CONFIG as not
+// worth another attempt: it is refused identically on every one — the same
+// file parses the same way — so a fresh mesh would spend the whole start
+// budget re-asking a question already answered, and then report it as a
+// cluster that never came up.
+func refusal(what string, err error) error {
+	var fault *config.Fault
+	if errors.As(err, &fault) {
+		return fmt.Errorf("%w: %s: %w", errNotRetryable, what, err)
+	}
+	return fmt.Errorf("%s: %w", what, err)
 }
 
 // otherMembers is a mesh's route list without this member's own route.
