@@ -468,7 +468,7 @@ func (q *Queue) createStream(ctx context.Context, config jetstream.StreamConfig)
 		// configuration at boot is how a ceiling an operator raised gets
 		// silently lowered".
 		_, err := q.js.CreateStream(ctx, config)
-		if refusedStorage(err) {
+		if jsprovision.OutOfCapacity(err) {
 			// NAMED, because the broker's own words name no number: see
 			// [ErrInsufficientStorage]. Named INSIDE the placement
 			// retry rather than around it, so the refusal that is not
@@ -722,44 +722,35 @@ func (q *Queue) createOrObserveStream(
 	if createErr == nil {
 		return nil
 	}
-	if jsprovision.Unplaceable(createErr) || errors.Is(createErr, ErrInsufficientStorage) {
-		// NOTHING WAS PLACED, so there is nothing to become visible.
-		// Two refusals say that, and both must skip the read-back:
-		// reading back would spend the whole window asking after an
-		// object nobody made, and append a misleading not-found to the
-		// error that says what is actually wrong. [openBucket] has
-		// always gated the first; the stream path did not, which is
-		// the same rule written twice and drifting.
-		//
-		// STILL FORMING is the metadata leader refusing to PLACE this
-		// stream, after createStream waited out the whole budget.
-		//
-		// AND A REFUSED RESERVATION is it refusing the ceiling: the
-		// limits check runs only once no peer holds an assignment for
-		// the name (a peer that already made it answers "name already
-		// in use"), so this code is never a race a read-back could
-		// resolve. Left to fall through, the boot's clearest error —
-		// the one naming the bytes, the limit and the Tier A field —
-		// arrived wrapped in "(and it is not there)", five seconds
-		// later, once per refused log.
-		return fmt.Errorf("ensure stream %s: %w", spec.name, createErr)
-	}
 	if jsprovision.NoApplicableLimit(createErr) {
 		// NO LIMIT APPLIES TO THIS STREAM AT ALL, which is a different
 		// fact from "it does not fit" and has a different lever: the
 		// account's limits are tiered and it carries none for the class
 		// `stream.replicas` puts this node in, so the broker refuses
 		// the create before comparing a byte and no smaller ceiling
-		// would be accepted either.
-		//
-		// TERMINAL AND NOT READ BACK, for the arm above's reason:
-		// nothing was placed. Unclassified it fell through to the
-		// read-back below and came back as `(and it is not there:
-		// stream not found)` appended to the one sentence that said
-		// what was wrong — a missing stream on a cluster whose account
-		// never had a limit for it.
+		// would be accepted either. Asked BEFORE the general refusal
+		// below, which it is one of, because it is the one worded
+		// differently.
 		return fmt.Errorf("ensure stream %s: %w%s", spec.name, createErr,
 			jsprovision.NoApplicableLimitDetail(q.cfg.Replicas))
+	}
+	if jsprovision.Refused(createErr) {
+		// NOTHING WAS PLACED, so there is nothing to become visible:
+		// the broker refused this create on the request alone — still
+		// unplaceable after createStream waited the whole budget out, a
+		// reservation the limit has no room for, subjects another stream
+		// already holds — for a reason no peer creating the same stream
+		// can have produced. See [jsprovision.Refused] for which, and why
+		// a list.
+		//
+		// Read back, each of them spent the whole read-back window
+		// asking after a stream nobody made, then reported the refusal
+		// wrapped in "(and it is not there: stream not found)" — a
+		// not-found an operator reads as the cause. A publish to a
+		// subject whose derived stream overlapped the engine's own paid
+		// that on every call, because a stream is remembered only once
+		// it exists.
+		return fmt.Errorf("ensure stream %s: %w", spec.name, createErr)
 	}
 	// A PEER MAY HAVE WON THE RACE, and it announces that in two shapes
 	// rather than one.
@@ -1285,12 +1276,6 @@ func (q *Queue) ensureDurableConsumer(ctx context.Context, stream string,
 	if createErr == nil {
 		return cons, true, nil
 	}
-	if jsprovision.Unplaceable(createErr) {
-		// STILL UNPLACEABLE after the whole budget, so nothing was
-		// placed and there is nothing to read back — the same gate the
-		// stream and bucket creates take.
-		return nil, false, createErr
-	}
 	if jsprovision.NoApplicableLimit(createErr) {
 		// NO LIMIT APPLIES TO THIS CONSUMER EITHER. A consumer is
 		// resolved through the same table as a stream
@@ -1301,6 +1286,14 @@ func (q *Queue) ensureDurableConsumer(ctx context.Context, stream string,
 		// looking for a seat's mailbox instead of at the account.
 		return nil, false, fmt.Errorf("%w%s", createErr,
 			jsprovision.NoApplicableLimitDetail(q.cfg.Replicas))
+	}
+	if jsprovision.Refused(createErr) {
+		// NOTHING WAS PLACED and no peer's race explains the answer —
+		// still unplaceable after the whole budget, or refused on the
+		// request alone — so there is nothing to read back: the same
+		// gate the stream create takes, through the one predicate
+		// [jsprovision.Refused] for every create site.
+		return nil, false, createErr
 	}
 	// RE-ASKED, like the stream and bucket read-backs: a peer's create is
 	// visible to this member only on its next metadata update, so one

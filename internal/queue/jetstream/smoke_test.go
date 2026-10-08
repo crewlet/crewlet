@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -16,8 +17,10 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
@@ -278,6 +281,41 @@ func TestMalformedSubjectsAreRefused(t *testing.T) {
 	}
 	if err := q.Publish(t.Context(), "extension.thing", ev(1)); err != nil {
 		t.Errorf("Publish to a foreign namespace failed: %v", err)
+	}
+}
+
+// A SUBJECT WHOSE STREAM THE BROKER WILL NOT MAKE IS REFUSED IN A ROUND TRIP,
+// with the broker's own reason and nothing appended to it.
+//
+// `crewlet.events` matches no stream the engine defines — every one of them
+// needs a segment past it — so it derives a namespace stream for `crewlet`,
+// whose subjects overlap every stream the engine does define, and the broker
+// refuses the create. That refusal used to fall through to the read-back kept
+// for a peer that won a create race: it polled for the whole read-back window
+// after a stream nobody was making, and then reported the overlap wrapped in
+// "(and it is not there: stream not found)" — on every publish, because only
+// a stream that exists is remembered.
+func TestAStreamTheBrokerRefusesIsNotReadBack(t *testing.T) {
+	t.Parallel()
+	q := newQueue(t)
+	start := time.Now()
+	err := q.Publish(t.Context(), "crewlet.events", ev(1))
+	took := time.Since(start)
+
+	var apiErr *jetstream.APIError
+	if !errors.As(err, &apiErr) || !jsprovision.Refused(err) {
+		t.Fatalf("a publish whose derived stream overlaps the engine's own = %v, "+
+			"want the broker's refusal of the create", err)
+	}
+	if strings.Contains(err.Error(), "it is not there") {
+		t.Errorf("the refusal was read back, so the broker's reason arrives wrapped "+
+			"in a not-found an operator reads as the cause:\n%v", err)
+	}
+	// MEASURED AGAINST THE WINDOW the read-back would have spent: the
+	// refused create polls not-found until that window closes, so a
+	// refusal that reached it cannot have returned inside it.
+	if took >= jsprovision.ReadBack {
+		t.Errorf("the refusal took %v, the whole %v read-back window", took, jsprovision.ReadBack)
 	}
 }
 

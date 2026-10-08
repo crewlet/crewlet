@@ -334,34 +334,12 @@ func (e *embeddedServer) budget(memory bool) (StorageBudget, error) {
 // failure that is not an unknown the fleet has to seal to retire.
 var ErrInsufficientStorage = errors.New("jetstream: the broker cannot reserve the stream's byte ceiling")
 
-// The broker's codes for a reservation it refused for want of room.
-//
-// Spelled here for the reason [jsprovision.Unplaceable]'s code is: nats.go
-// names neither. Placement is deliberately NOT one of them. A clustered create
-// that no member can place reports `no suitable peers for placement`, whose
-// code is shared by every placement failure and whose storage clause is prose,
-// and what it would be compared against is somebody else's disk, which this
-// node cannot read. Nor is `insufficient resources` (10023): the server
-// answers a publish, a catch-up or a consumer's placement with it, never a
-// stream's create, so naming it here would read some other failure as a
-// ceiling nobody reserved.
-const (
-	jsErrCodeStorageExceeded jetstream.ErrorCode = 10047
-	jsErrCodeMemoryExceeded  jetstream.ErrorCode = 10028
-)
-
-// refusedStorage reports whether err is the broker refusing a reservation.
-func refusedStorage(err error) bool {
-	var apiErr *jetstream.APIError
-	if !errors.As(err, &apiErr) {
-		return false
-	}
-	switch apiErr.ErrorCode {
-	case jsErrCodeStorageExceeded, jsErrCodeMemoryExceeded:
-		return true
-	}
-	return false
-}
+// The broker's codes for a reservation it refused for want of room are
+// [jsprovision.OutOfCapacity]'s, for a create and for an update alike: the
+// coordination store's buckets meet the same refusal, and two spellings of one
+// rule are how one of them learns a third code and the other does not.
+// Placement is deliberately not one of them, and neither is `insufficient
+// resources` (10023) — see that predicate for why.
 
 // DomainStreamCeiling is the byte ceiling a domain's stream holds, and whether
 // the stream exists at all.

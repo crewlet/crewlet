@@ -1340,3 +1340,63 @@ func TestTheNoApplicableLimitClauseNamesTheClassAndNotTheCapacityLever(t *testin
 			"looks up:\n%s", zero)
 	}
 }
+
+// A CREATE THE BROKER REFUSED ON THE REQUEST ALONE IS NOT READ BACK, and one a
+// peer's race can explain still is.
+//
+// The two lists are the two halves of the risk [Refused] weighs. A refusal it
+// missed spends [ReadBack] asking after an object nobody made and reports it as
+// "not there"; a race's shape it took would turn a peer that won into a node
+// that refuses to boot. The second list is therefore the one that matters
+// most: every answer a create can come back with while a peer is making the
+// same object, the generic consumer-create failure included, because a create
+// the server held can come back as that with the consumer placed.
+//
+// The codes are this package's own spelling; that they are the pinned
+// server's is held where the server is linked, by
+// internal/queue/jetstream's TestTheRefusalsNotReadBackAreThePinnedServersCodes.
+func TestOnlyARefusalNoRaceCanProduceSkipsTheReadBack(t *testing.T) {
+	t.Parallel()
+	for name, err := range map[string]error{
+		"no suitable peers":       &jetstream.APIError{ErrorCode: errCodeNoPeers, Code: 400},
+		"no room in the file":     &jetstream.APIError{ErrorCode: errCodeOutOfStore, Code: 500},
+		"no room in memory":       &jetstream.APIError{ErrorCode: errCodeOutOfMemory, Code: 500},
+		"no applicable limit":     &jetstream.APIError{ErrorCode: errCodeNoLimits, Code: 400},
+		"an invalid stream":       &jetstream.APIError{ErrorCode: errCodeInvalidConfig, Code: 500},
+		"overlapping subjects":    &jetstream.APIError{ErrorCode: errCodeSubjectOverlap, Code: 400},
+		"the most streams":        &jetstream.APIError{ErrorCode: errCodeMaxStreams, Code: 400},
+		"the most consumers":      &jetstream.APIError{ErrorCode: errCodeMaxConsumers, Code: 400},
+		"a wrapped refusal":       fmt.Errorf("ensure stream CREWLET_NS_CREWLET: %w", &jetstream.APIError{ErrorCode: errCodeSubjectOverlap, Code: 400}),
+		"a refusal joined to one": errors.Join(errors.New("open crewlet_claims"), &jetstream.APIError{ErrorCode: errCodeMaxStreams, Code: 400}),
+	} {
+		if !Refused(err) {
+			t.Errorf("%s (%v) is read back, so the boot spends a read-back window "+
+				"asking after an object the broker refused to make", name, err)
+		}
+		// AND IT IS NEITHER OF THE TWO CONDITIONS A READ-BACK WAITS OUT, or
+		// the classification would depend on which arm a caller wrote first.
+		if NotYetVisible(err) || Unanswered(context.Background(), err) {
+			t.Errorf("%s (%v) is a refusal and also a condition a read-back "+
+				"waits out", name, err)
+		}
+	}
+
+	for name, err := range map[string]error{
+		"a name already in use":           jetstream.ErrStreamNameAlreadyInUse,
+		"a consumer configured otherwise": jetstream.ErrConsumerExists,
+		"the generic consumer failure":    &jetstream.APIError{ErrorCode: jetstream.JSErrCodeConsumerCreate, Code: 500},
+		"a group that is not available":   &jetstream.APIError{ErrorCode: 10008, Code: 503},
+		"a create nobody answered":        context.DeadlineExceeded,
+		"the client's own timeout":        nats.ErrTimeout,
+		"nobody serving yet":              nats.ErrNoResponders,
+		"a stream not found":              jetstream.ErrStreamNotFound,
+		"something not the broker's":      errors.New("connection closed"),
+		"no error":                        nil,
+	} {
+		if Refused(err) {
+			t.Errorf("%s (%v) is taken as a refusal, so a create a peer's race "+
+				"can explain is never read back and the node that lost the race "+
+				"refuses to boot", name, err)
+		}
+	}
+}

@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/crewlet/crewlet/internal/jsprovision"
 )
 
 // fileQueue opens an embedded broker with a file store, which is the one a
@@ -160,40 +162,13 @@ func TestAGrowthBudgetIsTheRoomAnUpdateIsHeldTo(t *testing.T) {
 		t.Fatalf("DomainLog: %v", err)
 	}
 	err = grow.SetMaxBytes(t.Context(), uint64(ceiling+room.Available()+1))
-	if !refusedStorage(err) {
+	if !jsprovision.OutOfCapacity(err) {
 		t.Fatalf("a raise one byte past the stated room returned %v, want the "+
 			"broker's refusal: the budget understates what it grants", err)
 	}
 	if err := grow.SetMaxBytes(t.Context(), uint64(ceiling+room.Available())); err != nil {
 		t.Fatalf("a raise of exactly the stated room was refused, so the budget "+
 			"overstates it: %v", err)
-	}
-}
-
-// ONLY A CREATE'S RESERVATION CHECK IS READ AS ONE.
-//
-// The refusal is named with the numbers of a reservation, so a code the broker
-// uses for anything else would be reported as a ceiling that did not fit:
-// placement is about members this node cannot see, and `insufficient
-// resources` answers a publish or a consumer, never a stream's create.
-func TestOnlyAReservationCheckIsReadAsARefusedReservation(t *testing.T) {
-	t.Parallel()
-	for name, tc := range map[string]struct {
-		err  error
-		want bool
-	}{
-		"the file store's limit":   {&jetstream.APIError{ErrorCode: 10047}, true},
-		"the memory store's limit": {&jetstream.APIError{ErrorCode: 10028}, true},
-		"no suitable peers":        {&jetstream.APIError{ErrorCode: 10005}, false},
-		"insufficient resources":   {&jetstream.APIError{ErrorCode: 10023}, false},
-		"not an API error":         {errors.New("connection closed"), false},
-		"no error":                 {nil, false},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if got := refusedStorage(tc.err); got != tc.want {
-				t.Errorf("refusedStorage(%v) = %v, want %v", tc.err, got, tc.want)
-			}
-		})
 	}
 }
 

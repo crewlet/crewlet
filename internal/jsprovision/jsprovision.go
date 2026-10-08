@@ -950,8 +950,84 @@ func OutOfCapacity(err error) bool {
 	return false
 }
 
+// The broker's codes for a create it refused ON THE REQUEST ALONE — before it
+// looked for an assignment of the same name, or with that name left out of
+// what it counted — so no peer creating the same object can have produced
+// one. NUMBERS for [errCodeNoPeers]'s reason; nats.go names only the last.
+//
+// Each was read in the pinned nats-server, on the path a create takes there
+// (server/jetstream_cluster.go, jsClusteredStreamRequest and
+// jsClusteredConsumerRequest):
+//
+//   - INVALID CONFIGURATION is checkStreamCfg's answer, and the sealed-create
+//     refusal after it: a function of the configuration sent, run before the
+//     handler asks whether the name is assigned. A peer sending the same
+//     configuration was refused the same way and made nothing either.
+//   - SUBJECTS OVERLAPPING another stream's is decided after the handler has
+//     answered a same-name stream with a DIFFERENT configuration as "name
+//     already in use", and with the same-name assignment excluded from the
+//     comparison when the configuration is the same. So the stream it
+//     overlaps is never the one this create was racing to make.
+//   - THE MAXIMUM NUMBER OF STREAMS, and of CONSUMERS, are counted without
+//     the name being created (tieredStreamAndReservationCount skips it, and
+//     the consumer count is not taken at all once the name is assigned), so a
+//     peer's object of the same name is not what reached the limit.
+const (
+	errCodeInvalidConfig  jetstream.ErrorCode = 10052
+	errCodeSubjectOverlap jetstream.ErrorCode = 10065
+	errCodeMaxStreams     jetstream.ErrorCode = 10027
+	errCodeMaxConsumers                       = jetstream.JSErrCodeMaximumConsumersLimit
+)
+
+// Refused reports a create the broker ANSWERED BY PLACING NOTHING, for a
+// reason no peer racing the same create can have produced — so a read-back
+// after it would be asking after an object nobody made.
+//
+// # Why one predicate rather than an arm at each create site
+//
+// Because every create site needs the same decision and each had written its
+// own: the stream create and the bucket create gated their read-backs on
+// three refusals each, spelled differently, and both consumer creates on two
+// — the drift this package exists to stop. Every refusal a
+// site did not list fell through to the read-back, which spent [ReadBack]
+// polling for an object the broker had refused to make and then appended
+// `(and it is not there: stream not found)` to the one sentence that said what
+// was wrong. Each refusal reached the list the same way, by being found doing
+// exactly that: [OutOfCapacity] first, then [NoApplicableLimit]; a publish to a
+// subject whose derived stream overlapped the engine's own was spending five
+// seconds a call there when this was written.
+//
+// # Why a list rather than "everything but a race's shapes"
+//
+// Because the unknown direction is the dangerous one. A code wrongly listed
+// here turns a peer that won the race into a node that refuses to boot; a code
+// wrongly left out costs a read-back and a misleading suffix. So the list
+// holds only codes proven not to be a race's — see the constants above — and
+// everything else is still read back: a name already in use, a create that
+// was never answered, a group that is not available, and the server's generic
+// consumer-create failure, which a create can answer with the consumer placed
+// all the same.
+//
+// It includes the three predicates beside it: [Unplaceable] once [Place] has
+// waited it out, [OutOfCapacity] and [NoApplicableLimit]. A caller that words
+// one of those differently asks for it first.
+func Refused(err error) bool {
+	if Unplaceable(err) || OutOfCapacity(err) || NoApplicableLimit(err) {
+		return true
+	}
+	apiErr, ok := apiError(err)
+	if !ok {
+		return false
+	}
+	switch apiErr.ErrorCode {
+	case errCodeInvalidConfig, errCodeSubjectOverlap, errCodeMaxStreams, errCodeMaxConsumers:
+		return true
+	}
+	return false
+}
+
 // apiError unwraps the broker's own answer out of whatever a caller wrapped it
-// in, which is how both predicates above are asked the question.
+// in, which is how every predicate here is asked the question.
 func apiError(err error) (*jetstream.APIError, bool) {
 	// TWO STATEMENTS, because `return apiErr, errors.As(err, &apiErr)` reads
 	// a variable the call it sits beside WRITES, and Go orders the function

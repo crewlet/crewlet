@@ -314,13 +314,13 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 			// it.
 			err = fmt.Errorf("%w%s", err,
 				jsprovision.NoApplicableLimitDetail(q.cfg.Replicas))
-		case !jsprovision.Unplaceable(err):
+		case !jsprovision.Refused(err):
 			// THE LOOKUP ABOVE WAS INSIDE THE PROPAGATION WINDOW, so
 			// the consumer this create met is one THIS NODE made on an
 			// earlier boot and has not been told about yet — the name
 			// carries the node id, so no peer can have made it.
 			//
-			// EVERY ERROR BUT AN UNPLACEABLE ONE, not just
+			// EVERY ERROR BUT A REFUSAL, not just
 			// ErrConsumerExists, because the create announces this in
 			// two shapes and the tidy one is the rarer. nats.go returns
 			// the existing consumer when the configs MATCH and
@@ -330,8 +330,10 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 			// there all the same. That is the shape a clustered boot
 			// actually produces, and it is the one
 			// [Queue.ensureDurableConsumer] has always read back.
-			// Unplaceable is excluded for its own reason: nothing was
-			// placed, so there is nothing to become visible.
+			// A refusal is excluded for its own reason — see
+			// [jsprovision.Refused]: nothing was placed, and no race
+			// explains the answer, so there is nothing to become
+			// visible.
 			//
 			// Read it back and hold it to the checkpoint, which is the
 			// same rule the lookup's own found branch below applies: a

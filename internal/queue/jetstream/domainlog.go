@@ -360,7 +360,7 @@ func (l *DomainLog) SetMaxBytes(ctx context.Context, maxBytes uint64) error {
 	config := info.Config
 	config.MaxBytes = int64(maxBytes)
 	_, err = l.js.UpdateStream(ctx, config)
-	if refusedStorage(err) {
+	if jsprovision.OutOfCapacity(err) {
 		// NAMED, exactly as a refused CREATE is. The broker answers a
 		// raise it cannot reserve with the same two codes and the same
 		// numberless sentence, and a caller that reported it as "the
