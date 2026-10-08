@@ -602,6 +602,17 @@ func TestFleet(t *testing.T) {
 					t.Fatalf("the drain returned no leases: %v still owned, so a "+
 						"successor must wait out a full TTL before it can claim", owned)
 				}
+				// The presence too, given back first: left to lapse, it has
+				// peers dividing the seats by a node that will never claim
+				// again for a TTL.
+				presence, err := f.backend.Get(t.Context(), coord.NodeResource("node-a"))
+				if err != nil {
+					t.Fatalf("reading node-a's presence: %v", err)
+				}
+				if presence != nil {
+					t.Fatalf("node-a's presence is still held by %s after the drain: "+
+						"it was given back on the expired deadline", presence.Owner)
+				}
 				eventually(t, "node-a to let the seat go", func() bool {
 					return len(a.Attached()) == 0
 				})

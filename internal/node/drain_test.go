@@ -28,6 +28,12 @@ import (
 // would return nothing at all, which fleet_test.go's expired-deadline case
 // holds against a live store.
 //
+// The presence goes first and is the one give-back the allowance is still
+// whole for, so it must be asked on a LIVE context: one asked on the caller's
+// ended context fails before reaching any store, and this node goes on being
+// counted by its peers for a TTL. The seats after it are rightly asked on
+// contexts the presence's wait has already spent.
+//
 //   - A caller that is not an engine's stop carries no allowance, and the
 //     drain begins one from this node's own TTL: one heartbeat interval, a
 //     third of the lease. With none, the give-backs would wait on the store
@@ -81,6 +87,10 @@ func TestADrainsGiveBacksSpendOneAllowance(t *testing.T) {
 			}
 			if got := store.releases(); got != 3 {
 				t.Errorf("%d release(s) asked for, want the presence and both seats", got)
+			}
+			if store.askedEnded(coord.NodeResource("node-a")) {
+				t.Error("the presence was given back on a context that had already ended: " +
+					"the drain handed its caller's context to the give-back")
 			}
 			if held := n.Host().Held(); len(held) != 0 {
 				t.Errorf("the drain returned still holding %v", held)
@@ -145,6 +155,15 @@ type stuckReleases struct {
 	mu      sync.Mutex
 	blocked bool
 	asked   int
+	ended   map[string]bool // resources a release was asked for on an ended context
+}
+
+// askedEnded reports whether a release of resource was asked for on a context
+// that had already ended.
+func (s *stuckReleases) askedEnded(resource string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ended[resource]
 }
 
 func (s *stuckReleases) block() {
@@ -164,6 +183,12 @@ func (s *stuckReleases) Release(ctx context.Context, resource, owner string, epo
 	blocked := s.blocked
 	if blocked {
 		s.asked++
+		if ctx.Err() != nil {
+			if s.ended == nil {
+				s.ended = map[string]bool{}
+			}
+			s.ended[resource] = true
+		}
 	}
 	s.mu.Unlock()
 	if !blocked {
