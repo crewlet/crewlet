@@ -10,9 +10,14 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 )
 
 // recordingLauncher stands in for the engine's detached-run seam.
@@ -140,6 +145,89 @@ func TestALaunchFailureFailsThePhase(t *testing.T) {
 	}
 	if _, ok := r.Suspended(); ok {
 		t.Error("a failed launch recorded a suspension, so the engine would open a row nothing can complete")
+	}
+}
+
+// AN AGENT-MODE EXECUTOR LAUNCHES NOTHING ON A REFUSAL ALREADY CERTAIN.
+//
+// Its calls are made in a box and post-charged when the run is collected, so
+// no round of the engine's loop is there to stop them: a run launched on a
+// window already past its ceiling is paid for whole, and every token of it is
+// over the cap. Asked before the launch, the executor is refused as a native
+// one is before its first round.
+func TestAnAgentModeExecutorLaunchesNothingOnAStandingRefusal(t *testing.T) {
+	t.Parallel()
+	launcher := &recordingLauncher{}
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
+		buildOpts{agentRun: launcher, budget: &ceilingMeter{
+			countingMeter: countingMeter{seen: []int{120}}, ceiling: 100,
+		}})
+
+	_, _, err := r.Execute(context.Background(), 1, "", nil)
+	if !errors.Is(err, toolloop.ErrBudgetExhausted) {
+		t.Fatalf("Execute = %v, want the refusal the meter holds", err)
+	}
+	if launcher.runs != 0 {
+		t.Errorf("launched %d runs on a refusal that already stood", launcher.runs)
+	}
+	if _, ok := r.Suspended(); ok {
+		t.Error("a launch that never happened recorded a suspension")
+	}
+}
+
+// chargingModels is the seat's auxiliary seam as the engine's is for a turn:
+// every rewrite it makes is charged to the turn's meter, here the very meter
+// the runner judges its calls by.
+type chargingModels struct {
+	meter  toolloop.BudgetMeter
+	tokens int
+}
+
+func (m chargingModels) Auxiliary(*org.Role, auxspend.Use) (chain.Member, error) {
+	return chain.Member{Key: "cheap", Provider: chargingRewriter(m)}, nil
+}
+
+type chargingRewriter chargingModels
+
+func (chargingRewriter) Model() string { return "cheap" }
+
+func (r chargingRewriter) Complete(ctx context.Context, _ llm.Request) (*llm.Completion, error) {
+	if _, err := r.meter.Spend(ctx, r.tokens); err != nil {
+		return nil, err
+	}
+	return &llm.Completion{Content: "condensed: the earlier round drafted the summary"}, nil
+}
+
+// AN AGENT-MODE EXECUTOR LAUNCHES NOTHING WHEN ITS OWN BRIEF FILLS THE WINDOW.
+//
+// The phase asks the meter before it builds anything, and the answer is room;
+// building the brief then rewrites a prior round's long output with the seat's
+// auxiliary model, charged to the same counters, and that rewrite takes the
+// window past its ceiling. A run launched now is paid for whole past it, so the
+// executor asks again once the brief exists and is refused as a native pass is
+// before its first round.
+func TestAnAgentModeExecutorLaunchesNothingWhenItsBriefFillsTheWindow(t *testing.T) {
+	t.Parallel()
+	launcher := &recordingLauncher{}
+	meter := &ceilingMeter{ceiling: 100}
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
+		buildOpts{agentRun: launcher, budget: meter,
+			compact: compact.New(chargingModels{meter: meter, tokens: 150}, nil).
+				For(nil, auxspend.Use{Stage: types.AuxStageTurn})})
+	history := []ledger.Iteration{{Text: strings.Repeat("drafting the weekly summary. ", 400)}}
+
+	_, _, err := r.Execute(context.Background(), 2, "", history)
+	if !errors.Is(err, toolloop.ErrBudgetExhausted) {
+		t.Fatalf("Execute = %v, want the refusal the brief's own rewrite made certain", err)
+	}
+	if got := meter.charges(); len(got) != 1 || got[0] != 150 {
+		t.Fatalf("charges = %v, want the one rewrite this case is about", got)
+	}
+	if launcher.runs != 0 {
+		t.Errorf("launched %d runs on a window the brief had already filled", launcher.runs)
+	}
+	if _, ok := r.Suspended(); ok {
+		t.Error("a launch that never happened recorded a suspension")
 	}
 }
 

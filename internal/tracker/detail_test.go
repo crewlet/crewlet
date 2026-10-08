@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -382,81 +381,85 @@ func TestAChecklistItemIsARow(t *testing.T) {
 	}
 }
 
-// A LONG COMMENT BODY IS AN EXCERPT IN THE PAGE AND WHOLE WHEN OPENED.
+// EVERY COMMENT ON A PAGE IS WHOLE, AND THE BYTES END A PAGE, NEVER A COMMENT.
 //
-// The page is excerpted because twenty bodies at [tracker.MaxCommentBody] is
-// ten times the ceiling on one tool answer. That is only legitimate if the
-// rest is reachable, and for a long time it was not: the excerpt was
-// documented as a pointer to a read the engine did not have, so anything a
-// person wrote past 2 KiB could not be recovered by any seat through any
-// tool. This is that read, and the assertion that the two halves disagree —
-// one cut and marked, one exactly what was written — is the whole point.
-func TestALongCommentBodyIsAnExcerptWithAWayBackToTheWhole(t *testing.T) {
+// The page used to carry each body cut to two kilobytes, so a comment past
+// that read as a comment that ended there. Now a page holds whole comments up
+// to [tracker.CommentPageBytes] — at least one — and its cursor continues
+// exactly where it stopped. This writes a thread of long comments, each with a
+// non-ASCII character where the old cut fell, and walks it: every comment must
+// arrive exactly once and byte for byte as written.
+func TestAThreadPageCarriesWholeCommentsAndPagesByBytes(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	created := r.createTask("the incident write-up")
-
-	// Past the excerpt and well inside what a write accepts, with a
-	// non-ASCII character ON the boundary: a byte slice there yields
-	// invalid UTF-8, which is the other half of what the cut has to get
-	// right.
-	body := strings.Repeat("a", tracker.CommentBodyShown-1) + "é" +
-		strings.Repeat("b", 500)
-	if _, err := r.writer.UpdateTask(t.Context(), "op-comment", created.ID, "ENG",
-		tracker.NoIfMatch, tracker.TaskPatch{Comment: &tracker.Comment{
-			ID: "cm-long", Task: created.ID, Author: "ana",
-			AuthorKind: tracker.AuthorHuman, Body: body, CreatedAt: wednesday,
-		}}, tracker.ChangeComment, nil); err != nil {
-		t.Fatalf("comment: %v", err)
-	}
-	r.drain()
-
-	page, err := r.reader.Task(t.Context(), created.ID,
-		tracker.DetailWants{Comments: true}, statelog.Freshness{Level: statelog.ReadStale})
-	if err != nil {
-		t.Fatalf("read the thread: %v", err)
-	}
-	if len(page.Comments) != 1 {
-		t.Fatalf("the thread holds %d comment(s), want 1", len(page.Comments))
-	}
-	excerpt := page.Comments[0].Body
-	switch {
-	case excerpt == body:
-		t.Fatal("a body past the excerpt came back whole in the PAGE — " +
-			"twenty of these is ten times what one tool answer may weigh")
-	case !strings.HasSuffix(excerpt, "…"):
-		t.Errorf("the excerpt is unmarked: %q — a body cut at exactly the cap "+
-			"and handed over unmarked reads as a comment that ENDED there",
-			excerpt[max(0, len(excerpt)-8):])
-	case !utf8.ValidString(excerpt):
-		t.Error("the excerpt is not valid UTF-8, so the cut went through a rune")
+	const total = 7
+	written := map[string]string{}
+	for i := range total {
+		body := strings.Repeat("a", 2047) + "é" + strings.Repeat(string(rune('b'+i)), 5000)
+		id := fmt.Sprintf("cm-long-%d", i)
+		written[id] = body
+		if _, err := r.writer.UpdateTask(t.Context(), "op-"+id, created.ID, "ENG",
+			tracker.NoIfMatch, tracker.TaskPatch{Comment: &tracker.Comment{
+				ID: id, Task: created.ID, Author: "ana",
+				AuthorKind: tracker.AuthorHuman, Body: body,
+				CreatedAt: wednesday.Add(time.Duration(i) * time.Minute),
+			}}, tracker.ChangeComment, nil); err != nil {
+			t.Fatalf("comment %d: %v", i, err)
+		}
+		r.drain()
 	}
 
-	// AND THE WHOLE THING IS ONE READ AWAY. Without this the excerpt is
-	// not a pointer, it is a loss.
+	seen := map[string]bool{}
+	cursor, pages := "", 0
+	for {
+		page, err := r.reader.Task(t.Context(), created.ID, tracker.DetailWants{
+			Comments: true, CommentCursor: cursor,
+		}, statelog.Freshness{Level: statelog.ReadStale})
+		if err != nil {
+			t.Fatalf("page %d: %v", pages, err)
+		}
+		pages++
+		weight := 0
+		for _, c := range page.Comments {
+			if c.Body != written[c.ID] {
+				t.Fatalf("%s came back as %d bytes of the %d written", c.ID, len(c.Body), len(written[c.ID]))
+			}
+			if seen[c.ID] {
+				t.Fatalf("%s came back on two pages", c.ID)
+			}
+			seen[c.ID] = true
+			weight += len(c.Body)
+		}
+		if len(page.Comments) == 0 {
+			t.Fatal("a page of a non-empty thread was empty")
+		}
+		if len(page.Comments) > 1 && weight > tracker.CommentPageBytes {
+			t.Fatalf("page %d holds %d bytes of comments, past its %d", pages, weight, tracker.CommentPageBytes)
+		}
+		if page.CommentsCursor == "" {
+			break
+		}
+		cursor = page.CommentsCursor
+		if pages > total {
+			t.Fatal("the cursor never ran out")
+		}
+	}
+	if len(seen) != total {
+		t.Fatalf("walked %d of %d comments", len(seen), total)
+	}
+	if pages < 2 {
+		t.Fatal("seven 7 KiB comments fit one page, so the byte bound was not exercised")
+	}
+
+	// AND ONE BY ID IS EXACT, with no thread cursor behind it.
 	opened, err := r.reader.Task(t.Context(), created.ID,
-		tracker.DetailWants{Comment: "cm-long"}, statelog.Freshness{Level: statelog.ReadStale})
+		tracker.DetailWants{Comment: "cm-long-3"}, statelog.Freshness{Level: statelog.ReadStale})
 	if err != nil {
 		t.Fatalf("open one comment: %v", err)
 	}
-	if len(opened.Comments) != 1 {
-		t.Fatalf("opening one comment answered %d of them", len(opened.Comments))
-	}
-	if opened.Comments[0].Body != body {
-		t.Fatalf("the opened comment is %d bytes and %d were written — opening "+
-			"one is the read that has to be exact",
-			len(opened.Comments[0].Body), len(body))
-	}
-	// IT REPLACES THE PAGE, so there is no cursor inviting a caller to walk
-	// a thread it did not ask for.
-	if opened.CommentsCursor != "" {
-		t.Errorf("opening one comment carried a thread cursor %q",
-			opened.CommentsCursor)
-	}
-	// AND IT IS READ WITHOUT `comments`: naming one IS asking for it, and a
-	// caller that had to pass both would meet a silently empty thread.
-	if len(opened.Comments) == 0 {
-		t.Error("a read naming a comment but not `comments` came back empty")
+	if len(opened.Comments) != 1 || opened.Comments[0].Body != written["cm-long-3"] || opened.CommentsCursor != "" {
+		t.Fatalf("opening one comment answered %d comment(s), cursor %q", len(opened.Comments), opened.CommentsCursor)
 	}
 }
 

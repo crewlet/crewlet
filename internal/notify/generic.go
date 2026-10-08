@@ -33,6 +33,11 @@ func (Generic) Source() string { return "" }
 // conversation's membership from, so the text has to decide alone.
 func (Generic) RequiresRecon(Inbound) bool { return false }
 
+// SubjectIsLabel is false: for a source the spine knows nothing about, the
+// subject is part of what it sent, and dropping it could drop the topic — the
+// conservative half, see [Prompt.SubjectIsLabel].
+func (Generic) SubjectIsLabel(Inbound) bool { return false }
+
 // Addressed is false: an unrecognised source has no routing vocabulary to
 // read an ask out of, and the trigger's own evaluation block already tells
 // the seat to decide from the text. False is the safe half — see

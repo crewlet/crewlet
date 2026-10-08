@@ -692,3 +692,48 @@ test("the expensive tasks are the engine's order, with their reopens", async () 
   });
   expect(document.body.innerHTML).not.toMatch(/[$€£]\s?\d|\bUSD\b/);
 });
+
+// A PERSON IS A ROW OF THEIR OWN, and says why it has no turns. Two people of
+// one role are two rows — keyed on the role they were one — and where a seat
+// counts its turns a person's row says a person takes none, rather than a
+// blank that reads as a seat that ended nothing.
+test("people are their own rows, and say they take no turns", async () => {
+  const person = (handle: string, total: number) => ({
+    ...bucket(total),
+    role: "Founder",
+    handle,
+    agent_id: "",
+    person: true,
+    by_phase: {},
+  });
+  mount("#/spend?window=30d", <Spend />, {
+    tokens: rollup(900, { by_agent: [person("maya", 600), person("ana", 300)] }),
+    viewer: VIEWER,
+  });
+  await settle();
+  const grid = screen.getByText("By agent").closest(".spend-card") as HTMLElement;
+  expect(within(grid).getByText(/maya/i)).toBeTruthy();
+  expect(within(grid).getByText(/ana/i)).toBeTruthy();
+  expect(within(grid).getAllByLabelText(/A person takes no turns/).length).toBeGreaterThan(0);
+});
+
+// THE AUXILIARY MODEL'S SPEND IS NAMED FOR WHAT IT WAS FOR, in the words the
+// turn screen uses for the same records — never as background work outside
+// the seats, which it is not: every call is inside its seat's row already.
+test("the auxiliary card names each purpose and its provider calls", async () => {
+  mount("#/spend?window=30d", <Spend />, {
+    tokens: rollup(500, {
+      by_worker: [
+        { worker: "condense_thread", ...bucket(300, { calls: 7 }) },
+        { worker: "memory_filter", ...bucket(200, { calls: 1 }) },
+      ],
+    }),
+    viewer: VIEWER,
+  });
+  await settle();
+  const card = screen.getByText("Auxiliary model").closest(".spend-card") as HTMLElement;
+  expect(within(card).getByText("condense thread")).toBeTruthy();
+  expect(within(card).getByText("7 calls")).toBeTruthy();
+  expect(within(card).getByText("memory filter")).toBeTruthy();
+  expect(screen.queryByText("Background workers")).toBeNull();
+});

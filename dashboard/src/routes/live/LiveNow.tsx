@@ -119,16 +119,14 @@ const RUNS_POLL_MS = 30_000;
 /** How often a seat's own latest events are read again, when one is chosen. */
 const SEAT_EVENTS_POLL_MS = 15_000;
 
-/** The phases the engine emits, the turn's own two first. */
-const PHASES = [
-  "execute",
-  "review",
-  "onboarding",
-  "sandbox",
-  "subagent",
-  "auxiliary",
-  "judge",
-] as const;
+/**
+ * The phases the engine emits, the turn's own two first.
+ *
+ * NOT `auxiliary`: no phase record carries it. The auxiliary model's spend is
+ * an `auxiliary_spend` record, which is no phase and runs nothing live, so a
+ * filter offering it matched no row and read as a quiet model.
+ */
+const PHASES = ["execute", "review", "onboarding", "sandbox", "subagent", "judge"] as const;
 
 /** The phase a running turn is in, in the vocabulary the phase filter uses. */
 function runningPhase(row: AgentRow): string {
@@ -192,9 +190,19 @@ export function LiveNow() {
 
   // --- activity ----------------------------------------------------------
   const { cell, cells } = cutInto(spanOf(range.window), STRIP_CELLS);
+  // THE FEED'S ROWS, on the strip and on a seat's latest events alike: the
+  // unselected card is the live ring, which holds no accounting row, so a
+  // strip that counted them — or a seat's card listing its spend records,
+  // several after every turn — would be drawing a different stream.
   const series = useQuery(
     "event_series",
-    { since: range.since, until: range.until, bucket: "minute", ...(seat ? { seat } : {}) },
+    {
+      since: range.since,
+      until: range.until,
+      bucket: "minute",
+      feed_only: "true",
+      ...(seat ? { seat } : {}),
+    },
     { pollMs: 30_000 },
   );
   const strip = useMemo(
@@ -205,7 +213,7 @@ export function LiveNow() {
   // push names no seat on an event, so filtering it here would be a guess.
   const seatEvents = useQuery(
     "events",
-    { seat, limit: LATEST_EVENTS },
+    { seat, limit: LATEST_EVENTS, feed_only: "true" },
     { enabled: seat !== "", pollMs: SEAT_EVENTS_POLL_MS },
   );
   const latest = seat ? (seatEvents.data?.events ?? []) : pushed.slice(0, LATEST_EVENTS);

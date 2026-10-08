@@ -75,6 +75,7 @@ import {
 import { useNavigator, useRoute } from "../router.tsx";
 import { capsOf, keyRow, matchesRow } from "../keymap.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useRecents, forgetAll } from "~/lib/recents.ts";
 import { useViewerPrefs } from "~/lib/prefs.ts";
@@ -98,7 +99,7 @@ import { renderMarkdown } from "~/lib/markdown.ts";
 import { requestToken } from "~/protocol/index.ts";
 import type { ActResult } from "~/protocol/act.ts";
 import type { SearchOutcome, WorkProjectRow } from "~/protocol/index.ts";
-import { SEARCH_MODES, modeLabel, servedNote } from "~/lib/search.ts";
+import { SEARCH_MODES, modeLabel, searchTooLong, servedNote } from "~/lib/search.ts";
 import { PriorityMark, StatusMark } from "~/components/work.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { Mark } from "~/ui/glyph.tsx";
@@ -220,16 +221,27 @@ export function CommandPalette({
   const pickTerm = pickQuery.trim();
 
   // ---- the three questions ---------------------------------------------
+  // A TERM PAST THE ENGINE'S SEARCH BOUND ASKS NEITHER SEARCH NOR THE ANSWER,
+  // and the lead says why (`searchTooLong`): sent, both would be refused, and
+  // a list that silently lost its tasks and pages reads as nothing matching.
+  const searchable = (scope === "all" || scope === "tasks" || scope === "pages") && !picking;
+  const tooLong = searchable ? searchTooLong(term) : null;
   const wantsTasks =
-    !picking && (scope === "all" || scope === "tasks") && term.length >= SEARCH_MIN;
-  const tasks = useQuery(
+    !picking &&
+    (scope === "all" || scope === "tasks") &&
+    term.length >= SEARCH_MIN &&
+    tooLong === null;
+  const tasks = useSearchQuery(
     "work_search",
     { q: term, mode: "hybrid", limit: TASK_HITS },
     { enabled: wantsTasks },
   );
   const wantsPages =
-    !picking && (scope === "all" || scope === "pages") && term.length >= SEARCH_MIN;
-  const pages = useQuery("knowledge", { q: term }, { enabled: wantsPages });
+    !picking &&
+    (scope === "all" || scope === "pages") &&
+    term.length >= SEARCH_MIN &&
+    tooLong === null;
+  const pages = useSearchQuery("knowledge", { q: term }, { enabled: wantsPages });
   const pickingAgent = pick?.kind === "assign" || pick?.kind === "ask";
   const nameTerm = picking ? pickTerm : term;
   const wantsNames =
@@ -857,6 +869,7 @@ export function CommandPalette({
     if (scope === "tasks") {
       if (term.length < SEARCH_MIN)
         return "Type at least two characters to search the company’s work.";
+      if (tooLong) return tooLong;
       if (taskAnswer.error) return "Task search did not run — the note above says why.";
       if (!taskAnswer.data) return "Searching…";
       if (taskAnswer.data.available === false) {
@@ -867,6 +880,7 @@ export function CommandPalette({
     if (scope === "pages") {
       if (term.length < SEARCH_MIN)
         return "Type at least two characters to search the knowledge base.";
+      if (tooLong) return tooLong;
       if (pageAnswer.error) return "Knowledge search did not run — the note above says why.";
       if (!pageAnswer.data) return "Searching…";
       if (pageAnswer.data.available === false)
@@ -902,6 +916,11 @@ export function CommandPalette({
         // — "the engine does not serve this here" and "the socket went away"
         // both read as "nothing matched" otherwise.
         <QueryState error={scopeRefusal} loading={false} />
+      ) : tooLong ? (
+        // NOT SENT, and said where an answer would be: All still lists the
+        // screens and actions the term matches, and nothing else on the
+        // surface would say why its tasks and pages are missing.
+        <p className="palette-answer-note">{tooLong}</p>
       ) : (
         <AnswerLead state={answer} nav={nav} openPage={openPage} />
       )}

@@ -12,9 +12,11 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerfit"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
@@ -24,7 +26,6 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat"
-	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
@@ -178,6 +179,42 @@ type Dispatcher struct {
 	// that cannot say which seat it is: the panic is still logged, the
 	// trigger still recorded and the delivery still settled.
 	Identify func(handle string) (role, agentID string)
+
+	// Rewriter is the seat's compactor, which rewrites a tool-call payload
+	// past the ledger's budget before the conversation entry is written —
+	// see [ledger.SessionInput.Fitted] — bound to the attribution the
+	// dispatcher files those rewrites under.
+	//
+	// A FUNCTION, read per dispatch, for [Dispatcher.Conversation]'s
+	// reason: the auxiliary chain is the company's, and a live apply
+	// replaces it. Nil records every payload whole, which is the honest
+	// answer for a dispatcher with no model to rewrite with: the row is the
+	// store's only record of the turn, and a fragment written into it is a
+	// fragment for ever.
+	Rewriter func(handle string, use auxspend.Use) ledgerfit.Fitter
+
+	// ReflectionRoom is the PRE-FLIGHT gate on those rewrites: whether the
+	// seat may spend on the reflection stage at all, the same answer the
+	// reflection pass beside them asks for ([Engine.reflectionRoom]) — they
+	// are filed under that stage, being what the seat remembers of a turn
+	// once it is over. Asked once per entry, and only for an entry with a
+	// payload to rewrite, so a false is those rewrites turned away — and the
+	// engine's gate records it as the window's refusal. Three-valued: an
+	// error is a counter that could not be read, and the rewrites are made,
+	// since the charge on the way out still counts them.
+	//
+	// A FUNCTION, read per dispatch, for [Dispatcher.Conversation]'s reason.
+	// Nil admits every entry, which is the answer for a dispatcher with no
+	// counter to ask.
+	ReflectionRoom func(ctx context.Context, handle string) (bool, error)
+
+	// FlushSpend publishes what a run's auxiliary calls have cost on this
+	// node so far ([auxspend.Ledger.FlushTurn]) — called once the
+	// conversation entry's rewrites are made, which happen after the turn's
+	// end and beside its reflection pass, so their records reach the
+	// rollups and the turn's page then rather than a flush interval later.
+	// Nil leaves them to the ledger's timer.
+	FlushSpend func(ctx context.Context, runID string)
 
 	// Now is injectable so a test can pin the clock.
 	Now func() time.Time
@@ -1005,8 +1042,10 @@ func (d *Dispatcher) noteAbandoned(ctx context.Context, handle string, evs []*ev
 			AgentHandle: handle,
 			TriggerID:   ev.ID.String(),
 			TriggerType: ev.Type,
-			Reason: reason + ", so it was not redelivered: " +
-				textcut.Ellipsis(cause.Error(), 200),
+			// THE CAUSE WHOLE, held only to the event's delivery bound:
+			// it was cut at 200 bytes, which a wrapped error spends on
+			// its outer operations before it reaches what failed.
+			Reason: events.ClipDiagnostic(reason + ", so it was not redelivered: " + cause.Error()),
 		}, triggerTrace([]*events.Event{ev}))
 		rec.Source = "engine.dispatch"
 		d.Observe(ctx, rec)
@@ -1601,6 +1640,43 @@ func (d *Dispatcher) RecordSession(ctx context.Context, handle, conversation,
 			in.BlockedOn = w.Evidence
 		}
 	}
+	if pieces := ledger.SessionPieces(in); d.Rewriter != nil && len(pieces) > 0 {
+		// REWRITTEN BEFORE THE WRITE, never cut: the row is the only copy,
+		// and what a later turn reads of a payload past the budget is what
+		// the seat's auxiliary model made of it. Bounded by the turn's own
+		// context rather than a detached one, because the turn's work is
+		// done and an entry written a moment later with the payload whole
+		// is better than a dispatcher held behind a slow provider.
+		//
+		// THE REFLECTION STAGE: the entry is the seat's own account of the
+		// turn, written for its next turn on the thread once this one is
+		// over — what the seat remembers, never what the work cost — so
+		// it is counted on the seat's day and kept off the turn's total
+		// and its work item, beside the reflection workers.
+		//
+		// AND GATED AS THAT STAGE IS: a seat or a company with no room left
+		// starts no reflection pass, and makes none of these rewrites
+		// either. A turn the budget ended is the case that matters: its
+		// refused round left the counter past the ceiling, and a rewrite
+		// made now would be spend past it on a turn nobody will read
+		// again until the window turns over. The entry is still written —
+		// a payload that cannot be rewritten is named by its size and
+		// digest, ledgerfit's account of any rewrite it cannot have, and
+		// the call line beside it still says which tool ran and whether
+		// it worked. Unlike the task card (turnspend.go), which a person
+		// reads for exactly that turn, this row is read by the seat's
+		// next turn on the thread, which waits for room anyway.
+		var fitter ledgerfit.Fitter
+		if d.mayReflect(ctx, handle, runID) {
+			fitter = d.Rewriter(handle, auxspend.Use{
+				Stage: types.AuxStageReflection, TurnID: runID, WorkKey: workKey,
+			})
+		}
+		in.Fitted = ledgerfit.Fit(ctx, fitter, pieces)
+		if fitter != nil && d.FlushSpend != nil {
+			d.FlushSpend(ctx, runID)
+		}
+	}
 	entry := ledger.BuildSession(in)
 	if res.LastReview != nil {
 		entry.CompletedWork = res.LastReview.CompletedWork
@@ -1615,6 +1691,30 @@ func (d *Dispatcher) RecordSession(ctx context.Context, handle, conversation,
 		log.WarnContext(ctx, "conversation_not_recorded", "seat", handle,
 			"conversation", conversation, "error", err)
 	}
+}
+
+// mayReflect asks [Dispatcher.ReflectionRoom] whether a conversation entry's
+// rewrites may be made, and logs the two answers that are not a plain yes.
+func (d *Dispatcher) mayReflect(ctx context.Context, handle, runID string) bool {
+	if d.ReflectionRoom == nil {
+		return true
+	}
+	ok, err := d.ReflectionRoom(ctx, handle)
+	switch {
+	case err != nil:
+		// UNKNOWN, not refused — the reflection pass's own reading.
+		log.WarnContext(ctx, "conversation_rewrite_budget_unknown", "seat", handle,
+			"turn_id", runID, "error", err,
+			"detail", "rewriting the entry's long payloads anyway; the spend is still charged")
+		return true
+	case !ok:
+		log.InfoContext(ctx, "conversation_rewrite_skipped_no_budget", "seat", handle,
+			"turn_id", runID,
+			"detail", "the company or this seat is at its token ceiling, so the entry's "+
+				"long payloads are named by size and digest rather than rewritten")
+		return false
+	}
+	return true
 }
 
 func (d *Dispatcher) history(ctx context.Context, handle, conversation string) ([]ledger.Session, error) {

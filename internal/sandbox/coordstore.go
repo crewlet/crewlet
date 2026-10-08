@@ -83,9 +83,14 @@ const casRetries = 16
 
 // BeginLaunch opens a launch on this turn's row. See the contract on
 // [PendingStore].
-func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fence) error {
+//
+// A ROW THAT VANISHES BETWEEN THE CREATE AND THE RESET is a row there is none
+// of, so the create is tried again: the turn's previous run finishing as this
+// one opens ends the row underneath the reset, and a reset that found nothing
+// used to report the launch open on a row that did not exist.
+func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fence) (PendingRun, error) {
 	if run.TurnID == "" {
-		return fmt.Errorf("sandbox: a pending run needs a turn id")
+		return PendingRun{}, fmt.Errorf("sandbox: a pending run needs a turn id")
 	}
 	now := s.clock()
 	if run.CreatedAt.IsZero() {
@@ -109,29 +114,54 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	run.Launch = LaunchRecord{StartedAt: now, Model: run.Launch.Model}
 	raw, err := encodeRun(run)
 	if err != nil {
-		return err
+		return PendingRun{}, err
 	}
-	created, err := s.runs.CreateSandboxRun(ctx, run.TurnID, raw)
-	if err != nil {
-		return fmt.Errorf("sandbox: create run %s: %w", run.TurnID, err)
+	for range casRetries {
+		created, err := s.runs.CreateSandboxRun(ctx, run.TurnID, raw)
+		if err != nil {
+			return PendingRun{}, fmt.Errorf("sandbox: create run %s: %w", run.TurnID, err)
+		}
+		if created {
+			return run, nil
+		}
+		opened, reset, held, err := s.resetLaunch(ctx, run, fence)
+		if err != nil {
+			return PendingRun{}, err
+		}
+		if reset {
+			return opened, nil
+		}
+		if held > 0 {
+			return PendingRun{}, fmt.Errorf("sandbox: run %s is held by a newer lease "+
+				"(epoch %d, this launch's %d), so no job was opened on it",
+				run.TurnID, held, fence.Epoch)
+		}
+		// The row went between the create and the reset: create it again.
 	}
-	if created {
-		return nil
-	}
-	// The row was already there — a second run_sandbox call in this turn,
-	// or a redelivered kick-off. Only the LAUNCH-SCOPED state is reset: the
-	// identity fields stay the existing row's, and so does the box
-	// reference, which the caller is about to reattach to.
-	//
-	// A RESET THE ROW REFUSES IS AN ERROR, never a launch that went ahead: a
-	// newer lease owns the run, or its ending is decided ([ErrRunEnding]), or
-	// the record went between the create and the reset. It used to answer
-	// nil, and the launch went on to start a job in a box the row did not
-	// record — killed under it by the ending, or billed and named by nothing.
-	outrankedBy := int64(0)
-	_, reset, err := s.mutateLive(ctx, run.TurnID, func(existing *PendingRun) bool {
+	return PendingRun{}, fmt.Errorf(
+		"sandbox: begin launch %s: the record kept appearing and vanishing under the launch",
+		run.TurnID)
+}
+
+// resetLaunch is [CoordStore.BeginLaunch]'s half for a row that was already
+// there — a second run_sandbox call in this turn, or a redelivered kick-off —
+// reporting the row as it reset it, whether it did and, where a newer lease
+// refused it, that lease's epoch. Neither is a row that is gone.
+//
+// Only the LAUNCH-SCOPED state is reset: the identity fields stay the existing
+// row's, and so does the box reference, which the caller is about to reattach
+// to.
+//
+// A RESET THE ROW REFUSES IS NEVER A LAUNCH THAT WENT AHEAD: a newer lease
+// owns the run (the epoch reported), or its ending is decided — an error
+// wrapping [ErrRunEnding]. Answered as a launch, either would start a job in a
+// box the row did not record — killed under it by the ending, or billed and
+// named by nothing.
+func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fence) (PendingRun, bool, int64, error) {
+	var held int64
+	opened, reset, err := s.mutateLive(ctx, run.TurnID, func(existing *PendingRun) bool {
 		if outranked(*existing, fence) {
-			outrankedBy = existing.OwnerEpoch
+			held = existing.OwnerEpoch
 			return false
 		}
 		existing.Status = StatusLaunching
@@ -173,19 +203,13 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// AND THE PREVIOUS JOB'S CHARGE IS NOT THIS JOB'S. Carried over,
 		// it would tell this job's completion that its spend is already
 		// counted, and the company would never be billed for it.
-		existing.Charged = false
+		existing.Charged, existing.CompanyCharged = false, false
 		return true
 	})
-	switch {
-	case err != nil:
-		return fmt.Errorf("sandbox: relaunch run %s: %w", run.TurnID, err)
-	case outrankedBy > 0:
-		return fmt.Errorf("sandbox: relaunch run %s: a newer lease (epoch %d) than the launch's (%d) "+
-			"owns it", run.TurnID, outrankedBy, fence.Epoch)
-	case !reset:
-		return fmt.Errorf("sandbox: relaunch run %s: its record went before it could be reset", run.TurnID)
+	if err != nil {
+		return PendingRun{}, false, 0, fmt.Errorf("sandbox: relaunch run %s: %w", run.TurnID, err)
 	}
-	return nil
+	return opened, reset, held, nil
 }
 
 // Get returns one run by turn id.
@@ -236,6 +260,10 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 		return false, fmt.Errorf("sandbox: a claim is never taken out of %q, so it cannot be released to it",
 			release.To)
 	}
+	if release.Collected && !release.CollectFailedAt.IsZero() {
+		return false, errors.New("sandbox: a release cannot report a collection that both read its box " +
+			"back and failed to")
+	}
 	_, released, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
 		if run.Status != StatusResumed || run.LaunchID != release.Launch || outranked(*run, release.Fence) {
 			return false
@@ -248,6 +276,7 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 		}
 		run.Status = release.To
 		run.Charged = run.Charged || release.Charged
+		run.CompanyCharged = run.CompanyCharged || release.CompanyCharged
 		if run.Answer != nil && run.Answer.Taken() {
 			// The turn that took it gave the claim back as a retry, so
 			// the answer is the run's again — see [RecordedAnswer.TakenAt].
@@ -255,10 +284,21 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 			answer.TakenAt = time.Time{}
 			run.Answer = &answer
 		}
+		// Onto THIS job's record, every fact below: the release names the
+		// job the row holds, or it was refused above.
 		if release.Published {
-			// Onto THIS job's record: the release names the job the row
-			// holds, or it was refused above.
 			run.Launch.Published = true
+		}
+		if at := release.CollectFailedAt; !at.IsZero() {
+			run.Launch.CollectFailures++
+			if run.Launch.CollectFailingSince.IsZero() {
+				run.Launch.CollectFailingSince = at.UTC()
+			}
+		}
+		// THE RUN OF FAILURES ENDS AT A COLLECTION THAT READ THE BOX.
+		if release.Collected {
+			run.Launch.CollectFailures = 0
+			run.Launch.CollectFailingSince = time.Time{}
 		}
 		return true
 	})
@@ -284,6 +324,9 @@ func (s *CoordStore) MarkAwaiting(ctx context.Context, turnID string, q Clarific
 		// replies let go of belong to the question they were matched to.
 		run.AskedAt = q.AskedAt
 		run.Answer, run.DeclinedAnswers = nil, nil
+		// And what condensing the collection that parked it cost, onto the
+		// record of the job the row holds — see [LaunchRecord.Condensed].
+		run.Launch.Condensed = q.Condensed
 		return true
 	})
 	return err
@@ -686,16 +729,27 @@ func (s *CoordStore) ReleaseBox(ctx context.Context, turnID string) error {
 // rather than clobbering each other.
 //
 // A run whose row is gone is not an error: the run ended while a late call was
-// in flight, which is the ordinary shape of a box shutting down. The append is
-// simply dropped, and the caller — which must not fail the box's call over
-// telemetry — treats false the same as true.
-func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, call BridgeCall) (bool, error) {
+// in flight, which is the ordinary shape of a box shutting down. Nor is a job
+// the row has moved on from, or an append naming no job at all (see the pin on
+// [PendingStore]). The append is simply dropped, and the caller — which must
+// not fail the box's call over telemetry — goes on as it would have.
+func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, a BridgeAppend) (bool, error) {
+	if a.Launch == "" {
+		return false, nil
+	}
+	call := a.Call
 	if call.At.IsZero() {
 		call.At = s.clock()
 	}
 	_, won, err := s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
+		if a.Launch != run.LaunchID {
+			return false
+		}
 		run.BridgeCalls, run.BridgeCallsElided = appendBounded(
 			run.BridgeCalls, run.BridgeCallsElided, call)
+		// Onto THIS job's record: the append names the job the row holds,
+		// or it was dropped above.
+		run.Launch.Bridged = run.Launch.Bridged.Newest(a.Spent)
 		return true
 	})
 	return won, err

@@ -80,6 +80,12 @@ type Service struct {
 	// Set on the publish path and cleared on the tick — see flushTokens.
 	tokensDirty atomic.Bool
 
+	// pushMu orders the `agents` pushes, and pushed is what the last of them
+	// said about each seat's live call: which call, and the version of each
+	// heavy field it described. See pushAgents.
+	pushMu sync.Mutex
+	pushed map[string]pushedCall
+
 	mu      sync.Mutex
 	ticking bool
 	stop    chan struct{}
@@ -190,6 +196,7 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 		placement: opts.Placement,
 		now:       opts.Now,
 		interval:  opts.HealthInterval,
+		pushed:    map[string]pushedCall{},
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }
@@ -262,6 +269,20 @@ func (s *Service) ReconcileSandboxes(records []livestate.SandboxRecord, asOf tim
 }
 
 // pushAgents sends the rows of the seats a change moved.
+//
+// A LIVE CALL'S HEAVY FIELDS GO ONLY WHEN THEY MOVED. A running phase moves
+// its seat's row five times a second while a round streams, and the prompt,
+// the committed rounds' narration, the tool calls and the rounds' timing move
+// once a round or once a call at most — so each push carries those only when
+// their version moved since the last push for the same call, and names every
+// version always (see livestate's detail.go for why a version and not a
+// delta: the hub drops a slow client's oldest envelope, and a tab must know
+// from the next push that it missed one).
+//
+// ONE PUSH AT A TIME, under pushMu, from reading the rows to queueing the
+// frame: what is left out is decided against what the previous push said,
+// so two pushes built side by side could each leave out a field the other
+// was the one to carry. Broadcast never blocks, so nothing waits long here.
 func (s *Service) pushAgents(change livestate.Change, now time.Time) {
 	if len(change.Agents) == 0 {
 		return
@@ -270,8 +291,41 @@ func (s *Service) pushAgents(change livestate.Change, now time.Time) {
 	// map iteration is randomised, and a frame whose row order changes for
 	// no reason makes a diff of two captures unreadable.
 	roles := slices.Sorted(maps.Keys(change.Agents))
-	if rows := s.state.OverlayRows(roles); len(rows) > 0 {
-		s.hub.Broadcast(Push(KindAgents, rows, now))
+	s.pushMu.Lock()
+	defer s.pushMu.Unlock()
+	rows := s.state.OverlayRows(roles)
+	if len(rows) == 0 {
+		return
+	}
+	for _, row := range rows {
+		s.leaveOutWhatIsHeld(row)
+	}
+	s.hub.Broadcast(Push(KindAgents, rows, now))
+}
+
+// pushedCall is what an `agents` push said about one seat's live call.
+type pushedCall struct {
+	key      livestate.CallKey
+	versions livestate.CallVersions
+}
+
+// leaveOutWhatIsHeld replaces a row's live call with the copy a push carries:
+// without the heavy fields the last push for the same call already carried at
+// the same version. A call the last push did not describe — a new phase, a
+// seat's first — goes whole.
+//
+// Called under pushMu.
+func (s *Service) leaveOutWhatIsHeld(row map[string]any) {
+	role, _ := row["role"].(string)
+	call, _ := row["live_call"].(*livestate.LiveCall)
+	if call == nil {
+		delete(s.pushed, role)
+		return
+	}
+	last, ok := s.pushed[role]
+	s.pushed[role] = pushedCall{key: call.Key(), versions: call.Versions}
+	if ok && last.key == call.Key() {
+		row["live_call"] = call.Without(last.versions)
 	}
 }
 

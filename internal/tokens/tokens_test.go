@@ -13,7 +13,7 @@ func rec(role, phase, model, turn, at string, in, out int) tokens.Record {
 		EventID: at + role + phase, Timestamp: at,
 		AgentRole: role, AgentID: "id-" + role,
 		Phase: phase, Model: model, TurnID: turn,
-		InputTokens: in, OutputTokens: out, TotalTokens: in + out,
+		InputTokens: in, OutputTokens: out, TotalTokens: in + out, Calls: 1,
 	}
 }
 

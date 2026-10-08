@@ -3,6 +3,7 @@ package engine
 import (
 	"github.com/crewlet/crewlet/internal/agent/extension"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/auxspend"
 )
 
 // The round-cap extension judge, wired.
@@ -25,7 +26,14 @@ import (
 // configured for the seat, or a turn on a build with no epoch — and
 // extension.Consider already reads a nil judge as "do not ask", which is the
 // same rescue this would otherwise have to invent.
-func (e *Engine) judgeFor(c *Company, handle string) extension.Judge {
+//
+// use is the turn's attribution, which the judge's evidence rewrites are filed
+// under: the judgement is the turn's, so condensing what it reads is too. The
+// judge's own call is a phase of the turn, metered by the turn's meter — the
+// one use carries ([auxspend.Use.Budget]), which the judge asks once its
+// evidence is rendered, since a rewrite of that evidence can be what fills
+// the window its call would be refused in ([extension.LLMJudge.WithHold]).
+func (e *Engine) judgeFor(c *Company, handle string, use auxspend.Use) extension.Judge {
 	if c == nil || c.Org == nil || c.Models == nil {
 		return nil
 	}
@@ -45,7 +53,14 @@ func (e *Engine) judgeFor(c *Company, handle string) extension.Judge {
 	}
 	// NewLLMJudge returns nil for a nil provider, which is what makes the
 	// nil-judge path above and this one the same path.
-	judge := extension.NewLLMJudge(member.Provider, member.Key)
+	// WITH THE SEAT'S COMPACTOR, so evidence past its budget — a pasted
+	// document in a call, an error page, a long task — is rewritten for
+	// the judge rather than cut or carried whole.
+	judge := extension.NewLLMJudge(member.Provider, member.Key).
+		WithCompactor(e.seatCompactor(c, handle, use))
+	if use.Budget != nil {
+		judge = judge.WithHold(use.Budget)
+	}
 	if judge == nil {
 		return nil
 	}

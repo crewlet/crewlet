@@ -1,10 +1,16 @@
 package integration
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/logging"
 )
 
 // A REFUSED CREDENTIAL IS NOT A WAIT.
@@ -191,5 +197,33 @@ func TestAskingForATeardownDropsWhatTheLastPassFound(t *testing.T) {
 	if got.Attempts != 0 || !got.NextAttemptAt.IsZero() {
 		t.Errorf("attempts=%d next=%v, so the disconnect waits out a backoff",
 			got.Attempts, got.NextAttemptAt)
+	}
+}
+
+// WHAT A ROW SHORTENS IS LEFT WHOLE ON THE LOG. The row's bounds are its KV
+// value's, and the row was the only place that text was written — so what
+// they left out was lost: a validation list's later fields, the scope a
+// refusal named after its first sentence.
+func TestWhatARowShortensIsLoggedWhole(t *testing.T) {
+	var out bytes.Buffer
+	logging.Configure(slog.LevelInfo, logging.FormatText, &out)
+	t.Cleanup(func() { logging.Configure(slog.LevelError, logging.FormatText, io.Discard) })
+
+	long := strings.Repeat("field is required; ", 40) + "missing scope admin:org"
+	fault := errors.New(strings.Repeat("upstream said no; ", 200) + "rotate the key")
+	LogWhole(t.Context(), KindGitHub, []Finding{
+		{Kind: FindingApprovalRequired, Subject: "sre-lead", Detail: long},
+		{Kind: FindingApprovalRequired, Subject: "eng-lead", Detail: "short"},
+	}, fault)
+
+	got := out.String()
+	if !strings.Contains(got, "integration_finding_shortened") || !strings.Contains(got, "missing scope admin:org") {
+		t.Errorf("a finding past the row's bound was not logged whole:\n%.400s", got)
+	}
+	if strings.Contains(got, "eng-lead") {
+		t.Error("a finding within the bound was logged as shortened")
+	}
+	if !strings.Contains(got, "integration_fault_shortened") || !strings.Contains(got, "rotate the key") {
+		t.Errorf("a fault past the row's bound was not logged whole:\n%.400s", got)
 	}
 }

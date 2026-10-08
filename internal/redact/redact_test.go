@@ -53,7 +53,7 @@ func TestTheMoreSpecificShapeWinsOverThePrefixThatContainsIt(t *testing.T) {
 
 func TestAPrivateKeyBlockGoesWholeRatherThanLineByLine(t *testing.T) {
 	block := "-----BEGIN OPENSSH PRIVATE KEY-----\n" +
-		strings.Repeat("b3BlbnNzaC1rZXktdjEAAAAA\n", 20) +
+		strings.Repeat(sshLine+"\n", 20) +
 		"-----END OPENSSH PRIVATE KEY-----"
 	got := redact.Secrets("log line\n" + block + "\ntrailing")
 	if strings.Contains(got, "b3BlbnNzaC") {
@@ -70,7 +70,7 @@ func TestAPrivateKeyBlockGoesWholeRatherThanLineByLine(t *testing.T) {
 // Two keys in one payload must not be merged into a single span by a greedy
 // match that runs from the first BEGIN to the last END.
 func TestTwoPrivateKeysDoNotSwallowWhatIsBetweenThem(t *testing.T) {
-	key := "-----BEGIN RSA PRIVATE KEY-----\nAAAA\n-----END RSA PRIVATE KEY-----"
+	key := "-----BEGIN RSA PRIVATE KEY-----\n" + pemBody(2) + "-----END RSA PRIVATE KEY-----"
 	got := redact.Secrets(key + "\nIMPORTANT LOG\n" + key)
 	if !strings.Contains(got, "IMPORTANT LOG") {
 		t.Fatalf("a greedy match ate the text between two keys: %q", got)

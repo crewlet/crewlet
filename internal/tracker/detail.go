@@ -16,7 +16,6 @@ import (
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // Reading ONE task, and why it is not a board query with a filter.
@@ -122,16 +121,8 @@ type DetailWants struct {
 	// another's.
 	Clock *DayClock
 
-	// Comment names ONE comment to read WHOLE, and REPLACES the page.
-	//
-	// The thread page carries EXCERPTS — see [CommentBodyShown] — so this
-	// is the read that opens one. Without it the excerpt is not a pointer
-	// but a loss: a body is accepted at up to [MaxCommentBody] and there
-	// would be no read in the engine that ever returns the rest of it.
-	//
-	// It replaces the page rather than widening it, because a thread of
-	// twenty whole bodies is ten times the ceiling on one tool answer —
-	// which is the reason the page is excerpted in the first place.
+	// Comment names ONE comment to read, and REPLACES the page — the read
+	// that answers "that comment, and nothing else", by id.
 	Comment string
 }
 
@@ -799,10 +790,9 @@ const DetailComments = 20
 // MaxCommentPage is the most comments one page may hold.
 //
 // FIFTY, the ceiling every other paged read in this tracker holds a caller to
-// ([MaxInboxRows], [MaxFeedPage], [MaxSearchLimit]): each body on a page is
-// excerpted to [CommentBodyShown], so fifty of them stay near a hundred KiB —
-// inside what one answer carries — where a caller walking a long thread wants
-// as few round trips as that allows.
+// ([MaxInboxRows], [MaxFeedPage], [MaxSearchLimit]), where a caller walking a
+// long thread wants as few round trips as that allows. What a page WEIGHS is
+// [CommentPageBytes]'s to bound, not this.
 const MaxCommentPage = 50
 
 // commentPage is the page size a detail read asked for, defaulted and held
@@ -818,20 +808,21 @@ func commentPage(asked int) int {
 	}
 }
 
-// CommentBodyShown is how much of each body a THREAD PAGE carries.
+// CommentPageBytes is how much comment text one THREAD PAGE carries, in
+// WHOLE comments — never a comment cut to fit.
 //
-// 2 KiB, against [MaxCommentBody]'s 32 KiB — which is the whole point: twenty
-// comments at their full length is 640 KiB, ten times the ceiling on ONE tool
-// answer, for a thread nobody asked to read in full. The excerpt is what a
-// reader skims; [DetailWants.Comment] is how they open one.
+// The page used to carry every body cut to two kibibytes, and a comment cut
+// there reads as a comment that ENDED there: a reviewer's "looks good, but —"
+// with the "but" two kilobytes in. Every comment on a page is now whole, and
+// a page holds as many as fit this budget — at least one, which [MaxCommentBody]
+// already bounds — and its cursor continues exactly where it stopped, so a
+// long thread is more pages rather than shorter comments.
 //
-// THAT SECOND HALF IS WHAT MAKES THE CUT LEGITIMATE, and it did not exist:
-// the excerpt was documented as a pointer to a read the engine did not have,
-// so a body written at more than 2 KiB — which every wake excerpt, every
-// `my_work` ask row and every detail read shortened further — could not be
-// recovered by any seat through any tool. A cut with no way back is not a
-// pointer, it is a silent loss of what somebody wrote.
-const CommentBodyShown = 2 << 10
+// 16 KiB is a quarter of the 64 KiB one tool answer may weigh: beside a whole
+// description ([MaxBody]) it leaves the history, links and fields their room,
+// and the answer's own ceiling refuses — naming `include` — rather than cuts
+// on the rare item where all of them are at their largest at once.
+const CommentPageBytes = 16 << 10
 
 // readComments is a page of the thread, NEWEST FIRST.
 //
@@ -846,6 +837,18 @@ const CommentBodyShown = 2 << 10
 // reply still resolve against something — so it is returned rather than
 // filtered, and its `removed` flag is what a renderer reads.
 func readComments(ctx context.Context, tx *sql.Tx, taskID, cursor string, limit int) (
+	[]Comment, string, error) {
+	return readCommentPage(ctx, tx, taskID, cursor, limit, CommentPageBytes)
+}
+
+// readCommentPage is [readComments] with the byte budget a parameter, so the
+// bound is exercised directly rather than only at its default.
+//
+// THE BUDGET ENDS A PAGE EARLY, never a comment: the comment that would take
+// the page past it is the first of the next page, and the cursor names the
+// last comment this page RETURNED — the same rule the count follows, for the
+// same reason.
+func readCommentPage(ctx context.Context, tx *sql.Tx, taskID, cursor string, limit, maxBytes int) (
 	[]Comment, string, error) {
 
 	// ONE MORE THAN THE PAGE, which is how the cursor knows whether there
@@ -868,6 +871,8 @@ func readComments(ctx context.Context, tx *sql.Tx, taskID, cursor string, limit 
 		// what the next page continues strictly below.
 		lastAt int64
 		lastID string
+		// weight is the comment text on the page so far.
+		weight int
 	)
 	for rows.Next() {
 		var body []byte
@@ -891,10 +896,15 @@ func readComments(ctx context.Context, tx *sql.Tx, taskID, cursor string, limit 
 			return nil, "", fmt.Errorf("tracker: decode a comment on %s: %w",
 				taskID, err)
 		}
-		// THE BODY IS ELIDED HERE and not at the caller, because the
-		// caller that forgot would send the whole thread — and the
-		// elision is what makes twenty of them fit an answer at all.
-		comment.Body = elideCommentBody(comment.Body)
+		// WHOLE, and the page ends before a comment that would take it
+		// past its budget — HERE and not at the caller, because a caller
+		// that forgot would send the whole thread. The first comment is
+		// always taken, so a page is never empty while the thread is not.
+		if len(out) > 0 && weight+len(comment.Body) > maxBytes {
+			next = formatCommentCursor(lastAt, lastID)
+			break
+		}
+		weight += len(comment.Body)
 		out = append(out, comment)
 		lastAt, lastID = at, id
 	}
@@ -917,24 +927,11 @@ func operatorComments(comments []Comment) []any {
 	return out
 }
 
-// elideCommentBody is what a thread carries of one comment.
+// readComment is ONE comment, WHOLE — the read that answers one comment by id.
 //
-// MARKED, and that is the half a plain cut leaves out: a body cut at exactly
-// the cap and handed over unmarked reads as a comment that ENDED there, which
-// is a different message from the one somebody wrote. [textcut.Ellipsis] is
-// the tree's one rune-safe cut, so a multi-byte character on the boundary does
-// not reach a model as a replacement character.
-func elideCommentBody(body string) string {
-	return textcut.Ellipsis(body, CommentBodyShown)
-}
-
-// readComment is ONE comment, WHOLE.
-//
-// The counterpart to the page above, and the reason its excerpt is honest:
-// what a reader skims is cut, what a reader OPENS is exactly what was
-// written. Nothing here elides — a single body is bounded by
-// [MaxCommentBody], which the write already refuses above, so the one value
-// this returns fits inside a tool answer with room to spare.
+// A single body is bounded by [MaxCommentBody], which the write already
+// refuses above, so the one value this returns fits inside a tool answer with
+// room to spare.
 //
 // SCOPED TO THE TASK, so a comment id from another item answers
 // [ErrNoComment] rather than quietly returning a thread the caller was not

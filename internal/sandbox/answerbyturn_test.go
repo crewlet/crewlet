@@ -26,7 +26,7 @@ func launchScheduled(t *testing.T, rig *coordRig, turnID string) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if err := rig.pending.BeginLaunch(t.Context(), PendingRun{
+	if _, err := rig.pending.BeginLaunch(t.Context(), PendingRun{
 		TurnID: turnID, AgentHandle: "swe", AgentID: "a-1", Role: "SWE",
 		CodingAgent: "claude-code", TraceID: "tr-1", CreatedAt: rig.now,
 		Requester: "ada",
@@ -82,7 +82,7 @@ func givenAgainst(t *testing.T, rig *coordRig, turnID string) (types.SandboxAnsw
 // launch, asked an hour after the first.
 func asksAgain(t *testing.T, rig *coordRig) func(context.Context, PendingRun) {
 	return func(ctx context.Context, run PendingRun) {
-		if err := rig.pending.BeginLaunch(ctx, run, Fence{}); err != nil {
+		if _, err := rig.pending.BeginLaunch(ctx, run, Fence{}); err != nil {
 			t.Errorf("relaunch: %v", err)
 		}
 		rig.suspendIn(ctx, run.TurnID)

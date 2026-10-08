@@ -51,17 +51,24 @@ type PendingRuns interface {
 // SandboxTails answers a running coding run's live output from the node that
 // owns it — the one method this surface calls of [sandbox.TailReader].
 type SandboxTails interface {
-	Tail(ctx context.Context, turnID, launchID string) (sandbox.TailAnswer, error)
+	Tail(ctx context.Context, q sandbox.TailQuery) (sandbox.TailAnswer, error)
 }
 
 // sandboxTail answers `sandbox_tail{turn_id, launch_id}`: the tail of that
-// launch while it runs, `not_running` with the record's own status once it is
-// not, or the owning node NAMED where it did not answer (`owner_silent`).
+// launch while it runs, `launching` while its box is being made, `not_running`
+// with the record's own status once it is not, `box_paused` for a running
+// record whose box is paused, or the owning node NAMED where it did not answer
+// (`owner_silent`).
 //
 // BOTH IDS ARE REQUIRED. A run is one execution of a turn and a turn can launch
 // more than one job; a request naming only the turn would show whichever job
 // its row holds now, which is a different job from the span a person clicked
 // the moment a second launch replaces the first.
+//
+// BY CURSOR: `epoch`, `after` and `digest` say what the asker holds — all
+// three absent for one holding nothing yet — and the answer carries what it
+// lacks, or a reset. A cursor's offset is a whole number of bytes, refused by
+// name otherwise.
 func (s Sources) sandboxTail(ctx context.Context, p Params) (any, error) {
 	turnID := strings.TrimSpace(p.String("turn_id"))
 	launchID := strings.TrimSpace(p.String("launch_id"))
@@ -69,7 +76,18 @@ func (s Sources) sandboxTail(ctx context.Context, p Params) (any, error) {
 		return nil, fmt.Errorf("%w: sandbox_tail needs a turn_id and the launch_id of the "+
 			"run's job", ErrBadParams)
 	}
-	return s.SandboxTail.Tail(ctx, turnID, launchID)
+	var after int64
+	if p.Has("after") {
+		var whole bool
+		if after, whole = p.WholeInt("after"); !whole || after < 0 {
+			return nil, fmt.Errorf("%w: sandbox_tail's after is the byte offset the asker "+
+				"holds through, a whole number of zero or more", ErrBadParams)
+		}
+	}
+	return s.SandboxTail.Tail(ctx, sandbox.TailQuery{
+		TurnID: turnID, LaunchID: launchID,
+		Cursor: sandbox.TailCursor{Epoch: p.String("epoch"), Offset: after, Digest: p.String("digest")},
+	})
 }
 
 // sandboxRuns answers the board, or — with `audience=<handle>` — the runs
@@ -83,9 +101,9 @@ func (s Sources) sandboxTail(ctx context.Context, p Params) (any, error) {
 // every run's audience to anybody who may read it, so a narrower answer
 // reveals nothing the wider one did not.
 //
-// A run parked by a build that resolved no audience carries none, and is
-// therefore nobody's by this filter — which is the truth about it: nothing
-// recorded whom its question was put to.
+// A run whose question resolved to nobody carries no audience, and is
+// therefore nobody's by this filter — which is the truth about it: nobody was
+// recorded as the one its question was put to.
 func (s Sources) sandboxRuns(ctx context.Context, p Params) (any, error) {
 	runs, err := s.Sandbox.ListActive(ctx)
 	if err != nil {

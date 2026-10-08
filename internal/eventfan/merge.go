@@ -130,7 +130,11 @@ func MergeListing(parts []listPart, limit int) (rows []store.EventRecord, more b
 // its custody batch is in flight (see the package doc), and both send it. By
 // the id alone the union would drop a second row sharing an id at another
 // instant, which the log's key allows.
-func MergeSpend(parts []spendPart, limit int) []tokens.Record {
+//
+// more reports that records exist past this page — a node said it holds more
+// than it sent, or the merged page was cut at limit — which is what tells a
+// paged read to ask again below the page's last record.
+func MergeSpend(parts []spendPart, limit int) (records []tokens.Record, more bool) {
 	var all []tokens.Record
 	var horizon *tokens.Record
 	type key struct{ at, id string }
@@ -149,7 +153,11 @@ func MergeSpend(parts []spendPart, limit int) []tokens.Record {
 			}
 			all = append(all, r)
 		}
-		if !p.Full || len(p.Records) == 0 {
+		if !p.Full {
+			continue
+		}
+		more = true
+		if len(p.Records) == 0 {
 			continue
 		}
 		last := p.Records[len(p.Records)-1]
@@ -169,9 +177,9 @@ func MergeSpend(parts []spendPart, limit int) []tokens.Record {
 		all = all[:cut]
 	}
 	if limit > 0 && len(all) > limit {
-		all = all[:limit]
+		all, more = all[:limit], true
 	}
-	return all
+	return all, more
 }
 
 // newestSpendFirst orders spend records by instant, newest first, and by event

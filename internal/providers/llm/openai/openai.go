@@ -244,20 +244,30 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 			if attempt > 1 {
 				req.Send(llm.Delta{Restart: true, Model: p.model})
 			}
-			out, reasoning, sErr := p.streamOnce(ctx, req, params, opt)
-			if errors.Is(sErr, errNoStream) {
+			out, reasoning, unary, sErr := p.streamOnce(ctx, req, params, opt)
+			if unary || errors.Is(sErr, errNoStream) {
 				// This endpoint accepted `stream: true` and answered
 				// without streaming. "OpenAI-compatible" is a de-facto
 				// standard with real variance — a local shim or a proxy
 				// may implement the unary route only — so the capability
 				// is NEGOTIATED rather than assumed, or pushed onto the
 				// operator as a config field they would have to know to
-				// set. Latched: one call per process, never repeated.
+				// set. Latched: found out once per process, never again.
 				p.noStream.Store(true)
 				log.WarnContext(ctx, "provider_does_not_stream",
 					"provider", p.name, "model", p.model,
 					"hint", "the endpoint answered a streaming request without streaming; "+
 						"live phase text will appear per round instead of as it is written")
+				if unary {
+					// THE ANSWER IT GAVE IS THE ANSWER. It was processed
+					// and billed, and asking again would pay twice for a
+					// round whose first answer no counter ever heard of.
+					// Its reasoning, if any, is on the message itself,
+					// where the unary path reads it.
+					return out, nil
+				}
+				// Answered with nothing a completion could be read from,
+				// so there is no answer to keep: asked again, unary.
 				plain := params
 				plain.StreamOptions = sdk.ChatCompletionStreamOptionsParam{}
 				return p.client.Chat.Completions.New(ctx, plain, opt)
@@ -297,20 +307,39 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 // `reasoning_content` is not in the OpenAI schema — it is the convention the
 // reasoning hosts adopted — so the accumulator neither knows nor keeps it, and
 // the assembled message's raw JSON has no trace of it. See [reasoningText].
+//
+// unary reports an endpoint that answered with a whole completion instead of a
+// stream ([httpapi.UnaryAnswer]): that completion is the answer, decoded
+// exactly as the unary path decodes one, and no fragment was forwarded.
 func (p *Provider) streamOnce(
 	ctx context.Context, req llm.Request,
 	params sdk.ChatCompletionNewParams, opt option.RequestOption,
-) (*sdk.ChatCompletion, string, error) {
+) (out *sdk.ChatCompletion, reasoning string, unary bool, err error) {
 	ctx, watch := httpapi.WatchIdle(ctx, p.timeout)
 	defer watch.Stop()
 	var done doneWatch
+	var answer sdk.ChatCompletion
+	whole := httpapi.NewUnaryAnswer(func(body []byte) bool {
+		var c sdk.ChatCompletion
+		// A completion carries its choices; an error envelope a gateway
+		// sent with a 2xx status, or an empty body, carries none.
+		if json.Unmarshal(body, &c) != nil || len(c.Choices) == 0 {
+			return false
+		}
+		answer = c
+		return true
+	})
+	// The watchdog and the sentinel watch INSIDE the unary reader, so a
+	// whole body read to find out whether it is a completion is bounded by
+	// its silence as a stream is, and a stream it hands back has already
+	// been seen for its `[DONE]`.
 	stream := p.client.Chat.Completions.NewStreaming(ctx, params, opt,
-		option.WithRequestTimeout(0), option.WithMiddleware(watch.Middleware),
-		option.WithMiddleware(done.Middleware))
+		option.WithRequestTimeout(0),
+		option.WithMiddleware(whole.Middleware, watch.Middleware, done.Middleware))
 	defer func() { _ = stream.Close() }()
 
 	var acc sdk.ChatCompletionAccumulator
-	var reasoning strings.Builder
+	var thinking strings.Builder
 	events := 0
 	finished := false
 	for stream.Next() {
@@ -328,7 +357,7 @@ func (p *Provider) streamOnce(
 		}
 		delta := chunk.Choices[0].Delta
 		thought := reasoningText(delta.RawJSON())
-		reasoning.WriteString(thought)
+		thinking.WriteString(thought)
 		req.Send(llm.Delta{Content: delta.Content, Reasoning: thought})
 	}
 	if err := stream.Err(); err != nil {
@@ -337,13 +366,16 @@ func (p *Provider) streamOnce(
 		// returning what accumulated would hand the loop a truncated
 		// response as though the model had finished. A stream the watchdog
 		// ended is reported as the stall it was.
-		return nil, "", watch.Err(err)
+		return nil, "", false, watch.Err(err)
 	}
 	if events == 0 {
+		if whole.Taken() {
+			return &answer, "", true, nil
+		}
 		// Not a failure of the call — the endpoint simply does not do
 		// this. Distinguished so the caller can fall back rather than fail
 		// a phase over a capability.
-		return nil, "", errNoStream
+		return nil, "", false, errNoStream
 	}
 	if !finished && !done.seen.Load() {
 		// A BODY THAT ENDED CLEANLY IS NOT A FINISHED ANSWER. The SDK's
@@ -357,14 +389,14 @@ func (p *Provider) streamOnce(
 		// Neither means the call failed, and it is retried like the
 		// server failure it is. The ""-is-an-end reading stays for unary
 		// responses, which arrive whole or not at all.
-		return nil, "", errStreamCut
+		return nil, "", false, errStreamCut
 	}
-	out := acc.ChatCompletion
-	return &out, reasoning.String(), nil
+	assembled := acc.ChatCompletion
+	return &assembled, thinking.String(), false, nil
 }
 
 // errNoStream reports an endpoint that accepted a streaming request and
-// answered without streaming.
+// answered with neither a stream nor a completion.
 var errNoStream = errors.New("endpoint did not stream")
 
 // errStreamCut reports a stream whose body ended before its terminal event:
@@ -427,6 +459,10 @@ func (b *doneBody) Read(p []byte) (int, error) {
 }
 
 // classify turns an SDK failure into the contract's error.
+//
+// WITH WHAT THE ENDPOINT SAID ([Detail]): the SDK's error names the status
+// alone, and the status is all the classification needs — but a reader of the
+// error needs the endpoint's reason, which only its fields still carry.
 func (p *Provider) classify(err error) *llm.Error {
 	var apiErr *sdk.Error
 	if errors.As(err, &apiErr) {
@@ -434,7 +470,9 @@ func (p *Provider) classify(err error) *llm.Error {
 		if apiErr.Response != nil {
 			header = apiErr.Response.Header
 		}
-		return httpapi.FromStatus(err, p.name, p.model, apiErr.StatusCode, header)
+		classified := httpapi.FromStatus(err, p.name, p.model, apiErr.StatusCode, header)
+		classified.Detail = Detail(apiErr)
+		return classified
 	}
 	if errors.Is(err, errStreamCut) {
 		// The response opened with 200 and stopped short: the server's
@@ -443,7 +481,11 @@ func (p *Provider) classify(err error) *llm.Error {
 	}
 	var streamErr *ssestream.StreamError
 	if errors.As(err, &streamErr) {
-		return &llm.Error{Kind: streamErrorKind(streamErr), Provider: p.name, Model: p.model, Err: err}
+		// WITH WHAT THE ENDPOINT SAID, as an API error is, and never the
+		// SDK's text: its StreamError pastes the error chunk raw, which is
+		// the endpoint's own words unredacted.
+		return &llm.Error{Kind: streamErrorKind(streamErr), Provider: p.name, Model: p.model,
+			Err: &streamFailure{err: err}, Detail: streamDetail(streamErr)}
 	}
 	return httpapi.FromTransport(err, p.name, p.model)
 }
@@ -475,6 +517,44 @@ func streamErrorKind(se *ssestream.StreamError) llm.ErrorKind {
 		return llm.KindForStatus(status)
 	}
 	return llm.KindServer
+}
+
+// streamFailure is an error chunk inside a stream as this engine shows it: a
+// line of its own, with the SDK's error behind it for errors.Is and errors.As
+// and never printed — the chunk's own words travel as [llm.Error.Detail],
+// redacted ([streamDetail]).
+type streamFailure struct{ err error }
+
+func (e *streamFailure) Error() string { return "the response stream carried an error" }
+
+func (e *streamFailure) Unwrap() error { return e.err }
+
+// streamDetail is what an error chunk SAID — its message and the fields it
+// filed it under — as one redacted, bounded line, read the way [Detail] reads
+// an API error's body: the OpenAI envelope first, and otherwise whatever the
+// chunk's data can honestly yield.
+func streamDetail(se *ssestream.StreamError) string {
+	var body struct {
+		Error struct {
+			Message string          `json:"message"`
+			Type    string          `json:"type"`
+			Code    json.RawMessage `json:"code"`
+			Param   string          `json:"param"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(se.Event.Data, &body) == nil {
+		code := strings.Trim(string(body.Error.Code), `"`)
+		if code == "null" {
+			code = ""
+		}
+		if said := httpapi.Said(body.Error.Message,
+			httpapi.Filed{Name: "type", Value: body.Error.Type},
+			httpapi.Filed{Name: "code", Value: code},
+			httpapi.Filed{Name: "param", Value: body.Error.Param}); said != "" {
+			return said
+		}
+	}
+	return httpapi.SaidBody("application/json", se.Event.Data)
 }
 
 func (p *Provider) params(req llm.Request) (sdk.ChatCompletionNewParams, error) {

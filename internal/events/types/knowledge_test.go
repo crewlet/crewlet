@@ -4,16 +4,14 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/events"
 )
 
-// A READ'S QUERY IS CLIPPED ON A RUNE AND SAYS SO. The query is a label a
-// reader recognises a search by, and a clip through a multi-byte rune is
-// invalid UTF-8 that a JSON encoder substitutes — so the stored label would
-// not be the text anybody typed, nor valid text at all.
-func TestAReadsQueryIsClippedOnARuneBoundary(t *testing.T) {
+// A READ'S QUERY IS RECORDED WHOLE, trimmed. Every producer bounds it where it
+// is written, so a clip here could only make two searches sharing an opening
+// read as one.
+func TestAReadsQueryIsRecordedWhole(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name  string
@@ -22,24 +20,11 @@ func TestAReadsQueryIsClippedOnARuneBoundary(t *testing.T) {
 	}{
 		{"a short query is untouched, trimmed", "  deploy rollback  ", "deploy rollback"},
 		{"an empty query stays empty", "", ""},
-		{"exactly at the cap is untouched",
-			strings.Repeat("a", KnowledgeReadQueryMax), strings.Repeat("a", KnowledgeReadQueryMax)},
+		{"a long one is whole", strings.Repeat("é", 300), strings.Repeat("é", 300)},
 	} {
 		if got := KnowledgeReadQuery(tc.query); got != tc.want {
 			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
 		}
-	}
-	// Two-byte runes, so the cap falls between the bytes of one of them.
-	long := strings.Repeat("é", KnowledgeReadQueryMax)
-	got := KnowledgeReadQuery(long)
-	if len(got) > KnowledgeReadQueryMax {
-		t.Errorf("clipped query is %d bytes, over the %d cap", len(got), KnowledgeReadQueryMax)
-	}
-	if !utf8.ValidString(got) {
-		t.Errorf("clipped query %q is not valid UTF-8: the cut went through a rune", got)
-	}
-	if !strings.HasSuffix(got, "…") {
-		t.Errorf("clipped query %q does not say it was clipped", got)
 	}
 }
 

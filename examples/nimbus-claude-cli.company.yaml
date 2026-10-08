@@ -554,7 +554,7 @@ learning:
   enabled: true
   reflect:
     enabled: true                          # PersistDecider runs after every terminal turn
-    summarize_episodes: true               # cheap-model summary of query_episodes hits
+    summarize_episodes: true               # cheap-model briefing of the Similar prior work hits
   counterparty:
     enabled: true                          # observe + auto-inject counterparty traits
   skill_synthesis:

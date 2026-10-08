@@ -266,6 +266,25 @@ func (p *Publisher) Records(day string, d store.UsageDay) ([]Record, error) {
 		rec.Reads, rec.ReadsElided = capReads(s.Reads)
 		out = append(out, rec)
 	}
+	for _, person := range d.People {
+		rec := Record{
+			RecordEnvelope: RecordEnvelope{
+				Subject: Subject{Kind: KindPerson, Node: p.deps.NodeID, Day: day,
+					Person: person.Handle},
+				Writer: p.deps.NodeID,
+			},
+			Role: person.Role,
+		}
+		for _, t := range person.Tokens {
+			rec.Tokens = append(rec.Tokens, Tokens{
+				Phase: t.Phase, Worker: t.Worker, Model: t.Model,
+				ProviderKey: t.ProviderKey, Input: t.Input, Output: t.Output,
+				CacheRead: t.CacheRead, CacheWrite: t.CacheWrite, Total: t.Total,
+				Calls: t.Calls,
+			})
+		}
+		out = append(out, rec)
+	}
 	for _, s := range d.Schedules {
 		rec := Record{
 			RecordEnvelope: RecordEnvelope{

@@ -51,15 +51,19 @@ const QueryEmbeddingCacheEntries = 1024
 
 // QueryEmbedBudget bounds computing one query's vector.
 //
-// TWO SECONDS, against the provider client's own fifteen, because the two
-// guard different callers. The client's bound is the embedding DUTY's — a
-// batch of 128 documents off the interactive path — while this one sits in
-// front of a person typing or a turn starting. It is twice
-// [SemanticScanBudget]: past it the meaning half has cost two whole scans
-// before it began, and the search serves the words (hybrid) or says so
-// (semantic) rather than hold the reader. A single short input to a hosted
-// embeddings endpoint answers in a few hundred milliseconds at the p99, so a
-// healthy provider never meets it.
+// TWO SECONDS, against the provider client's own ceilings — fifteen for one
+// input ([embeddings.EmbedTimeout]) and a minute for each batch request
+// ([embeddings.BatchTimeout]) — because those are what a caller that sets no
+// deadline of its own is held to, and this caller sits in front of a person
+// typing or a turn starting. It is twice [SemanticScanBudget]: past it the
+// meaning half has cost two whole scans before it began, and the search serves
+// the words (hybrid) or says so (semantic) rather than hold the reader. A
+// single short input to a hosted embeddings endpoint answers in a few hundred
+// milliseconds at the p99, so a healthy provider never meets it — and nor does
+// the one batch request a query past a narrow model's bound is sent as
+// ([queryEmbedding]), which carries [knowledge.MaxQueryBytes] as typed and at
+// most three times that as sent — the size a query of nothing but stray bytes
+// reaches once each is a U+FFFD ([embeddings.Prepare]).
 const QueryEmbedBudget = 2 * time.Second
 
 // EmbeddingModel is the company's embedder as a query needs it: the provider,
@@ -136,7 +140,7 @@ func (v *QueryVectors) Vector(ctx context.Context, text string) (QueryVector, kn
 
 	bounded, cancel := context.WithTimeout(ctx, QueryEmbedBudget)
 	defer cancel()
-	raw, err := provider.Embed(bounded, key)
+	raw, err := queryEmbedding(bounded, provider, key)
 	if err != nil {
 		if !errors.Is(err, embeddings.ErrEmpty) {
 			log.WarnContext(ctx, "search_query_embedding_failed",
@@ -157,6 +161,34 @@ func (v *QueryVectors) Vector(ctx context.Context, text string) (QueryVector, kn
 	}
 	v.store(model, dim, key, packed)
 	return QueryVector{Vector: packed, Model: model, Dim: dim}, knowledge.NotDegraded
+}
+
+// queryEmbedding is the vector of the WHOLE query.
+//
+// NEVER ITS OPENING. The corpus embeds each source as its opening, because one
+// vector stands for one source and an opening says what it is about; a query
+// is a question, and a vector of its first part ranks the answers to another
+// one. So a query too long for the model is embedded whole — in pieces at the
+// model's own bound, every piece in one request, the vectors pooled
+// ([embeddings.EmbedWhole]).
+//
+// WHICH ONLY A NARROW MODEL EVER NEEDS. Every surface refuses a query past
+// [knowledge.MaxQueryBytes], and every model this build documents takes at
+// least five times that in one input — more than the three times a query can
+// grow to as sent, every byte of it a stray one that [embeddings.Prepare]
+// makes a U+FFFD — so on those this is one [embeddings.Embedder.Embed] call. A
+// local model stated with a smaller window (`max_input_tokens`, a 256-token
+// sentence encoder) would otherwise refuse every query longer than its bound,
+// and each refusal would read as the provider failing.
+//
+// An embedder that cannot batch is held to its single-input bound, as
+// [embeddings.BatchEmbedder] says a caller falls back; every embedder this build
+// constructs batches.
+func queryEmbedding(ctx context.Context, provider embeddings.Embedder, text string) ([]float32, error) {
+	if batch, ok := provider.(embeddings.BatchEmbedder); ok {
+		return embeddings.EmbedWhole(ctx, batch, text)
+	}
+	return provider.Embed(ctx, text)
 }
 
 // lookup answers a cached vector, emptying the cache first when the model or

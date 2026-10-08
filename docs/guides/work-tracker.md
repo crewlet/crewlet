@@ -279,9 +279,18 @@ nothing. Only the engine's own tasks carry counters: a turn on a Jira issue is
 attributed on its events and adds to no row here.
 
 **What a turn's tokens include.** Its own phases, the workers it delegated to,
-the round-cap judge, and the coding runs it detached — in input and output,
-with the prompt cache's share of the input beside them. Learning afterwards
-(reflection, diary, skills) is the seat's own and is not charged to the task.
+the round-cap judge, the coding runs it detached, and the **auxiliary** model
+calls it made along the way — the turn-start memory filter, knowledge query and
+episode summary, every rewrite its ledgers and tools needed, and the
+condensing of its card — in input and output, with the prompt cache's share of
+the input beside them. That includes what the engine spends on a coding run
+while no part of the turn is running: an agent-mode run's calls through the
+tool bridge (the rewrites its tools ask for, the workers it delegates to) and
+the condensing of a collected run's report, failure or question, which the part
+of the turn that resumes from the run pays. Learning afterwards (reflection,
+diary, skills, the conversation ledger's account of the turn) is the seat's own
+and is not charged to the task; it is still on the seat's day in the [spend
+history](budgets-and-spend.md#auxiliary-spend).
 Beside the tokens, two counts say *why* a task was expensive: `spend_workers`,
 how many delegated tasks its turns ran, and `spend_sent_back`, how many reviews
 returned the work for another pass.
@@ -326,11 +335,13 @@ counted none — more of a turn charged elsewhere — carries no number.
 carries the turn's own account of what it did (the reviewer's summary of what
 landed, or the executor's artifact), the notes of the newest review that sent
 the work back for another pass, and each tool its executor called with how
-many times — each account cut to 600 bytes and at most sixteen tools, bounds
-the writer refuses to exceed rather than cutting for you — and, for a segment
-that failed because one of its phases did, which phase that was. The arguments
-and results of every call stay on the turn's trace, which a task's turn card
-links to.
+many times — each account at most 600 bytes and at most sixteen tools, bounds
+the writer refuses to exceed. An account longer than that is **condensed** for
+the card by the seat's auxiliary model and marked `(condensed)`, never cut; where
+no rewrite can be had the card says how long the account is and to open the
+turn for it — and, for a segment that failed because one of its phases did,
+which phase that was. The arguments and results of every call stay on the
+turn's trace, which a task's turn card links to.
 
 The counters are `spend_turns`, `spend_rounds`, `spend_input`, `spend_output`,
 `spend_cache_read`, `spend_cache_write`, `spend_wall_ms`, `spend_tokens`
@@ -936,12 +947,12 @@ over the project's [files](#a-projects-files):
 | Tool | What it does |
 |---|---|
 | `list_work_items` | the query surface above, filtered any way a view can be — and every row filtered **on its own**, whatever a named view's own shape says: the grammar's `collapsed` default makes the filter a predicate on the ROOT and lets its whole subtree ride along unfiltered, which draws a board and misreports a list. An item's subtasks are asked for with `parent`, which that mode never applied to — including `preset=my_queue`, which is the seat's own open work. Beside the obvious filters it takes `type`, `priority`, `parent` (an item's subtasks), `reporter`, `watcher`, `unit`, the three date keys (`due`, `updated`, `created`), `sort`, `cursor` for the next page, and **`field_filters`** keyed by field slug — which is how a seat reaches the custom fields its company declares |
-| `get_work_item` | one task with its recent comments, history, links and **custom fields**. `include` narrows to the parts you need; `comments_cursor` pages back through a long thread; **`comment`** opens one comment by id with its body exactly as it was written; **`body: true`** returns the task's own description in full. Comment bodies in the thread are excerpts ending in `…`, because twenty at their full length is ten times what one tool answer may weigh — `comment` is how the rest is read, and on its own it answers the item and that comment and nothing else. The description is excerpted the same way and for the same reason, and `body` is its counterpart — each answers on its own, and naming both gets the comment, because it is the narrower ask. Each field value comes back with the slug, name and type that explain it, and says when it is **hidden** (its declaration was archived), **foreign** (mirrored in from another tracker) or **undeclared** (a value this company explains nowhere) |
+| `get_work_item` | one task with its recent comments, history, links and **custom fields**. `include` narrows to the parts you need; `comments_cursor` pages back through a long thread; **`comment`** answers one comment by id and nothing else. **Nothing in the answer is cut**: every comment on a thread page is whole — a page holds as many as fit 16 KiB, at least one, and `comments_cursor` continues exactly where it stopped — and the description is whole too. The description is one of the `include` parts (`body`, `comments`, `history`, `links`, `fields`; all five by default), so that each part on its own always fits one answer: a read that names other parts says the description was left out and how large it is, rather than handing over an item that reads as having none. Each field value comes back with the slug, name and type that explain it, and says when it is **hidden** (its declaration was archived), **foreign** (mirrored in from another tracker) or **undeclared** (a value this company explains nowhere) |
 | `create_work_item` | file a task or a subtask. It lands in `todo` unless `status` names another — a board lane's **+** files into that lane in the one record, and an unknown status is refused by name. Left without an `assignee` it goes to the project's **default assignee** (the lead's `write_project` setting, read inside the create itself), and lands in triage — where the project's lead is told — only when the project names none, or names a seat that has since left the chart, which the answer's `warnings` say; the answer's `assignee` is who it was filed to. `fields` sets custom fields by **slug**, and the create is refused naming any the project requires and this call leaves out. It also takes the four **scheduling** arguments below, and `ask` (with an optional `decision`) to file the item **as a question** — see [Asking for a decision](#asking-for-a-decision) |
 | `update_work_item` | change any field, with an optional `if_match`. `routing_unit` points the item at another team and is the project **lead's or a person's own** — see [Which team an item belongs to](#which-team-an-item-belongs-to). `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked` and `linked_pages` arguments are **set-valued** — see below — and `fields` sets custom fields by slug, checked against each field's own declaration. It takes the four **scheduling** arguments too, where `null` on any of them CLEARS it. An `assignee` may carry a **`reason`** — one line, at most 500 characters, that the new assignee is woken with and the item's history shows beside the hand-off; a `reason` without an `assignee` is refused, because the explanation of any other change is a comment. **`checklist`** makes one change to the item's checklists — see [Checklists](#checklists) |
 | `create_work_item` and `update_work_item` | both take `fields`, keyed by field **slug** — see "What a field value may be" above |
 | `comment_on_work_item` | add to the thread, optionally as a **question** somebody owes an answer to (`ask`, with a `decision` when they have to choose) or as the **answer** that closes one (`answers`, with a `choice` naming an option — `body` is then optional) |
-| `search_work_items` | find an item by what it **says** — ranked over every item's title *and description*, which no filter reaches. `list_work_items`' own `text` is a substring of the key or title and cannot see a description at all, so the two are different questions: one narrows a board, the other ranks a corpus. It ranks `hybrid` — the words and, where the company has an embeddings provider, the meaning, fused (see [Search](search.md#three-modes-and-what-an-answer-says-it-served)). A node still building its index says so rather than answering empty, because "there is nothing" is what gets a duplicate filed, and an answer over part of the fleet carries a `partial` sentence for the same reason |
+| `search_work_items` | find an item by what it **says** — ranked over every item's title *and description*, which no filter reaches. `list_work_items`' own `text` is a substring of the key or title and cannot see a description at all, so the two are different questions: one narrows a board, the other ranks a corpus. It ranks `hybrid` — the words and, where the company has an embeddings provider, the meaning, fused (see [Search](search.md#three-modes-and-what-an-answer-says-it-served)). Its `text` is at most 400 bytes, the bound every search shares, and a longer one is refused naming the limit rather than cut. A node still building its index says so rather than answering empty, because "there is nothing" is what gets a duplicate filed, and an answer over part of the fleet carries a `partial` sentence for the same reason |
 | `merge_work_item` | fold a duplicate into the item that survives: the duplicate is linked to it, its **subtasks are re-parented onto it** (`move_subtasks`, true unless you say otherwise), and the duplicate is closed as `cancelled`. Nothing is destroyed and both histories stay readable. Closing a duplicate by hand instead leaves its subtasks under a closed parent, where nobody finds them. A subtask in the trash stays under the duplicate, where a restore finds it — a removed item is frozen. A merge that stops part-way (its node died, or the stream refused an append) is finished by the `tracker` duty on its first pass (every 15 minutes) after the merge's claim has lapsed — a minute after its holder's last heartbeat — so never beside a merge that is still running; a duplicate that is itself in the trash waits for its restore. A merge that would re-parent subtasks onto an item in **another project** is refused before it starts — a subtask under an item in another project is drawn under it on neither board — so move the duplicate first with `move_work_item` (its subtasks go with it), or merge with `move_subtasks: false` |
 | `move_work_item` | move a top-level item, with everything under it, to another project: each task in the subtree is re-keyed there (ENG-7 becomes OPS-3) with its old key still resolving, the tags the subtree carries are declared in the new project (a label the new project already gives a different tag refuses the move, naming both, before anything is written), and the people on the item are told. The item's project **lead's or a person's own**, as `routing_unit` is. A subtask does not move on its own — move its root. A move that stops part-way is finished by the same call, or by the `tracker` duty (see [how a move is carried out](#what-a-project-row-carries-about-its-work)) |
 | `get_work_catalogue` | the types a task may be and the fields it may carry |
@@ -1014,7 +1025,10 @@ has ever made, and it has no cheaper mode to fall back to.
 **Every change carries its own before and after.** A row says what KIND of
 change it was (`status`, `view_saved`, `project_updated`, …) and, in `fields`,
 which values moved and from what to what — `{"status": {"from": "todo", "to":
-"in_progress"}}`. That holds for every kind, not only the ones about a task: a
+"in_progress"}}` — and, for a **set** (the watchers, a kind of link, the tags,
+a catalogue's declarations), which members joined and which left:
+`{"watchers": {"from": "", "to": "", "added": ["ada"], "removed": ["bo"]}}`,
+each list sorted and every member whole. That holds for every kind, not only the ones about a task: a
 project reconciled from the org chart names the purpose or the unit that moved,
 a saved view names the query parameters that changed, a re-ordered priority
 list carries the order before and after, and a dependency names the item it
@@ -1029,25 +1043,30 @@ commit may move several of these, and the row names each one it moved:
 |---|---|
 | `title` `status` `assignee` `priority` `project` `type` `tags` | the columns a board is read by |
 | `due` `due_all_day` `start` `estimate` `points` | the schedule and the sizing. The flag is recorded beside the instant because an all-day date is stored as the company's own midnight, so making a midnight due date all-day moves the flag and leaves the instant where it was |
-| `reporter` `watchers` `muted` `collaborators` | who filed it, who follows it, who opted out of hearing, who is doing it with you |
+| `reporter` `watchers` `muted` `collaborators` | who filed it, who follows it, who opted out of hearing, who is doing it with you — the last three as the handles that joined and left |
 | `parent` `routing_unit` `archived` `removed_with` | where it sits, whose lead hears about it, whether it is filed away, and — when a removal cascaded — the item it went with |
-| `waiting_on` `linked` `duplicates` `page` `blocking` | the four kinds of link it authors, and the mirror a blocker carries |
+| `waiting_on` `linked` `duplicates` `page` `blocking` | the four kinds of link it authors, and the mirror a blocker carries — each as the items that joined and left it |
 | `checklists` | one entry per named list, as `Setup: 3 of 5 done`, plus `(1 promoted)` where an item became a sub-item. A list that arrived is on the `to` side alone and one that was deleted on the `from` side alone |
-| `fields` | the custom values that moved, by **slug**, as `severity=high` — a choice by its option's slug, a multi-valued field's members joined with `/`, and a count of any whose field this project no longer declares |
+| `fields` | the custom values that moved, by **slug**, as `severity=high` — a choice by its option's slug, a multi-valued field's members joined with `/`, a value past 150 bytes as its size (`severity=4096 bytes`), and a count of any whose field this project no longer declares |
 | `body` | that the description changed and how big it now is (`980 bytes → 1204 bytes`, or `— → 1204 bytes` written and `980 bytes → —` cleared) — never the prose |
 
 Three things the values are deliberately not. They are the **stored** form — a
 status slug, a whole timestamp, an item's id — rather than what a screen shows,
 because the same row is written identically by every node in a fleet and a
 rendering would depend on the reader's time zone and on the company's current
-vocabulary; the dashboard resolves them. A collection is **bounded**: a row
-is a line in a log rather than a copy of the object, so a long list is cut at a
-whole member and ends with a count of what it left out (`+12 more`), and a
-list whose members a person does not read — an inbox, say — is recorded as its
-size. And the two largest things a task holds are **marked rather than
-carried**: a description can be 32 KiB and a checklist tree 256 items, so the
-row says that they moved and by how much, and the change record it stores
-beside them holds the rest.
+vocabulary; the dashboard resolves them. Nothing is **cut**: a row is a line in
+a log rather than a copy of the object, so a set records only what joined and
+left it — small even when the set is not, where carrying both sides once cut
+the member a commit added off the end of each — an ordered list (a priority
+queue, the checklists) is carried whole because its order is the change, a list
+whose members a person does not read — an inbox, say — is recorded as its size,
+and free text past 600 bytes (a project's purpose, say) is described by its
+size rather than quoted in part. And the two largest things a task holds are
+**marked rather than carried**: a description can be 32 KiB and a checklist
+tree 256 items, so the row says that they moved and by how much, and the change
+record it stores beside them holds the rest. A row records **every** field a
+change moved; only a notification card stops at 32, and says how many more
+there were.
 
 **A notification card carries all of that but the custom fields.** The card is
 built at the write, from the item as it stood and as it will stand; naming a
@@ -1058,13 +1077,21 @@ added, a checklist ticked off, a description rewritten — reads the same on
 both.
 
 **And the woken seat reads them.** A change wake's prompt carries a **What
-changed** block: one `field: from → to` line per delta, in the engine's own
-field names, with an em dash for a side that was empty, and the change's own
+changed** block: one `field: from → to` line per delta — `field: added …;
+removed …` for a set — in the engine's own field names, with an em dash for a
+side that was empty, a closing line counting any fields the card had no room
+for, and the change's own
 excerpt under it where there is one. Without it a wake named the kind and
 nothing else — "The status changed by ana." — and the seat had to read the
 task to learn what the status now was, which still left the value it moved
 **from** unrecoverable, because that side is nowhere on the task. A comment is
-the exception: its body is the comment, and the opener has already quoted it.
+the exception: its body is the comment, and the opener has already quoted it —
+**whole**. The card a change leaves in an inbox carries a 600-byte excerpt,
+marked where it was cut, because an inbox is a list read to choose what to
+open; the wake is the one message a seat acts on, so it is given the comment
+(or a new task's description) whole from the change record itself, and never
+the card's excerpt of it. An excerpt somebody stated — a hand-off's reason, a
+purge's line — is shown as the text it is.
 
 A dependency is where the stored form would otherwise show, and so are a
 re-parent and a cascade removal: each records the other item by its **id**,
@@ -1074,7 +1101,7 @@ the items its deltas point at — every link a task authors except `page`, which
 names a knowledge-base page rather than an item, plus the `blocking` mirror, a
 person's priority queue, and the `parent` and `removed_with` scalars — resolved
 when the question is asked rather than when the change was made. That is what
-lets a screen draw "Waiting on: — → ENG-2", or "Parent: — → ENG-2", from a row
+lets a screen draw "Waiting on: added ENG-2", or "Parent: — → ENG-2", from a row
 that stored a uuid. An item this node has not applied is simply missing from
 the map, and a reader falls back to the id.
 
@@ -1638,16 +1665,21 @@ smallest context the shipped models offer, spent on a single call.
 
 What keeps answers under it is that every collection which grows is paged:
 
-- **Comments** come back twenty at a time, newest page first, each body cut to
-  2 KiB with a marker. `comments_cursor` reads the page before. Twenty comments
-  at their full length would be 640 KiB — ten times the ceiling — for a thread
-  nobody asked to read in full.
-- **The description** comes back cut to 4 KiB with a marker, and `body: true`
-  returns it whole. It is the one value on a detail read that used to carry no
-  bound: a description at its 32 KiB cap would have spent half the ceiling on a
-  part nobody named, and `include` governs the collections *beside* the task,
-  never the task itself — so an item with a long description met a refusal
-  whose own advice could not help.
+- **Comments** come back newest page first, **every one whole**: a page holds
+  as many as fit 16 KiB (at most twenty, at least one), and `comments_cursor`
+  reads the page before. They used to come back twenty at a time with each body
+  cut to 2 KiB — and a review cut there was a review whose "but" never arrived.
+  A long thread is now more pages, never shorter comments.
+- **The description** comes back whole, and is a part of `include` (`body`)
+  like the collections beside it. A description and one comment are each capped
+  at 32 KiB, so together they are a full answer before anything else is said;
+  with the description a part of its own, every part asked for alone fits. It
+  used to come back cut to 4 KiB, with a separate argument to get the rest.
+- **Open asks** in `my_work` come back whole until the block holds 16 KiB of
+  them, the first always; the ones after that carry their decision, their
+  author and the call that answers them, plus `body_not_included` naming the
+  body's size and the `get_work_item` read that returns it — never a body cut
+  to fit.
 - **History** is the fifty most recent changes. `work_activity` is what pages
   properly, with a cursor that survives a reanchor.
 - **Options** page by whole fields: a field whose list does not fit comes back

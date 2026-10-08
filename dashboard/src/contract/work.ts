@@ -202,3 +202,23 @@ export const TASK_TITLE_MAX_BYTES = 256;
  * the same gate.
  */
 export const TASK_BODY_MAX_BYTES = 32768;
+
+/**
+ * The most a saved view's NAME holds, in UTF-8 bytes — the engine's
+ * `MaxViewName`. The Save view dialog bounds its name here, before the press,
+ * for the reason the task sheet bounds a title: the engine refuses a name past
+ * it rather than cutting it. The field used to carry `maxLength={80}` — a
+ * figure the engine never held, in characters rather than bytes — so a pasted
+ * name was cut by the browser, silently, short of what the engine would take.
+ * Held by `internal/tracker/client_gate_test.go`.
+ */
+export const VIEW_NAME_MAX_BYTES = 128;
+
+/**
+ * The most a structured ask's QUESTION holds, in UTF-8 bytes — the engine's
+ * `MaxDecisionQuestion`. The Ask dialog prefills it from the comment's first
+ * line WHOLE and says when that is past the cap, rather than slicing the line
+ * to a length (it was sliced to 200, which is not even the engine's figure).
+ * Held by the same gate.
+ */
+export const DECISION_QUESTION_MAX_BYTES = 300;

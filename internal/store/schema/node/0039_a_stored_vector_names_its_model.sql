@@ -1,0 +1,29 @@
+-- A diary note's vector and an episode's vector say which model made them.
+--
+-- WHAT THE COLUMN BUYS is a recall that compares like with like. A vector is a
+-- point in ONE model's space, and two models of one width are two spaces:
+-- text-embedding-3-small and embed-v4.0 both answer 1 536 floats, so a company
+-- that switched between them kept every stored vector at a width the recall's
+-- `length(embedding) = ?` admitted, and ranked a query from one space against
+-- rows from the other — a cosine that means nothing, ranked as if it did. The
+-- knowledge corpus has always keyed its vectors on the model; these two tables
+-- had only the width. Recall now filters on `embedding_model = ?` as well.
+--
+-- WHO HAS TO AGREE ON IT: this node alone, like the rows it describes — both
+-- tables are the node's own estate. The memory changelog
+-- (internal/learning/memsync) carries columns BY NAME, so the column is
+-- additive in both directions: a row this build publishes carries
+-- `embedding_model`, which an older build does not know and ignores, and a row
+-- an older build publishes lacks it, which this build stores as NULL — a vector
+-- in no known space, which no recall here compares against.
+--
+-- NULL FOR EVERY ROW ALREADY HERE, deliberately, and not backfilled with the
+-- model configured now: nothing recorded which model wrote them, and stamping
+-- one would be a guess that is wrong for exactly the company that switched.
+-- What that costs differs by table. No diary row ever had a vector — neither
+-- writer passed one — so there is nothing to lose there, and the holder of a
+-- seat embeds its notes after this upgrade. An episode's vector was of the
+-- trigger's one-line dashboard label, so recall excludes those rows and the
+-- seat's raw window (about 500 turns) refills as it works.
+ALTER TABLE agent_diary ADD COLUMN embedding_model TEXT;
+ALTER TABLE episodes ADD COLUMN embedding_model TEXT;

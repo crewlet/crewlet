@@ -265,19 +265,24 @@ func TestEveryGroupingTheDashboardOffersIsOneTheGrammarTakes(t *testing.T) {
 	}
 }
 
-// THE SHEET BOUNDS A TASK'S TEXT WHERE THE ENGINE DOES.
+// THE DASHBOARD BOUNDS THE TRACKER'S TEXT WHERE THE ENGINE DOES.
 //
-// The New task sheet refuses a title or a description past the engine's cap
-// before the press — the field is marked and says by how much — because the
-// engine refuses such a value rather than cutting it, and a refusal that
-// arrives after the press lands on no field at all. That only works while the
-// two figures agree: a dashboard cap above the engine's lets through a title
-// the engine refuses, and one below it refuses a title the engine would file.
-func TestTheDashboardBoundsATasksTextAtTheEnginesCaps(t *testing.T) {
+// The New task sheet, the Save view dialog and the Ask dialog refuse a title,
+// a description, a view's name or a question past the engine's cap before the
+// press — the field is marked and says by how much — because the engine
+// refuses such a value rather than cutting it, and a refusal that arrives
+// after the press lands on no field at all. That only works while the two
+// figures agree: a dashboard cap above the engine's lets through a value the
+// engine refuses, and one below it refuses one the engine would take — which
+// the Save view dialog did, with a `maxLength` of 80 against 128, cutting a
+// pasted name in the browser where nobody saw it.
+func TestTheDashboardBoundsTrackerTextAtTheEnginesCaps(t *testing.T) {
 	t.Parallel()
 	for name, engine := range map[string]int{
-		"TASK_TITLE_MAX_BYTES": tracker.MaxTitle,
-		"TASK_BODY_MAX_BYTES":  tracker.MaxBody,
+		"TASK_TITLE_MAX_BYTES":        tracker.MaxTitle,
+		"TASK_BODY_MAX_BYTES":         tracker.MaxBody,
+		"VIEW_NAME_MAX_BYTES":         tracker.MaxViewName,
+		"DECISION_QUESTION_MAX_BYTES": tracker.MaxDecisionQuestion,
 	} {
 		raw, err := clientsource.Scalar(clientsource.Tree(t), name)
 		if err != nil {

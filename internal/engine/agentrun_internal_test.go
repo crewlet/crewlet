@@ -352,9 +352,20 @@ func TestASeatsSandboxBlockIsFoundInsideAUnit(t *testing.T) {
 // store, a queue for the start event and a bridge with somewhere to dial.
 func launchReadyEngine(t *testing.T, c *Company) *Engine {
 	t.Helper()
+	e, _ := launchRig(t, c, mcpbridge.New(mcpbridge.Options{
+		Key: []byte("test-key"), BaseURL: "https://engine.example.com",
+	}))
+	return e
+}
+
+// launchRig is [launchReadyEngine] over a bridge the caller built — one a test
+// can dial — with the runner every launch starts its job on.
+func launchRig(t *testing.T, c *Company, bridge *mcpbridge.Bridge) (*Engine, *sandbox.FakeRunner) {
+	t.Helper()
+	jobs := sandbox.NewFakeRunner("claude-code")
 	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
 		Providers:          map[sandbox.Placement]sandbox.Provider{sandbox.E2B: sandbox.NewFakeProvider()},
-		Runners:            map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
+		Runners:            map[string]sandbox.Runner{"claude-code": jobs},
 		DefaultCodingAgent: "claude-code",
 	})
 	if err != nil {
@@ -362,9 +373,6 @@ func launchReadyEngine(t *testing.T, c *Company) *Engine {
 	}
 	q := memory.New()
 	pending := sandbox.NewCoordStore(coordmemory.NewFleet())
-	bridge := mcpbridge.New(mcpbridge.Options{
-		Key: []byte("test-key"), BaseURL: "https://engine.example.com",
-	})
 	// Mounted, as serveAPI mounts it on a node with a listener: a bridge no
 	// listener took opens no session.
 	_ = bridge.Handler()
@@ -383,7 +391,7 @@ func launchReadyEngine(t *testing.T, c *Company) *Engine {
 	}
 	e.useSandbox(pending, coordinator)
 	e.epoch.current.Store(c)
-	return e
+	return e, jobs
 }
 
 // A NODE THAT SERVES NO BRIDGE REFUSES AGENT MODE, AND SAYS WHICH SETTING.

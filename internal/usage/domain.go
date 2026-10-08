@@ -110,9 +110,11 @@ func (Domain) Envelope(payload []byte) (statelog.Envelope, error) {
 		return statelog.Envelope{}, err
 	}
 	return statelog.Envelope{
-		V:       env.V,
-		Kind:    string(env.Subject.Kind),
-		Subject: env.Subject.Wire(),
+		V:    env.V,
+		Kind: string(env.Subject.Kind),
+		// THE WRITER'S IDENTITY for a kind this build does not know — the
+		// key a deferred record supersedes on. See [RecordEnvelope.Wire].
+		Subject: env.Wire(),
 		OpID:    env.OpID,
 		Gen:     env.Gen,
 		Scope:   env.Scope,
@@ -145,6 +147,7 @@ func (Domain) Tables() map[string]statelog.TableClass {
 		"usage_tokens":        statelog.Divergent,
 		"usage_reads":         statelog.Divergent,
 		"usage_schedule_runs": statelog.Divergent,
+		"usage_person_tokens": statelog.Divergent,
 
 		"usage_log_deferred":       statelog.Local,
 		"usage_log_deferred_scope": statelog.Local,

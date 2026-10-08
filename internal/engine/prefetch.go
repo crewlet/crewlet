@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/knowledge"
@@ -40,13 +41,17 @@ func (e *Engine) prefetcher(company *Company) *prefetch.Fetcher {
 func (e *Engine) prefetchSources(company *Company) prefetch.Sources {
 	src := prefetch.Sources{
 		Knowledge: e.Knowledge(),
-		// METERED, like every other completion made on a seat's behalf.
-		// The memory filter, the knowledge query and the episode summary
-		// each send a full prompt on EVERY turn, and resolved off the bare
-		// registry that spend reached no counter: a seat at its ceiling
-		// kept paying for its turn-start context and the window an
-		// operator reads understated it. See learningbudget.go.
-		Models: e.meteredModelsFor(company),
+		// THROUGH THE AUXILIARY SEAM, like every other completion made on
+		// a seat's behalf. The memory filter, the knowledge query and the
+		// episode summary each send a full prompt on EVERY turn, and
+		// resolved off the bare registry that spend reached no counter and
+		// no record: a seat at its ceiling kept paying for its turn-start
+		// context and every figure an operator reads understated it. See
+		// auxiliary.go.
+		Models: e.auxiliaryFor(company),
+		// The same seam, as a compactor: the middle of a long chat thread
+		// is condensed rather than dropped, on the seat's own aux chain.
+		Compact: e.compactorFor(company),
 		// The chat surfaces' READ half, which is how a seat woken in a
 		// thread is handed the thread. Empty on a node running no chat
 		// transport, which renders the unreadable hint rather than
@@ -72,11 +77,14 @@ func (e *Engine) prefetchSources(company *Company) prefetch.Sources {
 	if reg := e.Registry(); reg != nil {
 		src.Parties = reg
 	}
-	// Nil where a company configured no embeddings, which degrades the
+	// THE CURRENT EMBEDDER, read at each call rather than now: this
+	// fetcher is also the pull tools' (see [Engine.equip]), which is built
+	// before the epoch it equips stores its embedder. A company with none
+	// configured answers learning.ErrNoEmbeddings, which degrades the
 	// similarity half of the memory pool to recency alone and episode
 	// recall to an empty block — both first-class states in the prefetch
 	// rather than failures.
-	src.Embed = e.embedder()
+	src.Embed = e.embedText
 	return src
 }
 
@@ -86,7 +94,7 @@ func (e *Engine) prefetchSources(company *Company) prefetch.Sources {
 // else a turn is built from: a prefetch resolved against a revision the turn
 // is not running would surface another company's memory.
 func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
-	task string,
+	task string, aux auxspend.Use,
 ) prefetch.Blocks {
 	seat := company.Org.AgentSeatByHandle(req.Handle)
 	if seat == nil {
@@ -95,14 +103,16 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 	agentID, _ := company.Org.AgentIDFor(seat)
 	r := prefetch.Request{
 		Seat: seat, AgentID: agentID.String(), Org: company.Org,
-		// THE RUN, not the unit of work. Every phase record of this turn
-		// is filed under the run, so a prefetch summary carrying the work
-		// key would sit under an id no phase shares — invisible to the
-		// turn view and to `GET /events?turn_id=`. And the prefetcher's
-		// own per-turn cache is keyed on it: a retry keyed on the work
-		// key would inherit the FAILED attempt's frozen context blocks
-		// rather than assembling its own. See ADR-0017.
-		Task: task, TurnID: req.RunID,
+		// THE TURN'S ATTRIBUTION, which names the RUN, not the unit of
+		// work: every phase record of this turn is filed under the run,
+		// so an auxiliary record carrying only the work key would sit
+		// under an id no phase shares — invisible to the turn view and to
+		// `GET /events?turn_id=`. See ADR-0017.
+		Task: task, Aux: aux,
+		// WHAT IT WAS ASKED, which every relevance judgement is made
+		// against while the executor is handed the task — see
+		// [prefetch.Request.Ask] and [turnAsk].
+		Ask: turnAsk(req.Ask()),
 		// OFF THE ASK, which for a coalesced conversation is the merged
 		// digest and for everything else is the partition itself. One
 		// shape rather than two: the merge is where a conversation's
@@ -230,11 +240,73 @@ func (e *Engine) publishPrefetchSummary(ctx context.Context, seat *org.Role,
 		ThreadContextRead:         b.ThreadContextRead,
 		ThreadContextStoppedShort: b.ThreadContextStoppedShort,
 		TriggerRequiresRecon:      r.RequiresRecon,
+		// AND THE FACT THE EPISODE BLOCK CANNOT CARRY: an empty block is
+		// both "nothing similar" and "the embedder failed, so nothing was
+		// searched".
+		TurnEmbedding: b.TurnEmbedding,
 	}, tracing.TraceOf(ctx))
 	if ev == nil {
 		return
 	}
 	e.publishEvent(ctx, ev, seat.Name)
+}
+
+// turnAsk is what a turn was ASKED — [prefetch.Request.Ask] — read off its
+// trigger events, in order, one paragraph each.
+//
+// DescribeTrigger's job, without the wrapping. That function renders each
+// event's [events.Briefer], which for a notification is the integration's
+// prompt: the message behind triage guidance, reply instructions and the ids
+// to act on, identical on every turn of the surface. This renders, per event:
+//
+//   - a notification: its SUBJECT, where the source says the subject is
+//     content, and its SALIENT body — the raw message, or a coalesced burst's
+//     messages attributed to their senders with the copies a source re-sent
+//     left out (notify's mergedSalient). On most sources the subject is part
+//     of what was sent: an issue's key and title, a page's title, a monitor's
+//     alert — and on a tracker comment the only place the topic is named at
+//     all. A chat backend's is not: it names the SURFACE ("Slack message"),
+//     identical on every message, so it is left out
+//     ([types.ExternalNotification.SubjectIsLabel]) and a chat turn's ask is
+//     what was said. Led by it, every chat turn's memory filter, knowledge
+//     query and episode summary were handed the same words, and every chat
+//     turn's vector was pulled towards every other's;
+//   - anything else that states an ask (a schedule's task, a colleague's
+//     question, their answer): its brief, which is already the ask itself —
+//     and for a colleague names who asked, the one sender a turn woken by a
+//     colleague has.
+//
+// An event with none of those contributes nothing — not its type name, which
+// DescribeTrigger hands the executor so it is never given a blank ask, and
+// which here would be a word every such turn is judged against.
+func turnAsk(evs []*events.Event) string {
+	var parts []string
+	for _, ev := range evs {
+		if ev == nil {
+			continue
+		}
+		if text := strings.TrimSpace(eventAsk(ev)); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+// eventAsk is one trigger event's part of [turnAsk].
+func eventAsk(ev *events.Event) string {
+	if n, ok := events.DataAs[*types.ExternalNotification](ev); ok && n != nil {
+		body := strings.TrimSpace(salientBody(n))
+		if n.SubjectIsLabel {
+			return body
+		}
+		return strings.TrimSpace(strings.TrimSpace(n.Subject) + "\n\n" + body)
+	}
+	if brief, ok := ev.Data.(events.Briefer); ok {
+		if b := strings.TrimSpace(brief.Brief()); b != "" {
+			return b
+		}
+	}
+	return ""
 }
 
 // requiresRecon reports that ANY constituent of the trigger is a bare

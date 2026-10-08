@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
@@ -160,17 +161,30 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) knowledgeBlo
 	}); ok && builder.Building(ctx) {
 		return knowledgeBlock{text: BuildingKnowledgeHint}
 	}
-	if r.RequiresRecon {
-		// The trigger is a pointer, so there is nothing worth searching
-		// on yet: a query built from "PR #42 got a comment" matches the
-		// wrong pages or none. The hint says to look again once the seat
-		// knows what the task needs, which is exactly what the executor's
-		// search_knowledge tool is for.
+	if !r.judgeable() {
+		// The trigger is a pointer, or asked nothing, so there is nothing
+		// worth searching on yet: a query built from "PR #42 got a
+		// comment" matches the wrong pages or none. The hint says to look
+		// again once the seat knows what the task needs, which is exactly
+		// what the executor's search_knowledge tool is for.
 		return knowledgeBlock{text: EmptyKnowledgeHint}
 	}
 	query := f.knowledgeQuery(ctx, r)
 	if query == "" {
 		return knowledgeBlock{}
+	}
+	if err := knowledge.CheckQuery(query); err != nil {
+		// A QUERY THE MODEL WROTE PAST THE SEARCH'S BOUND is not searched
+		// — the bound every surface holds a query to, so a model that
+		// ignored "2-8 keywords" and wrote a paragraph is not the one
+		// caller that slips one past it — and never cut to fit, which
+		// would search on wherever the cut fell. The block says the search
+		// did not run, because it did not; the seat searches with a
+		// focused query of its own once it knows what the task needs.
+		log.WarnContext(ctx, "prefetch_knowledge_query_refused", "error", err.Error(),
+			"detail", "the auxiliary model wrote a search query past the bound; "+
+				"the knowledge block says the search did not run")
+		return knowledgeBlock{text: UnsearchedKnowledgeHint}
 	}
 	answer := f.src.Knowledge.Search(ctx, knowledge.Query{
 		Text: query, Seat: r.Seat, Org: r.Org, Limit: knowledgeHits,
@@ -209,9 +223,15 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) knowledgeBlo
 }
 
 // knowledgeQuery asks the auxiliary model for a search query.
+//
+// WRITTEN FROM WHAT THE TURN WAS ASKED ([Request.Ask]), not from the brief the
+// executor is handed: the brief wraps a chat message in triage guidance with
+// worked examples of its own (a new hire welcomed, a ticket opened for an
+// engineer), and a query writer handed the brief is handed those as candidate
+// search terms beside the one sentence the turn is about.
 func (f *Fetcher) knowledgeQuery(ctx context.Context, r Request) string {
-	answer, ok := f.auxCall(ctx, r.Seat, knowledgeQuerySystemPrompt,
-		"Task the agent is about to work on:\n\""+r.Task+
+	answer, ok := f.auxCall(ctx, r, types.AuxKnowledgeQuery, knowledgeQuerySystemPrompt,
+		"Task the agent is about to work on:\n\""+r.Ask+
 			"\"\n\nKnowledge-base search query:", knowledgeQueryTokens)
 	if !ok {
 		return ""

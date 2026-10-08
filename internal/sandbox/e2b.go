@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -137,6 +138,10 @@ func (p *E2BProvider) templateFor(spec Spec) string {
 }
 
 // Create implements [Provider].
+//
+// EVERY BOX IS SECURED ([e2bAPI.createBox]): its envd refuses any request
+// without the box's access token, which every handle this backend builds
+// carries ([e2bBox.EnvdAccessToken]) and every envd call presents.
 func (p *E2BProvider) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	template := p.templateFor(spec)
 	box, err := p.api.createBox(ctx, template, spec.TimeoutSec, spec.Env)
@@ -145,7 +150,7 @@ func (p *E2BProvider) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	}
 	e2bLog.Info("e2b_sandbox_created", "sandbox_id", box.SandboxID,
 		"template", template, "domain", p.api.domain,
-		"envd_version", box.EnvdVersion)
+		"envd_version", box.EnvdVersion, "envd_token", box.EnvdAccessToken != "")
 	return p.box(box), nil
 }
 
@@ -169,11 +174,35 @@ func (p *E2BProvider) Connect(ctx context.Context, sandboxID string) (Sandbox, e
 	if err != nil {
 		var apiErr *E2BError
 		if errors.As(err, &apiErr) && apiErr.Gone() {
-			return nil, fmt.Errorf("e2b: sandbox %s is gone: %w", sandboxID, err)
+			return nil, boxGone{fmt.Errorf("e2b: sandbox %s is gone: %w", sandboxID, err)}
 		}
 		return nil, fmt.Errorf("e2b: sandbox %s could not be connected to: %w", sandboxID, err)
 	}
 	e2bLog.Debug("e2b_sandbox_connected", "sandbox_id", sandboxID)
+	return p.box(box), nil
+}
+
+// Attach implements [Provider]: the box READ, never resumed.
+//
+// A paused box is a snapshot with no envd running to answer, so there is
+// nothing to read without waking it, and waking it is what a reader must not
+// do — it is refused with [ErrBoxPaused]. A running one is reached exactly as
+// a connected one is, through envd on its own hostname, and its timer is left
+// where the waiter's keepalive set it: /connect would have moved it to its own
+// 900 seconds on every read.
+func (p *E2BProvider) Attach(ctx context.Context, sandboxID string) (Sandbox, error) {
+	box, err := p.api.getBox(ctx, sandboxID)
+	if err != nil {
+		var apiErr *E2BError
+		if errors.As(err, &apiErr) && apiErr.Gone() {
+			return nil, boxGone{fmt.Errorf("e2b: sandbox %s is gone: %w", sandboxID, err)}
+		}
+		return nil, fmt.Errorf("e2b: sandbox %s could not be read: %w", sandboxID, err)
+	}
+	if box.State == e2bPaused {
+		return nil, boxPaused{fmt.Errorf("e2b: sandbox %s is paused, and a paused box cannot be "+
+			"read without resuming it", sandboxID)}
+	}
 	return p.box(box), nil
 }
 
@@ -198,7 +227,7 @@ func (p *E2BProvider) box(b e2bBox) *E2BSandbox {
 	return &E2BSandbox{
 		id:   b.SandboxID,
 		api:  p.api,
-		envd: newEnvdClient(b.host(p.api.domain), p.http),
+		envd: newEnvdClient(b.host(p.api.domain), b.EnvdAccessToken, p.http),
 	}
 }
 
@@ -272,6 +301,16 @@ func (s *E2BSandbox) WriteFile(ctx context.Context, path string, content []byte)
 // ReadFile implements [Sandbox].
 func (s *E2BSandbox) ReadFile(ctx context.Context, path string) ([]byte, error) {
 	return s.envd.readFile(ctx, path)
+}
+
+// OpenFile implements [Sandbox]: envd's download body, read as it arrives.
+func (s *E2BSandbox) OpenFile(ctx context.Context, path string) (io.ReadCloser, error) {
+	return s.envd.openFile(ctx, path)
+}
+
+// ReadTail implements [Sandbox]: a suffix range on envd's download.
+func (s *E2BSandbox) ReadTail(ctx context.Context, path string, n int) (FileTail, error) {
+	return s.envd.readTail(ctx, path, n)
 }
 
 // SetTimeout implements [Sandbox]: the keepalive.

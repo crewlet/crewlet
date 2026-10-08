@@ -27,6 +27,7 @@ import { WORKSPACES } from "~/app/nav.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 
 const had = Object.getOwnPropertyDescriptor(navigator, "clipboard");
 
@@ -240,7 +241,7 @@ describe("who is working", () => {
         id: "a1",
         role: "Agent SWE",
         activity: "working",
-        live_call: { work_item: { key: "ENG-1", project: "ENG" } },
+        live_call: { work_item: { key: "ENG-1", project: "ENG" }, versions: ZERO_VERSIONS },
       },
       { id: "a2", role: "SRE", activity: "working" },
       { id: "a4", role: "CTO", activity: "idle" },

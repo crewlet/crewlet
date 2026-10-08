@@ -436,7 +436,7 @@ func seedRunningRun(t *testing.T, e *Engine, turnID, sandboxID string) {
 	t.Helper()
 	store := sandbox.NewCoordStore(e.backends.Fleet)
 	ctx := t.Context()
-	if err := store.BeginLaunch(ctx, sandbox.PendingRun{
+	if _, err := store.BeginLaunch(ctx, sandbox.PendingRun{
 		TurnID: turnID, AgentHandle: "swe", Role: "SWE", CodingAgent: "claude-code",
 		CreatedAt: time.Now().UTC(),
 	}, sandbox.Fence{}); err != nil {

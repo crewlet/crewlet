@@ -38,7 +38,7 @@ const (
 	Direct Placement = "direct"
 
 	// Container runs a long-lived Docker or Podman container per box, with
-	// the box directory bind-mounted at DefaultHome — the same home a remote
+	// the box's home bind-mounted at DefaultHome — the same home a remote
 	// backend uses, so setup steps that provision system paths work exactly
 	// as they do remotely. Real host isolation, at the cost of an image with
 	// the coding CLI already installed.

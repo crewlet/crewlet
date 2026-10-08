@@ -542,6 +542,7 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 		SalientBody:          &salient,
 		Metadata:             meta,
 		ContextRequiresRecon: prompt.RequiresRecon(r.Inbound),
+		SubjectIsLabel:       prompt.SubjectIsLabel(r.Inbound),
 		Addressed:            prompt.Addressed(r.Inbound),
 		Owes:                 r.Owes,
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -117,6 +118,20 @@ func (h *fleetHarness) refusedAt(scope string, p period.Period, from, to time.Ti
 	return stamp
 }
 
+// refuse records a refusal the gate made without a charge, failing on an
+// error and on an answer that is not the scope's counter.
+func (h *fleetHarness) refuse(scope string, caps coord.Caps, w coord.Windows) coord.Usage {
+	h.t.Helper()
+	got, err := h.f.Refuse(h.ctx, scope, caps, w)
+	if err != nil {
+		h.t.Fatalf("Refuse(%s, %v): %v", scope, caps, err)
+	}
+	if got.Scope != scope {
+		h.t.Fatalf("Refuse(%s) answered for scope %q", scope, got.Scope)
+	}
+	return got
+}
+
 // refusing reports which periods of a scope carry a refusal stamp.
 func (h *fleetHarness) refusing(scope string) []period.Period {
 	h.t.Helper()
@@ -178,22 +193,27 @@ func windowRollover(h *fleetHarness) {
 
 	// Saturday 7 March, half an hour before midnight in New York — 04:30 on
 	// the 8th in UTC, so a counter cut on UTC would already be on Sunday.
+	//
+	// Every refused round below is COUNTED in all three windows, as every
+	// charge is (coord.Budgets.Charge): the figures carry each one, and the
+	// last step is where that shows — the week the 1st shares with the 31st
+	// still holds the round March refused.
 	saturday := at(2026, time.March, 7, 23, 30)
 	if got := charge(saturday, 300); !got.OK {
 		h.t.Fatalf("Saturday's first charge was refused: %+v", got)
 	}
 	refused("Saturday's day is full", charge(saturday, 1), period.Day, saturday)
-	want("Saturday", saturday, 300, 300, 300)
+	want("Saturday", saturday, 301, 301, 301)
 
 	// LOCAL MIDNIGHT, on the day the clocks spring forward: a 23-hour day.
 	// The day's allowance is back, and nothing else moved — Sunday is in the
 	// same ISO week and the same month.
 	sunday := at(2026, time.March, 8, 0, 30)
-	if got := charge(sunday, 150); !got.OK {
+	if got := charge(sunday, 149); !got.OK {
 		h.t.Fatalf("Sunday's first charge was refused, so the day did not roll at "+
 			"local midnight: %+v", got)
 	}
-	want("Sunday", sunday, 150, 450, 450)
+	want("Sunday", sunday, 149, 450, 450)
 	if stamps := h.refusingAt(sunday, coord.OrgScope); len(stamps) != 0 {
 		h.t.Fatalf("Sunday reads as refusing in %v: Saturday's refusal belonged to a "+
 			"window that is over", stamps)
@@ -206,20 +226,47 @@ func windowRollover(h *fleetHarness) {
 	if got := charge(monday, 300); !got.OK {
 		h.t.Fatalf("Monday's first charge was refused, so the week did not roll: %+v", got)
 	}
-	want("Monday", monday, 300, 300, 750)
+	want("Monday", monday, 300, 300, 751)
 
 	// The last second of March: a fresh day and a fresh week (Monday the
-	// 30th began it), and a month with 50 tokens left.
+	// 30th began it), and a month with 49 tokens left.
 	lastOfMarch := coord.WindowsAt(time.Date(2026, time.March, 31, 23, 59, 59, 0, ny), ny)
 	refused("March is nearly spent", charge(lastOfMarch, 100), period.Month, lastOfMarch)
-	want("the 31st", lastOfMarch, 0, 0, 750)
+	want("the 31st", lastOfMarch, 100, 100, 851)
 
-	// THE 1ST: the day and the month roll, the week does not.
+	// THE 1ST: the day and the month roll, the week does not — so it still
+	// holds the round March refused on the 31st.
 	april := at(2026, time.April, 1, 0, 0)
 	if got := charge(april, 100); !got.OK {
 		h.t.Fatalf("the 1st's first charge was refused, so the month did not roll: %+v", got)
 	}
-	want("the 1st", april, 100, 100, 100)
+	want("the 1st", april, 100, 200, 100)
+}
+
+// smallerAfterRefused fills a 100-token day to 98 under the caps given, has a
+// 3-token round refused by scope, and then charges a 1-token round — which fits
+// the room the counter showed before the refused round was counted, and must
+// be refused against the room that round actually left.
+func smallerAfterRefused(h *fleetHarness, scope string, org, seatCaps coord.Caps) {
+	h.t.Helper()
+	if got := h.charge(testSeat, 98, org, seatCaps); !got.OK {
+		h.t.Fatalf("the first charge was refused: %+v", got)
+	}
+	if got := h.charge(testSeat, 3, org, seatCaps); got.OK || got.RefusedScope != scope ||
+		got.RefusedUsed != 101 {
+		h.t.Fatalf("the round past the ceiling = %+v, want the %s scope refusing at 101 of 100",
+			got, scope)
+	}
+	if got := h.charge(testSeat, 1, org, seatCaps); got.OK || got.RefusedScope != scope ||
+		got.RefusedUsed != 102 {
+		h.t.Fatalf("a smaller round after the refusal = %+v, want the %s scope refusing at "+
+			"102 of 100: the refused round was paid for, and left no room", got, scope)
+	}
+	for _, s := range []string{coord.OrgScope, testSeat} {
+		if got := h.used(s); got != 102 {
+			h.t.Fatalf("%s used = %d, want all 102 tokens the three rounds spent", s, got)
+		}
+	}
 }
 
 // refusingAt is which periods of a scope carry a refusal stamp, read against w.
@@ -233,6 +280,31 @@ func (h *fleetHarness) refusingAt(w coord.Windows, scope string) []period.Period
 		}
 	}
 	return out
+}
+
+// answered fails unless a charge's answer carries both counters read against
+// the suite's windows, the company's at org and the seat's at seat in every
+// window.
+func (h *fleetHarness) answered(got coord.Spend, org, seat int) {
+	h.t.Helper()
+	w := h.windows()
+	for _, c := range []struct {
+		counter coord.Usage
+		scope   string
+		want    int
+	}{{got.Org, coord.OrgScope, org}, {got.Agent, testSeat, seat}} {
+		if c.counter.Scope != c.scope {
+			h.t.Fatalf("the answer %+v carries %q where the %s counter belongs",
+				got, c.counter.Scope, c.scope)
+		}
+		for i, p := range period.Periods {
+			slot := c.counter.In(p)
+			if slot.Window.Label != w[i].Label || slot.Used != c.want {
+				h.t.Fatalf("the answer's %s %s window = %q at %d, want %q at %d: %+v",
+					c.scope, p, slot.Window.Label, slot.Used, w[i].Label, c.want, got)
+			}
+		}
+	}
 }
 
 var budgetCases = []fleetCase{{
@@ -253,11 +325,14 @@ var budgetCases = []fleetCase{{
 		if got.OK {
 			h.t.Fatal("a charge past the org cap was accepted")
 		}
-		if got.RefusedScope != "org" || got.RefusedLimit != 500 || got.RefusedUsed != 500 {
-			h.t.Fatalf("refusal = %+v, want the org scope at 500 of its 500", got)
+		// The refused round is counted, and the refusal states the counter
+		// as it left it: 501 of 500, the figure every later reader sees.
+		if got.RefusedScope != "org" || got.RefusedLimit != 500 || got.RefusedUsed != 501 {
+			h.t.Fatalf("refusal = %+v, want the org scope at 501 of its 500", got)
 		}
-		if h.used(coord.OrgScope) != 500 {
-			h.t.Fatalf("org spend = %d, want the 500 that fit", h.used(coord.OrgScope))
+		if h.used(coord.OrgScope) != 501 {
+			h.t.Fatalf("org spend = %d, want the 500 that fit and the 1 that was refused",
+				h.used(coord.OrgScope))
 		}
 	},
 }, {
@@ -330,53 +405,103 @@ var budgetCases = []fleetCase{{
 		}
 	},
 }, {
-	name: "a refused seat leaves the org uncharged",
+	name: "a round the seat refuses is counted on the company too",
 	fn: func(h *fleetHarness) {
-		// The property a single SQL transaction used to give for free,
-		// and the whole reason this contract cannot be two calls:
-		// charging the company for a turn that never ran lets it
-		// exhaust its budget on work it did not do. On a KV backend
-		// there is no transaction, so the org bump made a moment ago
-		// has to be UNWOUND by hand — this is the case that proves it.
+		// A round is charged once its reply is in, so a refused round has
+		// already been billed — to the company as much as to the seat. The
+		// counter that took the company's half BACK on a seat's refusal
+		// read a round short of what the company had paid for, and handed
+		// its other seats room that round had already used.
 		if got := h.charge(testSeat, 90, nil, day(100)); !got.OK {
 			h.t.Fatalf("the first charge was refused: %+v", got)
 		}
-		before := h.spent(h.windows(), coord.OrgScope)
 		got := h.charge(testSeat, 90, nil, day(100))
 		if got.OK {
 			h.t.Fatal("a charge past the seat cap was accepted")
 		}
-		if got.RefusedScope != "agent" {
-			h.t.Fatalf("refusal = %+v, want the agent scope", got)
+		if got.RefusedScope != "agent" || got.RefusedUsed != 180 || got.RefusedLimit != 100 {
+			h.t.Fatalf("refusal = %+v, want the agent scope at 180 of its 100", got)
 		}
-		// Every window, the uncapped ones included: the unwind takes the
-		// charge back from each window it was counted in.
-		if after := h.spent(h.windows(), coord.OrgScope); after != before {
-			h.t.Fatalf("org spend moved from %v to %v on a REFUSED turn", before, after)
+		// Every window, the uncapped ones included.
+		w := h.windows()
+		for _, scope := range []string{coord.OrgScope, testSeat} {
+			if got := h.spent(w, scope); got != [3]int{180, 180, 180} {
+				h.t.Fatalf("%s day/week/month = %v after a refused round, want 180 in each: "+
+					"the round the seat refused was paid for all the same", scope, got)
+			}
 		}
 	},
 }, {
-	name: "a refused org leaves the seat uncharged",
+	name: "a round the company refuses is counted on the seat too",
 	fn: func(h *fleetHarness) {
-		// The other direction. Nothing to unwind here — the org is
-		// charged first, so its refusal happens before the seat is
-		// touched — which is exactly the property being pinned: a
-		// backend that wrote the seat first would burn a seat's own
-		// allowance on turns the company refused.
+		// The other direction: the company is judged first, and its
+		// refusal settles the answer — but the round was the seat's, and a
+		// seat whose counter never heard of it would read as having room
+		// the company's next window will hand it.
 		if got := h.charge(testSeat, 90, day(100), day(1000)); !got.OK {
 			h.t.Fatalf("the first charge was refused: %+v", got)
 		}
-		before := h.used(testSeat)
 		got := h.charge(testSeat, 90, day(100), day(1000))
 		if got.OK {
 			h.t.Fatal("a charge past the org cap was accepted")
 		}
-		if got.RefusedScope != "org" {
-			h.t.Fatalf("refusal = %+v, want the org scope", got)
+		if got.RefusedScope != "org" || got.RefusedUsed != 180 {
+			h.t.Fatalf("refusal = %+v, want the org scope at 180", got)
 		}
-		if after := h.used(testSeat); after != before {
-			h.t.Fatalf("seat spend moved from %d to %d on a REFUSED turn", before, after)
+		w := h.windows()
+		for _, scope := range []string{coord.OrgScope, testSeat} {
+			if got := h.spent(w, scope); got != [3]int{180, 180, 180} {
+				h.t.Fatalf("%s day/week/month = %v after a refused round, want 180 in each",
+					scope, got)
+			}
 		}
+	},
+}, {
+	name: "a refusal answers both counters as the round left them",
+	fn: func(h *fleetHarness) {
+		// A refusal names ONE window of ONE scope, and the round it
+		// records can fill another. Here the seat refuses a round that
+		// leaves the company's day exactly at its ceiling, so the next
+		// charge is refused by the COMPANY, which is judged first — and a
+		// caller that kept only the refusal it was answered (the engine's
+		// turn meter keeps what an answer makes certain) named the seat
+		// for a refusal the company makes. So a refusal answers both
+		// counters as the charge left them, exactly as an admission does.
+		if got := h.charge(testSeat, 40, day(100), day(50)); !got.OK {
+			h.t.Fatalf("the first charge was refused: %+v", got)
+		}
+		got := h.charge(testSeat, 60, day(100), day(50))
+		if got.OK || got.RefusedScope != "agent" || got.RefusedUsed != 100 || got.RefusedLimit != 50 {
+			h.t.Fatalf("refusal = %+v, want the seat at 100 of its 50", got)
+		}
+		h.answered(got, 100, 100)
+
+		next := h.charge(testSeat, 1, day(100), day(50))
+		if next.OK || next.RefusedScope != "org" || next.RefusedUsed != 101 {
+			h.t.Fatalf("the next charge = %+v, want the company refusing at 101: the seat's "+
+				"refusal left the company's day with no room", next)
+		}
+		// And the company's refusal carries the seat it counted the round
+		// on, with no verdict of its own.
+		h.answered(next, 101, 101)
+	},
+}, {
+	name: "a round the company refused leaves no room for a smaller one",
+	fn: func(h *fleetHarness) {
+		// The room is judged on what the counter holds, so a counter that
+		// dropped the refused round still showed the room that round had
+		// spent: 98 of 100, a 3-token round refused, and then a 1-token
+		// round ADMITTED on top of the 3 already paid for. Counted, the
+		// refused round takes the window past its ceiling and every charge
+		// after it is refused.
+		smallerAfterRefused(h, "org", day(100), nil)
+	},
+}, {
+	name: "a round the seat refused leaves no room for a smaller one",
+	fn: func(h *fleetHarness) {
+		// The same rule on the seat's own ceiling, which a backend judges
+		// in a write of its own after the company's.
+		smallerAfterRefused(h, "agent", nil, day(100))
 	},
 }, {
 	name: "an exhausted company is reported before an exhausted seat",
@@ -399,12 +524,12 @@ var budgetCases = []fleetCase{{
 }, {
 	name: "an exhausted company is reported before a charge the seat cap can never hold",
 	fn: func(h *fleetHarness) {
-		// The same ordering rule, reached through the other door. A charge
-		// larger than the seat's WHOLE cap is screened before anything is
-		// written, and a screen that tested each scope's cap alone named
-		// the seat while the company was out of room too: the org holds 90
-		// of 100 and 50 more fits neither. An operator sent to raise the
-		// seat's ceiling would raise it and still be refused.
+		// The same ordering rule, reached through the other door: a charge
+		// larger than the seat's WHOLE cap, while the company is out of
+		// room too — the org holds 90 of 100 and 50 more fits neither. A
+		// backend that judged each scope's cap alone named the seat, and an
+		// operator sent to raise the seat's ceiling would raise it and
+		// still be refused.
 		if got := h.charge(testSeat, 90, day(100), nil); !got.OK {
 			h.t.Fatalf("the first charge was refused: %+v", got)
 		}
@@ -412,11 +537,17 @@ var budgetCases = []fleetCase{{
 		if got.OK {
 			h.t.Fatal("a charge past both caps was accepted")
 		}
-		if got.RefusedScope != "org" || got.RefusedUsed != 90 || got.RefusedLimit != 100 {
-			h.t.Fatalf("refusal = %+v, want the org scope at 90 of 100", got)
+		if got.RefusedScope != "org" || got.RefusedUsed != 140 || got.RefusedLimit != 100 {
+			h.t.Fatalf("refusal = %+v, want the org scope at 140 of 100", got)
 		}
-		if h.used(coord.OrgScope) != 90 || h.used(testSeat) != 90 {
-			h.t.Fatal("a refused charge still moved a counter")
+		if h.used(coord.OrgScope) != 140 || h.used(testSeat) != 140 {
+			h.t.Fatal("the refused round is missing from a counter it was spent against")
+		}
+		// The company refused, so the seat has no verdict of its own: its
+		// own cap could not hold the round either, but the refusal is the
+		// company's and it is stamped there alone.
+		if stamps := h.refusing(testSeat); len(stamps) != 0 {
+			h.t.Fatalf("the seat carries a refusal the company made, in %v", stamps)
 		}
 	},
 }, {
@@ -428,19 +559,24 @@ var budgetCases = []fleetCase{{
 		if got.OK {
 			h.t.Fatal("a charge larger than the seat's whole cap was accepted")
 		}
-		if got.RefusedScope != "agent" || got.RefusedLimit != 40 || got.RefusedPeriod != period.Day {
-			h.t.Fatalf("refusal = %+v, want the agent scope's day window and its limit", got)
+		if got.RefusedScope != "agent" || got.RefusedLimit != 40 || got.RefusedPeriod != period.Day ||
+			got.RefusedUsed != 50 {
+			h.t.Fatalf("refusal = %+v, want the agent scope's day window at 50 of its 40", got)
 		}
-		if h.used(coord.OrgScope) != 0 || h.used(testSeat) != 0 {
-			h.t.Fatal("a refused charge still moved a counter")
+		if h.used(coord.OrgScope) != 50 || h.used(testSeat) != 50 {
+			h.t.Fatal("the refused round is missing from a counter it was spent against")
 		}
 	},
 }, {
-	name: "a charge larger than the whole cap is refused before anything is written",
+	name: "a charge larger than the whole cap is refused on a counter that never charged",
 	fn: func(h *fleetHarness) {
 		// The first-ever charge, against an empty counter. A backend
 		// that only checked "existing + delta" on an UPDATE path would
-		// accept this one, because there is nothing to update yet.
+		// accept this one, because there is nothing to update yet. It is
+		// still the gate saying no, so it is stamped like any refusal —
+		// a backend that stamped only on one path would leave the largest
+		// refusals of all invisible — and it is counted like any round.
+		from := time.Now()
 		got := h.charge(testSeat, 1_000_000, day(10), nil)
 		if got.OK {
 			h.t.Fatal("a charge larger than the entire cap was accepted")
@@ -448,8 +584,9 @@ var budgetCases = []fleetCase{{
 		if got.RefusedScope != "org" {
 			h.t.Fatalf("refusal = %+v, want the org scope", got)
 		}
-		if h.used(coord.OrgScope) != 0 || h.used(testSeat) != 0 {
-			h.t.Fatal("a refused charge still moved a counter")
+		h.refusedAt(coord.OrgScope, period.Day, from, time.Now())
+		if h.used(coord.OrgScope) != 1_000_000 || h.used(testSeat) != 1_000_000 {
+			h.t.Fatal("the refused round is missing from a counter it was spent against")
 		}
 	},
 }, {
@@ -478,8 +615,11 @@ var budgetCases = []fleetCase{{
 		if got.OK {
 			h.t.Fatal("a second seat spent the org allowance the first had already spent")
 		}
-		if h.used(other) != 0 {
-			h.t.Fatal("a refused seat was charged")
+		// Each seat's counter carries its own rounds and nobody else's;
+		// the company's carries both.
+		if h.used(other) != 60 || h.used(testSeat) != 60 || h.used(coord.OrgScope) != 120 {
+			h.t.Fatalf("seats = %d and %d, org = %d, want 60 each and the company 120",
+				h.used(testSeat), h.used(other), h.used(coord.OrgScope))
 		}
 	},
 }, {
@@ -520,11 +660,9 @@ var budgetCases = []fleetCase{{
 }, {
 	name: "a refusal is recorded on the scope that refused and on no other",
 	fn: func(h *fleetHarness) {
-		// "Exhausted" is a refusal, never used >= max: a refused charge
-		// increments nothing, so a counter stalls short of its cap by the
-		// size of the round that did not fit. The stamp is the only honest
-		// record of the gate saying no, and it belongs to the scope that
-		// said it.
+		// The stamp is the record of the gate saying no, and WHEN, and it
+		// belongs to the scope that said it. The round it refused is
+		// counted on both scopes; the stamp is on one.
 		if got := h.charge(testSeat, 90, day(100), nil); !got.OK {
 			h.t.Fatalf("the first charge was refused: %+v", got)
 		}
@@ -536,20 +674,24 @@ var budgetCases = []fleetCase{{
 		if stamps := h.refusing(testSeat); len(stamps) != 0 {
 			h.t.Fatalf("the seat carries a refusal the company made, in %v", stamps)
 		}
-		if h.used(coord.OrgScope) != 90 {
-			h.t.Fatalf("org used = %d after a refusal, want the 90 it held", h.used(coord.OrgScope))
+		if h.used(coord.OrgScope) != 140 {
+			h.t.Fatalf("org used = %d after a refusal, want the 90 it held and the 50 refused",
+				h.used(coord.OrgScope))
 		}
 
 		other := "agent:44444444-4444-4444-4444-444444444444"
 		from = time.Now()
-		if got := h.charge(other, 5, day(100), day(4)); got.RefusedScope != "agent" {
+		// The company's own ceiling left out: it is past it, and would
+		// refuse first.
+		if got := h.charge(other, 5, nil, day(4)); got.RefusedScope != "agent" {
 			h.t.Fatalf("refusal = %+v, want the agent scope", got)
 		}
 		h.refusedAt(other, period.Day, from, time.Now())
-		if row, _ := h.usage(other); row.In(period.Day).Used != 0 || !row.UpdatedAt.IsZero() {
-			// Listed, because a seat refused on its first charge has
-			// refused one; but it has been charged nothing and never.
-			h.t.Fatalf("a scope known only for its refusal reads %+v, want no spend and no charge time", row)
+		if row, _ := h.usage(other); row.In(period.Day).Used != 5 || row.UpdatedAt.IsZero() {
+			// A seat refused on its first charge still spent that
+			// round, so it reads the round and the time it was counted.
+			h.t.Fatalf("a scope refused on its first charge reads %+v, want its 5 tokens and "+
+				"a charge time", row)
 		}
 	},
 }, {
@@ -564,8 +706,8 @@ var budgetCases = []fleetCase{{
 		}
 		from := time.Now()
 		got := h.charge(testSeat, 100, caps, nil)
-		if got.OK || got.RefusedPeriod != period.Week || got.RefusedLimit != 150 || got.RefusedUsed != 100 {
-			h.t.Fatalf("refusal = %+v, want the org's week at 100 of 150", got)
+		if got.OK || got.RefusedPeriod != period.Week || got.RefusedLimit != 150 || got.RefusedUsed != 200 {
+			h.t.Fatalf("refusal = %+v, want the org's week at 200 of 150, the refused round counted", got)
 		}
 		if want := h.windows()[1].Label; got.RefusedWindow.Label != want {
 			h.t.Fatalf("refused in window %q, want the current week %q", got.RefusedWindow.Label, want)
@@ -624,8 +766,8 @@ var budgetCases = []fleetCase{{
 				h.t.Fatalf("%s: refusal = %+v, want the org's %s %q, the refusing window that ends last",
 					tc.what, got, tc.want, w[i].Label)
 			}
-			if !got.RefusedWindow.End.Equal(w[i].End) || got.RefusedUsed != 100 || got.RefusedLimit != 100 {
-				h.t.Fatalf("%s: refusal = %+v, want the %s ending %v at 100 of 100",
+			if !got.RefusedWindow.End.Equal(w[i].End) || got.RefusedUsed != 101 || got.RefusedLimit != 100 {
+				h.t.Fatalf("%s: refusal = %+v, want the %s ending %v at 101 of 100",
 					tc.what, got, tc.want, w[i].End)
 			}
 			// And every full window was stamped, since every one refused —
@@ -664,10 +806,11 @@ var budgetCases = []fleetCase{{
 			h.t.Fatalf("tomorrow holds %d, want 90: the trailing charge rolled the day back "+
 				"or went nowhere", got)
 		}
-		// Refused against the window the counter is on, and named as it.
+		// Refused against the window the counter is on, named as it, and
+		// counted there.
 		got := h.chargeAt(today, testSeat, 20, day(100), nil)
-		if got.OK || got.RefusedWindow.Label != tomorrow[0].Label || got.RefusedUsed != 90 {
-			h.t.Fatalf("refusal = %+v, want tomorrow %q at 90 of 100", got, tomorrow[0].Label)
+		if got.OK || got.RefusedWindow.Label != tomorrow[0].Label || got.RefusedUsed != 110 {
+			h.t.Fatalf("refusal = %+v, want tomorrow %q at 110 of 100", got, tomorrow[0].Label)
 		}
 		// A read against the earlier day answers what that refusal was made
 		// against — the later day, its spend and its refusal — and never the
@@ -675,28 +818,29 @@ var budgetCases = []fleetCase{{
 		// turn headroom the gate refuses. That lasts a few seconds behind a
 		// peer's clock, and up to a day after the company's zone moves west.
 		read := h.usedAt(today, coord.OrgScope).In(period.Day)
-		if read.Used != 90 || read.Window.Label != tomorrow[0].Label || read.RefusedAt.IsZero() {
-			h.t.Fatalf("a read of the earlier day = %+v, want the later day %q at 90, refusing: "+
+		if read.Used != 110 || read.Window.Label != tomorrow[0].Label || read.RefusedAt.IsZero() {
+			h.t.Fatalf("a read of the earlier day = %+v, want the later day %q at 110, refusing: "+
 				"the counter holds the later day and the gate refuses against it", read, tomorrow[0].Label)
 		}
 	},
 }, {
 	name: "an admitted charge clears the refusals of both scopes it charged",
 	fn: func(h *fleetHarness) {
-		// A cap raised or a smaller round that fits: the scope has room
-		// again, and a dashboard still saying "refusing charges" would send
-		// an operator to fix what is already fixed.
+		// A cap raised: the scope has room again, and a dashboard still
+		// saying "refusing charges" would send an operator to fix what is
+		// already fixed. (A smaller round is no way back: the round that was
+		// refused is counted, so it left the window past its ceiling.)
 		h.charge(testSeat, 95, day(100), nil)
-		h.charge(testSeat, 50, day(100), nil) // org refuses
-		h.charge(testSeat, 5, nil, day(4))    // seat refuses
+		h.charge(testSeat, 50, day(100), nil) // org refuses, at 145
+		h.charge(testSeat, 5, nil, day(4))    // seat refuses, at 150
 		if len(h.refusing(coord.OrgScope)) == 0 {
 			h.t.Fatal("setup: the org refusal was not recorded")
 		}
 		if len(h.refusing(testSeat)) == 0 {
 			h.t.Fatal("setup: the seat refusal was not recorded")
 		}
-		if got := h.charge(testSeat, 5, day(100), day(200)); !got.OK {
-			h.t.Fatalf("a charge that fits both caps was refused: %+v", got)
+		if got := h.charge(testSeat, 5, day(1000), day(1000)); !got.OK {
+			h.t.Fatalf("a charge that fits both raised caps was refused: %+v", got)
 		}
 		for _, scope := range []string{coord.OrgScope, testSeat} {
 			if stamps := h.refusing(scope); len(stamps) != 0 {
@@ -714,10 +858,11 @@ var budgetCases = []fleetCase{{
 		// backend tests its scopes in.
 		h.charge(testSeat, 90, day(100), nil)
 		from := time.Now()
-		h.charge(testSeat, 50, day(100), nil) // org refuses
+		h.charge(testSeat, 50, day(100), nil) // org refuses, at 140
 		stamped := h.refusedAt(coord.OrgScope, period.Day, from, time.Now())
 
-		got := h.charge(testSeat, 5, day(100), day(92)) // org has room, the seat does not
+		// The company's ceiling raised, so it has room; the seat's does not.
+		got := h.charge(testSeat, 5, day(1000), day(142))
 		if got.RefusedScope != "agent" {
 			h.t.Fatalf("refusal = %+v, want the agent scope", got)
 		}
@@ -726,24 +871,43 @@ var budgetCases = []fleetCase{{
 			h.t.Fatalf("org refusal stamp = %v, want the %v it held: a charge refused "+
 				"overall cleared it", row.In(period.Day).RefusedAt, stamped)
 		}
-		if row.In(period.Day).Used != 90 {
-			h.t.Fatalf("org used = %d, want 90: the refused charge was not unwound", row.In(period.Day).Used)
+		if row.In(period.Day).Used != 145 {
+			h.t.Fatalf("org used = %d, want 145: the round the seat refused is the "+
+				"company's spend too", row.In(period.Day).Used)
 		}
 	},
 }, {
-	name: "a charge screened against a whole cap still records its refusal",
+	name: "a company refusal leaves the seat's own refusal standing",
 	fn: func(h *fleetHarness) {
-		// The screen refuses before any counter is written. It is still
-		// the gate saying no, and a backend that stamped only on the
-		// compare-and-swap path would leave the largest refusals of all
-		// invisible.
+		// The other direction of the case above, and the one a backend
+		// reaches by WRITING the seat: a round the company refused is
+		// counted on the seat with no verdict of its own, so that write
+		// carries the seat's stamps through. A backend that cleared them
+		// there — or judged the seat after all — would erase a seat
+		// refusal that is still true, and the seat's surfaces would stop
+		// saying since when it has been refusing.
 		from := time.Now()
-		if got := h.charge(testSeat, 1_000_000, day(10), nil); got.RefusedScope != "org" {
+		if got := h.charge(testSeat, 50, nil, day(40)); got.RefusedScope != "agent" {
+			h.t.Fatalf("setup refusal = %+v, want the agent scope", got)
+		}
+		stamped := h.refusedAt(testSeat, period.Day, from, time.Now())
+		// A distinct instant, so a backend that stamped the seat again
+		// cannot pass by landing in the same clock tick.
+		time.Sleep(2 * time.Millisecond)
+
+		// The company's ceiling tightened below what it holds: the
+		// company refuses, and the seat's own ceiling is not asked.
+		if got := h.charge(testSeat, 10, day(55), day(1000)); got.RefusedScope != "org" {
 			h.t.Fatalf("refusal = %+v, want the org scope", got)
 		}
-		h.refusedAt(coord.OrgScope, period.Day, from, time.Now())
-		if h.used(coord.OrgScope) != 0 {
-			h.t.Fatal("recording a refusal moved the counter")
+		row, _ := h.usage(testSeat)
+		if got := row.In(period.Day).RefusedAt; !got.Equal(stamped) {
+			h.t.Fatalf("seat refusal stamp = %v, want the %v it held: a round the "+
+				"company refused rewrote the seat's own refusal", got, stamped)
+		}
+		if h.used(coord.OrgScope) != 60 || h.used(testSeat) != 60 {
+			h.t.Fatalf("org = %d and seat = %d, want both rounds on both counters",
+				h.used(coord.OrgScope), h.used(testSeat))
 		}
 	},
 }, {
@@ -780,30 +944,49 @@ var budgetCases = []fleetCase{{
 	name: "concurrent charges never admit past a ceiling",
 	fn: func(h *fleetHarness) {
 		// The gate's half of the same property: a check and an increment
-		// that were two steps would let every racing caller see room.
+		// that were two steps would let every racing caller see room. What
+		// is ADMITTED is what the ceiling holds, exactly; what is COUNTED is
+		// every round, because every one of them was spent.
 		const callers = 32
-		var wg sync.WaitGroup
+		var (
+			wg       sync.WaitGroup
+			admitted atomic.Int32
+		)
+		errs := make(chan error, callers)
 		for range callers {
 			wg.Go(func() {
-				_, _ = h.f.Charge(h.ctx, coord.ChargeRequest{
+				got, err := h.f.Charge(h.ctx, coord.ChargeRequest{
 					Seat: testSeat, Tokens: 10, Windows: h.windows(), OrgCaps: day(100),
 				})
+				switch {
+				case err != nil:
+					errs <- err
+				case got.OK:
+					admitted.Add(1)
+				}
 			})
 		}
 		wg.Wait()
-		if got := h.used(coord.OrgScope); got != 100 {
-			h.t.Fatalf("org spend = %d after %d racing charges against a ceiling of 100, "+
-				"want exactly 100", got, callers)
+		close(errs)
+		for err := range errs {
+			h.t.Fatalf("a racing charge failed: %v", err)
+		}
+		if got := admitted.Load(); got != 10 {
+			h.t.Fatalf("%d of %d racing charges of 10 were admitted against a ceiling of 100, "+
+				"want exactly 10", got, callers)
+		}
+		if got := h.used(coord.OrgScope); got != callers*10 {
+			h.t.Fatalf("org spend = %d after %d racing charges of 10, want all %d: a refused "+
+				"round is spent like an admitted one", got, callers, callers*10)
 		}
 	},
 }, {
 	name: "a post-charge records spend that overran both caps",
 	fn: func(h *fleetHarness) {
 		// The spend already happened (a detached coding run, collected
-		// long after it started), so nothing can refuse it. Through the
-		// gate it was recorded NOT AT ALL whenever it did not fit, which
-		// is exactly when a cap binds, and the next round was admitted
-		// against room the run had already used.
+		// long after it started) and nothing waits on a verdict about it,
+		// so nothing refuses it: it is recorded whole, past both caps, and
+		// the next round is refused against what the run used.
 		if got := h.charge(testSeat, 90, day(100), day(100)); !got.OK {
 			h.t.Fatalf("setup charge refused: %+v", got)
 		}
@@ -841,7 +1024,7 @@ var budgetCases = []fleetCase{{
 	name: "a post-charge leaves every refusal stamp as it was",
 	fn: func(h *fleetHarness) {
 		// It is not a decision about room, so it neither says the gate
-		// turned a charge away nor that it had room for one: a refusing
+		// turned a call away nor that it had room for one: a refusing
 		// company stays refusing, and a seat that never refused is not
 		// stamped because a run took it past its cap.
 		h.charge(testSeat, 90, day(100), nil)
@@ -852,8 +1035,8 @@ var budgetCases = []fleetCase{{
 		if _, err := h.f.PostCharge(h.ctx, testSeat, 30, h.windows()); err != nil {
 			h.t.Fatalf("PostCharge: %v", err)
 		}
-		if row, _ := h.usage(coord.OrgScope); !row.In(period.Day).RefusedAt.Equal(stamped) || row.In(period.Day).Used != 120 {
-			h.t.Fatalf("org = %+v, want 120 used and the refusal stamped at %v kept", row, stamped)
+		if row, _ := h.usage(coord.OrgScope); !row.In(period.Day).RefusedAt.Equal(stamped) || row.In(period.Day).Used != 170 {
+			h.t.Fatalf("org = %+v, want 170 used and the refusal stamped at %v kept", row, stamped)
 		}
 		if stamps := h.refusing(testSeat); len(stamps) != 0 {
 			h.t.Fatalf("the seat reads as refusing in %v after a post-charge", stamps)
@@ -951,8 +1134,248 @@ var budgetCases = []fleetCase{{
 			h.t.Fatalf("PostChargeOrg: %v", err)
 		}
 		if row, _ := h.usage(coord.OrgScope); !row.In(period.Day).RefusedAt.Equal(stamped) ||
-			row.In(period.Day).Used != 120 {
-			h.t.Fatalf("org = %+v, want 120 used and the refusal stamped at %v kept", row, stamped)
+			row.In(period.Day).Used != 170 {
+			h.t.Fatalf("org = %+v, want 170 used and the refusal stamped at %v kept", row, stamped)
+		}
+	},
+}, {
+	name: "a seat post-charge moves that seat's counter and not the company's",
+	fn: func(h *fleetHarness) {
+		// It finishes a post-charge whose company half already landed, so
+		// counting the company here would count it twice. Past the seat's
+		// ceiling included: the spend happened, and the next round is
+		// refused against it.
+		if got := h.charge(testSeat, 90, day(1000), day(100)); !got.OK {
+			h.t.Fatalf("setup charge refused: %+v", got)
+		}
+		got, err := h.f.PostChargeSeat(h.ctx, testSeat, 50, h.windows())
+		if err != nil {
+			h.t.Fatalf("PostChargeSeat: %v", err)
+		}
+		if got.Scope != testSeat || got.In(period.Day).Used != 140 {
+			h.t.Fatalf("seat post-charge = %+v, want the seat's counter at 140", got)
+		}
+		if h.used(coord.OrgScope) != 90 || h.used(testSeat) != 140 {
+			h.t.Fatalf("org = %d and seat = %d, want the company's own 90 and 140",
+				h.used(coord.OrgScope), h.used(testSeat))
+		}
+		if next := h.charge(testSeat, 1, day(1000), day(100)); next.OK || next.RefusedScope != "agent" {
+			h.t.Fatalf("next charge = %+v, want the seat to refuse against the recorded spend", next)
+		}
+	},
+}, {
+	name: "a seat post-charge keeps the refusal stamp, needs a seat, and one of nothing writes nothing",
+	fn: func(h *fleetHarness) {
+		if got, err := h.f.PostChargeSeat(h.ctx, testSeat, 0, h.windows()); err != nil || got.Scope != "" {
+			h.t.Fatalf("PostChargeSeat(0) = (%+v, %v), want an empty answer", got, err)
+		}
+		if _, listed := h.usage(testSeat); listed {
+			h.t.Fatal("a seat post-charge of zero created a counter")
+		}
+		if _, err := h.f.PostChargeSeat(h.ctx, "", 5, h.windows()); err == nil {
+			h.t.Fatal("a seat post-charge with no seat scope was accepted")
+		}
+		if _, err := h.f.PostChargeSeat(h.ctx, testSeat, 5, coord.Windows{}); err == nil {
+			h.t.Fatal("a seat post-charge with no windows was accepted")
+		}
+		if _, listed := h.usage(testSeat); listed {
+			h.t.Fatal("a refused seat post-charge still charged the seat")
+		}
+		// Not a decision about room: a refusing seat stays refusing.
+		from := time.Now()
+		h.charge(testSeat, 50, nil, day(40)) // the seat refuses
+		stamped := h.refusedAt(testSeat, period.Day, from, time.Now())
+		if _, err := h.f.PostChargeSeat(h.ctx, testSeat, 30, h.windows()); err != nil {
+			h.t.Fatalf("PostChargeSeat: %v", err)
+		}
+		if row, _ := h.usage(testSeat); !row.In(period.Day).RefusedAt.Equal(stamped) ||
+			row.In(period.Day).Used != 80 {
+			h.t.Fatalf("seat = %+v, want 80 used and the refusal stamped at %v kept", row, stamped)
+		}
+	},
+}, {
+	name: "a refusal without a charge stamps every full window and counts nothing",
+	fn: func(h *fleetHarness) {
+		// The engine's turn meter stops a turn's next call once an answer
+		// has shown a window full — here a post-charge took the company's
+		// day past its ceiling, its month to its ceiling exactly, and left
+		// its week with room — so the charge that would have stamped them
+		// is never made. The refusal is the gate's all the same, and the
+		// counter records it: on every window with no room for a single
+		// token, the one filled exactly included, on none with room, and
+		// without spending a token.
+		caps := coord.Caps{period.Day: 100, period.Week: 1000, period.Month: 120}
+		if _, err := h.f.PostCharge(h.ctx, testSeat, 120, h.windows()); err != nil {
+			h.t.Fatalf("PostCharge: %v", err)
+		}
+		if stamps := h.refusing(coord.OrgScope); len(stamps) != 0 {
+			h.t.Fatalf("setup: a post-charge stamped the org in %v", stamps)
+		}
+		before, _ := h.usage(coord.OrgScope)
+
+		from := time.Now()
+		got := h.refuse(coord.OrgScope, caps, h.windows())
+		first := h.refusedAt(coord.OrgScope, period.Day, from, time.Now())
+		if stamps := h.refusing(coord.OrgScope); !slices.Equal(stamps, []period.Period{period.Day, period.Month}) {
+			h.t.Fatalf("the org is stamped in %v, want the full day and month: the week has room", stamps)
+		}
+		if day := got.In(period.Day); day.Used != 120 || !day.RefusedAt.Equal(first) {
+			h.t.Fatalf("the answer's day = %+v, want 120 used and the stamp %v the refusal wrote",
+				day, first)
+		}
+		after, _ := h.usage(coord.OrgScope)
+		if after.In(period.Day).Used != 120 || after.In(period.Week).Used != 120 ||
+			!after.UpdatedAt.Equal(before.UpdatedAt) {
+			h.t.Fatalf("org after the refusal = %+v, want 120 in every window and its clock "+
+				"still at %v: a refusal with no charge spends nothing", after, before.UpdatedAt)
+		}
+
+		// WHEN THE GATE LAST SAID NO, so a later refusal moves the stamp. A
+		// distinct instant, so a backend that kept the first cannot pass by
+		// landing in the same clock tick.
+		time.Sleep(2 * time.Millisecond)
+		from = time.Now()
+		h.refuse(coord.OrgScope, caps, h.windows())
+		if again := h.refusedAt(coord.OrgScope, period.Day, from, time.Now()); !again.After(first) {
+			h.t.Fatalf("a second refusal left the stamp at %v, want one after the first's %v",
+				again, first)
+		}
+	},
+}, {
+	name: "a refusal without a charge stamps no window the caps leave room in",
+	fn: func(h *fleetHarness) {
+		// Judged against the counter and the ceilings passed, never against
+		// what the caller remembers: under a ceiling raised since the window
+		// was seen full it has room, and a stamp there would tell every
+		// screen the gate is refusing a scope that is not.
+		if _, err := h.f.PostCharge(h.ctx, testSeat, 120, h.windows()); err != nil {
+			h.t.Fatalf("PostCharge: %v", err)
+		}
+		got := h.refuse(coord.OrgScope, day(1000), h.windows())
+		if day := got.In(period.Day); day.Used != 120 || !day.RefusedAt.IsZero() {
+			h.t.Fatalf("the answer's day = %+v, want 120 used and no stamp: it has room", day)
+		}
+		// A scope no ceiling caps has no window to refuse in at all.
+		h.refuse(coord.OrgScope, nil, h.windows())
+		if stamps := h.refusing(coord.OrgScope); len(stamps) != 0 {
+			h.t.Fatalf("the org is stamped in %v, where every window had room", stamps)
+		}
+	},
+}, {
+	name: "a refusal without a charge stamps no window that has turned over, and writes nothing",
+	fn: func(h *fleetHarness) {
+		// The window the caller saw full is over, so the one the refusal is
+		// judged in is a fresh window nobody has refused.
+		today := h.windows()
+		tomorrow := coord.WindowsAt(today[0].End, time.UTC)
+		if _, err := h.f.PostCharge(h.ctx, testSeat, 150, today); err != nil {
+			h.t.Fatalf("PostCharge: %v", err)
+		}
+		got := h.refuse(coord.OrgScope, day(100), tomorrow)
+		if day := got.In(period.Day); day.Window.Label != tomorrow[0].Label || day.Used != 0 ||
+			!day.RefusedAt.IsZero() {
+			h.t.Fatalf("the answer's day = %+v, want tomorrow %q unspent and unstamped: the full "+
+				"day is over", day, tomorrow[0].Label)
+		}
+		// AND NOTHING WRITTEN. A roll persisted for a refusal that stamped
+		// nothing would leave the slot on tomorrow, and a read of today
+		// would then answer tomorrow's empty window in place of today's.
+		read := h.usedAt(today, coord.OrgScope).In(period.Day)
+		if read.Window.Label != today[0].Label || read.Used != 150 || !read.RefusedAt.IsZero() {
+			h.t.Fatalf("today's day after the refusal = %+v, want %q at 150 and unstamped: a "+
+				"refusal that stamped nothing wrote the counter", read, today[0].Label)
+		}
+	},
+}, {
+	name: "a refusal without a charge is judged against the later window a slot is on",
+	fn: func(h *fleetHarness) {
+		// A peer whose clock leads moved the slot onto tomorrow and filled
+		// it. The next charge is refused against tomorrow (a slot never
+		// rolls back), so a refusal judged from today is tomorrow's too.
+		today := h.windows()
+		tomorrow := coord.WindowsAt(today[0].End, time.UTC)
+		if got := h.chargeAt(tomorrow, testSeat, 150, nil, nil); !got.OK {
+			h.t.Fatalf("the leading node's uncapped charge was refused: %+v", got)
+		}
+		from := time.Now()
+		got := h.refuse(coord.OrgScope, day(100), today)
+		if day := got.In(period.Day); day.Window.Label != tomorrow[0].Label || day.Used != 150 ||
+			day.RefusedAt.IsZero() {
+			h.t.Fatalf("the answer's day = %+v, want tomorrow %q at 150, stamped", day, tomorrow[0].Label)
+		}
+		h.refusedAt(coord.OrgScope, period.Day, from, time.Now())
+	},
+}, {
+	name: "a refusal without a charge leaves the other scope alone",
+	fn: func(h *fleetHarness) {
+		// Of the scope the refusal names and of no other, as a refused
+		// charge stamps only the scope that refused it. Both scopes are past
+		// the same ceiling here; only the one refused on behalf of is
+		// stamped, and refusing the other later leaves the first's stamp
+		// where it was.
+		if _, err := h.f.PostCharge(h.ctx, testSeat, 150, h.windows()); err != nil {
+			h.t.Fatalf("PostCharge: %v", err)
+		}
+		from := time.Now()
+		h.refuse(testSeat, day(100), h.windows())
+		seat := h.refusedAt(testSeat, period.Day, from, time.Now())
+		if stamps := h.refusing(coord.OrgScope); len(stamps) != 0 {
+			h.t.Fatalf("the company carries a refusal made of the seat, in %v", stamps)
+		}
+		time.Sleep(2 * time.Millisecond)
+		from = time.Now()
+		h.refuse(coord.OrgScope, day(100), h.windows())
+		h.refusedAt(coord.OrgScope, period.Day, from, time.Now())
+		if row, _ := h.usage(testSeat); !row.In(period.Day).RefusedAt.Equal(seat) {
+			h.t.Fatalf("seat stamp = %v after the company's refusal, want the %v it held",
+				row.In(period.Day).RefusedAt, seat)
+		}
+	},
+}, {
+	name: "an admitted charge clears a refusal recorded without one",
+	fn: func(h *fleetHarness) {
+		// The same stamp a refused charge writes, so the same thing clears
+		// it: a charge admitted on both scopes — here once both ceilings
+		// were raised — has just had room in every window.
+		if _, err := h.f.PostCharge(h.ctx, testSeat, 120, h.windows()); err != nil {
+			h.t.Fatalf("PostCharge: %v", err)
+		}
+		h.refuse(coord.OrgScope, day(100), h.windows())
+		h.refuse(testSeat, day(100), h.windows())
+		for _, scope := range []string{coord.OrgScope, testSeat} {
+			if len(h.refusing(scope)) == 0 {
+				h.t.Fatalf("setup: the refusal of %s was not recorded", scope)
+			}
+		}
+		if got := h.charge(testSeat, 5, day(1000), day(1000)); !got.OK {
+			h.t.Fatalf("a charge that fits both raised caps was refused: %+v", got)
+		}
+		for _, scope := range []string{coord.OrgScope, testSeat} {
+			if stamps := h.refusing(scope); len(stamps) != 0 {
+				h.t.Fatalf("%s still reads as refusing in %v after an admitted charge", scope, stamps)
+			}
+		}
+	},
+}, {
+	name: "a refusal without a charge needs a scope, its windows and real ceilings, and creates nothing",
+	fn: func(h *fleetHarness) {
+		if _, err := h.f.Refuse(h.ctx, "", day(100), h.windows()); err == nil {
+			h.t.Fatal("a refusal with no scope was accepted")
+		}
+		if _, err := h.f.Refuse(h.ctx, testSeat, day(100), coord.Windows{}); err == nil {
+			h.t.Fatal("a refusal with no windows was accepted")
+		}
+		if _, err := h.f.Refuse(h.ctx, testSeat, coord.Caps{period.Day: 0}, h.windows()); err == nil {
+			h.t.Fatal("a refusal under a ceiling of zero was accepted")
+		}
+		// A scope nothing has charged has no full window, so there is
+		// nothing to stamp, and no counter is made to hold nothing.
+		got := h.refuse(testSeat, day(100), h.windows())
+		if day := got.In(period.Day); day.Used != 0 || !day.RefusedAt.IsZero() || !got.UpdatedAt.IsZero() {
+			h.t.Fatalf("a refusal of a scope never charged answered %+v, want it unspent", got)
+		}
+		if _, listed := h.usage(testSeat); listed {
+			h.t.Fatal("a refusal of a scope never charged created a counter")
 		}
 	},
 }}

@@ -28,6 +28,7 @@ import { Project } from "~/routes/work/Project.tsx";
 import { healthFrame } from "~/test/health.ts";
 import { emptyDay } from "~/test/myWork.ts";
 import { withDerived } from "~/test/org.ts";
+import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -310,7 +311,7 @@ describe("the sidebar's figures", () => {
       store.applyAgents([
         { role: "A", activity: "working" },
         { role: "B", activity: "working" },
-        { role: "C", activity: "idle", live_call: { in_progress: true } },
+        { role: "C", activity: "idle", live_call: { in_progress: true, versions: ZERO_VERSIONS } },
         { role: "D", activity: "needs" },
       ] as never),
     );

@@ -1149,6 +1149,7 @@ func (w *Worker) reconcile(
 	// THE FOLD IS integration.Observe, shared with the pass an operator
 	// runs from the dashboard: a status row must not depend on which
 	// surface produced it. It carries the field stamped above through.
+	LogWhole(ctx, kind, findings, err)
 	state, forget := Observe(state, kind, findings, err, now)
 	// THE ADDRESS THIS PASS RAN AGAINST, on every pass rather than only a
 	// successful one: what it answers is "where is this surface's

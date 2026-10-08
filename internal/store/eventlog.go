@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 
 	"github.com/crewlet/crewlet/internal/tokens"
@@ -185,6 +186,13 @@ type Spend struct {
 	// when a phase names no model; this is the key itself, never the
 	// fallback. schema/0032.
 	ProviderKey string `json:"provider_key,omitempty"`
+
+	// Calls is how many PROVIDER CALLS the row covers — a phase's rounds,
+	// an auxiliary record's coalesced calls — and zero on a row that is no
+	// call. Stage is an auxiliary record's stage (`turn`, `reflection`, …),
+	// empty on every other row. schema/0040.
+	Calls int    `json:"calls,omitempty"`
+	Stage string `json:"stage,omitempty"`
 }
 
 // Cursor is an exclusive keyset position: the reader holds this row and wants
@@ -284,6 +292,19 @@ type ListQuery struct {
 	// It over-fetches and post-filters, so a page shorter than Limit does
 	// NOT mean history is exhausted here; only a zero-row page does.
 	RelatedAgent string
+
+	// FeedOnly selects the rows the ACTIVITY FEED carries: every stored type
+	// but the ones [events.Unfed] keeps out of it — a related agent's trace
+	// siblings included. It is what every read that is merged with or drawn
+	// beside the live ring asks: the live projection's startup seed, which
+	// rebuilds the feed from the store and must fill it with what the stream
+	// would have put there, and the activity views' older pages and axes,
+	// which a reader scrolls on from the ring. Filtered in the read rather
+	// than afterwards, because a page of the newest rows filtered afterwards
+	// would hand back fewer than it asked for whenever a burst of accounting
+	// rows was newest. [EventLog.Histogram] counts through the same
+	// predicate, so a feed-only bar counts what a feed-only page lists.
+	FeedOnly bool
 
 	// Since and Until bound the window a caller is asking about, as a
 	// half-open interval `[Since, Until)`.
@@ -433,9 +454,10 @@ INSERT INTO crewlet_events (
 	summary, actor, tags, payload,
 	phase, host_phase, worker, model, turn_id, work_key, iteration,
 	input_tokens, output_tokens, total_tokens,
-	cache_read_tokens, cache_write_tokens, provider_key, work_item
+	cache_read_tokens, cache_write_tokens, provider_key, work_item,
+	calls, spend_stage
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (event_time, event_id) DO NOTHING`
 
 // ErrIncompleteRecord reports a record missing part of its identity.
@@ -586,6 +608,7 @@ func (r eventRow) insert(ctx context.Context, tx *sql.Tx) error {
 		// agent_id's beside it, so the column and the tag can never
 		// name two different items. See schema/0033.
 		tags["work_item"],
+		spend.Calls, spend.Stage,
 	); err != nil {
 		return err
 	}
@@ -743,6 +766,13 @@ func (q ListQuery) predicate(at time.Time) (from string, where []string, args []
 		where = append(where, expr)
 		args = append(args, failedArgs...)
 	}
+	if unfed := events.Unfed(); q.FeedOnly && len(unfed) > 0 {
+		where = append(where, col("event_type")+" NOT IN ("+
+			strings.TrimSuffix(strings.Repeat("?,", len(unfed)), ",")+")")
+		for _, name := range unfed {
+			args = append(args, name)
+		}
+	}
 	// THE WINDOW, half-open, on the same column the keyset walks — so it
 	// narrows the index range the read already scans rather than adding a
 	// term the planner has to filter on.
@@ -787,6 +817,15 @@ func (l *EventLog) List(ctx context.Context, q ListQuery) ([]EventRecord, error)
 		siblings, err := l.traceSiblings(ctx, out, limit, at)
 		if err != nil {
 			return nil, err
+		}
+		if q.FeedOnly {
+			// A TRACE'S SIBLINGS CARRY NONE OF THE PAGE'S FILTERS — they
+			// are the cause beside the effect — but a feed-only page is
+			// the feed's rows, and a turn's trace holds every one of its
+			// accounting records.
+			siblings = slices.DeleteFunc(siblings, func(r EventRecord) bool {
+				return events.KeptOutOfFeed(r.Type)
+			})
 		}
 		out = mergeRelated(out, siblings, limit)
 	}
@@ -1395,6 +1434,16 @@ type PhaseTokenQuery struct {
 	// clock; floored again at a peer's later one, every record between the
 	// two floors was dropped from a window the answer said it covered.
 	At time.Time
+
+	// Before resumes a read below a record already held: only records
+	// strictly older than it in the read's own (event_time, event_id)
+	// order. Nil reads from the top of the window.
+	//
+	// A KEYSET, for the reason [ListQuery.Before] is one: records share a
+	// microsecond in a burst, and a cursor on the instant alone skips or
+	// repeats whatever collided with it — and a repeated spend record is a
+	// double count.
+	Before *Cursor
 }
 
 // at is the instant the window is cut against, read ONCE per answer.
@@ -1479,14 +1528,25 @@ const (
 // row of the table. The extraction is free of a scan cost the filter does not
 // already pay — the event_type and event_time predicates are what choose the
 // rows, and json_extract runs only on the ones they keep.
+//
+// BOTH SPEND TYPES — a phase's record and an auxiliary record — and one more
+// payload read on the second alone: a PERSON's auxiliary spend names no agent
+// and no agent role, since a person is not an agent seat, and carries the role
+// of the person's seat as `actor_role`, which the per-seat breakdown names it
+// by. The person themselves is the envelope's ACTOR, a column already.
 const phaseTokenSQL = `
-SELECT event_time, event_id, agent_id, agent_role,
+SELECT event_time, event_id, agent_id,
+       CASE WHEN agent_role = '' AND event_type = 'auxiliary_spend'
+            THEN COALESCE(json_extract(payload, '$.actor_role'), '')
+            ELSE agent_role END,
+       CASE WHEN agent_id = '' AND event_type = 'auxiliary_spend' THEN actor ELSE '' END,
        phase, host_phase, worker, model, turn_id, work_key, iteration,
        input_tokens, output_tokens, total_tokens,
        cache_read_tokens, cache_write_tokens, provider_key,
-       COALESCE(json_extract(payload, '$.cost_usd'), 0)
+       COALESCE(json_extract(payload, '$.cost_usd'), 0),
+       calls, spend_stage
 FROM crewlet_events
-WHERE event_type = 'agent_phase_completed' AND event_time >= ?`
+WHERE event_type IN ('agent_phase_completed', 'auxiliary_spend') AND event_time >= ?`
 
 // AgentPhaseLimit bounds a seat's phase history.
 //
@@ -1495,6 +1555,12 @@ WHERE event_type = 'agent_phase_completed' AND event_time >= ?`
 // response verbatim, so a hundred of them is already megabytes on the wire for
 // a list nobody scrolls to the end of. The dashboard keeps its own cap at the
 // same number, so the page and the answer agree about where history stops.
+//
+// PHASES ONLY, and an auxiliary record is deliberately not one: it is a SUM of
+// calls with no prompt and no response, so it has nothing this list renders,
+// and a compaction's burst would push a seat's real model calls off its first
+// page. What the auxiliary model spent is in every spend figure and on the
+// turn's own page.
 const AgentPhaseLimit = 50
 
 // The event_time floor is EventHistory, the same one every other read of this
@@ -1697,6 +1763,10 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens
 		sql += " AND agent_role = ?"
 		args = append(args, q.AgentRole)
 	}
+	if q.Before != nil {
+		sql += " AND (event_time, event_id) < (?, ?)"
+		args = append(args, EncodeTime(q.Before.Time), q.Before.ID)
+	}
 	// Newest first, which is the order the breakdown renders in, and the
 	// order a Limit keeps the head of. No LIMIT unless the caller asked for
 	// a tail: see the note where the rollup's cap used to be.
@@ -1718,12 +1788,12 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens
 			at  int64
 			rec tokens.Record
 		)
-		if err := rows.Scan(&at, &rec.EventID, &rec.AgentID, &rec.AgentRole,
+		if err := rows.Scan(&at, &rec.EventID, &rec.AgentID, &rec.AgentRole, &rec.Person,
 			&rec.Phase, &rec.HostPhase, &rec.Worker, &rec.Model,
 			&rec.TurnID, &rec.WorkKey, &rec.Iteration,
 			&rec.InputTokens, &rec.OutputTokens, &rec.TotalTokens,
 			&rec.CacheReadTokens, &rec.CacheWriteTokens, &rec.ProviderKey,
-			&rec.CostUSD,
+			&rec.CostUSD, &rec.Calls, &rec.Stage,
 		); err != nil {
 			return nil, fmt.Errorf("store: phase tokens: scan: %w", err)
 		}

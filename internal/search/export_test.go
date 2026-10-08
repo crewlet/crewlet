@@ -47,6 +47,31 @@ func ExactTops(ctx context.Context, tx *sql.Tx, queries []sampledDoc, shapes [][
 // ProgressStride is [progressStride].
 const ProgressStride = progressStride
 
+// HeldOf is a [Held] passing over docs, each at the version and title it is
+// given, as the refusal memory builds one for a corpus ([Refusals.plan]) — for
+// the gates that hold a corpus's own selection to the pass-over, which no
+// other caller of [Corpus.Stale] reaches.
+func HeldOf(docs ...Document) Held {
+	held := Held{byID: map[string]heldAs{}}
+	for _, doc := range docs {
+		held.byID[doc.ID] = heldAs{version: doc.Version, title: doc.Title}
+	}
+	return held
+}
+
+// PageSelection, PageOpeningRead, PageWithdrawals and PageCoverageCount are
+// the page corpus's four statements, for the plan gate.
+var (
+	PageSelection     = pageSelection
+	PageOpeningRead   = pageOpeningRead
+	PageWithdrawals   = pageWithdrawals
+	PageCoverageCount = pageCoverageCount
+)
+
+// EmbedReadChars is [embedReadChars], for the gate that holds a selection to
+// reading only the opening of a body.
+const EmbedReadChars = embedReadChars
+
 // SampleDocuments is [sampleDocuments], and ShapesFor [shapesFor].
 var (
 	SampleDocuments = sampleDocuments
@@ -76,4 +101,5 @@ const (
 	TrainingCodesStatement = trainingCodesStatement
 	StaleKeysStatement     = staleKeysStatement
 	StaleRowsStatement     = staleRowsStatement
+	StoredVectorStatement  = storedVectorStatement
 )

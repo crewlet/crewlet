@@ -48,6 +48,7 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 		Knowledge:         knowledgeSearch(e, c),
 		Events:            e.telemetry(),
 		Recall:            e.prefetcher(c),
+		Compact:           e.compactorFor(c),
 		EpisodeLimit:      c.Config.Learning.Episodic.RetrievalLimit,
 		RefreshesPerTurn:  c.Config.Learning.PersonalMemory.MaxRefreshesPerTurn,
 		SkillBodyMax:      refinement.MaxBodyChars,
@@ -66,7 +67,9 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 			deps.Refinable = skills
 		}
 		deps.Episodes = learning.NewEpisodes(db)
-		deps.Diary = learning.NewDiary(db)
+		// A WRITER, so it embeds each note as it is written — read at call
+		// time, like every other embed seam (see [Engine.embedText]).
+		deps.Diary = learning.NewDiary(db, learning.WithEmbed(e.embedText))
 		deps.Onboarding = learning.NewOnboarding(db)
 	}
 	// THE REGISTRY, NOT ITS CONTENT. load_tool_skill is registered

@@ -505,6 +505,8 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 		"CompactionBudgetTokens": true, "MaxTokens": true, "TokenExpiryDays": true,
 		"ReasoningBudgetTokens": true, "MinTokensPerTask": true,
 		"SandboxMinBudgetTokens": true,
+		// An embedding model's limits, counted in tokens.
+		"MaxInputTokens": true, "MaxBatchTokens": true,
 		// Scope NAMES minted onto a token, not the token.
 		"TokenScopes": true,
 		// A path on disk, not the material at it.

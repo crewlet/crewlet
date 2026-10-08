@@ -53,7 +53,7 @@ type table struct {
 
 	// wholeEachCycle republishes every row rather than only what is new.
 	//
-	// THE SPLIT IS BY SIZE AND BY MUTABILITY. A watermark over the rowid
+	// THE SPLIT IS BY SIZE AND BY MUTABILITY. A watermark ([table.watermark])
 	// catches inserts and misses in-place updates, which is right for the
 	// big append-only tables — a diary entry's retrieval counter moving is
 	// bookkeeping, and a compaction flag that fails to travel self-heals
@@ -71,6 +71,46 @@ type table struct {
 	// no bound at all, which made it the one table here whose cost grew
 	// with the deployment's age rather than with its size.
 	wholeEachCycle bool
+
+	// watermark is the column an append-only table's incremental export
+	// is over: a seat's rows past the highest value it published last
+	// cycle, in that column's order. Empty for a wholeEachCycle table,
+	// which has none.
+	//
+	// IT MUST NEVER BE REUSED, which is the whole of the requirement and
+	// what the rowid failed. A TEXT-keyed table with no AUTOINCREMENT
+	// hands out max(rowid) + 1, so after the newest row is deleted — the
+	// diary's expiry or its trim, a lifecycle sweep, a skill's pruned
+	// history — the next insert takes that rowid again, at or below a
+	// mark that has already passed it, and is never published while this
+	// node holds the seat. So those tables carry `change_seq`, stamped by
+	// a trigger from a counter that only ever increments, on every insert
+	// and on every vector set in place (node migration 0041); and the one
+	// table here whose rowid IS an AUTOINCREMENT id, which is never
+	// reused, keeps the rowid. TestNoAppendOnlyTableReusesItsWatermark
+	// holds every append-only entry to that, so an entry added later
+	// cannot bring the reusable rowid back.
+	watermark string
+
+	// fillsVector says the holder FILLS this append-only table's vector
+	// after the insert — its `embedding` and the `embedding_model` it came
+	// from — for rows written without one or under a model the company
+	// has since left.
+	//
+	// The one in-place change an append-only row takes, and both halves
+	// of carrying it are deliberate. Setting the vector stamps the row
+	// with a fresh change sequence (the table's trigger, node migration
+	// 0041), so the watermark carries it like an insert
+	// (learning.Diary.FillEmbeddings); and a carry over a row
+	// already here takes the carried vector WHEN THE STORED ONE IS OF NO
+	// MODEL OR ANOTHER — see [table.onConflict] — because with DO NOTHING
+	// a peer that already held the vectorless row would keep it, and when
+	// the seat moved there that stale copy would be the holder's.
+	//
+	// The diary and the episodes: a note's vector is of its content, and an
+	// episode's of its label, its ask and what it did — all stored on the
+	// row — so the holder can make either again.
+	fillsVector bool
 }
 
 // tables is every table a seat's memory lives in.
@@ -87,9 +127,11 @@ var tables = []table{
 		columns: []string{
 			"id", "agent_id", "kind", "content", "ttl_until", "source",
 			"turn_id", "metadata", "retrieval_count", "last_retrieved_at",
-			"embedding", "created_at",
+			"embedding", "embedding_model", "created_at",
 		},
-		blobs: []string{"embedding"},
+		blobs:       []string{"embedding"},
+		watermark:   "change_seq",
+		fillsVector: true,
 	},
 	{
 		name:    "episodes",
@@ -97,14 +139,16 @@ var tables = []table{
 		key:     []string{"id"},
 		columns: []string{
 			"id", "agent_handle", "agent_role", "work_item", "turn_id",
-			"started_at", "ended_at", "plan_summary", "task_summary",
+			"started_at", "ended_at", "plan_summary", "task_summary", "ask",
 			"tool_sequence", "skills_used", "review_outcome", "duration_ms",
-			"embedding", "kind", "count", "exemplar_turn_ids",
+			"embedding", "embedding_model", "kind", "count", "exemplar_turn_ids",
 			"consolidated_into_skill_id", "common_task_pattern",
 			"common_outcome", "success_rate", "subjects_involved",
 			"notable_patterns", "work_key", "conversation_key",
 		},
-		blobs: []string{"embedding"},
+		blobs:       []string{"embedding"},
+		watermark:   "change_seq",
+		fillsVector: true,
 	},
 	{
 		name:    "counterparty_profiles",
@@ -142,6 +186,7 @@ var tables = []table{
 			"frontmatter", "tool_sequence", "source_episode_ids", "version",
 			"refinement_kind", "refinement_note", "archived_at",
 		},
+		watermark: "change_seq",
 	},
 	{
 		name:      "agent_onboarding_markers",
@@ -173,6 +218,10 @@ var tables = []table{
 			"entry_id", "agent_handle", "conversation_key", "work_key",
 			"turn_id", "entry", "created_at",
 		},
+		// THE ROWID, and sound here as it is nowhere else in this list:
+		// `id INTEGER PRIMARY KEY AUTOINCREMENT` makes the rowid that id,
+		// and AUTOINCREMENT never hands a deleted one out again.
+		watermark: "rowid",
 	},
 }
 

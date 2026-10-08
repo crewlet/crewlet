@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -296,13 +295,14 @@ func TestTheGatesThatKeepEpisodesHonest(t *testing.T) {
 }
 
 // A TRANSIENT EMBEDDING OUTAGE MUST NEVER COST AN EPISODE. The row cannot be
-// reconstructed later; the vector can, by nothing more than a re-embed.
+// reconstructed later, and a row without a vector still answers every read
+// but similarity.
 func TestAnUnreachableEmbedderStillWritesTheEpisode(t *testing.T) {
 	t.Parallel()
 	store := episodes(t, func(o *store.Options) { o.EmbeddingDim = 4 })
 	w := episodist(t, store, func(o *learning.EpisodistOptions) {
-		o.Embed = func(context.Context, string) ([]float32, error) {
-			return nil, errors.New("the provider is down")
+		o.Embed = func(context.Context, string) (learning.Vector, error) {
+			return learning.Vector{}, errors.New("the provider is down")
 		}
 	})
 	reflectEpisode(t, w, epTurn())
@@ -321,19 +321,24 @@ func TestAReachableEmbedderStampsTheVector(t *testing.T) {
 	store := episodes(t, func(o *store.Options) { o.EmbeddingDim = 4 })
 	var embedded string
 	w := episodist(t, store, func(o *learning.EpisodistOptions) {
-		o.Embed = func(_ context.Context, text string) ([]float32, error) {
+		o.Embed = func(_ context.Context, text string) (learning.Vector, error) {
 			embedded = text
-			return []float32{0.5, 0.5, 0.5, 0.5}, nil
+			return learning.Vector{Values: []float32{0.5, 0.5, 0.5, 0.5}, Model: "m"}, nil
 		}
 	})
 	reflectEpisode(t, w, epTurn())
 
-	if embedded != "the staging deploy keeps failing" {
-		t.Errorf("embedded %q, want the task summary", embedded)
+	if want := "the staging deploy keeps failing\n\nread the pipeline, then reply"; embedded != want {
+		t.Errorf("embedded %q, want the label and what the turn did (%q)", embedded, want)
 	}
 	got, _ := store.Recent(context.Background(), "dev", 10)
 	if len(got[0].Embedding) != 4 {
 		t.Fatalf("embedding = %v, want the 4-wide vector", got[0].Embedding)
+	}
+	// TAGGED WITH ITS SPACE: a vector stored without the model it came
+	// from is one no recall can compare.
+	if got[0].EmbeddingModel != "m" {
+		t.Errorf("embedding model = %q, want the embedder's", got[0].EmbeddingModel)
 	}
 }
 
@@ -344,9 +349,9 @@ func TestASlowEmbedderIsBoundedAndYieldsNoVector(t *testing.T) {
 	store := episodes(t, func(o *store.Options) { o.EmbeddingDim = 4 })
 	w := episodist(t, store, func(o *learning.EpisodistOptions) {
 		o.EmbedTimeout = 10 * time.Millisecond
-		o.Embed = func(ctx context.Context, _ string) ([]float32, error) {
+		o.Embed = func(ctx context.Context, _ string) (learning.Vector, error) {
 			<-ctx.Done()
-			return nil, ctx.Err()
+			return learning.Vector{}, ctx.Err()
 		}
 	})
 	reflectEpisode(t, w, epTurn())
@@ -381,25 +386,25 @@ func TestAnEpisodistNeedsAStore(t *testing.T) {
 	}
 }
 
-// AN EMPTY TASK SUMMARY IS NOT SENT to the provider. There is nothing to
+// A TURN WITH NOTHING TO SAY IS NOT SENT to the provider. There is nothing to
 // embed, the provider would answer ErrEmpty, and the round trip is spent for
 // a vector that could not exist — on a pass that runs after every turn.
-func TestAnEmptySummaryNeverReachesTheEmbedder(t *testing.T) {
+func TestAnEmptyTurnNeverReachesTheEmbedder(t *testing.T) {
 	t.Parallel()
 	store := episodes(t, func(o *store.Options) { o.EmbeddingDim = 4 })
 	var calls int
 	w := episodist(t, store, func(o *learning.EpisodistOptions) {
-		o.Embed = func(context.Context, string) ([]float32, error) {
+		o.Embed = func(context.Context, string) (learning.Vector, error) {
 			calls++
-			return []float32{1, 0, 0, 0}, nil
+			return learning.Vector{Values: []float32{1, 0, 0, 0}, Model: "m"}, nil
 		}
 	})
 	turn := epTurn()
-	turn.Event.TaskSummary = ""
+	turn.Event.TaskSummary, turn.Event.PlanSummary = "", " \n"
 	reflectEpisode(t, w, turn)
 
 	if calls != 0 {
-		t.Fatalf("the embedder was called %d times for an empty summary", calls)
+		t.Fatalf("the embedder was called %d times for a turn with nothing to embed", calls)
 	}
 	got, _ := store.Recent(context.Background(), "dev", 10)
 	if len(got) != 1 {
@@ -407,29 +412,126 @@ func TestAnEmptySummaryNeverReachesTheEmbedder(t *testing.T) {
 	}
 }
 
-// THE EMBED INPUT IS CAPPED, and on a rune boundary: a coalesced trigger
-// merges N messages and a webhook body can be a whole diff, so an uncapped
-// summary is a request the provider refuses on length — and a byte-sliced
-// one is a request it refuses on invalid UTF-8.
-func TestALongSummaryIsCappedOnARuneBoundary(t *testing.T) {
+// AN EPISODE IS EMBEDDED AS WHAT ITS TURN WAS ASKED AND WHAT IT DID, under
+// its label. The label alone — which is what this embedded — is the same line
+// for every message a surface delivers, so it ranked every chat turn alike,
+// and a colleague's question or a schedule's task named nothing of what was
+// asked at all.
+func TestAnEpisodeIsEmbeddedAsWhatItWasAskedAndWhatItDid(t *testing.T) {
+	t.Parallel()
+	ana := types.CanonicalIdentity{ExternalID: "U1", Platform: "slack", DisplayName: "Ana"}
+	for _, tc := range []struct {
+		name  string
+		shape func(*types.TurnCompleted)
+		want  string
+	}{
+		{
+			name: "a notification's ask is what each sender said",
+			shape: func(e *types.TurnCompleted) {
+				e.TaskSummary = "Message from Ana: Slack message"
+				e.Interactions = []types.InboundInteraction{
+					{Sender: ana, Body: "The staging deploy keeps failing."},
+					{Sender: ana, Body: "It started after the cache change."},
+				}
+			},
+			want: "Message from Ana: Slack message\n\nThe staging deploy keeps failing." +
+				"\n\nIt started after the cache change.\n\nread the pipeline, then reply",
+		},
+		{
+			name: "a colleague's question is the ask the event carries",
+			shape: func(e *types.TurnCompleted) {
+				e.TaskSummary = "cto asked a colleague on ch-1"
+				e.Ask = "A colleague (CTO) asks:\n\nIs runbook step 4 wrong?"
+			},
+			want: "cto asked a colleague on ch-1\n\nA colleague (CTO) asks:\n\n" +
+				"Is runbook step 4 wrong?\n\nread the pipeline, then reply",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store := episodes(t, func(o *store.Options) { o.EmbeddingDim = 4 })
+			var sent string
+			w := episodist(t, store, func(o *learning.EpisodistOptions) {
+				o.Embed = func(_ context.Context, text string) (learning.Vector, error) {
+					sent = text
+					return learning.Vector{Values: []float32{1, 0, 0, 0}, Model: "m"}, nil
+				}
+			})
+			turn := epTurn()
+			tc.shape(&turn.Event)
+			reflectEpisode(t, w, turn)
+			if sent != tc.want {
+				t.Fatalf("embedded %q\nwant      %q", sent, tc.want)
+			}
+		})
+	}
+}
+
+// TWO FIRES OF ONE SCHEDULE ARE ONE KIND OF WORK to a similarity search and to
+// a seat reading them back. The fire's label led with the fire's own id —
+// "swe was assigned task unit:Engineering:weekly-report:<instant>:swe" — so
+// every scheduled episode's vector opened on the one part that differs on
+// every fire, and every recall of one handed the seat a tracker-looking key
+// that names no item. Each fire here is built as the scheduler publishes it,
+// and its label and ask are read off it the way the engine reads them.
+func TestTwoFiresOfOneScheduleAreLabelledAndEmbeddedAlike(t *testing.T) {
+	t.Parallel()
+	fire := func(instant string) types.TaskAssigned {
+		return types.TaskAssigned{
+			TaskID: "unit:Engineering:weekly-report:" + instant + ":swe",
+			Agent:  "agent-uuid", RoleName: "swe",
+			Schedule: "weekly-report", Description: "Write the weekly engineering report.",
+		}
+	}
+	var labels, texts []string
+	for _, instant := range []string{"2026-09-21T09:00:00Z", "2026-09-28T09:00:00Z"} {
+		task := fire(instant)
+		store := episodes(t, func(o *store.Options) { o.EmbeddingDim = 4 })
+		var sent string
+		w := episodist(t, store, func(o *learning.EpisodistOptions) {
+			o.Embed = func(_ context.Context, text string) (learning.Vector, error) {
+				sent = text
+				return learning.Vector{Values: []float32{1, 0, 0, 0}, Model: "m"}, nil
+			}
+		})
+		turn := epTurn()
+		turn.Event.TaskSummary = types.DescribeTrigger(events.New(task, events.TraceContext{})).Summary
+		turn.Event.Ask = task.Brief()
+		turn.Event.ConversationKey = ""
+		reflectEpisode(t, w, turn)
+		if strings.Contains(turn.Event.TaskSummary, instant) || strings.Contains(sent, instant) {
+			t.Fatalf("the fire's id reached the episode: label %q, embedded %q", turn.Event.TaskSummary, sent)
+		}
+		labels, texts = append(labels, turn.Event.TaskSummary), append(texts, sent)
+	}
+	if labels[0] != labels[1] || texts[0] != texts[1] {
+		t.Fatalf("two fires of one schedule differ:\nlabels %q\ntexts  %q", labels, texts)
+	}
+	if want := "swe was assigned scheduled work weekly-report"; labels[0] != want {
+		t.Fatalf("label = %q, want %q", labels[0], want)
+	}
+}
+
+// A LONG TURN IS EMBEDDED WHOLE. The input used to be cut at 8000 bytes, so a
+// pasted diff or a long answer was a vector of its opening; the seam chunks
+// and pools a text past the model's window instead, and only the seam knows
+// the window.
+func TestALongTurnIsHandedToTheEmbedderWhole(t *testing.T) {
 	t.Parallel()
 	store := episodes(t, func(o *store.Options) { o.EmbeddingDim = 4 })
 	var sent string
 	w := episodist(t, store, func(o *learning.EpisodistOptions) {
-		o.Embed = func(_ context.Context, text string) ([]float32, error) {
+		o.Embed = func(_ context.Context, text string) (learning.Vector, error) {
 			sent = text
-			return []float32{1, 0, 0, 0}, nil
+			return learning.Vector{Values: []float32{1, 0, 0, 0}, Model: "m"}, nil
 		}
 	})
 	turn := epTurn()
-	// Three-byte runes, so a byte-aligned cut lands mid-character.
-	turn.Event.TaskSummary = strings.Repeat("→", 20000)
+	turn.Event.Ask = strings.Repeat("→ the step that fails ", 2000)
 	reflectEpisode(t, w, turn)
 
-	if len(sent) >= len(turn.Event.TaskSummary) {
-		t.Fatalf("sent %d bytes uncapped", len(sent))
-	}
-	if !utf8.ValidString(sent) {
-		t.Fatal("the cap split a rune, so the provider gets invalid UTF-8")
+	if !strings.Contains(sent, strings.TrimSpace(turn.Event.Ask)) || !strings.HasSuffix(sent, turn.Event.PlanSummary) {
+		t.Fatalf("sent %d bytes, want the %d-byte ask and the plan after it, whole",
+			len(sent), len(turn.Event.Ask))
 	}
 }

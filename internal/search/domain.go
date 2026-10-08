@@ -32,8 +32,11 @@ const (
 	// other state log, inside what the broker can actually grant.
 	//
 	// ONE MESSAGE PER SOURCE, so the stream's size is the corpus rather
-	// than its history: at the packed 12 KiB a 3 072-wide vector costs,
-	// plus its envelope, ≈ 12.3 KB a source. The ceiling is the mutation
+	// than its history: ≈ 17 KB a source at 3 072 dimensions (≈ 8.8 KB at
+	// 1 536). The packed vector is 12 KiB, but a record carries it as JSON,
+	// so base64 makes it 16 KiB, and the envelope, the digest and the title
+	// add the rest — an encoded embed record measures 16 902 bytes with no
+	// title and 17 169 with a 256-byte one. The ceiling is the mutation
 	// log's declared one (the tracker domain's 16 GiB), because a node
 	// derives both from the same share of the stream volume
 	// (config.Stream.VectorsMaxBytes) — so this harness sizes the two as a
@@ -45,7 +48,7 @@ const (
 	// not be: that is ≈ 345 000 sources idle and ≈ 136 000 under eight
 	// concurrent readers through the full scan, ≈ 545 000 and ≈ 183 000
 	// through an index at its probe ceiling (see [SemanticScanBudget]) —
-	// between ≈ 1.7 GB and ≈ 6.7 GB of messages. A corpus past those
+	// between ≈ 2.3 GB and ≈ 9.3 GB of messages. A corpus past those
 	// figures is a fleet dividing its buckets, and every data node still
 	// holds every vector — so the log carries the whole corpus however the
 	// search is divided.

@@ -38,6 +38,9 @@ import (
 //     `failed` — the last the event log's "Failures only", narrowing the rows
 //     a tab is sent rather than the rows it had paged in — and every
 //     histogram bar and total carries the `failed` split.
+//   - A listing and its axis take `feed_only`, the rows the activity feed
+//     carries ([store.ListQuery.FeedOnly]): every node leaves the types the
+//     feed keeps out of its own page and its own bars.
 //   - The company's phases narrow by `agent_id`, the seat's own id, because
 //     two unit seats share a role name.
 //   - A page of turns takes `since` and `until` as the asker's two instants on
@@ -54,6 +57,9 @@ import (
 //     doc) — and `kept` is the second question that resolves them: which of
 //     the named rows each node keeps, so a row two data nodes hold is counted
 //     once.
+//   - A phase-token read takes `before`, the record a page resumes below, so
+//     the live spend window's seed is read in pages no one node's reply has
+//     to carry whole ([Fleet.PhaseTokens]).
 //   - `notification_outcomes` asks what became of the notifications each
 //     third-party app delivered over a window the asker names, rather than
 //     over the span of the newest page of notification events.
@@ -203,6 +209,10 @@ type listParams struct {
 	Suspended *bool  `json:"suspended,omitempty"`
 	Failed    *bool  `json:"failed,omitempty"`
 
+	// FeedOnly is [store.ListQuery.FeedOnly]: the rows the activity feed
+	// carries, which every view merged with the live ring asks for.
+	FeedOnly bool `json:"feed_only,omitempty"`
+
 	// At is the asker's instant.
 	At time.Time `json:"at"`
 }
@@ -214,7 +224,7 @@ func listParamsOf(q store.ListQuery) listParams {
 		WorkKey: q.WorkKey, WorkItem: q.WorkItem, RelatedAgent: q.RelatedAgent,
 		Since: q.Since, Until: q.Until, Before: cursorOf(q.Before), Limit: q.Limit,
 		ChannelID: q.ChannelID, AgentID: q.AgentID, Suspended: q.Suspended,
-		Failed: q.Failed, At: q.At,
+		Failed: q.Failed, FeedOnly: q.FeedOnly, At: q.At,
 	}
 }
 
@@ -225,7 +235,7 @@ func (p listParams) query() store.ListQuery {
 		WorkKey: p.WorkKey, WorkItem: p.WorkItem, RelatedAgent: p.RelatedAgent,
 		Since: p.Since, Until: p.Until, Before: p.Before.cursor(), Limit: p.Limit,
 		ChannelID: p.ChannelID, AgentID: p.AgentID, Suspended: p.Suspended,
-		Failed: p.Failed, At: p.At,
+		Failed: p.Failed, FeedOnly: p.FeedOnly, At: p.At,
 	}
 }
 
@@ -346,18 +356,22 @@ type phaseTokenParams struct {
 	AgentRole string    `json:"role,omitempty"`
 	Limit     int       `json:"limit,omitempty"`
 
+	// Before is the record a paged read resumes below — see
+	// [Fleet.PhaseTokens].
+	Before *cursorWire `json:"before,omitempty"`
+
 	// At is the instant the window was cut against.
 	At time.Time `json:"at"`
 }
 
 func phaseTokenParamsOf(q store.PhaseTokenQuery) phaseTokenParams {
 	return phaseTokenParams{Since: q.Since, Until: q.Until, AgentRole: q.AgentRole,
-		Limit: q.Limit, At: q.At}
+		Limit: q.Limit, Before: cursorOf(q.Before), At: q.At}
 }
 
 func (p phaseTokenParams) query() store.PhaseTokenQuery {
 	return store.PhaseTokenQuery{Since: p.Since, Until: p.Until, AgentRole: p.AgentRole,
-		Limit: p.Limit, At: p.At}
+		Limit: p.Limit, Before: p.Before.cursor(), At: p.At}
 }
 
 // outcomeParams is the outcome count's window: its bottom edge and the
@@ -611,7 +625,11 @@ func fit(self string, part any, limit, version int) ([]byte, error) {
 		return encodeError(self, ErrTooLarge.Error())
 	}
 	// THE LARGEST PREFIX THAT FITS, by bisection: each probe is a full
-	// encode, and a page is at most a few hundred rows.
+	// encode, about log2(rows) of them. A listing is a page of at most a few
+	// hundred rows and a spend read one of [PhaseTokenPage] records sized to
+	// fit, so this runs only for rows far larger than their page was sized
+	// for — a cut every question still answers correctly, at the cost of
+	// those encodes inside the fleet read budget.
 	lo, hi := 0, c.rows()-1 // hi: the most rows known NOT to be required to fail
 	var best []byte
 	for lo <= hi {

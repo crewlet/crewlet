@@ -14,6 +14,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/jsprovision"
+	"github.com/crewlet/crewlet/internal/textcut"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -949,7 +950,10 @@ func domainConsumerName(stream, nodeID string) string {
 
 	readable := "statelog__" + safe(stream) + "__" + safe(nodeID)
 	if max := consumerNameMax - len(id) - 2; len(readable) > max {
-		readable = readable[:max]
+		// On a character boundary: a byte slice through a multi-byte
+		// node id or group name is a consumer name that is not valid
+		// UTF-8, which the broker stores mangled.
+		readable = textcut.Bytes(readable, max)
 	}
 	return readable + "__" + id
 }
@@ -1216,7 +1220,7 @@ func domainGroupName(stream, group string) string {
 	id := hex.EncodeToString(sum[:6])
 	readable := safe(group) + "__" + safe(stream)
 	if max := consumerNameMax - len(id) - 2; len(readable) > max {
-		readable = readable[:max]
+		readable = textcut.Bytes(readable, max) // on a character boundary; see domainConsumerName
 	}
 	return readable + "__" + id
 }

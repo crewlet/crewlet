@@ -38,6 +38,8 @@ var namedRoutes = []struct {
 	path map[string]string
 }{
 	{method: "GET", pattern: "/agents/{id}/memory", what: "agent_memory", path: map[string]string{"id": "id"}},
+	// One episode WHOLE, under the memory that lists its opening.
+	{method: "GET", pattern: "/agents/{id}/memory/episodes/{episode}", what: "agent_episode", path: map[string]string{"id": "id", "episode": "episode"}},
 	// One seat's external threads. Under /agents/{id}/ beside its memory,
 	// because it is the same kind of fact — what this seat has said and
 	// remembered — rather than a company-wide listing.

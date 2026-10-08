@@ -1,6 +1,7 @@
 package sandbox_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
 )
 
 // What these tests protect.
@@ -58,21 +60,67 @@ type e2bStub struct {
 	connectStatus int
 	// clientID is what create reports; empty exercises the short hostname.
 	clientID string
+	// envdToken is the box's envd access token, answered by the create, a
+	// connect and a read of the box, and REQUIRED by envd on every request
+	// it serves, as a secured box's is. Empty is a box made without secured
+	// access, whose envd requires nothing — what E2B makes for a create that
+	// does not ask for `secure`.
+	envdToken string
+	// refused counts the envd requests refused for their token.
+	refused int
+	// state is what a read of the box reports: "running" when empty.
+	state string
 	// trailingGarbage appends an unreadable frame after the real ones, so
 	// a client that should have stopped reading is caught doing so.
 	trailingGarbage bool
 	// streamDelay is how long the stub waits between frames, standing in
 	// for a command that takes real time.
 	streamDelay time.Duration
+	// ignoreRange serves every download whole with 200, standing in for an
+	// envd that does not honour a Range request.
+	ignoreRange bool
+	// ranges is every Range header a download carried, in order.
+	ranges []string
 }
 
 func newE2BStub() *e2bStub {
 	return &e2bStub{
-		bodies:   map[string]map[string]any{},
-		headers:  map[string]http.Header{},
-		files:    map[string][]byte{},
-		clientID: "cl1",
+		bodies:    map[string]map[string]any{},
+		headers:   map[string]http.Header{},
+		files:     map[string][]byte{},
+		clientID:  "cl1",
+		envdToken: "envd-token-1",
 	}
+}
+
+// boxJSON is the sandbox the control plane answers, with extra fields.
+func (s *e2bStub) boxJSON(extra string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	token := ""
+	if s.envdToken != "" {
+		token = `, "envdAccessToken": "` + s.envdToken + `"`
+	}
+	return `{"sandboxID": "sbx1", "clientID": "` + s.clientID +
+		`", "templateID": "claude", "envdVersion": "0.1.0"` + token + extra + `}`
+}
+
+// envdAdmits is a secured envd's own check (WithAuthorization in
+// packages/envd/internal/api/auth.go, e2b-dev/infra): with a token set, a
+// request without it is refused 401 — a /files call may present a signature
+// instead, which this client never does, so for it the header is the rule.
+func (s *e2bStub) envdAdmits(w http.ResponseWriter, r *http.Request) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.envdToken == "" || r.Header.Get("X-Access-Token") == s.envdToken {
+		return true
+	}
+	s.refused++
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusUnauthorized)
+	_, _ = w.Write([]byte(`{"code":401,"message":"unauthorized access, please provide a valid ` +
+		`access token or method signing if supported"}`))
+	return false
 }
 
 func (s *e2bStub) record(r *http.Request) {
@@ -105,8 +153,17 @@ func (s *e2bStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.URL.Path == "/sandboxes" && r.Method == http.MethodPost:
 		s.capture(r)
-		_, _ = w.Write([]byte(`{"sandboxID": "sbx1", "clientID": "` + s.clientID +
-			`", "templateID": "claude", "envdVersion": "0.1.0"}`))
+		// AS E2B'S CREATE DOES (packages/api/internal/handlers/
+		// sandbox_create.go in e2b-dev/infra): a token is minted only for a
+		// box asked for with `secure: true`, and a box made without one has
+		// an envd that requires nothing — so a client that stopped asking
+		// would be caught reaching a box nobody secured.
+		s.mu.Lock()
+		if s.bodies[r.URL.Path]["secure"] != true {
+			s.envdToken = ""
+		}
+		s.mu.Unlock()
+		_, _ = w.Write([]byte(s.boxJSON("")))
 
 	case strings.HasSuffix(r.URL.Path, "/timeout"),
 		strings.HasSuffix(r.URL.Path, "/pause"):
@@ -128,8 +185,17 @@ func (s *e2bStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if s.connectStatus != 0 {
 			w.WriteHeader(s.connectStatus)
 		}
-		_, _ = w.Write([]byte(`{"sandboxID": "sbx1", "clientID": "` + s.clientID +
-			`", "templateID": "claude", "envdVersion": "0.1.0"}`))
+		_, _ = w.Write([]byte(s.boxJSON("")))
+
+	// A read of one box: E2B's SandboxDetail, its state among it.
+	case strings.HasPrefix(r.URL.Path, "/sandboxes/") && r.Method == http.MethodGet:
+		s.mu.Lock()
+		state := s.state
+		s.mu.Unlock()
+		if state == "" {
+			state = "running"
+		}
+		_, _ = w.Write([]byte(s.boxJSON(`, "state": "` + state + `"`)))
 
 	case strings.HasPrefix(r.URL.Path, "/sandboxes/") && r.Method == http.MethodDelete:
 		if s.killStatus != 0 {
@@ -139,6 +205,9 @@ func (s *e2bStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 
 	case r.URL.Path == "/process.Process/Start":
+		if !s.envdAdmits(w, r) {
+			return
+		}
 		if s.startStatus != 0 {
 			w.WriteHeader(s.startStatus)
 			_, _ = w.Write([]byte(`envd said no`))
@@ -165,6 +234,9 @@ func (s *e2bStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(connectFrame(0x02, map[string]any{}))
 
 	case r.URL.Path == "/files":
+		if !s.envdAdmits(w, r) {
+			return
+		}
 		s.serveFiles(w, r)
 
 	default:
@@ -201,12 +273,23 @@ func (s *e2bStub) serveFiles(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		s.mu.Lock()
 		content, held := s.files[path]
+		if r.Header.Get("Range") != "" {
+			s.ranges = append(s.ranges, r.Header.Get("Range"))
+		}
 		s.mu.Unlock()
 		if !held {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		_, _ = w.Write(content)
+		if s.ignoreRange {
+			_, _ = w.Write(content)
+			return
+		}
+		// THROUGH ServeContent, as envd itself serves /files
+		// (packages/envd/internal/api/download.go in e2b-dev/infra), so a
+		// Range request is answered with 206 and Content-Range by the same
+		// code the real box runs.
+		http.ServeContent(w, r, path, time.Time{}, bytes.NewReader(content))
 	case http.MethodPost:
 		if err := r.ParseMultipartForm(1 << 20); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -336,6 +419,69 @@ func TestE2BCreateSendsTheDocumentedRequest(t *testing.T) {
 	meta, _ := body["metadata"].(map[string]any)
 	if meta["crewlet"] == nil {
 		t.Errorf("a box was minted with nothing marking it as ours: %v", body["metadata"])
+	}
+	// SECURED: unasked, this endpoint makes a box whose envd requires no
+	// credential.
+	if body["secure"] != true {
+		t.Errorf("secure = %v; want a box created with secured envd access", body["secure"])
+	}
+}
+
+// EVERY ENVD REQUEST CARRIES THE BOX'S ACCESS TOKEN, on a box reached by each
+// of the three calls that answer one — a create, a connect and a read — and
+// for every kind of request envd serves: a command, a file read whole, read
+// from its end and streamed, and a write. A secured box refuses each of them
+// without it; the stub refuses them as envd does.
+//
+// Mutation: drop the header, and every call here is refused 401.
+func TestE2BSendsTheBoxsAccessTokenOnEveryEnvdRequest(t *testing.T) {
+	t.Parallel()
+	stub := newE2BStub()
+	stub.frames = []any{startEvent(7), dataEvent("ok", ""), endEvent(0)}
+	provider, _ := newE2B(t, stub)
+	ctx := context.Background()
+
+	created, err := provider.Create(ctx, sandbox.Spec{CodingAgent: "claude-code"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connected, err := provider.Connect(ctx, "sbx1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	attached, err := provider.Attach(ctx, "sbx1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, box := range map[string]sandbox.Sandbox{"created": created, "connected": connected, "attached": attached} {
+		if err := box.WriteFile(ctx, "/home/user/.crewlet/done", []byte("0\n")); err != nil {
+			t.Errorf("%s: WriteFile: %v", name, err)
+		}
+		if got, err := box.ReadFile(ctx, "/home/user/.crewlet/done"); err != nil || string(got) != "0\n" {
+			t.Errorf("%s: ReadFile = %q, %v", name, got, err)
+		}
+		if _, err := box.ReadTail(ctx, "/home/user/.crewlet/done", 1); err != nil {
+			t.Errorf("%s: ReadTail: %v", name, err)
+		}
+		r, err := box.OpenFile(ctx, "/home/user/.crewlet/done")
+		if err == nil {
+			_, err = io.ReadAll(r)
+			_ = r.Close()
+		}
+		if err != nil {
+			t.Errorf("%s: OpenFile: %v", name, err)
+		}
+		if res, err := box.Exec(ctx, "true", sandbox.ExecOptions{}); err != nil || res.ExitCode != 0 {
+			t.Errorf("%s: Exec = %+v, %v", name, res, err)
+		}
+		if _, err := box.StartBackground(ctx, "sleep 1", sandbox.ExecOptions{}); err != nil {
+			t.Errorf("%s: StartBackground: %v", name, err)
+		}
+	}
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	if stub.refused != 0 {
+		t.Errorf("envd refused %d requests for their token", stub.refused)
 	}
 }
 
@@ -660,6 +806,73 @@ func TestE2BFilesRoundTripAndMissingIsEmpty(t *testing.T) {
 	}
 }
 
+// THE FILE CONTRACT, against a fake envd that serves downloads the way envd
+// does — through ServeContent, so a range is answered by the same code.
+func TestE2BKeepsTheFileContract(t *testing.T) {
+	t.Parallel()
+	sandboxtest.Box(t, func(t *testing.T) sandbox.Sandbox {
+		provider, _ := newE2B(t, newE2BStub())
+		box, err := provider.Create(t.Context(), sandbox.Spec{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return box
+	})
+}
+
+// A TAIL IS A SUFFIX RANGE, so the cost of asking a running job what it last
+// wrote is the window and not the whole stream — every poll, for as long as
+// the run lasts.
+func TestE2BReadsATailAsASuffixRange(t *testing.T) {
+	t.Parallel()
+	stub := newE2BStub()
+	provider, _ := newE2B(t, stub)
+	box, err := provider.Create(t.Context(), sandbox.Spec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := bytes.Repeat([]byte("0123456789\n"), 10_000)
+	stub.files["/home/user/.crewlet/result.json"] = content
+
+	tail, err := box.ReadTail(t.Context(), "/home/user/.crewlet/result.json", 64)
+	if err != nil {
+		t.Fatalf("ReadTail: %v", err)
+	}
+	if !bytes.Equal(tail.Data, content[len(content)-64:]) || tail.Size != int64(len(content)) {
+		t.Errorf("tail = %d bytes of %d; want the last 64 of %d", len(tail.Data), tail.Size, len(content))
+	}
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	if !slices.Equal(stub.ranges, []string{"bytes=-64"}) {
+		t.Errorf("the download asked for %q; want one suffix range of 64", stub.ranges)
+	}
+}
+
+// AN ENVD THAT IGNORES THE RANGE IS STILL ANSWERED RIGHT. Its 200 carries the
+// whole file, which is read through keeping only the end, so the answer is
+// the same and only its cost differs — a box's envd version is not something
+// this engine gets to choose.
+func TestE2BReadsATailFromAnEnvdThatIgnoresTheRange(t *testing.T) {
+	t.Parallel()
+	stub := newE2BStub()
+	stub.ignoreRange = true
+	provider, _ := newE2B(t, stub)
+	box, err := provider.Create(t.Context(), sandbox.Spec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := bytes.Repeat([]byte("abcdefghij"), 50_000)
+	stub.files["/home/user/.crewlet/err.log"] = content
+
+	tail, err := box.ReadTail(t.Context(), "/home/user/.crewlet/err.log", 1000)
+	if err != nil {
+		t.Fatalf("ReadTail: %v", err)
+	}
+	if !bytes.Equal(tail.Data, content[len(content)-1000:]) || tail.Size != int64(len(content)) {
+		t.Errorf("tail = %d bytes of %d; want the last 1000 of %d", len(tail.Data), tail.Size, len(content))
+	}
+}
+
 // THE KEEPALIVE, THE SNAPSHOT AND THE TEARDOWN each hit their own endpoint.
 func TestE2BLifecycleCallsAreDistinct(t *testing.T) {
 	t.Parallel()
@@ -798,8 +1011,52 @@ func TestE2BConnectToAVanishedBoxFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := provider.Connect(context.Background(), "sbx-gone"); err == nil {
-		t.Fatal("connecting to a vanished box succeeded")
+	if _, err := provider.Connect(context.Background(), "sbx-gone"); !errors.Is(err, sandbox.ErrBoxGone) {
+		t.Fatalf("connecting to a vanished box = %v; want ErrBoxGone", err)
+	}
+	if _, err := provider.Attach(context.Background(), "sbx-gone"); !errors.Is(err, sandbox.ErrBoxGone) {
+		t.Fatalf("attaching to a vanished box = %v; want ErrBoxGone", err)
+	}
+}
+
+// A READER NEVER WAKES A BOX. Attach READS the box (`GET /sandboxes/{id}`):
+// a running one is reached through envd exactly as a connected one is, and a
+// paused one is refused — never /connect, which resumes a paused box and
+// moves its timer, so a peek that raced the collection's pause woke the box,
+// and nothing renewed it again.
+//
+// Mutation: attach through /connect, and the box is woken.
+func TestE2BAttachReadsTheBoxAndNeverWakesIt(t *testing.T) {
+	t.Parallel()
+	stub := newE2BStub()
+	provider, _ := newE2B(t, stub)
+	ctx := context.Background()
+
+	box, err := provider.Attach(ctx, "sbx1")
+	if err != nil {
+		t.Fatalf("attaching to a running box: %v", err)
+	}
+	stub.mu.Lock()
+	stub.files["/home/user/.crewlet/done"] = []byte("0\n")
+	stub.mu.Unlock()
+	if got, err := box.ReadFile(ctx, "/home/user/.crewlet/done"); err != nil || string(got) != "0\n" {
+		t.Fatalf("an attached box read %q, %v; want its file through envd", got, err)
+	}
+
+	stub.mu.Lock()
+	stub.state = "paused"
+	stub.mu.Unlock()
+	if _, err := provider.Attach(ctx, "sbx1"); !errors.Is(err, sandbox.ErrBoxPaused) {
+		t.Fatalf("attaching to a paused box = %v; want ErrBoxPaused", err)
+	}
+
+	if !stub.saw("GET /sandboxes/sbx1") {
+		t.Errorf("the box was never read: %v", stub.requests)
+	}
+	for _, woke := range []string{"POST /sandboxes/sbx1/connect", "POST /sandboxes/sbx1/timeout"} {
+		if stub.saw(woke) {
+			t.Errorf("an attach called %s: %v", woke, stub.requests)
+		}
 	}
 }
 

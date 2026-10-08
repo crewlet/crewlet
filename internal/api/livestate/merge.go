@@ -14,6 +14,7 @@ func mergeOverlay(row map[string]any, o Overlay) {
 	row["current_phase"] = o.CurrentPhase
 	row["current_iteration"] = o.CurrentIteration
 	row["live_call"] = o.LiveCall
+	row["live_call_seq"] = o.LiveCallSeq
 	row["last_error"] = o.LastError
 	row["budget"] = o.Budget
 	row["turn"] = o.Turn

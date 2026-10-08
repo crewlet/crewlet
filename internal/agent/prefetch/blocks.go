@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/compact"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
 )
 
@@ -64,7 +66,7 @@ Output format (strict):
 If none of the past turns would help with the current task, output nothing at all.`
 
 // episodeRecall renders similar prior work.
-func (f *Fetcher) episodeRecall(ctx context.Context, r Request) string {
+func (f *Fetcher) episodeRecall(ctx context.Context, r Request, vector turnVector) string {
 	if f.src.Episodes == nil || r.Seat == nil || strings.TrimSpace(r.Task) == "" {
 		return ""
 	}
@@ -72,13 +74,13 @@ func (f *Fetcher) episodeRecall(ctx context.Context, r Request) string {
 	if handle == "" {
 		return ""
 	}
-	if r.RequiresRecon {
+	if !r.judgeable() {
 		// Same gate as memory and knowledge, and the same reason: a
 		// similarity search against a pointer returns the seat's most
 		// recent work rather than its most relevant.
 		return EmptyRecallHint
 	}
-	vector, ok := f.embed(ctx, r.Task)
+	v, ok := vector()
 	if !ok {
 		// NO FALLBACK TO RECENCY. Episode recall's whole claim is "this
 		// resembles what you are doing now"; the three most recent turns
@@ -87,7 +89,7 @@ func (f *Fetcher) episodeRecall(ctx context.Context, r Request) string {
 		return ""
 	}
 	hits, err := f.src.Episodes.Recall(ctx, learning.RecallQuery{
-		Handle: handle, Embedding: vector, Limit: recallHits,
+		Handle: handle, Embedding: v.Values, Model: v.Model, Limit: recallHits,
 	})
 	if err != nil {
 		log.WarnContext(ctx, "episode_recall_failed", "seat", handle, "error", err.Error())
@@ -97,26 +99,63 @@ func (f *Fetcher) episodeRecall(ctx context.Context, r Request) string {
 		return ""
 	}
 
-	bullets := make([]string, 0, len(hits))
-	for _, hit := range hits {
-		bullets = append(bullets, renderEpisode(hit))
+	// ONE DEADLINE FOR EVERY MODEL CALL THE BLOCK MAKES — its rewrites and
+	// its summary alike — so the block waits at most one auxiliary call's
+	// [AuxTimeout] past the recall, as it did when the summary was all it
+	// called, and is never the block every turn's start waits for. Each
+	// render already holds its own rewrites to one deadline
+	// ([learning.PastTurns]); this one is shared across the summary and
+	// the bullets it falls back to, so a summary that did not answer in
+	// time is not followed by another thirty seconds of rewrites from the
+	// same seat's auxiliary chain: whatever is left of the deadline is
+	// theirs, and a text no rewrite reached by then is named by its size.
+	ctx, cancel := context.WithTimeout(ctx, AuxTimeout)
+	defer cancel()
+
+	// WHICH PATH PAYS WHICH CALL. With the summary on, its model reads the
+	// recalled asks and accounts WHOLE — up to [summaryTextBytes] each,
+	// which almost every one is under — and its one briefing replaces them,
+	// so condensing them to a reader's [learning.EpisodeAccountBytes] first
+	// was rewrites spent on text the summary threw away, and a summary
+	// written from rewrites instead of from the turns. The raw bullets, each
+	// text condensed past that reader's bound, are rendered only where they
+	// are what the seat is shown: the summary off, or a summary that did not
+	// answer.
+	if f.src.SummarizeEpisodes && f.src.Models != nil {
+		whole := joinBullets(f.renderEpisodes(ctx, r, hits, summaryTextBytes))
+		if whole == "" {
+			return ""
+		}
+		// THE SUMMARY IS OPTIONAL AND ITS FAILURE IS FREE: the raw
+		// bullets are a usable block, so a model that is slow or
+		// unreachable costs verbosity rather than the block.
+		//
+		// JUDGED AGAINST WHAT THE TURN WAS ASKED ([Request.Ask]), for the
+		// memory filter's reason: the summary keeps "what bears on doing
+		// similar work again", and an integration's triage scaffolding
+		// is the same on every turn of its surface, so it bears on
+		// nothing.
+		summary, ok := f.auxCall(ctx, r, types.AuxEpisodeSummary, recallSummarySystemPrompt,
+			"Current task:\n"+r.Ask+
+				"\n\nPast turns by this agent:\n"+whole+
+				"\n\nBriefing:", f.summaryTokens())
+		if ok && strings.TrimSpace(summary) != "" {
+			return summary
+		}
 	}
-	raw := joinBullets(bullets)
-	if raw == "" || !f.src.SummarizeEpisodes {
-		return raw
-	}
-	// THE SUMMARY IS OPTIONAL AND ITS FAILURE IS FREE: the raw bullets are
-	// already a usable block, so a model that is slow or unreachable costs
-	// verbosity rather than the block.
-	summary, ok := f.auxCall(ctx, r.Seat, recallSummarySystemPrompt,
-		"Current task:\n"+r.Task+
-			"\n\nPast turns by this agent:\n"+raw+
-			"\n\nBriefing:", f.summaryTokens())
-	if !ok || strings.TrimSpace(summary) == "" {
-		return raw
-	}
-	return summary
+	return joinBullets(f.renderEpisodes(ctx, r, hits, learning.EpisodeAccountBytes))
 }
+
+// summaryTextBytes bounds one recalled turn's ask, and its account, as the
+// episode summary's input, where [learning.EpisodeAccountBytes] bounds each as
+// the block a seat reads.
+//
+// ONE AUXILIARY CALL'S INPUT ROOM, shared by the texts recalled: a sixth of
+// [compact.ChunkBytes] — the most one auxiliary completion is handed, about
+// sixteen thousand tokens — so three turns' asks and accounts together fit one
+// call, and only a text past about eleven kilobytes, a task description or a
+// final answer pages long, is condensed before the summary reads it.
+const summaryTextBytes = compact.ChunkBytes / (2 * recallHits)
 
 // summaryTokens is the operator's cap on the episode summary, or the default.
 func (f *Fetcher) summaryTokens() int {
@@ -126,19 +165,42 @@ func (f *Fetcher) summaryTokens() int {
 	return DefaultSummaryTokens
 }
 
+// renderEpisodes renders the recalled turns, each one's ask and account
+// condensed where it is past textBytes — through [learning.PastTurns], the
+// one rendering the query_episodes tool shares, so at most [compact.Parallel]
+// rewrites run at once and all of them are held to one deadline: the render's
+// own [learning.EpisodeRewriteTimeout], or ctx's when sooner.
+func (f *Fetcher) renderEpisodes(ctx context.Context, r Request, hits []learning.Hit,
+	textBytes int,
+) []string {
+	episodes := make([]learning.Episode, len(hits))
+	for i, hit := range hits {
+		episodes[i] = hit.Episode
+	}
+	turns := learning.PastTurns(ctx, episodes, f.src.Compact.For(r.Seat, r.Aux), textBytes)
+	bullets := make([]string, len(hits))
+	for i, hit := range hits {
+		bullets[i] = renderEpisode(hit.Episode, turns[i])
+	}
+	return bullets
+}
+
 // renderEpisode renders one past turn.
 //
-// The TASK and the OUTCOME, because those are the two things that make a
-// past turn useful: what it was, and whether it worked. The tool sequence
-// rides along because it is the cheapest possible answer to "how did I do
-// this last time".
-func renderEpisode(hit learning.Hit) string {
-	ep := hit.Episode
-	summary := collapse(firstNonEmpty(ep.TaskSummary, ep.PlanSummary))
-	if summary == "" {
+// WHAT WOKE IT, WHAT IT WAS ASKED, WHAT IT DID, AND WHETHER IT WORKED, because
+// those are what make a past turn useful as precedent. The label alone was all
+// this showed, and a label names the kind of event and nothing of the work —
+// every chat turn's is "Message from <someone>: <surface> message" — so it is
+// said as what WOKE the turn, the worker prompts' own word for it, and what
+// the turn was asked and what it did ([learning.PastTurn]) ride beside it. The
+// tool sequence rides along
+// because it is the cheapest possible answer to "how did I do this last time".
+func renderEpisode(ep learning.Episode, turn learning.PastTurn) string {
+	label := collapse(ep.TaskSummary)
+	if label == "" && turn.Ask == "" && turn.Account == "" {
 		return ""
 	}
-	line := "- " + summary
+	line := "- Woken by: " + firstNonEmpty(label, "(not recorded)")
 	var notes []string
 	if ep.ReviewOutcome != "" {
 		notes = append(notes, "outcome: "+ep.ReviewOutcome)
@@ -148,6 +210,12 @@ func renderEpisode(hit learning.Hit) string {
 	}
 	if len(notes) > 0 {
 		line += " _(" + strings.Join(notes, "; ") + ")_"
+	}
+	if turn.Ask != "" {
+		line += "\n  Asked: " + turn.Ask
+	}
+	if turn.Account != "" {
+		line += "\n  What it did: " + turn.Account
 	}
 	return line
 }

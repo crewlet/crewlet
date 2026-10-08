@@ -22,6 +22,7 @@ import { reloadForTest, setZone } from "~/lib/prefs.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { healthFrame } from "~/test/health.ts";
+import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -585,6 +586,7 @@ describe("live now", () => {
             work_item: { backend: "native", id: "t", key: "ENG-412", project: "ENG" },
           },
           live_call: {
+            versions: ZERO_VERSIONS,
             turn_id: "run-7",
             work_key: "wk-notakey",
             phase: "execute",

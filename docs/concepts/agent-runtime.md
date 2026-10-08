@@ -194,7 +194,7 @@ So the engine reads it instead, at turn start, and renders it as ``## The thread
 What lands in the prompt:
 
 - **Oldest first**, with the thread's root always kept — it is what the thread is about — and then the newest messages. The root keeps its place even when there is nothing to render in it: an alert app posts its payload in blocks or attachments and no text at all, a system line is channel bookkeeping, and Mattermost leaves a *deleted* root out of its answer while every reply to it stays. The block then carries one line saying the first message could not be shown, which is the honest alternative to the silent one — dropping it promotes the oldest surviving reply into the root's slot, where every bound protects it and the preamble calls it what the thread is about.
-- **Bounded by whole messages, never a cut inside one**: at most 30 messages and 8000 characters, dropped oldest-first, and the block **says how many it dropped**. The root (or the line standing in for it) and the newest message survive both bounds however long they are. 8000 is one third of the conversation ledger's 24000-character budget, because both blocks are frozen into the same system prompt and re-sent on every round of every phase, and the thread must not crowd out the seat's own cross-turn history. Neither bound is configurable.
+- **Bounded by whole messages, never a cut inside one**: 8000 bytes. A thread within it is handed over whole, however many messages it has. Past it, the root (or the line standing in for it) and the newest messages that fit take three quarters of the room verbatim, and the messages between them are **condensed** into one account by the seat's auxiliary model in the last quarter, marked as a rewrite and with the number of messages it stands for — so the decision made in the middle of a long thread is still in front of the seat. Only where no rewrite can be had are those messages left out, and the block then **says how many it dropped**. The root and the newest message survive however long they are. 8000 is one third of the conversation ledger's 24000-byte budget, because both blocks are frozen into the same system prompt and re-sent on every round of every phase, and the thread must not crowd out the seat's own cross-turn history. It is not configurable. A second bound of 30 messages used to drop everything older whatever its size; with the middle condensed rather than dropped it bounded nothing the bytes do not.
 - **Senders resolved through the party registry**, so a colleague reads as `Tech Lead (lead)` rather than an opaque platform id; a stranger renders as whatever the backend volunteered and then as the raw id, and never as a blank.
 - **The seat's own earlier replies marked `**you**`**, resolved by the transport from the identity it learned at connect. On Slack that takes *both* the bot user id and the app id, because a `bot_message` echo of the seat's own post carries the app id and no user id at all.
 - **A thread too long to read says so, in place of the claim it would otherwise make.** Slack pages `conversations.replies` from the *oldest* end, 100 messages at a time, up to 10 pages — so a thread past ~1000 messages cannot be reached at its newest end at all. The walk keeps the root and the newest of what it did reach rather than the oldest of the thread, and the block then drops its ordinary "the newest messages are what woke you" framing for one that says it stops short and tells the seat to read the rest with its chat tools: on that path the newest message is exactly what is missing, so the ordinary sentence would be guaranteed false. Everything either end dropped is in the count. The page size is 100 rather than the 200 Slack recommends because the client reads at most 1 MiB of a response before decoding it, and 200 messages carrying blocks, attachments or unfurls exceed that — which fails the read outright rather than shortening it. Mattermost has no such bound: `GET /api/v4/posts/{root}/thread` answers the whole thread in one response.
@@ -278,7 +278,7 @@ The engine runs **genuinely parallel** work within a single process:
 
 **A turn past the ceiling waits, in this process.** It is not handed back for the broker to redeliver on the broker's own schedule — for a chat message someone is waiting on, that turns a busy moment into a visible stall. The waiting turn starts the instant a slot frees. The one exception is a drain, below.
 
-**What it does not gate, and why that is not an oversight.** Post-turn [reflection](agent-learning.md) does not take a slot. It does not need one: it consumes `turn_completed` through a single durable subscription whose handler runs one delivery at a time, so a node runs at most one reflection pass at a time however many turns finish at once. Making it compete for turn slots instead would let a backlog of completed turns starve live seats — a company under load would stop answering people in order to finish learning from what it already answered — and the reverse, learning starved indefinitely by traffic, is what the separate consumer group exists to prevent. Auxiliary spend is bounded where it belongs, by the [token budget](../guides/deployment.md), and every learning worker resolves its model through the metered registry so that counter sees it — a pass the model **refused** included: a refusal returns no answer, but the response the vendor billed travels with it and is recorded like any other (`llm.Billed` is the one reading every meter uses).
+**What it does not gate, and why that is not an oversight.** Post-turn [reflection](agent-learning.md) does not take a slot. It does not need one: it consumes `turn_completed` through a single durable subscription whose handler runs one delivery at a time, so a node runs at most one reflection pass at a time however many turns finish at once. Making it compete for turn slots instead would let a backlog of completed turns starve live seats — a company under load would stop answering people in order to finish learning from what it already answered — and the reverse, learning starved indefinitely by traffic, is what the separate consumer group exists to prevent. Auxiliary spend is bounded where it belongs, by the [token budget](../guides/deployment.md), and every learning worker resolves its model through the engine's one auxiliary seam, so that counter sees it and every spend figure records it ([Budgets and spend § Auxiliary spend](../guides/budgets-and-spend.md#auxiliary-spend)) — a pass the model **refused** included: a refusal returns no answer, but the response the vendor billed travels with it and is recorded like any other (`llm.Billed` is the one reading every meter uses).
 
 **Sizing it.** It is per *node*, so a fleet's ceiling is N × the value — see [Scaling Out](scaling.md#what-stays-per-process-deliberately). The default of 32 is above the seat count of a single-node company (the example company runs a handful of seats; a large one runs tens) so it changes nothing for a company running today, while still bounding a node that has been handed far more seats than its host can serve. Raise it on a bigger host; lower it on a satellite running one agent. There is no "unbounded" — `0` means "take the default", and effectively-no-limit is a large number you can see in your config. Note this is a *different* knob from a cli-agent provider's own `max_concurrent`, which caps that provider's subprocesses; see [Subscription LLM backends](subscription-llm-backends.md).
 
@@ -311,25 +311,39 @@ stateDiagram-v2
 ```
 
 - **Asked.** The node reads the seat's counters and the company's, in the
-  current windows. A window is refusing when the gate has refused a charge in it
-  (its refusal stamp, cleared only by an admitted charge or the window turning
-  over) or when it has no room left for a single token. A counter that cannot be
-  read parks nothing: the turn runs and its own meter, which fails closed, is
-  the gate.
+  current windows. A window is refusing when it has no room left for a single
+  token — and a window that refused a round always has none, because the
+  refused round is counted past its ceiling. The refusal stamp is not asked:
+  after a ceiling is raised it stays until an admitted charge clears it, and a
+  park taken on it would hold the seat back from the very charge that could. A
+  counter that cannot be read parks nothing: the turn runs and its own meter,
+  which fails closed, is the gate.
 - **Parked.** The seat's inbox takes a pause hold (`budget_window`), the
   delivery is **deferred** — handed back unacked, for one of its deliveries,
   with a reason naming the window: `budget: day window 2026-09-23 resets
   2026-09-24T07:00:00Z` — and an alarm is set for the end of the refusing
   window, the one that ends **last** where several refuse, since nothing can run
   before it. `seat_budget_parked` is logged with the scope, the window, its
-  figures and the reset.
+  figures and the reset. And the park is **recorded as the gate's refusal**:
+  the delivery it defers is the turn whose first charge would have been
+  refused, so the window's `refused_at` — "last refused" on every screen and
+  in `crewlet budgets show` — is stamped on the scope a charge would be refused
+  by, the company's before the seat's, exactly as that charge would have
+  stamped it. A window a coding run or a background pass filled used to park
+  every delivery its seat was sent while reading as one that had refused
+  nothing.
 - **Released.** At the reset, or at once when an apply changes the ceilings of
   either scope or the company's clock (which moves every window's end), the hold
   is lifted, `seat_budget_park_released` is logged, and the held mail is
   delivered again in order and asked again. A revision that lowers a ceiling
   parks it again at the cost of one delivery.
 - **Refused mid-flight.** A window that had room when the delivery was claimed
-  can run out during the turn. That turn stops with `budget_exhausted`, and the
+  can run out during the turn. That turn stops with `budget_exhausted` and makes
+  no model call after the refusal — its meter holds it, so the next phase, the
+  round-cap judge and the turn's other workers are refused before they are sent,
+  and the first call it holds in a window is recorded on the counter as the
+  gate's refusal, the stamp a refused charge would have written
+  ([Turn Engine](turn-engine.md#runtime-invariants), invariant 4) — and the
   seat is parked exactly as above — unless the turn had already written outside
   the engine (an MCP write, a colleague ask, a coding run), in which case the
   trigger is recorded and acked, because running it again after the reset would
@@ -439,7 +453,7 @@ flowchart TD
     S6["6. Release every seat"] --> S7
     S7["7. Close the HTTP listener<br/>dashboard · REST · webhooks · probes"] --> S8
     S8["8. Stop the duties<br/>sandbox waiter · notifications · maintenance<br/>integrations · memory sync · learning · scheduler"] --> S9
-    S9["9. Reap shared MCP servers; close stream + store"]
+    S9["9. Reap shared MCP servers; last auxiliary-spend flush;<br/>custody flush; close stream + store"]
     SIG -.->|"2nd signal:<br/>immediate exit"| X["Process dies"]
 ```
 
@@ -486,8 +500,13 @@ flowchart TD
    notification transports, the maintenance duties, the integration reconcile
    loop, memory sync, the learning passes, the cron scheduler and the
    credential cooldown refresh.
-9. **Close the backends**: the shared MCP servers are reaped, then the stream
-   connection and the store file are closed (`engine_stopped`).
+9. **Close the backends**: the shared MCP servers are reaped; the
+   auxiliary-spend ledger publishes its last records — what the seats'
+   auxiliary model spent since its last 15-second flush — on a budget of five
+   seconds, once every producer of them has stopped and before a node without
+   `data` flushes its [custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data)
+   batches, which carry those records too; then the custody flush, and the
+   stream connection and the store file are closed (`engine_stopped`).
 
 **Let LLMs finish their rounds — but only the running ones.** The drain distinguishes two kinds of in-flight turn. Turns already past the concurrency gate (model rounds under way) run to completion: they may have fired side effects, and abandoning that work buys a faster deploy by throwing away what was nearly done. Turns delivered before the quiesce but still *waiting* for a slot abort immediately — they have called no model and fired nothing, so their trigger is simply deferred. Without this split, a backlog parked behind `max_concurrent` would run full multi-minute executor → reviewer turns one after another during a shutdown that waits for them indefinitely.
 

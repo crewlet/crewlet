@@ -160,7 +160,7 @@ func reflectorGated(t *testing.T, budget learning.BudgetGate, o *org.Organizatio
 	pub queue.Publisher, workers ...learning.Worker,
 ) *learning.Reflector {
 	t.Helper()
-	r, err := learning.NewReflector(o, pub, workers, budget)
+	r, err := learning.NewReflector(o, pub, workers, budget, nil)
 	if err != nil {
 		t.Fatalf("NewReflector: %v", err)
 	}
@@ -597,23 +597,23 @@ func TestAWorkerWithNothingToAnnounceStillCounts(t *testing.T) {
 
 func TestADispatcherRefusesWiringItCannotWorkWithout(t *testing.T) {
 	t.Parallel()
-	if _, err := learning.NewReflector(nil, &recordingPub{}, nil, nil); err == nil {
+	if _, err := learning.NewReflector(nil, &recordingPub{}, nil, nil, nil); err == nil {
 		t.Error("a dispatcher with no org was accepted; every turn would skip on an unresolvable seat")
 	}
-	if _, err := learning.NewReflector(devOrg(), nil, nil, nil); err == nil {
+	if _, err := learning.NewReflector(devOrg(), nil, nil, nil, nil); err == nil {
 		t.Error("a dispatcher with no publisher was accepted")
 	}
-	if _, err := learning.NewReflector(devOrg(), &recordingPub{}, []learning.Worker{nil}, nil); err == nil {
+	if _, err := learning.NewReflector(devOrg(), &recordingPub{}, []learning.Worker{nil}, nil, nil); err == nil {
 		t.Error("a nil worker was accepted; it panics on the first completed turn")
 	}
-	if _, err := learning.NewReflector(devOrg(), &recordingPub{}, nil, nil); err != nil {
+	if _, err := learning.NewReflector(devOrg(), &recordingPub{}, nil, nil, nil); err != nil {
 		t.Errorf("a dispatcher with no workers yet was refused: %v", err)
 	}
 	// A pass reports its skips and failures BY WORKER NAME, so two workers
 	// sharing one would each erase the other's entry and an operator would
 	// read one worker's failure as the other's.
 	twins := []learning.Worker{&stubWorker{name: "same"}, &stubWorker{name: "same"}}
-	if _, err := learning.NewReflector(devOrg(), &recordingPub{}, twins, nil); err == nil {
+	if _, err := learning.NewReflector(devOrg(), &recordingPub{}, twins, nil, nil); err == nil {
 		t.Error("two workers under one name were accepted")
 	}
 }
@@ -1012,5 +1012,76 @@ func TestAParkedTurnLeavesTheMarkForItsResumedHalf(t *testing.T) {
 	// refused, which is what the mark did.
 	if w.ran() != 2 {
 		t.Errorf("the worker ran %d times, want the park and then the resume", w.ran())
+	}
+}
+
+// flushProbe is the node's spend ledger as a pass sees it, noting how much the
+// pass had published at each flush.
+type flushProbe struct {
+	pub *recordingPub
+
+	mu      sync.Mutex
+	flushed []string
+	before  []int
+}
+
+func (f *flushProbe) FlushTurn(_ context.Context, turnID string) {
+	sent := len(f.pub.snapshot())
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.flushed = append(f.flushed, turnID)
+	f.before = append(f.before, sent)
+}
+
+// A PASS'S SENTINEL FOLLOWS WHAT ITS MODEL CALLS COST — on both of the paths
+// that publish one.
+//
+// The Turn screen asks for the turn again when `reflection_completed` lands
+// and draws the Reflection lane from the reflection stage's spend records,
+// which the node's ledger publishes. Left to its timer, they landed up to a
+// flush interval after the sentinel, so a page already open never showed
+// them. So the pass flushes the turn's records, and only then publishes the
+// sentinel — whether its workers ran or the turn was one it decided not to
+// learn from.
+func TestAPassFlushesItsSpendBeforeItsSentinel(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		mutate func(*types.TurnCompleted)
+	}{
+		{"its workers ran", func(*types.TurnCompleted) {}},
+		{"it decided not to learn", func(x *types.TurnCompleted) { x.ToolSequence = nil }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pub := &recordingPub{}
+			probe := &flushProbe{pub: pub}
+			r, err := learning.NewReflector(devOrg(), pub, []learning.Worker{
+				&stubWorker{name: "w", out: types.TurnCompleted{}},
+			}, nil, probe)
+			if err != nil {
+				t.Fatalf("NewReflector: %v", err)
+			}
+			turn := settledTurn()
+			tc.mutate(&turn)
+			reflectOnce(r, turn)
+
+			sentinel := -1
+			for i, ev := range pub.snapshot() {
+				if ev.Type == "reflection_completed" {
+					sentinel = i
+				}
+			}
+			probe.mu.Lock()
+			defer probe.mu.Unlock()
+			if sentinel < 0 || len(probe.flushed) != 1 || probe.flushed[0] != turn.TurnID {
+				t.Fatalf("flushed %v, sentinel at %d — want one flush of %s and a sentinel",
+					probe.flushed, sentinel, turn.TurnID)
+			}
+			if probe.before[0] > sentinel {
+				t.Errorf("the flush came after the sentinel (%d events out, sentinel at %d)",
+					probe.before[0], sentinel)
+			}
+		})
 	}
 }

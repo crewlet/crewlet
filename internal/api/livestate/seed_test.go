@@ -35,7 +35,7 @@ func storedSpend(id, ts string, total int) tokens.Record {
 	return tokens.Record{
 		EventID: id, Timestamp: ts, AgentRole: "Lead", AgentID: "a-1",
 		Phase: "execute", Model: "claude-sonnet-5", TurnID: "tn-" + id,
-		InputTokens: total / 2, OutputTokens: total / 2, TotalTokens: total,
+		InputTokens: total / 2, OutputTokens: total / 2, TotalTokens: total, Calls: 1,
 	}
 }
 
@@ -84,13 +84,13 @@ func TestAFullSeedDoesNotRecountTheLiveRowsItAlreadyHolds(t *testing.T) {
 		recs = append(recs, tokens.Record{
 			EventID:   fmt.Sprintf("S%d", i),
 			Timestamp: base.Add(time.Duration(i) * time.Millisecond).Format(time.RFC3339Nano),
-			AgentRole: "Lead", Phase: "execute", TotalTokens: 1,
+			AgentRole: "Lead", Phase: "execute", TotalTokens: 1, Calls: 1,
 		})
 	}
 	for i := 0; i < 10; i += 2 {
 		recs = append(recs, tokens.Record{
 			EventID: live[i], Timestamp: newest,
-			AgentRole: "Lead", Phase: "execute", TotalTokens: 7,
+			AgentRole: "Lead", Phase: "execute", TotalTokens: 7, Calls: 1,
 		})
 	}
 	s.Seed(livestate.History{Spend: recs})

@@ -5,16 +5,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerfit"
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/logging"
 	llm "github.com/crewlet/crewlet/internal/providers/llm"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 var log = logging.Get("agent.extension")
@@ -65,7 +64,9 @@ const (
 	// verdict at all — which the policy reads as a refusal.
 	judgeEffort = llm.EffortLow
 
-	// judgeCallsShown bounds the tool log in the prompt.
+	// judgeCallsShown bounds the tool log in the prompt, and it is a
+	// window, never a cut: the line says how many calls it shows of how
+	// many.
 	//
 	// The judge's question is "is this phase repeating itself?", which is
 	// answered by the RECENT calls: a phase thrashing does it in its last
@@ -74,11 +75,18 @@ const (
 	// prompt whose point is being cheap.
 	judgeCallsShown = 12
 
-	// judgeArgsShown bounds one call's rendered arguments. Enough to tell
-	// two calls to the same tool apart, which is the entire discrimination
-	// the judge has to make, and not enough for one pasted document to
-	// crowd out the rest of the log.
-	judgeArgsShown = 200
+	// JudgeTaskBudget is the size the task is REWRITTEN to past it — never
+	// cut. Eight kibibytes: the judge is a cheap model asked a small
+	// question, and the task is context for the log, which is the
+	// evidence. It used to be cut at 1500 bytes from the HEAD, so a task
+	// whose ask came after its quoted thread was judged without its ask.
+	JudgeTaskBudget = 8 << 10
+
+	// JudgeTextBudget is the size the phase's own last words are rewritten
+	// to past it. Four kibibytes, for the task's reason. They used to be cut
+	// at 800 bytes from the HEAD — so "what it last said" was what the
+	// phase said FIRST.
+	JudgeTextBudget = 4 << 10
 )
 
 // ErrNoVerdict reports an answer the judge could not read as a decision.
@@ -111,7 +119,32 @@ type LLMJudge struct {
 	// every turn because one provider key was misconfigured is otherwise
 	// indistinguishable from a phase that genuinely deserved no extension.
 	key string
+
+	// fit rewrites evidence past its budget — see [LLMJudge.WithCompactor].
+	fit Fitter
+
+	// hold is the turn's budget, asked once the evidence is rendered — see
+	// [LLMJudge.WithHold].
+	hold Hold
 }
+
+// Fitter rewrites a text that will not fit its budget: the seat's compactor.
+type Fitter interface {
+	Fit(ctx context.Context, kind compact.Kind, text string, budget int) (compact.Result, error)
+}
+
+// Hold is the turn's budget as the judge asks it: the refusal its call is
+// certain to meet, or nil. Asked immediately before the judge's call, on its
+// context, because an error is the gate turning that call away and the turn's
+// meter records it as it records a refused round.
+type Hold interface {
+	Held(ctx context.Context) error
+}
+
+// ErrHeld is a judge that did not call its model because the turn's budget
+// already refuses the call: it would be billed, and its charge refused. Not a
+// failed judge — [Consider] rescues it as the budget it is.
+var ErrHeld = errors.New("extension: the turn's budget refuses the judge's call")
 
 // NewLLMJudge builds a judge over one model. A nil model yields a nil judge,
 // which [Consider] already handles as "no judge" — the alternative, a judge
@@ -124,18 +157,59 @@ func NewLLMJudge(model Completer, key string) *LLMJudge {
 	return &LLMJudge{model: model, key: key}
 }
 
+// WithCompactor makes the judge rewrite evidence past its budget — a pasted
+// document in a call's arguments, a whole error page, a long task — with the
+// seat's auxiliary model rather than show it whole. Without one, the task and
+// the phase's words are shown whole and an over-budget argument by its size
+// and digest, which still tells two identical calls from two different ones.
+// Nil-safe, so the engine can chain it on a judge that does not exist.
+func (j *LLMJudge) WithCompactor(fit Fitter) *LLMJudge {
+	if j != nil {
+		j.fit = fit
+	}
+	return j
+}
+
+// WithHold makes the judge ask the turn's budget before it calls its model,
+// and call nothing on a refusal ([ErrHeld]). Nil-safe, like WithCompactor.
+//
+// ASKED AFTER THE EVIDENCE IS RENDERED, never only before the judge is
+// consulted: rendering can rewrite the task, the phase's last words or a
+// call's arguments with the seat's auxiliary model, and each rewrite is
+// charged to the same counters the judge's call is. A rewrite that fills a
+// window leaves the judge's call certain to be refused, and asked only
+// beforehand, that call was made, billed, and then refused.
+func (j *LLMJudge) WithHold(hold Hold) *LLMJudge {
+	if j != nil {
+		j.hold = hold
+	}
+	return j
+}
+
 // Decide asks the model and reads its verdict.
 func (j *LLMJudge) Decide(ctx context.Context, req Request) (Decision, error) {
 	if j == nil || j.model == nil {
 		return Decision{}, ErrNoVerdict
 	}
+	evidence := j.render(ctx, req)
+	if j.hold != nil {
+		if held := j.hold.Held(ctx); held != nil {
+			// NOT ASKED: no call was made, so there is nothing to report
+			// or to charge — see [WithHold].
+			return Decision{}, fmt.Errorf("%w: %w", ErrHeld, held)
+		}
+	}
+	// THE CALL'S OWN CLOCK, started once the evidence is in hand: rendering
+	// can wait on rewrites, each under its own deadline, and a timer started
+	// before it handed the one call [JudgeTimeout] bounds whatever the
+	// rewrites left of it — none at all after a slow one.
 	call, cancel := context.WithTimeout(ctx, JudgeTimeout)
 	defer cancel()
 
 	completion, err := j.model.Complete(call, llm.Request{
 		Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: judgeSystemPrompt},
-			{Role: llm.RoleUser, Content: renderJudgeRequest(req)},
+			{Role: llm.RoleUser, Content: evidence},
 		},
 		// NO TOOLS: the answer is two lines of text, and a tool on the
 		// surface invites a model to call it and answer nothing.
@@ -178,9 +252,10 @@ func (j *LLMJudge) Decide(ctx context.Context, req Request) (Decision, error) {
 	}
 	decision, err := ParseVerdict(completion.Content)
 	if err != nil {
+		// WHOLE: the answer is bounded by [JudgeMaxTokens], and the part
+		// of an unparseable answer worth reading is rarely its opening.
 		log.DebugContext(ctx, "extension_judge_unparsed", "model", j.key,
-			"answer", textcut.Ellipsis(completion.Content, 200),
-			"output_tokens", completion.OutputTokens)
+			"answer", completion.Content, "output_tokens", completion.OutputTokens)
 		return spent, err
 	}
 	return decision.withSpend(spent), nil
@@ -215,8 +290,15 @@ or
 Never exceed the maximum you are told. When in doubt, answer RESCUE: more rounds
 cost real money and a phase that is looping will loop in them too.`
 
-// renderJudgeRequest turns the evidence into the user message.
-func renderJudgeRequest(req Request) string {
+// render turns the evidence into the user message.
+//
+// NOTHING IN IT IS CUT. The plan and the counters are small by construction;
+// the task, the phase's last words, a call's argument values and a failed
+// call's error are rewritten past their budgets by the seat's auxiliary model
+// (or, with none, shown whole — and an argument by its size and digest). The
+// calls render exactly as the prior-work ledger renders them, so a payload
+// the ledger has already condensed this turn is answered from the cache.
+func (j *LLMJudge) render(ctx context.Context, req Request) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Phase: %s\n", req.Phase)
 	fmt.Fprintf(&b, "Rounds already used: %d\n", req.RoundsUsed)
@@ -225,12 +307,12 @@ func renderJudgeRequest(req Request) string {
 
 	if task := strings.TrimSpace(req.Task); task != "" {
 		b.WriteString("\n## Task\n")
-		b.WriteString(textcut.Ellipsis(task, 1500))
+		b.WriteString(j.fitted(ctx, compact.KindTask, task, JudgeTaskBudget))
 		b.WriteString("\n")
 	}
 	if plan := strings.TrimSpace(req.PlanSummary); plan != "" {
 		b.WriteString("\n## Plan\n")
-		b.WriteString(textcut.Ellipsis(plan, 1000))
+		b.WriteString(plan)
 		b.WriteString("\n")
 	}
 
@@ -246,53 +328,50 @@ func renderJudgeRequest(req Request) string {
 			fmt.Fprintf(&b, " (last %d of %d)", judgeCallsShown, len(shown))
 			shown = shown[len(shown)-judgeCallsShown:]
 		}
+		// THE LEDGER'S OWN RENDERING, with its argument budget: one line
+		// per call, its arguments as sorted JSON — so the same call always
+		// renders the same way and a loop cannot read as progress — and
+		// every payload past the budget fitted rather than cut.
+		opts := ledger.FormatOptions{ValueLimit: ledger.ValueLimit}
+		opts.Fitted = ledgerfit.Fit(ctx, j.fitter(), ledger.CallPieces(shown, opts))
 		b.WriteString("\n")
-		for i, c := range shown {
-			b.WriteString(renderJudgeCall(i+1, c))
-		}
+		b.WriteString(ledger.FormatCalls(shown, opts))
+		b.WriteString("\n")
 	}
 
 	if last := strings.TrimSpace(req.LastText); last != "" {
 		b.WriteString("\n## What it last said\n")
-		b.WriteString(textcut.Ellipsis(last, 800))
+		b.WriteString(j.fitted(ctx, compact.KindProduced, last, JudgeTextBudget))
 		b.WriteString("\n")
 	}
 	b.WriteString("\nVerdict:")
 	return b.String()
 }
 
-// renderJudgeCall renders one call as a line the judge can compare against
-// its neighbours. The arguments are the discrimination — a log of bare tool
-// names cannot tell a loop from a sequence — so they are included and
-// bounded rather than dropped.
-func renderJudgeCall(n int, c ledger.Call) string {
-	line := fmt.Sprintf("%d. %s(%s)", n, c.Name,
-		textcut.Ellipsis(collapseSpace(renderArgs(c.Args)), judgeArgsShown))
-	if c.Failed {
-		// The FAILURE is the signal, and the text after it is what tells
-		// a second identical failure from a different one — which is the
-		// difference between a phase retrying usefully and a phase stuck.
-		line += " -> failed: " + textcut.Ellipsis(collapseSpace(c.Result), 120)
+// fitted is text within budget: whole if it already fits, the seat's
+// rewrite, announced as one, if it does not — and whole again if no rewrite
+// can be had, because the judge cannot weigh a phase against a task it was
+// shown none of, and the rescue its failure falls back to is safe.
+func (j *LLMJudge) fitted(ctx context.Context, kind compact.Kind, text string, budget int) string {
+	if len(text) <= budget || j.fit == nil {
+		return text
 	}
-	return line + "\n"
+	res, err := j.fit.Fit(ctx, kind, text, budget)
+	if err != nil {
+		log.DebugContext(ctx, "extension_judge_evidence_whole", "model", j.key,
+			"kind", string(kind), "bytes", len(text), "error", err.Error())
+		return text
+	}
+	return res.Note() + "\n" + res.Text
 }
 
-// renderArgs renders a call's arguments in a stable order.
-//
-// SORTED, because Go map iteration is randomised and this text is the
-// judge's only way to tell two calls apart: the same call rendered with its
-// keys in a different order reads as a different call, which turns a loop
-// into apparent progress at random.
-func renderArgs(args map[string]any) string {
-	if len(args) == 0 {
-		return ""
+// fitter is the judge's compactor as ledgerfit takes one — a nil interface,
+// not a typed nil, when the judge has none.
+func (j *LLMJudge) fitter() ledgerfit.Fitter {
+	if j.fit == nil {
+		return nil
 	}
-	keys := slices.Sorted(maps.Keys(args))
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		parts = append(parts, fmt.Sprintf("%s=%v", k, args[k]))
-	}
-	return strings.Join(parts, ", ")
+	return j.fit
 }
 
 // ParseVerdict reads a judge's answer.
@@ -365,17 +444,16 @@ func judgeReason(rest []string, countConsumed bool, following []string) string {
 	if countConsumed && len(rest) > 0 {
 		rest = rest[1:]
 	}
+	// WHOLE: the answer is bounded by [JudgeMaxTokens], and the reason is
+	// what the extended phase is handed as its nudge — a reason cut
+	// mid-sentence is an instruction cut mid-sentence.
 	if tail := strings.TrimSpace(strings.Join(rest, " ")); tail != "" {
-		return textcut.Ellipsis(tail, 300)
+		return tail
 	}
 	for _, raw := range following {
 		if line := strings.TrimSpace(strings.Trim(strings.TrimSpace(raw), "`*#>-")); line != "" {
-			return textcut.Ellipsis(line, 300)
+			return line
 		}
 	}
 	return ""
 }
-
-// collapseSpace folds whitespace so one call renders on one line: a pretty
-// printed JSON argument would otherwise turn a twelve-line log into a page.
-func collapseSpace(s string) string { return strings.Join(strings.Fields(s), " ") }

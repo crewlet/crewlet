@@ -168,7 +168,7 @@ func (r *waiterRig) launchingUnder(turnID string, lease Fence) PendingRun {
 		// phase record is filed under.
 		Launch: LaunchRecord{Model: "claude-sonnet-5"},
 	}
-	if err := r.pending.BeginLaunch(ctx, run, lease); err != nil {
+	if _, err := r.pending.BeginLaunch(ctx, run, lease); err != nil {
 		r.t.Fatalf("BeginLaunch: %v", err)
 	}
 	if err := r.pending.AttachSandbox(ctx, turnID, BoxRef{
@@ -494,6 +494,65 @@ func TestEveryTickKeepsTheRunningBoxAlive(t *testing.T) {
 	}
 }
 
+// THE POLL NEVER WAKES A BOX ITS RUN HAS MOVED ON FROM. A poll that listed a
+// running run, then reached its box after the collection had claimed the run
+// and paused the box, used to resume it — Connect wakes whatever it reaches —
+// and nothing kept it alive again, so on E2B it was killed at its timer and
+// the run lost its snapshot. The poll attaches without resuming, and a paused
+// box sends it to the record, which says the run has moved on.
+//
+// Mutation: poll through Connect, and the box is woken and heart-beaten.
+func TestThePollNeverWakesABoxItsRunHasMovedOnFrom(t *testing.T) {
+	rig := newWaiterRig(t)
+	listed := rig.launch("t1")
+	box := rig.provider.Box(listed.SandboxID)
+	rig.runner.Finish(Result{Text: "done", Success: true})
+
+	// The collection claimed the run off running, read the box and paused
+	// it, between the poll's listing and its reach.
+	if _, ok, err := rig.pending.ClaimForResume(t.Context(), "t1", CompletionTail(listed.LaunchID), rigLease); err != nil || !ok {
+		t.Fatalf("claim = %v, %v", ok, err)
+	}
+	if err := box.Pause(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := rig.waiter.pollOne(t.Context(), rig.manager, listed); got != pollRunning {
+		t.Errorf("the poll of a run that moved on = %v; want nothing done", got)
+	}
+	if !box.Paused() {
+		t.Fatal("the poll woke a box its run no longer runs")
+	}
+	if box.Keepalives() != 0 {
+		t.Errorf("the poll heart-beat a box its run no longer runs %d time(s)", box.Keepalives())
+	}
+}
+
+// A PAUSED BOX UNDER A RUN STILL RUNNING IS WOKEN, because that is the run's
+// box again: a collection that read and paused it and then could not resume
+// the turn hands the claim back to running, and the box has to be kept alive
+// and collected anew. The read-only attach must not cost that.
+//
+// Mutation: leave every paused box alone, and the handed-back run's box is
+// never heart-beaten or polled again.
+func TestThePollWakesAPausedBoxItsRunStillRuns(t *testing.T) {
+	rig := newWaiterRig(t)
+	run := rig.launch("t1")
+	box := rig.provider.Box(run.SandboxID)
+	if err := box.Pause(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	rig.runner.Finish(Result{Text: "done", Success: true})
+
+	if fired := rig.tick(); fired != 1 {
+		t.Errorf("the handed-back run fired %d completion(s); want its job collected anew", fired)
+	}
+	if box.Paused() || box.Keepalives() != 1 {
+		t.Errorf("paused=%v keepalives=%d; want the run's box woken and kept alive",
+			box.Paused(), box.Keepalives())
+	}
+}
+
 // A run parked on a question is not running: the seat is free and the box is
 // deliberately NOT heart-beaten, because the pause TTL is what bounds it.
 func TestAParkedRunIsNeitherPolledNorHeartBeaten(t *testing.T) {
@@ -728,8 +787,8 @@ func TestAnAnsweredRunIsNotReclaimedUnderTheResume(t *testing.T) {
 		t.Fatalf("ClaimForResume = %v, %v", won, err)
 	}
 	rig.now = rig.now.Add(DefaultPauseTTL + time.Second)
-	rig.waiter.reapExpiredPauses(t.Context(), rig.manager,
-		[]PendingRun{withPaused(run, rig.now.Add(-DefaultPauseTTL-time.Second))})
+	rig.waiter.reapOne(t.Context(), rig.manager,
+		withPaused(run, rig.now.Add(-DefaultPauseTTL-time.Second)))
 
 	if killed := rig.provider.KilledIDs(); len(killed) != 0 {
 		t.Fatalf("the reaper destroyed %v underneath a resume that had already claimed the run", killed)
@@ -824,7 +883,7 @@ func TestANodeWithoutTheDutyDoesNothing(t *testing.T) {
 
 	waiter, err := NewWaiter(WaiterOptions{
 		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
-		ClaimDuty: func(context.Context) (bool, error) { return false, nil },
+		ClaimDuty: func(context.Context) (bool, error) { return false, nil }, DutyTTL: time.Minute,
 	})
 	if err != nil {
 		t.Fatalf("NewWaiter: %v", err)
@@ -848,7 +907,7 @@ func TestAnUnreadableDutyStandsDownRatherThanPollingAnyway(t *testing.T) {
 
 	waiter, err := NewWaiter(WaiterOptions{
 		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
-		ClaimDuty: func(context.Context) (bool, error) {
+		DutyTTL: time.Minute, ClaimDuty: func(context.Context) (bool, error) {
 			return false, errors.New("coordination store unreachable")
 		},
 	})
@@ -887,6 +946,106 @@ func TestTheLoopTicksAndStopsCleanly(t *testing.T) {
 	}
 	// Stop is idempotent and returns only once the in-flight tick is done.
 	waiter.Stop()
+}
+
+// A PASS LEAVES NOTHING BEHIND IN THE CONTEXT IT WAS GIVEN. That context is
+// the loop's, which lives as long as the process, so a child of it nobody
+// cancelled stays in its list of children until the engine stops — one more
+// every pass, on every node.
+//
+// Mutation: make the walk's context twice, overwriting the first cancel func
+// with the deadline's, and every pass leaves one child registered.
+func TestAPassLeavesNoChildOfItsContextBehind(t *testing.T) {
+	rig := newWaiterRig(t)
+	rig.launch("t1")
+	waiter, err := NewWaiter(WaiterOptions{
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
+		Now:       func() time.Time { return rig.now },
+		ClaimDuty: func(context.Context) (bool, error) { return true, nil },
+		DutyTTL:   time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("NewWaiter: %v", err)
+	}
+	parent := newChildCounter()
+	defer parent.cancel()
+	const passes = 5
+	for range passes {
+		if _, err := waiter.Tick(parent); err != nil {
+			t.Fatalf("Tick: %v", err)
+		}
+	}
+	// The walk cancels its own context as it returns, AFTER the last task
+	// it started has told the round it is done — so the round's end is
+	// not quite the walk's. Wait for every task the waiter started.
+	waiter.tasks.Wait()
+	if live := parent.live(); live != 0 {
+		t.Fatalf("%d passes left %d children of their context registered; want none", passes, live)
+	}
+}
+
+// childCounter is a context that counts the children registered on it and not
+// yet cancelled. A context the standard library did not make, with an
+// AfterFunc method, is one every child derived from it registers with through
+// that method, and deregisters from by calling the stop it returned — which is
+// exactly a child's lifetime in its parent's list.
+type childCounter struct {
+	context.Context
+	done chan struct{}
+	once sync.Once
+
+	mu       sync.Mutex
+	children map[int]func()
+	next     int
+}
+
+func newChildCounter() *childCounter {
+	return &childCounter{Context: context.Background(), done: make(chan struct{}), children: map[int]func(){}}
+}
+
+func (c *childCounter) Done() <-chan struct{} { return c.done }
+
+func (c *childCounter) Err() error {
+	select {
+	case <-c.done:
+		return context.Canceled
+	default:
+		return nil
+	}
+}
+
+func (c *childCounter) AfterFunc(f func()) func() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	id := c.next
+	c.next++
+	c.children[id] = f
+	return func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		_, ok := c.children[id]
+		delete(c.children, id)
+		return ok
+	}
+}
+
+func (c *childCounter) live() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.children)
+}
+
+func (c *childCounter) cancel() {
+	c.once.Do(func() {
+		close(c.done)
+		c.mu.Lock()
+		children := c.children
+		c.children = map[int]func(){}
+		c.mu.Unlock()
+		for _, f := range children {
+			f()
+		}
+	})
 }
 
 // A MANAGER SWAPPED AFTER THE WAITER STARTED IS THE ONE THE NEXT TICK POLLS
@@ -929,7 +1088,7 @@ func TestTheWaiterPollsThroughTheManagerCurrentAtEachTick(t *testing.T) {
 func (r *waiterRig) seedRunning(turnID, sandboxID string) {
 	r.t.Helper()
 	ctx := r.t.Context()
-	if err := r.pending.BeginLaunch(ctx, PendingRun{
+	if _, err := r.pending.BeginLaunch(ctx, PendingRun{
 		TurnID: turnID, AgentHandle: "swe", AgentID: "a-1", Role: "SWE",
 		CodingAgent: "claude-code", CreatedAt: r.now,
 	}, Fence{}); err != nil {

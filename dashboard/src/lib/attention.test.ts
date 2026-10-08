@@ -23,6 +23,7 @@ import {
   type Where,
 } from "./attention.ts";
 import { healthFrame } from "~/test/health.ts";
+import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 
 const now = Date.parse("2026-01-01T12:00:00Z");
 
@@ -187,6 +188,7 @@ describe("what it surfaces", () => {
       role: "Dev A",
       handle: "dev-a",
       live_call: {
+        versions: ZERO_VERSIONS,
         turn_id: "t1",
         phase: "execute",
         iteration: 1,
@@ -348,6 +350,7 @@ describe("what it surfaces", () => {
             role: "Dev B",
             handle: "dev-b",
             live_call: {
+              versions: ZERO_VERSIONS,
               turn_id: "t2",
               phase: "execute",
               iteration: 1,
@@ -411,6 +414,7 @@ describe("where a condition is shown", () => {
             role: "Dev B",
             handle: "dev-b",
             live_call: {
+              versions: ZERO_VERSIONS,
               turn_id: "t2",
               phase: "execute",
               iteration: 1,

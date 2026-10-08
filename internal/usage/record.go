@@ -12,7 +12,8 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// The USAGE RECORD: one node's day for one seat or one schedule, whole.
+// The USAGE RECORD: one node's day for one seat, one schedule or one person,
+// whole.
 //
 // # A record is the object's current value, never a delta
 //
@@ -25,16 +26,38 @@ import (
 // It is also what makes a lost or repeated publish harmless: the next flush
 // carries the whole day again.
 
-// RecordVersion is the record shape this build reads.
+// RecordVersion is the record shape this build reads: the highest
+// [versionedFields] names, which the conformance suite holds it to.
 //
 // A record above it is RETAINED at its position rather than skipped, so a
-// newer peer's shape survives a rolling upgrade in both directions.
+// newer peer's shape survives a rolling upgrade in both directions. Every
+// kind this build writes — a seat's, a schedule's and a person's day — is the
+// base format, version 1.
 const RecordVersion = 1
+
+// versionedFields is every field the record has gained since the base format,
+// and the version a reader must be at to apply a record carrying it — today
+// none. A record is stamped with the LOWEST version that reads it
+// ([statelog.RecordFields.Minimum]), so a field or a kind a later build adds
+// takes a row here at the next version, and a record of an existing shape
+// stays readable by every build that reads that shape.
+//
+// A NEW KIND IS A VALUE of a field every record carries, so its row names the
+// key and the value (`subject.kind` equal to the new kind's name): a row
+// naming only the key would stamp every record the domain writes.
+var versionedFields = statelog.RecordFields{}
+
+// VersionedFields is the table, for the conformance suite.
+func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFields) }
 
 // Kind is what a usage record is about.
 //
 // A NAMED STRING TYPE with a Valid method, so a kind a newer build publishes
-// is a value this build defers rather than a panic.
+// is a value this build defers rather than a panic. DEFERS, and the envelope is
+// what makes that true rather than claimed: a kind this build does not know is
+// admitted there only on a record stamped above [RecordVersion] — which is how
+// a newer build stamps one — and the second pass then retains the record as
+// [ErrFutureVersion]. See [Subject.validateFor].
 type Kind string
 
 const (
@@ -43,10 +66,18 @@ const (
 
 	// KindSchedule is one schedule's fires.
 	KindSchedule Kind = "schedule"
+
+	// KindPerson is one PERSON's auxiliary spend: what the seats' cheap
+	// model spent for a human seat — a question answered on the operator
+	// surface, a background pass on a unit a person leads. A person is no
+	// seat: no agent id to key a seat's record on, no turns and no reads,
+	// so its spend was in no seat's day and therefore in no named spend
+	// window.
+	KindPerson Kind = "person"
 )
 
 // Kinds is every kind this build writes.
-var Kinds = []Kind{KindSeat, KindSchedule}
+var Kinds = []Kind{KindSeat, KindSchedule, KindPerson}
 
 // Valid reports whether a kind off the wire is one this build knows.
 func (k Kind) Valid() bool { return slices.Contains(Kinds, k) }
@@ -72,6 +103,12 @@ type Subject struct {
 	// Seat is the seat's agent id, on a seat record.
 	Seat string `json:"seat,omitempty"`
 
+	// Person is the person's seat HANDLE, on a person record — the name
+	// the person's credential is bound to. A handle rather than an id,
+	// because a human seat has none: identity is derived for agent seats
+	// alone.
+	Person string `json:"person,omitempty"`
+
 	// ScopeType, ScopeID and Schedule name a schedule, on a schedule
 	// record — the three halves of a schedule's identity the dispatch
 	// ledger keys on.
@@ -85,20 +122,23 @@ func (s Subject) Validate() error {
 	if !s.Kind.Valid() {
 		return fmt.Errorf("usage: %q is not a kind this build writes", s.Kind)
 	}
-	if strings.TrimSpace(s.Node) == "" {
-		return fmt.Errorf("usage: a %s record names no node — the node is half "+
-			"of the object's identity, and the only writer allowed on it", s.Kind)
-	}
-	if _, err := period.Parse(period.Day, s.Day, nil); err != nil {
-		return fmt.Errorf("usage: a %s record's day: %w", s.Kind, err)
+	if err := s.validateShared(); err != nil {
+		return err
 	}
 	switch s.Kind {
 	case KindSeat:
 		if strings.TrimSpace(s.Seat) == "" {
 			return fmt.Errorf("usage: a seat record names no seat")
 		}
-		if s.ScopeType != "" || s.ScopeID != "" || s.Schedule != "" {
-			return fmt.Errorf("usage: a seat record names a schedule")
+		if s.ScopeType != "" || s.ScopeID != "" || s.Schedule != "" || s.Person != "" {
+			return fmt.Errorf("usage: a seat record names a schedule or a person")
+		}
+	case KindPerson:
+		if strings.TrimSpace(s.Person) == "" {
+			return fmt.Errorf("usage: a person record names no person")
+		}
+		if s.Seat != "" || s.ScopeType != "" || s.ScopeID != "" || s.Schedule != "" {
+			return fmt.Errorf("usage: a person record names a seat or a schedule")
 		}
 	case KindSchedule:
 		if strings.TrimSpace(s.ScopeType) == "" || strings.TrimSpace(s.ScopeID) == "" ||
@@ -107,18 +147,62 @@ func (s Subject) Validate() error {
 				"scope id and schedule, and names %q/%q/%q",
 				s.ScopeType, s.ScopeID, s.Schedule)
 		}
-		if s.Seat != "" {
-			return fmt.Errorf("usage: a schedule record names a seat")
+		if s.Seat != "" || s.Person != "" {
+			return fmt.Errorf("usage: a schedule record names a seat or a person")
 		}
 	}
 	return nil
 }
 
+// validateShared checks the two segments every kind's identity begins with —
+// the node and the day — which is all a build can check of a kind it does not
+// know.
+func (s Subject) validateShared() error {
+	if strings.TrimSpace(s.Node) == "" {
+		return fmt.Errorf("usage: a %s record names no node — the node is half "+
+			"of the object's identity, and the only writer allowed on it", s.Kind)
+	}
+	if _, err := period.Parse(period.Day, s.Day, nil); err != nil {
+		return fmt.Errorf("usage: a %s record's day: %w", s.Kind, err)
+	}
+	return nil
+}
+
+// validateFor is [Subject.Validate] as the envelope applies it to a record of
+// version v.
+//
+// A KIND THIS BUILD DOES NOT KNOW, ON A RECORD ABOVE [RecordVersion], IS A
+// NEWER BUILD'S, and the envelope admits it with only the node and the day
+// checked, so the second pass retains it as [ErrFutureVersion]. The envelope
+// is the half every build must read, and refused here the record was an
+// unreadable envelope — which the framework treats as a STOP of the whole
+// applier rather than a deferral of one record. So every kind a later build
+// added stopped every node still on this one, which is the opposite of what
+// [Kind] promised. Below the day this build cannot read the subject's fields at
+// all, so the record is filed under the identity its writer stated
+// ([RecordEnvelope.SubjectID]) — which is NOT a label: on this compacted
+// domain a deferred record supersedes whatever was retained under its
+// subject, so a subject composed from the fields this build does know would
+// make every object of the new kind on one day one object. The deferred
+// record keeps its whole payload, and the build that can read it applies it.
+//
+// AT OR BELOW [RecordVersion] AN UNKNOWN KIND IS A WRITER FAULT rather than a
+// newer build, because a version this build reads is one whose kinds it knows.
+func (s Subject) validateFor(v int) error {
+	if !s.Kind.Valid() && v > RecordVersion {
+		return s.validateShared()
+	}
+	return s.Validate()
+}
+
 // segments is the object's identity below its kind, in the order the subject
 // is built: node, day, then the object.
 func (s Subject) segments() []string {
-	if s.Kind == KindSchedule {
+	switch s.Kind {
+	case KindSchedule:
 		return []string{s.Node, s.Day, s.ScopeType, s.ScopeID, s.Schedule}
+	case KindPerson:
+		return []string{s.Node, s.Day, s.Person}
 	}
 	return []string{s.Node, s.Day, s.Seat}
 }
@@ -157,7 +241,7 @@ func (s Subject) ScopePath() string {
 
 // RecordEnvelope is the half EVERY build can read, for ever.
 //
-// Its SEVEN keys are reserved at the top level of the format for its life: a
+// Its EIGHT keys are reserved at the top level of the format for its life: a
 // later version may add fields beside them and may never repurpose one.
 type RecordEnvelope struct {
 	// V is the record version.
@@ -169,6 +253,20 @@ type RecordEnvelope struct {
 
 	// Subject is the object this record is about.
 	Subject Subject `json:"subject"`
+
+	// SubjectID is the object's identity below its kind as its WRITER
+	// composed it — [Subject.ID] — written on every record, and the identity
+	// a build reads for a kind it does not know ([RecordEnvelope.Wire]).
+	//
+	// THE SUBJECT IS THE SUPERSEDE KEY, not a label: this domain replays
+	// compacted, and a deferred record is retained under its subject with
+	// whatever an earlier one held there deleted first. A kind a later build
+	// adds is keyed on fields this one cannot decode, so composed here from
+	// what it can, every object of that kind on one (node, day) was ONE
+	// subject — and the second retained deleted the first, a day nothing
+	// re-derives once yesterday has passed. The writer's own composition is
+	// the one every build can read verbatim.
+	SubjectID string `json:"subject_id,omitempty"`
 
 	// CreatedAt is the writer's own clock. Reported, never ordered on.
 	CreatedAt time.Time `json:"created_at,omitzero"`
@@ -184,18 +282,54 @@ type RecordEnvelope struct {
 	Scope statelog.ScopeSet `json:"scope"`
 }
 
+// Wire is the subject the framework files this record under: the one its
+// kind's own fields compose when this build knows the kind, and the one its
+// writer composed ([RecordEnvelope.SubjectID]) when it does not.
+func (e RecordEnvelope) Wire() statelog.Subject {
+	if !e.Subject.Kind.Valid() {
+		return statelog.Subject{Kind: string(e.Subject.Kind), ID: e.SubjectID}
+	}
+	return e.Subject.Wire()
+}
+
+// validateSubjectID holds the writer's identity to the subject it names.
+//
+// FOR A KIND THIS BUILD KNOWS, the two must be one: a record whose stated
+// identity names another object than its fields is a writer fault, and filed
+// under either it would supersede the wrong row. FOR ONE IT DOES NOT, the
+// identity is required — every build that can write a kind this one lacks
+// writes it — and must begin with the subject's own node and day, which is
+// all this build can check and what keeps a record in its writer's own
+// namespace.
+func (e RecordEnvelope) validateSubjectID() error {
+	if e.Subject.Kind.Valid() {
+		if e.SubjectID != "" && e.SubjectID != e.Subject.ID() {
+			return fmt.Errorf("usage: the record on %s states its identity as %q", e.Subject, e.SubjectID)
+		}
+		return nil
+	}
+	prefix := coord.DocumentKey(e.Subject.Node, e.Subject.Day) + coord.KeySeparator
+	if !strings.HasPrefix(e.SubjectID, prefix) || len(e.SubjectID) == len(prefix) {
+		return fmt.Errorf("usage: the %s record of a newer build states its identity as %q, "+
+			"which does not name an object under its own node and day — every build "+
+			"that writes a kind this one lacks states it", e.Subject.Kind, e.SubjectID)
+	}
+	return nil
+}
+
 // Record is one node's day for one object.
 type Record struct {
 	RecordEnvelope
 
 	// Handle and Role name a seat as its day knew it. A seat's id is
 	// derived and outlives both, so a reader that has only the id — a seat
-	// removed since — still has a name to show.
+	// removed since — still has a name to show. On a person's record Role
+	// is the person's seat's role, and the handle is the subject's own.
 	Handle string `json:"handle,omitempty"`
 	Role   string `json:"role,omitempty"`
 
-	// Tokens are a seat's spend, one entry per (phase, worker, model,
-	// provider key).
+	// Tokens are a seat's or a person's spend, one entry per (phase,
+	// worker, model, provider key).
 	Tokens []Tokens `json:"tokens,omitempty"`
 
 	// Turns are a seat's turn statistics. Present on every seat record,
@@ -271,7 +405,7 @@ type Fire struct {
 // what it does not. LISTED RATHER THAN REFLECTED, for the vector record's
 // reason: the list is the format's own reserved set.
 var knownKeys = []string{
-	"v", "op_id", "subject", "created_at", "gen", "writer", "scope",
+	"v", "op_id", "subject", "subject_id", "created_at", "gen", "writer", "scope",
 	"handle", "role", "tokens", "turns", "reads", "reads_elided", "fires",
 }
 
@@ -286,7 +420,10 @@ func DecodeEnvelope(payload []byte) (RecordEnvelope, error) {
 			"every record states its version, and one that does not cannot be "+
 			"told apart from a newer build's", env.V)
 	}
-	if err := env.Subject.Validate(); err != nil {
+	if err := env.Subject.validateFor(env.V); err != nil {
+		return RecordEnvelope{}, err
+	}
+	if err := env.validateSubjectID(); err != nil {
 		return RecordEnvelope{}, err
 	}
 	if env.Scope.Empty() {
@@ -370,18 +507,50 @@ func (r Record) validateBody() error {
 			return fmt.Errorf("usage: the schedule record on %s carries a seat's "+
 				"spend, turns or reads", r.Subject)
 		}
+	case KindPerson:
+		if r.Turns != nil || len(r.Reads) > 0 || r.ReadsElided != 0 || len(r.Fires) > 0 ||
+			r.Handle != "" {
+			return fmt.Errorf("usage: the person record on %s carries a seat's turns, "+
+				"reads or handle, or a schedule's fires — a person's day is its spend "+
+				"alone, named by its subject", r.Subject)
+		}
 	}
 	return nil
 }
 
-// Encode writes a record.
+// minimumVersion is the lowest version r may be stamped at under
+// [versionedFields]: one where it carries nothing the base format lacked.
+func (r Record) minimumVersion() (int, error) {
+	body, err := json.Marshal(r)
+	if err != nil {
+		return 0, err
+	}
+	return versionedFields.Minimum("", body)
+}
+
+// Encode writes a record, stamped with the lowest version that reads it.
+//
+// A RECORD STAMPED BELOW ITS FIELDS IS REFUSED: a record carrying a field a
+// build at that version does not read would be one that build reads as a
+// writer fault on every redelivery rather than defers, which is the opposite
+// of what a rolling upgrade promises.
 func (r Record) Encode() ([]byte, error) {
+	want, stampErr := r.minimumVersion()
+	if stampErr != nil {
+		return nil, fmt.Errorf("usage: stamp the record on %s: %w", r.Subject, stampErr)
+	}
 	if r.V == 0 {
-		r.V = RecordVersion
+		r.V = want
+	}
+	if r.V < want {
+		return nil, fmt.Errorf("usage: the %s record on %s is version %d, and it "+
+			"carries a field introduced at version %d", r.Subject.Kind, r.Subject, r.V, want)
 	}
 	if err := r.Subject.Validate(); err != nil {
 		return nil, err
 	}
+	// THE IDENTITY, written on every record — see [RecordEnvelope.SubjectID].
+	r.SubjectID = r.Subject.ID()
 	if r.Scope.Empty() {
 		r.Scope = statelog.ScopeSet{Paths: []string{r.Subject.ScopePath()}}
 	}

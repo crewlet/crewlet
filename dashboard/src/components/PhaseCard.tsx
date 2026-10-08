@@ -96,6 +96,7 @@ import {
   decisionLabel,
   decisionTone,
   phaseDuration,
+  transcriptLength,
   type PhaseRecord,
   type Refusal,
   type Round,
@@ -901,13 +902,10 @@ export function PhaseCard({
             </section>
           )}
           {codingRun && record.transcript && (
-            // LAZY and closed: the engine caps it at 256 KiB, which is a
-            // long log to mount for a reader who came for the report.
-            <Disclosure
-              title="Activity"
-              count={`${record.transcript.split("\n").length} lines`}
-              lazy
-            >
+            // LAZY and closed: the engine bounds it at 256 KiB — its start
+            // and its end — which is a long log to mount for a reader who
+            // came for the report. The count says when it is not the whole.
+            <Disclosure title="Activity" count={transcriptLength(record)} lazy>
               <p className="prose mono">{record.transcript}</p>
             </Disclosure>
           )}

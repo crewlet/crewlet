@@ -12,7 +12,7 @@ subcommand below is served by it.
 | `crewlet run [config.yaml]` | Read Tier A bootstrap (positional, or `-config`; default `./crewlet.yaml`), connect to DB, run engine; falls into unconfigured state if no active revision |
 | `crewlet validate [file.yaml]` | Validate a Tier A or Tier B YAML and print a summary (`-json` for located, classified problems and warnings); with no positional it checks both tiers via `-config` and `-company` |
 | `crewlet migrate [config.yaml]` | Apply pending schema migrations (Tier A file, default `./crewlet.yaml`). Every process migrates on open, so this is a way to do it *without* starting one — `-check` reports pending work and exits non-zero without applying it |
-| `crewlet budgets show [config]` | Print each scope's day, ISO week and month on the company clock — spend, ceiling (`unlimited` where none), the engine's `STATE` (`ok`, `near`, `refusing`), when the window turns over and `REFUSING SINCE` — read from a running node, because the counters are the fleet's and not this file's. There is no reset: a window's allowance comes back when the window turns over |
+| `crewlet budgets show [config]` | Print each scope's day, ISO week and month on the company clock — spend, ceiling (`unlimited` where none), the engine's `STATE` (`ok`, `near`, `refusing`), when the window turns over and `LAST REFUSED` — read from a running node, because the counters are the fleet's and not this file's. There is no reset: a window's allowance comes back when the window turns over |
 | `crewlet backup -dir PATH [config]` | Copy a running node's store files **and** its stream estate into one verified directory on the *engine's* host — the only way to copy either, since the store is locked to that process and the embedded broker binds no socket. See [Backups & Restore](../guides/backup.md) |
 | `crewlet retention status [config]` | What each domain's log is holding, what the trim concluded and which of the six terms is stopping it, every node's position, and what this node costs to replace. **Exits non-zero when any alarm is active**, printing each one's measurement and remedy on stderr — the hook for your own cron |
 | `crewlet retention snapshots [config]` | The per-node snapshot inventory: what each machine holds, per domain, how old and how large — or why it holds none. The question you ask when a join fails |
@@ -556,23 +556,32 @@ per window**: the company's day, week and month, then each seat's.
 ```
 Windows on the company clock: Europe/Berlin
 
-SCOPE  PERIOD  WINDOW      USED     LIMIT      STATE     RESETS AT             REFUSING SINCE
+SCOPE  PERIOD  WINDOW      USED     LIMIT      STATE     RESETS AT             LAST REFUSED
 org    day     2026-09-23  2710450  3000000    near      2026-09-23T22:00:00Z  -
 org    week    2026-W39    9120045  unlimited  ok        2026-09-27T22:00:00Z  -
 org    month   2026-09     31004188 unlimited  ok        2026-09-30T22:00:00Z  -
-eng    day     2026-09-23  99120    100000     refusing  2026-09-23T22:00:00Z  2026-09-23T07:29:51Z
+eng    day     2026-09-23  102120   100000     refusing  2026-09-23T22:00:00Z  2026-09-23T07:29:51Z
 …
 ```
 
 A window no ceiling caps still shows its spend, with a `LIMIT` of `unlimited`.
 `STATE` is the engine's own judgement, the one every surface shows: `refusing`
-when the gate has turned a charge away in the window or no charge fits, `near`
-at nine tenths of the ceiling, `ok` otherwise. `REFUSING SINCE` is when that
-window last turned a charge away, or `-` while it has not. Read those rather
-than `USED` against `LIMIT`, because a refused charge increments nothing: a seat
-charged in 3 000-token rounds against a 100 000 ceiling stops near 99 000 and
-its row would otherwise read as headroom. The next charge the scope admits
-clears the stamp, and so does the window turning over.
+when no charge fits — which every window that refused a round reaches, since
+the refused round is counted — `near`
+at nine tenths of the ceiling, `ok` otherwise. `LAST REFUSED` is when that
+window last turned a call away — a round whose charge it refused, or work turned
+away unsent because the window was already full (a turn's next call, a parked
+delivery, a person's question, a reflection pass), which is recorded as the
+gate's refusal too — printed only while its `STATE` is
+`refusing`, and `-` otherwise: a window whose ceiling was raised after it
+refused reads `ok` or `near` and shows `-` there, although it keeps the
+refusal's stamp (`refused_at` on `GET /budgets`) until its next admitted
+charge clears it. A refused round is
+counted like any other, because the vendor billed it, so a window that refused
+one reads `USED` past `LIMIT` by that round — the `eng` day above refused a
+3 000-token round at 99 120 — and every later charge is refused against that
+figure. The next charge the scope admits clears the stamp, and so does the
+window turning over.
 
 `show` refuses rather than printing zeros when the node reports it could not
 read the counter (`durable: false` on the query surface). A counter nobody
@@ -1379,11 +1388,27 @@ same rows — or the node's own file with the engine stopped. With neither
 $ crewlet search eval -store /var/backups/crewlet/2026-09-01/store-replicated.db
 corpus       118432 sources, text-embedding-3-large at 3072 dimensions
 measured     25 queries at depth 150 from 1200 candidates
+first stage  the semantic index: 128 of 1024 lists probed (generation 1099511744562)
+index        measured on 118432 sources: 0.9812 against a 0.9800 floor in its worst shape (container:task), 0 head miss(es)
 recall       0.9761  (floor 0.9312 for this corpus size)
 worst query  0.9467
 head misses  0  (documents dropped from the exact top ten)
-verdict      the two-stage search recovers the exact ranking at the shipped depth
+scan recall  0.9803 with 0 head miss(es) — the same search with the full scan as its first stage
+narrowed     source:page      recall 0.9950  floor 0.9800  head misses 0  (25 of 25 scanned)  — scan 0.9950, 0 head miss(es)
+narrowed     source:task      recall 0.9772  floor 0.9368  head misses 0  — scan 0.9810, 0 head miss(es)
+narrowed     container:task   recall 0.9967  floor 0.9800  head misses 0  (19 of 21 scanned)  — scan 0.9967, 0 head miss(es)
+narrowed     container:page   recall 1.0000  floor 0.9800  head misses 0  (4 of 4 scanned)  — scan 1.0000, 0 head miss(es)
+verdict      the two-stage search recovers the exact ranking at the shipped depth, in every shape
+window       8192 bytes a source (the corpus's opening): a semantic search sees each source's title and body up to it, a keyword search the whole body
+past window  task  2110 of 104208 sources (2.0%), 7.4 MiB of 196.0 MiB of text (3.8%)
+past window  page  9874 of 14224 sources (69.4%), 402.1 MiB of 518.6 MiB of text (77.5%)
 ```
+
+The last three lines are printed on every run: for each corpus, how many
+sources and how much of their text lie past the window each vector was
+computed from — what a search by meaning cannot see, which a keyword search
+still reads ([Knowledge System](../concepts/knowledge-system.md#what-the-quality-of-this-can-and-cannot-be-promised)).
+That part of the report reads every source's whole body.
 
 | Flag | Default | What it does |
 |---|---|---|
@@ -1394,12 +1419,14 @@ verdict      the two-stage search recovers the exact ranking at the shipped dept
 | `-candidates N` | `1200` | The stage-1 candidate depth — the shipped pair |
 | `-model NAME` | most populated | The embedding model to measure |
 | `-dimensions N` | the model's | The width to measure |
+| `-probes N` | the index's own | How many lists of the semantic index to probe. `0` takes the count the index's own training measured; a larger one shows what probing more lists would recall |
+| `-window BYTES` | the smaller of 8 192 and the model's own per-input bound | The bytes of each source the vectors were computed from, for the report of what lies past them. The store does not carry the company's configuration, so state it when `providers.embeddings.max_input_tokens` or `max_batch_tokens` lowers the per-input bound below the model's own — the embedding duty embeds the smaller of 8 192 bytes and that bound |
 | `-fit` | off | Also print the corpus's own mean pairwise cosine, which is the parameter the engine's seeded fixture is fitted from |
-| `-metrics` | off | Print one `key value` line per metric instead of a report, for a collector or a shell |
+| `-metrics` | off | Print one `key value` line per metric instead of a report, for a collector or a shell — the window report included, as `search_eval_window_bytes` and, labelled by `source`, `search_eval_window_sources`, `search_eval_window_beyond_sources`, `search_eval_window_text_bytes` and `search_eval_window_beyond_bytes` |
 
 **It exits non-zero** when the recall is below the floor for that corpus size,
-or when any document was dropped from the exact top ten — so it can go in a
-schedule. Both conditions matter: an aggregate of 0.98 is compatible with
+or when any document was dropped from the exact top ten, in any shape — so it
+can go in a schedule. Both conditions matter: an aggregate of 0.98 is compatible with
 losing exactly the documents that mattered, and a semantic-only document the
 first stage drops leaves the fused answer entirely.
 

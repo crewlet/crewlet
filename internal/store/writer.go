@@ -5,6 +5,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/tokens"
 )
 
 // Category reports the dashboard category an event type is filed under, and
@@ -147,14 +148,32 @@ var tagKeys = map[string]string{
 	"dir":        "dir",
 }
 
-// spendEventType is the one event that carries an LLM call's cost.
+// The two events that carry an LLM call's cost: a phase's record, and an
+// auxiliary record's coalesced calls.
 //
 // Gated on the type rather than on "does the payload happen to have these
 // fields", because several other events carry a `model` or a `turn_id` and a
 // rollup that counted them would be counting calls that never happened.
-const spendEventType = "agent_phase_completed"
+// TWO, and taken from their payload types for the reason [phaseCompleted] is.
+var (
+	phaseSpendType     = types.AgentPhaseCompleted{}.EventType()
+	auxiliarySpendType = types.AuxiliarySpend{}.EventType()
+)
 
-// SpendFor pulls one LLM call's cost out of a phase completion.
+// spendTypes are both, as a SQL `IN (…)` takes them — every read that folds
+// spend lists the same two.
+func spendTypes() (string, []any) {
+	return "?, ?", []any{phaseSpendType, auxiliarySpendType}
+}
+
+// phaseAuxiliary is the phase an auxiliary record is filed under. Its event
+// carries no phase of its own because it is none, and every reader — the
+// rollup's bands, the worker breakdown, the usage cells — already keys the
+// auxiliary model's spend on this value.
+const phaseAuxiliary = string(types.PhaseAuxiliary)
+
+// SpendFor pulls a spend record's cost out of a phase completion or an
+// auxiliary record.
 //
 // Read from the event's serialized form for the same reason [extractTags] is:
 // an event type this build has never heard of still arrives with its fields
@@ -175,14 +194,14 @@ const spendEventType = "agent_phase_completed"
 // per-field accessors exist: it fails the whole call on one wrong-typed
 // field, where these zero only the offender.
 func SpendFor(eventType string, payload []byte) *Spend {
-	if eventType != spendEventType {
+	if eventType != phaseSpendType && eventType != auxiliarySpendType {
 		return nil
 	}
 	var body map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &body); err != nil {
 		// The call happened, and dropping it because its payload would
 		// not decode understates the spend this exists to report.
-		return &Spend{}
+		return &Spend{Calls: 1}
 	}
 	spend := &Spend{
 		Phase:        jsonString(body["phase"]),
@@ -199,6 +218,18 @@ func SpendFor(eventType string, payload []byte) *Spend {
 		CacheReadTokens:  jsonInt(body["cache_read_tokens"]),
 		CacheWriteTokens: jsonInt(body["cache_write_tokens"]),
 		ProviderKey:      jsonString(body["provider_key"]),
+		Calls:            phaseCalls(body),
+	}
+	if eventType == auxiliarySpendType {
+		// THE AUXILIARY MODEL'S SPEND, filed where every reader already
+		// looks for it: phase `auxiliary`, its purpose as the worker. The
+		// record names no phase, host phase or iteration of its own, and its
+		// calls are the ones it coalesced — at least the one that produced
+		// it.
+		spend.Phase, spend.HostPhase, spend.Iteration = phaseAuxiliary, "", 0
+		spend.Worker = jsonString(body["purpose"])
+		spend.Stage = jsonString(body["stage"])
+		spend.Calls = max(jsonInt(body["calls"]), 1)
 	}
 	if spend.Model == "" {
 		// An entry that names no model is identified by the provider
@@ -206,6 +237,19 @@ func SpendFor(eventType string, payload []byte) *Spend {
 		spend.Model = jsonString(body["provider_key"])
 	}
 	return spend
+}
+
+// phaseCalls is a phase record's provider calls, by [tokens.PhaseCalls] — the
+// rule the live projection counts by too.
+//
+// The list is counted, never decoded: a phase can run a hundred rounds and this
+// runs on the publishing goroutine of every LLM call.
+func phaseCalls(body map[string]json.RawMessage) int {
+	var rounds []json.RawMessage
+	if raw, ok := body["rounds"]; ok {
+		_ = json.Unmarshal(raw, &rounds)
+	}
+	return tokens.PhaseCalls(len(rounds), jsonInt(body["rounds_used"]))
 }
 
 // ExtractTags pulls the filterable dimensions out of an event's serialized

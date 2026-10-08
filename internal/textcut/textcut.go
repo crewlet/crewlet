@@ -7,7 +7,9 @@
 // appended "…" and two appended "...", so the same cut read differently
 // depending on which subsystem made it. Copies that agree today are copies
 // that can stop agreeing. A fifth, the sandbox runner's private tail cut and
-// the only one that kept the END, became [Tail].
+// the only one that kept the END, became [Tail] — and so did a sixth, the
+// in-flight progress frame's own end-of-round cut in internal/agent/runner,
+// the same rule written out again under the name of the bound it served.
 //
 // The rule they each re-derive is this: a plain s[:n] splits whatever
 // multi-byte character straddles the boundary and yields invalid UTF-8. What
@@ -17,34 +19,25 @@
 // once the input stops being ASCII, which in a company's traffic is a matter
 // of when rather than whether.
 //
-// # The other shared cut, and why it is not this one
-//
-// [github.com/crewlet/crewlet/internal/agent/ledger.Elide] is also an exported,
-// marked, rune-safe head cut, and its doc makes this package's own argument:
-// "Two trimming functions would eventually disagree about where a limit falls
-// and whether the cut is marked." They are still separate on purpose, because
-// they disagree about the two things that matter most at a call site:
-//
-//   - ITS BUDGET IS RUNES, this one's is BYTES. A ledger budget is a character
-//     count an operator configured; a payload cap and a log field are bytes.
-//   - A LIMIT OF 0 MEANS UNBOUNDED THERE and empty HERE. Review's
-//     single-iteration evidence log depends on 0 leaving the text verbatim,
-//     and a payload cap of 0 that returned the whole payload would be the
-//     opposite of a cap.
-//
-// Folding them together would mean one of those two contracts changing
-// silently under callers that rely on it, so the honest answer is two
-// functions whose docs point at each other rather than one that quietly
-// means different things in different packages.
-//
 // # Cutting is the last resort, not the first
 //
 // Most of what this package once shortened is no longer shortened at all, and
 // that is the better fix wherever it is available: content a turn reasons over
-// is passed whole, and a value with a vendor limit is REFUSED with a message
-// naming the field rather than silently cut to fit. What is left here is the
-// cases where cutting is genuinely right — a diagnostic, a log field, a prompt
-// budget — where the alternative to a bounded string is an unbounded one.
+// is passed whole, a value with a vendor limit is REFUSED with a message
+// naming the field rather than silently cut to fit, and text that genuinely
+// has to fit a budget a model reads is REWRITTEN to fit by
+// [github.com/crewlet/crewlet/internal/compact] — never cut by this package.
+// What is left here is the cases where no reader takes the text for the whole
+// of something: a diagnostic or a process's tail past a transport ceiling, a
+// marked preview of what the reader can open (a search snippet, an inbox
+// excerpt), an identifier with a length limit — which keeps a digest of the
+// whole beside the cut, so two that shorten alike still differ — and
+// EMBEDDING INPUT, which no reader sees at all: its bound is the embedding
+// model's, its rule is internal/providers/embeddings (Opening for a caller
+// that embeds an opening, EmbedWhole for one that represents the whole text),
+// and it is unmarked because a marker there would be a token in the vector
+// rather than a note about one. Every cut is one of those, and a cut that is
+// none of them is the bug this package was written to remove.
 package textcut
 
 import "unicode/utf8"
@@ -124,14 +117,16 @@ func Bytes(s string, max int) string {
 // marker in front where it was cut.
 //
 // The mirror of [Ellipsis], for the one kind of text whose useful end is the
-// end: a process's own account of itself — a coding run's activity log, its
-// stderr — where the most recent activity and the conclusion are what a reader
-// wants and the head (a clone, a dependency install, a banner) is the least
-// interesting thing to drop. The same two rules hold: the marker is not
-// counted against max, because the cap bounds the content, and the cut never
-// lands inside a rune, because a byte slice taken from the end begins mid-rune
-// whenever the text is not ASCII and a JSON encoder turns that partial rune
-// into U+FFFD.
+// end: a process's own account of itself watched live — the last few KiB of a
+// running coding job's activity log or its stderr, where what a watcher asks
+// is what it is doing now — and the end of one line too long to keep whole,
+// which is where a process says what went wrong. It is never how a whole log
+// is bounded for a record: that keeps whole lines from both ends and counts
+// the middle, because a log's opening is its plan and a cut to its end loses
+// it. The same two rules hold: the marker is not counted against max, because
+// the cap bounds the content, and the cut never lands inside a rune, because a
+// byte slice taken from the end begins mid-rune whenever the text is not ASCII
+// and a JSON encoder turns that partial rune into U+FFFD.
 //
 // It replaced a private rune-counting `tail` in the sandbox's coding-agent
 // runner — a fifth copy of this package's rule, and the only one whose budget

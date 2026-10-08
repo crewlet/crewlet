@@ -6,8 +6,11 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -60,10 +63,11 @@ func (e *Engine) buildReflectionWorkers(c *Company) []learning.Worker {
 	}
 
 	// EVERY WORKER RESOLVES ITS MODEL THROUGH THIS, so auxiliary spend is
-	// charged against the same fleet counter a turn is. Wrapping the seam
-	// rather than each call site is what makes a worker added later charge
-	// without anyone remembering to — see learningbudget.go.
-	models := e.meteredModelsFor(c)
+	// charged against the same fleet counter a turn is and recorded in the
+	// spend history beside it. Wrapping the seam rather than each call site
+	// is what makes a worker added later charge and record without anyone
+	// remembering to — see auxiliary.go.
+	models := e.auxiliaryFor(c)
 	if models == nil {
 		// A COMPANY WITH NO MODELS is a valid one (see nomodels.go), and the
 		// workers that call a model are waiting for a provider rather than
@@ -78,7 +82,8 @@ func (e *Engine) buildReflectionWorkers(c *Company) []learning.Worker {
 
 	var workers []learning.Worker
 	if models != nil && cfg.Reflect.Enabled.Or(true) && cfg.Reflect.PersistDecider.Or(true) {
-		decider, err := learning.NewPersistDecider(models, learning.NewDiary(db),
+		decider, err := learning.NewPersistDecider(models,
+			learning.NewDiary(db, learning.WithEmbed(e.embedText)),
 			learning.PersistOptions{MaxTokens: cfg.Reflect.BudgetTokens})
 		if err != nil {
 			log.Warn("persist_decider_unavailable", "error", err,
@@ -95,8 +100,14 @@ func (e *Engine) buildReflectionWorkers(c *Company) []learning.Worker {
 	// `episodic.enabled` in the config because the read-side knobs
 	// (retrieval_limit) presuppose rows exist — a company that wants no
 	// episodic memory turns learning off entirely.
+	//
+	// Its embedder is READ AT CALL TIME (see [Engine.embedText]). The
+	// workers happen to be rebuilt after the apply stores its embedder, so
+	// a captured one would be current today only because of the order of
+	// two calls in the apply — the order that put the pull tools a whole
+	// epoch behind. Read per call, it is current by construction.
 	episodist, err := learning.NewEpisodist(learning.NewEpisodes(db),
-		learning.EpisodistOptions{Embed: e.embedder()})
+		learning.EpisodistOptions{Embed: e.embedText})
 	if err != nil {
 		log.Warn("episodist_unavailable", "error", err,
 			"detail", "no episode will be recorded, so recall and skill "+
@@ -254,8 +265,10 @@ func (e *Engine) attachReflection(_ context.Context, c *Company) error {
 	if c == nil || e.backends == nil || e.backends.Queue == nil {
 		return nil
 	}
+	// THE NODE'S LEDGER, flushed for a turn before its pass's sentinel: the
+	// pass runs here, so what its workers' calls cost is in this ledger.
 	reflector, err := learning.NewReflector(c.Org, e.backends.Queue,
-		e.buildReflectionWorkers(c), e.learningBudget(c))
+		e.buildReflectionWorkers(c), e.learningBudget(c), e.auxSpend)
 	if err != nil {
 		return fmt.Errorf("engine: build the reflect dispatcher: %w", err)
 	}
@@ -461,7 +474,7 @@ func (e *Engine) learningPasses(ctx context.Context, c *Company) learning.Backgr
 	// least wants unsupervised, so no summarizer means no pass at all: the
 	// rows stay raw and readable rather than being dropped unfolded.
 	if summarize := e.auxSummarizer(c); summarize != nil {
-		passes.Lifecycle = learning.NewLifecycle(db, learning.NewSummarizer(summarize),
+		passes.Lifecycle = learning.NewLifecycle(db, learning.NewSummarizer(summarize, e.episodeFit(c)),
 			lifecycleOptions(&cfg.EpisodeLifecycle))
 	} else {
 		log.WarnContext(ctx, "episode_compaction_unavailable",
@@ -535,7 +548,7 @@ func (e *Engine) clusteringPass(c *Company) *learning.Synthesizer {
 	}
 	opts := synthesizerOptions(cfg)
 	opts.Episodes = learning.NewEpisodes(db)
-	built, err := learning.NewSynthesizer(e.meteredModelsFor(c), learning.NewSkills(db), opts)
+	built, err := learning.NewSynthesizer(e.auxiliaryFor(c), learning.NewSkills(db), opts)
 	if err != nil {
 		log.Warn("skill_clustering_unavailable", "error", err,
 			"detail", "scheduler_enabled is on but no clustering pass could be "+
@@ -650,7 +663,8 @@ func hours(n int) time.Duration {
 // compaction entirely — see the caller for why a delete-only pass is worse
 // than no pass.
 func (e *Engine) auxSummarizer(c *Company) learning.CompleteFunc {
-	if c.Models == nil {
+	seam := e.auxiliaryFor(c)
+	if seam == nil {
 		return nil
 	}
 	if !anySeatHasAuxiliary(c) {
@@ -661,7 +675,10 @@ func (e *Engine) auxSummarizer(c *Company) learning.CompleteFunc {
 		if seat == nil {
 			return "", fmt.Errorf("engine: compaction for %q: this revision has no such role", role)
 		}
-		member, err := e.meteredModelsFor(c).Head(seat, phase.Auxiliary)
+		// A BACKGROUND PASS, on no turn: the lifecycle worker compacts a
+		// seat's old episodes on its own schedule.
+		member, err := seam.Auxiliary(seat, auxspend.Use{Stage: types.AuxStageBackground,
+			Purpose: types.AuxEpisodeCompaction})
 		if err != nil {
 			return "", fmt.Errorf("engine: compaction for %q: %w", role, err)
 		}
@@ -683,6 +700,36 @@ func (e *Engine) auxSummarizer(c *Company) learning.CompleteFunc {
 			return "", nil
 		}
 		return completion.Content, nil
+	}
+}
+
+// episodeFit is the compaction pass's [learning.FitFunc]: the epoch's
+// compactor, on the role the cluster belongs to, with the rewrite
+// instructions for the field it is asked about.
+//
+// Nil where the company has no models, which the summarizer reads as "carry
+// every field whole" — the call is then larger, never wrong.
+func (e *Engine) episodeFit(c *Company) learning.FitFunc {
+	fitter := e.compactorFor(c)
+	if fitter == nil {
+		return nil
+	}
+	return func(ctx context.Context, role string, field learning.EpisodeField, text string, budget int) (string, error) {
+		seat := c.Org.Role(role)
+		if seat == nil {
+			return "", fmt.Errorf("engine: condensing an episode for %q: this revision has no such role", role)
+		}
+		kind := compact.KindTask
+		if field == learning.FieldOutcome {
+			kind = compact.KindOutcome
+		}
+		// The background stage, as the summary it feeds is.
+		res, err := fitter.For(seat, auxspend.Use{Stage: types.AuxStageBackground}).
+			Fit(ctx, kind, text, budget)
+		if err != nil {
+			return "", err
+		}
+		return res.Text, nil
 	}
 }
 

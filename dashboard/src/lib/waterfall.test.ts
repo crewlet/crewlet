@@ -289,6 +289,47 @@ describe("buildWaterfall", () => {
     expect(w.to).toBe(T0 + 11_500);
   });
 
+  // THE REFLECTION'S WORKERS ARE WHAT THEY SPENT: one span per
+  // `auxiliary_spend` of the `reflection` stage, from its first call to its
+  // last — and the in-turn records are not reflection, so they are not here.
+  test("the reflection lane draws the reflection stage's spend records, and only those", () => {
+    const { events, phases } = settledTurn();
+    const w = buildWaterfall({
+      events: [
+        ...events,
+        event("agent_turn_completed", 11_100),
+        event("auxiliary_spend", 11_400, {
+          stage: "reflection",
+          purpose: "persist_decider",
+          model: "haiku",
+          calls: 2,
+          failed_calls: 1,
+          started_at: iso(11_200),
+          ended_at: iso(11_400),
+        }),
+        event("auxiliary_spend", 900, {
+          stage: "turn",
+          purpose: "memory_filter",
+          model: "haiku",
+          calls: 1,
+          started_at: iso(500),
+          ended_at: iso(900),
+        }),
+        event("reflection_completed", 11_500),
+      ],
+      phases,
+      now: T0 + 60_000,
+      running: false,
+      parked: false,
+    });
+    const workers = w.spans.filter((s) => s.kind === "worker");
+    expect(workers.map((s) => [s.label, s.sub, s.start, s.end, s.failed])).toEqual([
+      ["persist decider", "haiku · 2 calls", T0 + 11_200, T0 + 11_400, true],
+    ]);
+    const reflection = byId(w.spans, "reflection");
+    expect([reflection.start, reflection.end]).toEqual([T0 + 11_100, T0 + 11_500]);
+  });
+
   test("a record with no instants is listed as untimed, never drawn at an invented place", () => {
     const untimed = phaseRecord({ key: "turn-1|execute|1", at: "", startedAt: "", durationMs: 0 });
     const w = buildWaterfall({

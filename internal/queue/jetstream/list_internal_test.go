@@ -1,7 +1,9 @@
 package jetstream
 
 import (
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/nats-io/nats.go/jetstream"
 
@@ -111,5 +113,26 @@ func TestAStreamThisBackendDidNotProvisionIsNotListed(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("ListSubscriptions(>) = %v, want nothing from a stream this backend does not own", got)
+	}
+}
+
+// A NAME SHORTENED TO FIT IS STILL TEXT. Every derived consumer name cuts its
+// readable half to a length and keeps a digest of the exact pair after it; the
+// cut was a byte slice, so a long group or node id with a multi-byte character
+// at the cut became a name that is not valid UTF-8.
+func TestAShortenedConsumerNameIsCutOnACharacter(t *testing.T) {
+	t.Parallel()
+	wide := strings.Repeat("é", consumerNameMax)
+	for name, got := range map[string]string{
+		"subscription":  consumerName("t.x", "a"+wide),
+		"domain reader": domainConsumerName("CREWLET_TRACKER_LOG", "n"+wide),
+		"domain group":  domainGroupName("CREWLET_TRACKER_LOG", "g"+wide),
+	} {
+		if !utf8.ValidString(got) {
+			t.Errorf("%s: %q is not valid UTF-8", name, got)
+		}
+		if len(got) > consumerNameMax {
+			t.Errorf("%s: %d bytes, past the %d-byte bound", name, len(got), consumerNameMax)
+		}
 	}
 }

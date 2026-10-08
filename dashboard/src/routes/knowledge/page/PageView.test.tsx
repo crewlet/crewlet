@@ -20,7 +20,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { reloadForTest } from "~/lib/prefs.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
-import type { PageReadsAnswer } from "~/contract/pages.ts";
+import { PAGE_TITLE_MAX_BYTES, type PageReadsAnswer } from "~/contract/pages.ts";
 import type { PageDetail } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
@@ -594,3 +594,25 @@ function reasonOf(button: HTMLElement): string {
     .map((id) => document.getElementById(id)?.textContent ?? "")
     .join(" ");
 }
+
+// A TITLE PAST THE ENGINE'S CAP IS SAID AND HELD, NEVER CUT. The field carried
+// `maxLength={200}`, which the browser applies by dropping what a paste holds
+// past it — silently, in characters, short of the engine's 256 bytes. Now the
+// whole of what was typed stays in the field, the line under it says by how
+// much it is over, and Write is held with the reason.
+test("a page title past the engine's cap is held whole and said, not cut", async () => {
+  mount(<NewPageDialog container="ENG" onClose={() => {}} />, { viewer: JANE });
+  await settle();
+  const title = screen.getByRole("textbox", { name: "Title" }) as HTMLInputElement;
+  const typed = "t".repeat(PAGE_TITLE_MAX_BYTES + 44);
+  fireEvent.change(title, { target: { value: typed } });
+  await settle();
+  expect(title.value).toBe(typed);
+  expect(document.body.textContent).toContain(
+    `${PAGE_TITLE_MAX_BYTES + 44} bytes — a page's title holds at most ${PAGE_TITLE_MAX_BYTES}.`,
+  );
+  const write = screen.getByRole("button", { name: "Write the page" });
+  expect(write.getAttribute("aria-disabled")).toBe("true");
+  expect(reasonOf(write)).toContain("Shorten the title");
+  expect(posted).toEqual([]);
+});

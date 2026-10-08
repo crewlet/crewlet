@@ -345,14 +345,21 @@ func TestMergeSpendStopsWhereAFullPartStopped(t *testing.T) {
 		{EventID: "pa-10", Timestamp: at(10)},
 	}}
 	var got []string
-	for _, r := range MergeSpend([]spendPart{cut, whole}, 10) {
+	merged, more := MergeSpend([]spendPart{cut, whole}, 10)
+	if !more {
+		t.Error("a merge with a full part says nothing lies past it")
+	}
+	for _, r := range merged {
 		got = append(got, r.EventID)
 	}
 	if !slices.Equal(got, []string{"pb-12", "pa-10", "pa-9"}) {
 		t.Fatalf("merged %v, want pb-12, pa-10, pa-9 and nothing past the cut", got)
 	}
-	if n := len(MergeSpend([]spendPart{whole}, 1)); n != 1 {
-		t.Errorf("a merge cut at one kept %d", n)
+	if kept, more := MergeSpend([]spendPart{whole}, 1); len(kept) != 1 || !more {
+		t.Errorf("a merge cut at one kept %d (more %v), want one and more behind it", len(kept), more)
+	}
+	if _, more := MergeSpend([]spendPart{whole}, 10); more {
+		t.Error("a merge of one whole part says more lies past it")
 	}
 }
 
@@ -370,7 +377,7 @@ func TestMergeSpendStopsWhereAFullPartStopped(t *testing.T) {
 func TestASpendRecordIsOneRowByItsInstantAndItsID(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
-	got := MergeSpend([]spendPart{
+	got, _ := MergeSpend([]spendPart{
 		{Records: []tokens.Record{{EventID: "p-1", Timestamp: at.Format(time.RFC3339Nano), TotalTokens: 5}}},
 		{Records: []tokens.Record{
 			{EventID: "p-1", Timestamp: at.In(time.FixedZone("x", 3600)).Format(time.RFC3339Nano), TotalTokens: 5},
@@ -445,10 +452,10 @@ func TestAMergedTraceStopsWhereANodesUnsentRowsBegin(t *testing.T) {
 // [MergeTrace]'s reason — and its ending is still the turn's last rows.
 //
 // The peer holds 600 rows of the turn and sends its opening and its ending,
-// the 80 between unsent — or, cut to fit the transport, more; the asker holds
+// the rows between unsent — or, cut to fit the transport, more; the asker holds
 // ten rows in that gap. Shown in the opening, they would sit past a hole the
 // opening does not admit to, and they are not in the ending either, which is
-// the peer's last twenty.
+// the peer's last [TurnClosingEvents].
 //
 // Mutation: drop the cut at the oldest last sent row from [MergeTurn], and
 // both cases show the asker's rows past the peer's opening.
@@ -486,10 +493,11 @@ func TestAMergedTurnsOpeningStopsWhereANodesUnsentRowsBegin(t *testing.T) {
 				t.Errorf("the opening ends at %s, want the peer's last sent row %s",
 					opening[len(opening)-1].ID, c.last)
 			}
-			if ending := rows[len(rows)-TurnClosingEvents:]; ending[0].ID != "a0581" ||
+			first := fmt.Sprintf("a%04d", len(peer)-TurnClosingEvents+1)
+			if ending := rows[len(rows)-TurnClosingEvents:]; ending[0].ID != first ||
 				ending[len(ending)-1].ID != "a0600" {
-				t.Errorf("the ending runs %s … %s, want the turn's last twenty", ending[0].ID,
-					ending[len(ending)-1].ID)
+				t.Errorf("the ending runs %s … %s, want the turn's last %d, %s … a0600",
+					ending[0].ID, ending[len(ending)-1].ID, TurnClosingEvents, first)
 			}
 			if total != c.total {
 				t.Errorf("total = %d, want %d — the gap still reported", total, c.total)

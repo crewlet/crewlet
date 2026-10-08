@@ -524,7 +524,7 @@ const answerRetryFirst = time.Second
 func answeredRun(t *testing.T, store sandbox.PendingStore, turnID string) {
 	t.Helper()
 	ctx := t.Context()
-	if err := store.BeginLaunch(ctx, sandbox.PendingRun{
+	if _, err := store.BeginLaunch(ctx, sandbox.PendingRun{
 		TurnID: turnID, AgentHandle: "swe", Role: "SWE", CodingAgent: "claude-code",
 		ConversationKey: "slack:C1:1.0", PartitionKey: "slack:C1:1.0", CreatedAt: time.Now().UTC(),
 	}, sandbox.Fence{}); err != nil {

@@ -1,10 +1,14 @@
 package codingagent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
@@ -204,7 +208,19 @@ func openCodeMCP(servers map[string]sandbox.MCPServer) map[string]any {
 	return out
 }
 
-// Finished reports whether the streamed output says the agent has stopped.
+// Output is where OpenCode writes: its stdout IS its event stream and its
+// result is derived from it, and the stream's end can say the agent is done
+// before the process exits — which is the hang [OpenCode.Finished] exists for.
+// The stream is the result file the clear removes, so a reused box never shows
+// a job another's.
+func (OpenCode) Output(paths Paths) Output {
+	return Output{Stdout: paths.Result(), Events: true, Terminal: true}
+}
+
+// Events is a new decoder for one stream, read whole or followed ([Decoder]).
+func (OpenCode) Events() Decoder { return &openCodeEvents{} }
+
+// Finished reports whether the stream's end says the agent has stopped.
 //
 // THIS RUNNER NEEDS IT because `opencode run` finishes its work and hangs, so
 // the shell wrapper never reaches the done-marker write. Three terminal
@@ -214,77 +230,216 @@ func openCodeMCP(servers map[string]sandbox.MCPServer) map[string]any {
 //   - a step_finish whose reason is "stop" — the assistant produced its final
 //     message and asked for no further tools (intermediate steps carry
 //     "tool-calls");
-//   - a session.status event reporting idle, on newer builds;
+//   - a session.status event reporting idle, on builds that print it;
 //   - an error event, which is also an ending.
-func (OpenCode) Finished(stdout string) bool {
-	for _, obj := range streamEvents(stdout) {
-		switch eventType(obj) {
-		case "error":
-			return true
-		case "step_finish":
-			if part, ok := obj["part"].(map[string]any); ok {
-				if reason, _ := part["reason"].(string); reason == "stop" {
-					return true
-				}
-			}
-		case "session.status":
-			props, _ := obj["properties"].(map[string]any)
-			status, _ := props["status"].(map[string]any)
-			if kind, _ := status["type"].(string); kind == "idle" {
-				return true
-			}
+//
+// Asked of the stream's END only ([terminalWindow]): the CLI prints a
+// terminal event when its session stops and nothing after it, so an error a
+// session went on from, far up the stream, is no longer read as the end of
+// the run.
+func (OpenCode) Finished(lines string) bool {
+	finished := false
+	_ = eachLine(strings.NewReader(lines), lineFunc(func(line []byte) {
+		ev, ok := decodeOpenCodeEvent(line)
+		if !ok {
+			return
 		}
-	}
-	return false
+		switch ev.Type {
+		case "error":
+			finished = true
+		case "step_finish":
+			finished = finished || ev.Part.Reason == "stop"
+		case "session.status":
+			finished = finished || ev.Properties.Status.Type == "idle"
+		}
+	}))
+	return finished
 }
 
-// Parse reconstructs the answer and a readable transcript from the stream.
+// Parse decodes a whole stream already in hand: the result of a run whose
+// result IS its stream.
 //
 // OpenCode exposes no stable token or cost envelope, so those stay ZERO rather
 // than being estimated: an invented number in the spend rollup is worse than a
 // missing one, because a reader cannot tell it is invented.
 func (OpenCode) Parse(stdout string) sandbox.Result {
-	text := strings.TrimSpace(stdout)
-	if text == "" {
+	return decodeAll(&openCodeEvents{}, stdout)
+}
+
+// openCodeEvent is the part of one stream event this runner reads, and no
+// more: the event carries the tool's whole state, its output included, and a
+// generic map of every field was several times the line it came from.
+//
+// DECODED LOOSELY. A field whose type a CLI version changed is skipped rather
+// than losing the event — see [decodeOpenCodeEvent] — because the nesting has
+// moved across versions and a box runs whatever the operator's image has.
+type openCodeEvent struct {
+	Type  string          `json:"type"`
+	Tool  string          `json:"tool"`
+	Name  string          `json:"name"`
+	Error json.RawMessage `json:"error"`
+	Part  struct {
+		Tool   string         `json:"tool"`
+		Text   string         `json:"text"`
+		Reason string         `json:"reason"`
+		Input  *openCodeInput `json:"input"`
+		State  struct {
+			Status string         `json:"status"`
+			Error  string         `json:"error"`
+			Output string         `json:"output"`
+			Input  *openCodeInput `json:"input"`
+		} `json:"state"`
+	} `json:"part"`
+	Properties struct {
+		Status struct {
+			Type string `json:"type"`
+		} `json:"status"`
+	} `json:"properties"`
+}
+
+// openCodeInput is the part of a tool call's input a transcript line names.
+type openCodeInput struct {
+	Command     string `json:"command"`
+	FilePath    string `json:"filePath"`
+	Path        string `json:"path"`
+	Pattern     string `json:"pattern"`
+	Description string `json:"description"`
+}
+
+// decodeOpenCodeEvent reads one line as an event, or reports that it is not
+// one: a line that is not a JSON object, or a partial one — the stream is
+// flushed live and a read can end mid-line, and the next read has it whole.
+//
+// A TYPE MISMATCH IS NOT A LOST EVENT. encoding/json skips a field whose value
+// does not fit its Go type, decodes the rest, and reports the first such
+// mismatch — so the mismatch is ignored and the event kept, which is what the
+// map lookups this replaced did for free.
+func decodeOpenCodeEvent(line []byte) (openCodeEvent, bool) {
+	line = bytes.TrimSpace(line)
+	if len(line) == 0 || line[0] != '{' {
+		return openCodeEvent{}, false
+	}
+	var ev openCodeEvent
+	if err := json.Unmarshal(line, &ev); err != nil {
+		var mismatch *json.UnmarshalTypeError
+		if !errors.As(err, &mismatch) {
+			return openCodeEvent{}, false
+		}
+	}
+	return ev, true
+}
+
+// openCodeEvents decodes one stream into the answer and a readable
+// transcript, read whole or followed across reads ([Decoder]).
+type openCodeEvents struct {
+	answers    []string
+	transcript transcriptLines
+	errText    string
+	sawEvent   bool
+	sawLine    bool
+
+	// plain is the output while no event has been seen: an older CLI, or a
+	// run captured before the format flag, printed its answer as text, and
+	// the whole of it is the answer then. Held to [sandbox.MaxFileBytes],
+	// the bound the whole read it replaced held it to, with what lies past
+	// it counted rather than kept.
+	plain        strings.Builder
+	plainDropped int64
+
+	// following is a decoder read through Entries, which keeps neither
+	// the answer nor the plain output a Result would need: a live reading
+	// holds it for as long as somebody watches.
+	following bool
+}
+
+// Entries implements [Decoder].
+func (d *openCodeEvents) Entries() []string {
+	d.following = true
+	d.answers = nil
+	d.plain.Reset()
+	return d.transcript.take()
+}
+
+func (d *openCodeEvents) Line(line []byte) {
+	if len(bytes.TrimSpace(line)) == 0 {
+		return
+	}
+	d.sawLine = true
+	ev, ok := decodeOpenCodeEvent(line)
+	if !ok {
+		if !d.sawEvent {
+			d.keepPlain(line)
+		}
+		return
+	}
+	if !d.sawEvent {
+		// The first event: whatever plain text came before it was a banner,
+		// not an answer.
+		d.sawEvent = true
+		d.plain.Reset()
+		d.plainDropped = 0
+	}
+	switch ev.Type {
+	case "text":
+		if chunk := strings.TrimSpace(ev.Part.Text); chunk != "" {
+			if !d.following {
+				d.answers = append(d.answers, chunk)
+			}
+			d.transcript.add(chunk)
+		}
+	case "tool_use":
+		d.transcript.add(toolLine(ev))
+	case "error":
+		d.errText = errorText(ev.Error)
+		d.transcript.add("[error] " + d.errText)
+	}
+}
+
+func (d *openCodeEvents) keepPlain(line []byte) {
+	if d.following {
+		return
+	}
+	if d.plainDropped > 0 || d.plain.Len()+len(line)+1 > sandbox.MaxFileBytes {
+		d.plainDropped += int64(len(line) + 1)
+		return
+	}
+	d.plain.Write(line)
+	d.plain.WriteByte('\n')
+}
+
+func (d *openCodeEvents) Skipped(n int64) {
+	d.sawLine = true
+	if !d.sawEvent {
+		d.plainDropped += n
+		return
+	}
+	d.transcript.skip(n)
+}
+
+func (d *openCodeEvents) Result() sandbox.Result {
+	if !d.sawLine {
 		return sandbox.Result{Error: "the coding agent produced no output"}
 	}
-	events := streamEvents(text)
-	if len(events) == 0 {
+	if !d.sawEvent {
 		// Non-JSON output — an older CLI, or a run captured before the
-		// format flag. The whole blob is the answer.
-		return sandbox.Result{
-			Text: text, Success: true, DeliveredRefs: prPattern.FindAllString(text, -1),
+		// format flag. The whole of it is the answer.
+		text := strings.TrimSpace(d.plain.String())
+		if d.plainDropped > 0 {
+			text += fmt.Sprintf("\n(%s more of the output not read: past the %s a run's plain "+
+				"output is read to)", humanSize(d.plainDropped), humanSize(sandbox.MaxFileBytes))
 		}
+		return sandbox.Result{Text: text, Success: true, DeliveredRefs: prPattern.FindAllString(text, -1)}
 	}
-
-	var answers, transcript []string
-	errText := ""
-	for _, obj := range events {
-		part, _ := obj["part"].(map[string]any)
-		switch eventType(obj) {
-		case "text":
-			chunk := strings.TrimSpace(stringField(part, "text"))
-			if chunk != "" {
-				answers = append(answers, chunk)
-				transcript = append(transcript, chunk)
-			}
-		case "tool_use":
-			transcript = append(transcript, toolLine(part, obj))
-		case "error":
-			errText = errorText(obj["error"])
-			transcript = append(transcript, "[error] "+errText)
-		}
-	}
-	body := strings.TrimSpace(strings.Join(answers, "\n"))
-	success := body != "" && errText == ""
+	body := strings.TrimSpace(strings.Join(d.answers, "\n"))
+	success := body != "" && d.errText == ""
 	res := sandbox.Result{
 		Text:          body,
 		Success:       success,
-		Transcript:    strings.TrimSpace(strings.Join(transcript, "\n")),
+		Transcript:    d.transcript.String(),
 		DeliveredRefs: prPattern.FindAllString(body, -1),
 	}
 	if !success {
-		res.Error = errText
+		res.Error = d.errText
 		if res.Error == "" {
 			res.Error = "the coding agent produced no answer"
 		}
@@ -296,33 +451,36 @@ func (OpenCode) Parse(stdout string) sandbox.Result {
 //
 // Enriched with the call's own input, because a bare tool name is useless when
 // a run fails: what a reader needs is the command that ran. The nesting varies
-// across versions, so every lookup is defensive and falls back to the name.
-// Transcript only — never fed to a model — so a little extra length is fine.
-func toolLine(part, obj map[string]any) string {
-	name := firstString(part["tool"], obj["tool"], obj["name"])
+// across versions, so every lookup falls back to the name. NEVER the tool's
+// output: that is the file a read returned or everything a command printed,
+// which is what the transcript is a summary of — only a failed call's first
+// line, which says why it failed.
+func toolLine(ev openCodeEvent) string {
+	name := firstNonBlank(ev.Part.Tool, ev.Tool, ev.Name)
 	if name == "" {
 		name = "tool"
 	}
-	state, _ := part["state"].(map[string]any)
-	input, _ := state["input"].(map[string]any)
+	input := ev.Part.State.Input
 	if input == nil {
-		input, _ = part["input"].(map[string]any)
+		input = ev.Part.Input
+	}
+	if input == nil {
+		input = &openCodeInput{}
 	}
 
 	line := "[tool] " + name
-	if detail := firstString(
-		input["command"], input["filePath"], input["path"],
-		input["pattern"], input["description"],
+	if detail := firstNonBlank(
+		input.Command, input.FilePath, input.Path, input.Pattern, input.Description,
 	); detail != "" {
 		line += ": " + firstLine(detail, transcriptDetailLimit)
 	}
 
-	status, _ := state["status"].(string)
-	failure := firstString(state["error"])
-	if failure == "" && status == "error" {
-		failure = firstString(state["output"])
+	state := ev.Part.State
+	failure := firstNonBlank(state.Error)
+	if failure == "" && state.Status == "error" {
+		failure = firstNonBlank(state.Output)
 	}
-	if status == "error" || failure != "" {
+	if state.Status == "error" || failure != "" {
 		if failure == "" {
 			failure = "failed"
 		}
@@ -331,70 +489,75 @@ func toolLine(part, obj map[string]any) string {
 	return line
 }
 
-// streamEvents decodes the newline-delimited JSON objects, skipping anything
-// that is not one.
-//
-// Tolerant on purpose: the stream is flushed live and a poll can read it
-// mid-line, so the last entry is routinely a partial object. Dropping it is
-// correct — the next read has it whole.
-func streamEvents(text string) []map[string]any {
-	var out []map[string]any
-	for line := range strings.SplitSeq(text, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || line[0] != '{' {
-			continue
-		}
-		var obj map[string]any
-		if json.Unmarshal([]byte(line), &obj) == nil && obj != nil {
-			out = append(out, obj)
-		}
-	}
-	return out
-}
-
-func eventType(obj map[string]any) string {
-	s, _ := obj["type"].(string)
-	return s
-}
-
-func errorText(v any) string {
-	switch e := v.(type) {
-	case string:
-		return e
-	case nil:
-		return ""
-	default:
-		if blob, err := json.Marshal(e); err == nil {
-			return string(blob)
-		}
+func errorText(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
 		return ""
 	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	// An object: its JSON, compacted, which is how the generic decode this
+	// replaced rendered it.
+	var compacted bytes.Buffer
+	if json.Compact(&compacted, raw) == nil {
+		return compacted.String()
+	}
+	return string(raw)
 }
 
-func firstString(values ...any) string {
+// firstNonBlank is the first value that is not blank.
+func firstNonBlank(values ...string) string {
 	for _, v := range values {
-		if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
-			return s
+		if strings.TrimSpace(v) != "" {
+			return v
 		}
 	}
 	return ""
 }
 
-// firstLine is one transcript line's echoed command or path, bounded.
+// lineFunc is a [Decoder] that only looks at lines — for a question asked of
+// a stream's end, where nothing is built.
+type lineFunc func(line []byte)
+
+func (f lineFunc) Line(line []byte)     { f(line) }
+func (lineFunc) Skipped(int64)          {}
+func (lineFunc) Result() sandbox.Result { return sandbox.Result{} }
+func (lineFunc) Entries() []string      { return nil }
+
+// firstLine is one transcript line's echoed command or path, bounded — a
+// PREVIEW, for a person scanning what the run did, and marked as one.
 //
-// The bound is real — a heredoc echoed whole would blow up the phase event —
-// and the cut is marked. Two defects it used to carry: `line[:limit-1] + "…"`
-// emits limit+2 BYTES (limit-1 of content plus a three-byte ellipsis), so the
-// constant bounded nothing it named; and the byte slice split whatever
-// multi-byte character straddled the cut, which reaches the event store as
-// invalid UTF-8.
+// The bound is real — a heredoc echoed whole would make one entry of a
+// line-structured log read as many — and every cut says so: the line itself
+// with an ellipsis, and the lines after it with a count. Only the first was
+// ever marked, so a heredoc read as the one command on its first line. Two
+// older defects: `line[:limit-1] + "…"` emitted limit+2 BYTES (limit-1 of
+// content plus a three-byte ellipsis), so the constant bounded nothing it
+// named; and the byte slice split whatever multi-byte character straddled the
+// cut, which reaches the event store as invalid UTF-8.
+//
+// REDACTED WHOLE BEFORE IT IS CUT, and here because this is the one place
+// every preview cut goes through — a tool's subject, a failed call's error and
+// a run's ending, for both decoders and so for the record and the live view
+// alike. The transcript is redacted again downstream, but by then the cut has
+// already happened: a token whose start fell in the last few dozen bytes
+// before the limit survived as a fragment shorter than its rule's length floor
+// (`ghp_` and 28 of a GitHub token's 36 characters), which no pattern
+// recognises and which identifies the token to anybody holding its checksum.
+// The whole value, not just its first line, because a private key's block
+// runs from a BEGIN line on the first line into the lines below it.
 func firstLine(s string, limit int) string {
-	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
-	if limit <= 0 || len(line) <= limit {
-		return line
+	line, rest, more := strings.Cut(strings.TrimSpace(redact.Secrets(s)), "\n")
+	suffix := ""
+	if more {
+		suffix = fmt.Sprintf(" (+%d more line(s))", strings.Count(rest, "\n")+1)
+	}
+	if limit <= 0 || len(line)+len(suffix) <= limit {
+		return line + suffix
 	}
 	// [textcut.Within] rather than Ellipsis: that one does not count its
 	// marker against max, and this limit bounds what reaches the phase
-	// event, marker included.
-	return textcut.Within(line, limit)
+	// event, markers included.
+	return textcut.Within(line, max(limit-len(suffix), 0)) + suffix
 }

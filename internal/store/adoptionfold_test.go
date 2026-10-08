@@ -10,10 +10,10 @@ import (
 // AN ADOPTION ROW CARRIES NO FOLD FLAG, and one is written without naming it.
 //
 // Node migration 0030 gave `statelog_adoption` a `ledger_folded` column for a
-// boot-time fold this tree no longer has; 0040 drops it, because nothing
+// boot-time fold this tree no longer has; 0045 drops it, because nothing
 // reads it and the only value this build ever wrote was the constant 1. The
 // case runs the real migrator over a fresh node estate, which is what proves
-// the driver takes the DROP COLUMN, and writes the row the adopter writes.
+// the driver takes the rebuild, and writes the row the adopter writes.
 func TestAnAdoptionRowCarriesNoFoldFlag(t *testing.T) {
 	t.Parallel()
 	db, err := OpenEstate(t.Context(), EstateNode,
@@ -26,8 +26,8 @@ func TestAnAdoptionRowCarriesNoFoldFlag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(applied, "0040_an_adoption_row_forgets_the_fold.sql") {
-		t.Fatalf("0040 did not run on a fresh node estate: applied %v", applied)
+	if !slices.Contains(applied, "0045_an_adoption_row_forgets_the_fold.sql") {
+		t.Fatalf("0045 did not run on a fresh node estate: applied %v", applied)
 	}
 	if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
 		if columns := columnsOf(t, tx, "statelog_adoption"); slices.Contains(columns, "ledger_folded") {

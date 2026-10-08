@@ -561,11 +561,11 @@ func upsertTask(ctx context.Context, tx *sql.Tx, task Task, document []byte,
 			 spend_cache_read, spend_cache_write, spend_wall_ms, spend_tokens,
 			 spend_workers, spend_sent_back, done_at, closed_at, finished_at, archived, archived_at, removed_at,
 			 removed_with, batch_id, merging, moving, reassignments, policy_stamp,
-			 unblocked_told_at, search_rev, embed_rev, inconsistent_project,
+			 unblocked_told_at, inconsistent_project,
 			 cycle, too_deep, key_collision, created_at, updated_at, version,
 			 scoped_through, document)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?,?,?,?,?,
-		        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,0,0,0,0,0,0,?,?,?,0,?)
+		        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,0,0,0,0,?,?,?,0,?)
 		ON CONFLICT (id) DO UPDATE SET
 			key = excluded.key, project_key = excluded.project_key,
 			routing_unit = excluded.routing_unit,

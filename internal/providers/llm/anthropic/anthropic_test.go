@@ -671,6 +671,109 @@ func TestEveryKeyBenchedReportsAnExhaustedPool(t *testing.T) {
 	}
 }
 
+// A CLASSIFIED FAILURE SAYS WHAT THE ENDPOINT SAID, AND NOTHING THE SDK DOES.
+//
+// The SDK's own error prints the request method and URL — the userinfo of a
+// gateway's `base_url` with it — and pastes the raw body, which can echo the
+// key the endpoint rejected; every classified error carried that text, and an
+// exhausted pool's sentence carries the last refusal's. What the error says
+// now is a status line of the engine's and the endpoint's own words, redacted,
+// on a single classified failure and on an exhausted pool alike, unary and
+// streamed alike — and the SDK's error is still behind it for errors.As.
+//
+// Mutation: hand FromStatus's caller the SDK's error unwrapped, and the
+// password, the key and the URL are back in the text.
+func TestAClassifiedFailureShowsNoneOfTheSDKsText(t *testing.T) {
+	t.Parallel()
+	const password = "s3cretpass"
+	key := "sk-ant-api03-" + strings.Repeat("Kv4", 12)
+	// The failure's type is the one its status means, because the type is
+	// what classifies it (see kindOf) and this case is about the text.
+	for _, tc := range []struct {
+		name    string
+		status  int
+		errType string
+		kind    llm.ErrorKind
+		keys    []string
+		stream  bool
+	}{
+		{"a single classified failure", 400, "invalid_request_error", llm.KindFatal, []string{"k1"}, false},
+		{"an exhausted pool", 401, "authentication_error", llm.KindAuth, []string{"k1", "k2"}, false},
+		{"an exhausted pool, streamed", 401, "authentication_error", llm.KindAuth, []string{"k1"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			body := `{"type":"error","error":{"type":"` + tc.errType + `","message":"invalid key ` +
+				key + `"},"request_id":"req_011CSHoEeqs5C35K2UUqR7Fy"}`
+			_, url := serve(t, func(w http.ResponseWriter, _ int) {
+				w.Header().Set("request-id", "req_011CSHoEeqs5C35K2UUqR7Fy")
+				writeJSON(w, tc.status, body)
+			})
+			gateway := strings.Replace(url, "http://", "http://gateway:"+password+"@", 1)
+			p := newProvider(t, gateway, func(c *Config) { c.APIKeys = tc.keys })
+			req := userTurn("hi")
+			if tc.stream {
+				req.OnDelta = func(llm.Delta) {}
+			}
+			_, err := p.Complete(context.Background(), req)
+			if err == nil || llm.KindOf(err) != tc.kind {
+				t.Fatalf("Complete = %v, want a %s failure", err, tc.kind)
+			}
+			if tc.kind.ExhaustsCredential() && !errors.Is(err, credential.ErrExhausted) {
+				t.Fatalf("err = %v, want the pool exhausted", err)
+			}
+			text := err.Error()
+			for _, leaked := range []string{password, key, strings.TrimPrefix(url, "http://"), "/v1/messages", "POST"} {
+				if strings.Contains(text, leaked) {
+					t.Errorf("the error carries %q: %s", leaked, text)
+				}
+			}
+			for _, want := range []string{
+				fmt.Sprintf("HTTP %d %s", tc.status, http.StatusText(tc.status)),
+				"(request req_011CSHoEeqs5C35K2UUqR7Fy)",
+				"invalid key [REDACTED:api-key] (type " + tc.errType + ")",
+			} {
+				if !strings.Contains(text, want) {
+					t.Errorf("the error does not say %q: %s", want, text)
+				}
+			}
+			var apiErr *sdk.Error
+			if !errors.As(err, &apiErr) || apiErr.StatusCode != tc.status {
+				t.Errorf("errors.As no longer reaches the SDK's error behind %s", text)
+			}
+		})
+	}
+}
+
+// AN ENDPOINT OUTSIDE ANTHROPIC'S ENVELOPE — a gateway's own shape, a proxy's
+// page — is read for what its body can honestly say.
+func TestAFailureOutsideTheEnvelopeSaysWhatItsBodySays(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, contentType, body, want string
+	}{
+		{"a gateway's JSON", "application/json", `{"detail": "claude-test is not served here"}`,
+			`{"detail":"claude-test is not served here"}`},
+		{"a proxy's page", "text/html",
+			"<html><head><title>502 Bad Gateway</title></head><body>…</body></html>", "502 Bad Gateway"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, url := serve(t, func(w http.ResponseWriter, _ int) {
+				w.Header().Set("Content-Type", tc.contentType)
+				w.WriteHeader(404)
+				_, _ = io.WriteString(w, tc.body)
+			})
+			_, err := newProvider(t, url, nil).Complete(context.Background(), userTurn("hi"))
+			var classified *llm.Error
+			if !errors.As(err, &classified) || classified.Status != 404 || classified.Detail != tc.want {
+				t.Fatalf("Complete = %v (detail %q), want a 404 whose detail is %q",
+					err, classified.Detail, tc.want)
+			}
+		})
+	}
+}
+
 func TestServerRetryHintShortensTheBench(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -2263,11 +2366,16 @@ func TestAStreamedCallForwardsFragmentsAndStillAnswers(t *testing.T) {
 	}
 }
 
-// AN ENDPOINT THAT ANSWERS A STREAMING REQUEST WITHOUT STREAMING STILL ANSWERS,
-// on the same key, and is never asked to stream again. "Anthropic-compatible"
-// has real variance — a local shim or a proxy may serve the unary route only —
-// and failing a phase over that would regress every such deployment.
-func TestAnEndpointThatCannotStreamStillAnswers(t *testing.T) {
+// AN ENDPOINT THAT CANNOT STREAM IS ASKED ONCE, AND ITS ANSWER IS KEPT, on the
+// same key, and it is never asked to stream again.
+//
+// "Anthropic-compatible" is a de-facto standard with real variance: a local
+// shim or a gateway may take `stream: true` and answer with a whole message.
+// The SDK reads any 2xx body as an event stream, a JSON body has no events,
+// and the answer — usage included — was thrown away and asked for again
+// unary: the round was billed twice and the first answer reached no counter.
+// It is read as the message it is now, and the capability is latched.
+func TestAnEndpointThatCannotStreamIsAskedOnceAndItsAnswerKept(t *testing.T) {
 	t.Parallel()
 	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeUnary(w, 200, okMessage("Hello")) })
 	p := newProvider(t, url, nil)
@@ -2277,15 +2385,14 @@ func TestAnEndpointThatCannotStreamStillAnswers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
-	if out.Content != "Hello" {
-		t.Fatalf("content = %q, want the unary answer", out.Content)
+	if out.Content != "Hello" || out.InputTokens != 10 || out.OutputTokens != 5 {
+		t.Errorf("completion = %q with %d/%d tokens, want the endpoint's answer and the "+
+			"10/5 it billed", out.Content, out.InputTokens, out.OutputTokens)
 	}
 	seen := api.seen()
-	if len(seen) != 2 || seen[0].body["stream"] != true || seen[1].body["stream"] != nil {
-		t.Fatalf("attempts = %d, want one streaming ask and one unary retry", len(seen))
-	}
-	if seen[1].apiKey != "k1" {
-		t.Fatalf("the unary retry went out on %q, want the same key — a capability is not a key failure", seen[1].apiKey)
+	if len(seen) != 1 || seen[0].body["stream"] != true {
+		t.Fatalf("the first call cost %d requests, want one streaming ask: the endpoint's "+
+			"answer was thrown away and asked for again", len(seen))
 	}
 	for _, s := range p.Pool().Stats() {
 		if s.Cooling != 0 {
@@ -2298,9 +2405,12 @@ func TestAnEndpointThatCannotStreamStillAnswers(t *testing.T) {
 		t.Fatalf("second Complete: %v", err)
 	}
 	seen = api.seen()
-	if len(seen) != 3 || seen[2].body["stream"] != nil {
+	if len(seen) != 2 || seen[1].body["stream"] != nil {
 		t.Fatalf("the second call made %d requests (stream %v), want one unary request",
-			len(seen)-2, seen[len(seen)-1].body["stream"])
+			len(seen)-1, seen[len(seen)-1].body["stream"])
+	}
+	if seen[1].apiKey != "k1" {
+		t.Fatalf("the unary call went out on %q, want the same key — a capability is not a key failure", seen[1].apiKey)
 	}
 }
 

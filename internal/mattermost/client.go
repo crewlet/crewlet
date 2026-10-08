@@ -238,14 +238,14 @@ func (c *Client) attempt(ctx context.Context, method, path string, body []byte, 
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		// The server's own error text, capped: it is written for a
-		// person, and surfacing it turns "500 on /users/me" into
-		// "Invalid session". Capped because a proxy in front of a dead
-		// server answers with an HTML page.
-		payload, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		// The server's own error text: it is written for a person, and
+		// surfacing it turns "500 on /users/me" into "Invalid session".
+		// Read to [httpx.RefusalBytes] and one byte more, so a body past
+		// the read is said to be rather than parsed as a shorter one.
+		payload, _ := io.ReadAll(io.LimitReader(resp.Body, httpx.RefusalBytes+1))
 		return resp.Header, &Error{
 			Method: method, Path: path, Status: resp.StatusCode,
-			Message:    serverMessage(payload),
+			Message:    serverMessage(resp.Header.Get("Content-Type"), payload),
 			retryAfter: parseRetryAfter(resp.Header.Get("Retry-After")),
 		}
 	}
@@ -344,17 +344,22 @@ func (e *transportError) Error() string {
 }
 func (e *transportError) Unwrap() error { return e.err }
 
-// serverMessage pulls Mattermost's own error text out of a body.
-func serverMessage(payload []byte) string {
+// serverMessage pulls Mattermost's own error text out of a body, and hands
+// anything that is not its envelope to [httpx.Refusal] — a proxy in front of
+// a dead server answers with an HTML page, whose title says why, and a body
+// past the read is marked rather than reported as no message at all.
+func serverMessage(contentType string, payload []byte) string {
 	var body struct {
 		Message string `json:"message"`
 		ID      string `json:"id"`
 	}
-	if err := json.Unmarshal(payload, &body); err != nil {
-		return ""
+	if err := json.Unmarshal(payload, &body); err == nil {
+		if body.Message != "" {
+			return body.Message
+		}
+		if body.ID != "" {
+			return body.ID
+		}
 	}
-	if body.Message != "" {
-		return body.Message
-	}
-	return body.ID
+	return httpx.Refusal(contentType, payload)
 }

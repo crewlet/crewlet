@@ -2,6 +2,8 @@ package tracker
 
 import (
 	"encoding/json"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -40,8 +42,8 @@ func TestAnEdgeDeltaIsAboutMembershipRatherThanOrder(t *testing.T) {
 	// would pass for a comparison that answers nothing at all.
 	grew := Task{Relations: append([]Relation{{Kind: RelationWaitingOn, Other: "c"}},
 		other.Relations...)}
-	if got := TaskDeltas(other, grew, nil)["waiting_on"]; got != (Delta{From: "a, b", To: "a, b, c"}) {
-		t.Errorf("adding an edge recorded %+v", got)
+	if got := TaskDeltas(other, grew, nil)["waiting_on"]; !sameDelta(got, moves([]string{"c"}, nil)) {
+		t.Errorf("adding an edge recorded %+v, want only the edge it added", got)
 	}
 }
 
@@ -69,7 +71,7 @@ func TestEveryRelationKindGetsItsOwnDeltaField(t *testing.T) {
 				"later needs no second edit", kind)
 			continue
 		}
-		if got.To != "other-"+string(kind) {
+		if !sameDelta(got, moves([]string{"other-" + string(kind)}, nil)) {
 			t.Errorf("the %s field recorded %+v", kind, got)
 		}
 	}
@@ -78,63 +80,60 @@ func TestEveryRelationKindGetsItsOwnDeltaField(t *testing.T) {
 	// because it is not an authored edge: it is the copy a blocker carries
 	// so a close can name who it unblocks.
 	mirrored := TaskDeltas(Task{}, Task{Dependents: []string{"dep-2", "dep-1"}}, nil)
-	if got := mirrored["blocking"]; got != (Delta{From: "", To: "dep-1, dep-2"}) {
+	if got := mirrored["blocking"]; !sameDelta(got, moves([]string{"dep-1", "dep-2"}, nil)) {
 		t.Errorf("the mirror recorded %+v", got)
 	}
 }
 
-// A DELTA SIDE IS A LOG LINE, so a collection past the budget is cut at a
-// WHOLE MEMBER and says how many it dropped.
+// A SET RECORDS WHAT MOVED, WHOLE, HOWEVER LARGE THE SET.
 //
-// `tracker_history` is never swept: every byte written here is kept for the
-// life of the company on every node. A task may wait on [MaxWaitingOn] tasks
-// and carry [MaxOtherRelations] other edges, each named by a uuid, which is
-// several kilobytes on each side of one field.
-func TestADeltaValueIsBoundedToOneLogLine(t *testing.T) {
+// Both sides used to be carried, joined and cut to six hundred bytes with a
+// "+N more" count — so on a task waiting on many others, the one edge a
+// commit added was off the end of BOTH sides, and the row recorded two lists
+// that differed only in their counts, which a renderer diffing them read as a
+// member called "+19 more" joining. What a commit changed in a set is what
+// joined and what left it.
+func TestASetRecordsWhatMovedHoweverLargeTheSet(t *testing.T) {
 	t.Parallel()
-	members := make([]string, 0, MaxWaitingOn)
-	for i := range MaxWaitingOn {
-		members = append(members, strings.Repeat("x", 36)+string(rune('a'+i%26)))
+	before := Task{}
+	for i := range MaxWaitingOn - 1 {
+		before.Relations = append(before.Relations, Relation{
+			Kind: RelationWaitingOn, Other: fmt.Sprintf("%036d", i)})
 	}
-	got := listText(members)
-	if len(got) > MaxDeltaValue {
-		t.Fatalf("a %d-member collection rendered %d bytes against a %d "+
-			"budget", len(members), len(got), MaxDeltaValue)
+	after := before
+	after.Relations = append(slices.Clone(before.Relations), Relation{
+		Kind: RelationWaitingOn, Other: "the-one-it-added"})
+	if got := TaskDeltas(before, after, nil)["waiting_on"]; !sameDelta(got,
+		moves([]string{"the-one-it-added"}, nil)) {
+
+		t.Errorf("adding one edge to a set of %d recorded %+v, want only the "+
+			"edge it added", len(before.Relations), got)
 	}
-	if !strings.HasSuffix(got, " more") {
-		t.Fatalf("a collection that did not fit was cut silently: %q — a list "+
-			"cut without a count reads as the whole set", got)
-	}
-	// AND EVERY MEMBER IT KEPT IS WHOLE, which is the other half: a list
-	// cut inside a member reads as a member.
-	for _, part := range strings.Split(strings.TrimSuffix(got, " more"), ", ") {
-		if strings.HasPrefix(part, "+") {
-			continue
-		}
-		if len(part) != 37 {
-			t.Fatalf("the cut left %q, which is not one of the members it was "+
-				"given", part)
-		}
-	}
-	// A COLLECTION THAT FITS IS WHOLE AND CARRIES NO TAIL, or the bound
-	// would be rewriting every ordinary row it touches.
+	// AND AN ORDERED LIST IS WHOLE, both sides: its order is its content,
+	// and it is capped in the tens where it is written.
 	if got := listText([]string{"a", "b", "c"}); got != "a, b, c" {
-		t.Errorf("a collection well inside the budget rendered %q", got)
+		t.Errorf("listText = %q", got)
 	}
-	// AND ONE MEMBER TOO LARGE FOR ITS OWN SHARE IS CUT AND MARKED rather
-	// than dropped: a delta side that was only a count would be a number
-	// where every reader expects a list.
-	huge := listText([]string{strings.Repeat("y", 4*MaxDeltaValue), "b", "c"})
-	if len(huge) > MaxDeltaValue {
-		t.Fatalf("an oversized member rendered %d bytes against a %d budget",
-			len(huge), MaxDeltaValue)
+}
+
+// FREE TEXT PAST THE BUDGET IS DESCRIBED BY ITS SIZE, NEVER CUT.
+//
+// A cut kept an opening, which a reader takes for the value; a size is not a
+// fragment anybody can mistake for the text, and the text is the mutation, on
+// the row's document column. Two long texts of one size still record that
+// they moved, because the move is established from the values.
+func TestALongFreeTextIsDescribedBySizeNotCut(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("p", MaxDeltaValue+1)
+	same := strings.Repeat("q", MaxDeltaValue+1)
+	got := projectDeltas(Project{Purpose: long}, Project{Purpose: same})["purpose"]
+	want := fmt.Sprintf("%d bytes", MaxDeltaValue+1)
+	if got.From != want || got.To != want {
+		t.Errorf("a long purpose recorded %+v, want its size on both sides", got)
 	}
-	if !strings.HasPrefix(huge, strings.Repeat("y", MaxDeltaElement-len("…"))+"…") {
-		t.Errorf("an oversized member was not cut and marked: %q", huge)
-	}
-	if !strings.HasSuffix(huge, ", b, c") && !strings.HasSuffix(huge, " more") {
-		t.Errorf("an oversized member left %q, which neither kept its "+
-			"neighbours nor counted them", huge)
+	if got := projectDeltas(Project{Purpose: "short"}, Project{Purpose: "still short"})["purpose"]; !sameDelta(got,
+		Delta{From: "short", To: "still short"}) {
+		t.Errorf("a short purpose recorded %+v, want it whole", got)
 	}
 }
 
@@ -184,14 +183,14 @@ func TestAPersonsInboxIsCountedAndTheirQueueIsOrdered(t *testing.T) {
 		Priorities: []string{"t-2", "t-1"},
 	}
 	moved := personDeltas(before, after)
-	if got := moved["unread"]; got != (Delta{From: "2", To: "1"}) {
+	if got := moved["unread"]; !sameDelta(got, Delta{From: "2", To: "1"}) {
 		t.Errorf("the unread count recorded %+v", got)
 	}
-	if got := moved["read"]; got != (Delta{From: "0", To: "1"}) {
+	if got := moved["read"]; !sameDelta(got, Delta{From: "0", To: "1"}) {
 		t.Errorf("the read count recorded %+v — a zero is a value here, not "+
 			"an absence", got)
 	}
-	if got := moved["priorities"]; got != (Delta{From: "t-1, t-2", To: "t-2, t-1"}) {
+	if got := moved["priorities"]; !sameDelta(got, Delta{From: "t-1, t-2", To: "t-2, t-1"}) {
 		t.Errorf("the queue recorded %+v, and a re-ordering with the same "+
 			"members is exactly the change somebody made", got)
 	}
@@ -289,8 +288,8 @@ func TestAnUnmovedDocumentRecordsNothing(t *testing.T) {
 	// because these functions answer nothing at all.
 	moved := project
 	moved.Purpose = "ships it"
-	if got := projectDeltas(project, moved)["purpose"]; got !=
-		(Delta{From: "builds it", To: "ships it"}) {
+	if got := projectDeltas(project, moved)["purpose"]; !sameDelta(got,
+		Delta{From: "builds it", To: "ships it"}) {
 
 		t.Errorf("a purpose edit recorded %+v", got)
 	}
@@ -308,7 +307,7 @@ func TestATargetDateEditRecordsItsDelta(t *testing.T) {
 	after := before
 	after.TargetDate = "2027-01-29"
 	if got := projectDeltas(before, after); len(got) != 1 ||
-		got["target_date"] != (Delta{From: "2026-12-18", To: "2027-01-29"}) {
+		!sameDelta(got["target_date"], Delta{From: "2026-12-18", To: "2027-01-29"}) {
 
 		t.Errorf("a target edit recorded %+v, want exactly the target_date move", got)
 	}
@@ -344,12 +343,11 @@ func TestThePeopleSetsRecordMembershipRatherThanOrder(t *testing.T) {
 	grew.Watchers = []string{"ana", "bo", "zed"}
 	grew.Collaborators = nil
 	moved := TaskDeltas(other, grew, nil)
-	if got := moved["watchers"]; got != (Delta{From: "ana, bo", To: "ana, bo, zed"}) {
+	if got := moved["watchers"]; !sameDelta(got, moves([]string{"zed"}, nil)) {
 		t.Errorf("adding a watcher recorded %+v", got)
 	}
-	if got := moved["collaborators"]; got != (Delta{From: "ana, di", To: ""}) {
-		t.Errorf("clearing the collaborators recorded %+v — an emptied set is "+
-			"the empty string, which every renderer draws as an em dash", got)
+	if got := moved["collaborators"]; !sameDelta(got, moves(nil, []string{"ana", "di"})) {
+		t.Errorf("clearing the collaborators recorded %+v, want both removed", got)
 	}
 }
 
@@ -367,10 +365,10 @@ func TestAMuteIsRecordedApartFromTheWatcherSet(t *testing.T) {
 	before := Task{Watchers: []string{"ana", "bo"}}
 	after := Task{Watchers: []string{"bo"}, Muted: []string{"ana"}}
 	moved := TaskDeltas(before, after, nil)
-	if got := moved["watchers"]; got != (Delta{From: "ana, bo", To: "bo"}) {
+	if got := moved["watchers"]; !sameDelta(got, moves(nil, []string{"ana"})) {
 		t.Errorf("the watcher set recorded %+v", got)
 	}
-	if got := moved["muted"]; got != (Delta{From: "", To: "ana"}) {
+	if got := moved["muted"]; !sameDelta(got, moves([]string{"ana"}, nil)) {
 		t.Errorf("the mute recorded %+v — a watcher row that did not say who "+
 			"opted out is the row this field exists to complete", got)
 	}
@@ -397,12 +395,12 @@ func TestABodyDeltaCarriesASizeAndNotTheText(t *testing.T) {
 	if strings.Contains(written.To, "fox") {
 		t.Fatalf("the body delta carried the prose: %+v", written)
 	}
-	if written != (Delta{From: "", To: "19 bytes"}) {
+	if !sameDelta(written, Delta{From: "", To: "19 bytes"}) {
 		t.Errorf("writing a body recorded %+v — the empty `from` is what a "+
 			"renderer draws as an em dash for a task that had none", written)
 	}
 	cleared := TaskDeltas(Task{Body: prose}, Task{}, nil)["body"]
-	if cleared != (Delta{From: "19 bytes", To: ""}) {
+	if !sameDelta(cleared, Delta{From: "19 bytes", To: ""}) {
 		t.Errorf("clearing a body recorded %+v", cleared)
 	}
 	// AND A REWRITE OF THE SAME LENGTH IS STILL A CHANGE, which is the
@@ -410,7 +408,7 @@ func TestABodyDeltaCarriesASizeAndNotTheText(t *testing.T) {
 	// and the KEY's presence is what says the field moved. Compared on the
 	// text, as `add` does, a typo fix would have recorded nothing.
 	same := TaskDeltas(Task{Body: prose}, Task{Body: "the quick brown cat"}, nil)
-	if got, held := same["body"]; !held || got != (Delta{From: "19 bytes", To: "19 bytes"}) {
+	if got, held := same["body"]; !held || !sameDelta(got, Delta{From: "19 bytes", To: "19 bytes"}) {
 		t.Errorf("an edit that kept the length recorded %+v (held=%v)", got, held)
 	}
 	// An unchanged body is not a change, or every commit would carry one.
@@ -445,7 +443,7 @@ func TestAChecklistDeltaCountsItemsPerNamedList(t *testing.T) {
 		},
 	}}
 	got := TaskDeltas(before, done, nil)["checklists"]
-	if got != (Delta{From: "Setup: 0 of 3 done", To: "Setup: 1 of 3 done"}) {
+	if !sameDelta(got, Delta{From: "Setup: 0 of 3 done", To: "Setup: 1 of 3 done"}) {
 		t.Errorf("checking an item off recorded %+v", got)
 	}
 	if strings.Contains(got.To, "clone") {
@@ -459,8 +457,8 @@ func TestAChecklistDeltaCountsItemsPerNamedList(t *testing.T) {
 		done.Checklists[0],
 		{ID: "c-2", Name: "Rollout", Items: []ChecklistItem{{ID: "i-4"}}},
 	}
-	if got := TaskDeltas(done, added, nil)["checklists"]; got !=
-		(Delta{From: "Setup: 1 of 3 done", To: "Setup: 1 of 3 done, Rollout: 0 of 1 done"}) {
+	if got := TaskDeltas(done, added, nil)["checklists"]; !sameDelta(got,
+		Delta{From: "Setup: 1 of 3 done", To: "Setup: 1 of 3 done, Rollout: 0 of 1 done"}) {
 
 		t.Errorf("adding a list recorded %+v", got)
 	}
@@ -474,8 +472,8 @@ func TestAChecklistDeltaCountsItemsPerNamedList(t *testing.T) {
 			{ID: "i-3", Name: "ship"},
 		},
 	}}
-	if got := TaskDeltas(done, promoted, nil)["checklists"]; got !=
-		(Delta{From: "Setup: 1 of 3 done", To: "Setup: 1 of 3 done (1 promoted)"}) {
+	if got := TaskDeltas(done, promoted, nil)["checklists"]; !sameDelta(got,
+		Delta{From: "Setup: 1 of 3 done", To: "Setup: 1 of 3 done (1 promoted)"}) {
 
 		t.Errorf("promoting an item recorded %+v, and the one checklist "+
 			"gesture this build has must not write an empty row", got)
@@ -519,7 +517,7 @@ func TestACustomFieldDeltaIsNamedBySlugOrNotAtAll(t *testing.T) {
 	got := TaskDeltas(before, after, declared)["fields"]
 	// ORDERED BY SLUG, both sides, and `eta_days` did not move so it is on
 	// neither — [paramsText]'s rule, for [paramsText]'s reason.
-	if got != (Delta{
+	if !sameDelta(got, Delta{
 		From: "environment=staging, severity=low",
 		To:   "environment=production, severity=high",
 	}) {
@@ -541,8 +539,8 @@ func TestACustomFieldDeltaIsNamedBySlugOrNotAtAll(t *testing.T) {
 		"f-eta": json.RawMessage(`3`),
 		"f-???": json.RawMessage(`"anything"`),
 	}}
-	if got := TaskDeltas(before, foreign, declared)["fields"]; got !=
-		(Delta{From: "", To: "1 undeclared"}) {
+	if got := TaskDeltas(before, foreign, declared)["fields"]; !sameDelta(got,
+		Delta{From: "", To: "1 undeclared"}) {
 
 		t.Errorf("a value for an undeclared field recorded %+v", got)
 	}
@@ -568,8 +566,8 @@ func TestAMultiValuedFieldSeparatesItsOwnMembers(t *testing.T) {
 	after := Task{Fields: map[string]json.RawMessage{
 		"f-lab": json.RawMessage(`["o-1","o-2"]`),
 	}}
-	if got := TaskDeltas(Task{}, after, declared)["fields"]; got !=
-		(Delta{From: "", To: "labels=api/ui"}) {
+	if got := TaskDeltas(Task{}, after, declared)["fields"]; !sameDelta(got,
+		Delta{From: "", To: "labels=api/ui"}) {
 
 		t.Errorf("a two-option labels field recorded %+v", got)
 	}
@@ -604,13 +602,13 @@ func TestTheScalarTaskFieldsRecordWhatMoved(t *testing.T) {
 		// actor, actor_kind and created_at do not already carry.
 		"removed_with": {From: "", To: "t-root"},
 	} {
-		if got := moved[field]; got != want {
+		if got := moved[field]; !sameDelta(got, want) {
 			t.Errorf("%s = %+v, want %+v", field, got, want)
 		}
 	}
 	// A ROOT HAS NO PARENT, and losing one is a move like any other.
 	orphaned := TaskDeltas(Task{Parent: &oldParent}, Task{}, nil)["parent"]
-	if orphaned != (Delta{From: "t-1", To: ""}) {
+	if !sameDelta(orphaned, Delta{From: "t-1", To: ""}) {
 		t.Errorf("clearing a parent recorded %+v", orphaned)
 	}
 	// AND AN ORDINARY REMOVAL WENT WITH NOTHING, so it records nothing
@@ -646,11 +644,11 @@ func TestACardCarriesEveryDeltaButTheCatalogueOne(t *testing.T) {
 	}
 
 	card := Wake{Kind: ChangeWatchers, Before: before, After: after}.Notify(nil)
-	if got := card.Fields["watchers"]; got != (Delta{From: "ana", To: "ana, bo"}) {
+	if got := card.Fields["watchers"]; !sameDelta(got, moves([]string{"bo"}, nil)) {
 		t.Errorf("a watcher change reached the card as %+v — a card that "+
 			"named no watcher is the row this field exists to complete", got)
 	}
-	if got := card.Fields["archived"]; got != (Delta{From: "false", To: "true"}) {
+	if got := card.Fields["archived"]; !sameDelta(got, Delta{From: "false", To: "true"}) {
 		t.Errorf("the archive flag reached the card as %+v", got)
 	}
 	if got, held := card.Fields["fields"]; held {
@@ -663,12 +661,12 @@ func TestACardCarriesEveryDeltaButTheCatalogueOne(t *testing.T) {
 	// opinion about it.
 	row := TaskDeltas(before, after, declared)
 	for name, got := range card.Fields {
-		if row[name] != got {
+		if !sameDelta(row[name], got) {
 			t.Errorf("the row records %+v for %s and the card %+v — one "+
 				"function answers both, so they cannot differ", row[name], name, got)
 		}
 	}
-	if got := row["fields"]; got != (Delta{From: "severity=low", To: "severity=high"}) {
+	if got := row["fields"]; !sameDelta(got, Delta{From: "severity=low", To: "severity=high"}) {
 		t.Errorf("the history row recorded %+v for the custom field", got)
 	}
 	if len(row) != len(card.Fields)+1 {
@@ -691,7 +689,7 @@ func TestMakingADueDateAllDayIsRecorded(t *testing.T) {
 	allDay := Task{DueAt: &midnight, DueAllDay: true}
 
 	moved := TaskDeltas(timed, allDay, nil)
-	if got := moved["due_all_day"]; got != (Delta{From: "false", To: "true"}) {
+	if got := moved["due_all_day"]; !sameDelta(got, Delta{From: "false", To: "true"}) {
 		t.Errorf("making a due date all-day recorded %+v", got)
 	}
 	if _, held := moved["due"]; held {
@@ -701,5 +699,63 @@ func TestMakingADueDateAllDayIsRecorded(t *testing.T) {
 	// every commit in the company would carry the flag.
 	if moved := TaskDeltas(timed, timed, nil); moved != nil {
 		t.Errorf("an untouched schedule recorded %v", moved)
+	}
+}
+
+// sameDelta compares two deltas, a set's moves included.
+func sameDelta(a, b Delta) bool {
+	return a.From == b.From && a.To == b.To &&
+		slices.Equal(a.Added, b.Added) && slices.Equal(a.Removed, b.Removed)
+}
+
+// moves is a set's delta: what it gained and what it lost.
+func moves(added, removed []string) Delta { return Delta{Added: added, Removed: removed} }
+
+// A CARD SHOWS AT MOST MaxDeltas FIELDS AND SAYS HOW MANY IT LEFT OFF — and
+// the history row is never trimmed. The applier's set used to be cut to the
+// first thirty-two by field name, for the row as well as the card, so a commit
+// moving more recorded only those and said nothing about the rest.
+func TestACardTrimsToTheDisplayLimitAndCountsTheRest(t *testing.T) {
+	t.Parallel()
+	all := deltaSet{}
+	for i := range MaxDeltas + 3 {
+		all.add(fmt.Sprintf("f%02d", i), "", "x")
+	}
+	moved := all.done()
+	if len(moved) != MaxDeltas+3 {
+		t.Fatalf("the row's delta set holds %d fields, want all %d", len(moved), MaxDeltas+3)
+	}
+	shown, omitted := cardFields(moved)
+	if len(shown) != MaxDeltas || omitted != 3 {
+		t.Errorf("the card shows %d and omits %d, want %d and 3", len(shown), omitted, MaxDeltas)
+	}
+	if _, held := shown["f00"]; !held {
+		t.Error("the card did not keep the first fields by name")
+	}
+	if _, held := shown[fmt.Sprintf("f%02d", MaxDeltas+2)]; held {
+		t.Error("the card kept a field past the limit")
+	}
+	if err := (&Notify{Kind: ChangeFields, Fields: shown, FieldsOmitted: omitted}).Validate(); err != nil {
+		t.Errorf("a trimmed card was refused: %v", err)
+	}
+	if err := (&Notify{Kind: ChangeFields, FieldsOmitted: -1}).Validate(); err == nil {
+		t.Error("a negative omitted count was accepted")
+	}
+	if got := changedText(shown, omitted); !strings.HasSuffix(got, "- and 3 more field(s) this card had no room for") {
+		t.Errorf("the wake prompt does not count what the card left off:\n%s", got)
+	}
+}
+
+// THE WAKE PROMPT NAMES A SET'S MOVES, so a seat reads what joined and what
+// left rather than diffing two whole lists itself.
+func TestTheWakePromptNamesWhatASetGainedAndLost(t *testing.T) {
+	t.Parallel()
+	got := changedText(map[string]Delta{
+		"watchers": moves([]string{"ana", "bo"}, []string{"cy"}),
+		"status":   {From: "todo", To: "done"},
+	}, 0)
+	want := "- status: todo → done\n- watchers: added ana, bo; removed cy"
+	if got != want {
+		t.Errorf("changedText =\n%s\nwant\n%s", got, want)
 	}
 }

@@ -330,10 +330,10 @@ test("a delta takes the project's own label and the project's own tag name", () 
     }),
   ).toBe("Status: To do → Shipped");
   expect(
-    describeHistory(change({ fields: { tags: { from: "", to: "p1" } } }), {
+    describeHistory(change({ fields: { tags: { from: "", to: "", added: ["p1"] } } }), {
       tags: [{ slug: "p1", label: "Priority one" }],
     }),
-  ).toBe(`Tags: ${EMPTY_VALUE} → Priority one`);
+  ).toBe("Tags: added Priority one");
 });
 
 const change = (over: Partial<WorkChange> = {}): WorkChange => ({
@@ -415,10 +415,10 @@ test("a relation delta reads as the other task's key where the answer knew it", 
   const ctx: LabelContext = { taskKey: (id) => (id === "t-2" ? "ENG-2" : "") };
   expect(
     describeHistory(
-      change({ kind: "relations", fields: { waiting_on: { from: "", to: "t-2" } } }),
+      change({ kind: "relations", fields: { waiting_on: { from: "", to: "", added: ["t-2"] } } }),
       ctx,
     ),
-  ).toBe(`Waiting on: ${EMPTY_VALUE} → ENG-2`);
+  ).toBe("Waiting on: added ENG-2");
   // EVERY FIELD WHOSE VALUE IS TASKS, so one added to the engine's set and
   // missed here is a column of uuids rather than a silent omission. The last
   // two are SCALARS — a task has one parent and went with one root — and they
@@ -460,11 +460,18 @@ test("a relation delta reads as the other task's key where the answer knew it", 
   // a counterparty this node has not applied, and a value nobody can explain is
   // still a value somebody set — a blank would read as a task with no name.
   expect(describeHistory(change({ fields: { waiting_on: ["t-9"] } }), ctx)).toBe("Waiting on: t-9");
-  // AND A LIST IS RESOLVED MEMBER BY MEMBER, including the `+N more` tail the
-  // engine appends when it cuts a long collection at a whole member.
-  expect(describeHistory(change({ fields: { blocking: ["t-2", "t-9", "+12 more"] } }), ctx)).toBe(
-    "Blocking: ENG-2, t-9, +12 more",
-  );
+  // AND A SET'S MOVES ARE RESOLVED MEMBER BY MEMBER, both sides of it: the
+  // engine records what joined and what left, whole members, however large
+  // the set — it used to cut both sides with a `+N more` tail, which hid the
+  // member a commit added.
+  expect(
+    describeHistory(
+      change({
+        fields: { blocking: { from: "", to: "", added: ["t-2", "t-9"], removed: ["t-3"] } },
+      }),
+      ctx,
+    ),
+  ).toBe("Blocking: added ENG-2, t-9; removed t-3");
 });
 
 // A PEOPLE FIELD IS HANDLES, and every other surface on this screen says the
@@ -475,15 +482,18 @@ test("a relation delta reads as the other task's key where the answer knew it", 
 // is the failure the assignee arm was already written against.
 test("a people delta reads as the seat's name where the chart knew it", () => {
   const ctx: LabelContext = { seatName: (h) => (h === "ada" ? "Ada Lovelace" : h) };
-  // A SET TRAVELS JOINED WITH ", " (wake.go sorts it first), so it resolves
-  // member by member and an unknown handle stays a handle — a seat the chart
-  // no longer holds still moved this field.
+  // A SET TRAVELS AS ITS MOVES, sorted, so it resolves member by member and
+  // an unknown handle stays a handle — a seat the chart no longer holds still
+  // moved this field.
   expect(
     describeHistory(
-      change({ kind: "watchers", fields: { watchers: { from: "", to: "ada, zz" } } }),
+      change({
+        kind: "watchers",
+        fields: { watchers: { from: "", to: "", added: ["ada", "zz"] } },
+      }),
       ctx,
     ),
-  ).toBe(`Watchers: ${EMPTY_VALUE} → Ada Lovelace, zz`);
+  ).toBe("Watchers: added Ada Lovelace, zz");
   // EVERY FIELD WHOSE VALUE IS PEOPLE, for the reason the task-id loop above
   // gives: one added to the engine's set and missed here is a column of
   // handles nobody asked for.

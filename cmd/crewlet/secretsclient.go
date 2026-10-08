@@ -200,7 +200,7 @@ func (c *secretsClient) call(ctx context.Context, method, path string, body []by
 				"one would be worse than none", path, maxSecretResponseBytes)
 	}
 	if resp.StatusCode/100 != 2 {
-		return c.refusal(resp.StatusCode, path, raw)
+		return c.refusal(resp.StatusCode, path, resp.Header.Get("Content-Type"), raw)
 	}
 	if out == nil {
 		return nil
@@ -220,7 +220,7 @@ func (c *secretsClient) call(ctx context.Context, method, path string, body []by
 const maxSecretResponseBytes = (64 << 10) + (4 << 10)
 
 // refusal turns a status code into something an operator can act on.
-func (c *secretsClient) refusal(status int, path string, raw []byte) error {
+func (c *secretsClient) refusal(status int, path, contentType string, raw []byte) error {
 	var body struct {
 		Error  string `json:"error"`
 		Detail string `json:"detail"`
@@ -243,7 +243,7 @@ func (c *secretsClient) refusal(status int, path string, raw []byte) error {
 	}
 	msg := body.Error
 	if msg == "" {
-		msg = strings.TrimSpace(string(raw))
+		msg = foreignAnswer(contentType, raw)
 	}
 	return fmt.Errorf("%s answered %d for %s: %s", c.base, status, path,
 		withRefusalDetail(msg, body.Detail, body.Hint))

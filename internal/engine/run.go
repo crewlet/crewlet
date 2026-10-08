@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -11,14 +12,17 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/crewlet/crewlet/internal/agent/inbox"
-	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerfit"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/agent/skillsync"
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
@@ -249,6 +253,11 @@ type Engine struct {
 	// memorySync is the loop that publishes it, and the handle Stop uses
 	// to end it. Nil where memory is.
 	memorySync *memorySync
+
+	// fill is the loop that fills the vectors the memory of the seats this
+	// node holds is missing — see memoryfill.go — and the handle Stop uses
+	// to end it. Nil on a node with no store or no seat host.
+	fill *memoryFill
 
 	// sandboxOtel mints each coding run's telemetry endpoint. Nil exports
 	// nothing from inside a box, which is the ordinary configuration.
@@ -539,9 +548,11 @@ type Engine struct {
 	stopMemoryServe queue.Unsubscribe
 
 	// sandboxTails answers a running coding run's live output from the node
-	// that owns it, and stopTailServe withdraws this node as one of its
-	// answerers. See sandboxtail.go.
+	// that owns it, sandboxFeeds is this node's readings of the runs it owns,
+	// and stopTailServe withdraws this node as one of its answerers. See
+	// sandboxtail.go.
 	sandboxTails  *sandbox.TailReader
+	sandboxFeeds  *sandbox.LiveFeeds
 	stopTailServe queue.Unsubscribe
 
 	// scheduler is the role/unit cron tick. On the ENGINE rather than on an
@@ -563,6 +574,24 @@ type Engine struct {
 	// every seat and re-run a pass for agents already marked. It is keyed
 	// by chain hash, so a live restructure still re-onboards by design.
 	onboarded *runner.Latch
+
+	// rewrites is the cache every compaction this process makes is kept in
+	// — see [Engine.compactorFor].
+	//
+	// On the engine rather than on an epoch for the latch's reason: a
+	// rewrite is a function of the text it was made from, so it stays
+	// right across an apply that did not touch it, and a turn running
+	// across that apply re-renders its ledger against the same payloads.
+	rewrites *compact.Cache
+
+	// auxSpend is this node's auxiliary-spend ledger: every auxiliary
+	// completion the seam sees, coalesced and published as
+	// `auxiliary_spend` — see auxiliary.go and internal/auxspend.
+	//
+	// On the engine for the cache's reason, and more strongly: a bucket
+	// is spend already made, and a ledger that came with an epoch would
+	// drop whatever the apply that replaced it had not flushed.
+	auxSpend *auxspend.Ledger
 }
 
 // Options configure an engine.
@@ -805,6 +834,11 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		profile:  opts.Bootstrap.Profile(nodeID),
 		backends: backends, ownsBackends: ownsBackends,
 		onboarded: runner.NewLatch(), skills: skills.NewRegistry(),
+		rewrites: compact.NewCache(),
+		// ON THE NODE'S OWN QUEUE, which on a node without `data` is the
+		// publish its custody hands to a data node — so a stateless node's
+		// auxiliary spend reaches the history like its phases do.
+		auxSpend:            auxspend.NewLedger(backends.Queue),
 		steers:              newSteerDesk(),
 		mcp:                 mcp.NewBridge(nil),
 		sandboxOtel:         otel,
@@ -1260,6 +1294,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// for one seat, and no later pass can detect or repair that.
 	e.startIntegrations(ctx)
 	e.startMemorySync(ctx)
+	e.startMemoryFill(ctx)
 	e.startScheduler(ctx)
 	// The credential pools were attached to the fleet's ledger by equip,
 	// above, so a bench already publishes. This arms the other half: the
@@ -1340,6 +1375,19 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 		d.Conversation = func() config.ConversationSession {
 			return e.Company().Config.TurnEngine.ConversationSession
 		}
+	}
+	if d.Rewriter == nil {
+		d.Rewriter = func(handle string, use auxspend.Use) ledgerfit.Fitter {
+			return e.seatCompactor(e.Company(), handle, use)
+		}
+	}
+	if d.ReflectionRoom == nil {
+		d.ReflectionRoom = func(ctx context.Context, handle string) (bool, error) {
+			return e.reflectionRoom(ctx, e.Company(), handle)
+		}
+	}
+	if d.FlushSpend == nil {
+		d.FlushSpend = e.auxSpend.FlushTurn
 	}
 	if d.Park == nil {
 		d.Park = e.park
@@ -1432,6 +1480,11 @@ func (e *Engine) Start(ctx context.Context) error {
 	// company's budget. Detached, like everything else here — see
 	// [Engine.startBudgetReports].
 	e.startBudgetReports(ctx)
+	// THE AUXILIARY-SPEND LEDGER'S TIMER, detached like the meters beside
+	// it and on their cadence (auxspend.FlushInterval). Calls made before
+	// it — an apply's first passes — wait in their buckets for its first
+	// tick, and [Engine.teardown] flushes whatever is left.
+	e.auxSpend.Run(context.WithoutCancel(ctx))
 	// AFTER the host is running, and detached from the caller's context
 	// like the host itself. Before it, every watched duty reads as not
 	// live and the watchdog stands down for the life of the process —
@@ -1646,6 +1699,9 @@ func (e *Engine) teardown(ctx context.Context) {
 	// releases to the flush alone, which is the bounded path rather than
 	// the whole one.
 	e.stopMemorySync()
+	// AND THE FILL BESIDE IT, for the same reason the learning passes
+	// below stop here: it queries the store that backends.Close closes.
+	e.stopMemoryFill()
 	// BEFORE backends.Close below, which closes the store the four passes
 	// query. They tick on a detached context on purpose — like the node's
 	// loops, they must not stop at SIGTERM — so nothing else ends them,
@@ -1696,6 +1752,12 @@ func (e *Engine) teardown(ctx context.Context) {
 	// credentials, and one left behind outlives the engine that vouched
 	// for it.
 	e.stopSharedServers(ctx)
+	// THE LAST AUXILIARY SPEND, once every producer of it has stopped —
+	// the turns and reflections with the seats, the learning passes and
+	// the sandbox's condensations above, a person's question with the HTTP
+	// surface before the teardown began — and BEFORE the custody flush
+	// below, which is what carries a node without `data` its records.
+	e.stopAuxSpend(ctx)
 	// AFTER EVERY SEAT AND LOOP THAT PUBLISHES, so the last events they
 	// published are in the buffer, and BEFORE the broker closes under the
 	// last batch.
@@ -1969,6 +2031,15 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// else said this run existed. Every path out of this frame that returns
 	// closes it — see [Engine.publishTurnStarted].
 	e.publishTurnStarted(ctx, tel, req.Depth, req.DelegationChain, false)
+	// THE TURN'S METER, BEFORE ITS FIRST MODEL CALL — and the prefetch below
+	// makes several, on the seat's auxiliary chain, as the conversation
+	// block's condensation does after it. Every one is charged through this
+	// meter ([turnTelemetry.aux]), so a window they fill is held before the
+	// executor's first round rather than learned from that round's refusal
+	// once the vendor has billed it. Read off the PINNED epoch, so a revision
+	// that raises a ceiling mid-turn cannot move the limit a round is judged
+	// against.
+	tel.budget = e.meterFor(company, req.Handle)
 	// THE ASK, not the partition: a coalesced conversation reaches the model
 	// as ONE merged digest rather than as its constituents concatenated —
 	// see [Request.Trigger] and internal/engine/coalesce.go.
@@ -1980,7 +2051,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// thin trigger whose turn-start search was skipped — is served by the
 	// executor calling search_knowledge over the same seam, on a query it
 	// writes once it knows what the task needs.
-	blocks := e.prefetchFor(ctx, company, req, task)
+	blocks := e.prefetchFor(ctx, company, req, task, tel.aux())
 	// The skills OFFERED to this turn, carried onto its completion so the
 	// curator ages a skill on when it was last put in front of a model
 	// rather than archiving the ones a seat reads every turn.
@@ -1996,28 +2067,26 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	box := steerBox(agentRun)
 	r, err := company.RunnerFor(req.Handle, e.seatRegistry(company, req.Handle), RunnerInput{
 		Task:    task,
+		Compact: e.compactorFor(company),
 		Context: blocks,
 		Skills:  e.skills,
 		Reply:   reply,
 		// BOUNDED AT RENDER, never at write. The stored row is the only copy
 		// of the turn; what a prompt shows is a display decision, and this
-		// one drops whole entries oldest-first and says how many.
-		Conversation: ledger.RenderHistory(req.History, ledger.HistoryOptions{
-			MaxChars: ledger.InjectedMaxChars,
-		}),
-		Publisher: e.backends.Queue,
-		Turn:      turnIdentity,
-		AgentRun:  agentRun,
-		Steer:     box,
-		Markers:   e.markers(),
-		Latch:     e.onboarded,
-		// Read off the PINNED epoch, so a revision that raises a ceiling
-		// mid-turn cannot move the limit a round is judged against.
-		Budget: e.meterFor(company, req.Handle),
+		// one keeps the newest entries whole and condenses the rest.
+		Conversation: e.conversationBlock(ctx, company, req.Handle, req.History, tel.aux()),
+		Publisher:    e.backends.Queue,
+		Turn:         turnIdentity,
+		AgentRun:     agentRun,
+		Steer:        box,
+		Markers:      e.markers(),
+		Latch:        e.onboarded,
+		// The meter the context assembly was charged through — see above.
+		Budget: tel.budget.budget(),
 		// The round-cap extension judge, from the same pinned epoch. It
 		// was never supplied, so every exhaustion rescued with "no_judge"
 		// and the extension mechanism was inert.
-		Judge: e.judgeFor(company, req.Handle),
+		Judge: e.judgeFor(company, req.Handle, tel.aux()),
 		// The seat's headroom, for a sub-agent spawn. Three-valued on
 		// purpose: nil is "no ceiling configured", and a FAILED read
 		// refuses the spawn rather than granting it no ceiling.
@@ -2046,10 +2115,13 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		// (ADR-0017), and the learning dispatcher marks a unit of work
 		// spent only on a settled outcome, which the empty decision of a
 		// turn that never reached its loop is not.
-		e.publishTurnCompleted(ctx, tel, runner.Spend{}, turn.Result{}, err)
-		// AND CHARGED LIKE ANY OTHER ENDING: the run happened, on the
-		// item it names, and a task's turn count is its attempts.
-		e.recordTurnSpend(ctx, tel.chargeFor(runner.Spend{}, turn.Result{}, err, time.Now().UTC()))
+		//
+		// AND CHARGED LIKE ANY OTHER ENDING: the run happened, on the item
+		// it names, and a task's turn count is its attempts. Its context was
+		// gathered, at a cost, which is on the stream before its end — see
+		// [Engine.endSegment].
+		e.endSegment(ctx, tel, runner.Spend{}, turn.Result{}, err,
+			tel.chargeFor(runner.Spend{}, turn.Result{}, err, time.Now().UTC()))
 		return turn.Result{}, err
 	}
 
@@ -2069,23 +2141,44 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// A failure here does NOT fail the turn: the seat is un-onboarded, which
 	// is the state it was already in, and refusing to work over it would
 	// make a knowledge base that is briefly unreachable stop the company.
-	//nolint:govet // shadow: scoped to this block; see .golangci.yml
-	if ran, err := r.Onboard(ctx); err != nil {
+	//
+	// EXCEPT A BUDGET REFUSAL, which ends the turn here, as the refusal it
+	// is. Its refused round is counted, so the window it named reads past
+	// its ceiling and every later call of the turn is certain to be refused
+	// on the turn's pinned clock ([toolloop.BudgetMeter.Refused] states the
+	// one edge of that): entering the loop paid for nothing (the meter stops
+	// the executor's first round before it is made), and it put an executor
+	// phase on the record that never ran a round. Ended here, the turn is
+	// published as budget_exhausted naming the onboarding's refusal, and the
+	// dispatch parks the seat until the window turns over, exactly as a
+	// refusal inside the loop does.
+	var res turn.Result
+	ran, onboardErr := r.Onboard(ctx)
+	refused := errors.Is(onboardErr, toolloop.ErrBudgetExhausted)
+	switch {
+	case refused:
+		log.InfoContext(ctx, "onboarding_pass_refused", "handle", req.Handle,
+			"error", onboardErr, "detail", "the budget refused the onboarding pass; "+
+				"the turn ends on the refusal and the seat retries once its window has room")
+		err = fmt.Errorf("turn: onboarding: %w", onboardErr)
+	case onboardErr != nil:
 		log.WarnContext(ctx, "onboarding_pass_failed", "handle", req.Handle,
-			"error", err, "detail", "the seat stays un-onboarded and retries "+
+			"error", onboardErr, "detail", "the seat stays un-onboarded and retries "+
 				"next turn; the turn continues")
-	} else if ran {
+	case ran:
 		log.InfoContext(ctx, "onboarding_pass_ran", "handle", req.Handle)
 	}
-
-	res, err := turn.Run(ctx, r, company.TurnSettings(req.TimeoutSeconds),
-		turnInputFor(req, reply))
-	// WHAT THE TURN ANSWERED WITHOUT BEING WOKEN FOR IT: the waiting
-	// messages its thread block showed it, which the dispatch records as
-	// worked through beside its own triggers. Off the block this frame
-	// assembled, because the loop never knew what a prompt showed — see
-	// workedthrough.go.
-	res.WorkedThrough = workedThroughKeys(threadOf(req.Ask()), blocks.ThreadContextAnswered)
+	if !refused {
+		res, err = turn.Run(ctx, r, company.TurnSettings(req.TimeoutSeconds),
+			turnInputFor(req, reply))
+		// WHAT THE TURN ANSWERED WITHOUT BEING WOKEN FOR IT: the waiting
+		// messages its thread block showed it, which the dispatch records as
+		// worked through beside its own triggers. Off the block this frame
+		// assembled, because the loop never knew what a prompt showed — see
+		// workedthrough.go. Only for a turn that RAN: a refused onboarding
+		// showed nothing to a model, so nothing was worked through.
+		res.WorkedThrough = workedThroughKeys(threadOf(req.Ask()), blocks.ThreadContextAnswered)
+	}
 	// THE BOX CLOSES THE MOMENT THE TURN RETURNS: no later round will read
 	// a note, and one offered from here on is answered `closed`.
 	closeSteer(ctx)
@@ -2103,16 +2196,18 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	spend := r.Spend()
 	charge := tel.chargeFor(spend, res, err, time.Now().UTC())
 	if res.Suspended {
-		working = stillWorking(e.persistSuspension(ctx, r, req.RunID, tel.written, charge.carry))
+		working = stillWorking(e.persistSuspension(ctx, r, req.RunID, tel.written, charge.carry, tel.ask, tel.senders))
 	}
 	// Published on BOTH paths. An error here means a phase broke, which is
 	// precisely when a dashboard most needs the turn closed: the phase
 	// events already put the seat into `working`, and returning without this
 	// leaves it there until the seat happens to take another turn.
-	e.publishTurnCompleted(ctx, tel, spend, res, err)
-	// AND CHARGED to the work item it was on, after the record of the turn
-	// exists — see turnspend.go.
-	e.recordTurnSpend(ctx, charge)
+	//
+	// AFTER WHAT ITS AUXILIARY CALLS COST — its card's rewrite the last of
+	// them — so a reader that asks for the turn as it ends reads its context
+	// and its rewrites beside its phases; and CHARGED to the work item it
+	// was on after the record of its end exists. See [Engine.endSegment].
+	e.endSegment(ctx, tel, spend, res, err, charge)
 	// AND, if a colleague asked for this turn, the answer they are waiting
 	// for. Here because this is the one frame holding both the result and
 	// the trigger; after the completion event because the reply wakes

@@ -117,8 +117,10 @@ learning:                               # optional — agent-learning subsystem
     enabled: true                       # ReflectEngine + reflect_and_persist tool
     persist_decider: true               # run the post-turn PersistDecider on every turn
     budget_tokens: 5000                 # soft cap on the decider's LLM call (0 disables)
-    summarize_episodes: true            # cheap-model summarisation of query_episodes hits
-    summarize_max_tokens: 400           # soft cap on summariser response length
+    summarize_episodes: true            # cheap-model briefing of the turn-start
+                                        # Similar prior work hits (query_episodes is
+                                        # never summarised)
+    summarize_max_tokens: 400           # soft cap on that briefing, in tokens
   counterparty:
     enabled: true                       # CounterpartyProfiler + auto-inject + lookup inline
     budget_tokens: 3000                 # soft cap on the profiler's LLM call per turn
@@ -451,11 +453,17 @@ providers:
                                         #   passes validation and fails at a seat's
                                         #   first turn — `crewlet llm doctor` names it
 
-  embeddings:                           # optional — similarity search for the
+  embeddings:                           # optional — the semantic half of a native
+                                        #   knowledge search (the company's pages and
+                                        #   work items, embedded once for the fleet)
+                                        #   and similarity search for the
                                         #   agent-learning subsystem (agent_diary
                                         #   candidate selection AND episode recall).
-                                        #   Omit it and both fall back to recency;
-                                        #   nothing else changes.
+                                        #   Omit it and search is keyword only,
+                                        #   the diary's candidates are its recent
+                                        #   notes alone and episode recall renders
+                                        #   nothing (recent turns are not similar
+                                        #   work); nothing else changes.
     type: openai                        # openai | openai-compatible
     model: text-embedding-3-large       # required, and it DECIDES THE WIDTH: this
                                         #   one emits 3072, text-embedding-3-small
@@ -479,7 +487,19 @@ providers:
                                         #   A model this build does not know is
                                         #   REFUSED with `dimensions` unset rather
                                         #   than given a guess — name a known model
-                                        #   or state the width yourself
+                                        #   or state the width yourself. embed-v4.0
+                                        #   takes no override: Cohere's endpoint
+                                        #   does not support the parameter
+  # max_input_tokens: 512               # THE MODEL'S LIMITS, in tokens, and unset
+  # max_batch_inputs: 32                #   takes the ones its vendor documents.
+  # max_batch_tokens: 16384             #   Required where none is documented — a
+                                        #   model this build does not know, and the
+                                        #   request limits of gemini-embedding-001
+                                        #   and embed-v4.0, whose OpenAI-compatible
+                                        #   endpoints document none. A stated value
+                                        #   may only LOWER a documented one (a
+                                        #   gateway that accepts less); raising one
+                                        #   is refused naming the field
 ```
 
 **The width belongs to the model.** `text-embedding-3-large` emits 3072,
@@ -489,6 +509,59 @@ emits. There is no global default, because a number that was right for one
 model is silently wrong for the next — and a model this build does not know is
 refused rather than guessed at, naming both ways to fix it.
 
+Every request asks for the width, in the OpenAI `dimensions` parameter, where
+the endpoint takes it — so a shortened width is the width that comes back —
+and every answer is checked against it either way:
+
+| Model | `dimensions` at its endpoint | What the engine does |
+|---|---|---|
+| `text-embedding-3-large`, `text-embedding-3-small` | Supported: the vector is shortened to the width asked ([OpenAI's reference](https://developers.openai.com/api/reference/resources/embeddings/methods/create)) | Sends it, so a width below the model's own is the width stored |
+| `gemini-embedding-001` | Not mentioned by [Google's compatibility page](https://ai.google.dev/gemini-api/docs/openai), whose examples send none | Sends it, as it always has; an endpoint that ignored it would answer 3072, which the width check refuses at any other width |
+| `embed-v4.0` | Listed as unsupported by [Cohere's Compatibility API](https://docs.cohere.com/docs/compatibility-api), which takes no other way to choose a width either, so it answers at the model's default, 1536 ([the model page](https://docs.cohere.com/docs/cohere-embed)) | Never sends it, and refuses any other `dimensions`, naming the field |
+| any other model | Unknown | Sends it |
+
+**So do its limits.** How many tokens one input may hold, how many inputs one
+request may carry and how many tokens one request may carry in all are facts
+about the model, and the engine carries what each vendor documents for the
+endpoint it calls:
+
+| Model | Tokens an input | Inputs a request | Tokens a request |
+|---|---|---|---|
+| `text-embedding-3-large`, `text-embedding-3-small` | 8 192 | 2 048 | 300 000 |
+| `gemini-embedding-001` | 2 048 | *state it* | *state it* |
+| `embed-v4.0` | 128 000 | *state it* | *state it* |
+
+Google's and Cohere's OpenAI-compatible endpoints document no limit per
+request — Cohere's native API takes 96 texts a call, but that is a different
+endpoint's — so those two are refused until `max_batch_inputs` and
+`max_batch_tokens` are stated, and a model this build does not know states all
+three, exactly as it states its width. A stated limit may only *lower* a
+documented one, for a gateway or proxy in front of the model that accepts less;
+raising one is refused, naming the field, because the provider would refuse
+what the engine then sends.
+
+**A company that needs a limit states it.** A stored company naming
+`gemini-embedding-001`, `embed-v4.0` or a model this build does not know,
+without the limits it needs, is refused at boot as well as at an apply,
+exactly as a model with no known width is — and, the same way, `embed-v4.0`
+at any `dimensions` but 1536, which its endpoint cannot produce. No node
+starts on that revision, so state the limits in the same edit that names the
+model.
+
+The engine counts **bytes** against those token limits rather than shipping a
+tokenizer per vendor: every tokenizer these models use emits at most one token
+per byte of the text it is given, plus the few special tokens a server wraps an
+input in (none for OpenAI, whose count is the input's own; sixteen are set
+aside for every other model). So an input of 8 192 bytes is always inside
+OpenAI's 8 192-token window, whatever language it is in — at the price that
+ordinary prose, three to four bytes a token, is held to about a quarter of the
+window. An input past that bound is refused *before* anything is sent, and a
+batch is sent in as many requests as the model's limits need. What a text too
+long for one input becomes is each caller's choice: the knowledge corpus embeds
+a document's opening, while a turn's ask and an episode are split between words
+into pieces that each fit, embedded in one call, and pooled into one vector —
+so a long ask is still searched by meaning, all of it, rather than refused.
+
 **The width is a contract with the store, not with the model.** Vectors of
 two different widths cannot be compared, so a row written at the wrong one is
 not a degraded search — it is a row that can be written and never read back,
@@ -497,18 +570,66 @@ than adapt:
 
 - **At the apply.** A revision whose `dimensions` differs from the width this
   store already holds is rejected, with an error naming both. Changing the
-  width means re-embedding what is stored, which is a decision for an operator
-  who is watching rather than a silent divergence discovered at the first
-  recall weeks later.
+  width is a restart, which is a decision for an operator who is watching
+  rather than a silent divergence discovered at the first recall weeks later:
+  after it the knowledge corpus re-embeds itself and each seat's diary and
+  episodes are re-filled by the node holding the seat.
+- **Per model, at recall.** Two models of one width are two spaces —
+  `text-embedding-3-small` and `embed-v4.0` both answer 1 536 floats — so
+  every diary and episode vector is stored with the model it came from and
+  recall compares only rows of the query's model. Changing `model` at the
+  same width is therefore an ordinary apply: each seat's diary and episodes
+  are re-filled in the new space by the node holding it — about a million
+  bytes of text a minute across the company — and until a row is, it is
+  reached by recency and by conversation rather than ranked against a space
+  it is not in, and `query_episodes` says how many of a seat's turns its
+  search could not reach.
 - **On every call.** A vector that comes back at the wrong width is refused
   rather than stored — on every call and not just the first, because a
   gateway or aggregator can move models mid-deployment.
 
-Everything else about an embedding failure is cheap: a timed-out or refused
-call is *no vector*, which every caller reads as "no similarity search this
-turn" and carries on with recency. Nothing here retries — the caller's
-degradation costs less than a retry spent inside a turn-start prefetch
-somebody is waiting on.
+**What a failure costs depends on who asked, so nothing in the provider
+retries.** For a turn starting — diary and episode recall, a search's query
+vector — a timed-out or refused call is *no vector*: personal memory keeps its
+recent half, `## Similar prior work` renders nothing and `query_episodes` says
+its search could not run (a recent turn is not similar work), and a hybrid
+search serves its keyword half — and a retry would be spent inside a prefetch
+somebody is waiting on. For the knowledge corpus, a failure is
+a backlog, and the duty asks again on its next tick. What the provider gives
+every caller instead is *which* failure it was, in three classes: **refused**
+(HTTP 400, 413 or 422, or an input past the bound — sent again unchanged it
+will be refused again, so a caller can set that one input aside rather than
+resend its whole batch for ever), **transient** (408, 409, 425, 429 and 5xx, a
+timeout or a network failure — asking again later may succeed) and
+**configuration** (401, 402, 403, 404 and the remaining 4xx, or a vector of the
+wrong width — nothing will succeed until `providers.embeddings` is fixed).
+
+**One call's ceiling is not another's.** A single embedding is held to 15
+seconds where nothing tighter bounds it — an episode embedded after its turn,
+for one. What a person or a turn waits on is held to two seconds instead: a
+search's query vector, whether a person or a seat's `search_knowledge` asked; a
+turn's ask as the turn starts; the hint `query_episodes` or `refresh_memory`
+passes; and a note `reflect_and_persist` keeps, which the seat's model is
+waiting on mid-turn (a note the reflection after the turn keeps is held to the
+same two seconds). Past it each degrades rather than waits. A hybrid search
+serves its keyword half and a semantic one answers nothing, each saying why.
+Personal memory is chosen from the recent half of its candidate pool alone. Similar prior work renders nothing, and
+`query_episodes` says its search could not run — by design, since a recent
+turn is not similar work and the block would offer it as precedent. The note
+is kept without a vector until the node holding the seat fills it. So a slow
+embeddings server shows up as `embedding_failed` searches, personal memory drawn
+from recent notes only and no similar prior work, not as slow searches, slow
+turn starts and stalled tool calls. A batch request carries up to
+the model's request total (300 000 tokens on OpenAI) and is held to 60 seconds,
+a fifth of the five minutes a corpus tick may go without progress. Nothing has
+measured how long a server takes over a full request — OpenAI's or a self-hosted
+one on CPU, the deployment most likely to need longer. If batches time out
+against a slow server, lower `max_batch_tokens`: a smaller request is a shorter
+one, and the ceiling a stuck call is held to does not move. Keep it at or above
+the model's per-input window (`max_input_tokens`, or the model's own) — one
+input must fit one request, so a request total below the window is also the most
+one input may hold, and the knowledge corpus would then embed a shorter opening
+of every long source, each under a new digest and so embedded again.
 
 ### Claude models: thinking, effort and sampling
 

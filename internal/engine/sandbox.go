@@ -17,6 +17,8 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
@@ -240,11 +242,14 @@ func secondsPtr(v *float64) *time.Duration {
 // The charge happens AFTER the spend, which is why it cannot refuse: a refusal
 // cannot un-spend a run that already ran, and recording it anyway is the only
 // way the meter stays true when the cap is binding. So it goes through
-// [coord.Budgets.PostCharge], never the gate: charged through
-// [coord.Budgets.Charge], a run that did not fit was recorded not at all,
-// which under-stated the company's spend by the whole run at exactly the
-// moment the cap bound, and stamped a refusal on a seat that would still
-// admit its next round.
+// [coord.Budgets.PostCharge], never the gate. Charged through
+// [coord.Budgets.Charge] when a refused charge counted nothing, a run that did
+// not fit was recorded not at all, which under-stated the company's spend by
+// the whole run at exactly the moment the cap bound. Charge counts what it
+// refuses now, but its verdict is still the wrong thing to ask for: nothing
+// waits on it — the work the run bought is done — and a refusal would stamp
+// the seat's window as the gate turning a round away, and an admission clear
+// every stamp, for a charge nobody was deciding about.
 //
 // The run is counted in the windows of COLLECTION — the day, week and month
 // it was collected in, on the company's clock — because that is the only
@@ -253,7 +258,11 @@ func secondsPtr(v *float64) *time.Duration {
 // whether to SAY the run went over.
 //
 // Charging it once per launch, however often its completion is retried, is the
-// coordinator's side: see [sandbox.PendingRun.Charged].
+// coordinator's side: see [sandbox.PendingRun.Charged]. So is finishing a charge
+// that reached the company and not the seat ([coord.SeatUncountedError]): the
+// coordinator records the partial on the run, and the retry it hands here is
+// told so and records the seat's share alone ([coord.Budgets.PostChargeSeat]),
+// rather than counting the company a second time.
 type sandboxAccountant struct {
 	budgets postCharger
 
@@ -270,15 +279,31 @@ type sandboxAccountant struct {
 // postCharger is the slice of the fleet's counters the accountant calls.
 type postCharger interface {
 	PostCharge(ctx context.Context, seat string, tokens int, windows coord.Windows) (coord.Spend, error)
+	PostChargeSeat(ctx context.Context, seat string, tokens int, windows coord.Windows) (coord.Usage, error)
 }
 
-func (a sandboxAccountant) Charge(ctx context.Context, agentID, _ string, tokens int) (bool, error) {
+// Charge post-charges a collected run, and reports whether it took a counter
+// past a ceiling. The error is the counter's own, a [coord.SeatUncountedError]
+// included, for the coordinator to record.
+//
+// A run whose company share an earlier attempt already recorded is charged to
+// the seat alone, and only the seat's ceilings can then say it went over: the
+// company's counter was not read, and reading it to answer a log line would
+// be a second round trip for a figure nothing acts on.
+func (a sandboxAccountant) Charge(ctx context.Context, agentID, _ string, tokens int, companyCharged bool) (bool, error) {
 	if a.budgets == nil || tokens <= 0 {
 		return false, nil
 	}
 	basis := a.basis(agentID)
-	spend, err := a.budgets.PostCharge(ctx, coord.AgentScope(agentID), tokens,
-		coord.WindowsAt(a.now(), basis.zone))
+	scope, windows := coord.AgentScope(agentID), coord.WindowsAt(a.now(), basis.zone)
+	if companyCharged {
+		seat, err := a.budgets.PostChargeSeat(ctx, scope, tokens, windows)
+		if err != nil {
+			return false, err
+		}
+		return overAnyCap(seat, basis.seat), nil
+	}
+	spend, err := a.budgets.PostCharge(ctx, scope, tokens, windows)
 	if err != nil {
 		return false, err
 	}
@@ -362,9 +387,11 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 		Success:       req.Success,
 		Trigger:       req.Trigger,
 		DeliveredRefs: req.DeliveredRefs,
+		RefsElided:    req.DeliveredRefsElided,
 		InputTokens:   req.InputTokens,
 		OutputTokens:  req.OutputTokens,
 		Begin:         req.Begin,
+		Engine:        req.Engine,
 	})
 }
 
@@ -444,6 +471,10 @@ type resumeInput struct {
 	// `sandbox` phase record — see [sandbox.ResumeRequest.DeliveredRefs].
 	DeliveredRefs []string
 
+	// RefsElided is how many more the run reported than DeliveredRefs
+	// lists — see [sandbox.ResumeRequest.DeliveredRefsElided].
+	RefsElided int
+
 	// InputTokens and OutputTokens are the resumed job's tokens, which this
 	// segment's charge to the turn's work item includes — see
 	// [sandbox.ResumeRequest.InputTokens].
@@ -454,6 +485,11 @@ type resumeInput struct {
 	// to run and before any of it does — see [sandbox.ResumeRequest.Begin].
 	// Nil commits nothing.
 	Begin func(ctx context.Context) error
+
+	// Engine is what the engine spent on the job between segments — its
+	// bridged calls and the condensation of its collection — which this
+	// segment's charge includes too: see [sandbox.ResumeRequest.Engine].
+	Engine sandbox.EngineSpend
 }
 
 // resumeTurn re-enters a suspended turn.
@@ -571,6 +607,12 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		// rebase again against its own clock.
 		return err
 	}
+	// THE COUNTER AS THE RUN LEFT IT, read once before anything is sent:
+	// the run was post-charged a moment ago, and a window it took past its
+	// ceiling refuses every call this segment would make. Before the turn
+	// identity, which carries it to every auxiliary call the segment makes
+	// ([turnTelemetry.budget]).
+	tel.budget = e.resumeMeterFor(ctx, company, in.Turn.Handle())
 	turnIdentity := tel.runnerTurn(company, in.Run.DelegationDepth,
 		in.Run.DelegationChain, resumeTask(in), resumedReply)
 	// The runtime, and the note box it decides — see [steerBox].
@@ -578,7 +620,8 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	box := steerBox(agentRun)
 	r, err := company.RunnerFor(in.Turn.Handle(),
 		e.seatRegistry(company, in.Turn.Handle()), RunnerInput{
-			Task: resumeTask(in),
+			Task:    resumeTask(in),
+			Compact: e.compactorFor(company),
 			// THE RUNNER NEEDS IT TOO, not just the loop below. This
 			// field reaches runner.Config.Reply, which is what
 			// submit_work's own citation check reads — so a resumed turn
@@ -598,11 +641,11 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			// same turn running again, and a note sent while it parked
 			// was answered `closed` — the box that segment had is gone.
 			Steer:  box,
-			Budget: e.meterFor(company, in.Turn.Handle()),
+			Budget: tel.budget.budget(),
 			// A resumed Execute loop can exhaust its rounds like any other,
 			// and it is the phase most likely to: it comes back mid-task with
 			// its budget already partly spent.
-			Judge:     e.judgeFor(company, in.Turn.Handle()),
+			Judge:     e.judgeFor(company, in.Turn.Handle(), tel.aux()),
 			Remaining: e.remainingFor(company, in.Turn.Handle()),
 			// THE SAME FENCE THE DISPATCH PATH GETS, and a resume needs it
 			// more than a fresh turn does: this loop was parked across a
@@ -639,6 +682,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 					SandboxID:     in.Run.SandboxID,
 					LaunchID:      in.Run.LaunchID,
 					DeliveredRefs: in.DeliveredRefs,
+					RefsElided:    in.RefsElided,
 				},
 				// THE RUN'S OWN TOOL CALLS, off its durable row. An
 				// agent-mode executor called them over the bridge, possibly
@@ -696,8 +740,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// charge after the completion — see turnspend.go.
 	spend := r.Spend()
 	charge := tel.chargeFor(spend, res, err, time.Now().UTC())
-	e.publishTurnCompleted(ctx, tel, spend, res, err)
-	e.recordTurnSpend(ctx, charge)
+	e.endSegment(ctx, tel, spend, res, err, charge)
 	if err != nil {
 		// A PERSON STOPPED THE RESUMED TURN — its seat was paused with a
 		// stop while the run was out, and the turn ended at its first
@@ -760,7 +803,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// running and leaves the box for the next completion — and keeps its
 	// indicator on the same terms, off the ROW rather than off the intent.
 	if res.Suspended {
-		working = stillWorking(e.persistSuspension(ctx, r, in.Run.TurnID, tel.written, charge.carry))
+		working = stillWorking(e.persistSuspension(ctx, r, in.Run.TurnID, tel.written, charge.carry, tel.ask, tel.senders))
 	}
 	e.recordResume(ctx, in, res)
 	return nil
@@ -895,9 +938,15 @@ func resumeReply(run sandbox.PendingRun) (turn.Reply, error) {
 // by a sole write, and it can only judge "exactly one" over the whole turn if
 // the half before the park travels with the conversation. So does what the
 // segments so far spent and charged to nothing (execstate.State.Uncharged),
-// for that same finishing segment to pay — see turnspend.go.
+// for that same finishing segment to pay — see turnspend.go. And so does what
+// the turn was ASKED (execstate.State.Ask), which the finishing segment's
+// completed-turn event carries and is woken by something else entirely — and
+// WHO asked it (execstate.State.Senders), which a refresh_memory call in any
+// later segment tells the memory filter, since no later segment has the
+// interactions to read them off.
 func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID string,
-	written *turnctx.Written, uncharged *execstate.Uncharged,
+	written *turnctx.Written, uncharged *execstate.Uncharged, ask string,
+	senders []types.CanonicalIdentity,
 ) (bool, error) {
 	rt := e.sandbox.Load()
 	if rt == nil {
@@ -913,6 +962,8 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 	}
 	suspension.State.Written, suspension.State.WrittenMany = written.Items()
 	suspension.State.Uncharged = uncharged
+	suspension.State.Ask = ask
+	suspension.State.Senders = senders
 	blob, err := execstate.Encode(suspension.State)
 	if err != nil {
 		e.failSuspension(ctx, rt, turnID, "sandbox_suspension_unserializable",
@@ -1459,6 +1510,9 @@ func (e *Engine) buildSandboxRuntime(manager *sandbox.Manager) (*sandboxRuntime,
 		// Who a parked question is put to, resolved against the live
 		// chart at the park — see audience.go.
 		Audience: audienceResolver{engine: e},
+		// A report, a failure or a question past what the run's record
+		// carries is condensed by the seat's auxiliary model rather than cut.
+		Condense: runCondenser{engine: e},
 		// The per-run tool bridge dies with the run — see
 		// [sandbox.CoordinatorOptions.Ended]. Idempotent, and reached
 		// from every settle path, so a run that failed before it ever
@@ -1511,6 +1565,63 @@ func (e *Engine) spendAnswer(ctx context.Context, handle string, evs []*events.E
 	e.dispatch.SpendAnswer(ctx, handle, evs)
 }
 
+// runCondenser is the coordinator's [sandbox.Condenser]: the seat's own
+// compactor, on the epoch CURRENT at the collection — the coordinator outlives
+// every revision, and a run collected after an apply is condensed by the model
+// the seat is configured with now.
+//
+// The label goes in front and is counted against the budget, because the
+// budget is the record's and the label rides it.
+type runCondenser struct{ engine *Engine }
+
+func (r runCondenser) Condense(ctx context.Context, run sandbox.PendingRun, part sandbox.RunPart,
+	text string, budget int) (string, sandbox.AuxTokens, error) {
+	company := r.engine.Company()
+	if company == nil {
+		return "", sandbox.AuxTokens{}, compact.ErrUnavailable
+	}
+	note := compact.Result{Compacted: true, From: len(text)}.Note()
+	// THE TURN'S OWN COST, filed under the run the report belongs to: the
+	// resumed segment reads it as the coding run's answer.
+	//
+	// ITS OWN TALLY, handed back with the text: no segment's tally is open
+	// while a run is collected — the condensation happens between two of
+	// them, on whichever node collects — so the coordinator carries what it
+	// cost to the segment that resumes from the collection, which pays it
+	// to the turn's work item (ADR-0022). A rewrite that failed was paid
+	// for too, so the tally is answered on every path.
+	spent := auxspend.NewTally()
+	use := auxspend.Use{Stage: types.AuxStageTurn, TurnID: run.TurnID, WorkKey: run.WorkKey,
+		Tally: spent}
+	res, err := r.engine.seatCompactor(company, run.AgentHandle, use).Fit(ctx, runPartKind(part), text,
+		budget-len(note)-1)
+	cost := auxTokensOf(spent.Total())
+	if err != nil {
+		return "", cost, err
+	}
+	return note + "\n" + res.Text, cost, nil
+}
+
+// auxTokensOf is an auxiliary tally in the shape a run's row carries.
+func auxTokensOf(s auxspend.Spent) sandbox.AuxTokens {
+	return sandbox.AuxTokens{Input: s.Input, Output: s.Output,
+		CacheRead: s.CacheRead, CacheWrite: s.CacheWrite}
+}
+
+// runPartKind is what the compactor is told a piece of a run's account IS,
+// which decides what its rewrite must keep: a report its findings, a failure
+// its cause, a question the question and its options.
+func runPartKind(part sandbox.RunPart) compact.Kind {
+	switch part {
+	case sandbox.PartFailure:
+		return compact.KindToolError
+	case sandbox.PartQuestion:
+		return compact.KindQuestion
+	default:
+		return compact.KindReport
+	}
+}
+
 // startSandboxWaiter starts the completion poll, once the node exists and a
 // runtime does, and at most once.
 func (e *Engine) startSandboxWaiter(ctx context.Context) error {
@@ -1534,6 +1645,10 @@ func (e *Engine) startSandboxWaiter(ctx context.Context) error {
 		// unclaimed means N reconnects per box per tick and N racing
 		// reapers.
 		ClaimDuty: sandbox.DutyFunc(duty),
+		// The lease each claim takes, which bounds every poll the claim
+		// authorises: a poll outlives the pass that started it, and must
+		// not outlive the duty, past which a peer may poll the same box.
+		DutyTTL: waiterDutyTTL(interval),
 	})
 	if err != nil {
 		return err

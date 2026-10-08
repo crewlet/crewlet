@@ -14,7 +14,7 @@ import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { CommandPalette } from "./Palette.tsx";
 import { forgetAnswersForTest } from "./answer.ts";
 import { ANSWER_IDLE_MS } from "./hits.ts";
-import { COLLEAGUE_QUERY_MAX } from "~/contract/wire.ts";
+import { COLLEAGUE_QUERY_MAX, SEARCH_QUERY_MAX } from "~/contract/wire.ts";
 import { Router, href } from "../router.tsx";
 import { DESTINATIONS } from "../nav.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -23,6 +23,7 @@ import { remember } from "~/lib/recents.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
+import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 
 vi.mock("~/lib/viewer.ts", () => ({ useViewer: vi.fn() }));
 
@@ -275,7 +276,14 @@ describe("running now", () => {
       stage: "phase",
       ...(item ? { work_item: { backend: "native", id: item, key: item, project: "ENG" } } : {}),
     },
-    live_call: { turn_id: turn, phase: "execute", round_num: 0, rounds_used: 1, max_rounds: 25 },
+    live_call: {
+      turn_id: turn,
+      phase: "execute",
+      round_num: 0,
+      rounds_used: 1,
+      max_rounds: 25,
+      versions: ZERO_VERSIONS,
+    },
   });
   const agents = [
     working("SRE", "sre", "t-late", 9),
@@ -961,6 +969,38 @@ describe("the colleague question", () => {
     // 201 bytes in a string JavaScript calls 67 long.
     await p.type(`@${"語".repeat(67)}`);
     expect(asked.filter((a) => a.kind === "colleague")).toHaveLength(1);
+  });
+});
+
+describe("the search bound", () => {
+  // THE ENGINE REFUSES A PHRASE PAST ITS SEARCH BOUND rather than cutting it,
+  // so a pasted passage asks neither search nor the answer — the list would
+  // lose its tasks and pages to two refusals and the answer card to a third,
+  // with nothing saying why — and the lead says why instead.
+  test("a term past it asks nothing and says why", async () => {
+    vi.useFakeTimers();
+    engine(() => json({ error: "not_found", detail: "no" }, 404));
+    const p = mount();
+    const searches = () => asked.filter((a) => a.kind === "work_search" || a.kind === "knowledge");
+    const pasted = "why does the deploy keep failing ".repeat(15).trim();
+    await p.type(pasted);
+    await act(async () => {
+      vi.advanceTimersByTime(ANSWER_IDLE_MS * 2);
+    });
+    await act(async () => {});
+    expect(searches()).toEqual([]);
+    expect(posted).toEqual([]);
+    expect(
+      screen.getByText(
+        `This is ${pasted.length} bytes, and a search takes at most ${SEARCH_QUERY_MAX} — search on a few keywords or a phrase, not a pasted passage.`,
+      ),
+    ).toBeDefined();
+    // BYTES, as the engine counts, not characters.
+    await p.type("語".repeat(134));
+    expect(searches()).toEqual([]);
+    // AT the bound it is a search, of both.
+    await p.type("x".repeat(SEARCH_QUERY_MAX));
+    expect(searches().map((a) => a.kind)).toEqual(["work_search", "knowledge"]);
   });
 });
 

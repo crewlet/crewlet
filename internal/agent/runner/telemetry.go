@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
@@ -143,6 +144,13 @@ type emitter struct {
 // nestedAt is this emitter bound to the round a nested phase runs under.
 func (e emitter) nestedAt(round int) emitter {
 	e.hostIteration = round
+	return e
+}
+
+// talliedOn is this emitter counting the workers it closes on spend, under mu,
+// rather than on the runner's own tally — see [meter].
+func (e emitter) talliedOn(spend *Spend, mu *sync.Mutex) emitter {
+	e.tally, e.mu = spend, mu
 	return e
 }
 
@@ -1186,6 +1194,7 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		ev.CodingAgent = rec.Run.CodingAgent
 		ev.SandboxID = rec.Run.SandboxID
 		ev.DeliveredRefs = rec.Run.DeliveredRefs
+		ev.DeliveredRefsElided = rec.Run.RefsElided
 		ev.LaunchID = rec.Run.LaunchID
 	}
 	if rec.Err != nil {
@@ -1530,24 +1539,17 @@ func liveExecutions(execs []toolloop.Execution) []types.ToolExecution {
 //
 // The tail is what a reader is actually watching — text appears at the END —
 // and the full text arrives moments later on the round's own narration, which
-// is authoritative anyway. Four thousand characters is roughly two screens at
-// this type size, so nothing a reader could have been mid-way through is cut.
+// is authoritative anyway. Four thousand BYTES — what the frame costs, so the
+// unit is the wire's — is roughly two screens of English at this type size
+// (fewer characters of a script whose characters take more bytes), so nothing
+// a reader could have been mid-way through is cut.
 const partialTail = 4000
 
-// tail is the last partialTail characters, marked when it elides.
-func tail(text string) string {
-	if len(text) <= partialTail {
-		return text
-	}
-	// Cut on a RUNE boundary: slicing a UTF-8 string by bytes can split a
-	// multi-byte character, and the replacement glyph would be the last
-	// thing on screen every time the cut landed mid-character.
-	cut := text[len(text)-partialTail:]
-	for len(cut) > 0 && !utf8.RuneStart(cut[0]) {
-		cut = cut[1:]
-	}
-	return "…" + cut
-}
+// tail is the last partialTail bytes of text, marked when it elides — the
+// engine's one rule for keeping a string's end ([textcut.Tail]): on a
+// character, so the cut never shows a replacement glyph, with the marker not
+// counted against the bound.
+func tail(text string) string { return textcut.Tail(text, partialTail) }
 
 // encodeArgs renders a call's arguments as JSON text, falling back to nothing
 // rather than to a Go-syntax dump: an argument map that will not marshal is

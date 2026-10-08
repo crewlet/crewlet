@@ -1,12 +1,19 @@
 package engine
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/knowledge"
+	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/store"
@@ -161,38 +168,170 @@ func TestAStoreOpenedWithoutVectorsVetoesNothing(t *testing.T) {
 	}
 }
 
-// The prefetch takes a FUNCTION, and nil is how it learns there is no
-// similarity search — so an engine that built no embedder must hand it a nil
-// func rather than a live method value closing over a nil interface, which
-// is not nil and panics on the first call.
-func TestNoEmbedderIsANilFuncNotAPanickingOne(t *testing.T) {
+// NO EMBEDDER IS AN ANSWER, not a panic: the seam is a method value that
+// reads the engine's current embedder on every call, so an engine that never
+// stored one — or stored a nil — answers learning.ErrNoEmbeddings, which every
+// consumer reads as "no similarity search" rather than as a fault.
+func TestNoEmbedderAnswersThatNoneIsConfigured(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
-	if e.embedder() != nil {
-		t.Fatal("an engine that never stored an embedder handed out a callable")
+	if _, err := e.embedText(t.Context(), "anything"); !errors.Is(err, learning.ErrNoEmbeddings) {
+		t.Fatalf("an engine that never stored an embedder answered %v", err)
 	}
 	var none embeddings.Embedder
 	e.embeddings.Store(&none)
-	if e.embedder() != nil {
-		t.Fatal("a stored nil embedder handed out a callable")
+	if _, err := e.embedText(t.Context(), "anything"); !errors.Is(err, learning.ErrNoEmbeddings) {
+		t.Fatalf("a stored nil embedder answered %v", err)
 	}
 }
 
-func TestAStoredEmbedderIsHandedOutAsItsEmbedMethod(t *testing.T) {
+// A STORED EMBEDDER IS USED AS ITS WHOLE-TEXT FORM: what the prefetch and the
+// episodist embed — a turn's ask, a completed turn — has an end that matters
+// as much as its beginning, and the provider refuses an input past the model's
+// bound before sending it. So a short text is exactly Embed's vector and a
+// long one is the pool of all of it, never "no similarity search".
+func TestAStoredEmbedderEmbedsTheWholeOfWhatItIsHanded(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
-	var fake embeddings.Embedder = embeddings.NewFake(4)
-	e.embeddings.Store(&fake)
-	embed := e.embedder()
-	if embed == nil {
-		t.Fatal("a stored embedder handed out nothing")
-	}
-	v, err := embed(t.Context(), "the quick brown fox")
+	fake := embeddings.NewFake(4)
+	var held embeddings.Embedder = fake
+	e.embeddings.Store(&held)
+	embed := e.embedText
+	short := "the quick brown fox"
+	v, err := embed(t.Context(), short)
 	if err != nil {
 		t.Fatalf("embed: %v", err)
 	}
-	if len(v) != 4 {
-		t.Fatalf("vector width = %d, want the embedder's 4", len(v))
+	alone, err := embeddings.NewFake(4).Embed(t.Context(), short)
+	if err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if !slices.Equal(v.Values, alone) {
+		t.Fatal("a short text is not the vector Embed gives it")
+	}
+	// TAGGED WITH THE SPACE IT IS IN, read off the embedder that made it.
+	if v.Model != fake.Model() {
+		t.Fatalf("the vector names model %q, want the embedder's %q", v.Model, fake.Model())
+	}
+
+	long := strings.Repeat("the deploy keeps failing on staging ", 400)
+	if _, err := fake.Embed(t.Context(), long); !errors.Is(err, embeddings.ErrTooLong) {
+		t.Fatalf("the fixture is wrong: Embed of %d bytes = %v", len(long), err)
+	}
+	v, err = embed(t.Context(), long)
+	if err != nil {
+		t.Fatalf("a text past the model's bound was not embedded whole: %v", err)
+	}
+	if len(v.Values) != 4 || v.Model != fake.Model() {
+		t.Fatalf("vector = %d wide in %q, want the embedder's 4 in %q",
+			len(v.Values), v.Model, fake.Model())
+	}
+}
+
+// THE TWIN STARTS WHERE THE DEFAULT PROVIDER IS: the limits a fake embedder
+// enforces out of the box are the ones the configuration resolves for
+// OpenAI's models, so a test certified against the fake was certified against
+// what production refuses — and a change to either side that the other did
+// not follow fails here rather than in a company's corpus.
+func TestTheFakeStartsAtTheDefaultModelsLimits(t *testing.T) {
+	t.Parallel()
+	got, err := (&Engine{}).buildEmbedder(companyWith(t, fmt.Sprintf(embeddingDoc, 1536)))
+	if err != nil {
+		t.Fatalf("buildEmbedder: %v", err)
+	}
+	if fake := embeddings.NewFake(4).Limits(); got.Limits() != fake {
+		t.Fatalf("text-embedding-3-small resolves %+v; the fake starts at %+v", got.Limits(), fake)
+	}
+}
+
+// THE PROVIDER IS BUILT AT THE LIMITS THE CONFIGURATION RESOLVES, a stated one
+// included — a gateway that accepts less than the model is what the field is
+// for, and a provider built at the model's own would send what it refuses.
+func TestAConfiguredEmbedderIsBuiltAtTheStatedLimits(t *testing.T) {
+	t.Parallel()
+	doc := strings.Replace(fmt.Sprintf(embeddingDoc, 1536),
+		"    api_key: sk-embed\n",
+		"    api_key: sk-embed\n    max_input_tokens: 512\n    max_batch_inputs: 16\n", 1)
+	got, err := (&Engine{}).buildEmbedder(companyWith(t, doc))
+	if err != nil {
+		t.Fatalf("buildEmbedder: %v", err)
+	}
+	want := embeddings.Limits{InputBytes: 512, BatchInputs: 16, BatchBytes: 300_000}
+	if got.Limits() != want {
+		t.Fatalf("Limits() = %+v, want %+v", got.Limits(), want)
+	}
+	if got.Model() != "text-embedding-3-small" {
+		t.Errorf("Model() = %q", got.Model())
+	}
+}
+
+// THE PROVIDER ASKS FOR ITS WIDTH ON THE CONFIGURATION'S RULE. A model whose
+// endpoint documents `dimensions` as unsupported — embed-v4.0 through Cohere's
+// Compatibility API — is built not to send it, and every other model is built
+// to; the rule and its citations live in config, and this is where the engine
+// hands the answer to the provider, so a wiring that dropped it is a company
+// whose every embedding request carries a parameter its endpoint says it does
+// not take.
+func TestTheEmbedderAsksForItsWidthOnTheConfigurationsRule(t *testing.T) {
+	t.Parallel()
+	for model, wantAsked := range map[string]bool{
+		"embed-v4.0":             false,
+		"text-embedding-3-small": true,
+	} {
+		t.Run(model, func(t *testing.T) {
+			t.Parallel()
+			var (
+				mu    sync.Mutex
+				asked []bool
+			)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var req map[string]json.RawMessage
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				_, carried := req["dimensions"]
+				mu.Lock()
+				asked = append(asked, carried)
+				mu.Unlock()
+				vector := strings.TrimSuffix(strings.Repeat("0.5,", 1536), ",")
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprintf(w, `{"object":"list","data":[{"object":"embedding","index":0,"embedding":[%s]}],"model":"m"}`, vector)
+			}))
+			t.Cleanup(srv.Close)
+			doc := fmt.Sprintf(`
+name: Nimbus
+providers:
+  llm:
+    scripted:
+      type: anthropic
+      model: claude-x
+      api_keys: ["sk-test"]
+  embeddings:
+    type: openai-compatible
+    model: %s
+    base_url: %s
+    api_key: sk-embed
+    max_batch_inputs: 96
+    max_batch_tokens: 128000
+roles:
+  - name: CEO
+    handle: ceo
+    llm: scripted
+`, model, srv.URL)
+			got, err := (&Engine{}).buildEmbedder(companyWith(t, doc))
+			if err != nil {
+				t.Fatalf("buildEmbedder: %v", err)
+			}
+			if _, err := got.Embed(t.Context(), "the deploy keeps failing"); err != nil {
+				t.Fatalf("Embed: %v", err)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if len(asked) != 1 || asked[0] != wantAsked {
+				t.Fatalf("the request carried dimensions: %v, want %v", asked, wantAsked)
+			}
+		})
 	}
 }
 

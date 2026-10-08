@@ -245,6 +245,7 @@ package coordtest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"maps"
 	"reflect"
 	"slices"
@@ -457,8 +458,49 @@ func newHarness(t *testing.T, newBackend func(t *testing.T) coord.Backend) *harn
 // claim acquires and fails the case unless the backend granted the lease.
 func (h *harness) claim(resource string, opts coord.AcquireOptions) *coord.Lease {
 	h.t.Helper()
-	h.lastClaimAt, h.lastClaimTTL, h.travelled = time.Now(), opts.TTL, false
-	lease, refused, err := h.b.TryAcquire(h.ctx, resource, opts)
+	return h.claimWithin(resource, opts, 0)
+}
+
+// claimAnswered is [harness.claim] for a claim a case asks of a store it has
+// just put under load: an UNKNOWN answer ([coord.ErrUnavailable]) is asked
+// again, for up to bound, and every other answer is judged exactly as claim
+// judges it.
+//
+// An unknown is a legitimate answer — "the store could not be reached" is the
+// third value every claim has, and a backend that never gave it under load
+// would be one that serialises every call behind a lock — so a case whose
+// LAST claim certifies something (the epoch after a churn) must not fail on
+// one. A store that still has not answered when the bound runs out fails the
+// case, so nothing passes by answering nothing.
+func (h *harness) claimAnswered(resource string, opts coord.AcquireOptions, bound time.Duration) *coord.Lease {
+	h.t.Helper()
+	return h.claimWithin(resource, opts, bound)
+}
+
+// claimWithin asks for the lease until it is answered or retry has passed,
+// then judges the answer: a grant, of the resource and owner asked, at a real
+// epoch. A retry of zero asks once.
+func (h *harness) claimWithin(resource string, opts coord.AcquireOptions, retry time.Duration) *coord.Lease {
+	h.t.Helper()
+	deadline := time.Now().Add(retry)
+	var (
+		lease   *coord.Lease
+		refused coord.Refusal
+		err     error
+	)
+	for {
+		h.lastClaimAt, h.lastClaimTTL, h.travelled = time.Now(), opts.TTL, false
+		lease, refused, err = h.b.TryAcquire(h.ctx, resource, opts)
+		if !errors.Is(err, coord.ErrUnavailable) || !time.Now().Before(deadline) {
+			break
+		}
+		select {
+		case <-h.ctx.Done():
+			h.t.Fatalf("TryAcquire(%q, owner=%q): the case ended while the store answered "+
+				"unknown: %v", resource, opts.Owner, err)
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 	if err != nil {
 		h.t.Fatalf("TryAcquire(%q, owner=%q): unexpected error: %v", resource, opts.Owner, err)
 	}

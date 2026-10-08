@@ -57,6 +57,21 @@ type UsageDay struct {
 	// Schedules are the schedules this node's scheduler fired in the
 	// window, ordered by scope and name.
 	Schedules []UsageSchedule
+
+	// People are the PEOPLE the auxiliary model spent for in the window —
+	// a person's questions on the operator surface, a pass on a unit a
+	// person leads — ordered by handle. A person is no seat: no agent id,
+	// no turns, no reads, only spend.
+	People []UsagePerson
+}
+
+// UsagePerson is one person's auxiliary spend on this node in one day: the
+// handle of the human seat it was spent for, that seat's role as the records
+// named it, and the cells.
+type UsagePerson struct {
+	Handle string
+	Role   string
+	Tokens []UsageTokens
 }
 
 // UsageSeat is one seat's day on this node.
@@ -154,11 +169,15 @@ type UsageMark struct {
 	Fires, LastFire   int64
 }
 
-// usageEventTypes are the four records a day is derived from, taken from their
-// payload types for the reason [phaseCompleted] is.
+// usageEventTypes are the five records a day is derived from, taken from their
+// payload types for the reason [phaseCompleted] is. The auxiliary record is one
+// of them so the fingerprint moves when it lands: a flush writes it up to one
+// ledger interval after its last call, stamped with that call's instant, and a
+// day whose only change was that row would otherwise never be re-derived.
 func usageEventTypes() []any {
 	return []any{
 		phaseCompleted,
+		auxiliarySpendType,
 		turnCompleted,
 		types.AgentTurnCompleted{}.EventType(),
 		types.KnowledgeRead{}.EventType(),
@@ -237,31 +256,44 @@ func (d *DB) UsageForDay(ctx context.Context, w UsageWindow) (UsageDay, error) {
 	if err != nil {
 		return UsageDay{}, err
 	}
+	people, err := d.usagePeople(ctx, w)
+	if err != nil {
+		return UsageDay{}, err
+	}
 
-	out := UsageDay{Schedules: schedules}
+	out := UsageDay{Schedules: schedules, People: people}
 	for _, id := range slices.Sorted(maps.Keys(seats)) {
 		out.Seats = append(out.Seats, *seats[id])
 	}
 	return out, nil
 }
 
-// usageTokens folds the window's phase completions into (phase, worker, model,
-// provider key) cells per seat, off the columns node/0015 and node/0032
-// promoted — never the payload.
+// usageTokens folds the window's spend records — the phase completions and the
+// auxiliary records — into (phase, worker, model, provider key) cells per seat,
+// off the columns node/0015, node/0032 and node/0040 promoted, never the
+// payload. An auxiliary record's cell is phase `auxiliary` with its purpose as
+// the worker, so it takes no cell shape of its own.
+//
+// CALLS ARE PROVIDER CALLS — the `calls` column's sum, not a count of rows —
+// since one coalesced auxiliary row stands for many (node/0040).
+//
+// A SEAT'S, by its agent id: a person's auxiliary spend names no agent and is
+// no seat's cell — it is [DB.usagePeople]'s.
 func (d *DB) usageTokens(ctx context.Context, w UsageWindow,
 	seat func(string) *UsageSeat, name func(*UsageSeat, string, string)) error {
 
+	holders, kinds := spendTypes()
 	rows, err := d.sql.QueryContext(ctx, `
 		SELECT agent_id, MAX(agent_role), phase, worker, model, provider_key,
 		       SUM(input_tokens), SUM(output_tokens),
 		       SUM(cache_read_tokens), SUM(cache_write_tokens),
-		       SUM(total_tokens), COUNT(*)
+		       SUM(total_tokens), SUM(calls)
 		  FROM crewlet_events
-		 WHERE event_type = ? AND event_time >= ? AND event_time < ?
+		 WHERE event_type IN (`+holders+`) AND event_time >= ? AND event_time < ?
 		   AND agent_id != ''
 		 GROUP BY agent_id, phase, worker, model, provider_key
 		 ORDER BY agent_id, phase, worker, model, provider_key`,
-		phaseCompleted, EncodeTime(w.Start), EncodeTime(w.End))
+		append(kinds, EncodeTime(w.Start), EncodeTime(w.End))...)
 	if err != nil {
 		return fmt.Errorf("store: read the usage day's spend: %w", err)
 	}
@@ -280,6 +312,54 @@ func (d *DB) usageTokens(ctx context.Context, w UsageWindow,
 		s.Tokens = append(s.Tokens, t)
 	}
 	return rows.Err()
+}
+
+// usagePeople folds the window's auxiliary records spent for a PERSON into
+// (phase, worker, model, provider key) cells per person, the cell shape a
+// seat's spend has.
+//
+// A PERSON'S RECORD names no agent, and names the person as its envelope's
+// ACTOR — a column already, so the person is grouped on without reading a
+// payload; the person's role is the one payload key read, on these rows only,
+// for [phaseTokenSQL]'s reason. Ordered by handle and cell, so an unchanged
+// day derives identical records.
+func (d *DB) usagePeople(ctx context.Context, w UsageWindow) ([]UsagePerson, error) {
+	rows, err := d.sql.QueryContext(ctx, `
+		SELECT actor, MAX(COALESCE(json_extract(payload, '$.actor_role'), '')),
+		       phase, worker, model, provider_key,
+		       SUM(input_tokens), SUM(output_tokens),
+		       SUM(cache_read_tokens), SUM(cache_write_tokens),
+		       SUM(total_tokens), SUM(calls)
+		  FROM crewlet_events
+		 WHERE event_type = ? AND event_time >= ? AND event_time < ?
+		   AND agent_id = '' AND actor != ''
+		 GROUP BY actor, phase, worker, model, provider_key
+		 ORDER BY actor, phase, worker, model, provider_key`,
+		auxiliarySpendType, EncodeTime(w.Start), EncodeTime(w.End))
+	if err != nil {
+		return nil, fmt.Errorf("store: read the usage day's people: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []UsagePerson
+	for rows.Next() {
+		var (
+			handle, role string
+			t            UsageTokens
+		)
+		if err := rows.Scan(&handle, &role, &t.Phase, &t.Worker, &t.Model, &t.ProviderKey,
+			&t.Input, &t.Output, &t.CacheRead, &t.CacheWrite, &t.Total, &t.Calls); err != nil {
+			return nil, fmt.Errorf("store: scan the usage day's people: %w", err)
+		}
+		if len(out) == 0 || out[len(out)-1].Handle != handle {
+			out = append(out, UsagePerson{Handle: handle})
+		}
+		p := &out[len(out)-1]
+		if p.Role == "" {
+			p.Role = role
+		}
+		p.Tokens = append(p.Tokens, t)
+	}
+	return out, rows.Err()
 }
 
 // usageTurns reads the turns that ENDED in the window and folds each one's

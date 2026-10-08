@@ -17,6 +17,7 @@ import { LiveSocket, Store, type AgentRow, type OrgProjection } from "~/protocol
 import type { BudgetWindow } from "~/protocol/types.ts";
 import type { EngineHealth } from "~/contract/health.ts";
 import { healthFrame } from "~/test/health.ts";
+import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -72,6 +73,7 @@ const SWE: AgentRow = {
     work_item: { key: "ENG-412" },
   },
   live_call: {
+    versions: ZERO_VERSIONS,
     turn_id: "turn-2",
     phase: "execute",
     model: "claude-sonnet-5",

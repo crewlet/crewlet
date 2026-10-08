@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"time"
 
@@ -418,7 +419,16 @@ func (f *FanOut) resolve(ctx context.Context, q FanQuery) (FanQuery, knowledge.M
 }
 
 // Search runs one query across the fleet and fuses what comes back.
+//
+// A QUERY PAST [knowledge.MaxQueryBytes] IS REFUSED before anything runs.
+// Every surface refuses one first, in its own words for its own reader; this
+// is where the rule meets the one path every native search of either kind
+// takes — whichever node, surface or peer it came from — so no text past it
+// is ranked, scattered to the peers or sent to the provider for its vector.
 func (f *FanOut) Search(ctx context.Context, q FanQuery) (Answer, error) {
+	if err := knowledge.CheckQuery(q.Text); err != nil {
+		return Answer{}, fmt.Errorf("search: %w", err)
+	}
 	started := time.Now()
 	if f.Enter != nil {
 		// BEFORE THE PLAN, because the plan is a coordination read and

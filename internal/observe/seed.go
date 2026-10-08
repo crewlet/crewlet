@@ -64,14 +64,19 @@ const seedTurnReads = 16
 // THREE BOUNDED READS, each bound the projection's own, so a seed can never
 // hold more than the live stream could have built:
 //
-//   - the feed: the newest [livestate.EventFeedLimit] persisted events, inside
+//   - the feed: the newest [livestate.EventFeedLimit] persisted events the feed
+//     carries ([store.ListQuery.FeedOnly] — an accounting row is stored and
+//     never fed, see events.KeptOutOfFeed), inside
 //     the store's own read floor ([store.EventHistory]). Payload-free, because
 //     a feed row carries none;
-//   - the spend: the newest [livestate.SpendRecordLimit] phase records inside
+//   - the spend: the newest [livestate.SpendRecordLimit] spend records — phases
+//     and auxiliary records — inside
 //     [livestate.LiveSpendWindow], read from the promoted token columns rather
 //     than the payloads. The count is the projection's record cap, applied at
 //     the READ, on every node: a busy day past it was otherwise read in full
-//     inside the seed's time budget, only to be cut to the cap on arrival;
+//     inside the seed's time budget, only to be cut to the cap on arrival.
+//     Read in pages ([eventfan.Fleet.PhaseTokens]), because the cap is more
+//     than one node's reply carries;
 //   - each seat's newest [SeedTurnsPerRole] turns, for the seat's last turn
 //     and a turn it left parked on a coding run.
 //
@@ -122,7 +127,7 @@ func Seed(ctx context.Context, history FleetHistory, roles []string, live Seeded
 	}
 
 	wg.Go(func() {
-		listing, c, err := history.List(ctx, store.ListQuery{Limit: livestate.EventFeedLimit})
+		listing, c, err := history.List(ctx, store.ListQuery{Limit: livestate.EventFeedLimit, FeedOnly: true})
 		if !report(c, err, "the activity feed's history") {
 			return
 		}

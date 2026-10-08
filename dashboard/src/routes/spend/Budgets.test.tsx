@@ -205,7 +205,7 @@ test("every scope states its three windows, the company's first", async () => {
   for (const heading of ["Today", "This week", "This month"]) {
     expect(screen.getAllByText(heading).length).toBeGreaterThan(0);
   }
-  expect(screen.getByText(/refusing charges since/i)).toBeTruthy();
+  expect(screen.getByText(/last refused a call/i)).toBeTruthy();
 });
 
 // THE ENGINE'S STATE, AS SERVED. 95% served `ok` is drawn ok and 50% served

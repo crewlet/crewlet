@@ -30,6 +30,7 @@ import {
 import { installWindow } from "~/testing.tsx";
 import { LiveSocket, Store, type AgentRow } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
+import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -45,12 +46,12 @@ const AGENTS = [
   {
     role: "CTO",
     activity: "working",
-    live_call: { phase: "review", work_item: { key: "ENG-409" } },
+    live_call: { phase: "review", work_item: { key: "ENG-409" }, versions: ZERO_VERSIONS },
   },
   {
     role: "SWE",
     activity: "working",
-    live_call: { phase: "execute", work_item: { key: "ENG-412" } },
+    live_call: { phase: "execute", work_item: { key: "ENG-412" }, versions: ZERO_VERSIONS },
   },
   { role: "FE", activity: "needs", turn: { turn_id: "t", started_at: "", stage: "parked" } },
   { role: "PM", activity: "stopped", stopped_reason: "budget" },

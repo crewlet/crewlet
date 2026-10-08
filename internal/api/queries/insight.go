@@ -3,6 +3,7 @@ package queries
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -374,7 +375,8 @@ func (s Sources) a2aChannels(ctx context.Context, p Params) (any, error) {
 // the `modes` this backend can serve as asked, `degraded` when those differ,
 // and the `coverage` of the fleet the search was divided across — see
 // [knowledge.Outcome]. A mode this build does not know is refused rather than
-// run as the default, because that would answer a different question.
+// run as the default, because that would answer a different question — and so
+// is a phrase past [knowledge.MaxQueryBytes] ([searchTextRefusal]).
 func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 	text := p.String("q")
 	if text == "" {
@@ -383,6 +385,9 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 	mode, err := knowledge.ParseMode(p.String("mode"))
 	if err != nil {
 		return nil, badParams("mode", p.String("mode"), modeNames())
+	}
+	if err := searchTextRefusal(text); err != nil {
+		return nil, err
 	}
 	organization := s.organization()
 	out := map[string]any{
@@ -469,6 +474,26 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 	}
 	out["hits"] = rows
 	return out, nil
+}
+
+// searchTextRefusal is the `bad_params` refusal of a phrase past
+// [knowledge.MaxQueryBytes], the bound both ranked searches share on every
+// surface, or nil.
+//
+// REFUSED, NOT CUT, and refused HERE rather than left to the search: the
+// fan-out refuses it too, but the knowledge search is best effort and would
+// answer "could not be searched", and a reader told that tries again with the
+// same paste. The class rides in the chain ([knowledge.ErrQueryTooLong]) and
+// the sentence names the parameter, the size and the limit, so a screen can
+// say what to change.
+func searchTextRefusal(text string) error {
+	var tooLong *knowledge.QueryTooLongError
+	if !errors.As(knowledge.CheckQuery(text), &tooLong) {
+		return nil
+	}
+	return refuseAs(knowledge.ErrQueryTooLong, "q is %d bytes, and a search takes at most "+
+		"%d — search on a few keywords or a phrase, not a pasted passage",
+		tooLong.Bytes, knowledge.MaxQueryBytes)
 }
 
 // outcome writes what a ranked search did onto its answer: the four fields

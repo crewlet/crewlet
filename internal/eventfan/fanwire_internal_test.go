@@ -74,3 +74,52 @@ func TestATurnCursorCrossesTheWireWhole(t *testing.T) {
 		t.Errorf("the cursor %+v came back off the wire as %+v", cursor, got)
 	}
 }
+
+// THE FEED'S FILTER AND THE SPEND PAGE'S CURSOR CROSS THE WIRE: a peer that
+// read a listing without `feed_only` would answer the accounting rows the feed
+// leaves out, and its axis would count them; one that read a spend page without
+// `before` would answer the FIRST page again, which the merge dedupes into a
+// page that stops where that one did.
+//
+// Mutation: drop FeedOnly from listParamsOf or query, or Before from
+// phaseTokenParamsOf or query, and its case fails.
+func TestTheFeedFilterAndTheSpendCursorCrossTheWire(t *testing.T) {
+	t.Parallel()
+	at := time.Now().UTC().Truncate(time.Microsecond)
+	list := store.ListQuery{FeedOnly: true, Limit: 10, At: at}
+	raw, err := json.Marshal(listParamsOf(list))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var listBack listParams
+	if err := json.Unmarshal(raw, &listBack); err != nil {
+		t.Fatal(err)
+	}
+	if !listBack.query().FeedOnly {
+		t.Error("a feed-only listing came back off the wire asking for every row")
+	}
+	raw, err = json.Marshal(seriesParamsOf(store.HistogramQuery{ListQuery: list, Bucket: store.BucketHour}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seriesBack seriesParams
+	if err := json.Unmarshal(raw, &seriesBack); err != nil {
+		t.Fatal(err)
+	}
+	if !seriesBack.query().FeedOnly {
+		t.Error("a feed-only axis came back off the wire counting every row")
+	}
+
+	cursor := &store.Cursor{Time: at, ID: "e-1"}
+	raw, err = json.Marshal(phaseTokenParamsOf(store.PhaseTokenQuery{Before: cursor, Limit: 10, At: at}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var spendBack phaseTokenParams
+	if err := json.Unmarshal(raw, &spendBack); err != nil {
+		t.Fatal(err)
+	}
+	if got := spendBack.query().Before; got == nil || *got != *cursor {
+		t.Errorf("the spend page's cursor %+v came back off the wire as %+v", cursor, got)
+	}
+}

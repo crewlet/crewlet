@@ -18,8 +18,11 @@
 
 import type {
   AgentRow,
+  CallVersions,
   FeedRow,
   EventEnvelope,
+  LiveCall,
+  LiveCallAnswer,
   OrgBudget,
   OrgProjection,
   Overlay,
@@ -31,7 +34,7 @@ import type {
 } from "./types.ts";
 // RELATIVE, like every contract import in this directory: it is also built
 // alone as `protocol.js`, where the `~` alias does not exist.
-import { MAX_EVENTS } from "../contract/wire.ts";
+import { LIVE_CALL_DETAIL, MAX_EVENTS } from "../contract/wire.ts";
 import type { EngineHealth } from "../contract/health.ts";
 
 /**
@@ -63,6 +66,95 @@ import type { EngineHealth } from "../contract/health.ts";
  * card that is late, never a turn that is gone.
  */
 export const MAX_PHASES = 200;
+
+/** What a heavy field reads as while nothing of it is held. */
+const NOTHING_HELD: Record<string, unknown> = {
+  prompt: "",
+  prompt_messages: null,
+  response: "",
+  round_narration: null,
+  tool_executions: null,
+  rounds: null,
+};
+
+/**
+ * One seat's live call as a push states it, merged onto the copy a tab holds —
+ * and whether the push says the tab missed a change it no longer carries.
+ *
+ * THE PUSH LEAVES OUT WHAT DID NOT MOVE. A call's heavy fields
+ * (`LIVE_CALL_DETAIL`) travel only on the push that moved their version, and
+ * every push names every version. So a field the push carries is taken — unless
+ * its version is older than the one held, a push overtaken by a snapshot or an
+ * answer — and one it leaves out is the copy held, at the version held, for the
+ * SAME call (`turn_id`, `phase`, `iteration`); a call of its own holds nothing
+ * yet. A push naming a version newer than the one held, without the field, is
+ * a tab that missed the push which carried it: `stale`, and the field stays
+ * what is held until the call is fetched whole.
+ */
+export function mergeLiveCall(
+  held: LiveCall | null | undefined,
+  next: LiveCall | null | undefined,
+): { call: LiveCall | null; stale: boolean } {
+  if (!next) return { call: null, stale: false };
+  const same = !!held && sameCall(held, next);
+  const merged: Record<string, unknown> = { ...next };
+  const versions: Partial<CallVersions> = {};
+  let stale = false;
+  for (const [detail, fields] of Object.entries(LIVE_CALL_DETAIL) as [
+    keyof CallVersions,
+    readonly string[],
+  ][]) {
+    const pushed = next.versions[detail];
+    const have = same ? held.versions[detail] : 0;
+    const carried = fields.every((f) => f in next);
+    if (carried && pushed >= have) {
+      versions[detail] = pushed;
+      continue;
+    }
+    for (const f of fields) {
+      merged[f] = same ? (held as unknown as Record<string, unknown>)[f] : NOTHING_HELD[f];
+    }
+    versions[detail] = have;
+    if (!carried && pushed > have) stale = true;
+  }
+  merged.versions = versions;
+  return { call: merged as unknown as LiveCall, stale };
+}
+
+/** Whether two copies are of one call: one turn, one phase, one iteration. */
+function sameCall(a: LiveCall, b: LiveCall): boolean {
+  return a.turn_id === b.turn_id && a.phase === b.phase && a.iteration === b.iteration;
+}
+
+/**
+ * The heavy fields of `older` — a copy of the call `held` is, read BEFORE the
+ * pushes that brought `held` — whose versions are newer than `held`'s, laid onto
+ * `held`; or null when it brings none, or is not a copy of the same call.
+ *
+ * A version is never handed out twice and only grows, so a newer one is newer
+ * content whenever it was read: the pushes after `older` left those fields out
+ * because the tab was meant to hold them already, and their copy is what the
+ * tab missed. Everything else — the light fields, and every heavy field the tab
+ * holds at a version as new — stays `held`'s, which the later pushes wrote.
+ */
+function newerDetail(held: LiveCall, older: LiveCall): LiveCall | null {
+  if (!sameCall(held, older)) return null;
+  let merged: Record<string, unknown> | null = null;
+  const versions: Partial<CallVersions> = { ...held.versions };
+  for (const [detail, fields] of Object.entries(LIVE_CALL_DETAIL) as [
+    keyof CallVersions,
+    readonly string[],
+  ][]) {
+    const version = older.versions[detail];
+    if (version <= held.versions[detail] || !fields.every((f) => f in older)) continue;
+    merged ??= { ...held };
+    for (const f of fields) merged[f] = (older as unknown as Record<string, unknown>)[f];
+    versions[detail] = version;
+  }
+  if (!merged) return null;
+  merged.versions = versions;
+  return merged as unknown as LiveCall;
+}
 
 export interface StoreState {
   agents: AgentRow[];
@@ -230,13 +322,37 @@ export class Store {
     this.emit(...ALL_DATA_SLICES);
   }
 
-  /** Changed seat overlays, keyed by role. */
-  applyAgents(rows: (Overlay & { role: string })[] | unknown): void {
+  /**
+   * Changed seat overlays, keyed by role — and the roles whose live call this
+   * tab now holds behind what the push describes, which the socket fetches
+   * whole (`mergeLiveCall`).
+   */
+  applyAgents(rows: (Overlay & { role: string })[] | unknown): string[] {
     // `Array.isArray` is load-bearing. The server sent this as an object keyed
     // by role once; every push was silently discarded and seats rendered idle
     // for the whole of a turn, with both sides' own suites green. That is the
     // bug internal/e2e/golden_test.go exists to catch.
-    if (!Array.isArray(rows) || rows.length === 0) return;
+    if (!Array.isArray(rows) || rows.length === 0) return [];
+    const stale: string[] = [];
+    const merge = (
+      held: AgentRow | undefined,
+      patch: Overlay & { role: string },
+    ): Overlay & { role: string } => {
+      if (!("live_call" in patch)) return patch;
+      const heldSeq = held?.live_call_seq ?? 0;
+      const patchSeq = patch.live_call_seq;
+      if (patchSeq !== undefined && patchSeq < heldSeq) {
+        // This push's live_call is BEHIND one a `live_call` answer already
+        // applied for the seat (the answer jumped the sequence ahead of a
+        // push generated earlier). Keep the held call and its sequence; the
+        // push's other fields — status, turn — are ordered on the wire and
+        // still apply.
+        return { ...patch, live_call: held?.live_call ?? null, live_call_seq: heldSeq };
+      }
+      const { call, stale: behind } = mergeLiveCall(held?.live_call, patch.live_call);
+      if (behind) stale.push(patch.role);
+      return { ...patch, live_call: call, live_call_seq: patchSeq ?? heldSeq };
+    };
     const byRole = new Map<string, Overlay & { role: string }>(
       (rows as (Overlay & { role: string })[]).map((r) => [r.role, r]),
     );
@@ -244,14 +360,66 @@ export class Store {
       const patch = byRole.get(a.role);
       if (!patch) return a;
       byRole.delete(a.role);
-      return { ...a, ...patch };
+      return { ...a, ...merge(a, patch) };
     });
     // A seat the roster does not carry yet (a role added by a live revision)
     // still belongs on screen.
     for (const row of byRole.values()) {
-      this.state.agents = [...this.state.agents, { id: row.role, ...row }];
+      this.state.agents = [...this.state.agents, { id: row.role, ...merge(undefined, row) }];
     }
     this.emit("agents");
+    return stale;
+  }
+
+  /**
+   * One seat's live call, fetched WHOLE because a push said this tab had
+   * missed a change to it — and whether the answer was CURRENT: at or past the
+   * sequence the seat has applied, so that nothing a push has said since is
+   * missing from it.
+   *
+   * ORDERED BY `live_call_seq`, because this answer runs on its own goroutine
+   * and the socket can deliver it AFTER pushes the engine generated later. A
+   * current answer is merged like a push that carries everything. One BEHIND
+   * the applied sequence describes the slot as it was before those pushes, and
+   * the sequence decides only what it can order:
+   *
+   * - when they cleared the call or began another, the answer is DROPPED, so a
+   *   cleared seat or a newer call is never overwritten by a running call read
+   *   a moment before it — a per-field version cannot say this, since a cleared
+   *   null carries none and two calls' fields are never compared;
+   * - when they are the same call, the answer still brings every heavy field
+   *   whose version is newer than the copy held (`newerDetail`), because those
+   *   are exactly what the tab asked for — the pushes since left them out —
+   *   while the light fields stay the newer pushes'. Dropping it whole lost
+   *   that repair, and nothing asked again until the seat's next push.
+   *
+   * A behind answer is the caller's cue to ask again if a push said the call
+   * was behind while this answer was out (`LiveSocket.fetchCalls`).
+   */
+  applyLiveCall(answer: LiveCallAnswer | null | undefined): boolean {
+    if (!answer || typeof answer.role !== "string") return true;
+    let moved = false;
+    let current = true;
+    this.state.agents = this.state.agents.map((a) => {
+      if (a.role !== answer.role) return a;
+      const heldSeq = a.live_call_seq ?? 0;
+      const seq = answer.live_call_seq;
+      if (seq === undefined || seq >= heldSeq) {
+        moved = true;
+        return {
+          ...a,
+          live_call: mergeLiveCall(a.live_call, answer.live_call).call,
+          live_call_seq: seq ?? heldSeq,
+        };
+      }
+      current = false;
+      const fresher = a.live_call && answer.live_call && newerDetail(a.live_call, answer.live_call);
+      if (!fresher) return a;
+      moved = true;
+      return { ...a, live_call: fresher };
+    });
+    if (moved) this.emit("agents");
+    return current;
   }
 
   /**

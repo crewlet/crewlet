@@ -27,10 +27,9 @@ type liveData interface {
 // holdersOf is who holds the estate as every counted set on this node reads it:
 // the live data nodes, listed afresh ([presenceHolders]).
 //
-// ONE CHOICE, made here, for the trim and the embedding duty alike: the two read
-// one log's counted set for two questions — what may be removed, and who must
-// read a record before it is published — and answered from two sources they
-// could disagree about who the log's readers are.
+// ONE CHOICE, made here, for every reading of a log's counted set that
+// licenses removing records — the trim's — so two of them can never disagree
+// about who the log's readers are.
 func (e *Engine) holdersOf() liveData {
 	return presenceHolders{leases: e.backends.Coord}
 }

@@ -361,6 +361,15 @@ agent_phase_completed      # one phase's durable record: prompts, response,
                            # budget_exhausted — and a phase whose model
                            # DECLINED carries `refusal` {category,
                            # explanation} beside `error_kind: refusal`
+auxiliary_spend            # what the seat's auxiliary model cost for one key —
+                           # stage (turn, reflection, background, operator),
+                           # purpose, seat or person, turn, model, provider
+                           # entry, company day — coalesced over one flush of
+                           # the node's ledger: calls, failed_calls, tokens,
+                           # first call's start and last call's end. No
+                           # prompt, no response, no `failed` key. STORED AND
+                           # NOT FED: it never takes a row of the activity
+                           # feed, and it moves no seat's state
 budget_exhausted           # a charge the token budget refused ended a turn;
                            # names the scope and the refusing window —
                            # period, window label, resets_at — with its
@@ -421,6 +430,24 @@ fixed tick, which the next report supersedes; the live projection reads it), `ra
 A2A inbox wakes `a2a_request` and `a2a_message` (the ask and the answer are
 already rows as `a2a_channel_opened` and `a2a_message_sent`). See the
 exclusions table in the Deployment page above.
+
+**Stored, not fed.** One type is a row like every other and is kept out of the
+activity feed: `auxiliary_spend`, which is accounting rather than activity. The
+feed is a ring of the whole company's last few hundred events — every node's is
+fed by a fleet-wide broadcast — and a turn writes several of these beside its
+own phases, a compaction a burst, so in the feed they would push out the turns
+and failures a reader is watching. The class is declared beside the category
+map in `internal/events` and asked by every read of the feed's rows: the live
+projection, its startup seed, and every view a reader scrolls on from the feed
+— the dashboard's event log pages and its axis, the Live strip, a seat's latest
+events — which ask `events` and `event_series` with `feed_only`, so a bar never
+counts and a page never lists a row the feed would not hold. The row is still
+in `GET /events` without it, a turn's history and a trace.
+
+Every node applies `feed_only` to its own rows — its page and its bars alike —
+by its own copy of that class, and the rows a related-agent page pulls in by
+trace id are held to it too, since a turn's trace holds every one of its
+accounting records.
 
 ---
 

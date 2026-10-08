@@ -23,6 +23,7 @@ import { LiveNow, stripOf } from "./LiveNow.tsx";
 import { PHASE_PAGE } from "./RecentPhases.tsx";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
+import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -205,6 +206,7 @@ test("a quiet round is marked on its row, and a parked turn is not", async () =>
     in_progress: true,
     started_at: ago(900_000),
     updated_at: ago(700_000),
+    versions: ZERO_VERSIONS,
   });
   mount({
     agents: [
@@ -256,6 +258,7 @@ test("a finished phase is held back under a reader, unless it was running above"
     activity: "working",
     turn: { turn_id: "t-watched", started_at: ago(60_000), stage: "execute" },
     live_call: {
+      versions: ZERO_VERSIONS,
       turn_id: "t-watched",
       phase: "execute",
       iteration: 1,
@@ -330,6 +333,14 @@ test("the seat filter asks by handle and matches the push by id", async () => {
     seat: "eng-search",
     bucket: "minute",
   });
+  // THE FEED'S ROWS, on the strip and the seat's latest events alike: the
+  // unselected card is the live ring, which holds no accounting row, and a
+  // seat's card asked without it filled with its spend records after every
+  // turn.
+  await waitFor(() => expect(asked.some((q) => q.kind === "events")).toBe(true));
+  for (const kind of ["event_series", "events"]) {
+    expect(asked.find((q) => q.kind === kind)?.params.feed_only, kind).toBe("true");
+  }
 
   act(() => {
     store.applyEvent(phaseEvent("p-mine", "t-mine", "id-search", { decision: "mine" }));
@@ -499,6 +510,7 @@ test("a running turn on no item names what woke it after the verb", async () => 
         activity: "working",
         turn: { turn_id: "t-free", started_at: ago(5_000), stage: "phase" },
         live_call: {
+          versions: ZERO_VERSIONS,
           turn_id: "t-free",
           phase: "execute",
           iteration: 1,

@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -242,5 +244,49 @@ func TestAnAnswerTheReaderRefusesCarriesItsClass(t *testing.T) {
 	}
 	if _, ok := answerRefusal(errors.New("tracker: read the ask c1: disk I/O")); ok {
 		t.Error("a read failure was classed as the reader's refusal of an answer")
+	}
+}
+
+// A NOTE LIST CUT TO A LIMIT SAYS HOW MANY IT LEFT OFF. The filter picks up to
+// eight; the default shows every one of them, and a smaller limit is a
+// narrowing the answer admits to rather than a list that reads as complete.
+func TestRefreshMemorySaysWhatALimitLeftOff(t *testing.T) {
+	t.Parallel()
+	entries := make([]learning.DiaryEntry, noteLimit)
+	for i := range entries {
+		entries[i] = learning.DiaryEntry{Kind: "long", Content: "note " + strconv.Itoa(i)}
+	}
+	all := renderHintedNotes(entries, "deploys", noteLimit)
+	if strings.Count(all.Output, "- [long]") != noteLimit || strings.Contains(all.Output, "more that bear") {
+		t.Fatalf("the default did not show every pick:\n%s", all.Output)
+	}
+	some := renderHintedNotes(entries, "deploys", 3)
+	if strings.Count(some.Output, "- [long]") != 3 || !strings.Contains(some.Output, "+5 more that bear on this") {
+		t.Fatalf("a narrowed list did not say what it left off:\n%s", some.Output)
+	}
+}
+
+// AN AMBIGUOUS ANSWER'S CANDIDATES ARE WHOLE OR BY REFERENCE. They were the
+// first hundred and twenty characters of each, unmarked, so two questions that
+// opened alike read as one question asked twice — and the refusal exists to
+// tell them apart.
+func TestAmbiguousAnswerCandidatesAreWholeOrReferenced(t *testing.T) {
+	t.Parallel()
+	opening := strings.Repeat("About the release plan for next week, ", 4)
+	e := &tracker.ErrAmbiguousAnswer{Task: "ENG-1", Actor: "ana", Asks: []tracker.AskCandidate{
+		{Comment: "c-1", Author: "bo", Body: opening + "should we ship on Friday?"},
+		{Comment: "c-2", Author: "cy", Body: opening + "who signs off the migration?"},
+		{Comment: "c-3", Author: "di", Question: "Pick a region", Body: "context"},
+		{Comment: "c-4", Author: "ed", Body: strings.Repeat("long ", 4000)},
+	}}
+	got := ambiguousText(e)
+	for _, want := range []string{"should we ship on Friday?", "who signs off the migration?",
+		"Pick a region", `get_work_item(item="ENG-1", comment="c-4")`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "long long") || strings.Contains(got, "…") && !strings.Contains(got, "… and more") {
+		t.Errorf("a candidate was cut rather than carried whole or referenced:\n%s", got)
 	}
 }

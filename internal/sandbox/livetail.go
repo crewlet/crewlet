@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -18,7 +19,8 @@ import (
 //
 // A detached run writes its own account of itself into its box — the streamed
 // transcript a runner parses, or its stderr — and nothing leaves the box until
-// the run is collected, when the whole of it rides the run's
+// the run is collected, when the transcript, held to the record's bound (its
+// start and its end, [MaxRunTextBytes]), rides the run's
 // `agent_phase_completed{phase: sandbox}` record. Between the launch and the
 // collection a person watching the run had nothing: the run could be minutes
 // or hours in, and the turn trace showed a bar and no words.
@@ -28,43 +30,48 @@ import (
 // over for nobody, since almost nobody is watching almost every run. So it is a
 // QUESTION, asked only while somebody looks: `sandbox_tail{turn_id, launch_id}`,
 // answered from the box by the node whose incarnation the run's record names as
-// its owner ([PendingRun.Owner]). There is no event and no row.
+// its owner ([PendingRun.Owner]). There is no event and no row. What the owner
+// keeps while somebody looks, and how an answer sends only what the asker
+// lacks, is livefeed.go's.
 //
-// # Three outcomes, never two
+// # Outcomes, never an empty answer standing in for another
 //
 // The TAIL itself ([Output], possibly empty — a run that has written nothing
-// yet has nothing to show). `not_running`, with the record's own status, when
-// the launch asked about is not a running job: it finished and was collected,
-// it parked on a question, a later launch replaced it, or no record is left at
-// all. And `owner_silent{node}` when the node that owns the run did not answer
-// inside the fleet read budget — NAMED, because "the run said nothing" and "the
-// node that could ask it did not answer" send a reader to opposite places, and
-// collapsing the second into an empty tail is exactly the lie a screen that
-// polls cannot recover from. An owner with no presence — draining, or its
-// heartbeat lapsed — is asked like any other, and its silence is that same
-// `owner_silent`.
+// yet has nothing to show). `launching`, a job whose box is being made and
+// whose agent has not started: NOT a run that stopped, and a screen that took
+// it for one stopped asking about a run that had not begun. `not_running`, with
+// the record's own status, when the launch asked about is not a running job:
+// it finished and was collected, it parked on a question, a later launch
+// replaced it, or no record is left at all. And `owner_silent{node}` when the
+// node that owns the run did not answer inside the fleet read budget — NAMED,
+// because "the run said nothing" and "the node that could ask it did not
+// answer" send a reader to opposite places, and collapsing the second into an
+// empty tail is exactly the lie a screen that polls cannot recover from. An
+// owner with no presence — draining, or its heartbeat lapsed — is asked like
+// any other, and its silence is that same `owner_silent`. `box_paused` is a
+// running record whose box is paused, which a reader never wakes.
 //
 // A box that the owner could not read is an ERROR rather than an outcome: it
 // clears by asking again, and the reader shows the owner's own sentence.
 
-// MaxLiveOutputBytes is how much of a running job's account of itself one peek
-// carries: the LAST 8 KiB.
-//
-// A peek answers "what is it doing now", polled every few seconds while a
-// person has the run open, and every answer crosses the broker whole. 8 KiB is
-// a hundred-odd lines of a transcript — the current step and the few before it
-// — at a size a poll can repeat indefinitely without being noticed; the WHOLE
-// transcript is on the run's phase record the moment it is collected
-// ([github.com/crewlet/crewlet/internal/sandbox/codingagent.MaxTranscriptBytes],
-// 256 KiB), so nothing is lost by the live view being a window.
-const MaxLiveOutputBytes = 8 << 10
-
 // TailReadBudget is how long a tail request waits for the owning node to
 // answer: the fleet read budget every other scatter in this engine answers
-// inside (eventfan's FleetReadBudget, memread's DefaultBudget). The dashboard
-// polls every three seconds, so a budget under the interval means at most one
-// request is in flight per open run.
+// inside (eventfan's FleetReadBudget, memread's DefaultBudget).
+//
+// It bounds the OWNER too, which nothing used to: the request carries it
+// ([tailRequest.BudgetMS]), and the owner's answer waits for the box only
+// [answerShare] of it, so an asker that gave up frees its answer slot instead
+// of leaving the read running in it. The read itself is shared and goes on
+// ([LiveFeeds]); the next request is answered from what it found. The
+// dashboard chains its polls after each answer, so one open view has one
+// request in flight, and any number of views share one read of the box.
 const TailReadBudget = 2 * time.Second
+
+// answerShare is the part of an asker's budget an owner's answer may spend
+// waiting for the box: three quarters, leaving the rest for the reply to cross
+// the broker before the asker stops listening — an answer composed just as
+// the asker gives up is the silence it was meant to avoid.
+const answerShare = 0.75
 
 // OutputSource is which of a job's two accounts of itself an [Output] is.
 type OutputSource string
@@ -85,14 +92,23 @@ func (s OutputSource) Valid() bool {
 	return s == SourceTranscript || s == SourceStderr || s == SourceNone
 }
 
-// Output is what a job has said about itself so far — a [Runner.Peek].
+// Output is what a job has said about itself, as one answer carries it: what
+// the asker's CURSOR lacks ([TailCursor]).
+//
+// The fields a reader compares against what it holds — Epoch, Start, End and
+// Digest — are ALWAYS present, and an asker holds at most what the run's record
+// will hold, [MaxRunTextBytes]: an answer is sent only what it lacks, so how
+// much a view holds costs nothing per poll.
 type Output struct {
-	// Text is the last [MaxLiveOutputBytes] of it, REDACTED: the box's
-	// environment holds the seat's credentials, and this reaches a screen.
+	// Text is the output, REDACTED — the box's environment holds the
+	// seat's credentials, and this reaches a screen: what follows the
+	// asker's offset, or — on a Reset — the last [MaxRunTextBytes] in whole
+	// lines, which replaces what it held.
 	Text string `json:"text"`
 	// Source says which account Text is.
 	Source OutputSource `json:"source"`
-	// Cut is whether Text lost its front to the bound.
+	// Cut is whether output came before what this answer carries and is
+	// not in it: on a reset, before the reset's start.
 	Cut bool `json:"cut"`
 	// AsOf is when the box was read, on the owning node's clock.
 	AsOf time.Time `json:"as_of"`
@@ -100,6 +116,55 @@ type Output struct {
 	// terminal event): it is over and waiting to be collected, so this
 	// output will not grow again.
 	Finished bool `json:"finished"`
+
+	// Epoch names the reading the offsets count in; a cursor naming
+	// another is answered with a Reset.
+	Epoch string `json:"epoch"`
+	// Start and End are the offsets of Text's first byte and of the byte
+	// after its last, in the epoch's text (UTF-8 bytes). End is what the
+	// asker holds through once it has this answer — its next offset.
+	//
+	// NEVER OMITTED, because ZERO IS AN OFFSET: a reading that has settled
+	// nothing yet answers at end 0 and is followed from start 0, and
+	// `omitempty` folded both into "absent". A screen comparing a delta's
+	// start with what it held through then compared a missing field with 0,
+	// threw a valid delta away and asked for a reset; a REST caller told to
+	// send `end` back had no `end` to send.
+	Start int64 `json:"start"`
+	End   int64 `json:"end"`
+	// Digest covers the window an asker holding through End holds; it goes
+	// back on the next request, beside End.
+	Digest string `json:"digest"`
+	// Reset is whether Text REPLACES what the asker holds rather than
+	// following it: its cursor named another reading, more than it may hold
+	// was written since, or its digest did not match.
+	Reset bool `json:"reset,omitempty"`
+	// Front is whether the reading began after the job's own start, so
+	// output before Start was never read at all.
+	Front bool `json:"front,omitempty"`
+	// Held is how many bytes the job has written that are not shown yet,
+	// because what they redact to is not settled: a line not finished, a
+	// private key whose END may still come, a password whose value is on a
+	// later line.
+	Held int `json:"held,omitempty"`
+}
+
+// TailCursor is how much of a reading an asker holds: through Offset of the
+// reading named Epoch, with the Digest the owner gave it there. The zero
+// cursor holds nothing, and is answered with a Reset — a first request, and a
+// view that lost step with its owner.
+type TailCursor struct {
+	Epoch  string `json:"epoch"`
+	Offset int64  `json:"offset"`
+	Digest string `json:"digest"`
+}
+
+// TailQuery is one tail request, as the read surface hands it over.
+type TailQuery struct {
+	TurnID   string
+	LaunchID string
+	// Cursor is what the asker holds; the zero cursor holds nothing.
+	Cursor TailCursor
 }
 
 // TailOutcome is what one tail request concluded.
@@ -108,22 +173,31 @@ type TailOutcome string
 const (
 	// TailRunning is an answer: the tail of a running job.
 	TailRunning TailOutcome = "tail"
+	// TailLaunching is a job being launched — its box made and provisioned,
+	// its agent not started — which has nothing to show YET.
+	TailLaunching TailOutcome = "launching"
 	// TailNotRunning is a launch that is not a running job — see
 	// [LiveLaunch].
 	TailNotRunning TailOutcome = "not_running"
 	// TailOwnerSilent is an owning node that did not answer inside the
 	// budget, or a run no node holds right now.
 	TailOwnerSilent TailOutcome = "owner_silent"
+	// TailBoxPaused is a running record whose box is PAUSED, which its
+	// backend cannot read without waking it ([ErrBoxPaused]) — and a peek
+	// never wakes a box. Its job has finished: only a collection pauses a
+	// running run's box, so this is the moment between that collection and
+	// the record moving on, or a collection whose claim was handed back to
+	// be tried again. NOT terminal: the next answer says which.
+	TailBoxPaused TailOutcome = "box_paused"
 )
 
-// Valid reports whether this build knows the outcome.
-func (o TailOutcome) Valid() bool {
-	switch o {
-	case TailRunning, TailNotRunning, TailOwnerSilent:
-		return true
-	}
-	return false
+// TailOutcomes is every outcome this build answers.
+var TailOutcomes = []TailOutcome{
+	TailRunning, TailLaunching, TailNotRunning, TailOwnerSilent, TailBoxPaused,
 }
+
+// Valid reports whether this build knows the outcome.
+func (o TailOutcome) Valid() bool { return slices.Contains(TailOutcomes, o) }
 
 // TailAnswer is one tail request's answer, as the read surface serves it.
 type TailAnswer struct {
@@ -180,6 +254,14 @@ func LiveLaunch(ctx context.Context, store PendingReader, turnID, launchID strin
 	return run, true, "", nil
 }
 
+// notRunning is the outcome for a launch [LiveLaunch] did not find running.
+func notRunning(status string) TailOutcome {
+	if status == StatusLaunching {
+		return TailLaunching
+	}
+	return TailNotRunning
+}
+
 // TailAsker scatters one request — the half of [queue.EventQueue] a tail needs.
 type TailAsker interface {
 	Ask(ctx context.Context, subject string, request []byte, want int) ([][]byte, error)
@@ -199,9 +281,9 @@ type TailReader struct {
 	// Pending is the fleet's run records.
 	Pending PendingReader
 
-	// Manager is this node's sandbox manager, resolved per call because an
-	// apply swaps it; nil on a node with no sandbox backend.
-	Manager func() *Manager
+	// Feeds is this node's own readings, for a run it owns ([LiveFeeds]);
+	// nil on a node with no sandbox backend, which owns no run.
+	Feeds *LiveFeeds
 
 	// Queue asks a peer. Nil is a node with no broker, which is the whole
 	// fleet: every run is its own.
@@ -209,9 +291,6 @@ type TailReader struct {
 
 	// Budget bounds a peer's answer; zero is [TailReadBudget].
 	Budget time.Duration
-
-	// Now stamps a local peek; nil is the wall clock.
-	Now func() time.Time
 }
 
 func (r *TailReader) budget() time.Duration {
@@ -222,18 +301,26 @@ func (r *TailReader) budget() time.Duration {
 }
 
 // Tail answers one request.
-func (r *TailReader) Tail(ctx context.Context, turnID, launchID string) (TailAnswer, error) {
-	answer := TailAnswer{TurnID: turnID, LaunchID: launchID}
-	run, running, status, err := LiveLaunch(ctx, r.Pending, turnID, launchID)
+func (r *TailReader) Tail(ctx context.Context, q TailQuery) (TailAnswer, error) {
+	answer := TailAnswer{TurnID: q.TurnID, LaunchID: q.LaunchID}
+	run, running, status, err := LiveLaunch(ctx, r.Pending, q.TurnID, q.LaunchID)
 	if err != nil {
 		return TailAnswer{}, err
 	}
+	answer.Node = nodeOf(run.Owner)
 	if !running {
-		answer.Outcome, answer.Status = TailNotRunning, status
-		answer.Node = nodeOf(run.Owner)
+		// The same as a peer's answer does: a launch that stopped is never
+		// asked about again, so its reading here is let go now rather than
+		// a sweep later. These are THIS node's readings, which hold the
+		// launch only when this node owns its run; the owner of anybody
+		// else's run is never asked again, and lets its reading go on its
+		// own clock ([liveIdle]).
+		if r.Feeds != nil {
+			r.Feeds.Forget(q.TurnID, q.LaunchID)
+		}
+		answer.Outcome, answer.Status = notRunning(status), status
 		return answer, nil
 	}
-	answer.Node = nodeOf(run.Owner)
 	switch {
 	case run.Owner == "":
 		// UNCLAIMED: the instant between an owner letting the seat go and
@@ -242,27 +329,37 @@ func (r *TailReader) Tail(ctx context.Context, turnID, launchID string) (TailAns
 		answer.Outcome = TailOwnerSilent
 		return answer, nil
 	case run.Owner == r.Owner || r.Queue == nil:
-		out, err := peekLocal(ctx, r.Manager, run, r.now())
-		if err != nil {
-			return TailAnswer{}, err
-		}
-		answer.Outcome, answer.Output = TailRunning, &out
-		return answer, nil
+		return r.local(ctx, run, q.Cursor, answer)
 	}
-	return r.ask(ctx, run, answer)
+	return r.ask(ctx, run, q.Cursor, answer)
 }
 
-func (r *TailReader) now() time.Time {
-	if r.Now != nil {
-		return r.Now().UTC()
+// local answers from this node's own reading, inside the share of the budget
+// an owner answering a peer would have.
+func (r *TailReader) local(ctx context.Context, run PendingRun, cursor TailCursor, answer TailAnswer) (TailAnswer, error) {
+	if r.Feeds == nil {
+		return TailAnswer{}, errors.New("sandbox: this node owns the run and has no sandbox " +
+			"backend to reach its box with — providers.sandbox was removed by an apply")
 	}
-	return time.Now().UTC()
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(float64(r.budget())*answerShare))
+	defer cancel()
+	out, err := r.Feeds.Answer(ctx, run, cursor)
+	switch {
+	case errors.Is(err, ErrBoxPaused):
+		answer.Outcome = TailBoxPaused
+	case err != nil:
+		return TailAnswer{}, err
+	default:
+		answer.Outcome, answer.Output = TailRunning, &out
+	}
+	return answer, nil
 }
 
 // ask puts the request to the incarnation the record names.
-func (r *TailReader) ask(ctx context.Context, run PendingRun, answer TailAnswer) (TailAnswer, error) {
+func (r *TailReader) ask(ctx context.Context, run PendingRun, cursor TailCursor, answer TailAnswer) (TailAnswer, error) {
 	raw, err := json.Marshal(tailRequest{
 		Version: tailWireVersion, TurnID: run.TurnID, LaunchID: run.LaunchID, Owner: run.Owner,
+		Cursor: cursor, BudgetMS: r.budget().Milliseconds(),
 	})
 	if err != nil {
 		return TailAnswer{}, fmt.Errorf("sandbox: encode a tail request: %w", err)
@@ -283,12 +380,14 @@ func (r *TailReader) ask(ctx context.Context, run PendingRun, answer TailAnswer)
 		case rep.Error != "":
 			return TailAnswer{}, fmt.Errorf("sandbox: %s owns run %s and answered: %s",
 				answer.Node, run.TurnID, rep.Error)
+		case rep.Paused:
+			answer.Outcome = TailBoxPaused
 		case rep.Output != nil:
 			answer.Outcome, answer.Output = TailRunning, rep.Output
 		default:
 			// The owner re-read the record and the launch had stopped
 			// running in between: its answer, not ours.
-			answer.Outcome, answer.Status = TailNotRunning, rep.Status
+			answer.Outcome, answer.Status = notRunning(rep.Status), rep.Status
 		}
 		return answer, nil
 	}
@@ -296,42 +395,21 @@ func (r *TailReader) ask(ctx context.Context, run PendingRun, answer TailAnswer)
 	return answer, nil
 }
 
-// peekLocal reads a run's box on this node.
-func peekLocal(ctx context.Context, manager func() *Manager, run PendingRun, now time.Time) (Output, error) {
-	var m *Manager
-	if manager != nil {
-		m = manager()
-	}
-	if m == nil {
-		return Output{}, errors.New("sandbox: this node owns the run and has no sandbox " +
-			"backend to reach its box with — providers.sandbox was removed by an apply")
-	}
-	box, runner, err := m.Reconnect(ctx, Placement(run.Placement), run.SandboxID, run.CodingAgent)
-	if err != nil {
-		return Output{}, fmt.Errorf("sandbox: reach the box of run %s: %w", run.TurnID, err)
-	}
-	out, err := runner.Peek(ctx, box, RunHandle{CommandID: run.CommandID, SessionID: run.SessionID})
-	if err != nil {
-		return Output{}, fmt.Errorf("sandbox: read the box of run %s: %w", run.TurnID, err)
-	}
-	if out.AsOf.IsZero() {
-		out.AsOf = now
-	}
-	if !out.Source.Valid() {
-		out.Source = SourceNone
-	}
-	return out, nil
-}
-
 // ServeTail makes this node an answerer for tail requests about the runs it
-// owns.
+// owns, from its own readings.
 //
 // EVERY NODE SERVES and only the addressed incarnation answers — and it answers
 // from its OWN read of the record, because the asker's read is a moment old
 // and a collection may have landed since: a box read after its run was
 // collected would show a finished job as running.
+//
+// EACH ANSWER IS BOUNDED BY ITS ASKER'S BUDGET. Every tail request a node owns
+// shares one registration's answer slots, and an answer used to run on the
+// registration's own context for as long as the box took — a box slow to
+// read held its slot past the asker's patience, poll after poll, until the
+// slots every run on this node needed were full of answers nobody would read.
 func ServeTail(ctx context.Context, q TailServer, owner string, pending PendingReader,
-	manager func() *Manager, now func() time.Time,
+	feeds *LiveFeeds,
 ) (queue.Unsubscribe, error) {
 	return q.Serve(ctx, topics.ObserveSandboxTail, func(ctx context.Context, raw []byte) ([]byte, error) {
 		var req tailRequest
@@ -341,6 +419,8 @@ func ServeTail(ctx context.Context, q TailServer, owner string, pending PendingR
 		if req.Owner != owner {
 			return nil, errTailNotAddressed
 		}
+		ctx, cancel := context.WithTimeout(ctx, req.answerBudget())
+		defer cancel()
 		reply := tailReply{Version: tailWireVersion, Owner: owner}
 		run, running, status, err := LiveLaunch(ctx, pending, req.TurnID, req.LaunchID)
 		switch {
@@ -348,21 +428,25 @@ func ServeTail(ctx context.Context, q TailServer, owner string, pending PendingR
 			reply.Error = "its record of the run could not be read: " + err.Error()
 		case !running:
 			reply.Status = status
+			if feeds != nil {
+				feeds.Forget(req.TurnID, req.LaunchID)
+			}
 		case run.Owner != owner:
 			// The seat moved between the asker's read and this one; the
 			// new owner is who can answer, and saying so is the honest
-			// reply rather than a peek at a box this node no longer drives.
+			// reply rather than a read of a box this node no longer drives.
 			reply.Error = "the run moved to " + nodeOf(run.Owner) + " — ask again"
+		case feeds == nil:
+			reply.Error = "this node owns the run and has no sandbox backend to reach its box with"
 		default:
-			stamp := time.Now().UTC()
-			if now != nil {
-				stamp = now().UTC()
-			}
-			out, err := peekLocal(ctx, manager, run, stamp)
-			if err != nil {
+			out, err := feeds.Answer(ctx, run, req.Cursor)
+			switch {
+			case errors.Is(err, ErrBoxPaused):
+				reply.Paused = true
+			case err != nil:
 				log.WarnContext(ctx, "sandbox_tail_failed", "turn_id", run.TurnID, "error", err.Error())
 				reply.Error = err.Error()
-			} else {
+			default:
 				reply.Output = &out
 			}
 		}
@@ -386,11 +470,28 @@ const tailWireVersion = 1
 // nothing for it.
 var errTailNotAddressed = errors.New("sandbox: the tail request is addressed to another incarnation")
 
+// tailRequest is one request on the wire.
 type tailRequest struct {
 	Version  int    `json:"v"`
 	TurnID   string `json:"turn_id"`
 	LaunchID string `json:"launch_id"`
 	Owner    string `json:"owner"`
+
+	// Cursor is what the asker holds; the zero cursor holds nothing.
+	Cursor TailCursor `json:"cursor"`
+	// BudgetMS is how long the asker waits for the reply; zero is
+	// [TailReadBudget].
+	BudgetMS int64 `json:"budget_ms,omitempty"`
+}
+
+// answerBudget is how long the owner's answer may wait for the box: its share
+// of the asker's budget ([answerShare]).
+func (r tailRequest) answerBudget() time.Duration {
+	budget := TailReadBudget
+	if r.BudgetMS > 0 {
+		budget = time.Duration(r.BudgetMS) * time.Millisecond
+	}
+	return time.Duration(float64(budget) * answerShare)
 }
 
 // tailReply names its owner because a scatter's replies carry no sender.
@@ -400,4 +501,7 @@ type tailReply struct {
 	Output  *Output `json:"output,omitempty"`
 	Status  string  `json:"status,omitempty"`
 	Error   string  `json:"error,omitempty"`
+
+	// Paused is [TailBoxPaused]: the box is paused and was left so.
+	Paused bool `json:"paused,omitempty"`
 }

@@ -474,3 +474,21 @@ func (m *Manager) Reconnect(ctx context.Context, placement Placement, sandboxID,
 		"placement", string(placement), "coding_agent", codingAgent)
 	return box, runner, nil
 }
+
+// Attach reattaches to an existing box for a READER, without resuming it — see
+// [Provider.Attach]. A paused box its backend cannot read is [ErrBoxPaused].
+func (m *Manager) Attach(ctx context.Context, placement Placement, sandboxID, codingAgent string) (Sandbox, Runner, error) {
+	runner, err := m.RunnerFor(codingAgent)
+	if err != nil {
+		return nil, nil, err
+	}
+	provider, err := m.Provider(placement)
+	if err != nil {
+		return nil, nil, err
+	}
+	box, err := provider.Attach(ctx, sandboxID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return box, runner, nil
+}

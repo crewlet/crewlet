@@ -22,6 +22,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { EventRecord, TurnAnswer } from "~/protocol/index.ts";
+import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -832,6 +833,51 @@ test("a turn with nothing absorbed draws no such note", async () => {
   expect(screen.queryByRole("button", { name: /Already on this page/ })).toBeNull();
 });
 
+// THE REFLECTION PASS'S SENTINEL ASKS FOR THE TURN AGAIN — THIS TURN'S ONLY.
+//
+// The Reflection lane is drawn from the pass's `auxiliary_spend` records, which
+// reach no slice of the store: they arrive only in the `turn` answer. The
+// engine publishes them before the pass's `reflection_completed`, so that
+// sentinel is when a page already open has to ask again; refetching only when
+// a phase landed or the seat's stage changed, the lane stayed empty for as
+// long as the page was open. Another turn's sentinel is no news about this one.
+test("this turn's reflection sentinel refetches the turn, another turn's does not", async () => {
+  onTab("timeline");
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  let asked = 0;
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) => {
+    if (what !== "turn") return Promise.resolve({});
+    asked++;
+    return Promise.resolve({
+      turn_id: TURN,
+      nodes: [],
+      events: [phase("2026-09-13T10:01:30Z", 90_000)],
+      truncated: false,
+    });
+  };
+  frame(store, socket);
+  await waitFor(() => expect(asked).toBe(1));
+
+  const sentinel = (turn: string, at: string) => ({
+    ...event({
+      type: "reflection_completed",
+      timestamp: at,
+      category: "learning",
+      payload: { turn_id: turn, role: "CEO", workers_run: 2 },
+    }),
+    failed: false,
+  });
+  act(() => store.applyEvent(sentinel("t-elsewhere", "2026-09-13T10:02:00Z")));
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 20));
+  });
+  expect(asked, "another turn's sentinel refetched this one").toBe(1);
+
+  act(() => store.applyEvent(sentinel(TURN, "2026-09-13T10:02:05Z")));
+  await waitFor(() => expect(asked).toBe(2));
+});
+
 // ---------------------------------------------------------------------------
 // Steer
 // ---------------------------------------------------------------------------
@@ -933,6 +979,7 @@ function runningSeat(phase: string) {
     activity: "working",
     turn: { turn_id: TURN, started_at: "2026-09-13T10:00:00Z", stage: "phase" },
     live_call: {
+      versions: ZERO_VERSIONS,
       turn_id: TURN,
       phase,
       iteration: 1,
@@ -1139,6 +1186,11 @@ const TAIL = {
     cut: false,
     as_of: "2026-09-13T10:05:00Z",
     finished: false,
+    reset: true,
+    epoch: "transcript@0",
+    start: 0,
+    end: 33,
+    digest: "d33",
   },
 };
 

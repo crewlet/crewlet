@@ -222,23 +222,42 @@ func (p turnPart) keep(n int) any {
 // TurnClosingEvents is how many of a long turn's last rows are recovered
 // beside its opening.
 //
-// Twenty rather than two, because the two records a reader came for are not
-// reliably the last two. A turn ends with its final review phase, then
-// `agent_turn_completed` and `turn_completed` — and then the REFLECTION PASS,
-// which publishes after them: an episode, a persist decision, a counterparty
-// profile, a synthesized, refined or promoted skill, and its own sentinel,
-// each of them a model call that also files its own auxiliary
-// `agent_phase_completed`. Two would be swallowed by that tail on any turn
-// with learning enabled, and the review phase — the one a reader who came for
-// "how did it end" wants beside the words — would go with them.
+// Thirty-two rather than two, because the records a reader came for are not
+// reliably the last two. A turn's ending is its final review phase and
+// everything after it, which on a turn with learning enabled is, counted in the
+// order it is stamped:
 //
-// Twenty clears that with headroom while staying small enough that the second
-// read is a seek rather than a scan. The recovered rows replace nothing: a cut
-// view holds [store.MaxTurnEvents] opening rows plus at most this many closing
-// ones, which is the same payload budget the cap exists for with a bounded
-// addition — fleet-wide as well as per node, because the merge cuts to the
-// same two numbers.
-const TurnClosingEvents = 20
+//   - the review phase's own record: 1;
+//   - its card's rewrite, an IN-turn `auxiliary_spend` stamped at that call —
+//     after the review it condenses, before the completion: 1. Every other
+//     in-turn record is stamped at its own last call, which is before the
+//     review phase ended, so it sorts above this tail whenever it was flushed;
+//   - the stop's own record, when a guard, the budget or the provider chain
+//     ended the turn: 1;
+//   - `agent_turn_completed` and `turn_completed`: 2;
+//   - the audit record of a colleague's answer, when the turn was an ask: 1;
+//   - the REFLECTION PASS, which publishes after them: an episode, a persist
+//     decision, a counterparty profile per distinct sender, a synthesized,
+//     refined or promoted skill and its sentinel — 7 with one sender;
+//   - what that pass's model calls cost, as `auxiliary_spend` of the
+//     reflection stage — one per purpose per model: the persist decider, the
+//     profiler, the synthesizer and the refiner, 4 on one model;
+//   - and the conversation entry's rewrites, beside the pass: one record per
+//     kind of payload it condensed, an argument and a failed call's error, 2.
+//
+// Nineteen, then, before a coalesced trigger's second sender or a fallback
+// chain that answered the pass on a second model adds a row each. Twenty —
+// this constant's old value, set when the ending was counted at fifteen —
+// cleared that by one, and a busier ending pushed the review phase out of
+// the recovered rows: the one a reader who came for "how did it end" wants
+// beside the words. Thirty-two keeps thirteen rows of headroom for exactly
+// those, while staying small enough that the second read is a seek rather
+// than a scan. The recovered rows replace nothing: a cut view holds
+// [store.MaxTurnEvents] opening rows plus at most this many closing ones,
+// which is the same payload budget the cap exists for with a bounded addition
+// — fleet-wide as well as per node, because the merge cuts to the same two
+// numbers.
+const TurnClosingEvents = 32
 
 // turnPartOf reads one node's share of a turn from ONE SNAPSHOT of its log, for
 // [tracePartOf]'s reason.

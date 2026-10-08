@@ -44,6 +44,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { indexOrg, seatLookup, type OrgIndex } from "~/lib/seats.ts";
 import { plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -73,7 +74,7 @@ export function Knowledge() {
   // address naming no mode runs in (`defaultSearchMode`, the same rule the
   // tree's control draws). It runs nothing, so asking it beside a search
   // costs a round trip and no ranking. See `KnowledgeTree`.
-  const probe = useQuery("knowledge", { q: "", mode: "semantic" });
+  const probe = useSearchQuery("knowledge", { q: "", mode: "semantic" });
   const mode = resolveSearchMode(modeRaw || null, probe.data);
   // AN ADDRESS WITH NO MODE WAITS FOR THE PROBE rather than running hybrid
   // first: on a company with no embeddings provider that first answer is
@@ -83,7 +84,14 @@ export function Knowledge() {
   const settled = modeRaw !== "" || probe.data !== null || probe.error !== null;
   // Searching is a real request, so it runs on submit — the phrase is in the
   // address — rather than on every keystroke.
-  const asked = useQuery("knowledge", { q: phrase, mode }, { enabled: phrase !== "" && settled });
+  // A PHRASE PAST THE ENGINE'S BOUND IS NOT SENT, and the results say why —
+  // see `useSearchQuery`.
+  const asked = useSearchQuery(
+    "knowledge",
+    { q: phrase, mode },
+    { enabled: phrase !== "" && settled },
+  );
+  const tooLong = asked.tooLong;
   const search = { ...asked, loading: asked.loading || (phrase !== "" && !settled) };
   const answer = phrase ? search.data : probe.data;
 
@@ -97,7 +105,9 @@ export function Knowledge() {
         ) : undefined}
       </PageActions>
       {answer?.available === false && <Unavailable answer={answer} />}
-      {phrase ? (
+      {phrase && tooLong ? (
+        <Callout variant="warning">{tooLong}</Callout>
+      ) : phrase ? (
         <Results phrase={phrase} search={search} />
       ) : (
         <KnowledgeHome backend={probe.data?.backend ?? ""} />
@@ -155,7 +165,12 @@ function Results({
   search,
 }: {
   phrase: string;
-  search: { data: KnowledgeAnswer | null; loading: boolean; error: string | null };
+  search: {
+    data: KnowledgeAnswer | null;
+    loading: boolean;
+    error: string | null;
+    detail?: string;
+  };
 }) {
   const { open: openPeek } = usePeekControls();
   const data = search.data;
@@ -205,6 +220,7 @@ function Results({
       )}
       <QueryState
         error={search.error}
+        detail={search.detail}
         loading={search.loading}
         empty={
           hits.length || !ran

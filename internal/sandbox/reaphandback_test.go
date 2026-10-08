@@ -1049,7 +1049,7 @@ func TestAReplyATurnTookIsSpentBeforeItsRelaunchClearsTheRow(t *testing.T) {
 	var answer *RecordedAnswer
 	rig.resumer.during = func(ctx context.Context, run PendingRun) {
 		// THE TURN CALLS run_sandbox AGAIN, and its node stops right after.
-		if err := rig.pending.BeginLaunch(ctx, run, rigLease); err != nil {
+		if _, err := rig.pending.BeginLaunch(ctx, run, rigLease); err != nil {
 			t.Errorf("relaunch: %v", err)
 		}
 		answer = rig.getIn(ctx, "t1").Answer

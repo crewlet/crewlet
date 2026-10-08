@@ -31,6 +31,7 @@
 import { forwardRef, useImperativeHandle, useMemo, useRef, useState } from "react";
 import {
   Button,
+  Callout,
   Checkbox,
   FormField,
   IconButton,
@@ -50,11 +51,15 @@ import {
   XGlyph,
 } from "@crewlethq/icons/glyphs";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
+import { QueryState } from "~/components/common.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { matchesRow } from "~/app/keymap.ts";
 import { handleLabel, type OrgIndex } from "~/lib/seats.ts";
-import { firstLine } from "~/lib/format.ts";
+import { firstLine, textBudget } from "~/lib/format.ts";
+import { DECISION_QUESTION_MAX_BYTES } from "~/contract/work.ts";
+import { PAGE_TITLE_MAX_BYTES } from "~/contract/pages.ts";
 
 /** How the composer posts. */
 export type ComposeMode =
@@ -365,7 +370,11 @@ function AskDialog({
 }) {
   const [who, setWho] = useState("");
   const [choose, setChoose] = useState(false);
-  const [question, setQuestion] = useState(firstLine(body).slice(0, 200));
+  // THE FIRST LINE WHOLE. It was sliced to 200 characters — not the
+  // engine's figure, which is bytes — so a long opening line arrived as half a
+  // sentence nobody wrote. A line past the cap is said below the field, and
+  // the person shortens it.
+  const [question, setQuestion] = useState(firstLine(body));
   const [labels, setLabels] = useState<string[]>(["", ""]);
   const [recommended, setRecommended] = useState(-1);
   const [role, setRole] = useState<"approver" | "contributor">("approver");
@@ -382,13 +391,16 @@ function AskDialog({
   );
   const filled = labels.map((l) => l.trim()).filter(Boolean);
   const name = index.byHandle.get(who)?.name ?? who;
+  const questionBudget = textBudget(question, DECISION_QUESTION_MAX_BYTES, "a question");
   const blocked = !who
     ? "Choose who owes the answer."
     : choose && !question.trim()
       ? "Say what is being decided, in one sentence."
-      : choose && filled.length < MIN_OPTIONS
-        ? `Offer at least ${MIN_OPTIONS} options.`
-        : undefined;
+      : choose && questionBudget.over
+        ? `Shorten the question: it is ${questionBudget.bytes} bytes and a question holds at most ${questionBudget.limit}.`
+        : choose && filled.length < MIN_OPTIONS
+          ? `Offer at least ${MIN_OPTIONS} options.`
+          : undefined;
   const submit = async () => {
     // THE BUTTON'S OWN GATE, for the dialog's submit: an ask is a comment,
     // and a second one is a second ask.
@@ -459,10 +471,16 @@ function AskDialog({
         />
         {choose && (
           <div className="col gap-3">
-            <FormField label="What is being decided" htmlFor="composer-ask-q">
+            <FormField
+              label="What is being decided"
+              htmlFor="composer-ask-q"
+              helper={questionBudget.over ? undefined : questionBudget.line}
+              error={questionBudget.over ? questionBudget.line : undefined}
+            >
               <Input
                 id="composer-ask-q"
                 value={question}
+                error={questionBudget.over}
                 onChange={(event) => setQuestion(event.target.value)}
               />
             </FormField>
@@ -542,12 +560,16 @@ function LinkTaskDialog({ item, onClose }: { item: string; onClose: () => void }
   const write = useAct("update_work_item");
   const [q, setQ] = useState("");
   const [chosen, setChosen] = useState<{ key: string; title: string } | null>(null);
-  const search = useQuery(
+  // THE BOUND IS THE HOOK'S: a phrase past it is not sent, and the list's
+  // place says why (`useSearchQuery`).
+  const search = useSearchQuery(
     "work_search",
     { q: q.trim(), mode: "hybrid", limit: 8 },
     { enabled: q.trim().length >= 2 },
   );
-  const hits = (search.data?.hits ?? []).filter((h) => h.key !== item);
+  // A REFUSED SEARCH LISTS NOTHING: `useQuery` keeps its last answer across a
+  // failure, which here is the hits of a term the box no longer holds.
+  const hits = search.error ? [] : (search.data?.hits ?? []).filter((h) => h.key !== item);
   const blocked = chosen ? undefined : "Choose a task first.";
   const submit = async () => {
     // THE BUTTON'S OWN GATE: the dialog is a form its search field submits
@@ -593,22 +615,28 @@ function LinkTaskDialog({ item, onClose }: { item: string; onClose: () => void }
         >
           <Input id="composer-link-q" value={q} onChange={(event) => setQ(event.target.value)} />
         </FormField>
-        <PickList
-          label="Tasks"
-          items={hits.map((h) => ({ id: h.key, title: h.title, meta: h.key }))}
-          chosen={chosen?.key ?? ""}
-          onChoose={(id) => {
-            const hit = hits.find((h) => h.key === id);
-            if (hit) setChosen({ key: hit.key, title: hit.title });
-          }}
-          empty={
-            q.trim().length < 2
-              ? "Type two characters to search."
-              : search.loading
-                ? "Searching…"
-                : "No task matches."
-          }
-        />
+        {search.tooLong ? (
+          <Callout variant="warning">{search.tooLong}</Callout>
+        ) : search.error ? (
+          <QueryState error={search.error} detail={search.detail} loading={false} />
+        ) : (
+          <PickList
+            label="Tasks"
+            items={hits.map((h) => ({ id: h.key, title: h.title, meta: h.key }))}
+            chosen={chosen?.key ?? ""}
+            onChoose={(id) => {
+              const hit = hits.find((h) => h.key === id);
+              if (hit) setChosen({ key: hit.key, title: hit.title });
+            }}
+            empty={
+              q.trim().length < 2
+                ? "Type two characters to search."
+                : search.loading
+                  ? "Searching…"
+                  : "No task matches."
+            }
+          />
+        )}
         <RefusalNote write={write} />
       </div>
     </Modal>
@@ -633,7 +661,11 @@ function AttachPageDialog({
   const save = useAct("write_page");
   const [q, setQ] = useState("");
   const [chosen, setChosen] = useState<{ id: string; title: string } | null>(null);
-  const [title, setTitle] = useState(firstLine(draft).slice(0, 120));
+  // THE FIRST LINE WHOLE, for the Ask dialog's reason: a slice put half a
+  // sentence in as the page's address. A line past the cap is said below the
+  // field instead.
+  const [title, setTitle] = useState(firstLine(draft));
+  const titleBudget = textBudget(title, PAGE_TITLE_MAX_BYTES, "a page's title");
   const found = useQuery("pages", { title: q.trim(), limit: 8 }, { enabled: q.trim().length >= 2 });
   const busy = link.busy || save.busy;
 
@@ -712,11 +744,17 @@ function AttachPageDialog({
           <FormField
             label="Or save what you wrote as a new page"
             htmlFor="composer-page-title"
-            helper="Filed in your team's container, then attached to the task."
+            helper={
+              titleBudget.over
+                ? undefined
+                : (titleBudget.line ?? "Filed in your team's container, then attached to the task.")
+            }
+            error={titleBudget.over ? titleBudget.line : undefined}
           >
             <Input
               id="composer-page-title"
               value={title}
+              error={titleBudget.over}
               onChange={(event) => setTitle(event.target.value)}
             />
           </FormField>
@@ -729,7 +767,9 @@ function AttachPageDialog({
                 ? "Write something in the reply first — that is the page's body."
                 : !title.trim()
                   ? "Give the page a title."
-                  : undefined
+                  : titleBudget.over
+                    ? `Shorten the title: it is ${titleBudget.bytes} bytes and a page's title holds at most ${titleBudget.limit}.`
+                    : undefined
             }
             onPress={() => void saveThenAttach()}
           >

@@ -211,6 +211,52 @@ func TestFromKindKeepsTheKindItIsGiven(t *testing.T) {
 	}
 }
 
+// A STATUS FAILURE SHOWS THE ENGINE'S LINE, NEVER THE SDK'S TEXT. An SDK's
+// error is whatever its vendor chose to print — Anthropic's is the request
+// URL, userinfo and all, and the raw body — and the classified error's text is
+// what every log line, event and turn error carries. The cause is still
+// reachable, for errors.Is and errors.As.
+//
+// Mutation: put the cause on the classified error unwrapped, and the password
+// and the body are in its text.
+func TestAStatusFailureShowsTheStatusAndNeverTheSDKsText(t *testing.T) {
+	t.Parallel()
+	cause := errors.New(`POST "http://gateway:s3cretpass@llm.example.com/v1/messages": 401 ` +
+		`{"error":{"message":"invalid key sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWXYZ"}}`)
+	for _, tc := range []struct {
+		name   string
+		status int
+		h      http.Header
+		want   string
+	}{
+		{"Anthropic's request id", 401, header("request-id", "req_011CSHoEeqs5C35K2UUqR7Fy",
+			"x-request-id", "gw-1"), "HTTP 401 Unauthorized (request req_011CSHoEeqs5C35K2UUqR7Fy)"},
+		{"OpenAI's and a gateway's", 429, header("x-request-id", "req_8f2b"),
+			"HTTP 429 Too Many Requests (request req_8f2b)"},
+		{"no request id", 500, nil, "HTTP 500 Internal Server Error"},
+		{"a status with no name", 529, nil, "HTTP 529"},
+		{"a header that is not an id", 400, header("request-id", "see the body for details"),
+			"HTTP 400 Bad Request"},
+		{"a header too long to be an id", 400, header("request-id", strings.Repeat("r", maxRequestID+1)),
+			"HTTP 400 Bad Request"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := FromStatus(cause, "anthropic", "claude", tc.status, tc.h)
+			if got := e.Err.Error(); got != tc.want {
+				t.Errorf("the failure says %q, want %q", got, tc.want)
+			}
+			if text := e.Error(); strings.Contains(text, "s3cretpass") || strings.Contains(text, "sk-ant-") ||
+				strings.Contains(text, "llm.example.com") {
+				t.Errorf("the SDK's text reached the classified error: %s", text)
+			}
+			if !errors.Is(e, cause) {
+				t.Error("the SDK's error is no longer behind the classified one")
+			}
+		})
+	}
+}
+
 // --- FromTransport -----------------------------------------------------
 
 type timeoutError struct{}

@@ -53,8 +53,10 @@ type Syncer struct {
 	js      jetstream.JetStream
 	agentID AgentIDFor
 
-	// marks is the per-seat, per-table watermark: the highest rowid
-	// already published. In memory only, and deliberately: a restart
+	// marks is the per-seat, per-table watermark: the highest value of
+	// the table's watermark column already published (table.watermark —
+	// a change sequence that is never reused, so a row written after the
+	// mark is always above it). In memory only, and deliberately: a restart
 	// republishes what it has, which the stream collapses onto the same
 	// subjects, so the cost is one extra pass and the benefit is a
 	// subsystem with no state of its own to keep correct.

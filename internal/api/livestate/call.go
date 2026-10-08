@@ -145,12 +145,15 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 		// it alone carries and moves nothing else: not the round, not the
 		// tokens, not the clock.
 		if roundNum == openingRound && cur.RoundNum > openingRound {
+			was := *cur
 			if cur.Prompt == "" {
 				cur.Prompt = str(payload, "prompt")
 			}
 			if len(cur.PromptMessages) == 0 {
 				cur.PromptMessages = list(payload, "prompt_messages")
 			}
+			cur.Versions = s.restamp(&was, cur)
+			agent.liveCallSeq = s.versions
 			return role
 		}
 		// A stale earlier round of the SAME call is ignored.
@@ -257,6 +260,15 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 		StartedAt:        startedAt,
 		UpdatedAt:        env.Timestamp,
 	}
+	// The versions this round's fields are at: the held call's where a
+	// field is what it held, the projection's next where it moved — and
+	// every field at the next for a call of its own.
+	var held *LiveCall
+	if cur.sameCall(turnID, phase, iteration) {
+		held = cur
+	}
+	agent.liveCall.Versions = s.restamp(held, agent.liveCall)
+	agent.liveCallSeq = s.versions
 	return role
 }
 
@@ -286,6 +298,8 @@ func (s *LiveState) recordPhaseFailure(agent *agentLive, env Envelope, payload m
 	if !call.sameCall(str(payload, "turn_id"), str(payload, "phase"), num(payload, "iteration")) {
 		return
 	}
+	was := *call
+	defer func() { call.Versions = s.restamp(&was, call); agent.liveCallSeq = s.versions }()
 	call.InProgress = false
 	call.Failed = true
 	call.Error = failure
@@ -319,6 +333,19 @@ func (s *LiveState) recordPhaseFailure(agent *agentLive, env Envelope, payload m
 	call.RoundStartedAt = ""
 }
 
+// clearCall drops a seat's live call and advances its overlay sequence, so the
+// clear is ordered against a call a push carries or a tab fetches whole that
+// the clear overtook on the wire — see [Overlay.LiveCallSeq]. A no-op when
+// there is nothing to clear, so a tab holding nothing has no sequence to move.
+func (s *LiveState) clearCall(a *agentLive) {
+	if a.liveCall == nil {
+		return
+	}
+	a.liveCall = nil
+	s.versions++
+	a.liveCallSeq = s.versions
+}
+
 // finishLiveCall closes out the in-flight call when its phase completes.
 //
 // It records the call as finished — so no later progress round can resurrect it
@@ -345,7 +372,7 @@ func (s *LiveState) finishLiveCall(agent *agentLive, env Envelope, payload map[s
 		return
 	}
 	if agent.liveCall.sameCall(turnID, phase, iteration) {
-		agent.liveCall = nil
+		s.clearCall(agent)
 	}
 }
 

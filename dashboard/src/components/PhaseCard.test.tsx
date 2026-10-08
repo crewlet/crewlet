@@ -66,7 +66,10 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     sandboxId: "",
     launchId: "",
     transcript: "",
+    transcriptElidedLines: 0,
+    transcriptElidedBytes: 0,
     deliveredRefs: [],
+    deliveredRefsElided: 0,
     trigger: null,
     at: "2026-09-02T10:00:00Z",
     startedAt: "2026-09-02T10:00:00Z",
@@ -523,6 +526,29 @@ describe("a coding run's card", () => {
     const activity = screen.getByRole("button", { name: /^Activity/ });
     fireEvent.click(activity);
     expect(screen.getByText(/go test \.\/\.\.\./)).toBeDefined();
+  });
+
+  // THE COUNT IS NOT THE KEPT PART PRESENTED AS THE WHOLE. A long run's
+  // record keeps its transcript's start and end, so the lines on the card
+  // are not the lines the run wrote — and the fold said "3 lines" of a run
+  // that wrote thousands.
+  //
+  // Mutation: count `record.transcript` alone, as the card did, and this
+  // reads "3 lines".
+  test("counts what the record left out of a long run's activity", () => {
+    render(
+      <PhaseCard
+        record={phase({
+          ...RUN,
+          transcript:
+            "[tool] Bash: go test ./...\n(1200 line(s), 380 KiB, left out here)\nAll green.",
+          transcriptElidedLines: 1200,
+          transcriptElidedBytes: 389_120,
+        })}
+        defaultOpen
+      />,
+    );
+    expect(screen.getByRole("button", { name: /^Activity.*2 of 1,202 lines/ })).toBeDefined();
   });
 });
 

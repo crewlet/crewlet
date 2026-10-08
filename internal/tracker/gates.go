@@ -9,7 +9,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // THE TWO GATES, and they are in one file because they are ONE CATEGORY: a
@@ -418,6 +417,12 @@ func purgeWake(task Task, reason, actor string, leads Leads) *Notify {
 	}
 }
 
+// maxPurgeKey is the longest task key a purge's notice is measured against: a
+// project key of at most ten characters (the config's container-key grammar,
+// `[A-Z][A-Z0-9]{1,9}`), a dash, and a sequence number of up to nineteen
+// digits — the most an int64 has.
+const maxPurgeKey = 10 + 1 + 19
+
 // purgeExcerpt is the line the lead reads.
 //
 // IT NAMES THE KEY AND NOT THE TITLE. A purge destroys the content; an
@@ -425,9 +430,11 @@ func purgeWake(task Task, reason, actor string, leads Leads) *Notify {
 // window, which is the one thing this operation is for. The key is an
 // identifier the person already has in whatever ticket asked for the purge.
 //
-// The REASON is the operator's own sentence and is kept, cut to fit: it is
-// why they did it, and a record of an irreversible act with no reason on it is
-// the shape nobody can audit afterwards.
+// The REASON is the operator's own sentence and is kept WHOLE: it is why they
+// did it, and a record of an irreversible act with a reason cut off half way
+// is the shape nobody can audit afterwards. A reason too long for the line is
+// refused by [Writer.PurgeTask] before anything is destroyed, so this never
+// has to choose what to drop.
 func purgeExcerpt(task Task, reason, actor string) string {
 	out := task.Key + " was purged"
 	if actor != "" {
@@ -437,7 +444,7 @@ func purgeExcerpt(task Task, reason, actor string) string {
 	if reason = strings.TrimSpace(reason); reason != "" {
 		out += ": " + reason
 	}
-	return textcut.Within(out, MaxExcerpt)
+	return out
 }
 
 // PurgeTask destroys a task and every row it produced.
@@ -465,6 +472,16 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 			"gesture and this writer acts as %q — nothing else may destroy "+
 			"a task, because nothing else can be asked to confirm it",
 			w.ActorKind)
+	}
+	// THE REASON FITS ITS NOTICE OR THE PURGE IS REFUSED, before anything
+	// is decided: the lead is told in one line carrying the reason whole,
+	// and an irreversible act audited by half a sentence is worse than an
+	// operator asked to say it shorter. Judged against the longest key a
+	// project mints so the answer cannot depend on the task's own key.
+	if line := purgeExcerpt(Task{Key: strings.Repeat("K", maxPurgeKey)}, reason, w.Actor); len(line) > MaxExcerpt {
+		return WriteResult{}, fmt.Errorf("%w: a purge's reason is carried whole on the "+
+			"one line its project's lead is told, and that line holds %d bytes; this "+
+			"reason makes it %d — say it in fewer words", ErrInvalid, MaxExcerpt, len(line))
 	}
 	subject := TaskSubject(id)
 	// EVERY TASK ITS APPLY WRITES, not the purged task alone: the apply

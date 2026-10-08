@@ -67,12 +67,23 @@ func TestAnUnknownModelWithNoWidthIsRefused(t *testing.T) {
 	}
 
 	// AND STATING THE WIDTH IS THE WAY THROUGH, which is what makes the
-	// refusal a question rather than a wall.
+	// refusal a question rather than a wall — the width and, on the same
+	// rule, the limits (embedlimits_test.go), which are facts about the model
+	// this build does not know either.
 	c = embeddingCompany(t, &config.EmbeddingProvider{
 		Type: config.EmbeddingOpenAI, Model: "some-new-model-v9", Dimensions: 2048,
+		MaxInputTokens: 8192, MaxBatchInputs: 64, MaxBatchTokens: 100_000,
 	})
 	if err := c.Validate(); err != nil {
 		t.Fatalf("an unknown model WITH a width was refused: %v", err)
+	}
+	for _, field := range []string{"max_input_tokens", "max_batch_inputs", "max_batch_tokens"} {
+		c = embeddingCompany(t, &config.EmbeddingProvider{
+			Type: config.EmbeddingOpenAI, Model: "some-new-model-v9", Dimensions: 2048,
+		})
+		if err := c.Validate(); err == nil || !strings.Contains(err.Error(), field) {
+			t.Errorf("an unknown model with a width and no %s: %v", field, err)
+		}
 	}
 }
 

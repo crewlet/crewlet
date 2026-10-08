@@ -7,9 +7,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
 )
 
@@ -323,15 +323,30 @@ func assignWaves(tasks []resolved) error {
 	return nil
 }
 
-// dependencyBudget caps what one task's injected dependency results may cost.
+// dependencyBudget is the most the answers a task waited for may add to its
+// prompt, TOGETHER.
 //
-// 16 KB per dependency, because a submission is the parent's own declared
-// shape and truncating it silently would hand a dependent half a JSON
-// document — worse than none, since a model reads the fragment as the whole
-// answer. Past the cap the answer is elided WITH the elision marked, so the
-// worker can see something was cut and say so rather than reasoning over a
-// gap it cannot detect.
-const dependencyBudget = 16 << 10
+// Each answer is already bounded where it was made — a submission is one tool
+// call of a worker capped on tokens, its prose likewise — so one answer is
+// carried whole, and a task that waited on two or three never meets this. What
+// it answers is the fan-in: a task waiting on eight workers inherits eight
+// answers, and a worker usually runs on a small model whose context is the
+// first thing that runs out. 64 KiB is about sixteen thousand tokens, a share
+// of any context this engine targets that leaves the task its own room.
+//
+// PAST IT, AN ANSWER IS REWRITTEN, NEVER CUT. It used to be elided at sixteen
+// thousand runes per dependency, and a submission cut there is half a JSON
+// document that a model reads as the whole answer. Each answer over its share
+// is rewritten by the parent seat's auxiliary model instead — a submission as
+// JSON of the same shape — and where no rewrite can be had it is carried
+// whole: the dependent task cannot do its work without its input, and a
+// prompt that is too heavy fails loudly where a fragment fails silently.
+const dependencyBudget = 64 << 10
+
+// fitter rewrites an answer to fit its share — the parent seat's compactor.
+type fitter interface {
+	Fit(ctx context.Context, kind compact.Kind, text string, budget int) (compact.Result, error)
+}
 
 // withDependencies prefixes a task's prompt with the answers it waited for.
 //
@@ -346,9 +361,31 @@ const dependencyBudget = 16 << 10
 // position, because a task id is whatever the parent's model typed — and the
 // task. An answer is a worker's prose or its JSON, so whatever headings it
 // carries stay inside its own section.
-func withDependencies(prompt string, deps []Result) prompts.Prompt {
+func withDependencies(ctx context.Context, fit fitter, prompt string, deps []Result) prompts.Prompt {
 	b := prompts.NewBuilder("")
 	if len(deps) > 0 {
+		answers := make([]string, len(deps))
+		total := 0
+		for i, d := range deps {
+			answers[i] = d.Answer()
+			total += len(answers[i])
+		}
+		if total > dependencyBudget {
+			share := dependencyBudget / len(deps)
+			for i, answer := range answers {
+				if len(answer) <= share {
+					continue
+				}
+				res, err := fit.Fit(ctx, compact.KindAnswer, answer, share)
+				if err != nil {
+					log.WarnContext(ctx, "subagent_dependency_not_condensed",
+						"task", deps[i].ID, "bytes", len(answer), "share", share, "error", err.Error(),
+						"detail", "the answer is carried whole; the dependent task's prompt is heavier than its budget")
+					continue
+				}
+				answers[i] = res.Note() + "\n" + res.Text
+			}
+		}
 		b.Heading("dependencies", "## Results you were given\n\n"+
 			"These are the answers from the tasks this one waited for. "+
 			"They are the input to your work.\n")
@@ -357,8 +394,7 @@ func withDependencies(prompt string, deps []Result) prompts.Prompt {
 			if d.Worker != "" {
 				heading += " (worker: " + d.Worker + ")"
 			}
-			b.Heading(fmt.Sprintf("dependency_%d", i+1),
-				heading+"\n"+ledger.Elide(d.Answer(), dependencyBudget)+"\n")
+			b.Heading(fmt.Sprintf("dependency_%d", i+1), heading+"\n"+answers[i]+"\n")
 		}
 		b.Add("\n---\n\n")
 	}

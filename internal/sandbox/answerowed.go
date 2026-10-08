@@ -575,6 +575,7 @@ func (c *Coordinator) attemptOwed(ctx context.Context, run PendingRun) {
 	disposition, err := c.resumeAndSettle(ctx, claimed, answerText(claimed, answer.Text, answer.attribution()),
 		true, answer.trigger(), runOutcome{
 			InputTokens: claimed.ParkedInputTokens, OutputTokens: claimed.ParkedOutputTokens,
+			Engine: parkedEngineSpend(claimed),
 		})
 	if disposition == AnswerDeferred {
 		// The claim went back: the run is [StatusAnswered] again with

@@ -4,14 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/compact"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -66,7 +69,9 @@ func (p answerPages) Get(_ context.Context, ref string, _ statelog.Freshness) (p
 	return pages.Detail{Page: pages.Page{ID: ref, Body: body}}, nil
 }
 
-// answerModel is a model with a known answer and a known cost.
+// answerModel is a model with a known answer and a known cost, behind the
+// auxiliary seam — which records every attribution it is handed, since the
+// seam is what charges and records each call under it.
 type answerModel struct {
 	content string
 	in, out int
@@ -74,7 +79,10 @@ type answerModel struct {
 	calls   int
 	asked   []llm.Request
 	role    *org.Role
-	phase   phase.Phase
+	uses    []auxspend.Use
+	// failRewrite fails the condensing calls only — the ones made with the
+	// compactor's instructions — and answers the question as usual.
+	failRewrite bool
 }
 
 func (m *answerModel) Model() string { return "aux-small" }
@@ -85,30 +93,37 @@ func (m *answerModel) Complete(_ context.Context, req llm.Request) (*llm.Complet
 	if m.err != nil {
 		return nil, m.err
 	}
+	if m.failRewrite && strings.HasPrefix(req.Messages[0].Content, "You rewrite text") {
+		return nil, errors.New("503 from the rewrite")
+	}
 	return &llm.Completion{Model: "aux-small", Content: m.content,
 		InputTokens: m.in, OutputTokens: m.out}, nil
 }
 
-func (m *answerModel) Head(role *org.Role, ph phase.Phase) (chain.Member, error) {
-	m.role, m.phase = role, ph
+func (m *answerModel) Auxiliary(role *org.Role, use auxspend.Use) (chain.Member, error) {
+	m.role = role
+	m.uses = append(m.uses, use)
 	return chain.Member{Key: "aux", Provider: m}, nil
 }
 
-// answerBudget is the company's windows as a list of charges.
+// purposes is what each call the seam resolved was for, in order.
+func (m *answerModel) purposes() []types.AuxPurpose {
+	out := make([]types.AuxPurpose, 0, len(m.uses))
+	for _, use := range m.uses {
+		out = append(out, use.Purpose)
+	}
+	return out
+}
+
+// answerBudget is the company's windows, as the gate reads them.
 type answerBudget struct {
 	refusal  builtin.BudgetRefusal
 	refusing bool
 	err      error
-	charged  []int
 }
 
 func (b *answerBudget) Refusing(context.Context) (builtin.BudgetRefusal, bool, error) {
 	return b.refusal, b.refusing, b.err
-}
-
-func (b *answerBudget) Charge(_ context.Context, tokens int) error {
-	b.charged = append(b.charged, tokens)
-	return nil
 }
 
 // answerRig is one operator surface serving answer_knowledge.
@@ -186,27 +201,33 @@ func ask(t *testing.T, tool tools.Callable, q string) (tools.Result, builtin.Kno
 	return res, answer, raw
 }
 
-// AN ANSWER IS WRITTEN BY THE PERSON'S AUXILIARY MODEL AND CHARGED WHAT IT
-// COST. The budget hears exactly the tokens the reply reported, the answer
-// says them back, and the model is the one the asker's own seat resolves for
-// auxiliary work.
-func TestAnAnswerChargesWhatItsModelSpent(t *testing.T) {
+// AN ANSWER IS WRITTEN BY THE PERSON'S AUXILIARY MODEL, RESOLVED THROUGH THE
+// SEAM AS THE OPERATOR'S SPEND. The seam is what charges the company's windows
+// and records the call for the person, so what this tool owes it is the
+// attribution: the operator stage — a person's, on no seat budget — and the
+// answer's own purpose, on the asker's own seat. The answer says back what the
+// reply reported.
+func TestAnAnswerIsResolvedAsThePersonsSpend(t *testing.T) {
 	t.Parallel()
 	rig := newAnswerRig()
 	res, answer, _ := ask(t, rig.tool(t), "How do we deploy?")
 	if res.Failed {
 		t.Fatalf("refused: %s", res.Output)
 	}
-	if len(rig.budget.charged) != 1 || rig.budget.charged[0] != 820 {
-		t.Errorf("charged %v, want one charge of the 820 tokens the reply spent", rig.budget.charged)
+	want := auxspend.Use{Stage: types.AuxStageOperator, Purpose: types.AuxAnswerKnowledge}
+	if len(rig.model.uses) != 1 || rig.model.uses[0] != want {
+		t.Errorf("the seam was handed %+v, want one call attributed %+v", rig.model.uses, want)
+	}
+	if err := want.Validate(); err != nil {
+		t.Errorf("the answer's attribution is one the seam refuses: %v", err)
 	}
 	if answer.Tokens != (builtin.AnswerTokens{Input: 700, Output: 120}) || answer.Model != "aux-small" ||
 		answer.Cached {
 		t.Errorf("answered tokens %+v, model %q, cached %v", answer.Tokens, answer.Model, answer.Cached)
 	}
-	if rig.model.phase != phase.Auxiliary || rig.model.role == nil || rig.model.role.Handle() != "founder" {
-		t.Errorf("resolved the %s model for %v, want the asker's own seat's auxiliary model",
-			rig.model.phase, rig.model.role)
+	if rig.model.role == nil || rig.model.role.Handle() != "founder" {
+		t.Errorf("resolved the model for %v, want the asker's own seat's auxiliary model",
+			rig.model.role)
 	}
 	if !strings.Contains(answer.AnswerMD, "make deploy") {
 		t.Errorf("answer_md = %q", answer.AnswerMD)
@@ -228,9 +249,9 @@ func TestASecondIdenticalQuestionIsServedFromCache(t *testing.T) {
 		t.Fatalf("refused: %s", res.Output)
 	}
 	if !again.Cached || again.Tokens != (builtin.AnswerTokens{}) || rig.model.calls != 1 ||
-		len(rig.budget.charged) != 1 {
-		t.Fatalf("second ask: cached %v, tokens %+v, model calls %d, charges %v — want a "+
-			"cache hit that spent nothing", again.Cached, again.Tokens, rig.model.calls, rig.budget.charged)
+		len(rig.model.uses) != 1 {
+		t.Fatalf("second ask: cached %v, tokens %+v, model calls %d, resolutions %d — want a "+
+			"cache hit that spent nothing", again.Cached, again.Tokens, rig.model.calls, len(rig.model.uses))
 	}
 	if again.AnswerMD != first.AnswerMD || len(again.Sources) != len(first.Sources) {
 		t.Errorf("the cached answer differs from the one it was cached from")
@@ -295,7 +316,8 @@ func TestTheAnswerNamesItsSources(t *testing.T) {
 	}
 	user := rig.model.asked[0].Messages[1].Content
 	for i, needle := range []string{"[1] page: Deploy runbook\nRun `make deploy` from main.",
-		"[2] page: Rollback\nRevert the tag.", "[3] work item: ENG-7 Automate the deploy\nscript it"} {
+		"[2] page: Rollback\nRevert the tag.",
+		"[3] work item: ENG-7 Automate the deploy\n" + builtin.SnippetOnly + "script it"} {
 		if !strings.Contains(user, needle) {
 			t.Errorf("source [%d] reached the model as something other than %q:\n%s", i+1, needle, user)
 		}
@@ -368,9 +390,9 @@ func TestAnUnboundCredentialIsRefusedBeforeAnythingIsSpent(t *testing.T) {
 		!strings.Contains(res.Output, "contact.crewlet_operator_id") {
 		t.Fatalf("an unbound credential was not refused with the binding to make: %+v", res)
 	}
-	if rig.model.calls != 0 || len(rig.budget.charged) != 0 || len(rig.search.asked) != 0 {
-		t.Errorf("refused after spending: model %d, charges %v, searches %d",
-			rig.model.calls, rig.budget.charged, len(rig.search.asked))
+	if rig.model.calls != 0 || len(rig.model.uses) != 0 || len(rig.search.asked) != 0 {
+		t.Errorf("refused after spending: model %d, resolutions %d, searches %d",
+			rig.model.calls, len(rig.model.uses), len(rig.search.asked))
 	}
 }
 
@@ -410,8 +432,9 @@ func TestNoSourcesIsAnsweredWithoutAModelAndNoSearchIsRefused(t *testing.T) {
 	rig.search.hits, rig.items.hits = nil, nil
 	res, answer, _ := ask(t, rig.tool(t), "Who owns billing?")
 	if res.Failed || len(answer.Sources) != 0 || answer.Model != "" || rig.model.calls != 0 ||
-		len(rig.budget.charged) != 0 {
-		t.Fatalf("nothing matched: %+v (model calls %d, charges %v)", res, rig.model.calls, rig.budget.charged)
+		len(rig.model.uses) != 0 {
+		t.Fatalf("nothing matched: %+v (model calls %d, resolutions %d)", res, rig.model.calls,
+			len(rig.model.uses))
 	}
 
 	rig = newAnswerRig()
@@ -424,8 +447,10 @@ func TestNoSourcesIsAnsweredWithoutAModelAndNoSearchIsRefused(t *testing.T) {
 }
 
 // A FAILED CALL IS NOT AN ANSWER, and a reply that spent tokens and wrote
-// nothing is still charged: the vendor billed it.
-func TestAnEmptyReplyIsChargedAndRefused(t *testing.T) {
+// nothing was still made through the seam — which charges and records what a
+// completion reported whatever its caller makes of it, since the vendor billed
+// it (the engine's own suite holds the seam to that).
+func TestAnEmptyReplyIsRefusedAfterTheSeamSawIt(t *testing.T) {
 	t.Parallel()
 	rig := newAnswerRig()
 	rig.model.content = "  "
@@ -434,19 +459,20 @@ func TestAnEmptyReplyIsChargedAndRefused(t *testing.T) {
 	if !res.Failed || res.Refusal != tools.RefusalUnavailable {
 		t.Fatalf("an empty reply was answered: %+v", res)
 	}
-	if len(rig.budget.charged) != 1 || rig.budget.charged[0] != 820 {
-		t.Errorf("charged %v, want the 820 the empty reply spent", rig.budget.charged)
+	if len(rig.model.uses) != 1 || rig.model.uses[0].Purpose != types.AuxAnswerKnowledge {
+		t.Errorf("the empty reply was resolved as %+v, want through the seam as the answer",
+			rig.model.uses)
 	}
 	if res, _, _ := ask(t, tool, "How do we deploy?"); !res.Failed || rig.model.calls != 2 {
 		t.Error("a refusal was cached")
 	}
 }
 
-// A REFUSED ANSWER IS CHARGED AND REFUSED. A refusal returns no completion —
-// its text is not an answer — but the response the vendor billed travels in
-// the error, and an answer that charged only a non-nil completion let every
-// refused question spend against a counter that never moved.
-func TestARefusedAnswerIsCharged(t *testing.T) {
+// A REFUSED ANSWER IS REFUSED, and it was made through the seam. A refusal
+// returns no completion — its text is not an answer — but the response the
+// vendor billed travels in the error, and the seam charges and records it
+// from there (llm.Billed; the engine's own suite holds the seam to that).
+func TestARefusedAnswerIsRefusedAfterTheSeamSawIt(t *testing.T) {
 	t.Parallel()
 	rig := newAnswerRig()
 	rig.model.err = llm.Refused("anthropic", "aux-small", &llm.Refusal{Category: "bio",
@@ -456,8 +482,9 @@ func TestARefusedAnswerIsCharged(t *testing.T) {
 	if !res.Failed || res.Refusal != tools.RefusalUnavailable {
 		t.Fatalf("a refused answer was answered: %+v", res)
 	}
-	if len(rig.budget.charged) != 1 || rig.budget.charged[0] != 649 {
-		t.Errorf("charged %v, want the 649 the refused response was billed", rig.budget.charged)
+	if len(rig.model.uses) != 1 || rig.model.uses[0].Purpose != types.AuxAnswerKnowledge {
+		t.Errorf("the refused answer was resolved as %+v, want through the seam as the answer",
+			rig.model.uses)
 	}
 }
 
@@ -484,5 +511,87 @@ func TestAnswerKnowledgeIsOmittedWithNoBudget(t *testing.T) {
 		if tool.Name() == builtin.AnswerKnowledgeTool {
 			t.Fatal("answer_knowledge was served with no budget behind it")
 		}
+	}
+}
+
+// A PAGE LONGER THAN AN ANSWER CAN READ IS CONDENSED FOR THE QUESTION, NOT
+// CUT. It used to be cut to its first four kilobytes, unmarked — so the step
+// the question was about, past the cut, never reached the model, and the
+// answer said the runbook did not have it.
+func TestALongSourceIsCondensedForTheQuestion(t *testing.T) {
+	t.Parallel()
+	rig := newAnswerRig()
+	long := strings.Repeat("Preamble about the deploy pipeline. ", 300) + "STEP FOUR: rotate the signing key."
+	rig.pages.bodies["p-1"] = long
+	res, _, _ := ask(t, rig.tool(t), "How do we rotate the signing key?")
+	if res.Failed {
+		t.Fatalf("refused: %s", res.Output)
+	}
+	if len(rig.model.asked) != 2 {
+		t.Fatalf("%d model calls, want the rewrite and the answer", len(rig.model.asked))
+	}
+	rewrite, answer := rig.model.asked[0], rig.model.asked[1]
+	if !strings.Contains(rewrite.Messages[1].Content, "STEP FOUR: rotate the signing key.") {
+		t.Fatal("the rewrite was not shown the end of the page")
+	}
+	if !strings.Contains(rewrite.Messages[0].Content, "How do we rotate the signing key?") {
+		t.Fatal("the rewrite was not told the question it serves")
+	}
+	if !strings.Contains(answer.Messages[1].Content, "condensed by a model") {
+		t.Fatalf("the answer was not told its source is a rewrite:\n%s", answer.Messages[1].Content)
+	}
+	if strings.Contains(answer.Messages[1].Content, long[:1000]) {
+		t.Fatal("the answering model was handed the raw page as well")
+	}
+	// THE REWRITE IS THE PERSON'S SPEND TOO, under its own purpose: the
+	// seam charges it to the company's windows and records it beside the
+	// answer, so the history says what the question cost in full.
+	got := rig.model.purposes()
+	wantPurposes := []types.AuxPurpose{types.AuxCondense(string(compact.KindSource)), types.AuxAnswerKnowledge}
+	if !slices.Equal(got, wantPurposes) {
+		t.Fatalf("the seam was handed %v — want the rewrite and the answer, each named", got)
+	}
+	for _, use := range rig.model.uses {
+		if use.Stage != types.AuxStageOperator || use.TurnID != "" || use.Tally != nil {
+			t.Errorf("%s was filed as %+v, want the operator's, on no turn", use.Purpose, use)
+		}
+	}
+}
+
+// A SOURCE THAT CANNOT BE CONDENSED IS DROPPED — from what the model reads AND
+// from the sources it cites — never handed over cut.
+func TestASourceThatCannotBeCondensedIsNotCited(t *testing.T) {
+	t.Parallel()
+	rig := newAnswerRig()
+	rig.model.failRewrite = true
+	rig.pages.bodies["p-1"] = strings.Repeat("x", builtin.AnswerSourceBytes*3)
+	res, answer, _ := ask(t, rig.tool(t), "How do we deploy?")
+	if res.Failed {
+		t.Fatalf("refused: %s", res.Output)
+	}
+	for _, src := range answer.Sources {
+		if src.Ref == "p-1" {
+			t.Fatal("an answer cited a source its model was never shown")
+		}
+	}
+	if strings.Contains(rig.model.asked[len(rig.model.asked)-1].Messages[1].Content, "xxxx") {
+		t.Fatal("a source that could not be condensed reached the model anyway")
+	}
+}
+
+// A QUESTION PAST ITS LIMIT IS REFUSED, NOT CUT — an answer to the first four
+// hundred bytes of a question answers a different question.
+func TestALongQuestionIsRefusedNotCut(t *testing.T) {
+	t.Parallel()
+	rig := newAnswerRig()
+	res, err := rig.tool(t).Call(t.Context(), map[string]any{"q": strings.Repeat("why ", 200)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Failed || !strings.Contains(res.Output, "takes at most") {
+		t.Fatalf("a long question was not refused naming the limit: %s", res.Output)
+	}
+	if rig.model.calls != 0 || len(rig.search.asked) != 0 {
+		t.Fatal("a refused question still searched or spent")
 	}
 }

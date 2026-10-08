@@ -125,10 +125,20 @@ type ErrAmbiguousAnswer struct {
 }
 
 // AskCandidate is one open ask, as a refusal names it.
+//
+// WHOLE, never an excerpt: the refusal exists so the caller can tell which
+// question it is answering, and two questions that share an opening are
+// exactly the two an excerpt cannot tell apart. The renderer decides how many
+// it can carry whole and names the rest by id — see the builtin's
+// ambiguousText.
 type AskCandidate struct {
 	Comment string
 	Author  string
-	Excerpt string
+	// Question is a structured ask's own question ([Decision.Question]),
+	// empty for an ask in prose.
+	Question string
+	// Body is the comment the ask was written as.
+	Body string
 }
 
 func (e *ErrAmbiguousAnswer) Error() string {
@@ -256,7 +266,7 @@ func inferAnswer(ctx context.Context, tx *sql.Tx, task, author string) (string, 
 	// without the literal term the index is skipped and this reads every
 	// comment on the task.
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id, author, substr(body, 1, 120)
+		SELECT id, author, body, document
 		FROM tracker_comments
 		WHERE task_id = ? AND ask = ? AND ask <> '' AND resolved = 0
 		  AND answered_by IS NULL AND removed = 0
@@ -270,8 +280,13 @@ func inferAnswer(ctx context.Context, tx *sql.Tx, task, author string) (string, 
 	var found []AskCandidate
 	for rows.Next() {
 		var one AskCandidate
-		if err := rows.Scan(&one.Comment, &one.Author, &one.Excerpt); err != nil {
+		var document []byte
+		if err := rows.Scan(&one.Comment, &one.Author, &one.Body, &document); err != nil {
 			return "", err
+		}
+		var stored Comment
+		if len(document) > 0 && json.Unmarshal(document, &stored) == nil && stored.Decision != nil {
+			one.Question = stored.Decision.Question
 		}
 		found = append(found, one)
 	}

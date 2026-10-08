@@ -36,8 +36,10 @@ import type {
   WorkProjectDetail,
   WorkRoutingAnswer,
 } from "~/protocol/index.ts";
+import { DECISION_QUESTION_MAX_BYTES } from "~/contract/work.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
+import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -797,14 +799,26 @@ test("a change reads as a sentence, a checklist move included", () => {
       chrome,
     ).what,
   ).toBe("cleared the due date");
-  // A relation says which task joined it, by its key.
+  // A relation says which task joined it and which left, by its key — what
+  // the engine records for a set is exactly those moves.
   expect(
     changeSentence(
-      record({ kind: "relations", fields: { blocking: { from: "", to: "t-4" } } }),
+      record({
+        kind: "relations",
+        fields: { blocking: { from: "", to: "", added: ["t-4"], removed: ["t-5"] } },
+      }),
       task(),
-      { taskKey: (id: string) => (id === "t-4" ? "ENG-4" : "") },
+      { taskKey: (id: string) => (id === "t-4" ? "ENG-4" : id === "t-5" ? "ENG-5" : "") },
     ).what,
-  ).toBe("made it block ENG-4");
+  ).toBe("made it block ENG-4 and stopped it blocking ENG-5");
+  // And any other set as members added to or removed from it.
+  expect(
+    changeSentence(
+      record({ kind: "watchers", fields: { watchers: { from: "", to: "", added: ["ada"] } } }),
+      task(),
+      chrome,
+    ).what,
+  ).toBe("added ada to the watchers");
 });
 
 // WHO A CHANGE REACHED IS A QUIET DISCLOSURE AT THE END OF ITS LINE: a button
@@ -934,7 +948,14 @@ test("the live row appears only for a turn on this item", async () => {
       work_item: { backend: "native", id: key === "ENG-42" ? "t-1" : "t-9", key, project: "ENG" },
     },
     // THE SEVENTH ROUND IN FLIGHT: `round_num` is zero-based.
-    live_call: { turn_id: "run-9", phase: "execute", round_num: 6, rounds_used: 6, max_rounds: 25 },
+    live_call: {
+      turn_id: "run-9",
+      phase: "execute",
+      round_num: 6,
+      rounds_used: 6,
+      max_rounds: 25,
+      versions: ZERO_VERSIONS,
+    },
   });
   expect(liveOn([on("ENG-9")] as never, { id: "t-1", key: "ENG-42" })).toBeNull();
   expect(liveOn([on("ENG-42", "stopped")] as never, { id: "t-1", key: "ENG-42" })).toBeNull();
@@ -986,7 +1007,7 @@ test("the live row counts rounds from one and names the phase running", async ()
       stage: "phases",
       work_item: { backend: "native", id: "t-1", key: "ENG-42", project: "ENG" },
     },
-    live_call: { turn_id: "run-9", max_rounds: 25, ...live_call },
+    live_call: { turn_id: "run-9", max_rounds: 25, ...live_call, versions: ZERO_VERSIONS },
   });
   const liveText = async (live_call: Record<string, unknown>) => {
     cleanup();
@@ -1022,7 +1043,13 @@ test("the live row says a sub-minute turn's seconds, as the profile does", async
           stage: "phases",
           work_item: { backend: "native", id: "t-1", key: "ENG-42", project: "ENG" },
         },
-        live_call: { turn_id: "run-9", phase: "execute", round_num: 1, max_rounds: 24 },
+        live_call: {
+          turn_id: "run-9",
+          phase: "execute",
+          round_num: 1,
+          max_rounds: 24,
+          versions: ZERO_VERSIONS,
+        },
       },
     ] as never,
   });
@@ -1263,6 +1290,31 @@ test("a comment is posted on the task", async () => {
       args: { item: "ENG-42", body: "Holding the port for 20s reproduces it." },
     },
   ]);
+});
+
+// AN ASK'S QUESTION STARTS FROM THE COMMENT'S FIRST LINE, WHOLE. It was
+// sliced to 200 characters — not even the engine's figure, which is 300 bytes —
+// so a long opening line arrived as half a sentence nobody wrote. Past the cap
+// the line under the field says by how much, and Ask is held until it is
+// shortened.
+test("an ask's question is prefilled whole and held past the engine's cap", async () => {
+  mount(<WorkItemPage id="ENG-42" />);
+  await settle();
+  const opening = `Which ${"region ".repeat(60)}do we ship first?`;
+  fireEvent.change(screen.getByRole("combobox", { name: "Comment on ENG-42" }), {
+    target: { value: `${opening}\nThe detail.` },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Ask…" }));
+  await settle();
+  fireEvent.click(screen.getByRole("checkbox", { name: /choose between options/ }));
+  await settle();
+  const question = screen.getByRole("textbox", {
+    name: "What is being decided",
+  }) as HTMLInputElement;
+  expect(question.value).toBe(opening);
+  expect(document.body.textContent).toContain(
+    `${opening.length} bytes — a question holds at most ${DECISION_QUESTION_MAX_BYTES}.`,
+  );
 });
 
 /**

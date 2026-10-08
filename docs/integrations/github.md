@@ -525,9 +525,12 @@ and ready.
   to run before the engine knows its own public base.
 - **An app name is globally unique and capped at 34 characters.** A name built
   from the seat alone would collide the second time two companies both have an
-  `sre-lead`, so the company name leads, the seat's role name follows, and the
-  whole is cut on a rune boundary (a name sliced through a multi-byte character
-  is refused as malformed rather than as too long). GitHub then slugifies the
+  `sre-lead`, so the company name leads and the seat's role name follows. A
+  name past the limit shortens the company and keeps the seat whole, and ends
+  in six hex characters of a digest of the full name, so two seats of a
+  company whose name alone fills the limit never share one (a name sliced
+  through a multi-byte character is refused as malformed rather than as too
+  long, so every shortening lands on a character boundary). GitHub then slugifies the
   name and disambiguates a collision itself, so the app that exists may not
   carry the name that was asked for. That is why the install link is built from
   the slug the conversion returned rather than from the name that was

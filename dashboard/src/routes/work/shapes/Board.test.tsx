@@ -24,6 +24,7 @@ import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { WorkGroup, WorkSummary } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
+import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -625,6 +626,7 @@ describe("the board on the work screen", () => {
     handle: "swe",
     activity: "working",
     live_call: {
+      versions: ZERO_VERSIONS,
       turn_id: "t-1",
       work_key: key,
       phase: "execute",

@@ -98,7 +98,7 @@ func (r *answerResumer) Resume(ctx context.Context, req sandbox.ResumeRequest) e
 		return fmt.Errorf("%w: the runner is still being built on this node", sandbox.ErrResumeUnavailable)
 	}
 	// The resumed executor launches the next job, and it asks again.
-	if err := r.store.BeginLaunch(ctx, req.Run, sandbox.Fence{}); err != nil {
+	if _, err := r.store.BeginLaunch(ctx, req.Run, sandbox.Fence{}); err != nil {
 		return err
 	}
 	if _, err := r.store.MarkSuspended(ctx, req.Run.TurnID,
@@ -257,7 +257,7 @@ func runAnswerOrder(t *testing.T, q queue.EventQueue) {
 		TurnID: "t1", AgentHandle: "swe", AgentID: "a-1", Role: "SWE", CodingAgent: "claude-code",
 		ConversationKey: "slack:C1:1.0", PartitionKey: "slack:C1:1.0",
 	}
-	if err := store.BeginLaunch(ctx, run, sandbox.Fence{}); err != nil {
+	if _, err := store.BeginLaunch(ctx, run, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
 	if _, err := store.MarkSuspended(ctx, "t1",

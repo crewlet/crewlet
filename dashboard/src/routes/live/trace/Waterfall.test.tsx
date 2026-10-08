@@ -14,10 +14,13 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
+import type { PhaseRecord } from "~/lib/phases.ts";
 import { buildWaterfall } from "~/lib/waterfall.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { EventRecord, SandboxTailAnswer } from "~/protocol/index.ts";
-import { SANDBOX_TAIL_POLL_MS, Waterfall, liveState, steerMarks } from "./Waterfall.tsx";
+import { phaseRecord } from "~/test/phaseRecord.ts";
+import { SANDBOX_TAIL_POLL_MS } from "~/contract/sandbox.ts";
+import { Waterfall, liveState, steerMarks } from "./Waterfall.tsx";
 import { withDerived } from "~/test/org.ts";
 
 class InertWebSocket {
@@ -72,12 +75,18 @@ const PARKED = [
 /** Mount the Timeline over a stubbed tail answer, counting the asks. */
 function mount(
   events: EventRecord[],
-  tail: SandboxTailAnswer,
+  tail: SandboxTailAnswer | ((asked: number) => SandboxTailAnswer),
   {
     selected: initial = "",
     now = T0 + 60_000,
     org,
-  }: { selected?: string; now?: number; org?: Record<string, unknown> } = {},
+    phases = [],
+  }: {
+    selected?: string;
+    now?: number;
+    org?: Record<string, unknown>;
+    phases?: PhaseRecord[];
+  } = {},
 ) {
   const store = new Store();
   if (org) store.applyOrg(withDerived(org) as never);
@@ -89,11 +98,12 @@ function mount(
   ) => {
     if (what === "sandbox_tail") {
       asked.push(params as Record<string, unknown>);
-      return Promise.resolve(tail);
+      // A FUNCTION ANSWERS THE NTH ASK, for a run whose output grows.
+      return Promise.resolve(typeof tail === "function" ? tail(asked.length) : tail);
     }
     return Promise.resolve({});
   };
-  const model = buildWaterfall({ events, phases: [], now, running: true, parked: true });
+  const model = buildWaterfall({ events, phases, now, running: true, parked: true });
   let selected = initial;
   const draw = () => (
     <ClientContext.Provider value={{ store, socket }}>
@@ -101,7 +111,7 @@ function mount(
         <Router>
           <Waterfall
             model={model}
-            phases={[]}
+            phases={phases}
             marks={steerMarks(events, "turn-1")}
             agent="SWE"
             selected={selected}
@@ -137,6 +147,11 @@ const RUNNING: SandboxTailAnswer = {
     cut: false,
     as_of: iso(59_000),
     finished: false,
+    reset: true,
+    epoch: "transcript@0",
+    start: 0,
+    end: 21,
+    digest: "d21",
   },
 };
 
@@ -151,6 +166,7 @@ describe("a running coding run's live output", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Coding run/ }));
     await flush();
+    // HOLDING NOTHING YET, it names no cursor: the owner answers what there is.
     expect(asked).toEqual([{ turn_id: "turn-1", launch_id: "L1" }]);
     expect(screen.getByText("running go test ./...")).toBeTruthy();
 
@@ -190,6 +206,86 @@ describe("a running coding run's live output", () => {
     expect(await screen.findByText(/has not written anything it can show yet/)).toBeTruthy();
   });
 
+  // IT HOLDS WHAT IT IS SENT AND FOLLOWS THE END. Each answer adds what was
+  // written since; the block keeps the newest line in view — the one that
+  // says what the run is doing now — until the reader scrolls up, after which
+  // the text they are reading stays where it is.
+  //
+  // Mutation: drop the follow, and the block stays at its top; follow
+  // regardless of the reader, and their scroll is taken away.
+  test("accumulates what it is sent and follows the end until the reader scrolls up", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false, toFake: ["setTimeout", "clearTimeout"] });
+    const lines = ["[tool] bash: go build\n", "[tool] bash: go vet\n", "[tool] bash: go test\n"];
+    let end = 0;
+    const answer = (n: number): SandboxTailAnswer => {
+      const text = lines[Math.min(n, lines.length) - 1]!;
+      const start = end;
+      end += text.length;
+      return {
+        outcome: "tail",
+        turn_id: "turn-1",
+        launch_id: "L1",
+        node: "node-b",
+        output: {
+          text,
+          source: "transcript",
+          cut: false,
+          as_of: iso(59_000),
+          finished: false,
+          reset: n === 1,
+          epoch: "transcript@0",
+          start,
+          end,
+          digest: `d${end}`,
+        },
+      };
+    };
+    const { asked } = mount(PARKED, answer, { selected: "run:L1" });
+    await flush();
+    const pre = document.querySelector(".live-output pre") as HTMLElement;
+    expect(pre.textContent).toContain("go build");
+    Object.defineProperty(pre, "scrollHeight", { configurable: true, value: 1_000 });
+    Object.defineProperty(pre, "clientHeight", { configurable: true, value: 100 });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SANDBOX_TAIL_POLL_MS);
+    });
+    expect(pre.textContent).toContain("go build");
+    expect(pre.textContent).toContain("go vet");
+    expect(asked[1]).toEqual({
+      turn_id: "turn-1",
+      launch_id: "L1",
+      epoch: "transcript@0",
+      after: lines[0]!.length,
+      digest: `d${lines[0]!.length}`,
+    });
+    expect(pre.scrollTop).toBe(1_000);
+
+    pre.scrollTop = 200;
+    fireEvent.scroll(pre);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SANDBOX_TAIL_POLL_MS);
+    });
+    expect(pre.textContent).toContain("go test");
+    expect(pre.scrollTop).toBe(200);
+  });
+
+  // A JOB STILL BEING SET UP IS ASKED ABOUT AGAIN, and is not called stopped.
+  test("a job being set up keeps the poll going", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false, toFake: ["setTimeout", "clearTimeout"] });
+    const { asked } = mount(
+      PARKED,
+      { outcome: "launching", turn_id: "turn-1", launch_id: "L1", status: "launching" },
+      { selected: "run:L1" },
+    );
+    await flush();
+    expect(screen.getByText(/its box made and provisioned/)).toBeTruthy();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SANDBOX_TAIL_POLL_MS * 2);
+    });
+    expect(asked.length).toBeGreaterThan(1);
+  });
+
   test("a run that stopped running stops the poll", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false, toFake: ["setTimeout", "clearTimeout"] });
     const { asked } = mount(
@@ -208,6 +304,36 @@ describe("a running coding run's live output", () => {
       await vi.advanceTimersByTimeAsync(SANDBOX_TAIL_POLL_MS * 3);
     });
     expect(asked).toHaveLength(1);
+  });
+});
+
+// A COLLECTED RUN'S SPAN SAYS WHAT ITS RECORD DOES NOT LIST. The record holds
+// the delivered refs to a byte bound and counts the rest, so the span's
+// "Delivered" names how many more the run's report holds rather than showing
+// the listed part as all of it.
+//
+// Mutation: join `deliveredRefs` alone, as the span did, and the count is
+// gone.
+describe("a collected coding run's span", () => {
+  test("names the refs its record does not list", async () => {
+    const run = phaseRecord({
+      key: "turn-1|sandbox|1|L1",
+      phase: "sandbox",
+      backend: "sandbox",
+      codingAgent: "claude-code",
+      launchId: "L1",
+      at: iso(31_000),
+      durationMs: 30_000,
+      deliveredRefs: ["https://github.com/acme/api/pull/1"],
+      deliveredRefsElided: 3,
+    });
+    mount(PARKED, RUNNING, { phases: [run] });
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: /Coding run/ }));
+    await flush();
+    expect(
+      screen.getByText("https://github.com/acme/api/pull/1 (+3 more its report names)"),
+    ).toBeTruthy();
   });
 });
 

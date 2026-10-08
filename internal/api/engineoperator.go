@@ -290,6 +290,9 @@ func EngineOperatorOptions(e *engine.Engine) operator.Options {
 			Budget: engine.AnswerBudget(e),
 			Corpus: e.KnowledgeCorpus,
 			Actor:  operator.WorkActor(opts.Org),
+			// A source too long to read whole is condensed for the
+			// question, in the node's one rewrite cache.
+			Rewrites: e.Rewrites(),
 		}
 	}
 	// THE LEAD RELATION, which the tracker deliberately does not derive:

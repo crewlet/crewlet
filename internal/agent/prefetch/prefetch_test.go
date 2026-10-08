@@ -11,8 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
+	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/compact"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
@@ -69,13 +71,41 @@ func (a *aux) calls() int {
 	return len(a.asked)
 }
 
-type models struct{ provider llm.Provider }
+// models is the auxiliary seam, recording the attribution each call states
+// when uses is set.
+type models struct {
+	provider llm.Provider
+	uses     *useLog
+}
 
-func (m models) Head(*org.Role, phase.Phase) (chain.Member, error) {
+func (m models) Auxiliary(_ *org.Role, use auxspend.Use) (chain.Member, error) {
+	m.uses.add(use)
 	if m.provider == nil {
 		return chain.Member{}, errors.New("no auxiliary model")
 	}
 	return chain.Member{Key: "aux", Provider: m.provider}, nil
+}
+
+// useLog is every attribution the seam was handed. A POINTER, because the
+// fake is a value in struct literals throughout.
+type useLog struct {
+	mu   sync.Mutex
+	uses []auxspend.Use
+}
+
+func (l *useLog) add(u auxspend.Use) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.uses = append(l.uses, u)
+}
+
+func (l *useLog) all() []auxspend.Use {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.uses)
 }
 
 type diary struct {
@@ -89,7 +119,12 @@ type diary struct {
 	marked *retrievalLog
 }
 
-func (d diary) Recall(context.Context, string, learning.RecallQuery, time.Time) ([]learning.DiaryHit, error) {
+// Recall refuses what the real one refuses: a query with no vector, or one
+// that does not say which model the vector came from.
+func (d diary) Recall(_ context.Context, _ string, q learning.RecallQuery, _ time.Time) ([]learning.DiaryHit, error) {
+	if len(q.Embedding) == 0 || q.Model == "" {
+		return nil, learning.ErrNoEmbedding
+	}
 	return d.hits, d.err
 }
 
@@ -134,10 +169,32 @@ func (l *retrievalLog) seen() ([]string, int) {
 type episodes struct {
 	hits []learning.Hit
 	err  error
+
+	// unsearched is how many turns have no vector of any model but
+	// searchedModel.
+	unsearched    int
+	searchedModel string
 }
 
-func (e episodes) Recall(context.Context, learning.RecallQuery) ([]learning.Hit, error) {
+// Recall refuses what the real one refuses, as the diary fake does.
+func (e episodes) Recall(_ context.Context, q learning.RecallQuery) ([]learning.Hit, error) {
+	if len(q.Embedding) == 0 || q.Model == "" {
+		return nil, learning.ErrNoEmbedding
+	}
 	return e.hits, e.err
+}
+
+// Unsearchable answers for the model the turns were embedded under: none of
+// them is outside a search of it, and every one is outside a search of any
+// other — what a company that moved models has.
+func (e episodes) Unsearchable(_ context.Context, _, model string) (int, error) {
+	if e.err != nil {
+		return 0, e.err
+	}
+	if model == e.searchedModel {
+		return 0, nil
+	}
+	return e.unsearched, nil
 }
 
 type counterparties struct {
@@ -229,13 +286,27 @@ func company(t *testing.T) (*org.Organization, *org.Role) {
 	return o, o.Role("Tech Lead")
 }
 
+// triageScaffold stands in for the guidance an integration's prompt wraps
+// around a message before the executor sees it — the part of the task no
+// relevance judgement may read.
+const triageScaffold = "## Triage — decide BEFORE replying\n\"@PM open a ticket for @SWE\" → addressee = PM"
+
+// theAsk is what the fixture turn was asked.
+const theAsk = "fix the login redirect loop on staging"
+
+// turnAux is the fixture turn's attribution: the turn stage, its run, its
+// unit of work and its tally.
+var turnAux = auxspend.Use{Stage: types.AuxStageTurn, TurnID: "turn-1", WorkKey: "wk-1",
+	Tally: auxspend.NewTally()}
+
 func request(t *testing.T) prefetch.Request {
 	t.Helper()
 	o, seat := company(t)
 	return prefetch.Request{
 		Seat: seat, AgentID: "agent-1", Org: o,
-		Task:   "fix the login redirect loop on staging",
-		TurnID: "turn-1",
+		Task: triageScaffold + "\n\n**Message:** " + theAsk,
+		Ask:  theAsk,
+		Aux:  turnAux,
 		Senders: []learning.Subject{
 			{ExternalID: "U1", Platform: "chat", Name: "Ana Ruiz"},
 		},
@@ -249,7 +320,9 @@ func memory(id, content string) learning.DiaryEntry {
 	}
 }
 
-func embeds(context.Context, string) ([]float32, error) { return []float32{0.1, 0.2}, nil }
+func embeds(context.Context, string) (learning.Vector, error) {
+	return learning.Vector{Values: []float32{0.1, 0.2}, Model: "m"}, nil
+}
 
 func fetch(t *testing.T, src prefetch.Sources, r prefetch.Request) prefetch.Blocks {
 	t.Helper()
@@ -450,6 +523,10 @@ type panickingEpisodes struct{ *reached }
 
 func (p panickingEpisodes) Recall(context.Context, learning.RecallQuery) ([]learning.Hit, error) {
 	panic(p.mark("a malformed episode"))
+}
+
+func (p panickingEpisodes) Unsearchable(context.Context, string, string) (int, error) {
+	panic(p.mark("a malformed episode count"))
 }
 
 type panickingSkills struct{ *reached }
@@ -758,6 +835,27 @@ func TestAKnowledgeSearchThatNeverRanSaysItCouldNotSearch(t *testing.T) {
 	}
 }
 
+// A QUERY THE MODEL WROTE PAST THE SEARCH'S BOUND IS NOT SEARCHED, and the
+// block says the search did not run. Every surface holds a query to that
+// bound, so the model that ignored "2-8 keywords" is not the one caller that
+// slips a paragraph past it — and a query cut to fit would search on wherever
+// the cut fell.
+func TestAQueryPastTheBoundIsNotSearched(t *testing.T) {
+	t.Parallel()
+	pages := &searcher{hits: []knowledge.Hit{{Title: "Staging runbook"}}}
+	got := fetch(t, prefetch.Sources{
+		Knowledge: pages,
+		Models: models{provider: &aux{answers: []string{
+			strings.Repeat("staging ", knowledge.MaxQueryBytes/8+1)}}},
+	}, request(t)).RelevantKnowledge
+	if got != prefetch.UnsearchedKnowledgeHint {
+		t.Fatalf("an over-long query rendered %q, want %q", got, prefetch.UnsearchedKnowledgeHint)
+	}
+	if asked := pages.asked(); len(asked) != 0 {
+		t.Fatalf("an over-long query was searched: %+v", asked)
+	}
+}
+
 // A chatty model prefixes an explanation or wraps the query in quotes, and
 // both would be searched verbatim — a quoted query matches nothing.
 func TestAChattyQueryIsReducedToItsFirstRealLine(t *testing.T) {
@@ -876,6 +974,76 @@ func TestRecallRendersWhatAPastTurnWasAndHowItWent(t *testing.T) {
 	}
 }
 
+// WHAT A PAST TURN WAS ASKED AND WHAT IT DID RIDE BESIDE ITS LABEL, and the
+// label is said as what WOKE it. The label is the kind of event — every chat
+// turn's reads "Message from <someone>" — so a block of labels told a seat
+// three times that somebody had sent a message, and nothing of what it was
+// asked or did about it; unmarked, it read as the question.
+func TestRecallShowsWhatAPastTurnWasAskedAndDidBesideItsLabel(t *testing.T) {
+	t.Parallel()
+	got := fetch(t, prefetch.Sources{
+		Episodes: episodes{hits: []learning.Hit{{Episode: learning.Episode{
+			TaskSummary:   "Message from Ana: Slack message",
+			Ask:           "The staging deploy\nkeeps failing.",
+			PlanSummary:   "Rolled staging back to v41 and\nposted the runbook fix in #ops.",
+			ReviewOutcome: "done",
+		}}}},
+		Embed: embeds,
+	}, request(t)).EpisodeRecall
+	want := "- Woken by: Message from Ana: Slack message _(outcome: done)_\n" +
+		"  Asked: The staging deploy keeps failing.\n" +
+		"  What it did: Rolled staging back to v41 and posted the runbook fix in #ops."
+	if got != want {
+		t.Fatalf("recall =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// A LONG ACCOUNT IS CONDENSED, NEVER CUT. A turn's account of what it did is
+// its final answer when no review wrote one, and an answer can be pages; the
+// block is in the system prompt and re-sent every round, so past its bound the
+// seat's auxiliary model rewrites it — marked as a rewrite — and the opening
+// of it is never passed off as the whole.
+func TestALongAccountIsCondensedNotCut(t *testing.T) {
+	t.Parallel()
+	long := "OPENING-" + strings.Repeat("the deploy log said ", 200) + "and the fix was the cache key."
+	model := &aux{answers: []string{"fixed the cache key that broke the staging deploy"}}
+	got := fetch(t, prefetch.Sources{
+		Episodes: episodes{hits: []learning.Hit{{Episode: learning.Episode{
+			TaskSummary: "Message from Ana: Slack message", PlanSummary: long,
+		}}}},
+		Embed:   embeds,
+		Compact: compact.New(models{provider: model}, compact.NewCache()),
+	}, request(t)).EpisodeRecall
+	for _, want := range []string{"fixed the cache key that broke the staging deploy", "condensed by a model"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("recall is missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "OPENING-") {
+		t.Fatalf("the account's opening was carried alongside its rewrite:\n%s", got)
+	}
+	if model.calls() != 1 || !strings.Contains(model.prompts()[0], "and the fix was the cache key.") {
+		t.Fatalf("the rewrite was not shown the whole account (%d calls)", model.calls())
+	}
+}
+
+// AND ONE NO MODEL CAN CONDENSE IS NAMED BY ITS SIZE, never shown in part: a
+// fragment reads as the whole account.
+func TestAnAccountNoModelCanCondenseIsNamedNotCut(t *testing.T) {
+	t.Parallel()
+	long := "OPENING-" + strings.Repeat("the deploy log said ", 200)
+	got := fetch(t, prefetch.Sources{
+		Episodes: episodes{hits: []learning.Hit{{Episode: learning.Episode{
+			TaskSummary: "Message from Ana: Slack message", PlanSummary: long,
+		}}}},
+		Embed: embeds,
+	}, request(t)).EpisodeRecall
+	if strings.Contains(got, "OPENING-") || !strings.Contains(got, "What it did: (") ||
+		!strings.Contains(got, "not shown") {
+		t.Fatalf("recall = %q, want the account named by its size", got)
+	}
+}
+
 // NO FALLBACK TO RECENCY. Recall's whole claim is "this resembles what you
 // are doing now"; the three most recent turns carry no such claim, and an
 // executor told they are similar work will treat them as precedent.
@@ -918,6 +1086,165 @@ func TestTheEpisodeSummaryIsOptionalAndFailsSoft(t *testing.T) {
 	}, request(t)).EpisodeRecall
 	if !strings.Contains(failed, "redirect loop") {
 		t.Fatalf("a failed summary lost the block: %q", failed)
+	}
+}
+
+// THE SUMMARY READS THE ACCOUNTS WHOLE, AND NOTHING CONDENSES THEM FIRST. With
+// the summary on, its briefing replaces the bullets, so condensing each long
+// account to the reader's 600 bytes before it was up to three rewrites spent
+// on text the summary threw away — and a summary written from rewrites. The
+// accounts are condensed only where the bullets are what the seat is shown: a
+// summary that did not answer.
+func TestTheEpisodeSummaryReadsTheAccountsWholeAndPaysNoRewrite(t *testing.T) {
+	t.Parallel()
+	long := "OPENING-" + strings.Repeat("the deploy log said ", 200) + "and the fix was the cache key."
+	hits := episodes{hits: []learning.Hit{{Episode: learning.Episode{
+		TaskSummary: "Message from Ana: Slack message", PlanSummary: long}}}}
+
+	model := &aux{answers: []string{"- fixed the cache key that broke staging"}}
+	seam := models{provider: model}
+	got := fetch(t, prefetch.Sources{Episodes: hits, Embed: embeds, SummarizeEpisodes: true,
+		Models: seam, Compact: compact.New(seam, compact.NewCache()),
+	}, request(t)).EpisodeRecall
+	if got != "- fixed the cache key that broke staging" {
+		t.Fatalf("recall = %q, want the summary", got)
+	}
+	prompts := model.prompts()
+	if len(prompts) != 1 {
+		t.Fatalf("the summary path made %d auxiliary calls, want the summary alone", len(prompts))
+	}
+	if !strings.Contains(prompts[0], "OPENING-") || !strings.Contains(prompts[0], "and the fix was the cache key.") {
+		t.Fatalf("the summary was not shown the account whole:\n%s", prompts[0])
+	}
+
+	// A summary that does not answer leaves the bullets, and THOSE are
+	// condensed: they are what the seat reads.
+	failing := &aux{err: errors.New("503")}
+	rewriter := &aux{answers: []string{"fixed the cache key"}}
+	got = fetch(t, prefetch.Sources{Episodes: hits, Embed: embeds, SummarizeEpisodes: true,
+		Models:  models{provider: failing},
+		Compact: compact.New(models{provider: rewriter}, compact.NewCache()),
+	}, request(t)).EpisodeRecall
+	if !strings.Contains(got, "What it did: fixed the cache key") || strings.Contains(got, "OPENING-") {
+		t.Fatalf("after a failed summary, recall = %q, want the condensed bullet", got)
+	}
+}
+
+// timedAux records the deadline every auxiliary call is handed, and answers
+// it — or fails it, after a pause, with err.
+type timedAux struct {
+	mu        sync.Mutex
+	pause     time.Duration
+	err       error
+	answer    string
+	deadlines []time.Time
+}
+
+func (a *timedAux) Model() string { return "aux-model" }
+
+func (a *timedAux) Complete(ctx context.Context, _ llm.Request) (*llm.Completion, error) {
+	deadline, _ := ctx.Deadline()
+	a.mu.Lock()
+	a.deadlines = append(a.deadlines, deadline)
+	a.mu.Unlock()
+	select {
+	case <-time.After(a.pause):
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	if a.err != nil {
+		return nil, a.err
+	}
+	return &llm.Completion{Content: a.answer}, nil
+}
+
+func (a *timedAux) seen() []time.Time {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Clone(a.deadlines)
+}
+
+// THE EPISODE BLOCK WAITS ONE AUXILIARY DEADLINE FOR EVERYTHING IT ASKS A MODEL
+// — its summary and the rewrites of the bullets a failed summary falls back to
+// share it — so it is never the block every turn's start waits on. The bullets
+// after a summary that did not answer were handed thirty seconds of their own,
+// from the same seat's auxiliary chain that had just not answered, which put
+// the block at a minute past the summary's thirty seconds.
+func TestTheEpisodeBlockHoldsItsSummaryAndItsRewritesToOneDeadline(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("the deploy log said ", 200)
+	hits := make([]learning.Hit, 3)
+	for i := range hits {
+		hits[i] = learning.Hit{Episode: learning.Episode{TaskSummary: "Message from Ana",
+			Ask: strconv.Itoa(i) + " asked " + long, PlanSummary: strconv.Itoa(i) + " did " + long}}
+	}
+	summary := &timedAux{pause: 80 * time.Millisecond, err: errors.New("503")}
+	rewrites := &timedAux{answer: "condensed"}
+	got := fetch(t, prefetch.Sources{Episodes: episodes{hits: hits}, Embed: embeds,
+		SummarizeEpisodes: true, Models: models{provider: summary},
+		Compact: compact.New(models{provider: rewrites}, compact.NewCache()),
+	}, request(t)).EpisodeRecall
+	if !strings.Contains(got, "What it did: condensed") {
+		t.Fatalf("after a failed summary, recall = %q, want the condensed bullets", got)
+	}
+	asked, rewritten := summary.seen(), rewrites.seen()
+	if len(asked) != 1 || len(rewritten) != 2*len(hits) {
+		t.Fatalf("%d summary calls and %d rewrites, want one and %d", len(asked),
+			len(rewritten), 2*len(hits))
+	}
+	for i, deadline := range rewritten {
+		if deadline.IsZero() || deadline.After(asked[0].Add(time.Millisecond)) {
+			t.Fatalf("rewrite %d was handed a deadline %v past the summary's: the bullets "+
+				"waited a deadline of their own after the summary had spent one",
+				i, deadline.Sub(asked[0]))
+		}
+	}
+}
+
+// EVERY TURN-START CALL IS THE TURN'S OWN, under its own purpose: the seam
+// files each call's spend under the attribution it is handed, so a call
+// handed the turn's identity without its purpose — or one handed none — is
+// spend that every breakdown shows against the wrong line or refuses
+// outright. The memory filter, the knowledge query, the episode summary and
+// the rewrite of a long account each name themselves and carry the run, its
+// work key and its tally.
+func TestEveryTurnStartCallIsFiledUnderTheTurnAndItsPurpose(t *testing.T) {
+	t.Parallel()
+	uses := &useLog{}
+	// PAST THE SUMMARY'S OWN INPUT BOUND, so even with the summary on the
+	// account is rewritten before the summary reads it.
+	long := strings.Repeat("the deploy log said ", 1200)
+	model := &aux{answers: []string{"[0]"}}
+	seam := models{provider: model, uses: uses}
+	fetch(t, prefetch.Sources{
+		Diary:     diary{recent: []learning.DiaryEntry{memory("m1", "always use semantic commits")}},
+		Knowledge: &searcher{hits: []knowledge.Hit{{Title: "Staging runbook"}}},
+		Episodes: episodes{hits: []learning.Hit{{Episode: learning.Episode{
+			TaskSummary: "fixed a redirect loop on staging", PlanSummary: long}}}},
+		Embed:             embeds,
+		SummarizeEpisodes: true,
+		Models:            seam,
+		Compact:           compact.New(seam, compact.NewCache()),
+	}, request(t))
+
+	seen := map[types.AuxPurpose]bool{}
+	for _, use := range uses.all() {
+		if err := use.Validate(); err != nil {
+			t.Errorf("a turn-start call states an attribution the seam refuses: %v", err)
+		}
+		if use.Stage != types.AuxStageTurn || use.TurnID != "turn-1" || use.WorkKey != "wk-1" ||
+			use.Tally != turnAux.Tally {
+			t.Errorf("%s was filed as %+v, want the turn's own attribution", use.Purpose, use)
+		}
+		seen[use.Purpose] = true
+	}
+	for _, want := range []types.AuxPurpose{
+		types.AuxMemoryFilter, types.AuxKnowledgeQuery, types.AuxEpisodeSummary,
+		types.AuxCondense(string(compact.KindOutcome)),
+	} {
+		if !seen[want] {
+			t.Errorf("no call was filed under %s (saw %v)", want, seen)
+		}
 	}
 }
 

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
@@ -114,12 +114,12 @@ type stubModels struct {
 	mu    sync.Mutex
 	p     llm.Provider
 	err   error
-	asked []phase.Phase
+	asked []auxspend.Use
 }
 
-func (m *stubModels) Head(_ *org.Role, ph phase.Phase) (chain.Member, error) {
+func (m *stubModels) Auxiliary(_ *org.Role, use auxspend.Use) (chain.Member, error) {
 	m.mu.Lock()
-	m.asked = append(m.asked, ph)
+	m.asked = append(m.asked, use)
 	m.mu.Unlock()
 	if m.err != nil {
 		return chain.Member{}, m.err
@@ -629,8 +629,8 @@ func TestEveryCoalescedRequesterReachesThePrompt(t *testing.T) {
 		`- Inbound message: "please open replies with hey sam"`,
 		"- Requester: miles",
 		`- Inbound message: "and cc me"`,
-		"- Task: Help with reporting",
-		"- Plan: Summarise",
+		"- Woken by: Help with reporting",
+		"- What it did: Summarise",
 		"- Tools called: search",
 		"- Outcome: done",
 	} {
@@ -654,7 +654,7 @@ func TestAnEmptyTurnStillDescribesItself(t *testing.T) {
 	p := says(`{"kind":"NOOP"}`)
 	mustDecide(t, decider(t, p, &fakeDiary{}), turn)
 	prompt := p.prompt(t, 0)
-	for _, want := range []string{"- Task: (no description)", "- Plan: (no plan)", "- Tools called: (none)"} {
+	for _, want := range []string{"- Woken by: (not recorded)", "- What it did: (nothing recorded)", "- Tools called: (none)"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt is missing %q:\n%s", want, prompt)
 		}
@@ -801,8 +801,14 @@ func TestTheDeciderAsksForTheAuxiliaryModel(t *testing.T) {
 	if _, err := d.Decide(context.Background(), pdTurn()); err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
-	if len(m.asked) != 1 || m.asked[0] != phase.Auxiliary {
-		t.Errorf("asked for %v, want the cheap auxiliary model reflection is meant to run on", m.asked)
+	// THE REFLECTION STAGE, ITS OWN PURPOSE AND THE TURN IT LEARNS FROM: the
+	// seam files the call's spend under exactly this, so the seat's day
+	// counts it, the turn's page draws it in its Reflection lane, and the
+	// turn's own cost and its work item never do.
+	want := auxspend.Use{Stage: types.AuxStageReflection, Purpose: types.AuxPersistDecider,
+		TurnID: "t1"}
+	if len(m.asked) != 1 || m.asked[0] != want {
+		t.Errorf("asked for %+v, want the reflection's auxiliary call %+v", m.asked, want)
 	}
 }
 

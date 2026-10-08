@@ -52,10 +52,11 @@ type Providers struct {
 	// falls back to sorted keys, arbitrary but stable; see ProviderOrder.
 	LLMOrder []string `yaml:"llm_order,omitempty" json:"llm_order,omitempty" desc:"Provider precedence; normally derived from the order they are written in."`
 
-	// Embeddings powers the learning subsystem's vector recall. Nil
-	// disables it — episodes are still written, but nothing searches them
-	// by similarity.
-	Embeddings *EmbeddingProvider `yaml:"embeddings,omitempty" json:"embeddings,omitempty" desc:"Embedding provider for diary and episode recall."`
+	// Embeddings powers every vector this engine computes: the semantic half
+	// of a native knowledge search and the similarity halves of diary and
+	// episode recall. Nil disables them — a search is keyword only, and
+	// episodes are still written, but nothing searches them by similarity.
+	Embeddings *EmbeddingProvider `yaml:"embeddings,omitempty" json:"embeddings,omitempty" desc:"Embedding provider for semantic knowledge search and for diary and episode recall."`
 
 	// Sandbox is the code-runtime backend. Nil (or type none) means no
 	// seat can run a sandboxed coding run, whatever its own gate says.
@@ -1106,7 +1107,10 @@ const (
 // EmbeddingProviderTypes is the closed set.
 var EmbeddingProviderTypes = []EmbeddingProviderType{EmbeddingOpenAI, EmbeddingOpenAICompatible}
 
-// EmbeddingProvider is the vector backend behind diary and episode recall.
+// EmbeddingProvider is the vector backend, and it has four callers: the
+// fleet-singleton duty that embeds the company's own pages and work items for
+// the semantic half of a native knowledge search, each such search's query
+// vector, and the similarity halves of diary and episode recall.
 type EmbeddingProvider struct {
 	Type    EmbeddingProviderType `yaml:"type,omitempty" json:"type,omitempty" js:"enum=openai|openai-compatible" desc:"openai (default) or openai-compatible."`
 	Model   string                `yaml:"model,omitempty" json:"model,omitempty" desc:"Embedding model id."`
@@ -1118,7 +1122,7 @@ type EmbeddingProvider struct {
 	// The width is a property of the model, not a setting with a global
 	// default: text-embedding-3-large emits 3072 and -3-small emits 1536,
 	// and a number that was right for one is silently wrong for the other.
-	// So an unset value resolves from [ModelWidths], and a model this
+	// So an unset value resolves from [EmbeddingModels], and a model this
 	// build does not know is REFUSED rather than given a guess — see
 	// Width.
 	//
@@ -1126,29 +1130,331 @@ type EmbeddingProvider struct {
 	// shortening its output. It must match what the model actually
 	// produces: the store's vector columns are checked against it, and a
 	// mismatch is not a degraded search but a write that cannot be read
-	// back.
+	// back. So a model whose endpoint documents the `dimensions` parameter
+	// as unsupported ([DimensionsUnsupported] — embed-v4.0 through
+	// Cohere's Compatibility API) is refused any width but its own, and is
+	// never sent the parameter at that one.
 	Dimensions int `yaml:"dimensions,omitempty" json:"dimensions,omitempty" js:"min=0;max=4096" desc:"Vector width; 0 takes the named model's own width. 64..4096 to override, and it must match what the model produces."`
+
+	// MaxInputTokens, MaxBatchInputs and MaxBatchTokens are the model's
+	// LIMITS — the most tokens one input may hold, the most inputs one
+	// request may carry, and the most tokens one request may carry summed
+	// over its inputs — and 0 means THE MODEL'S OWN, on exactly the rule
+	// Dimensions follows and for the same reason: a limit is a fact about
+	// the model, and a guess at it is a company whose every long document
+	// is refused by its provider, or whose every batch is, from the day
+	// embeddings are turned on.
+	//
+	// So an unset value resolves from [EmbeddingModels], and one the table
+	// does not carry — a model this build does not know, or a limit its
+	// vendor does not document for the endpoint this backend calls — is
+	// REFUSED until it is stated. A stated value for a limit the table does
+	// carry may only LOWER it, which is what it is for: a gateway or a proxy
+	// in front of the model that accepts less than the model does. Raising a
+	// documented limit is refused, naming the field, because the provider
+	// would refuse what this engine then sends.
+	//
+	// Tokens, because that is the unit every vendor documents a limit in;
+	// what the engine counts is bytes, and [EmbeddingProvider.InputBound] is
+	// the one conversion, which [EmbeddingProvider.Limits] carries.
+	//
+	// THIS BUILD REFUSES A STORED REVISION THAT LACKS ONE IT NEEDS — a
+	// company naming gemini-embedding-001, embed-v4.0 or a model the table
+	// does not carry, with no limits stated — exactly as it refuses an
+	// unknown model with no width: a RUNNABLE rule, not an admission one,
+	// because there is no running such a company without either guessing
+	// the limits or sending what the model refuses. It is refused at boot as
+	// well as at an apply, so no node starts on that revision; the
+	// configuration guide tells an operator to state the limits in the same
+	// edit that names the model.
+	MaxInputTokens int `yaml:"max_input_tokens,omitempty" json:"max_input_tokens,omitempty" js:"min=0" desc:"Most tokens one input may hold; 0 takes the named model's documented window. Required for a model this build does not know; may only lower a documented one."`
+	MaxBatchInputs int `yaml:"max_batch_inputs,omitempty" json:"max_batch_inputs,omitempty" js:"min=0" desc:"Most inputs one request may carry; 0 takes the named model's documented limit. Required where none is documented; may only lower a documented one."`
+	MaxBatchTokens int `yaml:"max_batch_tokens,omitempty" json:"max_batch_tokens,omitempty" js:"min=0" desc:"Most tokens one request may carry, summed over its inputs; 0 takes the named model's documented limit. Required where none is documented; may only lower a documented one."`
 }
 
-// ModelWidths is what each embedding model this build knows emits.
+// EmbeddingModel is what this build knows about one embedding model: the width
+// it emits, what the endpoint the embedding backend calls does with a width
+// asked for, and the limits its vendor documents for that endpoint — an
+// OpenAI-shaped POST /embeddings carrying `model`, an `input` array and, where
+// the endpoint takes it, `dimensions` (internal/providers/embeddings).
+//
+// A ZERO LIMIT IS "NOT DOCUMENTED", never "unlimited": [Undocumented] says
+// which source was read and what it did not say, and validation refuses the
+// provider until the operator states the value ([EmbeddingProvider]). A
+// guessed limit is the failure the table exists to prevent — and a limit
+// copied from a DIFFERENT endpoint of the same vendor is a guess with a
+// citation, which is worse, because it reads as checked.
+type EmbeddingModel struct {
+	// Width is the vector width the model emits when no shorter one is
+	// asked for.
+	Width int
+
+	// Dimensions is what the endpoint does with the request's `dimensions`
+	// parameter for this model, as its vendor documents it — which decides
+	// whether the embedder sends it ([EmbeddingProvider.SendsDimensions])
+	// and whether a width other than [EmbeddingModel.Width] can be
+	// configured at all.
+	Dimensions DimensionsSupport
+
+	// DimensionsSource is the documentation [EmbeddingModel.Dimensions] is
+	// read from, which a refusal of a width the endpoint cannot produce
+	// quotes — so the operator is told where to check, not merely that
+	// this build says no.
+	DimensionsSource string
+
+	// InputTokens is the most tokens one input may hold.
+	InputTokens int
+
+	// BatchInputs is the most inputs one request may carry.
+	BatchInputs int
+
+	// BatchTokens is the most tokens one request may carry, summed over its
+	// inputs.
+	BatchTokens int
+
+	// WrapTokens is how many tokens the server may add around each input
+	// beyond the input's own: the special tokens a model is fed with its
+	// text. Zero only where the vendor documents its count as the input's
+	// own tokens and nothing else; [EmbeddingWrapTokens] everywhere else.
+	WrapTokens int
+
+	// Undocumented names, when any limit above is zero, the documentation
+	// that was read and what it does not state — which is what the refusal
+	// tells an operator, so the field they are asked for comes with the
+	// reason nobody filled it in for them.
+	Undocumented string
+}
+
+// DimensionsSupport is what an embedding endpoint does with the request's
+// `dimensions` parameter for one model, as its vendor documents it.
+//
+// THREE VALUES, because the documentation says one of three things, and each
+// is acted on differently. An endpoint that SHORTENS to the width asked for is
+// sent it, so a store sized below the model's own width is filled at that
+// width. One documented as NOT TAKING it is never sent it, and holds a company
+// to the model's own width, because a width it cannot produce is a store whose
+// every vector would be refused. And where the documentation is SILENT the
+// parameter is sent as it always has been, since dropping it would rest on a
+// guess about the endpoint as much as keeping it does — and the width check
+// every response passes (internal/providers/embeddings) is what catches an
+// endpoint that ignores it.
+type DimensionsSupport string
+
+// The documented answers.
+const (
+	// DimensionsShortens is an endpoint that documents the parameter and
+	// returns a vector of the width asked for.
+	DimensionsShortens DimensionsSupport = "shortens"
+
+	// DimensionsUnsupported is an endpoint that documents the parameter as
+	// one it does not take, so it returns the model's own width and no
+	// other.
+	DimensionsUnsupported DimensionsSupport = "unsupported"
+
+	// DimensionsUnstated is an endpoint whose documentation says nothing
+	// about the parameter.
+	DimensionsUnstated DimensionsSupport = "unstated"
+)
+
+// Valid reports whether d is one of the documented answers.
+func (d DimensionsSupport) Valid() bool {
+	switch d {
+	case DimensionsShortens, DimensionsUnsupported, DimensionsUnstated:
+		return true
+	}
+	return false
+}
+
+// EmbeddingModels is every embedding model this build knows, keyed by the id
+// the provider is configured with.
 //
 // # Why a table and not a default
 //
 // The width decides whether a vector written today can be read tomorrow, and
-// it is a fact about the MODEL. A single default was wrong the moment a
-// company named a model that emits something else — and the default this
-// replaces justified itself by a case that could not exist: it was documented
-// as "what an entry that names no model gets", while validation refuses
-// exactly that entry.
+// the limits decide whether a request is accepted at all — and all four are
+// facts about the MODEL. A single default was wrong the moment a company named
+// a model that emits something else — and the default this replaced justified
+// itself by a case that could not exist: it was documented as "what an entry
+// that names no model gets", while validation refuses exactly that entry. A
+// model absent from this table is refused rather than guessed at, naming both
+// ways to fix it: name a model this build knows, or state the values.
 //
-// A model absent from this table is refused rather than guessed at, naming
-// both ways to fix it: name a model this build knows, or state the width.
-var ModelWidths = map[string]int{
-	"text-embedding-3-large": 3072,
-	"text-embedding-3-small": 1536,
-	"gemini-embedding-001":   3072,
-	"embed-v4.0":             1536,
+// # Why the engine counts BYTES against a limit stated in tokens
+//
+// Every tokenizer these models use emits at most one token per byte of the
+// text it is given, plus the special tokens a server wraps an input in:
+//
+//   - a BYTE-LEVEL BPE (OpenAI's cl100k_base) starts from one token per byte
+//     and every merge replaces two tokens with one;
+//   - a SENTENCEPIECE model with byte fallback (Gemma's, which the Gemini
+//     embedders share, and most open models') emits pieces that each cover at
+//     least one character, falling back to one token per BYTE for a character
+//     its vocabulary lacks — plus, at most, a word-boundary marker in front of
+//     the first piece;
+//   - a WORDPIECE model (the BERT family most self-hosted embedders are)
+//     emits pieces that each cover at least one character, and one [UNK] for
+//     a word it cannot split.
+//
+// So a text of N bytes is at most N tokens plus the wrapper, which is a bound
+// that needs NO TOKENIZER — and that is the reason for it. A tokenizer port
+// (a Go tiktoken with its ranks embedded) was the alternative and is
+// rejected: it is exact for one vendor only, every other model this backend
+// serves has its own, and the standard library plus this argument already
+// keeps every input inside every window.
+//
+// The argument has one hole and it is stated rather than papered over: a
+// tokenizer that applies Unicode COMPATIBILITY normalisation (NFKC) before it
+// splits can lengthen a few characters — U+FDFA, one character of three bytes,
+// becomes eighteen. Byte-level BPE normalises nothing, so OpenAI's bound is
+// exact; for a normalising model the wrap allowance absorbs a handful of
+// those characters, and an input dense with them is refused by the provider
+// as a request it will refuse again, which the embedder classifies so a
+// caller can set that one input aside.
+//
+// The price of counting bytes is that ordinary prose — three to four bytes a
+// token — is held to about a quarter of a model's window. For a caller that
+// represents a long text in CHUNKS that costs nothing but more chunks for the
+// same tokens; for a caller that embeds a text's OPENING it is a shorter
+// opening, which is that caller's policy to weigh.
+//
+// # Over the limit, refused or truncated?
+//
+// Each entry says what its vendor documents, and none of it decides anything:
+// the embedder refuses, BEFORE any request, an input past the byte bound, and
+// the byte bound is inside the window, so no server is ever sent an input its
+// over-length behaviour applies to.
+var EmbeddingModels = map[string]EmbeddingModel{
+	// OpenAI's embeddings reference
+	// (https://developers.openai.com/api/reference/resources/embeddings/methods/create):
+	// "The input must not exceed the max input tokens for the model (8192
+	// tokens for all embedding models)", an array of at most 2048 inputs, and
+	// "a maximum of 300,000 tokens summed across all inputs in a single
+	// request". 8192, not the 8191 older pages gave: the reference and the
+	// embeddings guide's model table (developers.openai.com/api/docs/guides/
+	// embeddings) both say 8192 today. WrapTokens is 0 because the guide's
+	// own way to check an input against the limit is to count it with
+	// cl100k_base and nothing else — so the per-input byte bound is exactly
+	// 8192, which is the size the knowledge corpus has always embedded at
+	// (search.EmbedInputBytes): a byte less would move the opening of every
+	// long document, change the digest its replicated vector record carries,
+	// and re-embed the corpus.
+	//
+	// `dimensions`: "The number of dimensions the resulting output
+	// embeddings should have. Only supported in text-embedding-3 and later
+	// models" (the same reference), and the guide's table gives each
+	// model's own width.
+	"text-embedding-3-large": {
+		Width: 3072, Dimensions: DimensionsShortens, DimensionsSource: openAIDimensions,
+		InputTokens: 8192, BatchInputs: 2048, BatchTokens: 300_000,
+	},
+	"text-embedding-3-small": {
+		Width: 1536, Dimensions: DimensionsShortens, DimensionsSource: openAIDimensions,
+		InputTokens: 8192, BatchInputs: 2048, BatchTokens: 300_000,
+	},
+
+	// The model page (https://ai.google.dev/gemini-api/docs/models/gemini-embedding-001):
+	// an input token limit of 2,048 and a flexible output of 128..3072. The
+	// OpenAI-compatible endpoint this backend calls is documented only by an
+	// example (https://ai.google.dev/gemini-api/docs/openai); the native API
+	// truncates an over-long input silently when asked to (autoTruncate,
+	// https://ai.google.dev/api/embeddings), and neither page says what the
+	// compatible endpoint does.
+	//
+	// `dimensions` is not mentioned on the compatibility page at all, and its
+	// examples send none. The native API shortens on request through its own
+	// `output_dimensionality` and emits 3072 by default
+	// (https://ai.google.dev/gemini-api/docs/embeddings), which says nothing
+	// about whether the compatible endpoint maps the OpenAI parameter onto
+	// it, ignores it or refuses it — so it is sent as it always was, and the
+	// width check on every response is what holds the vector to the store.
+	"gemini-embedding-001": {
+		Width: 3072, Dimensions: DimensionsUnstated,
+		DimensionsSource: "Google's page for the OpenAI-compatible endpoint " +
+			"(ai.google.dev/gemini-api/docs/openai) does not mention `dimensions`",
+		InputTokens: 2048, WrapTokens: EmbeddingWrapTokens,
+		Undocumented: "Google's page for the OpenAI-compatible endpoint " +
+			"(ai.google.dev/gemini-api/docs/openai) states no limit on the " +
+			"inputs or the tokens one request may carry, and the native " +
+			"batchEmbedContents reference states none either",
+	},
+
+	// The model page (https://docs.cohere.com/docs/cohere-embed): a 128k
+	// context, read as 128 000 — the smaller of the two things "128k" can
+	// mean, so the bound holds under either — and a default output of 1536.
+	// The Compatibility API this backend calls
+	// (https://docs.cohere.com/docs/compatibility-api) documents no limit at
+	// all; the 96 texts a call of the native Embed API
+	// (https://docs.cohere.com/reference/embed) is that endpoint's, and so is
+	// its silent END truncation.
+	//
+	// That page lists `dimensions` among the embeddings parameters it does
+	// NOT support (it takes `input`, `model` and `encoding_format`), and
+	// says neither whether one sent is ignored or refused nor how a width is
+	// chosen instead — the native API's `output_dimension` is among the
+	// Cohere-specific parameters it does not take either. So the endpoint
+	// returns the model's own width, 1536 of 256, 512, 1024 and 1536 (the
+	// model page), and nothing else: the parameter is never sent, and no
+	// other width can be configured.
+	"embed-v4.0": {
+		Width: 1536, Dimensions: DimensionsUnsupported,
+		DimensionsSource: "Cohere's Compatibility API " +
+			"(docs.cohere.com/docs/compatibility-api) lists `dimensions` among " +
+			"the embeddings parameters it does not support",
+		InputTokens: 128_000, WrapTokens: EmbeddingWrapTokens,
+		Undocumented: "Cohere's Compatibility API " +
+			"(docs.cohere.com/docs/compatibility-api) states no limit on the " +
+			"inputs or the tokens one request may carry — the native Embed " +
+			"API's 96 texts a call is a different endpoint's",
+	},
 }
+
+// openAIDimensions is where OpenAI documents the `dimensions` parameter for its
+// third-generation models.
+const openAIDimensions = "OpenAI's embeddings reference " +
+	"(developers.openai.com/api/reference/resources/embeddings/methods/create): " +
+	"`dimensions` is supported in text-embedding-3 and later models"
+
+// EmbeddingWrapTokens is the allowance, in tokens, for what a server adds
+// around each input of a model whose vendor does not document its count —
+// every model in [EmbeddingModels] that is not OpenAI's, and every model it
+// does not carry.
+//
+// SIXTEEN. The wrappers in use are two or three tokens — [CLS] and [SEP] for
+// the BERT family, <s> and </s> plus SentencePiece's word-boundary marker,
+// BOS and EOS for a decoder used as an embedder — so sixteen is five times the
+// largest, with room left for the few NFKC expansions the byte argument cannot
+// cover ([EmbeddingModels]). It costs sixteen bytes of an input's bound,
+// under one percent of a 2 048-token window. A server configured to PREPEND
+// an instruction of its own is outside it: declare `max_input_tokens` net of
+// that instruction.
+const EmbeddingWrapTokens = 16
+
+// EmbeddingLimits is what the embedder enforces, in the unit it counts without
+// a tokenizer: bytes of PREPARED text — whitespace collapsed and every stray
+// byte a U+FFFD, which is the text the server decodes from the request
+// (embeddings.Prepare).
+type EmbeddingLimits struct {
+	// InputBytes is the most prepared bytes one input may hold.
+	InputBytes int
+
+	// BatchInputs is the most inputs one request may carry.
+	BatchInputs int
+
+	// BatchBytes is the most one request may carry, counting each input as
+	// its prepared bytes plus InputOverhead.
+	BatchBytes int
+
+	// InputOverhead is what each input costs a request beyond its own
+	// bytes: the model's wrap allowance.
+	InputOverhead int
+}
+
+// MinEmbeddingInputBytes is the narrowest input bound the limits may resolve
+// to: one character of any script, which is four bytes in UTF-8. A bound
+// narrower than that cannot hold every text at all, so a declaration that
+// resolves below it is refused rather than turned into an embedder that
+// refuses whatever it is given.
+const MinEmbeddingInputBytes = 4
 
 // The bounds on an explicit width.
 const (
@@ -1168,7 +1474,108 @@ func (e *EmbeddingProvider) Width() int {
 	if e.Dimensions > 0 {
 		return e.Dimensions
 	}
-	return ModelWidths[strings.TrimSpace(e.Model)]
+	return EmbeddingModels[strings.TrimSpace(e.Model)].Width
+}
+
+// SendsDimensions is whether the embedder asks for its width in every request
+// — the `dimensions` parameter — rather than only checking the width of what
+// comes back.
+//
+// Every model but one kind is asked: an endpoint that shortens answers at the
+// width the store was sized for, and one whose documentation is silent, or a
+// model this build does not know, is asked as it always has been. The one
+// kind is a model whose endpoint documents the parameter as NOT SUPPORTED
+// ([DimensionsUnsupported]) at the width it emits on its own: the answer is
+// that width without the parameter, and a parameter an endpoint says it does
+// not take is one it may refuse. At any other width the parameter is sent as
+// before — validation refuses that width, so only a caller that skipped
+// validation meets it, and it then fails as it always did, at the width check.
+func (e *EmbeddingProvider) SendsDimensions() bool {
+	model, known := EmbeddingModels[strings.TrimSpace(e.Model)]
+	return !known || model.Dimensions != DimensionsUnsupported || e.Width() != model.Width
+}
+
+// InputBound is the most PREPARED BYTES one input to this provider may hold,
+// and 0 when the model's window is unknown — which validation refuses, so no
+// caller of [EmbeddingProvider.Limits] meets it.
+//
+// THE ONE CONVERSION from what a vendor documents (tokens) to what the engine
+// counts (bytes), by the argument at [EmbeddingModels]: a prepared text of N
+// bytes is at most N tokens plus the wrap allowance, so an input of
+// window − wrap bytes is inside the window. The window is the model's
+// documented one, lowered by a stated `max_input_tokens`, and — because one
+// input must fit one request — lowered again to the request's own token total
+// where that is known and smaller: a gateway whose request is smaller than the
+// model's window bounds the input too.
+//
+// Its own method rather than a field of [EmbeddingProvider.Limits], because
+// the bound is known wherever the window is, and the request limits are not:
+// a model whose vendor documents its window but nothing per request still has
+// a per-input bound a reader of its vectors needs — the window a stored corpus
+// was embedded at — while it has no limits an embedder could be built from.
+// Limits takes this value; nothing re-derives it.
+//
+// A stated limit LOWERS a documented one and never raises it — validation
+// refuses the attempt, and this takes the lower of the two regardless, so a
+// bound the provider would refuse is not enforced even by a caller that
+// skipped validation.
+func (e *EmbeddingProvider) InputBound() int {
+	model := EmbeddingModels[strings.TrimSpace(e.Model)]
+	window := limitOf(e.MaxInputTokens, model.InputTokens)
+	if tokens := limitOf(e.MaxBatchTokens, model.BatchTokens); tokens > 0 {
+		window = min(window, tokens)
+	}
+	if bound := window - e.wrapTokens(); window > 0 && bound >= MinEmbeddingInputBytes {
+		return bound
+	}
+	return 0
+}
+
+// Limits is what the embedder enforces for this provider, and the zero value
+// when any limit is unknown — which validation refuses, so no caller meets it.
+//
+// The per-input bound is [EmbeddingProvider.InputBound], the one conversion;
+// the request half is counted in the same unit — a request whose inputs'
+// bytes plus one wrap allowance each sum to the request's token total is
+// inside that total. A stated limit lowers a documented one and never raises
+// it, as there.
+func (e *EmbeddingProvider) Limits() EmbeddingLimits {
+	model := EmbeddingModels[strings.TrimSpace(e.Model)]
+	bound := e.InputBound()
+	inputs := limitOf(e.MaxBatchInputs, model.BatchInputs)
+	tokens := limitOf(e.MaxBatchTokens, model.BatchTokens)
+	if bound == 0 || inputs <= 0 || tokens <= 0 {
+		return EmbeddingLimits{}
+	}
+	return EmbeddingLimits{
+		InputBytes:    bound,
+		BatchInputs:   inputs,
+		BatchBytes:    tokens,
+		InputOverhead: e.wrapTokens(),
+	}
+}
+
+// wrapTokens is the model's wrap allowance: the table's for a model it
+// carries, [EmbeddingWrapTokens] for one it does not.
+func (e *EmbeddingProvider) wrapTokens() int {
+	if model, known := EmbeddingModels[strings.TrimSpace(e.Model)]; known {
+		return model.WrapTokens
+	}
+	return EmbeddingWrapTokens
+}
+
+// limitOf is a limit as stated over the documented one: the stated value where
+// there is one, never above the documented one, and the documented one where
+// nothing was stated. Zero is "unknown".
+func limitOf(stated, documented int) int {
+	switch {
+	case stated <= 0:
+		return documented
+	case documented > 0:
+		return min(stated, documented)
+	default:
+		return stated
+	}
 }
 
 // ResolvedKey is the embedder's credential, resolved through r and trimmed.
@@ -1213,17 +1620,33 @@ func (e *EmbeddingProvider) validate(path Path) error {
 		p.add(at(path, "dimensions"), ErrOutOfRange,
 			"%d is past the %d ceiling, which is the widest any model in current "+
 				"use emits", e.Dimensions, MaxEmbeddingWidth)
+	case e.Dimensions > 0 && fixedWidth(strings.TrimSpace(e.Model)) && e.Dimensions != e.modelWidth():
+		// A WIDTH THE ENDPOINT CANNOT PRODUCE is refused here, not
+		// discovered at the first embedding: the store's columns are
+		// sized from this value, and an endpoint that takes no
+		// `dimensions` answers at the model's own width whatever was
+		// configured, so every vector would be refused as the wrong
+		// width for as long as the company ran.
+		model := EmbeddingModels[strings.TrimSpace(e.Model)]
+		p.add(at(path, "dimensions"), ErrConflict,
+			"%q emits %d through the endpoint this backend calls, and that "+
+				"endpoint takes no width of its own: %s. Leave `dimensions` "+
+				"unset, or state %d",
+			strings.TrimSpace(e.Model), model.Width, model.DimensionsSource, model.Width)
 	case e.Dimensions == 0 && strings.TrimSpace(e.Model) != "":
 		// AN UNKNOWN MODEL WITH NO WIDTH IS REFUSED, not defaulted. The
 		// width decides whether a vector written today can be read
 		// tomorrow, and a guess here is a company whose recall silently
 		// stops working the day it is turned on.
-		if _, known := ModelWidths[strings.TrimSpace(e.Model)]; !known {
+		if _, known := EmbeddingModels[strings.TrimSpace(e.Model)]; !known {
 			p.add(at(path, "dimensions"), ErrMissing,
 				"this build does not know how wide %q's vectors are. Either name "+
 					"a model it knows (%s) or state `dimensions` yourself",
 				strings.TrimSpace(e.Model), knownModels())
 		}
+	}
+	if strings.TrimSpace(e.Model) != "" {
+		e.validateLimits(path, &p)
 	}
 	if e.Type == EmbeddingOpenAICompatible && strings.TrimSpace(e.BaseURL) == "" {
 		p.add(at(path, "base_url"), ErrMissing,
@@ -1232,12 +1655,110 @@ func (e *EmbeddingProvider) validate(path Path) error {
 	return p.err()
 }
 
-// knownModels lists the models whose width this build carries, sorted, for
-// the refusal above.
+// fixedWidth reports whether the endpoint for model takes no `dimensions`, so
+// the model's own width is the only one it produces.
+func fixedWidth(model string) bool {
+	return EmbeddingModels[model].Dimensions == DimensionsUnsupported
+}
+
+// modelWidth is the width the named model emits on its own, 0 for a model this
+// build does not carry.
+func (e *EmbeddingProvider) modelWidth() int {
+	return EmbeddingModels[strings.TrimSpace(e.Model)].Width
+}
+
+// validateLimits refuses a limit that is unknown, negative, above the model's
+// documented one, or too small to hold a character — each naming the field.
+func (e *EmbeddingProvider) validateLimits(path Path, p *problems) {
+	name := strings.TrimSpace(e.Model)
+	model, known := EmbeddingModels[name]
+	wrap := e.wrapTokens()
+	for _, limit := range []struct {
+		field  string
+		stated int
+		of     func(EmbeddingModel) int
+		what   string
+	}{
+		{"max_input_tokens", e.MaxInputTokens, func(m EmbeddingModel) int { return m.InputTokens }, "tokens one input may hold"},
+		{"max_batch_inputs", e.MaxBatchInputs, func(m EmbeddingModel) int { return m.BatchInputs }, "inputs one request may carry"},
+		{"max_batch_tokens", e.MaxBatchTokens, func(m EmbeddingModel) int { return m.BatchTokens }, "tokens one request may carry"},
+	} {
+		documented := limit.of(model)
+		switch {
+		case limit.stated < 0:
+			p.add(at(path, limit.field), ErrOutOfRange,
+				"must be 0 (the named model's documented limit) or the most %s, "+
+					"got %d", limit.what, limit.stated)
+		case limit.stated > 0 && documented > 0 && limit.stated > documented:
+			// RAISING A DOCUMENTED LIMIT is refused, not obeyed: the
+			// provider would refuse what the engine then sends, and
+			// the field exists to LOWER one — a gateway or proxy in
+			// front of the model that accepts less.
+			p.add(at(path, limit.field), ErrOutOfRange,
+				"%d is above the %d %s for %q as its vendor documents it; this "+
+					"field may only lower a documented limit (for a gateway or a "+
+					"proxy that accepts less) — leave it unset to take %d",
+				limit.stated, documented, limit.what, name, documented)
+		case limit.stated == 0 && documented == 0 && known:
+			p.add(at(path, limit.field), ErrMissing,
+				"this build carries no value for the most %s for %q: %s. State "+
+					"`%s` from the limit your endpoint enforces",
+				limit.what, name, model.Undocumented, limit.field)
+		case limit.stated == 0 && documented == 0:
+			// THE WAY OUT NAMES ONLY MODELS THAT TAKE IT: a model the
+			// table carries without this limit would be refused for
+			// the same field, so suggesting it is advice that does not
+			// clear the error. With none to name, stating it is the
+			// one way out, and the refusal says only that.
+			if models := modelsDocumenting(limit.of); models != "" {
+				p.add(at(path, limit.field), ErrMissing,
+					"this build does not know the most %s for %q. Either name a "+
+						"model whose limit it carries (%s) or state `%s` yourself",
+					limit.what, name, models, limit.field)
+			} else {
+				p.add(at(path, limit.field), ErrMissing,
+					"this build does not know the most %s for %q, nor for any "+
+						"model it carries. State `%s` from the limit your endpoint "+
+						"enforces", limit.what, name, limit.field)
+			}
+		}
+	}
+	// AN INPUT BOUND THAT CANNOT HOLD A CHARACTER is refused here rather
+	// than built into an embedder that refuses everything: the bound is a
+	// window less the wrap allowance, and a window at or under the
+	// allowance leaves nothing for the text.
+	input := limitOf(e.MaxInputTokens, model.InputTokens)
+	tokens := limitOf(e.MaxBatchTokens, model.BatchTokens)
+	floor := wrap + MinEmbeddingInputBytes
+	if e.MaxInputTokens > 0 && input < floor {
+		p.add(at(path, "max_input_tokens"), ErrOutOfRange,
+			"%d leaves no room for text: %d tokens are reserved for what a "+
+				"server wraps around each input, so the window must be at least %d",
+			e.MaxInputTokens, wrap, floor)
+	}
+	if e.MaxBatchTokens > 0 && tokens < floor {
+		p.add(at(path, "max_batch_tokens"), ErrOutOfRange,
+			"%d leaves no room for text: %d tokens are reserved for what a "+
+				"server wraps around each input, so a request must take at least %d",
+			e.MaxBatchTokens, wrap, floor)
+	}
+}
+
+// knownModels lists the models this build carries, sorted, for the refusals
+// above.
 func knownModels() string {
-	out := make([]string, 0, len(ModelWidths))
-	for model := range ModelWidths {
-		out = append(out, model)
+	return modelsDocumenting(func(EmbeddingModel) int { return 1 })
+}
+
+// modelsDocumenting lists, sorted, the models this build carries a value of
+// limit for — the models that name in a refusal of that limit is a way out of
+// it — or "" when none does.
+func modelsDocumenting(limit func(EmbeddingModel) int) string {
+	out := make([]string, 0, len(EmbeddingModels))
+	for name, model := range EmbeddingModels {
+		if limit(model) > 0 {
+			out = append(out, name)
+		}
 	}
 	slices.Sort(out)
 	return strings.Join(out, ", ")

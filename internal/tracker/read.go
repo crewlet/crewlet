@@ -745,9 +745,9 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 	if q.Text != "" {
 		// THE FIND, and it is a substring of a KEY or a TITLE — what
 		// the tool that carries it promises, and the only thing this
-		// grammar can honestly do: ranked search over the company's
-		// prose is `search_knowledge`'s, and nothing has ever put a task
-		// in the inverted list.
+		// grammar can honestly do: ranked search over what an item says
+		// is the search index's ([Searcher]), which a filter composed
+		// into this query cannot be.
 		//
 		// THE KEY MATCHES FROM THE FRONT and the title anywhere. A key
 		// is `PROJECT-N`, so it is only ever typed from its start —

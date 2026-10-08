@@ -15,7 +15,7 @@ import (
 
 // The bind mount, and the two things container mode is built on.
 //
-// A container box is a directory on the engine host mounted at [DefaultHome]
+// A container box's home is a directory on the engine host mounted at [DefaultHome]
 // inside a container. That is what makes in-box paths identical to a remote
 // backend's and file I/O a plain host read or write with no copy round trip —
 // and it means TWO PROCESSES SHARE ONE FILESYSTEM. Both properties that has to
@@ -164,7 +164,7 @@ func verifyMount(ctx context.Context, box execer, layout boxLayout) error {
 			"driving a daemon on another host (DOCKER_HOST, a forwarded socket), which "+
 			"cannot bind-mount this filesystem — point providers.sandbox.local.runtime at "+
 			"a local daemon, or use the %q sandbox provider for a remote runtime",
-			layout.id, layout.root, DefaultHome, E2BKind)
+			layout.id, layout.home(), DefaultHome, E2BKind)
 	}
 
 	// The box made this directory; the engine now has to live in it.

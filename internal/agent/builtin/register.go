@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -59,6 +60,12 @@ type Deps struct {
 	// learning.skill_refinement.max_versions_kept. Zero lets the store
 	// apply its own default.
 	SkillVersionsKept int
+
+	// Compact condenses what does not fit where a bound is genuine: here, a
+	// recalled turn's account of what it did, past
+	// [learning.EpisodeAccountBytes], in query_episodes' answer. Nil
+	// condenses nothing, and such an account is named by its size instead.
+	Compact *compact.Compactor
 
 	// Recall is the turn-start prefetch's semantic search, re-run on demand. Nil
 	// leaves query_episodes on recency and conversation and refresh_memory
@@ -142,6 +149,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		{&queryEpisodes{
 			episodes: deps.Episodes,
 			recall:   deps.Recall,
+			compact:  deps.Compact,
 			limit:    orDefault(deps.EpisodeLimit, DefaultEpisodeLimit),
 		}, deps.Episodes != nil},
 		{&refreshMemory{

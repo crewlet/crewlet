@@ -79,6 +79,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // Stream names. Kept short and uppercase because they appear in every
@@ -479,7 +480,9 @@ func consumerName(topic, group string) string {
 	// Truncation cannot reintroduce an alias: the digest is over the full
 	// pair and is appended after it.
 	if max := consumerNameMax - len(id) - len(consumerNameSep); len(readable) > max {
-		readable = readable[:max]
+		// On a character boundary: a byte slice through a multi-byte
+		// group or topic is a consumer name that is not valid UTF-8.
+		readable = textcut.Bytes(readable, max)
 	}
 	return readable + consumerNameSep + id
 }

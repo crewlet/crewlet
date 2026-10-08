@@ -1,8 +1,12 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/procgroup"
@@ -34,25 +39,55 @@ const captureLimit = 256 << 10
 
 // capture is a bounded io.Writer. Once full it keeps the HEAD, because a
 // command's first output is its error message and its last is progress noise.
+//
+// What it drops is COUNTED and said, in whole lines. It used to mark only a
+// write that found the buffer already full, so one write crossing the limit —
+// the whole output of a command that printed it at once — was clipped with no
+// marker at all; and the clip landed wherever the byte count did, mid-line and
+// mid-character, which a JSON encoder turns into U+FFFD.
 type capture struct {
-	buf      []byte
-	overflow bool
+	buf     []byte
+	dropped int
 }
 
 func (c *capture) Write(p []byte) (int, error) {
-	if room := captureLimit - len(c.buf); room > 0 {
-		c.buf = append(c.buf, p[:min(room, len(p))]...)
-	} else {
-		c.overflow = true
-	}
+	take := min(max(captureLimit-len(c.buf), 0), len(p))
+	c.buf = append(c.buf, p[:take]...)
+	c.dropped += len(p) - take
 	return len(p), nil
 }
 
 func (c *capture) String() string {
-	if c.overflow {
-		return string(c.buf) + "\n… output truncated"
+	if c.dropped == 0 {
+		return string(c.buf)
 	}
-	return string(c.buf)
+	kept, dropped := c.buf, c.dropped
+	// Back to the end of the last whole line, so the note follows a line
+	// rather than half of one; a buffer with no line break at all keeps
+	// itself, held to a whole character.
+	if end := bytes.LastIndexByte(kept, '\n'); end >= 0 {
+		dropped += len(kept) - end - 1
+		kept = kept[:end+1]
+	} else {
+		whole := wholeRunes(kept)
+		dropped += len(kept) - len(whole)
+		kept = whole
+	}
+	return fmt.Sprintf("%s\n(%d more bytes of output not kept: past the %d KiB a control "+
+		"command's output may hold)", strings.TrimRight(string(kept), "\n"), dropped, captureLimit>>10)
+}
+
+// wholeRunes is b without a character the limit split at its end.
+func wholeRunes(b []byte) []byte {
+	for i := len(b) - 1; i >= 0 && len(b)-i <= utf8.UTFMax; i-- {
+		if utf8.RuneStart(b[i]) {
+			if !utf8.FullRune(b[i:]) {
+				return b[:i]
+			}
+			return b
+		}
+	}
+	return b
 }
 
 // flattenEnv renders an env map as os/exec's KEY=value slice.
@@ -95,7 +130,7 @@ type directBox struct {
 var _ Sandbox = (*directBox)(nil)
 
 func (b *directBox) ID() string   { return b.layout.id }
-func (b *directBox) Home() string { return b.layout.root }
+func (b *directBox) Home() string { return b.layout.home() }
 
 // childEnv is the allowlisted host environment plus the box's home and the run
 // env.
@@ -106,7 +141,7 @@ func (b *directBox) Home() string { return b.layout.root }
 // The run env is what config deliberately put there.
 func (b *directBox) childEnv(extra map[string]string) map[string]string {
 	env := hostbox.Inherit()
-	home := b.layout.root
+	home := b.layout.home()
 	env["HOME"] = home
 	env["XDG_CONFIG_HOME"] = filepath.Join(home, ".config")
 	env["XDG_DATA_HOME"] = filepath.Join(home, ".local", "share")
@@ -264,9 +299,9 @@ func reap(proc *exec.Cmd) { _ = proc.Wait() }
 func (b *directBox) resolve(path string) (string, error) {
 	rel := path
 	if filepath.IsAbs(path) {
-		root, err := filepath.EvalSymlinks(b.layout.root)
+		root, err := filepath.EvalSymlinks(b.layout.home())
 		if err != nil {
-			root = filepath.Clean(b.layout.root)
+			root = filepath.Clean(b.layout.home())
 		}
 		clean := filepath.Clean(path)
 		// An absolute path that already names somewhere in the box is the
@@ -274,15 +309,21 @@ func (b *directBox) resolve(path string) (string, error) {
 		// box reports.
 		if within, err := filepath.Rel(root, clean); err == nil && !strings.HasPrefix(within, "..") {
 			rel = within
-		} else if within, err := filepath.Rel(filepath.Clean(b.layout.root), clean); err == nil && !strings.HasPrefix(within, "..") {
+		} else if within, err := filepath.Rel(filepath.Clean(b.layout.home()), clean); err == nil && !strings.HasPrefix(within, "..") {
 			rel = within
 		} else {
 			return "", b.escapeError(path)
 		}
 	}
-	resolved, err := hostbox.SafeJoin(b.layout.root, rel)
-	if err != nil {
+	resolved, err := hostbox.SafeJoin(b.layout.home(), rel)
+	switch {
+	case errors.Is(err, hostbox.ErrEscape):
 		return "", b.escapeError(path)
+	case err != nil:
+		// NOT AN ESCAPE: a path that could not be resolved at all — one
+		// under a file, say — and reporting it as outside the box sent its
+		// reader looking for a symlink that was never there.
+		return "", localErrorf("local sandbox %s could not resolve %q: %v", b.layout.id, path, err)
 	}
 	return resolved, nil
 }
@@ -291,7 +332,7 @@ func (b *directBox) escapeError(path string) error {
 	return localErrorf("local sandbox (run_in %q) refuses to touch %q: it is outside "+
 		"the box at %s. Direct mode has no filesystem virtualisation, so this would write to "+
 		"the engine host itself. Put the file under the box's home, or use "+
-		"run_in %q.", Direct, path, b.layout.root, Container)
+		"run_in %q.", Direct, path, b.layout.home(), Container)
 }
 
 func (b *directBox) WriteFile(ctx context.Context, path string, content []byte) error {
@@ -302,7 +343,7 @@ func (b *directBox) WriteFile(ctx context.Context, path string, content []byte) 
 	if err := os.MkdirAll(filepath.Dir(target), hostbox.DirMode); err != nil {
 		return localErrorf("local sandbox %s could not create %s: %v", b.layout.id, filepath.Dir(target), err)
 	}
-	return os.WriteFile(target, content, hostbox.FileMode)
+	return writeHostFile(target, path, content)
 }
 
 // ReadFile is EMPTY-ON-MISSING: the detached runner polls for marker and
@@ -317,14 +358,27 @@ func (b *directBox) ReadFile(ctx context.Context, path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	content, err := os.ReadFile(target)
+	return readHostFile(target, path)
+}
+
+// OpenFile implements [Sandbox] for a box on the engine host: the file itself,
+// read in place, after the same escape check every other path takes.
+func (b *directBox) OpenFile(ctx context.Context, path string) (io.ReadCloser, error) {
+	target, err := b.resolve(path)
 	if err != nil {
-		//nolint:nilerr // Empty-on-missing IS the contract here: the
-		// detached runner polls for marker and result files that do not
-		// exist until the job finishes, and a poll is not an error.
-		return nil, nil
+		return nil, err
 	}
-	return content, nil
+	return openHostFile(target, path)
+}
+
+// ReadTail implements [Sandbox] for a box on the engine host: a seek, so the
+// cost is what is read rather than how long the run has been writing.
+func (b *directBox) ReadTail(ctx context.Context, path string, n int) (FileTail, error) {
+	target, err := b.resolve(path)
+	if err != nil {
+		return FileTail{}, err
+	}
+	return readHostTail(target, path, n)
 }
 
 // SetTimeout refreshes the box's keepalive stamp.
@@ -391,9 +445,10 @@ func (b *directBox) Close(ctx context.Context) error {
 
 // containerBox is a [Sandbox] backed by a long-lived container.
 //
-// The box directory is bind-mounted at [DefaultHome], so in-box paths are
-// identical to a remote backend's and file reads and writes happen on the HOST
-// side of the mount — no copy round trip through the runtime.
+// The box's home — never its records ([boxLayout]) — is bind-mounted at
+// [DefaultHome], so in-box paths are identical to a remote backend's and file
+// reads and writes happen on the HOST side of the mount, with no copy round
+// trip through the runtime.
 type containerBox struct {
 	layout      boxLayout
 	runtime     string
@@ -420,7 +475,7 @@ func (b *containerBox) workdir() string { return DefaultHome + "/" + WorkspaceSu
 func (b *containerBox) hostPath(path string) (string, error) {
 	clean := filepath.Clean(path)
 	if clean == DefaultHome {
-		return b.layout.root, nil
+		return b.layout.home(), nil
 	}
 	prefix := DefaultHome + "/"
 	rel := path
@@ -433,10 +488,15 @@ func (b *containerBox) hostPath(path string) (string, error) {
 		return "", localErrorf("%q is outside the sandbox home mount at %s; write it with a "+
 			"setup-step command instead of a file entry", path, DefaultHome)
 	}
-	resolved, err := hostbox.SafeJoin(b.layout.root, rel)
-	if err != nil {
+	resolved, err := hostbox.SafeJoin(b.layout.home(), rel)
+	switch {
+	case errors.Is(err, hostbox.ErrEscape):
 		return "", localErrorf("%q resolves outside the sandbox home mount at %s — it would be "+
-			"written to the engine host itself", path, b.layout.root)
+			"written to the engine host itself", path, b.layout.home())
+	case err != nil:
+		// Not an escape — see [directBox.resolve].
+		return "", localErrorf("%q could not be resolved under the sandbox home mount at %s: %v",
+			path, b.layout.home(), err)
 	}
 	return resolved, nil
 }
@@ -446,8 +506,12 @@ func (b *containerBox) hostPath(path string) (string, error) {
 // NOT "-e KEY=value": a process's argv is world-readable on a normal Linux box
 // (/proc/<pid>/cmdline, and every ps on the host), and this env carries the
 // seat's LLM key and whatever code-host token role.sandbox.env declares. A file
-// the runtime reads keeps them off the command line; it lives inside the box,
-// which is already 0700, and is written 0600.
+// the runtime reads keeps them off the command line; it is one of the box's
+// RECORDS, under its 0700 directory and written 0600 — and beside its home,
+// never in it. The runtime's client reads it on the host, so the container
+// has no need of it, and inside the mount the job could replace it between
+// two execs: with a link that this rewrite followed to overwrite whatever host
+// file it named, or with a named pipe whose open never returned.
 //
 // Rewritten per call rather than kept: extra differs between the setup steps
 // and the coding job, and a stale file would hand one phase another's
@@ -476,7 +540,7 @@ func (b *containerBox) envArgs(extra map[string]string) ([]string, error) {
 		}
 		lines = append(lines, assignment)
 	}
-	if err := os.MkdirAll(b.layout.meta(), hostbox.DirMode); err != nil {
+	if err := os.MkdirAll(b.layout.records(), hostbox.DirMode); err != nil {
 		return nil, localErrorf("container sandbox %s could not write its env file: %v", b.layout.id, err)
 	}
 	blob := strings.Join(lines, "\n") + "\n"
@@ -578,7 +642,7 @@ func (b *containerBox) WriteFile(ctx context.Context, path string, content []byt
 		return localErrorf("container sandbox %s could not create %s: %v",
 			b.layout.id, filepath.Dir(target), err)
 	}
-	return os.WriteFile(target, content, hostbox.FileMode)
+	return writeHostFile(target, path, content)
 }
 
 func (b *containerBox) ReadFile(ctx context.Context, path string) ([]byte, error) {
@@ -588,13 +652,129 @@ func (b *containerBox) ReadFile(ctx context.Context, path string) ([]byte, error
 	if err != nil {
 		return nil, err
 	}
-	content, err := os.ReadFile(target)
-	if err != nil {
-		//nolint:nilerr // Empty-on-missing IS the contract; see directBox.ReadFile.
-		return nil, nil
-	}
-	return content, nil
+	return readHostFile(target, path)
 }
+
+// OpenFile implements [Sandbox]: the host side of the mount, read in place.
+func (b *containerBox) OpenFile(ctx context.Context, path string) (io.ReadCloser, error) {
+	target, err := b.hostPath(path)
+	if err != nil {
+		return nil, err
+	}
+	return openHostFile(target, path)
+}
+
+// ReadTail implements [Sandbox]: a seek on the host side of the mount.
+func (b *containerBox) ReadTail(ctx context.Context, path string, n int) (FileTail, error) {
+	target, err := b.hostPath(path)
+	if err != nil {
+		return FileTail{}, err
+	}
+	return readHostTail(target, path, n)
+}
+
+// openHostFile is a local box's OpenFile once the path is resolved: the file,
+// or a reader that yields nothing for one that is not there yet.
+//
+// ONLY ABSENCE IS EMPTY. A file that exists and cannot be opened is an error,
+// because the reader of a stream decides what the run did from what it reads,
+// and an unreadable event log answered as an empty one is a run that "said
+// nothing" — which a collection settles as a run that produced nothing. So is
+// anything that is not a regular file ([openHostRegular]), for all three
+// reads alike.
+func openHostFile(target, path string) (io.ReadCloser, error) {
+	f, err := openHostRegular(target)
+	switch {
+	case absent(err):
+		return io.NopCloser(strings.NewReader("")), nil
+	case err != nil:
+		return nil, fmt.Errorf("local sandbox: open %s: %w", path, err)
+	}
+	return f, nil
+}
+
+// readHostTail is a local box's ReadTail once the path is resolved.
+//
+// A SECTION OF THE FILE, never a read to its end: a job still writing can
+// have grown it since the size was taken, and a read to EOF would then answer
+// more than was asked for. Whatever arrived inside the window is counted into
+// the size, so Data never claims to be more of the file than the file was.
+func readHostTail(target, path string, n int) (FileTail, error) {
+	f, err := openHostRegular(target)
+	switch {
+	case absent(err):
+		return FileTail{}, nil
+	case err != nil:
+		return FileTail{}, fmt.Errorf("local sandbox: open %s: %w", path, err)
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return FileTail{}, fmt.Errorf("local sandbox: stat %s: %w", path, err)
+	}
+	want := int64(max(n, 0))
+	start := max(info.Size()-want, 0)
+	data, err := io.ReadAll(io.NewSectionReader(f, start, want))
+	if err != nil {
+		return FileTail{}, fmt.Errorf("local sandbox: read %s: %w", path, err)
+	}
+	return FileTail{Data: data, Size: max(info.Size(), start+int64(len(data)))}, nil
+}
+
+// readHostFile is a local box's ReadFile once the path is resolved: empty for
+// a file that is not there, and REFUSED past [MaxFileBytes] for the reason
+// [readCapped] gives — which a plain os.ReadFile skipped, so a job that looped
+// printing errors into its stderr file put all of it in the engine's memory on
+// the host it shares, where a remote box's identical file was refused.
+//
+// ONLY ABSENCE IS EMPTY, as for [openHostFile]. Every failure to open or read
+// used to answer empty too, so a findings report the engine was not permitted
+// to read — a container writing its mount as a user the engine is not —
+// collected as a run that wrote none, and a question file as a run that asked
+// nothing; a remote box's envd answers the same failure as an error, which
+// is what a collection retries and a person can act on.
+func readHostFile(target, path string) ([]byte, error) {
+	f, err := openHostRegular(target)
+	switch {
+	case absent(err):
+		// Empty-on-missing IS the contract here: the detached runner
+		// polls for marker and result files that do not exist until the
+		// job finishes, and a poll is not an error.
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("local sandbox: open %s: %w", path, err)
+	}
+	defer func() { _ = f.Close() }()
+	content, err := readCapped(f, path)
+	if err != nil && !errors.Is(err, ErrFileTooLarge) {
+		return nil, fmt.Errorf("local sandbox: read %s: %w", path, err)
+	}
+	return content, err
+}
+
+// writeHostFile is a local box's WriteFile once the path is resolved: content
+// put at target whole, in place, through [openHostWritable] — so a link at the
+// path is refused rather than followed out of the box, and a named pipe is
+// refused rather than waited on, each as a [NotRegularFileError] naming what
+// is there.
+func writeHostFile(target, path string, content []byte) error {
+	f, err := openHostWritable(target)
+	if err != nil {
+		return fmt.Errorf("local sandbox: open %s for writing: %w", path, err)
+	}
+	if _, err := f.Write(content); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("local sandbox: write %s: %w", path, err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("local sandbox: write %s: %w", path, err)
+	}
+	return nil
+}
+
+// absent is whether an open failed because there is no file at the path —
+// the one failure a read answers as an empty file.
+func absent(err error) bool { return errors.Is(err, fs.ErrNotExist) }
 
 // SetTimeout refreshes the box's keepalive stamp — see [directBox.SetTimeout].
 func (b *containerBox) SetTimeout(ctx context.Context, seconds float64) error {
@@ -619,6 +799,17 @@ func (b *containerBox) Pause(ctx context.Context) error {
 // unconditional call.
 func (b *containerBox) unpause(ctx context.Context) {
 	_, _ = runHost(ctx, hostCommand{argv: []string{b.runtime, "unpause", b.container}})
+}
+
+// paused reports whether the runtime says the container is paused: its own
+// `.State.Paused`, read without changing it — the same field on Docker and
+// Podman. Anything but a plain "true" is not a pause, a failed inspection
+// included: see [Local.Attach].
+func (b *containerBox) paused(ctx context.Context) bool {
+	res, err := runHost(ctx, hostCommand{
+		argv: []string{b.runtime, "inspect", "--format", "{{.State.Paused}}", b.container},
+	})
+	return err == nil && res.ExitCode == 0 && strings.TrimSpace(res.Stdout) == "true"
 }
 
 func (b *containerBox) Close(ctx context.Context) error {

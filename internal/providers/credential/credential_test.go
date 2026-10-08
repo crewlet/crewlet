@@ -649,6 +649,45 @@ func TestRotateExhaustionCarriesTheLastKind(t *testing.T) {
 	}
 }
 
+// AN EXHAUSTED POOL SAYS WHAT ITS LAST KEY WAS TOLD.
+//
+// The kinds that bench a key share a status with the reasons an operator
+// acts on differently — a revoked key, a quota run out, a throttle that clears
+// by itself — so the pool's own sentence alone made a seat whose one key was
+// revoked read exactly like one briefly throttled. The last refusal travels
+// with it, its cause and the provider's own words both, and the error is still
+// the pool's: its kind, its identity and errors.Is(ErrExhausted).
+func TestAnExhaustedPoolSaysWhatItsLastKeyWasTold(t *testing.T) {
+	t.Parallel()
+	p, _ := newTestPool(t, []string{"k0", "k1"}, Policy{})
+	calls := 0
+	_, err := Rotate(t.Context(), p, Identity{Provider: "openai", Model: "gpt"},
+		func(err error) *llm.Error {
+			return &llm.Error{Kind: llm.KindAuth, Provider: "openai", Model: "gpt", Status: 401,
+				Err: err, Detail: "Incorrect API key provided (code invalid_api_key)"}
+		},
+		func(key string) (string, error) {
+			calls++
+			return "", fmt.Errorf("401 Unauthorized for %s", key)
+		})
+	if calls != 2 {
+		t.Fatalf("made %d calls, want one per key", calls)
+	}
+	if !errors.Is(err, ErrExhausted) || llm.KindOf(err) != llm.KindAuth {
+		t.Fatalf("err = %v, want the pool's exhausted auth error", err)
+	}
+	for _, want := range []string{"all 2 credentials cooling after auth", "401 Unauthorized for k1",
+		"Incorrect API key provided (code invalid_api_key)"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error does not say %q: %v", want, err)
+		}
+	}
+	var classified *llm.Error
+	if !errors.As(err, &classified) || classified.Provider != "openai" || classified.Model != "gpt" {
+		t.Fatalf("errors.As found %+v, want the pool's own error first", classified)
+	}
+}
+
 // A pool already fully benched when Rotate arrives never calls anything, and
 // the honest hint is the kind that says "try elsewhere" without claiming the
 // key is bad.

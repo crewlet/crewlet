@@ -1150,7 +1150,6 @@ func TestACompactedRowRoundTripsThroughTheEpisodeScanner(t *testing.T) {
 			CommonOutcome:     "done",
 			SubjectsInvolved:  []string{"finance", "legal"},
 			NotablePatterns:   "escalated twice",
-			Embedding:         []float32{0.1, 0.2, 0.3, 0.4},
 		}, nil
 	}
 	mustPass(t, l)
@@ -1172,47 +1171,16 @@ func TestACompactedRowRoundTripsThroughTheEpisodeScanner(t *testing.T) {
 	if c.NotablePatterns != "escalated twice" || c.CommonOutcome != "done" {
 		t.Errorf("prose fields: %+v", c)
 	}
-	if len(c.Embedding) != 4 || c.Embedding[3] != 0.4 {
-		t.Errorf("embedding = %v", c.Embedding)
+	// A SUMMARY IS NEVER EMBEDDED: similarity recall reads raw turns only,
+	// so a vector here would be bytes nothing reads.
+	if c.Embedding != nil {
+		t.Errorf("a compacted row carries a vector: %v", c.Embedding)
 	}
 	if c.ConsolidatedInto != "" || c.ConversationKey != "" {
 		t.Errorf("a summary spans conversations and belongs to no skill: %+v", c)
 	}
 	if len(c.SkillsUsed) != 0 || c.TaskSummary != "" || c.PlanSummary != "" {
 		t.Errorf("per-turn fields leaked onto a summary: %+v", c)
-	}
-	// And it is recallable, which is the only reason the vector is carried.
-	hits, err := e.Recall(context.Background(), RecallQuery{
-		Handle: "ceo", Embedding: []float32{0.1, 0.2, 0.3, 0.4},
-		Kinds: []Kind{KindCompacted},
-	})
-	if err != nil || len(hits) != 1 || hits[0].Episode.ID != c.ID {
-		t.Errorf("recall over summaries = %d hits, %v", len(hits), err)
-	}
-}
-
-func TestASummaryLandsEvenWhenItsVectorCannot(t *testing.T) {
-	t.Parallel()
-	l, e, sum := newLife(t, Options{}, func(o *store.Options) { o.EmbeddingDim = 4 })
-	sixSimilar(e, t)
-	sum.reply = func(Cluster) (Summary, error) {
-		// The company changed embedding model between the turns and the
-		// fold. The summary is what the call bought; refusing the row would
-		// spend it again next pass and fail the same way.
-		return Summary{CommonTaskPattern: "still useful", Embedding: []float32{1, 2}}, nil
-	}
-
-	res := mustPass(t, l)
-
-	if res.ClustersCompacted != 1 {
-		t.Fatalf("result = %+v, want the fold to land", res)
-	}
-	_, compacted := snapshot(t, e)
-	if len(compacted) != 1 || compacted[0].CommonTaskPattern != "still useful" {
-		t.Fatalf("summary = %+v", compacted)
-	}
-	if compacted[0].Embedding != nil {
-		t.Errorf("embedding = %v, want none stored", compacted[0].Embedding)
 	}
 }
 
@@ -1240,7 +1208,7 @@ func TestTheModelSummarizerMakesOneCallAndParsesIt(t *testing.T) {
 		calls++
 		gotSystem, gotUser = system, user
 		return `{"common_task_pattern":"posted updates","subjects_involved":["finance"]}`, nil
-	})
+	}, nil)
 	got, err := s.Summarize(context.Background(), Cluster{
 		Handle: "ceo", Episodes: []Episode{rawEp("a", t0, "slack_post")},
 	})
@@ -1258,11 +1226,11 @@ func TestTheModelSummarizerMakesOneCallAndParsesIt(t *testing.T) {
 	}
 
 	boom := errors.New("rate limited")
-	s = NewSummarizer(func(context.Context, string, string, string) (string, error) { return "", boom })
+	s = NewSummarizer(func(context.Context, string, string, string) (string, error) { return "", boom }, nil)
 	if _, err := s.Summarize(context.Background(), Cluster{Episodes: []Episode{rawEp("a", t0)}}); !errors.Is(err, boom) {
 		t.Errorf("model error = %v, want it propagated", err)
 	}
-	if _, err := NewSummarizer(nil).Summarize(context.Background(), Cluster{Episodes: []Episode{rawEp("a", t0)}}); err == nil {
+	if _, err := NewSummarizer(nil, nil).Summarize(context.Background(), Cluster{Episodes: []Episode{rawEp("a", t0)}}); err == nil {
 		t.Error("a summarizer with no model answered")
 	}
 	if _, err := s.Summarize(context.Background(), Cluster{}); err == nil {
@@ -1329,7 +1297,7 @@ func TestParseSummaryToleratesWhatAModelActuallySends(t *testing.T) {
 	}
 }
 
-func TestRenderClusterFlattensClampsAndCounts(t *testing.T) {
+func TestRenderClusterFlattensAndCarriesEveryFieldWhole(t *testing.T) {
 	t.Parallel()
 	long := strings.Repeat("x", perTurnDetail+50)
 	first := rawEp("a", t0, "t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9")
@@ -1338,7 +1306,7 @@ func TestRenderClusterFlattensClampsAndCounts(t *testing.T) {
 	second := rawEp("b", t0.Add(-time.Hour))
 	second.ReviewOutcome = "failed"
 
-	got := RenderCluster(Cluster{Handle: "ceo", Episodes: []Episode{first, second}})
+	got := RenderCluster(Cluster{Handle: "ceo", Episodes: []Episode{first, second}}, nil)
 
 	if !strings.Contains(got, "Cluster of 2 similar agent turns") {
 		t.Errorf("the count is not stated:\n%s", got)
@@ -1346,26 +1314,20 @@ func TestRenderClusterFlattensClampsAndCounts(t *testing.T) {
 	// A turn summary carrying its own newlines would look like more turns
 	// than there are, and a model that miscounts writes the pattern of a
 	// cluster that does not exist.
-	if !strings.Contains(got, "task: line one line two") {
+	if !strings.Contains(got, "woken by: line one line two") {
 		t.Errorf("newlines were not flattened:\n%s", got)
 	}
-	if strings.Contains(got, long) || !strings.Contains(got, "xxx…") {
-		t.Errorf("the per-turn clamp did not apply:\n%s", got)
+	// NOTHING IS CUT. A field past the budget with no rewrite is carried
+	// whole: the pattern inferred from a stack trace's first 280 bytes is
+	// the trace's opening and none of what the turn was for.
+	if !strings.Contains(got, "   did: "+long+"\n") {
+		t.Errorf("an unrewritten field was not carried whole:\n%s", got)
 	}
-	// Capped at 8, and it SAYS SO. The compactor is inferring "how this
-	// agent does this kind of work", and a silently shortened tool sequence
-	// reads as a shorter procedure — which is the pattern it then writes
-	// down as the seat's own.
-	if strings.Contains(got, "t9") || !strings.Contains(got, "t8") {
-		t.Errorf("the tool list is not capped at 8:\n%s", got)
-	}
-	if !strings.Contains(got, "(+1 more)") {
-		t.Errorf("the tool-list cut is silent:\n%s", got)
-	}
-	// And a turn under the cap carries no marker at all.
-	under := rawEp("c", t0, "t1", "t2")
-	if u := RenderCluster(Cluster{Handle: "ceo", Episodes: []Episode{under}}); strings.Contains(u, "more)") {
-		t.Errorf("a short tool list claimed to be cut:\n%s", u)
+	// The whole tool sequence. A shortened one reads as a shorter procedure
+	// — which is the pattern the compactor then writes down as the seat's
+	// own.
+	if !strings.Contains(got, "tools: t1, t2, t3, t4, t5, t6, t7, t8, t9\n") {
+		t.Errorf("the tool sequence is not whole:\n%s", got)
 	}
 	if !strings.Contains(got, "tools: (none)") {
 		t.Errorf("a tool-free turn is not labelled:\n%s", got)
@@ -1378,6 +1340,76 @@ func TestRenderClusterFlattensClampsAndCounts(t *testing.T) {
 	}
 	if strings.Count(got, "\n1. ") != 1 {
 		t.Errorf("turns are not numbered once each:\n%s", got)
+	}
+
+	// A REWRITE IS LABELLED, so the compactor reading it knows the wording
+	// is not the turn's own — and only a field past the budget takes one.
+	condensed := map[string]string{long: "posted the release notes to #eng", "line one line two": "nope"}
+	got = RenderCluster(Cluster{Handle: "ceo", Episodes: []Episode{first}}, condensed)
+	if !strings.Contains(got, "did: (condensed) posted the release notes to #eng\n") || strings.Contains(got, long) {
+		t.Errorf("the rewrite was not rendered in the field's place:\n%s", got)
+	}
+	if !strings.Contains(got, "woken by: line one line two\n") {
+		t.Errorf("a field within the budget took a rewrite:\n%s", got)
+	}
+}
+
+// The summarizer rewrites only the fields past the budget, each once, as the
+// account it is — and a field whose rewrite failed is carried whole rather
+// than dropped or cut.
+func TestTheSummarizerCondensesOnlyTheOutliersBeforeTheCall(t *testing.T) {
+	t.Parallel()
+	longTask := strings.Repeat("stack frame ", 40)
+	longPlan := strings.Repeat("deployed the fix and posted it ", 20)
+	broken := strings.Repeat("unrewritable ", 40)
+	a := rawEp("a", t0)
+	a.TaskSummary, a.PlanSummary = longTask, longPlan
+	b := rawEp("b", t0.Add(-time.Hour))
+	b.TaskSummary, b.PlanSummary = longTask, "short" // the same long task twice
+	c := rawEp("c", t0.Add(-2*time.Hour))
+	c.PlanSummary = broken
+
+	var (
+		mu     sync.Mutex
+		asked  = map[string]EpisodeField{}
+		budget int
+	)
+	fit := func(_ context.Context, role string, field EpisodeField, text string, n int) (string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if role != "ceo-role" {
+			t.Errorf("fit asked on role %q, want the cluster's", role)
+		}
+		if _, again := asked[text]; again {
+			t.Errorf("one text was rewritten twice")
+		}
+		asked[text], budget = field, n
+		if text == flatten(broken) {
+			return "", errors.New("aux unavailable")
+		}
+		return "rewrote " + string(field), nil
+	}
+	var user string
+	s := NewSummarizer(func(_ context.Context, _, _, u string) (string, error) {
+		user = u
+		return `{"common_task_pattern":"p"}`, nil
+	}, fit)
+	if _, err := s.Summarize(context.Background(), Cluster{Handle: "ceo", Role: "ceo-role",
+		Episodes: []Episode{a, b, c}}); err != nil {
+		t.Fatalf("Summarize: %v", err)
+	}
+	if len(asked) != 3 || asked[flatten(longTask)] != FieldTask || asked[flatten(longPlan)] != FieldOutcome ||
+		asked[flatten(broken)] != FieldOutcome || budget != perTurnDetail {
+		t.Errorf("rewrites asked = %v at %d bytes, want the three outliers as their fields at %d",
+			asked, budget, perTurnDetail)
+	}
+	if strings.Count(user, "woken by: (condensed) rewrote task") != 2 ||
+		!strings.Contains(user, "did: (condensed) rewrote outcome") ||
+		!strings.Contains(user, "did: short\n") {
+		t.Errorf("the rewrites did not reach the prompt:\n%s", user)
+	}
+	if !strings.Contains(user, "did: "+flatten(broken)+"\n") {
+		t.Errorf("a field whose rewrite failed was not carried whole:\n%s", user)
 	}
 }
 
@@ -1489,6 +1521,42 @@ func TestTheBatchSizeBoundsOnePass(t *testing.T) {
 	// for the next pass rather than being skipped.
 	if want := []string{"s0", "s1", "s2", "s3"}; !slices.Equal(idsOf(sum.seen[0].Episodes), want) {
 		t.Errorf("batch = %v, want the oldest four %v", idsOf(sum.seen[0].Episodes), want)
+	}
+}
+
+// ROWS THAT CAN NEVER FOLD DO NOT HOLD THE WINDOW. The batch is the oldest
+// BatchSize candidates, and a summary's retired exemplars and a seat's
+// tool-free turns are old rows no fold ever takes: filtered out after the
+// limit, a window full of them folded nothing, pass after pass, while turns
+// that cluster waited behind them for good.
+func TestRowsThatCanNeverFoldDoNotHoldTheCompactionWindow(t *testing.T) {
+	t.Parallel()
+	l, e, sum := newLife(t, Options{BatchSize: 4, MinClusterSize: 3, ExemplarCount: 2})
+	// One fold first, which retires two exemplars at the old end.
+	for i := range 3 {
+		write(t, e, rawEp(fmt.Sprintf("old%d", i), daysAgo(80-i), "slack_post", "jira_get"))
+	}
+	mustPass(t, l)
+	if sum.calls() != 1 {
+		t.Fatalf("the first pass made %d summaries, want 1", sum.calls())
+	}
+	// Two tool-free turns, older than the work that clusters and young
+	// enough that their own horizon has not taken them.
+	write(t, e, rawEp("chat0", daysAgo(70)), rawEp("chat1", daysAgo(69)))
+	// Three turns that cluster, newer than all four rows above.
+	for i := range 3 {
+		write(t, e, rawEp(fmt.Sprintf("new%d", i), daysAgo(50-i), "gitlab_merge"))
+	}
+
+	res := mustPass(t, l)
+
+	if res.ClustersCompacted != 1 || sum.calls() != 2 {
+		t.Fatalf("a window of two retired exemplars and two tool-free turns folded %d "+
+			"clusters (%d summaries): the turns that cluster never reached it", res.ClustersCompacted,
+			sum.calls())
+	}
+	if got := idsOf(sum.seen[1].Episodes); !slices.Equal(got, []string{"new0", "new1", "new2"}) {
+		t.Fatalf("the second fold took %v, want the three turns that cluster", got)
 	}
 }
 
@@ -1695,12 +1763,12 @@ func BenchmarkRecallScan(b *testing.B) {
 			}
 			for i := range n {
 				ep := rawEp(fmt.Sprintf("e%04d", i), t0.Add(time.Duration(i)*time.Minute))
-				ep.Embedding = vec()
+				ep.Embedding, ep.EmbeddingModel = vec(), "bench-embedding"
 				if _, err := e.Append(b.Context(), ep); err != nil {
 					b.Fatal(err)
 				}
 			}
-			q := RecallQuery{Handle: "ceo", Embedding: vec(), Limit: 5}
+			q := RecallQuery{Handle: "ceo", Embedding: vec(), Model: "bench-embedding", Limit: 5}
 			b.ResetTimer()
 			for b.Loop() {
 				if _, err := e.Recall(context.Background(), q); err != nil {

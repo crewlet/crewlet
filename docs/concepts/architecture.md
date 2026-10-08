@@ -65,7 +65,7 @@ flowchart LR
 
     subgraph supply["What a turn consumes"]
         LLM["<b>LLM API</b><br/>Anthropic · OpenAI · any<br/>OpenAI-compatible endpoint<br/><i>or a coding CLI on your own subscription</i>"]
-        EMB["<b>Embeddings API</b><br/><i>optional — without it, recall<br/>falls back to recency</i>"]
+        EMB["<b>Embeddings API</b><br/><i>optional — without it, search is<br/>keyword only and nothing is<br/>recalled by similarity</i>"]
         MCPS["<b>MCP servers</b><br/><i>the agents' hands</i>"]
         BOX["<b>Code sandbox</b><br/>an E2B VM, or this host"]
     end
@@ -237,7 +237,13 @@ visible on the turn that paid for it rather than only in aggregate. Exhausting
 the chain publishes `llm_unavailable` and fails the turn. That is why the same
 429 produces three different behaviours at three different altitudes, and why
 cooldowns are fleet state rather than per-process: a limit belongs to the key at
-the vendor, so four nodes should not each pay their own 429 to learn it.
+the vendor, so four nodes should not each pay their own 429 to learn it. What a
+classified failure *says* — in a log line, `llm_unavailable`, a turn's error —
+is the backend's own line: the status, the provider's id for the request and
+what the provider said about it, redacted, which is also what an exhausted pool
+reports its last key was told. It is never the vendor SDK's own error text,
+which for Anthropic is the request URL (a password in `base_url` with it) and
+the raw response body.
 
 **The observability edge is two routes, not one, and the split is deliberate.**
 A published event forks. It is written to this node's `crewlet_events` **inline,
@@ -539,8 +545,9 @@ What each of the four holds, in full:
 |---|---|
 | **`crewlet_events`** · `crewlet_event_parties` | The audit log and its party index — this node's own events, and on a data node the batches of a stateless node's events it **keeps** ([custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data)) |
 | `custody_unsettled` | The custody batches this node has written and not yet learned whether it keeps: the fleet decides which data node keeps each batch, create-only in coordination, and a node that crashed between writing a batch and claiming it asks at its next pass and deletes the rows if another node keeps them. Empty but for the batches of the last few moments |
-| **`agent_diary`** · **`episodes`** | Vector-indexed recall |
+| **`agent_diary`** · **`episodes`** | A seat's notes and turns, each with the vector of the model it came from — recall is a per-seat scan the database ranks, with no vector index |
 | **`synthesized_skills`** · `synthesized_skill_versions` · `counterparty_profiles` · `agent_onboarding_markers` | The rest of the learning subsystem — skill induction and its versions, counterparty profiles, first-turn onboarding markers |
+| `memory_change_sequence` | One counter, which every new diary note, episode and skill version — and every vector set on a note or an episode — is stamped from, so the [memory changelog](seat-ownership.md#a-seats-memory-follows-it) carries what changed since its last cycle. It only ever increases: a row's rowid is handed out again once the newest row is deleted, and a watermark over it skipped the next row written |
 | **`conversation_sessions`** | What this seat already said in that thread |
 | `company_config` · `scheduled_runs` · `secret_values` | Revisions, cron bookkeeping, and the secret store's bootstrap half |
 | `kb_docs` · `kb_postings` | The **lexical** half of the knowledge search index over those rows, built asynchronously behind them and droppable wholesale when the analyzer changes. The semantic half is not here — an embedding costs a provider call, so it is derived once by the fleet and lives in the estate below |
@@ -573,7 +580,7 @@ to the adopted log.
 | **`tracker_tasks`** · `tracker_comments` · `tracker_history` · … | The company's work — the tracker's whole state, derived from `CREWLET_TRACKER_LOG` |
 | **`pages_heads`** · `pages_revisions` · `pages_titles` · … | The company's knowledge base, derived from `CREWLET_PAGES_LOG`: a page's current body, the immutable revisions behind it, and the title claim that is what makes a name an address |
 | **`kb_vectors`** · `kb_vectors_bin` · `kb_ivf` · `kb_ivf_centroids` · `kb_ivf_rollout` · `kb_ivf_lists` | Page and task embeddings, their 1-bit codes, and the semantic index filing those codes in lists — its head, its centroids and the re-filing its training cut are a record on the same log, and the per-list counts are kept beside the rows they count ([ADR-0028](https://github.com/crewlet/crewlet/blob/main/adr/0028-the-semantic-first-stage-is-an-index.md)) — derived from `CREWLET_TRACKER_VECTORS`. The fleet pays the provider bill **once** and every node holds the answer, which is precisely why these are not in the node's own file |
-| **`usage_tokens`** · `usage_turns` · `usage_reads` · `usage_schedule_runs` | What each node's seats and schedules did each company day — spend by phase, worker, model and provider slot; ended turns and how they ended; the pages seats read; every fire — derived from `CREWLET_USAGE_LOG`. Every node publishes its own days and applies everyone's, so spend history is answered fleet-wide and outlives the node that spent it (ADR-0020). Kept 181 days, aged out by the applier rather than a sweep |
+| **`usage_tokens`** · `usage_turns` · `usage_reads` · `usage_schedule_runs` · `usage_person_tokens` | What each node's seats, schedules and people did each company day — spend by phase, worker, model and provider slot; ended turns and how they ended; the pages seats read; every fire; and what the auxiliary model spent for a person (a question answered on the operator surface), who has no agent id to file it under a seat — derived from `CREWLET_USAGE_LOG`. Every node publishes its own days and applies everyone's, so spend history is answered fleet-wide and outlives the node that spent it (ADR-0020). Kept 181 days, aged out by the applier rather than a sweep |
 | `statelog_cursor` · each domain's operation ledger and deferred records · `statelog_ops_lost` | Where this node is on each log, which operations have already been applied — a record that travels inside a snapshot — and how far back that record may have lost rows, to the sweep, so a retry older than that is answered `unknown` rather than applied twice; and any record a newer build wrote that this one cannot decode |
 
 **The whole company — coordination KV.**

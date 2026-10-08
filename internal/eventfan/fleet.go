@@ -9,6 +9,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
@@ -447,7 +448,19 @@ func (f *Fleet) List(ctx context.Context, q store.ListQuery) (Listing, Coverage,
 			for _, part := range sib.parts() {
 				siblings = append(siblings, part.Rows)
 			}
-			rows = MergeRelated(rows, union(siblings...), q.Limit, more)
+			related := union(siblings...)
+			if q.FeedOnly {
+				// A TRACE'S SIBLINGS CARRY NONE OF THE PAGE'S FILTERS —
+				// they are the cause beside the effect, read by trace id
+				// alone — but a feed-only page is the feed's rows, and a
+				// turn's trace holds every one of its accounting records:
+				// the store's own related-agent read narrows them the same
+				// way ([store.EventLog.List]).
+				related = slices.DeleteFunc(related, func(r store.EventRecord) bool {
+					return events.KeptOutOfFeed(r.Type)
+				})
+			}
+			rows = MergeRelated(rows, related, q.Limit, more)
 			coverage = coverage.And(sib.coverage)
 		}
 	}
@@ -828,6 +841,21 @@ func (l listings) at(id string, start time.Time) {
 	}
 }
 
+// PhaseTokenPage is how many spend records one node sends in one reply of a
+// paged phase-token read ([Fleet.PhaseTokens]).
+//
+// SIZED FROM THE TRANSPORT. A reply is at most [queue.MaxPayloadBytes] (8 MiB),
+// and a spend record encodes to about 590 bytes of JSON with realistic values
+// — an agent id, a role name, a model id, a turn id and a work key — so 4 096
+// records are about 2.4 MiB: under a third of the ceiling, which leaves room
+// for role names and model ids three times the measured ones before a reply
+// has to be cut. A cut is not a loss here, since the next page resumes from
+// where the cut one stopped, but it is fifteen encodes of a reply past the
+// ceiling inside the fleet read budget, which a page sized under it never
+// pays. A larger page buys fewer round trips only for a fleet holding more
+// than this in its window; a smaller one pages a quiet company.
+const PhaseTokenPage = 4096
+
 // PhaseTokens answers the per-phase spend records of a window from every node,
 // newest first, cut to the query's limit — what the live projection's spend
 // rollup is seeded from.
@@ -836,19 +864,80 @@ func (l listings) at(id string, start time.Time) {
 // [Fleet.Histogram]'s reason: a peer counting "a day back" from its own clock
 // would answer a window its neighbours did not. And so is the instant it was
 // cut against, which every node floors it at — see [store.PhaseTokenQuery.At].
+//
+// # In pages
+//
+// READ IN PAGES OF [PhaseTokenPage], each resuming below the last record the
+// one before kept, until the limit or the window runs out — never in one
+// reply per node. The seed asks for a whole company-day, which on a busy
+// node is more than one reply carries: asked whole, that node's reply was cut
+// to fit the transport, and the merge — which cannot place a record older
+// than the last one a cut node sent — cut EVERY node's records at that
+// node's horizon, so the restarted node's live window started hours short of
+// its day. Each page is exact for [MergeSpend]'s reason, and the pages are
+// disjoint because each resumes strictly below the last.
+//
+// A page this node could not finish — its own read failing, or the read's
+// context ending — stops the walk with the records read so far, which are the
+// window's newest, and the coverage says the answer is short.
 func (f *Fleet) PhaseTokens(ctx context.Context, q store.PhaseTokenQuery) ([]tokens.Record, Coverage, error) {
+	return f.phaseTokens(ctx, q, PhaseTokenPage)
+}
+
+// phaseTokens is [Fleet.PhaseTokens] in pages of size records — a parameter so
+// the suite can walk pages of a window it can afford to write.
+func (f *Fleet) phaseTokens(ctx context.Context, q store.PhaseTokenQuery, size int) ([]tokens.Record, Coverage, error) {
 	started := time.Now()
 	q.At = f.askedAt(q.At)
 	q.Since, q.Until = q.Window(q.At)
 	q.SinceDays = 0
-	g, err := gather(ctx, f, QuestionPhaseTokens, phaseTokenParamsOf(q), nil,
-		func(ctx context.Context) (spendPart, error) { return spendPartOf(ctx, f.Local, q) })
-	if err != nil {
-		return nil, Coverage{}, err
+	q.Before = nil
+	var (
+		out      []tokens.Record
+		coverage Coverage
+	)
+	for pages := 0; ; pages++ {
+		page := q
+		page.Limit = size
+		if q.Limit > 0 {
+			page.Limit = min(page.Limit, q.Limit-len(out))
+		}
+		g, err := gather(ctx, f, QuestionPhaseTokens, phaseTokenParamsOf(page), nil,
+			func(ctx context.Context) (spendPart, error) { return spendPartOf(ctx, f.Local, page) })
+		if err != nil {
+			if pages == 0 {
+				return nil, Coverage{}, err
+			}
+			coverage = coverage.And(Coverage{Nodes: []NodeCoverage{{ID: f.Self, Error: fmt.Sprintf(
+				"the window was read %d pages deep and could not be read further: %s",
+				pages, err.Error())}}})
+			break
+		}
+		if pages == 0 {
+			coverage = g.coverage
+		} else {
+			coverage = coverage.And(g.coverage)
+		}
+		records, more := MergeSpend(g.parts(), page.Limit)
+		out = append(out, records...)
+		if !more || len(records) == 0 || (q.Limit > 0 && len(out) >= q.Limit) {
+			break
+		}
+		last := records[len(records)-1]
+		at, err := time.Parse(time.RFC3339Nano, last.Timestamp)
+		if err != nil {
+			// A RECORD NO CURSOR CAN NAME — the store writes every stamp in
+			// this layout, so this is a peer's record that is not one — ends
+			// the walk where it is rather than guessing a resumption.
+			coverage = coverage.And(Coverage{Nodes: []NodeCoverage{{ID: f.Self, Error: fmt.Sprintf(
+				"a spend record's stamp %q names no position, so the window was read "+
+					"no further than it", last.Timestamp)}}})
+			break
+		}
+		q.Before = &store.Cursor{Time: at, ID: last.EventID}
 	}
-	records := MergeSpend(g.parts(), q.Limit)
-	f.report(QuestionPhaseTokens, g.coverage, started)
-	return records, g.coverage, nil
+	f.report(QuestionPhaseTokens, coverage, started)
+	return out, coverage, nil
 }
 
 // NotificationOutcomes answers how many notifications each third-party app had

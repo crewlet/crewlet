@@ -7,12 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // The CLI's client for /config, and why the command needs one.
@@ -86,12 +84,25 @@ func (c *configClient) Import(ctx context.Context, doc []byte, summary string) (
 			"-api names its address", c.base, err)
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxConfigResponseBytes))
+	// +1 SO THE OVERRUN IS VISIBLE. io.LimitReader stops at its cap with a
+	// clean end of file, so an answer past it reached the decoder clipped
+	// and was reported as something this build cannot read — a protocol
+	// fault that is not there, on a write that may well have landed.
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxConfigResponseBytes+1))
 	if err != nil {
 		return "", 0, fmt.Errorf("reading the answer from %s: %w", c.base, err)
 	}
+	if len(raw) > maxConfigResponseBytes {
+		landed := "so whether the revision was stored is unknown"
+		if resp.StatusCode/100 == 2 {
+			landed = fmt.Sprintf("though its status, %d, says the revision was stored", resp.StatusCode)
+		}
+		return "", 0, fmt.Errorf("the answer from %s to PUT /config exceeded %d bytes, so it was "+
+			"not read, %s: no company's answer comes near the cap, so check that -api names "+
+			"the engine rather than something in front of it", c.base, maxConfigResponseBytes, landed)
+	}
 	if resp.StatusCode/100 != 2 {
-		return "", 0, c.refusal(resp.StatusCode, raw)
+		return "", 0, c.refusal(resp.StatusCode, resp.Header.Get("Content-Type"), raw)
 	}
 	var body struct {
 		RevisionID string `json:"revision_id"`
@@ -123,7 +134,7 @@ func (c *configClient) Import(ctx context.Context, doc []byte, summary string) (
 const maxConfigResponseBytes = 16 * configapi.MaxBodyBytes
 
 // refusal turns a status code into something an operator can act on.
-func (c *configClient) refusal(status int, raw []byte) error {
+func (c *configClient) refusal(status int, contentType string, raw []byte) error {
 	var body struct {
 		Error   string `json:"error"`
 		Detail  string `json:"detail"`
@@ -145,19 +156,11 @@ func (c *configClient) refusal(status int, raw []byte) error {
 	}
 	msg := body.Error
 	if msg == "" {
-		// NOT THE ENGINE'S JSON, so a proxy's page or a plain-text error,
-		// shown for a person to recognise rather than read whole: an
-		// answer can be as large as maxConfigResponseBytes.
-		msg = textcut.Ellipsis(strings.TrimSpace(string(raw)), maxRefusalTextBytes)
+		msg = foreignAnswer(contentType, raw)
 	}
 	return fmt.Errorf("%s answered %d for PUT /config: %s", c.base, status,
 		withRefusalDetail(msg, body.Detail, body.Hint))
 }
-
-// maxRefusalTextBytes is how much of an answer that is not the engine's JSON
-// a refusal quotes: a screenful, enough to tell a proxy's error page from a
-// node's plain-text one.
-const maxRefusalTextBytes = 2 << 10
 
 // lostRace is what an import refused with revision_advanced tells the
 // operator: what won, whether their document was kept, and what puts it live

@@ -14,9 +14,12 @@ week from Monday and the calendar month, cut on the company's one clock
 (ADR-0018) — and the fleet counts spend per window. `coord.Budgets` keeps
 **one record per scope** holding **a slot per period**: the label of the
 window it counts (`2026-09-23`, `2026-W39`, `2026-09`), what has been spent in
-it and when it last refused a charge. A charge is admitted only while every
-capped window of the company and of the seat has room, and it is still one
-compare-and-swap per scope: org first, compensated if the seat refuses.
+it and when the gate last turned a call away in it. A charge is admitted only
+while every capped window of the company and of the seat has room, and it is
+still one compare-and-swap per scope: org first, then the seat. A charge that
+is refused is counted all the same — a round is charged once its reply is in,
+so it has been billed by the time it is judged — and what the refusal stops is
+what follows it.
 
 **The roll is the reset.** A slot whose label is earlier than the charge's
 window is rolled — label moved on, spend and refusal cleared — inside the same
@@ -52,9 +55,9 @@ inside a write that already happens, on whichever node charges next, with
 nothing to schedule and nothing that can run twice.
 
 The second is a counter per window, keyed by label. That is three records per
-scope and three compare-and-swaps per charge, and the org-first compensation
-then has to unwind across as many as six keys; a charge refused by the month
-after the day and the week were written leaves two to take back.
+scope and three compare-and-swaps per charge, and a charge that fails partway
+then leaves its round on as many as five of six keys rather than on one of
+two, each a partial somebody has to reason about.
 
 ## What this does not decide
 

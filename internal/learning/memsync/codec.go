@@ -55,6 +55,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/logging"
@@ -80,18 +81,22 @@ type Row struct {
 
 // export reads a seat's rows for one table.
 //
-// after bounds an incremental read on the table's rowid — see
-// table.wholeEachCycle for which tables use it and why. It returns the
-// highest rowid it saw, so the caller can advance its watermark.
+// after bounds an incremental read on the table's watermark column — see
+// table.wholeEachCycle for which tables take one and table.watermark for
+// which column it is. It returns the highest value of that column it saw, so
+// the caller can advance its watermark; a wholeEachCycle table is read whole
+// and what it returns is unused.
 func export(ctx context.Context, db *sql.DB, t table, seat seatRef, after int64) ([]Row, int64, error) {
 	where := t.seatCol + " = ?"
 	args := []any{seat.value(t)}
+	order := "rowid"
 	if !t.wholeEachCycle {
-		where += " AND rowid > ?"
+		order = t.watermark
+		where += " AND " + order + " > ?"
 		args = append(args, after)
 	}
-	query := "SELECT rowid, " + strings.Join(t.columns, ", ") +
-		" FROM " + t.name + " WHERE " + where + " ORDER BY rowid"
+	query := "SELECT " + order + ", " + strings.Join(t.columns, ", ") +
+		" FROM " + t.name + " WHERE " + where + " ORDER BY " + order
 
 	sqlRows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -102,10 +107,10 @@ func export(ctx context.Context, db *sql.DB, t table, seat seatRef, after int64)
 	high := after
 	var out []Row
 	for sqlRows.Next() {
-		var rowid int64
+		var mark int64
 		cells := make([]any, len(t.columns))
 		into := make([]any, 0, len(t.columns)+1)
-		into = append(into, &rowid)
+		into = append(into, &mark)
 		for i := range cells {
 			into = append(into, &cells[i])
 		}
@@ -117,8 +122,8 @@ func export(ctx context.Context, db *sql.DB, t table, seat seatRef, after int64)
 			values[column] = encodeCell(t, column, cells[i])
 		}
 		out = append(out, Row{Table: t.name, Values: values})
-		if rowid > high {
-			high = rowid
+		if mark > high {
+			high = mark
 		}
 	}
 	if err := sqlRows.Err(); err != nil {
@@ -204,14 +209,16 @@ func (t table) subject(handle string, values map[string]any) string {
 //
 // WHAT THE CONFLICT DOES IS THE TABLE'S OWN ANSWER, and it is the same split
 // table.wholeEachCycle already makes. An append-only row is immutable once
-// written, so a row already here is that row and DO NOTHING is exact. A
-// wholeEachCycle row is one whose UPDATE IS THE CONTENT — a counterparty
-// profile rewritten as the seat learns, a skill archived, an onboarding
-// marker flipped — and DO NOTHING there discards precisely what the table is
-// republished every cycle to carry. A node that held the seat, lost it while
-// a peer kept learning, and took it back would keep its own stale profile and
-// then publish it back over the peer's, regressing the seat's memory for the
-// whole fleet.
+// written, so a row already here is that row and DO NOTHING is exact — but for
+// the one column pair a holder fills afterwards, a diary note's or an
+// episode's vector, which the carry takes over a stored vector of no model or
+// another (table.fillsVector, [table.fillVector]). A wholeEachCycle row is one
+// whose UPDATE IS THE CONTENT — a counterparty profile rewritten as the seat
+// learns, a skill archived, an onboarding marker flipped — and DO NOTHING
+// there discards precisely what the table is republished every cycle to
+// carry. A node that held the seat, lost it while a peer kept learning, and
+// took it back would keep its own stale profile and then publish it back over
+// the peer's, regressing the seat's memory for the whole fleet.
 //
 // Last writer wins is safe rather than merely convenient: a seat is held by
 // ONE node at a time, so the changelog's latest value for a subject is by
@@ -322,7 +329,7 @@ func decode(body []byte) (Row, table, bool, error) {
 func (t table) onConflict(carried []string) string {
 	skip := " ON CONFLICT DO NOTHING"
 	if !t.wholeEachCycle {
-		return skip
+		return t.fillVector(carried) + skip
 	}
 	assignments := make([]string, 0, len(carried))
 	for _, column := range carried {
@@ -339,4 +346,30 @@ func (t table) onConflict(carried []string) string {
 	}
 	return " ON CONFLICT (" + strings.Join(t.key, ", ") + ") DO UPDATE SET " +
 		strings.Join(assignments, ", ") + skip
+}
+
+// fillVector is the one update an append-only row takes on import: the vector
+// the holder filled, over a stored row whose vector is of no model or of
+// another (see [table.fillsVector]). Empty for a table that fills none.
+//
+// EVERYTHING ELSE ABOUT THE ROW STAYS WHAT IS HERE — its retrieval
+// bookkeeping is this node's — and the carried vector is taken only when it is
+// a whole one: the row must carry both columns, set, so a carried copy written
+// before the fill never erases the vector the fill gave this node. ONLY A
+// DIFFERENT SPACE is a change — another model, or the same model at another
+// width, which a restart can leave behind: the same model's vector of the same
+// immutable text at the same width is the same vector, and rewriting it would
+// be churn.
+func (t table) fillVector(carried []string) string {
+	if !t.fillsVector || !slices.Contains(carried, "embedding") ||
+		!slices.Contains(carried, "embedding_model") {
+		return ""
+	}
+	stored := t.name + "."
+	return " ON CONFLICT (" + strings.Join(t.key, ", ") + ") DO UPDATE SET" +
+		" embedding = excluded.embedding, embedding_model = excluded.embedding_model" +
+		" WHERE excluded.embedding IS NOT NULL AND excluded.embedding_model IS NOT NULL" +
+		" AND (" + stored + "embedding IS NULL OR " + stored + "embedding_model IS NULL" +
+		" OR " + stored + "embedding_model <> excluded.embedding_model" +
+		" OR length(" + stored + "embedding) <> length(excluded.embedding))"
 }

@@ -422,3 +422,27 @@ func TestEveryGateTableIsCoveredByThePredicate(t *testing.T) {
 			"node defers, which licenses every later record on it", tables, want)
 	}
 }
+
+// A PURGE'S REASON IS CARRIED WHOLE OR THE PURGE IS REFUSED. It used to be cut
+// to fit the lead's one-line notice — so the only account of an irreversible
+// act could stop half way through the sentence that explained it. A reason
+// that does not fit is now refused before anything is destroyed.
+func TestAPurgeReasonIsWholeOrThePurgeIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if _, err := r.writer.CreateTask(t.Context(), "op-1", newTask("t-1"), nil); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	r.drain()
+	long := strings.Repeat("the customer asked for this record to be erased; ", 20)
+	if _, err := r.writer.PurgeTask(t.Context(), "op-purge-long", "t-1", "ENG", long); !errors.Is(err, tracker.ErrInvalid) {
+		t.Fatalf("a reason too long for its notice was not refused: %v", err)
+	}
+	r.drain()
+	if answer := r.ask(map[string]any{"container": "project:ENG"}); len(answer.Rows) != 1 {
+		t.Fatal("a refused purge destroyed the task anyway")
+	}
+	if _, err := r.writer.PurgeTask(t.Context(), "op-purge", "t-1", "ENG", "erasure request #4411"); err != nil {
+		t.Fatalf("a short reason was refused: %v", err)
+	}
+}

@@ -10,13 +10,12 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // PersistDecider is the post-turn classifier that decides what, if anything,
@@ -51,14 +50,18 @@ type PersistDecider struct {
 	newID     func() string
 }
 
-// Models resolves the model one seat's auxiliary work runs on.
+// Models resolves the model one seat's auxiliary work runs on: the engine's
+// ONE auxiliary seam, which resolves the seat's auxiliary chain head off the
+// phase registry — so "which model does reflection use" is still decided in one
+// place, the one the config validator checks — and records and charges every
+// completion made through what it hands back.
 //
-// One method, and deliberately the phase registry's own signature so
-// *phase.Registry satisfies it as written: an adapter in the engine's wiring
-// would be a second place for "which model does reflection use" to be
-// decided, and the answer has to be the same one the config validator checks.
+// EVERY CALL STATES ITS ATTRIBUTION — a stage, a purpose, the turn it learns
+// from ([Turn.Reflecting] for a reflection worker) — because the seam files
+// the spend under it, and an ambient one would charge a worker's call to
+// whichever turn last wrote it.
 type Models interface {
-	Head(role *org.Role, ph phase.Phase) (chain.Member, error)
+	Auxiliary(role *org.Role, use auxspend.Use) (chain.Member, error)
 }
 
 // DiaryStore is the seat's diary, as much of it as the decider touches.
@@ -278,7 +281,7 @@ func (d *PersistDecider) Reflect(ctx context.Context, t Turn) ([]events.Payload,
 // still reports what was concluded before the failure, so a caller can tell a
 // LONG that failed to land from a turn with nothing in it.
 func (d *PersistDecider) Decide(ctx context.Context, t Turn) (Decision, error) {
-	member, err := d.models.Head(t.Role, phase.Auxiliary)
+	member, err := d.models.Auxiliary(t.Role, t.Reflecting(types.AuxPersistDecider))
 	if err != nil {
 		return Decision{Tier: types.PersistNOOP}, fmt.Errorf("learning: no auxiliary model: %w", err)
 	}
@@ -334,9 +337,11 @@ func (d *PersistDecider) Decide(ctx context.Context, t Turn) (Decision, error) {
 		// The preview is the only diagnosis available for a model that
 		// has stopped honouring the contract — a bare tier count would
 		// say classification collapsed to NOOP without saying why.
-		// Capped because the response can carry the turn's own content.
+		// WHOLE: it is bounded by the classifier's own MaxTokens, and an
+		// opening cut away from the part that broke the contract is a
+		// diagnosis that names nothing.
 		log.WarnContext(ctx, "persist_decider_unparseable",
-			"turn_id", t.Event.TurnID, "response", preview(text, 200))
+			"turn_id", t.Event.TurnID, "response", text)
 		return Decision{Tier: types.PersistNOOP}, nil
 	}
 
@@ -363,7 +368,7 @@ func (d *PersistDecider) Decide(ctx context.Context, t Turn) (Decision, error) {
 		}
 		log.InfoContext(ctx, "persist_decider_doc_observed", "turn_id", t.Event.TurnID,
 			"agent_handle", t.Event.AgentHandle, "target_hint", dir.TargetHint,
-			"content", preview(dir.Content, 120))
+			"content", dir.Content)
 		return Decision{Tier: types.PersistDoc, Directive: dir}, nil
 
 	case types.PersistLong:
@@ -541,10 +546,10 @@ func buildPersistPrompt(t Turn, existing []DiaryEntry) string {
 		tools = strings.Join(t.Event.ToolSequence, ", ")
 	}
 	var b strings.Builder
-	b.WriteString("Turn summary:\n- Task: ")
-	b.WriteString(orElse(t.Event.TaskSummary, "(no description)"))
-	b.WriteString("\n- Plan: ")
-	b.WriteString(orElse(t.Event.PlanSummary, "(no plan)"))
+	b.WriteString("Turn summary:\n")
+	// ONLY THE ASK NO INTERACTION CARRIES: each interaction is rendered
+	// below with its sender, which is what attributing a fact needs.
+	describeTurn(&b, t, t.Event.Ask)
 	b.WriteString("\n- Tools called: ")
 	b.WriteString(tools)
 	b.WriteString("\n- Outcome: ")
@@ -725,12 +730,3 @@ func orElse(s, fallback string) string {
 	}
 	return s
 }
-
-// preview shortens a model's answer for a log line.
-//
-// BYTES, through [textcut.Ellipsis], which is the unit a log field wants — and
-// it walks back to a rune boundary rather than materialising the whole string
-// as runes to cut it, which is what this did when it counted them. Every
-// caller is a diagnostic preview of a model response, so nothing here depends
-// on an exact character count.
-func preview(s string, limit int) string { return textcut.Ellipsis(s, limit) }

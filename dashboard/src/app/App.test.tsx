@@ -22,6 +22,7 @@ import { resetForTest as resetStarsForTest } from "~/lib/starred.ts";
 import { CHUNKS, loadChunk } from "./lazyScreen.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
+import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -634,6 +635,7 @@ describe("a turn watched to its end", () => {
         agent_id: "a-ceo",
         activity: "working",
         live_call: {
+          versions: ZERO_VERSIONS,
           turn_id: "t1",
           phase: "review",
           iteration: 1,
@@ -680,6 +682,7 @@ describe("a turn watched to its end", () => {
         agent_id: "a-ceo",
         activity: "working",
         live_call: {
+          versions: ZERO_VERSIONS,
           turn_id: "t1",
           phase: "execute",
           iteration: 1,

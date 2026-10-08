@@ -95,8 +95,8 @@ func TestAnEndingWhoseDeleteLandedAndFailedIsAnnouncedOnce(t *testing.T) {
 }
 
 // A RUN IS ANNOUNCED FOR THE REASON ITS ENDING WAS DECIDED ON, whichever node
-// finishes it. A collect fails, so the node holding the seat decides to end the
-// run as `collect_unreachable` — and the broker refuses the announcement, and
+// finishes it. A collect finds the box gone, so the node holding the seat
+// decides to end the run as `collect_unreachable` — and the broker refuses the announcement, and
 // the node stops before it can try again. The seat's next holder finds the
 // ending decided on the row and finishes it: one announcement, for the reason it
 // was decided on. It used to find a claim and reap it as an abandoned tail, so
@@ -107,7 +107,9 @@ func TestAnEndingIsAnnouncedForItsOwnReasonByTheNodeThatFinishesIt(t *testing.T)
 	rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
 	rig.runner.Finish(Result{Success: true})
-	rig.runner.CollectErr = errors.New("the box died mid-read")
+	// GONE, so the run is given up at once rather than its collection
+	// retried ([Coordinator.collectFailed]).
+	rig.runner.CollectErr = errBoxGoneMidRead
 	rig.failPublishes(errors.New("the broker is unreachable"))
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {

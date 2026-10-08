@@ -2,9 +2,11 @@ package prefetch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
 )
@@ -12,8 +14,8 @@ import (
 // The PULL side of the same two searches the turn-start prefetch pushes.
 //
 // Both blocks this file exposes are the prefetch's own, re-run on demand: the
-// vector recall behind `## Relevant prior work`, and the auxiliary relevance
-// filter behind `## What you have learned`. They are here rather than
+// vector recall behind `## Similar prior work`, and the auxiliary relevance
+// filter behind `## Personal memory`. They are here rather than
 // reimplemented in a builtin because a second implementation of "which of this
 // seat's memories bear on this text" is a second answer to it, and the two
 // would drift in exactly the direction nobody looks — the tool would quietly
@@ -35,27 +37,50 @@ import (
 // NO FALLBACK TO RECENCY, matching the block: episode recall's whole claim is
 // "this resembles what you are doing now", the three most recent turns carry
 // no such claim, and an executor told they are similar work treats them as
-// precedent. A company with no embeddings gets (nil, nil) and the caller says
-// so — which is a different sentence from "you have done nothing like this".
-func (f *Fetcher) RecallEpisodes(ctx context.Context, seat *org.Role, text string, limit int) ([]learning.Hit, error) {
-	if f == nil || f.src.Episodes == nil || seat == nil {
-		return nil, nil
+// precedent.
+//
+// THREE ANSWERS, never two: a search (no hits is "nothing that could be
+// searched resembles this"), [ErrNoSimilarity] for a company with no
+// embeddings, and an error wrapping [ErrSimilarityFailed] for a search that
+// could not run — an embedder that refused or did not answer inside
+// [EmbedBudget], or an episode store that could not be read. The last two used
+// to be one: every embed failure answered "no embeddings are configured",
+// which sent a model away from a search that would have answered on the next
+// call.
+//
+// AND WHAT IT COULD NOT SEARCH: the search counts the seat's turns with no
+// vector of the query's model ([learning.EpisodeSearch.Unsearched]) — after a
+// model change, until the holder's fill has reached them, that is most of a
+// seat's history — because "nothing similar" over a history nobody searched
+// told a seat its work was new.
+func (f *Fetcher) RecallEpisodes(ctx context.Context, seat *org.Role, text string, limit int) (learning.EpisodeSearch, error) {
+	if f == nil || f.src.Episodes == nil || seat == nil || seat.Handle() == "" {
+		return learning.EpisodeSearch{}, fmt.Errorf("%w: this node holds no episode store for the seat", ErrSimilarityFailed)
 	}
 	handle := seat.Handle()
-	if handle == "" || strings.TrimSpace(text) == "" {
-		return nil, nil
+	if strings.TrimSpace(text) == "" {
+		return learning.EpisodeSearch{}, nil
 	}
-	vector, ok := f.embed(ctx, text)
-	if !ok {
-		return nil, ErrNoSimilarity
+	embedCtx, cancel := context.WithTimeout(ctx, EmbedBudget)
+	vector, err := f.embed(embedCtx, text)
+	cancel()
+	if errors.Is(err, learning.ErrNoEmbeddings) {
+		return learning.EpisodeSearch{}, ErrNoSimilarity
+	}
+	if err != nil {
+		return learning.EpisodeSearch{}, fmt.Errorf("%w: embedding the query: %w", ErrSimilarityFailed, err)
 	}
 	hits, err := f.src.Episodes.Recall(ctx, learning.RecallQuery{
-		Handle: handle, Embedding: vector, Limit: limit,
+		Handle: handle, Embedding: vector.Values, Model: vector.Model, Limit: limit,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("prefetch: recall episodes for %s: %w", handle, err)
+		return learning.EpisodeSearch{}, fmt.Errorf("%w: reading %s's episodes: %w", ErrSimilarityFailed, handle, err)
 	}
-	return hits, nil
+	unsearched, err := f.src.Episodes.Unsearchable(ctx, handle, vector.Model)
+	if err != nil {
+		return learning.EpisodeSearch{}, fmt.Errorf("%w: counting %s's episodes: %w", ErrSimilarityFailed, handle, err)
+	}
+	return learning.EpisodeSearch{Hits: hits, Unsearched: unsearched}, nil
 }
 
 // RecallMemories re-runs the personal-memory filter against a hint.
@@ -66,15 +91,32 @@ func (f *Fetcher) RecallEpisodes(ctx context.Context, seat *org.Role, text strin
 // empty, because "the most recent eight" would leak a memory about one person
 // into a turn about another, which is the failure the filter exists to
 // prevent.
-func (f *Fetcher) RecallMemories(ctx context.Context, seat *org.Role, agentID, hint string) ([]learning.DiaryEntry, error) {
+//
+// WITH THE TURN'S SENDERS, which the block's own request carries: the filter's
+// per-subject rule — a preference about somebody not party to the task does
+// not apply — has nothing to judge "party to the task" by without them, and a
+// re-filter built without them was a filter that could not tell the person
+// asking from anybody else.
+//
+// AND WITH THE TURN'S ATTRIBUTION (aux): the filter's call is the turn's own
+// cost, spent mid-turn on its behalf, so it is filed under the turn and its
+// tally like the turn-start filter's — a re-filter attributed to nothing would
+// be refused by the seam, and the tool would find nothing it could recall.
+func (f *Fetcher) RecallMemories(ctx context.Context, seat *org.Role, agentID, hint string,
+	senders []learning.Subject, aux auxspend.Use,
+) ([]learning.DiaryEntry, error) {
 	if f == nil || f.src.Diary == nil || seat == nil || agentID == "" {
 		return nil, nil
 	}
 	if strings.TrimSpace(hint) == "" {
 		return nil, nil
 	}
-	request := Request{Seat: seat, AgentID: agentID, Task: hint}
-	candidates := f.memoryCandidates(ctx, request)
+	// THE HINT IS THE ASK: it is the executor's own account of what the
+	// task is about, written after recon, and the whole of what the filter
+	// and the vector are judged against here.
+	request := Request{Seat: seat, AgentID: agentID, Task: hint, Ask: hint, Senders: senders,
+		Aux: aux}
+	candidates := f.memoryCandidates(ctx, request, f.vectorFor(ctx, request, nil))
 	if len(candidates) == 0 {
 		return nil, nil
 	}
@@ -82,11 +124,21 @@ func (f *Fetcher) RecallMemories(ctx context.Context, seat *org.Role, agentID, h
 }
 
 // ErrNoSimilarity reports that this company configured no embeddings, so a
-// similarity search cannot run at all.
+// similarity search cannot run at all. It wraps [learning.ErrNoEmbeddings],
+// which is what a caller that does not import this package tests for.
 //
 // Its own error rather than an empty result, because the two send a model to
 // opposite places: "nothing resembles this" is an answer it should act on, and
-// "this deployment cannot search by meaning" is a reason to fall back to a
+// "this company cannot search by meaning" is a reason to fall back to a
 // conversation filter it can still use.
-var ErrNoSimilarity = fmt.Errorf("prefetch: no embeddings are configured, so " +
-	"a similarity search cannot run")
+var ErrNoSimilarity = fmt.Errorf("prefetch: a similarity search cannot run: %w", learning.ErrNoEmbeddings)
+
+// ErrSimilarityFailed reports a similarity search that could have run and did
+// not: the embedder refused or did not answer in time, or the store could not
+// be read. Distinct from [ErrNoSimilarity] because it is not how the company
+// is set up. Whether the same call may answer later is the CAUSE's to say,
+// and it is wrapped beside this one: an embedder's failure keeps its class
+// (embeddings.ErrConfiguration, embeddings.ErrRefused,
+// embeddings.ErrTransient) through the wrap, and only a transient one or a
+// deadline is worth asking again.
+var ErrSimilarityFailed = errors.New("prefetch: the similarity search could not run")

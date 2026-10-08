@@ -772,7 +772,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/knowledge/pages/{id}` | **Page** — addressed by its id, which a rename does not change: the document, who read it and how, what links to it, its revisions and thread; edited as you | `edit=1` · `version=` (one revision in the document's place) · `lens=diff\|full` |
 | `#/knowledge/skills` | **Agent skills** — the tool skills the engine offers a phase, who loaded each; and what one agent learned | `kind=pages\|learned` · `seat=` (learned) |
 | `#/knowledge/diaries` · `#/knowledge/diaries/{handle}` | **Agent diaries** — every agent's diary at a glance, each counted by the node holding the agent; one agent's diary and episodes. Handles live here as they do under `seats/` | |
-| `#/spend` | **Spend › Overview** — the window's tokens against the one before, the monthly budget, the prompt-cache share and the median task; daily tokens by phase (or model, provider, seat, unit, worker); then by agent, by provider, by team, background workers and the three most expensive tasks (tokens only) | `window=7d\|30d\|90d\|<from>/<to>` (whole company days, kept across the sections) · `group=phase\|model\|provider\|seat\|unit\|worker` |
+| `#/spend` | **Spend › Overview** — the window's tokens against the one before, the monthly budget, the prompt-cache share and the median task; daily tokens by phase (or model, provider, seat, unit, worker); then by agent, by provider, by team, the auxiliary model by purpose and the three most expensive tasks (tokens only) | `window=7d\|30d\|90d\|<from>/<to>` (whole company days, kept across the sections) · `group=phase\|model\|provider\|seat\|unit\|worker` |
 | `#/spend/tasks` | **Expensive tasks** — the tasks last changed inside the window, most tokens first, each with what drove it: turns, workers, reopens and send-backs | `window=7d\|30d\|90d\|<from>/<to>` (kept across the sections) |
 | `#/spend/budgets` | **Budgets** — the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by an operator), and what is refusing. ONE address: Settings lists it as a cross-link | `window=` is not read here, and is carried through to the other sections |
 | `#/settings` | **Settings › General** — the charter: mission, vision, policies | |
@@ -2369,7 +2369,13 @@ some, since calls that failed before a model answered recorded none and were a
 bar of nothing named "unknown" — with the way to all of its activity on Live. **Memory** is read from the node HOLDING the seat, whose
 copy is the one kept current, and says which node answered: the diary, the
 episodes (each outcome in the reviewer's own tone — `failed` is red here as on
-a turn), the skills it taught itself and who it has worked with (when last,
+a turn; each turn's **Woken by** — the waking event's label, with what it was
+asked under it — apart from **What it did**, its account, each an opening
+marked with `…` and a **Read all** that opens the turn whole where the text is
+longer than the list carries, because the label
+under "What it did" said every chat turn had done "Message from Ana"; and a
+compacted row as how many turns it stands for, their pattern and what varied,
+and how many of them ended done), the skills it taught itself and who it has worked with (when last,
 relative, as every list on the profile says it), each header
 the holder's total ("Latest 50 of 142" where the list is a page of it), and the
 **Conversations** it holds a ledger in (`conversation=` opens one) — each
@@ -2592,7 +2598,20 @@ once as the palette opens, before a term can be typed, so they never contend
 with the three. A term longer than the engine resolves to a colleague (200
 bytes — a pasted log line) is not sent to `colleague`, and the chart's own
 matching answers it; the cap is `COLLEAGUE_QUERY_MAX` in the contract, held to
-the engine's by a Go gate.
+the engine's by a Go gate. A term past the engine's search bound (400 bytes —
+a pasted passage) asks neither search nor the answer, and the lead says so,
+naming its size and the limit, where the answer would be: sent, all three
+would be refused, and a list that lost its tasks and pages with nothing saying
+why reads as nothing matching. The work search and the knowledge screen do the
+same with a phrase in their address, and so do the two pickers that find a
+task — handing one over and linking one — in place of their list. Every
+`work_search` and `knowledge` read is asked through one hook,
+`useSearchQuery` (`lib/useSearchQuery.ts`), which applies the bound, says why
+and holds no answer from a shorter phrase under one it never sent; a source
+test fails on a ranked search asked any other way, so a new picker cannot skip
+it. The bound is `SEARCH_QUERY_MAX` in the contract, held to the engine's by a
+Go gate, and no search box carries a `maxLength` — that is the same cut, made
+by the browser on a paste.
 
 ### The answer, and when it spends tokens
 
@@ -2602,6 +2621,8 @@ by `answer_knowledge` as the person asking. Every answer is a model call
 charged to the company's budget windows, so it is asked only when:
 
 - the scope is All or Pages;
+- the question is within the search bound (400 bytes), since it is the search
+  text and one past it is refused;
 - typing has paused for **800 ms** (a typist's gap is 150–250 ms, so this is a
   question finished rather than one being typed);
 - this browser may ask: a token bound to a person, on an engine that answers;
@@ -3197,8 +3218,8 @@ rules fix it, and each one names a specific mechanism:
    document keeps its newlines and gains no margin. That reading is also what keeps the
    output linear: indentation is quadratic in nesting depth, and the depth
    here belongs to whichever MCP server answered, with Go's decoder accepting
-   ten thousand levels. And a LIVE result over four thousand characters is
-   sent with a leading ellipsis, which is not a JSON document — so a long
+   ten thousand levels. And a LIVE result over four thousand bytes is
+   sent as its last four thousand, with a leading ellipsis, which is not a JSON document — so a long
    result renders flat while the phase runs and indented once it completes.
    The text already changes at that moment; the shape changing with it is the
    same fact, not a second one.
@@ -4423,13 +4444,18 @@ to decide a colour.
 There were three before. The Budgets table restated the 75% the old `Meter`
 primitive derived from the fill, the attention queue warned at 90%, and the
 kit's `Meter` ramp had its own — so one window read as healthy, nearly spent
-and full at once, depending on which screen it was drawn on. And a ratio is the
-wrong question at the one moment that matters: a refused charge increments
-nothing, so a scope the gate is turning away sits just below its ceiling and a
-fill-derived colour draws it as the calmest bar on the screen. `refusing` is the
-gate's own word — a refusal stamped in the window, or no room left for a single
-token — and it is the condition a seat is parked on, so a parked seat's bar can
-never read as merely near.
+and full at once, depending on which screen it was drawn on. `refusing` is the
+gate's own word — no room left for a single token — and it is the condition a
+seat is parked on, so a parked seat's bar can never read as merely near. The
+refusal stamp says when the gate last turned a call away — a refused charge, or
+work turned away unsent because the window was already full (a turn's next
+call, a parked delivery, a person's question, a reflection pass) — and only
+beside a refusing window: under a ceiling raised since, the stamp is history
+until the next admitted charge clears it, and the window is drawn by its spend.
+A window that refused a round reads past its ceiling, because the refused round
+is counted like any other (the vendor billed it), and its figures say so —
+102 120 of 100 000, the spend the company was billed for, rather than the
+ceiling it crossed.
 
 Each capped window is its own bar: a scope capped by the day and by the month
 has two ceilings, and one bar can only be drawn against one of them. `ok` is
@@ -4607,7 +4633,13 @@ it, so a delegate fan-out of eight rendered as eight siblings of the turn's
 own two phases, and both the "N phases" badge and the token total disagreed
 with the feed's card for the same turn. The token tile now counts the turn's
 own phases and reports worker spend beside it, which is what the engine's own
-`total_tokens` / `subagent_tokens` split means.
+`total_tokens` / `subagent_tokens` split means — and, the same way, the
+**auxiliary** spend inside the turn (`+N auxiliary`: its turn-start context,
+its ledgers' rewrites, its card), read off the turn's `auxiliary_spend`
+records of the `turn` stage. The figure and its notes add up to the turn
+list's tokens for the same turn. The reflection after the turn is never in
+it: that is the seat's learning rather than the work's cost, and it is drawn
+in the Timeline's Reflection lane instead.
 
 ---
 
@@ -5177,7 +5209,9 @@ that can.
   answer and says it was *placed*), a delegate's workers and the round-cap
   judge under the round that spawned them (`host_round`), each coding run as
   its own span keyed by its job's `launch_id`, the reflection pass after the
-  last phase, and *review pending* while an executor has finished and no
+  last phase — its workers drawn from what each SPENT, one span per
+  `auxiliary_spend` record of the `reflection` stage from its first call to
+  its last, marked where a call failed — and *review pending* while an executor has finished and no
   reviewer has started. The ROUND IN FLIGHT is drawn only from a start the
   engine announced for it: every round publishes a frame as its provider call
   is made, and `round_started_at` stays the previous round's while that
@@ -5218,11 +5252,33 @@ that can.
   the trace asks the node that owns the run for its live output every three
   seconds (`sandbox_tail`, see [Watching a run
   live](../concepts/code-sandbox.md#watching-a-run-live)), and only then:
-  closing the span or the run stopping ends the poll. *Nothing to show yet*
-  and *the node that owns this run did not answer* are different sentences,
-  and the second names the node. A screen reader is told the tail's STATE —
-  one sentence in a status region, which changes only when the state does —
-  never the output or the "read 3s ago" clock, which change every poll.
+  closing the span or the job stopping ends the poll — and only
+  `not_running` is stopping: a job still being set up (`launching`), a box
+  paused before its record moves on (`box_paused`), a silent owner and a
+  failed read all keep asking, and keep what is on screen.
+  - **The view holds what it was sent.** It asks by CURSOR — the reading it
+    holds, how far and the owner's digest there — and APPENDS what the owner
+    says it lacks, or replaces what it holds on a reset. `lib/useLiveTail.ts`
+    is that hook, and not `useQuery`, because the cursor moves with every
+    answer and a cursor in a query's parameters re-runs its effect the moment
+    an answer lands. It holds at most what the run's record will
+    (`LIVE_OUTPUT_MAX_BYTES` in `contract/sandbox.ts`, the engine's
+    `sandbox.MaxRunTextBytes`, held to it by a gate), dropping its FRONT on a
+    line past that, and the caption says how much earlier output it no longer
+    holds — every figure read from the answer or the view's own count, never
+    spelled on the screen. A delta that does not follow what the view holds is
+    never spliced in: the view keeps its text and asks for a reset.
+  - **It follows the end unless the reader scrolled up.** At the bottom (within
+    about a line, `FOLLOW_SLACK_PX`) the block scrolls to each new line;
+    anywhere else it stays where they put it.
+  - Bytes the owner holds back until their redaction is settled — a line not
+    finished, a private key whose end has not been written — are counted
+    under the block rather than shown.
+  - *Nothing to show yet* and *the node that owns this run did not answer*
+    are different sentences, and the second names the node. A screen reader
+    is told the tail's STATE — one sentence in a status region, which changes
+    only when the state does — never the output or the "read 3s ago" clock,
+    which change every poll.
 - **Notes sent to a turn** name their sender as a seat's name, the way every
   other attribution does, and say what became of each — read at a round, or
   expired — without assuming the reader sent it.
@@ -5240,9 +5296,12 @@ that can.
   its span on the Timeline.
 - **The answer is the fleet's.** A node that did not answer the turn read is
   named above the tabs; the answer is asked again whenever one of the turn's
-  phases lands on the stream or its seat's stage changes, because what the
-  phases do not carry — a run's announcement, a note's outcome, the
-  reflection — arrives only in the answer.
+  phases lands on the stream, its seat's stage changes, or its reflection
+  pass's `reflection_completed` lands, because what the phases do not carry —
+  a run's announcement, a note's outcome, what the auxiliary model spent, the
+  reflection — arrives only in the answer. The engine publishes a turn's
+  in-turn `auxiliary_spend` before its end and a pass's before its sentinel,
+  so the asks at those two moments read them.
 
 
 ## Coding runs, agent-to-agent, traces and the event log
@@ -5265,7 +5324,11 @@ it, so a link to one run landed on a board with the run below the fold.
     is on the seat's inbox and the node holding the seat resumes the run.
   - A running run's page polls its live output from the node that owns it
     (`sandbox_tail`, by the `launch_id` the row names, every 3 s while the page
-    is open — the same `LiveOutput` the turn trace draws).
+    is open — the same `LiveOutput` the turn trace draws). The view is keyed
+    on the turn AND the launch, so a later job starts a view of its own rather
+    than appending its output to the last job's; an answer naming the job
+    `replaced` reads the board again at once, so the page follows the job the
+    row holds now rather than waiting out `RUNS_POLL_MS`.
   - A run is collected when its record is deleted, and its page still
     answers: it reads the turn and draws every `sandbox` phase the turn
     published — what the job reported, what it delivered, its tokens and its
@@ -5531,7 +5594,10 @@ export.
   hero's; the chart draws no ghost of the window before.
 - **By agent** — turns, tokens, share, **budget today** (the seat's daily window
   from its overlay, `exhausted` where the engine says `refusing`) and tokens per
-  ended turn. A row opens the seat in the peek; on a phone a seat is one
+  ended turn. A PERSON the auxiliary model spent for (`person: true` — their
+  questions answered with `answer_knowledge`, and the background passes of a
+  unit they lead) is a row of their own, keyed by their handle, and says in its
+  turns and per-turn cells that a person takes no turns. A row opens the seat in the peek; on a phone a seat is one
   compact row — name, tokens and share, then turns · today · per turn, each
   with its unit. **Recent turns by tokens** goes to `#/live/turns?sort=-tokens`
   over the same window where the turn list has it (a quarter goes to its thirty
@@ -5540,7 +5606,12 @@ export.
 - **By model** is the engine's `by_provider`: each configured provider entry,
   the models it answered with, who used it (the top three and how many more)
   and its tokens. **By team** is `token_series{group: unit}` asked for every
-  team; **Background workers** is `by_worker`.
+  team; **Auxiliary model** is `by_worker` — what the seats' cheap model spent,
+  by purpose (`memory filter`, `condense thread`, `persist decider`, …) and its
+  provider calls. A breakdown rather than an addition: every one of those calls
+  is already in the row of the seat or person it was made for, under the
+  Auxiliary band. It used to be headed "Background workers" and to claim the
+  embedding pass, which is metered nowhere.
 - **Export** is a client CSV of the rollup and the by-agent table, every row
   labelled with its window and section, tokens only, and every text cell
   guarded so a spreadsheet opens a name as text rather than a formula.
@@ -6062,7 +6133,9 @@ a real value to be read, rather than a null the client would read as easily
 as the value it replaced: its turn is woken by a TASK assigned to the seat, so
 a live call names its `work_item` whole and states its `max_rounds`; a seat's
 `turn.stage` is seen in `phase`; a second seat caps its own day below one
-model call, so the gate refuses it for real and its meter arrives with
+model call, so the gate refuses it for real — a round's charge, or the call the
+seat's meter holds once its own context assembly has filled the day, which the
+meter records as the gate's refusal — and its meter arrives with
 `refused_at`, `resets_at` and `state: refusing`; and the health push has to
 count its live `nodes` and name the worst of its standing `alarms` (the company
 has never taken a backup, so one stands). The replay and the Go half each hold

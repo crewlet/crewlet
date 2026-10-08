@@ -325,10 +325,19 @@ type VectorRecord struct {
 	// the duty knows a row is stale without re-embedding it.
 	SourceRev uint64 `json:"source_rev,omitempty"`
 
-	// TextSHA is the digest of the exact text that was embedded. A source
-	// rewritten into the same words — a re-file, a label, a parent move —
-	// is what this stops the duty paying for.
+	// TextSHA is the digest of the exact text that was embedded — the bytes
+	// the provider received. A source rewritten into the same words — a
+	// re-file, a label, a parent move — is what this stops the duty paying
+	// for: its stored vector is republished rather than computed again
+	// ([Embedder.restamp]).
 	TextSHA string `json:"text_sha,omitempty"`
+
+	// Title is the source's title as it stood when this vector was
+	// computed or restamped — the first thing its text embeds — which is
+	// how the duty notices a page renamed or retitled without a save
+	// ([PageCorpus]): nothing else a page carries moves when only its title
+	// does, short of the log version every comment moves too.
+	Title string `json:"title,omitempty"`
 
 	// Embedding is the vector as PACKED LITTLE-ENDIAN FLOAT32, which is
 	// byte-for-byte what the column holds and what `vector1bit(?)`
@@ -364,7 +373,7 @@ type VectorRecord struct {
 // well as in its field, and re-encoded twice.
 var knownKeys = []string{
 	"v", "op_id", "subject", "op", "created_at", "gen", "writer", "scope",
-	"container", "model", "dim", "source_rev", "text_sha", "embedding",
+	"container", "model", "dim", "source_rev", "text_sha", "title", "embedding",
 	"index", "reassign", "measure",
 }
 

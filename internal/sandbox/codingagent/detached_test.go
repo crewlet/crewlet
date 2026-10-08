@@ -32,7 +32,7 @@ func TestEveryArtefactPathIsUnderTheBoxsOwnHome(t *testing.T) {
 	b := sandbox.NewFakeSandbox("box-1")
 	p := codingagent.PathsFor(b)
 	for _, path := range []string{
-		p.WorkDir(), p.Result(), p.Err(), p.Done(), p.ExitCode(),
+		p.WorkDir(), p.Result(), p.Stream(), p.Err(), p.Done(), p.ExitCode(),
 		p.Ask(), p.MCPConfig(), p.Findings(), p.BinDir(), p.AskShim(),
 	} {
 		if !strings.HasPrefix(path, b.Home()+"/") {
@@ -82,7 +82,8 @@ func TestStartLaunchesDetachedAndWritesBothMarkers(t *testing.T) {
 	script := lastBackground(t, b)
 	for _, want := range []string{
 		"< /dev/null", // a headless agent must never block on input
-		p.Result(),    // stdout is the parseable output
+		p.Stream(),    // stdout is the event stream
+		p.Result(),    // its last line is the result
 		p.Err(),       // stderr is the transcript fallback
 		p.ExitCode(),  // the crash explanation
 		p.Done(),      // the completion signal
@@ -146,7 +147,7 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 	if cleared == "" {
 		t.Fatal("the prior run's artefacts were never cleared")
 	}
-	for _, want := range []string{p.Done(), p.ExitCode(), p.Result(), p.Findings(), p.Ask()} {
+	for _, want := range []string{p.Done(), p.ExitCode(), p.Result(), p.Stream(), p.Findings(), p.Ask()} {
 		if !strings.Contains(cleared, want) {
 			t.Fatalf("%q was not cleared: %s", want, cleared)
 		}
@@ -257,7 +258,7 @@ func TestTheFindingsFileIsTheResultCarrierOfRecord(t *testing.T) {
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	p := paths(b)
-	b.Put(p.Result(), `{"result":"streamed summary","subtype":"success"}`)
+	b.Put(p.Result(), `{"type":"result","result":"streamed summary","subtype":"success"}`)
 	b.Put(p.Findings(), "Outcome: succeeded\nOpened https://github.com/acme/api/pull/42")
 	b.Put(p.ExitCode(), "0")
 
@@ -313,21 +314,24 @@ func TestARunThatProducedNothingReportsWhyRatherThanStallingSilently(t *testing.
 	}
 }
 
-// The transcript is the observability surface for an agent that emits no
-// telemetry of its own.
-func TestTheTranscriptFallsBackToStderr(t *testing.T) {
+// THE ERROR STREAM IS THE TRANSCRIPT ONLY WHERE THE STREAM SAYS NOTHING — a
+// CLI that never got as far as streaming, which says why on stderr. (It used
+// to be the whole of Claude Code's transcript, on a fabricated premise: under
+// `--output-format json` in print mode that CLI writes nothing to stderr, so
+// the case certified a narration no real run produced.)
+func TestTheTranscriptFallsBackToStderrWhereTheStreamSaysNothing(t *testing.T) {
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	p := paths(b)
-	b.Put(p.Result(), `{"result":"done","subtype":"success"}`)
-	b.Put(p.Err(), "cloning…\nrunning tests…")
+	b.Put(p.Err(), "error: unknown option '--output-formt'")
+	b.Put(p.ExitCode(), "1")
 
 	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
-	if !strings.Contains(res.Transcript, "running tests") {
-		t.Fatalf("transcript = %q", res.Transcript)
+	if res.Transcript != "error: unknown option '--output-formt'" {
+		t.Fatalf("transcript = %q; want what the CLI said before it could stream", res.Transcript)
 	}
 }
 
@@ -410,87 +414,100 @@ func TestAMalformedAskDoesNotLoseTheResult(t *testing.T) {
 	}
 }
 
-// THE BOUND IS BYTES, AND THE CUT IS ON A BOUNDARY. The transcript rides an
-// event, and an event's ceiling is bytes: a transcript of three-byte runes
-// under the old 100 000-RUNE cap was 300 KB on the wire, past the 256 KiB this
-// bound promises. And the kept half opens on a whole character, because a
-// byte offset from the end lands mid-rune two times in three here, which the
-// event store's JSON encoding turns into U+FFFD.
-func TestTheTranscriptIsCutAtABoundaryInBytes(t *testing.T) {
+// THE TRANSCRIPT LEAVES THE RUNNER WHOLE AND REDACTED. The record's bound is
+// the coordinator's to apply, in one place, after it redacts again; a runner
+// that cut it first would decide by position what of the log a reader sees,
+// and a runner that forgot to cut it would no longer be a hole.
+func TestTheTranscriptLeavesTheRunnerWholeAndRedacted(t *testing.T) {
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	p := paths(b)
+	secret := "sk-ant-" + strings.Repeat("Q7", 20)
+	stderr := "start " + secret + "\n" + strings.Repeat("日", sandbox.MaxRunTextBytes) + "\nTHE CONCLUSION"
 	b.Put(p.Findings(), "Outcome: succeeded")
-	b.Put(p.Err(), strings.Repeat("日", codingagent.MaxTranscriptBytes)+"\nTHE CONCLUSION")
+	b.Put(p.Err(), stderr)
 
 	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
-	kept, marked := strings.CutPrefix(res.Transcript, "…")
-	if !marked {
-		t.Fatal("the cap was silent")
+	if strings.Contains(res.Transcript, secret) {
+		t.Error("a credential left the runner unredacted")
 	}
-	if len(kept) > codingagent.MaxTranscriptBytes {
-		t.Fatalf("the transcript kept %d bytes, past the %d-byte bound", len(kept), codingagent.MaxTranscriptBytes)
+	if !strings.HasPrefix(res.Transcript, "start ") || !strings.HasSuffix(res.Transcript, "THE CONCLUSION") ||
+		len(res.Transcript) < sandbox.MaxRunTextBytes {
+		t.Errorf("the transcript is %d bytes opening %.20q; want the whole of it", len(res.Transcript), res.Transcript)
 	}
-	if !utf8.ValidString(kept) || strings.HasPrefix(kept, string(utf8.RuneError)) {
-		t.Fatal("the transcript was cut through a rune")
-	}
-	// The TAIL is kept: the conclusion is what a reader wants.
-	if !strings.HasSuffix(kept, "THE CONCLUSION") {
-		t.Fatal("the tail cap dropped the end of the transcript instead of the start")
+	if !utf8.ValidString(res.Transcript) {
+		t.Error("the transcript is not valid UTF-8")
 	}
 }
 
-// A crash explains itself at the bottom, so the failure text a run that
-// produced nothing reports is its stderr's END, bounded like the transcript
-// and marked where it was cut.
-func TestACrashDetailKeepsItsEndAndSaysItCut(t *testing.T) {
+// A crash explains itself at the bottom, so the failure a run that produced
+// nothing reports is its WHOLE stderr behind its exit status: the runner
+// bounds nothing a model reads, and the coordinator condenses a failure past
+// the record's bound keeping its cause.
+func TestACrashDetailIsCarriedWholeBehindItsStatus(t *testing.T) {
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	p := paths(b)
-	b.Put(p.Err(), strings.Repeat("noise\n", codingagent.MaxTranscriptBytes)+"FATAL: migrations/0007.sql is missing")
+	stderr := strings.Repeat("noise\n", sandbox.MaxRunTextBytes) + "FATAL: migrations/0007.sql is missing"
+	b.Put(p.Err(), stderr)
 	b.Put(p.ExitCode(), "1")
 
 	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
-	if !strings.HasSuffix(res.Error, "FATAL: migrations/0007.sql is missing") {
-		t.Error("the line naming the failure was cut away")
-	}
-	if !strings.HasPrefix(res.Error, "…") {
-		t.Error("the cut is silent")
-	}
-	if len(res.Error) > codingagent.MaxTranscriptBytes+len("…") {
-		t.Errorf("the failure text is %d bytes, past its bound", len(res.Error))
+	// The CLI produced no output, so its own "no output" is the middle part.
+	want := "the coding agent exited with status 1:\nthe coding agent produced no output:\n" + stderr
+	if res.Error != want {
+		t.Errorf("the failure is %d bytes opening %.80q, want the status, the CLI's error and "+
+			"the whole stderr (%d bytes)", len(res.Error), res.Error, len(want))
 	}
 }
 
-// THE REPORT IS BOUNDED TOO, and keeps its HEAD. It is the response on the
-// run's own phase record, the agent writes it and nothing else limits it —
-// and a record over the queue's ceiling is refused whole. Unlike a log, a
-// report is read from the top, where its summary is.
-func TestTheReportIsBoundedAndKeepsItsHead(t *testing.T) {
+// THE CLI'S OWN ERROR SURVIVES A STDERR. It used to be replaced by the stderr
+// whenever the stderr held anything, so a run that hit its turn cap and
+// printed one deprecation warning reported the warning as why it failed.
+func TestTheCLIsErrorIsNotReplacedByItsStderr(t *testing.T) {
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	p := paths(b)
-	b.Put(p.Findings(), "Outcome: succeeded\n"+strings.Repeat("detail\n", codingagent.MaxTranscriptBytes))
+	b.Put(p.Result(), `{"type":"result","subtype":"error_max_turns","is_error":false,`+
+		`"errors":["Reached maximum number of turns (30)"]}`)
+	b.Put(p.Err(), "warning: a deprecated flag")
 	b.Put(p.ExitCode(), "0")
 
 	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
-	if !strings.HasPrefix(res.Text, "Outcome: succeeded") {
-		t.Error("the report's opening line was cut away")
+	if res.Error != "error_max_turns: Reached maximum number of turns (30):\nwarning: a deprecated flag" {
+		t.Errorf("failure = %q, want the CLI's error and then the stderr", res.Error)
 	}
-	if len(res.Text) > codingagent.MaxTranscriptBytes+len("…") || !strings.HasSuffix(res.Text, "…") {
-		t.Errorf("the report is %d bytes and unmarked, not bounded", len(res.Text))
+}
+
+// THE REPORT LEAVES THE RUNNER WHOLE. It is what the resumed executor reads,
+// and a cut keeping its head reads as the whole report; the coordinator holds
+// it to the record's bound by condensing it.
+func TestTheReportLeavesTheRunnerWhole(t *testing.T) {
+	runner := codingagent.NewClaudeCode()
+	b := box(t, runner)
+	p := paths(b)
+	report := "Outcome: succeeded\n" + strings.Repeat("detail\n", sandbox.MaxRunTextBytes)
+	b.Put(p.Findings(), report)
+	b.Put(p.ExitCode(), "0")
+
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if res.Text != strings.TrimSpace(report) {
+		t.Errorf("the report is %d bytes, want the whole %d", len(res.Text), len(strings.TrimSpace(report)))
 	}
 	if !res.Success {
-		t.Error("a bounded report stopped reading as a success")
+		t.Error("a long report stopped reading as a success")
 	}
 }
 
@@ -533,82 +550,4 @@ func lastBackground(t *testing.T, b *sandbox.FakeSandbox) string {
 		t.Fatal("nothing was started in the background")
 	}
 	return cmds[len(cmds)-1]
-}
-
-// ---------------------------------------------------------------------
-// peek — a running job's live output
-// ---------------------------------------------------------------------
-
-// A PEEK IS THE TAIL OF THE PARSED TRANSCRIPT, REDACTED, and touches nothing.
-//
-// What a person watching a run wants is what it is doing now, so the END of
-// the agent's own account is kept; the box's environment holds the seat's
-// credentials, so a key the agent echoed must not reach a screen; and a peek
-// racing the completion poll must not change what the poll sees.
-func TestPeekTailsTheParsedTranscriptAndRedacts(t *testing.T) {
-	t.Parallel()
-	runner := codingagent.NewOpenCode()
-	b := box(t, runner)
-	p := paths(b)
-	secret := "sk-ant-api03-" + strings.Repeat("x", 40)
-	var stream strings.Builder
-	for i := range 400 {
-		stream.WriteString(`{"type":"text","part":{"text":"step ` + strings.Repeat("·", 20) +
-			` number ` + string(rune('a'+i%26)) + `"}}` + "\n")
-	}
-	stream.WriteString(`{"type":"text","part":{"text":"exporting ` + secret + ` and running go test"}}` + "\n")
-	b.Put(p.Result(), stream.String())
-	b.Put(p.Err(), "stderr is not what a parsed transcript run shows")
-
-	out, err := runner.Peek(t.Context(), b, sandbox.RunHandle{})
-	if err != nil {
-		t.Fatalf("Peek: %v", err)
-	}
-	if out.Source != sandbox.SourceTranscript {
-		t.Errorf("source = %q; want the parsed transcript", out.Source)
-	}
-	if strings.Contains(out.Text, secret) {
-		t.Error("a credential the agent echoed reached the live output unredacted")
-	}
-	if !strings.HasSuffix(out.Text, "running go test") {
-		t.Errorf("the live output does not end with the newest line: …%q", out.Text[max(0, len(out.Text)-60):])
-	}
-	if !out.Cut || len(out.Text) > sandbox.MaxLiveOutputBytes+len("…") || !utf8.ValidString(out.Text) {
-		t.Errorf("cut=%v len=%d valid=%v; want the last %d bytes on a rune boundary, marked",
-			out.Cut, len(out.Text), utf8.ValidString(out.Text), sandbox.MaxLiveOutputBytes)
-	}
-	if out.Finished {
-		t.Error("a job with no done marker read as finished")
-	}
-	if out.AsOf.IsZero() {
-		t.Error("the peek carries no instant")
-	}
-	if done, _ := b.ReadFile(t.Context(), p.Done()); len(done) != 0 {
-		t.Error("a peek wrote the done marker")
-	}
-}
-
-// An agent that writes nothing parseable until it exits shows its stderr, and
-// one that has written nothing at all says so rather than failing.
-func TestPeekFallsBackToStderrAndThenToNothing(t *testing.T) {
-	t.Parallel()
-	runner := codingagent.NewClaudeCode()
-	b := box(t, runner)
-	p := paths(b)
-
-	out, err := runner.Peek(t.Context(), b, sandbox.RunHandle{})
-	if err != nil || out.Source != sandbox.SourceNone || out.Text != "" {
-		t.Errorf("an empty box peeked %+v, %v; want source none and no text", out, err)
-	}
-
-	b.Put(p.Err(), "cloning github.com/acme/api\n")
-	out, err = runner.Peek(t.Context(), b, sandbox.RunHandle{})
-	if err != nil || out.Source != sandbox.SourceStderr || out.Text != "cloning github.com/acme/api" {
-		t.Errorf("a box with only stderr peeked %+v, %v; want its stderr", out, err)
-	}
-
-	b.Put(p.Done(), "0")
-	if out, _ = runner.Peek(t.Context(), b, sandbox.RunHandle{}); !out.Finished {
-		t.Error("a job whose done marker is written did not read as finished")
-	}
 }

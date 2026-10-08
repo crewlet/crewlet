@@ -635,7 +635,7 @@ test("a column with no word in its head declares one", () => {
  */
 
 /** Names the engine's gates read by spelling: `clientsource.Calls` is asked for exactly these. */
-const SPELLED = new Set(["useQuery", "query"]);
+const SPELLED = new Set(["useQuery", "query", "useSearchQuery"]);
 /** Names held by binding, imported from this tree, because a package exports one of the same spelling. */
 const BOUND = new Set(["act", "useAct"]);
 
@@ -646,6 +646,12 @@ const FORWARDS: readonly { path: string; callee: string; argument: string; why: 
     callee: "query",
     argument: "what",
     why: "useQuery's own body sends the socket the kind its caller named, and every caller is held to a literal here",
+  },
+  {
+    path: "lib/useSearchQuery.ts",
+    callee: "useQuery",
+    argument: "what",
+    why: "useSearchQuery's own body asks the ranked search its caller named, after the search bound, and every useSearchQuery( is held to a literal here",
   },
   {
     path: "lib/useAct.ts",
@@ -778,6 +784,29 @@ describe("every read names its question", () => {
     expect(literal("useQuery")).toBeGreaterThan(80);
     expect(literal("query")).toBeGreaterThanOrEqual(2);
     expect(literal("useAct")).toBeGreaterThanOrEqual(4);
+    expect(literal("useSearchQuery")).toBeGreaterThanOrEqual(8);
+  });
+
+  // A RANKED SEARCH IS ASKED THROUGH ITS HOOK, OR NOT AT ALL. The engine
+  // refuses a phrase past its search bound as `bad_params`, and
+  // `useSearchQuery` is where that bound is applied and said: two pickers that
+  // asked `work_search` through `useQuery` sent a pasted description, had it
+  // refused and listed "No task matches". A new picker cannot skip the bound,
+  // because this is where it would have to.
+  test("and every ranked search goes through the search bound", () => {
+    const ranked = new Set(["work_search", "knowledge"]);
+    const bypassing = tree
+      .filter(({ path }) => !/\.test\.tsx?$/.test(path))
+      .flatMap(({ path, calls }) =>
+        calls
+          .filter((c) => c.callee !== "useSearchQuery" && c.name !== null && ranked.has(c.name))
+          .map((c) => `${path}:${c.line} — ${c.written}${c.argument}`),
+      );
+    expect(
+      bypassing,
+      "ask work_search and knowledge with useSearchQuery (lib/useSearchQuery.ts), which sends " +
+        "nothing past the engine's search bound and says why",
+    ).toEqual([]);
   });
 
   // THE WRITE VOCABULARY IS EXACTLY WHAT THE SCREENS PRESS. `ACTIONS` is

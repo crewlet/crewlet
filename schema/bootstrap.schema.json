@@ -799,7 +799,7 @@
               "type": "string"
             }
           ],
-          "description": "Copies of every stream and coordination bucket, 1..5: 1 solo, 3 in a fleet, and on an embedded cluster at most its members. Not the object store's copies; those are objects.replicas in the company."
+          "description": "Copies of every stream and coordination bucket, and of the company's files on the default nats object store, 1..5: 1 solo, 3 in a fleet, and on an embedded cluster at most its members."
         },
         "store_dir": {
           "description": "Embedded stream persistence directory. Empty = in-memory (nothing survives a restart). Required on a member of a fleet (a named cluster, peers or a leaf listener); refused on a leaf.",

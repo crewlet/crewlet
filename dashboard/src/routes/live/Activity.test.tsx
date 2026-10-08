@@ -320,6 +320,12 @@ test("a seat's log asks for that seat and shows only its live rows", async () =>
   });
   expect(asked.find((a) => a.what === "events")?.params.seat).toBe("swe");
   expect(asked.find((a) => a.what === "event_series")?.params.seat).toBe("swe");
+  // AND THE FEED'S ROWS ALONE, on every page and the axis: the head of this
+  // log is the live ring, which holds no accounting row, so a page or a bar
+  // that held them would be another log than the one being scrolled.
+  for (const what of ["events", "event_series"]) {
+    expect(asked.find((a) => a.what === what)?.params.feed_only, what).toBe("true");
+  }
   expect(screen.getByText("swe opened a task")).toBeTruthy();
   expect(screen.queryByText("cto opened a task")).toBeNull();
   // THE FILTER SAYS WHOSE LOG THIS IS, by name, and takes itself off.

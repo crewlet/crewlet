@@ -93,7 +93,7 @@ import { useViewer } from "~/lib/viewer.ts";
 import { handleLabel, indexOrg, type OrgIndex, type Seat } from "~/lib/seats.ts";
 import { projectsByUnit } from "~/lib/orgchart.ts";
 import { DEFAULT_TYPE, PRIORITIES, STATUSES, statusLabel, typeName } from "~/lib/work.ts";
-import { humanize, utf8Bytes } from "~/lib/format.ts";
+import { humanize, textBudget } from "~/lib/format.ts";
 import { TASK_BODY_MAX_BYTES, TASK_TITLE_MAX_BYTES } from "~/contract/work.ts";
 import type { WorkProjectDetail, WorkProjectRow } from "~/protocol/index.ts";
 
@@ -107,37 +107,8 @@ const SEAT_CHOICES = 8;
  */
 const QUOTE_CHARS = 40;
 
-/**
- * How near its cap a text is before its field starts counting — the last
- * fifth. Earlier than that a counter is a number a reader is not deciding
- * anything with; at the cap it is too late to plan the sentence.
- */
-const COUNT_FROM = 0.8;
-
-/** What one text field says about its size against its cap. */
-export interface TextBudget {
-  bytes: number;
-  limit: number;
-  /** Past the cap: the engine would refuse it. */
-  over: boolean;
-  /** The line under the field — a count near the cap, the refusal past it. */
-  line: string | undefined;
-}
-
-/**
- * A text's size against the engine's cap, in the engine's unit (UTF-8 bytes,
- * of what is sent: the trimmed value).
- */
-export function textBudget(value: string, limit: number, what: string): TextBudget {
-  const bytes = utf8Bytes(value.trim());
-  const over = bytes > limit;
-  const line = over
-    ? `${bytes} bytes — ${what} holds at most ${limit}. Shorten it, or put the long form on a page and link it here.`
-    : bytes >= limit * COUNT_FROM
-      ? `${bytes} of ${limit} bytes`
-      : undefined;
-  return { bytes, limit, over, line };
-}
+/** What a task's text past its cap is told to do instead. */
+const LONG_FORM = "Shorten it, or put the long form on a page and link it here.";
 
 /** The field a draft cannot be filed without changing, and why. */
 export interface Blocked {
@@ -154,14 +125,14 @@ export function blockedBy(draft: NewTaskDraft): Blocked | undefined {
   if (!draft.title.trim()) {
     return { field: "title", reason: "Give the task a title — one line saying what the work is." };
   }
-  const title = textBudget(draft.title, TASK_TITLE_MAX_BYTES, "a title");
+  const title = textBudget(draft.title, TASK_TITLE_MAX_BYTES, "a title", LONG_FORM);
   if (title.over) {
     return {
       field: "title",
       reason: `Shorten the title: it is ${title.bytes} bytes and a title holds at most ${title.limit}.`,
     };
   }
-  const body = textBudget(draft.body, TASK_BODY_MAX_BYTES, "a description");
+  const body = textBudget(draft.body, TASK_BODY_MAX_BYTES, "a description", LONG_FORM);
   if (body.over) {
     return {
       field: "body",
@@ -361,8 +332,8 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
   // whether it is a task or a question, so an ask carries the same project,
   // assignee and refusals a task does — and the answer lands in the Inbox.
   const asked = draft.ask ? (index.byHandle.get(draft.ask)?.name ?? draft.ask) : "";
-  const titleBudget = textBudget(draft.title, TASK_TITLE_MAX_BYTES, "a title");
-  const bodyBudget = textBudget(draft.body, TASK_BODY_MAX_BYTES, "a description");
+  const titleBudget = textBudget(draft.title, TASK_TITLE_MAX_BYTES, "a title", LONG_FORM);
+  const bodyBudget = textBudget(draft.body, TASK_BODY_MAX_BYTES, "a description", LONG_FORM);
   const hold = blockedBy(draft);
   const blocked = hold?.reason;
   // WHY CREATE IS HELD, whichever it is: this reader cannot file at all

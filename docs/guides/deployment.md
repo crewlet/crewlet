@@ -839,8 +839,8 @@ all in the [coordination slot](../concepts/coordination.md) instead.
 
 The load-bearing tables:
 
-- **`agent_diary`** — vector-indexed, each agent's private observation log. Written by the reflect path, which embeds content on write. The `## Personal memory` prefetch reads it via hybrid candidate selection (vector top-50 ∪ recency top-50, deduped by row id) handed to an aux-LLM relevance filter. Shared knowledge is **not** stored here — natively it is rows in the replicated estate beside the vectors derived from them, and a Confluence knowledge base has no local copy at all; see [knowledge system](../concepts/knowledge-system.md).
-- **`episodes`** — vector-indexed, one row per completed turn, raw and LLM-compacted shapes in the same table. Drained by the episode-lifecycle duty.
+- **`agent_diary`** — each agent's private observation log, each note with the vector of the model it came from (a per-agent scan the database ranks; there is no vector index). Written by the reflect path, which embeds content on write; the node holding the seat fills any note left without a vector of the current model. The `## Personal memory` prefetch reads it via hybrid candidate selection (vector top-50 ∪ recency top-50, deduped by row id) handed to an aux-LLM relevance filter. Shared knowledge is **not** stored here — natively it is rows in the replicated estate beside the vectors derived from them, and a Confluence knowledge base has no local copy at all; see [knowledge system](../concepts/knowledge-system.md).
+- **`episodes`** — one row per completed turn, raw and LLM-compacted shapes in the same table; a raw turn carries the vector of the model it came from and a compacted row none (a per-seat scan the database ranks; there is no vector index). Drained by the episode-lifecycle duty.
 - **`synthesized_skills`** + **`synthesized_skill_versions`** — auto-drafted skills the agent can load, plus their refinement history.
 - **`counterparty_profiles`** — per-`(observer, subject, platform)` profiles built from observed interactions.
 - **`agent_onboarding_markers`** — onboarding bookkeeping, one row per agent.
@@ -935,6 +935,12 @@ and merge counts: each data node counts the rows it keeps and names the ones it
 has not settled, and the node you asked counts each named row once
 ([Reading the fleet's history](../concepts/event-system.md#reading-the-fleets-history)).
 
+**Upgrade the data nodes first.** A data node writes each event in a batch by
+its own build's category map, and leaves out a type its build does not place —
+so a node without `data` on a newer build can hand a data node still on this
+one events it cannot keep, and they reach no event log. With every data node
+upgraded before the nodes without `data`, nothing is left out.
+
 #### What gets stored, and under which category
 
 `category` is the one column with a closed vocabulary, and it is what the
@@ -949,7 +955,7 @@ from that map — a guard test fails if the two drift.
 | `learning` | `compaction_completed`, `compaction_requested`, `counterparty_profile_updated`, `episode_written`, `knowledge_read`, `persist_decider_completed`, `prefetch_summary`, `reflection_completed`, `skill_archived`, `skill_promoted`, `skill_refined`, `skill_revived`, `skill_staled`, `skill_synthesized`, `skill_used`, `turn_completed` |
 | `lifecycle` | `backup_requested`, `config_revision_activated`, `config_revision_applied`, `operator_acted`, `org_started`, `org_stopped`, `seat_paused`, `seat_resumed` |
 | `notification` | `external_notification`, `notification_skipped`, `notifications_coalesced`, `turn_trigger_skipped` |
-| `system` | `agent_phase_completed`, `agent_phase_started`, `agent_turn_completed`, `agent_turn_started`, `agent_turn_steered`, `agent_turn_stopped`, `budget_exhausted`, `llm_unavailable`, `phase.tool_skill_blocked`, `prompt.size`, `provider_fallback`, `skill_telemetry_write_failed`, `subagent_batched`, `turn.guard_breach` |
+| `system` | `agent_phase_completed`, `agent_phase_started`, `agent_turn_completed`, `agent_turn_started`, `agent_turn_steered`, `agent_turn_stopped`, `auxiliary_spend`, `budget_exhausted`, `llm_unavailable`, `phase.tool_skill_blocked`, `prompt.size`, `provider_fallback`, `skill_telemetry_write_failed`, `subagent_batched`, `turn.guard_breach` |
 | `task` | `sandbox_clarification_requested`, `sandbox_run_answered`, `sandbox_run_completed`, `sandbox_run_failed`, `sandbox_run_started`, `scheduled_task_fired`, `task_assigned` |
 | `webhook` | `inbound_delivery` — one row per delivery presented to one seat, from a [webhook route](../reference/api-endpoints.md) or a [Mattermost socket](../integrations/mattermost.md#running-on-a-fleet). The row is filed under the delivery's own label (`webhook:<event>`, `forge:<event>`, `socket:posted`) rather than under `inbound_delivery`, with the provider's exact bytes as its payload |
 
@@ -970,7 +976,17 @@ test rather than vanishing quietly.
 | `tool_skill_page_changed` | A **nudge** between nodes that one tool-skill page moved, so every node's registry re-reads it rather than only the node that won the webhook. The delivery that caused it is **already** a row (the `webhook` category above), and what the change did is a log line on each node, so a durable row would record one wiki edit once more per member of the fleet. |
 | `reflection_due` | The **wake** that puts a finished turn in front of [post-turn reflection](../concepts/agent-learning.md) on the seat's holder. The turn is **already** a row (`turn_completed`), and what reflecting on it did is its own (`reflection_completed`) — same reason as `a2a_request`. |
 | `custody_batch` | A **carrier**, not an event: a node without the `data` role keeps no event log, so it publishes its events in batches and one data node writes each event inside as the row it is ([custody](#custody-the-rows-of-a-node-without-data)). A row for the batch would describe the transport and repeat every event in it. |
-| `budget_meters` | A **snapshot** of the shared token counters, published by every node on a 15-second tick, so a durable row per report is about two million a year per node to answer a question the live projection and `GET /budgets` answer for free. What the audit log holds instead is the spend the counter is charged with, recorded per phase in the `agent_phase_completed` rows every spend query folds, so "what did we spend last month" is answerable and "what was the counter reading at 14:03:15" is not a question anybody asks. It still drives the live projection. |
+| `budget_meters` | A **snapshot** of the shared token counters, published by every node on a 15-second tick, so a durable row per report is about two million a year per node to answer a question the live projection and `GET /budgets` answer for free. What the audit log holds instead is the spend the counter is charged with, recorded per phase in the `agent_phase_completed` rows and per auxiliary purpose in the `auxiliary_spend` rows every spend query folds, so "what did we spend last month" is answerable and "what was the counter reading at 14:03:15" is not a question anybody asks. It still drives the live projection. |
+
+**Stored is not always fed.** One class of type is written like every other row
+and kept out of the dashboard's activity feed — a ring of the whole company's
+last few hundred events, since every node's feed is fed fleet-wide. It is in
+`GET /events`, a turn's history and a trace like any row, and filterable by its
+category.
+
+| Stored, not in the activity feed | Why |
+|---|---|
+| `auxiliary_spend` | **Accounting, not activity**: what the auxiliary model cost for one key, coalesced per flush ([Budgets and spend § Auxiliary spend](budgets-and-spend.md#auxiliary-spend)). A turn writes several beside its own phases, and a compaction a burst, so in the feed they would push the turns, failures and deliveries a reader is watching out of the ring. |
 
 #### Querying events
 
@@ -1430,17 +1446,25 @@ An absent window is uncapped, and a ceiling of `0` is refused rather than read
 as unlimited. See [Configuration § Token budgets](../getting-started/configuration.md#token-budgets)
 for the rules and for the ceilings `crewlet validate` warns can never bind.
 
-Every model round is charged against both before it runs, in every window at
-once — the day, the week and the month it falls in on the company's clock —
-and it is admitted only while every capped window of both has room. A charge
-that does not fit is refused: the turn stops and the engine publishes a
-`budget_exhausted` event naming the scope that refused, the window
-(`period`, `window`, `resets_at`) and its figures, beside the turn's own
-`agent_turn_completed`. The
-check is atomic: if the agent's budget refuses, the org-level consumption it
-had already charged is rolled back. In a fleet the counters live in the
-coordination slot, so an org cap of 500 k is 500 k across every node rather
-than per process.
+Every model round is charged against both the moment its reply arrives (its
+size is known no sooner) and before any tool it asked for runs, in every
+window at once — the day, the week and the month it falls in on the company's
+clock — and it is admitted only while every capped window of both had room for
+it. A round that does not fit is refused: its tool calls do not run, the turn
+stops, and the engine publishes a `budget_exhausted` event naming the scope that
+refused, the window (`period`, `window`, `resets_at`) and its figures, beside
+the turn's own `agent_turn_completed`. The refused round is **counted all the
+same**, on the seat's counter and the company's, because the vendor has
+already billed it: the refusing window reads past its ceiling by the round that
+crossed it, and every later round is refused against that figure until the
+window turns over or the ceiling is raised. Each scope's check is atomic, and
+nothing a charge counted is taken back: a seat write that fails after the
+company's landed stops the round as an outage and leaves it on the company,
+whose record of a billed round is true, so only that seat's own counter is
+short of it — logged as `coord_kv_budget_spend_uncounted` — until the window
+turns over. In a fleet the counters live in the coordination
+slot, so an org cap of 500 k is 500 k across every node rather than per
+process.
 
 A window's allowance comes back when the window turns over — at local
 midnight, on Monday, on the 1st — rolled inside the first charge after the
@@ -1467,18 +1491,38 @@ part-way through a day judges what the day has already spent rather than
 starting from zero, and `GET /budgets` shows an uncapped company's spend
 rather than nothing.
 
-A refusal is also recorded beside the counter, as when that window last
-refused a charge (`refused_at` on [`GET /budgets`](../reference/api-endpoints.md#get-budgets)
+A refusal is also recorded beside the counter, as when the gate last turned a
+call away in that window (`refused_at` on [`GET /budgets`](../reference/api-endpoints.md#get-budgets)
 and on the [live token meter](../reference/api-endpoints.md#the-live-token-meter)),
 and the next charge the scope admits clears it, as does the window turning
-over. That, not a counter at its cap,
-is what exhausted means: a refused charge increments nothing, so the counter
-stops short of the cap by the size of the round that did not fit.
+over. The gate turns work away in two ways, and both are recorded: it refuses
+a round's charge, or — once a window is already full, because a context
+assembly, a rewrite, a coding run, a person's answers or an earlier round took
+it there — the work is turned away before its first call, since that call
+would be billed and then refused. That second way is every refusal of a full
+window the engine can see coming: a turn stops its next call, the
+[budget park](../concepts/agent-runtime.md#the-budget-park) defers a seat's
+delivery, a person's `answer_knowledge` question is refused, and the
+reflection stage declines a pass and a conversation entry's rewrites. Each is
+recorded on the scope a charge would be refused by (the company's before the
+seat's), a turn's once per window for each part of the turn, so a window that
+is refusing everything sent its way never reads as one that has refused
+nothing. Because the counter carries every round it refused, `GET /budgets`,
+the live meter and the park all read a window that refused a round **over** its
+ceiling by the round that crossed it, never just short of it; `refused_at` is
+when the gate last said no. A window filled with nothing asked of it since — a
+background pass, a coding run whose turn has not resumed, and no delivery,
+question or pass for that scope after it — carries no `refused_at` until
+something is, though its `state` is already `refusing`.
 
-Three spends cannot be checked by their own size first, because their size is
-known only once they have happened, and each is **post-charged** — added to the
-counters in the windows it is recorded in, without a check, because no answer
-can un-spend it — behind a gate that reads the room left *before* it starts:
+No model call can be checked by its own size first, because its size is known
+only once it has happened. A turn's round is judged when it is charged, as
+above, because a verdict still has something to stop: the tools it asked for
+and every model call of the turn after it, each refused before it is sent
+rather than billed and refused in turn. Four other spends have nothing left to
+stop by the time their size is known, so each is **post-charged** — added to
+the counters in the windows it is recorded in, without a verdict — behind a
+gate that reads the room left *before* it starts:
 
 - **A coding run.** Its box spends while the turn is suspended, so its tokens
   are known only when the run is collected, and they reach both the seat's
@@ -1488,14 +1532,22 @@ can un-spend it — behind a gate that reads the room left *before* it starts:
   calls the [learning subsystem](../concepts/agent-learning.md) makes on a
   seat's behalf. A pass does not start for a seat or company with no room
   left, and each completion it makes is recorded in full on the seat's counter
-  and the company's, past the ceiling included.
-- **A turn's context assembly** — the memory filter, the knowledge query and
+  and the company's, past the ceiling included. The same gate stands in front
+  of the rewrite of a [conversation entry's](../concepts/conversation-sessions.md)
+  long tool payloads, made after a turn under the same reflection stage: with
+  no room left the entry is still written, each such payload named by its size
+  and digest.
+- **A turn's own auxiliary calls** — the memory filter, the knowledge query and
   the episode summary the [turn-start prefetch](../concepts/agent-learning.md)
-  asks the seat's auxiliary model for before the first phase opens. Its gate is
-  the turn's own: a delivery to a seat whose window has no room left is
+  asks the seat's auxiliary model for before the first phase opens, and every
+  rewrite the turn's conversation block, ledgers, judge and tools need. Their
+  gate is the turn's own: a delivery to a seat whose window has no room left is
   [parked](../concepts/agent-runtime.md#the-budget-park) before it runs, so no
-  prefetch starts for it, and each completion it does make is recorded on the
-  seat's counter and the company's like an auxiliary pass.
+  prefetch starts for it; each completion the turn does make is recorded on the
+  seat's counter and the company's through the turn's own meter, which then
+  holds any window the completion filled; and the turn makes no further call,
+  auxiliary or not, while that window is full — except its task card's
+  rewrite, the turn's record, made after its last round.
 - **A person's knowledge answer** — the dashboard's ⌘K answer
   ([`answer_knowledge`](../reference/api-endpoints.md#answering-a-question-from-the-companys-knowledge)).
   A person has no seat budget, so it is gated on the **company's** windows
@@ -1503,7 +1555,10 @@ can un-spend it — behind a gate that reads the room left *before* it starts:
   has no room — and recorded on the company's counter alone.
 
 In each case the next round the seat or the company attempts is refused
-against the recorded figure.
+against the recorded figure — and for a turn's own auxiliary calls, and for a
+coding run its resumed turn collects, that round is refused before it is sent:
+the turn's meter holds what the post-charge answered, or reads it once before
+the resumed turn's first call.
 
 ### Structured Logging
 

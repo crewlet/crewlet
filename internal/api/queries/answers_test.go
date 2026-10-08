@@ -152,7 +152,7 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 		// wired with.
 		{"a node with no sources at all", queries.Sources{}, []string{"viewer"}},
 		{"the live projection alone", queries.Sources{State: state},
-			[]string{"agent", "tokens", "viewer"}},
+			[]string{"agent", "live_call", "tokens", "viewer"}},
 		// `turn` is what made "everything that happened in this unit of
 		// work" askable at all (see migration 0015); `turns` is the list
 		// of them, which the dashboard used to fake by paging the raw
@@ -172,7 +172,7 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 			[]string{"page_reads", "seat_activity", "token_series", "viewer"}},
 		{"all of them", queries.Sources{
 			State: state, Events: fleetOf(db.Events()), Usage: db.Replicated(),
-		}, []string{"agent", "event", "event_series", "events", "page_reads",
+		}, []string{"agent", "event", "event_series", "events", "live_call", "page_reads",
 			"phases", "seat_activity", "token_series", "tokens", "trace", "turn", "turns", "viewer"}},
 	} {
 		if got := registryOver(t, c.sources).Names(); !slices.Equal(got, c.names) {
@@ -182,6 +182,72 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 }
 
 // --- the projection questions -------------------------------------------- //
+
+// A SEAT'S CALL IN FLIGHT IS ANSWERED WHOLE, by role or handle: every heavy
+// field an `agents` push may leave out, and the versions they are at — what a
+// tab that missed a push asks for. A seat with nothing in flight is null, not
+// an error.
+func TestLiveCallAnswersOneSeatsCallWhole(t *testing.T) {
+	t.Parallel()
+	state := livestate.New()
+	state.Apply(&livestate.Envelope{
+		ID: "e1", Type: "agent_turn_progress", Timestamp: "2026-06-14T12:00:00Z", Category: "task",
+		Payload: map[string]any{
+			"role": "Lead", "turn_id": "tn-1", "phase": "execute", "iteration": float64(0),
+			"round_num": float64(-1), "prompt": "fix the build",
+			"prompt_messages": []any{map[string]any{"role": "system", "content": "you are the lead"}},
+		},
+	})
+	r := registryOver(t, queries.Sources{State: state})
+
+	got := ask(t, r, "live_call", map[string]any{"role": "Lead"})
+	call, _ := got["live_call"].(*livestate.LiveCall)
+	if got["role"] != "Lead" || call == nil || call.Prompt != "fix the build" ||
+		len(call.PromptMessages) != 1 || call.Versions.Prompt != 1 {
+		t.Fatalf("answer = %+v; want the call whole, its prompt at version 1", got)
+	}
+	idle := ask(t, r, "live_call", map[string]any{"role": "Reviewer"})
+	if idle["live_call"] != nil {
+		t.Errorf("a seat with nothing in flight = %+v; want null", idle)
+	}
+	if _, err := r.Answer(t.Context(), "live_call", map[string]any{}, "operator"); !errors.Is(err, queries.ErrBadParams) {
+		t.Errorf("live_call with no seat = %v; want a bad-params refusal", err)
+	}
+}
+
+// THE ANSWER CARRIES THE SEAT'S CALL SEQUENCE, a null call included: it is what
+// the tab orders the answer by against the `agents` pushes for the same seat,
+// since the answer is computed on its own goroutine and can reach the tab after
+// a push generated later ([livestate.Overlay.LiveCallSeq]). An answer for a
+// cleared call that carried no sequence could not be told from one read before
+// the call it cleared began.
+//
+// Mutation: answer `live_call_seq` only beside a call, or not at all, and this
+// fails.
+func TestLiveCallAnswersAtTheSeatsCallSequence(t *testing.T) {
+	t.Parallel()
+	state := livestate.New()
+	call := map[string]any{"role": "Lead", "turn_id": "tn-1", "phase": "execute", "iteration": float64(0)}
+	state.Apply(&livestate.Envelope{
+		ID: "e1", Type: "agent_phase_started", Timestamp: "2026-06-14T12:00:00Z", Category: "task", Payload: call,
+	})
+	r := registryOver(t, queries.Sources{State: state})
+
+	running := ask(t, r, "live_call", map[string]any{"role": "Lead"})
+	seq := state.AgentOverlay("Lead").LiveCallSeq
+	if running["live_call"] == nil || seq == 0 || running["live_call_seq"] != seq {
+		t.Fatalf("answer = %+v; want the running call at the overlay's sequence %d", running, seq)
+	}
+
+	state.Apply(&livestate.Envelope{
+		ID: "e2", Type: "agent_phase_completed", Timestamp: "2026-06-14T12:00:05Z", Category: "task", Payload: call,
+	})
+	cleared := ask(t, r, "live_call", map[string]any{"role": "Lead"})
+	after := state.AgentOverlay("Lead").LiveCallSeq
+	if cleared["live_call"] != nil || after <= seq || cleared["live_call_seq"] != after {
+		t.Errorf("answer = %+v; want a null call at the clear's sequence %d, past %d", cleared, after, seq)
+	}
+}
 
 func TestAgentAnswersOneSeatsLiveState(t *testing.T) {
 	t.Parallel()
@@ -811,11 +877,10 @@ token_budget: {month: 10000}
 
 func TestBudgetsCarryTheRefusalTheCounterRecorded(t *testing.T) {
 	t.Parallel()
-	// "Exhausted" is a refusal, never used >= limit alone: a refused charge
-	// increments nothing, so a seat charged in rounds stalls short of its
-	// cap and never reads as full. The stamp is what says the gate is
-	// turning turns away, so the answer carries it on the window that
-	// refused and on no other, and the window's state says `refusing`.
+	// A refused round is COUNTED, so the window that refused it reads past
+	// its ceiling by that round, and the stamp says when the gate said no.
+	// The answer carries both on the window that refused and on no other,
+	// and the window's state says `refusing`.
 	cfg := parsed(t, `
 name: Acme
 providers:
@@ -856,10 +921,11 @@ token_budget: {day: 10000}
 	if _, err := time.Parse(time.RFC3339Nano, day.RefusedAt); err != nil {
 		t.Errorf("seat's day refused_at = %q, want the refusal's instant: %v", day.RefusedAt, err)
 	}
-	// 70 of 100 is below the near mark, and still refusing: the stamp, not
-	// the arithmetic, is the gate's word.
-	if day.Used != 70 || day.State != types.BudgetRefusing {
-		t.Errorf("seat's day = %+v, want the 70 that fit and refusing", day)
+	// 110 of 100: the 70 that fit and the 40 that were refused, all of it
+	// spent — which is what an operator is shown and what every later
+	// charge is refused against.
+	if day.Used != 110 || day.State != types.BudgetRefusing {
+		t.Errorf("seat's day = %+v, want the 70 that fit and the 40 refused, refusing", day)
 	}
 	if w := window(t, got.Seats[0].Windows, period.Week); w.RefusedAt != "" || w.State != types.BudgetOK {
 		t.Errorf("seat's week = %+v, want no refusal: nothing caps it", w)

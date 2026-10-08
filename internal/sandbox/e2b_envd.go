@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -12,6 +13,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/httpx"
@@ -79,6 +81,11 @@ type idleReader struct {
 	// once and ten minutes on every read after it.
 	idle   time.Duration
 	cancel context.CancelFunc
+
+	// fired is whether the countdown ran out — what tells an exchange the
+	// bound abandoned from one the caller's own context ended, which both
+	// surface as the same "context canceled".
+	fired atomic.Bool
 }
 
 // idleTimer is the countdown a reader arms and re-arms. *time.Timer satisfies
@@ -115,8 +122,21 @@ func newIdleReaderOn(
 	arm func(time.Duration, func()) idleTimer,
 ) *idleReader {
 	r := &idleReader{inner: body, idle: idle, cancel: cancel}
-	r.timer = arm(idle, cancel)
+	r.timer = arm(idle, func() {
+		r.fired.Store(true)
+		cancel()
+	})
 	return r
+}
+
+// silent names an error this reader's bound caused as exactly that, and leaves
+// every other error as it was: a bare "context canceled" reads as the caller's
+// own cancellation, which sends whoever reads it looking in the wrong place.
+func (r *idleReader) silent(err error) error {
+	if err != nil && r.fired.Load() {
+		return fmt.Errorf("envd moved no byte for %s, so the exchange was abandoned: %w", r.idle, err)
+	}
+	return err
 }
 
 func (r *idleReader) Read(p []byte) (int, error) {
@@ -151,6 +171,14 @@ func (r *idleReader) stop() {
 type envdClient struct {
 	host string
 	http *http.Client
+
+	// token is the box's envd access token ([e2bBox.EnvdAccessToken]),
+	// sent on every request.
+	token string
+
+	// fileIdle is [e2bFileIdleTimeout], held on the value so a test can
+	// watch a silent transfer abandoned without waiting a minute for it.
+	fileIdle time.Duration
 }
 
 // newEnvdClient derives envd's client from the caller's, keeping its
@@ -159,7 +187,7 @@ type envdClient struct {
 // The transport falls back to [httpx.Transport] rather than to nil, which
 // would be http.DefaultTransport and its two idle connections per host —
 // the one thing every other client here was moved off.
-func newEnvdClient(host string, from *http.Client) *envdClient {
+func newEnvdClient(host, token string, from *http.Client) *envdClient {
 	client := &http.Client{Transport: httpx.Transport()}
 	if from != nil {
 		if from.Transport != nil {
@@ -168,7 +196,7 @@ func newEnvdClient(host string, from *http.Client) *envdClient {
 		client.CheckRedirect = from.CheckRedirect
 		client.Jar = from.Jar
 	}
-	return &envdClient{host: host, http: client}
+	return &envdClient{host: host, http: client, token: token, fileIdle: e2bFileIdleTimeout}
 }
 
 // connectEnvelope is the five-byte prefix Connect puts before each streamed
@@ -264,7 +292,7 @@ func (c *envdClient) start(ctx context.Context, cmd string, opts ExecOptions, ba
 		req.Header.Set("Connect-Timeout-Ms",
 			strconv.FormatInt(int64(opts.TimeoutSec*1000), 10))
 	}
-	setEnvdUser(req)
+	c.authorize(req)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -277,9 +305,8 @@ func (c *envdClient) start(ctx context.Context, cmd string, opts ExecOptions, ba
 	// above, where a linter can see it belongs to this response.
 	defer stream.stop()
 	if resp.StatusCode >= 400 {
-		detail, _ := io.ReadAll(io.LimitReader(stream, 2048))
 		return e2bProcessResult{}, fmt.Errorf("e2b: start: %d: %s",
-			resp.StatusCode, strings.TrimSpace(string(detail)))
+			resp.StatusCode, httpx.ReadRefusalFrom(resp.Header.Get("Content-Type"), stream))
 	}
 	return foldStream(stream, background)
 }
@@ -359,58 +386,283 @@ func foldStream(r io.Reader, background bool) (e2bProcessResult, error) {
 // desynced length cannot exhaust the process.
 const maxEnvdFrame = 32 << 20
 
-// maxEnvdFile caps one file read back out of a box, and REFUSES past it.
+// e2bFileIdleTimeout bounds how long one file transfer may go with NO byte
+// moving in either direction before it is abandoned.
 //
-// Separate from maxEnvdFrame, which guards a desynced stream length: this
-// bounds a whole file read into engine memory, and the two answer different
-// questions even at the same number.
+// A file transfer had no bound at all: the in-box client carries no overall
+// deadline (see [envdClient]), and a /files call was the one envd exchange
+// with no idle reader either, so a box whose envd accepted the connection and
+// then said nothing held the caller for as long as the caller's context lived
+// — which for a collection or a live reading is as long as its delivery or
+// its viewer lasts. (The completion poll bounds each box's poll as a whole
+// besides, and polls no box behind another — see [MaxConcurrentPolls].)
 //
-// The refusal is the point. io.LimitReader stops at its cap and reports a
-// clean EOF, so a file of exactly the cap cannot be told from one that was
-// clipped there — and the files this reads are a run's report and its stderr,
-// which is precisely the content nothing downstream can sanity-check. A
-// silently halved report reads as a finished one.
-const maxEnvdFile = 32 << 20
+// MEASURED BETWEEN BYTES, not over the call, for the reason
+// [e2bStreamIdleTimeout] gives: a large read on a slow link legitimately takes
+// longer than any fixed bound. But a tenth of that bound, because unlike a
+// command, a file transfer has no legitimate reason to fall silent — envd
+// answers from a file that already exists. Sixty seconds is the control
+// plane's whole-request budget ([E2BClientTimeout]), which is the engine's
+// standing answer to "how long may E2B take to start answering".
+const e2bFileIdleTimeout = E2BClientTimeout
 
-// readFile fetches a file from the box.
+// fileExchange makes one /files request whose every byte, sent or received,
+// re-arms [e2bFileIdleTimeout] — the wait for the response's headers
+// included, which is silence like any other. A request with no body passes
+// nil.
+//
+// The caller owns both returns: it closes the response's body and stops the
+// reader, which also releases the request's context.
+func (c *envdClient) fileExchange(ctx context.Context, method, path string,
+	body []byte, header http.Header,
+) (*http.Response, *idleReader, error) {
+	reqCtx, cancel := context.WithCancel(ctx)
+	// ARMED NOW, before the request is sent, so a connection that is never
+	// answered is abandoned exactly as one that stops mid-body is.
+	idle := newIdleReader(nil, cancel, c.fileIdle)
+	var reader io.Reader
+	if body != nil {
+		reader = sendProgress{inner: bytes.NewReader(body), idle: idle}
+	}
+	req, err := http.NewRequestWithContext(reqCtx, method, c.host+"/files?"+filesQuery(path), reader)
+	if err != nil {
+		idle.stop()
+		return nil, nil, err
+	}
+	if body != nil {
+		// BOTH STATED, because the progress wrapper hides the buffer the
+		// request would have taken them from. Without the length a body
+		// goes out chunked — a different wire shape for a write that has
+		// always carried its length — and without GetBody the transport
+		// cannot send the body again: an HTTP/2 connection the server
+		// closes with GOAWAY before reading the request is retried on a
+		// fresh one only when the body can be had twice.
+		req.ContentLength = int64(len(body))
+		req.GetBody = func() (io.ReadCloser, error) {
+			return io.NopCloser(sendProgress{inner: bytes.NewReader(body), idle: idle}), nil
+		}
+	}
+	for key, values := range header {
+		req.Header[key] = values
+	}
+	c.authorize(req)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		idle.stop()
+		return nil, nil, idle.silent(err)
+	}
+	idle.inner = resp.Body
+	return resp, idle, nil
+}
+
+// sendProgress re-arms an exchange's idle bound for every byte of the request
+// body the transport takes, so a large upload is not abandoned while it is
+// still moving.
+type sendProgress struct {
+	inner io.Reader
+	idle  *idleReader
+}
+
+func (s sendProgress) Read(p []byte) (int, error) {
+	n, err := s.inner.Read(p)
+	if n > 0 {
+		s.idle.timer.Reset(s.idle.idle)
+	}
+	return n, err
+}
+
+// readFile fetches a file from the box, WHOLE — see [Sandbox.ReadFile].
 //
 // EMPTY ON MISSING, not an error: the detached runner polls for a done marker
 // and a result file that do not exist until the job finishes, so "not there
 // yet" is the ordinary answer on most calls.
 func (c *envdClient) readFile(ctx context.Context, path string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		c.host+"/files?"+filesQuery(path), nil)
-	if err != nil {
-		return nil, fmt.Errorf("e2b: read %s: %w", path, err)
-	}
-	setEnvdUser(req)
-
-	resp, err := c.http.Do(req)
+	resp, idle, err := c.fileExchange(ctx, http.MethodGet, path, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("e2b: read %s: %w", path, err)
 	}
 	defer resp.Body.Close()
+	defer idle.stop()
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, nil
 	}
 	if resp.StatusCode >= 400 {
-		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 		return nil, fmt.Errorf("e2b: read %s: %d: %s", path,
-			resp.StatusCode, strings.TrimSpace(string(detail)))
+			resp.StatusCode, httpx.ReadRefusal(resp))
 	}
-	// +1 so an overrun is visible; see maxEnvdFile.
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxEnvdFile+1))
+	raw, err := readCapped(idle, path)
 	if err != nil {
-		return nil, fmt.Errorf("e2b: read %s: %w", path, err)
-	}
-	if len(raw) > maxEnvdFile {
-		return nil, fmt.Errorf(
-			"e2b: %s is larger than the %d-byte cap this engine reads back from "+
-				"a box, so it was not read — the coding agent wrote more than a "+
-				"report, and a clipped one would be indistinguishable from a "+
-				"finished one", path, maxEnvdFile)
+		return nil, fmt.Errorf("e2b: read %s: %w", path, idle.silent(err))
 	}
 	return raw, nil
+}
+
+// openFile streams a file out of the box — see [Sandbox.OpenFile]. The body
+// IS the stream: envd serves the file as it is, and nothing here holds more
+// of it than the caller's own read asks for.
+func (c *envdClient) openFile(ctx context.Context, path string) (io.ReadCloser, error) {
+	resp, idle, err := c.fileExchange(ctx, http.MethodGet, path, nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("e2b: open %s: %w", path, err)
+	}
+	switch {
+	case resp.StatusCode == http.StatusNotFound:
+		idle.stop()
+		_ = resp.Body.Close()
+		return io.NopCloser(strings.NewReader("")), nil
+	case resp.StatusCode >= 400:
+		defer idle.stop()
+		defer resp.Body.Close()
+		return nil, fmt.Errorf("e2b: open %s: %d: %s", path,
+			resp.StatusCode, httpx.ReadRefusal(resp))
+	}
+	return &envdStream{body: resp.Body, idle: idle, path: path}, nil
+}
+
+// envdStream is an open file's body, read through its idle bound.
+type envdStream struct {
+	body io.ReadCloser
+	idle *idleReader
+	path string
+}
+
+func (s *envdStream) Read(p []byte) (int, error) {
+	n, err := s.idle.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) {
+		err = fmt.Errorf("e2b: read %s: %w", s.path, s.idle.silent(err))
+	}
+	return n, err
+}
+
+func (s *envdStream) Close() error {
+	s.idle.stop()
+	return s.body.Close()
+}
+
+// readTail reads the end of a file — see [Sandbox.ReadTail] — as an HTTP
+// SUFFIX RANGE (`Range: bytes=-n`).
+//
+// envd serves /files through Go's http.ServeContent, which answers a range
+// with 206 and the file's whole size in Content-Range; with Range set it also
+// serves identity rather than gzip, so the bytes are the file's own
+// (packages/envd/internal/api/download.go in e2b-dev/infra; ServeContent has
+// been its writer since file handling landed, and the gzip support added
+// beside it in February 2026 steps aside for any Range or conditional
+// request). A server that ignores the range and answers 200 with the whole
+// file is still answered correctly — its body is read through and only the
+// last n bytes are kept — so the read is bounded in memory whatever the
+// box's envd does, and only its cost differs.
+func (c *envdClient) readTail(ctx context.Context, path string, n int) (FileTail, error) {
+	want := max(n, 0)
+	// A suffix range of zero is unsatisfiable, so the smallest real one is
+	// asked for and dropped: what such a caller wants is the size.
+	header := http.Header{"Range": {fmt.Sprintf("bytes=-%d", max(want, 1))}}
+	resp, idle, err := c.fileExchange(ctx, http.MethodGet, path, nil, header)
+	if err != nil {
+		return FileTail{}, fmt.Errorf("e2b: read the end of %s: %w", path, err)
+	}
+	defer resp.Body.Close()
+	defer idle.stop()
+
+	var tail FileTail
+	switch {
+	case resp.StatusCode == http.StatusNotFound:
+		return FileTail{}, nil
+	case resp.StatusCode == http.StatusRequestedRangeNotSatisfiable:
+		// Unsatisfiable only because the file is empty: Content-Range then
+		// reads `bytes */0`.
+		_, total, _ := parseContentRange(resp.Header.Get("Content-Range"))
+		return FileTail{Size: max(total, 0)}, nil
+	case resp.StatusCode == http.StatusPartialContent:
+		start, total, ok := parseContentRange(resp.Header.Get("Content-Range"))
+		data, readErr := io.ReadAll(io.LimitReader(idle, int64(max(want, 1))))
+		if readErr != nil {
+			return FileTail{}, fmt.Errorf("e2b: read the end of %s: %w",
+				path, idle.silent(readErr))
+		}
+		if !ok || total < 0 {
+			total = start + int64(len(data))
+		}
+		tail = FileTail{Data: data, Size: max(total, start+int64(len(data)))}
+	case resp.StatusCode >= 400:
+		return FileTail{}, fmt.Errorf("e2b: read the end of %s: %d: %s", path,
+			resp.StatusCode, httpx.ReadRefusal(resp))
+	default:
+		data, total, readErr := keepLast(idle, max(want, 1))
+		if readErr != nil {
+			return FileTail{}, fmt.Errorf("e2b: read the end of %s: %w",
+				path, idle.silent(readErr))
+		}
+		tail = FileTail{Data: data, Size: total}
+	}
+	if len(tail.Data) > want {
+		tail.Data = tail.Data[len(tail.Data)-want:]
+	}
+	return tail, nil
+}
+
+// parseContentRange reads `bytes <start>-<end>/<total>` (or `bytes */<total>`):
+// where the served range starts and the file's whole size, with ok false for
+// a header that is absent or says neither. A total of `*` is unknown, answered
+// as -1.
+func parseContentRange(header string) (start, total int64, ok bool) {
+	spec, found := strings.CutPrefix(strings.TrimSpace(header), "bytes ")
+	if !found {
+		return 0, -1, false
+	}
+	served, size, found := strings.Cut(spec, "/")
+	if !found {
+		return 0, -1, false
+	}
+	total = -1
+	if size != "*" {
+		parsed, err := strconv.ParseInt(size, 10, 64)
+		if err != nil {
+			return 0, -1, false
+		}
+		total = parsed
+	}
+	if served == "*" {
+		return 0, total, true
+	}
+	from, _, found := strings.Cut(served, "-")
+	if !found {
+		return 0, total, false
+	}
+	start, err := strconv.ParseInt(from, 10, 64)
+	if err != nil {
+		return 0, total, false
+	}
+	return start, total, true
+}
+
+// keepLast reads r to its end keeping only its last n bytes, and how many it
+// read in all — the end of a stream in memory bounded by n, whatever its
+// length.
+func keepLast(r io.Reader, n int) ([]byte, int64, error) {
+	buf := make([]byte, 0, 2*n)
+	chunk := make([]byte, 32<<10)
+	var total int64
+	for {
+		got, err := r.Read(chunk)
+		total += int64(got)
+		buf = append(buf, chunk[:got]...)
+		if len(buf) > 2*n {
+			// Slid down only once the buffer has doubled, so the copy is
+			// paid once per n bytes read rather than once per chunk.
+			buf = append(buf[:0], buf[len(buf)-n:]...)
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, total, err
+		}
+	}
+	if len(buf) > n {
+		buf = buf[len(buf)-n:]
+	}
+	return buf, total, nil
 }
 
 // writeFile puts a file into the box.
@@ -431,25 +683,18 @@ func (c *envdClient) writeFile(ctx context.Context, path string, content []byte)
 		return fmt.Errorf("e2b: write %s: %w", path, closeErr)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		c.host+"/files?"+filesQuery(path), &body)
-	if err != nil {
-		return fmt.Errorf("e2b: write %s: %w", path, err)
-	}
-	req.Header.Set("Content-Type", form.FormDataContentType())
-	setEnvdUser(req)
-
-	resp, err := c.http.Do(req)
+	header := http.Header{"Content-Type": {form.FormDataContentType()}}
+	resp, idle, err := c.fileExchange(ctx, http.MethodPost, path, body.Bytes(), header)
 	if err != nil {
 		return fmt.Errorf("e2b: write %s: %w", path, err)
 	}
 	defer resp.Body.Close()
+	defer idle.stop()
 	if resp.StatusCode >= 400 {
-		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 		return fmt.Errorf("e2b: write %s: %d: %s", path,
-			resp.StatusCode, strings.TrimSpace(string(detail)))
+			resp.StatusCode, httpx.ReadRefusal(resp))
 	}
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+	_, _ = io.Copy(io.Discard, io.LimitReader(idle, 1<<20))
 	return nil
 }
 
@@ -458,12 +703,19 @@ func filesQuery(path string) string {
 	return url.Values{"path": {path}, "username": {e2bEnvdUser}}.Encode()
 }
 
-// setEnvdUser names the account a call acts as.
-func setEnvdUser(req *http.Request) {
+// authorize names the account a call acts as and presents the box's access
+// token — the two headers EVERY envd request carries, which is why each one
+// is built through here.
+func (c *envdClient) authorize(req *http.Request) {
 	// Sent as a header AND as the query parameter above, because envd has
 	// read it from both across versions and a mismatch between the box's
 	// envd and this build shows up as a permission error naming no user.
 	req.Header.Set("X-User", e2bEnvdUser)
+	// envd's own header for the token (packages/envd/internal/api/auth.go
+	// in e2b-dev/infra). A secured box refuses a process call without it
+	// and a file call without it or a signature; a header is the form both
+	// accept, and the one E2B's SDKs send.
+	req.Header.Set("X-Access-Token", c.token)
 }
 
 // baseName is the last path element, without importing path/filepath for a

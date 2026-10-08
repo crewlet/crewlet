@@ -58,7 +58,7 @@ export interface SeatCondition {
   row: AgentRow;
   /** The window that is spent: the seat's own, or the company's. */
   window: BudgetWindow | undefined;
-  /** When it last turned a charge away, where the gate recorded it. */
+  /** When it last turned a call away, where the gate recorded it. */
   at?: string;
 }
 
@@ -88,7 +88,7 @@ export function decisionsHref(): string {
 /**
  * The seats the engine stopped for a spent budget, each with the window that
  * is spent — the seat's own where it names one, else the company's the gate
- * refused on — and when the gate last turned a charge away.
+ * refused on — and when the gate last turned a call away.
  */
 export function seatConditionsOf(agents: readonly AgentRow[]): SeatCondition[] {
   const out: SeatCondition[] = [];

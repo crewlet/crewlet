@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/store"
@@ -85,4 +86,18 @@ func memoStore(t *testing.T, log string, seed byte) (*store.DB, IndexHead) {
 		t.Fatal(err)
 	}
 	return db, h
+}
+
+// A STORED EXCERPT SAYS WHERE IT WAS CUT, so a snippet whose window reaches
+// its end does not end as though the document did.
+func TestAStoredExcerptIsMarkedWhereItWasCut(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("word ", 400)
+	got := excerptOf(long)
+	if len(got) > excerptLimit || !strings.HasSuffix(got, "…") {
+		t.Fatalf("a cut excerpt is %d bytes ending %q", len(got), got[max(0, len(got)-6):])
+	}
+	if short := excerptOf("a short page"); short != "a short page" {
+		t.Errorf("a short body was altered: %q", short)
+	}
 }

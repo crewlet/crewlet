@@ -337,7 +337,7 @@ func (b answerBudget) live(now time.Time, window time.Duration) bool {
 //
 // THE RUN'S OWN AWAITING WINDOW, because that is the tolerance the run itself
 // declares: pause_ttl_seconds is how long the engine holds a box paused for
-// the person to reply, the same number [Waiter.reapExpiredPauses] enforces on
+// the person to reply, the same number [Waiter.reapOne] enforces on
 // it. A seat whose role sets a short one has said a reply is worth little
 // after it, and bouncing that reply around the inbox for longer than the
 // engine was willing to wait for it costs the person an answer on a failure

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
@@ -172,17 +173,33 @@ func registeredQueries() map[string]map[string]any {
 // index nobody has checked: the duty's statement is as much a reader as a
 // board's, and the planner is the only thing that knows whether it reaches
 // what its comment names.
+//
+// AND THEY ARE THE STATEMENTS THE DUTY RUNS, never a copy written here. The
+// embed duty's entry used to be one — `embed_rev < ? ORDER BY embed_rev`, over
+// a column the applier only ever wrote a zero into — and it kept an index on
+// that column certified for a selection nothing ran, while the selection the
+// duty does run was certified by nothing. The search package exports its own.
 func dutyReads() map[string]struct {
 	sql  string
 	args []any
 } {
+	read := func(sql string, args []any) struct {
+		sql  string
+		args []any
+	} {
+		return struct {
+			sql  string
+			args []any
+		}{sql, args}
+	}
 	return map[string]struct {
 		sql  string
 		args []any
 	}{
-		"the embed duty's selection": {
-			`SELECT id FROM tracker_tasks WHERE removed_at IS NULL
-			 AND embed_rev < ? ORDER BY embed_rev LIMIT 64`, []any{5}},
+		"the embed duty's selection":    read(search.TaskSelection("m", 8, 1024)),
+		"the embed duty's opening read": read(search.TaskOpeningRead("t-00001")),
+		"the embed duty's withdrawals":  read(search.TaskWithdrawals(1024)),
+		"the embed duty's coverage":     read(search.TaskCoverageCount("m", 8)),
 		"the re-spread walk": {
 			`SELECT id, rank FROM tracker_tasks
 			 WHERE project_key = ? AND length(rank) > 64

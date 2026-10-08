@@ -44,8 +44,9 @@ import (
 // counts (at most a few thousand rows) and one count of the embedding space
 // over kb_vectors' model index, then runs one indexed anti-join that returns
 // no rows, and stops there — no provider call, no publish. A tick with a
-// backlog spends at most [search.EmbedBatchesPerTick] round trips, which is
-// what bounds the provider bill per minute.
+// backlog embeds at most [search.EmbedSourcesPerTick] sources in at most
+// [search.EmbedRequestsPerTick] requests, which is what bounds the provider
+// bill per minute.
 //
 // # The one tick that is long, and how it keeps its lease
 //
@@ -87,12 +88,13 @@ const embedDutyTTL = 3 * search.EmbedInterval
 // embedTickBudget is how long one tick may go without showing progress
 // before it is cut off, the lease renewed or not ([tickBound]).
 //
-// FIVE MINUTES, several times the longest stretch a LIVE tick goes without
+// FIVE MINUTES, more than the longest stretch a LIVE tick goes without
 // showing any. A tick shows progress at every step that has a natural end: a
-// provider call answered — bounded by the provider's own timeout (15 s by
-// default, with no retries) — each vector it publishes or withdraws, which is
-// one publish (up to 128 a batch, and 1 024 withdrawals a corpus after a bulk
-// purge, so reported one by one rather than as a stretch), a batch of the
+// provider request answered — each sent through a call of its own and bounded
+// by its own ceiling ([embeddings.BatchTimeout], a minute, with no retries) —
+// each vector it publishes or withdraws, which is one publish (up to 128 a
+// request, and 1 024 withdrawals a corpus after a bulk purge, so reported one
+// by one rather than as a stretch), a batch of the
 // index's rollout published, every 1 024 rows the training's reading and
 // its exact pass stream, which on the slowest node measured, one core shared
 // with two searchers, are a third of a second apart (BenchmarkIndexTraining
@@ -128,6 +130,15 @@ type embedDuty struct {
 	// budget is how long a tick may go without progress: [embedTickBudget],
 	// and a test's shorter one.
 	budget time.Duration
+
+	// refusals is what the provider has refused alone, kept ACROSS ticks —
+	// the search package's duty is rebuilt every tick — and refusalsFor the
+	// configuration it belongs to ([embedConfiguration]). A refusal is a
+	// fact about the provider as it was configured, so a provider configured
+	// otherwise starts with none ([search.Refusals]); one an apply merely
+	// built again the same keeps it. Touched only by the loop's own ticks.
+	refusals    *search.Refusals
+	refusalsFor embedConfiguration
 
 	stop context.CancelFunc
 	done chan struct{}
@@ -322,6 +333,12 @@ func (d *embedDuty) tick(ctx context.Context) tickReport {
 	if !configured {
 		return report
 	}
+	// THE MEMORY FOLLOWS THE CONFIGURATION, read off the very provider this
+	// tick embeds with, so no apply landing between two reads can pair one
+	// provider's refusals with another's.
+	if configuration := configurationOf(provider); d.refusals == nil || d.refusalsFor != configuration {
+		d.refusals, d.refusalsFor = search.NewRefusals(), configuration
+	}
 	tick, bound, release := boundTick(ctx, d.budget)
 	defer release()
 	duty, err := search.NewEmbedder(search.EmbedDeps{
@@ -334,6 +351,7 @@ func (d *embedDuty) tick(ctx context.Context) tickReport {
 		Embedder: provider,
 		Model:    model,
 		Corpora:  d.corpora,
+		Refusals: d.refusals,
 		// THE TICK'S OWN BOUND, which the duty's steps show their
 		// progress to: see [tickBound].
 		Budget: bound,

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -198,22 +199,23 @@ func TestTheStartedEventNamesTheJobItAnnounces(t *testing.T) {
 	}
 }
 
-// The full brief lives on the row; the wire carries a label for one panel row.
-func TestTheStartedEventCarriesALabelNotTheWholeBrief(t *testing.T) {
+// The full brief lives on the row; the wire carries its first line as the
+// run's label — WHOLE, because a row too narrow for it is the renderer's to
+// elide, and a label cut to a width put half a sentence on the run's page as
+// its title.
+func TestTheStartedEventCarriesTheBriefsFirstLineWhole(t *testing.T) {
 	rig := newWaiterRig(t)
 	req := launchReq("t1")
-	req.Brief = strings.Repeat("a very long brief. ", 40)
+	first := strings.TrimSpace(strings.Repeat("a very long brief. ", 40))
+	req.Brief = first + "\nThe goal it serves: the release.\n"
 	if _, err := rig.launchVia(t.Context(), rig.manager, req); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
 	rig.queue.mu.Lock()
 	defer rig.queue.mu.Unlock()
 	payload := rig.queue.published[0].event.Data.(*types.SandboxRunStarted)
-	if len(payload.Task) > briefSummaryLimit+4 {
-		t.Fatalf("the started event carries %d characters of brief", len(payload.Task))
-	}
-	if !strings.HasSuffix(payload.Task, "…") {
-		t.Fatalf("a truncated label does not say it was cut: %q", payload.Task)
+	if payload.Task != first {
+		t.Fatalf("the started event's label is %q, want the brief's first line whole", payload.Task)
 	}
 }
 
@@ -356,6 +358,64 @@ func TestTheRowExistsBeforeTheBoxDoes(t *testing.T) {
 	if !witness.found {
 		t.Fatal("the box was created before the run's row existed: a crash there leaves a box nothing names")
 	}
+}
+
+// THE JOB IS NAMED BEFORE ITS BOX EXISTS. An agent-mode run's bridge session
+// files every call the box makes under the name a launch hands it, so the name
+// has to reach it before the box can make one — and it has to be the name the
+// row holds, which is the one the store minted. Learned later, from the row,
+// a call that outlived its job would learn whichever job the row held by then.
+//
+// Mutation: call Opened after the box is created, or hand it anything but the
+// store's answer, and this goes red.
+func TestALaunchNamesItsJobBeforeItsBoxExists(t *testing.T) {
+	rig := newWaiterRig(t)
+	witness := &openedWitness{FakeProvider: rig.provider}
+	manager, err := NewManager(ManagerOptions{
+		Providers: map[Placement]Provider{Direct: witness},
+		Runners:   map[string]Runner{"claude-code": rig.runner},
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	req := launchReq("t1")
+	req.Opened = func(launch string) {
+		witness.mu.Lock()
+		defer witness.mu.Unlock()
+		witness.named = append(witness.named, launch)
+	}
+	if _, err := rig.launchVia(t.Context(), manager, req); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	witness.mu.Lock()
+	defer witness.mu.Unlock()
+	if !witness.created {
+		t.Fatal("the launch never created a box, so the ordering was not observed")
+	}
+	if witness.namedAtCreate != 1 {
+		t.Fatalf("the box was created after %d namings, want 1 — the job must be named first",
+			witness.namedAtCreate)
+	}
+	if run := rig.get("t1"); len(witness.named) != 1 || witness.named[0] != run.LaunchID {
+		t.Fatalf("the launch named %v, and the row holds job %q", witness.named, run.LaunchID)
+	}
+}
+
+// openedWitness is a provider that counts, at the moment it is asked for a
+// box, how many times the launch has named its job.
+type openedWitness struct {
+	*FakeProvider
+	mu            sync.Mutex
+	named         []string
+	created       bool
+	namedAtCreate int
+}
+
+func (w *openedWitness) Create(ctx context.Context, spec Spec) (Sandbox, error) {
+	w.mu.Lock()
+	w.created, w.namedAtCreate = true, len(w.named)
+	w.mu.Unlock()
+	return w.FakeProvider.Create(ctx, spec)
 }
 
 // rowWitness is a provider that looks for the run's row at the moment it is

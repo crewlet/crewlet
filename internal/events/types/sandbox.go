@@ -122,9 +122,12 @@ func (e SandboxRunCompleted) SummaryFor(actor string) string {
 // person a question.
 //
 // The sandbox never posts anything itself: it signals through its ask tool, the
-// runner surfaces the question and audience, and the engine posts it on the
-// audited per-role surface. This event records that routing; the agent goes
-// free while it waits, so nothing else marks the pause.
+// runner surfaces the question and audience, and the engine announces it with
+// this event and resolves the audience into the people it is put to, on the
+// run's record. That is how it reaches them — a row in each one's decisions
+// on the dashboard and on the sandbox-runs board — and NOTHING POSTS IT TO A
+// CHAT SURFACE. The agent goes free while it waits, so nothing else marks the
+// pause.
 //
 // Audience is "requester", "team", "manager" or a handle — an open set, since a
 // named colleague is a legitimate audience.
@@ -153,8 +156,8 @@ func (SandboxClarificationRequested) EventType() string {
 	return "sandbox_clarification_requested"
 }
 
-// Role is the seat the question is posted as — the sandbox never speaks in its
-// own name.
+// Role is the seat whose run asked, and whom the question is attributed to —
+// the sandbox never speaks in its own name.
 func (e SandboxClarificationRequested) Role() string { return e.RoleName }
 
 // AgentID is the instance whose run asked.

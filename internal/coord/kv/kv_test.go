@@ -788,7 +788,6 @@ func TestAnAdmittedChargeLeavesANewerRefusalStanding(t *testing.T) {
 	store := openFleet(t, embeddedNATS(t))
 	ctx := t.Context()
 	w := testWindows()
-	day := []period.Period{period.Day}
 	stamp := func() coord.Tally {
 		t.Helper()
 		tally, err := store.tally(ctx, coord.OrgScope, w)
@@ -797,17 +796,22 @@ func TestAnAdmittedChargeLeavesANewerRefusalStanding(t *testing.T) {
 		}
 		return tally
 	}
-
-	if err := store.stampRefusal(ctx, coord.OrgScope, day, coord.Tally{}.Roll(w), w); err != nil {
-		t.Fatalf("stampRefusal: %v", err)
+	refuse := func() {
+		t.Helper()
+		got, err := store.Charge(ctx, coord.ChargeRequest{
+			Seat: coord.AgentScope("x"), Tokens: 10, Windows: w, OrgCaps: coord.Caps{period.Day: 5},
+		})
+		if err != nil || got.OK {
+			t.Fatalf("Charge = (%+v, %v), want the company refusing", got, err)
+		}
 	}
+
+	refuse()
 	seen := stamp()
 	// A distinct instant, so the two stamps cannot compare equal by
 	// landing in the same clock tick.
 	time.Sleep(2 * time.Millisecond)
-	if err := store.stampRefusal(ctx, coord.OrgScope, day, seen, w); err != nil {
-		t.Fatalf("stampRefusal: %v", err)
-	}
+	refuse()
 	newer := stamp()
 	if !newer.Slots[0].RefusedAt.After(seen.Slots[0].RefusedAt) {
 		t.Fatalf("setup: the second stamp %v is not after the first %v",
@@ -835,9 +839,15 @@ func testWindows() coord.Windows {
 // orgSpent is the org's day, week and month spend at testWindows.
 func orgSpent(t *testing.T, store *FleetStore) [3]int {
 	t.Helper()
-	u, err := store.Used(t.Context(), coord.OrgScope, testWindows())
+	return spentBy(t, store, coord.OrgScope)
+}
+
+// spentBy is one scope's day, week and month spend at testWindows.
+func spentBy(t *testing.T, store *FleetStore, scope string) [3]int {
+	t.Helper()
+	u, err := store.Used(t.Context(), scope, testWindows())
 	if err != nil {
-		t.Fatalf("Used: %v", err)
+		t.Fatalf("Used(%s): %v", scope, err)
 	}
 	return [3]int{u.Windows[0].Used, u.Windows[1].Used, u.Windows[2].Used}
 }
@@ -868,92 +878,151 @@ func TestAnUnreachableCounterIsAnErrorNeverARefusal(t *testing.T) {
 	}
 }
 
-// A CHARGE WHOSE CALLER HANGS UP STILL UNWINDS THE COMPANY'S HALF.
+// A CHARGE WHOSE SEAT WRITE FAILS KEEPS THE ROUND ON THE COMPANY.
 //
-// The org is written before the seat, and a seat write that fails is undone by
-// taking the org's tokens back off. The failure being undone is often the
-// caller's own cancellation, and an unwind that inherited that dead context
-// failed with it: the company was billed for a round that never ran, and kept
-// refusing early until its windows turned over.
-func TestACancelledChargeStillUnwindsTheOrg(t *testing.T) {
-	store := openFleet(t, embeddedNATS(t))
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	store.budgets = hangUpAfterWriting{
-		KeyValue: store.budgets, key: encodeKey(coord.OrgScope), hangUp: cancel,
-	}
-
-	if got, err := store.Charge(ctx, coord.ChargeRequest{
-		Seat: "agent:x", Tokens: 10, Windows: testWindows(),
-		OrgCaps: coord.Caps{period.Day: 100}, SeatCaps: coord.Caps{period.Day: 100},
-	}); err == nil {
-		t.Fatalf("Charge = %+v, want the seat's write to fail on the cancelled context", got)
-	}
-	if used := orgSpent(t, store); used != [3]int{} {
-		t.Errorf("org day/week/month = %v after a charge that failed, want nothing: "+
-			"the unwind ran on the cancelled context and left the company billed", used)
-	}
-}
-
-// A POST-CHARGE IS ALL OR NOTHING, exactly as a charge is.
-//
-// Two keys and no transaction, so the property is built rather than given: the
-// org is written first and taken back when the seat's write fails. Without the
-// compensation a collected coding run whose second write failed would leave the
-// company billed for tokens the seat's own counter never saw, and the caller —
-// which retries — would bill the org again.
-func TestAPostChargeThatCannotFinishRecordsNeitherScope(t *testing.T) {
+// The company is written before the seat, and the round was billed before
+// either: a charge is handed tokens a model call has already spent. So when
+// the seat's write fails after the company's landed, the company's record of
+// the round is true and stays — the answer is an error, naming the partial,
+// and the round stops as an outage. The compensation this replaced took the
+// company's half back, and since nothing that charges asks again, the billed
+// round then sat on neither counter and the next round was admitted against
+// room it had used.
+func TestAChargeWhoseSeatWriteFailsKeepsTheRoundOnTheCompany(t *testing.T) {
 	store := openFleet(t, embeddedNATS(t))
 	seat := coord.AgentScope("x")
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	store.budgets = hangUpAfterWriting{
-		KeyValue: store.budgets, key: encodeKey(coord.OrgScope), hangUp: cancel,
-	}
+	store.budgets = failWriting{KeyValue: store.budgets, key: encodeKey(seat)}
 
-	if got, err := store.PostCharge(ctx, seat, 10, testWindows()); err == nil {
-		t.Fatalf("PostCharge = %+v, want the seat's write to fail on the cancelled context", got)
+	got, err := store.Charge(t.Context(), coord.ChargeRequest{
+		Seat: seat, Tokens: 10, Windows: testWindows(),
+		OrgCaps: coord.Caps{period.Day: 100}, SeatCaps: coord.Caps{period.Day: 100},
+	})
+	var partial *coord.SeatUncountedError
+	if !errors.As(err, &partial) || partial.Seat != seat || partial.Tokens != 10 {
+		t.Fatalf("Charge = (%+v, %v), want an error naming the 10 tokens the seat "+
+			"%s is missing", got, err, seat)
 	}
-	if used := orgSpent(t, store); used != [3]int{} {
-		t.Errorf("org day/week/month = %v after a post-charge that failed, want "+
-			"nothing: the unwind ran on the cancelled context and left the company "+
-			"billed for a run its seat never recorded", used)
+	if got.OK || got.RefusedScope != "" {
+		t.Fatalf("Charge = %+v: a failed write reported as a decision", got)
+	}
+	if used := orgSpent(t, store); used != [3]int{10, 10, 10} {
+		t.Errorf("org day/week/month = %v, want the 10 the round was billed in every "+
+			"window: the company's record of a spent round was taken back", used)
+	}
+	if used := spentBy(t, store, seat); used != [3]int{0, 0, 0} {
+		t.Errorf("the seat's day/week/month = %v, want nothing: the fault did not stop "+
+			"its write", used)
 	}
 }
 
-// AN UNWIND TAKES A CHARGE BACK FROM THE WINDOW IT WAS COUNTED IN.
+// THE SEAT'S HALF OUTLIVES A CALLER WHO HANGS UP AFTER THE COMPANY'S.
 //
-// The seat's write can fail after midnight has passed and a peer has rolled
-// the org's day. What the refused round spent belongs to the day that is over;
-// taking it off the new day would hand that day credit, and a floor at zero
-// would hide it only until the day's first real charge.
-func TestAnUnwindLeavesAWindowThatHasRolledOnAlone(t *testing.T) {
+// The company is written first, and from the moment its write lands the round
+// is half recorded. The caller's context dying between the two writes is
+// ordinary — a turn cancelled, a node draining — and the round was spent
+// whatever the caller does next. Left on that context the seat's write failed
+// with it, and the seat's own ceiling judged a round less than it had spent
+// for the rest of the window, only because somebody stopped listening. So
+// every way a charge or a post-charge reaches the seat after the company's
+// write lands finishes on a context of its own, and answers what it decided:
+// a refusal by either scope, an admission, or the post-charge's record.
+func TestTheSeatsHalfOutlivesACallerWhoHangsUp(t *testing.T) {
+	seat := coord.AgentScope("x")
+	charge := func(orgCap, seatCap int) func(context.Context, *FleetStore) (coord.Spend, error) {
+		return func(ctx context.Context, store *FleetStore) (coord.Spend, error) {
+			return store.Charge(ctx, coord.ChargeRequest{
+				Seat: seat, Tokens: 10, Windows: testWindows(),
+				OrgCaps:  coord.Caps{period.Day: orgCap},
+				SeatCaps: coord.Caps{period.Day: seatCap},
+			})
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		call func(context.Context, *FleetStore) (coord.Spend, error)
+		want func(coord.Spend) bool
+	}{
+		{"a charge the company refuses", charge(5, 100), func(got coord.Spend) bool {
+			return !got.OK && got.RefusedScope == "org" && got.RefusedUsed == 10
+		}},
+		{"a charge the seat refuses", charge(100, 5), func(got coord.Spend) bool {
+			return !got.OK && got.RefusedScope == "agent" && got.RefusedUsed == 10
+		}},
+		{"a charge both admit", charge(100, 100), func(got coord.Spend) bool {
+			return got.OK && got.Agent.In(period.Day).Used == 10
+		}},
+		{"a post-charge", func(ctx context.Context, store *FleetStore) (coord.Spend, error) {
+			return store.PostCharge(ctx, seat, 10, testWindows())
+		}, func(got coord.Spend) bool {
+			return got.OK && got.Agent.In(period.Day).Used == 10
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := openFleet(t, embeddedNATS(t))
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			store.budgets = hangUpAfterWriting{
+				KeyValue: store.budgets, key: encodeKey(coord.OrgScope), hangUp: cancel,
+			}
+
+			got, err := tc.call(ctx, store)
+			if err != nil || !tc.want(got) {
+				t.Fatalf("answer = (%+v, %v), want what the counters decided: a caller "+
+					"hanging up after the company's write is not an outage", got, err)
+			}
+			if ctx.Err() == nil {
+				t.Fatal("the caller never hung up: the fault was not injected")
+			}
+			for _, scope := range []string{coord.OrgScope, seat} {
+				if used := spentBy(t, store, scope); used != [3]int{10, 10, 10} {
+					t.Errorf("%s day/week/month = %v, want the 10 the round spent in "+
+						"every window: its write ran on the caller's cancelled context",
+						scope, used)
+				}
+			}
+		})
+	}
+}
+
+// A POST-CHARGE WHOSE SEAT WRITE FAILS KEEPS ITS SPEND ON THE COMPANY, AND THE
+// SEAT'S HALF CAN BE FINISHED ALONE.
+//
+// The spend already happened (a collected coding run, an auxiliary call), so
+// the company's record of it is true when its write lands and the seat's then
+// fails. The compensation this replaced took it back so a caller that retried
+// would not count the company twice — but an auxiliary call is never offered
+// again, and a coding run only when its resume fails, so in the common case
+// the company lost the spend for good. Kept, the partial is named, and the one
+// caller that does offer the spend again finishes the seat's half alone.
+func TestAPostChargeWhoseSeatWriteFailsKeepsTheCompanysHalf(t *testing.T) {
 	store := openFleet(t, embeddedNATS(t))
-	ctx := t.Context()
-	today := testWindows()
-	tomorrow := coord.WindowsAt(today[0].End, time.UTC)
+	seat := coord.AgentScope("x")
+	healthy := store.budgets
+	store.budgets = failWriting{KeyValue: healthy, key: encodeKey(seat)}
 
-	charged, fits, err := store.bump(ctx, coord.OrgScope, 40, today, nil)
-	if err != nil || !fits {
-		t.Fatalf("bump = (%v, %v)", fits, err)
+	got, err := store.PostCharge(t.Context(), seat, 10, testWindows())
+	var partial *coord.SeatUncountedError
+	if !errors.As(err, &partial) || partial.Seat != seat || partial.Tokens != 10 {
+		t.Fatalf("PostCharge = (%+v, %v), want an error naming the 10 tokens the seat "+
+			"%s is missing", got, err, seat)
 	}
-	// A peer's charge crosses midnight before the unwind lands.
-	if _, _, err := store.bump(ctx, coord.OrgScope, 25, tomorrow, nil); err != nil {
-		t.Fatalf("bump tomorrow: %v", err)
+	if used := orgSpent(t, store); used != [3]int{10, 10, 10} {
+		t.Errorf("org day/week/month = %v after the seat's write failed, want the 10 "+
+			"the company was billed: its half was taken back", used)
 	}
-	store.unwindOrg(ctx, 40, charged)
 
-	u, err := store.Used(ctx, coord.OrgScope, tomorrow)
+	// The seat's half, finished alone: the company is not counted twice.
+	store.budgets = healthy
+	u, err := store.PostChargeSeat(t.Context(), seat, partial.Tokens, testWindows())
 	if err != nil {
-		t.Fatalf("Used: %v", err)
+		t.Fatalf("PostChargeSeat: %v", err)
 	}
-	if got := u.Windows[0].Used; got != 25 {
-		t.Errorf("tomorrow's day = %d, want the 25 charged in it: the unwind took "+
-			"yesterday's round off a window it was never counted in", got)
+	if day := u.Windows[0].Used; day != 10 {
+		t.Errorf("the seat's day = %d after its half was finished, want 10", day)
 	}
-	// The week and the month did not roll, so the round comes off them.
-	if got := u.Windows[2].Used; got != 25 {
-		t.Errorf("the month = %d, want 25: the unwound round is still counted", got)
+	if used := orgSpent(t, store); used != [3]int{10, 10, 10} {
+		t.Errorf("org day/week/month = %v after the seat's half was finished, want "+
+			"still 10: finishing the seat counted the company again", used)
 	}
 }
 
@@ -968,21 +1037,28 @@ func TestACancelledChargeStillClearsTheRefusalItAdmittedPast(t *testing.T) {
 	store := openFleet(t, embeddedNATS(t))
 	seat := coord.AgentScope("x")
 	w := testWindows()
-	day := []period.Period{period.Day}
-	for _, scope := range []string{coord.OrgScope, seat} {
-		if err := store.stampRefusal(t.Context(), scope, day, coord.Tally{}.Roll(w), w); err != nil {
-			t.Fatalf("stampRefusal(%s): %v", scope, err)
+	// A refusal on each scope, at ceilings of 5: the company's, then the
+	// seat's while the company's ceiling has room.
+	for _, caps := range []struct{ org, seat coord.Caps }{
+		{coord.Caps{period.Day: 5}, nil},
+		{coord.Caps{period.Day: 100}, coord.Caps{period.Day: 5}},
+	} {
+		if got, err := store.Charge(t.Context(), coord.ChargeRequest{
+			Seat: seat, Tokens: 10, Windows: w, OrgCaps: caps.org, SeatCaps: caps.seat,
+		}); err != nil || got.OK {
+			t.Fatalf("setup Charge = (%+v, %v), want a refusal", got, err)
 		}
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	// The SEAT's write is the last one before the clears, so a hang-up
-	// there leaves both counters written and both clears to make.
+	// The SEAT's write is the last one before the company's clear, so a
+	// hang-up there leaves both counters written and the clear to make.
 	store.budgets = hangUpAfterWriting{
 		KeyValue: store.budgets, key: encodeKey(seat), hangUp: cancel,
 	}
 
+	// The ceilings raised, which is what gives a refusing scope room again.
 	if got, err := store.Charge(ctx, coord.ChargeRequest{
 		Seat: seat, Tokens: 10, Windows: w,
 		OrgCaps: coord.Caps{period.Day: 100}, SeatCaps: coord.Caps{period.Day: 100},
@@ -1106,4 +1182,29 @@ func (k hangUpAfterWriting) Update(ctx context.Context, key string, value []byte
 		k.hangUp()
 	}
 	return rev, err
+}
+
+// failWriting is a counter bucket whose broker refuses every write to one key,
+// with an error that is not a lost race — so the write fails once rather than
+// being retried, the way a broker that is unreachable or out of storage fails
+// it.
+type failWriting struct {
+	jetstream.KeyValue
+	key string
+}
+
+var errWriteRefused = errors.New("nats: the broker refused the write (injected)")
+
+func (k failWriting) Create(ctx context.Context, key string, value []byte, opts ...jetstream.KVCreateOpt) (uint64, error) {
+	if key == k.key {
+		return 0, errWriteRefused
+	}
+	return k.KeyValue.Create(ctx, key, value, opts...)
+}
+
+func (k failWriting) Update(ctx context.Context, key string, value []byte, revision uint64) (uint64, error) {
+	if key == k.key {
+		return 0, errWriteRefused
+	}
+	return k.KeyValue.Update(ctx, key, value, revision)
 }

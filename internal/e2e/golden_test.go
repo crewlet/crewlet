@@ -32,6 +32,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/tokens"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -415,14 +416,41 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 	// a real but partial rollup — waiting for "a tokens frame" would assert
 	// against whichever phases happened to be done, which is a coin flip
 	// (measured: two rows instead of three, one run in three).
-	waitFor(t, "the spend rollup for the whole turn", func() bool {
+	//
+	// EACH OF THE TURN'S PHASES BY NAME, never a count of rows: the rollup
+	// also draws the AUXILIARY model's spend under its own band, and a count
+	// that said "three" read the turn-start context's records — which the
+	// rollup now holds — as a turn with a phase too many.
+	phasesOf := func() map[string]bool {
+		have := map[string]bool{}
 		r := frames.lastRollup(t)
 		if r == nil {
-			return false
+			return have
 		}
-		phases, _ := r["by_phase"].([]any)
-		return len(phases) == 3 // onboarding, execute, review
+		rows, _ := r["by_phase"].([]any)
+		for _, row := range rows {
+			if m, ok := row.(map[string]any); ok {
+				name, _ := m["phase"].(string)
+				have[name] = true
+			}
+		}
+		return have
+	}
+	waitFor(t, "the spend rollup for the whole turn", func() bool {
+		have := phasesOf()
+		return have["onboarding"] && have["execute"] && have["review"]
 	})
+	// AND WHAT ITS CONTEXT COST. The turn-start passes are the turn's own
+	// auxiliary records, flushed as the turn ends, so the rollup draws them
+	// under the Auxiliary band — where they reached no spend figure at all
+	// before, while the counter was charged for them.
+	if slices.ContainsFunc(n.model.seen(), func(call string) bool {
+		return call == "aux:memory" || call == "aux:knowledge" || call == "aux:recall"
+	}) {
+		waitFor(t, "the turn's auxiliary spend in the rollup", func() bool {
+			return phasesOf()["auxiliary"]
+		})
+	}
 	cancel()
 
 	// --- what the model was actually asked ---------------------------- //
@@ -576,9 +604,22 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 		t.Errorf("the rollup reports %v tokens for a turn that ran three "+
 			"phases", totals["total_tokens"])
 	}
-	if n, _ := totals["calls"].(float64); n != 3 {
-		t.Errorf("the rollup counted %v calls, want one per phase "+
-			"(onboarding, execute, review)", totals["calls"])
+	// THE TURN'S PHASES, apart from the auxiliary band: the rollup also holds
+	// what the auxiliary model spent — the turn-start context, and the
+	// reflection's calls once the ledger flushes them — which no phase record
+	// carries, so every comparison with the phase records below is made over
+	// the phases' own rows.
+	phaseTotals := map[string]float64{}
+	byPhase, _ := rollup["by_phase"].([]any)
+	for _, raw := range byPhase {
+		row, _ := raw.(map[string]any)
+		if row["phase"] == tokens.PhaseAuxiliary {
+			continue
+		}
+		for _, key := range []string{"calls", "cache_read_tokens", "cache_write_tokens"} {
+			v, _ := row[key].(float64)
+			phaseTotals[key] += v
+		}
 	}
 
 	// --- and what the store kept -------------------------------------- //
@@ -617,6 +658,18 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 	records := frames.phaseRecords(t)
 	if len(records) == 0 {
 		t.Fatal("no phase record reached the socket with its payload")
+	}
+	// ONE CALL PER PROVIDER CALL: a phase's rounds, as every spend figure
+	// counts them (node/0040).
+	var wantCalls int
+	for _, rec := range records {
+		rounds, _ := rec["rounds"].([]any)
+		used, _ := rec["rounds_used"].(float64)
+		wantCalls += tokens.PhaseCalls(len(rounds), int(used))
+	}
+	if got := phaseTotals["calls"]; got != float64(wantCalls) {
+		t.Errorf("the rollup counted %v calls over the turn's phases, want the %d "+
+			"provider calls their records state", got, wantCalls)
 	}
 	for _, rec := range records {
 		ms, ok := rec["duration_ms"].(float64)
@@ -693,13 +746,13 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 		t.Fatalf("the phase records carry %v cached / %v written tokens; the "+
 			"provider reported both on every round", cacheRead, cacheWrite)
 	}
-	if got, _ := totals["cache_read_tokens"].(float64); got != cacheRead {
-		t.Errorf("the live rollup counts %v cached tokens, want the records' %v",
-			got, cacheRead)
+	if got := phaseTotals["cache_read_tokens"]; got != cacheRead {
+		t.Errorf("the live rollup counts %v cached tokens over the phases, want the "+
+			"records' %v", got, cacheRead)
 	}
-	if got, _ := totals["cache_write_tokens"].(float64); got != cacheWrite {
-		t.Errorf("the live rollup counts %v cache-written tokens, want the "+
-			"records' %v", got, cacheWrite)
+	if got := phaseTotals["cache_write_tokens"]; got != cacheWrite {
+		t.Errorf("the live rollup counts %v cache-written tokens over the phases, "+
+			"want the records' %v", got, cacheWrite)
 	}
 	stored, err := n.engine.Backends().Store.Events().PhaseTokens(t.Context(),
 		store.PhaseTokenQuery{SinceDays: 1})
@@ -708,6 +761,10 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 	}
 	var storedRead, storedWrite int
 	for _, r := range stored {
+		if r.Phase == tokens.PhaseAuxiliary {
+			// The auxiliary model's records, held to their own cases.
+			continue
+		}
 		storedRead += r.CacheReadTokens
 		storedWrite += r.CacheWriteTokens
 		if !keys[r.ProviderKey] {
@@ -886,8 +943,12 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	// `refused_at` — the field that was once dropped on its way from the
 	// counter to the push, which left every "refusing charges" row the
 	// dashboard draws unreachable. The refusal is the engine's own, made by
-	// the gate a real turn charges through; the seat is its own scope, so
-	// the company's turn beside it is charged against nothing it spent.
+	// the gate a real turn's calls pass — a charge it refuses, or the call
+	// the turn's meter holds once the turn's own context assembly has
+	// filled the day, which the meter records as the refusal a charge would
+	// have (coord.Budgets.Refuse) — so what is waited on is the counter's
+	// stamp, which both write. The seat is its own scope, so the company's
+	// turn beside it is charged against nothing it spent.
 	//
 	// AND A PERSON WHO CAN WRITE: the founder's seat binds a bearer token, so
 	// the capture can end with a real `/operator/act` answer — the one the
@@ -929,7 +990,7 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	budgets := n.engine.Backends().Fleet
 	company := n.engine.Company()
 	cfoID, _ := company.Org.AgentIDFor(company.Org.AgentSeatByHandle("cfo"))
-	waitFor(t, "the seat's own ceiling to refuse a charge", func() bool {
+	waitFor(t, "the seat's own ceiling to refuse a call", func() bool {
 		got, err := budgets.Used(t.Context(), coord.AgentScope(cfoID.String()),
 			coord.WindowsAt(time.Now(), zone))
 		return err == nil && !got.In(period.Day).RefusedAt.IsZero()
@@ -1172,7 +1233,7 @@ func TestAToolActsForTheSeatThatCalledIt(t *testing.T) {
 	}
 }
 
-func TestATightBudgetRefusesTheTurnRatherThanSpendingPastIt(t *testing.T) {
+func TestATightBudgetStopsTheTurnAndCountsTheRoundItRefused(t *testing.T) {
 	t.Parallel()
 	// THE SEAM WAS NEVER SUPPLIED. runner.Config.Budget existed and every
 	// turn passed nil, so a company with a `token_budget:` ceiling spent
@@ -1227,57 +1288,78 @@ func TestATightBudgetRefusesTheTurnRatherThanSpendingPastIt(t *testing.T) {
 		return false
 	})
 
-	orgToday, err := budgets.Used(t.Context(), coord.OrgScope, today())
-	if err != nil {
-		t.Fatalf("used: %v", err)
-	}
-	used := orgToday.In(period.Day).Used
-	// THE CAP GOVERNS WHAT THE LOOP ADMITS, and only that. The counter also
-	// holds every AUXILIARY completion — the prefetch's knowledge query
-	// here, a reflection pass after a turn — and those are RECORDED whole
-	// after they return, past the ceiling included, because their size is
-	// known only from the answer and no refusal can un-spend them
-	// (coord.Budgets.PostCharge). So `used <= limit` is not the engine's
-	// promise, and it failed a correct engine the moment the prefetch was
-	// charged. The promise is that no charge the loop's gate ADMITTED took
-	// the company past its cap: what was recorded before the loop began
-	// counts against the room its rounds had, and only what was recorded
-	// after the loop's first call can stand above the cap.
+	// EVERY COMPLETION THE MODEL ANSWERED IS ON THE COUNTER, ONCE — the
+	// rounds the gate refused included. A round is charged once its reply is
+	// in, so a refused round was billed, and the counter counts it
+	// (coord.Budgets.Charge); the auxiliary completions — the prefetch's
+	// knowledge query here — are recorded whole after they return
+	// (coord.Budgets.PostCharge). So the counter reads past the cap by every
+	// round the gate refused, and `used <= limit` is not the engine's promise:
+	// what it promises is that the counter is what the company was billed. A
+	// counter that dropped a refused round read short of that, and let the
+	// next, smaller round in on room the refused one had already used.
 	//
-	// Ordered by what the model ANSWERED, read after the counter: the turn
-	// is sequential, so a completion answered before the loop's first call
-	// was recorded before any of its rounds, and an auxiliary call answered
-	// after it but not yet recorded only makes the bound looser, never one
-	// a correct engine fails.
-	calls := n.model.seen()
-	loopBegan, auxAfter := false, 0
+	// What the gate ADMITS is certified where it can be judged charge by
+	// charge — the contract suite on the real broker (coordtest's budget
+	// cases, a refused round followed by a smaller one among them) and the
+	// tool loop's refused-round case — because here every charge, admitted or
+	// refused, lands on the one figure.
+	//
+	// WAITED FOR, re-reading the model's log and the counter together on
+	// every poll: a completion's charge lands a moment after its answer, so
+	// the two agree once the charges are through, and the poll that sees them
+	// agree is a snapshot in which every refused round so far is counted.
+	// Every round of the loop here is a tool-use reply, and every auxiliary
+	// pass a text reply, so each call's cost is known from its kind. EVERY
+	// call the model answered is summed, the first streamed request
+	// included: the fixture answers it unary, and the adapter keeps that
+	// answer rather than dropping it and asking again
+	// (httpapi.UnaryAnswer), so there is no call the engine was billed for
+	// and never handed.
+	var used, want int
+	var calls []string
+	waitFor(t, "the counter to hold every completion the model answered", func() bool {
+		calls = n.model.seen()
+		org, err := budgets.Used(t.Context(), coord.OrgScope, today())
+		if err != nil {
+			return false
+		}
+		used, want = org.In(period.Day).Used, 0
+		for _, call := range calls {
+			if strings.HasPrefix(call, "aux:") {
+				want += aux
+			} else {
+				want += round
+			}
+		}
+		return used == want
+	}, func() string {
+		return fmt.Sprintf("the counter reads %d against a cap of %d, and the model "+
+			"answered %d tokens' worth: %v", used, limit, want, calls)
+	})
+	loop := 0
 	for _, call := range calls {
-		switch {
-		case !strings.HasPrefix(call, "aux:"):
-			loopBegan = true
-		case loopBegan:
-			auxAfter++
+		if !strings.HasPrefix(call, "aux:") {
+			loop++
 		}
 	}
-	if !loopBegan {
-		t.Fatalf("the cap refused a charge but the model answered no round of "+
-			"the turn's own loop: %v", calls)
-	}
-	if atLastAdmit := used - auxAfter*aux; atLastAdmit > limit {
-		t.Errorf("the turn loop admitted charges up to %d against a cap of %d a "+
-			"day (the counter reads %d, %d of it recorded by auxiliary calls "+
-			"after the loop began); model calls %v",
-			atLastAdmit, limit, used, auxAfter*aux, calls)
+	// PARTWAY THROUGH THE TURN: the loop ran at least the round that fitted
+	// and the round that did not, and the counter holds the second past the
+	// cap.
+	if loop < 2 || used <= limit {
+		t.Errorf("the cap refused a charge after %d round(s) of the turn's own loop with "+
+			"the counter at %d of %d, want a round that fitted and a refused one counted "+
+			"past the cap; model calls %v", loop, used, limit, calls)
 	}
 	// And the SEAT's counter moved with it: one charge, both scopes.
 	//
 	// WAITED FOR rather than read once, because the two counters are two
 	// KEYS AND NO TRANSACTION — [coord/kv.FleetStore.Charge] says so and
-	// builds the all-or-nothing property out of ordering instead: the org
-	// is charged first and compensated if the seat then refuses. So there
-	// is a real window in which the org has moved and the seat has not,
-	// and the wait above lands inside it whenever the org's bump is what
-	// satisfied it.
+	// builds its order out of sequence instead: the org is counted and
+	// judged first, then the seat, which a round the company refused is
+	// counted on all the same. So there is a real window in which the org
+	// has moved and the seat has not, and the wait above lands inside it
+	// whenever the org's write is what satisfied it.
 	//
 	// Read synchronously, this asserted an ATOMICITY the design does not
 	// claim, and CI caught it: `seat spent 0 and the org 150`. The
@@ -1306,6 +1388,72 @@ func TestATightBudgetRefusesTheTurnRatherThanSpendingPastIt(t *testing.T) {
 		return fmt.Sprintf("seat spent %d and the org %d; one charge must "+
 			"move both", seatUsed, orgUsed)
 	})
+}
+
+// AN ONBOARDING PASS THE BUDGET REFUSES ENDS THE TURN THERE.
+//
+// The cap leaves room for the turn-start prefetch's knowledge query and half
+// of the onboarding pass's first round, so that round is billed and refused —
+// and, counted, it leaves the window past its ceiling, so every later call of
+// the turn is certain to be refused. The turn used to log the refusal as an
+// onboarding failure and enter its loop anyway, where the executor's first
+// round was billed and refused in turn. It ends on the onboarding's refusal
+// now, published as budget_exhausted like a refusal inside the loop, with no
+// executor phase opened and no executor call made.
+func TestAnOnboardingRefusalEndsTheTurnBeforeTheExecutor(t *testing.T) {
+	t.Parallel()
+	aux, round := textReplyUsage.tokens(), toolUseUsage.tokens()
+	limit := aux + round/2
+	n := startWith(t, func(doc string) string {
+		return doc + fmt.Sprintf("\ntoken_budget: {day: %d}\n", limit)
+	})
+	waitFor(t, "the seat to be claimed", func() bool {
+		return slices.Contains(n.engine.Node().Host().Held(), "ceo")
+	})
+	n.wake(t, "ceo", "How did the week go?")
+
+	stored := func(eventType string) []*events.Event {
+		rows, err := n.engine.Backends().Store.Events().List(t.Context(),
+			store.ListQuery{Type: eventType, Limit: 50})
+		if err != nil {
+			return nil
+		}
+		var out []*events.Event
+		for _, row := range rows {
+			full, err := n.engine.Backends().Store.Events().ByID(t.Context(), row.ID, time.Now())
+			if err != nil {
+				return nil
+			}
+			var ev events.Event
+			if err := json.Unmarshal(full.Payload, &ev); err != nil {
+				t.Fatalf("decode a stored %s: %v", eventType, err)
+			}
+			out = append(out, &ev)
+		}
+		return out
+	}
+	// The completion is published after every phase event of the turn, so
+	// once it is stored an executor phase that opened would be too.
+	waitFor(t, "the turn to end on the budget", func() bool {
+		return len(stored("budget_exhausted")) > 0 && len(stored("agent_turn_completed")) > 0
+	})
+
+	var phases []string
+	for _, ev := range stored("agent_phase_started") {
+		if started, ok := events.DataAs[*types.AgentPhaseStarted](ev); ok {
+			phases = append(phases, string(started.Phase))
+		}
+	}
+	if !slices.Contains(phases, "onboarding") {
+		t.Fatalf("phases opened = %v, want the onboarding pass the budget refused", phases)
+	}
+	if slices.Contains(phases, "execute") {
+		t.Errorf("phases opened = %v: the turn entered its loop after the budget had "+
+			"already refused it", phases)
+	}
+	if calls := n.model.seen(); slices.Contains(calls, "execute") {
+		t.Errorf("the executor called the model after the onboarding pass was refused: %v", calls)
+	}
 }
 
 // The trace a wake starts must reach the events the turn it caused writes —
