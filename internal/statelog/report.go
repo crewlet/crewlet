@@ -241,8 +241,8 @@ type DomainReport struct {
 	// "not evicted" is then a guess the reader cannot tell from a fact. A
 	// screen that reads a missing tombstone as proof of a readmission
 	// released an eviction it had just made and offered to make it again,
-	// re-dating it. ABSENT WHEN READ, so a node from a build before the
-	// field is read as it always was.
+	// re-dating it. ABSENT WHEN READ, so only the case a reader must treat
+	// differently carries the key.
 	EvictionsUnreadable bool `json:"evictions_unreadable,omitempty"`
 }
 
