@@ -576,7 +576,18 @@ func (b *Bootstrap) Warnings() []Warning {
 	// trim until somebody tells it, and the log grows until its ceiling
 	// refuses writes. That is the configuration working as asked; it is
 	// also a state nobody discovers until the refusal.
-	if b.Stream.TrackerRetention.Floor() == BackupFloorOperator {
+	//
+	// ONLY WHERE THE TRIM RUNS, which is a node holding the estate: the trim
+	// reads the estate's own eviction rows, so only a `data` node arms it,
+	// and every other reader of `stream.tracker_retention` — the snapshot
+	// cadence, the retention report, the API's backup surface — is a data
+	// node's too. On a stateless node the block is read by nothing, so a
+	// warning about what it does to the trim described the members' trim
+	// from a value they never see. (`retention.backup_owner`, below, is not
+	// gated: who owns the deployment's backups is a question every node's
+	// operator answers.)
+	if b.Profile("").HoldsData() &&
+		b.Stream.TrackerRetention.Floor() == BackupFloorOperator {
 		out = append(out, advisory(field("stream.tracker_retention.backup_floor"),
 			"`operator` means the trim advances only as far as somebody "+
 				"has acknowledged a backup. Until the first acknowledgement the log "+

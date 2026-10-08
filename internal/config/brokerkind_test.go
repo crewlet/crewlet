@@ -378,3 +378,61 @@ func TestALeafDeclinesNoFsync(t *testing.T) {
 		}
 	}
 }
+
+// THE OPERATOR FLOOR IS A WARNING ABOUT THE TRIM, and only a node holding the
+// estate runs the trim: it reads the estate's own eviction rows, so a node
+// without `data` never arms it and reads `stream.tracker_retention` for
+// nothing else. Warning a stateless node that its floor stops the trim
+// described the members' trim from a value they never see. The backup owner
+// is a different question — who owns the deployment's backups — and is asked
+// of every node, so it stays.
+func TestOnlyANodeThatRunsTheTrimIsWarnedAboutItsFloor(t *testing.T) {
+	t.Parallel()
+	const (
+		floor = "stream.tracker_retention.backup_floor"
+		owner = "retention.backup_owner"
+		data  = "node:\n  roles: [data, seats]\n"
+		seats = "node:\n  roles: [seats]\nstore:\n  scratch: true\n"
+	)
+	operator := func(stream string) string {
+		return strings.Replace(stream, "stream:\n",
+			"stream:\n  tracker_retention:\n    backup_floor: operator\n", 1)
+	}
+	for _, tc := range []struct {
+		name string
+		doc  string
+		want []string
+	}{
+		{"the every-role default", operator("stream:\n"), []string{floor, owner}},
+		{"a solo data member", data + operator("stream:\n  store_dir: /var/js\n"),
+			[]string{floor, owner}},
+		{"a clustered data member", data + operator(brokerStreams[placement.BrokerMember]),
+			[]string{floor, owner}},
+		{"a data node on an external cluster", data + operator(brokerStreams[placement.BrokerClient]),
+			[]string{floor, owner}},
+		{"a stateless leaf", seats + operator(brokerStreams[placement.BrokerLeaf]),
+			[]string{owner}},
+		{"a stateless node on an external cluster", seats + operator(brokerStreams[placement.BrokerClient]),
+			[]string{owner}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			b, err := ParseBootstrap([]byte(tc.doc), EnvOnly())
+			if err != nil {
+				t.Fatalf("the fixture must be valid, since a warning is: %v", err)
+			}
+			if b.Stream.TrackerRetention.Floor() != BackupFloorOperator {
+				t.Fatalf("the fixture must declare the operator floor: %q", tc.doc)
+			}
+			var got []string
+			for _, w := range b.Warnings() {
+				if w.Path == floor || w.Path == owner {
+					got = append(got, w.Path)
+				}
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("warnings at %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

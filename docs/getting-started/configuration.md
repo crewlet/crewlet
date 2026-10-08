@@ -1000,7 +1000,9 @@ stream:
   # tracker_retention:              # when the log may be trimmed. Every term
                                     #   here is a statement about the OPERATOR's
                                     #   estate rather than the company's policy,
-                                    #   which is why it is Tier A
+                                    #   which is why it is Tier A. Read only on
+                                    #   a node with the `data` role, which is
+                                    #   where the trim and the snapshots run
   #   min_age: 7d                   #   the age floor NO trim may cross, whatever
                                     #   the other terms say (24h..90d). It can
                                     #   only make a trim more conservative, so it

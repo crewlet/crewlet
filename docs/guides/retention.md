@@ -140,7 +140,10 @@ Two policies decide which copies count:
   ```
 
   Under this policy the trim does not advance until that acknowledgement has
-  been given at least once.
+  been given at least once, and `crewlet validate` warns about it on every
+  node that holds data — the nodes that run the trim. A node without `data`
+  runs no trim and reads none of `stream.tracker_retention`, so it is not
+  warned.
 
 The **backup-age alarm** (`backup_age`) ages the same point the trim reads,
 under the same policy: under `operator` a node's nightly copies are fresh
