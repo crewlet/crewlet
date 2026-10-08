@@ -237,7 +237,7 @@ func TestAReplyPostedBeforeTheQuestionDoesNotAnswerIt(t *testing.T) {
 // delivery with no instant, or a question with no anchor, proves nothing about
 // which came first, and the delivery goes its ordinary way rather than being
 // spliced into the run as an answer it may never have been. Neither is
-// presumed to qualify, as rows parked before the anchor existed once were.
+// presumed to qualify.
 func TestAReplyThatCannotShowItCameAfterTheQuestionDoesNotAnswerIt(t *testing.T) {
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
