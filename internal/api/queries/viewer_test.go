@@ -432,3 +432,38 @@ roles:
 		t.Errorf("an anonymous viewer's project = %v, want \"\"", anonymous["project"])
 	}
 }
+
+// WHO MAY CHANGE THE COMPANY DOCUMENT is on the viewer, so the dashboard
+// draws a managed document read-only rather than offering saves the config
+// surface refuses — and the writers are named to an operator only.
+func TestTheViewerSaysWhetherItMayChangeTheCompany(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		writers   []string
+		caller    string
+		writer    bool
+		managedBy []string
+	}{
+		"an unmanaged document is every operator's": {nil, "ops-1", true, []string{}},
+		"a listed writer may":                       {[]string{"ops-1"}, "ops-1", true, []string{"ops-1"}},
+		"any other operator may not, and is told":   {[]string{"gitops"}, "ops-1", false, []string{"gitops"}},
+		"an anonymous reader is told nothing":       {[]string{"gitops"}, "", false, []string{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := viewerSources(t, &stubWork{})
+			s.Access = &queries.AccessPosture{TokenIDs: []string{"ops-1", "gitops"}, CompanyWriters: tc.writers}
+			r := queries.NewRegistry()
+			queries.Register(r, s)
+			answered, err := r.Answer(t.Context(), "viewer", nil, tc.caller)
+			got := answerMap(t, answered, err)
+			if got["config_writer"] != tc.writer {
+				t.Errorf("config_writer = %v, want %v", got["config_writer"], tc.writer)
+			}
+			managedBy, ok := got["config_managed_by"].([]string)
+			if !ok || !slices.Equal(managedBy, tc.managedBy) {
+				t.Errorf("config_managed_by = %#v, want %v", got["config_managed_by"], tc.managedBy)
+			}
+		})
+	}
+}

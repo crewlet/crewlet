@@ -62,6 +62,20 @@ func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 		// every team above it, owns no project, whose create is refused
 		// until one is named.
 		"project": "",
+		// WHETHER THIS CALLER MAY CHANGE THE COMPANY DOCUMENT, and who may
+		// when it is managed (ADR-0030), so a screen draws every editing
+		// control disabled with the reason rather than offering a save the
+		// config surface refuses. The writers are named to an operator
+		// only: which credential can rewrite the company is the most
+		// valuable line of the `access` answer, which is operator-only for
+		// the same reason. ALWAYS AN ARRAY; empty is not managed.
+		"config_writer":     false,
+		"config_managed_by": []string{},
+	}
+	if operatorID != "" {
+		writers := s.companyWriters()
+		out["config_managed_by"] = writers
+		out["config_writer"] = s.Access == nil || s.Access.MayWriteCompany(operatorID)
 	}
 	seat := s.seatForOperator(operatorID)
 	if seat == nil {
@@ -86,6 +100,14 @@ func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 	// project promised here is the project the create files into.
 	out["project"] = s.projectOf(seat.Handle())
 	return out, nil
+}
+
+// companyWriters is the managed document's writers, or empty — never nil.
+func (s Sources) companyWriters() []string {
+	if s.Access == nil {
+		return []string{}
+	}
+	return append([]string{}, s.Access.CompanyWriters...)
 }
 
 // seatForOperator resolves the caller's operator id to a seat, or nil.

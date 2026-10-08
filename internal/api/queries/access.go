@@ -6,6 +6,8 @@ import (
 	"context"
 	"slices"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/config"
 )
 
 // AccessPosture is Tier A's auth posture as the `access` answer reads it.
@@ -26,6 +28,19 @@ type AccessPosture struct {
 	AnonymousRead bool
 	// AllowedOrigins is `api.auth.allowed_origins`; empty is same-origin only.
 	AllowedOrigins []string
+	// CompanyWriters is `api.auth.company_writers`: the token ids that alone
+	// may change the company document, empty when every token may
+	// (ADR-0030). Read through [AccessPosture.MayWriteCompany].
+	CompanyWriters []string
+}
+
+// MayWriteCompany reports whether the credential with this id may change the
+// company document — Tier A's own reading ([config.APIAuth.MayWriteCompany]),
+// never a second one, so the viewer offers exactly the edits the config
+// surface admits.
+func (p *AccessPosture) MayWriteCompany(operatorID string) bool {
+	auth := config.APIAuth{CompanyWriters: p.CompanyWriters}
+	return auth.MayWriteCompany(operatorID)
 }
 
 // TokenScope is what one accepted credential reaches.
