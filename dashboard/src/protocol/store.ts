@@ -404,12 +404,12 @@ export class Store {
       if (a.role !== answer.role) return a;
       const heldSeq = a.live_call_seq ?? 0;
       const seq = answer.live_call_seq;
-      if (seq === undefined || seq >= heldSeq) {
+      if (seq >= heldSeq) {
         moved = true;
         return {
           ...a,
           live_call: mergeLiveCall(a.live_call, answer.live_call).call,
-          live_call_seq: seq ?? heldSeq,
+          live_call_seq: seq,
         };
       }
       current = false;

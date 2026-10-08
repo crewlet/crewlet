@@ -447,7 +447,7 @@ export interface LiveCallAnswer {
    *  dropped when the slot has since been cleared or taken by another call,
    *  and otherwise brings only the heavy fields it holds at a newer version
    *  (`Store.applyLiveCall`). */
-  live_call_seq?: number;
+  live_call_seq: number;
 }
 
 /** One calendar window of one scope's token counter — the day, the ISO week or

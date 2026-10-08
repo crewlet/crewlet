@@ -384,6 +384,7 @@ describe("a live call's heavy fields", () => {
       role: "PM",
       live_call:
         pushed({ prompt: 1, narration: 3 }, { ...prompt, ...narration(3) }).live_call ?? null,
+      live_call_seq: 0,
     });
     const call = store.state.agents[0]?.live_call;
     expect(call?.round_narration).toHaveLength(3);
@@ -453,6 +454,7 @@ describe("a live call's heavy fields", () => {
           { prompt: 9, response: 11, narration: 11 },
           { ...resumed, ...narration(1), response: "new" },
         ).live_call ?? null,
+      live_call_seq: 0,
     });
     call = store.state.agents[0]?.live_call;
     expect(call?.prompt).toBe("resume it");
