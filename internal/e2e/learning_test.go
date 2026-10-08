@@ -69,107 +69,24 @@ func awaitRows(t *testing.T, what string, found func() (int, error)) {
 	})
 }
 
-func TestACompletedTurnLeavesAnEpisodeBehind(t *testing.T) {
+// ONE TURN, AND EVERYTHING REFLECTION LEARNS FROM IT.
+//
+// Four claims about one turn, each under its own name, and one turn rather
+// than four: every claim was already a read of the outcome of an identical
+// boot and an identical turn — the same start, the same engaged executor, the
+// same message from the same person — so four turns bought four copies of one
+// premise. A turn that fails now fails all four, which share that premise
+// either way.
+func TestACompletedTurnLeavesWhatReflectionLearnsFrom(t *testing.T) {
 	n := start(t)
 	waitForSeat(t, n, "ceo")
 	// A turn that calls nothing has engaged with nothing, and every
 	// learning worker correctly skips it — see scriptedModel.engages.
 	n.model.engageOnExecute()
-	wakeWithMessage(t, n, "ceo")
-	waitForTurn(t, n)
 
-	episodes := learning.NewEpisodes(n.engine.Backends().Store)
-	awaitRows(t, "the turn's episode", func() (int, error) {
-		rows, err := episodes.Recent(context.Background(), "ceo", 10)
-		return len(rows), err
-	})
-
-	rows, err := episodes.Recent(context.Background(), "ceo", 10)
-	if err != nil {
-		t.Fatalf("Recent: %v", err)
-	}
-	ep := rows[0]
-	if ep.Role != "CEO" {
-		t.Errorf("role = %q, want the seat's", ep.Role)
-	}
-	if ep.ReviewOutcome != "done" {
-		t.Errorf("review outcome = %q, want the turn's decision", ep.ReviewOutcome)
-	}
-	// THE WORK KEY IS WHAT DEDUPES, and it only reaches the row if the
-	// turn event carried it: an episode keyed on nothing lands twice the
-	// first time two nodes complete one trigger.
-	if ep.WorkKey == "" {
-		t.Error("the episode carries no work key, so nothing dedupes it")
-	}
-	if ep.TaskSummary == "" {
-		t.Error("the episode carries no task summary, so recall can never match it")
-	}
-}
-
-func TestACompletedTurnLeavesADiaryRowBehind(t *testing.T) {
-	n := start(t)
-	waitForSeat(t, n, "ceo")
-	// A turn that calls nothing has engaged with nothing, and every
-	// learning worker correctly skips it — see scriptedModel.engages.
-	n.model.engageOnExecute()
-	wakeWithMessage(t, n, "ceo")
-	waitForTurn(t, n)
-
-	seat, ok := n.engine.Registry().ByHandle("ceo")
-	if !ok {
-		t.Fatal("no CEO seat")
-	}
-	diary := learning.NewDiary(n.engine.Backends().Store)
-	awaitRows(t, "the classifier's diary row", func() (int, error) {
-		rows, err := diary.Recent(context.Background(), seat.AgentID.String(),
-			time.Now().UTC(), 10)
-		return len(rows), err
-	})
-}
-
-func TestACompletedTurnLeavesACounterpartyProfileBehind(t *testing.T) {
-	n := start(t)
-	waitForSeat(t, n, "ceo")
-	// A turn that calls nothing has engaged with nothing, and every
-	// learning worker correctly skips it — see scriptedModel.engages.
-	n.model.engageOnExecute()
-	wakeWithMessage(t, n, "ceo")
-	waitForTurn(t, n)
-
-	counterparties := learning.NewCounterparties(n.engine.Backends().Store)
-	subject := learning.Subject{
-		ExternalID: "u-sam", Platform: "mattermost", Name: "sam",
-	}
-	awaitRows(t, "the sender's profile", func() (int, error) {
-		_, found, err := counterparties.Get(context.Background(), "ceo", subject)
-		if !found {
-			return 0, err
-		}
-		return 1, err
-	})
-
-	got, _, err := counterparties.Get(context.Background(), "ceo", subject)
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if got.InteractionCount != 1 {
-		t.Errorf("interaction count = %d, want the one message", got.InteractionCount)
-	}
-	if got.Traits["reply_style"] != "plain numbers, no preamble" {
-		t.Errorf("traits = %v, want the patch the model answered with", got.Traits)
-	}
-}
-
-// THE GATES READ FIELDS THE ENGINE HAS TO PUBLISH. Every one of these was
-// absent from the completed-turn event, and their absence failed OPEN-
-// LOOKING: an empty tool sequence reads as "the agent engaged with nothing",
-// which skips every worker on exactly the successful turns worth learning
-// from — silently, with the dispatcher reporting a clean pass.
-func TestTheCompletedTurnEventCarriesWhatReflectionGatesOn(t *testing.T) {
-	n := start(t)
-	waitForSeat(t, n, "ceo")
-	n.model.engageOnExecute()
-
+	// SUBSCRIBED BEFORE THE WAKE, or the event the first claim reads could
+	// be published before anything listened and the claim would assert
+	// nothing at all.
 	completed := make(chan types.TurnCompleted, 4)
 	if err := n.engine.Backends().Queue.Subscribe(t.Context(),
 		topics.Event(types.TurnCompleted{}.EventType()), "e2e-turn-watch",
@@ -178,8 +95,21 @@ func TestTheCompletedTurnEventCarriesWhatReflectionGatesOn(t *testing.T) {
 	}
 
 	wakeWithMessage(t, n, "ceo")
-	select {
-	case tc := <-completed:
+	waitForTurn(t, n)
+
+	// THE GATES READ FIELDS THE ENGINE HAS TO PUBLISH. Every one of these
+	// was absent from the completed-turn event, and their absence failed
+	// OPEN-LOOKING: an empty tool sequence reads as "the agent engaged with
+	// nothing", which skips every worker on exactly the successful turns
+	// worth learning from — silently, with the dispatcher reporting a clean
+	// pass.
+	t.Run("TheCompletedTurnEventCarriesWhatReflectionGatesOn", func(t *testing.T) {
+		var tc types.TurnCompleted
+		select {
+		case tc = <-completed:
+		case <-time.After(waitBudget):
+			t.Fatalf("no turn was completed within %s", waitBudget)
+		}
 		if len(tc.ToolSequence) == 0 && tc.ReviewOutcome == "done" {
 			t.Error("a done turn published no tool sequence, which every " +
 				"engagement gate reads as 'the agent did nothing'")
@@ -191,8 +121,13 @@ func TestTheCompletedTurnEventCarriesWhatReflectionGatesOn(t *testing.T) {
 			t.Error("no whole-turn tool list, so the self-persist gate cannot " +
 				"see a builtin the agent fired in an earlier round")
 		}
+		if tc.TurnID == "" {
+			t.Error("no turn id, so nothing the workers write can be deduped")
+		}
+		// FATAL, because the two claims after it read the first entry: an
+		// error here went on to index an empty list and panicked the case.
 		if len(tc.Interactions) == 0 {
-			t.Error("no interactions, so no counterparty can ever be profiled")
+			t.Fatal("no interactions, so no counterparty can ever be profiled")
 		}
 		if tc.Interactions[0].Sender.ExternalID != "u-sam" {
 			t.Errorf("sender = %+v, want the resolved actor",
@@ -202,12 +137,74 @@ func TestTheCompletedTurnEventCarriesWhatReflectionGatesOn(t *testing.T) {
 			t.Errorf("channel kind = %q, want the canonical dm the parser stamped",
 				tc.Interactions[0].ChannelKind)
 		}
-		if tc.TurnID == "" {
-			t.Error("no turn id, so nothing the workers write can be deduped")
+	})
+
+	t.Run("ACompletedTurnLeavesAnEpisodeBehind", func(t *testing.T) {
+		episodes := learning.NewEpisodes(n.engine.Backends().Store)
+		awaitRows(t, "the turn's episode", func() (int, error) {
+			rows, err := episodes.Recent(context.Background(), "ceo", 10)
+			return len(rows), err
+		})
+
+		rows, err := episodes.Recent(context.Background(), "ceo", 10)
+		if err != nil {
+			t.Fatalf("Recent: %v", err)
 		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("no turn was ever completed")
-	}
+		ep := rows[0]
+		if ep.Role != "CEO" {
+			t.Errorf("role = %q, want the seat's", ep.Role)
+		}
+		if ep.ReviewOutcome != "done" {
+			t.Errorf("review outcome = %q, want the turn's decision", ep.ReviewOutcome)
+		}
+		// THE WORK KEY IS WHAT DEDUPES, and it only reaches the row if the
+		// turn event carried it: an episode keyed on nothing lands twice the
+		// first time two nodes complete one trigger.
+		if ep.WorkKey == "" {
+			t.Error("the episode carries no work key, so nothing dedupes it")
+		}
+		if ep.TaskSummary == "" {
+			t.Error("the episode carries no task summary, so recall can never match it")
+		}
+	})
+
+	t.Run("ACompletedTurnLeavesADiaryRowBehind", func(t *testing.T) {
+		seat, ok := n.engine.Registry().ByHandle("ceo")
+		if !ok {
+			t.Fatal("no CEO seat")
+		}
+		diary := learning.NewDiary(n.engine.Backends().Store)
+		awaitRows(t, "the classifier's diary row", func() (int, error) {
+			rows, err := diary.Recent(context.Background(), seat.AgentID.String(),
+				time.Now().UTC(), 10)
+			return len(rows), err
+		})
+	})
+
+	t.Run("ACompletedTurnLeavesACounterpartyProfileBehind", func(t *testing.T) {
+		counterparties := learning.NewCounterparties(n.engine.Backends().Store)
+		subject := learning.Subject{
+			ExternalID: "u-sam", Platform: "mattermost", Name: "sam",
+		}
+		awaitRows(t, "the sender's profile", func() (int, error) {
+			_, found, err := counterparties.Get(context.Background(), "ceo", subject)
+			if !found {
+				return 0, err
+			}
+			return 1, err
+		})
+
+		got, _, err := counterparties.Get(context.Background(), "ceo", subject)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if got.InteractionCount != 1 {
+			t.Errorf("interaction count = %d, want the one message", got.InteractionCount)
+		}
+		if got.Traits["reply_style"] != "plain numbers, no preamble" {
+			t.Errorf("traits = %v, want the patch the model answered with", got.Traits)
+		}
+	})
 }
 
 // queueHandler forwards completed turns to a test channel.
