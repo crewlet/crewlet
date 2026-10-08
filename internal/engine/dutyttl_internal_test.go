@@ -5,7 +5,7 @@ import (
 	"go/parser"
 	"go/printer"
 	"go/token"
-	"io/fs"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -92,59 +92,18 @@ func TestEveryDutyTTLFitsTheDutyCeiling(t *testing.T) {
 // directly.
 func TestEveryDutyClaimSiteIsInTheTTLTable(t *testing.T) {
 	t.Parallel()
-	root := sourcetree.Root(t)
-	helpers := map[string]bool{
-		filepath.Join("internal", "engine", "duty.go"):   true,
-		filepath.Join("internal", "schedule", "duty.go"): true,
+	claims := dutyClaims(t, sourcetree.Root(t))
+	for _, site := range claims.direct {
+		t.Errorf("%s calls schedule.%s directly; claim a duty through "+
+			"Engine.workerDuty or Engine.workerHold so its TTL is checked here",
+			site.where, site.expr)
 	}
-	var sites []string
-	for _, dir := range []string{"internal", "cmd"} {
-		err := sourcetree.Walk(filepath.Join(root, dir), func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-				return nil
-			}
-			rel, err := filepath.Rel(root, path)
-			if err != nil {
-				return err
-			}
-			fset := token.NewFileSet()
-			file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-			if err != nil {
-				return err
-			}
-			ast.Inspect(file, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				name := calleeName(call.Fun)
-				switch name {
-				case "ClaimNamedDuty", "HoldNamedDuty", "ClaimDuty":
-					if !helpers[rel] {
-						t.Errorf("%s calls schedule.%s directly; claim a duty through "+
-							"Engine.workerDuty or Engine.workerHold so its TTL is checked here",
-							fset.Position(call.Pos()), name)
-					}
-				case "workerDuty", "workerHold":
-					if len(call.Args) != 2 {
-						return true
-					}
-					expr := exprText(fset, call.Args[1])
-					sites = append(sites, expr)
-					if _, listed := dutyTTLs[expr]; !listed {
-						t.Errorf("%s claims a duty with TTL %q, which dutyTTLs does not list; add it "+
-							"with the longest value it can take", fset.Position(call.Pos()), expr)
-					}
-				}
-				return true
-			})
-			return nil
-		})
-		if err != nil {
-			t.Fatalf("walking %s: %v", dir, err)
+	sites := make([]string, 0, len(claims.sites))
+	for _, site := range claims.sites {
+		sites = append(sites, site.expr)
+		if _, listed := dutyTTLs[site.expr]; !listed {
+			t.Errorf("%s claims a duty with TTL %q, which dutyTTLs does not list; add it "+
+				"with the longest value it can take", site.where, site.expr)
 		}
 	}
 	// A guard asserting an absence must assert it matched its subject: a
@@ -154,6 +113,110 @@ func TestEveryDutyClaimSiteIsInTheTTLTable(t *testing.T) {
 			t.Errorf("dutyTTLs lists %q but no workerDuty or workerHold call passes it; "+
 				"the table is stale or the scan matched nothing", expr)
 		}
+	}
+}
+
+// claimFunctions are the schedule package's claim functions, which nothing
+// but the two duty helpers may call; dutyHelpers are those helpers, whose TTL
+// argument the table must list.
+var (
+	claimFunctions = []string{"ClaimNamedDuty", "HoldNamedDuty", "ClaimDuty"}
+	dutyHelpers    = []string{"workerDuty", "workerHold"}
+)
+
+// dutyHelperFiles are the two files allowed to call claimFunctions.
+var dutyHelperFiles = []string{"internal/engine/duty.go", "internal/schedule/duty.go"}
+
+// dutySite is one call the duty gate judges: where it is, and what it names —
+// a helper's TTL expression, or the claim function called directly.
+type dutySite struct {
+	where, expr string
+}
+
+// dutyCalls is what the duty gate found.
+type dutyCalls struct {
+	// sites are the helpers' calls, each with its TTL expression.
+	sites []dutySite
+	// direct are calls of a claim function outside the duty helpers.
+	direct []dutySite
+}
+
+// dutyClaims reads every non-test Go file under root's internal/ and cmd/
+// for the calls the gate above judges.
+//
+// ONLY A FILE THAT NAMES ONE OF THE FUNCTIONS IS PARSED: each judged call
+// spells its callee, and an identifier has no escapes, so a file whose bytes
+// spell none of them holds no such call (sourcetree.Identifiers). Parsing all
+// of internal/ and cmd/ to find the two dozen that do was ten seconds under
+// the race detector.
+func dutyClaims(t *testing.T, root string) dutyCalls {
+	t.Helper()
+	names := sourcetree.MustIdentifiers(append(slices.Clone(claimFunctions), dutyHelpers...)...)
+	var out dutyCalls
+	for _, f := range moduleFiles(t, root) {
+		if !f.under("internal", "cmd") || !names.In(f.body) {
+			continue
+		}
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, f.path, f.body, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", f.rel, err)
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			name := calleeName(call.Fun)
+			switch {
+			case slices.Contains(claimFunctions, name):
+				if !slices.Contains(dutyHelperFiles, f.rel) {
+					out.direct = append(out.direct, dutySite{fset.Position(call.Pos()).String(), name})
+				}
+			case slices.Contains(dutyHelpers, name):
+				if len(call.Args) == 2 {
+					out.sites = append(out.sites,
+						dutySite{fset.Position(call.Pos()).String(), exprText(fset, call.Args[1])})
+				}
+			}
+			return true
+		})
+	}
+	return out
+}
+
+// THE DUTY GATE, ON A TREE WHOSE VERDICT IS KNOWN — through the same read,
+// prefilter and matcher. A helper's call and a direct claim are planted
+// outside the helpers' files, the same claim inside one, and a file that
+// does not parse and names no claim, which the gate must never open.
+func TestTheDutyGateFindsEveryClaimInAPlantedTree(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	for path, body := range map[string]string{
+		"internal/engine/thing.go": "package engine\n\n" +
+			"func (e *Engine) run() { e.workerDuty(\"thing\", plantedTTL) }\n",
+		"cmd/crewlet/claim.go": "package main\n\n" +
+			"func f() { schedule.ClaimDuty(ctx, c, \"x\", time.Minute) }\n",
+		"internal/schedule/duty.go": "package schedule\n\n" +
+			"func g() { ClaimNamedDuty(ctx, c, \"x\", time.Minute) }\n",
+		"internal/broken/broken.go": "package broken\n\nthis is not Go\n",
+	} {
+		full := filepath.Join(root, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	claims := dutyClaims(t, root)
+	if len(claims.sites) != 1 || claims.sites[0].expr != "plantedTTL" {
+		t.Errorf("helper calls = %+v, want the one passing plantedTTL", claims.sites)
+	}
+	if len(claims.direct) != 1 || claims.direct[0].expr != "ClaimDuty" ||
+		!strings.Contains(claims.direct[0].where, "claim.go") {
+		t.Errorf("direct claims = %+v, want cmd/crewlet's ClaimDuty alone — the "+
+			"helper's own file may call one", claims.direct)
 	}
 }
 
