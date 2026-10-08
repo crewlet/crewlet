@@ -1472,11 +1472,14 @@ func TestATurnsEventsJoinTheTriggersTrace(t *testing.T) {
 		return slices.Contains(n.engine.Node().Host().Held(), "ceo")
 	})
 
-	// A trace this test can recognise, in the shape a real tracer emits.
+	// A trace this test can recognise, in the shape a real tracer emits —
+	// WATCHED before the wake, because the recorder keeps only the lines of a
+	// trace somebody asked for, and a line logged before the ask is gone.
 	const (
 		traceID     = "4bf92f3577b34da6a3ce929d0e0e4736"
 		triggerSpan = "00f067aa0ba902b7"
 	)
+	logs.watch(t, traceID)
 	n.wakeInTrace(t, "ceo", "How did the week go?",
 		events.TraceContext{TraceID: traceID, SpanID: triggerSpan})
 
