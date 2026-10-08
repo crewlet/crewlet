@@ -52,17 +52,48 @@
 // structural skip that stopped skipping means the thing it described changed.
 // An [Environment] entry is only checked in the unlisted direction, since
 // whether it fires is a fact about the machine.
+//
+// # The report a CI shard leaves behind
+//
+//	go run ./internal/skipgate -report DIR -- go test -json <packages>
+//
+// writes two files into DIR, from the package-level records this program
+// already reads to reach its verdict:
+//
+//   - ran.txt, every package whose test binary reported a result (pass, fail,
+//     or skip for a package with no test files), one import path a line. ci.yml
+//     runs each half of the suite as SHARDS on separate runners, and its
+//     `tests` job holds the shards' ran.txt against the half they were cut
+//     from: every package in exactly one shard, none in two, none in neither.
+//     That is the cross-job half of an exact-cover guarantee whose in-process
+//     half is internal/solo/partition's own check, and it is read from what
+//     RAN rather than from what was planned, so it also catches a shard whose
+//     command line was not the list the partition printed.
+//   - timings.tsv, `importpath<TAB>seconds` for every package that passed or
+//     had no tests, which is the file internal/solo/partition reads with
+//     -weights to start the longest packages first and to balance the shards.
+//     A FAILED package is left out: its elapsed time stops wherever the
+//     failure stopped it, so it is not a measurement of the package, and
+//     ci.yml keeps the timings of passing runs only.
+//
+// Both are written whatever the verdict, so a red shard's report still says
+// what it got through; a report that cannot be written fails the run, since
+// the job that reads it would otherwise fail later and say less.
 package main
 
 import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -72,6 +103,17 @@ type event struct {
 	Package string
 	Test    string
 	Output  string
+	// Elapsed is the seconds a package's test binary ran, on its
+	// package-level pass, fail or skip record (and a test's, on its own).
+	Elapsed float64
+}
+
+// finish is how one package's test binary ended.
+type finish struct {
+	// action is the package-level record's: pass, fail, or skip — the last
+	// meaning the package has no test files.
+	action  string
+	elapsed float64
 }
 
 // short drops the module prefix, so an allowlist entry reads as a path.
@@ -116,11 +158,18 @@ type report struct {
 	// ran is every package the stream carried a record for.
 	//
 	// Load-bearing for the staleness half: BOTH test targets run a SUBSET of
-	// the tree — `make test` the shared partition, `make test-solo` the rest
-	// — so without this, every Always entry belonging to the other half
-	// reads as "declared and did not skip" and each target fails on the other
-	// one's entries. Staleness is only a question about a package that ran.
+	// the tree — `make test` the shared partition, `make test-solo` the rest,
+	// and in CI each job runs one SHARD of its half — so without this, every
+	// Always entry belonging to another run reads as "declared and did not
+	// skip" and each run fails on the others' entries. Staleness is only a
+	// question about a package that ran.
 	ran map[string]bool
+
+	// finished is every package whose binary reported its own result, by
+	// FULL import path — the form `go test` was handed and the partition
+	// prints, which is what the -report files are compared against. Narrower
+	// than ran: a stream cut off mid-package has records for it and no result.
+	finished map[string]finish
 }
 
 // read consumes a test2json stream and renders it back as PLAIN `go test`
@@ -138,7 +187,7 @@ type report struct {
 // writes build errors and toolchain chatter around the stream, and a gate that
 // swallowed those would hide the one failure nobody can debug without them.
 func read(in *bufio.Scanner, out *os.File) report {
-	r := report{ran: map[string]bool{}, measuredSeen: map[string]bool{}}
+	r := report{ran: map[string]bool{}, measuredSeen: map[string]bool{}, finished: map[string]finish{}}
 	buffered := map[string][]string{}
 
 	for in.Scan() {
@@ -164,6 +213,10 @@ func read(in *bufio.Scanner, out *os.File) report {
 		if e.Test == "" {
 			if e.Output != "" {
 				fmt.Fprint(out, e.Output)
+			}
+			switch e.Action {
+			case "pass", "fail", "skip":
+				r.finished[e.Package] = finish{action: e.Action, elapsed: e.Elapsed}
 			}
 			if e.Action == "fail" {
 				r.failedPkgs = append(r.failedPkgs, short(e.Package))
@@ -266,13 +319,47 @@ func flush(out *os.File, buffered map[string][]string, pkg string) int {
 	return len(names)
 }
 
-func main() {
-	argv := os.Args[1:]
-	if len(argv) > 0 && argv[0] == "--" {
-		argv = argv[1:]
+// writeReport writes ran.txt and timings.tsv into dir; see the package doc.
+//
+// Both sorted by import path, so a report is a function of what ran and
+// diffs cleanly against another shard's. Seconds to the millisecond, which is
+// test2json's own precision.
+func writeReport(dir string, r report) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("-report %s: %w", dir, err)
 	}
+	var ran, timings strings.Builder
+	for _, p := range slices.Sorted(maps.Keys(r.finished)) {
+		f := r.finished[p]
+		fmt.Fprintln(&ran, p)
+		if f.action != "fail" {
+			fmt.Fprintf(&timings, "%s\t%s\n", p, strconv.FormatFloat(f.elapsed, 'f', 3, 64))
+		}
+	}
+	for name, body := range map[string]string{"ran.txt": ran.String(), "timings.tsv": timings.String()} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			return fmt.Errorf("-report %s: %w", dir, err)
+		}
+	}
+	return nil
+}
+
+func main() {
+	fs := flag.NewFlagSet("skipgate", flag.ContinueOnError)
+	reportDir := fs.String("report", "", "write ran.txt and timings.tsv for this run into `dir`")
+	fs.Usage = func() {
+		fmt.Fprintf(fs.Output(), "usage: %s [-report DIR] -- go test -json <packages>\n", os.Args[0])
+		fs.PrintDefaults()
+	}
+	// The flag package stops at the first non-flag argument and consumes a
+	// `--`, so both `skipgate -- go test …` and `skipgate go test …` hand the
+	// command over whole: no flag of `go test`'s is ever read as this one's.
+	if err := fs.Parse(os.Args[1:]); err != nil {
+		os.Exit(2)
+	}
+	argv := fs.Args()
 	if len(argv) == 0 {
-		fmt.Fprintf(os.Stderr, "usage: %s -- go test -json <packages>\n", os.Args[0])
+		fs.Usage()
 		os.Exit(2)
 	}
 
@@ -308,6 +395,14 @@ func main() {
 	// Waited for BEFORE anything is decided, so the producer's own verdict is
 	// in hand rather than inferred from what it managed to say.
 	producer := cmd.Wait()
+	// The report first, before any branch can exit: it says what the run got
+	// through, which a stream that could not be read is the case for most.
+	if *reportDir != "" {
+		if err := writeReport(*reportDir, r); err != nil {
+			fmt.Fprintf(os.Stderr, "\nskipgate: %v\n", err)
+			os.Exit(1)
+		}
+	}
 	if scanErr != nil {
 		fmt.Fprintf(os.Stderr, "\nskipgate: reading the test stream: %v\n", scanErr)
 		os.Exit(1)

@@ -328,6 +328,60 @@ func TestEveryAllowanceIsWellFormed(t *testing.T) {
 	t.Logf("%d declared skips", len(allowed))
 }
 
+// THE REPORT NAMES WHAT FINISHED, AND TIMES WHAT PASSED.
+//
+// Two readers depend on it and each fails differently when it is wrong.
+// ci.yml's `tests` job holds every shard's ran.txt against the half it was cut
+// from, so a package missing from ran.txt reads as a package no shard ran — and
+// one listed there that never reported a result would hide exactly that.
+// internal/solo/partition reads timings.tsv to order and place packages, so a
+// FAILED package's elapsed time, which stops wherever the failure stopped it,
+// would teach the next run that a package is short because it broke. And a
+// package with no test files is in the half like any other, so it must finish
+// (as a zero) rather than read as missing.
+func TestTheReportNamesWhatFinishedAndTimesWhatPassed(t *testing.T) {
+	t.Parallel()
+
+	const (
+		passed    = "github.com/crewlet/crewlet/internal/a"
+		noTests   = "github.com/crewlet/crewlet/static"
+		failed    = "github.com/crewlet/crewlet/internal/c"
+		truncated = "github.com/crewlet/crewlet/internal/d"
+	)
+	stream := strings.Join([]string{
+		`{"Action":"start","Package":"` + passed + `"}`,
+		`{"Action":"run","Package":"` + passed + `","Test":"TestX"}`,
+		`{"Action":"pass","Package":"` + passed + `","Test":"TestX","Elapsed":12.1}`,
+		`{"Action":"pass","Package":"` + passed + `","Elapsed":12.5}`,
+		`{"Action":"skip","Package":"` + noTests + `","Elapsed":0}`,
+		`{"Action":"run","Package":"` + failed + `","Test":"TestY"}`,
+		`{"Action":"fail","Package":"` + failed + `","Test":"TestY","Elapsed":3}`,
+		`{"Action":"fail","Package":"` + failed + `","Elapsed":3.25}`,
+		// Cut off mid-package: records, and no result of its own.
+		`{"Action":"start","Package":"` + truncated + `"}`,
+		`{"Action":"run","Package":"` + truncated + `","Test":"TestZ"}`,
+	}, "\n")
+
+	r := read(bufio.NewScanner(strings.NewReader(stream)), devNull(t))
+	dir := filepath.Join(t.TempDir(), "report", "parallel")
+	if err := writeReport(dir, r); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, want := range map[string]string{
+		"ran.txt":     passed + "\n" + failed + "\n" + noTests + "\n",
+		"timings.tsv": passed + "\t12.500\n" + noTests + "\t0.000\n",
+	} {
+		got, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != want {
+			t.Errorf("%s =\n%s\nwant\n%s", name, got, want)
+		}
+	}
+}
+
 func devNull(t *testing.T) *os.File {
 	t.Helper()
 	f, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
