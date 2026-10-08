@@ -631,6 +631,107 @@ const fleetSize = 3
 // suite timeout naming nothing.
 const clusterSettle = 10 * time.Second
 
+// whole is the condition a member of a healthy fleet meets: its native
+// backends have hydrated, and it counts every member live. HYDRATED ALONE
+// does not say a fleet is whole — an engine that stopped keeps the answer it
+// last had — so the member's own view of the fleet's presence is read too,
+// which a member that stopped or lost its peers changes at once.
+//
+// Each presence read is bounded by [engine.ProbeReadBudget], the bound the
+// health envelope gives the same read: it is a scan no client timeout covers,
+// and an unbounded one against a store that stopped answering would hold the
+// wait past its own budget.
+func (c *cluster) whole(t *testing.T, n *node) func() bool {
+	t.Helper()
+	return func() bool {
+		if !n.engine.NativeHydrated(t.Context()) {
+			return false
+		}
+		ctx, cancel := context.WithTimeout(t.Context(), engine.ProbeReadBudget)
+		defer cancel()
+		live, err := n.engine.LiveNodes(ctx)
+		return err == nil && live == len(c.nodes)
+	}
+}
+
+// fleetClaims are the claims [TestAFleetOfThree] makes of one fleet, in the
+// order it makes them. Each is a subtest under the name it had when it was a
+// case of its own, standing up a fleet of its own.
+//
+// THE ORDER IS PART OF THE CLAIMS, which is what sharing a fleet costs:
+//   - the snapshots claim is FIRST, because what it holds is a snapshot taken
+//     AT BOOT, and on a fleet several claims old an artefact on disk could be
+//     one any of them caused;
+//   - the agreement claim is LAST, because it compares every replicated row
+//     of every member, and placed last that is every row every claim before
+//     it wrote — tasks, keys minted three ways at once, pages, a file —
+//     rather than only its own (which is why it waits on every log's end:
+//     [cluster.digestsAtOneEnd]);
+//   - the rest read only what they wrote, under op ids, titles and paths no
+//     other claim uses, so another claim's rows only add to what they read:
+//     the search's coverage is computed from its own pages and every match
+//     another page adds is still a match.
+var fleetClaims = []struct {
+	name string
+	run  func(*testing.T, *cluster)
+}{
+	{"AFleetTakesAndOffersSnapshots", claimAFleetTakesAndOffersSnapshots},
+	{"ARecordOneNodeWritesReachesEveryNodesRows", claimARecordOneNodeWritesReachesEveryNodesRows},
+	{"EveryNodeMintsIntoOneKeySpace", claimEveryNodeMintsIntoOneKeySpace},
+	{"TheFleetAnswersOneSearchBetweenItsMembers", claimTheFleetAnswersOneSearchBetweenItsMembers},
+	{"AFileUploadedToOneNodeDownloadsFromAnother", claimAFileUploadedToOneNodeDownloadsFromAnother},
+	{"TheCollectorsReportReadsOnEveryNode", claimTheCollectorsReportReadsOnEveryNode},
+	{"AFleetAgreesAboutOneCompany", claimAFleetAgreesAboutOneCompany},
+}
+
+// A FLEET OF THREE, AND WHAT ONLY A FLEET CAN SHOW — on ONE fleet.
+//
+// Every claim here stood up a fleet of its own: three members over the same
+// company and the same bootstrap, a boot and a teardown apiece around a body
+// that was often the shorter part. The claims are about a running fleet, not
+// about its boot, so they share one.
+//
+// WHAT THAT COSTS, and what pays for each:
+//   - the claims are ordered — see [fleetClaims] for why each sits where it
+//     does;
+//   - one fleet that cannot be stood up fails every claim at once, where it
+//     failed one; [startMesh] retries it on fresh ports as it always has;
+//   - a claim that leaves the fleet unhealthy would fail every claim after
+//     it, each on its own budget. So every claim starts on a fleet whose
+//     members have all hydrated — the state each case started from — and
+//     each count the whole fleet live ([cluster.whole]); when they do not
+//     after a claim, the case stops there naming that claim, rather than
+//     spending a budget per claim reporting it again;
+//   - a run boots one fleet rather than seven, so a defect in booting one
+//     shows once a run where it showed seven times — boot is still exercised
+//     by every case in this package and by the partition case's own fleet.
+//
+// THE PARTITION CLAIM KEEPS A FLEET OF ITS OWN
+// ([TestAPartitionedMemberIsSilentRatherThanSlow]): it needs every route to
+// run through a relay this process can cut, which is cost and risk under
+// every claim that never cuts one ([jetstreamtest.StartDirectMesh] says
+// why), and it is the one claim that breaks its fleet on purpose.
+func TestAFleetOfThree(t *testing.T) {
+	noParallel(t)
+	c := startCluster(t, fleetSize)
+	for i, claim := range fleetClaims {
+		after := "the fleet came up"
+		if i > 0 {
+			after = "the " + fleetClaims[i-1].name + " claim"
+		}
+		var rest []string
+		for _, later := range fleetClaims[i:] {
+			rest = append(rest, later.name)
+		}
+		for m, n := range c.nodes {
+			waitFor(t, fmt.Sprintf("member %d to be hydrated and see all %d members "+
+				"live after %s — %v are not run on a fleet that is not",
+				m, len(c.nodes), after, rest), c.whole(t, n))
+		}
+		t.Run(claim.name, func(t *testing.T) { claim.run(t, c) })
+	}
+}
+
 // A RECORD ONE NODE WRITES REACHES EVERY NODE'S ROWS.
 //
 // This is the whole claim of the state log stated as a product fact, and it is
@@ -642,11 +743,7 @@ const clusterSettle = 10 * time.Second
 // The failure it protects against is not "the record was lost". It is the
 // quieter one: two nodes' boards disagreeing about the same company, which
 // from either screen looks exactly like the other node being idle.
-func TestARecordOneNodeWritesReachesEveryNodesRows(t *testing.T) {
-	noParallel(t)
-	c := startCluster(t, fleetSize)
-	c.hydrated(t)
-
+func claimARecordOneNodeWritesReachesEveryNodesRows(t *testing.T, c *cluster) {
 	// THE CHART FIRST. A create takes its key from its project's own
 	// counter, so the project has to exist — every node applies the chart
 	// at boot, and this is also the first assertion that it did.
@@ -698,11 +795,7 @@ func TestARecordOneNodeWritesReachesEveryNodesRows(t *testing.T) {
 // On one node that arbitration is untested — there is nobody to lose to. Here
 // all three file into one project simultaneously, which is exactly the shape
 // that produced two ENG-1s in the design this replaced.
-func TestEveryNodeMintsIntoOneKeySpace(t *testing.T) {
-	noParallel(t)
-	c := startCluster(t, fleetSize)
-	c.hydrated(t)
-
+func claimEveryNodeMintsIntoOneKeySpace(t *testing.T, c *cluster) {
 	type filed struct {
 		key string
 		err error
@@ -768,11 +861,7 @@ func TestEveryNodeMintsIntoOneKeySpace(t *testing.T) {
 // a trim, which needs a backup, which is [internal/backup]'s own suite. What
 // this establishes is that if one ever did fall behind, there would be
 // something to adopt.
-func TestAFleetTakesAndOffersSnapshots(t *testing.T) {
-	noParallel(t)
-	c := startCluster(t, fleetSize)
-	c.hydrated(t)
-
+func claimAFleetTakesAndOffersSnapshots(t *testing.T, c *cluster) {
 	// A SNAPSHOT IS TAKEN AT BOOT, not only on the interval — the
 	// interval is measured against the newest artefact on DISK, so a node
 	// restarted more often than it would otherwise never take one.
@@ -994,11 +1083,7 @@ func (c *cluster) nodeIDs() []string {
 // that floor would measure the applier rather than the fan-out. The floor's own
 // decision is [search]'s to test; what a fleet can see is the network, so this
 // case hands out the table the floor would have produced.
-func TestTheFleetAnswersOneSearchBetweenItsMembers(t *testing.T) {
-	noParallel(t)
-	c := startCluster(t, fleetSize)
-	c.hydrated(t)
-
+func claimTheFleetAnswersOneSearchBetweenItsMembers(t *testing.T, c *cluster) {
 	table := search.Divide(c.nodeIDs())
 	if len(table) != fleetSize {
 		t.Fatalf("a fleet of %d divided into %d assignments", fleetSize, len(table))
@@ -1150,13 +1235,14 @@ func TestTheFleetAnswersOneSearchBetweenItsMembers(t *testing.T) {
 
 // WHAT A FLEET GUARANTEES A READER, AND THAT ITS MEMBERS AGREE.
 //
-// Three claims that only a fleet can make, in one case because they need one
-// fleet: standing three of these up costs three embedded brokers and six
-// databases, and the arms do not interfere.
+// Three things only a fleet can show, in one claim because they are about the
+// same writes every member must see alike, and the arms do not interfere. It
+// is the LAST claim [TestAFleetOfThree] makes, so the twins arm compares every
+// row the claims before it wrote as well as its own.
 //
 //  1. A LINEARIZABLE READ ON ANOTHER MEMBER SEES AN ACKNOWLEDGED WRITE, with
 //     no wait loop. That is what the barrier append buys and the one thing
-//     [TestARecordOneNodeWritesReachesEveryNodesRows] deliberately does not
+//     [claimARecordOneNodeWritesReachesEveryNodesRows] deliberately does not
 //     assert — it polls at session level, because its subject is that the
 //     record arrives at all rather than when.
 //  2. THE MEMBERS ARE TWINS. Every domain is N identical SQL copies, so two
@@ -1166,11 +1252,7 @@ func TestTheFleetAnswersOneSearchBetweenItsMembers(t *testing.T) {
 //  3. THE KNOWLEDGE BASE IS ONE OF THOSE DOMAINS TOO. Pages arrived on the log
 //     later than the tracker did, and the arm that would have caught a
 //     half-adopted domain is this one.
-func TestAFleetAgreesAboutOneCompany(t *testing.T) {
-	noParallel(t)
-	c := startCluster(t, fleetSize)
-	c.hydrated(t)
-
+func claimAFleetAgreesAboutOneCompany(t *testing.T, c *cluster) {
 	written, err := operator(t, c.nodes[0]).CreateTask(t.Context(),
 		"fleet-agrees-1", newTask("ENG", "the linearizable one"), nil)
 	if err != nil {
