@@ -3,6 +3,7 @@ package statelog_test
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 // transferHarness is a broker, a donor holding an artefact, and a joiner.
 type transferHarness struct {
 	t        *testing.T
+	q        *js.Queue
 	nc       *nats.Conn
 	dir      string
 	artefact string
@@ -55,7 +57,7 @@ func newTransferHarness(t *testing.T, bytes int) *transferHarness {
 	}
 
 	h := &transferHarness{
-		t: t, nc: nc, dir: dir, artefact: artefact,
+		t: t, q: q, nc: nc, dir: dir, artefact: artefact,
 		manifest: statelog.Manifest{
 			V:        statelog.ManifestVersion,
 			Artifact: filepath.Base(artefact),
@@ -75,7 +77,7 @@ func newTransferHarness(t *testing.T, bytes int) *transferHarness {
 		},
 	}
 	donor, err := statelog.NewDonor(statelog.DonorDeps{
-		NodeID: "donor",
+		NodeID: harnessDonor,
 		Dial:   func(context.Context) (*nats.Conn, error) { return q.Conn(), nil },
 		Newest: func() (statelog.Manifest, bool) { return h.manifest, true },
 		Path:   func(statelog.Manifest) string { return h.artefact },
@@ -94,6 +96,124 @@ func newTransferHarness(t *testing.T, bytes int) *transferHarness {
 	// than the protocol.
 	waitForSubject(t, nc, statelog.SubjectOffer)
 	return h
+}
+
+// harnessDonor is the node id of [newTransferHarness]'s one donor, which its
+// cases name to [statelog.CollectOffers] so a collection ends on that donor's
+// answer rather than at the window.
+const harnessDonor = "donor"
+
+// A COLLECTION ENDS ONCE EVERY DONOR IT EXPECTS HAS ANSWERED, AND A DECLINE IS
+// AN ANSWER.
+//
+// A node below the floor refuses every read and write while it collects, and
+// it collected for the whole window because a donor holding nothing stayed
+// silent — its own donor first among them, which every data node runs. Now a
+// donor holding nothing declines, a joiner names the donors it expects, and
+// the collection stops on the last of their answers. The decline is counted
+// and never handed back as an offer.
+func TestACollectionEndsOnceEveryExpectedDonorHasAnswered(t *testing.T) {
+	t.Parallel()
+	h := newTransferHarness(t, 4096)
+	empty := serveEmptyDonor(t, h.q, "empty")
+
+	started := time.Now()
+	offers, err := statelog.CollectOffers(t.Context(), h.nc,
+		statelog.OfferRequest{NodeID: "joiner"}, statelog.OfferWindow, harnessDonor, empty)
+	took := time.Since(started)
+	if err != nil {
+		t.Fatalf("CollectOffers: %v", err)
+	}
+	if len(offers) != 1 || offers[0].Donor != harnessDonor || offers[0].Declined() {
+		t.Fatalf("offers = %+v, want the one artefact — a decline is not an offer", offers)
+	}
+	// HALF THE WINDOW separates the two outcomes with room on both sides:
+	// a collection that waited for the window takes all of it, and one that
+	// stopped on the last answer takes two round trips.
+	if took >= statelog.OfferWindow/2 {
+		t.Fatalf("the collection took %v with both expected donors answering at "+
+			"once — it waited for the %v window rather than stopping on their "+
+			"answers", took, statelog.OfferWindow)
+	}
+}
+
+// AN EXPECTED DONOR THAT NEVER ANSWERS COSTS THE WINDOW, AND NO MORE.
+//
+// A live data node whose donor is not up yet, or is gone, is named and silent;
+// the joiner then waits exactly what it waited before it named anybody, and
+// still takes the answers it did hear.
+func TestAnExpectedDonorThatNeverAnswersCostsTheWindow(t *testing.T) {
+	t.Parallel()
+	h := newTransferHarness(t, 4096)
+	const window = 400 * time.Millisecond
+	started := time.Now()
+	offers, err := statelog.CollectOffers(t.Context(), h.nc,
+		statelog.OfferRequest{NodeID: "joiner"}, window, harnessDonor, "a-silent-peer")
+	took := time.Since(started)
+	if err != nil {
+		t.Fatalf("CollectOffers: %v", err)
+	}
+	if len(offers) != 1 {
+		t.Fatalf("%d offer(s), want the one that answered", len(offers))
+	}
+	if took < window {
+		t.Fatalf("the collection ended after %v, before its %v window, with a "+
+			"donor it expected never having answered", took, window)
+	}
+}
+
+// serveEmptyDonor runs a donor that holds no artefact, as node id, on its own
+// connection to q for the rest of the test, and returns the id.
+func serveEmptyDonor(t *testing.T, q *js.Queue, id string) string {
+	t.Helper()
+	donor, err := statelog.NewDonor(statelog.DonorDeps{
+		NodeID: id,
+		Dial:   func(context.Context) (*nats.Conn, error) { return q.DialOwned() },
+		Newest: func() (statelog.Manifest, bool) { return statelog.Manifest{}, false },
+		Path:   func(statelog.Manifest) string { return "" },
+	})
+	if err != nil {
+		t.Fatalf("NewDonor: %v", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	served := make(chan struct{})
+	go func() { defer close(served); _ = donor.Serve(ctx) }()
+	t.Cleanup(func() { cancel(); <-served })
+	// ITS OWN DECLINE, not the harness donor's offer, proves it is
+	// subscribed: read off a raw inbox, because a collection hands back no
+	// decline to look at.
+	nc, err := q.DialOwned()
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer nc.Close()
+	inbox := nats.NewInbox()
+	answers, err := nc.SubscribeSync(inbox)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := nc.PublishRequest(statelog.SubjectOffer, inbox,
+			[]byte(`{"node_id":"probe"}`)); err != nil {
+			t.Fatalf("ask: %v", err)
+		}
+		for {
+			msg, err := answers.NextMsg(200 * time.Millisecond)
+			if err != nil {
+				break
+			}
+			var o statelog.Offer
+			if json.Unmarshal(msg.Data, &o) == nil && o.Donor == id {
+				if !o.Declined() {
+					t.Fatalf("a donor holding nothing answered an offer: %+v", o)
+				}
+				return id
+			}
+		}
+	}
+	t.Fatalf("the empty donor %s never answered", id)
+	return ""
 }
 
 // waitForSubject waits until somebody answers an offer request, which is what
@@ -127,7 +247,7 @@ func TestAnArtefactArrivesByteForByte(t *testing.T) {
 
 	offers, err := statelog.CollectOffers(t.Context(), h.nc, statelog.OfferRequest{
 		NodeID: "joiner",
-	}, statelog.OfferWindow)
+	}, statelog.OfferWindow, harnessDonor)
 	if err != nil {
 		t.Fatalf("CollectOffers: %v", err)
 	}
@@ -167,7 +287,7 @@ func TestAnAbandonedTransferIsNeverReportedAsASnapshot(t *testing.T) {
 	// what a rotation mid-transfer looks like from here.
 	offers, err := statelog.CollectOffers(t.Context(), h.nc, statelog.OfferRequest{
 		NodeID: "joiner",
-	}, statelog.OfferWindow)
+	}, statelog.OfferWindow, harnessDonor)
 	if err != nil || len(offers) != 1 {
 		t.Fatalf("CollectOffers = (%d, %v)", len(offers), err)
 	}
@@ -649,7 +769,7 @@ func TestAFetchThatNamesNoArtefactIsRefused(t *testing.T) {
 	h := newTransferHarness(t, 4096)
 	offers, err := statelog.CollectOffers(t.Context(), h.nc, statelog.OfferRequest{
 		NodeID: "joiner",
-	}, statelog.OfferWindow)
+	}, statelog.OfferWindow, harnessDonor)
 	if err != nil || len(offers) != 1 {
 		t.Fatalf("CollectOffers = (%d, %v)", len(offers), err)
 	}
@@ -672,7 +792,7 @@ func TestAFetchOfAReplacedArtefactIsRefusedBeforeItStreams(t *testing.T) {
 	h := newTransferHarness(t, 4096)
 	offers, err := statelog.CollectOffers(t.Context(), h.nc, statelog.OfferRequest{
 		NodeID: "joiner",
-	}, statelog.OfferWindow)
+	}, statelog.OfferWindow, harnessDonor)
 	if err != nil || len(offers) != 1 {
 		t.Fatalf("CollectOffers = (%d, %v)", len(offers), err)
 	}

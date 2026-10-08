@@ -39,6 +39,13 @@ type AdoptDeps struct {
 	// Conn is the transfer's own connection.
 	Conn *nats.Conn
 
+	// Donors answers the donors this join expects to hear from — every
+	// live data node, each of which runs one — so its collection ends once
+	// each has answered rather than at the [OfferWindow] ([CollectOffers]).
+	// Nil, or an error, waits out the window: an expectation is a way to
+	// stop early and never a reason not to ask.
+	Donors func(ctx context.Context) ([]string, error)
+
 	// Need is this node's own acceptance test for an artefact, as the
 	// request it would make: per domain, the lowest position an artefact
 	// may name, the generation its live stream is on, and that stream's
@@ -224,7 +231,19 @@ func (a *Adopter) Join(ctx context.Context) (Manifest, error) {
 	}
 	req.NodeID = a.deps.NodeID
 
-	offers, err := CollectOffers(ctx, a.deps.Conn, req, OfferWindow)
+	var donors []string
+	if a.deps.Donors != nil {
+		named, err := a.deps.Donors(ctx)
+		if err != nil {
+			a.log.WarnContext(ctx, "statelog_donors_unknown",
+				"node", a.deps.NodeID, "error", err.Error(),
+				"detail", "which donors to wait for could not be read, so "+
+					"the join collects offers for the whole offer window")
+		} else {
+			donors = named
+		}
+	}
+	offers, err := CollectOffers(ctx, a.deps.Conn, req, OfferWindow, donors...)
 	if err != nil {
 		return Manifest{}, err
 	}

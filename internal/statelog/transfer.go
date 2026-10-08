@@ -49,11 +49,13 @@ const (
 // path and a joiner that gives up simply asks again.
 const TransferChunkWait = 30 * time.Second
 
-// OfferWindow is how long a joining node collects offers before choosing.
+// OfferWindow is the longest a joining node collects offers before choosing.
 //
 // Long enough that a busy donor answers, short enough that a node below the
 // floor — which is refusing every read and every write meanwhile — is not held
-// there by a peer that will never reply.
+// there by a peer that will never reply. It is a CEILING rather than the
+// collection's length: a joiner that names the donors it expects stops as soon
+// as each has answered ([CollectOffers]).
 const OfferWindow = 5 * time.Second
 
 // OfferRequest is what a joining node asks with.
@@ -91,14 +93,26 @@ type OfferRequest struct {
 	StreamCreatedAt map[string]time.Time `json:"stream_created_at,omitempty"`
 }
 
-// Offer is what a node answers with.
+// Offer is what a donor answers with: the artefact it holds, or — with no
+// Fetch — that it holds none ([Offer.Declined]).
 type Offer struct {
-	// Manifest is the artefact's own claim about itself.
-	Manifest Manifest `json:"manifest"`
+	// Donor is the node that answered, on every answer — an offer and a
+	// decline alike — because it is what a joiner counts its expected
+	// donors off by ([CollectOffers]). Not the manifest's NodeID, which
+	// names who TOOK the artefact and is absent from a decline.
+	Donor string `json:"donor"`
 
-	// Fetch is the subject to fetch this artefact from.
-	Fetch string `json:"fetch"`
+	// Manifest is the artefact's own claim about itself, absent on a
+	// decline.
+	Manifest Manifest `json:"manifest,omitzero"`
+
+	// Fetch is the subject to fetch this artefact from, and empty on a
+	// decline.
+	Fetch string `json:"fetch,omitempty"`
 }
+
+// Declined reports an answer from a donor that holds nothing to offer.
+func (o Offer) Declined() bool { return o.Fetch == "" }
 
 // Usable reports whether this offer can serve the request, and why not.
 // known is every migration of the replicated estate this binary carries
@@ -273,22 +287,27 @@ func (d *Donor) Serve(ctx context.Context) error {
 	return ctx.Err()
 }
 
-// answerOffer replies with this node's artefact, or stays silent.
+// answerOffer replies with this node's artefact, or with a decline when it
+// holds none.
 //
-// SILENT RATHER THAN A REFUSAL, because a joiner collects for a window and
-// takes the best answer: a node with nothing to donate has nothing to say, and
-// an explicit "no" would only make the joiner wait for it.
+// A DECLINE RATHER THAN SILENCE, because a joiner that knows whom to expect
+// stops collecting once each has answered ([CollectOffers]), and silence is
+// indistinguishable from a donor that has not heard the request yet — so a
+// silent donor held every joiner for the whole [OfferWindow], refusing every
+// read and write meanwhile. The commonest silent donor was the joiner's OWN:
+// every data node runs one, and a node that has never snapshotted holds
+// nothing, so a lone node below the floor waited five seconds on itself.
 //
 // THE REQUEST IS NOT READ. Every data node keeps the one replicated estate, so
 // there is only one thing a joiner can be asking for, and what makes an offer
 // usable — its generations, its floor, its record versions — is the joiner's
 // to judge from the manifest ([Offer.Usable]), never the donor's to guess.
 func (d *Donor) answerOffer(ctx context.Context, msg *nats.Msg) {
-	m, ok := d.deps.Newest()
-	if !ok {
-		return
+	answer := Offer{Donor: d.deps.NodeID}
+	if m, ok := d.deps.Newest(); ok {
+		answer.Manifest, answer.Fetch = m, d.FetchSubject()
 	}
-	body, err := json.Marshal(Offer{Manifest: m, Fetch: d.FetchSubject()})
+	body, err := json.Marshal(answer)
 	if err != nil {
 		d.log.WarnContext(ctx, "statelog_snapshot_offer_failed",
 			"node", d.deps.NodeID, "error", err.Error())
@@ -422,11 +441,23 @@ func (d *Donor) terminate(nc *nats.Conn, deliver string, status int, detail stri
 }
 
 // CollectOffers asks the fleet who can donate and returns what answers,
-// newest first.
+// newest first. A donor's decline ([Offer.Declined]) is counted and never
+// returned.
 //
 // It collects for a WINDOW rather than taking the first reply, because the
 // first reply is the fastest peer rather than the best artefact — and newer is
 // strictly better, since the only thing an older one buys is a longer replay.
+//
+// # Unless every donor it expects has answered
+//
+// expect names the donors the joiner knows of — the engine's live data nodes,
+// each of which runs one — and the collection ends the moment each has
+// answered, an offer or a decline, because no later answer can come from
+// anybody it is waiting for. With none named, the window decides. A donor it
+// did not name is still heard while the window is open, and one it named that
+// never answers — not up yet, or gone — costs the window and nothing more,
+// which is the most an expectation can cost: the window was what every join
+// paid before it.
 //
 // # What the context means
 //
@@ -439,7 +470,8 @@ func (d *Donor) terminate(nc *nats.Conn, deliver string, status int, detail stri
 // state log is stopping must do neither. A connection that stops delivering
 // is an error for the same reason: a joiner that cannot hear has not been told
 // that nobody can donate.
-func CollectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window time.Duration) ([]Offer, error) {
+func CollectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window time.Duration,
+	expect ...string) ([]Offer, error) {
 	// A CALLER THAT HAS ALREADY GIVEN UP ASKS NOBODY: a request published
 	// now is one every donor answers for a joiner that will not read it.
 	if err := ctx.Err(); err != nil {
@@ -475,8 +507,12 @@ func CollectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window 
 				"within the %s offer window, so no donor was asked", window))
 	}
 
+	waiting := make(map[string]bool, len(expect))
+	for _, donor := range expect {
+		waiting[donor] = true
+	}
 	var out []Offer
-	for {
+	for len(expect) == 0 || len(waiting) > 0 {
 		msg, err := sub.NextMsgWithContext(collect)
 		if err != nil {
 			// THE CALLER'S END FIRST, and tested on the PARENT: the
@@ -502,7 +538,10 @@ func CollectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window 
 		if err := json.Unmarshal(msg.Data, &o); err != nil {
 			continue
 		}
-		out = append(out, o)
+		delete(waiting, o.Donor)
+		if !o.Declined() {
+			out = append(out, o)
+		}
 	}
 	// NEWEST FIRST, so a caller's own refusals run against the best
 	// artefact before the worse ones.

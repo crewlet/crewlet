@@ -89,6 +89,8 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDonor: %v", err)
 	}
+	// A LIVE DATA NODE, as every donor is: the join waits for those.
+	presentAsDataNode(t, e, "donor")
 	donorCtx, stopDonor := context.WithCancel(t.Context())
 	t.Cleanup(stopDonor)
 	go func() { _ = donor.Serve(donorCtx) }()
@@ -164,12 +166,14 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 //
 // A SILENT listener on the offer subject tells the case the moment the rejoin
 // has asked, so the Stop lands inside the window rather than before the ask or
-// after it. Silent is also what a fleet whose donors hold nothing looks like —
-// this node's own donor, holding no snapshot, is one — so the window is spent
-// exactly as it would be in production.
+// after it. A join collects until every live data node has answered, so the
+// window stays open only while one has not: a live data node is named here
+// whose donor never answers — one not up yet, or gone — which is the window
+// spent exactly as it would be in production.
 func TestAStopMidRejoinEndsTheJoinAndWaitsForItsAppliers(t *testing.T) {
 	t.Parallel()
 	e, _, q := bootRejoinNode(t)
+	presentAsDataNode(t, e, "a-silent-peer")
 	listener, err := q.DialOwned()
 	if err != nil {
 		t.Fatalf("dial the listener: %v", err)
@@ -246,6 +250,10 @@ func bootRejoinNode(t *testing.T) (*Engine, *Backends, *jetstream.Queue) {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
+	// PRESENT, as a running data node is from its seat host's start: a join
+	// waits for the live data nodes' donors and no others, and this node's
+	// own is one of them.
+	presentAsDataNode(t, e, e.id)
 
 	q, ok := back.Queue.(*jetstream.Queue)
 	if !ok {
@@ -460,6 +468,36 @@ func TestALostEstateIsReopenedBeforeAnythingIsAskedOfIt(t *testing.T) {
 					err, errNoDonor)
 			}
 		})
+	}
+}
+
+// A JOIN NOBODY CAN DONATE TO ENDS ON THE FLEET'S ANSWERS, NOT ON THE WINDOW.
+//
+// A node below the floor refuses every read and write while it asks, and it
+// asked for the whole offer window whatever the fleet said: a donor holding
+// nothing stayed silent, and every data node runs a donor — the asking node's
+// own among them. So a lone node below the floor spent five seconds refusing
+// everything to hear itself say nothing. Its donor now declines, and the join
+// waits for the live data nodes it lists and no longer.
+func TestALoneNodesJoinEndsOnItsOwnDonorsAnswer(t *testing.T) {
+	t.Parallel()
+	e, _, q := bootRejoinNode(t)
+	s := e.native.Load().log
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
+	quietHeartbeat(s)
+	pushBelowTheFloor(t, e, q)
+	started := time.Now()
+	if err := e.rejoin(s.run, s); !errors.Is(err, errNoDonor) {
+		t.Fatalf("a lone node's rejoin = %v, want %v", err, errNoDonor)
+	}
+	// HALF THE WINDOW, which separates the two outcomes with room on both
+	// sides: a join that waited for the window takes all of it, and one
+	// that stopped on its own donor's decline takes a round trip and the
+	// reads around it.
+	if took := time.Since(started); took >= statelog.OfferWindow/2 {
+		t.Fatalf("a lone node's join took %v — it waited out the %v offer "+
+			"window rather than stopping on its own donor's answer",
+			took, statelog.OfferWindow)
 	}
 }
 

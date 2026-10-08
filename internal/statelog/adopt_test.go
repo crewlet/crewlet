@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -34,6 +35,11 @@ type joinHarness struct {
 	joinPath   string
 	manifest   statelog.Manifest
 	snapPath   string
+
+	// donors is every donor the harness runs, which its adopter names to
+	// the join so the collection ends on their answers rather than at the
+	// offer window ([statelog.AdoptDeps.Donors]).
+	donors []string
 
 	held     atomic.Int64
 	released atomic.Int64
@@ -134,7 +140,7 @@ func newJoinHarnessFrom(t *testing.T, from joinDonor) *joinHarness {
 		from.seed(t, donorEstate)
 	}
 
-	h := &joinHarness{t: t, nc: q.Conn(), broker: q}
+	h := &joinHarness{t: t, nc: q.Conn(), broker: q, donors: []string{"donor"}}
 	snapDir := filepath.Join(donorDir, "snapshots")
 	lag := uint64(0)
 	snapper, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
@@ -200,6 +206,9 @@ func (h *joinHarness) adopter(t *testing.T) *statelog.Adopter {
 		LivePath: h.joinPath,
 		NodeID:   "joiner",
 		Conn:     h.nc,
+		Donors: func(context.Context) ([]string, error) {
+			return slices.Clone(h.donors), nil
+		},
 		Need: func(context.Context) (statelog.OfferRequest, error) {
 			return statelog.OfferRequest{
 				Need:        map[string]uint64{"probe": 4_000},
@@ -705,6 +714,7 @@ func (h *joinHarness) addDonor(t *testing.T, nodeID string) {
 	served := make(chan struct{})
 	go func() { defer close(served); _ = donor.Serve(ctx) }()
 	t.Cleanup(func() { cancel(); <-served })
+	h.donors = append(h.donors, nodeID)
 
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {

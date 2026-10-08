@@ -761,7 +761,7 @@ func TestEveryEventThatStrandsTheArtefactWakesTheSnapshotLoop(t *testing.T) {
 				running, at, last := pushBelowTheFloor(t, e, q)
 				rows := filepath.Join(t.TempDir(), "crewlet-replicated.db")
 				copyAdvancedTo(t, back, running, at, last, rows)
-				standUpDonor(t, q, rows, statelog.Position{
+				standUpDonor(t, e, q, rows, statelog.Position{
 					Stream: at.Stream, Generation: at.Generation, Seq: last,
 				}, running.runner.KeyedTo())
 				if err := e.rejoin(e.native.Load().log.run, e.native.Load().log); err != nil {

@@ -368,7 +368,8 @@ func (s *stateLog) Domain(name string) *runningLog { return s.held().byKey[name]
 // doubles, so a fleet whose donor is a minute from taking its first snapshot
 // is asked again inside that minute — and a fleet that genuinely has no donor
 // is asked a dozen times an hour rather than three hundred and sixty, each
-// ask being a five-second offer window the node spends refusing every read.
+// ask being up to a five-second offer window the node spends refusing every
+// read — the whole of it whenever a live data node's donor does not answer.
 const RejoinRetryCeiling = 5 * time.Minute
 
 // errNoDonor reports a runtime join that found nothing to adopt, which is a
@@ -1974,10 +1975,11 @@ func (c *Company) Epoch() map[string]any {
 // written and never trimmed is one below the first record rather than behind
 // it: the first sequence is 1, and its next record is exactly that. Those are
 // the common cases and they must not pay a fleet round trip. Where peers are
-// listening it costs the whole [statelog.OfferWindow], five seconds refusing
-// every read and write while donors with nothing usable stay silent; a node
-// alone is answered "no responders" at once, which is why a single-node boot
-// cannot show the mistake and the boot tests observe the ask itself.
+// listening it costs a round trip to every live data node, refusing every read
+// and write meanwhile — and the whole [statelog.OfferWindow], five seconds,
+// when one of them does not answer; a node alone is answered "no responders"
+// at once, which is why a single-node boot cannot show the mistake and the
+// boot tests observe the ask itself.
 //
 // # And why no offer is not a failure
 //
@@ -2050,6 +2052,26 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 		LivePath: e.backends.Store.ReplicatedFile(),
 		NodeID:   s.nodeID,
 		Conn:     conn.Conn(),
+		// EVERY LIVE DATA NODE, each of which runs a donor — this one's
+		// own among them: the join stops collecting once each has
+		// answered, an offer or a decline, rather than refusing every read
+		// and write for the whole offer window while it waits for answers
+		// that are not coming. LISTED NOW ([Engine.holdersOf]) rather than
+		// read from the watched view, which re-lists on a heartbeat: a
+		// donor the view has not seen yet is one the join could stop
+		// before hearing, and a join is rare enough that one listing is
+		// nothing. A listing that fails waits the window out.
+		Donors: func(ctx context.Context) ([]string, error) {
+			live, err := e.holdersOf().LiveData(ctx)
+			if err != nil {
+				return nil, err
+			}
+			ids := make([]string, 0, len(live))
+			for _, p := range live {
+				ids = append(ids, p.NodeID)
+			}
+			return ids, nil
+		},
 		Need: func(context.Context) (statelog.OfferRequest, error) {
 			return want, nil
 		},

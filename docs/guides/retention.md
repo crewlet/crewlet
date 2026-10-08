@@ -377,11 +377,15 @@ below the published floor whose missing records the log still holds reports
    appliers, adopts, moves its consumers to the artefact's position and
    resumes, with no restart. It takes a **hold** on every domain's log first,
    which pins the trim for the duration of the transfer — so a join cannot
-   race the trim that made it necessary. A running node that finds no donor
-   stays as it is, refusing, and asks again on an interval that doubles up to
-   five minutes. Stopping a node mid-join — a signal during its boot, or a
-   shutdown while it is asking or fetching — gives the join up at once rather
-   than waiting out the five-second offer window, and is never reported as a
+   race the trim that made it necessary. It collects offers until every live
+   data node has answered — each runs a donor, the asking node's own among
+   them, and one holding no artefact answers that it has none — or for five
+   seconds at most, which is what a data node whose donor never answers costs.
+   A running node that finds no donor stays as it is, refusing, and asks again
+   on an interval that doubles up to five minutes. Stopping a node mid-join —
+   a signal during its boot, or a shutdown while it is asking or fetching —
+   gives the join up at once rather than waiting out the five-second offer
+   window, and is never reported as a
    fleet with nothing to donate: the next start decides afresh. Nor is a join
    that loses the node's **own database** — an install that failed and whose
    live file then could not be reopened, or an artefact installed and then not

@@ -172,7 +172,7 @@ func TestANodeLeftOnARebuiltLogAdoptsTheReanchoredGeneration(t *testing.T) {
 	// it has written since.
 	peerRecord := appendEviction(t, running, "op-peer", "node-z")
 	next := running.runner.Committed().Generation + 1
-	standUpDonor(t, q, rows, statelog.Position{
+	standUpDonor(t, e, q, rows, statelog.Position{
 		Stream: running.spec.Name, Generation: next, Seq: peerRecord - 1,
 	}, live)
 	if err := e.backends.Fleet.PutPositions(t.Context(), coord.NodePositions{
@@ -283,7 +283,7 @@ func TestANodeARestoredReanchorLeftBehindStopsOnItsRecordAndAdopts(t *testing.T)
 			"record was applied into rows from the one before", got, end)
 	}
 
-	standUpDonor(t, q, rows, statelog.Position{
+	standUpDonor(t, e, q, rows, statelog.Position{
 		Stream: spec.Name, Generation: next, Seq: end,
 	}, live)
 	if err := e.backends.Fleet.PutPositions(t.Context(), coord.NodePositions{
@@ -321,7 +321,11 @@ func copyEstate(t *testing.T, back *Backends) string {
 // standUpDonor serves a snapshot of rows — with one domain's checkpoint moved to
 // at, keyed to created — on the node's broker, the way a peer that re-anchored
 // that domain would, until the test ends.
-func standUpDonor(t *testing.T, q *jetstream.Queue, rows string,
+//
+// AS A LIVE DATA NODE OF e's FLEET, which is what every donor is: a join waits
+// for the live data nodes to answer and no longer, so a donor nobody's
+// presence names is one a join may stop before hearing ([presentAsDataNode]).
+func standUpDonor(t *testing.T, e *Engine, q *jetstream.Queue, rows string,
 	at statelog.Position, created time.Time) {
 
 	t.Helper()
@@ -383,7 +387,16 @@ func standUpDonor(t *testing.T, q *jetstream.Queue, rows string,
 	if err != nil {
 		t.Fatalf("NewDonor: %v", err)
 	}
+	presentAsDataNode(t, e, "donor")
 	ctx, stop := context.WithCancel(t.Context())
 	t.Cleanup(stop)
 	go func() { _ = donor.Serve(ctx) }()
+}
+
+// presentAsDataNode claims a presence lease for id as a data node on e's
+// fleet, so a join e makes lists it and expects its answer
+// ([statelog.AdoptDeps.Donors]).
+func presentAsDataNode(t *testing.T, e *Engine, id string) {
+	t.Helper()
+	claimPresences(t, e.backends.Coord, map[string][]string{id: {"data"}})
 }
