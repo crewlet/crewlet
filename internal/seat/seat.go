@@ -40,6 +40,14 @@
 //     it is spawning that seat's stdio MCP children. A node absorbing a dead
 //     peer's twenty seats at once would fork twenty subprocess trees in one
 //     tick.
+//   - A change to the seats themselves sweeps AT ONCE ([Host.Resweep]).
+//     The sweep's tick is sized for watching the fleet, and the seat list
+//     moves only when a configuration is applied: a role a revision added,
+//     and the whole company on a node that booted without one, sat
+//     unclaimed for up to [SweepInterval] waiting for a tick that had
+//     nothing to learn but what the apply already knew. At most one such
+//     pass per interval, so the rate limit above still bounds a node to
+//     two passes' claims in any interval however many applies arrive.
 //
 // # Losing a seat is as important as gaining one
 //
@@ -154,7 +162,9 @@ const (
 	// the heartbeat keeps what this node has, the sweep looks for what it
 	// should take. Five seconds means a dead peer's seats are fully
 	// absorbed within ~TTL plus a few sweeps, without polling the store
-	// hard enough to matter.
+	// hard enough to matter. It is the cadence for what changes in the
+	// FLEET; a change to the seats themselves asks for a pass at once
+	// ([Host.Resweep]).
 	SweepInterval = 5 * time.Second
 
 	// ClaimLimitPerSweep is how many seats one sweep may newly claim.

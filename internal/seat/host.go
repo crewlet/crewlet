@@ -223,6 +223,11 @@ type Host struct {
 	releaseLimit   int
 	acquireBackoff time.Duration
 
+	// resweep asks the sweep loop for a pass before its next tick
+	// ([Host.Resweep]). Buffered by one: a request that finds one already
+	// pending adds nothing to it.
+	resweep chan struct{}
+
 	// sweepMu and beatMu serialise the two passes against themselves. A
 	// single-threaded scheduler gives this for free; here the loops are
 	// goroutines and a caller may drive either pass directly, so two
@@ -314,6 +319,7 @@ func New(cfg Config) (*Host, error) {
 		ttl:          ttl,
 		heartbeat:    orDuration(cfg.HeartbeatInterval, ttl/HeartbeatRatio),
 		sweepEvery:   orDuration(cfg.SweepInterval, SweepInterval),
+		resweep:      make(chan struct{}, 1),
 		claimLimit:   orInt(cfg.ClaimLimit, ClaimLimitPerSweep),
 		releaseLimit: orInt(cfg.ReleaseLimit, ReleaseLimitPerSweep),
 		// One TTL — THIS host's, not the shipped constant. Tying the two

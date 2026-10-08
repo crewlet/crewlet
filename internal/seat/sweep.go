@@ -13,17 +13,50 @@ import (
 
 // sweepLoop re-evaluates placement on its own cadence, separate from the
 // heartbeat because the two answer different questions: the heartbeat keeps
-// what this node has, the sweep looks for what it should take.
+// what this node has, the sweep looks for what it should take — and at once
+// when [Host.Resweep] asks, at most once per interval.
+//
+// THE INTERVAL STARTS AGAIN after an asked-for pass, so that pass stands in
+// for the tick rather than adding one beside it: a node's passes stay one per
+// interval apart but for the one an ask brings forward, which is what keeps
+// the per-sweep claim limit a bound on the rate — two passes' claims in any
+// interval at most, however many applies ask. An ask inside the interval of
+// the last one it honoured waits for the tick, which is the latency it would
+// have had without asking. Wall-clock, like the ticker, never the injected
+// clock the leases are judged by.
 func (h *Host) sweepLoop(ctx context.Context) {
 	ticker := time.NewTicker(h.sweepEvery)
 	defer ticker.Stop()
+	var asked time.Time
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+		case <-h.resweep:
+			if !asked.IsZero() && time.Since(asked) < h.sweepEvery {
+				continue
+			}
+			asked = time.Now()
+			ticker.Reset(h.sweepEvery)
 		}
 		h.safely("seat_sweep_tick_failed", func() { h.Sweep(ctx) })
+	}
+}
+
+// Resweep asks for a placement pass now rather than at the sweep's next tick,
+// without waiting for it. For a change to the seats [Config.Seats] answers —
+// a role added or removed, a placement moved, a node's first company — which
+// the next tick would otherwise be the first to see, up to [SweepInterval]
+// later with every new seat unclaimed and every removed one still held.
+//
+// A no-op on a host that is not running, and coalesced: an ask that finds one
+// pending adds nothing, and one inside the interval of the last honoured waits
+// for the tick ([Host.sweepLoop]).
+func (h *Host) Resweep() {
+	select {
+	case h.resweep <- struct{}{}:
+	default:
 	}
 }
 
