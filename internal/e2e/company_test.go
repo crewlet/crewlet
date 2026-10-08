@@ -215,27 +215,56 @@ type node struct {
 // Everything real: a real embedded stream on a real temp directory, a real
 // store, the real API in front of them, and the real observability pipeline
 // wired the way cmd/crewlet wires it. The one stub is the vendor endpoint.
-func start(t *testing.T) *node { return startWith(t, nil) }
+func start(t *testing.T) *node { return startNode(t, nodeSpec{}) }
 
 // startWith stands a node up over a company document the caller may amend, for
 // the cases whose subject is a config field rather than a turn.
 func startWith(t *testing.T, amend func(doc string) string) *node {
 	t.Helper()
-	return startBooted(t, amend, nil)
+	return startNode(t, nodeSpec{company: amend})
 }
 
-// startBooted stands a node up over a company document and a bootstrap the
-// caller may both amend, for the cases that need the operator's own half of
-// the configuration too — a bearer token a person writes with.
-func startBooted(
-	t *testing.T, amend func(doc string) string, amendBoot func(*config.Bootstrap),
-) *node {
+// nodeSpec is what a case may vary about the node it stands up. The zero value
+// is the golden company on the harness's own environment.
+type nodeSpec struct {
+	// company amends the golden company document.
+	company func(doc string) string
+	// boot amends the operator's half of the configuration, for the cases
+	// that need it — a bearer token a person writes with.
+	boot func(*config.Bootstrap)
+	// env is what the node's `${VAR}` references resolve to beyond the
+	// harness's own ([nodeEnvironment]).
+	env map[string]string
+}
+
+// nodeEnvironment is the environment a node in this package resolves its
+// `${VAR}` references from: the harness's own variables and the case's,
+// HANDED to the engine ([engine.Options.Environment]) and never read from the
+// process.
+//
+// HANDED because the process environment is the one input every case in a
+// binary shares. A case that configured a node through it had to set it with
+// t.Setenv, which Go refuses beside t.Parallel, so eight cases ran alone for
+// no other reason — and a case asserting that a reference resolves to NOTHING
+// held only on a runner that happened not to export the variable.
+//
+// The scripted endpoint takes any key, so CREWLET_TEST_KEY is a placeholder,
+// set so every node runs on a key as a deployment does rather than on whatever
+// the runner exports.
+func nodeEnvironment(vars map[string]string) config.MapSource {
+	env := config.MapSource{"CREWLET_TEST_KEY": "sk-ant-e2e-placeholder"}
+	maps.Copy(env, vars)
+	return env
+}
+
+// startNode stands a node up as spec describes.
+func startNode(t *testing.T, spec nodeSpec) *node {
 	t.Helper()
 	model := newScriptedModel(t)
 
 	doc := fmt.Sprintf(companyDoc, model.url)
-	if amend != nil {
-		doc = amend(doc)
+	if spec.company != nil {
+		doc = spec.company(doc)
 	}
 	cfg, err := config.ParseCompany([]byte(doc))
 	if err != nil {
@@ -244,13 +273,14 @@ func startBooted(
 	boot := config.DefaultBootstrap()
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
-	if amendBoot != nil {
-		amendBoot(&boot)
+	if spec.boot != nil {
+		spec.boot(&boot)
 	}
 	seedStore(t, &boot)
 
 	e, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation,
+		Environment: nodeEnvironment(spec.env),
 	})
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)

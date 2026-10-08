@@ -191,23 +191,36 @@ func TestACodeHostWithNoUsableSigningSecretDoesNotStart(t *testing.T) {
 	// code: config refuses a literal that is not a usable key outright, so
 	// what the engine has left to catch is a reference resolving to nothing
 	// or to something else — precisely what config cannot see.
-	const ref = "${CREWLET_TEST_GITLAB_SECRET}"
+	const (
+		variable = "CREWLET_TEST_GITLAB_SECRET"
+		ref      = "${" + variable + "}"
+	)
 	for _, tc := range []struct{ name, resolvesTo string }{
 		{"a reference nothing answers", ""},
 		{"a value the vendor could not have produced", "not-a-whsec-value"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			env := map[string]string{}
 			if tc.resolvesTo != "" {
-				t.Setenv("CREWLET_TEST_GITLAB_SECRET", tc.resolvesTo)
+				env[variable] = tc.resolvesTo
 			}
 			// THE SEAT HOLDS A CREDENTIAL, which is what makes the silence
 			// mean something: this exact company with a usable signing
 			// secret wakes the CEO on this exact delivery, as
 			// TestACodeHostAssignmentWakesTheSeatThatOwnsTheAccount does.
-			n := startWith(t, func(doc string) string {
+			n := startNode(t, nodeSpec{company: func(doc string) string {
 				return strings.Replace(withSeatCredential(forge.url)(doc),
 					testSigningSecret, ref, 1)
-			})
+			}, env: env})
+			// THE PREMISE, held on the node rather than assumed of the
+			// runner: the reference answers exactly what this case handed
+			// it, so "nothing answers" cannot quietly become "the runner
+			// exports a value" and test the other case twice.
+			if got, found := n.engine.LookupSecret(variable); found != (tc.resolvesTo != "") ||
+				got != tc.resolvesTo {
+				t.Fatalf("%s resolves to %q (found %v) on the node, want %q",
+					ref, got, found, tc.resolvesTo)
+			}
 			box := watchInbox(t, n, "ceo")
 
 			// The company is up — the seat's mailbox exists and the rest of

@@ -138,21 +138,30 @@ func startCoding(t *testing.T, mode string) *codingNode {
 	t.Helper()
 	stateDir := t.TempDir()
 	binDir := installFakeAgent(t)
-	// Both reach the box through role.sandbox.env, which is the ONLY way an
-	// external value gets there: the engine names no tool-specific variable
-	// of its own. That the fake agent runs at all is therefore also the
-	// proof that ${VAR} references in that block resolve.
-	t.Setenv("FAKE_AGENT_MODE", mode)
-	t.Setenv("FAKE_AGENT_PATH", filepath.Join(binDir, "claude"))
 	// Outside the box directory, so it survives the teardown that ends the
 	// turn under test.
 	argv := filepath.Join(stateDir, "argv.txt")
-	t.Setenv("FAKE_AGENT_ARGV", argv)
+	// All three reach the box through role.sandbox.env, which is the ONLY
+	// way an external value gets there: the engine names no tool-specific
+	// variable of its own. That the fake agent runs at all is therefore also
+	// the proof that ${VAR} references in that block resolve.
+	env := fakeAgentEnv(binDir, mode)
+	env["FAKE_AGENT_ARGV"] = argv
 
 	model := newSandboxModel(t)
 	doc := fmt.Sprintf(sandboxCompanyDoc, model.url, stateDir)
-	n := bootCompany(t, doc, model)
+	n := bootCompany(t, doc, model, env)
 	return &codingNode{node: n, stateDir: stateDir, binDir: binDir, argvPath: argv}
+}
+
+// fakeAgentEnv is what a coding node's environment carries for the stand-in
+// CLI installed in binDir to run in mode: where to copy it from, and how to
+// behave.
+func fakeAgentEnv(binDir, mode string) map[string]string {
+	return map[string]string{
+		"FAKE_AGENT_MODE": mode,
+		"FAKE_AGENT_PATH": filepath.Join(binDir, "claude"),
+	}
 }
 
 // installFakeAgent writes a `claude` that behaves like a headless coding CLI.
@@ -228,17 +237,20 @@ esac
 	return dir
 }
 
-// bootCompany stands a node (an engine and its API) up over a company document.
+// bootCompany stands a node (an engine and its API) up over a company document,
+// with env added to its environment ([nodeEnvironment]).
 //
-// The same assembly startWith does, factored out so a suite whose subject
+// The same assembly startNode does, factored out so a suite whose subject
 // needs its own store directory — one that SURVIVES a restart — can supply it.
-func bootCompany(t *testing.T, doc string, model *scriptedModel) *node {
+func bootCompany(t *testing.T, doc string, model *scriptedModel, env map[string]string) *node {
 	t.Helper()
 	dir := t.TempDir()
-	return bootCompanyIn(t, doc, model, filepath.Join(dir, "crewlet.db"), filepath.Join(dir, "stream"))
+	return bootCompanyIn(t, doc, model, filepath.Join(dir, "crewlet.db"),
+		filepath.Join(dir, "stream"), env)
 }
 
-func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, streamDir string) *node {
+func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, streamDir string,
+	env map[string]string) *node {
 	t.Helper()
 	cfg, err := config.ParseCompany([]byte(doc))
 	if err != nil {
@@ -251,6 +263,7 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 
 	e, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation,
+		Environment: nodeEnvironment(env),
 		// The completion poll, sped up. It is sized in production against
 		// coding jobs that run for minutes; at that cadence a test whose
 		// job finishes in a moment would wait out a real tick to see it.
@@ -754,13 +767,12 @@ func (n *codingNode) board(t *testing.T) []map[string]any {
 func TestAnEngineRestartMidRunStillFinishesTheSameTurn(t *testing.T) {
 	stateDir := t.TempDir()
 	binDir := installFakeAgent(t)
-	t.Setenv("FAKE_AGENT_MODE", "held")
+	env := fakeAgentEnv(binDir, "held")
 	// THE JOB RUNS UNTIL THIS FILE APPEARS. The restart has to happen while
 	// it is still running, and how long a second engine takes to boot is a
 	// property of the machine rather than of the design.
 	release := filepath.Join(t.TempDir(), "release")
-	t.Setenv("FAKE_AGENT_RELEASE", release)
-	t.Setenv("FAKE_AGENT_PATH", filepath.Join(binDir, "claude"))
+	env["FAKE_AGENT_RELEASE"] = release
 
 	// ONE store and ONE stream directory across both processes, which is
 	// what makes this a restart rather than a fresh company.
@@ -771,7 +783,7 @@ func TestAnEngineRestartMidRunStillFinishesTheSameTurn(t *testing.T) {
 	model := newSandboxModel(t)
 	doc := fmt.Sprintf(sandboxCompanyDoc, model.url, stateDir)
 
-	first := bootCompanyIn(t, doc, model, dbPath, streamDir)
+	first := bootCompanyIn(t, doc, model, dbPath, streamDir, env)
 	firstNode := &codingNode{node: first, stateDir: stateDir, binDir: binDir}
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(first.engine.Node().Host().Held(), "swe")
@@ -795,7 +807,7 @@ func TestAnEngineRestartMidRunStillFinishesTheSameTurn(t *testing.T) {
 	// whole reason the row exists.
 	first.engine.Stop(context.Background())
 
-	second := bootCompanyIn(t, doc, model, dbPath, streamDir)
+	second := bootCompanyIn(t, doc, model, dbPath, streamDir, env)
 	secondNode := &codingNode{node: second, stateDir: stateDir, binDir: binDir}
 	waitFor(t, "the new engine to claim the seat", func() bool {
 		return slices.Contains(second.engine.Node().Host().Held(), "swe")
@@ -974,13 +986,12 @@ func startCodingWithPause(t *testing.T, mode string, pauseTTL int) *codingNode {
 	t.Helper()
 	stateDir := t.TempDir()
 	binDir := installFakeAgent(t)
-	t.Setenv("FAKE_AGENT_MODE", mode)
-	t.Setenv("FAKE_AGENT_PATH", filepath.Join(binDir, "claude"))
 
 	model := newSandboxModel(t)
 	doc := strings.Replace(
 		fmt.Sprintf(sandboxCompanyDoc, model.url, stateDir),
 		"default_pause_ttl_seconds: 1800",
 		fmt.Sprintf("default_pause_ttl_seconds: %d", pauseTTL), 1)
-	return &codingNode{node: bootCompany(t, doc, model), stateDir: stateDir, binDir: binDir}
+	n := bootCompany(t, doc, model, fakeAgentEnv(binDir, mode))
+	return &codingNode{node: n, stateDir: stateDir, binDir: binDir}
 }

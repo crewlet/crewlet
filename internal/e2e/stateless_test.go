@@ -44,12 +44,14 @@ type statelessPair struct {
 
 func startStatelessPair(t *testing.T) statelessPair {
 	t.Helper()
-	return startStatelessPairWith(t, nil)
+	return startStatelessPairWith(t, nil, nil)
 }
 
 // startStatelessPairWith is [startStatelessPair] over a company document the
-// caller may amend first.
-func startStatelessPairWith(t *testing.T, amend func(doc string) string) statelessPair {
+// caller may amend first, with env added to both nodes' environment
+// ([nodeEnvironment]).
+func startStatelessPairWith(t *testing.T, amend func(doc string) string,
+	env map[string]string) statelessPair {
 	t.Helper()
 	model := newScriptedModel(t)
 	doc := fmt.Sprintf(companyDoc, model.url)
@@ -72,7 +74,7 @@ func startStatelessPairWith(t *testing.T, amend func(doc string) string) statele
 	dataBoot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	dataBoot.Stream.Leaf.Host, dataBoot.Stream.Leaf.Port = "127.0.0.1", port
 	dataBoot.Coordination.Type = config.CoordinationEmbeddedKV
-	data := bootNode(t, &dataBoot, cfg, model)
+	data := bootNode(t, &dataBoot, cfg, model, env)
 	data.app, data.server = serveAPI(t, data.engine, &dataBoot, nil)
 
 	agentDir := t.TempDir()
@@ -83,7 +85,7 @@ func startStatelessPairWith(t *testing.T, amend func(doc string) string) statele
 	agentBoot.Store.Scratch = true
 	agentBoot.Stream.Leaf.URLs = []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", port)}
 	agentBoot.Coordination.Type = config.CoordinationEmbeddedKV
-	agent := bootNode(t, &agentBoot, cfg, model)
+	agent := bootNode(t, &agentBoot, cfg, model, env)
 	return statelessPair{data: data, agent: agent, agentStore: agentDir, agentBoot: &agentBoot}
 }
 
@@ -91,10 +93,12 @@ func startStatelessPairWith(t *testing.T, amend func(doc string) string) statele
 //
 // Neither bootstrap is validated here: engine.New holds every bootstrap it is
 // given to Tier A, and a refusal names the node it was building.
-func bootNode(t *testing.T, boot *config.Bootstrap, cfg *config.Company, model *scriptedModel) *node {
+func bootNode(t *testing.T, boot *config.Bootstrap, cfg *config.Company, model *scriptedModel,
+	env map[string]string) *node {
 	t.Helper()
 	return bootNodeWith(t, engine.Options{
 		Bootstrap: boot, Company: cfg, ActivatedAt: harnessActivation,
+		Environment: nodeEnvironment(env),
 	}, model)
 }
 
@@ -326,6 +330,7 @@ func TestANodeAdmissionDoesNotApplyToIsReadyOnItsPresence(t *testing.T) {
 			boot.Coordination.Type = config.CoordinationEmbeddedKV
 			n := bootNodeWith(t, engine.Options{
 				Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation, Mode: tc.mode,
+				Environment: nodeEnvironment(nil),
 			}, model)
 			probes, runtime := serveProbes(t, n, &boot)
 

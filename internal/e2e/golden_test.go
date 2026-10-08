@@ -953,7 +953,7 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	// AND A PERSON WHO CAN WRITE: the founder's seat binds a bearer token, so
 	// the capture can end with a real `/operator/act` answer — the one the
 	// dashboard's session floor is raised from.
-	n := startBooted(t, func(doc string) string {
+	n := startNode(t, nodeSpec{company: func(doc string) string {
 		doc = strings.Replace(doc, "roles:\n", "roles:\n"+
 			"  - name: CFO\n"+
 			"    handle: cfo\n"+
@@ -965,9 +965,9 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 		// MID-DAY ON THE COMPANY'S CLOCK, so the refusal waited for below
 		// is stamped in the day it is read back in ([middayZone]).
 		return doc + "\ntimezone: " + middayZone() + "\ntoken_budget: {day: 100000000}\n"
-	}, func(boot *config.Bootstrap) {
+	}, boot: func(boot *config.Bootstrap) {
 		boot.API.Auth.Tokens = []config.APIToken{{ID: replayOperator, Token: replayToken}}
-	})
+	}})
 	zone := companyMidday(t, n.engine)
 
 	waitFor(t, "the seats to be claimed", func() bool {

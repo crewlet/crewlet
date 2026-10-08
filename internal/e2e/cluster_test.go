@@ -408,6 +408,7 @@ func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i in
 
 	e, err := engine.New(ctx, engine.Options{
 		Bootstrap: boot, Company: cfg, ActivatedAt: harnessActivation,
+		Environment: nodeEnvironment(nil),
 	})
 	if err != nil {
 		// A CONFIG THE ENGINE REFUSED is refused identically on every

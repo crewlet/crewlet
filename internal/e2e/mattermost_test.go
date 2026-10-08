@@ -131,14 +131,13 @@ func (m *fakeMattermost) post(t *testing.T, id, message string) {
 // data node whichever of the two delivered it.
 func TestAMattermostPostWakesItsSeatOnceOnAFleet(t *testing.T) {
 	mm := startFakeMattermost(t)
-	t.Setenv("CREWLET_TEST_MM_TOKEN", "tok-ceo")
 	p := startStatelessPairWith(t, func(doc string) string {
 		doc = strings.Replace(doc, "roles:\n", "integrations:\n  mattermost:\n    enabled: true\n"+
 			"    url: "+mm.URL+"\n    team: acme\nroles:\n", 1)
 		return strings.Replace(doc, "    handle: ceo\n    llm: scripted\n",
 			"    handle: ceo\n    llm: scripted\n    integrations:\n      mattermost:\n"+
 				"        bot_token: \"${CREWLET_TEST_MM_TOKEN}\"\n", 1)
-	})
+	}, map[string]string{"CREWLET_TEST_MM_TOKEN": "tok-ceo"})
 	waitFor(t, "the stateless node to be admitted by a data node", hydrated(t, p.agent.engine))
 	waitFor(t, "both nodes to open the bot's socket", func() bool { return mm.open() >= 2 })
 	box := watchInbox(t, p.data, "ceo")

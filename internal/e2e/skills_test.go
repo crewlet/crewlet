@@ -176,11 +176,10 @@ func TestAnOrdinaryPageInTheContainerIsNotASkill(t *testing.T) {
 // per epoch, unlike the skills themselves, which come from the knowledge
 // base and outlive one.
 func TestOperatorVariablesAreSubstitutedIntoASkill(t *testing.T) {
-	t.Setenv("CREWLET_TEST_TENANT", "nimbus")
-	n := startWith(t, func(doc string) string {
+	n := startNode(t, nodeSpec{company: func(doc string) string {
 		return strings.Replace(doc, "name: Nimbus",
 			"name: Nimbus\nskill_variables:\n  tenant: ${CREWLET_TEST_TENANT}", 1)
-	})
+	}, env: map[string]string{"CREWLET_TEST_TENANT": "nimbus"}})
 	waitForSeat(t, n, "ceo")
 
 	with := toolSkill("recall-conventions", "query_episodes", true)
