@@ -720,6 +720,20 @@ the value at its source as well.
 records what it discovered at a vendor writes as the node, not as a
 credential; a managing system that re-renders the document should carry those
 values (they are in the active revision it reads back) or set them itself.
+That includes a provisioning pass any operator starts on demand from `/setup`
+or Settings › Integrations: where `integrations.jira` or
+`integrations.confluence` has no `cloud_id`, the Atlassian pass records the
+`cloud_id` and `site_url` of the site it found, and the revision is credited to
+the node (`reconcile loop`), not to the operator who pressed the button.
+
+**It prevents drift; it is not a privilege boundary.** `company_writers`
+stops a person's edit from being silently overwritten, and nothing more. Every
+token still writes the secret store and can reload, so a token that is not a
+writer can still change what the managed document *does* by rewriting a value
+it references — a model's API key, a webhook secret, or any URL or endpoint
+kept as a `${VAR}` — and publishing it with `POST /config/reload`. A
+deployment that needs to keep a credential away from the company's behaviour
+must not issue that credential a token at all.
 
 **The dashboard shows the document as managed.** The [`viewer`](../reference/api-endpoints.md#queries)
 answer says whether the caller may change the document and, to an operator,

@@ -781,7 +781,12 @@ an agent's GitHub App answer a credential the list does not name
 — before a value is sealed, a teardown is queued or GitHub is asked for
 anything. A submission that only rotates a value the document already points
 at is not a change to it and is served, ending in a reload as always; so are
-the provisioning pass and its read-only check. A GitHub App creation carries
+the provisioning pass and its read-only check. A provisioning pass any
+operator starts may still record what it discovered into the document — where
+`integrations.jira` or `integrations.confluence` has no `cloud_id`, the
+Atlassian pass records the site's `cloud_id` and `site_url` — and that revision is
+written as the node (`reconcile loop`), not as the credential that started
+the pass. A GitHub App creation carries
 the operator who began it in its signed state, so the callback records the
 app — its revision and its sealed key — as that credential, and asks again
 before it exchanges GitHub's one-time code.

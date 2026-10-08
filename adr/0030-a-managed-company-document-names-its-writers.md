@@ -57,6 +57,14 @@ renders the company; refusing them that is an outage the setting caused.
 
 ## What this does not decide
 
+It is not a privilege boundary. It prevents silent drift between the managing
+system and the running document; it does not keep a credential from changing
+what the document does. Every token still writes the secret store and can
+reload, so a token that is not a writer can rewrite any value the document
+references through a `${VAR}` — a model's key, a webhook secret, an endpoint —
+and publish it. A deployment that needs separation must not issue tokens it
+does not trust.
+
 It does not decide who may READ the document — reads are unchanged — nor who
 may write the secret store, the work tracker, the knowledge base or anything
 else outside the company document. It does not stop the engine's own
