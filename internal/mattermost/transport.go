@@ -310,7 +310,7 @@ func (t *Transport) identify(ctx context.Context, cfg SeatConfig) (identifiedSea
 // attach registers an identified seat and attaches its socket.
 func (t *Transport) attach(ctx context.Context, s identifiedSeat) error {
 	t.mu.Lock()
-	t.seats[s.seat.Handle] = runningSeat{seat: s.seat, client: s.client}
+	t.seats[s.seat.Handle] = runningSeat(s)
 	t.mu.Unlock()
 
 	t.register(s.seat)
