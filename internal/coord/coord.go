@@ -195,13 +195,13 @@ const ProtocolVersion = 4
 // A DUTY (`worker:`) IS NOT COUNTED, and counting it was a fleet-wide stall:
 // a duty is claimed ungated (see [AcquireOptions.Ungated]) and outlives its
 // holder by its TTL, which runs to [MaxDutyTTL]. When the last node of the
-// older build crashed mid-upgrade, its presence and seats lapsed in under a
-// minute while its duty leases stayed live for up to three hours, and every
-// newer node's seat claim was refused for all of it — a fleet that could not
-// place a seat for hours after a crash, over a lease that says nothing
+// older build crashed mid-upgrade, its presence and seats lapsed within one
+// seat lease TTL while its duty leases stayed live for up to three hours, and
+// every newer node's seat claim was refused for all of it — a fleet that could
+// not place a seat for hours after a crash, over a lease that says nothing
 // presence does not already say while its holder lives. The same holds for
-// every other class a claim takes — the tracker's walk claims, whose TTL
-// follows the walk — none of which is the seat-host protocol and each of
+// every other class a claim takes — the tracker's walk claims, held for as
+// long as the walk runs — none of which is the seat-host protocol and each of
 // which is held by a node whose presence or seats already speak for it.
 func ProtocolGateCounts(resource string) bool {
 	return ClassNode.Holds(resource) || ClassSeat.Holds(resource)

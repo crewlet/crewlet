@@ -818,11 +818,12 @@ func (c *floorCounter) FleetProtocolFloor(ctx context.Context) (int, bool, error
 // A node whose share did not come out even has room for one more seat and
 // nothing free to take — the steady state of most of a fleet — and it used to
 // read the fleet's protocol floor on every sweep to rule the mixed-version
-// gate out. The floor is a question about every live lease, which the KV
-// backend answers from a view that takes in every lease write the fleet makes
-// while anybody asks it: asked every five seconds, the view never went idle,
-// and each such node took in the fleet's heartbeats — about 670 messages a
-// second at ten thousand seats — to learn what each refusal had already said.
+// gate out. The floor is a question about every live presence and seat lease,
+// which the KV backend answers from a view that takes in every write to the
+// seat lease bucket while anybody asks it: asked every five seconds, the view
+// never went idle, and each such node took in the fleet's heartbeats — about
+// 670 messages a second at ten thousand seats — to learn what each refusal had
+// already said.
 // So here every seat is held, by this node's peer and by a node that has
 // given up its presence (a drain's first step), this node has room, and its
 // sweeps must read no floor at all. And the gate half stands: once an

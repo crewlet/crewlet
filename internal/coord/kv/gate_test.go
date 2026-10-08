@@ -46,8 +46,8 @@ func delivered(ns *server.Server) int64 {
 // and the broker counts every message it delivers: so the case holds a number
 // of seats, claims more gated, and compares what a claim was delivered at the
 // two sizes. The view's watch is started, and its load of the seat lease
-// bucket paid, by one claim BEFORE the ones counted — that load is the view's cost once
-// per run, not a claim's.
+// bucket paid, by one claim BEFORE the ones counted — that load is the view's
+// cost once per run, not a claim's.
 func TestAGatedClaimCostsTheSameWhateverIsHeld(t *testing.T) {
 	t.Parallel()
 	const claims = 20

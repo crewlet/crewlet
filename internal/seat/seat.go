@@ -468,8 +468,8 @@ type SweepResult struct {
 	// and every node in the fleet reports a perfectly healthy sweep.
 	Unplaceable []string
 	// BlockedByProtocol is the fleet's protocol floor when an
-	// older-protocol peer holds leases and this node is therefore refusing
-	// to claim; zero when nothing is blocking (no protocol is zero — see
+	// older-protocol peer holds a presence or seat lease and this node is
+	// therefore refusing to claim; zero when nothing is blocking (no protocol is zero — see
 	// coord.ProtocolVersion). Without it, a node stalled by the
 	// mixed-version gate is indistinguishable from one whose peers simply
 	// hold every seat.
