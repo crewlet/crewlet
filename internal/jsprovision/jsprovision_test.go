@@ -35,7 +35,7 @@ var fast = Timing{
 	AskTerm:        40 * time.Millisecond,
 	ReAsk:          200 * time.Millisecond,
 	ReadBack:       600 * time.Millisecond,
-	SettleAsk:      40 * time.Millisecond,
+	ReadTerm:       40 * time.Millisecond,
 	PlacementRetry: 5 * time.Millisecond,
 }
 
@@ -50,15 +50,15 @@ func relationsBroken(tm Timing) []string {
 	}
 	// ONE ATTEMPT IS BOUNDED WELL INSIDE ITS WINDOW, or a hung ask is the
 	// whole read-back — the single lookup the re-asking replaced.
-	check(tm.SettleAsk < tm.ReadBack,
+	check(tm.ReadTerm < tm.ReadBack,
 		"one attempt gets %v of a %v window, so a hung ask is the whole read-back",
-		tm.SettleAsk, tm.ReadBack)
+		tm.ReadTerm, tm.ReadBack)
 	// AT LEAST TWO UNANSWERED ASKS FIT, or the re-asking never happens on
-	// the condition it was written for: a hung ask costs SettleAsk and then
+	// the condition it was written for: a hung ask costs ReadTerm and then
 	// waits ReAsk before the next one.
-	check(tm.SettleAsk+tm.ReAsk < tm.ReadBack,
+	check(tm.ReadTerm+tm.ReAsk < tm.ReadBack,
 		"a hung ask plus its %v pause is %v of a %v window, leaving room for no "+
-			"second ask", tm.ReAsk, tm.SettleAsk+tm.ReAsk, tm.ReadBack)
+			"second ask", tm.ReAsk, tm.ReadTerm+tm.ReAsk, tm.ReadBack)
 	// AN ANSWERED NOT-FOUND IS POLLED MANY TIMES OVER, which is the
 	// propagation delay the window was sized for.
 	check(tm.PlacementRetry*10 <= tm.ReadBack,
@@ -80,7 +80,7 @@ func relationsBroken(tm Timing) []string {
 // production timings and the scaled one the mechanism's cases run at — held
 // against each other rather than restated in a comment.
 //
-// [SettleAsk] bounds ONE attempt so a request that hangs cannot spend the whole
+// [ReadTerm] bounds ONE attempt so a request that hangs cannot spend the whole
 // window, and [ReadBack] bounds the run of them. A term at or above the window
 // makes the first hung ask the entire read-back, which is the single lookup
 // this re-asking replaced. And the production numbers reach these timings
@@ -123,7 +123,7 @@ func TestEachTopologysTimingCarriesTheNumbersThisPackageNames(t *testing.T) {
 			AskTerm:        AskTerm(clustered),
 			ReAsk:          ReAsk,
 			ReadBack:       ReadBack,
-			SettleAsk:      SettleAsk,
+			ReadTerm:       ReadTerm,
 			PlacementRetry: PlacementRetry,
 		}
 		if got := Clustered(clustered).Timing(); got != want {
@@ -133,13 +133,13 @@ func TestEachTopologysTimingCarriesTheNumbersThisPackageNames(t *testing.T) {
 
 	// AND THE PACKAGE-LEVEL VERBS RUN AT ONE TOPOLOGY'S CADENCES FOR BOTH,
 	// which is right only while the cadences do not branch on one: what
-	// those verbs read is the cadences, the window, and the term their
-	// caller hands them.
+	// those verbs read is the cadences, the window, the read term, and the
+	// write term their caller hands them.
 	solo, clustered := Clustered(false).Timing(), Clustered(true).Timing()
 	if solo.ReAsk != clustered.ReAsk || solo.ReadBack != clustered.ReadBack ||
-		solo.SettleAsk != clustered.SettleAsk || solo.PlacementRetry != clustered.PlacementRetry {
+		solo.ReadTerm != clustered.ReadTerm || solo.PlacementRetry != clustered.PlacementRetry {
 		t.Errorf("the cadences now differ by topology (solo %+v, clustered %+v), and "+
-			"Settle, Ask and Place run every caller at the solo ones", solo, clustered)
+			"Settle, Read, Ask and Place run every caller at the solo ones", solo, clustered)
 	}
 	if got := withTerm(time.Hour); got.AskTerm != time.Hour ||
 		got.ReAsk != ReAsk || got.PlacementRetry != PlacementRetry {
@@ -161,6 +161,7 @@ func TestATimingNobodyFilledInIsRefused(t *testing.T) {
 	for name, call := range map[string]func() error{
 		"ReadBack":       func() error { return Timing{}.Settle(t.Context(), ask) },
 		"AskTerm":        func() error { return Timing{}.Ask(t.Context(), ask, nil) },
+		"ReadTerm":       func() error { return Timing{}.Read(t.Context(), ask, nil) },
 		"PlacementRetry": func() error { return Timing{}.Place(t.Context(), ask, nil) },
 	} {
 		err := call()
@@ -890,6 +891,98 @@ func TestAnUnansweredRequestIsAskedAgain(t *testing.T) {
 	if got := asks.Load(); got != 3 {
 		t.Errorf("the request was sent %d times, want 3 — a request that was "+
 			"destroyed has to be re-issued, not waited on", got)
+	}
+}
+
+// A DROPPED READ IS ASKED AGAIN AT THE READ TERM, never at a write's.
+//
+// The server answers a read when it processes it or never, so a read held for
+// the term that spans a write's election waits on a reply that does not exist
+// — measured costing a fleet's boot sixteen idle seconds on one stream lookup.
+// The write term here is an hour: a Read that waited it would sit until the
+// case's own deadline and report that instead of the third request's answer.
+func TestADroppedReadIsAskedAgainAtTheReadTerm(t *testing.T) {
+	t.Parallel()
+
+	tm := fast
+	tm.AskTerm = time.Hour
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	var asks atomic.Int64
+	err := tm.Read(ctx, func(ctx context.Context) error {
+		if asks.Add(1) <= 2 {
+			<-ctx.Done() // dropped on arrival; nothing will ever answer it
+			return ctx.Err()
+		}
+		return nil
+	}, nil)
+	if err != nil {
+		t.Fatalf("Read returned %v after %d request(s), want the answer the third "+
+			"got — a dropped read waited out a write's term rather than its own",
+			err, asks.Load())
+	}
+	if got := asks.Load(); got != 3 {
+		t.Errorf("the read was sent %d times, want 3", got)
+	}
+}
+
+// AND A WRITE IS NOT CUT AT IT, because a write's reply is HELD: the server
+// answers a create once the object it made has a leader, an election after the
+// request arrived. Cut at the read term, every accepted create would be
+// abandoned just before its answer and asked again into the same wait.
+func TestAHeldWriteIsNotCutAtTheReadTerm(t *testing.T) {
+	t.Parallel()
+
+	tm := fast
+	tm.ReadTerm, tm.AskTerm = 10*time.Millisecond, 5*time.Second
+	// Bounded, because a loop cutting every request short re-asks for as
+	// long as its context allows, and the case should say so rather than
+	// hang.
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+
+	var asks atomic.Int64
+	err := tm.Ask(ctx, func(ctx context.Context) error {
+		asks.Add(1)
+		select {
+		case <-time.After(100 * time.Millisecond): // the leader answers
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}, nil)
+	if err != nil {
+		t.Fatalf("Ask returned %v, want the held reply", err)
+	}
+	if got := asks.Load(); got != 1 {
+		t.Errorf("the write was sent %d times, want 1 — its first request was "+
+			"abandoned at the read term while its reply was still coming", got)
+	}
+}
+
+// A READ IS GIVEN FAR LESS THAN A WRITE, on both topologies, at the production
+// numbers: a dropped read costs one read term and a pause, and that has to be
+// well short of the term a write waits for its held reply, or the split bought
+// nothing. And the production read term is the one the readiness wait and every
+// read-back share, so the number is pinned here once.
+func TestAReadIsGivenFarLessThanAWrite(t *testing.T) {
+	t.Parallel()
+
+	if ReadTerm != time.Second {
+		t.Errorf("ReadTerm is %v, want the server's one-second hbInterval it is "+
+			"anchored to", ReadTerm)
+	}
+	for _, clustered := range []bool{false, true} {
+		tm := Clustered(clustered).Timing()
+		if dropped := tm.ReadTerm + tm.ReAsk; dropped*4 > tm.AskTerm {
+			t.Errorf("clustered=%v: a dropped read costs %v against a write's %v "+
+				"term — not even a quarter of it", clustered, dropped, tm.AskTerm)
+		}
+		if tm.Lookup < 10*(tm.ReadTerm+tm.ReAsk) {
+			t.Errorf("clustered=%v: a %v lookup ceiling re-asks a dropped read "+
+				"fewer than ten times", clustered, tm.Lookup)
+		}
 	}
 }
 

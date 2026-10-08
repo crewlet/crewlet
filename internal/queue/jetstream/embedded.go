@@ -23,6 +23,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/jsapi"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue"
 )
@@ -90,13 +91,12 @@ const (
 	// JetStream during that wait — "do you answer?" — waits for its reply
 	// before it is asked again.
 	//
-	// ONE SECOND, the vendored server's hbInterval (server/raft.go) and the
-	// anchor [jsprovision.SettleAsk] states for the same kind of question:
-	// a group that can answer does so in a round trip, and one that cannot
-	// DROPS the request rather than refusing it, so an attempt longer than
-	// the shortest interval over which leadership can change waits for a
-	// reply nobody is going to send.
-	clusterReadyAsk = time.Second
+	// [jsprovision.ReadTerm], and not merely the same number: the question is
+	// a metadata READ, which the metadata leader answers when it processes it
+	// and every other member drops, so it is exactly the request that term is
+	// sized for, and a second constant here would be a second opinion about
+	// one fact.
+	clusterReadyAsk = jsprovision.ReadTerm
 )
 
 // readiness bounds the wait for the fleet to be able to serve this broker:

@@ -54,10 +54,10 @@
 // # Every duration in one value, so the mechanism can be run at any scale
 //
 // [Timing] carries every duration this package decides, and [Clustered.Timing]
-// is the one place a topology is turned into them. [Settle], [Ask] and [Place]
-// are that value's methods at the production numbers; a caller that holds a
-// [Timing] of its own — a test, through the one seam its package keeps for it —
-// runs the same branches in milliseconds.
+// is the one place a topology is turned into them. [Settle], [Ask], [Read] and
+// [Place] are that value's methods at the production numbers; a caller that
+// holds a [Timing] of its own — a test, through the one seam its package keeps
+// for it — runs the same branches in milliseconds.
 //
 // It exists because the branches that matter most are the ones only an
 // EXHAUSTED budget reaches — a read-back after a create the server held, a
@@ -148,7 +148,7 @@ func SequenceBudget(clustered bool) time.Duration {
 
 // LookupBudget is the CEILING over one existence probe — the "does this object
 // already exist" read that decides create-versus-observe, including however
-// many times [Ask] has to re-issue it.
+// many times [Read] has to re-issue it.
 //
 // # Why a read is not sized like a create
 //
@@ -159,45 +159,37 @@ func SequenceBudget(clustered bool) time.Duration {
 // metadata READ, and the only reason it is ever slow is that the group cannot
 // answer it yet.
 //
-// # THIRTY SECONDS, WHICH IS TWO ATTEMPTS AND THE GAP BETWEEN THEM
+// # THIRTY SECONDS: THE LONGEST SILENCE THE SERVER KEEPS, ASKED ACROSS
 //
-// A ceiling rather than one request's deadline, because an unanswered lookup
-// is re-issued like any other metadata request: the reply is usually destroyed
-// rather than late, and [Ask] carries the server's own three drop paths.
+// A ceiling rather than one request's deadline, because a read the server did
+// not answer is one it never will — it decides a read when it processes it
+// ([ReadTerm]) — so what the ceiling bounds is not how long one request may
+// take but how long the REASON for the silence may last, re-asked every
+// [ReadTerm] and [ReAsk] throughout.
 //
-// THE SECOND ATTEMPT IS DELIBERATELY TRUNCATED, and the arithmetic says so
-// rather than rounding it away. A full first attempt at [AskTerm]'s clustered
-// fifteen seconds plus the [ReAsk] second between them leaves FOURTEEN of the
-// thirty for the second, not another fifteen. Fourteen is still past both
-// numbers the term is anchored to — maxElectionTimeout is 9s and
-// lostQuorumInterval is 10s — so the second attempt still spans a complete
-// election and still outlasts the point at which a leaderless group starts
-// answering. It buys everything a full term would; it is one second short of
-// symmetric, which is a property of the ceiling and not a defect in it.
-//
-// Thirty-one would make the two attempts equal and buy nothing: what the
-// second attempt needs is to reach a group that has settled, and it does that
-// at fourteen. A round ceiling that states its own truncation is better than
-// an odd one chosen to hide it.
-//
-// A third attempt would add no evidence. What changes between attempts is
-// which member holds the metadata group, and that is settled within one
-// election; past it, a group still not answering is one the create's own
-// budget goes on asking — with far more of that budget left than a longer
-// lookup would have spent.
+// The vendored server bounds that reason itself. An election runs to
+// maxElectionTimeout (9s, server/raft.go); a leader cut off from its quorum
+// notices after lostQuorumInterval (10s), checked every
+// lostQuorumCheckInterval (10s), and steps down; and a group left with no
+// leader past that ANSWERS a read with JSClusterNotAvailError rather than
+// dropping it. Past their sum, twenty-nine seconds, a read is answered
+// whatever state the group is in, so thirty spans the longest silence there
+// is, asked into every two seconds. A longer ceiling would ask only a group
+// that has already started answering, and a read still unanswered at thirty
+// loses nothing by stopping: the create after it decides ([Unanswered]).
 //
 // The ceiling does not branch on topology, which is why this is one constant
 // where [Budget] and [SequenceBudget] are two. A solo member's lookup is a
-// local file-store read answered in microseconds, with no raft, no election
-// and nothing to re-ask — [AskTerm] states that as one attempt — so for it
-// thirty seconds is pure hang detection.
+// read of its own memory, answered in microseconds, with no raft, no election
+// and nothing to drop it — so for it thirty seconds is pure hang detection.
 //
 // # What it buys
 //
 // A lookup that used to spend the whole two-minute clustered [Budget] on ONE
-// unanswered request and then fail the boot now spends thirty seconds asking
-// twice, and if it is still told nothing it falls through to the create, which
-// covers every outcome the lookup could have reported (see [Unanswered]).
+// unanswered request and then fail the boot now asks again every two seconds
+// for at most thirty, and if it is still told nothing it falls through to the
+// create, which covers every outcome the lookup could have reported (see
+// [Unanswered]).
 //
 // Both of the numbers this replaced were measured failing. The client's
 // undeclared five-second default on this call failed a three-member cluster
@@ -228,7 +220,7 @@ type Timing struct {
 	// Lookup is the ceiling over one existence probe, re-asks included —
 	// see [LookupBudget].
 	Lookup time.Duration
-	// AskTerm is how long one metadata request waits before it is presumed
+	// AskTerm is how long one metadata WRITE waits before it is presumed
 	// destroyed and re-issued — see [AskTerm].
 	AskTerm time.Duration
 	// ReAsk is the pause before a request nobody answered is sent again —
@@ -236,8 +228,10 @@ type Timing struct {
 	ReAsk time.Duration
 	// ReadBack bounds a whole read-back — see [ReadBack].
 	ReadBack time.Duration
-	// SettleAsk bounds one attempt of a read-back — see [SettleAsk].
-	SettleAsk time.Duration
+	// ReadTerm is how long one metadata READ waits before it is presumed
+	// dropped and re-issued — every attempt of a read-back and of
+	// [Timing.Read] — see [ReadTerm].
+	ReadTerm time.Duration
 	// PlacementRetry is how often an answered refusal is asked again — see
 	// [PlacementRetry].
 	PlacementRetry time.Duration
@@ -252,7 +246,7 @@ func (c Clustered) Timing() Timing {
 		AskTerm:        c.AskTerm(),
 		ReAsk:          ReAsk,
 		ReadBack:       ReadBack,
-		SettleAsk:      SettleAsk,
+		ReadTerm:       ReadTerm,
 		PlacementRetry: PlacementRetry,
 	}
 }
@@ -336,7 +330,7 @@ func Settle(ctx context.Context, ask func(context.Context) error) error {
 //
 // # An attempt nobody answered is not an answer, and gets its own cadence
 //
-// Inside that window each attempt gets its own short term ([SettleAsk]), for
+// Inside that window each attempt gets its own short term ([ReadTerm]), for
 // [Ask]'s reason arriving on the read-back path: a request put to a group that
 // has no leader yet is DROPPED rather than refused, so handing one attempt the
 // whole window spends all of it waiting for a reply nobody is going to send —
@@ -362,7 +356,7 @@ func Settle(ctx context.Context, ask func(context.Context) error) error {
 // answer a caller wraps is what the object said, not what this function's
 // patience did.
 func (t Timing) Settle(ctx context.Context, ask func(context.Context) error) error {
-	if err := refuseUnset(span{"ReadBack", t.ReadBack}, span{"SettleAsk", t.SettleAsk},
+	if err := refuseUnset(span{"ReadBack", t.ReadBack}, span{"ReadTerm", t.ReadTerm},
 		span{"ReAsk", t.ReAsk}, span{"PlacementRetry", t.PlacementRetry}); err != nil {
 		return err
 	}
@@ -371,7 +365,7 @@ func (t Timing) Settle(ctx context.Context, ask func(context.Context) error) err
 
 	var absent, unanswered error
 	for {
-		attempt, endAttempt := context.WithTimeout(window, t.SettleAsk)
+		attempt, endAttempt := context.WithTimeout(window, t.ReadTerm)
 		err := ask(attempt)
 		endAttempt()
 		// THE CADENCE FOLLOWS THE CONDITION, never the loop: see the
@@ -407,7 +401,7 @@ func (t Timing) Settle(ctx context.Context, ask func(context.Context) error) err
 
 // namedSilence keeps whichever of two unanswered errors NAMES something.
 //
-// An attempt that expires on [SettleAsk] is unanswered, and it is also a bare
+// An attempt that expires on [ReadTerm] is unanswered, and it is also a bare
 // [context.DeadlineExceeded] — which names neither the object nor the broker,
 // and is the shape [Settle] promises never to report. [nats.ErrNoResponders]
 // and [nats.ErrTimeout] say WHY nobody replied, so once one of those has been
@@ -439,32 +433,52 @@ func heard(absent, unanswered error) error {
 	return unanswered
 }
 
-// SettleAsk is how long ONE of [Settle]'s attempts waits for a reply before
-// it is presumed dropped and re-issued inside the same window.
+// ReadTerm is how long ONE metadata READ — a stream's or a consumer's info —
+// waits for a reply before it is presumed dropped and re-issued: each attempt
+// of [Settle]'s, and each of [Timing.Read]'s.
 //
-// ONE SECOND, the vendored server's hbInterval (server/raft.go) and [ReAsk]'s
-// own anchor: the shortest interval over which the group's leadership can
-// have changed, so an attempt shorter than it abandons a request just as the
-// state that would answer it might change.
+// # A READ IS ANSWERED WHEN IT ARRIVES OR NEVER
 //
-// WHAT IT BUYS IS THAT ONE HUNG ASK IS NOT THE WHOLE READ-BACK, which is what
-// the single lookup this replaced amounted to. A hung ask costs this term and
-// then waits [ReAsk], so two of them complete inside [ReadBack] and a third
-// begins — stated as the relation rather than as a count, because all three
-// constants are tuned against the server and a count restated here is the
-// thing that goes stale. The test holds the relation, not the number.
+// Which is what separates it from the writes [AskTerm] is sized for. The
+// vendored server decides an info request when it PROCESSES it
+// (server/jetstream_api.go, jsStreamInfoRequest and jsConsumerInfoRequest): it
+// replies, or it returns without replying, and nothing keeps the request to be
+// answered later. And a whole fleet returns without replying in an ordinary
+// moment of every clustered boot. An object another node has just asked for is
+// IN FLIGHT — assigned by the metadata leader, not yet applied by the member
+// preferred to lead it — and a group with no leader yet may be answered for
+// only by that member, so until it has applied the assignment every other
+// member, the metadata leader included, bails without a word. A read sent into
+// that window is gone the moment it is processed, and a term spanning an
+// election waits for a reply that does not exist: a three-member fleet's boot
+// was measured spending a whole [AskTerm] and a [ReAsk] — sixteen seconds —
+// on one stream lookup dropped that way, with its metadata leader answering
+// throughout.
 //
-// Deliberately NOT [AskTerm], and not because that term is for a different
-// KIND of request — five of [Ask]'s call sites are lookups exactly like this
-// one. It is that [AskTerm] is sized to span a complete election, at fifteen
-// seconds clustered, and [ReadBack] is five: one such attempt would be the
-// whole window three times over. The two windows differ because the QUESTIONS
-// do. [Ask] is asking a group that may be electing, and waits that out. This
-// is asking after an object somebody has just committed, against a group that
-// has therefore just proven it works — so a reply either arrives in a round
-// trip or is not being routed, and the wait is for the routing rather than
-// for a leader.
-const SettleAsk = time.Second
+// # ONE SECOND
+//
+// The vendored server's hbInterval (server/raft.go) and [ReAsk]'s own anchor:
+// the shortest interval over which a group's state can have changed, so a read
+// re-sent sooner meets the state that dropped it and is dropped again. A read
+// that IS answered comes back in a round trip, far inside it. One slower than
+// that has its reply missed and is simply asked again, and what a read nobody
+// answered leaves open is decided elsewhere — a lookup's create covers it
+// ([Unanswered]), and a read-back reports the silence when its window closes.
+//
+// WHAT IT BUYS IS THAT ONE DROPPED READ COSTS A SECOND AND A [ReAsk], NOT AN
+// ELECTION — and that one hung ask is not a whole read-back. A hung ask costs
+// this term and then waits [ReAsk], so two of them complete inside [ReadBack]
+// and a third begins — stated as the relation rather than as a count, because
+// all three constants are tuned against the server and a count restated here
+// is the thing that goes stale. The test holds the relation, not the number.
+//
+// It does not branch on topology, unlike [AskTerm]. A solo broker drops no
+// read, so one it has not answered in a second is a broker that is not
+// answering at all; asking it again every two seconds is one more request per
+// two seconds to a server already not serving, and reaches the same fallthrough
+// a single long attempt would. A solo WRITE is different — it is file-store
+// setup a busy disk can make slow — which is why its term is its budget.
+const ReadTerm = time.Second
 
 // Place runs create until the cluster stops refusing to place the object, for
 // as long as ctx allows.
@@ -568,13 +582,41 @@ func Place(ctx context.Context, term time.Duration,
 // answered. The error returned is the last attempt's own, never this
 // function's patience.
 //
-// Each request waits t.AskTerm, and the next is sent t.ReAsk after it.
+// Each request waits t.AskTerm, and the next is sent t.ReAsk after it. That is
+// a WRITE's term, sized for a reply the server holds until the object it made
+// has a leader ([AskTerm]); a read is never held, and asks through
+// [Timing.Read] at the read term instead.
 func (t Timing) Ask(ctx context.Context, one func(context.Context) error, again func(asks int)) error {
-	if err := refuseUnset(span{"AskTerm", t.AskTerm}, span{"ReAsk", t.ReAsk}); err != nil {
+	return t.ask(ctx, span{"AskTerm", t.AskTerm}, one, again)
+}
+
+// Read is [Timing.Ask] for a metadata READ — a stream's or a consumer's info —
+// each request waiting t.ReadTerm rather than t.AskTerm.
+//
+// A read is answered when the server processes it or never ([ReadTerm]), so
+// the term that spans an election for a write whose reply the server holds
+// would only wait out a request that is already gone. Everything else is
+// [Timing.Ask]'s: any answer ends it, only [Unanswered] is asked again, and
+// the next request goes t.ReAsk after the last one's term.
+func (t Timing) Read(ctx context.Context, one func(context.Context) error, again func(asks int)) error {
+	return t.ask(ctx, span{"ReadTerm", t.ReadTerm}, one, again)
+}
+
+// Read is [Timing.Read] at the production cadences, which no topology changes.
+func Read(ctx context.Context, one func(context.Context) error, again func(asks int)) error {
+	return Clustered(false).Timing().Read(ctx, one, again)
+}
+
+// ask is the loop [Timing.Ask] and [Timing.Read] share, each request given
+// term.
+func (t Timing) ask(ctx context.Context, term span,
+	one func(context.Context) error, again func(asks int)) error {
+
+	if err := refuseUnset(term, span{"ReAsk", t.ReAsk}); err != nil {
 		return err
 	}
 	for asks := 1; ; asks++ {
-		attempt, cancel := context.WithTimeout(ctx, t.AskTerm)
+		attempt, cancel := context.WithTimeout(ctx, term.d)
 		err := one(attempt)
 		cancel()
 		if !Unanswered(ctx, err) {
@@ -598,30 +640,29 @@ func Ask(ctx context.Context, term time.Duration,
 	return withTerm(term).Ask(ctx, one, again)
 }
 
-// AskTerm is how long ONE metadata request waits before it is presumed
-// destroyed and re-issued by [Ask].
+// AskTerm is how long ONE metadata WRITE — a create, a delete — waits before it
+// is presumed destroyed and re-issued by [Ask].
 //
-// # THE CLUSTERED TERM IS FIFTEEN SECONDS, AND THE SERVER CHOSE IT
+// # THE CLUSTERED TERM IS FIFTEEN SECONDS, BECAUSE A WRITE'S REPLY IS HELD
 //
-// An attempt has to be long enough that a group which is GOING to answer has
-// answered, and no longer — because past that point the request is gone and
-// the time is spent waiting for nothing. Three of the vendored server's own
-// constants bound that (server/raft.go, server/jetstream_api.go in the pinned
-// nats-server):
+// The vendored server answers a create when the object it made has a LEADER:
+// the reply is kept on the assignment and sent from the new group's first
+// leader change (server/jetstream_cluster.go, processStreamLeaderChange), so a
+// write the metadata group accepted is answered an election later, never on
+// arrival. An attempt has to be long enough that a reply which is coming has
+// come, and no longer — because past that point the request is gone and the
+// time is spent waiting for nothing. maxElectionTimeout is 9s (server/raft.go),
+// so the term has to span the metadata commit and a complete election after
+// it; shorter, and an accepted create is abandoned just before its leader
+// answers and asked again into the same wait. Fifteen covers both with room,
+// and it is an eighth of the clustered [Budget] that used to be one attempt —
+// so a create now asks eight times inside the budget that once bought a single
+// unanswered request.
 //
-//   - maxElectionTimeout is 9s, so an attempt that spans it covers a complete
-//     election: a request that arrived mid-election is re-asked at a leader
-//     that now exists rather than at one that never did.
-//   - lostQuorumInterval is 10s, which is when a leaderless group stops being
-//     silent and starts ANSWERING JSClusterNotAvailError. An attempt shorter
-//     than this abandons the request just before the server would have replied
-//     to it, and the reply is the thing that ends the loop.
-//   - errRespDelay is 500ms, the delay on that answer once it is decided, so
-//     the term has to clear 10s by more than a rounding margin.
-//
-// Fifteen covers all three with room, and it is an eighth of the clustered
-// [Budget] that used to be one attempt — so a create now asks eight times
-// inside the budget that once bought a single unanswered request.
+// A READ IS NOT HELD — the server answers it when it processes it or never —
+// so a read waits [ReadTerm] instead, through [Timing.Read]. Sized by this
+// term, one dropped stream lookup was measured costing a fleet's boot sixteen
+// idle seconds.
 //
 // # AND THE SOLO TERM IS THE SOLO BUDGET, BECAUSE THERE IS NOTHING TO RE-ASK
 //
