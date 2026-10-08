@@ -21,6 +21,7 @@ import (
 // server derives one fails this, rather than every removal of a voter nobody
 // can name.
 func TestEveryMemberReadsTheWholeMetadataGroup(t *testing.T) {
+	t.Parallel()
 	c := StartCluster(t, 3, js.Config{})
 	want := []string{c.Configs[0].ServerName, c.Configs[1].ServerName, c.Configs[2].ServerName}
 	for i, srv := range c.Servers {
@@ -59,6 +60,7 @@ func TestEveryMemberReadsTheWholeMetadataGroup(t *testing.T) {
 // naming a server the group never had, is refused as naming nothing — which is
 // what the fleet's remove verb reports rather than a failure.
 func TestAMemberGoneForGoodIsRemovedFromTheMetadataGroup(t *testing.T) {
+	t.Parallel()
 	c := StartCluster(t, 3, js.Config{})
 	leader := leaderOf(t, c)
 	gone, carrier := -1, -1
@@ -104,6 +106,14 @@ func TestAMemberGoneForGoodIsRemovedFromTheMetadataGroup(t *testing.T) {
 //
 // The survivors restart one at a time, as a rolling upgrade does, so the group
 // keeps the quorum each restarted member has to rejoin.
+//
+// NOT PARALLEL, unlike its neighbours, and for a reason of its own: each
+// survivor comes back on the SAME configuration — the same route port, which
+// is what makes it the same member — through [js.StartServer] directly, with
+// none of [withFreshPorts]'s retry. Between the shutdown and the restart that
+// port is free, and a cluster another case is reserving ports for in the same
+// moment can take it, failing the restart on a bind this case cannot retry.
+// Run serially, nothing in this binary reserves a port while it is down.
 func TestAMemberGoneForGoodIsRemovedAfterEverySurvivorRestarted(t *testing.T) {
 	c := StartCluster(t, 3, js.Config{})
 	leaderOf(t, c)
@@ -143,6 +153,7 @@ func TestAMemberGoneForGoodIsRemovedAfterEverySurvivorRestarted(t *testing.T) {
 // its JetStream is switched off, which the commit does — so its answer would
 // be lost with it.
 func TestAMemberRefusesToCarryItsOwnRemoval(t *testing.T) {
+	t.Parallel()
 	c := StartCluster(t, 3, js.Config{})
 	leaderOf(t, c)
 	self := js.PeerIDOf(c.Configs[0].ServerName)
@@ -170,6 +181,7 @@ func TestAMemberRefusesToCarryItsOwnRemoval(t *testing.T) {
 // (four to nine seconds each), and half the budget a single lost ask would
 // spend.
 func TestTheLeaderGoneForGoodIsRemovedOnceTheSurvivorsElectAnother(t *testing.T) {
+	t.Parallel()
 	c := StartCluster(t, 3, js.Config{})
 	leader := leaderOf(t, c)
 	carrier := (leader + 1) % len(c.Servers)
