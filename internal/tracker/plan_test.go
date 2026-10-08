@@ -50,6 +50,29 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	covered := []string{"tracker_tasks", "tracker_task_tags",
 		"tracker_task_deps", "tracker_field_values"}
 
+	// NO REGISTERED READER READS A COVERED TABLE WITH NO INDEX AT ALL —
+	// at any scope, a query's own subqueries and a duty's statement
+	// included. An index SCAN is a legitimate plan when the order is what
+	// the read is about and the limit stops it early; a bare table scan is
+	// every row the company has read from the heap, and there is no reader
+	// here for which that is right.
+	//
+	// EVERY COVERED TABLE, AND THE DUTIES TOO, because the inventory below
+	// cannot see what this sees: an index somebody DROPS is no longer in
+	// the inventory to go unclaimed, so a duty whose index went with it
+	// fell back to a heap scan and this test stayed green — measured by
+	// dropping tracker_tasks_key_idx, which left key resolution reading
+	// every task and passed.
+	refuseHeapScans := func(t *testing.T, plan []string) {
+		t.Helper()
+		for _, table := range covered {
+			if scansHeap(plan, table) {
+				t.Errorf("this read reads %s with no index:\n%s",
+					table, strings.Join(plan, "\n"))
+			}
+		}
+	}
+
 	used := map[string]bool{}
 	for name, params := range registeredQueries() {
 		t.Run(name, func(t *testing.T) {
@@ -72,16 +95,7 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 			for _, index := range indexesIn(plan) {
 				used[index] = true
 			}
-			// A REGISTERED QUERY MUST NOT READ tracker_tasks WITH
-			// NO INDEX AT ALL — at any scope. An index SCAN is a
-			// legitimate plan when the order is what the query is
-			// about and the limit stops it early; a bare table scan
-			// is every task in the company read from the heap, and
-			// there is no query here for which that is right.
-			if scansHeap(plan, "tracker_tasks") {
-				t.Errorf("this query reads tracker_tasks with no index:\n%s",
-					strings.Join(plan, "\n"))
-			}
+			refuseHeapScans(t, plan)
 		})
 	}
 
@@ -91,9 +105,11 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	// and a duty's own statement is as much a reader as a board is.
 	for name, statement := range dutyReads() {
 		t.Run(name, func(t *testing.T) {
-			for _, index := range indexesIn(explain(t, db, statement.sql, statement.args)) {
+			plan := explain(t, db, statement.sql, statement.args)
+			for _, index := range indexesIn(plan) {
 				used[index] = true
 			}
+			refuseHeapScans(t, plan)
 		})
 	}
 
