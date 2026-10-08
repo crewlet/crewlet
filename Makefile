@@ -508,7 +508,21 @@ test: ## the suite, minus the packages that run alone (ci: test (race), one job 
 # links are not even reusable, since -c keeps debug information the run's do
 # not. GOTESTBUILD is shared with the run so the two compile the same action
 # IDs; a flag in one and not the other would prebuild a tree nothing reads.
-SOLO_PREBUILD = $(GO) list -export -test -deps $(1) -f '{{.ImportPath}}' $(SOLO_PKGS) > /dev/null
+#
+# -e, BECAUSE THE PREBUILD IS A CACHE FILL AND NEVER A GATE. Without it one
+# package whose tests do not compile fails the whole prebuild, and the recipe
+# stops there: no package of the half runs, skipgate names nothing, and a CI
+# shard leaves no ran.txt, so the `tests` job reports every package of that
+# shard as one no shard ran. With it the broken package is recorded and left,
+# everything else is compiled, and the run below reports `FAIL pkg [build
+# failed]` for that one package and runs the rest, as it did before the
+# prebuild existed. Measured on a probe with a type error in one of two test
+# packages: without -e the prebuild exited 1 and make stopped before any test
+# ran; with it the prebuild exited 0, and the run compiled only the probe
+# package (and failed it), plus the other's test main and link. The flag
+# changes how a load error is REPORTED and nothing about what is compiled, so
+# the action IDs are the run's either way.
+SOLO_PREBUILD = $(GO) list -e -export -test -deps $(1) -f '{{.ImportPath}}' $(SOLO_PKGS) > /dev/null
 
 test-solo: require-node ## the packages that need a runner to themselves (ci: end-to-end gates, one job per shard)
 	@test -n "$(SOLO_PKGS)" || { echo "the solo partition printed no packages; internal/solo/partition said why above (a SHARD or TEST_WEIGHTS it refused, go list failing, or no package importing internal/solo)" >&2; exit 1; }
