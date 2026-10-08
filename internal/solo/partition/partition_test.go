@@ -113,24 +113,45 @@ func TestEveryPackageLandsInExactlyOneHalf(t *testing.T) {
 //
 // Not cosmetic: the Makefile expands these into a command line, and a set that
 // reordered between runs would make every `make test` invocation a different
-// command for no reason anybody could see in a diff. The whole half as one
-// shard — the Makefile's default, `-shard 1/1` — is the same list. The
-// listed order here is deliberately not sorted, so a rule that sorted by
-// path would fail rather than agree by accident.
+// command for no reason anybody could see in a diff. So the order is held from
+// the listing itself, through partition, weigh, order and the whole half as
+// one shard — the Makefile's default, `-shard 1/1` — to what is printed. The
+// listing here is deliberately not sorted, with the two halves interleaved, so
+// a step that sorted by path would fail rather than agree by accident.
 func TestWithoutWeightsTheListedOrderIsPreserved(t *testing.T) {
 	t.Parallel()
 
-	half := []string{"x/z", "x/m", "x/a", "x/m/b"}
-	weights, unmeasured := weigh(half, nil)
-	if unmeasured != len(half) {
-		t.Errorf("unmeasured = %d, want all %d — no weights were given", unmeasured, len(half))
+	pkgs := []pkg{
+		{ImportPath: "x/z"},
+		{ImportPath: "x/y", XTestImports: []string{marker}},
+		{ImportPath: "x/m"},
+		{ImportPath: "x/b", TestImports: []string{marker}},
+		{ImportPath: "x/a"},
+		{ImportPath: "x/m/b"},
 	}
+	parallel, solo := partition(pkgs)
 
-	if got := order(half, weights); !slices.Equal(got, half) {
-		t.Errorf("order = %v, want %v (go list order)", got, half)
-	}
-	if got := shard(order(half, weights), weights, 1); len(got) != 1 || !slices.Equal(got[0], half) {
-		t.Errorf("shard 1/1 = %v, want the whole half in go list order %v", got, half)
+	for _, c := range []struct {
+		name       string
+		half, want []string
+	}{
+		{"the parallel half", parallel, []string{"x/z", "x/m", "x/a", "x/m/b"}},
+		{"the solo half", solo, []string{"x/y", "x/b"}},
+	} {
+		if !slices.Equal(c.half, c.want) {
+			t.Errorf("%s = %v, want %v (go list order)", c.name, c.half, c.want)
+		}
+		weights, unmeasured := weigh(c.half, nil)
+		if unmeasured != len(c.half) {
+			t.Errorf("%s: unmeasured = %d, want all %d — no weights were given",
+				c.name, unmeasured, len(c.half))
+		}
+		if got := order(c.half, weights); !slices.Equal(got, c.want) {
+			t.Errorf("%s: order = %v, want %v (go list order)", c.name, got, c.want)
+		}
+		if got := shard(order(c.half, weights), weights, 1); len(got) != 1 || !slices.Equal(got[0], c.want) {
+			t.Errorf("%s: shard 1/1 = %v, want the whole half in go list order %v", c.name, got, c.want)
+		}
 	}
 }
 
@@ -165,6 +186,30 @@ func TestWithWeightsTheLongestStartsFirst(t *testing.T) {
 		if got := order(half, weights); !slices.Equal(got, want) {
 			t.Fatalf("order = %v, want %v", got, want)
 		}
+	}
+
+	// TIES KEEP THE LISTED ORDER IN A HALF OF ANY SIZE. The six above cannot
+	// tell a stable sort from one that is not: below thirteen elements Go's
+	// sort is an insertion sort, stable by accident, and the parallel half is
+	// well over a hundred packages long. So forty packages, listed out of path
+	// order, at three weights between them: each weight's packages must come
+	// out in the order they were listed. Three weights rather than one,
+	// because a pdqsort leaves a run that is ALL equal where it found it, so
+	// forty ties at one weight cannot tell either.
+	var many []string
+	tiers := map[string]float64{}
+	byTier := map[float64][]string{}
+	for i := range 40 {
+		p := fmt.Sprintf("x/p%02d", (i*17)%40)
+		many = append(many, p)
+		tiers[p] = float64(i % 3)
+		byTier[tiers[p]] = append(byTier[tiers[p]], p)
+	}
+	want = slices.Concat(byTier[2], byTier[1], byTier[0])
+	weights, _ := weigh(many, tiers)
+	if got := order(many, weights); !slices.Equal(got, want) {
+		t.Errorf("forty packages at three weights came out as\n%v\nwant each weight's packages in the listed order\n%v",
+			got, want)
 	}
 }
 
