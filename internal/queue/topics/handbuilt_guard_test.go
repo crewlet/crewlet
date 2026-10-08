@@ -220,9 +220,10 @@ type walkResult struct {
 //
 // Production is everything but test code: _test.go files and the *test
 // support packages (queuetest, coordtest, …), whose ordinary .go files are
-// test code too. A support package is recognised by its own directory name, so
-// a nested package underneath one would read as production. None exists; if
-// one appears, this is where it has to be taught.
+// test code too. A support package is recognised by its own directory name and
+// skipped whole, everything beneath it included, so a production package
+// nested underneath one would go unguarded. None exists; if one appears, this
+// is where it has to be taught.
 //
 // The test half used to be walked too, to log how many hand-built names it
 // carries: half the parsing this gate did, for a line nothing asserted and
