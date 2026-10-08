@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // A SEED IS THE NODE'S WRITE, UNDER THE NODE'S OWN ID. Nobody ran a command:
@@ -84,10 +85,7 @@ func TestAPublishedLocalRevisionKeepsItsOperator(t *testing.T) {
 // read as an operator's on the audit screen.
 func TestTheEnginesConfigWriterWritesAsTheNode(t *testing.T) {
 	t.Parallel()
-	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "w.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "w.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	fleet := coordmemory.NewFleet()
 	if err := seedCompany(t.Context(), db, fleet, nil, seedOf(parse(t, companyYAML)),
