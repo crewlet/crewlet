@@ -98,16 +98,14 @@ export function liveRow(
 }
 
 /**
- * The detached coding run a seat has in flight, by the same rule as
- * [liveRow]: the run's `agent_handle` names one seat, and its role name is
- * read only for a run that carries no handle. Matched on the role alone, a
- * sibling's run parked on a question was drawn on this seat's profile and
+ * The detached coding run a seat has in flight, by its handle alone: the run's
+ * `agent_handle` names one seat, and every run carries one — a launch is made
+ * under the seat's own lease. The role name is never read. Matched on the role,
+ * a sibling's run parked on a question was drawn on this seat's profile and
  * peek as THIS seat's question.
  */
 export function seatRun(sandboxes: readonly SandboxEntry[], seat: Seat): SandboxEntry | null {
-  const own = sandboxes.find((s) => s.agent_handle === seat.handle);
-  if (own) return own;
-  return sandboxes.find((s) => !s.agent_handle && s.role === seat.name) ?? null;
+  return sandboxes.find((s) => s.agent_handle === seat.handle) ?? null;
 }
 
 // ---------------------------------------------------------------------------

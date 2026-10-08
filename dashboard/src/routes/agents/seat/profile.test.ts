@@ -88,8 +88,8 @@ describe("which coding run is the seat's", () => {
     expect(seatRun(runs, seat)?.turn_id).toBe("t-mine");
   });
 
-  test("the role name is read only where the run carries no handle", () => {
-    expect(seatRun([run("t-old", "SWE", "")], seat)?.turn_id).toBe("t-old");
+  test("the role name is never read", () => {
+    expect(seatRun([run("t-nameless", "SWE", "")], seat)).toBeNull();
   });
 });
 
