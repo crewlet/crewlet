@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // stubSearcher is a knowledge backend that is wired but has nothing to search,
@@ -139,15 +140,15 @@ func TestATurnReadToItsCapSaysItWasCut(t *testing.T) {
 	// the turn — which is the only way to reach the flag's true branch — and
 	// far enough past that the recovered ending cannot overlap the opening.
 	const extra = 60
+	recs := make([]store.EventRecord, 0, store.MaxTurnEvents+extra)
 	for i := range store.MaxTurnEvents + extra {
-		if err := log.Append(t.Context(), store.EventRecord{
+		recs = append(recs, store.EventRecord{
 			ID:   fmt.Sprintf("e-%04d", i),
 			Type: "agent_phase_completed", Time: base.Add(time.Duration(i) * time.Second),
 			Category: "lifecycle", Actor: "PM", Payload: payload,
-		}); err != nil {
-			t.Fatal(err)
-		}
+		})
 	}
+	storetest.WriteEvents(t, log, recs)
 
 	got := asMap(t, answer(t, queries.Sources{Events: fleetOf(log)}, "turn",
 		map[string]any{"turn_id": "long"}))
@@ -213,15 +214,15 @@ func TestATurnAtTheCapIsNotDoubled(t *testing.T) {
 	}
 	// EXACTLY the cap: the head read fills, so the answer reports truncated
 	// and asks for a closing read whose every row the head already holds.
+	recs := make([]store.EventRecord, 0, store.MaxTurnEvents)
 	for i := range store.MaxTurnEvents {
-		if err := log.Append(t.Context(), store.EventRecord{
+		recs = append(recs, store.EventRecord{
 			ID:   fmt.Sprintf("x-%04d", i),
 			Type: "agent_phase_completed", Time: base.Add(time.Duration(i) * time.Second),
 			Category: "lifecycle", Actor: "PM", Payload: payload,
-		}); err != nil {
-			t.Fatal(err)
-		}
+		})
 	}
+	storetest.WriteEvents(t, log, recs)
 
 	got := asMap(t, answer(t, queries.Sources{Events: fleetOf(log)}, "turn",
 		map[string]any{"turn_id": "exact"}))
@@ -258,15 +259,15 @@ func TestATurnTheRecoveryMakesWholeIsNotReportedCut(t *testing.T) {
 	}
 	// Past the cap, but inside the reach of the closing read.
 	total := store.MaxTurnEvents + eventfan.TurnClosingEvents/2
+	recs := make([]store.EventRecord, 0, total)
 	for i := range total {
-		if err := log.Append(t.Context(), store.EventRecord{
+		recs = append(recs, store.EventRecord{
 			ID:   fmt.Sprintf("w-%04d", i),
 			Type: "agent_phase_completed", Time: base.Add(time.Duration(i) * time.Second),
 			Category: "lifecycle", Actor: "PM", Payload: payload,
-		}); err != nil {
-			t.Fatal(err)
-		}
+		})
 	}
+	storetest.WriteEvents(t, log, recs)
 
 	got := asMap(t, answer(t, queries.Sources{Events: fleetOf(log)}, "turn",
 		map[string]any{"turn_id": "whole"}))
@@ -502,6 +503,7 @@ func TestATurnNamesEveryTraceItTouchedEvenOnesTheCapDropped(t *testing.T) {
 	const extra = 60
 	total := store.MaxTurnEvents + extra
 	middle := store.MaxTurnEvents + extra/2
+	recs := make([]store.EventRecord, 0, total)
 	for i := range total {
 		trace := "trace-first"
 		switch {
@@ -510,14 +512,13 @@ func TestATurnNamesEveryTraceItTouchedEvenOnesTheCapDropped(t *testing.T) {
 		case i > middle:
 			trace = "trace-third"
 		}
-		if err := log.Append(t.Context(), store.EventRecord{
+		recs = append(recs, store.EventRecord{
 			ID:   fmt.Sprintf("e-%04d", i),
 			Type: "agent_phase_completed", Time: base.Add(time.Duration(i) * time.Second),
 			Category: "lifecycle", Actor: "PM", TraceID: trace, Payload: payload,
-		}); err != nil {
-			t.Fatal(err)
-		}
+		})
 	}
+	storetest.WriteEvents(t, log, recs)
 
 	got := asMap(t, answer(t, queries.Sources{Events: fleetOf(log)}, "turn",
 		map[string]any{"turn_id": "resumed"}))

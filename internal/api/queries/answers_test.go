@@ -34,7 +34,8 @@ func openStore(t *testing.T) *store.DB {
 	return db
 }
 
-// seedEvents writes n rows, oldest first.
+// seedEvents writes n rows, oldest first, in one transaction (see
+// [storetest.WriteEvents]).
 func seedEvents(t *testing.T, log *store.EventLog, n int, mutate func(int, *store.EventRecord)) {
 	t.Helper()
 	// Relative to NOW, not a literal date: List filters on the store's
@@ -44,6 +45,7 @@ func seedEvents(t *testing.T, log *store.EventLog, n int, mutate func(int, *stor
 	// what is under test. Trace has no such filter, which is exactly how
 	// this hid: the trace cases passed while the listings did not.
 	base := time.Now().UTC().Add(-time.Hour)
+	recs := make([]store.EventRecord, 0, n)
 	for i := range n {
 		rec := store.EventRecord{
 			ID:       "e" + string(rune('a'+i%26)) + string(rune('0'+i/26)),
@@ -59,10 +61,9 @@ func seedEvents(t *testing.T, log *store.EventLog, n int, mutate func(int, *stor
 		if mutate != nil {
 			mutate(i, &rec)
 		}
-		if err := log.Append(t.Context(), rec); err != nil {
-			t.Fatalf("append %d: %v", i, err)
-		}
+		recs = append(recs, rec)
 	}
+	storetest.WriteEvents(t, log, recs)
 }
 
 // fleetOf is one store read as the fleet it is: a node alone, with nobody
@@ -564,15 +565,15 @@ func TestATraceOfExactlyTheCapIsNotReportedCut(t *testing.T) {
 	db := openStore(t)
 	log := db.Events()
 	base := time.Now().UTC().Add(-time.Hour)
+	recs := make([]store.EventRecord, 0, store.MaxTraceEvents)
 	for i := range store.MaxTraceEvents {
-		if err := log.Append(t.Context(), store.EventRecord{
+		recs = append(recs, store.EventRecord{
 			ID: fmt.Sprintf("t-%04d", i), Type: "task_assigned",
 			Time:     base.Add(time.Duration(i) * time.Second),
 			Category: "task", Actor: "PM", TraceID: "tr-exact",
-		}); err != nil {
-			t.Fatal(err)
-		}
+		})
 	}
+	storetest.WriteEvents(t, log, recs)
 	r := registryOver(t, queries.Sources{Events: fleetOf(log)})
 
 	got := ask(t, r, "trace", map[string]any{"trace_id": "tr-exact"})
