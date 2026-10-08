@@ -357,7 +357,7 @@ func loadWeights(path string) (map[string]float64, error) {
 	if err != nil {
 		return nil, fmt.Errorf("-weights: %w (it is the TEST_WEIGHTS make variable; leave it empty to run without one)", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read-only: nothing a close could lose
 	return readWeights(f, path)
 }
 
