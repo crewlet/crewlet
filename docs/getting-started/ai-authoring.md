@@ -102,8 +102,9 @@ schedules:
     task: "Write a short note on what the company should focus on this week."
 ```
 
-Within five minutes the CEO goes `Working`, steps through **Plan →
-Execute → Review**, and returns to `Idle` — every prompt and tool call
+Within five minutes the CEO goes `Working`, steps through **Execute →
+Review** (with **Onboarding** before them on its very first turn), and
+returns to `Idle` — every prompt and tool call
 inspectable. That's the engine, your model, and your config all
 confirmed working, with no external account involved. Delete the
 schedule once real work arrives.
