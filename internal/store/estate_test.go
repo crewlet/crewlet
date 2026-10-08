@@ -7,8 +7,6 @@ import (
 	"slices"
 	"strconv"
 	"testing"
-
-	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // NOTHING ISSUES A STATEMENT ON THE REPLICATED ESTATE'S POOL.
@@ -81,8 +79,7 @@ func TestNothingIssuesAStatementOnTheReplicatedPool(t *testing.T) {
 		}
 	}
 
-	root := sourcetree.Root(t)
-	files := parseTree(t, root, "internal", "cmd")
+	files := moduleTree(t)
 	var found []string
 	for _, f := range files {
 		for _, decl := range f.file.Decls {
