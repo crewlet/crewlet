@@ -85,7 +85,32 @@ const (
 	// a fast local cluster is not held back by the poll itself, and it runs
 	// at most a few hundred times.
 	clusterReadyPoll = 100 * time.Millisecond
+
+	// clusterReadyAsk is how long one question put to the fleet's
+	// JetStream during that wait — "do you answer?" — waits for its reply
+	// before it is asked again.
+	//
+	// ONE SECOND, the vendored server's hbInterval (server/raft.go) and the
+	// anchor [jsprovision.SettleAsk] states for the same kind of question:
+	// a group that can answer does so in a round trip, and one that cannot
+	// DROPS the request rather than refusing it, so an attempt longer than
+	// the shortest interval over which leadership can change waits for a
+	// reply nobody is going to send.
+	clusterReadyAsk = time.Second
 )
+
+// readiness bounds the wait for the fleet to be able to serve this broker:
+// how long it may take, how often it re-checks, and how long one question put
+// to the fleet's JetStream waits for its answer.
+//
+// THE ZERO VALUE IS PRODUCTION ([embeddedServer.readiness]). It is a value at
+// all, rather than the constants alone, because the branch that names what to
+// fix is reached only by the WHOLE wait running out — sixty seconds — and a
+// case that cannot afford to reach it ends up asserting on whatever error a
+// shorter deadline of its own produced instead, which names nothing.
+type readiness struct {
+	timeout, poll, ask time.Duration
+}
 
 // embeddedServer is a nats-server running inside this process.
 //
@@ -112,6 +137,19 @@ type embeddedServer struct {
 	// system is the identity that reaches this member's system account,
 	// declared on a clustered member only — see membership.go.
 	system systemUser
+	// ready bounds the waits for the fleet to serve this broker; zero is
+	// production. Set by this package's own tests and nothing else — see
+	// [readiness].
+	ready readiness
+}
+
+// readiness is the bound on the waits for the fleet to serve this broker:
+// production's unless this package's own tests set [embeddedServer.ready].
+func (e *embeddedServer) readiness() readiness {
+	if e.ready != (readiness{}) {
+		return e.ready
+	}
+	return readiness{timeout: clusterReadyTimeout, poll: clusterReadyPoll, ask: clusterReadyAsk}
 }
 
 // holdsStreams reports whether this process's broker is where its streams
@@ -726,11 +764,12 @@ func (e *embeddedServer) awaitLeafReady(ctx context.Context, js jetstream.JetStr
 	if e == nil || !e.leaf {
 		return nil
 	}
-	deadline := time.Now().Add(clusterReadyTimeout)
+	r := e.readiness()
+	deadline := time.Now().Add(r.timeout)
 	var last error
 	for time.Now().Before(deadline) {
 		if e.ns.NumLeafNodes() > 0 {
-			askCtx, cancel := context.WithTimeout(ctx, clusterReadyPoll*10)
+			askCtx, cancel := context.WithTimeout(ctx, r.ask)
 			_, last = js.AccountInfo(askCtx)
 			cancel()
 			if last == nil {
@@ -739,19 +778,23 @@ func (e *embeddedServer) awaitLeafReady(ctx context.Context, js jetstream.JetStr
 		}
 		select {
 		case <-ctx.Done():
+			// THE CALLER'S DEADLINE, which says nothing about the link:
+			// cut short, a wait cannot tell a member that is not there
+			// from a link that has not formed YET, so naming the setting
+			// to fix here would be a diagnosis it has no evidence for.
 			return fmt.Errorf("waiting for leaf %q to reach the fleet: %w",
 				e.ns.Name(), ctx.Err())
-		case <-time.After(clusterReadyPoll):
+		case <-time.After(r.poll):
 		}
 	}
 	if e.ns.NumLeafNodes() == 0 {
 		return fmt.Errorf("leaf %q made no link to any member within %s — "+
 			"stream.leaf.urls names no member that is up and listening on its "+
 			"stream.leaf.port, or a firewall is between them",
-			e.ns.Name(), clusterReadyTimeout)
+			e.ns.Name(), r.timeout)
 	}
 	return fmt.Errorf("leaf %q is linked to the fleet but its JetStream did not "+
-		"answer within %s: %w", e.ns.Name(), clusterReadyTimeout, last)
+		"answer within %s: %w", e.ns.Name(), r.timeout, last)
 }
 
 func (e *embeddedServer) connect() (*nats.Conn, error) {

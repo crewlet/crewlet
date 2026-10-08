@@ -133,20 +133,39 @@ func TestEveryMemberServesTheFleetsDomain(t *testing.T) {
 }
 
 // A LEAF THAT CANNOT REACH A MEMBER SAYS SO, rather than booting and then
-// timing out on its first stream with a message about the stream.
+// timing out on its first stream with a message about the stream — and what
+// it says is the SETTING to fix.
+//
+// That sentence is reached only when the leaf's own wait runs out — sixty
+// seconds in production — so the wait is shortened on the server itself and
+// the caller's context is left long. Cut short by the caller instead, which is
+// how this case used to run, the wait ends with the caller's deadline and
+// names nothing: and the assertion then read "leaf", which every error this
+// wait can return contains, so it passed whatever the message said.
 func TestALeafWithNoMemberToReachNamesTheLink(t *testing.T) {
 	t.Parallel()
-	ctx, cancel := context.WithTimeout(t.Context(), clusterReadyTimeout/10)
-	defer cancel()
-	_, err := Open(ctx, testTimings(Config{
-		ServerName: "leaf",
+	cfg := testTimings(Config{
+		ServerName: "edge-1",
 		LeafURLs:   []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", unusedPort(t))},
-	}))
+	})
+	e, err := startEmbedded(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("start the leaf: %v", err)
+	}
+	t.Cleanup(e.shutdown)
+	e.ready = readiness{timeout: 300 * time.Millisecond, poll: 10 * time.Millisecond,
+		ask: 100 * time.Millisecond}
+
+	q, err := newQueueOn(t.Context(), cfg, e, false, queue.Resolve())
 	if err == nil {
+		_ = q.Stop(context.WithoutCancel(t.Context()))
 		t.Fatal("a leaf with no member listening opened a queue")
 	}
-	if !strings.Contains(err.Error(), "leaf") {
-		t.Errorf("the refusal %q does not name the leaf link", err)
+	for _, want := range []string{"stream.leaf.urls", "made no link"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %q, so an operator is not told "+
+				"which setting reaches no member:\n%v", want, err)
+		}
 	}
 }
 
