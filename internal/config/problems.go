@@ -597,34 +597,49 @@ func (b *Bootstrap) Warnings() []Warning {
 				"so has nobody to name"))
 	}
 
-	// AN EMBEDDED STREAM WITH NOWHERE TO PERSIST loses everything on a
-	// restart. It is the right configuration for a test and the wrong one
-	// for any node serving a company. An ingress-only node is no exception:
-	// it runs the engine like every other node, and an embedded server with
-	// no store directory creates every stream it provisions in memory.
-	if b.Stream.Type != StreamNATS && strings.TrimSpace(b.Stream.StoreDir) == "" {
+	// A BROKER THAT HOLDS STREAMS WITH NOWHERE TO PERSIST THEM loses
+	// everything on a restart. It is the right configuration for a test and
+	// the wrong one for any node serving a company.
+	//
+	// ASKED OF THE BROKER KIND, and only a MEMBER holds a stream: it is the
+	// one broker that runs JetStream in this process, so it is the one whose
+	// streams an empty `store_dir` puts in memory. A LEAF runs no JetStream —
+	// every stream its clients use is a member's, kept in that member's
+	// store directory — and is refused a store directory outright
+	// ([StreamLeaf.validate]), so a correct stateless node would otherwise
+	// be told to set the one field it may not; a CLIENT's streams are its
+	// external cluster's. Both used to be caught by a predicate that asked
+	// only "is the stream embedded", which is a question about the process
+	// rather than about who keeps the data.
+	//
+	// The ROLES are not the question either: a member is a data node
+	// ([Bootstrap.checkRolesAndBroker]), and what its broker keeps in memory
+	// is lost whatever else the node does.
+	inMemory := b.BrokerKind() == placement.BrokerMember &&
+		strings.TrimSpace(b.Stream.StoreDir) == ""
+	if inMemory {
 		out = append(out, advisory(field("stream.store_dir"),
-			"an embedded stream with no store directory keeps everything in "+
-				"memory: a restart loses every mailbox, every coordination record and "+
-				"the company's own history. Correct for a test; not for a node that "+
-				"serves a company, whatever its node.roles"))
+			"this node's broker holds the company's streams and has no store "+
+				"directory, so it keeps them in memory: a restart loses every "+
+				"mailbox, every coordination record and the company's own history. "+
+				"Correct for a test; not for a node that serves a company"))
 	}
 
-	// A STORE LIMIT ON A BROKER WITH NO STORE bounds nothing. An embedded
-	// server with no `store_dir` keeps its streams in MEMORY, and a
-	// memory-backed stream's ceiling is reserved against the broker's
-	// memory allowance rather than against this number — so the pair that
-	// reads as "I have bounded this node's broker" is the pair that has
-	// not.
+	// A STORE LIMIT ON A BROKER WITH NO STORE bounds nothing. A member with
+	// no `store_dir` keeps its streams in MEMORY, and a memory-backed
+	// stream's ceiling is reserved against the broker's memory allowance
+	// rather than against this number — so the pair that reads as "I have
+	// bounded this node's broker" is the pair that has not. (A leaf and a
+	// client are refused the limit outright: neither runs a store it could
+	// bound — see [Stream.validate].)
 	//
 	// A WARNING RATHER THAN A REFUSAL, because the pair is still valid: a
 	// company on external backends keeps nothing of its own on the stream,
 	// and a test runs this way on purpose. What is NOT valid is a native
 	// tracker or knowledge base on it, and that is refused already — see
-	// [Company.validate] — so this never softens that rule, it covers the
+	// [CheckTiers] — so this never softens that rule, it covers the
 	// deployments the rule leaves standing.
-	if b.Stream.Type != StreamNATS && b.Stream.StoreMaxBytes > 0 &&
-		strings.TrimSpace(b.Stream.StoreDir) == "" {
+	if inMemory && b.Stream.StoreMaxBytes > 0 {
 		out = append(out, advisory(field("stream.store_max_bytes"),
 			"this embedded stream has no `store_dir`, so its streams are held in "+
 				"memory and this limit bounds none of them: what bounds them is the "+

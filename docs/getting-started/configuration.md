@@ -1234,9 +1234,11 @@ separate on purpose: the exit code turns on refusals alone, so a CI step gates
 on what cannot run and still prints what its operator should read. A warning is
 a configuration that is valid and carries a consequence worth knowing before it
 is applied — a declined fsync's window, a trim that will never advance until
-somebody acknowledges a backup, an embedded stream with nowhere to persist, a
-`stream.cluster.peers` entry left out of the member count because it is this
-node's own route or a repeat, a unit keyed on a name somebody will rename.
+somebody acknowledges a backup, a broker member with nowhere to persist the
+streams it holds (never a leaf or a client of an external cluster, which hold
+no stream of their own), a `stream.cluster.peers` entry left out of the member
+count because it is this node's own route or a repeat, a unit keyed on a name
+somebody will rename.
 
 `api.host` and `api.port` are what this node **binds**, which is rarely where it
 **answers**: a fleet behind a load balancer binds `0.0.0.0:8000` and is reached
