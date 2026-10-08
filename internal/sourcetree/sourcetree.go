@@ -72,6 +72,19 @@
 // commit that tracks it — which is precisely the commit the guard exists to
 // stop.
 //
+// # What a gate may skip without reading it
+//
+// Reading everything is the premise; examining everything with a regular
+// expression or a parser is not, and under the race detector it was most of
+// what the gates cost — a pattern with no literal prefix runs at about a
+// megabyte a second, and go/parser at three or four. So a gate may skip a file
+// that PROVABLY holds nothing its matcher could find, and the proof is here,
+// once: [Required] derives from a pattern's own syntax tree the substrings
+// every match contains, and [Identifiers] skips Go source spelling none of the
+// identifiers a syntax-tree matcher compares. Each is exact, so a gate's
+// verdict does not change; what a gate counts as READ is still counted before
+// either is asked, so its floors measure the walk rather than the filter.
+//
 // # One implementation, for the reason clientsource gives
 //
 // Twenty-one walks over this tree each decided for themselves what it was —
@@ -120,15 +133,24 @@ import (
 // `git check-attr` resolves paths against exactly that.
 func Root(t testing.TB) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("sourcetree: cannot locate this package's own source file")
-	}
-	root, err := moduleRoot(file)
+	root, err := ModuleRoot()
 	if err != nil {
 		t.Fatal(err)
 	}
 	return root
+}
+
+// ModuleRoot is [Root] for a caller with no test to fail: what several gates
+// of one test binary share — a parsed tree, a loaded corpus — is computed
+// once, through [sync.OnceValues], outside any one of them, so it hands the
+// error back to every test that asks rather than failing whichever asked
+// first.
+func ModuleRoot() (string, error) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		return "", errors.New("sourcetree: cannot locate this package's own source file")
+	}
+	return moduleRoot(file)
 }
 
 // moduleRoot is the nearest directory above file that holds a go.mod, with
