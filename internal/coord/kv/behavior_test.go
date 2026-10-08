@@ -11,12 +11,13 @@
 //
 //	go test ./internal/coord/kv/ -run TestBrokerBehavior -v
 //
-// Measured on nats-server 2.14.5 / nats.go 1.53.1, embedded in-process with
-// file storage:
+// Measured on nats-server 2.15.0 / nats.go 1.54.0, embedded in-process with
+// file storage (a run prints the versions it ran on as its first row, read
+// from the binary rather than from here):
 //
 //	bucket TTL (MaxAge) under test                1s
 //	renewed through Update, held for              3x the bucket TTL, no lapse
-//	unrenewed key reaped after                    1.306s — TTL + 306 ms
+//	unrenewed key reaped after                    1.298s — TTL + 298 ms
 //	Get on a reaped key                           jetstream.ErrKeyNotFound
 //	Create on the reaped key                      succeeds
 //	epoch record after the lease key was reaped   still there, value intact
@@ -24,9 +25,9 @@
 //	Update at a stale revision                    jetstream.ErrKeyRevisionMismatch
 //	per-key TTL (KeyTTL), never renewed           expires
 //	per-key TTL (KeyTTL), renewed through Update  IMMORTAL — the trap
-//	Get                                           40 µs
-//	Update                                        40 µs
-//	WatchAll over 21 keys                         720 µs
+//	Get                                           20 µs
+//	Update                                        30 µs
+//	WatchAll over 21 keys                         710 µs
 //
 // Three of these decide something.
 //
@@ -54,6 +55,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
@@ -128,7 +130,7 @@ func TestBrokerBehavior(t *testing.T) {
 	}
 	out := &results{}
 	t.Cleanup(func() { out.print(t) })
-	out.record("nats-server / nats.go", "2.14.5 / 1.53.1 (see go.mod)")
+	out.record("nats-server / nats.go", brokerVersions(t))
 	out.record("bucket TTL (MaxAge) under test", behaviorTTL)
 
 	leases := newBucket(ctx, t, js, "beh_leases", jetstream.KeyValueConfig{TTL: behaviorTTL})
@@ -383,6 +385,39 @@ func TestBrokerBehavior(t *testing.T) {
 			return errors.New("watcher closed before the initial values ended")
 		}))
 	})
+}
+
+// brokerVersions names the nats-server and nats.go these measurements ran on,
+// read from this test binary's own build information.
+//
+// READ, NEVER WRITTEN DOWN, because a version spelled beside a measurement is
+// one the next go.mod bump leaves behind: this row printed "2.14.5 / 1.53.1
+// (see go.mod)" for as long as go.mod said 2.15.0 / 1.54.0, so every table it
+// headed attributed its numbers to a broker the binary did not contain. A
+// replaced module reports its replacement, since that is the code that ran.
+func brokerVersions(t *testing.T) string {
+	t.Helper()
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		t.Fatal("this test binary carries no build information, so the broker " +
+			"its measurements ran on cannot be named")
+	}
+	version := func(path string) string {
+		for _, dep := range info.Deps {
+			if dep.Path != path {
+				continue
+			}
+			if dep.Replace != nil {
+				return dep.Replace.Path + " " + dep.Replace.Version
+			}
+			return dep.Version
+		}
+		t.Fatalf("%s is not in this binary's build information, so the "+
+			"measurements cannot say which one they ran on", path)
+		return ""
+	}
+	return version("github.com/nats-io/nats-server/v2") + " / " +
+		version("github.com/nats-io/nats.go")
 }
 
 func newBucket(ctx context.Context, t *testing.T, js jetstream.JetStream, name string, cfg jetstream.KeyValueConfig) jetstream.KeyValue {
