@@ -1354,9 +1354,19 @@ without the keyword holds none, and the keyword's only value is `true`.
 
 It is read from the same declaration on the config types that drives
 [redaction](../concepts/configuration.md#reads-and-export), and a test
-holds the two to one set in both directions: a position is marked exactly
-when `GET /config`, `crewlet config show` and `crewlet config export -redact`
-mask it.
+holds the two to one set in both directions: in the company schema, a
+position is marked exactly when `GET /config`, `crewlet config show` and
+`crewlet config export -redact` mask it. The Tier A schema marks its own by
+the same rule — the keyring's `secrets.keys[].material`,
+`api.auth.tokens[].token`, `stream.token` and
+`store.objects.s3.secret_access_key` — though no read surface serves Tier A
+to redact. `store.objects.s3.access_key_id` is not marked: AWS treats an
+access key id as an identifier rather than a secret — it travels in every
+signed request's `Authorization` header and appears in CloudTrail records
+and error messages — and only the secret access key proves possession. A
+consumer that prefers every value of that block to arrive by reference
+may still write a `${VAR}` there; the mark only says where a literal is
+wrong.
 
 It is an **annotation, not a rule**. The engine runs a literal credential
 in a marked position (it seals it at rest and masks it on every read), so

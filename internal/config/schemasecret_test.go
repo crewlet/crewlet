@@ -45,7 +45,12 @@ func TestSchemaMarksExactlyWhatRedactionMasks(t *testing.T) {
 			"providers.sandbox.setup[].files{}",
 			"integrations.confluence.token",
 		}},
-		{TierBootstrap, reflect.TypeFor[Bootstrap](), nil},
+		{TierBootstrap, reflect.TypeFor[Bootstrap](), []string{
+			"api.auth.tokens[].token",
+			"secrets.keys[].material",
+			"store.objects.s3.secret_access_key",
+			"stream.token",
+		}},
 	} {
 		t.Run(string(tc.tier), func(t *testing.T) {
 			t.Parallel()

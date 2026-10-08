@@ -518,14 +518,21 @@ func TestAReorderedKeyListRefusesToGuess(t *testing.T) {
 //
 // A hand-maintained list of secret PATHS is maintained by whoever remembers it
 // exists, so the day somebody adds integrations.newthing.token the read
-// surface starts publishing it and nothing fails. This walks the config type
+// surface starts publishing it and nothing fails. This walks the config types
 // and fails on a field whose name says credential and whose tag does not.
+//
+// BOTH TIERS. Tier A has no read surface to redact, but the tag is also what
+// marks a credential's position in the generated schema, and tooling that
+// renders a node's crewlet.yaml — the keyring, the API tokens — needs the
+// mark as much as tooling that renders a company does.
 func TestEveryCredentialFieldIsTagged(t *testing.T) {
 	t.Parallel()
 	// Names that mean "this holds a credential". Deliberately broad: a
 	// false positive is one `secret:"true"` to add or one exemption to
 	// write down, and a false negative is a published credential.
-	credential := []string{"token", "secret", "apikey", "password", "credential"}
+	// "material" is key material: the keyring's, which is named for what
+	// it is rather than for what it unlocks.
+	credential := []string{"token", "secret", "apikey", "password", "credential", "material"}
 
 	// The exemptions, each of which is a NAME rather than a credential.
 	// Listed here so adding one is a decision somebody wrote down.
@@ -548,6 +555,19 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 		// it is in every manifest the operator installs.
 		"ForgeAppID": true,
 	}
+
+	// The exemptions by Type.Field, for a name that is a credential's
+	// somewhere else: a BLOCK or a LIST whose credential is tagged on the
+	// member that holds it, beside labels a tag on the whole would mask.
+	exemptFields := map[string]string{
+		"Bootstrap.Secrets": "the keyring block; its key ids are labels, and " +
+			"SecretKey.Material is tagged",
+		"APIAuth.Tokens": "a list of {id, token}; the id is the label writes " +
+			"are attributed to, and APIToken.Token is tagged",
+		"Stream.Credentials": "a PATH to a NATS credentials file, not the " +
+			"material at it",
+	}
+	usedFields := map[string]bool{}
 
 	// THE TYPE RULE, beside the name rule. A map named Env, Headers or Files
 	// is where a process's credentials are handed to it, and its NAME says
@@ -600,10 +620,15 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 						path+rt.Name(), field.Name, field.Name)
 				}
 			}
+			_, exemptField := exemptFields[rt.Name()+"."+field.Name]
 			for _, needle := range credential {
-				if strings.Contains(name, needle) && !tagged && !exempt[field.Name] {
+				if exemptField && strings.Contains(name, needle) && !tagged {
+					usedFields[rt.Name()+"."+field.Name] = true
+				}
+				if strings.Contains(name, needle) && !tagged && !exempt[field.Name] && !exemptField {
 					t.Errorf("%s.%s looks like a credential and is not tagged "+
-						"secret:\"true\", so the config read surface publishes it",
+						"secret:\"true\", so the config read surface publishes it "+
+						"and the schema does not mark its position",
 						path+rt.Name(), field.Name)
 					break
 				}
@@ -612,6 +637,15 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 		}
 	}
 	walk(reflect.TypeOf(Company{}), "", map[reflect.Type]bool{})
+	walk(reflect.TypeOf(Bootstrap{}), "", map[reflect.Type]bool{})
+	// An exemption that excuses nothing is one that would silently excuse
+	// whatever field takes its name next.
+	for field, reason := range exemptFields {
+		if !usedFields[field] {
+			t.Errorf("exemption %s (%s) names no untagged credential-looking "+
+				"field the walk reached: delete it", field, reason)
+		}
+	}
 }
 
 // rosterDoc is two seats and two MCP servers, each holding a credential of

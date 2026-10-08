@@ -1352,7 +1352,7 @@ type Stream struct {
 
 	// Token is a bearer token presented to an external server. Use ${VAR}
 	// to read it from the environment.
-	Token string `yaml:"token,omitempty" json:"token,omitempty" desc:"Bearer token for an external server; ${VAR} supported."`
+	Token string `secret:"true" yaml:"token,omitempty" json:"token,omitempty" desc:"Bearer token for an external server; ${VAR} supported."`
 
 	// TLS is the transport for an external NATS server: a private CA to
 	// trust, and a client certificate to present. Without it a broker
@@ -2160,7 +2160,7 @@ type APIToken struct {
 
 	// Token is the value, or a ${VAR} reference to it. Resolved once at
 	// startup and never stored.
-	Token string `yaml:"token" json:"token" js:"required" desc:"Token value or ${VAR} reference."`
+	Token string `secret:"true" yaml:"token" json:"token" js:"required" desc:"Token value or ${VAR} reference."`
 }
 
 func (a *APIAuth) validate(path Path) error {
@@ -2315,7 +2315,7 @@ type SecretKey struct {
 
 	// Material is a base64-encoded 32-byte key, or a ${VAR} reference to
 	// one.
-	Material string `yaml:"material" json:"material" js:"required" desc:"base64(32 bytes), or a ${VAR} reference to it."`
+	Material string `secret:"true" yaml:"material" json:"material" js:"required" desc:"base64(32 bytes), or a ${VAR} reference to it."`
 }
 
 func (s *Secrets) validate(path Path) error {

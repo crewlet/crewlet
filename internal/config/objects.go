@@ -70,7 +70,7 @@ type ObjectsS3 struct {
 	// references. Both empty takes the SDK's own chain — the environment,
 	// a shared profile, a web identity or the instance's role.
 	AccessKeyID     string `yaml:"access_key_id,omitempty" json:"access_key_id,omitempty" desc:"Access key id, as a ${VAR} reference; with secret_access_key, or neither to use the environment or the instance's role."`
-	SecretAccessKey string `yaml:"secret_access_key,omitempty" json:"secret_access_key,omitempty" desc:"Secret access key, as a ${VAR} reference."`
+	SecretAccessKey string `secret:"true" yaml:"secret_access_key,omitempty" json:"secret_access_key,omitempty" desc:"Secret access key, as a ${VAR} reference."`
 }
 
 // BackendOrDefault is the backend with the default applied.

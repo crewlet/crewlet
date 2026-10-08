@@ -25,9 +25,12 @@ const Redacted = "__redacted__"
 // nothing fails. A tag lives on the field, and [TestEveryCredentialFieldIsTagged]
 // fails the build when a field that looks like a credential does not carry one.
 //
-// It has TWO READERS and one predicate, [isSecret]: the redaction below, and
-// the schema generator, which marks every position it covers with
-// [secretKeyword]. Both read the tag the same way — a tagged field covers
+// It has TWO READERS and one predicate, [isSecret]: the redaction below,
+// which runs over the company (Tier B) because that is the tier a read
+// serves, and the schema generator, which marks every position the tag
+// covers in BOTH tiers with [secretKeyword] — Tier A's keyring and API
+// tokens are what tooling rendering a node's file most needs to know not to
+// write in clear. Both read the tag the same way — a tagged field covers
 // every string beneath it, a list's members and a map's values included — so
 // what a read masks and what the published schema calls a credential cannot
 // disagree; TestSchemaMarksExactlyWhatRedactionMasks holds the two to one set.
