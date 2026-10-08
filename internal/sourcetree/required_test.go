@@ -451,3 +451,69 @@ func TestIdentifiersRefusesWhatIsNotAnIdentifier(t *testing.T) {
 		}()
 	}
 }
+
+// A LINE-LOCAL PATTERN FINDS THE SAME MATCHES LINE BY LINE AS OVER THE TEXT.
+//
+// Generated as the property above is — matches built from each pattern's own
+// syntax tree, joined by newlines and noise that holds newlines too — and
+// compared both ways: every pattern LineLocal accepts finds, line by line,
+// exactly the matches it finds over the whole text, in order.
+func TestALineLocalPatternFindsTheSameMatchesLineByLine(t *testing.T) {
+	t.Parallel()
+	for pattern, want := range map[string]bool{
+		`\btypes\.([A-Z][A-Za-z0-9_]*)\{`:       true,
+		`\bmetrics\.([A-Z]\w*)\b`:               true,
+		`(?m)^func (Test[A-Za-z0-9_]*)\(`:       true,
+		`(?i)home\s+stream`:                     false, // \s matches a newline
+		`\bKind:\s*types\.(Guard[A-Za-z0-9_]+)`: false,
+		`^package`:                              false, // the text's start, not a line's
+		`end$`:                                  false,
+		`(?s)a.b`:                               false,
+		`a.b`:                                   true,
+		"[^x]":                                  false, // a negated class holds the newline
+		`a\nb`:                                  false,
+	} {
+		if got := LineLocal(regexp.MustCompile(pattern)); got != want {
+			t.Errorf("LineLocal(%s) = %v, want %v", pattern, got, want)
+		}
+	}
+
+	rng := rand.New(rand.NewPCG(20261008, 2))
+	local, compared := 0, 0
+	for range 1000 {
+		pattern := randomPattern(rng, 3)
+		re := regexp.MustCompile(pattern)
+		if !LineLocal(re) {
+			continue
+		}
+		local++
+		parsed, err := syntax.Parse(pattern, syntax.Perl)
+		if err != nil {
+			t.Fatalf("parse %q: %v", pattern, err)
+		}
+		for range 10 {
+			var b strings.Builder
+			for range 1 + rng.IntN(4) {
+				b.WriteString(noise(rng))
+				generate(rng, parsed, &b)
+				b.WriteString([]string{"\n", " ", "\n\n", ""}[rng.IntN(4)])
+			}
+			text := b.String()
+			whole := re.FindAllString(text, -1)
+			var lines []string
+			for _, line := range strings.Split(text, "\n") {
+				lines = append(lines, re.FindAllString(line, -1)...)
+			}
+			if !slices.Equal(whole, lines) {
+				t.Fatalf("LineLocal(%s) is true, and over %q it finds %q but line "+
+					"by line %q", pattern, text, whole, lines)
+			}
+			compared++
+		}
+	}
+	if local < 100 {
+		t.Fatalf("only %d of 1000 generated patterns were line-local, so the "+
+			"property was hardly exercised", local)
+	}
+	t.Logf("%d line-local patterns, %d texts compared", local, compared)
+}

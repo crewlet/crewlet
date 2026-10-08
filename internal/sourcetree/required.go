@@ -637,6 +637,48 @@ var escapes = sync.OnceValue(func() escapeSet {
 	return out
 })
 
+// LineLocal reports whether re finds, in any text, exactly the matches it
+// finds in each of the text's lines on its own — so a gate may run it only on
+// the lines its [Prefilter] admits, rather than over every byte of a file
+// that holds one admitted line among thousands.
+//
+// That holds when no match can cross a line and no assertion reads a line's
+// edge differently from the text's: nothing in re matches a newline (a
+// literal or class holding one, or any-character under (?s)), and re does not
+// anchor at the start or end of the TEXT, which a line would turn into its
+// own start or end. A line's edges are where (?m)^ and $ match anyway, and a
+// word boundary sees a newline and a text's edge alike, as a non-word.
+func LineLocal(re *regexp.Regexp) bool {
+	parsed, err := syntax.Parse(re.String(), syntax.Perl)
+	if err != nil {
+		return false
+	}
+	return lineLocal(parsed.Simplify())
+}
+
+func lineLocal(re *syntax.Regexp) bool {
+	switch re.Op {
+	case syntax.OpBeginText, syntax.OpEndText, syntax.OpAnyChar:
+		return false
+	case syntax.OpLiteral:
+		// A newline folds to nothing but itself, so (?i) changes nothing.
+		return !slices.Contains(re.Rune, '\n')
+	case syntax.OpCharClass:
+		for i := 0; i+1 < len(re.Rune); i += 2 {
+			if re.Rune[i] <= '\n' && '\n' <= re.Rune[i+1] {
+				return false
+			}
+		}
+		return true
+	}
+	for _, sub := range re.Sub {
+		if !lineLocal(sub) {
+			return false
+		}
+	}
+	return true
+}
+
 // Identifiers is a prefilter for Go source on the identifiers a gate's
 // matcher compares: a file whose bytes spell none of them cannot hold the
 // construct, so a gate need not parse it.

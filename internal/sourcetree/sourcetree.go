@@ -80,10 +80,11 @@
 // megabyte a second, and go/parser at three or four. So a gate may skip a file
 // that PROVABLY holds nothing its matcher could find, and the proof is here,
 // once: [Required] derives from a pattern's own syntax tree the substrings
-// every match contains, and [Identifiers] skips Go source spelling none of the
+// every match contains, [LineLocal] says when the pattern may then run on the
+// admitted lines alone, and [Identifiers] skips Go source spelling none of the
 // identifiers a syntax-tree matcher compares. Each is exact, so a gate's
 // verdict does not change; what a gate counts as READ is still counted before
-// either is asked, so its floors measure the walk rather than the filter.
+// any is asked, so its floors measure the walk rather than the filter.
 //
 // # One implementation, for the reason clientsource gives
 //
