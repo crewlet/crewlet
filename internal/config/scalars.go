@@ -70,8 +70,8 @@ func fieldFor(t reflect.Type, key string) reflect.Type {
 		if tag == "-" {
 			continue
 		}
-		name, opts, _ := strings.Cut(tag, ",")
-		if strings.Contains(","+opts+",", ",inline,") {
+		name, _, _ := strings.Cut(tag, ",")
+		if inlined(f) {
 			switch inner := decodedAs(f.Type); {
 			case inner == nil:
 			case inner.Kind() == reflect.Struct:

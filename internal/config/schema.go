@@ -272,14 +272,14 @@ func (g *schemaGen) structSchema(t reflect.Type) map[string]any {
 	props := map[string]any{}
 	var required []string
 
-	// Embedded structs contribute their fields to the enclosing object,
-	// which is what yaml.v3 does when decoding one.
+	// An `,inline` struct contributes its fields to the enclosing object,
+	// which is what yaml.v3 does when decoding one ([inlined]).
 	var walk func(reflect.Type)
 	walk = func(typ reflect.Type) {
 		for i := range typ.NumField() {
 			f := typ.Field(i)
-			if f.Anonymous && f.Type.Kind() == reflect.Struct {
-				walk(f.Type)
+			if inlined(f) {
+				walk(indirect(f.Type))
 				continue
 			}
 			if f.PkgPath != "" {
@@ -536,6 +536,16 @@ func yamlName(f reflect.StructField) (string, bool) {
 		return strings.ToLower(f.Name), true
 	}
 	return name, true
+}
+
+// inlined reports whether yaml.v3 decodes f's keys as its parent's own: a
+// field tagged `,inline`. Embedding is not what says so — yaml.v3 decodes an
+// untagged embedded struct under its lowercased type name, like any other
+// field, and encoding/json's flattening of the same field is a different
+// decoder's rule.
+func inlined(f reflect.StructField) bool {
+	_, opts, _ := strings.Cut(f.Tag.Get("yaml"), ",")
+	return strings.Contains(","+opts+",", ",inline,")
 }
 
 // parseDirectives reads the js tag: semicolon-separated flags and

@@ -3,6 +3,9 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"maps"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -54,6 +57,43 @@ func TestSchemaGenerationIsStable(t *testing.T) {
 		if !bytes.Equal(first, second) {
 			t.Fatalf("%s: two generations differ", tier)
 		}
+	}
+}
+
+// AN EMBEDDED STRUCT IS KEYED AS THE DECODER READS IT. yaml.v3 flattens a
+// struct into its parent only under `,inline`; an embedded struct without
+// the option is an ordinary field keyed by its lowercased type name. The
+// generator used to flatten every embedded struct, so the first config type
+// to embed one would have published keys the loader refuses as unknown and
+// refused the one key it reads. The decoder itself is the oracle here.
+func TestAnEmbeddedStructIsKeyedAsTheDecoderReadsIt(t *testing.T) {
+	t.Parallel()
+	type Flat struct {
+		Inner string `yaml:"inner"`
+	}
+	type Nested struct {
+		Deep string `yaml:"deep"`
+	}
+	type host struct {
+		Flat `yaml:",inline"`
+		Nested
+	}
+
+	const doc = "inner: a\nnested:\n  deep: b\n"
+	dec := yaml.NewDecoder(strings.NewReader(doc))
+	dec.KnownFields(true)
+	var got host
+	if err := dec.Decode(&got); err != nil {
+		t.Fatalf("control: yaml.v3 refused %q: %v", doc, err)
+	}
+	if got.Inner != "a" || got.Deep != "b" {
+		t.Fatalf("control: yaml.v3 decoded %q as %+v", doc, got)
+	}
+
+	props, _ := newSchemaGen(false).structSchema(reflect.TypeFor[host]())["properties"].(map[string]any)
+	keys := slices.Sorted(maps.Keys(props))
+	if want := []string{"inner", "nested"}; !slices.Equal(keys, want) {
+		t.Fatalf("schema keys %v, want %v: the keys yaml.v3 decoded %q by", keys, want, doc)
 	}
 }
 
