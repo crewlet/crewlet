@@ -1522,6 +1522,10 @@ func (q *Queue) WaitForHandlers(ctx context.Context, timeout time.Duration) (int
 // handler finishing: WaitForHandlers is the API for that, and a graceful
 // drain calls it first. Waiting on handlers here would make Stop hang for as
 // long as the longest turn — on a path whose whole job is to let go.
+//
+// AN IDLE LOOP DOES NOT SPEND IT: Stop ends every outstanding fetch (see
+// [attachment.stop]), so a loop parked in one exits at once. What it bounds
+// is a loop inside a handler that ignores its context.
 const stopGrace = 250 * time.Millisecond
 
 // Stop closes every attachment and the connection, and shuts down the
@@ -1546,7 +1550,7 @@ func (q *Queue) Stop(ctx context.Context) error {
 	var wg sync.WaitGroup
 	for _, a := range atts {
 		wg.Go(func() {
-			a.close()
+			a.stop()
 			a.wait(stopGrace)
 		})
 	}

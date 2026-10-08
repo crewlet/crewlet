@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go/jetstream"
+
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -211,4 +213,77 @@ func failureEntries(q *Queue, topic, group string) int {
 		a.failuresMu.Unlock()
 	}
 	return total
+}
+
+// A FETCH EXPIRES AFTER ITS WAIT, AND A STOP ENDS IT AT ONCE — the two halves
+// of [attachment.fetch], each of which a client upgrade could move without a
+// word.
+//
+// The first: a fetch on a consumer with nothing for it ends when the broker
+// expires the request, and that must be the wait asked for — not a tenth early,
+// which is what the client makes of a context's deadline unadjusted, and not
+// the client's thirty-second default, which is what a context with no deadline
+// would leave the request at. The second: a stop does not wait for an idle
+// fetch to run out. It used to — a loop parked in a fetch noticed its
+// cancellation only when the fetch ended, so every stop of a queue holding an
+// idle attachment spent the whole stop grace and then closed the connection
+// under the loop anyway.
+func TestAFetchExpiresAfterItsWaitAndAStopEndsItAtOnce(t *testing.T) {
+	t.Parallel()
+
+	t.Run("an idle fetch ends at its wait", func(t *testing.T) {
+		t.Parallel()
+		const wait = 500 * time.Millisecond
+		q := newQueue(t)
+		topic, group := topics.AgentInbox("idle"), topics.AgentInboxGroup("idle")
+		if _, err := q.EnsureSubscription(t.Context(), topic, group); err != nil {
+			t.Fatal(err)
+		}
+		cons, err := q.js.Consumer(t.Context(), q.mustStream(t, topic), consumerName(topic, group))
+		if err != nil {
+			t.Fatal(err)
+		}
+		a := &attachment{cons: cons, fetching: t.Context()}
+		start := time.Now()
+		if err := a.fetch(1, wait, func(jetstream.Msg) {
+			t.Error("an empty mailbox handed over a message")
+		}); err != nil {
+			t.Fatalf("fetch: %v", err)
+		}
+		// THE BROKER CANNOT ANSWER BEFORE ITS EXPIRY, so the lower bound
+		// is exact; the upper one is the client's own second of grace past
+		// it, which only a broker that never answered spends.
+		if took := time.Since(start); took < wait-10*time.Millisecond || took > wait+time.Second {
+			t.Errorf("an idle fetch asked to wait %v ended after %v", wait, took)
+		}
+	})
+
+	t.Run("a stop ends an idle fetch at once", func(t *testing.T) {
+		t.Parallel()
+		// A POLL OF A MINUTE, so a fetch the stop did not reach is still
+		// outstanding long after the stop's own grace.
+		q := newQueueWith(t, Config{FetchWait: time.Minute})
+		topic, group := topics.AgentInbox("stopping"), topics.AgentInboxGroup("stopping")
+		if err := q.Subscribe(t.Context(), topic, group,
+			func(context.Context, *events.Event) queue.Result { return queue.Ack() }); err != nil {
+			t.Fatal(err)
+		}
+		atts := q.lookup(topic, group)
+		if len(atts) != 1 {
+			t.Fatalf("%d attachments, want 1", len(atts))
+		}
+		// Long enough that the loop is parked in its fetch: the attachment
+		// is registered before the loop starts.
+		time.Sleep(100 * time.Millisecond)
+		if err := q.Stop(context.WithoutCancel(t.Context())); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-atts[0].done:
+		default:
+			t.Fatal("the consume loop was still parked in its fetch when Stop " +
+				"returned, so the stop waited out its grace for a loop it then " +
+				"abandoned")
+		}
+	})
 }

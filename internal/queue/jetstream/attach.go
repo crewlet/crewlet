@@ -140,6 +140,12 @@ type attachment struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 
+	// fetching bounds every fetch this attachment makes, and abandon ends
+	// whichever one is outstanding. STOP ALONE CALLS IT, never Detach — see
+	// [attachment.stop] for why the two differ.
+	fetching context.Context
+	abandon  context.CancelFunc
+
 	// quiesced stops this consumer taking NEW work while staying
 	// attached. A running handler finishes; nothing new is fetched. Its
 	// inverse is required, not optional: a node whose coordination store
@@ -224,11 +230,93 @@ func (a *attachment) blocked() bool {
 // It deliberately does NOT join a running handler: Detach is the
 // fenced-release path, and a node that has lost a seat must give it up now
 // rather than when the turn it should not be running finally ends.
+//
+// AND IT LEAVES AN OUTSTANDING FETCH TO END ON ITS OWN, which is the
+// difference between this and [attachment.stop]. The pull request that fetch
+// sent is still open at the broker, and a message published in the moment
+// after the detach can be delivered to it. Left open, that message reaches
+// [attachment.dispatchOne], finds this consumer detached, and is handed back
+// at once for the successor. Abandoned, the client drops its subscription
+// while the broker may already be sending, and a message in flight then is
+// lost to nobody's hand-back: it waits out the whole ack window before the
+// broker offers it again — on exactly the lease movement a hand-back exists
+// to keep cheap.
 func (a *attachment) close() {
 	a.detached.Store(true)
 	if a.cancel != nil {
 		a.cancel()
 	}
+}
+
+// stop is close, and the end of the outstanding fetch as well — the half only
+// [Queue.Stop] may take.
+//
+// THE CONNECTION IS CLOSED NEXT whatever happens here, and closing it ends the
+// broker's interest in every pull request on it: a message in flight to one
+// is lost to the same ack window either way, so ending the fetch first loses
+// nothing a stop was not already losing. What it removes is the wait. A loop
+// parked in a fetch noticed its cancellation only when the fetch ran out — a
+// second at the shipped poll — so every stop of a queue with an idle
+// attachment spent the whole [stopGrace] waiting for loops it then abandoned
+// anyway.
+func (a *attachment) stop() {
+	a.close()
+	if a.abandon != nil {
+		a.abandon()
+	}
+}
+
+// fetch asks the broker for up to n messages, waiting at most wait for them,
+// and hands each to take as it arrives — the one way every consume loop here
+// fetches, so a stop reaches every outstanding fetch through
+// [attachment.fetching].
+//
+// # Why two context options and no expiry option
+//
+// The client's own expiry option (FetchMaxWait) is a timer and nothing else:
+// a fetch sent with it ran to the end of its window whatever became of the
+// loop that sent it, so a stop waited for it. Its context option is the
+// cancellable form, but it couples two durations the expiry option kept
+// apart. A context's deadline becomes the request's expiry with a tenth held
+// back (at most a second), and the same deadline then ENDS THE CLIENT'S WAIT —
+// so a message the broker hands over just before its expiry has a tenth of
+// the window to arrive before the client stops listening, five milliseconds
+// on a tail fetch, and one that arrives after is dropped unacknowledged and
+// sits out the whole ack window before the broker offers it again. The expiry
+// option's client waits a full second past the expiry, which is the margin
+// worth keeping.
+//
+// So the request is sent with TWO: the first carries only a deadline, which
+// the client turns into the expiry and nothing else, and the second replaces
+// it as the context the client waits under — [attachment.fetching], which has
+// no deadline, so the wait ends on the broker's own timeout, a second's grace
+// after it, or a stop. The first deadline is set past wait by exactly the share
+// the client holds back, so the expiry the broker is given is wait itself;
+// [TestAFetchExpiresAfterItsWaitAndAStopEndsItAtOnce] pins both halves against
+// the vendored client.
+func (a *attachment) fetch(n int, wait time.Duration, take func(jetstream.Msg)) error {
+	if err := a.fetching.Err(); err != nil {
+		return err
+	}
+	expiry, cancel := context.WithTimeout(context.Background(), wait+expiryHeldBack(wait))
+	batch, err := a.cons.Fetch(n, jetstream.FetchContext(expiry), jetstream.FetchContext(a.fetching))
+	// The options are applied before Fetch returns, and the first one's
+	// context is read for its deadline alone.
+	cancel()
+	if err != nil {
+		return err
+	}
+	for msg := range batch.Messages() {
+		take(msg)
+	}
+	return nil
+}
+
+// expiryHeldBack is how far past the wanted expiry a fetch's deadline is set,
+// so that what the client keeps back of it — a tenth, at most a second
+// (jetstream.FetchContext) — leaves exactly the wanted expiry.
+func expiryHeldBack(wait time.Duration) time.Duration {
+	return min(wait/9, time.Second)
 }
 
 // wait blocks until the consume loop has exited, or the deadline passes.
@@ -415,10 +503,12 @@ func (q *Queue) attach(ctx context.Context, topic, group string, loop func(conte
 	// is waiting to finish.
 	paused := q.paused
 	loopCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	fetching, abandon := context.WithCancel(context.WithoutCancel(ctx))
 	a := &attachment{
 		q: q, key: key, cons: cons,
 		log:    q.log.With("topic", topic, "group", group),
 		cancel: cancel, done: make(chan struct{}),
+		fetching: fetching, abandon: abandon,
 	}
 	a.paused.Store(paused)
 	q.attachments[key] = append(q.attachments[key], a)
@@ -426,6 +516,10 @@ func (q *Queue) attach(ctx context.Context, topic, group string, loop func(conte
 
 	go func() {
 		defer close(a.done)
+		// Released when the loop ends, however it ends: a detached
+		// attachment's loop exits on its own once its fetch runs out, and
+		// nothing else would release the fetch scope it no longer uses.
+		defer abandon()
 		loop(loopCtx, a)
 	}()
 	return nil
@@ -447,13 +541,10 @@ func (q *Queue) Subscribe(ctx context.Context, topic, group string, h queue.Hand
 				}
 				continue
 			}
-			msgs, err := a.cons.Fetch(1, jetstream.FetchMaxWait(a.q.fetchWait()))
-			if err != nil {
-				a.logFetchErr(ctx, err)
-				continue
-			}
-			for msg := range msgs.Messages() {
+			if err := a.fetch(1, a.q.fetchWait(), func(msg jetstream.Msg) {
 				a.dispatchOne(ctx, msg, h)
+			}); err != nil {
+				a.logFetchErr(ctx, err)
 			}
 		}
 	})
