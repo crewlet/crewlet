@@ -107,10 +107,41 @@ func TestWithinStopJoinsTheStopOrBeginsOneInsideTheLease(t *testing.T) {
 	}
 }
 
-// A HOST STOPPED ON AN ENDED CONTEXT STILL GIVES ITS LEASES BACK, on an
-// allowance inside its own lease rather than none: Stop is reached on a
-// shutdown path whose context has routinely ended, and the store here answers
-// a release only when the context it was asked on ends.
+// A HOST STOPPED ON AN ENDED CONTEXT STILL GIVES ITS LEASES BACK. Stop is
+// reached on a shutdown path whose context has routinely ended, and the twin
+// here refuses a call made on one, as every backend does: a give-back that
+// inherited it would release nothing, so every seat would sit dark for a full
+// TTL and peers would keep reserving capacity for a node that is gone.
+//
+// Read straight off the store the moment Stop returns, on a clock that never
+// moves, so no lease can have lapsed into looking given back.
+func TestAStopOnAnEndedContextGivesItsLeasesBack(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	h := f.newHost("node-a", Config{
+		Seats: seatsNamed("ceo", "eng"), SweepInterval: time.Hour, HeartbeatInterval: time.Hour,
+	})
+	h.Start(f.ctx)
+	wantHeld(t, h, "ceo", "eng")
+
+	ended, cancel := context.WithCancel(f.ctx)
+	cancel()
+	h.Stop(ended)
+	for _, resource := range []string{
+		coord.SeatResource("ceo"), coord.SeatResource("eng"), coord.NodeResource("node-a"),
+	} {
+		if lease := f.leaseOf(resource); lease != nil {
+			t.Errorf("%s is still held by %s after a stop on an ended context: "+
+				"the give-back inherited the caller's context", resource, lease.Owner)
+		}
+	}
+}
+
+// A HOST STOPPED ON AN ENDED CONTEXT SPENDS ONE ALLOWANCE OF ITS OWN LEASE on
+// giving its leases back, never none and never longer: the store here answers
+// a release only when the context it was asked on ends — a member that has
+// lost quorum — so nothing but the allowance decides how long the stop spends
+// learning that every give-back failed.
 func TestAStopOnAnEndedContextSpendsOneAllowanceOfItsLease(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
