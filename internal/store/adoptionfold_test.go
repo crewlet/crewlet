@@ -44,3 +44,26 @@ func TestAnAdoptionRowCarriesNoFoldFlag(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// columnsOf names a table's columns as the driver reports them.
+func columnsOf(t *testing.T, tx *sql.Tx, table string) []string {
+	t.Helper()
+	rows, err := tx.QueryContext(t.Context(),
+		`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		t.Fatalf("read %s's columns: %v", table, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("read %s's columns: %v", table, err)
+		}
+		out = append(out, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read %s's columns: %v", table, err)
+	}
+	return out
+}
