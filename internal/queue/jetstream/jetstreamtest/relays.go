@@ -18,10 +18,11 @@ import (
 // so a harness that started the servers would be testing a topology no
 // deployment has — engines talking to brokers they did not start.
 //
-// What a caller actually needs from that harness is the addressing: a shared
-// cluster name, a route port per member, the peer URLs that reach the other
-// members THROUGH a relay this process can cut, and an advertised address that
-// is deliberately dead so gossip cannot route around the relays. That is this.
+// What a caller actually needs from that harness is the addressing: a cluster
+// name its members share and no other mesh carries, a route port per member,
+// the peer URLs that reach the other members THROUGH a relay this process can
+// cut, and an advertised address that is deliberately dead so gossip cannot
+// route around the relays. That is this.
 //
 // The relays are running when this returns and are stopped when the test ends.
 // [Relays.Partition] and [Relays.Heal] are [Cluster.Partition] and
@@ -29,6 +30,7 @@ import (
 // cuts established connections rather than only refusing new ones.
 type Relays struct {
 	c           *Cluster
+	name        string
 	ports, dead []int
 
 	// direct is a mesh with no relays in it: every member is given its
@@ -63,8 +65,8 @@ func StartRelays(ctx context.Context, t *testing.T, n int) *Relays {
 	// The classification it needs lives at the bind itself now, in
 	// [listenErr], which is the only place that can tell those apart.
 	var mesh *Relays
-	withFreshPorts(ctx, t, "relay mesh", func(ctx context.Context) (*Cluster, error) {
-		r, err := startRelaysOnce(ctx, t, n)
+	withFreshPorts(ctx, t, "relay mesh", func(ctx context.Context, name string) (*Cluster, error) {
+		r, err := startRelaysOnce(ctx, t, n, name)
 		mesh = r
 		return r.c, err
 	})
@@ -77,13 +79,13 @@ func StartRelays(ctx context.Context, t *testing.T, n int) *Relays {
 // [StartCluster]'s factory gives: the relays that DID bind hold their
 // listeners until the test ends, and [withFreshPorts] is what takes them down
 // between attempts. Only the embedded cluster is meaningful on an error.
-func startRelaysOnce(ctx context.Context, t *testing.T, n int) (*Relays, error) {
+func startRelaysOnce(ctx context.Context, t *testing.T, n int, name string) (*Relays, error) {
 	t.Helper()
 	ports := freePorts(ctx, t, n+n*(n-1)+n)
 	routePorts, relayPorts, dead := ports[:n], ports[n:n+n*(n-1)], ports[n+n*(n-1):]
 
 	c := &Cluster{}
-	mesh := &Relays{c: c, ports: routePorts, dead: dead}
+	mesh := &Relays{c: c, name: name, ports: routePorts, dead: dead}
 	for i := range n {
 		for j := range n {
 			if i == j {
@@ -152,7 +154,7 @@ func StartDirectMesh(ctx context.Context, t *testing.T, n int) *Relays {
 	if n < 2 {
 		t.Fatalf("StartDirectMesh(%d): use one member's own config for a solo node", n)
 	}
-	return &Relays{ports: freePorts(ctx, t, n), direct: true}
+	return &Relays{name: newClusterName(), ports: freePorts(ctx, t, n), direct: true}
 }
 
 // Stop releases everything this mesh holds — the relay listeners, and with
@@ -177,8 +179,11 @@ func (r *Relays) Stop() {
 	}
 }
 
-// RelayClusterName is the cluster name every member shares.
-const RelayClusterName = "crewlet-test"
+// ClusterName is the cluster name every member of this mesh carries — this
+// mesh's alone, for [newClusterName]'s reason: a member a case stops for good
+// leaves its peers dialling its route port, and a member another mesh is
+// handed that port for must be refused by them rather than routed to.
+func (r *Relays) ClusterName() string { return r.name }
 
 // Member is member i's routing: the port it listens on, the peer URLs it
 // dials, and the address it advertises to gossip.

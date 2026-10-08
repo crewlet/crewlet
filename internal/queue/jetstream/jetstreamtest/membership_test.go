@@ -114,6 +114,13 @@ func TestAMemberGoneForGoodIsRemovedFromTheMetadataGroup(t *testing.T) {
 // port is free, and a cluster another case is reserving ports for in the same
 // moment can take it, failing the restart on a bind this case cannot retry.
 // Run serially, nothing in this binary reserves a port while it is down.
+//
+// Its neighbours stop members for good as well, and the port each of those
+// leaves IS handed to whichever case asks next — which costs that case
+// nothing only because no two clusters share a name ([newClusterName]): the
+// survivors go on dialling the port for as long as they run, and a member
+// another cluster starts there is refused by them rather than merged into
+// their cluster.
 func TestAMemberGoneForGoodIsRemovedAfterEverySurvivorRestarted(t *testing.T) {
 	c := StartCluster(t, 3, js.Config{})
 	leaderOf(t, c)
