@@ -172,7 +172,14 @@ type Options struct {
 	// Runtime is the engine this process runs beside.
 	Runtime NodeRuntime
 
-	// State is the projection to serve. Nil builds an empty one.
+	// State is the projection to serve. Nil builds an empty one on
+	// [Options.Now].
+	//
+	// The projection ages and labels the live spend window on a clock of
+	// its own ([livestate.WithClock]), and the live `tokens` answer's
+	// window is that clock's rather than Now's — so an embedder that
+	// supplies a projection and pins Now pins the projection to the same
+	// clock, or the one surface answers on two.
 	State *livestate.LiveState
 
 	// Sources are what the read surface answers from. Company, Events and
@@ -187,7 +194,8 @@ type Options struct {
 	// QueueBackend names the broker, for the health body.
 	QueueBackend string
 
-	// Now is injectable so a test can pin the timestamps.
+	// Now is injectable so a test can pin the timestamps. It is also the
+	// clock of the projection a nil [Options.State] builds.
 	Now func() time.Time
 
 	// PaceClock is the clock a file upload's and download's pace is
@@ -318,7 +326,10 @@ func New(opts Options) (*App, error) {
 	}
 	state := opts.State
 	if state == nil {
-		state = livestate.New()
+		// ON THE APP'S CLOCK: the live spend window is labelled by the
+		// projection's, and one on the wall clock beside a pinned Now
+		// would answer the surface's questions on two clocks.
+		state = livestate.New(livestate.WithClock(now))
 	}
 
 	a := &App{
@@ -388,7 +399,8 @@ func New(opts Options) (*App, error) {
 	// answered a REST call and a socket call a second apart with two
 	// different instants, and nothing but the call's timing said which. (The
 	// live spend window, where that showed, is labelled by the projection
-	// now, on the clock it was aged on.)
+	// now, on the clock it was aged on — which a nil State builds on this
+	// one: see [Options.State].)
 	if sources.Now == nil {
 		sources.Now = now
 	}

@@ -176,6 +176,28 @@ func TestBothTransportsAnswerTheSameQuestionIdentically(t *testing.T) {
 	}
 }
 
+// THE PROJECTION THE APP BUILDS ITSELF IS ON THE APP'S CLOCK.
+//
+// The live `tokens` answer is labelled by the projection's clock rather than by
+// [api.Options.Now], so a projection built on the wall clock beside a pinned Now
+// is two clocks under one surface — the live window stamped with one instant
+// and every other answer with another, and a REST call and a socket call either
+// side of a second answering two windows.
+//
+// Mutation: build New's default projection with no clock, and this fails.
+func TestTheAppsOwnProjectionAnswersOnTheAppsClock(t *testing.T) {
+	t.Parallel()
+	a := newApp(t, api.Options{}) // Now pinned to clock, no State
+
+	_, body := overREST(t, a, "tokens", nil)
+	window, _ := body.(map[string]any)
+	since, until := clock.Add(-livestate.LiveSpendWindow).Format(time.RFC3339), clock.Format(time.RFC3339)
+	if window["since"] != since || window["until"] != until {
+		t.Errorf("live window = %v to %v, want the app's clock's %s to %s",
+			window["since"], window["until"], since, until)
+	}
+}
+
 func TestAFilterIsHonouredOnBothTransports(t *testing.T) {
 	t.Parallel()
 	// The specific divergence the shared accessors exist to prevent: a
