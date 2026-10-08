@@ -565,6 +565,14 @@ func memberClient(t *testing.T) jetstream.JetStream {
 	return client(t, srv)
 }
 
+// leafClient is a client of a leaf of a member, once the leaf's link is up.
+//
+// WAITED FOR, as the engine waits for it before it opens anything on a leaf
+// ([js.Server.Client]): every case through a leaf opened its bucket while the
+// link was still forming, and each paid a second of [jsprovision.ReAsk] for a
+// request nobody could answer yet — a second a case, where the member's own
+// cases take a tenth of one. Opening on a link that is NOT up is a case of its
+// own ([TestOpeningOnALeafWaitsOutItsLink]).
 func leafClient(t *testing.T) jetstream.JetStream {
 	t.Helper()
 	port := unusedPort(t)
@@ -574,13 +582,95 @@ func leafClient(t *testing.T) jetstream.JetStream {
 		t.Fatalf("start the member: %v", err)
 	}
 	t.Cleanup(member.Shutdown)
+	leaf := startLeaf(t, port)
+	c := client(t, leaf)
+	awaitLink(t, c)
+	return c
+}
+
+// startLeaf starts a leaf that dials a member's leaf listener on port.
+func startLeaf(t *testing.T, port int) *js.Server {
+	t.Helper()
 	leaf, err := js.StartServer(t.Context(), js.Config{ServerName: "leaf",
 		LeafURLs: []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", port)}})
 	if err != nil {
 		t.Fatalf("start the leaf: %v", err)
 	}
 	t.Cleanup(leaf.Shutdown)
-	return client(t, leaf)
+	return leaf
+}
+
+// awaitLink waits until the members' JetStream answers across the leaf's
+// link: a leaf runs none of its own, so an answer is the link.
+func awaitLink(t *testing.T, c jetstream.JetStream) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		_, err := c.AccountInfo(ctx)
+		cancel()
+		if err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the leaf's link to its member never answered: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A BUCKET OPENED ON A LEAF WHOSE LINK IS NOT UP YET OPENS ONCE IT IS.
+//
+// A leaf's JetStream is across its link, and until the link forms nobody
+// answers: the create comes back "no responders" at once. Open asks again
+// rather than failing ([jsprovision.Place]), and that is the whole of what
+// this case holds — the leaf is started with no member at all, Open is left
+// asking, and only then does the member come up.
+func TestOpeningOnALeafWaitsOutItsLink(t *testing.T) {
+	t.Parallel()
+	port := unusedPort(t)
+	c := client(t, startLeaf(t, port))
+	type result struct {
+		b   *natsobj.Backend
+		err error
+	}
+	opened := make(chan result, 1)
+	go func() {
+		b, err := natsobj.Open(t.Context(), c, natsobj.Config{Replicas: 1})
+		opened <- result{b, err}
+	}()
+	select {
+	case r := <-opened:
+		t.Fatalf("the bucket opened (%v) with no member for the leaf to reach", r.err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	member, err := js.StartServer(t.Context(), js.Config{ServerName: "member",
+		LeafHost: "127.0.0.1", LeafPort: port, StoreDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("start the member: %v", err)
+	}
+	t.Cleanup(member.Shutdown)
+	var r result
+	select {
+	case r = <-opened:
+	case <-time.After(time.Minute):
+		t.Fatal("the bucket never opened once the member was up")
+	}
+	if r.err != nil {
+		t.Fatalf("opening on a leaf whose link came up late: %v", r.err)
+	}
+	// AND IT IS THE BUCKET: an object goes up and comes back across the link.
+	if err := r.b.Put(t.Context(), "late", bytes.NewReader([]byte("linked")), objstore.PutMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	rc, err := r.b.Get(deadline(t), "late", 0, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rc.Close()
+	if got, err := io.ReadAll(rc); err != nil || string(got) != "linked" {
+		t.Fatalf("read back %q, %v", got, err)
+	}
 }
 
 func client(t *testing.T, srv *js.Server) jetstream.JetStream {
