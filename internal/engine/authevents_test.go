@@ -5,12 +5,14 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // feed is what a node published, as its own publish listener heard it — the
@@ -57,8 +59,8 @@ func TestTheNodesIdentityWriterAnnouncesOnItsFeed(t *testing.T) {
 	}
 	heard := &feed{}
 	heard.listen(e)
-	if _, err := e.IAMWriter().InvalidateAll(t.Context(), "op-restore",
-		"restored from a backup"); err != nil {
+	if _, err := e.IAMWriter().InvalidateAll(t.Context(),
+		statelog.NewOpID(time.Now(), "restore"), "restored from a backup"); err != nil {
 		t.Fatalf("invalidate: %v", err)
 	}
 	bumped := (types.IAMSessionGenerationBumped{}).EventType()
