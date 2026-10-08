@@ -420,11 +420,12 @@ type Unavailable struct {
 	//
 	// EMPTY WHEN THE REFUSAL IS ABOUT THE NODE THAT MADE IT — its own
 	// record, a copy it wrote itself on an earlier attempt, or no record at
-	// all — which is every refusal but that one. And EMPTY for another node's copy
-	// under a gate that blames no writer, which is `deleted`: the marker
-	// holds every writer's record on the object for ever, this node's own
-	// included, so the refusal is as true of this node as of the copy, and a
-	// writer named here read as a retry that only meets the marker again.
+	// all — which is every refusal but that one. And EMPTY for another
+	// node's copy under a gate that blames no writer, which is `deleted`:
+	// the marker holds every writer's record on the object for ever, this
+	// node's own included, so the refusal is as true of this node as of the
+	// copy, and a writer named here read as a retry that only meets the
+	// marker again.
 	// Detail still says whose copy the record is.
 	CopyWriter string
 
