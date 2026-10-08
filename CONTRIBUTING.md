@@ -423,6 +423,16 @@ What follows are the prerequisites that legitimately vary by machine.
 Tests never call real LLM APIs — use the fakes in `internal/providers`. Test
 files sit beside what they cover, as Go expects.
 
+A test that opens a store on a fresh path opens it through
+`storetest.OpenNode` or `storetest.OpenEstate`, and one that boots an engine on
+a path of its own seeds it first with `storetest.Seed` — the node estate, and
+the replicated one where the node holds it, never a scratch store. Each copies
+an image the test binary's own migrations built once, so a broken migration
+still fails at the first fixture and no case pays the whole migration sequence
+for nothing it asserts. Only a test whose subject is migration — the schema
+cases, `Pending`, an adoption, a fresh-file boot — opens a fresh file with
+`store.OpenNode`.
+
 ### The end-to-end gates
 
 `internal/e2e` runs a real engine, a real broker and the real API, then
