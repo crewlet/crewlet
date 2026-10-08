@@ -133,6 +133,13 @@ func partition(pkgs []pkg) (parallel, solo []string) {
 // is a path named twice — one run measures each package once, so two entries
 // are two runs spliced together and neither number is the measurement.
 //
+// The rule can be tightened or loosened freely, because ci.yml keys the
+// measurement it keeps on a hash of this package's source and
+// internal/skipgate's: a CI run whose reader or writer differs from the ones
+// that produced a saved file never restores it. Keyed on anything less, a
+// tighter rule here would refuse the saved file on every later run, and no run
+// could save one it accepts — only a run whose shards all pass saves at all.
+//
 // Pure over a reader so the refusals can be stated directly.
 func readWeights(r io.Reader, name string) (map[string]float64, error) {
 	weights := map[string]float64{}

@@ -338,19 +338,57 @@ jobs:
   # there is none (the first run, or the entry was evicted after a week unread)
   # the file is empty, every package weighs the same and the shards split by
   # count: slower, and exactly as complete.
+  #
+  # A MEASUREMENT IS KEYED ON THE CODE THAT WROTE IT AND THE CODE THAT READS
+  # IT, because a prefix restore otherwise hands every run the newest entry
+  # whatever its shape, and that can wedge CI for good. internal/solo/partition
+  # reads the file strictly and refuses a line internal/skipgate did not write;
+  # a refusal fails every shard; and only a main run whose shards ALL passed
+  # saves a replacement. So a change to either side of the format — a new
+  # column, a tighter reader — would leave every later run, on every pull
+  # request and on main, restoring a file it refuses, with nothing able to save
+  # one it accepts, and the eviction that would end it never comes, since the
+  # entry is read on every run. Keyed on a hash of both packages' sources, a
+  # change to either starts from no measurement — the bootstrap above, which
+  # runs complete — and an entry a later change cannot read is never offered
+  # to it. That holds for a bug too: a file the same code wrote and cannot
+  # read is retired by the change that fixes the code. The `tests` job only
+  # sorts the shards' lines together, which can make no line unreadable and,
+  # once its cover check has passed, name no package twice — so these two
+  # packages are the whole of the format. A change to either one, test files
+  # and the skip allowlist included, costs a run split by count, which is
+  # cheaper than a key that misses the one edit that mattered.
   plan:
     name: plan the test shards
     runs-on: ubuntu-latest
     outputs:
       parallel: ${{ steps.shards.outputs.parallel }}
       solo: ${{ steps.shards.outputs.solo }}
+      weights-key: ${{ steps.weights-key.outputs.prefix }}
     steps:
+      # The two packages the key is hashed over, and nothing else: this job
+      # runs no Go.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            internal/skipgate
+            internal/solo/partition
+      - name: name the measurements this code can read
+        id: weights-key
+        env:
+          FORMAT: ${{ hashFiles('internal/skipgate/**', 'internal/solo/partition/**') }}
+        run: |
+          if [ -z "$FORMAT" ]; then
+            echo "::error::internal/skipgate and internal/solo/partition hashed to nothing; the checkout above did not fetch them."
+            exit 1
+          fi
+          echo "prefix=test-weights-$FORMAT-" >> "$GITHUB_OUTPUT"
       - name: restore the newest measured package durations
         uses: actions/cache/restore@v6
         with:
           path: test-weights.tsv
-          key: test-weights-${{ github.sha }}
-          restore-keys: test-weights-
+          key: ${{ steps.weights-key.outputs.prefix }}${{ github.sha }}
+          restore-keys: ${{ steps.weights-key.outputs.prefix }}
       # ONE NUMBER PER HALF, and every shard name is derived from it, so the
       # matrix and the `I/N` each shard is handed cannot disagree.
       #
@@ -572,12 +610,14 @@ jobs:
       - name: the package durations this run measured
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: sort reports/*/*/timings.tsv > test-weights.tsv
+      # Under the plan's key, so the next run whose two programs are these
+      # ones restores it and no other run does.
       - name: keep them for the next run's plan
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@v6
         with:
           path: test-weights.tsv
-          key: test-weights-${{ github.sha }}
+          key: ${{ needs.plan.outputs.weights-key }}${{ github.sha }}
 
   # THERE IS NO SEPARATE "stores" JOB ANY MORE. One existed, running the store
   # contract suites twice over CREWLET_STORE_DRIVER=turso|sqlite, because

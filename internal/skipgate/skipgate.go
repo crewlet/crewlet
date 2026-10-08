@@ -324,6 +324,11 @@ func flush(out *os.File, buffered map[string][]string, pkg string) int {
 // Both sorted by import path, so a report is a function of what ran and
 // diffs cleanly against another shard's. Seconds to the millisecond, which is
 // test2json's own precision.
+//
+// timings.tsv's shape is internal/solo/partition's to read, strictly, and it
+// outlives this run: ci.yml keeps it as the next run's weights. Change it
+// freely — that cache is keyed on a hash of this package's source and the
+// partition's, so no run ever restores a file a different writer produced.
 func writeReport(dir string, r report) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("-report %s: %w", dir, err)
