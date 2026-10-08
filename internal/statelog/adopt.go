@@ -241,14 +241,14 @@ func (a *Adopter) Join(ctx context.Context) (Manifest, error) {
 	var expect func(context.Context) ([]string, error)
 	if a.deps.Donors != nil {
 		expect = func(listing context.Context) ([]string, error) {
-			named, err := a.deps.Donors(listing)
-			if err != nil && ctx.Err() == nil {
+			named, listErr := a.deps.Donors(listing)
+			if listErr != nil && ctx.Err() == nil {
 				a.log.WarnContext(ctx, "statelog_donors_unknown",
-					"node", a.deps.NodeID, "error", err.Error(),
+					"node", a.deps.NodeID, "error", listErr.Error(),
 					"detail", "which donors to wait for could not be read within "+
 						"the offer window, so the join collected offers for all of it")
 			}
-			return named, err
+			return named, listErr
 		}
 	}
 	offers, err := collectOffers(ctx, a.deps.Conn, req, OfferWindow, expect)
