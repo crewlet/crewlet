@@ -30,7 +30,7 @@ func auditedSurface(t *testing.T) (*operator.Server, *auditLog) {
 	s := newSurface(t, operator.Options{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Writer: work.writer,
-			Actor: operator.WorkActor(boundChart),
+			Actor: operator.WorkActor(boundChart, nil),
 		},
 		Org:   boundChart,
 		Audit: audit,
@@ -116,7 +116,7 @@ func TestBothTransportsAuditAWriteAndNeitherAuditsARead(t *testing.T) {
 func TestASurfaceWithToolsAndNoAuditIsRefused(t *testing.T) {
 	t.Parallel()
 	s, err := operator.New(operator.Options{
-		Work: builtin.WorkDeps{Reader: stubWorkReader{}, Actor: operator.WorkActor(nil)},
+		Work: builtin.WorkDeps{Reader: stubWorkReader{}, Actor: operator.WorkActor(nil, nil)},
 	})
 	if !errors.Is(err, operator.ErrNoAudit) || s != nil {
 		t.Fatalf("a surface with tools and no audit answered %v, %v; want ErrNoAudit", s, err)
@@ -233,7 +233,7 @@ func TestACallIsMadeAndAuditedAsTheSeatItWasAdmittedAs(t *testing.T) {
 			s := newSurface(t, operator.Options{
 				Work: builtin.WorkDeps{
 					Reader: stubWorkReader{}, Writer: work.writer,
-					Actor: operator.WorkActor(chart),
+					Actor: operator.WorkActor(chart, nil),
 				},
 				Org:   chart,
 				Audit: audit,

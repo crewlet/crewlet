@@ -1673,8 +1673,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// one this process booted on would describe a company that
 			// is no longer running.
 			Company: func() *config.Company { return companyConfig(e) },
-			Coord:   e.Backends().Coord,
-			Plane:   e.Backends().Fleet,
+			// AND WHAT A `${VAR}` IN ITS CHART RESOLVES TO: this node's own
+			// chain, the one its guard binds a token to a person through.
+			Env:   e.LookupSecret,
+			Coord: e.Backends().Coord,
+			Plane: e.Backends().Fleet,
 			// The object collector's last report, read from the store
 			// every node reads it from, for the fleet view's card.
 			Objects: e.Backends().Fleet,

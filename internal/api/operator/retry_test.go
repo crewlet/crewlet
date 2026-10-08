@@ -31,7 +31,7 @@ func TestAnOperatorsAssistantFinishesACreateWithTheOpIDItWasAnswered(t *testing.
 	s := newSurface(t, operator.Options{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Merges: stubWorkMerger,
-			Writer: work.writer, Actor: operator.WorkActor(nil),
+			Writer: work.writer, Actor: operator.WorkActor(nil, nil),
 		},
 	})
 	if s == nil {

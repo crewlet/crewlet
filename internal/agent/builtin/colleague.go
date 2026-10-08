@@ -86,7 +86,9 @@ const LookupColleagueTool = "lookup_colleague"
 // than one that asked which — the wrong person gets pulled into work that is
 // not theirs, and the right one never hears about it. So an ambiguous query
 // returns the candidates and says they are candidates.
-type lookupColleague struct{}
+//
+// env resolves the chart's `${VAR}` contacts ([Deps.Env]).
+type lookupColleague struct{ env org.EnvLookup }
 
 var _ tools.SeatCallable = (*lookupColleague)(nil)
 
@@ -137,7 +139,7 @@ func (t *lookupColleague) CallForTurn(_ context.Context, turn *turnctx.Turn, arg
 			"No organization is in scope, so there is nobody to look up."), nil
 	}
 
-	seats := Corpus(turn.Org)
+	seats := Corpus(turn.Org, t.env)
 	found := colleague.Resolve(query, seats)
 	safe := clip(query)
 
@@ -181,7 +183,13 @@ func (t *lookupColleague) CallForTurn(_ context.Context, turn *turnctx.Turn, arg
 // human seat is addressable — it just cannot be reached the same way. Leaving
 // humans out would make the tool silently unable to find the people an agent
 // most often needs.
-func Corpus(o *org.Organization) []colleague.Seat {
+//
+// lookup resolves a person's `${VAR}` contact ids
+// ([org.HumanContact.ResolvedIdentities]); a node passes its own chain, the
+// secret store and then the environment it was handed, which is what the
+// notification routing that mentions these same people reads. Nil reads the
+// process environment.
+func Corpus(o *org.Organization, lookup org.EnvLookup) []colleague.Seat {
 	if o == nil {
 		return nil
 	}
@@ -194,7 +202,7 @@ func Corpus(o *org.Organization) []colleague.Seat {
 		if seat.Kind == "" {
 			seat.Kind = string(org.KindAgent)
 		}
-		for _, id := range role.Contact.ResolvedIdentities(nil) {
+		for _, id := range role.Contact.ResolvedIdentities(lookup) {
 			// UNREACHABLE TRANSPORTS ARE LEFT OUT. This map is both the
 			// exact-id index and what describe renders under a person's
 			// name, so an operator id would appear beside their Slack id as
@@ -236,8 +244,12 @@ func Corpus(o *org.Organization) []colleague.Seat {
 // person bound for one direction and unbound for the other is a dashboard that
 // knows who they are and shows them nothing.
 //
+// lookup resolves a `${VAR}` binding — the same lookup the other direction is
+// handed, which a node makes its own chain (see [Corpus]); nil reads the
+// process environment.
+//
 // A nil chart, or one this build has not loaded, answers the handle alone.
-func Parties(chart func() *org.Organization) func(string) tracker.Party {
+func Parties(chart func() *org.Organization, lookup org.EnvLookup) func(string) tracker.Party {
 	return func(handle string) tracker.Party {
 		party := tracker.PartyOf(handle)
 		if chart == nil {
@@ -247,10 +259,7 @@ func Parties(chart func() *org.Organization) func(string) tracker.Party {
 		if o == nil {
 			return party
 		}
-		// NIL LOOKUP, so a `${VAR}` binding resolves against this
-		// process's own environment, which is where every other
-		// consumer of `contact` resolves one.
-		party.OperatorID = o.SeatByHandle(handle).ResolvedOperatorID(nil)
+		party.OperatorID = o.SeatByHandle(handle).ResolvedOperatorID(lookup)
 		return party
 	}
 }

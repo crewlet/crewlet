@@ -1488,7 +1488,7 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 		// chart would refuse a colleague who joined this morning and
 		// admit one who left.
 		Seats: func() []colleague.Seat {
-			return builtin.Corpus(e.Company().Org)
+			return builtin.Corpus(e.Company().Org, e.LookupSecret)
 		},
 		// AND THE UNIT SEAM, read per call for the reason the default
 		// project is: a seat's tools are cloned into its lease, an apply
@@ -1687,7 +1687,7 @@ func (l liveUnits) AllUnits() []tracker.ChartUnit {
 type liveSeats struct{ engine *Engine }
 
 func (l liveSeats) ResolveSeat(ref string) (string, bool) {
-	found := colleague.Resolve(ref, builtin.Corpus(l.engine.Company().Org))
+	found := colleague.Resolve(ref, builtin.Corpus(l.engine.Company().Org, l.engine.LookupSecret))
 	if len(found) != 1 {
 		return "", false
 	}

@@ -102,7 +102,7 @@ func TestTheActRouteIsMountedBehindTheGuard(t *testing.T) {
 		Bootstrap: &b,
 		Runtime:   &fakeRuntime{},
 		Operator: operatorSurface(t, operator.Options{
-			Work: builtin.WorkDeps{Reader: stubWorkReader{}, Actor: operator.WorkActor(nil)},
+			Work: builtin.WorkDeps{Reader: stubWorkReader{}, Actor: operator.WorkActor(nil, nil)},
 		}),
 	})
 	post := func(token string) (int, string) {

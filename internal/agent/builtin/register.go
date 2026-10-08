@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -26,6 +27,19 @@ import (
 type Deps struct {
 	// A2A opens agent-to-agent channels. Nil omits a2a_ask.
 	A2A Asker
+
+	// Env resolves a `${VAR}` the chart's contacts carry — a person's Slack
+	// id, their operator binding — for lookup_colleague and a2a_ask: this
+	// node's own chain, the secret store and then the environment it was
+	// handed. Nil reads the process environment, which is what a registry
+	// built outside an engine has.
+	//
+	// THE NODE'S CHAIN because the notification routing that mentions these
+	// same people resolves the same fields through it: read from the process
+	// environment here, a person whose id was sealed in the store — or whose
+	// node was handed an environment of its own — was mentioned by every
+	// notification and found by no lookup.
+	Env org.EnvLookup
 
 	// Skills, Episodes, Diary and Onboarding are the learning stores. Each
 	// nil omits the tools that need it.
@@ -137,8 +151,8 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		tool tools.Callable
 		on   bool
 	}{
-		{&lookupColleague{}, true},
-		{&a2aAsk{svc: deps.A2A}, deps.A2A != nil},
+		{&lookupColleague{env: deps.Env}, true},
+		{&a2aAsk{svc: deps.A2A, env: deps.Env}, deps.A2A != nil},
 		{&useSkill{skills: deps.Skills, events: deps.Events}, deps.Skills != nil},
 		{&refineSkill{
 			skills:   deps.Refinable,

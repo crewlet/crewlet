@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/static"
@@ -93,6 +94,9 @@ type App struct {
 	// company reads the engine's CURRENT epoch, which is what
 	// [App.Configured] asks.
 	company func() *config.Company
+
+	// contacts resolves a `${VAR}` binding in the chart ([queries.Sources.Env]).
+	contacts org.EnvLookup
 
 	handler http.Handler
 
@@ -345,6 +349,8 @@ func New(opts Options) (*App, error) {
 		// Sources.Company reads the CURRENT epoch, and "is there one" is
 		// the whole question [App.Configured] asks.
 		company: opts.Sources.Company,
+		// And the lookup its bindings resolve through, from the same place.
+		contacts: opts.Sources.Env,
 	}
 	var err error
 	a.stream, err = stream.NewService(state, stream.Options{

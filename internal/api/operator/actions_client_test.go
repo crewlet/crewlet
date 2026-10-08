@@ -218,7 +218,7 @@ func fullSurface(t *testing.T) *operator.Server {
 			ProjectWriter:   func(builtin.Actor) builtin.ProjectWriter { return nil },
 			TrashWriter:     func(builtin.Actor) builtin.TrashWriter { return nil },
 			Placer:          func(builtin.Actor) builtin.WorkPlacer { return nil },
-			Actor:           operator.WorkActor(nil),
+			Actor:           operator.WorkActor(nil, nil),
 		},
 		Pages: builtin.PageDeps{
 			Reader: struct{ builtin.PageReader }{},

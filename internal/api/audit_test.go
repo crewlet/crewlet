@@ -116,7 +116,7 @@ func auditedApp(t *testing.T, taker *fakeBackup) (*api.App, *recordedAudit) {
 			Work: builtin.WorkDeps{
 				Reader: stubWorkReader{},
 				Writer: func(builtin.Actor) builtin.WorkWriter { return auditWork{} },
-				Actor:  operator.WorkActor(chart),
+				Actor:  operator.WorkActor(chart, nil),
 			},
 			Org:   chart,
 			Audit: audit,

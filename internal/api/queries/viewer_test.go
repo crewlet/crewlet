@@ -118,11 +118,11 @@ func TestAnAnonymousReaderIsNeitherBoundNorAnOperator(t *testing.T) {
 // whoever reaches the engine that person's dashboard — their inbox, their
 // queue, their name on every write. The literal is refused where the company
 // is read, naming the field; a `${VAR}` cannot be, because its value lives in
-// an environment validation may not see, so the resolution drops it instead.
-//
-// Not parallel: the reference resolves against the process environment, which
-// is what every consumer of the binding reads.
+// an environment validation may not see, so the resolution drops it instead —
+// here through the lookup a node hands its sources ([queries.Sources.Env]),
+// which is what every consumer of the binding reads.
 func TestADisabledGuardIsNeverAPerson(t *testing.T) {
+	t.Parallel()
 	b := config.DefaultBootstrap()
 	b.API.Auth.Disabled = true
 	caller, ok := auth.New(&b).Operator("")
@@ -140,7 +140,6 @@ func TestADisabledGuardIsNeverAPerson(t *testing.T) {
 		t.Errorf("the refusal does not name the field: %v", err)
 	}
 
-	t.Setenv("CREWLET_TEST_BOUND_OPERATOR", "Anonymous")
 	cfg, err := config.ParseCompany([]byte(strings.Replace(viewerCompany,
 		"crewlet_operator_id: ops-1",
 		"crewlet_operator_id: ${CREWLET_TEST_BOUND_OPERATOR}", 1)))
@@ -150,6 +149,7 @@ func TestADisabledGuardIsNeverAPerson(t *testing.T) {
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{
 		Company: func() *config.Company { return cfg },
+		Env:     handedOnly(t, "CREWLET_TEST_BOUND_OPERATOR", "Anonymous"),
 		Work:    &stubWork{},
 	})
 	answered, err := r.Answer(t.Context(), "viewer", nil, caller)

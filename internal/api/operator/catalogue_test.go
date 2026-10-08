@@ -42,7 +42,7 @@ func TestBothTransportsServeTheSameCatalogue(t *testing.T) {
 	s := newSurface(t, operator.Options{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Writer: stubWorkWriter,
-			Merges: stubWorkMerger, Actor: operator.WorkActor(nil),
+			Merges: stubWorkMerger, Actor: operator.WorkActor(nil, nil),
 		},
 		Pages: builtin.PageDeps{
 			Reader: stubPageReader{}, Writer: stubPageWriter{},
@@ -186,7 +186,7 @@ func TestTheWorkActorCarriesTheOperation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RequestOperation: %v", err)
 	}
-	named, err := operator.WorkActor(nil)(operator.WithOperation(ctx, op), nil)
+	named, err := operator.WorkActor(nil, nil)(operator.WithOperation(ctx, op), nil)
 	if err != nil {
 		t.Fatalf("WorkActor: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestTheWorkActorCarriesTheOperation(t *testing.T) {
 		t.Errorf("a call under %s resolved to %+v (seed %q) — a person's call is "+
 			"its operation, never a turn's seed", op, named, named.OperationSeed())
 	}
-	plain, err := operator.WorkActor(nil)(ctx, nil)
+	plain, err := operator.WorkActor(nil, nil)(ctx, nil)
 	if err != nil {
 		t.Fatalf("WorkActor: %v", err)
 	}

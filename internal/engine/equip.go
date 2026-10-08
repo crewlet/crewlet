@@ -43,7 +43,12 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	// one produced a revision and changed nothing an operator could observe.
 	refinement := c.Config.Learning.SkillRefinement
 	deps := builtin.Deps{
-		A2A:               e.a2aFor(c),
+		A2A: e.a2aFor(c),
+		// THIS NODE'S CHAIN for the chart's `${VAR}` contacts — what the
+		// notification routing that mentions the same people reads — and
+		// never the process environment, which an engine handed an
+		// environment of its own does not read anywhere else.
+		Env:               e.LookupSecret,
 		Sandbox:           e.sandboxLauncher(c),
 		Knowledge:         knowledgeSearch(e, c),
 		Events:            e.telemetry(),

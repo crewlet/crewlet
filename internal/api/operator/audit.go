@@ -58,9 +58,10 @@ func Audit(ctx context.Context, pub AuditPublisher, data events.Payload) {
 // BoundSeat is the human seat a token id is bound to by
 // `contact.crewlet_operator_id`, or "" for a token nobody bound — the person
 // an audit record names beside the credential. Exported for the API's backup
-// route, which has the same question about the same caller.
-func BoundSeat(chart func() *org.Organization, operatorID string) string {
-	return seatFor(chart, operatorID)
+// route, which has the same question about the same caller. lookup resolves a
+// `${VAR}` binding, as [Options.Env] does here.
+func BoundSeat(chart func() *org.Organization, lookup org.EnvLookup, operatorID string) string {
+	return seatFor(chart, lookup, operatorID)
 }
 
 // dispatch is the one path every transport takes into a tool, and the one
@@ -81,7 +82,7 @@ func (s *Server) dispatch(ctx context.Context, transport, requestID, name string
 	operatorID, _ := auth.OperatorFrom(ctx)
 	seat, pinned := pinnedSeat(ctx)
 	if !pinned {
-		seat = seatFor(s.chart, operatorID)
+		seat = seatFor(s.chart, s.env, operatorID)
 		ctx = withSeat(ctx, seat)
 	}
 	result, served, err := s.catalogue.call(ctx, name, args)

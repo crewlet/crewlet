@@ -2,6 +2,7 @@ package builtin_test
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -294,6 +295,51 @@ func TestAnAmbiguousLookupRefusesToGuess(t *testing.T) {
 		if !strings.Contains(res.Output, want) {
 			t.Errorf("output does not mention %q:\n%s", want, res.Output)
 		}
+	}
+}
+
+// A PERSON'S `${VAR}` CONTACT RESOLVES THROUGH THE LOOKUP THE NODE HANDS IN
+// ([builtin.Deps.Env]), never the process environment behind it. An id sealed
+// in the node's secret store, or set in an environment the node was handed, is
+// the id notification routing mentions that person by, so it is the id a
+// colleague must be found by. The variable is one no process sets.
+func TestALookupResolvesAContactThroughTheNodesOwnLookup(t *testing.T) {
+	t.Parallel()
+	const variable = "CREWLET_BUILTIN_TEST_HANDED_SLACK_ID"
+	if _, set := os.LookupEnv(variable); set {
+		t.Fatalf("the premise: %s is set in no process", variable)
+	}
+	cfg, err := config.ParseCompany([]byte(strings.Replace(companyDoc,
+		"slack_user_id: U0FOUNDER", "slack_user_id: ${"+variable+"}", 1)))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	o, err := cfg.Organization()
+	if err != nil {
+		t.Fatalf("organization: %v", err)
+	}
+	turn := &turnctx.Turn{RunID: "run-1", WorkKey: "wk-1",
+		Seat: o.AgentSeatByHandle("agent-ceo"), Org: o}
+	handed := func(name string) (string, bool) {
+		if name == variable {
+			return "U0HANDED", true
+		}
+		return "", false
+	}
+
+	tool := registered(t, builtin.Deps{Env: handed}, builtin.LookupColleagueTool)
+	res := callFor(t, tool, turn, map[string]any{"query": "U0HANDED"})
+	if res.Failed || !strings.Contains(res.Output, "handle: founder") {
+		t.Fatalf("the id the node's lookup resolves the founder's contact to "+
+			"found nobody:\n%s", res.Output)
+	}
+	// THE CONTROL: with no lookup handed the process environment is read,
+	// and it has no such variable — or the case above passes on a tool that
+	// ignores what it was handed.
+	plain := registered(t, builtin.Deps{}, builtin.LookupColleagueTool)
+	if res := callFor(t, plain, turn, map[string]any{"query": "U0HANDED"}); !res.Failed {
+		t.Fatalf("an id no process environment holds was found with no lookup "+
+			"handed in:\n%s", res.Output)
 	}
 }
 

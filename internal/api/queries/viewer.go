@@ -116,10 +116,9 @@ func (s Sources) seatForOperator(operatorID string) *org.Role {
 	if operatorID == "" || organization == nil {
 		return nil
 	}
-	// NIL LOOKUP, so the reference resolves against this process's own
-	// environment — which is where Tier B's `${VAR}` pointers are resolved
-	// everywhere else in the engine.
-	return organization.SeatByOperatorID(operatorID, nil)
+	// THROUGH THE NODE'S OWN CHAIN ([Sources.Env]), which is where every
+	// other consumer of `contact` resolves a `${VAR}` binding.
+	return organization.SeatByOperatorID(operatorID, s.Env)
 }
 
 // viewerParty is who a personal question answers about when the caller named
@@ -182,11 +181,10 @@ func (s Sources) viewerParty(ctx context.Context, asked string) (tracker.Party, 
 
 // partyOf is one seat and the credential bound to it.
 //
-// NIL LOOKUP, so a `${VAR}` binding resolves against this process's own
-// environment — which is where every other consumer of `contact` resolves one,
-// including [Sources.seatForOperator] on the way in. The two directions go
-// through the same resolution in `org`, so a company cannot be bound for one
-// and unbound for the other.
+// THROUGH THE NODE'S OWN CHAIN ([Sources.Env]), as [Sources.seatForOperator]
+// resolves the way in. The two directions go through the same resolution in
+// `org` with the same lookup, so a company cannot be bound for one and unbound
+// for the other.
 //
 // A SEAT THAT IS NOT IN THE CHART IS STILL A PARTY. An operator naming a
 // handle that no seat holds — a person who has left, a handle on old rows —
@@ -198,7 +196,7 @@ func (s Sources) partyOf(handle string) tracker.Party {
 	if organization == nil {
 		return party
 	}
-	party.OperatorID = organization.SeatByHandle(handle).ResolvedOperatorID(nil)
+	party.OperatorID = organization.SeatByHandle(handle).ResolvedOperatorID(s.Env)
 	return party
 }
 
