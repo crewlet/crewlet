@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/httpx"
 )
 
 // fakeCapacityNode answers the maintenance surface, recording what it was
@@ -493,19 +497,57 @@ func writeArtefact(t *testing.T, dir string, at time.Time) {
 // gets. The CLI gave up there and reported a failure for a transition the node
 // went on to finish; the node had also been running it on the request's own
 // context, so the cancellation stopped it halfway.
+//
+// Against a client whose ORDINARY timeout is half a second and a node that
+// answers the transition after a second: the status read before it is
+// answered at once, so only a transition sent through
+// [nodeClient.patiently] can be waited for. The command's own wiring — the
+// flags, the client nodeClientFor builds at nodeRequestTimeout — is the other
+// reanchor cases' and [TestAnOperatorCallIsGivenTenSeconds]'s; this one would
+// otherwise sit out the real ten seconds to prove a relation.
 func TestAReanchorIsWaitedForPastTheOrdinaryTimeout(t *testing.T) {
+	t.Parallel()
+	const ordinary = 500 * time.Millisecond
 	node := newFakeCapacityNode(t)
-	base := bootstrapForURL(t, node.server.URL)
 	node.reanchorCase, node.reanchorCursor = "restored", 7000
-	node.reanchorTakes = nodeRequestTimeout + 500*time.Millisecond
+	node.reanchorTakes = 2 * ordinary
+	client := &nodeClient{base: node.server.URL, token: "t", http: httpx.Client(ordinary)}
 
-	stdout, _, err := cli(t, "retention", "reanchor", base,
-		"-stream", "CREWLET_TRACKER_LOG", "-confirm", "2031-04-02T03:00:00Z")
+	var stdout bytes.Buffer
+	err := reanchor(t.Context(), client, reanchorAsk{
+		stream: "CREWLET_TRACKER_LOG", confirm: "2031-04-02T03:00:00Z",
+	}, &stdout)
 	if err != nil {
-		t.Fatalf("a reanchor the node answered after %s was reported as %v — the "+
-			"CLI gave up on a transition the node finished", node.reanchorTakes, err)
+		t.Fatalf("a reanchor the node answered after %s, past the client's own %s, was "+
+			"reported as %v — the CLI gave up on a transition the node finished",
+			node.reanchorTakes, ordinary, err)
 	}
-	if !strings.Contains(stdout, "is re-anchored at generation") {
-		t.Fatalf("the report does not say the log was re-anchored:\n%s", stdout)
+	if !strings.Contains(stdout.String(), "is re-anchored at generation") {
+		t.Fatalf("the report does not say the log was re-anchored:\n%s", stdout.String())
+	}
+}
+
+// AN OPERATOR CALL IS GIVEN TEN SECONDS, and a reanchor longer: the client
+// every node-facing command builds waits nodeRequestTimeout, the figure that
+// constant argues for, and the transition outlasts it. The case above proves
+// the reanchor waits past whatever ordinary timeout its client has; this is
+// what ties that to the ten seconds a real command gets.
+func TestAnOperatorCallIsGivenTenSeconds(t *testing.T) {
+	t.Parallel()
+	if nodeRequestTimeout != 10*time.Second {
+		t.Errorf("nodeRequestTimeout = %v, want 10s", nodeRequestTimeout)
+	}
+	if reanchorRequestTimeout <= nodeRequestTimeout {
+		t.Errorf("reanchorRequestTimeout = %v, which does not outlast the ordinary %v",
+			reanchorRequestTimeout, nodeRequestTimeout)
+	}
+	client, err := nodeClientFor([]string{"-url", "http://127.0.0.1:1", "-token", "t"},
+		"retention reanchor", io.Discard, nil)
+	if err != nil {
+		t.Fatalf("nodeClientFor: %v", err)
+	}
+	if client.http.Timeout != nodeRequestTimeout {
+		t.Errorf("a node-facing command waits %v, want nodeRequestTimeout (%v)",
+			client.http.Timeout, nodeRequestTimeout)
 	}
 }
