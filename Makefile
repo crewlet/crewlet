@@ -372,8 +372,9 @@ dashboard-check: $(UI)/node_modules ## fail if static/dashboard is not what dash
 #
 # Measured, by doing it accidentally: `make test-solo` with a `make
 # test-cross` running beside it failed internal/e2e's
-# TestEveryNodeMintsIntoOneKeySpace with `ensure stream
-# CREWLET_NOTIFICATIONS: context deadline exceeded`, and passed alone.
+# TestAFleetOfThree/EveryNodeMintsIntoOneKeySpace (then a test of its own)
+# with `ensure stream CREWLET_NOTIFICATIONS: context deadline exceeded`, and
+# passed alone.
 #
 # EACH HALF WHOLE, stated rather than defaulted. TEST_SHARD's `?=` takes a
 # value from the environment, and a sub-make inherits the variables its
