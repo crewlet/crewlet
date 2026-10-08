@@ -15,6 +15,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 
+	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/jsprovision"
@@ -240,7 +241,21 @@ type stateLog struct {
 	// takes another the peers that reanchor left behind have no donor — for
 	// up to the interval, a day by default. Buffered by one: a nudge that
 	// finds one already pending adds nothing to it.
+	//
+	// AND AN APPLIER'S FIRST DRAIN, which is the other half of a boot: a
+	// node is `unhydrated` until every log has drained once, and the loop
+	// otherwise learned that only by asking again on its retry
+	// ([statelog.RunnerDeps.OnDrained]).
 	snapshotNudge chan struct{}
+
+	// heartbeatNudge wakes the position heartbeat out of its interval, for
+	// the one change its row carries that the fleet is waiting on: an
+	// artefact this node has just taken. The trim's snapshot term and a
+	// joiner both count donors from the register, and a row that names the
+	// artefact a heartbeat later — up to [PositionHeartbeat] — is a donor
+	// the fleet could have counted and did not. Buffered by one, as
+	// snapshotNudge is.
+	heartbeatNudge chan struct{}
 
 	// run is the context the runtime's loops run under — the heartbeat,
 	// the snapshot loop, the donor — and stop is what ends them. HELD
@@ -487,7 +502,8 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 		ceilings: ceilings, volume: streamVolume(boot),
 		clustered: host.Clustered(),
 		run:       runCtx, stop: cancel,
-		snapshotNudge: make(chan struct{}, 1),
+		snapshotNudge:  make(chan struct{}, 1),
+		heartbeatNudge: make(chan struct{}, 1),
 	}
 	// PROVISION EVERY LOG FIRST, and only then decide whether this node
 	// can replay from where it is.
@@ -972,6 +988,9 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 			evicted, readErr := s.evictedOn(ctx, domain, spec, appendTo, []string{node})
 			return evicted[node], readErr
 		},
+		// THE FIRST DRAIN WAKES THE SNAPSHOT LOOP, whose commonest boot
+		// skip — `unhydrated` — it is the end of ([stateLog.snapshotNudge]).
+		OnDrained: s.nudgeSnapshot,
 		// NO LOGGER, here or at any other statelog constructor: an absent
 		// one is the framework's own `component=statelog` logger. The
 		// engine's own labelled those lines `component=engine`, and the
@@ -2913,7 +2932,7 @@ func (e *Engine) startSnapshots(ctx context.Context, boot *config.Bootstrap, s *
 	s.done.Add(1)
 	go func() {
 		defer s.done.Done()
-		e.snapshotLoop(s, snapshotter, root, interval)
+		e.snapshotLoop(s, snapshotter, root, snapshotWaitsFor(interval))
 	}()
 }
 
@@ -2978,11 +2997,9 @@ func (e *Engine) snapshotterOf(s *stateLog, dir string, interval time.Duration) 
 //
 // A taken snapshot is different: the preconditions held, and the next one is a
 // question about staleness rather than about readiness. That is what the
-// operator's interval is for, and it is what waits.
-//
-// The retry is deliberately not tight. A skip is a state that clears on its
-// own in seconds to minutes, the gate itself is a few reads, and a node that
-// is genuinely unable to snapshot must not spend its life asking.
+// operator's interval is for, and it is what waits. So does `recent`, which is
+// the same answer reached from the disk rather than from this tick — see
+// [snapshotWaits.after] for how long each answer waits.
 //
 // # And a nudge is neither
 //
@@ -2990,9 +3007,10 @@ func (e *Engine) snapshotterOf(s *stateLog, dir string, interval time.Duration) 
 // installed each leave this node holding an artefact at a generation a joiner
 // will refuse, so each wakes the loop at once ([stateLog.nudgeSnapshot])
 // rather than leaving it to whichever wait it is in — the interval, a day by
-// default, after a taken snapshot.
+// default, after a taken snapshot. So does an applier's first drain, which is
+// the moment the commonest boot skip, `unhydrated`, stops being true.
 func (e *Engine) snapshotLoop(s *stateLog, snap snapshotTaker,
-	dir string, interval time.Duration) {
+	dir string, waits snapshotWaits) {
 
 	ctx := s.run
 	// WHAT THIS NODE HOLDS is what decides how LOUD a skip is, and the
@@ -3010,16 +3028,17 @@ func (e *Engine) snapshotLoop(s *stateLog, snap snapshotTaker,
 	// survives the restart the way the artefact does.
 	//
 	// THE REASON LAST REPORTED is the other half: a state that has not
-	// changed is not news, and the loop retries every thirty seconds for as
-	// long as it holds. A tick that changes nothing says nothing; the
-	// register is still stamped, so Settings › Nodes and the trim see every
-	// tick whether or not the log does.
+	// changed is not news, and the loop retries for as long as it holds. A
+	// tick that changes nothing says nothing; the register is still
+	// stamped, so Settings › Nodes and the trim see every tick whether or
+	// not the log does.
 	var reported statelog.SkipReason
+	// streak counts the boot skips in a row the retry is backing off over.
+	streak := 0
 	for {
 		if ctx.Err() != nil {
 			return
 		}
-		wait := interval
 		m, err := snap.Take(ctx)
 		// THE REGISTER IS TOLD ON EVERY TICK, taken or skipped, because
 		// that row is the only place the rest of the fleet can see this
@@ -3028,9 +3047,15 @@ func (e *Engine) snapshotLoop(s *stateLog, snap snapshotTaker,
 		// invisible until somebody needs to adopt.
 		held := heldAfter(m, err, dir)
 		s.snapshot.Store(&held)
+		var wait time.Duration
+		wait, streak = waits.after(err, held, streak, time.Now())
 		switch {
 		case err == nil:
 			reported = ""
+			// AND AT ONCE rather than on the heartbeat's next beat: the
+			// row naming this artefact is what makes the node a donor
+			// anybody counts — see [stateLog.heartbeatNudge].
+			s.nudgeHeartbeat()
 		case !isSkip(err):
 			// REPEATED DELIBERATELY, unlike a skip: this one RAN and
 			// errored, the error text is what says why, and a disk that
@@ -3038,26 +3063,109 @@ func (e *Engine) snapshotLoop(s *stateLog, snap snapshotTaker,
 			// rather than a posture they have already been told about.
 			log.WarnContext(ctx, "statelog_snapshot_failed",
 				"error", err.Error(), "holds_artefact", held.Have,
+				"retry_in", wait,
 				"detail", "this node's newest artefact is older than the "+
 					"interval, so a peer adopting from it replays further")
 			reported = statelog.SkipFailed
-			wait = min(snapshotSkipRetry, interval)
 		default:
 			reason, _ := statelog.Skipped(err)
-			emitNoSnapshot(ctx, reportForSkip(reason, reported, held.Have))
+			emitNoSnapshot(ctx, reportForSkip(reason, reported, held.Have), wait)
 			reported = remembered(reason, held.Have)
-			wait = min(snapshotSkipRetry, interval)
 		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(wait):
 		case <-s.snapshotNudge:
-			// A REANCHOR, AN ADOPTION OR A RESTORE: the next take is a
-			// question about whether the artefact is current, which the
-			// gate answers — see [stateLog.snapshotNudge].
+			// A REANCHOR, AN ADOPTION, A RESTORE OR A FIRST DRAIN: the
+			// next take is a question about whether the artefact is
+			// current, which the gate answers — see
+			// [stateLog.snapshotNudge].
 		}
 	}
+}
+
+// snapshotWaits is how long the snapshot loop waits after each tick.
+type snapshotWaits struct {
+	// Interval is the operator's staleness interval
+	// (`stream.tracker_retention.snapshot_interval`): how long a taken
+	// snapshot stands before the next is taken.
+	Interval time.Duration
+	// FirstRetry and Retry are the doubling retry after a skip that clears
+	// on its own as a boot settles — its first wait, and the ceiling it
+	// doubles to, which every other declined or failed tick waits flat.
+	FirstRetry, Retry time.Duration
+}
+
+// snapshotWaitsFor is the production schedule under the operator's interval.
+func snapshotWaitsFor(interval time.Duration) snapshotWaits {
+	return snapshotWaits{Interval: interval,
+		FirstRetry: snapshotSkipFirstRetry, Retry: snapshotSkipRetry}
+}
+
+// after is how long the loop waits after a tick that ended in err holding
+// held, and the run of boot skips it carries to the next tick.
+//
+// PURE OVER ITS INPUTS, for [reportForSkip]'s reason: the schedule is the
+// whole of what makes a restarted node a donor promptly, and a schedule
+// exercised only through a running loop is one measured in boots.
+//
+// # The four answers
+//
+//   - A TAKEN SNAPSHOT waits the interval: the next question is staleness.
+//   - `recent` waits until the artefact it found AGES PAST the interval,
+//     which is when the gate's answer next changes: the artefact is
+//     adoptable and young, and a nudge is what wakes the loop for the one
+//     event that would make it otherwise — a generation moving under it.
+//     Retried every thirty seconds instead, a node restarted on a fresh
+//     artefact asked the gate the same question 2 880 times a day.
+//   - A SKIP THAT CLEARS AS A BOOT SETTLES — `unhydrated`, `sole_node`,
+//     `lagging` — retries on a doubling wait from [snapshotSkipFirstRetry]
+//     to [snapshotSkipRetry]. Each one ends seconds into a healthy boot (an
+//     applier drains, a peer's first position lands, the node catches up),
+//     and a flat thirty-second retry put a restarted node's first artefact,
+//     and the donor the fleet counts with it, half a minute after it could
+//     have been taken — in exactly the rolling upgrade that needs donors.
+//     Doubling rather than flat-and-short, so a node that genuinely stays
+//     in one of them — a single node is `sole_node` for its whole life —
+//     settles on the ceiling within a minute rather than asking once a
+//     second for ever.
+//   - EVERY OTHER SKIP, and a take that failed, retries flat at the
+//     ceiling: each waits on something outside the boot — an upgrade for
+//     `deferred`, an operator for disk space or a restored log, a disk that
+//     errored — and none is helped by being asked sooner.
+//
+// No wait is longer than the interval: an operator who asked for a snapshot
+// every ten minutes is not made to wait thirty seconds for a retry.
+func (w snapshotWaits) after(err error, held snapshotHeld, streak int,
+	now time.Time) (time.Duration, int) {
+	retry := min(w.Retry, w.Interval)
+	if err == nil {
+		return w.Interval, 0
+	}
+	reason, skipped := statelog.Skipped(err)
+	switch {
+	case !skipped:
+		return retry, 0
+	case reason == statelog.SkipRecent && held.Have:
+		stale := w.Interval - now.Sub(held.Manifest.TakenAt)
+		return min(max(stale, min(w.FirstRetry, retry)), w.Interval), 0
+	case clearsAtBoot(reason):
+		streak++
+		return backoff.Doubling(streak, w.FirstRetry, retry), streak
+	default:
+		return retry, 0
+	}
+}
+
+// clearsAtBoot reports a skip that ends by itself as a node's boot settles —
+// see [snapshotWaits.after].
+func clearsAtBoot(reason statelog.SkipReason) bool {
+	switch reason {
+	case statelog.SkipUnhydrated, statelog.SkipSoleNode, statelog.SkipLagging:
+		return true
+	}
+	return false
 }
 
 // snapshotTaker is the snapshotter as its loop uses it: one attempt, which
@@ -3072,6 +3180,15 @@ type snapshotTaker interface {
 func (s *stateLog) nudgeSnapshot() {
 	select {
 	case s.snapshotNudge <- struct{}{}:
+	default:
+	}
+}
+
+// nudgeHeartbeat wakes the position heartbeat, without waiting for it — see
+// [stateLog.heartbeatNudge].
+func (s *stateLog) nudgeHeartbeat() {
+	select {
+	case s.heartbeatNudge <- struct{}{}:
 	default:
 	}
 }
@@ -3120,10 +3237,11 @@ type noSnapshotReport struct {
 // exactly this case, too: that the preconditions clear "as its peers publish
 // their positions", of a node that has no peers.
 //
-// The tick itself stays on the same retry, and cheaply: `sole_node` is the
-// FIRST term [statelog.Snapshotter] gates on, so a solo node's whole attempt
-// is one read of the positions register, and keeping it at that cadence is
-// what arms the donor within a tick of a second node appearing.
+// The tick itself stays on the retry, and cheaply: `sole_node` is the FIRST
+// term [statelog.Snapshotter] gates on, so a solo node's whole attempt is one
+// read of the positions register, and keeping it at the retry's ceiling
+// ([snapshotSkipRetry]) is what arms the donor within a tick of a second node
+// appearing.
 func reportForSkip(reason, reported statelog.SkipReason, holds bool) noSnapshotReport {
 	// A NODE THAT HOLDS AN ARTEFACT SAYS NOTHING, and `holds` is the whole
 	// of that rule rather than a condition at the call site: written as a
@@ -3168,16 +3286,17 @@ func remembered(reason statelog.SkipReason, holds bool) statelog.SkipReason {
 }
 
 // emitNoSnapshot writes what [reportForSkip] decided, and nothing for the tick
-// it decided says nothing.
-func emitNoSnapshot(ctx context.Context, say noSnapshotReport) {
+// it decided says nothing. wait is how long the loop waits before it asks
+// again ([snapshotWaits.after]).
+func emitNoSnapshot(ctx context.Context, say noSnapshotReport, wait time.Duration) {
 	switch {
 	case say.Event == "":
 	case say.Warn:
 		log.WarnContext(ctx, say.Event, "reason", string(say.Reason),
-			"retry_in", snapshotSkipRetry, "detail", say.Detail)
+			"retry_in", wait, "detail", say.Detail)
 	default:
 		log.InfoContext(ctx, say.Event, "reason", string(say.Reason),
-			"recheck_in", snapshotSkipRetry, "detail", say.Detail)
+			"recheck_in", wait, "detail", say.Detail)
 	}
 }
 
@@ -3257,15 +3376,27 @@ func stampSnapshot(row *coord.NodePositions, held *snapshotHeld) {
 	}
 }
 
-// snapshotSkipRetry is how soon a skipped attempt is retried.
+// snapshotSkipRetry is the longest a declined attempt waits to be retried:
+// the ceiling a boot skip's doubling retry settles on, and the flat retry of
+// every other skip and of a take that failed ([snapshotWaits.after]).
 //
 // THIRTY SECONDS, which is a boot's own settling time rather than a guess: a
 // node's peers publish their positions on the heartbeat, its appliers drain
 // what the log holds, and both are seconds on a healthy fleet. Shorter would
 // spend a wedged node's life on a gate it cannot pass; much longer would leave
-// a restarted node without an artefact for minutes, which is exactly the
-// window a rolling upgrade lives in.
+// a node whose skip cleared late without an artefact for minutes, which is
+// exactly the window a rolling upgrade lives in.
 const snapshotSkipRetry = 30 * time.Second
+
+// snapshotSkipFirstRetry is the first wait of a boot skip's doubling retry.
+//
+// ONE SECOND, the scale of the events that end a boot skip: an applier's
+// drain is a fetch that comes back empty, and a peer's position lands within
+// one heartbeat of its boot. The gate it re-asks is a few reads, so the five
+// retries the doubling makes before it reaches [snapshotSkipRetry] cost a
+// booting node five register reads — against the half-minute a flat retry
+// spent on every restart before the node could donate.
+const snapshotSkipFirstRetry = time.Second
 
 // counted is the nodes the fleet counts on the estate's logs at now, sorted,
 // which is what decides whether there is anybody to donate an artefact to at
@@ -3291,7 +3422,7 @@ const snapshotSkipRetry = 30 * time.Second
 //
 // # From the watched view, and unknown is the register's half
 //
-// It is asked every thirty seconds for as long as a take declines, and it
+// It is asked on every retry for as long as a take declines, and it
 // decides nothing about what may be removed — so it reads the presence view
 // this node already keeps ([Engine.watchedHolders]) rather than listing the
 // store each time. A view that cannot answer leaves the live half out, and the
@@ -3436,21 +3567,33 @@ func (s *stateLog) startPositionHeartbeat() {
 	s.done.Add(1)
 	go func() {
 		defer s.done.Done()
-		tick := time.NewTicker(PositionHeartbeat)
-		defer tick.Stop()
-		for {
-			// AT ONCE, then on the tick: a node that published nothing
-			// for its first interval is a node the trim cannot see for
-			// that interval, and a node restarted more often than the
-			// interval would never appear at all.
-			s.publishPositions(s.run)
-			select {
-			case <-s.run.Done():
-				return
-			case <-tick.C:
-			}
-		}
+		s.beat(s.run, PositionHeartbeat, s.publishPositions)
 	}()
+}
+
+// beat is the heartbeat's loop: publish at once, then on every tick of
+// interval and on every nudge ([stateLog.heartbeatNudge]), until ctx ends.
+//
+// AT ONCE, then on the tick: a node that published nothing for its first
+// interval is a node the trim cannot see for that interval, and a node
+// restarted more often than the interval would never appear at all.
+//
+// The publish is a PARAMETER so the loop's own schedule — the re-invocation on
+// every tick and every nudge, which is what notices a running node fall below
+// the floor — is exercised under an interval a test can wait out.
+func (s *stateLog) beat(ctx context.Context, interval time.Duration,
+	publish func(context.Context)) {
+	tick := time.NewTicker(interval)
+	defer tick.Stop()
+	for {
+		publish(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		case <-s.heartbeatNudge:
+		}
+	}
 }
 
 // PositionHeartbeat is how often a node republishes its row.

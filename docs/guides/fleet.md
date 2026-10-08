@@ -645,10 +645,10 @@ serves anything.
 
 Three things make that work, and all three are per node:
 
-- **Every node publishes its own position**, every ten seconds. This is what
-  the trim reads to decide what the fleet has finished with — a node that
-  publishes nothing is a node the trim cannot see, and the log is then
-  trimmed past records that node still needs.
+- **Every node publishes its own position**, every ten seconds and at once
+  when it takes a snapshot. This is what the trim reads to decide what the
+  fleet has finished with — a node that publishes nothing is a node the trim
+  cannot see, and the log is then trimmed past records that node still needs.
 - **Every node takes snapshots**, into `store.snapshot_dir` (by default
   `snapshots/` beside the store file), no more often than
   `stream.tracker_retention.snapshot_interval` (default 24h). A node declines

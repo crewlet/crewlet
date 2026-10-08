@@ -274,9 +274,16 @@ what it lacks, replays it instead and needs none of this.)
 own. It is taken on `snapshot_interval` and judged against the file's size for
 free space. Every data node takes its own and offers it, whether or not it may
 write the estate: an evicted machine, back with its files, keeps applying its
-logs and may hold the only copy a joiner can fetch. A take the node declines —
-at boot, before it has caught up — is retried every thirty seconds rather than
-an interval later. Its manifest names every log it carries: a joiner refuses an
+logs and may hold the only copy a joiner can fetch. A take the node declines is
+retried rather than left for an interval: one declined for a reason a boot
+settles by itself — `unhydrated`, `sole_node`, `lagging` — a second later,
+doubling to thirty seconds, and the moment each log first catches up; any
+other decline, or a take that failed, every thirty seconds; and `recent` once
+the artefact it found has aged past `snapshot_interval`. A node that stays in
+one of them — a single node is `sole_node` for good — settles on the
+thirty-second retry within a minute. The register row naming a new artefact is
+published as soon as it is taken, not on the position heartbeat's next beat.
+Its manifest names every log it carries: a joiner refuses an
 artefact naming a log it does not run, or missing one it does, before a byte
 moves. Artefacts live in `store.snapshot_dir` itself.
 
