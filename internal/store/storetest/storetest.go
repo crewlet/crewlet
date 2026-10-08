@@ -522,16 +522,18 @@ func testTrace(t *testing.T, db *store.DB) {
 func testTraceCap(t *testing.T, db *store.DB) {
 	log := db.Events()
 	over := store.MaxTraceEvents + 10
-	for i := range over {
-		write(t, log, store.EventRecord{
+	recs := make([]store.EventRecord, over)
+	for i := range recs {
+		recs[i] = store.EventRecord{
 			ID:       "s" + fourDigits(i),
 			Type:     "task_assigned",
 			Source:   "pm",
 			Time:     base.Add(time.Duration(i) * time.Millisecond),
 			Category: "task",
 			TraceID:  "tr-long",
-		})
+		}
 	}
+	WriteEvents(t, log, recs)
 	got, err := log.Trace(t.Context(), "tr-long", time.Now())
 	if err != nil {
 		t.Fatalf("trace: %v", err)
@@ -552,16 +554,18 @@ func testTraceCap(t *testing.T, db *store.DB) {
 func testTurnClosing(t *testing.T, db *store.DB) {
 	log := db.Events()
 	over := store.MaxTurnEvents + 10
-	for i := range over {
-		write(t, log, store.EventRecord{
+	recs := make([]store.EventRecord, over)
+	for i := range recs {
+		recs[i] = store.EventRecord{
 			ID:       "c" + fourDigits(i),
 			Type:     "agent_phase_completed",
 			Source:   "pm",
 			Time:     base.Add(time.Duration(i) * time.Millisecond),
 			Category: "lifecycle",
 			Payload:  []byte(`{"turn_id":"tn-long"}`),
-		})
+		}
 	}
+	WriteEvents(t, log, recs)
 
 	// The head read keeps the OPENING, as its own doc says.
 	head, err := log.Turn(t.Context(), "tn-long", time.Now())
@@ -791,12 +795,14 @@ func testRetentionBacklog(t *testing.T, db *store.DB) {
 	ctx := t.Context()
 	stale := store.EventPurgeBatch + 3
 	when := time.Now().UTC().Add(-store.EventRetention - time.Hour)
-	for i := range stale {
-		write(t, log, store.EventRecord{
+	recs := make([]store.EventRecord, stale)
+	for i := range recs {
+		recs[i] = store.EventRecord{
 			ID: fmt.Sprintf("stale-%04d", i), Type: "task_assigned", Source: "pm",
 			Time: when.Add(time.Duration(i) * time.Millisecond), Category: "task",
-		})
+		}
 	}
+	WriteEvents(t, log, recs)
 	write(t, log, store.EventRecord{
 		ID: "keep", Type: "task_assigned", Source: "pm",
 		Time: time.Now().UTC().Add(-time.Hour), Category: "task",
@@ -963,23 +969,29 @@ func testRelatedSwept(t *testing.T, db *store.DB) {
 // so a busy org's monthly spend was short by whatever fell past the cap, and
 // an undercount reads exactly like an underspend. This writes more rows than
 // that old ceiling and insists every one is counted.
+//
+// The window is written in ONE transaction ([WriteEvents]), through the same
+// row builder an Append runs, because what this case certifies is the fold
+// over the rows and not how they arrived: one commit per row was 20,001
+// fsync'd commits and 69 s of the package's wall clock.
 func testSpendUncapped(t *testing.T, db *store.DB) {
 	log := db.Events()
 	ctx := t.Context()
 	const rows = 20001
 	at := time.Now().UTC().Add(-time.Hour)
-	for i := range rows {
-		payload := []byte(`{"phase":"execute","model":"m","input_tokens":1,` +
-			`"output_tokens":2,"total_tokens":3}`)
-		write(t, log, store.EventRecord{
+	recs := make([]store.EventRecord, rows)
+	for i := range recs {
+		recs[i] = store.EventRecord{
 			ID:       fmt.Sprintf("spend-%05d", i),
 			Type:     "agent_phase_completed",
 			Source:   "agent",
 			Time:     at.Add(time.Duration(i) * time.Millisecond),
 			Category: "agent",
-			Payload:  payload,
-		})
+			Payload: []byte(`{"phase":"execute","model":"m","input_tokens":1,` +
+				`"output_tokens":2,"total_tokens":3}`),
+		}
 	}
+	WriteEvents(t, log, recs)
 
 	got, err := log.PhaseTokens(ctx, store.PhaseTokenQuery{SinceDays: 1})
 	if err != nil {
