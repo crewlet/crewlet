@@ -20,6 +20,8 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/period"
+	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // A golden company: two seats, one scripted model, one embedded broker.
@@ -245,6 +247,7 @@ func startBooted(
 	if amendBoot != nil {
 		amendBoot(&boot)
 	}
+	seedStore(t, &boot)
 
 	e, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation,
@@ -260,6 +263,33 @@ func startBooted(
 	app, srv := serveAPI(t, e, &boot, nil)
 
 	return &node{engine: e, app: app, server: srv, model: model, id: boot.Node.ID}
+}
+
+// seedStore writes the migrated store image where boot's store will open, so a
+// node boots onto a store this binary migrated once rather than running every
+// migration again for every node it stands up — the cost [storetest.Seed]
+// exists to remove, and none of these cases is about migrating.
+//
+// THE ENGINE'S OWN RULE for what a fresh node holds, so a seeded node is one a
+// fresh boot would have produced: the node file unless the store is scratch
+// (discarded at open, so a seed would only be deleted), and the replicated file
+// only on a node that holds the estate ([engine.HoldsEstate]) — a node without
+// `data` has none, and a backup or an estate check would find one that was put
+// there. A file already there is left as it is, which is what lets the restart
+// case boot twice on one path and reopen its own.
+//
+// Call it once boot is final and before engine.New, ON THE TEST'S GOROUTINE:
+// a seed that cannot be written fails the test, which only that goroutine may.
+func seedStore(t *testing.T, boot *config.Bootstrap) {
+	t.Helper()
+	if boot.Store.Scratch {
+		return
+	}
+	storetest.Seed(t, store.EstateNode, boot.Store.Path)
+	if engine.HoldsEstate(boot) {
+		storetest.Seed(t, store.EstateReplicated,
+			store.ReplicatedPath(boot.Store.Path, boot.Store.ReplicatedPath))
+	}
 }
 
 // scriptedModel is an Anthropic Messages endpoint that answers by PHASE.

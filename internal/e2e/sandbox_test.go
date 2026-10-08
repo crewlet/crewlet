@@ -247,6 +247,7 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 	boot := config.DefaultBootstrap()
 	boot.Store.Path = dbPath
 	boot.Stream.StoreDir = streamDir
+	seedStore(t, &boot)
 
 	e, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation,

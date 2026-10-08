@@ -102,6 +102,7 @@ func bootNode(t *testing.T, boot *config.Bootstrap, cfg *config.Company, model *
 // maintenance mode, say.
 func bootNodeWith(t *testing.T, opts engine.Options, model *scriptedModel) *node {
 	t.Helper()
+	seedStore(t, opts.Bootstrap)
 	id := opts.Bootstrap.Node.ID
 	e, err := engine.New(t.Context(), opts)
 	if err != nil {

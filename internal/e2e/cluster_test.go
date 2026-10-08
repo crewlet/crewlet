@@ -186,6 +186,21 @@ func startMeshOnce(ctx context.Context, t *testing.T, relays *jetstreamtest.Rela
 	t.Helper()
 	c := &cluster{relays: relays, nodes: make([]*node, n)}
 
+	// EVERY MEMBER'S BOOTSTRAP IS ASSEMBLED, AND ITS STORE SEEDED, HERE, on
+	// the test's own goroutine before any member starts: a seed that cannot
+	// be written fails the test, which a member's goroutine may not do (see
+	// below), and none of it binds anything, so nothing about it has to wait
+	// for the moment a member starts.
+	boots := make([]config.Bootstrap, n)
+	for i := range n {
+		boot, err := memberBootstrap(t, relays, i, n)
+		if err != nil {
+			return nil, fmt.Errorf("member %d: %w", i, err)
+		}
+		seedStore(t, &boot)
+		boots[i] = boot
+	}
+
 	// CONCURRENTLY, which is what a fleet actually does: n machines boot
 	// independently. Sequentially is not merely slower — it does not work.
 	// A clustered member does not finish starting until its JetStream has
@@ -204,7 +219,7 @@ func startMeshOnce(ctx context.Context, t *testing.T, relays *jetstreamtest.Rela
 			// failure is carried back rather than raised here — a
 			// FailNow from another goroutine ends that goroutine and
 			// leaves the test running with a nil member.
-			c.nodes[i], stops[i], errs[i] = buildMember(ctx, t, relays, i, n)
+			c.nodes[i], stops[i], errs[i] = buildMember(ctx, t, &boots[i], i)
 		}()
 	}
 	wg.Wait()
@@ -271,12 +286,6 @@ func stopAll(stops [][]func()) {
 // that makes "trying again" mean something. See [startMesh].
 const clusterStartAttempts = jetstreamtest.ClusterStartAttempts
 
-// startMember brings up one member of the fleet.
-//
-// EVERY NODE HAS ITS OWN STORE AND ITS OWN STREAM DIRECTORY, because that is
-// what a fleet is: n machines, each with its own disk. Sharing either would
-// make this one node wearing three hats, and every fleet mechanism under it
-// would pass for the wrong reason.
 // clusterHost is the interface every member of a test mesh binds its route
 // listener on. LOOPBACK, because the mesh's own route URLs are loopback and a
 // member listening wider would be reachable from outside the harness — and
@@ -284,61 +293,19 @@ const clusterStartAttempts = jetstreamtest.ClusterStartAttempts
 // wildcard bind.
 const clusterHost = "127.0.0.1"
 
-// ctx is the ATTEMPT's, so the retry loop's wall-clock ceiling can interrupt a
-// bring-up rather than only refuse the next one — see [startMesh].
-func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays, i, n int) (
-	*node, []func(), error) {
-
-	// THE TEARDOWN IS RETURNED, NOT REGISTERED WITH t.Cleanup, because an
-	// attempt that fails has to stop what it started BEFORE the next one
-	// starts — see [startMeshOnce]. It is built up as each piece comes up,
-	// so a member that fails halfway still hands back a way to undo the
-	// half that worked.
-	var stops []func()
-	fail := func(err error) (*node, []func(), error) { return nil, stops, err }
-
-	model := newScriptedModel(t)
-	// THE MODEL SERVER IS THIS ATTEMPT'S, not the test's. Its own
-	// constructor registers a t.Cleanup as well, which is right for the
-	// single-node cases — but a cluster case that retries three times would
-	// otherwise leave one live server per member per failed attempt running
-	// until the case ends. Close is idempotent, so both fire safely.
-	stops = append(stops, model.close)
-	cfg, err := config.ParseCompany([]byte(fmt.Sprintf(companyDoc, model.url)))
-	if err != nil {
-		// THE SAME FILE PARSES THE SAME WAY on every attempt.
-		return fail(fmt.Errorf("%w: company config: %w", errNotRetryable, err))
-	}
-
+// memberBootstrap is member i's half of Tier A: where it keeps its data, the
+// mesh it routes through, and the fleet-wide settings every member shares.
+//
+// EVERY NODE HAS ITS OWN STORE AND ITS OWN STREAM DIRECTORY, because that is
+// what a fleet is: n machines, each with its own disk. Sharing either would
+// make this one node wearing three hats, and every fleet mechanism under it
+// would pass for the wrong reason.
+func memberBootstrap(t *testing.T, relays *jetstreamtest.Relays, i, n int) (config.Bootstrap, error) {
 	port, routes, advertise := relays.Member(i)
 	peers, err := otherMembers(routes, port)
 	if err != nil {
-		return fail(fmt.Errorf("%w: member %d's routes: %w", errNotRetryable, i, err))
-	}
-	// PROBED IMMEDIATELY BEFORE THE ENGINE BINDS IT, which is the guard
-	// [jetstreamtest.Cluster.start] has and this path did not.
-	//
-	// It cannot close the race — nothing can, short of never letting the
-	// port go — but it shortens the window from however long engine.New
-	// takes to get there down to microseconds, and it names the CAUSE. Its
-	// partner is the engine's own post-bind check, which is what catches a
-	// port lost inside that window: together they turn a member that comes
-	// up, serves clients and silently never routes into an immediate,
-	// named retry.
-	//
-	// THE SAME HOST THE MEMBER BINDS, set below — a probe against a
-	// different address answers about a port the server never asks for.
-	switch free, err := jetstreamtest.PortFree(ctx, clusterHost, port); {
-	case err != nil:
-		// NOT A RACE: an address this host does not have, or a probe
-		// that never ran. Retrying it would spend every attempt on a
-		// mistake that answers the same way each time.
-		return fail(fmt.Errorf("%w: route port %d on %q cannot be probed for "+
-			"member %d: %w", errNotRetryable, port, clusterHost, i, err))
-	case !free:
-		return fail(fmt.Errorf("%w — route port %d went between this mesh "+
-			"reserving it and member %d starting",
-			jetstream.ErrRoutePortTaken, port, i))
+		return config.Bootstrap{}, fmt.Errorf("%w: member %d's routes: %w",
+			errNotRetryable, i, err)
 	}
 	boot := config.DefaultBootstrap()
 	boot.Node.ID = fmt.Sprintf("node-%d", i)
@@ -379,9 +346,68 @@ func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays
 	// names and a member with none refuses every one — the file uploads
 	// cross the fleet through the API.
 	boot.API.Auth.Tokens = []config.APIToken{{ID: e2eOperatorID, Token: e2eOperatorToken}}
+	return boot, nil
+}
+
+// buildMember brings up member i of the fleet on the bootstrap
+// [memberBootstrap] assembled for it.
+//
+// ctx is the ATTEMPT's, so the retry loop's wall-clock ceiling can interrupt a
+// bring-up rather than only refuse the next one — see [startMesh].
+func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i int) (
+	*node, []func(), error) {
+
+	// THE TEARDOWN IS RETURNED, NOT REGISTERED WITH t.Cleanup, because an
+	// attempt that fails has to stop what it started BEFORE the next one
+	// starts — see [startMeshOnce]. It is built up as each piece comes up,
+	// so a member that fails halfway still hands back a way to undo the
+	// half that worked.
+	var stops []func()
+	fail := func(err error) (*node, []func(), error) { return nil, stops, err }
+
+	model := newScriptedModel(t)
+	// THE MODEL SERVER IS THIS ATTEMPT'S, not the test's. Its own
+	// constructor registers a t.Cleanup as well, which is right for the
+	// single-node cases — but a cluster case that retries three times would
+	// otherwise leave one live server per member per failed attempt running
+	// until the case ends. Close is idempotent, so both fire safely.
+	stops = append(stops, model.close)
+	cfg, err := config.ParseCompany([]byte(fmt.Sprintf(companyDoc, model.url)))
+	if err != nil {
+		// THE SAME FILE PARSES THE SAME WAY on every attempt.
+		return fail(fmt.Errorf("%w: company config: %w", errNotRetryable, err))
+	}
+
+	// PROBED IMMEDIATELY BEFORE THE ENGINE BINDS IT, which is the guard
+	// [jetstreamtest.Cluster.start] has and this path did not.
+	//
+	// It cannot close the race — nothing can, short of never letting the
+	// port go — but it shortens the window from however long engine.New
+	// takes to get there down to microseconds, and it names the CAUSE. Its
+	// partner is the engine's own post-bind check, which is what catches a
+	// port lost inside that window: together they turn a member that comes
+	// up, serves clients and silently never routes into an immediate,
+	// named retry.
+	//
+	// THE SAME HOST THE MEMBER BINDS, set by [memberBootstrap] — a probe
+	// against a different address answers about a port the server never
+	// asks for.
+	port := boot.Stream.Cluster.Port
+	switch free, err := jetstreamtest.PortFree(ctx, boot.Stream.Cluster.Host, port); {
+	case err != nil:
+		// NOT A RACE: an address this host does not have, or a probe
+		// that never ran. Retrying it would spend every attempt on a
+		// mistake that answers the same way each time.
+		return fail(fmt.Errorf("%w: route port %d on %q cannot be probed for "+
+			"member %d: %w", errNotRetryable, port, boot.Stream.Cluster.Host, i, err))
+	case !free:
+		return fail(fmt.Errorf("%w — route port %d went between this mesh "+
+			"reserving it and member %d starting",
+			jetstream.ErrRoutePortTaken, port, i))
+	}
 
 	e, err := engine.New(ctx, engine.Options{
-		Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation,
+		Bootstrap: boot, Company: cfg, ActivatedAt: harnessActivation,
 	})
 	if err != nil {
 		// A CONFIG THE ENGINE REFUSED is refused identically on every
@@ -415,7 +441,7 @@ func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays
 	// projector — serves for the whole case. The test's own context is
 	// that lifetime exactly: longer than the attempt, and still ended when
 	// the case is over, which [context.WithoutCancel] would not be.
-	app, srv, apiStops, err := wireAPI(t.Context(), e, &boot, nil) //nolint:contextcheck // see above
+	app, srv, apiStops, err := wireAPI(t.Context(), e, boot, nil) //nolint:contextcheck // see above
 	stops = append(stops, apiStops...)
 	if err != nil {
 		return fail(fmt.Errorf("api: %w", err))
