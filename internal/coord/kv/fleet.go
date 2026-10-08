@@ -103,13 +103,28 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 				"says whether it got past it")
 	})
 
-	// THE LOOKUP IS SIZED AS A READ, not as the create it precedes — see
-	// [jsprovision.LookupBudget]. Sharing the create's term meant a lookup
-	// nobody answered spent the whole clustered budget and left none of it
-	// for the create that would have settled the question.
+	// THE LOOKUP IS SIZED AS A READ, not as the create it precedes, in both
+	// of its bounds.
+	//
+	// Its CEILING is [jsprovision.LookupBudget]. Sharing the create's
+	// budget meant a lookup nobody answered spent the whole clustered
+	// budget and left none of it for the create that would have settled
+	// the question.
+	//
+	// And each REQUEST is asked through [jsprovision.Read], so one nobody
+	// answered is sent again a [jsprovision.ReadTerm] later rather than
+	// after a write's [jsprovision.AskTerm]. A read is answered when the
+	// server processes it or never, and a fleet booting together meets
+	// "never" as a matter of course: a bucket another member has just
+	// asked for is IN FLIGHT, assigned with no leader yet, and every
+	// member but the one chosen to lead it drops a lookup of it. Asked at
+	// the write's term, each lookup dropped that way held a booting node
+	// for that term and a [jsprovision.ReAsk] — sixteen seconds a bucket,
+	// on a boot that opens every coordination bucket in a row — where a
+	// read's term costs it two.
 	lookupCtx, cancelLookup := context.WithTimeout(ctx, jsprovision.LookupBudget)
 	var bucket jetstream.KeyValue
-	err := jsprovision.Ask(lookupCtx, jsprovision.Clustered(clustered).AskTerm(),
+	err := jsprovision.Read(lookupCtx,
 		func(ctx context.Context) error {
 			var e error
 			bucket, e = js.KeyValue(ctx, cfg.Bucket)
