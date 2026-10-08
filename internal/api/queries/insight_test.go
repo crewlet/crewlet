@@ -533,7 +533,8 @@ func TestATurnNamesEveryTraceItTouchedEvenOnesTheCapDropped(t *testing.T) {
 
 // A TURN WITH NO TRACE AT ALL ANSWERS AN EMPTY LIST, never null: a client
 // rendering `trace_ids.length` should not have to guard the field as well, and
-// an event written before tracing existed carries no trace id.
+// an event published under an empty trace context — which `events.New` takes
+// as given, and several publishers pass — carries no trace id.
 func TestATurnWithNoTracesAnswersAnEmptyList(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
