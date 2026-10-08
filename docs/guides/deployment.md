@@ -507,32 +507,31 @@ case. An object another node has just asked for is *in flight*, assigned by
 the metadata leader but not yet applied by the member chosen to lead it, and
 until that member has applied it every other member drops a lookup of it. So
 a lookup of one of the engine's streams or consumers, of a coordination
-bucket, or of the object store's bucket, waits one second for its answer before
-it is asked again, for up to thirty seconds in all. A create is the opposite case: the broker keeps
-its reply until the object it made has a leader, which can take an election,
-so a create waits fifteen seconds before it is re-sent. A lookup used to wait
-the create's fifteen too, and a fresh three-member fleet was measured idling
-sixteen seconds of its boot on one dropped stream lookup.
+bucket, or of the object store's bucket, waits one second for its answer
+before it is asked again, for up to thirty seconds in all. A create is the
+opposite case: the broker keeps its reply until the object it made has a
+leader, which can take an election, so a create waits fifteen seconds before
+it is re-sent. A lookup used to wait the create's fifteen too, and a fresh
+three-member fleet was measured idling sixteen seconds of its boot on one
+dropped stream lookup.
 
 **A create that is taking a while says so while it is happening.** Provisioning
 was otherwise silent — a node opens every coordination bucket and several
 streams in a row and logged nothing between them, so one that hung emitted
 nothing at all until its budget expired and the log could not say which object
-it was on. Any
-create still running after 10 seconds now writes one `WARN` naming it
-(`coord_kv_bucket_slow`, `natsobj_bucket_slow`, `jetstream_stream_slow`,
-`jetstream_consumer_slow`),
-and so does the lookup that precedes it
-(`jetstream_stream_lookup_slow`, `jetstream_consumer_lookup_slow`) — that
-lookup is the first call to reach the metadata group, so a member stalled
-against a group that has not settled waits there, where nothing used to
-report it at all. The object store's bucket is looked up and created as one
-step, and writes one line over the two (`natsobj_bucket_slow`). A probe that
-went unanswered is named as such (`jetstream_stream_lookup_unanswered`,
-`jetstream_consumer_lookup_unanswered`, `coord_kv_bucket_lookup_unanswered`,
-`natsobj_bucket_lookup_unanswered`) rather than failing the boot.
-One line per object, deliberately: whether more lines follow is what tells a
-slow bring-up from a wedged one.
+it was on. Any create still running after 10 seconds now writes one `WARN`
+naming it (`coord_kv_bucket_slow`, `natsobj_bucket_slow`,
+`jetstream_stream_slow`, `jetstream_consumer_slow`), and so does the lookup
+that precedes it (`jetstream_stream_lookup_slow`,
+`jetstream_consumer_lookup_slow`) — that lookup is the first call to reach the
+metadata group, so a member stalled against a group that has not settled
+waits there, where nothing used to report it at all. The object store's
+bucket is looked up and created as one step, and writes one line over the two
+(`natsobj_bucket_slow`). A probe that went unanswered is named as such
+(`jetstream_stream_lookup_unanswered`, `jetstream_consumer_lookup_unanswered`,
+`coord_kv_bucket_lookup_unanswered`, `natsobj_bucket_lookup_unanswered`)
+rather than failing the boot. One line per object, deliberately: whether more
+lines follow is what tells a slow bring-up from a wedged one.
 
 **Every broker line names the member that emitted it.** More than one
 embedded broker can run in one process — a fleet test does exactly that — and

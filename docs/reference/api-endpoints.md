@@ -2133,13 +2133,13 @@ seat host is running and every **15 seconds** (`engine.BudgetReportInterval`)
 after that — and **at once** when a budget window first refuses a charge, so
 the moment a company or a seat stops reaches every open screen with the
 refusal rather than up to a tick later; a repeat refusal in the same window
-waits for the tick — and the projection folds each one in as it arrives. Until the first
-one lands, `budget` is **`null`** — nobody has read the counter — which is a
-different fact from a report whose `org.windows` is `[]`, "nothing is capped". A
-company with no ceiling anywhere publishes exactly that: an empty list and no
-seats, without reading the counter. A node whose read of the counter fails
-publishes nothing that interval, so the meter keeps the last reading it had
-rather than drawing zeroes.
+waits for the tick — and the projection folds each one in as it arrives. Until
+the first one lands, `budget` is **`null`** — nobody has read the counter —
+which is a different fact from a report whose `org.windows` is `[]`, "nothing
+is capped". A company with no ceiling anywhere publishes exactly that: an empty
+list and no seats, without reading the counter. A node whose read of the
+counter fails publishes nothing that interval, so the meter keeps the last
+reading it had rather than drawing zeroes.
 
 - `meter_id` identifies the node incarnation whose report is held. Every node
   reads the same counter, so reports under different ids describe the same
