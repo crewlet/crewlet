@@ -529,6 +529,8 @@ func TestANoOpSaveStillAnswersWithThePage(t *testing.T) {
 // is what the applier stamps into the row, so the write's answer and the
 // reader's are the same integer by construction — and the sequence alone is
 // NOT that integer, because a row's version composes the generation with it.
+// This harness runs in generation zero, where the two coincide, so that half
+// is [TestAWrittenRevisionIsTheRecordsPackedPosition]'s, over values.
 func TestAWriteReportsTheRevisionTheReaderAnswersWith(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
