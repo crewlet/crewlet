@@ -17,4 +17,24 @@
 // more files under internal/api because its subject is the composition, and a
 // test that lives inside one of the components it composes tends, over time,
 // to be written as a test of that component.
+//
+// # How a case here is written
+//
+// A case that stands up ONE node, or a stateless node beside one data node,
+// calls t.Parallel: each has its own directories, its own scripted model and
+// its own broker, so nothing is shared but the machine. What used to be
+// shared is the process environment, and a node is HANDED its environment
+// instead (nodeSpec.env, nodeEnvironment) — t.Setenv cannot run beside
+// t.Parallel, and a case that read the runner's environment held only on
+// runners that agreed with it.
+//
+// A case that stands up a FLEET calls noParallel, and runs before every
+// parallel case starts, alone; the fleet's claims share one fleet
+// (TestAFleetOfThree) rather than each paying a boot and a teardown.
+//
+// A case asserting that something did NOT happen waits for the record that
+// says the thing was decided — a delivery's notification_skipped, or a later
+// delivery's, which the inbound edge handles in order — and never for a fixed
+// time: an absence read after a sleep holds only for as long as the sleep
+// happened to be long enough.
 package e2e
