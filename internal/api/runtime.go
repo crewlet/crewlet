@@ -157,6 +157,18 @@ type NodeRuntime interface {
 	// network read that has nothing to do with the answer.
 	ShuttingDown() bool
 
+	// Seats is the handles this node is serving: the same fact as
+	// Snapshot's Seats, read from the same place.
+	//
+	// A SECOND WAY TO READ IT for ShuttingDown's reason. The seat placement
+	// asks on every shared tick and every socket connect, and wants this
+	// node's seats and nothing else — while Snapshot reaches the
+	// coordination plane for the config posture on every call, which the
+	// placement read paid for and threw away: a second listing of the
+	// fleet's apply status on every tick, beside the health body's own,
+	// and one more per tab that connected.
+	Seats() []string
+
 	// Fleet is the envelope's fleet counts. It reads the coordination
 	// plane, and its caller BOUNDS it (engine.ProbeReadBudget): the
 	// envelope is the liveness probe's body, and the counts are what it can

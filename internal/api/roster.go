@@ -130,7 +130,9 @@ func placement(ctx context.Context, company func() *config.Company, leases coord
 			held[handle] = true
 		}
 	}
-	for _, handle := range runtime.Snapshot(ctx).Seats {
+	// FROM MEMORY ([NodeRuntime.Seats]), never through Snapshot, which
+	// reads the config posture off the coordination plane on every call.
+	for _, handle := range runtime.Seats() {
 		held[handle] = true
 	}
 	out := map[string]bool{}

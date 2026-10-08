@@ -84,10 +84,21 @@ type fakeRuntime struct {
 	// fleetReads counts every Fleet call, so a probe that must not scan the
 	// fleet can be shown not to.
 	fleetReads atomic.Int32
+	// snapshotReads counts every Snapshot call, which on a real engine reads
+	// the config posture off the coordination plane, so a read that wants
+	// only this node's seats can be shown not to make one.
+	snapshotReads atomic.Int32
 }
 
-func (f *fakeRuntime) Snapshot(context.Context) api.RuntimeState { return f.state }
-func (f *fakeRuntime) Tools() []api.ToolInfo                     { return f.tools }
+func (f *fakeRuntime) Snapshot(context.Context) api.RuntimeState {
+	f.snapshotReads.Add(1)
+	return f.state
+}
+
+func (f *fakeRuntime) Tools() []api.ToolInfo { return f.tools }
+
+// Seats answers from the same state Snapshot does, as ShuttingDown does.
+func (f *fakeRuntime) Seats() []string { return f.state.Seats }
 
 func (f *fakeRuntime) Fleet(ctx context.Context) api.FleetState {
 	f.fleetReads.Add(1)

@@ -201,6 +201,42 @@ func TestEverySeatHeldAnywhereCarriesAState(t *testing.T) {
 	}
 }
 
+// PLACING THE SEATS READS NO POSTURE.
+//
+// The placement is read on every shared tick and every socket connect, and the
+// one thing it wants from this node is which seats it serves. It took them off
+// the runtime's Snapshot, which on an engine reads the config posture off the
+// coordination plane — a listing of the fleet's apply status on every tick
+// beside the health body's own, and one more for every tab that connected,
+// each thrown away. This node's seats still count as held.
+//
+// Mutation: read the seats through Snapshot again, and the roster read is a
+// posture read.
+func TestPlacingTheSeatsReadsNoPosture(t *testing.T) {
+	t.Parallel()
+	runtime := &fakeRuntime{state: api.RuntimeState{Seats: []string{"cto"}}}
+	a := rosterAppWith(t, runtime, coordmemory.New())
+
+	before := runtime.snapshotReads.Load()
+	byHandle := map[string]map[string]any{}
+	for _, row := range rows(t, a.Stream().Roster()) {
+		handle, _ := row["handle"].(string)
+		byHandle[handle] = row
+	}
+	if after := runtime.snapshotReads.Load(); after != before {
+		t.Errorf("reading the placement took %d snapshots of the runtime, each a posture "+
+			"read on an engine; it wants only this node's seats", after-before)
+	}
+	if got := byHandle["cto"]; got["activity"] != "idle" {
+		t.Errorf("the seat this node serves reads %v (%v), want idle: its own seats were "+
+			"not counted as held", got["activity"], got["stopped_reason"])
+	}
+	if got := byHandle["ceo"]; got["stopped_reason"] != "unplaced" {
+		t.Errorf("a seat no node holds reads %v, want unplaced: the case read no placement",
+			got["stopped_reason"])
+	}
+}
+
 // AN UNREADABLE LEASE TABLE STOPS NOBODY. "No node holds any seat" is a claim
 // about the lease table, and a read that failed has not made it.
 func TestAnUnreadableLeaseTableClaimsNoSeatIsUnplaced(t *testing.T) {
