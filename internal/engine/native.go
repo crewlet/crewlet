@@ -1500,8 +1500,8 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 		// every seat. Per call, through this node's own chain, for the
 		// roster's reasons.
 		Party: builtin.Parties(func() *org.Organization {
-			if c := e.Company(); c != nil {
-				return c.Org
+			if current := e.Company(); current != nil {
+				return current.Org
 			}
 			return nil
 		}, e.LookupSecret),

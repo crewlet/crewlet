@@ -2063,9 +2063,9 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 		// nothing — read while the offers arrive, inside the window, so a
 		// slow one costs nothing past it and one that fails waits it out.
 		Donors: func(ctx context.Context) ([]string, error) {
-			live, err := e.holdersOf().LiveData(ctx)
-			if err != nil {
-				return nil, err
+			live, listErr := e.holdersOf().LiveData(ctx)
+			if listErr != nil {
+				return nil, listErr
 			}
 			ids := make([]string, 0, len(live))
 			for _, p := range live {
