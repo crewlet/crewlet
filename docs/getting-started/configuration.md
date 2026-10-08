@@ -1195,7 +1195,7 @@ coordination:
                                     #   the bucket's age is what expires a
                                     #   lease and a node claiming longer than
                                     #   it would have every acquire refused.
-                                    #   Its heartbeat and release budget are
+                                    #   Its heartbeat and a stop's allowance are
                                     #   fractions of the live value too. So
                                     #   make it agree across the fleet:
                                     #   changing it requires deleting the

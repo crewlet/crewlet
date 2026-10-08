@@ -486,9 +486,9 @@ flowchart TD
    fleet's coordination store rather than in this node, so whichever node
    holds the seat next picks it up rather than it being lost with this
    process.
-6. **Release every seat**, each lease given back with its mailbox intact and
-   on a bounded budget of one heartbeat interval, so peers can claim them at
-   once rather than waiting out the lease TTL. The drain then logs
+6. **Release every seat**, each lease given back with its mailbox intact, so
+   peers can claim them at once rather than waiting out the lease TTL, and
+   each seat's last lifecycle event published. The drain then logs
    `drain_complete`.
 7. **Close the HTTP listener**, and not before: until now the probes are what
    the orchestrator reads, and they read the stream and the coordination
@@ -507,6 +507,8 @@ flowchart TD
    `data` flushes its [custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data)
    batches, which carry those records too; then the custody flush, and the
    stream connection and the store file are closed (`engine_stopped`).
+
+**The stop's coordination shares one allowance.** Every round trip the stop makes to give something back — the `org_stopped` announcement, the presence and seat leases of steps 2 and 6, each seat's last lifecycle event, and in step 8 the node's admission to a [ceiling change](../guides/retention.md#changing-a-logs-ceiling) withdrawn and its fleet duties released — draws on ONE allowance of one heartbeat interval: the lease TTL over three, 15 s at the shipped 45 s. It is charged only while one of those round trips is in flight, so the wait of step 5 spends none of it, and seats released together are charged once for the time they overlap. On a healthy fleet each step takes milliseconds and the allowance never binds. On a member that has lost its coordination store — every step failing, each falling back to its lease lapsing on its TTL — the stop's give-back costs that one allowance in total, after which every remaining step fails at once with its own `…_unavailable` / `…_not_released` / `…_not_published` warning. Each step used to wait out a bound of its own, and a lone member's stop was measured at 25 s of deadlines that could not succeed — most of a 30 s kill grace, spent before the custody flush and the store close. The auxiliary-spend and custody flushes of step 9 are NOT on the allowance: they carry records rather than give a lease back, and what they cannot publish is lost rather than lapsed, so each keeps the budget of its own named there.
 
 **Let LLMs finish their rounds — but only the running ones.** The drain distinguishes two kinds of in-flight turn. Turns already past the concurrency gate (model rounds under way) run to completion: they may have fired side effects, and abandoning that work buys a faster deploy by throwing away what was nearly done. Turns delivered before the quiesce but still *waiting* for a slot abort immediately — they have called no model and fired nothing, so their trigger is simply deferred. Without this split, a backlog parked behind `max_concurrent` would run full multi-minute executor → reviewer turns one after another during a shutdown that waits for them indefinitely.
 

@@ -181,6 +181,12 @@ type Engine struct {
 	// would announce a second stop for one shutdown.
 	drainOnce sync.Once
 
+	// stopBudget is the allowance every coordination round trip of this
+	// node's stop shares ([seat.StopBudget]) — the drain's and the
+	// teardown's — built by whichever reaches it first ([Engine.stopping]).
+	stopBudget     *seat.StopBudget
+	stopBudgetOnce sync.Once
+
 	// stopOnce does the same for the teardown [Engine.Stop] runs after the
 	// drain. A second teardown is not a harmless repeat: every step in it
 	// runs against what the first one closed, so a second Stop warned that
@@ -1585,7 +1591,11 @@ func (e *Engine) publishLifecycle(ctx context.Context, ev *events.Event) {
 	if e.node != nil {
 		ev.Source = e.node.ID()
 	}
-	if err := e.backends.Queue.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
+	// The stop's announcement is one step of its allowance ([seat.StopStep]);
+	// the start's is not on one.
+	publishCtx, done := seat.StopStep(ctx)
+	defer done()
+	if err := e.backends.Queue.Publish(publishCtx, topics.Event(ev.Type), ev); err != nil {
 		log.WarnContext(ctx, "lifecycle_event_not_published", "type", ev.Type,
 			"error", err.Error(),
 			"detail", "the audit log has no line for this node's start or stop; "+
@@ -1610,6 +1620,9 @@ func (e *Engine) publishLifecycle(ctx context.Context, ev *events.Event) {
 //
 // Bounded only by ctx, for the reason [node.Node.Drain] gives.
 func (e *Engine) Drain(ctx context.Context) {
+	// ONE ALLOWANCE FOR THE WHOLE STOP'S COORDINATION, from its first step —
+	// see [Engine.stopping].
+	ctx = seat.WithStopBudget(ctx, e.stopping())
 	e.drainOnce.Do(func() {
 		// BEFORE ANYTHING THAT CAN BLOCK, so every surface that asks
 		// refuses new work from the moment the drain was decided rather
@@ -1689,6 +1702,30 @@ func (e *Engine) Stop(ctx context.Context) {
 	})
 }
 
+// stopping is the allowance this node's stop draws its coordination round
+// trips from — the stop's announcement, the presence and seat leases it gives
+// back, the seats' last lifecycle events, the admission it withdraws, the
+// duties it releases — built once, by the drain or by a failed boot's
+// teardown, whichever comes first. See [seat.StopBudget] for why one
+// allowance and not one per step, and [seat.StopAllowance] for its size: one
+// heartbeat interval of this node's own lease TTL.
+//
+// NOT the custody flush or the last auxiliary spend, which carry records
+// rather than give a lease back: what they could not publish is lost rather
+// than lapsed, so each keeps the budget of its own it states.
+func (e *Engine) stopping() *seat.StopBudget {
+	e.stopBudgetOnce.Do(func() {
+		ttl := e.leaseTTL
+		if ttl <= 0 {
+			// A boot that failed before its lease TTL was resolved: the
+			// shipped one, which is what a lease it took would carry.
+			ttl = seat.SeatLeaseTTL
+		}
+		e.stopBudget = seat.NewStopBudget(seat.StopAllowance(ttl))
+	})
+	return e.stopBudget
+}
+
 // teardown stops everything a node started, in the one order that is correct.
 //
 // ONE IMPLEMENTATION FOR TWO CALLERS — [Engine.Stop] and [New]'s failure path
@@ -1710,6 +1747,9 @@ func (e *Engine) Stop(ctx context.Context) {
 // it stops was never started, and the node is absent entirely where the
 // failure came before [node.New].
 func (e *Engine) teardown(ctx context.Context) {
+	// THE STOP'S ONE ALLOWANCE, the drain's if there was one — see
+	// [Engine.stopping].
+	ctx = seat.WithStopBudget(ctx, e.stopping())
 	// After the drain: the waiter's keepalive is what stops a running box
 	// being reaped, so stopping it first would start the orphan clock on
 	// every in-flight run while turns are still finishing.

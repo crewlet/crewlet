@@ -121,15 +121,6 @@ func (d *claimedDuties) list() []string {
 	return slices.Clone(d.names)
 }
 
-// dutyReleaseBudget bounds the give-back of every duty at the end of a stop.
-//
-// ONE SEAT HEARTBEAT INTERVAL (15 s at the shipped 45 s lease TTL), the budget
-// the node gives its seats' release for the same reason: giving a lease back is
-// a handful of coordination writes, so this guards against a store that has
-// stopped answering rather than allowing for real work, and past it a duty
-// lapses on its TTL, which is the outcome of not trying.
-const dutyReleaseBudget = seat.SeatLeaseTTL / seat.HeartbeatRatio
-
 // releaseDuties gives back every fleet duty this incarnation still holds.
 //
 // # Why a duty is released on a graceful stop
@@ -154,12 +145,18 @@ const dutyReleaseBudget = seat.SeatLeaseTTL / seat.HeartbeatRatio
 // tick in flight, so no tick of this node runs once a peer can take the duty.
 // Released at the epoch the store reports for this owner, so a lease a peer
 // has since taken is never touched.
+//
+// ONE STEP OF THE STOP'S ALLOWANCE ([seat.StopStep]), which the teardown
+// always carries: giving a lease back is a handful of coordination writes,
+// past the allowance a duty lapses on its TTL, which is the outcome of not
+// trying — and a bound of its own here was one more bound a member without
+// quorum spent in full, after every step before it had spent theirs.
 func (e *Engine) releaseDuties(ctx context.Context) {
 	if e.backends == nil || e.backends.Coord == nil || e.node == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dutyReleaseBudget)
-	defer cancel()
+	ctx, done := seat.StopStep(context.WithoutCancel(ctx))
+	defer done()
 	owner := e.node.Owner()
 	for _, name := range e.duties.list() {
 		resource := coord.WorkerResource(name)

@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -175,12 +176,15 @@ func (e *Engine) admit(ctx context.Context, streams []string) error {
 //
 // It is conditional on this incarnation, so a late withdrawal cannot remove a
 // replacement process's admission.
+//
+// One step of a stop's allowance ([seat.StopStep]) when a stop is what asks.
 func (e *Engine) withdraw(ctx context.Context) error {
 	if e.backends == nil || e.backends.Fleet == nil || e.mode != statelog.ModeNormal {
 		return nil
 	}
-	return e.backends.Fleet.ForgetAdmission(
-		context.WithoutCancel(ctx), e.id, e.incarnation)
+	ctx, done := seat.StopStep(context.WithoutCancel(ctx))
+	defer done()
+	return e.backends.Fleet.ForgetAdmission(ctx, e.id, e.incarnation)
 }
 
 // acknowledge is the maintenance-mode half: this node's evidence that its

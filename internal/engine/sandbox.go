@@ -2122,7 +2122,11 @@ func (e *Engine) publishSeatLifecycle(ctx context.Context, handle string,
 		return
 	}
 	ev.Source = role.Name
-	if err := e.backends.Queue.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
+	// ONE STEP OF A STOP when a drain released the seat ([seat.StopStep]):
+	// a live screen ages a seat out whether or not this lands.
+	publishCtx, done := seat.StopStep(ctx)
+	defer done()
+	if err := e.backends.Queue.Publish(publishCtx, topics.Event(ev.Type), ev); err != nil {
 		log.WarnContext(ctx, "seat_lifecycle_not_published", "type", ev.Type,
 			"seat", handle, "error", err.Error(),
 			"detail", "the live seat state keeps whatever this seat last showed")
