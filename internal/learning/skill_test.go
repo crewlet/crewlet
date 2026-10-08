@@ -15,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // The SQL fragments the write-fault driver below keys on. Each names exactly
@@ -34,10 +35,7 @@ func skillStore(t *testing.T, opts ...func(*store.Options)) (*learning.Skills, *
 	for _, fn := range opts {
 		fn(&o)
 	}
-	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "s.db"), o)
-	if err != nil {
-		t.Fatalf("store.OpenNode: %v", err)
-	}
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "s.db"), o)
 	t.Cleanup(func() { _ = db.Close() })
 	return learning.NewSkills(db), db
 }

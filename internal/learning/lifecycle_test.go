@@ -16,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // t0 is the instant every test calls "now". Ages are counted back from it, so
@@ -71,10 +72,7 @@ func openLearningDB(t *testing.T, opts ...func(*store.Options)) *store.DB {
 	for _, fn := range opts {
 		fn(&o)
 	}
-	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "l.db"), o)
-	if err != nil {
-		t.Fatalf("store.OpenNode: %v", err)
-	}
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "l.db"), o)
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
@@ -1746,11 +1744,8 @@ func BenchmarkRecallScan(b *testing.B) {
 	const dim = 1536
 	for _, n := range []int{100, 250, 500, 1000, 2000} {
 		b.Run(fmt.Sprint(n), func(b *testing.B) {
-			db, err := store.OpenNode(b.Context(), filepath.Join(b.TempDir(), "l.db"),
+			db := storetest.OpenNode(b, filepath.Join(b.TempDir(), "l.db"),
 				store.Options{EmbeddingDim: dim})
-			if err != nil {
-				b.Fatal(err)
-			}
 			b.Cleanup(func() { _ = db.Close() })
 			e := NewEpisodes(db)
 			rng := rand.New(rand.NewPCG(1, 2))

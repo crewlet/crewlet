@@ -8,14 +8,12 @@ import (
 
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 func counterparties(t *testing.T) *learning.Counterparties {
 	t.Helper()
-	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "c.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.OpenNode: %v", err)
-	}
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "c.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	return learning.NewCounterparties(db)
 }

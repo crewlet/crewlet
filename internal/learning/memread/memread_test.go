@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 var pinned = time.Date(2026, 9, 21, 9, 0, 0, 0, time.UTC)
@@ -34,10 +35,7 @@ type node struct {
 
 func newNode(t *testing.T, owner string) *node {
 	t.Helper()
-	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "m.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "m.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	return &node{owner: owner, db: db, stores: &memread.Stores{
 		Diary:         learning.NewDiary(db),

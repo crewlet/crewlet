@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 func onboardingOn(t *testing.T, db *store.DB) *learning.Onboarding {
@@ -26,10 +27,7 @@ func onboardingOn(t *testing.T, db *store.DB) *learning.Onboarding {
 
 func openStore(t *testing.T, path string) *store.DB {
 	t.Helper()
-	db, err := store.OpenNode(t.Context(), path, store.Options{})
-	if err != nil {
-		t.Fatalf("store.OpenNode(%s): %v", path, err)
-	}
+	db := storetest.OpenNode(t, path, store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
@@ -880,11 +878,8 @@ func (unknownRowsResult) RowsAffected() (int64, error) { return 0, errPassWrite 
 
 func faultedStore(t *testing.T, f *passWriteFault) *learning.Onboarding {
 	t.Helper()
-	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "f.db"),
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "f.db"),
 		store.Options{WrapDriver: f.wrap})
-	if err != nil {
-		t.Fatalf("store.OpenNode: %v", err)
-	}
 	t.Cleanup(func() { _ = db.Close() })
 	return learning.NewOnboarding(db)
 }
