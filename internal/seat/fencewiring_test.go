@@ -5,9 +5,11 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/sourcetree"
@@ -53,39 +55,7 @@ type literal struct {
 
 func TestEveryConfigThatCanCarryTheSeatFenceDoes(t *testing.T) {
 	t.Parallel()
-	root := sourcetree.Root(t)
-
-	seen := map[string]int{}
-	var missing []literal
-	files := 0
-	for _, dir := range []string{"internal", "cmd"} {
-		walkGoFiles(t, filepath.Join(root, dir), func(fset *token.FileSet, file *ast.File) {
-			files++
-			rel := shortPos(root, fset.Position(file.Pos()).Filename)
-			pkg := file.Name.Name
-			ast.Inspect(file, func(n ast.Node) bool {
-				lit, ok := n.(*ast.CompositeLit)
-				if !ok {
-					return true
-				}
-				name, ok := literalType(pkg, lit)
-				if !ok {
-					return true
-				}
-				if _, watched := carriers[name]; !watched {
-					return true
-				}
-				seen[name]++
-				if !hasKey(lit, "Fence") {
-					missing = append(missing, literal{
-						Type: name, File: rel,
-						Line: fset.Position(lit.Pos()).Line,
-					})
-				}
-				return true
-			})
-		})
-	}
+	files, seen, missing := fenceCarriers(t, sourcetree.Root(t))
 	if files == 0 {
 		t.Fatal("parsed no source files — this guard was certifying nothing")
 	}
@@ -110,6 +80,107 @@ func TestEveryConfigThatCanCarryTheSeatFenceDoes(t *testing.T) {
 		t.Errorf("%s:%d: %s is built without a Fence, so the seat check is disarmed "+
 			"for whatever it builds — %s. Thread the caller's fence in, or nil it "+
 			"explicitly with the reason", m.File, m.Line, m.Type, carriers[m.Type])
+	}
+}
+
+// fenceCarriers walks root's internal/ and cmd/ for literals of a carrier:
+// how many files it read, how many literals of each carrier it saw, and the
+// ones built without a Fence.
+func fenceCarriers(t *testing.T, root string) (int, map[string]int, []literal) {
+	t.Helper()
+	seen := map[string]int{}
+	var missing []literal
+	files := 0
+	for _, dir := range []string{"internal", "cmd"} {
+		walkGoFiles(t, filepath.Join(root, dir), func(fset *token.FileSet, file *ast.File) {
+			rel := shortPos(root, fset.Position(file.Pos()).Filename)
+			pkg := file.Name.Name
+			ast.Inspect(file, func(n ast.Node) bool {
+				lit, ok := n.(*ast.CompositeLit)
+				if !ok {
+					return true
+				}
+				name, ok := literalType(pkg, lit)
+				if !ok {
+					return true
+				}
+				if _, watched := carriers[name]; !watched {
+					return true
+				}
+				seen[name]++
+				if !hasKey(lit, "Fence") {
+					missing = append(missing, literal{
+						Type: name, File: rel,
+						Line: fset.Position(lit.Pos()).Line,
+					})
+				}
+				return true
+			})
+		}, func() { files++ })
+	}
+	return files, seen, missing
+}
+
+// mayBuildCarrier reports whether a file could hold a literal of a carrier.
+//
+// A carrier `pkg.Type` is written `pkg.Type{` outside its package and
+// `Type{` inside it, where the package clause names `pkg` — so either way the
+// file spells both identifiers, and an identifier has no escapes
+// (sourcetree.Identifiers). A file that spells neither pair holds no literal
+// this gate judges, and is not parsed: parsing every file under internal/ and
+// cmd/ for the few dozen literals of four types was five seconds under the
+// race detector.
+func mayBuildCarrier(src []byte) bool {
+	for _, pair := range carrierNames() {
+		if pair[0].In(src) && pair[1].In(src) {
+			return true
+		}
+	}
+	return false
+}
+
+// carrierNames is each carrier's package and type, as prefilters.
+var carrierNames = sync.OnceValue(func() [][2]sourcetree.Identifiers {
+	var out [][2]sourcetree.Identifiers
+	for name := range carriers {
+		pkg, typ, _ := strings.Cut(name, ".")
+		out = append(out, [2]sourcetree.Identifiers{
+			sourcetree.MustIdentifiers(pkg), sourcetree.MustIdentifiers(typ),
+		})
+	}
+	return out
+})
+
+// THE WALK AND THE MATCHER, ON A TREE WHOSE VERDICT IS KNOWN: a carrier built
+// without a Fence outside its package, one built with one inside it, a
+// same-named type of another package, and a file that is not Go and spells no
+// carrier — which must never be parsed.
+func TestTheFenceWalkFindsACarrierBuiltWithoutOne(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	for path, body := range map[string]string{
+		"internal/engine/turn.go": "package engine\n\n" +
+			"var _ = runner.Config{Model: m}\n",
+		"internal/runner/runner.go": "package runner\n\n" +
+			"var _ = Config{Fence: f}\n",
+		"internal/other/other.go": "package other\n\n" +
+			"var _ = Config{Model: m}\n",
+		"cmd/x/x.go": "package main\n\nthis is not Go and spells no carrier\n",
+	} {
+		full := filepath.Join(root, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files, seen, missing := fenceCarriers(t, root)
+	if files != 4 || seen["runner.Config"] != 2 || len(missing) != 1 ||
+		missing[0].File != filepath.FromSlash("internal/engine/turn.go") {
+		t.Errorf("read %d files, saw %v, missing %+v; want 4 read, two runner.Config "+
+			"literals, and the one in internal/engine/turn.go missing its Fence",
+			files, seen, missing)
 	}
 }
 
@@ -145,7 +216,9 @@ func hasKey(lit *ast.CompositeLit, key string) bool {
 
 // --- the walk --------------------------------------------------------------
 
-func walkGoFiles(t *testing.T, dir string, fn func(*token.FileSet, *ast.File)) {
+// walkGoFiles hands fn every non-test .go file under dir that could build a
+// carrier, parsed, and calls read for every one it reads, before that test.
+func walkGoFiles(t *testing.T, dir string, fn func(*token.FileSet, *ast.File), read func()) {
 	t.Helper()
 	fset := token.NewFileSet()
 	err := sourcetree.Walk(dir, func(p string, d fs.DirEntry, err error) error {
@@ -155,7 +228,15 @@ func walkGoFiles(t *testing.T, dir string, fn func(*token.FileSet, *ast.File)) {
 		if d.IsDir() || !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") {
 			return nil
 		}
-		parsed, perr := parser.ParseFile(fset, p, nil, parser.SkipObjectResolution)
+		read()
+		src, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		if !mayBuildCarrier(src) {
+			return nil
+		}
+		parsed, perr := parser.ParseFile(fset, p, src, parser.SkipObjectResolution)
 		if perr != nil {
 			return perr
 		}
