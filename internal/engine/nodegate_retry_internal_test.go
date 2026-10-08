@@ -279,11 +279,13 @@ func TestARetryThroughALaggingApplierWritesNoSecondRecord(t *testing.T) {
 	req := GateRequest{Node: "node-away", OpID: "op-lagging", By: "operator"}
 
 	// THE FIRST GESTURE LANDS ON A LOG THIS NODE IS NOT APPLYING, so the
-	// tracker's answer is durable and unresolved here.
+	// tracker's answer is durable and unresolved here — after
+	// [haltedWriteBudget], since nothing it could wait for will move. The
+	// retry below keeps the default: it waits on an applier that RESUMES.
 	if !s.haltApplier(trackerName) {
 		t.Fatal("the tracker's applier was not running to halt")
 	}
-	first, err := gate.Evict(t.Context(), req)
+	first, err := gate.Evict(statelog.WithResolveBudget(t.Context(), haltedWriteBudget), req)
 	if err != nil || !first.Complete() {
 		t.Fatalf("evict: %v (%+v)", err, first)
 	}

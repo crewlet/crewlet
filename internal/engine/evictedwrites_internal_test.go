@@ -71,15 +71,17 @@ func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 	// ITS OWN WRITES, THROUGH ITS REAL WRITERS: its fence reads its own
 	// applied rows, which do not hold the eviction yet, so both land.
 	// Neither can resolve — the appliers are halted — so each answers
-	// pending, which is the honest answer and the one asserted.
-	res, err := e.native.Load().writer.WriteView(t.Context(), "op-view-evicted", evictedView("v-evicted"))
+	// pending, which is the honest answer and the one asserted, after
+	// [haltedWriteBudget] rather than the publisher's whole default.
+	halted := statelog.WithResolveBudget(t.Context(), haltedWriteBudget)
+	res, err := e.native.Load().writer.WriteView(halted, "op-view-evicted", evictedView("v-evicted"))
 	if err != nil || res.Outcome != statelog.OutcomePending {
 		t.Fatalf("the evicted node's view write answered %q (err %v), want "+
 			"pending — it has to LAND for the gate to have anything to drop",
 			res.Outcome, err)
 	}
 	viewAt := res.Position
-	if _, _, err := e.native.Load().pages.EnsureContainer(t.Context(), testActivation, "EVICTED",
+	if _, _, err := e.native.Load().pages.EnsureContainer(halted, testActivation, "EVICTED",
 		"Evicted", ""); err != nil {
 		t.Fatalf("the evicted node's container write: %v", err)
 	}
@@ -117,6 +119,18 @@ func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 			"record, want evicted", reason, gated, err)
 	}
 }
+
+// haltedWriteBudget is the resolution budget a case hands the writes it makes
+// while one of this node's appliers is halted ([statelog.WithResolveBudget]),
+// and those writes alone: every other write keeps the publisher's default.
+//
+// ONE SECOND. A write on a halted applier answers pending whatever the budget,
+// so its length is simply spent — the default's five seconds per write was
+// most of these cases' run time. But one gesture writes every identity log at
+// once, and a log whose applier is RUNNING must still resolve applied inside
+// the same budget, which a running applier does in milliseconds and a loaded
+// race runner in well under a second.
+const haltedWriteBudget = time.Second
 
 // evictedView is a shared workspace view, the smallest thing the tracker's
 // writer publishes that leaves a row a case can look for.
