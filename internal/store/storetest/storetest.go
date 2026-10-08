@@ -1233,7 +1233,8 @@ func testRecordUntracked(t *testing.T, db *store.DB) {
 	}
 	if _, tracked := store.Category("budget_meters"); tracked {
 		t.Fatal("budget_meters must stay out of the store: it is a ROLLUP " +
-			"of live meters on a 15-second tick, so a durable row per tick " +
+			"of live meters on a 15-second tick (and at a window's first " +
+			"refusal), so a durable row per tick " +
 			"is about two million a year to answer what the live projection " +
 			"answers for free — and the audit log already holds the per-turn " +
 			"spend it is a sum of")

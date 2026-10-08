@@ -186,7 +186,8 @@ var excluded = map[string]string{
 	"a2a_message": "the ANSWER is already a row (a2a_message_sent). This " +
 		"event is the wake it puts on the requester's inbox; see a2a_request",
 	"budget_meters": "a SNAPSHOT of the shared token counters, published by " +
-		"every node on a 15-second tick, so a durable row per report is about " +
+		"every node on a 15-second tick and at once when a budget window first " +
+		"refuses a charge, so a durable row per report is about " +
 		"two million a year per node to answer a question the live projection " +
 		"and the budgets query answer for free. What the audit log holds instead is " +
 		"the spend the counter is charged with, recorded per phase in the " +
