@@ -368,6 +368,7 @@ func TestEveryLexicalIndexServesARegisteredQuery(t *testing.T) {
 	// same size and driving on either would be a defensible plan — which
 	// would make this gate agree with a plan that is wrong on a real
 	// corpus, where a term is in a small fraction of the documents.
+	var rows []appliedPage
 	for i := range 1_000 {
 		container := "ENG"
 		if i%3 == 0 {
@@ -377,9 +378,11 @@ func TestEveryLexicalIndexServesARegisteredQuery(t *testing.T) {
 		if i%20 == 0 {
 			body = "the migration plan is here"
 		}
-		page(t, db, fmt.Sprintf("p.%04d", i), container,
-			fmt.Sprintf("Doc %04d", i), body, 1)
+		rows = append(rows, appliedPage{id: fmt.Sprintf("p.%04d", i),
+			container: container, title: fmt.Sprintf("Doc %04d", i), body: body,
+			version: 1})
 	}
+	writePages(t, db, rows...)
 	indexAll(t, x)
 
 	half := 32

@@ -23,6 +23,7 @@ func TestASearchScansOnlyItsAssignedBuckets(t *testing.T) {
 	// One document per bucket, each carrying the same word, so a search
 	// over an assignment returns exactly the documents in it.
 	inBucket := map[int]string{}
+	var rows []appliedPage
 	for i := range 200 {
 		id := fmt.Sprintf("p.%03d", i)
 		shard := search.ShardOf("page", id)
@@ -30,8 +31,10 @@ func TestASearchScansOnlyItsAssignedBuckets(t *testing.T) {
 			continue
 		}
 		inBucket[shard] = id
-		page(t, db, id, "ENG", "Doc "+id, "the migration plan is here", 1)
+		rows = append(rows, appliedPage{id: id, container: "ENG", title: "Doc " + id,
+			body: "the migration plan is here", version: 1})
 	}
+	writePages(t, db, rows...)
 	if len(inBucket) < 8 {
 		t.Fatalf("only %d of %d buckets were populated — the fixture cannot "+
 			"demonstrate a narrowed scan", len(inBucket), search.SearchShards)
@@ -445,6 +448,7 @@ func TestTheLexicalStatisticsAreGlobalWhateverWasScanned(t *testing.T) {
 	// document, "migration" in a handful. Split by bucket, a slice's own
 	// view of how rare each is differs from the corpus's.
 	target := ""
+	var rows []appliedPage
 	for i := range 300 {
 		body := "this page is about retention and the sweep that enforces it"
 		if i%50 == 0 {
@@ -453,9 +457,10 @@ func TestTheLexicalStatisticsAreGlobalWhateverWasScanned(t *testing.T) {
 				target = fmt.Sprintf("p.%03d", i)
 			}
 		}
-		page(t, db, fmt.Sprintf("p.%03d", i), "ENG",
-			fmt.Sprintf("Doc %03d", i), body, 1)
+		rows = append(rows, appliedPage{id: fmt.Sprintf("p.%03d", i), container: "ENG",
+			title: fmt.Sprintf("Doc %03d", i), body: body, version: 1})
 	}
+	writePages(t, db, rows...)
 	indexAll(t, x)
 	if target == "" {
 		t.Fatal("the fixture wrote no document holding the rare term")
