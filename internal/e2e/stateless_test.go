@@ -105,12 +105,14 @@ func dataMemberBootstrap(t *testing.T, port int) *config.Bootstrap {
 // hand a listener's port to a broker the engine builds — and with the cases
 // here running in parallel, another case's listener can take it in that gap.
 // The member's own pre-bind probe refuses a taken port by name
-// ([jetstream.ErrRoutePortTaken], which
+// ([jetstream.ErrLeafPortTaken], which
 // [TestADataMemberRefusesATakenLeafPortByName] holds), so that one failure is
 // worth another set of numbers, for the reason
 // [jetstreamtest.ClusterStartAttempts] gives and on its count: the collision
 // is with work this case does not coordinate with, so a wider window does not
-// help and a different number does. Any other failure ends the case.
+// help and a different number does. Any other failure ends the case — the
+// route listener's [jetstream.ErrRoutePortTaken] among them, since this member
+// is no cluster's and opens no route listener to lose.
 func bootDataMember(t *testing.T, cfg *config.Company, model *scriptedModel,
 	env map[string]string) (*node, *config.Bootstrap) {
 	t.Helper()
@@ -120,7 +122,7 @@ func bootDataMember(t *testing.T, cfg *config.Company, model *scriptedModel,
 		switch {
 		case err == nil:
 			return n, boot
-		case errors.Is(err, jetstream.ErrRoutePortTaken) &&
+		case errors.Is(err, jetstream.ErrLeafPortTaken) &&
 			attempt < jetstreamtest.ClusterStartAttempts:
 			t.Logf("data member attempt %d/%d lost its leaf port, retrying on "+
 				"another: %v", attempt, jetstreamtest.ClusterStartAttempts, err)
@@ -182,9 +184,11 @@ func newNode(t *testing.T, opts engine.Options, model *scriptedModel) (*node, er
 
 // A DATA MEMBER REFUSES A LEAF PORT SOMEBODY HOLDS, BY NAME — the premise
 // [bootDataMember] retries on. A refusal that stopped carrying
-// [jetstream.ErrRoutePortTaken] would turn every lost port back into a failed
+// [jetstream.ErrLeafPortTaken] would turn every lost port back into a failed
 // case, and a member that came up on a port it does not hold would leave the
-// stateless node joining somebody else's listener.
+// stateless node joining somebody else's listener. And it is the LEAF
+// listener's name: refused as the route listener's, a member with no cluster
+// block was told its cluster route port was taken.
 func TestADataMemberRefusesATakenLeafPortByName(t *testing.T) {
 	t.Parallel()
 	held, err := net.Listen("tcp", "127.0.0.1:0")
@@ -199,9 +203,12 @@ func TestADataMemberRefusesATakenLeafPortByName(t *testing.T) {
 	}
 	boot := dataMemberBootstrap(t, held.Addr().(*net.TCPAddr).Port)
 	_, err = newNode(t, nodeOptions(boot, cfg, nil), model)
-	if !errors.Is(err, jetstream.ErrRoutePortTaken) {
+	if !errors.Is(err, jetstream.ErrLeafPortTaken) {
 		t.Fatalf("a data member on a held leaf port answered %v, want %v", err,
-			jetstream.ErrRoutePortTaken)
+			jetstream.ErrLeafPortTaken)
+	}
+	if errors.Is(err, jetstream.ErrRoutePortTaken) {
+		t.Errorf("a data member's held leaf port is reported as a route port: %v", err)
 	}
 }
 

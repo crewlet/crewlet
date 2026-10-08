@@ -303,7 +303,7 @@ func (s *Server) ClusterPort() int {
 // it instead means binding one, reading its number and letting it go before
 // the member binds it, and anything else on the machine — usually the rest of
 // this suite, starting brokers by the dozen — can take it in between: the
-// member then refuses to start ([ErrRoutePortTaken]) and the case fails for a
+// member then refuses to start ([ErrLeafPortTaken]) and the case fails for a
 // reason that has nothing to do with it. Bound by the OS, there is no window.
 //
 // Never a deployment's setting: a fleet's leaves are configured with the
@@ -621,6 +621,8 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	// whose leaf port is taken logs the bind failure and never becomes
 	// ready, and the boot spends its budget reporting something else. Not
 	// [AnyPort], which names no port to probe: the OS hands out a free one.
+	// Refused as [ErrLeafPortTaken], never the route listener's sentinel:
+	// the remedy is a different setting on a different listener.
 	if opts.LeafNode.Port > 0 {
 		free, probeErr := PortAvailable(ctx, opts.LeafNode.Host, opts.LeafNode.Port)
 		switch {
@@ -634,7 +636,7 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 			return nil, fmt.Errorf("%w: stream.leaf.port %d is already "+
 				"in use on %s, so no stateless node could join the fleet through "+
 				"this member — free that port or give this node a different one",
-				ErrRoutePortTaken, opts.LeafNode.Port, routeHostLabel(opts.LeafNode.Host))
+				ErrLeafPortTaken, opts.LeafNode.Port, routeHostLabel(opts.LeafNode.Host))
 		}
 	}
 	if clustered && opts.Cluster.Port != 0 {
@@ -1195,6 +1197,18 @@ func (q *Queue) runStreamHandler(ctx context.Context, h queue.StreamHandler, sub
 // failure — a bad company config, an engine that will not start — must fail
 // the first time rather than three times with a misleading diagnosis.
 var ErrRoutePortTaken = errors.New("cluster route port taken")
+
+// ErrLeafPortTaken is a member whose LEAF listener's port (`stream.leaf.port`)
+// was held by something else when the member probed it before binding.
+//
+// A SENTINEL OF ITS OWN, beside [ErrRoutePortTaken] rather than folded into
+// it: the two name different listeners with different remedies — a member
+// that cannot route is cut off from its peers, one that cannot open its leaf
+// listener has nowhere for a stateless node to join — and reported as a route
+// port, a taken leaf port sent its reader to a cluster block that may not
+// exist. Retrying on a different number answers either, so a caller that can
+// lose both matches both.
+var ErrLeafPortTaken = errors.New("leaf listener port taken")
 
 // PortAvailable reports whether a port can still be bound on host right now.
 //

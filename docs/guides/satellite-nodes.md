@@ -145,6 +145,18 @@ stream:
     port: 7422                    # where stateless nodes join
 ```
 
+A leaf port something else already holds is refused when the member starts,
+by name, as a taken route port is (see [Every node embeds a member of one
+cluster](deployment.md#every-node-embeds-a-member-of-one-cluster)). NATS
+does not fail when it cannot bind the listener — it logs the error and the
+member never becomes ready — so the engine probes the port first:
+
+```
+leaf listener port taken: stream.leaf.port 7422 is already in use on
+every interface, so no stateless node could join the fleet through this
+member — free that port or give this node a different one
+```
+
 On an **external** NATS cluster there is no leaf to configure: a stateless
 node dials the cluster as every node does, and keeps `store.scratch: true`
 and `roles: [seats]`.

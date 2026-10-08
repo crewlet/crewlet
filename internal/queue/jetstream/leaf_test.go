@@ -173,6 +173,36 @@ func TestAMemberOnAnyLeafPortSaysWhichItBound(t *testing.T) {
 	}
 }
 
+// A MEMBER WHOSE LEAF PORT SOMEBODY HOLDS IS REFUSED AS ITS LEAF PORT — named
+// by the setting and the sentinel of the leaf listener, never the route
+// listener's. It shared [ErrRoutePortTaken] once, and a member with no cluster
+// block at all was told its "cluster route port" was taken.
+func TestATakenLeafPortIsNamedAsTheLeafPort(t *testing.T) {
+	t.Parallel()
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("hold a port: %v", err)
+	}
+	defer held.Close()
+	port := held.Addr().(*net.TCPAddr).Port
+
+	member, err := StartServer(t.Context(), testTimings(Config{ServerName: "member",
+		LeafHost: "127.0.0.1", LeafPort: port, StoreDir: t.TempDir()}))
+	if err == nil {
+		member.Shutdown()
+		t.Fatalf("a member started on leaf port %d, which something else holds", port)
+	}
+	if !errors.Is(err, ErrLeafPortTaken) {
+		t.Errorf("a held leaf port answered %v, want %v", err, ErrLeafPortTaken)
+	}
+	if errors.Is(err, ErrRoutePortTaken) {
+		t.Errorf("a held leaf port is reported as a route port: %v", err)
+	}
+	if want := fmt.Sprintf("stream.leaf.port %d", port); !strings.Contains(err.Error(), want) {
+		t.Errorf("the refusal does not name %q, the setting to change: %v", want, err)
+	}
+}
+
 // A LEAF THAT CANNOT REACH A MEMBER SAYS SO, rather than booting and then
 // timing out on its first stream with a message about the stream — and what
 // it says is the SETTING to fix.
