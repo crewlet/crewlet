@@ -39,6 +39,7 @@ const boxReadCap = 4 * sandbox.MaxRunTextBytes
 // A local backend runs many boxes on one filesystem; a shared work dir would
 // have every run reading its neighbour's done marker.
 func TestEveryArtefactPathIsUnderTheBoxsOwnHome(t *testing.T) {
+	t.Parallel()
 	b := sandbox.NewFakeSandbox("box-1")
 	p := codingagent.PathsFor(b)
 	for _, path := range []string{
@@ -54,6 +55,7 @@ func TestEveryArtefactPathIsUnderTheBoxsOwnHome(t *testing.T) {
 // The shim goes under the box, not a system directory: a local backend runs as
 // an unprivileged user and two boxes would overwrite each other there.
 func TestTheAskShimLivesInTheBoxNotASystemPath(t *testing.T) {
+	t.Parallel()
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	p := paths(b)
@@ -75,6 +77,7 @@ func TestTheAskShimLivesInTheBoxNotASystemPath(t *testing.T) {
 // ---------------------------------------------------------------------
 
 func TestStartLaunchesDetachedAndWritesBothMarkers(t *testing.T) {
+	t.Parallel()
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	p := paths(b)
@@ -114,6 +117,7 @@ func TestStartLaunchesDetachedAndWritesBothMarkers(t *testing.T) {
 // The brief's `crewlet-ask` instruction only resolves if the shim directory is
 // on the agent's PATH.
 func TestTheShimDirectoryIsOnTheAgentsPath(t *testing.T) {
+	t.Parallel()
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	script := startAndScript(t, runner, b, sandbox.RunRequest{Brief: "fix it"})
@@ -124,6 +128,7 @@ func TestTheShimDirectoryIsOnTheAgentsPath(t *testing.T) {
 
 // The findings path is a property of the box, which the launch does not know.
 func TestTheBriefGainsTheReportInstructionForThisBox(t *testing.T) {
+	t.Parallel()
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	script := startAndScript(t, runner, b, sandbox.RunRequest{Brief: "fix the flake"})
@@ -139,6 +144,7 @@ func TestTheBriefGainsTheReportInstructionForThisBox(t *testing.T) {
 // A reused box carries the prior run's marker; without clearing it the poll
 // fires immediately and collect reads the old result.
 func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
+	t.Parallel()
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	p := paths(b)
@@ -174,6 +180,7 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 // ---------------------------------------------------------------------
 
 func TestARunningJobIsNotDone(t *testing.T) {
+	t.Parallel()
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	handle := start(t, runner, b)
@@ -187,6 +194,7 @@ func TestARunningJobIsNotDone(t *testing.T) {
 }
 
 func TestTheDoneMarkerEndsTheRun(t *testing.T) {
+	t.Parallel()
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	handle := start(t, runner, b)
@@ -202,6 +210,7 @@ func TestTheDoneMarkerEndsTheRun(t *testing.T) {
 // A zero-byte marker reads identically to a missing one, which is why the
 // shell writes the exit code into it.
 func TestAnEmptyMarkerIsNotACompletion(t *testing.T) {
+	t.Parallel()
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	handle := start(t, runner, b)
@@ -217,6 +226,7 @@ func TestAnEmptyMarkerIsNotACompletion(t *testing.T) {
 // The whole process group died before the tail echo ran. Without this the run
 // hangs forever.
 func TestADeadWrapperWithNoMarkerEndsTheRun(t *testing.T) {
+	t.Parallel()
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	handle := start(t, runner, b)
@@ -231,6 +241,7 @@ func TestADeadWrapperWithNoMarkerEndsTheRun(t *testing.T) {
 // A genuinely hung-but-alive process is indistinguishable from a working one
 // without a timer, and imposing one is exactly what this design refuses.
 func TestAnAliveWrapperKeepsWaitingHoweverLong(t *testing.T) {
+	t.Parallel()
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	handle := start(t, runner, b)
@@ -246,6 +257,7 @@ func TestAnAliveWrapperKeepsWaitingHoweverLong(t *testing.T) {
 // An unreadable probe is not proof of death; collecting on one would read a
 // partial result from a job that is still working.
 func TestAnUnreadableLivenessProbeIsNotACompletion(t *testing.T) {
+	t.Parallel()
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	handle := start(t, runner, b)
@@ -265,6 +277,7 @@ func TestAnUnreadableLivenessProbeIsNotACompletion(t *testing.T) {
 // The report survives a run whose streamed message was lost and one that
 // parsed to no text at all, so it wins.
 func TestTheFindingsFileIsTheResultCarrierOfRecord(t *testing.T) {
+	t.Parallel()
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	p := paths(b)
@@ -289,6 +302,7 @@ func TestTheFindingsFileIsTheResultCarrierOfRecord(t *testing.T) {
 
 // A report plus a crash is a partial run, not a success.
 func TestACrashOverridesTheReportsSuccessSignal(t *testing.T) {
+	t.Parallel()
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	p := paths(b)
@@ -306,6 +320,7 @@ func TestACrashOverridesTheReportsSuccessSignal(t *testing.T) {
 
 // A silent stall must report a real failure, not an empty success.
 func TestARunThatProducedNothingReportsWhyRatherThanStallingSilently(t *testing.T) {
+	t.Parallel()
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	p := paths(b)
@@ -330,6 +345,7 @@ func TestARunThatProducedNothingReportsWhyRatherThanStallingSilently(t *testing.
 // `--output-format json` in print mode that CLI writes nothing to stderr, so
 // the case certified a narration no real run produced.)
 func TestTheTranscriptFallsBackToStderrWhereTheStreamSaysNothing(t *testing.T) {
+	t.Parallel()
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	p := paths(b)
@@ -348,6 +364,7 @@ func TestTheTranscriptFallsBackToStderrWhereTheStreamSaysNothing(t *testing.T) {
 // Everything collected came out of a box whose environment holds the seat's
 // credentials, and everything returned reaches a model, a store and a screen.
 func TestEverythingCollectedIsRedacted(t *testing.T) {
+	t.Parallel()
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	p := paths(b)
@@ -371,6 +388,7 @@ func TestEverythingCollectedIsRedacted(t *testing.T) {
 }
 
 func TestARecordedQuestionSurfacesAsNeedingInput(t *testing.T) {
+	t.Parallel()
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	p := paths(b)
@@ -391,6 +409,7 @@ func TestARecordedQuestionSurfacesAsNeedingInput(t *testing.T) {
 
 // A question with no audience is still a question.
 func TestAQuestionWithNoAudienceDefaultsToTheRequester(t *testing.T) {
+	t.Parallel()
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	b.Put(paths(b).Ask(), `{"question":"which branch?"}`)
@@ -406,6 +425,7 @@ func TestAQuestionWithNoAudienceDefaultsToTheRequester(t *testing.T) {
 
 // A malformed signal must not lose the result the run did produce.
 func TestAMalformedAskDoesNotLoseTheResult(t *testing.T) {
+	t.Parallel()
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	p := paths(b)
@@ -429,6 +449,7 @@ func TestAMalformedAskDoesNotLoseTheResult(t *testing.T) {
 // that cut it first would decide by position what of the log a reader sees,
 // and a runner that forgot to cut it would no longer be a hole.
 func TestTheTranscriptLeavesTheRunnerWholeAndRedacted(t *testing.T) {
+	t.Parallel()
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	p := paths(b)
@@ -460,6 +481,7 @@ func TestTheTranscriptLeavesTheRunnerWholeAndRedacted(t *testing.T) {
 // bounds nothing a model reads, and the coordinator condenses a failure past
 // the record's bound keeping its cause.
 func TestACrashDetailIsCarriedWholeBehindItsStatus(t *testing.T) {
+	t.Parallel()
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	p := paths(b)
@@ -485,6 +507,7 @@ func TestACrashDetailIsCarriedWholeBehindItsStatus(t *testing.T) {
 // whenever the stderr held anything, so a run that hit its turn cap and
 // printed one deprecation warning reported the warning as why it failed.
 func TestTheCLIsErrorIsNotReplacedByItsStderr(t *testing.T) {
+	t.Parallel()
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	p := paths(b)
@@ -506,6 +529,7 @@ func TestTheCLIsErrorIsNotReplacedByItsStderr(t *testing.T) {
 // and a cut keeping its head reads as the whole report; the coordinator holds
 // it to the record's bound by condensing it.
 func TestTheReportLeavesTheRunnerWhole(t *testing.T) {
+	t.Parallel()
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	p := paths(b)
