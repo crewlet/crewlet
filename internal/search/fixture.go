@@ -174,20 +174,25 @@ func newFixture(n int, seed uint64, basis *basis, gen generator) *Fixture {
 		basis:        basis,
 		gen:          gen,
 	}
-	vector := make([]float32, FixtureWidth)
-	for i := range n {
-		coefficients := make([]float32, len(basis.weights)+1)
-		f.Topics[i] = gen.draw(rng, coefficients)
-		// THE MEAN IS THE SAME DISPLACEMENT IN EVERY DOCUMENT, along an
-		// axis nothing else uses — which is what makes it shared, and
-		// what makes the achieved mean pairwise cosine the number the
-		// constant declares.
-		coefficients[len(basis.weights)] = meanWeight
-
-		basis.compose(vector, coefficients)
-		f.Codes[i] = Quantize(vector)
-		f.coefficients[i] = coefficients
-		f.norms[i] = norm(coefficients)
+	// A BLOCK OF DOCUMENTS IS DRAWN, THEN COMPOSED: every draw is the
+	// stream's next, in document order, exactly as one document at a time
+	// drew them — composing consumes nothing from the stream — so the block
+	// changes how often the basis is read and never what a document is
+	// ([basis.composeInto]).
+	for at := 0; at < n; at += composeBlock {
+		block := f.coefficients[at:min(at+composeBlock, n)]
+		for j := range block {
+			coefficients := make([]float32, len(basis.weights)+1)
+			f.Topics[at+j] = gen.draw(rng, coefficients)
+			// THE MEAN IS THE SAME DISPLACEMENT IN EVERY DOCUMENT, along
+			// an axis nothing else uses — which is what makes it shared,
+			// and what makes the achieved mean pairwise cosine the number
+			// the constant declares.
+			coefficients[len(basis.weights)] = meanWeight
+			block[j] = coefficients
+			f.norms[at+j] = norm(coefficients)
+		}
+		basis.composeInto(block, f.Codes[at:at+len(block)], nil)
 	}
 	return f
 }
@@ -319,37 +324,125 @@ func newBasis() *basis {
 	return b
 }
 
-// compose writes the full-width vector one coefficient set produces.
-func (b *basis) compose(vector []float32, coefficients []float32) {
-	// clear() rather than a loop: it compiles to one memclr, where the
-	// loop is three thousand instrumented writes per document — measured,
-	// that difference is most of the quality gate's wall clock under the
-	// race detector.
-	clear(vector)
-	for k, c := range coefficients {
-		if k >= len(b.support) || c == 0 {
+// composeBlock is how many documents [basis.composeInto] composes in one pass
+// over the basis: as many full-width float32 accumulators as fit under
+// [maxStackVarBytes] — ten at the shipped width, 120 KiB. One more and the
+// accumulator moves to the heap, where every write to it is instrumented
+// again (TestTheFixtureComposesOnItsOwnStack). Each document more in a block
+// is one share fewer of the basis's reads a document pays for, and at ten
+// the sign code's own reads of each vector are already most of what is left.
+const composeBlock = maxStackVarBytes / (FixtureWidth * 4)
+
+// maxStackVarBytes is the largest variable the compiler keeps on a function's
+// stack rather than moving it to the heap: 128 KiB, cmd/compile's
+// MaxStackVarSize for a variable a function declares.
+const maxStackVarBytes = 128 << 10
+
+// composeInto composes each coefficient set in block — at most [composeBlock]
+// of them — into the full-width vector it produces, and writes that vector's
+// sign code to codes[j] and, where vectors is not nil, the vector itself to
+// vectors[j].
+//
+// # Why the accumulators are local arrays, and what that buys
+//
+// A document is a sum of thirty-two sparse directions and the mean's: about
+// twenty-five thousand scattered `+=` into a width-3 072 vector. Into a heap
+// slice, every one of those is a read and a write the race detector
+// instruments — four calls into it per addition, a hundred thousand per
+// document — and measured, that was most of this package's wall clock under
+// `make test`: the 120 000-row gate corpus took about two minutes to generate
+// under `-race` against six seconds without it. The detector never instruments
+// a function's own stack, which no other goroutine can reach, so the sums are
+// accumulated in an array this function declares, and the instrumented
+// accesses left are the basis's own reads — made once for a whole block of
+// documents rather than once a document — and the sign code's reads of each
+// finished vector. Measured on one machine: 116 s to 15 s for that corpus
+// under `-race`, and 5.3 s to 6.0 s without it — the price of a block's
+// bookkeeping where the instrumentation it saves is absent.
+//
+// The accumulator is held COORDINATE-MAJOR — a coordinate's partial sums for
+// the whole block side by side — because a basis entry then touches one cache
+// line rather than one per document: document-major, the same block measured
+// half as slow again as one document at a time without the detector.
+//
+// # And why the codes are BIT-IDENTICAL to one document at a time
+//
+// Every coordinate of every document receives its contributions in the order
+// the one-document loop added them — direction by direction, each along its
+// support, the mean last — because the documents are the INNERMOST loop: a
+// block changes which document's coordinate is written next and never the
+// order of the float32 additions into any one of them.
+//
+// A ZERO COEFFICIENT, which that loop skipped, is added here as the zero
+// product it is, and that cannot move a bit either: an accumulator starts at
+// +0 and is never −0, since a sum is −0 only when both of its terms are and
+// +0 + −0 is +0; and adding either zero to +0 or to any finite non-zero sum
+// leaves it exactly as it was. So every corpus, every code and every recall
+// figure this package's comments quote is unchanged
+// (TestABlockComposesExactlyWhatOneDocumentAtATimeDoes).
+func (b *basis) composeInto(block [][]float32, codes [][]uint64, vectors [][]float32) {
+	if len(block) > composeBlock {
+		panic("search: a fixture block larger than its accumulator")
+	}
+	// ONE FUNCTION, NO CLOSURE, AND NO SLICE OF THESE ARRAYS IN THE LOOPS:
+	// the detector skips an address only when it can see the address is
+	// this frame's own, and an array reached through a captured pointer or
+	// a slice header is not one it can see that of.
+	var (
+		acc    [FixtureWidth][composeBlock]float32
+		weight [composeBlock]float32
+		vector [FixtureWidth]float32
+	)
+	for k := 0; k <= len(b.support); k++ {
+		// THE MEAN RIDES A DIRECTION OF ITS OWN, last, drawn like the
+		// others and carrying no noise.
+		//
+		// The obvious alternative — a constant added to every coordinate
+		// — is not a mean, it is the all-ones direction, and a sign code
+		// reads it as one particular threshold shift rather than as a
+		// corpus's own centre. Measured: the uniform form costs about
+		// five points of recall against a random direction of the same
+		// magnitude, which is the fixture reporting a property of the
+		// all-ones vector rather than of an off-centre corpus.
+		support, values := b.meanSupport, b.meanValues
+		if k < len(b.support) {
+			support, values = b.support[k], b.values[k]
+		}
+		// A row past the block keeps the zero weight it was declared
+		// with, so the fixed-length loop below adds nothing to it.
+		touched := false
+		for j, coefficients := range block {
+			weight[j] = coefficients[k]
+			touched = touched || weight[j] != 0
+		}
+		if !touched {
 			continue
 		}
-		support, values := b.support[k], b.values[k]
 		for i, d := range support {
-			vector[d] += c * values[i]
+			v := values[i]
+			for j := range composeBlock {
+				acc[d][j] += weight[j] * v
+			}
 		}
 	}
-	// THE MEAN RIDES A DIRECTION OF ITS OWN, drawn like the others and
-	// carrying no noise.
-	//
-	// The obvious alternative — a constant added to every coordinate — is
-	// not a mean, it is the all-ones direction, and a sign code reads it
-	// as one particular threshold shift rather than as a corpus's own
-	// centre. Measured: the uniform form costs about five points of
-	// recall against a random direction of the same magnitude, which is
-	// the fixture reporting a property of the all-ones vector rather than
-	// of an off-centre corpus.
-	if mean := coefficients[len(b.support)]; mean != 0 {
-		for i, d := range b.meanSupport {
-			vector[d] += mean * b.meanValues[i]
+	for j := range block {
+		for d := range vector {
+			vector[d] = acc[d][j]
+		}
+		if codes != nil {
+			codes[j] = Quantize(vector[:])
+		}
+		if vectors != nil {
+			copy(vectors[j], vector[:])
 		}
 	}
+}
+
+// vector is the full-width vector one coefficient set produces.
+func (b *basis) vector(coefficients []float32) []float32 {
+	vector := make([]float32, FixtureWidth)
+	b.composeInto([][]float32{coefficients}, nil, [][]float32{vector})
+	return vector
 }
 
 // Len is how many documents the fixture holds.
@@ -358,18 +451,12 @@ func (f *Fixture) Len() int { return len(f.Codes) }
 // Vector is document i as the full-width vector it was quantized from —
 // recomposed from its coefficients, for the benchmark that writes a fixture
 // into a real store rather than scanning its codes.
-func (f *Fixture) Vector(i int) []float32 {
-	vector := make([]float32, FixtureWidth)
-	f.basis.compose(vector, f.coefficients[i])
-	return vector
-}
+func (f *Fixture) Vector(i int) []float32 { return f.basis.vector(f.coefficients[i]) }
 
 // QueryVector is the full-width vector of the query [Fixture.Query] draws for
 // the same seed.
 func (f *Fixture) QueryVector(seed uint64) []float32 {
-	vector := make([]float32, FixtureWidth)
-	f.basis.compose(vector, f.queryCoefficients(seed))
-	return vector
+	return f.basis.vector(f.queryCoefficients(seed))
 }
 
 // queryCoefficients is the draw behind a query.
@@ -390,9 +477,7 @@ func (f *Fixture) queryCoefficients(seed uint64) []float32 {
 // coefficients an exact similarity against it is computed from.
 func (f *Fixture) Query(seed uint64) (code []uint64, similarity func(int) float64) {
 	coefficients := f.queryCoefficients(seed)
-	vector := make([]float32, FixtureWidth)
-	f.basis.compose(vector, coefficients)
-	code = Quantize(vector)
+	code = Quantize(f.basis.vector(coefficients))
 	queryNorm := norm(coefficients)
 	return code, func(i int) float64 {
 		dot := float32(0)
