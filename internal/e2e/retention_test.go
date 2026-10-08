@@ -21,6 +21,7 @@ import (
 // simply grows, with no term reporting anything, which is what this engine did
 // before the duty existed.
 func TestTheRetentionTrimRunsOnANode(t *testing.T) {
+	t.Parallel()
 	n := start(t)
 
 	report, runs := n.engine.RetentionReport(t.Context())

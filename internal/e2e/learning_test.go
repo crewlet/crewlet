@@ -78,6 +78,7 @@ func awaitRows(t *testing.T, what string, found func() (int, error)) {
 // premise. A turn that fails now fails all four, which share that premise
 // either way.
 func TestACompletedTurnLeavesWhatReflectionLearnsFrom(t *testing.T) {
+	t.Parallel()
 	n := start(t)
 	waitForSeat(t, n, "ceo")
 	// A turn that calls nothing has engaged with nothing, and every

@@ -55,6 +55,7 @@ func startStatelessPair(t *testing.T) statelessPair {
 func startStatelessPairWith(t *testing.T, amend func(doc string) string,
 	env map[string]string) statelessPair {
 	t.Helper()
+	logs.attribute(t)
 	model := newScriptedModel(t)
 	doc := fmt.Sprintf(companyDoc, model.url)
 	if amend != nil {
@@ -165,6 +166,7 @@ func bootNodeWith(t *testing.T, opts engine.Options, model *scriptedModel) *node
 // something about one.
 func newNode(t *testing.T, opts engine.Options, model *scriptedModel) (*node, error) {
 	t.Helper()
+	logs.attribute(t)
 	seedStore(t, opts.Bootstrap)
 	id := opts.Bootstrap.Node.ID
 	e, err := engine.New(t.Context(), opts)
@@ -184,6 +186,7 @@ func newNode(t *testing.T, opts engine.Options, model *scriptedModel) (*node, er
 // case, and a member that came up on a port it does not hold would leave the
 // stateless node joining somebody else's listener.
 func TestADataMemberRefusesATakenLeafPortByName(t *testing.T) {
+	t.Parallel()
 	held, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("hold a port: %v", err)
@@ -217,6 +220,7 @@ func leafPort(t *testing.T) int {
 // runs on the data node, attributed to the seat, and the node that ran the
 // turn keeps no copy of it — nor any replicated estate at all.
 func TestASeatOnAStatelessNodeWritesThroughADataNode(t *testing.T) {
+	t.Parallel()
 	p := startStatelessPair(t)
 	waitFor(t, "the stateless node to be admitted by a data node", hydrated(t, p.agent.engine))
 	waitForSeat(t, p.agent, "ceo")
@@ -261,6 +265,7 @@ func TestASeatOnAStatelessNodeWritesThroughADataNode(t *testing.T) {
 
 // A SEARCH FROM A NODE THAT HOLDS NO INDEX IS ANSWERED BY ONE THAT DOES.
 func TestAStatelessNodeSearchesTheFleetsKnowledge(t *testing.T) {
+	t.Parallel()
 	p := startStatelessPair(t)
 	if _, err := p.data.engine.PagesStore().Create(t.Context(), pageOperator(), pages.NewPage{
 		Container: "ENG", Title: "Rollback runbook",
@@ -287,6 +292,7 @@ func TestAStatelessNodeSearchesTheFleetsKnowledge(t *testing.T) {
 // event log — and the data node ran no turn itself, so every phase row there
 // came across.
 func TestAStatelessNodesAuditTrailLandsOnADataNode(t *testing.T) {
+	t.Parallel()
 	p := startStatelessPair(t)
 	waitFor(t, "the stateless node to be admitted by a data node", hydrated(t, p.agent.engine))
 	waitForSeat(t, p.agent, "ceo")

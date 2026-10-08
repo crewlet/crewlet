@@ -120,6 +120,7 @@ func TestAFileUploadedToOneNodeDownloadsFromAnother(t *testing.T) {
 // the members' bucket, and the data node serves both — while the node that ran
 // the turn keeps neither.
 func TestASeatOnAStatelessNodeWritesAFileTheDataNodeServes(t *testing.T) {
+	t.Parallel()
 	p := startStatelessPair(t)
 	waitFor(t, "the stateless node to be admitted by a data node", hydrated(t, p.agent.engine))
 	waitForSeat(t, p.agent, "ceo")

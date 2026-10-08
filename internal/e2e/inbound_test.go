@@ -333,6 +333,7 @@ func startInbound(t *testing.T, amend func(string) string) (*node, *stubVendor) 
 }
 
 func TestAVerifiedDeliveryWakesTheSeat(t *testing.T) {
+	t.Parallel()
 	n, vendor := startInbound(t, nil)
 	box := watchInbox(t, n, "ceo")
 	vendor.says(routed("ceo", "can you look at this", nil))
@@ -395,6 +396,7 @@ func TestAVerifiedDeliveryWakesTheSeat(t *testing.T) {
 // A human seat is addressable and never woken: a person reads the surface
 // the event arrived on.
 func TestAHumanRecipientIsNeverWokenEndToEnd(t *testing.T) {
+	t.Parallel()
 	n, vendor := startInbound(t, nil)
 	vendor.says(routed("founder", "for you", nil))
 
@@ -407,6 +409,7 @@ func TestAHumanRecipientIsNeverWokenEndToEnd(t *testing.T) {
 // The self-action guard, through the whole path: without it a seat assigned
 // to its own issue receives a webhook for every comment it posts.
 func TestASeatIsNotWokenByItsOwnActionEndToEnd(t *testing.T) {
+	t.Parallel()
 	n, vendor := startInbound(t, nil)
 	if err := n.engine.Registry().Register("stub", "acct-ceo", "ceo"); err != nil {
 		t.Fatalf("register: %v", err)
@@ -485,6 +488,7 @@ func (v *orderedVendor) recorded() []string {
 // [holdFirst]: a consumer that handled the two side by side starts the second
 // inside that hold, and the log shows it before the first ended.
 func TestTheInboundEdgeHandlesOneNodesDeliveriesInOrder(t *testing.T) {
+	t.Parallel()
 	n := start(t)
 	vendor := &orderedVendor{second: make(chan struct{})}
 	if err := n.engine.RouteInbound(t.Context(), []notify.Parser{vendor}, nil); err != nil {
@@ -514,6 +518,7 @@ func TestTheInboundEdgeHandlesOneNodesDeliveriesInOrder(t *testing.T) {
 // THE VALVE IS READ LIVE off the epoch: an apply that changes the cap takes
 // effect on the next notification, not on the next restart.
 func TestTheRateValveFollowsTheAppliedConfig(t *testing.T) {
+	t.Parallel()
 	n, vendor := startInbound(t, func(doc string) string {
 		return strings.Replace(doc, "name: Nimbus",
 			"name: Nimbus\nnotification_rate_limit: 2", 1)

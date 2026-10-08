@@ -260,6 +260,7 @@ func nodeEnvironment(vars map[string]string) config.MapSource {
 // startNode stands a node up as spec describes.
 func startNode(t *testing.T, spec nodeSpec) *node {
 	t.Helper()
+	logs.attribute(t)
 	model := newScriptedModel(t)
 
 	doc := fmt.Sprintf(companyDoc, model.url)
@@ -774,23 +775,17 @@ func textReply(text string) string {
 	}`, body, textReplyUsage.json())
 }
 
-// waitFor polls until cond holds, failing the test if it never does.
-//
-// diag, when given, is rendered INTO the failure. A timeout here reports that
-// something the engine should have done was not done, and on CI that one line
-// is the entire artefact: a run of this suite failed with nothing but "timed
-// out waiting for the suspended turn to be resumed", which named the symptom
-// and not one fact about the state that produced it. A condition worth waiting
-// on is worth saying what it saw instead.
 // waitBudget is how long every wait in this suite gets.
 //
 // # Why it is this large
 //
 // The conditions here are not in-process flags: they are a seat claimed
 // through a lease, an engine booted, a detached sandbox run recovered from a
-// row. And the machine they run on is not this one — CI runs the WHOLE suite
-// under the race detector, so an e2e engine boots while a dozen other
-// packages compete for the same cores.
+// row. And the machine they run on is not this one — CI runs the suite under
+// the race detector, with this package's single-engine cases running beside
+// each other, as many at once as the runner has cores ([testing.T.Parallel]),
+// so an engine here boots while three others do. This package is alone on the
+// runner ([solo.Run]); its own cases are what it competes with.
 //
 // # What a long budget does NOT fix
 //
@@ -809,6 +804,14 @@ func textReply(text string) string {
 // to raise.
 const waitBudget = 90 * time.Second
 
+// waitFor polls until cond holds, failing the test if it never does.
+//
+// diag, when given, is rendered INTO the failure. A timeout here reports that
+// something the engine should have done was not done, and on CI that one line
+// is the entire artefact: a run of this suite failed with nothing but "timed
+// out waiting for the suspended turn to be resumed", which named the symptom
+// and not one fact about the state that produced it. A condition worth waiting
+// on is worth saying what it saw instead.
 func waitFor(t *testing.T, what string, cond func() bool, diag ...func() string) {
 	t.Helper()
 	deadline := time.Now().Add(waitBudget)

@@ -379,6 +379,7 @@ func (n *node) publishWakeKeyed(t *testing.T, handle, text, partition, conversat
 }
 
 func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
+	t.Parallel()
 	n := start(t)
 
 	// The seat has to be claimed before its inbox is consumed; publishing
@@ -917,6 +918,7 @@ func captureAct(t *testing.T, n *node) []byte {
 }
 
 func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
+	t.Parallel()
 	// THE OTHER HALF OF THE GATE. The test above asserts the frames say the
 	// right things; this one asserts the CLIENT can read them — and those
 	// are different questions, which is the entire lesson of the bug that
@@ -1466,6 +1468,7 @@ func TestAnOnboardingRefusalEndsTheTurnBeforeTheExecutor(t *testing.T) {
 // at a seam and substitute the thing on the other side, so "does anything
 // actually connect these" is the one question none of them asks.
 func TestATurnsEventsJoinTheTriggersTrace(t *testing.T) {
+	t.Parallel()
 	n := start(t)
 
 	waitFor(t, "the seat to be claimed", func() bool {

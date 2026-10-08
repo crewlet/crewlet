@@ -15,10 +15,12 @@ import (
 // The process-wide log sink for this package's tests.
 //
 // TestMain owns it, which is the ONLY legitimate owner besides the CLI. What
-// happens when `run` installs a writer it was handed instead: 29 parallel tests pointing the global at their own buffers,
-// a data race, and one test's lines in another's output. Tests here DO run in
-// parallel, so the sink is installed exactly once, here, and the recorder below
-// is safe to write from many goroutines.
+// happens when `run` installs a writer it was handed instead: 29 parallel tests
+// pointing the global at their own buffers, a data race, and one test's lines
+// in another's output. The single-engine cases here run in parallel with each
+// other (the fleet cases run alone, before them — see [noParallel]), so the
+// sink is installed exactly once, here, and the recorder below is safe to
+// write from many goroutines.
 //
 // It also runs through [solo.Run], which declares that this package needs the
 // test runner to itself: cluster_test.go stands up a fleet of engines, each
@@ -31,36 +33,51 @@ func TestMain(m *testing.M) {
 
 // logs indexes what a test can assert on, and passes on what a PERSON needs.
 //
-// TWO JOBS, and conflating them cost a real CI investigation. Retaining every
-// line of ~40 company boots would be a large buffer for no reason, so only the
-// lines of a trace a case WATCHES are kept for [traceRecorder.linesFor] — but
-// this is the engine's ONLY log destination for the whole package, so
-// discarding the rest discarded the engine's own account of every failure. A
-// run of this suite failed in CI with nothing but "timed out waiting for the
-// suspended turn to be resumed"; `sandbox_resume_no_execute_state`, which
-// named the cause on the line above it, went nowhere, and `-v` on the gates job
-// bought nothing at all.
+// THREE JOBS, and conflating the first two cost a real CI investigation. This
+// is the engine's ONLY log destination for the whole package, so it sees every
+// line of every company boot at debug; keeping all of them would be a large
+// buffer for no reason, and discarding all but the asserted ones discarded the
+// engine's own account of every failure. A run of this suite failed in CI with
+// nothing but "timed out waiting for the suspended turn to be resumed";
+// `sandbox_resume_no_execute_state`, which named the cause on the line above
+// it, went nowhere, and `-v` on the gates job bought nothing at all.
 //
-// So the buffer stays bounded and trace-scoped, and anything at WARN or above
-// is written through to stderr, where `go test` attributes it to the failing
-// test. A failure always logs at that level; the debug chatter of forty boots
-// still does not.
+//  1. A case that asserts on log lines WATCHES its trace before it starts the
+//     work, and only a watched trace's lines are kept ([traceRecorder.watch]).
+//  2. Every line at WARN or above is written through to stderr, which is the
+//     one record that survives a crash or a suite timeout — no cleanup runs
+//     for either.
+//  3. And it is KEPT, numbered, so a failing case prints the lines logged
+//     while it ran under its own name ([traceRecorder.attribute]). Stderr
+//     alone stopped doing that when the cases started running concurrently:
+//     `go test` frames a test's own t.Log output, and credits a line an
+//     engine goroutine writes to stderr to whichever test printed last.
 var logs = &traceRecorder{through: os.Stderr}
 
-// traceKept is how many lines one watched trace keeps.
+// traceKept is how many lines one watched trace keeps, and loudKept how many
+// WARN and ERROR lines the ring holds.
 //
-// It was the bound the whole RUN shared — the first 4096 trace-carrying lines
-// of the package, whichever cases logged them — so the one case that reads
-// lines back passed or failed on how many lines every case before it had
-// written, and "no log line carried the trace" blamed the engine for a
-// harness limit. Each watched trace keeps this many now: a turn logs a few
-// hundred lines at debug, so one that reached it has run away rather than
-// run, and its first lines are the ones a correlation assertion reads.
-const traceKept = 4096
+// traceKept was the bound the whole RUN shared — the first 4096 trace-carrying
+// lines of the package, whichever cases logged them — so the one case that
+// reads lines back passed or failed on how many lines every case before it had
+// written, and "no log line carried the trace" blamed the engine for a harness
+// limit. Each watched trace keeps this many now: a turn logs a few hundred
+// lines at debug, so one that reached it has run away rather than run, and its
+// first lines are the ones a correlation assertion reads.
+//
+// loudKept is about three and a half times the 2,345 WARN and ERROR lines one
+// whole run of this package logged (measured on the commit before the cases
+// ran in parallel), so a failing case's window — at most the whole parallel
+// phase — is not cut short by the ring in practice; when it is, the dump says
+// how many lines fell out rather than presenting what is left as the whole.
+const (
+	traceKept = 4096
+	loudKept  = 8192
+)
 
 type traceRecorder struct {
-	// through receives the lines a person reads. Never the buffer's job:
-	// the buffer answers assertions, this answers "why did it fail".
+	// through receives the lines a person reads. Never the buffers' job:
+	// the buffers answer assertions and failures, this answers a crash.
 	through io.Writer
 
 	mu sync.Mutex
@@ -68,6 +85,14 @@ type traceRecorder struct {
 	// nobody watches is never kept, which is what makes a case's assertion
 	// independent of how much every other case logged before it.
 	traces map[string][]string
+	// loud is the ring of WARN and ERROR lines; loudSeen counts every one
+	// ever written, so line n of the run sits at loud[n % loudKept] while it
+	// is still held.
+	loud     []string
+	loudSeen int
+	// attributed is every case already printing its window on failure, so a
+	// case that boots several nodes prints it once.
+	attributed map[*testing.T]bool
 }
 
 // loud reports whether a line is one a reader of a failing run needs.
@@ -97,14 +122,24 @@ func traceOf(line string) string {
 
 func (r *traceRecorder) Write(p []byte) (int, error) {
 	line := string(p)
-	if trace := traceOf(line); trace != "" {
+	trace := traceOf(line)
+	isLoud := loud(line)
+	if trace != "" || isLoud {
 		r.mu.Lock()
 		if kept, watched := r.traces[trace]; watched && len(kept) < traceKept {
 			r.traces[trace] = append(kept, line)
 		}
+		if isLoud {
+			if len(r.loud) < loudKept {
+				r.loud = append(r.loud, line)
+			} else {
+				r.loud[r.loudSeen%loudKept] = line
+			}
+			r.loudSeen++
+		}
 		r.mu.Unlock()
 	}
-	if r.through != nil && loud(line) {
+	if r.through != nil && isLoud {
 		// Best effort: a test's diagnostics must never fail the test.
 		_, _ = r.through.Write(p)
 	}
@@ -139,6 +174,64 @@ func (r *traceRecorder) linesFor(traceID string) []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]string(nil), r.traces[traceID]...)
+}
+
+// attribute makes every WARN and ERROR line logged from now until t ends part
+// of t's own output, if t fails. Every node constructor here calls it, so a
+// case that stands a node up gets it without asking.
+//
+// Every line of the window, other cases' engines' included: a line carries no
+// mark of which engine wrote it, and the window is the one thing certain to
+// hold all of this case's own. CALLED BEFORE THE CASE'S ENGINES ARE BUILT, so
+// its cleanup runs after their stops (cleanups run last-registered first) and
+// the window covers what an engine says on its way down.
+func (r *traceRecorder) attribute(t *testing.T) {
+	t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.attributed[t] {
+		return
+	}
+	if r.attributed == nil {
+		r.attributed = map[*testing.T]bool{}
+	}
+	r.attributed[t] = true
+	from := r.loudSeen
+	t.Cleanup(func() {
+		r.mu.Lock()
+		delete(r.attributed, t)
+		r.mu.Unlock()
+		if !t.Failed() {
+			return
+		}
+		lines, lost := r.loudSince(from)
+		if len(lines) == 0 && lost == 0 {
+			return
+		}
+		t.Logf("%d WARN/ERROR line(s) were logged while this case ran, by every "+
+			"engine in the process — the lines name none:", len(lines)+lost)
+		if lost > 0 {
+			t.Logf("(the first %d fell out of the %d-line ring before this case "+
+				"ended)", lost, loudKept)
+		}
+		for _, line := range lines {
+			t.Log(strings.TrimRight(line, "\n"))
+		}
+	})
+}
+
+// loudSince is every loud line from number from on that the ring still holds,
+// and how many of them it no longer does.
+func (r *traceRecorder) loudSince(from int) (lines []string, lost int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if oldest := r.loudSeen - len(r.loud); from < oldest {
+		lost, from = oldest-from, oldest
+	}
+	for n := from; n < r.loudSeen; n++ {
+		lines = append(lines, r.loud[n%loudKept])
+	}
+	return lines, lost
 }
 
 var _ io.Writer = (*traceRecorder)(nil)

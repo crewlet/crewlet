@@ -89,6 +89,7 @@ func startPartitionableCluster(t *testing.T, n int) *cluster {
 // attempts identically and with nothing to say which of the two causes it was.
 func startMesh(t *testing.T, mesh func(context.Context, *testing.T, int) *jetstreamtest.Relays, n int) *cluster {
 	t.Helper()
+	logs.attribute(t)
 	// BOUNDED IN WALL CLOCK AS WELL AS IN TRIES — see
 	// [jetstreamtest.ClusterStartBudget]. Three attempts at an unbounded
 	// cost each is a product nobody declared, and on this package it was
@@ -503,6 +504,12 @@ func (c *cluster) hydrated(t *testing.T) {
 // scheduler, and what gives way first is raft: measured here, each case passes
 // alone in under forty seconds and both fail together — a member's metadata
 // read timing out after thirty, reported as a boot failure naming a stream.
+//
+// AND NOT BESIDE THE SINGLE-ENGINE CASES EITHER, which do run in parallel:
+// `go test` starts a parallel top-level test only once every sequential one
+// has returned, so every fleet here stands up, runs and comes down before the
+// first of them starts. A fleet's start budget is spent against a quiet
+// runner, and the single-engine cases share it only with each other.
 //
 // A function rather than a bare comment because the absence of a call is not
 // something a reader notices, and "why is this one not parallel" is exactly

@@ -252,6 +252,7 @@ func bootCompany(t *testing.T, doc string, model *scriptedModel, env map[string]
 func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, streamDir string,
 	env map[string]string) *node {
 	t.Helper()
+	logs.attribute(t)
 	cfg, err := config.ParseCompany([]byte(doc))
 	if err != nil {
 		t.Fatalf("company config: %v", err)
@@ -359,6 +360,7 @@ func sawSandboxResult(raw []byte) bool {
 // A coding turn end to end: decide, launch, suspend, poll, collect, resume, and
 // the same turn finishing with the agent's findings in hand.
 func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
+	t.Parallel()
 	n := startCoding(t, "succeed")
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "swe")
@@ -518,6 +520,7 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 // false, for the whole life of the feature, so the answer ran as an unrelated
 // turn and the box waited out its pause TTL.
 func TestACodingRunThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
+	t.Parallel()
 	n := startCoding(t, "ask")
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "swe")
@@ -701,6 +704,7 @@ func countOf(list []string, want string) int {
 // that — so the states that most need a person were the ones least likely to
 // be on screen.
 func TestAParkedRunReachesTheBoardAnOperatorReads(t *testing.T) {
+	t.Parallel()
 	n := startCoding(t, "ask")
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "swe")
@@ -765,6 +769,7 @@ func (n *codingNode) board(t *testing.T) []map[string]any {
 // on the seat's next claim, drives it to completion, and re-enters the SAME
 // conversation the dead process suspended.
 func TestAnEngineRestartMidRunStillFinishesTheSameTurn(t *testing.T) {
+	t.Parallel()
 	stateDir := t.TempDir()
 	binDir := installFakeAgent(t)
 	env := fakeAgentEnv(binDir, "held")
@@ -847,6 +852,7 @@ func TestAnEngineRestartMidRunStillFinishesTheSameTurn(t *testing.T) {
 // half of the gate a workstation cannot always run, and a suite that quietly
 // tested only the easy mode would report a gate it had not met.
 func TestTheContainerModeRunsTheSameProtocol(t *testing.T) {
+	t.Parallel()
 	runtime := usableContainerRuntime(t)
 	if runtime == "" {
 		t.Skip("no usable container runtime; the direct mode covers the protocol here")
@@ -930,6 +936,7 @@ func usableContainerRuntime(t *testing.T) string {
 // over: the answer can still arrive, and the work re-seeds from the branch the
 // agent pushed, which was always the durable half.
 func TestAnExpiredPauseReclaimsTheBoxAndLeavesTheRunWaiting(t *testing.T) {
+	t.Parallel()
 	n := startCodingWithPause(t, "ask", 1)
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "swe")

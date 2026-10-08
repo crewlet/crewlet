@@ -130,6 +130,7 @@ func (m *fakeMattermost) post(t *testing.T, id, message string) {
 // woken once under the post's derived wake id, with ONE delivery row on the
 // data node whichever of the two delivered it.
 func TestAMattermostPostWakesItsSeatOnceOnAFleet(t *testing.T) {
+	t.Parallel()
 	mm := startFakeMattermost(t)
 	p := startStatelessPairWith(t, func(doc string) string {
 		doc = strings.Replace(doc, "roles:\n", "integrations:\n  mattermost:\n    enabled: true\n"+

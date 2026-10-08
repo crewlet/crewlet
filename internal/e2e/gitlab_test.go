@@ -130,6 +130,7 @@ func issueOpened(actor string, assignees ...string) map[string]any {
 // username, and the org model does not say which account a seat holds — so
 // the engine reads it from the same mcp_env block the seat's own tools use.
 func TestACodeHostAssignmentWakesTheSeatThatOwnsTheAccount(t *testing.T) {
+	t.Parallel()
 	n := startWith(t, withSeatCredential(fakeGitLab(t, map[string]string{"glpat-ceo": "ceo-bot"}).url))
 	box := watchInbox(t, n, "ceo")
 
@@ -165,6 +166,7 @@ func TestACodeHostAssignmentWakesTheSeatThatOwnsTheAccount(t *testing.T) {
 // integration is inert. Worth pinning, because the failure is a company
 // where every code-host event names a stranger and nothing says why.
 func TestASeatWithNoCredentialIsUnreachableFromTheCodeHost(t *testing.T) {
+	t.Parallel()
 	n := startWith(t, gitlabCompany(fakeGitLab(t, map[string]string{"glpat-ceo": "ceo-bot"}).url))
 
 	gitlabWebhook(t, n, issueOpened("human-dev", "ceo-bot"))
@@ -185,6 +187,7 @@ func TestASeatWithNoCredentialIsUnreachableFromTheCodeHost(t *testing.T) {
 // cannot see. The company keeps running: the code host is what is
 // unavailable, and saying so beats reporting it enabled and inert.
 func TestACodeHostWithNoUsableSigningSecretDoesNotStart(t *testing.T) {
+	t.Parallel()
 	forge := fakeGitLab(t, map[string]string{"glpat-ceo": "ceo-bot"})
 	// Both cases are REFERENCES, because that is the only way to reach this
 	// code: config refuses a literal that is not a usable key outright, so
@@ -199,6 +202,7 @@ func TestACodeHostWithNoUsableSigningSecretDoesNotStart(t *testing.T) {
 		{"a value the vendor could not have produced", "not-a-whsec-value"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			env := map[string]string{}
 			if tc.resolvesTo != "" {
 				env[variable] = tc.resolvesTo
@@ -239,6 +243,7 @@ func TestACodeHostWithNoUsableSigningSecretDoesNotStart(t *testing.T) {
 // is what lets a failed build past it, and this is the only path in the
 // engine that exercises the override.
 func TestAFailedPipelineReachesTheSeatThatBrokeIt(t *testing.T) {
+	t.Parallel()
 	n := startWith(t, withSeatCredential(fakeGitLab(t, map[string]string{"glpat-ceo": "ceo-bot"}).url))
 	box := watchInbox(t, n, "ceo")
 
@@ -263,6 +268,7 @@ func TestAFailedPipelineReachesTheSeatThatBrokeIt(t *testing.T) {
 // must not come back to it, or a seat assigned to its own issue answers its
 // own comment and loops.
 func TestASeatIsNotWokenByItsOwnComment(t *testing.T) {
+	t.Parallel()
 	n := startWith(t, withSeatCredential(fakeGitLab(t, map[string]string{"glpat-ceo": "ceo-bot"}).url))
 
 	gitlabWebhook(t, n, map[string]any{
@@ -284,6 +290,7 @@ func TestASeatIsNotWokenByItsOwnComment(t *testing.T) {
 // pushed on every commit, which is the loop the self-action rule exists to
 // prevent, reintroduced through the one event allowed past it.
 func TestAGreenPipelineWakesNobody(t *testing.T) {
+	t.Parallel()
 	n := startWith(t, withSeatCredential(fakeGitLab(t, map[string]string{"glpat-ceo": "ceo-bot"}).url))
 
 	gitlabWebhook(t, n, map[string]any{
@@ -305,6 +312,7 @@ func TestAGreenPipelineWakesNobody(t *testing.T) {
 // added by a revision permanently unreachable — while one that re-resolved
 // every seat would spend a request per seat on every reconcile.
 func TestApplyingARevisionKeepsTheCodeHostIdentitiesWithoutReasking(t *testing.T) {
+	t.Parallel()
 	instance := fakeGitLab(t, map[string]string{"glpat-ceo": "ceo-bot"})
 	n := startWith(t, withSeatCredential(instance.url))
 	box := watchInbox(t, n, "ceo")
@@ -337,6 +345,7 @@ func TestApplyingARevisionKeepsTheCodeHostIdentitiesWithoutReasking(t *testing.T
 // would keep routing that account's events to a seat that no longer holds
 // it.
 func TestARotatedCredentialIsReresolved(t *testing.T) {
+	t.Parallel()
 	instance := fakeGitLab(t, map[string]string{
 		"glpat-ceo": "ceo-bot", "glpat-rotated": "ceo-bot-v2"})
 	n := startWith(t, withSeatCredential(instance.url))
@@ -365,6 +374,7 @@ func TestARotatedCredentialIsReresolved(t *testing.T) {
 // briefly down, and the next apply retries. What it costs is that seat's
 // inbound routing until then, which is reported per seat.
 func TestAnUnresolvableCredentialDoesNotStopTheCompany(t *testing.T) {
+	t.Parallel()
 	instance := fakeGitLab(t, map[string]string{})
 	n := startWith(t, withSeatCredential(instance.url))
 	box := watchInbox(t, n, "ceo")

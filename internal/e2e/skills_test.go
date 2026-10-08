@@ -83,6 +83,7 @@ func toolSkill(key, tool string, required bool) skills.Skill {
 // from the knowledge base is that publishing one is a wiki edit — no
 // restart, no deploy, no config push.
 func TestAPublishedSkillReachesTheExecutorsPrompt(t *testing.T) {
+	t.Parallel()
 	n := start(t)
 	waitForSeat(t, n, "ceo")
 	publish(t, n, toolSkill("recall-conventions", "query_episodes", true))
@@ -113,6 +114,7 @@ func TestAPublishedSkillReachesTheExecutorsPrompt(t *testing.T) {
 
 // A SKILL FOR A TOOL THIS PHASE CANNOT CALL is noise the model reads past.
 func TestASkillForAnAbsentToolIsNotOffered(t *testing.T) {
+	t.Parallel()
 	n := start(t)
 	waitForSeat(t, n, "ceo")
 	publish(t, n, toolSkill("jira-conventions", "jira_transition", true))
@@ -128,6 +130,7 @@ func TestASkillForAnAbsentToolIsNotOffered(t *testing.T) {
 // A company that has published none gets no skill scaffolding at all — not
 // an empty section.
 func TestNoSkillsMeansNoCatalogue(t *testing.T) {
+	t.Parallel()
 	n := start(t)
 	waitForSeat(t, n, "ceo")
 
@@ -143,6 +146,7 @@ func TestNoSkillsMeansNoCatalogue(t *testing.T) {
 // soon as the node reads the container again, rather than lingering until a
 // restart.
 func TestATrashedSkillPageLeavesTheRegistry(t *testing.T) {
+	t.Parallel()
 	n := start(t)
 	waitForSeat(t, n, "ceo")
 
@@ -160,6 +164,7 @@ func TestATrashedSkillPageLeavesTheRegistry(t *testing.T) {
 // An ordinary page in the same container is not a broken skill: a project
 // home page or an operator's notes sit beside the skills without becoming one.
 func TestAnOrdinaryPageInTheContainerIsNotASkill(t *testing.T) {
+	t.Parallel()
 	n := start(t)
 	waitForSeat(t, n, "ceo")
 
@@ -176,6 +181,7 @@ func TestAnOrdinaryPageInTheContainerIsNotASkill(t *testing.T) {
 // per epoch, unlike the skills themselves, which come from the knowledge
 // base and outlive one.
 func TestOperatorVariablesAreSubstitutedIntoASkill(t *testing.T) {
+	t.Parallel()
 	n := startNode(t, nodeSpec{company: func(doc string) string {
 		return strings.Replace(doc, "name: Nimbus",
 			"name: Nimbus\nskill_variables:\n  tenant: ${CREWLET_TEST_TENANT}", 1)
@@ -214,6 +220,7 @@ func TestOperatorVariablesAreSubstitutedIntoASkill(t *testing.T) {
 // afterwards, and this is the whole path, from a wiki write to what an
 // executor would be offered.
 func TestASkillPagePublishedNativelyReachesTheRegistry(t *testing.T) {
+	t.Parallel()
 	n := start(t)
 	waitFor(t, "the native backends to hydrate", hydrated(t, n.engine))
 
