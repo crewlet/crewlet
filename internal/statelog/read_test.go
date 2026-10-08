@@ -28,10 +28,18 @@ type stubStore struct {
 	err   error
 }
 
+// newStubStore is a whole estate of its own — a migrated store and the probe
+// domain's tables — so a case builds ONE and hands it to every reader it
+// makes: the rows are read and never written here, and what a case counts is
+// a fresh wrapper's ([stubStore.again]), never the estate's.
 func newStubStore(t *testing.T) *stubStore {
 	t.Helper()
 	return &stubStore{inner: newApplyHarness(t, probeDomain{}).estate}
 }
+
+// again is the same estate behind a fresh read count, for a case that asks
+// whether one reader opened a transaction after another already had.
+func (s *stubStore) again() *stubStore { return &stubStore{inner: s.inner} }
 
 func (s *stubStore) Read(ctx context.Context, fn func(*sql.Tx) error) error {
 	s.reads.Add(1)
@@ -274,7 +282,7 @@ func TestAStallBelowTheFloorServesNoRead(t *testing.T) {
 		t.Fatalf("a stalled node at the floor refused a consistent-prefix read: %v", err)
 	}
 
-	db = newStubStore(t)
+	db = db.again()
 	r = newReader(t, db, stalled(statelog.FloorReplaying), &stubWaiter{at: healthy().Position}, index)
 	_, err = r.Read(t.Context(), pointQuery(statelog.ReadConsistentPrefix),
 		func(*sql.Tx) error { return nil })
@@ -745,12 +753,13 @@ func TestTheCallersFloorIsHonouredAtEveryLevel(t *testing.T) {
 	// waited for the later of the two.
 	floor := statelog.Position{Stream: probeStream, Generation: 1, Seq: 1 << 30}
 
+	db := newStubStore(t)
 	for _, level := range []statelog.ReadLevel{
 		statelog.ReadLinearizable, statelog.ReadSession,
 		statelog.ReadStale, statelog.ReadConsistentPrefix,
 	} {
 		w := &stubWaiter{at: healthy().Position}
-		r := newReader(t, newStubStore(t), healthy, w, index)
+		r := newReader(t, db, healthy, w, index)
 		q := pointQuery(level)
 		q.MinPosition = floor
 		if _, err := r.Read(t.Context(), q, func(*sql.Tx) error { return nil }); err != nil {
@@ -773,7 +782,7 @@ func TestTheCallersFloorIsHonouredAtEveryLevel(t *testing.T) {
 	// that never appends — the one where a wait for a foreign sequence
 	// would otherwise run out the whole budget.
 	w := &stubWaiter{at: healthy().Position}
-	r := newReader(t, newStubStore(t), healthy, w, index)
+	r := newReader(t, db, healthy, w, index)
 	q := pointQuery(statelog.ReadStale)
 	q.MinPosition = statelog.Position{Stream: "SOME_OTHER_LOG", Generation: 1, Seq: 5}
 	_, err = r.Read(t.Context(), q, func(*sql.Tx) error { return nil })
@@ -809,6 +818,7 @@ func TestAFloorOnAnotherStreamIsRefusedAtEveryLevel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
+	db := newStubStore(t)
 	for _, floor := range []statelog.Position{
 		{Stream: "SOME_OTHER_LOG", Generation: 1, Seq: 1},
 		{Stream: "SOME_OTHER_LOG", Generation: 1, Seq: 1 << 30},
@@ -818,7 +828,7 @@ func TestAFloorOnAnotherStreamIsRefusedAtEveryLevel(t *testing.T) {
 			statelog.ReadStale, statelog.ReadConsistentPrefix,
 		} {
 			w := &stubWaiter{at: healthy().Position}
-			r := newReader(t, newStubStore(t), healthy, w, index)
+			r := newReader(t, db, healthy, w, index)
 			q := pointQuery(level)
 			q.MinPosition = floor
 			_, err := r.Read(t.Context(), q, func(*sql.Tx) error { return nil })
