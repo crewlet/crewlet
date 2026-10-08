@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 var clock = time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
@@ -222,10 +223,7 @@ func TestARekeyRefusesToLeaveARowBehind(t *testing.T) {
 
 func localStore(t *testing.T, cipher secrets.Cipher) *store.SecretValues {
 	t.Helper()
-	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "s.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.OpenNode: %v", err)
-	}
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "s.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	return db.SecretValues(cipher)
 }
