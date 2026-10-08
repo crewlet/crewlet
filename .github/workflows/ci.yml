@@ -13,6 +13,24 @@ on:
 permissions:
   contents: read
 
+# A PUSH TO A PULL REQUEST CANCELS THAT PULL REQUEST'S RUN FOR THE COMMIT IT
+# REPLACED, and nothing else is ever cancelled. Nobody can merge the replaced
+# commit, so its run only holds runners — fourteen jobs of them now that the
+# test halves are sharded — that the new commit's run is queueing for.
+#
+# The group is UNIQUE PER RUN for every other event, and that is the half that
+# is easy to get wrong. A group keyed on the ref would put every push to main
+# into one group, and GitHub keeps one running and ONE pending run per group,
+# cancelling a pending one when another queues — even with cancel-in-progress
+# off — so main's runs would serialise behind each other and the middle of
+# three quick merges would be cancelled outright. A main run is the record of
+# a merge and the run that saves the caches and the test weights below; none
+# of them may be dropped. Named after the workflow because a concurrency group
+# is shared by every workflow in the repository.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) || format('{0}-run-{1}', github.workflow, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   # The module pins its own toolchain in go.mod; auto lets the setup-go
   # toolchain fetch it rather than failing on a mismatch.
