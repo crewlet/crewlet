@@ -24,7 +24,19 @@ const Redacted = "__redacted__"
 // integrations.newthing.token the config surface starts publishing it and
 // nothing fails. A tag lives on the field, and [TestEveryCredentialFieldIsTagged]
 // fails the build when a field that looks like a credential does not carry one.
+//
+// It has TWO READERS and one predicate, [isSecret]: the redaction below, and
+// the schema generator, which marks every position it covers with
+// [secretKeyword]. Both read the tag the same way — a tagged field covers
+// every string beneath it, a list's members and a map's values included — so
+// what a read masks and what the published schema calls a credential cannot
+// disagree; TestSchemaMarksExactlyWhatRedactionMasks holds the two to one set.
 const secretTag = "secret"
+
+// isSecret reports whether a field declares that it holds a credential.
+func isSecret(field reflect.StructField) bool {
+	return field.Tag.Get(secretTag) == "true"
+}
 
 // Redact returns a copy of the company with every credential masked.
 //
@@ -105,7 +117,7 @@ func copyMasking(src, dst reflect.Value, secret bool) {
 				continue
 			}
 			copyMasking(src.Field(i), dst.Field(i),
-				secret || field.Tag.Get(secretTag) == "true")
+				secret || isSecret(field))
 		}
 	case reflect.Slice:
 		if src.IsNil() {
@@ -280,7 +292,7 @@ func (r *restorer) restore(target, prior reflect.Value, secret bool) {
 			if prior.IsValid() {
 				previous = prior.Field(i)
 			}
-			r.restore(target.Field(i), previous, secret || field.Tag.Get(secretTag) == "true")
+			r.restore(target.Field(i), previous, secret || isSecret(field))
 		}
 	case reflect.Slice, reflect.Array:
 		r.restoreSlice(target, prior, secret)
@@ -431,7 +443,7 @@ func findMasks(v reflect.Value, path Path, secret bool, found *[]Path) {
 				continue
 			}
 			findMasks(v.Field(i), at(path, jsonName(field)),
-				secret || field.Tag.Get(secretTag) == "true", found)
+				secret || isSecret(field), found)
 		}
 	case reflect.Slice, reflect.Array:
 		for i := range v.Len() {

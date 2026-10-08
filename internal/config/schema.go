@@ -88,6 +88,18 @@ const (
 // wrote, because there is none left to model: a fractional number in an
 // integer field is refused by the loader rather than truncated
 // ([refuseFractions]), so `integer` here is exactly what the engine reads.
+//
+// # A credential's position says so
+//
+// Every string position a `secret:"true"` tag covers carries
+// [secretKeyword]: the field itself for one value, `items` for each member
+// of a list, `additionalProperties` for each value of a map — never a map's
+// keys, which are names. The generator reads the tag through [isSecret],
+// the predicate redaction reads it through, and descends exactly as
+// redaction does, so the positions a config read masks and the positions
+// this document calls credentials are one set, and a test holds them to it
+// in both directions. It is an annotation and never a rule: a literal there
+// is still a value the engine runs, so marking it changes no verdict.
 func Schema(tier Tier) ([]byte, error) {
 	var root reflect.Type
 	var title, id string
@@ -119,7 +131,7 @@ func Schema(tier Tier) ([]byte, error) {
 			tier, TierBootstrap, TierCompany)
 	}
 
-	body := g.structSchema(root)
+	body := g.structSchema(root, false)
 	body["type"] = rootType
 	doc := map[string]any{
 		"$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -204,6 +216,37 @@ const referencePattern = `\$\{[A-Za-z_][A-Za-z0-9_]*\}`
 // verdict).
 const wholeReferencePattern = `^\$\{[A-Za-z_][A-Za-z0-9_]*\}$`
 
+// secretKeyword marks a schema position that holds a credential; its value
+// is always `true`, and a position without it holds none.
+//
+// A VENDOR KEYWORD, because the vocabulary has no word for this. JSON Schema
+// 2020-12 collects a keyword it does not know as an annotation and validates
+// nothing by it, so every conforming validator and editor reads the file
+// exactly as before. The nearest standard word, `writeOnly`, says the value
+// is never returned by its owner — false here, since a whole ${VAR} in a
+// credential field is returned verbatim on every read.
+//
+// SPELLED `x-crewlet-secret`. The `x-` prefix is the convention for a
+// vendor's word in a JSON Schema: OpenAPI 3.1 accepts no other spelling for
+// an extension, so the mark survives being quoted in an API description,
+// and `crewlet` keeps it from meaning somebody else's word. Its consumers —
+// an editor, a CI linter, external tooling such as a Kubernetes operator —
+// read the published file and act on the mark there. They cannot carry it
+// further into a CustomResourceDefinition: a CRD's schema accepts only its
+// own fixed `x-kubernetes-*` extensions (and no `$ref`), so a generator that
+// copies fragments of this schema into one has to strip the mark and keep
+// the policy it states in its own code. A boolean rather than a kind of
+// credential, because the one thing a reader acts on is whether a literal
+// belongs here.
+const secretKeyword = "x-crewlet-secret"
+
+// secretDefSuffix names the $defs entry of a struct reached beneath a secret
+// tag, whose strings are all credentials, beside the entry of the same struct
+// reached anywhere else, whose strings are not. A dot cannot occur in the
+// name of a non-generic Go type, which is every type a config document
+// decodes into, so the two never collide with a third.
+const secretDefSuffix = ".secret"
+
 // yaml11BoolPattern is every string the decoder turns into a Go bool: the
 // YAML 1.1 words it keeps for compatibility (`yes`, `on`, `off`…), in the
 // three casings it accepts and no others.
@@ -225,6 +268,12 @@ const yaml11BoolPattern = `^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF
 // these decoders ends in the ordinary one: a key is decoded as a string and
 // a toggle as a bool, so what those admit, these admit. And each reads a
 // null as unset in its own first lines, so a null is admitted by all four.
+//
+// None of them is a credential's position — a switch, provider NAMES and
+// tool hints — so a fragment here carries no [secretKeyword]. A secret tag
+// on a field of one of these types would make redaction mask strings this
+// fragment does not mark, and TestSchemaMarksExactlyWhatRedactionMasks
+// fails on exactly that.
 func (g *schemaGen) overrides() map[reflect.Type]map[string]any {
 	text := map[string]any{"type": textTypes}
 	textList := map[string]any{"type": "array", "items": text}
@@ -267,19 +316,22 @@ func (g *schemaGen) overrides() map[reflect.Type]map[string]any {
 	}
 }
 
-// structSchema builds the object schema for a struct type.
-func (g *schemaGen) structSchema(t reflect.Type) map[string]any {
+// structSchema builds the object schema for a struct type. secret says the
+// struct was reached beneath a secret tag, so every string in it is a
+// credential, as redaction reads it.
+func (g *schemaGen) structSchema(t reflect.Type, secret bool) map[string]any {
 	props := map[string]any{}
 	var required []string
 
 	// An `,inline` struct contributes its fields to the enclosing object,
-	// which is what yaml.v3 does when decoding one ([inlined]).
-	var walk func(reflect.Type)
-	walk = func(typ reflect.Type) {
+	// which is what yaml.v3 does when decoding one ([inlined]) — and a tag
+	// on the inlined field covers them, as it does for redaction.
+	var walk func(reflect.Type, bool)
+	walk = func(typ reflect.Type, secret bool) {
 		for i := range typ.NumField() {
 			f := typ.Field(i)
 			if inlined(f) {
-				walk(indirect(f.Type))
+				walk(indirect(f.Type), secret || isSecret(f))
 				continue
 			}
 			if f.PkgPath != "" {
@@ -290,7 +342,7 @@ func (g *schemaGen) structSchema(t reflect.Type) map[string]any {
 				continue
 			}
 			directives := parseDirectives(f.Tag.Get("js"))
-			schema := g.fieldSchema(f.Type, directives)
+			schema := g.fieldSchema(f.Type, directives, secret || isSecret(f))
 			if desc := f.Tag.Get("desc"); desc != "" {
 				schema["description"] = desc
 			}
@@ -300,7 +352,7 @@ func (g *schemaGen) structSchema(t reflect.Type) map[string]any {
 			}
 		}
 	}
-	walk(t)
+	walk(t, secret)
 
 	out := map[string]any{
 		// A null block is an unset one, which the decoder leaves as it was.
@@ -319,24 +371,32 @@ func (g *schemaGen) structSchema(t reflect.Type) map[string]any {
 	return out
 }
 
-// ref registers a named struct in $defs and returns a reference to it.
-func (g *schemaGen) ref(t reflect.Type) map[string]any {
+// ref registers a named struct in $defs and returns a reference to it —
+// under its own name, or, beneath a secret tag, under the name of its
+// credential-bearing variant ([secretDefSuffix]).
+func (g *schemaGen) ref(t reflect.Type, secret bool) map[string]any {
 	name := t.Name()
 	if name == "" {
-		return g.structSchema(t) // an anonymous struct has nothing to name
+		return g.structSchema(t, secret) // an anonymous struct has nothing to name
+	}
+	if secret {
+		name += secretDefSuffix
 	}
 	if _, done := g.defs[name]; !done {
 		// Reserve the name BEFORE recursing: a unit holds child units, so
 		// a walk that registered on the way out would never come back.
 		g.defs[name] = map[string]any{}
-		g.defs[name] = g.structSchema(t)
+		g.defs[name] = g.structSchema(t, secret)
 	}
 	return map[string]any{"$ref": "#/$defs/" + name}
 }
 
 // fieldSchema maps one Go type onto a schema fragment: what the decoder
-// reads into that type, narrowed by the field's own directives.
-func (g *schemaGen) fieldSchema(t reflect.Type, directives map[string]string) map[string]any {
+// reads into that type, narrowed by the field's own directives. secret says
+// a secret tag covers the position, which marks every string beneath it —
+// a list's members and a map's values, never a map's keys — exactly where
+// redaction masks one.
+func (g *schemaGen) fieldSchema(t reflect.Type, directives map[string]string, secret bool) map[string]any {
 	if frag, ok := g.overridden[t]; ok {
 		return cloneSchema(frag)
 	}
@@ -344,9 +404,13 @@ func (g *schemaGen) fieldSchema(t reflect.Type, directives map[string]string) ma
 	case reflect.Pointer:
 		// An optional block. Absence is expressed by the field not being
 		// required, so the pointer itself adds nothing to the schema.
-		return g.fieldSchema(t.Elem(), directives)
+		return g.fieldSchema(t.Elem(), directives, secret)
 	case reflect.String:
-		return g.textSchema(directives)
+		out := g.textSchema(directives)
+		if secret {
+			out[secretKeyword] = true
+		}
+		return out
 	case reflect.Bool:
 		return g.boolSchema()
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
@@ -364,11 +428,11 @@ func (g *schemaGen) fieldSchema(t reflect.Type, directives map[string]string) ma
 		applyNumberDirectives(out, directives)
 		return g.orWholeReference(out)
 	case reflect.Slice, reflect.Array:
-		return map[string]any{"type": []any{"array", "null"}, "items": g.fieldSchema(t.Elem(), nil)}
+		return map[string]any{"type": []any{"array", "null"}, "items": g.fieldSchema(t.Elem(), nil, secret)}
 	case reflect.Map:
-		return map[string]any{"type": []any{"object", "null"}, "additionalProperties": g.fieldSchema(t.Elem(), nil)}
+		return map[string]any{"type": []any{"object", "null"}, "additionalProperties": g.fieldSchema(t.Elem(), nil, secret)}
 	case reflect.Struct:
-		return g.ref(t)
+		return g.ref(t, secret)
 	case reflect.Interface:
 		// A deliberately open value — the CLI profile overrides, whose
 		// shape belongs to the profile being overridden.

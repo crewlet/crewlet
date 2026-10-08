@@ -589,7 +589,7 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 				continue
 			}
 			name := strings.ToLower(field.Name)
-			tagged := field.Tag.Get(secretTag) == "true"
+			tagged := isSecret(field)
 			if stringMap(field.Type) && credentialMaps[field.Name] && !tagged {
 				if _, ok := exemptMaps[rt.Name()+"."+field.Name]; !ok {
 					t.Errorf("%s.%s is a map[string]string named %s and is not "+
@@ -1106,7 +1106,7 @@ func holdsCredential(t reflect.Type, seen map[reflect.Type]bool) bool {
 			if !field.IsExported() {
 				continue
 			}
-			if field.Tag.Get(secretTag) == "true" || holdsCredential(field.Type, seen) {
+			if isSecret(field) || holdsCredential(field.Type, seen) {
 				return true
 			}
 		}

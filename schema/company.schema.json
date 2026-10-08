@@ -10,7 +10,8 @@
             "number",
             "boolean",
             "null"
-          ]
+          ],
+          "x-crewlet-secret": true
         },
         "deployment": {
           "description": "Which Atlassian this company runs: cloud or data_center. Default cloud.",
@@ -69,7 +70,8 @@
               "number",
               "boolean",
               "null"
-            ]
+            ],
+            "x-crewlet-secret": true
           },
           "description": "Extra environment for the CLI child process.",
           "type": [
@@ -145,7 +147,8 @@
             "number",
             "boolean",
             "null"
-          ]
+          ],
+          "x-crewlet-secret": true
         },
         "mode": {
           "description": "subscription (default), api-key, or inherit-env.",
@@ -164,7 +167,8 @@
             "number",
             "boolean",
             "null"
-          ]
+          ],
+          "x-crewlet-secret": true
         }
       },
       "type": [
@@ -209,7 +213,8 @@
             "number",
             "boolean",
             "null"
-          ]
+          ],
+          "x-crewlet-secret": true
         },
         "url": {
           "description": "Instance URL. Give this or cloud_id, not both.",
@@ -227,7 +232,8 @@
             "number",
             "boolean",
             "null"
-          ]
+          ],
+          "x-crewlet-secret": true
         },
         "webhook_token": {
           "description": "Shared token for Confluence Cloud webhooks, carried in the registered URL; minted by crewlet confluence provision.",
@@ -236,7 +242,8 @@
             "number",
             "boolean",
             "null"
-          ]
+          ],
+          "x-crewlet-secret": true
         }
       },
       "required": [
@@ -384,7 +391,8 @@
             "number",
             "boolean",
             "null"
-          ]
+          ],
+          "x-crewlet-secret": true
         }
       },
       "type": [
@@ -402,7 +410,8 @@
             "number",
             "boolean",
             "null"
-          ]
+          ],
+          "x-crewlet-secret": true
         },
         "app_key": {
           "description": "Datadog application key; says which user acts.",
@@ -411,7 +420,8 @@
             "number",
             "boolean",
             "null"
-          ]
+          ],
+          "x-crewlet-secret": true
         },
         "email_domain": {
           "description": "Domain agent service-account addresses are built under.",
@@ -530,7 +540,8 @@
             "number",
             "boolean",
             "null"
-          ]
+          ],
+          "x-crewlet-secret": true
         },
         "domain": {
           "description": "Self-hosted sandbox cluster domain; empty = vendor cloud.",
@@ -566,7 +577,8 @@
             "number",
             "boolean",
             "null"
-          ]
+          ],
+          "x-crewlet-secret": true
         },
         "base_url": {
           "description": "Endpoint for an openai-compatible embedding service.",
@@ -773,7 +785,8 @@
             "number",
             "boolean",
             "null"
-          ]
+          ],
+          "x-crewlet-secret": true
         },
         "url": {
           "description": "Enterprise Server base URL, e.g. https://github.example.com. Empty = github.com.",
@@ -791,7 +804,8 @@
             "number",
             "boolean",
             "null"
-          ]
+          ],
+          "x-crewlet-secret": true
         }
       },
       "type": [
@@ -867,7 +881,8 @@
             "number",
             "boolean",
             "null"
-          ]
+          ],
+          "x-crewlet-secret": true
         },
         "token": {
           "description": "Read PAT for participants-based routing; empty degrades routing.",
@@ -876,7 +891,8 @@
             "number",
             "boolean",
             "null"
-          ]
+          ],
+          "x-crewlet-secret": true
         },
         "url": {
           "description": "Instance base URL, e.g. https://gitlab.com.",
@@ -936,7 +952,8 @@
             "number",
             "boolean",
             "null"
-          ]
+          ],
+          "x-crewlet-secret": true
         },
         "group": {
           "description": "Top-level group the service accounts join.",
@@ -1173,7 +1190,8 @@
             "number",
             "boolean",
             "null"
-          ]
+          ],
+          "x-crewlet-secret": true
         },
         "url": {
           "description": "Instance URL. Give this or cloud_id, not both.",
@@ -1200,7 +1218,8 @@
             "number",
             "boolean",
             "null"
-          ]
+          ],
+          "x-crewlet-secret": true
         }
       },
       "required": [
@@ -1283,7 +1302,8 @@
               "number",
               "boolean",
               "null"
-            ]
+            ],
+            "x-crewlet-secret": true
           },
           "type": [
             "array",
@@ -1518,7 +1538,8 @@
               "number",
               "boolean",
               "null"
-            ]
+            ],
+            "x-crewlet-secret": true
           },
           "description": "Environment for the subprocess (stdio); ${VAR} supported.",
           "type": [
@@ -1533,7 +1554,8 @@
               "number",
               "boolean",
               "null"
-            ]
+            ],
+            "x-crewlet-secret": true
           },
           "description": "Headers sent with each request (http); ${VAR} supported.",
           "type": [
@@ -1750,7 +1772,8 @@
             "number",
             "boolean",
             "null"
-          ]
+          ],
+          "x-crewlet-secret": true
         },
         "channels": {
           "description": "Channels every bot joins.",
@@ -2309,7 +2332,8 @@
                 "number",
                 "boolean",
                 "null"
-              ]
+              ],
+              "x-crewlet-secret": true
             },
             "type": [
               "object",
@@ -2452,7 +2476,8 @@
             "number",
             "boolean",
             "null"
-          ]
+          ],
+          "x-crewlet-secret": true
         },
         "repos": {
           "description": "Repositories this seat works in, as owner/name. Empty means all the installation covers.",
@@ -2485,7 +2510,8 @@
             "number",
             "boolean",
             "null"
-          ]
+          ],
+          "x-crewlet-secret": true
         }
       },
       "type": [
@@ -2524,7 +2550,8 @@
             "number",
             "boolean",
             "null"
-          ]
+          ],
+          "x-crewlet-secret": true
         },
         "channel": {
           "description": "Channel this seat's bot is added to at provisioning, on top of provisioning.channels.",
@@ -2630,7 +2657,8 @@
               "number",
               "boolean",
               "null"
-            ]
+            ],
+            "x-crewlet-secret": true
           },
           "description": "Env for this seat's sandbox run; declare external tokens here.",
           "type": [
@@ -2718,7 +2746,8 @@
             "number",
             "boolean",
             "null"
-          ]
+          ],
+          "x-crewlet-secret": true
         },
         "signing_secret": {
           "description": "Verifies inbound webhooks for this seat's app.",
@@ -2727,7 +2756,8 @@
             "number",
             "boolean",
             "null"
-          ]
+          ],
+          "x-crewlet-secret": true
         }
       },
       "type": [
@@ -2848,7 +2878,8 @@
               "number",
               "boolean",
               "null"
-            ]
+            ],
+            "x-crewlet-secret": true
           },
           "description": "Env merged into the run; resolved once at launch, not at load.",
           "type": [
@@ -2863,7 +2894,8 @@
               "number",
               "boolean",
               "null"
-            ]
+            ],
+            "x-crewlet-secret": true
           },
           "description": "Files written into the box before commands run.",
           "type": [
@@ -3601,7 +3633,8 @@
                 "number",
                 "boolean",
                 "null"
-              ]
+              ],
+              "x-crewlet-secret": true
             },
             "type": [
               "object",

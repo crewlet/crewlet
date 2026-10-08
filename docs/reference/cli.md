@@ -1340,6 +1340,51 @@ hold the two to the same verdict:
   `username`. See
   [Environment Variable References](../getting-started/configuration.md#environment-variable-references).
 
+### Credential positions: `x-crewlet-secret`
+
+Every position that holds a credential carries the annotation
+`"x-crewlet-secret": true` — on the field itself for a single value
+(`integrations.github.webhook_secret`), on `items` for each member of a
+list (`providers.llm.*.api_keys`), and on `additionalProperties` for each
+value of a map (`mcp_servers[].headers`, a seat's `sandbox.env`, and both
+levels down in `mcp_env`, whose values are per-server maps of variables).
+A map's **keys** are never marked: they are names (`GITHUB_TOKEN`,
+`Authorization`), and only what they map to is a credential. A position
+without the keyword holds none, and the keyword's only value is `true`.
+
+It is read from the same declaration on the config types that drives
+[redaction](../concepts/configuration.md#reads-and-export), and a test
+holds the two to one set in both directions: a position is marked exactly
+when `GET /config`, `crewlet config show` and `crewlet config export -redact`
+mask it.
+
+It is an **annotation, not a rule**. The engine runs a literal credential
+in a marked position (it seals it at rest and masks it on every read), so
+the schema accepts one there, and a validator that does not know the
+keyword ignores it, as JSON Schema 2020-12 requires. What a consumer does
+with it is its own policy; the one the engine is built for:
+
+- **Write a whole `${VAR}` reference there, never the value.** In the company
+  document the reference is stored verbatim and resolved where the provider
+  or transport is built — from the [secret store](../concepts/secret-store.md)
+  first, then the environment — so a tool that renders a company (a
+  Kubernetes operator from its `Secret`s, a CI job from its vault) pushes the
+  value to the secret store with `PUT /secrets/{name}` and writes
+  `${NAME}` into the marked position. In Tier A the reference resolves from
+  the node's environment.
+- **Treat a literal in a marked position as a finding** — an editor warning,
+  a linter failure, or a refusal in tooling that must never hold a credential
+  in a document it versions.
+- **Mask it when displaying a document**, as the engine's own reads do,
+  unless the value is exactly one `${VAR}`, which names a credential and
+  carries none.
+
+The mark lives in the published schema, and a consumer acts on it there.
+It does not survive being copied into a Kubernetes CustomResourceDefinition:
+a CRD's schema accepts only its own `x-kubernetes-*` extensions (and no
+`$ref`), so a generator that builds one from fragments of these files has
+to strip `x-crewlet-secret` and keep the policy in its own code.
+
 Both documents are checked into [`schema/`](../../schema/); a test
 regenerates and compares them, so a config field added without a schema
 entry fails the build rather than leaving a stale file nobody opens.

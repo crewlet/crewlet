@@ -90,7 +90,7 @@ func TestAnEmbeddedStructIsKeyedAsTheDecoderReadsIt(t *testing.T) {
 		t.Fatalf("control: yaml.v3 decoded %q as %+v", doc, got)
 	}
 
-	props, _ := newSchemaGen(false).structSchema(reflect.TypeFor[host]())["properties"].(map[string]any)
+	props, _ := newSchemaGen(false).structSchema(reflect.TypeFor[host](), false)["properties"].(map[string]any)
 	keys := slices.Sorted(maps.Keys(props))
 	if want := []string{"inner", "nested"}; !slices.Equal(keys, want) {
 		t.Fatalf("schema keys %v, want %v: the keys yaml.v3 decoded %q by", keys, want, doc)
