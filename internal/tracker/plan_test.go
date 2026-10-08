@@ -653,6 +653,25 @@ func TestTheSubtaskRollupKeepsItsContainer(t *testing.T) {
 // a scan of the company's whole history on every landing-screen poll, and
 // nothing else would ever say so.
 //
+// # Reaching the index is not the claim
+//
+// The claim is that a poll costs the WINDOW's changes, and a plan can name the
+// index while breaking it, so each read is held to the plan its shape calls
+// for:
+//
+//   - A read that BOUNDS `effective_at` — the flow's window, a feed page past
+//     its cursor — SEEKS the index on it ([seeks]). Measured: wrapping the
+//     column in the flow's walk (`effective_at + 0 >= ?`) turns its SEARCH
+//     into a SCAN of the index — every change that ever moved a count, in
+//     the index's order — and that plan still names the index, which is all
+//     this test used to ask.
+//   - A read with NO bound — the newest page, filtered or not — is an order
+//     and a LIMIT, and the right plan is the index walked in its own order and
+//     stopped after a page. Right only while the index's order IS the read's,
+//     so no read here SORTS ([sorts]): measured, ordering the feed by
+//     `effective_at, id` kept the index, added a sort of every moving change
+//     before the first row, and passed.
+//
 // PLANNED AGAINST A COUNTED HISTORY ([historyPlanStore]). It used to be
 // planned against the task corpus, which writes no history row at all — so
 // the verdict was taken over an empty, uncounted table, the one shape no
@@ -660,38 +679,57 @@ func TestTheSubtaskRollupKeepsItsContainer(t *testing.T) {
 func TestTheFlowAndFeedReadsSearchTheirIndex(t *testing.T) {
 	t.Parallel()
 	db := historyPlanStore(t)
+	const moves = "tracker_history_moves_idx"
 	// THE WIDEST WINDOW THE FLOW WALKS — [MaxFlowPoints] days back — and a
 	// feed page a month down, both inside the history the fixture spans.
 	from := planNow.AddDate(0, 0, -MaxFlowPoints)
-	before := planNow.AddDate(0, -1, 0)
-	statements := map[string]struct {
+	before := &FeedCursor{At: planNow.AddDate(0, -1, 0), Seq: 9}
+	type read struct {
 		sql  string
 		args []any
-	}{
-		"the flow's walk": {flowRowsStatement, []any{store.EncodeTime(from)}},
+		// bounded is whether the read bounds effective_at, the index's
+		// leading column, and so has a range to seek.
+		bounded bool
 	}
-	for name, q := range map[string]FeedQuery{
-		"the newest feed page":   {Limit: 20},
-		"a later feed page":      {Limit: 20, Before: &FeedCursor{At: before, Seq: 9}},
-		"one writer's hand-offs": {Limit: 20, Actor: "h-7", Kinds: []FeedKind{FeedHandoff}},
+	reads := map[string]read{
+		"the flow's walk": {flowRowsStatement, []any{store.EncodeTime(from)}, true},
+	}
+	for name, c := range map[string]struct {
+		q       FeedQuery
+		bounded bool
+	}{
+		"the newest feed page": {FeedQuery{Limit: 20}, false},
+		"a later feed page":    {FeedQuery{Limit: 20, Before: before}, true},
+		"one writer's hand-offs": {FeedQuery{Limit: 20, Actor: "h-7",
+			Kinds: []FeedKind{FeedHandoff}}, false},
+		"a later page of one writer's hand-offs": {FeedQuery{Limit: 20, Actor: "h-7",
+			Kinds: []FeedKind{FeedHandoff}, Before: before}, true},
 	} {
-		kinds := q.Kinds
+		kinds := c.q.Kinds
 		if len(kinds) == 0 {
 			kinds = FeedKinds
 		}
-		sql, args := companyFeedStatement(q, kinds)
-		statements[name] = struct {
-			sql  string
-			args []any
-		}{sql, args}
+		sql, args := companyFeedStatement(c.q, kinds)
+		reads[name] = read{sql, args, c.bounded}
 	}
-	for name, statement := range statements {
+	for name, r := range reads {
 		t.Run(name, func(t *testing.T) {
-			plan := explain(t, db, statement.sql, statement.args)
-			if !slices.Contains(indexesIn(plan), "tracker_history_moves_idx") ||
-				scansHeap(plan, "tracker_history") {
-				t.Errorf("this read does not search tracker_history_moves_idx:\n%s",
-					strings.Join(plan, "\n"))
+			plan := explain(t, db, r.sql, r.args)
+			shown := strings.Join(plan, "\n")
+			switch {
+			case !slices.Contains(indexesIn(plan), moves) ||
+				scansHeap(plan, "tracker_history"):
+				t.Errorf("this read does not reach %s:\n%s", moves, shown)
+			case r.bounded && !seeks(plan, moves):
+				t.Errorf("this read bounds effective_at and does not SEEK %s "+
+					"on it — it walks every change that ever moved a count, "+
+					"which is the company's history rather than the "+
+					"window's:\n%s", moves, shown)
+			}
+			if sorts(plan) {
+				t.Errorf("this read sorts what it selected rather than reading "+
+					"%s in its own order, so every moving change it selects is "+
+					"read before the first row is returned:\n%s", moves, shown)
 			}
 		})
 	}

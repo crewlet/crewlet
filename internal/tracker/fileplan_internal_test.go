@@ -42,11 +42,11 @@ func TestTheFileIndexesServeTheirQueries(t *testing.T) {
 		return objstore.KeyAt(filesFrom.Add(time.Duration(i) * time.Hour)).String()
 	}
 	for _, c := range []struct {
-		name, table, index, statement string
-		args                          []any
+		name, index, statement string
+		args                   []any
 	}{
 		{
-			"a project's listing", "tracker_files", "tracker_files_project_idx",
+			"a project's listing", "tracker_files_project_idx",
 			`SELECT path, content_type, hash, size, version, created_by,
 				created_at, updated_by, updated_at, removed_by, removed_at
 			 FROM tracker_files
@@ -55,7 +55,7 @@ func TestTheFileIndexesServeTheirQueries(t *testing.T) {
 			[]any{"P01", "", 201},
 		},
 		{
-			"a folder's listing", "tracker_files", "tracker_files_project_idx",
+			"a folder's listing", "tracker_files_project_idx",
 			`SELECT path FROM tracker_files
 			 WHERE project_key = ? AND path > ? AND path > ? AND path < ?
 			 ORDER BY path LIMIT ?`,
@@ -65,19 +65,19 @@ func TestTheFileIndexesServeTheirQueries(t *testing.T) {
 			// THE DECLARATION'S OWN STATEMENTS, built exactly as the
 			// collector builds them, over a batch of three — and a page
 			// of the walk the audit and the backup take.
-			"a batch's references", "tracker_files", "tracker_files_object_idx",
+			"a batch's references", "tracker_files_object_idx",
 			declared(t, func() (string, error) { return FileObjectReferences.ObjectsAmong(3) }),
 			[]any{key(1), key(2), key(3)},
 		},
 		{
-			"a page of every reference", "tracker_files", "tracker_files_object_idx",
+			"a page of every reference", "tracker_files_object_idx",
 			declared(t, func() (string, error) { return FileObjectReferences.ReferencesAfter(500) }),
 			[]any{key(4)},
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			plan := explain(t, db, c.statement, c.args)
-			if !seeks(plan, c.table, c.index) {
+			if !seeks(plan, c.index) {
 				t.Fatalf("this query does not SEEK %s:\n%s", c.index, strings.Join(plan, "\n"))
 			}
 		})
@@ -132,18 +132,41 @@ func fileRow(i int) []any {
 	}
 }
 
-// seeks reports a plan that SEARCHES table through index — a seek on the
-// index's leading columns.
+// seeks reports a plan that SEARCHES through index — a seek on the index's
+// leading columns.
 //
 // REACHING THE INDEX IS NOT ENOUGH, which is what this used to check: every
 // query here is covered by its index, so an index whose columns lead with the
 // wrong one is still "used" — as a SCAN of every entry, which is every file
 // row in the company read in index order rather than heap order, and no
 // cheaper. `SEARCH` is the planner saying it will seek.
-func seeks(plan []string, table, index string) bool {
+//
+// KEYED ON THE INDEX, NOT ON THE TABLE, because the table is not what the
+// line names once the statement aliases it: this engine writes a seek under
+// the ALIAS (`SEARCH h USING INDEX …`) and a scan under the table and the
+// alias (`SCAN tracker_history AS h …`), so a match on `SEARCH <table>` finds
+// no seek in any statement that joins. An index belongs to exactly one table,
+// so its name already says which table is being sought.
+func seeks(plan []string, index string) bool {
 	for _, line := range plan {
-		if strings.HasPrefix(line, "SEARCH "+table+" ") &&
+		if strings.HasPrefix(line, "SEARCH ") &&
 			slices.Contains(indexesIn([]string{line}), index) {
+			return true
+		}
+	}
+	return false
+}
+
+// sorts reports a plan that sorts the rows it read before it returns any.
+//
+// MATCHED ON `FOR ORDER BY`, the part of the line both spellings share — this
+// engine's `USE SORTER FOR ORDER BY` and SQLite's `USE TEMP B-TREE FOR ORDER
+// BY` — because the word for the structure is the engine's and the step is
+// the same: every row the read selected, buffered and sorted before the first
+// is returned, which a LIMIT can no longer stop early.
+func sorts(plan []string) bool {
+	for _, line := range plan {
+		if strings.Contains(line, "FOR ORDER BY") {
 			return true
 		}
 	}
