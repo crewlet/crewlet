@@ -121,7 +121,15 @@ func (r *results) print(t *testing.T) {
 	t.Log(b.String())
 }
 
+// TestBrokerBehavior runs BESIDE the package's other cases, on a broker of its
+// own. What it asserts has the room for that — every write that keeps a key
+// alive comes a [behaviorRenew] after the last, three quarters of a TTL short
+// of the reap — and what it only prints does not: a round trip measured while
+// the runner is busy is a busy runner's number. The numbers the design is
+// tuned to are the ones the command in this file's doc prints, which runs it
+// alone.
 func TestBrokerBehavior(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	nc := embeddedNATS(t)
 	js, err := jetstream.New(nc)

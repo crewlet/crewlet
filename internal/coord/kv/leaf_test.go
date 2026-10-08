@@ -24,6 +24,7 @@ import (
 // holds what is to run every case a member's store runs against one. The
 // queue's own half is internal/queue/jetstream's TestConformanceThroughALeaf.
 func TestContractThroughALeaf(t *testing.T) {
+	t.Parallel()
 	client := leafClient(t)
 	coordtest.Run(t, func(t *testing.T) coord.Backend {
 		return openStoreVia(t, client, coordtest.LongTTL)
@@ -34,6 +35,7 @@ func TestContractThroughALeaf(t *testing.T) {
 // secrets, whose every write is a compare-and-set a leaf's request has to
 // reach a member's stream leader to win or lose.
 func TestFleetContractThroughALeaf(t *testing.T) {
+	t.Parallel()
 	client := leafClient(t)
 	coordtest.RunFleet(t, func(t *testing.T) coord.Fleet {
 		return openFleetVia(t, client, fmt.Sprintf("f%d", bucketSeq.Add(1)))

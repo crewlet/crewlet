@@ -168,6 +168,7 @@ func TestAnEmptyBucketWalksCleanly(t *testing.T) {
 // with it. watchWalk owns the watcher and stops it on every exit, so the walk
 // has no early-return path that leaks.
 func TestAnAbandonedWalkLeavesNoConsumer(t *testing.T) {
+	t.Parallel()
 	nc := embeddedNATS(t)
 	prefix := fmt.Sprintf("f%d", bucketSeq.Add(1))
 	store := openFleetForTest(t, nc, prefix)
@@ -223,6 +224,7 @@ func TestAnAbandonedWalkLeavesNoConsumer(t *testing.T) {
 // trim holds and the maintenance acknowledgements are three very different
 // outages behind that one message.
 func TestAFailedListingNamesTheListingRatherThanTheBucket(t *testing.T) {
+	t.Parallel()
 	nc := embeddedNATS(t)
 	prefix := fmt.Sprintf("p%d", bucketSeq.Add(1))
 	store := openFleetForTest(t, nc, prefix)

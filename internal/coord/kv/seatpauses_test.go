@@ -17,6 +17,7 @@ import (
 // outage as an error that is not a false — the one listing included, which
 // every node's cache is rebuilt from.
 func TestAnUnreachableStoreIsNotUnpaused(t *testing.T) {
+	t.Parallel()
 	nc := embeddedNATS(t)
 	store := openFleet(t, nc)
 	if _, created, err := store.CreateSeatPause(t.Context(), coord.SeatPause{
