@@ -287,3 +287,47 @@ func TestAFetchExpiresAfterItsWaitAndAStopEndsItAtOnce(t *testing.T) {
 		}
 	})
 }
+
+// A FETCH WHOSE WINDOW LAPSED BEFORE IT WAS SENT IS AN EMPTY ONE, and the
+// message it did not ask for is still there for the next.
+//
+// The client refuses a fetch context whose deadline is already past when it
+// applies the option, so a consume loop descheduled between taking its
+// deadline and sending the request for longer than the window was handed an
+// "invalid option" — logged as fetch_failed, followed by a whole poll of
+// sleep, for a scheduler hiccup. A window of nothing has lapsed by the time
+// any request could be sent, which is the same refusal without needing a
+// scheduler to produce it.
+func TestAFetchWhoseWindowLapsedBeforeItWasSentIsAnEmptyOne(t *testing.T) {
+	t.Parallel()
+	q := newQueue(t)
+	topic, group := topics.AgentInbox("lapsed"), topics.AgentInboxGroup("lapsed")
+	if _, err := q.EnsureSubscription(t.Context(), topic, group); err != nil {
+		t.Fatal(err)
+	}
+	if err := q.Publish(t.Context(), topic, ev(1)); err != nil {
+		t.Fatal(err)
+	}
+	cons, err := q.js.Consumer(t.Context(), q.mustStream(t, topic), consumerName(topic, group))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &attachment{cons: cons, fetching: t.Context()}
+	if err := a.fetch(1, 0, func(jetstream.Msg) {
+		t.Error("a fetch that was never sent handed over a message")
+	}); err != nil {
+		t.Fatalf("a fetch whose window lapsed before it was sent answered %v, "+
+			"want an empty fetch — the loop logs and sleeps a poll on an error", err)
+	}
+	var got int
+	if err := a.fetch(1, 5*time.Second, func(msg jetstream.Msg) {
+		got++
+		_ = msg.Ack()
+	}); err != nil {
+		t.Fatalf("the next fetch: %v", err)
+	}
+	if got != 1 {
+		t.Errorf("the next fetch took %d message(s), want the 1 the lapsed one "+
+			"never asked for", got)
+	}
+}

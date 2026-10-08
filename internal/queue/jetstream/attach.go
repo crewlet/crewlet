@@ -298,12 +298,27 @@ func (a *attachment) fetch(n int, wait time.Duration, take func(jetstream.Msg)) 
 	if err := a.fetching.Err(); err != nil {
 		return err
 	}
-	expiry, cancel := context.WithTimeout(context.Background(), wait+expiryHeldBack(wait))
+	deadline := time.Now().Add(wait + expiryHeldBack(wait))
+	expiry, cancel := context.WithDeadline(context.Background(), deadline)
 	batch, err := a.cons.Fetch(n, jetstream.FetchContext(expiry), jetstream.FetchContext(a.fetching))
 	// The options are applied before Fetch returns, and the first one's
 	// context is read for its deadline alone.
 	cancel()
 	if err != nil {
+		// A WINDOW THAT LAPSED BEFORE THE REQUEST WAS SENT IS AN EMPTY
+		// FETCH, not a failure. The client reads that deadline when it
+		// applies the option and refuses one already past, so a goroutine
+		// descheduled between taking it and sending the request for longer
+		// than the window — fifty-five milliseconds on a tail fetch, on a
+		// loaded runner — was told "invalid option", logged fetch_failed
+		// and slept a whole poll. Nothing was sent, so nothing was missed,
+		// and the window it asked for has gone by all the same: the loop
+		// asks again, as after any empty fetch. Judged by the deadline
+		// itself rather than by the context's Err, which its timer sets a
+		// moment after the instant the client compared against.
+		if errors.Is(err, jetstream.ErrInvalidOption) && !time.Now().Before(deadline) {
+			return nil
+		}
 		return err
 	}
 	for msg := range batch.Messages() {
