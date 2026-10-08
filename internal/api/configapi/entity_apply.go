@@ -61,11 +61,12 @@ func (s *Service) ApplyEntity(ctx context.Context, req ApplyEntityRequest) (Appl
 	if err != nil {
 		return Applied{}, err
 	}
+	d.author = req.Author
 	prepared, err := s.prepare(ctx, d)
 	if err != nil {
 		return Applied{}, err
 	}
-	return s.commit(ctx, prepared, req.Summary, req.Author)
+	return s.commit(ctx, prepared, req.Summary)
 }
 
 // entityDraft replaces the entity of one kind under one id — or, with create,

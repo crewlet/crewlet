@@ -539,6 +539,7 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 			s.refuseEntity(w, kind, id, err)
 			return
 		}
+		d.author = authorOf(r)
 		prepared, err := s.prepare(r.Context(), d)
 		if err != nil {
 			s.refuseEntity(w, kind, id, err)
@@ -548,7 +549,7 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 			writeChecked(w, prepared)
 			return
 		}
-		applied, err := s.commit(r.Context(), prepared, summary, authorOf(r))
+		applied, err := s.commit(r.Context(), prepared, summary)
 		if err != nil {
 			s.refuseApply(w, err)
 			return
