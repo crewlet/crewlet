@@ -293,12 +293,18 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 // Equal or higher passes, so a single-replica development node against a
 // three-replica fleet's buckets still starts.
 //
-// ctx IS THE BOOT'S and the term is derived here, for the reason
-// [jsprovision.Settle] gives: the per-create deadline may be spent by the time
-// this runs — a slow lookup is enough — and an observation handed it fails
-// instantly on a bucket that was just found. [jsprovision.ReadBack] rather
-// than a create's budget, because this is an ordinary metadata read against a
-// group that has already answered.
+// THE READ IS [readBucket]'s, the one status read on this boot path, and so
+// it is [jsprovision.Settle]'s: ctx is the boot's, and Settle owns the
+// [jsprovision.ReadBack] window and gives each attempt a
+// [jsprovision.ReadTerm] of its own. Both halves matter here. The per-create
+// deadline may be spent by the time this runs — a slow lookup is enough — and
+// an observation handed it fails instantly on a bucket that was just found.
+// And a status read is a metadata READ, answered when the server processes it
+// or never: asked once with the whole window, as this used to be, a request
+// the group dropped waited all five seconds for a reply nobody was going to
+// send and then failed the boot over a bucket it had just found — the one
+// status read on the path still asked that way after every other had moved to
+// Settle.
 func observeReplicas(ctx context.Context, bucket jetstream.KeyValue,
 	cfg jetstream.KeyValueConfig) error {
 
@@ -307,17 +313,11 @@ func observeReplicas(ctx context.Context, bucket jetstream.KeyValue,
 		// Nothing to be short of, and no round trip spent asking.
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, jsprovision.ReadBack)
-	defer cancel()
-	status, err := bucket.Status(ctx)
+	facts, err := readBucket(ctx, bucket)
 	if err != nil {
-		return fmt.Errorf("read %s status: %w", cfg.Bucket, err)
+		return err
 	}
-	got, ok := status.(*jetstream.KeyValueBucketStatus)
-	if !ok || got.StreamInfo() == nil {
-		return fmt.Errorf("coord/kv: %s reported no backing stream", cfg.Bucket)
-	}
-	if live := got.StreamInfo().Config.Replicas; live < want {
+	if live := facts.replicas; live < want {
 		return fmt.Errorf(
 			"coord/kv: the running bucket %q is replicated %dx and this node is "+
 				"configured for %dx: it holds leases, fencing epochs and this "+

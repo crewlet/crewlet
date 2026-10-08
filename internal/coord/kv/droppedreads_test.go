@@ -2,6 +2,7 @@ package kv
 
 import (
 	"context"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -70,5 +71,60 @@ func TestADroppedBucketLookupIsAskedAgainAfterAReadsTerm(t *testing.T) {
 			"lookup waited a write's %v term for a reply the broker never "+
 			"holds, where a read is asked again after %v", elapsed, write,
 			jsprovision.ReadTerm)
+	}
+}
+
+// droppingStatus is a bucket whose first status read is DROPPED, and whose
+// every later one is answered by the real bucket beneath it.
+type droppingStatus struct {
+	jetstream.KeyValue
+	reads atomic.Int64
+}
+
+func (d *droppingStatus) Status(ctx context.Context) (jetstream.KeyValueStatus, error) {
+	if d.reads.Add(1) == 1 {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return d.KeyValue.Status(ctx)
+}
+
+// A REPLICA-COUNT READ NOBODY ANSWERED IS ASKED AGAIN RATHER THAN FAILING THE
+// BOOT.
+//
+// The check that refuses a bucket replicated below this node's configuration
+// reads the bucket's status — a metadata read like the lookup above, dropped
+// by the same members in the same window. It was asked ONCE, with the whole
+// [jsprovision.ReadBack] window as its deadline, so a dropped request waited
+// out the window for a reply that did not exist and failed the boot over a
+// bucket it had just found. It now reads through the one status read on the
+// path, which re-asks a request nobody answered.
+//
+// THE ANSWER IS THE PROOF. The bucket was made at one replica and the node
+// asks for three, so a read that was answered comes back as the replication
+// refusal naming both counts, and one that was never asked again as a status
+// failure naming neither.
+func TestADroppedReplicaReadIsAskedAgainRatherThanFailingTheBoot(t *testing.T) {
+	t.Parallel()
+	nc := embeddedNATS(t)
+	cfg := jetstream.KeyValueConfig{Bucket: "t_status", TTL: time.Minute, Replicas: 1}
+	made, err := jsOf(nc).CreateKeyValue(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("create the bucket whose replicas are read: %v", err)
+	}
+	bucket := &droppingStatus{KeyValue: made}
+	cfg.Replicas = 3
+
+	err = observeReplicas(t.Context(), bucket, cfg)
+	if err == nil {
+		t.Fatal("a bucket replicated 1x was accepted by a node configured for 3x")
+	}
+	if !strings.Contains(err.Error(), "replicated 1x") {
+		t.Fatalf("the replica count was never read — the dropped status read "+
+			"was not asked again, and the boot failed on the silence:\n%v", err)
+	}
+	if got := bucket.reads.Load(); got != 2 {
+		t.Errorf("the status was read %d times, want 2: the dropped request "+
+			"once, and once more to be answered", got)
 	}
 }
