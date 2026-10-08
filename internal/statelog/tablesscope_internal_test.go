@@ -53,7 +53,8 @@ func TestTheDeferredScopeIsTheSameRowsAtEveryChunkWidth(t *testing.T) {
 	// field — RowsPerInsert reads it as one row per statement, which is
 	// exactly the pre-conversion shape and therefore the control; 2 and 4
 	// and 14 straddle the collection at one, two and seven rows a
-	// statement; 2000 is the real probed limit, which takes it in one.
+	// statement; 2000 is wide enough to take all 41 in one, as the probed
+	// limit (32 766) is.
 	want := map[int][]string{}
 	for _, limit := range []int{0, 2, 4, 14, 2000} {
 		got := scopeRowsAt(ctx, t, rec, limit)

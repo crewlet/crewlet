@@ -65,7 +65,7 @@ semantic half found leaves the fused answer entirely if the semantic half
 drops it, where a document both halves found merely slides down.
 
 The driver this engine ships has **no approximate-nearest-neighbour index** —
-`internal/store/caps.go` probes for one on every open and reports what it
+`internal/store/caps.go` measures for one once per process and reports on every open what it
 found — and the alternatives to building one were a full exact scan of every
 vector on every query, or embedding a search library with its own index
 format, file and backup story on every node. Instead the search is **two
