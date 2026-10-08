@@ -385,30 +385,6 @@ func (n *Node) Stop(ctx context.Context) {
 // print a hundred lines.
 const drainLogInterval = 10 * time.Second
 
-// seatReleaseBudget bounds the give-back at the end of a drain.
-//
-// ONE HEARTBEAT INTERVAL — the TTL over [seat.HeartbeatRatio], 15 s at the
-// shipped 45 s TTL — which is the largest budget that is still strictly inside
-// the lease it is racing. Giving a lease back is a handful of coordination
-// writes, so this is a guard against a store that has stopped answering rather
-// than a real allowance; past it the seat lapses on its TTL, which is the same
-// outcome as not trying, only later.
-//
-// A budget rather than the caller's context, because the caller's is very
-// often already expired by the time the wait above ends — Drain's own doc
-// invites a deadline — and a release that inherits it does nothing at all,
-// leaving every seat dark for a full TTL instead of being taken over at once.
-//
-// A FUNCTION OF THIS NODE'S OWN TTL rather than a constant, which is what the
-// reason [seat.HeartbeatRatio] gives actually requires and what this budget
-// claimed while being derived from the shipped number: a deployment that
-// shortened its lease to ten seconds spent fifteen giving the seats back — a
-// budget strictly OUTSIDE the lease it is inside, which is the arrangement
-// the whole ratio exists to prevent.
-func (n *Node) seatReleaseBudget() time.Duration {
-	return n.host.TTL() / seat.HeartbeatRatio
-}
-
 // Drain performs this node's graceful departure and returns once its seats
 // are handed back.
 //
@@ -432,11 +408,21 @@ func (n *Node) seatReleaseBudget() time.Duration {
 // operator's second interrupt — which already has one and can see things this
 // process cannot. Callers that want a bound pass a ctx with a deadline.
 //
-// THAT DEADLINE BOUNDS THE WAIT ALONE. The release below runs on a budget of
-// its own, because handing an expired context to the step whose entire
-// purpose is giving the leases back is how every seat lapses on a full TTL —
-// the exact cost step 3 exists to avoid, paid precisely when a caller took
-// this doc's advice and passed a deadline.
+// THAT DEADLINE BOUNDS THE WAIT ALONE. Giving up presence and handing the
+// seats back run on the STOP'S ONE ALLOWANCE instead ([seat.StopBudget]),
+// because handing an expired context to the steps whose entire purpose is
+// giving the leases back is how every seat lapses on a full TTL — the exact
+// cost step 3 exists to avoid, paid precisely when a caller took this doc's
+// advice and passed a deadline. The allowance is the one the caller's stop
+// carries — [engine.Engine.Drain]'s, shared with everything else that stop
+// gives back — or, for a caller carrying none, one this drain begins from
+// this node's own TTL ([seat.WithinStop]): one heartbeat interval, 15 s at
+// the shipped 45 s, the largest still strictly inside the leases it is
+// racing. Past it a seat lapses on its TTL, the same outcome as not trying,
+// only later. Never a bound of the drain's own beside it: that was a second
+// clock over the same give-backs that also ran through the seats' teardowns
+// between them, so it could only agree with the allowance or cut a give-back
+// short for time no store had spent.
 //
 // Drain does not stop the node: a drained node still renews presence-free and
 // the layers beneath are all reversible, so it could be told to claim again.
@@ -449,7 +435,11 @@ func (n *Node) seatReleaseBudget() time.Duration {
 // clears it. So read the reversibility below as a property of the parts, not
 // as a path somebody takes.
 func (n *Node) Drain(ctx context.Context) {
-	n.host.BeginDrain(ctx)
+	// THE STOP THIS DRAIN IS PART OF, for the give-backs at either end of it
+	// — see the doc above. Free of ctx's cancellation, and carrying the
+	// allowance every one of them is a step of.
+	stop := seat.WithinStop(context.WithoutCancel(ctx), n.host.TTL())
+	n.host.BeginDrain(stop)
 
 	// THE GATE FIRST, before the mailboxes quiesce. Quiescing stops NEW
 	// deliveries, but a turn already delivered and parked behind a slot is
@@ -487,10 +477,7 @@ func (n *Node) Drain(ctx context.Context) {
 		n.log.Info("drain_in_progress", "in_flight", remaining)
 	}
 
-	releaseCtx, cancel := context.WithTimeout(
-		context.WithoutCancel(ctx), n.seatReleaseBudget())
-	defer cancel()
-	n.host.ReleaseAll(releaseCtx, seat.ReasonDrain)
+	n.host.ReleaseAll(stop, seat.ReasonDrain)
 	n.log.Info("drain_complete", "still_held", len(n.host.Held()))
 }
 
