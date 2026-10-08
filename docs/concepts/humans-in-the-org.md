@@ -160,8 +160,10 @@ credential's the fallback.
 
 One change that concerned you under both names is **one** notice, under the
 stronger of the two reasons — the same rule that already gives one handle one
-reason. And an operator reading somebody else's day is handed *that* person's
-two names from the chart, never the credential in their own hand.
+reason. And whoever reads somebody else's day — an operator, or an agent seat
+reading its lead's inbox or state with `work_inbox` or `get_person` — is
+handed *that* person's two names from the chart, never the credential in
+anybody's hand.
 
 **The binding is written on the seat, not on the token.** Tier A is the root of
 trust and may never read Tier B — it holds the keys to the secret store — so a

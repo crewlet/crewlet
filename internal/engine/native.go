@@ -1490,6 +1490,21 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 		Seats: func() []colleague.Seat {
 			return builtin.Corpus(e.Company().Org, e.LookupSecret)
 		},
+		// AND THE PARTY BEHIND A HANDLE, which the roster above leaves
+		// out: a seat reading a PERSON'S inbox or state — a manager agent
+		// looking at the founder's day — is answered about both names that
+		// person's rows may be filed under, the seat and the credential
+		// `crewlet_operator_id` binds to it, exactly as the operator
+		// surface answers the same question. Without it the rows a change
+		// wrote for that person under their credential were invisible to
+		// every seat. Per call, through this node's own chain, for the
+		// roster's reasons.
+		Party: builtin.Parties(func() *org.Organization {
+			if c := e.Company(); c != nil {
+				return c.Org
+			}
+			return nil
+		}, e.LookupSecret),
 		// AND THE UNIT SEAM, read per call for the reason the default
 		// project is: a seat's tools are cloned into its lease, an apply
 		// does not rebuild the clone, and a captured chart would render
