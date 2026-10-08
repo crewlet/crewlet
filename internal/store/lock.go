@@ -317,7 +317,14 @@ func pidOf(stamped string) (int, bool) {
 // shared claim — so an open landing between them shared the claim and had its
 // database deleted under it, and one landing during the delete opened a file
 // that was being removed.
-func discard(dbPath string) error {
+//
+// remove is what deletes the files: [removeDatabaseFiles], on the one path
+// that discards. A PARAMETER because the claim's exclusivity is a property of
+// the moment between the claim and the release, and only a case that can hold
+// a discard inside that moment can see whether an open is refused there —
+// [claimStore]'s own case could not tell this function taking the claim from
+// it looking first and then sharing one.
+func discard(dbPath string, remove func(dbPath string) error) error {
 	if dbPath == "" || strings.HasPrefix(dbPath, ":memory:") {
 		// Nothing on disk: an in-memory database starts empty by
 		// construction.
@@ -328,7 +335,7 @@ func discard(dbPath string) error {
 		return err
 	}
 	defer lock.release()
-	if err := removeDatabaseFiles(dbPath); err != nil {
+	if err := remove(dbPath); err != nil {
 		return fmt.Errorf("store: discard the scratch store: %w", err)
 	}
 	return nil

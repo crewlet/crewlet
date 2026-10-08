@@ -402,7 +402,7 @@ var ErrNoEstate = errors.New("store: this estate is not open")
 // between them.
 func OpenNode(ctx context.Context, path string, opts Options) (*DB, error) {
 	if opts.Scratch {
-		if err := discard(path); err != nil {
+		if err := discard(path, removeDatabaseFiles); err != nil {
 			return nil, err
 		}
 	}
