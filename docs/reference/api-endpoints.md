@@ -4210,8 +4210,9 @@ of the units above it). Both are empty on a run that is not parked. See
 that person — every identity their rows may carry, the seat and the operator
 credential bound to it. It is a filter over the board and not a personal read,
 so it has no scope rule of its own: the unfiltered board already names every
-run's audience. A run parked by a build that resolved no audience matches no
-one.
+run's audience. A run whose question resolved to nobody — the label named no
+one the chart has and the seat has no lead chain, or the node held no company
+when it parked — matches no one.
 
 `execute_state` — the serialised Execute-loop conversation — is
 deliberately not returned: it is the largest column in the row and every
