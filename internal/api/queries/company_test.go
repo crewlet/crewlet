@@ -32,6 +32,7 @@ import (
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/usage"
 )
@@ -1796,11 +1797,16 @@ func surfacesOf(t *testing.T, body map[string]any) map[string]map[string]any {
 // appendOutcome writes one notification outcome for a third-party app.
 func appendOutcome(t *testing.T, log *store.EventLog, id, kind, app string, at time.Time) {
 	t.Helper()
-	if err := log.Append(t.Context(), store.EventRecord{
+	if err := log.Append(t.Context(), outcomeEvent(id, kind, app, at)); err != nil {
+		t.Fatalf("append %s: %v", id, err)
+	}
+}
+
+// outcomeEvent is one notification outcome of kind, for app, at at.
+func outcomeEvent(id, kind, app string, at time.Time) store.EventRecord {
+	return store.EventRecord{
 		ID: id, Type: kind, Source: "engine", Category: "notification", Time: at,
 		Summary: kind, Tags: map[string]string{"notification_source": app},
-	}); err != nil {
-		t.Fatalf("append %s: %v", id, err)
 	}
 }
 
@@ -1853,10 +1859,12 @@ func TestIntegrationOutcomesOutnumberingDeliveriesCoverTheInboundWindow(t *testi
 	appendOutcome(t, log, "under-floor", "notification_skipped", "gitlab", floor.Add(-time.Microsecond))
 	appendOutcome(t, log, "inside", "notification_skipped", "gitlab", at.Add(-3*time.Hour))
 	appendOutcome(t, log, "at-instant", "notification_skipped", "gitlab", at)
+	merges := make([]store.EventRecord, 0, queries.MaxEventPage)
 	for i := range queries.MaxEventPage {
-		appendOutcome(t, log, fmt.Sprintf("merge-%03d", i), "notifications_coalesced", "mattermost",
-			at.Add(-time.Hour).Add(time.Duration(i)*time.Millisecond))
+		merges = append(merges, outcomeEvent(fmt.Sprintf("merge-%03d", i), "notifications_coalesced",
+			"mattermost", at.Add(-time.Hour).Add(time.Duration(i)*time.Millisecond)))
 	}
+	storetest.WriteEvents(t, log, merges)
 
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
@@ -1951,14 +1959,14 @@ func TestACappedDeliveryPageNamesTheWindowItsOutcomesAreCountedOver(t *testing.T
 	fleet.Clock = func() time.Time { return at }
 
 	newest := at.Add(-time.Minute)
+	deliveries := make([]store.EventRecord, 0, queries.MaxEventPage+1)
 	for i := range queries.MaxEventPage + 1 {
-		if err := log.Append(t.Context(), store.EventRecord{
+		deliveries = append(deliveries, store.EventRecord{
 			ID: fmt.Sprintf("w%03d", i), Type: "webhook:push", Source: "gitlab", Category: "webhook", Tags: map[string]string{"route": "gitlab"},
 			Summary: "push", Time: newest.Add(-time.Duration(i) * time.Second),
-		}); err != nil {
-			t.Fatalf("append: %v", err)
-		}
+		})
 	}
+	storetest.WriteEvents(t, log, deliveries)
 	// The oldest delivery the page holds is the 400th newest.
 	edge := newest.Add(-time.Duration(queries.MaxEventPage-1) * time.Second)
 	appendOutcome(t, log, "at-edge", "notification_skipped", "gitlab", edge)
@@ -2003,15 +2011,15 @@ func TestTheNewestDeliveryIsNeverBeforeItsWindow(t *testing.T) {
 	fleet.Clock = func() time.Time { return at }
 	second := at.Add(-time.Minute)
 	var newest time.Time
+	deliveries := make([]store.EventRecord, 0, queries.MaxEventPage+1)
 	for i := range queries.MaxEventPage + 1 {
 		newest = second.Add(time.Duration(i+1) * time.Microsecond)
-		if err := log.Append(t.Context(), store.EventRecord{
+		deliveries = append(deliveries, store.EventRecord{
 			ID: fmt.Sprintf("w%03d", i), Type: "webhook:push", Source: "gitlab", Category: "webhook", Tags: map[string]string{"route": "gitlab"},
 			Summary: "push", Time: newest,
-		}); err != nil {
-			t.Fatalf("append: %v", err)
-		}
+		})
 	}
+	storetest.WriteEvents(t, log, deliveries)
 
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
