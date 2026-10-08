@@ -392,9 +392,10 @@ var ErrOneFile = errors.New("store: the node's own estate and the replicated est
 var ErrNoEstate = errors.New("store: this estate is not open")
 
 // OpenNode opens (creating if absent) a node's OWN database, applies any
-// pending schema to it, and probes the driver's capabilities. A data node's
-// replicated estate is opened on the handle it returns
-// ([DB.OpenReplicated]).
+// pending schema to it, and reads its capabilities: the driver's, which the
+// process measures once and every later open reuses, and the file's page
+// cache, which is read on every open (see [openEstate]). A data node's
+// replicated estate is opened on the handle it returns ([DB.OpenReplicated]).
 //
 // This process takes an EXCLUSIVE lock on the file for the life of the handle
 // — see the package doc for why, and lock.go for how. A second crewlet process
@@ -688,9 +689,10 @@ func (d *DB) Estate() Estate {
 	return d.estate
 }
 
-// Caps reports what the live driver can do. Probed once at open — the answers
-// are a property of the compiled-in driver version, so nothing re-measures
-// them per query.
+// Caps reports what the live driver can do, as this handle's open read it: the
+// driver's answers, measured once per process because they are a property of
+// the compiled-in driver version ([driverMeasurement]), and the file's page
+// cache, read at this open. Nothing re-measures them per query.
 func (d *DB) Caps() Capabilities {
 	if d == nil {
 		return Capabilities{}
