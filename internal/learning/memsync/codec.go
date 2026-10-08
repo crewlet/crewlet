@@ -224,9 +224,10 @@ func upsert(ctx context.Context, tx *sql.Tx, t table, row Row) error {
 		cell, present := row.Values[column]
 		if !present {
 			// A row written by a build that did not have this column
-			// yet. Omitted so the column's own default applies, which
-			// is the additive-evolution rule the event envelope holds
-			// to: an older peer's row is readable, not rejected.
+			// yet — this one's, read by a successor that adds it.
+			// Omitted so the column's own default applies, which is the
+			// additive-evolution rule the event envelope holds to: the
+			// row is readable, not rejected.
 			continue
 		}
 		decoded, err := decodeCell(cell)
@@ -302,8 +303,9 @@ func decode(body []byte) (Row, table, bool, error) {
 //
 // See upsert for why the two tables of answer differ on the NATURAL key. The
 // SET list is built from the columns actually CARRIED rather than from the
-// registry, so a row written by an older build updates what it knew and
-// leaves the rest alone instead of nulling columns it never had.
+// registry, so a row written by a build whose table had fewer columns — this
+// one's, read by a successor that adds one — updates what it knew and leaves
+// the rest alone instead of nulling columns it never had.
 //
 // The TRAILING BARE CLAUSE is the other half, and it is not decoration.
 // SQLite's upsert only handles the constraint its target names — a carried
