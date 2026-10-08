@@ -555,6 +555,9 @@ type Engine struct {
 	// chart per tick instead.
 	usage *usageLoop
 
+	// usageEvery is Options.usageEvery.
+	usageEvery time.Duration
+
 	// history is the fleet's turn-level history reader, and
 	// stopHistoryServe withdraws this node as one of its answerers. See
 	// history.go.
@@ -725,6 +728,15 @@ type Options struct {
 	// root of trust, resolved from the process it was loaded in, by the
 	// loader and [OpenBackends] alike.
 	Environment config.Source
+
+	// usageEvery is the usage publisher's cadence
+	// ([usage.PublisherDeps.Every]), zero for the domain's own
+	// [usage.FlushInterval]. UNEXPORTED, so nothing outside this package's
+	// tests can set it (export_test.go): the cadence is the domain's
+	// decision rather than a deployment's, and the knob exists only so a
+	// test can watch a LIVE loop publish what arrives after boot without
+	// waiting out fifteen seconds of it.
+	usageEvery time.Duration
 }
 
 // New assembles an engine.
@@ -889,6 +901,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		mcp:                 mcp.NewBridge(nil),
 		sandboxOtel:         otel,
 		sandboxPollInterval: opts.SandboxPollInterval,
+		usageEvery:          opts.usageEvery,
 		sandboxSeats:        map[string]bool{},
 		bridge:              bridge,
 		metrics:             opts.Metrics,
