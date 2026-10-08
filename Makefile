@@ -97,7 +97,16 @@ BIN := crewlet
 # flag -timeout`. `make test` and therefore `make check` could not run at all.
 TEST_TIMEOUT := 30m
 
-GOTEST := $(GO) test -race -count=1 -timeout $(TEST_TIMEOUT)
+# -vet=off, because the vet `go test` runs by default is a DUPLICATE here and
+# not a gate of its own. It is twelve analyzers (cmd/go's defaultVetFlags), and
+# `go vet ./...` runs all twelve and more over the same packages and the same
+# _test.go files — this tree has no race-tagged file, so -race does not change
+# what is analysed. That full vet is `check`'s `vet` prerequisite and a step of
+# ci.yml's `build + vet` job, and it is what certifies vet now: drop either and
+# the copy that used to mask the loss is gone too. What the duplicate cost was
+# a cold vet pass per test package in every test job — run SERIALLY in
+# `test-solo`, whose -p 1 serialises vet with everything else.
+GOTEST := $(GO) test -race -vet=off -count=1 -timeout $(TEST_TIMEOUT)
 
 # THE SKIP GATE, on the end of both test pipelines.
 #
@@ -466,9 +475,9 @@ test-solo: require-node ## the packages that need a runner to themselves (ci: en
 test-norace: require-node ## the full suite without -race (faster; not a gate)
 	@status=0; \
 	echo "==> parallel partition"; \
-	$(GO) test -count=1 -timeout $(TEST_TIMEOUT) $(PARALLEL_PKGS) || status=1; \
+	$(GO) test -vet=off -count=1 -timeout $(TEST_TIMEOUT) $(PARALLEL_PKGS) || status=1; \
 	echo "==> solo partition"; \
-	$(GO) test -count=1 -timeout $(TEST_TIMEOUT) -p 1 $(SOLO_PKGS) || status=1; \
+	$(GO) test -vet=off -count=1 -timeout $(TEST_TIMEOUT) -p 1 $(SOLO_PKGS) || status=1; \
 	exit $$status
 
 # Every target reports in one run rather than stopping at the first failure —

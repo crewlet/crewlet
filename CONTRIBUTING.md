@@ -106,6 +106,13 @@ CI and in `make check`. `-count=1` is the other half: without it a cached
 PASS recorded before the change answers for the change. `make test-norace`
 skips the detector when you want the faster loop, and says so.
 
+The test targets run `go test -vet=off`, and that is not a gap: the vet
+`go test` runs by default is twelve analyzers, all of which `go vet ./...`
+runs too, over the same packages and the same `_test.go` files. That full vet
+is `make vet` — a prerequisite of `make check` — and a step of CI's
+`build + vet` job, and it is the only vet there is now. So a bare `make test`
+no longer vets: run `make vet` beside it, or `make check`.
+
 Some packages stand up N engines, each embedding its own NATS server, in ONE
 process. Sharing a two-core runner with everything else — `go test ./...` runs
 package binaries in parallel — their cluster cases cannot form a multi-member

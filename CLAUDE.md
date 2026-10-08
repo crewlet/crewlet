@@ -279,7 +279,7 @@ Before committing, ALWAYS run and fix any issues from **`make check`**, which is
 - `gofmt -l` over `go run ./internal/sourcetree/gofiles` — prints the files that need formatting; the output must be empty. Never `gofmt -l .`: gofmt enters every directory, so it reports — and `gofmt -w .` rewrites — the files of every nested checkout under `.claude/worktrees/`
 - `go mod tidy -diff` — go.mod / go.sum must already be what `go mod tidy` would write. It prints the patch and exits non-zero rather than writing it; `make tidy` applies it. This catches the half the build cannot: an UNDER-tidy module already fails `go build ./...`, but a leftover `require`, a stale `go.sum` line or a wrong `// indirect` marker compiles green and lands as churn in someone else's pull request
 - `scripts/check-signoff.sh` — every commit the branch adds carries a `Signed-off-by` trailer, and `scripts/check-signoff_test.sh` is that gate's own suite. The only gate whose subject is git history rather than the working tree, and therefore the only one a later edit cannot fix: the repair rewrites commits. It runs here and in CI's pull-request `sign-off` job, and nowhere else — the push-side `sign-off (main)` job that judged what each merge added to `main` is gone
-- `go vet ./...`
+- `go vet ./...` — the ONLY vet: both test targets run `go test -vet=off`, because `go test`'s default vet is twelve analyzers this already runs over the same packages and `_test.go` files, so a bare `make test` does not vet
 - `golangci-lint run` — what CI's lint job runs
 - `go build ./...`
 - `make test` — every package that shares a runner, under the detector, as CI runs it
