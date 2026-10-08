@@ -39,8 +39,8 @@ func TestAnAskedQuestionDoesNotRenderAsAnAnswer(t *testing.T) {
 // The account survives the round trip, because the entry is stored as a JSON
 // blob and read back by a LATER turn in another process.
 //
-// Additive by construction: `omitempty` means rows written before the field
-// existed decode with it empty and render exactly as they did.
+// Additive by construction: `omitempty` means an entry with no account is
+// stored without the key, decodes with it empty and renders no blocked line.
 func TestTheBlockedAccountSurvivesTheStoredBlob(t *testing.T) {
 	t.Parallel()
 	in := BuildSession(SessionInput{
@@ -57,8 +57,8 @@ func TestTheBlockedAccountSurvivesTheStoredBlob(t *testing.T) {
 	if out.BlockedOn != in.BlockedOn {
 		t.Errorf("blocked_on did not survive the blob: %q", out.BlockedOn)
 	}
-	// An entry with no account carries no key at all, so an older row and a
-	// new unblocked one are byte-identical.
+	// An entry with no account carries no key at all, so an unblocked turn's
+	// blob spends nothing on a field it does not use.
 	bare, err := json.Marshal(BuildSession(SessionInput{TurnID: "t2", Decision: "done"}))
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
