@@ -271,12 +271,13 @@ func TestRecordsOlderThanTheWindowAreDropped(t *testing.T) {
 
 func TestPruningSurvivesAnOutOfOrderHead(t *testing.T) {
 	t.Parallel()
-	// Popping from the front is only correct while the slice is
-	// timestamp-ordered, and the live path does not keep it so: events on
-	// different topics arrive in no order between them, and a fleet's
-	// clocks disagree. One recent record at the head is enough to make a
+	// Popping from the front is only correct while the window is held in
+	// stamp order, and it is fed out of it: events on different topics
+	// arrive in no order between them, and a fleet's clocks disagree. Held
+	// in arrival order, one recent record at the head was enough to make a
 	// head-popping loop exit immediately and never prune again, and the
-	// window would silently stop being a window.
+	// window would silently stop being a window — so a late record has to
+	// land at its place, where the front is what ages.
 	s := livestate.New()
 	s.Apply(phaseSpend("live", "2026-06-14T12:00:00Z", 10))
 	s.Apply(phaseSpend("late-old", "2026-06-12T00:00:00Z", 20))

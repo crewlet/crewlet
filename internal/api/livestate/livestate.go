@@ -78,8 +78,9 @@ const (
 	// SpendRecordLimit is a memory and latency backstop on retained spend
 	// records. The real bound is the window above; this only binds for an
 	// org emitting more than this in a day. Truncation drops the OLDEST
-	// records, so an org past the cap sees a rollup covering slightly less
-	// than a day rather than a wrong total.
+	// records — any whose stamp does not parse, then the earliest stamped —
+	// so an org past the cap sees a rollup covering slightly less than a day
+	// rather than a wrong total.
 	//
 	// THE WHOLE COMPANY'S, per projection: every node's projection is fed
 	// by a fleet-wide broadcast, so this is one company's day on every node
@@ -97,8 +98,8 @@ const (
 	// its index entry, so the cap is under 20 MB; the fold the stream
 	// makes on its five-second tick measured 12 ms on one core at the cap
 	// (24 000 records over 2 700 turns), outside this projection's lock,
-	// and an arrival past the cap trims by reslicing rather than copying
-	// the window (see pruneSpend).
+	// and an arrival — past the cap or not — costs the records it moves
+	// rather than a pass over the window (see holdSpend).
 	//
 	// THE TRANSPORT IS NOT WHAT BOUNDS IT. A spend record crosses the
 	// history scatter as about 590 bytes of JSON, so the whole cap is about
@@ -289,7 +290,7 @@ type LiveState struct {
 	// records the seed reads, and the ids the live stream had already put
 	// there sat at the FRONT of its eviction order, so a full seed evicted
 	// them before its own loop reached the store's copies of those very
-	// phases and counted each of them twice. See pruneSpend, which is where
+	// phases and counted each of them twice. See dropSpend, which is where
 	// this shrinks.
 	spendIDs map[string]struct{}
 
@@ -314,7 +315,15 @@ type LiveState struct {
 	// aggregation has exactly one implementation instead of the three it
 	// had — the endpoint's, a re-implementation in the browser, and
 	// whatever a reconnect left behind.
+	//
+	// These are the DATED records, oldest stamp first — the order they age
+	// out in, which is what makes an arrival constant work (see holdSpend).
 	spend []spendEntry
+
+	// undatedSpend are the records whose stamp did not parse, in the order
+	// they arrived: they cannot be placed in the window's order or aged out
+	// of it, and the count cap drops them first.
+	undatedSpend []spendEntry
 
 	// budget is the company's meter as the last report stated it, and NIL
 	// UNTIL ONE HAS. Three facts, not two: before a report nobody has read

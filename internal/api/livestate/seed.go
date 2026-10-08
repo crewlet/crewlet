@@ -171,19 +171,22 @@ func (s *LiveState) seedSpend(records []tokens.Record) bool {
 	if len(records) == 0 {
 		return false
 	}
+	// Aged against the CLOCK rather than an event's own stamp: nothing is
+	// arriving here, and the window a seed has to respect is the one ending
+	// now.
+	now := s.clock()
+	moved := s.expireSpend(now)
+	cutoff := now.Add(-LiveSpendWindow)
+
 	entries := make([]spendEntry, 0, len(records))
 	for _, r := range records {
 		entries = append(entries, spendEntry{at: newStamp(r.Timestamp), Record: r})
 	}
-	// OLDEST FIRST, before a single id is recorded. The dedupe set evicts
-	// its oldest insertions past its cap, and the store answers newest
-	// first: inserted in that order, a day busier than the cap would evict
-	// the ids of the NEWEST records, which are exactly the ones the live
-	// stream can still redeliver.
+	// OLDEST FIRST — the order the window is held in — so only the newest
+	// records the window can hold are worth an id: the count cap below would
+	// drop the rest from the front anyway. The seed's own read already stops
+	// at the cap; this holds for any other caller.
 	slices.SortStableFunc(entries, func(a, b spendEntry) int { return a.at.chronological(b.at) })
-	// Only the newest records the window can hold are worth an id: the
-	// count cap below would drop the rest from the front anyway. The seed's
-	// own read already stops at the cap; this holds for any other caller.
 	if len(entries) > SpendRecordLimit {
 		entries = entries[len(entries)-SpendRecordLimit:]
 	}
@@ -198,22 +201,29 @@ func (s *LiveState) seedSpend(records []tokens.Record) bool {
 		if entry.EventID == "" {
 			continue
 		}
+		if entry.at.valid && entry.at.t.Before(cutoff) {
+			continue
+		}
 		if _, held := s.spendIDs[entry.EventID]; held {
 			continue
 		}
 		s.spendIDs[entry.EventID] = struct{}{}
-		s.spend = append(s.spend, entry)
+		if entry.at.valid {
+			s.spend = append(s.spend, entry)
+		} else {
+			s.undatedSpend = append(s.undatedSpend, entry)
+		}
 		counted = true
 	}
 	if !counted {
-		return false
+		return moved
 	}
-	// The same order the count cap assumes, restored across the live
-	// records already held and the history appended behind them.
-	slices.SortStableFunc(s.spend, func(a, b spendEntry) int { return a.at.chronological(b.at) })
-	// Pruned against the CLOCK rather than an event's own stamp: nothing is
-	// arriving here, and the window a seed has to respect is the one ending
-	// now.
-	s.pruneSpend(s.clock().Format(time.RFC3339Nano))
+	// The window's order, restored across the live records already held
+	// and the history appended behind them. Stable, so a stored record
+	// sharing an instant with a live one lands behind it, and one sort of
+	// the merged window rather than an insert per record, since history is
+	// mostly OLDER than everything the stream has delivered.
+	slices.SortStableFunc(s.spend, func(a, b spendEntry) int { return a.at.t.Compare(b.at.t) })
+	s.capSpend()
 	return true
 }
