@@ -1116,8 +1116,9 @@ func TestToolCallsAreTranslated(t *testing.T) {
 	}
 	// The property is that the arguments can go back onto the wire. A
 	// number no float64 holds is decoded exactly and round-trips; keeping a
-	// half-decoded +Inf would put a value in the conversation that fails to
-	// serialise a round later and takes the rest of the turn with it.
+	// half-decoded float64 would put a value in the conversation the model
+	// never sent — +Inf, which fails to serialise a round later and takes
+	// the rest of the turn with it, or (from go1.27.2) a silent 0.
 	for _, i := range []int{1, 2} {
 		if _, err := json.Marshal(out.ToolCalls[i].Arguments); err != nil {
 			t.Fatalf("call %d arguments cannot be re-serialised: %v", i, err)

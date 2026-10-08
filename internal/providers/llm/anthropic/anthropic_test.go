@@ -2146,9 +2146,10 @@ func TestUnparseableToolArgumentsDoNotPoisonTheConversation(t *testing.T) {
 	}
 	// The property is that the arguments can go back onto the wire, not
 	// that they were discarded: decoded with UseNumber, a number no float64
-	// holds survives EXACTLY and round-trips. Without that the map holds
-	// +Inf, the assistant turn replaying this tool call fails to encode,
-	// and every subsequent round of the turn fails with it.
+	// holds survives EXACTLY and round-trips. Without that the map holds a
+	// float64 decode's residue — +Inf, on which the assistant turn replaying
+	// this tool call fails to encode and every later round fails with it, or
+	// (from go1.27.2) a 0 that replays a call the model never made.
 	blob, err := json.Marshal(out.ToolCalls[0].Arguments)
 	if err != nil {
 		t.Fatalf("the surviving arguments cannot be re-serialised: %v", err)

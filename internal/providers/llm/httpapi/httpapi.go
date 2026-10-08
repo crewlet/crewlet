@@ -316,7 +316,8 @@ func DecodeArgs(raw []byte, tool string) (map[string]any, error) {
 	// DIFFERENT entity, and nothing anywhere reports an error: the call
 	// succeeds against the wrong row. Measured on
 	// {"issue_id": 1234567890123456789}. It also accepts 1e1000 as an exact
-	// json.Number, which a float64 decode turns into +Inf and refuses.
+	// json.Number, which a float64 decode refuses — leaving behind a residue
+	// that is not the number sent (+Inf, or 0 from go1.27.2).
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	if err := dec.Decode(&args); err != nil {
