@@ -2130,7 +2130,10 @@ in the same shape.
 
 Every node publishes a `budget_meters` snapshot of the counters as soon as its
 seat host is running and every **15 seconds** (`engine.BudgetReportInterval`)
-after that, and the projection folds each one in as it arrives. Until the first
+after that — and **at once** when a budget window first refuses a charge, so
+the moment a company or a seat stops reaches every open screen with the
+refusal rather than up to a tick later; a repeat refusal in the same window
+waits for the tick — and the projection folds each one in as it arrives. Until the first
 one lands, `budget` is **`null`** — nobody has read the counter — which is a
 different fact from a report whose `org.windows` is `[]`, "nothing is capped". A
 company with no ceiling anywhere publishes exactly that: an empty list and no
@@ -2292,7 +2295,7 @@ Server → client kinds:
 | `seats`    | After a config revision changed the roster. | The COMPLETE seat list, replacing what the client holds. Distinct from `agents` on purpose: that one is a per-role merge, and a merge cannot express the deletion of a role a revision removed. |
 | `sandboxes`| After a detached sandbox run started, asked a question, finished or was lost, and after a reconcile against the durable run record changed the set. | The full in-flight sandbox list. |
 | `tokens`   | On the shared 5-second tick, when a spend record arrived or one aged out of the live window since the last one. The fold runs on the tick rather than on the publish, so a busy company costs one aggregation every five seconds rather than one per phase. | The spend rollup, same shape as `GET /tokens/breakdown`. |
-| `budget`   | After a node's token meter report is applied (every node reports at start and every 15 seconds, a company that caps nothing included). | `{ meter_id, seq, timezone, org: { windows: [...] } }`, the org-wide half: one entry per capped calendar window, each with its span, spend, ceiling, refusal stamp and `state`. Per-seat figures ride on each agent's overlay in the `agents` push. See [the live token meter](#the-live-token-meter). |
+| `budget`   | After a node's token meter report is applied (every node reports at start, every 15 seconds and at once when a budget window first refuses a charge, a company that caps nothing included). | `{ meter_id, seq, timezone, org: { windows: [...] } }`, the org-wide half: one entry per capped calendar window, each with its span, spend, ceiling, refusal stamp and `state`. Per-seat figures ride on each agent's overlay in the `agents` push. See [the live token meter](#the-live-token-meter). |
 | `org` / `tools` / `schedules` | After a config revision is activated. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
 | `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection). | The whole [health envelope](#the-health-envelope), exactly what `GET /health` answers. There is no query for it. |
 | `result`   | Reply to a client `query` that succeeded. | `{ id, what, data }` — `id` echoes the request's. |

@@ -506,9 +506,9 @@ answers that request later. Every fleet booting together meets the second
 case. An object another node has just asked for is *in flight*, assigned by
 the metadata leader but not yet applied by the member chosen to lead it, and
 until that member has applied it every other member drops a lookup of it. So
-a lookup of one of the engine's streams or consumers, or of the object
-store's bucket, waits one second for its answer before it is asked again, for
-up to thirty seconds in all. A create is the opposite case: the broker keeps
+a lookup of one of the engine's streams or consumers, of a coordination
+bucket, or of the object store's bucket, waits one second for its answer before
+it is asked again, for up to thirty seconds in all. A create is the opposite case: the broker keeps
 its reply until the object it made has a leader, which can take an election,
 so a create waits fifteen seconds before it is re-sent. A lookup used to wait
 the create's fifteen too, and a fresh three-member fleet was measured idling
@@ -520,7 +520,8 @@ streams in a row and logged nothing between them, so one that hung emitted
 nothing at all until its budget expired and the log could not say which object
 it was on. Any
 create still running after 10 seconds now writes one `WARN` naming it
-(`coord_kv_bucket_slow`, `jetstream_stream_slow`, `jetstream_consumer_slow`),
+(`coord_kv_bucket_slow`, `natsobj_bucket_slow`, `jetstream_stream_slow`,
+`jetstream_consumer_slow`),
 and so does the lookup that precedes it
 (`jetstream_stream_lookup_slow`, `jetstream_consumer_lookup_slow`) — that
 lookup is the first call to reach the metadata group, so a member stalled
@@ -1177,7 +1178,7 @@ test rather than vanishing quietly.
 | `tool_skill_page_changed` | A **nudge** between nodes that one tool-skill page moved, so every node's registry re-reads it rather than only the node that won the webhook. The delivery that caused it is **already** a row (the `webhook` category above), and what the change did is a log line on each node, so a durable row would record one wiki edit once more per member of the fleet. |
 | `reflection_due` | The **wake** that puts a finished turn in front of [post-turn reflection](../concepts/agent-learning.md) on the seat's holder. The turn is **already** a row (`turn_completed`), and what reflecting on it did is its own (`reflection_completed`) — same reason as `a2a_request`. |
 | `custody_batch` | A **carrier**, not an event: a node without the `data` role keeps no event log, so it publishes its events in batches and one data node writes each event inside as the row it is ([custody](#custody-the-rows-of-a-node-without-data)). A row for the batch would describe the transport and repeat every event in it. |
-| `budget_meters` | A **snapshot** of the shared token counters, published by every node on a 15-second tick, so a durable row per report is about two million a year per node to answer a question the live projection and `GET /budgets` answer for free. What the audit log holds instead is the spend the counter is charged with, recorded per phase in the `agent_phase_completed` rows and per auxiliary purpose in the `auxiliary_spend` rows every spend query folds, so "what did we spend last month" is answerable and "what was the counter reading at 14:03:15" is not a question anybody asks. It still drives the live projection. |
+| `budget_meters` | A **snapshot** of the shared token counters, published by every node on a 15-second tick and at once when a budget window first refuses a charge, so a durable row per report is about two million a year per node to answer a question the live projection and `GET /budgets` answer for free. What the audit log holds instead is the spend the counter is charged with, recorded per phase in the `agent_phase_completed` rows and per auxiliary purpose in the `auxiliary_spend` rows every spend query folds, so "what did we spend last month" is answerable and "what was the counter reading at 14:03:15" is not a question anybody asks. It still drives the live projection. |
 
 **Stored is not always fed.** One class of type is written like every other row
 and kept out of the dashboard's activity feed — a ring of the whole company's
