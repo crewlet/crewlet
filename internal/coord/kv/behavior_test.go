@@ -69,6 +69,20 @@ import (
 // being measured is the broker's own and not a rounding artefact.
 const behaviorTTL = time.Second
 
+// behaviorRenew is how long these measurements wait between the writes that
+// keep a key alive.
+//
+// A QUARTER OF THE TTL, so a renew that wakes up to three quarters of a TTL
+// late still lands before the broker can reap the key. These cases run beside
+// the package's others, under the race detector on a shared runner, where a
+// sleeper can wake hundreds of milliseconds late; at the half TTL the renewal
+// case used to wait, a wake more than 500 ms late could let the broker reap the
+// key — how much later it actually does depends on where its expiry sweep
+// stands — and fail the case on the scheduler rather than on the broker. What
+// is measured, that a write restarts an entry's age, does not depend on how
+// soon before the TTL the write comes, only on its coming before it.
+const behaviorRenew = behaviorTTL / 4
+
 // reapPoll is how often the harness asks whether an expired key is gone. It
 // bounds the resolution of the reap-lag number, so it is well below the lag
 // worth reporting.
@@ -163,15 +177,18 @@ func TestBrokerBehavior(t *testing.T) {
 		// TTL: because every write restarts an entry's age, a heartbeat that
 		// Updates is a renew, with no second mechanism and nothing to keep
 		// in sync.
+		//
+		// Renewed every [behaviorRenew], and twelve of those hold the key
+		// for three TTLs, which is what is measured.
 		key := "renewed"
 		rev, err := leases.Create(ctx, key, []byte("held"))
 		if err != nil {
 			t.Fatalf("Create: %v", err)
 		}
-		const renewals = 6
+		const renewals = 12
 		start := time.Now()
 		for i := range renewals {
-			time.Sleep(behaviorTTL / 2)
+			time.Sleep(behaviorRenew)
 			rev, err = leases.Update(ctx, key, []byte("held"), rev)
 			if err != nil {
 				t.Fatalf("renew %d at %v: %v — Update does not refresh the entry's age, so a "+
@@ -191,10 +208,19 @@ func TestBrokerBehavior(t *testing.T) {
 		// not a peer, and not anybody's wall clock — decides the seat is
 		// free. This is the arbiter Postgres now() used to be.
 		key := "abandoned"
+		// THE CLOCK IS READ BEFORE THE WRITE, never after it. The broker
+		// stamps the message somewhere inside the Create's round trip, so
+		// the instant before the call is the one bound that is never later
+		// than the stamp. Read after the call returns, an acknowledgement
+		// that came back late — a scheduler that woke this goroutine a few
+		// hundred milliseconds after the broker answered — was taken off
+		// the key's measured age, and a broker reaping exactly on time read
+		// as one reaping early: the "sooner than its TTL" failure below,
+		// raised against a broker that had done nothing wrong.
+		written := time.Now()
 		if _, err := leases.Create(ctx, key, []byte("held")); err != nil {
 			t.Fatalf("Create: %v", err)
 		}
-		written := time.Now()
 		deadline := written.Add(behaviorTTL + 10*time.Second)
 		var gone time.Duration
 		for {
@@ -291,8 +317,10 @@ func TestBrokerBehavior(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Create with a per-key TTL: %v", err)
 		}
-		// One renew, well inside the TTL — exactly what a heartbeat does.
-		time.Sleep(behaviorTTL / 3)
+		// One renew, well inside the TTL — exactly what a heartbeat does —
+		// and at [behaviorRenew] for that constant's reason: a renew that
+		// woke too late to land would fail this case on the scheduler.
+		time.Sleep(behaviorRenew)
 		if _, err := marked.Update(ctx, "renewed", []byte("v"), rev); err != nil {
 			t.Fatalf("Update: %v", err)
 		}
