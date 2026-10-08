@@ -1031,6 +1031,9 @@ func (h *Host) releaseNodePresence(ctx context.Context) {
 }
 
 func (h *Host) giveUpLease(ctx context.Context, lease coord.Lease) {
+	// ONE STEP OF A STOP, when a stop is what asks ([StopStep]).
+	ctx, done := StopStep(ctx)
+	defer done()
 	if _, err := h.backend.Release(ctx, lease.Resource, h.owner, lease.Epoch); err != nil {
 		log.WarnContext(ctx, "node_presence_release_unavailable", "node", h.nodeID, "error", err)
 	}

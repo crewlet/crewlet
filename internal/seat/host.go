@@ -872,7 +872,13 @@ func (h *Host) finishRelease(ctx context.Context, handle string, entry *heldSeat
 				"Teardown is retried every heartbeat")
 		return false
 	}
-	released, err := h.backend.Release(ctx, entry.lease.Resource, h.owner, entry.lease.Epoch)
+	// THE GIVE-BACK IS ONE STEP OF A STOP, when a stop is what released the
+	// seat ([StopStep]); the teardown above is not, because a teardown that
+	// cannot be proven keeps the lease, and cutting it short for time would
+	// keep it for a TTL.
+	stepCtx, done := StopStep(ctx)
+	defer done()
+	released, err := h.backend.Release(stepCtx, entry.lease.Resource, h.owner, entry.lease.Epoch)
 	if err != nil {
 		// The seat IS torn down locally; the row simply lapses on its own.
 		// Nothing here is worth failing a drain.
@@ -886,7 +892,7 @@ func (h *Host) finishRelease(ctx context.Context, handle string, entry *heldSeat
 		// this node's row still counted the seat it gave back, every peer
 		// read the fleet as full and the seat sat unclaimed. A no-op while
 		// draining, which drops presence instead.
-		h.renewNodePresence(ctx)
+		h.renewNodePresence(stepCtx)
 	}
 	return released
 }
