@@ -35,19 +35,22 @@ import (
 //
 // The training shows the tick's bound its progress, in a training and in the
 // day's measurement alike, and no exemption outlives the tick — and so does
-// every batch the tick embeds. The bound exists to cut off a tick that
-// WEDGED, and a wedge is the absence of progress — so every long step of a
-// training must show it, or on a node allowed one core, where a training at
-// the largest corpus is over six minutes of reading and six more of
-// arithmetic, the bound cut off every training such a node began, for ever.
-// The reading of every code and the exact pass stream rows: each reports
-// every [search.ProgressStride] of them, and the tick reports every batch it
-// embeds. The k-means, the filing and the choice of a probe count cannot
-// wedge — they are arithmetic over values in memory, reading their context
-// every stride — so every context reading they make happens with the bound's
-// clock stopped. And an exemption must be over by the end of the tick: one
-// left open would stop the clock on the reads and publishes after it, which
-// are what the bound is for.
+// every request the tick sends, every vector it publishes and every batch of
+// a rollout. The bound exists to cut off a tick that WEDGED, and a wedge is
+// the absence of progress — so every long step of a training must show it,
+// or on a node allowed one core, where a training at the largest corpus is
+// over six minutes of reading and six more of arithmetic, the bound cut off
+// every training such a node began, for ever. The reading of every code and
+// the exact pass stream rows: each reports every [search.ProgressStride] of
+// them. A request reports when the provider answers it, each vector it
+// publishes reports again, and a rollout reports each batch record — each
+// counted against the step that made it, so a publish's report never stands
+// in for the request's. The k-means, the filing and the choice of a probe
+// count cannot wedge — they are arithmetic over values in memory, reading
+// their context every stride — so every context reading they make happens
+// with the bound's clock stopped. And an exemption must be over by the end of
+// the tick: one left open would stop the clock on the reads and publishes
+// after it, which are what the bound is for.
 //
 // ONE RUN FOR BOTH HALVES, because the budget and the context the second
 // watches through only count what they see and hand everything on — the duty
@@ -61,7 +64,7 @@ func TestTheDutyTrainsAnIndexAndItsRolloutConverges(t *testing.T) {
 	// SIXTEEN TOPICS, where an index trained at 2 048 sources still meets
 	// the floor at the corpus's 2 200 a day later — so the day's step is a
 	// measurement, which TestAMeasurementThatMissesTheFloorRetrains is not.
-	embedder := topicalEmbedder{width: 384, topics: 16}
+	embedder := topicalEmbedder{width: 384, topics: 16, requests: new(atomic.Int64)}
 	now := time.Unix(1_700_000_000, 0).UTC()
 	budget := &watchedBudget{advanced: map[string]int{}}
 	duty := boundedDuty(t, h, embedder, h.standing(),
@@ -86,16 +89,38 @@ func TestTheDutyTrainsAnIndexAndItsRolloutConverges(t *testing.T) {
 		t.Fatalf("the installed index records the measurement %+v", state.Head.Measurement)
 	}
 
-	// EVERY BATCH THE TICKS EMBEDDED, AND EVERY STRIDE OF BOTH READS, in the
-	// one training that installed the index.
+	// EVERY REQUEST THE TICKS SENT, EVERY VECTOR AND ROLLOUT BATCH THEY
+	// PUBLISHED, AND EVERY STRIDE OF BOTH READS, in the one training that
+	// installed the index.
 	strides := state.Sources / search.ProgressStride
 	if strides < 2 {
 		t.Fatalf("setup: %d sources is under two strides of rows", state.Sources)
 	}
 	trainedReads := budget.reported()
-	if batches := (2_200 + search.EmbedBatch - 1) / search.EmbedBatch; trainedReads[tickFrame] < batches {
-		t.Errorf("the ticks that embedded 2200 sources reported progress %d time(s), "+
-			"want once a batch (%d)", trainedReads[tickFrame], batches)
+	requests := int(embedder.requests.Load())
+	if batches := (state.Sources + search.EmbedBatch - 1) / search.EmbedBatch; requests < batches {
+		t.Fatalf("setup: %d sources were embedded in %d request(s), and a request "+
+			"carries at most %d", state.Sources, requests, search.EmbedBatch)
+	}
+	if got := trainedReads[requestFrame]; got != requests {
+		t.Errorf("the ticks' %d provider request(s) reported progress %d time(s), "+
+			"want once each, when it is answered: a request is bounded by its own "+
+			"timeout and its answer is the tick's progress", requests, got)
+	}
+	if got := trainedReads[publishFrame]; got < state.Sources {
+		t.Errorf("the ticks published %d vectors and reported progress for %d, want "+
+			"every publish: a request's worth of them unreported is the longest a "+
+			"live tick went silent", state.Sources, got)
+	}
+	reassigns := 0
+	for _, env := range published(t, h) {
+		if env.Op == search.OpReassign {
+			reassigns++
+		}
+	}
+	if got := trainedReads[rolloutFrame]; reassigns == 0 || got < reassigns {
+		t.Errorf("the rollouts published %d batch record(s) and reported progress "+
+			"for %d, want every one", reassigns, got)
 	}
 	for _, reader := range streamingReads {
 		if got := trainedReads[reader]; got < strides {
@@ -428,15 +453,14 @@ func taskBodies(n int) map[string]string {
 	return bodies
 }
 
-// publishedVersions is every record version on the log, with the subject
-// kinds written at it.
-func publishedVersions(t *testing.T, h *embedHarness) map[int]map[search.Source]bool {
+// published is the envelope of every record on the log, in log order.
+func published(t *testing.T, h *embedHarness) []search.RecordEnvelope {
 	t.Helper()
 	last, err := h.log.End(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	out := map[int]map[search.Source]bool{}
+	var out []search.RecordEnvelope
 	for seq := uint64(1); seq <= last; seq++ {
 		_, payload, _, ok, err := h.log.At(t.Context(), seq)
 		if err != nil {
@@ -449,6 +473,17 @@ func publishedVersions(t *testing.T, h *embedHarness) map[int]map[search.Source]
 		if err != nil {
 			t.Fatal(err)
 		}
+		out = append(out, env)
+	}
+	return out
+}
+
+// publishedVersions is every record version on the log, with the subject
+// kinds written at it.
+func publishedVersions(t *testing.T, h *embedHarness) map[int]map[search.Source]bool {
+	t.Helper()
+	out := map[int]map[search.Source]bool{}
+	for _, env := range published(t, h) {
 		if out[env.V] == nil {
 			out[env.V] = map[search.Source]bool{}
 		}
@@ -460,23 +495,8 @@ func publishedVersions(t *testing.T, h *embedHarness) map[int]map[search.Source]
 // publishedKinds counts the log's records by subject kind.
 func publishedKinds(t *testing.T, h *embedHarness) map[search.Source]int {
 	t.Helper()
-	last, err := h.log.End(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
 	out := map[search.Source]int{}
-	for seq := uint64(1); seq <= last; seq++ {
-		_, payload, _, ok, err := h.log.At(t.Context(), seq)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !ok {
-			continue
-		}
-		env, err := search.DecodeEnvelope(payload)
-		if err != nil {
-			t.Fatal(err)
-		}
+	for _, env := range published(t, h) {
 		out[env.Subject.Source]++
 	}
 	return out
@@ -498,6 +518,10 @@ type topicalEmbedder struct {
 
 	// drifted is how many topics a drift-marked text is spread over.
 	drifted int
+
+	// requests, where not nil, counts the batch requests sent to the
+	// embedder.
+	requests *atomic.Int64
 }
 
 // driftMarker is the word that files a text in a drifted topic.
@@ -533,6 +557,9 @@ func (e topicalEmbedder) Embed(_ context.Context, text string) ([]float32, error
 }
 
 func (e topicalEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	if e.requests != nil {
+		e.requests.Add(1)
+	}
 	out := make([][]float32, len(texts))
 	for i, text := range texts {
 		v, err := e.Embed(ctx, text)
@@ -548,16 +575,23 @@ func (e topicalEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]fl
 // their progress as they go.
 var streamingReads = []string{"search.readTrainingSet", "search.exactTops"}
 
-// tickFrame is the tick itself, which reports every batch it embeds and every
-// vector it withdraws.
-const tickFrame = "search.(*Embedder).Tick"
+// The tick's other steps that report progress: a provider request, when it
+// is answered; each vector an answered request publishes; and each batch
+// record a rollout publishes.
+const (
+	requestFrame = "search.(*Embedder).request"
+	publishFrame = "search.(*Embedder).publishAll"
+	rolloutFrame = "search.(*Embedder).rollout"
+)
 
-// reporters is every frame a report of progress is counted against, a read
-// before the tick that called it: the nearest on the stack is the reporter.
-var reporters = append(slices.Clone(streamingReads), tickFrame)
+// reporters is every frame a report of progress is counted against: the
+// nearest on the stack is the reporter, so a vector published inside a
+// request is counted as the publish's and never as the request's.
+var reporters = append(slices.Clone(streamingReads), requestFrame, publishFrame,
+	rolloutFrame)
 
 // watchedBudget counts the exemptions open, and the reports of progress by
-// the read that made them.
+// the step that made them.
 type watchedBudget struct {
 	open atomic.Int64
 
