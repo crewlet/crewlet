@@ -95,18 +95,20 @@ func TestAnOrdinaryStopDoesNotSignalTheGroup(t *testing.T) {
 // It asserts only the ceilings it can defend; the values it prints are the
 // evidence a future reader needs to re-tune them.
 //
-// # A FLOOR IN THE INSTRUMENT, not in the code under test
+// # The figures are the code's own
 //
 // The helper server is this test binary re-executed, so under -race it is
-// RACE-INSTRUMENTED, and a race-instrumented Go binary takes ~1.00s from
-// stdin-EOF to process exit. Measured against a control on the same box:
-// `cat` exits in ~320µs, the helper in ~1.005s, with no MCP machinery in the
-// path at all — a plain exec, a plain pipe, a plain Wait.
+// RACE-INSTRUMENTED, and a race-built binary that exits 0 sleeps a second in
+// the race runtime's finaliser before it ends. Measured against a control on
+// the same box, `cat` exited in ~320µs and the helper in ~1.005s, with no MCP
+// machinery in the path at all — so every "clean stop" this printed under
+// -race carried a ~1s floor that belonged to the harness, and the ceiling
+// below absorbed it.
 //
-// So every "clean stop" figure printed under -race carries a ~1s floor that
-// belongs to the harness. Without -race the same stop measures ~1ms. Do not
-// tune shutdownGrace, stderrDrainTimeout or anything else against these
-// numbers without subtracting it.
+// [helperSpec] launches the helper with that sleep switched off, so the floor
+// is gone: a clean stop here measures what a clean stop costs, and the
+// ceiling has its whole margin again. Tune shutdownGrace and
+// stderrDrainTimeout against these numbers as they stand.
 func TestMeasuredStdioTimings(t *testing.T) {
 	t.Parallel()
 
@@ -131,14 +133,11 @@ func TestMeasuredStdioTimings(t *testing.T) {
 		}
 		stopped := time.Since(start)
 
-		t.Logf("spawn+handshake %s, tools/list %s, stop %s (the stop carries the "+
-			"harness's ~1s race-build exit floor; see the doc comment)",
-			connected, listed, stopped)
+		t.Logf("spawn+handshake %s, tools/list %s, stop %s", connected, listed, stopped)
 		// A clean stop must not pay the shutdown ladder at all: the child
 		// exits on stdin close. If this starts costing shutdownGrace, the
 		// child has stopped watching its stdin and every drain in the fleet
-		// just got slower. The instrument's ~1s floor sits comfortably under
-		// that, so the assertion still means what it says.
+		// just got slower.
 		if stopped > shutdownGrace {
 			t.Fatalf("a clean stop took %s, which is the whole first rung of the ladder", stopped)
 		}
