@@ -1,6 +1,7 @@
 package clientsource_test
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -630,6 +631,34 @@ func TestCallsSeesAMultiLineFirstArgument(t *testing.T) {
 	for kind, files := range want {
 		if !slices.Equal(got[kind], files) {
 			t.Errorf("%s is called from %v, want %v", kind, got[kind], files)
+		}
+	}
+}
+
+// CALLS READS A FILE THAT SPELLS ANY ONE OF ITS CALLEES.
+//
+// Calls passes over, unlexed, a file whose text spells none of the callees —
+// so a file spelling exactly one of them has to be read whichever one it is
+// and wherever that one sits in the list. Each screen here spells exactly one
+// (`useQuery` holds no lowercase `query`), and the callees are asked for in
+// both orders.
+func TestCallsReadsAFileSpellingAnyOneCallee(t *testing.T) {
+	t.Parallel()
+	root := tree(t, map[string]string{
+		"routes/Hook.tsx": "const h = useQuery(\"hook_kind\");\n",
+		"routes/Bare.tsx": "const r = await query(\"bare_kind\");\n",
+	})
+	want := map[string][]string{
+		"hook_kind": {"routes/Hook.tsx"},
+		"bare_kind": {"routes/Bare.tsx"},
+	}
+	for _, callees := range [][]string{{"useQuery", "query"}, {"query", "useQuery"}} {
+		got, err := clientsource.Calls(root, callees...)
+		if err != nil {
+			t.Fatalf("Calls(%v): %v", callees, err)
+		}
+		if !maps.EqualFunc(got, want, slices.Equal) {
+			t.Errorf("Calls(%v) = %v, want %v", callees, got, want)
 		}
 	}
 }
