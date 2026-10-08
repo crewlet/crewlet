@@ -351,20 +351,14 @@ dashboard-check: $(UI)/node_modules ## fail if static/dashboard is not what dash
 
 ##@ Gates — `make check` is all of them
 
-# .NOTPARALLEL, and it is about correctness rather than tidiness: under
-# `make -j check` GNU Make is free to start `test` and `test-solo` at the same
-# time, which puts the multi-member cluster packages back on the machine
-# alongside the whole parallel partition — precisely the contention the split
-# exists to remove, on the one invocation a contributor reaches for to go
-# faster. CI keeps them in separate jobs and so is unaffected; this is what
-# gives the local gate the same isolation.
-#
 # THE TWO TEST HALVES RUN IN THE RECIPE, one after the other, and everything
-# else stays a prerequisite. As prerequisites they were independent, so
-# `make -j check` was free to start both race suites at once — putting the
-# multi-member cluster packages back on the machine beside the whole parallel
-# partition, which is exactly the contention the split exists to remove, on
-# the invocation a contributor reaches for to go faster.
+# else stays a prerequisite — which is about correctness rather than tidiness.
+# As prerequisites they were independent, so `make -j check` was free to start
+# both race suites at once — putting the multi-member cluster packages back on
+# the machine beside the whole parallel partition, which is exactly the
+# contention the split exists to remove, on the invocation a contributor
+# reaches for to go faster. CI runs the halves on separate runners and so was
+# never exposed; this gives the local gate the same isolation.
 #
 # A bare `.NOTPARALLEL:` fixes it and costs too much: it is GLOBAL, so every
 # other parallel invocation of this file loses its concurrency to settle a
