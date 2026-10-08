@@ -18,9 +18,11 @@ import (
 	"testing/iotest"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/jsapi"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/natsobj"
 	"github.com/crewlet/crewlet/internal/objstore/objstoretest"
@@ -705,6 +707,199 @@ func TestNoJetStreamIsRefused(t *testing.T) {
 	t.Parallel()
 	if _, err := natsobj.Open(t.Context(), nil, natsobj.Config{}); err == nil {
 		t.Fatal("a backend was opened over no JetStream")
+	}
+}
+
+// bucketJS records every request that writes a stream's configuration, and
+// can hide the bucket from a lookup or leave a lookup unanswered; everything
+// else is the broker underneath.
+type bucketJS struct {
+	jetstream.JetStream
+
+	mu sync.Mutex
+	// writes is every configuration write sent, in order.
+	writes []string
+	// hidden is how many lookups are told "not found" before the truth.
+	hidden int
+	// silent leaves every lookup unanswered, and asks counts them.
+	silent bool
+	asks   int
+}
+
+func (b *bucketJS) wrote(verb string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.writes = append(b.writes, verb)
+}
+
+func (b *bucketJS) sent() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return slices.Clone(b.writes)
+}
+
+func (b *bucketJS) ObjectStore(ctx context.Context, bucket string) (jetstream.ObjectStore, error) {
+	b.mu.Lock()
+	silent, hide := b.silent, b.hidden > 0
+	if silent {
+		b.asks++
+	} else if hide {
+		b.hidden--
+	}
+	b.mu.Unlock()
+	switch {
+	case silent:
+		return nil, nats.ErrTimeout
+	case hide:
+		return nil, jetstream.ErrBucketNotFound
+	}
+	return b.JetStream.ObjectStore(ctx, bucket)
+}
+
+func (b *bucketJS) CreateObjectStore(ctx context.Context, cfg jetstream.ObjectStoreConfig) (jetstream.ObjectStore, error) {
+	b.wrote("create")
+	return b.JetStream.CreateObjectStore(ctx, cfg)
+}
+
+func (b *bucketJS) UpdateObjectStore(ctx context.Context, cfg jetstream.ObjectStoreConfig) (jetstream.ObjectStore, error) {
+	b.wrote("update")
+	return b.JetStream.UpdateObjectStore(ctx, cfg)
+}
+
+func (b *bucketJS) CreateOrUpdateObjectStore(ctx context.Context, cfg jetstream.ObjectStoreConfig) (jetstream.ObjectStore, error) {
+	b.wrote("create-or-update")
+	return b.JetStream.CreateOrUpdateObjectStore(ctx, cfg)
+}
+
+func (b *bucketJS) CreateStream(ctx context.Context, cfg jetstream.StreamConfig) (jetstream.Stream, error) {
+	b.wrote("create stream")
+	return b.JetStream.CreateStream(ctx, cfg)
+}
+
+func (b *bucketJS) UpdateStream(ctx context.Context, cfg jetstream.StreamConfig) (jetstream.Stream, error) {
+	b.wrote("update stream")
+	return b.JetStream.UpdateStream(ctx, cfg)
+}
+
+func (b *bucketJS) CreateOrUpdateStream(ctx context.Context, cfg jetstream.StreamConfig) (jetstream.Stream, error) {
+	b.wrote("create-or-update stream")
+	return b.JetStream.CreateOrUpdateStream(ctx, cfg)
+}
+
+// OPENING A BUCKET THAT EXISTS WRITES NOTHING.
+//
+// Every data node opens the bucket at boot, at the same moment, and the update
+// the library's create-or-update sends first is never answered when it reaches
+// a stream another node has just created: only a group's leader answers an
+// update, and that group has not elected one yet. A fleet booting together
+// spent the whole fifteen-second ask term on it, on every node. A bucket that
+// is there is looked up and bound, and nothing is written to it.
+func TestOpeningABucketThatExistsWritesNothing(t *testing.T) {
+	t.Parallel()
+	c := memberClient(t)
+	open(t, c)
+
+	w := &bucketJS{JetStream: c}
+	if _, err := natsobj.Open(t.Context(), w, natsobj.Config{Replicas: 1}); err != nil {
+		t.Fatalf("open an existing bucket: %v", err)
+	}
+	if sent := w.sent(); len(sent) != 0 {
+		t.Errorf("opening a bucket that exists sent %v; want nothing written — "+
+			"an update of a bucket a peer has just made is never answered", sent)
+	}
+}
+
+// A NODE THAT LOSES THE CREATE RACE BINDS THE BUCKET ITS PEER MADE, and writes
+// nothing over it.
+//
+// Staged as the race leaves it: the lookup is told the bucket is not there —
+// the peer's create had not landed yet — and the peer's bucket carries a
+// configuration of its own, as an older build's would, so this node's create
+// is told the name is taken. The bucket is read back rather than rewritten,
+// and it is the peer's: what was stored through it reads back here.
+func TestANodeThatLosesTheCreateRaceBindsItsPeersBucket(t *testing.T) {
+	t.Parallel()
+	c := memberClient(t)
+	peer, err := c.CreateObjectStore(t.Context(), jetstream.ObjectStoreConfig{
+		Bucket: natsobj.Bucket, Description: "a peer's build",
+		Storage: jetstream.FileStorage, Replicas: 1})
+	if err != nil {
+		t.Fatalf("the peer's create: %v", err)
+	}
+	if _, err := peer.PutBytes(t.Context(), "the peer's", []byte("kept")); err != nil {
+		t.Fatalf("the peer's put: %v", err)
+	}
+
+	w := &bucketJS{JetStream: c, hidden: 1}
+	b, err := natsobj.Open(t.Context(), w, natsobj.Config{Replicas: 1})
+	if err != nil {
+		t.Fatalf("a node that lost the create race failed to open: %v", err)
+	}
+	if sent := w.sent(); !slices.Equal(sent, []string{"create"}) {
+		t.Errorf("the losing node sent %v; want one create and nothing that "+
+			"rewrites the bucket its peer made", sent)
+	}
+	info, err := c.Stream(t.Context(), natsobj.Stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.CachedInfo().Config.Description; got != "a peer's build" {
+		t.Errorf("the bucket's description is %q, want the peer's — the losing "+
+			"node rewrote a bucket it did not make", got)
+	}
+	rc, err := b.Get(deadline(t), "the peer's", 0, -1)
+	if err != nil {
+		t.Fatalf("read the peer's object through the losing node: %v", err)
+	}
+	defer rc.Close()
+	if got, err := io.ReadAll(rc); err != nil || string(got) != "kept" {
+		t.Errorf("the peer's object read back %q (%v), want %q", got, err, "kept")
+	}
+}
+
+// A LOOKUP NOBODY ANSWERS FALLS THROUGH TO THE CREATE, which decides what the
+// lookup could not: absent and it is made. Run at a lookup ceiling of a fifth
+// of a second, because the branch is reached only by spending the whole of it.
+func TestALookupNobodyAnswersFallsThroughToTheCreate(t *testing.T) {
+	t.Parallel()
+	c := memberClient(t)
+	timing := jsprovision.Clustered(false).Timing()
+	timing.Lookup, timing.ReAsk = 200*time.Millisecond, 20*time.Millisecond
+
+	w := &bucketJS{JetStream: c, silent: true}
+	if _, err := natsobj.OpenAt(t.Context(), w, natsobj.Config{Replicas: 1}, timing); err != nil {
+		t.Fatalf("a bucket whose lookup went unanswered failed to open: %v — a "+
+			"broker that did not reply is not one that said the bucket is absent "+
+			"or present", err)
+	}
+	w.mu.Lock()
+	asks := w.asks
+	w.mu.Unlock()
+	if asks < 2 {
+		t.Errorf("the lookup was sent %d time(s) before the create; the ceiling "+
+			"holds several, and one means it was never asked again", asks)
+	}
+	if sent := w.sent(); !slices.Equal(sent, []string{"create"}) {
+		t.Errorf("after an unanswered lookup the node sent %v, want one create", sent)
+	}
+	if _, err := c.Stream(t.Context(), natsobj.Stream); err != nil {
+		t.Errorf("the bucket is not there after the open: %v", err)
+	}
+}
+
+// A BUCKET REPLICATED BELOW THIS NODE IS REFUSED, BY THE SETTING, as the queue
+// refuses such a stream: an upload acknowledged there would prove fewer copies
+// than stream.replicas promises, and nothing here rewrites a bucket that
+// exists to make it match.
+func TestABucketReplicatedBelowThisNodeIsRefused(t *testing.T) {
+	t.Parallel()
+	c := memberClient(t)
+	open(t, c)
+
+	_, err := natsobj.Open(t.Context(), c, natsobj.Config{Replicas: 3})
+	if err == nil || !strings.Contains(err.Error(), "stream.replicas") {
+		t.Fatalf("a node configured for three copies opened a bucket kept at "+
+			"one: %v — want a refusal naming stream.replicas", err)
 	}
 }
 

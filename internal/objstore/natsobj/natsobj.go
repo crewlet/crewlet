@@ -146,59 +146,165 @@ type Backend struct {
 	expiry time.Duration
 }
 
-// Open creates the bucket if it is not there and binds to it.
+// Open binds to the bucket, creating it first if it is not there.
 //
-// THROUGH [jsprovision.Place], as every replicated create at boot is: a
-// forming cluster answers "no suitable peers" until it has its members, and
-// drops a metadata request it cannot place rather than refusing it.
+// # A LOOKUP, THEN A CREATE, AND NEVER AN UPDATE
+//
+// Every data node opens the bucket at boot, and a fleet booting together does
+// it at the same moment. The library's create-or-update sends an UPDATE first,
+// and an update of a stream another node has just created — its group not yet
+// through its first election — is applied by members none of which leads that
+// group yet, while only a leader answers an update
+// (server/jetstream_cluster.go, processClusterUpdateStream): its reply is never
+// sent. Measured on a three-member fleet booting together: all three nodes'
+// requests went unanswered for the whole fifteen-second ask term, on each boot
+// instrumented, and nothing said so. It was also the node that booted last deciding
+// the bucket's configuration for everybody.
+//
+// So Open asks whether the bucket exists — a READ, asked again at the read
+// term while nobody answers ([jsprovision.Timing.Read]) — and creates it only
+// when told it is absent or when nobody answered, through
+// [jsprovision.Timing.Place] as every replicated create at boot is. A create
+// that is not refused outright may have landed, or found the name taken by a
+// peer that won the race, so the bucket is then read back
+// ([jsprovision.Timing.Settle]) rather than written again. Nothing here applies
+// a configuration to a bucket that exists.
+//
+// A BUCKET REPLICATED BELOW THIS NODE IS REFUSED, as the queue refuses such a
+// stream: an upload acknowledged there would prove fewer copies than
+// `stream.replicas` promises. Above it is fine, so a node configured for one
+// copy starts against a fleet's three.
 func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Backend, error) {
+	return open(ctx, js, cfg, jsprovision.Clustered(cfg.Clustered).Timing())
+}
+
+// open is [Open] at timing, which only this package's own tests set to
+// anything but the production one.
+func open(ctx context.Context, js jetstream.JetStream, cfg Config, timing jsprovision.Timing) (*Backend, error) {
 	if js == nil {
 		return nil, errors.New("natsobj: the nats object store needs the broker's " +
 			"JetStream, and this node has none")
 	}
 	replicas := max(cfg.Replicas, 1)
-	ctx, cancel := context.WithTimeout(ctx, jsprovision.Clustered(cfg.Clustered).Budget())
-	defer cancel()
-	var store jetstream.ObjectStore
-	err := jsprovision.Place(ctx, jsprovision.Clustered(cfg.Clustered).AskTerm(),
-		func(ctx context.Context) error {
-			// NO BYTE CEILING (MaxBytes): the engine reserves one for
-			// the state logs alone — the company's own records, whose
-			// growth the trim governs — and every other stream it runs,
-			// the mailboxes and every coordination bucket, declares none
-			// and is bounded by what writes it. This one is bounded by
-			// the collector, which deletes what no row names a day
-			// after it was written. A ceiling here would be a
-			// reservation carved out of the budget the logs' ceilings
-			// draw on, for bytes no log is waiting for.
-			made, err := js.CreateOrUpdateObjectStore(ctx, jetstream.ObjectStoreConfig{
-				Bucket: Bucket,
-				// FIXED ONCE A RELEASE SHIPS IT: every boot of every
-				// build writes its own text through this
-				// create-or-update, so a successor that changed it would
-				// flip the stream's replicated config back and forth for
-				// the whole of a rolling upgrade. It is read by nothing.
-				Description: "Crewlet files, one object per upload",
-				Storage:     jetstream.FileStorage,
-				Replicas:    replicas,
-			})
-			if err == nil {
-				store = made
-			}
-			return err
-		}, nil)
-	if err != nil {
-		return nil, fmt.Errorf("natsobj: create the %s bucket at %d copies: %w", Bucket, replicas, err)
+	// ONE BREADCRUMB OVER THE WHOLE OF IT, because either half can be the
+	// one that stalls and the operator's question is the same: which object
+	// is this node still waiting on.
+	stop := jsprovision.WhenSlow(ctx, func(after time.Duration) {
+		log.WarnContext(ctx, "natsobj_bucket_slow", "bucket", Bucket,
+			"replicas", replicas, "waited", after,
+			"detail", "the object store's bucket is still being looked up, "+
+				"and created if it was absent; on a fleet that is a metadata "+
+				"group that has not settled")
+	})
+	defer stop()
+
+	store, err := lookupBucket(ctx, js, timing)
+	switch {
+	case err == nil:
+	case errors.Is(err, jetstream.ErrBucketNotFound), jsprovision.Unanswered(ctx, err):
+		// TOLD it is absent, or told nothing — and the create decides
+		// both: absent and it is made, present and it is read back.
+		if store, err = createBucket(ctx, js, timing, replicas); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("natsobj: look up the %s bucket: %w", Bucket, err)
 	}
-	stream, err := js.Stream(ctx, Stream)
-	if err != nil {
+
+	// THE STREAM BEHIND IT, which a get and a listing consume — read back
+	// rather than read once, because a bucket a peer has just made can still
+	// be not there on the member that answers.
+	var stream jetstream.Stream
+	if err := timing.Settle(ctx, func(ctx context.Context) error {
+		var e error
+		stream, e = js.Stream(ctx, Stream)
+		return e
+	}); err != nil {
 		return nil, fmt.Errorf("natsobj: bind the %s stream: %w", Stream, err)
+	}
+	if got := stream.CachedInfo().Config.Replicas; got < replicas {
+		return nil, fmt.Errorf("natsobj: the %s bucket is replicated %dx and this "+
+			"node is configured for %dx (stream.replicas): an upload acknowledged "+
+			"there would prove fewer copies than this node promises — raise the "+
+			"bucket's replicas or align stream.replicas on every node",
+			Bucket, got, replicas)
 	}
 	leader, err := jsapi.NewLeader(js, Stream)
 	if err != nil {
 		return nil, fmt.Errorf("natsobj: address the %s stream's leader: %w", Stream, err)
 	}
 	return &Backend{store: store, stream: stream, leader: leader}, nil
+}
+
+// lookupBucket asks whether the bucket exists, under the lookup ceiling and at
+// the read term.
+func lookupBucket(ctx context.Context, js jetstream.JetStream, timing jsprovision.Timing) (jetstream.ObjectStore, error) {
+	lookupCtx, cancel := context.WithTimeout(ctx, timing.Lookup)
+	defer cancel()
+	var store jetstream.ObjectStore
+	err := timing.Read(lookupCtx, func(ctx context.Context) error {
+		var e error
+		store, e = js.ObjectStore(ctx, Bucket)
+		return e
+	}, nil)
+	return store, err
+}
+
+// createBucket creates the bucket at replicas copies, or reads back the one a
+// peer made.
+//
+// ctx IS OPEN'S, and the create's own deadline is derived here, because the
+// read-back runs precisely when that deadline may have expired — see
+// [jsprovision.Settle].
+func createBucket(ctx context.Context, js jetstream.JetStream, timing jsprovision.Timing,
+	replicas int) (jetstream.ObjectStore, error) {
+
+	createCtx, cancel := context.WithTimeout(ctx, timing.Budget)
+	defer cancel()
+	var store jetstream.ObjectStore
+	err := timing.Place(createCtx, func(ctx context.Context) error {
+		var e error
+		// CREATE, NOT CreateOrUpdate — see [Open].
+		//
+		// NO BYTE CEILING (MaxBytes): the engine reserves one for the
+		// state logs alone — the company's own records, whose growth the
+		// trim governs — and every other stream it runs, the mailboxes
+		// and every coordination bucket, declares none and is bounded by
+		// what writes it. This one is bounded by the collector, which
+		// deletes what no row names a day after it was written. A ceiling
+		// here would be a reservation carved out of the budget the logs'
+		// ceilings draw on, for bytes no log is waiting for.
+		store, e = js.CreateObjectStore(ctx, jetstream.ObjectStoreConfig{
+			Bucket: Bucket,
+			// WRITTEN ONCE, by whichever node creates the bucket: nothing
+			// here updates a bucket that exists, so a later build's text
+			// reaches only a fleet's first boot. It is read by nothing.
+			Description: "Crewlet files, one object per upload",
+			Storage:     jetstream.FileStorage,
+			Replicas:    replicas,
+		})
+		return e
+	}, nil)
+	if err == nil {
+		return store, nil
+	}
+	if jsprovision.Refused(err) {
+		// REFUSED OUTRIGHT, so nothing was made and there is nothing to
+		// read back — the refusal is the answer.
+		return nil, fmt.Errorf("natsobj: create the %s bucket at %d copies: %w", Bucket, replicas, err)
+	}
+	// THE NAME WAS TAKEN — a peer won the race — or nobody said whether the
+	// create landed: read back what is there, ON ctx, NOT createCtx.
+	readErr := timing.Settle(ctx, func(ctx context.Context) error {
+		var e error
+		store, e = js.ObjectStore(ctx, Bucket)
+		return e
+	})
+	if readErr != nil {
+		return nil, fmt.Errorf("natsobj: create the %s bucket at %d copies: %w "+
+			"(and reading it back: %v)", Bucket, replicas, err, readErr)
+	}
+	return store, nil
 }
 
 // Put implements [objstore.Backend].
