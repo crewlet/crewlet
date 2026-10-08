@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -385,6 +386,58 @@ func TestAStoppedEngineAppliesNothing(t *testing.T) {
 	if e.SchedulerRunning() {
 		t.Error("a stopped engine armed a scheduler after its teardown stopped it")
 	}
+}
+
+// A SECOND STOP DOES NOTHING. It ran the whole teardown again, against what
+// the first one had closed: the admission withdrawal among it, which warned an
+// operator to exclude a node whose admission the first Stop had already
+// removed. A failed start's cleanup is the ordinary way to reach a second Stop.
+// Lent backends keep the coordination store open across both calls, so a
+// second teardown would reach it and be counted here.
+func TestASecondStopTearsNothingDownAgain(t *testing.T) {
+	t.Parallel()
+	b := bootstrap(t, func(b *config.Bootstrap) {
+		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	})
+	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc))
+	if err != nil {
+		t.Fatalf("OpenBackends: %v", err)
+	}
+	t.Cleanup(func() { back.Close(context.Background()) })
+	withdrawals := &countingWithdrawals{fleet: back.Fleet}
+	back.Fleet = withdrawals
+
+	e, err := engine.New(t.Context(), engine.Options{
+		Bootstrap: b, Company: parsedCompany(t, companyDoc), Backends: back,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+	e.Stop(context.Background())
+	if got := withdrawals.n.Load(); got != 1 {
+		t.Fatalf("the first Stop withdrew the admission %d times, want once", got)
+	}
+	e.Stop(context.Background())
+	if got := withdrawals.n.Load(); got != 1 {
+		t.Errorf("a second Stop withdrew the admission again (%d withdrawals): it "+
+			"ran the teardown a second time", got)
+	}
+}
+
+// countingWithdrawals is a fleet that counts the admission withdrawals made
+// through it.
+type countingWithdrawals struct {
+	fleet
+	n atomic.Int32
+}
+
+// fleet names [coord.Fleet] for embedding: embedded under its own name, the
+// field would collide with the interface's Fleet method.
+type fleet = coord.Fleet
+
+func (c *countingWithdrawals) ForgetAdmission(ctx context.Context, nodeID, incarnation string) error {
+	c.n.Add(1)
+	return c.fleet.ForgetAdmission(ctx, nodeID, incarnation)
 }
 
 // A PARTIAL SET IS REFUSED, NAMING WHAT IS MISSING. It used to be run: the

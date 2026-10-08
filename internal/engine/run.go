@@ -182,6 +182,14 @@ type Engine struct {
 	// would announce a second stop for one shutdown.
 	drainOnce sync.Once
 
+	// stopOnce does the same for the teardown [Engine.Stop] runs after the
+	// drain. A second teardown is not a harmless repeat: every step in it
+	// runs against what the first one closed, so a second Stop warned that
+	// the admission could not be withdrawn — telling an operator to
+	// exclude a node whose admission the first Stop had already removed —
+	// and announced `engine_stopped` twice for one shutdown.
+	stopOnce sync.Once
+
 	// batch is the inbox coalescing window and cap, shared with every seat
 	// attachment on this node.
 	//
@@ -1637,10 +1645,16 @@ func (e *Engine) ShuttingDown() bool { return e.shuttingDown.Load() }
 // The DRAIN comes first and is the difference between a restart that resumes
 // cleanly and one that redelivers half-finished turns: it stops claiming, hands
 // back every seat, and waits for in-flight handlers before anything closes.
+//
+// ONCE, like the drain: a second call — the cleanup a failed start runs after
+// the ordinary one has already been through — waits for the first to finish
+// and then does nothing more. See [Engine.stopOnce].
 func (e *Engine) Stop(ctx context.Context) {
 	e.Drain(ctx)
-	e.teardown(ctx)
-	log.InfoContext(ctx, "engine_stopped")
+	e.stopOnce.Do(func() {
+		e.teardown(ctx)
+		log.InfoContext(ctx, "engine_stopped")
+	})
 }
 
 // teardown stops everything a node started, in the one order that is correct.
