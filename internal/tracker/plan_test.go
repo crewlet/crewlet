@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
@@ -635,20 +636,28 @@ func TestTheSubtaskRollupKeepsItsContainer(t *testing.T) {
 // ([historyMoves]); a planner that cannot prove the implication falls back to
 // a scan of the company's whole history on every landing-screen poll, and
 // nothing else would ever say so.
+//
+// PLANNED AGAINST A COUNTED HISTORY ([historyPlanStore]). It used to be
+// planned against the task corpus, which writes no history row at all — so
+// the verdict was taken over an empty, uncounted table, the one shape no
+// company's history has.
 func TestTheFlowAndFeedReadsSearchTheirIndex(t *testing.T) {
 	t.Parallel()
-	db := planStore(t)
-	at := time.Date(2031, 4, 16, 0, 0, 0, 0, time.UTC)
+	db := historyPlanStore(t)
+	// THE WIDEST WINDOW THE FLOW WALKS — [MaxFlowPoints] days back — and a
+	// feed page a month down, both inside the history the fixture spans.
+	from := planNow.AddDate(0, 0, -MaxFlowPoints)
+	before := planNow.AddDate(0, -1, 0)
 	statements := map[string]struct {
 		sql  string
 		args []any
 	}{
-		"the flow's walk": {flowRowsStatement, []any{store.EncodeTime(at)}},
+		"the flow's walk": {flowRowsStatement, []any{store.EncodeTime(from)}},
 	}
 	for name, q := range map[string]FeedQuery{
 		"the newest feed page":   {Limit: 20},
-		"a later feed page":      {Limit: 20, Before: &FeedCursor{At: at, Seq: 9}},
-		"one writer's hand-offs": {Limit: 20, Actor: "ana", Kinds: []FeedKind{FeedHandoff}},
+		"a later feed page":      {Limit: 20, Before: &FeedCursor{At: before, Seq: 9}},
+		"one writer's hand-offs": {Limit: 20, Actor: "h-7", Kinds: []FeedKind{FeedHandoff}},
 	} {
 		kinds := q.Kinds
 		if len(kinds) == 0 {
@@ -669,5 +678,121 @@ func TestTheFlowAndFeedReadsSearchTheirIndex(t *testing.T) {
 					strings.Join(plan, "\n"))
 			}
 		})
+	}
+}
+
+// The history the company-wide reads are planned against.
+//
+// # Why most of it moves nothing
+//
+// Whether the planner searches a PARTIAL index rather than scanning the table
+// turns on how much of the table the index's predicate keeps, and most commits
+// change nothing either reader draws — a title, a tag, a comment, a due date.
+// So one commit in [historyMoveEvery] moves a count (a create, a status, an
+// assignee, a project, a removal), one in [historyNotATask] is not about a
+// task at all, and the rest are the quiet changes that make up a company's
+// history. Twenty thousand rows over two years and two thousand tasks is ten
+// commits a task, and a [MaxFlowPoints]-day window is an eighth of it.
+const (
+	historyRows      = 20_000
+	historySubjects  = 2_000
+	historyMoveEvery = 10
+	historyNotATask  = 20
+	historyPurged    = 50
+)
+
+// historyPlanStore is a replicated estate holding a counted company history,
+// the tasks it is about and the deletion markers of the one in
+// [historyPurged] that were purged.
+//
+// THE TASKS AND THE MARKERS ARE THERE FOR THE FEED'S JOINS: its page LEFT
+// JOINs both on their primary keys, and a join against an empty table is a
+// plan nobody's company runs.
+func historyPlanStore(t *testing.T) store.ReplicatedHandle {
+	t.Helper()
+	return seededPlanStore(t, seedHistory)
+}
+
+// seedHistory is [historyPlanStore]'s seed.
+func seedHistory(ctx context.Context, tx *sql.Tx, maxVariables int) error {
+	var tasks, purged [][]any
+	for s := range historySubjects {
+		if s%historyPurged != 0 {
+			tasks = append(tasks, taskRow(s))
+			continue
+		}
+		purged = append(purged, []any{
+			fmt.Sprintf("t-%04d", s), fmt.Sprintf("ENG-%d", s),
+			fmt.Sprintf("P%02d", s%projects), "ana", "human",
+			int64(s), historyStream, store.EncodeTime(planNow), []byte(`{}`),
+		})
+	}
+	if err := insertAll(ctx, tx, maxVariables, insertTask, taskValues,
+		len(tasks), func(i int) []any { return tasks[i] }); err != nil {
+		return fmt.Errorf("the tasks: %w", err)
+	}
+	if err := insertAll(ctx, tx, maxVariables, `
+		INSERT INTO tracker_deletions
+			(task_id, task_key, project_key, by, by_kind,
+			 committed_seq, log_stream, at, document)
+		VALUES`, `(?,?,?,?,?,?,?,?,?)`,
+		len(purged), func(i int) []any { return purged[i] }); err != nil {
+		return fmt.Errorf("the deletion markers: %w", err)
+	}
+	if err := insertAll(ctx, tx, maxVariables, `
+		INSERT INTO tracker_history
+			(id, subject_kind, subject_id, project_key, kind, actor,
+			 actor_kind, fields_json, log_seq, log_stream, created_at,
+			 effective_at, document)
+		VALUES`, `(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		historyRows, historyRow); err != nil {
+		return fmt.Errorf("the history: %w", err)
+	}
+	return nil
+}
+
+// historyStream is the log every fixture row names: the domain's own.
+var historyStream = Domain{}.Stream().Name
+
+// historyRow is the i-th commit of the fixture's history, oldest first, two
+// years of it ending at [planNow].
+func historyRow(i int) []any {
+	start := planNow.AddDate(-2, 0, 0)
+	at := start.Add(planNow.Sub(start) / historyRows * time.Duration(i))
+	subject := i % historySubjects
+	project := fmt.Sprintf("P%02d", subject%projects)
+	subjectKind, subjectID := "task", fmt.Sprintf("t-%04d", subject)
+
+	// THE QUIET CHANGES, which neither reader draws.
+	quiet := []struct{ kind, fields string }{
+		{"fields", `{"title":{"from":"a task","to":"the task"}}`},
+		{"comment", `{}`},
+		{"tags", `{"tags":{"from":"a","to":"a,b"}}`},
+		{"fields", `{"due":{"from":"","to":"2031-05-01"}}`},
+	}
+	// AND THE ONES THAT MOVE A COUNT, by each road the predicate admits a
+	// row: a kind it names, and a status, assignee or project delta.
+	moves := []struct{ kind, fields string }{
+		{"created", `{}`},
+		{"status", `{"status":{"from":"todo","to":"in_progress"}}`},
+		{"status", `{"status":{"from":"in_progress","to":"done"}}`},
+		{"assignee", `{"assignee":{"from":"h-1","to":"h-7"}}`},
+		{"moved", `{"project":{"from":"P01","to":"P02"}}`},
+		{"removed", `{}`},
+	}
+	change := quiet[i%len(quiet)]
+	switch {
+	case i%historyNotATask == historyNotATask-1:
+		subjectKind, subjectID = "project", project
+		change = struct{ kind, fields string }{"project_updated",
+			`{"name":{"from":"Platform","to":"Platform team"}}`}
+	case i%historyMoveEvery == 0:
+		change = moves[i/historyMoveEvery%len(moves)]
+	}
+	return []any{
+		fmt.Sprintf("h-%05d", i), subjectKind, subjectID, project, change.kind,
+		fmt.Sprintf("h-%d", i%200), "human", change.fields,
+		statelog.Position{Generation: 1, Seq: uint64(i + 1)}.Packed(), historyStream,
+		store.EncodeTime(at), store.EncodeTime(at), []byte(`{}`),
 	}
 }
