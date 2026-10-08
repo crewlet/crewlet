@@ -872,3 +872,31 @@ func TestAHistoryRowWithNoDeltasStoresAnEmptyObject(t *testing.T) {
 			"cannot tell from a real difference", got[0])
 	}
 }
+
+// A KIND NOBODY DECLARED FAULTS THE APPLY, rather than applying as nothing.
+//
+// A record of a kind this build has no case for, at a version it can read, is a
+// writer that published a kind it never declared: the dispatch has nothing to
+// hand it to, and the applier's unconditional return after the switch is what
+// makes that mistake visible. It is not a gate — a gate drops a record
+// knowingly — and nothing is written.
+func TestAKindNobodyDeclaredFaults(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	rec := taskRecord("t-1", tracker.OpCreate, newTask("t-1"), nil)
+	rec.Subject.Kind = "nonesuch"
+	rec.OpID = "nonesuch-1"
+
+	_, err := h.apply(rec, time.Unix(1_700_000_100, 0).UTC())
+	var gate *gateError
+	if asGate(err, &gate) {
+		t.Fatalf("a kind nobody declared was GATED as %q, which drops it knowingly; "+
+			"a writer's undeclared kind must fault", gate.reason)
+	}
+	if err == nil || !strings.Contains(err.Error(), "nonesuch") {
+		t.Fatalf("applying a kind nobody declared = %v, want a fault naming the kind", err)
+	}
+	if got := h.count("tracker_tasks"); got != 0 {
+		t.Errorf("the estate holds %d task(s) after a record that faulted", got)
+	}
+}

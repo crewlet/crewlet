@@ -143,8 +143,9 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (s
 //
 // The dispatch is on the SUBJECT KIND, and every kind has a case — including
 // the two that write nothing, which are cases rather than a default so that a
-// kind added later without one is a compile-time hole rather than a silently
-// ignored record.
+// kind added later without one faults below rather than being silently
+// ignored. A Go switch is not exhaustive, so that fault — certified by
+// TestAKindNobodyDeclaredFaults — is the only thing that catches it.
 func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 	opts statelog.ApplyOptions) (int, error) {
 
