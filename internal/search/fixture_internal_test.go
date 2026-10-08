@@ -100,8 +100,18 @@ func TestABlockComposesExactlyWhatOneDocumentAtATimeDoes(t *testing.T) {
 // composes the same bits, and quietly moves it to the heap. A composition that
 // allocates nothing is one whose accumulator did not move.
 //
-// NOT PARALLEL, because an allocation count is the whole process's; it takes
-// milliseconds, before any parallel test resumes.
+// NOT PARALLEL, because an allocation count is the whole process's — and for
+// the same reason it is counted over A HUNDRED BLOCKS rather than a handful.
+// [testing.AllocsPerRun] divides every allocation the process made by the
+// runs, rounding down, and this binary is never quiet: nats-server, which it
+// links, samples the process's CPU once a second on a timer of its own
+// (server/pse), measured at about ten allocations a second with nothing else
+// running. Counted over five blocks, a sample landing in those few
+// milliseconds read as an accumulator on the heap, once in two thousand runs.
+// A block takes about half a millisecond under the detector, so a hundred are
+// about fifty milliseconds, before any parallel test resumes: a sample or two
+// in that window divides to zero, and an accumulator on the heap — one
+// allocation every block — divides to one whatever else allocated.
 func TestTheFixtureComposesOnItsOwnStack(t *testing.T) {
 	b := newBasis()
 	gen := generator{weights: b.weights}
@@ -113,7 +123,7 @@ func TestTheFixtureComposesOnItsOwnStack(t *testing.T) {
 		gen.draw(rng, block[j])
 		vectors[j] = make([]float32, FixtureWidth)
 	}
-	if allocs := testing.AllocsPerRun(5, func() {
+	if allocs := testing.AllocsPerRun(100, func() {
 		b.composeInto(block, nil, vectors)
 	}); allocs != 0 {
 		t.Fatalf("composing a block of %d documents allocated %.0f times — its "+
