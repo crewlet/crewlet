@@ -32,9 +32,8 @@ func declared(t *testing.T, build func() (string, error)) string {
 // through every named key — and without the key's index each is every file in
 // the company.
 //
-// PLANNED AGAINST COUNTED FILES ([filePlanStore]). It used to be planned
-// against the task corpus, which writes no file row at all — so every verdict
-// here was taken over an empty, uncounted table.
+// PLANNED OVER A COMPANY'S FILES ([filePlanStore]) and with no statistics, as
+// a deployment plans them ([seededPlanStore]).
 func TestTheFileIndexesServeTheirQueries(t *testing.T) {
 	t.Parallel()
 	db := filePlanStore(t)
@@ -101,7 +100,8 @@ const (
 // filesFrom is when the first fixture file was written.
 var filesFrom = time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)
 
-// filePlanStore is a replicated estate holding a counted set of files.
+// filePlanStore is a replicated estate holding [fileRows] files of a
+// company's shape.
 func filePlanStore(t *testing.T) store.ReplicatedHandle {
 	t.Helper()
 	return seededPlanStore(t, func(ctx context.Context, tx *sql.Tx, maxVariables int) error {

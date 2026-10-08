@@ -96,6 +96,24 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 				used[index] = true
 			}
 			refuseHeapScans(t, plan)
+			// A CUSTOM-FIELD FILTER SEEKS ITS OWN COLUMN'S INDEX,
+			// which the inventory below cannot see: the four lead
+			// with `field_id` alike, so a filter seeking another
+			// column's on `field_id` alone reads every value its
+			// field holds while the index it should have used is
+			// claimed by its neighbour. Measured: the unset filter
+			// sought the choice column's index even over the
+			// statistics this fixture used to take, and passed,
+			// because the number filter claimed the number index.
+			// Spelled from the column rather than through
+			// [fieldValueIndex], which is what is under test.
+			for _, field := range planFields(q) {
+				index := "tracker_field_values_" + FieldValueColumn(field.Type) + "_idx"
+				if !seeks(plan, index) {
+					t.Errorf("this filter on a %s field does not SEEK %s:\n%s",
+						field.Type, index, strings.Join(plan, "\n"))
+				}
+			}
 		})
 	}
 
@@ -269,18 +287,27 @@ func dutyReads() map[string]struct {
 
 var planNow = time.Date(2031, 4, 16, 14, 30, 0, 0, time.UTC)
 
-// The corpus the plans are taken against.
+// The corpus the task plans are taken against: twenty thousand tasks across
+// thirty projects, and the tag, dependency and field values every fifth one
+// carries.
 //
-// # Why it is not four hundred rows
+// # What the rows decide, measured
 //
-// A planner reasons about SELECTIVITY, and at four hundred rows across three
-// projects every predicate looks alike: a project seek and a due-date seek
-// return the same order of magnitude, so whichever index the cost model
-// happens to prefer wins and the answer says nothing about production. At
-// twenty thousand rows across thirty projects a project holds a
-// thirtieth of the corpus and a due date a tenth of that — which is the shape
-// the inventory has to be right for, and the shape that decides whether an
-// index earns the write cost it charges on every commit on every node.
+// NOTHING, today. No node ever runs ANALYZE, so a deployment's planner has no
+// statistics and plans from its built-in guesses whatever its tables hold —
+// and this fixture is planned the same way ([seededPlanStore]). Those guesses
+// do not read the rows on this engine: every plan the inventory takes over
+// this corpus is the plan it takes over an empty estate.
+//
+// THEY ARE KEPT because that is a property of the ENGINE, not of the schema,
+// and the engine is a dependency that moves. The shape is a deployment's — a
+// project a thirtieth of the work, a due date a tenth of that, the skew that
+// decides whether a partial index earns the write cost it charges on every
+// commit on every node — so the day an engine release starts weighing a
+// table's contents without being asked, the dependency update that brings it
+// plans the inventory over what a deployment holds rather than over an empty
+// file, and fails there rather than in production. What that costs is about
+// seven of the ten seconds the inventory takes under the race detector.
 const (
 	corpusRows = 20_000
 	projects   = 30
@@ -296,28 +323,29 @@ func nullableAt(i, n int) any {
 	return int64(i) * 1_000_000
 }
 
-// planStore is a replicated estate with the tracker's schema and enough task
-// rows for the planner to prefer an index.
-//
-// # Why rows at all
-//
-// A planner chooses from what it has counted, and a table nobody counted
-// leaves it its built-in guesses — which are not production's answer. Measured
-// on this engine: against an empty estate, which ANALYZE has nothing to count
-// in, every field-value filter seeks ANOTHER column's partial index on
-// `field_id` alone (the choice column's, for a text filter), the text and
-// number indexes are claimed by nothing, and this test fails on a schema with
-// no faults. The fixture is small and its shape is what matters: enough
-// distinct values that a seek is cheaper than a scan, and ANALYZE run so the
-// planner knows it.
+// planStore is a replicated estate holding the task corpus ([corpusRows]),
+// planned as a deployment plans it ([seededPlanStore]).
 func planStore(t *testing.T) store.ReplicatedHandle {
 	t.Helper()
 	return seededPlanStore(t, seedTaskCorpus)
 }
 
 // seededPlanStore is an empty replicated estate filled by seed in ONE
-// transaction and then ANALYZEd — the frame every plan fixture here shares, so
-// each seeds the table its own statements read and nothing else.
+// transaction — the frame every plan fixture here shares, so each seeds the
+// table its own statements read and nothing else.
+//
+// # Never ANALYZEd, because no deployment is
+//
+// Nothing in the engine runs ANALYZE, so every node's planner works from its
+// built-in guesses, and a plan taken over statistics is a plan no node runs.
+// This fixture used to ANALYZE, and that hid exactly the failure it exists to
+// report: counted, the text, number, date and choice filters each sought its
+// own column's index; uncounted, as on every node, each sought ANOTHER
+// column's on `field_id` alone, and the text and number indexes served no
+// read at all — certified as used for as long as the fixture counted what no
+// deployment counts ([fieldClause] now names its index). Statistics were also
+// the only way the rows ever reached a plan: with none, every plan the three
+// plan tests take is the same over an empty estate.
 //
 // seed is handed the estate's own parameter limit, which is what
 // [store.InsertRows] chunks to — the multi-row insert every applier writes a
@@ -342,13 +370,6 @@ func seededPlanStore(t *testing.T,
 	}); err != nil {
 		t.Fatalf("seed the fixture: %v", err)
 	}
-	// ANALYZE OUTSIDE THE TRANSACTION, on the same pinned connection: it
-	// writes the statistics tables the planner reads, and without it the
-	// planner reasons from its built-in guesses about a table it has never
-	// counted.
-	if _, err := w.Conn().ExecContext(t.Context(), `ANALYZE`); err != nil {
-		t.Fatalf("ANALYZE: %v", err)
-	}
 	return db
 }
 
@@ -360,8 +381,7 @@ func seededPlanStore(t *testing.T,
 // alone, 11 s through this). What is left is the driver binding each of some
 // 570 000 parameters and the engine maintaining the task table's twenty-odd
 // indexes, which no statement shape removes. The rows are the same rows
-// either way; what the planner is handed is the counted table, and ANALYZE
-// counts it after the commit.
+// either way.
 func insertAll(ctx context.Context, tx *sql.Tx, maxVariables int,
 	prefix, row string, n int, args func(i int) []any) error {
 
@@ -672,10 +692,8 @@ func TestTheSubtaskRollupKeepsItsContainer(t *testing.T) {
 //     `effective_at, id` kept the index, added a sort of every moving change
 //     before the first row, and passed.
 //
-// PLANNED AGAINST A COUNTED HISTORY ([historyPlanStore]). It used to be
-// planned against the task corpus, which writes no history row at all — so
-// the verdict was taken over an empty, uncounted table, the one shape no
-// company's history has.
+// PLANNED OVER A COMPANY'S HISTORY ([historyPlanStore]) and with no
+// statistics, as a deployment plans it ([seededPlanStore]).
 func TestTheFlowAndFeedReadsSearchTheirIndex(t *testing.T) {
 	t.Parallel()
 	db := historyPlanStore(t)
@@ -739,14 +757,16 @@ func TestTheFlowAndFeedReadsSearchTheirIndex(t *testing.T) {
 //
 // # Why most of it moves nothing
 //
-// Whether the planner searches a PARTIAL index rather than scanning the table
-// turns on how much of the table the index's predicate keeps, and most commits
-// change nothing either reader draws — a title, a tag, a comment, a due date.
-// So one commit in [historyMoveEvery] moves a count (a create, a status, an
-// assignee, a project, a removal), one in [historyNotATask] is not about a
-// task at all, and the rest are the quiet changes that make up a company's
-// history. Twenty thousand rows over two years and two thousand tasks is ten
-// commits a task, and a [MaxFlowPoints]-day window is an eighth of it.
+// It decides no plan today, for the reason the task corpus decides none
+// ([corpusRows]), and it is a company's shape for the reason that corpus is:
+// an engine that weighs contents judges a PARTIAL index by how much of the
+// table its predicate keeps, and most commits change nothing either reader
+// draws — a title, a tag, a comment, a due date. So one commit in
+// [historyMoveEvery] moves a count (a create, a status, an assignee, a
+// project, a removal), one in [historyNotATask] is not about a task at all,
+// and the rest are the quiet changes that make up a company's history. Twenty
+// thousand rows over two years and two thousand tasks is ten commits a task,
+// and a [MaxFlowPoints]-day window is an eighth of it.
 const (
 	historyRows      = 20_000
 	historySubjects  = 2_000
@@ -755,13 +775,13 @@ const (
 	historyPurged    = 50
 )
 
-// historyPlanStore is a replicated estate holding a counted company history,
-// the tasks it is about and the deletion markers of the one in
-// [historyPurged] that were purged.
+// historyPlanStore is a replicated estate holding a company history, the
+// tasks it is about and the deletion markers of the one in [historyPurged]
+// that were purged.
 //
 // THE TASKS AND THE MARKERS ARE THERE FOR THE FEED'S JOINS: its page LEFT
-// JOINs both on their primary keys, and a join against an empty table is a
-// plan nobody's company runs.
+// JOINs both on their primary keys, so the tables it joins hold what a
+// company's do.
 func historyPlanStore(t *testing.T) store.ReplicatedHandle {
 	t.Helper()
 	return seededPlanStore(t, seedHistory)
