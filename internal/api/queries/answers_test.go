@@ -20,19 +20,17 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tokens"
 )
 
+// openStore is a data node's two estates, opened from the binary's migrated
+// image: what is under test here is the answers, and a fresh file per case
+// replayed every migration of both estates behind one process-wide lock.
 func openStore(t *testing.T) *store.DB {
 	t.Helper()
-	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "q.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.OpenNode: %v", err)
-	}
+	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "q.db"), store.Options{}, 1)
 	t.Cleanup(func() { _ = db.Close() })
-	if _, err := db.OpenReplicated(t.Context(), 1); err != nil {
-		t.Fatalf("open the replicated estate beside the node: %v", err)
-	}
 	return db
 }
 

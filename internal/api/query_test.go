@@ -23,19 +23,14 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tokens"
 )
 
 // seededApp is an app whose sources hold a known company's worth of history.
 func seededApp(t *testing.T, mutate func(*api.Options)) *api.App {
 	t.Helper()
-	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "q.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.OpenNode: %v", err)
-	}
-	if _, err := db.OpenReplicated(t.Context(), 1); err != nil {
-		t.Fatalf("open the replicated estate beside the node: %v", err)
-	}
+	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "q.db"), store.Options{}, 1)
 	t.Cleanup(func() { _ = db.Close() })
 
 	base := time.Now().UTC().Add(-time.Hour)

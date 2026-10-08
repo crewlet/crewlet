@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // pinned is the clock every test runs on. Pinned rather than time.Now because
@@ -150,10 +151,7 @@ type edge struct {
 // the calls were made in the order the test expected.
 func newEdge(t *testing.T, opts ...func(*webhooks.Options)) *edge {
 	t.Helper()
-	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "w.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.OpenNode: %v", err)
-	}
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "w.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 
 	secrets := &webhooks.Secrets{
