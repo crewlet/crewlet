@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 func testKeyring(t *testing.T) (secrets.Keyring, secrets.Cipher) {
@@ -33,10 +34,7 @@ func testKeyring(t *testing.T) (secrets.Keyring, secrets.Cipher) {
 
 func engineWithSecrets(t *testing.T) (*Engine, *store.SecretValues) {
 	t.Helper()
-	db, err := store.OpenNode(t.Context(), t.TempDir()+"/index.db", store.Options{})
-	if err != nil {
-		t.Fatalf("store.OpenNode: %v", err)
-	}
+	db := storetest.OpenNode(t, t.TempDir()+"/index.db", store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	_, cipher := testKeyring(t)
 	e := &Engine{backends: &Backends{Store: db}, cipher: cipher}
@@ -86,10 +84,7 @@ func TestTheEnvironmentStillAnswersWhatTheStoreDoesNot(t *testing.T) {
 // that is the pre-store behaviour and a supported deployment, not a
 // degraded one.
 func TestANodeWithNoKeyringUsesTheEnvironmentAlone(t *testing.T) {
-	db, err := store.OpenNode(t.Context(), t.TempDir()+"/index.db", store.Options{})
-	if err != nil {
-		t.Fatalf("store.OpenNode: %v", err)
-	}
+	db := storetest.OpenNode(t, t.TempDir()+"/index.db", store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	e := &Engine{backends: &Backends{Store: db}}
 	t.Setenv("SOME_TOKEN", "from-the-environment")
@@ -179,10 +174,7 @@ func TestOnlyARealStoreProducesASnapshot(t *testing.T) {
 		t.Error("a node with no store reported that it loaded a snapshot")
 	}
 
-	db, err := store.OpenNode(t.Context(), t.TempDir()+"/index.db", store.Options{})
-	if err != nil {
-		t.Fatalf("store.OpenNode: %v", err)
-	}
+	db := storetest.OpenNode(t, t.TempDir()+"/index.db", store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	if (&Engine{backends: &Backends{Store: db}}).refreshSecrets(t.Context()) {
 		t.Error("a node with no keyring reported that it loaded a snapshot")
@@ -199,10 +191,7 @@ func TestOnlyARealStoreProducesASnapshot(t *testing.T) {
 // has them: its own table and the fleet's shared bucket.
 func engineWithFleetSecrets(t *testing.T) (*Engine, *store.SecretValues, *fleetsecrets.Store) {
 	t.Helper()
-	db, err := store.OpenNode(t.Context(), t.TempDir()+"/index.db", store.Options{})
-	if err != nil {
-		t.Fatalf("store.OpenNode: %v", err)
-	}
+	db := storetest.OpenNode(t, t.TempDir()+"/index.db", store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	_, cipher := testKeyring(t)
 	fleet := coordmem.NewFleet()
