@@ -406,7 +406,7 @@ func OpenNode(ctx context.Context, path string, opts Options) (*DB, error) {
 			return nil, err
 		}
 	}
-	db, err := openEstate(ctx, EstateNode, path, opts, nil)
+	db, err := openEstate(ctx, EstateNode, path, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -431,11 +431,8 @@ func OpenEstate(ctx context.Context, estate Estate, path string, opts Options) (
 		return nil, fmt.Errorf("store: open %s: %q is not an estate; the estates are %v",
 			path, estate, Estates)
 	}
-	// NIL, so this handle probes for itself. It has no sibling to inherit
-	// from, and a zero MaxVariables here is not a missing log line but a
-	// writer silently degraded to one statement per row.
 	opts.pins = 0
-	return openEstate(ctx, estate, path, opts, nil)
+	return openEstate(ctx, estate, path, opts)
 }
 
 // ReplicatedPath is where the replicated estate lives for a node whose own
@@ -463,28 +460,28 @@ func ReplicatedPath(nodePath, configured string) string {
 const replicatedFileName = "crewlet-replicated.db"
 
 // openEstate opens one estate's file: its lock, its pool, its own migration
-// sequence, and the capability probe.
+// sequence, and its capabilities.
 //
-// inherited is the DRIVER-level probe a sibling estate already paid for, or
-// nil to probe this pool. It exists because the probe answers a question about
-// the DRIVER — one compiled-in library, in one process — so the replicated
-// estate would pay a binary search of prepared statements to hear the answer
-// the node's own file already has, and pay it again at every reopen an
-// adoption makes.
+// THE DRIVER'S CAPABILITIES ARE THE PROCESS'S ([driverMeasurement]). The probe
+// answers a question about the DRIVER — one compiled-in library, in one
+// process — so every file opened after the first hears the answer the first
+// already has, the replicated estate and every reopen an adoption makes
+// included, and only the page cache, which is a property of the file and the
+// connection, is read for it. A pool on a WRAPPED driver probes for itself: a
+// wrapper exists to change what the driver does, so its answers are never the
+// process's.
 //
-// IT IS A PARAMETER RATHER THAN AN ASSIGNMENT AFTER THE FACT, and that is the
-// whole of the fix it carries: the caps used to be copied onto the replicated
-// handle AFTER openEstate had already written its `store_opened` line, so
-// every node boot logged `estate=replicated max_variables=0
-// vector_functions=false page_cache_kib=0` for a handle that in fact had all
-// three. Harmless while nothing read them — and then [InsertRows] landed,
-// which sizes every applier's statements from MaxVariables and reads 0 as
-// "one row per statement". An operator reading that line would conclude the
-// replicated estate writes the slow shape, and a standalone
-// [OpenEstate] handle genuinely DID, because nothing ever assigned its caps at
-// all.
-func openEstate(ctx context.Context, estate Estate, path string, opts Options,
-	inherited *Capabilities) (*DB, error) {
+// THEY ARE SET BEFORE THE `store_opened` LINE, every field, on every handle.
+// The replicated estate's used to be copied onto its handle AFTER openEstate
+// had already written that line, so every node boot logged `estate=replicated
+// max_variables=0 vector_functions=false page_cache_kib=0` for a handle that
+// in fact had all three. Harmless while nothing read them — and then
+// [InsertRows] landed, which sizes every applier's statements from
+// MaxVariables and reads 0 as "one row per statement". An operator reading
+// that line would conclude the replicated estate writes the slow shape, and a
+// standalone [OpenEstate] handle genuinely DID, because nothing ever assigned
+// its caps at all.
+func openEstate(ctx context.Context, estate Estate, path string, opts Options) (*DB, error) {
 	// THE LOCK FIRST, before the native library and before the pool: both
 	// of those touch shared state on the way up, and taking them for a
 	// database this process turns out not to own is work done against a
@@ -522,15 +519,23 @@ func openEstate(ctx context.Context, estate Estate, path string, opts Options,
 		_ = db.sql.Close()
 		return nil, err
 	}
-	if inherited != nil {
-		// The driver's answers carry over; the PAGE CACHE does not. It is
-		// read from `PRAGMA cache_size` and `PRAGMA page_size`, which are a
-		// connection's setting and a FILE's geometry — so the sibling's
-		// number describes the sibling's file, not this one.
-		db.caps = *inherited
-		db.caps.PageCacheKiB = probePageCache(ctx, db.sql)
-	} else {
-		db.caps = probe(ctx, db.sql)
+	var unanswered error
+	db.caps, unanswered = measuredDriver.capabilities(ctx, db.sql, opts.WrapDriver != nil)
+	// The driver's answers carry over; the PAGE CACHE does not. It is read
+	// from `PRAGMA cache_size` and `PRAGMA page_size`, which are a
+	// connection's setting and a FILE's geometry — so another file's number
+	// describes that file, not this one.
+	db.caps.PageCacheKiB = probePageCache(ctx, db.sql)
+	if unanswered != nil {
+		// THE ONE PLACE A DEGRADED HANDLE SAYS WHY. Its `store_opened` line
+		// below carries the conservative answers — a max_variables of 999 —
+		// and without this nothing would tell that from a driver that
+		// really has them.
+		log.WarnContext(ctx, "store_capability_probe_unanswered",
+			"estate", string(estate), "path", path, "error", unanswered.Error(),
+			"detail", "the driver did not answer every capability question, so "+
+				"this handle carries the conservative answer to each it missed; "+
+				"the next open asks again")
 	}
 
 	log.InfoContext(ctx, "store_opened",

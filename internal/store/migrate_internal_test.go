@@ -176,7 +176,7 @@ func (g *beginGate) waitReached(t *testing.T, what string) {
 }
 
 func (g *beginGate) wrap(d driver.Driver) driver.Driver {
-	return &beginGateDriver{inner: d, gate: g}
+	return (&driverHooks{begin: g.begin}).wrap(d)
 }
 
 // begin is called on every BEGIN, and only the first is noted or held.
@@ -195,75 +195,4 @@ func (g *beginGate) begin(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-}
-
-type beginGateDriver struct {
-	inner driver.Driver
-	gate  *beginGate
-}
-
-func (d *beginGateDriver) Open(name string) (driver.Conn, error) {
-	conn, err := d.inner.Open(name)
-	if err != nil {
-		return nil, err
-	}
-	return &beginGateConn{Conn: conn, gate: d.gate}, nil
-}
-
-// beginGateConn forwards every optional interface the store's connections
-// carry, for the reason storetest's fault conn gives: an embedded driver.Conn
-// carries none of them, and hiding them moves every statement onto a path
-// production never takes.
-type beginGateConn struct {
-	driver.Conn
-	gate *beginGate
-}
-
-func (c *beginGateConn) ExecContext(ctx context.Context, q string, args []driver.NamedValue) (driver.Result, error) {
-	ex, ok := c.Conn.(driver.ExecerContext)
-	if !ok {
-		return nil, driver.ErrSkip
-	}
-	return ex.ExecContext(ctx, q, args)
-}
-
-func (c *beginGateConn) QueryContext(ctx context.Context, q string, args []driver.NamedValue) (driver.Rows, error) {
-	qr, ok := c.Conn.(driver.QueryerContext)
-	if !ok {
-		return nil, driver.ErrSkip
-	}
-	return qr.QueryContext(ctx, q, args)
-}
-
-func (c *beginGateConn) PrepareContext(ctx context.Context, q string) (driver.Stmt, error) {
-	pc, ok := c.Conn.(driver.ConnPrepareContext)
-	if !ok {
-		return c.Conn.Prepare(q)
-	}
-	return pc.PrepareContext(ctx, q)
-}
-
-func (c *beginGateConn) IsValid() bool {
-	v, ok := c.Conn.(driver.Validator)
-	return !ok || v.IsValid()
-}
-
-func (c *beginGateConn) RetireSwitch() func() {
-	r, ok := c.Conn.(interface{ RetireSwitch() func() })
-	if !ok {
-		return func() {}
-	}
-	return r.RetireSwitch()
-}
-
-func (c *beginGateConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
-	if err := c.gate.begin(ctx); err != nil {
-		return nil, err
-	}
-	bt, ok := c.Conn.(driver.ConnBeginTx)
-	if !ok {
-		//nolint:staticcheck // SA1019: the fallback database/sql itself uses.
-		return c.Conn.Begin()
-	}
-	return bt.BeginTx(ctx, opts)
 }

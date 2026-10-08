@@ -169,7 +169,7 @@ func (d *DB) OpenReplicated(ctx context.Context, logs int) (*DB, error) {
 		}
 		return held, nil
 	}
-	db, err := openEstate(ctx, EstateReplicated, path, d.replicatedOptions(logs), &d.caps)
+	db, err := openEstate(ctx, EstateReplicated, path, d.replicatedOptions(logs))
 	if err != nil {
 		return nil, fmt.Errorf("store: open the replicated estate: %w", err)
 	}

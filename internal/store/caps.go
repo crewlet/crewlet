@@ -3,8 +3,12 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"slices"
 	"strings"
+	"sync"
+
+	turso "turso.tech/database/tursogo"
 )
 
 // Capabilities records what the live driver can actually do, measured at Open
@@ -164,7 +168,9 @@ type Capabilities struct {
 	PageCacheKiB int
 }
 
-// probe measures each capability against the live connection.
+// probeDriver measures the DRIVER's capabilities — every field but
+// PageCacheKiB — against a live pool, and reports the first question the
+// driver did not answer, or nil when it answered every one.
 //
 // Every probe runs inside its own transaction and rolls it back, so a probe
 // that half-succeeds leaves nothing behind and a probe that fails cannot
@@ -173,21 +179,159 @@ type Capabilities struct {
 // does not document, and one transaction per question costs microseconds.
 //
 // A probe never fails Open. An unavailable capability is an answer, not an
-// error — see the type doc for what each false actually costs.
+// error — see the type doc for what each false actually costs — and a question
+// that went unanswered gets the same conservative answer. What the error
+// return adds is which of the two it was, which only matters to
+// [driverMeasurement]: a conservative answer is right for the one handle that
+// probed and wrong for every handle after it.
+//
 // The gated three are assigned rather than composed in the literal, because
 // each needs the value it is filling in: a gate they answer false at is a
 // reading about the DRIVER that belongs beside their own — see
 // [Capabilities.Gated].
-func probe(ctx context.Context, db *sql.DB) Capabilities {
+func probeDriver(ctx context.Context, db *sql.DB) (Capabilities, error) {
+	p := &prober{ctx: ctx, db: db}
 	caps := Capabilities{
-		VectorFunctions: probeVectorFunctions(ctx, db),
-		MaxVariables:    probeMaxVariables(ctx, db),
-		PageCacheKiB:    probePageCache(ctx, db),
+		VectorFunctions: p.vectorFunctions(),
+		MaxVariables:    p.maxVariables(),
 	}
-	caps.VectorIndex = probeVectorIndex(ctx, db, &caps)
-	caps.FullTextSearch = probeFullText(ctx, db, &caps)
-	caps.WithoutRowid = probeWithoutRowid(ctx, db, &caps)
-	return caps
+	caps.VectorIndex = p.vectorIndex(&caps)
+	caps.FullTextSearch = p.fullText(&caps)
+	caps.WithoutRowid = p.withoutRowid(&caps)
+	// A CONTEXT THAT ENDED is unanswered whatever the questions reported:
+	// a question asked under it may have been refused by the context rather
+	// than by the parser, through a path that wrapped the cause away.
+	if err := ctx.Err(); err != nil {
+		p.heard(err)
+	}
+	return caps, p.unanswered
+}
+
+// prober asks one pool the probe's questions and keeps the first one the
+// driver did not answer.
+type prober struct {
+	ctx context.Context
+	db  *sql.DB
+
+	// unanswered is the first failure that was not the driver's own
+	// answer — see [answered].
+	unanswered error
+}
+
+// heard records one question's outcome and hands err back, so a probe can
+// branch on it exactly as before.
+func (p *prober) heard(err error) error {
+	if err != nil && p.unanswered == nil && !answered(err) {
+		p.unanswered = err
+	}
+	return err
+}
+
+// parseRefusal is the fragment every refusal a probe here is ASKING for
+// carries, measured on the pinned driver: "too many columns in result set",
+// "no such function", "no such module", the experimental gate's "… is an
+// experimental feature" and "unknown module name" behind it all arrive as
+// `turso: error: Parse error: …`. Matching the message is not a choice: the
+// driver gives every one of them the same generic status.
+const parseRefusal = "Parse error"
+
+// answered reports whether err is the DRIVER ANSWERING a probe's question —
+// its parser refusing the statement, which is a fact about the library — as
+// opposed to the question going unanswered: a busy file (`database is
+// locked`, the driver's busy status), a context that ended, a connection that
+// could not be had. Measured, the first kind is always the driver's generic
+// status carrying a parse error, and the second never is.
+func answered(err error) bool {
+	return errors.Is(err, turso.ErrTursoGeneric) && strings.Contains(err.Error(), parseRefusal)
+}
+
+// measuredDriver is the driver's half of [Capabilities] as this process
+// measured it — see [driverMeasurement] for what it holds and when.
+var measuredDriver driverMeasurement
+
+// driverMeasurement is the driver's half of [Capabilities] — every field but
+// PageCacheKiB — as the first probe that the driver answered IN FULL found it,
+// or nothing while none has.
+//
+// A TYPE RATHER THAN THE VARIABLE ALONE so a test can hold one of its own:
+// the process's is filled by whichever open in the binary finishes first, so
+// a case asking what an EMPTY measurement does with an unanswered probe could
+// never stage one there.
+//
+// # Why once per process
+//
+// Every one of those answers is about the compiled-in library: a parser's
+// bound, a registered function or module, an experimental gate. None is about
+// the file a pool happens to be open on — only the page cache is, which is
+// why it is read on every open regardless — so a second probe hears what the
+// first did. And the probe is a binary search of prepares plus three gated
+// questions, measured at a median of 56–128 ms per open, which was most of
+// what an open cost once the file's schema was already in place: every
+// snapshot, backup member and cursor copy [OpenEstate] opened paid it again,
+// and a test binary paid it thousands of times.
+//
+// # Why only a probe answered in full
+//
+// Each question's answer is a refusal as often as an acceptance, and every
+// probe here turns a failure into the conservative answer rather than failing
+// the open. A busy file or a context that ended produces that same
+// conservative answer, and kept here it would be every later handle's: one
+// transient on the first open would shrink every applier's statements for the
+// life of the process, where unremembered it shrinks one handle's. So a probe
+// is kept only when every question got the parser's answer ([answered]), and
+// one that did not is this handle's alone — the next open asks again.
+//
+// # Why not a WRAPPED driver's
+//
+// [Options.WrapDriver] exists to change what the driver does, so a pool on a
+// wrapped driver is asking a different driver: it probes for itself, and its
+// answers neither come from the measurement nor go into it.
+type driverMeasurement struct {
+	mu   sync.Mutex
+	caps *Capabilities
+}
+
+// capabilities is the driver's half of [Capabilities] for a pool: the
+// measurement when there is one and the pool is on the unwrapped driver, and
+// otherwise the pool's own probe — which becomes the measurement when the pool
+// is unwrapped and the driver answered all of it. The error is a probe's
+// unanswered question, as [probeDriver] reports it, and is always nil on an
+// answer taken from the measurement.
+//
+// THE PROBE RUNS OUTSIDE THE LOCK. Opens racing to be the first each probe for
+// themselves and the first full answer is kept. Held across a probe that can
+// wait out a busy file, a process-wide lock would be a line every open in the
+// process queues in for a question that needs none — the mistake the
+// migration lock made until it was scoped to its file.
+func (m *driverMeasurement) capabilities(ctx context.Context, db *sql.DB,
+	wrapped bool) (Capabilities, error) {
+	if wrapped {
+		return probeDriver(ctx, db)
+	}
+	m.mu.Lock()
+	known := m.caps
+	m.mu.Unlock()
+	if known != nil {
+		return known.clone(), nil
+	}
+	caps, err := probeDriver(ctx, db)
+	if err != nil {
+		return caps, err
+	}
+	m.mu.Lock()
+	if m.caps == nil {
+		kept := caps.clone()
+		m.caps = &kept
+	}
+	m.mu.Unlock()
+	return caps, nil
+}
+
+// clone is c with a Gated slice of its own, so no handle's answer shares a
+// backing array with another's or with the process's measurement.
+func (c Capabilities) clone() Capabilities {
+	c.Gated = slices.Clone(c.Gated)
+	return c
 }
 
 // gatedCapability pairs what [Capabilities.Gated] reports with the Turso
@@ -249,8 +393,8 @@ const (
 	gateUsable
 )
 
-// probeGated answers a capability whose refusal may be Turso's experimental
-// GATE rather than an absent feature.
+// gated answers a capability whose refusal may be Turso's experimental GATE
+// rather than an absent feature.
 //
 // Three outcomes, and the middle one is the whole reason this exists:
 //
@@ -259,17 +403,15 @@ const (
 //     connection carrying the flag accepts  -> gateBehind.
 //   - anything else                         -> gateAbsent, which is now a
 //     measurement rather than an assumption.
-func probeGated(ctx context.Context, db *sql.DB,
-	capability gatedCapability, stmts []string,
-) gateOutcome {
-	ok, err := probeReporting(ctx, db, stmts)
+func (p *prober) gated(capability gatedCapability, stmts []string) gateOutcome {
+	ok, err := p.inRollback(stmts)
 	if ok {
 		return gateUsable
 	}
 	if err == nil || !strings.Contains(err.Error(), gateMarker) {
 		return gateAbsent
 	}
-	behind, err := probeBehindGate(ctx, capability.Feature, stmts)
+	behind, err := p.behindGate(capability.Feature, stmts)
 	switch {
 	case behind:
 		return gateBehind
@@ -300,8 +442,8 @@ func record(caps *Capabilities, capability gatedCapability, got gateOutcome) boo
 	return got == gateUsable
 }
 
-// probeBehindGate runs the same statements on a throwaway connection that
-// opted into one experimental feature.
+// behindGate runs the same statements on a throwaway connection that opted
+// into one experimental feature.
 //
 // IN MEMORY, never the store's own file: the file is exclusively owned by this
 // process and a second handle to it is the one thing this package exists to
@@ -313,17 +455,16 @@ func record(caps *Capabilities, capability gatedCapability, got gateOutcome) boo
 // back and no debris to clean up.
 //
 // 3.4 ms per call, measured, and only on a probe that actually hit the gate —
-// at most once per capability, once per [OpenNode], which is
-// once per process.
-func probeBehindGate(ctx context.Context, feature string, stmts []string) (bool, error) {
+// at most once per capability, once per process ([driverMeasurement]).
+func (p *prober) behindGate(feature string, stmts []string) (bool, error) {
 	db, err := sql.Open(driverName, ":memory:?experimental="+feature)
 	if err != nil {
-		return false, err
+		return false, p.heard(err)
 	}
 	defer func() { _ = db.Close() }()
 	for _, stmt := range stmts {
-		if _, err := db.ExecContext(ctx, stmt); err != nil {
-			return false, err
+		if _, err := db.ExecContext(p.ctx, stmt); err != nil {
+			return false, p.heard(err)
 		}
 	}
 	return true, nil
@@ -349,7 +490,7 @@ func markGated(caps *Capabilities, name string) {
 // success.
 const conservativeMaxVariables = 999
 
-// probeMaxVariables finds the largest parameter count one statement accepts,
+// maxVariables finds the largest parameter count one statement accepts,
 // by BINARY SEARCH over prepares.
 //
 // A prepare rather than an execution: the limit is a parser bound, so a
@@ -360,11 +501,11 @@ const conservativeMaxVariables = 999
 // The search is bounded above by 32 766 — SQLite's own post-3.32 default and
 // the largest value any engine in this family reports — so the loop is at
 // most fifteen prepares and cannot run away on a driver with no limit at all.
-func probeMaxVariables(ctx context.Context, db *sql.DB) int {
+func (p *prober) maxVariables() int {
 	const ceiling = 32766
 	accepts := func(n int) bool {
-		stmt, err := db.PrepareContext(ctx, selectParams(n))
-		if err != nil {
+		stmt, err := p.db.PrepareContext(p.ctx, selectParams(n))
+		if p.heard(err) != nil {
 			return false
 		}
 		_ = stmt.Close()
@@ -453,17 +594,17 @@ func pageCacheKiB(raw, pageSize int) int {
 	return raw * pageSize / 1024
 }
 
-// probeVectorFunctions asks for a distance between two literal vectors. It
-// needs no table, so a bare query is the whole probe.
-func probeVectorFunctions(ctx context.Context, db *sql.DB) bool {
+// vectorFunctions asks for a distance between two literal vectors. It needs
+// no table, so a bare query is the whole probe.
+func (p *prober) vectorFunctions() bool {
 	var d float64
-	err := db.QueryRowContext(ctx,
+	err := p.db.QueryRowContext(p.ctx,
 		`SELECT vector_distance_cos(vector32('[1,0,0,0]'), vector32('[0,1,0,0]'))`,
 	).Scan(&d)
-	return err == nil
+	return p.heard(err) == nil
 }
 
-// probeVectorIndex tries to build an ANN index. The index METHOD is the part
+// vectorIndex tries to build an ANN index. The index METHOD is the part
 // Turso's parser rejects today, so creating one is the only honest test — the
 // column type and the distance functions are already present and prove
 // nothing about it.
@@ -474,19 +615,19 @@ func probeVectorFunctions(ctx context.Context, db *sql.DB) bool {
 // and a tripwire that cannot fire is a claim rather than a measurement. Both
 // spellings Turso could plausibly land are tried.
 //
-// THROUGH [probeGated], because `USING <method>` is refused at the
+// THROUGH [prober.gated], because `USING <method>` is refused at the
 // experimental gate before the method name is looked at — so an unflagged
 // connection answers identically for a method that exists and one that does
 // not, and this measured neither until it asked behind the gate as well.
 // Today both answer `unknown module name` there: genuinely absent.
-func probeVectorIndex(ctx context.Context, db *sql.DB, caps *Capabilities) bool {
+func (p *prober) vectorIndex(caps *Capabilities) bool {
 	// THE BEST OUTCOME ACROSS THE SPELLINGS, decided after both have
 	// answered. One method being gated says nothing about the capability
 	// while another may still be usable on the pool, so the marking
 	// happens once, here, on what the whole loop found.
 	best := gateAbsent
 	for _, method := range []string{"vector", "diskann"} {
-		got := probeGated(ctx, db, capVectorIndex, []string{
+		got := p.gated(capVectorIndex, []string{
 			`CREATE TABLE crewlet_probe_vec (id TEXT PRIMARY KEY, e F32_BLOB(4))`,
 			`CREATE INDEX crewlet_probe_vec_idx ON crewlet_probe_vec USING ` +
 				method + ` (e)`,
@@ -499,7 +640,7 @@ func probeVectorIndex(ctx context.Context, db *sql.DB, caps *Capabilities) bool 
 	return record(caps, capVectorIndex, best)
 }
 
-// probeWithoutRowid asks for the narrower table shape two of this engine's own
+// withoutRowid asks for the narrower table shape two of this engine's own
 // tables would take.
 //
 // CREATED AND ROLLED BACK, because the refusal is a PARSE error rather than a
@@ -511,14 +652,14 @@ func probeVectorIndex(ctx context.Context, db *sql.DB, caps *Capabilities) bool 
 // `experimental=without_rowid` the table is created. So this answers false —
 // which is the truth about the statement a migration would carry — and
 // [Capabilities.Gated] carries the name, which is the truth about the engine.
-func probeWithoutRowid(ctx context.Context, db *sql.DB, caps *Capabilities) bool {
-	return record(caps, capWithoutRowid, probeGated(ctx, db, capWithoutRowid, []string{
+func (p *prober) withoutRowid(caps *Capabilities) bool {
+	return record(caps, capWithoutRowid, p.gated(capWithoutRowid, []string{
 		`CREATE TABLE crewlet_probe_wr (a TEXT NOT NULL, b TEXT NOT NULL, ` +
 			`PRIMARY KEY (a, b)) WITHOUT ROWID`,
 	}))
 }
 
-// probeFullText accepts either mechanism, because the capability the engine
+// fullText accepts either mechanism, because the capability the engine
 // would eventually use is "a full-text index exists", not "this exact syntax
 // parses". The fts5 arm is not dead code for a single driver: it is the shape
 // a SQLite-compatible engine would most plausibly land, and a probe that only
@@ -538,46 +679,32 @@ func probeWithoutRowid(ctx context.Context, db *sql.DB, caps *Capabilities) bool
 // this records. The arm still exists for the day that changes — see
 // [Capabilities.FullTextSearch] for why a true would be a question rather than
 // a fix.
-func probeFullText(ctx context.Context, db *sql.DB, caps *Capabilities) bool {
-	if probeInRollback(ctx, db, []string{
+func (p *prober) fullText(caps *Capabilities) bool {
+	if ok, _ := p.inRollback([]string{
 		`CREATE VIRTUAL TABLE crewlet_probe_fts USING fts5(body)`,
-	}) {
+	}); ok {
 		return true
 	}
-	return record(caps, capFullText, probeGated(ctx, db, capFullText, []string{
+	return record(caps, capFullText, p.gated(capFullText, []string{
 		`CREATE TABLE crewlet_probe_txt (body TEXT NOT NULL)`,
 		`CREATE INDEX crewlet_probe_txt_idx ON crewlet_probe_txt USING fts (body)`,
 	}))
 }
 
-// probeReporting is probeInRollback with the failure kept, for a probe whose
-// ERROR distinguishes "the feature is absent" from "this probe asked wrong".
-func probeReporting(ctx context.Context, db *sql.DB, stmts []string) (bool, error) {
-	tx, err := db.BeginTx(ctx, nil)
+// inRollback runs statements in a transaction that is always rolled back,
+// reporting whether every one of them succeeded and, when one did not, why —
+// for a probe whose ERROR distinguishes "the feature is absent" from "this
+// probe asked wrong".
+func (p *prober) inRollback(stmts []string) (bool, error) {
+	tx, err := p.db.BeginTx(p.ctx, nil)
 	if err != nil {
-		return false, err
+		return false, p.heard(err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	for _, stmt := range stmts {
-		if _, err := tx.ExecContext(ctx, stmt); err != nil {
-			return false, err
+		if _, err := tx.ExecContext(p.ctx, stmt); err != nil {
+			return false, p.heard(err)
 		}
 	}
 	return true, nil
-}
-
-// probeInRollback runs statements in a transaction that is always rolled back,
-// reporting whether every one of them succeeded.
-func probeInRollback(ctx context.Context, db *sql.DB, stmts []string) bool {
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return false
-	}
-	defer func() { _ = tx.Rollback() }()
-	for _, stmt := range stmts {
-		if _, err := tx.ExecContext(ctx, stmt); err != nil {
-			return false
-		}
-	}
-	return true
 }

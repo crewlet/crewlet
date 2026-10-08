@@ -488,6 +488,7 @@ func TestEveryEstateReportsTheProbedVariableLimit(t *testing.T) {
 	defer func() { _ = alone.Close() }()
 	if got := alone.Caps().MaxVariables; got <= 0 {
 		t.Errorf("a lone replicated estate reports MaxVariables = %d — it has no "+
-			"sibling to inherit a probe from, so it has to run its own", got)
+			"node beside it, so its answer is the process's measurement or a "+
+			"probe of its own, and never nothing", got)
 	}
 }
