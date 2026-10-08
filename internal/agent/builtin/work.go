@@ -656,8 +656,10 @@ func (d WorkDeps) actor(ctx context.Context, turn *turnctx.Turn) (Actor, error) 
 // partyOf is who a personal read about `handle` is about — see
 // [WorkDeps.Party].
 //
-// NO SEAM RESOLVES TO THE HANDLE ALONE, which is exactly what this read did
-// before the seam existed and is still the whole truth for a seat.
+// NO SEAM RESOLVES TO THE HANDLE ALONE, which is right only for a surface with
+// no chart to read a binding from. Both surfaces that have one wire the seam —
+// the operator's and every seat's — because the person a read is ABOUT may be
+// bound to a token whichever of them asks.
 func (d WorkDeps) partyOf(handle string) tracker.Party {
 	if d.Party == nil {
 		return tracker.PartyOf(handle)
