@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 )
 
 // What these cases protect.
@@ -44,6 +46,22 @@ const tursoChildEnv = "CREWLET_TEST_TURSO_CHILD"
 // `-test.run='^TestNoSuchTestAtAll$' -test.count=1` prints that warning, prints
 // PASS, and exits 0.
 const childRan = "CREWLET_CHILD_RAN"
+
+// childEnv is the environment a child half runs with: this process's own,
+// then the race runtime's exit sleep switched off
+// ([procgrouptest.StandInRaceOptions]), then extra.
+//
+// A child that passes exits 0, and a race-built process that exits 0 sleeps
+// atexit_sleep_ms — a second by default — before it ends, with its parent
+// waiting on it: a second of nothing on every child, and the broken-cache
+// parents are serial cases. Nothing here is about the child's own exit, so
+// nothing is given up. An exec keeps the LAST of a repeated key, so this GORACE
+// replaces an inherited one — whose options it carries forward — and extra,
+// appended after it, wins over both.
+func childEnv(extra ...string) []string {
+	env := append(os.Environ(), procgrouptest.GORACE+"="+procgrouptest.StandInRaceOptions())
+	return append(env, extra...)
+}
 
 // requireChildRan fails unless the child both succeeded AND actually ran.
 func requireChildRan(t *testing.T, what string, out []byte, err error) {
@@ -90,8 +108,7 @@ func TestConcurrentStartsDoNotCorruptTheLibraryCache(t *testing.T) {
 		wg.Go(func() {
 			cmd := exec.Command(os.Args[0], //nolint:gosec // os.Args[0] is this test binary
 				"-test.run=^TestTursoLibraryPreparedByAChildProcess$", "-test.count=1")
-			cmd.Env = append(os.Environ(),
-				tursoChildEnv+"=1", tursoCacheEnv+"="+root)
+			cmd.Env = childEnv(tursoChildEnv+"=1", tursoCacheEnv+"="+root)
 			out, err := cmd.CombinedOutput()
 			switch {
 			case err != nil:
@@ -325,7 +342,7 @@ func TestOpenReportsABrokenLibraryCacheInsteadOfPanicking(t *testing.T) {
 	}
 	cmd := exec.Command(os.Args[0], //nolint:gosec // os.Args[0] is this test binary
 		"-test.run=^TestOpenWithABrokenLibraryCacheInAChildProcess$", "-test.count=1")
-	cmd.Env = append(os.Environ(), tursoChildEnv+"=1", tursoCacheEnv+"="+root)
+	cmd.Env = childEnv(tursoChildEnv+"=1", tursoCacheEnv+"="+root)
 	out, err := cmd.CombinedOutput()
 	requireChildRan(t, "Open did not report the broken cache", out, err)
 }

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -138,10 +139,18 @@ func openInSubprocess(t *testing.T, path string) (string, error) {
 	return runHelper(t, path, "")
 }
 
+// runHelper runs the helper in mode against path and returns its output.
+//
+// With the race runtime's exit sleep switched off
+// ([procgrouptest.StandInRaceOptions]): a helper that opened the file exits 0,
+// and a race-built one would sleep a second on its way out with the case
+// waiting on it. What the lock is held to — that the kernel frees it however
+// the holder ends — does not depend on when the exit comes.
 func runHelper(t *testing.T, path, mode string) (string, error) {
 	t.Helper()
 	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=NoSuchTest")
-	cmd.Env = append(os.Environ(), helperEnv+"="+path, helperModeEnv+"="+mode)
+	cmd.Env = append(os.Environ(), procgrouptest.GORACE+"="+procgrouptest.StandInRaceOptions(),
+		helperEnv+"="+path, helperModeEnv+"="+mode)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
