@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
@@ -135,8 +134,7 @@ func (e *Engine) migrateSecrets(ctx context.Context) {
 	}
 	_, err := fleetsecrets.Migrate(ctx,
 		e.backends.Store.SecretValues(e.cipher),
-		fleetsecrets.New(e.backends.Fleet, e.cipher),
-		time.Now().UTC())
+		fleetsecrets.New(e.backends.Fleet, e.cipher))
 	if err != nil {
 		log.ErrorContext(ctx, "secret_migration_incomplete", "error", err,
 			"detail", "this node's own secret rows are still local and no peer "+

@@ -25,8 +25,9 @@ type LocalStore interface {
 // Distinct from "cli" and "provision" so a listing says where a value came
 // from: an operator looking at a row written by this pass is looking at
 // something they set with `crewlet secrets set` while this node's engine was
-// stopped, and the original provenance is genuinely gone — the local row's own UpdatedBy is
-// preserved, but the write that put it on the KV was this one.
+// stopped, and the original provenance is genuinely gone — the local row's own
+// UpdatedBy and UpdatedAt are preserved, but the write that put it on the KV
+// was this one.
 const MigrateSource = "migrated"
 
 // Migrate moves a node's own secret rows onto the fleet and removes them.
@@ -65,7 +66,7 @@ const MigrateSource = "migrated"
 // alternative — logging and carrying on — would delete a credential this node
 // is the only holder of, and the first symptom would be a vendor 401 hours
 // later on a node that never had the value.
-func Migrate(ctx context.Context, from LocalStore, to *Store, now time.Time) ([]string, error) {
+func Migrate(ctx context.Context, from LocalStore, to *Store) ([]string, error) {
 	if from == nil || to == nil {
 		return nil, nil
 	}
@@ -103,11 +104,16 @@ func Migrate(ctx context.Context, from LocalStore, to *Store, now time.Time) ([]
 					"fleetsecrets: open this node's %s to migrate it: %w",
 					row.Name, err)
 			}
-			// The ORIGINAL author is preserved and the source is
-			// stamped: "who set this" is the question the provenance
-			// columns exist to answer, and answering it with the
-			// migration would erase the only record of it.
-			if err := to.Set(ctx, row.Name, value, row.UpdatedBy, MigrateSource, now); err != nil {
+			// The ORIGINAL author and the ORIGINAL instant are
+			// preserved and the source is stamped: "who set this" is
+			// the question the provenance columns exist to answer, and
+			// "when" is what the next migration compares against.
+			// Stamped with this pass's own clock, the record would say
+			// when this node booted rather than when its operator wrote
+			// the value, and a second stopped node's later offline
+			// write would read as the earlier one — and be dropped —
+			// whenever this node happened to start first.
+			if err := to.Set(ctx, row.Name, value, row.UpdatedBy, MigrateSource, row.UpdatedAt); err != nil {
 				return moved, fmt.Errorf("fleetsecrets: migrate %s: %w", row.Name, err)
 			}
 			moved = append(moved, row.Name)
