@@ -134,11 +134,14 @@ export function menuHold(access: WriteAccess): { disabled?: boolean; description
  * seat, a server — as opposed to acting in it.
  *
  * A DIFFERENT GATE FROM AN ACT, and the difference is the engine's: `/config`
- * is guarded by the API credential and nothing narrower (ADR-0024 keeps it
+ * is guarded by the API credential and not by a seat (ADR-0024 keeps it
  * credential-scoped), so an operator token nobody bound to a seat may change a
  * ceiling it could never answer an ask with, and a bound person whose token
  * the engine does not take as an operator's may not. `viewer.operator` is the
- * engine's own answer to exactly that question.
+ * engine's own answer to that question — and on a MANAGED document
+ * (ADR-0030) only the credentials it names as writers may change it, which
+ * `viewer.config_writer` answers ([managedBlock]). [mayChangeConfig] is the
+ * two together, for a screen that has to know before anything is pressed.
  */
 export type ConfigWriteBlock =
   "offline" | "loading" | "anonymous" | "not_operator" | "managed" | "held";
@@ -148,7 +151,7 @@ export type ConfigWriteAccess =
 
 /**
  * The sentence each block is shown as — every block but a [HoldWrites]' and
- * `managed`, whose sentence names who manages the document ([managedReason]).
+ * `managed`, whose sentence names who manages the document ([managedSentence]).
  */
 export const CONFIG_WRITE_REASONS: Readonly<
   Record<Exclude<ConfigWriteBlock, "held" | "managed">, string>
@@ -161,20 +164,6 @@ export const CONFIG_WRITE_REASONS: Readonly<
 };
 
 /**
- * Why a managed company document cannot be changed here, naming who manages
- * it (ADR-0030).
- *
- * MANAGED IS NOT A PERMISSION THIS PERSON LACKS, it is where the company is
- * written: another system — a GitOps pipeline, a Kubernetes operator —
- * renders it and writes it with its own token, and replaces any revision made
- * here at its next reconcile. So the sentence says where to change it, and
- * what stays possible: rotating a credential.
- */
-export function managedReason(managedBy: readonly string[]): string {
-  return managedSentence(managedBy);
-}
-
-/**
  * Why THIS caller may not change a managed company document, or null — when
  * the document is managed by nobody, or by this caller's own credential.
  *
@@ -185,7 +174,7 @@ export function managedReason(managedBy: readonly string[]): string {
  */
 export function managedBlock(viewer: ViewerState): string | null {
   if (viewer.configManagedBy.length === 0 || viewer.configWriter) return null;
-  return managedReason(viewer.configManagedBy);
+  return managedSentence(viewer.configManagedBy);
 }
 
 /**
@@ -194,6 +183,21 @@ export function managedBlock(viewer: ViewerState): string | null {
  */
 export function useManagedConfig(): string | null {
   return managedBlock(useViewer());
+}
+
+/**
+ * Whether this reader's credential may change the company's configuration at
+ * all — an operator's, and on a managed document one of its writers.
+ *
+ * THE STANDING ANSWER, apart from this moment's connection or a screen's
+ * hold: what a screen asks when it decides whether a change is the reader's
+ * to make — a stopped seat counted as THEIR decision, "Set one" offered as a
+ * link — rather than whether a control may be pressed now
+ * ([configWriteAccess]). Both read the same two answers, so they cannot
+ * disagree about who may write.
+ */
+export function mayChangeConfig(viewer: ViewerState): boolean {
+  return viewer.operator && managedBlock(viewer) === null;
 }
 
 /** The decision over values — what the hook reads, and what a test pins. */

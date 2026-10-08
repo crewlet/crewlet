@@ -329,6 +329,27 @@ describe("the figures", () => {
     expect(within(card).queryByRole("link")).toBeNull();
   });
 
+  // NOR TO AN OPERATOR WHO IS NOT A WRITER OF A MANAGED DOCUMENT: Spend ›
+  // Budgets would hold every ceiling for them with the managed sentence.
+  test("on a managed document a non-writer is told there is no budget, with no way in", async () => {
+    mount({
+      viewer: { ...JANE, config_writer: false, config_managed_by: ["gitops"] },
+      budget: UNCAPPED,
+    });
+    await settle();
+    const card = tile(/^Tokens · /);
+    expect(card.textContent).toContain("No weekly budget");
+    expect(within(card).queryByRole("link")).toBeNull();
+    cleanup();
+
+    mount({
+      viewer: { ...JANE, config_writer: true, config_managed_by: ["gitops"] },
+      budget: UNCAPPED,
+    });
+    await settle();
+    expect(within(tile(/^Tokens · /)).getByRole("link", { name: "No weekly budget" })).toBeTruthy();
+  });
+
   test("today is asked of the engine as one company day", async () => {
     location.hash = "#/home?range=today";
     mount();
@@ -496,6 +517,22 @@ describe("the decisions", () => {
   test("a stopped seat the reader cannot act on is a condition, not their decision", async () => {
     mount({
       viewer: { ...JANE, operator: false, acts: ["comment_on_work_item"] },
+      agents: [{ role: "DevRel", handle: "devrel", activity: "stopped", stopped_reason: "budget" }],
+    });
+    await settle();
+    expect(screen.queryByText(/DevRel stopped/)).toBeNull();
+    expect(tile("Waiting on your decision").textContent).not.toContain("1");
+    const link = document.querySelector<HTMLAnchorElement>(".home-status a");
+    expect(link?.textContent).toMatch(/1 condition needs a look/);
+  });
+
+  // A MANAGED DOCUMENT (ADR-0030) TAKES THE CEILING OUT OF AN OPERATOR'S
+  // HANDS unless their token is one of its writers: the raise control is
+  // disabled with the managed sentence, so a seat stopped between turns —
+  // nothing to hand on — is a condition for them, never a decision.
+  test("on a managed document a stopped seat is not a non-writer's decision", async () => {
+    mount({
+      viewer: { ...JANE, config_writer: false, config_managed_by: ["gitops"] },
       agents: [{ role: "DevRel", handle: "devrel", activity: "stopped", stopped_reason: "budget" }],
     });
     await settle();

@@ -37,6 +37,7 @@ import { NewTaskButton } from "~/components/NewTaskButton.tsx";
 import { href, useParam } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { mayChangeConfig } from "~/lib/useWriteAccess.ts";
 import { useNow } from "~/lib/clock.ts";
 import { toWall } from "~/lib/format.ts";
 import { useAttention } from "~/lib/useAttention.ts";
@@ -99,7 +100,14 @@ export function Home() {
   // THE STOPPED SEATS, SPLIT BY WHO CAN ACT: the ones this reader can raise
   // or hand on are decisions waiting on them; the rest are conditions they
   // can see and nothing more. See `seatDecisionsFor`.
-  const seats = useMemo(() => seatDecisionsFor(seatConditionsOf(agents), viewer), [agents, viewer]);
+  const seats = useMemo(
+    () =>
+      seatDecisionsFor(seatConditionsOf(agents), {
+        configWrite: mayChangeConfig(viewer),
+        acts: viewer.acts,
+      }),
+    [agents, viewer],
+  );
   // WHAT WAITS ON THE READER: the engine's count of their asks and parked
   // runs, and the stopped seats they can act on. Unknown — nobody bound, or
   // not answered yet — is null, never zero.

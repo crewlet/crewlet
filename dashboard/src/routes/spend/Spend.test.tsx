@@ -375,6 +375,37 @@ test("no monthly budget says so, and offers to set one only to an operator", asy
   expect(screen.queryByRole("link", { name: "Set one" })).toBeNull();
 });
 
+// A MANAGED DOCUMENT (ADR-0030) IS SET WHERE IT IS MANAGED: an operator whose
+// token is not one of its writers is told there is no ceiling and offered no
+// way to set one, which Spend › Budgets would only hold.
+test("on a managed document only a writer is offered to set a budget", async () => {
+  mount(
+    "#/spend?window=30d",
+    <Spend />,
+    {
+      tokens: rollup(1),
+      viewer: { ...VIEWER, config_writer: false, config_managed_by: ["gitops"] },
+    },
+    (store) => store.applyBudget(UNCAPPED),
+  );
+  await settle();
+  expect(screen.getByText("No monthly budget")).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "Set one" })).toBeNull();
+  cleanup();
+
+  mount(
+    "#/spend?window=30d",
+    <Spend />,
+    {
+      tokens: rollup(1),
+      viewer: { ...VIEWER, config_writer: true, config_managed_by: ["gitops"] },
+    },
+    (store) => store.applyBudget(UNCAPPED),
+  );
+  await settle();
+  expect(screen.getByRole("link", { name: "Set one" })).toBeTruthy();
+});
+
 // THE CACHE'S SHARE IS READ ÷ INPUT, and a window where nothing reported a
 // cache has no figure rather than "0%".
 test("the cache tile divides the engine's counts, and is absent when none were reported", async () => {

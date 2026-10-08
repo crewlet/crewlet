@@ -22,11 +22,15 @@ import type { OrgBudget } from "~/protocol/types.ts";
 
 export function BudgetTile({
   budget,
-  operator,
+  mayConfigure,
 }: {
   /** `null` until a node has reported the counters: see {@link OrgBudget}. */
   budget: OrgBudget | null;
-  operator: boolean;
+  /**
+   * Whether the reader may set a ceiling: `mayChangeConfig` — an operator,
+   * and on a managed document one of its writers.
+   */
+  mayConfigure: boolean;
 }) {
   // NOT KNOWN IS NOT NONE. Before the first report nobody has read the
   // counter, and saying "No monthly budget" then — with "Set one" — told the
@@ -53,7 +57,7 @@ export function BudgetTile({
         {/* WHERE A CEILING IS SET, for the one reader who can set it. Anybody
             else is told there is none, which is the whole of what they can
             act on. */}
-        {operator && (
+        {mayConfigure && (
           <a className="t-link" href={href(["spend", "budgets"])}>
             Set one
           </a>

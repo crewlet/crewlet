@@ -12,6 +12,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { OrgChart } from "./OrgChart.tsx";
 import { LEGIBLE_ZOOM } from "~/ui/canvasView.ts";
 import { ADD_SEAT_REASON, findSeats } from "./header.tsx";
+import { managedSentence } from "~/protocol/configAnswer.ts";
 import { Router } from "~/app/router.tsx";
 import { PeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -178,6 +179,36 @@ test("an operator's Add seat goes to the builder, adding an agent", async () => 
   await mount({ operator_id: "ops", operator: true, handle: "jane", acts: [] });
   const add = screen.getByRole("link", { name: /Add seat/ });
   expect(add.getAttribute("href")).toBe("#/agents/edit?add=agent");
+});
+
+// A MANAGED DOCUMENT (ADR-0030) holds Add seat for an operator whose token is
+// not one of its writers — the builder it opens would be read-only — with the
+// sentence that names who manages it; a writer still adds.
+test("Add seat is held with the managed sentence for an operator who is not a writer", async () => {
+  await mount({
+    operator_id: "ops",
+    operator: true,
+    handle: "jane",
+    acts: [],
+    config_writer: false,
+    config_managed_by: ["gitops"],
+  });
+  const add = screen.getByRole("button", { name: /Add seat/ });
+  expect(add.getAttribute("aria-disabled") === "true" || add.hasAttribute("disabled")).toBe(true);
+  expect(add.getAttribute("title")).toBe(managedSentence(["gitops"]));
+  cleanup();
+
+  await mount({
+    operator_id: "gitops",
+    operator: true,
+    handle: "jane",
+    acts: [],
+    config_writer: true,
+    config_managed_by: ["gitops"],
+  });
+  expect(screen.getByRole("link", { name: /Add seat/ }).getAttribute("href")).toBe(
+    "#/agents/edit?add=agent",
+  );
 });
 
 // FIND A SEAT matches what a reader remembers somebody by — name, handle,

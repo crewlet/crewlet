@@ -9,10 +9,11 @@ import {
   CONFIG_WRITE_REASONS,
   WRITE_REASONS,
   configWriteAccess,
-  managedReason,
+  mayChangeConfig,
   writeAccess,
 } from "./useWriteAccess.ts";
 import type { ViewerState } from "./viewer.ts";
+import { managedSentence } from "~/protocol/configAnswer.ts";
 
 const BOUND: ViewerState = {
   operatorID: "founder",
@@ -139,9 +140,9 @@ describe("changing the company's configuration", () => {
     expect(configWriteAccess(managed, true)).toEqual({
       can: false,
       block: "managed",
-      reason: managedReason(["gitops"]),
+      reason: managedSentence(["gitops"]),
     });
-    expect(managedReason(["gitops"])).toContain("managed by gitops");
+    expect(managedSentence(["gitops"])).toContain("managed by gitops");
     expect(configWriteAccess(managed, true, "these are Rui's")).toMatchObject({
       block: "managed",
     });
@@ -154,5 +155,16 @@ describe("changing the company's configuration", () => {
     expect(configWriteAccess(viewer({ configWriter: true, configManagedBy: [] }), true)).toEqual({
       can: true,
     });
+  });
+
+  // THE STANDING ANSWER agrees with the press-time one about WHO may write,
+  // and ignores what only this moment decides — the socket, a screen's hold.
+  test("whether the reader may change the configuration at all is the operator and the writers", () => {
+    expect(mayChangeConfig(viewer({}))).toBe(true);
+    expect(mayChangeConfig(viewer({ operator: false }))).toBe(false);
+    expect(mayChangeConfig(viewer({ configWriter: false, configManagedBy: ["gitops"] }))).toBe(
+      false,
+    );
+    expect(mayChangeConfig(viewer({ configWriter: true, configManagedBy: ["gitops"] }))).toBe(true);
   });
 });
