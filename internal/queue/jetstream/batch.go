@@ -102,6 +102,7 @@ func (a *attachment) drain(ctx context.Context, opts *queue.BatchOptions) []deli
 			batch = append(batch, d)
 		}
 	}
+	//nolint:contextcheck // a fetch runs on the attachment's fetch scope, never the loop's: see [attachment.fetching]
 	if err := a.fetch(1, a.q.fetchWait(), collect); err != nil {
 		a.logFetchErr(ctx, err)
 		return nil
@@ -126,6 +127,7 @@ func (a *attachment) drain(ctx context.Context, opts *queue.BatchOptions) []deli
 		if remaining := time.Until(deadline); remaining > wait {
 			wait = min(remaining, a.q.fetchWait())
 		}
+		//nolint:contextcheck // the attachment's fetch scope, as above
 		if err := a.fetch(maxBatch-len(batch), wait, collect); err != nil {
 			break
 		}

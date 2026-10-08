@@ -294,8 +294,8 @@ func (s *Server) ClusterPort() int {
 	return addr.Port
 }
 
-// AnyPort, as [Config.LeafPort], binds the leaf listener on whichever port the
-// OS hands out — nats-server's own spelling of that request — and
+// AnyPort is the [Config.LeafPort] that binds the leaf listener on whichever
+// port the OS hands out — nats-server's own spelling of that request — and
 // [Server.LeafPort] reads back which one it was.
 //
 // It is for a member whose leaves are told its address AFTER it starts, which

@@ -557,6 +557,7 @@ func (q *Queue) Subscribe(ctx context.Context, topic, group string, h queue.Hand
 				}
 				continue
 			}
+			//nolint:contextcheck // a fetch runs on the attachment's fetch scope, never the loop's: see [attachment.fetching]
 			if err := a.fetch(1, a.q.fetchWait(), func(msg jetstream.Msg) {
 				a.dispatchOne(ctx, msg, h)
 			}); err != nil {
