@@ -113,6 +113,14 @@ func TestMailIsRetainedWithNothingAttached(t *testing.T) {
 // behaviour rather than treating it as a surprise: interest retention means
 // a message published where no subscription covers it is gone, which is
 // exactly why EnsureSubscription must run before anything publishes.
+//
+// PROVED BY ORDER, NOT BY A QUIET WINDOW. A second publish, made once the
+// subscription exists, is a SENTINEL: the subscription starts at the earliest
+// message the stream holds, so a first publish the stream had kept would be
+// delivered ahead of it. The first delivery being the sentinel is therefore
+// the proof, however long the broker took to drop the first — where "nothing
+// arrived within two seconds" spent two seconds on every run and proved only
+// that nothing arrived in them.
 func TestPublishWithNoSubscriptionIsDropped(t *testing.T) {
 	q := newQueue(t)
 	ctx := t.Context()
@@ -124,8 +132,15 @@ func TestPublishWithNoSubscriptionIsDropped(t *testing.T) {
 	if _, err := q.EnsureSubscription(ctx, topic, group); err != nil {
 		t.Fatalf("EnsureSubscription: %v", err)
 	}
+	// CORROBORATION, not the proof: interest retention discards a message
+	// no consumer covers as it is stored, so the mailbox made after it
+	// holds nothing.
+	if held, err := q.Backlog(ctx, topic, group); err != nil || len(held) != 0 {
+		t.Errorf("the mailbox made after a publish holds %d event(s) (%v); a publish "+
+			"with no subscription must be dropped", len(held), err)
+	}
 
-	got := make(chan int, 1)
+	got := make(chan int, 2)
 	if err := q.Subscribe(ctx, topic, group, func(_ context.Context, e *events.Event) queue.Result {
 		p, _ := events.DataAs[*probe](e)
 		got <- p.N
@@ -133,10 +148,17 @@ func TestPublishWithNoSubscriptionIsDropped(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
+	if err := q.Publish(ctx, topic, ev(2)); err != nil {
+		t.Fatalf("Publish the sentinel: %v", err)
+	}
 	select {
 	case n := <-got:
-		t.Errorf("received %d; a publish with no subscription must be dropped", n)
-	case <-time.After(2 * time.Second):
+		if n != 2 {
+			t.Errorf("received %d before the sentinel; a publish with no "+
+				"subscription must be dropped", n)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the sentinel published to an existing subscription never arrived")
 	}
 }
 
