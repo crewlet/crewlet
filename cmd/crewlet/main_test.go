@@ -32,6 +32,8 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 const companyYAML = `
@@ -713,6 +715,7 @@ func testEngine(t *testing.T) *engine.Engine {
 func testEngineWithBridge(t *testing.T, bridge *mcpbridge.Bridge) *engine.Engine {
 	t.Helper()
 	boot := bootstrapFor(t, 0)
+	seedEngineStore(t, boot)
 	company, err := config.ParseCompany([]byte(companyYAML))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
@@ -723,6 +726,25 @@ func testEngineWithBridge(t *testing.T, bridge *mcpbridge.Bridge) *engine.Engine
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
 	return e
+}
+
+// seedEngineStore writes the binary's migrated store image wherever boot's
+// engine will open an estate, so the boot finds every migration applied rather
+// than running the whole sequence on a fresh file — none of these cases is
+// about migrating. The rule is internal/engine's SeedStore: the node estate
+// always, the replicated one only where the node holds it
+// ([engine.HoldsEstate]), and nothing for a scratch store, which a boot
+// discards.
+func seedEngineStore(t *testing.T, boot *config.Bootstrap) {
+	t.Helper()
+	if boot.Store.Scratch {
+		return
+	}
+	storetest.Seed(t, store.EstateNode, boot.Store.Path)
+	if engine.HoldsEstate(boot) {
+		storetest.Seed(t, store.EstateReplicated,
+			store.ReplicatedPath(boot.Store.Path, boot.Store.ReplicatedPath))
+	}
 }
 
 func freePort(t *testing.T) int {

@@ -51,6 +51,7 @@ func secretsCmd(t *testing.T, cfg string, args ...string) (string, string, error
 // A SECRET ROUND TRIPS THROUGH THE CLI, which is the whole surface: set,
 // list, get, unset.
 func TestASecretRoundTripsThroughTheCLI(t *testing.T) {
+	t.Parallel()
 	cfg := bootstrapWithKeyring(t, "k1")
 
 	if _, errs, err := secretsCmd(t, cfg, "set", "TOKEN", "-value", "sk-not-real"); err != nil {
@@ -95,6 +96,7 @@ func TestASecretRoundTripsThroughTheCLI(t *testing.T) {
 // is "is X set", which the listing answers without putting a credential into
 // a terminal and a screen-share.
 func TestGettingASecretNeedsTheRevealFlag(t *testing.T) {
+	t.Parallel()
 	cfg := bootstrapWithKeyring(t, "k1")
 	if _, errs, err := secretsCmd(t, cfg, "set", "TOKEN", "-value", "sk-not-real"); err != nil {
 		t.Fatalf("set: %v (%s)", err, errs)
@@ -115,6 +117,7 @@ func TestGettingASecretNeedsTheRevealFlag(t *testing.T) {
 // so `-value ""` must be distinguishable from omitting the flag, which
 // reads stdin.
 func TestAnEmptyValueIsStoredRatherThanReadFromStdin(t *testing.T) {
+	t.Parallel()
 	cfg := bootstrapWithKeyring(t, "k1")
 	if _, errs, err := secretsCmd(t, cfg, "set", "TOKEN", "-value", ""); err != nil {
 		t.Fatalf("set: %v (%s)", err, errs)
@@ -181,6 +184,7 @@ func TestKeygenEmitsAPasteableKey(t *testing.T) {
 // A REKEY MOVES THE STALE ROWS AND NAMES THEM, which is the last chance to
 // see what is now safe to retire the old key over.
 func TestRekeyReportsWhatItMoved(t *testing.T) {
+	t.Parallel()
 	first := bootstrapWithKeyring(t, "k1")
 	if _, errs, err := secretsCmd(t, first, "set", "TOKEN", "-value", "v"); err != nil {
 		t.Fatalf("set: %v (%s)", err, errs)
@@ -341,6 +345,7 @@ func TestKeygenNeedsAKeyID(t *testing.T) {
 // id column, which is there for exactly this — a preview that opened every
 // row would be a bigger exposure than the pass it previews.
 func TestARekeyDryRunReportsWithoutWriting(t *testing.T) {
+	t.Parallel()
 	first := bootstrapWithKeyring(t, "k1")
 	if _, errs, err := secretsCmd(t, first, "set", "TOKEN", "-value", "v"); err != nil {
 		t.Fatalf("set: %v (%s)", err, errs)
