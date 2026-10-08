@@ -24,6 +24,12 @@ import (
 // that a wedged child does not hold the seat's concurrency slot for a
 // meaningful fraction of the next call. Same figure the sandbox uses for the
 // same reason.
+//
+// Every provider [New] builds carries it as [Provider.termGrace], which is
+// what every child this package starts is given — a seat's call, the doctor's
+// version probe and the credential commands alike — so one figure governs
+// them all and the suite can witness a kill without sitting out five seconds
+// of it.
 const termGrace = 5 * time.Second
 
 // stderrTail is how many lines of a failed child's stderr are reported.
@@ -50,6 +56,12 @@ type invocation struct {
 	dir     string
 	env     []string
 	timeout time.Duration
+
+	// grace is how long a child signalled to stop has before it is killed —
+	// the provider's [Provider.termGrace]. Zero is refused by [run] rather
+	// than read as os/exec's own zero, which is no bound at all: a child
+	// that ignored SIGTERM would then hold the call open for ever.
+	grace time.Duration
 
 	// onLine, when set, receives each COMPLETE line of stdout as the child
 	// writes it, before the call returns. Nil takes the ordinary path where
@@ -128,6 +140,11 @@ type rawResult struct {
 // runtime that forks helpers, and signalling only the process Go started
 // leaves those holding the seat's memory and its network sockets.
 func run(ctx context.Context, in invocation) (*rawResult, error) {
+	if in.grace <= 0 {
+		return nil, fmt.Errorf("cli-agent: starting %q with no termination grace — "+
+			"a child that ignored SIGTERM would hold the call open for ever; "+
+			"an invocation takes its provider's termGrace", in.binary)
+	}
 	callCtx, cancel := context.WithTimeout(ctx, in.timeout)
 	defer cancel()
 
@@ -151,7 +168,7 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 	// process it knows about, and WaitDelay bounds how long a child that
 	// ignored SIGTERM can hold the call open.
 	cmd.Cancel = func() error { return procgroup.Terminate(cmd.Process.Pid) }
-	cmd.WaitDelay = termGrace
+	cmd.WaitDelay = in.grace
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("cli-agent: starting %q: %w", in.binary, err)

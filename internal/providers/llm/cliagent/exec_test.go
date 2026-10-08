@@ -629,6 +629,42 @@ func TestACancelledCallerDoesNotLaunchAProcess(t *testing.T) {
 	}
 }
 
+// EVERY PROVIDER GIVES A SIGNALLED CLI FIVE SECONDS to exit, the figure
+// [termGrace] argues for. The cases that watch a stubborn child die run at a
+// grace of their own (exec_unix_test.go), so this is what ties the value they
+// skip waiting for to the one a running engine uses — at both places a child is
+// started, since both read the provider's field.
+func TestAProviderGivesASignalledCLIFiveSecondsToExit(t *testing.T) {
+	t.Parallel()
+	if termGrace != 5*time.Second {
+		t.Errorf("termGrace = %v, want the 5s a Node runtime needs to flush", termGrace)
+	}
+	if p := fakeProvider(t, nil, nil); p.termGrace != termGrace {
+		t.Errorf("New gave the provider a grace of %v, want termGrace (%v)", p.termGrace, termGrace)
+	}
+}
+
+// AN INVOCATION WITH NO GRACE IS REFUSED rather than run. os/exec reads a zero
+// WaitDelay as no bound at all, so a call site that forgot to pass one would
+// start a child that, ignoring SIGTERM, held its call open for ever.
+func TestAnInvocationWithNoGraceIsRefused(t *testing.T) {
+	t.Parallel()
+	env := os.Environ()
+	for k, v := range fakeChildEnv(map[string]string{"FAKE_STDOUT": "ran"}) {
+		env = append(env, k+"="+v)
+	}
+	res, err := run(t.Context(), invocation{
+		binary: os.Args[0], args: []string{"-test.run=TestCLIAgentFakeCLI"},
+		env: env, timeout: 20 * time.Second,
+	})
+	if err == nil {
+		t.Fatalf("an invocation with no grace ran (stdout %q)", res.stdout)
+	}
+	if !strings.Contains(err.Error(), "termination grace") {
+		t.Errorf("the refusal does not name what is missing: %v", err)
+	}
+}
+
 // decodePrompt reads back a prompt the fake CLI echoed.
 func decodePrompt(t *testing.T, encoded string) string {
 	t.Helper()

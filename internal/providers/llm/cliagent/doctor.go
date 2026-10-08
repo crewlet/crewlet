@@ -438,6 +438,7 @@ func (p *Provider) probeVersion(ctx context.Context) string {
 		// the ENGINE's, see [Provider.probeEnv].
 		env:     p.probeEnv(),
 		timeout: probeTimeout,
+		grace:   p.termGrace,
 	})
 	if err != nil || res.exitCode != 0 {
 		return ""

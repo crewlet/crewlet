@@ -3,6 +3,7 @@
 package cliagent
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -35,6 +36,12 @@ func fakeStubborn() {
 	// Deliberately NOT procgroup.Set: the grandchild stays in its parent's
 	// group, which is the only reason a group signal can reach it and the
 	// reason a per-process kill cannot.
+	//
+	// And it INHERITS the pipes, as a runtime under a launcher does. That is
+	// what holds a caller's Wait open once the launcher itself is gone — the
+	// hang WaitDelay bounds — and left on os/exec's default of the null
+	// device, a grandchild could never witness it.
+	child.Stdout, child.Stderr = os.Stdout, os.Stderr
 	if err := child.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "fake CLI could not fork: %v\n", err)
 		os.Exit(1)
@@ -78,6 +85,7 @@ func TestCancellingACallReapsTheWholeTree(t *testing.T) {
 	p := fakeProvider(t, map[string]string{
 		"FAKE_STUBBORN": "1", "FAKE_PIDFILE": pidFile,
 	}, nil)
+	p.termGrace = witnessGrace
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
@@ -92,16 +100,87 @@ func TestCancellingACallReapsTheWholeTree(t *testing.T) {
 	t.Cleanup(func() { reapTree(grandchild) })
 
 	cancel()
+	cancelled := time.Now()
 	select {
 	case <-done:
 	case <-time.After(30 * time.Second):
 		t.Fatal("Complete never returned after the caller cancelled")
 	}
+	assertLetGoAtTheProvidersGrace(t, "a seat's call", time.Since(cancelled))
 
 	if !procgrouptest.AwaitGone(t, grandchild, 10*time.Second) {
 		t.Fatalf("grandchild %d survived the cancelled call: the reap runs on "+
 			"the deadline path only, so a shutdown leaves a runtime holding "+
 			"this seat's workspace and sockets", grandchild)
+	}
+}
+
+// A CANCELLED CREDENTIAL COMMAND IS LET GO when its grace runs out, even while
+// a helper the CLI forked holds its output open.
+//
+// The one child here started without its own process group — an interactive
+// login has to read the operator's terminal — so nothing signals its
+// descendants, and the inherited pipes are all that is left holding Wait.
+// Without a WaitDelay an operator's Ctrl+C left `crewlet llm login` hanging on
+// an EOF that was never coming.
+//
+// The stubborn fake and its grandchild are in THIS binary's process group, so
+// the cleanup ends the grandchild by its pid alone: [reapTree] would signal
+// the suite itself.
+func TestACancelledCredentialCommandIsLetGoAfterTheGrace(t *testing.T) {
+	t.Parallel()
+	pidFile := filepath.Join(t.TempDir(), "grandchild.pid")
+	p := loginProvider(t)
+	p.profile.StatusArgs = []string{"-test.run=TestCLIAgentFakeCLI"}
+	p.env = fakeChildEnv(map[string]string{"FAKE_STUBBORN": "1", "FAKE_PIDFILE": pidFile})
+	p.termGrace = witnessGrace
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		// Buffers, not nil: a nil writer is the null device, and only a
+		// pipe the grandchild inherited can hold the command open.
+		done <- p.Status(ctx, &bytes.Buffer{}, &bytes.Buffer{})
+	}()
+
+	grandchild := awaitPidFile(t, pidFile)
+	t.Cleanup(func() { _ = syscall.Kill(grandchild, syscall.SIGKILL) })
+
+	cancel()
+	cancelled := time.Now()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("a cancelled credential command was reported as success")
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("Status never returned after its context was cancelled: nothing " +
+			"bounds the wait on a pipe a forked helper holds open")
+	}
+	assertLetGoAtTheProvidersGrace(t, "a credential command", time.Since(cancelled))
+}
+
+// witnessGrace is the termination grace the cases that wait one out run at.
+// Any positive figure would do — each case cancels only once its stubborn tree
+// is up, its grandchild having announced itself after ignoring SIGTERM — and
+// this one is short enough that a kill costs the suite nothing while far
+// enough under [termGrace] to tell the two apart.
+const witnessGrace = 100 * time.Millisecond
+
+// assertLetGoAtTheProvidersGrace fails unless a call that had to wait out a
+// stubborn tree was let go before the PRODUCTION grace could have elapsed.
+//
+// A child ignoring SIGTERM, or a helper holding the pipes its parent was
+// killed with, keeps the call open for exactly the grace in force, so a call
+// that took termGrace or longer was not given its provider's — and both sites
+// that exec a child read the provider's, which is the only reason the cases
+// above can run at [witnessGrace] at all.
+func assertLetGoAtTheProvidersGrace(t *testing.T, what string, took time.Duration) {
+	t.Helper()
+	if took >= termGrace {
+		t.Errorf("%s was let go %v after its cancel, at the production %v rather "+
+			"than the provider's own %v: the exec path is not reading Provider.termGrace",
+			what, took, termGrace, witnessGrace)
 	}
 }
 

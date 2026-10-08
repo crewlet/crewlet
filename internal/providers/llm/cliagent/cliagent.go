@@ -100,6 +100,12 @@ type Provider struct {
 	auth      Auth
 	timeout   time.Duration
 
+	// termGrace is how long every child this provider starts has to exit once
+	// signalled — always [termGrace]. A field rather than the constant at each
+	// exec so that one value reaches all of them, and so the suite can watch a
+	// stubborn child be killed at a grace it can afford to wait out.
+	termGrace time.Duration
+
 	// slots caps concurrent child processes. A buffered channel rather
 	// than a semaphore type because acquisition has to be selectable
 	// against the caller's context: a seat whose turn was cancelled while
@@ -149,6 +155,7 @@ func New(cfg Config) (*Provider, error) {
 		env:       cfg.Env,
 		auth:      cfg.Auth,
 		timeout:   cfg.Timeout,
+		termGrace: termGrace,
 		slots:     make(chan struct{}, slots),
 	}
 	if p.timeout <= 0 {
@@ -257,6 +264,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		dir:     checkout.Work,
 		env:     buildEnv(p.profile, checkout, p.env, p.auth),
 		timeout: p.timeout,
+		grace:   p.termGrace,
 	}
 	// Streamed only for a JSONL profile, where each event's text IS a
 	// fragment of the answer. The other two output modes are extracted
