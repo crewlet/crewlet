@@ -162,7 +162,8 @@ func TestARevisionThisBuildRefusesIsStillShownExportedAndDiffed(t *testing.T) {
 
 // duplicateNamesRevision breaks both admission rules and no runnable one: two
 // units called "Platform", each with a seat called "Engineer" on its own
-// handle. A build before those rules admitted it.
+// handle. A successor that relaxes those hygiene rules may store it, and this
+// build must still run it.
 const duplicateNamesRevision = `{"name":"Nimbus",` +
 	`"providers":{"llm":{"main":{"type":"anthropic","model":"claude-sonnet-5",` +
 	`"api_keys":["${ANTHROPIC_API_KEY}"]}}},` +
