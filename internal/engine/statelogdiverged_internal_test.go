@@ -57,6 +57,7 @@ func stageRestoredBroker(t *testing.T) divergedBroker {
 	d.a.Node.ID = "node-a"
 	d.a.Store.Path = filepath.Join(base, "a", "crewlet.db")
 	d.a.Stream.StoreDir = filepath.Join(base, "stream")
+	SeedStore(t, &d.a)
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)

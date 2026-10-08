@@ -60,6 +60,7 @@ func TestTheBrokerTakesTheRESOLVEDNodeID(t *testing.T) {
 	// the environment.
 	b.Node.ID = ""
 
+	engine.SeedStore(t, &b)
 	back, err := engine.OpenBackends(t.Context(), &b, parsedCompany(t, companyDoc))
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
@@ -94,6 +95,7 @@ func TestAClusteredMemberStartsOnAnEnvironmentSuppliedID(t *testing.T) {
 	b.Stream.Cluster.Name = "acme"
 	b.Stream.Cluster.Port = 0
 
+	engine.SeedStore(t, &b)
 	back, err := engine.OpenBackends(t.Context(), &b, parsedCompany(t, companyDoc))
 	if err != nil {
 		t.Fatalf("a clustered member refused to start on an environment-supplied "+
@@ -127,6 +129,7 @@ func TestWhatANodePublishesNamesThatNode(t *testing.T) {
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	b.Node.ID = ""
 
+	engine.SeedStore(t, &b)
 	back, err := engine.OpenBackends(t.Context(), &b, parsedCompany(t, companyDoc))
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)

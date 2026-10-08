@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // THE REFINEMENT KNOBS WERE CONFIG-ONLY.
@@ -115,10 +116,7 @@ func engineOver(t *testing.T) *Engine {
 
 func refinementStore(t *testing.T) *store.DB {
 	t.Helper()
-	db, err := store.OpenNode(t.Context(), t.TempDir()+"/index.db", store.Options{})
-	if err != nil {
-		t.Fatalf("store.OpenNode: %v", err)
-	}
+	db := storetest.OpenNode(t, t.TempDir()+"/index.db", store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }

@@ -137,7 +137,9 @@ func TestAnInvalidBootstrapIsRefusedBeforeAnythingIsOpened(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			boot := bootstrap(t, func(b *config.Bootstrap) {
+			// UNSEEDED: that nothing is at the store's path afterwards
+			// is the assertion.
+			boot, _ := unseededBootstrap(t, func(b *config.Bootstrap) {
 				b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 				tc.mutate(b)
 			})

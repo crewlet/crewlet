@@ -395,6 +395,7 @@ func TestEveryLeaseThisProcessHoldsIsUnderItsOneIncarnation(t *testing.T) {
 	boot.Node.ID = "node-7"
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	SeedStore(t, &boot)
 	company, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)

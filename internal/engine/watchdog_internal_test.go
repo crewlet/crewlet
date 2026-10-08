@@ -33,6 +33,7 @@ func watchdogEngine(t *testing.T) *Engine {
 	boot := config.DefaultBootstrap()
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	SeedStore(t, &boot)
 	// No HTTP surface: this is about the seat host, and binding a port
 	// would make the test fight every other one in the package for it.
 	boot.API.Port = 0

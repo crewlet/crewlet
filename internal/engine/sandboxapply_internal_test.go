@@ -394,6 +394,7 @@ func newSandboxNode(t *testing.T, company *config.Company) *Engine {
 	dir := t.TempDir()
 	b.Store.Path = filepath.Join(dir, "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(dir, "stream")
+	SeedStore(t, &b)
 	e, err := New(t.Context(), Options{
 		Bootstrap: &b, Company: company,
 		ActivatedAt:         time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),

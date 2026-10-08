@@ -242,6 +242,7 @@ func bootRejoinNode(t *testing.T) (*Engine, *Backends, *jetstream.Queue) {
 	b := config.DefaultBootstrap()
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
@@ -619,14 +620,9 @@ func TestALostEstateIsReopenedAtOnceAndTheFleetAskedOnItsInterval(t *testing.T) 
 	}
 	boot := func(t *testing.T, ask func(h *harness) error) *harness {
 		t.Helper()
-		db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "node.db"), store.Options{})
-		if err != nil {
-			t.Fatalf("open the node: %v", err)
-		}
+		db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"),
+			store.Options{}, estateLogs())
 		t.Cleanup(func() { _ = db.Close() })
-		if _, err := db.OpenReplicated(t.Context(), estateLogs()); err != nil {
-			t.Fatalf("open the replicated estate: %v", err)
-		}
 		ctx, cancel := context.WithCancel(t.Context())
 		// THE NODE'S STORE IS WHAT A HEARTBEAT ASKS whether the replicated
 		// estate is open, so the harness's state log runs over this one.

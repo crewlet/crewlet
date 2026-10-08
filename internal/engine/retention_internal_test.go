@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -424,6 +425,7 @@ func trimmedTracker(t *testing.T) (*Engine, *Backends, *runningLog) {
 	b := config.DefaultBootstrap()
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
@@ -1194,11 +1196,7 @@ func TestTheRetentionReportSaysWhichLogsEvictionsItCouldNotRead(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
 	s := e.native.Load().log
-	closed, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "closed.db"),
-		store.Options{})
-	if err != nil {
-		t.Fatalf("open a second store: %v", err)
-	}
+	closed := storetest.OpenNode(t, filepath.Join(t.TempDir(), "closed.db"), store.Options{})
 	t.Cleanup(func() { _ = closed.Close() })
 	if err := closed.CloseReplicated(); err != nil {
 		t.Fatalf("close its replicated estate: %v", err)

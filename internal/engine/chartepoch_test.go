@@ -160,10 +160,13 @@ func TestARestartOnOneActivationWritesNothing(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	boot := func() *config.Bootstrap {
-		return bootstrap(t, func(b *config.Bootstrap) {
+		b := bootstrap(t, func(b *config.Bootstrap) {
 			b.Store.Path = filepath.Join(dir, "crewlet.db")
 			b.Stream.StoreDir = filepath.Join(dir, "stream")
 		})
+		// Seeded for the first boot; the second finds its own file.
+		engine.SeedStore(t, b)
+		return b
 	}
 	activated := time.Date(2026, 3, 2, 10, 0, 0, 0, time.UTC)
 	first, err := engine.New(t.Context(), engine.Options{

@@ -23,17 +23,36 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
+// bootstrap is a node's Tier A for a case, its store in the case's own
+// directory and MIGRATED ALREADY, from the image this binary builds once, when
+// the store is still where this put it: a boot here is about the engine, never
+// about the migration chain, which internal/store certifies. A case that moves
+// the store — onto a directory, or a path two boots share — decides for itself
+// ([engine.SeedStore]).
 func bootstrap(t *testing.T, mutate func(*config.Bootstrap)) *config.Bootstrap {
+	t.Helper()
+	b, chosen := unseededBootstrap(t, mutate)
+	if b.Store.Path == chosen {
+		engine.SeedStore(t, b)
+	}
+	return b
+}
+
+// unseededBootstrap is [bootstrap] with nothing written at the store's path,
+// for a case whose subject is what a node does before anything exists there,
+// and the path it chose for the store.
+func unseededBootstrap(t *testing.T, mutate func(*config.Bootstrap)) (*config.Bootstrap, string) {
 	t.Helper()
 	b := config.DefaultBootstrap()
 	// The default store path is relative, so a test that took it would
 	// create a database in the package directory and share it with every
 	// other test in the run. One process owns a store file exclusively.
-	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
+	chosen := filepath.Join(t.TempDir(), "crewlet.db")
+	b.Store.Path = chosen
 	if mutate != nil {
 		mutate(&b)
 	}
-	return &b
+	return &b, chosen
 }
 
 // parsedCompany is the Tier B half OpenBackends needs, for the one field it
@@ -459,6 +478,7 @@ func TestTheStoreOutlivesTheHandlersThatWriteToIt(t *testing.T) {
 		b.Stream.StoreDir = filepath.Join(dir, "stream")
 		b.Store.Path = path
 	})
+	engine.SeedStore(t, b)
 	back, err := openBackends(t, b)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)

@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -26,10 +27,7 @@ import (
 // the same silence with an extra step, so this asserts the table fires too.
 func TestTheCapacityAlarmsFireOnWhatThisNodesDiskIsDoing(t *testing.T) {
 	t.Parallel()
-	db, err := store.OpenNode(t.Context(), t.TempDir()+"/index.db", store.Options{})
-	if err != nil {
-		t.Fatalf("store.OpenNode: %v", err)
-	}
+	db := storetest.OpenNode(t, t.TempDir()+"/index.db", store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 
 	r := &retention{db: db}
@@ -83,16 +81,10 @@ func TestTheCapacityAlarmsFireOnWhatThisNodesDiskIsDoing(t *testing.T) {
 func TestTheVolumeAlarmReadsEachFilesOwnVolume(t *testing.T) {
 	t.Parallel()
 	nodeDir, replicatedDir := t.TempDir(), t.TempDir()
-	db, err := store.OpenNode(t.Context(), nodeDir+"/company.db", store.Options{
-		ReplicatedPath: replicatedDir + "/crewlet-replicated.db"})
-	if err != nil {
-		t.Fatalf("store.OpenNode: %v", err)
-	}
+	db, estate := storetest.OpenEstate(t, nodeDir+"/company.db", store.Options{
+		ReplicatedPath: replicatedDir + "/crewlet-replicated.db"}, 1)
 	t.Cleanup(func() { _ = db.Close() })
-	replicated, err := db.OpenReplicated(t.Context(), 1)
-	if err != nil {
-		t.Fatalf("open the replicated estate: %v", err)
-	}
+	replicated := storetest.ReplicatedDB(t, estate)
 	nodeSize, err := fileBytes(db.Path())
 	if err != nil {
 		t.Fatal(err)
@@ -223,10 +215,7 @@ func TestAnIdlePoolRecordsNothingRatherThanAZeroWait(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recorder: %v", err)
 	}
-	db, err := store.OpenNode(t.Context(), t.TempDir()+"/index.db", store.Options{})
-	if err != nil {
-		t.Fatalf("store.OpenNode: %v", err)
-	}
+	db := storetest.OpenNode(t, t.TempDir()+"/index.db", store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 
 	r := &retention{db: db, metrics: recorder, pooled: map[string]poolCounters{}}

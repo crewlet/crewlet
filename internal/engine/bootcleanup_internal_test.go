@@ -126,6 +126,7 @@ func TestAFailedBootStopsEverythingItAlreadyStarted(t *testing.T) {
 	b := config.DefaultBootstrap()
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(bootCleanupCompany))
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)

@@ -40,6 +40,7 @@ func TestSeatMemoryTravelsOnAnExternalBroker(t *testing.T) {
 	b.Stream.Type = config.StreamNATS
 	b.Stream.URL = broker.ClientURL()
 	b.Coordination.Type = config.CoordinationEmbeddedKV
+	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)

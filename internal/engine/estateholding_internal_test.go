@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // A DATA NODE HOLDS ITS REPLICATED ESTATE WHATEVER ITS COMPANY RUNS, and its
@@ -107,10 +108,7 @@ func TestANodeWithoutDataHoldsNothing(t *testing.T) {
 	if HoldsEstate(&b) {
 		t.Error("a node without data holds the replicated estate")
 	}
-	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "node.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("open the node's store: %v", err)
-	}
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "node.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	if err := holdEstate(t.Context(), db, &b); err != nil {
 		t.Fatalf("hold the estate of a node without data: %v", err)
