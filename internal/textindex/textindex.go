@@ -7,8 +7,8 @@
 // The native knowledge base has to answer "what do we already know about
 // this" over the company's own pages, and the store cannot. Turso ships no
 // fts5, and `USING fts` is behind an experimental flag the driver refuses
-// without it — [store.Capabilities] probes for both on every open and reports
-// what it found, so this is measured on the build that ships rather than
+// without it — [store.Capabilities] measures both once per process and reports
+// them on every open, so this is measured on the build that ships rather than
 // assumed. The alternatives were refusing knowledge search on the only driver
 // this build has (which is not a knowledge base), embedding a search library
 // (a second index format, its own file, its own corruption and backup story,
