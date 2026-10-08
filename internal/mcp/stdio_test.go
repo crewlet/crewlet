@@ -106,9 +106,12 @@ func TestAnOrdinaryStopDoesNotSignalTheGroup(t *testing.T) {
 // below absorbed it.
 //
 // [helperSpec] launches the helper with that sleep switched off, so the floor
-// is gone: a clean stop here measures what a clean stop costs, and the
-// ceiling has its whole margin again. Tune shutdownGrace and
-// stderrDrainTimeout against these numbers as they stand.
+// is gone and the ceiling has its whole margin again. The race build still
+// slows everything else on both sides of the pipe: measured on one box, a
+// spawn and handshake, a tools/list and a clean stop took 23 ms, 2.3 ms and
+// 2.3 ms under -race against 7.3 ms, 0.34 ms and 0.92 ms without it. Tune
+// shutdownGrace and stderrDrainTimeout against a run without -race; the
+// figures a -race run prints are a few times too slow.
 func TestMeasuredStdioTimings(t *testing.T) {
 	t.Parallel()
 
