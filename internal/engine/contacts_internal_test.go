@@ -2,21 +2,30 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/colleague"
+	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // AN EPOCH RESOLVES ITS ROSTER'S CONTACTS THROUGH THE RESOLVER IT WAS BUILT
 // WITH — on a running node its own chain, the secret store and then the
 // environment it was handed — and never the process environment behind it, so
 // a teammate's id reads in a seat's prompt as notification routing reads it.
-// [Company.RunnerFor] hands this lookup to the prompt builder's roster.
+// Read off the prompt a runner the epoch builds sends, because the resolver is
+// held by the epoch and handed to the prompt's roster by [Company.RunnerFor],
+// and either half alone could drop it.
 func TestAnEpochResolvesItsRosterThroughTheResolverItWasBuiltWith(t *testing.T) {
 	t.Parallel()
 	const variable = "CREWLET_ENGINE_TEST_EPOCH_CONTACT"
@@ -28,6 +37,7 @@ name: Acme
 roles:
   - name: CEO
     handle: ceo
+    manages: [Founder]
   - name: Founder
     kind: human
     contact:
@@ -40,9 +50,9 @@ roles:
 	if err != nil {
 		t.Fatalf("NewCompanyWith: %v", err)
 	}
-	if got, ok := built.contacts(variable); !ok || got != "U0HANDED" {
-		t.Errorf("the roster resolves %s to %q (%v), want the value of the resolver "+
-			"the epoch was built with", variable, got, ok)
+	if prompt := leadPrompt(t, built); !strings.Contains(prompt, "U0HANDED") {
+		t.Errorf("the CEO's prompt does not name its report by the id the epoch's "+
+			"resolver gives them:\n%s", prompt)
 	}
 	// THE CONTROL: an epoch built from the environment alone — `crewlet
 	// validate`'s — reads the process's, which has no such variable.
@@ -50,9 +60,66 @@ roles:
 	if err != nil {
 		t.Fatalf("NewCompany: %v", err)
 	}
-	if got, ok := plain.contacts(variable); ok {
-		t.Errorf("an environment-only epoch resolved %s to %q", variable, got)
+	if prompt := leadPrompt(t, plain); !strings.Contains(prompt, "Founder") ||
+		strings.Contains(prompt, "U0HANDED") {
+		t.Errorf("an environment-only epoch's prompt, want the founder named and "+
+			"the id no process holds absent:\n%s", prompt)
 	}
+}
+
+// leadPrompt is everything the CEO's executor sends its model on the first
+// round of a turn c builds, the model answering nothing back.
+func leadPrompt(t *testing.T, c *Company) string {
+	t.Helper()
+	sent := &promptRecorder{}
+	models, err := phase.NewRegistry([]phase.Entry{{Key: "only", Provider: sent}})
+	if err != nil {
+		t.Fatalf("phase registry: %v", err)
+	}
+	c.Models = models
+	r, err := c.RunnerFor("ceo", tools.NewRegistry(), RunnerInput{Task: "plan the week",
+		Reply: turn.NoReply()})
+	if err != nil {
+		t.Fatalf("RunnerFor: %v", err)
+	}
+	// The turn fails, its model refusing every call: only what it was sent
+	// is under test.
+	_, _, _ = r.Execute(t.Context(), 1, "", nil)
+	return sent.first()
+}
+
+// promptRecorder is a model that records the messages of the first request it is
+// sent and refuses every request.
+type promptRecorder struct {
+	mu   sync.Mutex
+	text string
+	seen bool
+}
+
+func (*promptRecorder) Model() string { return "recorder" }
+
+func (s *promptRecorder) Complete(_ context.Context, req llm.Request) (*llm.Completion, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.seen {
+		s.seen = true
+		var b strings.Builder
+		for _, m := range req.Messages {
+			b.WriteString(m.Content)
+			b.WriteString("\n")
+		}
+		s.text = b.String()
+	}
+	return nil, errors.New("the recorder answers nothing")
+}
+
+func (s *promptRecorder) first() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.seen {
+		return ""
+	}
+	return s.text
 }
 
 // THE ENGINE'S OWN CHART SEAMS FIND A PERSON THROUGH THIS NODE'S CHAIN. A
