@@ -236,9 +236,14 @@ func (c *secretsClient) refusal(status int, path string, raw []byte) error {
 		return fmt.Errorf("%w: %s", secrets.ErrNotFound,
 			strings.TrimPrefix(strings.SplitN(path, "?", 2)[0], "/secrets/"))
 	case status == http.StatusNotFound:
-		return fmt.Errorf("%s has no /secrets surface: it is running a build "+
-			"from before secrets moved onto the fleet, or it cannot reach the "+
-			"coordination store", c.base)
+		// Every node serves /secrets, so a 404 that is not the store's
+		// own not_found came from something that is not a node's API: a
+		// proxy or gateway in front of it, or another service at the
+		// address.
+		return fmt.Errorf("%s has no /secrets surface: whatever answered is "+
+			"not a Crewlet node's API — point -api (or api.host and api.port) "+
+			"at the node itself rather than at a proxy or another service",
+			c.base)
 	case status == http.StatusUnauthorized:
 		return fmt.Errorf("%s refused the bearer token: set %s to one of its "+
 			"api.auth.tokens", c.base, apiTokenEnv)

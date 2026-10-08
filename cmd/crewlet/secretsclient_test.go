@@ -238,11 +238,12 @@ func TestAMissingSecretIsTheNotFoundSentinel(t *testing.T) {
 	}
 }
 
-// A 404 WITH NO not_found BODY IS AN OLD NODE, not a missing secret.
+// A 404 WITH NO not_found BODY IS A MISSING SURFACE, not a missing secret.
 //
-// A binary from before secrets moved onto the fleet serves no /secrets at
-// all, and reporting that as "no such secret" would have an operator set a
-// value over and over against a node that will never hold it.
+// Every node serves /secrets, so a bare 404 came from something in front of
+// it or from another service at the address — and reporting that as "no such
+// secret" would have an operator set a value over and over against a server
+// that will never hold it.
 func TestA404WithoutTheBodyIsReportedAsAMissingSurface(t *testing.T) {
 	t.Parallel()
 	node := newFakeSecretsNode(t)
