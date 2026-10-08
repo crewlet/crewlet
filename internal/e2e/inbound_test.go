@@ -260,6 +260,27 @@ func dropped(t *testing.T, n *node, handle string, want skip) {
 	want.heldAs(t, n)
 }
 
+// settleRecipient is where [settleInbound]'s delivery is routed: the company
+// document's one human seat (companyDoc's Founder), which the spine resolves,
+// records as skipped and never wakes.
+const settleRecipient = "founder"
+
+// settler routes the one delivery [settleInbound] publishes from its source to
+// [settleRecipient].
+type settler struct{ source string }
+
+func (s settler) Source() string { return s.source }
+
+func (s settler) Parse(context.Context, types.RawWebhook, *notify.Registry) ([]notify.Routed, error) {
+	return []notify.Routed{{
+		Inbound: notify.Inbound{
+			Source: s.source, EventType: "settle", Sender: "e2e",
+			Subject: "settling the inbound edge",
+		},
+		To: notify.Recipient{Handle: settleRecipient},
+	}}, nil
+}
+
 // settleInbound returns once every delivery published to n's inbound edge
 // before it was called has been handled.
 //
@@ -267,10 +288,16 @@ func dropped(t *testing.T, n *node, handle string, want skip) {
 // nobody — a green pipeline, a username no seat holds — is acked with nothing
 // published at all (internal/notify: "most webhooks concern nobody here"), so
 // there is no record of its own to wait for. So this publishes one more
-// delivery behind it, from a source nothing parses, and waits for THAT one's
-// record: the service handles one node's deliveries one at a time in the order
-// they were published, which [TestTheInboundEdgeHandlesOneNodesDeliveriesInOrder]
-// holds, so once the last is recorded every one before it was handled.
+// delivery behind it and waits for THAT one's record: the service handles one
+// node's deliveries one at a time in the order they were published, which
+// [TestTheInboundEdgeHandlesOneNodesDeliveriesInOrder] holds, so once the last
+// is recorded every one before it was handled.
+//
+// TO A HUMAN SEAT, from a source of its own: a source nothing parses would do
+// for the order, but the service warns about one as an integration wired at
+// the edge and nowhere else, and every settle wrote that warning into the run's
+// output and into any failing case's window, where it reads as a fault. A human
+// seat is skipped by name and logged at INFO.
 //
 // ONE NODE ONLY. The inbound group is fleet-wide, and on a fleet the delivery
 // under test and this one may be handled by different members, in either
@@ -278,6 +305,9 @@ func dropped(t *testing.T, n *node, handle string, want skip) {
 func settleInbound(t *testing.T, n *node) {
 	t.Helper()
 	source := "e2e-settle-" + uuid.NewString()
+	if err := n.engine.RouteInbound(t.Context(), []notify.Parser{settler{source}}, nil); err != nil {
+		t.Fatalf("route the settling delivery's source: %v", err)
+	}
 	ev := events.New(types.RawWebhook{Body: map[string]any{}, Headers: map[string]string{}},
 		events.NewTrace())
 	ev.Source = source
@@ -285,7 +315,7 @@ func settleInbound(t *testing.T, n *node) {
 		topics.NotificationsInbound, ev); err != nil {
 		t.Fatalf("publish the settling delivery: %v", err)
 	}
-	settling := skip{source: source, reason: reasonUnparsed}
+	settling := skip{source: source, handle: settleRecipient, reason: reasonHumanSeat}
 	waitFor(t, "the settling delivery's record: "+settling.String(), func() bool {
 		return len(settling.reasons(t, n)) > 0
 	}, func() string { return skipsRecorded(t, n, source) })
