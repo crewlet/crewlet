@@ -66,8 +66,15 @@ func StartCluster(t testing.TB, n int, base js.Config) *Cluster {
 // can be handed out twice.
 func startCluster(t testing.TB, n int, base js.Config, leafListeners bool) *Cluster {
 	t.Helper()
-	if n < 1 {
-		t.Fatalf("StartCluster(%d): a cluster needs at least one member", n)
+	if n < 2 {
+		// ONE MEMBER IS NOT A CLUSTER THAT COMES UP: a member whose only
+		// route is itself never elects a metadata leader — measured, its
+		// JetStream answers "temporarily unavailable" from ten seconds on
+		// and [js.Server.Client] never returns on it — so the wait below
+		// could only spend the whole retry budget and report a port race.
+		// A case that needs one broker starts it with [js.StartServer].
+		t.Fatalf("StartCluster(%d): a cluster needs at least two members — one "+
+			"never elects a metadata leader, so nothing could be provisioned on it", n)
 	}
 
 	return withFreshPorts(t.Context(), t, "cluster", func(ctx context.Context) (*Cluster, error) {
@@ -109,13 +116,33 @@ func startCluster(t testing.TB, n int, base js.Config, leafListeners bool) *Clus
 			}
 		}
 
-		// No wait here: StartServer does not return a clustered member
-		// until its JetStream is current, because a node that
-		// provisions into a leaderless metadata group blocks rather
-		// than failing, and that is a production boot hazard rather
-		// than a test one.
-		return c, nil
+		return c, c.awaitReady(ctx)
 	})
+}
+
+// awaitReady waits until every member can serve a stream at its configured
+// replica count — current, routed, and answered by the metadata leader — so a
+// cluster this harness hands back is one a metadata request is answered on.
+//
+// HERE, AFTER EVERY MEMBER HAS STARTED, because [js.StartServer] cannot wait:
+// the first member of a fresh cluster would wait for a quorum its own blocking
+// keeps from forming. Only [js.Server.Client] waited, so a test that rode a
+// member's raw connection — the coordination store's cluster cases, which open
+// buckets on [js.Server.Conn] — sent its first lookup to a group that might
+// have no leader yet. Such a request is not refused but DROPPED, so the lookup
+// sat out a whole fifteen-second ask term before it was asked again: measured
+// as four sixteen-second stalls in one run of those cases, each standing in
+// for an election that takes about a second.
+//
+// A member that never gets there fails the ATTEMPT, so [withFreshPorts] tries
+// again rather than handing back a cluster nobody can provision on.
+func (c *Cluster) awaitReady(ctx context.Context) error {
+	for i, srv := range c.Servers {
+		if err := srv.AwaitClusterReady(ctx, c.Configs[i].Replicas); err != nil {
+			return fmt.Errorf("cluster member %d: %w", i, err)
+		}
+	}
+	return nil
 }
 
 // LeafURLs is every member's leaf listener, in the form [js.Config.LeafURLs]
@@ -463,7 +490,7 @@ func startPartitionable(ctx context.Context, t *testing.T, n int, base js.Config
 			return c, err
 		}
 	}
-	return c, nil
+	return c, c.awaitReady(ctx)
 }
 
 // Client connects a queue to member i. Each engine node in a fleet talks to

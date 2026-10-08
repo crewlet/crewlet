@@ -203,6 +203,35 @@ func (s *Server) Conn() (*nats.Conn, error) {
 	return s.embedded.connect()
 }
 
+// AwaitClusterReady waits until this member can serve a stream of replicas
+// copies: its JetStream current, routed to replicas-1 peers, and the metadata
+// leader answering it. It is the wait [Server.Client] makes before a client
+// provisions anything, and a no-op on a member with no cluster.
+//
+// EXPORTED FOR WHAT [Server.Conn] SKIPS. A subsystem that rides a member's
+// connection without a client — the coordination store, in a test that
+// stands members up itself — gets none of that wait, and a metadata request
+// it sends before the group has a leader is not refused but DROPPED: it costs
+// a whole ask term before anything asks again. A caller that starts members
+// waits for every one of them here, AFTER all of them have started: waited
+// inside [StartServer], the first member of a fresh cluster would wait for a
+// quorum its own blocking keeps from forming.
+func (s *Server) AwaitClusterReady(ctx context.Context, replicas int) error {
+	if s.embedded == nil {
+		return errors.New("jetstream: server is shut down")
+	}
+	nc, err := s.embedded.connect()
+	if err != nil {
+		return fmt.Errorf("jetstream: connect to wait for the cluster: %w", err)
+	}
+	defer nc.Close()
+	js, err := s.cfg.API().Client(nc)
+	if err != nil {
+		return fmt.Errorf("jetstream: open jetstream to wait for the cluster: %w", err)
+	}
+	return s.embedded.awaitClusterReady(ctx, js, replicas)
+}
+
 // RoutePeers names the cluster members this server currently holds a route
 // to, sorted, and never itself.
 //

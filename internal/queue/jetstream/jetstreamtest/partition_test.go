@@ -316,10 +316,11 @@ func TestAFailedStartCanHandBackWhatItStarted(t *testing.T) {
 
 	// A CLUSTER THAT CAME UP is the control: shutdown must be safe to call
 	// on the way out, because the retry path calls it and so does the
-	// test's own cleanup.
-	c := StartCluster(t, 1, js.Config{})
-	if len(c.Servers) != 1 {
-		t.Fatalf("a one-member cluster reports %d server(s)", len(c.Servers))
+	// test's own cleanup. Two members, the fewest that come up — see
+	// [StartCluster].
+	c := StartCluster(t, 2, js.Config{})
+	if len(c.Servers) != 2 {
+		t.Fatalf("a two-member cluster reports %d server(s)", len(c.Servers))
 	}
 	// TWICE, which is what actually happens: withFreshPorts on a failed
 	// attempt, then t.Cleanup at the end.
