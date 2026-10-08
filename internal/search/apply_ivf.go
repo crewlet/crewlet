@@ -634,7 +634,7 @@ func refile(ctx context.Context, tx *sql.Tx, generation int64, batch int, moves 
 // ms as a statement a row against 22 ms as this one over 2 000 rows, and 173
 // ms against 38 ms over 20 000. A whole batch at the shipped width, its
 // filing arithmetic and its counts included (BenchmarkReassignBatch, 5 000
-// rows, 64 lists, on a shared four-core box): 70–85 ms against 25–27 ms.
+// rows, 64 lists, on a shared four-core box): 70–85 ms against 25–31 ms.
 //
 // A constant of its own so the plan gate explains the statement the applier
 // runs.
