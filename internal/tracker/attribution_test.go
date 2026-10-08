@@ -25,6 +25,7 @@ import (
 // defect — so what is asserted is that every name it uses is one the engine
 // writes, plus a named report of the ones it has not taken up.
 func TestAttributionFieldsAreTheEngines(t *testing.T) {
+	t.Parallel()
 	engine := deltaFields(t)
 
 	body, err := clientsource.Literal(clientsource.Tree(t), "CHANGE_FIELDS")
