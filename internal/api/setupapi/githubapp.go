@@ -3,6 +3,7 @@ package setupapi
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -71,6 +72,41 @@ const manifestTTL = 15 * time.Minute
 // tokenDomain separates these tokens from every other signed URL this engine
 // issues, so a token minted for the OTLP receiver cannot be replayed here.
 const tokenDomain = "github-app-manifest"
+
+// stateSubject is what a begun creation's state carries: the seat, and the
+// operator whose credential began it.
+//
+// THE OPERATOR TRAVELS, because the callback is unauthenticated and the app
+// it records is a write onto the company document: attributed to a fixed
+// label, every app read in the history as made by "setup", a name no token
+// carries, and on a managed document (ADR-0030) a writer's own creation was
+// refused at the last step — after GitHub had issued the key. Signed with the
+// rest of the state, so the callback cannot be told somebody else began it.
+//
+// Each half is base64url, whose alphabet carries none of the separators the
+// signed token itself is split on.
+func stateSubject(handle, operator string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(handle)) + "~" +
+		base64.RawURLEncoding.EncodeToString([]byte(operator))
+}
+
+// parseStateSubject is [stateSubject] read back; ok is false for a subject
+// this engine did not write.
+func parseStateSubject(subject string) (handle, operator string, ok bool) {
+	rawHandle, rawOperator, found := strings.Cut(subject, "~")
+	if !found {
+		return "", "", false
+	}
+	h, err := base64.RawURLEncoding.DecodeString(rawHandle)
+	if err != nil || len(h) == 0 {
+		return "", "", false
+	}
+	o, err := base64.RawURLEncoding.DecodeString(rawOperator)
+	if err != nil {
+		return "", "", false
+	}
+	return string(h), string(o), true
+}
 
 // AppFlow is what the callback needs to finish an app creation.
 //
@@ -147,6 +183,15 @@ func (f *AppFlow) spend(ctx context.Context, state string) error {
 // not work out itself: the manifest, the address to POST it to, and the state
 // that ties the answer back to this seat.
 func (s *Service) beginApp(w http.ResponseWriter, r *http.Request) {
+	// A MANAGED DOCUMENT IS REFUSED HERE, before GitHub is asked for
+	// anything: the app this begins is recorded on the seat, and a refusal
+	// at the callback would come after GitHub had created the app and
+	// issued its key, once.
+	if err := s.config.Authorize(operatorAuthor(operatorOf(r))); err != nil {
+		s.refuse(w, r, err, setup.Result{})
+		return
+	}
+
 	// THROUGH THE PACKAGE'S OWN CAP, like every other route here. A decoder
 	// straight off r.Body reads whatever is sent: this route names one seat,
 	// so the body is tens of bytes, and streaming an unbounded one into a
@@ -199,7 +244,7 @@ func (s *Service) beginApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	state := s.appFlow.signer.Mint(handle, manifestTTL)
+	state := s.appFlow.signer.Mint(stateSubject(handle, operatorOf(r)), manifestTTL)
 	manifest := github.BuildManifest(github.ManifestOptions{
 		Seat:        handle,
 		Name:        github.AppName(company.Name, seat.Name),
@@ -231,8 +276,8 @@ var ErrStateRefused = errors.New(
 // anything that can fail has to happen after they are durable. A failure
 // after the seal costs a retry; a failure before it costs the app.
 func (f *AppFlow) Complete(ctx context.Context, code, state string) (string, error) {
-	handle := f.signer.Validate(strings.TrimSpace(state))
-	if handle == "" {
+	handle, operator, ok := parseStateSubject(f.signer.Validate(strings.TrimSpace(state)))
+	if !ok {
 		return "", ErrStateRefused
 	}
 	// SPENT HERE, BEFORE THE EXCHANGE, which is what makes [ErrStateRefused]
@@ -256,6 +301,13 @@ func (f *AppFlow) Complete(ctx context.Context, code, state string) (string, err
 	company := s.company()
 	if company == nil || seatByHandle(company, handle) == nil {
 		return handle, fmt.Errorf("setupapi: this company has no agent seat %q", handle)
+	}
+	// ASKED AGAIN BEFORE THE EXCHANGE, which is the last moment a refusal
+	// costs nothing: the begin route asked on the node that minted the
+	// state, and the callback may land on a node whose Tier A names the
+	// writers differently, or on this one after a restart that changed them.
+	if err := s.config.Authorize(operatorAuthor(operator)); err != nil {
+		return handle, err
 	}
 
 	// DETACHED FROM THE BROWSER, which is the same move [Service.runPass]
@@ -283,12 +335,12 @@ func (f *AppFlow) Complete(ctx context.Context, code, state string) (string, err
 	// GitHub had created it, and the crash landed before its key was
 	// sealed, so the key was gone for good.
 	now := s.now()
-	if err := s.secrets.Set(ctx, keyVar, app.PEM, "setup", "setup", now); err != nil {
+	if err := s.secrets.Set(ctx, keyVar, app.PEM, operator, setup.Source, now); err != nil {
 		return handle, fmt.Errorf("setupapi: seal the app key for %s: %w", handle, err)
 	}
 	sealedHook := strings.TrimSpace(app.WebhookSecret) != ""
 	if sealedHook {
-		if err := s.secrets.Set(ctx, hookVar, app.WebhookSecret, "setup", "setup", now); err != nil {
+		if err := s.secrets.Set(ctx, hookVar, app.WebhookSecret, operator, setup.Source, now); err != nil {
 			return handle, fmt.Errorf("setupapi: seal the webhook secret for %s: %w", handle, err)
 		}
 	}
@@ -303,7 +355,7 @@ func (f *AppFlow) Complete(ctx context.Context, code, state string) (string, err
 	if sealedHook {
 		hookRef = "${" + hookVar + "}"
 	}
-	if err := s.recordSeatApp(ctx, handle, app, keyVar, hookRef); err != nil {
+	if err := s.recordSeatApp(ctx, handle, operator, app, keyVar, hookRef); err != nil {
 		return handle, err
 	}
 	return handle, nil
@@ -316,7 +368,7 @@ func (f *AppFlow) Complete(ctx context.Context, code, state string) (string, err
 // handle is the seat's identity rather than its position, which is exactly
 // what this route addresses by.
 func (s *Service) recordSeatApp(
-	ctx context.Context, handle string, app *github.CreatedApp, keyVar, hookRef string,
+	ctx context.Context, handle, operator string, app *github.CreatedApp, keyVar, hookRef string,
 ) error {
 	body, err := s.writer.Config.Seat(ctx, handle)
 	if err != nil {
@@ -356,7 +408,7 @@ func (s *Service) recordSeatApp(
 		return fmt.Errorf("setupapi: encode the seat %s: %w", handle, err)
 	}
 	_, _, err = s.writer.Config.SetSeat(ctx, handle, updated,
-		"give "+handle+" its own GitHub App", "setup", "")
+		"give "+handle+" its own GitHub App", operator, "")
 	if err != nil {
 		return fmt.Errorf("setupapi: record the app for %s: %w", handle, err)
 	}

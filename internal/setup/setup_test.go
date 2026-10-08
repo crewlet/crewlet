@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -221,6 +222,23 @@ type recorder struct {
 	failApp error
 	active  string
 	seat    []byte
+	// writers, when set, are the only operators Authorize admits — a
+	// managed document, the way the config surface answers one.
+	writers []string
+	// asked is every operator Authorize was asked about, kept apart from
+	// events so the write order the other cases pin is unchanged.
+	asked []string
+}
+
+// errManaged is the recorder's refusal of an operator it does not admit.
+var errManaged = errors.New("the company document is managed")
+
+func (r *recorder) Authorize(operator string) error {
+	r.asked = append(r.asked, operator)
+	if len(r.writers) > 0 && !slices.Contains(r.writers, operator) {
+		return errManaged
+	}
+	return nil
 }
 
 func (r *recorder) Set(_ context.Context, name, value, by, source string, _ time.Time) error {
@@ -852,5 +870,72 @@ func TestAGateOnAMissingFieldIsShut(t *testing.T) {
 	if r.Needed([]setup.Requirement{{Field: "coverage", Stored: "true"}}) {
 		t.Error("a gate on a field nobody declares reads as open, so a typo " +
 			"blocks every connect")
+	}
+}
+
+// A MANAGED DOCUMENT REFUSES A SUBMISSION THAT WOULD CHANGE IT BEFORE ANY
+// VALUE IS SEALED — company-wide and per seat — so a refused connect leaves
+// no credential in the store under a name nothing points at.
+func TestAManagedDocumentRefusesAChangeBeforeAnythingIsSealed(t *testing.T) {
+	t.Parallel()
+	seatReqs := []setup.Requirement{{
+		Field: "bot_token", Kind: setup.KindSecret, Required: true,
+		ConfigPath: "integrations.slack.bot_token", Seat: "sre-lead",
+		SecretName: "SLACK_BOT_TOKEN_SRE_LEAD",
+	}}
+	for name, tc := range map[string]struct {
+		reqs []setup.Requirement
+		in   setup.Submission
+	}{
+		"company-wide": {datadogReqs, setup.Submission{
+			Kind:   integration.KindDatadog,
+			Values: map[string]string{"webhook_token": "s3cr3t-value", "route_to": "sre-lead"},
+		}},
+		"per seat": {seatReqs, setup.Submission{
+			Kind: integration.KindSlack, Seat: "sre-lead",
+			Values: map[string]string{"bot_token": "xoxb-value"},
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			for _, operator := range []string{"founder", "operator"} {
+				rec := &recorder{writers: []string{"operator"}}
+				in := tc.in
+				in.Operator = operator
+				_, err := writer(rec).Write(context.Background(), tc.reqs, in)
+				if operator == "founder" {
+					if !errors.Is(err, errManaged) {
+						t.Fatalf("a non-writer's submission = %v, want the refusal", err)
+					}
+					if len(rec.events) != 0 {
+						t.Errorf("a refused submission wrote %v", rec.events)
+					}
+					continue
+				}
+				if err != nil || len(rec.events) != 2 {
+					t.Errorf("the writer's submission = %v, events %v", err, rec.events)
+				}
+			}
+		})
+	}
+}
+
+// AND A ROTATION IS NOT A CHANGE TO THE DOCUMENT: the pointer is already
+// right, the value is sealed and the revision reloaded, whoever submits it —
+// the break-glass a person keeps when another system manages the document.
+func TestARotationOfAManagedDocumentIsNotAsked(t *testing.T) {
+	t.Parallel()
+	rec := &recorder{writers: []string{"operator"}}
+	rotating := withStored(datadogReqs, "webhook_token", "${DATADOG_WEBHOOK_TOKEN}")
+	result, err := writer(rec).Write(context.Background(), rotating, setup.Submission{
+		Kind:    integration.KindDatadog,
+		Values:  map[string]string{"webhook_token": "fresh"},
+		Summary: "rotate datadog", Operator: "founder",
+	})
+	if err != nil || !result.Reloaded {
+		t.Fatalf("a rotation by a non-writer = %+v, %v; want sealed and reloaded", result, err)
+	}
+	if len(rec.asked) != 0 {
+		t.Errorf("a rotation asked Authorize about %v; it changes nothing in the document", rec.asked)
 	}
 }

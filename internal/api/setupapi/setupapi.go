@@ -286,6 +286,10 @@ func (c configWriter) Apply(
 	return applied.RevisionID, applied.Epoch, err
 }
 
+func (c configWriter) Authorize(operator string) error {
+	return c.svc.Authorize(operatorAuthor(operator))
+}
+
 func (c configWriter) Current(ctx context.Context) (string, error) {
 	return c.svc.ActiveRevision(ctx)
 }
@@ -2042,6 +2046,15 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 		httpjson.Write(w, http.StatusOK, map[string]any{"key": kind, "removed": false})
 		return
 	}
+	// A DISCONNECT REMOVES A BLOCK FROM THE DOCUMENT — at once when forced,
+	// through the engine's teardown otherwise — so a managed document
+	// refuses it here, before the teardown is queued: queued, it would run
+	// at the third-party app and then remove a block the managing system
+	// puts straight back.
+	if err := s.config.Authorize(operatorAuthor(operatorOf(r))); err != nil {
+		s.refuse(w, r, err, setup.Result{})
+		return
+	}
 	var req disconnectRequest
 	if body, err := httpjson.ReadBody(w, r, MaxBody); err != nil {
 		httpjson.Refuse(w, err)
@@ -2144,7 +2157,10 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 	var raced *configapi.RacedError
 	var invalid *configapi.ValidationError
 	var patchErr *configapi.PatchError
+	var managed *configapi.ManagedError
 	switch {
+	case errors.As(err, &managed):
+		configapi.RefuseManaged(w, managed)
 	case errors.As(err, &literal):
 		httpjson.FailWith(w, http.StatusConflict, codeLiteralInConfig, map[string]string{
 			"path": literal.Path,
