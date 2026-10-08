@@ -93,6 +93,14 @@ checksummed.
    [CONTRIBUTING.md](CONTRIBUTING.md#nothing-is-released-until-a-tag-ships-it)
    carries the rule contributors work to.
 
+   The first tag that carries Go code is also the first point at which an
+   **upgrade in place** is owed. Until then no compatibility is kept with an
+   older unreleased build — nothing it wrote is read or migrated, and no
+   peer of one joins a fleet beside a newer one. From that tag on, the next
+   release must read what the tag wrote and run beside it in one fleet, so a
+   change that breaks either is a break in a shipped surface and is treated
+   as one above.
+
 2. **Skim the merged pull requests** since the previous tag — they *are* the
    release notes. GitHub builds the body from their titles, so a title that
    reads as a commit log rather than a release note is worth editing on the

@@ -774,18 +774,36 @@ tag sits on the initial commit, which contains no Go at all — so no package,
 config field, CLI command, event type, API route or schema file in this tree
 has yet been in a release.
 
-Two things a missing tag does **not** excuse, because neither is about
-releases:
+No compatibility is kept with an older build that no tag shipped: no
+deployment of one is upgraded in place, no peer of one ever joins this fleet
+or shares its broker, and nothing it wrote — rows, records, blobs, bucket
+keys, coordination documents, event payloads — is read, migrated, swept or
+tolerated. Code that exists only for such a build (a reader for a version
+this tree never writes, a fallback for a field it always sets, a gate waiting
+for one particular older build's era to end, a sweep of a bucket only an
+older build created) has no caller, and is deleted rather than kept.
+
+Two things a missing tag still does **not** excuse, because neither is about
+an older build:
 
 - **An applied migration is history, not source.** `schema_migrations` is
   keyed on the filename, so editing a file that already ran silently never
   re-runs it: a database that applied it keeps the old shape while the code
   assumes the new one. Reshape with a new numbered migration under
   `internal/store/schema/`.
-- **A rolling upgrade puts two builds on one stream.** The event envelope
-  evolves additive-only, because an unknown type must round-trip losslessly
-  in both directions — a contract between peers, not between releases. The
-  same holds for anything two builds share in the coordination store.
+- **This build must be a good older peer to the next.** A rolling upgrade
+  will put this build and its successor on one stream and one coordination
+  store, so the forward mechanisms stay: the event envelope evolves
+  additive-only and a type this build does not know round-trips losslessly;
+  a state-log record this build cannot read is deferred and kept, never
+  dropped — except a gate record above the version it reads, or one whose
+  envelope it cannot decode at all, which stops the applier rather than
+  apply it wrong, and that is why every node names the version it reads on
+  its position heartbeat and a writer of such a record waits on that census
+  before publishing one; and a bump of the seat-host lease protocol makes
+  the newer node refuse to claim beside a live lower lease. That contract
+  runs FORWARD, to the builds after this one, and never obliges this tree to
+  read what an earlier unreleased build wrote.
 
 A free break is still a complete one: the rename lands everywhere in the same
 change — `docs/`, `examples/`, the dashboard, the tests — and `schema/` is
