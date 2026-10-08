@@ -116,6 +116,20 @@ a pass the broker has stopped feeding is ever ended this way. The marker
 sweep, which nothing certifies and which owes nobody a complete answer, ends a
 pass that goes quiet the same way and sweeps the rest on its next tick.
 
+The one **watch** the store hands its callers — the
+[seat pauses](agent-runtime.md#pausing-a-seat) every node follows — begins with
+exactly this listing. Its first answer is the one a node replaces its copy
+with, so it is certified like any other: a pause the pass had not delivered
+when it ended is read from the leader rather than left out, which would lift
+that seat's hold, and a pass that goes quiet is ended after the same five
+seconds rather than leaving the node with no answer — and deferring every
+delivery it receives — until somebody next pauses or resumes a seat. Its
+changes then come from the same consumer, so none can fall between the answer
+and the first change, and a revision of a pause no newer than the one the
+answer holds is not passed on as a change. It costs what a listing costs, once
+for each watch a node starts: at boot, and again whenever the watch has to be
+re-opened.
+
 A key live from before the listing began until after it ended is therefore in
 it, however often it was rewritten in between and whichever replica served the
 pass. A listing that fails at any step hands its caller nothing rather than the

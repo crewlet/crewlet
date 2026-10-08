@@ -1103,7 +1103,7 @@ func TestAnUnchargedCounterAgesOut(t *testing.T) {
 	// than the package's timeout. This is the case that found one: a listing
 	// whose counters aged out between its consumer's creation and its first
 	// delivery waited for an end marker no delivery would bring, for nine
-	// minutes and forty-two seconds (see [watchWalk]).
+	// minutes and forty-two seconds (see [passOver]).
 	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()
 	if _, err := store.PostCharge(ctx, coord.AgentScope("x"), 10, testWindows()); err != nil {

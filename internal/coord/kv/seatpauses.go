@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -143,11 +144,54 @@ func (f *FleetStore) DeleteSeatPause(ctx context.Context, handle string, version
 // A KV watcher over the class filter, so the broker sends this class and no
 // other of the eight sharing the register. Deletes are NOT ignored — a purge
 // is exactly what a resume looks like on the wire.
+//
+// # The first answer is a certified listing, and the call waits for it
+//
+// Everything before [coord.SeatPauseUpdate.Current] is the answer a node
+// REPLACES its copy with, so a pause missing from it is a hold the node lifts
+// and a seat it lets take work. The client's own end of the initial values
+// cannot be that answer: it ends them on a count guess, while a pause live
+// throughout can still be ahead of the cursor, and it never ends them at all
+// for a consumer whose pending messages were removed before it reached them —
+// a resume's purge marker swept from the register, say — so that answer never
+// came, and every node that met it deferred its deliveries until somebody
+// paused or resumed a seat. So the first answer is [watchUnder]'s, certified
+// against the register's key index exactly as [FleetStore.ListSeatPauses] is,
+// and the client's marker is ignored whenever it arrives.
+//
+// The call returns once that answer is in hand, and a failure to certify it
+// is the call's error rather than a closed channel: there is no answer for a
+// consumer to have stopped hearing. A record in it this build cannot read
+// fails the call the same way, naming the seat.
 func (f *FleetStore) WatchSeatPauses(ctx context.Context) (<-chan coord.SeatPauseUpdate, error) {
-	w, err := f.positions.Watch(ctx, coord.DocumentFilter(coord.SeatPauseClass))
+	current, w, err := watchUnder(ctx, f.js, f.positions,
+		coord.DocumentFilter(coord.SeatPauseClass), "the seat pauses")
 	if err != nil {
-		return nil, unavailable("watch the seat pauses", err)
+		return nil, err
 	}
+	// held is the revision of each key the answer holds — a marker's too,
+	// since a resume the answer saw is a revision of its key like any other.
+	held := make(map[string]uint64, len(current))
+	answer := make([]coord.SeatPauseUpdate, 0, len(current)+1)
+	for _, key := range slices.Sorted(maps.Keys(current)) {
+		kve := current[key]
+		held[key] = kve.Revision()
+		handle, ok := seatPauseHandle(key)
+		if !ok || kve.Operation() != jetstream.KeyValuePut {
+			continue
+		}
+		p, err := decodeSeatPause(handle, kve.Value(), kve.Revision())
+		if err != nil {
+			// RAISED rather than skipped, as the listing raises it: a
+			// pause dropped from the answer is a seat every node reads
+			// as free to work. The consumer watches again and says why.
+			_ = w.Stop()
+			return nil, err
+		}
+		answer = append(answer, coord.SeatPauseUpdate{Handle: handle, Pause: &p})
+	}
+	answer = append(answer, coord.SeatPauseUpdate{Current: true})
+
 	out := make(chan coord.SeatPauseUpdate)
 	go func() {
 		defer close(out)
@@ -158,6 +202,11 @@ func (f *FleetStore) WatchSeatPauses(ctx context.Context) (<-chan coord.SeatPaus
 				return true
 			case <-ctx.Done():
 				return false
+			}
+		}
+		for _, u := range answer {
+			if !send(u) {
+				return
 			}
 		}
 		for {
@@ -173,15 +222,23 @@ func (f *FleetStore) WatchSeatPauses(ctx context.Context) (<-chan coord.SeatPaus
 					return
 				}
 				if kve == nil {
-					if !send(coord.SeatPauseUpdate{Current: true}) {
-						return
-					}
+					// The client's end of the initial values, late or
+					// never: the certified answer has already ended them.
 					continue
 				}
 				handle, ok := seatPauseHandle(kve.Key())
 				if !ok {
 					continue
 				}
+				if r, seen := held[kve.Key()]; seen && kve.Revision() <= r {
+					// NOT A CHANGE: the revision the answer holds for this
+					// key, or an older one — the consumer reaching a key its
+					// pass was ended before, or one the leader's read was
+					// ahead of it on. Sent, an older revision would undo the
+					// newer one on every node until the consumer caught up.
+					continue
+				}
+				held[kve.Key()] = kve.Revision()
 				u := coord.SeatPauseUpdate{Handle: handle}
 				if op := kve.Operation(); op != jetstream.KeyValueDelete && op != jetstream.KeyValuePurge {
 					p, err := decodeSeatPause(handle, kve.Value(), kve.Revision())

@@ -151,8 +151,8 @@ func sweepMarkers(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyV
 	// NO INDEX: nothing certifies a sweep, because a marker it misses is
 	// swept on the next tick — so its pass ends on the quiet from the start
 	// rather than waiting on removals no delivery will follow (see
-	// [watchWalk]).
-	pass, _, _, err := watchWalk(ctx, kv, jetstream.AllKeys, what, nil)
+	// [passOver]).
+	pass, err := watchWalk(ctx, kv, jetstream.AllKeys, what)
 	if err != nil {
 		return 0, err
 	}

@@ -72,7 +72,7 @@
 // overlap the pass's own; and one leader read for each key the pass lost or
 // delivered as a marker. The lost keys are zero without concurrent writes and
 // bounded by the keys written while the listing ran — or, for a pass that went
-// [passIdle] without a delivery and was ended there ([watchWalk] says why it
+// [passIdle] without a delivery and was ended there ([passOver] says why it
 // is), by the keys the index named that it had not reached. The markers are
 // bounded by the ESTATE: a bucket the broker never ages keeps a record's
 // marker until [FleetStore.SweepMarkers] removes it, [coord.MarkerRetention]
@@ -278,42 +278,74 @@ func eachEntryUnder(ctx context.Context, js jetstream.JetStream, kv jetstream.Ke
 func listUnder(ctx context.Context, js jetstream.JetStream, read *leaderReader, kv jetstream.KeyValue,
 	keys, what string, visit func(jetstream.KeyValueEntry) error) error {
 
-	// The index read runs BESIDE the pass. It is valid whenever it is taken
-	// before the reads that act on it (see the file doc), so there is no
-	// ordering to keep, and on a network its round trips overlap the ones
-	// the pass spends creating and deleting its consumer.
-	//
-	// Its goroutine is this call's: cancelled and joined on every return,
-	// including a pass that failed and no longer needs the answer.
-	indexCtx, cancel := context.WithCancel(ctx)
-	indexed := make(chan keyIndex, 1)
-	go func() {
-		names, err := keysUnder(indexCtx, js, kv, keys)
-		indexed <- keyIndex{names: names, err: err}
-	}()
-	joined := false
-	defer func() {
-		cancel()
-		if !joined {
-			<-indexed
-		}
-	}()
-
-	latest, index, joined, err := watchWalk(ctx, kv, keys, what, indexed)
+	p, err := beginPass(ctx, js, kv, keys, what)
 	if err != nil {
 		return err
 	}
-	if !joined {
-		index = <-indexed
-		joined = true
+	defer p.close()
+	latest, err := p.walk(ctx, what)
+	// STOPPED THE MOMENT THE PASS ENDS, on every path and before anything is
+	// certified: every write landing after the end is pushed into the
+	// client's blocking 256-entry handoff and a listing reads none of it, so
+	// a watcher left running past its pass is the abandoned listing that
+	// handoff parks a goroutine and a server-side consumer on for ever.
+	p.stop()
+	if err != nil {
+		return err
 	}
-	if index.err != nil {
-		return unavailable("read "+what, fmt.Errorf("read its key index to certify the pass: %w", index.err))
-	}
-	if err := certify(ctx, read, what, latest, index.names); err != nil {
+	if err := p.certify(ctx, read, what, latest); err != nil {
 		return err
 	}
 	return visitLive(latest, visit)
+}
+
+// watchUnder opens a WATCH over the keys matching one filter and answers its
+// first answer CERTIFIED, exactly as a listing's is, beside the watcher that
+// answer was read from — still open, so the caller reads every change after
+// the answer from the same consumer and no write can fall between the two.
+//
+// A watch's first answer IS a listing, and has a listing's two holes: the
+// count guess (the file doc) ends the initial values while a key live
+// throughout is still ahead of the cursor, and a pass whose pending messages
+// were all removed before it reached them is never ended at all ([passOver]).
+// A watch that took the client's end marker as its answer therefore answered
+// short whenever the guess came early, and held its caller with no answer at
+// all until something else was written under its filter. Certified, the answer
+// holds every key live from before the watch began until the answer was given,
+// and the end marker is never waited on.
+//
+// The answer carries markers, as [listUnder]'s does until [visitLive] drops
+// them, so the caller knows which revision of each key it already holds: the
+// consumer can deliver one again after the answer — a key the pass had not
+// reached when it was ended, or one the leader's read was ahead of it on — and
+// a revision at or below the answer's is not a change. Writes that land while
+// the answer is certified wait in the client's handoff for the caller, which
+// reads them next.
+//
+// The caller owns the watcher it is handed, and stops it. On a failure there
+// is none, and nothing is left running.
+func watchUnder(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValue,
+	keys, what string) (map[string]jetstream.KeyValueEntry, jetstream.KeyWatcher, error) {
+
+	// Resolved before the pass, for [eachEntryUnder]'s reason.
+	read, err := newLeaderReader(js, kv)
+	if err != nil {
+		return nil, nil, fmt.Errorf("coord/kv: read %s: %w", what, err)
+	}
+	p, err := beginPass(ctx, js, kv, keys, what)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer p.close()
+	latest, err := p.walk(ctx, what)
+	if err == nil {
+		err = p.certify(ctx, read, what, latest)
+	}
+	if err != nil {
+		p.stop()
+		return nil, nil, err
+	}
+	return latest, p.w, nil
 }
 
 // keyIndex is what the certification's index read answered.
@@ -322,7 +354,102 @@ type keyIndex struct {
 	err   error
 }
 
-// watchWalk is the PASS: one walk over an ordered ephemeral consumer, answering
+// pass is one certified pass under way: the watcher it reads, and the key
+// index read running BESIDE it.
+//
+// The index read is valid whenever it is taken before the reads that act on it
+// (see the file doc), so there is no ordering to keep, and it is started first
+// so that on a network its round trips overlap the ones the pass spends
+// creating its consumer. Its goroutine is the caller's: cancelled and joined by
+// [pass.close] on every return, including a pass that failed and no longer
+// needs the answer. Stopping the watcher is the caller's as well, because a
+// listing stops it the moment the pass ends and a watch goes on reading it.
+type pass struct {
+	w       jetstream.KeyWatcher
+	indexed chan keyIndex
+	index   keyIndex
+	joined  bool // index holds the answer and indexed has been read
+	cancel  context.CancelFunc
+}
+
+// beginPass starts the key index read under keys, then opens the watcher the
+// pass reads.
+func beginPass(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValue,
+	keys, what string) (*pass, error) {
+
+	indexCtx, cancel := context.WithCancel(ctx)
+	p := &pass{indexed: make(chan keyIndex, 1), cancel: cancel}
+	go func() {
+		names, err := keysUnder(indexCtx, js, kv, keys)
+		p.indexed <- keyIndex{names: names, err: err}
+	}()
+	// Watch rather than WatchAll, so this transport narrows server-side too.
+	//
+	// NOT IgnoreDeletes: a key removed while the pass ran is delivered as its
+	// value and then as its marker, and a pass that dropped the marker would
+	// list the value it replaced. certify reads a marker from the leader and
+	// visitLive is where a tombstone stops.
+	w, err := kv.Watch(ctx, keys)
+	if err != nil {
+		p.close()
+		return nil, unavailable("read "+what, err)
+	}
+	p.w = w
+	return p, nil
+}
+
+// walk runs the pass to its end — [passOver] gives both of its ends — keeping
+// the index when the pass received it.
+func (p *pass) walk(ctx context.Context, what string) (map[string]jetstream.KeyValueEntry, error) {
+	latest, index, answered, err := passOver(ctx, p.w, what, p.indexed)
+	if answered {
+		p.index, p.joined = index, true
+	}
+	return latest, err
+}
+
+// certify waits for the index when the pass ended before it answered, and
+// certifies latest against it — see [certify].
+func (p *pass) certify(ctx context.Context, read *leaderReader, what string,
+	latest map[string]jetstream.KeyValueEntry) error {
+
+	if !p.joined {
+		p.index, p.joined = <-p.indexed, true
+	}
+	if p.index.err != nil {
+		return unavailable("read "+what, fmt.Errorf("read its key index to certify the pass: %w", p.index.err))
+	}
+	return certify(ctx, read, what, latest, p.index.names)
+}
+
+// stop ends the pass's consumer.
+func (p *pass) stop() { _ = p.w.Stop() }
+
+// close cancels the index read and waits for it.
+func (p *pass) close() {
+	p.cancel()
+	if !p.joined {
+		<-p.indexed
+		p.joined = true
+	}
+}
+
+// watchWalk is a pass NOTHING certifies — the marker sweep's — over a watcher
+// it opens and stops on every return, which is what leaves it no early-return
+// path that leaks one. [passOver] says why its quiet counts from the start.
+func watchWalk(ctx context.Context, kv jetstream.KeyValue, keys, what string) (map[string]jetstream.KeyValueEntry, error) {
+	// Watch, and not IgnoreDeletes, for [beginPass]'s reasons: what the
+	// sweep is after is the markers.
+	w, err := kv.Watch(ctx, keys)
+	if err != nil {
+		return nil, unavailable("read "+what, err)
+	}
+	defer func() { _ = w.Stop() }()
+	latest, _, _, err := passOver(ctx, w, what, nil)
+	return latest, err
+}
+
+// passOver is the PASS: one walk over an ordered ephemeral consumer, answering
 // the newest revision it saw of every key it saw — a delete or purge marker
 // included, because a key deleted WHILE the pass ran is delivered first as a
 // value and then as its marker, and dropping the marker would leave the stale
@@ -368,26 +495,11 @@ type keyIndex struct {
 // It returns the index too when it received it, and says so, so the caller
 // reads the channel only when the pass did not.
 //
-// It also owns the watcher, so there is no early-return path that leaks one —
-// the abandoned-listing case the client's blocking 256-entry handoff could
-// park a goroutine and a server-side consumer on for ever. The watcher is
-// stopped the moment the pass ends, before anything is certified, for the same
-// reason: every write landing after the end marker is pushed into that
-// handoff, and nothing here reads it any more.
-func watchWalk(ctx context.Context, kv jetstream.KeyValue, keys, what string,
+// The watcher is the CALLER's, and the pass leaves it running: a listing stops
+// it the moment this returns ([listUnder]), and a watch reads its changes from
+// it next ([watchUnder]).
+func passOver(ctx context.Context, w jetstream.KeyWatcher, what string,
 	indexed <-chan keyIndex) (map[string]jetstream.KeyValueEntry, keyIndex, bool, error) {
-
-	// Watch rather than WatchAll, so this transport narrows server-side too.
-	//
-	// NOT IgnoreDeletes: a key removed while the pass ran is delivered as its
-	// value and then as its marker, and a pass that dropped the marker would
-	// list the value it replaced. certify reads a marker from the leader and
-	// visitLive is where a tombstone stops.
-	w, err := kv.Watch(ctx, keys)
-	if err != nil {
-		return nil, keyIndex{}, false, unavailable("read "+what, err)
-	}
-	defer func() { _ = w.Stop() }()
 
 	latest := map[string]jetstream.KeyValueEntry{}
 	var (
@@ -452,7 +564,7 @@ func watchWalk(ctx context.Context, kv jetstream.KeyValue, keys, what string,
 // interval. Shorter, a busy server's pause turns the rest of a large pass into
 // one leader read per key; longer, a listing that met removed messages holds
 // its caller longer. It is a cost bound and never a correctness one — see
-// [watchWalk].
+// [passOver].
 const passIdle = 5 * time.Second
 
 // keep records kve unless the listing already holds a newer revision of its
