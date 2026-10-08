@@ -172,77 +172,64 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 		// observe, and no round trip spent observing it.
 		return bucket, nil
 	}
-	if jsprovision.OutOfCapacity(createErr) {
-		// THE BROKER HAS NO ROOM. Nothing frees capacity by being
-		// waited for, so this was attempted ONCE — [jsprovision.Place]
-		// re-asks only [jsprovision.Unplaceable] — and it is terminal.
-		// That is the whole difference between this arm and the one
-		// below, and the reason they are two rather than one condition:
-		// they are told apart by whether the create is retried, and a
-		// merged arm could only ever be exercised as a pair.
-		//
-		// IT IS NOT A CEILING OF THIS BUCKET'S OWN. A bucket declares
-		// none — nats.go sends MaxBytes -1 for a [jetstream.KeyValueConfig]
-		// that sets none, and checkBytesLimits reads a negative as one
-		// byte — so what is spent is what the limit's OTHER reservations
-		// already hold, the state logs' ceilings above all, and what an
-		// operator changes is theirs or the limit's rather than this
-		// bucket's.
-		//
-		// WHICH LIMIT REFUSED DEPENDS ON THE TOPOLOGY, and for a BUCKET
-		// it is never the one a clustered stream gets. A standalone
-		// create is checked against the account's limit and the
-		// server's (checkAllLimits, checkServer=true), so
-		// `stream.store_max_bytes` can refuse it. A clustered create
-		// runs the account half alone (jsClusteredStreamLimitsCheck →
-		// checkAccountLimits, checkServer=false), and the place a
-		// clustered STREAM's server limit surfaces instead — the
-		// metadata leader's peer selection — skips its storage check
-		// entirely for an object with no ceiling: the test is
-		// `maxBytes > 0 && maxBytes > available`
-		// (server/jetstream_cluster.go, selectPeerGroup). So on a fleet
-		// this is the ACCOUNT limit's refusal alone, under the two
-		// codes [jsprovision.OutOfCapacity] names. A clustered member
-		// that cannot place the bucket for want of room is not this
-		// arm and not this fact: that refusal is about another
-		// member's disk, which is why it stays [jsprovision.Unplaceable]
-		// below and is waited out rather than reported.
-		//
-		// NOT READ BACK: nothing was placed. Without this arm the
-		// refusal fell through to the read-back below and came back as
-		// a bucket that is "not there", which is the one reading that
-		// sends an operator to the wrong subsystem.
-		return nil, createErr
-	}
 	if jsprovision.NoApplicableLimit(createErr) {
-		// NO LIMIT APPLIES TO THIS BUCKET AT ALL, which is not the arm
-		// above wearing another code: that one is a ceiling that does
-		// not fit inside a limit, and this is an account that states no
-		// limit to fit into. A bucket declares no ceiling of its own,
-		// so it is the clearest case of the two being different — there
-		// is no number here to make smaller.
+		// NO LIMIT APPLIES TO THIS BUCKET AT ALL: the account's limits are
+		// tiered and carry none for the replica class `stream.replicas`
+		// puts this node in, so the broker refuses before comparing a
+		// byte. A bucket declares no ceiling of its own, which makes it the
+		// clearest case of this being a different fact from "it does not
+		// fit" — there is no number here to make smaller — and the detail
+		// names the class to give a limit instead.
 		//
-		// TERMINAL AND NOT READ BACK for the same reason as the arm
-		// above, and it matters more here: unclassified, this refusal
-		// fell through and reported a bucket that is "not there", which
-		// of everything on a boot path is the sentence most likely to
-		// be read as corruption.
+		// ASKED BEFORE the general refusal below, which it is one of,
+		// because it is the one worded differently. Unclassified, it fell
+		// through to the read-back and reported a bucket that is "not
+		// there", which of everything on a boot path is the sentence most
+		// likely to be read as corruption.
 		return nil, fmt.Errorf("%w%s", createErr,
 			jsprovision.NoApplicableLimitDetail(cfg.Replicas))
 	}
-	if jsprovision.Unplaceable(createErr) {
-		// STILL FORMING, and it stayed that way for the whole budget,
-		// which createKeyValue has already waited out — re-asking every
-		// [jsprovision.PlacementRetry] until the create's deadline. A
-		// cluster still gathering members is the one condition worth
-		// waiting on, which is exactly why the capacity refusal above
-		// must not share this arm: waited out, a limit nobody was going
-		// to raise cost the whole provisioning budget and then reported
-		// the broker's bare text.
+	if jsprovision.Refused(createErr) {
+		// THE BROKER REFUSED THIS CREATE ON THE REQUEST ALONE, for a
+		// reason no peer creating the same bucket can have produced — see
+		// [jsprovision.Refused] for which, and why a list. Nothing was
+		// placed, so there is nothing to read back. Read back, a refusal
+		// spent the read-back window asking after a bucket nobody made and
+		// then arrived wrapped in "(and it is not there)", the one reading
+		// that sends an operator to the wrong subsystem — and this arm
+		// used to name three refusals of its own, so every other one
+		// (subjects another stream already holds, the account's stream
+		// count) was found that way first.
 		//
-		// Nothing was placed here either, so there is nothing to read
-		// back and a not-found would only obscure the refusal that says
-		// what is actually wrong.
+		// The two a bucket meets most are told apart by the RETRY, never
+		// by this arm. A cluster still gathering members
+		// ([jsprovision.Unplaceable]) is the one condition worth waiting
+		// on, so createKeyValue re-asked it every
+		// [jsprovision.PlacementRetry] until the create's deadline; a
+		// broker with no room ([jsprovision.OutOfCapacity]) frees nothing
+		// by being waited for, so [jsprovision.Place] asked it once.
+		// Waited out, a limit nobody was going to raise cost the whole
+		// provisioning budget and then reported the broker's bare text.
+		//
+		// AND THE ROOM IS NEVER A CEILING OF THIS BUCKET'S OWN. A bucket
+		// declares none — nats.go sends MaxBytes -1 for a
+		// [jetstream.KeyValueConfig] that sets none, and checkBytesLimits
+		// reads a negative as one byte — so what is spent is what the
+		// limit's OTHER reservations already hold, the state logs'
+		// ceilings above all, and what an operator changes is theirs or
+		// the limit's. Which limit refused depends on the topology. A
+		// standalone create is checked against the account's limit and
+		// the server's (checkAllLimits, checkServer=true), so
+		// `stream.store_max_bytes` can refuse it. A clustered one runs
+		// the account half alone (jsClusteredStreamLimitsCheck →
+		// checkAccountLimits, checkServer=false), and the metadata
+		// leader's peer selection skips its storage check for an object
+		// with no ceiling (`maxBytes > 0 && maxBytes > available`,
+		// server/jetstream_cluster.go, selectPeerGroup) — so a refusal
+		// to place the bucket for want of room is about another member's
+		// disk, which this node cannot read, and it stays
+		// [jsprovision.Unplaceable] and is waited out rather than
+		// reported.
 		return nil, createErr
 	}
 	// A PEER MAY HAVE WON THE RACE between the read above and this

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/jsprovision"
@@ -22,13 +23,21 @@ import (
 // that stops being terminal falls through to [jsprovision.Settle], spends its
 // window asking after an object nobody made, and appends "it is not there" to
 // a refusal that had already said what was wrong.
+//
+// UNLESS A PEER WON: with peerWon set, a lookup made after the create was
+// refused is answered from the real broker, where the case has made the bucket
+// itself — the shape a node that lost a create race to a peer meets.
 type refusingKV struct {
 	jetstream.JetStream
 	refusal error
 	creates atomic.Int64
+	peerWon bool
 }
 
-func (f *refusingKV) KeyValue(context.Context, string) (jetstream.KeyValue, error) {
+func (f *refusingKV) KeyValue(ctx context.Context, bucket string) (jetstream.KeyValue, error) {
+	if f.peerWon && f.creates.Load() > 0 {
+		return f.JetStream.KeyValue(ctx, bucket)
+	}
 	return nil, jetstream.ErrBucketNotFound
 }
 
@@ -132,7 +141,7 @@ func TestAStorageRefusalOnABucketIsTerminalAndNotAMissingBucket(t *testing.T) {
 			}
 			// ATTEMPTED ONCE. A limit nobody is going to raise inside
 			// the provisioning budget must not be waited out — which is
-			// what separates this arm from the placement one below.
+			// what separates this refusal from the placement one below.
 			if got := js.creates.Load(); got != 1 {
 				t.Errorf("the create was issued %d times: a storage limit was "+
 					"waited out as though the cluster were still forming", got)
@@ -146,21 +155,21 @@ func TestAStorageRefusalOnABucketIsTerminalAndNotAMissingBucket(t *testing.T) {
 	}
 }
 
-// AND A PLACEMENT REFUSAL IS THE OPPOSITE ARM: IT IS WAITED OUT, AND THEN ALSO
+// AND A PLACEMENT REFUSAL IS THE OPPOSITE CASE: IT IS WAITED OUT, AND THEN ALSO
 // REPORTED WITHOUT A READ-BACK.
 //
-// # Why the two arms are two
+// # Why the two are told apart by the retry alone
 //
-// They are told apart by the RETRY and by nothing else — both end in the
-// broker's own error, unwrapped, with no read-back — so merged into one
-// condition neither could be exercised without the other. Separated, each has
-// an observable of its own: a storage refusal is attempted once, and a cluster
-// that has not gathered enough members is re-asked every
-// [jsprovision.PlacementRetry] until the create's deadline.
+// Both end in the broker's own error, unwrapped, with no read-back, which is
+// why [openBucket] asks one predicate of both ([jsprovision.Refused]). What
+// separates them is the RETRY, and that is [jsprovision.Place]'s: a storage
+// refusal is attempted once, and a cluster that has not gathered enough
+// members is re-asked every [jsprovision.PlacementRetry] until the create's
+// deadline. Each has an observable of its own, so each has a case.
 //
 // That difference is the whole of b5e4481: keyed on the placement code alone,
-// a capacity refusal was claimed by this arm, waited out for the entire
-// provisioning budget, and then reported as the broker's bare text.
+// a capacity refusal was waited out for the entire provisioning budget, and
+// then reported as the broker's bare text.
 //
 // THE PARENT CONTEXT IS THE BUDGET HERE. [jsprovision.Clustered.Budget] is
 // minutes, and `WithTimeout` only ever shortens — so a caller with a deadline
@@ -218,7 +227,9 @@ func TestAPlacementRefusalIsRetriedAndThenReportedWithoutAReadBack(t *testing.T)
 // `no JetStream default or applicable tiered limit present` (10120) is the
 // broker answering that the account's limits are TIERED and carry none for the
 // replica class `stream.replicas` puts this node in. It is decided before a
-// byte is compared, so it is not the arm above wearing another code: a bucket
+// byte is compared, so it is not the storage refusal above wearing another
+// code — and it keeps an arm of its own in [openBucket], ahead of the general
+// refusal, because it is the one worded differently: a bucket
 // declares no ceiling at all, which makes it the clearest case of the two being
 // different — there is nothing here to make smaller.
 //
@@ -271,5 +282,99 @@ func TestABucketWithNoApplicableLimitNamesTheClassAndIsNotAMissingBucket(t *test
 		t.Errorf("the refusal took %v, which is at least the read-back "+
 			"window — a terminal answer spent time asking after an object "+
 			"nobody made", elapsed)
+	}
+}
+
+// pinnedRefusal is the pinned server's own answer for id, in the shape the
+// client hands a create — so a case asserts against the broker's table rather
+// than against a number copied out of it.
+func pinnedRefusal(t *testing.T, id server.ErrorIdentifier) *jetstream.APIError {
+	t.Helper()
+	e, ok := server.ApiErrors[id]
+	if !ok {
+		t.Fatalf("the pinned server has no error %d", id)
+	}
+	return &jetstream.APIError{ErrorCode: jetstream.ErrorCode(e.ErrCode),
+		Code: e.Code, Description: e.Description}
+}
+
+// EVERY REFUSAL NO PEER COULD HAVE CAUSED IS TERMINAL, NOT ONLY THE THREE THIS
+// SITE ONCE LISTED.
+//
+// The bucket create gated its read-back on its own three refusals — capacity,
+// no applicable limit, still forming — so every other answer the broker gives
+// a create it refused on the request alone fell through to
+// [jsprovision.Settle]: a bucket whose subjects another stream already holds,
+// or an account at its stream count, spent the read-back window asking after a
+// bucket nobody made and was reported as one that is "not there". The site now
+// asks [jsprovision.Refused], the one list every create site shares, and these
+// are the codes on it the old arms did not name.
+func TestEveryRefusalNoPeerCouldHaveCausedIsNotReadBack(t *testing.T) {
+	t.Parallel()
+	for name, id := range map[string]server.ErrorIdentifier{
+		"subjects another stream already holds": server.JSStreamSubjectOverlapErr,
+		"the account's stream count":            server.JSMaximumStreamsLimitErr,
+		"a configuration the server rejects":    server.JSStreamInvalidConfigF,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			refusal := pinnedRefusal(t, id)
+			js := refusingBroker(t, refusal)
+
+			started := time.Now()
+			bucket, err := openBucket(t.Context(), js, true, jetstream.KeyValueConfig{
+				Bucket: "t_refused", TTL: time.Minute, Replicas: 3,
+			})
+			elapsed := time.Since(started)
+
+			if err == nil || bucket != nil {
+				t.Fatalf("a bucket the broker refused to make came back as (%v, %v)",
+					bucket, err)
+			}
+			if !errors.Is(err, refusal) {
+				t.Errorf("the refusal is not the broker's own:\n%v", err)
+			}
+			if strings.Contains(err.Error(), "it is not there") {
+				t.Errorf("the refusal was read back, so a create the broker "+
+					"declined is reported as a bucket that does not exist:\n%v", err)
+			}
+			if got := js.creates.Load(); got != 1 {
+				t.Errorf("the create was issued %d times: an answer no member "+
+					"arriving can change was waited out", got)
+			}
+			if elapsed >= jsprovision.ReadBack {
+				t.Errorf("the refusal took %v, which is at least the read-back "+
+					"window — it was spent asking after a bucket nobody made",
+					elapsed)
+			}
+		})
+	}
+}
+
+// AND A CREATE A PEER WON IS STILL READ BACK, AND ITS BUCKET OPENED.
+//
+// The other direction of the same list, and the one whose failure is worse: a
+// code wrongly taken as a refusal turns the node that lost a create race into
+// a node that refuses to boot over a bucket that exists. "Stream name already
+// in use" is the tidy shape of that race — the peer's create committed first —
+// so it must reach the read-back, find the peer's bucket and carry on.
+func TestABucketAPeerMadeFirstIsReadBackAndOpened(t *testing.T) {
+	t.Parallel()
+	refusal := pinnedRefusal(t, server.JSStreamNameExistErr)
+	js := refusingBroker(t, refusal)
+	js.peerWon = true
+	cfg := jetstream.KeyValueConfig{Bucket: "t_raced", TTL: time.Minute, Replicas: 1}
+	// THE PEER'S BUCKET, made on the real broker beneath the fake one.
+	if _, err := js.JetStream.CreateKeyValue(t.Context(), cfg); err != nil {
+		t.Fatalf("make the peer's bucket: %v", err)
+	}
+
+	bucket, err := openBucket(t.Context(), js, true, cfg)
+	if err != nil {
+		t.Fatalf("a node that lost the create race to a peer refused to boot "+
+			"over the peer's bucket: %v", err)
+	}
+	if bucket == nil || bucket.Bucket() != cfg.Bucket {
+		t.Fatalf("opened %v, want the peer's bucket %q", bucket, cfg.Bucket)
 	}
 }
