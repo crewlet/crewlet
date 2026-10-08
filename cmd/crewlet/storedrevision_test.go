@@ -49,6 +49,7 @@ func activateStored(t *testing.T, cfg, payload string) string {
 // the engine stamps the company's chart with — and a company with no revision
 // carries none.
 func TestABootFromTheStoreCarriesItsRevisionsActivation(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 	if company, at, err := companyFromStore(t.Context(), cfg); err != nil ||
@@ -87,6 +88,7 @@ func TestABootFromTheStoreCarriesItsRevisionsActivation(t *testing.T) {
 // it on booted a node on its store's company with no projects until the next
 // apply. A Tier B file's company has no activation yet, and carries none.
 func TestRunBootsTheEngineWithItsStoredCompanysActivation(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 	boot := &config.Bootstrap{}
@@ -134,6 +136,7 @@ func TestRunBootsTheEngineWithItsStoredCompanysActivation(t *testing.T) {
 // validating reader, and diff through the AUTHORED reader, which also refused
 // the newer build's field.
 func TestARevisionThisBuildRefusesIsStillShownExportedAndDiffed(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 	if _, errs, err := configCmd(t, cfg, "import", companyFile(t, dir, "company.yaml", nil)); err != nil {
@@ -197,6 +200,7 @@ units:
 // holds what a build admitted under its own rules — a newer peer's may differ
 // from this one's — and a file is somebody's new submission.
 func TestDuplicateNamesBootFromTheStoreAndAreRefusedFromAFile(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 	activateStored(t, cfg, duplicateNamesRevision)
@@ -236,6 +240,7 @@ func TestDuplicateNamesBootFromTheStoreAndAreRefusedFromAFile(t *testing.T) {
 // recorded with its active copy — never zero (which would apply no chart at
 // boot) and never the moment of this boot.
 func TestAStoredCompanyBootsWithTheInstantItWasActivated(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 	activateStored(t, cfg, duplicateNamesRevision)
@@ -267,6 +272,7 @@ func TestAStoredCompanyBootsWithTheInstantItWasActivated(t *testing.T) {
 // and an error that did not say which revision failed would leave the
 // operator reading the store by hand.
 func TestBootingOnARevisionThisBuildCannotRunNamesTheRevision(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 	id := activateStored(t, cfg, storedRevisionDoc)
@@ -293,6 +299,7 @@ func TestBootingOnARevisionThisBuildCannotRunNamesTheRevision(t *testing.T) {
 // the rule. The rule still holds where the file becomes a new revision: an
 // empty store, or -import-company over a different company.
 func TestACompanyFileWithDuplicateNamesRunsAndIsRefusedOnlyOnImport(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	file := filepath.Join(dir, "company.yaml")
 	if err := os.WriteFile(file, []byte(duplicateNamesYAML), 0o600); err != nil {
@@ -380,6 +387,7 @@ func TestACompanyFileWithDuplicateNamesRunsAndIsRefusedOnlyOnImport(t *testing.T
 // stop on its own business (this company enables no integration), which is
 // what the absence of the loader's "company config" prefix shows.
 func TestVendorCommandsReadACompanyFileWithDuplicateNames(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	file := filepath.Join(dir, "company.yaml")
 	if err := os.WriteFile(file, []byte(duplicateNamesYAML), 0o600); err != nil {

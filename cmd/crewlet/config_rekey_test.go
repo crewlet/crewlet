@@ -46,6 +46,7 @@ func bootstrapWithKeys(t *testing.T, dir string, keys ...string) string {
 // secrets half report success and dropped the retired key had just made their
 // configuration unreadable on every node, at the next apply.
 func TestConfigRekeyMovesTheDocumentOntoTheActiveKey(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	old := bootstrapWithKeys(t, dir, "k1")
 	company := companyFile(t, dir, "company.yaml", nil)
@@ -79,6 +80,7 @@ func TestConfigRekeyMovesTheDocumentOntoTheActiveKey(t *testing.T) {
 
 // A SECOND RUN IS A NO-OP, which is what makes this safe in a deploy script.
 func TestConfigRekeyIsIdempotent(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapWithKeys(t, dir, "k1")
 	if _, errs, err := configCmd(t, cfg, "import",
@@ -103,6 +105,7 @@ func TestConfigRekeyIsIdempotent(t *testing.T) {
 // than decrypting — so previewing a rotation is not a bigger exposure than
 // the pass it previews.
 func TestConfigRekeyDryRunWritesNothing(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	old := bootstrapWithKeys(t, dir, "k1")
 	if _, errs, err := configCmd(t, old, "import",
@@ -133,6 +136,7 @@ func TestConfigRekeyDryRunWritesNothing(t *testing.T) {
 // different decisions, and an operator running a rotation script has not
 // asked for the second.
 func TestConfigRekeyRefusesAPlaintextRevisionAndNamesTheFix(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	plain := bootstrapWithKeys(t, dir)
 	if _, errs, err := configCmd(t, plain, "import",
@@ -154,6 +158,7 @@ func TestConfigRekeyRefusesAPlaintextRevisionAndNamesTheFix(t *testing.T) {
 // before a keyring existed has a plaintext revision, and `import` only seals
 // what it imports.
 func TestConfigSealEncryptsAPlaintextRevision(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	plain := bootstrapWithKeys(t, dir)
 	if _, errs, err := configCmd(t, plain, "import",
@@ -180,6 +185,7 @@ func TestConfigSealEncryptsAPlaintextRevision(t *testing.T) {
 
 // SEALING TWICE IS A NO-OP rather than an envelope inside an envelope.
 func TestConfigSealIsIdempotent(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	keyed := bootstrapWithKeys(t, dir, "k1")
 	if _, errs, err := configCmd(t, keyed, "import",
@@ -203,6 +209,7 @@ func TestConfigSealIsIdempotent(t *testing.T) {
 // WITHOUT A KEYRING BOTH SAY HOW TO GET ONE, rather than failing on a nil
 // cipher somewhere further in.
 func TestSealAndRekeyWithoutAKeyringNameTheRemedy(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	plain := bootstrapWithKeys(t, dir)
 	if _, errs, err := configCmd(t, plain, "import",

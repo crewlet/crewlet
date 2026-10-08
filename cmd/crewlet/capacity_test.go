@@ -146,6 +146,7 @@ func reply(w http.ResponseWriter, body any) {
 // will accept, so the byte count is not a value to get from a shell history —
 // and an operator who has just run it needs the next gesture, not a summary.
 func TestSetCapacityRepeatsTheCeilingAndSaysWhatIsNext(t *testing.T) {
+	t.Parallel()
 	node := newFakeCapacityNode(t)
 	base := bootstrapForURL(t, node.server.URL)
 
@@ -185,6 +186,7 @@ func TestSetCapacityRepeatsTheCeilingAndSaysWhatIsNext(t *testing.T) {
 // stopping every Crewlet node establishes nothing, and the operator says so in
 // their own words rather than a check quietly proving nothing.
 func TestTheExternalAssertionIsExplicit(t *testing.T) {
+	t.Parallel()
 	node := newFakeCapacityNode(t)
 	base := bootstrapForURL(t, node.server.URL)
 	if _, _, err := cli(t, "retention", "set-capacity",
@@ -208,6 +210,7 @@ func TestTheExternalAssertionIsExplicit(t *testing.T) {
 // can see why a fleet is still excluded: who has not acknowledged, whose
 // incarnation is unchanged, and which admission is blocking activation.
 func TestMaintenanceStatusNamesWhatIsHoldingTheSeal(t *testing.T) {
+	t.Parallel()
 	node := newFakeCapacityNode(t)
 	stdout, _, err := cli(t, "retention", "maintenance", "status",
 		bootstrapForURL(t, node.server.URL), "-stream", "CREWLET_TRACKER_LOG")
@@ -233,6 +236,7 @@ func TestMaintenanceStatusNamesWhatIsHoldingTheSeal(t *testing.T) {
 // TestMaintenanceStatusOnAFleetWithNoOperationSaysSo: "no window" and "a
 // window in phase opened" are different facts with different next steps.
 func TestMaintenanceStatusOnAFleetWithNoOperationSaysSo(t *testing.T) {
+	t.Parallel()
 	node := newFakeCapacityNode(t)
 	node.status = map[string]any{
 		"stream": "CREWLET_TRACKER_LOG", "open": false, "mode": "normal",
@@ -258,6 +262,7 @@ func TestMaintenanceStatusOnAFleetWithNoOperationSaysSo(t *testing.T) {
 // verb prints it and refuses, rather than reading it and feeding it straight
 // back — which would be confirming against its own output.
 func TestAReanchorPrintsTheValueItWillConfirmAgainst(t *testing.T) {
+	t.Parallel()
 	node := newFakeCapacityNode(t)
 	base := bootstrapForURL(t, node.server.URL)
 
@@ -303,6 +308,7 @@ func TestAReanchorPrintsTheValueItWillConfirmAgainst(t *testing.T) {
 // which, before the confirmation, and the report says which again after. And a
 // log with nothing to re-anchor offers no command to run.
 func TestAReanchorNamesTheCaseTheOperatorConfirms(t *testing.T) {
+	t.Parallel()
 	node := newFakeCapacityNode(t)
 	base := bootstrapForURL(t, node.server.URL)
 	node.reanchorCase, node.reanchorCursor = "restored", 7000
@@ -352,6 +358,7 @@ func discardedRecord() map[string]any {
 // refusal — and the command it offers carries -discard, which the transition
 // then passes on and whose answer names what it discarded.
 func TestAReanchorThatWouldDiscardSaysSoAndOffersTheFlag(t *testing.T) {
+	t.Parallel()
 	node := newFakeCapacityNode(t)
 	base := bootstrapForURL(t, node.server.URL)
 	node.reanchorCase, node.reanchorCursor, node.reanchorDiscards = "restored", 7100, true
@@ -394,6 +401,7 @@ func TestAReanchorThatWouldDiscardSaysSoAndOffersTheFlag(t *testing.T) {
 // test into a failing check somebody's cron notices, rather than a paragraph
 // in a runbook nobody read.
 func TestVerifyRestoreExitsNonZeroPastItsCadence(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	taken := time.Date(2031, 3, 1, 3, 0, 0, 0, time.UTC)
 	writeArtefact(t, filepath.Join(root, "nightly"), taken)
@@ -427,6 +435,7 @@ func TestVerifyRestoreExitsNonZeroPastItsCadence(t *testing.T) {
 // that sequence, so an artefact without one is not restorable whatever else it
 // contains.
 func TestAnArtefactWithNoDomainPositionCannotBeVerified(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	dir := filepath.Join(root, "nightly")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -448,6 +457,7 @@ func TestAnArtefactWithNoDomainPositionCannotBeVerified(t *testing.T) {
 
 // TestADirectoryWithNoManifestIsDebrisRatherThanABackup.
 func TestADirectoryWithNoManifestIsDebrisRatherThanABackup(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "half-finished"), 0o700); err != nil {
 		t.Fatal(err)

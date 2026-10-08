@@ -28,6 +28,7 @@ func cli(t *testing.T, args ...string) (string, string, error) {
 // -check REPORTS AND APPLIES NOTHING. A command that migrated while
 // answering "what would you migrate" could never answer it.
 func TestMigrateCheckReportsPendingWithoutApplying(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 
@@ -59,6 +60,7 @@ func TestMigrateCheckReportsPendingWithoutApplying(t *testing.T) {
 // reimplements — a second migrator is one that can disagree with the engine
 // about what "applied" means.
 func TestMigrateAppliesAndThenIsQuiet(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 
@@ -151,6 +153,7 @@ func bootstrapForURL(t *testing.T, serverURL string) string {
 // with `durable: false`, and printing a table of zeros for it would draw a
 // company at 0% of its budget when the truth is that nobody looked.
 func TestBudgetsShowRefusesToPrintZerosForAnUnreadableCounter(t *testing.T) {
+	t.Parallel()
 	node := newFakeNode(t)
 	node.durable = false
 	cfg := bootstrapForNode(t, node)
@@ -198,6 +201,7 @@ func rowsFor(out, scope string) [][]string {
 }
 
 func TestBudgetsShowListsEveryWindowOfEachScope(t *testing.T) {
+	t.Parallel()
 	node := newFakeNode(t)
 	node.budgets = []byte(budgetsAnswer)
 	cfg := bootstrapForNode(t, node)
@@ -238,6 +242,7 @@ func TestBudgetsShowListsEveryWindowOfEachScope(t *testing.T) {
 // USED against LIMIT is a figure, and a reader should not have to work out
 // from it which windows the park is holding a seat on.
 func TestBudgetsShowNamesAWindowThatIsRefusing(t *testing.T) {
+	t.Parallel()
 	node := newFakeNode(t)
 	node.budgets = []byte(budgetsAnswer)
 	cfg := bootstrapForNode(t, node)
@@ -273,6 +278,7 @@ func TestBudgetsShowNamesAWindowThatIsRefusing(t *testing.T) {
 // says the window is refusing while its state says it is not, and sends an
 // operator to raise a ceiling that has already been raised.
 func TestBudgetsShowPrintsNoRefusalUnderARaisedCeiling(t *testing.T) {
+	t.Parallel()
 	node := newFakeNode(t)
 	node.budgets = []byte(`{"durable":true,"timezone":"Europe/Berlin","near_fraction":0.9,
   "org":{"windows":[
@@ -308,6 +314,7 @@ func TestBudgetsShowPrintsNoRefusalUnderARaisedCeiling(t *testing.T) {
 // by raising a ceiling. A `reset` that still parsed would be a verb with no
 // route behind it, and one that reached a node would find nothing to call.
 func TestBudgetsHasNoReset(t *testing.T) {
+	t.Parallel()
 	node := newFakeNode(t)
 	cfg := bootstrapForNode(t, node)
 	_, _, err := cli(t, "budgets", "reset", "-config", cfg)
@@ -323,6 +330,7 @@ func TestBudgetsHasNoReset(t *testing.T) {
 // surface, so a command that dropped the token would fail against every
 // deployment that turns anonymous reads off.
 func TestABudgetCommandSendsTheConfiguredToken(t *testing.T) {
+	t.Parallel()
 	node := newFakeNode(t)
 	cfg := bootstrapForNode(t, node)
 
@@ -354,6 +362,7 @@ func TestAnExportedTokenBeatsTheConfigs(t *testing.T) {
 // alone sends an operator to the network; the actual answer is usually that
 // the engine is not running, because that is where this state lives.
 func TestReachingANodeThatIsDownExplainsItself(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	body := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n"+
 		"api:\n  host: 127.0.0.1\n  port: 1\n", filepath.Join(dir, "index.db"))
@@ -373,6 +382,7 @@ func TestReachingANodeThatIsDownExplainsItself(t *testing.T) {
 // A CONFIG THAT SERVES NO HTTP has no node to ask, and saying so beats
 // dialling port 0 and reporting whatever the network layer makes of it.
 func TestAConfigWithNoHTTPSurfaceSaysThereIsNoNode(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	body := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n",
 		filepath.Join(dir, "index.db"))
@@ -393,6 +403,7 @@ func TestAConfigWithNoHTTPSurfaceSaysThereIsNoNode(t *testing.T) {
 // which nothing can dial — so the default has to become the loopback one,
 // which is the interface a command running beside the config is on.
 func TestAWildcardBindResolvesToSomethingDialable(t *testing.T) {
+	t.Parallel()
 	for _, host := range []string{"", "0.0.0.0", "::", "[::]"} {
 		got, err := nodeBaseURL(&config.Bootstrap{
 			API: config.API{Host: host, Port: 8080},
@@ -407,6 +418,7 @@ func TestAWildcardBindResolvesToSomethingDialable(t *testing.T) {
 }
 
 func TestBudgetsRejectsAnUnknownSubcommand(t *testing.T) {
+	t.Parallel()
 	node := newFakeNode(t)
 	cfg := bootstrapForNode(t, node)
 	if _, _, err := cli(t, "budgets", "explode", "-config", cfg); err == nil {
@@ -425,6 +437,7 @@ var _ = time.Now
 // ./crewlet.yaml — migrating, for real and without -check, a database the
 // operator never named.
 func TestMigrateRefusesLeftoverPositionalArguments(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 	other := filepath.Join(dir, "other.yaml")
@@ -457,6 +470,7 @@ func TestMigrateRefusesLeftoverPositionalArguments(t *testing.T) {
 // rather than silently resolved — they would have to agree and nothing
 // checks that they do. `run` already had this guard; migrate did not.
 func TestMigrateRefusesAConfigNamedTwice(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 
@@ -472,6 +486,7 @@ func TestMigrateRefusesAConfigNamedTwice(t *testing.T) {
 // The single positional still WORKS, so the cases above are the refusal
 // firing rather than positional support being removed.
 func TestMigrateAcceptsASinglePositionalConfig(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 
@@ -507,6 +522,7 @@ func schemaOf(t *testing.T, schemas []store.Schema, want store.Estate) store.Sch
 // migration written into it would be lost without a word — and opening it at
 // all would create the replicated estate a node without `data` must not have.
 func TestOfflineStoreCommandsRefuseAScratchStore(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	body := fmt.Sprintf("node:\n  id: agent-1\n  roles: [seats]\nstore:\n  path: %s\n"+
 		"  scratch: true\nstream:\n  leaf:\n    urls: [\"nats-leaf://data-a.example.com:7422\"]\n"+
@@ -547,6 +563,7 @@ func TestOfflineStoreCommandsRefuseAScratchStore(t *testing.T) {
 // wrong disk. `config` and `secrets` read nothing a state log applies, so they
 // must not open it at all.
 func TestOfflineCommandsHonourTheReplicatedPath(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	elsewhere := filepath.Join(t.TempDir(), "estate.db")
 	body := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n  replicated_path: %s\n"+
