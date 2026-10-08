@@ -1536,10 +1536,21 @@ func TestAPartitionedMemberIsSilentRatherThanSlow(t *testing.T) {
 		return out, time.Since(started)
 	}
 
+	// ONE ASK, WHILE A WAIT BELOW WANTS EVERY PEER TO ANSWER, is short and
+	// asked again rather than long. A healthy scatter on loopback answers in
+	// milliseconds, so an ask that has not heard from every peer within a
+	// second is waiting on a route rather than on an answer — and NATS
+	// re-dials a lost route once a second (measured in this case's own log:
+	// "attempt 1", "attempt 2" a second apart). An ask given clusterSettle
+	// instead waited out all ten seconds when it went out a moment before
+	// the route came back, before the next ask could find it. waitFor's
+	// budget still bounds the whole wait.
+	const askEach = time.Second
+
 	// EVERY PEER ANSWERS FIRST. Without this the silence below is
 	// unfalsifiable: a responder that never registered looks the same.
 	waitFor(t, "every peer to answer a scatter", func() bool {
-		got, _ := scatter(clusterSettle)
+		got, _ := scatter(askEach)
 		return len(got) == len(peers)
 	})
 
@@ -1579,7 +1590,7 @@ func TestAPartitionedMemberIsSilentRatherThanSlow(t *testing.T) {
 	// report would be a permanent state rather than a passing one.
 	c.relays.Heal(t, 1)
 	waitFor(t, "the healed member to answer again", func() bool {
-		back, _ := scatter(clusterSettle)
+		back, _ := scatter(askEach)
 		return len(back) == len(peers)
 	})
 }
