@@ -1,6 +1,7 @@
 package tracker
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"path/filepath"
@@ -278,17 +279,35 @@ func nullableAt(i, n int) any {
 	return int64(i) * 1_000_000
 }
 
-// planStore is a replicated estate with the tracker's schema and enough rows
-// for the planner to prefer an index.
+// planStore is a replicated estate with the tracker's schema and enough task
+// rows for the planner to prefer an index.
 //
 // # Why rows at all
 //
-// SQLite's planner is free to scan a table it believes is tiny, and an empty
-// one is the tiniest there is — so a plan taken against no data reports a scan
-// for every query and this test would fail on a schema with no faults. The
-// fixture is small and its shape is what matters: enough distinct values that
-// a seek is cheaper than a scan, and ANALYZE run so the planner knows it.
+// A planner chooses from what it has counted, and a table nobody counted
+// leaves it its built-in guesses — which are not production's answer. Measured
+// on this engine: against an empty estate, which ANALYZE has nothing to count
+// in, every field-value filter seeks ANOTHER column's partial index on
+// `field_id` alone (the choice column's, for a text filter), the text and
+// number indexes are claimed by nothing, and this test fails on a schema with
+// no faults. The fixture is small and its shape is what matters: enough
+// distinct values that a seek is cheaper than a scan, and ANALYZE run so the
+// planner knows it.
 func planStore(t *testing.T) store.ReplicatedHandle {
+	t.Helper()
+	return seededPlanStore(t, seedTaskCorpus)
+}
+
+// seededPlanStore is an empty replicated estate filled by seed in ONE
+// transaction and then ANALYZEd — the frame every plan fixture here shares, so
+// each seeds the table its own statements read and nothing else.
+//
+// seed is handed the estate's own parameter limit, which is what
+// [store.InsertRows] chunks to — the multi-row insert every applier writes a
+// collection through.
+func seededPlanStore(t *testing.T,
+	seed func(ctx context.Context, tx *sql.Tx, maxVariables int) error) store.ReplicatedHandle {
+
 	t.Helper()
 	dbNode, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() {
@@ -302,74 +321,7 @@ func planStore(t *testing.T) store.ReplicatedHandle {
 	}
 	defer w.Close()
 	if err := w.Tx(t.Context(), func(tx *sql.Tx) error {
-		for i := range corpusRows {
-			id := fmt.Sprintf("t-%04d", i)
-			if _, err := tx.ExecContext(t.Context(), `
-				INSERT INTO tracker_tasks
-					(id, key, project_key, filed_unit, routing_unit,
-					 root_id, type, title, status, status_group,
-					 rank, assignee, batch_id, estimate_min, points,
-					 spend_tokens, due_at, start_at, finished_at,
-					 created_at, updated_at, version, document)
-				VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-				id, fmt.Sprintf("ENG-%d", i),
-				fmt.Sprintf("P%02d", i%projects), "eng", "eng", id,
-				[]string{"task", "bug", "epic"}[i%3], "a task",
-				[]string{"todo", "in_progress", "done"}[i%3],
-				[]string{"not_started", "active", "done"}[i%3],
-				fmt.Sprintf("a%06d", i), fmt.Sprintf("h-%d", i%200),
-				fmt.Sprintf("b-%d", i%97), i%480, float64(i%13), i*100,
-				// SKEWED, because selectivity is the whole question: a
-				// tenth of the corpus has a due date and a fiftieth is
-				// finished, which is what a company's board looks like
-				// and what decides whether a partial index earns its
-				// write cost.
-				nullableAt(i, 10), nullableAt(i, 10), nullableAt(i, 50),
-				0, int64(i), int64(i), []byte(`{}`)); err != nil {
-				return err
-			}
-			if i%tagEvery != 0 {
-				continue
-			}
-			for _, statement := range []struct {
-				sql  string
-				args []any
-			}{
-				{`INSERT INTO tracker_task_tags (task_id, project_key, slug)
-					VALUES (?,?,?)`,
-					[]any{id, "ENG", fmt.Sprintf("tag-%d", i%11)}},
-				{`INSERT INTO tracker_task_deps
-					(blocker_id, task_id, blocker_open, cleared_at) VALUES (?,?,?,?)`,
-					[]any{fmt.Sprintf("t-%04d", (i+1)%400), id, i % 2, int64(i)}},
-				// ONE ROW PER DECLARED FIELD, under the ids
-				// [planFields] resolves to — a fixture whose only
-				// field id is one no registered query names leaves
-				// the planner nothing to seek on.
-				{`INSERT INTO tracker_field_values
-					(task_id, field_id, seq, kind, hidden, text)
-					VALUES (?,?,?,?,0,?)`,
-					[]any{id, "field-owner", 0, FieldValueNative,
-						fmt.Sprintf("v-%d", i%211)}},
-				{`INSERT INTO tracker_field_values
-					(task_id, field_id, seq, kind, hidden, num)
-					VALUES (?,?,?,?,0,?)`,
-					[]any{id, "field-effort", 0, FieldValueNative, float64(i % 97)}},
-				{`INSERT INTO tracker_field_values
-					(task_id, field_id, seq, kind, hidden, at)
-					VALUES (?,?,?,?,0,?)`,
-					[]any{id, "field-ship", 0, FieldValueNative, int64(i)}},
-				{`INSERT INTO tracker_field_values
-					(task_id, field_id, seq, kind, hidden, ref)
-					VALUES (?,?,?,?,0,?)`,
-					[]any{id, "field-impact", 0, FieldValueNative,
-						fmt.Sprintf("r-%d", i%59)}},
-			} {
-				if _, err := tx.ExecContext(t.Context(), statement.sql, statement.args...); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
+		return seed(t.Context(), tx, db.Caps().MaxVariables)
 	}); err != nil {
 		t.Fatalf("seed the fixture: %v", err)
 	}
@@ -381,6 +333,117 @@ func planStore(t *testing.T) store.ReplicatedHandle {
 		t.Fatalf("ANALYZE: %v", err)
 	}
 	return db
+}
+
+// insertAll writes n rows through [store.InsertRows] with no conflict clause.
+//
+// THE MULTI-ROW INSERT, not a statement per row: the task corpus is 44 000
+// rows, and one ExecContext each — a round trip, a parse and a plan per row —
+// was two thirds of what this fixture cost under the race detector (29 s
+// alone, 11 s through this). What is left is the driver binding each of some
+// 570 000 parameters and the engine maintaining the task table's twenty-odd
+// indexes, which no statement shape removes. The rows are the same rows
+// either way; what the planner is handed is the counted table, and ANALYZE
+// counts it after the commit.
+func insertAll(ctx context.Context, tx *sql.Tx, maxVariables int,
+	prefix, row string, n int, args func(i int) []any) error {
+
+	_, err := store.InsertRows(ctx, tx, maxVariables, prefix, row, "", n, args)
+	return err
+}
+
+// taskRow is the i-th row of the task corpus, in [insertTask]'s column order.
+func taskRow(i int) []any {
+	id := fmt.Sprintf("t-%04d", i)
+	return []any{
+		id, fmt.Sprintf("ENG-%d", i),
+		fmt.Sprintf("P%02d", i%projects), "eng", "eng", id,
+		[]string{"task", "bug", "epic"}[i%3], "a task",
+		[]string{"todo", "in_progress", "done"}[i%3],
+		[]string{"not_started", "active", "done"}[i%3],
+		fmt.Sprintf("a%06d", i), fmt.Sprintf("h-%d", i%200),
+		fmt.Sprintf("b-%d", i%97), i % 480, float64(i % 13), i * 100,
+		// SKEWED, because selectivity is the whole question: a
+		// tenth of the corpus has a due date and a fiftieth is
+		// finished, which is what a company's board looks like
+		// and what decides whether a partial index earns its
+		// write cost.
+		nullableAt(i, 10), nullableAt(i, 10), nullableAt(i, 50),
+		0, int64(i), int64(i), []byte(`{}`),
+	}
+}
+
+// insertTask is the statement [taskRow] fills, as a prefix and one row.
+const insertTask = `
+	INSERT INTO tracker_tasks
+		(id, key, project_key, filed_unit, routing_unit,
+		 root_id, type, title, status, status_group,
+		 rank, assignee, batch_id, estimate_min, points,
+		 spend_tokens, due_at, start_at, finished_at,
+		 created_at, updated_at, version, document)
+	VALUES`
+
+const taskValues = `(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+
+// seedTaskCorpus is the twenty thousand tasks the task query set is planned
+// against, and the tags, dependencies and field values every fifth one
+// carries.
+func seedTaskCorpus(ctx context.Context, tx *sql.Tx, maxVariables int) error {
+	if err := insertAll(ctx, tx, maxVariables, insertTask, taskValues,
+		corpusRows, taskRow); err != nil {
+		return fmt.Errorf("the tasks: %w", err)
+	}
+	// EVERY FIFTH TASK carries one row in each child table: the k-th
+	// tagged task is task k*tagEvery.
+	tagged := (corpusRows + tagEvery - 1) / tagEvery
+	id := func(k int) string { return fmt.Sprintf("t-%04d", k*tagEvery) }
+	for _, child := range []struct {
+		what, prefix, row string
+		args              func(k int) []any
+	}{
+		{"tags", `INSERT INTO tracker_task_tags (task_id, project_key, slug) VALUES`,
+			`(?,?,?)`, func(k int) []any {
+				return []any{id(k), "ENG", fmt.Sprintf("tag-%d", k*tagEvery%11)}
+			}},
+		{"dependencies", `INSERT INTO tracker_task_deps
+			(blocker_id, task_id, blocker_open, cleared_at) VALUES`,
+			`(?,?,?,?)`, func(k int) []any {
+				i := k * tagEvery
+				return []any{fmt.Sprintf("t-%04d", (i+1)%400), id(k), i % 2, int64(i)}
+			}},
+		// ONE ROW PER DECLARED FIELD, under the ids [planFields]
+		// resolves to — a fixture whose only field id is one no
+		// registered query names leaves the planner nothing to seek on.
+		{"text values", `INSERT INTO tracker_field_values
+			(task_id, field_id, seq, kind, hidden, text) VALUES`,
+			`(?,?,?,?,0,?)`, func(k int) []any {
+				return []any{id(k), "field-owner", 0, FieldValueNative,
+					fmt.Sprintf("v-%d", k*tagEvery%211)}
+			}},
+		{"number values", `INSERT INTO tracker_field_values
+			(task_id, field_id, seq, kind, hidden, num) VALUES`,
+			`(?,?,?,?,0,?)`, func(k int) []any {
+				return []any{id(k), "field-effort", 0, FieldValueNative,
+					float64(k * tagEvery % 97)}
+			}},
+		{"date values", `INSERT INTO tracker_field_values
+			(task_id, field_id, seq, kind, hidden, at) VALUES`,
+			`(?,?,?,?,0,?)`, func(k int) []any {
+				return []any{id(k), "field-ship", 0, FieldValueNative, int64(k * tagEvery)}
+			}},
+		{"choice values", `INSERT INTO tracker_field_values
+			(task_id, field_id, seq, kind, hidden, ref) VALUES`,
+			`(?,?,?,?,0,?)`, func(k int) []any {
+				return []any{id(k), "field-impact", 0, FieldValueNative,
+					fmt.Sprintf("r-%d", k*tagEvery%59)}
+			}},
+	} {
+		if err := insertAll(ctx, tx, maxVariables, child.prefix, child.row,
+			tagged, child.args); err != nil {
+			return fmt.Errorf("the task %s: %w", child.what, err)
+		}
+	}
+	return nil
 }
 
 func explain(t *testing.T, db store.ReplicatedHandle, statement string, args []any) []string {
