@@ -315,7 +315,7 @@ func TestTokensAnswersTheLiveWindow(t *testing.T) {
 	}
 	// And it is the window the projection AGED, ending at the projection's
 	// clock — never a second read of the registry's, which here is the wall
-	// clock four months on.
+	// clock, months past the pinned date.
 	if want := projected.Format(time.RFC3339); got.Until != want {
 		t.Errorf("until = %s, want the projection's clock %s", got.Until, want)
 	}

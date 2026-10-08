@@ -281,6 +281,11 @@ func (s *LiveState) Spend() SpendWindow {
 
 // SpendRecords returns the records inside the live window: [LiveState.Spend]'s,
 // for a reader that has no use for the window's bounds.
+//
+// KEPT ON PURPOSE with no production reader. The rollups label what they fold,
+// so they read Spend; the suites that hold what the window CONTAINS — this
+// package's, observe's seed and the store's cache columns — ask exactly this
+// question, about two dozen times over, and have no use for the bounds.
 func (s *LiveState) SpendRecords() []tokens.Record { return s.Spend().Records }
 
 // ExpireSpend drops what the live window has aged past as of the projection's

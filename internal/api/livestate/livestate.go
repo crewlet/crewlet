@@ -285,13 +285,14 @@ type LiveState struct {
 	// or both, in either order.
 	//
 	// EXACT rather than bounded like finishedCalls below, because it tracks
-	// s.spend and shrinks with it — the same shape feedIDs has, and for the
-	// same reason. A bounded set could not do it: its cap was the number of
-	// records the seed reads, and the ids the live stream had already put
-	// there sat at the FRONT of its eviction order, so a full seed evicted
-	// them before its own loop reached the store's copies of those very
-	// phases and counted each of them twice. See dropSpend, which is where
-	// this shrinks.
+	// s.spend and s.undatedSpend, shrinks with them and takes no id they
+	// do not hold — the same shape feedIDs has, and for the same reason. A
+	// bounded set could not do it: its cap was the number of records the
+	// seed reads, and the ids the live stream had already put there sat at
+	// the FRONT of its eviction order, so a full seed evicted them before
+	// its own loop reached the store's copies of those very phases and
+	// counted each of them twice. See dropSpend, which is where this
+	// shrinks.
 	spendIDs map[string]struct{}
 
 	// finishedCalls maps a phase invocation to the instant its completion

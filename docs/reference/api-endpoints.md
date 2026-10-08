@@ -1549,7 +1549,7 @@ than a day rather than a wrong total) and folds them with
 windows are folded with, so changing the window on screen cannot change
 what a phase is counted as. The window is a ROLLING one, aged on the
 serving node's clock — every read leaves out what the window has aged
-past, and every record that arrives and the shared tick drop it — and
+past, and both an arriving record and the shared tick drop it — and
 never on a record's own stamp: a record stamped
 before the window is not counted however late it arrives, one stamped
 ahead by a node whose clock runs fast is held until the window passes it
