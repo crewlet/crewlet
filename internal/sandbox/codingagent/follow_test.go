@@ -133,7 +133,9 @@ func TestALiveReadingOfALongStreamBeginsAtItsEnd(t *testing.T) {
 	t.Parallel()
 	runner := codingagent.NewOpenCode()
 	b := box(t, runner)
-	b.Put(paths(b).Result(), bigToolStream(
+	// Each tool event as long as the window, so the window opens inside the
+	// last of them and the reading begins on the event after it.
+	b.Put(paths(b).Result(), toolStream(codingagent.LiveWindow, b.ReadCap(),
 		`{"type":"tool_use","part":{"tool":"bash","state":{"input":{"command":"go vet ./..."}}}}`))
 
 	got := read(t, runner.Follow(sandbox.RunHandle{}), b)
@@ -152,7 +154,8 @@ func TestALiveReadingOfTheErrorStreamStartsOnALine(t *testing.T) {
 	t.Parallel()
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
-	b.Put(paths(b).Err(), strings.Repeat("progress 0123456789\n", 80_000)+"now compiling")
+	// Past the window a reading begins from, so it begins inside the stream.
+	b.Put(paths(b).Err(), strings.Repeat("progress 0123456789\n", codingagent.LiveWindow/20+2000)+"now compiling")
 
 	got := read(t, runner.Follow(sandbox.RunHandle{}), b)
 	if !strings.HasPrefix(got.Text, "progress 0123456789\n") || !strings.HasSuffix(got.Text, "progress 0123456789\n") {
@@ -178,7 +181,8 @@ func TestAStreamThatOutrunsTheReadingBeginsAgain(t *testing.T) {
 	b.Put(p.Result(), textEvent("before the burst"))
 	first := read(t, reading, b)
 
-	b.Put(p.Result(), textEvent("before the burst")+bigToolStream(textEvent("after the burst")))
+	b.Put(p.Result(), textEvent("before the burst")+
+		toolStream(codingagent.LiveBacklog/8, codingagent.LiveBacklog, textEvent("after the burst")))
 	again := read(t, reading, b)
 	if again.Origin == first.Origin || !again.Front {
 		t.Errorf("origin %q after %q, front %v; want a new reading, begun at the end",

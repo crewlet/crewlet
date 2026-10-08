@@ -45,10 +45,11 @@ type Decoder interface {
 	// event types it does not know.
 	Line(line []byte)
 
-	// Skipped is a line past [maxLineBytes], which was not read: n is its
-	// size. The decoder says so where the line was, so a reader of what it
-	// built is not shown a gap as continuity.
-	Skipped(n int64)
+	// Skipped is a line past bound — what its reader held a line to,
+	// [maxLineBytes] on every read the engine makes — which was not read: n
+	// is its size. The decoder says so where the line was, naming the
+	// bound, so a reader of what it built is not shown a gap as continuity.
+	Skipped(n int64, bound int)
 
 	// Result is what the stream said: for a CLI whose result is its stream,
 	// the whole of it; for one whose result is read apart, its transcript.
@@ -71,16 +72,21 @@ type Decoder interface {
 // a whole read of the file could decode before, this still decodes, and what
 // memory one line can cost is what one file read could. What has no bound any
 // more is the number of lines.
+//
+// Every read the engine makes holds a line to it — a runner's through
+// [Runner.lineBound], which its suite lowers to skip a line it can afford to
+// build.
 const maxLineBytes = sandbox.MaxFileBytes
 
-// eachLine feeds r to dec a line at a time, in memory bounded by
-// [maxLineBytes]: a line longer than that is never held — its bytes are
-// counted as they pass and the decoder told its size.
+// eachLine feeds r to dec a line at a time, in memory bounded by bound
+// ([maxLineBytes] on every read the engine makes): a line longer than that is
+// never held — its bytes are counted as they pass and the decoder told its
+// size and the bound it was past.
 //
 // The last line need not end in a line break: a finished stream's last line
 // is complete wherever it stops, and a running one's is the decoder's to
 // recognise as partial.
-func eachLine(r io.Reader, dec Decoder) error {
+func eachLine(r io.Reader, dec Decoder, bound int) error {
 	br := bufio.NewReaderSize(r, 64<<10)
 	var (
 		line []byte
@@ -91,7 +97,7 @@ func eachLine(r io.Reader, dec Decoder) error {
 		switch {
 		case over > 0:
 			over += int64(len(chunk))
-		case len(line)+len(chunk) > maxLineBytes:
+		case len(line)+len(chunk) > bound:
 			over = int64(len(line) + len(chunk))
 			// RELEASED, not truncated: a line that reached the bound has
 			// grown the buffer to it, and keeping that buffer would hold
@@ -104,7 +110,7 @@ func eachLine(r io.Reader, dec Decoder) error {
 			continue
 		}
 		if over > 0 {
-			dec.Skipped(over)
+			dec.Skipped(over, bound)
 			over = 0
 		} else if len(line) > 0 {
 			dec.Line(bytes.TrimRight(line, "\r\n"))
@@ -123,7 +129,7 @@ func eachLine(r io.Reader, dec Decoder) error {
 // stream already in hand.
 func decodeAll(dec Decoder, text string) sandbox.Result {
 	// A strings.Reader cannot fail, so neither can this.
-	_ = eachLine(strings.NewReader(text), dec)
+	_ = eachLine(strings.NewReader(text), dec, maxLineBytes)
 	return dec.Result()
 }
 
@@ -133,9 +139,11 @@ type transcriptLines struct {
 	lines []string
 
 	// skipped and skippedBytes are a run of consecutive lines past the
-	// bound, said in ONE note where they were rather than one per line.
+	// bound, said in ONE note where they were rather than one per line,
+	// and skippedBound is the bound they were past.
 	skipped      int
 	skippedBytes int64
+	skippedBound int
 }
 
 func (t *transcriptLines) add(entry string) {
@@ -143,9 +151,10 @@ func (t *transcriptLines) add(entry string) {
 	t.lines = append(t.lines, entry)
 }
 
-func (t *transcriptLines) skip(n int64) {
+func (t *transcriptLines) skip(n int64, bound int) {
 	t.skipped++
 	t.skippedBytes += n
+	t.skippedBound = bound
 }
 
 func (t *transcriptLines) flushSkipped() {
@@ -153,7 +162,7 @@ func (t *transcriptLines) flushSkipped() {
 		return
 	}
 	t.lines = append(t.lines, fmt.Sprintf("(%d line(s) of output, %s, not read: past the %s one "+
-		"line of a run's output may hold)", t.skipped, humanSize(t.skippedBytes), humanSize(maxLineBytes)))
+		"line of a run's output may hold)", t.skipped, humanSize(t.skippedBytes), humanSize(int64(t.skippedBound))))
 	t.skipped, t.skippedBytes = 0, 0
 }
 

@@ -10,10 +10,14 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 )
 
-// box mints a fake sandbox with the shared plumbing installed.
+// box mints a fake sandbox with the shared plumbing installed, reading whole
+// up to [boxReadCap] rather than the real 32 MiB, so a case going past the cap
+// builds a mebibyte rather than thirty-two of them. Every case here sizes a
+// file past the cap from [sandbox.FakeSandbox.ReadCap]; that real boxes read
+// to MaxFileBytes is the file contract's to certify.
 func box(t *testing.T, runner *codingagent.Runner) *sandbox.FakeSandbox {
 	t.Helper()
-	b := sandbox.NewFakeSandbox("box-1")
+	b := sandbox.NewFakeSandbox("box-1").CapReads(boxReadCap)
 	if err := runner.Install(t.Context(), b); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
@@ -21,6 +25,12 @@ func box(t *testing.T, runner *codingagent.Runner) *sandbox.FakeSandbox {
 }
 
 func paths(b sandbox.Sandbox) codingagent.Paths { return codingagent.PathsFor(b) }
+
+// boxReadCap is the whole-read cap of the box [box] mints: four times the
+// record's bound ([sandbox.MaxRunTextBytes]), so a report past what the
+// record keeps — which the runner must hand on whole — is still a file the
+// box reads whole, as it is on a real one.
+const boxReadCap = 4 * sandbox.MaxRunTextBytes
 
 // ---------------------------------------------------------------------
 // paths
@@ -423,7 +433,9 @@ func TestTheTranscriptLeavesTheRunnerWholeAndRedacted(t *testing.T) {
 	b := box(t, runner)
 	p := paths(b)
 	secret := "sk-ant-" + strings.Repeat("Q7", 20)
-	stderr := "start " + secret + "\n" + strings.Repeat("日", sandbox.MaxRunTextBytes) + "\nTHE CONCLUSION"
+	// Just past the record's bound — the bound this runner must NOT apply —
+	// and well inside the failure bound the stream is read to.
+	stderr := "start " + secret + "\n" + strings.Repeat("日", sandbox.MaxRunTextBytes/3+1024) + "\nTHE CONCLUSION"
 	b.Put(p.Findings(), "Outcome: succeeded")
 	b.Put(p.Err(), stderr)
 
@@ -451,7 +463,9 @@ func TestACrashDetailIsCarriedWholeBehindItsStatus(t *testing.T) {
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	p := paths(b)
-	stderr := strings.Repeat("noise\n", sandbox.MaxRunTextBytes) + "FATAL: migrations/0007.sql is missing"
+	// Past the record's bound, which the runner leaves to the coordinator,
+	// and inside the failure bound it reads the stream to.
+	stderr := strings.Repeat("noise\n", sandbox.MaxRunTextBytes/6+1024) + "FATAL: migrations/0007.sql is missing"
 	b.Put(p.Err(), stderr)
 	b.Put(p.ExitCode(), "1")
 
@@ -495,7 +509,9 @@ func TestTheReportLeavesTheRunnerWhole(t *testing.T) {
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	p := paths(b)
-	report := "Outcome: succeeded\n" + strings.Repeat("detail\n", sandbox.MaxRunTextBytes)
+	// Past the record's bound, which the runner leaves to the coordinator,
+	// and inside the cap the box reads a report to.
+	report := "Outcome: succeeded\n" + strings.Repeat("detail\n", sandbox.MaxRunTextBytes/7+1024)
 	b.Put(p.Findings(), report)
 	b.Put(p.ExitCode(), "0")
 

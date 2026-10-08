@@ -252,7 +252,7 @@ func (OpenCode) Finished(lines string) bool {
 		case "session.status":
 			finished = finished || ev.Properties.Status.Type == "idle"
 		}
-	}))
+	}), maxLineBytes)
 	return finished
 }
 
@@ -407,13 +407,13 @@ func (d *openCodeEvents) keepPlain(line []byte) {
 	d.plain.WriteByte('\n')
 }
 
-func (d *openCodeEvents) Skipped(n int64) {
+func (d *openCodeEvents) Skipped(n int64, bound int) {
 	d.sawLine = true
 	if !d.sawEvent {
 		d.plainDropped += n
 		return
 	}
-	d.transcript.skip(n)
+	d.transcript.skip(n, bound)
 }
 
 func (d *openCodeEvents) Result() sandbox.Result {
@@ -521,7 +521,7 @@ func firstNonBlank(values ...string) string {
 type lineFunc func(line []byte)
 
 func (f lineFunc) Line(line []byte)     { f(line) }
-func (lineFunc) Skipped(int64)          {}
+func (lineFunc) Skipped(int64, int)     {}
 func (lineFunc) Result() sandbox.Result { return sandbox.Result{} }
 func (lineFunc) Entries() []string      { return nil }
 
