@@ -628,10 +628,27 @@ type priceFound struct {
 	what, near string
 }
 
+// priceFormNeeds is what each of priceForms cannot match without
+// (sourcetree.Required), by index. Every form but the field name's opens with
+// a class or `\b`, which leaves the regexp package no prefix to jump to, so
+// each ran over every byte of every module; a module that holds nothing a form
+// needs is not handed to it, which cannot change what it finds. The big
+// chunks hold most of what the forms need, so this skips the small ones.
+var priceFormNeeds = func() []sourcetree.Prefilter {
+	out := make([]sourcetree.Prefilter, len(priceForms))
+	for i, form := range priceForms {
+		out[i] = sourcetree.Required(form.re)
+	}
+	return out
+}()
+
 // pricesInModule is every place a built module holds a price.
 func pricesInModule(module []byte) []priceFound {
 	var out []priceFound
-	for _, form := range priceForms {
+	for i, form := range priceForms {
+		if !priceFormNeeds[i].Admits(module) {
+			continue
+		}
 		for _, at := range form.re.FindAllIndex(module, -1) {
 			from, to := max(0, at[0]-60), min(len(module), at[1]+40)
 			out = append(out, priceFound{form.what, string(module[from:to])})
