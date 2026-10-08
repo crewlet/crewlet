@@ -64,6 +64,7 @@ func startReconciler(ctx context.Context, e *engine.Engine, boot *config.Bootstr
 	if err != nil {
 		return nil, fmt.Errorf("node identity: %w", err)
 	}
+	seed = managedSeed(ctx, boot, seed, log)
 	if err = seedCompany(ctx, db, plane, e.Backends().Queue, seed, cipher,
 		nodeID, log); err != nil {
 		return nil, err

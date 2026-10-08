@@ -191,6 +191,14 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	case "diff":
 		return diffRevisions(ctx, cs, subject, against, stdout)
 	case "activate":
+		// RE-POINTING THE FLEET AT ANOTHER REVISION IS A CHANGE OF DOCUMENT,
+		// and this route is offline: no credential, so a managed document
+		// refuses it. Re-activating the CURRENT revision changes nothing in
+		// the company — it is the offline twin of POST /config/reload, the
+		// gesture a rotated credential needs — and stays open.
+		if err := refuseManagedActivation(ctx, cs, subject); err != nil {
+			return err
+		}
 		return activateRevision(ctx, cs, subject, stdout)
 	case "seal":
 		return sealConfig(ctx, cs, *bootstrapPath, stdout)
@@ -220,6 +228,10 @@ type configStore struct {
 	// two disagreeing is how a rekey comes to report moving a revision
 	// onto a key it did not use.
 	activeKeyID string
+
+	// boot is that Tier A document, for the one more thing a command asks
+	// of it: whether the company document is managed ([refuseManagedOffline]).
+	boot *config.Bootstrap
 }
 
 func openConfigStore(ctx context.Context, bootstrapPath string) (*configStore, func(), error) {
@@ -261,7 +273,7 @@ func openConfigStore(ctx context.Context, bootstrapPath string) (*configStore, f
 	}
 	return &configStore{
 		configs: db.Configs(), cipher: cipher,
-		activeKeyID: boot.Secrets.ActiveKeyID,
+		activeKeyID: boot.Secrets.ActiveKeyID, boot: boot,
 	}, func() { _ = db.Close() }, nil
 }
 
@@ -636,6 +648,11 @@ func importCompany(ctx context.Context, t importTarget, stdout io.Writer) error 
 		return importThroughNode(ctx, boot, t, summary, stdout)
 	}
 	defer closeStore()
+	// THE OFFLINE ROUTE PRESENTS NO CREDENTIAL, so on a managed document
+	// it is refused here; the API route is judged by the node it reaches.
+	if err := refuseManagedOffline(cs.boot, "an offline `crewlet config import`"); err != nil {
+		return err
+	}
 	return importConfig(ctx, cs, t.path, company, summary, stdout)
 }
 

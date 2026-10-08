@@ -153,6 +153,12 @@ func (c *configClient) refusal(status int, contentType string, raw []byte) error
 			"api.auth.tokens", c.base, apiTokenEnv)
 	case status == http.StatusConflict && body.Error == "revision_advanced":
 		return lostRace(c.base, body.Current, body.Stored)
+	case status == http.StatusForbidden && body.Error == string(configapi.CodeConfigManaged):
+		// THE CREDENTIAL IS VALID AND NOT A WRITER, so the remedy is which
+		// token this command sent, and the refusal says where it came from.
+		return fmt.Errorf("%s refused the import: %s\n  %s\n  (this command "+
+			"authenticated with %s when it is set, else the first of Tier A's "+
+			"api.auth.tokens)", c.base, body.Detail, body.Hint, apiTokenEnv)
 	}
 	msg := body.Error
 	if msg == "" {
