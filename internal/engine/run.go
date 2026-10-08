@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -372,6 +371,12 @@ type Engine struct {
 	// outer would have dereferenced nil.
 	env atomic.Pointer[config.Resolver]
 
+	// environ is the environment every resolver this node builds ends in —
+	// [Options.Environment], the process's own when that is nil. Read
+	// through [Engine.environment], which answers the process's for an
+	// engine built without one.
+	environ config.Source
+
 	// republish coalesces the re-activations a provisioning pass asks for
 	// when it seals a credential. See republish.go.
 	republish republisher
@@ -693,6 +698,21 @@ type Options struct {
 	// run for minutes; a test shrinks it so a run settles in a second
 	// rather than waiting out a real tick.
 	SandboxPollInterval time.Duration
+
+	// Environment is what a company's `${VAR}` references fall back to
+	// behind the secret store, and what the per-run endpoints' settings are
+	// read from ([sandbox.BuildOtelReceiver], [mcpbridge.Build]). Nil is
+	// the process environment, which is what `crewlet run` leaves it.
+	//
+	// A SOURCE RATHER THAN THE PROCESS'S OWN for the reason the org model
+	// takes a lookup ([org.HumanContact.ResolvedIdentities]): the
+	// environment is the one genuinely ambient input, and an ambient input
+	// serialises every test that sets it — Go forbids t.Setenv beside
+	// t.Parallel — while two engines in one process can each be handed
+	// their own. Tier A is not resolved through it: the bootstrap is the
+	// root of trust, resolved from the process it was loaded in, by the
+	// loader and [OpenBackends] alike.
+	Environment config.Source
 }
 
 // New assembles an engine.
@@ -753,9 +773,13 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// BUILT BEFORE THE SANDBOX RUNTIME, because the manager takes it: a
 	// receiver constructed after the first apply would leave every run
 	// launched in between exporting nowhere, silently.
+	environ := opts.Environment
+	if environ == nil {
+		environ = config.EnvSource{}
+	}
 	otel := opts.OtelReceiver
 	if otel == nil {
-		built, err := sandbox.BuildOtelReceiver(os.Getenv,
+		built, err := sandbox.BuildOtelReceiver(getenv(environ),
 			keyMaterial(opts.Bootstrap))
 		if err != nil {
 			// A receiver URL that is set and unusable is a deployment
@@ -772,7 +796,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// keyring rather than from a per-process random.
 	bridge := opts.Bridge
 	if bridge == nil {
-		bridge = mcpbridge.Build(os.Getenv, keyMaterial(opts.Bootstrap))
+		bridge = mcpbridge.Build(getenv(environ), keyMaterial(opts.Bootstrap))
 	}
 
 	// THE MODE AND THE INCARNATION, resolved once. An unset mode is
@@ -829,7 +853,8 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	}
 
 	e := &Engine{
-		boot: opts.Bootstrap,
+		boot:    opts.Bootstrap,
+		environ: environ,
 		// SET HERE, BEFORE ANYTHING READS IT, and once: the admission
 		// handshake below asks it whether this node publishes and whether
 		// its broker is a member, and the node is handed this exact value
