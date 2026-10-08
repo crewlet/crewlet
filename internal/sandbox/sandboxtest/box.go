@@ -28,11 +28,27 @@ import (
 // fresh returns an empty box per case. Every path is under the box's own
 // [sandbox.Sandbox.Home], because that is the only place every backend can
 // write.
-func Box(t *testing.T, fresh func(t *testing.T) sandbox.Sandbox) {
+//
+// readCap is the whole-read cap the fresh boxes were built with, and the two
+// cases about the cap write a file of it and one byte past it. A backend that
+// reads memory or the engine host's own files runs at a cap it can fill: the
+// refusal, the whole read and the streams past it are the same branches at any
+// size, and at [sandbox.MaxFileBytes] each case built, wrote and read two
+// 32 MiB files per backend. A backend with a transport of its own between the
+// engine and the file — E2B's envd — runs at the real one, so a limit written
+// against the constant anywhere on that path, a body cut or a ceiling on a
+// stream, is still met here.
+func Box(t *testing.T, readCap int, fresh func(t *testing.T) sandbox.Sandbox) {
 	t.Helper()
+	// Past the largest file the other cases read whole, or the cap would be
+	// what failed them.
+	if readCap <= wholeReadBytes {
+		t.Fatalf("sandboxtest: a read cap of %d bytes is not past the %d-byte file the suite "+
+			"reads whole", readCap, wholeReadBytes)
+	}
 	cases := []struct {
 		name string
-		fn   func(*testing.T, sandbox.Sandbox)
+		fn   func(*testing.T, sandbox.Sandbox, int)
 	}{
 		{"AMissingFileIsEmptyToEveryRead", testAMissingFileIsEmptyToEveryRead},
 		{"AWholeReadReturnsTheFileByteForByte", testAWholeReadReturnsTheFileByteForByte},
@@ -44,10 +60,15 @@ func Box(t *testing.T, fresh func(t *testing.T) sandbox.Sandbox) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			c.fn(t, fresh(t))
+			c.fn(t, fresh(t), readCap)
 		})
 	}
 }
+
+// wholeReadBytes is the file the suite reads whole and byte for byte: more
+// than one 32 KiB piece of E2B's transfer and more than a 64 KiB read buffer,
+// so a read that handed back its first piece as the whole is caught.
+const wholeReadBytes = 70_000
 
 // pathIn is a path under the box's own home.
 func pathIn(box sandbox.Sandbox, name string) string {
@@ -90,7 +111,7 @@ func readStream(t *testing.T, box sandbox.Sandbox, path string) []byte {
 // "NOT THERE YET" IS THE ORDINARY ANSWER, on every read: the runner polls for
 // markers and streams that do not exist until the job has written them, and a
 // poll is not an error.
-func testAMissingFileIsEmptyToEveryRead(t *testing.T, box sandbox.Sandbox) {
+func testAMissingFileIsEmptyToEveryRead(t *testing.T, box sandbox.Sandbox, _ int) {
 	path := pathIn(box, "absent")
 	if got, err := box.ReadFile(t.Context(), path); err != nil || len(got) != 0 {
 		t.Errorf("ReadFile of a missing file = %q, %v; want empty", got, err)
@@ -104,9 +125,9 @@ func testAMissingFileIsEmptyToEveryRead(t *testing.T, box sandbox.Sandbox) {
 	}
 }
 
-func testAWholeReadReturnsTheFileByteForByte(t *testing.T, box sandbox.Sandbox) {
+func testAWholeReadReturnsTheFileByteForByte(t *testing.T, box sandbox.Sandbox, _ int) {
 	path := pathIn(box, "report.md")
-	content := pattern(70_000)
+	content := pattern(wholeReadBytes)
 	write(t, box, path, content)
 	if got, err := box.ReadFile(t.Context(), path); err != nil || !bytes.Equal(got, content) {
 		t.Errorf("ReadFile = %d bytes, %v; want the %d written", len(got), err, len(content))
@@ -120,7 +141,7 @@ func testAWholeReadReturnsTheFileByteForByte(t *testing.T, box sandbox.Sandbox) 
 // and that is what a tail reports: zero, with no data. Over HTTP a suffix range
 // on an empty file is the one unsatisfiable range, which a backend must answer
 // as an empty end rather than as a failed read.
-func testAnEmptyFileIsEmptyToEveryRead(t *testing.T, box sandbox.Sandbox) {
+func testAnEmptyFileIsEmptyToEveryRead(t *testing.T, box sandbox.Sandbox, _ int) {
 	path := pathIn(box, "err.log")
 	write(t, box, path, nil)
 	if got, err := box.ReadFile(t.Context(), path); err != nil || len(got) != 0 {
@@ -139,7 +160,7 @@ func testAnEmptyFileIsEmptyToEveryRead(t *testing.T, box sandbox.Sandbox) {
 // THE END, AND HOW MUCH CAME BEFORE IT. A caller reading a stream's end says
 // what it did not read by the file's whole size, so a tail that answered the
 // right bytes and the wrong size would have it present the end as the whole.
-func testATailIsTheFilesEndAndNamesItsWholeSize(t *testing.T, box sandbox.Sandbox) {
+func testATailIsTheFilesEndAndNamesItsWholeSize(t *testing.T, box sandbox.Sandbox, _ int) {
 	path := pathIn(box, "result.json")
 	content := pattern(10_000)
 	write(t, box, path, content)
@@ -168,13 +189,23 @@ func testATailIsTheFilesEndAndNamesItsWholeSize(t *testing.T, box sandbox.Sandbo
 // reads as a finished one; the same bytes read as a stream or from their end
 // are what a run's event log and its stderr are, and refusing those refused a
 // run for the size of its own log.
-func testAFilePastTheCapIsRefusedWholeAndReadAsAStream(t *testing.T, box sandbox.Sandbox) {
+func testAFilePastTheCapIsRefusedWholeAndReadAsAStream(t *testing.T, box sandbox.Sandbox, readCap int) {
 	path := pathIn(box, "stream.jsonl")
-	content := pattern(sandbox.MaxFileBytes + 1)
+	content := pattern(readCap + 1)
 	write(t, box, path, content)
 
-	if got, err := box.ReadFile(t.Context(), path); !errors.Is(err, sandbox.ErrFileTooLarge) {
+	got, err := box.ReadFile(t.Context(), path)
+	if !errors.Is(err, sandbox.ErrFileTooLarge) {
 		t.Errorf("ReadFile past the cap = %d bytes, %v; want ErrFileTooLarge", len(got), err)
+	}
+	// And it names the cap, which is what a collection describes the
+	// refused piece by.
+	var tooLarge *sandbox.FileTooLargeError
+	if errors.As(err, &tooLarge) && (tooLarge.Limit != readCap || tooLarge.Path != path) {
+		t.Errorf("the refusal names %s at %d bytes; want %s at the box's %d",
+			tooLarge.Path, tooLarge.Limit, path, readCap)
+	} else if err != nil && !errors.As(err, &tooLarge) {
+		t.Errorf("the refusal %v does not carry the cap it was refused at", err)
 	}
 
 	r, err := box.OpenFile(t.Context(), path)
@@ -203,9 +234,9 @@ func testAFilePastTheCapIsRefusedWholeAndReadAsAStream(t *testing.T, box sandbox
 
 // The cap is inclusive: a file of exactly it is read, so the refusal above is
 // the +1 and not an off-by-one that refuses honest output.
-func testAFileAtTheCapIsReadWhole(t *testing.T, box sandbox.Sandbox) {
+func testAFileAtTheCapIsReadWhole(t *testing.T, box sandbox.Sandbox, readCap int) {
 	path := pathIn(box, "findings.md")
-	content := pattern(sandbox.MaxFileBytes)
+	content := pattern(readCap)
 	write(t, box, path, content)
 	got, err := box.ReadFile(t.Context(), path)
 	if err != nil || len(got) != len(content) {
@@ -215,7 +246,7 @@ func testAFileAtTheCapIsReadWhole(t *testing.T, box sandbox.Sandbox) {
 
 // A reader that stops early — a decoder that found what it needed — closes
 // the stream without draining it, and the close neither fails nor hangs.
-func testAStreamClosedEarlyIsReleased(t *testing.T, box sandbox.Sandbox) {
+func testAStreamClosedEarlyIsReleased(t *testing.T, box sandbox.Sandbox, _ int) {
 	path := pathIn(box, "stream.jsonl")
 	write(t, box, path, pattern(1<<20))
 	r, err := box.OpenFile(t.Context(), path)

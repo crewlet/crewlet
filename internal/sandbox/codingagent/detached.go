@@ -663,9 +663,10 @@ func readWhole(ctx context.Context, box sandbox.Sandbox, path, what string) (str
 	if refusal := notRegularPiece(err, path, what); refusal != "" {
 		return "", refusal, nil
 	}
+	var tooLarge *sandbox.FileTooLargeError
 	switch {
-	case errors.Is(err, sandbox.ErrFileTooLarge):
-		return "", refusedPiece(ctx, box, path, what), nil
+	case errors.As(err, &tooLarge):
+		return "", refusedPiece(ctx, box, path, what, tooLarge.Limit), nil
 	case err != nil:
 		return "", "", err
 	}
@@ -688,14 +689,16 @@ func notRegularPiece(err error, path, what string) string {
 	return fmt.Sprintf("%s (%s) %s", what, path, notRegular.Reason())
 }
 
-// refusedPiece describes a file the engine would not read whole, by its size.
-func refusedPiece(ctx context.Context, box sandbox.Sandbox, path, what string) string {
-	size := "past " + humanSize(sandbox.MaxFileBytes)
+// refusedPiece describes a file the engine would not read whole, by its size
+// and the cap the box refused it at — [sandbox.MaxFileBytes] on every box the
+// engine builds, read off the refusal rather than restated here.
+func refusedPiece(ctx context.Context, box sandbox.Sandbox, path, what string, limit int) string {
+	size := "past " + humanSize(int64(limit))
 	if end, err := box.ReadTail(ctx, path, 0); err == nil && end.Size > 0 {
 		size = humanSize(end.Size)
 	}
 	return fmt.Sprintf("%s (%s) is %s, past the %s the engine reads back from a box whole, "+
-		"so it was not read", what, path, size, humanSize(sandbox.MaxFileBytes))
+		"so it was not read", what, path, size, humanSize(int64(limit)))
 }
 
 // overlayAsk surfaces a question the shim recorded, if there is one, and a

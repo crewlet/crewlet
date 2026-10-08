@@ -13,22 +13,40 @@ import (
 // THE FILE CONTRACT, ON EVERY BACKEND. The twin first, because every runner
 // and coordinator test reads a box through it, and a twin that answers what
 // no real box would makes each of those tests a claim about nothing.
+//
+// The twin and the two local boxes run at [contractCap]: what they read is
+// memory or the engine host's own files, so nothing between them and the file
+// could hold a limit of its own, and every branch the cap cases reach is the
+// same at any size. That each of them reads by [sandbox.MaxFileBytes] in
+// production is [TestEveryBoxReadsWholeUpToMaxFileBytes]'s; E2B, whose reads
+// cross envd's transport, runs at the real cap in e2b_test.go.
 func TestTheFakeKeepsTheFileContract(t *testing.T) {
 	t.Parallel()
-	sandboxtest.Box(t, func(*testing.T) sandbox.Sandbox { return sandbox.NewFakeSandbox("box-1") })
+	sandboxtest.Box(t, contractCap, func(*testing.T) sandbox.Sandbox {
+		return sandbox.NewFakeSandbox("box-1").CapReads(contractCap)
+	})
 }
 
 func TestADirectBoxKeepsTheFileContract(t *testing.T) {
 	t.Parallel()
-	sandboxtest.Box(t, directBox)
+	sandboxtest.Box(t, contractCap, func(t *testing.T) sandbox.Sandbox {
+		return sandbox.CapReads(directBox(t), contractCap)
+	})
 }
 
 // A container box reads and writes on the host side of its mount, so its
 // contract is certified there; what the container itself does is local_test's.
 func TestAContainerBoxKeepsTheFileContract(t *testing.T) {
 	t.Parallel()
-	sandboxtest.Box(t, containerBox)
+	sandboxtest.Box(t, contractCap, func(t *testing.T) sandbox.Sandbox {
+		return sandbox.CapReads(containerBox(t), contractCap)
+	})
 }
+
+// contractCap is the whole-read cap the in-process backends keep the file
+// contract at: a MiB, past the largest file the suite reads whole and the
+// tail it reads, and a thirty-second of what it would build at the real one.
+const contractCap = 1 << 20
 
 // ONLY ABSENCE IS EMPTY ON THE ENGINE HOST. A local box's whole read answered
 // every failure to open or read a file as an empty one, so a report the

@@ -490,7 +490,7 @@ func (c *envdClient) readFile(ctx context.Context, path string) ([]byte, error) 
 		return nil, fmt.Errorf("e2b: read %s: %d: %s", path,
 			resp.StatusCode, httpx.ReadRefusal(resp))
 	}
-	raw, err := readCapped(idle, path)
+	raw, err := readCapped(idle, path, MaxFileBytes)
 	if err != nil {
 		return nil, fmt.Errorf("e2b: read %s: %w", path, idle.silent(err))
 	}

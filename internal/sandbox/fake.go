@@ -39,6 +39,9 @@ type FakeSandbox struct {
 	closed       bool
 	commands     []string
 	background   []string
+	// readCap is the whole-read cap a suite gave the box, zero for
+	// [MaxFileBytes]: see [FakeSandbox.CapReads].
+	readCap int
 
 	// ExecFunc, when set, answers Exec instead of the default success.
 	ExecFunc func(ctx context.Context, cmd string, opts ExecOptions) (ExecResult, error)
@@ -51,9 +54,38 @@ type FakeSandbox struct {
 
 var _ Sandbox = (*FakeSandbox)(nil)
 
-// NewFakeSandbox mints a box with the given id.
+// NewFakeSandbox mints a box with the given id. It reads files whole up to
+// [MaxFileBytes], as every real box does.
 func NewFakeSandbox(id string) *FakeSandbox {
 	return &FakeSandbox{id: id, home: DefaultHome, files: map[string][]byte{}}
+}
+
+// CapReads holds the box's whole reads to n bytes rather than [MaxFileBytes],
+// and returns the box.
+//
+// FOR A SUITE THAT HAS TO GO PAST THE CAP: a stream, a report or a question
+// one byte over it is the case such a suite is about, and at 32 MiB each one is
+// built, copied and redacted under -race for seconds. Every branch it reaches
+// is the same at any cap, so it runs at one it can fill, sizes what it writes
+// from [FakeSandbox.ReadCap], and leaves the real figure to the file contract,
+// which every real backend keeps at it. n must be positive: a cap of nothing
+// refuses every file, and no case means that.
+func (s *FakeSandbox) CapReads(n int) *FakeSandbox {
+	if n <= 0 {
+		panic(fmt.Sprintf("sandbox: FakeSandbox.CapReads(%d): a cap must be at least one byte", n))
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.readCap = n
+	return s
+}
+
+// ReadCap is the most the box reads whole: [MaxFileBytes], or what
+// [FakeSandbox.CapReads] set.
+func (s *FakeSandbox) ReadCap() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return readLimit(s.readCap)
 }
 
 // ID is the box's identifier.
@@ -105,17 +137,18 @@ func (s *FakeSandbox) WriteFile(ctx context.Context, p string, content []byte) e
 // ReadFile is empty-on-missing, matching every real backend: the runner polls
 // for markers that do not exist until the job finishes.
 //
-// It REFUSES A FILE PAST [MaxFileBytes] exactly as every real backend does
-// ([readCapped] is their rule too). It answered the whole file whatever its
-// size, so every runner and coordinator test that ran through this twin
-// certified a read no real box would make: a 33 MiB stdout read whole here was
-// a run wedged or lost on every backend it could reach.
+// It REFUSES A FILE PAST ITS CAP — [MaxFileBytes] unless a suite set another
+// ([FakeSandbox.CapReads]) — exactly as every real backend does ([readCapped]
+// is their rule too). It answered the whole file whatever its size, so every
+// runner and coordinator test that ran through this twin certified a read no
+// real box would make: a 33 MiB stdout read whole here was a run wedged or
+// lost on every backend it could reach.
 func (s *FakeSandbox) ReadFile(ctx context.Context, p string) ([]byte, error) {
 	content, err := s.content(p)
 	if err != nil || content == nil {
 		return nil, err
 	}
-	return readCapped(bytes.NewReader(content), p)
+	return readCapped(bytes.NewReader(content), p, s.ReadCap())
 }
 
 // OpenFile streams the file whole, as every real backend does: a machine
