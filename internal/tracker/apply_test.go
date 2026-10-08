@@ -26,8 +26,8 @@ type applyHarness struct {
 	// maxVariables is what every collection's insert chunks to. It starts
 	// at the estate's own probed limit, which is what the framework hands
 	// a real apply; a case that wants a CHUNK BOUNDARY it can count sets
-	// its own, because the probed 2 000 puts every collection the caps
-	// permit inside one statement.
+	// its own, because the probed limit and the 1 000-row cap put every
+	// collection the caps permit inside one statement.
 	maxVariables int
 }
 
