@@ -218,6 +218,22 @@ type RunnerDeps struct {
 	NodeID  string
 	Evicted func(ctx context.Context, node string) (bool, error)
 
+	// OnDrained is told when this loop first reaches the end of its log
+	// after it starts — the moment [Runner.Drained] turns true — and not on
+	// any drain after that until the loop runs again. Nil tells nobody.
+	//
+	// A PUSH because the one precondition it ends is waited on by a loop
+	// of somebody else's: a node's snapshot gate declines `unhydrated`
+	// until every applier has drained ([SkipUnhydrated]), and a gate that
+	// learned of the drain only by asking again found out on a timer, a
+	// boot's whole settling time after the copy could have been taken.
+	//
+	// CALLED ON THE APPLY LOOP'S OWN GOROUTINE, outside the runner's lock
+	// and after [Runner.Drained] reads true, so a reader it wakes sees the
+	// latch set. It must not block: the loop applies nothing until it
+	// returns.
+	OnDrained func()
+
 	// Now is the clock, injectable so a test can drive the time budget.
 	Now func() time.Time
 }
@@ -252,6 +268,8 @@ type Runner struct {
 	opts    ApplyOptions
 	nodeID  string
 	evicted func(ctx context.Context, node string) (bool, error)
+	// onDrained is [RunnerDeps.OnDrained].
+	onDrained func()
 
 	waiters waiters
 
@@ -535,20 +553,21 @@ func NewRunner(d RunnerDeps) (*Runner, error) {
 		now = time.Now
 	}
 	return &Runner{
-		domain:  d.Domain,
-		applier: d.Applier,
-		fetch:   d.Fetch,
-		log:     d.Log,
-		node:    d.Node,
-		db:      d.DB,
-		tables:  t,
-		spec:    spec,
-		metrics: d.Metrics,
-		logger:  logger,
-		now:     now,
-		created: d.StreamCreatedAt,
-		nodeID:  d.NodeID,
-		evicted: d.Evicted,
+		domain:    d.Domain,
+		applier:   d.Applier,
+		fetch:     d.Fetch,
+		log:       d.Log,
+		node:      d.Node,
+		db:        d.DB,
+		tables:    t,
+		spec:      spec,
+		metrics:   d.Metrics,
+		logger:    logger,
+		now:       now,
+		created:   d.StreamCreatedAt,
+		nodeID:    d.NodeID,
+		evicted:   d.Evicted,
+		onDrained: d.OnDrained,
 		opts: ApplyOptions{
 			ArbitratedKinds: spec.ArbitratedKinds,
 			Epoch:           d.Epoch,
@@ -1491,11 +1510,20 @@ func (r *Runner) Drained() bool {
 }
 
 // markDrained records that the broker answered this loop's fetch with nothing
-// while it held nothing itself, which is this node being level with the log.
+// while it held nothing itself, which is this node being level with the log —
+// and tells [RunnerDeps.OnDrained] the first time it does.
+//
+// AFTER THE LATCH IS SET AND THE LOCK RELEASED, so whoever the hook wakes
+// reads [Runner.Drained] true: told first, a snapshot gate woken by it could
+// read the latch still false and decline the copy the hook was sent for.
 func (r *Runner) markDrained() {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	first := !r.drained
 	r.drained = true
+	r.mu.Unlock()
+	if first && r.onDrained != nil {
+		r.onDrained()
+	}
 }
 
 // Deferred is the earliest record this node holds and cannot decode, and false
