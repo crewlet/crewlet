@@ -401,12 +401,12 @@ const drainLogInterval = 10 * time.Second
 //     out a TTL.
 //
 // Step 3 waits INDEFINITELY, bounded only by ctx. That is deliberate: a turn
-// parked mid-LLM-round is
-// making progress a timer cannot see, and cutting it off buys a faster deploy
-// by abandoning work that was nearly done. The hard deadline belongs to
-// whatever supervises the process — a container runtime's kill grace, an
-// operator's second interrupt — which already has one and can see things this
-// process cannot. Callers that want a bound pass a ctx with a deadline.
+// parked mid-LLM-round is making progress a timer cannot see, and cutting it
+// off buys a faster deploy by abandoning work that was nearly done. The hard
+// deadline belongs to whatever supervises the process — a container runtime's
+// kill grace, an operator's second interrupt — which already has one and can
+// see things this process cannot. Callers that want a bound pass a ctx with a
+// deadline.
 //
 // THAT DEADLINE BOUNDS THE WAIT ALONE. Giving up presence and handing the
 // seats back run on the STOP'S ONE ALLOWANCE instead ([seat.StopBudget]),
@@ -414,15 +414,16 @@ const drainLogInterval = 10 * time.Second
 // giving the leases back is how every seat lapses on a full TTL — the exact
 // cost step 3 exists to avoid, paid precisely when a caller took this doc's
 // advice and passed a deadline. The allowance is the one the caller's stop
-// carries — [engine.Engine.Drain]'s, shared with everything else that stop
-// gives back — or, for a caller carrying none, one this drain begins from
-// this node's own TTL ([seat.WithinStop]): one heartbeat interval, 15 s at
-// the shipped 45 s, the largest still strictly inside the leases it is
-// racing. Past it a seat lapses on its TTL, the same outcome as not trying,
-// only later. Never a bound of the drain's own beside it: that was a second
-// clock over the same give-backs that also ran through the seats' teardowns
-// between them, so it could only agree with the allowance or cut a give-back
-// short for time no store had spent.
+// carries — the engine's
+// ([github.com/crewlet/crewlet/internal/engine.Engine.Drain]), shared with
+// everything else that stop gives back — or, for a caller carrying none, one
+// this drain begins from this node's own TTL ([seat.WithinStop]): one
+// heartbeat interval, 15 s at the shipped 45 s, the largest still strictly
+// inside the leases it is racing. Past it a seat lapses on its TTL, the same
+// outcome as not trying, only later. Never a bound of the drain's own beside
+// it: that was a second clock over the same give-backs that also ran through
+// the seats' teardowns between them, so it could only agree with the
+// allowance or cut a give-back short for time no store had spent.
 //
 // Drain does not stop the node: a drained node still renews presence-free and
 // the layers beneath are all reversible, so it could be told to claim again.
@@ -430,10 +431,11 @@ const drainLogInterval = 10 * time.Second
 //
 // NOTHING IN THIS TREE REVERSES IT. [Node.ResumeClaiming] has no production
 // caller — the config plane's shed path gates admission rather than draining
-// the node — and the one caller Drain does have, [engine.Engine.Drain], is a
-// shutdown: it latches a flag the HTTP surface refuses new work on and never
-// clears it. So read the reversibility below as a property of the parts, not
-// as a path somebody takes.
+// the node — and the one caller Drain does have, the engine's
+// ([github.com/crewlet/crewlet/internal/engine.Engine.Drain]), is a shutdown:
+// it latches a flag the HTTP surface refuses new work on and never clears it.
+// So read the reversibility below as a property of the parts, not as a path
+// somebody takes.
 func (n *Node) Drain(ctx context.Context) {
 	// THE STOP THIS DRAIN IS PART OF, for the give-backs at either end of it
 	// — see the doc above. Free of ctx's cancellation, and carrying the
@@ -652,13 +654,14 @@ func (n *Node) OnAdmission(ctx context.Context, handle string, admitted bool) er
 // NO PRODUCTION CALLER. It was written for the posture path's other half — a
 // node that shed on config divergence and then converged serving again rather
 // than sitting out until it restarts — and that path was built differently:
-// [engine.Reconciler]'s shed gates ADMISSION and never drains the node, so
-// nothing here is ever undone. Whether the shed should drain, or this should
-// go, is a design decision of its own; until it is taken, do not reach for
-// this as though the engine already used it. [engine.Engine.Drain], the one
-// caller of [Node.Drain], is one-way by construction: it latches a flag the
-// HTTP surface refuses new work on and never clears it, so a resume through
-// here would leave the node serving turns while its routes answer 503.
+// [github.com/crewlet/crewlet/internal/engine.Reconciler]'s shed gates
+// ADMISSION and never drains the node, so nothing here is ever undone.
+// Whether the shed should drain, or this should go, is a design decision of
+// its own; until it is taken, do not reach for this as though the engine
+// already used it. The engine's Drain, the one caller of [Node.Drain], is
+// one-way by construction: it latches a flag the HTTP surface refuses new
+// work on and never clears it, so a resume through here would leave the node
+// serving turns while its routes answer 503.
 //
 // It is not the inverse of [Node.Stop]. Stop releases the seats; this is for
 // a node that still holds them.
