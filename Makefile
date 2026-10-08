@@ -141,10 +141,11 @@ SKIPGATE = $(GO) run ./internal/skipgate$(if $(TEST_REPORT), -report $(TEST_REPO
 # NOT A COVERAGE CUT — `check` depends on both, and ci.yml runs both. It is a
 # CONTENTION cut: a solo package stands up N engines, each embedding its own
 # NATS server, in ONE process, and a replicated create that has to reach a
-# quorum of members starved of CPU goes unanswered past every deadline it is
-# given. `go doc ./internal/solo` is the whole story — the measurements, and
-# what every obvious alternative (a build tag, -short, a flag, -skip, a nested
-# module) cost when it was tried.
+# quorum of members starved of CPU goes unanswered rather than slow.
+# `go doc ./internal/solo` is the whole story — the measurements, which of
+# them are of today's budgets and which are not, and what every obvious
+# alternative (a build tag, -short, a flag, -skip, a nested module) cost when
+# it was tried.
 #
 # This was a hand-written `go list ./... | grep -v '/internal/e2e…'` in two
 # files and a third, already divergent, copy in CONTRIBUTING.md. It named ONE

@@ -118,10 +118,12 @@ process, and every stream or bucket they create is a round trip a quorum of
 those servers has to answer. Sharing a runner with everything else —
 `go test ./...` runs package binaries in parallel, and the rest of the suite
 holds a four-vCPU runner almost fully busy for its whole run — those round
-trips go unanswered past whatever deadline they are given, and the cluster
-cases fail their cluster-start attempts with `context deadline exceeded`.
-Alone on a runner the same cases pass. `go doc ./internal/solo` has the
-measurements, under the old budgets and the current ones.
+trips went unanswered for the whole thirty seconds a create was given then,
+and the cluster cases failed every cluster-start attempt with `context
+deadline exceeded`, while alone on a runner the same cases passed. Today's
+budgets are longer, and the shared case has not been re-measured under them;
+`go doc ./internal/solo` has what has been measured since, and what it does
+and does not show.
 
 So those packages run in `make test-solo` and in CI's `end-to-end gates`
 jobs, and `make test` leaves them out. A contention split, not a coverage one
