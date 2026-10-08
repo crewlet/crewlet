@@ -208,9 +208,15 @@ const LookupBudget = 30 * time.Second
 // (this package's tests hold both to the same ones).
 //
 // THE ZERO VALUE IS REFUSED rather than read as anything: a window of zero is
-// a read-back that never asks and a cadence of zero is a loop that never
-// waits, and neither is a setting anybody chose. Each method names the field
-// it found unset.
+// a read-back that never asks, a cadence of zero is a loop that never waits,
+// and a bound of zero is a deadline already past — none of them a setting
+// anybody chose. EVERY METHOD REFUSES A TIMING WITH ANY FIELD UNSET, naming
+// the first, before it asks anything — Budget, Sequence and Lookup included,
+// which no method reads itself. A caller derives a context from those and
+// hands it to a method, so a timing that left one out is refused there by
+// name, where checking only the fields each method reads let it run on a
+// deadline that had expired before it began and report that as the broker's
+// answer.
 type Timing struct {
 	// Budget bounds one create — see [Budget].
 	Budget time.Duration
@@ -258,14 +264,22 @@ type span struct {
 	d    time.Duration
 }
 
-// refuseUnset names the first of spans that is not a positive duration — the
-// refusal every method gives a [Timing] nobody filled in.
+// unset is the refusal every method gives a [Timing] with any field left
+// unset — see [Timing]'s doc for why a method refuses fields it does not read.
+func (t Timing) unset() error {
+	return refuseUnset(span{"Budget", t.Budget}, span{"Sequence", t.Sequence},
+		span{"Lookup", t.Lookup}, span{"AskTerm", t.AskTerm},
+		span{"ReAsk", t.ReAsk}, span{"ReadBack", t.ReadBack},
+		span{"ReadTerm", t.ReadTerm}, span{"PlacementRetry", t.PlacementRetry})
+}
+
+// refuseUnset names the first of spans that is not a positive duration.
 func refuseUnset(spans ...span) error {
 	for _, s := range spans {
 		if s.d <= 0 {
 			return fmt.Errorf("jsprovision: Timing.%s is %v — a provisioning timing "+
 				"is built by Clustered.Timing, and one built by hand sets every "+
-				"field the call it is handed to reads", s.name, s.d)
+				"field", s.name, s.d)
 		}
 	}
 	return nil
@@ -356,8 +370,7 @@ func Settle(ctx context.Context, ask func(context.Context) error) error {
 // answer a caller wraps is what the object said, not what this function's
 // patience did.
 func (t Timing) Settle(ctx context.Context, ask func(context.Context) error) error {
-	if err := refuseUnset(span{"ReadBack", t.ReadBack}, span{"ReadTerm", t.ReadTerm},
-		span{"ReAsk", t.ReAsk}, span{"PlacementRetry", t.PlacementRetry}); err != nil {
+	if err := t.unset(); err != nil {
 		return err
 	}
 	window, cancel := context.WithTimeout(ctx, t.ReadBack)
@@ -507,7 +520,7 @@ const ReadTerm = time.Second
 // Each attempt is [Timing.Ask]'d at t.AskTerm, and an answered refusal asked
 // again every t.PlacementRetry.
 func (t Timing) Place(ctx context.Context, create func(context.Context) error, awaiting func()) error {
-	if err := refuseUnset(span{"PlacementRetry", t.PlacementRetry}); err != nil {
+	if err := t.unset(); err != nil {
 		return err
 	}
 	for attempt := 0; ; attempt++ {
@@ -587,7 +600,7 @@ func Place(ctx context.Context, term time.Duration,
 // has a leader ([AskTerm]); a read is never held, and asks through
 // [Timing.Read] at the read term instead.
 func (t Timing) Ask(ctx context.Context, one func(context.Context) error, again func(asks int)) error {
-	return t.ask(ctx, span{"AskTerm", t.AskTerm}, one, again)
+	return t.ask(ctx, t.AskTerm, one, again)
 }
 
 // Read is [Timing.Ask] for a metadata READ — a stream's or a consumer's info —
@@ -599,7 +612,7 @@ func (t Timing) Ask(ctx context.Context, one func(context.Context) error, again 
 // [Timing.Ask]'s: any answer ends it, only [Unanswered] is asked again, and
 // the next request goes t.ReAsk after the last one's term.
 func (t Timing) Read(ctx context.Context, one func(context.Context) error, again func(asks int)) error {
-	return t.ask(ctx, span{"ReadTerm", t.ReadTerm}, one, again)
+	return t.ask(ctx, t.ReadTerm, one, again)
 }
 
 // Read is [Timing.Read] at the production cadences, which no topology changes.
@@ -609,14 +622,14 @@ func Read(ctx context.Context, one func(context.Context) error, again func(asks 
 
 // ask is the loop [Timing.Ask] and [Timing.Read] share, each request given
 // term.
-func (t Timing) ask(ctx context.Context, term span,
+func (t Timing) ask(ctx context.Context, term time.Duration,
 	one func(context.Context) error, again func(asks int)) error {
 
-	if err := refuseUnset(term, span{"ReAsk", t.ReAsk}); err != nil {
+	if err := t.unset(); err != nil {
 		return err
 	}
 	for asks := 1; ; asks++ {
-		attempt, cancel := context.WithTimeout(ctx, term.d)
+		attempt, cancel := context.WithTimeout(ctx, term)
 		err := one(attempt)
 		cancel()
 		if !Unanswered(ctx, err) {

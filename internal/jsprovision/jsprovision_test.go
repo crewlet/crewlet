@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -148,29 +149,59 @@ func TestEachTopologysTimingCarriesTheNumbersThisPackageNames(t *testing.T) {
 	}
 }
 
-// A TIMING NOBODY FILLED IN IS REFUSED, BY THE FIELD IT LACKS, and asks
-// nothing.
+// A TIMING WITH ANY FIELD UNSET IS REFUSED BY EVERY METHOD, BY THE FIELD IT
+// LACKS, and asks nothing.
 //
 // Read as a setting, a zero window is a read-back that asks once into a
 // context already over and reports what that produced, and a zero cadence is
-// a loop that re-sends with no pause at all.
-func TestATimingNobodyFilledInIsRefused(t *testing.T) {
+// a loop that re-sends with no pause at all. And a zero BOUND — Budget,
+// Sequence, Lookup, which no method reads — is a context its caller derived
+// already expired, handed to a method that would ask on it and report the
+// deadline as the broker's answer; so every method refuses every field, and
+// each field is taken away from an otherwise production timing in turn.
+func TestATimingWithAnyFieldUnsetIsRefused(t *testing.T) {
 	t.Parallel()
 	asked := 0
 	ask := func(context.Context) error { asked++; return nil }
-	for name, call := range map[string]func() error{
-		"ReadBack":       func() error { return Timing{}.Settle(t.Context(), ask) },
-		"AskTerm":        func() error { return Timing{}.Ask(t.Context(), ask, nil) },
-		"ReadTerm":       func() error { return Timing{}.Read(t.Context(), ask, nil) },
-		"PlacementRetry": func() error { return Timing{}.Place(t.Context(), ask, nil) },
-	} {
-		err := call()
-		if err == nil || !strings.Contains(err.Error(), "Timing."+name) {
-			t.Errorf("a zero Timing answered %v, want a refusal naming Timing.%s", err, name)
+	methods := map[string]func(Timing) error{
+		"Settle": func(tm Timing) error { return tm.Settle(t.Context(), ask) },
+		"Ask":    func(tm Timing) error { return tm.Ask(t.Context(), ask, nil) },
+		"Read":   func(tm Timing) error { return tm.Read(t.Context(), ask, nil) },
+		"Place":  func(tm Timing) error { return tm.Place(t.Context(), ask, nil) },
+	}
+	unset := map[string]func(*Timing){
+		"Budget":         func(tm *Timing) { tm.Budget = 0 },
+		"Sequence":       func(tm *Timing) { tm.Sequence = 0 },
+		"Lookup":         func(tm *Timing) { tm.Lookup = 0 },
+		"AskTerm":        func(tm *Timing) { tm.AskTerm = 0 },
+		"ReAsk":          func(tm *Timing) { tm.ReAsk = 0 },
+		"ReadBack":       func(tm *Timing) { tm.ReadBack = 0 },
+		"ReadTerm":       func(tm *Timing) { tm.ReadTerm = 0 },
+		"PlacementRetry": func(tm *Timing) { tm.PlacementRetry = -time.Second },
+	}
+	// EVERY FIELD, so a field added to Timing and to nothing here fails
+	// rather than going unchecked.
+	if fields := reflect.TypeFor[Timing]().NumField(); len(unset) != fields {
+		t.Fatalf("Timing has %d fields and this case unsets %d", fields, len(unset))
+	}
+	for field, take := range unset {
+		tm := Clustered(true).Timing()
+		take(&tm)
+		for method, call := range methods {
+			if err := call(tm); err == nil || !strings.Contains(err.Error(), "Timing."+field) {
+				t.Errorf("%s on a timing without %s answered %v, want a refusal "+
+					"naming Timing.%s", method, field, err, field)
+			}
+		}
+	}
+	for method, call := range methods {
+		if err := call(Timing{}); err == nil || !strings.Contains(err.Error(), "Timing.") {
+			t.Errorf("%s on a zero Timing answered %v, want a refusal naming a field",
+				method, err)
 		}
 	}
 	if asked != 0 {
-		t.Errorf("a zero Timing asked %d time(s), want none", asked)
+		t.Errorf("a timing with a field unset asked %d time(s), want none", asked)
 	}
 }
 
