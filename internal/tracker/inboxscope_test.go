@@ -9,6 +9,23 @@ import (
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
+// THE THREE SCOPE CASES BELOW READ TWELVE NOTICES FIVE AT A TIME, and the
+// numbers are the smallest that still show what they pin.
+//
+// The defect is narrowing AFTER the read: the page was the limit+1 newest
+// rows, and the snoozed or read ones were dropped from it afterwards. That is
+// a property of the ARRANGEMENT — snoozes interleaved with the rest, or the
+// newest limit+1 all snoozed or all read — and not of the inbox's size, since
+// [readInbox] is one statement with no batch of its own for a larger inbox to
+// cross. Twelve is twice the six rows a page of five reads: half of it can be
+// the newest six, which a read-then-narrow page drops entirely, and the other
+// half still fills a page of five with one left behind for the cursor to name.
+// Five is the caller's own limit rather than [tracker.MaxInboxRows], which
+// only clamps one. The cases ran at 120 and 50, which was 360 creates and
+// drains — each a full write and apply — to show what 36 show. At twelve,
+// [crowdedInbox]'s own read is a single page, so paging itself is
+// [TestTheInboxPagesAndRefuses]'s.
+
 // crowdedInbox files n notices at bob, oldest first, and returns their record
 // ids NEWEST FIRST — the order an inbox page lists them in.
 func crowdedInbox(t *testing.T, r *roundTrip, n int) []string {
@@ -58,13 +75,14 @@ func snoozeAll(t *testing.T, r *roundTrip, ids []string, until time.Time) {
 // returned EVERY notice with the snoozed ones among them — so the dashboard's
 // Snoozed tab listed the whole inbox. And the snooze narrowing ran over the
 // page AFTER it was read while the cursor was computed from the page BEFORE,
-// so any narrowing short-paged. Half of 120 notices snoozed, interleaved with
-// the rest: `only` must answer fifty snoozed notices and a cursor to the other
-// ten, and nothing else.
+// so any narrowing short-paged. Half of 12 notices snoozed, interleaved with
+// the rest: `only` must answer five snoozed notices and a cursor to the sixth,
+// and nothing else — where the read-then-narrow page held the three snoozed
+// among the newest six.
 func TestTheSnoozedScopeReturnsOnlySnoozedNoticesAndAFullPage(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	ids := crowdedInbox(t, r, 120)
+	ids := crowdedInbox(t, r, 12)
 	var asleep []string
 	for i, id := range ids {
 		if i%2 == 0 {
@@ -74,15 +92,15 @@ func TestTheSnoozedScopeReturnsOnlySnoozedNoticesAndAFullPage(t *testing.T) {
 	snoozeAll(t, r, asleep, wednesday.Add(48*time.Hour))
 
 	first := r.inbox(tracker.InboxQuery{
-		Who: tracker.PartyOf("bob"), Snoozed: tracker.SnoozeOnly, Limit: 50,
+		Who: tracker.PartyOf("bob"), Snoozed: tracker.SnoozeOnly, Limit: 5,
 	})
-	if len(first.Notices) != 50 {
+	if len(first.Notices) != 5 {
 		t.Fatalf("the snoozed scope's first page holds %d notices, want a full "+
-			"page of 50 — 60 are snoozed", len(first.Notices))
+			"page of 5 — 6 are snoozed", len(first.Notices))
 	}
 	if first.NextCursor == "" {
-		t.Fatal("the snoozed scope's first page carries no cursor, and ten " +
-			"snoozed notices lie behind it")
+		t.Fatal("the snoozed scope's first page carries no cursor, and one " +
+			"snoozed notice lies behind it")
 	}
 	for _, notice := range first.Notices {
 		if !notice.Snoozed || !slices.Contains(asleep, notice.RecordID) {
@@ -91,80 +109,84 @@ func TestTheSnoozedScopeReturnsOnlySnoozedNoticesAndAFullPage(t *testing.T) {
 		}
 	}
 	second := r.inbox(tracker.InboxQuery{
-		Who: tracker.PartyOf("bob"), Snoozed: tracker.SnoozeOnly, Limit: 50,
+		Who: tracker.PartyOf("bob"), Snoozed: tracker.SnoozeOnly, Limit: 5,
 		Cursor: first.NextCursor,
 	})
-	if len(second.Notices) != 10 || second.NextCursor != "" {
+	if len(second.Notices) != 1 || second.NextCursor != "" {
 		t.Fatalf("the second page holds %d notices with cursor %q, want the "+
-			"last 10 and no cursor", len(second.Notices), second.NextCursor)
+			"last 1 and no cursor", len(second.Notices), second.NextCursor)
+	}
+	if second.Notices[0].RecordID != asleep[5] {
+		t.Errorf("the second page holds %s, want the oldest snoozed notice %s",
+			second.Notices[0].RecordID, asleep[5])
 	}
 }
 
 // THE DEFAULT SCOPE FILLS ITS PAGE DESPITE SNOOZES.
 //
-// The sixty NEWEST notices are snoozed, which is the arrangement that emptied
-// the landing page: filtered after the read, the newest fifty rows were all
-// dropped and the person was shown nothing, with a cursor, while sixty unread
-// notices waited behind it. In the scan, the page is the fifty newest notices
-// NOT snoozed.
+// The six NEWEST notices are snoozed, which is the arrangement that emptied
+// the landing page: filtered after the read, the newest six rows — the page
+// and its cursor's evidence — were all dropped and the person was shown
+// nothing, with a cursor, while six awake notices waited behind it. In the
+// scan, the page is the five newest notices NOT snoozed.
 func TestTheDefaultScopeFillsItsPageDespiteSnoozes(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	ids := crowdedInbox(t, r, 120)
-	snoozeAll(t, r, ids[:60], wednesday.Add(48*time.Hour))
+	ids := crowdedInbox(t, r, 12)
+	snoozeAll(t, r, ids[:6], wednesday.Add(48*time.Hour))
 
 	got := r.inbox(tracker.InboxQuery{
-		Who: tracker.PartyOf("bob"), Snoozed: tracker.SnoozeExclude, Limit: 50,
+		Who: tracker.PartyOf("bob"), Snoozed: tracker.SnoozeExclude, Limit: 5,
 	})
-	if len(got.Notices) != 50 {
+	if len(got.Notices) != 5 {
 		t.Fatalf("the default scope's page holds %d notices, want a full page "+
-			"of 50 — 60 notices are awake", len(got.Notices))
+			"of 5 — 6 notices are awake", len(got.Notices))
 	}
 	if got.NextCursor == "" {
-		t.Error("the page carries no cursor, and ten awake notices lie behind it")
+		t.Error("the page carries no cursor, and one awake notice lies behind it")
 	}
-	if !slices.Equal(recordIDs(got.Notices), ids[60:110]) {
-		t.Errorf("the default page is not the fifty newest awake notices")
+	if !slices.Equal(recordIDs(got.Notices), ids[6:11]) {
+		t.Errorf("the default page is not the five newest awake notices")
 	}
 }
 
 // AND SO DOES `unread`, the other half of the landing page's question.
 //
-// The sixty newest notices are marked read out of order — a person working
+// The six newest notices are marked read out of order — a person working
 // their queue from the top. An unread page applied after the read was empty;
-// in the scan it is the fifty newest notices the person has not read, and the
+// in the scan it is the five newest notices the person has not read, and the
 // rule it selects by is [markInbox]'s own: every notice returned reads unread.
 func TestTheUnreadFilterFillsItsPage(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	ids := crowdedInbox(t, r, 120)
+	ids := crowdedInbox(t, r, 12)
 	if _, err := asBob(r).MarkInbox(t.Context(), "op-read", "bob",
-		tracker.InboxGesture{Read: ids[:60]}); err != nil {
+		tracker.InboxGesture{Read: ids[:6]}); err != nil {
 
 		t.Fatalf("mark read: %v", err)
 	}
 	r.drain()
 
 	got := r.inbox(tracker.InboxQuery{
-		Who: tracker.PartyOf("bob"), Unread: true, Limit: 50,
+		Who: tracker.PartyOf("bob"), Unread: true, Limit: 5,
 	})
-	if len(got.Notices) != 50 || got.NextCursor == "" {
+	if len(got.Notices) != 5 || got.NextCursor == "" {
 		t.Fatalf("the unread page holds %d notices with cursor %q, want a full "+
-			"page of 50 and a cursor", len(got.Notices), got.NextCursor)
+			"page of 5 and a cursor", len(got.Notices), got.NextCursor)
 	}
-	if !slices.Equal(recordIDs(got.Notices), ids[60:110]) {
-		t.Error("the unread page is not the fifty newest unread notices")
+	if !slices.Equal(recordIDs(got.Notices), ids[6:11]) {
+		t.Error("the unread page is not the five newest unread notices")
 	}
-	if got.Unread != 50 {
-		t.Errorf("the page counts %d unread, want all 50 — the scan and the "+
+	if got.Unread != 5 {
+		t.Errorf("the page counts %d unread, want all 5 — the scan and the "+
 			"marks disagree about what is read", got.Unread)
 	}
 
 	// AND THE SEEN-THROUGH POSITION IS THE SAME RULE: read through the
-	// 20th oldest, and nothing at or below it comes back — while an
+	// 3rd oldest, and nothing at or below it comes back — while an
 	// unread mark on one of those outranks the position, in the scan as
 	// in the marks.
-	through := positionOf(noticeOf(t, r, ids[100]))
+	through := positionOf(noticeOf(t, r, ids[9]))
 	if _, err := asBob(r).MarkInbox(t.Context(), "op-through", "bob",
 		tracker.InboxGesture{ReadThrough: through}); err != nil {
 
@@ -172,14 +194,14 @@ func TestTheUnreadFilterFillsItsPage(t *testing.T) {
 	}
 	r.drain()
 	if _, err := asBob(r).MarkInbox(t.Context(), "op-unread", "bob",
-		tracker.InboxGesture{Unread: []string{ids[110]}}); err != nil {
+		tracker.InboxGesture{Unread: []string{ids[10]}}); err != nil {
 
 		t.Fatalf("mark unread: %v", err)
 	}
 	r.drain()
 	all := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob"), Unread: true})
-	if !slices.Equal(recordIDs(all.Notices), append(slices.Clone(ids[60:100]), ids[110])) {
-		t.Errorf("unread after a read-through is %d notices, want the forty "+
+	if !slices.Equal(recordIDs(all.Notices), append(slices.Clone(ids[6:9]), ids[10])) {
+		t.Errorf("unread after a read-through is %d notices, want the three "+
 			"above the position and the one marked unread below it",
 			len(all.Notices))
 	}
