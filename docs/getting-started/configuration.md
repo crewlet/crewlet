@@ -882,12 +882,15 @@ stream:
                                     #   window is refused where it would be
                                     #   recorded and not honoured: against an
                                     #   external cluster (which stores its own
-                                    #   data), below 3 replicas (no quorum to
-                                    #   trade the disk for), and on a cluster
-                                    #   whose peers are all on this host (one
-                                    #   failure domain). Declining it on a real
-                                    #   three-host fleet is a legitimate trade
-                                    #   and costs 1–3 ms per write on NVMe
+                                    #   data), on a leaf (which runs no
+                                    #   JetStream, so the members' own `sync`
+                                    #   decides), below 3 replicas (no quorum
+                                    #   to trade the disk for), and on a
+                                    #   cluster whose peers are all on this
+                                    #   host (one failure domain). Declining
+                                    #   it on a real three-host fleet is a
+                                    #   legitimate trade and costs 1–3 ms per
+                                    #   write on NVMe
   # debug: true                     # the EMBEDDED broker's OWN debug logging,
                                     #   which is a SEPARATE question from
                                     #   `logging.level` — that one is how loud

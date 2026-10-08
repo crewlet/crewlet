@@ -335,3 +335,46 @@ func TestOnlyABrokerThatHoldsStreamsIsWarnedTheyAreInMemory(t *testing.T) {
 		})
 	}
 }
+
+// A LEAF HAS NO FILE STORE, SO IT DECLINES NO FSYNC. `stream.sync` configures
+// the embedded server's file store and a leaf's server runs no JetStream: a
+// window written there reached nothing, and was then warned about as this
+// node's own exposure. The members it joins decide what an acknowledged write
+// has reached, so a declined fsync on a leaf is refused exactly as it is
+// against an external cluster — and the same window on a member that can
+// honour it still loads, so the refusal is about the leaf and not the value.
+func TestALeafDeclinesNoFsync(t *testing.T) {
+	t.Parallel()
+	const seats = "node:\n  roles: [seats]\nstore:\n  scratch: true\n" +
+		"coordination:\n  type: embedded-kv\n"
+	const leaf = "  leaf:\n    urls: [nats-leaf://data-a.example.com:7422]\n"
+
+	// THREE REPLICAS, the count that let it through: below three the
+	// no-quorum rule refused it anyway, naming a member's disk the leaf
+	// does not have.
+	err := rejectsBootstrap(t, seats+"stream:\n  replicas: 3\n  sync: 30s\n"+leaf, "stream.sync")
+	problems := Problems(err)
+	if len(problems) != 1 || problems[0].Kind != "conflict" ||
+		!strings.Contains(problems[0].Message, "leaf runs no JetStream") {
+		t.Fatalf("want one conflict at stream.sync saying why, got %+v", problems)
+	}
+	// One reason, not two: the no-quorum rule is a member's and must not
+	// pile on.
+	err = rejectsBootstrap(t, seats+"stream:\n  sync: 30s\n"+leaf, "stream.sync")
+	if problems := Problems(err); len(problems) != 1 ||
+		!strings.Contains(problems[0].Message, "leaf runs no JetStream") {
+		t.Fatalf("want only the leaf's refusal, got %+v", problems)
+	}
+
+	for name, doc := range map[string]string{
+		"a leaf saying the default out loud": seats + "stream:\n  sync: always\n" + leaf,
+		"the same window on a three-member fleet": "node:\n  roles: [data, seats]\n" +
+			"coordination:\n  type: embedded-kv\nstream:\n  store_dir: /var/js\n" +
+			"  replicas: 3\n  sync: 30s\n  cluster:\n    name: acme\n" +
+			"    peers: [nats://b.example.com:6222, nats://c.example.com:6222]\n",
+	} {
+		if _, err := ParseBootstrap([]byte(doc), EnvOnly()); err != nil {
+			t.Errorf("%s must load: %v", name, err)
+		}
+	}
+}

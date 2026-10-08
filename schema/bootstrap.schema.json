@@ -828,7 +828,7 @@
           "description": "How much of store_dir's volume the EMBEDDED broker may hold; unset lets it take three quarters of that volume's free space at boot. Divide it when several engines share one filesystem."
         },
         "sync": {
-          "description": "always (default) fsyncs every write before acknowledging it; a duration (30s) declines the fsync and names the window an acknowledged write may be behind the disk.",
+          "description": "always (default) fsyncs every write before acknowledging it; a duration (30s) declines the fsync and names the window an acknowledged write may be behind the disk. A duration is refused for type: nats and on a leaf, which have no file store of this node's to configure.",
           "type": [
             "string",
             "number",

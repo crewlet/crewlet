@@ -758,11 +758,14 @@ usually looks like, is exposed to the bottom two rows by construction.
 **Declining the fsync is a legitimate trade and it is made explicitly.** Set
 `sync` to a duration — `30s` — and that duration is the window: the most an
 acknowledged write may be behind the disk. Tier A refuses the value in the
-three places where it would be recorded and then not honoured:
+four places where it would be recorded and then not honoured:
 
 - **against `stream.type: nats`**, because the field configures the embedded
   server's file store and an external cluster stores its own data (set
   `sync_interval` on that cluster instead);
+- **on a leaf** (`stream.leaf.urls`), because a leaf's broker runs no
+  JetStream and has no file store at all — the members it joins decide what
+  an acknowledged write has reached, in their own `stream.sync`;
 - **below `replicas: 3`**, because the disk being traded away is the only copy
   there is, so the window buys nothing;
 - **on a cluster whose peers are all on this host**, because the majority the
