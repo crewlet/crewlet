@@ -2,7 +2,6 @@ package kv
 
 import (
 	"fmt"
-	"net"
 	"testing"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -11,7 +10,6 @@ import (
 	"github.com/crewlet/crewlet/internal/coord/coordtest"
 	"github.com/crewlet/crewlet/internal/jsapi"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
-	"github.com/crewlet/crewlet/internal/queue/jetstream/jetstreamtest"
 )
 
 // A LEAF'S COORDINATION STORE IS CERTIFIED ON THE SAME SUITES AS A MEMBER'S.
@@ -67,55 +65,22 @@ func leafClient(t *testing.T) jetstream.JetStream {
 }
 
 // leafMember starts a member serving leaves and returns the port its leaf
-// listener holds, trying again on another port when a start fails.
+// listener bound.
 //
-// # Why a retry rather than one attempt
-//
-// The port is a loopback port nothing held a moment ago ([unusedPort]), and
-// between that moment and the member binding it something else can take it —
-// in this binary, most likely one of the cluster cases running beside these,
-// which reserve their route ports the same way. The member's own probe
-// ([js.PortAvailable], run on its configured leaf port before the server is
-// asked for it) reports that loss at once as [js.ErrRoutePortTaken]; one lost
-// inside the start itself surfaces as a readiness wait that ran out. Either
-// way a fresh number is the remedy, which is the jetstreamtest harness's rule
-// for the same race one layer up — "what DOES fix it is noticing, and trying
-// again with different numbers" — and so is the default of retrying whatever
-// failed: a start that fails the same way every time costs a few attempts and
-// is then reported with its own error, where a race read as fatal ends the
-// test for a reason that is nobody's bug.
-//
-// [jetstreamtest.ClusterStartAttempts] attempts, the harness's own number for
-// that race, rather than a second spelling of it.
+// ON [js.AnyPort], which the OS binds and the member names afterwards
+// ([js.Server.LeafPort]), so nothing else can take the port between its
+// choosing and its binding — in this binary, most likely one of the cluster
+// cases running beside these. It used to reserve a loopback port nothing held
+// a moment ago and name it, and to retry on another whenever the member's own
+// probe found it taken: a retry for a race this way has no window for.
 func leafMember(t *testing.T) int {
 	t.Helper()
-	var last error
-	for attempt := 1; attempt <= jetstreamtest.ClusterStartAttempts; attempt++ {
-		port := unusedPort(t)
-		// A MEMBER THAT SERVES LEAVES PERSISTS, or it is refused.
-		member, err := js.StartServer(t.Context(), js.Config{ServerName: "member",
-			LeafHost: "127.0.0.1", LeafPort: port, StoreDir: t.TempDir()})
-		if err == nil {
-			t.Cleanup(member.Shutdown)
-			return port
-		}
-		last = err
-		t.Logf("leaf member attempt %d/%d on port %d failed, retrying on "+
-			"another port: %v", attempt, jetstreamtest.ClusterStartAttempts, port, err)
-	}
-	t.Fatalf("no member serving leaves started in %d attempts: %v",
-		jetstreamtest.ClusterStartAttempts, last)
-	return 0
-}
-
-// unusedPort is a loopback port nothing held a moment ago. The race to bind
-// it is the test's to lose, and [leafMember] tries again when it does.
-func unusedPort(t *testing.T) int {
-	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	// A MEMBER THAT SERVES LEAVES PERSISTS, or it is refused.
+	member, err := js.StartServer(t.Context(), js.Config{ServerName: "member",
+		LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: t.TempDir()})
 	if err != nil {
-		t.Fatalf("find a free port: %v", err)
+		t.Fatalf("start a member serving leaves: %v", err)
 	}
-	defer l.Close()
-	return l.Addr().(*net.TCPAddr).Port
+	t.Cleanup(member.Shutdown)
+	return member.LeafPort()
 }
