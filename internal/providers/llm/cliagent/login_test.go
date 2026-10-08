@@ -243,7 +243,7 @@ func TestLogoutRemovesTheCredentialEvenIfTheVendorCommandFails(t *testing.T) {
 	}
 	// A logout command that cannot possibly succeed.
 	p.profile.LogoutArgs = []string{"-test.run=TestCLIAgentFakeCLI"}
-	p.env = map[string]string{helperEnv: "1", "FAKE_EXIT": "3"}
+	p.env = fakeChildEnv(map[string]string{"FAKE_EXIT": "3"})
 
 	err := p.Logout(t.Context(), &bytes.Buffer{}, &bytes.Buffer{})
 	if err == nil {

@@ -55,12 +55,16 @@ func TestDoctorNamesAnUnadoptedHostLogin(t *testing.T) {
 		Key: "sub", Agent: "custom", StateDir: dir, Timeout: time.Second, MaxConcurrent: 1,
 		Overrides: map[string]any{
 			"binary": os.Args[0], "complete_args": []any{"-p"}, "output": "text",
-			"model_args": []any{}, "version_args": []any{"-test.run=NoSuchTest"},
+			"model_args": []any{}, "version_args": []any{"-test.run=TestCLIAgentFakeCLI"},
 			"credential_paths":      []any{".fake/creds.json"},
 			"host_credential_paths": []any{".fake/creds.json"},
 			"token_env":             "FAKE_OAUTH_TOKEN",
 			"capture_token_args":    []any{"setup-token"},
 		},
+		// The version probe runs the binary, so it is the fake CLI answering
+		// as a real one would — not this suite re-run with no test selected,
+		// whose testing-package warning was being read as a version.
+		Env: fakeChildEnv(map[string]string{"FAKE_STDOUT": "fake-cli 1.0.0"}),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -127,7 +131,7 @@ func TestTheSmokeTestCatchesACLIThatCannotProduceAToolCall(t *testing.T) {
 			"binary": os.Args[0], "complete_args": []any{"-test.run=TestCLIAgentFakeCLI"},
 			"model_args": []any{}, "output": "text",
 		},
-		Env: map[string]string{helperEnv: "1", "FAKE_STDOUT": "I would read the file."},
+		Env: fakeChildEnv(map[string]string{"FAKE_STDOUT": "I would read the file."}),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -164,10 +168,9 @@ func TestTheSmokeTestNamesAnEmptyAnswerRatherThanQuotingIt(t *testing.T) {
 			"text_paths": []any{[]any{"result"}},
 			"usage":      map[string]any{"output": []any{[]any{"usage", "output_tokens"}}},
 		},
-		Env: map[string]string{
-			helperEnv:     "1",
+		Env: fakeChildEnv(map[string]string{
 			"FAKE_STDOUT": `{"result":"","usage":{"output_tokens":627}}`,
-		},
+		}),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -203,7 +206,7 @@ func TestTheSmokeTestPassesOnAWorkingEnvelope(t *testing.T) {
 			"model_args": []any{}, "output": "text",
 			"usage": map[string]any{"input": []any{[]any{"in"}}},
 		},
-		Env: map[string]string{helperEnv: "1", "FAKE_STDOUT": reply},
+		Env: fakeChildEnv(map[string]string{"FAKE_STDOUT": reply}),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,14 +15,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
 // helperEnv marks a re-execution of this test binary as the fake CLI.
 //
-// The fake is this binary rather than a shell script because the engine ships
-// for Windows too, and a suite that proved the exec path only on Unix would
-// leave the platform where process handling differs most untested.
+// The fake is this binary rather than a shell script because the two platforms
+// the engine ships for do not share a userland: what the fake reports — a
+// file's permission bits, its whole environment, its stdin as base64 — is
+// spelled with `stat`, `base64` and `echo` flags that GNU and BSD disagree
+// about, so a script would test each machine's tools as much as the exec path.
+// Every mode is Go, defined here beside the cases that drive it, and every
+// fixture launches it through [fakeChildEnv].
 // helperEnv is what makes this binary the fake CLI instead of the suite. See
 // [TestMain], which reads it before the framework starts.
 //
@@ -222,19 +228,33 @@ func fakeProvider(t *testing.T, env map[string]string, overrides map[string]any)
 	for k, v := range overrides {
 		base[k] = v
 	}
-	child := map[string]string{helperEnv: "1"}
-	for k, v := range env {
-		child[k] = v
-	}
 	p, err := New(Config{
 		Key: "sub", Agent: "custom", StateDir: dir, Overrides: base,
-		Timeout: 20 * time.Second, MaxConcurrent: 2, Env: child,
+		Timeout: 20 * time.Second, MaxConcurrent: 2, Env: fakeChildEnv(env),
 		Auth: Auth{Mode: AuthSubscription},
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	return p
+}
+
+// fakeChildEnv is the environment every fake CLI this suite launches is handed
+// through [Config.Env]: the variable that makes the re-executed binary the
+// fake, the race options that let it exit the moment it is done
+// ([procgrouptest.StandInRaceOptions] — a second a call otherwise, which was
+// most of this package's wall clock), and extra over both.
+//
+// THROUGH Config.Env because nothing else reaches the child: buildEnv forwards
+// the host allowlist and the provider's own Env, so a GORACE the suite
+// inherited from make or CI is dropped at the exec.
+func fakeChildEnv(extra map[string]string) map[string]string {
+	env := map[string]string{
+		helperEnv:            "1",
+		procgrouptest.GORACE: procgrouptest.StandInRaceOptions(),
+	}
+	maps.Copy(env, extra)
+	return env
 }
 
 func ask(t *testing.T, p *Provider, req llm.Request) (*llm.Completion, error) {
@@ -476,7 +496,7 @@ func TestAPIKeyModeDeliversTheKey(t *testing.T) {
 			"model_args": []any{}, "output": "text", "api_key_env": "VENDOR_API_KEY",
 		},
 		Timeout: 20 * time.Second, MaxConcurrent: 1,
-		Env:  map[string]string{helperEnv: "1", "FAKE_DUMP_ENV": "1"},
+		Env:  fakeChildEnv(map[string]string{"FAKE_DUMP_ENV": "1"}),
 		Auth: Auth{Mode: AuthAPIKey, APIKey: "sk-metered"},
 	})
 	if err != nil {
