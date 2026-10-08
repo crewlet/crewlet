@@ -275,9 +275,9 @@ func TestPayloadTagsAreDistinctAndSnakeCase(t *testing.T) {
 // additive-only from the first build a successor runs beside, because a
 // rolling upgrade runs in both directions at once: a renamed tag is a dropped
 // field on whichever half has not upgraded, and every row already written
-// keeps the old key forever. The failure has no symptom a reviewer can see — the build is
-// green, the tests pass, and a reader of the dashboard gets a confidently
-// wrong `0` where the payload used to answer.
+// keeps the old key forever. The failure has no symptom a reviewer can see —
+// the build is green, the tests pass, and a reader of the dashboard gets a
+// confidently wrong `0` where the payload used to answer.
 //
 // GOLDEN, NOT DERIVED. Computing the expected keys from the struct is a test
 // that asserts the code equals itself; the whole value here is that the
