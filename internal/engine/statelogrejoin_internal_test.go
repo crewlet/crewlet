@@ -40,7 +40,10 @@ import (
 // trim does to a node that has been away. A donor is stood up on the same
 // broker holding a snapshot of the node's own rows at the purged position,
 // which is what a peer that applied those two barriers would hold, since a
-// barrier writes no rows. Then the heartbeat is left to notice.
+// barrier writes no rows. Then one heartbeat's publish is run, which is what
+// notices: the heartbeat running it again on every tick is
+// [TestTheHeartbeatPublishesOnEveryTickAndNudge]'s, and waiting here for its
+// next ten-second tick certified nothing that case does not.
 func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 	t.Parallel()
 	e, back, q := bootRejoinNode(t)
@@ -97,6 +100,7 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 
 	// THE HEARTBEAT NOTICES, the node adopts, and its appliers come back
 	// over the artefact — with no restart and no operator.
+	e.native.Load().log.publishPositions(t.Context())
 	waitUntil(t, 90*time.Second, "the node to adopt the donor's snapshot", func() bool {
 		return running.runner.Committed().Seq == last
 	})
@@ -169,7 +173,8 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 // after it. A join collects until every live data node has answered, so the
 // window stays open only while one has not: a live data node is named here
 // whose donor never answers — one not up yet, or gone — which is the window
-// spent exactly as it would be in production.
+// spent exactly as it would be in production. The heartbeat's publish is run
+// once rather than waited for, as in [TestANodeBelowTheFloorAdoptsWhileRunning].
 func TestAStopMidRejoinEndsTheJoinAndWaitsForItsAppliers(t *testing.T) {
 	t.Parallel()
 	e, _, q := bootRejoinNode(t)
@@ -194,6 +199,7 @@ func TestAStopMidRejoinEndsTheJoinAndWaitsForItsAppliers(t *testing.T) {
 		t.Fatalf("flush the listener: %v", err)
 	}
 	pushBelowTheFloor(t, e, q)
+	e.native.Load().log.publishPositions(t.Context())
 
 	select {
 	case <-asked:
