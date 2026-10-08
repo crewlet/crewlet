@@ -344,7 +344,7 @@ func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays
 	boot.Node.ID = fmt.Sprintf("node-%d", i)
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
-	boot.Stream.Cluster.Name = jetstreamtest.RelayClusterName
+	boot.Stream.Cluster.Name = relays.ClusterName()
 	boot.Stream.Cluster.Port = port
 	// THE OTHER MEMBERS, which is what Tier A says the field holds and what
 	// its member count is taken from — see [otherMembers].
