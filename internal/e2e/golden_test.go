@@ -809,9 +809,12 @@ const (
 
 	// replayOperator and replayToken are the founder's credential in the
 	// capture: the token's id is the operator id the founder's seat binds,
-	// which is what admits them to the act transport as a person.
-	replayOperator = "founder"
-	replayToken    = "e2e-replay-founder-token-0123456789"
+	// which is what admits them to the act transport as a person. The seat
+	// binds it through replayOperatorVar, a reference only the capturing
+	// node's environment resolves.
+	replayOperator    = "founder"
+	replayToken       = "e2e-replay-founder-token-0123456789"
+	replayOperatorVar = "CREWLET_TEST_FOUNDER_OPERATOR_ID"
 )
 
 // actCapture is one `/operator/act` exchange as the replay receives it: the
@@ -972,7 +975,13 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	//
 	// AND A PERSON WHO CAN WRITE: the founder's seat binds a bearer token, so
 	// the capture can end with a real `/operator/act` answer — the one the
-	// dashboard's session floor is raised from.
+	// dashboard's session floor is raised from. BOUND THROUGH A `${VAR}`, as
+	// a deployment binds one, which the node resolves through its own chain
+	// on both surfaces the capture reads it through: the read surface's
+	// (`/viewer`, queries.Sources.Env) and the act transport's. The variable
+	// is handed to this node alone, so a surface that read the process
+	// environment instead names the founder unbound and the capture stops at
+	// its first request.
 	n := startNode(t, nodeSpec{company: func(doc string) string {
 		doc = strings.Replace(doc, "roles:\n", "roles:\n"+
 			"  - name: CFO\n"+
@@ -981,13 +990,13 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 			"    token_budget: {day: 100}\n", 1)
 		doc = strings.Replace(doc, "      slack_user_id: U0FOUNDER\n",
 			"      slack_user_id: U0FOUNDER\n"+
-				"      crewlet_operator_id: "+replayOperator+"\n", 1)
+				"      crewlet_operator_id: ${"+replayOperatorVar+"}\n", 1)
 		// MID-DAY ON THE COMPANY'S CLOCK, so the refusal waited for below
 		// is stamped in the day it is read back in ([middayZone]).
 		return doc + "\ntimezone: " + middayZone() + "\ntoken_budget: {day: 100000000}\n"
 	}, boot: func(boot *config.Bootstrap) {
 		boot.API.Auth.Tokens = []config.APIToken{{ID: replayOperator, Token: replayToken}}
-	}})
+	}, env: map[string]string{replayOperatorVar: replayOperator}})
 	zone := companyMidday(t, n.engine)
 
 	waitFor(t, "the seats to be claimed", func() bool {

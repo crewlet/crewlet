@@ -153,7 +153,13 @@ func wireAPI(
 		Events:  e.History(),
 		Usage:   e.UsageEstate(),
 		Company: company,
-		NodeID:  nodeID,
+		// AND WHAT A `${VAR}` IN ITS CHART RESOLVES TO, through the node's
+		// own chain as cmd/crewlet wires it: a node here is HANDED its
+		// environment ([engine.Options.Environment]), so a read surface left
+		// on the process environment names unbound a person the node's act
+		// transport admits.
+		Env:    e.LookupSecret,
+		NodeID: nodeID,
 		// THE FLEET VIEW, over the lease table, the control plane and the
 		// object collector's recorded report, as cmd/crewlet reads it: the
 		// seat states the dashboard is served read placement from the
