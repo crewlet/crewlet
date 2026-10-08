@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
@@ -101,8 +103,7 @@ type fakeSocket struct {
 	once   sync.Once
 
 	// idle is closed the first time Read is entered with no scripted frame
-	// left: the pump is back for the frame after the script, so it has
-	// handled every one in it ([waitIdle]).
+	// left: the pump is back for the frame after the script ([settle]).
 	idle     chan struct{}
 	idleOnce sync.Once
 
@@ -194,31 +195,113 @@ func waitFor(t *testing.T, want int, got func() int) {
 	}
 }
 
-// waitIdle returns once every socket's pump has handled the whole of its
-// script — and, for a socket a reconnect dialled, the replay before it — so
-// what the fleet published is everything it ever will for them, and an
-// absence read afterwards is one.
+// toTheEnd runs body in a synctest bubble and returns once every goroutine the
+// bubble holds has exited — the fleet's own, and any the fleet started — so
+// what a recorder holds afterwards is everything the fleet will ever publish,
+// and an absence read then is one. body builds the fleet, [settle]s it and
+// stops it; the assertions follow toTheEnd rather than sit inside it.
 //
-// THE PUMP'S OWN WORD rather than a pause. A seat's pump reads its socket
-// again only once it has delivered the frame before, and the replay runs to
-// its end before a reconnected socket is read at all, so a read that finds
-// the script empty comes after every publish either of them makes. A fixed
-// sleep read the absence at an arbitrary moment instead: a duplicate
-// published a moment later passed, and the margin shrank with the runner's
-// load. [TestThePumpReadsOnOnlyOnceItHasDeliveredTheFrameBefore] holds the
-// premise.
-func waitIdle(t *testing.T, sockets ...*fakeSocket) {
+// THE END OF EVERY GOROUTINE, rather than a moment the test picks. A fixed
+// sleep read the absence at an arbitrary instant, so a duplicate published a
+// little later passed, and the margin shrank with the runner's load. Reading
+// it when the pump came back for its next frame proved only what the pump
+// published itself: a duplicate handed to a goroutine of its own, however soon
+// it landed, came after the read. A bubble waits for that goroutine too. Its
+// clock moves only while everything in it is blocked, so once body has
+// returned the clock is moved [afterStop] on, at no wall-clock cost, and
+// anything the fleet left waiting on a timer runs where its publishes are
+// still counted. A goroutine still there after that — on a longer timer, or
+// blocked for good — ends the bubble in a deadlock panic, which fails the run
+// as surely as an assertion would.
+//
+// The fleet must be stopped inside: one left running beats its heartbeat for
+// ever, and the bubble's clock with it. And the stand-in server is built
+// OUTSIDE, reached through [inProcess]: its listener waits on the network,
+// which a bubble never counts as blocked, so inside it the bubble would never
+// settle.
+func toTheEnd(t *testing.T, body func(t *testing.T)) {
 	t.Helper()
-	deadline := time.After(3 * time.Second)
+	synctest.Test(t, func(t *testing.T) {
+		body(t)
+		time.Sleep(afterStop)
+		synctest.Wait()
+	})
+}
+
+// afterStop is how far a bubble's clock moves once its fleet has stopped:
+// [mattermost.ClaimTTL], the longest the fleet answers for a post at all — its
+// claim lapses there, and no replay reaches back past it.
+const afterStop = mattermost.ClaimTTL
+
+// settle returns once the fleet has come back for the frame after every
+// socket's script — and, for a socket a reconnect dialled, after the replay
+// ahead of it — and everything in the bubble is blocked again, so a fleet
+// stopped now has nothing it was handed still in hand. Inside [toTheEnd] only.
+//
+// The bound is on the bubble's clock, which moves only while everything in it
+// waits: a minute of it costs nothing, and is far past every reconnect
+// [fastBackoff] schedules.
+func settle(t *testing.T, sockets ...*fakeSocket) {
+	t.Helper()
+	deadline := time.After(time.Minute)
 	for i, s := range sockets {
 		select {
 		case <-s.idle:
 		case <-deadline:
-			t.Fatalf("socket %d of %d: the pump never came back for the frame after "+
+			t.Fatalf("socket %d of %d: the fleet never came back for the frame after "+
 				"its script, so it is still handling one, or never read it at all",
 				i+1, len(sockets))
 		}
 	}
+	synctest.Wait()
+}
+
+// inProcess answers each request with the stand-in's own handler, called in
+// place on the requesting goroutine: no listener, no connection and no pool.
+//
+// It is what lets a fleet's REST reads run inside a bubble ([toTheEnd]). A
+// goroutine waiting on a socket is never durably blocked, so a fleet that
+// reached its stand-in over the network would keep the bubble from settling,
+// and a pooled connection would outlive it.
+type inProcess struct{ handler http.Handler }
+
+func (p inProcess) RoundTrip(req *http.Request) (*http.Response, error) {
+	// A handler is handed a request as a server reads one, and that always
+	// carries a body, a host and its request URI. A RoundTripper may not
+	// edit the request it is given, so the copy gets them.
+	in := req.Clone(req.Context())
+	if in.Body == nil {
+		in.Body = http.NoBody
+	}
+	if in.Host == "" {
+		in.Host = req.URL.Host
+	}
+	in.RequestURI = req.URL.RequestURI()
+	w := httptest.NewRecorder()
+	p.handler.ServeHTTP(w, in)
+	resp := w.Result()
+	// net/http's server dates every answer that carries no Date, and
+	// [mattermost.Client.ServerTime] reads it; a handler called in place is
+	// dated here instead, from the bubble's clock.
+	if resp.Header.Get("Date") == "" {
+		resp.Header.Set("Date", time.Now().UTC().Format(http.TimeFormat))
+	}
+	resp.Request = req
+	return resp, nil
+}
+
+// bubbleClient is [client] for a fleet inside [toTheEnd]: the same stand-in,
+// reached through [inProcess].
+func bubbleClient(t *testing.T, s *server) *mattermost.Client {
+	t.Helper()
+	c, err := mattermost.NewClient(mattermost.ClientOptions{
+		URL: s.URL, Token: "tok",
+		HTTP: &http.Client{Transport: inProcess{handler: s.Config.Handler}},
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	return c
 }
 
 func TestEachPostIsRepublishedAsAWebhook(t *testing.T) {
@@ -266,24 +349,26 @@ func TestEachPostIsRepublishedAsAWebhook(t *testing.T) {
 // The socket carries typing indicators, presence changes and status updates
 // too, and none of them is something to wake a seat for.
 func TestNonPostFramesAreIgnored(t *testing.T) {
-	rec := &recorder{}
-	sock := newSocket(
-		map[string]any{"event": "typing", "user_id": "u-ana"},
-		map[string]any{"event": "status_change"},
-		frame("p1", "hello", nil),
-	)
-	f, _ := mattermost.NewFleet(mattermost.FleetOptions{
-		Publisher: rec, Claims: coordmemory.NewFleet(),
-		Backoff: fastBackoff,
-		Connect: func(context.Context, mattermost.Seat, *mattermost.Client) (mattermost.Socket, error) {
-			return sock, nil
-		},
-	})
 	s := newServer(t)
-	f.Add(t.Context(), seat, client(t, s))
-	defer f.Stop()
+	rec := &recorder{}
+	toTheEnd(t, func(t *testing.T) {
+		sock := newSocket(
+			map[string]any{"event": "typing", "user_id": "u-ana"},
+			map[string]any{"event": "status_change"},
+			frame("p1", "hello", nil),
+		)
+		f, _ := mattermost.NewFleet(mattermost.FleetOptions{
+			Publisher: rec, Claims: coordmemory.NewFleet(),
+			Backoff: fastBackoff,
+			Connect: func(context.Context, mattermost.Seat, *mattermost.Client) (mattermost.Socket, error) {
+				return sock, nil
+			},
+		})
+		f.Add(t.Context(), seat, bubbleClient(t, s))
+		defer f.Stop()
+		settle(t, sock)
+	})
 
-	waitIdle(t, sock)
 	if got := rec.ids(); len(got) != 1 || got[0] != "p1" {
 		t.Fatalf("republished %v", got)
 	}
@@ -384,134 +469,29 @@ func TestTheBackfillWindowIsBounded(t *testing.T) {
 }
 
 func TestADuplicatePostIsPublishedOnce(t *testing.T) {
-	rec := &recorder{}
-	sock := newSocket(
-		frame("p1", "hello", nil),
-		frame("p1", "hello", nil),
-		frame("p2", "again", nil),
-	)
-	f, _ := mattermost.NewFleet(mattermost.FleetOptions{
-		Publisher: rec, Claims: coordmemory.NewFleet(),
-		Backoff: fastBackoff,
-		Connect: func(context.Context, mattermost.Seat, *mattermost.Client) (mattermost.Socket, error) {
-			return sock, nil
-		},
-	})
 	s := newServer(t)
-	f.Add(t.Context(), seat, client(t, s))
-	defer f.Stop()
+	rec := &recorder{}
+	toTheEnd(t, func(t *testing.T) {
+		sock := newSocket(
+			frame("p1", "hello", nil),
+			frame("p1", "hello", nil),
+			frame("p2", "again", nil),
+		)
+		f, _ := mattermost.NewFleet(mattermost.FleetOptions{
+			Publisher: rec, Claims: coordmemory.NewFleet(),
+			Backoff: fastBackoff,
+			Connect: func(context.Context, mattermost.Seat, *mattermost.Client) (mattermost.Socket, error) {
+				return sock, nil
+			},
+		})
+		f.Add(t.Context(), seat, bubbleClient(t, s))
+		defer f.Stop()
+		settle(t, sock)
+	})
 
-	waitIdle(t, sock)
 	if got := strings.Join(rec.ids(), ","); got != "p1,p2" {
 		t.Fatalf("republished %q", got)
 	}
-}
-
-// heldPublisher holds the publish of one post until released, and passes
-// every publish on to a recorder.
-type heldPublisher struct {
-	*recorder
-	post        string
-	entered     chan struct{}
-	enteredOnce sync.Once
-	release     chan struct{}
-}
-
-func held(post string) *heldPublisher {
-	return &heldPublisher{
-		recorder: &recorder{}, post: post,
-		entered: make(chan struct{}), release: make(chan struct{}),
-	}
-}
-
-func (p *heldPublisher) Publish(ctx context.Context, topic string, ev *events.Event) error {
-	if w, ok := events.DataAs[*types.RawWebhook](ev); ok {
-		if post, _ := w.Body["post"].(map[string]any); str(post, "id") == p.post {
-			p.enteredOnce.Do(func() { close(p.entered) })
-			select {
-			case <-p.release:
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-	}
-	return p.recorder.Publish(ctx, topic, ev)
-}
-
-// THE PUMP READS ON ONLY ONCE IT HAS DELIVERED THE FRAME BEFORE, AND A
-// RECONNECTED SOCKET ONLY ONCE THE REPLAY HAS — the premise every [waitIdle]
-// rests on. A pump that handed frames to goroutines and read on at once, or a
-// replay run beside the read rather than ahead of it, would come back for the
-// next frame while a publish was still in flight, and every absence asserted
-// after waitIdle would hold vacuously.
-//
-// holdFirst is how long the pump must stay away while the post ahead of it is
-// held in its publish. A pump that reads on regardless is back within
-// microseconds, so the bound is generous rather than tight, and it is the only
-// time this case spends waiting for something not to happen.
-//
-// Mutations: deliver on a goroutine in Fleet.pump, and the live socket is read
-// again while its post is held; replay on a goroutine in Fleet.run, and the
-// reconnected socket is read while the replayed post is.
-func TestThePumpReadsOnOnlyOnceItHasDeliveredTheFrameBefore(t *testing.T) {
-	const holdFirst = 200 * time.Millisecond
-	// heldOff holds that sock is not read while pub's post is held, then
-	// releases it and waits for the pump to come back.
-	heldOff := func(t *testing.T, pub *heldPublisher, sock *fakeSocket) {
-		t.Helper()
-		select {
-		case <-pub.entered:
-		case <-time.After(3 * time.Second):
-			t.Fatalf("%s was never published", pub.post)
-		}
-		select {
-		case <-sock.idle:
-			t.Fatalf("the pump came back for the next frame while %s, ahead of it, "+
-				"was still being published", pub.post)
-		case <-time.After(holdFirst):
-		}
-		close(pub.release)
-		waitIdle(t, sock)
-	}
-
-	t.Run("live", func(t *testing.T) {
-		t.Parallel()
-		pub := held("p1")
-		sock := newSocket(frame("p1", "hello", nil))
-		connect, _ := dialer(sock)
-		f, _ := mattermost.NewFleet(mattermost.FleetOptions{
-			Publisher: pub, Claims: coordmemory.NewFleet(), Backoff: fastBackoff, Connect: connect,
-		})
-		f.Add(t.Context(), seat, client(t, newServer(t)))
-		defer f.Stop()
-
-		heldOff(t, pub, sock)
-		if got := strings.Join(pub.ids(), ","); got != "p1" {
-			t.Fatalf("republished %q, want p1 once it was released", got)
-		}
-	})
-
-	t.Run("replay", func(t *testing.T) {
-		t.Parallel()
-		s := replayServer(t, postAt.Add(-time.Minute), func() []map[string]any {
-			return []map[string]any{storedPost("g1", postAt.Add(time.Second))}
-		})
-		pub := held("g1")
-		first, second := newSocket(frame("p1", "before the drop", nil)), newSocket()
-		connect, _ := dialer(first, second)
-		f, _ := mattermost.NewFleet(mattermost.FleetOptions{
-			Publisher: pub, Claims: coordmemory.NewFleet(), Backoff: fastBackoff, Connect: connect,
-		})
-		f.Add(t.Context(), seat, client(t, s))
-		defer f.Stop()
-
-		waitIdle(t, first)
-		first.Close()
-		heldOff(t, pub, second)
-		if got := strings.Join(pub.ids(), ","); got != "p1,g1" {
-			t.Fatalf("republished %q, want p1 and then the replayed g1", got)
-		}
-	})
 }
 
 // Mattermost replays nothing on reconnect, so a seat re-reads the gap
