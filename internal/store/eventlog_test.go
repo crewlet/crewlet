@@ -54,7 +54,7 @@ func TestEveryEventReadIsFlooredAtTheInstantItIsAskedAt(t *testing.T) {
 		// ONE NODE'S PART OF THE AXIS, whose first bar is the day the floor
 		// cuts — the row a minute above the floor is in it — and which the
 		// asker drops only after summing every node's (see
-		// TestAWindowTheFloorClipsIsCutAsEveryBuildCutsItAndShownFromItsFirstWholeBar).
+		// TestAWindowTheFloorClipsIsCutAsEveryNodeCutsItAndShownFromItsFirstWholeBar).
 		{"Histogram", func(at time.Time) (int, error) {
 			h, err := log.Histogram(ctx, store.HistogramQuery{
 				ListQuery: store.ListQuery{At: at}, Bucket: store.BucketDay,
