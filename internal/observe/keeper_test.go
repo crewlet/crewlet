@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // claims is the fleet's custody record as a keeper reaches it: it can be
@@ -44,10 +45,7 @@ type dataNode struct {
 
 func newDataNode(t *testing.T, name string, c *claims) *dataNode {
 	t.Helper()
-	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), name+".db"), store.Options{})
-	if err != nil {
-		t.Fatalf("open %s: %v", name, err)
-	}
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), name+".db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	k, err := observe.NewKeeper(db.Events(), c, name)
 	if err != nil {
