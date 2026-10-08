@@ -5,6 +5,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -158,6 +159,15 @@ type poolWalk struct {
 // BOTH halves of the tree, production and test, unlike the subject guard next
 // door: there the failure mode differs in kind between them, and here it is
 // the test half that carries the correctness bug.
+//
+// THE IMPORTS ARE READ FIRST, and a file is parsed whole only if one of them
+// is net/http: every selector this judges is on that import, and a file
+// without it has none. The imports are PARSED rather than searched for as
+// text, because an import path is a string literal and a string can be
+// spelled with escapes its bytes never show; parser.ImportsOnly stops at the
+// first declaration that is not an import, which is a fraction of the file.
+// Parsing all of internal/ and cmd/ whole — both halves, 36 MB — was ten
+// seconds under the race detector.
 func walkForGlobalPool(t *testing.T, root string) poolWalk {
 	t.Helper()
 
@@ -189,7 +199,19 @@ func walkForGlobalPool(t *testing.T, root string) poolWalk {
 			if filepath.Dir(path) == selfDir {
 				return nil
 			}
-			file, err := parser.ParseFile(fset, path, nil, 0)
+			src, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			imports, err := parser.ParseFile(token.NewFileSet(), path, src, parser.ImportsOnly)
+			if err != nil {
+				t.Errorf("parse %s: %v", path, err)
+				return nil
+			}
+			if _, ok := httpImportName(imports); !ok {
+				return nil
+			}
+			file, err := parser.ParseFile(fset, path, src, 0)
 			if err != nil {
 				t.Errorf("parse %s: %v", path, err)
 				return nil
@@ -213,6 +235,37 @@ func walkForGlobalPool(t *testing.T, root string) poolWalk {
 		}
 	}
 	return out
+}
+
+// THE WALK, ON A TREE WHOSE VERDICT IS KNOWN: a test file reaching for the
+// pool under a renamed import, a production file importing net/http cleanly,
+// this package's own files (which clone the pool, legitimately), and a file
+// importing nothing of net/http whose body is not Go — so a walk that parsed
+// past its imports would report it.
+func TestThePoolWalkReadsEveryFileImportingNetHTTP(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	for path, body := range map[string]string{
+		"internal/p/p_test.go": "package p\n\nimport nh \"net/http\"\n\nvar _ = nh.DefaultClient\n",
+		"cmd/q/q.go":           "package main\n\nimport \"net/http\"\n\nvar _ = http.NewRequest\n",
+		"internal/httpx/httpx.go": "package httpx\n\nimport \"net/http\"\n\n" +
+			"var _ = http.DefaultTransport\n",
+		"internal/r/r.go": "package r\n\nimport \"strings\"\n\nthis is not Go\n",
+	} {
+		full := filepath.Join(root, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	found := walkForGlobalPool(t, root)
+	if found.files != 2 || len(found.hits) != 1 || found.hits[0].what != "nh.DefaultClient" ||
+		found.hits[0].pkgPath != "p" {
+		t.Errorf("files %d, hits %+v; want the two outside httpx, and p's nh.DefaultClient",
+			found.files, found.hits)
+	}
 }
 
 // httpImportName is the local name net/http is imported under, if it is.
