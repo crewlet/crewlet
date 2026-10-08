@@ -120,12 +120,32 @@ JetStream quorum inside the 30s stream-provisioning budget, and fail every
 cluster-start attempt with `context deadline exceeded`. Alone on a runner the
 same cases pass.
 
-So those packages run in `make test-solo` and in CI's `end-to-end gates` job,
-and `make test` leaves them out. A contention split, not a coverage one —
-`make check` depends on both targets. `make test-solo` runs its packages one
-binary at a time (`-p 1`) and compiles them first at full parallelism, since
-`-p 1` would otherwise compile the whole dependency tree one package at a time
-too.
+So those packages run in `make test-solo` and in CI's `end-to-end gates`
+jobs, and `make test` leaves them out. A contention split, not a coverage one
+— `make check` depends on both targets. `make test-solo` runs its packages
+one binary at a time (`-p 1`) and compiles them first at full parallelism,
+since `-p 1` would otherwise compile the whole dependency tree one package at
+a time too.
+
+**In CI each half runs as shards**, one runner each: `test (race) 1/2` and
+`2/2`, `end-to-end gates 1/2` and `2/2`. A shard is the same target with three
+variables set, and you can run exactly what one CI job ran:
+
+```bash
+make test SHARD=2/2 TEST_WEIGHTS=test-weights.tsv TEST_REPORT=report
+```
+
+`TEST_WEIGHTS` is the seconds each package took on the last run on `main` —
+the CI run's `test-weights` artifact is the file its shards were cut by — and
+`internal/solo/partition` uses it to start the longest packages first and to
+deal the shards evenly; `TEST_REPORT` writes what the shard ran and how
+long each package took. Neither changes which packages are in a half, and the
+partition refuses to print a shard unless the shards cover the half exactly
+once. Left unset — the default — `make test` is the whole half in `go list`
+order, as it always was. The `tests` job in CI checks the shards' reports
+against each other, so a package that no shard ran fails the build, and it is
+the one check `main`'s protection rule must require for the suite (see
+[A bump merges itself](#a-bump-merges-itself)).
 
 **Which packages those are is computed, not listed.** A package declares it by
 importing `internal/solo` from its `TestMain`, and `internal/solo`'s roster
@@ -587,6 +607,17 @@ queue is empty and the bump merges the instant it is mergeable. And **Allow
 auto-merge** must be on under Settings → General, or the step fails outright;
 that failure is loud, a red check on the bump, which is the right way for it to
 fail.
+
+For the test suite the check to require is **`tests`**, never a shard. The
+shards' names carry the shard count (`test (race) 1/2`), so a rule naming one
+stops matching the day the count changes, and a check the rule names that never
+reports blocks every pull request; a rule that names none of them lets a pull
+request merge with no test result at all. `tests` runs whatever happened to the
+shards — `if: always()` in `ci.yml`, because GitHub counts a *skipped* required
+check as passing — and fails unless every shard passed and the shards between
+them ran every package of the suite exactly once. The other checks to require
+are the jobs that are not sharded: `build + vet`, `sign-off`, `dashboard`, the
+four `cross-compile the release targets` legs and `golangci-lint`.
 
 The job runs only when Dependabot is both the pull request's author *and* the
 actor that triggered the run. That second condition is what stops the workflow

@@ -7,10 +7,11 @@
 # all: it reports a pass CI will not honour, and the divergence is invisible
 # until the pull request goes red.
 #
-# For the two TEST jobs that is now true by construction rather than by care:
-# ci.yml's `test (race)` and `end-to-end gates` steps are `make test` and
-# `make test-solo`, so there is one command and no copy to keep in step. Every
-# other job still inlines its own, and NOTHING asserts those agree --
+# For the TEST jobs that is now true by construction rather than by care:
+# every shard of ci.yml's `test (race)` and `end-to-end gates` runs `make test`
+# or `make test-solo` with SHARD, TEST_WEIGHTS and TEST_REPORT set (below), so
+# there is one command and no copy to keep in step. Every other job still
+# inlines its own, and NOTHING asserts those agree --
 # internal/version/makefile_test.go used to and was dropped -- so for the rest,
 # change a target and its ci.yml step in the same commit, and read both.
 #
@@ -131,7 +132,10 @@ GOTEST      := $(GO) test $(GOTESTBUILD) $(GOTESTRUN)
 # PIPESTATUS in make's default /bin/sh to recover it, and switching this file
 # to bash for one recipe is a wider change than the bug deserves. Running the
 # command removes the question. -v is dropped because -json carries every line.
-SKIPGATE := $(GO) run ./internal/skipgate
+#
+# Called with the half's name, which is where its -report goes when
+# TEST_REPORT asks for one (see below).
+SKIPGATE = $(GO) run ./internal/skipgate$(if $(TEST_REPORT), -report $(TEST_REPORT)/$(1))
 
 # The two halves of the suite, COMPUTED rather than listed.
 #
@@ -161,9 +165,36 @@ SKIPGATE := $(GO) run ./internal/skipgate
 # So each expands once and redefines itself as a simple variable — `$(eval)`
 # expands to nothing, and what is left is the value it just assigned. Every
 # later reference is a plain lookup.
-PARTITION      = $(GO) run ./internal/solo/partition
-PARALLEL_PKGS  = $(eval PARALLEL_PKGS := $(shell $(PARTITION) parallel))$(PARALLEL_PKGS)
-SOLO_PKGS      = $(eval SOLO_PKGS := $(shell $(PARTITION) solo))$(SOLO_PKGS)
+#
+# SHARD, TEST_WEIGHTS AND TEST_REPORT are how ci.yml runs each half on more
+# than one runner, and their defaults leave a local run exactly as it was:
+#
+#   SHARD=I/N         run shard I of N of the half. 1/1 is the whole half.
+#   TEST_WEIGHTS=FILE the measured seconds per package (a skipgate timings.tsv)
+#                     the partition starts the longest first by and deals the
+#                     shards by. Unset, the half runs in go list's order.
+#   TEST_REPORT=DIR   write DIR/<half>/{half,ran}.txt and timings.tsv, which
+#                     ci.yml's `tests` job checks the shards against and keeps
+#                     as the next run's weights.
+#
+# Membership never depends on any of them: `go doc ./internal/solo/partition`
+# says why weights can move a package between runners and never drop one, and
+# what it asserts before printing a shard.
+SHARD        ?= 1/1
+TEST_WEIGHTS ?=
+TEST_REPORT  ?=
+
+PARTITION       = $(GO) run ./internal/solo/partition
+PARTITION_FLAGS = -shard $(SHARD)$(if $(TEST_WEIGHTS), -weights $(TEST_WEIGHTS))
+PARALLEL_PKGS   = $(eval PARALLEL_PKGS := $(shell $(PARTITION) $(PARTITION_FLAGS) parallel))$(PARALLEL_PKGS)
+SOLO_PKGS       = $(eval SOLO_PKGS := $(shell $(PARTITION) $(PARTITION_FLAGS) solo))$(SOLO_PKGS)
+
+# The WHOLE half this shard was cut from, written beside skipgate's report:
+# the `tests` job holds every shard's ran.txt against it, and every shard's
+# copy against every other's, which is what proves the shards were cut from
+# one list. Without weights or a shard, so it is go list's half and nothing
+# else. Expands to nothing when no report was asked for.
+REPORT_HALF = $(if $(TEST_REPORT),@mkdir -p $(TEST_REPORT)/$(1) && $(PARTITION) $(1) > $(TEST_REPORT)/$(1)/half.txt)
 
 # The release targets, cross-compiled. Nothing else builds for anything but
 # the machine you are on, so a build tag or a platform-gated file that only
@@ -449,9 +480,10 @@ lint: ## run golangci-lint (ci: golangci-lint)
 # target stricter than the CI job it mirrors — ci.yml's `test (race)` installs
 # no node and passes — and a Makefile stricter than CI is the same lie as one
 # looser than it, just in the direction nobody notices.
-test: ## the suite, minus the packages that run alone (ci: test (race))
-	@test -n "$(PARALLEL_PKGS)" || { echo "the parallel partition is empty" >&2; exit 1; }
-	$(SKIPGATE) -- $(GOTEST) -json $(PARALLEL_PKGS)
+test: ## the suite, minus the packages that run alone (ci: test (race), one job per shard)
+	@test -n "$(PARALLEL_PKGS)" || { echo "the parallel partition printed no packages; internal/solo/partition said why above (a SHARD or TEST_WEIGHTS it refused, or go list failing)" >&2; exit 1; }
+	$(call REPORT_HALF,parallel)
+	$(call SKIPGATE,parallel) -- $(GOTEST) -json $(PARALLEL_PKGS)
 
 # The solo half: every package that needs the runner to itself.
 #
@@ -478,10 +510,11 @@ test: ## the suite, minus the packages that run alone (ci: test (race))
 # IDs; a flag in one and not the other would prebuild a tree nothing reads.
 SOLO_PREBUILD = $(GO) list -export -test -deps $(1) -f '{{.ImportPath}}' $(SOLO_PKGS) > /dev/null
 
-test-solo: require-node ## the packages that need a runner to themselves (ci: end-to-end gates)
-	@test -n "$(SOLO_PKGS)" || { echo "no package imports internal/solo" >&2; exit 1; }
+test-solo: require-node ## the packages that need a runner to themselves (ci: end-to-end gates, one job per shard)
+	@test -n "$(SOLO_PKGS)" || { echo "the solo partition printed no packages; internal/solo/partition said why above (a SHARD or TEST_WEIGHTS it refused, go list failing, or no package importing internal/solo)" >&2; exit 1; }
+	$(call REPORT_HALF,solo)
 	$(call SOLO_PREBUILD,$(GOTESTBUILD))
-	$(SKIPGATE) -- $(GOTEST) -json -p 1 $(SOLO_PKGS)
+	$(call SKIPGATE,solo) -- $(GOTEST) -json -p 1 $(SOLO_PKGS)
 
 # The suite without the detector. It is roughly twice as fast and it is NOT
 # what CI runs: a data race it cannot see is a data race that lands.
