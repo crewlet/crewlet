@@ -679,7 +679,10 @@ func (s *Service) allow(ctx context.Context, party Party) (bool, error) {
 // reader, a reworded reason leaves every copy asserting the old words, and the
 // end-to-end suite kept such a copy until these were declared. The record's
 // field stays a string, since [types.NotificationSkipped] cannot import this
-// package, so a reader compares it as SkipReason(record.Reason).
+// package, so a reader compares it as SkipReason(record.Reason) — and that
+// comparison holds for every reason, because the record's Reason is one of
+// these words and nothing more: what a gate says about one delivery goes in
+// the record's Detail ([ReasonParseFailed]).
 type SkipReason string
 
 // The reasons a delivery is skipped for, in the order the service meets them.
@@ -694,9 +697,9 @@ const (
 	// the edge and nowhere else.
 	ReasonUnparsed SkipReason = "no parser for this source"
 	// ReasonParseFailed: the source's parser refused the payload. The one
-	// reason recorded with detail after it — `parse failed: <the parser's
-	// error>` — because which payload a parser cannot read is the whole of
-	// what an operator needs to fix it.
+	// reason recorded with a Detail — the parser's error — because which
+	// payload a parser cannot read is the whole of what an operator needs
+	// to fix it.
 	ReasonParseFailed SkipReason = "parse failed"
 	// ReasonNoSeat: the parser named a recipient no seat answers to.
 	ReasonNoSeat SkipReason = "no seat matches this recipient"
@@ -711,23 +714,35 @@ const (
 	ReasonRateLimited SkipReason = "rate limit exceeded"
 )
 
-// skip records why a delivery did not wake anybody: reason, followed by
-// cause's text when there is one ([ReasonParseFailed]).
+// Valid reports whether r is a reason this build records. A reason read off
+// a record a newer build wrote may not be, and is still a value to show
+// rather than one to refuse.
+func (r SkipReason) Valid() bool {
+	switch r {
+	case ReasonUnreadable, ReasonRetired, ReasonUnparsed, ReasonParseFailed,
+		ReasonNoSeat, ReasonHumanSeat, ReasonSelfAction, ReasonRateLimited:
+		return true
+	}
+	return false
+}
+
+// skip records why a delivery did not wake anybody: the reason, and cause's
+// text as the record's Detail when there is one ([ReasonParseFailed]).
 //
 // Best effort and never fatal: the delivery has already been decided, and
 // failing it because the bookkeeping could not be published would turn a
 // recorded non-event into a redelivered one.
 func (s *Service) skip(ctx context.Context, source, handle string, reason SkipReason, cause error) {
-	text := string(reason)
+	var detail string
 	if cause != nil {
-		text += ": " + cause.Error()
+		detail = cause.Error()
 	}
 	ev := events.New(types.NotificationSkipped{
-		Handle: handle, Reason: text, NotificationSource: source,
+		Handle: handle, Reason: string(reason), Detail: detail, NotificationSource: source,
 	}, tracing.TraceOf(ctx))
 	ev.Source = "notify." + source
 	if err := s.queue.Publish(ctx, topics.Event(types.NotificationSkipped{}.EventType()), ev); err != nil {
 		log.WarnContext(ctx, "notification_skip_unrecorded", "source", source,
-			"handle", handle, "reason", text, "error", err.Error())
+			"handle", handle, "reason", string(reason), "detail", detail, "error", err.Error())
 	}
 }

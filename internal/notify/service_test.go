@@ -158,11 +158,20 @@ func (h *harness) quiet(t *testing.T, topic string) {
 	}
 }
 
+// skips is every skip the service recorded — each one held, as it is read, to
+// a reason [notify.SkipReason] declares, whole. A reader tells which gate
+// dropped a delivery by comparing that word, so a record whose reason carries
+// anything more is one no reader can place; every reason the service records
+// passes through here in some case, so each is held by one.
 func (h *harness) skips(t *testing.T) []types.NotificationSkipped {
 	t.Helper()
 	var out []types.NotificationSkipped
 	for _, ev := range h.settled(t, skipTopic) {
 		if s, ok := events.DataAs[*types.NotificationSkipped](ev); ok {
+			if !notify.SkipReason(s.Reason).Valid() {
+				t.Errorf("a skip was recorded with reason %q, which is not one "+
+					"notify.SkipReason declares", s.Reason)
+			}
 			out = append(out, *s)
 		}
 	}
@@ -727,11 +736,15 @@ func TestAParseFailureIsRecordedAndNotRetried(t *testing.T) {
 	if got := h.svc.Handle(t.Context(), delivery("tracker")); got.Outcome != queue.OutcomeAck {
 		t.Fatalf("Handle = %+v, want an ack", got)
 	}
-	// The parser's own words follow the reason: which payload it could not
-	// read is the whole of what an operator needs to fix it.
-	want := string(notify.ReasonParseFailed) + ": no issue in the payload"
-	if skips := h.skips(t); len(skips) != 1 || skips[0].Reason != want {
-		t.Fatalf("skips = %+v", skips)
+	// The parser's own words ride along as the record's detail — which
+	// payload it could not read is the whole of what an operator needs to
+	// fix it — and apart from the reason, which stays the one word a reader
+	// compares.
+	if skips := h.skips(t); len(skips) != 1 ||
+		notify.SkipReason(skips[0].Reason) != notify.ReasonParseFailed ||
+		skips[0].Detail != "no issue in the payload" {
+		t.Fatalf("skips = %+v, want one %q with the parser's error as its detail",
+			skips, notify.ReasonParseFailed)
 	}
 }
 

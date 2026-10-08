@@ -195,6 +195,18 @@ func TestSummaries(t *testing.T) {
 		payload: AgentTurnProgress{RoleName: "Dev", Phase: PhaseReview, RoundNum: 2},
 		want:    "Dev working (review, round 3)",
 	}, {
+		name:    "a skip names the seat and the reason",
+		payload: NotificationSkipped{Handle: "swe", Reason: "human seat", NotificationSource: "jira"},
+		want:    "Skipped for swe: human seat",
+	}, {
+		// The detail rides apart from the reason on the record, and
+		// beside it on the line: which payload a parser refused is what
+		// an operator reads the skip for.
+		name: "a skip's detail follows its reason",
+		payload: NotificationSkipped{Reason: "parse failed", Detail: "no issue in the payload",
+			NotificationSource: "jira"},
+		want: "Skipped: parse failed: no issue in the payload",
+	}, {
 		name:    "a compaction pass names the seat it ran for",
 		payload: CompactionCompleted{SkippedReason: CompactionAlreadyRunning},
 		source:  "eng",
