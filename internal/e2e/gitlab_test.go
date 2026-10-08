@@ -229,7 +229,7 @@ func TestACodeHostWithNoUsableSigningSecretDoesNotStart(t *testing.T) {
 			// the spine is running — and the code host is not: the delivery
 			// finds no parser for its source, and the spine records that.
 			gitlabWebhook(t, n, issueOpened("human-dev", "ceo-bot"))
-			dropped(t, n, "ceo", skip{gitlab.Backend, "", reasonUnparsed})
+			dropped(t, n, "ceo", skip{gitlab.Backend, "", notify.ReasonUnparsed})
 			if got := forge.identityLookups(); got != 0 {
 				t.Errorf("the code host resolved %d identities on a config it "+
 					"could not verify a delivery with", got)
@@ -283,7 +283,7 @@ func TestASeatIsNotWokenByItsOwnComment(t *testing.T) {
 	})
 	// THE SPINE'S GUARD, by name: the parser leaves the actor in (it cannot
 	// know the pipeline exception), and the self-action rule drops it.
-	dropped(t, n, "ceo", skip{gitlab.Backend, "ceo", reasonSelfAction})
+	dropped(t, n, "ceo", skip{gitlab.Backend, "ceo", notify.ReasonSelfAction})
 }
 
 // A GREEN PIPELINE IS NOT NEWS. Routing every build would wake the seat that

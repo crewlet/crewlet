@@ -121,19 +121,6 @@ func (b *inbox) settled(t *testing.T, want int) []*types.ExternalNotification {
 	return append([]*types.ExternalNotification(nil), b.seen...)
 }
 
-// What the notification service records when a delivery wakes nobody
-// (notification_skipped), in its own words (internal/notify): the reason is
-// how a case tells WHICH gate dropped a delivery, and a gate that stopped
-// dropping it, or another that started to, is a different engine. A reworded
-// reason fails the case as soon as the delivery is decided, naming every reason
-// that was recorded ([skip.heldAs]).
-const (
-	reasonHumanSeat   = "human seat"
-	reasonSelfAction  = "self-action: the recipient caused this event"
-	reasonUnparsed    = "no parser for this source"
-	reasonRateLimited = "rate limit exceeded"
-)
-
 // storedLimit is the most rows one of these listings reads: far above the few
 // dozen wakes and skips any case here produces, so a listing is the whole set
 // it asks for — a short one could miss the very wake a case asserts never
@@ -200,20 +187,27 @@ func skipsFrom(t *testing.T, n *node, source string) []*types.NotificationSkippe
 // skip is the notification_skipped a case expects a delivery to end in: from
 // source, naming handle ("" for a delivery dropped before anybody was
 // resolved), for reason.
-type skip struct{ source, handle, reason string }
+//
+// THE REASON IS internal/notify's OWN DECLARATION ([notify.SkipReason]): it is
+// how a case tells WHICH gate dropped a delivery, and a gate that stopped
+// dropping it, or another that started to, is a different engine. A copy of its
+// words here would go on asserting the old ones the day notify reworded one.
+type skip struct {
+	source, handle string
+	reason         notify.SkipReason
+}
 
 // reasons is every reason n recorded for skipping a delivery from want's source
 // that names want's handle — WHATEVER THE REASON, so a wait on it ends the
 // moment the delivery is decided, and a reason other than want's fails the case
-// at once by name. Matched on the reason as well, a reason reworded in
-// internal/notify, or a different gate dropping the delivery, waited out the
-// whole budget and then reported only a timeout.
-func (want skip) reasons(t *testing.T, n *node) []string {
+// at once by name. Matched on the reason as well, a different gate dropping the
+// delivery waited out the whole budget and then reported only a timeout.
+func (want skip) reasons(t *testing.T, n *node) []notify.SkipReason {
 	t.Helper()
-	var out []string
+	var out []notify.SkipReason
 	for _, got := range skipsFrom(t, n, want.source) {
 		if got.Handle == want.handle {
-			out = append(out, got.Reason)
+			out = append(out, notify.SkipReason(got.Reason))
 		}
 	}
 	return out
@@ -239,8 +233,7 @@ func (want skip) heldAs(t *testing.T, n *node) {
 	t.Helper()
 	if reasons := want.reasons(t, n); !slices.Contains(reasons, want.reason) {
 		t.Fatalf("a %s delivery was skipped for %q as %q, want %q — a different gate "+
-			"dropped it, or internal/notify words that gate's reason differently now",
-			want.source, want.handle, reasons, want.reason)
+			"dropped it", want.source, want.handle, reasons, want.reason)
 	}
 }
 
@@ -315,7 +308,7 @@ func settleInbound(t *testing.T, n *node) {
 		topics.NotificationsInbound, ev); err != nil {
 		t.Fatalf("publish the settling delivery: %v", err)
 	}
-	settling := skip{source: source, handle: settleRecipient, reason: reasonHumanSeat}
+	settling := skip{source: source, handle: settleRecipient, reason: notify.ReasonHumanSeat}
 	waitFor(t, "the settling delivery's record: "+settling.String(), func() bool {
 		return len(settling.reasons(t, n)) > 0
 	}, func() string { return skipsRecorded(t, n, source) })
@@ -454,7 +447,7 @@ func TestAHumanRecipientIsNeverWokenEndToEnd(t *testing.T) {
 	deliver(t, n)
 	// DROPPED BY THE HUMAN-SEAT GATE BY NAME, which is what the old sleep
 	// could not say: an absence it read was the same whichever gate made it.
-	dropped(t, n, "founder", skip{"stub", "founder", reasonHumanSeat})
+	dropped(t, n, "founder", skip{"stub", "founder", notify.ReasonHumanSeat})
 }
 
 // The self-action guard, through the whole path: without it a seat assigned
@@ -469,7 +462,7 @@ func TestASeatIsNotWokenByItsOwnActionEndToEnd(t *testing.T) {
 		map[string]string{notify.ActorField: "acct-ceo"}))
 
 	deliver(t, n)
-	dropped(t, n, "ceo", skip{"stub", "ceo", reasonSelfAction})
+	dropped(t, n, "ceo", skip{"stub", "ceo", notify.ReasonSelfAction})
 }
 
 // orderedVendor is a parser that records when each delivery's handling starts
@@ -583,7 +576,8 @@ func TestTheRateValveFollowsTheAppliedConfig(t *testing.T) {
 	// off by one on a loaded runner.
 	decided := func() (wakes, refused int) {
 		for _, recorded := range skipsFrom(t, n, "stub") {
-			if recorded.Handle == "ceo" && recorded.Reason == reasonRateLimited {
+			if recorded.Handle == "ceo" &&
+				notify.SkipReason(recorded.Reason) == notify.ReasonRateLimited {
 				refused++
 			}
 		}
