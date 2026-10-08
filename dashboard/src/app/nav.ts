@@ -313,7 +313,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         label: "Org chart",
         icon: "network",
         path: ["agents"],
-        hint: "The hierarchy every seat works inside",
+        hint: "The hierarchy every seat works inside, and the seat each person is invited onto",
       },
       {
         key: "roster",

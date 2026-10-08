@@ -1,9 +1,12 @@
 /**
  * A write to the identity directory (`/iam`), and what came of it.
  *
- * Every gesture People & access makes — an invitation, a service account, an
- * edit, a suspension, a reset, a revocation, a removal — is one REST write
- * whose answer is one of four things a person acts on differently:
+ * Every gesture made about somebody in the directory — on a vacant human seat
+ * (the org chart's card menu, the seat's peek, its page): an invitation, a
+ * person's create, an invitation's cancellation; on People & access: a
+ * service account, an edit, a suspension, a reset, a revocation, a removal —
+ * is one REST write whose answer is one of four things a person acts on
+ * differently:
  *
  *  - **done** — `200`/`201` (this node has it) or `202` (`pending`: the record
  *    is durable and this node has not applied it yet, so the lists catch up a
@@ -38,6 +41,9 @@
  * is refused as a reused key, in the engine's own words about operation ids:
  * an address corrected after a dropped connection and sent under the first
  * attempt's key answered that, and only the press after it issued anything.
+ * A PERSON'S CREATE leans on the key hardest: the engine derives the person
+ * and their first password link from the operation, so the retry an unknown
+ * answer asks for hands back the same link rather than a second person.
  */
 
 import { useCallback, useState } from "react";

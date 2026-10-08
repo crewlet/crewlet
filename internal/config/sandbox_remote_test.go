@@ -225,7 +225,7 @@ func TestRuntimeEnvTakesEnvironmentNamesOnlyAndOnlyWhereAContainerRuns(t *testin
 // warning sits at the argument that names it.
 func TestABareEnvArgNothingSuppliesIsAdvised(t *testing.T) {
 	t.Parallel()
-	cfg := mustCompany(t, "name: Acme\nproviders:\n  sandbox:\n    local:\n"+
+	cfg := mustCompany(t, "name: Acme\n"+reachablePerson+"providers:\n  sandbox:\n    local:\n"+
 		"      image: \"example.invalid/box:1\"\n"+
 		"      runtime_env: {DECLARED: \"${DECLARED}\"}\n"+
 		"      run_args: [\"-e\", \"FOO\", \"--env\", \"BAR\", \"--env=BAZ\", \"-eQUX\",\n"+
@@ -260,8 +260,17 @@ func TestABareEnvArgNothingSuppliesIsAdvised(t *testing.T) {
 	}
 	// And a company with nothing to say says nothing — as an empty list,
 	// which a surface renders as "nothing to say" where a null reads as a
-	// failure.
-	if quiet := mustCompany(t, "name: Acme\n").AdvisoryWarnings(); quiet == nil || len(quiet) != 0 {
+	// failure. NOTHING TO SAY includes somebody to invite: a company with no
+	// human seat is advised that nobody can join it.
+	if quiet := mustCompany(t, "name: Acme\n"+reachablePerson).AdvisoryWarnings(); quiet == nil || len(quiet) != 0 {
 		t.Errorf("AdvisoryWarnings of a company with no sandbox = %#v, want an empty list", quiet)
 	}
 }
+
+// reachablePerson is a `roles:` block declaring one human seat somebody can be
+// reached at — what a fixture counting advisories declares, so the count is its
+// subject's alone: a company with no human seat is advised that nobody can
+// join it, and a human seat with no contact identity that nobody can be
+// mentioned at.
+const reachablePerson = "roles:\n  - name: Founder\n    kind: human\n" +
+	"    contact:\n      slack_user_id: U0FOUNDER\n"

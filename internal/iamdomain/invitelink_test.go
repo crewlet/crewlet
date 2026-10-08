@@ -37,7 +37,8 @@ func inviteFor(t *testing.T, rig *writeRig, address, seat string) (
 
 // redeemAs enrols the person an invitation creates through the node's own
 // writer, as the sign-in surface does, presenting secret and binding seat —
-// a fresh person per attempt, as the surface mints one.
+// a fresh person per attempt, as the surface mints one, carrying the password
+// they chose.
 func redeemAs(t *testing.T, rig *writeRig, issued iamdomain.InviteIssued,
 	address, secret, seat string) (statelog.Result, error) {
 
@@ -46,9 +47,10 @@ func redeemAs(t *testing.T, rig *writeRig, issued iamdomain.InviteIssued,
 	var result statelog.Result
 	err := rig.draining(func() error {
 		var err error
-		result, err = nodeWriter(rig).Enrol(t.Context(), iamdomain.Enrolment{
-			PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
+		result, err = nodeWriter(rig).Redeem(t.Context(), iamdomain.Redemption{
+			PersonID: person, Stage: iam.StageActive,
 			Name: "A joiner", Email: address, Login: iam.LoginFromAddress(address),
+			Password:   aPassword(),
 			Grants:     []iam.Grant{iam.GrantStateRead},
 			Invitation: issued.ID, InvitationSecret: secret, Seat: seat,
 			OpID: "invite:" + issued.ID, Reason: "redeemed an invitation",
@@ -74,7 +76,8 @@ func redeemAs(t *testing.T, rig *writeRig, issued iamdomain.InviteIssued,
 func TestAnInvitationKeepsItsLinksSecretOnlyAsAVerifier(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
-	issued, err := inviteFor(t, rig, "priya@example.com", "")
+	issued, err := inviteFor(t, rig, "priya@example.com",
+		rig.vacantSeat("platform-lead"))
 	if err != nil {
 		t.Fatalf("invite: %v", err)
 	}
@@ -135,57 +138,120 @@ func TestAnInvitationKeepsItsLinksSecretOnlyAsAVerifier(t *testing.T) {
 func TestARedemptionPresentsItsLinksSecret(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
-	issued, err := inviteFor(t, rig, "sam@example.com", "")
+	seat := rig.vacantSeat("platform-lead")
+	issued, err := inviteFor(t, rig, "sam@example.com", seat)
 	if err != nil {
 		t.Fatalf("invite: %v", err)
 	}
 	for _, wrong := range []string{"", "not-the-secret", issued.ID} {
 		if _, err := redeemAs(t, rig, issued, "sam@example.com", wrong,
-			""); !errors.Is(err, iamdomain.ErrRefused) {
+			seat); !errors.Is(err, iamdomain.ErrRefused) {
 			t.Errorf("a redemption presenting %q was not refused (%v)", wrong, err)
 		}
 	}
 	if rows := rig.column(`SELECT id FROM iam_people`); len(rows) != 0 {
 		t.Errorf("refused redemptions left rows behind: %v", rows)
 	}
-	result, err := redeemAs(t, rig, issued, "sam@example.com", issued.Secret, "")
+	result, err := redeemAs(t, rig, issued, "sam@example.com", issued.Secret, seat)
 	if err != nil || result.Outcome != statelog.OutcomeApplied {
 		t.Fatalf("the redemption presenting the link's secret answered %+v (%v)",
 			result, err)
 	}
 }
 
-// AN INVITATION BINDS ONLY A HUMAN SEAT NOBODY HOLDS, decided when it is issued.
+// A REDEMPTION CARRIES ONE CREDENTIAL, AND IT IS A PASSWORD.
 //
-// Each refusal is one the person the link is sent to could do nothing about: a
-// seat nobody created, an agent's seat — a person bound to one is refused on
-// every request — and a seat a colleague is already bound to. What it records
-// is the seat's handle, which is its identity.
+// The invitee presents a link and a password they chose, and nothing they
+// presented could vouch for any other credential: a token carried here would
+// skip the mint's cut to what its owner holds, a second factor would be one
+// nobody enrolled, and a reset link one nobody was shown. The type holds a
+// redemption to one credential; its validation holds that one to the
+// password's method, and refuses the rest before anything is published.
 //
-// Mutation: drop the kind check and the agent seat is issued; drop the holder
-// check and the held seat is.
+// Mutation: drop the method from the redemption's validation and each row
+// lands a person holding that credential instead.
+func TestARedemptionCarriesOnlyThePasswordItsInviteeChose(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	seat := rig.vacantSeat("platform-lead")
+	issued, err := inviteFor(t, rig, "sam@example.com", seat)
+	if err != nil {
+		t.Fatalf("invite: %v", err)
+	}
+	before, err := rig.end(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, method := range []iamdomain.CredentialMethod{iamdomain.MethodToken,
+		iamdomain.MethodReset, iamdomain.MethodTOTP} {
+		carried := aPassword()
+		carried.Method = method
+		err := rig.during(func() error {
+			_, err := nodeWriter(rig).Redeem(t.Context(), iamdomain.Redemption{
+				PersonID: uuid.Must(uuid.NewV7()).String(), Stage: iam.StageActive,
+				Name: "Sam", Email: "sam@example.com", Login: "sam.example",
+				Password: carried, Grants: []iam.Grant{iam.GrantStateRead},
+				Invitation: issued.ID, InvitationSecret: issued.Secret, Seat: seat,
+				OpID: "invite:" + issued.ID, Reason: "redeemed an invitation",
+			})
+			return err
+		})
+		if !errors.Is(err, iamdomain.ErrInvalid) {
+			t.Errorf("a redemption carrying a %s credential answered %v, want %v",
+				method, err, iamdomain.ErrInvalid)
+		}
+	}
+	if after, _ := rig.end(t.Context()); after != before {
+		t.Errorf("the refused redemptions published %d records", after-before)
+	}
+	if rows := rig.column(`SELECT id FROM iam_people`); len(rows) != 0 {
+		t.Errorf("refused redemptions left %v", rows)
+	}
+	// THE CONTROL: the same redemption carrying a password lands.
+	if _, err := redeemAs(t, rig, issued, "sam@example.com", issued.Secret,
+		seat); err != nil {
+		t.Errorf("the redemption carrying a password was refused: %v", err)
+	}
+}
+
+// AN INVITATION BINDS ONLY A HUMAN SEAT NOBODY HOLDS, decided when it is issued
+// — and it binds one: the person it creates holds a seat from the moment they
+// exist (ADR-0026).
+//
+// Each refusal is one the person the link is sent to could do nothing about: no
+// seat at all, a seat nobody created, an agent's seat — a person bound to one
+// is refused on every request — a seat a colleague is already bound to, and a
+// seat another open invitation is on its way to. What it records is the seat's
+// handle, which is its identity.
+//
+// Mutation: drop the seat requirement and the seatless invitation is issued;
+// drop the kind check and the agent seat is; drop the holder check and the
+// held seat is; drop the open-invitation check and the invited seat is.
 func TestAnInvitationBindsOnlyAHumanSeatNobodyHolds(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	rig.seatOnly("platform-lead")
-	rig.seatOnly("held-seat")
 	rig.agentSeat("release-bot")
 	const colleague = "018f3a9c-0000-7000-8000-0000000000c1"
-	if err := rig.enrol(iamdomain.Enrolment{
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: colleague, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: "Colleague", Email: "colleague@example.com", Login: "col.league",
+		Seat: rig.vacantSeat("held-seat"), LinkExpiresAt: firstLinkExpiry,
 		OpID: "op-colleague",
 	}); err != nil {
 		t.Fatalf("enrol the colleague: %v", err)
 	}
-	if err := rig.bind("held-seat", colleague, "op-colleague-seat"); err != nil {
-		t.Fatalf("bind the colleague: %v", err)
+	invited, err := inviteFor(t, rig, "invited@example.com",
+		rig.vacantSeat("invited-seat"))
+	if err != nil {
+		t.Fatalf("invite onto invited-seat: %v", err)
 	}
 
 	for _, refused := range []struct {
 		seat string
 		want error
 	}{
+		{"", iamdomain.ErrSeatRequired},
 		{"nobody-made-this", iamdomain.ErrInvalid},
 		{"release-bot", iamdomain.ErrInvalid},
 	} {
@@ -201,7 +267,15 @@ func TestAnInvitationBindsOnlyAHumanSeatNobodyHolds(t *testing.T) {
 		t.Errorf("an invitation binding a seat the colleague holds was not "+
 			"refused naming them (%v)", err)
 	}
-	if rows := rig.column(`SELECT id FROM iam_invites`); len(rows) != 0 {
+	taken = nil
+	if _, err := inviteFor(t, rig, "third@example.com",
+		"invited-seat"); !errors.As(err, &taken) ||
+		taken.Field != iamdomain.UniqueSeat || taken.Invitation != invited.ID {
+		t.Errorf("an invitation onto a seat another open invitation holds was "+
+			"not refused naming that invitation (%v)", err)
+	}
+	if rows := rig.column(`SELECT id FROM iam_invites`); len(rows) != 1 ||
+		rows[0] != invited.ID {
 		t.Errorf("refused issues left invitations behind: %v", rows)
 	}
 
@@ -222,7 +296,8 @@ func TestAnInvitationBindsOnlyAHumanSeatNobodyHolds(t *testing.T) {
 // A REDEMPTION BINDS THE SEAT ITS INVITATION NAMED, and nothing else.
 //
 // A redemption naming another seat, or none, asks for something the invitation
-// did not offer and is refused, publishing nothing.
+// did not offer and is refused as the link's refusal ([iamdomain.ErrRefused]),
+// publishing nothing.
 //
 // Mutation: drop the seat comparison from the person record's basis and the
 // redemption naming no seat spends the link without the binding.
@@ -266,18 +341,19 @@ func TestARedemptionBindsTheSeatItsInvitationNamed(t *testing.T) {
 	}
 }
 
-// A SEAT BOUND SINCE THE ISSUE REFUSES THE REDEMPTION, before anything is
-// written.
+// A SEAT A PERSON HOLDS REFUSES THE REDEMPTION, before anything is written.
 //
-// The chart and the directory move between an issue and a redemption — a
-// week, by default — and a seat an administrator bound to somebody else in
-// that time is a link that no longer works. It is refused naming the seat as
-// taken, whose remedy is a new invitation, and the refusal publishes nothing:
-// the invited address is not held against the next invitation to the same
-// person.
+// The invitation holds its seat from its issue, so a bind or a create onto it
+// is refused naming the invitation — the first defence, asserted first. The
+// redemption's own decide is the second, for what the first cannot see: a
+// person on the seat a retained record, a restore or a build before
+// invitations held their seats left behind. That residue is planted, since the
+// writer no longer produces it, and the redemption is refused naming the
+// seat's holder — whose remedy is a new invitation — publishing nothing: the
+// invited address is not held against the next invitation to the same person.
 //
-// Mutation: drop the seat check from Enrol's decide and the redemption binds
-// a second person to the colleague's seat.
+// Mutation: drop the seat check from the enrolment's decide and the redemption
+// binds a second person to the colleague's seat.
 func TestASeatBoundSinceTheIssueRefusesTheRedemptionBeforeAnything(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -287,16 +363,23 @@ func TestASeatBoundSinceTheIssueRefusesTheRedemptionBeforeAnything(t *testing.T)
 		t.Fatalf("invite: %v", err)
 	}
 	const colleague = "018f3a9c-0000-7000-8000-0000000000c2"
-	if err := rig.enrol(iamdomain.Enrolment{
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: colleague, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: "Colleague", Email: "colleague@example.com", Login: "col.league",
+		Seat: rig.vacantSeat("colleague-desk"), LinkExpiresAt: firstLinkExpiry,
 		OpID: "op-colleague",
 	}); err != nil {
 		t.Fatalf("enrol the colleague: %v", err)
 	}
-	if err := rig.bind("platform-lead", colleague, "op-colleague-seat"); err != nil {
-		t.Fatalf("bind the colleague: %v", err)
+	var held *iamdomain.ErrTaken
+	if err := rig.bind("platform-lead", colleague,
+		"op-colleague-seat"); !errors.As(err, &held) ||
+		held.Invitation != issued.ID {
+		t.Fatalf("moving the colleague onto the invited seat answered %v, want "+
+			"it refused naming invitation %s", err, issued.ID)
 	}
+	plant(t, rig, `UPDATE iam_people SET seat_id = 'platform-lead' WHERE id = ?`,
+		colleague)
 
 	var taken *iamdomain.ErrTaken
 	if _, err := redeemAs(t, rig, issued, "lead@example.com", issued.Secret,

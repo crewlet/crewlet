@@ -113,9 +113,10 @@ and eleven more beside them that no seat is given: the saved views, the
 catalogue write, a person's own queue, inbox and pins, the trash, and the board
 drag. Each call is decided by the same authority table a seat's is, and each
 write is attributed to who the request is, never to a name the caller chooses:
-a person whose credential the identity directory binds to a seat writes **as
-that seat**, with kind `human`, and a credential nobody is bound through writes
-under its own login (`token:<id>`), with kind `operator` — the credential
+a person writes **as the seat they hold** — every person holds one — and so
+does a token the identity directory binds to a seat, with kind `human`, while a
+credential nobody is bound through writes under its own login (`token:<id>`),
+with kind `operator` — the credential
 itself is recorded beside either as the write's `operator_id`. Five more are a
 person's decisions about the company rather than its work, and are served only
 there too: `pause_seat` and `resume_seat`, and `steer_turn` (a note to a

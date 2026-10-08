@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
 )
@@ -23,19 +25,32 @@ func (h *fleetHarness) pauseOf(handle string) (coord.SeatPause, bool) {
 	return p, found
 }
 
-// pause pauses a seat as the person named by does through their own session:
-// a person bound to no seat here, so they write under their login, kind
-// human, with the session they acted through beside it.
+// pause pauses a seat as the person holding the seat by does through their own
+// session — attributed as [iam.ActorFor] attributes a signed-in person: a
+// person holds a human seat for as long as they are here (ADR-0026), so they
+// write under that seat's HANDLE, kind human, with the session they acted
+// through beside it as its lineage ([sessionOf]). It was a login with no seat
+// written as kind human, which no principal ever is — a person bound to no
+// seat writes as an operator — beside a "session" naming the login rather than
+// a lineage, which is no credential name at all.
 func (h *fleetHarness) pause(handle, by string, stop bool) (coord.SeatPause, bool) {
 	h.t.Helper()
 	p, created, err := h.f.CreateSeatPause(h.ctx, coord.SeatPause{
-		Seat: seatID(handle), By: by, ByKind: iam.ActorHuman, OperatorID: "session:" + by,
+		Seat: seatID(handle), By: by, ByKind: iam.ActorHuman, OperatorID: sessionOf(by),
 		Reason: "looping on the same ticket", StopRunning: stop, At: h.now(),
 	})
 	if err != nil {
 		h.t.Fatalf("CreateSeatPause(%s): %v", handle, err)
 	}
 	return p, created
+}
+
+// sessionOf is the browser session the person holding seat by acts through, as
+// the operator column records it: [iam.SessionName] of a lineage, a uuid —
+// derived from the seat so a case can name it again.
+func sessionOf(by string) string {
+	return iam.SessionName(uuid.NewSHA1(uuid.MustParse(
+		"0b6f3d2a-5c4e-4f1a-9e7d-3a2c1b0f9e8d"), []byte(by)).String())
 }
 
 // nextPauseUpdate reads one update, failing the case if none arrives.
@@ -62,19 +77,19 @@ var seatPauseCases = []fleetCase{{
 	// rather than overwriting what somebody else just did.
 	name: "a seat pause is compare and set",
 	fn: func(h *fleetHarness) {
-		first, created := h.pause("swe", "jane.doe", false)
+		first, created := h.pause("swe", "jane-doe", false)
 		if !created {
 			h.t.Fatal("the first pause of a free seat lost")
 		}
 		if first.Version == 0 {
 			h.t.Fatal("the pause carries no version, so no resume can be conditioned on it")
 		}
-		if _, again := h.pause("swe", "omar.ali", true); again {
+		if _, again := h.pause("swe", "omar-ali", true); again {
 			h.t.Fatal("a second pause of a paused seat reported itself as new: " +
 				"two people's pauses would both announce, and the second overwrote the first")
 		}
 		read, found := h.pauseOf("swe")
-		if !found || read.By != "jane.doe" || read.StopRunning {
+		if !found || read.By != "jane-doe" || read.StopRunning {
 			h.t.Fatalf("pause = %+v (found %v), want jane's, untouched by the second", read, found)
 		}
 		// WHO PAUSED IT TRAVELS WHOLE — the author, its kind and the
@@ -82,7 +97,7 @@ var seatPauseCases = []fleetCase{{
 		// about the third, and a backend that dropped either would answer
 		// one of them with nobody.
 		if read.Version != first.Version || !read.At.Equal(h.now()) || read.Seat != seatID("swe") ||
-			read.ByKind != iam.ActorHuman || read.OperatorID != "session:jane.doe" {
+			read.ByKind != iam.ActorHuman || read.OperatorID != sessionOf("jane-doe") {
 			h.t.Errorf("read back %+v, want what the create stored (%+v)", read, first)
 		}
 
@@ -108,7 +123,7 @@ var seatPauseCases = []fleetCase{{
 			h.t.Fatal("a resume carrying no version lifted the pause")
 		}
 		if _, ok, _ := h.f.UpdateSeatPause(h.ctx, coord.SeatPause{
-			Seat: seatID("qa"), By: "jane.doe", ByKind: iam.ActorHuman, At: h.now(),
+			Seat: seatID("qa"), By: "jane-doe", ByKind: iam.ActorHuman, At: h.now(),
 		}); ok {
 			h.t.Fatal("an update carrying no version created a pause")
 		}
@@ -120,11 +135,11 @@ var seatPauseCases = []fleetCase{{
 		}
 		// And a resumed seat can be paused again — a purge marker must not
 		// make the next create lose.
-		if _, created := h.pause("swe", "omar.ali", false); !created {
+		if _, created := h.pause("swe", "omar-ali", false); !created {
 			h.t.Fatal("a seat resumed once could not be paused again")
 		}
 		all, err := h.f.ListSeatPauses(h.ctx)
-		if err != nil || len(all) != 1 || all[0].By != "omar.ali" || all[0].Seat != seatID("swe") {
+		if err != nil || len(all) != 1 || all[0].By != "omar-ali" || all[0].Seat != seatID("swe") {
 			h.t.Fatalf("ListSeatPauses = %+v, %v; want omar's one pause", all, err)
 		}
 	},
@@ -137,11 +152,11 @@ var seatPauseCases = []fleetCase{{
 	fn: func(h *fleetHarness) {
 		swe := seatID("swe")
 		for _, bad := range []coord.SeatPause{
-			{By: "jane.doe", ByKind: iam.ActorHuman, At: h.now()},
+			{By: "jane-doe", ByKind: iam.ActorHuman, At: h.now()},
 			{Seat: swe, ByKind: iam.ActorHuman, At: h.now()},
-			{Seat: swe, By: "jane.doe", At: h.now()},
-			{Seat: swe, By: "jane.doe", ByKind: "a_kind_nobody_named", At: h.now()},
-			{Seat: swe, By: "jane.doe", ByKind: iam.ActorHuman},
+			{Seat: swe, By: "jane-doe", At: h.now()},
+			{Seat: swe, By: "jane-doe", ByKind: "a_kind_nobody_named", At: h.now()},
+			{Seat: swe, By: "jane-doe", ByKind: iam.ActorHuman},
 		} {
 			if _, created, err := h.f.CreateSeatPause(h.ctx, bad); err == nil || created {
 				h.t.Errorf("CreateSeatPause(%+v) = (%v, %v), want a refusal", bad, created, err)
@@ -159,7 +174,7 @@ var seatPauseCases = []fleetCase{{
 	fn: func(h *fleetHarness) {
 		handles := []string{"swe", "qa", "ops", "pm"}
 		for _, handle := range handles {
-			if _, created := h.pause(handle, "jane.doe", false); !created {
+			if _, created := h.pause(handle, "jane-doe", false); !created {
 				h.t.Fatalf("pausing %s lost, though no seat shares its id", handle)
 			}
 		}
@@ -185,7 +200,7 @@ var seatPauseCases = []fleetCase{{
 	// missing the purge is a seat every node keeps paused after its resume.
 	name: "a watch sees a pause and its clear",
 	fn: func(h *fleetHarness) {
-		h.pause("ops", "jane.doe", false)
+		h.pause("ops", "jane-doe", false)
 
 		ctx, cancel := context.WithCancel(h.ctx)
 		defer cancel()
@@ -194,14 +209,14 @@ var seatPauseCases = []fleetCase{{
 			h.t.Fatalf("WatchSeatPauses: %v", err)
 		}
 		u := h.nextPauseUpdate(updates)
-		if u.Seat != seatID("ops") || u.Pause == nil || u.Pause.By != "jane.doe" || u.Current {
+		if u.Seat != seatID("ops") || u.Pause == nil || u.Pause.By != "jane-doe" || u.Current {
 			h.t.Fatalf("first update = %+v, want the pause that already existed", u)
 		}
 		if u = h.nextPauseUpdate(updates); !u.Current {
 			h.t.Fatalf("second update = %+v, want the marker ending the current records", u)
 		}
 
-		paused, _ := h.pause("swe", "omar.ali", true)
+		paused, _ := h.pause("swe", "omar-ali", true)
 		u = h.nextPauseUpdate(updates)
 		if u.Seat != seatID("swe") || u.Pause == nil || !u.Pause.StopRunning || u.Pause.Version != paused.Version {
 			h.t.Fatalf("update after a pause = %+v, want swe's pause as stored", u)

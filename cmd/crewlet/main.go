@@ -216,7 +216,8 @@ Usage:
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
   crewlet config <cmd>        Import, inspect and activate company revisions
   crewlet iam <cmd>           The company's people, credentials and sessions:
-                              invite, grant, bind, suspend, revoke, reset a
+                              the human seats, invite or create a person onto
+                              one, grant, move, suspend, revoke, reset a
                               password, audit
   crewlet llm <cmd>           Log in, verify and export the subscription CLI backends
   crewlet search eval         Measure the semantic search against the exact scan,
@@ -1603,9 +1604,13 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		return nil, err
 	}
 	// AND WHAT A COMPANY WITH NOBODY IN IT DOES NEXT: its first person is
-	// invited under a Tier A token like everybody after them, and the log
-	// says so once at boot.
-	announceUnclaimed(ctx, e.AnyPerson)
+	// invited under a Tier A token like everybody after them, onto a human
+	// seat the company declares — and the log says so once at boot, naming
+	// the seats nothing holds yet, or the step that has to come first where
+	// there are none. The directory surface above refuses a node with no
+	// identity reader, so one is here.
+	announceUnclaimed(ctx, e.AnyPerson, engine.SeatViewOf(e).HumanSeats,
+		e.IAM().SeatClaims)
 
 	// The fleet's integration status, which both the reconcile loop and a
 	// pass run from the dashboard write.

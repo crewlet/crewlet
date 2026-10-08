@@ -71,10 +71,12 @@ func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFiel
 type OpKind string
 
 const (
-	// OpInvite is an address spoken for by somebody who has no person yet,
-	// on [KindDirectory], so it contends with every enrolment and every
-	// other invitation: the decide refuses an address a person holds or
-	// another open invitation holds.
+	// OpInvite is an address and a human seat spoken for by somebody who
+	// has no person yet, on [KindDirectory], so it contends with every
+	// enrolment and every other invitation: the decide refuses an address
+	// or a seat a person holds or another open invitation holds, and the
+	// invitation HOLDS both from then until it is redeemed, cancelled or
+	// ages out.
 	//
 	// ITS OWN OP rather than a shape of [OpEnrol], because an invitation
 	// names nobody: it holds an address open for a person who does not
@@ -84,9 +86,10 @@ const (
 	OpInvite OpKind = "invite"
 
 	// OpCancel withdraws an invitation nobody has redeemed, on
-	// [KindDirectory] — the subject its address is held on — and its apply
-	// DELETES the row, so the address it held is free for a new invitation
-	// the moment it lands and its sealed copy goes with the row.
+	// [KindDirectory] — the subject its address and its seat are held on —
+	// and its apply DELETES the row, so the address and the seat it held
+	// are free for a new invitation, a create or a bind the moment it lands
+	// and its sealed copy goes with the row.
 	//
 	// ITS OWN OP rather than an invitation whose deadline moved to now: an
 	// operator reading the trail asks "who withdrew this link", and an
@@ -95,9 +98,14 @@ const (
 	// them.
 	OpCancel OpKind = "cancel"
 
-	// OpEnrol creates a person WHOLE — their row, their first credentials,
+	// OpEnrol creates a person WHOLE — their row, their first credential,
 	// their login, their address and their seat — and, for a redemption,
-	// spends the invitation, in ONE record on [KindDirectory].
+	// spends the invitation, in ONE record on [KindDirectory]. Two writer
+	// verbs publish it ([Writer.Create], [Writer.Redeem]) and it is one
+	// format: an administrator's create of a person carries their FIRST
+	// PASSWORD LINK as a `reset` credential, stamped with the counters of
+	// the record's own snapshot, and a redemption carries the password the
+	// invitee chose.
 	//
 	// ONE RECORD, because every half of it is a value the directory's
 	// decide judges in one snapshot: the address, the login and the seat
@@ -110,10 +118,11 @@ const (
 	// post-state, on [KindDirectory].
 	//
 	// BOTH ARE ALWAYS STATED, the unchanged one as the snapshot held it,
-	// so a rename, a bind, an unbind and a move between seats are one
-	// record each and the value the person gives up is freed by the same
-	// record that takes the new one — there is no release step left to
-	// not land.
+	// so a rename, a bind, a move between seats and a service account's
+	// unbind are one record each and the value given up is freed by the
+	// same record that takes the new one — there is no release step left to
+	// not land. A person is never unbound: their seat is moved, or freed by
+	// their removal ([ErrSeatRequired]).
 	OpIdentity OpKind = "identity"
 
 	// OpUpdate is a person's own content, as FULL POST-STATE: their name,

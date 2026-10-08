@@ -614,6 +614,12 @@ describe("who is looking", () => {
     });
     await settle();
     expect(screen.getByText(/not bound to a seat/)).toBeTruthy();
+    // A PERSON'S LOGIN, so the fault is theirs to have mended — every person
+    // holds a human seat — and no command is theirs to run. A service account
+    // is told the opposite (`MyWork.test.tsx`). Mutation: word every unbound
+    // reader alike and the command appears here.
+    expect(screen.getByText(/Every person holds a human seat and you hold none/)).toBeTruthy();
+    expect(screen.queryByText(/crewlet iam/)).toBeNull();
     expect(asked.find((a) => a.kind === "work_inbox")?.params.handle).toBe("ops.lead");
     const markAll = screen.getByRole("button", { name: "Mark all read" });
     expect(markAll.getAttribute("aria-disabled")).not.toBe("true");

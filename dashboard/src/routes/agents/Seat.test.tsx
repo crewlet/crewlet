@@ -242,9 +242,20 @@ beforeEach(() => {
   reply = { status: 200, body: { tool: "pause_seat", outcome: "applied" } };
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (url: string, init: RequestInit) => {
+    vi.fn(async (url: string, init?: RequestInit) => {
+      // A READ IS ANSWERED, never parsed as an act: a person's seat reads
+      // `/iam/seats` for a directory reader, and a body-less GET handed to
+      // `JSON.parse` threw inside the stub, which the page swallowed as a
+      // failed read while every case here passed by accident.
+      if ((init?.method ?? "GET").toUpperCase() === "GET") {
+        const path = new URL(String(url), "http://engine.test").pathname;
+        return new Response(JSON.stringify(path === "/iam/seats" ? { seats: [] } : {}), {
+          status: path === "/iam/seats" ? 200 : 404,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
       const tool = decodeURIComponent(String(url).split("/operator/act/")[1] ?? "");
-      const body = JSON.parse(init.body as string) as { args: Record<string, unknown> };
+      const body = JSON.parse(init?.body as string) as { args: Record<string, unknown> };
       posted.push({ tool, args: body.args });
       return new Response(JSON.stringify(reply.body), {
         status: reply.status,

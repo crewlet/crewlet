@@ -217,18 +217,34 @@ func TestADryRunAnswersTheBaseTheWarningsAndTheDerivedHierarchy(t *testing.T) {
 	if !answer.Valid || answer.Base != base {
 		t.Errorf("valid = %v, base = %q, want true and %q", answer.Valid, answer.Base, base)
 	}
-	if len(answer.Warnings) != 1 || answer.Warnings[0].Kind != config.WarningDanglingReference ||
+	// THE DANGLING ENTRY, LOCATED, and then — in [config.Company.Warnings]'
+	// own order, what is broken before what is worth knowing — the advisory
+	// that a company of agents alone admits nobody: every person holds a
+	// human seat, and this draft declares none. The check is where a builder
+	// hears it, before an operator meets the refusal of their first
+	// invitation.
+	if len(answer.Warnings) != 2 || answer.Warnings[0].Kind != config.WarningDanglingReference ||
 		answer.Warnings[0].Path != "roles[0].manages[1]" || answer.Warnings[0].Seat != "ceo" {
-		t.Errorf("warnings = %+v, want the dangling manages entry, located", answer.Warnings)
+		t.Errorf("warnings = %+v, want the dangling manages entry, located, "+
+			"then the advisory about no human seat", answer.Warnings)
+	} else if w := answer.Warnings[1]; w.Kind != config.WarningAdvisory || w.Path != "roles" ||
+		!strings.Contains(w.Message, "no `kind: human` seat") {
+		t.Errorf("warnings[1] = %+v, want the advisory at `roles` that nobody "+
+			"can be invited into a company with no human seat", w)
 	}
 	if len(answer.Derived.Seats) != 2 || answer.Derived.Seats[1].Manager != "ceo" ||
 		answer.Derived.Seats[1].Path != "roles[1]" {
 		t.Errorf("derived = %+v, want the CTO reporting to the CEO, with its path", answer.Derived)
 	}
 
-	// Creating the company is checked against nothing, and says so.
+	// Creating the company is checked against nothing, and says so. The
+	// company declares a person's seat somebody can be reached at, so it has
+	// nothing to be warned about: a company with no human seat is advised
+	// that nobody can join it.
 	empty := newCountedSurface(t)
-	created := empty.do(t, http.MethodPut, "/config?dry_run=true", companyJSONDoc,
+	created := empty.do(t, http.MethodPut, "/config?dry_run=true", strings.Replace(
+		companyJSONDoc, `"name":"Acme",`, `"name":"Acme","roles":[{"name":"Founder",`+
+			`"kind":"human","contact":{"slack_user_id":"U0FOUNDER"}}],`, 1),
 		map[string]string{"If-None-Match": "*"})
 	if created.Code != http.StatusOK {
 		t.Fatalf("create dry run = %d, want 200: %s", created.Code, created.Body)

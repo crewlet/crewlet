@@ -21,12 +21,13 @@ import (
 // The whole of a node's durable state used to come up with its FIRST COMPANY —
 // at boot for a node started on one, at the apply that handed one to a node
 // started without. So a node booted unconfigured had no state log at all, and
-// with it no identity estate: no sign-in, no invitation, no /iam. That is the
-// posture the quickstart starts from, and the one a company with nobody in it
-// has to leave through — its first person is invited under a Tier A token like
-// everybody after them — so the one node that most needed a way in had none,
-// and the dashboard's own "create the company" path needed a session nothing
-// could mint.
+// with it no identity estate: no sign-in, no session, no /iam. That is the
+// posture the quickstart starts from, and the one a company has to be created
+// through — a Tier A token's session, exchanged on this node, is what the
+// dashboard's own "create the company" path writes the first revision as, and
+// the company's first person is invited under it once that revision declares
+// the human seat they will hold (ADR-0026) — so the one node that most needed a
+// way in had none, and that path needed a session nothing could mint.
 //
 // # Split by what depends on a company, never by domain
 //
@@ -87,10 +88,12 @@ type core struct {
 	gate *NodeGate
 
 	// iamReader and iamWriter are the identity estate's two sides. BUILT
-	// ON EVERY NODE, with or without a company: a node with nobody in its
-	// company is precisely the node that must be able to enrol its first
-	// person, and one whose identity domain failed to come up is a boot
-	// failure naming the domain rather than a nil to branch on.
+	// ON EVERY NODE, with or without a company: a node with no company is
+	// precisely the node that must sign a Tier A token's session in so the
+	// company can be created, and one whose identity domain failed to come
+	// up is a boot failure naming the domain rather than a nil to branch
+	// on. What waits for the company is only the SEAT a person is invited
+	// or created onto, which the writer checks against it.
 	iamReader *iamdomain.Reader
 	iamWriter *iamdomain.Writer
 
@@ -219,8 +222,8 @@ func (e *Engine) startCore(ctx context.Context, boot *config.Bootstrap) error {
 // named — and this node's own usage publisher ([Engine.startUsage]).
 //
 // ON EVERY NODE THAT PUBLISHES, company or not: a fleet nobody has configured
-// yet still writes its identity log — the first person's invitation and
-// sign-in — and without the trim that log only grows.
+// yet still writes its identity log — the Tier A token's session the company
+// is created through — and without the trim that log only grows.
 //
 // THE USAGE PUBLISHER IS THE CORE'S TOO, and not a native duty, although it
 // is no singleton: every node publishes its own days, from its own event log,
@@ -338,10 +341,14 @@ func (c *core) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 		// there too.
 		Blinds: e.PersonBlinder(),
 		Sealer: e.PersonSealer(),
-		// THE ORGANISATION THIS NODE RUNS, which a seat bind and an
-		// invitation naming a seat are checked against — read per call,
-		// so a node with no company yet refuses a seat bind as unknown
-		// rather than binding unchecked.
+		// THE ORGANISATION THIS NODE RUNS, which EVERY binding the
+		// directory writes is checked against as a HUMAN seat — a
+		// create's, an invitation's, a redemption's and an identity
+		// edit's (ADR-0026) — read per call through the seat's KIND
+		// this view answers, so a node with no company yet refuses a
+		// bind naming the remedy ([session.ErrNoCompany], which the
+		// writer answers as iamdomain.ErrNoCompany) rather than binding
+		// unchecked.
 		Seats: SeatViewOf(e),
 		// WHAT A LANDED RECORD DECIDED — a grant delta, a session
 		// generation — goes on the node's audit feed from here, since
@@ -357,7 +364,7 @@ func (c *core) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 		// AND people:manage BESIDE IT, because two of the node's writes
 		// are about people with no principal of their own in the
 		// gesture: the person an invitation redeems into, who does not
-		// exist until the enrolment lands — the company's first person
+		// exist until the redemption lands — the company's first person
 		// included — and every person a re-seal rewrites. Without it
 		// the sign-in surface's own writer was refused by the domain, so
 		// nobody could redeem an invitation at all.

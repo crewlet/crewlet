@@ -29,7 +29,7 @@ subcommand below is served by it.
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
 | `crewlet config import <company.yaml>` | Load a company file as a new active `company_config` revision — through a running node's `PUT /config`, which activates it fleet-wide, or offline into this node's store, which the node publishes at its next start; the line it prints says which it did |
 | `crewlet config export [--revision <UUID>]` | Dump the active (or specified) revision as YAML to stdout |
-| `crewlet iam <command>` | The company's people, credentials and sessions through a running node: invite, create, grant, bind, suspend, remove, revoke, mint a machine token, check and audit — see [`crewlet iam`](#crewlet-iam) |
+| `crewlet iam <command>` | The company's people, credentials and sessions through a running node: list the human seats, invite or create a person onto one, grant, move, suspend, remove, revoke, mint a machine token, check and audit — see [`crewlet iam`](#crewlet-iam) |
 | `crewlet config show` | One-line summary of the active revision |
 | `crewlet config revisions [--limit N]` | List recent revisions (newest first) |
 | `crewlet config diff <UUID> [-against <UUID\|active>]` | Structural diff of two revisions — paths and values, always redacted on both sides |
@@ -254,10 +254,9 @@ The line it prints says which of the two happened.
 `imported from <path>`). The revision history is the record of who changed what
 and why, so a fleet-wide write is worth a sentence. Through the API the
 revision records the author the node resolved the request to — `created_by`
-is `token:<id>` for a Tier A token, a person's seat for a person bound to one
-(their login when nobody bound them), and the owner for a person's machine
-token — with `created_by_kind` saying which (`operator` or `human`) and
-`operator_id` naming the credential beside them; written offline it is the
+is `token:<id>` for a Tier A token, a person's seat for a person (every person
+holds one), and the owner for a person's machine token — with
+`created_by_kind` saying which (`operator` or `human`) and `operator_id` naming the credential beside them; written offline it is the
 invoking operator. Either way that author travels with the revision to every
 node in the fleet.
 
@@ -406,28 +405,36 @@ about how its owner signs in. The one exception is `iam token -login`, which
 mints **your own** token and therefore signs in as you instead of reading the
 variable at all.
 
+**A person holds a human seat for as long as they are here.** They are invited
+onto a vacant one (`invite -seat`) or created on one (`create -seat`) — the
+seat's **Invite** and **Create person** in the dashboard's Agents › Org chart do
+the same — `bind` moves them to another, and `remove` frees it. Nothing
+clears a person's seat: `unbind` is for service accounts, whose seat is
+optional. `seats` lists which seats are free.
+
 | Command | What it does |
 |---|---|
 | `people` | The directory, paged. `-q` narrows on the login and the seat; `-stage` on the enrolment stage; `-limit` on the page; `-after ID` starts the next page, as the listing's last line spells it |
 | `show ID` | One person, in full, with their name and address opened |
-| `invite EMAIL` | Issue an invitation. Prints the link **once** — nothing stores it and no route reads one back. The link is the dashboard's invitation screen, `<api.external_url>/dashboard#/invite/<id>.<secret>`. `-seat SEAT` binds the person it creates to a chart seat when they redeem it: a **human** seat nobody holds, by any handle it answers to — see [An invitation may bind a seat](../concepts/identity-and-access.md#everybody-arrives-by-invitation). Run under a Tier A token on an empty estate, it is how the company's **first person** arrives: give them `people:manage` — see [How the first person exists](../concepts/identity-and-access.md#how-the-first-person-exists) |
+| `seats` | The company's **human seats** and what holds each, in the order the company declares them: `HANDLE`, `NAME`, `UNIT`, the `HOLDER` (their login, marked `(service account)` for one) and their `STAGE`, the open `INVITATION` for the seat (its id, and the address it was sent to) and when that invitation `EXPIRES`. `-unheld` keeps only the **vacant** ones — nobody holds them and no open invitation is for them — which are the seats `invite` and `create` take. An empty listing says why: a company that declares no `kind: human` seat, which can admit nobody until it declares one, or one whose every seat is held or invited — which an empty `-unheld` listing tells apart by asking the node for every seat once (never under `-json`), and whose remedy names what frees a seat: `remove` for a person, `unbind` for a service account, `cancel-invite` for an invitation, or a new `kind: human` seat. A node that runs no company yet refuses it, naming the step before: a company declaring a human seat. See [`GET /iam/seats`](api-endpoints.md#get-iamseats-lists-the-human-seats-and-who-holds-each) |
+| `invite EMAIL -seat SEAT` | Invite somebody onto a vacant human seat. **`-seat` is required**: a person holds a human seat for as long as they are here, so nobody is invited onto none — the command refuses a missing one before it reads any config, naming `seats -unheld`, which lists the seats that are free. The seat must be a human seat that no person and no open invitation holds. Prints the link **once** — nothing stores it and no route reads one back — good for a week. The link is the dashboard's invitation screen, `<api.external_url>/dashboard#/invite/<id>.<secret>`, and redeeming it creates the person on that seat. While it is open the invitation **holds the seat** as it holds the address: a create, a move or another invitation naming the seat is refused naming it, and so is a company write that would remove the seat — see [An invitation names its seat, and holds it](../concepts/identity-and-access.md#an-invitation-names-its-seat-and-holds-it). Run under a Tier A token on an empty estate, it is how the company's **first person** arrives — onto a human seat the company declares, so a company that declares none declares one first: give them `people:manage` — see [How the first person exists](../concepts/identity-and-access.md#how-the-first-person-exists) |
 | `invitations` | The invitations nobody has redeemed and that are still good, paged like `people` (`-limit`, `-after ID`); `-all` adds the expired and redeemed ones the estate still holds, each with its state. Every row says for whom, which seat it binds, what it confers, who issued it and until when — and **never the link**, which was shown once: an inviter who lost it cancels and issues another |
-| `cancel-invite ID` | Withdraw an invitation nobody redeemed: its link opens nothing from then on and the address it held is free for a new one at once. A redeemed one is refused naming the person it created — what undoes that is `remove`. See [Everybody arrives by invitation](../concepts/identity-and-access.md#everybody-arrives-by-invitation) |
-| `create` | Create somebody directly, with `-login` (required), `-email`, `-name` and `-kind` (`person` or `machine`). **Every principal enrols with a login** — it is the name their changes are recorded under while they hold no seat — and it follows the kind: a person's is dotted (`jane.doe`) and a machine's coloned (`ci:release`, or `token:<id>` to bind a Tier A token), at most 64 characters either way, and anything else is refused. A person also needs `-email`, which is how they sign in; a machine needs none. No password: a person arrives with one by redeeming an invitation, and a machine gets a token from `iam token` |
-| `bind ID SEAT` | Bind a person to a chart seat, so they act as it on the engine's own surface — its inbox, its day, the lead relations it holds. `SEAT` is the seat's handle. A Tier A token acts under the login `token:<id>`, so binding one is `create -kind machine -login token:<id>` and then `bind` on the id it prints. See [Humans in the Org Chart](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api) |
-| `unbind ID` | Take the binding back |
+| `cancel-invite ID` | Withdraw an invitation nobody redeemed: its link opens nothing from then on, and the address and the seat it held are free at once — for a new invitation, a create or a move. A redeemed one is refused naming the person it created — what undoes that is `remove`. See [A person arrives on their seat: invited, or created](../concepts/identity-and-access.md#a-person-arrives-on-their-seat-invited-or-created) |
+| `create` | Create somebody directly, active from the moment it lands. **A person** — `create -email E -seat SEAT [-login L] [-name N] [-grants G,...]` — needs the address they sign in with and the vacant human seat they will hold, and the command refuses either missing before it reads any config. `-login` may be left out: the node proposes one from the address (`jane.doe@example.com` → `jane.doe`), as an invitation's screen does, and the command prints the login it took. It prints their id, login and seat and the outcome, and then their **first password link, once** — `<api.external_url>/dashboard#/reset/<id>.<secret>`, good for a week — which sets their first password once and signs nobody in: they sign in afterwards, enrolling a second factor there where the deployment requires one. Send it to them yourself; this engine sends no mail. See [A person created directly gets their first password link](../concepts/identity-and-access.md#a-person-created-directly-gets-their-first-password-link). **A service account** — `create -kind machine -login L [-seat SEAT] [-name N] [-grants G,...]` — needs its login, because it has no address to be found by; `-seat` is optional and binds it to act as that human seat (`-login token:<id> -seat SEAT` binds a Tier A token in one step). It gets no link — it has no password — and the command prints the `iam token -person ID` that mints its token. **Every principal enrols with a login** in its kind's grammar — a person's is dotted (`jane.doe`), a machine's coloned (`ci:release`, or `token:<id>`), at most 64 characters either way — and anything else is refused |
+| `bind ID SEAT` | **Move a person to another vacant human seat**, or bind a service account to one, so they act as it on the engine's own surface — its inbox, its day, the lead relations it holds. `SEAT` is the seat's handle, and it must be a **human** seat that no person and no open invitation holds. A Tier A token acts under the login `token:<id>`, so binding one is a service account's row under that login — `create -kind machine -login token:<id> -seat SEAT` makes it bound. See [Humans in the Org Chart](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api) |
+| `unbind ID` | Take a **service account's** seat back. A person always holds a human seat, so the node refuses to unbind one (`seat_required`) and the command names what does free it: `bind ID SEAT` moves them to another seat, `remove ID` frees it |
 | `grant ID` | Change what somebody carries: `-grants` |
 | `suspend ID` / `activate ID` | Stop somebody acting, or let them again. The row stays either way; a suspension also ends every session, token and password reset link they hold, which activating does not bring back |
-| `remove ID` | Tombstone them and erase every sealed value of theirs — name, address, second factor — from every node's rows, the invitation and trail rows that outlive them included. The identity log keeps the records that wrote those values, sealed under the keyring, until the retention trim passes them, and a backup keeps what it held until you delete it; their login is not sealed and outlives the removal in the clear. See [Removing somebody erases what is theirs from every node's rows](../concepts/identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-nodes-rows) |
+| `remove ID` | Tombstone them — which frees the seat they held — and erase every sealed value of theirs — name, address, second factor — from every node's rows, the invitation and trail rows that outlive them included. The identity log keeps the records that wrote those values, sealed under the keyring, until the retention trim passes them, and a backup keeps what it held until you delete it; their login is not sealed and outlives the removal in the clear. See [Removing somebody erases what is theirs from every node's rows](../concepts/identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-nodes-rows) |
 | `revoke ID` | End every session, token and password reset link they hold, by bumping their revocation epoch |
 | `sessions ID` | Their sessions, newest first, ended ones included — each ended one with why and when: the sign-out or gesture that ended it — a password change, a reset link, signing out everywhere, a suspension — which a later gesture never rewrites; or, for one ended with every session in the company, that |
 | `credentials` | What somebody proves themselves with. `-person` names them; without it, yourself |
 | `token` | Mint a machine token, naming exactly one owner. **`-login L` mints your own**: a person's token is theirs alone to mint, so the command signs in as `L` for the one request — the password read from the terminal without echo, or the first line piped in, and a second-factor code — when your account holds one — asked for the same way, or piped as the line after it — mints from that session, and signs out, reading no `CREWLET_API_TOKEN`. **`-person ID` mints a service account's**, and takes `people:manage`; it is refused for a person's id, whoever asks. Either way the value is printed **once** and the estate holds a hash. It acts as that owner, carrying `-grants` (default: everything the owner holds a token may carry) cut to what they still hold on every request, for `-days` (90, at most 365). Never `secrets:read` or `people:manage`. See [Machine tokens](../concepts/identity-and-access.md#machine-tokens-a-persons-own-and-a-service-accounts) |
 | `revoke-credential ID` | Withdraw one credential, naming its owner with `-person`. Run with a machine token, it withdraws machine tokens only |
 | `reset-mfa ID` | Clear the second factor **and** end every session, because clearing alone leaves the ones opened with it live — and with them every token and password reset link they hold, so a link they need as well is issued after this |
-| `reset-password ID\|LOGIN` | Issue somebody a **one-time password reset link**, printed **once** — `<api.external_url>/dashboard#/reset/<id>.<secret>` — and good for a day; send it to them yourself, as an invitation's. The person is named by their id or by their login, resolved to the one row holding it exactly. Spending it sets a new password, ends every session and token they held, and signs nobody in: they sign in afterwards, where a second factor they hold still applies. Issuing another revokes the one before, and `suspend`, `revoke`, `reset-mfa` and `invalidate-all` each end it, so issue it after any of those it is needed beside; a machine, somebody suspended or retired, and somebody holding a grant you do not hold are refused — you are shown the link, so it is held to the rule an invitation is. Takes no `-idempotency-key`: a retry could not hand back a secret its first attempt never showed, so an unknown issue is issued again. A person changes their **own** password signed in, through `POST /auth/password`, which needs a person present — no token this command reads is one — so there is no command for it. See [A forgotten password is a one-time link from an administrator](../concepts/identity-and-access.md#a-forgotten-password-is-a-one-time-link-from-an-administrator) |
+| `reset-password ID\|LOGIN` | Issue somebody a **one-time password reset link**, printed **once** — `<api.external_url>/dashboard#/reset/<id>.<secret>` — and good for a day; send it to them yourself, as an invitation's. The person is named by their id or by their login, resolved to the one row holding it exactly. Spending it sets a new password, ends every session and token they held, and signs nobody in: they sign in afterwards, where a second factor they hold still applies. Issuing another revokes the one before — a created person's first password link included, so this is also how somebody whose first link lapsed or went astray gets a new one, and their screen then says it sets their first password — and `suspend`, `revoke`, `reset-mfa` and `invalidate-all` each end it, so issue it after any of those it is needed beside; a machine, somebody suspended or retired, and somebody holding a grant you do not hold are refused — you are shown the link, so it is held to the rule an invitation is. Takes no `-idempotency-key`: a retry could not hand back a secret its first attempt never showed, so an unknown issue is issued again. A person changes their **own** password signed in, through `POST /auth/password`, which needs a person present — no token this command reads is one — so there is no command for it. See [A forgotten password is a one-time link from an administrator](../concepts/identity-and-access.md#a-forgotten-password-is-a-one-time-link-from-an-administrator) |
 | `invalidate-all` | Invalidate every session, every machine token and every password reset link in the company. The restore runbook's last step — it ends bearers and nothing else, so a removal, a suspension, a withdrawn credential or a reduced grant the restore rolled back is re-applied by hand before it, and a reset link the restore calls for is issued after it ([Backups & Restore](../guides/backup.md#the-last-step-is-crewlet-iam-invalidate-all)) — and the token takes `fleet:operate` **and** `people:manage`; the Tier A tokens in the config file are untouched |
-| `check` | What is wrong with this company's access: no administrator, people with no credential, dangling bindings (a seat the running company no longer holds as a human seat), grants this node's ceiling clamps. A binding a node that runs no company yet cannot judge is counted and said first rather than reported either way. See [below](#crewlet-iam-check) |
+| `check` | What is wrong with this company's access: no administrator, people with no way in, a person holding no seat, dangling bindings (a seat the running company no longer holds as a human seat), grants this node's ceiling clamps. A binding a node that runs no company yet cannot judge is counted and said first rather than reported either way. See [below](#crewlet-iam-check) |
 | `audit` | The identity estate's own trail. `-person`, `-event`, `-since POSITION`, `-at TIME`, `-before POSITION` (the next page, as the listing's last line spells it), `-limit`. The actor column names the credential beside them where the entry records one — `ana.admin (through pat:…)` for something their machine token did |
 
 ### Flags
@@ -440,7 +447,10 @@ variable at all.
 | `-reason TEXT` | the surface's own | Recorded on the change, and read by whoever audits it |
 | `-grants G,...` | leave alone | A comma-separated grant list, or the word `none` for an empty one. On `token`, what the token carries |
 | `-person ID` | yourself | Whose credentials or sessions, and — on `token` — the **service account** a minted token is for; a person's id is refused there, whoever asks |
-| `-login L` | — | On `create`, the login to enrol under. On `token`, **your own** login: the command signs in as you for the one request, mints, and signs out. The password and any second-factor code are read from the terminal or piped in, and **no flag takes either**: a recovery code on a command line lands in shell history and `ps`, and stays good there — a sign-in refused for a mistyped password spends nothing |
+| `-login L` | — | On `create`, the login to enrol under — required for a service account, and proposed from the address for a person given none. On `token`, **your own** login: the command signs in as you for the one request, mints, and signs out. The password and any second-factor code are read from the terminal or piped in, and **no flag takes either**: a recovery code on a command line lands in shell history and `ps`, and stays good there — a sign-in refused for a mistyped password spends nothing |
+| `-email E` | — | On `create`, the address a person signs in with — required for a person, optional for a service account |
+| `-name N` | — | On `create`, their own name |
+| `-kind K` | `person` | On `create`, `person` or `machine` (a service account) |
 | `-label L` | — | What to call a minted token, for somebody holding four |
 | `-days N` | 90 | How long a minted token lasts, at most 365 — "forever" is deliberately unexpressible |
 | `-q TERM` | — | Narrow the directory on a login or a seat |
@@ -449,48 +459,70 @@ variable at all.
 | `-limit N` | 50 (100 for the trail) | How many rows |
 | `-after ID` / `-before POSITION` | the first page | Where the next page starts: `-after` on `people` and `invitations`, `-before` on `audit` — each listing ends with the command for its next page, which repeats every filter the page was asked with |
 | `-all` | open ones only | On `invitations` only: the expired and redeemed invitations too. Refused on every other command rather than ignored |
-| `-seat SEAT` | — | On `invite` only: the chart seat redeeming the link binds the person to. Refused on every other command rather than ignored — somebody who already exists is bound with `bind` |
+| `-seat SEAT` | — | On `invite` and `create`: the human seat they will hold, by its handle — one nobody holds and no open invitation is for, which `seats -unheld` lists. **Required** on `invite` and on a person's `create`, optional on a service account's. Refused on every other command rather than ignored — somebody who already exists is moved with `bind` |
+| `-unheld` | every seat | On `seats` only: the vacant ones. Refused on every other command rather than ignored |
 | `-idempotency-key OP` | a new operation | Retry a write whose outcome was unknown **as the same operation** — the op id its refusal named. Refused on a read, on `token` and on `reset-password` (a retry of either would hand back a record whose value was shown to nobody, so an unknown mint or issue is made again) |
 
 **`-grants none` strips and an omitted `-grants` leaves alone.** They are
 opposite intentions and an empty flag value cannot carry both, so the word is
 explicit — and it is the one spelling that could never be a grant.
 
-**A value shown once is shown once.** `invite` and `token` print something
-nothing can read back: what the estate holds is the invitation's id and a
-SHA-256 of the secret its link carries after the id, and a SHA-256 of the
-token. Lost one is re-issued rather than recovered.
+**A value shown once is shown once.** `invite`, a person's `create`,
+`reset-password` and `token` each print something nothing can read back: what
+the estate holds is the invitation's id and a SHA-256 of the secret its link
+carries after the id, the same for a first password link and a reset link, and
+a SHA-256 of the token. Lost one is re-issued rather than recovered — an
+invitation cancelled and issued again, a first password link replaced by
+`reset-password` — with one exception: an `invite` or a `create` retried with
+`-idempotency-key <op id>` is the same operation, and hands back the very link
+its first attempt issued while that link still opens, because both are derived
+from the operation under the company's own key. A first password link that no
+longer opens by then is not printed: the command says so and names the
+`reset-password` that issues another.
 
 **Every write prints its outcome rather than "done".** `applied` means this
 node has the change; `pending` means it is durable and this node has not
 applied it yet, and carries the position to read at — each with the op id it
-was published under. `unknown` means nothing can be established from here, and
-it fails naming the op id and the one safe retry: the **same** command with
-`-idempotency-key <op id>`. A fresh attempt would be a second operation — for
-`create` and `invite` a second person or a second invitation, refused as a
-conflict by the address the first may already hold. `token` is the exception,
-because its route reads no key: an unknown mint names its op id for the trail
-and is run again as a new mint, and the one that may have landed is a token
-nobody holds, which expires.
+was published under. A link is printed on `pending` too: the record is durable,
+and the link opens on every node that has applied it. `unknown` means nothing
+can be established from here, and it fails naming the op id and the one safe
+retry: the **same** command with `-idempotency-key <op id>`. A fresh attempt
+would be a second operation — for `create` and `invite` a second person or a
+second invitation, which the first attempt's person or invitation refuses as a
+conflict, since it holds the address and the seat. `token` and
+`reset-password` are the exceptions, because their routes read no key: an
+unknown mint or issue names its op id for the trail and is run again as a new
+one — a token that may have landed is one nobody holds, which expires, and a
+reset link issued again revokes the one before it.
 
 **An edit refused partway says what landed.** `bind`, `suspend` and the rest
 are one `PATCH`, which moves the login and the seat in one record before the
-stage and the grants; a login or a seat somebody else holds refuses that first
-record with nothing changed, everything else the node can judge is refused
-before it, and what only a later record can decide fails listing the changes
-that did land before it.
+stage and the grants; a login or a seat somebody else holds — or an open
+invitation holds — refuses that first record with nothing changed, everything
+else the node can judge is refused before it, and what only a later record can
+decide fails listing the changes that did land before it.
+
+**A refusal names the command that clears it.** A seat or an address an open
+invitation holds is refused naming the invitation, and the command adds the
+`cancel-invite ID` that withdraws it. A person's seat left out is
+`seat_required`, and the command adds what to do: for `invite` or `create`,
+`-seat` with a seat `seats -unheld` lists; for `unbind` on a person, `bind ID
+SEAT` to move them or `remove ID` to free the seat.
 
 ### `crewlet iam check`
 
 One walk of the directory as the node you reach holds it, printed as a
-`FINDING`, a `WHO` and a sentence saying what to do. It reports and never
-repairs: each finding is somebody's decision.
+`FINDING`, a `WHO` and the node's sentence saying what to do, in the order of
+the table below. It reports and never repairs: each finding is somebody's
+decision. A seat binding the node could not judge — it runs no company yet —
+is counted and said first, because it qualifies everything below it.
 
 | Finding | What it means | What to do |
 |---|---|---|
-| `no_people_manage_holder` | No active person holding a credential carries `people:manage`, so nobody can invite, grant or revoke except through a Tier A token | Grant it to somebody, with a token |
-| `person_without_credential` | Somebody active who cannot sign in: an invitation never redeemed, an enrolment nobody finished | Re-invite them, or remove them |
-| `binding_dangling` | Somebody bound to a seat the org chart no longer holds | `unbind`, or `bind` them elsewhere |
+| `no_people_manage_holder` | No active person holding a credential they have **used** — a password, a second factor, a token — carries `people:manage`, so nobody can invite, grant or revoke except through a Tier A token. A first password link nobody has spent does not count | Grant it to somebody, with a token |
+| `person_without_credential` | Somebody active with no live way in: a person whose first password link lapsed unspent or was revoked, or whose every credential has been; a service account holding no live token. A live link counts, so somebody created a minute ago is not reported until theirs lapses — and an invitation creates nobody until it is redeemed, so it is never the cause | A person: `reset-password ID`. A service account: `token -person ID`. Or `remove` them |
+| `person_without_seat` | A person who holds no seat: one recorded before every person held a human seat, which nothing this build writes produces. They act under their bare login, in no unit and led by nobody. Reported at every stage, and never for a service account, whose seat is optional | `bind ID SEAT` onto a vacant human seat (`seats -unheld` lists them), or `remove` them |
+| `binding_dangling` | Somebody bound to a seat the org chart no longer holds as a human seat — removed, or made an agent's | A person: `bind` them to another human seat, or `remove` them. A service account: `unbind` it, or `bind` it elsewhere |
 | `grant_clamped_by_ceiling` | A grant somebody's row declares and this node's `api.auth.max_grants` withholds | Legal while a fleet rolls out a ceiling change; otherwise align the row and the ceiling |
 
 A login, an address or a seat two people hold is not a finding: every one is
@@ -500,8 +532,8 @@ holding one. A lookup or a seat listing that meets them answers `503` rather
 than picking either; a sign-in is refused like any failed sign-in and the node
 logs `api_sign_in_lookup_failed`. A duplicated login or seat is repaired by
 changing it on all but one of them — a login through `PATCH /iam/people/{id}`,
-a seat with `bind` or `unbind` — and a duplicated address, which no gesture
-changes, with `remove` on the extra person.
+a seat with `bind` (or, for a service account, `unbind`) — and a duplicated
+address, which no gesture changes, with `remove` on the extra person.
 
 ## `crewlet secrets`
 

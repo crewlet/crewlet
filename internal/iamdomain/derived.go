@@ -28,6 +28,11 @@ import (
 // bits are a digest of the key under a label of its own, so a derivation can
 // never meet a minted id except by the collision a uuid7's 74 random bits
 // already rule out.
+//
+// AND A CREATED PERSON'S FIRST PASSWORD LINK IS DERIVED FROM THE PERSON
+// ([Blinder.PasswordLinkID], [Blinder.PasswordLinkSecret]), so the same key
+// names the same link too: the retry the ledger answers hands back the link
+// its first attempt issued rather than one whose verifier was never recorded.
 
 // CreatedPersonID is the person an administrator's create names, derived from
 // the OPERATION KEY the create is published under.

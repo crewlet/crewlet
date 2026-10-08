@@ -140,11 +140,18 @@ func (a *Applier) applySweep(ctx context.Context, tx *sql.Tx, at applyContext) (
 					WHERE bucket = ? AND ended_at = 0
 					  AND absolute_expires_at > 0 AND absolute_expires_at < ?
 					LIMIT ?)`},
+			// AN INVITATION WITH NO EXPIRY IS COLLECTED like one that
+			// aged out, because every reader reads it as aged out
+			// ([InvitationRow.Spent], [openInvitation]): kept, it was the
+			// one row every reader calls dead whose sealed address stayed
+			// in every node's estate for good. No writer of any build has
+			// formed one — the issue refuses it — so this moves no row a
+			// node on another build holds, and two builds sweep the same
+			// rows.
 			{"invitations", `
 				DELETE FROM iam_invites WHERE rowid IN (
 					SELECT rowid FROM iam_invites
-					WHERE bucket = ? AND redeemed_at = 0
-					  AND expires_at > 0 AND expires_at < ?
+					WHERE bucket = ? AND redeemed_at = 0 AND expires_at < ?
 					LIMIT ?)`},
 			// WHAT WAS SPENT, and not only what lapsed: a redeemed
 			// invitation is as unpresentable as an expired one, and kept

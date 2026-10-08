@@ -39,7 +39,7 @@ func TestAnEnrolmentHoldsALoginToItsHoldersKind(t *testing.T) {
 		{"a person's login past the bound", iam.KindPerson,
 			strings.Repeat("d", iam.MaxLogin-3) + ".sre", "dana@example.com"},
 	} {
-		_, err := rig.writer.Enrol(rig.t.Context(), iamdomain.Enrolment{
+		_, err := rig.writer.Create(rig.t.Context(), iamdomain.Creation{
 			PersonID: "018f3a9c-0000-7000-8000-00000000010" + string(rune('a'+i)),
 			Kind:     tc.kind, Stage: iam.StageActive,
 			Name: "Somebody", Email: tc.email, Login: tc.login,
@@ -62,7 +62,7 @@ func TestAnEnrolmentHoldsALoginToItsHoldersKind(t *testing.T) {
 	// the chart's and the engine is the node, and neither has a login
 	// grammar to hold one to.
 	for _, kind := range []iam.Kind{iam.KindSeat, iam.KindEngine} {
-		_, err := rig.writer.Enrol(rig.t.Context(), iamdomain.Enrolment{
+		_, err := rig.writer.Create(rig.t.Context(), iamdomain.Creation{
 			PersonID: "018f3a9c-0000-7000-8000-0000000002ff",
 			Kind:     kind, Stage: iam.StageActive,
 			Name: "Somebody", Email: "somebody@example.com",
@@ -77,7 +77,7 @@ func TestAnEnrolmentHoldsALoginToItsHoldersKind(t *testing.T) {
 	// THE CONTROLS: each kind takes its own grammar, including the name the
 	// rule is about — a MACHINE holding `token:ops` is exactly how an
 	// operator binds that token to a seat.
-	if err := rig.enrol(iamdomain.Enrolment{
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: "018f3a9c-0000-7000-8000-0000000003a1",
 		Kind:     iam.KindMachine, Stage: iam.StageActive,
 		Name: "The ops credential", Login: "token:ops",
@@ -85,11 +85,12 @@ func TestAnEnrolmentHoldsALoginToItsHoldersKind(t *testing.T) {
 	}); err != nil {
 		t.Errorf("a machine could not take token:ops: %v", err)
 	}
-	if err := rig.enrol(iamdomain.Enrolment{
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: "018f3a9c-0000-7000-8000-0000000003a2",
 		Kind:     iam.KindPerson, Stage: iam.StageActive,
 		Name: "Sarah Chen", Email: "sarah.chen@example.com",
-		Login: "sarah.chen", OpID: "op-person", Reason: "a hire",
+		Login: "sarah.chen", Seat: rig.vacantSeat("sarah-chen"),
+		LinkExpiresAt: firstLinkExpiry, OpID: "op-person", Reason: "a hire",
 	}); err != nil {
 		t.Errorf("a person could not take sarah.chen: %v", err)
 	}
@@ -97,8 +98,9 @@ func TestAnEnrolmentHoldsALoginToItsHoldersKind(t *testing.T) {
 
 // EVERY PERSON ENROLS WITH A LOGIN, although their address already finds them.
 //
-// A login is the name a principal acts and is written under while they hold
-// no seat. A person enrolled by address alone was recorded as `anonymous`
+// A login is the name a person signs in and is shown under, on every row of
+// the directory and beside every change the trail records of their sign-ins
+// and credentials. A person enrolled by address alone was recorded as `anonymous`
 // beside every change they made — iam.ActorFor had no name to write — and
 // failed iam.Principal.Validate on every request they sent, so the directory
 // admitted a person the rest of the engine could not name. Refused before the
@@ -106,7 +108,7 @@ func TestAnEnrolmentHoldsALoginToItsHoldersKind(t *testing.T) {
 func TestEveryPersonEnrolsWithALogin(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
-	_, err := rig.writer.Enrol(rig.t.Context(), iamdomain.Enrolment{
+	_, err := rig.writer.Create(rig.t.Context(), iamdomain.Creation{
 		PersonID: "018f3a9c-0000-7000-8000-0000000005a1",
 		Kind:     iam.KindPerson, Stage: iam.StageActive,
 		Name: "Dana Sre", Email: "dana@example.com",
@@ -122,11 +124,12 @@ func TestEveryPersonEnrolsWithALogin(t *testing.T) {
 		t.Errorf("a refused enrolment left rows %v holding the address", got)
 	}
 	// THE CONTROL: the same person with a login lands, and the name the
-	// directory holds is the one every unbound change is written under.
-	if err := rig.enrol(iamdomain.Enrolment{
+	// directory holds is the one they sign in under.
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: "018f3a9c-0000-7000-8000-0000000005a2",
 		Kind:     iam.KindPerson, Stage: iam.StageActive,
 		Name: "Dana Sre", Email: "dana@example.com", Login: "dana.sre",
+		Seat: rig.vacantSeat("dana-sre"), LinkExpiresAt: firstLinkExpiry,
 		OpID: "op-login", Reason: "a hire",
 	}); err != nil {
 		t.Fatalf("a person with a login was refused: %v", err)
@@ -151,14 +154,15 @@ func TestARenameHoldsALoginToItsHoldersKind(t *testing.T) {
 	rig := newWriteRig(t)
 	const person, machine = "018f3a9c-0000-7000-8000-0000000004a1",
 		"018f3a9c-0000-7000-8000-0000000004a2"
-	if err := rig.enrol(iamdomain.Enrolment{
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: "Sarah Chen", Email: "sarah.chen@example.com",
-		Login: "sarah.chen", OpID: "op-person",
+		Login: "sarah.chen", Seat: rig.vacantSeat("sarah-chen"),
+		LinkExpiresAt: firstLinkExpiry, OpID: "op-person",
 	}); err != nil {
 		t.Fatalf("enrol the person: %v", err)
 	}
-	if err := rig.enrol(iamdomain.Enrolment{
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: machine, Kind: iam.KindMachine, Stage: iam.StageActive,
 		Name: "Release pipeline", Login: "svc:ci", OpID: "op-machine",
 	}); err != nil {

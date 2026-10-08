@@ -12,8 +12,9 @@ import (
 //
 // # The gap it closes
 //
-// A Tier A token acts under its own login, `token:<id>`, and a directory row
-// holding that login is what binds it to a seat. The two are written in two
+// A Tier A token acts under its own login, `token:<id>`, and a service
+// account's directory row holding that login is what binds it to a seat — a
+// HUMAN seat, as every binding names one. The two are written in two
 // places by two people — the label in a node's Tier A file, the row through
 // this surface — so a label somebody mistyped on one of them names a login
 // nobody holds, and the token goes on working as itself, unbound, while its

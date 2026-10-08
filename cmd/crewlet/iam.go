@@ -19,9 +19,11 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -51,18 +53,30 @@ Usage:
   crewlet iam people [-q TERM] [-stage S] [-limit N] [-after ID]
                                                        The directory
   crewlet iam show ID                                  One person, in full
-  crewlet iam invite EMAIL [-grants G,...] [-seat SEAT]
-                                                       Issue a link, shown ONCE
+  crewlet iam seats [-unheld]                          The human seats, who holds each,
+                                                       and any open invitation for one
+  crewlet iam invite EMAIL -seat SEAT [-grants G,...]
+                                                       Invite somebody onto a vacant human
+                                                       seat; the link is shown ONCE
   crewlet iam invitations [-all] [-limit N] [-after ID]
                                                        The open invitations; -all
                                                        adds the expired and redeemed
   crewlet iam cancel-invite ID                         Withdraw an invitation: its link
-                                                       opens nothing, its address is free
+                                                       opens nothing, its address and
+                                                       its seat are free
   crewlet iam reset-password ID|LOGIN                  Issue a one-time password reset
                                                        link, shown ONCE, good for a day
-  crewlet iam create -login L [-email E] [-kind K]     Create somebody directly
-  crewlet iam bind ID SEAT                             Bind a person to a chart seat
-  crewlet iam unbind ID                                Take the binding back
+  crewlet iam create -email E -seat SEAT [-login L] [-name N] [-grants G,...]
+                                                       Create a person on a vacant human
+                                                       seat; their first password link
+                                                       is shown ONCE
+  crewlet iam create -kind machine -login L [-seat SEAT] [-name N] [-grants G,...]
+                                                       Create a service account
+  crewlet iam bind ID SEAT                             Move a person to another vacant
+                                                       human seat, or bind a service
+                                                       account to one
+  crewlet iam unbind ID                                Take a SERVICE ACCOUNT's seat
+                                                       back; a person always holds one
   crewlet iam grant ID -grants G,...                   Change what somebody carries
   crewlet iam suspend ID                               Stop them acting and end their
                                                        sessions, tokens and reset link;
@@ -91,16 +105,34 @@ Flags:
   -reason TEXT   Recorded on the change, and read by whoever audits it
   -idempotency-key OP
                  Retry a write whose outcome was unknown, as the SAME operation
-  -seat SEAT     On invite: the chart seat redeeming the link binds them to — a
-                 human seat nobody holds
+  -seat SEAT     On invite and create: the human seat they will hold — one
+                 nobody holds and no open invitation is for, which "iam seats
+                 -unheld" lists. Required on invite and on a person's create;
+                 optional on a service account's
+  -unheld        On seats: only the seats nobody holds and no open invitation
+                 is for
 
 Every write prints its outcome: "applied" means this node has the change,
 "pending" that it is durable and this node has not applied it yet. A write
 nothing could establish fails naming its op id; run the same command again
 with -idempotency-key <op id> — a fresh attempt would be a second operation,
-and for create and invite a second person or invitation. Where the node says
-it cannot vouch for the operation, run it through another node with -api:
-asked again, that node answers the same way until the change reaches it.
+and for create and invite one the first attempt's person or invitation refuses,
+since it holds the address and the seat. Where the node says it cannot vouch
+for the operation, run it through another node with -api: asked again, that
+node answers the same way until the change reaches it.
+
+A person holds a human seat for as long as they are here: they are invited or
+created onto one nobody holds, "iam bind" moves them to another, and "iam
+remove" frees it. "iam unbind" is for service accounts, which may hold one or
+none.
+
+A person made by "iam create" arrives with a FIRST PASSWORD LINK, printed once,
+good for a week: it sets their first password once, through the screen a reset
+link opens, and signs nobody in — they sign in afterwards, enrolling a second
+factor there where the deployment requires one. A create retried with
+-idempotency-key <op id> hands back the SAME link, since it is derived from the
+operation; one that no longer opens is replaced with "iam reset-password". A
+grant added to them before they use it ends it, as it ends a reset link.
 
 Export CREWLET_API_TOKEN to authenticate. Every /iam route is guarded, reads
 included: a map of who can reach a company is worth as much as the grants.
@@ -181,9 +213,12 @@ func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	key := fs.String("idempotency-key", "",
 		"retry a write whose outcome was unknown: the op id its answer named")
 	seat := fs.String("seat", "",
-		"the chart seat an invitation binds the person it creates to (invite only)")
+		"the human seat an invitation or a create binds (required on invite "+
+			"and for a person's create)")
 	all := fs.Bool("all", false,
 		"list the expired and redeemed invitations too (invitations only)")
+	unheld := fs.Bool("unheld", false,
+		"only the seats nobody holds and no open invitation is for (seats only)")
 	if err := fs.Parse(rest); err != nil {
 		return err
 	}
@@ -210,13 +245,13 @@ func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			return fmt.Errorf("-idempotency-key: %w", err)
 		}
 	}
-	// -seat IS invite's, and refused anywhere else rather than ignored:
-	// `iam create -seat lead` read as accepted would leave somebody
-	// created and bound to nothing, which is the one outcome the flag was
-	// typed to prevent. A person who already exists is bound with `bind`.
-	if strings.TrimSpace(*seat) != "" && sub != "invite" {
-		return fmt.Errorf("-seat is invite's: it names the seat an "+
-			"invitation binds — bind somebody who already exists with "+
+	// -seat IS invite's AND create's — the seat somebody new takes — and
+	// refused anywhere else rather than ignored: `iam grant ID -seat lead`
+	// read as accepted would say a seat was taken that nothing sent. Somebody
+	// who already exists is moved with `bind`.
+	if strings.TrimSpace(*seat) != "" && sub != "invite" && sub != "create" {
+		return fmt.Errorf("-seat is invite's and create's: it names the seat "+
+			"somebody new takes — move somebody who already exists with "+
 			"`crewlet iam bind ID SEAT`, not with `iam %s -seat`", sub)
 	}
 	// -all IS invitations', refused elsewhere for -seat's reason: `iam
@@ -225,15 +260,20 @@ func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return fmt.Errorf("-all is invitations': it adds the expired and "+
 			"redeemed ones — `iam %s` takes no -all", sub)
 	}
-	// A CREATE NAMES ITS LOGIN, and is told so here rather than by the
-	// node: every principal enrols with one — it is the name their changes
-	// are recorded under while they hold no seat — and an operator who left
-	// the flag off needs that sentence, not a config file it was about to
-	// read or a round trip to a 400.
-	if sub == "create" && strings.TrimSpace(*login) == "" {
-		return errors.New("name the login to create them under: -login " +
-			"jane.doe for a person, -login ci:release (or token:<id>) for a " +
-			"machine — every principal enrols with one")
+	// -unheld IS seats', for the same reason: `iam people -unheld` read as
+	// accepted would say nobody listed holds a seat.
+	if *unheld && sub != "seats" {
+		return fmt.Errorf("-unheld is seats': it leaves out every seat "+
+			"somebody holds or an open invitation is for — `iam %s` takes "+
+			"no -unheld", sub)
+	}
+	// WHAT A NEW PERSON OR SERVICE ACCOUNT HAS TO BE GIVEN, told here
+	// rather than by the node, before a config file is read or a request
+	// is sent — the node refuses each the same way, and an operator who
+	// left a flag off needs the sentence naming it rather than a round
+	// trip to a 400. See [iamNewcomer].
+	if err := iamNewcomer(sub, *kind, *email, *login, *seat); err != nil {
+		return err
 	}
 	// A TOKEN HAS AN OWNER, and which kind decides who may mint it: a
 	// person mints their own, signed in (-login), and a service account's
@@ -291,6 +331,28 @@ func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		body["seat"] = strings.TrimSpace(*seat)
 		body["reason"] = *reason
 		return out.invite(client.post(ctx, "/iam/invitations", body))
+	case "seats":
+		query := url.Values{}
+		if *unheld {
+			query.Set("unheld", "true")
+		}
+		answer, err := client.get(ctx, "/iam/seats", query)
+		// AN EMPTY VACANCY LIST HAS TWO CAUSES with opposite remedies — a
+		// company declaring no human seat, and one whose every seat is
+		// held or invited — and `?unheld=true` answers `[]` for both, so
+		// the whole listing is asked once to tell them apart. Never under
+		// -json, which prints the node's answer as it gave it.
+		declared := seatsUncounted
+		var counting error
+		if err == nil && *unheld && !out.raw && len(seatRows(answer)) == 0 {
+			every, everyErr := client.get(ctx, "/iam/seats", nil)
+			if everyErr != nil {
+				counting = everyErr
+			} else {
+				declared = len(seatRows(every))
+			}
+		}
+		return out.seats(query, answer, declared, counting, err)
 	case "invitations":
 		query := url.Values{}
 		setIf(query, "after", *after)
@@ -313,15 +375,26 @@ func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return out.reset(client.post(ctx,
 			"/iam/people/"+person+"/password-reset", nil))
 	case "create":
+		// A PERSON'S LOGIN MAY BE LEFT OUT: the node proposes one from
+		// the address, the proposal an invitation's screen offers its
+		// redeemer, and the answer names the login it took.
 		body := iamGrantsBody(*grants)
 		body["login"], body["email"] = *login, *email
 		body["name"], body["kind"] = *name, *kind
+		body["seat"] = strings.TrimSpace(*seat)
 		body["reason"] = *reason
-		return out.written(client.post(ctx, "/iam/people", body))
+		return out.created(client.post(ctx, "/iam/people", body))
 	case "bind":
+		// TRIMMED, as an invitation's and a create's seat is: a handle
+		// typed with a stray space was a seat the company does not have.
 		return out.written(client.patch(ctx, "/iam/people/"+subject,
-			map[string]any{"seat": second, "reason": *reason}))
+			map[string]any{"seat": strings.TrimSpace(second), "reason": *reason}))
 	case "unbind":
+		// A SERVICE ACCOUNT'S, and the node is what says so: the rule is
+		// the directory's, decided in the record's own snapshot, so a
+		// person is refused `seat_required` there and this command
+		// renders the remedy ([iamRefusal]) rather than restating the
+		// rule over a read of its own.
 		return out.written(client.patch(ctx, "/iam/people/"+subject,
 			map[string]any{"seat": "", "reason": *reason}))
 	case "grant":
@@ -417,6 +490,57 @@ var iamSubjects = subjectTable{
 	"reset-password":    {"a person id or login"},
 }
 
+// iamNewcomer is what `invite` and `create` must be told before anything is
+// sent: the seat a person will hold, the address that finds them, and the
+// login a service account is found by.
+//
+// A PERSON HOLDS A HUMAN SEAT for as long as they are here (ADR-0026), so an
+// invitation and a person's create each name one; a SERVICE ACCOUNT's is
+// optional, bound only to act as it. A person's login may be left out — the
+// node proposes it from their address — and a service account's may not,
+// since it has no address to propose from.
+//
+// THE KIND IS THE FLAG'S, never guessed from the login's shape: the node reads
+// a blank kind as a person, and so does this. A kind this command does not
+// name is the node's to refuse, in its own words.
+func iamNewcomer(sub, kind, email, login, seat string) error {
+	seatless := strings.TrimSpace(seat) == ""
+	switch sub {
+	case "invite":
+		if seatless {
+			return errors.New("name the seat the invitation is for: -seat " +
+				"<handle>, a human seat nobody holds and no open invitation " +
+				"is for (`crewlet iam seats -unheld` lists them) — a person " +
+				"always holds a seat, so nobody is invited onto none")
+		}
+	case "create":
+		switch iam.Kind(strings.TrimSpace(kind)) {
+		case iam.KindMachine:
+			if strings.TrimSpace(login) == "" {
+				return errors.New("name the login to create the service " +
+					"account under: -login ci:release (or token:<id> for a " +
+					"Tier A token) — it has no address to be found by, so " +
+					"its login is how it is found and the name its changes " +
+					"are recorded under")
+			}
+		case "", iam.KindPerson:
+			if strings.TrimSpace(email) == "" {
+				return errors.New("name the address to create them under: " +
+					"-email jane@example.com — a person is found by it, and " +
+					"their login is proposed from it unless -login names one")
+			}
+			if seatless {
+				return errors.New("name the seat to create them on: -seat " +
+					"<handle>, a human seat nobody holds and no open " +
+					"invitation is for (`crewlet iam seats -unheld` lists " +
+					"them) — a person always holds one; a service account " +
+					"(-kind machine) may be created without one")
+			}
+		}
+	}
+	return nil
+}
+
 // iamKeyed is every subcommand whose route reads an Idempotency-Key: each a
 // write, and each one whose `unknown` answer prescribes the SAME operation
 // again — which a command that could not send the key could never perform, so
@@ -424,7 +548,10 @@ var iamSubjects = subjectTable{
 //
 // TWO WRITES ARE MISSING, deliberately, and [iamUnkeyed] says why to whoever
 // asks: a mint and a reset link each answer a value only their first attempt
-// could show.
+// could show. A CREATE IS NOT ONE OF THEM although a person's answers a link
+// too: its first password link is DERIVED from the operation under the
+// company's key, so its retry hands back the link its first attempt issued —
+// which a reset link's random secret could never be.
 var iamKeyed = map[string]bool{
 	"invite": true, "create": true, "bind": true, "unbind": true,
 	"grant": true, "suspend": true, "activate": true, "remove": true,
@@ -745,6 +872,7 @@ func iamRefusal(status int, answer map[string]any, raw []byte, keyed bool) error
 	if hint := str(answer["hint"]); hint != "" {
 		said += "\n" + hint
 	}
+	said += iamRemedy(code, answer)
 	if op := str(answer["op_id"]); op != "" {
 		switch unvouched, _ := answer["unvouched"].(bool); {
 		case status != http.StatusServiceUnavailable, !keyed:
@@ -769,6 +897,38 @@ func iamRefusal(status int, answer map[string]any, raw []byte, keyed bool) error
 		}
 	}
 	return errors.New(said)
+}
+
+// iamRemedy is the command that clears a refusal, spelled for this CLI, where
+// the answer says which — keyed on the ANSWER and never on the subcommand,
+// which says what was asked rather than what refused it. The node's own
+// sentence names a route, which an operator at a terminal does not hold.
+//
+//   - AN OPEN INVITATION HOLDS what was asked for — an address or a seat,
+//     named on the 409 as `invitation` — and cancelling it frees both.
+//   - A PERSON'S SEAT LEFT OUT, `seat_required`, is one of two gestures, told
+//     apart by whether the answer names somebody who exists (`id`): a person
+//     being unbound, whom a move or a removal frees the seat from — `unbind`
+//     is a service account's — or an invitation or a create that named no
+//     seat.
+func iamRemedy(code string, answer map[string]any) string {
+	var out string
+	if inv := str(answer["invitation"]); inv != "" {
+		out += "\nheld by open invitation " + inv + " — `crewlet iam " +
+			"cancel-invite " + inv + "` withdraws it"
+	}
+	if code == string(httpjson.CodeSeatRequired) {
+		if id := str(answer["id"]); id != "" {
+			out += "\na person always holds a seat: `crewlet iam bind " + id +
+				" SEAT` moves them to another human seat and `crewlet iam " +
+				"remove " + id + "` frees it — `iam unbind` is for service " +
+				"accounts"
+		} else {
+			out += "\nname it with -seat <handle>: `crewlet iam seats " +
+				"-unheld` lists the human seats nobody holds"
+		}
+	}
+	return out
 }
 
 // --- printing ------------------------------------------------------------ //
@@ -1066,6 +1226,115 @@ func (p *iamPrinter) invitations(asked url.Values, answer map[string]any,
 	return nil
 }
 
+// seatsUncounted is the count [iamPrinter.seats] is handed where nobody asked
+// how many human seats the company declares — every listing but an empty
+// `-unheld` one.
+const seatsUncounted = -1
+
+// seatRows is the rows a seat listing answered.
+func seatRows(answer map[string]any) []any {
+	rows, _ := answer["seats"].([]any)
+	return rows
+}
+
+// seats prints the human seats and what holds each — a holder, an open
+// invitation, or neither — and never a link, which the answer does not carry.
+//
+// AN EMPTY LISTING IS SAID, in the words of what makes it empty: a company
+// declaring no human seat can admit nobody until it declares one, while a
+// company whose every seat is held or invited needs a seat added or freed —
+// and a bare header would leave an operator about to invite somebody unable
+// to tell the two apart. An empty `-unheld` listing is one of either, so it is
+// told apart by `declared`, the number of human seats the whole listing held
+// (`counting` is why it could not be read). Its remedy names the commands that
+// FREE a seat — a removal for a person, an unbind for a service account, a
+// cancellation for an invitation — and not `bind`, which MOVES somebody onto
+// a vacant seat and so needs the very vacancy the listing says is not there.
+func (p *iamPrinter) seats(asked url.Values, answer map[string]any,
+	declared int, counting, err error) error {
+	if err != nil {
+		return err
+	}
+	if p.raw {
+		return p.dump(answer)
+	}
+	rows := seatRows(answer)
+	if len(rows) == 0 {
+		unheld := asked.Get("unheld") == "true"
+		switch {
+		case unheld && counting != nil:
+			fmt.Fprintf(p.w, "no human seat is vacant, and the node could not "+
+				"list every seat to say whether the company declares any: "+
+				"%v — `crewlet iam seats` lists them\n", counting)
+			return nil
+		case unheld && declared > 0:
+			seats := "seat is"
+			if declared != 1 {
+				seats = "seats are"
+			}
+			fmt.Fprintf(p.w, "no human seat is vacant: the company's %d human "+
+				"%s each held or an open invitation is for it — free one "+
+				"(`crewlet iam remove ID` removes a person, `crewlet iam "+
+				"unbind ID` unbinds a service account, `crewlet iam "+
+				"cancel-invite ID` withdraws an invitation) or add a `kind: "+
+				"human` seat to the company\n", declared, seats)
+			return nil
+		}
+		fmt.Fprintln(p.w, "the company declares no human seat, so nobody can "+
+			"be invited or created: a person always holds one — add a "+
+			"`kind: human` seat (Agents › Edit org, or `crewlet config "+
+			"import FILE`) for each person first")
+		return nil
+	}
+	tw := tabwriter.NewWriter(p.w, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "HANDLE\tNAME\tUNIT\tHOLDER\tSTAGE\tINVITATION\tEXPIRES")
+	for _, raw := range rows {
+		row, _ := raw.(map[string]any)
+		holder, _ := row["holder"].(map[string]any)
+		invitation, _ := row["invitation"].(map[string]any)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			str(row["handle"]), dash(str(row["name"])), dash(str(row["unit"])),
+			dash(seatHolder(holder)), dash(str(holder["stage"])),
+			dash(seatInvitation(invitation)),
+			dash(stamp(invitation["expires_at"])))
+	}
+	return tw.Flush()
+}
+
+// seatHolder is the HOLDER column: whoever the directory binds to the seat, by
+// their login where they have one, and a service account said to be one —
+// because the two free a seat differently, a person by a move or a removal and
+// a service account by an unbind.
+func seatHolder(holder map[string]any) string {
+	if holder == nil {
+		return ""
+	}
+	who := str(holder["login"])
+	if who == "" {
+		who = str(holder["person"])
+	}
+	if iam.Kind(str(holder["kind"])) == iam.KindMachine {
+		who += " (service account)"
+	}
+	return who
+}
+
+// seatInvitation is the INVITATION column: the id `cancel-invite` takes, and
+// the address it was sent to where this node's keyring opens it.
+func seatInvitation(invitation map[string]any) string {
+	if invitation == nil {
+		return ""
+	}
+	id := str(invitation["id"])
+	switch {
+	case truthy(invitation["sealed"]):
+		return id + " (address sealed under a key this node's keyring does not hold)"
+	case str(invitation["email"]) != "":
+		return id + " (" + str(invitation["email"]) + ")"
+	}
+	return id
+}
+
 // reset prints a reset link ONCE, for the invitation's reason.
 func (p *iamPrinter) reset(answer map[string]any, err error) error {
 	if err != nil {
@@ -1104,11 +1373,6 @@ func (p *iamPrinter) token(answer map[string]any, err error) error {
 
 // written prints a write's outcome, which is the three-valued answer rather
 // than "done".
-//
-// READ OFF THE ANSWER'S `outcome`, never off the status: it printed "applied"
-// for every 2xx, so a write the node had made durable and NOT applied — a 202,
-// whose read here does not show it yet — was reported as applied. The third
-// value never reaches here; it is a 503, and [iamRefusal] says it.
 func (p *iamPrinter) written(answer map[string]any, err error) error {
 	if err != nil {
 		return err
@@ -1119,6 +1383,20 @@ func (p *iamPrinter) written(answer map[string]any, err error) error {
 	if id := str(answer["id"]); id != "" {
 		fmt.Fprintf(p.w, "%s\n", id)
 	}
+	p.outcome(answer)
+	if detail := str(answer["detail"]); detail != "" {
+		fmt.Fprintln(p.w, detail)
+	}
+	return nil
+}
+
+// outcome prints the line saying where a write stands.
+//
+// READ OFF THE ANSWER'S `outcome`, never off the status: it printed "applied"
+// for every 2xx, so a write the node had made durable and NOT applied — a 202,
+// whose read here does not show it yet — was reported as applied. The third
+// value never reaches here; it is a 503, and [iamRefusal] says it.
+func (p *iamPrinter) outcome(answer map[string]any) {
 	position, op := dash(str(answer["position"])), dash(str(answer["op_id"]))
 	switch outcome := str(answer["outcome"]); outcome {
 	case "applied", "pending":
@@ -1128,8 +1406,52 @@ func (p *iamPrinter) written(answer map[string]any, err error) error {
 		// never promoted to "applied" — that was the bug.
 		fmt.Fprintf(p.w, "outcome %q at %s (op %s)\n", outcome, position, op)
 	}
-	if detail := str(answer["detail"]); detail != "" {
-		fmt.Fprintln(p.w, detail)
+}
+
+// created prints a create: who was created, under which login and on which
+// seat, where the write stands — and, for a PERSON, their first password link
+// ONCE, which is the only time this command shows it.
+//
+// THE LINK IS PRINTED ON `pending` TOO: the record is durable, and the link
+// opens on every node that has applied it — this one within moments.
+//
+// THE NODE'S SENTENCE BESIDE THE LINK IS NOT PRINTED, because it names the
+// retry as a header: the one this command sends is -idempotency-key, and a
+// create retried under it hands back this same link. Where the link no longer
+// opens — a retry after it was spent, revoked or aged out — the node says so
+// and this names the command that issues another.
+func (p *iamPrinter) created(answer map[string]any, err error) error {
+	if err != nil {
+		return err
+	}
+	if p.raw {
+		return p.dump(answer)
+	}
+	id := str(answer["id"])
+	fmt.Fprintf(p.w, "%s\n", id)
+	fmt.Fprintf(p.w, "login %s", dash(str(answer["login"])))
+	if seat := str(answer["seat"]); seat != "" {
+		fmt.Fprintf(p.w, ", on seat %s", seat)
+	}
+	fmt.Fprintln(p.w)
+	p.outcome(answer)
+	switch link := str(answer["url"]); {
+	case link != "":
+		fmt.Fprintf(p.w, "\nfirst password link for %s\n%s\n\n", id, link)
+		fmt.Fprintf(p.w, "expires %s\n", stamp(answer["expires_at"]))
+		fmt.Fprintf(p.w, "This link is shown once and cannot be read back. It "+
+			"sets their first password once and signs nobody in: they sign in "+
+			"afterwards. Send it to them yourself — this engine never sends "+
+			"mail. Run again with -idempotency-key %s, this command hands back "+
+			"this same link.\n", dash(str(answer["op_id"])))
+	case iam.Kind(str(answer["kind"])) == iam.KindMachine:
+		fmt.Fprintf(p.w, "mint its token with `crewlet iam token -person %s`\n", id)
+	default:
+		if detail := str(answer["detail"]); detail != "" {
+			fmt.Fprintln(p.w, detail)
+		}
+		fmt.Fprintf(p.w, "issue them a password reset link with `crewlet iam "+
+			"reset-password %s`\n", id)
 	}
 	return nil
 }
@@ -1186,8 +1508,8 @@ func stamp(v any) string {
 }
 
 // dash renders an empty cell as something a reader can see: a blank column
-// reads as a bug, while an unbound seat or a person with no login yet is a real
-// state the table should name.
+// reads as a bug, while a service account bound to no seat, or a seat nobody
+// holds, is a real state the table should name.
 func dash(in string) string {
 	if in == "" {
 		return "—"

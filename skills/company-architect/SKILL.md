@@ -122,7 +122,11 @@ live-editable, so the first version does not need to be the last.
    who leads what, who reports to whom. Names, one-line goals, and a
    sentence of backstory each. This is 90% of the config.
 3. **Where does the founder sit?** They should be *in* the chart — see
-   the founder seat under invariants.
+   the founder seat under invariants. And who else will sign in? Every
+   person who uses the dashboard holds a `kind: human` seat of their own,
+   from the moment they join until they are removed — they are invited or
+   created *onto* it — so each human teammate needs one too, and a
+   company with no human seat can admit nobody.
 4. **What surfaces does the work live on?** Chat and the code host are
    the ones to ask about; the tracker and the knowledge base **ship with
    the engine and are on by default**, so a founder needs a positive
@@ -296,7 +300,10 @@ child unit with no `lead` inherits its parent's.
 
 **Put the founder in the chart.** A human seat at the root, above the
 top agent, so escalation terminates at a person and agents recognise
-their activity in chat / the tracker / the code host:
+their activity in chat / the tracker / the code host. It is not optional:
+it is also the seat the founder **joins on**, since every person who signs
+in holds exactly one human seat and is put onto it rather than given one
+later:
 
 ```yaml
 roles:
@@ -312,7 +319,8 @@ inbox, no LLM. They reject the runtime-only fields, and `contact` is
 optional: a person with none works through the dashboard only, agents
 cannot @-mention them, and `crewlet validate` warns about the seat at its
 `contact`. Scope their `manages` to the top roles — a
-founder managing every seat floods them. See
+founder managing every seat floods them. Give every other person who will
+sign in a `kind: human` seat the same way, where they sit in the chart. See
 [Humans in the org chart](https://docs.crewlet.ai/concepts/humans-in-the-org/).
 
 **Agents do not get code-authoring tools by default.** Reading and
@@ -402,6 +410,18 @@ crewlet validate company.yaml
 crewlet run crewlet.yaml -company company.yaml
 # dashboard on the configured api.port
 ```
+
+5. How they join it. Nobody holds a password until they are put on a
+   seat, and the API token is what puts the first person on theirs — so
+   its `grants` must list `people:manage` and everything the founder is to
+   hold. Sign in at the dashboard with the API token, open **Agents › Org
+   chart**, open the founder's seat (drawn **Vacant**) and press
+   **Invite**, then open the link it shows once and choose a login and a
+   password — or, from a shell, `crewlet iam invite <address> -seat
+   jane-founder -grants …` with `CREWLET_API_TOKEN` set. Every teammate
+   after them is invited or created from their own vacant seat the same
+   way, by whoever holds `people:manage`. See [How the first person
+   exists](https://docs.crewlet.ai/concepts/identity-and-access/#how-the-first-person-exists).
 
 Full field reference:
 [Configuration](https://docs.crewlet.ai/getting-started/configuration/). Two-tier

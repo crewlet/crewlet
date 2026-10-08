@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -63,7 +62,10 @@ type PersonRow struct {
 	EmailSealed []byte
 
 	// Seat is the handle of the seat this person is bound to, which is
-	// immutable (ADR-0013).
+	// immutable (ADR-0013). A person always holds one ([Writer.Create],
+	// ADR-0026); empty on a person only where they were recorded before
+	// every person did ([PersonRow.Seatless]), and on a service account
+	// that acts as itself.
 	Seat string
 
 	Grants []iam.Grant
@@ -78,6 +80,15 @@ type PersonRow struct {
 
 	// Version is the iam position that last wrote this row.
 	Version uint64
+}
+
+// Seatless reports a PERSON who holds no seat: one recorded before every person
+// held a human seat (ADR-0026), which nothing this build writes can produce.
+// A service account is never seatless in this sense — its seat is optional by
+// design — so the predicate is the one rule a report about the former asks,
+// stated where the row is rather than at each of its readers.
+func (p PersonRow) Seatless() bool {
+	return p.Kind == iam.KindPerson && p.Seat == ""
 }
 
 // PeopleQuery is one page of the directory.
@@ -421,10 +432,11 @@ func (r *Reader) Invitations(ctx context.Context, q InvitationsQuery) (
 	query := `SELECT ` + invitationColumns + ` FROM iam_invites WHERE id > ?`
 	args := []any{q.After}
 	if !q.All {
-		// OPEN IS [InvitationRow.Spent]'s complement: not redeemed, and a
-		// deadline still ahead — the predicate the issue's own decide
-		// reads an address as held by ([openInvitationFor]).
-		query += ` AND redeemed_at = 0 AND expires_at > ?`
+		// OPEN IS [InvitationRow.Spent]'s complement — not redeemed, a
+		// deadline still ahead, a seat named — and the very predicate a
+		// directory decide holds a value against ([openInvitation]), so
+		// the listing shows exactly the invitations that hold something.
+		query += ` AND ` + openInvitation
 		args = append(args, q.Now.UnixMilli())
 	}
 	query += ` ORDER BY id LIMIT ?`
@@ -782,15 +794,20 @@ func (r *Reader) PositionAt(ctx context.Context, at time.Time) (uint64, error) {
 }
 
 // SeatBinding is one person's seat binding — the columns the request path's
-// seat table reads (internal/iam/session's PersonRow), and nothing sealed.
+// seat table reads (internal/iam/session's PersonRow), the kind beside them,
+// and nothing sealed.
 //
-// ITS OWN TYPE rather than a [PersonRow] with most fields left zero: the one
-// reader walks it on every alarm heartbeat, and a row type whose document,
-// grants and sealed values were silently absent would be one a later caller
-// read as a person with no grants.
+// ITS OWN TYPE rather than a [PersonRow] with most fields left zero: a row
+// type whose document, grants and sealed values were silently absent would be
+// one a later caller read as a person with no grants.
 type SeatBinding struct {
 	// Person is the directory id, Login the name the dashboard prints.
 	Person, Login string
+
+	// Kind is a person or a service account, which is what a remedy for a
+	// binding names: a person is MOVED to another seat or removed, and a
+	// service account may be unbound ([Writer.SetIdentity]).
+	Kind iam.Kind
 
 	// Seat is the seat's handle, which is immutable (ADR-0013).
 	Seat string
@@ -799,104 +816,189 @@ type SeatBinding struct {
 	Stage iam.Stage
 }
 
-// Binding is the row's seat binding, as [Reader.SeatBindings] answers it.
+// Binding is the row's seat binding.
 func (p PersonRow) Binding() SeatBinding {
 	return SeatBinding{
-		Person: p.ID, Login: p.Login, Seat: p.Seat, Stage: p.Stage,
+		Person: p.ID, Login: p.Login, Kind: p.Kind, Seat: p.Seat, Stage: p.Stage,
 	}
 }
 
-// HoldersOf is who this node's directory binds to each of seats, read in ONE
-// snapshot: the person with a row, at whatever stage — an invited or
-// suspended person, an active one — because a removal deletes the row and
-// every other stage is somebody the seat still names. A seat nobody holds is
-// absent from the answer.
-//
-// It is the company write's question — may this seat leave the company? — so
-// it answers about the seats asked and no others. Three-valued like everything
-// here: an error is the unknown arm, never "nobody" — and so is a seat asked
-// about that two rows hold ([BySeat]).
-func (r *Reader) HoldersOf(ctx context.Context, seats []string) (
-	map[string]SeatBinding, error) {
+// SeatInvitation is one OPEN invitation onto a seat — the person on their way
+// to it — as the seat listing and a company write that takes a seat away read
+// it: never its link, which is shown once by the issue that made it.
+type SeatInvitation struct {
+	// Invitation is the invitation's id, which is what cancelling it names.
+	Invitation string
 
-	if len(seats) == 0 {
-		return map[string]SeatBinding{}, nil
-	}
-	bindings, err := r.SeatBindings(ctx)
-	if err != nil {
-		return nil, err
-	}
-	asked := make([]SeatBinding, 0, len(seats))
-	for _, b := range bindings {
-		if slices.Contains(seats, b.Seat) {
-			asked = append(asked, b)
-		}
-	}
-	return BySeat(asked)
+	// Seat is the handle of the seat it holds.
+	Seat string
+
+	// Sealed is the address it was issued to, sealed as the INVITATION's
+	// own ([Sealer.OpenInvitation] opens it with the invitation's id), for
+	// a surface entitled to show it.
+	Sealed string
+
+	// InvitedBy is who issued it.
+	InvitedBy string
+
+	CreatedAt time.Time
+	ExpiresAt time.Time
 }
 
-// BySeat is bindings keyed by their seat, ONE holder per seat.
-//
-// TWO ROWS BINDING ONE SEAT ARE THE UNKNOWN ARM, never a pick. The directory
-// decides every binding on one subject in one snapshot, so ordinary traffic
-// never produces two; a node that retained the record moving somebody off a
-// seat, and applied a later one binding it to somebody else, holds both until
-// it reprocesses the first — as a restore can. That node cannot say who holds
-// the seat, so another node answers.
-func BySeat(bindings []SeatBinding) (map[string]SeatBinding, error) {
-	out := make(map[string]SeatBinding, len(bindings))
-	for _, b := range bindings {
-		if first, twice := out[b.Seat]; twice {
-			return nil, fmt.Errorf("%w: this node holds two rows bound to seat "+
-				"%s (%s and %s), which only a record it retained or a restore "+
-				"leaves behind — another node can answer", statelog.ErrUnavailable,
-				b.Seat, first.Person, b.Person)
-		}
-		out[b.Seat] = b
-	}
-	return out, nil
+// SeatClaims is everybody who holds a seat or is on their way to one: every
+// binding and every OPEN invitation ([openInvitation]), read in ONE snapshot.
+type SeatClaims struct {
+	Bindings    []SeatBinding
+	Invitations []SeatInvitation
 }
 
-// SeatBindings is every person this node's directory binds to a seat, read in
-// ONE snapshot and ordered by seat.
+// SeatClaims answers [SeatClaims] at now — the instant an invitation is open
+// at, the caller's clock as every reader of an expiry here takes it.
 //
-// # Why not a walk of [Reader.People]
+// # One snapshot, because the two halves move together
 //
-// A directory page reads every person — bound or not — and decodes each row's
-// document, and the seat listing and every company write that takes a human
-// seat away ask only who holds which seat. This reads the binding columns of
-// the bound rows and nothing else, over the seat index, so its cost is the
-// number of people bound to a seat rather than the size of the company.
+// A redemption spends its invitation and binds its person in ONE record, so
+// read in two snapshots a redemption landing between them showed the seat as
+// held by neither — vacant, and offered to the next administrator to fill —
+// or by both. One read of both tables is the only shape in which every
+// answer is a state the directory was actually in.
+//
+// # What it costs
+//
+// The bindings are a walk of the people's partial seat index, bound rows only,
+// in seat order; the open invitations a walk of the invitations' OPEN index
+// (0031's `iam_invites_open_idx`, unredeemed rows only) and a sort of what it
+// finds. That index rather than the seat's: a range of the seat index above
+// the empty seat is every invitation that ever named a seat, the redeemed ones
+// included until the sweep collects them a week on, where the open index is
+// only the invitations still outstanding — the set this answers. Neither
+// decodes a document.
 //
 // Three-valued like everything here: an error is the unknown arm, and an
-// empty answer is a real one.
-func (r *Reader) SeatBindings(ctx context.Context) ([]SeatBinding, error) {
-	var out []SeatBinding
+// empty answer is a real one ("nobody holds or is invited to any seat").
+// [ClaimsBySeat] folds it to one claim per seat.
+func (r *Reader) SeatClaims(ctx context.Context, now time.Time) (SeatClaims, error) {
+	var out SeatClaims
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
-		out = out[:0]
+		out = SeatClaims{}
 		rows, err := tx.QueryContext(ctx, `
-			SELECT id, login, stage, seat_id
+			SELECT id, kind, login, stage, seat_id
 			  FROM iam_people
 			 WHERE seat_id != ''
 			 ORDER BY seat_id, id`)
 		if err != nil {
 			return fmt.Errorf("iamdomain: read the seat bindings: %w", err)
 		}
-		defer func() { _ = rows.Close() }()
 		for rows.Next() {
 			var b SeatBinding
-			var stage string
-			if err := rows.Scan(&b.Person, &b.Login, &stage,
+			var kind, stage string
+			if err = rows.Scan(&b.Person, &kind, &b.Login, &stage,
 				&b.Seat); err != nil {
+				_ = rows.Close()
 				return fmt.Errorf("iamdomain: read a seat binding: %w", err)
 			}
-			b.Stage = iam.Stage(stage)
-			out = append(out, b)
+			b.Kind, b.Stage = iam.Kind(kind), iam.Stage(stage)
+			out.Bindings = append(out.Bindings, b)
 		}
-		return rows.Err()
+		if err = rows.Close(); err != nil {
+			return fmt.Errorf("iamdomain: read the seat bindings: %w", err)
+		}
+		if err = rows.Err(); err != nil {
+			return fmt.Errorf("iamdomain: read the seat bindings: %w", err)
+		}
+
+		invites, err := tx.QueryContext(ctx, `
+			SELECT id, seat_id, email_sealed, invited_by, created_at, expires_at
+			  FROM iam_invites
+			 WHERE `+openInvitation+`
+			 ORDER BY seat_id, created_at DESC, id`, now.UnixMilli())
+		if err != nil {
+			return fmt.Errorf("iamdomain: read the open invitations: %w", err)
+		}
+		for invites.Next() {
+			var (
+				i                SeatInvitation
+				sealed           []byte
+				created, expires int64
+			)
+			if err = invites.Scan(&i.Invitation, &i.Seat, &sealed, &i.InvitedBy,
+				&created, &expires); err != nil {
+				_ = invites.Close()
+				return fmt.Errorf("iamdomain: read an open invitation: %w", err)
+			}
+			i.Sealed = string(sealed)
+			i.CreatedAt, i.ExpiresAt = fromMillis(created), fromMillis(expires)
+			out.Invitations = append(out.Invitations, i)
+		}
+		if err = invites.Close(); err != nil {
+			return fmt.Errorf("iamdomain: read the open invitations: %w", err)
+		}
+		return invites.Err()
 	})
 	if err != nil {
-		return nil, err
+		return SeatClaims{}, err
 	}
 	return out, nil
+}
+
+// SeatClaim is what one seat is claimed by: the principal bound to it, the
+// open invitation holding it, or — only where a build before invitations held
+// their seats left the two side by side — both. A surface rendering one answer
+// takes the holder: the invitation's redemption will be refused for the seat
+// they hold.
+type SeatClaim struct {
+	Holder     *SeatBinding
+	Invitation *SeatInvitation
+}
+
+// ClaimsBySeat folds [SeatClaims] to one [SeatClaim] per seat; a seat nobody
+// holds or is invited to is absent.
+//
+// TWO ROWS BOUND TO ONE SEAT ARE THE UNKNOWN ARM, never a pick. The directory
+// decides every binding on one subject in one snapshot, so ordinary traffic
+// never produces two; a node that retained the record moving somebody off a
+// seat, and applied a later one binding it to somebody else, holds both until
+// it reprocesses the first — as a restore can. That node cannot say who holds
+// the seat, so another node answers.
+//
+// TWO OPEN INVITATIONS ON ONE SEAT ARE NOT. Invitations issued before every
+// invitation held its seat may name one seat twice, and both stay open until
+// they age out — a week at most; the newest is the one an administrator acted
+// on last and the one this answers, and the other stays cancellable by its id
+// from the invitation listing. Refusing the whole answer over them would take
+// the seat listing down for every seat, for a week, over a residue nothing
+// this build writes.
+func ClaimsBySeat(c SeatClaims) (map[string]SeatClaim, error) {
+	out := make(map[string]SeatClaim, len(c.Bindings)+len(c.Invitations))
+	for i := range c.Bindings {
+		b := &c.Bindings[i]
+		claim := out[b.Seat]
+		if claim.Holder != nil {
+			return nil, fmt.Errorf("%w: this node holds two rows bound to seat "+
+				"%s (%s and %s), which only a record it retained or a restore "+
+				"leaves behind — another node can answer", statelog.ErrUnavailable,
+				b.Seat, claim.Holder.Person, b.Person)
+		}
+		claim.Holder = b
+		out[b.Seat] = claim
+	}
+	for i := range c.Invitations {
+		inv := &c.Invitations[i]
+		claim := out[inv.Seat]
+		if claim.Invitation != nil && !newerInvitation(*inv, *claim.Invitation) {
+			continue
+		}
+		claim.Invitation = inv
+		out[inv.Seat] = claim
+	}
+	return out, nil
+}
+
+// newerInvitation reports whether a was issued after b, its id breaking a tie
+// so two nodes folding one answer pick one invitation.
+func newerInvitation(a, b SeatInvitation) bool {
+	if !a.CreatedAt.Equal(b.CreatedAt) {
+		return a.CreatedAt.After(b.CreatedAt)
+	}
+	return a.Invitation > b.Invitation
 }

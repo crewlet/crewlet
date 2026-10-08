@@ -31,3 +31,29 @@ export const BUDGET_WINDOWS = [
   { period: "week", label: "Weekly token ceiling", none: "No weekly ceiling" },
   { period: "month", label: "Monthly token ceiling", none: "No monthly ceiling" },
 ] as const;
+
+/**
+ * One claim on a human seat a `409 seat_held` names (`configapi.SeatHolder`):
+ * the refusal's `held` maps each seat a write would take out of the company to
+ * the ONE thing holding it — a person, a service account, or an open
+ * invitation, never the invitation's address — and a person wins where both
+ * claim one seat.
+ *
+ * HELD BY `internal/api/configapi.TestTheDashboardReadsWhatASeatHeldRefusalSends`.
+ * The refusal was read as a LIST of holders per seat while the engine sent one
+ * object, so every seat it named was "held by somebody" with no remedy at all.
+ * Which remedy is right turns on the kind: a person is moved to another human
+ * seat or removed, a service account unbound, an invitation cancelled.
+ */
+export interface SeatHeldHolder {
+  /** The holder's id, when a person or a service account holds the seat. */
+  person?: string;
+  /** `person` or `machine` (`iam.Kind`). */
+  kind?: string;
+  login?: string;
+  stage?: string;
+  /** The open invitation's id, when one holds the seat and nobody else does. */
+  invitation?: string;
+  /** When that invitation lapses and frees the seat on its own. */
+  expires_at?: string;
+}

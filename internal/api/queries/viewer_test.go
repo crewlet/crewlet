@@ -568,9 +568,9 @@ func TestALoginThatNamesNobodyIsNotARosterForAQuestion(t *testing.T) {
 // A SEAT'S TRAIL IS STILL THE SEAT'S. The threads a seat said things in are
 // the seat's, not a person record, so a caller bound to no seat who names none
 // is refused for want of a handle — and the refusal names the remedy where it
-// lives: a row in the identity directory, bound with `crewlet iam bind`,
-// because the org chart it used to point at has no field that binds a
-// credential any more.
+// lives: a row in the identity directory, bound with `crewlet iam bind` to a
+// HUMAN seat, the one kind the directory binds anybody to, because the org
+// chart it used to point at has no field that binds a credential any more.
 func TestAnUnbindableCallerHasNoSeatTrailOfItsOwn(t *testing.T) {
 	t.Parallel()
 	s := viewerSources(t, &stubWork{})
@@ -585,9 +585,9 @@ func TestAnUnbindableCallerHasNoSeatTrailOfItsOwn(t *testing.T) {
 		t.Error("refused as unauthorized; the remedy is a binding, not a credential")
 	}
 	if msg := err.Error(); !strings.Contains(msg, "crewlet iam bind") ||
-		strings.Contains(msg, "org chart") {
-		t.Errorf("refusal = %q, want it to name `crewlet iam bind` and not the "+
-			"org chart, which no longer binds a credential", msg)
+		!strings.Contains(msg, "human seat") || strings.Contains(msg, "org chart") {
+		t.Errorf("refusal = %q, want it to name `crewlet iam bind` onto a human "+
+			"seat and not the org chart, which no longer binds a credential", msg)
 	}
 }
 

@@ -18,9 +18,13 @@ import (
 // A PASSWORD RESET LINK, AND WHY ITS TWO METHODS ARE THE INVITATION'S.
 //
 // An administrator issues it through `/iam` (a `reset` credential on the
-// person, a day long) and sends it out of band; this is the other end. It is
-// the invitation pair in every respect that matters, for the invitation's
-// reasons:
+// person, a day long — [credential.ResetLinkLifetime]) and sends it out of
+// band; this is the other end. So is a person's FIRST PASSWORD LINK, which an
+// administrator's create of them on a human seat issues in the same record
+// (`POST /iam/people`, a week long — [credential.EnrolmentLinkLifetime]): the
+// same credential, opened and spent here identically, and told apart only by
+// what the screen says ([resetView.First]). It is the invitation pair in every
+// respect that matters, for the invitation's reasons:
 //
 //   - A GET SAYS WHOSE PASSWORD IT SETS AND SPENDS NOTHING, because a link is
 //     followed by mail clients prefetching, scanners and preview cards.
@@ -40,7 +44,8 @@ import (
 // other the person held, and the revocation epoch moved — every session and
 // machine token they held ends. It answers the LOGIN and nothing else: the
 // person signs in next, where a second factor they hold still applies, which a
-// session handed out here would skip.
+// session handed out here would skip. A first password link signs nobody in
+// for the same reason, and ends nothing because there was nothing to end.
 
 // resetSecretHeader carries a reset link's secret to the view, for
 // [inviteSecretHeader]'s reason.
@@ -55,6 +60,15 @@ type resetView struct {
 
 	// MinPasswordLength is the floor, so a form refuses before it posts.
 	MinPasswordLength int `json:"min_password_length"`
+
+	// First says this link sets the person's FIRST password — they hold
+	// none yet ([iamdomain.ResetRow.First]) — so the screen says "choose
+	// your password" rather than "choose a new one", and does not warn of
+	// sessions it would end: a reset ends every session its person holds,
+	// a first password ends none. DERIVED from what the person holds rather
+	// than stored on the link, so a reset issued to somebody whose first
+	// link lapsed unspent is worded as the first password it sets.
+	First bool `json:"first"`
 }
 
 // resetSpend is what spending a link presents.
@@ -77,7 +91,7 @@ func (s *Service) ViewReset(w http.ResponseWriter, r *http.Request) {
 	}
 	httpjson.Write(w, http.StatusOK, resetView{
 		Login: held.Login, ExpiresAt: held.ExpiresAt,
-		MinPasswordLength: s.passwordFloor(),
+		MinPasswordLength: s.passwordFloor(), First: held.First,
 	})
 }
 
@@ -123,6 +137,16 @@ func (s *Service) SpendReset(w http.ResponseWriter, r *http.Request) {
 	// AUTHORED AS THE PERSON WHOSE LINK IT IS: the link is their proof.
 	holder := s.behalf(madeBy(iamdomain.Sighting{ID: held.PersonID,
 		Kind: held.Kind, Login: held.Login, Seat: held.Seat}, ""))
+	// WHETHER IT SETS THEIR FIRST PASSWORD, as the link was read — which
+	// is what the record's snapshot finds whenever it lands: a person
+	// holding no password cannot get one past this link but by another
+	// link, and issuing that one revokes this ([iamdomain.RevokeResetLinks]),
+	// so a link that still opens in the record's snapshot is one whose
+	// person still held no password when it was read.
+	reason := "set a new password from a reset link"
+	if held.First {
+		reason = "set their first password"
+	}
 	set, err := holder.SetPassword(r.Context(), iamdomain.PasswordSet{
 		PersonID: held.PersonID, Verifier: verifier,
 		// THE LINK AGAIN, IN THE RECORD'S OWN SNAPSHOT: one spent by
@@ -136,7 +160,7 @@ func (s *Service) SpendReset(w http.ResponseWriter, r *http.Request) {
 			return nil
 		},
 		Spends: held.ID,
-		OpID:   opID, Reason: "set a new password from a reset link",
+		OpID:   opID, Reason: reason,
 	})
 	switch {
 	case errors.Is(err, errResetSpent), errors.Is(err, iamdomain.ErrNotFound),
@@ -158,10 +182,11 @@ func (s *Service) SpendReset(w http.ResponseWriter, r *http.Request) {
 	// this request's alone, so a copy the ledger names is this spend.
 	s.audit.Emit(r.Context(), types.IAMPasswordReset{
 		Person: held.PersonID, Login: held.Login, Credential: held.ID,
-		Remote: s.sourceOf(r),
+		Remote: s.sourceOf(r), First: held.First,
 	})
 	log.InfoContext(r.Context(), "api_password_reset", "person", held.PersonID,
-		"credential", held.ID, "position", set.Position.String())
+		"credential", held.ID, "first", held.First,
+		"position", set.Position.String())
 	httpjson.Write(w, http.StatusOK, map[string]string{
 		"status": "password_set", "login": held.Login,
 	})

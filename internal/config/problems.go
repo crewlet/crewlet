@@ -531,6 +531,11 @@ func (c *Company) ReferenceWarnings() []Warning {
 // for it — valid, since an operator may mean exactly that, and silent until
 // whatever read the variable inside the box finds it unset.
 //
+// A COMPANY WITH NO HUMAN SEAT is one ([Company.peoplelessWarnings]): nobody
+// can be invited into it or created in it, which is the right shape for a
+// company its agents run alone and a surprise for one somebody meant to sign
+// in to.
+//
 // EMPTY, NEVER NIL, for the reason [Company.ReferenceWarnings] gives.
 func (c *Company) AdvisoryWarnings() []Warning {
 	out := []Warning{}
@@ -547,8 +552,41 @@ func (c *Company) AdvisoryWarnings() []Warning {
 					"host's value on", unsupplied.name)))
 		}
 	}
+	out = append(out, c.peoplelessWarnings()...)
 	out = append(out, c.unreachableWarnings()...)
 	return append(out, c.budgetWarnings()...)
+}
+
+// peoplelessWarnings is the one warning a company declaring no human seat
+// carries: nobody can be invited into it or created in it.
+//
+// EVERY PERSON HOLDS A HUMAN SEAT for as long as they are here
+// (internal/iamdomain, ADR-0026) — an invitation and an administrator's create
+// each name the seat the person will hold, and both are refused without one —
+// so a company with none is a company nobody can join. Said HERE, before an
+// operator meets the refusal at their first invitation, because `crewlet
+// validate` and the builder's check are the moments the document can still
+// change.
+//
+// A WARNING AND NOT A RULE, because the state is legitimate: a company its
+// agents run alone, administered through the deployment's Tier A tokens, which
+// act as themselves and need no seat, has nobody to invite. Refusing it would
+// refuse that company. AT `roles`, which is where the remedy is written.
+func (c *Company) peoplelessWarnings() []Warning {
+	for role := range c.EachRole() {
+		if role.Kind == org.KindHuman {
+			return nil
+		}
+	}
+	return []Warning{advisory(field("roles"), "this company declares no "+
+		"`kind: human` seat, so nobody can be invited into it or created in "+
+		"it: every person holds a human seat for as long as they are here, "+
+		"and an invitation or a create names the one they will hold. That is "+
+		"right for a company its agents run alone, administered through the "+
+		"deployment's Tier A tokens. Otherwise add a `kind: human` seat for "+
+		"each person who is to sign in, then invite or create them on it — "+
+		"from the seat in the dashboard's Agents › Org chart, or with "+
+		"`crewlet iam invite <address> -seat <handle>`")}
 }
 
 // unreachableWarnings is every human seat that declares no contact identity:

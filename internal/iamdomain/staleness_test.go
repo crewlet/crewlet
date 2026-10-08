@@ -28,7 +28,7 @@ import (
 func TestAVouchIsTheLagAndNoDeferralWhereNothingIsRetained(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
-	someone := uuid.New().String()
+	someone := uuid.Must(uuid.NewV7()).String()
 	enrolSarah(t, rig, someone)
 	log, err := statelogtest.LocalReaderOver(
 		iamdomain.Domain{}, rig.db.Replicated(), rig.waiter)

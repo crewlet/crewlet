@@ -314,12 +314,13 @@ func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.G
 // records carry the PRINCIPAL's kind.
 //
 // THREE ACTOR KINDS NAME ONE PRINCIPAL KIND EACH, AND THE FOURTH DOES NOT.
-// [iam.ActorOperator] is a principal acting under its own login, which is an
-// unbound PERSON's or a MACHINE's — and the login's SHAPE is which, because
-// the two grammars are disjoint by construction ([iam.ValidLogin] joins with
-// dots, a machine handle with a colon). Mapping every operator to a machine
-// recorded an administrator who is not in the org chart, reanchoring by hand,
-// as a service account.
+// [iam.ActorOperator] is a principal acting under its own login, which is a
+// MACHINE's — or a PERSON's recorded before every person held a seat
+// (ADR-0026), whom `iam check` reports — and the login's SHAPE is which,
+// because the two grammars are disjoint by construction ([iam.ValidLogin]
+// joins with dots, a machine handle with a colon). Mapping every operator to
+// a machine recorded such a person, reanchoring by hand, as a service
+// account.
 //
 // NOBODY NAMED IS THE NODE, recorded as the node's own writer records itself —
 // its id, a machine — rather than as an empty author column.

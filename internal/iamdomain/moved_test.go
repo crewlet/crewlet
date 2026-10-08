@@ -39,13 +39,15 @@ func TestABatchSaysWhoseCredentialsItMoved(t *testing.T) {
 	person := bindNew(t, rig, "sarah.chen", "sarah-chen")
 	other := bindNew(t, rig, "noor.aziz", "ops-lead")
 	machine := uuid.Must(uuid.NewV7()).String()
-	if err := rig.enrol(iamdomain.Enrolment{
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: machine, Kind: iam.KindMachine, Stage: iam.StageActive,
-		Login: "token:ops", OpID: "op-enrol-machine", Reason: "break-glass",
+		Login: "token:ops", Seat: rig.vacantSeat("ops-desk"),
+		OpID: "op-enrol-machine", Reason: "break-glass",
 	}); err != nil {
 		t.Fatalf("enrol the machine: %v", err)
 	}
 	rig.drain()
+	rig.vacantSeat("sarah-desk")
 	rig.takeMoved()
 	lineage := uuid.Must(uuid.NewV7()).String()
 
@@ -96,21 +98,30 @@ func TestABatchSaysWhoseCredentialsItMoved(t *testing.T) {
 				return err
 			}, iamdomain.Moved{Seats: true, People: []string{machine},
 				Logins: []string{"token:ops"}}},
-		{"an unbind names the person it took the seat off", func() error {
-			unbound := ""
+		{"a move names the person it moved", func() error {
+			seat := "sarah-desk"
 			_, err := rig.writer.SetIdentity(t.Context(), iamdomain.IdentityEdit{
-				PersonID: person, Seat: &unbound, OpID: "op-unbind",
+				PersonID: person, Seat: &seat, OpID: "op-move",
 				Reason: "moved teams"})
 			return err
 		}, iamdomain.Moved{Seats: true, People: []string{person},
 			Logins: []string{"sarah.chen"}}},
-		{"a bind names the person bound", func() error {
-			seat := "sarah-chen"
+		{"an unbind names the service account it took the seat off",
+			func() error {
+				unbound := ""
+				_, err := rig.writer.SetIdentity(t.Context(), iamdomain.IdentityEdit{
+					PersonID: machine, Seat: &unbound, OpID: "op-unbind",
+					Reason: "acts as itself"})
+				return err
+			}, iamdomain.Moved{Seats: true, People: []string{machine},
+				Logins: []string{"token:ops"}}},
+		{"a bind names the principal bound", func() error {
+			seat := "ops-desk"
 			_, err := rig.writer.SetIdentity(t.Context(), iamdomain.IdentityEdit{
-				PersonID: person, Seat: &seat, OpID: "op-rebind"})
+				PersonID: machine, Seat: &seat, OpID: "op-rebind"})
 			return err
-		}, iamdomain.Moved{Seats: true, People: []string{person},
-			Logins: []string{"sarah.chen"}}},
+		}, iamdomain.Moved{Seats: true, People: []string{machine},
+			Logins: []string{"token:ops"}}},
 		{"a rename names the person, the login it took and the one it left",
 			func() error {
 				login := "sarah.c"

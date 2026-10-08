@@ -179,7 +179,7 @@ func (stubWriter) Revoke(context.Context, string, string, string) (statelog.Resu
 	return applied(statelog.Position{}), nil
 }
 
-func (stubWriter) Enrol(context.Context, iamdomain.Enrolment) (statelog.Result, error) {
+func (stubWriter) Redeem(context.Context, iamdomain.Redemption) (statelog.Result, error) {
 	return applied(statelog.Position{}), nil
 }
 

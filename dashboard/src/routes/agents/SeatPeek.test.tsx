@@ -1,10 +1,11 @@
 /**
  * The seat peek: what it reads, what it withholds, and what it lets a reader
- * do — without a refused request and within three reads.
+ * do — without a refused request and within three questions, plus one read of
+ * the identity directory for a human seat and a reader it answers.
  */
 
-import { act, cleanup, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test } from "vitest";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { SeatPeek, budgetLine, turnOrdinal } from "./SeatPeek.tsx";
 import { PERIOD_WORDS } from "~/lib/budget.ts";
@@ -33,7 +34,43 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   location.hash = "";
+  vi.unstubAllGlobals();
 });
+
+/**
+ * The identity directory answering `GET /iam/seats` with jane's seat as each
+ * case wants it — held, invited or vacant — and every request recorded.
+ */
+function directory(jane: Record<string, unknown>) {
+  const paths: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const path = new URL(String(input), "http://engine.test").pathname;
+      paths.push(path);
+      return new Response(
+        JSON.stringify(
+          path === "/iam/seats"
+            ? { seats: [{ handle: "jane", name: "Jane Founder", ...jane }] }
+            : { error: "no_route" },
+        ),
+        {
+          status: path === "/iam/seats" ? 200 : 404,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    }),
+  );
+  return paths;
+}
+
+const HELD = {
+  holder: { person: "p-jane", kind: "person", login: "jane.doe", stage: "suspended" },
+};
+const INVITED = {
+  invitation: { id: "inv-3", email: "jane@example.com", expires_at: "2031-05-08T09:00:00Z" },
+};
+const VACANT = {};
 
 const window_ = (period: BudgetWindow["period"], used: number, limit: number): BudgetWindow => ({
   period,
@@ -205,6 +242,85 @@ test("the peek asks at most three questions", async () => {
   const { asked } = await mount(OPERATOR);
   expect(new Set(asked).size).toBeLessThanOrEqual(3);
   expect(asked).not.toContain("config");
+});
+
+// A HUMAN SEAT SAYS WHAT HOLDS IT, for a reader the directory answers, and is
+// asked ONE more read — the directory — never for an agent's seat, whose
+// holder is the engine. The CONTROLS: the operator's agent-seat peek above
+// asks no directory at all, and a reader holding neither grant is asked
+// nothing and shown no fact. Mutation: read the directory for every seat, or
+// for every reader, and a count here goes red.
+//
+// THE VALUE DOES NOT REPEAT ITS TERM: the card's line begins "Held by", and
+// drawn under the term it read "Held by / Held by jane.doe (suspended)".
+test.each([
+  ["held", HELD, "jane.doe (suspended)"],
+  [
+    "service account's",
+    { holder: { person: "m-ci", kind: "machine", login: "ci:release", stage: "active" } },
+    "The service account ci:release",
+  ],
+  ["invited", INVITED, "An open invitation · jane@example.com"],
+  ["vacant", VACANT, "Nobody — the seat is vacant"],
+])("a %s human seat's peek says what holds it, in one directory read", async (_, jane, line) => {
+  const paths = directory(jane);
+  const { asked } = await mount(OPERATOR, { handle: "jane" });
+  await act(async () => {});
+  expect(screen.getByText("Held by").nextElementSibling?.textContent).toBe(line);
+  expect(paths.filter((p) => p === "/iam/seats")).toHaveLength(1);
+  expect(new Set(asked).size).toBeLessThanOrEqual(3);
+});
+
+test("an agent's seat and a reader the directory refuses ask it nothing", async () => {
+  const paths = directory(VACANT);
+  await mount(OPERATOR);
+  expect(paths).toEqual([]);
+  expect(screen.queryByText("Held by")).toBeNull();
+  cleanup();
+  const again = directory(VACANT);
+  await mount({ ...OPERATOR, grants: ["state:read", "work:write"] }, { handle: "jane" });
+  expect(again).toEqual([]);
+  expect(screen.queryByText("Held by")).toBeNull();
+});
+
+// THE PEEK FILLS A SEAT TOO — on a phone it is where those gestures are —
+// for `people:manage` alone: an auditor reads the fact with no control. A
+// vacant seat offers Invite and Create, an invited one its cancellation, a
+// held one nothing. Mutation: drop the grant check and the auditor is
+// offered both.
+test("a vacant human seat's peek offers Invite and Create to an administrator alone", async () => {
+  directory(VACANT);
+  await mount(OPERATOR, { handle: "jane" });
+  await act(async () => {});
+  const foot = screen.getByRole("button", { name: "Invite" }).closest("footer") as HTMLElement;
+  expect(within(foot).getByRole("button", { name: "Create person" })).toBeTruthy();
+  fireEvent.click(within(foot).getByRole("button", { name: "Create person" }));
+  expect(screen.getByRole("dialog", { name: "Create a person on Jane Founder" })).toBeTruthy();
+  cleanup();
+
+  directory(VACANT);
+  await mount({ ...OPERATOR, grants: ["state:read", "audit:read"] }, { handle: "jane" });
+  await act(async () => {});
+  expect(screen.getByText("Held by").nextElementSibling?.textContent).toBe(
+    "Nobody — the seat is vacant",
+  );
+  expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Create person" })).toBeNull();
+  cleanup();
+
+  directory(INVITED);
+  await mount(OPERATOR, { handle: "jane" });
+  await act(async () => {});
+  expect(screen.getByRole("button", { name: "Cancel invitation" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
+  cleanup();
+
+  directory(HELD);
+  await mount(OPERATOR, { handle: "jane" });
+  await act(async () => {});
+  for (const name of ["Invite", "Create person", "Cancel invitation"]) {
+    expect(screen.queryByRole("button", { name })).toBeNull();
+  }
 });
 
 // THE STATE CARD: the engine's line, and which turn on the task and which

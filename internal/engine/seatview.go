@@ -2,7 +2,7 @@ package engine
 
 import (
 	"context"
-	"errors"
+	"fmt"
 
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/org"
@@ -30,9 +30,12 @@ var _ session.Chart = SeatView{}
 // question instead, which is 503 and says come back to a node that can tell.
 func SeatViewOf(e *Engine) SeatView { return SeatView{engine: e} }
 
-// errNoOrg is what a view answers on a node that runs no company yet.
-var errNoOrg = errors.New("engine: this node runs no company yet, so it " +
-	"cannot say which seat anybody holds")
+// errNoOrg is what a view answers on a node that runs no company yet: the
+// seam's own [session.ErrNoCompany], so the identity directory's writer can
+// tell "create a company first" from a lookup that failed, while the request
+// path still reads both as the unknown arm.
+var errNoOrg = fmt.Errorf("engine: %w, so it cannot say which seat anybody "+
+	"holds", session.ErrNoCompany)
 
 // Seat finds a seat in the running organisation by its handle.
 //

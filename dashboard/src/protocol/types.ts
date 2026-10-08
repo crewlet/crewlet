@@ -4269,22 +4269,15 @@ export interface InvitationView {
   login?: string;
   /** The floor every password is held to. */
   min_password_length: number;
-  /** The seat redeeming it binds the person to, as the chart calls it now, or
-   *  absent for an invitation that binds none. */
+  /** The seat redeeming it binds the person to, as the chart calls it now —
+   *  with no handle where the chart no longer holds it. Every invitation
+   *  names one, because every person holds a human seat; one that names none
+   *  (absent, or empty) is one whose redemption the engine refuses, and the
+   *  screen says so before anybody types a password. */
   seat?: { handle?: string; name?: string };
   /** The login this BROWSER is signed in as, or absent for nobody: redeeming
    *  ends that session, so the form says so first. */
   signed_in_as?: string;
-}
-
-/** What a password reset link's screen renders from, before anything is spent. */
-export interface ResetView {
-  /** Whose password the link sets. */
-  login: string;
-  /** When the link stops opening. */
-  expires_at: string;
-  /** The floor every password is held to. */
-  min_password_length: number;
 }
 
 /** A password set from a reset link — and no session: the person signs in next. */

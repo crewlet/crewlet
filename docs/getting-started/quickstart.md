@@ -94,15 +94,15 @@ api:
                     #   `optional` is fine here because the browser reaches
                     #   this on loopback; leave the line out anywhere else.
                     #   Nobody holds a password yet: the token below invites
-                    #   the first person (step 4).
+                    #   the first person onto their seat (step 4).
     max_grants:     # THE CEILING on what this deployment will ever let a
                     #   directory record confer. Required once a port is set.
       [state:read, audit:read, config:read, secrets:read, work:write,
        knowledge:write, config:write, secrets:write, fleet:operate,
        people:manage, sandbox:run]
     tokens:         # at least one is REQUIRED once a port is set: every route
-                    #   needs a credential, and this is also what creates the
-                    #   first person on a fresh deployment.
+                    #   needs a credential, and this is also what puts the
+                    #   first person on their seat on a fresh deployment.
       - id: founder
         token: "${CREWLET_API_TOKEN_FOUNDER}"   # 26 characters at minimum
         grants:     # what this credential may do — required and non-empty.
@@ -152,9 +152,11 @@ roles:
   # You, in the chart. A `kind: human` seat is addressable but never
   # spawned (no runtime, no inbox, no LLM) — it gives escalation a person
   # to stop at, and lets agents recognise your activity on the surfaces
-  # you connect later. `contact` is optional — without one you are
-  # reached through the dashboard only, and agents cannot @-mention you on
-  # chat; scope `manages` to the top seat so you aren't copied on everything.
+  # you connect later. It is also the seat you join on in step 4: every
+  # person holds a human seat, so a company with none admits nobody.
+  # `contact` is optional — without one you are reached through the
+  # dashboard only, and agents cannot @-mention you on chat; scope
+  # `manages` to the top seat so you aren't copied on everything.
   - name: Your Name
     handle: founder             # see the note under this block — set these now
     kind: human
@@ -432,29 +434,40 @@ exchanged for a one-hour session, and the browser keeps the session's cookie
 and never the token, which is sent once, in a header, and held nowhere
 afterwards.
 
-**Invite yourself.** Open **Settings › People & access**: a callout says nobody
-has joined yet. Press **Invite person** and fill in
+**Invite yourself onto your seat.** Every person holds exactly one human seat
+for as long as they exist, so you join the company on the one `company.yaml`
+declares for you — the human seat with the handle `founder`. Open **Agents ›
+Org chart**: your seat's card (under the name you gave it) reads **Vacant**,
+because nobody holds it yet. Click the card to open the seat beside the
+chart: its foot offers **Invite** and **Create person** (the same two are on
+the card itself, as icons that appear when you point at it or in its menu
+from the keyboard, and on the seat's page). Press **Invite** — the dialog is
+for that seat and offers no other — and fill in
 
 - **your email address** — what the invitation is held against;
-- **the seat** — yours, the human seat `company.yaml` declares with the handle
-  `founder` (listed under the name you gave it), so you act as that seat from
-  your first sign-in;
 - **the grants** — tick all eleven for yourself (the founder token holds them
   all, and nobody can confer a grant they do not hold). Keep `people:manage`,
-  or nobody after you can be invited except with the token again.
+  or nobody after you can be invited or created except with the token again.
 
 The link it shows is the credential and is shown **once** — copy it now. The
 engine sends no mail; for anybody else you invite, getting it to them is
-yours.
+yours. Until the link is redeemed, the open invitation holds the seat: the
+card reads **Invited ·** your address, and nobody else can be put on it.
+
+(**Create person** is the other way onto a vacant seat:
+it creates the person active at once and shows a one-time **password link**
+that sets their first password. For yourself the invitation is the shorter
+road, since redeeming it signs you in.)
 
 **Open the link** (this browser is fine). It is the dashboard's invitation
 screen: it names who the invitation is for and the seat it binds — and who
 sent it when a person did; this one was issued under the founder token, a
 machine nobody holding the link would recognise, so it names no sender — and
 asks for a login — it proposes one from your address, dotted like
-`jane.doe`, the name your changes are recorded under — your name, and a
+`jane.doe`, how you sign in beside your address — your name, and a
 password of at least twelve characters (`api.auth.min_password_length` raises
-that). Redeeming it signs you in. The secret after the `.` never leaves the
+that). Redeeming it puts you on the `founder` seat and signs you in: from your
+first sign-in you act as that seat. The secret after the `.` never leaves the
 page in a URL: the link carries it in the fragment, which no browser sends to a
 server, and the screen sends it in a header and a body instead.
 
@@ -478,12 +491,16 @@ proves who they are, asks you to confirm your password first, in one dialog,
 and then carries on. The founder token stays: it is what a pipeline uses, and
 the way back in when nobody who can sign in is available — a machine
 credential, not how people should be signing in. Everybody after you arrives
-the same way, invited from **People & access** by whoever holds
-`people:manage`.
+the same way, on a seat of their own: add a human seat for them (**Agents ›
+Edit org › Add human seat**), and once it is saved whoever holds
+`people:manage` invites them onto it, or creates them on it, from its card in
+the org chart.
 
 **From a shell instead**, `crewlet iam invite` issues the same invitation
 through the running node, authenticating with `CREWLET_API_TOKEN` like every
-command that talks to one, and prints its link once:
+command that talks to one, and prints its link once. `-seat` is required —
+every invitation names the seat its redemption binds — and `crewlet iam seats
+-unheld` lists the human seats nothing holds yet:
 
 ```bash
 export CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER"
@@ -544,22 +561,23 @@ is the work list narrowed to that person: the same Filter, Display and scope
 controls, opening grouped by when each task is due; read in priority order, its
 rows are reordered by dragging them. A question put to them is answered on its
 row in **Asked of me**. Signed in with the API token instead, the dashboard says
-so rather than guessing — an unbound token is an ordinary state, not a fault,
-and its day is the one kept under its own login. See [Humans in the Org
+so rather than guessing — a token bound to no seat is an ordinary state, not a
+fault, and its day is the one kept under its own login. See [Humans in the Org
 Chart](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api).
 
 **⌘K (Ctrl+K elsewhere) searches everything and acts on it.** Type to find a
 screen, a task, a page or a colleague — `#` narrows to tasks, `@` to agents,
 `>` to actions — or paste an event, trace or turn id out of a log to open it.
 Type a question of three words or more and pause, and a caller bound to a
-seat — a signed-in person or a directory-bound token — gets a short answer
-written from your company's own pages and tasks, with its sources and the
-tokens it spent, charged to the company's budget. It runs on the auxiliary
-model of the seat you are bound to, so a person or token bound to no seat is
+seat — a signed-in person, who always holds one, or a directory-bound token —
+gets a short answer written from your company's own pages and tasks, with its
+sources and the tokens it spent, charged to the company's budget. It runs on
+the auxiliary model of the seat you act as, so a token bound to no seat is
 told so instead. From the same box you
 can assign the task you found to an agent, ask an agent about what you typed
 (the answer lands in your Inbox) or file it as a task — each made as you, under
-your seat when you are bound to one and under your own login when you are not,
+your seat when you are signed in as yourself and under the token's own login
+when you are signed in with one that no seat binds,
 filed in the project on screen or your team's, and where neither says, in the
 project you pick from the list it offers; an action the authority table would
 refuse you says why on its row instead.
@@ -585,14 +603,16 @@ the saved views, the catalogue write, a person's own queue, inbox and pins, the
 trash, and the board drag. Each is decided by the same authority table a seat's
 calls are, and knowledge search sits beside them, with the gestures a person
 makes about the company rather than its work — pausing and resuming a seat,
-steering a running turn, answering a coding run's question. Its writes carry
-your seat's handle with author kind `human` once the token is bound to it, and
-the token's own login with author kind `operator` while it is not — never an
-agent's — so an audit can tell your edit from an agent's either way. See
+steering a running turn, answering a coding run's question. On the
+deployment's token its writes carry the token's own login, `token:founder`,
+with author kind `operator` — never an agent's — so an audit can tell them from
+an agent's. The token cannot write as your seat: a seat is held by one row of
+the identity directory, and yours is you. See
 [the operator surface](../reference/api-endpoints.md#operatormcp--your-own-assistant).
 
 Once you sign in as a person, give the assistant **your own** token rather than
-the deployment's. It acts as you — your seat, your grants — and every write it
+the deployment's. It acts as you — your seat, your grants, its writes carrying
+your seat's handle with author kind `human` — and every write it
 makes also records `pat:<its id>`, so what the assistant did stays tellable
 from what you did. Nobody else can mint it, an administrator included; you mint
 it yourself, and the command signs in as you for that one request:
@@ -622,8 +642,11 @@ that posture and why it could not simply be defaulted the other way.
 If you skipped the import, `crewlet run` boots in the **unconfigured** state
 with the API still serving — you can then bootstrap live without restarting.
 An unconfigured node is not an idle one: its identity estate runs from boot,
-so the invitation above works before any company exists and you can sign in
-on it. The work tracker's and the knowledge base's routes
+so you can sign in on it with the founder token before any company exists. You
+cannot invite yourself yet — there is no seat to put you on, so an invitation
+there answers `409 no_active_revision` — and the company comes first: import
+or create it with your human seat in it, then invite yourself onto that seat
+as above. The work tracker's and the knowledge base's routes
 answer `503 no_active_revision` until the first revision arrives. That
 revision brings up everything the company needs, the engine's own tracker and
 knowledge base included, with their projects and spaces, and the
@@ -643,7 +666,9 @@ directly sends ([Configure via the API](../guides/configure-via-api.md)).
 Or create the company from the dashboard: open **Agents** and its **Edit
 org** button (`#/agents/edit`). With no configuration active it opens on a
 form that starts the company from a template, has the engine check it, and
-creates it with `PUT /config`. The builder reads and writes the company
+creates it with `PUT /config`. Keep its **Add a seat for yourself** ticked:
+that seat is the one you then invite yourself onto, from the org chart, as
+step 4 describes. The builder reads and writes the company
 document, so it needs a session whose grants reach it: the one you signed in
 with using `$CREWLET_API_TOKEN_FOUNDER` carries the `state:read`,
 `config:read` and `config:write` it uses, and a person you invite needs them
@@ -732,6 +757,11 @@ each), then wire them in:
   [GitHub](../integrations/github.md) — and enable the
   [code sandbox](../concepts/code-sandbox.md) so engineer roles author real
   merge requests
+- Bring your team in: add a human seat for each person who is to sign in
+  (**Agents › Edit org › Add human seat**), then invite them onto it or create
+  them on it from its card in **Agents › Org chart** — every person holds a
+  seat of their own. See [Putting a person in the
+  seat](../concepts/humans-in-the-org.md#putting-a-person-in-the-seat)
 - Fill in the [founder seat](../concepts/humans-in-the-org.md#the-founder-seat)
   you already have at the root — add the `contact` identities for each
   surface you connect (`mattermost_user_id`, `atlassian_account_id`,

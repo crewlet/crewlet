@@ -149,6 +149,66 @@ describe("opening the link", () => {
   });
 });
 
+// ONE SCREEN, TWO LINKS. A reset replaces a password and ends every session
+// its person held; a FIRST password link — handed to a person an
+// administrator created on a seat — ends nothing, because there was nothing
+// to end, and told that it would, a person just created read their first
+// sign-in as a lock-out. The view says which (`first`). The CONTROL is the
+// reset, which keeps its own words. Mutation: word every link as a reset and
+// the first link's lines go red.
+describe("a first password link", () => {
+  const FIRST: Answer = {
+    status: 200,
+    body: { ...(VIEW.body as object), first: true, expires_at: "2026-10-12T09:00:00Z" },
+  };
+
+  test("is worded as a first password, before and after it is set", async () => {
+    engine({
+      [`GET ${PATH}`]: FIRST,
+      [`POST ${PATH}`]: { status: 200, body: { status: "password_set", login: "jane.doe" } },
+    });
+    mount();
+    await screen.findByLabelText("New password");
+    expect(screen.getByText("Choose your password")).toBeDefined();
+    expect(screen.getByText(/sets the first password for/)).toBeDefined();
+    expect(screen.queryByText(/ends every session/)).toBeNull();
+    type("New password", "correct horse battery staple");
+    type("Confirm new password", "correct horse battery staple");
+    fireEvent.click(screen.getByRole("button", { name: "Set password" }));
+    expect(await screen.findByText("Sign in as jane.doe with your password.")).toBeDefined();
+    expect(screen.queryByText(/Every session you held has ended/)).toBeNull();
+  });
+
+  test("a reset keeps its own words: a new password, and every session ended", async () => {
+    engine({
+      [`GET ${PATH}`]: VIEW,
+      [`POST ${PATH}`]: { status: 200, body: { status: "password_set", login: "jane.doe" } },
+    });
+    mount();
+    await screen.findByLabelText("New password");
+    expect(screen.getByText("Choose a new password")).toBeDefined();
+    expect(screen.getByText(/Setting it ends every session you hold/)).toBeDefined();
+    type("New password", "correct horse battery staple");
+    type("Confirm new password", "correct horse battery staple");
+    fireEvent.click(screen.getByRole("button", { name: "Set password" }));
+    expect(await screen.findByText("Sign in as jane.doe with your new password.")).toBeDefined();
+    expect(screen.getByText(/Every session you held has ended/)).toBeDefined();
+  });
+
+  // A LINK THAT NO LONGER OPENS DOES NOT SAY WHICH IT WAS, so the screen names
+  // no lifetime: a reset lasts a day and a first link a week, and "works once,
+  // and for a day" was wrong for every first link.
+  test("a link that no longer opens names no lifetime", async () => {
+    engine({ [`GET ${PATH}`]: SPENT });
+    mount();
+    await screen.findByText(
+      "This password reset link is no longer valid. Ask an administrator for a new one.",
+    );
+    expect(screen.getByText(/works once, and for a limited time/)).toBeDefined();
+    expect(screen.queryByText(/for a day/)).toBeNull();
+  });
+});
+
 describe("spending it", () => {
   test("a password under the floor is refused here, and nothing is posted", async () => {
     const sent = engine({ [`GET ${PATH}`]: VIEW });

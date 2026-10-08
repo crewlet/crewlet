@@ -15,6 +15,7 @@
  * network half is `configWrite.ts`.
  */
 
+import type { SeatHeldHolder } from "../contract/config.ts";
 import type { ConfigProblem, ConfigWarning, Derived } from "./types.ts";
 
 /** What the engine answered: its status, its parsed body and its entity tag.
@@ -110,10 +111,11 @@ export function classifyConfigRefusal(answer: ConfigAnswer): ConfigRefusal {
   }
   if (answer.status === 401 || answer.status === 403) return { kind: "guarded", code };
   // A 409 THAT IS NOT A RACE. `seat_held` refuses a write taking a human seat
-  // out of the company while somebody is bound to it: nothing about it moves
-  // with a newer revision, so reading it as one offered to update a draft
-  // onto the very revision it was built on, for ever. It is a problem with
-  // the draft, one per held seat, which unbinding the person clears.
+  // out of the company while something holds it — a person, a service
+  // account, an open invitation: nothing about it moves with a newer
+  // revision, so reading it as one offered to update a draft onto the very
+  // revision it was built on, for ever. It is a problem with the draft, one
+  // per held seat, which freeing the seat clears.
   if (answer.status === 409 && code === "seat_held") {
     return {
       kind: "problems",
@@ -221,33 +223,45 @@ export function refusedSentence(entry: Record<string, unknown>): string {
 
 /**
  * One problem per seat a `409 seat_held` names, each about that seat (by its
- * handle) and naming everybody bound to it with the command that unbinds
- * them, which takes the person's id. A body that names none is one problem at
- * document level carrying the refusal's own sentence.
+ * handle) and naming the ONE thing holding it (`SeatHeldHolder`) with the
+ * command that frees it. A body that names none is one problem at document
+ * level carrying the refusal's own sentence.
+ *
+ * THE REMEDY IS THE HOLDER'S KIND. A person holds a human seat for as long as
+ * they exist, so they are MOVED to another human seat or removed — never
+ * unbound, which the engine refuses for a person; a service account is
+ * unbound; an open invitation is cancelled. One remedy for all of them told
+ * an administrator to unbind a person, which could never clear the refusal.
  */
 function heldSeatProblems(held: unknown, detail: string): ConfigProblem[] {
   const seats = isRecord(held) ? Object.entries(held).sort(([a], [b]) => a.localeCompare(b)) : [];
-  const problems = seats.map(([seat, holders]): ConfigProblem => {
-    const people = (Array.isArray(holders) ? holders : []).filter(isRecord);
-    const names = people.map((h) => text(h.login) || text(h.person)).filter((n) => n !== "");
-    const unbind = people
-      .map((h) => text(h.person))
-      .filter((id) => id !== "")
-      .map((id) => `crewlet iam unbind ${id}`);
-    return {
-      path: "",
-      segments: null,
-      kind: "seat_held",
-      seat,
-      message:
-        `@${seat} is held by ${names.join(", ") || "somebody"}: unbind them first` +
-        (unbind.length > 0 ? ` (${unbind.join("; ")})` : "") +
-        ", then save again. People & access shows who holds each seat.",
-    };
-  });
+  const problems = seats.map(([seat, claim]): ConfigProblem => ({
+    path: "",
+    segments: null,
+    kind: "seat_held",
+    seat,
+    message: `@${seat} ${heldBy(isRecord(claim) ? (claim as SeatHeldHolder) : {})}, then save again. The seat's page in the org chart says what holds it.`,
+  }));
   return problems.length > 0
     ? problems
     : [{ path: "", segments: null, kind: "seat_held", message: detail }];
+}
+
+/** What holds one seat and how it is freed, as the middle of a sentence. */
+function heldBy(claim: SeatHeldHolder): string {
+  const id = text(claim.person);
+  const who = text(claim.login) || id;
+  if (id && text(claim.kind) === "machine") {
+    return `is held by the service account ${who}: unbind it first (crewlet iam unbind ${id})`;
+  }
+  if (id) {
+    return `is held by ${who}: move them to another human seat (crewlet iam bind ${id} SEAT) or remove them (crewlet iam remove ${id}) first`;
+  }
+  const invitation = text(claim.invitation);
+  if (invitation) {
+    return `is held by the open invitation ${invitation}: cancel it first (crewlet iam cancel-invite ${invitation})`;
+  }
+  return "is held: free it first";
 }
 
 /**

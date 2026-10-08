@@ -49,8 +49,11 @@ import (
 // options by [HumanSurfaces.Mount].
 type HumanSurfaces struct {
 	// SignIn serves /auth — how a person BECOMES a principal. Every node
-	// serves it, one that has met no company included: that is the node
-	// its company's first person is invited to.
+	// serves it, one that has met no company included: there the
+	// deployment's Tier A token exchanges for a session (`POST
+	// /auth/token`), which is how a company is created, and the company's
+	// first person is invited or created onto a human seat it declares —
+	// `409 no_active_revision` until it does.
 	//
 	// HELD BY WHOEVER SERVES IT as well as mounted, for
 	// [authapi.Service.Stop]: the work a sign-in runs after its answer — a
@@ -86,8 +89,10 @@ type HumanSurfaces struct {
 //
 // EVERY NODE SERVES ALL OF THEM, with a company or without one. The identity
 // estate is the engine's CORE, running from boot on every node, so a node
-// nobody has configured yet still signs people in, holds the directory its
-// first person is invited through, and serves the write surface — whose
+// nobody has configured yet still exchanges the deployment's Tier A token for
+// a session — the session its company is created through — holds the
+// directory its first person is invited or created into once that company
+// declares a human seat, and serves the write surface — whose
 // routes answer `503 no_active_revision` until the first company brings the
 // tracker and the knowledge base up, and are served from then on with no
 // restart. They used to be ABSENT on such a node, each logged, so the node a
@@ -151,8 +156,10 @@ func (h HumanSurfaces) Mount(o *Options) {
 // signInSurface builds /auth and the session arm beside it.
 //
 // ON EVERY NODE. The identity estate is the engine's core, so a node that has
-// met no company holds its directory too — and is exactly where the company's
-// first person is invited and signs in. An engine with no identity estate is
+// met no company holds its directory too — and is exactly where the
+// deployment's Tier A token signs a session in to create the company, after
+// which its first person is invited or created onto one of its human seats
+// and signs in there. An engine with no identity estate is
 // one [engine.New] did not build, which is a wiring mistake to refuse by
 // name rather than a posture to serve around.
 //

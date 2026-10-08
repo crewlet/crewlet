@@ -262,7 +262,18 @@ function Profile({
                 {seatName} <span className="mono muted">{seat}</span>
               </a>
             ) : (
-              <EmptyValue label="Bound to no seat" />
+              // EVERY PERSON HOLDS A HUMAN SEAT, so a person with none was
+              // recorded before that held — a fault the directory reports
+              // (`person_without_seat`), and one only an administrator mends.
+              // SAID, not a blank: "Bound to no seat" read as a choice.
+              <span className="row gap-1" style={{ flexWrap: "wrap" }}>
+                <Tag size="sm" variant="warning">
+                  No seat
+                </Tag>
+                <span className="t-caption muted">
+                  Every person holds a human seat — ask whoever manages people to give you one.
+                </span>
+              </span>
             )}
           </dd>
           <dt>Grants</dt>

@@ -399,8 +399,13 @@ describe("signing in with the deployment's token", () => {
     await answered();
     screen.getByText(/nobody has joined this deployment yet/i);
     expect(screen.queryByText(/nobody has been invited/i)).toBeNull();
-    screen.getByText(/invite yourself/i);
-    screen.getByText(/if you have invited yourself already, open that link/i);
+    // A PERSON COMES FROM A SEAT: the way in is the org chart, never a
+    // People & access button that no longer invites anybody.
+    screen.getByText(
+      /open Agents › Org chart, choose\s+your human seat and invite or create yourself/i,
+    );
+    expect(screen.queryByText(/People & access/)).toBeNull();
+    screen.getByText(/if you have a link already, open it instead/i);
     // OPEN, not behind the disclosure a claimed deployment keeps it under.
     expect(screen.queryByText("Use an API token instead")).toBeNull();
     expect(screen.getByLabelText("API token")).toBeDefined();
@@ -411,7 +416,7 @@ describe("signing in with the deployment's token", () => {
     engine({ "GET /health": CLAIMED, "GET /auth/session": NOBODY });
     mount();
     await answered();
-    expect(screen.queryByText(/invite yourself/i)).toBeNull();
+    expect(screen.queryByText(/invite or create yourself/i)).toBeNull();
     expect(screen.getByLabelText(/^password$/i)).toBeDefined();
     screen.getByText("Use an API token instead");
   });
@@ -425,7 +430,7 @@ describe("signing in with the deployment's token", () => {
     });
     mount();
     await answered();
-    expect(screen.queryByText(/invite yourself/i)).toBeNull();
+    expect(screen.queryByText(/invite or create yourself/i)).toBeNull();
     screen.getByText(/use the login or email address/i);
   });
 });

@@ -55,7 +55,7 @@ func TestEveryDirectoryWriteCarriesAnInstantItsLedgerCanVouchFor(t *testing.T) {
 			"/iam/people/" + bob.String() + "/mfa/reset", nil},
 		{"ending every session", http.MethodPost, "/iam/invalidate-all", nil},
 		{"an invitation", http.MethodPost, "/iam/invitations",
-			map[string]any{"email": "dana@example.com"}},
+			map[string]any{"email": "dana@example.com", "seat": "sre"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -121,7 +121,8 @@ func TestAKeyOutsideTheGrammarIsRefusedBeforeAnyWrite(t *testing.T) {
 		{"ending somebody's sessions", http.MethodDelete,
 			"/iam/people/" + bob.String() + "/sessions", "retry-7", nil},
 		{"a create", http.MethodPost, "/iam/people", "retry-1",
-			map[string]any{"login": "dana.sre", "email": "dana@example.com"}},
+			map[string]any{"login": "dana.sre", "email": "dana@example.com",
+				"seat": "sre"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -164,13 +165,14 @@ func TestAnUnvouchedUnknownSendsTheAdministratorElsewhere(t *testing.T) {
 		body       map[string]any
 		unvouched  bool
 	}{
-		{"a create", "enrol",
-			map[string]any{"login": "dana.sre", "email": "dana@example.com"}, true},
-		{"a create naming a seat", "enrol",
+		{"a person's create", "create",
 			map[string]any{"login": "dana.sre", "email": "dana@example.com",
 				"seat": "sre"}, true},
-		{"a lost acknowledgement (the control)", "enrol",
-			map[string]any{"login": "dana.sre", "email": "dana@example.com"}, false},
+		{"a service account's create", "create",
+			map[string]any{"kind": "machine", "login": "ci:release"}, true},
+		{"a lost acknowledgement (the control)", "create",
+			map[string]any{"login": "dana.sre", "email": "dana@example.com",
+				"seat": "sre"}, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -363,12 +365,13 @@ func TestTwoKeysSharingAUUIDCreateTwoPeople(t *testing.T) {
 	for _, key := range []string{bare, named} {
 		r := newRig(t)
 		got := r.asWith(administrator(), http.MethodPost, "/iam/people",
-			map[string]any{"login": "dana.sre", "email": "dana@example.com"},
+			map[string]any{"login": "dana.sre", "email": "dana@example.com",
+				"seat": "sre"},
 			http.Header{opkey.Header: {key}})
 		if got.status/100 != 2 {
 			t.Fatalf("a create under %q answered %d: %v", key, got.status, got.body)
 		}
-		people[key] = r.writer.enrolled.PersonID
+		people[key] = r.writer.created.PersonID
 	}
 	if people[bare] == "" || people[bare] == people[named] {
 		t.Errorf("the keys %q and %q created %q and %q, want two people",

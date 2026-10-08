@@ -5,6 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -23,22 +26,25 @@ func cancel(t *testing.T, rig *writeRig, id string) (statelog.Result, error) {
 	return result, err
 }
 
-// A CANCELLED INVITATION OPENS NOTHING, AND ITS ADDRESS IS FREE AT ONCE.
+// A CANCELLED INVITATION OPENS NOTHING, AND ITS ADDRESS AND ITS SEAT ARE FREE
+// AT ONCE.
 //
 // The record deletes the row, so a link to it resolves exactly as an id nobody
 // issued does — the zero row every refusal of a dead link is decided on — and
-// the address it held is free for a new invitation under a new key the moment
-// it lands. The cancellation is on the trail, filed under the address as the
-// issue was.
+// the address and the seat it held are free for a new invitation under a new
+// key the moment it lands. The cancellation is on the trail, filed under the
+// address as the issue was.
 //
-// The CONTROL is the same second invitation with no cancellation, which the
-// address refuses as held by the first. Mutation: delete nothing in the apply
-// and the second invitation is refused; keep the row and the link still opens.
-func TestACancelledInvitationOpensNothingAndFreesItsAddress(t *testing.T) {
+// The CONTROL is the same two invitations with no cancellation, which the
+// address and the seat each refuse as held by the first. Mutation: delete
+// nothing in the apply and the second invitations are refused; keep the row
+// and the link still opens.
+func TestACancelledInvitationOpensNothingAndFreesItsAddressAndItsSeat(t *testing.T) {
 	t.Parallel()
 	for _, cancelled := range []bool{true, false} {
 		rig := newWriteRig(t)
-		first, err := inviteFor(t, rig, "priya@example.com", "")
+		first, err := inviteFor(t, rig, "priya@example.com",
+			rig.vacantSeat("platform-lead"))
 		if err != nil {
 			t.Fatalf("invite: %v", err)
 		}
@@ -62,16 +68,73 @@ func TestACancelledInvitationOpensNothingAndFreesItsAddress(t *testing.T) {
 					"under the address", trail)
 			}
 		}
-		_, err = inviteFor(t, rig, "priya@example.com", "")
-		var taken *iamdomain.ErrTaken
-		switch {
-		case cancelled && err != nil:
-			t.Errorf("a new invitation to a cancelled one's address was "+
-				"refused: %v", err)
-		case !cancelled && !errors.As(err, &taken):
-			t.Errorf("with no cancellation the second invitation answered %v, "+
-				"want the address held by the first — the control", err)
+		for _, again := range []struct {
+			what, address, seat string
+			field               iamdomain.Unique
+		}{
+			{"its address, onto another seat", "priya@example.com",
+				rig.vacantSeat("data-lead"), iamdomain.UniqueEmail},
+			{"its seat, for another address", "dana@example.com",
+				"platform-lead", iamdomain.UniqueSeat},
+		} {
+			_, err = inviteFor(t, rig, again.address, again.seat)
+			var taken *iamdomain.ErrTaken
+			switch {
+			case cancelled && err != nil:
+				t.Errorf("a new invitation to a cancelled one's %s was "+
+					"refused: %v", again.what, err)
+			case !cancelled && (!errors.As(err, &taken) ||
+				taken.Field != again.field || taken.Invitation != first.ID):
+				t.Errorf("with no cancellation an invitation to %s answered "+
+					"%v, want it held by the first — the control", again.what, err)
+			}
 		}
+	}
+}
+
+// AN INVITATION THAT AGED OUT HOLDS NOTHING, swept or not.
+//
+// Open is one predicate — not redeemed, not aged out — and the sweep that
+// collects the row runs a week after its deadline, so between the two an
+// expired invitation is a row that must hold neither its address nor its seat:
+// held, an administrator who let a link lapse could not create its person on
+// the seat for a week, for a link that opens nothing.
+//
+// The CONTROL is the same create while the invitation is still open, refused
+// naming it.
+func TestAnInvitationThatAgedOutHoldsNothing(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	seat := rig.vacantSeat("platform-lead")
+	issued := issueOnto(t, rig, "priya@example.com", seat, brokerAt.Add(time.Hour))
+	create := func(w *iamdomain.Writer, op string, expires time.Time) error {
+		return rig.during(func() error {
+			_, err := w.Create(t.Context(), iamdomain.Creation{
+				PersonID: uuid.Must(uuid.NewV7()).String(), Kind: iam.KindPerson,
+				Stage: iam.StageActive, Name: "Priya Shah",
+				Email: "priya@example.com", Login: "priya.shah", Seat: seat,
+				LinkExpiresAt: expires, OpID: op, Reason: "a hire",
+			})
+			return err
+		})
+	}
+	var taken *iamdomain.ErrTaken
+	if err := create(rig.writer, "op-open", firstLinkExpiry); !errors.As(err, &taken) ||
+		taken.Invitation != issued.ID {
+		t.Fatalf("a create beside the open invitation answered %v, want it "+
+			"refused naming %s — the control", err, issued.ID)
+	}
+	later := rig.writer.As(principalNamed("ana.admin", iam.KindPerson, iam.AllGrants))
+	at := brokerAt.Add(2 * time.Hour)
+	later.Now = func() time.Time { return at }
+	if err := create(later, "op-lapsed", at.Add(time.Hour)); err != nil {
+		t.Fatalf("a create onto the seat and the address of an invitation that "+
+			"aged out was refused: %v", err)
+	}
+	if rows := rig.column(`SELECT id FROM iam_invites WHERE id = ?`,
+		issued.ID); len(rows) != 1 {
+		t.Errorf("the aged-out invitation's row is %v — the case is about a row "+
+			"the sweep has not collected", rows)
 	}
 }
 
@@ -84,11 +147,12 @@ func TestACancelledInvitationOpensNothingAndFreesItsAddress(t *testing.T) {
 func TestOnlyAnUnredeemedInvitationIsCancelled(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
-	issued, err := inviteFor(t, rig, "sam@example.com", "")
+	seat := rig.vacantSeat("platform-lead")
+	issued, err := inviteFor(t, rig, "sam@example.com", seat)
 	if err != nil {
 		t.Fatalf("invite: %v", err)
 	}
-	if _, err = redeemAs(t, rig, issued, "sam@example.com", issued.Secret, ""); err != nil {
+	if _, err = redeemAs(t, rig, issued, "sam@example.com", issued.Secret, seat); err != nil {
 		t.Fatalf("redeem: %v", err)
 	}
 	rig.drain()
@@ -125,15 +189,16 @@ func TestOnlyAnUnredeemedInvitationIsCancelled(t *testing.T) {
 func TestTheReaderListsOpenInvitationsUnlessAskedForAll(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
-	open, err := inviteFor(t, rig, "open@example.com", "")
+	open, err := inviteFor(t, rig, "open@example.com", rig.vacantSeat("open-seat"))
 	if err != nil {
 		t.Fatalf("invite: %v", err)
 	}
-	spent, err := inviteFor(t, rig, "spent@example.com", "")
+	spent, err := inviteFor(t, rig, "spent@example.com", rig.vacantSeat("spent-seat"))
 	if err != nil {
 		t.Fatalf("invite: %v", err)
 	}
-	if _, err = redeemAs(t, rig, spent, "spent@example.com", spent.Secret, ""); err != nil {
+	if _, err = redeemAs(t, rig, spent, "spent@example.com", spent.Secret,
+		"spent-seat"); err != nil {
 		t.Fatalf("redeem: %v", err)
 	}
 	rig.drain()

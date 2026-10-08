@@ -119,6 +119,37 @@ A few things worth knowing when deploying Crewlet:
   made the id itself the link**, so an invitation they issued is in every
   backup as a working credential: such an invitation is now redeemable by
   nobody, and the remedy is to issue it again.
+- **Whoever creates a person is shown that person's first password link.** An
+  administrator can create somebody directly on a vacant human seat (`POST
+  /iam/people`, `crewlet iam create`, or **Create person** on the seat in the
+  org chart) instead of inviting them, and the answer carries the person's
+  first password link, shown once, for the administrator to send on. Until it
+  is spent, or for its week, that link sets the password of an `active` person
+  who acts as the seat they hold — so holding `people:manage`, with a vacant
+  human seat to name, is enough to obtain a credential that will act as that
+  seat once its password is set. Two rules bound it: a create confers only
+  grants its writer holds, exactly as an invitation does, so nobody creates a
+  person holding more than they could act with themselves; and the link signs
+  nobody in, so a second factor the company requires is enrolled at that
+  person's first sign-in. Give `people:manage` to the people you would trust to
+  put somebody on any vacant seat, and treat a created person's link as you
+  would an invitation: send it over a channel only they read, and if it may
+  have been seen by anybody else, end it — issue a password reset link, or end
+  their sessions — before it is spent. The issue is an
+  `iam_password_reset_issued` event marked `first`, naming who created them.
+- **A first password link and an invitation link are derived, under the
+  company's blind key.** So that a retry of a create or an invitation whose
+  answer was lost hands back the same link rather than a second person or a
+  second invitation, each link's id and secret are MACs under the company's
+  blind-index key — an invitation's of its operation key, a first password
+  link's of the person the create's key derived — and the estate keeps only the
+  SHA-256 of the secret. Whoever holds that key can compute the secret of every link that
+  is still open. That adds no exposure beyond the keyring: the blind-index key
+  is itself sealed under the fleet keyring, and whoever holds the keyring can
+  already sign any state-log record, open every sealed name, address and
+  second-factor seed, and sign session cookies. Protect the keyring as the root
+  of trust it is, and a stolen copy of the identity log, a snapshot or a backup
+  without it computes no link.
 - **Every API route requires a credential, reads included.** `allow_anonymous_read`
   is gone: it served `/events`, `/agents/{id}/memory` and `/ws/stream` — full
   LLM transcripts, diary entries and the roster — without one, by default, and
@@ -238,10 +269,11 @@ A few things worth knowing when deploying Crewlet:
   them, because a history whose authors evaporate is not an audit trail.
   **Their login outlives it too, in the clear**: it is on the removal record in
   the identity log (so in every backup and donated snapshot), in the
-  tombstone's `iam_removed.claims_json`, and in the audit rows that record an
-  unbound person's changes under it. A login is deliberately not sealed — it is
+  tombstone's `iam_removed.claims_json`, in the trail's reasons
+  (`suspended by jane.doe`), and in any rows a person recorded before every
+  person held a seat wrote under it. A login is deliberately not sealed — it is
   printed beside everything its holder does — and the one an invitation's form
-  proposes is derived from the address (`jane.doe@example.com` proposes
+  or an administrator's create proposes is derived from the address (`jane.doe@example.com` proposes
   `jane.doe`), so after a removal the address's local part is usually still
   readable. If a person's login has to be erasable, do not derive it from a
   personal address: give them one that names nothing about them. See

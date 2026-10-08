@@ -23,8 +23,11 @@ func TestAnUnreachableStoreIsNotUnpaused(t *testing.T) {
 	nc := embeddedNATS(t)
 	store := openFleet(t, nc)
 	swe := uuid.MustParse("7a1e4c90-2b3d-5f68-9a0c-4e5d6f7a8b9c")
+	// BY A SEAT'S HANDLE, kind human, as a signed-in person is recorded:
+	// every person holds a human seat (ADR-0026), and a login written as
+	// kind human is no principal [iam.ActorFor] makes.
 	if _, created, err := store.CreateSeatPause(t.Context(), coord.SeatPause{
-		Seat: swe, By: "jane.doe", ByKind: iam.ActorHuman, At: time.Now(),
+		Seat: swe, By: "jane-doe", ByKind: iam.ActorHuman, At: time.Now(),
 	}); err != nil || !created {
 		t.Fatalf("CreateSeatPause = (%v, %v)", created, err)
 	}

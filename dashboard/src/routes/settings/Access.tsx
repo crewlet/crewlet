@@ -23,8 +23,8 @@
  *    it is. Opening a row reads that one principal's credentials
  *    (`GET /iam/credentials?person=`) and sessions
  *    (`GET /iam/people/{id}/sessions`).
- *  - `GET /iam/seats` — every human seat of the running company and who
- *    holds it.
+ *  - `GET /iam/seats` — every human seat of the running company and what
+ *    holds it: a person, a service account, or an open invitation.
  *  - `GET /iam/node-tokens` — THIS NODE's Tier A tokens by label, each joined
  *    to the directory row its login names.
  *  - `GET /iam/check` — what the directory reports wrong, worded per kind
@@ -36,11 +36,19 @@
  *
  * # And written, by a reader holding `people:manage`
  *
- * Inviting somebody, creating a service account and minting its token,
- * cancelling an invitation, and — on an opened row — changing a login, a seat
- * or grants, suspending and reactivating, resetting a second factor, issuing a
- * password reset link, ending every session, revoking one credential and
- * removing somebody. Each is one `/iam` write through `lib/iamWrite.ts`: a
+ * Creating a service account and minting its token, cancelling an invitation,
+ * and — on an opened row — changing a login, a seat or grants, suspending and
+ * reactivating, resetting a second factor, issuing a password reset link,
+ * ending every session, revoking one credential and removing somebody.
+ *
+ * NOT INVITING OR CREATING A PERSON. Every person holds exactly one human seat
+ * for as long as they exist, so a person comes from a vacant human seat: its
+ * card on the org chart, its peek and its page offer Invite and Create
+ * (`components/people.tsx`), and this screen points there. A person's seat is
+ * changed here, among the vacant ones, and never cleared — removing them is
+ * what frees it; only a service account is unbound.
+ *
+ * Each is one `/iam` write through `lib/iamWrite.ts`: a
  * step-up the engine asks for is confirmed and the same request replayed, an
  * unknown answer is retried under the same operation key, and a refusal is the
  * engine's sentence with the grants that would admit. After each write the
@@ -68,6 +76,7 @@
 import { useCallback, useMemo, useState } from "react";
 import {
   Button,
+  ButtonLink,
   Callout,
   Card,
   Checkbox,
@@ -86,21 +95,25 @@ import {
   SendGlyph,
   PlusGlyph,
   TriangleAlertGlyph,
-  UserPlusGlyph,
   UsersGlyph,
 } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
 import {
+  CancelInvitation,
   canManagePeople,
   ConfirmDialog,
+  DIRECTORY_READ,
   endedWord,
   ExpiresCell,
   GrantTags,
   IamOutcome,
-  InviteDialog,
+  listsNoCompany,
   MintTokenDialog,
   ShownOnce,
+  useHumanSeats,
+  useSeatEntry,
 } from "~/components/people.tsx";
+import { FINDING_KINDS, type HumanSeat } from "~/contract/identity.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -180,16 +193,6 @@ export interface SessionRow {
   ended_reason?: string;
   live: boolean;
   enrolment_only?: boolean;
-}
-
-/** One human seat of the running company and who holds it (`iamapi.SeatRow`). */
-export interface SeatRow {
-  handle: string;
-  name: string;
-  /** The key of the unit the seat sits in, "" at the root. */
-  unit?: string;
-  /** Whoever the directory binds to it, absent for a seat nobody holds. */
-  holder?: { person: string; login?: string; stage?: string };
 }
 
 /** One of this node's Tier A tokens, by label, joined to its directory row. */
@@ -302,18 +305,32 @@ export const TOKEN_ROW_WORDS: Record<string, Words> = {
   none: {
     label: "No row",
     tone: "neutral",
-    hint: "Nobody in the directory holds this login, so the token acts as itself and is bound to no seat. Bind it with crewlet iam if it should act as one.",
+    hint: "Nobody in the directory holds this login, so the token acts as itself and is bound to no seat. To have it act as a human seat nothing else holds, create its row bound to one: crewlet iam create -kind machine -login token:<id> -seat <seat>.",
   },
   held: { label: "Row", tone: "success", hint: "A directory row holds this login." },
 };
 
-/** The directory report's kinds, in the engine's order (`iamapi.FindingKinds`). */
-export const FINDING_WORDS: Record<string, { label: string; tone: Tone }> = {
-  no_people_manage_holder: { label: "Nobody can administer", tone: "danger" },
-  person_without_credential: { label: "Active, no credential", tone: "warning" },
-  binding_dangling: { label: "Seat gone", tone: "warning" },
-  grant_clamped_by_ceiling: { label: "Grant withheld here", tone: "neutral" },
-};
+/**
+ * The directory report's kinds in words — KEYED ON THE ENGINE'S OWN LIST
+ * (`FINDING_KINDS`, held against `iamapi.FindingKinds`), so a kind the engine
+ * grew is a compile error here rather than a raw code on the screen. The
+ * report arrives sorted in that list's order.
+ */
+export const FINDING_WORDS: Record<(typeof FINDING_KINDS)[number], { label: string; tone: Tone }> =
+  {
+    no_people_manage_holder: { label: "Nobody can administer", tone: "danger" },
+    person_without_credential: { label: "Active, no credential", tone: "warning" },
+    person_without_seat: { label: "No seat", tone: "warning" },
+    binding_dangling: { label: "Seat gone", tone: "warning" },
+    grant_clamped_by_ceiling: { label: "Grant withheld here", tone: "neutral" },
+  };
+
+/** A finding's words, or none for a kind this build does not know. */
+function findingWords(kind: string): { label: string; tone: Tone } | undefined {
+  return (FINDING_KINDS as readonly string[]).includes(kind)
+    ? FINDING_WORDS[kind as (typeof FINDING_KINDS)[number]]
+    : undefined;
+}
 
 /** What a credential method is called. */
 const METHOD_WORDS: Record<string, string> = {
@@ -364,18 +381,26 @@ function WordTag({ words, fallback }: { words: Words | undefined; fallback: stri
 }
 
 /**
- * What comes next in a company nobody has joined: invite yourself, or — once
- * an invitation is open — open its link, which is where its person chooses a
- * login and password.
+ * What comes next in a company nobody has joined: put yourself on your seat —
+ * every person holds a human seat, so the org chart is where a person comes
+ * from — or, once an invitation is open, open its link, which is where its
+ * person chooses a login and password.
+ *
+ * THE SEAT LISTING DECIDES THE STEP, so it is read whole rather than as its
+ * rows. A node running NO COMPANY answers it `409 no_active_revision`, and
+ * the step is creating one that declares a human seat: read as its rows, the
+ * refusal was an empty answer taken for a company holding seats, and the
+ * callout sent the operator to "choose your human seat" on a chart with no
+ * company behind it. A company with NO HUMAN SEAT can admit nobody, and is
+ * told so with the way to add one. A listing refused for any other reason
+ * says nothing about the seats, so the callout claims nothing about them.
  */
 function FirstPerson({
   waiting,
-  onInvite,
+  seats,
 }: {
-  /** The open invitations. */
   waiting: InvitationRow[];
-  /** Opens the invite dialog, for a reader who may invite. */
-  onInvite: (() => void) | undefined;
+  seats: RestResult<HumanSeat[]>;
 }) {
   if (waiting.length > 0) {
     const only = waiting.length === 1 ? waiting[0]! : null;
@@ -388,43 +413,85 @@ function FirstPerson({
       <Callout variant="neutral" title="Nobody has joined yet">
         {which} waiting to be redeemed: {only ? "its" : "an invitation's"} link is where its person
         chooses a login and password, and until somebody opens one nobody can sign in with a
-        password. A link is shown once, when it is issued — a lost one is cancelled below and issued
-        again. The API token you are using stays the way back in.
+        password. A link is shown once, when it is issued — a lost one is cancelled below or on its
+        seat, and issued again from the seat. The API token you are using stays the way back in.
+      </Callout>
+    );
+  }
+  if (listsNoCompany(seats)) {
+    return (
+      <Callout
+        variant="neutral"
+        title="Nobody has joined yet"
+        action={
+          <ButtonLink size="small" variant="primary" href={href(["agents", "edit"])}>
+            Create the company
+          </ButtonLink>
+        }
+      >
+        This node runs no company yet, so it has no human seat for anybody to hold. Create one in
+        the org chart — or import one with <InlineCode>crewlet config import</InlineCode> — that
+        declares a human seat for you, then invite or create yourself on it. The API token you are
+        using stays the way back in.
+      </Callout>
+    );
+  }
+  if (seats.data && seats.data.length === 0) {
+    return (
+      <Callout
+        variant="neutral"
+        title="Nobody has joined yet"
+        action={
+          <ButtonLink
+            size="small"
+            variant="primary"
+            href={href(["agents", "edit"], { add: "human" })}
+          >
+            Add a human seat
+          </ButtonLink>
+        }
+      >
+        This company has no person in it, and no human seat for one: every person holds a human
+        seat, so add one for yourself in the org chart first, then invite or create yourself on it.
+        The API token you are using stays the way back in.
+      </Callout>
+    );
+  }
+  const chart = (
+    <ButtonLink size="small" variant="primary" href={href(["agents"])}>
+      Open the org chart
+    </ButtonLink>
+  );
+  if (!seats.data) {
+    return (
+      <Callout variant="neutral" title="Nobody has joined yet" action={chart}>
+        This company has no person in it, so nobody can sign in with a password yet. Every person is
+        invited or created on a human seat in the org chart; this node could not list the seats just
+        now, so Human seats below says why. The API token you are using stays the way back in.
       </Callout>
     );
   }
   return (
-    <Callout
-      variant="neutral"
-      title="Nobody has joined yet"
-      action={
-        onInvite ? (
-          <Button size="small" variant="primary" onClick={onInvite}>
-            Invite person
-          </Button>
-        ) : undefined
-      }
-    >
-      This company has no person in it, so nobody can sign in with a password yet. Invite yourself —
-      your address, your seat and the grants you need — and open the link it shows: that is where
-      you choose your login and password. The API token you are using stays the way back in.
+    <Callout variant="neutral" title="Nobody has joined yet" action={chart}>
+      This company has no person in it, so nobody can sign in with a password yet. Open the org
+      chart, choose your human seat and invite or create yourself on it: the link it shows is where
+      you choose your password. The API token you are using stays the way back in.
     </Callout>
   );
+}
+
+/**
+ * Whether a read has said something — answered or been refused — rather than
+ * being on its way for the first time. A step decided before then is decided
+ * on nothing, and says the wrong one first.
+ */
+function settled(read: RestResult<unknown>): boolean {
+  return !(read.loading && read.data === null && read.error === null);
 }
 
 // ---------------------------------------------------------------------------
 // Reads
 // ---------------------------------------------------------------------------
-
-/**
- * How often each answer is asked again, in ms.
- *
- * The directory moves on an administrator's gesture and a node's Tier A at a
- * restart: a minute is soon enough to see a `crewlet iam` run in another
- * terminal land, and the page is read, not watched. The tab coming back asks
- * at once, which is where somebody who just ran the command is looking.
- */
-const POLL_MS = 60_000;
 
 /** A page as large as the directory serves (`iamdomain.MaxPageSize`). */
 const PAGE = 200;
@@ -482,15 +549,12 @@ function listOf<T>(answer: unknown, field: string): T[] {
   return Array.isArray(list) ? (list as T[]) : [];
 }
 
-/** How every `/iam` read here is kept current. */
-const READ = { pollMs: POLL_MS, refetchOnFocus: true };
+/** How every `/iam` read here is kept current: as every directory read is. */
+const READ = DIRECTORY_READ;
 
 // ---------------------------------------------------------------------------
 // The screen
 // ---------------------------------------------------------------------------
-
-/** The dialog a page action has open. */
-type Opening = "invite" | "service" | null;
 
 export function PeopleAndAccess() {
   const org = useOrg();
@@ -500,15 +564,13 @@ export function PeopleAndAccess() {
   const manages = canManagePeople(viewer.grants);
   const toast = useToast();
   const [opened, setOpened] = useParam("person", "");
-  const [opening, setOpening] = useState<Opening>(null);
+  const [creating, setCreating] = useState(false);
   const [allInvitations, setAllInvitations] = useState(false);
 
   const directory = useRest("/iam/people", readDirectory, READ);
-  const seats = useRest(
-    "/iam/seats",
-    async (signal) => listOf<SeatRow>(await rest.get("/iam/seats", signal), "seats"),
-    READ,
-  );
+  // THE ONE READING OF THE SEATS every seat surface takes, so a gesture made
+  // on a seat elsewhere on the page — or this page's own — is heard here too.
+  const seats = useHumanSeats(true);
   const tokens = useRest(
     "/iam/node-tokens",
     async (signal) => listOf<NodeToken>(await rest.get("/iam/node-tokens", signal), "tokens"),
@@ -524,8 +586,8 @@ export function PeopleAndAccess() {
     readInvitations(allInvitations),
     READ,
   );
-  // AFTER A WRITE, EVERY LIST IT MAY HAVE MOVED is read again, quietly: an
-  // invitation moves the invitations and the vacant seats, a create the
+  // AFTER A WRITE, EVERY LIST IT MAY HAVE MOVED is read again, quietly: a
+  // cancellation moves the invitations and the vacant seats, a create the
   // directory, an edit the directory, the seats and the report.
   const { reload: reloadDirectory } = directory;
   const { reload: reloadSeats } = seats;
@@ -553,7 +615,11 @@ export function PeopleAndAccess() {
   const people = useMemo(() => directory.data ?? [], [directory.data]);
   const active = people.filter((p) => p.stage === "active").length;
   const seatRows = useMemo(() => seats.data ?? [], [seats.data]);
-  const unheld = seatRows.filter((s) => !s.holder).length;
+  // VACANT IS HELD BY NOTHING: an open invitation holds its seat as surely as
+  // a person does, and counted as vacant it read as a seat an administrator
+  // could still invite somebody onto.
+  const vacant = seatRows.filter((s) => !s.holder && !s.invitation).length;
+  const invited = seatRows.filter((s) => !s.holder && s.invitation).length;
   const tokenRows = useMemo(() => tokens.data ?? [], [tokens.data]);
   const boundTokens = tokenRows.filter((t) => t.seat).length;
   const openedRow = people.find((p) => p.id === opened) ?? null;
@@ -566,22 +632,20 @@ export function PeopleAndAccess() {
     <>
       <PageActions>
         {manages && (
-          <>
-            <Button
-              variant="primary"
-              leadingIcon={<UserPlusGlyph size="sm" />}
-              onClick={() => setOpening("invite")}
-            >
-              Invite person
-            </Button>
-            <Button
-              variant="secondary"
-              leadingIcon={<PlusGlyph size="sm" />}
-              onClick={() => setOpening("service")}
-            >
-              New service account
-            </Button>
-          </>
+          <Button
+            variant="secondary"
+            leadingIcon={<PlusGlyph size="sm" />}
+            onClick={() => setCreating(true)}
+          >
+            New service account
+          </Button>
+        )}
+        {/* A PERSON COMES FROM A SEAT: inviting and creating are the vacant
+            seat's, on the chart, its peek and its page — see the file's doc. */}
+        {manages && (
+          <a className="t-link" href={href(["agents"])}>
+            Invite or create from the org chart →
+          </a>
         )}
         <a className="t-link" href={href(["settings", "audit"], { kind: "identity" })}>
           Identity trail →
@@ -596,17 +660,14 @@ export function PeopleAndAccess() {
         Who can reach this company and as whom: the identity directory, its open invitations, the
         human seats and who holds them, and this node&rsquo;s API tokens.{" "}
         {manages
-          ? "Invite, change and remove people here; an invitation's link, a reset link and a token are shown once."
+          ? "People are invited and created from their seat in the org chart; change, suspend and remove them here. An invitation's link, a password link and a token are shown once."
           : "Changing any of it takes people:manage."}{" "}
         This screen never reads a credential&rsquo;s value back.
       </PageNote>
-      {opening === "invite" && (
-        <InviteDialog held={viewer.grants} onClose={() => setOpening(null)} onDone={refresh} />
-      )}
-      {opening === "service" && (
+      {creating && (
         <ServiceAccountDialog
           held={viewer.grants}
-          onClose={() => setOpening(null)}
+          onClose={() => setCreating(false)}
           onDone={refresh}
         />
       )}
@@ -614,15 +675,19 @@ export function PeopleAndAccess() {
       {/* FIRST RUN: nobody has JOINED — `/health`'s `unclaimed` says no person
           is enrolled, and an invitation creates its person only when it is
           redeemed — and somebody signed in with an API token is reading
-          this. Which step is next turns on the invitations: with none open,
-          inviting yourself; with one open, its link. Keyed on `unclaimed`
-          alone, the callout said "nobody has been invited" and offered
-          another invitation directly above the one just issued. Drawn once
-          the invitations have answered, so it never says the wrong one first. */}
-      {health?.identity === "unclaimed" && !(invitations.loading && !invitations.data) && (
+          this. Which step is next turns on the invitations and the seats:
+          with an invitation open, its link; with none, the seat to put
+          yourself on, or — with no human seat at all — adding one. Keyed on
+          `unclaimed` alone, the callout said "nobody has been invited" above
+          the invitation just issued. Drawn once the invitations AND the
+          seats have answered or been refused, so it never says the wrong one
+          first — keyed on the invitations alone, it said "Open the org
+          chart" while the seats were in flight and "Add a human seat" once
+          they answered none. */}
+      {health?.identity === "unclaimed" && settled(invitations) && settled(seats) && (
         <FirstPerson
           waiting={(invitations.data ?? []).filter((i) => i.state === "open")}
-          onInvite={manages ? () => setOpening("invite") : undefined}
+          seats={seats}
         />
       )}
 
@@ -654,11 +719,13 @@ export function PeopleAndAccess() {
               <StatCard
                 icon={<TriangleAlertGlyph size="xs" />}
                 label="Human seats nobody holds"
-                value={seats.data ? unheld : EMPTY_VALUE}
+                value={seats.data ? vacant : EMPTY_VALUE}
                 sub={
                   seats.data
-                    ? `of ${seatRows.length} human seat${seatRows.length === 1 ? "" : "s"}`
-                    : "not read"
+                    ? `${invited > 0 ? `${invited} invited · ` : ""}of ${seatRows.length} human seat${seatRows.length === 1 ? "" : "s"}`
+                    : listsNoCompany(seats)
+                      ? "no company yet"
+                      : "not read"
                 }
               />
               <StatCard
@@ -684,7 +751,7 @@ export function PeopleAndAccess() {
               onRowActivate={(p) => setOpened(p.id === opened ? "" : p.id)}
               empty={{
                 title: "Nobody is in the directory yet",
-                hint: "Invite the first person with Invite person above (or crewlet iam invite), signed in with this node's API token.",
+                hint: "Invite or create the first person on their human seat in the org chart (or crewlet iam invite EMAIL -seat SEAT), signed in with this node's API token.",
               }}
               columns={[
                 {
@@ -721,7 +788,9 @@ export function PeopleAndAccess() {
                   key: "seat",
                   header: "Seat",
                   sortValue: (p) => p.seat ?? "",
-                  cell: (p) => <BoundSeat seat={p.seat} index={index} />,
+                  cell: (p) => (
+                    <BoundSeat seat={p.seat} index={index} person={p.kind === "person"} />
+                  ),
                 },
                 {
                   key: "grants",
@@ -785,58 +854,69 @@ export function PeopleAndAccess() {
             <Card.Header icon={<UsersGlyph size="sm" />} count={seatRows.length}>
               Human seats
             </Card.Header>
-            <QueryState
-              error={seats.code}
-              refusal={seats.refusal}
-              detail={seats.error?.detail || undefined}
-              loading={seats.loading && !seats.data}
-            >
-              <DataGrid<SeatRow>
-                rows={seatRows}
-                rowKey={(s) => s.handle}
-                defaultSort="seat"
-                empty={{ title: "The running company has no human seats" }}
-                columns={[
-                  {
-                    key: "seat",
-                    header: "Seat",
-                    floor: "12rem",
-                    sortValue: (s) => s.name || s.handle,
-                    cell: (s) => <SeatCell handle={s.handle} name={s.name} kind="human" />,
-                  },
-                  {
-                    key: "unit",
-                    header: "Team",
-                    shrink: true,
-                    drop: 2,
-                    sortValue: (s) => (s.unit ? (unitByKey(index, s.unit)?.name ?? s.unit) : ""),
-                    cell: (s) => {
-                      if (!s.unit) return <EmptyValue label="No team" />;
-                      return <TextCell>{unitByKey(index, s.unit)?.name ?? s.unit}</TextCell>;
+            {/* NO COMPANY IS NOT A FAILURE: the listing's 409 is the node
+                saying it has no seat to list yet, which the generic refusal
+                read as "the engine tried to answer and failed". */}
+            {listsNoCompany(seats) ? (
+              <Callout variant="neutral">
+                This node runs no company yet, so it has no human seat to list. Seats appear here
+                once a company that declares them is created or imported.
+              </Callout>
+            ) : (
+              <QueryState
+                error={seats.code}
+                refusal={seats.refusal}
+                detail={seats.error?.detail || undefined}
+                loading={seats.loading && !seats.data}
+              >
+                <DataGrid<HumanSeat>
+                  rows={seatRows}
+                  rowKey={(s) => s.handle}
+                  defaultSort="seat"
+                  empty={{ title: "The running company has no human seats" }}
+                  columns={[
+                    {
+                      key: "seat",
+                      header: "Seat",
+                      floor: "12rem",
+                      sortValue: (s) => s.name || s.handle,
+                      cell: (s) => <SeatCell handle={s.handle} name={s.name} kind="human" />,
                     },
-                  },
-                  {
-                    key: "holder",
-                    header: "Held by",
-                    sortValue: (s) => s.holder?.login ?? s.holder?.person ?? "",
-                    cell: (s) => <Holder holder={s.holder} />,
-                  },
-                  {
-                    key: "reach",
-                    header: "Reached on",
-                    drop: 1,
-                    cell: (s) =>
-                      readsConfig ? (
-                        <Contacts contact={contacts.get(s.handle)} />
-                      ) : (
-                        <EmptyValue
-                          label={needsSentence("Reading where a seat is reached", [CONFIG_READ])}
-                        />
-                      ),
-                  },
-                ]}
-              />
-            </QueryState>
+                    {
+                      key: "unit",
+                      header: "Team",
+                      shrink: true,
+                      drop: 2,
+                      sortValue: (s) => (s.unit ? (unitByKey(index, s.unit)?.name ?? s.unit) : ""),
+                      cell: (s) => {
+                        if (!s.unit) return <EmptyValue label="No team" />;
+                        return <TextCell>{unitByKey(index, s.unit)?.name ?? s.unit}</TextCell>;
+                      },
+                    },
+                    {
+                      key: "holder",
+                      header: "Held by",
+                      sortValue: (s) =>
+                        s.holder?.login ?? s.holder?.person ?? s.invitation?.email ?? "",
+                      cell: (s) => <Holder seat={s} />,
+                    },
+                    {
+                      key: "reach",
+                      header: "Reached on",
+                      drop: 1,
+                      cell: (s) =>
+                        readsConfig ? (
+                          <Contacts contact={contacts.get(s.handle)} />
+                        ) : (
+                          <EmptyValue
+                            label={needsSentence("Reading where a seat is reached", [CONFIG_READ])}
+                          />
+                        ),
+                    },
+                  ]}
+                />
+              </QueryState>
+            )}
           </Card>
 
           <Card padding="none">
@@ -925,8 +1005,29 @@ function PersonName({ row }: { row: DirectoryRow }) {
   return <TextCell>{row.name || row.login || row.id}</TextCell>;
 }
 
-/** Whoever holds a seat, by login and stage — or the plain fact that nobody does. */
-function Holder({ holder }: { holder: SeatRow["holder"] }) {
+/**
+ * What holds a seat: its holder by login and stage, the open invitation that
+ * names it, or the plain fact that nothing does. An INVITED seat is not a
+ * vacant one — nothing else may be invited onto it or bound to it until the
+ * invitation is redeemed, cancelled or lapses — so it is never drawn as
+ * "Nobody holds it".
+ */
+function Holder({ seat }: { seat: HumanSeat }) {
+  const { holder, invitation } = seat;
+  if (!holder && invitation) {
+    return (
+      <span className="row gap-1">
+        <Tag size="sm" variant="neutral" title={`Open invitation ${invitation.id}`}>
+          Invited
+        </Tag>
+        {invitation.sealed ? (
+          <SealedTag />
+        ) : invitation.email ? (
+          <TextCell>{invitation.email}</TextCell>
+        ) : null}
+      </span>
+    );
+  }
   if (!holder) return <EmptyValue label="Nobody holds it" />;
   return (
     <Tag
@@ -963,8 +1064,32 @@ function Contacts({ contact }: { contact: ConfigRole["contact"] }) {
  * residue the report names, and drawn with a person's badge this cell would
  * state the opposite of the chart on the row the report calls dangling. A seat
  * the chart does not hold has no kind, which the cell draws as its default.
+ *
+ * A PERSON WITH NO SEAT IS A FAULT, not a neutral blank: every person holds a
+ * human seat, and one recorded before that held is what the report names
+ * (`person_without_seat`). A service account bound to none is ordinary.
  */
-function BoundSeat({ seat, index }: { seat?: string; index: ReturnType<typeof indexOrg> }) {
+function BoundSeat({
+  seat,
+  index,
+  person = false,
+}: {
+  seat?: string;
+  index: ReturnType<typeof indexOrg>;
+  /** The row is a person's. */
+  person?: boolean;
+}) {
+  if (!seat && person) {
+    return (
+      <Tag
+        size="sm"
+        variant="warning"
+        title="Every person holds a human seat: give them one with Edit login, seat and grants."
+      >
+        No seat
+      </Tag>
+    );
+  }
   if (!seat) return <EmptyValue label="Bound to no seat" />;
   const held = index.byHandle.get(seat);
   return <SeatCell handle={seat} name={held?.name ?? seat} kind={held?.kind} />;
@@ -992,7 +1117,7 @@ function Findings({ check }: { check: RestResult<DirectoryCheck | null> }) {
         <div className="col" style={{ gap: "var(--spacing-2)", padding: "var(--spacing-4)" }}>
           {findings.length === 0 && <p className="t-body muted">Nothing to report.</p>}
           {findings.map((f, i) => {
-            const words = FINDING_WORDS[f.kind];
+            const words = findingWords(f.kind);
             return (
               <div key={`${f.kind}:${f.person ?? f.seat ?? i}`} className="row gap-2">
                 <Tag size="sm" variant={words?.tone ?? "neutral"}>
@@ -1143,6 +1268,7 @@ function Invitations({
       {cancelling && (
         <CancelInvitation
           row={cancelling}
+          seatName={cancelling.seat ? index.byHandle.get(cancelling.seat)?.name : undefined}
           onClose={() => setCancelling(null)}
           onChanged={onChanged}
         />
@@ -1164,41 +1290,6 @@ function Inviter({ author, index }: { author?: string; index: ReturnType<typeof 
     <SeatCell handle={author} name={seat.name || author} kind={seat.kind} />
   ) : (
     <KeyCell value={author} />
-  );
-}
-
-/** Withdraw an invitation nobody redeemed: its link stops working, and the address is free. */
-function CancelInvitation({
-  row,
-  onClose,
-  onChanged,
-}: {
-  row: InvitationRow;
-  onClose: () => void;
-  onChanged: () => void;
-}) {
-  const write = useIamGesture();
-  return (
-    <ConfirmDialog
-      title="Cancel this invitation?"
-      confirm="Cancel invitation"
-      dismiss="Keep it"
-      danger
-      write={write}
-      onClose={onClose}
-      onConfirm={async () => {
-        const answer = await write.run({
-          method: "DELETE",
-          path: `/iam/invitations/${encodeURIComponent(row.id)}`,
-        });
-        if (!answer) return;
-        onChanged();
-        if (answer.kind === "done" && !answer.pending) onClose();
-      }}
-    >
-      The link sent to {row.sealed ? "this address" : <strong>{row.email}</strong>} stops working at
-      once, as one nobody issued, and the address is free to invite again.
-    </ConfirmDialog>
   );
 }
 
@@ -1277,6 +1368,11 @@ function Principal({
   );
   const [gesture, setGesture] = useState<PersonGesture | null>(null);
   const who = row.sealed ? row.id : row.name || row.login || row.id;
+  // THE SEAT AS THE CHART NAMES IT, which a suspension withholds and a
+  // removal frees — said by name, since it is the seat the reader will next
+  // look for on the chart.
+  const seatEntry = useSeatEntry();
+  const seatName = row.seat ? seatEntry(row.seat).name : "";
   const machine = row.kind === "machine";
   const live = (credentials.data ?? []).filter((c) => !c.revoked);
   const holdsFactor = live.some((c) => c.method === "totp" || c.method === "recovery");
@@ -1398,12 +1494,13 @@ function Principal({
           {/* WHAT THIS PERSON HOLDS, said: a seat they do not hold is not
               withheld, and the sessions a suspension ends stay ended — a
               password reset link among them, which a reactivation does not
-              bring back either. */}
+              bring back either. A SUSPENDED PERSON KEEPS THEIR SEAT: it is
+              withheld, never freed, so nobody else is put on it meanwhile. */}
           {gesture === "reactivate"
             ? `${who} may sign in again with what they held${row.seat ? ", their seat included" : ""}; nothing has to be enrolled again. The sessions, tokens and password reset link the suspension ended stay ended, so issue a new link if they need one.`
             : you
-              ? `You may not act while suspended: every session, token and password reset link you hold ends and your sign-ins are refused${row.seat ? ", and your seat is withheld" : ""}. Your record is kept, and somebody holding people:manage can reactivate you.`
-              : `${who} may not act while suspended: every session, token and password reset link they hold ends and their sign-ins are refused${row.seat ? ", and their seat is withheld" : ""}. Their record is kept, and reactivating lets them sign in again.`}
+              ? `You may not act while suspended: every session, token and password reset link you hold ends and your sign-ins are refused${row.seat ? `, and your seat ${seatName} is withheld — it stays yours, and nobody else can hold it meanwhile` : ""}. Your record is kept, and somebody holding people:manage can reactivate you.`
+              : `${who} may not act while suspended: every session, token and password reset link they hold ends and their sign-ins are refused${row.seat ? `, and their seat ${seatName} is withheld — it stays theirs, and nobody else can hold it meanwhile` : ""}. Their record is kept, and reactivating lets them sign in again.`}
         </PersonWrite>
       )}
       {gesture === "mfa" && (
@@ -1452,9 +1549,13 @@ function Principal({
           onLanded={() => onRemoved(who)}
         >
           {you && <OnYourself alone={alone} />}
+          {/* A SERVICE ACCOUNT IS NOT INVITED BACK: nobody redeems a link for
+              one, so its way back is the create it came from. */}
           {you
-            ? `Your row, credentials and sessions are deleted, ${row.seat ? "your seat is freed, " : ""}and every sealed value of yours is erased. This cannot be undone: to come back, you must be invited again. The trail keeps what you did.`
-            : `Their row, credentials and sessions are deleted, ${row.seat ? "their seat is freed, " : ""}and every sealed value of theirs is erased. This cannot be undone: to bring them back, invite them again. The trail keeps what they did.`}
+            ? `Your row, credentials and sessions are deleted, ${row.seat ? `your seat ${seatName} is freed and stands vacant in the org chart, ` : ""}and every sealed value of yours is erased. This cannot be undone: to come back, you must be invited onto a seat again. The trail keeps what you did.`
+            : machine
+              ? `Its row and every token it holds are deleted, ${row.seat ? `the seat ${seatName} it is bound to is freed, ` : ""}and its sealed values are erased. This cannot be undone: to bring it back, create the service account again. The trail keeps what it did.`
+              : `Their row, credentials and sessions are deleted, ${row.seat ? `their seat ${seatName} is freed and stands vacant in the org chart, ` : ""}and every sealed value of theirs is erased. This cannot be undone: to bring them back, invite them onto a seat again. The trail keeps what they did.`}
         </PersonWrite>
       )}
       <QueryState

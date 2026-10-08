@@ -8,10 +8,20 @@
  * which round of how many), then the handful of facts a reader asks next:
  * who it reports to, which model it runs on and which one is serving the call
  * in flight, each capped budget window, which node holds it, how much work it
- * holds, where its tools come from, and what it is for. Everything else is
- * the profile's, one press away.
+ * holds, where its tools come from, and what it is for — and for a HUMAN
+ * seat, who holds it. Everything else is the profile's, one press away.
  *
- * # At most three reads, and none a reader will be refused
+ * # A human seat says who holds it, and is filled from here
+ *
+ * The identity directory binds a person to a human seat, and every person
+ * comes from one, so a human seat's peek says what holds it — its holder and
+ * their stage, the open invitation that names it, or that it is vacant — and,
+ * for a reader holding `people:manage`, offers what the seat's card menu and
+ * its page offer: Invite and Create on a vacant seat, Cancel invitation on an
+ * invited one. On a phone, whose chart is rows with no card menu, this is
+ * where those gestures are.
+ *
+ * # At most three questions, one directory read, and none a reader will be refused
  *
  * The seat, its state, its model chain and tool sources, and its budget
  * windows all arrive with the org projection and the `agents` push, so they
@@ -27,6 +37,10 @@
  *   * `work_item_turns` — which turn this is on its task ("Turn 2") — asked
  *     only while the seat is working on one.
  *
+ * And for a HUMAN seat, one REST read of the directory (`GET /iam/seats`),
+ * asked only of a reader it answers (`people:manage` or `audit:read`) and
+ * never for an agent's seat, whose holder is the engine.
+ *
  * The company document is NOT read: the model chain a turn resolves is on the
  * org projection for a reader holding `config:read` — the one who could read
  * the document — and everybody else is told which grant shows it
@@ -40,8 +54,17 @@
  * work the seat owes an answer on, and the answer lands in the asker's Inbox.
  */
 
-import { useMemo } from "react";
-import { ButtonLink, Callout, EmptyState, EmptyValue, Meter, StatusDot, Tag } from "@crewlethq/ui";
+import { useMemo, useState } from "react";
+import {
+  Button,
+  ButtonLink,
+  Callout,
+  EmptyState,
+  EmptyValue,
+  Meter,
+  StatusDot,
+  Tag,
+} from "@crewlethq/ui";
 import { UserGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { MessageSeatButton } from "~/components/writes.tsx";
@@ -50,6 +73,16 @@ import { fmtCount, fmtElapsed, fmtMinute, fmtTime, plural, readerDay } from "~/l
 import { useAgents, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import {
+  canManagePeople,
+  canReadDirectory,
+  SEAT_GESTURE_WORDS,
+  SeatGestureDialog,
+  seatGestures,
+  useHumanSeats,
+  type SeatGesture,
+} from "~/components/people.tsx";
+import type { HumanSeat } from "~/contract/identity.ts";
 import {
   activityOf,
   awaitingPerson,
@@ -221,6 +254,13 @@ function SeatPeekBody({
   const sandbox = sandboxes.find((s) => s.agent_handle === seat.handle) ?? null;
   const absent = resolvedAbsence(viewer);
   const place = unitPath(seat.unit);
+  // WHO HOLDS A HUMAN SEAT — the directory read, see the file's doc.
+  const readsDirectory = human && !viewer.asking && canReadDirectory(viewer.grants);
+  const directory = useHumanSeats(readsDirectory);
+  const holding = directory.data?.find((row) => row.handle === seat.handle);
+  const gestures = canManagePeople(viewer.grants) ? seatGestures(holding) : [];
+  // ABOUT THE SEAT AS IT WAS WHEN THE GESTURE STARTED (`SeatGestureDialog`).
+  const [opening, setOpening] = useState<{ gesture: SeatGesture; row: HumanSeat } | null>(null);
 
   return (
     <div className="seat-peek">
@@ -356,6 +396,23 @@ function SeatPeekBody({
           </>
         )}
 
+        {readsDirectory && (
+          <>
+            <dt>Held by</dt>
+            <dd>
+              {holding ? (
+                <HeldBy row={holding} />
+              ) : directory.error ? (
+                <EmptyValue label="The identity directory did not answer" />
+              ) : directory.data ? (
+                <EmptyValue label="Not in this node's directory yet" />
+              ) : (
+                <EmptyValue label="Reading the directory" />
+              )}
+            </dd>
+          </>
+        )}
+
         <dt>Open work</dt>
         <dd>
           {workload.error ? (
@@ -405,9 +462,62 @@ function SeatPeekBody({
           Open profile
         </ButtonLink>
         <MessageSeatButton handle={seat.handle} />
+        {holding &&
+          gestures.map((gesture) => (
+            <Button
+              key={gesture}
+              size="small"
+              variant="secondary"
+              leadingIcon={SEAT_GESTURE_WORDS[gesture].icon}
+              onClick={() => setOpening({ gesture, row: holding })}
+            >
+              {SEAT_GESTURE_WORDS[gesture].button}
+            </Button>
+          ))}
       </footer>
+      {opening && (
+        <SeatGestureDialog
+          gesture={opening.gesture}
+          seat={opening.row}
+          held={viewer.grants}
+          onClose={() => setOpening(null)}
+        />
+      )}
     </div>
   );
+}
+
+/**
+ * What holds a human seat, as the VALUE of the peek's **Held by** fact: the
+ * holder's login — a service account said to be one — with their stage short
+ * of active; the open invitation that names the seat; or nobody.
+ *
+ * NOT THE CARD'S LINE (`holdingLine` in `components/people.tsx`), which begins
+ * "Held by" itself because a card has no term beside it: under this term it
+ * read "Held by / Held by jane.doe (suspended)", and "Held by / Vacant".
+ */
+function HeldBy({ row }: { row: HumanSeat }) {
+  const { holder, invitation } = row;
+  if (holder) {
+    const stage = holder.stage && holder.stage !== "active" ? ` (${holder.stage})` : "";
+    return (
+      <span>
+        {holder.kind === "machine" && "The service account "}
+        <code className="inline">{holder.login || holder.person}</code>
+        {stage}
+      </span>
+    );
+  }
+  if (invitation) {
+    return (
+      <span>
+        {invitation.email && !invitation.sealed
+          ? `An open invitation · ${invitation.email}`
+          : "An open invitation"}
+      </span>
+    );
+  }
+  return <span>Nobody — the seat is vacant</span>;
 }
 
 /** One capped window: its label, its figure and a meter in the engine's state. */

@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
@@ -163,9 +165,13 @@ const MinBlindKeyBytes = 32
 func (b *Blinder) Email(address string) (string, error) {
 	folded := iam.NormalizeEmail(address)
 	if folded == "" {
-		return "", fmt.Errorf("iamdomain: an empty address has no blind — " +
-			"one would be a value every addressless person in the company " +
-			"shares")
+		// NOT FINDABLE, which every surface answers as a value the caller
+		// typed: an address of nothing but whitespace reaches here past a
+		// check for an empty one, and unclassified it was a 500 telling an
+		// administrator the engine was broken.
+		return "", fmt.Errorf("%w: an empty address has no blind — one "+
+			"would be a value every addressless person in the company shares",
+			ErrNotFindable)
 	}
 	return b.derive("email", folded)
 }
@@ -196,11 +202,8 @@ func (b *Blinder) InvitationID(key string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	mac := hmac.New(sha256.New, b.key)
-	_, _ = mac.Write([]byte(invitationIDDomain))
-	_, _ = mac.Write([]byte{0})
-	_, _ = mac.Write([]byte(id.String()))
-	return uuid7At(instantOf(id), mac.Sum(nil)[:16]).String(), nil
+	return uuid7At(instantOf(id), b.mac(invitationIDDomain, id.String())[:16]).
+		String(), nil
 }
 
 // invitationIDDomain separates an invitation id's MAC from every blind the same
@@ -239,16 +242,94 @@ func (b *Blinder) InvitationSecret(id string) (string, error) {
 		return "", errors.New("iamdomain: an invitation's secret is derived " +
 			"from its id, and this one names none")
 	}
-	mac := hmac.New(sha256.New, b.key)
-	_, _ = mac.Write([]byte(invitationSecretDomain))
-	_, _ = mac.Write([]byte{0})
-	_, _ = mac.Write([]byte(id))
-	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nil
+	return base64.RawURLEncoding.EncodeToString(
+		b.mac(invitationSecretDomain, id)), nil
 }
 
 // invitationSecretDomain separates an invitation's link secret from its id and
 // from every blind the same key derives.
 const invitationSecretDomain = "crewlet/iam/invitation-secret/v1"
+
+// PasswordLinkID is the credential id of the FIRST PASSWORD LINK an
+// administrator's create issues a person, derived from the person under the
+// company's key ([Writer.Create]).
+//
+// # Derived from the person, and why that is enough
+//
+// The person is itself derived from the create's operation key
+// ([CreatedPersonID]), so the retry an unknown answer asks for — the same key
+// — names the same person and therefore the same link, and the framework that
+// answers that retry from its ledger, without running the decide, hands back
+// the link the first attempt issued rather than one whose verifier the estate
+// never recorded. A redemption's person is minted per attempt and is never
+// handed one.
+//
+// UNDER THE COMPANY'S KEY, in a MAC domain of its own
+// ([passwordLinkIDDomain]): the id is in the clear on the credential's row and
+// in every snapshot, and the secret is derived from it, so an id anybody could
+// compute from a person's id would be one step from a link anybody could.
+//
+// A UUID7 AT THE PERSON'S INSTANT, as every credential id this estate mints
+// is a uuid7 — so a person id that is not one is [ErrInvalid].
+func (b *Blinder) PasswordLinkID(personID string) (string, error) {
+	if b == nil || len(b.key) == 0 {
+		return "", ErrNoBlindKey
+	}
+	id, err := uuid.Parse(personID)
+	if err != nil || id.Version() != 7 || id.Variant() != uuid.RFC4122 {
+		return "", fmt.Errorf("%w: person id %q is not a uuid7, and a first "+
+			"password link is derived at its person's instant", ErrInvalid,
+			personID)
+	}
+	return uuid7At(instantOf(id), b.mac(passwordLinkIDDomain, id.String())[:16]).
+		String(), nil
+}
+
+// passwordLinkIDDomain separates a first password link's id from every other
+// value the company's key derives.
+const passwordLinkIDDomain = "crewlet/iam/password-link-id/v1"
+
+// PasswordLinkSecret is the secret a first password link carries beside its
+// id — the half that is the credential, which the estate keeps only as
+// [credential.ResetVerifier] of — derived from the link's id under the
+// company's key, for [Blinder.InvitationSecret]'s reason: the create's retry
+// hands back the same link.
+//
+// The same thirty-two bytes and the same URL-safe base64 as an invitation's,
+// which carries no `.` — the separator the link's `<id>.<secret>` splits on.
+//
+// WHAT THE DERIVATION EXPOSES, stated: anybody holding the company's key can
+// compute an open link's secret from the id its row holds, and set the
+// person's password while it is open. That key holder already holds the fleet
+// keyring and can open every sealed address and sign any record this log
+// accepts, so it is no reach they did not have — the property an invitation's
+// derived secret rests on too.
+func (b *Blinder) PasswordLinkSecret(linkID string) (string, error) {
+	if b == nil || len(b.key) == 0 {
+		return "", ErrNoBlindKey
+	}
+	if linkID == "" {
+		return "", errors.New("iamdomain: a password link's secret is derived " +
+			"from its id, and this one names none")
+	}
+	return base64.RawURLEncoding.EncodeToString(
+		b.mac(passwordLinkSecretDomain, linkID)), nil
+}
+
+// passwordLinkSecretDomain separates a first password link's secret from its
+// id, from an invitation's and from every blind the same key derives.
+const passwordLinkSecretDomain = "crewlet/iam/password-link-secret/v1"
+
+// mac is one keyed digest of value in a domain of its own — the shape every
+// derivation here but an address's blind shares: the domain, a separator, the
+// value.
+func (b *Blinder) mac(domain, value string) []byte {
+	mac := hmac.New(sha256.New, b.key)
+	_, _ = mac.Write([]byte(domain))
+	_, _ = mac.Write([]byte{0})
+	_, _ = mac.Write([]byte(value))
+	return mac.Sum(nil)
+}
 
 // InvitationVerifier is what the estate keeps of an invitation's link secret:
 // its SHA-256, hex.

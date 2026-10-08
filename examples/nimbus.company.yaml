@@ -605,13 +605,15 @@ roles:
       mattermost_user_id: founder
       gitlab_username: jane-founder
       # WHO SHE IS ON THE DASHBOARD is not written here.  She signs in as
-      # a person in the identity directory (`crewlet iam invite`, then
-      # `crewlet iam bind <id> jane-founder` — the SEAT's handle, declared
-      # above; `founder` above is her Mattermost username), and
-      # the directory binds her to this seat — so what she files there is
-      # filed by her.  A contact
-      # block is how to REACH a person; a credential is something they
-      # hold, and the company document names none of them.
+      # a person in the identity directory, invited ONTO this seat — from
+      # its card in Agents › Org chart (Invite), or `crewlet iam invite
+      # <address> -seat jane-founder`, the SEAT's handle declared above
+      # (`founder` above is her Mattermost username).  Every person holds
+      # a human seat from the moment they join, so there is no separate
+      # bind: the directory binds her here as her invitation is redeemed,
+      # and what she files there is filed by her.  A contact block is how
+      # to REACH a person; a credential is something they hold, and the
+      # company document names none of them.
 
 # Flexible org — units can nest to any depth.
 # Each unit has a type (department, team, squad, pod, etc.) and can

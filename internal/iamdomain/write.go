@@ -43,7 +43,8 @@ import (
 // both be valid and both win. The residue — a person bound to a seat the chart
 // no longer has — is a LEGAL NAMED STATE the session layer answers with a 403
 // naming the seat, not a state this domain can prevent. The check is here to
-// catch a typo, and it says so.
+// catch a typo and to hold every binding to a HUMAN seat
+// ([Writer.humanSeat]), and it says so.
 //
 // # Why the actor is on the writer and never on the call
 //
@@ -76,9 +77,9 @@ type Writer struct {
 	blinds Blinds
 	sealer *Sealer
 
-	// seats is the organisation this node runs, which a seat bind is
-	// checked against. Nil refuses every seat bind as unavailable: see
-	// [Writer.seatOf].
+	// seats is the organisation this node runs, which every seat binding
+	// is checked against. Nil refuses every one as unavailable: see
+	// [Writer.humanSeat].
 	seats SeatLookup
 
 	// Actor and ActorKind are who this writer acts as. ActorKind is the
@@ -157,13 +158,15 @@ type Events interface {
 	Emit(ctx context.Context, payload events.Payload)
 }
 
-// SeatLookup is the organisation this node runs, as narrowly as a seat bind
-// asks it: whether it holds a seat at a handle, and what kind of seat that is.
+// SeatLookup is the organisation this node runs, as narrowly as a seat binding
+// asks it: whether it holds a seat at a HANDLE (ADR-0013), and what kind of
+// seat that is — every binding names a human one ([Writer.humanSeat]).
 //
 // DECLARED HERE, by the consumer, in the shape the session layer's own seam
 // takes ([session.Chart]), so the engine's one view of its running org
-// satisfies both. An error is the unknown arm — a node running no company yet
-// — and never "no such seat".
+// satisfies both. An error is never "no such seat": [session.ErrNoCompany] is
+// a node running no company yet, which the writer refuses as [ErrNoCompany],
+// and any other is the unknown arm.
 type SeatLookup interface {
 	Seat(ctx context.Context, handle string) (session.Seat, bool, error)
 }
@@ -179,9 +182,11 @@ type WriterDeps struct {
 	Sealer *Sealer
 
 	// Seats is the organisation this node runs — the org chart of the
-	// configuration epoch it applied — which a seat bind and an invitation
-	// binding a seat are checked against. Optional: a writer handed none
-	// refuses every seat bind as unavailable rather than binding unchecked.
+	// configuration epoch it applied — which every seat binding is checked
+	// against: a create, an invitation, a redemption and a bind. Optional,
+	// and a writer handed none refuses every one of them as unavailable
+	// rather than binding unchecked — which, since every person holds a
+	// seat, is a writer that can create no person and invite nobody.
 	Seats SeatLookup
 
 	Actor     string
@@ -280,7 +285,7 @@ func (w *Writer) As(p iam.Principal) *Writer {
 // wrote the record; the person made the gesture. What the engine decides for
 // itself — a sweep, a re-seal, a password re-hashed at this build's cost —
 // keeps the node as its author. And what a redemption CONFERS is announced as
-// the decision of whoever issued the invitation ([Writer.Enrol]), never as the
+// the decision of whoever issued the invitation ([Writer.Redeem]), never as the
 // person it writes for: they redeemed the link, and chose none of its grants.
 //
 // Unlike [Writer.As] it carries no grants and no id from the principal: a

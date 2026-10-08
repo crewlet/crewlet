@@ -40,3 +40,15 @@ export function loginProblem(kind: LoginKind, login: string): string | null {
   }
   return null;
 }
+
+/**
+ * Whose grammar a login is in — a person's (dots) or a machine's (a colon) —
+ * or null for one in neither. The two grammars are disjoint by the shape of
+ * the value, which is what lets a screen tell a person from a service account
+ * or a Tier A token's session by the login alone.
+ */
+export function loginKind(login: string): LoginKind | null {
+  if (GRAMMAR.person.test(login)) return "person";
+  if (GRAMMAR.machine.test(login)) return "machine";
+  return null;
+}

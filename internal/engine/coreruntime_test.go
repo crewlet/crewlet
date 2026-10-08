@@ -15,8 +15,9 @@ import (
 //
 // The whole of a node's durable state used to wait for its first company, so a
 // node started with none — the quickstart's own route — had no identity
-// estate: nobody could be invited or sign in. Everything here is asserted
-// before any company is applied, on a running node.
+// estate: nobody could sign in, a Tier A token's session included, which is
+// what the company is created through. Everything here is asserted before any
+// company is applied, on a running node.
 //
 // # And why it is every domain, the tracker's and the knowledge base's too
 //
@@ -41,8 +42,9 @@ func TestANodeWithNoCompanyRunsTheCoreRuntime(t *testing.T) {
 	}
 
 	if e.IAM() == nil || e.IAMWriter() == nil {
-		t.Fatal("a node with no company holds no identity estate, so its first " +
-			"person has nowhere to be invited or to sign in")
+		t.Fatal("a node with no company holds no identity estate, so nobody " +
+			"can sign in — not even the Tier A token's session the company is " +
+			"created through")
 	}
 	if e.NodeGate() == nil {
 		t.Fatal("a node with no company holds no node gate, so it cannot be " +

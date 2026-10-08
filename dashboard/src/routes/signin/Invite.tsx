@@ -37,6 +37,17 @@
  * attempt the engine refused wrote nothing and the next has nothing in its
  * way — what keeps the link single-use is the record that spends it.
  *
+ * # A link whose seat is gone is said before anybody types a password
+ *
+ * Every person holds a human seat, so every invitation names the one its
+ * redemption binds them to — and a redemption is refused when the chart no
+ * longer holds it as a human seat. The view says which seat it is, or — a seat
+ * with no handle — that the chart has none to name; this screen warns before
+ * the form, since a warning after a password is typed is a wasted form. An
+ * invitation naming no seat at all (one issued before every person held one)
+ * never reaches the form: its view is the dead link's 410, like every link
+ * that can no longer be used.
+ *
  * # A browser already signed in is told so
  *
  * The view names the login this browser's session is signed in as, and
@@ -235,25 +246,24 @@ function Redeem({
           session out and signs you in as the person this invitation is for.
         </Callout>
       )}
-      {seat &&
-        (seat.handle ? (
-          <Callout variant="neutral">
-            <Text as="span" variant="body">
-              You will hold the seat <strong>{seat.name || seat.handle}</strong>{" "}
-              <code className="inline">{seat.handle}</code> in the org chart: work addressed to it
-              reaches you, and your changes are recorded under it.
-            </Text>
-          </Callout>
-        ) : (
-          // THE ENGINE REFUSES THIS REDEMPTION, and says so only once it is
-          // posted: the seat it binds is no longer in this node's chart.
-          // Saying it before the person types a password is the difference
-          // between a warning and a wasted form.
-          <Callout variant="warning">
-            The seat this invitation was for is no longer in the org chart, so redeeming it will be
-            refused. Ask whoever sent it for a new one.
-          </Callout>
-        ))}
+      {seat?.handle ? (
+        <Callout variant="neutral">
+          <Text as="span" variant="body">
+            You will hold the seat <strong>{seat.name || seat.handle}</strong>{" "}
+            <code className="inline">{seat.handle}</code> in the org chart: work addressed to it
+            reaches you, and your changes are recorded under it.
+          </Text>
+        </Callout>
+      ) : (
+        // THE ENGINE REFUSES THIS REDEMPTION, and says so only once it is
+        // posted: the seat it binds is no longer a human seat of this node's
+        // chart. Saying it before the person types a password is the
+        // difference between a warning and a wasted form.
+        <Callout variant="warning">
+          The seat this invitation was for is no longer in the org chart, so redeeming it will be
+          refused. Ask whoever sent it for a new one.
+        </Callout>
+      )}
       <form
         className="signin-form"
         onSubmit={(e) => {
@@ -274,7 +284,7 @@ function Redeem({
         />
         <FormField
           label="Login"
-          helper="What your changes are recorded under while you hold no seat, and one way to sign in. Lowercase words joined by dots, such as jane.doe."
+          helper="How you sign in, beside your address. Lowercase words joined by dots, such as jane.doe."
           error={tried ? (loginMissing ? "Choose a login." : (loginWrong ?? undefined)) : undefined}
         >
           {(field) => (

@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // A WARNING IS A VALID CONFIGURATION WITH A CONSEQUENCE, and the consequence
@@ -171,6 +172,10 @@ func TestAUnitWithNoIDIsRefusedAndWarnedAbout(t *testing.T) {
 	t.Parallel()
 	c := &config.Company{
 		Name: "Acme",
+		// A REACHABLE PERSON'S SEAT, so the one warning counted is the
+		// unit's: a company with no human seat carries an advisory of its
+		// own ([config.Company.AdvisoryWarnings]).
+		Roles: []config.Role{founderSeat()},
 		Units: []config.Unit{{
 			Name:  "Platform",
 			Roles: []config.Role{{Name: "SWE", Handle: "swe"}},
@@ -218,6 +223,15 @@ func TestAUnitWithNoIDIsRefusedAndWarnedAbout(t *testing.T) {
 	}
 }
 
+// founderSeat is a human seat somebody can be reached at: what a fixture
+// counting warnings declares, so the count is its subject's alone — a company
+// with no human seat is advised that nobody can join it, and a human seat with
+// no contact identity that nobody can be mentioned at.
+func founderSeat() config.Role {
+	return config.Role{Name: "Founder", Handle: "founder", Kind: org.KindHuman,
+		Contact: &org.HumanContact{SlackUserID: "U0FOUNDER"}}
+}
+
 // AND A NESTED UNIT IS REPORTED WHERE IT WAS WRITTEN. The index is the half
 // a rendered path cannot be rebuilt from: a document full of units with no
 // id raises this once per unit, and a path that named them all the same
@@ -225,7 +239,8 @@ func TestAUnitWithNoIDIsRefusedAndWarnedAbout(t *testing.T) {
 func TestANestedUnitWithNoIDIsWarnedAboutWhereItWasWritten(t *testing.T) {
 	t.Parallel()
 	c := &config.Company{
-		Name: "Acme",
+		Name:  "Acme",
+		Roles: []config.Role{founderSeat()},
 		Units: []config.Unit{
 			{Name: "Product", ID: "product", Roles: []config.Role{{Name: "PM", Handle: "pm"}}},
 			{Name: "Engineering", ID: "engineering", Children: []config.Unit{
@@ -356,6 +371,100 @@ func TestEveryNodeNeedsAStreamThatSurvivesARestart(t *testing.T) {
 					if !strings.Contains(err.Error(), want) {
 						t.Errorf("%s's refusal = %q, want it to say %q", door, err, want)
 					}
+				}
+			}
+		})
+	}
+}
+
+// A COMPANY WITH NO HUMAN SEAT IS ONE NOBODY CAN JOIN, and it is said before
+// anybody tries.
+//
+// Every person holds a human seat for as long as they are here (ADR-0026):
+// an invitation and an administrator's create each name the seat the person
+// will hold, and both are refused without one. So a company declaring none
+// admits nobody — which an operator otherwise learns from the refusal of their
+// first invitation, after the revision is live. `crewlet validate` and the
+// builder's check read [config.Company.Warnings], so that is where it is said.
+//
+// ADVISED, NEVER REFUSED: a company its agents run alone, administered through
+// the deployment's Tier A tokens, is legitimate and validates. And a human seat
+// ANYWHERE silences it — inside a unit as much as at the top — because the
+// remedy is a seat, not a seat in a particular place.
+//
+// Mutations: drop the advisory from AdvisoryWarnings and the first two cases
+// go quiet; walk only the top-level roles and the unit's seat is missed.
+func TestACompanyNobodyCanJoinIsAdvisedNotRefused(t *testing.T) {
+	t.Parallel()
+	const agents = "name: Acme\nproviders:\n  llm:\n    main:\n" +
+		"      type: anthropic\n      model: claude-sonnet-5\n" +
+		"      api_keys: [\"${K}\"]\n"
+	for name, tc := range map[string]struct {
+		doc     string
+		advised bool
+	}{
+		"a company declaring no seat at all": {
+			doc: agents, advised: true,
+		},
+		"a company of agents alone": {
+			doc: agents + "roles:\n  - name: CEO\n    handle: ceo\n    llm: main\n" +
+				"units:\n  - name: Platform\n    id: platform\n    roles:\n" +
+				"      - name: SWE\n        handle: swe\n        llm: main\n",
+			advised: true,
+		},
+		"a human seat at the top": {
+			doc: agents + "roles:\n  - name: CEO\n    handle: ceo\n    llm: main\n" +
+				"  - name: Founder\n    handle: founder\n    kind: human\n" +
+				"    contact:\n      slack_user_id: U0FOUNDER\n",
+		},
+		"a human seat inside a unit": {
+			doc: agents + "roles:\n  - name: CEO\n    handle: ceo\n    llm: main\n" +
+				"units:\n  - name: Platform\n    id: platform\n    roles:\n" +
+				"      - name: Lead\n        handle: platform-lead\n        kind: human\n" +
+				"        contact:\n          slack_user_id: U0LEAD\n",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			// NOT A REFUSAL: the document parses and validates.
+			c, err := config.ParseCompany([]byte(tc.doc))
+			if err != nil {
+				t.Fatalf("a company with no human seat was refused — it is "+
+					"legitimate for a company its agents run alone: %v", err)
+			}
+			var advised []config.Warning
+			for _, w := range c.Warnings() {
+				if w.Path == "roles" {
+					advised = append(advised, w)
+				}
+			}
+			if !tc.advised {
+				if len(advised) != 0 {
+					t.Errorf("a company declaring a human seat was advised "+
+						"nobody can join it: %+v", advised)
+				}
+				return
+			}
+			if len(advised) != 1 {
+				t.Fatalf("warnings at `roles` = %+v, want the one advisory "+
+					"that nobody can be invited or created", advised)
+			}
+			w := advised[0]
+			if w.Kind != config.WarningAdvisory || w.Seat != "" || w.Unit != "" ||
+				!reflect.DeepEqual(w.Segments, config.Path{"roles"}) {
+				t.Errorf("warning = %+v, want an advisory at `roles` about no "+
+					"seat or unit in particular", w)
+			}
+			// WHAT HAPPENS, WHY, WHEN IT IS FINE, AND WHAT TO DO — the
+			// last as the command that works, which names the seat.
+			for _, says := range []string{
+				"no `kind: human` seat", "nobody can be invited",
+				"every person holds a human seat", "Tier A tokens",
+				"Agents › Org chart",
+				"`crewlet iam invite <address> -seat <handle>`",
+			} {
+				if !strings.Contains(w.Message, says) {
+					t.Errorf("the advisory does not say %q: %q", says, w.Message)
 				}
 			}
 		})

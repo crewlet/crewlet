@@ -21,14 +21,14 @@ import (
 // grants for. The domain holds the enrolment to that basis in its own
 // snapshot; this case holds the surface to naming it.
 
-// enrolmentRecorder is a writer that keeps the enrolment it was asked for.
+// enrolmentRecorder is a writer that keeps the redemption it was asked for.
 type enrolmentRecorder struct {
 	stubWriter
-	got *iamdomain.Enrolment
+	got *iamdomain.Redemption
 	err error
 }
 
-func (w enrolmentRecorder) Enrol(_ context.Context, in iamdomain.Enrolment) (
+func (w enrolmentRecorder) Redeem(_ context.Context, in iamdomain.Redemption) (
 	statelog.Result, error) {
 
 	*w.got = in
@@ -42,7 +42,7 @@ func (w enrolmentRecorder) Enrol(_ context.Context, in iamdomain.Enrolment) (
 // enrolment names none, which the domain holds to the node's own grants.
 func TestARedemptionNamesItsInvitationAsTheAuthority(t *testing.T) {
 	t.Parallel()
-	var got iamdomain.Enrolment
+	var got iamdomain.Redemption
 	mux := http.NewServeMux()
 	buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
 		o.Directory = liveInvitation{}

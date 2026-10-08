@@ -43,8 +43,10 @@ var ReproducibleTables = []string{
 	// several and a person holds a password and a second factor at once.
 	"iam_credentials",
 
-	// An address spoken for by somebody who has no person yet, and the
-	// record of its redemption.
+	// An address AND a human seat spoken for by somebody who has no
+	// person yet, and the record of its redemption. Its `seat_id` is written
+	// by the apply from the record and, on a row an older build applied, by
+	// the applier's Rederive (replicated migration 0032).
 	"iam_invites",
 
 	// One row per live session lineage. Re-issues are NOT rows — the

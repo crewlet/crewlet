@@ -15,10 +15,12 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/iamapi"
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -31,6 +33,9 @@ var (
 	alice = uuid.MustParse("018f3a9c-0000-7000-8000-0000000000a1")
 	bob   = uuid.MustParse("018f3a9c-0000-7000-8000-0000000000b2")
 	at    = time.Date(2026, 3, 2, 9, 0, 0, 0, time.UTC)
+
+	// ciRelease is a service account a case adds to the rig's directory.
+	ciRelease = uuid.MustParse("018f3a9c-0000-7000-8000-0000000000c9")
 )
 
 // rig is the surface over a directory and a writer that record what they were
@@ -193,10 +198,14 @@ type fakeDirectory struct {
 	// history is the trail `GET /iam/audit` pages.
 	history []iamdomain.HistoryRow
 
-	// bindings is who the directory binds to which seat, and bindingsErr
-	// a directory this node could not read them from.
+	// bindings is who the directory binds to which seat and seatInvites
+	// every invitation naming one; claimsErr is a directory this node
+	// could not read them from, and claimedAt the instant the surface last
+	// asked them open at.
 	bindings    []iamdomain.SeatBinding
-	bindingsErr error
+	seatInvites []iamdomain.SeatInvitation
+	claimsErr   error
+	claimedAt   time.Time
 
 	// invitations is every invitation the estate holds, and invited the
 	// last query `GET /iam/invitations` asked of it.
@@ -222,11 +231,23 @@ func (d *fakeDirectory) Invitations(_ context.Context, q iamdomain.InvitationsQu
 	return out, nil
 }
 
-func (d *fakeDirectory) SeatBindings(context.Context) ([]iamdomain.SeatBinding, error) {
-	if d.bindingsErr != nil {
-		return nil, d.bindingsErr
+// SeatClaims answers every binding and the invitations OPEN at now, as the
+// reader's own predicate judges them — so a surface asking at any clock but
+// its own is answered about other invitations than it meant.
+func (d *fakeDirectory) SeatClaims(_ context.Context, now time.Time) (
+	iamdomain.SeatClaims, error) {
+
+	d.claimedAt = now
+	if d.claimsErr != nil {
+		return iamdomain.SeatClaims{}, d.claimsErr
 	}
-	return d.bindings, nil
+	out := iamdomain.SeatClaims{Bindings: d.bindings}
+	for _, inv := range d.seatInvites {
+		if inv.Seat != "" && inv.ExpiresAt.After(now) {
+			out.Invitations = append(out.Invitations, inv)
+		}
+	}
+	return out, nil
 }
 
 // fakeSeats is the company a case's node runs: its human seats, or none
@@ -326,13 +347,13 @@ type fakeWriter struct {
 	// authority — who the domain decides a person's own mint on.
 	principal string
 
-	calls    []string
-	enrolled iamdomain.Enrolment
-	invited  iamdomain.InviteMint
-	updated  iamdomain.PersonUpdate
-	creds    iamdomain.CredentialSet
-	minted   iamdomain.TokenMint
-	err      error
+	calls   []string
+	created iamdomain.Creation
+	invited iamdomain.InviteMint
+	updated iamdomain.PersonUpdate
+	creds   iamdomain.CredentialSet
+	minted  iamdomain.TokenMint
+	err     error
 
 	// identity is every identity change the surface asked for.
 	identity []iamdomain.IdentityEdit
@@ -375,6 +396,16 @@ type fakeWriter struct {
 	// ops is the operation id every call was asked under, by call, in
 	// order.
 	ops map[string][]string
+
+	// linkClosed is a create the framework answered from its ledger whose
+	// person's first password link no longer opens — the domain's
+	// [iamdomain.Created.LinkClosed].
+	linkClosed bool
+
+	// linkAnyway makes Create hand a person's link back beside ANY outcome,
+	// an unknown one included — a writer breaking the domain's contract, as
+	// the case holding the surface to its own guard needs.
+	linkAnyway bool
 }
 
 // op records the operation id one call was asked under.
@@ -415,13 +446,45 @@ func (w *fakeWriter) did(what string) (statelog.Result, error) {
 	return result, nil
 }
 
-func (w *fakeWriter) Enrol(_ context.Context, in iamdomain.Enrolment) (
-	statelog.Result, error) {
+// Create answers a created PERSON's first password link as the domain does:
+// derived for real, under a fixture key, from the person the surface derived
+// from the operation's key — so a case about a retry holds the surface to
+// handing back the same link — and only beside an outcome somebody can confirm.
+func (w *fakeWriter) Create(_ context.Context, in iamdomain.Creation) (
+	iamdomain.Created, error) {
 
-	w.enrolled = in
-	w.reason("enrol", in.Reason)
-	w.op("enrol", in.OpID)
-	return w.did("enrol")
+	w.created = in
+	w.reason("create", in.Reason)
+	w.op("create", in.OpID)
+	result, err := w.did("create")
+	if err != nil || in.Kind != iam.KindPerson ||
+		(result.Outcome == statelog.OutcomeUnknown && !w.linkAnyway) {
+		return iamdomain.Created{Result: result}, err
+	}
+	if result.Collapsed && w.linkClosed {
+		return iamdomain.Created{Result: result, LinkClosed: true}, nil
+	}
+	blinder, err := fixtureBlinder()
+	if err != nil {
+		return iamdomain.Created{}, err
+	}
+	id, err := blinder.PasswordLinkID(in.PersonID)
+	if err != nil {
+		return iamdomain.Created{}, err
+	}
+	secret, err := blinder.PasswordLinkSecret(id)
+	if err != nil {
+		return iamdomain.Created{}, err
+	}
+	return iamdomain.Created{Result: result, Link: &iamdomain.PasswordLink{
+		Credential: id, Secret: secret, ExpiresAt: in.LinkExpiresAt}}, nil
+}
+
+// fixtureBlinder is the company key every derivation in these cases is made
+// under, the fake writer's and a case's own alike.
+func fixtureBlinder() (*iamdomain.Blinder, error) {
+	return iamdomain.NewBlinder([]byte(strings.Repeat("k",
+		iamdomain.MinBlindKeyBytes)))
 }
 
 func (w *fakeWriter) UpdatePerson(_ context.Context, in iamdomain.PersonUpdate) (
@@ -504,8 +567,7 @@ func (w *fakeWriter) Invite(_ context.Context, in iamdomain.InviteMint) (
 	// THE REAL DERIVATION, under a fixture key: the id is the operation's,
 	// and a case about a retry holds the surface to handing back the same
 	// one.
-	blinder, berr := iamdomain.NewBlinder([]byte(strings.Repeat("k",
-		iamdomain.MinBlindKeyBytes)))
+	blinder, berr := fixtureBlinder()
 	if berr != nil {
 		return iamdomain.InviteIssued{}, berr
 	}
@@ -794,8 +856,9 @@ func TestAWriteIsAuthoredByTheCallerAndNotByTheNode(t *testing.T) {
 	r := newRig(t)
 	got := r.as(administrator(), http.MethodPost, "/iam/people", map[string]any{
 		"login": "dana.sre", "email": "dana@example.com", "name": "Dana",
+		"seat": "platform-lead",
 	})
-	if got.status != http.StatusOK {
+	if got.status != http.StatusCreated {
 		t.Fatalf("status %d (body %v)", got.status, got.body)
 	}
 	// A PERSON ACTING AS A SEAT AUTHORS UNDER THE SEAT'S HANDLE, which is
@@ -812,8 +875,8 @@ func TestAWriteIsAuthoredByTheCallerAndNotByTheNode(t *testing.T) {
 		t.Errorf("the writer carries %v, which is not the caller's own set",
 			r.writer.grants)
 	}
-	if r.writer.enrolled.Login != "dana.sre" {
-		t.Errorf("enrolled %+v", r.writer.enrolled)
+	if r.writer.created.Login != "dana.sre" {
+		t.Errorf("created %+v", r.writer.created)
 	}
 }
 
@@ -821,20 +884,315 @@ func TestAWriteIsAuthoredByTheCallerAndNotByTheNode(t *testing.T) {
 // directory decides the address, the login and the seat together, so a seat
 // somebody else holds refuses the create having created nobody. It was a
 // second record after the person's, and its refusal left a person created
-// without the seat they were created for.
+// without the seat they were created for. The seat is TRIMMED, as an
+// invitation's is: the domain looks a handle up as given, so ` founder ` was a
+// seat an invitation accepted and a create refused — and so are the login and
+// the address, the address sealed as given: a padded one was a person whose
+// address carried its padding for good, and one of nothing but spaces reached
+// the domain as an address rather than as none, for it to refuse as a fault
+// rather than as a person nothing can find.
+//
+// Mutation: pass the seat, the login or the address untrimmed and the record
+// names the spaces.
 func TestACreateNamingASeatIsOneRecord(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	got := r.as(administrator(), http.MethodPost, "/iam/people", map[string]any{
-		"login": "dana.sre", "email": "dana@example.com", "seat": "founder",
+		"login": " dana.sre ", "email": " dana@example.com\t", "seat": " founder ",
 	})
-	if got.status != http.StatusOK {
+	if got.status != http.StatusCreated {
 		t.Fatalf("status %d (body %v)", got.status, got.body)
 	}
-	if !slices.Equal(r.writer.calls, []string{"enrol"}) ||
-		r.writer.enrolled.Seat != "founder" {
-		t.Errorf("the create asked for %v with seat %q, want one enrolment "+
-			"carrying the seat", r.writer.calls, r.writer.enrolled.Seat)
+	if !slices.Equal(r.writer.calls, []string{"create"}) ||
+		r.writer.created.Seat != "founder" || r.writer.created.Login != "dana.sre" ||
+		r.writer.created.Email != "dana@example.com" {
+		t.Errorf("the create asked for %v with seat %q, login %q and address %q, "+
+			"want one create carrying each, trimmed", r.writer.calls,
+			r.writer.created.Seat, r.writer.created.Login, r.writer.created.Email)
+	}
+	if got.body["seat"] != "founder" || got.body["login"] != "dana.sre" {
+		t.Errorf("the answer names seat %v and login %v, want the ones the "+
+			"record carries", got.body["seat"], got.body["login"])
+	}
+
+	// AN ADDRESS OF NOTHING BUT SPACES IS NONE: it reaches the domain empty,
+	// which refuses it as a person nothing can find — 400, never the 500 a
+	// blind of nothing was.
+	r = newRig(t)
+	r.writer.refusals = map[string]error{"create": fmt.Errorf(
+		"%w: a person needs an address", iamdomain.ErrNotFindable)}
+	got = r.as(administrator(), http.MethodPost, "/iam/people", map[string]any{
+		"login": "dana.sre", "email": "   ", "seat": "founder",
+	})
+	if r.writer.created.Email != "" || got.status != http.StatusBadRequest {
+		t.Errorf("a blank address reached the writer as %q and answered %d %v, "+
+			"want it empty and a 400", r.writer.created.Email, got.status, got.body)
+	}
+}
+
+// A PERSON'S CREATE HANDS OUT THEIR FIRST PASSWORD LINK, AND A SERVICE
+// ACCOUNT'S HANDS OUT NONE.
+//
+// An administrator's create IS the enrolment, so the one thing the person
+// lacks is a way to prove themselves: the record carries a link that sets the
+// password they then sign in with, and this answer is the one place it is
+// shown — the reset screen's address, with the credential in the fragment, an
+// invitation's week long. The login is the caller's or, left out, the one the
+// address proposes, and the answer says which was taken. The CONTROL is a
+// service account, which has no password and is handed no link and asked for
+// no expiry.
+//
+// Mutation: build the link from the invitation screen, drop the link's
+// expiry, or propose no login, and the person's half goes red; ask a machine
+// for an expiry and the control does.
+func TestAPersonsCreateHandsOutTheirFirstPasswordLink(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	got := r.as(administrator(), http.MethodPost, "/iam/people", map[string]any{
+		"email": "Dana.Ng@Example.com", "name": "Dana", "seat": "platform-lead",
+	})
+	if got.status != http.StatusCreated {
+		t.Fatalf("status %d (body %v)", got.status, got.body)
+	}
+	if r.writer.created.Login != "dana.ng" || got.body["login"] != "dana.ng" {
+		t.Errorf("a create naming no login took %q and answered %v, want the "+
+			"one the address proposes", r.writer.created.Login, got.body["login"])
+	}
+	if want := at.Add(credential.EnrolmentLinkLifetime); !r.writer.created.LinkExpiresAt.Equal(want) {
+		t.Errorf("the first link expires at %s, want an invitation's week, %s",
+			r.writer.created.LinkExpiresAt, want)
+	}
+	person, _ := got.body["id"].(string)
+	blinder, err := fixtureBlinder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := blinder.PasswordLinkID(person)
+	if err != nil {
+		t.Fatalf("the answer names person %q: %v", person, err)
+	}
+	secret, err := blinder.PasswordLinkSecret(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "https://crewlet.example.com/dashboard#/reset/" + id + "." +
+		secret; got.body["url"] != want || got.body["credential"] != id {
+		t.Errorf("the link is %v (credential %v), want the reset screen built "+
+			"from api.external_url, %q", got.body["url"], got.body["credential"],
+			want)
+	}
+	if got.body["kind"] != string(iam.KindPerson) || got.body["expires_at"] == nil {
+		t.Errorf("the answer is %v, want the kind and the link's expiry", got.body)
+	}
+
+	machine := newRig(t)
+	got = machine.as(administrator(), http.MethodPost, "/iam/people", map[string]any{
+		"kind": "machine", "login": "ci:release",
+	})
+	if got.status != http.StatusCreated {
+		t.Fatalf("a service account's create answered %d (body %v)", got.status,
+			got.body)
+	}
+	for _, handed := range []string{"url", "credential", "expires_at"} {
+		if _, ok := got.body[handed]; ok {
+			t.Errorf("a service account's create handed out a %s: %v", handed,
+				got.body)
+		}
+	}
+	if !machine.writer.created.LinkExpiresAt.IsZero() {
+		t.Errorf("a service account's create asked for a link expiring at %s",
+			machine.writer.created.LinkExpiresAt)
+	}
+}
+
+// A LOGIN THE ADDRESS CANNOT PROPOSE IS ASKED FOR BY NAME, before anything is
+// published — and an absent address is left to the domain, which names the
+// address rather than a login the caller could not have typed. Mutation:
+// publish the empty proposal and the first row reaches the writer.
+func TestALoginTheAddressCannotProposeIsAskedFor(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	got := r.as(administrator(), http.MethodPost, "/iam/people", map[string]any{
+		"email": "___@example.com", "seat": "platform-lead",
+	})
+	if got.status != http.StatusBadRequest || got.body["field"] != "login" {
+		t.Errorf("an address proposing nothing answered %d %v, want 400 naming "+
+			"login", got.status, got.body)
+	}
+	if len(r.writer.calls) != 0 {
+		t.Errorf("a create with no login published %v", r.writer.calls)
+	}
+
+	r = newRig(t)
+	r.writer.refusals = map[string]error{"create": fmt.Errorf(
+		"%w: a person needs an address", iamdomain.ErrNotFindable)}
+	got = r.as(administrator(), http.MethodPost, "/iam/people", map[string]any{
+		"seat": "platform-lead",
+	})
+	if got.status != http.StatusBadRequest || got.body["field"] == "login" ||
+		r.writer.created.Login != "" {
+		t.Errorf("a create with no address answered %d %v, proposing %q — want "+
+			"the domain's refusal of the address", got.status, got.body,
+			r.writer.created.Login)
+	}
+}
+
+// A PERSON IS NEVER CREATED OR INVITED WITHOUT A SEAT, AND NEVER LEFT WITHOUT
+// ONE.
+//
+// A person holds a human seat for as long as they are here (ADR-0026). A
+// create or an invitation naming none — a seat of nothing but spaces included —
+// is `400 seat_required` naming the field BEFORE anything is minted or
+// published, because the remedy is the caller's to type; an edit clearing a
+// person's seat is the identity record's own refusal, which goes first, so it
+// answers the same code with nothing landed and nothing after it published.
+// The CONTROLS are a service account, created with no seat and unbound with
+// `seat: ""`, which is legal.
+//
+// Mutation: drop the create's or the invitation's early check and its rows
+// publish; drop the domain refusal's arm from the answer and the edit answers
+// `invalid_body`.
+func TestAPersonIsNeverCreatedOrInvitedWithoutASeat(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, target string
+		body         map[string]any
+	}{
+		{"a create naming no seat", "/iam/people",
+			map[string]any{"login": "dana.sre", "email": "dana@example.com"}},
+		{"a create naming a blank seat", "/iam/people",
+			map[string]any{"login": "dana.sre", "email": "dana@example.com",
+				"seat": "   "}},
+		{"a person's create, spelled out", "/iam/people",
+			map[string]any{"kind": "person", "email": "dana@example.com"}},
+		{"an invitation naming no seat", "/iam/invitations",
+			map[string]any{"email": "dana@example.com"}},
+		{"an invitation naming a blank seat", "/iam/invitations",
+			map[string]any{"email": "dana@example.com", "seat": " "}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t)
+			got := r.as(administrator(), http.MethodPost, tc.target, tc.body)
+			if got.status != http.StatusBadRequest ||
+				got.body["error"] != string(httpjson.CodeSeatRequired) ||
+				got.body["field"] != "seat" {
+				t.Fatalf("answered %d %v, want 400 seat_required naming the field",
+					got.status, got.body)
+			}
+			if len(r.writer.calls) != 0 {
+				t.Errorf("a gesture naming no seat published %v", r.writer.calls)
+			}
+			for _, handed := range []string{"id", "url", "op_id"} {
+				if _, ok := got.body[handed]; ok {
+					t.Errorf("the refusal carries %s: %v", handed, got.body)
+				}
+			}
+		})
+	}
+
+	t.Run("an edit clearing a person's seat", func(t *testing.T) {
+		t.Parallel()
+		r := newRig(t)
+		r.writer.refusals = map[string]error{"identity": fmt.Errorf(
+			"%w: person %s holds a human seat", iamdomain.ErrSeatRequired, alice)}
+		got := r.as(administrator(), http.MethodPatch, "/iam/people/"+alice.String(),
+			map[string]any{"seat": "", "stage": "suspended", "name": "Alice"})
+		if got.status != http.StatusBadRequest ||
+			got.body["error"] != string(httpjson.CodeSeatRequired) ||
+			got.body["field"] != "seat" || got.body["landed"] != nil {
+			t.Errorf("answered %d %v, want 400 seat_required with nothing landed",
+				got.status, got.body)
+		}
+		if !slices.Equal(r.writer.calls, []string{"identity"}) {
+			t.Errorf("calls %v, want the refused identity record alone — "+
+				"nothing after it", r.writer.calls)
+		}
+		if detail, _ := got.body["detail"].(string); detail == "" ||
+			strings.Contains(detail, "iamdomain") {
+			t.Errorf("the detail is %q, want a sentence of the surface's own",
+				detail)
+		}
+	})
+
+	t.Run("a service account, created with no seat (the control)", func(t *testing.T) {
+		t.Parallel()
+		r := newRig(t)
+		got := r.as(administrator(), http.MethodPost, "/iam/people",
+			map[string]any{"kind": "machine", "login": "ci:release"})
+		if got.status != http.StatusCreated || r.writer.created.Seat != "" {
+			t.Errorf("answered %d %v with seat %q, want 201 and no seat",
+				got.status, got.body, r.writer.created.Seat)
+		}
+	})
+
+	t.Run("a service account, unbound (the control)", func(t *testing.T) {
+		t.Parallel()
+		r := newRig(t)
+		r.directory.people[ciRelease.String()] = iamdomain.PersonRow{
+			ID: ciRelease.String(), Kind: iam.KindMachine, Stage: iam.StageActive,
+			Login: "ci:release", Seat: "founder",
+		}
+		got := r.as(administrator(), http.MethodPatch,
+			"/iam/people/"+ciRelease.String(), map[string]any{"seat": " "})
+		if got.status != http.StatusOK {
+			t.Fatalf("status %d (body %v)", got.status, got.body)
+		}
+		if len(r.writer.identity) != 1 ||
+			r.writer.identity[0].PersonID != ciRelease.String() ||
+			r.writer.identity[0].Seat == nil || *r.writer.identity[0].Seat != "" ||
+			r.writer.identity[0].Login != nil {
+			t.Errorf("identity changes %+v, want one clearing the service "+
+				"account's seat alone, filed under it", r.writer.identity)
+		}
+	})
+}
+
+// A SEAT NAMED ON A NODE THAT RUNS NO COMPANY IS `409 no_active_revision`, NOT
+// A 503.
+//
+// The domain cannot check a seat against an organisation this node does not
+// run, and every node of a fresh install answers that the same after every
+// wait — so the 503 it was, carrying "come back in two seconds", sent an
+// administrator round a loop that only importing a company ends. It is the
+// answer `GET /iam/seats` gives the same state, with the same hint.
+//
+// Mutation: drop the arm and every row answers 500.
+func TestASeatOnANodeRunningNoCompanyIsNoActiveRevision(t *testing.T) {
+	t.Parallel()
+	noCompany := fmt.Errorf("%w: seat %q cannot be bound yet",
+		iamdomain.ErrNoCompany, "founder")
+	for _, tc := range []struct {
+		name, call, method, target string
+		body                       map[string]any
+	}{
+		{"a create", "create", http.MethodPost, "/iam/people",
+			map[string]any{"email": "dana@example.com", "seat": "founder"}},
+		{"an invitation", "invite", http.MethodPost, "/iam/invitations",
+			map[string]any{"email": "dana@example.com", "seat": "founder"}},
+		{"a move", "identity", http.MethodPatch, "/iam/people/" + bob.String(),
+			map[string]any{"seat": "founder"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t)
+			r.writer.refusals = map[string]error{tc.call: noCompany}
+			got := r.as(administrator(), tc.method, tc.target, tc.body)
+			if got.status != http.StatusConflict ||
+				got.body["error"] != string(httpjson.CodeNoActiveRevision) ||
+				got.header.Get("Retry-After") != "" {
+				t.Errorf("answered %d %v (Retry-After %q), want 409 "+
+					"no_active_revision with no Retry-After", got.status, got.body,
+					got.header.Get("Retry-After"))
+			}
+			if hint, _ := got.body["hint"].(string); !strings.Contains(hint,
+				"declares a human seat") {
+				t.Errorf("the hint %q does not say what brings a seat", hint)
+			}
+			if _, handed := got.body["url"]; handed {
+				t.Errorf("a refused gesture handed out a link: %v", got.body)
+			}
+		})
 	}
 }
 
@@ -861,8 +1219,7 @@ func TestTheInviteUrlIsReturnedExactlyOnce(t *testing.T) {
 	}
 	link, _ := got.body["url"].(string)
 	id, _ := got.body["id"].(string)
-	blinder, err := iamdomain.NewBlinder([]byte(strings.Repeat("k",
-		iamdomain.MinBlindKeyBytes)))
+	blinder, err := fixtureBlinder()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -889,9 +1246,13 @@ func TestTheInviteUrlIsReturnedExactlyOnce(t *testing.T) {
 		t.Errorf("the invitation binds seat %q, want the one named, trimmed",
 			r.writer.invited.Seat)
 	}
-	if r.writer.invited.ExpiresAt != at.Add(iamapi.InviteWindow) {
+	if r.writer.invited.ExpiresAt != at.Add(credential.EnrolmentLinkLifetime) {
 		t.Errorf("the invitation expires at %s, want %s",
-			r.writer.invited.ExpiresAt, at.Add(iamapi.InviteWindow))
+			r.writer.invited.ExpiresAt, at.Add(credential.EnrolmentLinkLifetime))
+	}
+	if got.body["seat"] != "platform-lead" {
+		t.Errorf("the answer names seat %v, want the one the invitation holds",
+			got.body["seat"])
 	}
 	// AND NOTHING READS IT BACK. The listing names the invitation and never
 	// its link, and no route reads one invitation back: the one place the
@@ -964,7 +1325,7 @@ func TestTheDanglingArmReportsWhatTheRuleSays(t *testing.T) {
 	// calls dangling, in the rule's own words, and asks about nobody the
 	// directory does not bind.
 	var asked []string
-	const why = `seat "founder" is a "agent" seat; unbind them, or bind them to another seat`
+	const why = `seat "founder" is a "agent" seat; bind them to another human seat, or remove them`
 	with := newRig(t, func(o *iamapi.Options) {
 		o.Bindings = func(_ context.Context, row iamdomain.PersonRow) (bool, string, error) {
 			asked = append(asked, row.ID)
@@ -1027,6 +1388,184 @@ func TestTheReportNamesAGrantTheCeilingClamps(t *testing.T) {
 	got := r.as(administrator(), http.MethodGet, "/iam/check", nil)
 	if !hasFinding(got.body, string(iamapi.KindClampedGrant)) {
 		t.Errorf("the report does not name the clamped grant: %v", got.body)
+	}
+}
+
+// A PERSON WITHOUT A SEAT IS REPORTED, AT EVERY STAGE, AND A SERVICE ACCOUNT
+// WITHOUT ONE NEVER IS.
+//
+// Every person holds a human seat (ADR-0026), and nothing this build writes
+// leaves one without — so a person with no seat is a row recorded before the
+// rule, acting under their bare login, in no unit and led by nobody, and this
+// report is where an administrator finds them. Suspending somebody does not
+// make their missing seat stop mattering. A service account's seat is optional
+// by design, so the CONTROL is one with none. And the row says it binds
+// nothing, so it is never counted among the bindings this node could not
+// check.
+//
+// Mutation: report a seatless service account, or only an active person, and
+// a row goes red.
+func TestTheReportNamesAPersonWithoutASeat(t *testing.T) {
+	t.Parallel()
+	dave := uuid.MustParse("018f3a9c-0000-7000-8000-0000000000d7")
+	r := newRig(t)
+	r.directory.people[dave.String()] = iamdomain.PersonRow{
+		ID: dave.String(), Kind: iam.KindPerson, Stage: iam.StageSuspended,
+		Login: "dave.ops",
+	}
+	r.directory.people[ciRelease.String()] = iamdomain.PersonRow{
+		ID: ciRelease.String(), Kind: iam.KindMachine, Stage: iam.StageActive,
+		Login: "ci:release",
+	}
+	got := r.as(administrator(), http.MethodGet, "/iam/check", nil)
+	if got.status != http.StatusOK {
+		t.Fatalf("status %d (body %v)", got.status, got.body)
+	}
+	var seatless []string
+	rows, _ := got.body["findings"].([]any)
+	for _, raw := range rows {
+		row, _ := raw.(map[string]any)
+		if row["kind"] == string(iamapi.KindNoSeat) {
+			seatless = append(seatless, row["login"].(string))
+			if detail, _ := row["detail"].(string); !strings.Contains(detail,
+				"PATCH /iam/people/") {
+				t.Errorf("the finding reads %q, want the move that repairs it", detail)
+			}
+		}
+	}
+	slices.Sort(seatless)
+	if !slices.Equal(seatless, []string{"bob.sre", "dave.ops"}) {
+		t.Errorf("the report names %v as seatless, want the two people with no "+
+			"seat and not the service account", seatless)
+	}
+	if n, _ := got.body["bindings_unchecked"].(float64); n != 0 {
+		t.Errorf("bindings_unchecked = %v, want 0 — a row binding nothing has "+
+			"nothing to check", got.body["bindings_unchecked"])
+	}
+}
+
+// THE REPORT IS IN THE ORDER IT SAYS IT IS, and stable within a kind.
+//
+// [iamapi.FindingKinds] was declared "the order the report renders them" and
+// read by nothing, while findings came out person by person with only the
+// missing administrator put first — so the CLI and the dashboard, which both
+// promise that order, printed whatever order the rows walked in. Every kind is
+// raised here by one or two people, and the answer must be grouped by kind in
+// the declared order with each kind's people in the directory's order.
+//
+// Mutation: drop the sort and the report is alice's, then bob's; sort
+// unstably and the two people's missing credentials may swap.
+func TestTheReportIsInTheOrderItSaysItIs(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, func(o *iamapi.Options) {
+		o.Ceiling = []iam.Grant{iam.GrantStateRead}
+		o.Bindings = func(_ context.Context, row iamdomain.PersonRow) (bool, string, error) {
+			return row.Seat == "founder", "the seat founder is not in the org chart", nil
+		}
+	})
+	got := r.as(administrator(), http.MethodGet, "/iam/check", nil)
+	if got.status != http.StatusOK {
+		t.Fatalf("status %d (body %v)", got.status, got.body)
+	}
+	var order []string
+	rows, _ := got.body["findings"].([]any)
+	for _, raw := range rows {
+		row, _ := raw.(map[string]any)
+		who, _ := row["login"].(string)
+		order = append(order, row["kind"].(string)+" "+who)
+	}
+	want := []string{
+		string(iamapi.KindNoManageHolder) + " ",
+		string(iamapi.KindNoCredential) + " alice.admin",
+		string(iamapi.KindNoCredential) + " bob.sre",
+		string(iamapi.KindNoSeat) + " bob.sre",
+		string(iamapi.KindDanglingBinding) + " alice.admin",
+		string(iamapi.KindClampedGrant) + " alice.admin",
+	}
+	if !slices.Equal(order, want) {
+		t.Errorf("the report reads\n  %s\nwant\n  %s", strings.Join(order, "\n  "),
+			strings.Join(want, "\n  "))
+	}
+}
+
+// A LIVE LINK IS A WAY IN, AND NOT AN ENROLMENT.
+//
+// A person created a minute ago holds their first password link and nothing
+// else: they CAN get in, so they are not reported as holding no credential —
+// but they have not, so a company whose only holder of people:manage is them is
+// one nobody can administer yet, and the report says so in its own words,
+// "an enrolled credential". A link that lapsed is no way in at all, and the
+// finding names the reset that repairs it. The CONTROL is the same person
+// holding a password.
+//
+// Mutation: count a link toward the administrators and the missing one goes
+// unreported; stop counting it as a way in and the new person is reported.
+func TestALiveLinkIsAWayInAndNotAnEnrolment(t *testing.T) {
+	t.Parallel()
+	link := func(expires time.Time) []iamdomain.CredentialRow {
+		return []iamdomain.CredentialRow{{ID: "first", PersonID: alice.String(),
+			Method: iamdomain.MethodReset, ExpiresAt: expires}}
+	}
+	nocred := func(body map[string]any) bool {
+		finding := findingOf(body, string(iamapi.KindNoCredential))
+		return finding != nil && finding["person"] == alice.String()
+	}
+
+	r := newRig(t)
+	r.directory.creds = map[string][]iamdomain.CredentialRow{
+		alice.String(): link(at.Add(time.Hour))}
+	got := r.as(administrator(), http.MethodGet, "/iam/check", nil)
+	if nocred(got.body) {
+		t.Errorf("a person holding a live first link was reported holding no "+
+			"credential: %v", got.body)
+	}
+	if !hasFinding(got.body, string(iamapi.KindNoManageHolder)) {
+		t.Errorf("a company whose only administrator has never set a password "+
+			"was reported administrable: %v", got.body)
+	}
+
+	r = newRig(t)
+	r.directory.creds = map[string][]iamdomain.CredentialRow{
+		alice.String(): link(at.Add(-time.Hour))}
+	got = r.as(administrator(), http.MethodGet, "/iam/check", nil)
+	if !nocred(got.body) {
+		t.Errorf("a person whose only link lapsed was not reported: %v", got.body)
+	}
+	if detail, _ := findingOf(got.body,
+		string(iamapi.KindNoCredential))["detail"].(string); !strings.Contains(detail,
+		"/password-reset") {
+		t.Errorf("the finding reads %q, want the reset that repairs it", detail)
+	}
+
+	r = newRig(t)
+	r.directory.creds = map[string][]iamdomain.CredentialRow{
+		alice.String(): {{ID: "pw", PersonID: alice.String(),
+			Method: iamdomain.MethodPassword}}}
+	got = r.as(administrator(), http.MethodGet, "/iam/check", nil)
+	if nocred(got.body) || hasFinding(got.body, string(iamapi.KindNoManageHolder)) {
+		t.Errorf("an administrator holding a password was reported: %v", got.body)
+	}
+
+	// AND A SERVICE ACCOUNT WITH NO TOKEN is told to mint one: it has no
+	// password, so the reset link a person's finding names is refused for it.
+	r.directory.people[ciRelease.String()] = iamdomain.PersonRow{
+		ID: ciRelease.String(), Kind: iam.KindMachine, Stage: iam.StageActive,
+		Login: "ci:release",
+	}
+	got = r.as(administrator(), http.MethodGet, "/iam/check", nil)
+	rows, _ := got.body["findings"].([]any)
+	var machine string
+	for _, raw := range rows {
+		row, _ := raw.(map[string]any)
+		if row["kind"] == string(iamapi.KindNoCredential) &&
+			row["person"] == ciRelease.String() {
+			machine, _ = row["detail"].(string)
+		}
+	}
+	if !strings.Contains(machine, "/iam/credentials?person=") ||
+		strings.Contains(machine, "password-reset") {
+		t.Errorf("a service account with no token reads %q, want the mint that "+
+			"repairs it", machine)
 	}
 }
 
@@ -1098,6 +1637,7 @@ func TestARefusedLoginOrKindIsABadRequestAndNotAFault(t *testing.T) {
 		r.writer.err = fmt.Errorf("%w: the domain's own sentence", refusal)
 		got := r.as(administrator(), http.MethodPost, "/iam/people", map[string]any{
 			"login": "token:ops", "email": "mallory@example.com", "name": "Mallory",
+			"seat": "platform-lead",
 		})
 		if got.status != http.StatusBadRequest {
 			t.Errorf("%v answered %d, want 400 (body %v)", refusal, got.status,
@@ -1127,6 +1667,7 @@ func TestAWriteThatLostItsRaceIsStale(t *testing.T) {
 		statelog.ErrConflict)
 	got := r.as(administrator(), http.MethodPost, "/iam/people", map[string]any{
 		"login": "dana.sre", "email": "dana@example.com", "name": "Dana",
+		"seat": "platform-lead",
 	})
 	if got.status != http.StatusConflict || got.body["error"] != "stale" {
 		t.Errorf("a lost race answered %d %v, want 409 stale", got.status,
@@ -1146,24 +1687,40 @@ func TestAnOversizedWriteIsAnsweredRatherThanDropped(t *testing.T) {
 	}
 }
 
-// AN UNBIND IS AN IDENTITY CHANGE OF THE PERSON THE ROUTE NAMES.
+// A MOVE IS AN IDENTITY CHANGE OF THE PERSON THE ROUTE NAMES.
 //
 // The record is filed under its person's bucket, which is where a node that
 // cannot decode it files the deferral a read about that person finds — so the
-// surface names the person the route names and just read.
-func TestAnUnbindIsAnIdentityChangeOfThePerson(t *testing.T) {
+// surface names the person the route names and just read, and sends the seat
+// TRIMMED, as a create's: the domain looks a handle up as given, so an edit
+// refused ` platform-lead ` an invitation accepted. A service account's unbind
+// is the same record (TestAPersonIsNeverCreatedOrInvitedWithoutASeat).
+//
+// Mutation: send the seat untrimmed and the record names the spaces; compare
+// the untrimmed value with the seat held and a seat they already hold is
+// published again.
+func TestAMoveIsAnIdentityChangeOfThePerson(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	got := r.as(administrator(), http.MethodPatch, "/iam/people/"+alice.String(),
-		map[string]any{"seat": ""})
+		map[string]any{"seat": " platform-lead "})
 	if got.status != http.StatusOK {
 		t.Fatalf("status %d (body %v)", got.status, got.body)
 	}
 	if len(r.writer.identity) != 1 || r.writer.identity[0].PersonID != alice.String() ||
-		r.writer.identity[0].Seat == nil || *r.writer.identity[0].Seat != "" ||
+		r.writer.identity[0].Seat == nil ||
+		*r.writer.identity[0].Seat != "platform-lead" ||
 		r.writer.identity[0].Login != nil {
-		t.Errorf("identity changes %+v, want one clearing %s's seat alone",
+		t.Errorf("identity changes %+v, want one moving %s's seat alone, trimmed",
 			r.writer.identity, alice)
+	}
+	// AND A SEAT THEY ALREADY HOLD, however it is spaced, is no change.
+	r = newRig(t)
+	if got := r.as(administrator(), http.MethodPatch, "/iam/people/"+alice.String(),
+		map[string]any{"seat": "founder "}); got.status != http.StatusOK ||
+		len(r.writer.identity) != 0 {
+		t.Errorf("a seat already held answered %d with %+v, want no record",
+			got.status, r.writer.identity)
 	}
 }
 
@@ -1208,15 +1765,38 @@ func TestALoginAndASeatMoveInOneRecord(t *testing.T) {
 			r.writer.calls)
 	}
 
+	// A LOGIN IS TRIMMED as a create's is, so the one they already hold,
+	// however it is spaced, is no change — and a padded new one is sent
+	// trimmed rather than refused for its grammar.
+	r = newRig(t)
+	if got := r.as(administrator(), http.MethodPatch, "/iam/people/"+alice.String(),
+		map[string]any{"login": " alice.admin "}); got.status != http.StatusOK ||
+		len(r.writer.identity) != 0 {
+		t.Errorf("the login already held, spaced, answered %d with %+v, want "+
+			"no record", got.status, r.writer.identity)
+	}
+	r = newRig(t)
+	if got := r.as(administrator(), http.MethodPatch, "/iam/people/"+alice.String(),
+		map[string]any{"login": " alice.a.admin "}); got.status != http.StatusOK ||
+		len(r.writer.identity) != 1 || r.writer.identity[0].Login == nil ||
+		*r.writer.identity[0].Login != "alice.a.admin" {
+		t.Errorf("a padded new login answered %d with %+v, want one record "+
+			"carrying it trimmed", got.status, r.writer.identity)
+	}
+
 	// AND WHAT THE SURFACE CAN JUDGE IS REFUSED BEFORE ANY RECORD, each
-	// beside a seat move that would otherwise land: a login cleared, a
-	// stage this build cannot name, a grant the caller may not confer.
+	// beside a seat move that would otherwise land: a login cleared — a
+	// login of nothing but spaces too, told it is being cleared rather than
+	// that its grammar is wrong — a stage this build cannot name, a grant
+	// the caller may not confer.
 	for name, tc := range map[string]struct {
 		body   map[string]any
 		status int
 	}{
 		"a cleared login": {map[string]any{"seat": "platform-lead",
 			"login": ""}, http.StatusBadRequest},
+		"a login of spaces": {map[string]any{"seat": "platform-lead",
+			"login": "   "}, http.StatusBadRequest},
 		"a stage nobody can name": {map[string]any{"seat": "platform-lead",
 			"stage": "paused"}, http.StatusBadRequest},
 		"a grant the caller does not hold": {map[string]any{
@@ -1232,6 +1812,11 @@ func TestALoginAndASeatMoveInOneRecord(t *testing.T) {
 		}
 		if len(r.writer.calls) != 0 {
 			t.Errorf("%s published %v before it was refused", name, r.writer.calls)
+		}
+		if detail, _ := got.body["detail"].(string); strings.Contains(name, "login") &&
+			!strings.Contains(detail, "never cleared") {
+			t.Errorf("%s answered %q, want it told a login is never cleared",
+				name, detail)
 		}
 	}
 }
@@ -1395,7 +1980,7 @@ func TestARefusalPartwayNamesWhatLanded(t *testing.T) {
 func TestACreateWhoseSeatIsTakenCreatesNobody(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
-	r.writer.refusals = map[string]error{"enrol": &iamdomain.ErrTaken{
+	r.writer.refusals = map[string]error{"create": &iamdomain.ErrTaken{
 		Field: iamdomain.UniqueSeat, Value: "platform-lead", Person: bob.String()}}
 	got := r.as(administrator(), http.MethodPost, "/iam/people",
 		map[string]any{"login": "dana.sre", "email": "dana@example.com",
@@ -1403,12 +1988,12 @@ func TestACreateWhoseSeatIsTakenCreatesNobody(t *testing.T) {
 	if got.status != http.StatusConflict {
 		t.Fatalf("status %d (body %v), want the seat's 409", got.status, got.body)
 	}
-	if got.body["id"] != nil || got.body["landed"] != nil {
+	if got.body["id"] != nil || got.body["landed"] != nil || got.body["url"] != nil {
 		t.Errorf("the refused create answered %v, which names a person it "+
-			"never made", got.body)
+			"never made or a link to them", got.body)
 	}
-	if !slices.Equal(r.writer.calls, []string{"enrol"}) {
-		t.Errorf("calls %v, want the one refused enrolment", r.writer.calls)
+	if !slices.Equal(r.writer.calls, []string{"create"}) {
+		t.Errorf("calls %v, want the one refused create", r.writer.calls)
 	}
 }
 
@@ -1430,8 +2015,8 @@ func TestAGesturesOwnReasonSaysWhatWasDoneAndByWhom(t *testing.T) {
 		call, want           string
 	}{
 		{"a create", http.MethodPost, "/iam/people", map[string]any{
-			"login": "dana.sre", "email": "dana@example.com"},
-			"enrol", "created by alice.admin"},
+			"login": "dana.sre", "email": "dana@example.com",
+			"seat": "platform-lead"}, "create", "created by alice.admin"},
 		{"an edit", http.MethodPatch, "/iam/people/" + bob.String(),
 			map[string]any{"name": "Bob"}, "update", "changed by alice.admin"},
 		{"a suspension", http.MethodPatch, "/iam/people/" + bob.String(),
@@ -1447,8 +2032,8 @@ func TestAGesturesOwnReasonSaysWhatWasDoneAndByWhom(t *testing.T) {
 			"/iam/people/" + bob.String() + "/sessions", nil,
 			"revoke", "every session ended by alice.admin"},
 		{"an invitation", http.MethodPost, "/iam/invitations",
-			map[string]any{"email": "dana@example.com"}, "invite",
-			"invited by alice.admin"},
+			map[string]any{"email": "dana@example.com", "seat": "platform-lead"},
+			"invite", "invited by alice.admin"},
 		{"a cancellation", http.MethodDelete, "/iam/invitations/inv-1", nil,
 			"cancel", "cancelled by alice.admin"},
 	} {
@@ -1471,41 +2056,57 @@ func TestAGesturesOwnReasonSaysWhatWasDoneAndByWhom(t *testing.T) {
 // digest nobody can read, all shown verbatim by the dashboard, under
 // `bad_params`, whose sentence is about a query parameter. It is `invalid`
 // now, naming the value and the holder by their login, with the ids beside the
-// sentence rather than in it. The address held by an open invitation names
-// the invitation. Mutation: answer the domain's error as the detail and every
-// case goes red; name the holder by id and the login cases do.
+// sentence rather than in it. A value held by an open invitation names the
+// invitation and how to cancel it — and WHICH value: an invitation holds its
+// seat as well as its address, and "that address" said of a seat told an
+// administrator a value they never typed was taken. Mutation: answer the
+// domain's error as the detail and every case goes red; name the holder by id
+// and the login cases do; word every invitation's value as an address and the
+// seat's case does.
 func TestAValueSomebodyHoldsIsRefusedInWordsAPersonReads(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name  string
-		taken *iamdomain.ErrTaken
-		want  string
+		name   string
+		taken  *iamdomain.ErrTaken
+		want   string
+		absent string
 	}{
 		{"a seat", &iamdomain.ErrTaken{Field: iamdomain.UniqueSeat,
 			Value: "platform-lead", Person: bob.String()},
-			"the seat platform-lead is already held by bob.sre"},
+			"the seat platform-lead is already held by bob.sre", "invitation"},
 		{"an address", &iamdomain.ErrTaken{Field: iamdomain.UniqueEmail,
 			Value: "0123456789abcdef", Person: bob.String()},
-			"that address is already held by bob.sre"},
+			"that address is already held by bob.sre", "invitation"},
 		{"an address an invitation holds", &iamdomain.ErrTaken{
 			Field: iamdomain.UniqueEmail, Value: "0123456789abcdef",
-			Invitation: "inv-1"}, "held by an open invitation"},
+			Invitation: "inv-1"}, "that address is held by an open invitation — " +
+			"cancel it (DELETE /iam/invitations/inv-1)", "seat"},
+		{"a seat an invitation holds", &iamdomain.ErrTaken{
+			Field: iamdomain.UniqueSeat, Value: "platform-lead",
+			Invitation: "inv-1"}, "the seat platform-lead is held by an open " +
+			"invitation — cancel it (DELETE /iam/invitations/inv-1)",
+			"that address"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			r := newRig(t)
-			r.writer.refusals = map[string]error{"enrol": tc.taken}
+			r.writer.refusals = map[string]error{"create": tc.taken}
 			got := r.as(administrator(), http.MethodPost, "/iam/people",
 				map[string]any{"login": "dana.sre", "email": "dana@example.com",
 					"seat": "platform-lead"})
 			detail, _ := got.body["detail"].(string)
 			if got.status != http.StatusConflict || got.body["error"] != "invalid" ||
 				!strings.Contains(detail, tc.want) ||
+				strings.Contains(detail, tc.absent) ||
 				strings.Contains(detail, "iamdomain") ||
 				strings.Contains(detail, tc.taken.Value) && tc.taken.Field == iamdomain.UniqueEmail ||
 				strings.Contains(detail, bob.String()) {
 				t.Errorf("answered %d %v, want 409 `invalid` saying %q", got.status,
 					got.body, tc.want)
+			}
+			if tc.taken.Invitation != "" && got.body["invitation"] != tc.taken.Invitation {
+				t.Errorf("the refusal names invitation %v, want %s",
+					got.body["invitation"], tc.taken.Invitation)
 			}
 		})
 	}
@@ -1530,12 +2131,13 @@ func TestAnotherCreateUnderOneKeyIsAnotherOperation(t *testing.T) {
 	create := func(login string) (published, person string) {
 		t.Helper()
 		got := r.asWith(administrator(), http.MethodPost, "/iam/people",
-			map[string]any{"login": login, "email": login + "@example.com"},
+			map[string]any{"login": login, "email": login + "@example.com",
+				"seat": "platform-lead"},
 			http.Header{opkey.Header: {key}})
 		if got.status/100 != 2 {
 			t.Fatalf("a create answered %d: %v", got.status, got.body)
 		}
-		return r.writer.enrolled.OpID, r.writer.enrolled.PersonID
+		return r.writer.created.OpID, r.writer.created.PersonID
 	}
 	first, person := create("dana.sre")
 	again, samePerson := create("dana.sre")

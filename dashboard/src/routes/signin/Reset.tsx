@@ -1,6 +1,7 @@
 /**
- * `#/reset/<id>.<secret>` — choosing a new password from the one-time link an
- * administrator sent.
+ * `#/reset/<id>.<secret>` — choosing a password from the one-time link an
+ * administrator sent: a RESET for somebody who has a password, or the FIRST
+ * password of a person an administrator created on a seat.
  *
  * # It is the invitation's screen again, for the invitation's reasons
  *
@@ -13,17 +14,26 @@
  *
  * # One answer for every link that no longer works
  *
- * Spent, revoked, past its day, a secret that is not the link's, an id nobody
- * issued, a person suspended since: the engine answers all of them `410` in
- * the same bytes, so this screen has one sentence for them too — the engine's
- * — and one remedy: ask an administrator for a new link.
+ * Spent, revoked, past its deadline, a secret that is not the link's, an id
+ * nobody issued, a person suspended since: the engine answers all of them
+ * `410` in the same bytes, so this screen has one sentence for them too — the
+ * engine's — and one remedy: ask an administrator for a new link. It names no
+ * lifetime: a reset lasts a day and a first password link a week, and a link
+ * that no longer opens does not say which it was.
+ *
+ * # A first password is not a reset
+ *
+ * The view says which (`first`, `contract/identity.ts`). A reset replaces a
+ * password and ends every session its person held; a first password ends
+ * nothing, because there was nothing to end — and told that it would, a person
+ * just created on their seat read their first sign-in as a lock-out.
  *
  * # It signs nobody in
  *
- * Setting the password ends every session the person held, on every device,
- * and opens none: they sign in next, where a second factor they hold still
- * applies — which a session handed out by the link would skip. So the screen
- * ends on a button to the sign-in form rather than in the product.
+ * Setting the password opens no session: they sign in next, where a second
+ * factor they hold still applies — which a session handed out by the link
+ * would skip — and a reset ends every session they held, on every device. So
+ * the screen ends on a button to the sign-in form rather than in the product.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -31,7 +41,8 @@ import { Button, Callout, EmptyState, Skeleton } from "@crewlethq/ui";
 import { CompassGlyph, KeyGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator } from "~/app/router.tsx";
 import { refusalText } from "~/lib/refusal.ts";
-import { auth, RestError, type ResetView } from "~/protocol/index.ts";
+import type { ResetView } from "~/contract/identity.ts";
+import { auth, RestError } from "~/protocol/index.ts";
 import { parseLink } from "./link.ts";
 import { NewPasswordFields, newPasswordReady } from "./NewPassword.tsx";
 import { SignInPage } from "./SignInPage.tsx";
@@ -41,17 +52,17 @@ type Read =
   | { state: "ready"; view: ResetView }
   | { state: "spent"; sentence: string }
   | { state: "failed"; sentence: string }
-  | { state: "set"; login: string };
+  | { state: "set"; login: string; first: boolean };
 
 export function Reset({ link }: { link: string }) {
   const parsed = parseLink(link);
   if (!parsed) {
     return (
-      <SignInPage title="This reset link is incomplete">
+      <SignInPage title="This password link is incomplete">
         <EmptyState
           icon={<CompassGlyph size={32} />}
           title="Part of the link is missing."
-          description="A reset link ends in two parts joined by a dot. Copy the whole link from the message it came in, or ask an administrator for a new one."
+          description="A password link ends in two parts joined by a dot. Copy the whole link from the message it came in, or ask an administrator for a new one."
           headingLevel="none"
         />
       </SignInPage>
@@ -87,8 +98,8 @@ function ResetLink({ id, secret }: { id: string; secret: string }) {
   switch (read.state) {
     case "loading":
       return (
-        <SignInPage title="Opening your reset link">
-          <Skeleton variant="text" rows={3} label="Reading the reset link" />
+        <SignInPage title="Opening your password link">
+          <Skeleton variant="text" rows={3} label="Reading the password link" />
         </SignInPage>
       );
     case "spent":
@@ -96,7 +107,7 @@ function ResetLink({ id, secret }: { id: string; secret: string }) {
     case "failed":
       return (
         // NOTHING WAS DECIDED ABOUT THE LINK, so it is not called bad.
-        <SignInPage title="Your reset link could not be read">
+        <SignInPage title="Your password link could not be read">
           <Callout
             variant="warning"
             role="alert"
@@ -111,7 +122,7 @@ function ResetLink({ id, secret }: { id: string; secret: string }) {
         </SignInPage>
       );
     case "set":
-      return <PasswordIsSet login={read.login} />;
+      return <PasswordIsSet login={read.login} first={read.first} />;
     case "ready":
       return (
         <Choose
@@ -119,7 +130,7 @@ function ResetLink({ id, secret }: { id: string; secret: string }) {
           secret={secret}
           view={read.view}
           onSpent={(sentence) => setRead({ state: "spent", sentence })}
-          onSet={(login) => setRead({ state: "set", login })}
+          onSet={(login) => setRead({ state: "set", login, first: read.view.first === true })}
         />
       );
   }
@@ -128,11 +139,11 @@ function ResetLink({ id, secret }: { id: string; secret: string }) {
 function Spent({ sentence }: { sentence: string }) {
   const nav = useNavigator();
   return (
-    <SignInPage title="This reset link can no longer be used">
+    <SignInPage title="This password link can no longer be used">
       <EmptyState
         icon={<KeyGlyph size={32} />}
         title={sentence}
-        description="A reset link works once, and for a day. If you already set a password with it, sign in with that password."
+        description="A password link works once, and for a limited time. If you already set a password with it, sign in with that password; otherwise ask an administrator for a new link."
         headingLevel="none"
         action={
           <Button variant="secondary" onClick={() => nav.to(["login"])}>
@@ -144,14 +155,18 @@ function Spent({ sentence }: { sentence: string }) {
   );
 }
 
-function PasswordIsSet({ login }: { login: string }) {
+function PasswordIsSet({ login, first }: { login: string; first: boolean }) {
   const nav = useNavigator();
   return (
     <SignInPage title="Your password is set">
       <EmptyState
         icon={<KeyGlyph size={32} />}
-        title={`Sign in as ${login} with your new password.`}
-        description="Every session you held has ended, on every device. A second factor you hold is still asked for."
+        title={`Sign in as ${login} with your ${first ? "" : "new "}password.`}
+        description={
+          first
+            ? "This link is spent: from now on your login and this password are how you sign in."
+            : "Every session you held has ended, on every device. A second factor you hold is still asked for."
+        }
         headingLevel="none"
         action={
           // WITH THE LOGIN, AND SAYING WHERE THEY CAME FROM: the sign-in was a
@@ -208,12 +223,19 @@ function Choose({
 
   return (
     <SignInPage
-      title="Choose a new password"
+      title={view.first ? "Choose your password" : "Choose a new password"}
       lede={
-        <>
-          This link sets the password for <strong>{view.login}</strong>, once. Setting it ends every
-          session you hold, and you sign in with it afterwards.
-        </>
+        view.first ? (
+          <>
+            This link sets the first password for <strong>{view.login}</strong>, once. You sign in
+            with it afterwards.
+          </>
+        ) : (
+          <>
+            This link sets the password for <strong>{view.login}</strong>, once. Setting it ends
+            every session you hold, and you sign in with it afterwards.
+          </>
+        )
       }
     >
       <form

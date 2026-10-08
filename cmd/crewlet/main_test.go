@@ -53,6 +53,16 @@ roles:
     llm: primary
 `
 
+// peopleCompanyYAML is [companyYAML] with a human seat, `founder`, for the
+// cases that invite or create a person: a person holds a human seat for as
+// long as they are here, so a company with none has nowhere to put anybody.
+// Extended rather than edited, because every agent-only case shares
+// companyYAML.
+const peopleCompanyYAML = companyYAML + `  - name: Founder
+    handle: founder
+    kind: human
+`
+
 // configPair writes both tiers into a temp directory and returns the flags
 // that point at them.
 func configPair(t *testing.T, bootstrapYAML, company string) []string {
@@ -921,24 +931,31 @@ func TestUsageAdvertisesEveryDispatchedCommand(t *testing.T) {
 
 // advertisedCommands returns the command word of every `crewlet <word>` line
 // in the usage text.
+func advertisedCommands(t *testing.T, help string) []string {
+	t.Helper()
+	// THE USAGE BLOCK ONLY, which is what `Usage:` opens: the first line
+	// is `crewlet <version> — …`, and the config section below names
+	// flags rather than commands.
+	return advertisedWords(t, help, "crewlet ", "\nConfig:")
+}
+
+// advertisedWords returns the word after prefix on every line of a usage
+// text's `Usage:` block that begins with prefix — the block ending at end.
 //
 // THE FIRST WORD ONLY, because a usage line names the command and then its
 // shape — `crewlet budgets <cmd>`, `crewlet backup -dir PATH` — and the
 // switch dispatches on the word.
-func advertisedCommands(t *testing.T, help string) []string {
+func advertisedWords(t *testing.T, help, prefix, end string) []string {
 	t.Helper()
 	var out []string
-	// THE USAGE BLOCK ONLY, which is what `Usage:` opens: the first line
-	// is `crewlet <version> — …`, and the config section below names
-	// flags rather than commands.
 	_, block, found := strings.Cut(help, "Usage:\n")
 	if !found {
 		t.Fatal("the help text has no usage block, so this half proves nothing")
 	}
-	block, _, _ = strings.Cut(block, "\nConfig:")
+	block, _, _ = strings.Cut(block, end)
 	for _, line := range strings.Split(block, "\n") {
 		line = strings.TrimSpace(line)
-		rest, found := strings.CutPrefix(line, "crewlet ")
+		rest, found := strings.CutPrefix(line, prefix)
 		if !found {
 			continue
 		}
@@ -960,32 +977,50 @@ func advertisedCommands(t *testing.T, help string) []string {
 // dispatchedCommands returns the case values of the command switch in run().
 func dispatchedCommands(t *testing.T) []string {
 	t.Helper()
-	file, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	return switchCases(t, "main.go", "run", "cmd")
+}
+
+// switchCases returns the string case values of the switch on the variable
+// tag inside the function fn of file — a dispatch its usage text has to agree
+// with.
+//
+// THE SWITCH ON THAT VARIABLE ONLY, never every case in the function: a
+// dispatcher's arms may hold switches of their own, and a string case of one
+// of those is not a command.
+func switchCases(t *testing.T, file, fn, tag string) []string {
+	t.Helper()
+	parsed, err := parser.ParseFile(token.NewFileSet(), file, nil, 0)
 	if err != nil {
-		t.Fatalf("parsing main.go: %v", err)
+		t.Fatalf("parsing %s: %v", file, err)
 	}
 
 	var commands []string
-	ast.Inspect(file, func(n ast.Node) bool {
-		fn, ok := n.(*ast.FuncDecl)
-		if !ok || fn.Name.Name != "run" {
+	ast.Inspect(parsed, func(n ast.Node) bool {
+		decl, ok := n.(*ast.FuncDecl)
+		if !ok || decl.Name.Name != fn {
 			return true
 		}
-		ast.Inspect(fn.Body, func(n ast.Node) bool {
-			clause, ok := n.(*ast.CaseClause)
+		ast.Inspect(decl.Body, func(n ast.Node) bool {
+			dispatch, ok := n.(*ast.SwitchStmt)
 			if !ok {
 				return true
 			}
-			for _, expr := range clause.List {
-				lit, ok := expr.(*ast.BasicLit)
-				if !ok || lit.Kind != token.STRING {
-					continue
+			if on, ok := dispatch.Tag.(*ast.Ident); !ok || on.Name != tag {
+				return true
+			}
+			for _, stmt := range dispatch.Body.List {
+				clause := stmt.(*ast.CaseClause)
+				for _, expr := range clause.List {
+					lit, ok := expr.(*ast.BasicLit)
+					if !ok || lit.Kind != token.STRING {
+						continue
+					}
+					value, err := strconv.Unquote(lit.Value)
+					if err != nil {
+						t.Fatalf("unquoting %s: %v", lit.Value, err)
+					}
+					commands = append(commands, value)
 				}
-				value, err := strconv.Unquote(lit.Value)
-				if err != nil {
-					t.Fatalf("unquoting %s: %v", lit.Value, err)
-				}
-				commands = append(commands, value)
 			}
 			return true
 		})
@@ -993,7 +1028,8 @@ func dispatchedCommands(t *testing.T) []string {
 	})
 
 	if len(commands) == 0 {
-		t.Fatal("found no command cases in run(), so this test proves nothing")
+		t.Fatalf("found no cases of the switch on %s in %s(), so this test "+
+			"proves nothing", tag, fn)
 	}
 	return commands
 }
@@ -1250,6 +1286,10 @@ func TestTheProseOutputLeadsEachMessageWithItsPaths(t *testing.T) {
 //
 // THE LEAD IS A HANDLE, which is what makes `ghost` a misspelling rather than
 // a name somebody wrote: nothing resolves a seat by its display name.
+//
+// AND A COMPANY OF AGENTS ALONE IS SAID TO BE ONE, after it: it declares no
+// human seat, so nobody can be invited into it or created in it — which is
+// right for a company its agents run alone and worth knowing for any other.
 func TestTheJSONOutputCarriesWarnings(t *testing.T) {
 	t.Parallel()
 	doc := companyYAML + "units:\n  - name: Platform\n    lead: ghost\n"
@@ -1261,6 +1301,9 @@ func TestTheJSONOutputCarriesWarnings(t *testing.T) {
 		Kind: config.WarningDanglingReference, Ref: "lead",
 		Path: "units[0].lead", Segments: config.Path{"units", 0, "lead"},
 		Unit: "Platform", From: "Platform", To: "ghost",
+	}, {
+		Kind: config.WarningAdvisory, Path: "roles",
+		Segments: config.Path{"roles"},
 	}}
 	if len(got.Warnings) != len(want) {
 		t.Fatalf("warnings = %+v, want %d: %s", got.Warnings, len(want), raw)
@@ -1322,6 +1365,8 @@ func TestTheTwoFileFormCarriesWarnings(t *testing.T) {
 	want := []string{
 		config.WarningAdvisory + " retention.backup_owner",
 		config.WarningDanglingReference + " units[0].lead",
+		// A COMPANY OF AGENTS ALONE: no human seat to invite anybody onto.
+		config.WarningAdvisory + " roles",
 	}
 	if !slices.Equal(located, want) {
 		t.Errorf("warnings = %v, want %v\n%s", located, want, out.String())

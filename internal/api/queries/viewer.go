@@ -14,27 +14,32 @@ import (
 )
 
 // errNoSeat is the refusal a question about a SEAT's trail makes of a caller
-// bound to no seat who named none. It is NOT an authorization failure —
-// nobody was refused anything — and its remedy is a row in the identity
-// directory rather than a different credential, which is why it is
-// [ErrBadParams] and the authority refusal beside it is a [Refusal] carrying
-// the rule's own reason.
+// bound to no seat who named none — a Tier A token's credential, a service
+// account bound to none, or a person recorded before every person held a seat.
+// It is NOT an authorization failure — nobody was refused anything — and its
+// remedy is a row in the identity directory rather than a different
+// credential, which is why it is [ErrBadParams] and the authority refusal
+// beside it is a [Refusal] carrying the rule's own reason.
 //
 // THE BINDING IS NAMED WHERE IT LIVES. It used to say "in the org chart", which
 // was true while a seat's contact block carried the credential it was held by;
 // the directory holds that now, and a remedy pointing at the chart sends
-// somebody to edit a document that has no field for it.
+// somebody to edit a document that has no field for it. And it names a HUMAN
+// seat, because that is the only kind the directory binds anybody to: a bind
+// naming an agent's seat is refused, so "bind it to one" sent a caller to try
+// the seat whose trail they were reading.
 var errNoSeat = fmt.Errorf("%w: this credential is not bound to a seat — bind "+
-	"its row in the identity directory to one (`crewlet iam bind`), or "+
-	"name a handle", ErrBadParams)
+	"its row in the identity directory to a human seat (`crewlet iam bind`), "+
+	"or name a handle", ErrBadParams)
 
 // errNoRecord is the refusal a question about a PERSONAL RECORD makes of a
 // caller who has none and named nobody.
 //
-// RARER THAN [errNoSeat] and a different fact: every bound person, every
-// unbound person with a login and every token has a record of their own —
-// see [iam.RecordOwner] — so what reaches this is a principal the engine can
-// name nothing for, and the remedy is to name whose record to read.
+// RARER THAN [errNoSeat] and a different fact: every person — bound to their
+// seat, or recorded with a login before every person held one — every service
+// account and every token has a record of their own — see [iam.RecordOwner] —
+// so what reaches this is a principal the engine can name nothing for, and the
+// remedy is to name whose record to read.
 var errNoRecord = fmt.Errorf("%w: this credential names nobody whose own "+
 	"record there is — name a handle", ErrBadParams)
 
@@ -47,9 +52,14 @@ var errNoRecord = fmt.Errorf("%w: this credential names nobody whose own "+
 // replaced it: a person is a ROW, a session resolves to that row, and the seat
 // they hold is on the chart. Nothing here derives anything any more.
 //
-// AN UNBOUND CREDENTIAL IS AN ORDINARY STATE, so this answers the login with
-// no seat rather than an error — the screen then says what to bind, which is a
-// different thing from a screen that looks broken.
+// A CREDENTIAL BOUND TO NO SEAT IS AN ORDINARY STATE — a Tier A token's
+// session, a service account bound to none, and a person recorded before every
+// person held a seat (`/iam/check`'s `person_without_seat`) — so this answers
+// the login with no seat rather than an error: the screen then says what to
+// bind, which is a different thing from a screen that looks broken. It is not
+// a PERSON's ordinary state any more: a person holds a human seat for as long
+// as they exist (ADR-0026), so a person reaching here unbound is the residue
+// the check names, and the screen says so rather than calling it normal.
 func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 	principal, how := iam.From(ctx)
 	if how == iam.Unknown {

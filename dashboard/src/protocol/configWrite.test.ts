@@ -267,39 +267,57 @@ describe("one reading of a /config refusal", () => {
   });
 
   // A 409 THAT NO NEWER REVISION CLEARS. A write taking a human seat out of
-  // the company while somebody is bound to it is refused `seat_held`; read
-  // as a revision race it offered to update the draft onto the revision it
-  // was built on, for ever. It is a problem per seat, which unbinding clears.
-  test("a held seat is a problem on that seat naming who holds it and how to unbind them", () => {
+  // the company while something holds it is refused `seat_held`; read as a
+  // revision race it offered to update the draft onto the revision it was
+  // built on, for ever. It is a problem per seat, and the engine names the
+  // ONE thing holding each — whose remedy turns on what it is: a person is
+  // moved or removed (never unbound, which the engine refuses for a person),
+  // a service account unbound, an open invitation cancelled.
+  test("a held seat is a problem on that seat naming what holds it and how to free it", () => {
     const refusal = classifyConfigRefusal({
       status: 409,
       body: {
         error: "seat_held",
-        detail: "configapi: this write removes a human seat somebody is bound to",
+        detail: "configapi: this write removes a human seat something holds",
         held: {
-          sre: [{ person: "p-2", login: "sam", stage: "active" }],
-          dev: [
-            { person: "p-1", login: "ada", stage: "active" },
-            { person: "p-3", login: "", stage: "invited" },
-          ],
+          sre: { person: "p-2", kind: "person", login: "sam.ito", stage: "active" },
+          dev: { person: "p-1", kind: "person", stage: "suspended" },
+          ops: { person: "m-1", kind: "machine", login: "ci:release" },
+          qa: { invitation: "inv-9", expires_at: "2026-10-14T09:00:00Z" },
         },
-        hint: "unbind each person",
+        hint: "free each seat first",
       },
     });
     expect(refusal).toMatchObject({ kind: "problems", code: "seat_held", derived: null });
     if (refusal.kind !== "problems") throw new Error(refusal.kind);
+    const tail = ", then save again. The seat's page in the org chart says what holds it.";
     expect(refusal.problems.map((p) => [p.kind, p.seat, p.message])).toEqual([
       [
         "seat_held",
         "dev",
-        "@dev is held by ada, p-3: unbind them first (crewlet iam unbind p-1; crewlet iam unbind p-3), then save again. People & access shows who holds each seat.",
+        // No login: the id names them, in the sentence and in both commands.
+        `@dev is held by p-1: move them to another human seat (crewlet iam bind p-1 SEAT) or remove them (crewlet iam remove p-1) first${tail}`,
+      ],
+      [
+        "seat_held",
+        "ops",
+        `@ops is held by the service account ci:release: unbind it first (crewlet iam unbind m-1)${tail}`,
+      ],
+      [
+        "seat_held",
+        "qa",
+        `@qa is held by the open invitation inv-9: cancel it first (crewlet iam cancel-invite inv-9)${tail}`,
       ],
       [
         "seat_held",
         "sre",
-        "@sre is held by sam: unbind them first (crewlet iam unbind p-2), then save again. People & access shows who holds each seat.",
+        `@sre is held by sam.ito: move them to another human seat (crewlet iam bind p-2 SEAT) or remove them (crewlet iam remove p-2) first${tail}`,
       ],
     ]);
+    // A PERSON IS NEVER TOLD TO UNBIND: the one remedy the engine refuses.
+    expect(refusal.problems.filter((p) => p.seat !== "ops").map((p) => p.message)).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("unbind")]),
+    );
     // A body naming no seat still refuses, in the engine's own sentence.
     const bare = classifyConfigRefusal({
       status: 409,

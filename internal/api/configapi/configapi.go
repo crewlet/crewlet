@@ -109,11 +109,13 @@ type Options struct {
 	// Required: [New] refuses to build without it.
 	Cipher secrets.Cipher
 
-	// Holders reads who the identity directory binds to a seat, so a write
-	// that takes a human seat away while somebody holds it is refused
-	// naming them (seatheld.go). Required: every node runs the identity
-	// domain from boot, and a surface that skipped the check would remove
-	// a colleague's seat from under them with nothing said.
+	// Holders reads what holds a human seat — whoever the identity
+	// directory binds to it, or an open invitation onto it — so a write
+	// that takes a human seat away while it is held is refused naming the
+	// holder (seatheld.go). Required: every node runs the identity domain
+	// from boot, and a surface that skipped the check would remove a
+	// colleague's seat from under them, or an invitee's from under their
+	// link, with nothing said.
 	Holders Holders
 
 	// Queue publishes the activation NUDGE, so an operator's change lands
@@ -154,7 +156,8 @@ func New(opts Options) (*Service, error) {
 	case opts.Holders == nil:
 		return nil, errors.New("configapi: Options.Holders is required: a write " +
 			"that removes a human seat is refused while the identity directory " +
-			"binds somebody to it, and that needs the directory")
+			"binds somebody to it or an open invitation holds it, and that " +
+			"needs the directory")
 	}
 	now := opts.Now
 	if now == nil {
@@ -816,13 +819,20 @@ func (s *Service) refuseApply(w http.ResponseWriter, err error) {
 				"the part it changed, so a section that is fine on its own is "+
 				"still refused when the company it leaves is invalid", err)
 	case errors.As(err, &held):
+		// A REMEDY PER KIND OF HOLDER, because a person is never unbound —
+		// they hold a human seat for as long as they exist (ADR-0026) — so
+		// the one remedy this used to name, unbinding them, was refused by
+		// the very directory it sent an administrator to. Each `held` entry
+		// says which kind holds its seat.
 		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeSeatHeld,
 			httpjson.Detail{
 				"detail": held.Error(),
 				"held":   held.Held,
-				"hint": "unbind each person from the seat (PATCH " +
-					"/iam/people/{person} with no seat) or remove them, then " +
-					"send the write again",
+				"hint": "move each person to another human seat (PATCH " +
+					"/iam/people/{person} with seat) or remove them, unbind a " +
+					"service account (PATCH /iam/people/{person} with no seat), " +
+					"cancel an open invitation (DELETE /iam/invitations/{id}) — " +
+					"whoever holds people:manage — then send the write again",
 			})
 	case errors.As(err, &unknown):
 		log.Warn("config_seat_holders_unreadable",

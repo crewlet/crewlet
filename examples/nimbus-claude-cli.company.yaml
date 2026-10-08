@@ -725,9 +725,12 @@ roles:
       # WHO SHE IS ON THE DASHBOARD is not written here: she signs in as
       # a person in the identity directory, which binds her to this seat
       # — so the dashboard knows whose day it is showing and what she
-      # files from it is filed by her.  Until somebody is bound, the
-      # seat is an ordinary unheld one, which `GET /iam/seats?unheld=true`
-      # lists.
+      # files from it is filed by her.  She joins ONTO it: invited or
+      # created from the seat in Agents › Org chart, or `crewlet iam
+      # invite <address> -seat jane-founder`.  Until then the seat is
+      # vacant, which `GET /iam/seats?unheld=true` lists — and once an
+      # invitation is open for it, that invitation holds it and the
+      # listing leaves it out.
 
 # Flexible org — units can nest to any depth.
 # Each unit has a type (department, team, squad, pod, etc.) and can

@@ -637,8 +637,9 @@ func (e IAMMFAReset) Summary() string {
 }
 
 // IAMInvitationCancelled is an administrator withdrawing an invitation nobody
-// had redeemed: its link opens nothing from now on, and the address it held is
-// free for a new one.
+// had redeemed: its link opens nothing from now on, and the address and the
+// human seat it held are free — for a new invitation, or a person created or
+// moved onto the seat.
 //
 // THE INVITATION BY ITS ID AND NEVER THE ADDRESS, which the trail row the
 // cancellation's record writes files under its blind — the address itself is
@@ -685,7 +686,9 @@ func (e IAMPasswordChanged) Summary() string {
 }
 
 // IAMPasswordResetIssued is an administrator issuing somebody a one-time link
-// that sets a new password.
+// that sets a new password — or, with First, the FIRST PASSWORD LINK an
+// administrator's create issued the person it created on a human seat, which
+// sets the password they never had.
 //
 // NEVER THE LINK. It is shown once, to whoever issued it, and the estate keeps
 // a verifier of its secret; this says that one exists, whose it is and until
@@ -699,6 +702,14 @@ type IAMPasswordResetIssued struct {
 	// [IAMSessionEnded.OperatorID].
 	OperatorID string `json:"operator_id,omitempty"`
 	Reason     string `json:"reason"`
+
+	// First marks a created person's first password link rather than a
+	// reset. ONE TYPE WITH A FIELD rather than a type of its own, because
+	// it is the same credential spent through the same path, and a reader
+	// filtering the feed for links in circulation wants both. Additive
+	// (ADR-0006): a build that does not know it reads a reset, which the
+	// link also is.
+	First bool `json:"first,omitempty"`
 }
 
 // EventType is the "iam_password_reset_issued" wire type.
@@ -707,13 +718,18 @@ func (IAMPasswordResetIssued) EventType() string { return "iam_password_reset_is
 // Actor is the administrator.
 func (e IAMPasswordResetIssued) Actor() string { return e.By }
 
-// Summary names for whom.
+// Summary names for whom, and which link.
 func (e IAMPasswordResetIssued) Summary() string {
+	if e.First {
+		return "First password link issued for " + orSomebody(e.Person, "")
+	}
 	return "Password reset link issued for " + orSomebody(e.Person, "")
 }
 
 // IAMPasswordReset is a reset link spent: a new password set from it, the link
-// with it, and every session and machine token the person held ended.
+// with it, and every session and machine token the person held ended — or,
+// with First, a created person setting the first password they ever held,
+// through their first password link, when there was nothing of theirs to end.
 //
 // NOBODY WAS SIGNED IN BY IT — the person signs in afterwards, where a second
 // factor they hold still applies — so there is no session on this row.
@@ -722,6 +738,10 @@ type IAMPasswordReset struct {
 	Login      string `json:"login"`
 	Credential string `json:"credential"`
 	Remote     string `json:"remote"`
+
+	// First marks the person's first password, set from a link while they
+	// held none — see [IAMPasswordResetIssued.First].
+	First bool `json:"first,omitempty"`
 }
 
 // EventType is the "iam_password_reset" wire type.
@@ -730,8 +750,13 @@ func (IAMPasswordReset) EventType() string { return "iam_password_reset" }
 // Actor is the person whose password the link set.
 func (e IAMPasswordReset) Actor() string { return e.Login }
 
-// Summary says it was a link, which is what tells it from a change.
+// Summary says it was a link, which is what tells it from a change — and a
+// first password ends nothing, since there was nothing it could have ended,
+// so it does not say it did.
 func (e IAMPasswordReset) Summary() string {
+	if e.First {
+		return lead(orSomebody(e.Login, e.Person), "set their first password")
+	}
 	return lead(orSomebody(e.Login, e.Person),
 		"set a new password from a reset link, ending every session and token they held")
 }

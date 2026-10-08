@@ -398,8 +398,9 @@ Two properties differ from the vendor path and both are visible:
   (`search.IndexDerivation`), with no rebuild command to remember.
 - **THE DASHBOARD EDITS AS THE PERSON.** A save, a new page and a comment go
   through `/operator/act` as the principal the person signed in as — a person
-  the identity directory binds to a seat writes as that seat, anybody else
-  under their own login — so the page's history names who wrote it, never
+  writes as the seat they hold, as does a token or service account the
+  identity directory binds to one, and a credential bound to no seat under
+  its own login — so the page's history names who wrote it, never
   "the dashboard". A save states the revision it edited; one against a stale
   revision is refused rather than overwriting prose somebody else just wrote.
 - **A BODY HAS A HISTORY**, and revision N is the body at version N. The
@@ -531,11 +532,14 @@ sequenceDiagram
   sentence when they do not answer the question. Source `[n]` is the n-th entry
   of the answer's `sources`, so a screen links every citation. A question
   nothing matches is answered without a model at all, and costs nothing.
-- **A person's, not a seat's.** It takes `state:read` and a person the
-  identity directory binds to a seat — the spend is on somebody's behalf, and
-  it runs on that seat's model. A principal no seat binds, an unbound person or
-  a pipeline's token, is refused rather than answered on the company's default
-  model, because a credential is not somebody a spend can be attributed to.
+- **A person's, not a seat's.** It takes `state:read` and a caller who holds
+  a seat — a person, from the dashboard or through their own assistant over
+  `/operator/mcp`, or a token or service account the identity directory binds
+  to one — because the spend is on somebody's behalf and it runs on the model
+  of that seat; every person holds a human seat. A credential bound to no
+  seat — a pipeline's token, or a service account bound to none — is refused
+  rather than answered on the company's default model, because a credential is
+  not somebody a spend can be attributed to.
   And no seat is given the tool: a seat has `search_knowledge` and its own
   model, and a second model's summary in its context would be one it could not
   check.
@@ -569,12 +573,14 @@ with your API token and tell it what to publish:
 > Publish everything under `examples/nimbus-docs/` — one container per
 > directory, the page title from each file's first `# H1`.
 
-It calls `write_page` per file, and each page names you as its author exactly
-as every write through that surface does — your seat when the identity
-directory binds you to one, your own login otherwise, with the credential
-beside it. That handles the parts a flag-driven CLI handles badly: the parent
-chain, a title that already exists (`save_page` with the version it read), and
-a file that turns out to be a [tool skill](tool-skills.md) rather than prose.
+It calls `write_page` per file, and each page names its author exactly as
+every write through that surface does, with the credential beside it: the seat
+you hold — every person holds one — through a token you minted for yourself
+(`crewlet iam token -login`), or the deployment token's own login
+(`token:<id>`) through a Tier A token bound to no seat. That handles the parts a
+flag-driven CLI handles badly: the parent chain, a title that already exists
+(`save_page` with the version it read), and a file that turns out to be a
+[tool skill](tool-skills.md) rather than prose.
 
 The [reserved containers](#who-may-write-where) are **not** refused to it, which
 is the difference from a seat: they are refused to an agent, and publishing the

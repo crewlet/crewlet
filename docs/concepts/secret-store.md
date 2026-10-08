@@ -32,9 +32,11 @@ _secrets (a coordination KV bucket, no TTL)
   value       "enc:v1:<key_id>:<base64>"
   key_id      which keyring entry sealed it
   updated_at
-  updated_by       the author: a seat's handle for a person bound to one, a
-                   login otherwise, `token:<id>` for a Tier A token, the
-                   engine's own name for a key or a pass it wrote itself
+  updated_by       the author: the seat's handle for a person (every person
+                   holds one) or a credential bound to a seat, the login of
+                   a credential bound to none — `token:<id>` for a Tier A
+                   token — or the engine's own name for a key or a pass it
+                   wrote itself
   updated_by_kind  agent | human | operator | system
   operator_id      the credential it was stored through — `pat:<id>`,
                    `session:<lineage>`, a Tier A token's login — and empty

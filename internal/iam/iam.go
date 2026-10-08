@@ -384,12 +384,17 @@ func NormalizeEmail(email string) string {
 // LoginFromAddress PROPOSES a person's login from their address, or answers ""
 // when nothing in the address fits the person grammar.
 //
-// A PROPOSAL AND NEVER A DECISION. Every person enrols with a login — it is
-// the name an unbound person's changes are recorded under — and somebody
-// redeeming an invitation has typed nothing yet, so the form they are shown
-// arrives pre-filled with this and they keep it or change it. Nothing derives
-// a login SILENTLY from here: a name recorded beside everything a person does
-// is one they saw before it was theirs.
+// A PROPOSAL, TAKEN ONLY WHERE SOMEBODY CHOSE TO TAKE IT. Every person enrols
+// with a login — it is the name they sign in with and the name the directory
+// and its trail list them under — and it reaches the directory from here in
+// exactly two ways, neither of them silent. Somebody redeeming an invitation
+// has typed nothing yet, so the form they are shown arrives pre-filled with
+// this and they keep it or change it. An administrator creating a person
+// onto their seat may leave the field blank, which the dashboard's form says
+// the engine will propose one from the address for, and the create's answer
+// names the login it took beside the first password link that person signs in
+// through. A login
+// typed by nobody and shown to nobody is what this never becomes.
 //
 // THE LOCAL PART, FOLDED INTO THE GRAMMAR: the address is normalised by
 // [NormalizeEmail] (so a plus tag is not part of anybody's name), every run of

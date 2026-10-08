@@ -5,31 +5,25 @@ import (
 	"encoding/hex"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 )
-
-// InviteWindow is how long an invitation stays redeemable.
-//
-// A HUNDRED AND SIXTY-EIGHT HOURS — one week — and the number is the SECURITY
-// HORIZON rather than a convenience: the link — its secret — is a bearer
-// credential sitting in somebody's mailbox, so the window is how long a
-// compromised mailbox yields an account. A week survives somebody being away without making the
-// link a standing way in, and an administrator whose invitation aged out
-// issues another in one call.
-const InviteWindow = 168 * time.Hour
 
 // inviteBody is what issuing an invitation accepts.
 type inviteBody struct {
 	Email  string      `json:"email"`
 	Grants []iam.Grant `json:"grants"`
 
-	// Seat is a seat redeeming the invitation BINDS the new person to, by
-	// its handle, or empty. It must be a HUMAN seat nobody is bound to.
+	// Seat is the human seat redeeming the invitation binds the new person
+	// to, by its handle. REQUIRED: a person holds a human seat for as long
+	// as they are here (ADR-0026), and the invitation holds this one — as
+	// it holds its address — from its issue until it is redeemed,
+	// cancelled or ages out, so it must be a seat nobody holds and no
+	// other open invitation holds.
 	Seat   string `json:"seat"`
 	Reason string `json:"reason"`
 }
@@ -48,14 +42,19 @@ type inviteBody struct {
 // — because the id is derived from that key, the secret from the id, and the
 // retry is the same operation rather than a read.
 //
-// # It may bind a seat
+// # It binds a seat, and holds it until it is redeemed
 //
-// `seat` names a human seat nobody holds, and redeeming the invitation then
-// binds the person it creates to that seat as the first step of the same
-// enrolment — so an administrator onboarding somebody into a seat sends one
-// link rather than inviting them and binding them afterwards. A seat that is
-// not a human seat, one the chart does not hold, and one somebody is already
-// bound to are refused here, naming the seat.
+// `seat` names the human seat the invitee will hold, and redeeming the
+// invitation creates them bound to it in one record. It is REQUIRED — `400
+// seat_required` before anything is minted where it names none — because a
+// person holds a human seat for as long as they are here (ADR-0026). From its
+// issue until it is redeemed, cancelled or ages out the invitation HOLDS that
+// seat as it holds its address, so nothing else is bound to it or invited onto
+// it meanwhile, and a company write cannot take it away. A seat that is not a
+// human seat and one the chart does not hold are refused here; one somebody is
+// bound to, or another open invitation holds, is `409` naming which.
+//
+// The link lives [credential.EnrolmentLinkLifetime].
 //
 // # What it confers is decided HERE, by whoever issues it
 //
@@ -73,6 +72,15 @@ func (s *Service) PostInvite(w http.ResponseWriter, r *http.Request) {
 			map[string]string{"detail": "an invitation needs the address it " +
 				"is for: it is what the directory holds the invitation against " +
 				"every person and every open invitation by"})
+		return
+	}
+	// TRIMMED, and asked BEFORE THE KEY IS READ, so a refusal the caller
+	// fixes by typing a seat mints nothing and publishes nothing.
+	seat := strings.TrimSpace(in.Seat)
+	if seat == "" {
+		refuseSeatless(w, "an invitation names the human seat its invitee "+
+			"will hold — name a vacant one (GET /iam/seats?unheld=true lists "+
+			"them)")
 		return
 	}
 	if !s.linksPoint(w, "an invitation") {
@@ -93,8 +101,8 @@ func (s *Service) PostInvite(w http.ResponseWriter, r *http.Request) {
 	}
 	issued, err := writer.Invite(r.Context(), iamdomain.InviteMint{
 		Email: address, Grants: in.Grants,
-		Seat:      strings.TrimSpace(in.Seat),
-		ExpiresAt: s.now().Add(InviteWindow),
+		Seat:      seat,
+		ExpiresAt: s.now().Add(credential.EnrolmentLinkLifetime),
 		// THE SEED, which the domain derives the invitation's id from and
 		// publishes the issue under; the answer hands back the scoped key,
 		// whose seed a retry reproduces — see [Service.createKey].
@@ -119,7 +127,7 @@ func (s *Service) PostInvite(w http.ResponseWriter, r *http.Request) {
 		"position", invited.Position.String())
 	s.answer(w, r, opID, invited, nil, http.StatusCreated, map[string]any{
 		"id": id, "url": s.inviteURL(id, issued.Secret),
-		"expires_at": issued.ExpiresAt,
+		"expires_at": issued.ExpiresAt, "seat": seat,
 		"detail": "this link is shown once and cannot be read back; what the " +
 			"estate holds is the invitation's id and a verifier of the secret " +
 			"the link carries beside it, which is what redeeming it presents",

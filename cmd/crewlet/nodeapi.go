@@ -8,8 +8,12 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/session"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
@@ -116,24 +120,129 @@ func nodeAPIToken(surface string) (string, error) {
 }
 
 // announceUnclaimed says, once at boot, what an operator does next with a
-// company nobody is enrolled in yet: invite its first person under a Tier A
-// token, exactly as every later person is invited.
+// company nobody is enrolled in yet — see [unclaimedDetail] for what it says.
 //
 // A LOG LINE AND NOTHING ELSE. There is no founder route and no code to
 // write: the Tier A token every serving node already requires is the
 // credential a company has before it has anybody, so the first invitation is
-// an ordinary one. An estate this node cannot read, or has not caught up with,
-// says nothing here — /health answers `unknown` for it — rather than telling an
-// operator to invite somebody into a company that may have started: at boot a
-// node joining a fleet has usually applied none of its identity log yet.
-func announceUnclaimed(ctx context.Context, anybody func(context.Context) (bool, error)) {
+// an ordinary one.
+func announceUnclaimed(ctx context.Context, anybody func(context.Context) (bool, error),
+	seats func() ([]session.Seat, bool), claims seatClaims) {
+
+	if detail, unclaimed := unclaimedDetail(ctx, anybody, seats, claims,
+		time.Now()); unclaimed {
+		logging.Get("cli").Warn("iam_unclaimed", "detail", detail)
+	}
+}
+
+// seatClaims is who and what holds the human seats at an instant — every
+// binding and every open invitation, the identity reader's own
+// [iamdomain.Reader.SeatClaims].
+type seatClaims func(context.Context, time.Time) (iamdomain.SeatClaims, error)
+
+// unclaimedDetail is the sentence [announceUnclaimed] logs, and whether the
+// company is unclaimed at all.
+//
+// A PERSON IS ALWAYS INVITED ONTO A HUMAN SEAT (ADR-0026), so what comes next
+// depends on the company this node runs: with none, or with no human seat in
+// it, there is nowhere to invite anybody, and the step before the invitation
+// is the one to name — a company, or a seat in it.
+//
+// WHERE THERE ARE SEATS, ONLY THE VACANT ONES ARE NAMED. "Nobody is in the
+// directory" counts people, and a seat can be held without one: by a SERVICE
+// ACCOUNT (a Tier A token's `token:<id>` row bound to it), or by an OPEN
+// INVITATION — the founder invited, the node restarted before the link was
+// redeemed. An invitation onto either is refused, so the line names what is
+// vacant, says an open invitation is the step already taken (its link is the
+// next one), and where nothing is vacant says what holds each seat and what
+// frees one. The seats are read in the snapshot `GET /iam/seats` reads them
+// in; where that read fails the line names no seat at all and points at
+// `crewlet iam seats -unheld`, which asks again, rather than listing seats it
+// cannot vouch are free.
+//
+// SILENT ON AN ESTATE THIS NODE CANNOT READ, or has not caught up with, rather
+// than telling an operator to invite somebody into a company that may have
+// started: at boot a node joining a fleet has usually applied none of its
+// identity log yet, and /health answers `unknown` for it.
+func unclaimedDetail(ctx context.Context, anybody func(context.Context) (bool, error),
+	seats func() ([]session.Seat, bool), claims seatClaims, now time.Time) (string, bool) {
+
 	enrolled, err := anybody(ctx)
 	if err != nil || enrolled {
-		return
+		return "", false
 	}
-	logging.Get("cli").Warn("iam_unclaimed",
-		"detail", "this company has no person in it; invite its first person "+
-			"with `crewlet iam invite <address> -grants <grants>` and "+
-			apiTokenEnv+" set to one of api.auth.tokens, then send them the "+
-			"link it prints")
+	const nobody = "nobody is in this company's identity directory yet"
+	const invite = "`crewlet iam invite <address> -seat <handle> -grants " +
+		"<grants>` with " + apiTokenEnv + " set to one of api.auth.tokens, " +
+		"then send them the link it prints"
+	human, running := seats()
+	switch {
+	case !running:
+		return nobody + ", and this node runs no company: a person is always " +
+			"invited onto a human seat of one, so create it first — `crewlet " +
+			"config import FILE`, or Agents › Edit org in the dashboard signed " +
+			"in with one of api.auth.tokens — declaring a `kind: human` seat " +
+			"for its first person, then invite them onto it with " + invite, true
+	case len(human) == 0:
+		return nobody + ", and the company declares no human seat: a person " +
+			"is always invited onto one, so declare a `kind: human` seat for " +
+			"its first person — Agents › Edit org, or `crewlet config import " +
+			"FILE` — then invite them onto it with " + invite, true
+	}
+	var bySeat map[string]iamdomain.SeatClaim
+	read, err := claims(ctx, now)
+	if err == nil {
+		bySeat, err = iamdomain.ClaimsBySeat(read)
+	}
+	if err != nil {
+		return nobody + ": invite its first person onto a vacant human seat — " +
+			"`crewlet iam seats -unheld` lists them — from Agents › Org chart " +
+			"› the seat › Invite, or " + invite, true
+	}
+	var vacant, invited, bound []string
+	for _, seat := range human {
+		claim := bySeat[seat.Handle]
+		switch {
+		case claim.Holder != nil:
+			// A SERVICE ACCOUNT, whenever nobody is enrolled: what the
+			// directory found absent is every person at every stage.
+			who := claim.Holder.Login
+			if who == "" {
+				who = claim.Holder.Person
+			}
+			if claim.Holder.Kind == iam.KindMachine {
+				who = "service account " + who
+			}
+			bound = append(bound, seat.Handle+" ("+who+", id "+
+				claim.Holder.Person+")")
+		case claim.Invitation != nil:
+			invited = append(invited, seat.Handle+" (invitation "+
+				claim.Invitation.Invitation+")")
+		default:
+			vacant = append(vacant, seat.Handle)
+		}
+	}
+	var detail string
+	switch {
+	case len(invited) > 0:
+		detail = nobody + ", and an invitation is open for " +
+			strings.Join(invited, ", ") + ": its link is where the first " +
+			"person chooses a login and password, and redeeming it puts them " +
+			"on the seat — a lost link is withdrawn with `crewlet iam " +
+			"cancel-invite ID` and issued again with " + invite
+		if len(vacant) > 0 {
+			detail += "; the vacant human seats are " + strings.Join(vacant, ", ")
+		}
+	case len(vacant) > 0:
+		detail = nobody + ": invite its first person onto one of its vacant " +
+			"human seats (" + strings.Join(vacant, ", ") + ") — Agents › Org " +
+			"chart › the seat › Invite, or " + invite
+	default:
+		detail = nobody + ", and none of its human seats is vacant: " +
+			strings.Join(bound, ", ") + " each hold one — free one with " +
+			"`crewlet iam unbind ID`, or declare another `kind: human` seat " +
+			"(Agents › Edit org, or `crewlet config import FILE`), then " +
+			"invite its first person onto it with " + invite
+	}
+	return detail, true
 }

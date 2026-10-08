@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -132,12 +133,26 @@ func (s *Service) GetPerson(w http.ResponseWriter, r *http.Request) {
 
 // personBody is what a create accepts.
 //
-// NO CREDENTIALS FIELD, deliberately. A person arrives with a password by
-// REDEEMING AN INVITATION, which is the one path where the secret is typed by
-// the person it belongs to and never travels through an administrator; a
-// machine gets a token from `POST /iam/credentials`, which shows its value
-// once. A create that accepted a password would be an administrator choosing
-// somebody else's, which every one of them then keeps.
+// NO CREDENTIALS FIELD, deliberately. A create that accepted a password would
+// be an administrator choosing somebody else's, which every one of them then
+// keeps. A PERSON's create is answered instead with a one-time FIRST PASSWORD
+// LINK, issued by the same record ([iamdomain.Writer.Create]), through which
+// the person types their own password — the administrator hands the link on
+// and never knows the password; a person invited instead types theirs while
+// redeeming the invitation. A service account gets a token from
+// `POST /iam/credentials`, which shows its value once.
+//
+// # The seat, and the login
+//
+// `seat` is REQUIRED for a person: a person holds a human seat for as long as
+// they are here (ADR-0026), so they are created onto one — a human seat
+// nobody holds and no open invitation holds. A service account's is optional.
+//
+// `login` is OPTIONAL for a person, whose address finds them: left out, it is
+// proposed from the address by [iam.LoginFromAddress] — the one proposal, the
+// one an invitation's screen offers its redeemer — and the answer says which
+// login was taken. A service account has no address to propose from, so its
+// login is required.
 type personBody struct {
 	Kind   string      `json:"kind"`
 	Login  string      `json:"login"`
@@ -148,7 +163,32 @@ type personBody struct {
 	Reason string      `json:"reason"`
 }
 
-// PostPeople is `POST /iam/people`.
+// PostPeople is `POST /iam/people`: a person or a service account, created
+// whole in ONE record, answered `201`.
+//
+// # A person is created onto a seat, and handed a way in
+//
+// A person's create names the human seat they will hold — refused `400
+// seat_required` before anything is minted where it names none, because the
+// remedy is the caller's to type — and is answered with their FIRST PASSWORD
+// LINK, `<api.external_url>/dashboard#/reset/<credential>.<secret>`, which
+// sets the password they sign in with once and signs nobody in. It is spent
+// through the reset path every reset link is (internal/api/authapi), lives
+// [credential.EnrolmentLinkLifetime] — an invitation's week, since it is the
+// same person's position — and is shown here and nowhere else: what the
+// estate holds is its verifier. So the gesture needs `api.external_url`, and
+// a node with none refuses a person's create naming the setting.
+//
+// # Its retry hands back the same link
+//
+// The person is derived from the operation's key and the link from the person
+// under the company's key, so the retry an unknown answer asks for — the same
+// request under the key it handed back — answers the link its first attempt
+// issued, with the expiry that attempt stored. A link that no longer opens by
+// then (spent, revoked, aged out) is not handed back: the answer says so, and
+// the remedy is a password reset link. Neither a retry nor an outcome nobody
+// can confirm is announced — the first link's issue is announced once, by the
+// call whose record carried it ([ownLanding]).
 func (s *Service) PostPeople(w http.ResponseWriter, r *http.Request) {
 	in, ok := readBody[personBody](w, r)
 	if !ok {
@@ -168,6 +208,45 @@ func (s *Service) PostPeople(w http.ResponseWriter, r *http.Request) {
 			map[string]string{"detail": strconv.Quote(in.Kind) +
 				" is not a principal kind"})
 		return
+	}
+	// TRIMMED, as an invitation's seat is: the domain looks the handle up
+	// as given, so ` founder ` was a seat an invitation accepted and a
+	// create refused as one the company does not have.
+	seat := strings.TrimSpace(in.Seat)
+	if kind == iam.KindPerson && seat == "" {
+		// BEFORE THE KEY IS READ, so a refusal the caller fixes by typing a
+		// seat mints nothing and publishes nothing.
+		refuseSeatless(w, "a person is created onto the human seat they "+
+			"will hold — name a vacant one (GET /iam/seats?unheld=true lists "+
+			"them)")
+		return
+	}
+	// THE ADDRESS AND THE LOGIN ARE TRIMMED as the seat is, and as an
+	// invitation's address is: the address is sealed as given, so a padded
+	// one was a person whose address carried its padding for good, and one
+	// that was nothing but spaces passed the "names an address" check and
+	// reached the blind as an address of nothing.
+	email := strings.TrimSpace(in.Email)
+	login := strings.TrimSpace(in.Login)
+	if kind == iam.KindPerson && login == "" && email != "" {
+		// THE ONE PROPOSAL, the one an invitation's screen offers its
+		// redeemer. An address with nothing to propose from is refused
+		// naming the field the caller fills in; an absent address is the
+		// domain's to refuse, naming the address.
+		if login = iam.LoginFromAddress(email); login == "" {
+			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
+				map[string]string{"field": "login", "detail": "no login " +
+					"can be proposed from that address — send one: lowercase " +
+					"words joined by dots, as jane.doe"})
+			return
+		}
+	}
+	var expires time.Time
+	if kind == iam.KindPerson {
+		if !s.linksPoint(w, "a first password") {
+			return
+		}
+		expires = s.now().Add(credential.EnrolmentLinkLifetime)
 	}
 	// THE PERSON IS THE OPERATION'S, derived from its key, so a retry
 	// under the key an unknown answer handed back names the person its
@@ -197,29 +276,84 @@ func (s *Service) PostPeople(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	published := statelog.StepOpID(opID, "people-create", digest)
-	// ONE RECORD, THE SEAT INCLUDED: the directory decides the address,
-	// the login and the seat together, so a create whose seat somebody
-	// else holds is refused having created nobody.
-	enrolled, err := writer.Enrol(r.Context(), iamdomain.Enrolment{
+	reason := reasonOr(in.Reason, byCaller(r.Context(), "created"))
+	// ONE RECORD, THE SEAT AND THE FIRST LINK INCLUDED: the directory
+	// decides the address, the login and the seat together, so a create
+	// whose seat somebody else holds is refused having created nobody and
+	// issued no link.
+	created, err := writer.Create(r.Context(), iamdomain.Creation{
 		PersonID: person, Kind: kind,
 		// ACTIVE FROM THE MOMENT IT IS CREATED, because an
 		// administrator creating somebody IS the enrolment: there is no
-		// second gesture for them to wait for. An invitation is the
-		// other path and it is the one with stages, because the person
-		// has to act.
+		// second gesture for them to wait for — what they lack is a
+		// password, which the first link is for. An invitation is the
+		// other path, and it creates nobody until it is redeemed.
 		Stage: iam.StageActive,
-		Name:  in.Name, Email: in.Email, Login: in.Login, Seat: in.Seat,
-		Grants: in.Grants,
-		OpID:   published, Reason: reasonOr(in.Reason, byCaller(r.Context(), "created")),
+		Name:  in.Name, Email: email, Login: login, Seat: seat,
+		Grants: in.Grants, LinkExpiresAt: expires,
+		OpID: published, Reason: reason,
 	})
-	// THE ID ONLY BESIDE A CREATE THAT MAY HAVE LANDED: a refused one
-	// created nobody, and naming the person it would have made reads as
-	// somebody who exists.
-	var created map[string]any
-	if err == nil {
-		created = map[string]any{"id": person}
+	switch {
+	case err != nil:
+		// THE ID ONLY BESIDE A CREATE THAT MAY HAVE LANDED: a refused one
+		// created nobody, and naming the person it would have made reads
+		// as somebody who exists.
+		s.answerWrite(w, r, opID, created.Result, err, nil)
+		return
+	case !landed(created.Result):
+		// NO LINK BESIDE AN OUTCOME NOBODY CAN CONFIRM — the domain hands
+		// none back — and the id, since the retry under the same key
+		// names this person and is answered in full.
+		s.answerWrite(w, r, opID, created.Result, nil,
+			map[string]any{"id": person})
+		return
 	}
-	s.answerWrite(w, r, opID, enrolled, err, created)
+	answer := map[string]any{"id": person, "kind": kind, "login": login}
+	if seat != "" {
+		answer["seat"] = seat
+	}
+	switch link := created.Link; {
+	case link != nil:
+		if ownLanding(created.Result) {
+			// ANNOUNCED BY THE CALL WHOSE RECORD CARRIED IT, and never
+			// its secret: the log line names the credential and its
+			// expiry, which is what an investigation matches a spend to.
+			log.InfoContext(r.Context(), "iam_first_password_link_issued",
+				"person", person, "credential", link.Credential,
+				"expires_at", link.ExpiresAt)
+			s.audit.Emit(r.Context(), types.IAMPasswordResetIssued{
+				Person: person, Credential: link.Credential,
+				ExpiresAt: link.ExpiresAt, By: callerName(r.Context()),
+				OperatorID: callerOperator(r.Context()), Reason: reason,
+				First: true,
+			})
+		}
+		answer["credential"] = link.Credential
+		answer["url"] = s.resetURL(link.Credential, link.Secret)
+		answer["expires_at"] = link.ExpiresAt
+		answer["detail"] = "this link is shown once and cannot be read back; " +
+			"send it to the person yourself — this engine sends no mail. It " +
+			"sets their first password once, signs nobody in, and expires at " +
+			"the instant above; a retry under the same " + opkey.Header +
+			" hands back this same link"
+	case created.LinkClosed:
+		answer["detail"] = "the first password link no longer opens — spent, " +
+			"revoked or aged out — so it is not handed back; issue a password " +
+			"reset link (POST /iam/people/" + person + "/password-reset)"
+	}
+	s.answer(w, r, opID, created.Result, nil, http.StatusCreated, answer)
+}
+
+// refuseSeatless answers a person's gesture that names no seat — `400
+// seat_required` naming the field — with detail saying what to name.
+//
+// ITS OWN CODE rather than `invalid_body`: a person holds a human seat for as
+// long as they are here, so the remedy is always the same field, and the CLI
+// and the dashboard branch on the code to say how to fill it rather than
+// reading a sentence.
+func refuseSeatless(w http.ResponseWriter, detail string) {
+	httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeSeatRequired,
+		map[string]string{"field": "seat", "detail": detail})
 }
 
 // patchBody is what an edit accepts.
@@ -275,6 +409,19 @@ func (b patchBody) grantsOn(held []iam.Grant) ([]iam.Grant, bool) {
 	return out, true
 }
 
+// trim takes the whitespace off the two values the directory looks up as
+// given — the login and the seat — ONCE, before anything judges them, as a
+// create's and an invitation's are: judged raw, ` dana.sre ` was a login a
+// create took and an edit refused for its grammar, and a login of nothing but
+// spaces was refused for its grammar rather than as a login being cleared.
+func (b *patchBody) trim() {
+	for _, v := range []*string{b.Login, b.Seat} {
+		if v != nil {
+			*v = strings.TrimSpace(*v)
+		}
+	}
+}
+
 // refusal is what is wrong with an edit that this surface can judge before
 // publishing anything, or "".
 //
@@ -282,15 +429,17 @@ func (b patchBody) grantsOn(held []iam.Grant) ([]iam.Grant, bool) {
 // a value refused halfway leaves every record before it landed: a stage this
 // build cannot name used to be refused after the seat and the login had
 // already moved. What needs the estate to judge — a login's grammar against
-// its holder's kind, a seat the chart holds, a value somebody else holds — is
-// the directory's, decided in the identity record's own snapshot, which goes
-// first.
+// its holder's kind, a seat the chart holds, a PERSON's seat being cleared, a
+// value somebody else holds — is the directory's, decided in the identity
+// record's own snapshot, which goes first: whether the row is a person or a
+// service account is a fact of that snapshot, and judged here from an earlier
+// read it is one a concurrent edit could make wrong.
 func (b patchBody) refusal() string {
 	switch {
 	case b.Login != nil && *b.Login == "":
 		return "a login is never cleared, only changed: every principal " +
-			"holds one — it is the name their changes are recorded under " +
-			"while they hold no seat"
+			"holds one — it is the name the directory lists them under, and " +
+			"the name a service account's changes are recorded under"
 	case b.Stage != nil && !b.Stage.Valid():
 		return strconv.Quote(string(*b.Stage)) + " is not an enrolment stage"
 	case len(b.Reason) > iamdomain.MaxReason:
@@ -334,6 +483,17 @@ func (b patchBody) refusal() string {
 // [iamdomain.Writer.MayConfer]) — each used to be met only at its own record,
 // after a seat or a login ahead of it had already moved.
 //
+// # A person's seat is moved, never cleared
+//
+// `seat` names the human seat to MOVE somebody to — trimmed, as a create's is,
+// and so is `login` ([patchBody.trim]).
+// A PERSON holds one for as long as they are here (ADR-0026), so `seat: ""`
+// about a person is the identity record's refusal, `400 seat_required` with
+// nothing landed, since that record goes first; a SERVICE ACCOUNT may be
+// unbound with it. A seat somebody holds, or an open invitation holds, is
+// `409` naming which. To free a person's seat, move them to another or remove
+// them.
+//
 // # What only a later record can decide is answered with what landed
 //
 // A stage or a document refused after the identity record landed cannot
@@ -344,6 +504,7 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	in.trim()
 	writer, ok := s.writerFor(r.Context())
 	if !ok {
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)

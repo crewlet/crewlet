@@ -122,10 +122,13 @@ function json(status: number, payload: unknown): Response {
  */
 function engine({
   session = PERSON,
+  row = ROW,
   credentials = [PASSWORD, APP, TOKEN],
   writes = {},
 }: {
   session?: SessionAnswer;
+  /** The caller's own directory row. */
+  row?: Record<string, unknown>;
   credentials?: unknown[];
   writes?: Record<string, () => Response>;
 } = {}) {
@@ -157,7 +160,7 @@ function engine({
         case "/auth/config":
           return json(200, { min_password_length: 12, second_factor: "optional" });
         case "/iam/people/p-1":
-          return json(200, ROW);
+          return json(200, row);
         case "/iam/people/p-1/sessions":
           return json(200, state.sessions);
         case "/iam/credentials":
@@ -228,6 +231,22 @@ describe("a person's own page", () => {
     // and again on every focus beside the frame. Mutation: read it here too
     // and it is asked twice.
     expect(engineIs.reads("/auth/session")).toHaveLength(1);
+  });
+
+  // EVERY PERSON HOLDS A HUMAN SEAT, so one with none was recorded before that
+  // held — a fault only an administrator mends, said as one and naming who
+  // to ask. "Bound to no seat" read as a choice. The CONTROL is the seated
+  // profile above, which links its seat. Mutation: draw the empty seat as a
+  // blank and the warning is gone.
+  test("a person with no seat is told it is a fault, and whom to ask", async () => {
+    const { seat: _seat, ...seatless } = ROW;
+    const { seat: _none, ...session } = PERSON;
+    engine({ session: session as SessionAnswer, row: seatless });
+    mount();
+    await screen.findByText("ada@example.com");
+    expect(screen.getByText("No seat")).toBeDefined();
+    expect(screen.getByText(/ask whoever manages people to give you one/)).toBeDefined();
+    expect(screen.queryByText("Bound to no seat")).toBeNull();
   });
 
   // THE CONTROL is the other live session, which IS offered a named sign-out;

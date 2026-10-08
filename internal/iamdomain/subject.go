@@ -19,9 +19,12 @@
 //
 // What keeps an address, a login and a seat binding to one holder instead is
 // that EVERY WRITE THAT SETS OR FREES ONE IS A RECORD ON ONE SUBJECT — the
-// directory ([KindDirectory]): an enrolment, a redemption, an invitation and
-// its cancellation, an identity change and a removal. Its decide reads the whole directory in its
-// own snapshot, refuses a value somebody else holds by naming them
+// directory ([KindDirectory]): an administrator's create, a redemption, an
+// invitation and its cancellation, an identity change and a removal. An OPEN
+// INVITATION holds an address AND a seat as surely as a person does, from its
+// issue until it is redeemed, cancelled or ages out. Its decide reads the
+// whole directory in its own snapshot, refuses a value somebody else holds —
+// a person or an open invitation — by naming them
 // ([ErrTaken]), and publishes at that one subject's arbitration anchor — so two
 // directory writes contend at the broker and the loser decides again from rows
 // that hold the winner. It is the org chart's structure rule applied to the
@@ -38,8 +41,8 @@
 //
 // # Two subjects meet on one row, and never on one column
 //
-// The directory CREATES a person's row, sets and clears its three unique
-// columns, and DELETES it; the person's own subject owns the document and the
+// The directory CREATES a person's row, sets its three unique columns, and
+// DELETES it; the person's own subject owns the document and the
 // columns derived from it. A directory record after the enrolment never
 // touches the document, and a person record never touches a unique column and
 // never creates a row — so the two halves are disjoint, and since every record
@@ -58,14 +61,30 @@
 //
 // # A seat is bound by its HANDLE (ADR-0013)
 //
-// A seat binding — the row's `seat_id`, the seat a removal's tombstone
-// records, the successor's stamp on that tombstone, and every reading of them
-// ([Reader.SeatHolders],
-// [Reader.SeatBindings], the notify registry's standing, the request path's
-// seat table, the dangling-binding rule) — names the seat by its handle, which
-// is immutable in the company document: a document that changes a handle has
-// removed one seat and created another, and the bind checks the seat against
-// the running organisation ([Writer.seatOf]).
+// A seat binding — the row's `seat_id`, an invitation's, the seat a removal's
+// tombstone records, the successor's stamp on that tombstone, and every
+// reading of them ([Reader.SeatHolders], [Reader.SeatClaims], the notify
+// registry's standing, the request path's seat table, the dangling-binding
+// rule) — names the seat by its handle, which is immutable in the company
+// document: a document that changes a handle has removed one seat and created
+// another.
+//
+// # Every person holds a HUMAN seat for as long as they are here (ADR-0026)
+//
+// A person is created on a human seat ([Writer.Create]) or invited onto one
+// ([Writer.Invite], [Writer.Redeem]), and their seat is MOVED, never cleared
+// ([Writer.SetIdentity], [ErrSeatRequired]) — freed only by moving them or
+// removing them. A person with no seat acted under their bare login, in no
+// unit, led by nobody and reached by no contact route, so every rule the org
+// chart decides had nothing to say about them. A SERVICE ACCOUNT's seat stays
+// optional: it acts as itself and binds one only to act as it. Every binding,
+// of either kind, is checked against the running organisation to be a human
+// seat ([Writer.humanSeat]); a node running no company has none to offer
+// ([ErrNoCompany]). The applier writes whatever a record says — a person a
+// build before the rule enrolled with no seat included — because refusing a
+// record there stops the log on every node; the WRITER's decides are where the
+// rule is enforced, and the directory check reports the residue
+// ([PersonRow.Seatless]).
 package iamdomain
 
 import (

@@ -484,17 +484,21 @@ carries, so everybody signing in again once lets them straight back:
 - **An invitation cancelled since is open again** until its week runs out:
   cancelling one deletes it, so the artefact's copy comes back with its link
   working, and whoever holds the link — the stranger an address typo sent it
-  to — can redeem it and be enrolled with what it carries.
-- **A grant or a seat binding taken away since is held again** — never
-  above `api.auth.max_grants`, which is Tier A and not in the artefact, but up
-  to it.
+  to — can redeem it and be enrolled with what it carries, on the seat it
+  names. While it is open it holds that seat again too: nobody else can be
+  invited onto it or created on it until it is cancelled once more.
+- **A grant taken away since is held again** — never above
+  `api.auth.max_grants`, which is Tier A and not in the artefact, but up to
+  it — and so is a **seat**: a person moved to another seat since is back on
+  the one they held, and a service account unbound since is bound again.
 
 The restored estate cannot list any of these: its own trail
 ([`crewlet iam audit`](../reference/cli.md#crewlet-iam)) and every node's event
 log stop at the moment the artefact was taken, exactly like the rows they
 describe. So re-apply each one from a record kept **outside** the estate — your
 own off-boarding and access-change records, or the engine's logs if you ship
-them off the host — with `crewlet iam remove`, `suspend`, `grant`, `unbind`,
+them off the host — with `crewlet iam remove`, `suspend`, `grant`, `bind`
+(a person's move to another seat), `unbind` (a service account's),
 `revoke-credential`, `reset-mfa` and `cancel-invite`. Removals first: a
 removed person is the one the restore handed everything back to. Anybody whose
 password changed since needs a new reset link (`reset-password`), and that one

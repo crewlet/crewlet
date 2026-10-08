@@ -17,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -534,13 +535,56 @@ func (r *writeRig) drainSafely() {
 	}
 }
 
-// enrol creates one person through the whole path and applies the result.
-func (r *writeRig) enrol(in iamdomain.Enrolment) error {
+// enrol creates one person or service account through the whole path — an
+// administrator's create — and applies the result.
+func (r *writeRig) enrol(in iamdomain.Creation) error {
 	r.t.Helper()
-	return r.draining(func() error {
-		_, err := r.writer.Enrol(r.t.Context(), in)
+	_, err := r.create(in)
+	return err
+}
+
+// create is [writeRig.enrol] answering what the create answered: its outcome,
+// and a person's first password link.
+func (r *writeRig) create(in iamdomain.Creation) (iamdomain.Created, error) {
+	r.t.Helper()
+	var created iamdomain.Created
+	err := r.draining(func() error {
+		var err error
+		created, err = r.writer.Create(r.t.Context(), in)
 		return err
 	})
+	return created, err
+}
+
+// firstLinkExpiry is when a person the rig creates stops being able to spend
+// their first password link: the lifetime a surface gives it, from the rig
+// writer's clock.
+var firstLinkExpiry = brokerAt.Add(credential.EnrolmentLinkLifetime)
+
+// vacantSeat puts one HUMAN seat in the running company and answers its handle:
+// the seat a person's create, an invitation or a move names. Every person holds
+// one (ADR-0026), so every case that creates a person asks for one here.
+func (r *writeRig) vacantSeat(handle string) string {
+	r.t.Helper()
+	r.seatOnly(handle)
+	return handle
+}
+
+// seatOf is a seat handle for whoever an address is for, from its local part
+// alone: a handle is in the clear on every record and row that binds it, and
+// one spelled from the whole address would put the address there with it.
+func seatOf(address string) string {
+	local, _, _ := strings.Cut(address, "@")
+	return strings.ReplaceAll(local, ".", "-") + "-desk"
+}
+
+// aPassword is the one credential a redemption carries: a password, as the
+// verifier the sign-in surface derives — its bytes are opaque to this domain.
+func aPassword() iamdomain.Credential {
+	return iamdomain.Credential{
+		V: iamdomain.DocumentVersion, ID: uuid.Must(uuid.NewV7()).String(),
+		Method: iamdomain.MethodPassword, Verifier: "argon",
+	}
 }
 
 // bind binds one person to a seat through the whole path and applies the
@@ -785,7 +829,7 @@ func testVerifier(t *testing.T) *statelog.Verifier {
 // read: the broker accepts one, and the other decides again from rows that
 // hold the winner and is refused naming them.
 //
-// Mutation: drop the address check from Enrol's decide, and both land.
+// Mutation: drop the address check from the enrolment's decide, and both land.
 func TestTwoEnrolmentsOnOneAddressYieldOneWinner(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -799,15 +843,19 @@ func TestTwoEnrolmentsOnOneAddressYieldOneWinner(t *testing.T) {
 		"018f3a9c-0000-7000-8000-00000000000a",
 		"018f3a9c-0000-7000-8000-00000000000b",
 	} {
+		// A SEAT EACH, so the one value the two contend for is the address
+		// and the loser is refused for it rather than for a seat.
+		seat := rig.vacantSeat(fmt.Sprintf("joiner-%d", i))
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := rig.enrol(iamdomain.Enrolment{
+			err := rig.enrol(iamdomain.Creation{
 				PersonID: id, Kind: iam.KindPerson, Stage: iam.StageActive,
 				Name: "Sarah Chen", Email: address,
-				Login:  fmt.Sprintf("sarah.chen%d", i),
-				OpID:   fmt.Sprintf("op-%d", i),
-				Reason: "the joiner",
+				Login: fmt.Sprintf("sarah.chen%d", i), Seat: seat,
+				LinkExpiresAt: firstLinkExpiry,
+				OpID:          fmt.Sprintf("op-%d", i),
+				Reason:        "the joiner",
 			})
 			mu.Lock()
 			defer mu.Unlock()
@@ -851,20 +899,22 @@ func TestTakingAHeldAddressNamesWhoHoldsIt(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	const first = "018f3a9c-0000-7000-8000-00000000000a"
-	if err := rig.enrol(iamdomain.Enrolment{
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: first, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: "Sarah Chen", Email: "sarah.chen@example.com",
-		Login: "sarah.chen", OpID: "op-1",
+		Login: "sarah.chen", Seat: rig.vacantSeat("sarah-chen"),
+		LinkExpiresAt: firstLinkExpiry, OpID: "op-1",
 	}); err != nil {
 		t.Fatalf("the first enrolment: %v", err)
 	}
 	rig.drain()
 
-	err := rig.enrol(iamdomain.Enrolment{
+	err := rig.enrol(iamdomain.Creation{
 		PersonID: "018f3a9c-0000-7000-8000-00000000000b",
 		Kind:     iam.KindPerson, Stage: iam.StageActive,
 		Name: "Someone Else", Email: "Sarah.Chen+jira@Example.COM",
-		Login: "someone.else", OpID: "op-2",
+		Login: "someone.else", Seat: rig.vacantSeat("someone-else"),
+		LinkExpiresAt: firstLinkExpiry, OpID: "op-2",
 	})
 	if err == nil {
 		t.Fatal("a second enrolment on a held address landed — and it reached " +
@@ -886,10 +936,11 @@ func TestAnEnrolmentWritesOnePersonWhoseValuesAreSealed(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	const id = "018f3a9c-0000-7000-8000-00000000000a"
-	if err := rig.enrol(iamdomain.Enrolment{
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: id, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: "Sarah Chen", Email: "sarah.chen@example.com",
-		Login: "sarah.chen", OpID: "op-1", Reason: "the joiner",
+		Login: "sarah.chen", Seat: rig.vacantSeat("sarah-chen"),
+		LinkExpiresAt: firstLinkExpiry, OpID: "op-1", Reason: "the joiner",
 	}); err != nil {
 		t.Fatalf("enrol: %v", err)
 	}
@@ -935,10 +986,11 @@ func TestARemovalLeavesATombstone(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	const id = "018f3a9c-0000-7000-8000-00000000000a"
-	if err := rig.enrol(iamdomain.Enrolment{
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: id, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: "Sarah Chen", Email: "sarah.chen@example.com",
-		Login: "sarah.chen", OpID: "op-1",
+		Login: "sarah.chen", Seat: rig.vacantSeat("sarah-chen"),
+		LinkExpiresAt: firstLinkExpiry, OpID: "op-1",
 	}); err != nil {
 		t.Fatalf("enrol: %v", err)
 	}
@@ -1002,10 +1054,11 @@ func TestInvalidatingEverySessionMovesOneRowAndNobodysEpoch(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	const id = "018f3a9c-0000-7000-8000-00000000001a"
-	if err := rig.enrol(iamdomain.Enrolment{
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: id, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: "Sarah Chen", Email: "sarah.chen@example.com",
-		Login: "sarah.chen", OpID: "op-1",
+		Login: "sarah.chen", Seat: rig.vacantSeat("sarah-chen"),
+		LinkExpiresAt: firstLinkExpiry, OpID: "op-1",
 	}); err != nil {
 		t.Fatalf("enrol: %v", err)
 	}
@@ -1266,7 +1319,7 @@ func TestAnAdministrativeRecordNeedsPeopleManageAndNotTheCompanysGrant(t *testin
 	person := "018f3a9c-0000-7000-8000-0000000000b1"
 	enrol := func(w *iamdomain.Writer, op string) error {
 		return rig.draining(func() error {
-			_, err := w.Enrol(rig.t.Context(), iamdomain.Enrolment{
+			_, err := w.Create(rig.t.Context(), iamdomain.Creation{
 				PersonID: person + op, Kind: iam.KindMachine,
 				Stage: iam.StageActive, Login: "svc:" + op,
 				OpID: op, Reason: "a hire",
@@ -1303,11 +1356,12 @@ func TestACallerCannotConferAGrantTheyDoNotHold(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	person := "018f3a9c-0000-7000-8000-0000000000c2"
-	if err := rig.enrol(iamdomain.Enrolment{
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: "Dana Okafor", Email: "dana@example.com", Login: "dana.sre",
+		Seat:   rig.vacantSeat("dana-okafor"),
 		Grants: []iam.Grant{iam.GrantSecretRead, iam.GrantWorkWrite},
-		OpID:   "op-enrol", Reason: "a hire",
+		OpID:   "op-enrol", Reason: "a hire", LinkExpiresAt: firstLinkExpiry,
 	}); err != nil {
 		t.Fatalf("enrol: %v", err)
 	}
@@ -1363,26 +1417,29 @@ func TestACallerCannotConferAGrantTheyDoNotHold(t *testing.T) {
 func TestTwoInvitationsToOneAddressYieldOneWinner(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
-	invite := func(op string) error {
+	// A SEAT EACH, so the one value the two contend for is the address.
+	invite := func(op, seat string) error {
 		_, err := rig.writer.Invite(rig.t.Context(), iamdomain.InviteMint{
 			Email:     "sarah@example.com",
 			Grants:    []iam.Grant{iam.GrantStateRead},
+			Seat:      rig.vacantSeat(seat),
 			ExpiresAt: brokerAt.Add(168 * time.Hour),
 			OpID:      op, Reason: "onboarding",
 		})
 		return err
 	}
-	if err := invite(operationKey()); err != nil {
+	if err := invite(operationKey(), "platform-lead"); err != nil {
 		t.Fatalf("the first invitation: %v", err)
 	}
 	rig.drain()
-	err := invite(operationKey())
+	err := invite(operationKey(), "data-lead")
 	if err == nil {
 		t.Fatal("a second invitation to the same address was accepted, so " +
 			"the company holds two links that each create one person")
 	}
 	var taken *iamdomain.ErrTaken
-	if !errors.As(err, &taken) || taken.Invitation == "" {
+	if !errors.As(err, &taken) || taken.Invitation == "" ||
+		taken.Field != iamdomain.UniqueEmail {
 		t.Errorf("the refusal is %v, want one naming the invitation that "+
 			"already holds the address", err)
 	}
@@ -1391,15 +1448,68 @@ func TestTwoInvitationsToOneAddressYieldOneWinner(t *testing.T) {
 	}
 }
 
+// AND TWO INVITATIONS ONTO ONE SEAT YIELD ONE WINNER, for the address's reason:
+// a seat is held by the invitation on its way to it, so two administrators
+// inviting two people onto one seat produce one invitation and one refusal
+// naming it — never two links whose second redemption is refused at the last
+// step for a seat the first one took.
+//
+// Mutation: drop the seat's open-invitation check from Invite's decide, and
+// both land.
+func TestTwoInvitationsToOneSeatYieldOneWinner(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	seat := rig.vacantSeat("platform-lead")
+	invite := func(address string) (iamdomain.InviteIssued, error) {
+		var issued iamdomain.InviteIssued
+		err := rig.during(func() error {
+			var err error
+			issued, err = rig.writer.Invite(rig.t.Context(), iamdomain.InviteMint{
+				Email: address, Grants: []iam.Grant{iam.GrantStateRead},
+				Seat: seat, ExpiresAt: brokerAt.Add(168 * time.Hour),
+				OpID: operationKey(), Reason: "onboarding",
+			})
+			return err
+		})
+		return issued, err
+	}
+	first, err := invite("sarah@example.com")
+	if err != nil {
+		t.Fatalf("the first invitation: %v", err)
+	}
+	_, err = invite("dana@example.com")
+	var taken *iamdomain.ErrTaken
+	if !errors.As(err, &taken) || taken.Field != iamdomain.UniqueSeat ||
+		taken.Invitation != first.ID || taken.Value != seat {
+		t.Fatalf("a second invitation onto %s answered %v, want it refused "+
+			"naming invitation %s as holding the seat", seat, err, first.ID)
+	}
+	if got := rig.column(`SELECT id FROM iam_invites`); len(got) != 1 {
+		t.Errorf("iam_invites holds %v, want exactly one row", got)
+	}
+}
+
 // AN INVITATION NEEDS AN EXPIRY, because one read as `never` is a superuser
 // claim that stays live in somebody's mailbox for the life of the company.
+//
+// It names a seat, so the expiry is the one thing missing and the refusal is
+// asserted on its sentinel: asserting only that SOMETHING refused it passed
+// on any refusal at all, the seat's included.
 func TestAnInvitationWithNoExpiryIsRefused(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
-	if _, err := rig.writer.Invite(rig.t.Context(), iamdomain.InviteMint{
-		Email: "sarah@example.com", OpID: operationKey(),
-	}); err == nil {
-		t.Error("an invitation with no expiry was accepted")
+	_, err := rig.writer.Invite(rig.t.Context(), iamdomain.InviteMint{
+		Email: "sarah@example.com", Seat: rig.vacantSeat("platform-lead"),
+		OpID: operationKey(),
+	})
+	if !errors.Is(err, iamdomain.ErrInvalid) ||
+		errors.Is(err, iamdomain.ErrSeatRequired) ||
+		!strings.Contains(err.Error(), "expiry") {
+		t.Errorf("an invitation with no expiry answered %v, want %v naming "+
+			"the expiry", err, iamdomain.ErrInvalid)
+	}
+	if got := rig.column(`SELECT id FROM iam_invites`); len(got) != 0 {
+		t.Errorf("the refused issue left invitations %v", got)
 	}
 }
 
@@ -1416,7 +1526,9 @@ func TestAnInvitationWithNoExpiryIsRefused(t *testing.T) {
 func TestAMachineEnrolsWithNoAddressAndAPersonMayNot(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
-	if err := rig.enrol(iamdomain.Enrolment{
+	// WITH NO SEAT EITHER, which is a service account's to leave out: it
+	// acts as itself.
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: "018f3a9c-0000-7000-8000-0000000000f1",
 		Kind:     iam.KindMachine, Stage: iam.StageActive,
 		Name: "Release pipeline", Login: "svc:ci",
@@ -1443,7 +1555,10 @@ func TestAMachineEnrolsWithNoAddressAndAPersonMayNot(t *testing.T) {
 	// happened": an enrolment that reaches the publisher fails for
 	// unrelated reasons in a rig that is not draining, which would make
 	// both of these pass whatever the rule said.
-	if _, err := rig.writer.Enrol(rig.t.Context(), iamdomain.Enrolment{
+	//
+	// A PERSON MISSING THEIR SEAT AS WELL is told about the address first:
+	// it is the more specific thing they left out.
+	if _, err := rig.writer.Create(rig.t.Context(), iamdomain.Creation{
 		PersonID: "018f3a9c-0000-7000-8000-0000000000f2",
 		Kind:     iam.KindPerson, Stage: iam.StageActive,
 		Login: "dana.sre", OpID: "op-person", Reason: "a hire",
@@ -1452,9 +1567,51 @@ func TestAMachineEnrolsWithNoAddressAndAPersonMayNot(t *testing.T) {
 			"nothing they hold is an interactive login key, so they can "+
 			"never sign in", err, iamdomain.ErrNotFindable)
 	}
+	// AN ADDRESS OF NOTHING BUT WHITESPACE IS NO ADDRESS, judged on what it
+	// folds to — for a person, a service account that names one, and an
+	// invitation alike. Judged raw it passed the check for an empty address
+	// and failed at the blind, unclassified: a 500 for a value the caller
+	// typed.
+	blank := []struct {
+		name  string
+		write func() error
+	}{
+		{"a person", func() error {
+			_, err := rig.writer.Create(rig.t.Context(), iamdomain.Creation{
+				PersonID: "018f3a9c-0000-7000-8000-0000000000f4",
+				Kind:     iam.KindPerson, Stage: iam.StageActive, Email: "   ",
+				Login: "dana.sre", Seat: rig.vacantSeat("sre-desk"),
+				LinkExpiresAt: firstLinkExpiry, OpID: "op-blank-person",
+				Reason: "a hire",
+			})
+			return err
+		}},
+		{"a service account", func() error {
+			_, err := rig.writer.Create(rig.t.Context(), iamdomain.Creation{
+				PersonID: "018f3a9c-0000-7000-8000-0000000000f5",
+				Kind:     iam.KindMachine, Stage: iam.StageActive, Email: " \t",
+				Login: "svc:blank", OpID: "op-blank-machine", Reason: "a pipeline",
+			})
+			return err
+		}},
+		{"an invitation", func() error {
+			_, err := rig.writer.Invite(rig.t.Context(), iamdomain.InviteMint{
+				Email: "  ", Seat: rig.vacantSeat("sre-desk"),
+				ExpiresAt: brokerAt.Add(time.Hour), OpID: operationKey(),
+				Reason: "onboarding",
+			})
+			return err
+		}},
+	}
+	for _, tc := range blank {
+		if err := tc.write(); !errors.Is(err, iamdomain.ErrNotFindable) {
+			t.Errorf("%s with a blank address was refused with %v, want %v",
+				tc.name, err, iamdomain.ErrNotFindable)
+		}
+	}
 	// AND A MACHINE WITH NEITHER IS REFUSED TOO, which is the control:
 	// the rule is "findable", not "no address needed".
-	if _, err := rig.writer.Enrol(rig.t.Context(), iamdomain.Enrolment{
+	if _, err := rig.writer.Create(rig.t.Context(), iamdomain.Creation{
 		PersonID: "018f3a9c-0000-7000-8000-0000000000f3",
 		Kind:     iam.KindMachine, Stage: iam.StageActive,
 		OpID: "op-nameless", Reason: "a pipeline",
@@ -1473,23 +1630,30 @@ func TestAMachineEnrolsWithNoAddressAndAPersonMayNot(t *testing.T) {
 func TestAnEnrolmentOutOfBoundsPublishesNothing(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
+	seat := rig.vacantSeat("sarah-chen")
 	for i, tc := range []struct {
 		name   string
-		mutate func(*iamdomain.Enrolment)
+		mutate func(*iamdomain.Creation)
 	}{
-		{"a reason past the cap", func(e *iamdomain.Enrolment) {
+		{"a reason past the cap", func(e *iamdomain.Creation) {
 			e.Reason = strings.Repeat("x", iamdomain.MaxReason+1)
 		}},
-		{"a name past the cap", func(e *iamdomain.Enrolment) {
+		{"a name past the cap", func(e *iamdomain.Creation) {
 			e.Name = strings.Repeat("x", iamdomain.MaxName+1)
 		}},
+		{"a first password link already aged out", func(e *iamdomain.Creation) {
+			e.LinkExpiresAt = brokerAt
+		}},
+		{"a first password link that never ages out", func(e *iamdomain.Creation) {
+			e.LinkExpiresAt = time.Time{}
+		}},
 	} {
-		in := iamdomain.Enrolment{
+		in := iamdomain.Creation{
 			PersonID: fmt.Sprintf("018f3a9c-0000-7000-8000-0000000004a%d", i),
 			Kind:     iam.KindPerson, Stage: iam.StageActive,
 			Name: "Sarah Chen", Email: "sarah.chen@example.com",
-			Login: "sarah.chen", OpID: fmt.Sprintf("op-bounds-%d", i),
-			Reason: "a hire",
+			Login: "sarah.chen", Seat: seat, LinkExpiresAt: firstLinkExpiry,
+			OpID: fmt.Sprintf("op-bounds-%d", i), Reason: "a hire",
 		}
 		tc.mutate(&in)
 		if err := rig.enrol(in); !errors.Is(err, iamdomain.ErrInvalid) {
@@ -1505,11 +1669,12 @@ func TestAnEnrolmentOutOfBoundsPublishesNothing(t *testing.T) {
 
 	// THE CONTROL: the same enrolment inside its bounds lands, and takes
 	// the address and the login the refused ones did not.
-	if err := rig.enrol(iamdomain.Enrolment{
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: "018f3a9c-0000-7000-8000-0000000004b1",
 		Kind:     iam.KindPerson, Stage: iam.StageActive,
 		Name: "Sarah Chen", Email: "sarah.chen@example.com",
-		Login: "sarah.chen", OpID: "op-bounds-ok", Reason: "a hire",
+		Login: "sarah.chen", Seat: seat, LinkExpiresAt: firstLinkExpiry,
+		OpID: "op-bounds-ok", Reason: "a hire",
 	}); err != nil {
 		t.Fatalf("the corrected enrolment was refused: %v", err)
 	}

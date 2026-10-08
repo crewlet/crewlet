@@ -23,8 +23,10 @@
  * `identity: unclaimed` — nobody has JOINED yet, which an open invitation does
  * not change, since redeeming it is what creates its person — it is the ONLY
  * way in, so the token form is open from the start and the page says how to
- * begin: sign in with the token, then invite yourself from Settings › People &
- * access, or open the link of an invitation already issued. `unknown` (a node that cannot read its identity estate) and a
+ * begin: sign in with the token, then open Agents › Org chart, choose your
+ * human seat and invite or create yourself on it — every person holds one, so
+ * a seat is where a person comes from — or open the link of an invitation
+ * already issued. `unknown` (a node that cannot read its identity estate) and a
  * `/health` that did not answer are not "unclaimed": they keep the ordinary
  * page, because telling somebody to invite a founder into a company that has
  * one is the wrong instruction to guess.
@@ -160,9 +162,9 @@ export function SignIn() {
         <Callout variant="neutral" title="Getting started">
           Sign in with one of this deployment&rsquo;s API tokens — the founder token its{" "}
           <code className="inline">crewlet.yaml</code> declares under{" "}
-          <code className="inline">api.auth.tokens</code> — then open Settings › People &amp; access
-          and invite yourself. The invitation&rsquo;s link is where you choose your login and
-          password; if you have invited yourself already, open that link instead.
+          <code className="inline">api.auth.tokens</code> — then open Agents › Org chart, choose
+          your human seat and invite or create yourself on it. The link it shows is where you choose
+          your password; if you have a link already, open it instead.
         </Callout>
       )}
       <PasswordForm

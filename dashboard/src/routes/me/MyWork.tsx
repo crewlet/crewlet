@@ -91,6 +91,7 @@ import { useMemo } from "react";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import type { MeSection } from "~/app/routes.ts";
 import { QueryState, SeatChip } from "~/components/common.tsx";
+import { UnboundRemedy } from "~/components/people.tsx";
 import { usePageCoverage, usePageMenu, useSectionCounts } from "~/app/Shell.tsx";
 import { ChecklistClaims, Coverage, RowList, type RowChrome } from "~/components/work.tsx";
 import { AskList, decisionsHref } from "~/components/DecisionRow.tsx";
@@ -420,16 +421,17 @@ export function MyWork({ section }: { section: MeSection }) {
       {/* THREE STATES, and they are not one empty state. A reader nobody has
           signed in, a reader the directory binds to no seat, and a reader who
           simply has not chosen somebody need three different sentences. The
-          unbound reader is not an EMPTY state: they have a day of their own,
-          kept under their login, and what they lack is the work the chart
-          addresses to a seat — which is what the note says, above the day
-          rather than instead of it. */}
+          unbound reader — a service account, a Tier A token's session, or a
+          person recorded before every person held a seat — is not an EMPTY
+          state: they have a day of their own, kept under their login, and
+          what they lack is the work the chart addresses to a seat — which is
+          what the note says (`UnboundRemedy`), above the day rather than
+          instead of it. */}
       {ownDay && viewer.unbound && (
         <Callout variant="info">
           You are <code className="inline">{viewer.login}</code> and not bound to a seat, so this is
-          the day kept under that login: what you follow, what names you, and your own priorities.
-          Work the org chart hands to a seat reaches you once an administrator binds you to one (
-          <code className="inline">crewlet iam bind</code>).
+          the day kept under that login: what you follow, what names you, and your own priorities.{" "}
+          <UnboundRemedy login={viewer.login} />
         </Callout>
       )}
       {!whose &&

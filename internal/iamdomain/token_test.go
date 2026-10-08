@@ -3,6 +3,7 @@ package iamdomain_test
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,9 +26,11 @@ import (
 func tokenOwner(t *testing.T, rig *writeRig, login string) string {
 	t.Helper()
 	person := uuid.Must(uuid.NewV7()).String()
-	if err := rig.enrol(iamdomain.Enrolment{
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: "Jane Doe", Email: login + "@example.com", Login: login,
+		Seat:          rig.vacantSeat(strings.ReplaceAll(login, ".", "-")),
+		LinkExpiresAt: firstLinkExpiry,
 		Grants: []iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite,
 			iam.GrantPeopleManage, iam.GrantSecretRead},
 		OpID: "op-enrol-" + person, Reason: "a hire",
@@ -181,7 +184,7 @@ func TestAMintRefusesWhatATokenMayNotCarry(t *testing.T) {
 		t.Errorf("a token was minted for a suspended owner (%v)", err)
 	}
 	binding := uuid.Must(uuid.NewV7()).String()
-	if err := rig.enrol(iamdomain.Enrolment{
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: binding, Kind: iam.KindMachine, Stage: iam.StageActive,
 		Login: iam.TokenLogin("ops"), OpID: "op-binding", Reason: "binds ops",
 	}); err != nil {
@@ -238,8 +241,13 @@ func TestAPersonsTokenIsMintedByThatPersonAlone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(held) != 0 {
-		t.Errorf("the refused mints left %d credentials on jane's account", len(held))
+	// HER FIRST PASSWORD LINK IS ON IT FROM HER CREATE, and nothing a
+	// refused mint left.
+	tokens := slices.DeleteFunc(held, func(c iamdomain.CredentialRow) bool {
+		return c.Method != iamdomain.MethodToken
+	})
+	if len(tokens) != 0 {
+		t.Errorf("the refused mints left %d tokens on jane's account", len(tokens))
 	}
 	// JANE HERSELF.
 	if _, token, err := mintFor(t, rig, asOwner(rig, owner), iamdomain.TokenMint{
@@ -266,7 +274,7 @@ func TestAPersonsTokenIsMintedByThatPersonAlone(t *testing.T) {
 	// A SERVICE ACCOUNT: the administrator mints for it, and a party
 	// without people:manage may not.
 	service := uuid.Must(uuid.NewV7()).String()
-	if err := rig.enrol(iamdomain.Enrolment{
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: service, Kind: iam.KindMachine, Stage: iam.StageActive,
 		Name: "Release pipeline", Login: "svc:release",
 		Grants: []iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite},

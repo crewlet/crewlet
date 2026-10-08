@@ -11,11 +11,11 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/api/iamapi"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -685,7 +685,7 @@ func waitOutInvitations(stdout io.Writer, held engineHeld, active string) {
 		fmt.Fprintf(stdout, "%d outstanding invitations are sealed under another "+
 			"key and are not re-sealed: keep that key on the ring until each is "+
 			"redeemed or expires (at most %s after it was issued)\n",
-			n, iamapi.InviteWindow)
+			n, credential.EnrolmentLinkLifetime)
 	}
 }
 

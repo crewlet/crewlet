@@ -39,7 +39,7 @@ func TestAnEnrolmentConfersOnlyWhatItsWriterHolds(t *testing.T) {
 	rig := newWriteRig(t)
 	enrol := func(w *iamdomain.Writer, op, login string, grants []iam.Grant) error {
 		return rig.draining(func() error {
-			_, err := w.Enrol(rig.t.Context(), iamdomain.Enrolment{
+			_, err := w.Create(rig.t.Context(), iamdomain.Creation{
 				PersonID: uuid.Must(uuid.NewV7()).String(), Kind: iam.KindMachine,
 				Stage: iam.StageActive, Login: login, Grants: grants,
 				OpID: op, Reason: "a pipeline",
@@ -82,11 +82,16 @@ func TestAMachineHoldsNoGrantATokenNeverCarries(t *testing.T) {
 	rig := newWriteRig(t)
 	enrol := func(kind iam.Kind, login, email string, grants []iam.Grant) (string, error) {
 		id := uuid.Must(uuid.NewV7()).String()
+		in := iamdomain.Creation{
+			PersonID: id, Kind: kind, Stage: iam.StageActive, Login: login,
+			Email: email, Grants: grants, OpID: operationKey(), Reason: "test",
+		}
+		if kind == iam.KindPerson {
+			in.Seat = rig.vacantSeat(strings.ReplaceAll(login, ".", "-"))
+			in.LinkExpiresAt = firstLinkExpiry
+		}
 		return id, rig.draining(func() error {
-			_, err := rig.writer.Enrol(rig.t.Context(), iamdomain.Enrolment{
-				PersonID: id, Kind: kind, Stage: iam.StageActive, Login: login,
-				Email: email, Grants: grants, OpID: operationKey(), Reason: "test",
-			})
+			_, err := rig.writer.Create(rig.t.Context(), in)
 			return err
 		})
 	}
@@ -133,6 +138,7 @@ func TestAnInvitationConfersOnlyWhatItsIssuerHolds(t *testing.T) {
 			_, err := w.Invite(rig.t.Context(), iamdomain.InviteMint{
 				Email:  address,
 				Grants: grants, ExpiresAt: brokerAt.Add(168 * time.Hour),
+				Seat: rig.vacantSeat(seatOf(address)),
 				OpID: operationKey(), Reason: "onboarding",
 			})
 			return err
@@ -157,21 +163,23 @@ func TestARedemptionConfersWhatTheInvitationSaid(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	offered := []iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite}
-	// THE LINK'S SECRET, per invitation: a redemption presents it beside
-	// the id, and these cases are about what the invitation confers.
-	secrets := map[string]string{}
+	// THE LINK'S SECRET AND THE SEAT, per invitation: a redemption presents
+	// the one and binds the other, and these cases are about what the
+	// invitation confers.
+	secrets, seats := map[string]string{}, map[string]string{}
 	var redeemAs func(person, invitation, address string, grants []iam.Grant) error
 	issue := func(address string) string {
 		t.Helper()
 		var id string
+		seat := rig.vacantSeat(seatOf(address))
 		if err := rig.draining(func() error {
 			issued, err := rig.writer.Invite(rig.t.Context(), iamdomain.InviteMint{
-				Email: address, Grants: offered,
+				Email: address, Grants: offered, Seat: seat,
 				ExpiresAt: brokerAt.Add(168 * time.Hour),
 				OpID:      operationKey(), Reason: "onboarding",
 			})
 			id = issued.ID
-			secrets[id] = issued.Secret
+			secrets[id], seats[id] = issued.Secret, seat
 			return err
 		}); err != nil {
 			t.Fatalf("invite %s: %v", address, err)
@@ -185,12 +193,12 @@ func TestARedemptionConfersWhatTheInvitationSaid(t *testing.T) {
 	}
 	redeemAs = func(person, invitation, address string, grants []iam.Grant) error {
 		return rig.draining(func() error {
-			_, err := nodeWriter(rig).Enrol(rig.t.Context(), iamdomain.Enrolment{
-				PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
+			_, err := nodeWriter(rig).Redeem(rig.t.Context(), iamdomain.Redemption{
+				PersonID: person, Stage: iam.StageActive,
 				Name: "A joiner", Email: address, Login: iam.LoginFromAddress(address),
-				Grants: grants, Invitation: invitation,
-				InvitationSecret: secrets[invitation],
-				OpID:             "op-redeem-" + person, Reason: "redeemed an invitation",
+				Password: aPassword(), Grants: grants, Seat: seats[invitation],
+				Invitation: invitation, InvitationSecret: secrets[invitation],
+				OpID: "op-redeem-" + person, Reason: "redeemed an invitation",
 			})
 			return err
 		})
@@ -257,10 +265,19 @@ func TestARedemptionConfersWhatTheInvitationSaid(t *testing.T) {
 			"person once the first had gone (%v)", err)
 	}
 
-	// AND WITHOUT NAMING THE INVITATION the node writer is only itself: it
-	// holds neither state:read nor work:write, so it may confer neither.
-	if err := redeem("", "unnamed@example.com",
-		offered); !errors.Is(err, iamdomain.ErrRefused) {
+	// AND WITHOUT AN INVITATION BEHIND IT the node writer is only itself —
+	// an administrator's create — and holds neither state:read nor
+	// work:write, so it may confer neither.
+	if err := rig.draining(func() error {
+		_, err := nodeWriter(rig).Create(rig.t.Context(), iamdomain.Creation{
+			PersonID: uuid.Must(uuid.NewV7()).String(), Kind: iam.KindPerson,
+			Stage: iam.StageActive, Name: "Unnamed", Email: "unnamed@example.com",
+			Login: "un.named", Grants: offered, Seat: rig.vacantSeat("unnamed"),
+			LinkExpiresAt: firstLinkExpiry, OpID: operationKey(),
+			Reason: "no invitation",
+		})
+		return err
+	}); !errors.Is(err, iamdomain.ErrRefused) {
 		t.Errorf("the node's own writer conferred grants it does not hold "+
 			"with no invitation behind them (%v)", err)
 	}
@@ -285,14 +302,17 @@ func TestTheFirstPersonIsInvitedUnderATierAToken(t *testing.T) {
 	if anybody, err := rig.anybody(t); err != nil || anybody {
 		t.Fatalf("the rig's estate is not empty (%v, %v)", anybody, err)
 	}
+	// THE FOUNDER'S SEAT, which the company declares before anybody can be
+	// invited onto it: every person holds one.
+	founder := rig.vacantSeat("founder")
 	token := rig.writer.As(principalNamed("token:ops", iam.KindMachine, iam.AllGrants))
 	var issued iamdomain.InviteIssued
 	if err := rig.draining(func() error {
 		var err error
 		issued, err = token.Invite(rig.t.Context(), iamdomain.InviteMint{
 			Email: "founder@example.com", Grants: iam.AllGrants,
-			ExpiresAt: brokerAt.Add(168 * time.Hour),
-			OpID:      operationKey(), Reason: "the first person",
+			Seat: founder, ExpiresAt: brokerAt.Add(168 * time.Hour),
+			OpID: operationKey(), Reason: "the first person",
 		})
 		return err
 	}); err != nil {
@@ -302,11 +322,11 @@ func TestTheFirstPersonIsInvitedUnderATierAToken(t *testing.T) {
 	rig.drain()
 	person := uuid.Must(uuid.NewV7()).String()
 	if err := rig.draining(func() error {
-		_, err := nodeWriter(rig).Enrol(rig.t.Context(), iamdomain.Enrolment{
-			PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
+		_, err := nodeWriter(rig).Redeem(rig.t.Context(), iamdomain.Redemption{
+			PersonID: person, Stage: iam.StageActive,
 			Name: "The founder", Email: "founder@example.com",
-			Login:      "the.founder",
-			Grants:     iam.AllGrants,
+			Login: "the.founder", Password: aPassword(),
+			Grants: iam.AllGrants, Seat: founder,
 			Invitation: issued.ID, InvitationSecret: issued.Secret,
 			OpID: "op-redeem-" + person, Reason: "redeemed the first invitation",
 		})
@@ -333,11 +353,12 @@ func TestTheFirstPersonIsInvitedUnderATierAToken(t *testing.T) {
 	// AND WITHOUT AN INVITATION the node writer confers only what it holds.
 	nobody := uuid.Must(uuid.NewV7()).String()
 	if err := rig.draining(func() error {
-		_, err := nodeWriter(rig).Enrol(rig.t.Context(), iamdomain.Enrolment{
+		_, err := nodeWriter(rig).Create(rig.t.Context(), iamdomain.Creation{
 			PersonID: nobody, Kind: iam.KindPerson, Stage: iam.StageActive,
 			Name: "Nobody", Email: "nobody@example.com", Login: "nobody.here",
-			Grants: iam.AllGrants,
-			OpID:   "op-nobasis", Reason: "no basis",
+			Grants: iam.AllGrants, Seat: rig.vacantSeat("nobody-here"),
+			LinkExpiresAt: firstLinkExpiry,
+			OpID:          "op-nobasis", Reason: "no basis",
 		})
 		return err
 	}); !errors.Is(err, iamdomain.ErrRefused) {

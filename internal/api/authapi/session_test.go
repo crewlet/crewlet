@@ -174,10 +174,11 @@ func TestTheSessionRouteNamesTheSessionTheRequestCarried(t *testing.T) {
 
 // THE SESSION ROUTE CARRIES THE PERSON'S OWN NAME.
 //
-// A person bound to no seat has no name the chart could give, so the dashboard
-// drew their login in the sidebar and greeted them with nothing — the name
-// they typed when they redeemed their invitation is on their row, sealed, and
-// nothing answered it. The CONTROL is a row this node cannot open, which
+// The chart names a SEAT, never the person in it — and a person recorded
+// before every person held a seat, as the rig's is, has no seat to name at
+// all — so the dashboard drew their login in the sidebar and greeted them with
+// nothing: the name they typed when they redeemed their invitation is on
+// their row, sealed, and nothing answered it. The CONTROL is a row this node cannot open, which
 // answers no name and still says who the caller is. Mutation: drop the name
 // and the first case is empty; fail the answer on a value that does not open
 // and the control is refused.

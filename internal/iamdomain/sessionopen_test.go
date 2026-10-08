@@ -132,10 +132,12 @@ func TestTheEpochIsReadForASubjectNobodyEnrolled(t *testing.T) {
 func enrolForSessions(t *testing.T, rig *writeRig) string {
 	t.Helper()
 	person := uuid.Must(uuid.NewV7()).String()
-	if err := rig.enrol(iamdomain.Enrolment{
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: "Sarah Chen", Email: "sarah.chen@example.com",
-		Login: "sarah.chen", OpID: "op-enrol-" + person, Reason: "a hire",
+		Login: "sarah.chen", Seat: rig.vacantSeat("sarah-chen"),
+		LinkExpiresAt: firstLinkExpiry, OpID: "op-enrol-" + person,
+		Reason: "a hire",
 	}); err != nil {
 		t.Fatalf("enrol: %v", err)
 	}
@@ -202,9 +204,10 @@ func TestASessionsProofIsReadBackAsItsOwnFact(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	const person = "018f3a9c-0000-7000-8000-0000000008a2"
-	if err := rig.enrol(iamdomain.Enrolment{
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: "Sarah Chen", Email: "sarah@example.com", Login: "sarah.chen",
+		Seat: rig.vacantSeat("sarah-chen"), LinkExpiresAt: firstLinkExpiry,
 		OpID: "op-enrol", Reason: "a hire",
 	}); err != nil {
 		t.Fatalf("enrol: %v", err)

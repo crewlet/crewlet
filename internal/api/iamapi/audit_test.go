@@ -164,6 +164,34 @@ func TestTheDirectoryAnnouncesWhatItChanged(t *testing.T) {
 		}
 	})
 
+	// A FIRST PASSWORD LINK IS A LINK IN CIRCULATION, announced as a reset
+	// link's issue is — marked first, by its create, and never a service
+	// account's, which is handed none.
+	t.Run("a person's create announces their first password link", func(t *testing.T) {
+		t.Parallel()
+		r := newRig(t)
+		got := r.as(administrator(), http.MethodPost, "/iam/people",
+			map[string]any{"email": "dana@example.com", "seat": "sre",
+				"reason": "joins on Monday"})
+		if got.status != http.StatusCreated {
+			t.Fatalf("create answered %d: %v", got.status, got.body)
+		}
+		row := only[types.IAMPasswordResetIssued](t, r.audit)
+		if !row.First || row.Person != got.body["id"] ||
+			row.Credential != got.body["credential"] || row.By != "founder" ||
+			row.Reason != "joins on Monday" ||
+			!row.ExpiresAt.Equal(r.writer.created.LinkExpiresAt) {
+			t.Errorf("first link row = %+v, want the create's link, marked first", row)
+		}
+
+		machine := newRig(t)
+		machine.as(administrator(), http.MethodPost, "/iam/people",
+			map[string]any{"kind": "machine", "login": "ci:release"})
+		if seen := machine.audit.all(); len(seen) != 0 {
+			t.Errorf("a service account's create announced %v", seen)
+		}
+	})
+
 	t.Run("a write that did not land announces nothing", func(t *testing.T) {
 		t.Parallel()
 		r := newRig(t)

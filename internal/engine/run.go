@@ -973,9 +973,11 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	}
 	// THE CORE RUNTIME, ON EVERY NODE AND BEFORE ANYTHING DERIVED FROM A
 	// COMPANY: the state log for every registered domain, the node gate and
-	// the identity estate. A node with no company still signs people in and
-	// still enrols its first person under a Tier A token — and none of that
-	// waits for the first company any more. See core.go.
+	// the identity estate. A node with no company still signs people in — a
+	// Tier A token's session included, which is what its company is created
+	// through — and its identity log runs from boot; none of that waits for
+	// the first company any more. Only its first PERSON does, since every
+	// person holds a human seat the company declares (ADR-0026). See core.go.
 	//
 	// It does NOT wait for hydration — the reconcile is O(keys), and a node
 	// that blocked here would serve no dashboard, answer no probe and run no

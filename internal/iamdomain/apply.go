@@ -155,6 +155,85 @@ func (a *Applier) Retained(context.Context, int) {
 	a.moved.Everyone = true
 }
 
+// THE APPLIER MAINTAINS ONE DERIVED COLUMN: see [Applier.Rederive].
+var _ statelog.Deriver = (*Applier)(nil)
+
+// DerivationVersion is the rule set this build derives its columns at.
+//
+// 1 is an invitation's `seat_id` (replicated migration 0032): the column is
+// written by the apply from the record and, on a row an older build applied
+// before the column existed, by [Applier.Rederive] — the bump from the zero an
+// older build's checkpoint carries is what runs it, once, on a node upgraded
+// in place. Bumped by any change to what a derived column holds.
+const DerivationVersion = 1
+
+// DerivationVersion implements [statelog.Deriver].
+func (a *Applier) DerivationVersion() int { return DerivationVersion }
+
+// Rederive implements [statelog.Deriver]: every invitation's `seat_id`
+// recomputed from the document its row holds.
+//
+// THE SAME DECODE THE APPLY WRITES IT FROM ([DecodeInvitation], in
+// [Applier.writeInvitation]'s arm), never a second reading of the document in
+// SQL: a `json_extract` backfill would be another implementation of what an
+// invitation's seat is, and the two would answer differently the day either is
+// edited. Only rows that differ are written, so a node whose rows this build
+// maintained repairs none, and a row re-derived here equals the row a node
+// replaying the log writes — the column, and nothing else; the version stays
+// the record's.
+//
+// READ WHOLE BEFORE ANY ROW IS WRITTEN, because an UPDATE of the table a
+// cursor is still walking is a write the cursor may or may not see again.
+func (a *Applier) Rederive(ctx context.Context, tx *sql.Tx,
+	_ statelog.ApplyOptions) (int, error) {
+
+	type stale struct{ id, seat string }
+	rows, err := tx.QueryContext(ctx,
+		`SELECT id, seat_id, document FROM iam_invites ORDER BY id`)
+	if err != nil {
+		return 0, fmt.Errorf("iamdomain: read the invitations to re-derive "+
+			"their seats: %w", err)
+	}
+	var repair []stale
+	for rows.Next() {
+		var (
+			id, held string
+			document []byte
+		)
+		if err = rows.Scan(&id, &held, &document); err != nil {
+			_ = rows.Close()
+			return 0, fmt.Errorf("iamdomain: read an invitation to re-derive "+
+				"its seat: %w", err)
+		}
+		invitation, err := DecodeInvitation(document)
+		if err != nil {
+			_ = rows.Close()
+			return 0, fmt.Errorf("iamdomain: open invitation %s to re-derive "+
+				"its seat: %w", id, err)
+		}
+		if invitation.Seat != held {
+			repair = append(repair, stale{id: id, seat: invitation.Seat})
+		}
+	}
+	if err = rows.Close(); err != nil {
+		return 0, fmt.Errorf("iamdomain: read the invitations to re-derive "+
+			"their seats: %w", err)
+	}
+	if err = rows.Err(); err != nil {
+		return 0, fmt.Errorf("iamdomain: read the invitations to re-derive "+
+			"their seats: %w", err)
+	}
+	for _, r := range repair {
+		if _, err = tx.ExecContext(ctx,
+			`UPDATE iam_invites SET seat_id = ? WHERE id = ?`,
+			r.seat, r.id); err != nil {
+			return 0, fmt.Errorf("iamdomain: re-derive invitation %s's "+
+				"seat: %w", r.id, err)
+		}
+	}
+	return len(repair), nil
+}
+
 // Gated reports a record that must produce no rows at all.
 //
 // TWO GATES, READ FROM THIS SAME TRANSACTION, because the answer has to come

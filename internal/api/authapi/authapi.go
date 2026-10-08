@@ -221,11 +221,13 @@ type Writer interface {
 	// they hold.
 	Revoke(ctx context.Context, personID, opID, reason string) (statelog.Result, error)
 
-	// Enrol creates a person — and, for a redemption, spends the link in
-	// the same record. Reached by redeeming an invitation, and by nothing
-	// else here: the first person is invited like everybody after them,
-	// by an administrator or a Tier A token through /iam.
-	Enrol(ctx context.Context, in iamdomain.Enrolment) (statelog.Result, error)
+	// Redeem creates the person an invitation was issued for, binds them
+	// to the human seat it holds and spends the link, in ONE record —
+	// the only enrolment this surface performs. An administrator's create
+	// is `/iam`'s ([iamdomain.Writer.Create]), and the company's first
+	// person arrives either way onto a human seat, like everybody after
+	// them: invited or created by an administrator or a Tier A token.
+	Redeem(ctx context.Context, in iamdomain.Redemption) (statelog.Result, error)
 
 	// SetCredentials replaces a person's credential set, forming the new
 	// whole from their own row INSIDE the snapshot — which is what keeps

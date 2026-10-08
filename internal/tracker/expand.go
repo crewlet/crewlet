@@ -274,8 +274,8 @@ func expandPreset(name string, viewer Viewer) (MapParams, error) {
 			// every unassigned task in the company, the widest reading
 			// of "what can I pick up" and the one this arm is scoped to
 			// prevent. A seat whose unit files no project, and every
-			// person the directory binds to no seat, pick up what they
-			// hold.
+			// token or service account the directory binds to no seat,
+			// pick up what they hold.
 			out["assignee"] = viewer.Handle
 			return out, nil
 		}

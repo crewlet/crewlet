@@ -18,26 +18,59 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// EVERY UNIQUE COLUMN IS WRITTEN FROM THE DIRECTORY'S APPLY AND NOWHERE ELSE.
+// EVERY UNIQUE COLUMN IS WRITTEN FROM THE DIRECTORY'S APPLY AND NOWHERE ELSE —
+// AND SO IS EVERY VALUE AN INVITATION HOLDS.
 //
 // A login, an address and a seat are decided on ONE subject, in one snapshot
 // of every row, and that is the whole of what keeps two people off one of
 // them: there is no unique index in this estate and there cannot be one. A
 // statement anywhere else that set one of the three columns would be a write
-// no directory decision ever saw — the duplicate nothing refuses.
+// no directory decision ever saw — the duplicate nothing refuses. An open
+// invitation holds an address and a seat by the same decision, so the columns
+// a hold is read from are held to the same rule — with the one other writer
+// the seat column has, the applier's re-derivation of rows an older build
+// applied, which writes the value the apply would have.
 //
 // A WALK OVER THE SOURCE, because the property is about which statements
 // exist rather than about what any one record does: a behavioural case could
 // only show the paths somebody thought to exercise.
 //
-// Mutation: add `login = ?` to the person record's UPDATE in apply_person.go
-// and this fails naming that file.
+// Mutation: add `login = ?` to the person record's UPDATE in apply_person.go,
+// or a `seat_id` set to empty to the erasure's UPDATE in apply_erase.go, and
+// this fails naming that file.
 func TestEveryUniqueColumnIsWrittenOnlyFromTheDirectory(t *testing.T) {
 	t.Parallel()
-	const home = "apply_directory.go"
-	write := regexp.MustCompile(`(?is)^\s*(INSERT\s+INTO|UPDATE)\s+iam_people\b(.*)$`)
-	unique := regexp.MustCompile(`\b(login|email_blind|seat_id)\b`)
+	for table, rule := range map[string]struct {
+		unique *regexp.Regexp
+		homes  []string
+		// least is how many statements the homes hold, so a walk that
+		// looked in the wrong place cannot pass by finding none.
+		least int
+	}{
+		// The enrolment's INSERT and the identity change's UPDATE.
+		"iam_people": {regexp.MustCompile(`\b(login|email_blind|seat_id)\b`),
+			[]string{"apply_directory.go"}, 2},
+		// The issue's INSERT, and the re-derivation's UPDATE.
+		"iam_invites": {regexp.MustCompile(`\b(email_blind|seat_id)\b`),
+			[]string{"apply_directory.go", "apply.go"}, 2},
+	} {
+		found := uniqueWritesOf(t, table, rule.unique, rule.homes)
+		if found < rule.least {
+			t.Errorf("the walk found %d statements in %v writing a value "+
+				"%s keeps to one holder, want at least %d", found, rule.homes,
+				table, rule.least)
+		}
+	}
+}
 
+// uniqueWritesOf walks this package's source for statements writing one of
+// unique's columns on table, failing every one outside homes and counting the
+// ones inside.
+func uniqueWritesOf(t *testing.T, table string, unique *regexp.Regexp,
+	homes []string) int {
+
+	t.Helper()
+	write := regexp.MustCompile(`(?is)^\s*(INSERT\s+INTO|UPDATE)\s+` + table + `\b(.*)$`)
 	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatalf("read the package directory: %v", err)
@@ -80,23 +113,17 @@ func TestEveryUniqueColumnIsWrittenOnlyFromTheDirectory(t *testing.T) {
 			if len(columns) == 0 {
 				return true
 			}
-			if name != home {
-				t.Errorf("%s writes %v on iam_people — only the directory's "+
-					"apply (%s) may, because only its decide read every row "+
-					"the value could collide with", name, columns, home)
+			if !slices.Contains(homes, name) {
+				t.Errorf("%s writes %v on %s — only the directory's apply "+
+					"(%v) may, because only its decide read every row the "+
+					"value could collide with", name, columns, table, homes)
 				return true
 			}
 			found++
 			return true
 		})
 	}
-	// THE WALK READ SOMETHING: the enrolment's INSERT and the identity
-	// change's UPDATE both write the columns, so fewer than two is a walk
-	// that looked in the wrong place and would pass anything.
-	if found < 2 {
-		t.Fatalf("the walk found %d statements in %s writing a unique column, "+
-			"want at least the enrolment's and the identity change's", found, home)
-	}
+	return found
 }
 
 // A DIRECTORY DECISION IS REFUSED WHILE THIS NODE RETAINS A RECORD — any
@@ -170,12 +197,14 @@ func TestADirectoryWriteRefusesWhileThisNodeRetainsARecord(t *testing.T) {
 		PersonID: rig.sarah, Login: &rename, OpID: "op-rename", Reason: "a rename",
 	})
 	deferred("a rename", err)
-	deferred("an enrolment", rig.enrol(iamdomain.Enrolment{
+	deferred("an enrolment", rig.enrol(iamdomain.Creation{
 		PersonID: "018f3a9c-0000-7000-8000-0000000006b1", Kind: iam.KindPerson,
 		Stage: iam.StageActive, Name: "New Hire", Email: "new.hire@example.com",
-		Login: "new.hire", OpID: "op-new-hire", Reason: "a hire",
+		Login: "new.hire", Seat: rig.vacantSeat("new-hire"),
+		LinkExpiresAt: firstLinkExpiry, OpID: "op-new-hire", Reason: "a hire",
 	}))
-	_, err = inviteFor(t, rig.writeRig, "new.hire@example.com", "")
+	_, err = inviteFor(t, rig.writeRig, "new.hire@example.com",
+		rig.vacantSeat("new-lead"))
 	deferred("an invitation", err)
 	if got, _ := rig.held(rig.sarah); got != "sarah.chen" {
 		t.Errorf("the refused rename moved Sarah to %q", got)
@@ -206,7 +235,8 @@ func TestARedemptionIsOneRecord(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	const address = "jo.joiner@example.com"
-	issued, err := inviteFor(t, rig, address, "")
+	seat := rig.vacantSeat("platform-lead")
+	issued, err := inviteFor(t, rig, address, seat)
 	if err != nil {
 		t.Fatalf("invite: %v", err)
 	}
@@ -215,7 +245,7 @@ func TestARedemptionIsOneRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the log's end: %v", err)
 	}
-	if _, err := redeemAs(t, rig, issued, address, issued.Secret, ""); err != nil {
+	if _, err := redeemAs(t, rig, issued, address, issued.Secret, seat); err != nil {
 		t.Fatalf("redeem: %v", err)
 	}
 	after, err := rig.end(t.Context())
@@ -250,10 +280,13 @@ func TestARedemptionIsOneRecord(t *testing.T) {
 	}
 	logins := rig.column(`SELECT login FROM iam_people WHERE id = ?`, spentFor[0])
 	blinds := rig.column(`SELECT email_blind FROM iam_people WHERE id = ?`, spentFor[0])
+	seats := rig.column(`SELECT seat_id FROM iam_people WHERE id = ?`, spentFor[0])
 	if !slices.Equal(logins, []string{iam.LoginFromAddress(address)}) ||
-		!slices.Equal(blinds, []string{blindOf(t, address)}) {
-		t.Errorf("the person the link was spent for holds login %v and address "+
-			"%v, want what the redemption asked for", logins, blinds)
+		!slices.Equal(blinds, []string{blindOf(t, address)}) ||
+		!slices.Equal(seats, []string{seat}) {
+		t.Errorf("the person the link was spent for holds login %v, address "+
+			"%v and seat %v, want what the redemption asked for", logins,
+			blinds, seats)
 	}
 }
 
@@ -356,21 +389,23 @@ func TestTwoRowsHoldingOneLoginAreTheUnknownArm(t *testing.T) {
 // beside it would leave a link that creates a second person on one address the
 // day it is followed. The refusal names the invitation, because that is what
 // an administrator withdraws or lets lapse — a person id would name nobody.
+// The create names ANOTHER seat, so the address is the one value refused.
 //
-// Mutation: drop the open-invitation check from Enrol's decide and the create
-// lands beside the invitation.
+// Mutation: drop the address's open-invitation check from the enrolment's
+// decide and the create lands beside the invitation.
 func TestACreateOfAnInvitedAddressNamesTheInvitation(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	const address = "sarah.chen@example.com"
-	issued, err := inviteFor(t, rig, address, "")
+	issued, err := inviteFor(t, rig, address, rig.vacantSeat("platform-lead"))
 	if err != nil {
 		t.Fatalf("invite: %v", err)
 	}
 	person := "018f3a9c-0000-7000-8000-0000000006d1"
-	err = rig.enrol(iamdomain.Enrolment{
+	err = rig.enrol(iamdomain.Creation{
 		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: "Sarah Chen", Email: address, Login: "sarah.chen",
+		Seat: rig.vacantSeat("sarah-desk"), LinkExpiresAt: firstLinkExpiry,
 		OpID: "op-create-sarah", Reason: "a hire",
 	})
 	var taken *iamdomain.ErrTaken
@@ -378,6 +413,40 @@ func TestACreateOfAnInvitedAddressNamesTheInvitation(t *testing.T) {
 		taken.Invitation != issued.ID || taken.Person != "" {
 		t.Errorf("creating somebody at an invited address answered %v, want "+
 			"the address refused naming invitation %s", err, issued.ID)
+	}
+	rig.drain()
+	if got := rig.column(`SELECT id FROM iam_people WHERE id = ?`, person); len(got) != 0 {
+		t.Errorf("the refused create left person %v", got)
+	}
+}
+
+// AND ONE ONTO A SEAT AN OPEN INVITATION HOLDS IS REFUSED, NAMING IT — for the
+// address's reason: the invitation is a person on their way to that seat, and
+// a create beside it would put two people on one. A create of ANOTHER address,
+// so the seat is the one value refused.
+//
+// Mutation: drop the seat's open-invitation check from the enrolment's decide
+// and the create lands on the invited seat.
+func TestACreateOfAnInvitedSeatNamesTheInvitation(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	seat := rig.vacantSeat("platform-lead")
+	issued, err := inviteFor(t, rig, "priya@example.com", seat)
+	if err != nil {
+		t.Fatalf("invite: %v", err)
+	}
+	person := "018f3a9c-0000-7000-8000-0000000006d2"
+	err = rig.enrol(iamdomain.Creation{
+		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
+		Name: "Sarah Chen", Email: "sarah.chen@example.com", Login: "sarah.chen",
+		Seat: seat, LinkExpiresAt: firstLinkExpiry, OpID: "op-create-sarah",
+		Reason: "a hire",
+	})
+	var taken *iamdomain.ErrTaken
+	if !errors.As(err, &taken) || taken.Field != iamdomain.UniqueSeat ||
+		taken.Value != seat || taken.Invitation != issued.ID || taken.Person != "" {
+		t.Errorf("creating somebody on an invited seat answered %v, want the "+
+			"seat refused naming invitation %s", err, issued.ID)
 	}
 	rig.drain()
 	if got := rig.column(`SELECT id FROM iam_people WHERE id = ?`, person); len(got) != 0 {

@@ -14,6 +14,7 @@
  */
 
 import type { EngineHealth } from "../contract/health.ts";
+import type { ResetView } from "../contract/identity.ts";
 import { rest } from "./rest.ts";
 import type {
   AuthConfig,
@@ -21,7 +22,6 @@ import type {
   PasswordChanged,
   PasswordSet,
   RecoveryCodes,
-  ResetView,
   SecondFactorEnrolled,
   SecondFactorSeed,
   SessionAnswer,

@@ -21,11 +21,12 @@ func TestStrippingAPersonsLastGrantSticks(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	person := uuid.Must(uuid.NewV7()).String()
-	if err := rig.enrol(iamdomain.Enrolment{
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: "Dana Okafor", Email: "dana@example.com", Login: "dana.sre",
-		Grants: []iam.Grant{iam.GrantStateRead},
-		OpID:   "op-enrol", Reason: "a hire",
+		Seat:   rig.vacantSeat("dana-okafor"),
+		Grants: []iam.Grant{iam.GrantStateRead}, LinkExpiresAt: firstLinkExpiry,
+		OpID: "op-enrol", Reason: "a hire",
 	}); err != nil {
 		t.Fatalf("enrol: %v", err)
 	}

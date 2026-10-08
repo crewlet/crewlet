@@ -249,12 +249,22 @@ func (a *Applier) reboundBy(ctx context.Context, tx *sql.Tx, at applyContext,
 	return n, nil
 }
 
-// writeInvitation records an address spoken for by somebody who has no person
-// yet.
+// writeInvitation records an address and a seat spoken for by somebody who has
+// no person yet.
 //
 // THE BUCKET IS THE ADDRESS'S OWN, not a person's: an invitation has no person
 // until it is redeemed, and a bucket derived from an empty id would put every
 // outstanding invitation in the company into one sweep transaction.
+//
+// THE SEAT IS A COLUMN, beside the address's blind, because it is what a
+// directory decide holds a seat against ([heldByInvitation]) and what the seat
+// listing reads an invitation by — a lookup over a column, as every other
+// hold here is, rather than a decode of every open invitation's document per
+// decide. It is the document's own value, written whatever it holds: an
+// invitation a build before seats were required issued carries none, and this
+// applier salvages it as it is — refusing it here would stop the log on every
+// node — while the writer's decides are what refuse to redeem it. A row this
+// build did not write was filled by [Applier.Rederive].
 func (a *Applier) writeInvitation(ctx context.Context, tx *sql.Tx,
 	at applyContext, invitation Invitation) (int, error) {
 
@@ -269,20 +279,22 @@ func (a *Applier) writeInvitation(ctx context.Context, tx *sql.Tx,
 	}
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO iam_invites
-			(id, email_blind, email_sealed, invited_by, grants_json,
+			(id, email_blind, email_sealed, invited_by, grants_json, seat_id,
 			 expires_at, redeemed_at, person_id, bucket, created_at, version, document)
-		VALUES (?, ?, ?, ?, ?, ?, 0, '', ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 0, '', ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			email_blind  = excluded.email_blind,
 			email_sealed = excluded.email_sealed,
 			invited_by   = excluded.invited_by,
 			grants_json  = excluded.grants_json,
+			seat_id      = excluded.seat_id,
 			expires_at   = excluded.expires_at,
 			version      = excluded.version,
 			document     = excluded.document
 		WHERE excluded.version > iam_invites.version`,
 		invitation.ID, invitation.EmailBlind, []byte(invitation.Sealed),
-		invitation.InvitedBy, grants, millis(invitation.ExpiresAt),
+		invitation.InvitedBy, grants, invitation.Seat,
+		millis(invitation.ExpiresAt),
 		at.bucket(), at.unix(), at.packed, document)
 	if err != nil {
 		return 0, fmt.Errorf("iamdomain: write an invitation: %w", err)
@@ -293,8 +305,8 @@ func (a *Applier) writeInvitation(ctx context.Context, tx *sql.Tx,
 
 // writeCancellation deletes an invitation nobody redeemed.
 //
-// A DELETE AND NOT A MARK: the row is what holds the address
-// ([openInvitationFor] reads it), its sealed copy goes with it, and an id the
+// A DELETE AND NOT A MARK: the row is what holds the address and the seat
+// ([heldByInvitation] reads it), its sealed copy goes with it, and an id the
 // estate does not hold is exactly what a link to it must look like afterwards
 // — the same refusal as one nobody issued. The guard is the column: a
 // redeemed invitation created somebody, and its row stays until the sweep

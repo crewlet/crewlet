@@ -1,19 +1,38 @@
 /**
- * The identity directory's writes that more than one screen offers: inviting
- * somebody (Settings › People & access, and a human seat nobody holds), minting
- * a token (a service account's there, your own on the Account page), the grants
- * a write confers, a value shown once, and what a write came to.
+ * The identity directory as more than one screen offers it: who holds a human
+ * seat, and the writes made about one — inviting a person onto a vacant seat,
+ * creating one there, cancelling the invitation that holds it — plus minting a
+ * token (a service account's on People & access, your own on the Account
+ * page), the grants a write confers, a value shown once, and what a write came
+ * to.
+ *
+ * # A person is invited or created ON A SEAT, and only there
+ *
+ * Every person holds exactly one human seat for as long as they exist (the
+ * engine refuses a person with none, ADR-0026), so the place a person comes
+ * from is a vacant human seat: its card's menu on the org chart, the seat's
+ * peek, and its page — each through [SeatHolding]'s three states (held,
+ * invited, vacant) and the dialogs [SeatGestureDialog] opens. People & access
+ * lists, edits, suspends and removes people; it no longer invites anybody, and
+ * points at the chart instead.
+ *
+ * # Read where it is drawn, and heard everywhere it is
+ *
+ * The chart, the peek beside it and a seat's page each read the seat listing
+ * for themselves ([useHumanSeats]), because each is drawn without the others;
+ * a write made from any one of them is announced ([directoryMoved]) and every
+ * listing on the page reads again.
  *
  * Every write goes through `lib/iamWrite.ts`, so the step-up, the operation key
  * a retry sends and the four answers are decided once. And they are offered to
  * a reader holding `people:manage` only — the grant every one of them is
- * refused without ([canManagePeople]). People & access is read by auditors
- * (`audit:read`) as well, and a dozen controls disabled with one reason is
- * noise on the record they came to read; the engine refuses whatever reaches
- * it all the same.
+ * refused without ([canManagePeople]). The directory is read by auditors
+ * (`audit:read`) as well, and a control disabled with one reason on every seat
+ * and every row is noise on the record they came to read; the engine refuses
+ * whatever reaches it all the same.
  */
 
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Button,
   Callout,
@@ -24,29 +43,36 @@ import {
   InlineCode,
   Input,
   Modal,
-  Select,
   Tag,
   Text,
   type SelectOption,
 } from "@crewlethq/ui";
-import { KeyGlyph, UserPlusGlyph } from "@crewlethq/icons/glyphs";
+import { BanGlyph, KeyGlyph, SendGlyph, UserPlusGlyph } from "@crewlethq/icons/glyphs";
 import { DateCell } from "~/app/frame/cells.tsx";
+import { QueryState } from "~/components/common.tsx";
 import {
   GRANTS,
   TOKEN_DEFAULT_DAYS,
   TOKEN_MAX_DAYS,
   TOKEN_WITHHELD_GRANTS,
+  type HumanSeat,
+  type HumanSeatsAnswer,
+  type SeatInvitation,
 } from "~/contract/identity.ts";
 import { fmtDateTime, tsKey } from "~/lib/format.ts";
+import { loginKind, loginProblem } from "~/lib/login.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useIamGesture, type IamAnswer, type IamGesture } from "~/lib/iamWrite.ts";
 import { useWaiting } from "~/lib/waiting.ts";
-import { useRest } from "~/lib/useRest.ts";
+import { useRest, type RestOptions, type RestResult } from "~/lib/useRest.ts";
 import { rest } from "~/protocol/index.ts";
 
 /** The grant every directory write is decided on. */
 export const PEOPLE_MANAGE = "people:manage";
+
+/** The grant the directory is READ on beside it (`authz.ActionDirectoryRead`). */
+const AUDIT_READ = "audit:read";
 
 /**
  * The word for a credential the engine reports `revoked`: USED for a reset
@@ -90,6 +116,43 @@ export function ExpiresCell({
 /** Whether a reader's grants reach the directory's writes. */
 export function canManagePeople(grants: readonly string[]): boolean {
   return grants.includes(PEOPLE_MANAGE);
+}
+
+/**
+ * Whether a reader's grants reach the directory's READS — `people:manage` or
+ * `audit:read`, the engine's `authz.ActionDirectoryRead`. A surface that is
+ * not the directory's own (the chart, a seat's peek and page) asks it only of
+ * such a reader: anybody else would be handed a refusal on a screen they came
+ * to for something else.
+ */
+export function canReadDirectory(grants: readonly string[]): boolean {
+  return grants.includes(PEOPLE_MANAGE) || grants.includes(AUDIT_READ);
+}
+
+/**
+ * How every read of the directory is kept current.
+ *
+ * The directory moves on an administrator's gesture and a node's Tier A at a
+ * restart: a minute is soon enough to see a `crewlet iam` run in another
+ * terminal land, and these surfaces are read, not watched. The tab coming back
+ * asks at once, which is where somebody who just ran the command is looking;
+ * a gesture made on this page is heard at once ([directoryMoved]).
+ */
+export const DIRECTORY_READ: RestOptions = { pollMs: 60_000, refetchOnFocus: true };
+
+/**
+ * Where a directory write is announced to every seat listing on the page.
+ *
+ * ONE ANSWER, SEVERAL READERS: the chart and the peek beside it each hold a
+ * reading of `/iam/seats`, and an invitation sent from the peek re-read by the
+ * peek alone said "Invited" beside a card still saying "Vacant" until the
+ * chart's next poll.
+ */
+const directoryWrites = new EventTarget();
+
+/** Tell every seat listing on the page that the directory may have moved. */
+export function directoryMoved(): void {
+  directoryWrites.dispatchEvent(new Event("moved"));
 }
 
 /** What each grant opens, in a line — beside the grant's own name, never instead of it. */
@@ -267,23 +330,89 @@ export function pressLabel(
   return write.answer?.kind === "unknown" ? "Try again" : idle;
 }
 
-/** One human seat of the running company and who holds it (`GET /iam/seats`). */
-export interface HumanSeat {
-  handle: string;
-  name: string;
-  unit?: string;
-  holder?: { person: string; login?: string; stage?: string };
+/**
+ * What a credential the directory binds to no seat lacks, and who gives it.
+ *
+ * TWO DIFFERENT FACTS by whose login it is. A PERSON holds a human seat for as
+ * long as they exist, so one with none was recorded before that held — a
+ * fault an administrator mends (`person_without_seat` in the directory's
+ * report). A service account or a Tier A token's session acting as itself is
+ * ordinary, and binding its row to a human seat is what would add the seat's
+ * work. Worded alike, the first read as a choice and the second as a fault.
+ */
+export function UnboundRemedy({ login }: { login: string }) {
+  if (loginKind(login) === "person") {
+    return (
+      <>
+        Every person holds a human seat and you hold none — you were recorded before that held — so
+        ask whoever manages people to give you one: work the org chart hands to a seat reaches you
+        once they do.
+      </>
+    );
+  }
+  return (
+    <>
+      Work the org chart hands to a seat reaches this credential once the directory binds its row to
+      a human seat nothing else holds: <code className="inline">crewlet iam bind ID SEAT</code>, or
+      — for a token no row holds yet —{" "}
+      <code className="inline">crewlet iam create -kind machine -login {login} -seat SEAT</code>.
+    </>
+  );
 }
 
-/** The seats an invitation, a create or a bind may name: those nobody holds. */
+/**
+ * Every human seat of the running company and what holds it (`GET /iam/seats`),
+ * or — `enabled` false — nothing asked at all.
+ *
+ * A caller passes `enabled` as `canReadDirectory(viewer.grants)` once the
+ * viewer has answered (`!viewer.asking`), so nobody is asked a question they
+ * would be refused. Every listing hears a write made anywhere on the page
+ * ([directoryMoved]) and reads again, quietly.
+ */
+export function useHumanSeats(enabled: boolean): RestResult<HumanSeat[]> {
+  const seats = useRest(
+    enabled ? "/iam/seats" : null,
+    async (signal) => {
+      const answer = (await rest.get("/iam/seats", signal)) as HumanSeatsAnswer | null;
+      return answer?.seats ?? [];
+    },
+    DIRECTORY_READ,
+  );
+  const { reload } = seats;
+  useEffect(() => {
+    if (!enabled) return;
+    const moved = () => void reload({ quiet: true });
+    directoryWrites.addEventListener("moved", moved);
+    return () => directoryWrites.removeEventListener("moved", moved);
+  }, [enabled, reload]);
+  return seats;
+}
+
+/**
+ * Whether the seat listing was refused because this node runs NO COMPANY
+ * (`409 no_active_revision`): not a failure to report but the first step of a
+ * first run, since there is no human seat until a company declares one. Read
+ * through the generic refusal it was "the engine tried to answer and failed",
+ * with nothing to do about it.
+ */
+export function listsNoCompany(seats: RestResult<unknown>): boolean {
+  return !seats.data && seats.error?.code === "no_active_revision";
+}
+
+/**
+ * The seats a bind may name: those NOTHING holds — no person, no service
+ * account and no open invitation, which the engine's `?unheld=true` leaves
+ * out alike, so the vacancies offered are exactly the ones a bind can take.
+ */
 export function useUnheldSeats() {
   return useRest("/iam/seats?unheld=true", async (signal) => {
-    const answer = (await rest.get("/iam/seats?unheld=true", signal)) as {
-      seats?: HumanSeat[] | null;
-    } | null;
+    const answer = (await rest.get("/iam/seats?unheld=true", signal)) as HumanSeatsAnswer | null;
     return answer?.seats ?? [];
   });
 }
+
+/** A human seat as a dialog names it: its handle and the name the chart gives it. */
+export type SeatName = Pick<HumanSeat, "handle" | "name">;
 
 /**
  * A seat the vacancy list leaves out — the one a person holds now, or one a
@@ -291,7 +420,7 @@ export function useUnheldSeats() {
  * names it. Named by its handle, it was offered as "jane-founder / jane-founder"
  * beside every vacancy's name.
  */
-export function useSeatEntry(): (handle: string) => HumanSeat {
+export function useSeatEntry(): (handle: string) => SeatName {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   return useCallback(
@@ -303,10 +432,23 @@ export function useSeatEntry(): (handle: string) => HumanSeat {
 /** The value of the "nobody" option in a seat select. */
 export const NO_SEAT = "";
 
-/** A seat select's options: nobody, then each seat by name with its handle. */
-export function seatOptions(seats: readonly HumanSeat[]): SelectOption[] {
+/**
+ * A seat select's options: each seat by name with its handle — and, for a
+ * SERVICE ACCOUNT alone (`none`), nobody first.
+ *
+ * NO SEAT IS A MACHINE'S ANSWER ONLY. A person holds a human seat for as long
+ * as they exist, so the engine refuses a person's write that clears one
+ * (`seat_required`); offered to a person, "No seat" was a choice whose every
+ * save came back refused.
+ */
+export function seatOptions(
+  seats: readonly SeatName[],
+  { none = false }: { none?: boolean } = {},
+): SelectOption[] {
   return [
-    { value: NO_SEAT, label: "No seat", description: "Acts under their own login" },
+    ...(none
+      ? [{ value: NO_SEAT, label: "No seat", description: "Acts as itself, under its own login" }]
+      : []),
     ...seats.map((s) => ({
       value: s.handle,
       label: s.name || s.handle,
@@ -316,50 +458,288 @@ export function seatOptions(seats: readonly HumanSeat[]): SelectOption[] {
   ];
 }
 
+/** What may be done about a human seat, wherever it is drawn. */
+export type SeatGesture = "invite" | "create" | "cancel";
+
 /**
- * Invite somebody: an address, the seat redeeming it binds them to, and the
- * grants it confers. On success the link is shown ONCE — it is the credential,
- * and the engine keeps only a hash of its secret.
+ * The gestures a seat offers a reader holding `people:manage`: a VACANT seat
+ * is invited onto or has a person created on it; a seat an open invitation
+ * holds offers that invitation's cancellation; a HELD seat offers nothing
+ * here — its holder is moved or removed on their row in People & access.
+ *
+ * NOTHING ON A SEAT THE LISTING DID NOT ANSWER FOR: a read that failed or has
+ * not arrived says nothing about whether the seat is free, and an invitation
+ * offered onto a seat somebody holds is a refusal the person pressing it
+ * could have been spared.
+ */
+export function seatGestures(row: HumanSeat | undefined): SeatGesture[] {
+  if (!row || row.holder) return [];
+  return row.invitation ? ["cancel"] : ["invite", "create"];
+}
+
+/** Each gesture's words: as a menu item on a card, and as a button. */
+export const SEAT_GESTURE_WORDS: Record<
+  SeatGesture,
+  { menu: string; button: string; icon: ReactNode }
+> = {
+  invite: { menu: "Invite to this seat…", button: "Invite", icon: <SendGlyph size="sm" /> },
+  create: {
+    menu: "Create a person on this seat…",
+    button: "Create person",
+    icon: <UserPlusGlyph size="sm" />,
+  },
+  cancel: { menu: "Cancel invitation", button: "Cancel invitation", icon: <BanGlyph size="sm" /> },
+};
+
+/**
+ * What holds a seat, in the few words a card has room for: "Held by jane.doe",
+ * "Invited · sam@example.com", or "Vacant". NEUTRAL WORDS for a card whose one
+ * hue is a seat's state — who holds a seat is not something it is doing.
+ */
+export function holdingLine(row: HumanSeat): string {
+  if (row.holder) return `Held by ${row.holder.login || row.holder.person}`;
+  if (row.invitation) {
+    const { email, sealed } = row.invitation;
+    return email && !sealed ? `Invited · ${email}` : "Invited";
+  }
+  return "Vacant";
+}
+
+/**
+ * The dialog a seat gesture opens, about the seat as it was when the gesture
+ * started.
+ *
+ * A SNAPSHOT, NEVER THE LIVE ROW: the listing is read again the moment the
+ * write lands ([directoryMoved]), and a cancellation reading the live row
+ * would lose the invitation it is about — and its own dialog with it — before
+ * a `202` could say it was recorded.
+ */
+export function SeatGestureDialog({
+  gesture,
+  seat,
+  held,
+  onClose,
+}: {
+  gesture: SeatGesture;
+  seat: HumanSeat;
+  /** The viewer's own grants. */
+  held: readonly string[];
+  onClose: () => void;
+}) {
+  switch (gesture) {
+    case "invite":
+      return <InviteDialog seat={seat} held={held} onClose={onClose} onDone={directoryMoved} />;
+    case "create":
+      return (
+        <CreatePersonDialog seat={seat} held={held} onClose={onClose} onDone={directoryMoved} />
+      );
+    case "cancel":
+      return seat.invitation ? (
+        <CancelInvitation
+          row={{ ...seat.invitation, seat: seat.handle }}
+          seatName={seat.name}
+          onClose={onClose}
+          onChanged={directoryMoved}
+        />
+      ) : null;
+  }
+}
+
+/**
+ * Who holds a human seat — said on the seat's own page, where a held seat
+ * names its holder, an invited one its invitation (with its cancellation), and
+ * a vacant one the two ways to fill it.
+ *
+ * A READ THAT FAILED IS SAID: drawn as nothing, a refused or unreachable
+ * listing removed the only way to fill the seat with no word why.
+ *
+ * THE DIALOG IS NOT THE LISTING'S: every write is announced
+ * ([directoryMoved]) and the listing reads again — and a read refused then
+ * (a node behind its identity log, a poll, the refetch as the tab comes back
+ * from the email the link was pasted into) leaves no data. Drawn inside the
+ * branch that needs the listing, the open dialog went with it, and so did the
+ * invitation link or first password link the engine shows only once. So the
+ * gesture is held here and its dialog drawn beside whatever the listing says,
+ * as the chart and the peek draw theirs.
+ */
+export function SeatHolding({
+  seat,
+  seats,
+  manages,
+  held,
+  you = false,
+}: {
+  seat: SeatName;
+  /** The listing, as [useHumanSeats] read it. */
+  seats: RestResult<HumanSeat[]>;
+  /** The reader holds `people:manage`, so the gestures are drawn. */
+  manages: boolean;
+  /** The reader's own grants. */
+  held: readonly string[];
+  /** The seat is the reader's own. */
+  you?: boolean;
+}) {
+  const [opening, setOpening] = useState<{ gesture: SeatGesture; row: HumanSeat } | null>(null);
+  return (
+    <>
+      <SeatHoldingState
+        seat={seat}
+        seats={seats}
+        manages={manages}
+        you={you}
+        onGesture={(gesture, row) => setOpening({ gesture, row })}
+      />
+      {opening && (
+        <SeatGestureDialog
+          gesture={opening.gesture}
+          seat={opening.row}
+          held={held}
+          onClose={() => setOpening(null)}
+        />
+      )}
+    </>
+  );
+}
+
+/** What [SeatHolding] says about the listing: its failure, its absence, or the seat's holding. */
+function SeatHoldingState({
+  seat,
+  seats,
+  manages,
+  you,
+  onGesture,
+}: {
+  seat: SeatName;
+  seats: RestResult<HumanSeat[]>;
+  manages: boolean;
+  you: boolean;
+  onGesture: (gesture: SeatGesture, row: HumanSeat) => void;
+}) {
+  if (seats.code && !seats.data) {
+    return (
+      <QueryState
+        error={seats.code}
+        refusal={seats.refusal}
+        detail={seats.error?.detail || undefined}
+        loading={false}
+      />
+    );
+  }
+  if (!seats.data) return null;
+  const row = seats.data.find((s) => s.handle === seat.handle);
+  if (!row) {
+    // THE LISTING IS THE RUNNING COMPANY'S, so a seat the chart draws and it
+    // does not hold is one this node has not applied yet.
+    return (
+      <Callout variant="neutral">
+        The identity directory does not list this seat yet: this node has not applied the revision
+        that added it.
+      </Callout>
+    );
+  }
+  const actions = manages
+    ? seatGestures(row).map((gesture) => (
+        <Button
+          key={gesture}
+          size="small"
+          variant={gesture === "cancel" ? "ghost" : "secondary"}
+          leadingIcon={SEAT_GESTURE_WORDS[gesture].icon}
+          onClick={() => onGesture(gesture, row)}
+        >
+          {SEAT_GESTURE_WORDS[gesture].button}
+        </Button>
+      ))
+    : [];
+  return (
+    <Callout
+      variant="neutral"
+      action={actions.length > 0 ? <span className="row gap-2">{actions}</span> : undefined}
+    >
+      <HoldingSentence row={row} you={you} />
+    </Callout>
+  );
+}
+
+/** What holds a seat, said whole: its holder and their stage, its invitation, or nobody. */
+export function HoldingSentence({ row, you = false }: { row: HumanSeat; you?: boolean }) {
+  const { holder, invitation } = row;
+  if (holder) {
+    const stage = holder.stage && holder.stage !== "active" ? ` (${holder.stage})` : "";
+    return (
+      <>
+        Held by {you && "you, as "}
+        {holder.kind === "machine" && "the service account "}
+        <code className="inline">{holder.login || holder.person}</code>
+        {stage}.
+      </>
+    );
+  }
+  if (invitation) {
+    return (
+      <>
+        <span>Invited: </span>
+        {invitation.sealed || !invitation.email ? (
+          "an address this node's keyring cannot open"
+        ) : (
+          <strong>{invitation.email}</strong>
+        )}
+        , until {fmtDateTime(invitation.expires_at)}. Redeeming the link binds them to this seat;
+        until it is redeemed, cancelled or lapses, nobody else can be invited or bound to it.
+      </>
+    );
+  }
+  return <span>Nobody holds this seat.</span>;
+}
+
+/** The seat a person-dialog is about, said as a fact rather than offered as a choice. */
+function SeatFact({ seat, children }: { seat: SeatName; children: ReactNode }) {
+  return (
+    <Text as="p" variant="body">
+      For the seat <strong>{seat.name || seat.handle}</strong>{" "}
+      <InlineCode>{seat.handle}</InlineCode>: {children}
+    </Text>
+  );
+}
+
+/**
+ * Invite somebody onto a vacant human seat: an address and the grants it
+ * confers. On success the link is shown ONCE — it is the credential, and the
+ * engine keeps only a hash of its secret.
+ *
+ * THE SEAT IS FIXED, by where the dialog was opened from. An invitation names
+ * the seat its redemption binds, always: a person holds one for as long as
+ * they exist, and an open invitation holds it until then.
  */
 export function InviteDialog({
+  seat,
   held,
-  seat = NO_SEAT,
   onClose,
   onDone,
 }: {
+  /** The vacant seat the invitation is for. */
+  seat: SeatName;
   /** The viewer's own grants. */
   held: readonly string[];
-  /** A seat to propose — the seat page's own. */
-  seat?: string;
   onClose: () => void;
   /** After every answer, so the lists are read again. */
   onDone: () => void;
 }) {
   const write = useIamGesture();
   const waiting = useWaiting();
-  const seats = useUnheldSeats();
-  const entry = useSeatEntry();
   const [email, setEmail] = useState("");
-  const [bind, setBind] = useState(seat);
   const [grants, setGrants] = useState<string[]>([]);
-  const options = useMemo(() => {
-    const list = seats.data ?? [];
-    // THE PROPOSED SEAT STAYS OFFERED while the read is out, so a dialog
-    // opened from a seat's page does not drop it on the first render.
-    const named = list.some((s) => s.handle === seat) || seat === NO_SEAT;
-    return seatOptions(named ? list : [...list, entry(seat)]);
-  }, [seats.data, seat, entry]);
 
   const done = write.answer?.kind === "done" ? write.answer.body : null;
   const url = typeof done?.url === "string" ? done.url : "";
   const expires = typeof done?.expires_at === "string" ? done.expires_at : "";
+  const named = seat.name || seat.handle;
 
   async function submit() {
     if (email.trim() === "" || done) return;
     const answer = await write.run({
       method: "POST",
       path: "/iam/invitations",
-      body: { email: email.trim(), grants, ...(bind ? { seat: bind } : {}) },
+      body: { email: email.trim(), grants, seat: seat.handle },
     });
     if (answer) onDone();
   }
@@ -368,8 +748,8 @@ export function InviteDialog({
     <Modal
       open
       size="md"
-      title="Invite a person"
-      icon={<UserPlusGlyph />}
+      title={`Invite a person to ${named}`}
+      icon={<SendGlyph />}
       onClose={onClose}
       dismissable={!write.busy}
       closeDisabledReason={waiting.reason}
@@ -393,13 +773,25 @@ export function InviteDialog({
       }
     >
       {done ? (
-        <ShownOnce label="Invitation link" value={url}>
-          This link is the credential: it works once, for {email.trim()}, and expires{" "}
-          {fmtDateTime(expires)}. It is shown only now — send it yourself; this engine sends no
-          mail. Opening it is where they choose a login and a password.
-        </ShownOnce>
+        url ? (
+          <ShownOnce label="Invitation link" value={url}>
+            This link is the credential: it works once, for {email.trim()}, and expires{" "}
+            {fmtDateTime(expires)}. It is shown only now — send it yourself; this engine sends no
+            mail. Opening it is where they choose a login and a password, and redeeming it binds
+            them to {named}.
+          </ShownOnce>
+        ) : (
+          <Text as="p" variant="body">
+            The invitation is recorded, and the answer carried no link to show: cancel it on the
+            seat and invite them again.
+          </Text>
+        )
       ) : (
         <>
+          <SeatFact seat={seat}>
+            redeeming the invitation binds them to it, so they act as that seat, and until then the
+            invitation holds it.
+          </SeatFact>
           <FormField label="Email address">
             {(field) => (
               <Input
@@ -414,41 +806,247 @@ export function InviteDialog({
               />
             )}
           </FormField>
-          <FormField
-            label="Seat"
-            optional
-            helper={
-              // EVERY SEAT HELD IS A FACT, said where the choice is: the
-              // select offered only "No seat" under a helper describing the
-              // seat it would bind. Only on an ANSWER — a list still out, or
-              // one that failed (said below), is no such fact.
-              seats.data?.length === 0 && bind === NO_SEAT
-                ? "Every human seat is held, so the person joins bound to no seat — add a human seat to the org chart first if they should act as one."
-                : "A human seat nobody holds. Redeeming the invitation binds them to it, so they act as that seat."
-            }
-          >
-            {(field) => (
-              <Select
-                id={field.id}
-                ariaLabel="Seat"
-                searchable
-                value={bind}
-                options={options}
-                onChange={(next) => setBind(String(next))}
-              />
-            )}
-          </FormField>
-          {seats.error && (
-            <Text as="p" variant="caption" tone="secondary">
-              The seats nobody holds could not be read: {seats.error.message}
-            </Text>
-          )}
           <GrantPicker value={grants} onChange={setGrants} held={held} />
           <ReachNote grants={grants} />
         </>
       )}
       <IamOutcome answer={write.answer} />
     </Modal>
+  );
+}
+
+/**
+ * Create a person on a vacant human seat, active at once, and hand back the
+ * one-time link that sets their FIRST password.
+ *
+ * THE LOGIN IS THE ENGINE'S TO PROPOSE: left empty, the engine takes one from
+ * the address (the same proposal an invitation's screen makes) and answers the
+ * login it took, which the done screen says. One typed here is held to the
+ * person grammar under the field before anything is posted.
+ *
+ * KEYED, and the key is what makes the link survive a dropped answer: the
+ * engine derives the person and their link from the operation, so the retry
+ * an unknown answer asks for — the same request, under the same key — hands
+ * back the same link rather than a second person. A retry that finds the link
+ * already spent, revoked or lapsed answers no link and says so (`detail`).
+ */
+export function CreatePersonDialog({
+  seat,
+  held,
+  onClose,
+  onDone,
+}: {
+  /** The vacant seat the person is created on. */
+  seat: SeatName;
+  /** The viewer's own grants. */
+  held: readonly string[];
+  onClose: () => void;
+  /** After every answer, so the lists are read again. */
+  onDone: () => void;
+}) {
+  const write = useIamGesture();
+  const waiting = useWaiting();
+  const [email, setEmail] = useState("");
+  const [name, setName] = useState("");
+  const [login, setLogin] = useState("");
+  const [grants, setGrants] = useState<string[]>([]);
+  const [tried, setTried] = useState(false);
+  const typed = login.trim();
+  const loginWrong = loginProblem("person", typed);
+
+  const done = write.answer?.kind === "done" ? write.answer.body : null;
+  const text = (key: string) => (typeof done?.[key] === "string" ? (done[key] as string) : "");
+  const url = text("url");
+  const took = text("login") || typed;
+  const named = seat.name || seat.handle;
+
+  async function submit() {
+    setTried(true);
+    if (email.trim() === "" || loginWrong || done) return;
+    const answer = await write.run({
+      method: "POST",
+      path: "/iam/people",
+      body: {
+        kind: "person",
+        seat: seat.handle,
+        email: email.trim(),
+        ...(typed ? { login: typed } : {}),
+        ...(name.trim() ? { name: name.trim() } : {}),
+        grants,
+      },
+    });
+    if (answer) onDone();
+  }
+
+  return (
+    <Modal
+      open
+      size="md"
+      title={`Create a person on ${named}`}
+      icon={<UserPlusGlyph />}
+      onClose={onClose}
+      dismissable={!write.busy}
+      closeDisabledReason={waiting.reason}
+      stackBody
+      onSubmit={() => void submit()}
+      footer={
+        done ? (
+          <Button variant="primary" onClick={onClose}>
+            Done
+          </Button>
+        ) : (
+          <>
+            <Button variant="ghost" onClick={onClose} disabled={write.busy}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary" disabled={write.busy || email.trim() === ""}>
+              {pressLabel(write, "Create", "Creating", waiting.asked)}
+            </Button>
+          </>
+        )
+      }
+    >
+      {done ? (
+        <>
+          <Text as="p" variant="body">
+            {took ? (
+              <>
+                <InlineCode>{took}</InlineCode> is
+              </>
+            ) : (
+              "They are"
+            )}{" "}
+            on the seat {named}, and signs in with that login or {email.trim()}.
+          </Text>
+          {url ? (
+            <ShownOnce label="Password link" value={url}>
+              This link sets their first password, once, and expires{" "}
+              {fmtDateTime(text("expires_at"))}. It is shown only now — send it to them yourself;
+              this engine sends no mail. It signs nobody in, and until it is used nobody can sign in
+              as them.
+            </ShownOnce>
+          ) : text("detail") ? (
+            // A RETRY THAT FOUND THE LINK CLOSED — spent, revoked or lapsed
+            // since its first answer — in the engine's own words, which name
+            // the way to a new one.
+            <Callout variant="warning" title="No link to show">
+              {sentenceOf(text("detail"))}
+            </Callout>
+          ) : null}
+        </>
+      ) : (
+        <>
+          <SeatFact seat={seat}>
+            they are created on it, active at once, and act as that seat once they have set their
+            password.
+          </SeatFact>
+          <FormField
+            label="Email address"
+            helper="Where they can be reached, and one way to sign in."
+          >
+            {(field) => (
+              <Input
+                id={field.id}
+                aria-describedby={field.describedBy}
+                type="email"
+                autoFocus
+                width="full"
+                spellCheck={false}
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+            )}
+          </FormField>
+          <FormField label="Name" optional>
+            {(field) => (
+              <Input
+                id={field.id}
+                aria-describedby={field.describedBy}
+                width="full"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
+            )}
+          </FormField>
+          <FormField
+            label="Login"
+            optional
+            helper="Lowercase words joined by dots, such as jane.doe. Left empty, the engine proposes one from the address and says which it took."
+            error={tried ? (loginWrong ?? undefined) : undefined}
+          >
+            {(field) => (
+              <Input
+                id={field.id}
+                aria-describedby={field.describedBy}
+                aria-invalid={field.invalid || undefined}
+                width="full"
+                spellCheck={false}
+                value={login}
+                onChange={(e) => setLogin(e.target.value)}
+              />
+            )}
+          </FormField>
+          <GrantPicker value={grants} onChange={setGrants} held={held} />
+          <ReachNote grants={grants} />
+        </>
+      )}
+      <IamOutcome answer={write.answer} />
+    </Modal>
+  );
+}
+
+/** The engine writes a detail in its own lower case; drawn, it is a sentence. */
+function sentenceOf(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed === "") return "";
+  const opened = trimmed[0]!.toUpperCase() + trimmed.slice(1);
+  return /[.!?]$/.test(opened) ? opened : `${opened}.`;
+}
+
+/**
+ * Withdraw an invitation nobody redeemed: its link stops working, and the
+ * address and the seat it holds are free again.
+ */
+export function CancelInvitation({
+  row,
+  seatName,
+  onClose,
+  onChanged,
+}: {
+  row: Pick<SeatInvitation, "id" | "email" | "sealed"> & {
+    /** The seat it names, by handle — absent on one issued before every invitation named one. */
+    seat?: string;
+  };
+  /** The seat's name as the chart says it, where the caller has it. */
+  seatName?: string;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const write = useIamGesture();
+  const frees = row.seat
+    ? `the address and the seat ${seatName || row.seat} are free again`
+    : "the address is free to invite again";
+  return (
+    <ConfirmDialog
+      title="Cancel this invitation?"
+      confirm="Cancel invitation"
+      dismiss="Keep it"
+      danger
+      write={write}
+      onClose={onClose}
+      onConfirm={async () => {
+        const answer = await write.run({
+          method: "DELETE",
+          path: `/iam/invitations/${encodeURIComponent(row.id)}`,
+        });
+        if (!answer) return;
+        onChanged();
+        if (answer.kind === "done" && !answer.pending) onClose();
+      }}
+    >
+      The link sent to {row.sealed || !row.email ? "this address" : <strong>{row.email}</strong>}{" "}
+      stops working at once, as one nobody issued, and {frees}.
+    </ConfirmDialog>
   );
 }
 

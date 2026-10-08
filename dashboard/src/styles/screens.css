@@ -887,11 +887,14 @@ a.oc-key:hover {
    width: pushed down by the free space when the seat says little, and held at
    the bottom of the view while a long goal scrolls under it, so Open profile
    and Message are always where the eye ends. The rail body's side and bottom
-   padding is taken back so the rule spans it. */
+   padding is taken back so the rule spans it. A vacant human seat adds Invite
+   and Create for a people:manage reader, which the canvas-width rail cannot
+   hold on one line, so the foot WRAPS rather than squeezing Open profile. */
 .seat-peek-foot {
   position: sticky;
   bottom: calc(-1 * var(--spacing-6));
   display: flex;
+  flex-wrap: wrap;
   gap: var(--spacing-2);
   margin: auto calc(-1 * var(--spacing-4)) calc(-1 * var(--spacing-6));
   padding: var(--spacing-3) var(--spacing-4);

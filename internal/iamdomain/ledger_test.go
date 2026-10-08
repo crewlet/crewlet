@@ -3,6 +3,7 @@ package iamdomain_test
 import (
 	"errors"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -108,7 +109,7 @@ func TestARetriedMintHandsOutNoGrants(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	machine := uuid.Must(uuid.NewV7()).String()
-	if err := rig.enrol(iamdomain.Enrolment{
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: machine, Kind: iam.KindMachine, Stage: iam.StageActive,
 		Name: "Release pipeline", Login: "ci:release",
 		Grants: []iam.Grant{iam.GrantStateRead}, OpID: operationKey(),
@@ -153,16 +154,17 @@ func TestARetriedMintHandsOutNoGrants(t *testing.T) {
 func TestARedemptionRetriedAfterItLandedIsALinkAlreadyUsed(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
-	issued, err := inviteFor(t, rig, "joiner@example.com", "")
+	seat := rig.vacantSeat("platform-lead")
+	issued, err := inviteFor(t, rig, "joiner@example.com", seat)
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
-	if _, err := redeemAs(t, rig, issued, "joiner@example.com", issued.Secret, ""); err != nil {
+	if _, err := redeemAs(t, rig, issued, "joiner@example.com", issued.Secret, seat); err != nil {
 		t.Fatalf("the redemption: %v", err)
 	}
 	rig.drain()
 	if _, err := redeemAs(t, rig, issued, "joiner@example.com", issued.Secret,
-		""); !errors.Is(err, iamdomain.ErrRefused) {
+		seat); !errors.Is(err, iamdomain.ErrRefused) {
 		t.Errorf("the redemption retried after it landed answered %v, want %v",
 			err, iamdomain.ErrRefused)
 	}
@@ -228,8 +230,10 @@ func TestAWriteAboutARemovedPersonIsRefusedBeforeItIsPublished(t *testing.T) {
 func TestARetriedIssueOfACollectedInvitationIsAKeyAlreadyUsed(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
+	seat := rig.vacantSeat("platform-lead")
 	mint := iamdomain.InviteMint{
 		Email: "lapsed@example.com", Grants: []iam.Grant{iam.GrantStateRead},
+		Seat: seat,
 		// LAPSED LONG BEFORE THE SWEEP BELOW RUNS, which is what makes the
 		// row one it collects.
 		ExpiresAt: brokerAt.Add(168 * time.Hour),
@@ -268,6 +272,12 @@ func TestARetriedIssueOfACollectedInvitationIsAKeyAlreadyUsed(t *testing.T) {
 			"want %v — a retry of the same key can never find the row again",
 			again.Result, err, iamdomain.ErrOperationReused)
 	}
+	// AND THE SEAT IS FREE, at a clock the collected invitation would still
+	// have been open at: the hold is read from the row, and it is gone.
+	if _, err := inviteFor(t, rig, "next@example.com", seat); err != nil {
+		t.Errorf("an invitation onto the seat a collected invitation named "+
+			"was refused: %v", err)
+	}
 }
 
 // EVERY OPERATION A GESTURE DERIVES CARRIES ITS MINT INSTANT.
@@ -290,9 +300,10 @@ func TestEveryOperationAGestureDerivesCarriesItsMintInstant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("derive: %v", err)
 	}
-	if err := rig.enrol(iamdomain.Enrolment{
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: "Sarah Chen", Email: "sarah.chen@example.com", Login: "sarah.chen",
+		Seat: rig.vacantSeat("sarah-chen"), LinkExpiresAt: firstLinkExpiry,
 		OpID: key, Reason: "the joiner",
 	}); err != nil {
 		t.Fatalf("enrol: %v", err)
@@ -348,14 +359,16 @@ func TestEveryOperationAGestureDerivesCarriesItsMintInstant(t *testing.T) {
 	}
 }
 
-// enrolSomebody enrols one person holding login and answers their id.
+// enrolSomebody enrols one person holding login, on a seat of their own, and
+// answers their id.
 func enrolSomebody(t *testing.T, rig *writeRig, login string) string {
 	t.Helper()
 	person := uuid.Must(uuid.NewV7()).String()
-	if err := rig.enrol(iamdomain.Enrolment{
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: "Some Body", Email: login + "@example.com", Login: login,
-		OpID: operationKey(), Reason: "a hire",
+		Seat:          rig.vacantSeat(strings.ReplaceAll(login, ".", "-")),
+		LinkExpiresAt: firstLinkExpiry, OpID: operationKey(), Reason: "a hire",
 	}); err != nil {
 		t.Fatalf("enrol %s: %v", login, err)
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // peopleInBuckets mints n people who fall in n different identity buckets, so a
@@ -28,15 +29,23 @@ func peopleInBuckets(n int) []string {
 	return out
 }
 
-// enrolMachine enrols one active service account through the node's own
+// enrolMachine creates one active service account through the node's own
 // writer, so a row under its login exists for a retained record to cover.
+//
+// A SERVICE ACCOUNT, BOUND TO NO SEAT: its seat is optional (ADR-0026), so the
+// row needs no company declaring a human seat — and the id is the caller's,
+// because which bucket each principal falls in is what the cases are about.
+// The operation id is MINTED, carrying its instant, for the reason
+// [statelog.NewOpID] gives: one with none is read as older than every loss the
+// ledger has had and answered `unknown` unpublished once a sweep has run.
 func enrolMachine(t *testing.T, e *Engine, id, login string) {
 	t.Helper()
-	if _, err := e.core.Load().iamWriter.Enrol(t.Context(), iamdomain.Enrolment{
+	if _, err := e.core.Load().iamWriter.Create(t.Context(), iamdomain.Creation{
 		PersonID: id, Kind: iam.KindMachine, Stage: iam.StageActive,
-		Login: login, OpID: "enrol-" + login, Reason: "a pipeline",
+		Login: login, OpID: statelog.NewOpID(time.Now(), "create"),
+		Reason: "a pipeline",
 	}); err != nil {
-		t.Fatalf("enrol %s: %v", login, err)
+		t.Fatalf("create %s: %v", login, err)
 	}
 }
 
@@ -149,7 +158,8 @@ func TestAMachineTokenIsVouchedForOnlyWhereNothingRetainedCoversItsOwner(t *test
 			PersonID: id, ID: tokens[i],
 			Verifier:  credential.TokenVerifier(tokens[i], secret),
 			ExpiresAt: time.Now().Add(credential.DefaultTokenLifetime),
-			OpID:      "mint-" + login, Reason: "a pipeline's token",
+			OpID:      statelog.NewOpID(time.Now(), "mint"),
+			Reason:    "a pipeline's token",
 		}); err != nil {
 			t.Fatalf("mint %s's token: %v", login, err)
 		}

@@ -30,12 +30,13 @@ const (
 // The answers [Health.Identity] gives.
 //
 // `ready` once a person is enrolled, `unclaimed` while nobody is — a fresh
-// install, waiting for its first person to be invited; a service account
-// alone signs nobody in with a password, so it does not end the wait — and
-// `unknown` where
-// this node could not read its identity estate, which is never folded into
-// `unclaimed`: a dashboard told nobody is in would give an empty company's
-// guidance to one that may have started.
+// install, waiting for its first person to be invited or created onto a human
+// seat its company declares; a service account alone signs nobody in with a
+// password, so it does not end the wait — and `unknown` where this node could
+// not read its identity estate, which is never folded into `unclaimed`: a
+// dashboard told nobody is in would give an empty company's guidance to one
+// that may have started. A created person ends the wait as their create
+// lands, before they have spent their first password link.
 const (
 	IdentityReady     = "ready"
 	IdentityUnclaimed = "unclaimed"

@@ -45,7 +45,11 @@ func (e errNotResettable) Error() string {
 // [credential.ResetLinkLifetime] away — so it is listed among the person's
 // credentials, revoked by `DELETE /iam/credentials/{id}`, and collected by the
 // sweep once it is spent, revoked or aged out. Issuing one revokes the person's
-// earlier outstanding link in the same record: a person holds at most one.
+// earlier outstanding link in the same record: a person holds at most one. A
+// created person's FIRST password link ([Service.PostPeople]) is such a link,
+// so this is also the remedy for one that lapsed unspent — `GET /iam/check`
+// reports that person as holding no way in — and issuing it revokes one still
+// outstanding.
 //
 // # Shown once, like a token's value
 //
@@ -192,7 +196,9 @@ const resetUnknown = "no link was issued: this node cannot establish whether " +
 
 // resetURL is the link a person follows, built as an invitation's is
 // ([Service.inviteURL]): the dashboard's reset screen, with `<id>.<secret>` in
-// the fragment a browser never sends.
+// the fragment a browser never sends. A reset link and a created person's first
+// password link are one kind of credential spent on one screen, so both are
+// built here.
 func (s *Service) resetURL(id, secret string) string {
 	return strings.TrimRight(s.external, "/") + auth.PathDashboard +
 		resetRoute + id + "." + secret

@@ -3,8 +3,10 @@ package authapi_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -12,22 +14,11 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/authapi"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 )
-
-// seatedInvitation is [sealedInvitation] binding a seat by its handle, which
-// the view names as the running company calls it.
-type seatedInvitation struct{ sealedInvitation }
-
-func (seatedInvitation) InvitationByID(ctx context.Context, id string) (
-	iamdomain.InvitationRow, error) {
-
-	row, err := sealedInvitation{}.InvitationByID(ctx, id)
-	row.Seat = "eng-lead"
-	return row, err
-}
 
 // companySeats is the running company's seats, as the view asks it.
 type companySeats map[string]session.Seat
@@ -125,7 +116,7 @@ func TestAGetOnAnInviteRendersAndNeverSpends(t *testing.T) {
 	writer := &recordingWriter{}
 	mux := http.NewServeMux()
 	buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
-		o.Directory = seatedInvitation{}
+		o.Directory = sealedInvitation{}
 		o.Seats = engLead
 		o.Sealer = stubSealer{address: "dana@example.com"}
 		o.Writer = writer
@@ -291,7 +282,7 @@ func TestARedemptionWhoseSeatWasTakenSaysSo(t *testing.T) {
 	const holder = "018f3a9c-0000-7000-8000-0000000000a2"
 	mux := http.NewServeMux()
 	buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
-		o.Directory = seatedInvitation{}
+		o.Directory = sealedInvitation{}
 		o.Sealer = stubSealer{address: "dana@example.com"}
 		o.Writer = refusingWriter{err: &iamdomain.ErrTaken{
 			Field: iamdomain.UniqueSeat, Value: "eng-lead", Person: holder}}
@@ -369,4 +360,144 @@ func (a authoredInvitation) InvitationByID(ctx context.Context, id string) (
 		row.InvitedBy = a.author
 	}
 	return row, err
+}
+
+// unreadableSeats is a chart this node cannot read: every lookup fails.
+type unreadableSeats struct{}
+
+func (unreadableSeats) Seat(context.Context, string) (session.Seat, bool, error) {
+	return session.Seat{}, false, errors.New("this node is applying a revision")
+}
+
+// EVERY INVITATION'S VIEW NAMES ITS SEAT, AS THE CHART HOLDS IT NOW.
+//
+// A person holds a human seat for as long as they exist (ADR-0026), so every
+// invitation holds one and the seat is part of what its holder agrees to: the
+// view carries it on EVERY answer, never only where the chart still names it.
+// A seat the chart has retired since the issue — removed, or made an agent's —
+// is `seat: {}`, present with no handle, which is how the screen says the
+// redemption will be refused before anybody types a password. A chart this
+// node cannot read shows the stored handle alone: the page is a courtesy, and
+// the redemption asks again. The CONTROL is the seat as the chart names it.
+//
+// Mutation: answer nil for a seat the chart no longer holds and the key is
+// absent; drop the kind check and an agent's seat is offered to a person.
+func TestEveryInvitationViewNamesItsSeat(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		seats session.Chart
+		want  map[string]any
+	}{
+		{"a human seat the chart holds (the control)", engLead,
+			map[string]any{"handle": "eng-lead", "name": "Engineering lead"}},
+		{"a seat the chart made an agent's", companySeats{"eng-lead": {
+			Handle: "eng-lead", Kind: "agent", Name: "Engineering lead"}},
+			map[string]any{}},
+		{"a seat the chart no longer holds", companySeats{}, map[string]any{}},
+		{"a chart this node cannot read", unreadableSeats{},
+			map[string]any{"handle": "eng-lead"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			mux := http.NewServeMux()
+			buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
+				o.Directory = sealedInvitation{}
+				o.Seats = tc.seats
+				o.Sealer = stubSealer{address: "dana@example.com"}
+			}).Routes(mux)
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, viewInvite(invitationID))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("the view answered %d: %s", rec.Code, rec.Body)
+			}
+			var view map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+				t.Fatal(err)
+			}
+			seat, present := view["seat"]
+			if !present {
+				t.Fatalf("the view carries no seat: %s", rec.Body)
+			}
+			if got, _ := seat.(map[string]any); !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("the view shows seat %v, want %v", seat, tc.want)
+			}
+		})
+	}
+}
+
+// seatlessInvitation is [sealedInvitation] issued before every invitation held
+// a seat: it names none.
+type seatlessInvitation struct{ sealedInvitation }
+
+func (seatlessInvitation) InvitationByID(ctx context.Context, id string) (
+	iamdomain.InvitationRow, error) {
+
+	row, err := sealedInvitation{}.InvitationByID(ctx, id)
+	row.Seat = ""
+	return row, err
+}
+
+// AN INVITATION NAMING NO SEAT IS A DEAD LINK, on the view and the redemption.
+//
+// One issued before every invitation held a seat creates nobody — a person
+// holds a human seat for as long as they exist, and the redemption's own
+// record refuses a link naming none — so it is answered the one 410 every dead
+// link gets, and on the VIEW, before anybody chooses a password at a form
+// whose every submission would be refused. NEVER a 400 asking for a seat: the
+// invitee left nothing out and the form has no field to put one in; what they
+// need is a new link. It is the link's holder presenting the link's own
+// secret, so it is not a failed attempt. The CONTROL is the same link onto a
+// seat, which opens.
+//
+// Mutation: read such a link as open and the view renders, and the redemption
+// reaches the record.
+func TestAnInvitationNamingNoSeatIsADeadLink(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name      string
+		directory authapi.Directory
+		status    int
+	}{
+		{"a link onto a seat (the control)", sealedInvitation{}, http.StatusOK},
+		{"a link naming no seat", seatlessInvitation{}, http.StatusGone},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			audit := &recordingAudit{}
+			writer := &recordingWriter{}
+			mux := http.NewServeMux()
+			buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
+				o.Directory, o.Writer, o.Audit = tc.directory, writer, audit
+				o.Seats = engLead
+				o.Sealer = stubSealer{address: "dana@example.com"}
+			}).Routes(mux)
+
+			viewed := httptest.NewRecorder()
+			mux.ServeHTTP(viewed, viewInvite(invitationID))
+			redeemed := postJSON(t, mux, "/auth/invite/"+invitationID,
+				map[string]string{"secret": invitationSecret, "login": "dana.sre",
+					"name": "Dana", "password": "a-perfectly-fine-passphrase"})
+			for route, rec := range map[string]*httptest.ResponseRecorder{
+				"the view": viewed, "the redemption": redeemed} {
+				if rec.Code != tc.status {
+					t.Errorf("%s answered %d, want %d: %s", route, rec.Code,
+						tc.status, rec.Body)
+				}
+				if tc.status == http.StatusGone &&
+					codeOf(t, rec) != string(httpjson.CodeInviteSpent) {
+					t.Errorf("%s answered %s, want the one refusal every dead "+
+						"link gets", route, rec.Body)
+				}
+			}
+			if tc.status == http.StatusGone && len(writer.enrolled) != 0 {
+				t.Errorf("a link naming no seat reached the record: %+v",
+					writer.enrolled)
+			}
+			if _, failures := audit.snapshot(); len(failures) != 0 {
+				t.Errorf("the link's own holder was counted as a guesser: %v",
+					failures)
+			}
+		})
+	}
 }

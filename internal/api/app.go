@@ -138,15 +138,24 @@ type EstateFloor func(ctx context.Context) (ok bool, refusal string)
 //
 // # Why /health carries it
 //
-// A fresh install has nobody in it, and the way the first person gets in is an
-// invitation issued under a Tier A token (`crewlet iam invite`). An operator
-// who has just started a node, and a dashboard whose sign-in form nobody can
-// use yet, both need to know that this is the state they are in rather than a
-// sign-in that is failing — and /health is the one surface an install with
-// nobody in it can reach: it is a probe, exempt from the guard, and before the
-// first person there is no credential but the deployment's own to present
-// anywhere else. It is one EXISTS over the node's own rows, and one read of
-// the identity log's end beside it, neither of which a probe notices.
+// A fresh install has nobody in it, and the way the first person gets in is
+// onto a human seat the company declares — every person holds one for as long
+// as they exist (ADR-0026): an invitation into it, or a person an
+// administrator creates on it, either issued under a Tier A token
+// (`crewlet iam invite -seat`, `crewlet iam create -seat`, or the seat's
+// Invite and Create in the org chart). An operator who has just started a
+// node, and a dashboard whose sign-in form nobody can use yet, both need to
+// know that this is the state they are in rather than a sign-in that is
+// failing — and /health is the one surface an install with nobody in it can
+// reach: it is a probe, exempt from the guard, and before the first person
+// there is no credential but the deployment's own to present anywhere else. It
+// is one EXISTS over the node's own rows, and one read of the identity log's
+// end beside it, neither of which a probe notices.
+//
+// SOMEBODY EXISTS, NOT SOMEBODY CAN SIGN IN: a person an administrator created
+// is a row the moment the create lands, before they have spent the first
+// password link it handed back, so `identity: ready` there says the company
+// has its first person, who may not have chosen a password yet.
 //
 // A CONTEXT and a live read, for [EstateFloor]'s reason: the answer changes
 // the moment the first person lands, and a cached one would go on telling an
@@ -239,7 +248,9 @@ type Options struct {
 	// tokens are then the whole of authentication. `crewlet run` always
 	// wires it, beside [Options.Auth], on every node — the identity estate
 	// is the engine's core and runs from boot, so a node with no company
-	// signs its first person in like any other.
+	// serves the session a Tier A token exchanges for, which is how its
+	// company is created, and signs its people in once that company has
+	// any.
 	Sessions *auth.Sessions
 
 	// Tokens turns a machine token — a person's own access token or a

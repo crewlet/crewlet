@@ -4,25 +4,41 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
-
-	"github.com/google/uuid"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// identityEngine is a node running the identity domain, with the company's
-// secret store it mints into.
+// peopleDoc is [companyDoc] with a human seat for each person these cases
+// create, beside the founder's: every person holds a human seat for as long as
+// they are here (ADR-0026), so a create names one nobody holds — and each
+// person gets their own, so a case expecting the blind-key refusal is not
+// answered by the seat instead.
+const peopleDoc = companyDoc + `
+  - name: Ada Lovelace
+    handle: ada-lovelace
+    kind: human
+  - name: Grace Hopper
+    handle: grace-hopper
+    kind: human
+`
+
+// identityEngine is a node running the identity domain on a company declaring
+// a human seat per person, with the company's secret store it mints into.
 func identityEngine(t *testing.T) (*engine.Engine, *fleetsecrets.Estate) {
 	t.Helper()
 	boot := bootstrap(t, func(b *config.Bootstrap) {
 		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	})
-	e := newEngine(t, engine.Options{Bootstrap: boot})
+	e := newEngine(t, engine.Options{Bootstrap: boot,
+		Company: parsedCompany(t, peopleDoc)})
 	cipher, err := boot.Secrets.Cipher()
 	if err != nil {
 		t.Fatalf("keyring: %v", err)
@@ -33,15 +49,27 @@ func identityEngine(t *testing.T) (*engine.Engine, *fleetsecrets.Estate) {
 	return e, fleetsecrets.New(e.Backends().Fleet, cipher).Estate()
 }
 
-// enrolAddress enrols one person with an address through the node's own
-// writer, which is what an invitation redemption does.
-func enrolAddress(t *testing.T, e *engine.Engine, login, email string) (string, error) {
+// enrolAddress creates one person with an address on a human seat through the
+// node's own writer, which holds `people:manage` — the record an
+// administrator's create publishes, and the one that blinds the address.
+//
+// THE PERSON IS THE OPERATION'S, derived from its key as the create surface
+// derives it ([iamdomain.CreatedPersonID]), and the key is MINTED, carrying its
+// instant, for the reason [statelog.NewOpID] gives: one with none is read as
+// older than every loss the ledger has had and answered `unknown` unpublished
+// once a sweep has run.
+func enrolAddress(t *testing.T, e *engine.Engine, login, email, seat string) (string, error) {
 	t.Helper()
-	id := uuid.New().String()
-	_, err := e.IAMWriter().Enrol(t.Context(), iamdomain.Enrolment{
+	key := statelog.NewOpID(time.Now(), "")
+	id, err := iamdomain.CreatedPersonID(key)
+	if err != nil {
+		t.Fatalf("derive the created person: %v", err)
+	}
+	_, err = e.IAMWriter().Create(t.Context(), iamdomain.Creation{
 		PersonID: id, Kind: iam.KindPerson, Stage: iam.StageActive,
-		Name: login, Email: email, Login: login,
-		OpID: "enrol-" + login, Reason: "the first person",
+		Name: login, Email: email, Login: login, Seat: seat,
+		LinkExpiresAt: time.Now().Add(credential.EnrolmentLinkLifetime),
+		OpID:          key, Reason: "the first person",
 	})
 	return id, err
 }
@@ -54,7 +82,7 @@ func enrolAddress(t *testing.T, e *engine.Engine, login, email string) (string, 
 // every enrolment with an address, every invitation and every sign-in by
 // address was refused for a key that did not exist, while the estate's own
 // suite passed on a writer handed a key by the test. This boots a real node
-// and enrols through its own writer.
+// and creates somebody through its own writer.
 func TestTheFirstAddressAnEngineBlindsMintsTheCompanysKey(t *testing.T) {
 	t.Parallel()
 	e, store := identityEngine(t)
@@ -66,7 +94,7 @@ func TestTheFirstAddressAnEngineBlindsMintsTheCompanysKey(t *testing.T) {
 		t.Fatalf("a fresh company already holds %s (%v)", iamdomain.BlindKeyName, err)
 	}
 
-	id, err := enrolAddress(t, e, "ada.lovelace", "ada@example.com")
+	id, err := enrolAddress(t, e, "ada.lovelace", "ada@example.com", "ada-lovelace")
 	if err != nil {
 		t.Fatalf("enrol somebody with an address on a fresh company: %v", err)
 	}
@@ -115,7 +143,8 @@ func TestTheFirstAddressAnEngineBlindsMintsTheCompanysKey(t *testing.T) {
 func TestAMissingBlindKeyIsNeverMintedOverAnEstateThatUsedOne(t *testing.T) {
 	t.Parallel()
 	e, store := identityEngine(t)
-	if _, err := enrolAddress(t, e, "ada.lovelace", "ada@example.com"); err != nil {
+	if _, err := enrolAddress(t, e, "ada.lovelace", "ada@example.com",
+		"ada-lovelace"); err != nil {
 		t.Fatalf("enrol: %v", err)
 	}
 	// DELETED UNDER THE ENGINE, in the coordination store itself: no
@@ -137,7 +166,8 @@ func TestAMissingBlindKeyIsNeverMintedOverAnEstateThatUsedOne(t *testing.T) {
 		t.Fatalf("a key was minted over the deleted one (%v), so every stored "+
 			"address is now unmatchable and claimable again", err)
 	}
-	if _, err := enrolAddress(t, e, "grace.hopper", "grace@example.com"); !errors.Is(err,
+	if _, err := enrolAddress(t, e, "grace.hopper", "grace@example.com",
+		"grace-hopper"); !errors.Is(err,
 		iamdomain.ErrNoBlindKey) {
 		t.Errorf("an enrolment with an address answered %v, want the refusal "+
 			"naming the key", err)

@@ -111,7 +111,9 @@ func TestTheEnginesConfigWriterRecordsTheActorItIsHanded(t *testing.T) {
 	}
 	surface, err := configapi.New(configapi.Options{
 		Store: db, Plane: fleet, Cipher: fixtureCipher,
-		Holders: func(context.Context, []string) (map[string]configapi.SeatHolder, error) {
+		Holders: func(context.Context, []string, time.Time) (
+			map[string]configapi.SeatHolder, error) {
+
 			return nil, nil
 		},
 	})

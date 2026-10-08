@@ -1,7 +1,10 @@
 /**
  * What every Agents section carries in the page bar: a way to find a seat, the
- * way into the builder, and the one write the org chart invites — adding a
- * seat — plus the section tabs' figures.
+ * way into the builder, and the one write the bar offers — adding a seat —
+ * plus the section tabs' figures. The chart's other writes are a seat's own
+ * and live on it: a vacant human seat's card, peek and page offer Invite and
+ * Create to a reader holding `people:manage` (`components/people.tsx`), since
+ * a person comes from the seat they will hold.
  *
  * # One header for every section
  *
@@ -125,8 +128,8 @@ export function AgentsHeader({
     lead ? { unit: lead.key, add: "agent" } : { add: "agent" },
   );
   // ON A PHONE, Edit org FOLDS INTO "More": the bar keeps the finder and the
-  // one action the chart invites in view, where the three side by side put
-  // Add seat past the window's edge.
+  // one action the bar offers in view, where the three side by side put Add
+  // seat past the window's edge.
   usePageMenu([
     {
       key: "edit-org",

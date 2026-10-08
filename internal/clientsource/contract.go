@@ -132,6 +132,8 @@ var contract = []Entry{
 	// config.ts
 	{"ENTITY_KINDS", ReadLiteral, "internal/api/configapi.TestEntityKindsMatchTheClient"},
 	{"BUDGET_WINDOWS", ReadLiteral, "internal/config.TestTheBudgetEditorOffersExactlyTheEnginesWindows"},
+	{"SeatHeldHolder", ReadInterface,
+		"internal/api/configapi.TestTheDashboardReadsWhatASeatHeldRefusalSends"},
 
 	// errors.ts
 	{"QueryErrorCode", ReadUnion,
@@ -205,6 +207,15 @@ var contract = []Entry{
 		"internal/api/iamapi.TestTheDashboardMintsWithinTheEnginesTokenLifetimes"},
 	{"TOKEN_MAX_DAYS", ReadScalar,
 		"internal/api/iamapi.TestTheDashboardMintsWithinTheEnginesTokenLifetimes"},
+	{"FINDING_KINDS", ReadLiteral,
+		"internal/api/iamapi.TestTheDashboardWordsEveryFindingKindInTheEnginesOrder"},
+	{"HumanSeatsAnswer", ReadInterface,
+		"internal/api/iamapi.TestTheSeatSurfacesReadWhatTheSeatListingSends"},
+	{"HumanSeat", ReadInterface, "internal/api/iamapi.TestTheSeatSurfacesReadWhatTheSeatListingSends"},
+	{"SeatHolder", ReadInterface, "internal/api/iamapi.TestTheSeatSurfacesReadWhatTheSeatListingSends"},
+	{"SeatInvitation", ReadInterface,
+		"internal/api/iamapi.TestTheSeatSurfacesReadWhatTheSeatListingSends"},
+	{"ResetView", ReadInterface, "internal/api/authapi.TestTheResetScreenReadsWhatTheResetViewSends"},
 
 	// health.ts
 	{"EngineHealth", ReadInterface, "internal/api.TestTheDashboardDeclaresExactlyTheHealthTheEngineReports"},

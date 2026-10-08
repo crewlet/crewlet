@@ -192,6 +192,35 @@ describe("what the screen shows before anything is spent", () => {
     expect(screen.getByText(/Joining signs that session out/)).toBeDefined();
   });
 
+  // EVERY INVITATION NAMES A SEAT, and a redemption is refused when the chart
+  // no longer holds it as a human seat — which the view says with a seat that
+  // has no handle. Said before the form: a warning after a password is typed
+  // is a wasted form. A view with no seat at all is not one the engine sends
+  // (a link naming none is the dead link's 410), and it is warned the same
+  // rather than offered as a seat. The CONTROL is the view above, which names
+  // a seat and draws no warning. Mutation: draw the warning only for a seat
+  // with no handle, and a view carrying none promises nothing and warns
+  // nothing.
+  test.each([
+    ["names a seat the chart no longer holds", { seat: {} }],
+    ["names no seat at all", { seat: undefined }],
+  ])("a link that %s warns before any password that redeeming is refused", async (_, seat) => {
+    engine({ [`GET ${PATH}`]: { status: 200, body: { ...(VIEW.body as object), ...seat } } });
+    mount();
+    const login = await screen.findByLabelText("Login");
+    const warning = screen.getByText(/so redeeming it will be refused/);
+    expect(warning.compareDocumentPosition(login) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByText(/You will hold the seat/)).toBeNull();
+  });
+
+  test("a link naming a seat says the person will hold it, and warns nothing", async () => {
+    engine({ [`GET ${PATH}`]: VIEW });
+    mount();
+    await screen.findByLabelText("Login");
+    expect(screen.getByText(/You will hold the seat/)).toBeDefined();
+    expect(screen.queryByText(/so redeeming it will be refused/)).toBeNull();
+  });
+
   test("a browser signed in as nobody is told nothing about a session", async () => {
     engine({ [`GET ${PATH}`]: VIEW });
     mount();

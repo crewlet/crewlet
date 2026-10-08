@@ -1,7 +1,9 @@
 /**
  * The live org chart as a reader meets it: a card per seat off the applied
- * projection, a unit box with its project, the legend's counts, and a card
- * that opens the seat beside the chart.
+ * projection, a unit box with its project, the legend's counts, a card that
+ * opens the seat beside the chart — and, for a reader the identity directory
+ * answers, what holds each human seat, with the gestures that fill one for a
+ * reader holding `people:manage`.
  */
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
@@ -89,7 +91,59 @@ afterEach(() => {
   cleanup();
   restore();
   location.hash = "";
+  vi.unstubAllGlobals();
 });
+
+/** What `GET /iam/seats` says of jane's seat: vacant unless a case says otherwise. */
+let jane: Record<string, unknown> = {};
+/** Every path the chart sent to the engine's REST surface. */
+let fetched: string[] = [];
+/** What `GET /iam/seats` answers instead of the listing: a refusal. */
+let seatsRefused: Response | null = null;
+
+beforeEach(() => {
+  jane = {};
+  fetched = [];
+  seatsRefused = null;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const path = new URL(String(input), "http://engine.test").pathname;
+      fetched.push(path);
+      if (path === "/iam/seats" && seatsRefused) return seatsRefused.clone();
+      return new Response(
+        JSON.stringify(
+          path === "/iam/seats"
+            ? { seats: [{ handle: "jane", name: "Jane Founder", ...jane }] }
+            : { error: "no_route" },
+        ),
+        {
+          status: path === "/iam/seats" ? 200 : 404,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    }),
+  );
+});
+
+/** Every grant an operator holds. */
+const OPERATOR = {
+  login: "ops",
+  grants: [
+    "config:read",
+    "config:write",
+    "secrets:write",
+    "fleet:operate",
+    "people:manage",
+    "audit:read",
+    "state:read",
+    "work:write",
+    "knowledge:write",
+  ],
+  handle: "jane",
+  owner: "jane",
+  acts: [],
+};
 
 async function mount(viewer: Record<string, unknown> = { login: "", owner: "", acts: [] }) {
   const store = new Store();
@@ -131,6 +185,16 @@ async function mount(viewer: Record<string, unknown> = { login: "", owner: "", a
   return { asked };
 }
 
+/**
+ * Every control the chart draws beside a card, by its accessible name — the
+ * label an icon-only control carries.
+ */
+function controls(name: string): (string | null)[] {
+  return [...chartCard(card(name)).querySelectorAll("button")].map(
+    (b) => b.getAttribute("aria-label") ?? b.textContent,
+  );
+}
+
 function card(name: string): HTMLElement {
   // BY ROLE ATTRIBUTE rather than the accessibility tree: the canvas holds
   // its world out of it until a layout has been measured, which jsdom never
@@ -153,6 +217,153 @@ test("every seat of the applied chart is a card with its place and state line", 
   expect(within(card("PM")).getByText("Stopped · budget")).toBeTruthy();
   expect(within(card("Jane Founder")).getByText("Human · reviews releases")).toBeTruthy();
   expect(card("SWE").getAttribute("data-state")).toBe("working");
+});
+
+// A HUMAN CARD SAYS WHAT HOLDS ITS SEAT, for a reader the directory answers,
+// in the card's neutral ink — who holds a seat is not something it is doing.
+// The CONTROL is the grantless reader above, who is asked nothing and reads
+// "Human · availability". Mutation: drop the holding from `cardLine` and the
+// three lines read the availability.
+test.each([
+  [
+    "held",
+    { holder: { person: "p-jane", kind: "person", login: "jane.doe", stage: "active" } },
+    "Held by jane.doe",
+  ],
+  [
+    "invited",
+    { invitation: { id: "inv-3", email: "jane@example.com", expires_at: "2031-05-08T09:00:00Z" } },
+    "Invited · jane@example.com",
+  ],
+  ["vacant", {}, "Vacant"],
+])("a %s human seat's card says what holds it", async (_, holding, line) => {
+  jane = holding;
+  await mount({ ...OPERATOR, grants: ["state:read", "audit:read"] });
+  await act(async () => {});
+  const founder = card("Jane Founder");
+  expect(within(founder).getByText(line)).toBeTruthy();
+  // NO STATE HUE: a human card carries no engine state for its line to paint.
+  expect(founder.hasAttribute("data-state")).toBe(false);
+});
+
+test("a reader the directory does not answer is never asked it", async () => {
+  await mount({ ...OPERATOR, grants: ["state:read", "work:write"] });
+  expect(fetched).not.toContain("/iam/seats");
+  expect(within(card("Jane Founder")).getByText("Human · reviews releases")).toBeTruthy();
+});
+
+// A DIRECTORY READ THAT FAILED IS SAID over the chart: drawn as nothing, an
+// administrator saw the chart a reader holding neither grant sees — "Human ·
+// availability" and no menu — with no word why. The CONTROL is the same
+// administrator with the listing answered, who is shown no such banner.
+// Mutation: drop the banner and the sentence is gone.
+test("a directory that did not answer an administrator is said over the chart", async () => {
+  seatsRefused = new Response(
+    JSON.stringify({ error: "unavailable", message: "This node cannot answer yet." }),
+    { status: 503, headers: { "Content-Type": "application/json", "Retry-After": "2" } },
+  );
+  await mount(OPERATOR);
+  await act(async () => {});
+  expect(screen.getByText("The identity directory did not answer")).toBeTruthy();
+  expect(screen.getByText(/no vacant seat offers Invite or Create/)).toBeTruthy();
+  expect(screen.getByText(/This node cannot answer yet/)).toBeTruthy();
+  expect(within(card("Jane Founder")).getByText("Human · reviews releases")).toBeTruthy();
+  expect(controls("Jane Founder")).toEqual([]);
+  cleanup();
+
+  seatsRefused = null;
+  await mount(OPERATOR);
+  await act(async () => {});
+  expect(within(card("Jane Founder")).getByText("Vacant")).toBeTruthy();
+  expect(screen.queryByText("The identity directory did not answer")).toBeNull();
+});
+
+// THE CARD'S MENU FILLS A VACANT SEAT, for `people:manage` alone, through the
+// tree's own pattern: a pointer strip beside the card and the same items
+// under the ContextMenu key on the card itself, since a tree's items hold
+// nothing focusable. The CONTROLS: an auditor reads "Vacant" with no menu,
+// and an agent's card has none. Mutation: give every human card the menu, or
+// drop the grant check, and a line here goes red.
+test("a vacant human card offers Invite and Create in its menu to an administrator alone", async () => {
+  await mount(OPERATOR);
+  await act(async () => {});
+  // THE POINTER'S STRIP, out of the tab order, says which seat each control
+  // is about; an agent's card draws none.
+  expect(controls("Jane Founder")).toEqual([
+    "Invite a person to Jane Founder",
+    "Create a person on Jane Founder",
+    "Actions for Jane Founder",
+  ]);
+  expect(controls("SWE")).toEqual([]);
+  // AN AGENT'S CARD HAS NO SUCH MENU.
+  const swe = card("SWE");
+  swe.focus();
+  fireEvent.keyDown(swe, { key: "ContextMenu" });
+  expect(screen.queryByRole("menu", { name: "Actions for SWE" })).toBeNull();
+  const founder = card("Jane Founder");
+  founder.focus();
+  fireEvent.keyDown(founder, { key: "ContextMenu" });
+  const menu = screen.getByRole("menu", { name: "Actions for Jane Founder" });
+  expect(
+    within(menu)
+      .getAllByRole("menuitem")
+      .map((i) => i.textContent),
+  ).toEqual(["Invite to this seat…", "Create a person on this seat…"]);
+  fireEvent.click(within(menu).getByRole("menuitem", { name: "Create a person on this seat…" }));
+  expect(screen.getByRole("dialog", { name: "Create a person on Jane Founder" })).toBeTruthy();
+  cleanup();
+
+  await mount({ ...OPERATOR, grants: ["state:read", "audit:read"] });
+  await act(async () => {});
+  const read = card("Jane Founder");
+  expect(within(read).getByText("Vacant")).toBeTruthy();
+  read.focus();
+  fireEvent.keyDown(read, { key: "ContextMenu" });
+  expect(screen.queryByRole("menu")).toBeNull();
+  expect(controls("Jane Founder")).toEqual([]);
+});
+
+// A POINTER PRESS ON THE STRIP opens the same dialog the menu does, for the
+// card's own seat — and never opens the seat's peek, which a press on the
+// card itself does.
+test("the strip's Invite opens the invitation for that card's seat", async () => {
+  await mount(OPERATOR);
+  await act(async () => {});
+  const invite = [...chartCard(card("Jane Founder")).querySelectorAll("button")].find(
+    (b) => b.getAttribute("aria-label") === "Invite a person to Jane Founder",
+  )!;
+  fireEvent.click(invite);
+  expect(screen.getByRole("dialog", { name: "Invite a person to Jane Founder" })).toBeTruthy();
+  expect(location.hash).not.toContain("peek=");
+});
+
+// AN INVITED SEAT'S MENU CANCELS ITS INVITATION, and a held one has none.
+test("an invited human card's menu cancels its invitation, and a held one has no menu", async () => {
+  jane = {
+    invitation: { id: "inv-3", email: "jane@example.com", expires_at: "2031-05-08T09:00:00Z" },
+  };
+  await mount(OPERATOR);
+  await act(async () => {});
+  const founder = card("Jane Founder");
+  founder.focus();
+  fireEvent.keyDown(founder, { key: "ContextMenu" });
+  const menu = screen.getByRole("menu", { name: "Actions for Jane Founder" });
+  expect(
+    within(menu)
+      .getAllByRole("menuitem")
+      .map((i) => i.textContent),
+  ).toEqual(["Cancel invitation"]);
+  fireEvent.click(within(menu).getByRole("menuitem", { name: "Cancel invitation" }));
+  expect(screen.getByRole("dialog", { name: "Cancel this invitation?" })).toBeTruthy();
+  cleanup();
+
+  jane = { holder: { person: "p-jane", kind: "person", login: "jane.doe", stage: "active" } };
+  await mount(OPERATOR);
+  await act(async () => {});
+  const held = card("Jane Founder");
+  held.focus();
+  fireEvent.keyDown(held, { key: "ContextMenu" });
+  expect(screen.queryByRole("menu")).toBeNull();
 });
 
 // THE BOX NAMES THE UNIT AND ITS PROJECT.
@@ -560,6 +771,8 @@ test("on a phone the chart is an outline of rows, with the legend at its head", 
     expect(names).toEqual(["Jane Founder", "CEO", "CTO", "SWE", "FE", "PM", "DevRel"]);
     const swe = rows[3]!;
     expect(swe.getAttribute("aria-level")).toBe("4");
+    // A HUMAN ROW SAYS WHAT ITS CARD SAYS, for this reader the availability.
+    expect(rows[0]!.textContent).toContain("Human · reviews releases");
     expect(swe.textContent).toContain("Engineering · Core");
     expect(swe.textContent).toContain("Executing ENG-412");
     // THE LEGEND HEADS IT, as a line of the page.

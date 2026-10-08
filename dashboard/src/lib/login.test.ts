@@ -7,7 +7,7 @@
  */
 
 import { expect, test } from "vitest";
-import { loginProblem, type LoginKind } from "./login.ts";
+import { loginKind, loginProblem, type LoginKind } from "./login.ts";
 
 test.each<[LoginKind, string, RegExp | null]>([
   // What a person types for their own name, which the engine refuses.
@@ -30,4 +30,22 @@ test.each<[LoginKind, string, RegExp | null]>([
   const got = loginProblem(kind, login);
   if (want === null) expect(got).toBeNull();
   else expect(got).toMatch(want);
+});
+
+// WHOSE LOGIN IT IS, told by its shape alone: an unbound reader's remedy turns
+// on it — a person with no seat is a fault an administrator mends, and a
+// service account or a Tier A token's session is told how to bind — and the
+// two grammars are disjoint, so no login is both. Mutation: test the machine
+// grammar first with a looser pattern and a person's login reads as a
+// machine's.
+test.each<[string, LoginKind | null]>([
+  ["jane.doe", "person"],
+  ["dana-sre.ops", "person"],
+  ["ci:release", "machine"],
+  ["token:ops-7", "machine"],
+  ["jane", null],
+  ["Jane.Doe", null],
+  ["", null],
+])("the login %j is a %s login", (login, kind) => {
+  expect(loginKind(login)).toBe(kind);
 });

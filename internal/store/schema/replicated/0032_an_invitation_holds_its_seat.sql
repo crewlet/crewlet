@@ -1,0 +1,51 @@
+-- An invitation holds its seat.
+--
+-- Every person holds a human seat for as long as they are here (ADR-0026), so
+-- every invitation names the seat its redemption binds — and from its issue
+-- until it is redeemed, cancelled or ages out, it HOLDS that seat as it holds
+-- its address: an administrator's create, a bind and a second invitation onto
+-- it are refused naming the invitation, so the person the link was sent to is
+-- never told at the last step that somebody took their seat meanwhile.
+--
+-- WHO HAS TO AGREE ON IT: every node, identically — it is a column of the
+-- identity estate's own replicated rows, written by the applier and nothing
+-- else.
+--
+-- # A column, and not a decode of the document
+--
+-- The seat was already in the row: inside `document`, where the issue's
+-- record put it. But a directory decide that holds a seat against open
+-- invitations, and the seat listing that shows who is on their way to which
+-- seat, would each have to decode every open invitation's document to find
+-- the one on a seat — a second reading path for one value, beside the
+-- `email_blind` column every address hold already seeks on. So the seat gets
+-- the address's treatment: a column, and a lookup index.
+--
+-- # Filled by the apply, back-filled by the applier, never by SQL here
+--
+-- The apply writes it from the invitation record from now on. A row an older
+-- build applied holds the default, and what fills it is the identity applier's
+-- own Rederive (internal/iamdomain, `statelog.Deriver`), run once by the first
+-- boot of a build whose derivation differs from the one on the checkpoint row
+-- — in the same Go that decodes the document for the apply. A backfill here,
+-- `json_extract` over the document, would be a second implementation of what
+-- the seat of an invitation is, and two implementations of one rule are two
+-- answers the day either is edited. Without the backfill, a node upgraded in
+-- place would hold '' where a node replaying the log holds the seat: rows that
+-- differ on a table the estate claims identical, and old invitations that hold
+-- nothing.
+--
+-- '' is an invitation issued before every invitation named a seat. It is
+-- redeemable by nobody, and so holds nothing.
+--
+-- # A plain index, not a partial one
+--
+-- A hold asks `WHERE seat_id = ?` with a BOUND value, which a partial index
+-- cannot serve — a bound parameter implies nothing about being non-empty, the
+-- reason `iam_invites_email_idx` and the people's own lookups are plain. The
+-- listing of the open invitations by seat reads the same index as a range
+-- above the empty seat. No UNIQUE: two open invitations on one seat are a
+-- residue a restore can leave, and the estate refuses them by arbitration on
+-- the directory subject, never by a constraint an apply would abort on.
+ALTER TABLE iam_invites ADD COLUMN seat_id TEXT NOT NULL DEFAULT '';
+CREATE INDEX iam_invites_seat_idx ON iam_invites (seat_id, created_at DESC);                -- the invitations onto one seat

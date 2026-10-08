@@ -11,9 +11,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/iamapi"
 	"github.com/crewlet/crewlet/internal/api/opkey"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -47,9 +49,10 @@ func TestAWriteNobodyCanConfirmIsNeitherAnsweredNorAnnounced(t *testing.T) {
 		{"minting a token", "mint", http.MethodPost,
 			"/iam/credentials?person=" + alice.String(), map[string]any{"label": "ci"}},
 		{"inviting somebody", "invite", http.MethodPost, "/iam/invitations",
-			map[string]any{"email": "dana@example.com"}},
-		{"creating a person", "enrol", http.MethodPost, "/iam/people",
-			map[string]any{"login": "dana.sre", "email": "dana@example.com"}},
+			map[string]any{"email": "dana@example.com", "seat": "sre"}},
+		{"creating a person", "create", http.MethodPost, "/iam/people",
+			map[string]any{"login": "dana.sre", "email": "dana@example.com",
+				"seat": "sre"}},
 		{"invalidating every session", "invalidate", http.MethodPost,
 			"/iam/invalidate-all", nil},
 	} {
@@ -83,6 +86,54 @@ func TestAWriteNobodyCanConfirmIsNeitherAnsweredNorAnnounced(t *testing.T) {
 	}
 }
 
+// A PERSON'S CREATE NOBODY CAN CONFIRM HANDS OUT NO LINK, WHATEVER THE WRITER
+// ANSWERED.
+//
+// The domain hands no first password link back beside an outcome nobody can
+// confirm, and the surface holds the same rule itself rather than trusting the
+// writer to: a link shown beside an unknown outcome may set the password of a
+// person who does not exist, and the retry under the same key derives it again
+// once there is an answer. So the 503 carries the person's id and the op id
+// the retry is sent under — and no url, credential or expiry — and nothing is
+// announced, the unvouched unknown included.
+//
+// Mutation: drop the surface's own unknown arm and the writer's link is shown.
+func TestACreateNobodyCanConfirmHandsOutNoLink(t *testing.T) {
+	t.Parallel()
+	for name, unvouched := range map[string]bool{
+		"an unknown outcome": false, "one this node's ledger cannot vouch for": true,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t)
+			r.writer.linkAnyway = true
+			r.writer.outcomes = map[string]statelog.Outcome{
+				"create": statelog.OutcomeUnknown}
+			r.writer.unvouched = map[string]bool{"create": unvouched}
+			got := r.as(administrator(), http.MethodPost, "/iam/people",
+				map[string]any{"login": "dana.sre", "email": "dana@example.com",
+					"seat": "founder"})
+			if got.status != http.StatusServiceUnavailable {
+				t.Fatalf("answered %d (%v), want 503", got.status, got.body)
+			}
+			if got.body["id"] != r.writer.created.PersonID || got.body["op_id"] == nil {
+				t.Errorf("body %v, want the person's id and the op id the retry "+
+					"is sent under", got.body)
+			}
+			for _, handed := range []string{"url", "credential", "expires_at"} {
+				if _, ok := got.body[handed]; ok {
+					t.Errorf("handed out a %s beside a create nobody can "+
+						"confirm: %v", handed, got.body)
+				}
+			}
+			if seen := r.audit.all(); len(seen) != 0 {
+				t.Errorf("announced %v about a create whose outcome is unknown",
+					seen)
+			}
+		})
+	}
+}
+
 // A CREATE RETRIED UNDER THE KEY ITS UNKNOWN ANSWER CARRIED NAMES WHAT ITS
 // FIRST ATTEMPT CREATED.
 //
@@ -100,11 +151,12 @@ func TestACreateRetriedUnderItsKeyNamesWhatItsFirstAttemptCreated(t *testing.T) 
 		body               map[string]any
 		created            func(r *rig, answer answered) string
 	}{
-		{"a person", "enrol", "/iam/people",
-			map[string]any{"login": "dana.sre", "email": "dana@example.com"},
-			func(r *rig, _ answered) string { return r.writer.enrolled.PersonID }},
+		{"a person", "create", "/iam/people",
+			map[string]any{"login": "dana.sre", "email": "dana@example.com",
+				"seat": "sre"},
+			func(r *rig, _ answered) string { return r.writer.created.PersonID }},
 		{"an invitation", "invite", "/iam/invitations",
-			map[string]any{"email": "dana@example.com"},
+			map[string]any{"email": "dana@example.com", "seat": "sre"},
 			func(_ *rig, answer answered) string {
 				id, _ := answer.body["id"].(string)
 				return id
@@ -121,7 +173,7 @@ func TestACreateRetriedUnderItsKeyNamesWhatItsFirstAttemptCreated(t *testing.T) 
 				t.Fatalf("the first attempt answered %d (%v), want 503 with "+
 					"the key to retry under", first.status, first.body)
 			}
-			firstPerson := r.writer.enrolled.PersonID
+			firstPerson := r.writer.created.PersonID
 
 			r.writer.outcomes = nil
 			retry := r.asWith(administrator(), http.MethodPost, tc.target,
@@ -129,8 +181,8 @@ func TestACreateRetriedUnderItsKeyNamesWhatItsFirstAttemptCreated(t *testing.T) 
 			if retry.status/100 != 2 {
 				t.Fatalf("the retry answered %d: %v", retry.status, retry.body)
 			}
-			if tc.call == "enrol" && tc.created(r, retry) != firstPerson {
-				t.Errorf("the retry enrolled %s, want its first attempt's %s",
+			if tc.call == "create" && tc.created(r, retry) != firstPerson {
+				t.Errorf("the retry created %s, want its first attempt's %s",
 					tc.created(r, retry), firstPerson)
 			}
 			if tc.call == "invite" {
@@ -163,7 +215,8 @@ func TestACreatesKeyThatIsNoUUID7IsRefused(t *testing.T) {
 	r := newRig(t)
 	for _, target := range []string{"/iam/people", "/iam/invitations"} {
 		got := r.asWith(administrator(), http.MethodPost, target,
-			map[string]any{"login": "dana.sre", "email": "dana@example.com"},
+			map[string]any{"login": "dana.sre", "email": "dana@example.com",
+				"seat": "sre"},
 			http.Header{opkey.Header: {"retry-1"}})
 		if got.status != http.StatusBadRequest {
 			t.Errorf("%s under the key retry-1 answered %d, want 400", target,
@@ -293,18 +346,99 @@ func TestADirectoryWriteThatFaultedKeepsItsWordsInTheLog(t *testing.T) {
 	}
 }
 
-// AN INVITATION WITH NO ADDRESS TO POINT AT IS A FAULT, NOT AN OUTAGE.
+// A LINK WITH NO ADDRESS TO POINT AT IS A FAULT, NOT AN OUTAGE — an
+// invitation's, and a created person's first password link alike.
 //
 // `api.external_url` is this node's own configuration, and waiting never
 // supplies it; the 503 it answered told every client to retry in two seconds
-// for ever.
-func TestAnInvitationWithNoExternalURLIsAFault(t *testing.T) {
+// for ever. Refused BEFORE anything is published, since the person's create
+// would otherwise land a link nobody could be handed. The CONTROL is a service
+// account's create, which hands out no link and needs no address.
+//
+// Mutation: drop the create's check and its row publishes and answers 201.
+func TestALinkWithNoExternalURLIsAFault(t *testing.T) {
 	t.Parallel()
+	for _, tc := range []struct {
+		name, target string
+		body         map[string]any
+	}{
+		{"an invitation", "/iam/invitations",
+			map[string]any{"email": "dana@example.com", "seat": "sre"}},
+		{"a person's create", "/iam/people",
+			map[string]any{"email": "dana@example.com", "seat": "sre"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t, func(o *iamapi.Options) { o.ExternalBase = "" })
+			got := r.as(administrator(), http.MethodPost, tc.target, tc.body)
+			if got.status != http.StatusInternalServerError ||
+				got.body["error"] != "no_external_url" {
+				t.Errorf("answered %d (%v), want 500 no_external_url", got.status,
+					got.body)
+			}
+			if len(r.writer.calls) != 0 {
+				t.Errorf("published %v with no address to build a link from",
+					r.writer.calls)
+			}
+		})
+	}
 	r := newRig(t, func(o *iamapi.Options) { o.ExternalBase = "" })
-	got := r.as(administrator(), http.MethodPost, "/iam/invitations",
-		map[string]any{"email": "dana@example.com"})
-	if got.status != http.StatusInternalServerError || got.body["error"] != "no_external_url" {
-		t.Errorf("answered %d (%v), want 500 no_external_url", got.status, got.body)
+	if got := r.as(administrator(), http.MethodPost, "/iam/people",
+		map[string]any{"kind": "machine", "login": "ci:release"}); got.status != http.StatusCreated {
+		t.Errorf("a service account's create answered %d (%v) on a node with no "+
+			"external URL, want 201", got.status, got.body)
+	}
+}
+
+// A CREATE'S RETRY HANDS BACK THE SAME FIRST LINK, AND ANNOUNCES NOTHING.
+//
+// The person is derived from the key and the link from the person, so the
+// retry an unknown answer asks for — answered from the ledger without a decide
+// — hands back the link its first attempt issued. It was ANNOUNCED by the call
+// whose record carried it, and only that one: a retry announcing again would
+// be one link issued twice in the trail. A link that no longer opens by the
+// time of the retry is not handed back, and the answer says what to do.
+//
+// Mutation: announce on landing rather than on this call's own, and the retry
+// emits a second row; answer a closed link's url, and the last half goes red.
+func TestACreatesRetryHandsBackTheSameFirstLink(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	key := statelog.NewOpID(time.Now(), "")
+	body := map[string]any{"email": "dana@example.com", "seat": "sre"}
+	first := r.asWith(administrator(), http.MethodPost, "/iam/people", body,
+		http.Header{opkey.Header: {key}})
+	if first.status != http.StatusCreated || first.body["url"] == nil {
+		t.Fatalf("the create answered %d %v, want 201 with its link", first.status,
+			first.body)
+	}
+	issued := only[types.IAMPasswordResetIssued](t, r.audit)
+	if !issued.First || issued.Credential != first.body["credential"] ||
+		issued.Person != first.body["id"] || issued.By != "founder" {
+		t.Errorf("the create announced %+v, want its first link, by its caller",
+			issued)
+	}
+
+	r.writer.collapsed = map[string]bool{"create": true}
+	again := r.asWith(administrator(), http.MethodPost, "/iam/people", body,
+		http.Header{opkey.Header: {key}})
+	if again.status != http.StatusCreated || again.body["url"] != first.body["url"] ||
+		again.body["id"] != first.body["id"] {
+		t.Errorf("the retry answered %d %v, want the first attempt's person and "+
+			"link %v", again.status, again.body, first.body["url"])
+	}
+	if seen := r.audit.all(); len(seen) != 1 {
+		t.Errorf("the retry announced again: %#v", seen)
+	}
+
+	r.writer.linkClosed = true
+	closed := r.asWith(administrator(), http.MethodPost, "/iam/people", body,
+		http.Header{opkey.Header: {key}})
+	detail, _ := closed.body["detail"].(string)
+	if closed.status != http.StatusCreated || closed.body["url"] != nil ||
+		!strings.Contains(detail, "/password-reset") {
+		t.Errorf("a retry whose link no longer opens answered %d %v, want 201 "+
+			"with no link and the reset named", closed.status, closed.body)
 	}
 }
 

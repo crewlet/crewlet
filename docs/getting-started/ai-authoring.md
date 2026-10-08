@@ -48,7 +48,8 @@ what model and budget to use. Give rough answers — it proposes a
 concrete org chart and you correct it. It should also, without being
 asked:
 
-- put you in the chart as a **human seat** managing the top agent
+- put you in the chart as a **human seat** managing the top agent — the
+  seat you join the company on, since every person holds one
 - keep every secret as a `${VAR}`, never a literal
 - **skip integrations on the first pass** (step 8 adds them)
 - warn you that handles are effectively permanent
@@ -91,9 +92,13 @@ crewlet run crewlet.yaml -company company.yaml
 
 ### 7. Watch the first turn
 
-Open <http://localhost:8000/>. A company with no integrations has no
-inbound work, which is why the first pass puts a five-minute schedule on
-the top seat purely to prove the loop:
+Open <http://localhost:8000/> and sign in with the API token your
+`crewlet.yaml` declares; then put yourself on your human seat — open it in
+**Agents › Org chart** and press **Invite** — exactly as the
+[quickstart's step 4](quickstart.md#4-sign-in-and-invite-yourself)
+describes. A company with no integrations has no inbound work, which is why
+the first pass puts a five-minute schedule on the top seat purely to prove
+the loop:
 
 ```yaml
 schedules:
@@ -173,7 +178,11 @@ types the engine parses with, a schema-only check catches:
 A human seat with no `contact` identity passes both checks, because it is a
 legitimate seat: a person who works only through the dashboard has no chat
 account to name. `crewlet validate` warns about it at the seat's `contact`,
-so nobody is surprised that it cannot be @-mentioned.
+so nobody is surprised that it cannot be @-mentioned. A company with no
+`kind: human` seat at all passes too — its agents may run it alone through
+the deployment's API tokens — and `crewlet validate` warns at `roles` that
+nobody can be invited into it or created in it, since every person holds a
+human seat.
 
 Three things still need the binary, and the skill tells the assistant to
 check them by reading:
@@ -372,7 +381,8 @@ checkout, fetch it from
   time.
 - Keep every secret as a `${VAR}` reference, never a literal.
 - Put you in the org chart as a
-  [human seat](../concepts/humans-in-the-org.md#the-founder-seat).
+  [human seat](../concepts/humans-in-the-org.md#the-founder-seat) — the
+  seat you are invited onto once the company runs.
 - Warn you that handles are effectively permanent (see below).
 - Validate after every edit, and not claim success until it passes.
 

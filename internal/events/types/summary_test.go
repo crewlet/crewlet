@@ -242,6 +242,25 @@ func TestSummaries(t *testing.T) {
 			"wrong code from 203.0.113.9: somebody holding the password is " +
 			"guessing at the code",
 	}, {
+		name:    "a reset link issued says it is a reset",
+		payload: IAMPasswordResetIssued{Person: "p-1", Credential: "c-1"},
+		want:    "Password reset link issued for p-1",
+	}, {
+		// A FIRST LINK IS NOT A RESET: there was no password to reset.
+		name:    "a first password link says it is the first",
+		payload: IAMPasswordResetIssued{Person: "p-1", Credential: "c-1", First: true},
+		want:    "First password link issued for p-1",
+	}, {
+		name:    "a reset spent says what it ended",
+		payload: IAMPasswordReset{Person: "p-1", Login: "jane.doe"},
+		want: "jane.doe set a new password from a reset link, ending every " +
+			"session and token they held",
+	}, {
+		// AND A FIRST PASSWORD ENDS NOTHING, so it does not claim to.
+		name:    "a first password spent claims to end nothing",
+		payload: IAMPasswordReset{Person: "p-1", Login: "jane.doe", First: true},
+		want:    "jane.doe set their first password",
+	}, {
 		name:    "a grant change lists both directions",
 		payload: IAMGrantsChanged{Person: "p-1", Added: []string{"audit:read"}, Removed: []string{"config:write", "fleet:operate"}},
 		want:    "Grants of p-1 changed: +audit:read; -config:write, -fleet:operate",

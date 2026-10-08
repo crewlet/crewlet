@@ -27,16 +27,18 @@ import (
 func TestARedemptionRefusedForItsLoginPublishesNothing(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
-	if err := rig.enrol(iamdomain.Enrolment{
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: "018f3a9c-0000-7000-8000-0000000007a1",
 		Kind:     iam.KindPerson, Stage: iam.StageActive,
 		Name: "Dana Elsewhere", Email: "dana@elsewhere.example.com",
-		Login: "dana.sre", OpID: "op-first", Reason: "a hire",
+		Login: "dana.sre", Seat: rig.vacantSeat("dana-elsewhere"),
+		LinkExpiresAt: firstLinkExpiry, OpID: "op-first", Reason: "a hire",
 	}); err != nil {
 		t.Fatalf("enrol the login's holder: %v", err)
 	}
 	rig.drain()
-	issued, err := inviteFor(t, rig, "dana@example.com", "")
+	seat := rig.vacantSeat("dana-lead")
+	issued, err := inviteFor(t, rig, "dana@example.com", seat)
 	if err != nil {
 		t.Fatalf("invite: %v", err)
 	}
@@ -46,10 +48,11 @@ func TestARedemptionRefusedForItsLoginPublishesNothing(t *testing.T) {
 	}
 	redeem := func(login string) error {
 		return rig.draining(func() error {
-			_, err := nodeWriter(rig).Enrol(t.Context(), iamdomain.Enrolment{
-				PersonID: uuid.Must(uuid.NewV7()).String(), Kind: iam.KindPerson,
-				Stage: iam.StageActive, Name: "Dana Sre", Email: "dana@example.com",
-				Login: login, Grants: []iam.Grant{iam.GrantStateRead},
+			_, err := nodeWriter(rig).Redeem(t.Context(), iamdomain.Redemption{
+				PersonID: uuid.Must(uuid.NewV7()).String(),
+				Stage:    iam.StageActive, Name: "Dana Sre", Email: "dana@example.com",
+				Login: login, Password: aPassword(),
+				Grants: []iam.Grant{iam.GrantStateRead}, Seat: seat,
 				Invitation: issued.ID, InvitationSecret: issued.Secret,
 				OpID: "invite:" + issued.ID, Reason: "redeemed an invitation",
 			})
@@ -88,10 +91,14 @@ func TestARedemptionRefusedForItsLoginPublishesNothing(t *testing.T) {
 // same key with another body arrives under another operation id naming the
 // same derived person — and landing it would rewrite them. What still lands is
 // the retry of the very create that made them, which the operation ledger
-// answers.
+// answers — WITH THE FIRST PASSWORD LINK ITS FIRST ATTEMPT ISSUED, since the
+// link is derived from the person: the same id, the same secret and the expiry
+// the record stored, not the one the retry asked for. A service account's
+// create answers no link, first time or again.
 //
-// Mutation: drop createsNobodyTwice from Enrol's decide, and the second
-// request lands over the existing person.
+// Mutation: drop createsNobodyTwice from the enrolment's decide, and the
+// second request lands over the existing person; mint the link per call and
+// the retry answers a link whose verifier the estate never stored.
 func TestAnEnrolmentNeverRewritesSomebodyWhoExists(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -100,20 +107,38 @@ func TestAnEnrolmentNeverRewritesSomebodyWhoExists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("derive: %v", err)
 	}
-	create := iamdomain.Enrolment{
+	create := iamdomain.Creation{
 		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: "Omar Ops", Email: "omar@example.com", Login: "omar.ops",
+		Seat: rig.vacantSeat("ops-lead"), LinkExpiresAt: firstLinkExpiry,
 		OpID: key, Reason: "created by jane.doe",
 	}
-	if err := rig.enrol(create); err != nil {
+	first, err := rig.create(create)
+	if err != nil {
 		t.Fatalf("the create: %v", err)
+	}
+	if first.Link == nil || first.Link.Credential == "" || first.Link.Secret == "" ||
+		!first.Link.ExpiresAt.Equal(firstLinkExpiry) || first.LinkClosed {
+		t.Fatalf("the create answered link %+v (closed %v), want its first "+
+			"password link", first.Link, first.LinkClosed)
 	}
 	rig.drain()
 
 	// THE RETRY OF THAT VERY CREATE — the one an unknown answer asks for —
-	// is answered by the ledger.
-	if err := rig.enrol(create); err != nil {
+	// is answered by the ledger, with the same link and the expiry it was
+	// stored with, although the retry names a later one.
+	retry := create
+	retry.LinkExpiresAt = firstLinkExpiry.Add(time.Hour)
+	again, err := rig.create(retry)
+	if err != nil {
 		t.Errorf("the create's own retry was refused: %v", err)
+	}
+	if !again.Collapsed || again.Link == nil ||
+		again.Link.Credential != first.Link.Credential ||
+		again.Link.Secret != first.Link.Secret ||
+		!again.Link.ExpiresAt.Equal(first.Link.ExpiresAt) {
+		t.Errorf("the create's own retry answered link %+v (collapsed %v), "+
+			"want the first attempt's %+v", again.Link, again.Collapsed, first.Link)
 	}
 	// THE SAME KEY FOR ANOTHER ADDRESS is another request — published under
 	// another operation, as a surface binds it — refused before it gives the
@@ -137,6 +162,24 @@ func TestAnEnrolmentNeverRewritesSomebodyWhoExists(t *testing.T) {
 	if err := rig.enrol(other); !errors.Is(err, iamdomain.ErrOperationReused) {
 		t.Errorf("an enrolment of an existing person under another operation "+
 			"answered %v, want %v", err, iamdomain.ErrOperationReused)
+	}
+
+	// A SERVICE ACCOUNT'S CREATE ISSUES NO LINK, nor does its retry.
+	machineKey := operationKey()
+	machine, err := iamdomain.CreatedPersonID(machineKey)
+	if err != nil {
+		t.Fatalf("derive: %v", err)
+	}
+	account := iamdomain.Creation{
+		PersonID: machine, Kind: iam.KindMachine, Stage: iam.StageActive,
+		Login: "svc:release", OpID: machineKey, Reason: "the pipeline",
+	}
+	for _, attempt := range []string{"the create", "its retry"} {
+		created, err := rig.create(account)
+		if err != nil || created.Link != nil || created.LinkClosed {
+			t.Errorf("a service account's %s answered link %+v (closed %v, %v), "+
+				"want none", attempt, created.Link, created.LinkClosed, err)
+		}
 	}
 }
 
@@ -211,6 +254,106 @@ func TestACreatesIdentityIsItsOperationKeys(t *testing.T) {
 			t.Errorf("InvitationID(%q) answered %v, want %v", bad, err,
 				iamdomain.ErrInvalid)
 		}
+		if _, err := blinder.PasswordLinkID(bad); !errors.Is(err, iamdomain.ErrInvalid) {
+			t.Errorf("PasswordLinkID(%q) answered %v, want %v", bad, err,
+				iamdomain.ErrInvalid)
+		}
+	}
+}
+
+// A CREATED PERSON'S FIRST PASSWORD LINK IS THEIRS, DERIVED UNDER THE COMPANY'S
+// KEY.
+//
+// The person is derived from the create's operation key, and the link from the
+// person, so the retry the ledger answers without running the decide hands
+// back the link its first attempt issued. Each half is held to what that
+// rests on: one person derives one link id — a uuid7 at the person's instant,
+// as every credential id here is — and one id one secret; another person,
+// another link; another company's key, another link, so neither half is
+// computable by somebody holding the operation key; and each in a MAC domain
+// of its own, so no link id or secret is a value the same key derives for an
+// invitation or an address. The secret carries no `.`, the separator its
+// `<id>.<secret>` link splits on.
+//
+// Mutation: derive the link id or its secret in the invitation's domain and
+// the domain separation fails; derive them from the key alone and the
+// company's-key case does.
+func TestAFirstPasswordLinkIsDerivedFromItsPerson(t *testing.T) {
+	t.Parallel()
+	blinder, err := iamdomain.NewBlinder(testBlindKey)
+	if err != nil {
+		t.Fatalf("NewBlinder: %v", err)
+	}
+	key := operationKey()
+	person, err := iamdomain.CreatedPersonID(key)
+	if err != nil {
+		t.Fatalf("derive a person: %v", err)
+	}
+	link, err := blinder.PasswordLinkID(person)
+	if err != nil {
+		t.Fatalf("PasswordLinkID: %v", err)
+	}
+	secret, err := blinder.PasswordLinkSecret(link)
+	if err != nil {
+		t.Fatalf("PasswordLinkSecret: %v", err)
+	}
+	if again, _ := blinder.PasswordLinkID(person); again != link {
+		t.Errorf("one person derived two links: %s and %s", link, again)
+	}
+	if again, _ := blinder.PasswordLinkSecret(link); again != secret {
+		t.Error("one link derived two secrets")
+	}
+	parsed := uuid.MustParse(link)
+	if parsed.Version() != 7 || !sameMillisecond(parsed, uuid.MustParse(person)) {
+		t.Errorf("the link %s is not a uuid7 at its person's instant %s", link,
+			person)
+	}
+	if link == person {
+		t.Error("the link id is the person's id")
+	}
+	other, _ := iamdomain.CreatedPersonID(operationKey())
+	if theirs, _ := blinder.PasswordLinkID(other); theirs == link {
+		t.Error("two people derived one link")
+	}
+	if strings.Contains(secret, ".") || len(secret) < 43 {
+		t.Errorf("the secret %q carries the link's separator or is shorter "+
+			"than 32 bytes of base64", secret)
+	}
+
+	// UNDER THE COMPANY'S KEY.
+	elsewhere, err := iamdomain.NewBlinder([]byte(strings.Repeat("z",
+		iamdomain.MinBlindKeyBytes)))
+	if err != nil {
+		t.Fatalf("NewBlinder: %v", err)
+	}
+	if theirs, _ := elsewhere.PasswordLinkID(person); theirs == link {
+		t.Error("the link id does not depend on the company's key")
+	}
+	if theirs, _ := elsewhere.PasswordLinkSecret(link); theirs == secret {
+		t.Error("the link's secret does not depend on the company's key, so " +
+			"anybody holding its id — which every row holds — can open it")
+	}
+
+	// IN DOMAINS OF THEIR OWN: the same input under the invitation's and the
+	// address's derivations gives none of these values.
+	invitationID, _ := blinder.InvitationID(person)
+	invitationSecret, _ := blinder.InvitationSecret(link)
+	blind, _ := blinder.Email(person)
+	for name, value := range map[string]string{
+		"an invitation id": invitationID, "an invitation secret": invitationSecret,
+		"a blind": blind,
+	} {
+		if value == link || value == secret {
+			t.Errorf("a first password link shares a MAC domain with %s", name)
+		}
+	}
+
+	if _, err := blinder.PasswordLinkSecret(""); err == nil {
+		t.Error("a secret was derived for no link")
+	}
+	var none *iamdomain.Blinder
+	if _, err := none.PasswordLinkID(person); !errors.Is(err, iamdomain.ErrNoBlindKey) {
+		t.Errorf("a node with no company key derived a link id (%v)", err)
 	}
 }
 
@@ -225,12 +368,13 @@ func TestAnIssueRetriedUnderItsKeyAnswersTheInvitationItIssued(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	key := operationKey()
+	seat := rig.vacantSeat("platform-lead")
 	issue := func(key, address string, grants []iam.Grant) (iamdomain.InviteIssued, error) {
 		var issued iamdomain.InviteIssued
 		err := rig.draining(func() error {
 			var err error
 			issued, err = rig.writer.Invite(rig.t.Context(), iamdomain.InviteMint{
-				Email: address, Grants: grants,
+				Email: address, Grants: grants, Seat: seat,
 				ExpiresAt: brokerAt.Add(168 * time.Hour),
 				OpID:      key, Reason: "onboarding",
 			})
@@ -264,13 +408,13 @@ func TestAnIssueRetriedUnderItsKeyAnswersTheInvitationItIssued(t *testing.T) {
 	}
 	// THE KEY FOR ANOTHER ADDRESS, OR ON OTHER TERMS, is another request —
 	// a seat the first attempt did not bind included.
-	rig.seatOnly("platform-lead")
+	rig.seatOnly("data-lead")
 	for name, attempt := range map[string]func() error{
 		"a seat the first did not bind": func() error {
 			return rig.draining(func() error {
 				_, err := rig.writer.Invite(rig.t.Context(), iamdomain.InviteMint{
 					Email: "priya@example.com", Grants: []iam.Grant{iam.GrantStateRead},
-					Seat: "platform-lead", ExpiresAt: brokerAt.Add(168 * time.Hour),
+					Seat: "data-lead", ExpiresAt: brokerAt.Add(168 * time.Hour),
 					OpID: key, Reason: "onboarding",
 				})
 				return err

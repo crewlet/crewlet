@@ -83,11 +83,13 @@ type inviteView struct {
 	// MinPasswordLength is the floor, so a form refuses before it posts.
 	MinPasswordLength int `json:"min_password_length"`
 
-	// Seat is the seat redeeming this invitation BINDS the person to, as
-	// the company's chart calls it now, or absent for an invitation that
-	// binds none. It is part of what the person is agreeing to, so the
-	// form shows it before anything is spent.
-	Seat *inviteSeat `json:"seat,omitempty"`
+	// Seat is the human seat redeeming this invitation BINDS the person
+	// to, as the company's chart calls it now. ALWAYS PRESENT, because
+	// every invitation holds one: a person holds a human seat for as long
+	// as they exist (ADR-0026), and it is part of what they are agreeing
+	// to, so the form shows it before anything is spent. With no handle
+	// where the chart no longer holds it as a human seat ([inviteSeat]).
+	Seat *inviteSeat `json:"seat"`
 
 	// SignedInAs is the login of the session this BROWSER is signed in
 	// with, or absent for one signed in as nobody. Redeeming ends that
@@ -144,9 +146,7 @@ func (s *Service) ViewInvite(w http.ResponseWriter, r *http.Request) {
 		Email: email, InvitedBy: s.inviterOf(r.Context(), held.InvitedBy),
 		Login:             iam.LoginFromAddress(email),
 		MinPasswordLength: s.passwordFloor(),
-	}
-	if held.Seat != "" {
-		view.Seat = s.inviteSeatOf(r.Context(), held.Seat)
+		Seat:              s.inviteSeatOf(r.Context(), held.Seat),
 	}
 	// RESOLVED HERE ONLY THROUGH A SESSION COOKIE: an unguarded route
 	// compares no bearer ([auth.Guard]), so whoever it resolved is the
@@ -188,8 +188,17 @@ func (s *Service) inviterOf(ctx context.Context, author string) string {
 // when it is not — the redemption refuses that link, and the page says so
 // before anybody types a password. A lookup that fails shows the stored handle
 // alone: the page is a courtesy, and the redemption asks again.
+//
+// AN INVITATION NAMING NO SEAT never reaches here — one issued before every
+// invitation held a seat is spent ([iamdomain.InvitationRow.Spent]) and the
+// view answers it the one 410 every dead link gets — and were one rendered, it
+// would read exactly as a seat the chart no longer holds, which is what it is
+// to the redemption: a link that creates nobody.
 func (s *Service) inviteSeatOf(ctx context.Context, handle string) *inviteSeat {
-	if s.seats == nil {
+	switch {
+	case handle == "":
+		return &inviteSeat{}
+	case s.seats == nil:
 		return &inviteSeat{Handle: handle}
 	}
 	seat, found, err := s.seats.Seat(ctx, handle)
@@ -203,7 +212,8 @@ func (s *Service) inviteSeatOf(ctx context.Context, handle string) *inviteSeat {
 }
 
 // RedeemInvite creates the person an invitation was issued for — binding the
-// seat it names, when it names one, and spending the link — in ONE record.
+// human seat it holds and spending the link — in ONE record
+// ([iamdomain.Writer.Redeem]).
 //
 // THE BODY IS READ BEFORE THE INVITATION, because the secret is in it — and
 // nothing in it is answered until the invitation has opened: a password too
@@ -252,16 +262,16 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 	// AUTHORED AS THE PERSON IT CREATES, who redeemed the link, under the
 	// node's authority, which is what a redemption is enrolled with. What it
 	// confers is announced as the invitation's issuer's decision, which it
-	// was ([iamdomain.Writer.Enrol]).
+	// was ([iamdomain.Writer.Redeem]).
 	redeemer := s.behalf(madeBy(iamdomain.Sighting{ID: person,
 		Kind: iam.KindPerson, Login: in.Login, Seat: held.Seat}, ""))
-	enrolled, err := redeemer.Enrol(r.Context(), iamdomain.Enrolment{
-		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
+	enrolled, err := redeemer.Redeem(r.Context(), iamdomain.Redemption{
+		PersonID: person, Stage: iam.StageActive,
 		Name: in.Name, Email: email, Login: in.Login,
-		Credentials: []iamdomain.Credential{{
+		Password: iamdomain.Credential{
 			V: iamdomain.DocumentVersion, ID: uuid.New().String(),
 			Method: iamdomain.MethodPassword, Verifier: verifier,
-		}},
+		},
 		// WHAT THE INVITATION SAID, and not a word more. The grants were
 		// decided once, by whoever issued it, rather than again by
 		// whoever happens to process the redemption —
@@ -274,8 +284,10 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 		// of what an invitation usually confers.
 		//
 		// THE SECRET GOES WITH IT, checked again where the grants land,
-		// and so does the seat the invitation binds: refused as the
-		// link's own refusal if it moved since the issue.
+		// and so does the seat the invitation holds: refused as the
+		// link's own refusal — never as a request missing a seat, which
+		// the invitee could not fix — if the chart no longer holds it as
+		// a human seat, and 409 if somebody was bound to it since.
 		Grants:           held.Grants,
 		Invitation:       held.ID,
 		InvitationSecret: in.Secret,
@@ -285,7 +297,8 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, iamdomain.ErrRefused) {
 			// SPENT OR AGED OUT between the lookup above and the
-			// record, which is the same answer the lookup gives: one
+			// record, or its seat retired from the chart since the
+			// issue, which is the same answer the lookup gives: one
 			// refusal for every way a link stops working.
 			log.InfoContext(r.Context(), "api_invite_refused_at_the_record",
 				"invitation", held.ID, "error", err)
@@ -339,12 +352,12 @@ const redemptionNamespace = "crewlet.authapi.invite-redeem"
 //
 // # Why this is not one 503
 //
-// Both enrolments this surface performs — the first operator's and an
-// invitation's — used to answer every failure `503 unavailable`, which is the
-// status that says "the engine is having a moment, try again". For a login
-// the domain REFUSED that is false twice over: nothing will change on a
-// retry, and the person is left resubmitting the same name at a form that
-// never says what is wrong with it. So the refusals that are about what was
+// The one enrolment this surface performs — an invitation's redemption — used
+// to answer every failure `503 unavailable`, which is the status that says
+// "the engine is having a moment, try again". For a login the domain REFUSED
+// that is false twice over: nothing will change on a retry, and the person is
+// left resubmitting the same name at a form that never says what is wrong with
+// it. So the refusals that are about what was
 // TYPED are 400 naming the rule, a name somebody else already holds is 409,
 // and only what is left — a record that could not be published or applied —
 // is 503.
@@ -358,7 +371,12 @@ const redemptionNamespace = "crewlet.authapi.invite-redeem"
 // which is evidence of who THEY are and of nothing about anybody else.
 //
 // AN ADDRESS SOMEBODY IS ENROLLED UNDER is the 410 every way a link stops
-// working is: the person the link was for already exists.
+// working is: the person the link was for already exists. So is a link whose
+// seat the record refuses — one naming no seat, or one the chart no longer
+// holds as a human seat — which [iamdomain.Writer.Redeem] answers
+// [iamdomain.ErrRefused] and never [iamdomain.ErrSeatRequired]: the invitee
+// left nothing out, and the 400 that asks for a seat would send them looking
+// for a field the form does not have.
 func refuseEnrolment(w http.ResponseWriter, r *http.Request, event, opID string,
 	err error) {
 	var taken *iamdomain.ErrTaken

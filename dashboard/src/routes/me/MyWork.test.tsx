@@ -308,9 +308,14 @@ test("an unbound reader's own day is the one kept under their login", async () =
   await waitFor(() => expect(screen.getByText("yours")).toBeTruthy());
   await waitFor(() => expect(screen.getByText("Nothing is assigned to you")).toBeTruthy());
   expect(query).toHaveBeenCalledWith("work_my_work", { handle: "token:ops-7" });
-  // AND WHAT BINDING WOULD ADD, naming the login — the value
-  // `crewlet iam bind` takes — rather than reporting a fault.
+  // AND WHAT BINDING WOULD ADD, naming the login in the command that binds a
+  // token no row holds yet — rather than reporting a fault, which is a
+  // person's (`Inbox.test.tsx`).
   expect(screen.getByText(/binds/)).toBeTruthy();
+  expect(
+    screen.getByText(/crewlet iam create -kind machine -login token:ops-7 -seat SEAT/),
+  ).toBeTruthy();
+  expect(screen.queryByText(/Every person holds a human seat/)).toBeNull();
   expect(screen.getAllByText(/token:ops-7/).length).toBeGreaterThan(0);
   // A LOGIN IS NOT A SEAT, so the banner names it without a chip linking to a
   // seat page that would answer "no such seat".

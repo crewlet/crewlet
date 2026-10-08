@@ -421,7 +421,7 @@ func TestASweepCollectsWhatWasSpent(t *testing.T) {
 		t.Helper()
 		rig := &sweepRigT{writeRig: newWriteRig(t)}
 		person := uuid.Must(uuid.NewV7()).String()
-		if err := rig.enrol(iamdomain.Enrolment{
+		if err := rig.enrol(iamdomain.Creation{
 			PersonID: person, Kind: iam.KindMachine, Stage: iam.StageActive,
 			Name: "Release pipeline", Login: "release:pipeline",
 			OpID: "enrol-pipeline", Reason: "a pipeline",
@@ -561,7 +561,7 @@ func TestTheSweepPublisherFindsABucketDueForWhatWasSpent(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	person := uuid.Must(uuid.NewV7()).String()
-	if err := rig.enrol(iamdomain.Enrolment{
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: person, Kind: iam.KindMachine, Stage: iam.StageActive,
 		Name: "Release pipeline", Login: "release:pipeline",
 		OpID: "enrol-pipeline", Reason: "a pipeline",
@@ -604,6 +604,57 @@ func TestTheSweepPublisherFindsABucketDueForWhatWasSpent(t *testing.T) {
 	if got := rig.column(`SELECT id FROM iam_credentials WHERE person_id = ?`,
 		person); len(got) != 0 {
 		t.Errorf("the revoked token outlived the sweep that was due for it: %v", got)
+	}
+}
+
+// AN INVITATION WITH NO EXPIRY IS COLLECTED, as one that aged out is.
+//
+// Every reader reads it as aged out — it holds nothing, lists as open nowhere
+// and redeems nobody — so kept by the sweep it was the one dead invitation
+// whose sealed address stayed in every node's estate for good. The publisher
+// finds its bucket due on it alone, and the apply collects it beside an
+// outstanding invitation in the same bucket, which stays.
+//
+// Mutation: read a zero expiry as `never` in the publisher's probe and nothing
+// is published; in the apply's delete and the row outlives the sweep.
+func TestTheSweepCollectsAnInvitationWithNoExpiry(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	const address = "lee@example.com"
+	dead := uuid.Must(uuid.NewV7()).String()
+	applyLegacyInvitation(t, rig, dead, address, "a-secret",
+		rig.vacantSeat("platform-lead"), time.Time{}, 1)
+	bucket := iamdomain.BucketOf(blindOf(t, address))
+	// AN OUTSTANDING ONE IN THE SAME BUCKET, which the sweep leaves alone:
+	// the control that the delete is about the expiry and not the bucket.
+	if err := rig.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `
+			INSERT INTO iam_invites (id, email_blind, expires_at, bucket,
+				created_at, version, document)
+			VALUES ('invite-outstanding', 'blind-outstanding', ?, ?, 1, 1, x'')`,
+			brokerAt.Add(168*time.Hour).UnixMilli(), int64(bucket))
+		return err
+	}); err != nil {
+		t.Fatalf("plant the outstanding invitation: %v", err)
+	}
+
+	var report iamdomain.SweepReport
+	if err := rig.during(func() error {
+		var err error
+		report, err = rig.sweeper(brokerAt).Sweep(t.Context(), defaultHorizons)
+		return err
+	}); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	rig.drain()
+	if !slices.Equal(report.Published, []iamdomain.Bucket{bucket}) {
+		t.Fatalf("the tick published %v, want the bucket holding the invitation "+
+			"with no expiry, %s", report.Published, bucket)
+	}
+	if got := rig.column(`SELECT id FROM iam_invites ORDER BY id`); !slices.Equal(got,
+		[]string{"invite-outstanding"}) {
+		t.Errorf("the invitations after the sweep are %v, want the outstanding "+
+			"one alone", got)
 	}
 }
 

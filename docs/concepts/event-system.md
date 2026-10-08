@@ -214,8 +214,9 @@ config_revision_activated  # a new revision is the one to serve
 config_revision_applied    # one node's outcome, and how far it got
 # the runtime audit: source "operator", and the caller exactly as every
 # record the call wrote names it — `actor` and `actor_kind` from
-# iam.ActorFor (a person bound to a seat is the seat, kind human; anybody
-# else is their login, kind operator) and the credential it came through in
+# iam.ActorFor (a person is the seat they hold, as is a token or service
+# account the directory binds to one, kind human; a credential bound to no
+# seat is its login, kind operator) and the credential it came through in
 # `operator_id` (pat:<id>, session:<lineage>, or the login). One per call,
 # whatever became of it; never the arguments. Written by the node the call
 # reached. The event store keeps the actor as the row's own column and
@@ -398,13 +399,21 @@ iam_login_failures         # ONE per node per minute that had a failure, from
 iam_stepup_completed       # a signed-in person confirming who they are
 iam_credential_minted, iam_credential_revoked, iam_mfa_reset
 iam_invitation_cancelled   # an unredeemed invitation withdrawn: which one and
-                           # by whom, never the address
+                           # by whom, never the address. It frees the address
+                           # and the human seat the invitation held
 iam_password_changed       # a person changing their own, which ended every
                            # other session and token they held
 iam_password_reset_issued  # an administrator issuing a one-time reset link:
-                           # for whom, by whom, until when — never the link
+                           # for whom, by whom, until when — never the link.
+                           # With first: true, the FIRST password link an
+                           # administrator's create issued the person it
+                           # created on their seat — announced once, by the
+                           # call that created them, never by its retry
 iam_password_reset         # a reset link spent: the password set, every
-                           # session and token ended, nobody signed in
+                           # session and token ended, nobody signed in. With
+                           # first: true, a created person setting their first
+                           # password, which ended nothing — there was nothing
+                           # to end
 iam_grants_changed         # one per person write, from the writer that
                            # decided it: added, removed, by, record version
 iam_recovery_code_used     # and how many the person has left

@@ -74,6 +74,8 @@ func (s *Service) Routes(mux authz.Mux) error {
 	}
 
 	mount("GET /iam/people", at(authz.ActionDirectoryRead), s.GetPeople)
+	// CREATING somebody: a service account, or a person onto the human seat
+	// they will hold, answered with that person's first password link.
 	mount("POST /iam/people", at(authz.ActionDirectoryWrite), s.PostPeople)
 	mount("GET /iam/people/{id}", about(authz.ActionDirectoryRead), s.GetPerson)
 	// AN EDIT OF AN ENROLLED PERSON — what they may do or how they sign in
@@ -81,14 +83,16 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// and a person present, as creating, removing and inviting are.
 	mount("PATCH /iam/people/{id}", at(authz.ActionDirectoryWrite), s.PatchPerson)
 	mount("DELETE /iam/people/{id}", at(authz.ActionDirectoryWrite), s.DeletePerson)
-	// AN INVITATION IS ADDRESSED TO AN ADDRESS, not to a person, so it is
-	// its own collection rather than a verb on somebody's row. The design
-	// put it at `/iam/people/{id}/invite`, which assumes the person
-	// already exists and the link only sets their password; the estate
-	// this engine actually has does the opposite — the invitation holds
-	// the address, arbitrates on it, and the REDEMPTION is what enrols
-	// somebody. A route named after a person who does not exist yet would
-	// have had to invent an id for them.
+	// AN INVITATION IS ADDRESSED TO AN ADDRESS AND HOLDS A SEAT, not a
+	// person, so it is its own collection rather than a verb on somebody's
+	// row. The design put it at `/iam/people/{id}/invite`, which assumes the
+	// person already exists and the link only sets their password; the
+	// estate this engine actually has does the opposite — the invitation
+	// holds the address and the seat, arbitrates on both, and the
+	// REDEMPTION is what enrols somebody. A route named after a person who
+	// does not exist yet would have had to invent an id for them. (A
+	// person who should exist at once is CREATED instead, above, and handed
+	// a link that sets only their password.)
 	mount("POST /iam/invitations", at(authz.ActionDirectoryWrite), s.PostInvite)
 	// READ LIKE THE DIRECTORY and withdrawn like any directory write: an
 	// outstanding invitation is a way into the company, and both halves of
@@ -279,10 +283,13 @@ func (s *Service) opIDFor(w http.ResponseWriter, r *http.Request, name string,
 // A create is retried under the key its unknown answer handed back, and the
 // person or the invitation it names is derived from the seed
 // ([iamdomain.CreatedPersonID], [iamdomain.Blinder.InvitationID]) so the retry
-// names the same one. Each used to be minted per request, so the retry — or
-// the ledger's answer to it — named a second object nobody created: the
-// documented retry of an unknown could not recover what its first attempt
-// made.
+// names the same one — and so does a person's FIRST PASSWORD LINK, whose
+// credential and secret the domain derives from that person under the
+// company's key ([iamdomain.Blinder.PasswordLinkID]), so the retry hands back
+// the link its first attempt issued rather than one nobody recorded. Each used
+// to be minted per request, so the retry — or the ledger's answer to it —
+// named a second object nobody created: the documented retry of an unknown
+// could not recover what its first attempt made.
 //
 // # Two values, because the key is scoped and the seed is a uuid7
 //
@@ -402,22 +409,36 @@ func (s *Service) answerWrite(w http.ResponseWriter, r *http.Request, opID strin
 // landed answers — `200`, or `201` for one that hands the caller something it
 // created.
 //
-// # Six answers
+// # Refusals, each a different thing to do next
 //
-// THREE ARE FAILURES, each a different thing to do next. What is particular
-// here is [iamdomain.ErrRefused] and [iamdomain.ErrTaken]: the first is
-// authority (403, and it will never land however often it is retried) and the
-// second is an address, a login or a seat somebody else holds (409, naming
-// who holds it). An estate that could
-// not decide is 503 WITH the operation id and the Retry-After the refusal's
-// own rule gives ([auth.RetryIdentity]): it used to be a bare 503, which a
-// client cannot tell from a node that is gone for good — and then a 503
-// carrying the identity hint whatever refused it, which told a client to come
-// back in two seconds for a record too large to place, a full log or an
-// evicted node.
+//   - AUTHORITY, [iamdomain.ErrRefused]: 403, and it will never land however
+//     often it is retried.
+//   - SOMEBODY ELSE HOLDS IT, [iamdomain.ErrTaken]: an address, a login or a
+//     seat, 409 naming who holds it — a person, or an open invitation.
+//   - A PERSON'S SEAT LEFT OUT: a person's gesture naming none, or clearing
+//     theirs, is `400 seat_required` ([iamdomain.ErrSeatRequired]), answered
+//     before the generic invalid value below because its remedy is one field.
+//   - A VALUE THE CALLER TYPED WRONG: 400 `invalid_body`, naming it.
+//   - NO COMPANY TO FIND A SEAT IN: a seat named on a node that runs no company
+//     is `409 no_active_revision` ([iamdomain.ErrNoCompany]) — never the 503 a
+//     lookup the node could not make is, since no wait imports a company.
+//   - A KEY THAT ALREADY NAMES SOMETHING ELSE, [iamdomain.ErrOperationReused]:
+//     409 `bad_params` with the op id — a new key resolves it, never a wait.
+//   - A LOST RACE, [statelog.ErrConflict]: 409 `stale`, which the same request
+//     resolves once read again.
+//   - THE PERSON REMOVED between the route's read and the record: 404.
+//   - AN ESTATE THAT COULD NOT DECIDE: 503 WITH the operation id and the
+//     Retry-After the refusal's own rule gives ([auth.RetryIdentity]). It used
+//     to be a bare 503, which a client cannot tell from a node that is gone
+//     for good — and then a 503 carrying the identity hint whatever refused
+//     it, which told a client to come back in two seconds for a record too
+//     large to place, a full log or an evicted node.
+//   - ANYTHING ELSE is a fault: 500, its own words to the log.
 //
-// THREE ARE SUCCESSES, and they are what the writer's answer used to hide —
-// it answered a bare position, so an `unknown` outcome read as 200:
+// # Three outcomes of a write that was published
+//
+// They are what the writer's answer used to hide — it answered a bare
+// position, so an `unknown` outcome read as 200:
 //
 //   - applied → the route's own status: the next read here sees it.
 //   - pending → 202 with the position: durable, and every node will apply
@@ -463,6 +484,26 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 	case errors.Is(err, iamdomain.ErrRefused):
 		refuse(http.StatusForbidden, httpjson.CodeUnauthorized,
 			httpjson.Detail{"detail": err.Error()})
+		return
+	case errors.Is(err, iamdomain.ErrSeatRequired):
+		// BEFORE THE INVALID ARM IT WRAPS: the remedy is always the same
+		// field, so it carries its own code — and a sentence of the
+		// surface's own, since the domain's is written for a log.
+		refuse(http.StatusBadRequest, httpjson.CodeSeatRequired, httpjson.Detail{
+			"field": "seat",
+			"detail": "a person holds a human seat for as long as they are " +
+				"here, so they are created and invited onto one and moved to " +
+				"another, never to none — to free a seat, move its holder to " +
+				"another human seat or remove them",
+		})
+		return
+	case errors.Is(err, iamdomain.ErrNoCompany):
+		// NOT THE 503 a lookup this node could not make is: a node that
+		// runs no company answers the same after every wait, and the
+		// remedy is a company declaring a human seat — the answer `GET
+		// /iam/seats` gives the same state.
+		refuse(http.StatusConflict, httpjson.CodeNoActiveRevision,
+			httpjson.Detail{"hint": noCompanyHint})
 		return
 	case errors.Is(err, iamdomain.ErrOperationReused):
 		// A KEY THAT ALREADY NAMES SOMETHING ELSE: another request's
@@ -569,21 +610,29 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 // can read — into a dialog that shows a detail verbatim. And `invalid` rather
 // than `bad_params`, whose sentence is about a query parameter: the remedy is
 // to send a different value.
+//
+// AN OPEN INVITATION HOLDS AN ADDRESS OR A SEAT, and the sentence names which:
+// it said "that address" whatever the field, which was harmless while an
+// invitation held nothing else and wrong the moment it held its seat — an
+// administrator creating somebody onto a seat was told an address they never
+// typed was taken. A seat's value is a handle and no secret, so it is named;
+// an address's is a blind, so it is not.
 func (s *Service) takenDetail(r *http.Request, taken *iamdomain.ErrTaken) httpjson.Detail {
+	what := "that address"
+	if taken.Field != iamdomain.UniqueEmail {
+		what = fmt.Sprintf("the %s %s", taken.Field, taken.Value)
+	}
 	if taken.Invitation != "" {
 		return httpjson.Detail{"field": string(taken.Field),
 			"invitation": taken.Invitation,
-			"detail": "that address is held by an open invitation — cancel " +
-				"the invitation first, or let it be redeemed"}
+			"detail": what + " is held by an open invitation — cancel it " +
+				"(DELETE /iam/invitations/" + taken.Invitation + ") first, or " +
+				"let it be redeemed or lapse"}
 	}
 	holder := "somebody else"
 	if row, err := s.directory.Person(r.Context(), taken.Person); err == nil &&
 		row.Login != "" {
 		holder = row.Login
-	}
-	what := "that address"
-	if taken.Field != iamdomain.UniqueEmail {
-		what = fmt.Sprintf("the %s %s", taken.Field, taken.Value)
 	}
 	return httpjson.Detail{"field": string(taken.Field), "held_by": taken.Person,
 		"detail": fmt.Sprintf("%s is already held by %s — choose another",

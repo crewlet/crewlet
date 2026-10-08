@@ -21,9 +21,10 @@
  * The two feeds narrow on `actor_kinds` rather than on a set of handles, and
  * that is the whole design. Every record names its author the one way
  * `iam.ActorFor` does: a person the identity directory binds to a seat writes
- * AS that seat, kind `human`; a credential bound to none — a person with no
- * seat, a machine, a Tier A token — writes under its WHOLE login, kind
- * `operator`; a seat in its own turn is kind `agent`; and the engine is
+ * AS that seat, kind `human`; a credential bound to none — a machine, a Tier
+ * A token, or a person recorded before every person held a seat — writes
+ * under its WHOLE login, kind `operator`; a seat in its own turn is kind
+ * `agent`; and the engine is
  * `system`. A login always carries a separator a seat handle cannot, so the
  * name spaces are disjoint — and the set of people is the roster, which
  * changes. An audit assembled from handles would quietly lose every commit
@@ -407,10 +408,10 @@ function held<T>(read: QueryResult<T>): T | null {
  * Who a row's writer IS, as the Who column draws them.
  *
  * A LOGIN IS NOT A SEAT. An `operator` write carries a credential's whole
- * login as its actor — a person bound to no seat, a machine, `token:<id>` —
- * and the chart has no seat by that name, so a cell that looked it up drew the
- * chart's default, the agent's squircle, and linked it to a seat page that
- * does not exist. So:
+ * login as its actor — a machine, `token:<id>`, or a person recorded before
+ * every person held a seat — and the chart has no seat by that name, so a
+ * cell that looked it up drew the chart's default, the agent's squircle, and
+ * linked it to a seat page that does not exist. So:
  *
  *  - a seat's write — an agent in its turn, or a person writing AS the seat
  *    the directory binds them to — draws that seat, linking to it, with the

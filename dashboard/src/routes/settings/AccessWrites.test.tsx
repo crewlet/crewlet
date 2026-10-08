@@ -9,6 +9,12 @@
  * refusal is the engine's sentence with the grants that would admit; a
  * `403 step_up_required` is confirmed and the same request replayed; and every
  * list a write moved is read again.
+ *
+ * A PERSON IS NOT INVITED OR CREATED HERE: every person holds a human seat,
+ * so they come from a vacant one on the org chart (`components/people.test.tsx`
+ * holds those dialogs), and this screen points there. What it holds is that a
+ * person's seat is changed and never cleared, while a service account may be
+ * bound to one or none.
  */
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
@@ -22,6 +28,7 @@ import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, setStepUpConfirmer, Store } from "~/protocol/index.ts";
 import { CHART_ORG } from "~/test/orgchart.ts";
 import { SessionReading } from "~/lib/frameSession.ts";
+import { pick } from "~/testing.tsx";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -58,6 +65,7 @@ const PEOPLE = {
       stage: "active",
       login: "bo.lang",
       name: "Bo Lang",
+      seat: "jane",
       grants: ["state:read"],
     },
     {
@@ -66,8 +74,19 @@ const PEOPLE = {
       stage: "active",
       login: "di.moss",
       name: "Di Moss",
+      seat: "kai",
       // secrets:write is a grant ADMIN does not hold.
       grants: ["state:read", "secrets:write"],
+    },
+    // A PERSON RECORDED BEFORE EVERY PERSON HELD A SEAT — the one state the
+    // engine no longer creates, and the directory reports.
+    {
+      id: "p-ed",
+      kind: "person",
+      stage: "active",
+      login: "ed.vance",
+      name: "Ed Vance",
+      grants: ["state:read"],
     },
     {
       id: "p-ci",
@@ -124,8 +143,33 @@ let reader: string | null = null;
 let administrators = 1;
 /** What `GET /iam/invitations` answers. */
 let invitations: unknown = INVITATIONS;
-/** The human seats nobody holds, as `GET /iam/seats?unheld=true` answers. */
-let vacancies = [{ handle: "sam", name: "Sam Support" }];
+/** The human seats nothing holds, as `GET /iam/seats?unheld=true` answers. */
+let vacancies = [{ handle: "lee", name: "Lee Ops" }];
+/** Every human seat and what holds it, as `GET /iam/seats` answers. */
+const SEATS = [
+  {
+    handle: "sam",
+    name: "Sam Support",
+    invitation: { id: "inv-1", email: "sam@example.com", expires_at: "2026-10-13T09:00:00Z" },
+  },
+  {
+    handle: "jane",
+    name: "Jane Founder",
+    holder: { person: "p-bo", kind: "person", login: "bo.lang", stage: "active" },
+  },
+  {
+    handle: "kai",
+    name: "Kai Support",
+    holder: { person: "p-di", kind: "person", login: "di.moss", stage: "active" },
+  },
+  { handle: "lee", name: "Lee Ops" },
+];
+let humanSeats: unknown[] = SEATS;
+/**
+ * What `GET /iam/seats` answers instead of `humanSeats`: a refusal, or
+ * `"pending"` for a read that has not arrived.
+ */
+let seatsAnswer: Response | "pending" | null = null;
 
 function engine(writes: Record<string, Response[]> = {}, directory: () => unknown = () => PEOPLE) {
   const sent: Sent[] = [];
@@ -157,19 +201,10 @@ function engine(writes: Record<string, Response[]> = {}, directory: () => unknow
       case "/iam/invitations":
         return Promise.resolve(json(200, invitations));
       case "/iam/seats":
+        if (seatsAnswer === "pending") return new Promise<Response>(() => {});
+        if (seatsAnswer) return Promise.resolve(seatsAnswer.clone());
         return Promise.resolve(
-          json(200, {
-            seats: url.searchParams.get("unheld")
-              ? vacancies
-              : [
-                  { handle: "sam", name: "Sam Support" },
-                  {
-                    handle: "jane",
-                    name: "Jane Founder",
-                    holder: { person: "p-ana", login: "ana.admin", stage: "active" },
-                  },
-                ],
-          }),
+          json(200, { seats: url.searchParams.get("unheld") ? vacancies : humanSeats }),
         );
       case "/iam/node-tokens":
         return Promise.resolve(json(200, { tokens: [] }));
@@ -235,6 +270,20 @@ async function settle() {
   await act(async () => {});
 }
 
+/**
+ * The open invitation's row on the Invitations card — the one carrying its
+ * cancellation. Its address is drawn on the Human seats card too, against the
+ * seat the invitation holds.
+ */
+async function invitationRow(): Promise<HTMLElement> {
+  const cells = await screen.findAllByText("sam@example.com");
+  const row = cells
+    .map((cell) => cell.closest(".grid-row") as HTMLElement | null)
+    .find((r) => r && within(r).queryByRole("button", { name: /^Cancel the invitation/ }));
+  if (!row) throw new Error("no invitation row carries a cancellation");
+  return row;
+}
+
 let uninstall: (() => void) | null = null;
 
 beforeEach(() => {
@@ -244,7 +293,9 @@ beforeEach(() => {
   reader = null;
   administrators = 1;
   invitations = INVITATIONS;
-  vacancies = [{ handle: "sam", name: "Sam Support" }];
+  vacancies = [{ handle: "lee", name: "Lee Ops" }];
+  humanSeats = SEATS;
+  seatsAnswer = null;
 });
 
 afterEach(() => {
@@ -256,208 +307,40 @@ afterEach(() => {
 });
 
 // AN AUDITOR'S READ VIEW IS AS IT WAS: no control they could not use. The
-// control is an administrator, who sees every one of them.
+// control is an administrator, who sees every one of them — and NO "Invite
+// person": a person comes from a vacant seat, so the page points at the org
+// chart instead. Mutation: draw the pointer for an auditor, or the button for
+// anybody, and a line here goes red.
 test("an auditor sees no write control, and an administrator sees them", async () => {
   engine();
   location.hash = "#/settings/access?person=p-bo";
   mount(AUDITOR);
   await screen.findByText("Bo Lang");
-  await screen.findByText("sam@example.com");
+  await screen.findAllByText("sam@example.com");
   // THE VIEWER HAS ANSWERED once the contact column reads the company
   // document, which only a reader holding config:read is asked for.
   await screen.findAllByText("No surface");
   for (const name of ["Invite person", "New service account", "Cancel", "Remove", "Revoke"]) {
     expect(screen.queryByRole("button", { name: new RegExp(`^${name}`) })).toBeNull();
   }
+  expect(screen.queryByRole("link", { name: /Invite or create from the org chart/ })).toBeNull();
   cleanup();
   engine();
   mount(ADMIN);
   await screen.findByText("Bo Lang");
-  await screen.findByText("sam@example.com");
-  await screen.findAllByRole("button", { name: "Invite person" });
-  for (const name of ["Invite person", "New service account", "Cancel", "Remove", "Revoke"]) {
+  await screen.findAllByText("sam@example.com");
+  await screen.findAllByRole("button", { name: "New service account" });
+  for (const name of ["New service account", "Cancel", "Remove", "Revoke"]) {
     expect(screen.getAllByRole("button", { name: new RegExp(`^${name}`) }).length).toBeGreaterThan(
       0,
     );
   }
-});
-
-// AN INVITATION IS A KEYED CREATE: a uuid7 key, the body the route takes, and
-// the link shown once with when it expires — then the lists read again.
-test("an invitation is sent keyed and its link is shown once", async () => {
-  const eng = engine({
-    "POST /iam/invitations": [
-      json(201, {
-        id: "inv-2",
-        url: "https://crewlet.example.com/dashboard#/invite/inv-2.s3cret",
-        expires_at: "2026-10-13T09:00:00Z",
-        outcome: "applied",
-        op_id: "k",
-        position: "CREWLET_IAM_LOG@0:7",
-      }),
-    ],
-  });
-  mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Invite person" }));
-  const dialog = await screen.findByRole("dialog", { name: "Invite a person" });
-  // A GRANT THE VIEWER DOES NOT HOLD is refused before it is sent.
-  expect(within(dialog).getByRole("checkbox", { name: "secrets:read" })).toHaveProperty(
-    "disabled",
-    true,
-  );
-  fireEvent.change(within(dialog).getByLabelText("Email address"), {
-    target: { value: "dee@example.com" },
-  });
-  fireEvent.click(within(dialog).getByRole("checkbox", { name: "work:write" }));
-  const before = eng.reads("/iam/invitations");
-  fireEvent.click(within(dialog).getByRole("button", { name: "Invite" }));
-  await settle();
-  const [sent] = eng.writes();
-  expect(sent?.path).toBe("/iam/invitations");
-  expect(sent?.key).toMatch(UUID7);
-  expect(sent?.body).toEqual({ email: "dee@example.com", grants: ["work:write"] });
+  for (const name of ["Invite person", "Invite", "Create person"]) {
+    expect(screen.queryByRole("button", { name })).toBeNull();
+  }
   expect(
-    within(dialog).getByText("https://crewlet.example.com/dashboard#/invite/inv-2.s3cret"),
-  ).toBeTruthy();
-  expect(within(dialog).getByText(/works once/)).toBeTruthy();
-  expect(eng.reads("/iam/invitations")).toBeGreaterThan(before);
-});
-
-// EVERY HUMAN SEAT HELD IS SAID WHERE THE SEAT IS CHOSEN: the select offered
-// only "No seat" under a helper describing a seat nobody holds, which the
-// invitation would bind. The CONTROL is a vacancy, which keeps that helper.
-// Mutation: draw the static helper whatever the list says and it goes red.
-test("an invitation with every human seat held says its person joins bound to none", async () => {
-  vacancies = [];
-  engine({});
-  mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Invite person" }));
-  const dialog = await screen.findByRole("dialog", { name: "Invite a person" });
-  expect(await within(dialog).findByText(/Every human seat is held/)).toBeTruthy();
-  expect(within(dialog).queryByText(/A human seat nobody holds/)).toBeNull();
-  cleanup();
-
-  vacancies = [{ handle: "sam", name: "Sam Support" }];
-  engine({});
-  mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Invite person" }));
-  const open = await screen.findByRole("dialog", { name: "Invite a person" });
-  await settle();
-  expect(within(open).getByText(/A human seat nobody holds/)).toBeTruthy();
-  expect(within(open).queryByText(/Every human seat is held/)).toBeNull();
-});
-
-// AN INVITATION WITHOUT `state:read` IS SAID BEFORE IT IS SENT: its person can
-// open nothing but their own Account, and it went out with no word. The
-// CONTROL is the same dialog with `state:read` ticked, which says nothing.
-test("an invitation without state:read says its person can open only their Account", async () => {
-  engine({});
-  mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Invite person" }));
-  const dialog = await screen.findByRole("dialog", { name: "Invite a person" });
-  expect(within(dialog).getByText(/can open nothing but their own/)).toBeTruthy();
-  fireEvent.click(within(dialog).getByRole("checkbox", { name: "state:read" }));
-  expect(within(dialog).queryByText(/can open nothing but their own/)).toBeNull();
-});
-
-// AN UNKNOWN ANSWER IS RETRIED UNDER THE SAME KEY — the one the engine handed
-// back — so the retry is the first attempt's write. Mutation: mint a key per
-// press and the second request carries another.
-test("an unknown invitation is retried under the key the engine handed back", async () => {
-  const eng = engine({
-    "POST /iam/invitations": [
-      json(503, {
-        error: "unavailable",
-        outcome: "unknown",
-        op_id: "0192f4c8-0000-7000-8000-000000000001",
-        message: "This node cannot answer that right now.",
-      }),
-      json(201, { id: "inv-2", url: "https://x/dashboard#/invite/inv-2.s", expires_at: "" }),
-    ],
-  });
-  mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Invite person" }));
-  const dialog = await screen.findByRole("dialog", { name: "Invite a person" });
-  fireEvent.change(within(dialog).getByLabelText("Email address"), {
-    target: { value: "dee@example.com" },
-  });
-  fireEvent.click(within(dialog).getByRole("button", { name: "Invite" }));
-  await settle();
-  expect(within(dialog).getByText(/could not confirm whether this landed/)).toBeTruthy();
-  fireEvent.click(within(dialog).getByRole("button", { name: "Try again" }));
-  await settle();
-  const keys = eng.writes().map((w) => w.key);
-  expect(keys).toEqual([expect.stringMatching(UUID7), "0192f4c8-0000-7000-8000-000000000001"]);
-  expect(within(dialog).getByText("https://x/dashboard#/invite/inv-2.s")).toBeTruthy();
-});
-
-// AN UNKNOWN ANSWER'S KEY IS FOR THE REQUEST IT WAS SENT WITH. An address
-// corrected after a dropped connection was sent under the first attempt's key,
-// which the engine refuses as a reused key in words about operation ids — and
-// only the press after it issued the invitation meant. The CONTROL is the case
-// above: sent unchanged, the retry carries the key. Mutation: reuse the key
-// whatever the body and the corrected request carries it.
-test("an unknown invitation corrected before its retry goes under a new key", async () => {
-  const eng = engine({
-    "POST /iam/invitations": [
-      json(503, {
-        error: "unavailable",
-        outcome: "unknown",
-        op_id: "0192f4c8-0000-7000-8000-000000000001",
-        message: "This node cannot answer that right now.",
-      }),
-      json(201, { id: "inv-2", url: "https://x/dashboard#/invite/inv-2.s", expires_at: "" }),
-    ],
-  });
-  mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Invite person" }));
-  const dialog = await screen.findByRole("dialog", { name: "Invite a person" });
-  fireEvent.change(within(dialog).getByLabelText("Email address"), {
-    target: { value: "jan@example.com" },
-  });
-  fireEvent.click(within(dialog).getByRole("button", { name: "Invite" }));
-  await settle();
-  expect(within(dialog).getByText(/Changed, it is a new one/)).toBeTruthy();
-  fireEvent.change(within(dialog).getByLabelText("Email address"), {
-    target: { value: "jane@example.com" },
-  });
-  fireEvent.click(within(dialog).getByRole("button", { name: "Try again" }));
-  await settle();
-  const [first, second] = eng.writes();
-  expect(second?.body).toMatchObject({ email: "jane@example.com" });
-  expect(second?.key).toMatch(UUID7);
-  expect(second?.key).not.toBe(first?.key);
-  expect(second?.key).not.toBe("0192f4c8-0000-7000-8000-000000000001");
-});
-
-// A REFUSAL IS THE ENGINE'S SENTENCE, with the grants that would admit; and a
-// refused create's key is not sent again with the next attempt.
-test("a refusal is the engine's sentence and the grants that would admit", async () => {
-  const eng = engine({
-    "POST /iam/invitations": [
-      json(403, {
-        error: "unauthorized",
-        message: "The credential you presented does not carry the grant this request needs.",
-        reason: "directory",
-        grants: ["people:manage"],
-      }),
-    ],
-  });
-  mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Invite person" }));
-  const dialog = await screen.findByRole("dialog", { name: "Invite a person" });
-  fireEvent.change(within(dialog).getByLabelText("Email address"), {
-    target: { value: "dee@example.com" },
-  });
-  fireEvent.click(within(dialog).getByRole("button", { name: "Invite" }));
-  await settle();
-  const alert = within(dialog).getByRole("alert");
-  expect(alert.textContent).toMatch(/does not carry the grant/);
-  expect(alert.textContent).toMatch(/people:manage would admit you/);
-  fireEvent.click(within(dialog).getByRole("button", { name: "Invite" }));
-  await settle();
-  const [first, second] = eng.writes();
-  expect(second?.key).not.toBe(first?.key);
+    screen.getByRole("link", { name: /Invite or create from the org chart/ }).getAttribute("href"),
+  ).toBe("#/agents");
 });
 
 // CANCELLING AN INVITATION IS NEVER A BUTTON CALLED "CANCEL" BESIDE ANOTHER:
@@ -467,7 +350,7 @@ test("a refusal is the engine's sentence and the grants that would admit", async
 test("the cancel dialog's dismissal is not a second Cancel", async () => {
   engine();
   mount();
-  const row = (await screen.findByText("sam@example.com")).closest(".grid-row") as HTMLElement;
+  const row = await invitationRow();
   fireEvent.click(within(row).getByRole("button", { name: /^Cancel the invitation/ }));
   const dialog = await screen.findByRole("dialog", { name: "Cancel this invitation?" });
   expect(within(dialog).getByRole("button", { name: "Keep it" })).toBeTruthy();
@@ -490,7 +373,7 @@ test("a stale refusal leaves the cancel dialog only a way out", async () => {
     ],
   });
   mount();
-  const row = (await screen.findByText("sam@example.com")).closest(".grid-row") as HTMLElement;
+  const row = await invitationRow();
   fireEvent.click(within(row).getByRole("button", { name: /^Cancel the invitation/ }));
   const dialog = await screen.findByRole("dialog", { name: "Cancel this invitation?" });
   fireEvent.click(within(dialog).getByRole("button", { name: "Cancel invitation" }));
@@ -517,7 +400,7 @@ test("a write recorded but not yet applied here leaves its dialog only Done", as
     "PATCH /iam/people/p-bo": [json(202, { id: "p-bo", outcome: "pending", op_id: "k" })],
   });
   mount();
-  const row = (await screen.findByText("sam@example.com")).closest(".grid-row") as HTMLElement;
+  const row = await invitationRow();
   fireEvent.click(within(row).getByRole("button", { name: /^Cancel the invitation/ }));
   const cancel = await screen.findByRole("dialog", { name: "Cancel this invitation?" });
   fireEvent.click(within(cancel).getByRole("button", { name: "Cancel invitation" }));
@@ -550,7 +433,7 @@ test("a step-up refusal is confirmed and the same cancellation replayed", async 
     ],
   });
   mount();
-  const row = (await screen.findByText("sam@example.com")).closest(".grid-row") as HTMLElement;
+  const row = await invitationRow();
   fireEvent.click(within(row).getByRole("button", { name: /^Cancel the invitation/ }));
   const dialog = await screen.findByRole("dialog", { name: "Cancel this invitation?" });
   const before = eng.reads("/iam/invitations");
@@ -584,7 +467,7 @@ test("a write held for a step-up says it waits for the person", async () => {
     ],
   });
   mount();
-  const row = (await screen.findByText("sam@example.com")).closest(".grid-row") as HTMLElement;
+  const row = await invitationRow();
   fireEvent.click(within(row).getByRole("button", { name: /^Cancel the invitation/ }));
   const dialog = await screen.findByRole("dialog", { name: "Cancel this invitation?" });
   fireEvent.click(within(dialog).getByRole("button", { name: "Cancel invitation" }));
@@ -595,35 +478,65 @@ test("a write held for a step-up says it waits for the person", async () => {
   expect(screen.queryByRole("dialog", { name: "Cancel this invitation?" })).toBeNull();
 });
 
-// THE DIALOGS SAY WHAT THIS PERSON HOLDS AND WHAT THIS DEPLOYMENT ASKS. Bo
-// holds no seat, so none is withheld or freed; where a second factor is
-// optional, a reset promises no enrolment the next sign-in never asks for. The
-// CONTROL is the reset where one is required. Mutation: name the seat
-// whatever the person holds, or promise the enrolment whatever the setting.
+// A RESET SAYS WHAT THIS DEPLOYMENT ASKS: where a second factor is optional,
+// it promises no enrolment the next sign-in never asks for. The CONTROL is the
+// reset where one is required. Mutation: promise the enrolment whatever the
+// setting.
 test.each([
   ["optional", /password alone until they set up a new one/],
   ["required", /enrol a new factor at their next sign-in/],
-])(
-  "a seatless person's dialogs name no seat, and a reset says what %s asks",
-  async (setting, after) => {
-    secondFactor = setting;
-    engine();
-    location.hash = "#/settings/access?person=p-bo";
-    mount();
-    fireEvent.click(await screen.findByRole("button", { name: "Suspend" }));
-    const suspend = await screen.findByRole("dialog", { name: "Suspend Bo Lang?" });
-    expect(within(suspend).queryByText(/seat/)).toBeNull();
-    fireEvent.click(within(suspend).getByRole("button", { name: "Cancel" }));
-    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
-    const remove = await screen.findByRole("dialog", { name: "Remove Bo Lang?" });
-    expect(within(remove).queryByText(/seat/)).toBeNull();
-    fireEvent.click(within(remove).getByRole("button", { name: "Cancel" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Reset second factor" }));
-    const reset = await screen.findByRole("dialog", { name: "Reset Bo Lang's second factor?" });
-    expect(await within(reset).findByText(after)).toBeTruthy();
-    secondFactor = "required";
-  },
-);
+])("a second factor's reset says what %s asks", async (setting, after) => {
+  secondFactor = setting;
+  engine();
+  location.hash = "#/settings/access?person=p-bo";
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Reset second factor" }));
+  const reset = await screen.findByRole("dialog", { name: "Reset Bo Lang's second factor?" });
+  expect(await within(reset).findByText(after)).toBeTruthy();
+  secondFactor = "required";
+});
+
+// A PERSON KEEPS THEIR SEAT THROUGH A SUSPENSION, and a removal is what frees
+// it: both say so, naming the seat as the chart does — the seat the reader
+// looks for next. Mutation: name it by its handle, or say a suspension frees
+// it, and a line here goes red.
+test("a seated person's suspension withholds their seat, and a removal frees it, by name", async () => {
+  engine();
+  location.hash = "#/settings/access?person=p-bo";
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Suspend" }));
+  const suspend = await screen.findByRole("dialog", { name: "Suspend Bo Lang?" });
+  expect(suspend.textContent).toMatch(
+    /their seat Jane Founder is withheld — it stays theirs, and nobody else can hold it meanwhile/,
+  );
+  fireEvent.click(within(suspend).getByRole("button", { name: "Cancel" }));
+  fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+  const remove = await screen.findByRole("dialog", { name: "Remove Bo Lang?" });
+  expect(remove.textContent).toMatch(
+    /their seat Jane Founder is freed and stands vacant in the org chart/,
+  );
+  expect(remove.textContent).toMatch(/invite them onto a seat again/);
+});
+
+// A SERVICE ACCOUNT BOUND TO NO SEAT is told nothing about one, and its
+// removal is undone the way it was made — a create, never an invitation,
+// which nobody redeems for a machine. The CONTROL is the seated person above.
+// Mutation: name a seat whatever the row holds, or word a machine's removal
+// as a person's.
+test("a service account bound to no seat is told nothing about one, and is created back", async () => {
+  engine();
+  location.hash = "#/settings/access?person=p-ci";
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Suspend" }));
+  const suspend = await screen.findByRole("dialog", { name: "Suspend ci:release?" });
+  expect(within(suspend).queryByText(/seat/)).toBeNull();
+  fireEvent.click(within(suspend).getByRole("button", { name: "Cancel" }));
+  fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+  const remove = await screen.findByRole("dialog", { name: "Remove ci:release?" });
+  expect(within(remove).queryByText(/seat/)).toBeNull();
+  expect(remove.textContent).toMatch(/create the service account again/);
+  expect(remove.textContent).not.toMatch(/invite/);
+});
 
 // WHAT ENDS A PERSON'S SESSIONS ENDS THEIR RESET LINK, and each gesture that
 // does says so: an administrator who sent the link and then reset the second
@@ -782,6 +695,88 @@ test("an edit offers the seat its person holds by the seat's name", async () => 
   const edit = await screen.findByRole("dialog", { name: "Edit Bo Lang" });
   await settle();
   expect(within(edit).getAllByText("Jane Founder").length).toBeGreaterThan(0);
+});
+
+// A PERSON'S SEAT IS CHANGED, NEVER CLEARED: the engine refuses a person's
+// `seat: ""` (`seat_required`), so "No seat" is not offered, and the helper
+// says removing them is what frees it. Moving them sends the seat chosen.
+// Mutation: offer "No seat" to everybody and the option is drawn here.
+test("a person's edit offers no 'No seat', and moving them sends the seat chosen", async () => {
+  const eng = engine({
+    "PATCH /iam/people/p-bo": [json(200, { id: "p-bo", outcome: "applied", op_id: "k" })],
+  });
+  location.hash = "#/settings/access?person=p-bo";
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and grants" }));
+  const edit = await screen.findByRole("dialog", { name: "Edit Bo Lang" });
+  await settle();
+  expect(within(edit).getByText(/A person always holds one/)).toBeTruthy();
+  fireEvent.click(within(edit).getByLabelText("Seat"));
+  expect(screen.queryByRole("option", { name: /No seat/ })).toBeNull();
+  fireEvent.mouseDown(screen.getByRole("option", { name: /Lee Ops/ }));
+  fireEvent.click(within(edit).getByRole("button", { name: "Save" }));
+  await settle();
+  expect(eng.writes().map((w) => w.body)).toEqual([{ seat: "lee" }]);
+});
+
+// A PERSON RECORDED WITH NO SEAT — before every person held one — is told so,
+// starts on no choice rather than on "No seat", and an edit that chooses none
+// sends none: a person's `seat: ""` is refused, and sent beside an unrelated
+// change it failed the whole edit. Choosing one sends it. Mutation: start the
+// select on the row's empty seat and send it whenever it "differs".
+test("a person with no seat is warned, and the edit sends a seat only once one is chosen", async () => {
+  const eng = engine({
+    "PATCH /iam/people/p-ed": [json(200, { id: "p-ed", outcome: "applied", op_id: "k" })],
+  });
+  location.hash = "#/settings/access?person=p-ed";
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and grants" }));
+  const edit = await screen.findByRole("dialog", { name: "Edit Ed Vance" });
+  await settle();
+  expect(
+    within(edit).getByText(/Ed Vance holds no seat — recorded before every person held one/),
+  ).toBeTruthy();
+  expect(within(edit).getByLabelText("Seat").textContent).toMatch(/Choose a seat/);
+  fireEvent.click(within(edit).getByRole("checkbox", { name: "work:write" }));
+  fireEvent.click(within(edit).getByRole("button", { name: "Save" }));
+  await settle();
+  expect(eng.writes().map((w) => w.body)).toEqual([{ add_grants: ["work:write"] }]);
+  cleanup();
+
+  const again = engine({
+    "PATCH /iam/people/p-ed": [json(200, { id: "p-ed", outcome: "applied", op_id: "k" })],
+  });
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and grants" }));
+  const chosen = await screen.findByRole("dialog", { name: "Edit Ed Vance" });
+  await settle();
+  pick(within(chosen).getByLabelText("Seat"), /Lee Ops/);
+  fireEvent.click(within(chosen).getByRole("button", { name: "Save" }));
+  await settle();
+  expect(again.writes().map((w) => w.body)).toEqual([{ seat: "lee" }]);
+});
+
+// A SERVICE ACCOUNT MAY HOLD A SEAT OR NONE, so its edit keeps "No seat" and
+// choosing it unbinds — the one holder a seat is unbound from. The CONTROL is
+// the person above, who is offered no such thing.
+test("a service account's edit offers No seat, and choosing it unbinds the account", async () => {
+  const eng = engine(
+    { "PATCH /iam/people/p-ci": [json(200, { id: "p-ci", outcome: "applied", op_id: "k" })] },
+    () => ({
+      ...PEOPLE,
+      people: PEOPLE.people.map((p) => (p.id === "p-ci" ? { ...p, seat: "ops" } : p)),
+    }),
+  );
+  location.hash = "#/settings/access?person=p-ci";
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and grants" }));
+  const edit = await screen.findByRole("dialog", { name: "Edit ci:release" });
+  await settle();
+  expect(within(edit).getByText(/No seat unbinds it/)).toBeTruthy();
+  pick(within(edit).getByLabelText("Seat"), /^No seat/);
+  fireEvent.click(within(edit).getByRole("button", { name: "Save" }));
+  await settle();
+  expect(eng.writes().map((w) => w.body)).toEqual([{ seat: "" }]);
 });
 
 // A GRANT CHANGE IS WHAT ITS EDITOR TICKED AND UNTICKED, which the engine
@@ -1057,7 +1052,7 @@ test("taking your own people:manage in an edit says it is you, and when nobody e
     const edit = await screen.findByRole("dialog", { name: "Edit Ana Admin" });
     await settle();
     expect(within(edit).queryByText("This is you")).toBeNull();
-    expect(within(edit).getByText(/Your changes are recorded under it/)).toBeTruthy();
+    expect(within(edit).getByText(/how you sign in, beside your address/)).toBeTruthy();
     fireEvent.click(within(edit).getByRole("checkbox", { name: "people:manage" }));
     expect(within(edit).getByText("This is you")).toBeTruthy();
     expect(within(edit).getByText(/you stop administering people/)).toBeTruthy();
@@ -1204,6 +1199,28 @@ test("a service account is created keyed and its token minted unkeyed from its g
   expect(screen.getByText("cwl_pat_c-tok_1_secret")).toBeTruthy();
 });
 
+// A SERVICE ACCOUNT MAY ACT AS A SEAT FROM ITS FIRST RECORD: the seat goes in
+// the create, never in a second write, which left a pipeline meant to act as
+// a seat acting as itself until it landed. The CONTROL is the case above,
+// which chose none and sent none. Mutation: drop the seat from the body.
+test("a service account created on a seat sends it in the same record", async () => {
+  const eng = engine({
+    "POST /iam/people": [json(201, { id: "p-new", outcome: "applied", op_id: "k" })],
+  });
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "New service account" }));
+  const create = await screen.findByRole("dialog", { name: "New service account" });
+  fireEvent.change(within(create).getByLabelText("Login"), { target: { value: "ci:deploy" } });
+  await settle();
+  pick(within(create).getByLabelText(/^Seat/), /Lee Ops/);
+  fireEvent.click(within(create).getByRole("button", { name: "Create" }));
+  await settle();
+  expect(eng.writes().map((w) => w.body)).toEqual([
+    { kind: "machine", login: "ci:deploy", name: "", seat: "lee", grants: [] },
+  ]);
+  expect(within(create).getByText(/acting as the seat Lee Ops/)).toBeTruthy();
+});
+
 // A LOGIN OUTSIDE ITS HOLDER'S GRAMMAR IS SAID UNDER THE FIELD, and nothing is
 // posted: a service account named like a person, and a person renamed like a
 // machine, each came back a 400 carrying the domain's own sentence. The
@@ -1231,27 +1248,99 @@ test("a login outside its kind's grammar is refused under the field and not post
 });
 
 // FIRST RUN: nobody joined and nobody invited, and the screen says what to
-// do next with the button that does it. The control is a claimed deployment.
-test("an unclaimed deployment's screen says to invite yourself, with the button", async () => {
+// do next — a person comes from their seat, so it points at the org chart,
+// and a company with no human seat at all at adding one first. The CONTROL is
+// a claimed deployment. Mutation: offer an invitation here, or point a
+// company with no human seat at a chart with nothing to invite anybody onto.
+test("an unclaimed deployment's screen points at the seat a person comes from", async () => {
   invitations = { invitations: [], next: "" };
   engine();
   mount(ADMIN, "unclaimed");
   const callout = (await screen.findByText("Nobody has joined yet")).closest(
     ".crewlet-callout",
   ) as HTMLElement;
-  expect(within(callout).getByText(/Invite yourself/)).toBeTruthy();
-  expect(await within(callout).findByRole("button", { name: "Invite person" })).toBeTruthy();
+  expect(
+    within(callout).getByText(/choose your human seat and invite or create yourself/),
+  ).toBeTruthy();
+  const chart = await within(callout).findByRole("link", { name: "Open the org chart" });
+  expect(chart.getAttribute("href")).toBe("#/agents");
+  expect(within(callout).queryByRole("button", { name: /^Invite/ })).toBeNull();
   cleanup();
+
+  humanSeats = [];
+  engine();
+  mount(ADMIN, "unclaimed");
+  const bare = (await screen.findByText("Nobody has joined yet")).closest(
+    ".crewlet-callout",
+  ) as HTMLElement;
+  const add = await within(bare).findByRole("link", { name: "Add a human seat" });
+  expect(add.getAttribute("href")).toBe("#/agents/edit?add=human");
+  expect(within(bare).getByText(/no human seat for one/)).toBeTruthy();
+  cleanup();
+
+  humanSeats = SEATS;
   engine();
   mount(ADMIN, "ready");
   await screen.findByText("Bo Lang");
   expect(screen.queryByText("Nobody has joined yet")).toBeNull();
 });
 
+// A NODE RUNNING NO COMPANY answers the seat listing `409
+// no_active_revision`, and the first step is creating the company: read as
+// an empty answer, the callout sent the operator to "choose your human seat"
+// on a chart with nothing behind it, and the Human seats card said the
+// engine had failed. The CONTROL is the first case above, whose listing
+// answered. Mutation: read only `seats.data` and the callout says "Open the
+// org chart".
+test("an unclaimed node running no company says to create the company first", async () => {
+  invitations = { invitations: [], next: "" };
+  seatsAnswer = json(409, {
+    error: "no_active_revision",
+    message: "This node has not been handed a company yet.",
+    hint: "this node runs no company yet",
+  });
+  engine();
+  mount(ADMIN, "unclaimed");
+  const callout = (await screen.findByText("Nobody has joined yet")).closest(
+    ".crewlet-callout",
+  ) as HTMLElement;
+  expect(within(callout).getByText(/This node runs no company yet/)).toBeTruthy();
+  const create = within(callout).getByRole("link", { name: "Create the company" });
+  expect(create.getAttribute("href")).toBe("#/agents/edit");
+  expect(within(callout).queryByRole("link", { name: "Open the org chart" })).toBeNull();
+  expect(within(callout).queryByRole("link", { name: "Add a human seat" })).toBeNull();
+  // THE GRID SAYS IT TOO, as a sentence rather than a failure.
+  expect(await screen.findByText(/it has no human seat to list/)).toBeTruthy();
+  expect(screen.queryByText(/The engine tried to answer and failed/)).toBeNull();
+});
+
+// A SEAT LISTING STILL ON ITS WAY DECIDES NOTHING: drawn once the
+// invitations alone had answered, the callout said "Open the org chart"
+// while the seats were in flight and "Add a human seat" once they answered
+// none. The CONTROL is the same screen with the listing answered, which draws
+// the callout. Mutation: gate on the invitations alone and the callout is on
+// screen before the seats arrive.
+test("an unclaimed deployment's next step waits for the seat listing", async () => {
+  invitations = { invitations: [], next: "" };
+  seatsAnswer = "pending";
+  engine();
+  mount(ADMIN, "unclaimed");
+  await screen.findByText("Bo Lang");
+  await settle();
+  expect(screen.queryByText("Nobody has joined yet")).toBeNull();
+  cleanup();
+
+  seatsAnswer = null;
+  engine();
+  mount(ADMIN, "unclaimed");
+  expect(await screen.findByText("Nobody has joined yet")).toBeTruthy();
+});
+
 // AN OPEN INVITATION IS THE NEXT STEP, not another one: `unclaimed` stays
 // until somebody redeems, and keyed on it alone the callout said "Nobody has
-// been invited yet" and offered Invite person directly above the invitation
-// just issued. Mutation: ignore the invitations and the callout invites again.
+// been invited yet" and offered another invitation directly above the one
+// just issued. Mutation: ignore the invitations and the callout points at the
+// chart again.
 test("an unclaimed deployment with an open invitation says to open its link", async () => {
   engine();
   mount(ADMIN, "unclaimed");
@@ -1259,7 +1348,9 @@ test("an unclaimed deployment with an open invitation says to open its link", as
     ".crewlet-callout",
   ) as HTMLElement;
   await within(callout).findByText(/The invitation to sam@example\.com is waiting to be redeemed/);
-  expect(within(callout).queryByText(/Invite yourself/)).toBeNull();
-  expect(within(callout).queryByRole("button", { name: "Invite person" })).toBeNull();
+  expect(
+    within(callout).getByText(/cancelled below or on its seat, and issued again from the seat/),
+  ).toBeTruthy();
+  expect(within(callout).queryByRole("link", { name: "Open the org chart" })).toBeNull();
   expect(screen.queryByText(/Nobody has been invited/)).toBeNull();
 });

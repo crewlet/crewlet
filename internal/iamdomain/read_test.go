@@ -79,11 +79,12 @@ func TestAnAbsentLoginIsNobodyRatherThanAnError(t *testing.T) {
 
 	// THE CONTROL: a login somebody DOES hold resolves, or the assertion
 	// above would pass on a reader that answered nobody for everything.
-	id := uuid.New().String()
-	if err := rig.enrol(iamdomain.Enrolment{
+	id := uuid.Must(uuid.NewV7()).String()
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: id, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: "Sarah Chen", Email: "sarah.chen@example.com",
 		Login: "sarah.chen", OpID: "op-1", Reason: "the joiner",
+		Seat: rig.vacantSeat("sarah-chen"), LinkExpiresAt: firstLinkExpiry,
 		Grants: []iam.Grant{iam.GrantStateRead},
 	}); err != nil {
 		t.Fatalf("enrol: %v", err)
@@ -149,7 +150,7 @@ func TestTheEstateSaysWhetherAnybodyIsEnrolled(t *testing.T) {
 
 	// A MACHINE IS NOBODY HERE: a service account signs nobody in with a
 	// password, so the company is still waiting for its first person.
-	if err := rig.enrol(iamdomain.Enrolment{
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: uuid.New().String(), Kind: iam.KindMachine,
 		Stage: iam.StageActive, Name: "Release pipeline", Login: "ci:release",
 		OpID: "op-machine", Reason: "a service account first",
@@ -167,10 +168,11 @@ func TestTheEstateSaysWhetherAnybodyIsEnrolled(t *testing.T) {
 			"who has nobody to sign in as")
 	}
 
-	if err := rig.enrol(iamdomain.Enrolment{
-		PersonID: uuid.New().String(), Kind: iam.KindPerson,
+	if err := rig.enrol(iamdomain.Creation{
+		PersonID: uuid.Must(uuid.NewV7()).String(), Kind: iam.KindPerson,
 		Stage: iam.StageActive, Name: "Sarah Chen",
 		Email: "sarah.chen@example.com", Login: "sarah.chen",
+		Seat: rig.vacantSeat("sarah-chen"), LinkExpiresAt: firstLinkExpiry,
 		OpID: "op-1", Reason: "the first person",
 	}); err != nil {
 		t.Fatalf("enrol: %v", err)
@@ -205,11 +207,12 @@ func TestANamedSessionTheseRowsDoNotHoldIsNobodysOnlyWhereTheyHoldTheLog(t *test
 	t.Parallel()
 	rig := newWriteRig(t)
 	reader := rig.reader(t)
-	person := uuid.New().String()
-	if err := rig.enrol(iamdomain.Enrolment{
+	person := uuid.Must(uuid.NewV7()).String()
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: "Sarah Chen", Email: "sarah.chen@example.com",
-		Login: "sarah.chen", OpID: "enrol-sarah", Reason: "the joiner",
+		Login: "sarah.chen", Seat: rig.vacantSeat("sarah-chen"),
+		LinkExpiresAt: firstLinkExpiry, OpID: "enrol-sarah", Reason: "the joiner",
 	}); err != nil {
 		t.Fatalf("enrol: %v", err)
 	}
@@ -266,11 +269,12 @@ func TestOneResolveAnswersTheSessionAndThePersonTogether(t *testing.T) {
 	rig := newWriteRig(t)
 	reader := rig.reader(t)
 
-	id := uuid.New().String()
-	if err := rig.enrol(iamdomain.Enrolment{
+	id := uuid.Must(uuid.NewV7()).String()
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: id, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: "Sarah Chen", Email: "sarah.chen@example.com",
 		Login: "sarah.chen", OpID: "op-1", Reason: "the joiner",
+		Seat: rig.vacantSeat("sarah-chen"), LinkExpiresAt: firstLinkExpiry,
 		Grants: []iam.Grant{iam.GrantStateRead},
 	}); err != nil {
 		t.Fatalf("enrol: %v", err)
@@ -333,7 +337,7 @@ func TestTheEstateSaysWhetherItEverUsedTheBlindKey(t *testing.T) {
 	if holds() {
 		t.Fatal("a fresh estate reports a blinded row")
 	}
-	if err := rig.enrol(iamdomain.Enrolment{
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: uuid.New().String(), Kind: iam.KindMachine,
 		Stage: iam.StageActive, Name: "Release pipeline", Login: "ci:release",
 		OpID: "enrol-machine", Reason: "a service account",
@@ -345,10 +349,11 @@ func TestTheEstateSaysWhetherItEverUsedTheBlindKey(t *testing.T) {
 		t.Error("a machine with no address counts as a blind, so a company " +
 			"whose first identity was a service account could never mint a key")
 	}
-	if err := rig.enrol(iamdomain.Enrolment{
-		PersonID: uuid.New().String(), Kind: iam.KindPerson,
+	if err := rig.enrol(iamdomain.Creation{
+		PersonID: uuid.Must(uuid.NewV7()).String(), Kind: iam.KindPerson,
 		Stage: iam.StageActive, Name: "Sarah Chen",
 		Email: "sarah.chen@example.com", Login: "sarah.chen",
+		Seat: rig.vacantSeat("sarah-chen"), LinkExpiresAt: firstLinkExpiry,
 		OpID: "enrol-person", Reason: "the joiner",
 	}); err != nil {
 		t.Fatalf("enrol a person: %v", err)

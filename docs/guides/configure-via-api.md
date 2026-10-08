@@ -276,14 +276,27 @@ drop the seat in its `roles`, or the unit in its `children`, and `PUT` it back
 seat at the company root is added through the whole document. The answer's
 `derived` hierarchy shows where everything landed.
 
-**A human seat somebody is bound to cannot be taken away.** A write that
-removes one — or turns it into an agent seat — while the
-[identity directory](../concepts/identity-and-access.md) binds a person to it,
-at any stage short of their removal, is refused `409 seat_held` naming them under `held`;
-unbind or remove them first. A node that cannot read the directory refuses
-such a write `503 identity_unavailable` rather than allowing it. An offline `crewlet config import`
-has no directory to ask, so the binding it strands is reported by
-`crewlet iam check`.
+**A human seat something holds cannot be taken away.** A write that removes
+one — or turns it into an agent seat — is refused `409 seat_held` while the
+[identity directory](../concepts/identity-and-access.md) binds somebody to it
+at any stage short of their removal, or while an open invitation names it,
+since an invitation holds its seat until it is redeemed, cancelled or lapses.
+The answer names the one thing holding each seat under `held` — a holder by
+`person`, `kind`, `login` and `stage`, or an invitation by its `invitation` id
+and `expires_at`, never the invitee's address — and the remedy follows the
+holder, each a gesture for whoever holds `people:manage`:
+
+| What holds the seat | Free it with |
+|---|---|
+| A person | Move them to another human seat (`PATCH /iam/people/{person}` with `seat`, or `crewlet iam bind <person> <seat>`) or remove them. A person always holds a seat, so unbinding one is refused |
+| A service account | Unbind it (`PATCH /iam/people/{person}` with `seat: ""`, or `crewlet iam unbind <person>`) or move it |
+| An open invitation | Cancel it (`DELETE /iam/invitations/{invitation}`, or `crewlet iam cancel-invite <invitation>`) |
+
+Then send the write again. A node that cannot read the directory refuses such
+a write `503 identity_unavailable` rather than allowing it. An offline
+`crewlet config import` has no directory to ask, so the binding it strands is
+reported by `crewlet iam check`, and an invitation to a seat it removed is
+refused when somebody tries to redeem it.
 
 ### A lead editing their own team
 
@@ -380,7 +393,7 @@ classified, beside the `detail` that renders them.
 | `405` | `method_not_allowed` | A `/config` path under a method it does not take; `Allow` names the ones it does |
 | `409` | `no_active_revision` | A per-entity write before the first PUT: there is nothing to splice into |
 | `409` | `revision_advanced` | Stale `If-Match`, a concurrent writer won the race, or the write was built on an empty store while the fleet is running a company |
-| `409` | `seat_held` | A write that removes a human seat, or makes it an agent's, while the identity directory binds somebody to it; the answer names them. Unbind or remove them first |
+| `409` | `seat_held` | A write that removes a human seat, or makes it an agent's, while the identity directory binds somebody to it or an open invitation names it; `held` names the one thing holding each seat. Move or remove a person, unbind a service account, or cancel the invitation first |
 | `412` | `no_active_revision` | `If-Match: <revision>` sent while the node has no active revision; retry without `If-Match`, or send `If-None-Match: *` |
 | `412` | `already_configured` | `If-None-Match: *` on `PUT /config` sent while a revision is active on this node or anywhere in the fleet |
 | `412` | `entity_exists` | A per-entity create (`If-None-Match: *`) naming an MCP server or LLM provider the active revision already has |

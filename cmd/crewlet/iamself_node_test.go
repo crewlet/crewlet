@@ -42,7 +42,7 @@ func TestYourOwnTokenMintsOnARealNode(t *testing.T) {
 	// the one `crewlet validate` admits without an acknowledgement; the
 	// second factor has cases of its own.
 	boot.API.Auth.TOTP = iam.SecondFactorOptional
-	company, err := config.ParseCompany([]byte(companyYAML))
+	company, err := config.ParseCompany([]byte(peopleCompanyYAML))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -59,10 +59,10 @@ func TestYourOwnTokenMintsOnARealNode(t *testing.T) {
 	base := "http://127.0.0.1:" + strconv.Itoa(port)
 	client := httpxtest.Pool(t)
 
-	// THE FOUNDER, invited under the Tier A token and redeeming the link
-	// as anybody would.
+	// THE FOUNDER, invited under the Tier A token onto the founder's seat
+	// and redeeming the link as anybody would.
 	const password = "a-perfectly-fine-passphrase"
-	id, secret := inviteOverHTTP(t, client, base, "jane@example.com",
+	id, secret := inviteOverHTTP(t, client, base, "jane@example.com", "founder",
 		[]iam.Grant{iam.GrantStateRead, iam.GrantPeopleManage})
 	founder, _ := json.Marshal(map[string]string{
 		"secret": secret, "login": "jane.founder", "name": "Jane Founder",
@@ -119,7 +119,8 @@ func TestYourOwnTokenMintsOnARealNode(t *testing.T) {
 		t.Fatalf("the command printed no token:\n%s", out.String())
 	}
 
-	// AND THE TOKEN IT PRINTED IS ONE THE NODE HONOURS, as its owner.
+	// AND THE TOKEN IT PRINTED IS ONE THE NODE HONOURS, as its owner —
+	// who acts as the founder's seat.
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
 		base+"/agents", nil)
 	if err != nil {
@@ -137,14 +138,15 @@ func TestYourOwnTokenMintsOnARealNode(t *testing.T) {
 	}
 }
 
-// inviteOverHTTP issues one invitation under the fixture's Tier A token, the
-// way `crewlet iam invite` does, and answers the id and secret its link
-// carries.
-func inviteOverHTTP(t *testing.T, client *http.Client, base, email string,
+// inviteOverHTTP issues one invitation onto a human seat under the fixture's
+// Tier A token, the way `crewlet iam invite` does, and answers the id and
+// secret its link carries.
+func inviteOverHTTP(t *testing.T, client *http.Client, base, email, seat string,
 	grants []iam.Grant) (id, secret string) {
 
 	t.Helper()
-	raw, _ := json.Marshal(map[string]any{"email": email, "grants": grants})
+	raw, _ := json.Marshal(map[string]any{"email": email, "seat": seat,
+		"grants": grants})
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
 		base+"/iam/invitations", bytes.NewReader(raw))
 	if err != nil {
@@ -164,7 +166,7 @@ func inviteOverHTTP(t *testing.T, client *http.Client, base, email string,
 		res.StatusCode != http.StatusCreated {
 		t.Fatalf("the invitation answered %d (%v)", res.StatusCode, err)
 	}
-	return inviteLink(t, issued.URL, base)
+	return linkIn(t, issued.URL, base, "invite")
 }
 
 // post sends one unauthenticated JSON write and answers its status and body.

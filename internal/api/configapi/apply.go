@@ -268,8 +268,9 @@ type prepared struct {
 //   - Its hierarchy, DERIVED BEFORE IT IS JUDGED, because a refusal carries
 //     it too.
 //   - Its rules, and what an answer reports about it.
-//   - Whether it takes a human seat away from somebody bound to it, which
-//     is the one step that reads outside this node (seatheld.go).
+//   - Whether it takes a human seat away from somebody bound to it or an
+//     open invitation holding it, which is the one step that reads outside
+//     this node (seatheld.go).
 func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	active, found, err := s.configs.Active(ctx)
 	if err != nil {

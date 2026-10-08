@@ -8,6 +8,13 @@
  * `applyTemplate` operation, so the whole start is a single undo and is
  * checked by the engine exactly like any other draft.
  *
+ * YOUR OWN SEAT IS OFFERED ON, named for the role. Every person holds a human
+ * seat for as long as they exist, and is invited or created onto one from
+ * the org chart — so a company started with no human seat is one nobody,
+ * the operator included, can join until somebody adds one. Unticking it is
+ * still an answer (an agents-only company run through API tokens), and a
+ * deliberate one.
+ *
  * NO INVENTED CONTACT. A human seat reaches people through a contact
  * identity, and a template never writes one it was not given: the only
  * identity here is the one the operator may type for their own seat. The
@@ -74,8 +81,10 @@ export function CreateCompany({
   const [mission, setMission] = useState("");
   const [template, setTemplate] = useState<TemplateId>("new_company");
   const [leads, setLeads] = useState<LeadsAre>("agents");
-  const [ownSeat, setOwnSeat] = useState(false);
-  const [seatName, setSeatName] = useState("");
+  // ON, AND NAMED: see the file's doc. A name left empty is refused by the
+  // template, so a box ticked from the start starts with one.
+  const [ownSeat, setOwnSeat] = useState(true);
+  const [seatName, setSeatName] = useState("Founder");
   const [identity, setIdentity] = useState<HumanContactKey>(CONTACT_IDENTITIES[0]!.key);
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -161,7 +170,7 @@ export function CreateCompany({
         <Checkbox
           framed
           label="Add a seat for yourself"
-          description="A human seat at the top of the organization, so agents can reach you and escalate to you."
+          description="A human seat at the top of the organization, so agents can reach you and escalate to you. It is the seat you will hold: every person holds one, and once the company exists you invite or create yourself on it from the org chart."
           checked={ownSeat}
           onCheckedChange={setOwnSeat}
           disabled={disabled}

@@ -73,8 +73,9 @@ type Record struct {
 // that holds a principal fills it from internal/iam's ActorFor — the one
 // function every trail's author comes from.
 type Author struct {
-	// Name is the author: a seat's handle for a person bound to one, a
-	// login otherwise, `token:<id>` for a Tier A token, the node for the
+	// Name is the author: the seat's handle for a person (every person
+	// holds one) or a credential bound to a seat, the login of a credential
+	// bound to none — `token:<id>` for a Tier A token — and the node for the
 	// engine's own writes.
 	Name string
 

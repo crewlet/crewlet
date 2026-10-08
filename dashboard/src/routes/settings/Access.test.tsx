@@ -59,9 +59,14 @@ const SEATS = {
     {
       handle: "jane",
       name: "Jane Founder",
-      holder: { person: "p-ana", login: "ana.diaz", stage: "active" },
+      holder: { person: "p-ana", kind: "person", login: "ana.diaz", stage: "active" },
     },
-    { handle: "sam", name: "Sam Support" },
+    // HELD BY ITS OPEN INVITATION, which `OPEN_INVITATIONS` lists too.
+    {
+      handle: "sam",
+      name: "Sam Support",
+      invitation: { id: "inv-1", email: "sam@example.com", expires_at: "2026-10-14T09:00:00Z" },
+    },
     { handle: "lee", name: "Lee Legal" },
   ],
 };
@@ -234,10 +239,69 @@ test("a seat names who holds it and a token the seat its row binds", async () =>
   expect(within(tokensTile).getByText("1 bound to a seat")).toBeTruthy();
   // The directory's own finding, in the engine's words.
   expect(screen.getByText("The seat removed-seat is not in the org chart.")).toBeTruthy();
-  // A SEAT IS HELD BY ONE PERSON OR BY NOBODY: two of the three are vacant.
+  // AN INVITED SEAT IS NOT VACANT: the open invitation holds it as surely as
+  // a person would, so the tile counts the one seat nothing holds and says
+  // the invited one beside it. Mutation: count every seat with no holder and
+  // the figure reads 2.
   const vacant = screen.getByText("Human seats nobody holds").closest(".crewlet-statcard");
-  expect(vacant?.querySelector(".crewlet-statcard__value")?.textContent).toBe("2");
-  expect(within(vacant as HTMLElement).getByText("of 3 human seats")).toBeTruthy();
+  expect(vacant?.querySelector(".crewlet-statcard__value")?.textContent).toBe("1");
+  expect(within(vacant as HTMLElement).getByText("1 invited · of 3 human seats")).toBeTruthy();
+  // AND ITS ROW NAMES THE INVITATION rather than "Nobody holds it".
+  const sam = screen
+    .getAllByRole("link", { name: /Sam Support/ })
+    .map((link) => link.closest(".grid-row") as HTMLElement)
+    .find((row) => row && within(row).queryByText("Invited"))!;
+  expect(within(sam).getByText("sam@example.com")).toBeTruthy();
+  expect(within(sam).queryByText("Nobody holds it")).toBeNull();
+  const lee = screen.getByRole("link", { name: /Lee Legal/ }).closest(".grid-row") as HTMLElement;
+  expect(within(lee).getAllByText("Nobody holds it").length).toBeGreaterThan(0);
+});
+
+// A PERSON WITH NO SEAT IS A FAULT, not a neutral blank: every person holds a
+// human seat, and one recorded before that held is what the directory
+// reports (`person_without_seat`), worded here rather than drawn as its raw
+// code. A service account bound to none is ordinary. The CONTROL is the
+// suspended service account on page two. Mutation: draw the person's empty
+// seat like a machine's and the warning is gone.
+test("a person with no seat is drawn as the fault the directory reports", async () => {
+  stubIam((url) => {
+    if (url.pathname === "/iam/people" && !url.searchParams.get("after")) {
+      return json(200, {
+        ...PAGE_ONE,
+        people: [
+          ...PAGE_ONE.people,
+          { id: "p-ed", kind: "person", stage: "active", login: "ed.vance", name: "Ed Vance" },
+        ],
+      });
+    }
+    if (url.pathname === "/iam/check") {
+      return json(200, {
+        ...CHECK,
+        findings: [
+          {
+            kind: "person_without_seat",
+            person: "p-ed",
+            login: "ed.vance",
+            detail: "the person ed.vance holds no human seat",
+          },
+        ],
+      });
+    }
+    return null;
+  });
+  mount();
+  const ed = (await screen.findByText("Ed Vance")).closest(".grid-row") as HTMLElement;
+  expect(within(ed).getByText("No seat")).toBeTruthy();
+  expect(within(ed).queryByText("Bound to no seat")).toBeNull();
+  const ci = (await screen.findAllByText("ci:release"))
+    .map((cell) => cell.closest(".grid-row") as HTMLElement | null)
+    .find((row) => row && within(row).queryByText("Service account"))!;
+  expect(within(ci).getByText("Bound to no seat")).toBeTruthy();
+  // THE FINDING IN WORDS, never its code.
+  const finding = (await screen.findByText("The person ed.vance holds no human seat."))
+    .parentElement as HTMLElement;
+  expect(within(finding).getByText("No seat")).toBeTruthy();
+  expect(screen.queryByText("person_without_seat")).toBeNull();
 });
 
 // THE BOUND SEAT'S KIND IS THE CHART'S: a token bound to an AGENT seat is the
@@ -494,7 +558,8 @@ test("an ended credential draws no deadline it will never reach", async () => {
 test("an invitation names its sender by the chart and says its address was erased", async () => {
   stubIam();
   mount();
-  await screen.findByText("sam@example.com");
+  // TWICE: the invitation's own row, and the seat it holds on the Human seats card.
+  await screen.findAllByText("sam@example.com");
   fireEvent.click(screen.getByRole("checkbox", { name: "Show expired and redeemed" }));
   const erased = await screen.findByText("Erased with the person it invited");
   const row = erased.closest(".grid-row") as HTMLElement;
@@ -508,7 +573,8 @@ test("an invitation names its sender by the chart and says its address was erase
 test("the open invitations are listed, and the toggle asks for every state", async () => {
   const asked = stubIam();
   mount();
-  expect(await screen.findByText("sam@example.com")).toBeTruthy();
+  // TWICE: the invitation's own row, and the seat it holds on the Human seats card.
+  expect((await screen.findAllByText("sam@example.com")).length).toBe(2);
   expect(screen.getAllByText("sealed").length).toBeGreaterThan(0);
   expect(screen.queryByText("old@example.com")).toBeNull();
   fireEvent.click(screen.getByRole("checkbox", { name: "Show expired and redeemed" }));

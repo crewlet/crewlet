@@ -269,10 +269,10 @@ func bucketDue(ctx context.Context, tx *sql.Tx, b Bucket, changes, sessions uint
 			WHERE bucket = ? AND ended_at = 0
 			  AND absolute_expires_at > 0 AND absolute_expires_at < ? LIMIT 1`,
 			[]any{bucket, over}},
+		// An invitation with no expiry included, as the apply collects it.
 		{"invitations", over <= 0, `
 			SELECT 1 FROM iam_invites
-			WHERE bucket = ? AND redeemed_at = 0
-			  AND expires_at > 0 AND expires_at < ? LIMIT 1`,
+			WHERE bucket = ? AND redeemed_at = 0 AND expires_at < ? LIMIT 1`,
 			[]any{bucket, over}},
 		// AND WHAT WAS SPENT, which a sweep collects too, so a bucket
 		// holding nothing but a spent invitation or a revoked token is a

@@ -493,9 +493,9 @@ replays the frames its socket produced through the dashboard's own
 there and nowhere else, so it needs node too.
 
 It is also where a FLEET signs a person in. On a clustered fleet, a Tier A
-token invites somebody, they redeem the link and sign in on one member, and the
-same cookie must then read, write as them and open the live socket on the
-other member — never `401` while it catches up — while a handshake from a
+token invites somebody onto a human seat, they redeem the link and sign in on
+one member, and the same cookie must then read, write as them and open the
+live socket on the other member — never `401` while it catches up — while a handshake from a
 foreign origin is refused and a sign-out everywhere on the second member is
 refused on the first. The sign-in surface, the identity directory and the
 human write surface it serves are built by `api.NewHumanSurfaces`, the

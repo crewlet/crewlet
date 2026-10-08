@@ -71,9 +71,13 @@ type Directory interface {
 	// tokens listing asks of every `token:<id>` login.
 	PersonByLogin(ctx context.Context, login string) (iamdomain.Sighting, error)
 
-	// SeatBindings is everybody bound to a seat, in one snapshot, which
-	// the seat listing joins to the running company's human seats.
-	SeatBindings(ctx context.Context) ([]iamdomain.SeatBinding, error)
+	// SeatClaims is everybody bound to a seat and every OPEN invitation
+	// onto one, read in ONE snapshot and judged open at now — which the seat
+	// listing joins to the running company's human seats. One read because
+	// a redemption spends its invitation and binds its person in one record:
+	// read apart, a redemption landing between the two showed its seat as
+	// held by neither, a vacancy offered to the next administrator.
+	SeatClaims(ctx context.Context, now time.Time) (iamdomain.SeatClaims, error)
 
 	// Invitations is one page of the invitations this estate holds.
 	Invitations(ctx context.Context, q iamdomain.InvitationsQuery) (
@@ -93,7 +97,11 @@ type Directory interface {
 // unknown outcome read as 200, and the removal, the revocation and the reset
 // announced beside it had not necessarily happened.
 type Writer interface {
-	Enrol(ctx context.Context, in iamdomain.Enrolment) (statelog.Result, error)
+	// Create creates a person or a service account in one record, and
+	// answers a created PERSON's first password link beside the outcome —
+	// derived under the company's key, which this surface does not hold, so
+	// the domain is the only party that can hand it back.
+	Create(ctx context.Context, in iamdomain.Creation) (iamdomain.Created, error)
 	UpdatePerson(ctx context.Context, in iamdomain.PersonUpdate) (statelog.Result, error)
 	SetStage(ctx context.Context, personID string, stage iam.Stage,
 		opID, reason string) (statelog.Result, error)
@@ -180,16 +188,18 @@ type Options struct {
 	// node is in, and the look of a keyring nobody has.
 	Opener Opener
 
-	// ExternalBase is `api.external_url`, which is what an invitation's
-	// link is built from.
+	// ExternalBase is `api.external_url`, which is what every link this
+	// surface hands out is built from: an invitation's, a password reset
+	// link's, and the first password link a PERSON's create issues.
 	//
-	// OPTIONAL, AND ITS ABSENCE REFUSES ONE ROUTE rather than the
-	// surface. The whole directory — reading it, granting, suspending,
-	// revoking — needs no external address at all; only the invitation
-	// does, because a link built from a bind address is one nobody
-	// outside the host can follow and the engine reads no scheme or host
-	// off a request. Refusing to build over it would take the directory
-	// down for a setting that affects a single gesture.
+	// OPTIONAL, AND ITS ABSENCE REFUSES THE GESTURES THAT HAND OUT A LINK
+	// rather than the surface. The rest of the directory — reading it,
+	// granting, suspending, revoking, creating a service account — needs no
+	// external address at all; those three do, because a link built from a
+	// bind address is one nobody outside the host can follow and the engine
+	// reads no scheme or host off a request. Refusing to build over it would
+	// take the directory down for a setting that affects three gestures,
+	// each of which names it ([Service.linksPoint]).
 	ExternalBase string
 
 	// Bindings classifies one person's seat binding for the

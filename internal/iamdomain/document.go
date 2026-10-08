@@ -106,7 +106,9 @@ type Enrolled struct {
 	V int `json:"v"`
 
 	// Person is the document the row stores: their kind, stage, sealed
-	// name and address, first credentials and grants.
+	// name and address, first credential and grants — a created person's
+	// first password link, a redeemer's chosen password, and none for a
+	// service account.
 	Person Person `json:"person"`
 
 	// Holds is the login, the address blind and the seat the person is
@@ -135,14 +137,17 @@ type IdentityChange struct {
 	// Login is never empty: every principal holds one.
 	Login string `json:"login"`
 
-	// SeatID is the seat's handle (ADR-0013), or empty for a person bound
-	// to none.
+	// SeatID is the seat's handle (ADR-0013), or empty for a service
+	// account bound to none — never for a person, whose seat is moved and
+	// never cleared, unless a build before every person held a seat wrote
+	// it, which the applier still salvages as it is.
 	SeatID string `json:"seat_id"`
 
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// Invitation is an address spoken for by somebody who has no person yet.
+// Invitation is an address and a human seat spoken for by somebody who has no
+// person yet.
 type Invitation struct {
 	V int `json:"v"`
 
@@ -175,10 +180,13 @@ type Invitation struct {
 	// admitting exactly what this field exists to close.
 	Verifier string `json:"verifier,omitempty"`
 
-	// Seat is the HANDLE of the seat redeeming this BINDS (ADR-0013), or
-	// empty for an invitation that binds none. Decided once by whoever
-	// issued it, on a seat the chart held as a human seat nobody was bound
-	// to, and bound by the redemption's own record.
+	// Seat is the HANDLE of the seat redeeming this BINDS (ADR-0013), and
+	// holds until then. Decided once by whoever issued it, on a seat the
+	// chart held as a human seat nobody held, and bound by the redemption's
+	// own record. EMPTY only on an invitation a build before every
+	// invitation named a seat issued: it is redeemable by nobody, and the
+	// applier writes it as it is rather than refuse a record every node
+	// would then stop on.
 	Seat string `json:"seat,omitempty"`
 
 	// ExpiresAt is when it stops being redeemable. THE WRITER'S CLOCK is
@@ -384,6 +392,9 @@ func (c Credential) EndedBy(now Counters) bool {
 // one of them next, as a token minted in that snapshot is ([Credential.EndedBy]).
 // STAMPED BY THE RECORD, never by its caller: the caller forms the person
 // without either counter, which it could only read in another transaction.
+// Two records issue a link and both stamp it in their own snapshot: an
+// administrator's reset ([Writer.UpdatePerson]) and a created person's first
+// password link ([Writer.Create]), which holds no earlier set — before is nil.
 func stampIssued(before, after []Credential, counters Counters) []Credential {
 	held := make(map[string]bool, len(before))
 	for _, c := range before {
@@ -532,9 +543,15 @@ const (
 	// without re-enrolling the app.
 	MethodRecovery CredentialMethod = "recovery"
 
-	// MethodReset is a ONE-TIME PASSWORD RESET LINK an administrator
-	// issued: a 256-bit crypto/rand secret held, like a machine token's,
-	// as a SHA-256 verifier ([credential.ResetVerifier]), with an expiry.
+	// MethodReset is a ONE-TIME PASSWORD LINK: a RESET LINK an
+	// administrator issued, or the FIRST PASSWORD LINK an administrator's
+	// create issued the person it created ([Writer.Create]). Either is a
+	// 256-bit secret — a reset's crypto/rand, a first link's derived under
+	// the company's key — held, like a machine token's, as a SHA-256
+	// verifier ([credential.ResetVerifier]), with an expiry; nothing stored
+	// tells the two apart, and nothing needs to: one spend path serves both,
+	// and whether a link sets somebody's first password is read off whether
+	// they hold one ([ResetRow.First]).
 	//
 	// A CREDENTIAL ROW RATHER THAN A TABLE OF ITS OWN, because it is one:
 	// something presented and checked against a verifier, owned by one

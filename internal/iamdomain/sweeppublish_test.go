@@ -44,15 +44,20 @@ func TestTwoNodesWithSkewedClocksDeleteIdenticalRows(t *testing.T) {
 	rig := newWriteRig(t)
 	peer := newFollower(t, "node-b", brokerAt.Add(365*24*time.Hour))
 
-	person := uuid.New().String()
-	if err := rig.enrol(iamdomain.Enrolment{
+	person := uuid.Must(uuid.NewV7()).String()
+	wall := time.Now().UTC()
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: "Sarah Chen", Email: "sarah.chen@example.com",
-		Login: "sarah.chen", OpID: "enrol-sarah", Reason: "the joiner",
+		Login: "sarah.chen", Seat: rig.vacantSeat("sarah-chen"),
+		// THE FIRST PASSWORD LINK OPEN PAST EVERY SWEEP HERE, which run at
+		// the wall clock: a link lapsed by then is a credential the sweep
+		// collects, and its bucket would be due for a reason no case names.
+		LinkExpiresAt: wall.Add(365 * 24 * time.Hour),
+		OpID:          "enrol-sarah", Reason: "the joiner",
 	}); err != nil {
 		t.Fatalf("enrol: %v", err)
 	}
-	wall := time.Now().UTC()
 	live := rig.openSession(person, wall.Add(365*24*time.Hour))
 	ended := rig.openSession(person, wall.Add(365*24*time.Hour))
 	rig.closeSession(person, ended, "logout")
@@ -115,15 +120,18 @@ func TestTwoNodesWithSkewedClocksDeleteIdenticalRows(t *testing.T) {
 func TestABucketIsSweptOnlyOnceItIsASlackPastItsHorizon(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
-	person := uuid.New().String()
-	if err := rig.enrol(iamdomain.Enrolment{
+	person := uuid.Must(uuid.NewV7()).String()
+	wall := time.Now().UTC()
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: "Sarah Chen", Email: "sarah.chen@example.com",
-		Login: "sarah.chen", OpID: "enrol-sarah", Reason: "the joiner",
+		Login: "sarah.chen", Seat: rig.vacantSeat("sarah-chen"),
+		// Open past every sweep here, for the case above's reason.
+		LinkExpiresAt: wall.Add(365 * 24 * time.Hour),
+		OpID:          "enrol-sarah", Reason: "the joiner",
 	}); err != nil {
 		t.Fatalf("enrol: %v", err)
 	}
-	wall := time.Now().UTC()
 	rig.openSession(person, wall.Add(365*24*time.Hour))
 	rig.drain()
 	end, err := rig.log.End(t.Context())

@@ -152,46 +152,86 @@ instead of to the seat.
 
 ---
 
+## Putting a person in the seat
+
+A human seat is where a person comes from. **Every person who signs in holds
+exactly one human seat**, from the moment they exist until they are removed
+([ADR-0026](https://github.com/crewlet/crewlet/blob/main/adr/0026-every-person-holds-a-human-seat.md)),
+so the seat is declared first — in the company document, as above — and the
+person is then put in it. A human seat is in one of three states, and **Agents
+› Org chart** draws each on the seat's card for anybody who holds
+`people:manage` or `audit:read` (a reader holding neither sees the card's
+usual line, and the directory is never asked on their behalf):
+
+| The card says | What it means | What `people:manage` can do from the card's menu, its peek and its page |
+|---|---|---|
+| **Vacant** | Nobody holds it and no invitation names it | **Invite** (on the card's menu, **Invite to this seat…**) — an address and the grants; the link is shown once, and the person chooses their login and password when they redeem it. **Create person** (**Create a person on this seat…**) — an address, optionally a name and a login (proposed from the address when left empty), and the grants; the person exists at once, `active`, and you are shown their **first password link** once |
+| **Invited ·** an address | An open invitation holds it until it is redeemed, cancelled or lapses — a week. Nobody else can be invited onto it, created on it or bound to it meanwhile | **Cancel invitation**, which frees the seat |
+| **Held by** a login | A person holds it, at whatever stage, or a service account or a token's row is bound to it | Nothing here: the person is changed, moved, suspended or removed in Settings › People & access |
+
+The dialog is about the seat it was opened from and offers no other. The same
+gestures are a command and a route each — `crewlet iam invite <address> -seat
+sarah-chen` and `crewlet iam create -email <address> -seat sarah-chen` (`POST
+/iam/invitations` and `POST /iam/people`, both with `seat`) — and `crewlet iam
+seats -unheld` lists the seats they can name. Either way the seat must be a
+human seat the running company holds, nobody holds and no open invitation
+names; anything else is refused naming what is in the way. What a link does
+and what is kept of it is in [A person arrives on their
+seat](identity-and-access.md#a-person-arrives-on-their-seat-invited-or-created).
+
+**A person's seat is moved, never cleared.** To put somebody on another seat,
+bind them to it — `crewlet iam bind <person-id> <seat>`, or the seat field of
+**Edit login, seat and grants** in Settings › People & access, which offers the
+vacant human seats and their own and no "No seat". The move is one record: the
+old seat is free the moment the new one is taken. A suspended or retired person
+**keeps** their seat. To free a seat for somebody else, move its holder or
+remove them; the removal's tombstone keeps who held it, and what they did stays
+recorded under the seat's handle, so a successor arriving loses no history.
+
+A **service account** differs only in that its seat is optional: it is bound
+to a human seat with `-seat` at its create or with `crewlet iam bind`, and
+freed with `crewlet iam unbind`.
+
+---
+
 ## Acting as your seat on the dashboard and the API
 
 The engine's own surface — the dashboard, the REST API, and the operator tool
 server your assistant reaches — takes no `contact` identity, because nothing is
 ever sent there. A person acts **as their seat** on it through the [identity
 directory](identity-and-access.md#the-binding-has-two-ends-and-only-one-of-them-arbitrates):
-their row is bound to the seat, and every request they make resolves to it.
-
-```
-crewlet iam bind <person-id> sarah-chen
-```
+their row is bound to the seat they were invited or created onto, and every
+request they make resolves to it.
 
 ```mermaid
 flowchart LR
     SESSION["signed in<br/>(session cookie)"]
     TOKEN["Tier A token<br/>acts under the login token:its-id"]
-    ROW["identity directory<br/>the row for that person or login"]
+    PERSON["a person's row<br/>always holds a human seat"]
+    MACHINE["a machine row<br/>token:its-id, or a service account"]
     SEAT["seat sarah-chen<br/>in the org chart"]
     NONE["no seat<br/>acts as the credential"]
-    SESSION --> ROW
-    TOKEN --> ROW
-    ROW -->|"crewlet iam bind"| SEAT
-    ROW -->|"unbound"| NONE
+    SESSION --> PERSON
+    TOKEN --> MACHINE
+    PERSON -->|"invited or created onto it;<br/>moved with crewlet iam bind"| SEAT
+    MACHINE -->|"bound: create -seat,<br/>or crewlet iam bind"| SEAT
+    MACHINE -->|"bound to none,<br/>or no row at all"| NONE
 ```
 
-A person who signs in is a row already, and binding it is the one command
-above. Somebody who has **not joined yet** can be bound as they do: an
-invitation that names the seat (`crewlet iam invite <address> -seat
-sarah-chen`) binds the person it creates to it when they redeem the link — see
-[An invitation may bind a seat](identity-and-access.md#everybody-arrives-by-invitation).
-Every row carries a **login** — the name an unbound person acts and is
-recorded under — which is why an enrolment names one whatever path creates
-it, and why an invitation's form proposes one from the address. A **Tier A token** acts under the login `token:<id>`, so it acts as a
-seat when the directory holds a row under that login bound to one: enrol it as
-a machine (`crewlet iam create -kind machine -login token:<id>`) and bind that
-row. Typed into the dashboard's sign-in screen, a Tier A token is exchanged for
-a one-hour session that acts exactly as the token does, its binding included —
-the browser keeps the session and never the token. The bind is a claim on the
-seat itself, so two people can never be bound to one seat — they contend and
-exactly one wins.
+A person never needs a bind step: they arrive bound. Every row carries a
+**login** — the name a person signs in with besides their address, and the name
+a token or service account bound to no seat acts and is recorded under — which
+is why every path that creates somebody ends with one, and why an invitation's
+form and a create propose one from the address. A **Tier A token** acts under
+the login `token:<id>`, so it acts as a seat when the directory holds a machine
+row under that login bound to one: `crewlet iam create -kind machine -login
+token:<id> -seat <handle>` enrols and binds it in one record, on a human seat
+nobody holds. Typed into the dashboard's sign-in screen, a Tier A token is
+exchanged for a one-hour session that acts exactly as the token does, its
+binding included — the browser keeps the session and never the token. The bind
+is a claim on the seat itself, so two principals can never be bound to one seat
+— they contend and exactly one wins — and nobody can be bound to a seat an open
+invitation holds.
 
 What the binding buys:
 
@@ -199,15 +239,15 @@ What the binding buys:
   from the dashboard's landing screen — shows your notices, the one reason of eighteen
   that routed each one, and what is waiting on a decision; `#/me` is your own
   work. Both ask the engine who is looking, and your own record is kept under
-  the seat the directory binds you to — which is where an assignment, a
-  mention and a lead's priority list are addressed. Your login names that
+  the seat you hold — which is where an assignment, a mention and a lead's
+  priority list are addressed. Your login names that
   same record, to you and to anybody else: a lead reading your inbox by your
   login reads your seat's.
 - **Your seat's lead relations are yours.** Every authority rule that asks "do
-  you lead this" is asked about the bound seat — so the person holding a unit's
-  lead seat may re-route that unit's project's work, declare its fields and set
-  a report's priorities, where an unbound credential reaches those only through
-  `fleet:operate`. See [the authority
+  you lead this" is asked about the seat you hold — so the person holding a
+  unit's lead seat may re-route that unit's project's work, declare its fields
+  and set a report's priorities, where a token or service account bound to no
+  seat reaches those only through `fleet:operate`. See [the authority
   table](identity-and-access.md#the-authority-table-one-function-decides).
 - **You edit your own team.** Holding a unit's lead seat, you may change the
   seats and units inside it through `/config` — add a seat, edit a goal, move
@@ -226,14 +266,20 @@ What the binding buys:
   See [who a write is attributed
   to](../reference/api-endpoints.md#who-a-write-is-attributed-to).
 
-**Unbound is ordinary.** An operator outside the org chart, a pipeline, an
-automation — each acts as itself under its own login, decided by its grants
-alone, and is never refused for it. It has a record of its own all the same:
-its pins, its inbox marks, its priorities and its personal views are kept
-under that **login**, which is the name every write it makes is attributed to
-and the name every personal read answers for — so what its assistant arranges
-is what its screens show. What it lacks is the work the chart addresses to a
-seat, and the screens say so, naming `crewlet iam bind`.
+**A credential bound to no seat is ordinary.** A pipeline, an automation, the
+deployment's own break-glass token — each acts as itself under its own login,
+decided by its grants alone, and is never refused for it. It has a record of
+its own all the same: its pins, its inbox marks, its priorities and its
+personal views are kept under that **login**, which is the name every write it
+makes is attributed to and the name every personal read answers for — so what
+its assistant arranges is what its screens show. What it lacks is the work the
+chart addresses to a seat, and the screens say so, naming `crewlet iam bind`:
+a service account or a token's row is bound to a human seat nobody holds. A
+**person** is never in this state by design. One recorded before every person
+held a seat is, acting under their bare login in no unit and led by nobody,
+until they are moved onto a seat or removed — the screens tell them to ask
+whoever manages people for one, and `crewlet iam check` names them as
+`person_without_seat`.
 
 Read and snooze marks are the `mark_inbox` tool wherever they are made — the
 dashboard's buttons through `/operator/act`, a script through
@@ -413,15 +459,16 @@ sequenceDiagram
   screens — and it is the fallback, not the mechanism: a frame dropped under
   backpressure or lost to a reconnect is never re-sent.
 
-A person who is not bound to a seat watches the record kept under their login
-— what they follow, and what names them. See [Acting as your
+A token or service account bound to no seat — or a person recorded before
+every person held one — watches the record kept under its login: what it
+follows, and what names it. See [Acting as your
 seat](#acting-as-your-seat-on-the-dashboard-and-the-api).
 
 **The queue is whoever signed in.** `#/inbox`, one click from the landing
 screen (Home), is the queue of the principal the request resolved to — a person
 signed in with a session, or a token the identity directory binds — read under
-that principal's own record name (`iam.RecordOwner`): the seat the directory
-binds them to, or their login when it binds none. First comes what is waiting
+that principal's own record name (`iam.RecordOwner`): the seat they hold, or a
+credential's own login when the directory binds it to none. First comes what is waiting
 on their decision — the questions agents put to them, the coding runs parked on
 a question to them, a seat stopped on its budget — then their notices by the
 company's day, each with the one reason of eighteen that routed it, and the row
@@ -528,14 +575,23 @@ What this buys, with no further config:
 - DACI: the Approver is "the driver's manager", so you become the
   approver of last resort for top-level decisions behaviorally.
 
-Two boundaries to keep in mind:
+Three things to keep in mind:
 
 - **The seat is the colleague hat, not the operator hat.** Config
   ownership (`PUT /config`, API auth tokens, the dashboard) stays an
-  API-auth concern: the seat makes agents know you, and — once the
-  identity directory binds you to it — carries its lead relations onto
-  the engine's own surface; your grants make the engine obey you.
+  API-auth concern: the seat makes agents know you, and — once you are
+  invited or created onto it — carries its lead relations onto the
+  engine's own surface; your grants make the engine obey you.
   Different hats, deliberately separate.
+- **It is the seat you join through.** Every person holds a human seat, so
+  this is where you are put when you first sign in. Declare it before you
+  invite anybody — the **Create the company** form under **Agents › Edit
+  org** adds it when **Add a seat for yourself** is ticked, as it is by
+  default — then sign in with the deployment's API token, open **Agents ›
+  Org chart**, and press **Invite** or **Create person** on it (see
+  [Putting a person in the seat](#putting-a-person-in-the-seat)). A company
+  with no human seat can admit nobody, and `crewlet validate` warns about it
+  at `roles`; that is right only for a company its agents run alone.
 - **Scope `manages` to the top roles.** A founder managing every unit
   by name lists every seat in those units, and root seats are searched
   first when a seat's manager is resolved, so the founder becomes the
@@ -567,8 +623,10 @@ the founder seat there carries a single `contact` identity
 ## Hot Reload
 
 A seat's kind is its `kind:` in the company document. Making a person's seat an
-agent's is refused `409 seat_held` while somebody holds it, naming them —
-exactly as removing it is. The change is then applied like any other (see
+agent's is refused `409 seat_held` while somebody holds it or an open
+invitation names it, naming them — exactly as removing it is. A person is moved
+to another human seat or removed first (their seat is never cleared), a service
+account unbound, and an invitation cancelled. The change is then applied like any other (see
 [Organization Model: Hot Reload](organization-model.md#hot-reload)):
 
 - `human` to `agent`: the seat joins the next epoch's seat list, so a node
@@ -642,7 +700,7 @@ holder may not be reached registers **no contact identity at all**:
 | `active`, `invited`, `enrolling`, or a binding still being enrolled | registered — each is somebody the company has put in the seat |
 | `suspended` | withheld |
 | `retired` | withheld |
-| removed while holding the seat, and the seat not bound since | withheld until the seat is next bound — and that bind ends the removal's say for good, so a later unbind hands the seat to the org chart rather than back to the leaver |
+| removed while holding the seat, and the seat not bound since | withheld until the seat is next bound — and that bind ends the removal's say for good, so the successor's later move off the seat, or a service account's unbind, hands it to the org chart rather than back to the leaver |
 | a stage this build cannot name (a newer peer wrote it) | withheld — briefly unreachable is the safe way to be wrong during an upgrade |
 | nobody bound | registered — an unheld seat is routed by the org chart, as before the directory existed |
 
@@ -658,7 +716,7 @@ at the seat's next bind.
 **Two triggers rebuild the registry, and both rebuild it whole.** A published
 company is the first; the second is the identity applier, which signals after
 every committed batch that moved a seat's standing (a suspension, a
-reinstatement, a bind, an unbind, a removal). The node then reads the
+reinstatement, a bind or a move, a service account's unbind, a removal). The node then reads the
 directory once and, if the answer moved, builds a new registry for the same
 company and swaps it in — never a diff against the live one, so a reader
 always sees one reading of each source. That is **within one apply** of the

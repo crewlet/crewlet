@@ -45,15 +45,16 @@ func viewInvite(id string) *http.Request {
 }
 
 // liveInvitation is a directory holding one invitation that can still be
-// redeemed.
+// redeemed — onto the human seat `eng-lead`, by its handle, because every
+// invitation holds one ([engLead] is the company that holds it).
 type liveInvitation struct{ stubDirectory }
 
 func (liveInvitation) InvitationByID(context.Context, string) (iamdomain.InvitationRow, error) {
 	return iamdomain.InvitationRow{
 		ID: invitationID, Blind: "email:dana@example.com", InvitedBy: "founder",
-		ExpiresAt: clock.Add(time.Hour),
-		Verifier:  iamdomain.InvitationVerifier(invitationSecret),
-		Vouched:   true,
+		Seat: "eng-lead", ExpiresAt: clock.Add(time.Hour),
+		Verifier: iamdomain.InvitationVerifier(invitationSecret),
+		Vouched:  true,
 	}, nil
 }
 
@@ -71,11 +72,11 @@ func (sealedInvitation) InvitationByID(ctx context.Context, id string) (
 
 // THE INVITATION'S FORM PROPOSES A LOGIN, because every person enrols with one.
 //
-// A login is the name an unbound person's every change is recorded under, and
-// somebody following a link has typed nothing yet — so the GET that renders
-// the form answers one derived from the address, in the person grammar, for
-// them to keep or change. Without it a redeemer was free to post no login at
-// all and was recorded as `anonymous` for as long as they held no seat.
+// A login is the name a person signs in with and the one the directory and its
+// trail print beside them, and somebody following a link has typed nothing yet
+// — so the GET that renders the form answers one derived from the address, in
+// the person grammar, for them to keep or change. Without it a redeemer was
+// free to post no login at all, and was recorded as `anonymous`.
 func TestTheInvitationProposesALoginFromTheAddress(t *testing.T) {
 	t.Parallel()
 	mux := http.NewServeMux()
@@ -197,13 +198,13 @@ func TestASpentLinkThatProvesItselfIsNotAFailedAttempt(t *testing.T) {
 	}
 }
 
-// refusingWriter is a writer whose enrolment the domain refuses with err.
+// refusingWriter is a writer whose redemption the domain refuses with err.
 type refusingWriter struct {
 	stubWriter
 	err error
 }
 
-func (w refusingWriter) Enrol(context.Context, iamdomain.Enrolment) (statelog.Result, error) {
+func (w refusingWriter) Redeem(context.Context, iamdomain.Redemption) (statelog.Result, error) {
 	return statelog.Result{}, w.err
 }
 
@@ -255,6 +256,21 @@ func TestARefusedRedemptionSaysWhoseProblemItIs(t *testing.T) {
 			fmt.Errorf("%w: invitation inv-1 has already been used",
 				iamdomain.ErrRefused),
 			http.StatusGone, ""},
+		// A SEAT THE CHART RETIRED SINCE THE ISSUE — removed, or made an
+		// agent's — is the link's refusal too, as the record words it:
+		// never a 400 asking the invitee for a seat they could not give.
+		{"a seat the chart no longer holds as a human seat",
+			fmt.Errorf("%w: invitation inv-1 binds a seat it can no longer "+
+				"bind (seat \"eng-lead\" is an agent's)", iamdomain.ErrRefused),
+			http.StatusGone, ""},
+		// A NODE THAT RUNS NO COMPANY YET has not applied the one the
+		// invitation was issued against, which another node has: the
+		// record says so as a condition, and a retry clears it.
+		{"a node that runs no company yet",
+			fmt.Errorf("%w: invitation inv-1 binds seat \"eng-lead\" and this "+
+				"node runs no company yet to find it in — another node can "+
+				"redeem it", statelog.ErrUnavailable),
+			http.StatusServiceUnavailable, ""},
 		// THE CONTROL: a failure that is not the caller's stays 503, or the
 		// cases above would pass on a surface that answered 400 to
 		// everything.
@@ -291,13 +307,13 @@ func TestARefusedRedemptionSaysWhoseProblemItIs(t *testing.T) {
 	}
 }
 
-// recordingWriter records every enrolment and session start, answering each
-// enrolment with the next error in refusals (nil once they run out).
+// recordingWriter records every redemption and session start, answering each
+// redemption with the next error in refusals (nil once they run out).
 type recordingWriter struct {
 	stubWriter
 	mu       sync.Mutex
 	refusals []error
-	enrolled []iamdomain.Enrolment
+	enrolled []iamdomain.Redemption
 	starts   []iamdomain.SessionStart
 
 	// unresolved makes every enrolment past the refusals answer `unknown`
@@ -305,7 +321,7 @@ type recordingWriter struct {
 	unresolved bool
 }
 
-func (w *recordingWriter) Enrol(_ context.Context, in iamdomain.Enrolment) (
+func (w *recordingWriter) Redeem(_ context.Context, in iamdomain.Redemption) (
 	statelog.Result, error) {
 
 	w.mu.Lock()

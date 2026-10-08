@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -26,11 +27,19 @@ import (
 // a seat answers 403 for that seat is that short, and it is not worth a
 // position on every binding and a comparison on every request.
 //
-// AND THE SEATLESS ARM IS RESERVED FOR A PERSON WHO HOLDS NO BINDING. The org
-// is never consulted for them: their login is the handle, which is exactly why
+// AND THE SEATLESS ARM IS RESERVED FOR A ROW THAT HOLDS NO BINDING. The org is
+// never consulted for it: its login is the handle, which is exactly why
 // internal/iam makes a login and a seat handle disjoint by grammar — the two
 // namespaces meet in one author column and neither may be mistaken for the
-// other.
+// other. Who lands on it is a SERVICE ACCOUNT, a Tier A token's machine row
+// left unbound, or a PERSON recorded before every person held a human seat
+// (internal/iamdomain's ADR-0026) — which the directory's check reports, and
+// which keeps serving here: refusing it would lock out a company whose only
+// administrator predates the rule, and this table cannot tell a person from a
+// machine anyway ([PersonRow] carries no kind). Every binding the directory
+// WRITES now names a human seat, so the gone arm below is reached by a
+// revision that took the seat away — or by a binding an earlier build wrote to
+// an AGENT's seat, which an administrator's create and a bind once allowed.
 
 // Chart is what the organisation this node is running says about one seat —
 // the org chart of the configuration epoch it applied.
@@ -45,18 +54,32 @@ type Chart interface {
 	// A SEAT THE ORGANISATION DOES NOT HOLD answers not found and no
 	// error. AN ERROR IS THE UNKNOWN ARM, never "no such seat": a node
 	// running no company and a seat that does not exist are 503 and 403.
+	// A node running no company answers [ErrNoCompany].
 	Seat(ctx context.Context, handle string) (Seat, bool, error)
 }
+
+// ErrNoCompany is what a [Chart] answers on a node that runs no company yet.
+//
+// EXPORTED BY THE SEAM so a caller can tell it from a lookup that failed, and
+// the two callers read it differently. The request path does not: to
+// [ResolveSeat] it is the unknown arm like any other error, a 503, because a
+// node that has not applied the company yet is the commonest way to land here
+// and another node can serve the request. The directory's WRITER does: binding
+// somebody to a seat on a node that runs no company is not a question waiting
+// can answer when no company has ever been created, so it names the remedy —
+// create one that declares a human seat — rather than a retry.
+var ErrNoCompany = errors.New("session: this node runs no company yet")
 
 // Seat is what the chart says about one seat, as narrowly as this needs it.
 type Seat struct {
 	// Handle is the seat's handle, which is what an author column records.
 	Handle string
 
-	// Kind is agent or human. A person may only be bound to a human seat:
-	// an agent seat has an inbox and a turn loop, and a person acting as
-	// one would be a human writing under an agent's identity in every
-	// audit row in the company.
+	// Kind is agent or human. EVERY BINDING names a human seat — a
+	// person's, and the machine row a service account or a Tier A token is
+	// bound through: an agent seat has an inbox and a turn loop, and a
+	// principal acting as one would be writing under an agent's identity in
+	// every audit row in the company.
 	Kind string
 
 	// Unit is the key of the unit the seat sits in, which a principal
@@ -68,15 +91,17 @@ type Seat struct {
 	Name string
 }
 
-// SeatKindHuman is the only kind a person may be bound to.
+// SeatKindHuman is the only kind anybody may be bound to.
 const SeatKindHuman = "human"
 
 // SeatRow is which row of the seat table a person landed on.
 type SeatRow string
 
 const (
-	// SeatRowSeatless is a person who holds no binding. Their login is
-	// the handle and the chart is never consulted.
+	// SeatRowSeatless is a row that holds no binding — a service account,
+	// an unbound Tier A token's row, or a person recorded before every
+	// person held a seat. Its login is the handle and the chart is never
+	// consulted.
 	SeatRowSeatless SeatRow = "seatless"
 
 	// SeatRowHeld is a seat the running organisation holds as a human
@@ -209,6 +234,6 @@ func ResolveSeat(ctx context.Context, chart Chart, person PersonRow) Binding {
 			" is not a seat of the company this node runs"}
 	}
 	return Binding{Row: SeatRowGone, Seat: seat, Detail: detail + fmt.Sprintf(
-		" is a %q seat, and a person may only act as a %q one", seat.Kind,
+		" is a %q seat, and a principal may only act as a %q one", seat.Kind,
 		SeatKindHuman)}
 }

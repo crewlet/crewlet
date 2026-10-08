@@ -175,6 +175,14 @@ func TestTheIamOpsLedgerCarriesTheFrameworksFiveColumns(t *testing.T) {
 // person's row, which the directory's lookups seek on, and the bucket every
 // table's sweep seeks on — so they have to ship in the migration that creates
 // the table rather than in the one that starts using them.
+//
+// ONE COLUMN DID ARRIVE LATER, and the way it arrived is the rule's other
+// half: an invitation's `seat_id` (replicated migration 0032) is added
+// defaulted, and the rows an older build applied without it are filled by the
+// identity applier's own Rederive — a derivation bump the first boot of the
+// new build runs, in the Go that writes the column — never by an UPDATE in a
+// migration. It is asserted here beside the rest so a later file cannot drop
+// it unnoticed.
 func TestTheIamTablesShipTheColumnsAMigrationCannotAddLater(t *testing.T) {
 	t.Parallel()
 
@@ -182,7 +190,7 @@ func TestTheIamTablesShipTheColumnsAMigrationCannotAddLater(t *testing.T) {
 	for table, columns := range map[string][]string{
 		"iam_people":             {"login", "email_blind", "seat_id", "bucket"},
 		"iam_credentials":        {"bucket"},
-		"iam_invites":            {"bucket"},
+		"iam_invites":            {"bucket", "seat_id"},
 		"iam_sessions":           {"bucket"},
 		"iam_revocation_epochs":  {"bucket"},
 		"iam_session_generation": {"generation"},
@@ -213,11 +221,20 @@ func TestTheIamTablesShipTheColumnsAMigrationCannotAddLater(t *testing.T) {
 // The listing of every binding is the other direction: a non-empty `seat_id`
 // IS the seat's partial index's predicate, so it walks that index — the bound
 // people, in seat order — where without it the read is every person plus a
-// sort, on every alarm heartbeat and every party-registry rebuild.
+// sort, on every seat listing and every party-registry rebuild.
+//
+// AN OPEN INVITATION HOLDS ITS ADDRESS AND ITS SEAT, so every directory
+// decision that takes either asks the invitations too, with a bound value —
+// a seek on the address's index or the seat's (migration 0032), which is
+// plain for the people's reason — and the seat listing walks the OPEN
+// invitations' partial index (0031's) and sorts what it finds: the
+// outstanding invitations only, never every one that ever named a seat.
 //
 // Mutation: make the login and address indexes partial over their non-empty
 // rows and those rows read `SCAN iam_people`; drop `iam_people_seat_claim_idx`
-// and the listing does.
+// and the listing does; drop `iam_invites_seat_idx` and the seat hold scans
+// the invitations; drop `iam_invites_open_idx` and the invitation listing
+// does.
 func TestTheDirectoryLookupsSearchAnIndex(t *testing.T) {
 	t.Parallel()
 	db := openReplicated(t)
@@ -235,10 +252,28 @@ func TestTheDirectoryLookupsSearchAnIndex(t *testing.T) {
 		{`SELECT id, stage, login, seat_id, document FROM iam_people
 		   WHERE login = ? LIMIT 2`,
 			[]any{"jane.doe"}, "SEARCH iam_people USING INDEX iam_people_login_idx"},
-		// SeatBindings' and SeatHolders' shape: every bound person, by seat.
-		{`SELECT id, login, stage, seat_id FROM iam_people
+		// SeatClaims' and SeatHolders' shape: every bound person, by seat.
+		{`SELECT id, kind, login, stage, seat_id FROM iam_people
 		   WHERE seat_id != '' ORDER BY seat_id, id`,
 			nil, "SCAN iam_people USING INDEX iam_people_seat_claim_idx"},
+		// heldByInvitation's two shapes: an open invitation on an address,
+		// and on a seat.
+		{`SELECT id FROM iam_invites
+		   WHERE email_blind = ? AND redeemed_at = 0
+		     AND expires_at > ? AND seat_id <> ''
+		   ORDER BY created_at DESC LIMIT 1`,
+			[]any{"blind", 1}, "SEARCH iam_invites USING INDEX iam_invites_email_idx"},
+		{`SELECT id FROM iam_invites
+		   WHERE seat_id = ? AND redeemed_at = 0
+		     AND expires_at > ? AND seat_id <> ''
+		   ORDER BY created_at DESC LIMIT 1`,
+			[]any{"founder", 1}, "SEARCH iam_invites USING INDEX iam_invites_seat_idx"},
+		// SeatClaims' other half: every open invitation onto a seat.
+		{`SELECT id, seat_id, email_sealed, invited_by, created_at, expires_at
+		    FROM iam_invites
+		   WHERE redeemed_at = 0 AND expires_at > ? AND seat_id <> ''
+		   ORDER BY seat_id, created_at DESC, id`,
+			[]any{1}, "SCAN iam_invites USING INDEX iam_invites_open_idx"},
 	} {
 		plan := planOf(t, db, tc.query, tc.args...)
 		if !strings.Contains(plan, tc.want) {

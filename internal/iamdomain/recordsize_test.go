@@ -133,11 +133,16 @@ func widestCredentials(t *testing.T, sealer *iamdomain.Sealer, person string) []
 // THEM TO IT.
 //
 // The declared largest record rests on the cap, so the cap is checked where
-// the set is formed — the enrolment, a credential change, an edit of the
-// person and a mint — and a write that would leave more LIVE credentials than
-// it publishes nothing. The mint is the one a person meets, so its refusal is
-// the token's own ([iamdomain.ErrInvalidToken]) and counts the live ones.
-// Mutation: drop any one of the four checks and its row goes green past the
+// the set is formed — a credential change, an edit of the person and a mint —
+// and a write that would leave more LIVE credentials than it publishes
+// nothing. The mint is the one a person meets, so its refusal is the token's
+// own ([iamdomain.ErrInvalidToken]) and counts the live ones. An enrolment is
+// no row here because it carries at most one credential, where it once took a
+// list a caller filled and carried a token past the mint's grant cut: a
+// create carries none of the caller's — the record forms its first password
+// link itself — and a redemption's TYPE holds it to one, which its validation
+// holds to a password.
+// Mutation: drop any one of the three checks and its row goes green past the
 // cap.
 func TestAPersonHoldsNoMoreCredentialsThanTheCap(t *testing.T) {
 	t.Parallel()
@@ -185,14 +190,6 @@ func TestAPersonHoldsNoMoreCredentialsThanTheCap(t *testing.T) {
 				},
 			})
 			return err
-		},
-		"an enrolment": func() error {
-			return rig.enrol(iamdomain.Enrolment{
-				PersonID: uuid.Must(uuid.NewV7()).String(), Kind: iam.KindPerson,
-				Stage: iam.StageActive, Name: "John Doe", Email: "john@example.com",
-				Login: "john.doe", Credentials: liveTokens(iamdomain.MaxHeldCredentials + 1),
-				OpID: statelog.NewOpID(time.Now(), "enrol"), Reason: "a hire",
-			})
 		},
 	} {
 		if err := write(); !errors.Is(err, iamdomain.ErrInvalid) {

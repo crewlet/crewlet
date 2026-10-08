@@ -294,7 +294,12 @@ const (
 
 	// CodeUnknownKind is an integration this build does not know.
 	CodeUnknownKind Code = "unknown_kind"
-	// CodeSeatRequired is a per-seat gesture that named no seat.
+	// CodeSeatRequired is a per-seat gesture that named no seat: a GitHub
+	// App connected for a seat, and — because a person holds a human seat
+	// for as long as they exist (ADR-0026) — a person's create or
+	// invitation naming none, and an edit clearing a person's seat. ONE
+	// CODE for all of them, so a client branches on one spelling; the
+	// detail says which seat it needs and why.
 	CodeSeatRequired Code = "seat_required"
 	// CodeNoSuchSeat is a seat the company does not hold.
 	CodeNoSuchSeat Code = "no_such_seat"
@@ -371,8 +376,10 @@ const (
 	CodeNotCreatable Code = "not_creatable"
 
 	// CodeSeatHeld is a write that would take a human seat out of the
-	// company while the identity directory binds somebody to it. The
-	// refusal names every such seat and who holds it.
+	// company while something holds it: a person or a service account the
+	// identity directory binds to it, or an open invitation onto it. The
+	// refusal names every such seat and the ONE thing holding each, whose
+	// kind decides the remedy.
 	CodeSeatHeld Code = "seat_held"
 
 	// CodeConflictingPreconditions is a write carrying both
@@ -930,8 +937,9 @@ var codes = map[Code]string{
 		"address cannot name, so it is not added here. Add it through the " +
 		"whole configuration, or the unit it belongs in.",
 	CodeSeatHeld: "This change removes a person's seat, or makes it an agent's, " +
-		"while somebody is still bound to it, so nothing was changed. Unbind " +
-		"or remove them first — the detail says who.",
+		"while somebody is still bound to it or an open invitation holds it, " +
+		"so nothing was changed. Move them to another seat, remove them, or " +
+		"cancel the invitation first — the detail says which.",
 	CodeConflictingPreconditions: "A create (If-None-Match: *) and an edit " +
 		"(If-Match) were both asked for. Send one of them.",
 	CodeValidationError: "The configuration this change would produce is not " +

@@ -888,7 +888,11 @@ type InvitationRow struct {
 	// against, and empty for an invitation nothing can redeem.
 	Verifier string
 
-	// Seat is the seat redeeming this binds, or empty — [Invitation.Seat].
+	// Seat is the seat redeeming this binds and the invitation holds while
+	// it is open — the COLUMN a hold is decided on ([heldByInvitation]),
+	// which the apply writes from [Invitation.Seat]. Empty only on an
+	// invitation issued before every invitation named a seat, which is
+	// redeemable by nobody ([InvitationRow.Spent]).
 	Seat string
 
 	// Vouched is [ResetRow.Vouched], for [Reader.InvitationByID]: false on a
@@ -908,7 +912,7 @@ func (i InvitationRow) Admits(secret string) bool {
 }
 
 // invitationAdmits is [InvitationRow.Admits]' comparison, and the one the
-// redemption's own record asks ([Writer.Enrol]) — one function, so the route
+// redemption's own record asks ([Writer.Redeem]) — one function, so the route
 // and the record cannot come to disagree about what a secret is.
 func invitationAdmits(verifier, secret string) bool {
 	if verifier == "" || secret == "" {
@@ -918,18 +922,26 @@ func invitationAdmits(verifier, secret string) bool {
 		[]byte(verifier)) == 1
 }
 
-// Spent reports whether this invitation can still be redeemed, at now.
+// Spent reports whether this invitation can NO LONGER be redeemed, at now —
+// [openInvitation]'s complement, which is what the directory holds a value
+// against and the listing reads as outstanding.
 //
-// ONE PREDICATE rather than two fields a caller compares, because the two ways
-// an invitation stops working — redeemed, expired — have the same remedy and
-// must have the same answer: a surface that told them apart would say "this
-// was already used" to somebody whose link merely aged out, and send them
-// looking for whoever used it.
+// ONE PREDICATE rather than fields a caller compares, because every way an
+// invitation stops working — redeemed, expired, and issued before every
+// invitation named a seat — has the same remedy and must have the same
+// answer: a surface that told them apart would say "this was already used" to
+// somebody whose link merely aged out, and send them looking for whoever used
+// it.
+//
+// NO EXPIRY IS SPENT, never open for ever: no writer forms one, and three
+// readers had disagreed about the row that carries one — the redemption read
+// it as open for the life of the company while the hold and the listing read
+// it as closed — and the retention sweep collects it as it collects one that
+// aged out ([Applier.applySweep]). AND NO SEAT IS SPENT: the redemption refuses it
+// ([Redemption.validate]), so the screen that opens the link says so before
+// anybody chooses a password.
 func (i InvitationRow) Spent(now time.Time) bool {
-	if !i.RedeemedAt.IsZero() {
-		return true
-	}
-	return !i.ExpiresAt.IsZero() && !now.Before(i.ExpiresAt)
+	return !i.RedeemedAt.IsZero() || i.Seat == "" || !now.Before(i.ExpiresAt)
 }
 
 // InvitationByID resolves one invitation, on this file's three answers: the
@@ -972,9 +984,20 @@ type ResetRow struct {
 	Kind     iam.Kind
 	Stage    iam.Stage
 
-	// Seat is the seat the person is bound to, or empty: the spend is
-	// theirs, and its record names them as everything else they do does.
+	// Seat is the seat the person is bound to: the spend is theirs, and its
+	// record names them as everything else they do does. Empty only on a
+	// person recorded before every person held a seat.
 	Seat string
+
+	// First says the link sets the person's FIRST password: they hold no
+	// password credential at all, which is a created person's first
+	// password link before it is spent ([Writer.Create]). DERIVED from the
+	// credentials the person holds and never stored on the link, so the two
+	// cannot disagree — a reset link issued to somebody who never set a
+	// password sets their first one too, and is worded so. Nothing decides
+	// on it: the spend is the same record either way, and it is the reset
+	// screen's wording and the trail's that read it.
+	First bool
 
 	Verifier  string
 	ExpiresAt time.Time
@@ -1014,23 +1037,39 @@ func (r ResetRow) Opens(secret string, now time.Time) bool {
 // ResetOf is the reset link id names among a person's credentials, as a
 // document a decide read holds them at counters — the zero row for one it does
 // not hold. It is what a spend's [PasswordSet.Check] judges the link by, in the
-// record's own snapshot, with the same [ResetRow.Opens] the link's screen asks.
+// record's own snapshot, with the same [ResetRow.Opens] the link's screen asks
+// — and what a create's retry asks of its first password link
+// ([Writer.firstLinkAs]).
 func ResetOf(person Person, id string, counters Counters) ResetRow {
 	for _, c := range person.Credentials {
 		if c.ID == id && c.Method == MethodReset {
 			return ResetRow{ID: id, Kind: person.Kind, Stage: person.Stage,
 				Verifier: c.Verifier, ExpiresAt: c.ExpiresAt,
-				RevokedAt: c.RevokedAt, Ended: c.EndedBy(counters)}
+				RevokedAt: c.RevokedAt, Ended: c.EndedBy(counters),
+				First: !holdsPassword(person.Credentials)}
 		}
 	}
 	return ResetRow{}
 }
 
+// holdsPassword reports whether a credential set holds a password — any, a
+// revoked one included, because a person who once set a password is not
+// setting their first.
+func holdsPassword(credentials []Credential) bool {
+	for _, c := range credentials {
+		if c.Method == MethodPassword {
+			return true
+		}
+	}
+	return false
+}
+
 // ResetStages are the stages a password reset reaches: everybody enrolled and
 // not turned away — an invitation's person who never finished enrolling as
-// much as somebody active. A suspended or retired person is reactivated
-// first, because a link that set their password would hand back an account an
-// administrator deliberately stopped.
+// much as somebody active, and a person an administrator created, whose first
+// password link is spent through exactly this ([Writer.Create]). A suspended
+// or retired person is reactivated first, because a link that set their
+// password would hand back an account an administrator deliberately stopped.
 var ResetStages = []iam.Stage{iam.StageInvited, iam.StageEnrolling, iam.StageActive}
 
 // ResetByID resolves one reset link by its credential id, on this file's three
@@ -1080,6 +1119,16 @@ func (r *Reader) ResetByID(ctx context.Context, id string, end uint64) (
 		if err != nil {
 			return err
 		}
+		// AND WHETHER IT SETS THEIR FIRST PASSWORD, from the same rows.
+		var holds bool
+		if err = tx.QueryRowContext(ctx, `
+			SELECT EXISTS(SELECT 1 FROM iam_credentials
+			               WHERE person_id = ? AND method = ?)`,
+			out.PersonID, string(MethodPassword)).Scan(&holds); err != nil {
+			return fmt.Errorf("iamdomain: read whether person %s holds a "+
+				"password: %w", out.PersonID, err)
+		}
+		out.First = !holds
 		out.ID = id
 		out.Verifier = string(verifier)
 		out.ExpiresAt = fromMillis(expires)
@@ -1095,8 +1144,8 @@ func (r *Reader) ResetByID(ctx context.Context, id string, end uint64) (
 }
 
 // invitationColumns are what [scanInvitation] reads, in its order.
-const invitationColumns = `id, email_blind, created_at, expires_at, redeemed_at,
-	person_id, document`
+const invitationColumns = `id, email_blind, seat_id, created_at, expires_at,
+	redeemed_at, person_id, document`
 
 // scanInvitation reads one invitation row, opening the document for the halves
 // no column carries.
@@ -1106,8 +1155,8 @@ func scanInvitation(scan func(...any) error) (InvitationRow, error) {
 		document                   []byte
 		created, expires, redeemed int64
 	)
-	if err := scan(&out.ID, &out.Blind, &created, &expires, &redeemed,
-		&out.Person, &document); err != nil {
+	if err := scan(&out.ID, &out.Blind, &out.Seat, &created, &expires,
+		&redeemed, &out.Person, &document); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return InvitationRow{}, err
 		}
@@ -1122,7 +1171,6 @@ func scanInvitation(scan func(...any) error) (InvitationRow, error) {
 	out.InvitedBy = doc.InvitedBy
 	out.Grants = doc.Grants
 	out.Verifier = doc.Verifier
-	out.Seat = doc.Seat
 	out.CreatedAt = fromMillis(created)
 	out.ExpiresAt = fromMillis(expires)
 	out.RedeemedAt = fromMillis(redeemed)
@@ -1274,7 +1322,8 @@ type SeatHolder struct {
 	// IT SPEAKS FOR THE BINDING IT RELEASED AND NO OTHER. The first bind of
 	// the seat after the removal ends its say for good
 	// (`iam_removed.seat_rebound_by`): a successor who is bound and later
-	// unbound hands the seat back to the chart like any other unbind, rather
+	// moves off the seat — or a service account later unbound from it —
+	// hands the seat back to the chart like any other release, rather
 	// than back to the leaver's tombstone — which, read from the seat's
 	// current rows alone, withheld it again indefinitely whatever its
 	// contact map had since been pointed at. The tombstone, the successor's
@@ -1330,9 +1379,10 @@ func (r *Reader) SeatHolders(ctx context.Context) ([]SeatHolder, error) {
 
 		// A REMOVAL'S SEAT, UNTIL IT IS BOUND AGAIN. `seat_rebound_by` is
 		// what hands the seat on for good — the first bind after the
-		// removal stamps it, so a later unbind does not bring the leaver
-		// back — and the NOT EXISTS keeps a current holder's standing the
-		// seat's word over a tombstone no bind has stamped yet.
+		// removal stamps it, so a later move off the seat, or a service
+		// account's unbind, does not bring the leaver back — and the NOT
+		// EXISTS keeps a current holder's standing the seat's word over a
+		// tombstone no bind has stamped yet.
 		removed, err := tx.QueryContext(ctx, `
 			SELECT json_extract(r.claims_json, '$.seat_id') AS seat, r.person_id
 			  FROM iam_removed r

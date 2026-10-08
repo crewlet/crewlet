@@ -259,34 +259,40 @@ func TestEveryRetiredAuthKeyIsANamedRefusal(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		doc  string
-		want string
+		want []string
 	}{
 		{
 			"allow_anonymous_read",
 			"api:\n  auth:\n    allow_anonymous_read: false\n",
-			"is retired with no replacement setting",
+			[]string{"is retired with no replacement setting"},
 		},
 		{
 			"api.auth.disabled",
 			"api:\n  auth:\n    disabled: true\n",
-			"-dev-principal",
+			[]string{"-dev-principal"},
 		},
 		{
 			// The block was in the reference, so there is no spelling
 			// of it that works any more, and "unknown field" would send
-			// the operator looking for one.
+			// the operator looking for one. Its people are invited
+			// again, each onto their own human seat — an invitation
+			// that names none is refused (ADR-0026), so a remedy
+			// without `-seat` is one the engine turns down.
 			"api.auth.oidc",
 			"api:\n  auth:\n    oidc:\n" +
 				"      issuer: https://idp.example.com\n",
-			"`api.auth.totp`",
+			[]string{"`api.auth.totp`", "crewlet iam invite <address> -seat <handle>"},
 		},
 		{
 			// `closed` described the posture every deployment now
 			// runs, and `open` has no route left to serve — both are
-			// told where the first person comes from instead.
+			// told where the first person comes from instead: an
+			// invitation onto the human seat the company declares for
+			// them, which the command it names must say.
 			"api.auth.bootstrap",
 			"api:\n  auth:\n    bootstrap: closed\n",
-			"crewlet iam invite",
+			[]string{"crewlet iam invite <address> -seat <handle>",
+				"`kind: human` seat", "Agents › Org chart"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -296,8 +302,10 @@ func TestEveryRetiredAuthKeyIsANamedRefusal(t *testing.T) {
 				t.Fatalf("`%s` was accepted, so the file asks for one posture "+
 					"and the engine runs the other", tc.name)
 			}
-			if !strings.Contains(err.Error(), tc.want) {
-				t.Errorf("the refusal does not say what to do instead: %v", err)
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not say %q: %v", want, err)
+				}
 			}
 		})
 	}

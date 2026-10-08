@@ -449,7 +449,13 @@ func TestAnAdmittedCompanyHasNoAdmissionWarnings(t *testing.T) {
 	// TestDanglingReferencesAreReportedNotRejected states: a display name
 	// in a reference is refused by its own admission rule, so a fixture
 	// written that way would break this one's premise rather than test it.
-	cfg := parsed(t, "name: Acme\nroles:\n  - name: CEO\n    manages: [ghost]\n")
+	//
+	// AND A REACHABLE PERSON'S SEAT, so the one warning counted is the
+	// reference: a company with no human seat is advised that nobody can
+	// join it.
+	cfg := parsed(t, "name: Acme\nroles:\n  - name: CEO\n    manages: [ghost]\n"+
+		"  - name: Founder\n    kind: human\n"+
+		"    contact:\n      slack_user_id: U0FOUNDER\n")
 	if err := cfg.ValidateAdmission(); err != nil {
 		t.Fatalf("the fixture breaks an admission rule: %v", err)
 	}

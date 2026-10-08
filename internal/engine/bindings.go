@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 )
@@ -14,16 +15,21 @@ import (
 //
 // # The residue a bind leaves
 //
-// A person's binding lives on the IDENTITY log and the seat it names in the
-// company this node is running. A bind checks the seat against the running org
-// when it is made, and that check is ADVISORY: the org can drop the seat
-// afterwards, and a revision applied elsewhere first is one this node has not
-// seen. The residue — a binding to a seat the running company does not hold as
-// a human seat — is LEGAL rather than corruption, and nothing clears it but a
-// record: an unbind, or a bind to another seat. It is reported in one place,
-// `crewlet iam check` and `GET /iam/check` (`binding_dangling`, naming the
-// seat), and it is ENFORCED, which is not reporting, on the request path
-// (`403 seat_unavailable`) and at the company write (`409 seat_held`).
+// A binding lives on the IDENTITY log and the seat it names in the company
+// this node is running. Every binding the directory writes — a person's, which
+// they hold for as long as they are here (ADR-0026), and a service account's,
+// which is optional — is checked against the running org as a HUMAN seat when
+// it is made, and that check is ADVISORY: the org can drop the seat or turn it
+// into an agent's afterwards, and a revision applied elsewhere first is one
+// this node has not seen. The residue — a binding to a seat the running
+// company does not hold as a human seat — is LEGAL rather than corruption, and
+// nothing clears it but a record, which differs by who is bound: a PERSON is
+// moved to another human seat or removed, since the directory refuses to
+// unbind one, and a SERVICE ACCOUNT is unbound or moved. It is reported in one
+// place, `crewlet iam check` and `GET /iam/check` (`binding_dangling`, naming
+// the seat and that remedy), and it is ENFORCED, which is not reporting, on
+// the request path (`403 seat_unavailable`) and at the company write
+// (`409 seat_held`).
 //
 // # Why it is a finding and never an alarm
 //
@@ -67,7 +73,7 @@ var errSeatUnknown = errors.New("engine: this node runs no company, so it " +
 // THREE-VALUED: dangling, not dangling, or an error when this node cannot tell
 // — it runs no company yet, or the lookup failed. The report counts the third
 // as unchecked rather than guessing, because reporting a binding as dangling on
-// a node that could not say sends an administrator to unbind somebody whose
+// a node that could not say sends an administrator to move somebody whose
 // seat is perfectly there.
 //
 // ITS SHAPE IS THE REPORT'S SEAM, internal/api/iamapi's Bindings, so the
@@ -84,8 +90,14 @@ func danglingBinding(ctx context.Context, chart session.Chart, b iamdomain.SeatB
 	bool, string, error) {
 
 	if b.Seat == "" {
-		// NO BINDING. A removed person has no row to be asked about at
-		// all: a removal deletes it and leaves the tombstone.
+		// NO BINDING, so nothing to dangle — the request path serves the
+		// row under its login. A PERSON with none is the report's own
+		// row-level finding (`person_without_seat`, decided from the row
+		// alone, since no chart can say anything about a seat that is not
+		// named), and widening this rule to it would make it disagree with
+		// the seat table it is defined as. A removed person has no row to
+		// be asked about at all: a removal deletes it and leaves the
+		// tombstone.
 		return false, "", nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, bindingProbeBudget)
@@ -95,8 +107,7 @@ func danglingBinding(ctx context.Context, chart session.Chart, b iamdomain.SeatB
 	})
 	switch binding.Row {
 	case session.SeatRowGone:
-		return true, binding.Detail + "; unbind them, or bind them to " +
-			"another seat", nil
+		return true, binding.Detail + danglingRemedy(b.Kind), nil
 	case session.SeatRowStalled:
 		cause := binding.Err
 		if cause == nil {
@@ -106,4 +117,25 @@ func danglingBinding(ctx context.Context, chart session.Chart, b iamdomain.SeatB
 			b.Person, b.Seat, binding.Detail, cause)
 	}
 	return false, "", nil
+}
+
+// danglingRemedy is what repairs a dangling binding, which depends on WHO is
+// bound — one record either way.
+//
+// A PERSON IS NEVER TOLD TO UNBIND: they hold a human seat for as long as
+// they are here (ADR-0026), and the directory refuses the unbind, so the
+// sentence that used to serve both kinds sent an administrator to a gesture
+// the engine answers `seat_required`. A SERVICE ACCOUNT's seat is optional,
+// so unbinding it is the one-record repair and a move the other. A kind this
+// build does not name gets only the remedy that holds for both — a move or a
+// removal — rather than a guess at which it is.
+func danglingRemedy(kind iam.Kind) string {
+	switch kind {
+	case iam.KindPerson:
+		return "; move them to another human seat, or remove them — a " +
+			"person always holds a seat"
+	case iam.KindMachine:
+		return "; unbind them, or bind them to another human seat"
+	}
+	return "; bind them to another human seat, or remove them"
 }

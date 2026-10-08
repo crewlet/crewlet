@@ -819,8 +819,8 @@ func (a *APIAuth) validateTokens(path Path, api API) error {
 	// your own company:
 	//
 	//   - a fresh deployment's identity estate is EMPTY: somebody has to
-	//     invite the first person, and the token is the only credential
-	//     that exists to do it with;
+	//     create the company and put its first person on their human seat,
+	//     and the token is the only credential that exists to do it with;
 	//   - on a running one, an administrator who is throttled, who lost
 	//     their second factor, or whose password is refused has nothing
 	//     else to present.
@@ -828,8 +828,9 @@ func (a *APIAuth) validateTokens(path Path, api API) error {
 		p.add(at(path, "tokens"), ErrMissing,
 			"at least one token is required once `api.port` is set. The "+
 				"identity estate of a fresh deployment is empty, "+
-				"so this is what invites the first person (`crewlet iam "+
-				"invite`); and on a running one it is the way back in when an "+
+				"so this is what puts the first person on their human seat "+
+				"(`crewlet iam invite <address> -seat <handle>`); and on a "+
+				"running one it is the way back in when an "+
 				"administrator has locked themselves out. Generate one with "+
 				"`crewlet secrets keygen` and point `token:` at a ${VAR}")
 	}

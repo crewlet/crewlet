@@ -324,3 +324,74 @@ func TestACollapsedSpendOfAResetLinkIsAnnounced(t *testing.T) {
 		t.Errorf("announced %+v, want the one reset this request made", got)
 	}
 }
+
+// created is the rig's person as an administrator's create leaves them: no
+// credential at all, so the first password link the create issued is the one
+// way in they hold.
+func created(e *estate) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.person.Credentials = nil
+}
+
+// A FIRST PASSWORD LINK SAYS SO, AND ENDS NOTHING BECAUSE THERE WAS NOTHING.
+//
+// An administrator's create of a person on a human seat hands them a first
+// password link, opened and spent through exactly the reset pair. Its view
+// says `first: true` — the person holds no password yet — so the screen asks
+// them to choose their password and warns of no sessions it would end; the
+// spend records "set their first password" and announces it as a first one
+// (the trail's `first`). The CONTROL is a reset link on a person who holds a
+// password: `first: false`, and a reset's own wording.
+//
+// Mutation: answer `first` from anything but what the person holds and one arm
+// flips; drop it from the spend and the first arm announces a reset that ended
+// every session.
+func TestAFirstPasswordLinkSaysSo(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		person func(*estate)
+		first  bool
+		reason string
+	}{
+		{"a created person's first link", created, true, "set their first password"},
+		{"a reset of a person holding a password (the control)", passwordOnly,
+			false, "set a new password from a reset link"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r, h := passwordRig(t)
+			tc.person(r.estate)
+			id, secret := withResetLink(t, r.estate, func(c *iamdomain.Credential) {
+				c.ExpiresAt = clock.Add(credential.EnrolmentLinkLifetime)
+			})
+
+			viewed := viewReset(t, h, id, secret)
+			var view map[string]any
+			if err := json.Unmarshal(viewed.Body.Bytes(), &view); err != nil ||
+				viewed.Code != http.StatusOK {
+				t.Fatalf("the view answered %d (%v): %s", viewed.Code, err, viewed.Body)
+			}
+			if first, sent := view["first"]; !sent || first != tc.first {
+				t.Errorf("the view says first = %v (sent: %v), want %v", first,
+					sent, tc.first)
+			}
+
+			spent, cookie := spendReset(t, h, id, secret, newPassword)
+			if spent.Code != http.StatusOK || cookie != "" {
+				t.Fatalf("the spend answered %d with cookie %q: %s", spent.Code,
+					cookie, spent.Body)
+			}
+			if sets := r.estate.passwordSets; len(sets) != 1 ||
+				sets[0].Reason != tc.reason {
+				t.Errorf("the record's reason is %v, want %q", sets, tc.reason)
+			}
+			announced := emitted[types.IAMPasswordReset](r.audit)
+			if len(announced) != 1 || announced[0].First != tc.first {
+				t.Errorf("announced %+v, want one spend with first = %v",
+					announced, tc.first)
+			}
+		})
+	}
+}

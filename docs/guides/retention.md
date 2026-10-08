@@ -1542,7 +1542,7 @@ their clocks were. The record names *positions* the publisher resolved once —
 "every change below this one, every session record below that one" — and one
 instant, also read once, against which the same record collects the rows that
 are **over** rather than old: sessions that ended or passed their absolute
-deadline; invitations that expired unredeemed **or were redeemed**; and credentials — passwords, second factors, machine tokens — that
+deadline; invitations that expired unredeemed **or were redeemed** (one carrying no expiry at all counts as expired, since no reader treats it as open); and credentials — passwords, second factors, machine tokens — that
 were **revoked or passed their own expiry**. Each is kept for a week (168
 hours) after it stopped being presentable, so the sessions and credentials
 screens can still say what ended and why; after that the trail row, kept for

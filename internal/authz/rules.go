@@ -389,8 +389,10 @@ var rules = map[Action]rule{
 	// pages and the board already show a `state:read` holder, and what it
 	// costs is one auxiliary model call on the asker's own seat — which a
 	// seat would be spending on its own behalf, beside the search and the
-	// model it already has. The tool refuses a person no seat binds
-	// itself, naming why: there is no seat whose model to run on.
+	// model it already has. The tool itself refuses a principal no seat
+	// binds — a token, a service account, or a person recorded before
+	// every person held a seat — naming why: there is no seat whose model
+	// to run on.
 	ActionKnowledgeAnswer: {class: ClassRead, humanOnly: true, recency: iam.RecencyAny},
 
 	ActionSkillUse:      {class: ClassSelf, recency: iam.RecencyAny},

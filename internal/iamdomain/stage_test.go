@@ -1,6 +1,7 @@
 package iamdomain_test
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -23,7 +24,7 @@ func TestASuspensionIsWhatEveryReadAnswers(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	reader := rig.reader(t)
-	id := uuid.New().String()
+	id := uuid.Must(uuid.NewV7()).String()
 	enrolSarah(t, rig, id)
 
 	// THE CONTROL: before the suspension both reads say active, so the
@@ -71,7 +72,7 @@ func TestEditingASuspendedPersonLeavesThemSuspended(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	reader := rig.reader(t)
-	id := uuid.New().String()
+	id := uuid.Must(uuid.NewV7()).String()
 	enrolSarah(t, rig, id)
 	if _, err := rig.writer.SetStage(t.Context(), id, iam.StageSuspended,
 		"op-suspend", "left the building"); err != nil {
@@ -103,14 +104,81 @@ func TestEditingASuspendedPersonLeavesThemSuspended(t *testing.T) {
 	assertStage(t, reader, id, iam.StageSuspended)
 }
 
+// AN EDIT OF A PERSON'S DOCUMENT MOVES NEITHER THEIR KIND NOR THEIR STAGE.
+//
+// The applier writes whatever kind and stage a document states, so the record
+// is where both are held: a service account flipped to a person is a person
+// holding no seat and a coloned login no person may have, which every other
+// write here refuses to produce; and a stage moved by a document edit moved no
+// epoch, so whatever a suspended person held came back the day they were
+// reinstated. Both are refused with nothing published; an edit of what the
+// person holds, the control, lands.
+//
+// Mutation: drop either clause from the edit's decide and its row lands.
+func TestAnEditMovesNeitherAPersonsKindNorTheirStage(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	id := uuid.Must(uuid.NewV7()).String()
+	enrolSarah(t, rig, id)
+	before, err := rig.end(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, apply := range map[string]func(iamdomain.Person) iamdomain.Person{
+		"a person made a service account": func(p iamdomain.Person) iamdomain.Person {
+			p.Kind = iam.KindMachine
+			return p
+		},
+		"a person suspended by an edit": func(p iamdomain.Person) iamdomain.Person {
+			p.Stage = iam.StageSuspended
+			return p
+		},
+	} {
+		err := rig.during(func() error {
+			_, err := rig.writer.UpdatePerson(t.Context(), iamdomain.PersonUpdate{
+				PersonID: id, OpID: operationKey(), Reason: "an edit",
+				Apply: func(p iamdomain.Person) (iamdomain.Person, error) {
+					return apply(p), nil
+				},
+			})
+			return err
+		})
+		if !errors.Is(err, iamdomain.ErrInvalid) {
+			t.Errorf("%s answered %v, want %v", name, err, iamdomain.ErrInvalid)
+		}
+	}
+	if after, _ := rig.end(t.Context()); after != before {
+		t.Errorf("the refused edits published %d records", after-before)
+	}
+	if got := rig.column(`SELECT kind || ' ' || stage FROM iam_people WHERE id = ?`,
+		id); len(got) != 1 || got[0] != "person active" {
+		t.Errorf("the person reads %v after refused edits, want an active person",
+			got)
+	}
+	// THE CONTROL: an edit of what they hold lands.
+	if err := rig.during(func() error {
+		_, err := rig.writer.UpdatePerson(t.Context(), iamdomain.PersonUpdate{
+			PersonID: id, OpID: operationKey(), Reason: "narrowed",
+			Apply: func(p iamdomain.Person) (iamdomain.Person, error) {
+				p.Grants = []iam.Grant{iam.GrantStateRead}
+				return p, nil
+			},
+		})
+		return err
+	}); err != nil {
+		t.Errorf("an edit of the person's grants was refused: %v", err)
+	}
+}
+
 // enrolSarah enrols one active person under the login the stage assertions
 // read.
 func enrolSarah(t *testing.T, rig *writeRig, id string) {
 	t.Helper()
-	if err := rig.enrol(iamdomain.Enrolment{
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: id, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: "Sarah Chen", Email: "sarah.chen@example.com",
 		Login: "sarah.chen", OpID: "op-" + id, Reason: "the joiner",
+		Seat: rig.vacantSeat("sarah-chen"), LinkExpiresAt: firstLinkExpiry,
 		Grants: []iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite},
 	}); err != nil {
 		t.Fatalf("enrol: %v", err)

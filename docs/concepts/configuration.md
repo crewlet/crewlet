@@ -38,9 +38,19 @@ different seat. See [Handles and keys](organization-model.md#handle-based-identi
 
 **Removing a human seat somebody holds is refused.** A revision that takes a
 human seat out of the company — or turns it into an agent seat — while the
-[identity directory](identity-and-access.md) binds a person to it is refused
-`409 seat_held` naming them, at any stage short of their removal: unbind or
-remove them first.
+[identity directory](identity-and-access.md) binds somebody to it, at any stage
+short of their removal, or while an open invitation names it, is refused `409
+seat_held` naming each holder (an invitation by its id, never its address).
+Free the seat first: move a person to another human seat or remove them — a
+person's seat is never cleared — unbind a service account, or cancel the
+invitation; then send the write again.
+
+**A company with no human seat can admit nobody.** Every person holds a human
+seat, and an invitation or a create names the one they will hold, so a company
+that declares no `kind: human` seat has nowhere to put anybody. That is right
+for a company its agents run alone, administered through the deployment's Tier
+A tokens, so it is never refused: `crewlet validate` and every `/config` write
+name it in an `advisory` warning at `roles`.
 
 ### Tier A example (`crewlet.yaml`)
 
@@ -178,12 +188,12 @@ The engine boots in this order:
    record of it, `logging.stderr` notwithstanding
 4. Open the store file and start or dial the stream
 5. Run migrations — every file, in one pass. There is no lock and no phase ordering to serialize: this process owns its file, so nothing can be racing it, and no DDL depends on a value only the config knows. Embedding columns are declared as plain blobs and the vector width is validated in Go against the active revision at write time, so a schema step never has to read the config first (see [`crewlet migrate`](../reference/cli.md#crewlet-migrate)).
-6. Start the **core runtime** — on every node, with a company or without one: the [state log](../guides/consistency.md) for **every** registered domain, the node gate over every identity-claiming log, the [identity estate](identity-and-access.md) with the loops that keep this node's view of it, and — on a node that publishes — the log's own trim and the identity duties. None of it depends on a company, and a node with none is exactly the one its first person has to be invited to and sign in on. It is **every** domain rather than the identity estate alone because a join replaces the whole replicated file and a snapshot names every registered domain, and because the trim counts nodes per log: a node that applied part of the register could neither adopt nor donate, and would pin the rest of the logs' trims for as long as it was up
+6. Start the **core runtime** — on every node, with a company or without one: the [state log](../guides/consistency.md) for **every** registered domain, the node gate over every identity-claiming log, the [identity estate](identity-and-access.md) with the loops that keep this node's view of it, and — on a node that publishes — the log's own trim and the identity duties. None of it depends on a company, and a node with none is exactly the one that has to sign a Tier A token's session in, because that session is what the dashboard creates the company through; the company's first person is invited or created once it declares the human seat they will hold. It is **every** domain rather than the identity estate alone because a join replaces the whole replicated file and a snapshot names every registered domain, and because the trim counts nodes per log: a node that applied part of the register could neither adopt nor donate, and would pin the rest of the logs' trims for as long as it was up
 7. Start the API inside this process, bound to `api.host:api.port`, wire up auth middleware, register `/config/*` routes
 8. Start the [control plane](control-plane.md) — the reconcile loop that polls the activation pointer, plus a broadcast `crewlet.config.revision_activated` nudge that wakes it early
 9. `SELECT payload FROM company_config WHERE is_active <> 0`
    - **Row present**: apply the payload, which spawns the full company — including the **native halves** the company declares: the tracker's and the knowledge base's writers and readers over the logs step 6 already applies, their lexical index, change feeds and embedding duty
-   - **No row**: engine stays in the **unconfigured** state — the API keeps serving so an operator can push the first revision via `PUT /config` or `crewlet config import`, and people can be invited and sign in
+   - **No row**: engine stays in the **unconfigured** state — the API keeps serving so an operator can push the first revision via `PUT /config` or `crewlet config import`, and a Tier A token's session signs in — which is how the dashboard creates the company. Nobody can be invited or created yet: every person holds a human seat the company declares, so that waits for the first revision
 
 **A boot that fails leaves nothing running.** Any step above can fail — an
 unreachable broker, a keyring the node cannot open, a provider whose model is a
@@ -249,7 +259,7 @@ Until the first active row exists, the engine holds an empty `Organization` (no 
 **What stays running:**
 
 - The Tier A resources — the stream, the store file, the API socket — all up.
-- The **core runtime** ([Bootstrap Sequence](#bootstrap-sequence) step 6): every domain's state log, the node gate and the identity estate, and on a node that publishes the trim and the identity duties. So an unconfigured node **signs people in and invites them** — its first person is invited under a Tier A token exactly as everybody after them is (`crewlet iam invite`) — and can be evicted from and readmitted to the logs it is counted on.
+- The **core runtime** ([Bootstrap Sequence](#bootstrap-sequence) step 6): every domain's state log, the node gate and the identity estate, and on a node that publishes the trim and the identity duties. So an unconfigured node **signs a Tier A token's session in** — which is how the dashboard creates its company — and can be evicted from and readmitted to the logs it is counted on. What it cannot do yet is put anybody on a seat: every person holds a human seat the company declares, so an invitation or a create naming a seat answers `409 no_active_revision`, as `GET /iam/seats` does, until a company declaring one is applied. Then its first person is invited or created onto that seat under a Tier A token, exactly as everybody after them is (`crewlet iam invite -seat`, `crewlet iam create -seat`).
 - The API's `/config/*` routes and the node's [reconcile loop](control-plane.md) — which is exactly what wakes an unconfigured node when the first revision lands.
 - A structured log line carrying `state=unconfigured`, so the unconfigured posture is obvious in logs and on the dashboard.
 
@@ -265,7 +275,7 @@ Until the first active row exists, the engine holds an empty `Organization` (no 
 | `POST /config/revisions/{id}/revert` | `404` — no revisions exist yet |
 | Per-entity routes (`PUT /config/roles/{handle}`, `/config/units/{id}`, `/config/llm-providers/{key}`, `/config/mcp-servers/{name}`) and `PATCH /config` | `409 Conflict` — they edit a document, and there is none; initialise via `PUT /config` first |
 | `GET /agents`, `GET /tokens/breakdown` | `200` with empty lists / zero counters |
-| `/auth/*`, `/iam/*` | Served exactly as on a configured node — they are the core runtime's. `GET /iam/seats` alone answers `409 no_active_revision`: it lists the running company's human seats, and there are none |
+| `/auth/*`, `/iam/*` | Served exactly as on a configured node — they are the core runtime's. What names a seat answers `409 no_active_revision`, because the running company's human seats are what it is checked against and there are none: `GET /iam/seats`, an invitation, a person's create, and a bind |
 | `/work/*`, `/pages/*`, `/operator/mcp`, and the work, page and search questions | `503 no_active_revision` with a 15-second `Retry-After` — over the socket, an `unavailable` frame naming the same `refusal` with the same `retry_after` and words: the routes are **mounted** and say why they cannot serve rather than answering the `404` of a route that does not exist. They read the tracker's and the knowledge base's halves **per request**, so the first company's apply brings them up under the same API with no restart; a company that keeps its tracker or wiki on a vendor answers the `404` a route with nothing behind it answers from then on |
 | `POST /webhooks/...` | Answered **before** the signature check — a node with no revision has no secrets to check against, and verifying first would answer every delivery with the no-secret refusal and its five-minute wait — as `503 no_active_revision` with a 15-second `Retry-After`, so the sender **retries**; `webhook_rejected_unconfigured` is logged at WARNING with the source and the event. A 200 here would tell the sender the delivery was accepted while discarding it — silent, unrecoverable loss the moment one process of several has simply not caught up yet. See [Webhook refusals](../reference/api-endpoints.md#webhook-refusals) |
 
@@ -569,9 +579,10 @@ CREATE TABLE company_config (
     revision_id        TEXT    NOT NULL PRIMARY KEY,
     parent_revision_id TEXT    REFERENCES company_config(revision_id),
     created_at         INTEGER NOT NULL,          -- unix microseconds, UTC
-    created_by         TEXT    NOT NULL,          -- the AUTHOR: a seat's handle for a person
-                                                  -- bound to one, a login otherwise,
-                                                  -- token:<id> for a Tier A token, the
+    created_by         TEXT    NOT NULL,          -- the AUTHOR: the seat's handle for a person
+                                                  -- or a credential bound to one, a login
+                                                  -- for a credential bound to none —
+                                                  -- token:<id> for a Tier A token — the
                                                   -- engine's own name for its own writes
     created_by_kind    TEXT    NOT NULL DEFAULT '', -- agent | human | operator | system
     operator_id        TEXT    NOT NULL DEFAULT '', -- the credential it was written
@@ -649,8 +660,8 @@ the handful that authenticate by other means or must be reachable to obtain a
 credential at all, listed below. Tokens are listed in Tier A under
 `api.auth.tokens` and resolved from environment variables at API startup. Each
 revision a request produces records its **author** as `created_by` — a Tier A
-token's whole login (`token:ci-pipeline`), a signed-in person's login
-(`jane.doe`) or the seat the directory binds them to — with its kind as
+token's whole login (`token:ci-pipeline`) — or the seat it is bound to — or
+the seat a signed-in person holds — with its kind as
 `created_by_kind` and the **credential** it came through as `operator_id`: a
 machine token's `pat:<credential id>`, a browser session's `session:<lineage>`.
 So revision history carries meaningful attribution rather than generic strings,
@@ -827,7 +838,7 @@ bind time:
 |---------|----------------------------|
 | `api.external_url` | The session cookie's `Secure` flag and `__Host-` prefix follow its scheme, its host is the origin every write is checked against, and it is what every webhook URL is built on. The engine sits behind a TLS-terminating proxy and can read none of that off the request |
 | `api.auth.max_grants` | The ceiling on what a directory record may confer. One granting everything is a ceiling that does nothing; one granting a subset silently locks out whatever it left out |
-| `api.auth.tokens` | A fresh deployment's identity estate is empty, so a Tier A token is what creates the first person — and on a running one it is the way back in when an administrator has locked themselves out |
+| `api.auth.tokens` | A fresh deployment's identity estate is empty, so a Tier A token is what creates the company and then puts its first person on their seat — and on a running one it is the way back in when an administrator has locked themselves out |
 
 ### What `crewlet validate` warns about
 

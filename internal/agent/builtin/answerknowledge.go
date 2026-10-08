@@ -32,11 +32,12 @@ import (
 // the dashboard and is waiting for a paragraph. So it is an OPERATOR tool, and
 // one only a PERSON BOUND TO A SEAT may call ([authz.ActionKnowledgeAnswer] is
 // the read grant and human-only; this tool refuses the rest): it runs on the
-// auxiliary model of the seat the identity directory binds them to, and a
-// principal no seat binds — an unbound person, a pipeline's token — has no
-// seat whose model to run on. That is refused rather than answered on the
-// company's default model, because "a CI token" is not somebody the spend can
-// be attributed to. A seat is never given it: a seat has `search_knowledge`
+// auxiliary model of the seat the identity directory binds them to — the
+// human seat every person holds (ADR-0026). A principal no seat binds — a
+// pipeline's token, a service account, or a person recorded before every
+// person held a seat — has no seat whose model to run on, and is refused
+// rather than answered on the company's default model, because "a CI token"
+// is not somebody the spend can be attributed to. A seat is never given it: a seat has `search_knowledge`
 // and its own model, and an answer written by a second model into its context
 // would be one it could not check.
 //

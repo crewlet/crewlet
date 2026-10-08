@@ -103,7 +103,8 @@ A failed last turn does not colour a seat. The seat takes its next wake like
 any other; its `last_error` is shown where the seat is read about, not as a
 stop.
 
-**Where a seat runs is which node holds it** — the seat's "Held by" fact:
+**Where a seat runs is which node holds it** — the peek's **Running on** fact
+(**Runs on** on the profile's Setup card), never the human seat's **Held by**:
 "this node · node-a", "another node", or "no node — not placed", read off this
 node's own health push (the seats it holds) and the engine's `unplaced`. It was
 the agent instance id, which exists only mid-turn, so an idle seat this very
@@ -723,10 +724,13 @@ empty one nor a fault. Recolouring the dot for an alarm drew a green title
 beside an amber dot, and a title such as "serving, with alarms" only repeats
 the alarm line. Everything comes off the one health push; nothing polls.
 
-**The user block** is who this browser is — a person the identity directory
-binds to a seat (bound: their name, login and seat, linking to it), somebody
-resolved with no seat (unbound: the login, and that it is bound to no seat —
-ordinary, never a fault), or nobody (a **Sign in** button) — beside the theme
+**The user block** is who this browser is — a principal the identity
+directory binds to a seat, which every person is (bound: their name, login and
+seat, linking to it), somebody resolved with no seat (unbound: the login, and
+*Not bound to a seat* — ordinary for an API token's session or a service
+account acting as itself; a person recorded before every person held a seat is
+the fault [People & access](#settings-the-frame-people-secrets-nodes-and-configuration)
+reports), or nobody (a **Sign in** button) — beside the theme
 flip and the **preferences**: theme (light, dark, match the system), density,
 the zone timestamps are drawn in (`Intl.supportedValuesOf` plus UTC, which the
 runtime's canonical list omits, or the browser's own) and how a date is
@@ -778,12 +782,12 @@ a screen, and every workspace and section the code declares is below.
 | `#/work/search` | **Search** — the company's work ranked against a phrase | `q=` `mode=hybrid\|keyword\|semantic` |
 | `#/work/{KEY}` | **Project** | `lens=items\|about\|history` · the same view strip and filter grammar, scoped to the project |
 | `#/work/{KEY}-{n}` · `#/work/{id}` | **Task** — description, checklists, sub-tasks, activity (changes, comments, agent turns), properties and cost | `activity=all\|comments\|turns\|changes` · `list=` |
-| `#/agents` | **Agents › Org chart** — the hierarchy every seat works inside | `unit=` · `seat=` |
+| `#/agents` | **Agents › Org chart** — the hierarchy every seat works inside; for a reader the identity directory answers, what holds each human seat, and — for a `people:manage` holder — where a person is invited or created onto the vacant human seat they will hold | `unit=` · `seat=` |
 | `#/agents/roster` | **Roster** — every seat, and who is carrying how much | `view=seats\|workload` · `group=state\|unit\|flat` · `q=` |
 | `#/agents/teams` · `#/agents/teams/{unit}` | **Teams** — every unit with what it is for and its goals; one unit's page | |
 | `#/agents/schedules` · `#/agents/schedules/{scope_type}/{scope_id}/{name}` | **Schedules** — recurring work; one schedule | |
 | `#/agents/edit` | **Edit org** — the builder, opened from the chart's button *(needs `config:write`)* | `view=visualization\|table` · `chart=structure\|reporting` · `unit=` · `seat=` (the selection; arriving with one opens its editor) · `add=unit\|agent\|human` (opens the Add once, then leaves the address) |
-| `#/agents/seats/{handle}` | **Seat** — an agent's or a person's profile; a person's says who holds the seat, or that nobody does with an Invite for a `people:manage` holder. Handles live only under `seats/` | agent: `tab=overview\|work\|turns\|memory\|schedules\|settings` · `conversation=` (Memory); human: overview · work · settings |
+| `#/agents/seats/{handle}` | **Seat** — an agent's or a person's profile; a person's says what holds the seat — its holder, the open invitation that names it (with **Cancel invitation**), or nobody, with **Invite** and **Create person** — the gestures drawn for a `people:manage` holder. Handles live only under `seats/` | agent: `tab=overview\|work\|turns\|memory\|schedules\|settings` · `conversation=` (Memory); human: overview · work · settings |
 | `#/live` | **Live › Now running** — the running turns, the coding runs waiting on a person and the rest in a box, the activity strip and the recent phases | `window=15m\|1h\|6h` (the activity strip) · `seat=` (a handle) · `phase=` · `failed=true` (the same spelling Turns uses) |
 | `#/live/turns` · `#/live/turns/{id}` | **Turns** — the turns that ended over the window, counted by the engine, then every turn one row each; one turn *(needs `audit:read`)* | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `seat=` (a handle) · `failed=true\|false` · `sort=-started\|-tokens` (the engine's order) |
 | `#/live/runs` · `#/live/runs/{turn_id}` | **Coding runs** — live and durable; a run's own page draws the run alone, answered in place, and a collected run's page reads its turn | |
@@ -799,7 +803,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/spend/tasks` | **Expensive tasks** — the tasks last changed inside the window, most tokens first, each with what drove it: turns, workers, reopens and send-backs | `window=7d\|30d\|90d\|<from>/<to>` |
 | `#/spend/budgets` | **Budgets** — the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by a `config:write` holder), and what is refusing. ONE address: Settings lists it as a cross-link | |
 | `#/settings` | **Settings › General** — the charter: mission, vision, policies | |
-| `#/settings/people` | **People & access** — the identity directory: every person with their stage, login, grants and the seat they are bound to, their credentials and sessions, the invitations nobody has redeemed (`/iam/invitations`), the directory's own report (`/iam/check`), every human seat with whoever holds it (`/iam/seats`), and this node's API token labels joined to the rows that bind them (`/iam/node-tokens`) *(needs `people:manage` or `audit:read`)*. A `people:manage` holder also invites, creates service accounts and mints their tokens, cancels invitations, and changes, suspends, resets, signs out and removes people; an invitation's link, a reset link and a token are shown once and never read back. No tail: a person's page is their seat | `person=` (the opened row, dropped when a removal made from it lands; one the directory does not hold — removed elsewhere, or mistyped — is said, with **Close**) |
+| `#/settings/people` | **People & access** — the identity directory: every person with their stage, login, grants and the seat they are bound to, their credentials and sessions, the invitations nobody has redeemed (`/iam/invitations`), the directory's own report (`/iam/check`), every human seat with whatever holds it — a person, a service account or an open invitation (`/iam/seats`) — and this node's API token labels joined to the rows that bind them (`/iam/node-tokens`) *(needs `people:manage` or `audit:read`)*. A `people:manage` holder also creates service accounts (on a human seat or none) and mints their tokens, cancels invitations, and changes, suspends, resets, signs out and removes people. It invites and creates nobody: a person comes from the vacant human seat they will hold, on the org chart, and the screen links there. An invitation's link, a reset link and a token are shown once and never read back. No tail: a person's page is their seat | `person=` (the opened row, dropped when a removal made from it lands; one the directory does not hold — removed elsewhere, or mistyped — is said, with **Close**) |
 | `#/settings/integrations` · `#/settings/integrations/{kind}` | **Integrations** *(needs `config:read`)* | |
 | `#/settings/tools` · `#/settings/tools/{tool}` · `#/settings/tools/servers/{name}` | **Tools & MCP** — every MCP server with what each node did with it, and every tool a seat can call, by origin. Not guarded: the registry is a push every reader gets. Two things on it take `config:read`, and each says so in its own place: the servers' status (`mcp_servers_status`), and which seats hold a server's tools, which is the pushed org's `tool_sources` and reaches only a reader holding that grant. ONE tail segment is a tool and two are an origin filter, discriminated on LENGTH, because a tool name is a third party's string | `q=` · `origin=` · `add=server` (the add form) |
 | `#/settings/models` · `#/settings/models/{id}` | **Models & keys** — every `providers.llm` entry, the keys it rotates through by variable name, which a vendor is refusing and when each comes back (`credential_pool`), and the seats whose chain names it; one model's keys whole and its seats, and its **Edit** *(needs `config:read`; the edit `config:write`)*. `{id}` is the entry's config key, the name a seat's `llm:` writes | |
@@ -810,8 +814,8 @@ a screen, and every workspace and section the code declares is below.
 | `#/settings/audit` | **Audit log** — every write a person or a token made, every call they made at runtime, and every configuration revision labelled with the kind of writer it recorded (`agent`, `human`, `operator` or `system`) *(needs `audit:read`)*. No detail route | `window=` · `actor=` · `kind=work\|knowledge\|config\|credentials\|runtime` |
 | `#/account` | **Account** — the signed-in reader's own page, opened from the user block's menu at the sidebar's foot (it has no sidebar row) or `g u`: the profile the directory holds (an administrator changes it), the password (changed with the current one, which ends every other session and personal token and keeps this browser), the second factor and recovery codes, where they are signed in (this browser marked, any other signed out by name, or everywhere), and their personal access tokens (minted — the value shown once — and revoked). A credential that is not a person's, a Tier A token's session, is told what it is and offered none of it | |
 | `#/login` | **Sign in** *(outside the frame)* — a login or address and a password, the second factor when the engine asks for it, or an API token exchanged for a one-hour session | `next=` — where to go once signed in: a hash route of this dashboard, and anything else lands on Home; `login=` fills the login, and `after=reset` says the password was just set — what a reset link's own **Sign in** sends. Neither is a credential |
-| `#/invite/{id}.{secret}` | **Invitation** *(outside the frame)* — who it is for, who sent it (a person, never a machine: an invitation a Tier A token or a service account issued names no sender) and the seat it binds, then a login, a name and a password, typed twice. The link the engine mints lands here | |
-| `#/reset/{id}.{secret}` | **Password reset** *(outside the frame)* — whose password the link sets, then a new one, typed twice, once; it ends every session the person held and signs nobody in, so it ends on the sign-in form. The link an administrator issues lands here | |
+| `#/invite/{id}.{secret}` | **Invitation** *(outside the frame)* — who it is for, who sent it (a person, never a machine: an invitation a Tier A token or a service account issued names no sender) and the seat it binds — or, where the chart no longer holds that seat, that redeeming it will be refused — then a login, a name and a password, typed twice. The link the engine mints lands here | |
+| `#/reset/{id}.{secret}` | **Password link** *(outside the frame)* — whose password the link sets, then the password, typed twice, once: a RESET, which ends every session the person held, or the FIRST password of a person an administrator created on a seat, which ends nothing. Neither signs anybody in, so it ends on the sign-in form. The reset link an administrator issues, and the first password link a person's create hands back, land here | |
 | `#/enrol` | **Second factor** *(outside the frame)* — the authenticator a deployment that requires one asks for before anything else opens, then the first recovery codes | `next=`, as the sign-in's |
 
 **There is no redirect table.** There was one, and it was always a liability: a
@@ -1175,9 +1179,10 @@ four clauses that travel together because each one was got wrong separately:
   hold is resolved from the RECORD next: every change row and comment carries
   its writer's `actor_kind`/`author_kind`, and `kindWithAuthors` layers those
   under the chart's answer — `human` and `operator` draw a person, `agent` an
-  agent. That is what somebody bound to no seat needs: their write is
-  authored under their login, which no chart lists, and drawn from the chart
-  alone the founder who filed a task was a squircle. A handle with neither
+  agent. That is what a credential bound to no seat needs — an API token's
+  session, a service account acting as itself: its write is authored under
+  its login, which no chart lists, and drawn from the chart alone the founder
+  who filed a task through the deployment's token was a squircle. A handle with neither
   answer takes the kit's default, the agent's squircle — the kit has no third
   outline — and is never drawn as a person, since a circle there would claim an
   answer nothing gave. Inside a row that is itself a link, `SeatLabel` draws
@@ -1495,7 +1500,7 @@ copy of it is how the two drift. What `dashboard/src/app/` owns:
 | Piece | What it is |
 |---|---|
 | `sidebar/` | the one sidebar — [The sidebar](#the-sidebar) — with the health card and the user block |
-| `sidebar/UserBlock` | who is signed in, at the sidebar's foot: bound (their name, login and seat, linking to the seat's page), unbound (their own name, as `GET /auth/session` answers it from their directory row, beside the login, and that it is bound to no seat — ordinary, never a fault; the login alone where the row holds no name) or nobody (a **Sign in** button back to the screen they are on), with the grants beside it. Its popover holds a link to the reader's [Account](#account-the-readers-own-page) (`place: "menu"` in `app/nav.ts`) — where the password, the second factor and recovery codes, the sessions and the personal access tokens are — and both sign-outs, which need only `GET /auth/session` to answer — the frame's one read of it (`lib/frameSession.ts`), never one of the block's own: while the socket's `viewer` question has not (it never does for a person the socket refuses, or never dials for), a session is offered the two sign-outs under its own login. See [Signing in](#signing-in-is-a-screen-outside-the-frame) |
+| `sidebar/UserBlock` | who is signed in, at the sidebar's foot: bound (their name, login and seat, linking to the seat's page), unbound (their own name, as `GET /auth/session` answers it from their directory row, beside the login, and *Not bound to a seat* — ordinary for a token's session or a service account, and for a person the residue People & access reports, since every person holds a human seat; the login alone where the row holds no name) or nobody (a **Sign in** button back to the screen they are on), with the grants beside it. Its popover holds a link to the reader's [Account](#account-the-readers-own-page) (`place: "menu"` in `app/nav.ts`) — where the password, the second factor and recovery codes, the sessions and the personal access tokens are — and both sign-outs, which need only `GET /auth/session` to answer — the frame's one read of it (`lib/frameSession.ts`), never one of the block's own: while the socket's `viewer` question has not (it never does for a person the socket refuses, or never dials for), a session is offered the two sign-outs under its own login. See [Signing in](#signing-in-is-a-screen-outside-the-frame) |
 | `header/PageHeader` + `Breadcrumb` | the page header: the kit's top bar with the trail (whose last crumb is the page's `h1`), who is working now (Home's bar only, `useWorkingNow`), the star and Copy link, and last the screen's own controls (portalled in by `PageActions`); then the workspace's SECTION TABS, as links in a labelled `nav` with `aria-current` on the section the reader is on, drawn only on a section's own page; then the `StateBar`. Settings draws its sections as a grouped COLUMN beside the screen instead (`SectionColumn`, the kit's `SidebarNav`), with a lock naming the grant on a section the reader holds none of the grants for (drawn only once the viewer has answered) and an arrow on a cross-link, and Knowledge draws a TREE there — its search, the search's mode and every space's pages (`KnowledgeTree`, out of the Knowledge chunk) |
 | `routes.ts` + `crumbs.ts` | the route table as a pure resolver, and the trail derived from it |
 | `layout.ts` | the frame's breakpoints, READ from the kit's tokens (`breakpoint.shell`, `breakpoint.phone`), and the one width the dashboard derives itself — where the peek becomes a column |
@@ -1870,8 +1875,13 @@ token waits behind **Use an API token instead**. Where `/health` says
 `identity: unclaimed`, nobody has joined yet — an open invitation does not
 change that, since redeeming it is what creates its person — and the token is
 the only way in, so its form is open from the start and the page says how to
-begin: sign in with the token, then invite yourself from Settings › People &
-access, or open the link of an invitation already issued;
+begin: sign in with the token, then open **Agents › Org chart**, choose your
+human seat and invite or create yourself on it — every person holds a human
+seat, so a seat is where a person comes from — or open a link already issued.
+A node that runs no company yet has no seat to put anybody on, so there the
+company comes first, created from **Agents › Edit org** with a seat for
+yourself (see [How the first person
+exists](../concepts/identity-and-access.md#how-the-first-person-exists));
 `unknown` keeps the ordinary page, because a node that cannot read its identity
 estate is not one with nobody in it. Somebody already signed in is told who, and
 offered to continue as them.
@@ -1882,8 +1892,15 @@ screen sends the secret BESIDE the id — the `X-Crewlet-Invite-Secret` header o
 the view, the body on the redemption — never in a request URL. The view names
 who it is for, who sent it — when a person did: one a Tier A token or a service
 account issued, the company's first person's above all, names no sender, since
-`token:founder` is nothing its reader would recognise — and the seat it binds;
-the form proposes the login
+`token:founder` is nothing its reader would recognise — and the seat it binds.
+Every person holds a human seat, so every invitation names one; where the
+chart no longer holds that seat, the screen says before the form that
+redeeming it will be refused and to ask whoever sent it for a new one, since a
+warning after a password is typed is a wasted form. An invitation that names
+no seat at all (one issued before every invitation named a seat) never reaches
+the form: the view answers it the `410` every dead link gets, and the screen
+says the link can no longer be used. The form proposes
+the login
 the engine suggested — held to the login grammar, and said under the field,
 before anything is posted — says which session it signs out when the browser
 is already signed in as somebody, states the password length `/auth/config`
@@ -1893,16 +1910,25 @@ spent, withdrawn or mistyped link is one screen (`410`), and a login or address
 somebody else holds is the engine's own sentence (`409`) over the form as
 typed.
 
-**A password reset link is the invitation's screen again, and signs nobody
-in.** The link an administrator issues carries its credential in the fragment
+**A password link is the invitation's screen again, and signs nobody in.**
+Two links land on `#/reset`: the **reset link** an administrator issues
+somebody who has a password, and the **first password link** a person's
+create hands back — the way a person an administrator created on a seat sets
+the password they have never had. Each carries its credential in the fragment
 the same way, and the screen sends the secret beside the id — the
 `X-Crewlet-Reset-Secret` header on the view, the body on the spend. The view
-names whose password it sets, takes the new one twice and states the length
-`/auth/config` asks for; a
-spent, revoked, expired or mistyped link is one screen (`410`). Setting the
-password ends every session the person held and opens none, so the screen ends
-on a **Sign in** button rather than in the product: a second factor the person
-holds is asked for there, which a session handed out by the link would skip.
+names whose password it sets and says which link it is (`first`): a reset is
+**Choose a new password**, and says setting it ends every session the person
+holds; a first password is **Choose your password**, and ends nothing, since
+there was nothing to end — told that it would, a person just created read
+their first sign-in as a lock-out. Either takes the password twice and states
+the length `/auth/config` asks for. A spent, revoked, expired or mistyped link
+is one screen (`410`), **This password link can no longer be used**, which
+names no lifetime — a reset lasts a day and a first password link a week, and
+a link that no longer opens does not say which it was. Setting the password
+opens no session, so the screen ends on a **Sign in** button rather than in
+the product: a second factor the person holds is asked for there, which a
+session handed out by the link would skip.
 
 **A required second factor is enrolled before anything else opens.** `#/enrol`
 asks `POST /auth/totp` for a seed — drawn as a **QR code** of the seed's
@@ -2017,8 +2043,9 @@ company did.** Top to bottom:
 
 - **The greeting.** The company's day (on `org.timezone`, the one clock every
   due date and budget window is cut on), the reader's morning — by the first
-  word of their seat's name, or, for a person no seat names, of their own name
-  as `GET /auth/session` answers it — and one sentence
+  word of their seat's name, or, for a reader no seat names — a token's
+  session, or a person recorded before every person held a seat — of their
+  own name as `GET /auth/session` answers it — and one sentence
   of the engine's: "Nimbus is running on 3 nodes. **3 decisions** are waiting on
   you, 1 condition needs a look, and 4 agents are working right now." The
   decisions figure is weighted; an engine condition — a refused session, a lost
@@ -2124,8 +2151,8 @@ being listed again under Today, and Done and Snooze on the decision mark it.
 
 **Every row has the same three lines.** Who — the seat behind it, drawn with
 its avatar and state ring; a person's change is drawn as the seat the
-engine recorded it under, and one by somebody bound to no seat (author kind
-`operator`) as "An operator", never as a login or a credential — what (the question, the stop, the excerpt), and why (a pill). An
+engine recorded it under, and one by a credential bound to no seat (author
+kind `operator` — a token or a service account acting as itself) as "An operator", never as a login or a credential — what (the question, the stop, the excerpt), and why (a pill). An
 excerpt the engine COMPOSED names its author by name as the row's head does:
 the engine writes "maya-ops put LEAD-3 at position 1 of your priorities" with a
 handle, for the seat it wakes, and the row reads "Maya Ops put LEAD-3 …" — a
@@ -2186,8 +2213,8 @@ replies; under any other notice, the task's latest conversation. It is read a
 page at a time from `work_comments`, the newest page polled, and "Earlier
 comments" reads the page before — the detail's twenty are no longer where a
 long conversation ends. A comment's author is the seat a person wrote it as —
-the engine records it so — and one by somebody bound to no seat reads "An
-operator", never a login or a credential.
+the engine records it so — and one by a credential bound to no seat reads
+"An operator", never a login or a credential.
 
 **The composer writes as you.** A reply is `comment_on_work_item{item, body,
 reply_to}` and answers nothing; an answer closes the ask. `@` opens a picker
@@ -2223,10 +2250,15 @@ are one place the reader has been. Under 640px the list is the screen and a
 row opens in its place, with Back.
 
 **Three viewer states, three sentences.** A reader with no credential, a
-reader whose credential no seat claims, and a bound reader. The conditions a
-person decides are listed for all three; a person's notices and decisions need
-a credential bound to their seat, and every write control is drawn for all
-three, disabled with the reason.
+reader whose credential no seat claims, and a bound reader. The unbound
+reader's sentence is worded by whose login it is: a token's session or a
+service account is ordinary, and is told what binding its row to a human seat
+nothing else holds would add (`crewlet iam bind`, or a row created with
+`-seat`); a person is told they hold no seat although every person holds one —
+recorded before that held — and to ask whoever manages people to give them
+one. The conditions a person decides are listed for all three; a person's
+notices and decisions need a credential bound to their seat, and every write
+control is drawn for all three, disabled with the reason.
 
 ### My work is one person's day
 
@@ -2254,7 +2286,8 @@ the one the tab counts.
 grouping and count line, opening banded by the engine's `due:bucket` — and
 Asked by me is the same list with the ASKER locked instead (`asked_by=`
 alone: a question is recorded under its asker's own record name, the seat for
-a person the directory binds to one and the login for anybody else, so one
+a person — every person holds one — and the login for a credential bound to
+none, so one
 name finds every question they asked and no question accepts a `viewer=`),
 opening on every status. A lock is not a chip and not a
 key on the address: it is what the section IS.
@@ -2428,6 +2461,91 @@ hue on a card, and no seat has a colour of its own. The legend at the chart's
 foot counts Working, Needs you, Stopped and Idle from the engine's `activity` —
 a seat with no row yet is counted nowhere, and a person never.
 
+**A human seat's card says what holds it**, for a reader the identity
+directory answers — `people:manage` or `audit:read`, the two grants
+`GET /iam/seats` takes; nobody else is asked, and their card reads "Human ·
+availability" as before. Every person holds exactly one human seat for as long
+as they exist
+([ADR-0026](../../adr/0026-every-person-holds-a-human-seat.md)), and the
+company document cannot say who that is, so for such a reader a human card's
+third line is **Held by jane.doe**, **Invited · sam@example.com** (or
+*Invited*, where this node's keyring cannot open the address) or **Vacant** —
+in the card's NEUTRAL ink, beside a neutral dot, because who holds a seat is
+not something the seat is doing and the card's one hue is state. The whole
+chart is ONE read of the seat listing, asked once the viewer has said who this
+is, kept current on the directory's own terms (every minute and when the tab
+comes back) and read again the moment a directory write anywhere on the page
+lands, so a seat invited from the peek is never "Invited" beside a card still
+saying "Vacant". On a phone the rows carry the same line. A read that FAILED
+for such a reader is said above the canvas or the rows — **The identity
+directory did not answer**, that who holds each human seat (and, for
+`people:manage`, Invite and Create on a vacant one) waits until it does, and
+the refusal's own words beneath — wherever the chart holds a human seat,
+because the cards alone would read exactly as a reader holding neither grant
+sees them.
+
+**A vacant human seat is where a person joins.** A person is never invited or
+created anywhere else: Settings › People & access lists, changes and removes
+people but adds none, because a person comes from the seat they will hold. So
+for a reader holding `people:manage` a human card carries a menu — the tree's
+own pattern, as the builder's node actions are drawn: a strip of icon buttons
+for a pointer ("Invite a person to Jane Doe"), which the canvas draws over the
+end of the card once it is hovered, focused or selected, out of the tab order
+and hidden from assistive technology — and the same items as the card's menu,
+which the ContextMenu key and Shift+F10 open on the card itself, since a
+tree's items hold nothing focusable. What it offers is decided by what holds
+the seat:
+
+| The seat | The menu |
+|---|---|
+| Vacant | **Invite to this seat…** and **Create a person on this seat…** |
+| Invited — an open invitation names it | **Cancel invitation** |
+| Held by a person or a service account | nothing: a holder is moved to another seat or removed on their row in People & access |
+| Not answered for — the listing failed, has not arrived, or does not hold the seat yet | nothing, because a listing that did not answer says nothing about whether the seat is free |
+
+On a phone, whose chart is rows with no card menu, the gestures are the
+peek's. The seat's peek and its page offer the same three, and the dialogs are
+one set (`components/people.tsx`), each about the seat as it was when the
+gesture started rather than the live row — the listing is read again the
+moment the write lands, and a cancellation reading the live row lost the
+invitation it was about, and its dialog with it, before a `202` could say it
+was recorded:
+
+- **Invite** — "Invite a person to Jane Doe", the seat stated as a fact rather
+  than offered as a choice: an **Email address** and the grants, each grant
+  the reader does not hold disabled with why, and, while `state:read` is not
+  ticked, a warning that the person will open nothing but their own Account.
+  It sends `POST /iam/invitations` with the seat, and the **Invitation link**
+  comes back **once**, with its expiry and the sentence that it is the
+  credential: it works once, this engine sends no mail, and opening it is
+  where the person chooses a login and a password — redeeming it binds them
+  to the seat, which the open invitation holds until then.
+- **Create person** — "Create a person on Jane Doe": an **Email address**, a
+  **Name** and a **Login**, both optional — left empty, the engine proposes
+  the login from the address, the same proposal an invitation's screen makes,
+  and says which it took; one typed is held to the person grammar under the
+  field before anything is posted — and the grants, on the invitation's
+  terms. It sends `POST /iam/people` (`kind: person`, the seat) under a fresh
+  operation key, and the person is created ACTIVE on the seat at once. The
+  answer names the login the engine took and shows the **Password link**
+  **once**: it sets their first password, once, within a week, signs nobody
+  in, and until it is used nobody can sign in as them. The key is what makes
+  the link survive a dropped answer: the engine derives the person and their
+  link from the operation, so **Try again** after an unknown answer hands back
+  the same link rather than a second person, and a retry that finds the link
+  already spent, revoked or lapsed shows *No link to show* with the engine's
+  own sentence naming the way to a new one — a password reset link.
+- **Cancel invitation** — confirmed, with **Keep it** as the way out (a
+  "Cancel" beside "Cancel invitation" kept the invitation for somebody who
+  pressed it meaning to cancel it): the link stops working at once, as one
+  nobody issued, and the address and the seat are free again.
+
+Each is one `/iam` write through `lib/iamWrite.ts`, on the terms [People &
+access](#settings-the-frame-people-secrets-nodes-and-configuration) states for
+every directory write — a step-up asked and the request replayed, a `202`
+leaving the dialog only **Done**, a refusal in the engine's words with the
+grants that would admit.
+
 **A card opens the seat beside the chart** (`peek=seat:{handle}`); Enter does
 the same, the arrows walk the tree, `[` and `]` step the seats in the order the
 tree reads — pressed on a card as well as in the peek, since a card's own keys
@@ -2482,8 +2600,20 @@ every other reader reads what the health push says — this node by name,
 or "another node" — which is what the profile's Setup card says too, and no
 guarded read is sent), Open work (`work_workload`), where its tools come from
 (the projection's `tool_sources`, on the same `config:read` terms as the chain),
-and its goal, drawn as the inline markdown it is written in. It asks at most three questions. **Open profile** and **Message** are the
-rail's foot, pinned to its bottom edge; Message opens the New task sheet with
+and its goal, drawn as the inline markdown it is written in. A human seat's
+peek, for a reader the directory answers, adds **Held by** — the holder's
+login with, short of active, their stage ("jane.doe (suspended)"; "The service
+account `ci:release`" for a machine), "An open invitation ·
+sam@example.com", or "Nobody — the seat is vacant", never the card's line,
+which repeats the term — or says the directory did not answer, does not list
+the seat yet, or is still being read, rather than leaving the fact out. It asks at most three questions,
+and for a human seat one REST read of the directory (`GET /iam/seats`), asked
+only of a reader holding `people:manage` or `audit:read` and never for an
+agent's seat, whose holder is the engine. **Open profile** and **Message** are the
+rail's foot, pinned to its bottom edge — beside them, for a `people:manage`
+holder, the seat's gestures as buttons (**Invite** and **Create person** on a
+vacant seat, **Cancel invitation** on an invited one), which on a phone are
+the only place they are; Message opens the New task sheet with
 the seat as assignee and `ask` set — on the project filed under the seat's own
 unit, or the nearest unit above it that has one — so the question is filed as
 work the seat owes an answer on and the answer lands in the Inbox — there is no
@@ -2525,13 +2655,28 @@ holds every link to a seat to a tab its profile has. The Work tab counts the
 seat's open work — the engine's `total_hint`, the same answer the Overview's
 card and the Work tab read.
 
-**A person's seat says who holds it.** The chart cannot: the identity directory
-binds a person to a human seat. So above the tabs a person's profile states the
-holder's login and, short of active, their stage — or **Nobody holds this
-seat**, with **Invite** opening the invitation dialog with this seat chosen, for
-a reader holding `people:manage`. The answer is `GET /iam/seats`, which takes
-`people:manage` or `audit:read`, so it is asked only of a reader holding one;
-anybody else sees the profile as it was.
+**A person's seat says what holds it.** The company document cannot: the
+identity directory binds a person to a human seat. So above the tabs a
+person's profile says it whole, through the same holding the chart's card and
+the peek draw (`SeatHolding` in `components/people.tsx`): **Held by**
+`jane.doe` — "Held by you, as `jane.doe`" on your own seat, "the service
+account `ci:release`" where a machine holds it — with the stage short of
+active; or the open invitation that names it — its address, until when, and
+that until it is redeemed, cancelled or lapses nobody else can be invited or
+bound to the seat — with **Cancel invitation**; or **Nobody holds this seat**,
+with **Invite** and **Create person**, the two ways a person comes to exist,
+opening [the chart's dialogs](#the-org-chart-is-the-company-running). The
+gestures are drawn for a reader holding `people:manage`. The answer is
+`GET /iam/seats`, which takes `people:manage` or `audit:read`, so it is asked
+only of a reader holding one; anybody else sees the profile as it was. A read
+that failed is SAID, with the engine's refusal, rather than drawn as nothing —
+the gestures live here, and a page without them would say nothing about why —
+and a seat the chart draws but the listing does not hold yet is one this node
+has not applied the revision for, which the page says. A dialog opened here
+OUTLIVES the listing it was opened from: every write reads the listing again,
+and a re-read refused then — a node behind its identity log, or the refetch as
+the tab comes back from the email the link was pasted into — would otherwise
+have taken the open dialog, and the link it shows only once, with it.
 
 **Three actions, in the page bar, each a write control held with its reason**
 for a reader who cannot make it:
@@ -2864,10 +3009,12 @@ is typed rather than when the answer lands, so the list does not shrink under
 the highlight. The answer ends with a footnote in **tokens** — "1,440 tokens, charged to
 the company", or "Answered before — no tokens spent" — never money. An
 anonymous reader gets one line instead — *Sign in to get an answer from your
-company's knowledge* — and a reader bound to no seat is told the answer is
-written by their seat's own model and to ask whoever manages people to bind
-their login to one, because the engine refuses the answer to anybody without a
-seat whose model it can run on.
+company's knowledge* — and a reader bound to no seat (an API token's session,
+a service account, or a person recorded before every person held a seat) is
+told the answer is written by their seat's own model and to ask whoever
+manages people to bind their login to one, because the engine refuses the
+answer to anybody without a seat whose model it can run on. A person signed in
+as themselves always gets the answer: every person holds a human seat.
 
 ### Three changes, made as you
 
@@ -2965,11 +3112,13 @@ dashboard" — so there is no such actor. A write from a browser is made by the
 **principal your session resolves to**
 ([ADR-0024](../../adr/0024-the-dashboard-acts-as-the-principal-its-session-resolves-to.md)),
 through the same operator tools your own assistant calls, and it is recorded
-exactly as that assistant's would be: a person the identity directory binds to
-a seat writes as that seat, author kind `human`, with the session's lineage as
-the credential (`operator_id`); somebody bound to no seat writes under their
-own login, kind `operator`. Being bound is not a condition of writing — it
-decides only whose name the change carries.
+exactly as that assistant's would be: a person — every person holds a human
+seat — or a token the identity directory binds to one writes as that seat,
+author kind `human`, with the session's lineage as the credential
+(`operator_id`); a credential bound to no seat — an API token's session, a
+service account acting as itself — writes under its own login, kind
+`operator`. Being bound is not a condition of writing — it decides only whose
+name the change carries.
 
 **The audit log draws a person as a person.** A write of kind `human` reads as
 the seat it was made as — the person's circle and the seat's name, linking to
@@ -3002,8 +3151,8 @@ button's description rather than its title, hears it once. A form whose
 primary action is held also writes the reason on the page beside it (the New
 task sheet's foot), because neither reaches a touch screen. The six reasons,
 in the order you clear them (`lib/useWriteAccess.ts`) — and being bound to no
-seat is not one of them, since the engine makes your change all the same,
-under your own login:
+seat is not one of them, since the engine makes a credential's change all the
+same, under its own login:
 
 | You are | The control says |
 |---|---|
@@ -3014,14 +3163,21 @@ under your own login:
 | Somebody the engine does not make this change for | This engine does not make this change for you. |
 | Looking at somebody else's record | The screen's own sentence, naming whose record it is — My work read on a report's day holds every control on it (`HoldWrites`), and releases exactly the one change it offers there, a lead's reorder of that queue. |
 
-**The one screen that draws its writes for one grant only is People &
-access.** Its readers are administrators (`people:manage`) and auditors
-(`audit:read`), and an auditor reads it as a record: a dozen controls on every
-row, each disabled with the same "needs `people:manage`", is noise on exactly
-the screen they came to read, and never news — the one grant that would enable
-them is the one the screen's own note names. So its controls are drawn for a
-`people:manage` holder and left out for everybody else, and the engine refuses
-whatever reaches it all the same.
+**The one set of writes drawn for one grant only is the identity
+directory's** — People & access, and a human seat's **Invite**, **Create
+person** and **Cancel invitation** on the org chart's card, the seat's peek
+and its page. The directory's readers are administrators (`people:manage`)
+and auditors (`audit:read`), and an auditor reads it as a record: a dozen
+controls on every row, each disabled with the same "needs `people:manage`",
+is noise on exactly the screen they came to read, and never news — the one
+grant that would enable them is the one the screen's own note names. A seat's
+gestures are the same writes about the same directory, and held on every human
+card of the chart, on every peek and on every person's page they would be that
+noise on the company's busiest screens, read by everybody. So they are drawn
+for a `people:manage` holder and left out for everybody else — and a reader
+the directory does not answer is not even told what holds a seat, since the
+listing those words come from is the directory's own read — and the engine
+refuses whatever reaches it all the same.
 
 **One press at a time, by every way in.** A write control refuses a press
 while its last one is still out, and so does every other way into the same
@@ -5610,7 +5766,9 @@ nobody else** — `GET /auth/session` for who this browser is, the self arm of
 and revocation with no `?person=` — so the page holds no id it could be talked
 into swapping for somebody else's.
 
-- **Profile** — login, name, address, kind, seat (linking to its page) and
+- **Profile** — login, name, address, kind, seat (linking to its page; a
+  person with none — recorded before every person held a seat — reads a
+  warning **No seat**, and to ask whoever manages people for one) and
   grants, read-only, with the line that an administrator changes them: a
   person changing their own would be the escalation the directory exists to
   close. A sealed value reads *sealed*, never blank.
@@ -5722,44 +5880,64 @@ edited in the org builder (**Edit in org**).
 is every person in the directory (`/iam/people`) — their login, stage and
 grants, and the seat the directory binds them to — with their
 credentials (`/iam/credentials`) and sessions beside them; a sealed value this
-node's keyring cannot open reads *sealed*, never blank. **Human seats** is
-every human seat of the running company with whoever holds it (`/iam/seats`)
-and where agents reach it — its contact identities, read from the company
-document, which takes `config:read`, and said so to a reader without it
-rather than drawn as seats nobody can reach. **API tokens** is this node's
-Tier A labels joined to the directory rows holding their logins
-(`/iam/node-tokens`): a token whose login nobody holds acts as itself, unbound,
-and the row says so — a label mistyped on either side otherwise looks bound
-until the token presses something. The directory's own report (`/iam/check`)
-names a company nobody can administer, an active person with no credential, a
-binding whose seat is gone and a grant this node's ceiling withholds.
+node's keyring cannot open reads *sealed*, never blank. A person with no seat
+is drawn with a warning **No seat** tag rather than a blank, because it is a
+fault: every person holds a human seat for as long as they exist, and one
+recorded before that held is what the report names. A service account bound to
+none reads *Bound to no seat*, which is ordinary. **Human seats** is every
+human seat of the running company with whatever holds it (`/iam/seats`) — a
+person or a service account by login and stage, an open invitation as an
+**Invited** tag with its address, or *Nobody holds it* — and where agents
+reach it: its contact identities, read from the company document, which
+takes `config:read`, and said so to a reader without it rather than drawn as
+seats nobody can reach. The tile above it counts **Human seats nobody holds**
+as the seats held by NOTHING — an open invitation holds its seat as surely as
+a person does, and counted as vacant it read as a seat an administrator could
+still invite somebody onto — with "*n* invited" beside the total. **API
+tokens** is this node's Tier A labels joined to the directory rows holding
+their logins (`/iam/node-tokens`): a token whose login nobody holds acts as
+itself, unbound, and the row says so and names the one command that binds it
+— `crewlet iam create -kind machine -login token:<id> -seat <seat>`, a row
+created on a human seat nothing else holds — since a label mistyped on either
+side otherwise looks bound until the token presses something. The directory's
+own report (`/iam/check`) names a company nobody can administer, an active
+person with no credential, a person with no seat, a binding whose seat is gone
+and a grant this node's ceiling withholds, in the engine's order, each kind in
+words keyed on the engine's own list (`FINDING_KINDS` in
+`contract/identity.ts`, held against `iamapi.FindingKinds`), so a kind the
+engine grows is a compile error rather than a raw code on the screen.
 **Invitations** is every invitation nobody has redeemed and that is still good
 (`/iam/invitations`) — address, seat, grants, who sent it, when it expires —
 and **Show expired and redeemed** asks for every one the estate still holds.
 
-**A `people:manage` holder writes the directory from here**, and an
-`audit:read`-only reader keeps the read view with no control in it (see
-[A write control is never hidden](#a-write-control-is-never-hidden) for why
-this screen is the exception):
+**A `people:manage` holder writes the directory from here — except to add a
+person**, and an `audit:read`-only reader keeps the read view with no control
+in it (see [A write control is never hidden](#a-write-control-is-never-hidden)
+for why the directory's writes are the exception). **People & access invites
+and creates nobody.** A person holds exactly one human seat from the moment
+they exist, so a person comes from the vacant seat they will hold: **Invite**
+and **Create person** are on that seat's card in the org chart, its peek and
+its page ([The org chart is the company
+running](#the-org-chart-is-the-company-running)), and this screen's bar links
+there — **Invite or create from the org chart →**, beside **Identity trail
+→** — and its note says so. What it writes:
 
-- **Invite person** — an address, a human seat nobody holds (or none — and
-  where every human seat is held, the field says so: the person joins bound to
-  no seat) and the grants, each grant the reader does not hold disabled with why, since nobody
-  confers what they do not hold — and, while `state:read` is not ticked, a
-  warning that the person will open nothing but their own Account. An edit of a
-  person's grants says the same. The link comes back **once**, with its expiry
-  and the sentence that it is the credential: it works once and the engine keeps
-  only a hash of its secret. Opening it is where the person chooses a login and
-  a password.
 - **New service account** — a machine: a login in the colon grammar
   (`ci:release`, checked under the field before anything is posted, as an
-  edit's login is against its holder's grammar), a name and grants — and then **Mint its token**: a label, a
-  lifetime and grants out of the account's own (`secrets:read` and
-  `people:manage` disabled, since no token carries them, and one the reader
-  does not hold left unticked and disabled, since the engine refuses a token
-  carrying a grant its minter does not hold), the value shown once.
+  edit's login is against its holder's grammar), a name, grants and an
+  optional **Seat** — a human seat nothing holds, for an account that should
+  act as that seat (a deploy pipeline acting as its owner's seat, say), sent
+  in the same record as the account, because created bare and bound after, a
+  pipeline meant to act as a seat acted as itself until a second write landed;
+  with **No seat** it acts as itself, under its own login. Then **Mint its
+  token**: a label, a lifetime and grants out of the account's own
+  (`secrets:read` and `people:manage` disabled, since no token carries them,
+  and one the reader does not hold left unticked and disabled, since the
+  engine refuses a token carrying a grant its minter does not hold), the value
+  shown once.
 - **Cancel** on an invitation nobody redeemed: its link stops working at once
-  and the address is free again.
+  and the address and the seat it names are free again — the same dialog the
+  seat's own **Cancel invitation** opens.
 - On an **opened row** — **Edit login, seat and grants** (one `PATCH` carrying
   only what changed since the dialog opened — measured against that row and
   not the directory's minute-by-minute re-read, so a login or a seat left alone
@@ -5767,20 +5945,31 @@ this screen is the exception):
   grants as what was ticked and unticked, `add_grants` and `remove_grants`,
   which the engine applies to what the person holds when it decides, so a
   grant left alone stays as another administrator left it whichever others
-  are ticked; the seat offered among the vacant ones and their own; a
+  are ticked; the seat offered among the vacant ones and their own — with
+  **No seat** for a service account only: a person's seat is MOVED, never
+  cleared, since the engine refuses a person's edit that clears it
+  (`seat_required`), and removing them is what frees it; a person recorded
+  with no seat starts on **Choose a seat** with a warning saying so, and the
+  edit sends a seat only once one is chosen, so an unrelated change is never
+  refused for it; a
   grant the person already holds may be unticked whoever edits, since the
   engine checks only what an edit adds, while one neither holds stays
   disabled),
   **Suspend** / **Reactivate** (which of the two is fixed when the dialog
   opens, so its **Try again** after an unknown answer sends the same stage
-  even once the re-read shows it landed), and for a person **Issue password reset link**
+  even once the re-read shows it landed; a suspension says the person's seat,
+  by name, is withheld and stays theirs, so nobody else is put on it
+  meanwhile), and for a person **Issue password reset link**
   (shown once; the outstanding link is listed among their credentials),
   **Reset second factor** (when they hold one) and **End all sessions** — or,
   for a machine, **Mint token** — and **Remove**, confirmed by typing their
   login, since it cannot be undone, which closes the panel once it lands and
-  says who was removed. Each credential row has **Revoke**. **Suspend**,
-  **Reset second factor** and **End all sessions** each say that an
-  outstanding password reset link ends with the sessions, **Reactivate**
+  says who was removed. A removal says it frees the seat, by name, which then
+  stands vacant in the org chart, and that a person comes back by being
+  invited onto a seat again — a service account by being created again, since
+  nobody redeems an invitation for one. Each credential row has **Revoke**.
+  **Suspend**, **Reset second factor** and **End all sessions** each say that
+  an outstanding password reset link ends with the sessions, **Reactivate**
   that it stays ended, and **Issue password reset link** that it is issued
   after those — a link sent first is dead by the time it is opened. On the
   reader's OWN row — the person `GET /auth/session` names, by id — every
@@ -5794,25 +5983,39 @@ this screen is the exception):
   sentence where nobody else would be left — the engine refuses no one taking
   away a grant, the last administrator's own included.
 
-Every one of these is one `/iam` write (`lib/iamWrite.ts`): a `403
+Every one of these — and a seat's **Invite**, **Create person** and **Cancel
+invitation** — is one `/iam` write (`lib/iamWrite.ts`): a `403
 step_up_required` opens the step-up dialog and the same request is replayed; a
-create carries a fresh uuid7 `Idempotency-Key`, kept for the retry an unknown
-answer asks for — **Try again** sends the key the engine handed back, so it
-lands once, and a request changed before it is pressed is a new one under a new
-key, since a create's key sent with another body is refused as reused — while a token's mint and a reset link read no key and a retry
-issues another; a refusal is the engine's sentence with the grants that would
-admit; a `202` says the change is recorded and this node is catching up, and
-— like a stale refusal — leaves the dialog only **Done**, because the gesture
-is over and pressing it again would send it again; and after every answer — a refusal part way and an unknown one included, since
-either may have changed something — the lists the write touches are read
-again. Where `/health` says
-`identity: unclaimed`, a callout says nobody has joined yet and what comes
-next: with no invitation open, inviting yourself, and it offers **Invite
-person**; with one open, that its link is where its person chooses a login and
-password — naming the address where there is one invitation — and that a lost
-link is cancelled and issued again, with no second Invite beside it. A token is still declared in Tier A (`api.auth.tokens`) and
-changes at a restart. **It never reads a value back** — not a token's, not a
-password's, not a second factor's.
+create — a service account's or a person's — carries a fresh uuid7
+`Idempotency-Key`, kept for the retry an unknown answer asks for — **Try
+again** sends the key the engine handed back, so it lands once, and a
+person's create hands back the same first password link — and a request
+changed before it is pressed is a new one under a new key, since a create's
+key sent with another body is refused as reused — while a token's mint and a
+reset link read no key and a retry issues another; a refusal is the engine's
+sentence with the grants that would admit; a `202` says the change is
+recorded and this node is catching up, and — like a stale refusal — leaves
+the dialog only **Done**, because the gesture is over and pressing it again
+would send it again; and after every answer — a refusal part way and an
+unknown one included, since either may have changed something — the lists the
+write touches are read again, every seat listing on the page among them. Where
+`/health` says `identity: unclaimed`, a callout says nobody has joined yet and
+what comes next — drawn once the invitations and the human seats have both
+answered or been refused, so it never names one step and then another: with
+an invitation open, that its link is where its person chooses a login and
+password — naming the address where there is one invitation — and that a
+lost link is cancelled here or on its seat and issued again from the seat; on
+a node running no company (the seat listing's `409 no_active_revision`), that
+there is no seat yet and the company comes first, with **Create the company**
+(`#/agents/edit`) and `crewlet config import` beside it, while the Human seats
+card says the same in a sentence rather than as a failed read; in a company
+with no human seat at all, that nobody can join until one is added, with
+**Add a human seat** (`#/agents/edit?add=human`); otherwise **Open the org
+chart**, where you choose your human seat and invite or create yourself on it
+— and where the listing was refused for any other reason, the callout points
+at the chart without claiming anything about its seats. A token is still
+declared in Tier A (`api.auth.tokens`) and changes at a restart. **It never
+reads a value back** — not a token's, not a password's, not a second factor's.
 
 **Integrations** is a grid of **tiles, one per tool** — Slack, Mattermost,
 Atlassian, GitHub, GitLab, Datadog — each with the vendor's mark, the
@@ -6844,8 +7047,13 @@ while the screen binds the real chart, table, editor and dialogs, and
   irreversible ones on an acknowledgement, whose sentences (`dialogParts`'s
   `ACKNOWLEDGEMENT_TEXT`) the editor's company rename shares.
 - **Create mode is a form, one template operation, and a create-only write.**
-  `CreateCompany.tsx` collects the charter, the starting shape and an optional
-  seat for the operator, and records the model's `applyTemplate` (refused
+  `CreateCompany.tsx` collects the charter, the starting shape and a seat for
+  the operator — **Add a seat for yourself**, ticked from the start and named
+  "Founder", because every person holds a human seat and is invited or
+  created onto one from the org chart, so a company started without one is a
+  company nobody, the operator included, can join until somebody adds one;
+  unticking it is a deliberate answer (an agents-only company run through API
+  tokens) — and records the model's `applyTemplate` (refused
   outside create mode), so the start is a single undo and is checked like any
   other draft. The save is `PUT` with `If-None-Match: *`; a company that
   appeared meanwhile is offered instead, and the draft is discarded rather

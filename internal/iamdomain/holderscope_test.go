@@ -45,7 +45,7 @@ func (r *writeRig) lastRecord() (statelog.ScopeSet, string) {
 // each other by coincidence.
 func personAwayFrom(token string) string {
 	for {
-		id := uuid.New().String()
+		id := uuid.Must(uuid.NewV7()).String()
 		if iamdomain.BucketOf(id) != iamdomain.BucketOf(token) {
 			return id
 		}
@@ -53,86 +53,95 @@ func personAwayFrom(token string) string {
 }
 
 // AN IDENTITY CHANGE IS FILED UNDER ITS PERSON'S BUCKET — AND EVERY LEAVER'S
-// WHOSE TOMBSTONE ITS BIND STAMPS.
+// WHOSE TOMBSTONE ITS BIND STAMPS; AND SO IS A CREATE ONTO A SEAT.
 //
 // The scope is where a node that cannot decode a record files the deferral,
 // and a read about a person looks in THAT PERSON'S bucket. A directory record's
-// subject names nobody, so an unbinding that stated the bucket of the seat's
-// handle — a hash no read consults — would leave a node deferring it serving
-// the holder as bound to the seat, never saying it was behind about them; and
-// a record naming nobody would put "Sarah was unbound" on nobody's history. A
-// bind of a seat somebody was removed from also stamps that leaver's tombstone,
-// which is filed under the leaver, so their bucket is declared too.
+// subject names nobody, so a move off a seat that stated the bucket of the
+// seat's handle — a hash no read consults — would leave a node deferring it
+// serving the holder as bound to the seat, never saying it was behind about
+// them; and a record naming nobody would put "Sarah moved" on nobody's history.
+// A bind of a seat somebody was removed from also stamps that leaver's
+// tombstone, which is filed under the leaver, so their bucket is declared too
+// — by a move onto the seat, and by a create onto it alike.
 //
-// Mutation: drop the leavers from SetIdentity's scope, and the rig's apply
-// refuses the bind for writing outside what it declared.
+// Mutation: drop the leavers from SetIdentity's scope, or from the
+// enrolment's, and the rig's apply refuses the bind for writing outside what
+// it declared.
 func TestAnIdentityChangeIsFiledUnderItsPersonAndEveryLeaver(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	const seat = "platform-lead"
+	create := func(id, login, on string) {
+		t.Helper()
+		if err := rig.enrol(iamdomain.Creation{
+			PersonID: id, Kind: iam.KindPerson, Stage: iam.StageActive,
+			Name: login, Email: login + "@example.com", Login: login,
+			Seat: rig.vacantSeat(on), LinkExpiresAt: firstLinkExpiry,
+			OpID: "op-enrol-" + id, Reason: "a hire",
+		}); err != nil {
+			t.Fatalf("enrol %s onto %s: %v", login, on, err)
+		}
+	}
+	remove := func(id string) {
+		t.Helper()
+		if err := rig.draining(func() error {
+			_, err := rig.writer.Remove(rig.t.Context(), id, "op-remove-"+id, "left")
+			return err
+		}); err != nil {
+			t.Fatalf("remove: %v", err)
+		}
+	}
 	holder := personAwayFrom(seat)
-	if err := rig.enrol(iamdomain.Enrolment{
-		PersonID: holder, Kind: iam.KindPerson, Stage: iam.StageActive,
-		Name: "Sarah Chen", Email: "sarah.chen@example.com",
-		Login: "sarah.chen", OpID: "op-enrol",
-	}); err != nil {
-		t.Fatalf("enrol: %v", err)
-	}
-	rig.drain()
-	rig.seatOnly(seat)
-	if err := rig.bind(seat, holder, "op-bind"); err != nil {
-		t.Fatalf("bind: %v", err)
-	}
-	if err := rig.draining(func() error {
-		unbound := ""
-		_, err := rig.writer.SetIdentity(rig.t.Context(), iamdomain.IdentityEdit{
-			PersonID: holder, Seat: &unbound, OpID: "op-unbind",
-			Reason: "moved teams"})
-		return err
-	}); err != nil {
-		t.Fatalf("unbind: %v", err)
+	create(holder, "sarah.chen", seat)
+	rig.seatOnly("holder-desk")
+	if err := rig.bind("holder-desk", holder, "op-move"); err != nil {
+		t.Fatalf("move: %v", err)
 	}
 	scope, person := rig.lastRecord()
 	if !slices.Contains(scope.Paths, iamdomain.BucketOf(holder).Path()) {
-		t.Errorf("the unbind declares %v, which does not cover the holder's "+
+		t.Errorf("the move declares %v, which does not cover the holder's "+
 			"bucket %s — a node that cannot decode it files the deferral where "+
 			"no read about them looks", scope.Paths, iamdomain.BucketOf(holder).Path())
 	}
 	if slices.Contains(scope.Paths, iamdomain.BucketOf(seat).Path()) {
-		t.Errorf("the unbind declares the seat handle's bucket %s",
+		t.Errorf("the move off %s declares the seat handle's bucket %s", seat,
 			iamdomain.BucketOf(seat).Path())
 	}
 	if person != holder {
-		t.Errorf("the unbind names person %q, want the holder %s — its trail "+
+		t.Errorf("the move names person %q, want the holder %s — its trail "+
 			"row lands on nobody's history", person, holder)
 	}
 
-	// A LEAVER'S TOMBSTONE, stamped by the next bind of their seat.
-	if err := rig.bind(seat, holder, "op-rebind"); err != nil {
-		t.Fatalf("bind again: %v", err)
+	// A LEAVER'S TOMBSTONE, stamped by the next bind of their seat: a MOVE
+	// onto it.
+	if err := rig.bind(seat, holder, "op-move-back"); err != nil {
+		t.Fatalf("move back: %v", err)
 	}
-	if err := rig.draining(func() error {
-		_, err := rig.writer.Remove(rig.t.Context(), holder, "op-remove", "left")
-		return err
-	}); err != nil {
-		t.Fatalf("remove: %v", err)
-	}
+	remove(holder)
 	successor := personAwayFrom(holder)
-	if err := rig.enrol(iamdomain.Enrolment{
-		PersonID: successor, Kind: iam.KindPerson, Stage: iam.StageActive,
-		Name: "Dana Sre", Email: "dana@example.com", Login: "dana.sre",
-		OpID: "op-successor",
-	}); err != nil {
-		t.Fatalf("enrol the successor: %v", err)
-	}
+	create(successor, "dana.sre", "successor-desk")
 	if err := rig.bind(seat, successor, "op-successor-bind"); err != nil {
-		t.Fatalf("bind the successor: %v", err)
+		t.Fatalf("move the successor onto the seat: %v", err)
 	}
 	scope, _ = rig.lastRecord()
 	for _, who := range []string{successor, holder} {
 		if !slices.Contains(scope.Paths, iamdomain.BucketOf(who).Path()) {
-			t.Errorf("the successor's bind declares %v, without %s's bucket %s",
+			t.Errorf("the successor's move declares %v, without %s's bucket %s",
 				scope.Paths, who, iamdomain.BucketOf(who).Path())
+		}
+	}
+
+	// AND A CREATE ONTO IT, which binds the seat in the record that creates
+	// the person.
+	remove(successor)
+	third := personAwayFrom(successor)
+	create(third, "lee.park", seat)
+	scope, _ = rig.lastRecord()
+	for _, who := range []string{third, successor} {
+		if !slices.Contains(scope.Paths, iamdomain.BucketOf(who).Path()) {
+			t.Errorf("the create onto the seat declares %v, without %s's "+
+				"bucket %s", scope.Paths, who, iamdomain.BucketOf(who).Path())
 		}
 	}
 }
@@ -229,13 +238,14 @@ func (r *writeRig) scopeOf(op iamdomain.OpKind) statelog.ScopeSet {
 // every record it applies whether what it wrote is inside what it declared;
 // this is the case that names the two records it caught.)
 //
-// Mutation: drop the address's bucket from Enrol's scope for a redemption, and
+// Mutation: drop the address's bucket from the enrolment's scope for a redemption, and
 // the redemption's scope fails here.
 func TestARedemptionAndARemovalAreFiledUnderTheAddressTheyWrite(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	const address = "sarah@example.com"
-	issued, err := inviteFor(t, rig, address, "")
+	seat := rig.vacantSeat("platform-lead")
+	issued, err := inviteFor(t, rig, address, seat)
 	if err != nil {
 		t.Fatalf("invite: %v", err)
 	}
@@ -244,11 +254,11 @@ func TestARedemptionAndARemovalAreFiledUnderTheAddressTheyWrite(t *testing.T) {
 	// cannot pass for the other by coincidence.
 	person := personAwayFrom(blind)
 	if err := rig.draining(func() error {
-		_, err := nodeWriter(rig).Enrol(t.Context(), iamdomain.Enrolment{
-			PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
+		_, err := nodeWriter(rig).Redeem(t.Context(), iamdomain.Redemption{
+			PersonID: person, Stage: iam.StageActive,
 			Name: "Sarah", Email: address, Login: iam.LoginFromAddress(address),
-			Grants:     []iam.Grant{iam.GrantStateRead},
-			Invitation: issued.ID, InvitationSecret: issued.Secret,
+			Password: aPassword(), Grants: []iam.Grant{iam.GrantStateRead},
+			Seat: seat, Invitation: issued.ID, InvitationSecret: issued.Secret,
 			OpID: "invite:" + issued.ID, Reason: "redeemed an invitation",
 		})
 		return err

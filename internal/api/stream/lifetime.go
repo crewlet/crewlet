@@ -70,13 +70,14 @@ import (
 //   - RESOLVED AS WHO THE SOCKET ALREADY ACTS AS — the same login, seat and
 //     grants: the socket carries on, later questions are asked as the
 //     principal just resolved, and the watch is decided again.
-//   - RESOLVED AS SOMEBODY ELSE — a rename, a seat bound or unbound, a grant
-//     given or taken: closed [CloseUndecided], and the reconnect's handshake
-//     builds everything for whoever it is now. The tab's own answer to "who
-//     am I" (the `viewer` question, asked again on every reconnect) is what
-//     moves with it: kept open, the socket went on answering the new
-//     principal while the dashboard still named the old one — "Your day" on a
-//     seat the person had just unbound themselves from — until a reload. And
+//   - RESOLVED AS SOMEBODY ELSE — a rename, a person moved to another seat,
+//     a service account bound or unbound, a grant given or taken: closed
+//     [CloseUndecided], and the reconnect's handshake builds everything for
+//     whoever it is now. The tab's own answer to "who am I" (the `viewer`
+//     question, asked again on every reconnect) is what moves with it: kept
+//     open, the socket went on answering the new principal while the
+//     dashboard still named the old one — "Your day" on a seat the person had
+//     just been moved off — until a reload. And
 //     a snapshot sent in place, which a changed audience used to get, moved
 //     the pushes and left that answer behind.
 //   - A SEAT REFUSAL (the seat is gone), or a principal that no longer holds

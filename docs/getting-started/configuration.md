@@ -890,8 +890,8 @@ api:
     min_password_length: 12  # 12..256; 0 takes the engine's floor of 12.
                              #   Enforced wherever a person sets a password —
                              #   an invitation's redemption, a change, a reset
-                             #   link — and what /auth/config tells a form to
-                             #   refuse
+                             #   or first password link — and what
+                             #   /auth/config tells a form to refuse
     tokens:             # the DEPLOYMENT's machine credentials. At least one
                         #   is required once port is set
       - id: founder     # acts under the login token:founder — lowercase
@@ -902,8 +902,9 @@ api:
         grants: [state:read, audit:read, config:read, secrets:read,
                  work:write, knowledge:write, config:write, secrets:write,
                  fleet:operate, people:manage, sandbox:run]
-                        # what it may do, and the most an invitation it
-                        #   issues may confer — the first person's included
+                        # what it may do, and the most an invitation or a
+                        #   create it makes may confer — the first
+                        #   person's included
 
 logging:
   level: info       # debug, info (default), warn, error
@@ -942,7 +943,8 @@ on what cannot run and still prints what its operator should read. A warning is
 a configuration that is valid and carries a consequence worth knowing before it
 is applied — a declined fsync's window, a trim that will never advance until
 somebody acknowledges a backup, an embedded stream with nowhere to persist, a
-unit keyed on a name somebody will rename.
+unit keyed on a name somebody will rename, a company that declares no human
+seat and so can admit nobody.
 
 `api.host` and `api.port` are what this node **binds**, which is rarely where it
 **answers**: a fleet behind a load balancer binds `0.0.0.0:8000` and is reached
@@ -966,10 +968,15 @@ hash of its own resolved ceiling on its presence lease, and `/health` and the
 fleet view report a mixed one.
 
 **At least one `api.auth.tokens` entry is required.** A fresh
-deployment's identity estate is empty, so a Tier A token is what invites the
-first person (Settings › People & access, or `crewlet iam invite`) — and an invitation confers only what its
-issuer holds, so the token that invites them has to hold every grant they are
-to carry, `people:manage` included. On a running deployment it is the way back
+deployment's identity estate is empty, so a Tier A token is what puts the
+first person in it — invited onto, or created on, the human seat the company
+declares for them: from that seat's card in **Agents › Org chart**, or with
+`crewlet iam invite <address> -seat <handle>` (`crewlet iam create -email
+<address> -seat <handle>` creates them instead and prints their first password
+link). Every person holds a human seat, so a company has to declare one before
+anybody can join it. An invitation or a create confers only what its issuer
+holds, so the token that brings them in has to hold every grant they are to
+carry, `people:manage` included. On a running deployment it is the way back
 in when an administrator has locked themselves out. Each entry states its own
 `grants` — required and non-empty, because a credential's blast radius belongs
 where it is pinned — and its value must be at least 26 characters, checked on
@@ -986,7 +993,10 @@ node](../concepts/configuration.md#what-tier-a-must-state-on-every-node).
 Binding a credential to a seat is in neither tier. A token acts under the
 login `token:<id>`, and it acts **as a seat** when the identity directory holds
 a row under that login bound to one — `crewlet iam create -kind machine -login
-token:<id>`, then `crewlet iam bind`, both of which take `people:manage`. Never
+token:<id> -seat <handle>`, which takes `people:manage` (`crewlet iam bind`
+moves an existing row onto a seat, and `crewlet iam unbind` takes it back). The
+seat must be a human seat nothing else holds: no person, no other row and no
+open invitation, since a seat is held by one row of the directory. Never
 a `seat:` field on the token, because Tier A holds the keys to the secret store
 and may never read Tier B; and never a field on the seat's `contact` block,
 which says how to reach a person rather than which credential they hold. See
@@ -994,9 +1004,10 @@ which says how to reach a person rather than which credential they hold. See
 Chart](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api).
 
 **Leave `people:manage` out of the ceiling and nobody can ever hold it.** The
-first person carries what the invitation that enrolled them conferred, cut to
-the ceiling, and may confer only what they hold, so a ceiling without it is a
-deployment in which no person can invite, bind, suspend or remove anybody.
+first person carries what the invitation or the create that enrolled them
+conferred, cut to the ceiling, and may confer only what they hold, so a
+ceiling without it is a deployment in which no person can invite, create,
+move, suspend or remove anybody.
 
 The event store (LLM observability) is a table in that same file, created by
 the engine's own migrations on first start — there is nothing to configure
@@ -1124,8 +1135,8 @@ units:
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | yes | The seat's display name — what people read. It is NOT how anything refers to this seat: `manages:` and a unit's `lead:` both take the `handle` below |
-| `kind` | `agent` \| `human` | no | Who holds the seat (default `agent`). `human` marks a [human seat](../concepts/humans-in-the-org.md) — addressable, never spawned; rejects every runtime-only field below. Its `contact` identities are optional: a seat with none is legitimate, and `crewlet validate` and every `/config` write name it in an `advisory` warning at the seat's `contact` |
-| `contact` | dict | no | A human seat's external identities — optional, see `kind` above; refused on an agent seat: `slack_user_id`, `mattermost_user_id` (a username, not an ID), `atlassian_account_id` (Jira+Confluence), `github_login`, `gitlab_username`. Each accepts a literal ID or exactly one whole-value `${VAR}` env reference, resolved at use time; values are whitespace-stripped, and a `${VAR}` embedded inside a longer string is rejected at validation (see [Humans in the Org Chart](../concepts/humans-in-the-org.md)). **No two seats may declare the same identity** — an external account belongs to one person, and a duplicate is refused rather than silently sending one of them somebody else's mail. Every one is a place a message can be sent; who a person is on the engine's own surface — the dashboard, the API, the operator tool server — is not here but in the identity directory, bound with `crewlet iam bind` (see [Acting as your seat](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api)) |
+| `kind` | `agent` \| `human` | no | Who holds the seat (default `agent`). `human` marks a [human seat](../concepts/humans-in-the-org.md) — addressable, never spawned; rejects every runtime-only field below. It is also where a person joins: every person holds exactly one human seat, invited onto it or created on it from that seat in **Agents › Org chart** (or `crewlet iam invite -seat`), so a company that declares no `kind: human` seat at all can admit nobody — legitimate for a company its agents run alone through Tier A tokens, and named in an `advisory` warning at `roles` by `crewlet validate` and every `/config` write. Its `contact` identities are optional: a seat with none is legitimate, and the same two name it in an `advisory` warning at the seat's `contact` |
+| `contact` | dict | no | A human seat's external identities — optional, see `kind` above; refused on an agent seat: `slack_user_id`, `mattermost_user_id` (a username, not an ID), `atlassian_account_id` (Jira+Confluence), `github_login`, `gitlab_username`. Each accepts a literal ID or exactly one whole-value `${VAR}` env reference, resolved at use time; values are whitespace-stripped, and a `${VAR}` embedded inside a longer string is rejected at validation (see [Humans in the Org Chart](../concepts/humans-in-the-org.md)). **No two seats may declare the same identity** — an external account belongs to one person, and a duplicate is refused rather than silently sending one of them somebody else's mail. Every one is a place a message can be sent; who a person is on the engine's own surface — the dashboard, the API, the operator tool server — is not here but in the identity directory, which binds each person to the seat they were invited or created on (`crewlet iam bind` moves them to another) (see [Acting as your seat](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api)) |
 | `availability` | string | no | Human seats only — free-text availability rendered into rosters and `lookup_colleague` results |
 | `goal` | string | no | Individual mission statement |
 | `backstory` | string | no | Personality, background, expertise |

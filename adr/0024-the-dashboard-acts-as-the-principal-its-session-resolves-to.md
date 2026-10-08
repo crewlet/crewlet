@@ -87,3 +87,10 @@ purge, a page's rename, trash, restore and purge, a comment's take-down,
 rewriting one's own remark — which stay routes of the human write surface. And
 it does not change who may do what once admitted: every authority rule is the
 tool's, exactly as on `/operator/mcp`.
+
+Nor does it decide **who can be unbound**. That is
+[ADR-0026](0026-every-person-holds-a-human-seat.md)'s: every person holds a
+human seat for as long as they are here, so the principals "nobody is refused
+for being unbound" admits are a Tier A token, a service account bound to no
+seat, and a person recorded before that rule, whom `GET /iam/check` reports as
+`person_without_seat`.

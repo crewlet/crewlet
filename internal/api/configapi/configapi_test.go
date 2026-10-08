@@ -84,19 +84,22 @@ type surface struct {
 	// about who a write is recorded as.
 	caller *iam.Principal
 
-	// held is who the directory this surface asks binds to each seat, and
-	// directoryDown makes every read of it fail; asked is every list of
-	// seats the surface asked about, in order.
+	// held is what the directory this surface asks says holds each seat,
+	// and directoryDown makes every read of it fail; asked is every list of
+	// seats the surface asked about, in order, and askedAt the instant it
+	// asked at.
 	held          map[string]configapi.SeatHolder
 	directoryDown error
 	asked         [][]string
+	askedAt       []time.Time
 }
 
 // holders is the directory a case's surface asks, answering from s.held.
-func (s *surface) holders(_ context.Context, seats []string) (
+func (s *surface) holders(_ context.Context, seats []string, now time.Time) (
 	map[string]configapi.SeatHolder, error) {
 
 	s.asked = append(s.asked, slices.Clone(seats))
+	s.askedAt = append(s.askedAt, now)
 	if s.directoryDown != nil {
 		return nil, s.directoryDown
 	}
@@ -1244,7 +1247,9 @@ func TestNewRefusesAMissingStorePlaneOrKeyring(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	fleet, cipher := coordmemory.NewFleet(), testCipher(t)
 
-	nobody := func(context.Context, []string) (map[string]configapi.SeatHolder, error) {
+	nobody := func(context.Context, []string, time.Time) (
+		map[string]configapi.SeatHolder, error) {
+
 		return nil, nil
 	}
 	for field, opts := range map[string]configapi.Options{

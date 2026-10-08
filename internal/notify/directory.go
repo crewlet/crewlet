@@ -100,8 +100,9 @@ const (
 	// WithheldRemoved is a seat somebody was removed from while holding it,
 	// that nobody has been bound to since that removal. Binding its next
 	// holder is what routes it again — and what ends the removal's say over
-	// the seat for good, so a later holder's unbind hands it back to the
-	// chart rather than to the leaver's tombstone.
+	// the seat for good, so a later holder's move off the seat, or a
+	// service account's unbind, hands it back to the chart rather than to
+	// the leaver's tombstone.
 	WithheldRemoved Withholding = "removed"
 
 	// WithheldUnrecognised is a seat whose holder is at a stage this build

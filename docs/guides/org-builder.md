@@ -93,8 +93,23 @@ draft does not hold selects nothing and opens nothing.
 ## Creating the company
 
 On an engine with no active configuration the builder opens on a form: the
-company's name and mission, a shape to start from, and optionally a seat for
-yourself.
+company's name and mission, a shape to start from, and a seat for yourself —
+**Add a seat for yourself**, ticked from the start and named "Founder" (rename
+it for the role; the seat outlives whoever holds it), with an optional contact
+identity for it.
+
+**Leave that seat ticked unless agents alone will run the company.** Every
+person holds exactly one human seat for as long as they exist, and is put on
+it by an invitation or an administrator's create that names it — so the seat
+you add here is the one you put yourself on once the company exists: sign in
+with the deployment's API token, open **Agents › Org chart** and press
+**Invite** or **Create person** on it (see [How the first person
+exists](../concepts/identity-and-access.md#how-the-first-person-exists)). A
+company that declares no human seat can admit nobody, the operator included,
+until one is added, and its check warns about that at `roles`. Unticking the
+box is still a legitimate answer: a company its agents run alone, administered
+through the deployment's Tier A tokens, which act as themselves and need no
+seat.
 
 | Start from | What it writes |
 |---|---|
@@ -336,6 +351,14 @@ is fixed once the draft is saved. A human seat's contact identity is optional:
 the form offers it, it can be added later in the seat's editor, and without
 one the person is reached through the dashboard only.
 
+**A new human seat is vacant until somebody is put on it**, which the builder
+does not do: who holds a seat is the identity directory's, not the company
+document's. Once the save is applied, the seat's card in **Agents › Org
+chart** reads **Vacant** to a reader holding `people:manage` or `audit:read`,
+and a `people:manage` holder invites somebody onto it or creates a person on
+it from there, its peek or its page — see [Putting a person in the
+seat](../concepts/humans-in-the-org.md#putting-a-person-in-the-seat).
+
 ## Editing a node
 
 Choose **Edit** on the company, a unit or a seat to open its editor at the side
@@ -524,13 +547,25 @@ Root seats declared at the top level with a `unit:` reference to the unit being
 deleted are drawn inside it, so the dialog asks whether to delete them too or
 keep them at the top level with the reference cleared.
 
-A human seat somebody is bound to cannot be removed while they are: the
-engine refuses the save with `409 seat_held`, naming each person who holds
-the seat. The builder places that refusal on the seat — "@pat is held by
-pat.doe: unbind them first (`crewlet iam unbind <person id>`), then save
-again" — and keeps the draft; there is nothing to retry until the person is
-unbound (People & access shows who holds each seat). The same refusal meets a
-held human seat made an agent's, and a held seat replaced.
+A human seat that something holds cannot be removed while it does — a
+person on it at any stage short of removal (a suspended or retired person
+keeps their seat), a service account bound to it, or an open invitation that
+names it. The engine refuses the save with `409 seat_held`, naming the one
+thing holding each such seat, and the builder places that refusal on the seat
+with the remedy for that holder, then keeps the draft:
+
+| What holds the seat | The builder says |
+|---|---|
+| A person | "@pat is held by pat.doe: move them to another human seat (`crewlet iam bind <person id> SEAT`) or remove them (`crewlet iam remove <person id>`) first, then save again" |
+| A service account | "@pat is held by the service account ci:release: unbind it first (`crewlet iam unbind <person id>`), then save again" |
+| An open invitation | "@pat is held by the open invitation <id>: cancel it first (`crewlet iam cancel-invite <id>`), then save again" — never the invitee's address, since the editor may be a unit's lead with no grant over the directory |
+
+A person is never unbound: they hold a human seat for as long as they exist,
+so the engine refuses an unbind of a person, and moving them or removing them
+is what frees it. Each remedy is a `people:manage` holder's to make, and there
+is nothing to retry until it has landed; the seat's page in the org chart says
+what holds it. The same refusal meets a held human seat made an agent's, and a
+held seat replaced.
 
 Removing more than half of the saved company's seats asks for an
 acknowledgement first.
@@ -787,9 +822,9 @@ The lead of a unit edits that unit and everything inside it without
 seats added, moved between its teams, reordered or removed. A lead is the seat a unit
 names as its lead, or inherits from the unit above it when it names none, so
 leading a unit is leading every unit inside it, a sub-unit with a lead of its
-own included. The person needs a seat binding in the identity directory and
-no configuration grant; whoever holds `config:write` edits the whole company
-as above, units they lead included.
+own included. The person leads through the human seat they hold — every
+person holds one — and needs no configuration grant; whoever holds
+`config:write` edits the whole company as above, units they lead included.
 
 Such a person opening Edit org is shown the unit they lead rather than the
 company, and the toolbar says so: **Editing *unit* as its lead**. Somebody who

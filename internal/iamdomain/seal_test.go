@@ -338,11 +338,12 @@ func valuesOf(tx *sql.Tx, t *testing.T, table string) ([]string, error) {
 // record.
 func joinWithSeed(t *testing.T, rig *writeRig, address, name string) owned {
 	t.Helper()
-	issued, err := inviteFor(t, rig, address, "")
+	seat := rig.vacantSeat(seatOf(address))
+	issued, err := inviteFor(t, rig, address, seat)
 	if err != nil {
 		t.Fatalf("invite %s: %v", address, err)
 	}
-	if _, err := redeemAs(t, rig, issued, address, issued.Secret, ""); err != nil {
+	if _, err := redeemAs(t, rig, issued, address, issued.Secret, seat); err != nil {
 		t.Fatalf("redeem %s's invitation: %v", address, err)
 	}
 	rig.drain()
@@ -602,7 +603,8 @@ func TestAKeyringRotationMovesEverybodysValues(t *testing.T) {
 	sarah := joinWithSeed(t, rig, "sarah.chen@example.com", "Sarah Chen")
 	// AN INVITATION NOBODY HAS REDEEMED, which a re-seal does not move: it
 	// is counted, so the operator knows to wait out its window.
-	if _, err := inviteFor(t, rig, "sam@example.com", ""); err != nil {
+	if _, err := inviteFor(t, rig, "sam@example.com",
+		rig.vacantSeat("sam-desk")); err != nil {
 		t.Fatalf("invite: %v", err)
 	}
 	reader := rig.reader(t)

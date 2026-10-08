@@ -494,14 +494,19 @@ var retiredBootstrapFields = map[string]string{
 		"Delete the `oidc:` block, and the client secret's environment " +
 		"variable with it. An identity estate that linked provider accounts " +
 		"is reset rather than migrated, and its people are enrolled again " +
-		"with an invitation (`crewlet iam invite`)",
+		"with an invitation onto each one's human seat — every person holds " +
+		"one — from the seat in the dashboard's Agents › Org chart, or " +
+		"`crewlet iam invite <address> -seat <handle>`",
 	"APIAuth.bootstrap": "`api.auth.bootstrap` is retired, with the one-time " +
 		"founder code it opened or closed: there is no longer a second way in " +
 		"for the first person. Every node that serves the API already holds " +
 		"a Tier A token (`api.auth.tokens`), and the first person is invited " +
-		"under it exactly as everybody after them is — export " +
-		"CREWLET_API_TOKEN, run `crewlet iam invite <address> -grants " +
-		"<grants>`, and send them the link it prints. Delete the line; " +
+		"under it exactly as everybody after them is — onto the human seat " +
+		"the company declares for them, since every person holds one: give " +
+		"the company a `kind: human` seat for them, export CREWLET_API_TOKEN, " +
+		"run `crewlet iam invite <address> -seat <handle> -grants <grants>` " +
+		"(or press Invite on the seat in the dashboard's Agents › Org chart), " +
+		"and send them the link it prints. Delete the line; " +
 		"`bootstrap: closed` already described this posture, and " +
 		"`bootstrap: open` no longer has a route to serve",
 	"APIAuth.disabled": "`api.auth.disabled` is retired. It authenticated the " +

@@ -24,7 +24,7 @@ func TestAGestureMadeThroughATokenIsRecordedAsOneOnTheTrail(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	reader := rig.reader(t)
-	id := uuid.New().String()
+	id := uuid.Must(uuid.NewV7()).String()
 	enrolSarah(t, rig, id)
 
 	const via = "pat:0192f00d-0000-7000-8000-00000000000a"
@@ -93,7 +93,7 @@ func TestATrailEntryNamesTheLoginOfWhoeverItIsAbout(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	reader := rig.reader(t)
-	id := uuid.New().String()
+	id := uuid.Must(uuid.NewV7()).String()
 	enrolSarah(t, rig, id)
 	if _, err := rig.writer.SetStage(t.Context(), id, iam.StageSuspended,
 		"op-suspend", "a leave"); err != nil {
@@ -139,7 +139,7 @@ func TestAGestureAPersonMakesThroughTheNodeIsTheirsOnTheTrail(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	reader := rig.reader(t)
-	id := uuid.New().String()
+	id := uuid.Must(uuid.NewV7()).String()
 	enrolSarah(t, rig, id)
 	node := rig.writer.As(principalNamed("node-0", iam.KindMachine,
 		[]iam.Grant{iam.GrantFleetOperate, iamdomain.AdminGrant}))

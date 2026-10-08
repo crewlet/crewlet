@@ -50,6 +50,7 @@ import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { RefusalNote, WriteButton } from "~/components/WriteButton.tsx";
 import { decisionSubjects, seatConditionsOf } from "~/components/DecisionRow.tsx";
 import { QueryState } from "~/components/common.tsx";
+import { UnboundRemedy } from "~/components/people.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -205,9 +206,11 @@ export function Inbox() {
         <MarkAllRead through={bound ? readThrough(loaded) : null} />
       </PageActions>
 
-      {/* THREE VIEWER STATES, three sentences — and only one of them is
-          anybody's fault. The conditions a person decides are listed for all
-          three, which is why the screen is not simply locked. */}
+      {/* THREE VIEWER STATES, three sentences — and an unbound reader's is
+          worded by whose login it is (`UnboundRemedy`): a service account is
+          ordinary, a person with no seat a fault an administrator mends. The
+          conditions a person decides are listed for all three, which is why
+          the screen is not simply locked. */}
       {viewer.anonymous ? (
         <Callout variant="warning" className="inbox-callout">
           Nobody is signed in, so this browser is nobody. The conditions below are the
@@ -216,9 +219,8 @@ export function Inbox() {
       ) : viewer.unbound ? (
         <Callout variant="info" className="inbox-callout">
           You are <code className="inline">{viewer.login}</code> and not bound to a seat, so the
-          notices below are the ones kept under that login — what you follow and what names you.
-          Work the org chart hands to a seat reaches you once an administrator binds you to one (
-          <code className="inline">crewlet iam bind</code>).
+          notices below are the ones kept under that login — what you follow and what names you.{" "}
+          <UnboundRemedy login={viewer.login} />
         </Callout>
       ) : null}
 

@@ -646,10 +646,12 @@ func leadsProject(ctx context.Context, chart Chart, actor, project string) Decis
 
 // actorOf is the handle the CHART knows this principal by.
 //
-// THE SEAT, FALLING BACK TO THE LOGIN. A chart holds seats: a person bound to
-// one is asked about by that seat's handle, and an unbound person is asked
-// about by their login, which the chart will not find — answering false,
-// correctly, because they lead nobody in it.
+// THE SEAT, FALLING BACK TO THE LOGIN. A chart holds seats: a person — every
+// person holds one — or a token bound to one is asked about by that seat's
+// handle, and a principal bound to none (a token, a service account, or a
+// person recorded before every person held a seat) is asked about by their
+// login, which the chart will not find — answering false, correctly, because
+// they lead nobody in it.
 func actorOf(p iam.Principal) string {
 	if p.Seat != "" {
 		return p.Seat

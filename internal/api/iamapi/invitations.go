@@ -37,9 +37,12 @@ const (
 	invitationRedeemed invitationState = "redeemed"
 )
 
-// stateOf is one invitation's state at now — the same two predicates
-// [iamdomain.InvitationRow.Spent] folds into one, told apart here for an
-// administrator, who is entitled to know which.
+// stateOf is one invitation's state at now — the predicates
+// [iamdomain.InvitationRow.Spent] folds into one, redeemed told apart here for
+// an administrator, who is entitled to know whom it created. An invitation
+// issued before every invitation named a seat reads `expired` whatever its
+// deadline: it no longer opens, its row says it names no seat, and nothing
+// this build writes leaves one.
 func stateOf(row iamdomain.InvitationRow, now time.Time) invitationState {
 	switch {
 	case !row.RedeemedAt.IsZero():
@@ -63,7 +66,9 @@ type invitationView struct {
 	Email  string `json:"email,omitempty"`
 	Sealed bool   `json:"sealed,omitempty"`
 
-	// Seat is the handle of the seat redeeming it binds, or empty.
+	// Seat is the handle of the human seat redeeming it binds, and which it
+	// holds while it is open. Empty only on an invitation issued before
+	// every invitation named a seat, which no longer redeems.
 	Seat string `json:"seat,omitempty"`
 
 	Grants    []iam.Grant `json:"grants"`
@@ -113,7 +118,7 @@ func (s *Service) GetInvitations(w http.ResponseWriter, r *http.Request) {
 		if view.Grants == nil {
 			view.Grants = []iam.Grant{}
 		}
-		view.Email, view.Sealed = s.openInvitation(r, row)
+		view.Email, view.Sealed = s.openInvitation(r, row.ID, row.Sealed)
 		out = append(out, view)
 	}
 	httpjson.Write(w, http.StatusOK, map[string]any{
@@ -126,16 +131,18 @@ func (s *Service) GetInvitations(w http.ResponseWriter, r *http.Request) {
 // openInvitation opens an invitation's address for this one answer, and
 // reports one this node's keyring cannot open as sealed — for [Service.open]'s
 // reason, as the invitation's own, since there is no person to bind it to.
-func (s *Service) openInvitation(r *http.Request, row iamdomain.InvitationRow) (
+// The invitation listing and the seat listing both open one through it, so
+// the two cannot disagree about whether an address opens.
+func (s *Service) openInvitation(r *http.Request, id, sealed string) (
 	string, bool) {
 
-	if row.Sealed == "" {
+	if sealed == "" {
 		return "", false
 	}
-	email, err := s.opener.OpenInvitation(row.ID, row.Sealed)
+	email, err := s.opener.OpenInvitation(id, sealed)
 	if err != nil {
 		log.WarnContext(r.Context(), "api_iam_unseal_failed",
-			"invitation", row.ID, "error", err)
+			"invitation", id, "error", err)
 		return "", true
 	}
 	return email, false
@@ -143,7 +150,8 @@ func (s *Service) openInvitation(r *http.Request, row iamdomain.InvitationRow) (
 
 // DeleteInvitation is `DELETE /iam/invitations/{id}`: an invitation nobody has
 // redeemed, withdrawn — its link opens nothing from now on, exactly as an id
-// nobody issued, and the address it held is free for a new one.
+// nobody issued, and the address and the seat it held are free: the seat for
+// a create, another invitation or a move, the address for a new invitation.
 //
 // A REDEEMED ONE IS 409 `stale`, NAMING WHOM IT CREATED: the link is spent,
 // and what undoes it is removing that person. `stale` because the caller is

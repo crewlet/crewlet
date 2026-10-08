@@ -67,11 +67,12 @@ func TestAGrantChangeIsAnnouncedWithWhatItAddedAndRemoved(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	const person = "018f3a9c-0000-7000-8000-0000000000e1"
-	if err := rig.enrol(iamdomain.Enrolment{
+	if err := rig.enrol(iamdomain.Creation{
 		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: "Dana Okafor", Email: "dana@example.com", Login: "dana.sre",
+		Seat:   rig.vacantSeat("dana-okafor"),
 		Grants: []iam.Grant{iam.GrantWorkWrite, iam.GrantSecretRead},
-		OpID:   "op-enrol", Reason: "a hire",
+		OpID:   "op-enrol", Reason: "a hire", LinkExpiresAt: firstLinkExpiry,
 	}); err != nil {
 		t.Fatalf("enrol: %v", err)
 	}
@@ -235,7 +236,8 @@ func TestAGestureMadeThroughATokenIsAnnouncedAsOne(t *testing.T) {
 func TestARedemptionsGrantsAreAnnouncedAsItsIssuers(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
-	issued, err := inviteFor(t, rig, "sam@example.com", "")
+	seat := rig.vacantSeat("platform-lead")
+	issued, err := inviteFor(t, rig, "sam@example.com", seat)
 	if err != nil {
 		t.Fatalf("issue an invitation: %v", err)
 	}
@@ -246,12 +248,11 @@ func TestARedemptionsGrantsAreAnnouncedAsItsIssuers(t *testing.T) {
 		Kind: iam.KindPerson, Login: "sam.joiner"})
 	op := "invite:" + issued.ID
 	if err := rig.draining(func() error {
-		_, err := redeemer.Enrol(t.Context(), iamdomain.Enrolment{
-			PersonID: person.String(), Kind: iam.KindPerson,
-			Stage: iam.StageActive, Name: "Sam Joiner",
-			Email: "sam@example.com", Login: "sam.joiner",
-			Grants:     []iam.Grant{iam.GrantStateRead},
-			Invitation: issued.ID, InvitationSecret: issued.Secret,
+		_, err := redeemer.Redeem(t.Context(), iamdomain.Redemption{
+			PersonID: person.String(), Stage: iam.StageActive,
+			Name: "Sam Joiner", Email: "sam@example.com", Login: "sam.joiner",
+			Password: aPassword(), Grants: []iam.Grant{iam.GrantStateRead},
+			Seat: seat, Invitation: issued.ID, InvitationSecret: issued.Secret,
 			OpID: op, Reason: "redeemed an invitation",
 		})
 		return err

@@ -830,12 +830,12 @@ but its owner, which is what stops a shared board being rearranged under
 everybody.
 
 Saving a view and pinning one are both a person's gestures, and both are kept
-under the caller's own record — their seat when the identity directory binds
-them to one, their login when it does not — which is also the one name the
-strip is read under. There is no parameter naming whose strip to read: the
-engine already knows who is asking, so your own views and your own pins are on
-the strip you ask for, and an unbound caller's strip shows the pins their
-assistant set.
+under the caller's own record — the seat a person holds, which every person
+does, or the login of a token or service account the identity directory binds
+to none — which is also the one name the strip is read under. There is no
+parameter naming whose strip to read: the engine already knows who is asking,
+so your own views and your own pins are on the strip you ask for, and a
+pipeline token's strip shows the pins its assistant set.
 
 **Six of them exist without anybody saving one.** Every container has a list,
 a board, a calendar, a timeline, a table and a trash, and none of the six is an
@@ -1525,9 +1525,10 @@ given — `list_work_views`, `save_work_view`,
 — the five page tools beside them and knowledge
 search — the seat's own implementations, with one
 field different: a write carries the **caller's** own name as its author — the
-seat's handle with the author kind `human` for a person the identity directory
-binds to a seat, and otherwise the credential's whole login (`token:ops`,
-`jane.doe`) with the author kind `operator` (see [who a write is attributed
+seat's handle with the author kind `human` for a person — every person holds
+a seat — or a token the identity directory binds to one, and otherwise the
+credential's whole login (`token:ops`, `svc:ci`) with the author kind
+`operator` (see [who a write is attributed
 to](../reference/api-endpoints.md#who-a-write-is-attributed-to)).
 There is deliberately no way for the caller to name a seat to act
 as — a tracker whose author field is chosen by the writer is not an audit
@@ -1543,9 +1544,9 @@ and a refusal names the rule that refused it. What differs is only who is
 asking. A caller's grants come from their credential, and the **lead
 relations** come from the seat the [identity
 directory](../concepts/identity-and-access.md#the-binding-has-two-ends-and-only-one-of-them-arbitrates)
-binds them to — so a person bound to the seat that leads `ENG` may re-route
-`ENG`'s work and declare its fields, and an unbound caller reaches those only
-through `fleet:operate`.
+binds them to — so the person holding the seat that leads `ENG` may re-route
+`ENG`'s work and declare its fields, and a token or service account bound to
+no seat reaches those only through `fleet:operate`.
 
 **An argument a tool does not take is refused, naming it** — on this surface,
 in a seat's turn and on the HTTP routes alike, because the refusal is the
@@ -1563,9 +1564,10 @@ projects it may re-route work out of. See
 [A person's own state](#a-persons-own-state).
 
 **The dashboard writes through the same tools**, at `/operator/act/{tool}` —
-one tool per request, as the principal your session resolves to: your seat
-when the identity directory binds you to one, your own login when it does not.
-Nobody is refused for being unbound; every tool is decided by the same
+one tool per request, as the principal your session resolves to: the seat you
+hold — every person holds one — or, for a session exchanged from an API token
+bound to no seat, that token's own login. Nobody is refused for being unbound;
+every tool is decided by the same
 authority table, and each request carries its operation in an
 `Idempotency-Key` header, so a retry is the same write. The record is the same
 either way, so a change you make on screen and one your assistant makes read
@@ -1580,15 +1582,15 @@ personal parts — `preset=my_queue`, `preset=priorities`, the pins and personal
 views that order a strip — for the **caller's own record**, and take no
 parameter naming anybody else's: the engine already knows who is asking. A
 caller's own record is kept under the one name every write of theirs is made
-under — their seat when the directory binds them to one, their login when it
-does not — so an unbound caller's strip shows the pins their assistant set,
+under — the seat a person holds, or the login of a token or service account
+bound to none — so a pipeline token's strip shows the pins its assistant set,
 rather than nobody's. The questions that are *about*
 one person — their record, their day, their inbox — do take a handle, and
 naming somebody else's is decided as reading their record is: that person,
 whoever leads them, or `fleet:operate`, with a `503` rather than a refusal
 from a node that cannot read its chart. A handle that is somebody's **login**
 names their record — the seat the directory binds them to, or the login for
-somebody bound to none — so a lead may name a report either way, and a login
+a service account bound to none — so a lead may name a report either way, and a login
 is never mistaken for the seat it resembles. The tools that take a handle
 (`get_person`, `work_inbox`, `set_priorities`) resolve it the same way.
 
@@ -1814,8 +1816,8 @@ expecting an answer otherwise gets silence with nothing to explain it.
 
 **What waits on a person** is one question (`GET /work/decisions`,
 `decisions`): the open asks put to them — under the one name their record is
-kept under, the seat the identity directory binds them to, or their own login
-when it binds them to none — beside the coding runs parked on a question to
+kept under, the seat they hold (every person holds one), or a token's own
+login where the identity directory binds it to none — beside the coding runs parked on a question to
 them, with how many there are in all and when the longest one began. With no
 `handle` it is the caller's own; naming somebody else's is theirs, a lead's or
 a `fleet:operate` holder's to ask. The dashboard's Home
@@ -2096,8 +2098,9 @@ whose primary half is blank.
 the notices `work_inbox` returns, each labelled with the one reason of
 eighteen that routed it, beside what is waiting on a decision. Which person is
 decided by **who signed in**: the engine resolves the browser's session — or
-the token it presented — to a principal, and the seat the identity directory
-binds that principal to (`crewlet iam bind`) is whose queue it is. `#/me` is
+the token it presented — to a principal, and the seat that principal holds —
+every person holds one, and a token holds the one the identity directory binds
+it to — is whose queue it is. `#/me` is
 that same person's own work: one section per claim on their attention (the
 Queue, Asked of me, Asked by me, Unblocked, Collaborating, Watching,
 Checklist), each carrying the engine's own total on its tab so an unanswered
@@ -2108,10 +2111,12 @@ somebody put it (`order=due|priorities`). Above the list a band says whose day
 is on screen, links to that person's seat, and carries the one thing here that
 asks to be answered — a queue somebody *else* put in order, named by the
 person who did, with a flag on the Priorities choice. A caller the directory
-binds to no seat is an ordinary state: their day is the one kept under their
-own login — the name their assistant writes their marks and priorities under —
-and the screen says what binding it to a seat would add rather than guessing
-whose queue to show. See [Humans
+binds to no seat — an API token's session, or a service account — is an
+ordinary state: its day is the one kept under its own login — the name its
+assistant writes its marks and priorities under — and the screen says what
+binding it to a seat would add rather than guessing whose queue to show. A
+person signed in as themselves always has a seat; one recorded before every
+person held one is told to ask whoever manages people for one. See [Humans
 in the org](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api)
 for the binding.
 
@@ -2192,9 +2197,10 @@ letting the writer choose whose name it carries.
 
 **And your own marks, pins and queue are that same record.** `mark_inbox`,
 `set_pins` and `set_priorities` write the record of whoever the request
-resolves to, and it is the one every screen reads: the seat for a bound
-person, the login for everybody else. A credential nobody is bound through —
-an operator outside the org chart, a pipeline — writes under its whole login
+resolves to, and it is the one every screen reads: the seat for a person —
+every person holds one — and for a token bound to one, the login for everybody
+else. A credential nobody is bound through — a pipeline's token, a service
+account, the deployment's break-glass token — writes under its whole login
 with author kind `operator` and keeps its record under that login, which is
 ordinary rather than a fault.
 
@@ -2203,8 +2209,7 @@ ordinary rather than a fault.
 notice loaded — sent through
 [`/operator/act`](../reference/api-endpoints.md#operatoract--the-dashboards-write-surface),
 the dashboard's write transport, which records the write exactly as your
-assistant's would be: under your seat if the directory binds you to one, under
-your own login if it does not
+assistant's would be: under the seat you hold, which every person does
 ([ADR-0024](https://github.com/crewlet/crewlet/blob/main/adr/0024-the-dashboard-acts-as-the-principal-its-session-resolves-to.md)).
 The list is re-read at the position the write answered with, so a row moves
 only once the engine says it has. Your assistant makes the same call over
