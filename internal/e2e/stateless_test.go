@@ -20,6 +20,8 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/jetstreamtest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -66,16 +68,9 @@ func startStatelessPairWith(t *testing.T, amend func(doc string) string,
 	if err != nil {
 		t.Fatalf("company config: %v", err)
 	}
-	port := leafPort(t)
-
-	dataBoot := config.DefaultBootstrap()
-	dataBoot.Node.ID = "data-a"
-	dataBoot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	dataBoot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
-	dataBoot.Stream.Leaf.Host, dataBoot.Stream.Leaf.Port = "127.0.0.1", port
-	dataBoot.Coordination.Type = config.CoordinationEmbeddedKV
-	data := bootNode(t, &dataBoot, cfg, model, env)
-	data.app, data.server = serveAPI(t, data.engine, &dataBoot, nil)
+	data, dataBoot := bootDataMember(t, cfg, model, env)
+	data.app, data.server = serveAPI(t, data.engine, dataBoot, nil)
+	port := dataBoot.Stream.Leaf.Port
 
 	agentDir := t.TempDir()
 	agentBoot := config.DefaultBootstrap()
@@ -89,6 +84,52 @@ func startStatelessPairWith(t *testing.T, amend func(doc string) string,
 	return statelessPair{data: data, agent: agent, agentStore: agentDir, agentBoot: &agentBoot}
 }
 
+// dataMemberBootstrap is the pair's data member: a node holding the data, with
+// a leaf listener on port for the stateless node to join through.
+func dataMemberBootstrap(t *testing.T, port int) *config.Bootstrap {
+	t.Helper()
+	boot := config.DefaultBootstrap()
+	boot.Node.ID = "data-a"
+	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
+	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	boot.Stream.Leaf.Host, boot.Stream.Leaf.Port = "127.0.0.1", port
+	boot.Coordination.Type = config.CoordinationEmbeddedKV
+	return &boot
+}
+
+// bootDataMember boots the pair's data member on a leaf port nothing held a
+// moment ago, and on ANOTHER one when that port was taken in between.
+//
+// THE PORT IS RELEASED BEFORE THE MEMBER BINDS IT ([leafPort]) — nothing can
+// hand a listener's port to a broker the engine builds — and with the cases
+// here running in parallel, another case's listener can take it in that gap.
+// The member's own pre-bind probe refuses a taken port by name
+// ([jetstream.ErrRoutePortTaken], which
+// [TestADataMemberRefusesATakenLeafPortByName] holds), so that one failure is
+// worth another set of numbers, for the reason
+// [jetstreamtest.ClusterStartAttempts] gives and on its count: the collision
+// is with work this case does not coordinate with, so a wider window does not
+// help and a different number does. Any other failure ends the case.
+func bootDataMember(t *testing.T, cfg *config.Company, model *scriptedModel,
+	env map[string]string) (*node, *config.Bootstrap) {
+	t.Helper()
+	for attempt := 1; ; attempt++ {
+		boot := dataMemberBootstrap(t, leafPort(t))
+		n, err := newNode(t, nodeOptions(boot, cfg, env), model)
+		switch {
+		case err == nil:
+			return n, boot
+		case errors.Is(err, jetstream.ErrRoutePortTaken) &&
+			attempt < jetstreamtest.ClusterStartAttempts:
+			t.Logf("data member attempt %d/%d lost its leaf port, retrying on "+
+				"another: %v", attempt, jetstreamtest.ClusterStartAttempts, err)
+		default:
+			t.Fatalf("data member (attempt %d/%d): %v", attempt,
+				jetstreamtest.ClusterStartAttempts, err)
+		}
+	}
+}
+
 // bootNode builds and starts one engine.
 //
 // Neither bootstrap is validated here: engine.New holds every bootstrap it is
@@ -96,27 +137,69 @@ func startStatelessPairWith(t *testing.T, amend func(doc string) string,
 func bootNode(t *testing.T, boot *config.Bootstrap, cfg *config.Company, model *scriptedModel,
 	env map[string]string) *node {
 	t.Helper()
-	return bootNodeWith(t, engine.Options{
+	return bootNodeWith(t, nodeOptions(boot, cfg, env), model)
+}
+
+// nodeOptions is the engine options every harness node is built with: its
+// bootstrap and company, the harness's activation instant, and its own
+// environment ([nodeEnvironment]) rather than the process's.
+func nodeOptions(boot *config.Bootstrap, cfg *config.Company, env map[string]string) engine.Options {
+	return engine.Options{
 		Bootstrap: boot, Company: cfg, ActivatedAt: harnessActivation,
 		Environment: nodeEnvironment(env),
-	}, model)
+	}
 }
 
 // bootNodeWith is [bootNode] over the engine options the caller chose — a
 // maintenance mode, say.
 func bootNodeWith(t *testing.T, opts engine.Options, model *scriptedModel) *node {
 	t.Helper()
+	n, err := newNode(t, opts, model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// newNode is [bootNodeWith] handing its failure back, for a caller that can do
+// something about one.
+func newNode(t *testing.T, opts engine.Options, model *scriptedModel) (*node, error) {
+	t.Helper()
 	seedStore(t, opts.Bootstrap)
 	id := opts.Bootstrap.Node.ID
 	e, err := engine.New(t.Context(), opts)
 	if err != nil {
-		t.Fatalf("engine.New(%s): %v", id, err)
+		return nil, fmt.Errorf("engine.New(%s): %w", id, err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
 	if err := e.Start(t.Context()); err != nil {
-		t.Fatalf("engine.Start(%s): %v", id, err)
+		return nil, fmt.Errorf("engine.Start(%s): %w", id, err)
 	}
-	return &node{engine: e, model: model, id: id}
+	return &node{engine: e, model: model, id: id}, nil
+}
+
+// A DATA MEMBER REFUSES A LEAF PORT SOMEBODY HOLDS, BY NAME — the premise
+// [bootDataMember] retries on. A refusal that stopped carrying
+// [jetstream.ErrRoutePortTaken] would turn every lost port back into a failed
+// case, and a member that came up on a port it does not hold would leave the
+// stateless node joining somebody else's listener.
+func TestADataMemberRefusesATakenLeafPortByName(t *testing.T) {
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("hold a port: %v", err)
+	}
+	defer held.Close()
+	model := newScriptedModel(t)
+	cfg, err := config.ParseCompany([]byte(fmt.Sprintf(companyDoc, model.url)))
+	if err != nil {
+		t.Fatalf("company config: %v", err)
+	}
+	boot := dataMemberBootstrap(t, held.Addr().(*net.TCPAddr).Port)
+	_, err = newNode(t, nodeOptions(boot, cfg, nil), model)
+	if !errors.Is(err, jetstream.ErrRoutePortTaken) {
+		t.Fatalf("a data member on a held leaf port answered %v, want %v", err,
+			jetstream.ErrRoutePortTaken)
+	}
 }
 
 // leafPort is a loopback port nothing held a moment ago.
