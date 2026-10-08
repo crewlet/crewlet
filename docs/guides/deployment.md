@@ -268,11 +268,15 @@ config mistake into a half-minute hang with the same message at the end.
 a restart loses that member's replicas, and the same server holds the KV
 buckets carrying the fleet's shared records — the token counter, the
 completion ledger, open agent-to-agent asks, claimed scheduled fires, detached
-(and billed) sandbox runs. No node is an exception for its roles, an
-ingress-only one included: every node runs the engine, and an in-memory member
-creates every stream it provisions in memory. That is tolerable only for a
-company whose tracker and knowledge base are both a vendor's; on either native
-backend the engine refuses it outright, as the next paragraph describes.
+(and billed) sandbox runs. The rule is asked of the broker, not of the roles:
+every **member** — every `data` node on the embedded broker — sets `store_dir`
+whatever else it does, because an in-memory member creates every stream it
+provisions in memory. A leaf and a client of an external cluster hold no
+streams of their own, so both are refused a `store_dir`; see
+[Satellite nodes](satellite-nodes.md). For a member, an in-memory stream is
+tolerable only for a company whose tracker and knowledge base are both a
+vendor's; on either native backend the engine refuses it outright, as the next
+paragraph describes.
 
 **On the native backends it is the company's own record, and it is
 refused.** With `tracker.backend: native` or `knowledge.backend: native` (the
