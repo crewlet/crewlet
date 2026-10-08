@@ -781,7 +781,11 @@ keys, coordination documents, event payloads — is read, migrated, swept or
 tolerated. Code that exists only for such a build (a reader for a version
 this tree never writes, a fallback for a field it always sets, a gate waiting
 for one particular older build's era to end, a sweep of a bucket only an
-older build created) has no caller, and is deleted rather than kept.
+older build created) has no caller, and is deleted rather than kept. The
+first tag that carries Go code is the first build anything is owed to: from
+it on, the next release reads what that tag wrote and runs beside it in one
+fleet, while a build between two tags is still owed nothing (see
+[RELEASING.md](RELEASING.md)).
 
 Two things a missing tag still does **not** excuse, because neither is about
 an older build:
@@ -798,9 +802,10 @@ an older build:
   a state-log record this build cannot read is deferred and kept, never
   dropped — except a gate record above the version it reads, or one whose
   envelope it cannot decode at all, which stops the applier rather than
-  apply it wrong, and that is why every node names the version it reads on
-  its position heartbeat and a writer of such a record waits on that census
-  before publishing one; and a bump of the seat-host lease protocol makes
+  apply it wrong — which is why every node names the version it reads on
+  its position heartbeat, a writer of a gate above the base version waits on
+  that census before publishing one, and an envelope never refuses what a
+  newer build may add to it; and a bump of the seat-host lease protocol makes
   the newer node refuse to claim beside a live lower lease. That contract
   runs FORWARD, to the builds after this one, and never obliges this tree to
   read what an earlier unreleased build wrote.
