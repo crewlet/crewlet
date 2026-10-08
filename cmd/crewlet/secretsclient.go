@@ -11,8 +11,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
@@ -235,15 +237,23 @@ func (c *secretsClient) refusal(status int, path string, raw []byte) error {
 		// mint rather than as a failure to abort on.
 		return fmt.Errorf("%w: %s", secrets.ErrNotFound,
 			strings.TrimPrefix(strings.SplitN(path, "?", 2)[0], "/secrets/"))
+	case status == http.StatusNotFound && body.Error == string(httpjson.CodeNoRoute):
+		// A CREWLET NODE THAT SERVES NO /secrets. Only a node with the
+		// ingress role mounts the REST surface; one without it binds
+		// api.port for its tool bridge alone, and its router answers
+		// every other path with this code.
+		return fmt.Errorf("%s serves no /secrets surface: it is a node "+
+			"without the %s role, which serves only the tool bridge — point "+
+			"-api at a node whose node.roles include %s", c.base,
+			placement.RoleIngress, placement.RoleIngress)
 	case status == http.StatusNotFound:
-		// Every node serves /secrets, so a 404 that is not the store's
-		// own not_found came from something that is not a node's API: a
-		// proxy or gateway in front of it, or another service at the
-		// address.
+		// A 404 with neither code came from something that is not a
+		// node's API at all: a proxy or gateway in front of it, or another
+		// service at the address.
 		return fmt.Errorf("%s has no /secrets surface: whatever answered is "+
 			"not a Crewlet node's API — point -api (or api.host and api.port) "+
-			"at the node itself rather than at a proxy or another service",
-			c.base)
+			"at a node with the %s role rather than at a proxy or another "+
+			"service", c.base, placement.RoleIngress)
 	case status == http.StatusUnauthorized:
 		return fmt.Errorf("%s refused the bearer token: set %s to one of its "+
 			"api.auth.tokens", c.base, apiTokenEnv)
