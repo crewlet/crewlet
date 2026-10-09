@@ -3,58 +3,122 @@ package engine
 import (
 	"context"
 	"path/filepath"
+	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/seat"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A STOP'S LAST EVENTS ARE STEPS OF ITS ALLOWANCE. The node's own
-// announcement and each released seat's last lifecycle event are publishes to
-// a broker that, on a member without quorum, answers only when the request's
-// context ends — and the drain's context has no deadline, since it waits for
-// running turns. Each publish is therefore bounded by what is left of the
-// stop's one allowance, and a broker that never answers costs the stop that
-// allowance once rather than an unbounded wait per event.
-func TestAStopsLastEventsAreStepsOfItsAllowance(t *testing.T) {
+// A STOP'S LAST EVENTS SPEND NONE OF ITS ALLOWANCE, AND EACH HAS A BOUND OF
+// ITS OWN.
+//
+// The node's announcement and each released seat's last lifecycle event are
+// publishes on the event stream, which can lose its quorum while the
+// coordination store answers, and a publish it never acknowledges waits out
+// whatever deadline it is handed. As steps of the stop's allowance they spent
+// the time every lease behind them needed. Here a stream that holds each one
+// past the whole allowance: each is published on the client's own request
+// timeout, free of its caller's cancellation, and the allowance is whole when
+// both are over.
+func TestAStopsLastEventsSpendNoneOfItsAllowance(t *testing.T) {
 	t.Parallel()
-	e := &Engine{backends: &Backends{Queue: unansweredPublishes{}}}
+	const allowance = 200 * time.Millisecond
+	stream := &heldPublishes{hold: 2 * allowance}
+	e := &Engine{backends: &Backends{Queue: stream}}
 	e.epoch.current.Store(companyFor(t, "name: Acme\nroles:\n  - name: Lead\n    handle: lead\n"))
 
-	const allowance = 200 * time.Millisecond
 	ctx := seat.WithStopBudget(context.Background(), seat.NewStopBudget(allowance))
-	finished := make(chan struct{})
-	started := time.Now()
-	go func() {
-		defer close(finished)
-		e.publishLifecycle(ctx, events.New(types.OrgStopped{OrgName: "Acme"}, events.NewTrace()))
-		e.publishSeatLifecycle(ctx, "lead", types.AgentTerminated{})
-	}()
-	select {
-	case <-finished:
-	case <-time.After(10 * time.Second):
-		t.Fatal("a stop's publish to a broker that never answers was never " +
-			"ended: it is not a step of the stop's allowance")
+	// A CALLER THAT HAS ALREADY GIVEN UP does not take back a stop that
+	// happened: a release's context is routinely one a shutdown ended.
+	ended, cancel := context.WithCancel(ctx)
+	cancel()
+	e.publishLifecycle(ctx, events.New(types.OrgStopped{OrgName: "Acme"}, events.NewTrace()))
+	e.publishSeatLifecycle(ended, "lead", types.AgentTerminated{})
+
+	asked := stream.asked()
+	if len(asked) != 2 {
+		t.Fatalf("%d publish(es) reached the stream, want the announcement and "+
+			"the seat's last event", len(asked))
 	}
-	if took := time.Since(started); took > allowance+2*time.Second {
-		t.Fatalf("the stop's two publishes took %v against an allowance of %v: "+
-			"each waited out a bound of its own", took, allowance)
+	for _, p := range asked {
+		if p.err != nil {
+			t.Errorf("%s was published on a context already ended (%v): the "+
+				"caller's cancellation took back an event that had happened", p.event, p.err)
+		}
+		if !p.bounded {
+			t.Errorf("%s was published with no deadline of its own", p.event)
+			continue
+		}
+		// THE CLIENT'S OWN TIMEOUT, and not what was left of the
+		// allowance: a quarter of a second either side tells the two apart
+		// with room.
+		if bound := p.deadline.Sub(p.at); bound < lifecyclePublishBudget-time.Second/4 ||
+			bound > lifecyclePublishBudget+time.Second/4 {
+			t.Errorf("%s was published on a bound of %v, want its own %v",
+				p.event, bound, lifecyclePublishBudget)
+		}
+	}
+	// AND THE ALLOWANCE IS WHOLE: both publishes held past it, and a give-back
+	// begun after them still has all of it.
+	step, done := seat.StopStep(ctx)
+	defer done()
+	deadline, ok := step.Deadline()
+	if !ok {
+		t.Fatal("a step of the stop has no deadline")
+	}
+	if left := time.Until(deadline); left < allowance/2 {
+		t.Fatalf("after the stop's two events a give-back has %v of a %v "+
+			"allowance: the events spent what the leases are owed", left, allowance)
 	}
 }
 
-// unansweredPublishes is a broker that answers a publish only when the
-// request's context ends.
-type unansweredPublishes struct{ queue.EventQueue }
+// heldPublishes is a stream that acknowledges a publish only after hold, or
+// when the request's context ends first, recording each one it was asked for.
+type heldPublishes struct {
+	queue.EventQueue
+	hold time.Duration
 
-func (unansweredPublishes) Publish(ctx context.Context, _ string, _ *events.Event) error {
-	<-ctx.Done()
-	return ctx.Err()
+	mu   sync.Mutex
+	seen []heldPublish
+}
+
+// heldPublish is one publish as it reached the stream.
+type heldPublish struct {
+	event    string
+	at       time.Time
+	deadline time.Time
+	bounded  bool
+	err      error
+}
+
+func (s *heldPublishes) Publish(ctx context.Context, _ string, ev *events.Event) error {
+	p := heldPublish{event: ev.Type, at: time.Now(), err: ctx.Err()}
+	p.deadline, p.bounded = ctx.Deadline()
+	s.mu.Lock()
+	s.seen = append(s.seen, p)
+	s.mu.Unlock()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(s.hold):
+		return nil
+	}
+}
+
+func (s *heldPublishes) asked() []heldPublish {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.seen)
 }
 
 // A HOLD GIVEN BACK ONCE THE STOP HAS BEGUN IS A STEP OF ITS ALLOWANCE, AND
@@ -141,4 +205,76 @@ func (s *slowReleases) Release(ctx context.Context, resource, owner string, epoc
 		}
 	}
 	return s.Backend.Release(ctx, resource, owner, epoch)
+}
+
+// AN ADMISSION IS WITHDRAWN ON A SHARE NO GIVE-BACK BEFORE IT CAN SPEND.
+//
+// Every lease a stop gives back falls back to lapsing on its TTL, which is
+// what lets them share one allowance; an admission has no TTL, so one a stop
+// misses stays until an operator excludes the node. Here a store that stopped
+// answering while the leases were given back — spending every moment of their
+// allowance — and answers again by the time the admission is withdrawn: the
+// withdrawal lands. And the share is CARVED OUT of the stop allowance rather
+// than added beside it, so a stop against a store that never answers still
+// spends one allowance in total.
+func TestAnAdmissionIsWithdrawnOnAShareNoGiveBackCanSpend(t *testing.T) {
+	t.Parallel()
+	const ttl = 3 * time.Second
+	fleet := expiringFleet{memFleet: coordmemory.NewFleet()}
+	e := &Engine{
+		backends: &Backends{Fleet: fleet},
+		mode:     statelog.ModeNormal,
+		id:       "node-0", incarnation: "node-0:first",
+		leaseTTL: ttl,
+	}
+	if err := fleet.PutAdmission(t.Context(), coord.Admission{
+		NodeID: e.id, Incarnation: e.incarnation, At: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("PutAdmission: %v", err)
+	}
+
+	ctx := seat.WithStopBudget(context.Background(), e.stopping())
+	// THE GIVE-BACKS' WHOLE ALLOWANCE, spent by a step that waited out a
+	// store answering nothing.
+	spent, done := seat.StopStep(ctx)
+	<-spent.Done()
+	done()
+	if err := e.withdraw(ctx); err != nil {
+		t.Fatalf("withdraw after the give-backs spent their allowance: %v — the "+
+			"admission has no TTL, and an operator now has to exclude this node", err)
+	}
+	admissions, err := fleet.Admissions(t.Context())
+	if err != nil {
+		t.Fatalf("Admissions: %v", err)
+	}
+	if len(admissions) != 0 {
+		t.Fatalf("admissions = %+v after the withdrawal, want none", admissions)
+	}
+
+	// ONE ALLOWANCE IN TOTAL: what a fresh stop's give-backs get, and the
+	// admission's share beside it. Never more — a share added beside the
+	// allowance is a third over it — and less only by the moment between
+	// beginning the step and reading the clock, which a quarter of the
+	// allowance covers on any machine.
+	fresh := &Engine{leaseTTL: ttl}
+	step, end := seat.StopStep(seat.WithStopBudget(context.Background(), fresh.stopping()))
+	defer end()
+	deadline, _ := step.Deadline()
+	total := time.Until(deadline) + fresh.admissionShare()
+	if want := seat.StopAllowance(ttl); total > want || total < want-want/4 {
+		t.Fatalf("the give-backs' budget and the admission's share come to %v, "+
+			"want the one stop allowance of %v", total, want)
+	}
+}
+
+// expiringFleet is the in-memory fleet with the one property every real store
+// has and the twin does not need: a request on a context that has ended fails.
+// Embedded through [memFleet], as [failingFleet] is.
+type expiringFleet struct{ *memFleet }
+
+func (f expiringFleet) ForgetAdmission(ctx context.Context, nodeID, incarnation string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return f.memFleet.ForgetAdmission(ctx, nodeID, incarnation)
 }

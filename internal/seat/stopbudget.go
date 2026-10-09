@@ -6,22 +6,19 @@ import (
 	"time"
 )
 
-// StopBudget is the one allowance a stopping node's coordination round trips
-// share: the stop's announcement, the presence and seat leases it gives back,
-// the seats' last lifecycle events, the admission it withdraws, the duties it
-// releases and the holds its loops give back as they are stopped.
+// StopBudget is the one allowance a stopping node's lease give-backs share:
+// the presence and seat leases it hands back, the duties it releases and the
+// holds its loops give back as they are stopped.
 //
 // # Why one allowance rather than one per step
 //
-// Every one of those steps races a lease — or, for the announcement and the
-// lifecycle events, a live screen — and every one falls back to the same
-// thing when it cannot reach the store: the lease lapses on its TTL, the
-// screen ages out. Each used to run under a bound of its own, so a member that
-// had lost quorum spent the SUM of them: the e2e fleet measured a lone member's
-// stop at 25 s, five seconds per step, every one of them failing. A process
-// under an orchestrator's thirty-second kill grace that spends that long on
-// deadlines that cannot succeed is killed before its custody flush and its
-// store close.
+// Every one of those steps races a lease, and every one falls back to the
+// same thing when it cannot reach the store: the lease lapses on its TTL.
+// Each used to run under a bound of its own, so a member that had lost quorum
+// spent the SUM of them: the e2e fleet measured a lone member's stop at 25 s,
+// five seconds per step, every one of them failing. A process under an
+// orchestrator's thirty-second kill grace that spends that long on deadlines
+// that cannot succeed is killed before its custody flush and its store close.
 //
 // So the steps draw on one allowance, [StopAllowance] of the lease TTL: on a
 // healthy fleet each takes milliseconds and the allowance never binds; on an
@@ -30,6 +27,27 @@ import (
 // A store that blinks during a healthy stop costs the steps the blink, not the
 // stop its allowance — the alternative, abandoning every step after the first
 // failure, turns one transient error into a TTL of dark seats for every peer.
+//
+// # Only what lapses
+//
+// A round trip whose fallback is NOT a lease lapsing is never a step of it,
+// because the allowance's whole argument is that running out of it costs no
+// more than not trying. Two of a stop's round trips are not that:
+//
+//   - Its LIFECYCLE EVENTS — the node's `org_stopped`, each seat's last
+//     `agent_terminated` — travel on the event stream, which is replicated
+//     apart from the coordination buckets and can lose its quorum alone. A
+//     publish the stream never acknowledges waits out whatever deadline it is
+//     handed, so as steps of this allowance a stream without quorum spent the
+//     time every lease behind them needed, and a store that was answering was
+//     left holding the presence, the seats, the admission and every duty. The
+//     engine bounds each on its own and publishes it beside the give-backs
+//     rather than in front of them.
+//   - The engine's ADMISSION withdrawal falls back to nothing at all: an
+//     admission has no TTL, so one that is not withdrawn stays until the node
+//     restarts under the same id or an operator excludes it. The engine
+//     reserves it a share of the allowance no step before it can spend, and
+//     hands this budget the rest.
 //
 // # The clock runs only while a step does
 //
@@ -58,11 +76,12 @@ type StopBudget struct {
 	since  time.Time
 }
 
-// StopAllowance is the share of a lease TTL a stop's coordination steps get
-// between them: one heartbeat interval, the TTL over [HeartbeatRatio] — 15 s
-// at the shipped 45 s TTL. The largest allowance still strictly inside the
-// leases it is racing, which is the bound each seat's release already had on
-// its own; it is now the bound for all of them together.
+// StopAllowance is the share of a lease TTL a stop's coordination round trips
+// get between them: one heartbeat interval, the TTL over [HeartbeatRatio] —
+// 15 s at the shipped 45 s TTL. The largest allowance still strictly inside
+// the leases it is racing, which is the bound each seat's release already had
+// on its own; it is now the bound for all of them together, an engine's
+// admission withdrawal included, whose share the engine takes out of it.
 func StopAllowance(ttl time.Duration) time.Duration { return ttl / HeartbeatRatio }
 
 // NewStopBudget is an allowance of total for one stop.

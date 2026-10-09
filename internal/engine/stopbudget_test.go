@@ -13,6 +13,9 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/seat"
 )
 
@@ -179,4 +182,202 @@ func (f stallingFleet) ForgetAdmission(ctx context.Context, nodeID, incarnation 
 		return stall(ctx)
 	}
 	return f.fleet.ForgetAdmission(ctx, nodeID, incarnation)
+}
+
+// A STOP ON A STREAM THAT WILL NOT ACKNOWLEDGE LEAVES NOTHING HELD.
+//
+// The event stream and the coordination buckets are separately replicated
+// streams, so the stream can lose its quorum while the store answers. A stop's
+// last events are publishes on it — the node's `org_stopped` and each seat's
+// `agent_terminated` — and a publish the stream never acknowledges waits out
+// whatever deadline it is handed. As steps of the stop's allowance they spent
+// it, and the presence, both seats, the admission and every duty were left
+// held against a store that was answering all along: the presence and the
+// seats until their TTL, the duties for theirs, and the admission — which has
+// none — until an operator excluded the node. Here the stream holds both kinds
+// of event exactly as its client does, until the request's deadline or five
+// seconds without one, and the store is untouched: after the stop, nothing of
+// this node's is held.
+//
+// AND A SEAT'S LAST EVENT IS OVER BEFORE ITS LEASE IS GIVEN BACK, published
+// beside the seat's teardown but never past it: a peer that takes the seat
+// over then announces it after this node let it go, where the other order
+// shows the live projection a running seat as terminated.
+//
+// AND THE ANNOUNCEMENT RUNS BESIDE THE DRAIN, so the stream's silence costs
+// the stop one of its bounds while the seats' run, not one after the other.
+//
+// The lease TTL is fifteen seconds — an allowance of five — so a lease a stop
+// failed to give back is still held when the case reads it, seconds later.
+func TestAStopOnAStreamThatWillNotAcknowledgeLeavesNothingHeld(t *testing.T) {
+	t.Parallel()
+	b := bootstrap(t, func(b *config.Bootstrap) {
+		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+		// THE BROKER'S RESERVATIONS FROM A FIXED SIZE rather than from
+		// whatever this machine's disk has free, which is a fact about
+		// the machine and not about the stop.
+		b.Stream.StoreMaxBytes = 16 << 30
+		b.Coordination.LeaseTTLSeconds = 15
+	})
+	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc))
+	if err != nil {
+		t.Fatalf("OpenBackends: %v", err)
+	}
+	t.Cleanup(func() { back.Close(context.Background()) })
+	broker, ok := back.Queue.(*jetstream.Queue)
+	if !ok {
+		t.Fatalf("the premise: the engine's broker is JetStream, got %T", back.Queue)
+	}
+	stream := &unacknowledgedLastEvents{Queue: broker}
+	back.Queue = stream
+	leases := &recordedReleases{coordBackend: back.Coord}
+	back.Coord = leases
+
+	e, err := engine.New(t.Context(), engine.Options{
+		Bootstrap: b, Company: parsedCompany(t, companyDoc), Backends: back,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+	if err := e.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	node := e.Node().ID()
+	ctx := context.Background()
+	// THE PREMISE: everything the stop must give back is held first. A case
+	// that stopped before a duty was claimed would find none held afterwards
+	// whatever the stop did.
+	waitFor(t, "both seats to be claimed", func() bool {
+		return len(e.Node().Host().Held()) == 2
+	})
+	waitFor(t, "a fleet duty to be claimed", func() bool {
+		duties, err := back.Coord.ListLive(ctx, coord.ClassWorker)
+		return err == nil && len(duties) > 0
+	})
+	if admissions, err := back.Fleet.Admissions(ctx); err != nil || len(admissions) == 0 {
+		t.Fatalf("the premise: the node is admitted, got %v (%v)", admissions, err)
+	}
+
+	started := time.Now()
+	e.Stop(ctx)
+	took := time.Since(started)
+
+	if live, err := back.Coord.ListLive(ctx, coord.ClassNode); err != nil || len(live) != 0 {
+		t.Errorf("after the stop the node's presence is %v (%v), want none: the "+
+			"stream's silence spent the time its give-back needed", live, err)
+	}
+	for _, handle := range []string{"ceo", "cto"} {
+		lease, err := back.Coord.Get(ctx, coord.SeatResource(handle))
+		if err != nil {
+			t.Fatalf("read seat %s: %v", handle, err)
+		}
+		if lease != nil {
+			t.Errorf("after the stop seat %s is held by %s: the seat's last event "+
+				"spent the time its lease's give-back needed", handle, lease.Owner)
+		}
+	}
+	admissions, err := back.Fleet.Admissions(ctx)
+	if err != nil {
+		t.Fatalf("read the admissions: %v", err)
+	}
+	for _, a := range admissions {
+		if a.NodeID == node {
+			t.Errorf("after the stop the node's admission is still there — it has "+
+				"no TTL, so it stays until an operator excludes the node: %+v", a)
+		}
+	}
+	if duties, err := back.Coord.ListLive(ctx, coord.ClassWorker); err != nil || len(duties) != 0 {
+		t.Errorf("after the stop %d duty lease(s) are held (%v): %v",
+			len(duties), err, duties)
+	}
+
+	for role, handle := range map[string]string{"CEO": "ceo", "CTO": "cto"} {
+		ended, published := stream.terminated(role)
+		released, gaveBack := leases.released(coord.SeatResource(handle))
+		switch {
+		case !published:
+			t.Errorf("seat %s was released with no `agent_terminated` asked for", handle)
+		case !gaveBack:
+			t.Errorf("seat %s's lease was never given back", handle)
+		case released.Before(ended):
+			t.Errorf("seat %s's lease was given back %v before its last event was "+
+				"over: a peer taking it over could announce it first",
+				handle, ended.Sub(released))
+		}
+	}
+	// TWO OF THE STREAM'S BOUNDS separate the outcomes: beside the drain the
+	// announcement's runs while the seats' do, and in front of it the two run
+	// one after the other.
+	if limit := 2 * streamClientTimeout; took >= limit {
+		t.Errorf("the stop took %v on a stream that answers nothing, past %v: "+
+			"its events waited one after another rather than beside its "+
+			"give-backs", took, limit)
+	}
+}
+
+// streamClientTimeout is what the JetStream client waits for a request whose
+// context carries no deadline.
+const streamClientTimeout = 5 * time.Second
+
+// errNoQuorum is what the stalled stream answers once its wait is over.
+var errNoQuorum = errors.New("the event stream has lost quorum")
+
+// unacknowledgedLastEvents is the engine's own broker with an event stream
+// that never acknowledges a stop's last events — `org_stopped` and
+// `agent_terminated` — recording when each seat's was over, keyed by the role
+// it names. Every other publish is the broker's.
+type unacknowledgedLastEvents struct {
+	*jetstream.Queue
+	ended sync.Map // role name → time.Time
+}
+
+func (q *unacknowledgedLastEvents) Publish(ctx context.Context, subject string, ev *events.Event) error {
+	if ev.Type != (types.OrgStopped{}).EventType() &&
+		ev.Type != (types.AgentTerminated{}).EventType() {
+		return q.Queue.Publish(ctx, subject, ev)
+	}
+	// AS THE CLIENT WAITS for an acknowledgement that never comes: until
+	// the request's deadline, or its own timeout for one with none.
+	wait := streamClientTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		wait = time.Until(deadline)
+	}
+	select {
+	case <-ctx.Done():
+	case <-time.After(wait):
+	}
+	if ev.Type == (types.AgentTerminated{}).EventType() {
+		q.ended.Store(ev.Source, time.Now())
+	}
+	return errNoQuorum
+}
+
+// terminated is when role's last event was over, if one was asked for.
+func (q *unacknowledgedLastEvents) terminated(role string) (time.Time, bool) {
+	at, ok := q.ended.Load(role)
+	if !ok {
+		return time.Time{}, false
+	}
+	return at.(time.Time), true
+}
+
+// recordedReleases is the lease store, recording when each lease's give-back
+// was first asked for.
+type recordedReleases struct {
+	coordBackend
+	asked sync.Map // resource → time.Time
+}
+
+func (l *recordedReleases) Release(ctx context.Context, resource, owner string, epoch int64) (bool, error) {
+	l.asked.LoadOrStore(resource, time.Now())
+	return l.coordBackend.Release(ctx, resource, owner, epoch)
+}
+
+// released is when resource's give-back was first asked for.
+func (l *recordedReleases) released(resource string) (time.Time, bool) {
+	at, ok := l.asked.Load(resource)
+	if !ok {
+		return time.Time{}, false
+	}
+	return at.(time.Time), true
 }

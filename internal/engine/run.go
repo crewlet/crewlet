@@ -181,9 +181,9 @@ type Engine struct {
 	// would announce a second stop for one shutdown.
 	drainOnce sync.Once
 
-	// stopBudget is the allowance every coordination round trip of this
-	// node's stop shares ([seat.StopBudget]) — the drain's and the
-	// teardown's — built by whichever reaches it first ([Engine.stopping]).
+	// stopBudget is the allowance every lease this node's stop gives back
+	// shares ([seat.StopBudget]) — the drain's and the teardown's — built by
+	// whichever reaches it first ([Engine.stopping]).
 	// An ATOMIC POINTER because it is read where no stop's context reaches:
 	// a hold given back by a loop the teardown is waiting for asks it
 	// whether a stop has begun ([holdLeases]), and nil is "not yet".
@@ -1608,6 +1608,9 @@ func (e *Engine) Start(ctx context.Context) error {
 // moment, so the envelope's source is this node — which is also what tells one
 // member's line from another's on a fleet, since every member publishes its
 // own pair.
+//
+// On a bound of its own ([lifecycleContext]), never a step of the stop's
+// allowance.
 func (e *Engine) publishLifecycle(ctx context.Context, ev *events.Event) {
 	if e.backends == nil || e.backends.Queue == nil {
 		return
@@ -1615,16 +1618,46 @@ func (e *Engine) publishLifecycle(ctx context.Context, ev *events.Event) {
 	if e.node != nil {
 		ev.Source = e.node.ID()
 	}
-	// The stop's announcement is one step of its allowance ([seat.StopStep]);
-	// the start's is not on one.
-	publishCtx, done := seat.StopStep(ctx)
-	defer done()
+	publishCtx, cancel := lifecycleContext(ctx)
+	defer cancel()
 	if err := e.backends.Queue.Publish(publishCtx, topics.Event(ev.Type), ev); err != nil {
 		log.WarnContext(ctx, "lifecycle_event_not_published", "type", ev.Type,
 			"error", err.Error(),
 			"detail", "the audit log has no line for this node's start or stop; "+
 				"the engine log does")
 	}
+}
+
+// lifecyclePublishBudget bounds the publish of one lifecycle event: a node's
+// start or stop, a seat's spawn or release.
+//
+// FIVE SECONDS, the JetStream client's own request timeout — what nats.go gives
+// a publish whose context carries no deadline — and the bound the released
+// seat's last memory publish has beside it ([memoryFlushTimeout]). A stream
+// that has not acknowledged in that long will not inside any grace an
+// orchestrator gives a stop, and what is lost is a line in the audit log and a
+// live screen that ages the seat out instead.
+//
+// NEVER A STEP OF THE STOP'S ALLOWANCE ([seat.StopBudget]), which is the
+// coordination store's: these travel on the event stream, which is replicated
+// apart from the coordination buckets and can lose its quorum alone. A publish
+// the stream never acknowledges waits out whatever deadline it is handed — and
+// a deadline switches the client's own five seconds off — so on the allowance,
+// a stream without quorum spent the time the presence, the seats, the
+// admission and every duty needed, and a store that was answering was left
+// holding all of them.
+const lifecyclePublishBudget = 5 * time.Second
+
+// lifecycleContext is what a lifecycle event is published on: ctx without its
+// cancellation, bounded by [lifecyclePublishBudget] and nothing else.
+//
+// FREE OF ctx's CANCELLATION because the event records something that has
+// already happened — the node started or was told to stop, the seat was taken
+// or let go — and a caller that gave up on what comes after it has not taken
+// that back. A drain's caller may pass a deadline for its wait, and a
+// release's context is routinely one a shutdown has already ended.
+func lifecycleContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), lifecyclePublishBudget)
 }
 
 // Drain is the first half of a graceful stop: this node stops taking work,
@@ -1644,7 +1677,7 @@ func (e *Engine) publishLifecycle(ctx context.Context, ev *events.Event) {
 //
 // Bounded only by ctx, for the reason [node.Node.Drain] gives.
 func (e *Engine) Drain(ctx context.Context) {
-	// ONE ALLOWANCE FOR THE WHOLE STOP'S COORDINATION, from its first step —
+	// ONE ALLOWANCE FOR EVERY LEASE THE STOP GIVES BACK, from its first —
 	// see [Engine.stopping].
 	ctx = seat.WithStopBudget(ctx, e.stopping())
 	e.drainOnce.Do(func() {
@@ -1693,11 +1726,22 @@ func (e *Engine) Drain(ctx context.Context) {
 		// survive is a second interrupt or a supervisor's kill grace
 		// running out mid-drain, and the one thing the audit log must not
 		// lose is that this node was told to stop.
+		//
+		// AND BESIDE THE DRAIN rather than in front of it, joined before
+		// the drain returns. The announcement travels on the event stream,
+		// and a stream that will not acknowledge holds it for its whole
+		// bound ([lifecyclePublishBudget]) — time the presence give-back the
+		// drain begins with has no reason to wait out. On a member that has
+		// lost both stores the two run out together, rather than the
+		// announcement's five seconds coming first and the allowance after.
+		var announced sync.WaitGroup
 		if company := e.Company(); company != nil {
-			e.publishLifecycle(ctx, events.New(
-				types.OrgStopped{OrgName: company.Config.Name}, tracing.TraceOf(ctx)))
+			ev := events.New(types.OrgStopped{OrgName: company.Config.Name},
+				tracing.TraceOf(ctx))
+			announced.Go(func() { e.publishLifecycle(ctx, ev) })
 		}
 		e.node.Drain(ctx)
+		announced.Wait()
 	})
 }
 
@@ -1726,29 +1770,38 @@ func (e *Engine) Stop(ctx context.Context) {
 	})
 }
 
-// stopping is the allowance this node's stop draws its coordination round
-// trips from — the stop's announcement, the presence and seat leases it gives
-// back, the seats' last lifecycle events, the admission it withdraws, the
-// duties it releases, and the holds its loops give back as the teardown ends
-// them ([holdLeases]) — built once, by the drain or by a failed boot's
-// teardown, whichever comes first. See [seat.StopBudget] for why one
-// allowance and not one per step, and [seat.StopAllowance] for its size: one
-// heartbeat interval of this node's own lease TTL.
+// stopping is the allowance this node's stop gives its leases back on — the
+// presence and seat leases, the duties it releases, and the holds its loops
+// give back as the teardown ends them ([holdLeases]) — built once, by the drain
+// or by a failed boot's teardown, whichever comes first. See [seat.StopBudget]
+// for why one allowance and not one per step. Its size is the stop allowance
+// of this node's own lease TTL ([seat.StopAllowance], one heartbeat interval)
+// LESS the share reserved for withdrawing its admission
+// ([Engine.admissionShare]), so the stop's coordination is still one allowance
+// in total.
 //
-// NOT the custody flush or the last auxiliary spend, which carry records
-// rather than give a lease back: what they could not publish is lost rather
-// than lapsed, so each keeps the budget of its own it states.
+// NOT the stop's lifecycle events, the custody flush or the last auxiliary
+// spend, which carry records on the event stream rather than give a lease
+// back: what they could not publish is lost rather than lapsed, and a stream
+// that will not acknowledge must not spend the time the coordination store is
+// owed ([lifecyclePublishBudget]), so each keeps the bound of its own it
+// states. Nor the admission, which has no lapse to fall back on.
 func (e *Engine) stopping() *seat.StopBudget {
 	e.stopBudgetOnce.Do(func() {
-		ttl := e.leaseTTL
-		if ttl <= 0 {
-			// A boot that failed before its lease TTL was resolved: the
-			// shipped one, which is what a lease it took would carry.
-			ttl = seat.SeatLeaseTTL
-		}
-		e.stopBudget.Store(seat.NewStopBudget(seat.StopAllowance(ttl)))
+		e.stopBudget.Store(seat.NewStopBudget(
+			seat.StopAllowance(e.stopTTL()) - e.admissionShare()))
 	})
 	return e.stopBudget.Load()
+}
+
+// stopTTL is the lease TTL a stop's bounds are fractions of: this node's own,
+// or — for a boot that failed before it was resolved — the shipped one, which
+// is what a lease it took would carry.
+func (e *Engine) stopTTL() time.Duration {
+	if e.leaseTTL > 0 {
+		return e.leaseTTL
+	}
+	return seat.SeatLeaseTTL
 }
 
 // teardown stops everything a node started, in the one order that is correct.
