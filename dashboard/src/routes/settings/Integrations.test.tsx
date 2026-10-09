@@ -14,6 +14,7 @@ import { afterEach, expect, test } from "vitest";
 import {
   CATALOG,
   EntryRow,
+  SeatStep,
   IN_FLIGHT,
   Reconcile,
   byConfiguredThenName,
@@ -1230,6 +1231,38 @@ test("a connected tool offers a disconnect", () => {
   );
   fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
   expect(asked).toEqual(["github"]);
+});
+
+// BUT NOT ON A MANAGED DOCUMENT (ADR-0030): a disconnect removes the block,
+// which the managing system would put straight back, so the control is drawn
+// and held with who manages the document — and an agent's app, which is
+// recorded on its seat, is held the same way before the host makes one.
+test("a managed document holds the disconnect and an agent's app", () => {
+  const asked: string[] = [];
+  const managed = "This company's configuration is managed by gitops — change it there.";
+  render(
+    <>
+      <EntryRow
+        entry={CATALOG.find((e) => e.key === "github")!}
+        rows={rowsOf({ key: "github", configured: true })}
+        managed={managed}
+        onDisconnect={() => asked.push("github")}
+      />
+      <SeatStep
+        app="GitHub"
+        toolKey="github"
+        seat={{ handle: "sre-lead", requirements: [], satisfied: false, step: "create_app" }}
+        managed={managed}
+      />
+    </>,
+  );
+  const disconnect = screen.getByRole("button", { name: "Disconnect" });
+  expect(disconnect.getAttribute("aria-disabled")).toBe("true");
+  fireEvent.click(disconnect);
+  expect(asked).toEqual([]);
+  const create = screen.getByRole("button", { name: "Create app on GitHub" });
+  expect(create.getAttribute("aria-disabled")).toBe("true");
+  expect(document.body.textContent).toContain("managed by gitops");
 });
 
 // ALPHABETICAL, and it replaced a connected-first sort deliberately.

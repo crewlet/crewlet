@@ -65,6 +65,17 @@ type Config interface {
 	// handle, which is its identity rather than its position.
 	Seat(ctx context.Context, handle string) ([]byte, error)
 	SetSeat(ctx context.Context, handle string, body []byte, summary, operator, expect string) (revisionID string, epoch int64, err error)
+
+	// Authorize reports whether operator may CHANGE the document — nil, or
+	// the refusal to answer with — for a deployment whose document another
+	// system manages (ADR-0030).
+	//
+	// Asked BEFORE anything is sealed, for the reason [Config.Current] is:
+	// Apply and SetSeat refuse the same operator, but by then the credential
+	// is in the store under a name nothing points at. A submission that
+	// changes no pointer — a rotation — does not ask, because it changes
+	// nothing in the document and ends in a Reload.
+	Authorize(operator string) error
 }
 
 // Source is the value the secret store records for a row this package wrote,
@@ -224,6 +235,14 @@ func (w Writer) Write(ctx context.Context, reqs []Requirement, in Submission) (R
 		}
 	}
 
+	// A CHANGE TO THE DOCUMENT IS AUTHORIZED BEFORE ANY VALUE IS SEALED. A
+	// rotation (no pointer to write) changes nothing in it and is not asked.
+	if len(patch) > 0 {
+		if err := w.Config.Authorize(in.Operator); err != nil {
+			return Result{}, err
+		}
+	}
+
 	// VALUE FIRST. See the note at the top of this file: the other order
 	// leaves the config naming a secret with nothing behind it, and the
 	// route it guards refusing every delivery for the length of the window.
@@ -344,6 +363,13 @@ func (w Writer) writeSeat(ctx context.Context, reqs []Requirement, in Submission
 				return Result{}, err
 			}
 			changed = true
+		}
+	}
+
+	// AUTHORIZED BEFORE ANY VALUE IS SEALED, as the company-wide half is.
+	if changed {
+		if refused := w.Config.Authorize(in.Operator); refused != nil {
+			return Result{}, refused
 		}
 	}
 

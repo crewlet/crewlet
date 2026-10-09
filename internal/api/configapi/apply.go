@@ -192,7 +192,7 @@ func (s *Service) Apply(ctx context.Context, req ApplyRequest) (Applied, error) 
 	if err != nil {
 		return Applied{}, err
 	}
-	return s.commit(ctx, prepared, req.Summary, req.Author)
+	return s.commit(ctx, prepared, req.Summary)
 }
 
 // base is the active revision a write is built on, opened.
@@ -226,6 +226,15 @@ type draft struct {
 	build func(base) (*config.Company, []byte, error)
 	// rules is what the proposed company is held to.
 	rules func(*config.Company) error
+	// author is who the write is made as: the credential [Service.Authorize]
+	// judges, and the writer the revision records — one value for both, so
+	// the author a write was admitted as is the author it is stored under.
+	author store.Author
+	// republishes is a write that re-publishes the active document's
+	// stored bytes unchanged ([Service.Reload]). It changes nothing about
+	// the company, so a managed document does not refuse it: see
+	// [Service.Authorize].
+	republishes bool
 }
 
 // prepared is a write built and checked, and not yet stored: everything a dry
@@ -240,6 +249,7 @@ type prepared struct {
 	document []byte
 	warnings []config.Warning
 	derived  config.Derived
+	author   store.Author
 }
 
 // prepare builds and checks a write, storing nothing.
@@ -254,6 +264,17 @@ type prepared struct {
 //   - The proposal, built by the draft.
 //   - Its rules, and what an answer reports about it.
 func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
+	// WHO MAY CHANGE THE DOCUMENT, before this reads or stores anything: a
+	// credential a managed deployment does not let write is refused, and a
+	// dry run is held to it too, because a check that answered "valid" for a
+	// write the save would refuse is the one thing a dry run must never do.
+	// The HTTP routes have already asked, before they read the request
+	// ([Service.refusedManaged]); this is the rule for every other caller.
+	if !d.republishes {
+		if err := s.Authorize(d.author); err != nil {
+			return nil, err
+		}
+	}
 	active, found, err := s.configs.Active(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("configapi: read the active revision: %w", err)
@@ -303,7 +324,9 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	if invalid := config.CheckTiers(s.boot, company); invalid != nil {
 		return nil, &ValidationError{Err: invalid, Derived: derived}
 	}
-	p := &prepared{document: document, warnings: company.Warnings(), derived: derived}
+	p := &prepared{
+		document: document, warnings: company.Warnings(), derived: derived, author: d.author,
+	}
 	if found {
 		p.base = active.ID
 	}
@@ -326,7 +349,8 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 //
 // The plane is there: [Service.prepare] refused the write otherwise, and a
 // prepared write comes from nowhere else.
-func (s *Service) commit(ctx context.Context, p *prepared, summary string, author store.Author) (Applied, error) {
+func (s *Service) commit(ctx context.Context, p *prepared, summary string) (Applied, error) {
+	author := p.author
 	payload, err := secrets.Seal(s.cipher, p.document)
 	if err != nil {
 		return Applied{}, fmt.Errorf("configapi: seal the config: %w", err)
@@ -404,7 +428,7 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary string, autho
 // has.
 func patchDraft(req ApplyRequest, sent *yaml.Node) draft {
 	return draft{
-		expect: req.Expect, requireActive: true,
+		expect: req.Expect, requireActive: true, author: req.Author,
 		rules: (*config.Company).Validate,
 		build: func(b base) (*config.Company, []byte, error) {
 			if len(req.Patch) == 0 {
@@ -454,9 +478,9 @@ func patchDraft(req ApplyRequest, sent *yaml.Node) draft {
 // or empty for nothing, which refuses the write if a revision has appeared
 // since. A full replacement built on nothing and landing on something would
 // discard a company its author never saw.
-func replaceDraft(incoming *config.Company, built string) draft {
+func replaceDraft(incoming *config.Company, built string, author store.Author) draft {
 	return draft{
-		expect: built, expectAbsent: built == "",
+		expect: built, expectAbsent: built == "", author: author,
 		rules: (*config.Company).Validate,
 		build: func(b base) (*config.Company, []byte, error) {
 			if b.found {
@@ -595,7 +619,13 @@ func onlyUnknownField(_ *config.Company, err error) error {
 // reloaded at 04:12" is a fact somebody can find later.
 func (s *Service) Reload(ctx context.Context, summary string, author store.Author) (Applied, error) {
 	prepared, err := s.prepare(ctx, draft{
-		requireActive: true,
+		requireActive: true, author: author,
+		// NOT A CHANGE TO THE COMPANY, so a managed document does not
+		// refuse it: the bytes below are the active revision's own, and
+		// what a reload exists for is the credential rotation a person
+		// may have to make while the managing system cannot — see
+		// [Service.Authorize].
+		republishes: true,
 		// VALIDATED, because a reload is an apply: every node rebuilds its
 		// epoch from what this activates, and re-publishing a company this
 		// build cannot run would move every node onto a refusal. The answer
@@ -622,5 +652,5 @@ func (s *Service) Reload(ctx context.Context, summary string, author store.Autho
 	if summary == "" {
 		summary = "reload configuration"
 	}
-	return s.commit(ctx, prepared, summary, author)
+	return s.commit(ctx, prepared, summary)
 }

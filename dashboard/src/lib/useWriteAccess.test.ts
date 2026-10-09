@@ -9,9 +9,11 @@ import {
   CONFIG_WRITE_REASONS,
   WRITE_REASONS,
   configWriteAccess,
+  mayChangeConfig,
   writeAccess,
 } from "./useWriteAccess.ts";
 import type { ViewerState } from "./viewer.ts";
+import { managedSentence } from "~/protocol/configAnswer.ts";
 
 const BOUND: ViewerState = {
   operatorID: "founder",
@@ -25,6 +27,8 @@ const BOUND: ViewerState = {
   anonymous: false,
   loading: false,
   asking: false,
+  configWriter: true,
+  configManagedBy: [],
 };
 
 test.each([
@@ -95,6 +99,8 @@ describe("changing the company's configuration", () => {
     anonymous: false,
     loading: false,
     asking: false,
+    configWriter: true,
+    configManagedBy: [],
     ...over,
   });
 
@@ -124,5 +130,41 @@ describe("changing the company's configuration", () => {
       block: "held",
       reason: "these are Rui's",
     });
+  });
+
+  // A MANAGED DOCUMENT IS WRITTEN SOMEWHERE ELSE (ADR-0030): every operator but
+  // its writers is held, with the sentence naming who manages it — after the
+  // reasons a person can clear here, and before a hold no screen releases.
+  test("a managed document holds every operator but its writers", () => {
+    const managed = viewer({ configWriter: false, configManagedBy: ["gitops"] });
+    expect(configWriteAccess(managed, true)).toEqual({
+      can: false,
+      block: "managed",
+      reason: managedSentence(["gitops"]),
+    });
+    expect(managedSentence(["gitops"])).toContain("managed by gitops");
+    expect(configWriteAccess(managed, true, "these are Rui's")).toMatchObject({
+      block: "managed",
+    });
+    expect(configWriteAccess({ ...managed, operator: false }, true)).toMatchObject({
+      block: "not_operator",
+    });
+    expect(
+      configWriteAccess(viewer({ configWriter: true, configManagedBy: ["gitops"] }), true),
+    ).toEqual({ can: true });
+    expect(configWriteAccess(viewer({ configWriter: true, configManagedBy: [] }), true)).toEqual({
+      can: true,
+    });
+  });
+
+  // THE STANDING ANSWER agrees with the press-time one about WHO may write,
+  // and ignores what only this moment decides — the socket, a screen's hold.
+  test("whether the reader may change the configuration at all is the operator and the writers", () => {
+    expect(mayChangeConfig(viewer({}))).toBe(true);
+    expect(mayChangeConfig(viewer({ operator: false }))).toBe(false);
+    expect(mayChangeConfig(viewer({ configWriter: false, configManagedBy: ["gitops"] }))).toBe(
+      false,
+    );
+    expect(mayChangeConfig(viewer({ configWriter: true, configManagedBy: ["gitops"] }))).toBe(true);
   });
 });

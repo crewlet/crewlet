@@ -35,6 +35,7 @@ import { createContext, createElement, useContext, type ReactNode } from "react"
 import { useConnection } from "./store-hooks.ts";
 import { useViewer, type ViewerState } from "./viewer.ts";
 import type { ActionTool } from "~/protocol/act.ts";
+import { managedSentence } from "~/protocol/configAnswer.ts";
 
 /** Why a control cannot act, as a value a test can name. */
 export type WriteBlock = "offline" | "loading" | "anonymous" | "unbound" | "not_served" | "held";
@@ -133,19 +134,28 @@ export function menuHold(access: WriteAccess): { disabled?: boolean; description
  * seat, a server — as opposed to acting in it.
  *
  * A DIFFERENT GATE FROM AN ACT, and the difference is the engine's: `/config`
- * is guarded by the API credential and nothing narrower (ADR-0024 keeps it
+ * is guarded by the API credential and not by a seat (ADR-0024 keeps it
  * credential-scoped), so an operator token nobody bound to a seat may change a
  * ceiling it could never answer an ask with, and a bound person whose token
  * the engine does not take as an operator's may not. `viewer.operator` is the
- * engine's own answer to exactly that question.
+ * engine's own answer to that question — and on a MANAGED document
+ * (ADR-0030) only the credentials it names as writers may change it, which
+ * `viewer.config_writer` answers ([managedBlock]). [mayChangeConfig] is the
+ * two together, for a screen that has to know before anything is pressed.
  */
-export type ConfigWriteBlock = "offline" | "loading" | "anonymous" | "not_operator" | "held";
+export type ConfigWriteBlock =
+  "offline" | "loading" | "anonymous" | "not_operator" | "managed" | "held";
 
 export type ConfigWriteAccess =
   { can: true } | { can: false; block: ConfigWriteBlock; reason: string };
 
-/** The sentence each block is shown as — every block but a [HoldWrites]'. */
-export const CONFIG_WRITE_REASONS: Readonly<Record<Exclude<ConfigWriteBlock, "held">, string>> = {
+/**
+ * The sentence each block is shown as — every block but a [HoldWrites]' and
+ * `managed`, whose sentence names who manages the document ([managedSentence]).
+ */
+export const CONFIG_WRITE_REASONS: Readonly<
+  Record<Exclude<ConfigWriteBlock, "held" | "managed">, string>
+> = {
   offline: WRITE_REASONS.offline,
   loading: WRITE_REASONS.loading,
   anonymous: "Set an operator's API token to change the company's configuration.",
@@ -153,13 +163,50 @@ export const CONFIG_WRITE_REASONS: Readonly<Record<Exclude<ConfigWriteBlock, "he
     "This browser's token cannot change the company's configuration — the engine does not take it as an operator's.",
 };
 
+/**
+ * Why THIS caller may not change a managed company document, or null — when
+ * the document is managed by nobody, or by this caller's own credential.
+ *
+ * The engine's own answer decides (`viewer.config_writer`), and only a
+ * document somebody manages is managed: a reader the engine named no writers
+ * to (an anonymous one) is not told the document is managed here, because
+ * the gate in front of this one already says what they lack.
+ */
+export function managedBlock(viewer: ViewerState): string | null {
+  if (viewer.configManagedBy.length === 0 || viewer.configWriter) return null;
+  return managedSentence(viewer.configManagedBy);
+}
+
+/**
+ * [managedBlock] for the screen this browser is on: the sentence a managed
+ * document's editing controls are disabled with, or null.
+ */
+export function useManagedConfig(): string | null {
+  return managedBlock(useViewer());
+}
+
+/**
+ * Whether this reader's credential may change the company's configuration at
+ * all — an operator's, and on a managed document one of its writers.
+ *
+ * THE STANDING ANSWER, apart from this moment's connection or a screen's
+ * hold: what a screen asks when it decides whether a change is the reader's
+ * to make — a stopped seat counted as THEIR decision, "Set one" offered as a
+ * link — rather than whether a control may be pressed now
+ * ([configWriteAccess]). Both read the same two answers, so they cannot
+ * disagree about who may write.
+ */
+export function mayChangeConfig(viewer: ViewerState): boolean {
+  return viewer.operator && managedBlock(viewer) === null;
+}
+
 /** The decision over values — what the hook reads, and what a test pins. */
 export function configWriteAccess(
   viewer: ViewerState,
   connected: boolean,
   held: string | null = null,
 ): ConfigWriteAccess {
-  const blocked = (block: Exclude<ConfigWriteBlock, "held">): ConfigWriteAccess => ({
+  const blocked = (block: Exclude<ConfigWriteBlock, "held" | "managed">): ConfigWriteAccess => ({
     can: false,
     block,
     reason: CONFIG_WRITE_REASONS[block],
@@ -168,6 +215,12 @@ export function configWriteAccess(
   if (viewer.loading) return blocked("loading");
   if (viewer.anonymous) return blocked("anonymous");
   if (!viewer.operator) return blocked("not_operator");
+  // AFTER THE OPERATOR CHECK, because a reader who could not write anyway
+  // is told the thing they can clear; and BEFORE A HOLD, because no screen
+  // can release it. The engine's own answer decides — `config_writer` — and
+  // only a document somebody manages is managed.
+  const managed = managedBlock(viewer);
+  if (managed !== null) return { can: false, block: "managed", reason: managed };
   if (held) return { can: false, block: "held", reason: held };
   return { can: true };
 }

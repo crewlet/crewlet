@@ -43,6 +43,14 @@ and the builder treats it as a node it could not reach: the draft is kept,
 and the check retries until a peer or the restarted node answers. Nothing is
 written by a refused save, so there is nothing to settle afterwards.
 
+When another system [manages the company
+document](../concepts/configuration.md#managed-configuration) — Tier A names
+its writers in `api.auth.company_writers` — the builder opens read-only for
+every other token: the organization is drawn, every editing control is
+disabled, and a callout says who manages it. Change the company at its source
+and let that system write it. The org chart's **Add seat** is disabled with the
+same sentence. A writer's token edits as usual.
+
 ### Arriving from a link
 
 Every way into Edit org from another screen asks to change one thing, and the

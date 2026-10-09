@@ -16,6 +16,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Integrations } from "./Integrations.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, onTokenRequested } from "~/protocol/index.ts";
 
 class InertWebSocket {
@@ -48,9 +49,11 @@ function mount() {
   (socket as unknown as { query: () => Promise<unknown> }).query = () => Promise.resolve([]);
   return render(
     <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <Integrations />
-      </Router>
+      <ViewerProvider>
+        <Router>
+          <Integrations />
+        </Router>
+      </ViewerProvider>
     </ClientContext.Provider>,
   );
 }

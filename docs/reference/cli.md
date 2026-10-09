@@ -133,8 +133,8 @@ the wrong document on a machine that has both. Tier B is read from the `company_
 | Flag | Description |
 |------|-------------|
 | `-config PATH` | Tier A: this node's broker, store and API (default `./crewlet.yaml`) |
-| `-company PATH` | Tier B **bootstrap seed** (default `./company.yaml`): imported only when the store holds no company yet. Once one exists this file is **ignored**, loudly (`company_seed_ignored` at warn), so a restart with a stale file never reverts a live change. Absent at its default is fine — the node boots on whatever the store holds. A revision the seed writes is the node's own: its `created_by` is the node's id and its `created_by_kind` is `node`. |
-| `-import-company PATH` | Tier B to make the active revision **now**, over whatever the fleet is running. The deliberate "this file is the company again" gesture. Mutually exclusive with `-company`; both together is refused, because they ask for opposite things. |
+| `-company PATH` | Tier B **bootstrap seed** (default `./company.yaml`): imported only when the store holds no company yet. Once one exists this file is **ignored**, loudly (`company_seed_ignored` at warn), so a restart with a stale file never reverts a live change. Absent at its default is fine — the node boots on whatever the store holds. A revision the seed writes is the node's own: its `created_by` is the node's id and its `created_by_kind` is `node`. On a deployment whose Tier A names [`api.auth.company_writers`](../concepts/configuration.md#managed-configuration) the seed is never imported, empty store or not, and says so the same way: the managing system writes the company. |
+| `-import-company PATH` | Tier B to make the active revision **now**, over whatever the fleet is running. The deliberate "this file is the company again" gesture. Mutually exclusive with `-company`; both together is refused, because they ask for opposite things. **Refused** before the node starts when Tier A names [`api.auth.company_writers`](../concepts/configuration.md#managed-configuration): the file presents no credential, and the managing system would replace it at its next reconcile. |
 | `-log-level LEVEL` | `debug`, `info` (default), `warn` or `error`. Overrides `logging.level` in Tier A, and only when actually given. A typo resolves to `info` — a bad log level must never be why a company will not boot. |
 | `-log-format FORMAT` | `console` (default), `text` or `json`. Overrides `logging.format` in Tier A, and only when actually given. `console` is columns and colour for a person; `text` is slog's `key=value`; `json` is one object per line for a shipper. A typo resolves to `console`. |
 | `-log-file PATH` | Also write the log to this file, overriding `logging.file.path` in Tier A, and only when actually given. It is a **second** destination: stderr keeps every line. An explicit `-log-file ""` writes no file for one run, whatever the Tier A document says — unless that document also set `logging.stderr: false`, which would leave the node writing its log nowhere; that combination is refused by name. It moves the path only — the file's shape, level and rotation caps stay Tier A's. A path that cannot be opened **fails the command** rather than resolving to a default: a durable record an operator did not get, with nothing saying why, is worse than not starting. |
@@ -221,6 +221,14 @@ you and none is settable from the command line. (`PUT /config` takes an
 Like `seal` and `activate`, this writes the revision to **this node's** store;
 the note it prints says what publishes it to a running fleet.
 
+**On a managed document** — Tier A names
+[`api.auth.company_writers`](../concepts/configuration.md#managed-configuration)
+— the offline route presents no credential and is refused, naming the writers.
+Through a node, the node judges the token this command sends
+(`CREWLET_API_TOKEN` when set, else Tier A's first token): one of the writers
+imports as before, and any other is refused with `config_managed`, which the
+command prints with the token it sent.
+
 ### `crewlet config export`
 
 ```
@@ -296,6 +304,11 @@ crewlet config activate <UUID> [-config PATH]
 Re-points the fleet at a revision. Every node applies it on its next reconcile.
 
 **Re-activating the revision that is already active is not a no-op**, and that is the point: the pointer is append-only, so it mints a new epoch. A node's reconciler skips on the *epoch* it has applied, never on the payload, so the apply always runs — re-reading the [secret store](../concepts/secret-store.md) and rebuilding every provider, transport and MCP child that captured a resolved value. It is the documented way to make a rotated credential take effect on a running fleet.
+
+On a [managed document](../concepts/configuration.md#managed-configuration)
+that gesture stays open — it changes nothing in the company — and activating
+any **other** revision is refused, because it presents no credential and
+replaces the document the managing system wrote.
 
 ### `crewlet config seal`
 

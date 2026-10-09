@@ -38,6 +38,7 @@ import { useSearchTarget } from "~/app/searchTarget.ts";
 import { usePageMenu, useSectionCounts } from "~/app/Shell.tsx";
 import { useSchedules } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { useManagedConfig } from "~/lib/useWriteAccess.ts";
 import { handleLabel, type OrgIndex, type Seat } from "~/lib/seats.ts";
 import { unitPath } from "~/lib/orgchart.ts";
 
@@ -111,8 +112,17 @@ export function AgentsHeader({
   filter?: SeatFilter;
 }) {
   const viewer = useViewer();
+  const managed = useManagedConfig();
   const nav = useNavigator();
-  const editable = viewer.operator;
+  // WHY ADD SEAT CANNOT BE PRESSED, or null: it opens the builder to add, so
+  // it is held exactly where the builder would open read-only — no operator
+  // credential, or a managed document this token is not a writer of
+  // (ADR-0030), with the sentence that names who manages it.
+  const held = viewer.loading
+    ? "Checking your access"
+    : !viewer.operator
+      ? ADD_SEAT_REASON
+      : managed;
   // ON A PHONE, Edit org FOLDS INTO "More": the bar keeps the finder and the
   // one action the chart invites in view, where the three side by side put
   // Add seat past the window's edge.
@@ -139,7 +149,7 @@ export function AgentsHeader({
       </span>
       {/* NEVER HIDDEN: a reader without the credential sees the control and
           the reason, rather than a product with no way to grow its company. */}
-      {editable ? (
+      {held === null ? (
         <ButtonLink
           size="small"
           variant="primary"
@@ -153,8 +163,8 @@ export function AgentsHeader({
           size="small"
           variant="primary"
           leadingIcon={<PlusGlyph size="sm" />}
-          disabledReason={viewer.loading ? "Checking your access" : ADD_SEAT_REASON}
-          title={viewer.loading ? "Checking your access" : ADD_SEAT_REASON}
+          disabledReason={held}
+          title={held}
         >
           Add seat
         </Button>

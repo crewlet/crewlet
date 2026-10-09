@@ -43,6 +43,7 @@ import { isRange, useTimeRange, windowParam } from "~/lib/range.ts";
 import { useAgents, useOrg, useOrgBudget } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { mayChangeConfig } from "~/lib/useWriteAccess.ts";
 import { DownloadButton } from "~/ui/primitives.tsx";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import type { BudgetWindow } from "~/protocol/types.ts";
@@ -138,7 +139,7 @@ export function Spend() {
               named={named}
               prior={prior}
               budget={budget}
-              operator={viewer.operator}
+              mayConfigure={mayChangeConfig(viewer)}
             />
             <PhaseChart series={series} group={group} onGroup={setGroup} zone={zone} />
           </div>

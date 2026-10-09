@@ -18,6 +18,7 @@ import { vi } from "vitest";
 import type { ReactNode } from "react";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import {
   LiveSocket,
   Store,
@@ -400,9 +401,14 @@ export function mountBuilder({
     Promise.resolve(query(what));
   const view = render(
     <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        {wrap(<Builder surfaces={surfaces} storage={storage} {...(keys ? { keys } : {})} />)}
-      </Router>
+      {/* WHO THIS BROWSER IS, which the frame supplies and the builder
+          reads: whether the company document is managed (ADR-0030). It
+          answers through `query`, like everything else this socket says. */}
+      <ViewerProvider>
+        <Router>
+          {wrap(<Builder surfaces={surfaces} storage={storage} {...(keys ? { keys } : {})} />)}
+        </Router>
+      </ViewerProvider>
     </ClientContext.Provider>,
   );
   return { store, socket, view };

@@ -6,6 +6,8 @@ import (
 	"context"
 	"slices"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/config"
 )
 
 // AccessPosture is Tier A's auth posture as the `access` answer reads it.
@@ -26,6 +28,19 @@ type AccessPosture struct {
 	AnonymousRead bool
 	// AllowedOrigins is `api.auth.allowed_origins`; empty is same-origin only.
 	AllowedOrigins []string
+	// CompanyWriters is `api.auth.company_writers`: the token ids that alone
+	// may change the company document, empty when every token may
+	// (ADR-0030). Read through [AccessPosture.MayWriteCompany].
+	CompanyWriters []string
+}
+
+// MayWriteCompany reports whether the credential with this id may change the
+// company document — Tier A's own reading ([config.APIAuth.MayWriteCompany]),
+// never a second one, so the viewer offers exactly the edits the config
+// surface admits.
+func (p *AccessPosture) MayWriteCompany(operatorID string) bool {
+	auth := config.APIAuth{CompanyWriters: p.CompanyWriters}
+	return auth.MayWriteCompany(operatorID)
 }
 
 // TokenScope is what one accepted credential reaches.
@@ -96,6 +111,12 @@ type AccessAuth struct {
 	Disabled       bool     `json:"disabled"`
 	AnonymousRead  bool     `json:"anonymous_read"`
 	AllowedOrigins []string `json:"allowed_origins"`
+	// CompanyWriters is `api.auth.company_writers` as Tier A orders it: the
+	// token ids that alone may change the company document (ADR-0030).
+	// ALWAYS A LIST, and empty is a real posture — every token may — so the
+	// screen that reads the deployment's auth says whether the document is
+	// managed, and by which credential, where the operator looks for it.
+	CompanyWriters []string `json:"company_writers"`
 }
 
 // AccessToken is one accepted credential: its label, what it reaches and the
@@ -172,6 +193,7 @@ func (s Sources) access(ctx context.Context, _ Params) (any, error) {
 			Disabled:       posture.Disabled,
 			AnonymousRead:  posture.AnonymousRead,
 			AllowedOrigins: append([]string{}, posture.AllowedOrigins...),
+			CompanyWriters: append([]string{}, posture.CompanyWriters...),
 		},
 		Tokens: make([]AccessToken, 0, len(posture.TokenIDs)),
 		People: []AccessPerson{},

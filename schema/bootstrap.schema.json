@@ -72,6 +72,21 @@
             "null"
           ]
         },
+        "company_writers": {
+          "description": "Token ids that alone may change the company document. Empty = every token.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "disabled": {
           "anyOf": [
             {

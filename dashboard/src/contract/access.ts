@@ -31,6 +31,11 @@ export interface AccessAuth {
   anonymous_read: boolean;
   /** Empty is same-origin only. */
   allowed_origins: string[];
+  /**
+   * `api.auth.company_writers`: the token ids that alone may change the
+   * company document, as Tier A orders them (ADR-0030). Empty is every token.
+   */
+  company_writers: string[];
 }
 
 /** A seat a token acts as. */

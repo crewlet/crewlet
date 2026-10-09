@@ -13,6 +13,12 @@
 // reconcile tick. That is what makes a write on one node reach the whole
 // fleet — the failure the control plane exists to remove was a config change
 // that only the process handling the request ever saw.
+//
+// A DEPLOYMENT MAY NAME WHO WRITES IT. When Tier A lists
+// `api.auth.company_writers`, the document is managed by the system holding
+// those tokens and every other credential is refused a change to it, here,
+// on every path onto it — ADR-0030, and managed.go for what counts as a
+// change.
 package configapi
 
 import (
@@ -512,6 +518,9 @@ func dryRunOf(w http.ResponseWriter, r *http.Request) (dryRun, ok bool) {
 // With `dry_run=true` it is the same request, checked in the same order, that
 // stores and activates nothing: see [Service.prepare].
 func (s *Service) put(w http.ResponseWriter, r *http.Request) {
+	if s.refusedManaged(w, r) {
+		return
+	}
 	dryRun, ok := dryRunOf(w, r)
 	if !ok {
 		return
@@ -551,7 +560,7 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 	if found {
 		built = active.ID
 	}
-	prepared, err := s.prepare(r.Context(), replaceDraft(incoming, built))
+	prepared, err := s.prepare(r.Context(), replaceDraft(incoming, built, authorOf(r)))
 	if err != nil {
 		s.refuseWrite(w, err, createOnly)
 		return
@@ -560,7 +569,7 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		writeChecked(w, prepared)
 		return
 	}
-	applied, err := s.commit(r.Context(), prepared, summary, authorOf(r))
+	applied, err := s.commit(r.Context(), prepared, summary)
 	if err != nil {
 		s.refuseWrite(w, err, createOnly)
 		return
@@ -588,6 +597,9 @@ var errEmptyPatch = errors.New("the patch is empty")
 // nothing to merge onto, and building a company out of one section is not
 // what this route is for — `PUT /config` shows the whole thing.
 func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
+	if s.refusedManaged(w, r) {
+		return
+	}
 	dryRun, ok := dryRunOf(w, r)
 	if !ok {
 		return
@@ -637,7 +649,7 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 		writeChecked(w, prepared)
 		return
 	}
-	applied, err := s.commit(r.Context(), prepared, summary, authorOf(r))
+	applied, err := s.commit(r.Context(), prepared, summary)
 	if err != nil {
 		s.refuseApply(w, err)
 		return
@@ -706,7 +718,10 @@ func (s *Service) refuseApply(w http.ResponseWriter, err error) {
 	var raced *RacedError
 	var patchErr *PatchError
 	var invalid *ValidationError
+	var managed *ManagedError
 	switch {
+	case errors.As(err, &managed):
+		RefuseManaged(w, managed)
 	case errors.Is(err, ErrNoActiveRevision):
 		writeJSON(w, http.StatusConflict, map[string]string{
 			"error": "no_active_revision",
@@ -781,6 +796,9 @@ func (s *Service) reload(w http.ResponseWriter, r *http.Request) {
 // can find later — and the epoch keeps advancing, which is what makes every
 // node reconcile onto it.
 func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
+	if s.refusedManaged(w, r) {
+		return
+	}
 	target, ok := s.lookup(w, r, r.PathValue("id"), "not_found")
 	if !ok {
 		return
@@ -798,6 +816,7 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	prepared, err := s.prepare(r.Context(), draft{
+		author: authorOf(r),
 		// VALIDATED SEPARATELY from the open, so each refusal says what is
 		// true. Opening holds a stored revision to no rule, and a revert is
 		// an apply: an old revision this build can no longer run is refused
@@ -839,7 +858,7 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 	if summary == "" {
 		summary = "revert to " + target.ID
 	}
-	applied, err := s.commit(r.Context(), prepared, summary, authorOf(r))
+	applied, err := s.commit(r.Context(), prepared, summary)
 	if err != nil {
 		s.refuseApply(w, err)
 		return

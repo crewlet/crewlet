@@ -636,6 +636,7 @@ in proxy access logs.
 | `api.auth.allow_anonymous_read: true` *(default)* | `GET`/`HEAD` outside `/config`, `/secrets` and `/setup` serve without a token; writes and those three surfaces still require one, and so do the individual reads that describe the deployment rather than the company's work (`/fleet`, `/integrations`) or somebody else's personal record (`/work/my-work`, `/work/people/{handle}`, `/work/inbox`, `/conversations`, and `?viewer=` on `/work/views`, each naming a seat other than the caller's own) |
 | `api.auth.allow_anonymous_read: false` | Every route needs a token, `/ws/stream` included. The lockdown posture for a deployment that terminates traffic somewhere reachable |
 | `api.auth.disabled: true` | Local development only. Everything serves unauthenticated **including writes**, attribution becomes `"anonymous"`, loud `WARNING` at startup |
+| `api.auth.company_writers` | The token ids that alone may **change** the company document; empty *(default)* is every token. See [Managed configuration](#managed-configuration) |
 
 Two combinations are worth calling out:
 
@@ -675,6 +676,82 @@ Failed attempts log `api_auth_failed` at WARNING (never the candidate token
 value); successes log `api_auth_ok` at DEBUG with `operator_id` and `route`.
 
 See the [API endpoints reference](../reference/api-endpoints.md#config--live-config-management-auth-gated) for the per-route auth + status semantics.
+
+### Managed configuration
+
+Some deployments do not edit the company document by hand at all: a GitOps
+pipeline applies it from a repository, or external tooling such as a
+Kubernetes operator renders it from custom resources and writes it on every
+reconcile. Such a system replaces the active revision with its own each time
+it runs, so an edit a person makes through the dashboard or the API lasts only
+until then — and nothing tells them. Naming the system's token as the
+document's only writer turns that silent loss into a refusal at the moment of
+the edit:
+
+```yaml
+api:
+  auth:
+    tokens:
+      - {id: gitops, token: "${CREWLET_API_TOKEN_GITOPS}"}
+      - {id: founder, token: "${CREWLET_API_TOKEN_FOUNDER}"}
+    company_writers: [gitops]   # only this token may change the company document
+```
+
+With `company_writers` set, every write that **changes** the document refuses
+any other credential with `403 config_managed`, naming the writers and what to
+do instead. Reads are unchanged: every token still reads `/config`, its
+history and its diffs.
+
+| Refused for a credential not listed | Still open to every credential |
+|---|---|
+| `PUT` and `PATCH /config`, every per-entity `PUT /config/{kind}/{id}`, `POST /config/revisions/{id}/revert`, and the `?dry_run=true` check of each — a check answers what the write would, and the write would be refused | `POST /config/reload`, which re-publishes the active document's own bytes |
+| A `/setup` connect that writes a pointer, a disconnect, and an agent's GitHub App — each refused **before** anything is sealed, queued or created at the vendor | A `/setup` submission that only rotates a value the document already names, and the provisioning pass and its check |
+| An offline `crewlet config import`, an offline `crewlet config activate` of any revision but the active one, and `crewlet run -import-company`; a `-company` bootstrap seed is ignored with a `company_seed_ignored` warning | `/secrets`, `crewlet secrets`, `crewlet config seal` and `crewlet config rekey`, and `crewlet config activate` of the active revision |
+
+**Why the secret store and a rotation stay open.** A leaked credential has to
+be replaced now, by whoever holds the new one, and the managing system cannot
+know it is needed. Writing the new value and re-publishing the unchanged
+document — `PUT /secrets/{name}` then `POST /config/reload`, or one rotation
+through Settings › Integrations — changes nothing the managing system renders,
+so it is the break-glass a person keeps. If the managing system also syncs the
+secret store, it will overwrite a rotated name it owns at its next sync; fix
+the value at its source as well.
+
+**The engine's own writes are not judged by the list.** A reconcile pass that
+records what it discovered at a vendor writes as the node, not as a
+credential; a managing system that re-renders the document should carry those
+values (they are in the active revision it reads back) or set them itself.
+That includes a provisioning pass any operator starts on demand from `/setup`
+or Settings › Integrations: where `integrations.jira` or
+`integrations.confluence` has no `cloud_id`, the Atlassian pass records the
+`cloud_id` and `site_url` of the site it found, and the revision is credited to
+the node (`reconcile loop`), not to the operator who pressed the button.
+
+**It prevents drift; it is not a privilege boundary.** `company_writers`
+stops a person's edit from being silently overwritten, and nothing more. Every
+token still writes the secret store and can reload, so a token that is not a
+writer can still change what the managed document *does* by rewriting a value
+it references — a model's API key, a webhook secret, or any URL or endpoint
+kept as a `${VAR}` — and publishing it with `POST /config/reload`. A
+deployment that needs to keep a credential away from the company's behaviour
+must not issue that credential a token at all.
+
+**The dashboard shows the document as managed.** The [`viewer`](../reference/api-endpoints.md#queries)
+answer says whether the caller may change the document and, to an operator,
+who manages it; every control that writes the document is drawn disabled with
+that sentence, and the org builder opens read-only.
+
+`crewlet validate` warns about a list that is valid and almost certainly wrong:
+an id that names no token in `api.auth.tokens` (it lets nobody write), a list
+naming no configured token at all (nothing may change the document through the
+API — a frozen document), and `api.auth.disabled: true` beside it (every caller
+is the unauthenticated one, which no list can name). An empty, mixed-case,
+repeated or reserved (`anonymous`) entry is refused outright. The list is per
+node, like the rest of `api.auth`: give every node the same one.
+
+To take the document back, remove `company_writers` from every node's Tier A
+and restart. The decision and its boundaries are
+[ADR-0030](https://github.com/crewlet/crewlet/blob/main/adr/0030-a-managed-company-document-names-its-writers.md).
 
 ---
 

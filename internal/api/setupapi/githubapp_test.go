@@ -118,7 +118,7 @@ func TestACallbackStateIsRefusedTheSecondTime(t *testing.T) {
 	flow := newService(t, setupapi.Options{StateKeys: []string{"k1:material"}}).AppFlow()
 	state := runtoken.New(runtoken.Options{
 		Key: runtoken.KeyFrom("github-app-manifest", []string{"k1:material"}),
-	}).Mint("sre-lead", 15*time.Minute)
+	}).Mint(setupapi.StateSubject("sre-lead", "founder"), 15*time.Minute)
 
 	if _, err := flow.Complete(t.Context(), "code-1", state); errors.Is(err, setupapi.ErrStateRefused) {
 		t.Fatalf("the first use of a fresh state was refused: %v", err)
@@ -144,7 +144,7 @@ func TestAnUnreadableClaimRegistryRefusesTheCallback(t *testing.T) {
 	}).AppFlow()
 	state := runtoken.New(runtoken.Options{
 		Key: runtoken.KeyFrom("github-app-manifest", []string{"k1:material"}),
-	}).Mint("sre-lead", 15*time.Minute)
+	}).Mint(setupapi.StateSubject("sre-lead", "founder"), 15*time.Minute)
 
 	_, err := flow.Complete(t.Context(), "code-1", state)
 	if !errors.Is(err, setupapi.ErrStateRefused) {

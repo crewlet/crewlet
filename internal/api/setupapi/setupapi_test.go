@@ -15,6 +15,7 @@ import (
 
 	"errors"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/atlassian"
@@ -95,7 +96,10 @@ type surface struct {
 func newSurface(t *testing.T) *surface { return newSurfaceWithApps(t, nil) }
 
 // newConfigSurface is the config write path over a store of the test's own.
-func newConfigSurface(t *testing.T) (*configapi.Service, *store.DB) {
+//
+// writers, when given, are the token ids Tier A names as the company
+// document's only writers (`api.auth.company_writers`).
+func newConfigSurface(t *testing.T, writers ...string) (*configapi.Service, *store.DB) {
 	t.Helper()
 	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "c.db"), store.Options{})
 	if err != nil {
@@ -106,8 +110,11 @@ func newConfigSurface(t *testing.T) (*configapi.Service, *store.DB) {
 		Store: db, Plane: coordmemory.NewFleet(),
 		// A DEPLOYMENT THE COMPANY CAN RUN ON: an embedded stream that
 		// persists, so the cross-tier rule has nothing to refuse.
-		Bootstrap: &config.Bootstrap{Stream: config.Stream{StoreDir: t.TempDir()}},
-		Now:       func() time.Time { return pinned },
+		Bootstrap: &config.Bootstrap{
+			Stream: config.Stream{StoreDir: t.TempDir()},
+			API:    config.API{Auth: config.APIAuth{CompanyWriters: writers}},
+		},
+		Now: func() time.Time { return pinned },
 	})
 	if err != nil {
 		t.Fatalf("configapi.New: %v", err)
@@ -213,7 +220,14 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 // not running, or seats that have not come up.
 func newSurfaceWithApps(t *testing.T, apps map[string]string) *surface {
 	t.Helper()
-	cfg, db := newConfigSurface(t)
+	return newManagedSurface(t, apps)
+}
+
+// newManagedSurface is newSurfaceWithApps on a deployment naming writers as
+// the company document's only writers; none is an unmanaged document.
+func newManagedSurface(t *testing.T, apps map[string]string, writers ...string) *surface {
+	t.Helper()
+	cfg, db := newConfigSurface(t, writers...)
 	v := &vault{}
 	s := &surface{
 		mux: http.NewServeMux(), config: cfg, vault: v, configs: db.Configs(),
@@ -246,7 +260,17 @@ func newSurfaceWithApps(t *testing.T, apps map[string]string) *surface {
 
 func (s *surface) do(t *testing.T, method, path, body string, headers map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
+	return s.doAs(t, "", method, path, body, headers)
+}
+
+// doAs is do carrying the operator id the guard would have attached; "" is
+// none, which is what every case that is not about who asks sends.
+func (s *surface) doAs(t *testing.T, operator, method, path, body string, headers map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	if operator != "" {
+		req = req.WithContext(auth.WithOperator(req.Context(), operator))
+	}
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
 	}

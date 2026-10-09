@@ -266,6 +266,56 @@ curl -X POST $CREWLET_URL/config/revisions/$REV/revert \
 
 ---
 
+## When another system manages the document
+
+Everything above is a person driving the API. When something else is the
+source of the company — a GitOps pipeline applying `company.yaml` from a
+repository, or external tooling such as a Kubernetes operator rendering it from
+custom resources — that system runs exactly these requests with its own token,
+and it replaces whatever is active each time it reconciles. A person's edit
+made in between lasts until then, and nothing says it was lost.
+
+Give the managing system its own token and name it as the document's only
+writer in every node's Tier A:
+
+```yaml
+api:
+  auth:
+    tokens:
+      - {id: gitops, token: "${CREWLET_API_TOKEN_GITOPS}"}
+      - {id: founder, token: "${CREWLET_API_TOKEN_FOUNDER}"}
+    company_writers: [gitops]
+```
+
+The pipeline keeps writing as above, with `Authorization: Bearer
+$CREWLET_API_TOKEN_GITOPS` and an `If-Match` on the revision it last wrote, so a
+person's reload in between is a `409` it re-reads rather than one it
+overwrites. Everyone else still reads — `GET /config`, the history, the diffs —
+and is refused a change:
+
+```bash
+curl -X PATCH $CREWLET_URL/config -H "$AUTH" \
+  -H "Content-Type: application/merge-patch+json" -H "X-Summary: a tweak" \
+  -d '{"mission":"ship it"}'
+# 403 {"error":"config_managed","managed_by":["gitops"],"detail":"…","hint":"…"}
+```
+
+The dashboard shows the document as managed by `gitops`: the org builder opens
+read-only and every control that writes the document is disabled with that
+sentence. What stays open is the break-glass for a leaked credential, which the
+managing system cannot know about — write the new value and re-publish the
+unchanged document:
+
+```bash
+printf %s "$NEW_VALUE" | curl -X PUT $CREWLET_URL/secrets/GITLAB_TOKEN -H "$AUTH" --data-binary @-
+curl -X POST $CREWLET_URL/config/reload -H "$AUTH" -H "X-Summary: rotate the leaked GitLab token"
+```
+
+The full list of what is refused and what stays open, and why, is in
+[Managed configuration](../concepts/configuration.md#managed-configuration).
+
+---
+
 ## Common error responses
 
 Every `400` about the document carries `problems`, the failures located and
@@ -279,6 +329,7 @@ classified, beside the `detail` that renders them.
 | `400` | `summary_required` | Any write with neither an `X-Summary` header nor a top-level `_summary` key in the body |
 | `400` | `invalid_query` | `dry_run` given as anything but `true` or `false` |
 | `401` | `invalid_token` | Bearer missing / wrong / wrong scheme |
+| `403` | `config_managed` | The document is [managed by another system](#when-another-system-manages-the-document) and this token is not one of `api.auth.company_writers`; `managed_by` names the writers. A write and its dry run alike |
 | `404` | `no_active_revision` | Reading `/config` before the first PUT |
 | `404` | `no_such_entity` | A per-entity `PUT` naming an id the active revision does not carry — this route never creates |
 | `404` | `no_route` | A path under `/config` this surface does not serve |

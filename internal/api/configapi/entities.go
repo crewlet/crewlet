@@ -490,6 +490,9 @@ func (s *Service) getEntity(kind string) http.HandlerFunc {
 // company's own (a warning, which only a check can show before the save).
 func (s *Service) putEntity(kind string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if s.refusedManaged(w, r) {
+			return
+		}
 		id := r.PathValue("id")
 		dryRun, ok := dryRunOf(w, r)
 		if !ok {
@@ -539,6 +542,7 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 			s.refuseEntity(w, kind, id, err)
 			return
 		}
+		d.author = authorOf(r)
 		prepared, err := s.prepare(r.Context(), d)
 		if err != nil {
 			s.refuseEntity(w, kind, id, err)
@@ -548,7 +552,7 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 			writeChecked(w, prepared)
 			return
 		}
-		applied, err := s.commit(r.Context(), prepared, summary, authorOf(r))
+		applied, err := s.commit(r.Context(), prepared, summary)
 		if err != nil {
 			s.refuseApply(w, err)
 			return

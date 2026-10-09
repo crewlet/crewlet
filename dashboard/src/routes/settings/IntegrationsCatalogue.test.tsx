@@ -16,6 +16,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Integrations } from "./Integrations.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { IntegrationsAnswer } from "~/contract/integrations.ts";
 import type { SetupListing, SetupToolState } from "~/protocol/types.ts";
@@ -133,16 +134,18 @@ afterEach(() => {
   localStorage.clear();
 });
 
-function mount() {
+function mount(viewer: unknown = []) {
   const store = new Store();
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
-    Promise.resolve(what === "integrations" ? answer : []);
+    Promise.resolve(what === "integrations" ? answer : what === "viewer" ? viewer : []);
   return render(
     <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <Integrations />
-      </Router>
+      <ViewerProvider>
+        <Router>
+          <Integrations />
+        </Router>
+      </ViewerProvider>
     </ClientContext.Provider>,
     { wrapper: LayerHost },
   );
@@ -234,4 +237,32 @@ test("without an operator token every form action is disabled with its reason", 
   expect(screen.queryByRole("dialog")).toBeNull();
   const datadog = await tile("Datadog");
   expect(controls(datadog)[0]?.getAttribute("href")).toBe("#/settings/integrations/datadog");
+});
+
+// A MANAGED DOCUMENT HOLDS WHAT WRITES IT (ADR-0030). Connect would add a
+// block the managing system removes again, so it is disabled naming who
+// manages the document; Rotate token seals a value the document already
+// names and changes nothing in it, so it stays — the break-glass a person
+// keeps when a key leaks.
+test("a managed document holds Connect and keeps Rotate token", async () => {
+  stubFetch({ status: 200, body: listing });
+  mount({
+    operator_id: "jane",
+    operator: true,
+    config_writer: false,
+    config_managed_by: ["gitops"],
+  });
+  // THE PAGE SAYS IT ONCE, and each held control carries the same sentence.
+  expect(
+    (await screen.findAllByText(/configuration is managed by gitops — change it there/)).some(
+      (el) => el.closest(".crewlet-callout") !== null,
+    ),
+  ).toBe(true);
+  const connect = await screen.findByRole("button", { name: "Connect Slack" });
+  await waitFor(() => expect(connect.getAttribute("aria-disabled")).toBe("true"));
+  fireEvent.click(connect);
+  expect(screen.queryByRole("dialog")).toBeNull();
+
+  fireEvent.click(await screen.findByRole("button", { name: "Rotate token for GitLab" }));
+  expect(await screen.findByRole("dialog", { name: "Rotate the GitLab token" })).toBeTruthy();
 });

@@ -1776,7 +1776,8 @@ company did.** Top to bottom:
   stopped and idle, and a sub-line naming only the states somebody is in);
   *Waiting on your decision* (the engine's `decisions` count plus the seats
   stopped on their budget that THIS reader can act on — raise the ceiling, a
-  `/config` write any presented token may make, or hand the item on with
+  `/config` write an operator token may make (on a managed document, only one
+  of its writers: `mayChangeConfig`), or hand the item on with
   `update_work_item` — the oldest wait in the warning ink, and **Review**
   into the Inbox's decisions view; a stopped seat the reader can do neither
   about is one of the conditions that "need a look" instead — an em dash and "Not bound to a person" for a reader who is
@@ -1785,8 +1786,9 @@ company did.** Top to bottom:
   *Completed* over the window, against the window before it; and *Tokens* over
   the window, with the **week's** budget meter captioned as the week's ("63% of
   this week's budget · resets Mon") in the engine's own state — or "No weekly
-  budget", which links to Spend › Budgets for an operator and is plain text for
-  anybody the screen behind it would refuse. The Tokens tile draws no delta:
+  budget", which links to Spend › Budgets for a reader who may change the
+  configuration (`mayChangeConfig`) and is plain text for anybody the screen
+  behind it would refuse. The Tokens tile draws no delta:
   its second line is the budget's, and a bare change in front of it read as a
   claim about the budget. A second line is whole FACTS, so a narrow tile breaks
   between them ("+17 vs last week" / "· 2 blocked"), never inside one. Each
@@ -2894,12 +2896,24 @@ screen that makes one goes through `protocol/configWrite.ts` (read the document
 and its entity tag, or one entity and the same tag; dry-run a merge patch or an
 entity replacement; save either with its audit summary), always conditional on
 the revision it edited. Its gate is the operator credential rather than a seat
-binding — `/config` is guarded by the API token and nothing narrower — so its
-controls ask `useConfigWriteAccess()`, which is `viewer.operator`, and are
-disabled with that sentence for anybody else.
+binding — `/config` is guarded by the API token, never by a seat — and, where
+another system [manages the
+document](../concepts/configuration.md#managed-configuration), only the tokens
+`api.auth.company_writers` names may change it. So its controls ask
+`useConfigWriteAccess()`, which reads `viewer.operator` and then the managed
+block (`viewer.config_writer` and `viewer.config_managed_by`), and are disabled
+with that block's sentence for anybody else: the operator sentence, or the
+managed one naming who manages the document (`managedSentence`), which is
+checked after the operator credential and before a screen's hold, since no
+screen can release it. A screen that decides whether a change is the reader's
+to make before anything is pressed — Home counting a budget-stopped seat as
+their decision, "No weekly budget" or "Set one" offered as a link, the org
+chart's **Add seat** — asks `mayChangeConfig(viewer)`, the same two answers
+without this moment's connection or hold.
 `protocol/configAnswer.ts` is the one reading of a `/config` refusal — a
-conflict to re-read, the drain gate's certain `503`, a request that may have
-landed, or the problems the document has — which the org builder's model
+conflict to re-read, `403 config_managed` (the `managed` kind, with the
+writers the engine named), the drain gate's certain `503`, a request that may
+have landed, or the problems the document has — which the org builder's model
 classifies through too.
 
 ## Honest empty states
@@ -5741,7 +5755,11 @@ change at a restart, so the screen edits nothing; **Edit people in org** leaves
 for the builder, where a contact and its binding are written. **It never holds
 a value** — not an answer's, and not the token this browser presents. A
 disabled guard is a red banner: every caller is `anonymous` and nobody acts as
-a person.
+a person. When the company document is
+[managed](../concepts/configuration.md#managed-configuration), the Tier A
+callout names its writers (`auth.company_writers`): only those tokens may
+change the company, and every other one reads it and can still rotate a
+credential it names. Nothing is said when every token may write.
 
 **Integrations** is a grid of **tiles, one per tool** — Slack, Mattermost,
 Atlassian, GitHub, GitLab, Datadog — each with the vendor's mark, the
@@ -5763,7 +5781,15 @@ one of five, decided by `actionFor` from the same inputs as the tag:
 | **Learn more** | nothing configured and this build answers no form for it | opens the tool's page on docs.crewlet.ai |
 
 The three that open the form are disabled — never hidden — with *Setting an
-integration up needs an operator token* when `/setup` refused the read. A
+integration up needs an operator token* when `/setup` refused the read. On a
+[managed document](../concepts/configuration.md#managed-configuration), for a
+token that is not one of its writers, the screen leads with a callout carrying
+the managed sentence, and **Connect** and **Continue** are disabled with it —
+they write the document — while **Rotate token** stays open: a rotation seals
+a value the document already names and changes nothing in it, which is the
+break-glass a managed deployment keeps for a person. On the tool's own page
+the same holds **Disconnect** and an agent's **Create app on GitHub**, and
+leaves the settings form, through which a credential is rotated, open. A
 tile carries no Disconnect: **the tool's own page is where Manage goes**, and
 it holds everything else — the facts, the agents and any faulted surface
 (open on arrival, behind a disclosure that can fold it away), each agent's own
@@ -6544,6 +6570,16 @@ while the screen binds the real chart, table, editor and dialogs, and
   ([the guide](../guides/org-builder.md#opening-the-builder) has the table).
   A stored token is never the test: an engine with auth disabled needs none.
   A token change mid-edit keeps the draft and checks it again.
+- **A managed document opens read-only.** When the viewer says another
+  system [manages the
+  document](../concepts/configuration.md#managed-configuration) and this
+  token is not one of its writers (`useManagedConfig()`), the builder draws
+  the organization with every editing control disabled and an info callout
+  carrying the managed sentence, and collects no draft for a save the engine
+  would refuse. If a check is answered `403 config_managed` before the viewer
+  says so, the toolbar's check status is **Managed by another system** and
+  the check's own `managed_by` decides the same way. A writer's token edits
+  as it would on a document nobody manages.
 - **Every draft is a dry run of the write a save would send.** The same
   `PATCH` with `If-Match` (or `PUT` with `If-None-Match: *` in create mode),
   plus `dry_run=true` and without the audit summary. A draft that changes

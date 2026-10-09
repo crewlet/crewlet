@@ -32,6 +32,13 @@ A few things worth knowing when deploying Crewlet:
   decision to make deliberately anywhere else — set
   `api.auth.allow_anonymous_read: false` to require a token for reads too, and
   never expose the API publicly with a dev-literal token.
+- **`api.auth.company_writers` prevents drift; it is not a privilege
+  boundary.** It refuses a change to a managed company document from any
+  token it does not list, but every token still writes the secret store and
+  can reload, so it can rewrite any value the document references through a
+  `${VAR}` — a model key, a webhook secret, an endpoint. Do not issue a token
+  to anyone you would not let change what the company does
+  (`docs/concepts/configuration.md#managed-configuration`).
 - **Config encryption at rest** is available and recommended when your
   company config carries secrets — see
   `docs/concepts/configuration.md#secrets`.

@@ -108,8 +108,11 @@ export function seatConditionsOf(agents: readonly AgentRow[]): SeatCondition[] {
  * when they can take one of them:
  *
  *  - RAISE THE CEILING — a change to the company document, which `/config`
- *    takes from any presented token (`api.auth.tokens` gates writes and all of
- *    `/config`, with no narrower grant), so `viewer.operator`;
+ *    takes from an operator's token and, where another system manages the
+ *    document (ADR-0030), only from one of its writers: `mayChangeConfig`
+ *    (`lib/useWriteAccess.ts`), the same answer the raise control is
+ *    disabled by, so a seat is never counted as a decision whose control
+ *    then refuses the reader;
  *  - HAND THE ITEM ON — `update_work_item` as the reader, which needs the
  *    engine to serve that write for them (`viewer.acts`) AND an item the seat
  *    was on: a seat stopped between turns has nothing to hand on.
@@ -121,14 +124,18 @@ export function seatConditionsOf(agents: readonly AgentRow[]): SeatCondition[] {
  */
 export function seatDecisionsFor<T extends { row: AgentRow }>(
   conditions: readonly T[],
-  viewer: { operator: boolean; acts: readonly string[] },
+  reader: {
+    /** Whether the reader may change the company's configuration: `mayChangeConfig`. */
+    configWrite: boolean;
+    acts: readonly string[];
+  },
 ): { mine: T[]; others: T[] } {
   const mine: T[] = [];
   const others: T[] = [];
   for (const c of conditions) {
     const item = c.row.turn?.work_item ?? c.row.live_call?.work_item ?? null;
-    const reassign = item !== null && viewer.acts.includes("update_work_item");
-    (viewer.operator || reassign ? mine : others).push(c);
+    const reassign = item !== null && reader.acts.includes("update_work_item");
+    (reader.configWrite || reassign ? mine : others).push(c);
   }
   return { mine, others };
 }

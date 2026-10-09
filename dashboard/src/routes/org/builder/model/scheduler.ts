@@ -89,7 +89,7 @@ export function backoffDelay(failures: number): number {
 }
 
 export type CheckStatus =
-  "checking" | "clean" | "problems" | "conflict" | "guarded" | "unreachable";
+  "checking" | "clean" | "problems" | "conflict" | "guarded" | "managed" | "unreachable";
 
 /**
  * Why the engine holds a revision the draft was not built on: every reason
@@ -122,6 +122,8 @@ export type CheckOutcome =
       readonly currentRevisionId: string | null;
     }
   | { readonly status: "guarded" }
+  /** Another system manages the document, and this token is not it (ADR-0030). */
+  | { readonly status: "managed"; readonly managedBy: readonly string[] }
   | { readonly status: "unreachable"; readonly detail: string };
 
 const text = (value: unknown): string => (typeof value === "string" ? value : "");
@@ -167,6 +169,8 @@ export function classifyCheck(
   switch (refusal.kind) {
     case "guarded":
       return { status: "guarded" };
+    case "managed":
+      return { status: "managed", managedBy: refusal.managedBy };
     case "conflict":
       return {
         status: "conflict",
@@ -259,7 +263,7 @@ export const INITIAL_CHECK: CheckState = {
   halted: false,
 };
 
-const HALTING: ReadonlySet<CheckStatus> = new Set(["conflict", "guarded"]);
+const HALTING: ReadonlySet<CheckStatus> = new Set(["conflict", "guarded", "managed"]);
 
 /** The next state of the check, and what to do about it. */
 export function transition(state: CheckState, event: CheckEvent): Transition {
@@ -406,6 +410,14 @@ export function saveRules(status: CheckStatus, hasChanges: boolean): SaveRules {
         save: false,
         waiting: false,
         reason: "Saving needs an operator token the engine accepts.",
+      };
+    case "managed":
+      return {
+        review: false,
+        save: false,
+        waiting: false,
+        reason:
+          "Another system manages this company's configuration, so it is not saved from here.",
       };
     case "problems":
       return { review: true, save: false, waiting: false, reason: "Fix the problems above first." };

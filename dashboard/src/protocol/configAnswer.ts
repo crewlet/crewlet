@@ -40,6 +40,13 @@ export type ConfigConflictReason =
 export type ConfigRefusal =
   /** The credential was refused: this surface is guarded in full. */
   | { readonly kind: "guarded" }
+  /**
+   * `403 config_managed`: the credential was ACCEPTED and is not one the
+   * deployment lets change the company document — another system manages
+   * it (ADR-0030). Nothing was stored, and no retry with this token changes
+   * the answer; [managedSentence] is how a screen says so.
+   */
+  | { readonly kind: "managed"; readonly managedBy: readonly string[] }
   | {
       readonly kind: "conflict";
       readonly reason: ConfigConflictReason;
@@ -68,6 +75,21 @@ export type ConfigRefusal =
       readonly hint: string;
     };
 
+/**
+ * Why a managed company document cannot be changed from here, naming who
+ * manages it (ADR-0030) — the ONE sentence every screen shows for it, whether
+ * the viewer said so before a press or the engine refused one.
+ *
+ * MANAGED IS NOT A PERMISSION THIS PERSON LACKS, it is where the company is
+ * written: another system renders the document and writes it with its own
+ * token, and replaces any revision made here at its next reconcile. So the
+ * sentence says where to change it, and what stays possible.
+ */
+export function managedSentence(managedBy: readonly string[]): string {
+  const who = managedBy.length > 0 ? managedBy.join(", ") : "another system";
+  return `This company's configuration is managed by ${who} — change it there. An edit made here would be overwritten; a credential it already names can still be rotated from Settings › Integrations.`;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -84,6 +106,15 @@ const text = (value: unknown): string => (typeof value === "string" ? value : ""
 export function classifyConfigRefusal(answer: ConfigAnswer): ConfigRefusal {
   const body = isRecord(answer.body) ? answer.body : {};
   const code = text(body.error);
+  // A MANAGED DOCUMENT'S REFUSAL IS NOT ABOUT THE TOKEN, which the engine
+  // accepted: it is about where the company is written (ADR-0030), so it is
+  // its own answer rather than a credential to replace.
+  if (answer.status === 403 && code === "config_managed") {
+    const managedBy = Array.isArray(body.managed_by)
+      ? body.managed_by.filter((id): id is string => typeof id === "string")
+      : [];
+    return { kind: "managed", managedBy };
+  }
   if (answer.status === 401 || answer.status === 403) return { kind: "guarded" };
   if (answer.status === 409 || answer.status === 412) {
     const reason: ConfigConflictReason =

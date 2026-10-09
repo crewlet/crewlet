@@ -52,6 +52,9 @@ import { useFillScreen } from "~/app/fill.tsx";
 import { matchesRow } from "~/app/keymap.ts";
 import { fmtDateTime, plural } from "~/lib/format.ts";
 import { useAgents, useConnection, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
+import { useManagedConfig } from "~/lib/useWriteAccess.ts";
+import { managedSentence } from "~/protocol/configAnswer.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { apiToken, onTokenChanged, requestToken } from "~/protocol/index.ts";
 import type { ConfigProblem, ConfigWarning } from "~/protocol/index.ts";
 import type { Tone } from "@crewlethq/ui";
@@ -129,6 +132,7 @@ import {
   SaveGlyph,
   UndoGlyph,
   TriangleAlertGlyph,
+  ShieldGlyph,
 } from "@crewlethq/icons/glyphs";
 import {
   Button,
@@ -342,6 +346,8 @@ function statusLook(status: CheckStatus, problems: number, tokenStored: boolean)
         tone: "danger",
         icon: KeyGlyph,
       };
+    case "managed":
+      return { label: "Managed by another system", tone: "neutral", icon: ShieldGlyph };
   }
 }
 
@@ -359,6 +365,16 @@ function statusLook(status: CheckStatus, problems: number, tokenStored: boolean)
 function conflictOf(state: BuilderState): Extract<CheckOutcome, { status: "conflict" }> | null {
   const outcome = state.check.outcome;
   return outcome?.status === "conflict" ? outcome : null;
+}
+
+/**
+ * Who manages the document, from the check's own answer, or `null`. Called
+ * only while the status is `managed`; the last answer decides, for the reason
+ * [conflictOf] gives.
+ */
+function managedByOf(state: BuilderState): readonly string[] | null {
+  const outcome = state.check.outcome;
+  return outcome?.status === "managed" ? outcome.managedBy : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -790,8 +806,24 @@ function BuilderScreen({
 
   // Read at render: a token change always dispatches, so this is current.
   const tokenStored = apiToken() !== "";
+  // A MANAGED DOCUMENT IS WRITTEN SOMEWHERE ELSE (ADR-0030): the engine says
+  // so on the viewer, and the builder stays a reader of it — every control
+  // drawn, every one disabled with who manages it — rather than collecting a
+  // draft the engine refuses at the save, or that the managing system
+  // replaces at its next reconcile if this credential were let through.
+  //
+  // AND IF THE ENGINE SAYS SO FIRST — a check answered `config_managed`
+  // before the viewer did — the check's own answer decides the same way.
+  const viewerManaged = useManagedConfig();
+  const viewerManagedBy = useViewer().configManagedBy;
+  const checkManagedBy = status === "managed" ? managedByOf(state) : null;
+  const managedBy = checkManagedBy ?? (viewerManaged !== null ? viewerManagedBy : null);
+  const managed = managedBy === null ? null : managedSentence(managedBy);
   const readOnlyReason = useMemo((): string | null => {
     if (save.unsettled || keeping.unsettled) return "the outcome of the last save is not known yet";
+    if (managedBy !== null) {
+      return `this company's configuration is managed by ${managedBy.join(", ") || "another system"}`;
+    }
     if (keeping.offer) return "a kept draft is waiting for Keep or Discard";
     if (posture.kind === "guarded" || status === "guarded") {
       return tokenStored ? "the engine refused this browser's token" : "no operator token is set";
@@ -802,6 +834,7 @@ function BuilderScreen({
   }, [
     save.unsettled,
     keeping.unsettled,
+    managedBy,
     keeping.offer,
     posture.kind,
     status,
@@ -1538,6 +1571,11 @@ function BuilderScreen({
           </div>
         )}
 
+        {managed !== null && (
+          <Callout variant="info" icon={<ShieldGlyph />}>
+            {managed}
+          </Callout>
+        )}
         {(posture.kind === "guarded" || status === "guarded") && (
           <Callout
             variant="danger"

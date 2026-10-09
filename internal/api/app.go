@@ -353,6 +353,9 @@ func New(opts Options) (*App, error) {
 	}
 	if opts.Bootstrap != nil {
 		sources.Access.AllowedOrigins = slices.Clone(opts.Bootstrap.API.Auth.AllowedOrigins)
+		// THE SAME LIST the config surface enforces, from the same Tier A,
+		// so the viewer offers exactly the edits that surface admits.
+		sources.Access.CompanyWriters = slices.Clone(opts.Bootstrap.API.Auth.CompanyWriters)
 	}
 	a.queries = queries.NewRegistry()
 	queries.Register(a.queries, sources)

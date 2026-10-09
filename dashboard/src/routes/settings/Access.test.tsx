@@ -31,7 +31,7 @@ class InertWebSocket {
 const HELD = "held-token-value-8Hq2";
 
 const answer: AccessAnswer = {
-  auth: { disabled: false, anonymous_read: true, allowed_origins: [] },
+  auth: { disabled: false, anonymous_read: true, allowed_origins: [], company_writers: [] },
   tokens: [
     { id: "ci", scope: "operator", seat: null, yours: false },
     { id: "founder", scope: "person", seat: { handle: "ana", name: "Ana Diaz" }, yours: true },
@@ -142,6 +142,26 @@ test("a disabled guard is said out loud", async () => {
   );
   expect((await screen.findByRole("alert")).textContent).toMatch(/api\.auth\.disabled/);
   expect(screen.getByText(/accepts no token at all/)).toBeDefined();
+});
+
+// A MANAGED DOCUMENT (ADR-0030) IS PART OF THE POSTURE: the writers are named
+// where the deployment's api.auth is read, and nothing is said when every
+// token may write.
+test("a managed document names its writers beside the tokens", async () => {
+  mount(async (what) =>
+    what === "access"
+      ? { ...answer, auth: { ...answer.auth, company_writers: ["gitops", "ci"] } }
+      : null,
+  );
+  const line = (await screen.findByText(/The company document is managed/)).closest("span");
+  expect(line?.textContent).toMatch(
+    /only the tokens gitops, ci may change it \(api\.auth\.company_writers\)/,
+  );
+  cleanup();
+
+  mount(async (what) => (what === "access" ? answer : null));
+  await screen.findAllByText("Ana Diaz");
+  expect(screen.queryByText(/The company document is managed/)).toBeNull();
 });
 
 test("a refused reader sees the refusal alone — no tiles, no empty lists", async () => {

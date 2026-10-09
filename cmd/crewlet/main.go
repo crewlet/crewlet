@@ -341,6 +341,9 @@ func (c configFlags) loadForRun(set *flag.FlagSet, importPath string) (
 	bootErr = nameTheNeighbour(*c.bootstrap, bootErr)
 
 	seed, seedErr := c.resolveSeed(set, importPath)
+	if bootErr == nil && seedErr == nil && seed.Override {
+		seedErr = refuseManagedOverride(boot, seed.Path)
+	}
 	// TIER A COMES BACK EVEN WHEN THE SEED DID NOT. The two documents fail
 	// independently, and a caller holding a valid Tier A can do something
 	// with it before reporting the other one's error — `crewlet run` opens

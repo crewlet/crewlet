@@ -101,7 +101,7 @@ node means nothing was done.
 | `POST` | `/fleet/broker/remove/{node}` | Remove a member from the metadata group through a live member's system account. `?confirm=` repeats the node id; refused while the node holds a live presence lease as a member unless `?force=true`. **Operator-only** |
 | `POST` | `/fleet/broker/remove-peer/{peer}` | The same removal, naming the voter by the raft peer id `GET /fleet/broker` shows — for a voter whose name no member has heard. `?confirm=` repeats the peer id. **Operator-only** |
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
-| `GET` | `/access` | Who can reach the company through this engine and as whom: the API token LABELS the guard accepts (never a value), the person each one acts as, every human seat with its contacts and the state of its binding, and the auth posture. **Always needs a token** (see [below](#get-access)) |
+| `GET` | `/access` | Who can reach the company through this engine and as whom: the API token LABELS the guard accepts (never a value), the person each one acts as, every human seat with its contacts and the state of its binding, and the auth posture — including `company_writers`, the tokens that alone may change a managed company document. **Always needs a token** (see [below](#get-access)) |
 | `GET` | `/credential-pool` | Every `providers.llm` entry, each key it rotates through by variable name, and which of them a vendor is refusing and until when — this node's pools beside the fleet's cooldown ledger (never a value). **Always needs a token** (see [below](#get-credential-pool)) |
 | `GET` | `/backups` | What the fleet has backed up: each owner's newest point as the trim reads it, and every backup a person asked a node for, failures included. **Always needs a token** (see [below](#get-backups)) |
 | `GET` | `/mcp-servers` | What each configured MCP server did on each live node — started, failed, tools served and the first failure — read off every node's presence heartbeat, beside what the configuration declares (never a credential). **Always needs a token** (see [below](#get-mcp-servers)) |
@@ -136,7 +136,7 @@ node means nothing was done.
 | `GET` | `/pages` | The company's own knowledge base: a filtered listing. Served only where `knowledge.backend` is `native` |
 | `GET` | `/pages/{id}` | One page with its body, comments, revision metadata, children and ancestor breadcrumb. `{id}` is the id, or `CONTAINER/Title` — the title matches the way the fleet CLAIMED it, so case and runs of whitespace are ignored and `ENG/deploy runbook` reaches a page called "Deploy  Runbook" |
 | `GET` | `/containers` | Every knowledge container this node knows about, with how many pages each holds. The engine materialises one per `space:` the org chart names, plus the two reserved ones, on every config apply; each carries `chart_epoch`, the activation its name and purpose were last written from (Unix milliseconds), so a configuration activated earlier never overwrites them |
-| `GET` | `/viewer` | **Who is asking.** The presented credential's operator id, whether it is an operator one, and the seat that binds it — a human seat naming that id in `contact.crewlet_operator_id`. Three distinct states, and a caller must tell them apart: no credential at all, a credential no seat claims, and a bound one. An unbound token is an **ordinary state**, not an error — the remedy is a line of company configuration, so the id is answered with no seat rather than refused. `acts` names the tools [`/operator/act`](#operatoract--the-dashboards-write-surface) would serve this caller: the catalogue's writes for a bound token, and an empty list for anybody else |
+| `GET` | `/viewer` | **Who is asking.** The presented credential's operator id, whether it is an operator one, and the seat that binds it — a human seat naming that id in `contact.crewlet_operator_id`. Three distinct states, and a caller must tell them apart: no credential at all, a credential no seat claims, and a bound one. An unbound token is an **ordinary state**, not an error — the remedy is a line of company configuration, so the id is answered with no seat rather than refused. `acts` names the tools [`/operator/act`](#operatoract--the-dashboards-write-surface) would serve this caller: the catalogue's writes for a bound token, and an empty list for anybody else. `config_writer` is whether this credential may change the company document, and `config_managed_by` who may when [another system manages it](../concepts/configuration.md#managed-configuration) — empty when nothing does, and for an anonymous caller |
 | `GET` | `/stream/snapshot` | Dashboard initial-state bundle, served from the in-memory projection (REST fallback for the WebSocket) |
 | `WS`  | `/ws/stream` | Live dashboard stream — agents, events, LLM invocations, health |
 | `GET` | `/dashboard` | Dashboard shell (`/` redirects here; `/static/{path}` serves its assets) |
@@ -241,6 +241,28 @@ consumer.
 ### `/config/*` — live config management (auth-gated)
 
 All `/config/*` routes require `Authorization: Bearer <token>` matching one of the tokens listed in Tier A `api.auth.tokens`. See the [Configuration concept doc](../concepts/configuration.md#auth) for the full auth model.
+
+**A managed document refuses every other writer.** When Tier A lists
+`api.auth.company_writers`, only those token ids may change the document:
+`PUT`, `PATCH`, every per-entity `PUT`, a revert and the `?dry_run=true` check
+of each answer any other credential `403 config_managed`, before anything is
+read or stored, and `/setup`'s connect, disconnect and GitHub App routes
+answer the same refusal before they touch the secret store or a vendor. Reads
+and `POST /config/reload` stay open to every credential. The body names who
+manages the document and what to do:
+
+```json
+{
+  "error": "config_managed",
+  "managed_by": ["gitops"],
+  "detail": "the company document is managed by gitops, and the credential \"founder\" may read it but not change it",
+  "hint": "change the company at its source, the system that writes it here with the token gitops: an edit made directly would be overwritten at its next reconcile. A leaked credential can still be rotated: write the new value with /secrets and POST /config/reload. To take the document back, remove api.auth.company_writers from every node's Tier A and restart"
+}
+```
+
+`403` rather than `401`, because the credential was accepted and a different
+one is the managing system's to hold, not the caller's to retry with. See
+[Managed configuration](../concepts/configuration.md#managed-configuration).
 
 **Read-only:**
 
@@ -548,6 +570,7 @@ On a `409`, re-read `/config` and send the edit again.
 - `201 Created`: a write produced a new revision; the body is `{"revision_id", "epoch", "warnings", "derived"}` (see [What a write answers](#what-a-write-answers)). A per-entity write, a reload and a revert return this too: each created one revision.
 - `400 Bad Request`: `invalid_body`, `invalid_patch` or `validation_error`, each with `detail` (the field path and what to change) and [`problems`](#refusals-carry-located-problems); `summary_required` when a write has neither an `X-Summary` header nor a `_summary` body key; `invalid_query` when `dry_run` is anything but `true` or `false`; `identity_mismatch` when a per-entity body renames what the path addresses
 - `401 Unauthorized`: missing or invalid bearer token (`{"error": "invalid_token"}`)
+- `403 Forbidden`: `config_managed` when `api.auth.company_writers` names the document's writers and this credential is not one of them, with `managed_by`, `detail` and `hint` — a write and its dry run alike; never a read or a reload
 - `404 Not Found`: a revision that is not there, `no_active_revision` on a read before the first write, `no_such_entity` on a per-entity write naming an id the active revision does not carry, or `no_route` for a path under `/config` this surface does not serve
 - `405 Method Not Allowed`: `method_not_allowed` for a `/config` path under a method it does not take, with `Allow`
 - `409 Conflict`: `revision_advanced` (a stale `If-Match`, or a race with a concurrent writer) or `no_active_revision` (a `PATCH` or a per-entity write on an unconfigured node, or a reload)
@@ -671,6 +694,12 @@ answer lists each violation as an `admission` warning.
 The command-line equivalent is [`crewlet config activate <UUID>`](cli.md#crewlet-config-activate)
 naming the revision that is already current.
 
+**Open on a managed document.** A reload changes no byte of the company, so
+[`api.auth.company_writers`](../concepts/configuration.md#managed-configuration)
+does not refuse it: it is how a credential somebody rotated in an emergency
+reaches the running seats when the system that manages the document cannot
+know it has to.
+
 #### Stored revisions are read as they are
 
 A read never validates what it reads. `GET /config`, a revision read, a diff,
@@ -744,6 +773,23 @@ across two requests.
 holds, which of them are unset, and the pages at each third-party app an
 administrator would visit. That is a map of what to attack, and it is not
 something the anonymous-read posture opens.
+
+**On a managed document** (Tier A `api.auth.company_writers`), a submission
+that would write a pointer into the document, a disconnect, and the begin of
+an agent's GitHub App answer a credential the list does not name
+`403 config_managed` — the [same refusal `/config` answers](#config--live-config-management-auth-gated)
+— before a value is sealed, a teardown is queued or GitHub is asked for
+anything. A submission that only rotates a value the document already points
+at is not a change to it and is served, ending in a reload as always; so are
+the provisioning pass and its read-only check. A provisioning pass any
+operator starts may still record what it discovered into the document — where
+`integrations.jira` or `integrations.confluence` has no `cloud_id`, the
+Atlassian pass records the site's `cloud_id` and `site_url` — and that revision is
+written as the node (`reconcile loop`), not as the credential that started
+the pass. A GitHub App creation carries
+the operator who began it in its signed state, so the callback records the
+app — its revision and its sealed key — as that credential, and asks again
+before it exchanges GitHub's one-time code.
 
 ### The requirement list
 
@@ -2168,7 +2214,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `schedule_runs` | `{scope_type, scope_id, name, limit}` | `GET /schedules/{scope_type}/{scope_id}/{name}/runs`. ONE schedule's dispatch history, newest first, fifty to a page. `schedules.recent_runs` is the COMPANY's fifty most recent fires across every schedule, so twenty hourly ones fill it in two and a half hours — "did the standup fire this week" was unanswerable while every row of the answer sat in the table. The identity is all THREE parts and each is required: two units may each declare a `standup`, and a role and a unit may both, so a name alone merges two teams' histories. `truncated` says the page filled, because a full page is otherwise indistinguishable from a schedule that has fired exactly that many times |
 | `schedules` | `{}` | `GET /schedules` |
 | `fleet_broker` | `{}` | `GET /fleet/broker`: what every live node advertises about its broker, the metadata group as a member reports it, and where the two disagree. **Operator-only** |
-| `access` | `{}` | `GET /access`: the token labels, the people and the posture the Settings › People & access screen draws. **Operator-only**. See [below](#get-access) |
+| `access` | `{}` | `GET /access`: the token labels, the people and the posture (`auth.company_writers` included) the Settings › People & access screen draws. **Operator-only**. See [below](#get-access) |
 | `credential_pool` | `{}` | `GET /credential-pool`: every model's keys and their cooldowns, the Settings › Models & keys screen. **Operator-only**. See [below](#get-credential-pool) |
 | `backups` | `{}` | `GET /backups`: each owner's newest backup and the backup history, the Settings › Backups & retention screen. **Operator-only**. See [below](#get-backups) |
 | `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Settings › Tools & MCP screen's Servers section. **Operator-only**. See [below](#get-mcp-servers) |
@@ -2196,7 +2242,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `work_inbox` | `{handle, unread, primary_only, snoozed, reasons, limit, cursor, since}` | `GET /work/inbox`. One person's notices, newest first, 50 to a page. Each names the ONE reason of eighteen it reached them under, `addressed` (it asks something of them rather than informing them), `fallback` (nobody better was found), and their own read and snooze marks. `actor` is who made the change — for an operator, the TOKEN, which is the audit trail — and `actor_seat` the person that token is bound to, which is who a row draws; `comment_id` and `turn_id` are the comment the change wrote and the turn that made it; `ask` is the question the notice is about — the ask itself for `asked`, the ask it answered for `answered` — as `{comment, asked_of, open, answered_by, answered_at, resolved, choice, decision}`, read NOW, so an ask somebody has since answered reads `open: false`. `snoozed` is `exclude` (the default), `include` (snoozed notices kept and marked) or `only` (just what was put off); a snooze whose time has come is back under every scope and is not `only`. `snoozed`, `unread`, `primary_only` and `reasons` all narrow the SCAN rather than the page, by the same rules the marks are computed with, so a page holds `limit` notices whenever the scope does — they used to be applied to the page after it was read while the cursor was taken before, so a person with their newest fifty notices snoozed or read opened an empty page with a cursor behind it. For a person with two identities a reason filter keeps a change only under the reason it is HEARD under — the strongest of its rows — so one change never answers two filters under two reasons. `primary_reasons` is the split that was APPLIED, defaulted, so a caller renders *you are seeing these because* without repeating the rule; `unread` and `primary` are counts over the PAGE and say so, because a total over the table is a second scan of rows this answer did not return. `reasons` FILTERS rather than classifies — the primary split classifies the same rows — and an unknown one is refused naming the eighteen. `since` is a log POSITION (`<stream>@<generation>:<sequence>`, what `seen_through` renders), never a bare sequence. Same scope rule as `work_my_work` |
 | `work_search` | `{q, limit, mode?}` | `GET /work/search`. The company's work RANKED against a phrase — `hybrid` by default (BM25 over the engine's own inverted list fused with the semantic scan over the replicated vectors), or `keyword` / `semantic` alone, which is the same fan-out a seat's `search_work_items` runs. Not a filter: `work_activity`'s `q` is an escaped LIKE over an excerpt, gated to a span of days, and answers a different question. Registered only where this node HOLDS an index, which is separate from holding the board: a node that joined recently has every row and no index, and answers `available: false` with `reason: "building"` rather than an error or an empty result — nothing is wrong, and a reader told *nothing matched* files the duplicate. It carries the same outcome fields as `knowledge` — `mode`, `served_mode`, `modes`, `degraded` and `coverage{nodes, complete, buckets_missing}` — and refuses a mode it does not know, and a `q` past 400 bytes as `bad_params` naming its size and the limit, rather than cutting it. A hit carries the item's `id`, `key`, `title`, `project`, `type`, `status`, `assignee` and `priority`, its index `snippet`, and its 1-based `rank` and no score, because what ordered it is a fusion across rankers and slices, and a fused number means nothing beside a BM25 one |
 | `work_routing` | `{record_id}` | `GET /work/routing/{record_id}`. Who ONE change woke, and under which reason — the fact no other tracker records. `tracker_notifications` has always been readable by RECIPIENT (`work_inbox`); this is the same rows by RECORD, which is a primary-key prefix scan and needs no index of its own. Each recipient names the ONE reason of eighteen that found them, `addressed` (it asks something of them), and `fallback`/`fallback_rank` (nobody better was found). `notified` is the history row's own flag and means the commit CARRIED a notification — never that somebody was woken, since the applier deliberately does not hold the roster that would need. So an empty recipient list is THREE facts and `delivery` tells them apart: `nobody` (announced, inside the retention window, and every candidate was the actor or has left), `swept` (older than `tracker.native.inbox_retention_days`, so their absence is not evidence), `unknown` (no horizon stated) and `quiet` (the commit announced nothing, which is most of them). `retained_from` is the instant that decision was made against |
-| `viewer` | `{}` | `GET /viewer`. `{operator_id, operator, handle, name, kind, acts, project}`; `acts` is what [`/operator/act`](#operatoract--the-dashboards-write-surface) serves this caller, empty unless the token is bound to a seat. `project` is where this person's `create_work_item` lands when it names none — the engine's own default for their seat (the seat's project, else its unit's, else the nearest ancestor's), so a screen offering "Create task" says where rather than working out a second answer; `""` when there is none, and a create must name one. Registered on EVERY build with no seam of its own: who is asking is a property of the request rather than of anything this node stores. Answers three states apart — anonymous (`operator_id` empty), bound (`handle` set), and presented-but-unbound (an id with no handle), which is an ordinary state rather than a refusal |
+| `viewer` | `{}` | `GET /viewer`. `{operator_id, operator, handle, name, kind, acts, project, config_writer, config_managed_by}`; `config_writer` is whether this credential may change the company document — false for an anonymous caller and for every credential a managed document's `api.auth.company_writers` does not list — and `config_managed_by` is that list, named to an operator only (which token can rewrite the company is the line of `access` most worth stealing) and `[]` when the document is not managed, so a screen draws every editing control disabled with who manages it rather than offering a save the engine refuses; `acts` is what [`/operator/act`](#operatoract--the-dashboards-write-surface) serves this caller, empty unless the token is bound to a seat. `project` is where this person's `create_work_item` lands when it names none — the engine's own default for their seat (the seat's project, else its unit's, else the nearest ancestor's), so a screen offering "Create task" says where rather than working out a second answer; `""` when there is none, and a create must name one. Registered on EVERY build with no seam of its own: who is asking is a property of the request rather than of anything this node stores. Answers three states apart — anonymous (`operator_id` empty), bound (`handle` set), and presented-but-unbound (an id with no handle), which is an ordinary state rather than a refusal |
 | `work_person` | `{handle}` | `GET /work/people/{handle}`. Scoped like `work_my_work`: absent is the caller's own seat, somebody else's needs an operator credential. `due` is the snoozes whose time has come, REPORTED rather than promoted: putting one back in the unread list is a write, and a read that performed one would change fleet state from a path with no operation id and no record. `priorities_set_by` is who last set the queue when it was not this person — the PERSON, a bound token's seat rather than the token's id, which nobody the stamp is shown to can resolve — which is how a lead's authority is made visible beside the `prioritised` wake the write sends them — a wake that names the task now at the top of the list, because a notification here is task-shaped and "your list changed" names nothing to act on. `max_snooze_ahead` is how far ahead a snooze may be set, in SECONDS — the engine's bound, so a screen offers only the presets `mark_inbox` will accept |
 | `work_views` | `{container, viewer, counts}` | `GET /work/views`. `container` is the strip's own — `workspace`, `project:ENG`, `unit:engineering`, `person:ana` — and it is REQUIRED, because a strip belongs to exactly one. `viewer` is whose personal views appear and whose pins come first, and it takes the [personal scope rule](#whose-record-a-personal-question-answers-for): your own seat, or an operator credential for anybody else's. Absent is the shared strip — no pins and no personal views but the shared ones — which is what a screen asks for before it knows who is looking, and it needs no credential. Every row carries `builtin`, which is what tells the six nobody saved from the ones somebody did: a builtin row has no `id`, so there is nothing to rename, protect, rank or pin. `params` is the saved query in `work_items`' own parameter names — this channel's, not the `list_work_items` TOOL's, which renames four of them for a model — so a caller either hands them straight back or, simpler, passes the view's `id` as `view=` and lets the engine expand it. `counts=true` adds `count` to every row PINNED for `viewer` — the `total_hint` `work_items{view, container}` answers for it, run as that viewer on the company's clock, with `count_capped` when it stopped at 10,000 — or `count_refused` naming why a view that no longer compiles could not be counted. At most 32 counts, in the strip's one read; it needs a `viewer`, since only a viewer has pins, and is refused `bad_params` without one |
 | `work_saved_views` | `{viewer, counts}` | `GET /work/views/saved`. Every SAVED view — never a builtin — that `viewer` can see across every container: the shared ones, and `viewer`'s own personal ones, pinned-for-them first and then by container (the workspace, projects, units, people) and the strip's own rank. Each row is `work_views`' row shape, so `container` says where it lives and `params` is its saved query. A sibling of `work_views` rather than a `container=` it takes, because a strip is ONE container's tabs and this is one PERSON's views — the inventory of what somebody saved and the pins a sidebar draws — which the workspace strip could not answer: a view saved on a project board appeared in neither. `viewer` takes the same [personal scope rule](#whose-record-a-personal-question-answers-for), and `counts=true` the same rule as `work_views`: every pinned row's `count` is its view run IN ITS OWN CONTAINER, which is what opening it runs |
@@ -3884,9 +3930,16 @@ other identity fields, one per config key — is its `value` as written with
 variable's value. The binding is not among the contacts, because it is an
 attribution rather than an address.
 
+`auth.company_writers` is `api.auth.company_writers` in Tier A's order: the
+token ids that alone may change the company document when another system
+[manages it](../concepts/configuration.md#managed-configuration). It is always
+a list, and `[]` means every token may. The screen names the writers beside the
+tokens, so an operator reading the deployment's `api.auth` sees whether the
+document is managed and by which credential.
+
 ```json
 {
-  "auth": {"disabled": false, "anonymous_read": true, "allowed_origins": []},
+  "auth": {"disabled": false, "anonymous_read": true, "allowed_origins": [], "company_writers": []},
   "tokens": [
     {"id": "ci", "scope": "operator", "seat": null, "yours": false},
     {"id": "founder", "scope": "person", "seat": {"handle": "ana", "name": "Ana Diaz"}, "yours": true}

@@ -771,3 +771,89 @@ describe("the builder that fills the window", () => {
     expect(calls).not.toContain(true);
   });
 });
+
+// A MANAGED DOCUMENT IS WRITTEN SOMEWHERE ELSE (ADR-0030). The builder stays a
+// reader of it: the chart is drawn, every edit is paused with who manages it,
+// and the sentence says where the change is made instead.
+describe("a document another system manages", () => {
+  const managedViewer = (what: string) =>
+    what === "viewer"
+      ? {
+          operator_id: "jane",
+          operator: true,
+          handle: "",
+          name: "",
+          kind: "",
+          acts: [],
+          project: "",
+          config_writer: false,
+          config_managed_by: ["gitops"],
+        }
+      : null;
+
+  test("the viewer's answer pauses every edit, naming who manages it", async () => {
+    storeToken("jane");
+    const engine = new Engine(company());
+    mountBuilder({ engine, query: managedViewer });
+    expect(await screen.findByText("CEO")).toBeDefined();
+    expect(
+      await screen.findByText(
+        /This company's configuration is managed by gitops — change it there/,
+      ),
+    ).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+    await waitFor(() =>
+      expect(liveRegion().textContent).toContain(
+        "Editing is paused because this company's configuration is managed by gitops",
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    const menu = await screen.findByRole("menu", { name: "Add to the organization" });
+    expect(
+      within(menu).getByRole("menuitem", { name: "Add unit" }).getAttribute("aria-disabled"),
+    ).toBe("true");
+  });
+
+  // AND THE ENGINE'S OWN REFUSAL DECIDES THE SAME WAY, when a check is
+  // answered `config_managed` before the viewer has said anything: it halts,
+  // and it is not mistaken for a refused token.
+  test("a check answered config_managed halts as managed, not as a refused token", async () => {
+    storeToken("jane");
+    const engine = new Engine(company());
+    engine.script = (r) =>
+      r.query.get("dry_run") === "true"
+        ? json(
+            { error: "config_managed", managed_by: ["gitops"], detail: "managed", hint: "there" },
+            403,
+          )
+        : null;
+    mountBuilder({ engine });
+    expect(await screen.findByText("Managed by another system")).toBeDefined();
+    expect(screen.queryByText("The engine refused the token")).toBeNull();
+    expect(screen.getByText(/managed by gitops — change it there/)).toBeDefined();
+    const checks = engine.checks().length;
+    fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+    await waitFor(() => expect(liveRegion().textContent).toContain("Editing is paused"));
+    expect(engine.checks()).toHaveLength(checks);
+  });
+
+  test("a writer the viewer names edits as before", async () => {
+    storeToken("gitops");
+    const engine = new Engine(company());
+    mountBuilder({
+      engine,
+      query: (what) =>
+        what === "viewer"
+          ? {
+              operator_id: "gitops",
+              operator: true,
+              config_writer: true,
+              config_managed_by: ["gitops"],
+            }
+          : null,
+    });
+    expect(await screen.findByText("No problems")).toBeDefined();
+    expect(screen.queryByText(/managed by gitops/)).toBeNull();
+  });
+});

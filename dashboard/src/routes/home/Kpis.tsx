@@ -23,6 +23,7 @@ import { href } from "~/app/router.tsx";
 import { decisionsHref } from "~/components/DecisionRow.tsx";
 import { fmtCount } from "~/lib/format.ts";
 import { useOrgBudget, useOrg } from "~/lib/store-hooks.ts";
+import { mayChangeConfig } from "~/lib/useWriteAccess.ts";
 import type { ViewerState } from "~/lib/viewer.ts";
 import type { QueryResult } from "~/lib/useQuery.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
@@ -70,7 +71,7 @@ export function Kpis({
       <WaitingTile viewer={viewer} waiting={waiting} error={waitingError} now={now} />
       <InProgressTile flow={flow} />
       <CompletedTile flow={flow} range={range} />
-      <TokensTile spend={spend} range={range} operator={viewer.operator} />
+      <TokensTile spend={spend} range={range} mayConfigure={mayChangeConfig(viewer)} />
     </section>
   );
 }
@@ -219,9 +220,11 @@ function CompletedTile({ flow, range }: { flow: QueryResult<WorkFlowAnswer>; ran
  * and a bare "−88%" in front of "No weekly budget" read as a claim about the
  * budget. The window-on-window change is Spend's, where it has its own axis.
  *
- * THE WAY TO SET A BUDGET IS OFFERED TO WHOEVER CAN SET ONE: an operator gets
- * "No weekly budget" as the link into Spend › Budgets; anybody else gets the
- * fact, since the screen behind the link would only refuse them.
+ * THE WAY TO SET A BUDGET IS OFFERED TO WHOEVER CAN SET ONE: a reader who may
+ * change the company's configuration (`mayChangeConfig` — an operator, and on
+ * a managed document one of its writers) gets "No weekly budget" as the link
+ * into Spend › Budgets; anybody else gets the fact, since the screen behind
+ * the link would only refuse them.
  *
  * AND ONLY ONCE IT IS A FACT. Before the engine's first `budget` report the
  * slice is `null` — nobody has read the counter — and the line says that
@@ -231,11 +234,12 @@ function CompletedTile({ flow, range }: { flow: QueryResult<WorkFlowAnswer>; ran
 function TokensTile({
   spend,
   range,
-  operator,
+  mayConfigure,
 }: {
   spend: QueryResult<TokenSeries>;
   range: HomeRange;
-  operator: boolean;
+  /** Whether the reader may set a ceiling: `mayChangeConfig`. */
+  mayConfigure: boolean;
 }) {
   const label = `Tokens · ${range.words}`;
   const budget = useOrgBudget();
@@ -265,7 +269,7 @@ function TokensTile({
           <Parts parts={budgetCaption(week, org?.timezone ?? budget?.timezone)} />
         ) : budget === null ? (
           "Weekly budget not reported yet"
-        ) : operator ? (
+        ) : mayConfigure ? (
           <a className="t-link" href={href(["spend", "budgets"])}>
             No weekly budget
           </a>
