@@ -51,6 +51,7 @@ func TestHealthNeverReportsASuccessfulApplyAsADivergence(t *testing.T) {
 	boot := bootstrapFor(t, 0)
 	boot.API.Port = freePort(t)
 	boot.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: token}}
+	seedEngineStore(t, boot)
 	e, err := engine.New(t.Context(), engine.Options{Bootstrap: boot})
 	if err != nil {
 		t.Fatalf("an engine with no company was refused: %v", err)
