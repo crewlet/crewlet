@@ -66,7 +66,11 @@ import (
 // the one allowance reaches every step without a parameter at each layer. The
 // one step no stop's context reaches is a hold given back on the context it
 // was TAKEN on, made before the stop existed; the engine binds that one at the
-// lease store the hold is taken through, which asks whether a stop has begun.
+// lease store the hold is taken through, which makes the give-back a step from
+// the moment the TEARDOWN that ends the hold's loop begins, whether it was in
+// flight by then or not — never from the drain, whose wait for running turns
+// those loops run straight through, so a pass that ends on its own during it
+// would otherwise spend what the seats are owed at its end.
 type StopBudget struct {
 	total time.Duration
 

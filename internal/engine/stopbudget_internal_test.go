@@ -121,8 +121,8 @@ func (s *heldPublishes) asked() []heldPublish {
 	return slices.Clone(s.seen)
 }
 
-// A HOLD GIVEN BACK ONCE THE STOP HAS BEGUN IS A STEP OF ITS ALLOWANCE, AND
-// ONE GIVEN BACK BEFORE IT IS NOT.
+// A HOLD GIVEN BACK ONCE THE TEARDOWN HAS BEGUN IS A STEP OF THE STOP'S
+// ALLOWANCE, AND ONE GIVEN BACK BEFORE IT — THE DRAIN'S WAIT INCLUDED — IS NOT.
 //
 // The integration loop's pass holds its surface's lease and gives it back as
 // it ends, on the context the hold was TAKEN on with its cancellation removed
@@ -130,10 +130,18 @@ func (s *heldPublishes) asked() []heldPublish {
 // pass. Against a store that had gone away the give-back sat out a client's
 // whole request timeout beside the stop's allowance, five seconds past it
 // ([holdLeases]). Here a store that answers a release only after a stall of
-// four allowances: before the stop the give-back waits it out, because a pass
-// ending on its own is no stop's step and charging it would spend what the
-// stop is owed; once the stop has begun, it ends with the allowance.
-func TestAHoldGivenBackDuringTheStopIsAStepOfItsAllowance(t *testing.T) {
+// four allowances, given back four times:
+//
+//   - before any stop, the give-back waits the stall out, because a pass
+//     ending on its own is no stop's step;
+//   - once the DRAIN has begun and before the teardown, the same, and the
+//     allowance is whole afterwards: the drain's wait for running turns has no
+//     bound and the integration loop runs through it, so a pass charged there
+//     spent the time the seats are given back on when the wait ends;
+//   - begun during the drain and still in flight when the TEARDOWN begins, it
+//     ends with the allowance, because the teardown is what waits for it;
+//   - begun once the teardown has, it ends with the allowance too.
+func TestAHoldGivenBackDuringTheTeardownIsAStepOfItsAllowance(t *testing.T) {
 	t.Parallel()
 	const ttl = 1500 * time.Millisecond
 	b := config.DefaultBootstrap()
@@ -150,7 +158,7 @@ func TestAHoldGivenBackDuringTheStopIsAStepOfItsAllowance(t *testing.T) {
 		t.Fatalf("OpenBackends: %v", err)
 	}
 	t.Cleanup(func() { back.Close(context.Background()) })
-	slow := &slowReleases{Backend: back.Coord}
+	slow := &slowReleases{Backend: back.Coord, entered: make(chan struct{}, 1)}
 	back.Coord = slow
 	e, err := New(t.Context(), Options{Bootstrap: &b, Company: company, Backends: back})
 	if err != nil {
@@ -161,12 +169,17 @@ func TestAHoldGivenBackDuringTheStopIsAStepOfItsAllowance(t *testing.T) {
 	allowance := seat.StopAllowance(ttl)
 	stall := 4 * allowance
 	hold := e.workerHold("hold-probe", time.Minute)
+	held := func() func() {
+		t.Helper()
+		release, ok, err := hold(t.Context())
+		if err != nil || !ok {
+			t.Fatalf("hold = (%v, %v), want it held", ok, err)
+		}
+		return release
+	}
 	giveBack := func() time.Duration {
 		t.Helper()
-		release, held, err := hold(t.Context())
-		if err != nil || !held {
-			t.Fatalf("hold = (%v, %v), want it held", held, err)
-		}
+		release := held()
 		slow.stall.Store(int64(stall))
 		defer slow.stall.Store(0)
 		started := time.Now()
@@ -178,26 +191,76 @@ func TestAHoldGivenBackDuringTheStopIsAStepOfItsAllowance(t *testing.T) {
 		t.Fatalf("before any stop, a hold's give-back ended after %v, inside the "+
 			"%v its store took: a pass ending on its own was charged to a stop", took, stall)
 	}
-	e.stopping()
+
+	// THE DRAIN'S ALLOWANCE, as [Engine.Drain] builds it at its first line.
+	drain := e.stopping()
+	if took := giveBack(); took < stall {
+		t.Fatalf("while the drain waited, a hold's give-back ended after %v, "+
+			"inside the %v its store took: a pass ending on its own during the "+
+			"drain was charged to the stop", took, stall)
+	}
+	step, done := seat.StopStep(seat.WithStopBudget(context.Background(), drain))
+	deadline, _ := step.Deadline()
+	left := time.Until(deadline)
+	done()
+	if budget := allowance - e.admissionShare(); left < budget/2 {
+		t.Fatalf("after a pass gave its hold back during the drain, a seat's "+
+			"give-back has %v of the stop's %v: the pass spent what the seats "+
+			"are owed", left, budget)
+	}
+
+	// IN FLIGHT ACROSS THE TEARDOWN'S START: begun during the drain, against
+	// the stalled store, and the teardown begins while it waits.
+	select {
+	case <-slow.entered:
+	default:
+	}
+	release := held()
+	slow.stall.Store(int64(stall))
+	returned := make(chan time.Time, 1)
+	go func() { release(); returned <- time.Now() }()
+	<-slow.entered
+	begun := time.Now()
+	e.tearingDown()
+	var across time.Duration
+	select {
+	case at := <-returned:
+		across = at.Sub(begun)
+	case <-time.After(10 * time.Second):
+		t.Fatal("a hold's give-back in flight when the teardown began never returned")
+	}
+	slow.stall.Store(0)
 	// HALF THE STALL separates the outcomes with room on both sides: the
 	// allowance is a quarter of it, and a give-back left to its own bound
 	// takes all of it.
+	if across >= stall/2 {
+		t.Fatalf("a hold's give-back in flight when the teardown began went on "+
+			"%v past it, against an allowance of %v: the teardown waited out "+
+			"its store rather than the stop's allowance", across, allowance)
+	}
+
 	if took := giveBack(); took >= stall/2 {
-		t.Fatalf("once the stop had begun, a hold's give-back took %v against "+
-			"an allowance of %v: it waited out its store rather than the stop's "+
-			"allowance", took, allowance)
+		t.Fatalf("once the teardown had begun, a hold's give-back took %v "+
+			"against an allowance of %v: it waited out its store rather than "+
+			"the stop's allowance", took, allowance)
 	}
 }
 
 // slowReleases is a lease store that answers a release only after stall, or
-// when the request's context ends first.
+// when the request's context ends first, saying on entered — when it is not
+// nil and has room — that a release has begun stalling.
 type slowReleases struct {
 	coord.Backend
-	stall atomic.Int64
+	stall   atomic.Int64
+	entered chan struct{}
 }
 
 func (s *slowReleases) Release(ctx context.Context, resource, owner string, epoch int64) (bool, error) {
 	if d := time.Duration(s.stall.Load()); d > 0 {
+		select {
+		case s.entered <- struct{}{}:
+		default:
+		}
 		select {
 		case <-ctx.Done():
 			return false, ctx.Err()

@@ -94,8 +94,8 @@ func (e *Engine) workerHold(name string, ttl time.Duration) schedule.HoldFunc {
 }
 
 // holdLeases is the lease store this node's holds are taken through: its own,
-// with every give-back made once its stop has begun drawn from the stop's one
-// allowance ([Engine.stopping]).
+// with every give-back drawn from the stop's one allowance for as long as it
+// runs once the TEARDOWN has begun ([Engine.stepOnceTornDown]).
 //
 // A HOLD IS GIVEN BACK BY WHOEVER ENDS THE WORK IT GUARDS — the setup runner,
 // at the end of a pass the integration loop or an operator ran — on the context
@@ -109,19 +109,26 @@ func (e *Engine) workerHold(name string, ttl time.Duration) schedule.HoldFunc {
 // one frame that holds both the store a hold is taken through and the stop that
 // can end it; the hold's own context was made before the stop existed.
 //
-// ONLY ONCE THE STOP HAS BEGUN. A pass ending on its own is not a step of
-// anybody's stop, and charging the allowance for it would spend, during an
-// ordinary day, the time the stop is owed. A give-back already in flight when
-// the stop begins keeps the bound it was made under, like every round trip in
-// flight at that moment.
+// ONLY WHILE THE TEARDOWN IS UNDER WAY, which is where the loops that hold are
+// ended and where the stop waits for them. A pass ending on its own is not a
+// step of anybody's stop, and that includes one ending while the DRAIN waits
+// for running turns: the wait has no bound, the integration loop runs through
+// it, and every surface that comes due in a drain of minutes gives its hold
+// back. Charged from the drain's start, a store that blinked under one of
+// those give-backs spent the time the seats are owed when the wait ends, and
+// every seat then lapsed on its TTL rather than being handed on. But a
+// give-back still in flight when the teardown begins is one the teardown waits
+// for, so it is a step from that moment on rather than left to its own client
+// timeout beside the allowance.
 type holdLeases struct {
 	coord.Backend
 	engine *Engine
 }
 
-// Release is [coord.Backend.Release], one step of the stop once it has begun.
+// Release is [coord.Backend.Release], a step of the stop for as long as it
+// runs once the teardown has begun.
 func (l holdLeases) Release(ctx context.Context, resource, owner string, epoch int64) (bool, error) {
-	ctx, done := seat.StopStep(seat.WithStopBudget(ctx, l.engine.stopBudget.Load()))
+	ctx, done := l.engine.stepOnceTornDown(ctx)
 	defer done()
 	return l.Backend.Release(ctx, resource, owner, epoch)
 }

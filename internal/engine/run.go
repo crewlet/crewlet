@@ -183,12 +183,20 @@ type Engine struct {
 
 	// stopBudget is the allowance every lease this node's stop gives back
 	// shares ([seat.StopBudget]) — the drain's and the teardown's — built by
-	// whichever reaches it first ([Engine.stopping]).
-	// An ATOMIC POINTER because it is read where no stop's context reaches:
-	// a hold given back by a loop the teardown is waiting for asks it
-	// whether a stop has begun ([holdLeases]), and nil is "not yet".
-	stopBudget     atomic.Pointer[seat.StopBudget]
+	// whichever reaches it first ([Engine.stopping]). Written once, inside
+	// stopBudgetOnce, and read only through it.
+	stopBudget     *seat.StopBudget
 	stopBudgetOnce sync.Once
+
+	// teardownBegun is done from the moment the TEARDOWN begins
+	// ([Engine.tearingDown]) — never the drain, whose wait for running turns
+	// the integration loop runs straight through — and is what a give-back
+	// no stop's context reaches watches to become a step of the stop
+	// ([Engine.stepOnceTornDown]). Made on first use under teardownOnce, so
+	// the zero engine a failed boot tears down has one too.
+	teardownOnce  sync.Once
+	teardownBegun context.Context
+	beginTeardown context.CancelFunc
 
 	// stopOnce does the same for the teardown [Engine.Stop] runs after the
 	// drain. A second teardown is not a harmless repeat: every step in it
@@ -1772,13 +1780,13 @@ func (e *Engine) Stop(ctx context.Context) {
 
 // stopping is the allowance this node's stop gives its leases back on — the
 // presence and seat leases, the duties it releases, and the holds its loops
-// give back as the teardown ends them ([holdLeases]) — built once, by the drain
-// or by a failed boot's teardown, whichever comes first. See [seat.StopBudget]
-// for why one allowance and not one per step. Its size is the stop allowance
-// of this node's own lease TTL ([seat.StopAllowance], one heartbeat interval)
-// LESS the share reserved for withdrawing its admission
-// ([Engine.admissionShare]), so the stop's coordination is still one allowance
-// in total.
+// give back as the teardown ends them ([Engine.tearingDown]) — built once, by
+// the drain or by a failed boot's teardown, whichever comes first. See
+// [seat.StopBudget] for why one allowance and not one per step. Its size is
+// the stop allowance of this node's own lease TTL ([seat.StopAllowance], one
+// heartbeat interval) LESS the share reserved for withdrawing its admission
+// ([Engine.admissionShare]), so the stop's coordination is still one
+// allowance in total.
 //
 // NOT the stop's lifecycle events, the custody flush or the last auxiliary
 // spend, which carry records on the event stream rather than give a lease
@@ -1788,10 +1796,75 @@ func (e *Engine) Stop(ctx context.Context) {
 // states. Nor the admission, which has no lapse to fall back on.
 func (e *Engine) stopping() *seat.StopBudget {
 	e.stopBudgetOnce.Do(func() {
-		e.stopBudget.Store(seat.NewStopBudget(
-			seat.StopAllowance(e.stopTTL()) - e.admissionShare()))
+		e.stopBudget = seat.NewStopBudget(
+			seat.StopAllowance(e.stopTTL()) - e.admissionShare())
 	})
-	return e.stopBudget.Load()
+	return e.stopBudget
+}
+
+// tearingDown is the stop's allowance ([Engine.stopping]), and the moment the
+// teardown begins, said to every give-back no stop's context reaches
+// ([Engine.stepOnceTornDown]).
+//
+// THE TEARDOWN AND NOT THE DRAIN, because the drain's wait for running turns
+// has no bound and nothing ends the loops that hold until the teardown does —
+// a pass that finishes during that wait is an ordinary pass, and the time it
+// spends belongs to it rather than to the seats the drain gives back at the
+// end. A boot that failed reaches the teardown too, and it begins there the
+// same way.
+func (e *Engine) tearingDown() *seat.StopBudget {
+	b := e.stopping()
+	e.teardownSignal()
+	e.beginTeardown()
+	return b
+}
+
+// teardownSignal is done once the teardown has begun ([Engine.tearingDown]).
+func (e *Engine) teardownSignal() context.Context {
+	e.teardownOnce.Do(func() {
+		e.teardownBegun, e.beginTeardown = context.WithCancel(context.Background())
+	})
+	return e.teardownBegun
+}
+
+// stepOnceTornDown is ctx for a give-back no stop's context reaches — a
+// hold's, given back on the context it was taken on ([holdLeases]) — and the
+// call that ends it, which the caller defers until the give-back returns.
+//
+// THE GIVE-BACK IS A STEP OF THE STOP'S ALLOWANCE FROM THE MOMENT THE TEARDOWN
+// BEGINS: at once, if it already has, or partway through, if the teardown
+// begins while the give-back is in flight — and cancelled when the allowance
+// runs out. Before that it is no step of anything and keeps ctx's own bound.
+// From the teardown's start rather than the give-back's, because the teardown
+// is what waits for it: it stops the loop that holds and waits out the pass in
+// flight, so a give-back begun during the drain and still running then is time
+// the stop spends — against a store that has gone away, a client's whole
+// request timeout beside the allowance — while one that finished during the
+// drain's wait spent nothing the stop is owed.
+func (e *Engine) stepOnceTornDown(ctx context.Context) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	begun := e.teardownSignal()
+	finished, watched := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(watched)
+		select {
+		case <-finished:
+			return
+		case <-begun.Done():
+		}
+		step, done := seat.StopStep(seat.WithStopBudget(context.Background(), e.stopping()))
+		defer done()
+		select {
+		case <-finished:
+		case <-step.Done():
+			cancel()
+		}
+	}()
+	return ctx, func() {
+		close(finished)
+		<-watched
+		cancel()
+	}
 }
 
 // stopTTL is the lease TTL a stop's bounds are fractions of: this node's own,
@@ -1826,8 +1899,9 @@ func (e *Engine) stopTTL() time.Duration {
 // failure came before [node.New].
 func (e *Engine) teardown(ctx context.Context) {
 	// THE STOP'S ONE ALLOWANCE, the drain's if there was one — see
-	// [Engine.stopping].
-	ctx = seat.WithStopBudget(ctx, e.stopping())
+	// [Engine.stopping] — and from here on the one a hold given back by a
+	// loop stopped below is charged to ([Engine.tearingDown]).
+	ctx = seat.WithStopBudget(ctx, e.tearingDown())
 	// After the drain: the waiter's keepalive is what stops a running box
 	// being reaped, so stopping it first would start the orphan clock on
 	// every in-flight run while turns are still finishing.
