@@ -64,9 +64,11 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 	applied := s.applyStatus(ctx)
 	target := s.activation(ctx)
 	nodeRows := make([]map[string]any, 0, len(nodes))
+	profiles := make([]placement.NodeProfile, 0, len(nodes))
 	for _, lease := range nodes {
 		id := nameIn(coord.ClassNode, lease.Resource)
 		profile := placement.FromMeta(id, lease.Meta)
+		profiles = append(profiles, profile)
 		row := map[string]any{
 			"id":    id,
 			"roles": profile.Roles.Names(),
@@ -148,7 +150,7 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 
 	out := map[string]any{
 		"nodes": nodeRows, "seats": seatRows, "duties": dutyRows,
-		"unplaceable":    s.unplaceable(nodeRows, seatRows),
+		"unplaceable":    s.unplaceable(profiles, seatRows),
 		"unmanned_roles": unmannedRoles(nodeRows),
 		"this_node":      s.NodeID,
 		// What the fleet is converging ON, so a lagging node reads as
@@ -257,7 +259,12 @@ func (s Sources) activation(ctx context.Context) activationTarget {
 // cannot: a seat pinned to a label no node carries is not "unclaimed yet", it
 // is unclaimable, and it stays that way until somebody changes the config or
 // starts a node that matches.
-func (s Sources) unplaceable(nodes, seats []map[string]any) []map[string]any {
+//
+// THE PROFILES AS PLACEMENT READS THEM ([placement.FromMeta]), so this view
+// and the seat hosts' seats_unplaceable judge a node by the same reading —
+// a node whose roles this build cannot read counts as running every role,
+// and a node that has withdrawn from placement counts as no home at all.
+func (s Sources) unplaceable(nodes []placement.NodeProfile, seats []map[string]any) []map[string]any {
 	if s.Company == nil {
 		return []map[string]any{}
 	}
@@ -274,23 +281,6 @@ func (s Sources) unplaceable(nodes, seats []map[string]any) []map[string]any {
 	for _, seat := range seats {
 		claimed[seat["handle"].(string)] = true
 	}
-	profiles := make([]placement.NodeProfile, 0, len(nodes))
-	for _, node := range nodes {
-		roles, err := placement.ParseRoles(node["roles"].([]string))
-		if err != nil {
-			// A role this build does not know, which is a peer running a
-			// newer one. Its own seats are its business; what this answer
-			// must not do is conclude that a seat is unplaceable because
-			// the node that can run it uses a word we have not learned.
-			log.Warn("fleet_unknown_node_role", "node", node["id"], "error", err)
-			roles = placement.DefaultRoles()
-		}
-		profiles = append(profiles, placement.NodeProfile{
-			ID: node["id"].(string), Roles: roles,
-			Labels: node["labels"].(map[string]string),
-		})
-	}
-
 	out := []map[string]any{}
 	for role := range organization.AllRoles() {
 		if !role.IsAgent() {
@@ -300,7 +290,7 @@ func (s Sources) unplaceable(nodes, seats []map[string]any) []map[string]any {
 		if claimed[handle] {
 			continue
 		}
-		if placementFits(role.Placement, profiles) {
+		if placementFits(role.Placement, nodes) {
 			// Unclaimed but placeable: a node could take it, so this is
 			// a moment rather than a fault.
 			continue
@@ -319,13 +309,14 @@ func (s Sources) unplaceable(nodes, seats []map[string]any) []map[string]any {
 // placementFits reports whether any live node may run a seat with this
 // placement.
 //
-// A node that does not run seats does not count, however well it matches: the
-// placement selector and the node's ROLE are different constraints, and a
+// A node that is not placing seats does not count, however well it matches:
+// the placement selector and the node's ROLE are different constraints, and a
 // company whose only label-matching node is an ingress-only node has a seat
-// nothing will ever claim.
+// nothing will ever claim — as does one whose only match has withdrawn,
+// because it cannot serve its seats at all, for as long as that lasts.
 func placementFits(p placement.SeatPlacement, nodes []placement.NodeProfile) bool {
 	for _, node := range nodes {
-		if node.RunsSeats() && p.Matches(node.ID, node.Labels) {
+		if node.PlacesSeats() && p.Matches(node.ID, node.Labels) {
 			return true
 		}
 	}

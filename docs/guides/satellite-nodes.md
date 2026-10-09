@@ -242,8 +242,10 @@ inbox_attached  seat=eu-support epoch=3 elapsed_ms=5.1
 
 Two failures to know by sight:
 
-- **`seats_unplaceable`** — no live node matches the selector. Usually a
-  typo (`zone: EU` does not match `zone: eu`; comparison is exact) or a
+- **`seats_unplaceable`** — no live node matches the selector, or the
+  only one that does cannot serve its seats right now and has withdrawn
+  (`seats_shed_unserviceable` on that node says why). Usually a typo
+  (`zone: EU` does not match `zone: eu`; comparison is exact) or a
   satellite that has not started. The seat is not being served, and
   every other node's sweep looks perfectly healthy, which is why this is
   logged rather than left to be noticed.
@@ -300,14 +302,20 @@ agent is down, and the fleet says so (`seats_unplaceable`) rather than
 quietly running it somewhere it does not belong. If that is not
 acceptable, run **two** satellites carrying the same label: the seat
 moves between them, and the fair share is computed per placement group,
-so the pinned seat does not eat into anything else's capacity.
+so the pinned seat does not eat into anything else's capacity — and
+nothing else eats into the pinned seat's: a satellite's share of the
+unpinned seats is a separate bound from its share of its own, so it
+keeps room for the seat it exists for and claims it first. A seat whose
+teardown failed on the satellite is charged against the unpinned seats
+before the pinned one, for the same reason.
 
 **A satellite is eligible for unpinned seats too.** It runs seats, so it
-takes its share of the ones nobody pinned — which is a real property to
-be deliberate about, because those seats' MCP servers may not work in a
-restricted network. There is no "only take pinned seats" switch. To keep
-general work off it, pin the general work to the core, which is one
-label and a YAML anchor rather than a block per role:
+takes its share of the ones nobody pinned — on top of its pinned seat,
+never instead of it — which is a real property to be deliberate about,
+because those seats' MCP servers may not work in a restricted network.
+There is no "only take pinned seats" switch. To keep general work off
+it, pin the general work to the core, which is one label and a YAML
+anchor rather than a block per role:
 
 ```yaml
 roles:

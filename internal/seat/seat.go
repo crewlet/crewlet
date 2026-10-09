@@ -11,13 +11,20 @@
 // A cleverer one is a standing temptation, so the reasons are worth stating:
 //
 //   - Greedy claim up to a fair share. Capacity is ceil(seats / live nodes),
-//     live nodes being the node:* presence leases of nodes that actually run
-//     seats. No membership service, no gossip, no coordinator — every node
+//     live nodes being the node:* presence leases of nodes that run seats
+//     and have not withdrawn from placement because they cannot serve them.
+//     No membership service, no gossip, no coordinator — every node
 //     computes the same number from the same table and stops there. Two nodes
 //     racing for the last seat is resolved by the lease, not by the
 //     arithmetic. With role placement in play the share is computed per
-//     placement GROUP and summed, because one fleet-wide ratio strands pinned
-//     seats; see [placement.Compute].
+//     placement GROUP, because one fleet-wide ratio strands pinned seats,
+//     and it bounds that group alone: a node holds at most its share OF EACH
+//     group it matches, claiming and shedding against each separately,
+//     because a total it could spend on any of them lets unpinned seats
+//     crowd out a pinned one. Seats it cannot give back are charged first,
+//     against the least constrained groups, through the same per-group
+//     numbers — never a second, pooled bound. See [placement.Compute] and
+//     [placement.Plan.Room].
 //   - Converge in BOTH directions. Claiming alone only converges for a fleet
 //     that SHRINKS: a node that booted alone holds every seat, and a peer
 //     joining later computes a share it can never reach because the seats it
@@ -447,10 +454,13 @@ type SweepResult struct {
 	// the undead by design — nothing new starts on a seat whose teardown
 	// was never proven.
 	Held int
-	// Capacity is this node's fair share, summed over the placement groups
-	// it is eligible for.
+	// Capacity is this node's fair share: the sum of its shares of the
+	// placement groups it is eligible for. Each share bounds only its own
+	// group, so this is how many seats the node may hold in all, never how
+	// many of any one group. Zero while it is withdrawn.
 	Capacity int
-	// LiveNodes is how many live nodes run seats at all — the denominator.
+	// LiveNodes is how many live nodes are placing seats — running seats,
+	// and not withdrawn — the denominator.
 	LiveNodes int
 	// Claimed are the seats this pass newly established. A seat is counted
 	// only once its acquire hook succeeded.
@@ -461,11 +471,13 @@ type SweepResult struct {
 	// erased whatever the pass had shed, so a node that gave back two
 	// seats and then lost a third reported only the third.
 	Lost []string
-	// Unplaceable are the seats whose placement matches no live
-	// seat-running node. Nothing this node can act on — a pin to a node
-	// that is down, a label nobody carries — but it is the one placement
-	// failure that is otherwise invisible: the seat is simply not served,
-	// and every node in the fleet reports a perfectly healthy sweep.
+	// Unplaceable are the seats whose placement matches no live node
+	// placing seats, read off the same per-group shares the claims are
+	// bounded by. Nothing this node can act on — a pin to a node that is
+	// down or withdrawn, a label nobody carries — but it is the one
+	// placement failure that is otherwise invisible: the seat is simply
+	// not served, and every node in the fleet reports a perfectly healthy
+	// sweep.
 	Unplaceable []string
 	// BlockedByProtocol is the fleet's protocol floor when an
 	// older-protocol peer holds a presence or seat lease and this node is

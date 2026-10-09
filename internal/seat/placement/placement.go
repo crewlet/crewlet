@@ -21,10 +21,49 @@
 // forever, while every node in the fleet reports a perfectly healthy sweep.
 //
 // The share is therefore computed per placement GROUP, over the nodes
-// eligible for that group, and summed over the groups this node matches. A
-// fleet with no placements anywhere collapses to one group and the plain
-// ceil(seats / nodes): the unconstrained company is the degenerate case, not
-// a second code path. See [Compute].
+// eligible for that group. A fleet with no placements anywhere collapses to
+// one group and the plain ceil(seats / nodes): the unconstrained company is
+// the degenerate case, not a second code path. See [Compute].
+//
+// # A share bounds its own group and nothing else
+//
+// Summing the per-group shares into one number a node may fill with any
+// seat it is eligible for brings the stranding back by another door. A
+// satellite labelled for one pinned seat also matches the unpinned group, so
+// its capacity is 1 (the pinned seat) + 1 (its third of three unpinned
+// seats) = 2. Fill those two with unpinned seats — they sort first — and it
+// is at capacity with the pinned seat unclaimed, while no other node may run
+// that seat and every node's arithmetic says the fleet has room for it: no
+// sweep claims it and nothing is reported unplaceable.
+//
+// So a node holds at most its share OF EACH GROUP, and capacity is not
+// fungible across groups: [Plan.Room] is per group, and the host claims and
+// sheds against it and against nothing else. Every group is then covered on
+// its own terms — its eligible nodes' shares sum to at least its size, and
+// nothing outside the group can occupy them — which is also what lets
+// [Plan.Unplaceable] be read off the same arithmetic: a group is unplaceable
+// exactly when its eligible nodes' shares cannot reach its size, and the only
+// way that happens is when it has none.
+//
+// # A total kept beside the groups strands the same seat
+//
+// A node also holds leases it cannot give back — a seat whose teardown it
+// could not prove — and those count against what it may hold, wherever they
+// sit. A second, pooled bound for them (capacity less everything held) is the
+// fungible capacity again by the back door: a satellite holding one unpinned
+// seat and one such lease is "full" while its pinned group has room, and
+// sheds nothing because no group is over. So there is no second bound. The
+// leases that cannot be given back are charged first, and what capacity is
+// left is handed to the groups most constrained first, each up to its share
+// — one number per group, which both the claim and the give-back read.
+//
+// # Who counts
+//
+// The nodes a share divides by are the live nodes PLACING seats: they run
+// seats, and have not withdrawn ([NodeProfile.Withdrawn]). A node that holds
+// none and claims none while it stays live is a share nobody takes up — its
+// peers leave it free for a node that will never claim it, and every one of
+// them reports a healthy sweep.
 package placement
 
 import (
@@ -285,17 +324,35 @@ type NodeProfile struct {
 	Roles  RoleSet
 	Labels map[string]string
 
-	// Held is how many seat leases the node says it holds — the seats it
-	// runs and the ones whose teardown it could not prove — as of its last
-	// presence renewal (see [HeldKey]). A count the row does not carry
-	// readably reads as zero, which errs toward trying: the sweep claims
-	// nothing on the counts, so a low sum costs a pass, never a seat.
+	// Held is how many seat leases the node says it holds on PLACEABLE
+	// seats — the seats it runs and the ones whose teardown it could not
+	// prove, less any lease on a seat its last plan found no live node may
+	// run — as of its last presence renewal (see [HeldKey]). The only
+	// reader compares the fleet's sum with the placeable seats, so a lease
+	// on any other seat would stand in for a free one. A count the row does
+	// not carry readably reads as zero, which errs toward trying: the sweep
+	// claims nothing on the counts, so a low sum costs a pass, never a seat.
 	Held int
 
 	// Broker is how this node's broker takes part in the fleet's. Read off
 	// a peer's row, [BrokerUnknown] means the row did not say — see
 	// [BrokerKind] for why that is never read as a leaf.
 	Broker BrokerKind
+
+	// Withdrawn says the node runs seats but has stepped out of placement
+	// for now: it cannot serve its seats' work at all, so it gives back
+	// every seat it holds and claims none until that clears. It is not
+	// counted among the nodes a group's share divides by ([Compute]), so
+	// its peers take up the share it would otherwise leave free, and a
+	// group only it matches is reported unplaceable — which, while it is
+	// withdrawn, is exactly what that group is. Written by the seat host
+	// beside the profile (see [WithdrawnKey]); a row that does not say
+	// reads as not withdrawn, the reading every build before it gave.
+	//
+	// NOT a node that is merely not ready to claim yet. That one keeps
+	// serving every seat it holds, so its share is not free: counting it
+	// out would have its peers report a group it is serving as unplaceable.
+	Withdrawn bool
 }
 
 // HeldKey is where a presence row carries [NodeProfile.Held].
@@ -309,9 +366,17 @@ type NodeProfile struct {
 // it, because it is live state and the profile is configuration.
 const HeldKey = "seats_held"
 
-// RunsSeats reports whether this node claims seats at all. It is the
-// denominator test.
+// WithdrawnKey is where a presence row carries [NodeProfile.Withdrawn]:
+// present, and true, only while the node is withdrawn. Live state written by
+// the seat host beside the profile, for the reason [HeldKey] is.
+const WithdrawnKey = "seats_withdrawn"
+
+// RunsSeats reports whether this node is configured to run seats at all.
 func (n NodeProfile) RunsSeats() bool { return n.Roles.Has(RoleSeats) }
+
+// PlacesSeats reports whether this node takes part in seat placement now: it
+// runs seats and has not withdrawn. It is the denominator test.
+func (n NodeProfile) PlacesSeats() bool { return n.RunsSeats() && !n.Withdrawn }
 
 // RunsWorkers reports whether this node runs the company-wide singleton
 // duties.
@@ -372,6 +437,10 @@ func FromMeta(nodeID string, meta map[string]any) NodeProfile {
 		Labels: labelsFromMeta(meta["labels"]),
 		Held:   heldFromMeta(meta[HeldKey]),
 		Broker: brokerFromMeta(meta["broker"]),
+		// Only a real true. Anything else — absent, a string, a number — is
+		// the reading a build that never wrote the key gives: the node is
+		// counted, and the worst that costs is the share it leaves free.
+		Withdrawn: meta[WithdrawnKey] == true,
 	}
 }
 
@@ -465,11 +534,44 @@ type Seat struct {
 	Placement SeatPlacement
 }
 
+// Group is one placement group this node may claim from: the seats that share
+// a placement, and how many of them this node may hold.
+type Group struct {
+	// Placement is the constraint every seat in the group carries.
+	Placement SeatPlacement
+
+	// Handles are the group's seats, in the order the seats were given.
+	Handles []string
+
+	// Nodes is how many live nodes placing seats ([NodeProfile.PlacesSeats])
+	// match the placement, this one included.
+	Nodes int
+
+	// Share is how many of THIS GROUP's seats this node may hold:
+	// ceil(len(Handles) / Nodes). It bounds the group and nothing else —
+	// room left in one group is never room in another (see the package
+	// doc).
+	Share int
+}
+
 // Plan is what this node may claim, how much of it, and what nobody can.
 type Plan struct {
-	// Capacity is this node's fair share, summed over the placement groups
-	// it is eligible for. Zero for a node that does not run seats.
+	// Capacity is the sum of this node's per-group shares — how many seats
+	// it may hold in all, leases it cannot give back included. Never room
+	// to spend on any one group: [Plan.Room] hands it out group by group.
+	// Zero for a node that is not placing seats.
 	Capacity int
+
+	// Groups are the placement groups this node may claim from, MOST
+	// CONSTRAINED FIRST: fewest eligible nodes, a placement before
+	// "anywhere" at a tie, then the order the seats were given. A group few
+	// nodes may serve has the fewest ways to be served, so when a pass can
+	// claim only so many seats (the per-sweep claim limit) its seats are
+	// the ones taken first. Coverage does not depend on this order —
+	// [Plan.Room] does that — only how soon it is reached. It is also the
+	// order [Plan.Room] hands out capacity in when a node holds leases it
+	// cannot give back, so those squeeze the least constrained groups.
+	Groups []Group
 
 	// Eligible are the seat handles this node is allowed to hold, in the
 	// order the seats were given. Eligibility is not a preference to be
@@ -477,47 +579,96 @@ type Plan struct {
 	// however much capacity it has spare.
 	Eligible []string
 
-	// Unplaceable are the seats no live seat-running node matches — a pin
-	// to a node that is down, or a label nobody carries. Not something the
-	// engine can fix, since widening the selector is exactly what the
-	// operator asked it not to do, but it must be reported rather than
-	// dropped: the seat is simply not being served, and every node's sweep
-	// otherwise looks perfectly healthy. The host logs seats_unplaceable
-	// from this.
+	// Unplaceable are the seats the fleet's claim bounds cannot reach: a
+	// group whose eligible nodes' shares sum to less than its size, which —
+	// shares being ceilings — is exactly a group no live node placing seats
+	// matches, such as a pin to a node that is down or withdrawn, or a label
+	// nobody carries. Not something the engine can fix, since widening the
+	// selector is exactly what the operator asked it not to do, but it must
+	// be reported rather than dropped: the seat is simply not being served,
+	// and every node's sweep otherwise looks perfectly healthy. The host
+	// logs seats_unplaceable from this.
 	Unplaceable []string
 
-	// SeatNodes is how many live nodes run seats at all — the denominator
+	// SeatNodes is how many live nodes are placing seats — the denominator
 	// that used to be "every live node".
 	SeatNodes int
+}
+
+// Room is how many more seats this node may claim in each of [Plan.Groups],
+// index for index. NEGATIVE is how many of that group's running seats it
+// holds past what it may keep — exactly what the host gives back. It is the
+// ONE bound: claiming and giving back both read it, and there is no total
+// beside it (see the package doc for what a second, pooled bound strands).
+//
+// running reports a seat this node runs. stuck are the seat leases it holds
+// and cannot give back yet — a teardown it could not prove, still renewed so
+// no peer runs the seat twice — in a group or in none (a role it may no
+// longer run). They count against what it may hold because this process may
+// still be serving them, and they are charged FIRST, since they cannot be
+// put down. What is left of [Plan.Capacity] then goes to the groups in their
+// order, most constrained first, each up to its share less its own stuck
+// seats. So a stuck lease squeezes the least constrained group before the
+// pinned seat with no other home, and a group whose stuck seats alone reach
+// its share keeps none of its running ones.
+//
+// Once the node holds what Room allows, every group is within its share and
+// the whole holding within capacity, except where stuck leases alone exceed
+// them, which no give-back can mend.
+func (p Plan) Room(running func(handle string) bool, stuck []string) []int {
+	index := make(map[string]int)
+	for i, g := range p.Groups {
+		for _, h := range g.Handles {
+			index[h] = i
+		}
+	}
+	stuckIn := make([]int, len(p.Groups))
+	for _, h := range stuck {
+		if i, ok := index[h]; ok {
+			stuckIn[i]++
+		}
+	}
+
+	budget := max(p.Capacity-len(stuck), 0)
+	room := make([]int, len(p.Groups))
+	for i, g := range p.Groups {
+		keep := min(max(g.Share-stuckIn[i], 0), budget)
+		budget -= keep
+		room[i] = keep
+		for _, h := range g.Handles {
+			if running(h) {
+				room[i]--
+			}
+		}
+	}
+	return room
 }
 
 // Compute works out this node's share of a placement-constrained company.
 //
 // me is always counted as live whether or not the presence read returned it:
 // before the first successful renew there is no row yet, and a store blip
-// must not make a node invisible to itself. A node missing from its own
-// fleet finds zero eligible nodes for every group, claims nothing, and
-// reports every seat unplaceable.
+// must not make a node invisible to itself. A node that does not place seats
+// itself — it runs none, or it has withdrawn — is eligible for nothing and
+// counts in no group, the same arithmetic its peers run on it.
 //
 // me also WINS over any profile for the same id in live. Its own presence
 // row may have been written by its previous incarnation and can describe
 // roles or labels this process no longer has; believing the row over the
 // process would make a node claim seats it is no longer configured for.
 //
-// Seats are grouped by placement, each group's share is
-// ceil(group size / nodes eligible for that group), and this node's capacity
-// is the sum over the groups it belongs to. The share is a CEILING, and that
-// is what makes the host's give-back settle instead of oscillating: the
-// shares sum to at least the seat count, so a node that has shed down to its
-// share has no room to immediately re-claim what it just let go.
+// Seats are grouped by placement, and each group's share is
+// ceil(group size / nodes eligible for that group) — a bound on that group
+// alone (see the package doc for why a summed, fungible capacity strands a
+// pinned seat). The share is a CEILING, and that is what makes the host's
+// give-back settle instead of oscillating: a group's shares over its
+// eligible nodes sum to at least its size, so a node that has shed a group
+// down to its share has no room in it to immediately re-claim what it just
+// let go.
 func Compute(seats []Seat, me NodeProfile, live []NodeProfile) Plan {
 	seatNodes := seatRunners(me, live)
 
-	type group struct {
-		placement SeatPlacement
-		handles   []string
-	}
-	groups := make(map[string]*group)
+	groups := make(map[string]*Group)
 	var groupOrder []string
 	handleOrder := make([]string, 0, len(seats))
 
@@ -525,11 +676,11 @@ func Compute(seats []Seat, me NodeProfile, live []NodeProfile) Plan {
 		key := seat.Placement.Key()
 		g, ok := groups[key]
 		if !ok {
-			g = &group{placement: seat.Placement}
+			g = &Group{Placement: seat.Placement}
 			groups[key] = g
 			groupOrder = append(groupOrder, key)
 		}
-		g.handles = append(g.handles, seat.Handle)
+		g.Handles = append(g.Handles, seat.Handle)
 		handleOrder = append(handleOrder, seat.Handle)
 	}
 
@@ -539,30 +690,47 @@ func Compute(seats []Seat, me NodeProfile, live []NodeProfile) Plan {
 
 	for _, key := range groupOrder {
 		g := groups[key]
-
-		matching := 0
 		for _, node := range seatNodes {
-			if g.placement.Matches(node.ID, node.Labels) {
-				matching++
+			if g.Placement.Matches(node.ID, node.Labels) {
+				g.Nodes++
 			}
 		}
-		if matching == 0 {
-			for _, h := range g.handles {
+		// Per group, over the nodes eligible for THIS group. A fleet-wide
+		// ratio here is the stranding bug the package doc opens with.
+		g.Share = share(len(g.Handles), g.Nodes)
+
+		// THE SAME ARITHMETIC THE CLAIMS RUN ON. Every eligible node holds
+		// at most Share of this group, so Nodes × Share is all of it the
+		// fleet will ever hold; a group that bound cannot cover is one no
+		// sweep will finish, and it is reported rather than believed served.
+		if g.Nodes*g.Share < len(g.Handles) {
+			for _, h := range g.Handles {
 				unplaceable[h] = struct{}{}
 			}
 			continue
 		}
-		if !me.RunsSeats() || !g.placement.Matches(me.ID, me.Labels) {
+		if !me.PlacesSeats() || !g.Placement.Matches(me.ID, me.Labels) {
 			continue
 		}
 
-		// Per group, over the nodes eligible for THIS group. A fleet-wide
-		// ratio here is the stranding bug the package doc opens with.
-		plan.Capacity += ceilDiv(len(g.handles), matching)
-		for _, h := range g.handles {
+		plan.Capacity += g.Share
+		plan.Groups = append(plan.Groups, *g)
+		for _, h := range g.Handles {
 			eligible[h] = struct{}{}
 		}
 	}
+
+	// Fewest eligible nodes first. At a tie a placement goes before
+	// "anywhere": both have the same homes today, but every node that joins
+	// is a home for the unconstrained seat and few are for the placed one.
+	// Stable beyond that, so groups as constrained as each other keep the
+	// org's order and every node walks them the same way.
+	slices.SortStableFunc(plan.Groups, func(a, b Group) int {
+		if a.Nodes != b.Nodes {
+			return a.Nodes - b.Nodes
+		}
+		return boolOrder(a.Placement.IsAnywhere()) - boolOrder(b.Placement.IsAnywhere())
+	})
 
 	for _, h := range handleOrder {
 		if _, ok := eligible[h]; ok {
@@ -575,9 +743,28 @@ func Compute(seats []Seat, me NodeProfile, live []NodeProfile) Plan {
 	return plan
 }
 
+// boolOrder sorts false before true.
+func boolOrder(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// share is how many of a group's seats each of its eligible nodes may hold.
+// A group no node is eligible for gives nobody any of it, so the
+// fleet's bound on it is zero and [Compute] reports it unplaceable by the
+// same comparison that judges every other group.
+func share(seats, nodes int) int {
+	if nodes == 0 {
+		return 0
+	}
+	return (seats + nodes - 1) / nodes
+}
+
 // seatRunners resolves the fleet this node divides the seats by: live peers
 // plus me, deduplicated by id with me authoritative about itself, then
-// filtered to the nodes that run seats at all.
+// filtered to the nodes placing seats ([NodeProfile.PlacesSeats]).
 func seatRunners(me NodeProfile, live []NodeProfile) []NodeProfile {
 	index := make(map[string]int, len(live)+1)
 	fleet := make([]NodeProfile, 0, len(live)+1)
@@ -603,11 +790,9 @@ func seatRunners(me NodeProfile, live []NodeProfile) []NodeProfile {
 
 	runners := make([]NodeProfile, 0, len(fleet))
 	for _, node := range fleet {
-		if node.RunsSeats() {
+		if node.PlacesSeats() {
 			runners = append(runners, node)
 		}
 	}
 	return runners
 }
-
-func ceilDiv(a, b int) int { return (a + b - 1) / b }
