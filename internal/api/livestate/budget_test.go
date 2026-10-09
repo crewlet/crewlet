@@ -424,6 +424,38 @@ func TestRecordsArrivingOutOfOrderAgeOutInStampOrder(t *testing.T) {
 	}
 }
 
+// THE ROLLUP NAMES A SEAT BY THE ID ITS NEWEST RECORD CARRIES.
+//
+// tokens.Aggregate keeps the LAST runtime id it is handed for a seat and for a
+// turn, so the order the window hands its records over in is what decides which
+// id a row links by — and that order is the one the records age out in,
+// whatever order they arrived in. Held in arrival order, a record that lost a
+// cross-topic race to a newer one named the seat by the older id.
+//
+// Mutation: hold the window in arrival order (append in holdSpend), and both
+// rows name the late record's older id.
+func TestTheRollupNamesASeatByItsNewestRecordsID(t *testing.T) {
+	t.Parallel()
+	s := stoppedAt(t, "2026-06-14T14:00:00Z")
+	spent := func(eventID, agentID, ts string) *livestate.Envelope {
+		return env("agent_phase_completed", map[string]any{
+			"role": "Lead", "agent_id": agentID, "turn_id": "tn-1", "phase": "execute",
+			"total_tokens": 10,
+		}, id(eventID), at(ts))
+	}
+	s.Apply(spent("newer", "a-current", "2026-06-14T13:00:00Z"))
+	s.Apply(spent("older", "a-before", "2026-06-14T12:00:00Z")) // arriving late
+
+	window := s.Spend()
+	rollup := tokens.Aggregate(window.Records, tokens.Options{Since: window.Since, Until: window.Until})
+	if len(rollup.ByAgent) != 1 || rollup.ByAgent[0].AgentID != "a-current" {
+		t.Errorf("by_agent = %+v, want the one seat named by the newest record's id", rollup.ByAgent)
+	}
+	if len(rollup.ByTurn) != 1 || rollup.ByTurn[0].AgentID != "a-current" {
+		t.Errorf("by_turn = %+v, want the one turn named by the newest record's id", rollup.ByTurn)
+	}
+}
+
 func TestSpendRecordsDoNotAliasTheProjection(t *testing.T) {
 	t.Parallel()
 	s := stoppedAt(t, "2026-06-14T14:00:00Z")
