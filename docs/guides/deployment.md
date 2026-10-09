@@ -692,10 +692,16 @@ sockets at once.
 
 What to point where:
 
-- **`integrations.public_base_url`** (Tier B) is unchanged in meaning — the
-  address outside parties reach this deployment at — so it is now the **public**
-  listener's address as your proxy or load balancer publishes it. Every webhook
-  the engine registers and every vendor app it provisions uses it.
+- **`integrations.public_base_url`** (Tier B) is where vendors and sandboxes
+  reach this deployment, so it is now the **public** listener's address as your
+  proxy or load balancer publishes it. Every webhook the engine registers and
+  every vendor app it provisions uses it.
+- **`integrations.dashboard_base_url`** (Tier B) is where people reach the
+  dashboard — `api.port`'s address as your private network or VPN reaches it.
+  Every link an agent composes for a person (`${crewlet_base_url}` in a tool
+  skill, a page change's `url`) is built on it, and the public listener could
+  serve none of them. On a deployment with one listener the two fields usually
+  hold the same address; they are two fields because here they cannot.
 - **The dashboard and the CLI** stay on `api.port`: `crewlet` commands that
   read a node's own Tier A file dial `api.host:api.port`, which is unchanged.
 - **A node without the `ingress` role** serves one route, its seats' tool

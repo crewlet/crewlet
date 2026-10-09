@@ -190,6 +190,8 @@ The engine substitutes the variables at **render time**, everywhere a skill's `s
 
 `skill_variables` is **company-wide** and hot-reloadable: changing a value on `PUT /config` re-renders every skill on the next turn.
 
+**`${crewlet_base_url}` is the engine's own.** It carries where people reach this deployment's dashboard, from [`integrations.dashboard_base_url`](../getting-started/configuration.md#integrations) resolved like any `${VAR}`, so a skill links to a work item as `${crewlet_base_url}/#/work/{KEY}` and to a page as `${crewlet_base_url}/#/knowledge/pages/{page-id}` with nothing for an operator to keep in step. The name is reserved — a company declaring it is refused, since two sources for one address is how a link comes to point at the deployment the company used to run on. It is never taken from `integrations.public_base_url`, which is where vendors reach the deployment and, behind a [public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api), a socket that serves no dashboard. With no dashboard address set it is left undefined, so a skill renders it literally and the registry warns `skill_variable_unresolved`.
+
 ---
 
 ## Phase scoping (catalogue visibility)

@@ -1260,9 +1260,11 @@ somebody will rename.
 
 `api.host` and `api.port` are what this node **binds**, which is rarely where it
 **answers**: a fleet behind a load balancer binds `0.0.0.0:8000` and is reached
-at `https://crewlet.example.com`. That outside address is Tier B's
-[`integrations.public_base_url`](#integrations), written once and read by every
-provisioner and every link the engine composes.
+at `https://crewlet.example.com`. Those outside addresses are Tier B's, each
+written once: [`integrations.public_base_url`](#integrations), where vendors and
+sandboxes reach the deployment and every provisioner registers it, and
+`integrations.dashboard_base_url`, where people reach the dashboard and every
+link the engine composes for one points.
 
 **`api.public` splits the routes outside parties call onto a socket of their
 own.** With `api.public.port` set, the vendor webhooks and app landings
@@ -1273,10 +1275,12 @@ socket and the `/health` and `/ready` probes — only on `api.port`. `api.port`
 answers a public route with a `404 no_route` whose hint names `api.public`; the
 public listener answers every other route exactly as it answers a path nothing
 serves, with no hint, so the published socket says nothing about an admin port
-behind it, and it does so whatever credential is sent, since it requires none. Publish `api.public.port`, keep
-`api.port` private, and point `integrations.public_base_url` (and
-`CREWLET_MCP_BRIDGE_URL` / `CREWLET_SANDBOX_OTEL_RECEIVER_URL` for remote
-sandboxes) at the public address — see
+behind it, and it does so whatever credential is sent, since it requires none.
+Publish `api.public.port`, keep `api.port` private, point
+`integrations.public_base_url` (and `CREWLET_MCP_BRIDGE_URL` /
+`CREWLET_SANDBOX_OTEL_RECEIVER_URL` for remote sandboxes) at the public address
+and `integrations.dashboard_base_url` at the address people reach `api.port`
+on — see
 [Deployment → Exposing webhooks without the admin API](../guides/deployment.md#exposing-webhooks-without-the-admin-api).
 On a node without the `ingress` role, whose only route is its seats' tool
 bridge, the bridge moves to `api.public` too, so one file still serves every
@@ -1517,7 +1521,8 @@ Inbound / notification integrations live under a single `integrations:` block �
 
 ```yaml
 integrations:
-  public_base_url: "${CREWLET_PUBLIC_URL}"   # where this deployment answers from OUTSIDE
+  public_base_url: "${CREWLET_PUBLIC_URL}"   # where VENDORS and sandboxes reach this deployment
+  dashboard_base_url: "${CREWLET_DASHBOARD_URL}"   # where PEOPLE reach its dashboard
   forge_app_id: "ari:cloud:ecosystem::app/your-forge-app-id"   # Jira Cloud's delivery path
 
   jira:
@@ -1571,7 +1576,8 @@ integrations:
 
 ```
 
-- **`public_base_url`** — where this deployment answers from **outside**, which is rarely what `api.host` and `api.port` bind. A bare origin (`scheme://host[:port]`, no path, query or fragment): every consumer appends its own rooted path to it, so leftovers here land in the middle of every link. It is the base each provisioner's `-public-url` defaults to, the address every registered webhook points at, and what [tool-skill](../concepts/tool-skills.md) prose reaches as the reserved variable `${crewlet_base_url}` — which is why a company may not declare a `skill_variables` entry of that name. Write it as a whole `${VAR}` and staging and production answer at their own addresses off one revision; it is stored verbatim and resolved wherever a link or a registration is built, so a process that cannot read it registers nothing rather than a webhook at the literal text of a variable.
+- **`public_base_url`** — where **vendors** reach this deployment from outside, which is rarely what `api.host` and `api.port` bind. A bare origin (`scheme://host[:port]`, no path, query or fragment): every consumer appends its own rooted path to it, so leftovers here land in the middle of every address. It is the base each provisioner's `-public-url` defaults to, the address every registered webhook points at, and the base of every vendor app's redirect and manifest — never a link a person follows. With a [public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api) it is that listener's published address. Write it as a whole `${VAR}` and staging and production answer at their own addresses off one revision; it is stored verbatim and resolved wherever a registration is built, so a process that cannot read it registers nothing rather than a webhook at the literal text of a variable.
+- **`dashboard_base_url`** — where **people** reach this deployment's dashboard, a bare origin like `public_base_url` and resolved the same way. Every link the engine composes for a person is built on it: what [tool-skill](../concepts/tool-skills.md#skill-variables) prose reaches as the reserved variable `${crewlet_base_url}` — which is why a company may not declare a `skill_variables` entry of that name — and the `url` a page change's notification carries. On a deployment with one listener it is usually the same address as `public_base_url`; behind a [public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api) it is `api.port`'s address, since the public one answers the dashboard `404`. It never falls back to `public_base_url`: unset, no link is composed, and a skill renders `${crewlet_base_url}` literally with a `skill_variable_unresolved` warning.
 - **`forge_app_id`** — verifies the Forge Invocation Token (FIT) on Cloud webhooks against Atlassian's JWKS; the `aud` claim must match. Required when Jira Cloud delivers through the Forge app.
 - **`jira`** — the Atlassian tracker, served end to end. Give `url` **or** `cloud_id`, never both — they are two ways to name one instance and `crewlet validate` refuses the ambiguity. `token` is the org read account (an issue's watchers are the one routing input a webhook never carries); `email` switches authentication to Cloud's Basic scheme; `site_url` is the human base for links when the instance is named by a cloud id. `webhook_secret` is **required for Data Center** and unused on Cloud, whose events arrive through the Forge app instead. Each seat's own credential lives in `mcp_env.atlassian` (or `mcp_env.jira`) and is what the engine resolves its account id from — see [Jira](../integrations/jira.md).
 - **`confluence`** — the knowledge base, and the **query-time search** behind every turn's "Relevant knowledge" block and the `search_knowledge` tool. Same address rule as `jira`: `url` **or** `cloud_id`, never both. `token` is the org read account a seat with no Confluence credential of its own searches under; a seat WITH one searches as itself and Confluence enforces its page permissions natively. `webhook_secret` is required for Data Center and unused on Cloud. The knowledge backend is **single-homed** — the engine wires exactly one `knowledge.Searcher`, because two would make an agent's answer to "what do we already know about this" depend on which one was asked. Scope reads with `knowledge.scope`; publish with [`crewlet confluence import`](../reference/cli.md#crewlet-confluence-import). See [Confluence](../integrations/confluence.md).

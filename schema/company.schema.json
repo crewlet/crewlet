@@ -1105,6 +1105,15 @@
           "$ref": "#/$defs/Confluence",
           "description": "Confluence instance or Cloud site, org read account and webhook secret. Absent = disabled."
         },
+        "dashboard_base_url": {
+          "description": "HTTPS base a person reaches this deployment's dashboard on, e.g. https://crewlet.example.com; links agents compose for people are built on it. Empty means no link is composed.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
         "datadog": {
           "$ref": "#/$defs/Datadog",
           "description": "Datadog monitor alerts delivered as inbound events. Absent = disabled."

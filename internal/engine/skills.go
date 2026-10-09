@@ -29,13 +29,18 @@ import (
 // # Why crewlet_base_url is injected rather than declared
 //
 // It is the fact a skill most reliably needs and an operator most reliably
-// cannot supply. Where this deployment answers is already written once, as
-// `integrations.public_base_url` — the same address every webhook URL is
-// built on — and it is READ THROUGH THE RESOLVER for the reason that field
-// carries its own resolver argument: a whole `${VAR}` there is how staging
-// and production answer at their own addresses off one company revision, and
-// a raw read would inject the seven characters of the reference into prose a
-// person is meant to click.
+// cannot supply. Where a person reaches this deployment is already written
+// once, as `integrations.dashboard_base_url` — the same base a page change's
+// notification links on — and it is READ THROUGH THE RESOLVER for the reason
+// that field carries its own resolver argument: a whole `${VAR}` there is how
+// staging and production answer at their own addresses off one company
+// revision, and a raw read would inject the seven characters of the reference
+// into prose a person is meant to click.
+//
+// NEVER `integrations.public_base_url`. That is where VENDORS reach the
+// deployment, and behind a public listener (Tier A api.public) it is a socket
+// that answers the dashboard 404: every link a skill composed on it would land
+// a person on nothing.
 //
 // The name is RESERVED, and the loader refuses a company that declares it.
 // Two sources for one address is how a skill comes to link at the deployment
@@ -43,45 +48,44 @@ import (
 // updates the integrations block, the stale declaration keeps winning, and
 // every link a person clicks lands nowhere with nothing anywhere saying why.
 //
-// UNSET WHEN THERE IS NO PUBLIC URL, rather than empty. A skill referencing
+// UNSET WHEN THERE IS NO DASHBOARD URL, rather than empty. A skill referencing
 // it then renders the literal ${crewlet_base_url} and warns, which is the
 // registry's own signal for a variable nobody defined — and is what an
 // operator needs to hear. Defining it as "" would compose every link as a
 // rooted path a person cannot click and say nothing at all.
-func skillVariables(env *config.Resolver, c *Company, publicBase string) map[string]string {
+func skillVariables(env *config.Resolver, c *Company) map[string]string {
 	declared := c.Config.SkillVariables
-	if len(declared) == 0 && publicBase == "" {
+	base := dashboardBase(env, c)
+	if len(declared) == 0 && base == "" {
 		return nil
 	}
 	out := make(map[string]string, len(declared)+1)
 	for name, value := range declared {
 		out[name] = env.Value(value)
 	}
-	if publicBase != "" {
-		out[config.ReservedBaseURLVariable] = publicBase
+	if base != "" {
+		out[config.ReservedBaseURLVariable] = base
 	}
 	return out
 }
 
-// publicBase is where this DEPLOYMENT answers from outside: the base a link a
-// person clicks is composed on, and the one every webhook registration points
-// at.
+// dashboardBase is where a PERSON reaches this deployment: the base every link
+// composed for somebody to click is built on — a skill's ${crewlet_base_url}
+// and a page change's `url`. Never where a vendor reaches it; see
+// [config.Integrations.DashboardBaseURL].
 //
 // PER EPOCH rather than held on the engine, and READ THROUGH THE RESOLVER,
-// because `integrations.public_base_url` is a Tier B pointer stored verbatim.
-// A whole `${VAR}` there is how staging and production answer at their own
-// addresses off one company revision, and a raw read would put the seven
-// characters of the reference into every link — and into every webhook URL a
-// provisioner registers, which the third-party app then reports as healthy
-// and delivers nowhere.
+// because `integrations.dashboard_base_url` is a Tier B pointer stored
+// verbatim, and a raw read would put the seven characters of a reference into
+// every link.
 //
 // EMPTY when nothing resolves, which every consumer here reads as "compose no
 // link" rather than as a relative one.
-func (e *Engine) publicBase(c *Company) string {
-	if c == nil {
+func dashboardBase(env *config.Resolver, c *Company) string {
+	if c == nil || c.Config == nil {
 		return ""
 	}
-	return c.Config.Integrations.WebhookBase(e.resolver().LookupOK)
+	return c.Config.Integrations.DashboardBase(env.LookupOK)
 }
 
 // refreshSkillVariables installs an epoch's substitution map.
@@ -91,7 +95,7 @@ func (e *Engine) publicBase(c *Company) string {
 // against the new map — rather than on that skill's next edit, which might
 // be never.
 func (e *Engine) refreshSkillVariables(c *Company) {
-	e.skills.SetVariables(skillVariables(e.resolver(), c, e.publicBase(c)))
+	e.skills.SetVariables(skillVariables(e.resolver(), c))
 }
 
 // auditSkills reports every skill whose trigger names a tool the current

@@ -474,8 +474,8 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 		if key == ReservedBaseURLVariable {
 			p.add(entry(field("skill_variables"), key), ErrConflict,
 				"%s is reserved: the engine sets it from "+
-					"integrations.public_base_url, which is where this "+
-					"deployment's address belongs — write a whole ${VAR} "+
+					"integrations.dashboard_base_url, which is where this "+
+					"deployment's dashboard address belongs — write a whole ${VAR} "+
 					"there and staging and production answer at their own "+
 					"addresses off one revision. Set it there and delete "+
 					"this line",
@@ -570,9 +570,11 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 }
 
 // ReservedBaseURLVariable is the skill variable carrying this deployment's
-// public base URL, so a skill can compose a link a person can click.
+// dashboard base URL, so a skill can compose a link a person can click.
 //
-// The engine sets it from integrations.public_base_url and this package
+// The engine sets it from integrations.dashboard_base_url — never from
+// public_base_url, which is where vendors reach the deployment and may be a
+// listener that serves no dashboard — and this package
 // refuses a company that declares it: two sources for one address is how a
 // skill comes to link at the deployment the company used to run on.
 const ReservedBaseURLVariable = "crewlet_base_url"
