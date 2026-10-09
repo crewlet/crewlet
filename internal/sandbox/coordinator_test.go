@@ -456,7 +456,7 @@ func TestAParkedClarificationFreesTheSeat(t *testing.T) {
 	rig.coordinator.countRun("swe", StatusRunning)
 	rig.runner.Finish(Result{
 		NeedsInput: true, Question: "which branch?", AskTo: "requester",
-		DeliveredRefs: []string{"wip/t1"},
+		WIPBranch: "wip/t1",
 	})
 
 	payload, ev := rig.completion("t1")
@@ -2742,7 +2742,7 @@ func TestTheAnswerToAParkedQuestionResumesTheSameTurn(t *testing.T) {
 	rig.launch("t1")
 	rig.runner.Finish(Result{
 		NeedsInput: true, Question: "which branch?", AskTo: "requester",
-		DeliveredRefs: []string{"wip/t1"},
+		WIPBranch: "wip/t1",
 	})
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -2790,7 +2790,7 @@ func TestAnAnswerOutsideTheQuestionsPartitionStillResumesTheRun(t *testing.T) {
 	rig.launch("t1")
 	rig.runner.Finish(Result{
 		NeedsInput: true, Question: "which branch?", AskTo: "requester",
-		DeliveredRefs: []string{"wip/t1"},
+		WIPBranch: "wip/t1",
 	})
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -2967,7 +2967,7 @@ func parkOnAQuestion(t *testing.T, rig *coordRig) {
 	rig.launch("t1")
 	rig.runner.Finish(Result{
 		NeedsInput: true, Question: "which branch?", AskTo: "requester",
-		DeliveredRefs: []string{"wip/t1"},
+		WIPBranch: "wip/t1",
 	})
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -3497,7 +3497,7 @@ func TestAnAnswerAfterTheBoxWasReclaimedSaysToReseedFromGit(t *testing.T) {
 	rig.launch("t1")
 	rig.runner.Finish(Result{
 		NeedsInput: true, Question: "which branch?", AskTo: "requester",
-		DeliveredRefs: []string{"wip/t1"},
+		WIPBranch: "wip/t1",
 	})
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -3520,6 +3520,66 @@ func TestAnAnswerAfterTheBoxWasReclaimedSaysToReseedFromGit(t *testing.T) {
 	}
 	if !strings.Contains(calls[0].Answer, "wip/t1") {
 		t.Fatalf("the brief does not name the branch holding the work: %q", calls[0].Answer)
+	}
+}
+
+// A PARKED RUN'S BRANCH IS A BRANCH. It is what a re-seeded run is told to
+// check out, and it was taken from the run's first delivered ref — which is a
+// pull request's URL whenever the run opened one, so the brief said "check
+// out the existing branch `https://…/pull/42`", which git cannot. It is the
+// branch the ask recorded, and nothing the run delivered stands in for it.
+func TestAParkedRunsBranchIsNeverAPullRequestURL(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		recorded, want string
+	}{
+		"the ask recorded one":   {recorded: "wip/t1", want: "wip/t1"},
+		"the ask recorded none":  {recorded: "", want: ""},
+		"not a name git accepts": {recorded: "wip t1", want: ""},
+		"past what a row carries": {
+			recorded: "wip/" + strings.Repeat("b", MaxBranchBytes), want: "",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			rig.launch("t1")
+			rig.runner.Finish(Result{
+				NeedsInput: true, Question: "which branch?", AskTo: "requester",
+				DeliveredRefs: []string{"https://github.com/acme/api/pull/42"},
+				WIPBranch:     tc.recorded,
+			})
+			payload, ev := rig.completion("t1")
+			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+				t.Fatalf("OnCompleted: %v", err)
+			}
+			if got := rig.get("t1").Branch; got != tc.want {
+				t.Fatalf("the parked branch is %q, want %q", got, tc.want)
+			}
+
+			// And what the re-seed is told once the box is gone.
+			rig.now = rig.now.Add(DefaultPauseTTL + time.Second)
+			rig.tick()
+			if _, err := rig.coordinator.TryResumeFromAnswer(
+				t.Context(), "swe", chatReply(answerOnTheDM, "use main", nil)); err != nil {
+				t.Fatalf("TryResumeFromAnswer: %v", err)
+			}
+			calls := rig.resumer.calls()
+			if len(calls) != 1 {
+				t.Fatalf("resumed %d times, want 1", len(calls))
+			}
+			answer := calls[0].Answer
+			if strings.Contains(answer, "pull/42") {
+				t.Errorf("the re-seed is pointed at a pull request: %q", answer)
+			}
+			want := "check out the work-in-progress branch it pushed earlier"
+			if tc.want != "" {
+				want = "check out the existing branch `" + tc.want + "`"
+			}
+			if !strings.Contains(answer, want) {
+				t.Errorf("the re-seed does not say %q: %q", want, answer)
+			}
+		})
 	}
 }
 

@@ -833,6 +833,7 @@ func (r *Runner) overlayAsk(ctx context.Context, box sandbox.Sandbox, result san
 	var ask struct {
 		Question string `json:"question"`
 		To       string `json:"to"`
+		Branch   string `json:"branch"`
 	}
 	if err := json.Unmarshal([]byte(blob), &ask); err != nil {
 		// A malformed signal is not a reason to lose the result the run
@@ -849,5 +850,10 @@ func (r *Runner) overlayAsk(ctx context.Context, box sandbox.Sandbox, result san
 	if result.AskTo == "" {
 		result.AskTo = "requester"
 	}
+	// The branch as the ask recorded it, redacted like the question: it is
+	// a word from inside the box. Whether it is a branch at all, and short
+	// enough to carry, is the coordinator's to decide for every runner
+	// alike ([sandbox.MaxBranchBytes]).
+	result.WIPBranch = redact.Secrets(strings.TrimSpace(ask.Branch))
 	return result, "", nil
 }
