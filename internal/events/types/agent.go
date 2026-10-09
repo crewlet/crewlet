@@ -771,9 +771,10 @@ type AgentPhaseCompleted struct {
 	CostUSD       float64  `json:"cost_usd"`
 	DeliveredRefs []string `json:"delivered_refs,omitempty"`
 	// DeliveredRefsElided is how many more refs the run reported than
-	// DeliveredRefs lists: refs are scraped from the whole report by a
-	// pattern with no count to it, and the record lists them up to a bound,
-	// deduplicated, counting the rest here rather than dropping them unsaid.
+	// DeliveredRefs lists: refs are read from the whole report with no count
+	// to them — its `Delivered:` lines, or its pull-request URLs where it
+	// named none — and the record lists them up to a bound, deduplicated,
+	// counting the rest here rather than dropping them unsaid.
 	// Zero on a record that lists them all.
 	DeliveredRefsElided int `json:"delivered_refs_elided,omitempty"`
 	// ActivityTranscript is a coding run's own account of what it did —

@@ -48,12 +48,23 @@ const (
 	// ReadsPerSeatDay is how many (page, via) entries one seat-day record
 	// carries.
 	//
-	// TWO HUNDRED AND FIFTY-SIX. An entry is about 140 bytes encoded, so
-	// the cap bounds the read half of a record near 35 KiB — far under
-	// the broker's 1 MiB message ceiling beside a seat's spend cells —
-	// and it is past what any person reads about one seat on one day. The
-	// most-read entries survive, and what was dropped is counted on the
-	// record rather than lost silently.
+	// TWO HUNDRED AND FIFTY-SIX, and what it bounds is ONE RECORD. An
+	// entry is a few hundred bytes encoded plus its query, which is at
+	// most the 400 bytes a search accepts ([knowledge.MaxQueryBytes]), so
+	// a seat-day at the cap is under 200 KiB with a full-length query in
+	// every entry and under 1 MiB even where JSON escapes every byte of
+	// every one — far under the transport's 8 MiB message ceiling
+	// ([queue.MaxPayloadBytes], which the embedded broker is configured
+	// to and an external one is refused below), as
+	// TestAFullSeatDayRecordFitsOneMessage measures — and it is past what
+	// any person reads about one seat on one day. The most-read entries
+	// survive, and what was dropped is counted on the record rather than
+	// lost silently.
+	//
+	// It does NOT bound the stream: [LogMaxBytes] is sized from busy
+	// seat-days, and a fleet whose every seat reached this cap every day
+	// would outgrow that default, which the log's headroom alarm reports
+	// before an append is refused and `stream.usage_log_max_bytes` raises.
 	ReadsPerSeatDay = 256
 
 	// LogMaxBytes is the ceiling this domain declares for its stream, which

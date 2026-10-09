@@ -30,7 +30,9 @@
 // What it costs is that nothing is shared: a file written twice with the same
 // bytes is two objects, and a moved file is uploaded again. The seat's own
 // write skips content the file already holds, and the collector deletes the
-// object a write replaced a day later.
+// object a write replaced at its next pass once that object is past the
+// grace — which is measured from the object's upload, never from its
+// replacement, so a replaced object older than a day goes within the hour.
 //
 // # Every read is checked against the row
 //

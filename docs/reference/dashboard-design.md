@@ -982,7 +982,7 @@ than its share gives way. One fraction for every grid rather than a pixel floor
 per column, which is a number that would have to be invented nineteen times and
 re-invented at every width.
 
-**Below 860px a row is a card, because 390px has no columns.** The audit's six
+**Below 640px (`breakpoint.phone`) a row is a card, because 390px has no columns.** The audit's six
 want 808px between them and the work trash's twelve want more, and the grid's
 wrap is `overflow: clip` — the same decision that keeps the head sticky — so
 everything past the viewport was cut off with nothing to scroll to: WHAT, TO

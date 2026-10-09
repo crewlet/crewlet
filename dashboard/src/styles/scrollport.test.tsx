@@ -94,7 +94,7 @@ function rules(): [string, string][] {
       // AND FROM THE BRACE BEFORE IT, which is the other half of the same
       // hazard: a rule inside an at-rule shares its chunk with that at-rule's
       // prelude, so everything-before-the-brace reads as
-      // `@media (max-width: 860px) { .work-rows` and is then discarded as an
+      // `@media (width < 640px) { .work-rows` and is then discarded as an
       // at-rule. Nothing in these sheets declares an `overflow` or a sticky
       // band inside a media query today, so the hole is invisible — which is
       // exactly the shape of failure this file exists to catch, and the day

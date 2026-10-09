@@ -43,6 +43,7 @@
  */
 
 import type { CompanyDocument, ConfigRole, ConfigUnit } from "~/protocol/index.ts";
+import { AGENT_FORBIDDEN, HUMAN_FORBIDDEN, SEAT_CREDENTIALS } from "~/contract/config.ts";
 import { plural } from "~/lib/format.ts";
 import { cloneJson, getPath, isRecord, jsonEqual, setPath } from "./json.ts";
 import { COMPANY_KEY, handleOfKey, isMintedKey, type NodeKey } from "./keys.ts";
@@ -524,52 +525,9 @@ export interface ApplyReport {
 // Seat kind rules
 // ---------------------------------------------------------------------------
 
-/**
- * The fields a human seat must not carry, in the order the engine reports
- * them (`org.Role.humanForbidden`, by authored name), with the ones that hold
- * credentials marked: a credential a kind change strips was masked in the
- * document the builder holds, so it cannot be re-entered here and is gone for
- * good once the change is saved.
- *
- * `integrations.github` comes last because a different rule refuses it: the
- * org model carries no code-host identity for a seat, so the config layer's
- * admission rule (`config.Company.validateHumanSeatApps`) is what refuses a
- * seat's own GitHub App on a human seat. A kind change that kept the block
- * would record cleanly and then be refused by the very next check, over a
- * field the change itself made wrong.
- */
-export const HUMAN_FORBIDDEN: readonly {
-  readonly path: readonly string[];
-  readonly credential: boolean;
-}[] = [
-  { path: ["llm"], credential: false },
-  { path: ["llm_review"], credential: false },
-  { path: ["llm_subagent"], credential: false },
-  { path: ["llm_auxiliary"], credential: false },
-  { path: ["llm_judge"], credential: false },
-  { path: ["llm_sandbox"], credential: false },
-  { path: ["sandbox"], credential: true },
-  { path: ["token_budget"], credential: false },
-  { path: ["workers"], credential: false },
-  { path: ["learning_enabled"], credential: false },
-  { path: ["schedules"], credential: false },
-  { path: ["integrations", "slack"], credential: true },
-  { path: ["integrations", "mattermost"], credential: true },
-  { path: ["integrations", "jira"], credential: false },
-  { path: ["integrations", "confluence"], credential: false },
-  { path: ["mcp_env"], credential: true },
-  { path: ["behavioral_guidelines"], credential: false },
-  { path: ["integrations", "github"], credential: true },
-];
-
-/** The fields an agent seat must not carry (`org.Role.Validate`). */
-export const AGENT_FORBIDDEN: readonly {
-  readonly path: readonly string[];
-  readonly credential: boolean;
-}[] = [
-  { path: ["contact"], credential: false },
-  { path: ["availability"], credential: false },
-];
+// The fields each kind refuses and the ones holding a credential are the
+// engine's sets, declared in `~/contract/config.ts` where a Go gate holds them
+// against its refusals: HUMAN_FORBIDDEN, AGENT_FORBIDDEN and SEAT_CREDENTIALS.
 
 /** Who holds a seat, as the engine reads its `kind`. */
 export function kindOf(data: ConfigRole): SeatKind {
@@ -583,18 +541,17 @@ export function fieldName(path: readonly string[]): string {
 
 /** Whether a field path holds a credential a kind change would strip. */
 export function isCredentialField(path: readonly string[]): boolean {
-  return [...HUMAN_FORBIDDEN, ...AGENT_FORBIDDEN].some(
-    (f) => f.credential && jsonEqual(f.path, path),
-  );
+  return (SEAT_CREDENTIALS as readonly string[]).includes(fieldName(path));
 }
 
 /** The fields a seat holds that `kind` forbids, with their values. */
 function forbiddenFor(data: ConfigRole, kind: SeatKind): FieldChange[] {
-  const rules = kind === "human" ? HUMAN_FORBIDDEN : AGENT_FORBIDDEN;
+  const fields = kind === "human" ? HUMAN_FORBIDDEN : AGENT_FORBIDDEN;
   const out: FieldChange[] = [];
-  for (const rule of rules) {
-    const value = getPath(data, rule.path);
-    if (value !== undefined) out.push({ path: rule.path, before: cloneJson(value) });
+  for (const field of fields) {
+    const path = field.split(".");
+    const value = getPath(data, path);
+    if (value !== undefined) out.push({ path, before: cloneJson(value) });
   }
   return out;
 }

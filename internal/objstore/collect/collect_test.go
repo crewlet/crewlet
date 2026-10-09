@@ -76,6 +76,13 @@ func (s *fakeSource) name(o objstore.Object, path string) {
 	s.named[o.Key] = Reference{Object: o, NamedBy: "ENG/" + path}
 }
 
+// unname drops the row naming k, as a file's removal or rewrite does.
+func (s *fakeSource) unname(k objstore.Key) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.named, k)
+}
+
 // clock is a settable instant every piece of a case reads.
 type clock struct {
 	mu  sync.Mutex
@@ -273,6 +280,33 @@ func TestAnUnnamedObjectGoesOnlyAfterTheGrace(t *testing.T) {
 	}
 	if !h.held(named) {
 		t.Fatal("an object a file names was deleted")
+	}
+}
+
+// AN OBJECT UNNAMED ONCE IT IS A DAY OLD GOES AT THE NEXT PASS, with no
+// further day's wait: the grace dates the object's UPLOAD, the window between
+// storing it and writing the row that names it, and nothing records when a row
+// stopped naming it. A file older than a day that is rewritten or removed
+// loses its old bytes within the hour — which is what the object store's docs
+// promise, and why the store is no place to recover a replaced version from.
+func TestAnObjectUnnamedOnceItIsADayOldGoesAtTheNextPass(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	old := h.file("a.md", "the version a rewrite replaces").Key
+
+	h.clock.advance(PendingGrace + time.Hour)
+	if r, err := h.c.Collect(t.Context()); err != nil || r.Deleted != 0 || r.Referenced != 1 {
+		t.Fatalf("a pass while a row names the object = %+v, %v", r, err)
+	}
+	h.source.unname(old)
+	h.clock.advance(CollectInterval)
+	r, err := h.c.Collect(t.Context())
+	if err != nil || r.Deleted != 1 || !r.Completed {
+		t.Fatalf("the first pass after the row stopped naming it = %+v, %v; "+
+			"want the object deleted then, not a day after it was unnamed", r, err)
+	}
+	if h.held(old) {
+		t.Fatal("an object past its grace was kept after nothing named it")
 	}
 }
 

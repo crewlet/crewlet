@@ -257,8 +257,9 @@ type Engine struct {
 	// Held because it is a CEILING for every SEAT claim this engine makes
 	// outside the seat host: the KV's expiry is bucket-wide, so it refuses a
 	// seat lease asked to outlive it, and the mailbox retirement claims a
-	// removed seat's lease with exactly this TTL. Duties are NOT bounded by
-	// it: they live in a bucket of their own whose ceiling is
+	// removed seat's lease with exactly this TTL. Nothing but a seat or a
+	// presence lease is bounded by it (coord.HeldToSeatTTL): a duty and the
+	// tracker's walk claims live in a bucket whose ceiling is
 	// coord.MaxDutyTTL, and a duty clamped to this value lapsed between two
 	// of its own ticks.
 	leaseTTL time.Duration

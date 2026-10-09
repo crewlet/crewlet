@@ -248,15 +248,28 @@ type Result struct {
 	Question   string
 	AskTo      string
 
-	// DeliveredRefs are the branches and pull requests the run produced —
-	// what the delivery gate judges a coding turn on.
+	// WIPBranch is the branch the run pushed before it asked, as the ask
+	// recorded it: the name the agent gave, or the one git reported where
+	// it asked. It is what a run re-seeded on a fresh machine is told to
+	// check out ([PendingRun.Branch]), so it is carried as its own fact —
+	// never inferred from DeliveredRefs, which name pull requests as often
+	// as branches and are empty for the branch a run pushes and opens
+	// nothing for. Empty when the ask named none and git could not say,
+	// and on a run that did not ask.
+	WIPBranch string
+
+	// DeliveredRefs are the branches and pull or merge requests the run
+	// reported delivering, in its report's order: the `Delivered:` lines it
+	// wrote, or the pull-request URLs its prose holds where it named none.
+	// They are DISPLAY and a reminder — the run's phase record and the
+	// resumed executor's text carry them — and nothing judges a turn on
+	// them: whether a turn reached anybody is the tool loop's own record of
+	// what ran ([github.com/crewlet/crewlet/internal/agent/turn]).
 	DeliveredRefs []string
 
 	// DeliveredRefsElided is how many more refs the run reported than its
 	// record lists ([MaxDeliveredRefBytes]). Set by the coordinator.
 	DeliveredRefsElided int
-	ChangedFiles        []string
-	Commands            []string
 
 	Error string
 

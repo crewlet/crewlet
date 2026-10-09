@@ -589,8 +589,8 @@ to the adopted log.
 
 | Bucket | What it holds |
 |---|---|
-| **`crewlet_leases`** | `node:` · `seat:` ownership. The bucket's age **is** the lease TTL |
-| **`crewlet_duties`** | `worker:` ownership. Each record is judged by its own duty's deadline; the bucket's age only has to outlive the longest duty |
+| **`crewlet_leases`** | `node:` · `seat:` ownership, and nothing else. The bucket's age **is** the lease TTL |
+| **`crewlet_duties`** | `worker:` ownership, and every other lease — the work tracker's `move:` · `merge:` · `bulk:` claims among them. Each record is judged by its own deadline; the bucket's age only has to outlive the longest duty |
 | **`crewlet_epochs`** | The monotonic fencing counter. No age at all — see below |
 | **`crewlet_config`** | The activation pointer and its payload — the pointer's own revision **is** the epoch |
 | **`crewlet_status`** | One key per node: which revision it applied |
@@ -671,10 +671,11 @@ store, eighteen in the fleet store. The lease store is the sharpest illustration
 lease TTL* — a renew rewrites the key and restarts the clock, so a node that
 stops renewing stops holding and nothing has to notice it died. `crewlet_epochs`
 sits beside it with no age at all, because a fence that restarts is not a fence.
-And `crewlet_duties` holds the fleet singletons apart from the seats, because a
-duty's TTL follows its own tick, up to three hours, and a bucket whose age is
-the 45-second seat TTL refused every duty longer than that. Three buckets, three
-retentions, for the same subsystem.
+And `crewlet_duties` holds the fleet singletons and every other lease apart from
+the seats, because a duty's TTL follows its own tick, up to three hours, and a
+tracker walk's claim its own heartbeat, and a bucket whose age is the 45-second
+seat TTL refused every one longer than that. Three buckets, three retentions,
+for the same subsystem.
 
 ---
 

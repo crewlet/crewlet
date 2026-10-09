@@ -107,7 +107,7 @@ describe("structure", () => {
           fields: ["goal", "integrations.github"],
         },
         { ref: { key: "seat:dev", kind: "seat", name: "Developer" }, fields: ["handle"] },
-        // Its Jira project is untouched, so only the tool that changed is named.
+        // Its project is untouched, so only the tool that changed is named.
         { ref: { key: "seat:sre", kind: "seat", name: "SRE" }, fields: ["integrations.github"] },
       ]),
     );
@@ -331,29 +331,31 @@ describe("reporting, leads, channels and routing", () => {
 
   test("unrouted tracker work follows a declaring unit's lead and a root seat's own declaration", () => {
     const doc = fixtureCompany();
-    doc.units![0]!.children![0]!.integrations = { jira: { project: "ops" } };
-    doc.roles![0]!.integrations = { confluence: { space: "LEAD" } };
+    doc.units![0]!.children![0]!.project = "ops";
+    doc.roles![0]!.space = "LEAD";
     const s = scenario([{ type: "remove", target: "seat:ceo" }], doc, {
       units: { "units[0].children[0]": { lead: "sre" } },
     });
     const changes = changesOf(s, {
       units: { "units[0].children[0]": { lead: "vp-engineering", lead_inherited: true } },
     });
+    // The keys a seat and a unit write themselves, `project` and `space` —
+    // never a block under `integrations:`, which neither has.
     expect(changes.routing).toEqual([
       {
-        tool: "confluence",
-        scope: "LEAD",
-        holder: { key: "seat:ceo", kind: "seat", name: "CEO" },
-        before: { key: "seat:ceo", kind: "seat", name: "CEO" },
-        after: null,
-        shared: false,
-      },
-      {
-        tool: "jira",
+        field: "project",
         scope: "OPS",
         holder: { key: "unit:Platform", kind: "unit", name: "Platform" },
         before: { key: "seat:sre", kind: "seat", name: "SRE" },
         after: { key: "seat:vp-engineering", kind: "seat", name: "VP Engineering" },
+        shared: false,
+      },
+      {
+        field: "space",
+        scope: "LEAD",
+        holder: { key: "seat:ceo", kind: "seat", name: "CEO" },
+        before: { key: "seat:ceo", kind: "seat", name: "CEO" },
+        after: null,
         shared: false,
       },
     ]);
@@ -361,8 +363,8 @@ describe("reporting, leads, channels and routing", () => {
 
   test("a scope declared with different owners is marked shared, since the engine picks one and logs the ambiguity", () => {
     const doc = fixtureCompany();
-    doc.units![0]!.children![0]!.integrations = { jira: { project: "OPS" } };
-    doc.units![1]!.integrations = { jira: { project: "ops" } };
+    doc.units![0]!.children![0]!.project = "OPS";
+    doc.units![1]!.project = "ops";
     doc.units![1]!.lead = "Account Executive";
     const s = scenario([{ type: "setLead", target: "unit:Sales" }], doc, {
       units: { "units[0].children[0]": { lead: "sre" } },
@@ -372,7 +374,7 @@ describe("reporting, leads, channels and routing", () => {
     });
     expect(changes.routing).toEqual([
       expect.objectContaining({
-        tool: "jira",
+        field: "project",
         scope: "OPS",
         holder: { key: "unit:Sales", kind: "unit", name: "Sales" },
         before: { key: "seat:account-executive", kind: "seat", name: "Account Executive" },

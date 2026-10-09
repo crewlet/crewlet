@@ -29,9 +29,10 @@ const objectsDirName = "objects"
 // # Why a backup carries every object the copy names
 //
 // A tracker restored without the bytes of its files names files nobody can
-// open, and the collector deletes a removed file's object a day after it was
-// removed — so a restore from a week-old backup brings back rows whose objects
-// a live store may no longer hold. The backup is a copy of the COMPANY, so it
+// open, and the collector deletes a removed file's object at its next pass
+// once the object is more than a day old — within the hour of the removal for
+// any file older than that — so a restore from a week-old backup brings back
+// rows whose objects a live store may no longer hold. The backup is a copy of the COMPANY, so it
 // carries every object the store copy refers to.
 //
 // WHICH OBJECTS is not an option: the copy is read against

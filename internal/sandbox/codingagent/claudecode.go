@@ -192,7 +192,7 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 		Success:       msg.succeeded(),
 		SessionID:     msg.SessionID,
 		CostUSD:       msg.TotalCostUSD,
-		DeliveredRefs: prPattern.FindAllString(msg.Result, -1),
+		DeliveredRefs: deliveredRefs(msg.Result),
 	}
 	if u := msg.Usage; u != nil {
 		// INPUT TOKENS ARE A SUM, for the reason the engine's own Anthropic

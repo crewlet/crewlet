@@ -131,9 +131,9 @@ type ResumeRequest struct {
 	Trigger *events.Event
 
 	// DeliveredRefs are what the run reported producing, for the resumed
-	// phase's own event — the executor's delivery is judged on them. Empty
-	// when a PERSON's answer resumes a parked clarification: no new run
-	// finished.
+	// phase's own event to display — nothing judges the executor's delivery
+	// on them ([Result.DeliveredRefs]). Empty when a PERSON's answer resumes
+	// a parked clarification: no new run finished.
 	//
 	// The run's COST is deliberately not here. It is the run's own fact and
 	// rides the run's own record ([Coordinator.OnCompleted] publishes it as
@@ -1338,7 +1338,10 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 
 	if err := c.pending.MarkAwaiting(ctx, run.TurnID, Clarification{
 		Question: result.Question, Audience: result.AskTo,
-		Branch: firstRef(result.DeliveredRefs), SessionID: result.SessionID,
+		// THE BRANCH THE ASK RECORDED, never the run's first delivered
+		// ref: that was a pull request's URL whenever the run opened one,
+		// and a re-seeded run was told to check out the URL.
+		Branch: result.WIPBranch, SessionID: result.SessionID,
 		InputTokens: result.InputTokens, OutputTokens: result.OutputTokens,
 		// And what condensing this collection cost, paid by the same resume.
 		Condensed: result.Condensed,
@@ -3588,13 +3591,6 @@ func (c *Coordinator) ReleaseSeat(handle string) {
 
 func fenceOf(run PendingRun) Fence {
 	return Fence{Owner: run.Owner, Epoch: run.OwnerEpoch}
-}
-
-func firstRef(refs []string) string {
-	if len(refs) == 0 {
-		return ""
-	}
-	return refs[0]
 }
 
 // resumeText is the run_sandbox reply spliced into the resumed Execute loop.

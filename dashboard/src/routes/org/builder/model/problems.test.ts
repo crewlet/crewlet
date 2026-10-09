@@ -52,13 +52,13 @@ describe("placeProblems", () => {
     const index = placeProblems(sent, {
       problems: [
         problem(["units", 0, "roles", 1, "goal"]),
-        problem(["units", 0, "children", 0, "roles", 0, "integrations", "jira", "project"]),
+        problem(["units", 0, "children", 0, "roles", 0, "integrations", "slack", "channel"]),
         problem(["units", 1]),
       ],
     });
     expect(index.byNode.get("seat:dev")?.map((p) => p.field)).toEqual([["goal"]]);
     expect(index.byNode.get("seat:sre")?.[0]).toMatchObject({
-      field: ["integrations", "jira", "project"],
+      field: ["integrations", "slack", "channel"],
       link: null,
       severity: "problem",
     });

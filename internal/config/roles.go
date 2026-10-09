@@ -127,7 +127,8 @@ type Role struct {
 	// anywhere, which is what a single-process deployment always means.
 	Placement *RolePlacement `yaml:"placement,omitempty" json:"placement,omitempty" desc:"Which nodes may run this seat. Absent = any node that runs seats."`
 
-	// Integrations is this seat's non-tool identity on external surfaces.
+	// Integrations is this seat's own identity on external surfaces: its
+	// chat apps and its GitHub App. See [RoleIntegrations].
 	Integrations RoleIntegrations `yaml:"integrations,omitempty" json:"integrations,omitzero"`
 
 	// Project and Space are this seat's own tracker and knowledge
@@ -347,8 +348,13 @@ func (s *RoleSandbox) validate(path Path) error {
 	return p.err()
 }
 
-// RoleIntegrations is a seat's non-tool identity on external surfaces: the
-// chat apps it speaks as, and the tracker project and wiki space it owns.
+// RoleIntegrations is a seat's own identity on external surfaces: the chat
+// apps it speaks as (Slack, Mattermost) and the GitHub App it acts as.
+//
+// The tracker project and knowledge container a seat owns are NOT here. They
+// are [Role.Project] and [Role.Space], beside this block, because each names
+// a container on whichever backend the company runs rather than an identity
+// at one vendor.
 //
 // TOOL credentials are not here — they live in mcp_env and go straight to
 // the server that consumes them. Nothing in this block scopes knowledge

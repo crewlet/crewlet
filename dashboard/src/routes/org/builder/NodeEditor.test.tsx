@@ -117,8 +117,6 @@ function connected(): CompanyDocument {
     github: { enabled: true, webhook_secret: "__redacted__" },
     slack: {},
     mattermost: { enabled: true, url: "https://chat.example.com", team: "acme" },
-    jira: { enabled: true },
-    confluence: { enabled: true },
   };
   doc.units![0]!.roles![1] = {
     name: "Dev",
@@ -154,6 +152,31 @@ describe("applying", () => {
     expect(state.log.ops[0]).toMatchObject({ type: "edit", target: "seat:dev" });
     expect(seatData(state, "seat:dev")).toMatchObject({ name: "Developer", goal: "Ship" });
     expect(view.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  // A seat's project and space are its OWN keys, vendor-neutral, and mean
+  // something on the engine's own tracker and knowledge base, which a company
+  // that connected nothing runs. Written under `integrations:` they were a
+  // block the engine does not have, and the save was refused.
+  test("a seat's project and space are offered on the engine's own backends and written on the seat", () => {
+    const view = edit(keyedState(fixtureCompany()), "seat:dev");
+    type("Tracker project", "OPS");
+    type("Knowledge space", "DOCS");
+    apply();
+    const data = seatData(view.state(), "seat:dev");
+    expect(data).toMatchObject({ project: "OPS", space: "DOCS" });
+    expect(data.integrations).toBeUndefined();
+  });
+
+  test("a company that runs no tracker or knowledge base says so instead of offering a project or a space", () => {
+    const doc = fixtureCompany();
+    doc.tracker = { backend: "none" };
+    doc.knowledge = { backend: "none" };
+    edit(keyedState(doc), "unit:Engineering");
+    expect(screen.queryByLabelText(labelled("Tracker project"))).toBeNull();
+    expect(screen.queryByLabelText(labelled("Knowledge space"))).toBeNull();
+    expect(screen.getByText(/runs no work tracker/)).toBeDefined();
+    expect(screen.getByText(/runs no knowledge base/)).toBeDefined();
   });
 
   test("an untouched form records nothing and closes without asking", () => {
@@ -740,12 +763,17 @@ describe("seat fields", () => {
 describe("integrations", () => {
   test("a tool the company has not connected says so and links to Integrations", () => {
     edit(keyedState(fixtureCompany()), "seat:dev");
-    for (const tool of ["GitHub", "Slack", "Mattermost", "Jira", "Confluence"]) {
+    for (const tool of ["GitHub", "Slack", "Mattermost"]) {
       const note = screen.getByText(`${tool} is not connected.`, { exact: false });
       expect(within(note).getByRole("link").getAttribute("href")).toBe("#/settings/integrations");
     }
     expect(screen.queryByLabelText(labelled("Access tier"))).toBeNull();
-    expect(screen.queryByLabelText(labelled("Jira project"))).toBeNull();
+    // A project and a space are no tool's: the engine's own tracker and
+    // knowledge base need no block, so neither says Jira or Confluence is
+    // missing.
+    expect(screen.queryByText("Jira is not connected.", { exact: false })).toBeNull();
+    expect(screen.queryByText("Confluence is not connected.", { exact: false })).toBeNull();
+    expect(field("Tracker project")).toBeDefined();
     // GitLab provisioning is connected in the fixture.
     expect(field("Access level")).toBeDefined();
   });
@@ -766,8 +794,8 @@ describe("integrations", () => {
     expect(
       screen.getByText("Where unrouted work for this seat goes. Not a permission."),
     ).toBeDefined();
-    expect(field("Jira project")).toBeDefined();
-    expect(field("Confluence space")).toBeDefined();
+    expect(field("Tracker project")).toBeDefined();
+    expect(field("Knowledge space")).toBeDefined();
     expect(screen.getByText("Not the Datadog fallback.")).toBeDefined();
     // Already enrolled: its block exists, so a tier says nothing about enrolling.
     expect(screen.queryByText(/This enrols the seat in GitHub/)).toBeNull();
@@ -891,32 +919,36 @@ describe("problems", () => {
   // A problem about a field this form does not draw must not be attached to
   // one: it would be reported nowhere a reader can see it.
   test("a problem about a field the form does not draw is listed at the top", () => {
-    // The fixture company has not connected Jira, so the seat's Jira field is
-    // not drawn at all.
-    const state = checkWithProblems(keyedState(fixtureCompany()), [
-      problemAt(
-        ["units", 0, "roles", 1, "integrations", "jira", "project"],
-        "units[0].roles[1].integrations.jira.project: names no project",
-      ),
-    ]);
-    edit(state, "seat:dev");
+    // A company that runs no tracker draws no project field at all.
+    const noTracker = fixtureCompany();
+    noTracker.tracker = { backend: "none" };
+    const projectProblem = problemAt(
+      ["units", 0, "roles", 1, "project"],
+      'units[0].roles[1].project: "ops" is not a project key',
+    );
+    edit(checkWithProblems(keyedState(noTracker), [projectProblem]), "seat:dev");
     const alerts = screen.getAllByRole("alert");
     expect(alerts).toHaveLength(1);
-    expect(alerts[0]!.textContent).toContain("names no project");
+    expect(alerts[0]!.textContent).toContain("is not a project key");
     expect(describesAControl(alerts[0]!)).toBe(false);
     cleanup();
 
-    // The same for a unit, whose Confluence field is not drawn either.
-    const unit = checkWithProblems(keyedState(fixtureCompany()), [
-      problemAt(
-        ["units", 0, "integrations", "confluence", "space"],
-        "units[0].integrations.confluence.space: names no space",
-      ),
-    ]);
-    edit(unit, "unit:Engineering");
+    // The same for a unit, whose space field is not drawn either.
+    const noKnowledge = fixtureCompany();
+    noKnowledge.knowledge = { backend: "none" };
+    const spaceProblem = problemAt(["units", 0, "space"], 'units[0].space: "TS" is reserved');
+    edit(checkWithProblems(keyedState(noKnowledge), [spaceProblem]), "unit:Engineering");
     const unitAlerts = screen.getAllByRole("alert");
     expect(unitAlerts).toHaveLength(1);
     expect(describesAControl(unitAlerts[0]!)).toBe(false);
+    cleanup();
+
+    // On the engine's own tracker, which the fixture runs, the same problem
+    // sits under the field that wrote it.
+    edit(checkWithProblems(keyedState(fixtureCompany()), [projectProblem]), "seat:dev");
+    const drawn = screen.getAllByRole("alert");
+    expect(drawn).toHaveLength(1);
+    expect(errorOf(field("Tracker project"))).toBe(drawn[0]);
   });
 
   test("a schedule problem is shown in the schedules panel, where the toggle that fixes it is", () => {
@@ -1105,7 +1137,7 @@ describe("a unit", () => {
     apply();
     const found = locate(view.state().draft, "unit:Engineering");
     expect(found?.kind === "unit" && found.node.data.schedules?.[0]?.enabled).toBe(false);
-    expect(screen.getByText(/Knowledge/)).toBeDefined();
+    expect(screen.getByText(/^Knowledge( \(optional\))?$/)).toBeDefined();
     expect(screen.getByText("Free-text references, not a read scope.")).toBeDefined();
   });
 });

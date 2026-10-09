@@ -209,6 +209,7 @@ A config revision and the *values* its `${VAR}` references resolve to are two di
 |---|---|
 | LLM providers | **Yes** — the epoch's providers are constructed from the fresh resolver. |
 | Jira / Confluence / GitLab / GitHub | **Yes** — each tracker is reconciled against the new epoch and re-resolves the engine credential. |
+| Datadog / Atlassian | **Yes** — nothing holds their credentials between uses. Datadog's webhook token is resolved against the applied company on every delivery, and the [integration pass](integration-reconcile.md) resolves the provisioning keys (Datadog's API and application keys, Atlassian's organization API key) at the start of every pass, so a re-activation reaches the next delivery and the next pass. |
 | Shared MCP children | **Yes, selectively** — see below. |
 | Per-role MCP children | **No.** They belong to a seat's *lease*, not to the epoch: spawned when a seat is claimed and torn down when it is released, so a rotated `mcp_env` value reaches one only when its seat next changes hands. |
 | Slack transport | **Yes.** It is rebuilt on every apply (`Engine.reconcileSlack`); what is replaced is an HTTP client and the working-status driver, with no socket to drop. |

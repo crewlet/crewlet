@@ -241,7 +241,8 @@ answer is that there is no such work.
 | **custom fields** | declared per project and at the workspace, typed, with option lists — see [the catalogue](#the-catalogue). Filter on one with `f.<slug>`, and see [the operators](#filtering-a-custom-field). |
 | **checklists** | up to 16 named lists holding up to 64 items each and 256 between them, each item with its own assignee — see [Checklists](#checklists). |
 | **relations**, **dependencies** | links between tasks, and blocking edges. |
-| **linked pages**, **references** | into the knowledge base and out to third-party systems. |
+| **linked pages** | knowledge-base pages the task names, set with `linked_pages` on `update_work_item`. `linked_page=<page id>` lists the tasks that name a page. |
+| **references** | other tasks this task's description mentions by key (`ENG-12`), derived by the applier on every node from the first 64 distinct keys the description names, where a task's former key resolves like its current one. `references=<key>` lists the tasks whose description mentions it. A comment's mentions are not references. |
 | **spend** | turns, rounds, tokens, cache, wall-clock, delegated workers and review send-backs this task has cost — see [Spend is on the task](#spend-is-on-the-task). |
 | **reopens** | how many times the task left a finished status for an unfinished one. |
 | **updated** | when the task last changed: the fleet-agreed instant of the newest record that changed it — the same instant its newest history entry carries — never a writer's clock. It is what `sort=-updated`, `updated=` and every list's Updated column read. |

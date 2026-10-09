@@ -145,6 +145,9 @@ var contract = []Entry{
 	// config.ts
 	{"ENTITY_KINDS", ReadLiteral, "internal/api/configapi.TestEntityKindsMatchTheClient"},
 	{"BUDGET_WINDOWS", ReadLiteral, "internal/config.TestTheBudgetEditorOffersExactlyTheEnginesWindows"},
+	{"HUMAN_FORBIDDEN", ReadLiteral, "internal/config.TestTheBuilderStripsWhatEachKindRefuses"},
+	{"AGENT_FORBIDDEN", ReadLiteral, "internal/config.TestTheBuilderStripsWhatEachKindRefuses"},
+	{"SEAT_CREDENTIALS", ReadLiteral, "internal/config.TestTheBuilderStripsWhatEachKindRefuses"},
 
 	// errors.ts
 	{"QueryErrorCode", ReadUnion,

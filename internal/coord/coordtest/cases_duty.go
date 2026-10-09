@@ -7,16 +7,19 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
-// dutyCases certify the duty ceiling coord.MaxDutyTTL states: a `worker:`
-// lease is honoured at any TTL up to it, whatever TTL the backend's seat
-// leases run on, and refused beyond it.
+// dutyCases certify the ceiling coord.MaxDutyTTL states: a `worker:` lease,
+// and every other lease outside seats and presence, is honoured at any TTL up
+// to it, whatever TTL the backend's seat leases run on, and refused beyond it.
 //
-// A group of its own because the rule is the one place a duty and a seat are
+// A group of its own because the rule is the one place a lease and a seat are
 // held to different TTLs, and because every other case here claims a seat.
 // That is how the original defect went unseen: the embedded KV refused every
 // duty longer than its seat lease bucket's age, the twin honoured any TTL, and
 // no case ever sent a duty a TTL longer than LongTTL, so the suite certified
-// both backends while no fleet ran a single long duty.
+// both backends while no fleet ran a single long duty. And it is how it went
+// unseen a second time: the fix moved the duties alone, the cases here sent
+// the long TTL to duties alone, and the tracker's walk claims went on being
+// refused on every fleet while the suite passed.
 //
 // These cases are the one place the suite asks for more than LongTTL and
 // DEPENDS on the answer, which the LongTTL doc allows for exactly this
@@ -82,6 +85,59 @@ var dutyCases = []testCase{
 		h.requireUnchanged("a renew refused for its TTL", held, h.get(duty))
 	}},
 
+	{"a_caller_class_lease_is_honoured_beyond_the_seat_ceiling_up_to_the_contract_ceiling", func(h *harness) {
+		// The same ceiling for a class this package does not own. A
+		// caller's claim — the tracker's walk claims, `move:`, `merge:`
+		// and `bulk:` — is sized from the work it guards, a walk's
+		// heartbeat or a bulk's projected apply time, and never from the
+		// seat heartbeat. The embedded KV held every such claim to its
+		// seat lease bucket's age, so at the shipped 45-second seat TTL
+		// every cross-project move and every merge was refused before
+		// its first append, on every fleet. The twin honoured any TTL
+		// and every claim this suite made of a caller class sat inside
+		// LongTTL, so neither half of the suite could see it.
+		//
+		// Claimed GATED, as a caller's claim is: a duty is ungated, and
+		// a case that only ever claimed the ungated way would certify
+		// the ceiling on half the paths a claim takes.
+		claim := callerClass.Resource("node-a")
+		baseline := h.claim(coord.SeatResource("ceo"), coord.AcquireOptions{Owner: "node-a:1", TTL: LongTTL})
+		lease := h.claim(claim, coord.AcquireOptions{Owner: "node-a:1", TTL: coord.MaxDutyTTL})
+		// An interval, not an ordering, for the reason the duty case
+		// gives: a store clamping the claim still stamps it later.
+		if gap := lease.ExpiresAt.Sub(baseline.ExpiresAt); gap < coord.MaxDutyTTL-LongTTL-time.Minute {
+			h.t.Fatalf("a %v %s claim landed only %v beyond a %v seat lease: the store clamped "+
+				"it to a shorter ceiling instead of honouring coord.MaxDutyTTL",
+				coord.MaxDutyTTL, callerClass, gap, LongTTL)
+		}
+		if !h.renew(claim, "node-a:1", lease.Epoch, coord.MaxDutyTTL) {
+			h.t.Fatalf("renewing a live %s claim at the contract ceiling reported loss", callerClass)
+		}
+		held := h.mustHold(claim, "node-a:1")
+
+		// AND BEYOND IT, AN ERROR ON EVERY BACKEND: the twin could keep
+		// any deadline, and accepting one the embedded KV refuses is
+		// exactly how this went unseen. An error rather than a refusal,
+		// because nobody holds the resource.
+		over := coord.MaxDutyTTL + time.Second
+		fresh := callerClass.Resource("node-b")
+		got, refused, err := h.b.TryAcquire(h.ctx, fresh, coord.AcquireOptions{Owner: "node-a:1", TTL: over})
+		if !errors.Is(err, coord.ErrTTLTooLong) {
+			h.t.Fatalf("TryAcquire(%q, ttl=%v) = (%v, %q, %v), want an error wrapping coord.ErrTTLTooLong",
+				fresh, over, got, refused, err)
+		}
+		if got != nil {
+			h.t.Fatalf("TryAcquire(%q, ttl=%v) granted a lease beside its error", fresh, over)
+		}
+		h.mustBeUnheld(fresh)
+		ok, err := h.b.Renew(h.ctx, claim, "node-a:1", held.Epoch, over)
+		if !errors.Is(err, coord.ErrTTLTooLong) || ok {
+			h.t.Fatalf("Renew(%q, ttl=%v) = (%v, %v), want (false, an error wrapping coord.ErrTTLTooLong)",
+				claim, over, ok, err)
+		}
+		h.requireUnchanged("a renew refused for its TTL", held, h.get(claim))
+	}},
+
 	{"a_short_duty_lapses_on_its_own_deadline", func(h *harness) {
 		// A duty is judged by the deadline it asked for, not by whatever
 		// longer horizon the backend keeps duty records for. A dead holder's
@@ -115,12 +171,13 @@ var dutyCases = []testCase{
 		// So every assertion below names the class it asked for and the
 		// exact set it must get, on a fleet holding all four at once.
 		//
-		// The duties are claimed at coord.MaxDutyTTL rather than at
-		// LongTTL deliberately. That is the TTL a backend cannot keep
-		// beside its seats, so it is what forces the separate store into
-		// existence at all; inside the seat ceiling a backend is free to
-		// hold everything in one place and this case would certify a
-		// routing decision nothing had to make.
+		// The duties and the caller's claim are taken at
+		// coord.MaxDutyTTL rather than at LongTTL deliberately. That is
+		// the TTL a backend cannot keep beside its seats, so it is what
+		// forces the separate store into existence at all; inside the
+		// seat ceiling a backend is free to hold everything in one place
+		// and this case would certify a routing decision nothing had to
+		// make.
 		duties := coord.AcquireOptions{Owner: "node-a:1", TTL: coord.MaxDutyTTL, Ungated: true}
 		h.claim(coord.WorkerResource("scheduler"), duties)
 		h.claim(coord.WorkerResource("sandbox-waiter"), duties)
@@ -129,7 +186,7 @@ var dutyCases = []testCase{
 			Owner: "node-a:1", TTL: LongTTL, Ungated: true,
 		})
 		h.claim(callerClass.Resource("node-a"), coord.AcquireOptions{
-			Owner: "node-a:1", TTL: LongTTL, Ungated: true,
+			Owner: "node-a:1", TTL: coord.MaxDutyTTL,
 		})
 
 		// EVERY duty, and no seat. Both halves matter: a listing that

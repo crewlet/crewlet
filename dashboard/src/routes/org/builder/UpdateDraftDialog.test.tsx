@@ -207,17 +207,17 @@ describe("a conflict's values", () => {
       shape: "fields",
       base: [
         { path: ["mcp_env"], before: { tracker: { TOKEN: "__redacted__" } } },
-        { path: ["integrations", "jira"], before: { project: "OPS" } },
+        { path: ["integrations", "slack"], before: { channel: "OPS" } },
       ],
       theirs: [
         { path: ["mcp_env"], before: { tracker: { TOKEN: "__redacted__" } } },
-        { path: ["integrations", "jira"], before: { project: "SUP" } },
+        { path: ["integrations", "slack"], before: { channel: "SUP" } },
         { path: ["email"], before: "dev@example.com" },
       ],
     });
     expect(stripped).toEqual({
-      base: "mcp_env, integrations.jira",
-      theirs: "mcp_env, integrations.jira (changed), email (added)",
+      base: "mcp_env, integrations.slack",
+      theirs: "mcp_env, integrations.slack (changed), email (added)",
       mine: "Removed",
     });
     const shown = JSON.stringify([removal, stripped]);

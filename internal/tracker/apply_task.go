@@ -858,7 +858,7 @@ func (a *Applier) maintainDeps(ctx context.Context, tx *sql.Tx, task Task,
 	return written + n, nil
 }
 
-// taskKeyPattern is what a body or a comment is scanned for.
+// taskKeyPattern is what a task's description is scanned for.
 var taskKeyPattern = regexp.MustCompile(`[A-Z][A-Z0-9]{1,9}-[0-9]+`)
 
 // taskKeysIn is every distinct key a body names, IN DOCUMENT ORDER.
@@ -885,6 +885,12 @@ func taskKeysIn(body string) []string {
 }
 
 // maintainReferences derives the mention graph from the task's own body.
+//
+// THE DESCRIPTION ONLY. tracker_references has a from_comment column, and the
+// header of the migration that created it (replicated 0002) says comments are
+// scanned too, but no comment apply writes a row: this is the table's only
+// writer, so from_comment is empty on every row and `references=` lists the
+// tasks whose DESCRIPTION mentions a key.
 //
 // CAPPED AFTER DEDUPE, so a pathological body is a bounded number of lookups
 // on every node rather than one per occurrence — and the cap is on what the

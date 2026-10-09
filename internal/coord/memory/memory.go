@@ -438,10 +438,17 @@ func validate(resource, owner string) error {
 // non-positive TTL would mint a lease that is already lapsed, which reads
 // downstream as a seat nobody can hold.
 //
-// The twin could honour a duty TTL of any length, and refuses one above
-// coord.MaxDutyTTL anyway: a twin that accepted what the KV store refuses is
-// exactly how every long duty claim passed every single-node test while no
-// fleet ever ran those duties.
+// The twin could honour a TTL of any length, and refuses one above
+// coord.MaxDutyTTL on every lease outside seats and presence anyway — a duty,
+// a tracker walk's claim, any class of a caller's — through the contract's own
+// check (coord.CheckLeaseTTL). A twin that accepted what the KV store refuses
+// is exactly how every long duty claim passed every single-node test while no
+// fleet ever ran those duties, and how the tracker's walk claims did the same
+// after the twin learned the duties' ceiling and nobody else's.
+//
+// A seat or presence lease is not bounded here: the KV store holds one to the
+// seat lease TTL it was opened with, a property of the deployment the twin is
+// never given, and its callers acquire at the TTL that store reports.
 func validateTTL(resource, owner string, ttl time.Duration) error {
 	if err := validate(resource, owner); err != nil {
 		return err
@@ -449,7 +456,7 @@ func validateTTL(resource, owner string, ttl time.Duration) error {
 	if ttl <= 0 {
 		return errBadTTL
 	}
-	return coord.CheckDutyTTL(resource, ttl)
+	return coord.CheckLeaseTTL(resource, ttl)
 }
 
 // wireCopy puts meta through the encoding a real backend puts it through.

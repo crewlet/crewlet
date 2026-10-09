@@ -8,8 +8,15 @@ import (
 //
 // A headless coding agent cannot pause to ask a person — `claude -p` runs to
 // completion. So when it is blocked on something only a human can answer it
-// runs one shim command, crewlet-ask, which records the question and audience
-// to a file the runner reads on collect.
+// runs one shim command, crewlet-ask, which records the question, its
+// audience and the branch the agent pushed its work to, to a file the runner
+// reads on collect.
+//
+// THE BRANCH IS RECORDED HERE because this is the one moment anything knows
+// it: the agent has just pushed, and is asking from the checkout it pushed
+// from. It is what a run re-seeded on a fresh machine is told to check out
+// once the answer arrives, and inferring it afterwards from the refs the run
+// delivered named a pull request's URL as the branch whenever there was one.
 //
 // The shim is SIGNAL-ONLY: it never posts anything itself. The engine
 // announces the question, attributed to the seat whose run asked, and puts it
@@ -20,12 +27,19 @@ import (
 
 // AskShim is the crewlet-ask script, pointed at this box's output path.
 //
-// Usage inside the box: crewlet-ask "the question" --to team
+// Usage inside the box: crewlet-ask "the question" --to team --branch wip/x
 //
 // Pure POSIX shell, deliberately: it must run in whatever image an operator
 // built, and a shell that can start the coding CLI can certainly run this.
 // The JSON is assembled by hand because the alternative is depending on
 // python3 or jq being present, which is a claim about somebody else's image.
+//
+// GIT IS OPTIONAL TOO. The branch is the one the agent names with --branch;
+// where it names none and git is there, the shim asks git from where the
+// agent asked — the name the checkout's upstream has on its remote, which is
+// the name the work was pushed under, or else the branch it is on — and
+// records nothing on a detached HEAD, outside a repository, or with no git at
+// all, rather than fail an ask over a fact the engine can live without.
 func AskShim(outputPath string) string {
 	dir := outputPath
 	if i := strings.LastIndex(outputPath, "/"); i > 0 {
@@ -36,23 +50,56 @@ func AskShim(outputPath string) string {
 set -eu
 question=""
 to="requester"
+branch=""
+# A flag whose value was left off takes none: a shift past the end would end
+# the script under set -e before it recorded the question.
 while [ $# -gt 0 ]; do
   case "$1" in
-    --to) to="${2:-requester}"; shift 2 ;;
+    --to) shift; if [ $# -gt 0 ]; then to=$1; shift; fi ;;
     --to=*) to="${1#--to=}"; shift ;;
+    --branch) shift; if [ $# -gt 0 ]; then branch=$1; shift; fi ;;
+    --branch=*) branch="${1#--branch=}"; shift ;;
     *) if [ -z "$question" ]; then question="$1"; fi; shift ;;
   esac
 done
+if [ -z "$to" ]; then to="requester"; fi
 if [ -z "$question" ]; then
-  echo "usage: crewlet-ask \"<question>\" [--to requester|team|manager|<name>]" >&2
+  echo "usage: crewlet-ask \"<question>\" [--to requester|team|manager|<name>] [--branch <the branch you pushed>]" >&2
   exit 2
 fi
-# Escape for JSON: backslashes first, then quotes, then newlines.
+# The branch the work was pushed to, where the agent named none: the name the
+# upstream has on its remote, else the branch checked out here. Git is
+# optional, and a detached HEAD or no repository records no branch.
+if [ -z "$branch" ] && command -v git >/dev/null 2>&1; then
+  head=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) || head=""
+  if [ -n "$head" ]; then
+    branch=$head
+    remote=$(git config --get "branch.$head.remote" 2>/dev/null) || remote=""
+    merge=$(git config --get "branch.$head.merge" 2>/dev/null) || merge=""
+    if [ -n "$remote" ] && [ "$remote" != "." ]; then
+      case "$merge" in refs/heads/?*) branch=${merge#refs/heads/} ;; esac
+    fi
+  fi
+fi
+# Escape for JSON: a backslash, a quote and every control character, each of
+# which JSON refuses raw, and the newlines between lines. Byte by byte
+# (LC_ALL=C), printed as it goes rather than built up, so a long question
+# costs one pass.
 esc() {
-  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | awk 'BEGIN{ORS=""} {print sep $0; sep="\\n"}'
+  printf '%s' "$1" | LC_ALL=C awk '
+    BEGIN { for (i = 1; i < 32; i++) ctl[sprintf("%c", i)] = sprintf("\\u%04x", i) }
+    NR > 1 { printf "%s", "\\n" }
+    {
+      for (j = 1; j <= length($0); j++) {
+        c = substr($0, j, 1)
+        if (c in ctl) printf "%s", ctl[c]
+        else if (c == "\\" || c == "\"") printf "%s%s", "\\", c
+        else printf "%s", c
+      }
+    }'
 }
 mkdir -p ` + shellQuote(dir) + `
-printf '{"question":"%s","to":"%s"}' "$(esc "$question")" "$(esc "$to")" > ` + shellQuote(outputPath) + `
+printf '{"question":"%s","to":"%s","branch":"%s"}' "$(esc "$question")" "$(esc "$to")" "$(esc "$branch")" > ` + shellQuote(outputPath) + `
 echo "Question recorded; stop now — a person will answer and your work will resume with their reply."
 `
 }
@@ -69,10 +116,13 @@ func AskInstruction(roster []string, manager string) string {
 			"missing detail, a design or framework decision above your remit — do " +
 			"NOT guess:",
 		"1. Commit and push your work-in-progress branch.",
-		`2. Run: crewlet-ask "<a specific, self-contained question>" --to <audience>`,
+		`2. Run, from inside the repository: crewlet-ask "<a specific, self-contained question>" ` +
+			`--to <audience> --branch <the branch you pushed>`,
 		"   where <audience> is `requester` (the person who asked, for a spec " +
 			"clarification), `team` (a design or technical decision), `manager`, or " +
-			"a teammate's name.",
+			"a teammate's name. Name the branch exactly as you pushed it: if this " +
+			"machine is gone by the time they answer, the work continues on a fresh " +
+			"one from that branch.",
 		"3. Stop. Your work resumes automatically once they reply.",
 	}
 	if len(roster) > 0 {
@@ -91,6 +141,14 @@ func AskInstruction(roster []string, manager string) string {
 // when an agent finishes but never exits, and a tool-only run leaves no parsed
 // text at all — so a durable structured report at a known path is required,
 // and Collect always reads it.
+//
+// WHAT THE RUN DELIVERED IS NAMED, one `Delivered:` line per branch pushed and
+// per pull or merge request opened, because that is the only account of it
+// the engine can read on any code host: which hosts a box pushes to is the
+// seat's own environment's business, and a pushed branch has no URL at all.
+// Those lines are the run's delivered refs ([deliveredRefs]); a report that
+// writes none is scraped for pull-request URLs instead, which cannot tell one
+// the run opened from one it only read.
 func FindingsInstruction(findingsPath string) string {
 	return strings.Join([]string{
 		"\n## Before you finish — write your report",
@@ -100,7 +158,12 @@ func FindingsInstruction(findingsPath string) string {
 			"report to `" + findingsPath + "`:",
 		"- Outcome: succeeded / partial / blocked.",
 		"- What you did and verified (tests run and their results).",
-		"- The pull request or branch you opened, if any (full URL).",
+		"- What you delivered: a line of its own for each branch you pushed and " +
+			"each pull or merge request you opened, written exactly as " +
+			"`Delivered: <branch name or full URL>` with nothing else on it — " +
+			"for example `Delivered: fix/retry-backoff` and " +
+			"`Delivered: https://git.example.com/acme/api/pull/42`. Write no such " +
+			"line for anything you did not push or open yourself.",
 		"- What remains and what the Crewlet agent should do next.",
 		"Write that file even if you also print a summary — it is the " +
 			"authoritative report that gets read back to continue the task.",

@@ -51,6 +51,13 @@
 //     stops judging. What it deleted before is reported beside why it
 //     stopped.
 //
+// THE GRACE IS AN UPLOAD'S, NEVER A REPLACED VERSION'S. Both instants date
+// the object's upload, and nothing records when a row stopped naming it: an
+// object a file was rewritten off, or removed from, goes at the first pass
+// after it stops being named once both are past the grace — within the hour
+// for a file older than a day. The store is not where a replaced version is
+// kept.
+//
 // NO LOCK, NO SECOND LOOK. A key is minted for one upload and named only by
 // the write that uploaded it, so there is no writer re-using an object the
 // collector could be deleting, and so nothing for a lock to guard. Two

@@ -369,7 +369,7 @@ func TestEverythingCollectedIsRedacted(t *testing.T) {
 	b := box(t, runner)
 	p := paths(b)
 	secret := "ghp_" + strings.Repeat("b", 36)
-	b.Put(p.Findings(), "cloned with "+secret)
+	b.Put(p.Findings(), "cloned with "+secret+"\nDelivered: "+secret)
 	b.Put(p.Err(), "git clone https://"+secret+"@example.com/acme/api")
 	b.Put(p.Ask(), `{"question":"is `+secret+` right?","to":"requester"}`)
 
@@ -377,9 +377,13 @@ func TestEverythingCollectedIsRedacted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
+	if len(res.DeliveredRefs) != 1 {
+		t.Fatalf("refs = %q, want the one the report named", res.DeliveredRefs)
+	}
 	for name, field := range map[string]string{
 		"text": res.Text, "transcript": res.Transcript,
 		"error": res.Error, "question": res.Question,
+		"delivered ref": res.DeliveredRefs[0],
 	} {
 		if strings.Contains(field, secret) {
 			t.Fatalf("a credential survived in %s: %q", name, field)

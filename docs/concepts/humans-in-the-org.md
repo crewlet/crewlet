@@ -202,17 +202,20 @@ Human seats keep the descriptive identity fields (`goal`, `backstory`,
 agent lead's roster, so work goes to the person who owns it. They also keep
 the hierarchy fields (`manages`, unit `lead`). Every runtime-only field is
 **rejected at validation time**, and the refusal names each one as it is
-written: `llm` and every per-phase `llm_*` chain, `sandbox`, `token_budget`,
-`workers`, `learning_enabled`, `schedules`, `integrations.slack` and
-`integrations.mattermost` (a seat's own chat app), `integrations.jira` and
-`integrations.confluence` (the project and space a seat owns), `mcp_env` and
-`behavioral_guidelines`. A seat's own GitHub App (`integrations.github`) is
-refused on a human seat as well, because a person acts on GitHub as their
-own `contact.github_login`. That refusal is an [admission
-rule](configuration.md#what-a-stored-revision-is-held-to): a revision being
-applied that carries the block still runs, and the next write that keeps it
-is refused. The reverse holds too: `contact` or `availability` on an agent
-seat is refused with a hint to set `kind: human`.
+written — a refusal of one field is placed at that key, where the dashboard
+marks it: `llm` and every per-phase `llm_*` chain, `sandbox`,
+`token_budget`, `workers`, `learning_enabled`, `schedules`, `placement` (a
+human seat is never claimed, so there is no claim to constrain),
+`integrations.slack` and `integrations.mattermost` (a seat's own chat app),
+`project` and `space` (the tracker project and knowledge container a seat
+owns, written at the top of the seat rather than under `integrations:`),
+`mcp_env` and `behavioral_guidelines`. A seat's own GitHub App
+(`integrations.github`) is refused on a human seat as well, because a person
+acts on GitHub as their own `contact.github_login`. That refusal is an
+[admission rule](configuration.md#what-a-stored-revision-is-held-to): a
+revision being applied that carries the block still runs, and the next write
+that keeps it is refused. The reverse holds too: `contact` or `availability`
+on an agent seat is refused with a hint to set `kind: human`.
 
 A unit's `mcp_env` is shared with its direct **agent** members only. A
 human member inherits none of it, so a human seat can sit in, and lead, a
@@ -397,7 +400,7 @@ the founder seat there carries a single `contact` identity
 
 | Subsystem | Behavior |
 |-----------|----------|
-| Seat placement | Never claimed: only agent seats enter the placement sweep, so a human seat has no lease, no mailbox and no per-role MCP children |
+| Seat placement | Never claimed: only agent seats enter the placement sweep, so a human seat has no lease, no mailbox and no per-role MCP children, and a `placement` block on one is refused |
 | Inbox | None. A notification resolved to a human seat is skipped (`notification_skipped`, reason `human seat`) |
 | Engine notifications | None. The engine never sends as itself; agents reach humans with their own tools |
 | Scheduler | `target: each` fans out to agent members only; an enabled `target: lead` schedule under a (possibly inherited) human lead is a **config error**; human seats cannot define role schedules |

@@ -101,12 +101,12 @@ export function changeSentences(changes: ChangeSet): { changes: string[]; conseq
     );
   }
   for (const r of changes.routing) {
-    const tool = r.tool === "jira" ? "Jira project" : "Confluence space";
+    const container = r.field === "project" ? "tracker project" : "knowledge space";
     const shared = r.shared
       ? " More than one owner declares it, and the engine routes to the first it finds."
       : "";
     follow.push(
-      `Unrouted work in the ${tool} ${r.scope} goes to ${who(r.after)} instead of ${who(r.before)}.${shared}`,
+      `Unrouted work in the ${container} ${r.scope} goes to ${who(r.after)} instead of ${who(r.before)}.${shared}`,
     );
   }
   for (const s of changes.credentialServers) {

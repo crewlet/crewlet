@@ -243,14 +243,33 @@ const MaxQuestionBytes = 16 << 10
 // MaxDeliveredRefBytes bounds the branches and pull requests a run's record
 // lists as delivered.
 //
-// THEY ARE SCRAPED FROM THE WHOLE REPORT, by a pattern with no count to it, so
-// a report that pasted a list of pull requests — or a run that wrote one URL
-// on every line of a 30 MiB file — handed the record one entry per match. A
-// pull-request URL is typically under a hundred bytes, so 16 KiB lists more
-// than a hundred and sixty of them, past what any one run delivers; the refs
-// are deduplicated first, and what does not fit is COUNTED on the record and
-// in the resumed executor's text rather than dropped unsaid.
+// THEY ARE READ FROM THE WHOLE REPORT WITH NO COUNT TO THEM — every
+// `Delivered:` line it writes, or every pull-request URL its prose holds where
+// it names none — so a report that pasted a list of pull requests, or a run
+// that wrote one ref on every line of a 30 MiB file, handed the record one
+// entry per line. A pull-request URL is typically under a hundred bytes, so
+// 16 KiB lists more than a hundred and sixty of them, past what any one run
+// delivers; the refs are deduplicated first, and what does not fit is COUNTED
+// on the record and in the resumed executor's text rather than dropped
+// unsaid.
 const MaxDeliveredRefBytes = 16 << 10
+
+// MaxBranchBytes bounds the branch a parked run records with its question
+// ([Result.WIPBranch], [PendingRun.Branch]).
+//
+// SIZED TO WHERE IT TRAVELS AND TO WHAT A BRANCH IS. It rides the run's
+// coordination row beside the question ([MaxQuestionBytes]) — read and written
+// whole on every status flip and every listing of active runs — and the
+// answer's text, which the resumed executor re-sends on every later round of
+// the turn. Git keeps a branch as a path under refs/heads, every part of which
+// a filesystem holds to 255 bytes, and a work-in-progress branch is a few
+// parts at most: 1 KiB is four parts at their longest, past any name a person
+// or an agent gives one, and a sixteenth of the question it is parked beside.
+//
+// A BRANCH IS AN IDENTIFIER, so one past it is NOT RECORDED rather than cut
+// ([fitBranch]): a shortened branch names nothing a fresh machine could check
+// out.
+const MaxBranchBytes = 1 << 10
 
 // MaxCondenseBytes is the most text one [Condenser] call reads: what the
 // engine's compactor takes in one condensation, its compact.MaxChunks first-
@@ -327,7 +346,8 @@ type Condenser interface {
 // already trusts no runner to have redacted what it hands back (see
 // [runPhase]). Bounded in a runner, a runner that forgot the bound would
 // publish an unbounded transcript, and the record carrying the run's only
-// spend would be refused whole.
+// spend would be refused whole. And THE BRANCH a question was asked with, for
+// the run's row rather than its record ([fitBranch]).
 func (c *Coordinator) fitResult(ctx context.Context, run PendingRun, result Result) Result {
 	// THIS COLLECTION'S OWN, counted from nothing: the field is the
 	// coordinator's, and a runner that set it would be charging the turn
@@ -339,6 +359,7 @@ func (c *Coordinator) fitResult(ctx context.Context, run PendingRun, result Resu
 	if result.NeedsInput {
 		result = c.fitQuestion(ctx, run, result)
 	}
+	result.WIPBranch = fitBranch(ctx, run, result.WIPBranch)
 	result.Text = c.fitPart(ctx, run, PartReport, result.Text, MaxRunTextBytes, &result.Condensed)
 	result.Error = c.fitPart(ctx, run, PartFailure, result.Error, MaxRunTextBytes, &result.Condensed)
 	result.Transcript, result.TranscriptElidedLines, result.TranscriptElidedBytes =
@@ -373,7 +394,8 @@ func (c *Coordinator) fitQuestion(ctx context.Context, run PendingRun, result Re
 	refusal := questionRefusal(len(question))
 	log.WarnContext(ctx, "sandbox_question_not_asked", "turn_id", run.TurnID,
 		"launch_id", run.LaunchID, "bytes", len(question))
-	result.NeedsInput, result.Question, result.AskTo = false, "", ""
+	// The branch goes with the ask it was recorded by: nothing parks.
+	result.NeedsInput, result.Question, result.AskTo, result.WIPBranch = false, "", "", ""
 	result.Success = false
 	if result.Error == "" {
 		result.Error = refusal
@@ -392,15 +414,23 @@ func questionRefusal(bytes int) string {
 		"was asked it", kib(bytes), MaxQuestionBytes>>10)
 }
 
-// boundRefs is a run's delivered refs, deduplicated in the order they were
-// found and held to [MaxDeliveredRefBytes], with how many did not fit.
+// boundRefs is a run's delivered refs, redacted, deduplicated in the order
+// they were found and held to [MaxDeliveredRefBytes], with how many did not
+// fit.
 //
 // WHOLE REFS ONLY: a ref is an identifier, and a shortened URL names nothing.
+//
+// REDACTED FIRST, here rather than trusted to the runner, for the reason the
+// transcript is ([Coordinator.fitResult]): a ref is whatever word a run's
+// report put on its `Delivered:` line, which a box can make a credential, and
+// every reader of the record — its event, the resumed executor's text — reads
+// these. First, so the bound measures what is carried.
 func boundRefs(refs []string) ([]string, int) {
 	seen := make(map[string]bool, len(refs))
 	var kept []string
 	size, left := 0, 0
 	for _, ref := range refs {
+		ref = redact.Secrets(ref)
 		if seen[ref] {
 			continue
 		}
@@ -413,6 +443,29 @@ func boundRefs(refs []string) ([]string, int) {
 		kept = append(kept, ref)
 	}
 	return kept, left
+}
+
+// fitBranch is the branch a run recorded with its question, redacted, or ""
+// where it is not one to hand on: past [MaxBranchBytes], or a name git would
+// refuse ([ValidBranch]) — which a credential the redaction replaced always is.
+//
+// DROPPED RATHER THAN CUT OR MENDED, and said in the log. Without a branch the
+// answer's text tells a re-seeded run in general terms to check out the branch
+// the work was pushed to, which is true; with a wrong one it names a branch to
+// check out that does not exist. Here rather than in a runner, for the reason
+// the transcript's bound is ([Coordinator.fitResult]): this is where every
+// collected result enters, whichever runner read it.
+func fitBranch(ctx context.Context, run PendingRun, branch string) string {
+	branch = redact.Secrets(branch)
+	if branch == "" || (len(branch) <= MaxBranchBytes && ValidBranch(branch)) {
+		return branch
+	}
+	log.WarnContext(ctx, "sandbox_branch_not_recorded", "turn_id", run.TurnID,
+		"launch_id", run.LaunchID, "bytes", len(branch),
+		"detail", "the branch the run recorded with its question is not a name git accepts for a "+
+			"branch, or is past what a run's row carries, so the run is parked with no branch and "+
+			"its re-seed is told to check out the branch it pushed in general terms")
+	return ""
 }
 
 // The two halves of a long transcript a run's record keeps, in whole lines.

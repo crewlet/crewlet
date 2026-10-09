@@ -1902,7 +1902,7 @@ func (e *Engine) waiterDuty(interval time.Duration) (schedule.DutyFunc, error) {
 // revision that was itself fine. An Option is the operator's, so it is refused
 // where the operator is still looking.
 func checkSandboxPollInterval(interval time.Duration) error {
-	if err := coord.CheckDutyTTL(coord.WorkerResource(waiterDutyName), waiterDutyTTL(interval)); err != nil {
+	if err := coord.CheckLeaseTTL(coord.WorkerResource(waiterDutyName), waiterDutyTTL(interval)); err != nil {
 		return fmt.Errorf("engine: a sandbox poll interval of %v needs a %v waiter duty; "+
 			"lower Options.SandboxPollInterval: %w", interval, waiterDutyTTL(interval), err)
 	}
