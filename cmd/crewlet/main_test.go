@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
@@ -328,11 +329,21 @@ func TestANodeWithoutTheIngressRoleServesOnlyItsProbes(t *testing.T) {
 		t.Errorf("/health carries the dashboard's client count on a node that "+
 			"serves no dashboard: %v", health)
 	}
-	for _, path := range []string{"/health", "/ready"} {
-		if got := statusOf(t, http.MethodGet, base+path); got != http.StatusOK &&
-			got != http.StatusServiceUnavailable {
-			t.Errorf("GET %s = %d, want a probe's answer", path, got)
-		}
+	if got := statusOf(t, http.MethodGet, base+"/health"); got != http.StatusOK {
+		t.Errorf("GET /health = %d, want the liveness probe's 200", got)
+	}
+	// THE PROBE SURFACE'S JUDGEMENT, over the work this node must be doing.
+	// The engine here was never started, so it holds no presence lease — a
+	// fact only that judgement reads, and the one that outranks admission —
+	// so a listener wired to the wrong runtime, or to the ingress answer,
+	// says something else.
+	if got := statusOf(t, http.MethodGet, base+"/ready"); got != http.StatusServiceUnavailable {
+		t.Errorf("GET /ready = %d on a node holding no presence lease, want 503", got)
+	}
+	ready := getJSON(t, base+"/ready")
+	if ready["node"] != e.Node().ID() || ready["ready"] != false ||
+		ready["reason"] != api.ReasonNoPresence {
+		t.Errorf("/ready = %v, want this node, not ready, for %q", ready, api.ReasonNoPresence)
 	}
 	// REFUSED, by the router's 404 or by the guard in front of it: an
 	// always-guarded prefix (/config, /operator/) and every write answer 401

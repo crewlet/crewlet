@@ -1496,8 +1496,8 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// a bridged session is a live tool surface in the process that opened it,
 	// so a seats node running an agent-mode seat is the only node its box can
 	// reach. See [api.Probes].
-	if profile := boot.Profile(nodeID); !profile.RunsIngress() {
-		return serveProbes(ctx, boot, profile, e, reconciler, log)
+	if !boot.Profile(nodeID).RunsIngress() {
+		return serveProbes(ctx, boot, e, reconciler, log)
 	}
 	// The config surface is the caller's, built before this function so a
 	// node with no HTTP listener still has a config WRITER (see runEngine).
@@ -2016,39 +2016,32 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 }
 
 // serveProbes is serveAPI for a node whose roles leave out ingress: it binds
-// api.port for the node's probes, and for its tool bridge where it has one, and
-// serves nothing else.
+// api.port for the node's probes, and for its tool bridge where it has one —
+// api.public instead when the file sets it — and serves nothing else.
 //
 // The bridge needs a seats node and a bridge URL. A node that runs no seats
 // opens no session, so the route there could only answer every box with 401;
 // and with no CREWLET_MCP_BRIDGE_URL the engine built no bridge at all. Either
-// way the route is absent rather than refusing.
-func serveProbes(ctx context.Context, boot *config.Bootstrap, profile placement.NodeProfile,
-	e *engine.Engine, reconciler *engine.Reconciler, log *slog.Logger,
+// way the route is absent rather than refusing. Which of them a node mounts is
+// [api.EngineProbeOptions]' decision, the one the end-to-end suite probes
+// through too.
+func serveProbes(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
+	reconciler *engine.Reconciler, log *slog.Logger,
 ) (*httpSurface, error) {
-	nodeID := e.Node().ID()
-	runtime, err := api.NewEngineProbeRuntime(e, reconciler)
+	opts, err := api.EngineProbeOptions(boot, e, reconciler)
 	if err != nil {
 		return nil, err
-	}
-	var bridge *mcpbridge.Bridge
-	if profile.RunsSeats() {
-		bridge = e.Bridge()
 	}
 	// THE BRIDGE IS A PUBLIC ROUTE — a box outside this network calls it —
 	// so with api.public set it is served there, on every node, and api.port
 	// carries the probes alone: one file serves every role, and the bridge
 	// address follows one rule across the fleet. Without api.public it rides
 	// api.port beside the probes.
-	probeBridge := bridge
+	bridge := opts.Bridge
 	if boot.API.Public.Enabled() {
-		probeBridge = nil
+		opts.Bridge = nil
 	}
-	handler, err := api.Probes(api.ProbeOptions{
-		Bootstrap: boot, Runtime: runtime, NodeID: nodeID,
-		Roles: profile.Roles.Names(), QueueBackend: e.Backends().Queue.Backend(),
-		Bridge: probeBridge,
-	})
+	handler, err := api.Probes(opts)
 	if err != nil {
 		return nil, err
 	}
@@ -2058,7 +2051,7 @@ func serveProbes(ctx context.Context, boot *config.Bootstrap, profile placement.
 	}
 	surface := &httpSurface{server: server}
 	publicAddr := ""
-	if probeBridge == nil && bridge != nil {
+	if opts.Bridge == nil && bridge != nil {
 		surface.public, publicAddr, err = listenAPI(ctx, boot.API.Public.Addr(),
 			api.BridgeOnly(boot, bridge), log)
 		if err != nil {
@@ -2066,8 +2059,8 @@ func serveProbes(ctx context.Context, boot *config.Bootstrap, profile placement.
 			return nil, err
 		}
 	}
-	log.InfoContext(ctx, "api_probes_listening", "addr", addr, "node", nodeID,
-		"roles", profile.Roles.Names(), "tool_bridge", bridge != nil,
+	log.InfoContext(ctx, "api_probes_listening", "addr", addr, "node", opts.NodeID,
+		"roles", opts.Roles, "tool_bridge", bridge != nil,
 		// Empty unless the bridge has a listener of its own on api.public.
 		"public_addr", publicAddr,
 		"hint", "node.roles does not include ingress, so this node serves only "+
@@ -2082,9 +2075,9 @@ func serveProbes(ctx context.Context, boot *config.Bootstrap, profile placement.
 // listenAPI binds addr and serves handler on it, in the background.
 //
 // ONE PATH for every listener a node opens — the whole API, the public
-// listener beside it, the probe surface and the bridge's own — so they cannot drift apart
-// on the timeouts that bound an unauthenticated client or on how a bind failure
-// is reported.
+// listener beside it, the probe surface ([api.Probes]) and the bridge's own —
+// so they cannot drift apart on the timeouts that bound an unauthenticated
+// client or on how a bind failure is reported.
 func listenAPI(ctx context.Context, addr string, handler http.Handler,
 	log *slog.Logger,
 ) (*http.Server, string, error) {

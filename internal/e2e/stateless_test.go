@@ -93,17 +93,25 @@ func startStatelessPairWith(t *testing.T, amend func(doc string) string) statele
 // given to Tier A, and a refusal names the node it was building.
 func bootNode(t *testing.T, boot *config.Bootstrap, cfg *config.Company, model *scriptedModel) *node {
 	t.Helper()
-	e, err := engine.New(t.Context(), engine.Options{
+	return bootNodeWith(t, engine.Options{
 		Bootstrap: boot, Company: cfg, ActivatedAt: harnessActivation,
-	})
+	}, model)
+}
+
+// bootNodeWith is [bootNode] over the engine options the caller chose — a
+// maintenance mode, say.
+func bootNodeWith(t *testing.T, opts engine.Options, model *scriptedModel) *node {
+	t.Helper()
+	id := opts.Bootstrap.Node.ID
+	e, err := engine.New(t.Context(), opts)
 	if err != nil {
-		t.Fatalf("engine.New(%s): %v", boot.Node.ID, err)
+		t.Fatalf("engine.New(%s): %v", id, err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
 	if err := e.Start(t.Context()); err != nil {
-		t.Fatalf("engine.Start(%s): %v", boot.Node.ID, err)
+		t.Fatalf("engine.Start(%s): %v", id, err)
 	}
-	return &node{engine: e, model: model, id: boot.Node.ID}
+	return &node{engine: e, model: model, id: id}
 }
 
 // leafPort is a loopback port nothing held a moment ago.
@@ -218,7 +226,7 @@ func TestAStatelessNodesAuditTrailLandsOnADataNode(t *testing.T) {
 // stays 200, and every route that is not a probe refused throughout.
 func TestAStatelessNodeAnswersItsProbes(t *testing.T) {
 	p := startStatelessPair(t)
-	probes := serveProbes(t, p.agent, p.agentBoot)
+	probes, _ := serveProbes(t, p.agent, p.agentBoot)
 
 	waitFor(t, "the stateless node to be ready", func() bool {
 		status, _ := probeAt(t, probes, http.MethodGet, "/ready")
@@ -285,10 +293,72 @@ func TestAStatelessNodeAnswersItsProbes(t *testing.T) {
 	}
 }
 
-// serveProbes is a stateless node's probe surface, wired to its engine the way
-// cmd/crewlet wires a node without the ingress role, on a test listener torn
-// down when the test ends.
-func serveProbes(t *testing.T, n *node, boot *config.Bootstrap) *httptest.Server {
+// A NODE SEAT ADMISSION DOES NOT APPLY TO IS READY ON ITS PRESENCE. Admission
+// is a seats node's in a mode that publishes, and nobody else's: a node whose
+// roles leave out seats claims none whatever the gate says, and a node started
+// in maintenance mode withholds every claim BY DESIGN — that is the mode doing
+// its job, and a probe calling it unready would stall the rollout the mode
+// exists for. Each of the two rules is what keeps such a node out of
+// admission_withheld, and each case here is the one its rule decides.
+func TestANodeAdmissionDoesNotApplyToIsReadyOnItsPresence(t *testing.T) {
+	model := newScriptedModel(t)
+	cfg, err := config.ParseCompany([]byte(fmt.Sprintf(companyDoc, model.url)))
+	if err != nil {
+		t.Fatalf("company config: %v", err)
+	}
+	for _, tc := range []struct {
+		name  string
+		roles []string
+		mode  statelog.MaintenanceMode
+	}{
+		{name: "without the seats role", roles: []string{"data", "workers"},
+			mode: statelog.ModeNormal},
+		{name: "in maintenance mode, running seats", roles: []string{"data", "seats", "workers"},
+			mode: statelog.ModeMaintenance},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			boot := config.DefaultBootstrap()
+			boot.Node.ID = "probed"
+			boot.Node.Roles = tc.roles
+			boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
+			boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+			boot.Coordination.Type = config.CoordinationEmbeddedKV
+			n := bootNodeWith(t, engine.Options{
+				Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation, Mode: tc.mode,
+			}, model)
+			probes, runtime := serveProbes(t, n, &boot)
+
+			if work := runtime.Work(); work.Admission {
+				t.Errorf("seat admission applies to a node %s: %+v", tc.name, work)
+			}
+			waitFor(t, "the node to be ready on its presence", func() bool {
+				status, _ := probeAt(t, probes, http.MethodGet, "/ready")
+				return status == http.StatusOK
+			}, func() string {
+				_, body := probeAt(t, probes, http.MethodGet, "/ready")
+				return fmt.Sprint(body, " ", runtime.Work())
+			})
+			if tc.mode != statelog.ModeMaintenance {
+				return
+			}
+			// THE PREMISE: the mode's gate really did withhold this node's
+			// claims, so the rule is what kept it out of admission_withheld.
+			waitFor(t, "a placement pass to withhold its claims", func() bool {
+				last, swept := n.engine.Node().Host().LastSweep()
+				return swept && last.Withheld
+			})
+			if status, body := probeAt(t, probes, http.MethodGet, "/ready"); status != http.StatusOK {
+				t.Errorf("/ready after a withheld pass = %d %v, want 200", status, body)
+			}
+		})
+	}
+}
+
+// serveProbes is a node's probe surface, wired to its engine by the same
+// function `crewlet run` wires a node without the ingress role through, on a
+// test listener torn down when the test ends. The runtime it answers from is
+// returned beside it, so a case can read the facts /ready judged.
+func serveProbes(t *testing.T, n *node, boot *config.Bootstrap) (*httptest.Server, api.ProbeRuntime) {
 	t.Helper()
 	backends := n.engine.Backends()
 	reconciler, err := n.engine.NewReconciler(engine.ReconcilerOptions{
@@ -298,21 +368,17 @@ func serveProbes(t *testing.T, n *node, boot *config.Bootstrap) *httptest.Server
 	if err != nil {
 		t.Fatalf("reconciler: %v", err)
 	}
-	runtime, err := api.NewEngineProbeRuntime(n.engine, reconciler)
+	opts, err := api.EngineProbeOptions(boot, n.engine, reconciler)
 	if err != nil {
-		t.Fatalf("probe runtime: %v", err)
+		t.Fatalf("probe options: %v", err)
 	}
-	profile := boot.Profile(n.engine.Node().ID())
-	handler, err := api.Probes(api.ProbeOptions{
-		Bootstrap: boot, Runtime: runtime, NodeID: n.engine.Node().ID(),
-		Roles: profile.Roles.Names(), QueueBackend: backends.Queue.Backend(),
-	})
+	handler, err := api.Probes(opts)
 	if err != nil {
 		t.Fatalf("probe surface: %v", err)
 	}
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
-	return srv
+	return srv, opts.Runtime
 }
 
 // probeAt is one request to a probe surface: its status and its JSON body.
