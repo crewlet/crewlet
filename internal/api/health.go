@@ -15,11 +15,13 @@ import (
 
 // The statuses a health body reports.
 //
-// Precedence is shutting_down > a posture other than serve or wait >
-// unconfigured > ok. A draining engine is draining first, whatever else is true
-// of it. The posture outranks unconfigured because it names the CAUSE: a node
-// stuck applying its first revision is unconfigured because it is stuck, and
-// `configured: false` still says the rest beside it.
+// Precedence is shutting_down > unconfigured > a posture other than serve or
+// wait > ok, which is the order [App.health] and /ready's reason both apply. A
+// draining engine is draining first, whatever else is true of it. Unconfigured
+// outranks a posture because it is the fact that decides what the node does
+// with a delivery: with no revision it refuses every one, whatever it
+// concluded about the fleet's epoch, and the posture still travels beside it
+// in its own field.
 const (
 	StatusOK           = "ok"
 	StatusUnconfigured = "unconfigured"
