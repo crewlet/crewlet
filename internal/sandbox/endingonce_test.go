@@ -83,6 +83,7 @@ func (s deleteLandsThenFails) Finish(ctx context.Context, turnID, ending string)
 // only after the delete, the run was announced by nobody: the attempt that would
 // have made it found nothing left to end.
 func TestAnEndingWhoseDeleteLandedAndFailedIsAnnouncedOnce(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launching("t1")
 	next := reaper(t.Context(), t, rig, deleteLandsThenFails{rig.pending}, 2, nil)
@@ -103,6 +104,7 @@ func TestAnEndingWhoseDeleteLandedAndFailedIsAnnouncedOnce(t *testing.T) {
 // the run was announced lost for a reason it did not end for, and the reason it
 // did end for was announced by nobody.
 func TestAnEndingIsAnnouncedForItsOwnReasonByTheNodeThatFinishesIt(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
@@ -133,6 +135,7 @@ func TestAnEndingIsAnnouncedForItsOwnReasonByTheNodeThatFinishesIt(t *testing.T)
 // store, whose key that pair is, keeps one row, and the fleet's reads merge the
 // two copies into one.
 func TestAnEndingFinishedByTwoNodesIsOneEvent(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launching("t1")
 	first := reaper(t.Context(), t, rig, &finishUntil{refusingStore: &refusingStore{inner: rig.pending}}, 2, nil)
@@ -156,6 +159,7 @@ func TestAnEndingFinishedByTwoNodesIsOneEvent(t *testing.T) {
 // row is read by nobody and the announcement is the only account of how the run
 // ended.
 func TestAnAnnouncementTheBrokerRefusedIsMadeByTheRetry(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launching("t1")
 	rig.failPublishes(errors.New("the broker is unreachable"))
@@ -175,6 +179,7 @@ func TestAnAnnouncementTheBrokerRefusedIsMadeByTheRetry(t *testing.T) {
 // node that stops between the two leave the ending to be finished — and the
 // announcement made again, as the same event — rather than lose it.
 func TestAnEndingIsAnnouncedBeforeItsRecordIsDeleted(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launching("t1")
 	var recordAtAnnouncement []bool
@@ -201,6 +206,7 @@ func TestAnEndingIsAnnouncedBeforeItsRecordIsDeleted(t *testing.T) {
 // rather than counting it as a question waiting on a person, which nothing would
 // ever end again.
 func TestAnEndingDecidedOnAParkedRunIsFinishedByTheNextHolder(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
 	rig.failPublishes(errors.New("the broker is unreachable"))
@@ -229,6 +235,7 @@ func TestAnEndingDecidedOnAParkedRunIsFinishedByTheNextHolder(t *testing.T) {
 // inline attempt and its retry — the last two saying the person's reply went
 // back to the seat.
 func TestAResumeBrokenBeforeItsTurnIsAnnouncedOnce(t *testing.T) {
+	t.Parallel()
 	brokenBeforeTurn := func(rig *coordRig) {
 		rig.resumer.failWith(ErrResumeAbandoned)
 		rig.resumer.beforeTurn = true

@@ -109,12 +109,13 @@ func pinnedSeat(ctx context.Context) (string, bool) {
 // A CONSTRUCTOR because the resolution needs the chart, which is a Tier B
 // value a config apply replaces — so it is read per call rather than captured.
 // A nil chart, or a build with none loaded, resolves no seat, which is exactly
-// an unbound token and an ordinary state.
+// an unbound token and an ordinary state. lookup resolves a `${VAR}` binding
+// ([seatFor]).
 //
 // THE SEAT THE CALL WAS PINNED TO WINS ([withSeat]): every call through the
 // dispatch carries the one answer its admission and its audit read, and the
 // chart is read here only for a caller that reached the actor some other way.
-func WorkActor(chart func() *org.Organization) func(
+func WorkActor(chart func() *org.Organization, lookup org.EnvLookup) func(
 	context.Context, *turnctx.Turn) (builtin.Actor, error) {
 
 	return func(ctx context.Context, _ *turnctx.Turn) (builtin.Actor, error) {
@@ -132,7 +133,7 @@ func WorkActor(chart func() *org.Organization) func(
 		if seat, pinned := pinnedSeat(ctx); pinned {
 			actor.Seat = seat
 		} else {
-			actor.Seat = seatFor(chart, id)
+			actor.Seat = seatFor(chart, lookup, id)
 		}
 		// AND THE OPERATION THE TRANSPORT NAMED, where it named one: it
 		// is what makes a retried request the same writes. See
@@ -144,11 +145,13 @@ func WorkActor(chart func() *org.Organization) func(
 
 // seatFor is the chart seat a token id is bound to, or "".
 //
-// NIL LOOKUP, so a `crewlet_operator_id: ${FOUNDER_ID}` resolves against this
-// process's own environment — which is where every other consumer of `contact`
-// resolves one, and what stops a company being bound for one direction and
-// unbound for the other. The other direction is [builtin.Parties].
-func seatFor(chart func() *org.Organization, id string) string {
+// lookup resolves a `crewlet_operator_id: ${FOUNDER_ID}`: the serving node's
+// own chain ([Options.Env]) — the secret store, then the environment it was
+// handed — which is where every other consumer of `contact` resolves one, and
+// the same lookup the other direction is handed ([builtin.Parties]), which is
+// what stops a company being bound for one direction and unbound for the
+// other. Nil reads the process environment.
+func seatFor(chart func() *org.Organization, lookup org.EnvLookup, id string) string {
 	if chart == nil {
 		return ""
 	}
@@ -156,7 +159,7 @@ func seatFor(chart func() *org.Organization, id string) string {
 	if o == nil {
 		return ""
 	}
-	seat := o.SeatByOperatorID(id, nil)
+	seat := o.SeatByOperatorID(id, lookup)
 	if seat == nil {
 		return ""
 	}

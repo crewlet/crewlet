@@ -33,6 +33,7 @@ import (
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/slack"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/whsec"
 )
 
@@ -101,10 +102,7 @@ func newSurface(t *testing.T) *surface { return newSurfaceWithApps(t, nil) }
 // document's only writers (`api.auth.company_writers`).
 func newConfigSurface(t *testing.T, writers ...string) (*configapi.Service, *store.DB) {
 	t.Helper()
-	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "c.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.OpenNode: %v", err)
-	}
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "c.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	cfg, err := configapi.New(configapi.Options{
 		Store: db, Plane: coordmemory.NewFleet(),

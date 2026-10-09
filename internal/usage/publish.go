@@ -87,6 +87,14 @@ type PublisherDeps struct {
 	// Now is the clock. Nil is [time.Now].
 	Now func() time.Time
 
+	// Every is the cadence [Publisher.Run] ticks on. Zero is
+	// [FlushInterval], which is what every production caller leaves it:
+	// the cadence is the domain's decision, and a node publishing on
+	// another would put its day behind the live meters it is read beside.
+	// A test that must see a LIVE loop publish something written after
+	// boot shortens it rather than waiting out fifteen seconds.
+	Every time.Duration
+
 	Logger *slog.Logger
 }
 
@@ -121,6 +129,12 @@ func NewPublisher(d PublisherDeps) (*Publisher, error) {
 	case d.Zone == nil:
 		return nil, fmt.Errorf("usage: a publisher needs the company's clock, " +
 			"which is what a day is cut on")
+	case d.Every < 0:
+		return nil, fmt.Errorf("usage: a publisher's cadence of %v is negative; "+
+			"leave it zero for %v", d.Every, FlushInterval)
+	}
+	if d.Every == 0 {
+		d.Every = FlushInterval
 	}
 	if d.Now == nil {
 		d.Now = time.Now
@@ -133,9 +147,10 @@ func NewPublisher(d PublisherDeps) (*Publisher, error) {
 		published: map[string]string{}}, nil
 }
 
-// Run flushes at once and then every [FlushInterval] until ctx ends.
+// Run flushes at once and then every [PublisherDeps.Every] — [FlushInterval]
+// in production — until ctx ends.
 func (p *Publisher) Run(ctx context.Context) {
-	ticker := time.NewTicker(FlushInterval)
+	ticker := time.NewTicker(p.deps.Every)
 	defer ticker.Stop()
 	for {
 		if err := p.Flush(ctx); err != nil && ctx.Err() == nil {

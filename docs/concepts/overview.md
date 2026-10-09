@@ -294,7 +294,8 @@ internal/
 │                         #   engine's own, found by name and read by syntax;
 │                         #   every one lives in dashboard/src/contract/
 ├── sourcetree/           # What is this repository's tree: the module root,
-│                         #   and a walk that never reads a nested checkout
+│                         #   a walk that never reads a nested checkout, and
+│                         #   what a gate may skip unread
 ├── e2e/                  # The end-to-end company, and the dashboard replay
 ├── period/               # The company calendar: the day, ISO week and month a
 │                         #   moment falls in, named by a label every node

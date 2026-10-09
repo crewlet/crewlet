@@ -469,12 +469,21 @@ func (s *Service) StartHealthTicks(ctx context.Context) {
 	}()
 }
 
-// flushTokens sends the spend rollup if a phase completed since the last one.
+// flushTokens sends the spend rollup if it moved since the last one: a spend
+// record arrived, or one aged out of the live window.
+//
+// AGED AS WELL AS ARRIVED. A record leaving the window publishes nothing, so a
+// rollup pushed only on arrivals kept every open screen on a figure the window
+// no longer held until the next phase completed — on a quiet company, a day's
+// spend under the heading of a day that had none.
 //
 // The flag is cleared only AFTER the fold, so an aggregation that panicked
 // would not consume the burst it failed on and leave the rollup stale until
 // the next phase completed.
 func (s *Service) flushTokens() {
+	if s.state.ExpireSpend() {
+		s.tokensDirty.Store(true)
+	}
 	if !s.tokensDirty.Load() {
 		return
 	}
@@ -483,21 +492,23 @@ func (s *Service) flushTokens() {
 	s.hub.Broadcast(Push(KindTokens, rollup, s.now()))
 }
 
-// TokenRollup folds the live window into the breakdown the dashboard renders.
+// TokenRollup folds the live window into the breakdown the `tokens` push and
+// the snapshot carry, which no screen of the bundled dashboard draws: its spend
+// screens read named windows.
 //
 // Exported because the snapshot needs the same answer: a client that connected
 // mid-window and one that has been receiving pushes must hold the same rollup,
 // and two constructions of it is how they come to differ.
 func (s *Service) TokenRollup() tokens.Rollup {
 	// The window this rollup actually covers, reported rather than assumed:
-	// the client prints it beside the numbers, and a figure labelled with
-	// the wrong window is worse than an unlabelled one. The projection
-	// evicts on a rolling window, so its top edge is this instant.
-	now := time.Now()
-	return tokens.Aggregate(s.state.SpendRecords(), tokens.Options{
+	// a reader prints it beside the numbers, and a figure labelled with
+	// the wrong window is worse than an unlabelled one. The projection ages
+	// its window on its own clock and names the two instants it cut it at.
+	window := s.state.Spend()
+	return tokens.Aggregate(window.Records, tokens.Options{
 		Handles: s.handles(),
-		Since:   now.Add(-livestate.LiveSpendWindow),
-		Until:   now,
+		Since:   window.Since,
+		Until:   window.Until,
 	})
 }
 

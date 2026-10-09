@@ -130,16 +130,13 @@ func issueOpened(actor string, assignees ...string) map[string]any {
 // username, and the org model does not say which account a seat holds — so
 // the engine reads it from the same mcp_env block the seat's own tools use.
 func TestACodeHostAssignmentWakesTheSeatThatOwnsTheAccount(t *testing.T) {
+	t.Parallel()
 	n := startWith(t, withSeatCredential(fakeGitLab(t, map[string]string{"glpat-ceo": "ceo-bot"}).url))
 	box := watchInbox(t, n, "ceo")
 
 	gitlabWebhook(t, n, issueOpened("human-dev", "ceo-bot"))
 
-	got := box.settled(t, 1)
-	if len(got) != 1 {
-		t.Fatalf("the assignee was woken %d times", len(got))
-	}
-	woken := got[0]
+	woken := box.settled(t, 1)[0]
 	seat, ok := n.engine.Registry().ByHandle("ceo")
 	if !ok || woken.Agent != seat.AgentID.String() {
 		t.Fatalf("the wake names agent %q, want %q", woken.Agent, seat.AgentID)
@@ -162,17 +159,21 @@ func TestACodeHostAssignmentWakesTheSeatThatOwnsTheAccount(t *testing.T) {
 		t.Fatalf("the conversation identity reads %q and the partition key %q",
 			got, woken.Metadata[notify.PartitionField])
 	}
+	onlyWakes(t, n, "ceo", 1)
 }
 
 // WITHOUT A CREDENTIAL THERE IS NO IDENTITY, and without an identity the
 // integration is inert. Worth pinning, because the failure is a company
 // where every code-host event names a stranger and nothing says why.
 func TestASeatWithNoCredentialIsUnreachableFromTheCodeHost(t *testing.T) {
+	t.Parallel()
 	n := startWith(t, gitlabCompany(fakeGitLab(t, map[string]string{"glpat-ceo": "ceo-bot"}).url))
-	box := watchInbox(t, n, "ceo")
 
 	gitlabWebhook(t, n, issueOpened("human-dev", "ceo-bot"))
-	box.quiet(t)
+	// ROUTED TO NOBODY by the parser, which drops a username no seat holds
+	// and records nothing — so the wait is on the delivery behind it.
+	settleInbound(t, n)
+	nobodyWoken(t, n, "ceo")
 }
 
 // A SIGNING SECRET THAT CANNOT VERIFY ANYTHING STOPS THE CODE HOST, LOUDLY.
@@ -186,34 +187,49 @@ func TestASeatWithNoCredentialIsUnreachableFromTheCodeHost(t *testing.T) {
 // cannot see. The company keeps running: the code host is what is
 // unavailable, and saying so beats reporting it enabled and inert.
 func TestACodeHostWithNoUsableSigningSecretDoesNotStart(t *testing.T) {
+	t.Parallel()
 	forge := fakeGitLab(t, map[string]string{"glpat-ceo": "ceo-bot"})
 	// Both cases are REFERENCES, because that is the only way to reach this
 	// code: config refuses a literal that is not a usable key outright, so
 	// what the engine has left to catch is a reference resolving to nothing
 	// or to something else — precisely what config cannot see.
-	const ref = "${CREWLET_TEST_GITLAB_SECRET}"
+	const (
+		variable = "CREWLET_TEST_GITLAB_SECRET"
+		ref      = "${" + variable + "}"
+	)
 	for _, tc := range []struct{ name, resolvesTo string }{
 		{"a reference nothing answers", ""},
 		{"a value the vendor could not have produced", "not-a-whsec-value"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			env := map[string]string{}
 			if tc.resolvesTo != "" {
-				t.Setenv("CREWLET_TEST_GITLAB_SECRET", tc.resolvesTo)
+				env[variable] = tc.resolvesTo
 			}
 			// THE SEAT HOLDS A CREDENTIAL, which is what makes the silence
 			// mean something: this exact company with a usable signing
 			// secret wakes the CEO on this exact delivery, as
 			// TestACodeHostAssignmentWakesTheSeatThatOwnsTheAccount does.
-			n := startWith(t, func(doc string) string {
+			n := startNode(t, nodeSpec{company: func(doc string) string {
 				return strings.Replace(withSeatCredential(forge.url)(doc),
 					testSigningSecret, ref, 1)
-			})
-			box := watchInbox(t, n, "ceo")
+			}, env: env})
+			// THE PREMISE, held on the node rather than assumed of the
+			// runner: the reference answers exactly what this case handed
+			// it, so "nothing answers" cannot quietly become "the runner
+			// exports a value" and test the other case twice.
+			if got, found := n.engine.LookupSecret(variable); found != (tc.resolvesTo != "") ||
+				got != tc.resolvesTo {
+				t.Fatalf("%s resolves to %q (found %v) on the node, want %q",
+					ref, got, found, tc.resolvesTo)
+			}
 
 			// The company is up — the seat's mailbox exists and the rest of
-			// the spine is running — and the code host is not.
+			// the spine is running — and the code host is not: the delivery
+			// finds no parser for its source, and the spine records that.
 			gitlabWebhook(t, n, issueOpened("human-dev", "ceo-bot"))
-			box.quiet(t)
+			dropped(t, n, "ceo", skip{gitlab.Backend, "", notify.ReasonUnparsed})
 			if got := forge.identityLookups(); got != 0 {
 				t.Errorf("the code host resolved %d identities on a config it "+
 					"could not verify a delivery with", got)
@@ -227,6 +243,7 @@ func TestACodeHostWithNoUsableSigningSecretDoesNotStart(t *testing.T) {
 // is what lets a failed build past it, and this is the only path in the
 // engine that exercises the override.
 func TestAFailedPipelineReachesTheSeatThatBrokeIt(t *testing.T) {
+	t.Parallel()
 	n := startWith(t, withSeatCredential(fakeGitLab(t, map[string]string{"glpat-ceo": "ceo-bot"}).url))
 	box := watchInbox(t, n, "ceo")
 
@@ -240,21 +257,19 @@ func TestAFailedPipelineReachesTheSeatThatBrokeIt(t *testing.T) {
 	})
 
 	got := box.settled(t, 1)
-	if len(got) != 1 {
-		t.Fatalf("the seat that broke the build was woken %d times", len(got))
-	}
 	if body := got[0].Body; !strings.Contains(body, "has FAILED") ||
 		!strings.Contains(body, "deliberately") {
 		t.Fatalf("the trigger does not explain the exception:\n%s", body)
 	}
+	onlyWakes(t, n, "ceo", 1)
 }
 
 // And the rule itself still holds for everything else: a seat's own comment
 // must not come back to it, or a seat assigned to its own issue answers its
 // own comment and loops.
 func TestASeatIsNotWokenByItsOwnComment(t *testing.T) {
+	t.Parallel()
 	n := startWith(t, withSeatCredential(fakeGitLab(t, map[string]string{"glpat-ceo": "ceo-bot"}).url))
-	box := watchInbox(t, n, "ceo")
 
 	gitlabWebhook(t, n, map[string]any{
 		"object_kind": "note",
@@ -266,15 +281,17 @@ func TestASeatIsNotWokenByItsOwnComment(t *testing.T) {
 		"issue": map[string]any{"iid": 42, "title": "Fix it",
 			"assignees": []any{map[string]any{"username": "ceo-bot"}}},
 	})
-	box.quiet(t)
+	// THE SPINE'S GUARD, by name: the parser leaves the actor in (it cannot
+	// know the pipeline exception), and the self-action rule drops it.
+	dropped(t, n, "ceo", skip{gitlab.Backend, "ceo", notify.ReasonSelfAction})
 }
 
 // A GREEN PIPELINE IS NOT NEWS. Routing every build would wake the seat that
 // pushed on every commit, which is the loop the self-action rule exists to
 // prevent, reintroduced through the one event allowed past it.
 func TestAGreenPipelineWakesNobody(t *testing.T) {
+	t.Parallel()
 	n := startWith(t, withSeatCredential(fakeGitLab(t, map[string]string{"glpat-ceo": "ceo-bot"}).url))
-	box := watchInbox(t, n, "ceo")
 
 	gitlabWebhook(t, n, map[string]any{
 		"object_kind": "pipeline",
@@ -283,7 +300,10 @@ func TestAGreenPipelineWakesNobody(t *testing.T) {
 			"id": 7, "path_with_namespace": "nimbus/api"},
 		"object_attributes": map[string]any{"status": "success"},
 	})
-	box.quiet(t)
+	// NOTHING ROUTED, so nothing recorded: the parser names nobody for a
+	// green build, and the wait is on the delivery behind it.
+	settleInbound(t, n)
+	nobodyWoken(t, n, "ceo")
 }
 
 // AN APPLY MUST NOT LOSE THE IDENTITIES, and must not re-buy them either.
@@ -292,6 +312,7 @@ func TestAGreenPipelineWakesNobody(t *testing.T) {
 // added by a revision permanently unreachable — while one that re-resolved
 // every seat would spend a request per seat on every reconcile.
 func TestApplyingARevisionKeepsTheCodeHostIdentitiesWithoutReasking(t *testing.T) {
+	t.Parallel()
 	instance := fakeGitLab(t, map[string]string{"glpat-ceo": "ceo-bot"})
 	n := startWith(t, withSeatCredential(instance.url))
 	box := watchInbox(t, n, "ceo")
@@ -315,9 +336,8 @@ func TestApplyingARevisionKeepsTheCodeHostIdentitiesWithoutReasking(t *testing.T
 	}
 
 	gitlabWebhook(t, n, issueOpened("human-dev", "ceo-bot"))
-	if got := box.settled(t, 1); len(got) != 1 {
-		t.Fatalf("the assignee was woken %d times after the applies", len(got))
-	}
+	box.settled(t, 1)
+	onlyWakes(t, n, "ceo", 1)
 }
 
 // A ROTATED CREDENTIAL IS A CACHE MISS and costs exactly one request, which
@@ -325,6 +345,7 @@ func TestApplyingARevisionKeepsTheCodeHostIdentitiesWithoutReasking(t *testing.T
 // would keep routing that account's events to a seat that no longer holds
 // it.
 func TestARotatedCredentialIsReresolved(t *testing.T) {
+	t.Parallel()
 	instance := fakeGitLab(t, map[string]string{
 		"glpat-ceo": "ceo-bot", "glpat-rotated": "ceo-bot-v2"})
 	n := startWith(t, withSeatCredential(instance.url))
@@ -345,15 +366,15 @@ func TestARotatedCredentialIsReresolved(t *testing.T) {
 	}
 
 	gitlabWebhook(t, n, issueOpened("human-dev", "ceo-bot-v2"))
-	if got := box.settled(t, 1); len(got) != 1 {
-		t.Fatalf("the new account was woken %d times", len(got))
-	}
+	box.settled(t, 1)
+	onlyWakes(t, n, "ceo", 1)
 }
 
 // AN INSTANCE THAT REFUSES A LOOKUP does not fail the boot: it may be
 // briefly down, and the next apply retries. What it costs is that seat's
 // inbound routing until then, which is reported per seat.
 func TestAnUnresolvableCredentialDoesNotStopTheCompany(t *testing.T) {
+	t.Parallel()
 	instance := fakeGitLab(t, map[string]string{})
 	n := startWith(t, withSeatCredential(instance.url))
 	box := watchInbox(t, n, "ceo")
@@ -362,7 +383,10 @@ func TestAnUnresolvableCredentialDoesNotStopTheCompany(t *testing.T) {
 		t.Fatal("the company did not start")
 	}
 	gitlabWebhook(t, n, issueOpened("human-dev", "ceo-bot"))
-	box.quiet(t)
+	// ROUTED TO NOBODY, since no seat holds an account yet: see
+	// TestASeatWithNoCredentialIsUnreachableFromTheCodeHost.
+	settleInbound(t, n)
+	nobodyWoken(t, n, "ceo")
 
 	// The retry: the instance recovers and the next apply resolves it.
 	instance.mu.Lock()
@@ -372,7 +396,6 @@ func TestAnUnresolvableCredentialDoesNotStopTheCompany(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	gitlabWebhook(t, n, issueOpened("human-dev", "ceo-bot"))
-	if got := box.settled(t, 1); len(got) != 1 {
-		t.Fatalf("the seat was woken %d times after the instance recovered", len(got))
-	}
+	box.settled(t, 1)
+	onlyWakes(t, n, "ceo", 1)
 }

@@ -689,7 +689,7 @@ type leaseTTLInForce interface {
 // company's work sits unclaimed on a node that looks healthy.
 //
 // Taking the live value is also what keeps the derived timings coherent: the
-// heartbeat and the release budget are fractions of this number, so a node
+// heartbeat and a stop's allowance are fractions of this number, so a node
 // renewing on a 90-second cadence against a 45-second bucket would lose every
 // seat it held between beats.
 //

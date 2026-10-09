@@ -134,7 +134,7 @@ func actSurface(t *testing.T, work *recordingWork) *operator.Server {
 	s := newSurface(t, operator.Options{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Writer: work.writer,
-			Actor: operator.WorkActor(boundChart),
+			Actor: operator.WorkActor(boundChart, nil),
 		},
 		Pages: builtin.PageDeps{
 			Reader: stubPageReader{}, Writer: stubPageWriter{},
@@ -399,7 +399,7 @@ func TestARetriedActIsOneWriteOnEveryStore(t *testing.T) {
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Writer: (&recordingWork{}).writer,
 			ProjectWriter: func(builtin.Actor) builtin.ProjectWriter { return project },
-			Actor:         operator.WorkActor(boundChart),
+			Actor:         operator.WorkActor(boundChart, nil),
 		},
 		Pages: builtin.PageDeps{Reader: kb, Writer: kb, Actor: operator.PageActor},
 		Org:   boundChart,
@@ -494,7 +494,7 @@ func cofounderSurface(t *testing.T, work *recordingWork) *operator.Server {
 	}
 	s := newSurface(t, operator.Options{
 		Work: builtin.WorkDeps{
-			Reader: stubWorkReader{}, Writer: work.writer, Actor: operator.WorkActor(chart),
+			Reader: stubWorkReader{}, Writer: work.writer, Actor: operator.WorkActor(chart, nil),
 		},
 		Org: chart,
 	})

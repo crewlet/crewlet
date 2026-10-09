@@ -139,44 +139,49 @@ func BenchmarkLogApplyDrain(b *testing.B) {
 	}
 }
 
-// BenchmarkApplyTxUnderForeignCommits answers the question the applier's
-// occupancy model rests on: what a long write transaction costs when other
-// commits are happening beside it, and whether those commits ABORT it.
+// BenchmarkApplyTxUnderForeignCommits prices what a long write transaction
+// and the commits beside it cost each other — the throughput half of the
+// applier's occupancy model — when those commits land in the applier's own
+// file and when they land in the other estate.
 //
-// # Why it has to be measured
+// # What it was written to ask, and what it measures now
 //
-// The store's transactions are OPTIMISTIC — a write transaction can be
-// aborted at commit — and there are two possible granularities. Under
-// row-level detection the applier never collides with the audit log, the
-// diary or the config revisions, and its retry loop is dormant. Under
-// database-level detection, every event insert that commits during a
-// multi-second apply aborts it, eight times, and then the batch fails: the
-// applier would stop committing exactly when the fleet is busiest, and a
-// drain measured on an idle store would say nothing about it.
+// It was written to ask whether those commits ABORT the applier, back when a
+// write transaction began DEFERRED and a commit landing anywhere in the file
+// between its read and its write refused the write as a stale snapshot. That
+// question is closed by construction: a write transaction takes the file's
+// write lock at BEGIN IMMEDIATE (begin.go) and is served in the order it asked
+// (writequeue.go), so no commit lands inside one. The correctness half is held
+// by tests rather than read off this — [TestAReadThenWriteCannotLoseARace] for
+// the read-then-write, and [TestAForeignCommitDoesNotAbortAnApplierTransaction]
+// for this benchmark's own shape.
 //
-// The store's own TestTxRetriesAConflictedReadThenWrite cannot tell the two
-// apart, because a same-row conflict is a conflict under both.
+// What is left is WRITE-LOCK CONTENTION, which is a throughput fact rather
+// than a correctness one. Two of the metrics should read zero, and a nonzero
+// one is the finding: aborts/tx, the apply body run beyond its first attempt —
+// now only after a lock wait that outlasted the busy timeout, or on a
+// connection retired dirty — and foreign-refused/s, a foreign writer that gave
+// up waiting. The other two are the price: rows/s for the applier, and
+// foreign-commits/s for the writer beside it.
 //
 // # The two arms, and what they are for
 //
 //   - same-file: the foreign commits land in a table in the applier's OWN
-//     database, which the applier never reads or writes. This is the
-//     granularity question, asked directly.
+//     database, which the applier never reads or writes, and so queue for
+//     the one write lock behind it.
 //   - other-estate: the foreign commits land in the NODE estate, which is
 //     where the audit log actually is. This is the shipped arrangement, and
 //     the arm exists to price it against the one above.
 //
-// Measured (tursogo v0.8.0-pre.8, 4 vCPU): zero aborts per transaction in
-// BOTH arms and zero refusals, so the granularity is not database-level — a
-// commit to a table the applier never touches does not abort it, whichever
-// file it is in.
-//
-// What the same-file arm shows instead is CONTENTION. Commits do land while
-// an applier transaction is open, but under a continuously applying writer
-// they land at a tiny fraction of the rate they manage against the other
-// estate: 0.56/s against 1 676/s, three thousand times fewer. That is what the two-file split buys, and it is a throughput fact
-// rather than a correctness one — which is exactly why the split is now
-// unconditional rather than a response to this number.
+// Measured (tursogo v0.8.1, a shared 4 vCPU, -benchtime 20x, twice): zero
+// aborts and zero refusals in both arms, the applier at 17 900–21 200 rows/s
+// in each, and the foreign writer committing 4.9–5.3 times a second beside it
+// in the same file against 1 322–1 903 in the other estate — some three
+// hundred times fewer, let in between applier transactions and never inside
+// one. That is what the two-file split buys, and why the split is
+// unconditional rather than a response to this number. (Under the DEFERRED
+// begin, on tursogo v0.8.0-pre.8, it read zero aborts too — this body writes
+// without reading first — and 0.56 commits a second against 1 676.)
 func BenchmarkApplyTxUnderForeignCommits(b *testing.B) {
 	for _, arm := range []struct {
 		name string
@@ -241,11 +246,13 @@ func BenchmarkApplyTxUnderForeignCommits(b *testing.B) {
 				b.StopTimer()
 				resetBench(ctx, b, w)
 				b.StartTimer()
-				// COUNTED BY ATTEMPTS. Writer.Tx retries a stale
-				// snapshot internally, so the abort count is how many
-				// times fn ran beyond the first — the number that
-				// decides whether the eight-attempt budget absorbs
-				// this load or is spent by it.
+				// COUNTED BY ATTEMPTS. Writer.Tx runs the body again
+				// only after a lock wait that outlasted the busy
+				// timeout or on a connection retired dirty — a stale
+				// snapshot is not retried at all, and fails the run
+				// below — so the abort count is how many times fn ran
+				// beyond the first, and how much of the retry budget
+				// this load spends.
 				var attempts int
 				if err := w.Tx(ctx, func(tx *sql.Tx) error {
 					attempts++
@@ -647,8 +654,8 @@ func settleAfter(t *testing.T, foreign *atomic.Int64, mark int64) {
 // So the invariant is asserted where it is exact. What the chunker controls is
 // how many statements a collection becomes, and that number is arithmetic —
 // identical on a laptop, on a loaded CI box, and under the detector. An 8 000-row
-// apply is 22 statements through [store.InsertRows] against 8 000 one per row:
-// a 364-fold difference that no amount of contention can blur into parity.
+// apply is 8 statements through [store.InsertRows] against 8 000 one per row:
+// a thousand-fold difference that no amount of contention can blur into parity.
 // A test that goes red when the chunker stops chunking is what the old margin
 // was reaching for; this one cannot be fooled by a busy afternoon.
 //

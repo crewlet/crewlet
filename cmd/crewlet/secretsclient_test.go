@@ -422,6 +422,7 @@ func TestTheCommandWritesThroughTheNamedNode(t *testing.T) {
 // propagate would reasonably conclude the write failed. "This node will put
 // it on the fleet at its next start" is not guessable.
 func TestANodeLocalWriteSaysWhatHappensNext(t *testing.T) {
+	t.Parallel()
 	cfg := bootstrapWithKeyring(t, "k1")
 	var out, errs bytes.Buffer
 	err := run([]string{"secrets", "set", "GL_TOKEN", "-value", "v", "-config", cfg},

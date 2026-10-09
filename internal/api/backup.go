@@ -147,7 +147,7 @@ func (a *App) auditBackup(r *http.Request, operatorID, dir string,
 
 	record := types.BackupRequested{
 		OperatorID: operatorID,
-		ActorSeat:  apiOperator.BoundSeat(a.chart, operatorID),
+		ActorSeat:  apiOperator.BoundSeat(a.chart, a.contacts, operatorID),
 		Dir:        dir,
 		Outcome:    types.AuditApplied,
 		Streams:    len(manifest.Streams),

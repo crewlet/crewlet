@@ -23,19 +23,14 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tokens"
 )
 
 // seededApp is an app whose sources hold a known company's worth of history.
 func seededApp(t *testing.T, mutate func(*api.Options)) *api.App {
 	t.Helper()
-	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "q.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.OpenNode: %v", err)
-	}
-	if _, err := db.OpenReplicated(t.Context(), 1); err != nil {
-		t.Fatalf("open the replicated estate beside the node: %v", err)
-	}
+	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "q.db"), store.Options{}, 1)
 	t.Cleanup(func() { _ = db.Close() })
 
 	base := time.Now().UTC().Add(-time.Hour)
@@ -50,7 +45,11 @@ func seededApp(t *testing.T, mutate func(*api.Options)) *api.App {
 		}
 	}
 
-	state := livestate.New()
+	// ON THE SUITE'S CLOCK, as the app is: the live spend window is aged
+	// and labelled by the projection's own clock, so a projection on the
+	// wall clock beside an app pinned to [clock] answers a REST call and a
+	// socket call either side of a second with two different windows.
+	state := livestate.New(livestate.WithClock(func() time.Time { return clock }))
 	state.Apply(&livestate.Envelope{
 		ID: "e1", Type: "agent_phase_started", Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 		Category: "task", Payload: map[string]any{"role": "Lead", "task_id": "t-1"},
@@ -174,6 +173,28 @@ func TestBothTransportsAnswerTheSameQuestionIdentically(t *testing.T) {
 			t.Errorf("%s answered differently:\n  REST   %#v\n  socket %#v",
 				tc.what, rest, socket)
 		}
+	}
+}
+
+// THE PROJECTION THE APP BUILDS ITSELF IS ON THE APP'S CLOCK.
+//
+// The live `tokens` answer is labelled by the projection's clock rather than by
+// [api.Options.Now], so a projection built on the wall clock beside a pinned Now
+// is two clocks under one surface — the live window stamped with one instant
+// and every other answer with another, and a REST call and a socket call either
+// side of a second answering two windows.
+//
+// Mutation: build New's default projection with no clock, and this fails.
+func TestTheAppsOwnProjectionAnswersOnTheAppsClock(t *testing.T) {
+	t.Parallel()
+	a := newApp(t, api.Options{}) // Now pinned to clock, no State
+
+	_, body := overREST(t, a, "tokens", nil)
+	window, _ := body.(map[string]any)
+	since, until := clock.Add(-livestate.LiveSpendWindow).Format(time.RFC3339), clock.Format(time.RFC3339)
+	if window["since"] != since || window["until"] != until {
+		t.Errorf("live window = %v to %v, want the app's clock's %s to %s",
+			window["since"], window["until"], since, until)
 	}
 }
 

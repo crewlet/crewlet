@@ -61,7 +61,26 @@ func (e *Engine) resolver() *config.Resolver {
 	if r := e.env.Load(); r != nil {
 		return r
 	}
-	return config.EnvOnly()
+	return config.NewResolver(e.environment())
+}
+
+// environment is the source every resolver this node builds ends in
+// ([Options.Environment]): the process's own for an engine that was not
+// handed one.
+func (e *Engine) environment() config.Source {
+	if e.environ == nil {
+		return config.EnvSource{}
+	}
+	return e.environ
+}
+
+// getenv reads one variable from source the way [os.Getenv] reads the
+// process's: the empty string for one that is unset.
+func getenv(source config.Source) func(string) string {
+	return func(name string) string {
+		value, _ := source.Lookup(name)
+		return value
+	}
 }
 
 // refreshSecrets rebuilds the resolver from the secret store.
@@ -106,7 +125,9 @@ func (e *Engine) refreshSecrets(ctx context.Context) bool {
 		// line would conclude the store is wired when it is not.
 		return false
 	}
-	e.env.Store(config.WithStore(config.MapSource(values)))
+	// THE STORE IN FRONT OF THIS NODE'S ENVIRONMENT, which is the chain
+	// [config.WithStore] builds over the process's own.
+	e.env.Store(config.NewResolver(config.MapSource(values), e.environment()))
 	// NAMES ONLY. This is the one log line that could put a company's whole
 	// credential set into a file, so it counts them instead.
 	log.InfoContext(ctx, "secret_snapshot_loaded", "secrets", len(values))

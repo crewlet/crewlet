@@ -66,6 +66,7 @@ func newBackupNode(t *testing.T) *backupNode {
 // operator typed it: this is a path on the ENGINE'S host, so a command that
 // quietly rewrote it would write the company's state somewhere nobody named.
 func TestBackupSendsTheDestinationAndReportsWhatWasCaptured(t *testing.T) {
+	t.Parallel()
 	node := newBackupNode(t)
 	stdout, _, err := cli(t, "backup", bootstrapForURL(t, node.server.URL), "-dir", "/var/backups/tonight")
 	if err != nil {
@@ -98,6 +99,7 @@ func TestBackupSendsTheDestinationAndReportsWhatWasCaptured(t *testing.T) {
 // are in. It printed "objects / 0 B N chunks" — a directory that does not
 // exist and a size of nothing — for every backup on the default backend.
 func TestABackupOfObjectsInAStreamReportsTheStream(t *testing.T) {
+	t.Parallel()
 	node := newBackupNode(t)
 	node.answer = map[string]any{
 		"taken_at": "2026-08-30T12:00:00Z", "finished_at": "2026-08-30T12:00:02Z",
@@ -121,6 +123,7 @@ func TestABackupOfObjectsInAStreamReportsTheStream(t *testing.T) {
 // A missing -dir is refused before anything is sent: there is no sensible
 // default for "where should this company's entire durable state be written".
 func TestBackupWithoutADestinationIsRefused(t *testing.T) {
+	t.Parallel()
 	node := newBackupNode(t)
 	_, _, err := cli(t, "backup", bootstrapForURL(t, node.server.URL))
 	if err == nil {
@@ -135,6 +138,7 @@ func TestBackupWithoutADestinationIsRefused(t *testing.T) {
 // for the node to reject: the operator needs to know it would have been
 // resolved on another host, which an HTTP error cannot convey as well.
 func TestBackupRefusesARelativeDestinationLocally(t *testing.T) {
+	t.Parallel()
 	node := newBackupNode(t)
 	_, _, err := cli(t, "backup", bootstrapForURL(t, node.server.URL), "-dir", "backups/tonight")
 	if err == nil {
@@ -153,6 +157,7 @@ func TestBackupRefusesARelativeDestinationLocally(t *testing.T) {
 // alone shows a dash that reads as "nothing to back up" rather than "the rest
 // of this lives on the cluster".
 func TestBackupSaysWhenTheStreamEstateIsNotInTheCopy(t *testing.T) {
+	t.Parallel()
 	node := newBackupNode(t)
 	node.answer = map[string]any{
 		"taken_at": "2026-08-30T12:00:00Z", "finished_at": "2026-08-30T12:00:01Z",
@@ -175,6 +180,7 @@ func TestBackupSaysWhenTheStreamEstateIsNotInTheCopy(t *testing.T) {
 
 // The node refusing is reported as the node's answer, not swallowed.
 func TestBackupReportsANodeThatCannotTakeOne(t *testing.T) {
+	t.Parallel()
 	node := newBackupNode(t)
 	node.status = http.StatusServiceUnavailable
 	node.answer = map[string]any{"error": "backup_failed"}

@@ -334,14 +334,19 @@ const (
 	// hang in one queue backend was first reported against a different
 	// one, costing the wrong author the investigation. The heaviest case
 	// here issues a few thousand store round trips, so the budget has to
-	// clear that on a contended real store (90 s allows ~30 ms apiece).
-	// Measured rather than only derived, because arithmetic in a comment
-	// reads exactly like a measurement: the churn case runs in 8.8 s
-	// against the embedded broker under -race — roughly 2,700 operations
-	// at ~3 ms each — so the budget carries about ten times the observed
-	// worst case
-	// while still reporting well inside the default package timeout.
-	stallBudget = 90 * time.Second
+	// clear that on a contended real store, through the SLOWEST topology the
+	// suite certifies. Measured rather than only derived, because arithmetic
+	// in a comment reads exactly like a measurement: the churn case runs in
+	// 8.8 s against the embedded broker under -race — roughly 2,700
+	// operations at ~3 ms each — but in 18.6 s through a leaf, where every
+	// operation crosses the link, on an idle 4-CPU box, and in 28-85 s on
+	// the same box under other packages' load. A budget sized from the
+	// embedded figure (it was 90 s) failed the leaf case twice under load at
+	// a commit that changed nothing in the suite, which is a stall budget
+	// reporting contention as a hang. So it carries about ten times the
+	// slowest topology's idle figure, while still reporting well inside go
+	// test's default ten-minute package timeout.
+	stallBudget = 180 * time.Second
 )
 
 // Advancer is the optional hook a backend offers so the suite can outlast a

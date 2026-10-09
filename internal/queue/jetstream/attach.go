@@ -140,6 +140,12 @@ type attachment struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 
+	// fetching bounds every fetch this attachment makes, and abandon ends
+	// whichever one is outstanding. STOP ALONE CALLS IT, never Detach — see
+	// [attachment.stop] for why the two differ.
+	fetching context.Context
+	abandon  context.CancelFunc
+
 	// quiesced stops this consumer taking NEW work while staying
 	// attached. A running handler finishes; nothing new is fetched. Its
 	// inverse is required, not optional: a node whose coordination store
@@ -224,11 +230,108 @@ func (a *attachment) blocked() bool {
 // It deliberately does NOT join a running handler: Detach is the
 // fenced-release path, and a node that has lost a seat must give it up now
 // rather than when the turn it should not be running finally ends.
+//
+// AND IT LEAVES AN OUTSTANDING FETCH TO END ON ITS OWN, which is the
+// difference between this and [attachment.stop]. The pull request that fetch
+// sent is still open at the broker, and a message published in the moment
+// after the detach can be delivered to it. Left open, that message reaches
+// [attachment.dispatchOne], finds this consumer detached, and is handed back
+// at once for the successor. Abandoned, the client drops its subscription
+// while the broker may already be sending, and a message in flight then is
+// lost to nobody's hand-back: it waits out the whole ack window before the
+// broker offers it again — on exactly the lease movement a hand-back exists
+// to keep cheap.
 func (a *attachment) close() {
 	a.detached.Store(true)
 	if a.cancel != nil {
 		a.cancel()
 	}
+}
+
+// stop is close, and the end of the outstanding fetch as well — the half only
+// [Queue.Stop] may take.
+//
+// THE CONNECTION IS CLOSED NEXT whatever happens here, and closing it ends the
+// broker's interest in every pull request on it: a message in flight to one
+// is lost to the same ack window either way, so ending the fetch first loses
+// nothing a stop was not already losing. What it removes is the wait. A loop
+// parked in a fetch noticed its cancellation only when the fetch ran out — a
+// second at the shipped poll — so every stop of a queue with an idle
+// attachment spent the whole [stopGrace] waiting for loops it then abandoned
+// anyway.
+func (a *attachment) stop() {
+	a.close()
+	if a.abandon != nil {
+		a.abandon()
+	}
+}
+
+// fetch asks the broker for up to n messages, waiting at most wait for them,
+// and hands each to take as it arrives — the one way every consume loop here
+// fetches, so a stop reaches every outstanding fetch through
+// [attachment.fetching].
+//
+// # Why two context options and no expiry option
+//
+// The client's own expiry option (FetchMaxWait) is a timer and nothing else:
+// a fetch sent with it ran to the end of its window whatever became of the
+// loop that sent it, so a stop waited for it. Its context option is the
+// cancellable form, but it couples two durations the expiry option kept
+// apart. A context's deadline becomes the request's expiry with a tenth held
+// back (at most a second), and the same deadline then ENDS THE CLIENT'S WAIT —
+// so a message the broker hands over just before its expiry has a tenth of
+// the window to arrive before the client stops listening, five milliseconds
+// on a tail fetch, and one that arrives after is dropped unacknowledged and
+// sits out the whole ack window before the broker offers it again. The expiry
+// option's client waits a full second past the expiry, which is the margin
+// worth keeping.
+//
+// So the request is sent with TWO: the first carries only a deadline, which
+// the client turns into the expiry and nothing else, and the second replaces
+// it as the context the client waits under — [attachment.fetching], which has
+// no deadline, so the wait ends on the broker's own timeout, a second's grace
+// after it, or a stop. The first deadline is set past wait by exactly the share
+// the client holds back, so the expiry the broker is given is wait itself;
+// [TestAFetchExpiresAfterItsWaitAndAStopEndsItAtOnce] pins both halves against
+// the vendored client.
+func (a *attachment) fetch(n int, wait time.Duration, take func(jetstream.Msg)) error {
+	if err := a.fetching.Err(); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(wait + expiryHeldBack(wait))
+	expiry, cancel := context.WithDeadline(context.Background(), deadline)
+	batch, err := a.cons.Fetch(n, jetstream.FetchContext(expiry), jetstream.FetchContext(a.fetching))
+	// The options are applied before Fetch returns, and the first one's
+	// context is read for its deadline alone.
+	cancel()
+	if err != nil {
+		// A WINDOW THAT LAPSED BEFORE THE REQUEST WAS SENT IS AN EMPTY
+		// FETCH, not a failure. The client reads that deadline when it
+		// applies the option and refuses one already past, so a goroutine
+		// descheduled between taking it and sending the request for longer
+		// than the window — fifty-five milliseconds on a tail fetch, on a
+		// loaded runner — was told "invalid option", logged fetch_failed
+		// and slept a whole poll. Nothing was sent, so nothing was missed,
+		// and the window it asked for has gone by all the same: the loop
+		// asks again, as after any empty fetch. Judged by the deadline
+		// itself rather than by the context's Err, which its timer sets a
+		// moment after the instant the client compared against.
+		if errors.Is(err, jetstream.ErrInvalidOption) && !time.Now().Before(deadline) {
+			return nil
+		}
+		return err
+	}
+	for msg := range batch.Messages() {
+		take(msg)
+	}
+	return nil
+}
+
+// expiryHeldBack is how far past the wanted expiry a fetch's deadline is set,
+// so that what the client keeps back of it — a tenth, at most a second
+// (jetstream.FetchContext) — leaves exactly the wanted expiry.
+func expiryHeldBack(wait time.Duration) time.Duration {
+	return min(wait/9, time.Second)
 }
 
 // wait blocks until the consume loop has exited, or the deadline passes.
@@ -366,15 +469,16 @@ func (q *Queue) attach(ctx context.Context, topic, group string, loop func(conte
 	// exceeded` with nothing logged before it.
 	//
 	// TWO VERBS, because there are two hazards and one tool does not cover
-	// both. [jsprovision.Ask] re-issues a request the group never answered,
-	// under [jsprovision.LookupBudget] as its ceiling; [jsprovision.Settle]
+	// both. [jsprovision.Timing.Read] re-issues a request the group never
+	// answered, under [jsprovision.LookupBudget] as its ceiling;
+	// [jsprovision.Settle]
 	// waits out the propagation window, and this read is inside one BY
 	// CONSTRUCTION — EnsureSubscription above has just created the
 	// consumer, so the member that made it can still be told it is not
 	// there. Silence and not-yet-visible are different answers with
 	// different remedies, which is why neither verb subsumes the other.
 	name := consumerName(topic, group)
-	lookupCtx, cancelLookup := context.WithTimeout(ctx, q.lookupBudget())
+	lookupCtx, cancelLookup := context.WithTimeout(ctx, q.provisioning().Lookup)
 	stopLookup := jsprovision.WhenSlow(lookupCtx, func(after time.Duration) {
 		q.log.WarnContext(ctx, "jetstream_consumer_attach_slow", "stream", stream,
 			"consumer", name, "waited", after,
@@ -382,7 +486,7 @@ func (q *Queue) attach(ctx context.Context, topic, group string, loop func(conte
 				"on a fleet that is a metadata group that has not settled")
 	})
 	var cons jetstream.Consumer
-	err = jsprovision.Ask(lookupCtx, q.Clustered().AskTerm(),
+	err = q.provisioning().Read(lookupCtx,
 		func(ctx context.Context) error {
 			var e error
 			cons, e = q.js.Consumer(ctx, stream, name)
@@ -394,7 +498,7 @@ func (q *Queue) attach(ctx context.Context, topic, group string, loop func(conte
 		// ON ctx, NOT lookupCtx, for the reason [jsprovision.Settle]
 		// gives: lookupCtx may be the deadline that just expired, and a
 		// read-back handed an expired context asks once and gives up.
-		err = jsprovision.Settle(ctx, func(ctx context.Context) error {
+		err = q.provisioning().Settle(ctx, func(ctx context.Context) error {
 			var e error
 			cons, e = q.js.Consumer(ctx, stream, name)
 			return e
@@ -415,10 +519,12 @@ func (q *Queue) attach(ctx context.Context, topic, group string, loop func(conte
 	// is waiting to finish.
 	paused := q.paused
 	loopCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	fetching, abandon := context.WithCancel(context.WithoutCancel(ctx))
 	a := &attachment{
 		q: q, key: key, cons: cons,
 		log:    q.log.With("topic", topic, "group", group),
 		cancel: cancel, done: make(chan struct{}),
+		fetching: fetching, abandon: abandon,
 	}
 	a.paused.Store(paused)
 	q.attachments[key] = append(q.attachments[key], a)
@@ -426,6 +532,10 @@ func (q *Queue) attach(ctx context.Context, topic, group string, loop func(conte
 
 	go func() {
 		defer close(a.done)
+		// Released when the loop ends, however it ends: a detached
+		// attachment's loop exits on its own once its fetch runs out, and
+		// nothing else would release the fetch scope it no longer uses.
+		defer abandon()
 		loop(loopCtx, a)
 	}()
 	return nil
@@ -447,13 +557,11 @@ func (q *Queue) Subscribe(ctx context.Context, topic, group string, h queue.Hand
 				}
 				continue
 			}
-			msgs, err := a.cons.Fetch(1, jetstream.FetchMaxWait(a.q.fetchWait()))
-			if err != nil {
-				a.logFetchErr(ctx, err)
-				continue
-			}
-			for msg := range msgs.Messages() {
+			//nolint:contextcheck // a fetch runs on the attachment's fetch scope, never the loop's: see [attachment.fetching]
+			if err := a.fetch(1, a.q.fetchWait(), func(msg jetstream.Msg) {
 				a.dispatchOne(ctx, msg, h)
+			}); err != nil {
+				a.logFetchErr(ctx, err)
 			}
 		}
 	})

@@ -88,6 +88,10 @@ func EngineOperatorOptions(e *engine.Engine) operator.Options {
 		}
 		return c.Org
 	}
+	// AND WHAT A `${VAR}` IN IT RESOLVES TO, through this node's own chain:
+	// a binding sealed in the secret store binds its person here as it does
+	// for the seat's tools and the dashboard's reads.
+	opts.Env = e.LookupSecret
 	// A PARKED CODING RUN IS ANSWERABLE BY ITS TURN from here, on every
 	// node and whatever this company's sandbox configuration: the record is
 	// the fleet's, and the answer is carried out by the node holding the
@@ -98,7 +102,7 @@ func EngineOperatorOptions(e *engine.Engine) operator.Options {
 			Pending: sandbox.NewCoordStore(e.Backends().Fleet),
 			Queue:   e.Backends().Queue,
 		},
-		Actor: operator.WorkActor(opts.Org),
+		Actor: operator.WorkActor(opts.Org, opts.Env),
 	}
 	// AND A SEAT IS PAUSED OR RESUMED from here, on every node: the pause
 	// is the fleet's record, and each node holding or later acquiring the
@@ -108,14 +112,14 @@ func EngineOperatorOptions(e *engine.Engine) operator.Options {
 		Pauses:   e.Backends().Fleet,
 		Announce: e.Backends().Queue,
 		Org:      opts.Org,
-		Actor:    operator.WorkActor(opts.Org),
+		Actor:    operator.WorkActor(opts.Org, opts.Env),
 	}
 	// AND A NOTE REACHES A RUNNING TURN from here, on every node: it is
 	// scattered to the fleet and answered by the node running the turn,
 	// which is the only one that can hand it to the turn's next round.
 	opts.Steer = builtin.SteerDeps{
 		Asker: e.Backends().Queue,
-		Actor: operator.WorkActor(opts.Org),
+		Actor: operator.WorkActor(opts.Org, opts.Env),
 	}
 	reader, readable := engine.OperatorWork(e)
 	writer, writable := engine.OperatorWorkWriter(e)
@@ -215,7 +219,7 @@ func EngineOperatorOptions(e *engine.Engine) operator.Options {
 				if c == nil {
 					return nil
 				}
-				return builtin.Corpus(c.Org)
+				return builtin.Corpus(c.Org, opts.Env)
 			},
 			// AND THE PARTY BEHIND A HANDLE, which the roster above
 			// deliberately does not carry: an operator reading a
@@ -223,7 +227,7 @@ func EngineOperatorOptions(e *engine.Engine) operator.Options {
 			// BOTH the names that person's rows may be filed under,
 			// and the credential is an attribution key rather than
 			// somewhere an agent could mention them.
-			Party: builtin.Parties(opts.Org),
+			Party: builtin.Parties(opts.Org, opts.Env),
 			// AND THE THREE CHART SEAMS THE SEAT SURFACE HAS AND THIS
 			// ONE WENT WITHOUT. Their absence was invisible and not
 			// harmless: with no Leads, an operator filing an unassigned
@@ -240,7 +244,7 @@ func EngineOperatorOptions(e *engine.Engine) operator.Options {
 			// THE SAME CHART DECIDES WHO IS WRITING: a token bound to
 			// a human seat writes that PERSON's own state, while the
 			// author on the record stays the token.
-			Actor: operator.WorkActor(opts.Org),
+			Actor: operator.WorkActor(opts.Org, opts.Env),
 			// THE MENTION RESOLVER, which this surface went without: a
 			// comment's @-mention is turned into a wake by the tracker's
 			// recipients only when the writer resolved it, so an
@@ -289,7 +293,7 @@ func EngineOperatorOptions(e *engine.Engine) operator.Options {
 			Models: engine.AnswerModels(e),
 			Budget: engine.AnswerBudget(e),
 			Corpus: e.KnowledgeCorpus,
-			Actor:  operator.WorkActor(opts.Org),
+			Actor:  operator.WorkActor(opts.Org, opts.Env),
 			// A source too long to read whole is condensed for the
 			// question, in the node's one rewrite cache.
 			Rewrites: e.Rewrites(),

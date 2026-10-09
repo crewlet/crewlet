@@ -9,10 +9,13 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"time"
 
 	"golang.org/x/sys/unix"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
@@ -190,28 +193,54 @@ func ceilingsFor(ctx context.Context, host domainHost, boot *config.Bootstrap) (
 func sizeCeilings(ctx context.Context, host domainHost, stream config.Stream,
 	free int64, volume string) (map[string]domainCeiling, error) {
 
-	asked := map[string]domainCeiling{}
-	held := map[string]int64{}
-	var holding int64
-	for _, domain := range registeredDomains() {
+	domains := registeredDomains()
+	asked := make(map[string]domainCeiling, len(domains))
+	for _, domain := range domains {
 		ceiling, err := tierACeiling(stream, domain, free)
 		if err != nil {
 			return nil, err
 		}
 		asked[domain.Name()] = ceiling
-		holds, found, err := host.DomainStreamCeiling(ctx, domain.Stream().Name)
+	}
+	held := map[string]int64{}
+	var holding int64
+	for _, read := range readHeld(ctx, host, domains) {
 		switch {
-		case err != nil:
-			// CARRIED AS ABSENT. The provision that follows asks the
-			// same broker the same question and fails with its own
-			// answer if it still cannot give one; counted here as
-			// absent, the stream is merely sized as though this boot
-			// were creating it.
+		case read.err != nil:
+			// CARRIED AS ABSENT, and it costs more than this stream.
+			//
+			// Not a failed boot. A read nobody answered was asked again
+			// for the whole lookup ceiling first
+			// ([jetstream.Queue.DomainStreamCeiling]), and any other
+			// error is the broker's own answer, returned at once;
+			// either way the provision that follows asks the same
+			// broker again and settles whether the stream exists by its
+			// own create if it has to. Counted as absent, the stream
+			// itself is merely sized as though this boot were creating
+			// it, which changes nothing for one that exists — it keeps
+			// its ceiling.
+			//
+			// But every log this boot DOES create is sized without
+			// knowing what that one holds: the division counts it at
+			// its ask rather than at its ceiling, and where the pool is
+			// the broker's figure its reservation is not added back to
+			// it either. Either can move a created log's ceiling up or
+			// down, and a created ceiling is kept for good — so the
+			// line says so, because the boot that follows succeeds and
+			// nothing else will.
 			log.WarnContext(ctx, "statelog_ceiling_unread",
-				"domain", domain.Name(), "error", err.Error())
-		case found:
-			held[domain.Name()] = holds
-			holding += holds
+				"domain", read.domain.Name(), "stream", read.domain.Stream().Name,
+				"error", read.err.Error(),
+				"detail", "the broker did not say whether this log's stream "+
+					"exists or what ceiling it holds, so it is counted as "+
+					"absent: if it exists, every log this boot creates is "+
+					"sized without knowing what it holds, and keeps the "+
+					"ceiling that gives it — larger or smaller than a boot "+
+					"that read it would make — until `crewlet retention "+
+					"set-capacity` changes it once this node is up")
+		case read.found:
+			held[read.domain.Name()] = read.holds
+			holding += read.holds
 		}
 	}
 
@@ -280,6 +309,71 @@ func sizeCeilings(ctx context.Context, host domainHost, stream config.Stream,
 				"gives an existing log's reservation back and raises this one")
 	}
 	return sized, nil
+}
+
+// heldCeiling is one log's answer to [domainHost.DomainStreamCeiling]: the
+// ceiling its stream already holds, whether it exists, or why the broker did
+// not say.
+type heldCeiling struct {
+	domain statelog.Domain
+	holds  int64
+	found  bool
+	err    error
+}
+
+// readHeld asks the broker what every registered log's stream already holds —
+// all of the reads at once, and the answers in the register's order.
+//
+// # AT ONCE, because each read can take a whole lookup ceiling
+//
+// A read nobody answers is asked again for up to [jsprovision.LookupBudget]
+// ([jetstream.Queue.DomainStreamCeiling]), and asked one after another the four
+// reads cost the boot the PRODUCT, which nothing declared: against a broker
+// that answered none of them, two minutes went here, measured over sixty
+// requests on either topology, before the provision that follows began
+// spending its own [jsprovision.SequenceBudget]. Asked together, the pass costs
+// what its slowest read costs — one lookup ceiling, measured at thirty seconds
+// over the same sixty requests.
+//
+// Rather than one ceiling SHARED by a sequence, because that bounds the pass
+// at the same thirty seconds while starving whichever read comes last: it
+// would get only what its predecessors' silence left, which after one stream
+// whose group was electing is nothing — however promptly its own stream would
+// have answered. Asked together, every read is asked for the whole ceiling.
+//
+// Nothing orders them: each names one stream, and nothing one answers decides
+// another. What the caller reports follows the register's order all the same,
+// because the answers are handed back only once the last read has returned.
+//
+// # And each says so while it is still waiting
+//
+// A breadcrumb per stream, for [jsprovision.WhenSlow]'s reason. Under nats.go's
+// five-second default a read never outlived [jsprovision.SlowAfter]; asked
+// again for a lookup ceiling, a silent one is quiet for thirty seconds until
+// `statelog_ceiling_unread` reports how it ended, and every other lookup on the
+// boot path names the object it is waiting on.
+func readHeld(ctx context.Context, host domainHost, domains []statelog.Domain) []heldCeiling {
+	reads := make([]heldCeiling, len(domains))
+	var wg sync.WaitGroup
+	for i, domain := range domains {
+		reads[i].domain = domain
+		stream := domain.Stream().Name
+		wg.Go(func() {
+			stop := jsprovision.WhenSlow(ctx, func(after time.Duration) {
+				log.WarnContext(ctx, "statelog_ceiling_read_slow",
+					"domain", domain.Name(), "stream", stream, "waited", after,
+					"detail", "still asking the broker what ceiling this log's "+
+						"stream already holds, before any log is created; on a "+
+						"fleet that is usually a stream another node has in "+
+						"flight, and `statelog_ceilings` or "+
+						"`statelog_ceiling_unread` says how it ended")
+			})
+			defer stop()
+			reads[i].holds, reads[i].found, reads[i].err = host.DomainStreamCeiling(ctx, stream)
+		})
+	}
+	wg.Wait()
+	return reads
 }
 
 // fitCeilings sizes every log inside pool: what a MISSING log is created with,

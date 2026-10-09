@@ -203,7 +203,7 @@ func (s Sources) access(ctx context.Context, _ Params) (any, error) {
 		// THE SAME LOOKUP THE VIEWER AND THE ACT TRANSPORT MAKE, so a
 		// token this screen calls a person is one those admit as one.
 		if organization != nil {
-			if seat := organization.SeatByOperatorID(id, nil); seat != nil && seat.IsHuman() {
+			if seat := organization.SeatByOperatorID(id, s.Env); seat != nil && seat.IsHuman() {
 				row.Scope = ScopePerson
 				row.Seat = &AccessSeat{Handle: seat.Handle(), Name: seat.Name}
 			}
@@ -226,7 +226,7 @@ func (s Sources) access(ctx context.Context, _ Params) (any, error) {
 			Binding:      BindingUnbound,
 			Contacts:     []AccessContact{},
 		}
-		for _, field := range role.Contact.Fields(nil) {
+		for _, field := range role.Contact.Fields(s.Env) {
 			if field.Key == operatorIDKey {
 				person.OperatorID = field.Value
 				continue
@@ -239,7 +239,7 @@ func (s Sources) access(ctx context.Context, _ Params) (any, error) {
 		if person.OperatorID != "" {
 			// THROUGH THE ENGINE'S OWN RESOLUTION, so "unresolved" here is
 			// exactly the binding the guard's lookup cannot see.
-			resolved := role.ResolvedOperatorID(nil)
+			resolved := role.ResolvedOperatorID(s.Env)
 			switch {
 			case resolved == "":
 				person.Binding = BindingUnresolved

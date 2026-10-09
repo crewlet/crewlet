@@ -12,6 +12,12 @@
 // Run takes a constructor rather than a *store.DB so each subtest gets its own
 // file: the store owns its file exclusively, and sharing one across parallel
 // subtests would test a configuration the engine never runs in.
+//
+// It is also where the rest of the tree's tests open a store: [OpenEstate] and
+// [OpenNode], and [Seed] for a path a test opens or boots an engine on itself.
+// Those copy a migrated estate built once per test binary rather than
+// migrating every file from nothing — image.go says why that is safe, and
+// what stays fresh because migrating is its subject.
 package storetest
 
 import (
@@ -32,12 +38,28 @@ import (
 // Run executes the contract suite against databases produced by newDB.
 func Run(t *testing.T, newDB func(t *testing.T) *store.DB) {
 	t.Helper()
+	// THE SCHEMA CASES OPEN FRESH FILES OF THEIR OWN, never newDB's. A
+	// constructor may hand back a copy of the binary's migrated image
+	// ([OpenNode]), and on a copy an applied set equal to the binary's is a
+	// fact about the copy rather than about the migrator — which is what
+	// these two exist to certify, on both estates.
+	fresh := []struct {
+		name string
+		fn   func(t *testing.T)
+	}{
+		{"Schema", testSchema},
+		{"SchemaIsIdempotent", testSchemaIdempotent},
+	}
+	for _, tc := range fresh {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tc.fn(t)
+		})
+	}
 	cases := []struct {
 		name string
 		fn   func(t *testing.T, db *store.DB)
 	}{
-		{"Schema", testSchema},
-		{"SchemaIsIdempotent", testSchemaIdempotent},
 		{"Capabilities", testCapabilities},
 		{"AppendIsIdempotent", testAppendIdempotent},
 		{"AppendRejectsAnIncompleteIdentity", testAppendIncomplete},
@@ -101,41 +123,65 @@ func Run(t *testing.T, newDB func(t *testing.T) *store.DB) {
 // asserting that an empty page equals a full one.
 var base = time.Now().UTC().Add(-24 * time.Hour).Truncate(time.Minute)
 
-func testSchema(t *testing.T, db *store.DB) {
-	applied, err := db.AppliedMigrations(t.Context())
-	if err != nil {
-		t.Fatalf("AppliedMigrations: %v", err)
-	}
-	want := store.SchemaVersions(store.EstateNode)
-	if len(want) == 0 {
-		t.Fatal("no schema files embedded")
-	}
-	if !slices.Equal(applied, want) {
-		t.Fatalf("applied %v, want %v", applied, want)
+// testSchema migrates a fresh node and its replicated estate and finds each
+// file's whole sequence applied, in order.
+func testSchema(t *testing.T) {
+	node, replicated := openFresh(t, filepath.Join(t.TempDir(), "fresh.db"))
+	defer func() { _ = node.Close() }()
+	for _, db := range []*store.DB{node, replicated} {
+		applied, err := db.AppliedMigrations(t.Context())
+		if err != nil {
+			t.Fatalf("the %s estate's AppliedMigrations: %v", db.Estate(), err)
+		}
+		want := store.SchemaVersions(db.Estate())
+		if len(want) == 0 {
+			t.Fatalf("no %s schema files embedded", db.Estate())
+		}
+		if !slices.Equal(applied, want) {
+			t.Fatalf("the %s estate applied %v, want %v", db.Estate(), applied, want)
+		}
 	}
 }
 
-// testSchemaIdempotent reopens the same file. A forward-only migrator that
-// re-ran an applied file would fail on the second CREATE TABLE, so a clean
-// reopen is the whole assertion.
-func testSchemaIdempotent(t *testing.T, db *store.DB) {
-	path := db.Path()
-	if err := db.Close(); err != nil {
+// testSchemaIdempotent reopens both freshly migrated files. A forward-only
+// migrator that re-ran an applied file would fail on the second CREATE TABLE,
+// so a clean reopen is the whole assertion.
+func testSchemaIdempotent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fresh.db")
+	node, _ := openFresh(t, path)
+	if err := node.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	again, err := store.OpenNode(t.Context(), path, store.Options{})
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
+	again, replicated := openFresh(t, path)
 	defer func() { _ = again.Close() }()
 
-	applied, err := again.AppliedMigrations(t.Context())
+	for _, db := range []*store.DB{again, replicated} {
+		applied, err := db.AppliedMigrations(t.Context())
+		if err != nil {
+			t.Fatalf("the %s estate's AppliedMigrations: %v", db.Estate(), err)
+		}
+		if !slices.Equal(applied, store.SchemaVersions(db.Estate())) {
+			t.Fatalf("reopening changed the %s estate's applied set: %v",
+				db.Estate(), applied)
+		}
+	}
+}
+
+// openFresh opens a node's store at path and its replicated estate beside it
+// through the production path and NOTHING ELSE — no image is seeded — so a
+// file that is not there yet is migrated from nothing.
+func openFresh(t *testing.T, path string) (*store.DB, *store.DB) {
+	t.Helper()
+	node, err := store.OpenNode(t.Context(), path, store.Options{})
 	if err != nil {
-		t.Fatalf("AppliedMigrations: %v", err)
+		t.Fatalf("open the node's store at %s: %v", path, err)
 	}
-	if !slices.Equal(applied, store.SchemaVersions(store.EstateNode)) {
-		t.Fatalf("reopen changed the applied set: %v", applied)
+	replicated, err := node.OpenReplicated(t.Context(), 1)
+	if err != nil {
+		_ = node.Close()
+		t.Fatalf("open the replicated estate beside %s: %v", path, err)
 	}
+	return node, replicated
 }
 
 // testCapabilities asserts the probe is self-consistent: a capability reported
@@ -476,16 +522,18 @@ func testTrace(t *testing.T, db *store.DB) {
 func testTraceCap(t *testing.T, db *store.DB) {
 	log := db.Events()
 	over := store.MaxTraceEvents + 10
-	for i := range over {
-		write(t, log, store.EventRecord{
+	recs := make([]store.EventRecord, over)
+	for i := range recs {
+		recs[i] = store.EventRecord{
 			ID:       "s" + fourDigits(i),
 			Type:     "task_assigned",
 			Source:   "pm",
 			Time:     base.Add(time.Duration(i) * time.Millisecond),
 			Category: "task",
 			TraceID:  "tr-long",
-		})
+		}
 	}
+	WriteEvents(t, log, recs)
 	got, err := log.Trace(t.Context(), "tr-long", time.Now())
 	if err != nil {
 		t.Fatalf("trace: %v", err)
@@ -506,16 +554,18 @@ func testTraceCap(t *testing.T, db *store.DB) {
 func testTurnClosing(t *testing.T, db *store.DB) {
 	log := db.Events()
 	over := store.MaxTurnEvents + 10
-	for i := range over {
-		write(t, log, store.EventRecord{
+	recs := make([]store.EventRecord, over)
+	for i := range recs {
+		recs[i] = store.EventRecord{
 			ID:       "c" + fourDigits(i),
 			Type:     "agent_phase_completed",
 			Source:   "pm",
 			Time:     base.Add(time.Duration(i) * time.Millisecond),
 			Category: "lifecycle",
 			Payload:  []byte(`{"turn_id":"tn-long"}`),
-		})
+		}
 	}
+	WriteEvents(t, log, recs)
 
 	// The head read keeps the OPENING, as its own doc says.
 	head, err := log.Turn(t.Context(), "tn-long", time.Now())
@@ -745,12 +795,14 @@ func testRetentionBacklog(t *testing.T, db *store.DB) {
 	ctx := t.Context()
 	stale := store.EventPurgeBatch + 3
 	when := time.Now().UTC().Add(-store.EventRetention - time.Hour)
-	for i := range stale {
-		write(t, log, store.EventRecord{
+	recs := make([]store.EventRecord, stale)
+	for i := range recs {
+		recs[i] = store.EventRecord{
 			ID: fmt.Sprintf("stale-%04d", i), Type: "task_assigned", Source: "pm",
 			Time: when.Add(time.Duration(i) * time.Millisecond), Category: "task",
-		})
+		}
 	}
+	WriteEvents(t, log, recs)
 	write(t, log, store.EventRecord{
 		ID: "keep", Type: "task_assigned", Source: "pm",
 		Time: time.Now().UTC().Add(-time.Hour), Category: "task",
@@ -917,23 +969,29 @@ func testRelatedSwept(t *testing.T, db *store.DB) {
 // so a busy org's monthly spend was short by whatever fell past the cap, and
 // an undercount reads exactly like an underspend. This writes more rows than
 // that old ceiling and insists every one is counted.
+//
+// The window is written in ONE transaction ([WriteEvents]), through the same
+// row builder an Append runs, because what this case certifies is the fold
+// over the rows and not how they arrived: one commit per row was 20,001
+// fsync'd commits and 69 s of the package's wall clock.
 func testSpendUncapped(t *testing.T, db *store.DB) {
 	log := db.Events()
 	ctx := t.Context()
 	const rows = 20001
 	at := time.Now().UTC().Add(-time.Hour)
-	for i := range rows {
-		payload := []byte(`{"phase":"execute","model":"m","input_tokens":1,` +
-			`"output_tokens":2,"total_tokens":3}`)
-		write(t, log, store.EventRecord{
+	recs := make([]store.EventRecord, rows)
+	for i := range recs {
+		recs[i] = store.EventRecord{
 			ID:       fmt.Sprintf("spend-%05d", i),
 			Type:     "agent_phase_completed",
 			Source:   "agent",
 			Time:     at.Add(time.Duration(i) * time.Millisecond),
 			Category: "agent",
-			Payload:  payload,
-		})
+			Payload: []byte(`{"phase":"execute","model":"m","input_tokens":1,` +
+				`"output_tokens":2,"total_tokens":3}`),
+		}
 	}
+	WriteEvents(t, log, recs)
 
 	got, err := log.PhaseTokens(ctx, store.PhaseTokenQuery{SinceDays: 1})
 	if err != nil {
@@ -1175,7 +1233,8 @@ func testRecordUntracked(t *testing.T, db *store.DB) {
 	}
 	if _, tracked := store.Category("budget_meters"); tracked {
 		t.Fatal("budget_meters must stay out of the store: it is a ROLLUP " +
-			"of live meters on a 15-second tick, so a durable row per tick " +
+			"of live meters on a 15-second tick (and at a window's first " +
+			"refusal), so a durable row per tick " +
 			"is about two million a year to answer what the live projection " +
 			"answers for free — and the audit log already holds the per-turn " +
 			"spend it is a sum of")

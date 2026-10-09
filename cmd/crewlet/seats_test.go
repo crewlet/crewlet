@@ -55,6 +55,7 @@ func newFakeActNode(t *testing.T) *fakeActNode {
 // profile screen are one gesture with one record, attributed to the person the
 // token is bound to.
 func TestSeatsPauseActsThroughTheActTransport(t *testing.T) {
+	t.Parallel()
 	node := newFakeActNode(t)
 	node.answer = map[string]any{"handle": "swe", "outcome": "applied", "changed": true,
 		"paused_by": "jane-token", "paused_by_seat": "jane", "paused_at": "2026-09-25T09:00:00Z",
@@ -81,6 +82,7 @@ func TestSeatsPauseActsThroughTheActTransport(t *testing.T) {
 
 // A RESUME CARRIES ONLY THE HANDLE, and a retry names the request it repeats.
 func TestSeatsResumeRetriesUnderTheSameRequest(t *testing.T) {
+	t.Parallel()
 	node := newFakeActNode(t)
 	node.answer = map[string]any{"handle": "swe", "outcome": "unknown"}
 	stdout, _, err := cli(t, "seats", "resume", "swe", bootstrapForURL(t, node.server.URL))
@@ -106,6 +108,7 @@ func TestSeatsResumeRetriesUnderTheSameRequest(t *testing.T) {
 // AN UNBOUND TOKEN IS TOLD WHICH SEAT TO BIND IT ON, not that it is wrong:
 // it is a valid credential that names nobody, and the node's hint is the fix.
 func TestSeatsUnderAnUnboundTokenCarryTheRemedy(t *testing.T) {
+	t.Parallel()
 	node := newFakeActNode(t)
 	node.status = http.StatusForbidden
 	node.refusal = map[string]string{"error": "unbound", "tool": "pause_seat",
@@ -120,6 +123,7 @@ func TestSeatsUnderAnUnboundTokenCarryTheRemedy(t *testing.T) {
 
 // A GESTURE A SEAT CANNOT BE NAMED FOR is refused before anything is sent.
 func TestSeatsNeedsAHandle(t *testing.T) {
+	t.Parallel()
 	node := newFakeActNode(t)
 	_, _, err := cli(t, "seats", "pause", "-url", node.server.URL, "-token", "t")
 	if err == nil || !strings.Contains(err.Error(), "name the seat") {

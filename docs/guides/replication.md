@@ -430,10 +430,12 @@ burst.
 That floor is deliberately conservative, and it is the number every figure
 below is derived from. An applier writes a record's child rows — tags,
 watchers, relations, dependency mirrors, the inverted index's postings — as
-**multi-row inserts chunked to the engine's probed bind-parameter limit**,
-rather than one statement per row. On the pinned driver that limit is 2 000
-parameters, so a seven-column row batches 285 to a statement and a
-three-column row 666: an 8 000-row apply is 22 statements rather than 8 000.
+**multi-row inserts chunked to the engine's probed bind-parameter limit**, and
+to at most 1 000 rows a statement, rather than one statement per row. The
+pinned driver accepts more parameters than the probe's own 32 766 ceiling, so
+the 1 000-row cap is what binds: a seven-column row and a three-column row both
+batch 1 000 to a statement, and an 8 000-row apply is 8 statements rather than
+8 000.
 Measured unloaded that shape drains about four times faster than one statement
 per row; measured on a loaded CI runner under the race detector, closer to
 1.5 times. The floor above is the loaded, contended figure, so a fleet sized
@@ -646,6 +648,17 @@ set-capacity` gives an existing log's reservation back and raises the new one.
 It is never created above that `fit`, even where the existing logs leave more:
 every later boot reports its stream against that figure, and a log created
 past it would be reported as a capacity difference on every one of them.
+
+**A ceiling the broker would not report is counted as absent.** Before it
+sizes anything a node reads every existing log's ceiling from the broker — all
+four at once, each asked again every two seconds for up to thirty while nobody
+answers. A read still unanswered after that, or one the broker refused, counts
+that log as one this boot would create. A log that does exist keeps the
+ceiling it holds, but every log this boot creates is sized without knowing
+what it holds, so it can come out larger or smaller than a boot that read it
+would make, and keeps that ceiling. The node logs `statelog_ceiling_unread`
+naming the stream; once it is up, `crewlet retention set-capacity` changes
+either log.
 
 **A boot that still cannot reserve a log says why.** When even the floors, or
 a ceiling you set, do not fit, the node refuses to boot with an error naming

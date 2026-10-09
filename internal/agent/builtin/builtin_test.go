@@ -2,6 +2,7 @@ package builtin_test
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -297,6 +298,58 @@ func TestAnAmbiguousLookupRefusesToGuess(t *testing.T) {
 	}
 }
 
+// A PERSON'S `${VAR}` CONTACT RESOLVES THROUGH THE LOOKUP THE NODE HANDS IN
+// ([builtin.Deps.Env]), never the process environment behind it. An id sealed
+// in the node's secret store, or set in an environment the node was handed, is
+// the id notification routing mentions that person by, so it is the id a
+// colleague must be found by. The variable is one no process sets.
+func TestALookupResolvesAContactThroughTheNodesOwnLookup(t *testing.T) {
+	t.Parallel()
+	turn, handed := handedFounder(t, "CREWLET_BUILTIN_TEST_HANDED_SLACK_ID")
+
+	tool := registered(t, builtin.Deps{Env: handed}, builtin.LookupColleagueTool)
+	res := callFor(t, tool, turn, map[string]any{"query": "U0HANDED"})
+	if res.Failed || !strings.Contains(res.Output, "handle: founder") {
+		t.Fatalf("the id the node's lookup resolves the founder's contact to "+
+			"found nobody:\n%s", res.Output)
+	}
+	// THE CONTROL: with no lookup handed the process environment is read,
+	// and it has no such variable — or the case above passes on a tool that
+	// ignores what it was handed.
+	plain := registered(t, builtin.Deps{}, builtin.LookupColleagueTool)
+	if res := callFor(t, plain, turn, map[string]any{"query": "U0HANDED"}); !res.Failed {
+		t.Fatalf("an id no process environment holds was found with no lookup "+
+			"handed in:\n%s", res.Output)
+	}
+}
+
+// handedFounder is agent-ceo's turn over a chart whose founder's Slack id is
+// the `${VAR}` variable — which the premise holds is set in no process — and a
+// lookup that answers it as U0HANDED, as a node's own chain would.
+func handedFounder(t *testing.T, variable string) (*turnctx.Turn, org.EnvLookup) {
+	t.Helper()
+	if _, set := os.LookupEnv(variable); set {
+		t.Fatalf("the premise: %s is set in no process", variable)
+	}
+	cfg, err := config.ParseCompany([]byte(strings.Replace(companyDoc,
+		"slack_user_id: U0FOUNDER", "slack_user_id: ${"+variable+"}", 1)))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	o, err := cfg.Organization()
+	if err != nil {
+		t.Fatalf("organization: %v", err)
+	}
+	turn := &turnctx.Turn{RunID: "run-1", WorkKey: "wk-1",
+		Seat: o.AgentSeatByHandle("agent-ceo"), Org: o}
+	return turn, func(name string) (string, bool) {
+		if name == variable {
+			return "U0HANDED", true
+		}
+		return "", false
+	}
+}
+
 // --- a2a_ask -------------------------------------------------------------- //
 
 type asker struct {
@@ -409,6 +462,35 @@ func TestAnAskToAHumanExplainsWhyItCannotWork(t *testing.T) {
 	lower := strings.ToLower(res.Output)
 	if !strings.Contains(lower, "human") || !strings.Contains(lower, "mention") {
 		t.Errorf("the refusal does not say what to do instead:\n%s", res.Output)
+	}
+}
+
+// AN ASK FINDS ITS TARGET THROUGH THE LOOKUP THE NODE HANDS IN, as
+// lookup_colleague does: an id only the node's chain resolves names the
+// founder — so the answer is the refusal that says a person cannot be asked
+// this way — and never "no colleague matches", which sends the model looking
+// for somebody the chart already has.
+func TestAnAskFindsItsTargetThroughTheNodesOwnLookup(t *testing.T) {
+	t.Parallel()
+	turn, handed := handedFounder(t, "CREWLET_BUILTIN_TEST_ASKED_SLACK_ID")
+	ask := map[string]any{"target": "U0HANDED", "brief": "Approve the budget?"}
+
+	svc := &asker{}
+	tool := registered(t, builtin.Deps{A2A: svc, Env: handed}, builtin.A2AAskTool)
+	res := callFor(t, tool, turn, ask)
+	if !res.Failed || !strings.Contains(strings.ToLower(res.Output), "human") {
+		t.Fatalf("an ask to the id the node's lookup gives the founder was not "+
+			"resolved to them:\n%s", res.Output)
+	}
+	if len(svc.asks) != 0 {
+		t.Errorf("a channel was opened to a human: %+v", svc.asks)
+	}
+	// THE CONTROL: with no lookup handed the process environment is read,
+	// and it has no such variable — so nobody matches.
+	plain := registered(t, builtin.Deps{A2A: &asker{}}, builtin.A2AAskTool)
+	if res := callFor(t, plain, turn, ask); !strings.Contains(res.Output, "No colleague matches") {
+		t.Fatalf("an id no process environment holds named somebody with no "+
+			"lookup handed in:\n%s", res.Output)
 	}
 }
 

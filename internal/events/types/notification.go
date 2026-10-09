@@ -274,9 +274,17 @@ func (e NotificationsCoalesced) Summary() string {
 }
 
 // NotificationSkipped records a notification dropped, with the reason.
+//
+// Reason is exactly one of the reasons internal/notify declares
+// (notify.SkipReason) and never anything more, so a reader tells which gate
+// dropped a delivery by comparing it whole. What that gate said about THIS
+// delivery — the parser's error, for a payload its parser refused — is
+// Detail, kept apart because appended to the reason it left text no exact
+// comparison could match.
 type NotificationSkipped struct {
 	Handle             string `json:"handle"`
 	Reason             string `json:"reason"`
+	Detail             string `json:"detail,omitempty"`
 	NotificationSource string `json:"notification_source"`
 }
 
@@ -294,11 +302,16 @@ func (e NotificationSkipped) IntegrationSender() string { return "" }
 // IntegrationSender.
 func (e NotificationSkipped) IntegrationEventType() string { return "" }
 
-// Summary always states the reason. A dropped notification with no explanation
-// is indistinguishable from one that never arrived.
+// Summary always states the reason, and the detail after it when there is
+// one. A dropped notification with no explanation is indistinguishable from
+// one that never arrived.
 func (e NotificationSkipped) Summary() string {
-	if e.Handle != "" {
-		return "Skipped for " + e.Handle + ": " + e.Reason
+	why := e.Reason
+	if e.Detail != "" {
+		why += ": " + e.Detail
 	}
-	return "Skipped: " + e.Reason
+	if e.Handle != "" {
+		return "Skipped for " + e.Handle + ": " + why
+	}
+	return "Skipped: " + why
 }

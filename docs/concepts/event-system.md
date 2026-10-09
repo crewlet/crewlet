@@ -426,7 +426,8 @@ all.
 live-only per-round signal whose durable record is `agent_phase_completed`),
 `budget_meters` (a snapshot of the fleet's shared token counters, every capped
 calendar window with its engine-computed state, published by every node on a
-fixed tick, which the next report supersedes; the live projection reads it), `raw_webhook` (the delivery is already a row, as the `inbound_delivery` its edge publishes beside it), and the two
+fixed tick and at once when a window first turns work away on it, which the
+next report supersedes; the live projection reads it), `raw_webhook` (the delivery is already a row, as the `inbound_delivery` its edge publishes beside it), and the two
 A2A inbox wakes `a2a_request` and `a2a_message` (the ask and the answer are
 already rows as `a2a_channel_opened` and `a2a_message_sent`). See the
 exclusions table in the Deployment page above.
@@ -533,11 +534,14 @@ the integrations' delivery counts and what became of those deliveries (the
 notifications per third-party app, counted over the window the delivery
 counts name) — is answered by **every live node at query time**
 (`internal/eventfan`, ADR-0021). The same scatter seeds the live
-projection when a node starts: its feed, its 24-hour spend window (the
-`phase_tokens` question, cut to the asker's window and floored at the asker's
-instant, so every node answers the same one) and each seat's last turn, so a
-restarted node's screens show the company rather than the part of it this node
-published:
+projection when a node starts. It seeds the feed and each seat's last turn,
+so a restarted node's screens show the company rather than the part of it
+this node published, and the 24-hour spend window (the `phase_tokens`
+question, cut to the asker's window and floored at the asker's instant, so
+every node answers the same one) behind the
+[`tokens` push](../reference/api-endpoints.md#pushes), which no screen draws:
+the Overview and Spend screens read the replicated `usage` domain's company
+days instead. Every one of these reads crosses the fleet the same way:
 
 ```mermaid
 sequenceDiagram
@@ -689,7 +693,7 @@ the span above. A turn does not republish its trigger's span id as its own;
 that made every event in a turn look like the same span and collapsed the
 dashboard's tree onto the wake that started it.
 
-**When a delivery addressed to somebody is dropped** — no seat matches its recipient, the routing gate refuses it, the rate valve is shut, nothing parses its source, or its source was disconnected — a `NotificationSkipped` event is emitted with the reason, visible in the trace so you can see why a webhook didn't reach an agent. A chat parser's own filtering is **not** a skip: an agent's own post, a thread reply the seat does not follow, a system post or a deleted one concerns nobody, so it is logged at debug (`slack_event_skipped`, `mattermost_post_skipped`) rather than recorded — recording each would bury the drops that matter under the ordinary traffic of a busy channel.
+**When a delivery addressed to somebody is dropped** — its payload cannot be read, its source was disconnected, nothing parses its source, its parser refuses the payload, no seat matches its recipient, the routing gate refuses it, or the rate valve is shut — a `NotificationSkipped` event is emitted with the reason, visible in the trace so you can see why a webhook didn't reach an agent. Its `reason` is always one of a fixed set of phrases, so a reader can match it exactly; what the gate said about this particular delivery — the parser's error, for a payload its parser refused — is in `detail`, beside it. A chat parser's own filtering is **not** a skip: an agent's own post, a thread reply the seat does not follow, a system post or a deleted one concerns nobody, so it is logged at debug (`slack_event_skipped`, `mattermost_post_skipped`) rather than recorded — recording each would bury the drops that matter under the ordinary traffic of a busy channel.
 
 The dashboard groups events by `trace_id` into collapsible trace trees. See [Deployment — Tracing](../guides/deployment.md#tracing) for OTLP export configuration.
 

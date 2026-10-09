@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -326,6 +327,120 @@ func TestEveryAllowanceIsWellFormed(t *testing.T) {
 		t.Fatal("the allowlist is empty; this guard is asserting about nothing")
 	}
 	t.Logf("%d declared skips", len(allowed))
+}
+
+// THE TIMINGS TIME WHAT PASSED, AND NOTHING ELSE.
+//
+// internal/solo/partition reads this file to decide which packages start
+// first, so a FAILED package's elapsed time, which stops wherever the failure
+// stopped it, would teach the next run that a package is short because it
+// broke, and start it late. A package cut off mid-run has no result to time at
+// all. And a package with no test files is in the half like any other, so it
+// is timed (as a zero) rather than left out, where it would weigh the half's
+// median.
+func TestTheTimingsTimeWhatPassed(t *testing.T) {
+	t.Parallel()
+
+	const (
+		passed    = "github.com/crewlet/crewlet/internal/a"
+		noTests   = "github.com/crewlet/crewlet/static"
+		failed    = "github.com/crewlet/crewlet/internal/c"
+		truncated = "github.com/crewlet/crewlet/internal/d"
+	)
+	stream := strings.Join([]string{
+		`{"Action":"start","Package":"` + passed + `"}`,
+		`{"Action":"run","Package":"` + passed + `","Test":"TestX"}`,
+		`{"Action":"pass","Package":"` + passed + `","Test":"TestX","Elapsed":12.1}`,
+		`{"Action":"pass","Package":"` + passed + `","Elapsed":12.5}`,
+		`{"Action":"skip","Package":"` + noTests + `","Elapsed":0}`,
+		`{"Action":"run","Package":"` + failed + `","Test":"TestY"}`,
+		`{"Action":"fail","Package":"` + failed + `","Test":"TestY","Elapsed":3}`,
+		`{"Action":"fail","Package":"` + failed + `","Elapsed":3.25}`,
+		// Cut off mid-package: records, and no result of its own.
+		`{"Action":"start","Package":"` + truncated + `"}`,
+		`{"Action":"run","Package":"` + truncated + `","Test":"TestZ"}`,
+	}, "\n")
+
+	r := read(bufio.NewScanner(strings.NewReader(stream)), devNull(t))
+	var got strings.Builder
+	if err := writeTimings(&got, r); err != nil {
+		t.Fatal(err)
+	}
+	if want := passed + "\t12.500\n" + noTests + "\t0.000\n"; got.String() != want {
+		t.Errorf("timings =\n%s\nwant\n%s", got.String(), want)
+	}
+}
+
+// runMain is the environment variable that makes this test binary run
+// skipgate's own main, so a case can drive the program the Makefile runs
+// rather than the functions it is made of.
+const runMain = "SKIPGATE_TEST_RUN_MAIN"
+
+func TestMain(m *testing.M) {
+	if os.Getenv(runMain) == "1" {
+		main()
+		return
+	}
+	os.Exit(m.Run())
+}
+
+// A -timings PATH THAT CANNOT BE WRITTEN FAILS BEFORE THE SUITE RUNS.
+//
+// The file is the run's last product, so a path that cannot take it — a
+// directory that does not exist, a typo in TEST_TIMINGS — used to be found
+// only once every package had run: a quarter of an hour of race suite, then
+// an exit that said nothing about which tests had failed. So the file is
+// created before the test command starts, and the command here would leave a
+// mark if it ever did.
+func TestATimingsPathThatCannotBeWrittenFailsBeforeTheSuiteRuns(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	mark := filepath.Join(dir, "the suite ran")
+	cmd := exec.CommandContext(t.Context(), os.Args[0],
+		"-timings", filepath.Join(dir, "no such directory", "timings.tsv"),
+		"--", "sh", "-c", `touch "$0"`, mark)
+	cmd.Env = append(os.Environ(), runMain+"=1")
+	out, err := cmd.CombinedOutput()
+
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 2 {
+		t.Fatalf("skipgate exited %v, want 2 (a usage error):\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "TEST_TIMINGS") {
+		t.Errorf("the refusal does not name the make variable to change:\n%s", out)
+	}
+	if _, err := os.Stat(mark); err == nil {
+		t.Errorf("the test command ran before the -timings path was refused")
+	}
+}
+
+// A PREVIOUS RUN'S TIMINGS DO NOT OUTLIVE A RUN THAT MEASURED NOTHING.
+//
+// A path reused across runs — the one CONTRIBUTING.md shows — is read by the
+// next run as this one's measurement, so a run that never produced a stream
+// (here, a command that does not exist) must leave the file empty rather
+// than leave the last run's numbers to be trusted.
+func TestAPreviousRunsTimingsDoNotOutliveARunThatMeasuredNothing(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "timings.tsv")
+	if err := os.WriteFile(path, []byte("github.com/crewlet/crewlet/internal/old\t99.000\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.CommandContext(t.Context(), os.Args[0],
+		"-timings", path, "--", filepath.Join(t.TempDir(), "no such command"))
+	cmd.Env = append(os.Environ(), runMain+"=1")
+	if out, err := cmd.CombinedOutput(); err == nil {
+		t.Fatalf("skipgate exited 0 over a command that could not start:\n%s", out)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("the previous run's timings survived a run that measured nothing:\n%s", got)
+	}
 }
 
 func devNull(t *testing.T) *os.File {

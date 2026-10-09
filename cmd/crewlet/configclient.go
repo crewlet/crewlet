@@ -35,6 +35,12 @@ type configClient struct {
 	base  string
 	token string
 	http  *http.Client
+	// answerCap is the most of one answer read back: [maxConfigResponseBytes]
+	// in every client [newConfigClient] builds. A field so the suite can send
+	// an answer past it without building one of 64 MiB; zero is refused by
+	// [configClient.Import] rather than read as a cap that refuses every
+	// answer.
+	answerCap int
 }
 
 func newConfigClient(boot *config.Bootstrap, override string) (*configClient, error) {
@@ -46,7 +52,10 @@ func newConfigClient(boot *config.Bootstrap, override string) (*configClient, er
 	if err != nil {
 		return nil, err
 	}
-	return &configClient{base: base, token: token, http: httpx.Client(apiTimeout)}, nil
+	return &configClient{
+		base: base, token: token, http: httpx.Client(apiTimeout),
+		answerCap: maxConfigResponseBytes,
+	}, nil
 }
 
 // Describe names where a write lands, for the line the command prints.
@@ -63,6 +72,10 @@ func (c *configClient) Describe() string {
 // form its own. The caller validates first so a typo is caught here rather
 // than after a round trip, but what travels is what the operator wrote.
 func (c *configClient) Import(ctx context.Context, doc []byte, summary string) (string, int64, error) {
+	if c.answerCap <= 0 {
+		return "", 0, fmt.Errorf("the /config client for %s has no answer cap, so it could "+
+			"read no answer at all; it is built by newConfigClient", c.base)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut,
 		c.base+"/config", bytes.NewReader(doc))
 	if err != nil {
@@ -88,18 +101,18 @@ func (c *configClient) Import(ctx context.Context, doc []byte, summary string) (
 	// clean end of file, so an answer past it reached the decoder clipped
 	// and was reported as something this build cannot read — a protocol
 	// fault that is not there, on a write that may well have landed.
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxConfigResponseBytes+1))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, int64(c.answerCap)+1))
 	if err != nil {
 		return "", 0, fmt.Errorf("reading the answer from %s: %w", c.base, err)
 	}
-	if len(raw) > maxConfigResponseBytes {
+	if len(raw) > c.answerCap {
 		landed := "so whether the revision was stored is unknown"
 		if resp.StatusCode/100 == 2 {
 			landed = fmt.Sprintf("though its status, %d, says the revision was stored", resp.StatusCode)
 		}
 		return "", 0, fmt.Errorf("the answer from %s to PUT /config exceeded %d bytes, so it was "+
 			"not read, %s: no company's answer comes near the cap, so check that -api names "+
-			"the engine rather than something in front of it", c.base, maxConfigResponseBytes, landed)
+			"the engine rather than something in front of it", c.base, c.answerCap, landed)
 	}
 	if resp.StatusCode/100 != 2 {
 		return "", 0, c.refusal(resp.StatusCode, resp.Header.Get("Content-Type"), raw)

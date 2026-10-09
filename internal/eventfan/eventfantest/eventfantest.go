@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // Factory returns n started queue clients of ONE broker, one per member. The
@@ -348,10 +349,7 @@ func fleet(t *testing.T, factory Factory) []*member {
 	queues := factory(t, Members)
 	out := make([]*member, 0, Members)
 	for i, q := range queues {
-		db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), fmt.Sprintf("n%d.db", i)), store.Options{})
-		if err != nil {
-			t.Fatalf("open a store: %v", err)
-		}
+		db := storetest.OpenNode(t, filepath.Join(t.TempDir(), fmt.Sprintf("n%d.db", i)), store.Options{})
 		t.Cleanup(func() { _ = db.Close() })
 		m := &member{id: fmt.Sprintf("node-%d", i), q: q, log: db.Events()}
 		stop, err := eventfan.Serve(t.Context(), q, m.id, m.log)

@@ -13,15 +13,13 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // configSurface builds a config service over a real store with one revision.
 func configSurface(t *testing.T, docs ...string) (*configapi.Service, []string) {
 	t.Helper()
-	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "cq.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.OpenNode: %v", err)
-	}
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "cq.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 
 	var ids []string

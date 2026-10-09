@@ -60,6 +60,13 @@ import (
 // Twenty thousand sources, the smaller gate size, because training is the
 // cost: the hundred-and-twenty-thousand arm is BenchmarkIVFRecallAtScale, for
 // the reason the half-million recall arm is a benchmark.
+//
+// THE MEMBERS RUN IN TURN, NOT AS PARALLEL SUBTESTS: a parallel subtest of a
+// parallel test waits for a slot behind every top-level test released before
+// it, so the two trainings — about half a minute each under the race detector
+// — started when the rest of the package was finishing and were its last
+// half-minute. In turn they start when this test does, each training on its
+// own share of the cores ([search.TrainIVF]).
 func TestIVFRecallMeetsTheFloorCurve(t *testing.T) {
 	t.Parallel()
 	for _, member := range []struct {
@@ -72,7 +79,6 @@ func TestIVFRecallMeetsTheFloorCurve(t *testing.T) {
 		{"topical", topicalGateFixture, true},
 	} {
 		t.Run(member.name, func(t *testing.T) {
-			t.Parallel()
 			f := member.fixture()
 			c := gateCorpus(f)
 			lists := search.IVFLists(f.Len())
@@ -205,16 +211,21 @@ func TestANarrowedSearchReadsUntilItHasSeenEnoughOfItsRows(t *testing.T) {
 //
 // # What the log is, and why each phase is in it
 //
-// Two thousand six hundred vectors, an index trained over them and its
-// rollout; then eight hundred forgotten, a hundred re-embedded and fifty new;
-// then a SECOND training over the smaller corpus, a measurement of it that
-// changes its probe count, and its rollout — whose batches sit on subjects
-// of their own beside the first rollout's, naming an index nothing has
-// installed any more — and finally six hundred vectors written after the
-// second index, which are filed as they are written. A holder that replays
-// the compacted log sees every one of those shapes: an embed the compaction
-// moved past the index, batches for a replaced index, a forget with nothing
-// left to forget.
+// Two hundred and sixty vectors, an index trained over them and its rollout;
+// then eighty forgotten, ten re-embedded and five new; then a SECOND training
+// over the smaller corpus, a measurement of it that changes its probe count,
+// and its rollout — whose batches sit on subjects of their own beside the
+// first rollout's, naming an index nothing has installed any more — and
+// finally sixty vectors written after the second index, which are filed as
+// they are written. A holder that replays the compacted log sees every one of
+// those shapes: an embed the compaction moved past the index, batches for a
+// replaced index, a forget with nothing left to forget.
+//
+// AT A TENTH OF THE SCALE IT WAS WRITTEN AT, the rollout's batch included —
+// a hundred ids rather than [search.IVFReassignBatch], so each source still
+// spans two batches — because every shape above is a shape of the log and
+// none is a size: the same records at ten times the rows were ten times the
+// applies on each of three holders.
 //
 // # And the properties the index rests on
 //
@@ -228,7 +239,7 @@ func TestANarrowedSearchReadsUntilItHasSeenEnoughOfItsRows(t *testing.T) {
 // exactly a recount of the rows, on every holder.
 func TestEveryHolderBuildsTheSameIndex(t *testing.T) {
 	t.Parallel()
-	const dim, model = 32, "holder-embed"
+	const dim, model, batch = 32, "holder-embed", 100
 	rng := rand.New(rand.NewPCG(31, 31))
 	topics := topicCentres(rng, 24, dim)
 
@@ -253,7 +264,7 @@ func TestEveryHolderBuildsTheSameIndex(t *testing.T) {
 	train := func() int64 {
 		t.Helper()
 		catchUp()
-		index := trainedIndex(t, live, model, dim)
+		index := trainedIndex(t, live, model, dim, batch)
 		add(index)
 		catchUp()
 		generation := statelog.Position{Stream: "S", Generation: 1, Seq: seq}.Packed()
@@ -264,33 +275,33 @@ func TestEveryHolderBuildsTheSameIndex(t *testing.T) {
 		return generation
 	}
 
-	for i := range 1300 {
+	for i := range 130 {
 		embed(search.SourcePage, fmt.Sprintf("p%05d", i))
 		embed(search.SourceTask, fmt.Sprintf("t%05d", i))
 	}
 	train()
-	for i := range 400 {
+	for i := range 40 {
 		add(forgetRecord(search.SourcePage, fmt.Sprintf("p%05d", i)))
 		add(forgetRecord(search.SourceTask, fmt.Sprintf("t%05d", i)))
 	}
-	for i := 500; i < 600; i++ {
+	for i := 50; i < 60; i++ {
 		embed(search.SourcePage, fmt.Sprintf("p%05d", i))
 	}
-	for i := range 50 {
+	for i := range 5 {
 		embed(search.SourceTask, fmt.Sprintf("n%05d", i))
 	}
 	current := train()
 	add(measureRecord(current, 3))
-	// SIX HUNDRED written after the second index, which the applier files
-	// as it writes them rather than by a reassign — the path the popcount
-	// check below holds to Hamming distance on its own.
-	for i := range 600 {
+	// SIXTY written after the second index, which the applier files as it
+	// writes them rather than by a reassign — the path the popcount check
+	// below holds to Hamming distance on its own.
+	for i := range 60 {
 		embed(search.SourcePage, fmt.Sprintf("q%05d", i))
 	}
 	// AND FORGETS UNDER IT: rows the reassign filed and rows the applier
 	// filed as it wrote them, each leaving a list it is counted in — the
 	// path the count moves DOWN on, which nothing before this line took.
-	for i := 450; i < 550; i++ {
+	for i := 45; i < 55; i++ {
 		add(forgetRecord(search.SourcePage, fmt.Sprintf("p%05d", i)))
 		add(forgetRecord(search.SourcePage, fmt.Sprintf("q%05d", i)))
 	}
@@ -383,15 +394,21 @@ func TestEveryHolderBuildsTheSameIndex(t *testing.T) {
 // and each batch has a subject of its own naming its index — so a
 // re-publication says exactly what the first publication of each batch said,
 // and whatever mix of the two the compaction keeps tiles the key space. Here
-// the index's rollout is published once in full, then — after a thousand new
-// pages arrived and a thousand more tasks, which a rollout cut afresh would
-// have shifted every boundary for — again for its first two batches only, as
-// a publisher that stopped partway would. A holder replaying what the
+// the index's rollout is published once in full, then — after a batch's worth
+// of new pages arrived and of new tasks, which a rollout cut afresh would have
+// shifted every boundary for — again for its first two batches only, as a
+// publisher that stopped partway would. A holder replaying what the
 // compaction kept must file every row, and a batch of an OLDER index published
 // after the new one's must change nothing.
+//
+// A HUNDRED IDS A BATCH rather than the duty's [search.IVFReassignBatch]: the
+// case is about which batches the compaction keeps, [search.RolloutRanges]
+// tiles the same way at any size, and at a tenth of the batch it needs a
+// tenth of the rows to have several. TestARolloutCoversEveryKey holds the
+// duty's own cut.
 func TestAPartialRepublicationStillFilesEveryRow(t *testing.T) {
 	t.Parallel()
-	const dim, model = 32, "republish-embed"
+	const dim, model, batch = 32, "republish-embed", 100
 	rng := rand.New(rand.NewPCG(41, 41))
 	topics := topicCentres(rng, 16, dim)
 
@@ -401,17 +418,17 @@ func TestAPartialRepublicationStillFilesEveryRow(t *testing.T) {
 		seq++
 		log = append(log, logged{seq: seq, rec: rec})
 	}
-	for i := range 3 * search.IVFReassignBatch {
+	for i := range 3 * batch {
 		add(embedRecord(search.SourceTask, fmt.Sprintf("t%05d", i), model,
 			topicalEmbedding(rng, topics, 0.3)))
 	}
 	live := openReplicated(t)
 	applyAll(t, live, log)
-	older := trainedIndex(t, live, model, dim)
+	older := trainedIndex(t, live, model, dim, batch)
 	add(older)
 	olderGeneration := statelog.Position{Stream: "S", Generation: 1, Seq: seq}.Packed()
 	applyAll(t, live, log[len(log)-1:])
-	index := trainedIndex(t, live, model, dim)
+	index := trainedIndex(t, live, model, dim, batch)
 	index.Index.Seed++ // another training, so another index
 	add(index)
 	generation := statelog.Position{Stream: "S", Generation: 1, Seq: seq}.Packed()
@@ -422,7 +439,7 @@ func TestAPartialRepublicationStillFilesEveryRow(t *testing.T) {
 	for n := range batches {
 		add(reassignRecord(generation, n, batches))
 	}
-	for i := range search.IVFReassignBatch {
+	for i := range batch {
 		add(embedRecord(search.SourcePage, fmt.Sprintf("p%05d", i), model,
 			topicalEmbedding(rng, topics, 0.3)))
 		add(embedRecord(search.SourceTask, fmt.Sprintf("s%05d", i), model,
@@ -560,7 +577,7 @@ func TestARowTheRolloutHasNotReachedIsStillFound(t *testing.T) {
 	db, _ := indexedStore(t, model, dim, 1600)
 
 	// A SECOND INDEX, installed and not rolled out: every row is stale.
-	rec := trainedIndex(t, db, model, dim)
+	rec := trainedIndex(t, db, model, dim, search.IVFReassignBatch)
 	rec.Index.Seed++ // a different training, so a different index
 	applyAt(t, db, rec, 1_000_000)
 
@@ -614,7 +631,7 @@ func TestAnOlderIndexNeverReplacesANewerOne(t *testing.T) {
 	const dim, model = 32, "order-embed"
 	db, generation := indexedStore(t, model, dim, 1100)
 	newer := indexOf(t, db)
-	older := trainedIndex(t, db, model, dim)
+	older := trainedIndex(t, db, model, dim, search.IVFReassignBatch)
 	older.Index.Seed++
 	applyAt(t, db, older, 5) // far below the installed generation
 	if got := indexOf(t, db); got.generation != generation ||
@@ -847,14 +864,22 @@ func TestTheIndexStepFollowsTheCorpus(t *testing.T) {
 // rollout re-filing the corpus on every holder, every two ticks for ever.
 // Judged against what its own training achieved, the index trained here is
 // kept, over three seeds.
+//
+// Five hundred copies among five thousand documents, at sixty-four lists: the
+// eleventh of the corpus the measured case's two thousand of twenty-two
+// thousand were, at a sixteenth of the k-means work. Neither half depends on
+// the scale — identical codes share a nearest centroid at any list count, and
+// the rule that keeps the index is a ratio — and the measured case's own
+// numbers stand in TestTheIndexStepFollowsTheCorpus, where they cost nothing.
 func TestAnIndexTrainedOverDuplicatesComesToRest(t *testing.T) {
 	t.Parallel()
+	const documents, copies = 5_000, 500
 	f := topicalGateFixture()
-	codes := search.NewCodes(len(f.Codes[0]), f.Len()+2000)
-	for _, code := range f.Codes {
+	codes := search.NewCodes(len(f.Codes[0]), documents+copies)
+	for _, code := range f.Codes[:documents] {
 		codes.Append(code)
 	}
-	for range 2000 {
+	for range copies {
 		codes.Append(f.Codes[7])
 	}
 	n := codes.Len()
@@ -940,7 +965,7 @@ func TestARolloutCoversEveryKey(t *testing.T) {
 	for i := range 2*search.IVFReassignBatch + 17 {
 		ids[search.SourcePage] = append(ids[search.SourcePage], fmt.Sprintf("p%06d", i))
 	}
-	ranges := search.RolloutRanges(ids)
+	ranges := search.RolloutRanges(ids, search.IVFReassignBatch)
 	// Three page batches and one open task batch.
 	if len(ranges) != 4 {
 		t.Fatalf("%d batches for %d page ids and no task ids", len(ranges),
@@ -990,6 +1015,17 @@ func TestARolloutCoversEveryKey(t *testing.T) {
 			t.Errorf("a rollout with %s encoded", name)
 		}
 	}
+
+	// AND A CUT EVERY NO IDS AT ALL IS REFUSED, where the loop cutting it
+	// would never advance.
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("a rollout cut every 0 ids was cut")
+			}
+		}()
+		search.RolloutRanges(ids, 0)
+	}()
 }
 
 // ---- helpers --------------------------------------------------------- //
@@ -1222,8 +1258,9 @@ func readingOf(t testing.TB, db *store.DB, model string, dim int) search.Trainin
 
 // trainedIndex trains db's index exactly as the duty does and returns its
 // centroids record — INSTALLED whatever the training's verdict, because these
-// tests are about what an installed index does.
-func trainedIndex(t testing.TB, db *store.DB, model string, dim int) search.VectorRecord {
+// tests are about what an installed index does — its rollout cut every batch
+// ids.
+func trainedIndex(t testing.TB, db *store.DB, model string, dim, batch int) search.VectorRecord {
 	t.Helper()
 	reading := readingOf(t, db, model, dim)
 	codes := reading.Corpus.Codes
@@ -1252,7 +1289,7 @@ func trainedIndex(t testing.TB, db *store.DB, model string, dim int) search.Vect
 			Log: "S", Seed: seed, Lists: lists, Probes: choice.Probes,
 			TrainedOn: codes.Len(), Largest: search.LargestList(byList),
 			Measurement: &measurement, Centroids: index.Bytes(),
-			Rollout: search.RolloutRanges(reading.IDs),
+			Rollout: search.RolloutRanges(reading.IDs, batch),
 		},
 	}
 }
@@ -1296,7 +1333,7 @@ func indexedStore(t *testing.T, model string, dim, n int) (*store.DB, int64) {
 		t.Fatal(err)
 	}
 	seq++
-	index := trainedIndex(t, db, model, dim)
+	index := trainedIndex(t, db, model, dim, search.IVFReassignBatch)
 	applyAt(t, db, index, seq)
 	generation := statelog.Position{Stream: "S", Generation: 1, Seq: seq}.Packed()
 	for n := range index.Index.Rollout {

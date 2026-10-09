@@ -160,8 +160,10 @@ credential's the fallback.
 
 One change that concerned you under both names is **one** notice, under the
 stronger of the two reasons — the same rule that already gives one handle one
-reason. And an operator reading somebody else's day is handed *that* person's
-two names from the chart, never the credential in their own hand.
+reason. And whoever reads somebody else's day — an operator, or an agent seat
+reading its lead's inbox or state with `work_inbox` or `get_person` — is
+handed *that* person's two names from the chart, never the credential in
+anybody's hand.
 
 **The binding is written on the seat, not on the token.** Tier A is the root of
 trust and may never read Tier B — it holds the keys to the secret store — so a
@@ -186,12 +188,14 @@ emitted. The count of unresolved identities is logged on every apply
 validation, because substituting part of it would register a wrong
 identity that matches nobody.
 
-Where a reference is resolved depends on the consumer. Sender attribution
-resolves it the way every other `${VAR}` in the company is resolved: the
-[secret store](secret-store.md) first, then the process environment. The
-lead's roster and `lookup_colleague` read the process environment only, so
-an identity whose value exists only in the secret store attributes inbound
-activity correctly but does not appear in those two places.
+Every consumer resolves a reference the way every other `${VAR}` in the
+company is resolved: the [secret store](secret-store.md) first, then the
+environment the node runs with. Sender attribution, the lead's roster,
+`lookup_colleague` and `a2a_ask`, the dashboard's colleague search and access
+screen, and the `crewlet_operator_id` binding that makes a token a person all
+read that one chain, so an identity whose value exists only in the secret store
+resolves in every one of them or in none — never attributing a person's
+activity while leaving them out of the roster an agent addresses them from.
 
 Human seats keep the descriptive identity fields (`goal`, `backstory`,
 `responsibilities`). They are the **routing context** rendered into an

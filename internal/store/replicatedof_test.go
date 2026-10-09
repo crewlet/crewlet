@@ -19,6 +19,11 @@ func replicatedOf(tb testing.TB, node *store.DB) *store.DB {
 // openReplicated opens a node's store at path with opts, and its replicated
 // estate beside it carrying logs logs, and answers the node's handle and the
 // estate's. The caller closes the node, which closes both.
+//
+// Both files are seeded from the binary's migrated image where nothing is
+// there yet ([storetest.OpenEstate]): the cases that call this are about the
+// files' mechanics — pools, pins, locks, the slot — and migrating them is the
+// subject of the contract's schema cases, which open fresh files of their own.
 func openReplicated(tb testing.TB, path string, opts store.Options, logs int) (*store.DB, *store.DB) {
 	tb.Helper()
 	node, _ := storetest.OpenEstate(tb, path, opts, logs)

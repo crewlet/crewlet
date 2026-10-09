@@ -271,6 +271,7 @@ func TestAPartiallyReadableCallListKeepsWhatItCanRun(t *testing.T) {
 // on an argument path in this engine reads through json.Number for that
 // reason; this was the one that did not.
 func TestAWideArgumentIDSurvivesTheEnvelope(t *testing.T) {
+	t.Parallel()
 	for _, reply := range []string{
 		`{"tool_calls": [{"name": "get_issue", "arguments": {"id": 1234567890123456789}}]}`,
 		// The STRING form of an argument list takes the same path, and it is
@@ -299,6 +300,7 @@ func TestAWideArgumentIDSurvivesTheEnvelope(t *testing.T) {
 // the call fell back to no arguments. Refusing is the honest answer: half a
 // model's arguments is not its request.
 func TestAnArgumentListWithATailIsRefused(t *testing.T) {
+	t.Parallel()
 	env := ParseEnvelope(`{"tool_calls": [{"name": "get_issue", "arguments": "{\"id\": 1}garbage"}]}`)
 	if len(env.ToolCalls) != 1 {
 		t.Fatalf("ParseEnvelope gave %d calls, want 1", len(env.ToolCalls))

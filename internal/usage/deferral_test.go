@@ -41,33 +41,42 @@ func TestANewerBuildsDaysOfOneKindAreAllRetained(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open the log: %v", err)
 	}
+	var last uint64
 	for _, team := range []string{"payments", "search"} {
 		payload := newerKindFor(t, usage.RecordVersion+1, team)
 		// THE NEWER BUILD'S OWN SUBJECT, composed as it composes it — never
 		// this build's reading of the record.
 		subject := topics.LogSubject(spec.SubjectPrefix, "a_kind_from_a_later_build",
 			coord.DocumentKey("node-b", "2026-09-23", team))
-		if _, _, err := log.Append(t.Context(), subject, "op-"+team, nil, payload); err != nil {
+		seq, _, err := log.Append(t.Context(), subject, "op-"+team, nil, payload)
+		if err != nil {
 			t.Fatalf("append %s: %v", team, err)
 		}
+		last = seq
 	}
 
+	// THE CHECKPOINT, and not the table: the applier commits the retained
+	// records with its batch and only then re-reads what it holds deferred,
+	// before it moves the checkpoint past them. A case that stopped polling
+	// at the table's count asked for the report inside that gap, and under a
+	// loaded runner found it not yet made.
 	deadline := time.Now().Add(30 * time.Second)
-	for {
-		var held int
-		if err := node.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
-			return tx.QueryRowContext(t.Context(),
-				`SELECT COUNT(*) FROM `+usage.Domain{}.DeferredTable()).Scan(&held)
-		}); err != nil {
-			t.Fatalf("count the deferred records: %v", err)
-		}
-		if held == 2 {
-			break
-		}
+	for node.runner.Committed().Seq < last {
 		if time.Now().After(deadline) {
-			t.Fatalf("the node holds %d deferred record(s) after 30s, want both teams' days", held)
+			t.Fatalf("the applier is at %s after 30s, short of the last record at %d",
+				node.runner.Committed(), last)
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+	var held int
+	if err := node.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(),
+			`SELECT COUNT(*) FROM `+usage.Domain{}.DeferredTable()).Scan(&held)
+	}); err != nil {
+		t.Fatalf("count the deferred records: %v", err)
+	}
+	if held != 2 {
+		t.Fatalf("the node holds %d deferred record(s), want both teams' days", held)
 	}
 	if deferred, ok := node.runner.Deferred(); !ok {
 		t.Fatalf("the applier reports nothing deferred (%+v)", deferred)

@@ -5,7 +5,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
+	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -40,97 +40,10 @@ var perSeatGroups = []string{"AgentInboxGroup", "AgentControlGroup", "AgentRefle
 // hold to the table.
 func TestEveryFleetGroupSaysWhetherItNeedsData(t *testing.T) {
 	t.Parallel()
-	root := sourcetree.Root(t)
-	type file struct {
-		dir  string
-		path string
-		ast  *ast.File
-	}
-	fset := token.NewFileSet()
-	var files []file
-	consts := map[string]string{} // <dir>.<Name> -> value
-	err := sourcetree.Walk(filepath.Join(root, "internal"), func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		parsed, err := parser.ParseFile(fset, path, nil, 0)
-		if err != nil {
-			return err
-		}
-		dir := filepath.Dir(path)
-		files = append(files, file{dir: dir, path: path, ast: parsed})
-		for _, decl := range parsed.Decls {
-			gen, ok := decl.(*ast.GenDecl)
-			if !ok || gen.Tok != token.CONST {
-				continue
-			}
-			for _, spec := range gen.Specs {
-				value, ok := spec.(*ast.ValueSpec)
-				if !ok || len(value.Names) != len(value.Values) {
-					continue
-				}
-				for i, name := range value.Names {
-					if lit, ok := value.Values[i].(*ast.BasicLit); ok && lit.Kind == token.STRING {
-						if s, err := strconv.Unquote(lit.Value); err == nil {
-							consts[dir+"."+name.Name] = s
-						}
-					}
-				}
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk the tree: %v", err)
-	}
-
-	queueDir := filepath.Join(root, "internal", "queue") + string(filepath.Separator)
-	subscribed := map[string][]string{} // group -> where
-	for _, f := range files {
-		if strings.HasPrefix(f.path+string(filepath.Separator), queueDir) || strings.HasPrefix(f.path, queueDir) {
-			continue
-		}
-		imports := map[string]string{} // local name -> dir
-		for _, imp := range f.ast.Imports {
-			path, _ := strconv.Unquote(imp.Path.Value)
-			if !strings.HasPrefix(path, modulePath+"/") {
-				continue
-			}
-			name := filepath.Base(path)
-			if imp.Name != nil {
-				name = imp.Name.Name
-			}
-			imports[name] = filepath.Join(root, strings.TrimPrefix(path, modulePath+"/"))
-		}
-		for _, decl := range f.ast.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Body == nil {
-				continue
-			}
-			ast.Inspect(fn.Body, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok || (sel.Sel.Name != "Subscribe" && sel.Sel.Name != "SubscribeBatch") || len(call.Args) < 4 {
-					return true
-				}
-				where := fset.Position(call.Pos()).String()
-				group, perSeat, ok := resolveGroup(call.Args[2], f.dir, imports, consts, fn)
-				switch {
-				case !ok:
-					t.Errorf("%s subscribes a group this gate cannot read; name it with a "+
-						"constant so it can be held to internal/engine/groups.go", where)
-				case !perSeat:
-					subscribed[group] = append(subscribed[group], where)
-				}
-				return true
-			})
-		}
+	subscribed, unreadable := fleetSubscriptions(t, sourcetree.Root(t))
+	for _, where := range unreadable {
+		t.Errorf("%s subscribes a group this gate cannot read; name it with a "+
+			"constant so it can be held to internal/engine/groups.go", where)
 	}
 	if len(subscribed) == 0 {
 		t.Fatal("no fleet-wide subscription was found, so this gate is reading a tree it cannot see")
@@ -151,6 +64,176 @@ func TestEveryFleetGroupSaysWhetherItNeedsData(t *testing.T) {
 			t.Errorf("group %q is subscribed at %v and does not say whether it needs "+
 				"data: declare it in internal/engine/groups.go", group, where)
 		}
+	}
+}
+
+// subscribeMethods are the queue verbs that attach a consumer group, which
+// is what the gate above reads the source for — and, being identifiers, what
+// a file must spell to make such a call at all.
+var subscribeMethods = []string{"Subscribe", "SubscribeBatch"}
+
+// fleetSubscriptions is every fleet-wide group the Go source under root's
+// internal/ subscribes, with where, and where a call's group cannot be read.
+//
+// IN TWO PASSES, because parsing the whole of internal/ to find a handful of
+// calls was nine seconds under the race detector. The first parses only the
+// files that spell a subscribe verb (sourcetree.Identifiers) — every caller
+// is among them. The second parses every file of the only two places a
+// caller's group constant is looked up: the caller's own package, and each of
+// this module's packages it imports. So every constant the gate could resolve
+// before, it resolves now.
+func fleetSubscriptions(t *testing.T, root string) (map[string][]string, []string) {
+	t.Helper()
+	fset := token.NewFileSet()
+	parsed := map[string]*ast.File{}
+	parse := func(f moduleFile) *ast.File {
+		if file, ok := parsed[f.path]; ok {
+			return file
+		}
+		file, err := parser.ParseFile(fset, f.path, f.body, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", f.rel, err)
+		}
+		parsed[f.path] = file
+		return file
+	}
+
+	type caller struct {
+		moduleFile
+		ast     *ast.File
+		imports map[string]string // local name -> dir
+	}
+	verbs := sourcetree.MustIdentifiers(subscribeMethods...)
+	files := moduleFiles(t, root)
+	var callers []caller
+	lookIn := map[string]bool{} // directories whose constants a group may name
+	for _, f := range files {
+		if !f.under("internal") || f.under("internal/queue") || !verbs.In(f.body) {
+			continue
+		}
+		c := caller{moduleFile: f, ast: parse(f), imports: map[string]string{}}
+		for _, imp := range c.ast.Imports {
+			path, _ := strconv.Unquote(imp.Path.Value)
+			if !strings.HasPrefix(path, modulePath+"/") {
+				continue
+			}
+			name := filepath.Base(path)
+			if imp.Name != nil {
+				name = imp.Name.Name
+			}
+			c.imports[name] = filepath.Join(root, strings.TrimPrefix(path, modulePath+"/"))
+			lookIn[c.imports[name]] = true
+		}
+		lookIn[c.dir()] = true
+		callers = append(callers, c)
+	}
+
+	consts := map[string]string{} // <dir>.<Name> -> value
+	for _, f := range files {
+		if !f.under("internal") || !lookIn[f.dir()] {
+			continue
+		}
+		for _, decl := range parse(f).Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				value, ok := spec.(*ast.ValueSpec)
+				if !ok || len(value.Names) != len(value.Values) {
+					continue
+				}
+				for i, name := range value.Names {
+					if lit, ok := value.Values[i].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+						if s, err := strconv.Unquote(lit.Value); err == nil {
+							consts[f.dir()+"."+name.Name] = s
+						}
+					}
+				}
+			}
+		}
+	}
+
+	subscribed := map[string][]string{} // group -> where
+	var unreadable []string
+	for _, c := range callers {
+		for _, decl := range c.ast.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || !slices.Contains(subscribeMethods, sel.Sel.Name) || len(call.Args) < 4 {
+					return true
+				}
+				where := fset.Position(call.Pos()).String()
+				group, perSeat, ok := resolveGroup(call.Args[2], c.dir(), c.imports, consts, fn)
+				switch {
+				case !ok:
+					unreadable = append(unreadable, where)
+				case !perSeat:
+					subscribed[group] = append(subscribed[group], where)
+				}
+				return true
+			})
+		}
+	}
+	return subscribed, unreadable
+}
+
+// THE GATE ABOVE, ON A TREE WHOSE VERDICT IS KNOWN — through the same read,
+// prefilter and two passes.
+//
+// The second pass is the one a prefilter could quietly break: a group named
+// by a constant in a file of its own, which spells no subscribe verb and so
+// is never a caller, must still be read. So the planted constants live in
+// exactly such files — one in the caller's own package, one in a package it
+// imports — beside a literal, a seat's own group, a group no constant names,
+// the queue package's own subscriptions, and a file that does not even parse
+// and names no verb, which the gate must never open.
+func TestTheGroupGateReadsAConstantFromAFileThatSubscribesNothing(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	for path, body := range map[string]string{
+		"internal/work/work.go": "package work\n\n" +
+			"import \"" + modulePath + "/internal/names\"\n\n" +
+			"func run(q Q, unknown string) {\n" +
+			"\tq.Subscribe(ctx, \"t\", names.Imported, h)\n" +
+			"\tq.Subscribe(ctx, \"t\", local, h)\n" +
+			"\tq.SubscribeBatch(ctx, \"t\", \"literal-group\", h, 8)\n" +
+			"\tseat := topics.AgentInboxGroup(\"alice\")\n" +
+			"\tq.Subscribe(ctx, \"t\", seat, h)\n" +
+			"\tq.Subscribe(ctx, \"t\", unknown, h)\n" +
+			"}\n",
+		"internal/work/consts.go":      "package work\n\nconst local = \"local-group\"\n",
+		"internal/names/names.go":      "package names\n\nconst Imported = \"imported-group\"\n",
+		"internal/queue/memory/sub.go": "package memory\n\nfunc f(q Q) { q.Subscribe(ctx, \"t\", \"queue-own\", h) }\n",
+		"internal/broken/broken.go":    "package broken\n\nthis is not Go\n",
+	} {
+		full := filepath.Join(root, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	subscribed, unreadable := fleetSubscriptions(t, root)
+	var groups []string
+	for group := range subscribed {
+		groups = append(groups, group)
+	}
+	slices.Sort(groups)
+	if want := []string{"imported-group", "literal-group", "local-group"}; !slices.Equal(groups, want) {
+		t.Errorf("subscribed groups = %q, want %q", groups, want)
+	}
+	if len(unreadable) != 1 || !strings.Contains(unreadable[0], "work.go:11") {
+		t.Errorf("unreadable = %q, want the one call naming a variable, at work.go:11", unreadable)
 	}
 }
 

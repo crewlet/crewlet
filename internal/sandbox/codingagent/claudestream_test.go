@@ -88,6 +88,7 @@ func decodeClaude(lines ...string) string {
 // THE STREAM IS READ INTO WHAT THE RUN DID: what the agent said, one line per
 // tool call naming the tool and its subject, and a failed call marked as one.
 func TestTheClaudeStreamBecomesATranscriptOfWhatTheRunDid(t *testing.T) {
+	t.Parallel()
 	if got := decodeClaude(claudeRunStream...); got != claudeTranscript {
 		t.Fatalf("transcript =\n%s\nwant\n%s", got, claudeTranscript)
 	}
@@ -99,6 +100,7 @@ func TestTheClaudeStreamBecomesATranscriptOfWhatTheRunDid(t *testing.T) {
 // printed: echoed, it would grow the record and the live view by orders of
 // magnitude and push far more of somebody's files through redaction.
 func TestAClaudeToolResultsBodyNeverReachesTheTranscript(t *testing.T) {
+	t.Parallel()
 	got := decodeClaude(claudeRunStream...)
 	for _, body := range []string{"THE-SUITE-PRINTED-THIS", "THE-FILE-SAID-THIS", "THE-MODEL-THOUGHT-THIS", "0.412s"} {
 		if strings.Contains(got, body) {
@@ -112,6 +114,7 @@ func TestAClaudeToolResultsBodyNeverReachesTheTranscript(t *testing.T) {
 // decoder was never fed (a live reading begins part-way through a long
 // stream).
 func TestAFailedClaudeToolCallIsMarked(t *testing.T) {
+	t.Parallel()
 	failed := `{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_09",` +
 		`"type":"tool_result","content":[{"type":"text","text":"Error: file not found\nat line 3"}],"is_error":true}]}}`
 	if got := decodeClaude(failed); got != "[tool] tool → error: Error: file not found (+1 more line(s))" {
@@ -129,6 +132,7 @@ func TestAFailedClaudeToolCallIsMarked(t *testing.T) {
 // them; so is a line read mid-write. Text that is not an event at all is what
 // the CLI printed, and is kept.
 func TestAClaudeStreamSkipsWhatItDoesNotKnow(t *testing.T) {
+	t.Parallel()
 	got := decodeClaude(
 		`{"type":"system","subtype":"init","session_id":"sess-1"}`,
 		`{"type":"a_message_from_a_newer_cli","detail":"anything"}`,
@@ -145,6 +149,7 @@ func TestAClaudeStreamSkipsWhatItDoesNotKnow(t *testing.T) {
 // message's subtype and errors — the documented fields of an error result,
 // which carries no `result` text at all.
 func TestAClaudeRunThatDidNotSucceedSaysHowItEnded(t *testing.T) {
+	t.Parallel()
 	end := `{"type":"result","subtype":"error_max_turns","is_error":false,"num_turns":30,` +
 		`"session_id":"sess-1","total_cost_usd":0.92,"errors":["Reached maximum number of turns (30)"]}`
 	if got := decodeClaude(end); got != "[error] the run ended: error_max_turns: Reached maximum number of turns (30)" {
@@ -163,6 +168,7 @@ func TestAClaudeRunThatDidNotSucceedSaysHowItEnded(t *testing.T) {
 // THE RESULT IS THE STREAM'S LAST LINE, parsed as the one object `json` used
 // to print: its text, its session, its cost and its whole prompt.
 func TestTheClaudeResultIsTheStreamsLastLine(t *testing.T) {
+	t.Parallel()
 	res := claude().Parse(claudeRunStream[len(claudeRunStream)-1] + "\n")
 	if !res.Success || res.Text != "Fixed the race and opened https://github.com/acme/api/pull/9" {
 		t.Fatalf("Parse = %+v; want the successful result", res)
@@ -185,6 +191,7 @@ func TestTheClaudeResultIsTheStreamsLastLine(t *testing.T) {
 // an assistant message there — which has no subtype and no is_error, so read
 // as a result it was a run that succeeded and said nothing.
 func TestAClaudeStreamThatEndsBeforeItsResultIsNotASuccess(t *testing.T) {
+	t.Parallel()
 	res := claude().Parse(claudeRunStream[len(claudeRunStream)-2])
 	if res.Success {
 		t.Fatal("a stream that ended on an assistant message read as a successful run")
@@ -275,6 +282,7 @@ func TestARunWhoseWrapperDiedIsReadFromItsStream(t *testing.T) {
 // copy's own success cannot replace a failure. A CLI whose result is its
 // stream has nothing copied.
 func TestTheWrapperCopiesTheResultLineAfterTheCLIExits(t *testing.T) {
+	t.Parallel()
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	p := paths(b)
@@ -308,6 +316,7 @@ func TestTheWrapperCopiesTheResultLineAfterTheCLIExits(t *testing.T) {
 // the copy and the exit status all as they run, with a stand-in for the CLI
 // that prints the documented stream and exits with a status of its own.
 func TestAClaudeRunInARealBoxIsCollectedFromItsStream(t *testing.T) {
+	t.Parallel()
 	local, err := sandbox.NewLocal(sandbox.LocalOptions{Placement: sandbox.Direct, StateDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("NewLocal: %v", err)

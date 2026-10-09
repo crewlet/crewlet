@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/static"
@@ -43,6 +44,10 @@ type App struct {
 	// now is the clock, shared with the stream service so a hydration
 	// window and a health tick cannot disagree about what time it is.
 	now func() time.Time
+
+	// pace is the clock a file transfer's pace is measured on and its
+	// deadlines set from. See [Options.PaceClock].
+	pace func() time.Time
 
 	// queries is the read surface both transports answer from.
 	queries *queries.Registry
@@ -89,6 +94,9 @@ type App struct {
 	// company reads the engine's CURRENT epoch, which is what
 	// [App.Configured] asks.
 	company func() *config.Company
+
+	// contacts resolves a `${VAR}` binding in the chart ([queries.Sources.Env]).
+	contacts org.EnvLookup
 
 	handler http.Handler
 
@@ -168,7 +176,14 @@ type Options struct {
 	// Runtime is the engine this process runs beside.
 	Runtime NodeRuntime
 
-	// State is the projection to serve. Nil builds an empty one.
+	// State is the projection to serve. Nil builds an empty one on
+	// [Options.Now].
+	//
+	// The projection ages and labels the live spend window on a clock of
+	// its own ([livestate.WithClock]), and the live `tokens` answer's
+	// window is that clock's rather than Now's — so an embedder that
+	// supplies a projection and pins Now pins the projection to the same
+	// clock, or the one surface answers on two.
 	State *livestate.LiveState
 
 	// Sources are what the read surface answers from. Company, Events and
@@ -183,8 +198,24 @@ type Options struct {
 	// QueueBackend names the broker, for the health body.
 	QueueBackend string
 
-	// Now is injectable so a test can pin the timestamps.
+	// Now is injectable so a test can pin the timestamps. It is also the
+	// clock of the projection a nil [Options.State] builds.
 	Now func() time.Time
+
+	// PaceClock is the clock a file upload's and download's pace is
+	// measured on, and every read and write deadline it sets is taken
+	// from ([filePace]). Nil takes time.Now.
+	//
+	// NOT [Options.Now], which stamps answers and which a test pins to one
+	// instant: the pace is a DURATION, the time spent inside a body's
+	// reads, and a clock that never moves would measure every read as
+	// taking none — the pace charged nothing, whatever it was meant to
+	// charge. Injectable so a suite can move it by exactly the time a fake
+	// client or store took, rather than sleep that long. And time.Now
+	// itself rather than one converted to UTC, since a converted time
+	// drops the monotonic reading, and a pace on the wall reading alone
+	// moves with every step the system clock takes.
+	PaceClock func() time.Time
 
 	// HealthInterval overrides the shared tick's cadence.
 	HealthInterval time.Duration
@@ -293,9 +324,16 @@ func New(opts Options) (*App, error) {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
+	pace := opts.PaceClock
+	if pace == nil {
+		pace = time.Now
+	}
 	state := opts.State
 	if state == nil {
-		state = livestate.New()
+		// ON THE APP'S CLOCK: the live spend window is labelled by the
+		// projection's, and one on the wall clock beside a pinned Now
+		// would answer the surface's questions on two clocks.
+		state = livestate.New(livestate.WithClock(now))
 	}
 
 	a := &App{
@@ -305,11 +343,14 @@ func New(opts Options) (*App, error) {
 		nodeID:       opts.Sources.NodeID,
 		queueBackend: opts.QueueBackend,
 		now:          now,
+		pace:         pace,
 		// DERIVED FROM THE SOURCE THAT ALREADY EXISTS, rather than a
 		// second field an embedder could set inconsistently with it:
 		// Sources.Company reads the CURRENT epoch, and "is there one" is
 		// the whole question [App.Configured] asks.
 		company: opts.Sources.Company,
+		// And the lookup its bindings resolve through, from the same place.
+		contacts: opts.Sources.Env,
 	}
 	var err error
 	a.stream, err = stream.NewService(state, stream.Options{
@@ -361,9 +402,11 @@ func New(opts Options) (*App, error) {
 	}
 	// ONE CLOCK for the surface. The app's own was pinned by a test and the
 	// answers' was the wall clock, so a question stamping "now" on its answer
-	// — the live spend window's edges — answered a REST call and a socket call
-	// a second apart with two different windows, and nothing but the call's
-	// timing said which.
+	// answered a REST call and a socket call a second apart with two
+	// different instants, and nothing but the call's timing said which. (The
+	// live spend window, where that showed, is labelled by the projection
+	// now, on the clock it was aged on — which a nil State builds on this
+	// one: see [Options.State].)
 	if sources.Now == nil {
 		sources.Now = now
 	}

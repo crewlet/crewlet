@@ -266,7 +266,7 @@ func TestAFailedAttemptsListenersAreGoneBeforeTheNextAttempt(t *testing.T) {
 	var startedPort, attempts int
 	freeOnRetry := false
 
-	c := withFreshPorts(t.Context(), t, "partial-teardown probe", func(ctx context.Context) (*Cluster, error) {
+	c := withFreshPorts(t.Context(), t, "partial-teardown probe", func(ctx context.Context, name string) (*Cluster, error) {
 		attempts++
 		if attempts > 1 {
 			free, err := PortFree(ctx, "127.0.0.1", startedPort)
@@ -281,7 +281,7 @@ func TestAFailedAttemptsListenersAreGoneBeforeTheNextAttempt(t *testing.T) {
 		// back is never empty. That is the whole defect.
 		partial := &Cluster{}
 		startedPort = freePorts(ctx, t, 1)[0]
-		cfg := memberConfig(js.Config{}, 0, 1, startedPort, []string{routeURL(startedPort)})
+		cfg := memberConfig(js.Config{}, name, 0, 1, startedPort, []string{routeURL(startedPort)})
 		cfg.ClusterHost = "127.0.0.1"
 		if err := partial.start(ctx, t, cfg, 0); err != nil {
 			t.Fatalf("start the member this case needs: %v", err)
@@ -316,10 +316,11 @@ func TestAFailedStartCanHandBackWhatItStarted(t *testing.T) {
 
 	// A CLUSTER THAT CAME UP is the control: shutdown must be safe to call
 	// on the way out, because the retry path calls it and so does the
-	// test's own cleanup.
-	c := StartCluster(t, 1, js.Config{})
-	if len(c.Servers) != 1 {
-		t.Fatalf("a one-member cluster reports %d server(s)", len(c.Servers))
+	// test's own cleanup. Two members, the fewest that come up — see
+	// [StartCluster].
+	c := StartCluster(t, 2, js.Config{})
+	if len(c.Servers) != 2 {
+		t.Fatalf("a two-member cluster reports %d server(s)", len(c.Servers))
 	}
 	// TWICE, which is what actually happens: withFreshPorts on a failed
 	// attempt, then t.Cleanup at the end.
@@ -331,7 +332,7 @@ func TestAFailedStartCanHandBackWhatItStarted(t *testing.T) {
 	// discards is never empty — which is the whole defect.
 	partial := &Cluster{}
 	port := freePorts(t.Context(), t, 1)[0]
-	cfg := memberConfig(js.Config{}, 0, 1, port, []string{routeURL(port)})
+	cfg := memberConfig(js.Config{}, newClusterName(), 0, 1, port, []string{routeURL(port)})
 	cfg.ClusterHost = "127.0.0.1"
 	if err := partial.start(t.Context(), t, cfg, 0); err != nil {
 		t.Fatalf("start a member: %v", err)

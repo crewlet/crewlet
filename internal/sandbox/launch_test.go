@@ -43,6 +43,7 @@ var launchWorkSince = time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
 // the seat's next holder fence this node out. Launched unfenced, the row sat
 // at the zero epoch, which constrains nothing.
 func TestALaunchIsStampedWithTheLeaseItsSeatIsHeldUnder(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	if _, err := rig.launchVia(t.Context(), rig.manager, launchReq("t1")); err != nil {
 		t.Fatalf("Launch: %v", err)
@@ -83,6 +84,7 @@ func (s *finishFences) DecideEnding(ctx context.Context, turnID string, d Decisi
 }
 
 func TestALaunchStartsTheJobAndRecordsWhatOutlivesTheTurn(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 
 	res, err := rig.launchVia(t.Context(), rig.manager, launchReq("t1"))
@@ -138,6 +140,7 @@ func TestALaunchStartsTheJobAndRecordsWhatOutlivesTheTurn(t *testing.T) {
 
 // The panel reads the announcement; the seat's owner reads the control copy.
 func TestALaunchIsAnnouncedAndRoutedToTheSeat(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	if _, err := rig.launchVia(t.Context(), rig.manager, launchReq("t1")); err != nil {
 		t.Fatalf("Launch: %v", err)
@@ -158,6 +161,7 @@ func TestALaunchIsAnnouncedAndRoutedToTheSeat(t *testing.T) {
 // resumes it names none — and the announcement is what a running-runs panel
 // reads, which cannot join back to a turn that parked days ago.
 func TestALaunchRecordsTheItemItsTurnIsOn(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	req := launchReq("t1")
 	item := types.WorkItem{Backend: types.WorkNative, ID: "task-1", Key: "ENG-1", Project: "ENG"}
@@ -182,6 +186,7 @@ func TestALaunchRecordsTheItemItsTurnIsOn(t *testing.T) {
 // launch more than one job, so without it a watcher could not say which of
 // them is still running.
 func TestTheStartedEventNamesTheJobItAnnounces(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	if _, err := rig.launchVia(t.Context(), rig.manager, launchReq("t1")); err != nil {
 		t.Fatalf("Launch: %v", err)
@@ -204,6 +209,7 @@ func TestTheStartedEventNamesTheJobItAnnounces(t *testing.T) {
 // elide, and a label cut to a width put half a sentence on the run's page as
 // its title.
 func TestTheStartedEventCarriesTheBriefsFirstLineWhole(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	req := launchReq("t1")
 	first := strings.TrimSpace(strings.Repeat("a very long brief. ", 40))
@@ -228,6 +234,7 @@ func TestTheStartedEventCarriesTheBriefsFirstLineWhole(t *testing.T) {
 // "done" means is the executor's own brief, written by the frame that will
 // read the answer.
 func TestTheCodingAgentIsToldTheGoalAndItsEnvironment(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	req := launchReq("t1")
 	req.Setup = []SetupStep{{Name: "git-auth", Brief: "git is already authenticated."}}
@@ -264,6 +271,7 @@ func TestTheCodingAgentIsToldTheGoalAndItsEnvironment(t *testing.T) {
 // And the row records WHO ASKED, which is what the park resolves a question to
 // "the requester" against days later.
 func TestTheCodingAgentIsToldHowToAskAndTheRowWhoAsked(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	req := launchReq("t1")
 	req.Ask = "## If you get blocked on a human decision\nRun crewlet-ask --to founder"
@@ -283,6 +291,7 @@ func TestTheCodingAgentIsToldHowToAskAndTheRowWhoAsked(t *testing.T) {
 // The checkout is the expensive half of a coding run; a second call in one
 // turn continues where the first stopped.
 func TestASecondCallInOneTurnReusesTheBox(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	first, err := rig.launchVia(t.Context(), rig.manager, launchReq("t1"))
 	if err != nil {
@@ -301,6 +310,7 @@ func TestASecondCallInOneTurnReusesTheBox(t *testing.T) {
 
 // A box that is gone is exactly the case the pushed branch exists for.
 func TestAReuseOfAVanishedBoxFallsBackToAFreshOne(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	req := launchReq("t1")
 	req.ReuseBox = "box-that-was-reaped"
@@ -319,6 +329,7 @@ func TestAReuseOfAVanishedBoxFallsBackToAFreshOne(t *testing.T) {
 // names, which here are one box — killed by both, which a provider answers as
 // the reclaim it wanted — and nothing else is killed.
 func TestABoxIsReclaimedWhenTheJobCannotStart(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	rig.runner.StartErr = errors.New("the coding CLI is not installed")
 
@@ -339,6 +350,7 @@ func TestABoxIsReclaimedWhenTheJobCannotStart(t *testing.T) {
 // nothing to see either way, and only the provider's own view of the store
 // can tell the two orderings apart.
 func TestTheRowExistsBeforeTheBoxDoes(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	witness := &rowWitness{FakeProvider: rig.provider, store: rig.pending, turnID: "t1"}
 	manager, err := NewManager(ManagerOptions{
@@ -369,6 +381,7 @@ func TestTheRowExistsBeforeTheBoxDoes(t *testing.T) {
 // Mutation: call Opened after the box is created, or hand it anything but the
 // store's answer, and this goes red.
 func TestALaunchNamesItsJobBeforeItsBoxExists(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	witness := &openedWitness{FakeProvider: rig.provider}
 	manager, err := NewManager(ManagerOptions{
@@ -441,6 +454,7 @@ func (w *rowWitness) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 // seat's busy count, and its box where it got that far, until the seat happens
 // to move to another node and recovery reaps it.
 func TestEveryFailedLaunchClosesTheRowItOpened(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		derail func(*waiterRig)
@@ -467,6 +481,7 @@ func TestEveryFailedLaunchClosesTheRowItOpened(t *testing.T) {
 }
 
 func TestALaunchNeedsATurnAndABrief(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	for _, req := range []LaunchRequest{
 		{Brief: "do the thing"},

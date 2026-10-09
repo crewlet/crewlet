@@ -82,6 +82,19 @@ type Sources struct {
 	// process booted on would describe a company that is no longer running.
 	Company func() *config.Company
 
+	// Env resolves a `${VAR}` the chart's contacts carry — a person's
+	// operator binding and the ids `access` and `colleague` report — through
+	// the serving node's own chain: its secret store, then the environment
+	// it was handed (the engine's LookupSecret). Nil reads the process
+	// environment.
+	//
+	// THE NODE'S CHAIN because the guard that binds a token to a person and
+	// the routing that mentions them resolve the same fields through it: a
+	// binding sealed in the store, read here from the process environment,
+	// was a person the dashboard named unbound while every write they made
+	// was attributed to them.
+	Env org.EnvLookup
+
 	// OperatorActs names the tools the act transport serves
 	// (`internal/api/operator`'s Server.Acts), which `viewer` answers a
 	// person as `acts` so a screen enables exactly the controls a press of

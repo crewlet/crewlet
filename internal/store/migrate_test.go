@@ -52,7 +52,7 @@ func TestPendingReportsABrokenLibraryCacheInsteadOfPanicking(t *testing.T) {
 	}
 	cmd := exec.Command(os.Args[0], //nolint:gosec // os.Args[0] is this test binary
 		"-test.run=^TestPendingWithABrokenLibraryCacheInAChildProcess$", "-test.count=1")
-	cmd.Env = append(os.Environ(), pendingChildEnv+"=1", tursoCacheEnv+"="+root)
+	cmd.Env = childEnv(pendingChildEnv+"=1", tursoCacheEnv+"="+root)
 	out, err := cmd.CombinedOutput()
 	requireChildRan(t, "Pending did not report the broken cache", out, err)
 }

@@ -8,7 +8,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
+	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -271,7 +274,8 @@ func countFiled(ctx context.Context, tx *sql.Tx, list int, source Source, delta 
 		return fmt.Errorf("search: count %d row(s) out of list %d: %w", -delta, list, err)
 	}
 	if n, err := res.RowsAffected(); err != nil {
-		return err
+		return fmt.Errorf("search: read what counting %d row(s) out of list %d "+
+			"changed: %w", -delta, list, err)
 	} else if n != 1 {
 		return fmt.Errorf("search: list %d holds fewer than %d filed %s row(s) — "+
 			"kb_ivf_lists disagrees with kb_vectors_bin, which only the vector "+
@@ -284,6 +288,47 @@ func countFiled(ctx context.Context, tx *sql.Tx, list int, source Source, delta 
 	}
 	return nil
 }
+
+// countFiledIn counts n more rows of source into each list of in, in ONE
+// statement, the [list, n] pairs bound as a JSON array ([countFiledInStatement]).
+//
+// [countFiled]'s rule with the deltas known all at once, and only ever added:
+// a reassign batch files its rows into as many lists as it has rows at most,
+// and a statement a list was up to a thousand of them a batch at the largest
+// list count.
+func countFiledIn(ctx context.Context, tx *sql.Tx, source Source, in map[int]int) error {
+	if len(in) == 0 {
+		return nil
+	}
+	pairs := make([]byte, 0, 12*len(in))
+	pairs = append(pairs, '[')
+	for i, list := range slices.Sorted(maps.Keys(in)) {
+		if i > 0 {
+			pairs = append(pairs, ',')
+		}
+		pairs = append(pairs, '[')
+		pairs = strconv.AppendInt(pairs, int64(list), 10)
+		pairs = append(pairs, ',')
+		pairs = strconv.AppendInt(pairs, int64(in[list]), 10)
+		pairs = append(pairs, ']')
+	}
+	pairs = append(pairs, ']')
+	if _, err := tx.ExecContext(ctx, countFiledInStatement, string(source),
+		string(pairs)); err != nil {
+		return fmt.Errorf("search: count re-filed %s rows into %d list(s): %w",
+			source, len(in), err)
+	}
+	return nil
+}
+
+// countFiledInStatement adds counts to kb_ivf_lists: the source, then a JSON
+// array of [list, n] pairs. The `WHERE true` is the grammar's own requirement
+// rather than a filter — an upsert's SELECT without one reads its ON as a
+// join's.
+const countFiledInStatement = `
+	INSERT INTO kb_ivf_lists (list, source, filed)
+	SELECT m.value ->> 0, ?, m.value ->> 1 FROM json_each(?) AS m WHERE true
+	ON CONFLICT (list, source) DO UPDATE SET filed = filed + excluded.filed`
 
 // ListCounts is how many rows of each source every list of the installed
 // index holds, by list.
@@ -487,11 +532,7 @@ func (a Applier) reassign(ctx context.Context, tx *sql.Tx, batch ReassignRecord)
 	}
 	query, args := reassignStatement(r, head)
 
-	type move struct {
-		row  int64
-		list int
-	}
-	var moves []move
+	var moves []rowMove
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return 0, fmt.Errorf("search: read the range a reassign re-files: %w", err)
@@ -501,38 +542,106 @@ func (a Applier) reassign(ctx context.Context, tx *sql.Tx, batch ReassignRecord)
 		var bits []byte
 		if err := rows.Scan(&row, &bits); err != nil {
 			_ = rows.Close()
-			return 0, err
+			return 0, fmt.Errorf("search: read a row reassign batch %d re-files: %w",
+				batch.Batch, err)
 		}
 		code, err := codeFromBits(bits, head.Dim)
 		if err != nil {
 			_ = rows.Close()
 			return 0, err
 		}
-		moves = append(moves, move{row: row, list: index.Nearest(code)})
+		moves = append(moves, rowMove{row: row, list: index.Nearest(code)})
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
-		return 0, err
+		return 0, fmt.Errorf("search: read the rows reassign batch %d re-files: %w",
+			batch.Batch, err)
 	}
 	_ = rows.Close()
-	counted := map[int]int{}
-	for _, m := range moves {
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE kb_vectors_bin SET ivf_gen = ?, ivf_list = ? WHERE rowid = ?`,
-			head.Generation, m.list, m.row); err != nil {
-			return 0, fmt.Errorf("search: re-file a row under the index: %w", err)
-		}
-		counted[m.list]++
+	if len(moves) == 0 {
+		return 0, nil
+	}
+	if err := refile(ctx, tx, head.Generation, batch.Batch, moves); err != nil {
+		return 0, err
 	}
 	// EVERY ROW IT MOVED WAS STALE — the read above selects only rows not
 	// filed under this generation — so each one is counted in, once.
-	for list, n := range counted {
-		if err := countFiled(ctx, tx, list, r.Source, n); err != nil {
-			return 0, err
-		}
+	counted := map[int]int{}
+	for _, m := range moves {
+		counted[m.list]++
+	}
+	if err := countFiledIn(ctx, tx, r.Source, counted); err != nil {
+		return 0, err
 	}
 	return len(moves), nil
 }
+
+// rowMove is one row a reassign batch re-files, and the list it moves to.
+type rowMove struct {
+	row  int64
+	list int
+}
+
+// refile files every row of moves in its list under generation, in ONE
+// statement, the moves bound as one JSON array of [rowid, list] pairs the
+// statement joins on the primary key ([refileStatement]).
+//
+// A statement a row was up to [IVFReassignBatch] of them a batch, on every
+// holder at every rollout and on every node replaying one — and the driver
+// prepares, plans and finalizes every statement it is handed and keeps none,
+// so the batch paid a parse a row.
+func refile(ctx context.Context, tx *sql.Tx, generation int64, batch int, moves []rowMove) error {
+	pairs := make([]byte, 0, 24*len(moves))
+	pairs = append(pairs, '[')
+	for i, m := range moves {
+		if i > 0 {
+			pairs = append(pairs, ',')
+		}
+		pairs = append(pairs, '[')
+		pairs = strconv.AppendInt(pairs, m.row, 10)
+		pairs = append(pairs, ',')
+		pairs = strconv.AppendInt(pairs, int64(m.list), 10)
+		pairs = append(pairs, ']')
+	}
+	pairs = append(pairs, ']')
+	res, err := tx.ExecContext(ctx, refileStatement, generation, string(pairs))
+	if err != nil {
+		return fmt.Errorf("search: re-file batch %d's rows under the index: %w",
+			batch, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("search: count the rows re-filing batch %d moved: %w",
+			batch, err)
+	}
+	if n != int64(len(moves)) {
+		// EVERY ROW WAS READ IN THIS TRANSACTION, so a pair that moved
+		// nothing is a statement that did not do what it says.
+		return fmt.Errorf("search: re-filing batch %d moved %d of its %d rows",
+			batch, n, len(moves))
+	}
+	return nil
+}
+
+// refileStatement re-files a reassign batch's rows under the installed index:
+// the generation, then a JSON array of [rowid, list] pairs, each a row and the
+// list it moves to.
+//
+// THE ARRAY DRIVES AND EACH PAIR SEEKS ITS ROW BY ROWID — the plan gate holds
+// it to that (TestEveryIndexServesARegisteredQuery) — so the statement reads
+// the batch's rows and nothing else, whatever the size of the table. Measured
+// at the pin re-filing 1 000 rows of width 32, without the race detector: 62
+// ms as a statement a row against 22 ms as this one over 2 000 rows, and 173
+// ms against 38 ms over 20 000. A whole batch at the shipped width, its
+// filing arithmetic and its counts included (BenchmarkReassignBatch, 5 000
+// rows, 64 lists, on a shared four-core box): 70–85 ms against 25–31 ms.
+//
+// A constant of its own so the plan gate explains the statement the applier
+// runs.
+const refileStatement = `
+	UPDATE kb_vectors_bin SET ivf_gen = ?, ivf_list = m.value ->> 1
+	  FROM json_each(?) AS m
+	 WHERE kb_vectors_bin.rowid = m.value ->> 0`
 
 // reassignStatement is the read a reassign batch re-files, and its arguments.
 //

@@ -102,9 +102,11 @@ to 5M", and each node enforces it once it has applied that epoch. See
 ## The spend rollup, and why it has two sources
 
 **The live 24 hours** are held by each node's live projection: the phase records
-and auxiliary records of the last day, folded on every node and pushed to the
-dashboard every few seconds. It is instant and it can list recent turns one by
-one.
+and auxiliary records of the last day, folded on every node and pushed over the
+dashboard's socket every few seconds (the
+[`tokens` push](../reference/api-endpoints.md#pushes)). It is instant and it can
+list recent turns one by one, for a client that wants the last day as it
+happens; no screen of the bundled dashboard draws it.
 
 **Every named window** — 7, 30 or 90 days, or two dates you name — is read from
 the replicated [`usage` domain](replication.md#two-compacted-domains-the-embeddings-and-each-nodes-day).

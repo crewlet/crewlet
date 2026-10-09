@@ -93,12 +93,46 @@ type Output struct {
 }
 
 // Runner drives one CLI through the detached lifecycle.
-type Runner struct{ cli CLI }
+type Runner struct {
+	cli CLI
+
+	// failureBound is how much of a run's error stream, from its END, a
+	// collection reads, and the most a failure it composes may be:
+	// [sandbox.MaxFailureBytes] in every runner [New] builds.
+	//
+	// The error stream becomes the failure's detail, which the resumed
+	// executor acts on and which the coordinator condenses past the record's
+	// bound — and the whole failure a runner composes is held to what one
+	// condensation can take beside the coordinator's own prefix. A longer
+	// read is text no model could be shown, so it is not read; what was left
+	// unread is said by size where it was. From the END, because a process's
+	// conclusion — the line naming what broke — is the last thing it prints.
+	//
+	// THIS IS THE READ, NOT WHAT THE FAILURE CARRIES OF IT. The failure opens
+	// with the engine's own sentences — a piece it could not read, the exit
+	// status, the CLI's error — and the error stream gets what is left of the
+	// bound after them ([failureDetail]). Read to the bound and carried whole
+	// behind them, as it was, a failure built around a long stderr was always
+	// a few hundred bytes past what the compactor reads, refused before a
+	// model was asked.
+	//
+	// A FIELD rather than the constant at each use so the suite can stage a
+	// failure past it in kilobytes: at two mebibytes every such case built,
+	// redacted and measured megabytes of error stream, two to four times.
+	failureBound int
+
+	// lineBound is the longest line of a run's event stream the runner
+	// reads: [maxLineBytes] in every runner New builds, a field for the
+	// failure bound's reason.
+	lineBound int
+}
 
 var _ sandbox.Runner = (*Runner)(nil)
 
 // New wraps a CLI in the shared plumbing.
-func New(cli CLI) *Runner { return &Runner{cli: cli} }
+func New(cli CLI) *Runner {
+	return &Runner{cli: cli, failureBound: sandbox.MaxFailureBytes, lineBound: maxLineBytes}
+}
 
 // Name is the coding agent's config name.
 func (r *Runner) Name() string { return r.cli.Name() }
@@ -308,33 +342,14 @@ func (r *Runner) Poll(ctx context.Context, box sandbox.Sandbox, handle sandbox.R
 	return false, readErr
 }
 
-// stderrKeep is how much of a run's error stream, from its END, a collection
-// reads.
-//
-// The error stream becomes the failure's detail, which the resumed executor
-// acts on and which the coordinator condenses past the record's bound — and
-// the whole failure a runner composes is held to what one condensation can
-// take beside the coordinator's own prefix ([sandbox.MaxFailureBytes]). A
-// longer read is text no model could be shown, so it is not read; what was
-// left unread is said by size where it was. From the END, because a process's
-// conclusion — the line naming what broke — is the last thing it prints.
-//
-// THIS IS THE READ, NOT WHAT THE FAILURE CARRIES OF IT. The failure opens with
-// the engine's own sentences — a piece it could not read, the exit status, the
-// CLI's error — and the error stream gets what is left of the bound after
-// them ([failureDetail]). Read to the bound and carried whole behind them, as
-// it was, a failure built around a long stderr was always a few hundred bytes
-// past what the compactor reads, refused before a model was asked.
-const stderrKeep = sandbox.MaxFailureBytes
-
 // Collect reads the finished job's result out of the box.
 //
 // THE STREAMS ARE READ AS STREAMS. The event stream is decoded a line at a
 // time in bounded memory ([eachLine]), and the error stream is read from its
-// end ([stderrKeep]); neither is refused for its size, because a run is never
-// lost to the size of its own log. The pieces meant to be read WHOLE — the
-// report, the question, the result line, the exit code — are, and one past
-// [sandbox.MaxFileBytes] degrades ONLY ITSELF: it is described by its size,
+// end ([Runner.failureBound]); neither is refused for its size, because a run
+// is never lost to the size of its own log. The pieces meant to be read WHOLE
+// — the report, the question, the result line, the exit code — are, and one
+// past [sandbox.MaxFileBytes] degrades ONLY ITSELF: it is described by its size,
 // the run reads as not succeeded with that as the reason, and the run's
 // tokens, refs and transcript are still collected, charged and published. A
 // refusal used to fail the whole collection, which settled the run as
@@ -420,7 +435,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// telemetry of its own. The parser may have built one from streamed
 	// events; otherwise the error stream is it. Read once, reused below for
 	// the failure detail.
-	errTail, err := box.ReadTail(ctx, paths.Err(), stderrKeep+redactContext)
+	errTail, err := box.ReadTail(ctx, paths.Err(), r.failureBound+redactContext)
 	if refusal := notRegularPiece(err, paths.Err(), "the error stream"); refusal != "" {
 		refused = append(refused, refusal)
 		errTail, err = sandbox.FileTail{}, nil
@@ -428,7 +443,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	if err != nil {
 		return sandbox.Result{}, fmt.Errorf("codingagent: reading the error stream: %w", err)
 	}
-	stderr, unread := streamEnd(errTail, stderrKeep)
+	stderr, unread := streamEnd(errTail, r.failureBound)
 	stderr = strings.TrimSpace(stderr)
 	if result.Transcript == "" && stderr != "" {
 		result.Transcript = stderr
@@ -507,7 +522,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		// a reader cannot find anywhere else.
 		result.Success = false
 	}
-	result.Error = failureDetail(append(refused, said...), errStream, unread)
+	result.Error = failureDetail(append(refused, said...), errStream, unread, r.failureBound)
 
 	result.Text = redact.Secrets(result.Text)
 	result.Error = redact.Secrets(result.Error)
@@ -520,9 +535,10 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 
 // failureDetail composes a run's failure: the engine's own sentences in the
 // order given — a piece it could not read, the exit status, the CLI's error —
-// then as much of the error stream's END as is left of
-// [sandbox.MaxFailureBytes] after them, with what was not shown of it said by
-// size. unread is how much of the stream's start the read itself left.
+// then as much of the error stream's END as is left of bound — the runner's
+// [Runner.failureBound], [sandbox.MaxFailureBytes] — after them, with what was
+// not shown of it said by size. unread is how much of the stream's start the
+// read itself left.
 //
 // HELD TO THE BOUND AS A WHOLE, AND EXACTLY, because the whole failure is what
 // the coordinator condenses, and the compactor refuses one past what it reads
@@ -537,7 +553,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 // what is over comes off the stream's share. The room the stream is given
 // also holds the mark [sandbox.KeepEnd] puts on a single line too long to keep
 // whole, which is not part of what it counts.
-func failureDetail(sentences []string, errStream string, unread int64) string {
+func failureDetail(sentences []string, errStream string, unread int64, bound int) string {
 	var parts []string
 	for _, s := range sentences {
 		if s = strings.TrimSpace(s); s != "" {
@@ -553,7 +569,7 @@ func failureDetail(sentences []string, errStream string, unread int64) string {
 		sep = ":\n"
 	}
 	// The note's widest form, so the one it gets always fits the room.
-	room := sandbox.MaxFailureBytes - len(head) - len(sep) -
+	room := bound - len(head) - len(sep) -
 		(len(unreadNote(math.MaxInt64, false)) + len("\n")) - len(sandbox.KeepEndMark)
 	for {
 		kept, at := "", len(errStream)
@@ -572,10 +588,10 @@ func failureDetail(sentences []string, errStream string, unread int64) string {
 		// share gives back. The room shrinks on every pass, so this ends —
 		// at the latest where the stream is given none, and what is left is
 		// the engine's own account, which is never cut here.
-		if len(out) <= sandbox.MaxFailureBytes || room <= 0 {
+		if len(out) <= bound || room <= 0 {
 			return out
 		}
-		room -= len(out) - sandbox.MaxFailureBytes
+		room -= len(out) - bound
 	}
 }
 
@@ -604,17 +620,19 @@ func (r *Runner) decodeStream(ctx context.Context, box sandbox.Sandbox, path str
 	}
 	defer func() { _ = stream.Close() }()
 	dec := &keepingLast{Decoder: r.cli.Events()}
-	if err := eachLine(stream, dec); err != nil {
+	if err := eachLine(stream, dec, r.lineBound); err != nil {
 		return sandbox.Result{}, streamLast{}, "", fmt.Errorf("codingagent: reading the event stream: %w", err)
 	}
 	return dec.Result(), dec.last, "", nil
 }
 
 // streamLast is an event stream's last line, as `tail -n 1` would copy it
-// into a result file: the line itself, or the size of one too long to read.
+// into a result file: the line itself, or the size of one too long to read
+// and the bound it was past.
 type streamLast struct {
 	line    []byte
 	skipped int64
+	bound   int
 }
 
 // said reports whether the stream ended on anything at all: a line, or one
@@ -628,7 +646,7 @@ func (l streamLast) resultLine(stream string) (string, string) {
 	if l.skipped > 0 {
 		return "", fmt.Sprintf("the result its CLI printed (the last line of %s, read in place of "+
 			"the result file) is %s, past the %s one line of a run's output may hold, "+
-			"so it was not read", stream, humanSize(l.skipped), humanSize(maxLineBytes))
+			"so it was not read", stream, humanSize(l.skipped), humanSize(int64(l.bound)))
 	}
 	return string(l.line), ""
 }
@@ -649,9 +667,9 @@ func (k *keepingLast) Line(line []byte) {
 	k.Decoder.Line(line)
 }
 
-func (k *keepingLast) Skipped(n int64) {
-	k.last.line, k.last.skipped = k.last.line[:0], n
-	k.Decoder.Skipped(n)
+func (k *keepingLast) Skipped(n int64, bound int) {
+	k.last.line, k.last.skipped, k.last.bound = k.last.line[:0], n, bound
+	k.Decoder.Skipped(n, bound)
 }
 
 // readWhole reads a file meant to be read whole, answering a file past
@@ -663,9 +681,10 @@ func readWhole(ctx context.Context, box sandbox.Sandbox, path, what string) (str
 	if refusal := notRegularPiece(err, path, what); refusal != "" {
 		return "", refusal, nil
 	}
+	var tooLarge *sandbox.FileTooLargeError
 	switch {
-	case errors.Is(err, sandbox.ErrFileTooLarge):
-		return "", refusedPiece(ctx, box, path, what), nil
+	case errors.As(err, &tooLarge):
+		return "", refusedPiece(ctx, box, path, what, tooLarge.Limit), nil
 	case err != nil:
 		return "", "", err
 	}
@@ -688,14 +707,16 @@ func notRegularPiece(err error, path, what string) string {
 	return fmt.Sprintf("%s (%s) %s", what, path, notRegular.Reason())
 }
 
-// refusedPiece describes a file the engine would not read whole, by its size.
-func refusedPiece(ctx context.Context, box sandbox.Sandbox, path, what string) string {
-	size := "past " + humanSize(sandbox.MaxFileBytes)
+// refusedPiece describes a file the engine would not read whole, by its size
+// and the cap the box refused it at — [sandbox.MaxFileBytes] on every box the
+// engine builds, read off the refusal rather than restated here.
+func refusedPiece(ctx context.Context, box sandbox.Sandbox, path, what string, limit int) string {
+	size := "past " + humanSize(int64(limit))
 	if end, err := box.ReadTail(ctx, path, 0); err == nil && end.Size > 0 {
 		size = humanSize(end.Size)
 	}
 	return fmt.Sprintf("%s (%s) is %s, past the %s the engine reads back from a box whole, "+
-		"so it was not read", what, path, size, humanSize(sandbox.MaxFileBytes))
+		"so it was not read", what, path, size, humanSize(int64(limit)))
 }
 
 // overlayAsk surfaces a question the shim recorded, if there is one, and a

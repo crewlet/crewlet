@@ -33,7 +33,6 @@ func TestBinaryRecallFloorAtShippedDepth(t *testing.T) {
 	t.Parallel()
 	for _, n := range gateSizes {
 		t.Run(fmt.Sprint(n), func(t *testing.T) {
-			t.Parallel()
 			f := gateFixture(n)
 
 			// THE FITTED CONSTANT IS ASSERTED BACK. Recall at the
@@ -49,17 +48,7 @@ func TestBinaryRecallFloorAtShippedDepth(t *testing.T) {
 					mean, search.FixtureMeanPairCos)
 			}
 
-			recall := 0.0
-			for q := range gateQueries {
-				code, similarity := f.Query(uint64(1000 + q))
-				want := search.Exact(f.Len(), similarity, search.ReturnDepth)
-				got := search.TwoStage(f.Codes, code, similarity,
-					search.Stage1Depth, search.ReturnDepth)
-				recall += search.Recall(got, want)
-			}
-			recall /= float64(gateQueries)
-
-			if floor := search.FloorAt(n); recall < floor {
+			if recall, floor := gatePassAt(n).recall, search.FloorAt(n); recall < floor {
 				t.Fatalf("recall@%d from a stage-1 depth of %d is %.4f at "+
 					"%d sources, below the %.4f floor — raise "+
 					"BinaryOversample first, which measured free in latency, "+
@@ -87,21 +76,7 @@ func TestBinaryMissesStayOffTheHead(t *testing.T) {
 	t.Parallel()
 	for _, n := range gateSizes {
 		t.Run(fmt.Sprint(n), func(t *testing.T) {
-			t.Parallel()
-			f := gateFixture(n)
-			head := 0
-			for q := range gateQueries {
-				code, similarity := f.Query(uint64(1000 + q))
-				want := search.Exact(f.Len(), similarity, search.ReturnDepth)
-				got := search.TwoStage(f.Codes, code, similarity,
-					search.Stage1Depth, search.ReturnDepth)
-				for _, rank := range search.MissRanks(got, want) {
-					if rank < 10 {
-						head++
-					}
-				}
-			}
-			if head != 0 {
+			if head := gatePassAt(n).headMisses; head != 0 {
 				t.Fatalf("the candidate pool dropped %d document(s) from the "+
 					"first ten ranks at %d sources — an aggregate recall this "+
 					"gate would still pass is compatible with losing exactly "+
@@ -111,18 +86,66 @@ func TestBinaryMissesStayOffTheHead(t *testing.T) {
 	}
 }
 
+// gatePass is one corpus size measured: every held-out query's two-stage
+// answer against its exact one, once, for both gates above to judge.
+//
+// ONE PASS, because the two gates read different numbers off the same
+// comparison — the recall it averages and the ranks it missed — and each
+// computing its own was the same Exact and TwoStage over every query twice.
+type gatePass struct {
+	recall     float64 // mean recall@ReturnDepth over gateQueries
+	headMisses int     // exact top-ten documents the pool dropped, summed
+}
+
+// gatePassAt is size n's pass, measured once whichever gate asks first.
+func gatePassAt(n int) gatePass { return passes[n]() }
+
+func measureGate(n int) gatePass {
+	f := gateFixture(n)
+	var p gatePass
+	for q := range gateQueries {
+		code, similarity := f.Query(uint64(1000 + q))
+		want := search.Exact(f.Len(), similarity, search.ReturnDepth)
+		got := search.TwoStage(f.Codes, code, similarity,
+			search.Stage1Depth, search.ReturnDepth)
+		p.recall += search.Recall(got, want)
+		for _, rank := range search.MissRanks(got, want) {
+			if rank < 10 {
+				p.headMisses++
+			}
+		}
+	}
+	p.recall /= float64(gateQueries)
+	return p
+}
+
+var passes = map[int]func() gatePass{
+	20_000:  sync.OnceValue(func() gatePass { return measureGate(20_000) }),
+	120_000: sync.OnceValue(func() gatePass { return measureGate(120_000) }),
+}
+
 // gateFixture builds each corpus ONCE and shares it between the cases.
 //
 // The fixture is deterministic, so two cases building it twice produce two
-// identical corpora at twice the cost — and generation is what the gate's
-// whole wall clock is, so sharing it halves the price every contributor pays
-// on every run.
+// identical corpora at twice the cost — and generation and the pass over it
+// are what the gate's whole wall clock is, so sharing them halves the price
+// every contributor pays on every run.
+//
+// # Why a size's case is NOT parallel to its sibling
+//
+// A parallel subtest of a parallel test waits for a slot behind EVERY
+// top-level test released before it, so the per-size cases these gates once
+// ran in parallel started last of all — measured, the 120 000-row corpus
+// began generating four and a half minutes into the package and was its
+// last two minutes, on one core while the rest sat idle. Run in turn inside
+// each gate, they start when the gate does, early, and the two gates still
+// run beside each other; the second to reach a size waits on the first's
+// memo rather than repeating it.
 func gateFixture(n int) *search.Fixture { return fixtures[n]() }
 
-// ONE MEMO PER SIZE rather than one lock over all of them: the cases for
-// different sizes are meant to build in parallel, and a single mutex would
-// serialise the two largest generations behind each other — measured, that is
-// slower than building all four.
+// ONE MEMO PER SIZE rather than one lock over all of them: a lock would also
+// stop another case reading the smaller corpus — the IVF floor's isotropic
+// member — while the larger one generates.
 var fixtures = map[int]func() *search.Fixture{
 	20_000:  sync.OnceValue(func() *search.Fixture { return search.NewFixture(20_000, 1) }),
 	120_000: sync.OnceValue(func() *search.Fixture { return search.NewFixture(120_000, 1) }),

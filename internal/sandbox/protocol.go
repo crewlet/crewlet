@@ -350,9 +350,10 @@ type Sandbox interface {
 
 	// ReadFile reads a file the engine means to read WHOLE — a report, a
 	// question, a marker, a result line — and REFUSES one past
-	// [MaxFileBytes] ([ErrFileTooLarge]) rather than returning its first
-	// part, because a clipped report reads as a finished one. Empty on
-	// missing: a poll for a marker that is not written yet is not an error.
+	// [MaxFileBytes] ([ErrFileTooLarge], as a [*FileTooLargeError] naming the
+	// cap it refused at) rather than returning its first part, because a
+	// clipped report reads as a finished one. Empty on missing: a poll for a
+	// marker that is not written yet is not an error.
 	//
 	// NEVER FOR A MACHINE STREAM. A coding agent's event log and its stderr
 	// grow with the run and have no size a whole read could honestly refuse

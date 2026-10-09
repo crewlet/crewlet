@@ -165,9 +165,10 @@ func TestAnEmptyBucketWalksCleanly(t *testing.T) {
 // hands keys over a 256-buffered channel with a BLOCKING send, so a caller
 // that returned early — which five of these methods do on a bad record — left
 // the goroutine parked on that send for ever, and the server-side consumer
-// with it. watchWalk owns the watcher and stops it on every exit, so the walk
-// has no early-return path that leaks.
+// with it. A listing stops its watcher the moment its pass ends, on every
+// path, so the walk has no early-return path that leaks.
 func TestAnAbandonedWalkLeavesNoConsumer(t *testing.T) {
+	t.Parallel()
 	nc := embeddedNATS(t)
 	prefix := fmt.Sprintf("f%d", bucketSeq.Add(1))
 	store := openFleetForTest(t, nc, prefix)
@@ -223,6 +224,7 @@ func TestAnAbandonedWalkLeavesNoConsumer(t *testing.T) {
 // trim holds and the maintenance acknowledgements are three very different
 // outages behind that one message.
 func TestAFailedListingNamesTheListingRatherThanTheBucket(t *testing.T) {
+	t.Parallel()
 	nc := embeddedNATS(t)
 	prefix := fmt.Sprintf("p%d", bucketSeq.Add(1))
 	store := openFleetForTest(t, nc, prefix)

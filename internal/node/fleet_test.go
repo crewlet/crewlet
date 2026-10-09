@@ -95,12 +95,12 @@ func substrates() []substrate {
 				}
 				t.Cleanup(func() { _ = admin.Stop(context.WithoutCancel(t.Context())) })
 
-				// CLUSTERED, because the broker under this case is: without
-				// it the buckets are provisioned on the SOLO budget against a
-				// three-member metadata group, which is the flake this whole
-				// change removes — reintroduced in the suite that covers it.
+				// SOLO, because the broker under this substrate is: one
+				// server with no peers, provisioned exactly as the engine
+				// provisions a single node (clusteredStream is false there).
+				// The cluster substrate below is the one that says Clustered.
 				backend, err := coordkv.Open(t.Context(), admin.JetStream(),
-					coordkv.Config{TTL: fleetTTL, Clustered: true})
+					coordkv.Config{TTL: fleetTTL})
 				if err != nil {
 					t.Fatalf("coord kv: %v", err)
 				}
@@ -122,9 +122,10 @@ func substrates() []substrate {
 			// processes would — a suite where every node talks to one
 			// server proves nothing about the cluster.
 			//
-			// Slow to stand up (cluster formation, then quorum writes),
-			// so it is last: a failure on the twin or the single server
-			// is the same failure, found sooner.
+			// Slow to stand up (cluster formation, then quorum writes).
+			// The substrates run side by side, each case on a fleet of its
+			// own, so a failure on the twin or the single server — the
+			// same failure — still reports before this one has formed.
 			name: "cluster",
 			build: func(t *testing.T) (func(*testing.T) queue.EventQueue, coord.Backend) {
 				c := jetstreamtest.StartCluster(t, 3, jetstream.Config{
@@ -134,6 +135,9 @@ func substrates() []substrate {
 					AckWait:    2 * time.Second,
 				})
 				admin := c.Client(t, 0)
+				// CLUSTERED, because the broker under this substrate is:
+				// without it the buckets are provisioned on the SOLO budget
+				// against a three-member metadata group.
 				backend, err := coordkv.Open(t.Context(), admin.JetStream(), coordkv.Config{
 					TTL: fleetTTL, Replicas: len(c.Servers), Clustered: true,
 				})
@@ -319,10 +323,19 @@ func (f *fleet) nodesThatRan(handle string) []string {
 // The budget is a MULTIPLE OF THE LEASE TTL, not a wall-clock number: every
 // convergence this test waits on is counted in sweeps (TTL/8) and heartbeats
 // (TTL/4), so a fixed number silently stops meaning the same thing the moment
-// fleetTTL changes. 30x is deliberately generous — the suite runs 77 packages
-// in parallel, and a goroutine on a loaded CI box can lose the scheduler for
-// whole seconds at a time. The old fixed 20 s (10x) passed every run in
-// isolation and failed under full-suite load.
+// fleetTTL changes.
+//
+// 30x is deliberately generous, and what it is generous against is now this
+// package's OWN load. It runs in the solo partition, alone on its runner, but
+// its cases run side by side — up to four at once, three-member clusters among
+// them, every one under the race detector — and a goroutine there can lose the
+// scheduler for whole seconds at a time. The multiple was set while this
+// package still shared a runner with the rest of the suite, where the old
+// fixed 20 s (10x) passed every run in isolation and failed under that load;
+// the solo partition took the suite's load away and running the cases side by
+// side brought some of it back, so the margin stays. It costs nothing on a
+// pass: a condition that holds returns on the next 20 ms poll, and only a
+// failure waits the budget out.
 func eventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(30 * fleetTTL)
@@ -338,9 +351,12 @@ func eventually(t *testing.T, what string, cond func() bool) {
 // --- the exit criteria ----------------------------------------------------
 
 func TestFleet(t *testing.T) {
+	t.Parallel()
 	for _, sub := range substrates() {
 		t.Run(sub.name, func(t *testing.T) {
+			t.Parallel()
 			t.Run("every_seat_is_owned_by_exactly_one_node", func(t *testing.T) {
+				t.Parallel()
 				f := newFleet(t, sub, "ceo", "cto", "pm", "eng")
 				f.ensureMailboxes()
 				a, b := f.start("node-a"), f.start("node-b")
@@ -382,6 +398,7 @@ func TestFleet(t *testing.T) {
 			// Note the harness does NOT pre-create mailboxes here: the
 			// node's own start is what has to do it.
 			t.Run("an_unplaceable_seat_still_retains_its_mail", func(t *testing.T) {
+				t.Parallel()
 				f := newFleet(t, sub, "ceo", "ghost")
 				f.pin("ghost", "node-that-does-not-exist")
 				a := f.start("node-a")
@@ -411,6 +428,7 @@ func TestFleet(t *testing.T) {
 			})
 
 			t.Run("a_trigger_reaches_only_the_owner", func(t *testing.T) {
+				t.Parallel()
 				f := newFleet(t, sub, "ceo", "cto")
 				f.ensureMailboxes()
 				f.start("node-a")
@@ -433,6 +451,7 @@ func TestFleet(t *testing.T) {
 			})
 
 			t.Run("unclaimed_mail_survives_and_is_delivered_on_claim", func(t *testing.T) {
+				t.Parallel()
 				f := newFleet(t, sub, "ceo")
 				// The subscription exists; nothing is attached to it. This
 				// is an unowned seat, and its mail must wait.
@@ -455,6 +474,7 @@ func TestFleet(t *testing.T) {
 			})
 
 			t.Run("a_seats_mail_survives_the_whole_fleet_restarting", func(t *testing.T) {
+				t.Parallel()
 				// The stronger form of the previous criterion, and the one
 				// a deploy actually performs: every node stops, so for a
 				// while NOTHING holds the seat or consumes its subject,
@@ -509,6 +529,7 @@ func TestFleet(t *testing.T) {
 			})
 
 			t.Run("a_handoff_preserves_the_seats_mail", func(t *testing.T) {
+				t.Parallel()
 				f := newFleet(t, sub, "ceo")
 				f.ensureMailboxes()
 				a := f.start("node-a")
@@ -550,6 +571,7 @@ func TestFleet(t *testing.T) {
 			})
 
 			t.Run("a_drain_under_an_expired_deadline_still_returns_the_leases", func(t *testing.T) {
+				t.Parallel()
 				// Drain's own doc invites a caller to bound it with a
 				// deadline, and then handed that context to step 3 — the
 				// step whose entire purpose is giving the leases back. An
@@ -580,12 +602,24 @@ func TestFleet(t *testing.T) {
 					t.Fatalf("the drain returned no leases: %v still owned, so a "+
 						"successor must wait out a full TTL before it can claim", owned)
 				}
+				// The presence too, given back first: left to lapse, it has
+				// peers dividing the seats by a node that will never claim
+				// again for a TTL.
+				presence, err := f.backend.Get(t.Context(), coord.NodeResource("node-a"))
+				if err != nil {
+					t.Fatalf("reading node-a's presence: %v", err)
+				}
+				if presence != nil {
+					t.Fatalf("node-a's presence is still held by %s after the drain: "+
+						"it was given back on the expired deadline", presence.Owner)
+				}
 				eventually(t, "node-a to let the seat go", func() bool {
 					return len(a.Attached()) == 0
 				})
 			})
 
 			t.Run("a_node_that_lost_its_lease_starts_no_turn", func(t *testing.T) {
+				t.Parallel()
 				// The situation this reproduces is a node PARTITIONED
 				// FROM THE STORE, not a peer robbing a live holder — a
 				// live holder cannot be robbed, because it renews. So

@@ -11,6 +11,7 @@ import (
 // The ask signal is the one part of the protocol that runs INSIDE the box as a
 // script the engine wrote, so it needs a real shell to prove anything.
 func TestTheAskShimRecordsAQuestionFromInsideARealBox(t *testing.T) {
+	t.Parallel()
 	local, err := sandbox.NewLocal(sandbox.LocalOptions{
 		Placement: sandbox.Direct, StateDir: t.TempDir(),
 	})

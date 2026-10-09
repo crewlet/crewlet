@@ -808,9 +808,15 @@ func TestE2BFilesRoundTripAndMissingIsEmpty(t *testing.T) {
 
 // THE FILE CONTRACT, against a fake envd that serves downloads the way envd
 // does — through ServeContent, so a range is answered by the same code.
+//
+// AT THE REAL CAP, unlike the in-process backends: a read here crosses envd's
+// HTTP body, its 32 KiB pieces and the idle bound around them, and a limit
+// written against [sandbox.MaxFileBytes] anywhere on that path — on the whole
+// read, the stream or the tail — is the regression the two cap cases exist
+// to catch, and a smaller file would pass beneath it.
 func TestE2BKeepsTheFileContract(t *testing.T) {
 	t.Parallel()
-	sandboxtest.Box(t, func(t *testing.T) sandbox.Sandbox {
+	sandboxtest.Box(t, sandbox.MaxFileBytes, func(t *testing.T) sandbox.Sandbox {
 		provider, _ := newE2B(t, newE2BStub())
 		box, err := provider.Create(t.Context(), sandbox.Spec{})
 		if err != nil {

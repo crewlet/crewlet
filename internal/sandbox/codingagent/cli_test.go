@@ -19,6 +19,7 @@ func opencode() codingagent.CLI { return codingagent.OpenCode{} }
 // ---------------------------------------------------------------------
 
 func TestTheClaudeInvocationIsHeadlessAndMachineReadable(t *testing.T) {
+	t.Parallel()
 	cmd := claude().Command(sandbox.RunRequest{Brief: "fix the flake"}, codingagent.Paths{}, "")
 	for _, want := range []string{
 		"claude -p ", // headless
@@ -36,6 +37,7 @@ func TestTheClaudeInvocationIsHeadlessAndMachineReadable(t *testing.T) {
 
 // A minimal call stays minimal: an unset cap must not become a flag.
 func TestUnsetClaudeLimitsAppendNoFlags(t *testing.T) {
+	t.Parallel()
 	cmd := claude().Command(sandbox.RunRequest{Brief: "x"}, codingagent.Paths{}, "")
 	for _, absent := range []string{"--max-turns", "--max-budget-usd", "--model", "--mcp-config"} {
 		if strings.Contains(cmd, absent) {
@@ -45,6 +47,7 @@ func TestUnsetClaudeLimitsAppendNoFlags(t *testing.T) {
 }
 
 func TestSetClaudeLimitsBecomeFlags(t *testing.T) {
+	t.Parallel()
 	cmd := claude().Command(sandbox.RunRequest{
 		Brief:  "x",
 		Limits: sandbox.Limits{MaxTurns: 30, MaxBudgetUSD: 2.5},
@@ -66,6 +69,7 @@ func TestSetClaudeLimitsBecomeFlags(t *testing.T) {
 // The brief is operator- and model-authored text; it must not be able to end
 // the quoting and append a command.
 func TestABriefCannotEscapeItsQuoting(t *testing.T) {
+	t.Parallel()
 	cmd := claude().Command(sandbox.RunRequest{
 		Brief: `fix it'; rm -rf / #`,
 	}, codingagent.Paths{}, "")
@@ -79,6 +83,7 @@ func TestABriefCannotEscapeItsQuoting(t *testing.T) {
 // ---------------------------------------------------------------------
 
 func TestTheClaudeParserReadsTheEnvelope(t *testing.T) {
+	t.Parallel()
 	res := claude().Parse(`{
 		"type": "result",
 		"result": "Fixed it. Opened https://github.com/acme/api/pull/7",
@@ -110,6 +115,7 @@ func TestTheClaudeParserReadsTheEnvelope(t *testing.T) {
 // share is carried beside it as a breakdown, which is the convention every
 // engine provider reports in.
 func TestTheClaudeParserCountsTheCachedPrompt(t *testing.T) {
+	t.Parallel()
 	res := claude().Parse(`{
 		"type": "result", "result": "done", "subtype": "success",
 		"usage": {"input_tokens": 40, "cache_read_input_tokens": 9000,
@@ -129,6 +135,7 @@ func TestTheClaudeParserCountsTheCachedPrompt(t *testing.T) {
 // A run that hit its turn cap sets no is_error but did not finish — and an
 // error result carries no `result` text, so what it says is how it ended.
 func TestARunThatHitItsCapIsNotASuccess(t *testing.T) {
+	t.Parallel()
 	res := claude().Parse(`{"type":"result","subtype":"error_max_turns","is_error":false,"num_turns":30}`)
 	if res.Success {
 		t.Fatal("a run that exhausted its turns read as success")
@@ -141,6 +148,7 @@ func TestARunThatHitItsCapIsNotASuccess(t *testing.T) {
 // A run whose model call failed is a SUCCESS subtype carrying is_error, and
 // its result text is the failure.
 func TestARunThatReportsAnErrorIsNotASuccess(t *testing.T) {
+	t.Parallel()
 	res := claude().Parse(`{"type":"result","subtype":"success","is_error":true,` +
 		`"result":"API Error: 529 overloaded"}`)
 	if res.Success || res.Error != "API Error: 529 overloaded" {
@@ -151,6 +159,7 @@ func TestARunThatReportsAnErrorIsNotASuccess(t *testing.T) {
 // A coding agent that crashed should surface as "did not deliver" and let the
 // turn continue, not blow the turn up.
 func TestUnparseableOutputIsAFailedResultNotAnError(t *testing.T) {
+	t.Parallel()
 	res := claude().Parse("Segmentation fault (core dumped)")
 	if res.Success {
 		t.Fatal("a crash read as success")
@@ -161,6 +170,7 @@ func TestUnparseableOutputIsAFailedResultNotAnError(t *testing.T) {
 }
 
 func TestEmptyClaudeOutputIsAFailure(t *testing.T) {
+	t.Parallel()
 	if res := claude().Parse("   "); res.Success || res.Error == "" {
 		t.Fatalf("empty output = %+v", res)
 	}
@@ -168,6 +178,7 @@ func TestEmptyClaudeOutputIsAFailure(t *testing.T) {
 
 // claude-code exits cleanly, so the done marker is the signal.
 func TestClaudeRelisOnTheDoneMarker(t *testing.T) {
+	t.Parallel()
 	if claude().Finished(`{"type":"result","result":"done","subtype":"success"}`) {
 		t.Fatal("claude-code claimed a streamed terminal signal it does not emit")
 	}
@@ -180,6 +191,7 @@ func TestClaudeRelisOnTheDoneMarker(t *testing.T) {
 // --format json is load-bearing: `opencode run` finishes and hangs, and in
 // default mode the final summary is buffered and lost.
 func TestTheOpenCodeInvocationAlwaysStreamsJson(t *testing.T) {
+	t.Parallel()
 	cmd := opencode().Command(sandbox.RunRequest{Brief: "fix it"}, codingagent.Paths{}, "")
 	if !strings.Contains(cmd, "--format json") {
 		t.Fatalf("the invocation does not stream JSON:\n%s", cmd)
@@ -192,6 +204,7 @@ func TestTheOpenCodeInvocationAlwaysStreamsJson(t *testing.T) {
 // A custom base URL means the run's own declared provider; otherwise the model
 // is addressed under its vendor family.
 func TestTheOpenCodeModelIsAddressedUnderTheRightProvider(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		llm  sandbox.AgentLLM
 		want string
@@ -216,6 +229,7 @@ func TestTheOpenCodeModelIsAddressedUnderTheRightProvider(t *testing.T) {
 // reading it would address a Claude subscription's model as an OpenAI one —
 // which is why the family comes from the declared type, not from the entry.
 func TestAnUnknownProviderTypeFallsBackToTheOpenAiFamily(t *testing.T) {
+	t.Parallel()
 	cmd := opencode().Command(sandbox.RunRequest{
 		Brief: "x", LLM: &sandbox.AgentLLM{Model: "m", ProviderType: "something-new"},
 	}, codingagent.Paths{}, "")
@@ -231,6 +245,7 @@ func TestAnUnknownProviderTypeFallsBackToTheOpenAiFamily(t *testing.T) {
 // The secret is never written into a file inside the box where the agent
 // could read it back and echo it into its report.
 func TestTheOpenCodeConfigReferencesTheKeyRatherThanInliningIt(t *testing.T) {
+	t.Parallel()
 	b := sandbox.NewFakeSandbox("box-1")
 	path, err := opencode().WriteConfig(t.Context(), b, sandbox.RunRequest{
 		LLM: &sandbox.AgentLLM{
@@ -258,6 +273,7 @@ func TestTheOpenCodeConfigReferencesTheKeyRatherThanInliningIt(t *testing.T) {
 }
 
 func TestTheOpenCodeConfigTranslatesBothMcpTransports(t *testing.T) {
+	t.Parallel()
 	b := sandbox.NewFakeSandbox("box-1")
 	path, err := opencode().WriteConfig(t.Context(), b, sandbox.RunRequest{
 		MCPServers: map[string]sandbox.MCPServer{
@@ -315,6 +331,7 @@ func TestTheOpenCodeConfigTranslatesBothMcpTransports(t *testing.T) {
 // The other runner's vocabulary, from the same typed input — which is the
 // point of RenderMCP answering in server shape rather than in one CLI's keys.
 func TestTheClaudeCodeConfigTranslatesBothMcpTransports(t *testing.T) {
+	t.Parallel()
 	b := sandbox.NewFakeSandbox("box-1")
 	path, err := codingagent.ClaudeCode{}.WriteConfig(t.Context(), b, sandbox.RunRequest{
 		MCPServers: map[string]sandbox.MCPServer{
@@ -373,6 +390,7 @@ func TestTheClaudeCodeConfigTranslatesBothMcpTransports(t *testing.T) {
 // an agent that would not do the work. The box is the boundary instead, the
 // same stance claude-code takes with --permission-mode bypassPermissions.
 func TestTheOpenCodeConfigLeavesNoPermissionGateForNobodyToAnswer(t *testing.T) {
+	t.Parallel()
 	b := sandbox.NewFakeSandbox("box-1")
 	path, err := opencode().WriteConfig(t.Context(), b, sandbox.RunRequest{
 		MCPServers: map[string]sandbox.MCPServer{
@@ -422,6 +440,7 @@ func derefOr[T any](p *T, absent string) any {
 // whatever the previous run left on a reused box, MCP block and dead per-run
 // bridge URL included.
 func TestAnOpenCodeConfigIsWrittenEvenWithNoProviderAndNoServers(t *testing.T) {
+	t.Parallel()
 	b := sandbox.NewFakeSandbox("box-1")
 	path, err := opencode().WriteConfig(t.Context(), b, sandbox.RunRequest{}, codingagent.PathsFor(b))
 	if err != nil || path == "" {
@@ -452,6 +471,7 @@ func TestAnOpenCodeConfigIsWrittenEvenWithNoProviderAndNoServers(t *testing.T) {
 // The shape has moved across versions and a box runs whatever the operator's
 // image has, so all three terminal signals must be recognised.
 func TestOpenCodeRecognisesEveryTerminalSignal(t *testing.T) {
+	t.Parallel()
 	cases := map[string]string{
 		"step_finish stop":   `{"type":"step_finish","part":{"reason":"stop"}}`,
 		"session idle":       `{"type":"session.status","properties":{"status":{"type":"idle"}}}`,
@@ -466,6 +486,7 @@ func TestOpenCodeRecognisesEveryTerminalSignal(t *testing.T) {
 
 // An intermediate step carries "tool-calls" and must not end the run.
 func TestAnIntermediateStepIsNotATerminalSignal(t *testing.T) {
+	t.Parallel()
 	stream := `{"type":"step_finish","part":{"reason":"tool-calls"}}
 {"type":"text","part":{"text":"still working"}}`
 	if opencode().Finished(stream) {
@@ -475,6 +496,7 @@ func TestAnIntermediateStepIsNotATerminalSignal(t *testing.T) {
 
 // The stream is flushed live, so a poll routinely reads it mid-line.
 func TestAPartialLineIsSkippedRatherThanFailingThePoll(t *testing.T) {
+	t.Parallel()
 	stream := `{"type":"text","part":{"text":"working"}}
 {"type":"step_fin`
 	if opencode().Finished(stream) {
@@ -487,6 +509,7 @@ func TestAPartialLineIsSkippedRatherThanFailingThePoll(t *testing.T) {
 }
 
 func TestTheOpenCodeParserRebuildsTheAnswerAndTheTranscript(t *testing.T) {
+	t.Parallel()
 	stream := strings.Join([]string{
 		`{"type":"tool_use","part":{"tool":"bash","state":{"input":{"command":"pytest -q"},"status":"completed"}}}`,
 		`{"type":"text","part":{"text":"Fixed the flake."}}`,
@@ -511,6 +534,7 @@ func TestTheOpenCodeParserRebuildsTheAnswerAndTheTranscript(t *testing.T) {
 }
 
 func TestAFailedToolIsMarkedInTheTranscript(t *testing.T) {
+	t.Parallel()
 	stream := `{"type":"tool_use","part":{"tool":"bash","state":{"input":{"command":"pytest"},"status":"error","error":"2 failed"}}}
 {"type":"text","part":{"text":"could not fix it"}}`
 	res := opencode().Parse(stream)
@@ -522,6 +546,7 @@ func TestAFailedToolIsMarkedInTheTranscript(t *testing.T) {
 // An invented token count in the spend rollup is worse than a missing one,
 // because a reader cannot tell it is invented.
 func TestOpenCodeReportsNoTokensRatherThanEstimatingThem(t *testing.T) {
+	t.Parallel()
 	res := opencode().Parse(`{"type":"text","part":{"text":"done"}}`)
 	if res.InputTokens != 0 || res.OutputTokens != 0 || res.CostUSD != 0 {
 		t.Fatalf("tokens were invented: %+v", res)
@@ -529,6 +554,7 @@ func TestOpenCodeReportsNoTokensRatherThanEstimatingThem(t *testing.T) {
 }
 
 func TestAnErrorEventIsAFailure(t *testing.T) {
+	t.Parallel()
 	res := opencode().Parse(`{"type":"error","error":"model refused"}`)
 	if res.Success {
 		t.Fatal("an error event read as success")
@@ -540,6 +566,7 @@ func TestAnErrorEventIsAFailure(t *testing.T) {
 
 // An older CLI, or a run captured before the format flag.
 func TestNonJsonOpenCodeOutputIsTakenAsTheAnswer(t *testing.T) {
+	t.Parallel()
 	res := opencode().Parse("I fixed it and opened https://github.com/acme/api/pull/3")
 	if !res.Success || !strings.Contains(res.Text, "fixed it") {
 		t.Fatalf("plain output = %+v", res)
@@ -552,6 +579,7 @@ func TestNonJsonOpenCodeOutputIsTakenAsTheAnswer(t *testing.T) {
 // A tool-only run leaves no assistant text, which is exactly the case the
 // findings file exists for — but the parser must still report it honestly.
 func TestAToolOnlyStreamReportsNoAnswer(t *testing.T) {
+	t.Parallel()
 	res := opencode().Parse(`{"type":"tool_use","part":{"tool":"bash","state":{"input":{"command":"ls"}}}}`)
 	if res.Success {
 		t.Fatal("a run that said nothing read as success")

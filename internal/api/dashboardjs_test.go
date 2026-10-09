@@ -38,7 +38,6 @@ package api_test
 
 import (
 	"bytes"
-	"compress/gzip"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -266,13 +265,13 @@ var staticRef = regexp.MustCompile("[\"'`(](/static/[^\"'`)\\s]*[^/\"'`)\\s])[\"
 // Fetch /dashboard, then everything it names, then everything THOSE name —
 // static imports, lazy chunks, the preload lists beside them, the faces a
 // stylesheet asks for — all from the server rather than from disk
-// (crawlDashboard). An asset missing from the embed, or served as the wrong
-// type, takes the page with it, or, for a lazy chunk, the one screen that
-// loads it while every other keeps working, which is the failure a reader
-// finds before a test does.
+// ([embeddedDashboard], crawled once for the suite). An asset missing from the
+// embed, or served as the wrong type, takes the page with it, or, for a lazy
+// chunk, the one screen that loads it while every other keeps working, which
+// is the failure a reader finds before a test does.
 func TestTheShellLoadsFromTheBinary(t *testing.T) {
 	t.Parallel()
-	c := crawlDashboard(t, newApp(t, api.Options{}))
+	c := embeddedDashboard.crawl
 
 	// A bundled shell names few assets by design: an entry module, a vendor
 	// chunk, a stylesheet, an icon. The floor is what distinguishes that from
@@ -334,7 +333,7 @@ var hashedName = regexp.MustCompile(`^.+-[A-Za-z0-9_-]{8}\.[A-Za-z0-9]+$`)
 // checks the server's answer for each file as well as its name.
 func TestEveryFileUnderAssetsIsContentHashed(t *testing.T) {
 	t.Parallel()
-	a := newApp(t, api.Options{})
+	a := embeddedDashboard.app
 
 	names := 0
 	err := fs.WalkDir(static.FS(), "dashboard/assets", func(p string, d fs.DirEntry, err error) error {
@@ -379,7 +378,7 @@ func TestEveryFileUnderAssetsIsContentHashed(t *testing.T) {
 // passed. This reads what the binary serves and fails on the first of those.
 func TestTheShellFitsTheDashboardPolicy(t *testing.T) {
 	t.Parallel()
-	a := newApp(t, api.Options{})
+	a := embeddedDashboard.app
 
 	res := fetch(t, a, "/dashboard", nil)
 	if got := res.Header.Get("Content-Security-Policy"); got != pagepolicy.Dashboard {
@@ -411,7 +410,7 @@ func TestTheShellFitsTheDashboardPolicy(t *testing.T) {
 	// policy governs the whole document, so a sheet a screen loads later is
 	// refused exactly as the one the shell links is — and it is refused on
 	// that screen alone, where nothing else here would ever look.
-	sheets := crawlDashboard(t, a).ofKind(".css")
+	sheets := embeddedDashboard.crawl.ofKind(".css")
 	if len(sheets) == 0 {
 		t.Error("no stylesheet was reached, so no url() was checked")
 	}
@@ -465,7 +464,7 @@ func sameOrigin(url string) bool {
 // to order is exactly this one tie.
 func TestTheDesignSystemCascadesInOrder(t *testing.T) {
 	t.Parallel()
-	a := newApp(t, api.Options{})
+	a := embeddedDashboard.app
 	shell := mustFetch(t, a, "/dashboard", "text/html")
 
 	sheets := 0
@@ -532,7 +531,7 @@ func TestTheDesignSystemCascadesInOrder(t *testing.T) {
 // ours, and every per-component import answered empty.
 func TestNoLazyStylesheetCarriesTheDesignSystem(t *testing.T) {
 	t.Parallel()
-	c := crawlDashboard(t, newApp(t, api.Options{}))
+	c := embeddedDashboard.crawl
 	for _, p := range c.problems {
 		t.Error(p)
 	}
@@ -628,10 +627,27 @@ type priceFound struct {
 	what, near string
 }
 
+// priceFormNeeds is what each of priceForms cannot match without
+// (sourcetree.Required), by index. Every form but the field name's opens with
+// a class or `\b`, which leaves the regexp package no prefix to jump to, so
+// each ran over every byte of every module; a module that holds nothing a form
+// needs is not handed to it, which cannot change what it finds. The big
+// chunks hold most of what the forms need, so this skips the small ones.
+var priceFormNeeds = func() []sourcetree.Prefilter {
+	out := make([]sourcetree.Prefilter, len(priceForms))
+	for i, form := range priceForms {
+		out[i] = sourcetree.Required(form.re)
+	}
+	return out
+}()
+
 // pricesInModule is every place a built module holds a price.
 func pricesInModule(module []byte) []priceFound {
 	var out []priceFound
-	for _, form := range priceForms {
+	for i, form := range priceForms {
+		if !priceFormNeeds[i].Admits(module) {
+			continue
+		}
 		for _, at := range form.re.FindAllIndex(module, -1) {
 			from, to := max(0, at[0]-60), min(len(module), at[1]+40)
 			out = append(out, priceFound{form.what, string(module[from:to])})
@@ -658,8 +674,8 @@ func pricesInModule(module []byte) []priceFound {
 // TestTheShellLoadsFromTheBinary uses, and protocol.js, which no page imports.
 func TestTheDashboardRendersNoPrice(t *testing.T) {
 	t.Parallel()
-	a := newApp(t, api.Options{})
-	c := crawlDashboard(t, a)
+	a := embeddedDashboard.app
+	c := embeddedDashboard.crawl
 	// A crawl that lost a file would scan less than the engine serves and
 	// call it clean. TestTheShellLoadsFromTheBinary names each problem; this
 	// only refuses to vouch for a bundle it could not read whole.
@@ -747,7 +763,7 @@ func TestThePriceScanReadsWhatTheMinifierWrites(t *testing.T) {
 // from the binary, as text a browser shows.
 func TestTheNoticesAreServedAsText(t *testing.T) {
 	t.Parallel()
-	a := newApp(t, api.Options{})
+	a := embeddedDashboard.app
 	for _, url := range []string{
 		"/static/dashboard/THIRD_PARTY_NOTICES.txt",
 		"/static/dashboard/fonts/OFL.txt",
@@ -853,12 +869,13 @@ func mustFetch(t *testing.T, a *api.App, url, wantType string) []byte {
 // lazyChunkBudget and names this test as its authority; the prose in
 // docs/reference/dashboard-design.md ("How it is built") quotes these values.
 //
-// Script and stylesheet sizes are GZIPPED at gzip.BestCompression, because
-// that is exactly what the engine sends a browser that asks
-// (internal/api/dashboard.go compresses each text file once, at that level) —
-// a raw byte count would measure minified whitespace and identifiers the wire
-// never carries, and a default-level count would disagree with the server by a
-// few per cent in the direction that hides a regression.
+// Script and stylesheet sizes are what the engine SENDS a browser that asks
+// for gzip, read off its own answer (servedSize): the file compressed at
+// gzip.BestCompression (internal/api/dashboard.go compresses each text file
+// once, at that level), or the file as it is where that is not smaller. A raw
+// byte count would measure minified whitespace and identifiers the wire never
+// carries, and a count recomputed here would agree with the server only while
+// it kept the server's level and rule in step by hand.
 const (
 	// initialBudget is the entry, its static import graph and the stylesheet
 	// the shell links: everything a reader downloads before the first screen
@@ -903,7 +920,7 @@ const (
 // the biggest one.
 func TestTheDashboardFitsItsBudget(t *testing.T) {
 	t.Parallel()
-	c := crawlDashboard(t, newApp(t, api.Options{}))
+	c := embeddedDashboard.crawl
 	if len(c.problems) > 0 {
 		t.Fatalf("the crawl could not read %d of the files the shell reaches, so their "+
 			"size is unknown; TestTheShellLoadsFromTheBinary names them", len(c.problems))
@@ -921,7 +938,7 @@ func TestTheDashboardFitsItsBudget(t *testing.T) {
 		if ext != ".js" && ext != ".css" {
 			continue
 		}
-		size := gzippedSize(t, f.body)
+		size := servedSize(t, embeddedDashboard.app, f.url)
 		if initial[f.url] {
 			first = append(first, measured{f.url, size})
 			firstTotal += size
@@ -992,24 +1009,6 @@ func TestTheDashboardFitsItsBudget(t *testing.T) {
 		t.Errorf("static/dashboard is %s, over its %s: every engine binary and image carries "+
 			"it, opened or not", kib(tree), kib(treeBudget))
 	}
-}
-
-// gzippedSize is what the engine sends for this body to a browser that asks
-// for gzip: the same format at the same level.
-func gzippedSize(t *testing.T, body []byte) int {
-	t.Helper()
-	var buf bytes.Buffer
-	zw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := zw.Write(body); err != nil {
-		t.Fatal(err)
-	}
-	if err := zw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return buf.Len()
 }
 
 // kib renders a byte count the way the budgets are written.

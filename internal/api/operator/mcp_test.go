@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -46,7 +47,7 @@ func TestEachHalfIsOfferedOnItsOwn(t *testing.T) {
 	only := newSurface(t, operator.Options{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Writer: stubWorkWriter,
-			Merges: stubWorkMerger, Moves: stubWorkMover, Actor: operator.WorkActor(nil),
+			Merges: stubWorkMerger, Moves: stubWorkMover, Actor: operator.WorkActor(nil, nil),
 		},
 	})
 	if only == nil {
@@ -73,7 +74,7 @@ func TestAnOperatorWriteCarriesTheTokensOwnLabel(t *testing.T) {
 	t.Parallel()
 	ctx := auth.WithOperator(t.Context(), "ops-bot")
 
-	actor, err := operator.WorkActor(nil)(ctx, nil)
+	actor, err := operator.WorkActor(nil, nil)(ctx, nil)
 	if err != nil {
 		t.Fatalf("WorkActor: %v", err)
 	}
@@ -154,7 +155,7 @@ func TestABoundTokenCarriesTheSeatItNames(t *testing.T) {
 		return o
 	}
 
-	bound, err := operator.WorkActor(chart)(auth.WithOperator(t.Context(), "founder"), nil)
+	bound, err := operator.WorkActor(chart, nil)(auth.WithOperator(t.Context(), "founder"), nil)
 	if err != nil {
 		t.Fatalf("WorkActor: %v", err)
 	}
@@ -196,7 +197,7 @@ func TestABoundTokenCarriesTheSeatItNames(t *testing.T) {
 
 	// AN UNBOUND TOKEN IS AN ORDINARY STATE — an operator outside the org
 	// chart — and it writes under its own id exactly as before.
-	unbound, err := operator.WorkActor(chart)(auth.WithOperator(t.Context(), "ci"), nil)
+	unbound, err := operator.WorkActor(chart, nil)(auth.WithOperator(t.Context(), "ci"), nil)
 	if err != nil {
 		t.Fatalf("WorkActor for an unbound token: %v", err)
 	}
@@ -222,7 +223,7 @@ func TestABoundTokenCarriesTheSeatItNames(t *testing.T) {
 		"no chart loaded": func() *org.Organization { return nil },
 	} {
 		t.Run(name, func(t *testing.T) {
-			got, err := operator.WorkActor(none)(
+			got, err := operator.WorkActor(none, nil)(
 				auth.WithOperator(t.Context(), "founder"), nil)
 			if err != nil {
 				t.Fatalf("WorkActor: %v", err)
@@ -231,6 +232,50 @@ func TestABoundTokenCarriesTheSeatItNames(t *testing.T) {
 				t.Errorf("with %s the actor is %+v", name, got)
 			}
 		})
+	}
+}
+
+// A BINDING WRITTEN AS A REFERENCE RESOLVES THROUGH THE LOOKUP THE SURFACE IS
+// HANDED ([operator.Options.Env]) — the serving node's own chain, where the
+// dashboard's reads and a seat's tools resolve the same field — and never the
+// process environment behind it. The variable is set in no process, so the
+// same chart with no lookup binds nobody, and both directions agree: the
+// credential names the seat, and the seat's party names the credential.
+func TestABindingResolvesThroughTheLookupTheSurfaceIsHanded(t *testing.T) {
+	t.Parallel()
+	const variable = "CREWLET_OPERATOR_TEST_HANDED_BINDING"
+	if _, set := os.LookupEnv(variable); set {
+		t.Fatalf("the premise: %s is set in no process", variable)
+	}
+	chart := func() *org.Organization {
+		o := &org.Organization{Name: "Nimbus", Roles: []*org.Role{
+			{Name: "Jane Founder", Kind: org.KindHuman,
+				Contact: &org.HumanContact{CrewletOperatorID: "${" + variable + "}"}},
+		}}
+		o.Normalize()
+		return o
+	}
+	handed := func(name string) (string, bool) {
+		if name == variable {
+			return "founder", true
+		}
+		return "", false
+	}
+	ctx := auth.WithOperator(t.Context(), "founder")
+
+	bound, err := operator.WorkActor(chart, handed)(ctx, nil)
+	if err != nil {
+		t.Fatalf("WorkActor: %v", err)
+	}
+	if bound.Seat != "jane-founder" {
+		t.Errorf("a binding the handed lookup resolves to the caller left seat %q", bound.Seat)
+	}
+	if got := builtin.Parties(chart, handed)("jane-founder"); got.OperatorID != "founder" {
+		t.Errorf("the seat's party carries credential %q, want the one that binds it", got.OperatorID)
+	}
+	// THE CONTROL: the process environment holds no such variable.
+	if plain, err := operator.WorkActor(chart, nil)(ctx, nil); err != nil || plain.Seat != "" {
+		t.Errorf("with no lookup handed the actor is %+v (%v), want no seat", plain, err)
 	}
 }
 
@@ -245,7 +290,7 @@ func TestAWriteWithNoOperatorIsRefused(t *testing.T) {
 		"an empty operator id":       auth.WithOperator(context.Background(), ""),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := operator.WorkActor(nil)(ctx, nil); err == nil {
+			if _, err := operator.WorkActor(nil, nil)(ctx, nil); err == nil {
 				t.Error("a write with no operator was attributed rather than refused")
 			}
 			if _, err := operator.PageActor(ctx, nil); err == nil {
@@ -279,7 +324,7 @@ func TestAnUnguardedMCPRequestIsRefusedAsJSON(t *testing.T) {
 	s := newSurface(t, operator.Options{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Writer: stubWorkWriter,
-			Actor: operator.WorkActor(nil),
+			Actor: operator.WorkActor(nil, nil),
 		},
 	})
 	rec := httptest.NewRecorder()
@@ -307,7 +352,7 @@ func TestTheOperatorCatalogueIsDrawnFromTheSeatOne(t *testing.T) {
 	s := newSurface(t, operator.Options{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Writer: stubWorkWriter,
-			Merges: stubWorkMerger, Moves: stubWorkMover, Actor: operator.WorkActor(nil),
+			Merges: stubWorkMerger, Moves: stubWorkMover, Actor: operator.WorkActor(nil, nil),
 		},
 		Pages: builtin.PageDeps{Reader: stubPageReader{}, Writer: stubPageWriter{}, Actor: operator.PageActor},
 	})
@@ -457,7 +502,7 @@ func TestEveryToolAnOperatorIsOfferedCarriesItsHints(t *testing.T) {
 	s := newSurface(t, operator.Options{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Writer: stubWorkWriter,
-			Merges: stubWorkMerger, Moves: stubWorkMover, Actor: operator.WorkActor(nil),
+			Merges: stubWorkMerger, Moves: stubWorkMover, Actor: operator.WorkActor(nil, nil),
 		},
 		Pages: builtin.PageDeps{
 			Reader: stubPageReader{}, Writer: stubPageWriter{},

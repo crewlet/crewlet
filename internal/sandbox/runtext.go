@@ -80,8 +80,53 @@ const MaxRunTextBytes = 256 << 10
 const MaxFileBytes = 32 << 20
 
 // ErrFileTooLarge is [Sandbox.ReadFile]'s answer for a file past
-// [MaxFileBytes].
+// [MaxFileBytes]. The refusal is a [*FileTooLargeError], which names the cap
+// that refused it.
 var ErrFileTooLarge = errors.New("sandbox: the file is larger than the engine reads back from a box")
+
+// FileTooLargeError is [ErrFileTooLarge] with the path refused and the cap it
+// was refused at, so a caller describing the refusal says what the box said
+// rather than restating a constant of its own.
+type FileTooLargeError struct {
+	// Path is the file that was not read.
+	Path string
+	// Limit is the most the box reads whole: [MaxFileBytes] on every box
+	// the engine builds.
+	Limit int
+}
+
+func (e *FileTooLargeError) Error() string {
+	return fmt.Sprintf("%v: %s is past %s, so it was not read — the coding agent wrote more "+
+		"than a report, and a clipped one would read as a finished one",
+		ErrFileTooLarge, e.Path, capSize(e.Limit))
+}
+
+// Is makes the error [ErrFileTooLarge] under errors.Is.
+func (e *FileTooLargeError) Is(target error) bool { return target == ErrFileTooLarge }
+
+// capSize is a whole-read cap as a reader says it: in MiB when it is a whole
+// number of them, which [MaxFileBytes] is, and in KiB otherwise.
+func capSize(n int) string {
+	if n >= 1<<20 && n%(1<<20) == 0 {
+		return fmt.Sprintf("%d MiB", n>>20)
+	}
+	return kib(n)
+}
+
+// readLimit is the whole-read cap a box holds its reads to: [MaxFileBytes], or
+// a smaller one the suite gave the box ([FakeSandbox.CapReads], and the local
+// boxes' through export_test.go).
+//
+// ZERO IS MAXFILEBYTES, and that is the reading a box's field is meant to
+// have: no box in production is given a cap, so every constructor builds the
+// engine's own without a value to forget, and a cap of zero bytes is no
+// setting anybody could mean.
+func readLimit(capped int) int {
+	if capped > 0 {
+		return capped
+	}
+	return MaxFileBytes
+}
 
 // ErrNotRegularFile is a read a box refused because its path names something
 // other than a regular file where it lies — a named pipe, a device, a socket,
@@ -141,21 +186,19 @@ func (e *NotRegularFileError) Is(target error) bool { return target == ErrNotReg
 // kindSymlink is the [NotRegularFileError.Kind] of a symbolic link.
 const kindSymlink = "a symbolic link"
 
-// readCapped reads a file's content out of r, REFUSING one past
-// [MaxFileBytes] rather than returning its first part — the one rule every
-// backend's [Sandbox.ReadFile] follows.
+// readCapped reads a file's content out of r, REFUSING one past limit — the
+// box's [readLimit], [MaxFileBytes] in production — rather than returning its
+// first part: the one rule every backend's [Sandbox.ReadFile] follows.
 //
 // +1 so an overrun is visible: a reader stopped at exactly the cap cannot
 // tell a file of that size from a longer one.
-func readCapped(r io.Reader, path string) ([]byte, error) {
-	raw, err := io.ReadAll(io.LimitReader(r, MaxFileBytes+1))
+func readCapped(r io.Reader, path string, limit int) ([]byte, error) {
+	raw, err := io.ReadAll(io.LimitReader(r, int64(limit)+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(raw) > MaxFileBytes {
-		return nil, fmt.Errorf("%w: %s is past %d MiB, so it was not read — the coding agent "+
-			"wrote more than a report, and a clipped one would read as a finished one",
-			ErrFileTooLarge, path, MaxFileBytes>>20)
+	if len(raw) > limit {
+		return nil, &FileTooLargeError{Path: path, Limit: limit}
 	}
 	return raw, nil
 }

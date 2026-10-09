@@ -23,17 +23,36 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
+// bootstrap is a node's Tier A for a case, its store in the case's own
+// directory and MIGRATED ALREADY, from the image this binary builds once, when
+// the store is still where this put it: a boot here is about the engine, never
+// about the migration chain, which internal/store certifies. A case that moves
+// the store — onto a directory, or a path two boots share — decides for itself
+// ([engine.SeedStore]).
 func bootstrap(t *testing.T, mutate func(*config.Bootstrap)) *config.Bootstrap {
+	t.Helper()
+	b, chosen := unseededBootstrap(t, mutate)
+	if b.Store.Path == chosen {
+		engine.SeedStore(t, b)
+	}
+	return b
+}
+
+// unseededBootstrap is [bootstrap] with nothing written at the store's path,
+// for a case whose subject is what a node does before anything exists there,
+// and the path it chose for the store.
+func unseededBootstrap(t *testing.T, mutate func(*config.Bootstrap)) (*config.Bootstrap, string) {
 	t.Helper()
 	b := config.DefaultBootstrap()
 	// The default store path is relative, so a test that took it would
 	// create a database in the package directory and share it with every
 	// other test in the run. One process owns a store file exclusively.
-	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
+	chosen := filepath.Join(t.TempDir(), "crewlet.db")
+	b.Store.Path = chosen
 	if mutate != nil {
 		mutate(&b)
 	}
-	return &b
+	return &b, chosen
 }
 
 // parsedCompany is the Tier B half OpenBackends needs, for the one field it
@@ -355,10 +374,11 @@ func TestNoEmbeddingProviderIsAWidthOfNoneNotADefault(t *testing.T) {
 // This was REFUSED while the width was fixed at open, and rightly: a store
 // stuck at the wrong width refuses every write from the right one, and recall
 // stops returning anything with no reason in the log. What makes it safe now
-// is that the width is re-stated by every apply (see
-// TestTheEmbeddingWidthFollowsAConfigApply), so the first revision this node
-// applies corrects it. If that ever stops being true, this has to go back to
-// being a refusal.
+// is that a store never told a width LEARNS it from the first revision this
+// node applies, and holds it from then on (see
+// TestTheEmbeddingWidthIsLearnedOnceAndHeld) — so 0 here is "not yet told",
+// which the first apply settles, never a width a write is checked against. If
+// that ever stops being true, this has to go back to being a refusal.
 func TestNoCompanyOpensAtWidthZero(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
@@ -459,6 +479,7 @@ func TestTheStoreOutlivesTheHandlersThatWriteToIt(t *testing.T) {
 		b.Stream.StoreDir = filepath.Join(dir, "stream")
 		b.Store.Path = path
 	})
+	engine.SeedStore(t, b)
 	back, err := openBackends(t, b)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
@@ -740,7 +761,7 @@ func TestAnExternalStreamsTLSMaterialReachesTheDial(t *testing.T) {
 // which the reader can match neither of. Zero is "no declared width", and
 // EncodeVector checks nothing against it, so nothing would report this.
 func TestTheEmbeddingWidthIsLearnedOnceAndHeld(t *testing.T) {
-	// Not parallel: t.Setenv resolves the ${K} these documents reference.
+	t.Parallel()
 	const noVectors = `
 name: Acme
 providers:
@@ -775,8 +796,8 @@ roles:
 	narrow := strings.Replace(wide, "dimensions: 3072", "dimensions: 1536", 1)
 	narrow = strings.Replace(narrow, "text-embedding-3-large", "text-embedding-3-small", 1)
 
-	t.Setenv("K", "test-key")
-	e := newEngine(t, engine.Options{Company: parsedCompany(t, noVectors)})
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, noVectors),
+		Environment: config.MapSource{"K": "test-key"}})
 	if got := e.Backends().Store.EmbeddingDim(); got != 0 {
 		t.Fatalf("booted at width %d, want 0 for a company with no embeddings", got)
 	}

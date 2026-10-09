@@ -7,10 +7,11 @@
 # all: it reports a pass CI will not honour, and the divergence is invisible
 # until the pull request goes red.
 #
-# For the two TEST jobs that is now true by construction rather than by care:
-# ci.yml's `test (race)` and `end-to-end gates` steps are `make test` and
-# `make test-solo`, so there is one command and no copy to keep in step. Every
-# other job still inlines its own, and NOTHING asserts those agree --
+# For the TEST jobs that is now true by construction rather than by care:
+# ci.yml's `test (race)` job runs `make test` with TEST_WEIGHTS and
+# TEST_TIMINGS set (below), and its `end-to-end gates` job runs `make
+# test-solo`, so there is one command and no copy to keep in step. Every other job
+# still inlines its own, and NOTHING asserts those agree --
 # internal/version/makefile_test.go used to and was dropped -- so for the rest,
 # change a target and its ci.yml step in the same commit, and read both.
 #
@@ -38,7 +39,9 @@
 # engine's own CLI is the interface to the engine.
 
 # The module pins its own toolchain in go.mod. `auto` fetches it rather than
-# failing on a version mismatch — the value ci.yml sets for every job.
+# failing on a version mismatch. In CI nothing needs fetching: setup-go
+# installs go.mod's own toolchain and exports GOTOOLCHAIN=local, which this
+# `?=` leaves as it is.
 export GOTOOLCHAIN ?= auto
 
 GO ?= go
@@ -64,18 +67,18 @@ BIN := crewlet
 # -timeout IS NOT A BUDGET, it is a HANG DETECTOR, and it has to be stated
 # because go's own default is 10 minutes PER PACKAGE and internal/e2e does not
 # fit in it: that package starts a real engine, a real broker and the real API
-# per test, and measured 776s here under -race. Left at the default the gate
-# does not merely flap — it cannot pass on a machine this speed, and the
+# per test, and has measured 776s under -race. Left at the default the gate
+# does not merely flap — it cannot pass on a machine that speed, and the
 # failure reads as a hung test rather than as a budget nobody set.
 #
 # Thirty minutes is a hang detector sized against the worst LEGITIMATE run,
 # not against the worst run ever seen. On CI's own four-vCPU runners
-# internal/e2e completes in 303-404s green; the pathological 1684.497s that
-# once came within 115s of this wall was a run that lost nine cluster-start
-# attempts to unanswered broker metadata requests, which is a defect that has
-# been fixed rather than a duration to budget for (see internal/jsprovision's
-# Ask). Against the green figure this is 4.5x, which is room for a runner a
-# quarter this speed.
+# internal/e2e completed green in 426.6s on main and 561.9s on a pull request
+# (both 2026-10-07); the pathological 1684.497s that once came within 115s of
+# this wall was a run that lost nine cluster-start attempts to unanswered
+# broker metadata requests, which is a defect that has been fixed rather than
+# a duration to budget for (see internal/jsprovision's Ask). Against the slower
+# green figure this is 3.2x, which is room for a runner a third that speed.
 #
 # It applies to every package because the flag is per test BINARY: a unit
 # package that hangs dies in thirty minutes rather than go's default ten,
@@ -89,15 +92,30 @@ BIN := crewlet
 # A ceiling in the workflow would have to sit ABOVE this one to keep that true,
 # which is most of the reason there is not one.
 #
-# TEST_TIMEOUT is ci.yml's value, and the two must not drift: the Makefile is
-# the same command CI runs or it is a lie. It is defined BEFORE GOTEST, and
-# that is load-bearing rather than tidy: `:=` expands immediately, so with the
-# assignment below the reference the flag was handed an EMPTY value and `go
-# test` parsed the package list as its argument — `invalid value "./..." for
-# flag -timeout`. `make test` and therefore `make check` could not run at all.
+# TEST_TIMEOUT is defined BEFORE GOTEST, and that is load-bearing rather than
+# tidy: `:=` expands immediately, so with the assignment below the reference
+# the flag was handed an EMPTY value and `go test` parsed the package list as
+# its argument — `invalid value "./..." for flag -timeout`. `make test` and
+# therefore `make check` could not run at all.
 TEST_TIMEOUT := 30m
 
-GOTEST := $(GO) test -race -count=1 -timeout $(TEST_TIMEOUT)
+# -vet=off, because the vet `go test` runs by default is a DUPLICATE here and
+# not a gate of its own. It is twelve analyzers (cmd/go's defaultVetFlags), and
+# `go vet ./...` runs all twelve and more over the same packages and the same
+# _test.go files — this tree has no race-tagged file, so -race does not change
+# what is analysed. That full vet is `check`'s `vet` prerequisite and a step of
+# ci.yml's `build + vet` job, and it is what certifies vet now: drop either and
+# the copy that used to mask the loss is gone too. What the duplicate cost was
+# a cold vet pass per test package in every test job — run SERIALLY in
+# `test-solo`, whose -p 1 serialises vet with everything else.
+#
+# GOTESTBUILD is every flag that changes what is COMPILED, held apart so the
+# solo half's prebuild (below) compiles exactly what its run then finds in the
+# build cache: a flag in one and not the other is a different action ID, and
+# the prebuild would compile a tree nothing reads.
+GOTESTBUILD := -race
+GOTESTRUN   := -vet=off -count=1 -timeout $(TEST_TIMEOUT)
+GOTEST      := $(GO) test $(GOTESTBUILD) $(GOTESTRUN)
 
 # THE SKIP GATE, on the end of both test pipelines.
 #
@@ -115,17 +133,18 @@ GOTEST := $(GO) test -race -count=1 -timeout $(TEST_TIMEOUT)
 # PIPESTATUS in make's default /bin/sh to recover it, and switching this file
 # to bash for one recipe is a wider change than the bug deserves. Running the
 # command removes the question. -v is dropped because -json carries every line.
-SKIPGATE := $(GO) run ./internal/skipgate
+SKIPGATE = $(GO) run ./internal/skipgate
 
 # The two halves of the suite, COMPUTED rather than listed.
 #
 # NOT A COVERAGE CUT — `check` depends on both, and ci.yml runs both. It is a
 # CONTENTION cut: a solo package stands up N engines, each embedding its own
-# NATS server, in ONE process, and a two-core runner under the race detector
-# cannot form a multi-member JetStream quorum inside the 30s provisioning
-# budget while `./...` runs package binaries in parallel. `go doc ./internal/solo`
-# is the whole story — the measurement, and what every obvious alternative
-# (a build tag, -short, a flag, -skip, a nested module) cost when it was tried.
+# NATS server, in ONE process, and a replicated create that has to reach a
+# quorum of members starved of CPU goes unanswered rather than slow.
+# `go doc ./internal/solo` is the whole story — the measurements, which of
+# them are of today's budgets and which are not, and what every obvious
+# alternative (a build tag, -short, a flag, -skip, a nested module) cost when
+# it was tried.
 #
 # This was a hand-written `go list ./... | grep -v '/internal/e2e…'` in two
 # files and a third, already divergent, copy in CONTRIBUTING.md. It named ONE
@@ -139,15 +158,40 @@ SKIPGATE := $(GO) run ./internal/skipgate
 # and in opposite directions: `:=` runs the partition while make is still
 # PARSING, so `make help`, `make build` and `make fmt` each pay ~0.6s for two
 # `go list` walks they never look at; plain `=` costs nothing until referenced
-# but then re-runs per reference, and each of these is referenced twice below
-# (a guard, then the recipe).
+# but then re-runs per reference, and each of these is referenced more than
+# once below (a guard, then the recipe).
 #
 # So each expands once and redefines itself as a simple variable — `$(eval)`
 # expands to nothing, and what is left is the value it just assigned. Every
 # later reference is a plain lookup.
-PARTITION      = $(GO) run ./internal/solo/partition
-PARALLEL_PKGS  = $(eval PARALLEL_PKGS := $(shell $(PARTITION) parallel))$(PARALLEL_PKGS)
-SOLO_PKGS      = $(eval SOLO_PKGS := $(shell $(PARTITION) solo))$(SOLO_PKGS)
+#
+# TEST_WEIGHTS AND TEST_TIMINGS are how ci.yml starts `make test`'s longest
+# packages first, and leaving them unset leaves a local run exactly as it was:
+#
+#   TEST_WEIGHTS=FILE the measured seconds per package (a skipgate -timings
+#                     file) the partition starts the longest first by. It must
+#                     exist; empty, or unset, is go list's order.
+#   TEST_TIMINGS=FILE write how long each package that passed took, which
+#                     ci.yml keeps from a passing run on main as the next
+#                     run's TEST_WEIGHTS.
+#
+# Membership never depends on either: `go doc ./internal/solo/partition` says
+# why a weight can move a package earlier or later and never drop one.
+#
+# THE PARALLEL HALF ONLY. `make test-solo` runs at -p 1, where cmd/go's one
+# worker links and runs every test binary in turn, so the half takes the sum
+# of them in any order and a weight could not end it a second sooner.
+#
+# The TEST_ prefix is the family the other test knobs already share
+# (TEST_TIMEOUT), and it is also what keeps a variable this file takes from the
+# ENVIRONMENT — which is what `?=` does — from answering to a name as generic
+# as WEIGHTS, which another tool may well export.
+TEST_WEIGHTS ?=
+TEST_TIMINGS ?=
+
+PARTITION     = $(GO) run ./internal/solo/partition
+PARALLEL_PKGS = $(eval PARALLEL_PKGS := $(shell $(PARTITION)$(if $(TEST_WEIGHTS), -weights $(TEST_WEIGHTS)) parallel))$(PARALLEL_PKGS)
+SOLO_PKGS     = $(eval SOLO_PKGS := $(shell $(PARTITION) solo))$(SOLO_PKGS)
 
 # The release targets, cross-compiled. Nothing else builds for anything but
 # the machine you are on, so a build tag or a platform-gated file that only
@@ -297,20 +341,14 @@ dashboard-check: $(UI)/node_modules ## fail if static/dashboard is not what dash
 
 ##@ Gates — `make check` is all of them
 
-# .NOTPARALLEL, and it is about correctness rather than tidiness: under
-# `make -j check` GNU Make is free to start `test` and `test-solo` at the same
-# time, which puts the multi-member cluster packages back on the machine
-# alongside the whole parallel partition — precisely the contention the split
-# exists to remove, on the one invocation a contributor reaches for to go
-# faster. CI keeps them in separate jobs and so is unaffected; this is what
-# gives the local gate the same isolation.
-#
 # THE TWO TEST HALVES RUN IN THE RECIPE, one after the other, and everything
-# else stays a prerequisite. As prerequisites they were independent, so
-# `make -j check` was free to start both race suites at once — putting the
-# multi-member cluster packages back on the machine beside the whole parallel
-# partition, which is exactly the contention the split exists to remove, on
-# the invocation a contributor reaches for to go faster.
+# else stays a prerequisite — which is about correctness rather than tidiness.
+# As prerequisites they were independent, so `make -j check` was free to start
+# both race suites at once — putting the multi-member cluster packages back on
+# the machine beside the whole parallel partition, which is exactly the
+# contention the split exists to remove, on the invocation a contributor
+# reaches for to go faster. CI runs the halves on separate runners and so was
+# never exposed; this gives the local gate the same isolation.
 #
 # A bare `.NOTPARALLEL:` fixes it and costs too much: it is GLOBAL, so every
 # other parallel invocation of this file loses its concurrency to settle a
@@ -318,13 +356,15 @@ dashboard-check: $(UI)/node_modules ## fail if static/dashboard is not what dash
 # but that is GNU Make 4.4 and this repository pins no version (4.3 here).
 # Two lines in the recipe are portable, and they say the thing plainly.
 #
-# It also fails faster: formatting, vet, lint and the build are all ahead of a
-# six-minute test run rather than beside it.
+# It also fails faster: formatting, vet, lint and the build are all ahead of
+# the two test halves, which are by far the longest part of this gate, rather
+# than beside them.
 #
 # Measured, by doing it accidentally: `make test-solo` with a `make
 # test-cross` running beside it failed internal/e2e's
-# TestEveryNodeMintsIntoOneKeySpace with `ensure stream
-# CREWLET_NOTIFICATIONS: context deadline exceeded`, and passed alone.
+# TestAFleetOfThree/EveryNodeMintsIntoOneKeySpace (then a test of its own)
+# with `ensure stream CREWLET_NOTIFICATIONS: context deadline exceeded`, and
+# passed alone.
 check: fmt-check tidy-check signoff-check signoff-test vet lint build test-cross dashboard-lint dashboard-check dashboard-test ## every gate CI runs on a PR
 	@$(MAKE) test
 	@$(MAKE) test-solo
@@ -434,17 +474,50 @@ lint: ## run golangci-lint (ci: golangci-lint)
 # no node and passes — and a Makefile stricter than CI is the same lie as one
 # looser than it, just in the direction nobody notices.
 test: ## the suite, minus the packages that run alone (ci: test (race))
-	@test -n "$(PARALLEL_PKGS)" || { echo "the parallel partition is empty" >&2; exit 1; }
-	$(SKIPGATE) -- $(GOTEST) -json $(PARALLEL_PKGS)
+	@test -n "$(PARALLEL_PKGS)" || { echo "the parallel partition printed no packages; internal/solo/partition said why above (a TEST_WEIGHTS file it refused, or go list failing)" >&2; exit 1; }
+	$(SKIPGATE)$(if $(TEST_TIMINGS), -timings $(TEST_TIMINGS)) -- $(GOTEST) -json $(PARALLEL_PKGS)
 
 # The solo half: every package that needs the runner to itself.
 #
 # -p 1 is not decoration. `go test pkgA pkgB …` runs package BINARIES at
-# -p=GOMAXPROCS, so handing it four packages that each stand up a multi-member
+# -p=GOMAXPROCS, so handing it the packages that each stand up a multi-member
 # broker recreates precisely the contention this partition exists to remove.
 # The old target ran one package and did not need it.
+#
+# BUT -p 1 IS FOR THE RUNS, and the compile it serialised with them was a side
+# effect: cmd/go runs compile, link and test actions on ONE pool of -p workers,
+# so every package in the half's dependency tree compiled one at a time before
+# the first test started. On CI that was 266s of a 992s step running no test
+# at all. So the half is compiled FIRST at the default -p by SOLO_PREBUILD,
+# which starts no test binary and so forms no cluster, and the -p 1 run finds
+# every compile in the build cache. Measured from a cold cache (4 vCPUs, the
+# machine shared): 423s serial, against 144s for the prebuild plus 19s for a
+# -p 1 run left with seven links and the seven generated test mains, which is
+# all it compiles.
+#
+# `go list -export` rather than `go test -c -o /dev/null`, which leaves the run
+# exactly the same work but LINKS every binary in the prebuild too — and its
+# links are not even reusable, since -c keeps debug information the run's do
+# not. GOTESTBUILD is shared with the run so the two compile the same action
+# IDs; a flag in one and not the other would prebuild a tree nothing reads.
+#
+# -e, BECAUSE THE PREBUILD IS A CACHE FILL AND NEVER A GATE. Without it one
+# package whose tests do not compile fails the whole prebuild, and the recipe
+# stops there: no package of the half runs, and skipgate names nothing, so the
+# one broken package hides the result of every other. With it the broken
+# package is recorded and left, everything else is compiled, and the run below
+# reports `FAIL pkg [build failed]` for that one package and runs the rest, as
+# it did before the prebuild existed. Measured on a probe with a type error in
+# one of two test packages: without -e the prebuild exited 1 and make stopped
+# before any test ran; with it the prebuild exited 0, and the run compiled only
+# the probe package (and failed it), plus the other's test main and link. The
+# flag changes how a load error is REPORTED and nothing about what is
+# compiled, so the action IDs are the run's either way.
+SOLO_PREBUILD = $(GO) list -e -export -test -deps $(1) -f '{{.ImportPath}}' $(SOLO_PKGS) > /dev/null
+
 test-solo: require-node ## the packages that need a runner to themselves (ci: end-to-end gates)
-	@test -n "$(SOLO_PKGS)" || { echo "no package imports internal/solo" >&2; exit 1; }
+	@test -n "$(SOLO_PKGS)" || { echo "the solo partition printed no packages; internal/solo/partition said why above (go list failing, or no package importing internal/solo)" >&2; exit 1; }
+	$(call SOLO_PREBUILD,$(GOTESTBUILD))
 	$(SKIPGATE) -- $(GOTEST) -json -p 1 $(SOLO_PKGS)
 
 # The suite without the detector. It is roughly twice as fast and it is NOT
@@ -463,12 +536,15 @@ test-solo: require-node ## the packages that need a runner to themselves (ci: en
 # sub-makes, each of which must succeed), which is exactly why it went
 # unnoticed here: the escape hatch is the one place a partial run reports as a
 # whole one.
+#
+# The same flags as the gates bar -race (GOTESTRUN), and the same prebuild for
+# the solo half, compiled without it.
 test-norace: require-node ## the full suite without -race (faster; not a gate)
 	@status=0; \
 	echo "==> parallel partition"; \
-	$(GO) test -count=1 -timeout $(TEST_TIMEOUT) $(PARALLEL_PKGS) || status=1; \
+	$(GO) test $(GOTESTRUN) $(PARALLEL_PKGS) || status=1; \
 	echo "==> solo partition"; \
-	$(GO) test -count=1 -timeout $(TEST_TIMEOUT) -p 1 $(SOLO_PKGS) || status=1; \
+	{ $(call SOLO_PREBUILD,) && $(GO) test $(GOTESTRUN) -p 1 $(SOLO_PKGS); } || status=1; \
 	exit $$status
 
 # Every target reports in one run rather than stopping at the first failure —

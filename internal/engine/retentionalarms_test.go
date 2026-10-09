@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // THE ALARM COUNT A NODE'S HEALTH CARRIES IS THE RETENTION REPORT'S ALARMS.
@@ -104,10 +105,7 @@ func TestTheAlarmEvaluationLeavesTheHardwareMeasurementToTheTrimTick(t *testing.
 	if err != nil {
 		t.Fatalf("recorder: %v", err)
 	}
-	db, err := store.OpenNode(t.Context(), t.TempDir()+"/index.db", store.Options{})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
+	db := storetest.OpenNode(t, t.TempDir()+"/index.db", store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 
 	r := &retention{

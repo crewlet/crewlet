@@ -1,10 +1,12 @@
 package config_test
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -41,14 +43,64 @@ const storeBacked = "WithStore"
 // will be trying to achieve when they write it.
 func TestTierAIsNeverResolvedFromTheSecretStore(t *testing.T) {
 	t.Parallel()
-	root := sourcetree.Root(t)
+	scan := tierALoads(t, sourcetree.Root(t))
+	for _, offence := range scan.offences {
+		t.Error(offence)
+	}
+	if scan.files == 0 {
+		t.Fatal("read no source files — this guard was certifying nothing")
+	}
+	// TWO-SIDED. A loader renamed out from under this list leaves a guard
+	// watching for a call nobody makes, which passes for ever.
+	if scan.seen == 0 {
+		t.Fatalf("found no call to any of %v anywhere in the tree, so this "+
+			"guard is watching for a shape nobody writes: the Tier A loaders "+
+			"were renamed and the list needs following", keysOf(tierALoaders))
+	}
+}
 
-	seen := 0
-	files := 0
+// tierAScan is what one walk for Tier A loads found.
+type tierAScan struct {
+	// files is every non-test Go file read, counted before any is skipped;
+	// seen is the loader calls among them.
+	files, seen int
+	offences    []string
+}
+
+// tierALoads walks root's internal/ and cmd/ for calls of a Tier A loader,
+// and reports each handed the store-backed resolver.
+//
+// ONLY A FILE THAT NAMES A LOADER IS PARSED: a call spells its callee, and an
+// identifier has no escapes, so a file whose bytes hold none of tierALoaders'
+// names makes no such call (sourcetree.Identifiers). Parsing all eleven
+// hundred files to find the handful that do was four seconds under the race
+// detector.
+func tierALoads(t *testing.T, root string) tierAScan {
+	t.Helper()
+	names := sourcetree.MustIdentifiers(keysOf(tierALoaders)...)
+	var scan tierAScan
 	for _, dir := range []string{"internal", "cmd"} {
-		walkSources(t, filepath.Join(root, dir), func(fset *token.FileSet, file *ast.File) {
-			files++
-			rel := shortName(root, fset.Position(file.Pos()).Filename)
+		err := sourcetree.Walk(filepath.Join(root, dir), func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() || !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") {
+				return nil
+			}
+			scan.files++
+			src, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			if !names.In(src) {
+				return nil
+			}
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, p, src, parser.SkipObjectResolution)
+			if err != nil {
+				return err
+			}
+			rel := shortName(root, p)
 			ast.Inspect(file, func(n ast.Node) bool {
 				call, ok := n.(*ast.CallExpr)
 				if !ok {
@@ -58,34 +110,57 @@ func TestTierAIsNeverResolvedFromTheSecretStore(t *testing.T) {
 				if !ok || !tierALoaders[name] {
 					return true
 				}
-				seen++
+				scan.seen++
 				for i, arg := range call.Args {
 					inner, ok := arg.(*ast.CallExpr)
 					if !ok {
 						continue
 					}
 					if got, ok := calleeName(inner); ok && got == storeBacked {
-						t.Errorf("%s:%d: %s is given config.%s as argument %d, "+
-							"so Tier A would resolve out of the sealed store it "+
-							"holds the keys to — pass config.EnvOnly(), or nil, "+
-							"which means the same thing. See adr/0011.",
-							rel, fset.Position(inner.Pos()).Line, name,
-							storeBacked, i+1)
+						scan.offences = append(scan.offences, fmt.Sprintf("%s:%d: %s is "+
+							"given config.%s as argument %d, so Tier A would resolve out "+
+							"of the sealed store it holds the keys to — pass "+
+							"config.EnvOnly(), or nil, which means the same thing. See "+
+							"adr/0011.", rel, fset.Position(inner.Pos()).Line, name,
+							storeBacked, i+1))
 					}
 				}
 				return true
 			})
+			return nil
 		})
+		if err != nil {
+			t.Fatalf("walk %s: %v", dir, err)
+		}
 	}
-	if files == 0 {
-		t.Fatal("parsed no source files — this guard was certifying nothing")
+	return scan
+}
+
+// THE WALK AND THE MATCHER, ON A TREE WHOSE VERDICT IS KNOWN: a loader handed
+// the store-backed resolver, one handed the environment, and a file naming no
+// loader that is not even Go — which the walk must never parse.
+func TestTheTierAWalkFindsALoaderGivenTheStore(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	for path, body := range map[string]string{
+		"cmd/crewlet/boot.go": "package main\n\nfunc boot() {\n" +
+			"\t_, _ = config.LoadBootstrap(path, config.WithStore(s))\n" +
+			"\t_, _ = config.ParseBootstrap(raw, config.EnvOnly())\n}\n",
+		"internal/x/x.go": "package x\n\nthis is not Go and names no loader\n",
+	} {
+		full := filepath.Join(root, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
-	// TWO-SIDED. A loader renamed out from under this list leaves a guard
-	// watching for a call nobody makes, which passes for ever.
-	if seen == 0 {
-		t.Fatalf("found no call to any of %v anywhere in the tree, so this "+
-			"guard is watching for a shape nobody writes: the Tier A loaders "+
-			"were renamed and the list needs following", keysOf(tierALoaders))
+	scan := tierALoads(t, root)
+	if scan.files != 2 || scan.seen != 2 || len(scan.offences) != 1 ||
+		!strings.HasPrefix(scan.offences[0], filepath.FromSlash("cmd/crewlet/boot.go")+":4:") {
+		t.Errorf("files %d, loader calls %d, offences %q; want 2, 2 and the one at boot.go:4",
+			scan.files, scan.seen, scan.offences)
 	}
 }
 
@@ -107,28 +182,6 @@ func calleeName(call *ast.CallExpr) (string, bool) {
 		return fn.Sel.Name, true
 	}
 	return "", false
-}
-
-func walkSources(t *testing.T, dir string, fn func(*token.FileSet, *ast.File)) {
-	t.Helper()
-	fset := token.NewFileSet()
-	err := sourcetree.Walk(dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() || !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") {
-			return nil
-		}
-		parsed, perr := parser.ParseFile(fset, p, nil, parser.SkipObjectResolution)
-		if perr != nil {
-			return perr
-		}
-		fn(fset, parsed)
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk %s: %v", dir, err)
-	}
 }
 
 func shortName(root, pos string) string {

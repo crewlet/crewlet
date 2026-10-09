@@ -173,6 +173,9 @@ func toolInfo(entry tools.Entry, delivers string) ToolInfo {
 // its drain rather than when the drain reaches the seat host.
 func (r engineRuntime) ShuttingDown() bool { return r.engine.ShuttingDown() }
 
+// Seats is the seats the engine's host holds, from memory.
+func (r engineRuntime) Seats() []string { return r.engine.Node().Host().Held() }
+
 // Snapshot is this node's live state.
 func (r engineRuntime) Snapshot(ctx context.Context) RuntimeState {
 	host := r.engine.Node().Host()
@@ -181,7 +184,8 @@ func (r engineRuntime) Snapshot(ctx context.Context) RuntimeState {
 		// THE SAME FLAG the drain gate refuses work on, so a probe can
 		// never report a node in rotation while its routes refuse.
 		ShuttingDown: r.ShuttingDown(),
-		Seats:        host.Held(),
+		// And the same seats the placement read adds to its listing.
+		Seats: r.Seats(),
 		// The seats this node could not prove it let go of, and for how
 		// long. The one fleet fault that is silent everywhere else: the
 		// lease is still ours, so no peer claims the seat, and the host

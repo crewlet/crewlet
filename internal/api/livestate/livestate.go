@@ -8,8 +8,8 @@
 // and the IN-FLIGHT LLM call. Beside the seats it keeps the coding runs in
 // flight, reconciled against their durable record (sandbox.go).
 // What a seat has SPENT is not held per seat: it is the per-agent row of the
-// spend rollup, folded from the same records by internal/tokens, so a seat
-// card and the Spend screen cannot disagree about one seat.
+// spend rollup, folded from the same records by internal/tokens, so the
+// projection holds no second total that could disagree with its own rollup.
 //
 // It solves two problems, and both are worth stating because they are why this
 // exists at all rather than the dashboard querying the store.
@@ -78,8 +78,9 @@ const (
 	// SpendRecordLimit is a memory and latency backstop on retained spend
 	// records. The real bound is the window above; this only binds for an
 	// org emitting more than this in a day. Truncation drops the OLDEST
-	// records, so an org past the cap sees a rollup covering slightly less
-	// than a day rather than a wrong total.
+	// records — any whose stamp does not parse, then the first to age out —
+	// so an org past the cap sees a rollup covering slightly less than a day
+	// rather than a wrong total.
 	//
 	// THE WHOLE COMPANY'S, per projection: every node's projection is fed
 	// by a fleet-wide broadcast, so this is one company's day on every node
@@ -97,8 +98,8 @@ const (
 	// its index entry, so the cap is under 20 MB; the fold the stream
 	// makes on its five-second tick measured 12 ms on one core at the cap
 	// (24 000 records over 2 700 turns), outside this projection's lock,
-	// and an arrival past the cap trims by reslicing rather than copying
-	// the window (see pruneSpend).
+	// and an arrival — past the cap or not — costs the records it moves
+	// rather than a pass over the window (see holdSpend).
 	//
 	// THE TRANSPORT IS NOT WHAT BOUNDS IT. A spend record crosses the
 	// history scatter as about 590 bytes of JSON, so the whole cap is about
@@ -284,13 +285,14 @@ type LiveState struct {
 	// or both, in either order.
 	//
 	// EXACT rather than bounded like finishedCalls below, because it tracks
-	// s.spend and shrinks with it — the same shape feedIDs has, and for the
-	// same reason. A bounded set could not do it: its cap was the number of
-	// records the seed reads, and the ids the live stream had already put
-	// there sat at the FRONT of its eviction order, so a full seed evicted
-	// them before its own loop reached the store's copies of those very
-	// phases and counted each of them twice. See pruneSpend, which is where
-	// this shrinks.
+	// s.spend and s.undatedSpend, shrinks with them and takes no id they
+	// do not hold — the same shape feedIDs has, and for the same reason. A
+	// bounded set could not do it: its cap was the number of records the
+	// seed reads, and the ids the live stream had already put there sat at
+	// the FRONT of its eviction order, so a full seed evicted them before
+	// its own loop reached the store's copies of those very phases and
+	// counted each of them twice. See dropSpend, which is where this
+	// shrinks.
 	spendIDs map[string]struct{}
 
 	// finishedCalls maps a phase invocation to the instant its completion
@@ -314,7 +316,16 @@ type LiveState struct {
 	// aggregation has exactly one implementation instead of the three it
 	// had — the endpoint's, a re-implementation in the browser, and
 	// whatever a reconnect left behind.
+	//
+	// These are the DATED records, oldest first by the instant each is aged
+	// from (ageingStamp) — the order they age out in, which makes an arrival
+	// in that order an append and an expiry a prefix (see holdSpend).
 	spend []spendEntry
+
+	// undatedSpend are the records whose stamp did not parse, in the order
+	// they arrived: they cannot be placed in the window's order or aged out
+	// of it, and the count cap drops them first.
+	undatedSpend []spendEntry
 
 	// budget is the company's meter as the last report stated it, and NIL
 	// UNTIL ONE HAS. Three facts, not two: before a report nobody has read
@@ -342,8 +353,9 @@ type LiveState struct {
 	// is ever handed out twice.
 	versions int
 
-	// now is injectable so a test can pin the clock the spend window and
-	// the sandbox reconcile read. Nil takes the wall clock.
+	// now is injectable so a test can pin the clock the spend window is
+	// aged and labelled by, the sandbox reconcile reads and a budget's
+	// windows are judged against. Nil takes the wall clock.
 	now func() time.Time
 }
 
@@ -377,7 +389,8 @@ func WithFeedLimit(n int) Option {
 	}
 }
 
-// WithClock pins the clock the spend window and the sandbox reconcile read.
+// WithClock pins the clock the spend window is aged and labelled by, the
+// sandbox reconcile reads and a budget's windows are judged against.
 func WithClock(now func() time.Time) Option {
 	return func(s *LiveState) { s.now = now }
 }

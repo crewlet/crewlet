@@ -6,8 +6,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
 )
 
@@ -36,7 +39,7 @@ func answering(t *testing.T, status int, raw []byte) *configClient {
 		_, _ = w.Write(raw)
 	}))
 	t.Cleanup(server.Close)
-	return &configClient{base: server.URL, http: httpx.Client(apiTimeout)}
+	return &configClient{base: server.URL, http: httpx.Client(apiTimeout), answerCap: maxConfigResponseBytes}
 }
 
 // answeringLarge is answering with a JSON body larger than the 64 KiB the
@@ -166,13 +169,69 @@ func TestARefusalQuotesWhatAnAnswerThatIsNotJSONSaid(t *testing.T) {
 // AN ANSWER PAST THE CAP IS REFUSED, NOT CLIPPED. A clipped one reached the
 // decoder and read as something this build cannot parse, on a write whose
 // status said it had landed.
+//
+// At a cap of a KiB rather than the client's own 64 MiB: the +1 that makes an
+// overrun visible and the sentence saying the write landed are the same at any
+// size, and building and reading 64 MiB under -race was most of six seconds.
 func TestAnAnswerPastTheCapIsRefusedNamingWhatLanded(t *testing.T) {
 	t.Parallel()
-	client := answering(t, http.StatusOK, []byte(strings.Repeat(" ", maxConfigResponseBytes+1)))
+	const small = 1 << 10
+	client := answering(t, http.StatusOK, []byte(strings.Repeat(" ", small+1)))
+	client.answerCap = small
 	_, _, err := client.Import(t.Context(), []byte("name: Acme\n"), "import")
 	if err == nil || !strings.Contains(err.Error(), "exceeded") ||
 		!strings.Contains(err.Error(), "says the revision was stored") {
 		t.Errorf("an over-long answer = %v, want it refused, saying the write landed", err)
+	}
+	// And the cap is inclusive: an answer of exactly it is read, so the
+	// refusal above is the +1 and not an off-by-one.
+	exact := answering(t, http.StatusOK, []byte(`{"revision_id":"r-1","epoch":3}`+strings.Repeat(" ", small-31)))
+	exact.answerCap = small
+	if id, _, err := exact.Import(t.Context(), []byte("name: Acme\n"), "import"); err != nil || id != "r-1" {
+		t.Errorf("an answer of exactly the cap = (%q, %v), want it read", id, err)
+	}
+}
+
+// A CLIENT READS AN ANSWER OF UP TO 64 MiB, the figure maxConfigResponseBytes
+// argues for: sixteen times the largest document the route accepts, because
+// the derived hierarchy an answer carries restates every seat with its
+// relations spelled out. The case above runs at a cap of its own, so this is
+// what ties the client a command builds to the real one.
+func TestAConfigClientReadsSixteenDocumentsOfAnswer(t *testing.T) {
+	t.Parallel()
+	if maxConfigResponseBytes != 16*configapi.MaxBodyBytes {
+		t.Errorf("maxConfigResponseBytes = %d, want 16 × configapi.MaxBodyBytes (%d)",
+			maxConfigResponseBytes, 16*configapi.MaxBodyBytes)
+	}
+	boot := &config.Bootstrap{}
+	boot.API.Auth.Disabled = true
+	client, err := newConfigClient(boot, "http://127.0.0.1:1")
+	if err != nil {
+		t.Fatalf("newConfigClient: %v", err)
+	}
+	if client.answerCap != maxConfigResponseBytes {
+		t.Errorf("a command's client reads %d bytes of answer, want maxConfigResponseBytes (%d)",
+			client.answerCap, maxConfigResponseBytes)
+	}
+}
+
+// A CLIENT WITH NO CAP IS REFUSED rather than sent: a cap of zero would refuse
+// every answer, so a write that landed would be reported as one that did not.
+func TestAConfigClientWithNoCapSendsNothing(t *testing.T) {
+	t.Parallel()
+	var sent atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		sent.Store(true)
+		_, _ = w.Write([]byte(`{"revision_id":"r-1","epoch":3}`))
+	}))
+	t.Cleanup(server.Close)
+	client := &configClient{base: server.URL, http: httpx.Client(apiTimeout)}
+	if _, _, err := client.Import(t.Context(), []byte("name: Acme\n"), "import"); err == nil ||
+		!strings.Contains(err.Error(), "no answer cap") {
+		t.Errorf("a client with no cap = %v, want it refused", err)
+	}
+	if sent.Load() {
+		t.Error("a client with no cap sent the write anyway")
 	}
 }
 

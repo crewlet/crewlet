@@ -8,7 +8,6 @@ import (
 	"path"
 	"slices"
 	"strings"
-	"sync"
 )
 
 // schemaFS carries the consolidated schema into the binary, so a deployment is
@@ -71,17 +70,6 @@ var Estates = []Estate{EstateNode, EstateReplicated}
 // estate nobody named is not quietly the node's.
 func (e Estate) Valid() bool { return e == EstateNode || e == EstateReplicated }
 
-// migrateMu serialises migration runs across every handle in the process.
-//
-// It replaces a Postgres advisory lock, and the replacement is smaller than
-// the original because the problem is: three OS processes could race the DDL
-// there (`crewlet run`, `crewlet run api`, `crewlet config import`), and the
-// lock had to be a database object for that reason. Here one process owns the
-// file — Turso does not support any other arrangement — so the only race left
-// is two handles on one path inside this binary, which a package-level mutex
-// closes completely. Migrations run once at Open, so the contention is nil.
-var migrateMu sync.Mutex
-
 // migrate applies every embedded schema file that has not been applied yet, in
 // filename order, and returns the versions it applied.
 //
@@ -91,9 +79,31 @@ var migrateMu sync.Mutex
 // lets a whole file go in as one statement batch: the Postgres migrator split
 // files on ';' and then had to validate its own naive splitter (dollar-quoted
 // bodies would be cut in half). Nothing here needs that.
+//
+// # One run per FILE at a time, and the lock is the file's
+//
+// This replaces a Postgres advisory lock, and the replacement is smaller than
+// the original because the problem is: three OS processes could race the DDL
+// there (`crewlet run`, `crewlet run api`, `crewlet config import`), and the
+// lock had to be a database object for that reason. Here one process owns the
+// file — Turso does not support any other arrangement — so the only race left
+// is two handles on ONE PATH inside this binary: one would read a ledger the
+// other has not finished writing, apply a file the other already has, and fail
+// at its CREATE TABLE. A per-file transaction does not close it, because every
+// one of them begins after the ledger was read.
+//
+// So the lock is the path's: it lives on this process's claim on the file
+// ([fileLock]), which every handle open on that path shares, exactly as the
+// write queue does. It used to be one mutex for the whole process, on the
+// premise that migrations run once at Open and so contend with nothing. That
+// holds for one boot and for nothing else: a process that opens many stores —
+// an in-process fleet, any test binary — ran every migration of every file one
+// after another, and a test package spent most of its wall clock queued behind
+// other files' DDL that could never have raced its own.
 func (d *DB) migrate(ctx context.Context) ([]string, error) {
-	migrateMu.Lock()
-	defer migrateMu.Unlock()
+	running := d.lock.migrations()
+	running.Lock()
+	defer running.Unlock()
 
 	if err := d.createMigrationLedger(ctx); err != nil {
 		return nil, err

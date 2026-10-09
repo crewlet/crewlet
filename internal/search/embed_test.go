@@ -1616,7 +1616,11 @@ func (h *embedHarness) seedTasks(bodies map[string]string) {
 	// map's order, which documents a tick embedded — and so which corpus an
 	// index was trained on — changed from run to run.
 	slices.Sort(ids)
-	for _, id := range ids {
+	// ONE TRANSACTION FOR THE LOT: nothing reads the rows between two of
+	// them, and a fixture of two thousand tasks committed one at a time
+	// was two thousand synchronous commits before the case began.
+	rows := make([]taskRow, len(ids))
+	for i, id := range ids {
 		// A DOCUMENT WITH NO TEXT AT ALL needs an empty title too: a task
 		// titled after its own id is embeddable text, and a fixture that
 		// meant to test the empty case would silently be testing the
@@ -1625,35 +1629,58 @@ func (h *embedHarness) seedTasks(bodies map[string]string) {
 		if bodies[id] == "" {
 			title = ""
 		}
-		h.seedTitled(id, title, bodies[id])
+		rows[i] = taskRow{id: id, title: title, body: bodies[id]}
 	}
+	h.seedRows(rows...)
 }
 
 // seedTitled writes one tracker row with the title a test dictates, at the
 // next version and update instant.
 func (h *embedHarness) seedTitled(id, title, body string) {
 	h.t.Helper()
-	h.version++
-	document, err := json.Marshal(map[string]string{"body": body})
-	if err != nil {
-		h.t.Fatalf("encode the body: %v", err)
-	}
+	h.seedRows(taskRow{id: id, title: title, body: body})
+}
+
+// taskRow is the text of one tracker row [embedHarness.seedRows] writes.
+type taskRow struct{ id, title, body string }
+
+// seedRows writes rows in one transaction, each at the next version and update
+// instant in the order given.
+//
+// THE VERSIONS ARE MINTED FROM WHAT WAS COMMITTED, and the counter moves only
+// once the transaction has: [store.DB.Tx] runs its body again after a
+// conflict, and a body that advanced the counter itself would seed a retry at
+// versions the rolled-back attempt had already spent.
+func (h *embedHarness) seedRows(rows ...taskRow) {
+	h.t.Helper()
+	base := h.version
 	if err := h.db.Replicated().Tx(h.t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(h.t.Context(), `
-			INSERT INTO tracker_tasks
-				(id, key, project_key, root_id, type, title, status,
-				 status_group, rank, version, created_at, updated_at,
-				 document)
-			VALUES (?, ?, 'ENG', ?, 'task', ?, 'todo', 'open', 'm0',
-			        ?, 0, ?, ?)
-			ON CONFLICT (id) DO UPDATE SET
-				title = excluded.title, document = excluded.document,
-				version = excluded.version, updated_at = excluded.updated_at`,
-			id, strings.ToUpper(id), id, title, h.version, h.version, document)
-		return err
+		for i, row := range rows {
+			version := base + int64(i) + 1
+			document, err := json.Marshal(map[string]string{"body": row.body})
+			if err != nil {
+				return fmt.Errorf("encode the body of %s: %w", row.id, err)
+			}
+			if _, err := tx.ExecContext(h.t.Context(), `
+				INSERT INTO tracker_tasks
+					(id, key, project_key, root_id, type, title, status,
+					 status_group, rank, version, created_at, updated_at,
+					 document)
+				VALUES (?, ?, 'ENG', ?, 'task', ?, 'todo', 'open', 'm0',
+				        ?, 0, ?, ?)
+				ON CONFLICT (id) DO UPDATE SET
+					title = excluded.title, document = excluded.document,
+					version = excluded.version, updated_at = excluded.updated_at`,
+				row.id, strings.ToUpper(row.id), row.id, row.title, version, version,
+				document); err != nil {
+				return fmt.Errorf("seed %s: %w", row.id, err)
+			}
+		}
+		return nil
 	}); err != nil {
 		h.t.Fatalf("seed: %v", err)
 	}
+	h.version = base + int64(len(rows))
 }
 
 // moveTask files a task in another project, at its next version, with its text
@@ -1722,41 +1749,60 @@ func (h *embedHarness) removeTask(id string) {
 }
 
 // drain consumes every record the broker holds beyond what this node applied,
-// one transaction per record, exactly as the framework's own loop does.
+// in log order and in ONE transaction, as the framework's own loop commits a
+// run it fetched.
+//
+// The loop cuts a run at [statelog.ApplyTxRowBudget] rows, and no drain here
+// comes near it: a tick publishes at most [search.EmbedSourcesPerTick] embeds,
+// or one rollout's batches, and the largest drain in this package measured
+// 2 048 rows. So a drain is one run and one commit — where one commit a
+// record, which is what this helper used to make, was a synchronous commit per
+// vector the duty wrote.
 func (h *embedHarness) drain() {
 	h.t.Helper()
 	last, err := h.log.End(h.t.Context())
 	if err != nil {
 		h.t.Fatalf("read the log's end: %v", err)
 	}
-	for seq := h.consumed + 1; seq <= last; seq++ {
-		_, payload, storedAt, ok, err := h.log.At(h.t.Context(), seq)
-		if err != nil {
-			h.t.Fatalf("read record %d: %v", seq, err)
+	if err := h.db.Replicated().Tx(h.t.Context(), func(tx *sql.Tx) error {
+		for seq := h.consumed + 1; seq <= last; seq++ {
+			if err := h.applyRecord(tx, seq); err != nil {
+				return err
+			}
 		}
-		if !ok {
-			continue
-		}
-		env, err := search.Domain{}.Envelope(payload)
-		if err != nil {
-			h.t.Fatalf("decode record %d: %v", seq, err)
-		}
-		record := statelog.Record{
-			Envelope: env,
-			Position: statelog.Position{
-				Stream: search.Domain{}.Stream().Name, Generation: env.Gen, Seq: seq,
-			},
-			Payload: payload, StoredAt: storedAt,
-		}
-		if err := h.db.Replicated().Tx(h.t.Context(), func(tx *sql.Tx) error {
-			_, err := h.applier.Apply(h.t.Context(), tx, record,
-				statelog.ApplyOptions{StoredAt: storedAt})
-			return err
-		}); err != nil {
-			h.t.Fatalf("apply record %d: %v", seq, err)
-		}
+		return nil
+	}); err != nil {
+		h.t.Fatalf("drain %d to %d: %v", h.consumed+1, last, err)
 	}
 	h.consumed = last
+}
+
+// applyRecord applies the record at seq in tx — nothing, for a sequence the
+// log no longer holds.
+func (h *embedHarness) applyRecord(tx *sql.Tx, seq uint64) error {
+	_, payload, storedAt, ok, err := h.log.At(h.t.Context(), seq)
+	if err != nil {
+		return fmt.Errorf("read record %d: %w", seq, err)
+	}
+	if !ok {
+		return nil
+	}
+	env, err := search.Domain{}.Envelope(payload)
+	if err != nil {
+		return fmt.Errorf("decode record %d: %w", seq, err)
+	}
+	record := statelog.Record{
+		Envelope: env,
+		Position: statelog.Position{
+			Stream: search.Domain{}.Stream().Name, Generation: env.Gen, Seq: seq,
+		},
+		Payload: payload, StoredAt: storedAt,
+	}
+	if _, err := h.applier.Apply(h.t.Context(), tx, record,
+		statelog.ApplyOptions{StoredAt: storedAt}); err != nil {
+		return fmt.Errorf("apply record %d: %w", seq, err)
+	}
+	return nil
 }
 
 func (h *embedHarness) vectors() int {

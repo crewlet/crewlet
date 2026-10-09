@@ -413,6 +413,10 @@ func TestANodeHoldingNothingIsStillReported(t *testing.T) {
 // wait the loop is in: the interval — a day — after a snapshot it took, and
 // the skip retry after one it declined. Both waits are exercised here with the
 // interval at a day, so a tick that comes early can only be the nudge.
+//
+// THE DECLINE IS `deferred`, a skip the retry waits out flat at thirty
+// seconds. A boot skip retries a second later ([snapshotWaits.after]), and a
+// nudged tick could not be told from that one.
 func TestANudgeWakesTheSnapshotLoopOutOfEitherWait(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -424,7 +428,7 @@ func TestANudgeWakesTheSnapshotLoopOutOfEitherWait(t *testing.T) {
 		}},
 		{"after a tick it declined", func() (statelog.Manifest, error) {
 			return statelog.Manifest{}, &statelog.ErrSkipped{
-				Reason: statelog.SkipLagging, Detail: "behind"}
+				Reason: statelog.SkipDeferred, Detail: "a newer peer's record"}
 		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -435,7 +439,7 @@ func TestANudgeWakesTheSnapshotLoopOutOfEitherWait(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				(&Engine{}).snapshotLoop(s, taker, t.TempDir(), 24*time.Hour)
+				(&Engine{}).snapshotLoop(s, taker, t.TempDir(), snapshotWaitsFor(24*time.Hour))
 			}()
 			t.Cleanup(func() { stop(); <-done })
 
@@ -451,6 +455,240 @@ func TestANudgeWakesTheSnapshotLoopOutOfEitherWait(t *testing.T) {
 				t.Fatal("the nudged tick published nothing to the register row")
 			}
 		})
+	}
+}
+
+// A SKIP THAT CLEARS AS A BOOT SETTLES IS RETRIED SOON, AND LESS OFTEN EACH
+// TIME.
+//
+// `unhydrated`, `sole_node` and `lagging` each end seconds into a healthy boot,
+// and a flat thirty-second retry put a restarted node's first artefact — and
+// the donor the fleet counts with it — half a minute after it could have been
+// taken. Doubling, so a node that stays in one for its whole life (a single
+// node is `sole_node` for ever) settles on the ceiling rather than asking
+// every second. Each gap is held to at least the wait it was scheduled for —
+// a timer never fires early, so the lower bound is the one that cannot flake.
+func TestABootSkipIsRetriedOnADoublingWait(t *testing.T) {
+	t.Parallel()
+	waits := snapshotWaits{Interval: 24 * time.Hour,
+		FirstRetry: 50 * time.Millisecond, Retry: 1600 * time.Millisecond}
+	ctx, stop := context.WithCancel(t.Context())
+	s := &stateLog{run: ctx, snapshotNudge: make(chan struct{}, 1)}
+	// EACH ATTEMPT STAMPED WHEN IT STARTS, inside the loop's own call: the
+	// gap between two starts is the wait between them plus the work of the
+	// first, never less, however late this goroutine is scheduled.
+	started := make(chan time.Time, 16)
+	taker := &countingTaker{took: make(chan struct{}, 16), take: func() (statelog.Manifest, error) {
+		started <- time.Now()
+		return statelog.Manifest{}, &statelog.ErrSkipped{Reason: statelog.SkipSoleNode}
+	}}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		(&Engine{}).snapshotLoop(s, taker, t.TempDir(), waits)
+	}()
+	t.Cleanup(func() { stop(); <-done })
+
+	taker.await(t, "the boot's tick")
+	last := <-started
+	for i, want := range []time.Duration{50, 100, 200, 400, 800} {
+		taker.await(t, fmt.Sprintf("retry %d", i+1))
+		at := <-started
+		gap := at.Sub(last)
+		last = at
+		if want *= time.Millisecond; gap < want {
+			t.Fatalf("retry %d came %v after the attempt before it, want at "+
+				"least %v: the retry does not wait out its doubling", i+1, gap, want)
+		}
+		// AND SOON AT FIRST: a retry that waited the ceiling from the start
+		// is the flat half-minute this replaced.
+		if i == 0 && gap >= waits.Retry/2 {
+			t.Fatalf("the first retry came %v after the boot's tick, want well "+
+				"inside the %v ceiling: a boot skip is retried soon", gap, waits.Retry)
+		}
+	}
+}
+
+// EVERY ANSWER A TICK CAN GIVE WAITS AS LONG AS ITS NEXT ANSWER IS AWAY.
+//
+// The schedule is the whole of what makes a restarted node a donor promptly
+// and an idle one quiet, so it is pinned answer by answer, over the
+// production values.
+func TestEachSnapshotAnswerWaitsUntilItCanChange(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	day := snapshotWaitsFor(24 * time.Hour)
+	skip := func(r statelog.SkipReason) error { return &statelog.ErrSkipped{Reason: r} }
+	holding := func(age time.Duration) snapshotHeld {
+		return snapshotHeld{Have: true, Manifest: statelog.Manifest{TakenAt: now.Add(-age)}}
+	}
+	for _, c := range []struct {
+		name       string
+		waits      snapshotWaits
+		err        error
+		held       snapshotHeld
+		streak     int
+		want       time.Duration
+		wantStreak int
+	}{
+		{"a taken snapshot waits the interval", day, nil, holding(0), 3,
+			24 * time.Hour, 0},
+		{"a boot skip's first retry is a second", day, skip(statelog.SkipUnhydrated),
+			snapshotHeld{}, 0, time.Second, 1},
+		{"each boot skip in a row doubles it", day, skip(statelog.SkipSoleNode),
+			snapshotHeld{}, 3, 8 * time.Second, 4},
+		{"a lagging node backs off as a booting one does", day, skip(statelog.SkipLagging),
+			snapshotHeld{}, 1, 2 * time.Second, 2},
+		{"the doubling settles on the ceiling", day, skip(statelog.SkipSoleNode),
+			snapshotHeld{}, 40, snapshotSkipRetry, 41},
+		{"a skip that waits on an operator retries flat", day,
+			skip(statelog.SkipInsufficientSpace), snapshotHeld{}, 4, snapshotSkipRetry, 0},
+		{"a node holding a record it cannot read retries flat", day,
+			skip(statelog.SkipDeferred), snapshotHeld{}, 0, snapshotSkipRetry, 0},
+		{"a take that failed retries flat", day, errors.New("read-only file system"),
+			snapshotHeld{}, 2, snapshotSkipRetry, 0},
+		{"a recent artefact waits until it is stale", day, skip(statelog.SkipRecent),
+			holding(20 * time.Hour), 0, 4 * time.Hour, 0},
+		{"one just past stale is asked again soon", day, skip(statelog.SkipRecent),
+			holding(24*time.Hour + time.Minute), 0, time.Second, 0},
+		{"one stamped in the future waits no longer than the interval", day,
+			skip(statelog.SkipRecent), holding(-time.Hour), 0, 24 * time.Hour, 0},
+		{"no retry outlasts a short interval",
+			snapshotWaitsFor(10 * time.Second), skip(statelog.SkipDeferred),
+			snapshotHeld{}, 0, 10 * time.Second, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			got, streak := c.waits.after(c.err, c.held, c.streak, now)
+			if got != c.want || streak != c.wantStreak {
+				t.Errorf("after(%v) = (%v, streak %d), want (%v, streak %d)",
+					c.err, got, streak, c.want, c.wantStreak)
+			}
+		})
+	}
+}
+
+// A TAKEN SNAPSHOT IS PUBLISHED AT ONCE, NOT A HEARTBEAT LATER.
+//
+// The register row naming the artefact is what makes this node a donor the
+// trim and a joiner count, and the heartbeat's next beat is up to ten seconds
+// away; so a take wakes it, and a skip — which changes no artefact — does not.
+func TestATakenSnapshotWakesTheHeartbeat(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name  string
+		take  func() (statelog.Manifest, error)
+		wakes bool
+	}{
+		{"a take", func() (statelog.Manifest, error) {
+			return statelog.Manifest{TakenAt: time.Now().UTC(), NodeID: "node-a"}, nil
+		}, true},
+		{"a skip", func() (statelog.Manifest, error) {
+			return statelog.Manifest{}, &statelog.ErrSkipped{Reason: statelog.SkipDeferred}
+		}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			ctx, stop := context.WithCancel(t.Context())
+			s := &stateLog{run: ctx, snapshotNudge: make(chan struct{}, 1),
+				heartbeatNudge: make(chan struct{}, 1)}
+			taker := &countingTaker{took: make(chan struct{}, 8), take: c.take}
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				(&Engine{}).snapshotLoop(s, taker, t.TempDir(), snapshotWaitsFor(24*time.Hour))
+			}()
+			t.Cleanup(func() { stop(); <-done })
+			taker.await(t, "the boot's tick")
+			select {
+			case <-s.heartbeatNudge:
+				if !c.wakes {
+					t.Fatal("a tick that took nothing woke the heartbeat")
+				}
+			case <-time.After(2 * time.Second):
+				if c.wakes {
+					t.Fatal("a taken snapshot left its register row to the next beat")
+				}
+			}
+		})
+	}
+}
+
+// THE HEARTBEAT PUBLISHES AT ONCE, AGAIN ON EVERY TICK, AND ON A NUDGE.
+//
+// Every tick is what notices a RUNNING node fall below the floor or behind a
+// peer's reanchor ([stateLog.publishPositions]), so the loop that re-invokes
+// the publish is pinned here under an interval a test can wait out — the
+// cases that drive the publish directly certify what one publish does, and
+// none of them would notice a heartbeat that published once and stopped.
+func TestTheHeartbeatPublishesOnEveryTickAndNudge(t *testing.T) {
+	t.Parallel()
+	t.Run("on every tick", func(t *testing.T) {
+		t.Parallel()
+		published := beating(t, &stateLog{}, 50*time.Millisecond)
+		for i := range 4 {
+			awaitPublish(t, published, fmt.Sprintf("publish %d", i+1))
+		}
+	})
+	t.Run("on a nudge", func(t *testing.T) {
+		t.Parallel()
+		s := &stateLog{heartbeatNudge: make(chan struct{}, 1)}
+		published := beating(t, s, time.Hour)
+		awaitPublish(t, published, "the heartbeat's first publish")
+		s.nudgeHeartbeat()
+		awaitPublish(t, published, "the publish a nudge asked for, with the tick an hour away")
+	})
+}
+
+// beating runs s's heartbeat loop on interval for the rest of the test, over a
+// publish that reports each call.
+func beating(t *testing.T, s *stateLog, interval time.Duration) <-chan struct{} {
+	t.Helper()
+	ctx, stop := context.WithCancel(t.Context())
+	published := make(chan struct{}, 64)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.beat(ctx, interval, func(context.Context) { published <- struct{}{} })
+	}()
+	t.Cleanup(func() { stop(); <-done })
+	return published
+}
+
+// awaitPublish waits for the heartbeat's next publish.
+func awaitPublish(t *testing.T, published <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-published:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("waited 10s for %s: the heartbeat stopped publishing", what)
+	}
+}
+
+// AN APPLIER'S FIRST DRAIN WAKES THE SNAPSHOT LOOP.
+//
+// `unhydrated` is the commonest boot skip and an applier's first drain is the
+// moment it ends, so the engine hands every applier it builds the loop's nudge
+// rather than leaving the loop to find out on its retry. Built here through
+// the engine's own [stateLog.start], over an empty log: the loop's first fetch
+// comes back with nothing, which is the drain.
+func TestAnAppliersFirstDrainWakesTheSnapshotLoop(t *testing.T) {
+	t.Parallel()
+	s, q, appendTo := aProvisionedTrackerLog(t)
+	s.snapshotNudge = make(chan struct{}, 1)
+	running, err := s.start(t.Context(), t.Context(), q, tracker.Domain{}, appendTo, nil)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	errs := make(chan error, 1)
+	go func() { errs <- running.runner.Run(ctx) }()
+	t.Cleanup(func() { cancel(); <-errs })
+	select {
+	case <-s.snapshotNudge:
+	case <-time.After(15 * time.Second):
+		t.Fatalf("the applier drained (%v) and the snapshot loop was not woken",
+			running.runner.Drained())
 	}
 }
 
@@ -482,8 +720,10 @@ func (c *countingTaker) await(t *testing.T, what string) {
 // or, for the restore, possibly the donor's file under an artefact of its own —
 // and until the loop takes another, the peers the event left behind have no
 // donor. The loop is first left waiting out its interval behind a snapshot it
-// took, so the only thing that can run it again inside the test is the nudge
-// the event gives it.
+// took, so the only thing that can run it again inside the test is a nudge
+// the event gives it: its own, or the first drain of an applier it relaunched
+// ([stateLog.snapshotNudge]) — two paths to one wake, and this fails only when
+// the event takes neither.
 func TestEveryEventThatStrandsTheArtefactWakesTheSnapshotLoop(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -521,7 +761,7 @@ func TestEveryEventThatStrandsTheArtefactWakesTheSnapshotLoop(t *testing.T) {
 				running, at, last := pushBelowTheFloor(t, e, q)
 				rows := filepath.Join(t.TempDir(), "crewlet-replicated.db")
 				copyAdvancedTo(t, back, running, at, last, rows)
-				standUpDonor(t, q, rows, statelog.Position{
+				standUpDonor(t, e, q, rows, statelog.Position{
 					Stream: at.Stream, Generation: at.Generation, Seq: last,
 				}, running.runner.KeyedTo())
 				if err := e.rejoin(e.native.Load().log.run, e.native.Load().log); err != nil {
@@ -558,18 +798,29 @@ func TestEveryEventThatStrandsTheArtefactWakesTheSnapshotLoop(t *testing.T) {
 }
 
 // parkSnapshotLoop leaves a running node's snapshot loop waiting out its
-// interval — a day — behind a snapshot it has just taken, and returns what that
-// tick published. From then on nothing but a nudge runs the loop again.
+// interval — a day — behind a snapshot it has just taken, and returns what the
+// loop last published. From then on nothing but a nudge runs the loop again.
 //
-// A PEER IS COUNTED so the tick can take one — a row naming the tracker's
-// log, which is what the trim counts it on: a node alone declines as
-// `sole_node` and retries every thirty seconds, which would put a tick of its
-// own inside any window a test watched. And the loop is NOT nudged here: a
-// nudge that arrived while a tick was taking would run it again at once, and
-// that tick — declining as `recent` — goes back to the thirty-second retry.
+// A PEER IS COUNTED so a tick can take one — a row naming the tracker's log,
+// which is what the trim counts it on: a node alone declines as `sole_node`
+// and keeps retrying, which would put a tick of its own inside any window a
+// test watched.
+//
+// AFTER THE BOOT'S OWN TICK, and then nudged, so the take comes at once
+// rather than on the boot skip's retry. Before that tick has concluded a nudge
+// could land while it was still declining, which wastes it. Once one has, the
+// take comes from the nudge or from the retry, whichever is first; a nudge
+// that arrived while that take was running runs one more tick at once, which
+// declines as `recent` and waits until the artefact is stale — a day — like
+// the take does ([snapshotWaits.after]). So whichever tick was last, the loop
+// is parked behind the interval, and what this returns is the value it parked
+// behind: it waits for the nudge to have been taken and the value to hold.
 func parkSnapshotLoop(t *testing.T, e *Engine) *snapshotHeld {
 	t.Helper()
 	s := e.native.Load().log
+	waitUntil(t, 20*time.Second, "the boot's snapshot tick", func() bool {
+		return s.snapshot.Load() != nil
+	})
 	counted := time.Now().UTC()
 	// AT THIS NODE'S OWN GENERATION: a peer's row a generation ahead reads as
 	// a peer that re-anchored the log, which strands this node's rows.
@@ -581,10 +832,22 @@ func parkSnapshotLoop(t *testing.T, e *Engine) *snapshotHeld {
 	}); err != nil {
 		t.Fatalf("publish a counted peer: %v", err)
 	}
-	var parked *snapshotHeld
-	waitUntil(t, 75*time.Second, "the snapshot loop to take one and park", func() bool {
+	s.nudgeSnapshot()
+	waitUntil(t, 20*time.Second, "the snapshot loop to take one", func() bool {
 		held := s.snapshot.Load()
-		if held == nil || !held.Have || held.Skip != "" || held.Manifest.TakenAt.Before(counted) {
+		return held != nil && held.Have && held.Skip == "" &&
+			!held.Manifest.TakenAt.Before(counted)
+	})
+	// SETTLED: no nudge left to take, and the value unchanged across a pause
+	// longer than a tick that declines as `recent` — a few reads — takes.
+	var parked *snapshotHeld
+	waitUntil(t, 20*time.Second, "the snapshot loop to park", func() bool {
+		held := s.snapshot.Load()
+		if len(s.snapshotNudge) > 0 {
+			return false
+		}
+		time.Sleep(250 * time.Millisecond)
+		if len(s.snapshotNudge) > 0 || s.snapshot.Load() != held {
 			return false
 		}
 		parked = held

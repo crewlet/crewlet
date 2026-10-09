@@ -109,6 +109,7 @@ func openStoreVia(t *testing.T, client jetstream.JetStream, ttl time.Duration) *
 // So harness.lapse falls back to a real sleep of ShortTTL + margin — 150 ms
 // per lapsing case, overlapped because the suite runs its cases in parallel.
 func TestContract(t *testing.T) {
+	t.Parallel()
 	nc := embeddedNATS(t)
 	coordtest.Run(t, func(t *testing.T) coord.Backend {
 		return openStore(t, nc, coordtest.LongTTL)
@@ -120,6 +121,7 @@ func TestContract(t *testing.T) {
 // one copy there is. shared_cluster_test.go is the one that means something:
 // the same cases with the handles on three members of a cluster.
 func TestSharedContract(t *testing.T) {
+	t.Parallel()
 	nc := embeddedNATS(t)
 	coordtest.RunShared(t, func(t *testing.T) []coord.Backend {
 		prefix := fmt.Sprintf("t%d", bucketSeq.Add(1))
@@ -452,6 +454,7 @@ func TestUngatedClaimsDoNotScanTheFleet(t *testing.T) {
 // caller wins, a Put whose revision is the epoch — and those do not vary with
 // the retention.
 func TestFleetContract(t *testing.T) {
+	t.Parallel()
 	nc := embeddedNATS(t)
 	coordtest.RunFleet(t, func(t *testing.T) coord.Fleet {
 		return openFleetForTest(t, nc, fmt.Sprintf("f%d", bucketSeq.Add(1)))
@@ -468,6 +471,7 @@ func TestFleetContract(t *testing.T) {
 // comes back as an auth failure blamed on the vendor. "I could not read it"
 // has to be louder than "there is none".
 func TestAnUndecodableSecretIsRaisedNotSkipped(t *testing.T) {
+	t.Parallel()
 	nc := embeddedNATS(t)
 	prefix := fmt.Sprintf("f%d", bucketSeq.Add(1))
 	store, err := OpenFleet(context.Background(), jsOf(nc), FleetConfig{
@@ -595,6 +599,7 @@ func subjectMatches(filter, subject string) bool {
 // always correct: a filter that did not narrow would return the same leases
 // and simply move everything else over the wire to get there.
 func TestAClassReadMovesOnlyItsOwnClass(t *testing.T) {
+	t.Parallel()
 	nc := embeddedNATS(t)
 	s := openStore(t, nc, time.Minute)
 	ctx := context.Background()
@@ -785,6 +790,7 @@ func TestABucketReplicatedBelowThisNodesConfigIsRefused(t *testing.T) {
 // then, and the newer refusal is still true, so a clear that ignored which
 // stamp it saw would hide a scope that is refusing right now.
 func TestAnAdmittedChargeLeavesANewerRefusalStanding(t *testing.T) {
+	t.Parallel()
 	store := openFleet(t, embeddedNATS(t))
 	ctx := t.Context()
 	w := testWindows()
@@ -860,6 +866,7 @@ func spentBy(t *testing.T, store *FleetStore, scope string) [3]int {
 // it could not read. A dead context is the one unreachable store a test can
 // make on demand; the answer it gets must carry the error and no refusal.
 func TestAnUnreachableCounterIsAnErrorNeverARefusal(t *testing.T) {
+	t.Parallel()
 	store := openFleet(t, embeddedNATS(t))
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -889,6 +896,7 @@ func TestAnUnreachableCounterIsAnErrorNeverARefusal(t *testing.T) {
 // round then sat on neither counter and the next round was admitted against
 // room it had used.
 func TestAChargeWhoseSeatWriteFailsKeepsTheRoundOnTheCompany(t *testing.T) {
+	t.Parallel()
 	store := openFleet(t, embeddedNATS(t))
 	seat := coord.AgentScope("x")
 	store.budgets = failWriting{KeyValue: store.budgets, key: encodeKey(seat)}
@@ -927,6 +935,7 @@ func TestAChargeWhoseSeatWriteFailsKeepsTheRoundOnTheCompany(t *testing.T) {
 // write lands finishes on a context of its own, and answers what it decided:
 // a refusal by either scope, an admission, or the post-charge's record.
 func TestTheSeatsHalfOutlivesACallerWhoHangsUp(t *testing.T) {
+	t.Parallel()
 	seat := coord.AgentScope("x")
 	charge := func(orgCap, seatCap int) func(context.Context, *FleetStore) (coord.Spend, error) {
 		return func(ctx context.Context, store *FleetStore) (coord.Spend, error) {
@@ -958,6 +967,7 @@ func TestTheSeatsHalfOutlivesACallerWhoHangsUp(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			store := openFleet(t, embeddedNATS(t))
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
@@ -995,6 +1005,7 @@ func TestTheSeatsHalfOutlivesACallerWhoHangsUp(t *testing.T) {
 // the company lost the spend for good. Kept, the partial is named, and the one
 // caller that does offer the spend again finishes the seat's half alone.
 func TestAPostChargeWhoseSeatWriteFailsKeepsTheCompanysHalf(t *testing.T) {
+	t.Parallel()
 	store := openFleet(t, embeddedNATS(t))
 	seat := coord.AgentScope("x")
 	healthy := store.budgets
@@ -1034,6 +1045,7 @@ func TestAPostChargeWhoseSeatWriteFailsKeepsTheCompanysHalf(t *testing.T) {
 // and the scope went on telling every dashboard it was refusing charges while
 // it had just admitted one, until the next admitted charge on a live context.
 func TestACancelledChargeStillClearsTheRefusalItAdmittedPast(t *testing.T) {
+	t.Parallel()
 	store := openFleet(t, embeddedNATS(t))
 	seat := coord.AgentScope("x")
 	w := testWindows()
@@ -1084,9 +1096,16 @@ func TestACancelledChargeStillClearsTheRefusalItAdmittedPast(t *testing.T) {
 // life of the deployment — here a bucket built with a short retention, so the
 // case can watch it happen.
 func TestAnUnchargedCounterAgesOut(t *testing.T) {
+	t.Parallel()
 	nc := embeddedNATS(t)
 	store := openFleetWithTTL(t, nc, 500*time.Millisecond)
-	ctx := t.Context()
+	// BOUNDED, so a listing that never ends fails this case by name rather
+	// than the package's timeout. This is the case that found one: a listing
+	// whose counters aged out between its consumer's creation and its first
+	// delivery waited for an end marker no delivery would bring, for nine
+	// minutes and forty-two seconds (see [passOver]).
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
 	if _, err := store.PostCharge(ctx, coord.AgentScope("x"), 10, testWindows()); err != nil {
 		t.Fatalf("PostCharge: %v", err)
 	}

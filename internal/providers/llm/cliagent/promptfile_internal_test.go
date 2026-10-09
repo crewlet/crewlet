@@ -28,6 +28,7 @@ import (
 // CLI never saw, and a file written after the spawn or unreadable to the
 // child looks identical from outside.
 func TestFileModeKeepsTheTranscriptOffArgvAndPrivate(t *testing.T) {
+	t.Parallel()
 	// The leading "--" is for the FAKE, not for any real profile: the fake
 	// CLI is this test binary, and Go's flag package would reject
 	// `--prompt-file` as an unknown test flag. "--" ends its flag parsing
@@ -139,6 +140,7 @@ func TestFileModeWithoutAFilePlaceholderIsRefused(t *testing.T) {
 // alone: the CLI stops for want of a credential, which is exactly far enough
 // to prove the flags were understood.
 func TestTheMuseProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
+	t.Parallel()
 	binary, err := exec.LookPath("muse")
 	if err != nil {
 		t.Skip("no muse on PATH")
@@ -385,6 +387,7 @@ func TestTheMuseProfileIsIsolatedByXDGAlone(t *testing.T) {
 // rather than those two is that adding a field and forgetting to clone it is
 // the actual failure mode.
 func TestBuiltinHandsBackAnIndependentCopy(t *testing.T) {
+	t.Parallel()
 	for _, name := range BuiltinNames() {
 		if name == "custom" {
 			continue
@@ -458,6 +461,7 @@ func TestAClassifiedFailureNamesTheLineItMatched(t *testing.T) {
 // regression there would push a tool's output to the caller as though the
 // model had said it while the unary completion still passed.
 func TestStreamingHonoursTheEventFilter(t *testing.T) {
+	t.Parallel()
 	stream := strings.Join([]string{
 		`{"schema_version":1,"sequence":1,"payload_type":"tool.result","payload":{"kind":"tool_result","call_id":"c1","text":"wrote 5 bytes"}}`,
 		`{"schema_version":1,"sequence":2,"payload_type":"run.output.delta","payload":{"kind":"run_output_delta","text":"Created"}}`,

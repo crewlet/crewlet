@@ -20,23 +20,22 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tokens"
 )
 
+// openStore is a data node's two estates, opened from the binary's migrated
+// image: what is under test here is the answers, and a fresh file per case
+// replayed every migration of both estates behind one process-wide lock.
 func openStore(t *testing.T) *store.DB {
 	t.Helper()
-	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "q.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.OpenNode: %v", err)
-	}
+	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "q.db"), store.Options{}, 1)
 	t.Cleanup(func() { _ = db.Close() })
-	if _, err := db.OpenReplicated(t.Context(), 1); err != nil {
-		t.Fatalf("open the replicated estate beside the node: %v", err)
-	}
 	return db
 }
 
-// seedEvents writes n rows, oldest first.
+// seedEvents writes n rows, oldest first, in one transaction (see
+// [storetest.WriteEvents]).
 func seedEvents(t *testing.T, log *store.EventLog, n int, mutate func(int, *store.EventRecord)) {
 	t.Helper()
 	// Relative to NOW, not a literal date: List filters on the store's
@@ -46,6 +45,7 @@ func seedEvents(t *testing.T, log *store.EventLog, n int, mutate func(int, *stor
 	// what is under test. Trace has no such filter, which is exactly how
 	// this hid: the trace cases passed while the listings did not.
 	base := time.Now().UTC().Add(-time.Hour)
+	recs := make([]store.EventRecord, 0, n)
 	for i := range n {
 		rec := store.EventRecord{
 			ID:       "e" + string(rune('a'+i%26)) + string(rune('0'+i/26)),
@@ -61,10 +61,9 @@ func seedEvents(t *testing.T, log *store.EventLog, n int, mutate func(int, *stor
 		if mutate != nil {
 			mutate(i, &rec)
 		}
-		if err := log.Append(t.Context(), rec); err != nil {
-			t.Fatalf("append %d: %v", i, err)
-		}
+		recs = append(recs, rec)
 	}
+	storetest.WriteEvents(t, log, recs)
 }
 
 // fleetOf is one store read as the fleet it is: a node alone, with nobody
@@ -286,7 +285,8 @@ func TestAgentNeedsARole(t *testing.T) {
 
 func TestTokensAnswersTheLiveWindow(t *testing.T) {
 	t.Parallel()
-	state := livestate.New()
+	projected := time.Date(2026, 6, 14, 12, 30, 0, 0, time.UTC)
+	state := livestate.New(livestate.WithClock(func() time.Time { return projected }))
 	state.Apply(&livestate.Envelope{
 		ID: "p1", Type: "agent_phase_completed", Timestamp: "2026-06-14T12:00:00Z",
 		Category: "agent", Payload: map[string]any{
@@ -313,9 +313,14 @@ func TestTokensAnswersTheLiveWindow(t *testing.T) {
 		t.Errorf("window = %s .. %s (%s), want the live window %s",
 			got.Since, got.Until, width, livestate.LiveSpendWindow)
 	}
-	// The high-water mark the client folds live events onto. Without it an
-	// event that is both in this baseline and redelivered on the stream is
-	// counted twice.
+	// And it is the window the projection AGED, ending at the projection's
+	// clock — never a second read of the registry's, which here is the wall
+	// clock, months past the pinned date.
+	if want := projected.Format(time.RFC3339); got.Until != want {
+		t.Errorf("until = %s, want the projection's clock %s", got.Until, want)
+	}
+	// The rollup's own freshness: the newest record it counted. A total with
+	// no instant beside it cannot be told from a stale one.
 	if got.AggregatedThrough != "2026-06-14T12:00:00Z" {
 		t.Errorf("aggregated_through = %q", got.AggregatedThrough)
 	}
@@ -559,15 +564,15 @@ func TestATraceOfExactlyTheCapIsNotReportedCut(t *testing.T) {
 	db := openStore(t)
 	log := db.Events()
 	base := time.Now().UTC().Add(-time.Hour)
+	recs := make([]store.EventRecord, 0, store.MaxTraceEvents)
 	for i := range store.MaxTraceEvents {
-		if err := log.Append(t.Context(), store.EventRecord{
+		recs = append(recs, store.EventRecord{
 			ID: fmt.Sprintf("t-%04d", i), Type: "task_assigned",
 			Time:     base.Add(time.Duration(i) * time.Second),
 			Category: "task", Actor: "PM", TraceID: "tr-exact",
-		}); err != nil {
-			t.Fatal(err)
-		}
+		})
 	}
+	storetest.WriteEvents(t, log, recs)
 	r := registryOver(t, queries.Sources{Events: fleetOf(log)})
 
 	got := ask(t, r, "trace", map[string]any{"trace_id": "tr-exact"})

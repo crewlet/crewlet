@@ -19,6 +19,7 @@ import (
 // waiting for a delivery to notice: taken when a run starts holding, lifted
 // the moment it parks on a question (so the answer can arrive).
 func TestASeatsInboxIsHeldExactlyWhileARunHoldsIt(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	holds := rig.withHold()
 	run := rig.launch("t1")
@@ -56,6 +57,7 @@ func TestASeatsInboxIsHeldExactlyWhileARunHoldsIt(t *testing.T) {
 // already dropped the hold with the attachment, and a Release from here would
 // lift the one this node takes again the moment it re-acquires the seat.
 func TestARecoveredRunHoldsTheSeatAndAReleaseForgetsTheHold(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	holds := rig.withHold()
 	rig.launch("t1")
@@ -83,6 +85,7 @@ func TestARecoveredRunHoldsTheSeatAndAReleaseForgetsTheHold(t *testing.T) {
 // A DELIVERY THAT RACED THE HOLD asks for it again, which is how a hold the
 // queue refused is retried: at the spacing the delivery's own deferral sets.
 func TestHoldSeatRetriesAHoldTheQueueRefused(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	refusing := &flakyHold{fail: true}
 	rig.coordinator.hold = refusing
@@ -128,6 +131,7 @@ func (h *flakyHold) Release(context.Context, string) error {
 // and mail fetched the moment the turn returned, reached a seat the screening
 // called free and ran a turn beside the job.
 func TestALaunchHoldsItsSeatFromTheRowItWrites(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	holds := rig.withHold()
 	witness := &seatWitness{FakeProvider: rig.provider, coordinator: rig.coordinator, holds: holds}
@@ -192,6 +196,7 @@ func (w *seatWitness) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 // row and holds the seat, and the recount lands. Written back as read, it
 // would free the seat the launch just held — beside a job that is starting.
 func TestARecountDoesNotFreeASeatALaunchHeldUnderIt(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	holds := rig.withHold()
 	racing := &listRace{PendingStore: rig.pending}
@@ -234,6 +239,7 @@ func (s *listRace) ListActiveForSeat(ctx context.Context, handle string) ([]Pend
 // it holds the seat from: at the box, at the job, and at the turn's own
 // suspension into the row, which [Coordinator.FailRun] settles.
 func TestAFailedLaunchGivesItsSeatBack(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		derail func(*coordRig)

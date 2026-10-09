@@ -15,6 +15,7 @@ import (
 // rows through one column and a filter compares it exactly, so every way of
 // typing one grouping has to arrive as one slug.
 func TestTagSlugIsOneSpelling(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ raw, want string }{
 		{"regression", "regression"},
 		{"Regression", "regression"},
@@ -38,6 +39,7 @@ func TestTagSlugIsOneSpelling(t *testing.T) {
 // cut slug is a DIFFERENT tag that looks like the one somebody asked for, so
 // the normaliser hands the long one on and the write refuses it by name.
 func TestTagSlugNeverTruncates(t *testing.T) {
+	t.Parallel()
 	long := strings.Repeat("a", 200)
 	if got := tracker.TagSlug(long); got != long {
 		t.Fatalf("TagSlug cut a long slug to %d characters", len(got))
@@ -50,6 +52,7 @@ func TestTagSlugNeverTruncates(t *testing.T) {
 // TestTagAddIsOpenToEverySeat and the two below are the authority rule, which
 // is the whole reason the tag set is its own object.
 func TestTagAddIsOpenToEverySeat(t *testing.T) {
+	t.Parallel()
 	r := newRoundTrip(t)
 	if _, err := r.writer.WriteTags(t.Context(), "op-add", "ENG",
 		tracker.TagEdit{Add: []tracker.Tag{{Slug: "regression"}}},
@@ -64,6 +67,7 @@ func TestTagAddIsOpenToEverySeat(t *testing.T) {
 }
 
 func TestTagRenameAndArchiveAreTheLeads(t *testing.T) {
+	t.Parallel()
 	r := newRoundTrip(t)
 	r.declareTags("api", "apis")
 
@@ -99,10 +103,11 @@ func TestTagRenameAndArchiveAreTheLeads(t *testing.T) {
 	}
 }
 
-// TestTagArchiveIsOneWay is the rule a field's archive follows, and for the
-// same reason: a tag that came back would re-admit work filed against a
-// meaning nobody has looked at in a year.
+// TestTagArchiveIsOneWayForNewWork is the rule a field's archive follows, and
+// for the same reason: a tag that came back would re-admit work filed against
+// a meaning nobody has looked at in a year.
 func TestTagArchiveIsOneWayForNewWork(t *testing.T) {
+	t.Parallel()
 	r := newRoundTrip(t)
 	r.declareTags("legacy")
 	if _, err := r.writer.WriteTags(t.Context(), "op-archive", "ENG",
@@ -129,6 +134,7 @@ func TestTagArchiveIsOneWayForNewWork(t *testing.T) {
 // model invented became a tag row, which is how `Bug`, `bugfix` and `BUG` came
 // to sit beside `bug` in the TYPE catalogue before its own check existed.
 func TestUndeclaredTagIsRefused(t *testing.T) {
+	t.Parallel()
 	r := newRoundTrip(t)
 	r.declareTags("regression")
 
@@ -153,6 +159,7 @@ func TestUndeclaredTagIsRefused(t *testing.T) {
 // TestDeclaredTagIsFiled is the control: the same write with the tag declared
 // has to land, or the case above is passing for the wrong reason.
 func TestDeclaredTagIsFiled(t *testing.T) {
+	t.Parallel()
 	r := newRoundTrip(t)
 	r.declareTags("regression")
 
@@ -178,6 +185,7 @@ func TestDeclaredTagIsFiled(t *testing.T) {
 // TestUpdateRefusesAnUndeclaredTag covers the other write path, which had the
 // same hole: a patch's tags replace the set whole.
 func TestUpdateRefusesAnUndeclaredTag(t *testing.T) {
+	t.Parallel()
 	r := newRoundTrip(t)
 	r.declareTags("regression")
 	task := r.createTask("A task")
@@ -194,6 +202,7 @@ func TestUpdateRefusesAnUndeclaredTag(t *testing.T) {
 // that matters is that it is ONE append: a record per new tag would contend N
 // times on the one subject every seat in the project writes.
 func TestEnsureTagsDeclaresOnlyWhatIsMissing(t *testing.T) {
+	t.Parallel()
 	r := newRoundTrip(t)
 	r.declareTags("regression")
 
@@ -226,6 +235,7 @@ func TestEnsureTagsDeclaresOnlyWhatIsMissing(t *testing.T) {
 // a read before the write names tags somebody else declared a moment earlier,
 // which is the ordinary case here rather than a race nobody hits.
 func TestDeclaredIsWhatTheWriteActuallyCreated(t *testing.T) {
+	t.Parallel()
 	r := newRoundTrip(t)
 	r.declareTags("regression")
 
@@ -246,6 +256,7 @@ func TestDeclaredIsWhatTheWriteActuallyCreated(t *testing.T) {
 // apart split the work between them at random. It covers BOTH spellings,
 // because a label may collide with another tag's label or with its slug.
 func TestTagLabelCollisionIsRefused(t *testing.T) {
+	t.Parallel()
 	r := newRoundTrip(t)
 	if _, err := r.writer.WriteTags(t.Context(), "op-seed", "ENG",
 		tracker.TagEdit{Add: []tracker.Tag{{Slug: "api", Label: "Public API"}}},
@@ -277,6 +288,7 @@ func TestTagLabelCollisionIsRefused(t *testing.T) {
 // Refusing the second would make a tag set something every seat has to read
 // before it can file anything.
 func TestTagAddIsIdempotent(t *testing.T) {
+	t.Parallel()
 	r := newRoundTrip(t)
 	r.declareTags("regression")
 	before := r.tagsVersion("ENG")
@@ -296,6 +308,7 @@ func TestTagAddIsIdempotent(t *testing.T) {
 // a refusal with no override would block `apis` behind `api` for ever, and a
 // lead can merge two tags.
 func TestNearTagWarnsAndNeverRefuses(t *testing.T) {
+	t.Parallel()
 	r := newRoundTrip(t)
 	r.declareTags("api")
 
@@ -320,6 +333,7 @@ func TestNearTagWarnsAndNeverRefuses(t *testing.T) {
 // TestFarTagDoesNotWarn is that case's control: a warning on every add is a
 // warning nobody reads.
 func TestFarTagDoesNotWarn(t *testing.T) {
+	t.Parallel()
 	r := newRoundTrip(t)
 	r.declareTags("api")
 
@@ -337,6 +351,7 @@ func TestFarTagDoesNotWarn(t *testing.T) {
 // TestTagsPerTaskIsCapped protects the one bound the plan names for a task's
 // own set. A task filed under more groupings than this is not grouped.
 func TestTagsPerTaskIsCapped(t *testing.T) {
+	t.Parallel()
 	r := newRoundTrip(t)
 	tags := make([]string, 0, tracker.MaxTagsPerTask+1)
 	for i := range tracker.MaxTagsPerTask + 1 {
@@ -359,6 +374,7 @@ func TestTagsPerTaskIsCapped(t *testing.T) {
 
 // TestTagEditRefusesAnEmptyGesture keeps a record saying nothing off the log.
 func TestTagEditRefusesAnEmptyGesture(t *testing.T) {
+	t.Parallel()
 	r := newRoundTrip(t)
 	if _, err := r.writer.WriteTags(t.Context(), "op-empty", "ENG",
 		tracker.TagEdit{}, tracker.TagAuthority{Lead: true}); err == nil {
@@ -376,6 +392,7 @@ func TestTagEditRefusesAnEmptyGesture(t *testing.T) {
 // TestRenameKeepsTheSlug is the immutability rule: the slug is what every
 // task's row holds, so a rename that moved it would orphan them.
 func TestRenameKeepsTheSlug(t *testing.T) {
+	t.Parallel()
 	r := newRoundTrip(t)
 	r.declareTags("api")
 	task := newTask("t-renamed-tag")
@@ -410,6 +427,7 @@ func TestRenameKeepsTheSlug(t *testing.T) {
 // the tag would be an add wearing a rename's clothes — and a lead's gesture
 // would then create what a seat's typo could not.
 func TestRenameOfAnUnknownSlugIsRefused(t *testing.T) {
+	t.Parallel()
 	r := newRoundTrip(t)
 	r.declareTags("api")
 	_, err := r.writer.WriteTags(t.Context(), "op-rename-unknown", "ENG",

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 )
 
 // The engine's MCP wiring, against real child processes.
@@ -23,6 +24,12 @@ import (
 // echo names an environment variable each child reports back in its tool's
 // description, which is how a test reads what credential a child actually
 // received rather than what the engine meant to send.
+//
+// Each child runs with the race runtime's exit sleep switched off
+// ([procgrouptest.StandInRaceOptions]), set in the server's own `env:` because
+// that is the environment the engine launches a child with. A race-built
+// helper exits 0 when its stdin closes, and otherwise sleeps a second first on
+// every stop a case makes — a teardown, a restart, an apply retiring a server.
 func mcpCompany(shared bool, echo string) string {
 	sharedFlag := "false"
 	if shared {
@@ -45,6 +52,7 @@ mcp_servers:
       %s: %q
       %s: "probe"
       %s: %q
+      %s: %q
 roles:
   - name: CEO
     handle: ceo
@@ -61,7 +69,8 @@ roles:
 `, sharedFlag, os.Args[0],
 		toolServerModeEnv, "server",
 		toolServerToolEnv,
-		toolServerEchoEnv, echo)
+		toolServerEchoEnv, echo,
+		procgrouptest.GORACE, procgrouptest.StandInRaceOptions())
 }
 
 // claimed starts the engine and waits for it to hold its seats.

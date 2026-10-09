@@ -274,9 +274,16 @@ what it lacks, replays it instead and needs none of this.)
 own. It is taken on `snapshot_interval` and judged against the file's size for
 free space. Every data node takes its own and offers it, whether or not it may
 write the estate: an evicted machine, back with its files, keeps applying its
-logs and may hold the only copy a joiner can fetch. A take the node declines —
-at boot, before it has caught up — is retried every thirty seconds rather than
-an interval later. Its manifest names every log it carries: a joiner refuses an
+logs and may hold the only copy a joiner can fetch. A take the node declines is
+retried rather than left for an interval: one declined for a reason a boot
+settles by itself — `unhydrated`, `sole_node`, `lagging` — a second later,
+doubling to thirty seconds, and the moment each log first catches up; any
+other decline, or a take that failed, every thirty seconds; and `recent` once
+the artefact it found has aged past `snapshot_interval`. A node that stays in
+one of them — a single node is `sole_node` for good — settles on the
+thirty-second retry within a minute. The register row naming a new artefact is
+published as soon as it is taken, not on the position heartbeat's next beat.
+Its manifest names every log it carries: a joiner refuses an
 artefact naming a log it does not run, or missing one it does, before a byte
 moves. Artefacts live in `store.snapshot_dir` itself.
 
@@ -370,11 +377,26 @@ below the published floor whose missing records the log still holds reports
    appliers, adopts, moves its consumers to the artefact's position and
    resumes, with no restart. It takes a **hold** on every domain's log first,
    which pins the trim for the duration of the transfer — so a join cannot
-   race the trim that made it necessary. A running node that finds no donor
-   stays as it is, refusing, and asks again on an interval that doubles up to
-   five minutes. Stopping a node mid-join — a signal during its boot, or a
-   shutdown while it is asking or fetching — gives the join up at once rather
-   than waiting out the five-second offer window, and is never reported as a
+   race the trim that made it necessary. It collects offers until every node
+   that can donate has answered, or for five seconds at most. That is every
+   live data node — each runs a donor, and one holding no artefact answers
+   that it has none — and every node whose row in the positions register was
+   written within the last forty seconds and names an artefact. The second
+   half is how a **draining** node is waited for: it gives up its presence as
+   its drain begins, so its peers stop counting it for seats, but it goes on
+   serving its donor until it stops, and in a rolling upgrade it is the
+   likeliest holder of the newest artefact. The asking node counts itself only
+   once its own donor is serving, which at boot it is not yet. A node named
+   that never answers — one that died within its row's forty seconds — costs
+   the five seconds and no more. Who is live and what the register says are
+   read while the offers arrive, so a coordination store slow to say costs
+   nothing past those five seconds, and one that cannot say leaves the five
+   seconds to decide.
+   A running node that finds no donor stays as it is, refusing, and asks again
+   on an interval that doubles up to five minutes. Stopping a node mid-join —
+   a signal during its boot, or a shutdown while it is asking or fetching —
+   gives the join up at once rather than waiting out the five-second offer
+   window, and is never reported as a
    fleet with nothing to donate: the next start decides afresh. Nor is a join
    that loses the node's **own database** — an install that failed and whose
    live file then could not be reopened, or an artefact installed and then not

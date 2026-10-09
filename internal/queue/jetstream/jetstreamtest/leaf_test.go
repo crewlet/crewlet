@@ -13,6 +13,7 @@ import (
 // the `data` role on, so a listener that bound but served nothing would turn
 // every leaf number there into a number about a timeout.
 func TestALeafJoinsAClusterStartedWithLeafListeners(t *testing.T) {
+	t.Parallel()
 	c := startCluster(t, 3, js.Config{}, true)
 	urls := c.LeafURLs()
 	if len(urls) != 3 {

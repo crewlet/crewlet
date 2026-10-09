@@ -141,18 +141,27 @@ func TestTheWholeRecordFitsTheQueuesCeiling(t *testing.T) {
 	t.Parallel()
 	// LINES of control bytes, so the whole-line fallback keeps each piece
 	// right up to its bound — \u0001 on the wire, six bytes for one.
-	worst := strings.Repeat(strings.Repeat("\x01", 99)+"\n", 40_000)
+	//
+	// EACH PIECE JUST PAST WHAT IT IS HELD TO, which is where its fitted form
+	// is at its largest: the report and the transcript twice the record's
+	// bound, the failure past what one condensation reads (so it is brought
+	// inside that first, as the longest failure is), the question twice its
+	// own. A larger input fits to the same record and only costs the
+	// redactions it passes through.
+	line := strings.Repeat("\x01", 99) + "\n"
+	twice := strings.Repeat(line, 2*MaxRunTextBytes/len(line)+1)
+	failure := strings.Repeat(line, MaxCondenseBytes/len(line)+2)
 	refs := make([]string, 0, 2000)
 	for i := range 2000 {
 		refs = append(refs, fmt.Sprintf("https://github.com/acme/api/pull/%d?x=%s", i, strings.Repeat("<", 400)))
 	}
-	question := strings.Repeat("\x01\n", 2<<20)
+	question := strings.Repeat("\x01\n", MaxQuestionBytes)
 	c := &Coordinator{condense: &fakeCondenser{answer: func(RunPart, string, int) (string, error) {
 		return "", errors.New("no model")
 	}}}
 	for name, result := range map[string]Result{
-		"a failed run":    {Text: worst, Error: worst, Transcript: worst, DeliveredRefs: refs},
-		"a run that asks": {Text: worst, Transcript: worst, DeliveredRefs: refs, NeedsInput: true, Question: question},
+		"a failed run":    {Text: twice, Error: failure, Transcript: twice, DeliveredRefs: refs},
+		"a run that asks": {Text: twice, Transcript: twice, DeliveredRefs: refs, NeedsInput: true, Question: question},
 	} {
 		fitted := c.fitResult(t.Context(), PendingRun{}, result)
 		raw, err := json.Marshal(runPhase(PendingRun{}, LaunchRecord{}, fitted, time.Now()))

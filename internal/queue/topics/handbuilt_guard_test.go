@@ -65,11 +65,12 @@ import (
 //     inbound-notification topic with strings.HasSuffix(topic, ".inbound"),
 //     and ".inbound" is not a marker because NotificationsInbound is a whole
 //     subject rather than a named suffix;
-//   - TEST code. Deliberately, and it is the largest gap: see the census this
-//     test logs. Bringing tests in would need an allowance list an order of
-//     magnitude longer than the drift it guards, and the failure mode there
-//     is different in kind — a wrong literal in a test fails that test, where
-//     a wrong literal in the engine silently swallows live traffic.
+//   - TEST code — _test.go files and the *test support packages.
+//     Deliberately, and it is the largest gap: the test tree writes hand-built
+//     names by the dozen, so bringing it in would need an allowance list an
+//     order of magnitude longer than the drift it guards, and the failure mode
+//     there is different in kind — a wrong literal in a test fails that test,
+//     where a wrong literal in the engine silently swallows live traffic.
 //
 // If the subject of this guard ever legitimately goes away — every backend
 // deriving its subjects from this package with none left to write down —
@@ -148,8 +149,7 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		}
 	}
 
-	found := walkForLiterals(t, root, markers, false)
-	census := walkForLiterals(t, root, markers, true)
+	found := walkForLiterals(t, root, markers)
 
 	if found.files == 0 {
 		t.Fatal("parsed no source files — this guard was certifying nothing. Check the " +
@@ -188,10 +188,6 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 	t.Logf("scanned %d files / %d string literals in internal/ and cmd/: "+
 		"%d hand-built names, %d of them acknowledged drift",
 		found.files, found.literals, len(found.hits), len(acknowledgedDrift))
-	t.Logf("BOUNDARY, not enforced: the test tree (_test.go files and the *test "+
-		"support packages) carries %d hand-built names across %d files — a wrong "+
-		"literal there fails that test rather than swallowing live traffic",
-		len(census.hits), census.files)
 }
 
 // driftKey names a known hand-built literal by its package rather than its
@@ -219,19 +215,20 @@ type walkResult struct {
 	hits     []hit
 }
 
-// walkForLiterals parses .go files under internal/ and cmd/ and collects the
-// string literals that name a subject or a consumer group.
+// walkForLiterals parses the PRODUCTION .go files under internal/ and cmd/ and
+// collects the string literals that name a subject or a consumer group.
 //
-// tests selects which half of the tree to read, and the two halves partition
-// it: false is the enforced half — production code — and true is everything
-// the enforced half skips, which is _test.go files plus the *test support
-// packages (queuetest, coordtest, …) whose ordinary .go files are test code
-// too. That is the census the boundary note reports.
+// Production is everything but test code: _test.go files and the *test
+// support packages (queuetest, coordtest, …), whose ordinary .go files are
+// test code too. A support package is recognised by its own directory name and
+// skipped whole, everything beneath it included, so a production package
+// nested underneath one would go unguarded. None exists; if one appears, this
+// is where it has to be taught.
 //
-// A support package is recognised by its own directory name, so a nested
-// package underneath one would read as production. None exists; if one
-// appears, this is where it has to be taught.
-func walkForLiterals(t *testing.T, root string, markers markerSet, tests bool) walkResult {
+// The test half used to be walked too, to log how many hand-built names it
+// carries: half the parsing this gate did, for a line nothing asserted and
+// that a passing test's output never carries into a CI log.
+func walkForLiterals(t *testing.T, root string, markers markerSet) walkResult {
 	t.Helper()
 
 	topicsDir := filepath.Join(root, "internal", "queue", "topics")
@@ -252,20 +249,15 @@ func walkForLiterals(t *testing.T, root string, markers markerSet, tests bool) w
 				if path == topicsDir || base == "testdata" {
 					return fs.SkipDir
 				}
-				if !tests && isSupportPackage(base) {
+				if isSupportPackage(base) {
 					return fs.SkipDir
 				}
 				return nil
 			}
-			if !strings.HasSuffix(path, ".go") {
+			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 				return nil
 			}
-			isTest := strings.HasSuffix(path, "_test.go") ||
-				isSupportPackage(filepath.Base(filepath.Dir(path)))
-			if isTest != tests {
-				return nil
-			}
-			file, err := parser.ParseFile(fset, path, nil, 0)
+			file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 			if err != nil {
 				t.Errorf("parse %s: %v", path, err)
 				return nil

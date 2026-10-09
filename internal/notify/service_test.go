@@ -145,12 +145,17 @@ func (h *harness) inbox(t *testing.T, handle string) []*events.Event {
 	return h.settled(t, topics.AgentInbox(handle))
 }
 
-// quiet asserts a topic stays empty, which needs a real wait: "nothing
-// arrived" and "nothing has arrived YET" are the same observation until
-// enough time has passed.
+// quiet asserts a topic carried nothing, read the moment Handle has returned.
+//
+// NO WAIT, because nothing is left in flight to wait for. Handle publishes
+// everything it will before it returns — a wake's own publish failure IS its
+// result ([TestAFailedWakeIsRetried]), which a publish from a goroutine could
+// never be — and the memory twin hands a publish to every subscription, these
+// collectors among them, before Publish returns. "Nothing has arrived yet" is
+// therefore "nothing arrived"; the fifty-millisecond sleep this held before
+// every read guarded nothing.
 func (h *harness) quiet(t *testing.T, topic string) {
 	t.Helper()
-	time.Sleep(50 * time.Millisecond)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if got := h.seen[topic]; len(got) != 0 {
@@ -158,11 +163,20 @@ func (h *harness) quiet(t *testing.T, topic string) {
 	}
 }
 
+// skips is every skip the service recorded — each one held, as it is read, to
+// a reason [notify.SkipReason] declares, whole. A reader tells which gate
+// dropped a delivery by comparing that word, so a record whose reason carries
+// anything more is one no reader can place; every reason the service records
+// passes through here in some case, so each is held by one.
 func (h *harness) skips(t *testing.T) []types.NotificationSkipped {
 	t.Helper()
 	var out []types.NotificationSkipped
 	for _, ev := range h.settled(t, skipTopic) {
 		if s, ok := events.DataAs[*types.NotificationSkipped](ev); ok {
+			if !notify.SkipReason(s.Reason).Valid() {
+				t.Errorf("a skip was recorded with reason %q, which is not one "+
+					"notify.SkipReason declares", s.Reason)
+			}
 			out = append(out, *s)
 		}
 	}
@@ -500,11 +514,30 @@ func TestAnUnparsedSourceIsRecorded(t *testing.T) {
 		t.Fatalf("Handle = %+v, want an ack — a redelivery finds no parser either", got)
 	}
 	skips := h.skips(t)
-	if len(skips) != 1 || !strings.Contains(skips[0].Reason, "parser") {
+	if len(skips) != 1 || notify.SkipReason(skips[0].Reason) != notify.ReasonUnparsed {
 		t.Fatalf("skips = %+v", skips)
 	}
 	if skips[0].NotificationSource != "mystery" {
 		t.Fatalf("the skip names source %q", skips[0].NotificationSource)
+	}
+}
+
+// A delivery from a surface this company DISCONNECTED is a webhook still
+// registered at the third-party app, and its record says so rather than
+// reading as an integration nothing ever parsed — the two send an operator to
+// opposite places.
+func TestADisconnectedSourceIsRecordedAsDisconnected(t *testing.T) {
+	h := newService(t, nil)
+	if !h.svc.Unregister("tracker") {
+		t.Fatal("the tracker's parser was not registered to take away")
+	}
+
+	if got := h.svc.Handle(t.Context(), delivery("tracker")); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("Handle = %+v, want an ack — a redelivery finds the source gone too", got)
+	}
+	skips := h.skips(t)
+	if len(skips) != 1 || notify.SkipReason(skips[0].Reason) != notify.ReasonRetired {
+		t.Fatalf("skips = %+v, want one %q", skips, notify.ReasonRetired)
 	}
 }
 
@@ -516,7 +549,7 @@ func TestARecipientNobodyMatchesIsRecorded(t *testing.T) {
 
 	h.svc.Handle(t.Context(), delivery("tracker"))
 	skips := h.skips(t)
-	if len(skips) != 1 || !strings.Contains(skips[0].Reason, "no seat") {
+	if len(skips) != 1 || notify.SkipReason(skips[0].Reason) != notify.ReasonNoSeat {
 		t.Fatalf("skips = %+v", skips)
 	}
 }
@@ -590,7 +623,7 @@ func TestTheServiceRefusesToWakeASeatForItsOwnAction(t *testing.T) {
 	h.svc.Handle(t.Context(), delivery("tracker"))
 	h.quiet(t, topics.AgentInbox("engineering-lead"))
 	skips := h.skips(t)
-	if len(skips) != 1 || !strings.Contains(skips[0].Reason, "self-action") {
+	if len(skips) != 1 || notify.SkipReason(skips[0].Reason) != notify.ReasonSelfAction {
 		t.Fatalf("skips = %+v", skips)
 	}
 }
@@ -603,7 +636,8 @@ func TestAHumanRecipientIsNotWoken(t *testing.T) {
 
 	h.svc.Handle(t.Context(), delivery("tracker"))
 	h.quiet(t, topics.AgentInbox("dana-founder"))
-	if skips := h.skips(t); len(skips) != 1 || !strings.Contains(skips[0].Reason, "human") {
+	if skips := h.skips(t); len(skips) != 1 ||
+		notify.SkipReason(skips[0].Reason) != notify.ReasonHumanSeat {
 		t.Fatalf("skips = %+v", skips)
 	}
 }
@@ -635,7 +669,8 @@ func TestARateLimitedSeatIsNotWoken(t *testing.T) {
 		t.Fatalf("the valve was consulted %d times", h.valve.seen())
 	}
 	h.quiet(t, topics.AgentInbox("engineering-lead"))
-	if skips := h.skips(t); len(skips) != 1 || !strings.Contains(skips[0].Reason, "rate limit") {
+	if skips := h.skips(t); len(skips) != 1 ||
+		notify.SkipReason(skips[0].Reason) != notify.ReasonRateLimited {
 		t.Fatalf("skips = %+v", skips)
 	}
 }
@@ -691,7 +726,8 @@ func TestAnUnreadablePayloadIsNotRetried(t *testing.T) {
 	if got := h.svc.Handle(t.Context(), ev); got.Outcome != queue.OutcomeAck {
 		t.Fatalf("Handle = %+v, want an ack", got)
 	}
-	if skips := h.skips(t); len(skips) != 1 || !strings.Contains(skips[0].Reason, "unreadable") {
+	if skips := h.skips(t); len(skips) != 1 ||
+		notify.SkipReason(skips[0].Reason) != notify.ReasonUnreadable {
 		t.Fatalf("skips = %+v", skips)
 	}
 }
@@ -705,8 +741,15 @@ func TestAParseFailureIsRecordedAndNotRetried(t *testing.T) {
 	if got := h.svc.Handle(t.Context(), delivery("tracker")); got.Outcome != queue.OutcomeAck {
 		t.Fatalf("Handle = %+v, want an ack", got)
 	}
-	if skips := h.skips(t); len(skips) != 1 || !strings.Contains(skips[0].Reason, "parse failed") {
-		t.Fatalf("skips = %+v", skips)
+	// The parser's own words ride along as the record's detail — which
+	// payload it could not read is the whole of what an operator needs to
+	// fix it — and apart from the reason, which stays the one word a reader
+	// compares.
+	if skips := h.skips(t); len(skips) != 1 ||
+		notify.SkipReason(skips[0].Reason) != notify.ReasonParseFailed ||
+		skips[0].Detail != "no issue in the payload" {
+		t.Fatalf("skips = %+v, want one %q with the parser's error as its detail",
+			skips, notify.ReasonParseFailed)
 	}
 }
 
@@ -788,7 +831,8 @@ func TestOneFailedWakeAmongSeveralStillRetries(t *testing.T) {
 		t.Fatalf("Handle = %+v", got)
 	}
 	// The human seat was decided, not attempted, so its skip still lands.
-	if skips := h.skips(t); len(skips) != 1 || !strings.Contains(skips[0].Reason, "human") {
+	if skips := h.skips(t); len(skips) != 1 ||
+		notify.SkipReason(skips[0].Reason) != notify.ReasonHumanSeat {
 		t.Fatalf("skips = %+v", skips)
 	}
 }

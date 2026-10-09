@@ -2,6 +2,7 @@ package livestate_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
 )
@@ -24,6 +25,18 @@ func env(etype string, payload map[string]any, opts ...func(*livestate.Envelope)
 		opt(e)
 	}
 	return e
+}
+
+// stoppedAt is a projection whose clock is stopped at ts — the clock its live
+// spend window is aged and labelled by — for a case that stamps its records on
+// a fixed date: on the wall clock, every one of them left the window long ago.
+func stoppedAt(t *testing.T, ts string) *livestate.LiveState {
+	t.Helper()
+	now, err := time.Parse(time.RFC3339Nano, ts)
+	if err != nil {
+		t.Fatalf("parse the pinned clock %q: %v", ts, err)
+	}
+	return livestate.New(livestate.WithClock(func() time.Time { return now }))
 }
 
 func at(ts string) func(*livestate.Envelope) {

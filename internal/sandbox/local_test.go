@@ -44,6 +44,7 @@ func mustCreate(t *testing.T, local *Local, spec Spec) Sandbox {
 // ---------------------------------------------------------------------
 
 func TestContainerModeRefusesToStartWithoutAnImage(t *testing.T) {
+	t.Parallel()
 	_, err := NewLocal(LocalOptions{Placement: Container, StateDir: t.TempDir()})
 	if err == nil {
 		t.Fatal("a container box with no image fails only once an agent tries to use it — refuse at config time")
@@ -54,6 +55,7 @@ func TestContainerModeRefusesToStartWithoutAnImage(t *testing.T) {
 }
 
 func TestAPlacementTheLocalBackendDoesNotServeIsRefused(t *testing.T) {
+	t.Parallel()
 	if _, err := NewLocal(LocalOptions{Placement: E2B, StateDir: t.TempDir()}); err == nil {
 		t.Fatal("a remote placement was accepted by the local backend")
 	}
@@ -75,6 +77,7 @@ func TestTheBoxRootHonoursItsEnvironmentOverride(t *testing.T) {
 // ---------------------------------------------------------------------
 
 func TestACreatedBoxIsPrivateToTheEngineUser(t *testing.T) {
+	t.Parallel()
 	local := newDirect(t)
 	box := mustCreate(t, local, Spec{})
 	info, err := os.Stat(box.Home())
@@ -87,6 +90,7 @@ func TestACreatedBoxIsPrivateToTheEngineUser(t *testing.T) {
 }
 
 func TestEachBoxGetsItsOwnHome(t *testing.T) {
+	t.Parallel()
 	local := newDirect(t)
 	first := mustCreate(t, local, Spec{})
 	second := mustCreate(t, local, Spec{})
@@ -99,6 +103,7 @@ func TestEachBoxGetsItsOwnHome(t *testing.T) {
 }
 
 func TestExecRunsInTheBoxWorkspaceByDefault(t *testing.T) {
+	t.Parallel()
 	local := newDirect(t)
 	box := mustCreate(t, local, Spec{})
 	result, err := box.Exec(t.Context(), "pwd", ExecOptions{})
@@ -115,6 +120,7 @@ func TestExecRunsInTheBoxWorkspaceByDefault(t *testing.T) {
 }
 
 func TestExecReportsANonZeroExitRatherThanFailing(t *testing.T) {
+	t.Parallel()
 	local := newDirect(t)
 	box := mustCreate(t, local, Spec{})
 	result, err := box.Exec(t.Context(), "exit 3", ExecOptions{})
@@ -158,6 +164,7 @@ func TestTheChildSeesTheRunEnvAndTheBoxHomeButNotTheEngineSecrets(t *testing.T) 
 }
 
 func TestThePerCommandEnvOverridesTheRunEnv(t *testing.T) {
+	t.Parallel()
 	local := newDirect(t)
 	box := mustCreate(t, local, Spec{Env: map[string]string{"PHASE": "run"}})
 	result, err := box.Exec(t.Context(), "echo $PHASE", ExecOptions{Env: map[string]string{"PHASE": "setup"}})
@@ -174,6 +181,7 @@ func TestThePerCommandEnvOverridesTheRunEnv(t *testing.T) {
 // ---------------------------------------------------------------------
 
 func TestDirectModeRefusesToWriteOutsideTheBox(t *testing.T) {
+	t.Parallel()
 	local := newDirect(t)
 	box := mustCreate(t, local, Spec{})
 	outside := filepath.Join(t.TempDir(), "host-file")
@@ -189,6 +197,7 @@ func TestDirectModeRefusesToWriteOutsideTheBox(t *testing.T) {
 }
 
 func TestDirectModeNamesTheContainerAlternativeWhenItRefuses(t *testing.T) {
+	t.Parallel()
 	local := newDirect(t)
 	box := mustCreate(t, local, Spec{})
 	err := box.WriteFile(t.Context(), "/usr/local/bin/tool", []byte("x"))
@@ -201,6 +210,7 @@ func TestDirectModeNamesTheContainerAlternativeWhenItRefuses(t *testing.T) {
 }
 
 func TestDirectModeAcceptsAnAbsolutePathInsideTheBox(t *testing.T) {
+	t.Parallel()
 	local := newDirect(t)
 	box := mustCreate(t, local, Spec{})
 	// A brief and a setup step both speak in the home the box reports.
@@ -216,6 +226,7 @@ func TestDirectModeAcceptsAnAbsolutePathInsideTheBox(t *testing.T) {
 
 // The runner polls for a done marker that does not exist yet on every tick.
 func TestReadingAMissingFileIsEmptyRatherThanAnError(t *testing.T) {
+	t.Parallel()
 	local := newDirect(t)
 	box := mustCreate(t, local, Spec{})
 	got, err := box.ReadFile(t.Context(), filepath.Join(box.Home(), ".crewlet", "done"))
@@ -228,6 +239,7 @@ func TestReadingAMissingFileIsEmptyRatherThanAnError(t *testing.T) {
 }
 
 func TestReadingOutsideTheBoxIsEmptyRatherThanALeak(t *testing.T) {
+	t.Parallel()
 	local := newDirect(t)
 	box := mustCreate(t, local, Spec{})
 	secret := filepath.Join(t.TempDir(), "secret")
@@ -245,6 +257,7 @@ func TestReadingOutsideTheBoxIsEmptyRatherThanALeak(t *testing.T) {
 // ---------------------------------------------------------------------
 
 func TestABackgroundJobOutlivesTheCallAndRecordsItsPid(t *testing.T) {
+	t.Parallel()
 	local := newDirect(t)
 	box := mustCreate(t, local, Spec{})
 	marker := filepath.Join(box.Home(), WorkspaceSubdir, "done")
@@ -269,6 +282,7 @@ func TestABackgroundJobOutlivesTheCallAndRecordsItsPid(t *testing.T) {
 // a zombie that kill(0) reports as ALIVE — so the completion probe would hang
 // on a job that already exited. This is the test for the Wait goroutine.
 func TestAFinishedBackgroundJobStopsAnsweringTheLivenessProbe(t *testing.T) {
+	t.Parallel()
 	local := newDirect(t)
 	box := mustCreate(t, local, Spec{})
 
@@ -283,6 +297,7 @@ func TestAFinishedBackgroundJobStopsAnsweringTheLivenessProbe(t *testing.T) {
 
 // One killpg must reach the agent's children, not just the shell it started.
 func TestClosingABoxKillsTheWholeProcessTree(t *testing.T) {
+	t.Parallel()
 	local := newDirect(t)
 	box, err := local.Create(t.Context(), Spec{})
 	if err != nil {
@@ -312,6 +327,7 @@ func TestClosingABoxKillsTheWholeProcessTree(t *testing.T) {
 }
 
 func TestClosingABoxRemovesItsDirectory(t *testing.T) {
+	t.Parallel()
 	local := newDirect(t)
 	box, err := local.Create(t.Context(), Spec{})
 	if err != nil {
@@ -331,6 +347,7 @@ func TestClosingABoxRemovesItsDirectory(t *testing.T) {
 // ---------------------------------------------------------------------
 
 func TestPauseStopsTheTreeAndConnectResumesIt(t *testing.T) {
+	t.Parallel()
 	local := newDirect(t)
 	box := mustCreate(t, local, Spec{})
 	counter := filepath.Join(box.Home(), WorkspaceSubdir, "ticks")
@@ -367,6 +384,7 @@ func TestPauseStopsTheTreeAndConnectResumesIt(t *testing.T) {
 //
 // Mutation: resume in Attach, and the paused job ticks again.
 func TestAttachingToAPausedBoxLeavesItPaused(t *testing.T) {
+	t.Parallel()
 	local := newDirect(t)
 	box := mustCreate(t, local, Spec{})
 	counter := filepath.Join(box.Home(), WorkspaceSubdir, "ticks")
@@ -403,6 +421,7 @@ func TestAttachingToAPausedBoxLeavesItPaused(t *testing.T) {
 //
 // Mutation: unpause in Attach, and the log shows it.
 func TestAttachingToAPausedContainerRefusesItAndLeavesItPaused(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	calls, state := filepath.Join(dir, "calls"), filepath.Join(dir, "paused")
 	runtime := filepath.Join(dir, "runtime")
@@ -454,6 +473,7 @@ func TestAttachingToAPausedContainerRefusesItAndLeavesItPaused(t *testing.T) {
 // Teardown of a PAUSED box is the case SIGCONT-first exists for: a stopped
 // process never runs again to handle SIGTERM.
 func TestAPausedBoxCanStillBeTornDown(t *testing.T) {
+	t.Parallel()
 	local := newDirect(t)
 	box, err := local.Create(t.Context(), Spec{})
 	if err != nil {
@@ -484,6 +504,7 @@ func TestAPausedBoxCanStillBeTornDown(t *testing.T) {
 // The tick file lives OUTSIDE the box, because Kill deletes the box: reading a
 // counter inside it would measure the deletion, not the resume.
 func TestKillReclaimsAPausedBoxWithoutResumingIt(t *testing.T) {
+	t.Parallel()
 	local := newDirect(t)
 	box, err := local.Create(t.Context(), Spec{})
 	if err != nil {
@@ -522,6 +543,7 @@ func TestKillReclaimsAPausedBoxWithoutResumingIt(t *testing.T) {
 }
 
 func TestKillingAVanishedBoxIsNotAnError(t *testing.T) {
+	t.Parallel()
 	local := newDirect(t)
 	if err := local.Kill(t.Context(), "never-existed"); err != nil {
 		t.Fatalf("Kill of a box that is already gone: %v", err)
@@ -529,6 +551,7 @@ func TestKillingAVanishedBoxIsNotAnError(t *testing.T) {
 }
 
 func TestConnectingToAVanishedBoxSaysSo(t *testing.T) {
+	t.Parallel()
 	local := newDirect(t)
 	_, err := local.Connect(t.Context(), "never-existed")
 	if err == nil {
@@ -544,6 +567,7 @@ func TestConnectingToAVanishedBoxSaysSo(t *testing.T) {
 // ---------------------------------------------------------------------
 
 func TestTheLoginIsSeededInAndARefreshedOneIsWrittenBack(t *testing.T) {
+	t.Parallel()
 	store := t.TempDir()
 	shared := filepath.Join(store, "credentials.json")
 	if err := os.WriteFile(shared, []byte(`{"token":"first"}`), 0o600); err != nil {
@@ -575,6 +599,7 @@ func TestTheLoginIsSeededInAndARefreshedOneIsWrittenBack(t *testing.T) {
 // Every production teardown goes through Connect or Kill, never the object
 // Create returned — so the map has to be rebuilt from the box's own record.
 func TestAReconnectedBoxStillWritesARefreshedLoginBack(t *testing.T) {
+	t.Parallel()
 	store := t.TempDir()
 	shared := filepath.Join(store, "credentials.json")
 	if err := os.WriteFile(shared, []byte(`{"token":"first"}`), 0o600); err != nil {
@@ -611,6 +636,7 @@ func TestAReconnectedBoxStillWritesARefreshedLoginBack(t *testing.T) {
 
 // A torn-down box must never CREATE a login the operator has since removed.
 func TestARemovedLoginIsNotRecreatedByATeardown(t *testing.T) {
+	t.Parallel()
 	store := t.TempDir()
 	shared := filepath.Join(store, "credentials.json")
 	if err := os.WriteFile(shared, []byte(`{"token":"first"}`), 0o600); err != nil {
@@ -636,6 +662,7 @@ func TestARemovedLoginIsNotRecreatedByATeardown(t *testing.T) {
 
 // The keys are operator-overridable config.
 func TestASeededCredentialCannotEscapeTheBox(t *testing.T) {
+	t.Parallel()
 	store := t.TempDir()
 	source := filepath.Join(store, "payload")
 	if err := os.WriteFile(source, []byte("owned"), 0o600); err != nil {
@@ -660,6 +687,7 @@ func TestASeededCredentialCannotEscapeTheBox(t *testing.T) {
 // the checkout and the pid file of every run that lasted longer than the TTL,
 // leaving an unkillable job writing into a directory that no longer existed.
 func TestTheReaperLeavesABoxWithALiveJobAlone(t *testing.T) {
+	t.Parallel()
 	local := newDirect(t)
 	box := mustCreate(t, local, Spec{})
 	if _, err := box.StartBackground(t.Context(), "sleep 300", ExecOptions{}); err != nil {
@@ -675,6 +703,7 @@ func TestTheReaperLeavesABoxWithALiveJobAlone(t *testing.T) {
 }
 
 func TestTheReaperRemovesAnAbandonedBox(t *testing.T) {
+	t.Parallel()
 	local := newDirect(t)
 	box, err := local.Create(t.Context(), Spec{})
 	if err != nil {
@@ -694,6 +723,7 @@ func TestTheReaperRemovesAnAbandonedBox(t *testing.T) {
 // directory's mtime instead would read a constant: a directory's mtime does
 // not move when files are written inside its subdirectories.
 func TestTheKeepaliveStampIsWhatSparesABoxTheReaper(t *testing.T) {
+	t.Parallel()
 	local := newDirect(t)
 	box := mustCreate(t, local, Spec{})
 	ageBox(t, box, 2*time.Hour)
@@ -765,6 +795,7 @@ func recordedLeader(t *testing.T, box Sandbox) procgroup.Leader {
 // a pid that answers a liveness probe and is not the job. It is probed and
 // never signalled, and the reaper's decision rests on the start time alone.
 func TestARecycledPidDoesNotKeepADeadBoxAlive(t *testing.T) {
+	t.Parallel()
 	local := newDirect(t)
 	box, err := local.Create(t.Context(), Spec{})
 	if err != nil {
@@ -788,6 +819,7 @@ func TestARecycledPidDoesNotKeepADeadBoxAlive(t *testing.T) {
 // job belongs to somebody else: SIGKILL there takes down a stranger's tree,
 // and SIGSTOP freezes it for as long as the pause lasts.
 func TestARecycledPidIsNeverSignalled(t *testing.T) {
+	t.Parallel()
 	stranger := startStranger(t)
 	local := newDirect(t)
 	for name, act := range map[string]func(Sandbox) error{
@@ -850,6 +882,7 @@ func assertUntouched(t *testing.T, stranger procgroup.Leader, when string) {
 // that took the pid on trust read the stranger as the job, and a wrapper that
 // died without writing its marker held its run open until the stranger exited.
 func TestTheJobProbeFollowsTheJobAndNotItsPid(t *testing.T) {
+	t.Parallel()
 	local := newDirect(t)
 	box := mustCreate(t, local, Spec{})
 
@@ -878,6 +911,7 @@ func TestTheJobProbeFollowsTheJobAndNotItsPid(t *testing.T) {
 
 // An exited wrapper is not running, and the answer does not wait for the reap.
 func TestAFinishedJobIsNotRunning(t *testing.T) {
+	t.Parallel()
 	local := newDirect(t)
 	box := mustCreate(t, local, Spec{})
 	handle, err := box.StartBackground(t.Context(), "exit 0", ExecOptions{})
@@ -894,6 +928,7 @@ func TestAFinishedJobIsNotRunning(t *testing.T) {
 // absent one. Deleting a live box's checkout is unrecoverable and a lingering
 // directory is not, so the reaper keeps a box whose record it cannot read.
 func TestAnUnreadableJobRecordKeepsTheBox(t *testing.T) {
+	t.Parallel()
 	local := newDirect(t)
 	box, err := local.Create(t.Context(), Spec{})
 	if err != nil {
@@ -919,6 +954,7 @@ func TestAnUnreadableJobRecordKeepsTheBox(t *testing.T) {
 // identity with no start time: acting on it would reach whatever holds that pid
 // now, so it is neither signalled nor allowed to keep the box.
 func TestAJobRecordWithoutAStartTimeNamesNoJob(t *testing.T) {
+	t.Parallel()
 	stranger := startStranger(t)
 	local := newDirect(t)
 	box, err := local.Create(t.Context(), Spec{})
@@ -940,6 +976,7 @@ func TestAJobRecordWithoutAStartTimeNamesNoJob(t *testing.T) {
 }
 
 func TestTheReaperCollectsCredentialsBeforeDeleting(t *testing.T) {
+	t.Parallel()
 	store := t.TempDir()
 	shared := filepath.Join(store, "credentials.json")
 	if err := os.WriteFile(shared, []byte(`{"token":"first"}`), 0o600); err != nil {
@@ -968,6 +1005,7 @@ func TestTheReaperCollectsCredentialsBeforeDeleting(t *testing.T) {
 // A spec with a tiny or zero TTL must not make every box on the host instantly
 // reapable, including one another engine just created.
 func TestTheReaperFloorsItsCutoffRegardlessOfTheSpecTtl(t *testing.T) {
+	t.Parallel()
 	local := newDirect(t)
 	box, err := local.Create(t.Context(), Spec{})
 	if err != nil {
@@ -980,6 +1018,7 @@ func TestTheReaperFloorsItsCutoffRegardlessOfTheSpecTtl(t *testing.T) {
 }
 
 func TestCreateReapsOrphansLeftByAPreviousEngine(t *testing.T) {
+	t.Parallel()
 	local := newDirect(t)
 	orphan, err := local.Create(t.Context(), Spec{})
 	if err != nil {
@@ -1003,6 +1042,7 @@ func TestCreateReapsOrphansLeftByAPreviousEngine(t *testing.T) {
 // The env carries the seat's LLM key, and argv is world-readable through
 // /proc/<pid>/cmdline and every ps on the host.
 func TestTheContainerEnvGoesInAFileNeverOnTheCommandLine(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	box := &containerBox{
 		layout:    boxLayout{id: "box", root: root},
@@ -1043,6 +1083,7 @@ func TestTheContainerEnvGoesInAFileNeverOnTheCommandLine(t *testing.T) {
 
 // --env-file is line-oriented with no quoting, so a newline forges a variable.
 func TestAnUnrepresentableEnvValueIsDroppedRatherThanForgingAVariable(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	box := &containerBox{
 		layout:  boxLayout{id: "box", root: root},
@@ -1069,6 +1110,7 @@ func TestAnUnrepresentableEnvValueIsDroppedRatherThanForgingAVariable(t *testing
 
 // A stale file would hand one phase another's environment.
 func TestTheEnvFileIsRewrittenPerCall(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	box := &containerBox{
 		layout:  boxLayout{id: "box", root: root},
@@ -1088,6 +1130,7 @@ func TestTheEnvFileIsRewrittenPerCall(t *testing.T) {
 }
 
 func TestTheContainerMapsInBoxPathsOntoItsSideOfTheMount(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	box := &containerBox{layout: boxLayout{id: "box", root: root}, runtime: "d", container: "c"}
 	// The box's side of its directory, never the directory itself: that
@@ -1111,6 +1154,7 @@ func TestTheContainerMapsInBoxPathsOntoItsSideOfTheMount(t *testing.T) {
 // A prefix test alone would pass this: it starts with the mount point and
 // still resolves outside it, and setup-step file paths are operator config.
 func TestTheContainerRefusesAPathThatResolvesOffTheMount(t *testing.T) {
+	t.Parallel()
 	box := &containerBox{layout: boxLayout{id: "box", root: t.TempDir()}, runtime: "d", container: "c"}
 	for _, path := range []string{
 		DefaultHome + "/../../etc/cron.d/x",
@@ -1124,6 +1168,7 @@ func TestTheContainerRefusesAPathThatResolvesOffTheMount(t *testing.T) {
 }
 
 func TestTheBackgroundPidIsTheLastNumericLine(t *testing.T) {
+	t.Parallel()
 	cases := map[string]string{
 		"12345\n":                 "12345",
 		"[1] 12345\n12345\n":      "12345",
@@ -1142,6 +1187,7 @@ func TestTheBackgroundPidIsTheLastNumericLine(t *testing.T) {
 }
 
 func TestAnUnknownContainerRuntimeIsRefused(t *testing.T) {
+	t.Parallel()
 	if _, err := ResolveContainerRuntime("lxc"); err == nil {
 		t.Fatal("an unknown runtime was accepted")
 	}
@@ -1152,6 +1198,7 @@ func TestAnUnknownContainerRuntimeIsRefused(t *testing.T) {
 // ---------------------------------------------------------------------
 
 func TestAControlCommandThatHangsIsAbandonedWithATimeoutCode(t *testing.T) {
+	t.Parallel()
 	result, err := runHost(t.Context(), hostCommand{
 		argv:    []string{"/bin/sh", "-c", "sleep 30"},
 		timeout: 200 * time.Millisecond,
@@ -1184,6 +1231,7 @@ func TestAControlCommandThatHangsIsAbandonedWithATimeoutCode(t *testing.T) {
 // for both. A grandchild that never records its pid is now a failure, because
 // that is what it is: the fixture did not come up.
 func TestATimedOutControlCommandTakesItsChildrenWithIt(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	pidFile := filepath.Join(dir, "child.pid")
 
@@ -1232,6 +1280,7 @@ func TestATimedOutControlCommandTakesItsChildrenWithIt(t *testing.T) {
 }
 
 func TestControlOutputIsBoundedRatherThanTheEnginesMemory(t *testing.T) {
+	t.Parallel()
 	var c capture
 	for range 8 {
 		c.Write(make([]byte, captureLimit/4))
@@ -1249,6 +1298,7 @@ func TestControlOutputIsBoundedRatherThanTheEnginesMemory(t *testing.T) {
 // marker, so a command printing its output at once was clipped silently —
 // mid-line, and mid-character.
 func TestASingleWritePastTheLimitIsMarkedOnALine(t *testing.T) {
+	t.Parallel()
 	line := strings.Repeat("日", 20) + "\n" // 61 bytes: the limit lands inside a rune
 	var c capture
 	c.Write([]byte(strings.Repeat(line, captureLimit/len(line)+10)))
@@ -1275,6 +1325,7 @@ func TestASingleWritePastTheLimitIsMarkedOnALine(t *testing.T) {
 // os/exec reads a nil Env as "inherit the parent's", which is exactly what the
 // allowlist exists to prevent — so no caller may reach that path by accident.
 func TestFlattenEnvIsSortedAndNilOnlyWhenEmpty(t *testing.T) {
+	t.Parallel()
 	if got := flattenEnv(nil); got != nil {
 		t.Fatalf("flattenEnv(nil) = %v", got)
 	}
@@ -1343,6 +1394,7 @@ func ageBox(t *testing.T, box Sandbox, by time.Duration) {
 // it on teardown. It is reachable: a run's row exists before its box is
 // attached, so a poll landing in that window asks to connect to "".
 func TestAnEmptyBoxIdIsRefusedRatherThanResolvingToTheWholeEstate(t *testing.T) {
+	t.Parallel()
 	local := newDirect(t)
 	alive := mustCreate(t, local, Spec{})
 
@@ -1365,6 +1417,7 @@ func TestAnEmptyBoxIdIsRefusedRatherThanResolvingToTheWholeEstate(t *testing.T) 
 // one a traversal would exploit and the check costs one comparison on a path
 // that is about to be deleted from.
 func TestABoxIdThatIsAPathIsRefused(t *testing.T) {
+	t.Parallel()
 	local := newDirect(t)
 	for _, id := range []string{"..", ".", "../elsewhere", "nested/id"} {
 		if _, err := local.Connect(t.Context(), id); err == nil {
@@ -1377,6 +1430,7 @@ func TestABoxIdThatIsAPathIsRefused(t *testing.T) {
 // run wrote, and the only thing that will ever clean it up is the orphan
 // reaper on some later create.
 func TestKillWaitsForTheGroupBeforeRemovingTheBox(t *testing.T) {
+	t.Parallel()
 	local := newDirect(t)
 	box, err := local.Create(t.Context(), Spec{})
 	if err != nil {

@@ -74,10 +74,20 @@ func TestATrainingTakesAtMostItsShareOfTheCores(t *testing.T) {
 // beside it would add its own training's workers and its CPU time. Top-level
 // parallel tests wait until every sequential one has finished, so nothing else
 // in this package runs while it measures.
+//
+// And so FIVE THOUSAND CODES, at sixty-four lists: every other test in the
+// package waits on this one, and neither reading depends on the corpus's
+// size. The k-means sample is [IVFTrainPointsPerList] codes a list, so each
+// worker's range in a round is still 1 280 codes against every list — tens
+// of milliseconds under the race detector, against a sampler that looks every
+// two — and the training and filing together measured 1.5 to 2 s on the
+// shared container, long enough that the runtime's own work stays inside the
+// half core of slack below. At twenty thousand codes and 256 lists the same
+// readings held the whole package for 38 s.
 func TestATrainingRunsOnItsShareOfTheCores(t *testing.T) {
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(4))
 	workers := ivfWorkers()
-	f := NewTopicalFixture(20_000, 3)
+	f := NewTopicalFixture(5_000, 3)
 	codes := NewCodes(len(f.Codes[0]), f.Len())
 	for _, code := range f.Codes {
 		codes.Append(code)

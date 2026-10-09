@@ -10,7 +10,8 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/crewlet/crewlet/internal/jsprovision"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
@@ -33,7 +34,7 @@ import (
 // [jsprovision.Ask] re-asks, the second attempt reached the real broker and
 // answered "not found", and the caller took the ordinary absent path. The
 // probe has to go unanswered until its whole ceiling is spent, which is what
-// [Config.LookupBudget] exists to make affordable.
+// the queue's own timing ([Queue.timing]) exists to make affordable.
 type stallingJS struct {
 	jetstream.JetStream
 
@@ -98,29 +99,35 @@ func (s *stallingJS) Consumer(ctx context.Context, stream, name string) (jetstre
 // one that reached CI was a deadline and the others come from the same client
 // on the same path.
 func TestAnUnansweredExistenceProbeStillProvisions(t *testing.T) {
+	t.Parallel()
 	for _, unanswered := range []error{
 		context.DeadlineExceeded,
 		nats.ErrTimeout,
 		nats.ErrNoResponders,
 	} {
 		t.Run(unanswered.Error(), func(t *testing.T) {
-			// A SHORT CEILING, because the branch under test is
-			// only reached once a probe has spent its WHOLE one —
-			// see [Config.LookupBudget]. At the shipped thirty
-			// seconds this case would cost thirty seconds to
-			// prove; here it costs a couple, and proves the same
-			// thing, because what is exercised is the EXHAUSTION
-			// rather than the duration.
+			t.Parallel()
+			q := newQueue(t)
+			// A SHORT CEILING AND A SHORT PAUSE, because the branch
+			// under test is only reached once a probe has spent its
+			// WHOLE ceiling — see [Queue.timing]. At the shipped
+			// thirty seconds this case would cost thirty seconds to
+			// prove; here it costs a quarter of one, and proves the
+			// same thing, because what is exercised is the
+			// EXHAUSTION rather than the duration.
 			//
-			// DERIVED FROM [jsprovision.ReAsk] rather than a
-			// number of its own: the ceiling has to outlast the
-			// gap between attempts or only one attempt fits, and a
-			// literal here would silently stop testing the re-ask
-			// the day that gap changed. Room for two gaps and the
-			// attempts around them.
-			q := newQueueWith(t, Config{
-				LookupBudget: 2*jsprovision.ReAsk + 500*time.Millisecond,
-			})
+			// THE CEILING IS DERIVED FROM THE PAUSE rather than a
+			// number of its own: it has to outlast the gap between
+			// attempts or only one attempt fits, and the assertion
+			// below that more than one went out would then be
+			// measuring a single timeout. Room for four gaps and the
+			// attempts around them. Set after the open, so the
+			// engine's own streams were provisioned at production
+			// timing and only this case's probe runs at this one.
+			timing := q.Clustered().Timing()
+			timing.ReAsk = 50 * time.Millisecond
+			timing.Lookup = 5 * timing.ReAsk
+			q.timing = timing
 			ctx := t.Context()
 
 			topic := topics.AgentInbox("unanswered-" + sanitizeName(unanswered.Error()))
@@ -174,6 +181,7 @@ func TestAnUnansweredExistenceProbeStillProvisions(t *testing.T) {
 // round trip ending in a worse message. This is the half that makes the switch
 // a decision rather than a blanket retry.
 func TestAnAnsweredFailureStillFailsTheProbe(t *testing.T) {
+	t.Parallel()
 	q := newQueue(t)
 	ctx := t.Context()
 
@@ -211,4 +219,97 @@ func sanitizeName(s string) string {
 		}
 	}
 	return string(out)
+}
+
+// lookupTermJS records the time to answer that every existence lookup was given,
+// and answers it from the real broker.
+type lookupTermJS struct {
+	jetstream.JetStream
+
+	mu   sync.Mutex
+	left map[string][]time.Duration
+}
+
+// note records what ctx gave call to answer in — or a negative duration for a
+// call handed no deadline at all.
+func (d *lookupTermJS) note(ctx context.Context, call string) {
+	left := time.Duration(-1)
+	if deadline, ok := ctx.Deadline(); ok {
+		left = time.Until(deadline)
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.left[call] = append(d.left[call], left)
+}
+
+func (d *lookupTermJS) Stream(ctx context.Context, name string) (jetstream.Stream, error) {
+	d.note(ctx, "stream "+name)
+	return d.JetStream.Stream(ctx, name)
+}
+
+func (d *lookupTermJS) Consumer(ctx context.Context, stream, name string) (jetstream.Consumer, error) {
+	d.note(ctx, "consumer "+name)
+	return d.JetStream.Consumer(ctx, stream, name)
+}
+
+// EVERY LOOKUP IS ASKED AT THE READ TERM, never at a write's.
+//
+// The server answers a read when it processes it or never
+// ([jsprovision.ReadTerm]): an object another node has just asked for is in
+// flight, and until the member preferred to lead it has applied the assignment
+// every other member drops a lookup of it without a word. A lookup held for a
+// write's term waits on a reply that does not exist — a three-member fleet
+// booting together was measured spending sixteen idle seconds on one stream
+// lookup that way. So each request a lookup sends carries the read term as its
+// deadline, which at this solo broker's production timing is a second against
+// a write's thirty: a lookup asked as a write is told apart by the deadline it
+// carried.
+//
+// All three lookups the provisioning path makes: the stream's before its
+// create, the mailbox's before its create, and the attachment's open.
+func TestEveryLookupIsAskedAtTheReadTerm(t *testing.T) {
+	t.Parallel()
+	q := newQueue(t)
+	rec := &lookupTermJS{JetStream: q.js, left: map[string][]time.Duration{}}
+	q.js = rec
+	ctx := t.Context()
+
+	spec, err := specForSubject("lookupterm.probe", time.Hour)
+	if err != nil {
+		t.Fatalf("spec: %v", err)
+	}
+	if err := q.ensureStream(ctx, spec); err != nil {
+		t.Fatalf("ensure stream: %v", err)
+	}
+	topic := topics.AgentInbox("lookup-term")
+	group := topics.AgentInboxGroup("lookup-term")
+	if _, err := q.EnsureSubscription(ctx, topic, group); err != nil {
+		t.Fatalf("ensure subscription: %v", err)
+	}
+	if err := q.Subscribe(ctx, topic, group, func(context.Context, *events.Event) queue.Result {
+		return queue.Ack()
+	}); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if n := len(rec.left["stream "+spec.name]); n == 0 {
+		t.Errorf("the stream %s was never looked up, so nothing here measured "+
+			"the term its lookup runs at", spec.name)
+	}
+	if n := len(rec.left["consumer "+consumerName(topic, group)]); n < 2 {
+		t.Errorf("the mailbox was looked up %d time(s), want the provisioning "+
+			"probe and the attachment's open", n)
+	}
+	read := q.provisioning().ReadTerm
+	for call, lefts := range rec.left {
+		for _, left := range lefts {
+			if left < 0 || left > read {
+				t.Errorf("%s was given %v to answer, want at most the %v read "+
+					"term — a dropped lookup held that long waits on a reply "+
+					"nobody will send", call, left, read)
+			}
+		}
+	}
 }

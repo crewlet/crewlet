@@ -224,6 +224,7 @@ func blockedReport() *statelog.Report {
 // verb: an operator runs it because the log is growing, and the answer to that
 // question must not be a column they have to find.
 func TestRetentionStatusLeadsWithTheBlockingTermInProse(t *testing.T) {
+	t.Parallel()
 	node := newFakeRetentionNode(t)
 	stdout, _, err := cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
 	if err != nil {
@@ -269,6 +270,7 @@ func TestRetentionStatusLeadsWithTheBlockingTermInProse(t *testing.T) {
 // and an empty WATERMARKS block with no blocking term, which reads as a trim
 // nothing is holding.
 func TestAReanchoredDomainPrintsNoFloorAndSaysWhy(t *testing.T) {
+	t.Parallel()
 	node := newFakeRetentionNode(t)
 	report := blockedReport()
 	d := &report.Domains[0]
@@ -312,6 +314,7 @@ func TestAReanchoredDomainPrintsNoFloorAndSaysWhy(t *testing.T) {
 // domain row looked ordinary, and a peer on a generation the log had left read
 // lag 0 against a sequence space that no longer exists.
 func TestRetentionStatusNamesARefusedDomainAndAStalePeer(t *testing.T) {
+	t.Parallel()
 	node := newFakeRetentionNode(t)
 	report := blockedReport()
 	report.Domains[0].Generation = 1
@@ -360,6 +363,7 @@ func TestRetentionStatusNamesARefusedDomainAndAStalePeer(t *testing.T) {
 // "is something wrong", and the shell script would be watching the one nobody
 // maintained.
 func TestRetentionStatusExitsNonZeroOnAnAlarm(t *testing.T) {
+	t.Parallel()
 	node := newFakeRetentionNode(t)
 	report := blockedReport()
 	report.Alarms = []statelog.Alarm{{
@@ -389,6 +393,7 @@ func TestRetentionStatusExitsNonZeroOnAnAlarm(t *testing.T) {
 // an operator watching a company go completely quiet had nothing to read that
 // said why, and the alarm that names it only fires after an hour of it.
 func TestRetentionStatusLeadsWithAnOpenMaintenanceWindow(t *testing.T) {
+	t.Parallel()
 	node := newFakeRetentionNode(t)
 	report := blockedReport()
 	report.Maintenance = &statelog.MaintenanceReport{
@@ -421,6 +426,7 @@ func TestRetentionStatusLeadsWithAnOpenMaintenanceWindow(t *testing.T) {
 // ran the verb, and printing nothing there reads as "nearly done" — which is
 // the one reading that stops somebody finishing it.
 func TestAnOperationWithNobodyOutstandingSaysWhoItIsWaitingFor(t *testing.T) {
+	t.Parallel()
 	node := newFakeRetentionNode(t)
 	report := blockedReport()
 	report.Maintenance = &statelog.MaintenanceReport{
@@ -443,6 +449,7 @@ func TestAnOperationWithNobodyOutstandingSaysWhoItIsWaitingFor(t *testing.T) {
 // AND A FLEET WITH NO OPERATION SAYS NOTHING ABOUT ONE, or the banner above
 // would be a line every operator learns to skip.
 func TestAHealthyFleetPrintsNoMaintenanceBanner(t *testing.T) {
+	t.Parallel()
 	node := newFakeRetentionNode(t)
 	stdout, _, err := cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
 	if err != nil {
@@ -458,6 +465,7 @@ func TestAHealthyFleetPrintsNoMaintenanceBanner(t *testing.T) {
 // alarm that fires on a fleet doing exactly what it was asked to do is one
 // nobody believes the second time.
 func TestRetentionStatusIsSilentAndZeroOnAHealthyFleet(t *testing.T) {
+	t.Parallel()
 	node := newFakeRetentionNode(t)
 	report := blockedReport()
 	report.Domains[0].BlockedBy = ""
@@ -478,6 +486,7 @@ func TestRetentionStatusIsSilentAndZeroOnAHealthyFleet(t *testing.T) {
 // node with no artefact and no reason renders as a node nobody asked, and the
 // absence is the answer to "why did the join fail".
 func TestRetentionSnapshotsNamesWhyANodeHoldsNone(t *testing.T) {
+	t.Parallel()
 	node := newFakeRetentionNode(t)
 	stdout, _, err := cli(t, "retention", "snapshots", bootstrapForURL(t, node.server.URL))
 	if err != nil {
@@ -495,6 +504,7 @@ func TestRetentionSnapshotsNamesWhyANodeHoldsNone(t *testing.T) {
 // TestAnAcknowledgementNamesBothTheLogAndTheSequence: an acknowledgement moves
 // the floor the trim deletes against, so there is no value to guess.
 func TestAnAcknowledgementNamesBothTheLogAndTheSequence(t *testing.T) {
+	t.Parallel()
 	node := newFakeRetentionNode(t)
 	if _, _, err := cli(t, "retention", "ack",
 		bootstrapForURL(t, node.server.URL), "-position", "918100000"); err == nil {
@@ -521,6 +531,7 @@ func TestAnAcknowledgementNamesBothTheLogAndTheSequence(t *testing.T) {
 // records applying anywhere in the fleet, which is not a value to get from a
 // shell history.
 func TestAGateGestureRequiresTheNodeIdTwice(t *testing.T) {
+	t.Parallel()
 	node := newFakeRetentionNode(t)
 	base := bootstrapForURL(t, node.server.URL)
 
@@ -566,6 +577,7 @@ func TestAGateGestureRequiresTheNodeIdTwice(t *testing.T) {
 // overrode. For a full log it is NOT: the same command is refused the same way
 // for ever, and advising it anyway sent the operator round a loop.
 func TestAGateGestureThatMissedALogSaysHowToFinishIt(t *testing.T) {
+	t.Parallel()
 	node := newFakeRetentionNode(t)
 	base := bootstrapForURL(t, node.server.URL)
 	gesture := statelog.NewOpID(time.Now().Add(-time.Minute), "evict-node-4")
@@ -697,6 +709,7 @@ func TestAGateGestureThatMissedALogSaysHowToFinishIt(t *testing.T) {
 // the dashboard renders the same refusal; this command turns `force` into
 // -force — and does not offer it to an operator who already passed it.
 func TestARefusedEvictionNamesTheFlagThatForcesIt(t *testing.T) {
+	t.Parallel()
 	node := newFakeRetentionNode(t)
 	base := bootstrapForURL(t, node.server.URL)
 	for name, refusal := range map[string]error{
@@ -737,6 +750,7 @@ func TestARefusedEvictionNamesTheFlagThatForcesIt(t *testing.T) {
 // that": a readmission whose register nobody could read is the judgement's
 // own answer, and its hint says how to get past it.
 func TestAGateRefusalsWaitNamesWhatItWaitsOn(t *testing.T) {
+	t.Parallel()
 	node := newFakeRetentionNode(t)
 	base := bootstrapForURL(t, node.server.URL)
 	// advice is each refusal's own line, which no other refusal's answer
@@ -801,6 +815,7 @@ func TestAGateRefusalsWaitNamesWhatItWaitsOn(t *testing.T) {
 // And the wait was the ten seconds every other verb takes, which two of the
 // five-second resolutions a gesture legitimately makes use up between them.
 func TestAGateTheNodeNeverAnsweredNamesItsOperation(t *testing.T) {
+	t.Parallel()
 	node := newFakeRetentionNode(t)
 	base := bootstrapForURL(t, node.server.URL)
 	node.hangUp = true
@@ -842,6 +857,7 @@ func TestAGateTheNodeNeverAnsweredNamesItsOperation(t *testing.T) {
 // no -op-id, and the only way on was a second gesture over every log the first
 // one reached.
 func TestAGateAnswerTheNodeDidNotWriteNamesItsOperation(t *testing.T) {
+	t.Parallel()
 	for name, reply := range map[string]func(w http.ResponseWriter){
 		"a gateway timeout's page": func(w http.ResponseWriter) {
 			w.Header().Set("Content-Type", "text/html")
@@ -926,6 +942,7 @@ func TestOnlyAnAnswerWithAnEngineCodeIsTheNodesRefusal(t *testing.T) {
 // so an operator readmitting a machine that was still offline put back the
 // very pin the eviction had lifted and was told it had worked.
 func TestReadmittingANodeBelowTheFloorIsRefused(t *testing.T) {
+	t.Parallel()
 	e := testEngine(t)
 	boot := bootstrapFor(t, 0)
 	boot.API.Port = freePort(t)

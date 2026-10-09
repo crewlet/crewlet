@@ -291,7 +291,7 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 
 	// THE ONE RULE THIS TRANSPORT ADDS: the caller is a person. See the
 	// package doc and ADR-0024.
-	seat := seatFor(s.chart, operatorID)
+	seat := seatFor(s.chart, s.env, operatorID)
 	if seat == "" {
 		httpjson.FailWith(w, http.StatusForbidden, CodeUnbound, unbound(name, operatorID))
 		return

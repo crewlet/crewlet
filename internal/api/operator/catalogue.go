@@ -135,6 +135,13 @@ type Options struct {
 	// [WorkActor] and [builtin.Parties].
 	Org func() *org.Organization
 
+	// Env resolves a `${VAR}` binding in the chart — `crewlet_operator_id:
+	// ${FOUNDER_ID}` — for the decisions this surface makes about its caller:
+	// the serving node's own chain, its secret store and then the environment
+	// it was handed, which is where the dashboard's own reads and a seat's
+	// tools resolve the same field. Nil reads the process environment.
+	Env org.EnvLookup
+
 	// Leads answers whether one handle leads another — the one authority
 	// over a person's record that reaches across people. Nil degrades to
 	// "your own only" rather than to a hole.
@@ -189,6 +196,9 @@ type Server struct {
 	// a person, which is the whole of the act transport's admission rule,
 	// and which person an audit record names.
 	chart func() *org.Organization
+
+	// env is [Options.Env], which the chart's bindings resolve through.
+	env org.EnvLookup
 
 	// audit is [Options.Audit].
 	audit AuditPublisher
@@ -261,7 +271,8 @@ func New(opts Options) (*Server, error) {
 	if opts.Audit == nil {
 		return nil, ErrNoAudit
 	}
-	s := &Server{catalogue: newCatalogue(callables), chart: opts.Org, audit: opts.Audit}
+	s := &Server{catalogue: newCatalogue(callables), chart: opts.Org, env: opts.Env,
+		audit: opts.Audit}
 	s.mcp = newMCPTransport(s, opts.Company)
 	return s, nil
 }

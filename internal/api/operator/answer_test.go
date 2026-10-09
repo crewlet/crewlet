@@ -92,7 +92,7 @@ func answerSurface(t *testing.T, model *countedModel, budget *companyWindows) *o
 		Org:       boundChart,
 		Answer: builtin.AnswerDeps{
 			Models: model, Budget: budget,
-			Actor: operator.WorkActor(boundChart),
+			Actor: operator.WorkActor(boundChart, nil),
 		},
 	})
 }

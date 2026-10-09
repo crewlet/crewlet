@@ -319,6 +319,14 @@ type applyHarness struct {
 
 func newApplyHarness(t *testing.T, domain statelog.Domain) *applyHarness {
 	t.Helper()
+	return newApplyHarnessWith(t, domain, nil)
+}
+
+// newApplyHarnessWith is [newApplyHarness] with the runner's dependencies
+// adjusted by mutate before it is built, for a case about one of them.
+func newApplyHarnessWith(t *testing.T, domain statelog.Domain,
+	mutate func(*statelog.RunnerDeps)) *applyHarness {
+	t.Helper()
 	dir := t.TempDir()
 	db, estate := storetest.OpenEstate(t, filepath.Join(dir, "node.db"), store.Options{}, 1)
 	t.Cleanup(func() {
@@ -344,7 +352,7 @@ func newApplyHarness(t *testing.T, domain statelog.Domain) *applyHarness {
 	if err != nil {
 		t.Fatalf("recorder: %v", err)
 	}
-	runner, err := statelog.NewRunner(statelog.RunnerDeps{
+	deps := statelog.RunnerDeps{
 		Domain: domain, Spec: specOf(domain),
 		Applier:    applier,
 		Fetch:      fetch,
@@ -353,7 +361,11 @@ func newApplyHarness(t *testing.T, domain statelog.Domain) *applyHarness {
 		DB:         estate,
 		Checkpoint: statelog.Position{Generation: 1},
 		Metrics:    recorder,
-	})
+	}
+	if mutate != nil {
+		mutate(&deps)
+	}
+	runner, err := statelog.NewRunner(deps)
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -2478,6 +2490,66 @@ func TestTheDrainLatchIsTheApplierSOwnObservation(t *testing.T) {
 	}
 	cancel()
 	<-errs
+}
+
+// THE FIRST DRAIN OF A RUN IS TOLD, ONCE, AND ONLY ONCE THE LATCH READS IT.
+//
+// What waits on the drain is a loop of somebody else's — a node's snapshot
+// gate declines until every applier has drained — and a gate that learned of
+// it only by asking again found out a boot's whole settling time late. So the
+// loop says so, the moment [statelog.Runner.Drained] turns true: never before
+// it (a gate woken early reads the latch still false and declines the copy it
+// was woken for), never again for the later drains of the same run (every
+// empty fetch is one, and a hook called per fetch would wake the gate once a
+// fetch interval for the life of the node), and again after the loop runs
+// anew, whose drain is a claim about a different history.
+func TestTheFirstDrainOfARunIsToldOnce(t *testing.T) {
+	t.Parallel()
+	var h *applyHarness
+	told := make(chan bool, 16)
+	h = newApplyHarnessWith(t, probeDomain{}, func(d *statelog.RunnerDeps) {
+		d.OnDrained = func() { told <- h.runner.Drained() }
+	})
+	h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
+
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	errs := make(chan error, 1)
+	go func() { errs <- h.runner.Run(ctx) }()
+	awaitTold(t, told, "the first drain")
+	// EVERY LATER EMPTY FETCH IS A DRAIN TOO, and says nothing: an idle
+	// fetch comes back empty after [statelog.FetchWait], so the loop is
+	// left long enough to drain twice more past the one that latched.
+	time.Sleep(3 * statelog.FetchWait)
+	select {
+	case <-told:
+		t.Fatal("a drain after the first of the run was told again")
+	default:
+	}
+	cancel()
+	<-errs
+
+	// A RUN THAT STARTS AGAIN drains a history of its own, and says so.
+	ctx, cancel = context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	go func() { errs <- h.runner.Run(ctx) }()
+	awaitTold(t, told, "the restarted loop's first drain")
+	cancel()
+	<-errs
+}
+
+// awaitTold waits for one call of the drain hook and holds it to having been
+// made with the latch already set.
+func awaitTold(t *testing.T, told <-chan bool, what string) {
+	t.Helper()
+	select {
+	case latched := <-told:
+		if !latched {
+			t.Fatalf("%s was told while Drained() still read false, so a "+
+				"gate it woke would decline the copy it was woken for", what)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatalf("waited 15s for %s to be told", what)
+	}
 }
 
 // waitForDrain blocks until the runner's drain latch reads want, or fails.

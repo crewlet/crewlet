@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 var base = time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
@@ -22,10 +23,7 @@ func episodes(t *testing.T, opts ...func(*store.Options)) *learning.Episodes {
 	for _, fn := range opts {
 		fn(&o)
 	}
-	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "l.db"), o)
-	if err != nil {
-		t.Fatalf("store.OpenNode: %v", err)
-	}
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "l.db"), o)
 	t.Cleanup(func() { _ = db.Close() })
 	return learning.NewEpisodes(db)
 }
@@ -467,10 +465,7 @@ func TestListColumnsAlwaysHoldAJSONArray(t *testing.T) {
 	//
 	// Found by mutation: dropping the guard changed no Go-visible
 	// behaviour, so the property had to be asserted at the column.
-	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "j.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.OpenNode: %v", err)
-	}
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "j.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	e := learning.NewEpisodes(db)
 	mustAppend(t, e, ep("a", "ceo", base)) // every list nil

@@ -749,8 +749,10 @@ func (a *Applier) writeWatchers(ctx context.Context, tx *sql.Tx, at applyContext
 		})
 	if err != nil {
 		// The chunk names no single handle, so neither does this: a
-		// statement carrying 285 of them failed, and naming one of
-		// them would point a reader at a row that is probably fine.
+		// statement carrying all of them failed — up to [MaxWatchers],
+		// under the 1 000-row cap, so one chunk is the whole list — and
+		// naming one of them would point a reader at a row that is
+		// probably fine.
 		return 0, fmt.Errorf("pages: write %s's watchers: %w", head.ID, err)
 	}
 	return rows, nil

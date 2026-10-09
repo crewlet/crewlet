@@ -65,11 +65,11 @@ semantic half found leaves the fused answer entirely if the semantic half
 drops it, where a document both halves found merely slides down.
 
 The driver this engine ships has **no approximate-nearest-neighbour index** —
-`internal/store/caps.go` probes for one on every open and reports what it
-found — and the alternatives to building one were a full exact scan of every
-vector on every query, or embedding a search library with its own index
-format, file and backup story on every node. Instead the search is **two
-stages**, which is the shape every production vector engine uses anyway:
+`internal/store/caps.go` measures for one once per process and reports what it
+found on every open — and the alternatives to building one were a full exact
+scan of every vector on every query, or embedding a search library with its
+own index format, file and backup story on every node. Instead the search is
+**two stages**, which is the shape every production vector engine uses anyway:
 
 1. **Stage one** ranks a narrow table of **1-bit sign codes** — one bit per
    dimension, 387 bytes at 3 072 dimensions against 12 KB for the vector — and

@@ -260,21 +260,39 @@ func TestALineLongerThanTheRecordIsLeftOutWhole(t *testing.T) {
 // reports a clean end of file, so a clipped report reads as a finished one;
 // and the local backend read whatever the job wrote, whole, into the memory of
 // the host it shares.
+//
+// The rule at a cap of a KiB, where the +1 and the refusal naming its cap are
+// the same branches they are at 32 MiB; and then the local backend at the REAL
+// cap, through a box its own constructor built, over a sparse file that costs
+// the disk nothing.
 func TestAFilePastTheCapIsRefusedNotClipped(t *testing.T) {
 	t.Parallel()
-	exact, err := readCapped(io.LimitReader(zeros{}, MaxFileBytes), "findings")
-	if err != nil || len(exact) != MaxFileBytes {
+	const small = 1 << 10
+	exact, err := readCapped(io.LimitReader(zeros{}, small), "findings", small)
+	if err != nil || len(exact) != small {
 		t.Fatalf("a file of exactly the cap: %d bytes, %v", len(exact), err)
 	}
-	if _, err := readCapped(io.LimitReader(zeros{}, MaxFileBytes+1), "findings"); !errors.Is(err, ErrFileTooLarge) {
-		t.Fatalf("a file past the cap: %v, want ErrFileTooLarge", err)
+	_, err = readCapped(io.LimitReader(zeros{}, small+1), "findings", small)
+	var tooLarge *FileTooLargeError
+	if !errors.Is(err, ErrFileTooLarge) || !errors.As(err, &tooLarge) ||
+		tooLarge.Limit != small || tooLarge.Path != "findings" || !strings.Contains(err.Error(), "past 1 KiB") {
+		t.Fatalf("a file past the cap: %v, want ErrFileTooLarge naming findings and its 1 KiB", err)
 	}
 
 	dir := t.TempDir()
-	if got, err := readHostFile(filepath.Join(dir, "absent"), "absent"); got != nil || err != nil {
+	if got, err := readHostFile(filepath.Join(dir, "absent"), "absent", MaxFileBytes); got != nil || err != nil {
 		t.Errorf("a missing file = %q, %v; want empty, the poll's contract", got, err)
 	}
-	big := filepath.Join(dir, "stderr")
+	local, err := NewLocal(LocalOptions{Placement: Direct, StateDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("NewLocal: %v", err)
+	}
+	box, err := local.Create(t.Context(), Spec{Placement: Direct})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() { _ = box.Close(context.WithoutCancel(t.Context())) })
+	big := box.Home() + "/stderr"
 	f, err := os.Create(big)
 	if err != nil {
 		t.Fatal(err)
@@ -285,8 +303,59 @@ func TestAFilePastTheCapIsRefusedNotClipped(t *testing.T) {
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := readHostFile(big, "stderr"); !errors.Is(err, ErrFileTooLarge) {
-		t.Errorf("a local file past the cap: %v, want ErrFileTooLarge", err)
+	if _, err := box.ReadFile(t.Context(), big); !errors.As(err, &tooLarge) || tooLarge.Limit != MaxFileBytes {
+		t.Errorf("a local file past the real cap: %v, want ErrFileTooLarge at MaxFileBytes", err)
+	}
+}
+
+// EVERY BOX READS WHOLE UP TO MAXFILEBYTES unless a suite said otherwise —
+// the fake, a direct box from Create, and a box of either placement reattached
+// from its directory. (Create's container branch needs a container runtime;
+// like every constructor it gives its box no cap, and a box with none reads
+// by MaxFileBytes, which is what the others prove.) The contract suite
+// certifies the fake and the local boxes at a cap of its own, so this is what
+// ties that cap to the one a running engine reads by. E2B keeps its contract
+// at MaxFileBytes itself, so the real figure is certified there.
+func TestEveryBoxReadsWholeUpToMaxFileBytes(t *testing.T) {
+	t.Parallel()
+	if MaxFileBytes != 32<<20 {
+		t.Errorf("MaxFileBytes = %d, want the 32 MiB its doc argues for", MaxFileBytes)
+	}
+	if got := NewFakeSandbox("box").ReadCap(); got != MaxFileBytes {
+		t.Errorf("a fake box reads %d bytes whole, want MaxFileBytes", got)
+	}
+	direct, err := NewLocal(LocalOptions{Placement: Direct, StateDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("NewLocal: %v", err)
+	}
+	created, err := direct.Create(t.Context(), Spec{Placement: Direct})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() { _ = created.Close(context.WithoutCancel(t.Context())) })
+	reattached, err := direct.reattach(created.ID())
+	if err != nil {
+		t.Fatalf("reattach: %v", err)
+	}
+	container := &Local{opts: LocalOptions{Placement: Container, StateDir: t.TempDir()}}
+	layout, err := container.layout("contract")
+	if err != nil {
+		t.Fatalf("layout: %v", err)
+	}
+	if err := os.MkdirAll(layout.root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	reattachedContainer, err := container.reattach("contract")
+	if err != nil {
+		t.Fatalf("reattach a container box: %v", err)
+	}
+	for name, box := range map[string]Sandbox{
+		"a created direct box": created, "a reattached direct box": reattached,
+		"a reattached container box": reattachedContainer,
+	} {
+		if got := ReadLimit(box); got != MaxFileBytes {
+			t.Errorf("%s reads %d bytes whole, want MaxFileBytes", name, got)
+		}
 	}
 }
 

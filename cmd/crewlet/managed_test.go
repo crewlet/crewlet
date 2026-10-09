@@ -30,6 +30,7 @@ func managedBootstrap(t *testing.T, dir string) string {
 // an import and an activation alike — naming who manages it and the two ways
 // forward, and storing nothing. Reading it is untouched.
 func TestAManagedDocumentRefusesTheOfflineWrites(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	open := bootstrapForStore(t, dir)
 	company := companyFile(t, dir, "company.yaml", nil)

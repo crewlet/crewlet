@@ -3,6 +3,7 @@ package search_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"path/filepath"
@@ -414,7 +415,7 @@ func newIndexedCorpus(b *testing.B, n int) *indexedCorpus {
 
 	// THE DUTY'S OWN TRAINING, on the store's own rows and held-out
 	// documents, then installed and rolled out through the applier.
-	index := trainedIndex(b, c.db, c.model, search.FixtureWidth)
+	index := trainedIndex(b, c.db, c.model, search.FixtureWidth, search.IVFReassignBatch)
 	c.lists, c.probes = index.Index.Lists, index.Index.Probes
 	c.installed = index.Index.Measurement.Passed() &&
 		c.probes*search.IVFProbeCeiling <= c.lists
@@ -604,6 +605,47 @@ func BenchmarkIndexHeadRead(b *testing.B) {
 			}
 		})
 	}
+}
+
+// BenchmarkReassignBatch is one batch of a rollout as every holder applies it:
+// [search.IVFReassignBatch] rows of the shipped width re-filed under an index
+// installed over them, in the one transaction the framework commits it in —
+// rolled back after each iteration, so every iteration re-files the same
+// rows. A rollout of the largest corpus an index serves is about 545 of these
+// on every node, and so is a node replaying one.
+func BenchmarkReassignBatch(b *testing.B) {
+	const n, model = 5_000, "bench-embed"
+	db, _ := seedCorpus(b, n, model)
+	index := trainedIndex(b, db, model, search.FixtureWidth, search.IVFReassignBatch)
+	applyRecordAt(b, db, index, n+1)
+	generation := statelog.Position{Stream: "S", Generation: 1, Seq: n + 1}.Packed()
+	payload, err := reassignRecord(generation, 0, len(index.Index.Rollout)).Encode()
+	if err != nil {
+		b.Fatal(err)
+	}
+	record := statelog.Record{
+		Position: statelog.Position{Stream: "S", Generation: 1, Seq: n + 2},
+		Payload:  payload,
+	}
+	errUndone := errors.New("undone so the next iteration re-files the same rows")
+	applier := search.NewApplier()
+	refiled := 0
+	for b.Loop() {
+		if err := db.Replicated().Tx(b.Context(), func(tx *sql.Tx) error {
+			moved, err := applier.Apply(b.Context(), tx, record, statelog.ApplyOptions{})
+			if err != nil {
+				return err
+			}
+			refiled = moved
+			return errUndone
+		}); !errors.Is(err, errUndone) {
+			b.Fatal(err)
+		}
+	}
+	if refiled == 0 {
+		b.Fatal("the batch re-filed nothing, so this measured nothing")
+	}
+	b.ReportMetric(float64(refiled), "rows/op")
 }
 
 // BenchmarkIndexTraining is the embedding duty's TRAINING TICK as the duty runs

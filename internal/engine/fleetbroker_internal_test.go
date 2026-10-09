@@ -168,6 +168,7 @@ func nameless(g jetstream.MetaGroup, node string) jetstream.MetaGroup {
 // alone. A live member counted under a name the answer does not carry is
 // counted, not "not in the group".
 func TestTheBrokerListingNamesEveryDisagreement(t *testing.T) {
+	t.Parallel()
 	fleet := newBrokerFleet(t)
 	group := groupOf("node-a", "node-b", "node-c", "node-e", "node-f", "node-g")
 	group = nameless(nameless(nameless(group, "node-e"), "node-f"), "node-b")
@@ -224,6 +225,7 @@ func TestTheBrokerListingNamesEveryDisagreement(t *testing.T) {
 // is refused naming whose cluster it is — never an answer about a broker this
 // fleet does not run.
 func TestAnExternalBrokerIsNotThisFleetsToList(t *testing.T) {
+	t.Parallel()
 	fleet := newBrokerFleet(t)
 	client := fleet.node(t, placement.NodeProfile{ID: "node-a",
 		Roles: placement.Roles(placement.RoleData), Broker: placement.BrokerClient}, nil)
@@ -246,6 +248,7 @@ func TestAnExternalBrokerIsNotThisFleetsToList(t *testing.T) {
 // another will do — and the metadata group's own refusal travels back to the
 // asker as the sentinel a caller branches on.
 func TestAMemberIsRemovedOnlyOnceItIsGoneAndThroughAnotherMember(t *testing.T) {
+	t.Parallel()
 	fleet := newBrokerFleet(t)
 	a := &fakeMember{group: groupOf("node-a", "node-b", "node-c")}
 	b := &fakeMember{group: groupOf("node-a", "node-b", "node-c")}
@@ -303,6 +306,7 @@ func TestAMemberIsRemovedOnlyOnceItIsGoneAndThroughAnotherMember(t *testing.T) {
 // group counts is the id, and a name nobody has heard is no obstacle to
 // computing it.
 func TestAVoterNobodyCanNameIsRemovedByItsPeerID(t *testing.T) {
+	t.Parallel()
 	fleet := newBrokerFleet(t)
 	a := &fakeMember{group: nameless(nameless(
 		groupOf("node-a", "node-b", "node-c", "node-d"), "node-c"), "node-d")}
@@ -340,6 +344,7 @@ func TestAVoterNobodyCanNameIsRemovedByItsPeerID(t *testing.T) {
 // because a running MEMBER rejoins at its next restart, has nothing to protect,
 // and the command the listing prints for it must work as printed.
 func TestANodeAliveAsALeafUnderAVotersNameIsRemovedWithoutForce(t *testing.T) {
+	t.Parallel()
 	fleet := newBrokerFleet(t)
 	a := &fakeMember{group: groupOf("node-a", "node-b", "node-e", "node-g")}
 	fleet.node(t, member("node-a", placement.RoleData), a)
@@ -368,6 +373,7 @@ func TestANodeAliveAsALeafUnderAVotersNameIsRemovedWithoutForce(t *testing.T) {
 // nothing about the group, so the next member carries it rather than the
 // operator being told the removal failed.
 func TestAMemberThatCannotCarryItHereAsksTheNext(t *testing.T) {
+	t.Parallel()
 	fleet := newBrokerFleet(t)
 	here := &fakeMember{groupOK: jetstream.ErrNoMetaGroup, refuse: jetstream.ErrNoMetaGroup}
 	b := &fakeMember{group: groupOf("node-a", "node-b", "node-c")}
@@ -392,6 +398,7 @@ func TestAMemberThatCannotCarryItHereAsksTheNext(t *testing.T) {
 // commits — so a removal it carried could only ever be reported as not made.
 // The gesture says who would have to carry it instead.
 func TestTheOnlyLiveMemberIsNeverAskedToRemoveItself(t *testing.T) {
+	t.Parallel()
 	fleet := newBrokerFleet(t)
 	a := &fakeMember{group: groupOf("node-a", "node-b", "node-c")}
 	fleet.node(t, member("node-a", placement.RoleData), a)
@@ -412,6 +419,7 @@ func TestTheOnlyLiveMemberIsNeverAskedToRemoveItself(t *testing.T) {
 // and the gesture is over inside ONE wait — never one wait per member — which
 // is what the command line's and the dashboard's own waits are sized on.
 func TestASilentCarrierEndsTheRemovalAsUnknown(t *testing.T) {
+	t.Parallel()
 	fleet := newBrokerFleet(t)
 	b := &fakeMember{group: groupOf("node-a", "node-b", "node-c")}
 	// node-a TAKES THE REQUEST AND NEVER ANSWERS, first in the order
@@ -442,6 +450,7 @@ func TestASilentCarrierEndsTheRemovalAsUnknown(t *testing.T) {
 // would spend the whole wait of the command line and the dashboard, which is
 // ten seconds each.
 func TestAListingIsNotHeldUpByASilentMember(t *testing.T) {
+	t.Parallel()
 	fleet := newBrokerFleet(t)
 	fleet.wedged(t, "node-a")
 	fleet.node(t, member("node-b", placement.RoleData),
@@ -461,6 +470,7 @@ func TestAListingIsNotHeldUpByASilentMember(t *testing.T) {
 
 // A LISTING NOBODY COULD ANSWER SAYS WHO WAS ASKED, within one wait.
 func TestAnUnreadGroupSaysWhyWithinOneWait(t *testing.T) {
+	t.Parallel()
 	fleet := newBrokerFleet(t)
 	fleet.wedged(t, "node-a")
 	fleet.present(t, member("node-b", placement.RoleData))
@@ -481,6 +491,7 @@ func TestAnUnreadGroupSaysWhyWithinOneWait(t *testing.T) {
 // A MEMBER THAT CANNOT CARRY IT IS PASSED OVER, and with nobody who can the
 // gesture says so rather than reporting a removal nobody made.
 func TestARemovalWithNoMemberToCarryItSaysSo(t *testing.T) {
+	t.Parallel()
 	fleet := newBrokerFleet(t)
 	solo := &fakeMember{groupOK: jetstream.ErrNoMetaGroup, refuse: jetstream.ErrNoMetaGroup}
 	fleet.node(t, member("node-a", placement.RoleData), solo)
@@ -501,6 +512,7 @@ func TestARemovalWithNoMemberToCarryItSaysSo(t *testing.T) {
 
 // EVERY FINDING KIND IS ONE THIS BUILD NAMES, and none is valid by accident.
 func TestTheBrokerFindingKindsAreClosed(t *testing.T) {
+	t.Parallel()
 	for _, k := range BrokerFindingKinds() {
 		if !k.Valid() {
 			t.Errorf("%q is listed and not valid", k)

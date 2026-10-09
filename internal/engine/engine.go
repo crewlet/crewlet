@@ -56,6 +56,14 @@ type Company struct {
 	// describe credentials no pool holds.
 	credentials map[string][]credentialSource
 
+	// contacts resolves the `${VAR}` contact ids a teammate in the prompts'
+	// roster may carry: the resolver this epoch was built through, which on
+	// a running node is its own chain — the secret store, then the
+	// environment it was handed — so a teammate's id reads in a prompt as
+	// notification routing reads it. Never the process environment behind
+	// the chain's back.
+	contacts org.EnvLookup
+
 	// Tools is the catalogue every seat's surface is cut from: the
 	// builtins, plus the SHARED MCP servers, which one company-wide child
 	// serves for everyone.
@@ -145,6 +153,7 @@ func newCompany(c *config.Company, env *config.Resolver) (*Company, error) {
 		Models:      models,
 		Tools:       tools.NewRegistry(),
 		credentials: credentialSources(c, env),
+		contacts:    env.LookupOK,
 	}, nil
 }
 
@@ -230,7 +239,7 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 	te := c.Config.TurnEngine
 	del := te.Delegation
 	return runner.New(runner.Config{
-		Seat:     prompts.Seat{Org: c.Org, Role: role},
+		Seat:     prompts.Seat{Org: c.Org, Role: role, Env: c.contacts},
 		Registry: reg,
 		Models:   c.Models,
 		Caps: runner.Caps{

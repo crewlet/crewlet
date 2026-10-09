@@ -79,10 +79,7 @@ func download(t *testing.T, n *node, project, path string) (int, []byte) {
 // the object store (the bytes) rather than from anything the first member
 // still holds in memory. The row's digest is the content's, so the download
 // was verified against what was uploaded rather than against itself.
-func TestAFileUploadedToOneNodeDownloadsFromAnother(t *testing.T) {
-	noParallel(t)
-	c := startCluster(t, fleetSize)
-	c.hydrated(t)
+func claimAFileUploadedToOneNodeDownloadsFromAnother(t *testing.T, c *cluster) {
 	content := bytes.Repeat([]byte("region,quarter,revenue\nemea,q3,1200\n"), 90_000)
 	if len(content) <= 2*natsobj.MessageBytes {
 		t.Fatalf("the fixture is %d bytes, under three of the bucket's messages", len(content))
@@ -120,6 +117,7 @@ func TestAFileUploadedToOneNodeDownloadsFromAnother(t *testing.T) {
 // the members' bucket, and the data node serves both — while the node that ran
 // the turn keeps neither.
 func TestASeatOnAStatelessNodeWritesAFileTheDataNodeServes(t *testing.T) {
+	t.Parallel()
 	p := startStatelessPair(t)
 	waitFor(t, "the stateless node to be admitted by a data node", hydrated(t, p.agent.engine))
 	waitForSeat(t, p.agent, "ceo")
@@ -190,10 +188,7 @@ func operatorCall(t *testing.T, n *node, method, path string) (int, map[string]a
 // is recorded in the coordination store, so a member that never ran a pass
 // shows it on its fleet view naming the member that did and the backend it
 // collected — the store the whole fleet shares, not any one node's view of it.
-func TestTheCollectorsReportReadsOnEveryNode(t *testing.T) {
-	noParallel(t)
-	c := startCluster(t, fleetSize)
-	c.hydrated(t)
+func claimTheCollectorsReportReadsOnEveryNode(t *testing.T, c *cluster) {
 	ids := map[string]bool{}
 	for _, n := range c.nodes {
 		ids[n.id] = true

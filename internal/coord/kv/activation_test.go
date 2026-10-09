@@ -12,6 +12,7 @@ import (
 // build's pointer, so a later build must keep every key here with the meaning
 // it has here, and a change to this record cannot go unnoticed.
 func TestThePointerRecordIsPinnedOnTheWire(t *testing.T) {
+	t.Parallel()
 	at := time.Date(2026, 9, 2, 8, 0, 0, 0, time.UTC)
 	written := at.Add(-time.Hour)
 	store := openFleet(t, embeddedNATS(t))

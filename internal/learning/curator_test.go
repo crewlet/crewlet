@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // announced collects what the background passes published.
@@ -516,10 +517,7 @@ func (s *countingSummarizer) count() int {
 // loop, which is the seam an operator's deployment actually uses.
 func lifecycle(t *testing.T, o learning.Options) (*learning.Lifecycle, *learning.Episodes, *countingSummarizer) {
 	t.Helper()
-	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "life.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.OpenNode: %v", err)
-	}
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "life.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	sum := &countingSummarizer{}
 	return learning.NewLifecycle(db, sum, o), learning.NewEpisodes(db), sum

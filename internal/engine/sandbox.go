@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -2122,7 +2123,13 @@ func (e *Engine) publishSeatLifecycle(ctx context.Context, handle string,
 		return
 	}
 	ev.Source = role.Name
-	if err := e.backends.Queue.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
+	// ON A BOUND OF ITS OWN ([lifecycleContext]), never a step of a stop's
+	// allowance when a drain released the seat: a live screen ages a seat out
+	// whether or not this lands, and the allowance is the time the seat's
+	// LEASE needs to be given back.
+	publishCtx, cancel := lifecycleContext(ctx)
+	defer cancel()
+	if err := e.backends.Queue.Publish(publishCtx, topics.Event(ev.Type), ev); err != nil {
 		log.WarnContext(ctx, "seat_lifecycle_not_published", "type", ev.Type,
 			"seat", handle, "error", err.Error(),
 			"detail", "the live seat state keeps whatever this seat last showed")
@@ -2139,8 +2146,22 @@ func (e *Engine) releaseSeat(ctx context.Context, handle string) {
 	// release tears down: a seat that went away with no event left its
 	// last state standing on every dashboard — stuck "working" in a phase
 	// that ended, because `terminated` was a state nothing could reach.
-	e.publishSeatLifecycle(ctx, handle,
-		types.AgentTerminated{Reason: "the seat was released by this node"})
+	//
+	// BESIDE THE TEARDOWN BELOW rather than in front of it, because the
+	// event travels on the stream and a stream that will not acknowledge
+	// holds it for its whole bound ([lifecyclePublishBudget]), which the
+	// seat's teardown — its last memory publish among it — has no reason to
+	// wait out. And JOINED BEFORE THIS RETURNS, which is before the host
+	// gives the seat's lease back: a peer that takes the seat over then
+	// announces its `agent_spawned` after this node's `agent_terminated`,
+	// never before it, and the live projection, which keys on the role,
+	// would otherwise show a running seat as terminated.
+	var terminated sync.WaitGroup
+	defer terminated.Wait()
+	terminated.Go(func() {
+		e.publishSeatLifecycle(ctx, handle,
+			types.AgentTerminated{Reason: "the seat was released by this node"})
+	})
 	// The seat's children die with its lease. The credentials in one ARE
 	// that seat's identity, so a child left running would let this node go
 	// on acting as a seat a peer has taken over — and the surface goes

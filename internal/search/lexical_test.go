@@ -24,17 +24,39 @@ import (
 // indexer walks rather than joins is that no read crosses between them.
 func page(t testing.TB, db *store.DB, id, container, title, body string, version int) {
 	t.Helper()
-	_, err := storetest.ReplicatedDB(t, db.Replicated()).SQL().ExecContext(t.Context(), `
-		INSERT INTO pages_heads (id, container, parent_id, title, title_norm, body,
-		                         status, author, edit_version, created_at,
-		                         updated_at, version, scoped_through, document)
-		VALUES (?, ?, '', ?, lower(?), ?, 'published', '', 1, 0, 0, ?, 0, '{}')
-		ON CONFLICT (id) DO UPDATE SET
-			title = excluded.title, title_norm = excluded.title_norm,
-			body = excluded.body, version = excluded.version`,
-		id, container, title, title, body, version)
-	if err != nil {
-		t.Fatalf("insert page %s: %v", id, err)
+	writePages(t, db, appliedPage{id: id, container: container, title: title, body: body,
+		version: version})
+}
+
+// appliedPage is one applied page row, as [writePages] writes it.
+type appliedPage struct {
+	id, container, title, body string
+	version                    int
+}
+
+// writePages writes many applied page rows in ONE transaction: nothing reads
+// the estate between two of them, and a fixture of a thousand pages written a
+// page at a time was a thousand synchronous commits before the case began.
+func writePages(t testing.TB, db *store.DB, rows ...appliedPage) {
+	t.Helper()
+	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		for _, r := range rows {
+			if _, err := tx.ExecContext(t.Context(), `
+				INSERT INTO pages_heads (id, container, parent_id, title, title_norm,
+				                         body, status, author, edit_version,
+				                         created_at, updated_at, version,
+				                         scoped_through, document)
+				VALUES (?, ?, '', ?, lower(?), ?, 'published', '', 1, 0, 0, ?, 0, '{}')
+				ON CONFLICT (id) DO UPDATE SET
+					title = excluded.title, title_norm = excluded.title_norm,
+					body = excluded.body, version = excluded.version`,
+				r.id, r.container, r.title, r.title, r.body, r.version); err != nil {
+				return fmt.Errorf("insert page %s: %w", r.id, err)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -265,10 +287,13 @@ func TestALapOverAQuietCorpusReadsNoBodies(t *testing.T) {
 	db := openStore(t)
 	counted := &countingSource{LexicalSource: search.PageSource{}}
 	x := search.NewIndexerOver(db, db.Replicated().Reader(), []search.LexicalSource{counted})
+	var rows []appliedPage
 	for i := range 45 { // more than one index batch
-		page(t, db, fmt.Sprintf("p.%d", i), "ENG", fmt.Sprintf("Page %d", i),
-			"shared vocabulary across the whole company", 1)
+		rows = append(rows, appliedPage{id: fmt.Sprintf("p.%d", i), container: "ENG",
+			title: fmt.Sprintf("Page %d", i),
+			body:  "shared vocabulary across the whole company", version: 1})
 	}
+	writePages(t, db, rows...)
 	indexAll(t, x)
 
 	counted.scans, counted.fetches = 0, 0
@@ -369,10 +394,13 @@ func TestTheIndexerCatchesUpOnItsOwn(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
 	x := search.NewIndexer(db, db.Replicated().Reader())
+	var rows []appliedPage
 	for i := range 45 { // more than one batch
-		page(t, db, fmt.Sprintf("p.%d", i), "ENG", fmt.Sprintf("Page %d", i),
-			"shared vocabulary across the whole company", i+1)
+		rows = append(rows, appliedPage{id: fmt.Sprintf("p.%d", i), container: "ENG",
+			title: fmt.Sprintf("Page %d", i),
+			body:  "shared vocabulary across the whole company", version: i + 1})
 	}
+	writePages(t, db, rows...)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	go x.Run(ctx)
@@ -398,10 +426,13 @@ func TestAScopeNarrowsResultsWithoutChangingTheRanking(t *testing.T) {
 
 	page(t, db, "p.eng", "ENG", "Deploy", "the deploy pipeline runs here", 1)
 	page(t, db, "p.prod", "PROD", "Launch", "the deploy pipeline is announced here", 1)
+	var filler []appliedPage
 	for i := range 20 {
-		page(t, db, fmt.Sprintf("p.filler%d", i), "PROD", "Filler",
-			"unrelated words about other things entirely", 1)
+		filler = append(filler, appliedPage{id: fmt.Sprintf("p.filler%d", i),
+			container: "PROD", title: "Filler",
+			body: "unrelated words about other things entirely", version: 1})
 	}
+	writePages(t, db, filler...)
 	indexAll(t, x)
 
 	all, err := x.Search(t.Context(), search.LexicalQuery{Text: "deploy pipeline"})

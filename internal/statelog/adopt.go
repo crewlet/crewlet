@@ -39,6 +39,23 @@ type AdoptDeps struct {
 	// Conn is the transfer's own connection.
 	Conn *nats.Conn
 
+	// Donors answers the donors this join expects to hear from, so its
+	// collection ends once each has answered rather than at the
+	// [OfferWindow] ([CollectOffers]). It must name EVERY node that can
+	// offer, because the collection stops on the last one it names and an
+	// offer arriving after that is not waited for: the engine names every
+	// live data node — each runs a donor — and every node whose fresh
+	// register row names an artefact, which is how a DRAINING node is
+	// named, since it gives up its presence first and goes on serving its
+	// donor until its state log stops.
+	//
+	// Nil, or an error, waits out the window: an expectation is a way to
+	// stop early and never a reason not to ask. It is called WHILE the
+	// offers are collected, on a context the window ends, and must return
+	// once that context does — a listing still running when the window
+	// closes is abandoned rather than waited for.
+	Donors func(ctx context.Context) ([]string, error)
+
 	// Need is this node's own acceptance test for an artefact, as the
 	// request it would make: per domain, the lowest position an artefact
 	// may name, the generation its live stream is on, and that stream's
@@ -224,7 +241,24 @@ func (a *Adopter) Join(ctx context.Context) (Manifest, error) {
 	}
 	req.NodeID = a.deps.NodeID
 
-	offers, err := CollectOffers(ctx, a.deps.Conn, req, OfferWindow)
+	// THE DONORS IT EXPECTS ARE LISTED BESIDE THE COLLECTION, inside its
+	// window ([collectOffers]): listed first, a coordination store that was
+	// slow to answer held this node — refusing every read and write while it
+	// joins — for the whole listing and then the whole window.
+	var expect func(context.Context) ([]string, error)
+	if a.deps.Donors != nil {
+		expect = func(listing context.Context) ([]string, error) {
+			named, listErr := a.deps.Donors(listing)
+			if listErr != nil && ctx.Err() == nil {
+				a.log.WarnContext(ctx, "statelog_donors_unknown",
+					"node", a.deps.NodeID, "error", listErr.Error(),
+					"detail", "which donors to wait for could not be read within "+
+						"the offer window, so the join collected offers for all of it")
+			}
+			return named, listErr
+		}
+	}
+	offers, err := collectOffers(ctx, a.deps.Conn, req, OfferWindow, expect)
 	if err != nil {
 		return Manifest{}, err
 	}

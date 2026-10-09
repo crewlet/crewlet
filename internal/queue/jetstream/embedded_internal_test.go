@@ -5,8 +5,13 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/crewlet/crewlet/internal/jsapi"
 )
 
 // A PROBE THAT COULD NOT ANSWER IS NOT AN ANSWER, and telling the two apart is
@@ -129,4 +134,89 @@ func TestAReadinessFailureBlamesTheRouteListenerOnlyWhenItNeverBound(t *testing.
 	if !strings.Contains(solo.Error(), "clustered: false") {
 		t.Errorf("the failure does not say this member had no peers to wait for: %v", solo)
 	}
+}
+
+// droppingInfoJS drops the account report it is asked for — returning only
+// when the request's own term ends, as a request a metadata group with no
+// leader never replies to does — until it has dropped `drop` of them, and
+// then answers it.
+type droppingInfoJS struct {
+	jetstream.JetStream
+	drop  int32
+	asked atomic.Int32
+}
+
+func (f *droppingInfoJS) AccountInfo(ctx context.Context) (*jetstream.AccountInfo, error) {
+	if f.asked.Add(1) <= f.drop {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return f.JetStream.AccountInfo(ctx)
+}
+
+// A CLUSTERED MEMBER IS READY ONLY ONCE THE METADATA LEADER ANSWERS IT, not
+// once it believes itself current.
+//
+// "Current" is a local flag, and a member that knows of no leader can hold it
+// — so provisioning that started on it sent its first lookup to a group that
+// dropped it, and the lookup waited out a whole fifteen-second ask term before
+// anything asked again. Every fleet boot paid that by timer. The wait now
+// ends on an ANSWER, and a dropped question is asked again rather than waited
+// on; when none ever comes, the refusal says that it was the leader that never
+// answered, which is a different remedy from a member that never caught up or
+// was never routed.
+//
+// A member named into a cluster of its own, so the two local halves hold at
+// once and what the wait does is decided by the answer alone.
+func TestAClusteredMemberIsReadyOnlyOnceTheLeaderAnswers(t *testing.T) {
+	t.Parallel()
+	e, err := startEmbedded(t.Context(), Config{ClusterName: "alone", ServerName: "a"})
+	if err != nil {
+		t.Fatalf("start the member: %v", err)
+	}
+	t.Cleanup(e.shutdown)
+	nc, err := e.connect()
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(nc.Close)
+	real, err := jsapi.Embedded().Client(nc)
+	if err != nil {
+		t.Fatalf("jetstream: %v", err)
+	}
+
+	t.Run("a dropped question is asked again until it is answered", func(t *testing.T) {
+		js := &droppingInfoJS{JetStream: real, drop: 3}
+		e := *e
+		e.ready = readiness{timeout: 10 * time.Second, poll: 5 * time.Millisecond,
+			ask: 20 * time.Millisecond}
+		if err := e.awaitClusterReady(t.Context(), js, 1); err != nil {
+			t.Fatalf("a member whose leader answered on the fourth ask was not "+
+				"ready: %v", err)
+		}
+		if got := js.asked.Load(); got != 4 {
+			t.Errorf("the leader was asked %d time(s), want 4 — three dropped and "+
+				"the one that was answered; none at all is a member called ready "+
+				"on its local flag alone", got)
+		}
+	})
+
+	t.Run("a leader that never answers is named", func(t *testing.T) {
+		js := &droppingInfoJS{JetStream: real, drop: 1 << 30}
+		e := *e
+		e.ready = readiness{timeout: 300 * time.Millisecond, poll: 5 * time.Millisecond,
+			ask: 20 * time.Millisecond}
+		err := e.awaitClusterReady(t.Context(), js, 1)
+		if err == nil {
+			t.Fatal("a member no leader ever answered was called ready")
+		}
+		if !strings.Contains(err.Error(), "metadata leader answered: "+
+			context.DeadlineExceeded.Error()) {
+			t.Errorf("the refusal does not say the leader never answered:\n%v", err)
+		}
+		if strings.Contains(err.Error(), errNotAsked.Error()) {
+			t.Errorf("the refusal says the leader was never asked, of a member "+
+				"current and routed throughout:\n%v", err)
+		}
+	})
 }

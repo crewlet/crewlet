@@ -125,6 +125,9 @@ type directBox struct {
 	layout      boxLayout
 	env         map[string]string
 	credentials map[string]string
+	// readCap is the whole-read cap the suite gave the box, zero — every
+	// box in production — for [MaxFileBytes]: see [readLimit].
+	readCap int
 }
 
 var _ Sandbox = (*directBox)(nil)
@@ -358,7 +361,7 @@ func (b *directBox) ReadFile(ctx context.Context, path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return readHostFile(target, path)
+	return readHostFile(target, path, readLimit(b.readCap))
 }
 
 // OpenFile implements [Sandbox] for a box on the engine host: the file itself,
@@ -455,6 +458,8 @@ type containerBox struct {
 	container   string
 	env         map[string]string
 	credentials map[string]string
+	// readCap is as [directBox]'s.
+	readCap int
 }
 
 var _ Sandbox = (*containerBox)(nil)
@@ -652,7 +657,7 @@ func (b *containerBox) ReadFile(ctx context.Context, path string) ([]byte, error
 	if err != nil {
 		return nil, err
 	}
-	return readHostFile(target, path)
+	return readHostFile(target, path, readLimit(b.readCap))
 }
 
 // OpenFile implements [Sandbox]: the host side of the mount, read in place.
@@ -722,10 +727,11 @@ func readHostTail(target, path string, n int) (FileTail, error) {
 }
 
 // readHostFile is a local box's ReadFile once the path is resolved: empty for
-// a file that is not there, and REFUSED past [MaxFileBytes] for the reason
-// [readCapped] gives — which a plain os.ReadFile skipped, so a job that looped
-// printing errors into its stderr file put all of it in the engine's memory on
-// the host it shares, where a remote box's identical file was refused.
+// a file that is not there, and REFUSED past limit (the box's [readLimit]) for
+// the reason [readCapped] gives — which a plain os.ReadFile skipped, so a job
+// that looped printing errors into its stderr file put all of it in the
+// engine's memory on the host it shares, where a remote box's identical file
+// was refused.
 //
 // ONLY ABSENCE IS EMPTY, as for [openHostFile]. Every failure to open or read
 // used to answer empty too, so a findings report the engine was not permitted
@@ -733,7 +739,7 @@ func readHostTail(target, path string, n int) (FileTail, error) {
 // collected as a run that wrote none, and a question file as a run that asked
 // nothing; a remote box's envd answers the same failure as an error, which
 // is what a collection retries and a person can act on.
-func readHostFile(target, path string) ([]byte, error) {
+func readHostFile(target, path string, limit int) ([]byte, error) {
 	f, err := openHostRegular(target)
 	switch {
 	case absent(err):
@@ -745,7 +751,7 @@ func readHostFile(target, path string) ([]byte, error) {
 		return nil, fmt.Errorf("local sandbox: open %s: %w", path, err)
 	}
 	defer func() { _ = f.Close() }()
-	content, err := readCapped(f, path)
+	content, err := readCapped(f, path, limit)
 	if err != nil && !errors.Is(err, ErrFileTooLarge) {
 		return nil, fmt.Errorf("local sandbox: read %s: %w", path, err)
 	}

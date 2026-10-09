@@ -96,16 +96,16 @@ func (q *Queue) SubscribeBatch(
 // was expecting it to absorb. The window is measured from the first message,
 // so the instant that opens it is the instant that says how long it is.
 func (a *attachment) drain(ctx context.Context, opts *queue.BatchOptions) []delivery {
-	first, err := a.cons.Fetch(1, jetstream.FetchMaxWait(a.q.fetchWait()))
-	if err != nil {
-		a.logFetchErr(ctx, err)
-		return nil
-	}
 	var batch []delivery
-	for msg := range first.Messages() {
+	collect := func(msg jetstream.Msg) {
 		if d, ok := a.toDelivery(msg); ok {
 			batch = append(batch, d)
 		}
+	}
+	//nolint:contextcheck // a fetch runs on the attachment's fetch scope, never the loop's: see [attachment.fetching]
+	if err := a.fetch(1, a.q.fetchWait(), collect); err != nil {
+		a.logFetchErr(ctx, err)
+		return nil
 	}
 	if len(batch) == 0 {
 		return nil
@@ -127,14 +127,9 @@ func (a *attachment) drain(ctx context.Context, opts *queue.BatchOptions) []deli
 		if remaining := time.Until(deadline); remaining > wait {
 			wait = min(remaining, a.q.fetchWait())
 		}
-		more, err := a.cons.Fetch(maxBatch-len(batch), jetstream.FetchMaxWait(wait))
-		if err != nil {
+		//nolint:contextcheck // the attachment's fetch scope, as above
+		if err := a.fetch(maxBatch-len(batch), wait, collect); err != nil {
 			break
-		}
-		for msg := range more.Messages() {
-			if d, ok := a.toDelivery(msg); ok {
-				batch = append(batch, d)
-			}
 		}
 		// THE WINDOW IS THE BOUND, and only the window.
 		//

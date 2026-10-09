@@ -157,6 +157,7 @@ func openFleetWithTTL(t *testing.T, nc *nats.Conn, ttl time.Duration) *FleetStor
 // class test that remains would hide the second, so the count is checked from
 // the inside of the walk rather than from the rows it produced.
 func TestAPositionClassWalkSeesOnlyItsOwnClass(t *testing.T) {
+	t.Parallel()
 	nc := embeddedNATS(t)
 	prefix := fmt.Sprintf("p%d", bucketSeq.Add(1))
 	store := openFleetForTest(t, nc, prefix)
@@ -216,6 +217,7 @@ func TestAPositionClassWalkSeesOnlyItsOwnClass(t *testing.T) {
 // A walk that finds no rows and a class that has no rows are the same answer
 // at every caller, so the day that happens there is no symptom to notice.
 func TestAClassFilterMatchesAKeyOfAnyDepth(t *testing.T) {
+	t.Parallel()
 	nc := embeddedNATS(t)
 	prefix := fmt.Sprintf("p%d", bucketSeq.Add(1))
 	store := openFleetForTest(t, nc, prefix)

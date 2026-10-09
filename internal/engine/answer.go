@@ -53,7 +53,7 @@ func AnswerBudget(e *Engine) builtin.AnswerBudget {
 	if e == nil || e.backends == nil || e.backends.Fleet == nil {
 		return nil
 	}
-	return answerBudget{engine: e, budgets: e.backends.Fleet}
+	return answerBudget{engine: e, budgets: e.budgets()}
 }
 
 // answerBudget reads the company's windows through the [budgetCounter] a

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/pagepolicy"
+	"github.com/crewlet/crewlet/internal/api/webhooks"
 )
 
 // THE TWO LANDING PAGES RUN ONLY THEIR OWN INLINE BLOCKS.
@@ -25,30 +26,38 @@ import (
 // when a policy is computed from something other than what is served.
 func TestTheLandingPagesAllowExactlyTheirOwnInlineBlocks(t *testing.T) {
 	t.Parallel()
+	// A RECEIVER PER ARRIVAL, each with the flow it is about, and ONE STORE
+	// under all of them: a landing page writes nothing to the store and reads
+	// nothing from it, and a store per arrival was fifteen opens of a real
+	// database for pages that never touch one.
+	db := edgeStore(t)
+	arrive := func(flow webhooks.AppCompleter, query string) *httptest.ResponseRecorder {
+		return landingOn(t, newEdgeOn(t, db, func(o *webhooks.Options) { o.AppFlow = flow }), query)
+	}
 	for _, page := range []struct {
 		name     string
 		arrivals map[string]*httptest.ResponseRecorder
 	}{
 		{"github-app", map[string]*httptest.ResponseRecorder{
-			"a created app with an install link": landing(t, &stubFlow{
+			"a created app with an install link": arrive(&stubFlow{
 				seat: "sre-lead", install: "https://github.com/apps/acme-sre-lead/installations/new",
 			}, "code=abc&state=xyz"),
-			"the install arrival":       landing(t, &stubFlow{}, "installed=sre-lead&installation_id=42"),
-			"a refused creation":        landing(t, &stubFlow{seat: "sre-lead", err: errors.New("refused")}, "code=abc&state=xyz"),
-			"GitHub's own refusal":      landing(t, &stubFlow{}, "error=access_denied&error_description=No"),
-			"a creation with no code":   landing(t, &stubFlow{}, "state=xyz"),
-			"an engine with no flow":    landingOn(t, newEdge(t), "code=abc&state=xyz"),
-			"hostile markup in a query": landing(t, &stubFlow{}, "installed=<script>alert(1)</script>"),
+			"the install arrival":       arrive(&stubFlow{}, "installed=sre-lead&installation_id=42"),
+			"a refused creation":        arrive(&stubFlow{seat: "sre-lead", err: errors.New("refused")}, "code=abc&state=xyz"),
+			"GitHub's own refusal":      arrive(&stubFlow{}, "error=access_denied&error_description=No"),
+			"a creation with no code":   arrive(&stubFlow{}, "state=xyz"),
+			"an engine with no flow":    landingOn(t, newEdgeOn(t, db), "code=abc&state=xyz"),
+			"hostile markup in a query": arrive(&stubFlow{}, "installed=<script>alert(1)</script>"),
 		}},
 		{"slack-oauth", map[string]*httptest.ResponseRecorder{
-			"the CLI flow":      getLanding(t, newEdge(t), "code=abc&state=ceo"),
-			"the manual flow":   getLanding(t, newEdge(t), "code=abc"),
-			"Slack's refusal":   getLanding(t, newEdge(t), "error=access_denied"),
-			"a direct visit":    getLanding(t, newEdge(t), ""),
-			"hostile markup":    getLanding(t, newEdge(t), "code=<style>*{}</style>"),
-			"hostile in state":  getLanding(t, newEdge(t), "code=ok&state=<script>x()</script>"),
-			"hostile in error":  getLanding(t, newEdge(t), "error=</code><script>x()</script>"),
-			"an empty code key": getLanding(t, newEdge(t), "code="),
+			"the CLI flow":      getLanding(t, newEdgeOn(t, db), "code=abc&state=ceo"),
+			"the manual flow":   getLanding(t, newEdgeOn(t, db), "code=abc"),
+			"Slack's refusal":   getLanding(t, newEdgeOn(t, db), "error=access_denied"),
+			"a direct visit":    getLanding(t, newEdgeOn(t, db), ""),
+			"hostile markup":    getLanding(t, newEdgeOn(t, db), "code=<style>*{}</style>"),
+			"hostile in state":  getLanding(t, newEdgeOn(t, db), "code=ok&state=<script>x()</script>"),
+			"hostile in error":  getLanding(t, newEdgeOn(t, db), "error=</code><script>x()</script>"),
+			"an empty code key": getLanding(t, newEdgeOn(t, db), "code="),
 		}},
 	} {
 		t.Run(page.name, func(t *testing.T) {

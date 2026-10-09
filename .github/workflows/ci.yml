@@ -13,10 +13,60 @@ on:
 permissions:
   contents: read
 
-env:
-  # The module pins its own toolchain in go.mod; auto lets the setup-go
-  # toolchain fetch it rather than failing on a mismatch.
-  GOTOOLCHAIN: auto
+# A PUSH TO A PULL REQUEST CANCELS THAT PULL REQUEST'S RUN FOR THE COMMIT IT
+# REPLACED, and nothing else is ever cancelled. Nobody can merge the replaced
+# commit, so its run only holds runners — ten jobs of them — that the new
+# commit's run is queueing for.
+#
+# The group is UNIQUE PER RUN for every other event, and that is the half that
+# is easy to get wrong. A group keyed on the ref would put every push to main
+# into one group, and GitHub keeps one running and ONE pending run per group,
+# cancelling a pending one when another queues — even with cancel-in-progress
+# off — so main's runs would serialise behind each other and the middle of
+# three quick merges would be cancelled outright. A main run is the record of
+# a merge and the run that saves the caches and the test weights below; none
+# of them may be dropped. Named after the workflow because a concurrency group
+# is shared by every workflow in the repository.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) || format('{0}-run-{1}', github.workflow, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# THE GO CACHES. Every Go job below runs the same six steps around its own
+# work, written ONCE here as YAML anchors (`&name`) and repeated by alias
+# (`*name`), so the jobs cannot drift apart. GitHub Actions and Dependabot both
+# resolve aliases; merge keys (`<<:`) are NOT supported, which is why each
+# anchor is a whole step.
+#
+# Why not setup-go's own cache, which this used to be: it keeps BOTH Go caches
+# in ONE entry under ONE key, made of the runner, the Go version and a
+# dependency file's hash (this workflow pointed it at go.sum), with nothing for
+# the job, the target or the build flags. So every Go job here shared one key.
+# A key is saved only by the first job to finish without finding it, and never
+# again: there are no restore-keys to fall back to and no refresh, no way to
+# save from main alone, and no prune. On main the first to finish was always
+# one of the four cross-compile legs, CGO_ENABLED=0 and no -race, and which leg
+# varied from run to run; every other job restored its ~450 MB and could use
+# only the module half. `test (race)` reached its first package result
+# 101-158 s in with that cache restored and 103-160 s without it, and its own
+# build was never stored: refused ("Unable to reserve cache") on the run that
+# created the key, skipped as a hit on every run after. Measured on main's
+# runs from 35184635644 to 37918882598: the eight that created a key, and the
+# ones that restored it. setup-go has declined a key prefix (its issue #358)
+# and has no restore-only mode (#316, open), and its own docs ("Parallel
+# builds") send this case to `cache: false` and actions/cache, which is what
+# this file does.
+#
+# So: ONE MODULE CACHE, keyed exactly on go.sum and saved by `build + vet`
+# after `go mod download` has fetched the test-only modules too; and ONE BUILD
+# CACHE PER JOB (per matrix leg), restored from the newest one main saved for
+# that job and saved again only by a push to main. A pull request never saves:
+# an entry it writes is visible to no other pull request and to main not at
+# all, and it would only push main's entries out of the repository's 10 GB.
+#
+# Nothing here can make a test pass that should fail. A build-cache entry is
+# keyed by an action ID that hashes the inputs, the flags (-race), the
+# toolchain and the IDs of everything the package depends on, so a stale entry
+# can only miss; and the test targets pass -count=1, so every test binary runs.
 
 jobs:
   build:
@@ -24,11 +74,65 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      # go.mod's own toolchain, installed exactly, and no GOTOOLCHAIN of this
+      # file's: setup-go exports GOTOOLCHAIN=local to every later step, so a
+      # workflow-level `auto` was overridden and never reached a Go command.
+      - &setup-go
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.sum
+          # The caches are the steps below; see THE GO CACHES above.
+          cache: false
+      # THE EPOCH is an hour before this job touched the build cache, and it
+      # is what makes the prune at the end of the job exact: the go command
+      # re-stamps an entry's mtime when it USES it, unless the stamp is under
+      # an hour old (cmd/go/internal/cache: mtimeInterval). So after the job,
+      # an entry this job created or used is newer than the epoch, and one it
+      # only restored is older — unless the run that saved it ended within the
+      # hour, which is at most an hour of churn.
+      - &go-caches
+        name: locate the Go caches, and mark when this job began using them
+        run: |
+          touch -d '-1 hour' "$RUNNER_TEMP/gocache-epoch"
+          gocache="$(go env GOCACHE)"
+          gomodcache="$(go env GOMODCACHE)"
+          echo "GOCACHE=$gocache" >> "$GITHUB_ENV"
+          echo "GOMODCACHE=$gomodcache" >> "$GITHUB_ENV"
+      # Exact, with no restore-keys: a near-miss would restore a superset of
+      # modules that only grows, and a miss costs one download from the proxy.
+      - &gomod-restore
+        name: restore the module cache
+        id: gomod
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.GOMODCACHE }}
+          key: gomod-${{ runner.os }}-${{ hashFiles('go.sum') }}
+      # The job's id and its matrix leg name the cache, so every job and every
+      # leg keeps its own: a -race build, a cgo-free darwin/arm64 build and
+      # the linter's export data share almost nothing. The newest entry main
+      # saved for this job is what a miss on this commit's key restores.
+      - &gobuild-restore
+        name: restore this job's build cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.GOCACHE }}
+          key: gobuild-${{ runner.os }}-${{ github.job }}-${{ strategy.job-index }}-${{ github.sha }}
+          restore-keys: gobuild-${{ runner.os }}-${{ github.job }}-${{ strategy.job-index }}-
+      # Every module the build AND the tests need, so the cache saved below is
+      # whole: without this a test-only module (jsonschema) was fetched again
+      # by every test job of every run.
+      - run: go mod download
+      - name: save the module cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.gomod.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.GOMODCACHE }}
+          key: gomod-${{ runner.os }}-${{ hashFiles('go.sum') }}
       - run: go build ./...
+      # THE ONLY VET THE TEST PACKAGES GET. Both test targets run `go test
+      # -vet=off` (the Makefile's GOTESTRUN says why): `go vet ./...` runs every
+      # analyzer `go test` would, and more, over the same packages and their
+      # _test.go files. Drop this step and nothing in CI vets at all.
       - run: go vet ./...
       # This tree's Go files by internal/sourcetree's rule, never `.`, which
       # gofmt walks into every nested checkout — the Makefile's GOFILES says
@@ -62,6 +166,39 @@ jobs:
             echo "::error::go.mod / go.sum are not tidy. The diff above is what 'go mod tidy' would write -- run: make tidy"
             exit 1
           fi
+      # Only what this job created or used, by the epoch above. Without the
+      # prune, every save would carry forward everything the restored cache
+      # held, and the go command only trims entries five days unused — so each
+      # job's cache would grow to five days of every commit's builds, several
+      # times over the repository's 10 GB.
+      #
+      # Whole ENTRIES (`<id>-a`, `<id>-d`) at depth two, removed recursively —
+      # the shape of the go command's own trim. Not every old FILE: a cached
+      # EXECUTABLE (what `go run` keeps since Go 1.24) is a `-d` DIRECTORY,
+      # and using it re-stamps the directory and not the binary inside, so a
+      # file-by-file prune would empty an entry this job had just used.
+      # Saved only from a job that SUCCEEDED, because only a job that ran to
+      # its end is known to have compiled its whole working set. One that
+      # failed early — a module download refused, a partition that listed
+      # nothing — used nothing, so the prune above would leave an empty
+      # directory, and saved, that would become the newest entry: every
+      # pull request after it would restore nothing and compile cold until
+      # a later main run saved a whole one. A failed main run saves nothing
+      # instead, and the last good entry stays the one restored.
+      - &gobuild-prune
+        name: keep only what this job used of the build cache
+        if: ${{ success() && env.GOCACHE != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: |
+          find "$GOCACHE" -mindepth 2 -maxdepth 2 \( -name '*-a' -o -name '*-d' \) \
+            ! -newer "$RUNNER_TEMP/gocache-epoch" -exec rm -rf {} +
+          du -sh "$GOCACHE"
+      - &gobuild-save
+        name: save this job's build cache
+        if: ${{ success() && env.GOCACHE != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.GOCACHE }}
+          key: gobuild-${{ runner.os }}-${{ github.job }}-${{ strategy.job-index }}-${{ github.sha }}
 
   # THE DCO GATE — the one job here whose subject is git history rather than
   # the tree, and therefore the one whose failure cannot be fixed by editing a
@@ -197,20 +334,77 @@ jobs:
             exit 1
           fi
 
+  # ONE RUNNER PER HALF, and the two halves (below) are not split further.
+  # They were, for one pull request: each half cut into two shards by measured
+  # duration, on four runners. GitHub Actions has no native way to split one
+  # job across runners (its only fan-out is `strategy.matrix`), so that took a
+  # job to cut the shards, matrix legs named for their shard (`test (race)
+  # 1/2`), and an aggregate job for `main`'s ruleset to require in their
+  # place: a rule matches a check by its exact name, so one naming a leg would
+  # have stopped matching the day the shard count changed, and a required check
+  # that never reports blocks every pull request. Against that, its first run
+  # (37900112073) put the parallel half at 1,144 package-seconds with
+  # internal/engine (193s) its longest, which put the split's gain over one
+  # runner at about a minute and a half a run once the caches and the
+  # measurements below are warm: an estimate from that run's logs, not a
+  # measurement. Not worth the machinery while the slower half's job ends a
+  # minute or two after lint's and the dashboard's.
+  #
+  # THE LONGEST PACKAGES START FIRST in `test (race)`, which needs no second
+  # runner. `go test` starts package runs in command-line order and go list's
+  # is alphabetical, which started internal/search, internal/store and
+  # internal/tracker last of their half; `go doc ./internal/solo/partition` has
+  # the measurement. So the job restores the package durations main's last
+  # passing run of it measured, hands them to the partition as TEST_WEIGHTS,
+  # and on main keeps its own run's as the next one's. With none (the first
+  # run, or an entry evicted after a week unread) the file is empty and the
+  # half runs in go list's order: slower, and exactly as complete, since a
+  # weight decides when a package starts and never whether it runs. The
+  # `end-to-end gates` job takes no weights: its half runs at -p 1, where
+  # cmd/go's one worker links and runs every test binary in turn, so the half
+  # takes their sum in any order.
+  #
+  # A MEASUREMENT IS KEYED ON THE CODE THAT WROTE IT AND THE CODE THAT READS
+  # IT, because a prefix restore otherwise hands every run the newest entry
+  # whatever its shape, and that can wedge CI for good. internal/solo/partition
+  # reads the file strictly and refuses a line internal/skipgate did not write;
+  # a refusal fails the job; and only a main run whose job passed saves a
+  # replacement. So a change to either side of the format — a new column, a
+  # tighter reader — would leave every later run, on every pull request and on
+  # main, restoring a file it refuses, with nothing able to save one it
+  # accepts, and the eviction that would end it never comes, since the entry is
+  # read on every run. Keyed on a hash of both packages' sources, a change to
+  # either starts from no measurement — the bootstrap above, which runs
+  # complete — and an entry a later change cannot read is never offered to it.
+  # That holds for a bug too: a file the same code wrote and cannot read is
+  # retired by the change that fixes the code. A change to either package, test
+  # files and the skip allowlist included, runs in go list's order on every run
+  # of the pull request that makes it, since only main saves, and on every run
+  # after its merge until a run on main passes and saves a measurement under
+  # the new key. That is still cheaper than a key that misses the one edit
+  # that mattered.
   test:
     name: test (race)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - *setup-go
+      - *go-caches
+      - *gomod-restore
+      - *gobuild-restore
+      - name: restore the package durations main last measured
+        uses: actions/cache/restore@v6
         with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
+          path: ${{ runner.temp }}/test-weights.tsv
+          key: test-weights-${{ hashFiles('internal/skipgate/**', 'internal/solo/partition/**') }}-${{ github.sha }}
+          restore-keys: test-weights-${{ hashFiles('internal/skipgate/**', 'internal/solo/partition/**') }}-
       # THE MAKEFILE IS THE COMMAND, rather than a copy of it. Every other job
       # here inlines its own, and CLAUDE.md's rule that "the Makefile is the
       # same command CI runs, or it is a lie" was therefore held by hand —
       # by nothing, since internal/version/makefile_test.go was dropped. The
-      # two test jobs call `make` so that for them it is true by construction.
+      # test jobs call `make` so that for them it is true by construction:
+      # TEST_WEIGHTS and TEST_TIMINGS are the Makefile's own knobs, and left
+      # unset they are what `make test` runs on a laptop.
       #
       # The race detector is not optional: the engine's concurrency model is
       # real parallelism, so every "atomic because single-threaded" assumption
@@ -220,33 +414,54 @@ jobs:
       # PACKAGE.
       #
       # THE PACKAGES THAT RUN ALONE ARE EXCLUDED, and run in the `end-to-end
-      # gates` job below. Not a coverage cut — CI runs both jobs and `make
-      # check` depends on both targets — a CONTENTION cut, and which packages
-      # those are is COMPUTED from a marker import rather than named here:
-      # `go doc ./internal/solo` carries the measurement and the reason, and
+      # gates` job below. Not a coverage cut — CI runs both and `make check`
+      # depends on both targets — a CONTENTION cut, and which packages those
+      # are is COMPUTED from a marker import rather than named here: `go doc
+      # ./internal/solo` carries the measurement and the reason, and
       # internal/solo's roster guard fails the build when a package that
       # stands up a multi-member broker has not declared itself.
       #
       # This step was a `go list ./... | grep -v '/internal/e2e…'` filter, and
       # it named ONE package while THREE others stood up multi-member clusters
       # inside this job.
+      #
+      # The weights and the timings live in the runner's temp directory, never
+      # in the checkout, which the suite's own gates read as this repository's
+      # tree. An empty weights file is what a cache miss leaves: go list's
+      # order.
       - name: the suite, minus the packages that run alone
-        run: make test
+        run: |
+          touch "$RUNNER_TEMP/test-weights.tsv"
+          make test TEST_WEIGHTS="$RUNNER_TEMP/test-weights.tsv" TEST_TIMINGS="$RUNNER_TEMP/test-timings.tsv"
+      # What this run measured, kept as the next run's weights: on main only,
+      # like every cache here, and only from a job that passed. Moved onto the
+      # restored file's path because a cache entry is matched on its path as
+      # well as its key.
+      - name: keep this run's package durations for the next run
+        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: mv "$RUNNER_TEMP/test-timings.tsv" "$RUNNER_TEMP/test-weights.tsv"
+      - name: save the package durations
+        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/test-weights.tsv
+          key: test-weights-${{ hashFiles('internal/skipgate/**', 'internal/solo/partition/**') }}-${{ github.sha }}
+      - *gobuild-prune
+      - *gobuild-save
 
   gates:
     name: end-to-end gates
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
+      - *setup-go
+      - *go-caches
+      - *gomod-restore
+      - *gobuild-restore
       # THE PACKAGES THAT RUN ALONE — `make test-solo`, which is every package
       # importing internal/solo, run at -p 1 so their brokers do not contend
-      # with each other either. Today that is internal/e2e, internal/node,
-      # internal/statelog and the cluster harness's own suite; the list is
-      # computed, never written here. See `go doc ./internal/solo`.
+      # with each other either. Which packages those are is computed, never
+      # written here: `go doc ./internal/solo`.
       #
       # internal/e2e is why this job installs node: it runs a real engine, a
       # real broker and the real API, then replays the frames its socket
@@ -264,7 +479,10 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: latest
-      - run: make test-solo
+      - name: the packages that run alone
+        run: make test-solo
+      - *gobuild-prune
+      - *gobuild-save
 
   # THERE IS NO SEPARATE "stores" JOB ANY MORE. One existed, running the store
   # contract suites twice over CREWLET_STORE_DRIVER=turso|sqlite, because
@@ -302,10 +520,10 @@ jobs:
         goarch: [amd64, arm64]
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
+      - *setup-go
+      - *go-caches
+      - *gomod-restore
+      - *gobuild-restore
       - run: go build ./...
         env:
           CGO_ENABLED: "0"
@@ -346,16 +564,18 @@ jobs:
           CGO_ENABLED: "0"
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
+      - *gobuild-prune
+      - *gobuild-save
 
   lint:
     name: golangci-lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
+      - *setup-go
+      - *go-caches
+      - *gomod-restore
+      - *gobuild-restore
       # `latest` is deliberate, and it is one of the four floating versions
       # in this repository: the other three are the `node-version: latest` in
       # the `dashboard` and `end-to-end gates` jobs above and in
@@ -372,10 +592,16 @@ jobs:
       # module outright, so an older local build reports nothing rather than
       # disagreeing. Run the gate through `make lint` and match CI by taking
       # the newest release.
+      #
+      # The action keeps its own analysis cache (~/.cache/golangci-lint); the
+      # build cache above is the go command's, which loading the packages
+      # fills.
       - uses: golangci/golangci-lint-action@v9
         with:
           version: latest
           # No working-directory: the module is the repository.
+      - *gobuild-prune
+      - *gobuild-save
   # THERE IS NO SEPARATE "integration" JOB, and that is a correction rather
   # than an omission. One existed, running `go test ./... -tags=integration`
   # with CREWLET_INTEGRATION=1 — and NOTHING reads either: no file carries

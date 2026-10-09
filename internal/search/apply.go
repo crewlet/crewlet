@@ -119,7 +119,8 @@ func (a Applier) embed(ctx context.Context, tx *sql.Tx, vec VectorRecord, at sta
 	}
 	moved, err := res.RowsAffected()
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("search: read whether the vector for %s at %s "+
+			"was written: %w", vec.Subject, at, err)
 	}
 	if moved == 0 {
 		// A REDELIVERY, or a record below what this node already holds.
@@ -217,7 +218,8 @@ func (a Applier) forget(ctx context.Context, tx *sql.Tx, subject Subject, at sta
 	}
 	moved, err := res.RowsAffected()
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("search: read whether the vector for %s at %s "+
+			"was forgotten: %w", subject, at, err)
 	}
 	if moved == 0 {
 		return 0, nil

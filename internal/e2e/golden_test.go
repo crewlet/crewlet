@@ -69,38 +69,102 @@ func (n *node) dial(t *testing.T) *websocket.Conn {
 	return conn
 }
 
-// capture reads frames until stop says enough, or the deadline passes.
+// capture holds every frame a socket delivered, in order.
 //
-// Keeps the RAW bytes, not decoded maps: they are replayed verbatim through
+// It keeps the RAW bytes, not decoded maps: they are replayed verbatim through
 // the dashboard's own client, and decoding and re-encoding here would mean the
 // client was fed this test's re-serialization rather than the server's output.
+//
+// AND EACH FRAME DECODED ONCE, as it arrives, for the readers below — which
+// a case polls every 20 ms for as long as it waits. Decoded on every poll
+// instead, a capture of several hundred frames under the race detector cost
+// about a core for the whole wait, which every case running beside it paid.
 type capture struct {
 	mu     sync.Mutex
-	frames [][]byte
+	frames []frame
+}
+
+// frame is one captured frame: its bytes, and the parts of its envelope the
+// readers ask for.
+type frame struct {
+	raw []byte
+	// kind is the envelope's, set when the envelope decoded (enveloped);
+	// the parts below are set when this kind's data decoded (decoded) —
+	// the two conditions each reader's own decode used to apply.
+	kind      string
+	enveloped bool
+	decoded   bool
+	// event is an `event` frame's type and payload.
+	eventType string
+	payload   map[string]any
+	// rows is an `agents` frame's seat rows.
+	rows []map[string]any
+	// body is a `tokens`, `health` or `snapshot` frame's data.
+	body map[string]any
+}
+
+// decodeFrame reads one frame's envelope. A frame that does not decode keeps
+// its bytes and nothing else, exactly as the readers treated one before: the
+// replay is what holds the client to every byte.
+func decodeFrame(raw []byte) frame {
+	f := frame{raw: slices.Clone(raw)}
+	var env struct {
+		Kind string          `json:"kind"`
+		Data json.RawMessage `json:"data"`
+	}
+	if json.Unmarshal(raw, &env) != nil {
+		return f
+	}
+	f.kind, f.enveloped = env.Kind, true
+	switch env.Kind {
+	case "event":
+		var ev struct {
+			Type    string         `json:"type"`
+			Payload map[string]any `json:"payload"`
+		}
+		if json.Unmarshal(env.Data, &ev) == nil {
+			f.eventType, f.payload, f.decoded = ev.Type, ev.Payload, true
+		}
+	case "agents":
+		f.decoded = json.Unmarshal(env.Data, &f.rows) == nil
+	case "tokens", "health", "snapshot":
+		f.decoded = json.Unmarshal(env.Data, &f.body) == nil
+	}
+	return f
 }
 
 func (c *capture) add(raw []byte) {
+	f := decodeFrame(raw)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.frames = append(c.frames, slices.Clone(raw))
+	c.frames = append(c.frames, f)
 }
 
-func (c *capture) all() [][]byte {
+// snapshot is every frame captured so far, in order. The frames themselves
+// are never written after add, so the copy can be read without the lock.
+func (c *capture) snapshot() []frame {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return slices.Clone(c.frames)
+}
+
+// all is every captured frame's bytes, in order.
+func (c *capture) all() [][]byte {
+	frames := c.snapshot()
+	out := make([][]byte, 0, len(frames))
+	for _, f := range frames {
+		out = append(out, f.raw)
+	}
+	return out
 }
 
 // kinds reports the envelope kind of every captured frame, in order.
 func (c *capture) kinds(t *testing.T) []string {
 	t.Helper()
 	var out []string
-	for _, raw := range c.all() {
-		var env struct {
-			Kind string `json:"kind"`
-		}
-		if json.Unmarshal(raw, &env) == nil {
-			out = append(out, env.Kind)
+	for _, f := range c.snapshot() {
+		if f.enveloped {
+			out = append(out, f.kind)
 		}
 	}
 	return out
@@ -117,18 +181,9 @@ func (c *capture) kinds(t *testing.T) []string {
 func (c *capture) liveCalls(t *testing.T) []map[string]any {
 	t.Helper()
 	var out []map[string]any
-	for _, raw := range c.all() {
-		var env struct {
-			Kind string           `json:"kind"`
-			Data []map[string]any `json:"data"`
-		}
-		if json.Unmarshal(raw, &env) != nil || env.Kind != "agents" {
-			continue
-		}
-		for _, row := range env.Data {
-			if call, ok := row["live_call"].(map[string]any); ok && call != nil {
-				out = append(out, call)
-			}
+	for _, row := range c.agentRows(t) {
+		if call, ok := row["live_call"].(map[string]any); ok && call != nil {
+			out = append(out, call)
 		}
 	}
 	return out
@@ -138,15 +193,10 @@ func (c *capture) liveCalls(t *testing.T) []map[string]any {
 func (c *capture) agentRows(t *testing.T) []map[string]any {
 	t.Helper()
 	var out []map[string]any
-	for _, raw := range c.all() {
-		var env struct {
-			Kind string           `json:"kind"`
-			Data []map[string]any `json:"data"`
+	for _, f := range c.snapshot() {
+		if f.kind == "agents" && f.decoded {
+			out = append(out, f.rows...)
 		}
-		if json.Unmarshal(raw, &env) != nil || env.Kind != "agents" {
-			continue
-		}
-		out = append(out, env.Data...)
 	}
 	return out
 }
@@ -190,20 +240,11 @@ func (c *capture) sawRefusal(t *testing.T, role string) bool {
 func (c *capture) seatStates(t *testing.T) map[string][]string {
 	t.Helper()
 	out := map[string][]string{}
-	for _, raw := range c.all() {
-		var env struct {
-			Kind string           `json:"kind"`
-			Data []map[string]any `json:"data"`
-		}
-		if json.Unmarshal(raw, &env) != nil || env.Kind != "agents" {
-			continue
-		}
-		for _, row := range env.Data {
-			role, _ := row["role"].(string)
-			activity, _ := row["activity"].(string)
-			if role != "" && activity != "" {
-				out[role] = append(out[role], activity)
-			}
+	for _, row := range c.agentRows(t) {
+		role, _ := row["role"].(string)
+		activity, _ := row["activity"].(string)
+		if role != "" && activity != "" {
+			out[role] = append(out[role], activity)
 		}
 	}
 	return out
@@ -213,13 +254,9 @@ func (c *capture) seatStates(t *testing.T) map[string][]string {
 func (c *capture) lastRollup(t *testing.T) map[string]any {
 	t.Helper()
 	var out map[string]any
-	for _, raw := range c.all() {
-		var env struct {
-			Kind string         `json:"kind"`
-			Data map[string]any `json:"data"`
-		}
-		if json.Unmarshal(raw, &env) == nil && env.Kind == "tokens" {
-			out = env.Data
+	for _, f := range c.snapshot() {
+		if f.kind == "tokens" && f.decoded {
+			out = f.body
 		}
 	}
 	return out
@@ -230,21 +267,17 @@ func (c *capture) lastRollup(t *testing.T) map[string]any {
 func (c *capture) lastHealth(t *testing.T) map[string]any {
 	t.Helper()
 	var out map[string]any
-	for _, raw := range c.all() {
-		var env struct {
-			Kind string         `json:"kind"`
-			Data map[string]any `json:"data"`
-		}
-		if json.Unmarshal(raw, &env) != nil {
+	for _, f := range c.snapshot() {
+		if !f.decoded {
 			continue
 		}
-		switch env.Kind {
+		switch f.kind {
 		case "snapshot":
-			if health, ok := env.Data["health"].(map[string]any); ok {
+			if health, ok := f.body["health"].(map[string]any); ok {
 				out = health
 			}
 		case "health":
-			out = env.Data
+			out = f.body
 		}
 	}
 	return out
@@ -254,15 +287,9 @@ func (c *capture) lastHealth(t *testing.T) map[string]any {
 func (c *capture) eventTypes(t *testing.T) []string {
 	t.Helper()
 	var out []string
-	for _, raw := range c.all() {
-		var env struct {
-			Kind string `json:"kind"`
-			Data struct {
-				Type string `json:"type"`
-			} `json:"data"`
-		}
-		if json.Unmarshal(raw, &env) == nil && env.Kind == "event" {
-			out = append(out, env.Data.Type)
+	for _, f := range c.snapshot() {
+		if f.kind == "event" && f.decoded {
+			out = append(out, f.eventType)
 		}
 	}
 	return out
@@ -277,19 +304,10 @@ func (c *capture) eventTypes(t *testing.T) []string {
 func (c *capture) phaseRecords(t *testing.T) []map[string]any {
 	t.Helper()
 	var out []map[string]any
-	for _, raw := range c.all() {
-		var env struct {
-			Kind string `json:"kind"`
-			Data struct {
-				Type    string         `json:"type"`
-				Payload map[string]any `json:"payload"`
-			} `json:"data"`
-		}
-		if json.Unmarshal(raw, &env) != nil || env.Kind != "event" {
-			continue
-		}
-		if env.Data.Type == "agent_phase_completed" && env.Data.Payload != nil {
-			out = append(out, env.Data.Payload)
+	for _, f := range c.snapshot() {
+		if f.kind == "event" && f.decoded && f.eventType == "agent_phase_completed" &&
+			f.payload != nil {
+			out = append(out, f.payload)
 		}
 	}
 	return out
@@ -379,6 +397,7 @@ func (n *node) publishWakeKeyed(t *testing.T, handle, text, partition, conversat
 }
 
 func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
+	t.Parallel()
 	n := start(t)
 
 	// The seat has to be claimed before its inbox is consumed; publishing
@@ -790,9 +809,12 @@ const (
 
 	// replayOperator and replayToken are the founder's credential in the
 	// capture: the token's id is the operator id the founder's seat binds,
-	// which is what admits them to the act transport as a person.
-	replayOperator = "founder"
-	replayToken    = "e2e-replay-founder-token-0123456789"
+	// which is what admits them to the act transport as a person. The seat
+	// binds it through replayOperatorVar, a reference only the capturing
+	// node's environment resolves.
+	replayOperator    = "founder"
+	replayToken       = "e2e-replay-founder-token-0123456789"
+	replayOperatorVar = "CREWLET_TEST_FOUNDER_OPERATOR_ID"
 )
 
 // actCapture is one `/operator/act` exchange as the replay receives it: the
@@ -917,6 +939,7 @@ func captureAct(t *testing.T, n *node) []byte {
 }
 
 func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
+	t.Parallel()
 	// THE OTHER HALF OF THE GATE. The test above asserts the frames say the
 	// right things; this one asserts the CLIENT can read them — and those
 	// are different questions, which is the entire lesson of the bug that
@@ -952,8 +975,14 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	//
 	// AND A PERSON WHO CAN WRITE: the founder's seat binds a bearer token, so
 	// the capture can end with a real `/operator/act` answer — the one the
-	// dashboard's session floor is raised from.
-	n := startBooted(t, func(doc string) string {
+	// dashboard's session floor is raised from. BOUND THROUGH A `${VAR}`, as
+	// a deployment binds one, which the node resolves through its own chain
+	// on both surfaces the capture reads it through: the read surface's
+	// (`/viewer`, queries.Sources.Env) and the act transport's. The variable
+	// is handed to this node alone, so a surface that read the process
+	// environment instead names the founder unbound and the capture stops at
+	// its first request.
+	n := startNode(t, nodeSpec{company: func(doc string) string {
 		doc = strings.Replace(doc, "roles:\n", "roles:\n"+
 			"  - name: CFO\n"+
 			"    handle: cfo\n"+
@@ -961,13 +990,13 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 			"    token_budget: {day: 100}\n", 1)
 		doc = strings.Replace(doc, "      slack_user_id: U0FOUNDER\n",
 			"      slack_user_id: U0FOUNDER\n"+
-				"      crewlet_operator_id: "+replayOperator+"\n", 1)
+				"      crewlet_operator_id: ${"+replayOperatorVar+"}\n", 1)
 		// MID-DAY ON THE COMPANY'S CLOCK, so the refusal waited for below
 		// is stamped in the day it is read back in ([middayZone]).
 		return doc + "\ntimezone: " + middayZone() + "\ntoken_budget: {day: 100000000}\n"
-	}, func(boot *config.Bootstrap) {
+	}, boot: func(boot *config.Bootstrap) {
 		boot.API.Auth.Tokens = []config.APIToken{{ID: replayOperator, Token: replayToken}}
-	})
+	}, env: map[string]string{replayOperatorVar: replayOperator}})
 	zone := companyMidday(t, n.engine)
 
 	waitFor(t, "the seats to be claimed", func() bool {
@@ -1466,17 +1495,21 @@ func TestAnOnboardingRefusalEndsTheTurnBeforeTheExecutor(t *testing.T) {
 // at a seam and substitute the thing on the other side, so "does anything
 // actually connect these" is the one question none of them asks.
 func TestATurnsEventsJoinTheTriggersTrace(t *testing.T) {
+	t.Parallel()
 	n := start(t)
 
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "ceo")
 	})
 
-	// A trace this test can recognise, in the shape a real tracer emits.
+	// A trace this test can recognise, in the shape a real tracer emits —
+	// WATCHED before the wake, because the recorder keeps only the lines of a
+	// trace somebody asked for, and a line logged before the ask is gone.
 	const (
 		traceID     = "4bf92f3577b34da6a3ce929d0e0e4736"
 		triggerSpan = "00f067aa0ba902b7"
 	)
+	logs.watch(t, traceID)
 	n.wakeInTrace(t, "ceo", "How did the week go?",
 		events.TraceContext{TraceID: traceID, SpanID: triggerSpan})
 

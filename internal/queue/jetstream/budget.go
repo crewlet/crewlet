@@ -334,34 +334,12 @@ func (e *embeddedServer) budget(memory bool) (StorageBudget, error) {
 // failure that is not an unknown the fleet has to seal to retire.
 var ErrInsufficientStorage = errors.New("jetstream: the broker cannot reserve the stream's byte ceiling")
 
-// The broker's codes for a reservation it refused for want of room.
-//
-// Spelled here for the reason [jsprovision.Unplaceable]'s code is: nats.go
-// names neither. Placement is deliberately NOT one of them. A clustered create
-// that no member can place reports `no suitable peers for placement`, whose
-// code is shared by every placement failure and whose storage clause is prose,
-// and what it would be compared against is somebody else's disk, which this
-// node cannot read. Nor is `insufficient resources` (10023): the server
-// answers a publish, a catch-up or a consumer's placement with it, never a
-// stream's create, so naming it here would read some other failure as a
-// ceiling nobody reserved.
-const (
-	jsErrCodeStorageExceeded jetstream.ErrorCode = 10047
-	jsErrCodeMemoryExceeded  jetstream.ErrorCode = 10028
-)
-
-// refusedStorage reports whether err is the broker refusing a reservation.
-func refusedStorage(err error) bool {
-	var apiErr *jetstream.APIError
-	if !errors.As(err, &apiErr) {
-		return false
-	}
-	switch apiErr.ErrorCode {
-	case jsErrCodeStorageExceeded, jsErrCodeMemoryExceeded:
-		return true
-	}
-	return false
-}
+// The broker's codes for a reservation it refused for want of room are
+// [jsprovision.OutOfCapacity]'s, for a create and for an update alike: the
+// coordination store's buckets meet the same refusal, and two spellings of one
+// rule are how one of them learns a third code and the other does not.
+// Placement is deliberately not one of them, and neither is `insufficient
+// resources` (10023) — see that predicate for why.
 
 // DomainStreamCeiling is the byte ceiling a domain's stream holds, and whether
 // the stream exists at all.
@@ -370,8 +348,33 @@ func refusedStorage(err error) bool {
 // ceiling it already holds is part of what the state logs have reserved, an
 // absent stream is one this boot will create, and a broker that could not say
 // is neither.
+//
+// # A READ ON THE BOOT PATH
+//
+// Sized and re-asked as one — see [Queue.askRead]. It is asked while the logs
+// are sized at state-log start, which on a fleet booting together is the
+// moment the peers beside this node are creating these same streams — exactly
+// the window in which a member drops a read of a stream another node has in
+// flight ([jsprovision.ReadTerm]). Asked once on the boot's context, which
+// carries no deadline, it was nats.go's own five-second default that decided
+// it: each dropped read stalled the boot five seconds and then came back
+// unknown. And the sizing that reads this carries an unknown as an absent
+// stream, so every log that boot created was sized without what the stream
+// holds, and kept the ceiling that gave it for good. Measured on a stream
+// holding 3 GiB whose first request went unanswered: asked once, five seconds
+// and no ceiling; asked as a read, two seconds and the 3 GiB.
+//
+// What that costs is a read the broker never answers, which now takes the
+// whole lookup ceiling rather than five seconds — so [internal/engine] asks
+// every log's at once, and the sizing costs one ceiling rather than one per
+// log.
 func (q *Queue) DomainStreamCeiling(ctx context.Context, stream string) (int64, bool, error) {
-	s, err := q.js.Stream(ctx, stream)
+	var s jetstream.Stream
+	err := q.askRead(ctx, func(ctx context.Context) error {
+		var e error
+		s, e = q.js.Stream(ctx, stream)
+		return e
+	})
 	switch {
 	case errors.Is(err, jetstream.ErrStreamNotFound):
 		return 0, false, nil

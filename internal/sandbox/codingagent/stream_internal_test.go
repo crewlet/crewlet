@@ -21,18 +21,23 @@ import (
 // Mutation: return the first composition without measuring it redacted, and
 // the key-name case is ten bytes past the bound; leave the mark out of the
 // room as well, and the single-line case is three past it.
+//
+// At a bound of 64 KiB with a line half again past it, as the three
+// mebibytes this was are of the real one: what grows a composition past its
+// bound is a marker and a join, which are the same bytes at any bound.
 func TestAFailureIsHeldToItsBoundAsItLeaves(t *testing.T) {
 	t.Parallel()
 	// Thirteen digits of MiB, the width of the widest note.
 	const unread = int64(2e18)
-	oneLine := strings.Repeat("e", 3<<20)
+	const bound = 64 << 10
+	oneLine := strings.Repeat("e", bound*3/2)
 	for name, sentences := range map[string][]string{
 		"a single line kept by its end":     {"the coding agent exited with status 1"},
 		"a key name meeting the next piece": {"the coding agent exited with status 1", "the CLI could not read pwd"},
 	} {
-		got := failureDetail(sentences, oneLine, unread)
-		if len(got) > sandbox.MaxFailureBytes {
-			t.Errorf("%s: the failure is %d bytes, %d past its bound", name, len(got), len(got)-sandbox.MaxFailureBytes)
+		got := failureDetail(sentences, oneLine, unread, bound)
+		if len(got) > bound {
+			t.Errorf("%s: the failure is %d bytes, %d past its bound", name, len(got), len(got)-bound)
 		}
 		if redact.Secrets(got) != got {
 			t.Errorf("%s: the failure was not redacted whole, so redacting it again would grow it", name)
@@ -94,30 +99,60 @@ func TestTheEndOfAStreamIsWholeLines(t *testing.T) {
 
 // ONE LINE IS HELD AT MOST: a line past the bound is counted as it passes and
 // never kept, and the lines around it are read as they were.
+//
+// At a bound of 64 KiB, which is larger than the reader's own 64 KiB buffer
+// — so a line at it still arrives in more than one piece, the case the
+// counting is for — and a five-hundredth of [maxLineBytes].
 func TestALineIsReadInOnePieceUpToTheBound(t *testing.T) {
 	t.Parallel()
+	const bound = 64<<10 + 1
 	var seen []string
 	var skipped []int64
+	var bounds []int
 	dec := &recorder{line: func(l []byte) { seen = append(seen, string(l)) },
-		skip: func(n int64) { skipped = append(skipped, n) }}
-	huge := strings.Repeat("x", maxLineBytes+5)
-	if err := eachLine(strings.NewReader("a\r\n"+huge+"\nb\nlast"), dec); err != nil {
+		skip: func(n int64, at int) { skipped, bounds = append(skipped, n), append(bounds, at) }}
+	huge := strings.Repeat("x", bound+5)
+	whole := strings.Repeat("y", bound-1)
+	if err := eachLine(strings.NewReader("a\r\n"+huge+"\n"+whole+"\nb\nlast"), dec, bound); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(seen, "|") != "a|b|last" {
-		t.Errorf("lines = %q; want the lines around the long one, and the unterminated last", seen)
+	if strings.Join(seen, "|") != "a|"+whole+"|b|last" {
+		t.Errorf("read %d lines; want the lines around the long one, one exactly at the bound, "+
+			"and the unterminated last", len(seen))
 	}
-	if len(skipped) != 1 || skipped[0] != int64(len(huge)+1) {
-		t.Errorf("skipped = %v; want one line of %d bytes", skipped, len(huge)+1)
+	if len(skipped) != 1 || skipped[0] != int64(len(huge)+1) || bounds[0] != bound {
+		t.Errorf("skipped = %v past %v; want one line of %d bytes past %d", skipped, bounds, len(huge)+1, bound)
+	}
+}
+
+// A RUNNER READS TO THE ENGINE'S OWN BOUNDS: a failure to what one
+// condensation can take beside the coordinator's prefix, and a line to what
+// a whole read takes. The cases that go past either run at a bound of their
+// own ([Bounded] in export_test.go), so this is what ties the bounds they skip
+// building to the ones every runner New makes reads to.
+func TestARunnerReadsToTheEnginesOwnBounds(t *testing.T) {
+	t.Parallel()
+	if maxLineBytes != sandbox.MaxFileBytes {
+		t.Errorf("maxLineBytes = %d, want sandbox.MaxFileBytes (%d)", maxLineBytes, sandbox.MaxFileBytes)
+	}
+	for _, r := range []*Runner{NewClaudeCode(), NewOpenCode()} {
+		if r.failureBound != sandbox.MaxFailureBytes || r.lineBound != maxLineBytes {
+			t.Errorf("%s reads a failure to %d and a line to %d; want sandbox.MaxFailureBytes (%d) "+
+				"and maxLineBytes (%d)", r.Name(), r.failureBound, r.lineBound,
+				sandbox.MaxFailureBytes, maxLineBytes)
+		}
+		if f, ok := r.Follow(sandbox.RunHandle{}).(*follower); !ok || f.lineBound != r.lineBound {
+			t.Errorf("%s's live reading does not read lines to its runner's bound", r.Name())
+		}
 	}
 }
 
 type recorder struct {
 	line func([]byte)
-	skip func(int64)
+	skip func(int64, int)
 }
 
-func (r *recorder) Line(l []byte)          { r.line(l) }
-func (r *recorder) Skipped(n int64)        { r.skip(n) }
-func (r *recorder) Result() sandbox.Result { return sandbox.Result{} }
-func (r *recorder) Entries() []string      { return nil }
+func (r *recorder) Line(l []byte)              { r.line(l) }
+func (r *recorder) Skipped(n int64, bound int) { r.skip(n, bound) }
+func (r *recorder) Result() sandbox.Result     { return sandbox.Result{} }
+func (r *recorder) Entries() []string          { return nil }

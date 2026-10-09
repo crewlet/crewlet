@@ -120,6 +120,15 @@ func instrumentIdentifiers(t *testing.T) map[string]string {
 // exactly what this asserts.
 var selector = regexp.MustCompile(`\bmetrics\.([A-Z]\w*)\b`)
 
+// selectorNeeds is what a reference cannot be written without. The pattern
+// opens with `\b`, which leaves the regexp package no prefix to jump to, so
+// over every non-test file it ran at the race detector's megabyte a second;
+// a file without `metrics.` holds no reference and is not handed to it (see
+// [sourcetree.Required]). A prefilter that skipped a file holding one would
+// fail this gate rather than pass it — an instrument would read as unused —
+// so the gate's own verdict covers it.
+var selectorNeeds = sourcetree.Required(selector)
+
 // identifiersReferencedInTheTree is every metrics identifier named by
 // non-test code outside this package.
 func identifiersReferencedInTheTree(t *testing.T) map[string]bool {
@@ -157,6 +166,9 @@ func identifiersReferencedInTheTree(t *testing.T) map[string]bool {
 		body, err := os.ReadFile(filepath.Clean(path))
 		if err != nil {
 			return err
+		}
+		if !selectorNeeds.Admits(body) {
+			return nil
 		}
 		for _, match := range selector.FindAllSubmatch(body, -1) {
 			out[string(match[1])] = true

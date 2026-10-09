@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // A VECTOR IS A POINT IN ONE MODEL'S SPACE, and recall compares like with
@@ -20,11 +21,8 @@ import (
 // tests write.
 func learningStore(t *testing.T) *store.DB {
 	t.Helper()
-	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "m.db"),
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "m.db"),
 		store.Options{EmbeddingDim: 4})
-	if err != nil {
-		t.Fatalf("store.OpenNode: %v", err)
-	}
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }

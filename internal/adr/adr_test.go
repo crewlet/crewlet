@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -136,13 +137,86 @@ func TestEveryRecordIsAnchoredAtItsAuthority(t *testing.T) {
 	}
 
 	// THE OTHER DIRECTION, over the whole tree.
-	for _, cite := range citations(t, root) {
-		if _, ok := declared[cite.ID]; ok {
-			continue
-		}
+	dangling, total := danglingCitations(t, root, declared)
+	for _, cite := range dangling {
 		t.Errorf("%s:%d cites %s and no record declares it — either the "+
 			"record was never written, or it was renumbered and this "+
 			"reference now points at nothing", cite.File, cite.Line, cite.ID)
+	}
+	// AND IT READ CITATIONS AT ALL. Counting files proves the walk ran and
+	// says nothing about the matcher: an [adr.Reference] that stopped
+	// matching finds no citation, so none dangles, and this direction
+	// passes having checked nothing.
+	if total < minCitations {
+		t.Fatalf("found %d citations of a record in the tree, under the floor "+
+			"of %d — adr.Reference has stopped recognising a citation, so the "+
+			"backward check is certifying almost nothing", total, minCitations)
+	}
+	t.Logf("%d citation(s) of a record, %d of them dangling", total, len(dangling))
+}
+
+// minCitations is the fewest citations of a record the tree may hold. There
+// are 379 today, in 218 files; a floor near a quarter of that survives a
+// rewrite of any one page or package doc and fails the day the matcher, or
+// the walk, stops finding them.
+const minCitations = 100
+
+// THE BACKWARD CHECK, ON A TREE WHOSE VERDICT IS KNOWN — through the same walk,
+// the same prefilter and the same matcher the gate runs.
+//
+// A citation of a record nobody wrote is what that direction exists to catch,
+// and nothing in the real tree is one, so without a planted one the check is
+// never seen to fail. It is planted in a package doc and on a page, beside a
+// citation of a record that exists, and where the walk must not look: the
+// template, the committed bundle, and a file that is neither Go nor markdown.
+//
+// Every id below is ASSEMBLED, because this file is in the tree the gate
+// walks: written out whole, each would be a dangling citation of its own.
+func TestACitationOfARecordNobodyWroteIsReported(t *testing.T) {
+	t.Parallel()
+	records := load(t)
+	if len(records) == 0 {
+		t.Fatal("no records were loaded, so no citation can be declared")
+	}
+	id := func(number string) string { return "ADR" + "-" + number }
+	live, nobodys := records[0].ID, id("9999")
+	root := t.TempDir()
+	for path, body := range map[string]string{
+		"internal/x/x.go":      "// The rule is " + nobodys + "'s.\npackage x\n",
+		"internal/x/x_test.go": "package x // cites nothing\n",
+		"docs/page.md":         "# Page\n\nSee " + live + " and " + nobodys + ".\n",
+		"adr/0000-template.md": "# " + id("0000") + " — Title\n",
+		"static/bundle/b.go":   "// " + id("9998") + "\npackage b\n",
+		"docs/notes.txt":       id("9997") + "\n",
+	} {
+		full := filepath.Join(root, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	declared := map[string]adr.Record{}
+	for _, r := range records {
+		declared[r.ID] = r
+	}
+	dangling, total := danglingCitations(t, root, declared)
+	if total != 3 {
+		t.Errorf("read %d citations in the planted tree, want 3 — two of %s "+
+			"and one of %s", total, nobodys, live)
+	}
+	var got []string
+	for _, cite := range dangling {
+		got = append(got, cite.File+":"+strconv.Itoa(cite.Line)+" "+cite.ID)
+	}
+	slices.Sort(got)
+	want := []string{
+		filepath.FromSlash("docs/page.md") + ":3 " + nobodys,
+		filepath.FromSlash("internal/x/x.go") + ":1 " + nobodys,
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("dangling citations = %q, want %q", got, want)
 	}
 }
 
@@ -274,6 +348,14 @@ func namedTests(enforcedBy string) []string {
 var testNameRE = regexp.MustCompile(`\bTest[A-Z][A-Za-z0-9_]*`)
 
 // testFunctions is every Test function declared anywhere in the module.
+//
+// LINE BY LINE, rather than one multi-line expression over each file: a
+// `(?m)^` pattern has no literal prefix to jump to, so the regexp package
+// tried it at every byte of every test file — eight seconds under the race
+// detector. A declaration is the start of a line, which is all `(?m)^` ever
+// meant here, so the prefix is checked as a prefix and the expression runs
+// only on the lines that start with it; neither half can span a newline, so
+// the names found are the same.
 func testFunctions(t *testing.T, root string) map[string]bool {
 	t.Helper()
 	out := map[string]bool{}
@@ -291,8 +373,10 @@ func testFunctions(t *testing.T, root string) map[string]bool {
 		if !strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
-		for _, m := range testDeclRE.FindAllStringSubmatch(read(t, path), -1) {
-			out[m[1]] = true
+		for _, line := range strings.Split(read(t, path), "\n") {
+			if name, ok := testDeclaredOn(line); ok {
+				out[name] = true
+			}
 		}
 		return nil
 	})
@@ -302,7 +386,48 @@ func testFunctions(t *testing.T, root string) map[string]bool {
 	return out
 }
 
-var testDeclRE = regexp.MustCompile(`(?m)^func (Test[A-Za-z0-9_]*)\(`)
+// testDeclaredOn is the Test function one line declares, if it declares one.
+func testDeclaredOn(line string) (string, bool) {
+	if !strings.HasPrefix(line, testDeclPrefix) {
+		return "", false
+	}
+	m := testDeclRE.FindStringSubmatch(line)
+	if m == nil {
+		return "", false
+	}
+	return m[1], true
+}
+
+// testDeclPrefix is what every line testDeclRE matches starts with.
+const testDeclPrefix = "func Test"
+
+var testDeclRE = regexp.MustCompile(`^func (Test[A-Za-z0-9_]*)\(`)
+
+// THE DECLARATION MATCHER, on lines whose verdict is known. The walk only
+// ever hands it real test files, so a matcher that stopped recognising a
+// declaration would show only as the floor above — and one that recognised a
+// method, a call or an indented closure as a declaration not at all.
+func TestATestDeclarationIsReadFromTheStartOfItsLine(t *testing.T) {
+	t.Parallel()
+	for line, want := range map[string]string{
+		"func TestX(t *testing.T) {":            "TestX",
+		"func TestEveryNamedGateExists(t *T) {": "TestEveryNamedGateExists",
+		"func Test_underscore(t *testing.T) {":  "Test_underscore",
+		"func Test(t *testing.T) {":             "Test",
+		"func (s suite) TestMethod(t *T) {":     "",
+		" func TestIndented(t *testing.T) {":    "",
+		"\tfunc TestTabbed(t *testing.T) {":     "",
+		"// func TestInAComment(t *T) {":        "",
+		"x := func TestNotADeclaration(":        "",
+		"func Tester(t *testing.T) {":           "Tester",
+		"func TestGeneric[T any](t *T) {":       "",
+	} {
+		got, ok := testDeclaredOn(line)
+		if got != want || ok != (want != "") {
+			t.Errorf("testDeclaredOn(%q) = %q, %v; want %q", line, got, ok, want)
+		}
+	}
+}
 
 // citation is one reference to a record, somewhere in the tree.
 type citation struct {
@@ -328,6 +453,12 @@ type citation struct {
 // number, because what has to be skipped is the FILE: it carries the zero id
 // throughout as the shape of a record, and zero is the one number [adr.Load]
 // never declares.
+//
+// A FILE IS SPLIT INTO LINES ONLY IF IT CAN CITE: [adr.Reference] opens with
+// `\b`, so the regexp package has no prefix to jump to and tried it at every
+// byte of the tree, which was most of this gate's twenty-five seconds. Its
+// derived prefilter (see [sourcetree.Required]) skips a file that holds no
+// substring a citation needs, and that file holds no citation.
 func citations(t *testing.T, root string) []citation {
 	t.Helper()
 	var out []citation
@@ -351,7 +482,14 @@ func citations(t *testing.T, root string) []citation {
 			return nil
 		}
 		files++
-		for i, line := range strings.Split(read(t, path), "\n") {
+		body := read(t, path)
+		if !referenceNeeds.AdmitsString(body) {
+			return nil
+		}
+		for i, line := range strings.Split(body, "\n") {
+			if !referenceNeeds.AdmitsString(line) {
+				continue
+			}
 			for _, m := range adr.Reference.FindAllString(line, -1) {
 				out = append(out, citation{ID: m, File: rel, Line: i + 1})
 			}
@@ -368,6 +506,23 @@ func citations(t *testing.T, root string) []citation {
 			"was certifying nothing", root)
 	}
 	return out
+}
+
+// referenceNeeds is what a citation cannot be written without.
+var referenceNeeds = sourcetree.Required(adr.Reference)
+
+// danglingCitations is every citation under root of a record declared does
+// not hold, and how many citations the walk read in all.
+func danglingCitations(t *testing.T, root string, declared map[string]adr.Record) ([]citation, int) {
+	t.Helper()
+	all := citations(t, root)
+	var dangling []citation
+	for _, cite := range all {
+		if _, ok := declared[cite.ID]; !ok {
+			dangling = append(dangling, cite)
+		}
+	}
+	return dangling, len(all)
 }
 
 // authorityText is the doc a record's id has to appear in.
@@ -474,8 +629,14 @@ func TestEveryDocLinkNamesAPackageThatExists(t *testing.T) {
 			return nil
 		}
 		files++
+		body := read(t, path)
+		if !packageLinkNeeds.AdmitsString(body) {
+			// Not one `[internal/` or `[cmd/` in the file, so no link
+			// the matcher could find (see sourcetree.Required).
+			return nil
+		}
 		rel, _ := filepath.Rel(root, path)
-		for i, line := range strings.Split(read(t, path), "\n") {
+		for i, line := range strings.Split(body, "\n") {
 			if !strings.HasPrefix(strings.TrimSpace(line), "//") {
 				continue
 			}
@@ -513,6 +674,9 @@ func packageLinks(line string) []string {
 }
 
 var packageLinkRE = regexp.MustCompile(`\[((?:internal|cmd)/[a-z0-9]+(?:/[a-z0-9]+)*)\]`)
+
+// packageLinkNeeds is what a package link cannot be written without.
+var packageLinkNeeds = sourcetree.Required(packageLinkRE)
 
 var linkRE = regexp.MustCompile(`\]\(([^)]+)\)`)
 

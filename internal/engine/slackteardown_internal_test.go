@@ -136,6 +136,7 @@ func (w *seatWriter) block(handle, kind string) (map[string]any, bool) {
 // PAUSED. Measured on a live company, twice in a row, both attempts logging
 // `accounts=[] secrets=[]`.
 func TestASlackDisconnectRemovesEachSeatsApp(t *testing.T) {
+	t.Parallel()
 	e, writer := slackEngine(t)
 	if e.Resolve("${SLACK_BOT_TOKEN_CEO}") == "" {
 		t.Fatal("precondition: nothing was sealed")
@@ -196,6 +197,7 @@ func TestASlackDisconnectRemovesEachSeatsApp(t *testing.T) {
 // their credentials — so a teardown that reported removals anyway would
 // delete the sealed values behind apps this very call decided to keep.
 func TestASlackDisconnectKeepsTheAppsTheOperatorKept(t *testing.T) {
+	t.Parallel()
 	e, writer := slackEngine(t)
 
 	removed, err := e.disconnectors()[integration.KindSlack].Disconnect(t.Context(), false)
@@ -222,6 +224,7 @@ func TestASlackDisconnectKeepsTheAppsTheOperatorKept(t *testing.T) {
 // is the only thing that deletes them. Reported as a delta, or not at all, they
 // would be sealed values behind a block that no longer exists.
 func TestAPartialSlackTeardownReportsWhatItCleared(t *testing.T) {
+	t.Parallel()
 	e, writer := slackEngine(t)
 	writer.fail = errors.New("the config surface is busy")
 
@@ -242,6 +245,7 @@ func TestAPartialSlackTeardownReportsWhatItCleared(t *testing.T) {
 // and a node that has one finishes the disconnect. Answered as success, the
 // block drops with every seat's credentials still sealed and still pointed at.
 func TestASlackTeardownWithNoConfigSurfaceDefers(t *testing.T) {
+	t.Parallel()
 	e, _ := slackEngine(t)
 	e.configWriter.Store(nil)
 

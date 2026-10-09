@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -175,12 +176,45 @@ func (e *Engine) admit(ctx context.Context, streams []string) error {
 //
 // It is conditional on this incarnation, so a late withdrawal cannot remove a
 // replacement process's admission.
+//
+// ON A SHARE OF ITS OWN ([Engine.admissionShare]) and never a step of the
+// stop's allowance ([seat.StopBudget]). Every step on the allowance falls back
+// to a lease lapsing on its TTL, and an admission has no TTL — it lives in a
+// register with no age, because an expiring admission hides a publisher — so
+// one this misses stays until the node restarts under the same id or an
+// operator excludes it, which is what `admission_not_withdrawn` tells them. On
+// the allowance, a store that had stopped answering for the give-backs before
+// it, and was answering again by now, left the one round trip with nothing to
+// fall back on no time at all.
 func (e *Engine) withdraw(ctx context.Context) error {
 	if e.backends == nil || e.backends.Fleet == nil || e.mode != statelog.ModeNormal {
 		return nil
 	}
-	return e.backends.Fleet.ForgetAdmission(
-		context.WithoutCancel(ctx), e.id, e.incarnation)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), e.admissionShare())
+	defer cancel()
+	return e.backends.Fleet.ForgetAdmission(ctx, e.id, e.incarnation)
+}
+
+// admissionShare is the part of a stop's coordination time reserved for
+// withdrawing this node's admission ([Engine.withdraw]): a third of the stop's
+// allowance ([seat.StopAllowance]) of this node's lease TTL — five seconds at
+// the shipped 45 s — and the steps on the allowance get the other two thirds
+// ([Engine.stopping]).
+//
+// CARVED OUT OF THE ALLOWANCE RATHER THAN ADDED BESIDE IT, so a stop against a
+// store that answers nothing still spends one allowance in total, which is
+// the reason there is one: the give-backs fail inside their two thirds and the
+// withdrawal inside its third, where a bound of its own beside the allowance
+// would make that stop one share longer.
+//
+// A THIRD because the withdrawal is two round trips — a read from the
+// register's leader and a conditional purge — and at the shipped TTL a third
+// is the five seconds the JetStream client gives one request with no deadline
+// of its own, which a store answering at all answers in milliseconds. The two
+// thirds left are ten seconds there for the presence, the seats and the
+// duties, each also milliseconds of work on a store that answers.
+func (e *Engine) admissionShare() time.Duration {
+	return seat.StopAllowance(e.stopTTL()) / 3
 }
 
 // acknowledge is the maintenance-mode half: this node's evidence that its

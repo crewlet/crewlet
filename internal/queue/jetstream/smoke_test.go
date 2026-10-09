@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -16,8 +17,10 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
@@ -62,6 +65,7 @@ func ev(n int) *events.Event {
 // built on: the subscription exists without a consumer, retains what is
 // published while nothing is attached, and replays it in order on attach.
 func TestMailIsRetainedWithNothingAttached(t *testing.T) {
+	t.Parallel()
 	q := newQueue(t)
 	ctx := t.Context()
 	topic, group := topics.AgentInbox("alice"), topics.AgentInboxGroup("alice")
@@ -110,7 +114,16 @@ func TestMailIsRetainedWithNothingAttached(t *testing.T) {
 // behaviour rather than treating it as a surprise: interest retention means
 // a message published where no subscription covers it is gone, which is
 // exactly why EnsureSubscription must run before anything publishes.
+//
+// PROVED BY ORDER, NOT BY A QUIET WINDOW. A second publish, made once the
+// subscription exists, is a SENTINEL: the subscription starts at the earliest
+// message the stream holds, so a first publish the stream had kept would be
+// delivered ahead of it. The first delivery being the sentinel is therefore
+// the proof, however long the broker took to drop the first — where "nothing
+// arrived within two seconds" spent two seconds on every run and proved only
+// that nothing arrived in them.
 func TestPublishWithNoSubscriptionIsDropped(t *testing.T) {
+	t.Parallel()
 	q := newQueue(t)
 	ctx := t.Context()
 	topic, group := topics.AgentInbox("ghost"), topics.AgentInboxGroup("ghost")
@@ -121,8 +134,15 @@ func TestPublishWithNoSubscriptionIsDropped(t *testing.T) {
 	if _, err := q.EnsureSubscription(ctx, topic, group); err != nil {
 		t.Fatalf("EnsureSubscription: %v", err)
 	}
+	// CORROBORATION, not the proof: interest retention discards a message
+	// no consumer covers as it is stored, so the mailbox made after it
+	// holds nothing.
+	if held, err := q.Backlog(ctx, topic, group); err != nil || len(held) != 0 {
+		t.Errorf("the mailbox made after a publish holds %d event(s) (%v); a publish "+
+			"with no subscription must be dropped", len(held), err)
+	}
 
-	got := make(chan int, 1)
+	got := make(chan int, 2)
 	if err := q.Subscribe(ctx, topic, group, func(_ context.Context, e *events.Event) queue.Result {
 		p, _ := events.DataAs[*probe](e)
 		got <- p.N
@@ -130,10 +150,17 @@ func TestPublishWithNoSubscriptionIsDropped(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
+	if err := q.Publish(ctx, topic, ev(2)); err != nil {
+		t.Fatalf("Publish the sentinel: %v", err)
+	}
 	select {
 	case n := <-got:
-		t.Errorf("received %d; a publish with no subscription must be dropped", n)
-	case <-time.After(2 * time.Second):
+		if n != 2 {
+			t.Errorf("received %d before the sentinel; a publish with no "+
+				"subscription must be dropped", n)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the sentinel published to an existing subscription never arrived")
 	}
 }
 
@@ -141,6 +168,7 @@ func TestPublishWithNoSubscriptionIsDropped(t *testing.T) {
 // lost the right to do the work must neither claim it (ack) nor condemn it
 // (an ordinary failure), and must stop taking more.
 func TestDeferReturnsWorkAndQuiesces(t *testing.T) {
+	t.Parallel()
 	q := newQueue(t)
 	ctx := t.Context()
 	topic, group := topics.AgentInbox("bob"), topics.AgentInboxGroup("bob")
@@ -205,6 +233,7 @@ func TestDeferReturnsWorkAndQuiesces(t *testing.T) {
 // TestBatchCoalescesByConversation is why ten comments on one issue cost one
 // agent turn instead of ten.
 func TestBatchCoalescesByConversation(t *testing.T) {
+	t.Parallel()
 	q := newQueue(t)
 	ctx := t.Context()
 	topic, group := topics.AgentInbox("carol"), topics.AgentInboxGroup("carol")
@@ -266,6 +295,7 @@ func TestBatchCoalescesByConversation(t *testing.T) {
 // an unroutable handle produces (crewlet.agent..inbox), a real subject
 // nobody subscribes to that would swallow events in silence.
 func TestMalformedSubjectsAreRefused(t *testing.T) {
+	t.Parallel()
 	q := newQueue(t)
 	for _, subject := range []string{"", "crewlet.agent..inbox", ".leading", "trailing.", "has space"} {
 		if err := q.Publish(t.Context(), subject, ev(1)); err == nil {
@@ -278,6 +308,41 @@ func TestMalformedSubjectsAreRefused(t *testing.T) {
 	}
 	if err := q.Publish(t.Context(), "extension.thing", ev(1)); err != nil {
 		t.Errorf("Publish to a foreign namespace failed: %v", err)
+	}
+}
+
+// A SUBJECT WHOSE STREAM THE BROKER WILL NOT MAKE IS REFUSED IN A ROUND TRIP,
+// with the broker's own reason and nothing appended to it.
+//
+// `crewlet.events` matches no stream the engine defines — every one of them
+// needs a segment past it — so it derives a namespace stream for `crewlet`,
+// whose subjects overlap every stream the engine does define, and the broker
+// refuses the create. That refusal used to fall through to the read-back kept
+// for a peer that won a create race: it polled for the whole read-back window
+// after a stream nobody was making, and then reported the overlap wrapped in
+// "(and it is not there: stream not found)" — on every publish, because only
+// a stream that exists is remembered.
+func TestAStreamTheBrokerRefusesIsNotReadBack(t *testing.T) {
+	t.Parallel()
+	q := newQueue(t)
+	start := time.Now()
+	err := q.Publish(t.Context(), "crewlet.events", ev(1))
+	took := time.Since(start)
+
+	var apiErr *jetstream.APIError
+	if !errors.As(err, &apiErr) || !jsprovision.Refused(err) {
+		t.Fatalf("a publish whose derived stream overlaps the engine's own = %v, "+
+			"want the broker's refusal of the create", err)
+	}
+	if strings.Contains(err.Error(), "it is not there") {
+		t.Errorf("the refusal was read back, so the broker's reason arrives wrapped "+
+			"in a not-found an operator reads as the cause:\n%v", err)
+	}
+	// MEASURED AGAINST THE WINDOW the read-back would have spent: the
+	// refused create polls not-found until that window closes, so a
+	// refusal that reached it cannot have returned inside it.
+	if took >= jsprovision.ReadBack {
+		t.Errorf("the refusal took %v, the whole %v read-back window", took, jsprovision.ReadBack)
 	}
 }
 
@@ -453,6 +518,7 @@ func selfSignedPEM(t *testing.T) (certPEM, keyPEM []byte) {
 // Measured rather than reasoned: a trickle published for five times the window
 // must not all land in the first batch.
 func TestTheLingerWindowDoesNotSlideWithArrivals(t *testing.T) {
+	t.Parallel()
 	q := newQueue(t)
 	ctx := t.Context()
 	topic, group := topics.AgentInbox("dora"), topics.AgentInboxGroup("dora")

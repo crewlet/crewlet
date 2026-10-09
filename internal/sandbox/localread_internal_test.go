@@ -23,7 +23,7 @@ func TestALocalFileThatCannotBeOpenedIsAnError(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = l.Close() })
 
-	if got, err := readHostFile(sock, "findings.md"); err == nil {
+	if got, err := readHostFile(sock, "findings.md", MaxFileBytes); err == nil {
 		t.Errorf("readHostFile = %q, nil; want the open's failure, not an empty file", got)
 	}
 	if r, err := openHostFile(sock, "stream.jsonl"); err == nil {
@@ -35,7 +35,7 @@ func TestALocalFileThatCannotBeOpenedIsAnError(t *testing.T) {
 	}
 	// And absence is still empty, for all three.
 	missing := filepath.Join(dir, "absent")
-	if got, err := readHostFile(missing, "done"); err != nil || got != nil {
+	if got, err := readHostFile(missing, "done", MaxFileBytes); err != nil || got != nil {
 		t.Errorf("a missing file = %q, %v; want empty", got, err)
 	}
 	if tail, err := readHostTail(missing, "done", 64); err != nil || tail.Size != 0 {

@@ -273,6 +273,7 @@ func (r *waiterRig) tick() int {
 // ---------------------------------------------------------------------
 
 func TestARunningJobFiresNoCompletionUntilItFinishes(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	rig.launch("t1")
 
@@ -289,6 +290,7 @@ func TestARunningJobFiresNoCompletionUntilItFinishes(t *testing.T) {
 // broadcast stream, the control copy reaches the one node that holds the
 // suspended conversation.
 func TestACompletionIsAnnouncedAndRoutedToTheSeatsOwner(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true})
@@ -312,6 +314,7 @@ func TestACompletionIsAnnouncedAndRoutedToTheSeatsOwner(t *testing.T) {
 // The completion turn must nest under the turn that started the job rather
 // than opening a trace root of its own.
 func TestACompletionCarriesTheOriginalTrace(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true})
@@ -331,6 +334,7 @@ func TestACompletionCarriesTheOriginalTrace(t *testing.T) {
 // A completion event is a pure control signal — the outcome is read at collect
 // time, so nothing about the result may ride on the wire.
 func TestACompletionCarriesTheIdentityAndNotTheOutcome(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	run := rig.launch("t1")
 	rig.runner.Finish(Result{Success: true, Text: "shipped it"})
@@ -357,6 +361,7 @@ func TestACompletionCarriesTheIdentityAndNotTheOutcome(t *testing.T) {
 // A transient poll error is not a completion: firing on one would collect a
 // result the job has not written.
 func TestATransientPollErrorIsRetriedRatherThanFired(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	rig.launch("t1")
 	rig.runner.PollErr = errors.New("connection reset")
@@ -376,6 +381,7 @@ func TestATransientPollErrorIsRetriedRatherThanFired(t *testing.T) {
 // A box that can never be reached again can never produce a result, so the
 // run has to be freed rather than polled forever.
 func TestAVanishedBoxFiresCompletionOnceTheStreakIsLongEnough(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	run := rig.launch("t1")
 	rig.provider.Vanished[run.SandboxID] = true
@@ -401,6 +407,7 @@ func TestAVanishedBoxFiresCompletionOnceTheStreakIsLongEnough(t *testing.T) {
 // a second, and a box that is briefly slow rather than gone gets its turn
 // destroyed.
 func TestTheGiveUpWindowDoesNotShrinkWithTheCadence(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	fast, err := NewWaiter(WaiterOptions{
 		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
@@ -430,6 +437,7 @@ func TestTheGiveUpWindowDoesNotShrinkWithTheCadence(t *testing.T) {
 // At a cadence slower than the window, the FIRST failure is already older than
 // it. One probe is not evidence a box is gone.
 func TestOneProbeNeverGivesUpHoweverOldTheRunIs(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	run := rig.launch("t1")
 	rig.provider.Vanished[run.SandboxID] = true
@@ -447,6 +455,7 @@ func TestOneProbeNeverGivesUpHoweverOldTheRunIs(t *testing.T) {
 // One reachable tick means the box is there; a later blip must start counting
 // from zero rather than inheriting a streak from an hour ago.
 func TestASuccessfulReconnectClearsTheFailureStreak(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	run := rig.launch("t1")
 
@@ -467,6 +476,7 @@ func TestASuccessfulReconnectClearsTheFailureStreak(t *testing.T) {
 // A runner nobody registered cannot be polled, and retrying forever would hold
 // the seat busy for the life of the deployment.
 func TestARunNamingAnUnknownRunnerIsFreedRatherThanPolledForever(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	rig.launch("t1")
 	if err := rig.pending.AttachSandbox(t.Context(), "t1", BoxRef{
@@ -482,6 +492,7 @@ func TestARunNamingAnUnknownRunnerIsFreedRatherThanPolledForever(t *testing.T) {
 // The engine imposes NO run-time limit on a coding job — the box is bounded
 // only by how long the engine can go without a heartbeat.
 func TestEveryTickKeepsTheRunningBoxAlive(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	run := rig.launch("t1")
 	box := rig.provider.Box(run.SandboxID)
@@ -503,6 +514,7 @@ func TestEveryTickKeepsTheRunningBoxAlive(t *testing.T) {
 //
 // Mutation: poll through Connect, and the box is woken and heart-beaten.
 func TestThePollNeverWakesABoxItsRunHasMovedOnFrom(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	listed := rig.launch("t1")
 	box := rig.provider.Box(listed.SandboxID)
@@ -536,6 +548,7 @@ func TestThePollNeverWakesABoxItsRunHasMovedOnFrom(t *testing.T) {
 // Mutation: leave every paused box alone, and the handed-back run's box is
 // never heart-beaten or polled again.
 func TestThePollWakesAPausedBoxItsRunStillRuns(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	run := rig.launch("t1")
 	box := rig.provider.Box(run.SandboxID)
@@ -556,6 +569,7 @@ func TestThePollWakesAPausedBoxItsRunStillRuns(t *testing.T) {
 // A run parked on a question is not running: the seat is free and the box is
 // deliberately NOT heart-beaten, because the pause TTL is what bounds it.
 func TestAParkedRunIsNeitherPolledNorHeartBeaten(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	run := rig.launch("t1")
 	box := rig.provider.Box(run.SandboxID)
@@ -581,6 +595,7 @@ func TestAParkedRunIsNeitherPolledNorHeartBeaten(t *testing.T) {
 // it cannot resume — and the run's turn is destroyed by a job that was too
 // quick. The tick that finds it suspended is the one that may fire.
 func TestARunThatHasNotSuspendedYetIsNotPolled(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	run := rig.launching("t1")
 	box := rig.provider.Box(run.SandboxID)
@@ -605,6 +620,7 @@ func TestARunThatHasNotSuspendedYetIsNotPolled(t *testing.T) {
 // A publish failure must not be counted as a fired completion: the coordinator
 // never heard, so the next tick has to try again.
 func TestAFailedPublishIsRetriedOnTheNextTick(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true})
@@ -639,6 +655,7 @@ func (r *waiterRig) park(turnID string) {
 }
 
 func TestAPauseInsideItsTtlIsLeftAlone(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	run := rig.launch("t1")
 	rig.park("t1")
@@ -660,6 +677,7 @@ func TestAPauseInsideItsTtlIsLeftAlone(t *testing.T) {
 // The run is NOT over when the pause expires: the answer can still arrive, and
 // the work re-seeds from the pushed branch, which was always the durable half.
 func TestAnExpiredPauseIsReclaimedAndTheRunReseeds(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	run := rig.launch("t1")
 	rig.park("t1")
@@ -690,6 +708,7 @@ func TestAnExpiredPauseIsReclaimedAndTheRunReseeds(t *testing.T) {
 // exactly those boxes paused and billed; the answer itself must survive the
 // reap, since the resume re-seeds from the branch.
 func TestTheReaperReclaimsTheBoxOfAnAnswerStillWaitingOnItsResume(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	run := rig.launch("t1")
 	rig.park("t1")
@@ -715,6 +734,7 @@ func TestTheReaperReclaimsTheBoxOfAnAnswerStillWaitingOnItsResume(t *testing.T) 
 // Connect auto-resumes, so reclaiming through it would boot the work back up
 // purely to shut it down.
 func TestTheReaperKillsByIdRatherThanConnecting(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	run := rig.launch("t1")
 	box := rig.provider.Box(run.SandboxID)
@@ -734,6 +754,7 @@ func TestTheReaperKillsByIdRatherThanConnecting(t *testing.T) {
 // A zero TTL means "never hold a blocked box": the coordinator already tore
 // this one down when the run blocked, so there is no snapshot left to expire.
 func TestAZeroPauseTtlIsNotADeadlineForTheReaper(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	rig.launch("t1")
 	if err := rig.pending.AttachSandbox(t.Context(), "t1", BoxRef{
@@ -757,6 +778,7 @@ func TestAZeroPauseTtlIsNotADeadlineForTheReaper(t *testing.T) {
 // Every other paused box belongs to a tail being actively driven; expiring one
 // from here would kill it out from under live work.
 func TestTheReaperTouchesOnlyRunsParkedOnAQuestion(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	rig.launch("t1")
 	if err := rig.pending.MarkBoxPaused(t.Context(), "t1", rig.now); err != nil {
@@ -778,6 +800,7 @@ func TestTheReaperTouchesOnlyRunsParkedOnAQuestion(t *testing.T) {
 // is the authority for the WHOLE reap, not just for the status write — killing
 // before it lands destroys the box the resume is reconnecting to.
 func TestAnAnsweredRunIsNotReclaimedUnderTheResume(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	run := rig.launch("t1")
 	rig.park("t1")
@@ -803,6 +826,7 @@ func TestAnAnsweredRunIsNotReclaimedUnderTheResume(t *testing.T) {
 // reaper that skipped it left that box paused and billed for ever, which on a
 // remote provider is the most expensive way this subsystem fails.
 func TestAParkedBoxWhosePauseWasNeverRecordedIsStillReaped(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	run := rig.launch("t1")
 	if err := rig.provider.Box(run.SandboxID).Pause(t.Context()); err != nil {
@@ -842,6 +866,7 @@ func TestAParkedBoxWhosePauseWasNeverRecordedIsStillReaped(t *testing.T) {
 // is a LIVE box — dating it from the last write would reclaim a checkout out
 // from under the turn using it.
 func TestAnUnstampedBoxTheEngineIsDrivingIsNotTreatedAsHeld(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	run := rig.launch("t1")
 
@@ -877,6 +902,7 @@ func withPaused(run PendingRun, at time.Time) PendingRun {
 
 // N nodes polling means N reconnects per box per tick and N racing reapers.
 func TestANodeWithoutTheDutyDoesNothing(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true})
@@ -901,6 +927,7 @@ func TestANodeWithoutTheDutyDoesNothing(t *testing.T) {
 // is the multi-poller case the duty exists to prevent, and a skipped tick
 // costs one interval.
 func TestAnUnreadableDutyStandsDownRatherThanPollingAnyway(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true})
@@ -924,6 +951,7 @@ func TestAnUnreadableDutyStandsDownRatherThanPollingAnyway(t *testing.T) {
 // ---------------------------------------------------------------------
 
 func TestTheLoopTicksAndStopsCleanly(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true})
@@ -956,6 +984,7 @@ func TestTheLoopTicksAndStopsCleanly(t *testing.T) {
 // Mutation: make the walk's context twice, overwriting the first cancel func
 // with the deadline's, and every pass leaves one child registered.
 func TestAPassLeavesNoChildOfItsContextBehind(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	rig.launch("t1")
 	waiter, err := NewWaiter(WaiterOptions{
@@ -1057,6 +1086,7 @@ func (c *childCounter) cancel() {
 // launch used the new ones: a job started after the reload was on a backend
 // the poll had never heard of, and was declared gone.
 func TestTheWaiterPollsThroughTheManagerCurrentAtEachTick(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	// A CATALOGUE THAT MOVED THE CELL TO ANOTHER BACKEND, the way a
 	// reload rebuilds every backend it configures.
@@ -1103,6 +1133,7 @@ func (r *waiterRig) seedRunning(turnID, sandboxID string) {
 }
 
 func TestAWaiterNeedsItsCollaborators(t *testing.T) {
+	t.Parallel()
 	if _, err := NewWaiter(WaiterOptions{}); err == nil {
 		t.Fatal("a waiter with no queue, store or manager was accepted")
 	}
@@ -1113,6 +1144,7 @@ func TestAWaiterNeedsItsCollaborators(t *testing.T) {
 // announcement the dashboard's board reads and the one that routes the resume,
 // so a blank key here is a resumed turn whose writes dedupe against nothing.
 func TestACompletionCarriesTheRunsUnitOfWork(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	rig.launch("turn-1")
 	rig.runner.Finish(Result{Success: true})

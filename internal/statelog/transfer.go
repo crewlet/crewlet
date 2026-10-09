@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -49,11 +50,13 @@ const (
 // path and a joiner that gives up simply asks again.
 const TransferChunkWait = 30 * time.Second
 
-// OfferWindow is how long a joining node collects offers before choosing.
+// OfferWindow is the longest a joining node collects offers before choosing.
 //
 // Long enough that a busy donor answers, short enough that a node below the
 // floor — which is refusing every read and every write meanwhile — is not held
-// there by a peer that will never reply.
+// there by a peer that will never reply. It is a CEILING rather than the
+// collection's length: a joiner that names the donors it expects stops as soon
+// as each has answered ([CollectOffers]).
 const OfferWindow = 5 * time.Second
 
 // OfferRequest is what a joining node asks with.
@@ -91,14 +94,26 @@ type OfferRequest struct {
 	StreamCreatedAt map[string]time.Time `json:"stream_created_at,omitempty"`
 }
 
-// Offer is what a node answers with.
+// Offer is what a donor answers with: the artefact it holds, or — with no
+// Fetch — that it holds none ([Offer.Declined]).
 type Offer struct {
-	// Manifest is the artefact's own claim about itself.
-	Manifest Manifest `json:"manifest"`
+	// Donor is the node that answered, on every answer — an offer and a
+	// decline alike — because it is what a joiner counts its expected
+	// donors off by ([CollectOffers]). Not the manifest's NodeID, which
+	// names who TOOK the artefact and is absent from a decline.
+	Donor string `json:"donor"`
 
-	// Fetch is the subject to fetch this artefact from.
-	Fetch string `json:"fetch"`
+	// Manifest is the artefact's own claim about itself, absent on a
+	// decline.
+	Manifest Manifest `json:"manifest,omitzero"`
+
+	// Fetch is the subject to fetch this artefact from, and empty on a
+	// decline.
+	Fetch string `json:"fetch,omitempty"`
 }
+
+// Declined reports an answer from a donor that holds nothing to offer.
+func (o Offer) Declined() bool { return o.Fetch == "" }
 
 // Usable reports whether this offer can serve the request, and why not.
 // known is every migration of the replicated estate this binary carries
@@ -226,6 +241,10 @@ type DonorDeps struct {
 type Donor struct {
 	deps DonorDeps
 	log  *slog.Logger
+
+	// serving is whether the server has confirmed [Donor.Serve] is
+	// listening — see [Donor.Serving].
+	serving atomic.Bool
 }
 
 // NewDonor builds the donor half.
@@ -269,26 +288,103 @@ func (d *Donor) Serve(ctx context.Context) error {
 	}
 	defer func() { _ = fetches.Unsubscribe() }()
 
+	// SERVING ONCE THE SERVER HAS BOTH SUBSCRIPTIONS, never when Subscribe
+	// returns: Subscribe only queues the interest on this connection, and a
+	// subscription is registered when that interest reaches the server. A join
+	// on this node asks on ANOTHER connection, so one that named this donor
+	// the instant Subscribe returned could publish its request first and wait
+	// out the whole [OfferWindow] for an answer nobody was asked for.
+	defer d.serving.Store(false)
+	if err := d.confirmListening(ctx, nc); err != nil {
+		return err
+	}
+	d.serving.Store(true)
 	<-ctx.Done()
 	return ctx.Err()
 }
 
-// answerOffer replies with this node's artefact, or stays silent.
+// confirmListening returns once the server has acknowledged everything nc has
+// sent so far — [Donor.Serve]'s two subscriptions — or when ctx ends, or when
+// nc has closed for good.
 //
-// SILENT RATHER THAN A REFUSAL, because a joiner collects for a window and
-// takes the best answer: a node with nothing to donate has nothing to say, and
-// an explicit "no" would only make the joiner wait for it.
+// A CONFIRMATION THAT FAILS IS ASKED AGAIN rather than ending the donor. A
+// flush the client gave up on is not a subscription the server refused: both
+// stay on the connection, which sends them again when it reconnects, so the
+// donor answers whatever reaches it meanwhile and only waits to SAY it serves.
+// Ending Serve instead would end it for the node's whole life — nothing starts
+// a donor twice — over a broker that was slow for a moment at the wrong time.
+//
+// EACH ATTEMPT IS BOUNDED BY [OfferWindow], the longest a joiner listens for
+// an answer: a server that has not confirmed the subscriptions in that long
+// would have left a join that asked meanwhile unanswered anyway, so a longer
+// attempt buys nothing and a shorter one only asks the server more often while
+// it is not answering. No pause between attempts is needed: an attempt fails
+// at once only when its connection has just dropped, and the next one's ping
+// waits in the connection's reconnect buffer.
+func (d *Donor) confirmListening(ctx context.Context, nc *nats.Conn) error {
+	unconfirmed := false
+	for {
+		attempt, cancel := context.WithTimeout(ctx, OfferWindow)
+		err := nc.FlushWithContext(attempt)
+		cancel()
+		switch {
+		case err == nil:
+			if unconfirmed {
+				d.log.InfoContext(ctx, "statelog_donor_serving", "node", d.deps.NodeID)
+			}
+			return nil
+		case ctx.Err() != nil:
+			return ctx.Err()
+		case nc.IsClosed():
+			return fmt.Errorf("statelog: the donor's connection closed before the "+
+				"server confirmed its subscriptions: %w", err)
+		}
+		// SAID ONCE, not at every attempt: a broker that does not answer
+		// for minutes is reported by everything else that talks to it.
+		if !unconfirmed {
+			unconfirmed = true
+			d.log.WarnContext(ctx, "statelog_donor_unconfirmed",
+				"node", d.deps.NodeID, "error", err.Error(),
+				"detail", "the server has not confirmed this node's donor is "+
+					"listening, so a join on this node does not wait for it; "+
+					"asked again until it does")
+		}
+	}
+}
+
+// Serving reports whether this donor is answering offer requests: from the
+// moment the server has confirmed [Donor.Serve]'s subscriptions until Serve
+// returns.
+//
+// WHAT A JOIN ON THIS SAME NODE ASKS before it names this node among the
+// donors it waits for ([AdoptDeps.Donors]). A node's own donor is the one a
+// lone node below the floor ends its collection on, so it is named whenever it
+// answers — and never when it does not, which is every BOOT: the boot's join
+// runs before any donor starts, and a node naming itself there waited the
+// whole [OfferWindow] for an answer that could not come.
+func (d *Donor) Serving() bool { return d.serving.Load() }
+
+// answerOffer replies with this node's artefact, or with a decline when it
+// holds none.
+//
+// A DECLINE RATHER THAN SILENCE, because a joiner that knows whom to expect
+// stops collecting once each has answered ([CollectOffers]), and silence is
+// indistinguishable from a donor that has not heard the request yet — so a
+// silent donor held every joiner for the whole [OfferWindow], refusing every
+// read and write meanwhile. The commonest silent donor was the joiner's OWN:
+// every data node runs one, and a node that has never snapshotted holds
+// nothing, so a lone node below the floor waited five seconds on itself.
 //
 // THE REQUEST IS NOT READ. Every data node keeps the one replicated estate, so
 // there is only one thing a joiner can be asking for, and what makes an offer
 // usable — its generations, its floor, its record versions — is the joiner's
 // to judge from the manifest ([Offer.Usable]), never the donor's to guess.
 func (d *Donor) answerOffer(ctx context.Context, msg *nats.Msg) {
-	m, ok := d.deps.Newest()
-	if !ok {
-		return
+	answer := Offer{Donor: d.deps.NodeID}
+	if m, ok := d.deps.Newest(); ok {
+		answer.Manifest, answer.Fetch = m, d.FetchSubject()
 	}
-	body, err := json.Marshal(Offer{Manifest: m, Fetch: d.FetchSubject()})
+	body, err := json.Marshal(answer)
 	if err != nil {
 		d.log.WarnContext(ctx, "statelog_snapshot_offer_failed",
 			"node", d.deps.NodeID, "error", err.Error())
@@ -422,11 +518,28 @@ func (d *Donor) terminate(nc *nats.Conn, deliver string, status int, detail stri
 }
 
 // CollectOffers asks the fleet who can donate and returns what answers,
-// newest first.
+// newest first. A donor's decline ([Offer.Declined]) is counted and never
+// returned.
 //
 // It collects for a WINDOW rather than taking the first reply, because the
 // first reply is the fastest peer rather than the best artefact — and newer is
 // strictly better, since the only thing an older one buys is a longer replay.
+//
+// # Unless every donor it expects has answered
+//
+// expect names every donor that can answer — the engine names the live data
+// nodes and every node whose register row says it holds an artefact
+// ([AdoptDeps.Donors]) — and the collection ends the moment each has
+// answered, an offer or a decline, because no later answer can come from
+// anybody it is waiting for. With none named, the window decides. So an
+// expectation must be a SUPERSET of who can offer: a donor it does not name is
+// heard only while somebody named has still to answer, and its offer arriving
+// after the last named answer is not waited for. One it named that never
+// answers — not up yet, or gone — costs the window and nothing more, which is
+// the most an expectation can cost: the window was what every join paid
+// before it. The expectation may also be READ while the collection runs
+// rather than handed in, which is how [Adopter.Join] names its donors — see
+// [collectOffers].
 //
 // # What the context means
 //
@@ -439,7 +552,33 @@ func (d *Donor) terminate(nc *nats.Conn, deliver string, status int, detail stri
 // state log is stopping must do neither. A connection that stops delivering
 // is an error for the same reason: a joiner that cannot hear has not been told
 // that nobody can donate.
-func CollectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window time.Duration) ([]Offer, error) {
+func CollectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window time.Duration,
+	expect ...string) ([]Offer, error) {
+	var named func(context.Context) ([]string, error)
+	if len(expect) > 0 {
+		named = func(context.Context) ([]string, error) { return expect, nil }
+	}
+	return collectOffers(ctx, nc, req, window, named)
+}
+
+// collectOffers is [CollectOffers] with its expectation READ BESIDE the
+// collection rather than before it: expect runs once, on a context the window
+// bounds, while the offers arrive, and the collection ends once every donor it
+// names has answered — those that answered before it returned included. Nil
+// expects nobody, and the window decides.
+//
+// BESIDE AND NOT BEFORE, because the expectation [Adopter.Join] reads is a
+// listing of the fleet's live data nodes, which is a coordination read: run
+// first, a slow or unreachable store added all of its time in front of the
+// window, on a node refusing every read and write while it joins — for an
+// expectation that is only ever a way to stop early. Read beside, it costs
+// nothing the window does not: a listing still running when the window closes
+// is abandoned, and one that fails or names nobody leaves the window to decide.
+//
+// expect must return once its context ends, because the collection waits for
+// it: nothing a collection starts outlives the call.
+func collectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window time.Duration,
+	expect func(context.Context) ([]string, error)) ([]Offer, error) {
 	// A CALLER THAT HAS ALREADY GIVEN UP ASKS NOBODY: a request published
 	// now is one every donor answers for a joiner that will not read it.
 	if err := ctx.Err(); err != nil {
@@ -475,15 +614,71 @@ func CollectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window 
 				"within the %s offer window, so no donor was asked", window))
 	}
 
+	// THE EXPECTATION, read on a goroutine of its own under the window. Its
+	// answer INTERRUPTS the wait below (arrived), because every donor it
+	// names may have answered already, and a wait for a next answer that is
+	// never coming would hold the collection to the window regardless.
+	wait := collect
+	var expected chan []string
+	if expect != nil {
+		expected = make(chan []string, 1)
+		var arrived context.CancelFunc
+		wait, arrived = context.WithCancel(collect)
+		listed := make(chan struct{})
+		go func() {
+			defer close(listed)
+			defer arrived()
+			named, err := expect(collect)
+			if err != nil {
+				named = nil
+			}
+			expected <- named
+		}()
+		defer func() { cancel(); <-listed }()
+	}
+	// waiting is nil until the expectation is known, and from then the
+	// donors it names that have not answered.
+	var waiting map[string]bool
+	answered := map[string]bool{}
 	var out []Offer
-	for {
-		msg, err := sub.NextMsgWithContext(collect)
+	take := func(msg *nats.Msg) {
+		var o Offer
+		if err := json.Unmarshal(msg.Data, &o); err != nil {
+			return
+		}
+		answered[o.Donor] = true
+		delete(waiting, o.Donor)
+		if !o.Declined() {
+			out = append(out, o)
+		}
+	}
+	for waiting == nil || len(waiting) > 0 {
+		msg, err := sub.NextMsgWithContext(wait)
 		if err != nil {
 			// THE CALLER'S END FIRST, and tested on the PARENT: the
 			// child is done in both cases, so its own error cannot say
 			// whose end it was.
 			if ctx.Err() != nil {
 				return nil, fmt.Errorf("statelog: collect offers: %w", ctx.Err())
+			}
+			// THE EXPECTATION ARRIVING — its own interruption, with the
+			// window still open, and its answer sent before it: fold it
+			// in, less whoever has answered already, and go on waiting on
+			// the window alone. An answer that came in with it is still in
+			// the subscription, read on the next turn — or, when nobody
+			// it names is left to wait for, below.
+			if expected != nil && wait.Err() != nil && collect.Err() == nil {
+				named := <-expected
+				expected, wait = nil, collect
+				if len(named) > 0 {
+					waiting = make(map[string]bool, len(named))
+					for _, donor := range named {
+						if !answered[donor] {
+							waiting[donor] = true
+						}
+					}
+				}
+				continue
 			}
 			// The window closed, or the broker reported that nothing
 			// subscribes to the subject at all — which is the same
@@ -498,11 +693,22 @@ func CollectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window 
 			// as a fleet with nothing to give.
 			return nil, fmt.Errorf("statelog: collect offers: %w", err)
 		}
-		var o Offer
-		if err := json.Unmarshal(msg.Data, &o); err != nil {
-			continue
+		take(msg)
+	}
+	// WHAT HAS ALREADY ARRIVED IS READ BEFORE RETURNING, without waiting for
+	// more. The loop ends the moment the last donor it expects has answered
+	// or the window closes, and a wait whose context has ended answers that
+	// end even with a message in hand — so an answer that reached the
+	// subscription in the same instant, from a donor the join did not name
+	// or as the window closed, is one that arrived in time and was never
+	// read. Left there, the only usable offer could be dropped while the
+	// join reports that nobody could donate.
+	for {
+		msg, err := sub.NextMsg(0)
+		if err != nil {
+			break
 		}
-		out = append(out, o)
+		take(msg)
 	}
 	// NEWEST FIRST, so a caller's own refusals run against the best
 	// artefact before the worse ones.

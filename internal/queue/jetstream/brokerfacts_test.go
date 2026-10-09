@@ -7,6 +7,8 @@ import (
 
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/crewlet/crewlet/internal/jsprovision"
 )
 
 // The facts in this file belong to the VENDORED CLIENT and the broker it
@@ -260,5 +262,54 @@ func TestCreatingAnExistingConsumerErrsOnlyWhenTheConfigDiffers(t *testing.T) {
 		t.Fatalf("re-creating with a moved start sequence gave %v, want "+
 			"ErrConsumerExists — DomainConsumer's recovery branch keys on "+
 			"that error and would be unreachable", err)
+	}
+}
+
+// THE REFUSALS [jsprovision.Refused] TAKES AS ANSWERS ARE THE PINNED SERVER'S
+// OWN CODES, and so are the race's shapes it leaves to the read-back.
+//
+// The classifier spells each code as a number, because nats.go names few of
+// them, and a number copied from a server is one a server bump can move
+// without a word. It is held here rather than beside the classifier because
+// this is the package that links the server, and its error table is the only
+// authority on what each identifier is.
+func TestTheRefusalsNotReadBackAreThePinnedServersCodes(t *testing.T) {
+	t.Parallel()
+	answer := func(id server.ErrorIdentifier) *jetstream.APIError {
+		e, ok := server.ApiErrors[id]
+		if !ok {
+			t.Fatalf("the pinned server has no error %d", id)
+		}
+		return &jetstream.APIError{ErrorCode: jetstream.ErrorCode(e.ErrCode),
+			Code: e.Code, Description: e.Description}
+	}
+	for name, id := range map[string]server.ErrorIdentifier{
+		"no suitable peers":    server.JSClusterNoPeersErrF,
+		"no room in the file":  server.JSStorageResourcesExceededErr,
+		"no room in memory":    server.JSMemoryResourcesExceededErr,
+		"no applicable limit":  server.JSNoLimitsErr,
+		"an invalid stream":    server.JSStreamInvalidConfigF,
+		"overlapping subjects": server.JSStreamSubjectOverlapErr,
+		"the most streams":     server.JSMaximumStreamsLimitErr,
+		"the most consumers":   server.JSMaximumConsumersLimitErr,
+	} {
+		if !jsprovision.Refused(answer(id)) {
+			t.Errorf("the server's %s (%d) is read back after a create it "+
+				"refused, and reported as an object that is not there", name, id)
+		}
+	}
+	for name, id := range map[string]server.ErrorIdentifier{
+		"a name already in use":           server.JSStreamNameExistErr,
+		"a consumer configured otherwise": server.JSConsumerAlreadyExists,
+		"the generic consumer failure":    server.JSConsumerCreateErrF,
+		"a group that is not available":   server.JSClusterNotAvailErr,
+		"a stream not found":              server.JSStreamNotFoundErr,
+		"a consumer not found":            server.JSConsumerNotFoundErr,
+	} {
+		if jsprovision.Refused(answer(id)) {
+			t.Errorf("the server's %s (%d) is taken as a refusal, so the node "+
+				"that lost a create race to a peer refuses to boot instead of "+
+				"reading the peer's object back", name, id)
+		}
 	}
 }

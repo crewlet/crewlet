@@ -81,6 +81,7 @@ func newFakeBrokerNode(t *testing.T) *fakeBrokerNode {
 // command that stops the group counting it, and a voter with no live node is
 // still a row — the member an operator is looking for.
 func TestFleetBrokerListNamesTheDeadMemberAndTheRemedy(t *testing.T) {
+	t.Parallel()
 	node := newFakeBrokerNode(t)
 	out, stderr, err := cli(t, "fleet", "broker", "list", bootstrapForURL(t, node.server.URL))
 	if err != nil {
@@ -109,6 +110,7 @@ func TestFleetBrokerListNamesTheDeadMemberAndTheRemedy(t *testing.T) {
 // under a name the answer does not carry is still that node's row, matched
 // by the peer id its node id hashes to.
 func TestFleetBrokerListNamesAVoterNobodyCanNameByItsPeerID(t *testing.T) {
+	t.Parallel()
 	node := newFakeBrokerNode(t)
 	var answer map[string]any
 	if err := json.Unmarshal(node.answer, &answer); err != nil {
@@ -157,6 +159,7 @@ func TestFleetBrokerListNamesAVoterNobodyCanNameByItsPeerID(t *testing.T) {
 // AN EXTERNAL CLUSTER'S FLEET IS TOLD WHOSE MEMBERSHIP IT IS, and shown no
 // table of a broker this fleet does not run.
 func TestFleetBrokerListOnAnExternalCluster(t *testing.T) {
+	t.Parallel()
 	node := newFakeBrokerNode(t)
 	node.answer = []byte(`{"node":"node-a","kind":"client","external":true,"nodes":[],"findings":[]}`)
 	out, _, err := cli(t, "fleet", "broker", "list", bootstrapForURL(t, node.server.URL))
@@ -173,6 +176,7 @@ func TestFleetBrokerListOnAnExternalCluster(t *testing.T) {
 // the peer route, and naming it both ways — or neither — is refused before
 // anything is sent.
 func TestFleetBrokerRemoveConfirmsForcesOnlyOnAskAndRelaysRefusals(t *testing.T) {
+	t.Parallel()
 	node := newFakeBrokerNode(t)
 	conf := bootstrapForURL(t, node.server.URL)
 	if _, _, err := cli(t, "fleet", "broker", "remove", "node-c", conf); err == nil ||
@@ -229,6 +233,7 @@ func TestFleetBrokerRemoveConfirmsForcesOnlyOnAskAndRelaysRefusals(t *testing.T)
 // gave up first would report an unreachable node for a fleet whose broker had
 // a member wedged inside its lease — the fleet the command exists for.
 func TestTheListingWaitsPastTheNodesReadOfTheGroup(t *testing.T) {
+	t.Parallel()
 	if nodeRequestTimeout <= engine.BrokerReadWait() {
 		t.Errorf("the command waits %s for a listing the node may spend %s reading the "+
 			"group for", nodeRequestTimeout, engine.BrokerReadWait())

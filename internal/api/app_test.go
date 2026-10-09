@@ -58,6 +58,16 @@ func runSuite(m *testing.M) int {
 	}
 	defer func() { _ = db.Close() }()
 	sharedEvents = db.Events()
+
+	// THE BINARY'S OWN DASHBOARD, crawled once — see [embeddedDashboard].
+	// After the shared log, which the app's history reads are wired to.
+	dashboard, err := api.New(withRequired(api.Options{}))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "api test: api.New over the embedded dashboard:", err)
+		return 2
+	}
+	defer dashboard.Stop()
+	embeddedDashboard = embedded{app: dashboard, crawl: crawl(dashboard)}
 	return m.Run()
 }
 
@@ -74,10 +84,21 @@ type fakeRuntime struct {
 	// fleetReads counts every Fleet call, so a probe that must not scan the
 	// fleet can be shown not to.
 	fleetReads atomic.Int32
+	// snapshotReads counts every Snapshot call, which on a real engine reads
+	// the config posture off the coordination plane, so a read that wants
+	// only this node's seats can be shown not to make one.
+	snapshotReads atomic.Int32
 }
 
-func (f *fakeRuntime) Snapshot(context.Context) api.RuntimeState { return f.state }
-func (f *fakeRuntime) Tools() []api.ToolInfo                     { return f.tools }
+func (f *fakeRuntime) Snapshot(context.Context) api.RuntimeState {
+	f.snapshotReads.Add(1)
+	return f.state
+}
+
+func (f *fakeRuntime) Tools() []api.ToolInfo { return f.tools }
+
+// Seats answers from the same state Snapshot does, as ShuttingDown does.
+func (f *fakeRuntime) Seats() []string { return f.state.Seats }
 
 func (f *fakeRuntime) Fleet(ctx context.Context) api.FleetState {
 	f.fleetReads.Add(1)
@@ -117,7 +138,7 @@ func active() func() *config.Company {
 // is about.
 func newApp(t *testing.T, opts api.Options) *api.App {
 	t.Helper()
-	a, err := api.New(withRequired(t, opts))
+	a, err := api.New(withRequired(opts))
 	if err != nil {
 		t.Fatalf("api.New: %v", err)
 	}
@@ -125,8 +146,10 @@ func newApp(t *testing.T, opts api.Options) *api.App {
 	return a
 }
 
-func withRequired(t *testing.T, opts api.Options) api.Options {
-	t.Helper()
+// withRequired is opts with every required dependency it leaves unset filled
+// with an inert one — newApp's half that needs no test, so TestMain can build
+// the app the suite's dashboard cases share.
+func withRequired(opts api.Options) api.Options {
 	if opts.Bootstrap == nil {
 		b := config.DefaultBootstrap()
 		opts.Bootstrap = &b
@@ -228,7 +251,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 	}
 	// And the counterfactual: a complete set builds. Without it a refusal
 	// that named every field for any input would pass the case above.
-	a, err := api.New(withRequired(t, api.Options{}))
+	a, err := api.New(withRequired(api.Options{}))
 	if err != nil {
 		t.Fatalf("a complete set was refused: %v", err)
 	}

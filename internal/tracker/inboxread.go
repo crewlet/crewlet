@@ -849,9 +849,14 @@ func countInbox(notices []InboxNotice) (int, int) {
 // idList is ids as the one JSON array a `json_each(?)` term binds.
 //
 // ONE PARAMETER RATHER THAN ONE PER ID, because the lists are the person's own
-// and three of them together approach the driver's bound-parameter ceiling
-// ([store.Caps.MaxVariables] probes 2 000). An empty list is "[]", the one
-// spelling of an empty set: `NOT IN` over it keeps every row and `IN` none.
+// and the parameter ceiling is the ENGINE's: [store.Capabilities.MaxVariables]
+// reports the probe's own 32 766 on the pinned driver, whose real limit lies
+// past it, but an engine in this family may stop at the 999 the probe falls
+// back to — and three full lists are 768 ids ([MaxInboxEntries] each) before
+// the page's own arguments. One bind is one parameter at any length, so the
+// statement fits every engine and no list's length is a reason it fails. An
+// empty list is "[]", the one spelling of an empty set: `NOT IN` over it keeps
+// every row and `IN` none.
 func idList(ids []string) string {
 	if len(ids) == 0 {
 		return "[]"

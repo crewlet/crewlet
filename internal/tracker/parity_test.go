@@ -158,6 +158,7 @@ func TestTheParserCarriesNoUnwrittenState(t *testing.T) {
 // "fix": a record carrying a Notify that routes to nobody still writes
 // notified=1, and writes zero notification rows.
 func TestAnAnnouncedChangeThatNamesNobodyIsStillNotified(t *testing.T) {
+	t.Parallel()
 	r := newRoundTrip(t)
 	task := r.createTask("A task")
 

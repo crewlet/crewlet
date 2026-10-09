@@ -76,6 +76,14 @@ const (
 // fetch runs one request and returns the whole response.
 func fetch(t *testing.T, a *api.App, path string, headers map[string]string) *http.Response {
 	t.Helper()
+	return serve(a, path, headers)
+}
+
+// serve is fetch for a caller with no test to report through — the crawl the
+// suite makes once, before any case runs ([embeddedDashboard]). A request
+// served in memory has nothing to fail on but the answer it gets, which the
+// caller reads.
+func serve(a *api.App, path string, headers map[string]string) *http.Response {
 	req := httptest.NewRequest(http.MethodGet, path, nil)
 	for k, v := range headers {
 		req.Header.Set(k, v)

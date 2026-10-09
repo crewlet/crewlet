@@ -41,6 +41,7 @@ func (r *coordRig) phases() []types.AgentPhaseCompleted {
 // claim is handed back and the completion comes round again, and a second copy
 // of the record would be a second charge on every surface that shows spend.
 func TestACollectedRunIsPublishedOnceWithItsTokens(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	launched := rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
@@ -117,6 +118,7 @@ func TestACollectedRunIsPublishedOnceWithItsTokens(t *testing.T) {
 // and it came out of a box whose environment holds the seat's credentials, so
 // the publish is a boundary that redacts again rather than trusting the runner.
 func TestTheTranscriptRidesThePhaseRecordRedacted(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
@@ -149,6 +151,7 @@ func TestTheTranscriptRidesThePhaseRecordRedacted(t *testing.T) {
 // record of the first must not tell the second it was already published, and
 // the second's clock starts at its own launch rather than the row's creation.
 func TestTwoLaunchesInOneTurnAreTwoSpans(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	first := rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
@@ -210,6 +213,7 @@ func TestTwoLaunchesInOneTurnAreTwoSpans(t *testing.T) {
 // run that parked. A run that genuinely did not succeed is marked failed with
 // its reason.
 func TestEveryCollectedRunIsPublishedWithItsOutcome(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("asks")
 	rig.coordinator.countRun("swe", StatusRunning)
@@ -254,6 +258,7 @@ func TestEveryCollectedRunIsPublishedWithItsOutcome(t *testing.T) {
 // and a record that did not go out is not marked as having gone, so a retry of
 // the tail, if one comes, offers it again.
 func TestARefusedPhasePublishIsNotRecorded(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
@@ -287,6 +292,7 @@ func TestARefusedPhasePublishIsNotRecorded(t *testing.T) {
 // rollup by the phase record — headroom a run could print for itself. It is
 // read as nothing spent; the counts beside it stand.
 func TestARunsNegativeUsageIsReadAsNothingSpent(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)

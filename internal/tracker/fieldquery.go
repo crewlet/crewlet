@@ -341,10 +341,34 @@ func collectFieldRefs(q Query, into map[string]bool) {
 //
 // A clause that compared the WRONG column would be an index the planner cannot
 // use AND a predicate that matches nothing — see [FieldValueColumn].
+//
+// # Why the subquery NAMES its index
+//
+// Because no deployment ever counts this table. The four partial indexes all
+// lead with `field_id`, and with no statistics — nothing in the engine runs
+// ANALYZE — this engine's planner seeks `field_id` alone on whichever of them
+// it costs first rather than on the one whose second column the filter
+// compares: measured, a text, a number and a date filter each sought
+// `tracker_field_values_ref_idx (field_id=?)` and a choice filter
+// `tracker_field_values_at_idx (field_id=?)`, so every one read every value
+// the field holds, company-wide, through the heap, and the text and number
+// indexes served no read at all. The plan fixture never saw it because it used
+// to ANALYZE: statistics fixed the choice for those four, and the unset
+// filter, which sought the choice column's index even then, passed because the
+// number filter claimed the index it should have used. `INDEXED BY` is the
+// statement saying which of the four it was written for ([fieldValueIndex]),
+// and the planner then seeks both columns.
+//
+// It is also a GUARD, and that is the clause's documented purpose: a schema
+// change that drops the index fails the statement with `no such index`, and
+// one whose predicate this read stops implying (`hidden = 0`, carried by
+// [liveFieldValue]) with `no query solution` — loudly, at the first filter,
+// rather than as a board that quietly got slower.
 func fieldClause(filter FieldFilter, field resolvedField) (string, []any, error) {
 	column := "v." + FieldValueColumn(field.Type)
 	inner := func(predicate string, args ...any) (string, []any, error) {
 		return "t.id IN (SELECT v.task_id FROM tracker_field_values v " +
+			"INDEXED BY " + fieldValueIndex(field.Type) + " " +
 			"WHERE v.field_id = ? AND " + liveFieldValue + " AND " +
 			predicate + ")", append([]any{field.ID}, args...), nil
 	}

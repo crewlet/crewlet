@@ -99,12 +99,23 @@ type fileLock struct {
 	// drop a lock the opener is about to depend on.
 	holds int
 
+	// discarding marks the claim a scratch discard holds while it deletes
+	// the file ([discard]), which no handle may share. Guarded by
+	// locksHeld's mutex, like holds.
+	discarding bool
+
 	// writes orders the write transactions every one of those handles
 	// runs on this file. Here rather than on the handle for the same
 	// reason the claim itself is: two handles on one file share one
 	// driver-level write lock, so they have to share one line for it.
 	// See writequeue.go.
 	writes writeQueue
+
+	// migrating is held for the whole of a migration run on this file,
+	// by whichever of those handles is running it. Here for the reason
+	// writes is: the handles that can race one file's migration are
+	// exactly the handles that share this claim. See [DB.migrate].
+	migrating sync.Mutex
 }
 
 // queue is the write queue a handle on this path takes its place in.
@@ -119,18 +130,40 @@ func (l *fileLock) queue() *writeQueue {
 	return &l.writes
 }
 
+// migrations is the lock a migration run on this path holds.
+//
+// A nil claim is an in-memory database, which no other handle can reach, so it
+// gets a lock of its own for the reason [fileLock.queue] gives a queue of its
+// own: that is exactly the scope of what it excludes.
+func (l *fileLock) migrations() *sync.Mutex {
+	if l == nil {
+		return &sync.Mutex{}
+	}
+	return &l.migrating
+}
+
 // locksHeld is this process's claims, one per database path.
 var locksHeld = struct {
 	mu sync.Mutex
 	by map[string]*fileLock
 }{by: map[string]*fileLock{}}
 
-// lockStore takes the exclusive lock for a database path.
+// lockStore takes the exclusive lock for a database path, sharing a claim
+// this process already holds on it.
+func lockStore(dbPath string) (*fileLock, error) {
+	return claimStore(dbPath, false)
+}
+
+// claimStore takes the exclusive lock for a database path. A claim this
+// process already holds is shared — unless either side is a scratch discard
+// ([discard]), which takes the path ALONE: it is refused while any handle here
+// holds the path, and any handle asking while it holds the path is refused in
+// turn.
 //
 // The holder's identity is written into the sidecar AFTER the lock is held,
 // so what a refused opener reads is always a live holder's — never a
 // half-written line from a racing one.
-func lockStore(dbPath string) (*fileLock, error) {
+func claimStore(dbPath string, discarding bool) (*fileLock, error) {
 	if dbPath == "" || strings.HasPrefix(dbPath, ":memory:") {
 		// An in-memory database is per-connection by construction: there
 		// is no file for a second process to find, so there is nothing to
@@ -140,6 +173,14 @@ func lockStore(dbPath string) (*fileLock, error) {
 	locksHeld.mu.Lock()
 	defer locksHeld.mu.Unlock()
 	if held := locksHeld.by[dbPath]; held != nil {
+		switch {
+		case discarding:
+			return nil, fmt.Errorf("store: %s is open in this process, and a scratch "+
+				"store is discarded before it is opened — never under a live handle", dbPath)
+		case held.discarding:
+			return nil, fmt.Errorf("store: %s is being discarded as a scratch store "+
+				"by this process; open it once that open has returned", dbPath)
+		}
 		// Already ours. A second handle in this process shares the claim.
 		held.holds++
 		return held, nil
@@ -169,7 +210,7 @@ func lockStore(dbPath string) (*fileLock, error) {
 			ErrLocked, dbPath, holder)
 	}
 	stamp(file)
-	lock := &fileLock{path: path, file: file, holds: 1}
+	lock := &fileLock{path: path, file: file, holds: 1, discarding: discarding}
 	locksHeld.by[dbPath] = lock
 	return lock, nil
 }
@@ -270,25 +311,31 @@ func pidOf(stamped string) (int, bool) {
 // process already holds is refused too: the in-process claim is shared rather
 // than exclusive, so the lock alone would let a scratch open delete a
 // database a caller here is reading.
-func discard(dbPath string) error {
+//
+// THE CHECK AND THE CLAIM ARE ONE STEP, and the claim is never shared
+// ([claimStore]). They were two — a look for a handle here, then an ordinary
+// shared claim — so an open landing between them shared the claim and had its
+// database deleted under it, and one landing during the delete opened a file
+// that was being removed.
+//
+// remove is what deletes the files: [removeDatabaseFiles], on the one path
+// that discards. A PARAMETER because the claim's exclusivity is a property of
+// the moment between the claim and the release, and only a case that can hold
+// a discard inside that moment can see whether an open is refused there —
+// [claimStore]'s own case could not tell this function taking the claim from
+// it looking first and then sharing one.
+func discard(dbPath string, remove func(dbPath string) error) error {
 	if dbPath == "" || strings.HasPrefix(dbPath, ":memory:") {
 		// Nothing on disk: an in-memory database starts empty by
 		// construction.
 		return nil
 	}
-	locksHeld.mu.Lock()
-	open := locksHeld.by[dbPath] != nil
-	locksHeld.mu.Unlock()
-	if open {
-		return fmt.Errorf("store: %s is open in this process, and a scratch "+
-			"store is discarded before it is opened — never under a live handle", dbPath)
-	}
-	lock, err := lockStore(dbPath)
+	lock, err := claimStore(dbPath, true)
 	if err != nil {
 		return err
 	}
 	defer lock.release()
-	if err := removeDatabaseFiles(dbPath); err != nil {
+	if err := remove(dbPath); err != nil {
 		return fmt.Errorf("store: discard the scratch store: %w", err)
 	}
 	return nil

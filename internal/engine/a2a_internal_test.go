@@ -142,6 +142,7 @@ func TestTheQuestionIsEchoedBack(t *testing.T) {
 // than wait, was never woken, and the terminal state of every exchange was
 // the maintenance sweep closing an idle channel an hour later.
 func TestAnAnsweredAskWakesTheAskerAndClosesTheChannel(t *testing.T) {
+	t.Parallel()
 	e := watchdogEngine(t)
 	company := e.Company()
 	svc := e.a2aService(company)
@@ -281,6 +282,7 @@ func TestAnAnsweredAskWakesTheAskerAndClosesTheChannel(t *testing.T) {
 // would send the asker an artifact from a turn that has not finished; the
 // resumed turn comes back through the same frame and answers then.
 func TestASuspendedTurnDoesNotAnswerYet(t *testing.T) {
+	t.Parallel()
 	e := watchdogEngine(t)
 	company := e.Company()
 	svc := e.a2aService(company)
@@ -311,6 +313,7 @@ func TestASuspendedTurnDoesNotAnswerYet(t *testing.T) {
 // later with no explanation, which is strictly worse than a short "I could
 // not" the asker can act on.
 func TestATurnThatDeliveredNothingStillAnswers(t *testing.T) {
+	t.Parallel()
 	e := watchdogEngine(t)
 	company := e.Company()
 	svc := e.a2aService(company)
@@ -338,6 +341,7 @@ func TestATurnThatDeliveredNothingStillAnswers(t *testing.T) {
 // A TURN NOBODY ASKED FOR ANSWERS NOBODY. The ordinary case, and the one a
 // bug here would break loudest: every turn in the company runs through this.
 func TestATurnWithNoAskAnswersNobody(t *testing.T) {
+	t.Parallel()
 	e := watchdogEngine(t)
 	e.answerColleague(t.Context(), e.Company(), Request{
 		Handle: "cto", WorkKey: "wk",

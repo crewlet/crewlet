@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -38,6 +39,7 @@ func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 	b := config.DefaultBootstrap()
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
@@ -357,6 +359,7 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 	b := config.DefaultBootstrap()
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
@@ -560,11 +563,11 @@ func aProvisionedTrackerLog(t *testing.T) (*stateLog, *jetstream.Queue, *jetstre
 		t.Fatalf("open the broker: %v", err)
 	}
 	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(t.Context())) })
-	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "crewlet.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("open the store: %v", err)
-	}
+	path := filepath.Join(t.TempDir(), "crewlet.db")
+	db := storetest.OpenNode(t, path, store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
+	// The estate the runtime's start opens below, migrated already.
+	storetest.Seed(t, store.EstateReplicated, store.ReplicatedPath(path, ""))
 	ceilings, err := sizeCeilings(t.Context(), q, config.DefaultBootstrap().Stream,
 		64<<30, "/var/lib/crewlet/stream")
 	if err != nil {
@@ -635,6 +638,7 @@ func aRunningNodeOf(t *testing.T, company string) (*Engine, natsjs.JetStream) {
 	b := config.DefaultBootstrap()
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(company))
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)

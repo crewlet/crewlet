@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -150,23 +151,20 @@ func TestNoStatementSpansTwoFiles(t *testing.T) {
 	// literal, and an ATTACH of a path computed in Go is exactly that.
 	root := sourcetree.Root(t)
 	var crossings []string
-	for _, dir := range []string{"internal", "cmd"} {
-		walkGoFiles(t, filepath.Join(root, dir), func(fset *token.FileSet, file *ast.File) {
-			consts := stringConsts(file)
-			ast.Inspect(file, func(n ast.Node) bool {
-				text, ok := composedString(n, consts)
-				if !ok {
-					return true
-				}
-				if bothEstates(text, node, replicated) || attaches(text) {
-					crossings = append(crossings, shortPos(root, fset.Position(n.Pos()).String())+
-						": "+strings.Join(strings.Fields(text), " "))
-				}
-				// A composed string's own operands are literals the walk
-				// would otherwise report again, at a worse position.
-				_, isLit := n.(*ast.BasicLit)
-				return isLit
-			})
+	for _, f := range moduleTree(t) {
+		ast.Inspect(f.file, func(n ast.Node) bool {
+			text, ok := composedString(n, f.consts)
+			if !ok {
+				return true
+			}
+			if bothEstates(text, node, replicated) || attaches(text) {
+				crossings = append(crossings, shortPos(root, f.fset.Position(n.Pos()).String())+
+					": "+strings.Join(strings.Fields(text), " "))
+			}
+			// A composed string's own operands are literals the walk
+			// would otherwise report again, at a worse position.
+			_, isLit := n.(*ast.BasicLit)
+			return isLit
 		})
 	}
 	for _, c := range crossings {
@@ -296,36 +294,6 @@ var estateTables = func() func(store.Estate) (map[string]bool, error) {
 	}
 }()
 
-// walkGoFiles parses every non-test .go file under dir.
-func walkGoFiles(t *testing.T, dir string, fn func(*token.FileSet, *ast.File)) {
-	t.Helper()
-	fset := token.NewFileSet()
-	files := 0
-	err := sourcetree.Walk(dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() || !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") {
-			return nil
-		}
-		files++
-		parsed, perr := parser.ParseFile(fset, p, nil, parser.SkipObjectResolution)
-		if perr != nil {
-			return perr
-		}
-		fn(fset, parsed)
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk %s: %v", dir, err)
-	}
-	// Every caller asserts an absence over what this parsed, and a walk
-	// that parsed nothing asserts it just as confidently.
-	if files == 0 {
-		t.Fatalf("parsed no Go files under %s — this guard was certifying nothing", dir)
-	}
-}
-
 // parsedFile is one non-test source file the gates in this package read, with
 // the names they judge it by.
 type parsedFile struct {
@@ -333,24 +301,76 @@ type parsedFile struct {
 	file  *ast.File
 	rel   string
 	names fileNames
+	// consts is the file's own string constants (see [stringConsts]).
+	consts map[string]string
 }
 
-// parseTree parses every non-test .go file under each of dirs, relative to
-// root, once — for a gate that needs a first pass over the whole tree before
-// it can judge any one file.
-func parseTree(t *testing.T, root string, dirs ...string) []parsedFile {
+// moduleTree is every non-test .go file under the module's internal/ and
+// cmd/, parsed ONCE per test binary and shared by every gate here — the four
+// estate gates each parsed the same 1,087 files, eighteen megabytes, for
+// themselves, and three of those parses bought nothing. The source is the
+// build's, so no gate can see it change, and the gates only read what is
+// parsed: ast.Inspect, a position, a map lookup.
+//
+// Shared rather than FILTERED: a gate here joins what it reads across files
+// — the applier gate's accessor list, a statement composed from a constant —
+// so no one file's bytes can say it holds nothing the gate needs.
+func moduleTree(t *testing.T) []parsedFile {
 	t.Helper()
+	files, err := parsedModuleTree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return files
+}
+
+var parsedModuleTree = sync.OnceValues(func() ([]parsedFile, error) {
+	root, err := sourcetree.ModuleRoot()
+	if err != nil {
+		return nil, err
+	}
+	return parseTree(root, "internal", "cmd")
+})
+
+// parseTree parses every non-test .go file under each of dirs, relative to
+// root — for a gate that needs a first pass over the whole tree before it can
+// judge any one file.
+func parseTree(root string, dirs ...string) ([]parsedFile, error) {
 	var out []parsedFile
 	for _, dir := range dirs {
-		walkGoFiles(t, filepath.Join(root, dir), func(fset *token.FileSet, file *ast.File) {
-			rel := shortPos(root, fset.Position(file.Pos()).Filename)
+		fset := token.NewFileSet()
+		files := 0
+		err := sourcetree.Walk(filepath.Join(root, dir), func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() || !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") {
+				return nil
+			}
+			files++
+			file, err := parser.ParseFile(fset, p, nil, parser.SkipObjectResolution)
+			if err != nil {
+				return err
+			}
+			rel := shortPos(root, p)
 			out = append(out, parsedFile{
 				fset: fset, file: file, rel: rel,
-				names: namesOf(file, filepath.ToSlash(filepath.Dir(rel))),
+				names:  namesOf(file, filepath.ToSlash(filepath.Dir(rel))),
+				consts: stringConsts(file),
 			})
+			return nil
 		})
+		if err != nil {
+			return nil, fmt.Errorf("walk %s: %w", dir, err)
+		}
+		// Every gate asserts an absence over what this parsed, and a walk
+		// that parsed nothing asserts it just as confidently.
+		if files == 0 {
+			return nil, fmt.Errorf("parsed no Go files under %s — this guard was "+
+				"certifying nothing", dir)
+		}
 	}
-	return out
+	return out, nil
 }
 
 // fileNames is what a name-based walk knows about one file: its package's

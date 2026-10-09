@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -34,6 +35,18 @@ import (
 // would put an event on the fleet's stream per round for a screen nobody may
 // have open, and the frame is a SNAPSHOT — a consumer that missed ten of them
 // is not behind, it is one frame out of date.
+//
+// # And the one charge that does publish
+//
+// The FIRST REFUSAL IN A WINDOW is not one more reading of a meter that moves
+// over minutes: it is the moment the company — or a seat — stops working, and
+// every open header still says it is fine. Carried on the next tick it showed
+// up to fifteen seconds after every seat it stopped had stopped (the e2e
+// capture saw the refusal at 1.7 s and the frame that carried it at 15.6 s).
+// So the gate tells the reporter ([refusalLatch]) and the reporter publishes
+// at once; every refusal after it in the same window rides the tick, since it
+// changes nothing a header draws. It happens once per window per scope, so it
+// costs nothing the tick's own rationale was protecting.
 
 // BudgetReportInterval is how often a node publishes its snapshot.
 //
@@ -41,11 +54,101 @@ import (
 // can bear. The question a header answers, "is the company about to run out",
 // changes over minutes, while each report costs a listing of the counter plus
 // one read per scope it holds, and is fanned out to every open dashboard on
-// every node the moment it lands, EVERY node publishing its own. A refusal is
-// carried on the next frame, so a gate that starts turning turns away shows up
-// inside one interval, which is sooner than an operator reading a header acts
-// on it.
+// every node the moment it lands, EVERY node publishing its own. A window's
+// first refusal does not wait for it ([refusalLatch]).
 const BudgetReportInterval = 15 * time.Second
+
+// refusalLatch is how the gate tells the live meters a window has started
+// turning work away: the first refusal in each window wakes the reporter, and
+// the ones after it do not.
+//
+// FIRST AS THE COUNTER COUNTS IT. A window's refusal stamp is cleared by the
+// scope's next admitted charge ([coord.Budgets.Charge]), after which the next
+// refusal is a first again — a ceiling raised and then reached — so an
+// admitted charge forgets the scopes it charged, as the counter does. Per
+// NODE: a peer's refusal reaches this node's header on the peer's own frame,
+// which it publishes at once.
+//
+// Nil-safe throughout, for an engine built without one.
+type refusalLatch struct {
+	mu   sync.Mutex
+	seen map[refusedWindow]bool
+	// wake is the reporter's nudge. Buffered by one: a refusal that finds
+	// one pending adds nothing to it.
+	wake chan struct{}
+}
+
+// refusedWindow names one window of one scope: the counter's scope string
+// ([coord.OrgScope], or a seat's [coord.AgentScope]), the period and the
+// window's label.
+type refusedWindow struct {
+	scope  string
+	period period.Period
+	label  string
+}
+
+func newRefusalLatch() *refusalLatch {
+	return &refusalLatch{seen: map[refusedWindow]bool{}, wake: make(chan struct{}, 1)}
+}
+
+// refused records that scope's window turned work away, waking the reporter
+// the first time.
+func (l *refusalLatch) refused(scope string, p period.Period, label string) {
+	if l == nil {
+		return
+	}
+	key := refusedWindow{scope: scope, period: p, label: label}
+	l.mu.Lock()
+	first := !l.seen[key]
+	l.seen[key] = true
+	l.mu.Unlock()
+	if first {
+		select {
+		case l.wake <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// admitted forgets every window of the scopes an admitted charge charged,
+// whose refusal stamps that charge cleared.
+func (l *refusalLatch) admitted(scopes ...string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for key := range l.seen {
+		if slices.Contains(scopes, key.scope) {
+			delete(l.seen, key)
+		}
+	}
+}
+
+// keep forgets every window that is not current, so the latch holds at most
+// the windows the company's clock is in.
+func (l *refusalLatch) keep(current coord.Windows) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for key := range l.seen {
+		if !slices.ContainsFunc(current[:], func(w period.Window) bool {
+			return w.Period == key.period && w.Label == key.label
+		}) {
+			delete(l.seen, key)
+		}
+	}
+}
+
+// woken is the reporter's wake, and nil — which never fires — for no latch.
+func (l *refusalLatch) woken() <-chan struct{} {
+	if l == nil {
+		return nil
+	}
+	return l.wake
+}
 
 // budgetReporter is one node's meter loop.
 type budgetReporter struct {
@@ -94,20 +197,30 @@ func (e *Engine) stopBudgetReports() {
 
 func (r *budgetReporter) run(ctx context.Context) {
 	defer close(r.done)
-	tick := time.NewTicker(BudgetReportInterval)
+	r.loop(ctx, BudgetReportInterval, r.publish)
+}
+
+// loop publishes at once, then on every tick of every and on every wake of the
+// engine's refusal latch, until ctx ends. The publish is a parameter so the
+// schedule is exercised without a broker or a node behind it.
+func (r *budgetReporter) loop(ctx context.Context, every time.Duration,
+	publish func(context.Context)) {
+	tick := time.NewTicker(every)
 	defer tick.Stop()
 	// ONE FRAME AT ONCE, then one per tick. A ticker's first fire is an
 	// interval away, and until a frame lands every open dashboard holds no
 	// reading of the budget at all — which it says, rather than guessing,
 	// but for fifteen seconds after every engine start.
-	r.publish(ctx)
+	publish(ctx)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-			r.publish(ctx)
+		case <-r.engine.refusals.woken():
+			// A WINDOW'S FIRST REFUSAL — see [refusalLatch].
 		}
+		publish(ctx)
 	}
 }
 
@@ -162,6 +275,7 @@ func (r *budgetReporter) frame(ctx context.Context) (types.BudgetMeters, bool) {
 		return types.BudgetMeters{}, false
 	}
 	windows := coord.WindowsAt(e.now(), company.Config.Location())
+	e.refusals.keep(windows)
 	if uncapped := budgetSnapshot(company, windows, nil); !uncapped.Metered() {
 		return uncapped, true
 	}

@@ -34,6 +34,7 @@ func usageProfile() map[string]any {
 // walk, so the report rides a file instead — and it is read back through the
 // same [UsagePaths] every other profile uses.
 func TestAUsageFileReportsRealTokensWhereStdoutCannot(t *testing.T) {
+	t.Parallel()
 	p := fakeProvider(t, map[string]string{
 		"FAKE_STDOUT": "the answer",
 		"FAKE_USAGE_FILE": `{"input_tokens":1200,"output_tokens":340,` +
@@ -68,6 +69,7 @@ func TestAUsageFileReportsRealTokensWhereStdoutCannot(t *testing.T) {
 // count, would throw away work the operator paid for. The counts fall back to
 // the estimate, which is where a CLI reporting nothing already is.
 func TestAMissingUsageFileFallsBackToTheEstimate(t *testing.T) {
+	t.Parallel()
 	p := fakeProvider(t, map[string]string{
 		"FAKE_STDOUT": "the answer",
 		// "-" tells the fake to write no report at all.
@@ -89,6 +91,7 @@ func TestAMissingUsageFileFallsBackToTheEstimate(t *testing.T) {
 // look exactly like a profile reporting real usage — the silent half of the
 // same failure `located` exists to make loud for the answer.
 func TestAUsageFileThatSaysNothingThisProfileReadsIsStillEstimated(t *testing.T) {
+	t.Parallel()
 	for name, report := range map[string]string{
 		"every key renamed": `{"promptTokens":1200,"completionTokens":340}`,
 		// HALF a report is the sharper case: charging a real output
@@ -289,6 +292,7 @@ func TestTheHermesProfileDeniesItsToolsAndReadsItsRealTokens(t *testing.T) {
 //
 // Skipped unless a `hermes` is on PATH.
 func TestTheHermesProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
+	t.Parallel()
 	binary, err := exec.LookPath("hermes")
 	if err != nil {
 		t.Skip("no hermes on PATH")

@@ -61,12 +61,14 @@ const liveBacklog = 8 << 20
 
 // Follow implements [sandbox.Runner].
 func (r *Runner) Follow(sandbox.RunHandle) sandbox.LiveReading {
-	return &follower{cli: r.cli}
+	return &follower{cli: r.cli, lineBound: r.lineBound}
 }
 
 // follower is one live reading of one job.
 type follower struct {
 	cli CLI
+	// lineBound is its runner's ([Runner.lineBound]).
+	lineBound int
 
 	// events is the event stream, decoded by dec into transcript entries
 	// that wait in transcript until they settle.
@@ -147,7 +149,7 @@ func (f *follower) readEvents(ctx context.Context, box sandbox.Sandbox, path str
 		return nil
 	}
 	// A bytes.Reader cannot fail, so neither can this.
-	_ = eachLine(bytes.NewReader(lines), f.dec)
+	_ = eachLine(bytes.NewReader(lines), f.dec, f.lineBound)
 	for _, entry := range f.dec.Entries() {
 		f.transcript.add(entry + "\n")
 		f.spoke = true

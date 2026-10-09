@@ -5,7 +5,9 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -85,54 +87,11 @@ func TestOnlyOnePlaceWritesARunningStreamsConfiguration(t *testing.T) {
 		}
 	}
 
-	var found []string
-	files := 0
-	err := sourcetree.Walk(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			switch d.Name() {
-			case "dist", "static", "dashboard":
-				return fs.SkipDir
-			}
-			return nil
-		}
-		rel, _ := filepath.Rel(root, path)
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		if !strings.HasPrefix(rel, "internal"+string(filepath.Separator)) &&
-			!strings.HasPrefix(rel, "cmd"+string(filepath.Separator)) {
-			return nil
-		}
-		files++
-		fset := token.NewFileSet()
-		parsed, err := parser.ParseFile(fset, path, nil, 0)
-		if err != nil {
-			return err
-		}
-		ast.Inspect(parsed, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || !streamConfigWrite(sel.Sel.Name) {
-				return true
-			}
-			pos := fset.Position(call.Pos())
-			found = append(found, rel+":"+itoaLine(pos.Line)+" "+sel.Sel.Name)
-			return true
-		})
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk: %v", err)
+	scan := streamWriters(t, root)
+	if scan.read == 0 {
+		t.Fatal("read no source files — this guard was certifying nothing")
 	}
-	if files == 0 {
-		t.Fatal("parsed no source files — this guard was certifying nothing")
-	}
+	found := scan.found
 
 	sort.Strings(found)
 	var unexpected []string
@@ -156,12 +115,120 @@ func TestOnlyOnePlaceWritesARunningStreamsConfiguration(t *testing.T) {
 			"caller is gone, so this guard is watching for a call nobody makes " +
 			"and would pass whatever the tree did. Delete it, or fix the walk")
 	}
-	t.Logf("parsed %d files; stream-configuration writers: %v", files, found)
+	t.Logf("read %d files, parsed the %d that name a writer; stream-configuration "+
+		"writers: %v", scan.read, scan.parsed, found)
 }
 
-// streamConfigWrite names the calls that replace a live stream's config.
+// streamWriterScan is what one walk for stream-configuration writers found.
+type streamWriterScan struct {
+	// read is every non-test Go file under internal/ and cmd/, counted
+	// before the prefilter; parsed is the ones that passed it.
+	read, parsed int
+	found        []string
+}
+
+// streamWriters walks root for calls that write a stream's configuration.
+//
+// ONLY A FILE THAT SPELLS A WRITER IS PARSED. A selector names its method in
+// the source, and an identifier has no escapes, so a file whose bytes do not
+// hold one of streamConfigWriters holds no call of it (sourcetree.Identifiers)
+// — and of the tree's thousand-odd files, one does. Parsing all of them to
+// find it was six seconds under the race detector.
+func streamWriters(t *testing.T, root string) streamWriterScan {
+	t.Helper()
+	names := sourcetree.MustIdentifiers(streamConfigWriters...)
+	var scan streamWriterScan
+	err := sourcetree.Walk(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case "dist", "static", "dashboard":
+				return fs.SkipDir
+			}
+			return nil
+		}
+		rel, _ := filepath.Rel(root, path)
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		if !strings.HasPrefix(rel, "internal"+string(filepath.Separator)) &&
+			!strings.HasPrefix(rel, "cmd"+string(filepath.Separator)) {
+			return nil
+		}
+		scan.read++
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if !names.In(src) {
+			return nil
+		}
+		scan.parsed++
+		fset := token.NewFileSet()
+		parsed, err := parser.ParseFile(fset, path, src, parser.SkipObjectResolution)
+		if err != nil {
+			return err
+		}
+		ast.Inspect(parsed, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || !streamConfigWrite(sel.Sel.Name) {
+				return true
+			}
+			pos := fset.Position(call.Pos())
+			scan.found = append(scan.found, filepath.ToSlash(rel)+":"+itoaLine(pos.Line)+" "+sel.Sel.Name)
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	return scan
+}
+
+// THE WALK, ON A TREE WHOSE VERDICT IS KNOWN: both writers are found through
+// the same prefilter, and a file that names neither is never parsed — it is
+// not even Go, so parsing it would fail the walk.
+func TestTheStreamWriterWalkParsesOnlyWhatNamesAWriter(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	for path, body := range map[string]string{
+		"internal/a/a.go":      "package a\n\nfunc f() { js.UpdateStream(ctx, cfg) }\n",
+		"cmd/c/c.go":           "package main\n\nfunc g() { q.js.CreateOrUpdateStream(ctx, cfg) }\n",
+		"internal/b/b.go":      "package b\n\nthis is not Go and names no writer\n",
+		"internal/a/a_test.go": "package a\n\nfunc h() { js.UpdateStream(ctx, cfg) }\n",
+		"docs/elsewhere.go":    "package docs\n\nfunc i() { js.UpdateStream(ctx, cfg) }\n",
+	} {
+		full := filepath.Join(root, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	scan := streamWriters(t, root)
+	sort.Strings(scan.found)
+	want := []string{"cmd/c/c.go:3 CreateOrUpdateStream", "internal/a/a.go:3 UpdateStream"}
+	if scan.read != 3 || scan.parsed != 2 || !slices.Equal(scan.found, want) {
+		t.Errorf("read %d, parsed %d, found %q; want 3, 2 and %q", scan.read,
+			scan.parsed, scan.found, want)
+	}
+}
+
+// streamConfigWriters are the calls that replace a live stream's config.
+var streamConfigWriters = []string{"UpdateStream", "CreateOrUpdateStream"}
+
+// streamConfigWrite reports whether a call's method replaces a live stream's
+// config.
 func streamConfigWrite(name string) bool {
-	return name == "UpdateStream" || name == "CreateOrUpdateStream"
+	return slices.Contains(streamConfigWriters, name)
 }
 
 // allowedStreamWriter is the one site, named by file and function rather than

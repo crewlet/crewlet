@@ -106,16 +106,61 @@ CI and in `make check`. `-count=1` is the other half: without it a cached
 PASS recorded before the change answers for the change. `make test-norace`
 skips the detector when you want the faster loop, and says so.
 
-Some packages stand up N engines, each embedding its own NATS server, in ONE
-process. Sharing a two-core runner with everything else — `go test ./...` runs
-package binaries in parallel — their cluster cases cannot form a multi-member
-JetStream quorum inside the 30s stream-provisioning budget, and fail every
-cluster-start attempt with `context deadline exceeded`. Alone on a runner the
-same cases pass.
+The test targets run `go test -vet=off`, and that is not a gap: the vet
+`go test` runs by default is twelve analyzers, all of which `go vet ./...`
+runs too, over the same packages and the same `_test.go` files. That full vet
+is `make vet` — a prerequisite of `make check` — and a step of CI's
+`build + vet` job, and it is the only vet there is now. So a bare `make test`
+no longer vets: run `make vet` beside it, or `make check`.
 
-So those packages run in `make test-solo` and in CI's `end-to-end gates` job,
-and `make test` leaves them out. A contention split, not a coverage one —
-`make check` depends on both targets.
+Some packages stand up N engines, each embedding its own NATS server, in ONE
+process, and every stream or bucket they create is a round trip a quorum of
+those servers has to answer. Sharing a runner with everything else —
+`go test ./...` runs package binaries in parallel, and the rest of the suite
+holds a four-vCPU runner almost fully busy for its whole run — those round
+trips went unanswered for the whole thirty seconds a create was given then,
+and the cluster cases failed every cluster-start attempt with `context
+deadline exceeded`, while alone on a runner the same cases passed. Today's
+budgets are longer, and the shared case has not been re-measured under them;
+`go doc ./internal/solo` has what has been measured since, and what it does
+and does not show.
+
+So those packages run in `make test-solo` and in CI's `end-to-end gates`
+job, and `make test` leaves them out. A contention split, not a coverage one
+— `make check` depends on both targets. `make test-solo` runs its packages
+one binary at a time (`-p 1`) and compiles them first at full parallelism,
+since `-p 1` would otherwise compile the whole dependency tree one package at
+a time too.
+
+**In CI each half is one job**, `test (race)` and `end-to-end gates`, each on
+a runner of its own. `end-to-end gates` is plain `make test-solo`; `test (race)`
+is `make test` with two variables set, and a local run can do the same:
+
+```bash
+make test TEST_TIMINGS=/tmp/test-timings.tsv   # write how long each package took
+make test TEST_WEIGHTS=/tmp/test-timings.tsv   # start the longest first by that
+```
+
+`TEST_WEIGHTS` starts the longest packages first: `go test` starts package runs
+in the order it is handed them, and alphabetical order started the three
+longest last. It must name a file that exists — `internal/solo/partition`
+refuses one it cannot open rather than guess — and an empty file is `go list`'s
+order, which is what CI runs before `main` has measured anything. CI's own
+weights are the timings of the job's last passing run on `main`, kept in the
+Actions cache, which nothing outside a workflow can download; a local run
+takes them from a run of its own, as above. Neither variable changes which
+packages are in a half, and left unset — the default — `make test` is the
+whole half in `go list` order, as it always was. `make test-solo` takes
+neither: it runs at `-p 1`, where its binaries take the same time in any
+order.
+
+Both paths live outside the checkout, as they do in CI: the suite's own gates
+read the checkout as this repository's tree, and neither path is ignored by
+git, so a file left there is one `git add -A` away from a commit.
+
+A half is not split across more runners: GitHub Actions has no native way to
+split one job, and the comment above `ci.yml`'s `test` job says what doing it
+by hand cost and bought.
 
 **Which packages those are is computed, not listed.** A package declares it by
 importing `internal/solo` from its `TestMain`, and `internal/solo`'s roster
@@ -382,6 +427,16 @@ What follows are the prerequisites that legitimately vary by machine.
 Tests never call real LLM APIs — use the fakes in `internal/providers`. Test
 files sit beside what they cover, as Go expects.
 
+A test that opens a store on a fresh path opens it through
+`storetest.OpenNode` or `storetest.OpenEstate`, and one that boots an engine on
+a path of its own seeds it first with `storetest.Seed` — the node estate, and
+the replicated one where the node holds it, never a scratch store. Each copies
+an image the test binary's own migrations built once, so a broken migration
+still fails at the first fixture and no case pays the whole migration sequence
+for nothing it asserts. Only a test whose subject is migration — the schema
+cases, `Pending`, an adoption, a fresh-file boot — opens a fresh file with
+`store.OpenNode`.
+
 ### The end-to-end gates
 
 `internal/e2e` runs a real engine, a real broker and the real API, then
@@ -392,6 +447,31 @@ there and nowhere else, so it needs node too:
 ```bash
 make test-solo   # internal/e2e, and every other package that runs alone
 ```
+
+A case there is written to three rules, which `internal/e2e`'s package doc
+states with their reasons:
+
+- **A case that stands up one node — or a stateless node beside one data
+  node — runs in parallel.** Each has its own directories, its own scripted
+  model and its own broker, so the one thing such cases would share is the
+  process environment, and a node is *handed* its environment instead
+  (`nodeSpec.env`, which reaches the engine as `engine.Options.Environment`).
+  `t.Setenv` cannot run beside `t.Parallel`, and a case that read the
+  runner's environment held only on runners that happened to agree with it.
+- **A case that stands up a fleet runs alone, before the parallel ones, and
+  the fleet's claims share one fleet**: each is a subtest of
+  `TestAFleetOfThree`, in the order `fleetClaims` gives, rather than a test
+  paying a boot and a teardown of its own. A new fleet claim is a row there.
+  Only a claim that breaks its fleet on purpose — the partition case — keeps
+  a fleet to itself.
+- **An absence is waited on a recorded decision, never on a sleep.** A case
+  asserting that something did not happen waits for the record that says it
+  was decided — a delivery's `notification_skipped`, held against the reason
+  `notify.SkipReason` declares; a later delivery's record, behind it in the
+  order the inbound edge keeps; a Mattermost node's answer to a ping sent
+  behind a post — and each of those orders is held by a case of its own. An
+  absence read after a fixed sleep holds only for as long as the sleep
+  happened to be long enough.
 
 ## Project conventions
 
@@ -577,6 +657,14 @@ queue is empty and the bump merges the instant it is mergeable. And **Allow
 auto-merge** must be on under Settings → General, or the step fails outright;
 that failure is loud, a red check on the bump, which is the right way for it to
 fail.
+
+The checks to require are the jobs of `ci.yml` a pull request runs: `build +
+vet`, `sign-off`, `dashboard`, `test (race)`, `end-to-end gates`,
+`golangci-lint` and the four `cross-compile the release targets` legs. A rule
+matches a check by its exact name, and a matrix leg's name carries its matrix
+values — `cross-compile the release targets (linux, amd64)` — so each leg is
+required by that full name; a check the rule names that never reports blocks
+every pull request, and renaming a job is therefore a change to the rule too.
 
 The job runs only when Dependabot is both the pull request's author *and* the
 actor that triggered the run. That second condition is what stops the workflow

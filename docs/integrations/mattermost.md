@@ -769,6 +769,12 @@ heartbeat interval is **derived from the server's own
 `TimeBetweenUserTypingUpdatesMilliseconds`** setting rather than hardcoded:
 re-asserting faster than the server's throttle is silently dropped, and much
 slower leaves a visible gap. Tune the server setting and the engine follows.
+It is read when the transport starts, from the first bot token the server
+accepts, beside each bot's identity and before any bot's websocket attaches.
+A server that cannot be reached is asked once rather than once per bot — the
+next token would only meet the same outage — and the indicator then runs at
+Mattermost's default of five seconds until the next start
+(`mattermost_instance_unread`).
 
 | Mode | Shows the status when… |
 |---|---|

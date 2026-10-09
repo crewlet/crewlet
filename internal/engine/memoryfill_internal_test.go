@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // seatsHeld is a seat host as the fill reads it: which seats are held, and
@@ -41,10 +42,7 @@ func allEstablished(handles ...string) seatsHeld {
 // for each agent.
 func diaryFixture(t *testing.T, notes map[string][]string) (*store.DB, *learning.Diary) {
 	t.Helper()
-	db, err := store.OpenNode(t.Context(), t.TempDir()+"/n.db", store.Options{EmbeddingDim: 64})
-	if err != nil {
-		t.Fatalf("store.OpenNode: %v", err)
-	}
+	db := storetest.OpenNode(t, t.TempDir()+"/n.db", store.Options{EmbeddingDim: 64})
 	t.Cleanup(func() { _ = db.Close() })
 	diary := learning.NewDiary(db)
 	at := time.Now().UTC().Add(-time.Hour)

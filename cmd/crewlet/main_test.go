@@ -32,6 +32,8 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 const companyYAML = `
@@ -712,17 +714,47 @@ func testEngine(t *testing.T) *engine.Engine {
 // the bridge from the environment, as a node does.
 func testEngineWithBridge(t *testing.T, bridge *mcpbridge.Bridge) *engine.Engine {
 	t.Helper()
-	boot := bootstrapFor(t, 0)
-	company, err := config.ParseCompany([]byte(companyYAML))
-	if err != nil {
-		t.Fatalf("parse: %v", err)
+	return testEngineWith(t, engine.Options{Bridge: bridge})
+}
+
+// testEngineWith is testEngine built from opts, on a bootstrap of its own and
+// the [companyYAML] company where opts names none.
+func testEngineWith(t *testing.T, opts engine.Options) *engine.Engine {
+	t.Helper()
+	opts.Bootstrap = bootstrapFor(t, 0)
+	seedEngineStore(t, opts.Bootstrap)
+	if opts.Company == nil {
+		company, err := config.ParseCompany([]byte(companyYAML))
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		opts.Company = company
 	}
-	e, err := engine.New(t.Context(), engine.Options{Bootstrap: boot, Company: company, Bridge: bridge})
+	e, err := engine.New(t.Context(), opts)
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
 	return e
+}
+
+// seedEngineStore writes the binary's migrated store image wherever boot's
+// engine will open an estate, so the boot finds every migration applied rather
+// than running the whole sequence on a fresh file — none of these cases is
+// about migrating. The rule is internal/engine's SeedStore: the node estate
+// always, the replicated one only where the node holds it
+// ([engine.HoldsEstate]), and nothing for a scratch store, which a boot
+// discards.
+func seedEngineStore(t *testing.T, boot *config.Bootstrap) {
+	t.Helper()
+	if boot.Store.Scratch {
+		return
+	}
+	storetest.Seed(t, store.EstateNode, boot.Store.Path)
+	if engine.HoldsEstate(boot) {
+		storetest.Seed(t, store.EstateReplicated,
+			store.ReplicatedPath(boot.Store.Path, boot.Store.ReplicatedPath))
+	}
 }
 
 func freePort(t *testing.T) int {

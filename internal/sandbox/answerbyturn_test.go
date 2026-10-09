@@ -115,6 +115,7 @@ func (r *coordRig) answeredRecords() []types.SandboxRunAnswered {
 // asked — its requester is on the row — and a row read back carries the seats
 // and whether they are a fallback.
 func TestTheParkRecordsWhomTheQuestionIsPutTo(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.audience.resolves(Audience{Handles: []string{"founder", "cto"}, Fallback: true})
 	launchScheduled(t, rig, "t1")
@@ -135,6 +136,7 @@ func TestTheParkRecordsWhomTheQuestionIsPutTo(t *testing.T) {
 // answer names the run, resumes the suspended turn with it, attributed, and
 // the resume is on the record with who gave it.
 func TestAnAnswerByTurnResumesARunWithNoConversation(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	launchScheduled(t, rig, "t1")
 	parksOnAQuestion(t, rig, "t1")
@@ -176,6 +178,7 @@ func TestAnAnswerByTurnResumesARunWithNoConversation(t *testing.T) {
 // recorded against is not answered a second time — and the person who answered
 // late is told so on the record rather than left to wonder.
 func TestAnAnswerByTurnToARunAlreadyAnsweredIsNotMine(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	launchScheduled(t, rig, "t1")
 	parksOnAQuestion(t, rig, "t1")
@@ -231,6 +234,7 @@ func (s *staleOnce) Get(ctx context.Context, turnID string) (PendingRun, bool, e
 // resuming it a second time with the first question's answer presented as the
 // second's.
 func TestTwoAnswersByTurnResumeOnce(t *testing.T) {
+	t.Parallel()
 	t.Run("two answers at once", func(t *testing.T) {
 		rig := newCoordRig(t)
 		launchScheduled(t, rig, "t1")
@@ -322,6 +326,7 @@ func TestTwoAnswersByTurnResumeOnce(t *testing.T) {
 // question's name exists to stop. It is spent with the reason — not handed back,
 // since no retry can supply what it lacks — and the run keeps waiting.
 func TestAnAnswerByTurnNamingNoQuestionIsSpentUnread(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	launchScheduled(t, rig, "t1")
 	parksOnAQuestion(t, rig, "t1")
@@ -349,6 +354,7 @@ func TestAnAnswerByTurnNamingNoQuestionIsSpentUnread(t *testing.T) {
 // spent by the node holding the seat, so it is refused before anything is put
 // on the seat's inbox.
 func TestTheAnswerDeskRefusesAnAnswerNamingNoQuestion(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	desk := AnswerDesk{Pending: rig.pending, Queue: rig.queue}
 	given, _ := givenFor("t1")
@@ -369,6 +375,7 @@ func TestTheAnswerDeskRefusesAnAnswerNamingNoQuestion(t *testing.T) {
 // neither is resumed, neither is handed back — there is nothing to retry for —
 // and each says what it found.
 func TestAnAnswerByTurnToARunNotWaitingIsSpentAndSaysWhy(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	launchScheduled(t, rig, "running")
 
@@ -398,6 +405,7 @@ func TestAnAnswerByTurnToARunNotWaitingIsSpentAndSaysWhy(t *testing.T) {
 // back for the broker's spaced retry, and nothing is announced: it has not
 // become anything yet.
 func TestAnAnswerByTurnOverAnUnreadableStoreComesBack(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	launchScheduled(t, rig, "t1")
 	parksOnAQuestion(t, rig, "t1")
@@ -420,6 +428,7 @@ func TestAnAnswerByTurnOverAnUnreadableStoreComesBack(t *testing.T) {
 // It used to be handed back to the broker instead, held only by the claim the
 // resume took, so a node that stopped between that claim and the turn lost it.
 func TestAnAnswerByTurnWhoseResumeFailedIsRetriedFromItsRecord(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	launchScheduled(t, rig, "t1")
 	parksOnAQuestion(t, rig, "t1")
@@ -462,6 +471,7 @@ func TestAnAnswerByTurnWhoseResumeFailedIsRetriedFromItsRecord(t *testing.T) {
 // having no ordinary form, it is spent as `declined`. It is never recorded
 // against the question again, so it cannot circle the run it failed to reach.
 func TestAnAnswerByTurnItsRunCannotTakeIsDeclined(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	launchScheduled(t, rig, "t1")
 	parksOnAQuestion(t, rig, "t1")
@@ -526,6 +536,7 @@ func (r *coordRig) lastInboxEvent(t *testing.T) *events.Event {
 // was taken as the answer and resumed the run, and nothing said so; now the
 // resume is on the record, with the route and the sender.
 func TestTheChatAnswerPathRecordsWhoAnswered(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
@@ -556,6 +567,7 @@ func TestTheChatAnswerPathRecordsWhoAnswered(t *testing.T) {
 // every ordinary message on a seat with a parked run is offered to the match,
 // and a record per message would bury the answers that were.
 func TestAChatMessageThatMatchedNoRunRecordsNothing(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
@@ -580,6 +592,7 @@ func TestAChatMessageThatMatchedNoRunRecordsNothing(t *testing.T) {
 // the run and resumes the run with it, attributed to the person who gave it, as
 // it does a chat reply's ([Coordinator.reapTail]).
 func TestAnAnswerByTurnOutlivesItsClaimsNode(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	launchScheduled(t, rig, "t1")
 	parksOnAQuestion(t, rig, "t1")
@@ -658,6 +671,7 @@ func heldThroughResumes(rig *coordRig) *[]bool {
 // seat's inbox held through it. Without that, the person's answer waited on the
 // run until the seat changed hands.
 func TestAnAnswerByTurnWhoseRecordLandedUnseenStartsItsResumeWhenItComesBack(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	launchScheduled(t, rig, "t1")
 	parksOnAQuestion(t, rig, "t1")
@@ -688,6 +702,7 @@ func TestAnAnswerByTurnWhoseRecordLandedUnseenStartsItsResumeWhenItComesBack(t *
 // AND THE SAME ON THE CHAT ROUTE: a reply whose record landed unseen comes back,
 // is recognised as the answer on the run, and starts the resume.
 func TestAReplyWhoseRecordLandedUnseenStartsItsResumeWhenItComesBack(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
 	heldDuring := heldThroughResumes(rig)

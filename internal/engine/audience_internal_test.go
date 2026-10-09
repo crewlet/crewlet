@@ -80,7 +80,7 @@ func TestAQuestionIsPutToTheSeatsItsLabelNames(t *testing.T) {
 			t.Parallel()
 			r := run
 			r.Requester = tc.requester
-			got := resolveAudience(o, r, tc.label)
+			got := resolveAudience(o, nil, r, tc.label)
 			if !slices.Equal(got.Handles, tc.want) || got.Fallback != tc.fallback {
 				t.Errorf("%q resolved to %v (fallback %v), want %v (fallback %v)",
 					tc.label, got.Handles, got.Fallback, tc.want, tc.fallback)
@@ -93,7 +93,7 @@ func TestAQuestionIsPutToTheSeatsItsLabelNames(t *testing.T) {
 // never to a guess.
 func TestAQuestionFromASeatTheChartLostIsPutToNobody(t *testing.T) {
 	t.Parallel()
-	got := resolveAudience(audienceChart(t),
+	got := resolveAudience(audienceChart(t), nil,
 		sandbox.PendingRun{TurnID: "t1", AgentHandle: "left-the-company"}, "manager")
 	if len(got.Handles) != 0 || !got.Fallback {
 		t.Fatalf("resolved to %v (fallback %v), want nobody as a fallback", got.Handles, got.Fallback)
@@ -116,7 +116,7 @@ func TestTheAskBriefNamesWhomTheParkCanResolve(t *testing.T) {
 		t.Fatalf("the brief does not name the seat's teammates and manager by handle:\n%s", brief)
 	}
 	for _, name := range []string{"cto", "ada", "qa"} {
-		if got := resolveAudience(o, sandbox.PendingRun{AgentHandle: "swe"}, name); got.Fallback {
+		if got := resolveAudience(o, nil, sandbox.PendingRun{AgentHandle: "swe"}, name); got.Fallback {
 			t.Errorf("a --to %q copied from the brief fell back", name)
 		}
 	}

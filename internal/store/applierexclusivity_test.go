@@ -12,7 +12,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -262,8 +261,7 @@ func TestOnlyTheApplierWritesTheReplicatedEstate(t *testing.T) {
 			"only as a holder was not reported")
 	}
 
-	root := sourcetree.Root(t)
-	files := parseTree(t, root, "internal", "cmd")
+	files := moduleTree(t)
 	accessors := collectAccessors(files)
 	// THE COLLECTOR, ON THE TREE. The store's own constructor is declared
 	// with a bare `ReplicatedHandle` result and the runtime's accessor with
@@ -278,7 +276,6 @@ func TestOnlyTheApplierWritesTheReplicatedEstate(t *testing.T) {
 
 	var found []site
 	for _, f := range files {
-		consts := stringConsts(f.file)
 		inspectWithParent(f.file, func(n, parent ast.Node) bool {
 			if why, ok := replicatedWriteAt(n, parent, f.names, accessors); ok {
 				found = append(found, site{
@@ -287,7 +284,7 @@ func TestOnlyTheApplierWritesTheReplicatedEstate(t *testing.T) {
 				})
 				return true
 			}
-			text, ok := composedString(n, consts)
+			text, ok := composedString(n, f.consts)
 			if !ok {
 				return true
 			}

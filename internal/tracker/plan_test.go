@@ -1,6 +1,7 @@
 package tracker
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
@@ -48,6 +50,29 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	covered := []string{"tracker_tasks", "tracker_task_tags",
 		"tracker_task_deps", "tracker_field_values"}
 
+	// NO REGISTERED READER READS A COVERED TABLE WITH NO INDEX AT ALL —
+	// at any scope, a query's own subqueries and a duty's statement
+	// included. An index SCAN is a legitimate plan when the order is what
+	// the read is about and the limit stops it early; a bare table scan is
+	// every row the company has read from the heap, and there is no reader
+	// here for which that is right.
+	//
+	// EVERY COVERED TABLE, AND THE DUTIES TOO, because the inventory below
+	// cannot see what this sees: an index somebody DROPS is no longer in
+	// the inventory to go unclaimed, so a duty whose index went with it
+	// fell back to a heap scan and this test stayed green — measured by
+	// dropping tracker_tasks_key_idx, which left key resolution reading
+	// every task and passed.
+	refuseHeapScans := func(t *testing.T, plan []string) {
+		t.Helper()
+		for _, table := range covered {
+			if scansHeap(plan, table) {
+				t.Errorf("this read reads %s with no index:\n%s",
+					table, strings.Join(plan, "\n"))
+			}
+		}
+	}
+
 	used := map[string]bool{}
 	for name, params := range registeredQueries() {
 		t.Run(name, func(t *testing.T) {
@@ -70,15 +95,24 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 			for _, index := range indexesIn(plan) {
 				used[index] = true
 			}
-			// A REGISTERED QUERY MUST NOT READ tracker_tasks WITH
-			// NO INDEX AT ALL — at any scope. An index SCAN is a
-			// legitimate plan when the order is what the query is
-			// about and the limit stops it early; a bare table scan
-			// is every task in the company read from the heap, and
-			// there is no query here for which that is right.
-			if scansHeap(plan, "tracker_tasks") {
-				t.Errorf("this query reads tracker_tasks with no index:\n%s",
-					strings.Join(plan, "\n"))
+			refuseHeapScans(t, plan)
+			// A CUSTOM-FIELD FILTER SEEKS ITS OWN COLUMN'S INDEX,
+			// which the inventory below cannot see: the four lead
+			// with `field_id` alike, so a filter seeking another
+			// column's on `field_id` alone reads every value its
+			// field holds while the index it should have used is
+			// claimed by its neighbour. Measured: the unset filter
+			// sought the choice column's index even over the
+			// statistics this fixture used to take, and passed,
+			// because the number filter claimed the number index.
+			// Spelled from the column rather than through
+			// [fieldValueIndex], which is what is under test.
+			for _, field := range planFields(q) {
+				index := "tracker_field_values_" + FieldValueColumn(field.Type) + "_idx"
+				if !seeks(plan, index) {
+					t.Errorf("this filter on a %s field does not SEEK %s:\n%s",
+						field.Type, index, strings.Join(plan, "\n"))
+				}
 			}
 		})
 	}
@@ -89,9 +123,11 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	// and a duty's own statement is as much a reader as a board is.
 	for name, statement := range dutyReads() {
 		t.Run(name, func(t *testing.T) {
-			for _, index := range indexesIn(explain(t, db, statement.sql, statement.args)) {
+			plan := explain(t, db, statement.sql, statement.args)
+			for _, index := range indexesIn(plan) {
 				used[index] = true
 			}
+			refuseHeapScans(t, plan)
 		})
 	}
 
@@ -251,18 +287,27 @@ func dutyReads() map[string]struct {
 
 var planNow = time.Date(2031, 4, 16, 14, 30, 0, 0, time.UTC)
 
-// The corpus the plans are taken against.
+// The corpus the task plans are taken against: twenty thousand tasks across
+// thirty projects, and the tag, dependency and field values every fifth one
+// carries.
 //
-// # Why it is not four hundred rows
+// # What the rows decide, measured
 //
-// A planner reasons about SELECTIVITY, and at four hundred rows across three
-// projects every predicate looks alike: a project seek and a due-date seek
-// return the same order of magnitude, so whichever index the cost model
-// happens to prefer wins and the answer says nothing about production. At
-// twenty thousand rows across thirty projects a project holds a
-// thirtieth of the corpus and a due date a tenth of that — which is the shape
-// the inventory has to be right for, and the shape that decides whether an
-// index earns the write cost it charges on every commit on every node.
+// NOTHING, today. No node ever runs ANALYZE, so a deployment's planner has no
+// statistics and plans from its built-in guesses whatever its tables hold —
+// and this fixture is planned the same way ([seededPlanStore]). Those guesses
+// do not read the rows on this engine: every plan the inventory takes over
+// this corpus is the plan it takes over an empty estate.
+//
+// THEY ARE KEPT because that is a property of the ENGINE, not of the schema,
+// and the engine is a dependency that moves. The shape is a deployment's — a
+// project a thirtieth of the work, a due date a tenth of that, the skew that
+// decides whether a partial index earns the write cost it charges on every
+// commit on every node — so the day an engine release starts weighing a
+// table's contents without being asked, the dependency update that brings it
+// plans the inventory over what a deployment holds rather than over an empty
+// file, and fails there rather than in production. What that costs is about
+// seven of the ten seconds the inventory takes under the race detector.
 const (
 	corpusRows = 20_000
 	projects   = 30
@@ -278,17 +323,36 @@ func nullableAt(i, n int) any {
 	return int64(i) * 1_000_000
 }
 
-// planStore is a replicated estate with the tracker's schema and enough rows
-// for the planner to prefer an index.
-//
-// # Why rows at all
-//
-// SQLite's planner is free to scan a table it believes is tiny, and an empty
-// one is the tiniest there is — so a plan taken against no data reports a scan
-// for every query and this test would fail on a schema with no faults. The
-// fixture is small and its shape is what matters: enough distinct values that
-// a seek is cheaper than a scan, and ANALYZE run so the planner knows it.
+// planStore is a replicated estate holding the task corpus ([corpusRows]),
+// planned as a deployment plans it ([seededPlanStore]).
 func planStore(t *testing.T) store.ReplicatedHandle {
+	t.Helper()
+	return seededPlanStore(t, seedTaskCorpus)
+}
+
+// seededPlanStore is an empty replicated estate filled by seed in ONE
+// transaction — the frame every plan fixture here shares, so each seeds the
+// table its own statements read and nothing else.
+//
+// # Never ANALYZEd, because no deployment is
+//
+// Nothing in the engine runs ANALYZE, so every node's planner works from its
+// built-in guesses, and a plan taken over statistics is a plan no node runs.
+// This fixture used to ANALYZE, and that hid exactly the failure it exists to
+// report: counted, the text, number, date and choice filters each sought its
+// own column's index; uncounted, as on every node, each sought ANOTHER
+// column's on `field_id` alone, and the text and number indexes served no
+// read at all — certified as used for as long as the fixture counted what no
+// deployment counts ([fieldClause] now names its index). Statistics were also
+// the only way the rows ever reached a plan: with none, every plan the three
+// plan tests take is the same over an empty estate.
+//
+// seed is handed the estate's own parameter limit, which is what
+// [store.InsertRows] chunks to — the multi-row insert every applier writes a
+// collection through.
+func seededPlanStore(t *testing.T,
+	seed func(ctx context.Context, tx *sql.Tx, maxVariables int) error) store.ReplicatedHandle {
+
 	t.Helper()
 	dbNode, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() {
@@ -302,85 +366,121 @@ func planStore(t *testing.T) store.ReplicatedHandle {
 	}
 	defer w.Close()
 	if err := w.Tx(t.Context(), func(tx *sql.Tx) error {
-		for i := range corpusRows {
-			id := fmt.Sprintf("t-%04d", i)
-			if _, err := tx.ExecContext(t.Context(), `
-				INSERT INTO tracker_tasks
-					(id, key, project_key, filed_unit, routing_unit,
-					 root_id, type, title, status, status_group,
-					 rank, assignee, batch_id, estimate_min, points,
-					 spend_tokens, due_at, start_at, finished_at,
-					 created_at, updated_at, version, document)
-				VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-				id, fmt.Sprintf("ENG-%d", i),
-				fmt.Sprintf("P%02d", i%projects), "eng", "eng", id,
-				[]string{"task", "bug", "epic"}[i%3], "a task",
-				[]string{"todo", "in_progress", "done"}[i%3],
-				[]string{"not_started", "active", "done"}[i%3],
-				fmt.Sprintf("a%06d", i), fmt.Sprintf("h-%d", i%200),
-				fmt.Sprintf("b-%d", i%97), i%480, float64(i%13), i*100,
-				// SKEWED, because selectivity is the whole question: a
-				// tenth of the corpus has a due date and a fiftieth is
-				// finished, which is what a company's board looks like
-				// and what decides whether a partial index earns its
-				// write cost.
-				nullableAt(i, 10), nullableAt(i, 10), nullableAt(i, 50),
-				0, int64(i), int64(i), []byte(`{}`)); err != nil {
-				return err
-			}
-			if i%tagEvery != 0 {
-				continue
-			}
-			for _, statement := range []struct {
-				sql  string
-				args []any
-			}{
-				{`INSERT INTO tracker_task_tags (task_id, project_key, slug)
-					VALUES (?,?,?)`,
-					[]any{id, "ENG", fmt.Sprintf("tag-%d", i%11)}},
-				{`INSERT INTO tracker_task_deps
-					(blocker_id, task_id, blocker_open, cleared_at) VALUES (?,?,?,?)`,
-					[]any{fmt.Sprintf("t-%04d", (i+1)%400), id, i % 2, int64(i)}},
-				// ONE ROW PER DECLARED FIELD, under the ids
-				// [planFields] resolves to — a fixture whose only
-				// field id is one no registered query names leaves
-				// the planner nothing to seek on.
-				{`INSERT INTO tracker_field_values
-					(task_id, field_id, seq, kind, hidden, text)
-					VALUES (?,?,?,?,0,?)`,
-					[]any{id, "field-owner", 0, FieldValueNative,
-						fmt.Sprintf("v-%d", i%211)}},
-				{`INSERT INTO tracker_field_values
-					(task_id, field_id, seq, kind, hidden, num)
-					VALUES (?,?,?,?,0,?)`,
-					[]any{id, "field-effort", 0, FieldValueNative, float64(i % 97)}},
-				{`INSERT INTO tracker_field_values
-					(task_id, field_id, seq, kind, hidden, at)
-					VALUES (?,?,?,?,0,?)`,
-					[]any{id, "field-ship", 0, FieldValueNative, int64(i)}},
-				{`INSERT INTO tracker_field_values
-					(task_id, field_id, seq, kind, hidden, ref)
-					VALUES (?,?,?,?,0,?)`,
-					[]any{id, "field-impact", 0, FieldValueNative,
-						fmt.Sprintf("r-%d", i%59)}},
-			} {
-				if _, err := tx.ExecContext(t.Context(), statement.sql, statement.args...); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
+		return seed(t.Context(), tx, db.Caps().MaxVariables)
 	}); err != nil {
 		t.Fatalf("seed the fixture: %v", err)
 	}
-	// ANALYZE OUTSIDE THE TRANSACTION, on the same pinned connection: it
-	// writes the statistics tables the planner reads, and without it the
-	// planner reasons from its built-in guesses about a table it has never
-	// counted.
-	if _, err := w.Conn().ExecContext(t.Context(), `ANALYZE`); err != nil {
-		t.Fatalf("ANALYZE: %v", err)
-	}
 	return db
+}
+
+// insertAll writes n rows through [store.InsertRows] with no conflict clause.
+//
+// THE MULTI-ROW INSERT, not a statement per row: the task corpus is 44 000
+// rows, and one ExecContext each — a round trip, a parse and a plan per row —
+// was two thirds of what this fixture cost under the race detector (29 s
+// alone, 11 s through this). What is left is the driver binding each of some
+// 570 000 parameters and the engine maintaining the task table's twenty-odd
+// indexes, which no statement shape removes. The rows are the same rows
+// either way.
+func insertAll(ctx context.Context, tx *sql.Tx, maxVariables int,
+	prefix, row string, n int, args func(i int) []any) error {
+
+	_, err := store.InsertRows(ctx, tx, maxVariables, prefix, row, "", n, args)
+	return err
+}
+
+// taskRow is the i-th row of the task corpus, in [insertTask]'s column order.
+func taskRow(i int) []any {
+	id := fmt.Sprintf("t-%04d", i)
+	return []any{
+		id, fmt.Sprintf("ENG-%d", i),
+		fmt.Sprintf("P%02d", i%projects), "eng", "eng", id,
+		[]string{"task", "bug", "epic"}[i%3], "a task",
+		[]string{"todo", "in_progress", "done"}[i%3],
+		[]string{"not_started", "active", "done"}[i%3],
+		fmt.Sprintf("a%06d", i), fmt.Sprintf("h-%d", i%200),
+		fmt.Sprintf("b-%d", i%97), i % 480, float64(i % 13), i * 100,
+		// SKEWED, because selectivity is the whole question: a
+		// tenth of the corpus has a due date and a fiftieth is
+		// finished, which is what a company's board looks like
+		// and what decides whether a partial index earns its
+		// write cost.
+		nullableAt(i, 10), nullableAt(i, 10), nullableAt(i, 50),
+		0, int64(i), int64(i), []byte(`{}`),
+	}
+}
+
+// insertTask is the statement [taskRow] fills, as a prefix and one row.
+const insertTask = `
+	INSERT INTO tracker_tasks
+		(id, key, project_key, filed_unit, routing_unit,
+		 root_id, type, title, status, status_group,
+		 rank, assignee, batch_id, estimate_min, points,
+		 spend_tokens, due_at, start_at, finished_at,
+		 created_at, updated_at, version, document)
+	VALUES`
+
+const taskValues = `(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+
+// seedTaskCorpus is the twenty thousand tasks the task query set is planned
+// against, and the tags, dependencies and field values every fifth one
+// carries.
+func seedTaskCorpus(ctx context.Context, tx *sql.Tx, maxVariables int) error {
+	if err := insertAll(ctx, tx, maxVariables, insertTask, taskValues,
+		corpusRows, taskRow); err != nil {
+		return fmt.Errorf("the tasks: %w", err)
+	}
+	// EVERY FIFTH TASK carries one row in each child table: the k-th
+	// tagged task is task k*tagEvery.
+	tagged := (corpusRows + tagEvery - 1) / tagEvery
+	id := func(k int) string { return fmt.Sprintf("t-%04d", k*tagEvery) }
+	for _, child := range []struct {
+		what, prefix, row string
+		args              func(k int) []any
+	}{
+		{"tags", `INSERT INTO tracker_task_tags (task_id, project_key, slug) VALUES`,
+			`(?,?,?)`, func(k int) []any {
+				return []any{id(k), "ENG", fmt.Sprintf("tag-%d", k*tagEvery%11)}
+			}},
+		{"dependencies", `INSERT INTO tracker_task_deps
+			(blocker_id, task_id, blocker_open, cleared_at) VALUES`,
+			`(?,?,?,?)`, func(k int) []any {
+				i := k * tagEvery
+				return []any{fmt.Sprintf("t-%04d", (i+1)%400), id(k), i % 2, int64(i)}
+			}},
+		// ONE ROW PER DECLARED FIELD, under the ids [planFields]
+		// resolves to — a fixture whose only field id is one no
+		// registered query names leaves the planner nothing to seek on.
+		{"text values", `INSERT INTO tracker_field_values
+			(task_id, field_id, seq, kind, hidden, text) VALUES`,
+			`(?,?,?,?,0,?)`, func(k int) []any {
+				return []any{id(k), "field-owner", 0, FieldValueNative,
+					fmt.Sprintf("v-%d", k*tagEvery%211)}
+			}},
+		{"number values", `INSERT INTO tracker_field_values
+			(task_id, field_id, seq, kind, hidden, num) VALUES`,
+			`(?,?,?,?,0,?)`, func(k int) []any {
+				return []any{id(k), "field-effort", 0, FieldValueNative,
+					float64(k * tagEvery % 97)}
+			}},
+		{"date values", `INSERT INTO tracker_field_values
+			(task_id, field_id, seq, kind, hidden, at) VALUES`,
+			`(?,?,?,?,0,?)`, func(k int) []any {
+				return []any{id(k), "field-ship", 0, FieldValueNative, int64(k * tagEvery)}
+			}},
+		{"choice values", `INSERT INTO tracker_field_values
+			(task_id, field_id, seq, kind, hidden, ref) VALUES`,
+			`(?,?,?,?,0,?)`, func(k int) []any {
+				return []any{id(k), "field-impact", 0, FieldValueNative,
+					fmt.Sprintf("r-%d", k*tagEvery%59)}
+			}},
+	} {
+		if err := insertAll(ctx, tx, maxVariables, child.prefix, child.row,
+			tagged, child.args); err != nil {
+			return fmt.Errorf("the task %s: %w", child.what, err)
+		}
+	}
+	return nil
 }
 
 func explain(t *testing.T, db store.ReplicatedHandle, statement string, args []any) []string {
@@ -572,39 +672,201 @@ func TestTheSubtaskRollupKeepsItsContainer(t *testing.T) {
 // ([historyMoves]); a planner that cannot prove the implication falls back to
 // a scan of the company's whole history on every landing-screen poll, and
 // nothing else would ever say so.
+//
+// # Reaching the index is not the claim
+//
+// The claim is that a poll costs the WINDOW's changes, and a plan can name the
+// index while breaking it, so each read is held to the plan its shape calls
+// for:
+//
+//   - A read that BOUNDS `effective_at` — the flow's window, a feed page past
+//     its cursor — SEEKS the index on it ([seeks]). Measured: wrapping the
+//     column in the flow's walk (`effective_at + 0 >= ?`) turns its SEARCH
+//     into a SCAN of the index — every change that ever moved a count, in
+//     the index's order — and that plan still names the index, which is all
+//     this test used to ask.
+//   - A read with NO bound — the newest page, filtered or not — is an order
+//     and a LIMIT, and the right plan is the index walked in its own order and
+//     stopped after a page. Right only while the index's order IS the read's,
+//     so no read here SORTS ([sorts]): measured, ordering the feed by
+//     `effective_at, id` kept the index, added a sort of every moving change
+//     before the first row, and passed.
+//
+// PLANNED OVER A COMPANY'S HISTORY ([historyPlanStore]) and with no
+// statistics, as a deployment plans it ([seededPlanStore]).
 func TestTheFlowAndFeedReadsSearchTheirIndex(t *testing.T) {
 	t.Parallel()
-	db := planStore(t)
-	at := time.Date(2031, 4, 16, 0, 0, 0, 0, time.UTC)
-	statements := map[string]struct {
+	db := historyPlanStore(t)
+	const moves = "tracker_history_moves_idx"
+	// THE WIDEST WINDOW THE FLOW WALKS — [MaxFlowPoints] days back — and a
+	// feed page a month down, both inside the history the fixture spans.
+	from := planNow.AddDate(0, 0, -MaxFlowPoints)
+	before := &FeedCursor{At: planNow.AddDate(0, -1, 0), Seq: 9}
+	type read struct {
 		sql  string
 		args []any
-	}{
-		"the flow's walk": {flowRowsStatement, []any{store.EncodeTime(at)}},
+		// bounded is whether the read bounds effective_at, the index's
+		// leading column, and so has a range to seek.
+		bounded bool
 	}
-	for name, q := range map[string]FeedQuery{
-		"the newest feed page":   {Limit: 20},
-		"a later feed page":      {Limit: 20, Before: &FeedCursor{At: at, Seq: 9}},
-		"one writer's hand-offs": {Limit: 20, Actor: "ana", Kinds: []FeedKind{FeedHandoff}},
+	reads := map[string]read{
+		"the flow's walk": {flowRowsStatement, []any{store.EncodeTime(from)}, true},
+	}
+	for name, c := range map[string]struct {
+		q       FeedQuery
+		bounded bool
+	}{
+		"the newest feed page": {FeedQuery{Limit: 20}, false},
+		"a later feed page":    {FeedQuery{Limit: 20, Before: before}, true},
+		"one writer's hand-offs": {FeedQuery{Limit: 20, Actor: "h-7",
+			Kinds: []FeedKind{FeedHandoff}}, false},
+		"a later page of one writer's hand-offs": {FeedQuery{Limit: 20, Actor: "h-7",
+			Kinds: []FeedKind{FeedHandoff}, Before: before}, true},
 	} {
-		kinds := q.Kinds
+		kinds := c.q.Kinds
 		if len(kinds) == 0 {
 			kinds = FeedKinds
 		}
-		sql, args := companyFeedStatement(q, kinds)
-		statements[name] = struct {
-			sql  string
-			args []any
-		}{sql, args}
+		sql, args := companyFeedStatement(c.q, kinds)
+		reads[name] = read{sql, args, c.bounded}
 	}
-	for name, statement := range statements {
+	for name, r := range reads {
 		t.Run(name, func(t *testing.T) {
-			plan := explain(t, db, statement.sql, statement.args)
-			if !slices.Contains(indexesIn(plan), "tracker_history_moves_idx") ||
-				scansHeap(plan, "tracker_history") {
-				t.Errorf("this read does not search tracker_history_moves_idx:\n%s",
-					strings.Join(plan, "\n"))
+			plan := explain(t, db, r.sql, r.args)
+			shown := strings.Join(plan, "\n")
+			switch {
+			case !slices.Contains(indexesIn(plan), moves) ||
+				scansHeap(plan, "tracker_history"):
+				t.Errorf("this read does not reach %s:\n%s", moves, shown)
+			case r.bounded && !seeks(plan, moves):
+				t.Errorf("this read bounds effective_at and does not SEEK %s "+
+					"on it — it walks every change that ever moved a count, "+
+					"which is the company's history rather than the "+
+					"window's:\n%s", moves, shown)
+			}
+			if sorts(plan) {
+				t.Errorf("this read sorts what it selected rather than reading "+
+					"%s in its own order, so every moving change it selects is "+
+					"read before the first row is returned:\n%s", moves, shown)
 			}
 		})
+	}
+}
+
+// The history the company-wide reads are planned against.
+//
+// # Why most of it moves nothing
+//
+// It decides no plan today, for the reason the task corpus decides none
+// ([corpusRows]), and it is a company's shape for the reason that corpus is:
+// an engine that weighs contents judges a PARTIAL index by how much of the
+// table its predicate keeps, and most commits change nothing either reader
+// draws — a title, a tag, a comment, a due date. So one commit in
+// [historyMoveEvery] moves a count (a create, a status, an assignee, a
+// project, a removal), one in [historyNotATask] is not about a task at all,
+// and the rest are the quiet changes that make up a company's history. Twenty
+// thousand rows over two years and two thousand tasks is ten commits a task,
+// and a [MaxFlowPoints]-day window is an eighth of it.
+const (
+	historyRows      = 20_000
+	historySubjects  = 2_000
+	historyMoveEvery = 10
+	historyNotATask  = 20
+	historyPurged    = 50
+)
+
+// historyPlanStore is a replicated estate holding a company history, the
+// tasks it is about and the deletion markers of the one in [historyPurged]
+// that were purged.
+//
+// THE TASKS AND THE MARKERS ARE THERE FOR THE FEED'S JOINS: its page LEFT
+// JOINs both on their primary keys, so the tables it joins hold what a
+// company's do.
+func historyPlanStore(t *testing.T) store.ReplicatedHandle {
+	t.Helper()
+	return seededPlanStore(t, seedHistory)
+}
+
+// seedHistory is [historyPlanStore]'s seed.
+func seedHistory(ctx context.Context, tx *sql.Tx, maxVariables int) error {
+	var tasks, purged [][]any
+	for s := range historySubjects {
+		if s%historyPurged != 0 {
+			tasks = append(tasks, taskRow(s))
+			continue
+		}
+		purged = append(purged, []any{
+			fmt.Sprintf("t-%04d", s), fmt.Sprintf("ENG-%d", s),
+			fmt.Sprintf("P%02d", s%projects), "ana", "human",
+			int64(s), historyStream, store.EncodeTime(planNow), []byte(`{}`),
+		})
+	}
+	if err := insertAll(ctx, tx, maxVariables, insertTask, taskValues,
+		len(tasks), func(i int) []any { return tasks[i] }); err != nil {
+		return fmt.Errorf("the tasks: %w", err)
+	}
+	if err := insertAll(ctx, tx, maxVariables, `
+		INSERT INTO tracker_deletions
+			(task_id, task_key, project_key, by, by_kind,
+			 committed_seq, log_stream, at, document)
+		VALUES`, `(?,?,?,?,?,?,?,?,?)`,
+		len(purged), func(i int) []any { return purged[i] }); err != nil {
+		return fmt.Errorf("the deletion markers: %w", err)
+	}
+	if err := insertAll(ctx, tx, maxVariables, `
+		INSERT INTO tracker_history
+			(id, subject_kind, subject_id, project_key, kind, actor,
+			 actor_kind, fields_json, log_seq, log_stream, created_at,
+			 effective_at, document)
+		VALUES`, `(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		historyRows, historyRow); err != nil {
+		return fmt.Errorf("the history: %w", err)
+	}
+	return nil
+}
+
+// historyStream is the log every fixture row names: the domain's own.
+var historyStream = Domain{}.Stream().Name
+
+// historyRow is the i-th commit of the fixture's history, oldest first, two
+// years of it ending at [planNow].
+func historyRow(i int) []any {
+	start := planNow.AddDate(-2, 0, 0)
+	at := start.Add(planNow.Sub(start) / historyRows * time.Duration(i))
+	subject := i % historySubjects
+	project := fmt.Sprintf("P%02d", subject%projects)
+	subjectKind, subjectID := "task", fmt.Sprintf("t-%04d", subject)
+
+	// THE QUIET CHANGES, which neither reader draws.
+	quiet := []struct{ kind, fields string }{
+		{"fields", `{"title":{"from":"a task","to":"the task"}}`},
+		{"comment", `{}`},
+		{"tags", `{"tags":{"from":"a","to":"a,b"}}`},
+		{"fields", `{"due":{"from":"","to":"2031-05-01"}}`},
+	}
+	// AND THE ONES THAT MOVE A COUNT, by each road the predicate admits a
+	// row: a kind it names, and a status, assignee or project delta.
+	moves := []struct{ kind, fields string }{
+		{"created", `{}`},
+		{"status", `{"status":{"from":"todo","to":"in_progress"}}`},
+		{"status", `{"status":{"from":"in_progress","to":"done"}}`},
+		{"assignee", `{"assignee":{"from":"h-1","to":"h-7"}}`},
+		{"moved", `{"project":{"from":"P01","to":"P02"}}`},
+		{"removed", `{}`},
+	}
+	change := quiet[i%len(quiet)]
+	switch {
+	case i%historyNotATask == historyNotATask-1:
+		subjectKind, subjectID = "project", project
+		change = struct{ kind, fields string }{"project_updated",
+			`{"name":{"from":"Platform","to":"Platform team"}}`}
+	case i%historyMoveEvery == 0:
+		change = moves[i/historyMoveEvery%len(moves)]
+	}
+	return []any{
+		fmt.Sprintf("h-%05d", i), subjectKind, subjectID, project, change.kind,
+		fmt.Sprintf("h-%d", i%200), "human", change.fields,
+		statelog.Position{Generation: 1, Seq: uint64(i + 1)}.Packed(), historyStream,
+		store.EncodeTime(at), store.EncodeTime(at), []byte(`{}`),
 	}
 }

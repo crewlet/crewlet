@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sync/atomic"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
 // The epoch and how a new one replaces it.
@@ -448,11 +450,48 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	log.InfoContext(ctx, "config_applied",
 		"company", next.Config.Name, "seats", len(next.Seats()),
 		"previous_seats", seatCount(previous))
+	// AND PLACEMENT, AT ONCE, when this revision changed which seats exist
+	// or where they may run: the sweep's next tick is the first thing that
+	// would otherwise notice, up to its interval later with every seat the
+	// revision added — a node's whole first company among them — run by
+	// nobody, and every one it removed still held. HERE, at the end, and
+	// not beside the swap: a seat's acquisition reads what the stages after
+	// the swap install — the refiled seat tools, its mailbox, the released
+	// model holds, the sandbox runtime — so a pass asked for at the swap
+	// would claim seats onto a node still half applied. See
+	// [seat.Host.Resweep] for what bounds the pass.
+	if e.node != nil && seatsMoved(previous, next) {
+		e.node.Host().Resweep()
+	}
 	// LAST, after the epoch is current and everything derived from it has
 	// been rebuilt, so a surface that reads the company on this signal
 	// reads the one now serving rather than the one being replaced.
 	e.notifyApplied(ctx)
 	return configplane.StatusOK, applied, nil
+}
+
+// seatsMoved reports whether two epochs differ in what placement reads of
+// them: which seats exist, or where any of them may run. Either epoch may be
+// absent — a node's first company moves every seat it has.
+//
+// BY HANDLE, never by position: [Company.Seats] walks the org, and the same
+// seats in another order are not a change anybody has to claim.
+func seatsMoved(previous, next *Company) bool {
+	was, now := previous.Seats(), next.Seats()
+	if len(was) != len(now) {
+		return true
+	}
+	where := make(map[string]placement.SeatPlacement, len(was))
+	for _, s := range was {
+		where[s.Handle] = s.Placement
+	}
+	for _, s := range now {
+		old, ok := where[s.Handle]
+		if !ok || old.Node != s.Placement.Node || !maps.Equal(old.Labels, s.Placement.Labels) {
+			return true
+		}
+	}
+	return false
 }
 
 // errStopped refuses an apply that reaches a node after [Engine.Drain] began.

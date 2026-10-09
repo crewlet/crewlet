@@ -8,6 +8,13 @@ import (
 	"unicode/utf8"
 )
 
+// longRun is how many tool lines a run too long for its record wrote: some
+// 470 KB of them, past the start and the end the record keeps together
+// ([MaxRunTextBytes]) by enough that a middle is always left out. Every
+// branch of the bound is reached at it, and every line more is only bytes
+// redacted again.
+const longRun = 4_000
+
 // toolLines is n distinct transcript lines of the width an OpenCode tool line
 // runs to, numbered so a test can say exactly which were kept.
 func toolLines(n int) []string {
@@ -36,7 +43,7 @@ func TestATranscriptThatFitsIsCarriedWhole(t *testing.T) {
 // count presented what was kept as the whole.
 func TestALongTranscriptKeepsItsStartAndEndAndCountsItsMiddle(t *testing.T) {
 	t.Parallel()
-	all := toolLines(20_000)
+	all := toolLines(longRun)
 	got, lines, bytes := boundTranscript(strings.Join(all, ""))
 
 	head, rest, found := strings.Cut(got, "left out here")
@@ -118,7 +125,7 @@ func TestAKeyAcrossEitherCutIsRedactedFirst(t *testing.T) {
 	}
 	key = append(key, "-----END RSA PRIVATE KEY-----\n")
 
-	all := toolLines(20_000)
+	all := toolLines(longRun)
 	width := len(all[0])
 	// ONE BOUNDARY AT A TIME: two blocks would let the pattern run from the
 	// first one's BEGIN to the second one's END across the note, and redact
@@ -150,7 +157,7 @@ func TestAKeyAcrossEitherCutIsRedactedFirst(t *testing.T) {
 func TestTheRecordCarriesWhatTheBoundLeftOut(t *testing.T) {
 	t.Parallel()
 	c := &Coordinator{}
-	got := c.fitResult(t.Context(), PendingRun{}, Result{Transcript: strings.Join(toolLines(20_000), "")})
+	got := c.fitResult(t.Context(), PendingRun{}, Result{Transcript: strings.Join(toolLines(longRun), "")})
 	if got.TranscriptElidedLines <= 0 || got.TranscriptElidedBytes <= 0 || len(got.Transcript) > MaxRunTextBytes+1024 {
 		t.Errorf("fitResult left %d lines / %d bytes out and kept %d bytes",
 			got.TranscriptElidedLines, got.TranscriptElidedBytes, len(got.Transcript))

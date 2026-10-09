@@ -95,7 +95,7 @@ func indexRecordOver(model string, dim int) search.VectorRecord {
 		Model: model, Dim: dim,
 		Index: &search.IndexRecord{Log: "S", Lists: 1, Probes: 1, TrainedOn: 2,
 			Measurement: &measurement, Centroids: make([]byte, 8*search.CodeWords(dim)),
-			Rollout: search.RolloutRanges(nil)},
+			Rollout: search.RolloutRanges(nil, search.IVFReassignBatch)},
 	}
 }
 

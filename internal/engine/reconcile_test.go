@@ -1239,9 +1239,16 @@ func TestPostureIsSafeToReadWhileTheReconcilerTicks(t *testing.T) {
 	}
 	// And the writer, ticking against a moving target so the attempt
 	// counter and the target epoch both change under the readers.
+	//
+	// TEN CYCLES: the detector reports the first unordered pair it sees,
+	// and four readers spinning without a yield hit every field of the
+	// triple thousands of times between two ticks, so each cycle — every
+	// field moved — is already a full chance to see it. Forty bought
+	// nothing ten does not, and held four cores spinning for ten seconds
+	// of a shared race job.
 	wg.Go(func() {
 		defer cancel()
-		for range 40 {
+		for range 10 {
 			_ = p.recon.Tick(ctx)
 			p.activate(ctx, t, grownCompanyDoc)
 		}

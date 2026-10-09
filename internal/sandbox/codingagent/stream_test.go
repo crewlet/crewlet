@@ -1,9 +1,13 @@
 package codingagent_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -15,23 +19,31 @@ import (
 // A coding agent's stdout event stream and its stderr grow with the run, and
 // every path used to read them whole and refuse them past 32 MiB. Each case
 // below is a run the engine used to wedge or destroy for that alone. The fake
-// refuses a whole read past the cap exactly as every real backend does, so a
-// case that still read a stream whole would fail here rather than pass.
+// refuses a whole read past its cap exactly as every real backend does — at
+// the cap [box] gives it, which every case here sizes from — so a case that
+// still read a stream whole would fail here rather than pass.
 
-// bigToolStream is an OpenCode stream past the whole-read cap: tool events
-// whose state carries each tool's whole output, which is what makes a real
-// stream grow, ending with the events given.
-func bigToolStream(tail ...string) string {
-	output := strings.Repeat("o", 1<<20)
+// toolStream is an OpenCode stream longer than past bytes: tool events whose
+// state carries each tool's whole output — output bytes of it apiece — which
+// is what makes a real stream grow, ending with the events given.
+func toolStream(output, past int, tail ...string) string {
+	echoed := strings.Repeat("o", output)
 	var b strings.Builder
-	for b.Len() <= sandbox.MaxFileBytes {
+	for b.Len() <= past {
 		b.WriteString(`{"type":"tool_use","part":{"tool":"read","state":{"status":"completed",` +
-			`"input":{"filePath":"/home/user/workspace/big.log"},"output":"` + output + `"}}}` + "\n")
+			`"input":{"filePath":"/home/user/workspace/big.log"},"output":"` + echoed + `"}}}` + "\n")
 	}
 	for _, line := range tail {
 		b.WriteString(line + "\n")
 	}
 	return b.String()
+}
+
+// pastTheCap is a stream past the box's whole-read cap, in tool events of an
+// eighth of the cap apiece: a handful carry it past, and no one line is near
+// the bound a line is read to.
+func pastTheCap(b *sandbox.FakeSandbox, tail ...string) string {
+	return toolStream(b.ReadCap()/8, b.ReadCap(), tail...)
 }
 
 // errBoxUnreadable stands in for a box whose file could not be read back.
@@ -46,7 +58,7 @@ func TestADeadJobWithAStreamPastTheCapIsDone(t *testing.T) {
 	runner := codingagent.NewOpenCode()
 	b := box(t, runner)
 	handle := start(t, runner, b)
-	b.Put(paths(b).Result(), bigToolStream(`{"type":"text","part":{"text":"still going"}}`))
+	b.Put(paths(b).Result(), pastTheCap(b, `{"type":"text","part":{"text":"still going"}}`))
 	b.ExecFunc = alive(false)
 
 	done, err := runner.Poll(t.Context(), b, handle)
@@ -62,7 +74,7 @@ func TestAFinishedButHungJobWithAStreamPastTheCapIsDone(t *testing.T) {
 	runner := codingagent.NewOpenCode()
 	b := box(t, runner)
 	handle := start(t, runner, b)
-	b.Put(paths(b).Result(), bigToolStream(
+	b.Put(paths(b).Result(), pastTheCap(b,
 		`{"type":"text","part":{"text":"Fixed it."}}`,
 		`{"type":"step_finish","part":{"reason":"stop"}}`))
 	b.ExecFunc = alive(true) // hung: the wrapper never returns
@@ -122,7 +134,7 @@ func TestACollectionReadsAStreamPastTheCap(t *testing.T) {
 	runner := codingagent.NewOpenCode()
 	b := box(t, runner)
 	p := paths(b)
-	b.Put(p.Result(), bigToolStream(
+	b.Put(p.Result(), pastTheCap(b,
 		`{"type":"tool_use","part":{"tool":"bash","state":{"status":"completed","input":{"command":"go test ./..."}}}}`,
 		`{"type":"text","part":{"text":"All green."}}`,
 		`{"type":"step_finish","part":{"reason":"stop"}}`))
@@ -147,13 +159,17 @@ func TestACollectionReadsAStreamPastTheCap(t *testing.T) {
 // AN OVER-LONG LINE IS SKIPPED AND SAID, never held: one line is read in one
 // piece, so a line past what one piece may be is counted where it was, and
 // the events around it are still read.
+//
+// At a line bound of [testLineBound]: the skip, its note and the events
+// around it are the same at any bound, and a line past the real one is
+// 32 MiB built and scanned under -race.
 func TestALinePastTheBoundIsSkippedAndSaid(t *testing.T) {
 	t.Parallel()
-	runner := codingagent.NewOpenCode()
+	runner := codingagent.Bounded(codingagent.NewOpenCode(), sandbox.MaxFailureBytes, testLineBound)
 	b := box(t, runner)
 	p := paths(b)
 	huge := `{"type":"tool_use","part":{"tool":"read","state":{"output":"` +
-		strings.Repeat("x", sandbox.MaxFileBytes) + `"}}}`
+		strings.Repeat("x", testLineBound) + `"}}}`
 	b.Put(p.Result(), strings.Join([]string{
 		`{"type":"tool_use","part":{"tool":"bash","state":{"input":{"command":"make build"}}}}`,
 		huge,
@@ -164,8 +180,9 @@ func TestALinePastTheBoundIsSkippedAndSaid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
-	if !strings.Contains(res.Transcript, "1 line(s) of output") || !strings.Contains(res.Transcript, "not read") {
-		t.Errorf("the skipped line is not said: %q", res.Transcript)
+	if !strings.Contains(res.Transcript, "1 line(s) of output") || !strings.Contains(res.Transcript, "not read") ||
+		!strings.Contains(res.Transcript, "past the 64 KiB one line of a run's output may hold") {
+		t.Errorf("the skipped line is not said, with the bound it was past: %q", res.Transcript)
 	}
 	before := strings.Index(res.Transcript, "make build")
 	note := strings.Index(res.Transcript, "1 line(s) of output")
@@ -182,18 +199,47 @@ func TestALinePastTheBoundIsSkippedAndSaid(t *testing.T) {
 // and what was not read is said by size. It reaches the resumed executor as
 // the failure's detail, so its unread start is marked rather than silent; and
 // its end — the line naming what broke — is always there.
+//
+// The read itself is held to the bound too, not only what is shown from it:
+// the box is asked for the bound plus the redaction's context and no more, and
+// a run that parsed no transcript of its own carries at most the bound of the
+// stream as one, behind a note naming the size of what it left out. A read to
+// the engine's own ceiling shows the same failure, so the failure alone could
+// not tell that it read and redacted the whole stream.
+//
+// At a failure bound of [testFailureBound], with an error stream two and a
+// half times it, as the five mebibytes this was are of the real one.
+//
+// Mutation: read the error stream's end, or keep it, to
+// [sandbox.MaxFailureBytes] rather than to the runner's bound, and this fails.
 func TestTheErrorStreamIsReadFromItsEndAndItsStartIsSaid(t *testing.T) {
 	t.Parallel()
-	runner := codingagent.NewClaudeCode()
+	runner := codingagent.Bounded(codingagent.NewClaudeCode(), testFailureBound, codingagent.MaxLineBytes)
 	b := box(t, runner)
 	p := paths(b)
-	stderr := strings.Repeat("noise line\n", 5<<20/11) + "FATAL: migrations/0007.sql is missing"
+	stderr := strings.Repeat("noise line\n", testFailureBound*5/2/11) + "FATAL: migrations/0007.sql is missing"
 	b.Put(p.Err(), stderr)
 	b.Put(p.ExitCode(), "1")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	reads := &tailReads{Sandbox: b}
+	res, err := runner.Collect(t.Context(), reads, sandbox.RunHandle{})
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
+	}
+	if got, want := reads.asked(p.Err()), []int{testFailureBound + codingagent.RedactContext}; !slices.Equal(got, want) {
+		t.Errorf("the error stream's end was read as %v bytes; want %v, the runner's bound and the "+
+			"redaction's context", got, want)
+	}
+	note, shown, _ := strings.Cut(res.Transcript, "\n")
+	switch {
+	case len(shown) > testFailureBound:
+		t.Errorf("the transcript carries %d bytes of the error stream, past the %d its runner holds it to",
+			len(shown), testFailureBound)
+	case !strings.HasSuffix(stderr, shown) || !strings.HasSuffix(shown, "FATAL: migrations/0007.sql is missing"):
+		t.Errorf("the transcript is not the error stream's end: …%q", tailOf(res.Transcript, 120))
+	case note != codingagent.UnreadNote(int64(len(stderr)-len(shown))):
+		t.Errorf("the transcript opens with %q; want the note naming the %d bytes it left out",
+			note, len(stderr)-len(shown))
 	}
 	if !strings.HasSuffix(res.Error, "FATAL: migrations/0007.sql is missing") {
 		t.Errorf("the failure lost the error stream's last line: …%q", tailOf(res.Error, 120))
@@ -201,8 +247,8 @@ func TestTheErrorStreamIsReadFromItsEndAndItsStartIsSaid(t *testing.T) {
 	if !strings.Contains(res.Error, "were not read: a run's failure is read from its end") {
 		t.Errorf("the unread start is not said: %.300q", res.Error)
 	}
-	if len(res.Error) > sandbox.MaxFailureBytes {
-		t.Errorf("the failure is %d bytes, past what a condensation can take", len(res.Error))
+	if len(res.Error) > testFailureBound {
+		t.Errorf("the failure is %d bytes, past the %d its runner holds it to", len(res.Error), testFailureBound)
 	}
 }
 
@@ -223,25 +269,33 @@ func TestTheErrorStreamIsReadFromItsEndAndItsStartIsSaid(t *testing.T) {
 //
 // Mutation: carry the error stream as it was read, and the failure is past
 // the bound.
+//
+// EVERYTHING SIZED FROM THE BOUND the runner is given ([testFailureBound]),
+// in the proportions it had to the real one: the error stream half again past
+// it, and the CLI's own error about a hundredth of it — small enough that the
+// stream still gets room after the sentences, which is the branch this case
+// is about. A CLI error sized for the real bound would fill a small one and
+// leave the stream unshown, a different branch.
 func TestTheWholeFailureIsWhatOneCondensationCanTake(t *testing.T) {
 	t.Parallel()
 	for name, stderr := range map[string]string{
-		"in lines": strings.Repeat(strings.Repeat("e", 99)+"\n", 3<<20/100) + "FATAL: the last line",
-		"one line": strings.Repeat("e", 3<<20) + "FATAL: the last line",
+		"in lines": strings.Repeat(strings.Repeat("e", 99)+"\n", testFailureBound*3/2/100) + "FATAL: the last line",
+		"one line": strings.Repeat("e", testFailureBound*3/2) + "FATAL: the last line",
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			runner := codingagent.NewClaudeCode()
+			runner := codingagent.Bounded(codingagent.NewClaudeCode(), testFailureBound, codingagent.MaxLineBytes)
 			b := box(t, runner)
 			p := paths(b)
-			cliError := strings.Repeat("the provider answered 529: overloaded, retrying\n", 400)
+			const retrying = "the provider answered 529: overloaded, retrying\n"
+			cliError := strings.Repeat(retrying, testFailureBound/100/len(retrying)+1)
 			result, err := json.Marshal(map[string]any{"type": "result", "subtype": "error_during_execution",
 				"is_error": true, "errors": []string{cliError}})
 			if err != nil {
 				t.Fatal(err)
 			}
 			b.Put(p.Result(), string(result))
-			b.Put(p.Ask(), strings.Repeat("q", sandbox.MaxFileBytes+1)) // a piece that cannot be read
+			b.Put(p.Ask(), strings.Repeat("q", b.ReadCap()+1)) // a piece that cannot be read
 			b.Put(p.Err(), stderr)
 			b.Put(p.ExitCode(), "1")
 
@@ -249,10 +303,9 @@ func TestTheWholeFailureIsWhatOneCondensationCanTake(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Collect: %v", err)
 			}
-			if len(res.Error) > sandbox.MaxFailureBytes {
-				t.Fatalf("the failure is %d bytes, %d past the %d one condensation takes beside the "+
-					"coordinator's own prefix", len(res.Error), len(res.Error)-sandbox.MaxFailureBytes,
-					sandbox.MaxFailureBytes)
+			if len(res.Error) > testFailureBound {
+				t.Fatalf("the failure is %d bytes, %d past the %d its runner holds it to",
+					len(res.Error), len(res.Error)-testFailureBound, testFailureBound)
 			}
 			for _, want := range []string{
 				"the question the coding agent recorded", // the refused piece, first
@@ -280,11 +333,11 @@ func TestTheWholeFailureIsWhatOneCondensationCanTake(t *testing.T) {
 // coordinator holds the whole to what a condensation reads.
 func TestAFailureWhoseSentencesFillTheBoundSaysItsStreamWasNotShown(t *testing.T) {
 	t.Parallel()
-	runner := codingagent.NewClaudeCode()
+	runner := codingagent.Bounded(codingagent.NewClaudeCode(), testFailureBound, codingagent.MaxLineBytes)
 	b := box(t, runner)
 	p := paths(b)
 	result, err := json.Marshal(map[string]any{"type": "result", "subtype": "error_during_execution",
-		"is_error": true, "errors": []string{strings.Repeat("x", sandbox.MaxFailureBytes)}})
+		"is_error": true, "errors": []string{strings.Repeat("x", testFailureBound)}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,7 +367,7 @@ func TestAReportPastTheCapDegradesOnlyItself(t *testing.T) {
 	p := paths(b)
 	b.Put(p.Result(), `{"type":"result","result":"Opened https://github.com/acme/api/pull/3","subtype":"success",`+
 		`"usage":{"input_tokens":100,"output_tokens":50}}`)
-	b.Put(p.Findings(), strings.Repeat("r", sandbox.MaxFileBytes+1))
+	b.Put(p.Findings(), strings.Repeat("r", b.ReadCap()+1))
 	b.Put(p.Err(), "a warning")
 	b.Put(p.ExitCode(), "0")
 
@@ -325,8 +378,10 @@ func TestAReportPastTheCapDegradesOnlyItself(t *testing.T) {
 	if res.Success {
 		t.Error("a run whose report could not be read reads as a success")
 	}
-	if !strings.Contains(res.Error, "the report the coding agent wrote") || !strings.Contains(res.Error, "32.0 MiB") {
-		t.Errorf("the refusal is not described by size: %q", res.Error)
+	// By the cap the BOX refused it at, which is the fake's own here.
+	capText := fmt.Sprintf("past the %.1f MiB the engine reads back", float64(b.ReadCap())/(1<<20))
+	if !strings.Contains(res.Error, "the report the coding agent wrote") || !strings.Contains(res.Error, capText) {
+		t.Errorf("the refusal is not described by size and the box's cap (%q): %q", capText, res.Error)
 	}
 	if res.InputTokens != 100 || res.OutputTokens != 50 {
 		t.Errorf("tokens %d/%d; want the run's spend still collected", res.InputTokens, res.OutputTokens)
@@ -344,7 +399,7 @@ func TestAQuestionPastTheCapIsNotParkedOn(t *testing.T) {
 	b := box(t, runner)
 	p := paths(b)
 	b.Put(p.Findings(), "Outcome: blocked")
-	b.Put(p.Ask(), `{"question":"`+strings.Repeat("q", sandbox.MaxFileBytes)+`","to":"team"}`)
+	b.Put(p.Ask(), `{"question":"`+strings.Repeat("q", b.ReadCap())+`","to":"team"}`)
 	b.Put(p.ExitCode(), "0")
 
 	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
@@ -385,3 +440,38 @@ func TestAnUnreadableBoxIsAnErrorNotAPiece(t *testing.T) {
 }
 
 func tailOf(s string, n int) string { return s[max(0, len(s)-n):] }
+
+// tailReads is a box that records how much of a file's end each ReadTail asked
+// for: a read past its bound shows what a bounded one does and costs the whole
+// file, so only the request says which one was made.
+type tailReads struct {
+	sandbox.Sandbox
+	mu   sync.Mutex
+	asks map[string][]int
+}
+
+func (b *tailReads) ReadTail(ctx context.Context, path string, n int) (sandbox.FileTail, error) {
+	b.mu.Lock()
+	if b.asks == nil {
+		b.asks = map[string][]int{}
+	}
+	b.asks[path] = append(b.asks[path], n)
+	b.mu.Unlock()
+	return b.Sandbox.ReadTail(ctx, path, n)
+}
+
+// asked is every n a ReadTail of path asked for, in order.
+func (b *tailReads) asked(path string) []int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return slices.Clone(b.asks[path])
+}
+
+// testFailureBound and testLineBound are the bounds the cases that go past
+// one run their runner at ([codingagent.Bounded]): 64 KiB each, room for every
+// sentence a failure opens with and a stream behind them, and a thirty-second
+// and a five-hundredth of the real ones respectively.
+const (
+	testFailureBound = 64 << 10
+	testLineBound    = 64 << 10
+)

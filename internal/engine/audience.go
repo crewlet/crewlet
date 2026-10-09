@@ -42,7 +42,7 @@ func (r audienceResolver) ResolveAudience(run sandbox.PendingRun, label string) 
 	if company == nil || company.Org == nil {
 		return sandbox.Audience{Fallback: true}
 	}
-	return resolveAudience(company.Org, run, label)
+	return resolveAudience(company.Org, r.engine.LookupSecret, run, label)
 }
 
 // The labels the coding agent's ask shim documents, beside a free name. See
@@ -65,10 +65,11 @@ var exactTiers = []colleague.Method{
 }
 
 // resolveAudience is the rule itself, over a chart value so it is exercised
-// without an engine.
-func resolveAudience(o *org.Organization, run sandbox.PendingRun, label string) sandbox.Audience {
+// without an engine. lookup resolves the chart's `${VAR}` contact ids, which
+// a name may be ([builtin.Corpus]): the node's own chain, from the engine.
+func resolveAudience(o *org.Organization, lookup org.EnvLookup, run sandbox.PendingRun, label string) sandbox.Audience {
 	seat := o.SeatByHandle(run.AgentHandle)
-	named := namedAudience(o, seat, run, label)
+	named := namedAudience(o, lookup, seat, run, label)
 	if len(named) > 0 {
 		return sandbox.Audience{Handles: named}
 	}
@@ -77,7 +78,7 @@ func resolveAudience(o *org.Organization, run sandbox.PendingRun, label string) 
 
 // namedAudience is the seats a label names, or nothing when it names nobody
 // this chart has.
-func namedAudience(o *org.Organization, seat *org.Role, run sandbox.PendingRun, label string) []string {
+func namedAudience(o *org.Organization, lookup org.EnvLookup, seat *org.Role, run sandbox.PendingRun, label string) []string {
 	label = strings.TrimPrefix(strings.TrimSpace(label), "@")
 	switch strings.ToLower(label) {
 	case "":
@@ -100,7 +101,7 @@ func namedAudience(o *org.Organization, seat *org.Role, run sandbox.PendingRun, 
 	case audienceTeam:
 		return teamOf(o, seat)
 	}
-	found := colleague.Resolve(label, builtin.Corpus(o))
+	found := colleague.Resolve(label, builtin.Corpus(o, lookup))
 	if len(found) != 1 || !slices.Contains(exactTiers, found[0].Method) {
 		return nil
 	}

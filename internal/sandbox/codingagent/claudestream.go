@@ -152,7 +152,7 @@ func (d *claudeEvents) Line(line []byte) {
 	}
 }
 
-func (d *claudeEvents) Skipped(n int64) { d.transcript.skip(n) }
+func (d *claudeEvents) Skipped(n int64, bound int) { d.transcript.skip(n, bound) }
 
 // Entries implements [Decoder]. Nothing else here grows with the stream: the
 // pending calls are forgotten as their results arrive.

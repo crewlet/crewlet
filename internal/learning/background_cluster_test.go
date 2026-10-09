@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // THE CLUSTERING LOOP, as the background runner drives it.
@@ -151,10 +152,7 @@ var errNoModelForTest = errors.New("learning: no model in this test")
 
 func openTestStore(t *testing.T) *store.DB {
 	t.Helper()
-	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "cluster.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.OpenNode: %v", err)
-	}
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "cluster.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }

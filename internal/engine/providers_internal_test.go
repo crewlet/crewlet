@@ -53,6 +53,7 @@ const chatCompletion = `{
 // `crewlet secrets set OPENAI_API_KEY` had put in the store — the case the
 // resolver exists for, and which config.LLMProvider.Keys now reads through.
 func TestBuildProviderResolvesBaseURLAndConventionalKey(t *testing.T) {
+	t.Parallel()
 	var gotAuth string
 	var calls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -100,6 +101,7 @@ func TestBuildProviderResolvesBaseURLAndConventionalKey(t *testing.T) {
 // of its own — its APIKeys are the whole bag — so the conventional key reaches
 // it only if the engine resolved it through the store.
 func TestBuildProviderResolvesAnthropicBaseURLAndConventionalKey(t *testing.T) {
+	t.Parallel()
 	var gotKey string
 	var calls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -155,6 +157,7 @@ func TestBuildProviderResolvesAnthropicBaseURLAndConventionalKey(t *testing.T) {
 // write a reference into. An unresolved model is not a 401 an operator can
 // read: it is the vendor rejecting a model literally named "${LLM_MODEL}".
 func TestBuildProviderResolvesModel(t *testing.T) {
+	t.Parallel()
 	r := tierB(map[string]string{"LLM_MODEL": "gpt-4o-mini"})
 
 	for _, kind := range []config.LLMProviderType{
@@ -179,6 +182,7 @@ func TestBuildProviderResolvesModel(t *testing.T) {
 // TestBuildCLIAgentResolvesModel is the same for the subscription backend,
 // whose model becomes the CLI's --model argv rather than a request field.
 func TestBuildCLIAgentResolvesModel(t *testing.T) {
+	t.Parallel()
 	r := tierB(map[string]string{"CLI_MODEL": "sonnet"})
 
 	p, err := buildProvider("subscription", config.LLMProvider{
@@ -205,6 +209,7 @@ func TestBuildCLIAgentResolvesModel(t *testing.T) {
 // reported itself as "openai" and two of them were indistinguishable in the
 // log line naming which one failed.
 func TestOpenAICompatibleNamesItsEndpoint(t *testing.T) {
+	t.Parallel()
 	r := tierB(nil)
 
 	cases := []struct {
@@ -330,6 +335,7 @@ func TestAMissingCredentialStillBuilds(t *testing.T) {
 // model's thinking. Asserted on the wire, because the wiring is the part that
 // can be dropped with everything still compiling.
 func TestAnAnthropicEntryIsShapedFromItsModel(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		spec config.LLMProvider
@@ -391,6 +397,7 @@ func TestAnAnthropicEntryIsShapedFromItsModel(t *testing.T) {
 // backend's refusal is the one an operator reads: it names the provider, the
 // model it resolved to and the field to change.
 func TestADialTheResolvedModelRefusesFailsTheBuildByName(t *testing.T) {
+	t.Parallel()
 	_, err := buildProvider("claude", config.LLMProvider{
 		Type: config.LLMAnthropic, Model: "${LLM_MODEL}", ReasoningBudgetTokens: 4096,
 	}, tierB(map[string]string{"LLM_MODEL": "claude-sonnet-5-5"}))
@@ -407,6 +414,7 @@ func TestADialTheResolvedModelRefusesFailsTheBuildByName(t *testing.T) {
 // The config's levels are the contract's, so a level the config admits is one
 // a backend can compare and lower.
 func TestEveryConfigEffortIsAContractEffort(t *testing.T) {
+	t.Parallel()
 	for _, level := range config.ReasoningEfforts {
 		if e := llm.Effort(level); e == "" || !e.Valid() {
 			t.Errorf("config admits reasoning_effort %q, which llm.Effort does not know", level)
@@ -444,6 +452,7 @@ func TestTheLLMTimeoutDefaultIsOneNumber(t *testing.T) {
 // resolves — a `${VAR}` model and endpoint included — and refuse what it
 // refuses; one that built its own would certify a request no seat sends.
 func TestBuildAnthropicIsTheBuildASeatGets(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.NotFoundHandler())
 	defer srv.Close()
 	r := tierB(map[string]string{"LLM_MODEL": "claude-opus-4-1", "LLM_BASE_URL": srv.URL})

@@ -33,6 +33,7 @@ func watchdogEngine(t *testing.T) *Engine {
 	boot := config.DefaultBootstrap()
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	SeedStore(t, &boot)
 	// No HTTP surface: this is about the seat host, and binding a port
 	// would make the test fight every other one in the package for it.
 	boot.API.Port = 0
@@ -61,6 +62,7 @@ func watchdogEngine(t *testing.T) *Engine {
 // watched and when nothing is live, and only becomes non-zero once a watched,
 // live duty has actually stamped a beat.
 func TestTheEngineArmsAWatchdogOnTheSeatHost(t *testing.T) {
+	t.Parallel()
 	e := watchdogEngine(t)
 	if e.watchdog == nil {
 		t.Fatal("New built no watchdog, so a wedged node would never end itself")
@@ -92,6 +94,7 @@ func TestTheEngineArmsAWatchdogOnTheSeatHost(t *testing.T) {
 // the wedge it exists to end. Exiting through the middle of a drain abandons
 // the seat release that makes it graceful.
 func TestTheWatchdogIsDisarmedBeforeTheDrain(t *testing.T) {
+	t.Parallel()
 	e := watchdogEngine(t)
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -122,6 +125,7 @@ func TestTheWatchdogIsDisarmedBeforeTheDrain(t *testing.T) {
 // of rounds while making obvious progress was rescued exactly like one that
 // was thrashing.
 func TestTheEngineSuppliesAnExtensionJudge(t *testing.T) {
+	t.Parallel()
 	e := watchdogEngine(t)
 	if got := e.judgeFor(e.Company(), "ceo", auxspend.Use{Stage: types.AuxStageTurn}); got == nil {
 		t.Error("no judge for a seat whose company configures a model")

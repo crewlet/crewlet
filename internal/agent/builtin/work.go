@@ -246,11 +246,13 @@ type WorkDeps struct {
 	//
 	// A FUNCTION OF THE HANDLE rather than of the caller, because the
 	// party belongs to the person ASKED ABOUT: an operator reading a
-	// report's inbox is handed THAT person's two names from the chart,
-	// never the credential in their own hand.
+	// report's inbox, or a seat reading its lead's, is handed THAT person's
+	// two names from the chart, never the credential in anybody's hand.
+	// Both surfaces wire it — an agent seat's own rows are filed under its
+	// handle alone, but the person it asks about may be bound to a token.
 	//
 	// Nil answers the handle alone, which is the honest state for a
-	// surface with no chart loaded and the whole truth for every seat.
+	// surface with no chart loaded.
 	Party func(handle string) tracker.Party
 
 	// Units resolves a project's chart-owned unit at READ time — the
@@ -654,8 +656,10 @@ func (d WorkDeps) actor(ctx context.Context, turn *turnctx.Turn) (Actor, error) 
 // partyOf is who a personal read about `handle` is about — see
 // [WorkDeps.Party].
 //
-// NO SEAM RESOLVES TO THE HANDLE ALONE, which is exactly what this read did
-// before the seam existed and is still the whole truth for a seat.
+// NO SEAM RESOLVES TO THE HANDLE ALONE, which is right only for a surface with
+// no chart to read a binding from. Both surfaces that have one wire the seam —
+// the operator's and every seat's — because the person a read is ABOUT may be
+// bound to a token whichever of them asks.
 func (d WorkDeps) partyOf(handle string) tracker.Party {
 	if d.Party == nil {
 		return tracker.PartyOf(handle)

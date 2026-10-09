@@ -32,6 +32,7 @@ const gib = int64(1) << 30
 // without the others moving fails here, rather than as an eviction refused on
 // a full log.
 func TestTheGateReserveAtEveryFloorAbsorbsItsFleet(t *testing.T) {
+	t.Parallel()
 	// A thousand gate records, each under a kibibyte: an eviction and a
 	// readmission per node per identity log, many times over.
 	const gateRoom = 1 << 20

@@ -84,11 +84,53 @@ func (e *Engine) workerDuty(name string, ttl time.Duration) schedule.DutyFunc {
 // keeping it afterwards is indistinguishable from an outage to every other
 // caller. See [schedule.HoldNamedDuty].
 func (e *Engine) workerHold(name string, ttl time.Duration) schedule.HoldFunc {
-	if e.backends == nil || e.node == nil {
+	// No lease store is [schedule.HoldNamedDuty]'s own nil branch, asked
+	// here because the store it is handed below is never nil.
+	if e.backends == nil || e.backends.Coord == nil || e.node == nil {
 		return nil
 	}
-	return schedule.HoldNamedDuty(e.backends.Coord, name,
+	return schedule.HoldNamedDuty(holdLeases{Backend: e.backends.Coord, engine: e}, name,
 		e.node.Owner(), e.node.ID(), ttl)
+}
+
+// holdLeases is the lease store this node's holds are taken through: its own,
+// with every give-back drawn from the stop's one allowance for as long as it
+// runs once the TEARDOWN has begun ([Engine.stepOnceTornDown]).
+//
+// A HOLD IS GIVEN BACK BY WHOEVER ENDS THE WORK IT GUARDS — the setup runner,
+// at the end of a pass the integration loop or an operator ran — on the context
+// the hold was TAKEN on with its cancellation removed ([schedule.HoldNamedDuty]),
+// so nothing of a stop reaches it. The teardown cancels the integration loop
+// and waits for the pass in flight, and that pass gave its lease back on a
+// context with no deadline at all: against a store that has gone away, one
+// client request timeout the stop sat out beside its allowance — measured at
+// five seconds past it — on a give-back whose fallback is the lapse on the TTL
+// every other step of the stop falls back to. Bounded HERE because this is the
+// one frame that holds both the store a hold is taken through and the stop that
+// can end it; the hold's own context was made before the stop existed.
+//
+// ONLY WHILE THE TEARDOWN IS UNDER WAY, which is where the loops that hold are
+// ended and where the stop waits for them. A pass ending on its own is not a
+// step of anybody's stop, and that includes one ending while the DRAIN waits
+// for running turns: the wait has no bound, the integration loop runs through
+// it, and every surface that comes due in a drain of minutes gives its hold
+// back. Charged from the drain's start, a store that blinked under one of
+// those give-backs spent the time the seats are owed when the wait ends, and
+// every seat then lapsed on its TTL rather than being handed on. But a
+// give-back still in flight when the teardown begins is one the teardown waits
+// for, so it is a step from that moment on rather than left to its own client
+// timeout beside the allowance.
+type holdLeases struct {
+	coord.Backend
+	engine *Engine
+}
+
+// Release is [coord.Backend.Release], a step of the stop for as long as it
+// runs once the teardown has begun.
+func (l holdLeases) Release(ctx context.Context, resource, owner string, epoch int64) (bool, error) {
+	ctx, done := l.engine.stepOnceTornDown(ctx)
+	defer done()
+	return l.Backend.Release(ctx, resource, owner, epoch)
 }
 
 // refuseDuty is the answer for a node whose roles exclude worker duties.
@@ -121,15 +163,6 @@ func (d *claimedDuties) list() []string {
 	return slices.Clone(d.names)
 }
 
-// dutyReleaseBudget bounds the give-back of every duty at the end of a stop.
-//
-// ONE SEAT HEARTBEAT INTERVAL (15 s at the shipped 45 s lease TTL), the budget
-// the node gives its seats' release for the same reason: giving a lease back is
-// a handful of coordination writes, so this guards against a store that has
-// stopped answering rather than allowing for real work, and past it a duty
-// lapses on its TTL, which is the outcome of not trying.
-const dutyReleaseBudget = seat.SeatLeaseTTL / seat.HeartbeatRatio
-
 // releaseDuties gives back every fleet duty this incarnation still holds.
 //
 // # Why a duty is released on a graceful stop
@@ -154,12 +187,18 @@ const dutyReleaseBudget = seat.SeatLeaseTTL / seat.HeartbeatRatio
 // tick in flight, so no tick of this node runs once a peer can take the duty.
 // Released at the epoch the store reports for this owner, so a lease a peer
 // has since taken is never touched.
+//
+// ONE STEP OF THE STOP'S ALLOWANCE ([seat.StopStep]), which the teardown
+// always carries: giving a lease back is a handful of coordination writes,
+// past the allowance a duty lapses on its TTL, which is the outcome of not
+// trying — and a bound of its own here was one more bound a member without
+// quorum spent in full, after every step before it had spent theirs.
 func (e *Engine) releaseDuties(ctx context.Context) {
 	if e.backends == nil || e.backends.Coord == nil || e.node == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dutyReleaseBudget)
-	defer cancel()
+	ctx, done := seat.StopStep(context.WithoutCancel(ctx))
+	defer done()
 	owner := e.node.Owner()
 	for _, name := range e.duties.list() {
 		resource := coord.WorkerResource(name)

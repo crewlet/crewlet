@@ -35,7 +35,11 @@ type Asker interface {
 // answers in its own turn, on whichever node owns its seat — so blocking here
 // would hold a seat open across a network hop for work that may take minutes.
 // The answer arrives as a wake on this seat's inbox, which is a later turn.
-type a2aAsk struct{ svc Asker }
+type a2aAsk struct {
+	svc Asker
+	// env resolves the chart's `${VAR}` contacts ([Deps.Env]).
+	env org.EnvLookup
+}
 
 var _ tools.SeatCallable = (*a2aAsk)(nil)
 
@@ -170,7 +174,7 @@ func (t *a2aAsk) resolve(turn *turnctx.Turn, target string) (colleague.Seat, *to
 		return colleague.Seat{}, refusalOf(refused(tools.RefusalUnavailable,
 			"No organization is in scope, so there is nobody to ask."))
 	}
-	found := colleague.Resolve(target, Corpus(turn.Org))
+	found := colleague.Resolve(target, Corpus(turn.Org, t.env))
 	switch len(found) {
 	case 0:
 		return colleague.Seat{}, refusalOf(failed(fmt.Sprintf(

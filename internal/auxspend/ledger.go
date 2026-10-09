@@ -139,6 +139,12 @@ type sealed struct {
 type Ledger struct {
 	pub    Publisher
 	logger *slog.Logger
+	// maxPending is the most refused records the backlog keeps: [MaxPending]
+	// in every ledger [NewLedger] builds, and nothing else in production. A
+	// field so the suite can drive the trim and the merge at a bound it can
+	// fill in a handful of flushes, since every refused flush copies the
+	// whole backlog and filling 4096 of them one at a time is quadratic.
+	maxPending int
 
 	mu   sync.Mutex
 	open map[key]*bucket
@@ -157,7 +163,7 @@ type Ledger struct {
 // ledger that publishes nothing and keeps nothing — a node with no queue,
 // which records no event of any kind.
 func NewLedger(pub Publisher) *Ledger {
-	return &Ledger{pub: pub, logger: log, open: map[key]*bucket{}}
+	return &Ledger{pub: pub, logger: log, maxPending: MaxPending, open: map[key]*bucket{}}
 }
 
 // Add files one call in its bucket. Nil-safe.
@@ -265,7 +271,7 @@ func (l *Ledger) flush(ctx context.Context, pick func(key) bool, retry bool) {
 }
 
 // keep puts records a publish refused back in the backlog IN THE ORDER THEY
-// WERE SEALED, and drops the oldest past [MaxPending].
+// WERE SEALED, and drops the oldest past the ledger's bound ([MaxPending]).
 //
 // MERGED BY SEAL ORDER rather than put in front or behind, because neither
 // place is right for every flush that is refused. The timer's flush takes the
@@ -293,7 +299,7 @@ func (l *Ledger) keep(ctx context.Context, failed []sealed) {
 	merged = append(merged, l.pending[i:]...)
 	merged = append(merged, failed[j:]...)
 	l.pending = merged
-	if over := len(l.pending) - MaxPending; over > 0 {
+	if over := len(l.pending) - l.maxPending; over > 0 {
 		var lost Spent
 		for _, s := range l.pending[:over] {
 			lost.add(s.spent)

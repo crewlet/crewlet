@@ -50,6 +50,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -157,7 +158,16 @@ type marker struct {
 
 // markers finds every conflict marker in one file's text. See the package doc
 // for what is and is not one, and why the divider depends on where it stands.
+//
+// A FILE HOLDING NO RUN OF SEVEN IS NOT SPLIT INTO LINES: every line this
+// reports is a fence followed by nothing or a space, or the divider, so a
+// text without one of the four seven-character runs has none — and a
+// substring search over the whole file settles that, where splitting every
+// text file in the tree and testing each line was the whole cost of the gate.
 func markers(name string, body []byte) []marker {
+	if !slices.ContainsFunc(runs, func(run []byte) bool { return bytes.Contains(body, run) }) {
+		return nil
+	}
 	markdown := isMarkdown(name)
 	var (
 		found    []marker
@@ -170,12 +180,12 @@ func markers(name string, body []byte) []marker {
 		// none of them.
 		line := strings.TrimSuffix(raw, "\r")
 		switch {
-		case isMarker(line, '<'):
+		case isMarker(line, startFence):
 			inside = true
 			found = append(found, marker{number + 1, line})
-		case isMarker(line, '|'):
+		case isMarker(line, baseFence):
 			found = append(found, marker{number + 1, line})
-		case isMarker(line, '>'):
+		case isMarker(line, endFence):
 			inside = false
 			found = append(found, marker{number + 1, line})
 		case line == divider:
@@ -189,13 +199,22 @@ func markers(name string, body []byte) []marker {
 	return found
 }
 
-// divider is the line between a conflict's two sides.
-var divider = strings.Repeat("=", 7)
+// divider is the line between a conflict's two sides; the fences are git's
+// three labelled markers without their labels.
+var (
+	divider    = fence('=')
+	startFence = fence('<')
+	baseFence  = fence('|')
+	endFence   = fence('>')
+)
 
-// isMarker reports whether a line is one of git's three labelled markers made
-// of c: exactly seven of it at the start, then a space and a label, or nothing.
-func isMarker(line string, c byte) bool {
-	fence := strings.Repeat(string(c), 7)
+// runs is what a text holding a marker holds: one of the four, somewhere.
+var runs = [][]byte{[]byte(startFence), []byte(baseFence), []byte(endFence), []byte(divider)}
+
+// isMarker reports whether a line is one of git's three labelled markers,
+// given as its fence: exactly the fence at the start, then a space and a
+// label, or nothing.
+func isMarker(line, fence string) bool {
 	return line == fence || strings.HasPrefix(line, fence+" ")
 }
 
@@ -230,6 +249,13 @@ func TestAMarkerIsGitsOwnSpelling(t *testing.T) {
 			[]int{1, 3, 5, 7}},
 		{"markers with no label", "x.yaml",
 			[]string{fence('<'), divider, fence('>')}, []int{1, 2, 3}},
+		// EACH MARKER ALONE, the rest of its conflict resolved away: a
+		// file is examined only if it holds one of the four runs, so each
+		// run must be enough on its own.
+		{"a start marker left alone", "x.go", []string{"a", start, "b"}, []int{2}},
+		{"a base marker left alone", "x.go", []string{"a", base, "b"}, []int{2}},
+		{"an end marker left alone", "x.go", []string{"a", end, "b"}, []int{2}},
+		{"a divider left alone", "x.go", []string{"a", divider, "b"}, []int{2}},
 		{"a checkout with CRLF endings", "x.go",
 			[]string{start + "\r", divider + "\r", end + "\r"}, []int{1, 2, 3}},
 		// THE SETEXT UNDERLINE, which is the reason the divider is not

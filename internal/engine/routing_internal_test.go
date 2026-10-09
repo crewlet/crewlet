@@ -32,6 +32,7 @@ import (
 // so the seat that answers is registered into the live registry and starts
 // receiving work immediately.
 func TestASeatIdentityThatFailedIsRetriedOnTheNextPass(t *testing.T) {
+	t.Parallel()
 	var refuse atomic.Bool
 	refuse.Store(true)
 
@@ -109,6 +110,7 @@ func TestASeatIdentityThatFailedIsRetriedOnTheNextPass(t *testing.T) {
 // Reporting it would put every human seat in the company on the card and bury
 // the one seat that is actually broken.
 func TestASeatWithNoCredentialIsNotReportedAsUnresolved(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "nobody should ask", http.StatusForbidden)
 	}))
@@ -160,7 +162,9 @@ func TestOnlyTheSurfacesThatLookUpAnAccountReportRouting(t *testing.T) {
 // instance at url.
 func routingEngine(t *testing.T, instance string) (*Engine, *Company) {
 	t.Helper()
-	e := &Engine{}
+	// AN EMPTY ENVIRONMENT, so ${JIRA_ORG_TOKEN} answers nothing whatever
+	// the runner exports.
+	e := &Engine{environ: config.MapSource{}}
 	cfg, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
@@ -204,6 +208,7 @@ roles:
 // surface would report itself ready over a seat receiving nothing, the loop
 // would hold that answer for a settled interval, and nothing would ask again.
 func TestTheLoopTickCarriesTheEnginesOwnRoutingFindings(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "not grantable yet", http.StatusForbidden)
 	}))
@@ -241,6 +246,7 @@ func TestTheLoopTickCarriesTheEnginesOwnRoutingFindings(t *testing.T) {
 // Both now go through one function; two copies of a guard is a hole rather
 // than a duplication.
 func TestTheRetryWillNotWireASurfaceTheStartPathRefuses(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		t.Errorf("the retry asked %s about a code host it cannot verify a "+
 			"delivery for", r.URL.Path)
@@ -255,10 +261,15 @@ func TestTheRetryWillNotWireASurfaceTheStartPathRefuses(t *testing.T) {
 		{"a value the vendor could not have produced", "not-a-whsec-value"},
 	} {
 		t.Run(bad.name, func(t *testing.T) {
+			t.Parallel()
+			// THE CASE'S OWN ENVIRONMENT: a reference nothing answers is
+			// one this environment does not hold, whatever the runner's
+			// does.
+			env := config.MapSource{}
 			if bad.value != "" {
-				t.Setenv("GITLAB_SIGNING_FOR_THIS_CASE", bad.value)
+				env["GITLAB_SIGNING_FOR_THIS_CASE"] = bad.value
 			}
-			e := &Engine{}
+			e := &Engine{environ: env}
 			cfg, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
@@ -310,6 +321,7 @@ roles:
 // and "a person must act at Atlassian" one line below it, about one agent,
 // over a condition that cleared itself in seventy seconds.
 func TestASeatTheSurfacesOwnPassReportedIsNotReportedTwice(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "not grantable yet", http.StatusForbidden)
 	}))

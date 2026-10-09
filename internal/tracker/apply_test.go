@@ -26,8 +26,8 @@ type applyHarness struct {
 	// maxVariables is what every collection's insert chunks to. It starts
 	// at the estate's own probed limit, which is what the framework hands
 	// a real apply; a case that wants a CHUNK BOUNDARY it can count sets
-	// its own, because the probed 2 000 puts every collection the caps
-	// permit inside one statement.
+	// its own, because the probed limit and the 1 000-row cap put every
+	// collection the caps permit inside one statement.
 	maxVariables int
 }
 
@@ -842,7 +842,7 @@ func TestAHistoryRowWithNoDeltasStoresAnEmptyObject(t *testing.T) {
 
 	// THE NEWEST ROW, which is the re-statement. The first write is the
 	// one that moved the list onto an empty record and has a delta of its
-	// own — see TestEveryDocumentApplyRecordsWhatMoved.
+	// own — see TestAPriorityListRecordsTheOrderItMoved.
 	got := r.strings(`SELECT fields_json FROM tracker_history
 		WHERE subject_kind = ? AND kind = ?
 		ORDER BY log_seq DESC LIMIT 1`,

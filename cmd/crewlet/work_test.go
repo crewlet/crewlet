@@ -83,6 +83,7 @@ func (n *fakePurgeNode) asked() (string, url.Values) {
 // had no mechanism, and a credential pasted into a task body stayed in the
 // durable rows of every node for ever.
 func TestWorkPurgeReachesTheOneOperationNothingUndoes(t *testing.T) {
+	t.Parallel()
 	node := newFakePurgeNode(t)
 	stdout, stderr, err := cli(t, "work", "purge", "t-1",
 		"-project", "ENG", "-reason", "an erasure request", "-confirm", "ENG-42",
@@ -120,6 +121,7 @@ func TestWorkPurgeReachesTheOneOperationNothingUndoes(t *testing.T) {
 // A CONFIRMATION THAT REPEATS THE ID CONFIRMS NOTHING, because the id is on
 // the command line already. The KEY has to be looked up, which is the point.
 func TestAPurgeWithoutTheTasksKeyIsRefused(t *testing.T) {
+	t.Parallel()
 	node := newFakePurgeNode(t)
 	for _, args := range [][]string{
 		{"work", "purge", "t-1", "-project", "ENG", "-reason", "why"},
@@ -139,6 +141,7 @@ func TestAPurgeWithoutTheTasksKeyIsRefused(t *testing.T) {
 // are destroyed, and the marker's reason is the entire account of what used to
 // be at that key for whoever reads it a year later.
 func TestAPurgeWithNoReasonIsRefusedBeforeItIsSent(t *testing.T) {
+	t.Parallel()
 	node := newFakePurgeNode(t)
 	if _, _, err := cli(t, "work", "purge", "t-1", "-project", "ENG",
 		"-confirm", "ENG-42", bootstrapForURL(t, node.server.URL)); err == nil {
@@ -153,6 +156,7 @@ func TestAPurgeWithNoReasonIsRefusedBeforeItIsSent(t *testing.T) {
 // would append a SECOND purge of a task the first one may already have
 // destroyed — so the id is printed and the flag that reuses it exists.
 func TestAnUnknownPurgeNamesTheIdToRetryWith(t *testing.T) {
+	t.Parallel()
 	node := newFakePurgeNode(t)
 	node.outcome = "unknown"
 	stdout, _, err := cli(t, "work", "purge", "t-1", "-project", "ENG",
@@ -189,6 +193,7 @@ func TestAnUnknownPurgeNamesTheIdToRetryWith(t *testing.T) {
 // `pending` IS NOT A FAILURE AND MUST NOT BE RETRIED: the record is on the log
 // and every node applies it as it reaches it.
 func TestAPendingPurgeSaysNotToRunItAgain(t *testing.T) {
+	t.Parallel()
 	node := newFakePurgeNode(t)
 	node.outcome = "pending"
 	stdout, _, err := cli(t, "work", "purge", "t-1", "-project", "ENG",
@@ -211,6 +216,7 @@ func TestAPendingPurgeSaysNotToRunItAgain(t *testing.T) {
 // own waits rather than the ten seconds every other verb gives a network round
 // trip.
 func TestAPurgeTheNodeNeverAnsweredNamesItsOperation(t *testing.T) {
+	t.Parallel()
 	node := newFakePurgeNode(t)
 	node.hangUp = true
 	_, stderr, err := cli(t, "work", "purge", "t-1", "-project", "ENG",
@@ -242,6 +248,7 @@ func TestAPurgeTheNodeNeverAnsweredNamesItsOperation(t *testing.T) {
 // ever. The node's own mux ([httpjson.Mux]) answers JSON with a code now, and
 // that is a refusal: nothing was done.
 func TestAPurgeTheNodeDoesNotServeIsRefusedNotUnknown(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(httpjson.Mux(http.NewServeMux()))
 	t.Cleanup(server.Close)
 	stdout, stderr, err := cli(t, "work", "purge", "t-1", "-project", "ENG",

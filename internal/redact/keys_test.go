@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/redact"
@@ -702,23 +703,71 @@ func TestRedactingAKeyTwiceIsRedactingItOnce(t *testing.T) {
 // the given sizes — and shows each piece's settled part as it lands, and the
 // rest once the text is finished. It returns everything shown, and what had
 // been shown after each piece.
+//
+// A PIECE WITH NO LINE BREAK, landing on text none of which settled, is not
+// asked about again. Settled reads a text only up to its last line break, so
+// its answer is the 0 it just gave, and redacting nothing shows nothing — the
+// step it records is the one a reader asking would have seen. Asking anyway
+// re-read a held key's whole text once per byte of a one-byte schedule, which
+// made that schedule quadratic in the key's length and the slowest thing in
+// this suite. It is exact only for a Settled that keeps its promise to ignore
+// an unfinished line, so [TestAnUnfinishedLineChangesNothingSettled] holds it
+// to that promise directly, over every fixture.
 func settle(text string, sizes []int) (string, []string) {
 	var shown strings.Builder
 	var steps []string
 	pending := ""
+	// held is whether the last answer settled none of pending.
+	held := false
 	at, i := 0, 0
 	for at < len(text) {
 		n := min(sizes[i%len(sizes)], len(text)-at)
 		i++
-		pending += text[at : at+n]
+		piece := text[at : at+n]
+		pending += piece
 		at += n
-		cut := redact.Settled(pending)
-		shown.WriteString(redact.Secrets(pending[:cut]))
-		pending = pending[cut:]
+		if !held || strings.Contains(piece, "\n") {
+			cut := redact.Settled(pending)
+			shown.WriteString(redact.Secrets(pending[:cut]))
+			pending = pending[cut:]
+			held = cut == 0
+		}
 		steps = append(steps, shown.String())
 	}
 	shown.WriteString(redact.Secrets(pending))
 	return shown.String(), steps
+}
+
+// AN UNFINISHED LINE CHANGES NOTHING SETTLED: what Settled answers for a text
+// is what it answers for that text up to its last line break, however much of
+// the next line has been written after it.
+//
+// [settle] relies on it to stop asking while a line is still arriving, so the
+// one-byte schedules no longer probe it at every byte; it is held here
+// instead, at every line break of every fixture, with the next line begun,
+// half written, and written all but its break.
+//
+// Mutation: let Settled read past its last line break, and a key's armour
+// half written on the next line moves the answer.
+func TestAnUnfinishedLineChangesNothingSettled(t *testing.T) {
+	t.Parallel()
+	for name, text := range keyFixtures() {
+		for at := 0; at < len(text); {
+			next := strings.IndexByte(text[at:], '\n')
+			if next < 0 {
+				next = len(text) - at
+			}
+			line := text[at : at+next]
+			want := redact.Settled(text[:at])
+			for _, partial := range []string{line[:min(1, len(line))], line[:len(line)/2], line} {
+				if got := redact.Settled(text[:at] + partial); got != want {
+					t.Errorf("%s: %d bytes of the line after byte %d moved Settled from %d to %d: %q",
+						name, len(partial), at, want, got, partial)
+				}
+			}
+			at += next + 1
+		}
+	}
 }
 
 // WHAT IS SHOWN AS IT SETTLES IS THE WHOLE TEXT REDACTED, however the text
@@ -729,9 +778,13 @@ func settle(text string, sizes []int) (string, []string) {
 // password each come out differently from the whole.
 func TestTextShownAsItSettlesIsTheWholeTextRedacted(t *testing.T) {
 	t.Parallel()
+	byByte := byteAtATime()
 	for name, text := range keyFixtures() {
 		want := redact.Secrets(text)
-		for _, sizes := range [][]int{{1}, {7}, {64}, {3, 50, 1, 200}, {len(text)}} {
+		if got := byByte[name].shown; got != want {
+			t.Errorf("%s a byte at a time:\n got %q\nwant %q", name, got, want)
+		}
+		for _, sizes := range [][]int{{7}, {64}, {3, 50, 1, 200}, {len(text)}} {
 			if got, _ := settle(text, sizes); got != want {
 				t.Errorf("%s in pieces of %v:\n got %q\nwant %q", name, sizes, got, want)
 			}
@@ -739,14 +792,39 @@ func TestTextShownAsItSettlesIsTheWholeTextRedacted(t *testing.T) {
 	}
 }
 
+// byteAtATime is [settle] over every key fixture a byte at a time: the
+// costliest schedule there is, and the one both the case above and the case
+// below read, so it is worked out once for the two.
+var byteAtATime = sync.OnceValue(func() map[string]settled {
+	out := map[string]settled{}
+	for name, text := range keyFixtures() {
+		shown, steps := settle(text, []int{1})
+		out[name] = settled{shown: shown, steps: steps}
+	}
+	return out
+})
+
+// settled is what [settle] returns: everything shown, and what had been shown
+// after each piece.
+type settled struct {
+	shown string
+	steps []string
+}
+
 // NOTHING SHOWN BEFORE THE END IS A SECRET, at any moment: a key's body shown
 // before its END lands is a key in clear on a screen, whatever the record
 // redacts afterwards.
 func TestNoSecretIsShownBeforeItsShapeIsSettled(t *testing.T) {
 	t.Parallel()
-	for name, text := range keyFixtures() {
-		_, steps := settle(text, []int{1})
-		for _, shown := range steps {
+	for name, run := range byteAtATime() {
+		checked := -1
+		for _, shown := range run.steps {
+			// What is shown only ever grows, so a step as long as the last
+			// one checked is that step again.
+			if len(shown) == checked {
+				continue
+			}
+			checked = len(shown)
 			if strings.Contains(shown, keyLine) || strings.Contains(shown, sshLine) ||
 				strings.Contains(shown, keyLine[:30]) || strings.Contains(shown, "hunter2") ||
 				strings.Contains(shown, "swordfish") {

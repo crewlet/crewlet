@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // twoNodes is a fleet of two stores on one broker, read from the first: every
@@ -182,18 +183,20 @@ func TestAFullPageFromTwoNodesIsTheWholeHistory(t *testing.T) {
 	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
 	fleet.Clock = func() time.Time { return at }
 	oldest := at
+	var onA, onB []store.EventRecord
 	for i := range queries.MaxEventPage {
-		log := a
-		if i%2 == 1 {
-			log = b
-		}
 		oldest = at.Add(-time.Duration(i+1) * time.Minute)
-		if err := log.Append(t.Context(), store.EventRecord{ID: fmt.Sprintf("w%03d", i),
+		rec := store.EventRecord{ID: fmt.Sprintf("w%03d", i),
 			Type: "webhook:push", Source: "gitlab", Category: "webhook", Tags: map[string]string{"route": "gitlab"}, Summary: "push",
-			Time: oldest}); err != nil {
-			t.Fatal(err)
+			Time: oldest}
+		if i%2 == 1 {
+			onB = append(onB, rec)
+		} else {
+			onA = append(onA, rec)
 		}
 	}
+	storetest.WriteEvents(t, a, onA)
+	storetest.WriteEvents(t, b, onB)
 	if err := b.Append(t.Context(), store.EventRecord{ID: "dropped-early", Type: "notification_skipped",
 		Source: "engine", Category: "notification", Summary: "skipped", Time: oldest.Add(-time.Hour),
 		Tags: map[string]string{"notification_source": "gitlab"}}); err != nil {

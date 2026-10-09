@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -34,6 +35,14 @@ type joinHarness struct {
 	joinPath   string
 	manifest   statelog.Manifest
 	snapPath   string
+
+	// donors is every donor the harness runs, which its adopter names to
+	// the join so the collection ends on their answers rather than at the
+	// offer window ([statelog.AdoptDeps.Donors]).
+	donors []string
+	// listDonors, nil by default, is how the adopter lists them instead
+	// of answering donors at once: a case that times the listing sets it.
+	listDonors func(context.Context) ([]string, error)
 
 	held     atomic.Int64
 	released atomic.Int64
@@ -134,7 +143,7 @@ func newJoinHarnessFrom(t *testing.T, from joinDonor) *joinHarness {
 		from.seed(t, donorEstate)
 	}
 
-	h := &joinHarness{t: t, nc: q.Conn(), broker: q}
+	h := &joinHarness{t: t, nc: q.Conn(), broker: q, donors: []string{"donor"}}
 	snapDir := filepath.Join(donorDir, "snapshots")
 	lag := uint64(0)
 	snapper, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
@@ -200,6 +209,12 @@ func (h *joinHarness) adopter(t *testing.T) *statelog.Adopter {
 		LivePath: h.joinPath,
 		NodeID:   "joiner",
 		Conn:     h.nc,
+		Donors: func(ctx context.Context) ([]string, error) {
+			if h.listDonors != nil {
+				return h.listDonors(ctx)
+			}
+			return slices.Clone(h.donors), nil
+		},
 		Need: func(context.Context) (statelog.OfferRequest, error) {
 			return statelog.OfferRequest{
 				Need:        map[string]uint64{"probe": 4_000},
@@ -366,6 +381,51 @@ func TestANodeBelowTheFloorAdoptsAVerifiedArtefact(t *testing.T) {
 	// included.
 	if left := h.debris(t); len(left) != 0 {
 		t.Errorf("%v survive beside the live database", left)
+	}
+}
+
+// A JOIN LISTS THE DONORS IT EXPECTS WHILE THEIR OFFERS ARRIVE, NOT BEFORE.
+//
+// The listing is a coordination read, and a joining node refuses every read
+// and write until its join ends: listed first, a store slow to answer held the
+// node for the whole listing and then the whole offer window after it. Here
+// the listing answers only once the joiner's ask is on the wire — which a join
+// that listed first never sends — and with its answer in, the collection ends
+// as soon as the donor it names has offered rather than at the window.
+func TestAJoinListsItsDonorsWhileTheirOffersArrive(t *testing.T) {
+	t.Parallel()
+	h := newJoinHarness(t)
+	asks, err := h.nc.SubscribeSync(statelog.SubjectOffer)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	t.Cleanup(func() { _ = asks.Unsubscribe() })
+	if err := h.nc.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	h.listDonors = func(ctx context.Context) ([]string, error) {
+		if _, err := asks.NextMsgWithContext(ctx); err != nil {
+			return nil, err
+		}
+		return slices.Clone(h.donors), nil
+	}
+	// BOUNDED, so a join that lists first — whose listing waits for an ask
+	// it has not sent — fails here rather than hanging the run.
+	ctx, cancel := context.WithTimeout(t.Context(), 2*statelog.OfferWindow)
+	defer cancel()
+	started := time.Now()
+	if _, err := h.adopter(t).Join(ctx); err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	// THE INSTANT THE ADOPTION BEGAN is when the collection ended, and
+	// half the window separates a collection that ended on its listing
+	// from one that waited the window out.
+	if len(h.began) == 0 {
+		t.Fatal("the join recorded no adoption")
+	}
+	if collected := h.began[0].Sub(started); collected >= statelog.OfferWindow/2 {
+		t.Fatalf("the join collected offers for %v: its listing's answer, after "+
+			"every donor it named had offered, did not end the collection", collected)
 	}
 }
 
@@ -705,6 +765,7 @@ func (h *joinHarness) addDonor(t *testing.T, nodeID string) {
 	served := make(chan struct{})
 	go func() { defer close(served); _ = donor.Serve(ctx) }()
 	t.Cleanup(func() { cancel(); <-served })
+	h.donors = append(h.donors, nodeID)
 
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {

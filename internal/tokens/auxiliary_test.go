@@ -144,6 +144,48 @@ func TestAPersonsSpendIsTheirOwnRowOnBothWindows(t *testing.T) {
 	}
 }
 
+// A PERSON IS NAMED BY THE ROLE THEIR NEWEST RECORD CARRIES, on both windows.
+//
+// A person's row is keyed on their handle and names their seat's role, which a
+// rename changes. A named window names it by the newest day's cell; the live
+// window took the FIRST record's, so a person renamed mid-window kept the name
+// they started it with there and a first record carrying no role left them
+// "unknown" — two windows of one company naming one person two ways. Both now
+// keep the newest name, the live window by its records' order (ageing order in
+// production, so the last is the newest), and a record carrying none leaves it.
+//
+// Mutation: drop the role fill in Aggregate's per-seat row, and the live row
+// reads "unknown".
+func TestAPersonIsNamedByTheRoleTheirNewestRecordCarries(t *testing.T) {
+	t.Parallel()
+	asked := func(role, at string) tokens.Record {
+		r := auxRec("operator", "answer_knowledge", "", at, 1, 10)
+		r.AgentID, r.AgentRole, r.Person = "", role, "maya"
+		r.EventID += role
+		return r
+	}
+	live := tokens.Aggregate([]tokens.Record{
+		asked("", "2026-06-14T11:00:00Z"),
+		asked("Founder", "2026-06-14T12:00:00Z"),
+		asked("Chair", "2026-06-14T13:00:00Z"),
+		asked("", "2026-06-14T14:00:00Z"),
+	}, tokens.Options{Since: since, Until: until})
+	if len(live.ByAgent) != 1 || live.ByAgent[0].Role != "Chair" || live.ByAgent[0].TotalTokens != 40 {
+		t.Errorf("live by_agent = %+v, want one row of 40 for maya, named Chair", live.ByAgent)
+	}
+
+	named := tokens.FoldDaily([]tokens.Cell{
+		{Day: "2026-06-13", Handle: "maya", Role: "Founder", Person: true,
+			Phase: tokens.PhaseAuxiliary, Bucket: tokens.Bucket{TotalTokens: 20, Calls: 2}},
+		{Day: "2026-06-14", Handle: "maya", Role: "Chair", Person: true,
+			Phase: tokens.PhaseAuxiliary, Bucket: tokens.Bucket{TotalTokens: 20, Calls: 2}},
+	}, nil, tokens.DailyOptions{Range: days(t, "2026-06-13", "2026-06-14", time.UTC)})
+	if len(named.ByAgent) != 1 || named.ByAgent[0].Role != "Chair" {
+		t.Errorf("named by_agent = %+v, want maya named Chair, as the live window names her",
+			named.ByAgent)
+	}
+}
+
 // PEOPLE WITH EQUAL TOTALS COME BACK IN ONE ORDER, on both windows.
 //
 // A person's row carries no agent id, and two people may share a role, so a

@@ -20,6 +20,8 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/period"
+	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // A golden company: two seats, one scripted model, one embedded broker.
@@ -71,9 +73,19 @@ turn_engine:
   max_tool_rounds: 3
 `
 
-// tickInterval is the shared tick's cadence here. Short enough that the spend
-// rollup lands inside a test, long enough not to drown the capture in health
-// frames.
+// tickInterval is the shared tick's cadence on a single node here. Short enough
+// that the spend rollup lands inside a test, long enough not to drown the
+// capture in health frames.
+//
+// NOT A FLEET MEMBER'S, which runs the production cadence
+// ([stream.HealthInterval]; see [buildMember]). On a cluster every tick is
+// several certified coordination listings — the live nodes and their apply
+// status for the health envelope, the seat leases for placement — and each
+// listing creates and deletes an ordered consumer through the broker's
+// metadata group, which every member has to apply. Measured on a fleet that
+// only idled for thirty seconds: 113 cpu-s at 25 ms against 61 at five
+// seconds, close to two cores spent on ticks nobody reads — no fleet case
+// reads a push; every one reads REST or the engines.
 const tickInterval = 25 * time.Millisecond
 
 // harnessActivation is the instant this harness's company was "activated".
@@ -213,27 +225,57 @@ type node struct {
 // Everything real: a real embedded stream on a real temp directory, a real
 // store, the real API in front of them, and the real observability pipeline
 // wired the way cmd/crewlet wires it. The one stub is the vendor endpoint.
-func start(t *testing.T) *node { return startWith(t, nil) }
+func start(t *testing.T) *node { return startNode(t, nodeSpec{}) }
 
 // startWith stands a node up over a company document the caller may amend, for
 // the cases whose subject is a config field rather than a turn.
 func startWith(t *testing.T, amend func(doc string) string) *node {
 	t.Helper()
-	return startBooted(t, amend, nil)
+	return startNode(t, nodeSpec{company: amend})
 }
 
-// startBooted stands a node up over a company document and a bootstrap the
-// caller may both amend, for the cases that need the operator's own half of
-// the configuration too — a bearer token a person writes with.
-func startBooted(
-	t *testing.T, amend func(doc string) string, amendBoot func(*config.Bootstrap),
-) *node {
+// nodeSpec is what a case may vary about the node it stands up. The zero value
+// is the golden company on the harness's own environment.
+type nodeSpec struct {
+	// company amends the golden company document.
+	company func(doc string) string
+	// boot amends the operator's half of the configuration, for the cases
+	// that need it — a bearer token a person writes with.
+	boot func(*config.Bootstrap)
+	// env is what the node's `${VAR}` references resolve to beyond the
+	// harness's own ([nodeEnvironment]).
+	env map[string]string
+}
+
+// nodeEnvironment is the environment a node in this package resolves its
+// `${VAR}` references from: the harness's own variables and the case's,
+// HANDED to the engine ([engine.Options.Environment]) and never read from the
+// process.
+//
+// HANDED because the process environment is the one input every case in a
+// binary shares. A case that configured a node through it had to set it with
+// t.Setenv, which Go refuses beside t.Parallel, so eight cases ran alone for
+// no other reason — and a case asserting that a reference resolves to NOTHING
+// held only on a runner that happened not to export the variable.
+//
+// The scripted endpoint takes any key, so CREWLET_TEST_KEY is a placeholder,
+// set so every node runs on a key as a deployment does rather than on whatever
+// the runner exports.
+func nodeEnvironment(vars map[string]string) config.MapSource {
+	env := config.MapSource{"CREWLET_TEST_KEY": "sk-ant-e2e-placeholder"}
+	maps.Copy(env, vars)
+	return env
+}
+
+// startNode stands a node up as spec describes.
+func startNode(t *testing.T, spec nodeSpec) *node {
 	t.Helper()
+	logs.attribute(t)
 	model := newScriptedModel(t)
 
 	doc := fmt.Sprintf(companyDoc, model.url)
-	if amend != nil {
-		doc = amend(doc)
+	if spec.company != nil {
+		doc = spec.company(doc)
 	}
 	cfg, err := config.ParseCompany([]byte(doc))
 	if err != nil {
@@ -242,12 +284,14 @@ func startBooted(
 	boot := config.DefaultBootstrap()
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
-	if amendBoot != nil {
-		amendBoot(&boot)
+	if spec.boot != nil {
+		spec.boot(&boot)
 	}
+	seedStore(t, &boot)
 
 	e, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation,
+		Environment: nodeEnvironment(spec.env),
 	})
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
@@ -260,6 +304,33 @@ func startBooted(
 	app, srv := serveAPI(t, e, &boot, nil)
 
 	return &node{engine: e, app: app, server: srv, model: model, id: boot.Node.ID}
+}
+
+// seedStore writes the migrated store image where boot's store will open, so a
+// node boots onto a store this binary migrated once rather than running every
+// migration again for every node it stands up — the cost [storetest.Seed]
+// exists to remove, and none of these cases is about migrating.
+//
+// THE ENGINE'S OWN RULE for what a fresh node holds, so a seeded node is one a
+// fresh boot would have produced: the node file unless the store is scratch
+// (discarded at open, so a seed would only be deleted), and the replicated file
+// only on a node that holds the estate ([engine.HoldsEstate]) — a node without
+// `data` has none, and a backup or an estate check would find one that was put
+// there. A file already there is left as it is, which is what lets the restart
+// case boot twice on one path and reopen its own.
+//
+// Call it once boot is final and before engine.New, ON THE TEST'S GOROUTINE:
+// a seed that cannot be written fails the test, which only that goroutine may.
+func seedStore(t *testing.T, boot *config.Bootstrap) {
+	t.Helper()
+	if boot.Store.Scratch {
+		return
+	}
+	storetest.Seed(t, store.EstateNode, boot.Store.Path)
+	if engine.HoldsEstate(boot) {
+		storetest.Seed(t, store.EstateReplicated,
+			store.ReplicatedPath(boot.Store.Path, boot.Store.ReplicatedPath))
+	}
 }
 
 // scriptedModel is an Anthropic Messages endpoint that answers by PHASE.
@@ -714,23 +785,17 @@ func textReply(text string) string {
 	}`, body, textReplyUsage.json())
 }
 
-// waitFor polls until cond holds, failing the test if it never does.
-//
-// diag, when given, is rendered INTO the failure. A timeout here reports that
-// something the engine should have done was not done, and on CI that one line
-// is the entire artefact: a run of this suite failed with nothing but "timed
-// out waiting for the suspended turn to be resumed", which named the symptom
-// and not one fact about the state that produced it. A condition worth waiting
-// on is worth saying what it saw instead.
 // waitBudget is how long every wait in this suite gets.
 //
 // # Why it is this large
 //
 // The conditions here are not in-process flags: they are a seat claimed
 // through a lease, an engine booted, a detached sandbox run recovered from a
-// row. And the machine they run on is not this one — CI runs the WHOLE suite
-// under the race detector, so an e2e engine boots while a dozen other
-// packages compete for the same cores.
+// row. And the machine they run on is not this one — CI runs the suite under
+// the race detector, with this package's single-engine cases running beside
+// each other, as many at once as the runner has cores ([testing.T.Parallel]),
+// so an engine here boots while three others do. This package is alone on the
+// runner ([solo.Run]); its own cases are what it competes with.
 //
 // # What a long budget does NOT fix
 //
@@ -749,6 +814,14 @@ func textReply(text string) string {
 // to raise.
 const waitBudget = 90 * time.Second
 
+// waitFor polls until cond holds, failing the test if it never does.
+//
+// diag, when given, is rendered INTO the failure. A timeout here reports that
+// something the engine should have done was not done, and on CI that one line
+// is the entire artefact: a run of this suite failed with nothing but "timed
+// out waiting for the suspended turn to be resumed", which named the symptom
+// and not one fact about the state that produced it. A condition worth waiting
+// on is worth saying what it saw instead.
 func waitFor(t *testing.T, what string, cond func() bool, diag ...func() string) {
 	t.Helper()
 	deadline := time.Now().Add(waitBudget)

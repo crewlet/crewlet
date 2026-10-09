@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -181,6 +180,31 @@ type Engine struct {
 	// it: [Engine.Stop] drains for a caller that did not, and a second run
 	// would announce a second stop for one shutdown.
 	drainOnce sync.Once
+
+	// stopBudget is the allowance every lease this node's stop gives back
+	// shares ([seat.StopBudget]) — the drain's and the teardown's — built by
+	// whichever reaches it first ([Engine.stopping]). Written once, inside
+	// stopBudgetOnce, and read only through it.
+	stopBudget     *seat.StopBudget
+	stopBudgetOnce sync.Once
+
+	// teardownBegun is done from the moment the TEARDOWN begins
+	// ([Engine.tearingDown]) — never the drain, whose wait for running turns
+	// the integration loop runs straight through — and is what a give-back
+	// no stop's context reaches watches to become a step of the stop
+	// ([Engine.stepOnceTornDown]). Made on first use under teardownOnce, so
+	// the zero engine a failed boot tears down has one too.
+	teardownOnce  sync.Once
+	teardownBegun context.Context
+	beginTeardown context.CancelFunc
+
+	// stopOnce does the same for the teardown [Engine.Stop] runs after the
+	// drain. A second teardown is not a harmless repeat: every step in it
+	// runs against what the first one closed, so a second Stop warned that
+	// the admission could not be withdrawn — telling an operator to
+	// exclude a node whose admission the first Stop had already removed —
+	// and announced `engine_stopped` twice for one shutdown.
+	stopOnce sync.Once
 
 	// batch is the inbox coalescing window and cap, shared with every seat
 	// attachment on this node.
@@ -364,6 +388,12 @@ type Engine struct {
 	// outer would have dereferenced nil.
 	env atomic.Pointer[config.Resolver]
 
+	// environ is the environment every resolver this node builds ends in —
+	// [Options.Environment], the process's own when that is nil. Read
+	// through [Engine.environment], which answers the process's for an
+	// engine built without one.
+	environ config.Source
+
 	// republish coalesces the re-activations a provisioning pass asks for
 	// when it seals a credential. See republish.go.
 	republish republisher
@@ -515,6 +545,12 @@ type Engine struct {
 	// the counters are shared, so this is a frame rather than a duty.
 	budgetReports *budgetReporter
 
+	// refusals is how this node's gates tell that loop a window has started
+	// refusing ([refusalLatch]). Built with the engine rather than with the
+	// loop, because the gates charge through it from the first apply and
+	// the loop starts and stops beside them.
+	refusals *refusalLatch
+
 	// embedding is the vector domain's one writer: the fleet singleton
 	// that turns sources whose text has moved into vector records. On the
 	// ENGINE for the reason the trim is — it is a loop this process runs,
@@ -529,6 +565,9 @@ type Engine struct {
 	// this node's own subjects — and it reads the current epoch's clock and
 	// chart per tick instead.
 	usage *usageLoop
+
+	// usageEvery is Options.usageEvery.
+	usageEvery time.Duration
 
 	// history is the fleet's turn-level history reader, and
 	// stopHistoryServe withdraws this node as one of its answerers. See
@@ -685,6 +724,37 @@ type Options struct {
 	// run for minutes; a test shrinks it so a run settles in a second
 	// rather than waiting out a real tick.
 	SandboxPollInterval time.Duration
+
+	// Environment is what a company's `${VAR}` references fall back to
+	// behind the secret store, and what the per-run endpoints' settings are
+	// read from ([sandbox.BuildOtelReceiver], [mcpbridge.Build]). Nil is
+	// the process environment, which is what `crewlet run` leaves it.
+	//
+	// A SOURCE RATHER THAN THE PROCESS'S OWN for the reason the org model
+	// takes a lookup ([org.HumanContact.ResolvedIdentities]): the
+	// environment is the one genuinely ambient input, and an ambient input
+	// serialises every test that sets it — Go forbids t.Setenv beside
+	// t.Parallel — while two engines in one process can each be handed
+	// their own. Tier A is not resolved through it: the bootstrap is the
+	// root of trust, resolved from the process it was loaded in, by the
+	// loader and [OpenBackends] alike.
+	Environment config.Source
+
+	// usageEvery is the usage publisher's cadence
+	// ([usage.PublisherDeps.Every]), zero for the domain's own
+	// [usage.FlushInterval]. UNEXPORTED, so nothing outside this package's
+	// tests can set it (export_test.go): the cadence is the domain's
+	// decision rather than a deployment's, and the knob exists only so a
+	// test can watch a LIVE loop publish what arrives after boot without
+	// waiting out fifteen seconds of it.
+	usageEvery time.Duration
+
+	// sweepEvery is the seat host's placement cadence
+	// ([node.Config.SweepInterval]), zero for [seat.SweepInterval].
+	// UNEXPORTED for the reason usageEvery is: the cadence is the seat
+	// host's decision, and the knob exists only so a case can put the next
+	// tick out of reach and see what claims a seat without one.
+	sweepEvery time.Duration
 }
 
 // New assembles an engine.
@@ -745,9 +815,13 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// BUILT BEFORE THE SANDBOX RUNTIME, because the manager takes it: a
 	// receiver constructed after the first apply would leave every run
 	// launched in between exporting nowhere, silently.
+	environ := opts.Environment
+	if environ == nil {
+		environ = config.EnvSource{}
+	}
 	otel := opts.OtelReceiver
 	if otel == nil {
-		built, err := sandbox.BuildOtelReceiver(os.Getenv,
+		built, err := sandbox.BuildOtelReceiver(getenv(environ),
 			keyMaterial(opts.Bootstrap))
 		if err != nil {
 			// A receiver URL that is set and unusable is a deployment
@@ -764,7 +838,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// keyring rather than from a per-process random.
 	bridge := opts.Bridge
 	if bridge == nil {
-		bridge = mcpbridge.Build(os.Getenv, keyMaterial(opts.Bootstrap))
+		bridge = mcpbridge.Build(getenv(environ), keyMaterial(opts.Bootstrap))
 	}
 
 	// THE MODE AND THE INCARNATION, resolved once. An unset mode is
@@ -821,7 +895,9 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	}
 
 	e := &Engine{
-		boot: opts.Bootstrap,
+		boot:     opts.Bootstrap,
+		environ:  environ,
+		refusals: newRefusalLatch(),
 		// SET HERE, BEFORE ANYTHING READS IT, and once: the admission
 		// handshake below asks it whether this node publishes and whether
 		// its broker is a member, and the node is handed this exact value
@@ -843,6 +919,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		mcp:                 mcp.NewBridge(nil),
 		sandboxOtel:         otel,
 		sandboxPollInterval: opts.SandboxPollInterval,
+		usageEvery:          opts.usageEvery,
 		sandboxSeats:        map[string]bool{},
 		bridge:              bridge,
 		metrics:             opts.Metrics,
@@ -1172,8 +1249,9 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// moving it here does not deliver the mail it is holding: the
 		// release on the node it left dropped that node's hold with the
 		// attachment. See seatpause.go.
-		AttachHolds: e.attachHolds,
-		LeaseTTL:    e.leaseTTL,
+		AttachHolds:   e.attachHolds,
+		LeaseTTL:      e.leaseTTL,
+		SweepInterval: opts.sweepEvery,
 		// The host's own ceiling, from Tier A. Per NODE, so a fleet's is
 		// N times this. Passed through unresolved: zero is the shape of an
 		// absent key and node.New is what turns it into the default, so
@@ -1538,6 +1616,9 @@ func (e *Engine) Start(ctx context.Context) error {
 // moment, so the envelope's source is this node — which is also what tells one
 // member's line from another's on a fleet, since every member publishes its
 // own pair.
+//
+// On a bound of its own ([lifecycleContext]), never a step of the stop's
+// allowance.
 func (e *Engine) publishLifecycle(ctx context.Context, ev *events.Event) {
 	if e.backends == nil || e.backends.Queue == nil {
 		return
@@ -1545,12 +1626,46 @@ func (e *Engine) publishLifecycle(ctx context.Context, ev *events.Event) {
 	if e.node != nil {
 		ev.Source = e.node.ID()
 	}
-	if err := e.backends.Queue.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
+	publishCtx, cancel := lifecycleContext(ctx)
+	defer cancel()
+	if err := e.backends.Queue.Publish(publishCtx, topics.Event(ev.Type), ev); err != nil {
 		log.WarnContext(ctx, "lifecycle_event_not_published", "type", ev.Type,
 			"error", err.Error(),
 			"detail", "the audit log has no line for this node's start or stop; "+
 				"the engine log does")
 	}
+}
+
+// lifecyclePublishBudget bounds the publish of one lifecycle event: a node's
+// start or stop, a seat's spawn or release.
+//
+// FIVE SECONDS, the JetStream client's own request timeout — what nats.go gives
+// a publish whose context carries no deadline — and the bound the released
+// seat's last memory publish has beside it ([memoryFlushTimeout]). A stream
+// that has not acknowledged in that long will not inside any grace an
+// orchestrator gives a stop, and what is lost is a line in the audit log and a
+// live screen that ages the seat out instead.
+//
+// NEVER A STEP OF THE STOP'S ALLOWANCE ([seat.StopBudget]), which is the
+// coordination store's: these travel on the event stream, which is replicated
+// apart from the coordination buckets and can lose its quorum alone. A publish
+// the stream never acknowledges waits out whatever deadline it is handed — and
+// a deadline switches the client's own five seconds off — so on the allowance,
+// a stream without quorum spent the time the presence, the seats, the
+// admission and every duty needed, and a store that was answering was left
+// holding all of them.
+const lifecyclePublishBudget = 5 * time.Second
+
+// lifecycleContext is what a lifecycle event is published on: ctx without its
+// cancellation, bounded by [lifecyclePublishBudget] and nothing else.
+//
+// FREE OF ctx's CANCELLATION because the event records something that has
+// already happened — the node started or was told to stop, the seat was taken
+// or let go — and a caller that gave up on what comes after it has not taken
+// that back. A drain's caller may pass a deadline for its wait, and a
+// release's context is routinely one a shutdown has already ended.
+func lifecycleContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), lifecyclePublishBudget)
 }
 
 // Drain is the first half of a graceful stop: this node stops taking work,
@@ -1568,8 +1683,14 @@ func (e *Engine) publishLifecycle(ctx context.Context, ev *events.Event) {
 // not drain first, both wait for the first to finish and then do nothing more,
 // so one shutdown is announced once and no seat is handed back twice.
 //
-// Bounded only by ctx, for the reason [node.Node.Drain] gives.
+// Bounded by ctx for its wait, for the reason [node.Node.Drain] gives — and
+// past it by at most [lifecyclePublishBudget], for the stop's announcement:
+// the drain joins that publish before it returns, and it is free of ctx's
+// cancellation for the reason [lifecycleContext] gives.
 func (e *Engine) Drain(ctx context.Context) {
+	// ONE ALLOWANCE FOR EVERY LEASE THE STOP GIVES BACK, from its first —
+	// see [Engine.stopping].
+	ctx = seat.WithStopBudget(ctx, e.stopping())
 	e.drainOnce.Do(func() {
 		// BEFORE ANYTHING THAT CAN BLOCK, so every surface that asks
 		// refuses new work from the moment the drain was decided rather
@@ -1616,11 +1737,22 @@ func (e *Engine) Drain(ctx context.Context) {
 		// survive is a second interrupt or a supervisor's kill grace
 		// running out mid-drain, and the one thing the audit log must not
 		// lose is that this node was told to stop.
+		//
+		// AND BESIDE THE DRAIN rather than in front of it, joined before
+		// the drain returns. The announcement travels on the event stream,
+		// and a stream that will not acknowledge holds it for its whole
+		// bound ([lifecyclePublishBudget]) — time the presence give-back the
+		// drain begins with has no reason to wait out. On a member that has
+		// lost both stores the two run out together, rather than the
+		// announcement's five seconds coming first and the allowance after.
+		var announced sync.WaitGroup
 		if company := e.Company(); company != nil {
-			e.publishLifecycle(ctx, events.New(
-				types.OrgStopped{OrgName: company.Config.Name}, tracing.TraceOf(ctx)))
+			ev := events.New(types.OrgStopped{OrgName: company.Config.Name},
+				tracing.TraceOf(ctx))
+			announced.Go(func() { e.publishLifecycle(ctx, ev) })
 		}
 		e.node.Drain(ctx)
+		announced.Wait()
 	})
 }
 
@@ -1637,10 +1769,115 @@ func (e *Engine) ShuttingDown() bool { return e.shuttingDown.Load() }
 // The DRAIN comes first and is the difference between a restart that resumes
 // cleanly and one that redelivers half-finished turns: it stops claiming, hands
 // back every seat, and waits for in-flight handlers before anything closes.
+//
+// ONCE, like the drain: a second call — the cleanup a failed start runs after
+// the ordinary one has already been through — waits for the first to finish
+// and then does nothing more. See [Engine.stopOnce].
 func (e *Engine) Stop(ctx context.Context) {
 	e.Drain(ctx)
-	e.teardown(ctx)
-	log.InfoContext(ctx, "engine_stopped")
+	e.stopOnce.Do(func() {
+		e.teardown(ctx)
+		log.InfoContext(ctx, "engine_stopped")
+	})
+}
+
+// stopping is the allowance this node's stop gives its leases back on — the
+// presence and seat leases, the duties it releases, and the holds its loops
+// give back as the teardown ends them ([Engine.tearingDown]) — built once, by
+// the drain or by a failed boot's teardown, whichever comes first. See
+// [seat.StopBudget] for why one allowance and not one per step. Its size is
+// the stop allowance of this node's own lease TTL ([seat.StopAllowance], one
+// heartbeat interval) LESS the share reserved for withdrawing its admission
+// ([Engine.admissionShare]), so the stop's coordination is still one
+// allowance in total.
+//
+// NOT the stop's lifecycle events, the custody flush or the last auxiliary
+// spend, which carry records on the event stream rather than give a lease
+// back: what they could not publish is lost rather than lapsed, and a stream
+// that will not acknowledge must not spend the time the coordination store is
+// owed ([lifecyclePublishBudget]), so each keeps the bound of its own it
+// states. Nor the admission, which has no lapse to fall back on.
+func (e *Engine) stopping() *seat.StopBudget {
+	e.stopBudgetOnce.Do(func() {
+		e.stopBudget = seat.NewStopBudget(
+			seat.StopAllowance(e.stopTTL()) - e.admissionShare())
+	})
+	return e.stopBudget
+}
+
+// tearingDown is the stop's allowance ([Engine.stopping]), and the moment the
+// teardown begins, said to every give-back no stop's context reaches
+// ([Engine.stepOnceTornDown]).
+//
+// THE TEARDOWN AND NOT THE DRAIN, because the drain's wait for running turns
+// has no bound and nothing ends the loops that hold until the teardown does —
+// a pass that finishes during that wait is an ordinary pass, and the time it
+// spends belongs to it rather than to the seats the drain gives back at the
+// end. A boot that failed reaches the teardown too, and it begins there the
+// same way.
+func (e *Engine) tearingDown() *seat.StopBudget {
+	b := e.stopping()
+	e.teardownSignal()
+	e.beginTeardown()
+	return b
+}
+
+// teardownSignal is done once the teardown has begun ([Engine.tearingDown]).
+func (e *Engine) teardownSignal() context.Context {
+	e.teardownOnce.Do(func() {
+		e.teardownBegun, e.beginTeardown = context.WithCancel(context.Background())
+	})
+	return e.teardownBegun
+}
+
+// stepOnceTornDown is ctx for a give-back no stop's context reaches — a
+// hold's, given back on the context it was taken on ([holdLeases]) — and the
+// call that ends it, which the caller defers until the give-back returns.
+//
+// THE GIVE-BACK IS A STEP OF THE STOP'S ALLOWANCE FROM THE MOMENT THE TEARDOWN
+// BEGINS: at once, if it already has, or partway through, if the teardown
+// begins while the give-back is in flight — and cancelled when the allowance
+// runs out. Before that it is no step of anything and keeps ctx's own bound.
+// From the teardown's start rather than the give-back's, because the teardown
+// is what waits for it: it stops the loop that holds and waits out the pass in
+// flight, so a give-back begun during the drain and still running then is time
+// the stop spends — against a store that has gone away, a client's whole
+// request timeout beside the allowance — while one that finished during the
+// drain's wait spent nothing the stop is owed.
+func (e *Engine) stepOnceTornDown(ctx context.Context) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	begun := e.teardownSignal()
+	finished, watched := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(watched)
+		select {
+		case <-finished:
+			return
+		case <-begun.Done():
+		}
+		step, done := seat.StopStep(seat.WithStopBudget(context.Background(), e.stopping()))
+		defer done()
+		select {
+		case <-finished:
+		case <-step.Done():
+			cancel()
+		}
+	}()
+	return ctx, func() {
+		close(finished)
+		<-watched
+		cancel()
+	}
+}
+
+// stopTTL is the lease TTL a stop's bounds are fractions of: this node's own,
+// or — for a boot that failed before it was resolved — the shipped one, which
+// is what a lease it took would carry.
+func (e *Engine) stopTTL() time.Duration {
+	if e.leaseTTL > 0 {
+		return e.leaseTTL
+	}
+	return seat.SeatLeaseTTL
 }
 
 // teardown stops everything a node started, in the one order that is correct.
@@ -1664,6 +1901,10 @@ func (e *Engine) Stop(ctx context.Context) {
 // it stops was never started, and the node is absent entirely where the
 // failure came before [node.New].
 func (e *Engine) teardown(ctx context.Context) {
+	// THE STOP'S ONE ALLOWANCE, the drain's if there was one — see
+	// [Engine.stopping] — and from here on the one a hold given back by a
+	// loop stopped below is charged to ([Engine.tearingDown]).
+	ctx = seat.WithStopBudget(ctx, e.tearingDown())
 	// After the drain: the waiter's keepalive is what stops a running box
 	// being reaped, so stopping it first would start the orphan clock on
 	// every in-flight run while turns are still finishing.

@@ -163,6 +163,7 @@ func TestConfluenceResyncHonoursTheSpaceFlag(t *testing.T) {
 // A COMPANY WITH NO CONFLUENCE BLOCK IS TOLD SO, rather than reaching an
 // empty URL and reporting a transport failure.
 func TestConfluenceResyncNeedsAConfiguredInstance(t *testing.T) {
+	t.Parallel()
 	doc := "name: Nimbus\nroles:\n  - name: SWE\n    handle: swe\n    goal: ship\n"
 	path := filepath.Join(t.TempDir(), "company.yaml")
 	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {

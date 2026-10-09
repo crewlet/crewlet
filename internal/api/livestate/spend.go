@@ -2,6 +2,7 @@ package livestate
 
 import (
 	"slices"
+	"sort"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/tokens"
@@ -27,23 +28,46 @@ var spendTypes = map[string]bool{
 // auxiliarySpendType is the auxiliary record's wire type.
 const auxiliarySpendType = "auxiliary_spend"
 
-// foldSpend records one spend record, reporting whether it counted.
+// foldSpend records one spend record, reporting whether the rollup moved.
 //
 // Deduped by event id so a redelivered envelope cannot inflate the rollup, and
-// window-pruned so a long-lived process does not keep aggregating spend that
-// has aged out.
+// aged on the projection's CLOCK: every arrival first drops what the window
+// has aged past, and a record already outside it is not counted at all.
+//
+// THE CLOCK, NEVER THE ARRIVING RECORD'S OWN STAMP. The window used to be cut
+// at the arriving record's stamp minus a day, which made it a window only while
+// records kept arriving and only while every node's clock agreed: a quiet
+// company kept showing spend older than a day under a heading that said it was
+// the last one, and one record stamped ahead by a node with a fast clock moved
+// the cutoff forward, dropped every correctly stamped record a day behind it
+// and forgot their ids — so a redelivery of one of them counted it again.
+//
+// A RECORD STAMPED AHEAD IS AGED FROM ITS ARRIVAL ([ageingStamp]): it leaves
+// the window a day after it arrived, never a day after a stamp the clock may
+// not reach for decades.
 func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
+	now := s.clock()
+	moved := s.expireSpend(now)
 	if env.ID != "" {
 		if _, counted := s.spendIDs[env.ID]; counted {
-			return false
+			return moved
 		}
-		s.spendIDs[env.ID] = struct{}{}
 	}
 	// The stamp is PARSED ONCE, here, and carried with the record. The
-	// prune below tests every retained record's age on every spend event,
-	// and re-parsing them — up to three layouts each, twice per pass —
-	// happened inside the projection's write lock, which is the mutex
-	// every /agents request and every websocket snapshot waits on.
+	// window is kept in the order its records age out, and re-parsing a
+	// held stamp — up to three layouts each — would happen inside the
+	// projection's write lock, which is the mutex every /agents request and
+	// every websocket snapshot waits on.
+	at := ageingStamp(env.Timestamp, now)
+	if at.valid && at.t.Before(now.Add(-LiveSpendWindow)) {
+		// ALREADY AGED: the window it would have counted in has passed.
+		// Not indexed either, so a redelivery is refused the same way
+		// rather than held by an id no record in the window answers for.
+		return moved
+	}
+	if env.ID != "" {
+		s.spendIDs[env.ID] = struct{}{}
+	}
 	rec := tokens.Record{
 		EventID:      env.ID,
 		Timestamp:    env.Timestamp,
@@ -86,9 +110,37 @@ func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 			rec.AgentRole = str(payload, "actor_role")
 		}
 	}
-	s.spend = append(s.spend, spendEntry{at: newStamp(env.Timestamp), Record: rec})
-	s.pruneSpend(env.Timestamp)
+	s.holdSpend(spendEntry{at: at, Record: rec})
+	s.capSpend()
 	return true
+}
+
+// ageingStamp is a spend record's stamp as the window ages it: the instant the
+// record carries, or now — its arrival — when that instant is ahead of now.
+//
+// A record is aged by its own stamp because that is when its spend happened,
+// which a record arriving late behind a cross-topic race still says truly. A
+// stamp AHEAD of the clock names an instant that has not come: a node whose
+// clock runs fast, by milliseconds or by a garbled year. Aged by that stamp, a
+// record was held until the clock passed it plus a day — for the garbled year,
+// counted in "the last 24 hours" for the life of the process, under a window
+// label that excluded it, and the last record the count cap would ever drop,
+// since it sorted newest. Aged from its arrival it leaves a day after it came,
+// the cap takes it in its arrival's place, and every held record's ageing
+// instant lies inside the window [LiveState.Spend] labels.
+//
+// Only the AGEING instant moves. The record keeps the stamp it was published
+// with ([tokens.Record.Timestamp]), which is what every screen shows of it —
+// an hour no clock has reached yet is how an operator finds the node whose
+// clock is wrong. Nor is a record stamped past the window's end left out of a
+// read: every fresh record from a node a few milliseconds ahead is one, and
+// nothing would re-push the rollup when it later fell inside.
+func ageingStamp(raw string, now time.Time) stamp {
+	at := newStamp(raw)
+	if at.valid && at.t.After(now) {
+		at.t = now
+	}
+	return at
 }
 
 // length is the number of elements of a list field, zero for anything else.
@@ -97,62 +149,109 @@ func length(payload map[string]any, key string) int {
 	return len(list)
 }
 
-// pruneSpend drops records that have aged out of the live window.
+// THE WINDOW IS HELD IN THE ORDER ITS RECORDS AGE OUT, which is what makes an
+// arrival in that order an append and what the window has aged past a prefix.
 //
-// ORDER-INDEPENDENT by construction. Popping from the front is only correct
-// while the slice is timestamp-ordered, and the live path does not keep it so:
-// a broadcast subscription reads across topics with no order between them, and
-// a fleet's nodes stamp their events with clocks that disagree, so an older
-// record can land behind a newer one. One recent record at the head is enough
-// to make a head-popping loop exit immediately and never prune again, and the
-// window would silently stop being a window.
+// The dated records ([LiveState.spend]) are kept oldest first by the instant
+// each is aged from ([ageingStamp] — its stamp, or its arrival when the stamp is
+// ahead of the clock), records sharing an instant in the order they arrived, so
+// what the window has aged past is always a PREFIX, and the count cap's oldest
+// records are the same prefix. An arrival in stamp order — nearly every one,
+// and every one stamped ahead — is an append; one that lost a cross-topic race,
+// or was stamped by a node whose clock runs behind, is inserted at its place,
+// which costs a move of the records aged after it and nothing else. That cost
+// is proportional to how far out of order the arrival is, not constant: a
+// record lost to a cross-topic race moves the handful published beside it, but
+// a node whose clock lags an hour moves an hour of the company's records for
+// every one it publishes — about a thousand of them at the cap, which holds a
+// day — under the projection's lock.
 //
-// The sweep runs only when there is something to drop, so the common case costs
-// one pass of comparisons and no allocation.
-func (s *LiveState) pruneSpend(nowISO string) {
-	if len(s.spend) > SpendRecordLimit {
-		// The count cap binds before the window for an org emitting more
-		// than the cap in a day. Truncating the OLDEST is what makes a
-		// rollup past the cap cover slightly less than a window rather
-		// than report a wrong total.
-		//
-		// RESLICED FROM THE FRONT, never copied: once the cap binds this
-		// runs on EVERY arrival, under the projection's lock, and a fresh
-		// slice of the whole window per arrival was a 24 000-entry copy
-		// (about 10 MB) for each spend record the company published. The
-		// dropped entries are cleared so their strings are not held, and
-		// the backing array is replaced by append's own growth — which
-		// copies only the live records, once per quarter of the cap's
-		// worth of arrivals — so the work per arrival is constant and the
-		// memory at most a growth step past the window.
-		cut := len(s.spend) - SpendRecordLimit
-		s.forgetSpend(s.spend[:cut])
-		clear(s.spend[:cut])
-		s.spend = s.spend[cut:]
-	}
-	now := newStamp(nowISO)
-	if !now.valid {
-		return
-	}
-	// No `raw`: it is only read when a comparison has an INVALID side, and
-	// aged() below tests validity first, so the formatted string was
-	// computed on every prune and never looked at.
-	cutoff := stamp{t: now.t.Add(-LiveSpendWindow), valid: true}
+// The window used to be held in ARRIVAL order, and that order cannot be aged
+// from the front: a broadcast subscription reads across topics with no order
+// between them and a fleet's clocks disagree, so one recent record at the head
+// would have stopped a front-popping loop for good. So every arrival scanned
+// the whole window for an aged record, handing each 300-odd-byte entry to the
+// predicate by value — under the projection's lock, on every spend record the
+// company published: a scan of 24 000 records per arrival at the cap, and
+// quadratic to fill. The seed sorted the window into stamp order all the
+// while, so the two paths into it did not even agree on its order.
+//
+// A record whose stamp does not parse can be neither placed in that order nor
+// aged on time, so it is held apart ([LiveState.undatedSpend]), in arrival
+// order, and KEPT — for the reason the sandbox sweep keeps an undateable
+// entry: dropping it on that basis would be arbitrary. The count cap is what
+// bounds those, and it takes them first, as [stamp.chronological] orders them.
 
-	// A record whose own timestamp is unusable is KEPT, for the reason the
-	// sandbox sweep keeps an undateable entry: it cannot be aged out on
-	// time, and dropping it on that basis would be arbitrary. The count
-	// cap above is what bounds those.
-	aged := func(e spendEntry) bool { return e.at.valid && e.at.before(cutoff) }
-	if !slices.ContainsFunc(s.spend, aged) {
+// holdSpend places one record in the window.
+func (s *LiveState) holdSpend(e spendEntry) {
+	if !e.at.valid {
+		s.undatedSpend = append(s.undatedSpend, e)
 		return
 	}
-	for _, e := range s.spend {
-		if aged(e) {
-			delete(s.spendIDs, e.EventID)
-		}
+	n := len(s.spend)
+	if n == 0 || !e.at.t.Before(s.spend[n-1].at.t) {
+		s.spend = append(s.spend, e)
+		return
 	}
-	s.spend = slices.DeleteFunc(s.spend, aged)
+	// AFTER every record sharing its instant, so equal stamps keep the order
+	// they arrived in and the cap's oldest of them is the earlier arrival.
+	at := sort.Search(n, func(i int) bool { return s.spend[i].at.t.After(e.at.t) })
+	s.spend = slices.Insert(s.spend, at, e)
+}
+
+// expireSpend drops the records the window has aged past as of now, reporting
+// whether any left. Its work is the records it drops: they are the front of the
+// dated records, and it stops at the first that is still inside the window.
+func (s *LiveState) expireSpend(now time.Time) bool {
+	aged := s.agedSpend(now)
+	s.spend = s.dropSpend(s.spend, aged)
+	return aged > 0
+}
+
+// agedSpend is how many of the dated records the window has aged past as of
+// now: the length of the front they make up.
+func (s *LiveState) agedSpend(now time.Time) int {
+	cutoff := now.Add(-LiveSpendWindow)
+	aged := 0
+	for aged < len(s.spend) && s.spend[aged].at.t.Before(cutoff) {
+		aged++
+	}
+	return aged
+}
+
+// capSpend holds the window to [SpendRecordLimit], dropping the OLDEST: the
+// undateable records first, then the first the window would age out.
+//
+// The count cap binds before the window for an org emitting more than the cap
+// in a day. Truncating the oldest is what makes a rollup past the cap cover
+// slightly less than a window rather than report a wrong total.
+func (s *LiveState) capSpend() {
+	over := len(s.undatedSpend) + len(s.spend) - SpendRecordLimit
+	if over <= 0 {
+		return
+	}
+	undated := min(over, len(s.undatedSpend))
+	s.undatedSpend = s.dropSpend(s.undatedSpend, undated)
+	s.spend = s.dropSpend(s.spend, over-undated)
+}
+
+// dropSpend removes a list's first n records, and their ids from the index.
+//
+// RESLICED FROM THE FRONT, never copied: once the cap binds this runs on EVERY
+// arrival, under the projection's lock, and a fresh slice of the whole window
+// per arrival was a 24 000-entry copy (about 10 MB) for each spend record the
+// company published. The dropped entries are cleared so their strings are not
+// held, and the backing array is replaced by append's own growth — which
+// copies only the live records, once per quarter of the cap's worth of
+// arrivals — so the trim's work per arrival is constant once amortised, and the
+// memory at most a growth step past the window.
+func (s *LiveState) dropSpend(list []spendEntry, n int) []spendEntry {
+	if n == 0 {
+		return list
+	}
+	s.forgetSpend(list[:n])
+	clear(list[:n])
+	return list[n:]
 }
 
 // forgetSpend drops the index entries of records leaving the window.
@@ -161,45 +260,85 @@ func (s *LiveState) pruneSpend(nowISO string) {
 // an id left behind by a dropped record would make the map the one structure
 // here that grows for the life of the process.
 func (s *LiveState) forgetSpend(leaving []spendEntry) {
-	for _, e := range leaving {
-		delete(s.spendIDs, e.EventID)
+	for i := range leaving {
+		delete(s.spendIDs, leaving[i].EventID)
 	}
 }
 
-// spendEntry is one record with its timestamp already parsed.
+// spendEntry is one record with the instant the window ages it from already
+// parsed ([ageingStamp]).
 //
 // The parse is the point. tokens.Record is the WIRE shape — it carries the
 // stamp as the string the dashboard renders — and this is the projection's
-// own copy, so the parsed instant lives beside it rather than in it.
+// own copy, so the parsed instant lives beside it rather than in it. Beside
+// it, too, because the two can differ: a record stamped ahead of the clock is
+// aged from its arrival and still shows the stamp it was published with.
 type spendEntry struct {
 	tokens.Record
 	at stamp
 }
 
-// SpendRecords returns the records inside the live window.
-func (s *LiveState) SpendRecords() []tokens.Record {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]tokens.Record, len(s.spend))
-	for i, e := range s.spend {
-		out[i] = e.Record
-	}
-	return out
+// SpendWindow is the live window as one read: the records inside it, and the
+// two instants that bound it, read off the clock the window was aged against.
+//
+// ONE INSTANT for the eviction and the label. A rollup prints its window
+// beside its numbers, and a label taken from a second read of a second clock
+// is a heading over records that nothing ever cut to it.
+type SpendWindow struct {
+	// Records are the records inside the window: the undateable ones first,
+	// in the order they arrived, then the rest in the order they age out —
+	// oldest stamp first, a record stamped ahead in its arrival's place.
+	Records []tokens.Record
+
+	// Until is the projection's clock at the read, and Since is
+	// [LiveSpendWindow] before it.
+	Since, Until time.Time
 }
 
-// LiveSpendWindowDays is the live window expressed as the `since_days` a
-// caller would ask for to get exactly it.
+// Spend reads the live window as of the projection's clock, leaving out what
+// the window has aged past — so a company that has published nothing for a day
+// reads an empty window, rather than the last day it was busy under the
+// heading of this one.
 //
-// NOT A LABEL any more — a rollup names its window with two instants — but
-// still the comparison that decides whether a request can be answered from the
-// projection in memory rather than by a scan of the event store.
-//
-// At LEAST one, because the window is measured in hours and a sub-day one
-// would round to zero — and a fast path keyed on 0 would never be taken.
-func LiveSpendWindowDays() int {
-	days := int(LiveSpendWindow / (24 * time.Hour))
-	if days < 1 {
-		return 1
+// A READ, NEVER AN EXPIRY. What leaves the window is reported once, by
+// whatever drops it ([LiveState.ExpireSpend], an arrival), and the stream
+// re-pushes the rollup on that report. A read that dropped the records first
+// would leave the report nothing to say: a tab connecting a moment after a
+// record aged out would take the report with it, and every tab already open
+// would keep the figure.
+func (s *LiveState) Spend() SpendWindow {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.clock()
+	inside := s.spend[s.agedSpend(now):]
+	out := make([]tokens.Record, 0, len(s.undatedSpend)+len(inside))
+	for i := range s.undatedSpend {
+		out = append(out, s.undatedSpend[i].Record)
 	}
-	return days
+	for i := range inside {
+		out = append(out, inside[i].Record)
+	}
+	return SpendWindow{Records: out, Since: now.Add(-LiveSpendWindow), Until: now}
+}
+
+// SpendRecords returns the records inside the live window: [LiveState.Spend]'s,
+// for a reader that has no use for the window's bounds.
+//
+// KEPT ON PURPOSE with no production reader. The rollups label what they fold,
+// so they read Spend; the suites that hold what the window CONTAINS — this
+// package's, observe's seed and the store's cache columns — ask exactly this
+// question, about two dozen times over, and have no use for the bounds.
+func (s *LiveState) SpendRecords() []tokens.Record { return s.Spend().Records }
+
+// ExpireSpend drops what the live window has aged past as of the projection's
+// clock, reporting whether the rollup moved.
+//
+// For a caller that pushes the rollup only when it moves: a record ageing out
+// publishes nothing, so without this a screen holding the last push kept a
+// figure the window no longer holds until the next record arrived — on a quiet
+// company, indefinitely. Its work is the records it drops.
+func (s *LiveState) ExpireSpend() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.expireSpend(s.clock())
 }

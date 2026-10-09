@@ -47,6 +47,7 @@ func condensingRig(t *testing.T, turnID string) *coordRig {
 // Mutation: drop the bridged half or the condensation from the request, and
 // the resume carries less than the job cost.
 func TestACompletionsResumeCarriesWhatTheEngineSpentOnTheJob(t *testing.T) {
+	t.Parallel()
 	rig := condensingRig(t, "t1")
 	rig.runner.Finish(Result{Success: true, Text: lines("report", 7000),
 		InputTokens: 900, OutputTokens: 200})
@@ -80,6 +81,7 @@ func TestACompletionsResumeCarriesWhatTheEngineSpentOnTheJob(t *testing.T) {
 // Mutation: leave the condensation off the park, or the bridged half off the
 // answer's request, and the answer's resume carries less than the job cost.
 func TestAParkedJobsEngineSpendReachesTheAnswersResume(t *testing.T) {
+	t.Parallel()
 	rig := condensingRig(t, "asks")
 	rig.runner.Finish(Result{NeedsInput: true, AskTo: "requester",
 		Question: lines("which branch", 1000), InputTokens: 700, OutputTokens: 80})

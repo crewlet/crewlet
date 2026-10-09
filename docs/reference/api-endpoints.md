@@ -1545,14 +1545,31 @@ spend records for its own 24-hour window — each phase's, and each
 of them, the WHOLE COMPANY's since every projection is fed fleet-wide (about
 2 600 turns a day; a company past that sees a rollup covering slightly less
 than a day rather than a wrong total) and folds them with
-`internal/tokens`, which is the same aggregation the event store's wider
-windows are folded with, so changing the window on screen cannot change
-what a phase is counted as. It ships in the snapshot and is re-pushed on
-the shared 5-second tick after any phase completed, so the Spend screen
-and the overview widget stay live without a fetch and without a second
-implementation of the aggregation in the browser. What a seat has spent
-is that rollup's per-agent row: the projection keeps no second total of
-its own.
+`internal/tokens`, which folds the named windows' company days into the
+same breakdown, so changing the window cannot change what a phase is
+counted as. The window is a ROLLING one, aged on the serving node's clock
+and never on a record's own stamp — every read leaves out what the window
+has aged past, and both an arriving record and the shared tick drop it:
+
+- a record stamped before the window is not counted, however late it
+  arrives;
+- one stamped ahead, by a node whose clock runs fast, is aged from when it
+  arrived — from the startup seed, for one read from history — so it leaves
+  a day after it came and the cap takes it in that place, rather than moving
+  the window or outliving it. It still shows the stamp it was published
+  with, which is how the node with the wrong clock is found;
+- one whose stamp does not parse is kept (nothing can age it) and is the
+  first the 24 000 cap drops.
+
+The rollup's `since` and `until` are the two instants the window was cut
+at. It ships in the snapshot and is re-pushed on the shared 5-second tick
+after any phase completed or any record aged out, so a client holding it
+stays live without a fetch — and a company that has gone quiet sees its
+spend leave the window as it ages rather than keep its last busy day —
+without a second implementation of the aggregation in the browser. (The
+bundled dashboard's Spend screen reads [named windows](#token-spend-breakdown)
+instead.) What a seat has spent is that rollup's per-agent row: the
+projection keeps no second total of its own.
 
 **The projection is seeded from the fleet's event stores when the process
 starts**, after the broadcast subscription is attached and before the HTTP
@@ -1709,7 +1726,7 @@ is the operator-only [`fleet`](#get-fleet) answer, and what each alarm measured 
 | `stall_lag_seconds` | Present only when the node's watched duty is behind: how far, in seconds. It climbs towards the seat lease TTL, at which the watchdog ends the process. |
 | `nodes` | How many nodes hold a presence lease — the fleet this node's fan-outs (search, fleet history) divide their work by. **Absent** when the presence read failed or did not finish inside the probe's coordination budget (an eighth of the 15-second reconcile interval, under two seconds) (it runs beside the posture read, so a wedged broker slows `/health` by that budget rather than hanging it); never `0`, since the node answering is itself one. A screen says "node count unavailable" for an absence rather than guessing. |
 | `alarms` | `{count, worst}`: how many of this node's [alarms](alarms.md) are firing, and `worst`, the one that has been firing **longest** (absent when `count` is 0) — the table asserts no severity of its own, and the condition that has gone unanswered longest is the one a health card names. From the **same** evaluation the `crewlet.alarm.active` gauge and the `alarm_raised` / `alarm_cleared` log lines come from, which runs every ten seconds on every node. **Absent** before that evaluation first runs and on a node running no state log: neither has looked, and `{count: 0}` would read as healthy. |
-| `seeded_from` | Which nodes this node's live projection was seeded from at boot — the activity feed, the live spend window and each seat's last turn that every screen starts from — in the fleet [`coverage`](#reading-the-fleets-history-coverage) shape. Absent until the seed has run. A seed that missed a node started those screens a node short, and this is where that stays visible after the log line has scrolled away. |
+| `seeded_from` | Which nodes this node's live projection was seeded from at boot — the activity feed and each seat's last turn, which the pushed screens start from, and the live spend window behind the [`tokens` push](#pushes) — in the fleet [`coverage`](#reading-the-fleets-history-coverage) shape. Absent until the seed has run. A seed that missed a node started those surfaces a node short, and this is where that stays visible after the log line has scrolled away. |
 | `unproven_seconds` | Each seat whose teardown this node could not prove, mapped to how long it has been stranded, present only when one is. Such a seat is still leased by this node, so no peer can claim it, and this node will not run it: it is absent from `seats` for exactly that reason. Alert on the duration rather than on the field's presence: a release that fails once and succeeds on the next heartbeat is a working system. See [Seat ownership](../concepts/seat-ownership.md#what-ownership-looks-like-from-outside). |
 
 Per-socket facts, such as how many envelopes *this* connection dropped or
@@ -2120,13 +2137,16 @@ in the same shape.
 
 Every node publishes a `budget_meters` snapshot of the counters as soon as its
 seat host is running and every **15 seconds** (`engine.BudgetReportInterval`)
-after that, and the projection folds each one in as it arrives. Until the first
-one lands, `budget` is **`null`** — nobody has read the counter — which is a
-different fact from a report whose `org.windows` is `[]`, "nothing is capped". A
-company with no ceiling anywhere publishes exactly that: an empty list and no
-seats, without reading the counter. A node whose read of the counter fails
-publishes nothing that interval, so the meter keeps the last reading it had
-rather than drawing zeroes.
+after that — and **at once** when a budget window first refuses a charge, so
+the moment a company or a seat stops reaches every open screen with the
+refusal rather than up to a tick later; a repeat refusal in the same window
+waits for the tick — and the projection folds each one in as it arrives. Until
+the first one lands, `budget` is **`null`** — nobody has read the counter —
+which is a different fact from a report whose `org.windows` is `[]`, "nothing
+is capped". A company with no ceiling anywhere publishes exactly that: an empty
+list and no seats, without reading the counter. A node whose read of the
+counter fails publishes nothing that interval, so the meter keeps the last
+reading it had rather than drawing zeroes.
 
 - `meter_id` identifies the node incarnation whose report is held. Every node
   reads the same counter, so reports under different ids describe the same
@@ -2281,8 +2301,8 @@ Server → client kinds:
 | `agents`   | After an event moved one or more agents — or a read moved their state: a run record reconcile, or the seat-lease read the five-second tick makes. | The changed agents' overlays, each with its `role`, its `activity` and its `stopped_reason` — the *result* of applying the change, so a client merges them rather than running its own state machine over the raw stream. A `live_call` carries its heavy fields only when their `versions` moved since the last push for the same call, and a client keeps the copy it holds of one left out; every row carries the seat's `live_call_seq`, a `null` call included, which orders the call slot against a `live_call` answer (see [What the projection carries, and what the wire sends](#what-the-projection-carries-and-what-the-wire-sends)). |
 | `seats`    | After a config revision changed the roster. | The COMPLETE seat list, replacing what the client holds. Distinct from `agents` on purpose: that one is a per-role merge, and a merge cannot express the deletion of a role a revision removed. |
 | `sandboxes`| After a detached sandbox run started, asked a question, finished or was lost, and after a reconcile against the durable run record changed the set. | The full in-flight sandbox list. |
-| `tokens`   | On the shared 5-second tick, when a phase completed since the last one. The fold runs on the tick rather than on the publish, so a busy company costs one aggregation every five seconds rather than one per phase. | The spend rollup, same shape as `GET /tokens/breakdown`. |
-| `budget`   | After a node's token meter report is applied (every node reports at start and every 15 seconds, a company that caps nothing included). | `{ meter_id, seq, timezone, org: { windows: [...] } }`, the org-wide half: one entry per capped calendar window, each with its span, spend, ceiling, refusal stamp and `state`. Per-seat figures ride on each agent's overlay in the `agents` push. See [the live token meter](#the-live-token-meter). |
+| `tokens`   | On the shared 5-second tick, when a spend record arrived or one aged out of the live window since the last one. The fold runs on the tick rather than on the publish, so a busy company costs one aggregation every five seconds rather than one per phase. | The spend rollup, same shape as `GET /tokens/breakdown`. |
+| `budget`   | After a node's token meter report is applied (every node reports at start, every 15 seconds and at once when a budget window first refuses a charge, a company that caps nothing included). | `{ meter_id, seq, timezone, org: { windows: [...] } }`, the org-wide half: one entry per capped calendar window, each with its span, spend, ceiling, refusal stamp and `state`. Per-seat figures ride on each agent's overlay in the `agents` push. See [the live token meter](#the-live-token-meter). |
 | `org` / `tools` / `schedules` | After a config revision is activated. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
 | `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection). | The whole [health envelope](#the-health-envelope), exactly what `GET /health` answers. There is no query for it. |
 | `result`   | Reply to a client `query` that succeeded. | `{ id, what, data }` — `id` echoes the request's. |
@@ -5023,12 +5043,12 @@ Two sources, one aggregation, and which one answers is decided by the
 parameters:
 
 - **The live window** — a request naming no `days`, no dates, no `seat` and no
-  `previous` — is the projection's: the phase records of the last
+  `previous` — is the projection's: the spend records of the last
   24 hours (`livestate.LiveSpendWindow`, rolling), held in memory and pushed as
-  the [`tokens` push](#pushes). The dashboard's live views read it; the Spend
-  screen reads named windows only, so its figures are the company's. It is the
-  only answer with a per-turn tail (`by_turn`) and a watermark
-  (`aggregated_through`).
+  the [`tokens` push](#pushes), for a client that wants the last day as it
+  happens. No screen of the bundled dashboard draws it: the Spend screen reads
+  named windows only, so its figures are the company's. It is the only answer
+  with a per-turn tail (`by_turn`) and a watermark (`aggregated_through`).
 - **Every named window** is whole **company days** read from the replicated
   [`usage` domain](../guides/replication.md#two-compacted-domains-the-embeddings-and-each-nodes-day) (ADR-0020): every
   node's day, applied on every node. So the answer is the same whichever node
@@ -5150,13 +5170,20 @@ Notes:
   `aggregated_through`, the newest record counted, are the **live window's
   only**. A company day holds no turn and no per-call instant, so a named
   window has neither. Per-turn spend over any window is
-  [`GET /turns?sort=-tokens`](#queries).
-- A seat is one row per derived agent id, named by the newest day's record: a
-  role renamed mid-window is one row under its current name.
+  [`GET /turns?sort=-tokens`](#queries). Both carry each record's stamp as it
+  was published, so a record from a node whose clock runs fast puts them past
+  `until` for the day the window holds it — which is how that node is found.
+- On a named window a seat is one row per derived agent id, named by the
+  newest day's record: a role renamed mid-window is one row under its current
+  name. The live window keys a seat on its role, as the live projection keys
+  every seat's state, so a role renamed inside the last day is two rows until
+  the old name's records age out; a row's `agent_id` is the one its newest
+  record carries.
 - A **person** is a row of their own with `person: true`, on both windows:
   what the auxiliary model spent for a human seat — a question answered with
   `answer_knowledge`, a background pass on a unit a person leads — named by
-  that seat's `handle` and `role`, with no `agent_id` and, on a named window,
+  that seat's `handle` and the `role` its newest record or day names (a
+  record naming none leaves it), with no `agent_id` and, on a named window,
   no `turns` or `failed`, since a person takes no turns. `seat=<handle>`
   narrows a window to one person as it does to one seat. A person's spend
   reaches the named windows as its own usage record, published with the rest

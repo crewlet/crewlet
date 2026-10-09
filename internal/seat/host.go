@@ -274,6 +274,13 @@ type Host struct {
 	// advertises counts only its leases on these ([Host.placedCount]).
 	placeable map[string]struct{}
 
+	// resweep is the running sweep loop's ask for a pass before its next
+	// tick ([Host.Resweep]), buffered by one so an ask that finds one
+	// pending adds nothing to it. MADE BY EACH [Host.Start] and nil while
+	// the host is not running, so an ask made then is dropped rather than
+	// kept for a loop that does not exist yet.
+	resweep chan struct{}
+
 	// lastBeat is when the heartbeat goroutine last proved it was turning.
 	// It is what the watchdog reads; see [Host.Beat].
 	lastBeat time.Time
@@ -524,8 +531,9 @@ func (h *Host) NoteDeliveryDeferred(handle string) {
 //
 // Exported because every budget that races a lease has to be derived from the
 // lease it is racing, and the callers that derive one live in other packages:
-// the drain's give-back budget in [internal/node] and the watchdog threshold
-// in [internal/engine]. Written against the constant instead, each of them
+// the stop allowance a drain in [internal/node] begins through [WithinStop]
+// when its caller carries none, and the watchdog threshold in
+// [internal/engine]. Written against the constant instead, each of them
 // claimed in its own comment to follow the deployment's TTL while following
 // the shipped number — which is the drift [HeartbeatRatio] exists to name.
 func (h *Host) TTL() time.Duration { return h.ttl }
@@ -647,13 +655,15 @@ func (h *Host) Start(ctx context.Context) {
 	h.lastBeat = h.now()
 	loopCtx, cancel := context.WithCancel(ctx)
 	h.cancel = cancel
+	asks := make(chan struct{}, 1)
+	h.resweep = asks
 	h.mu.Unlock()
 
 	h.renewNodePresence(ctx)
 	h.Sweep(ctx)
 
 	h.wg.Go(func() { h.heartbeatLoop(loopCtx) })
-	h.wg.Go(func() { h.sweepLoop(loopCtx) })
+	h.wg.Go(func() { h.sweepLoop(loopCtx, asks) })
 
 	log.InfoContext(ctx, "seat_host_started", "node", h.nodeID, "owner", h.owner, "held", len(h.Held()))
 }
@@ -729,6 +739,7 @@ func (h *Host) Stop(ctx context.Context) {
 		return
 	}
 	h.running = false
+	h.resweep = nil
 	cancel := h.cancel
 	h.cancel = nil
 	h.mu.Unlock()
@@ -738,19 +749,20 @@ func (h *Host) Stop(ctx context.Context) {
 	}
 	h.wg.Wait()
 
-	// A BUDGET OF ITS OWN, for the reason Node.Drain gives: Stop is reached
-	// on a shutdown path whose context is routinely already cancelled, and
-	// a give-back that inherits it releases nothing — every seat then sits
-	// dark for a full TTL instead of being taken over at once, and this
-	// node's presence lingers so peers keep reserving capacity for it.
+	// NOT THE CALLER'S CONTEXT, for the reason Node.Drain gives: Stop is
+	// reached on a shutdown path whose context is routinely already
+	// cancelled, and a give-back that inherits it releases nothing — every
+	// seat then sits dark for a full TTL instead of being taken over at
+	// once, and this node's presence lingers so peers keep reserving
+	// capacity for it.
 	//
-	// FROM THIS HOST'S TTL and not from [SeatLeaseTTL], for the reason
-	// [HeartbeatRatio] gives: a deployment that shortened its lease to ten
-	// seconds would otherwise spend fifteen giving the seats back, which
-	// is a budget strictly outside the lease it is racing.
-	releaseCtx, cancel2 := context.WithTimeout(
-		context.WithoutCancel(ctx), h.ttl/HeartbeatRatio)
-	defer cancel2()
+	// ON THE STOP'S ONE ALLOWANCE instead ([WithinStop]): the engine's, when
+	// its stop is what reached here, or one begun from THIS HOST'S TTL —
+	// never [SeatLeaseTTL], for the reason [HeartbeatRatio] gives: a
+	// deployment that shortened its lease to ten seconds would otherwise
+	// spend fifteen giving the seats back, an allowance strictly outside the
+	// lease it is racing. Every give-back below is a [StopStep] of it.
+	releaseCtx := WithinStop(context.WithoutCancel(ctx), h.ttl)
 	h.ReleaseAll(releaseCtx, ReasonDrain)
 	h.releaseNodePresence(releaseCtx)
 
@@ -770,15 +782,16 @@ func (h *Host) Stop(ctx context.Context) {
 	log.InfoContext(ctx, "seat_host_stopped", "node", h.nodeID)
 }
 
-// ReleaseAll hands every seat back — each one the moment IT goes idle.
+// ReleaseAll hands every seat back, all at once.
 //
 // Concurrently, not one after another, and the difference is the whole point
-// of a graceful drain. A voluntary release waits for that seat's in-flight
-// turn under a bounded timeout; run in sequence, a node holding a dozen
-// seats pays that timeout a dozen times over, and the eleventh seat stays
-// dark for the whole procession even though it went idle first. Released
-// together, each seat leaves as soon as its own turn finishes and the drain
-// costs one timeout rather than N.
+// of a graceful drain. A seat's teardown takes time of its own — its MCP
+// children's shutdown ladder, its last memory flush — so in sequence a node
+// holding a dozen seats pays it a dozen times over, and the eleventh seat
+// stays dark for the whole procession. Released together, the drain costs the
+// slowest teardown rather than the sum, and the give-backs, which share a
+// stop's one allowance ([StopBudget]), are charged once for the time they
+// overlap.
 //
 // Deliberately uncapped, unlike claiming. The claim-rate limit is sized by
 // the cost of an MCP SPAWN on the node taking a seat on; letting go costs a
@@ -866,7 +879,13 @@ func (h *Host) finishRelease(ctx context.Context, handle string, entry *heldSeat
 				"Teardown is retried every heartbeat")
 		return false
 	}
-	released, err := h.backend.Release(ctx, entry.lease.Resource, h.owner, entry.lease.Epoch)
+	// THE GIVE-BACK IS ONE STEP OF A STOP, when a stop is what released the
+	// seat ([StopStep]); the teardown above is not, because a teardown that
+	// cannot be proven keeps the lease, and cutting it short for time would
+	// keep it for a TTL.
+	stepCtx, done := StopStep(ctx)
+	defer done()
+	released, err := h.backend.Release(stepCtx, entry.lease.Resource, h.owner, entry.lease.Epoch)
 	if err != nil {
 		// The seat IS torn down locally; the row simply lapses on its own.
 		// Nothing here is worth failing a drain.
@@ -880,7 +899,7 @@ func (h *Host) finishRelease(ctx context.Context, handle string, entry *heldSeat
 		// this node's row still counted the seat it gave back, every peer
 		// read the fleet as full and the seat sat unclaimed. A no-op while
 		// draining, which drops presence instead.
-		h.renewNodePresence(ctx)
+		h.renewNodePresence(stepCtx)
 	}
 	return released
 }

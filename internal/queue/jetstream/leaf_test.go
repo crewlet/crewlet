@@ -23,6 +23,7 @@ import (
 // to know the queue it gets behaves identically is to run every case the
 // member's queue runs against it.
 func TestConformanceThroughALeaf(t *testing.T) {
+	t.Parallel()
 	queuetest.RunWith(t, func(t *testing.T, opts ...queue.Option) queue.EventQueue {
 		return openLeafForTest(t, Config{}, opts...)
 	}, capabilitiesFor(func(t *testing.T, cfg Config) *Queue { return openLeafForTest(t, cfg) }))
@@ -39,7 +40,7 @@ func openLeafForTest(t *testing.T, cfg Config, opts ...queue.Option) *Queue {
 	memberCfg := cfg
 	memberCfg.ServerName = "member"
 	memberCfg.LeafHost = "127.0.0.1"
-	memberCfg.LeafPort = unusedPort(t)
+	memberCfg.LeafPort = AnyPort
 	// A MEMBER THAT SERVES LEAVES PERSISTS — it is refused otherwise — and
 	// the leaf creates what it is first to use in the file store to match.
 	if memberCfg.StoreDir == "" {
@@ -53,7 +54,7 @@ func openLeafForTest(t *testing.T, cfg Config, opts ...queue.Option) *Queue {
 
 	leafCfg := cfg
 	leafCfg.ServerName = "leaf"
-	leafCfg.LeafURLs = []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", memberCfg.LeafPort)}
+	leafCfg.LeafURLs = []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", member.LeafPort())}
 	leaf, err := StartServer(t.Context(), leafCfg)
 	if err != nil {
 		t.Fatalf("start the leaf: %v", err)
@@ -62,8 +63,10 @@ func openLeafForTest(t *testing.T, cfg Config, opts ...queue.Option) *Queue {
 	return clientUnderTest(t, leaf, member, opts...)
 }
 
-// unusedPort is a loopback port nothing held a moment ago. The race to bind
-// it is the test's to lose, and the member's own probe names it if it does.
+// unusedPort is a loopback port nothing held a moment ago, for a leaf that has
+// to find NO member listening. A member is never started on one: it binds
+// [AnyPort] and is asked which port that was, because a port reserved here is
+// released before the member binds it and anything else may take it between.
 func unusedPort(t *testing.T) int {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -132,21 +135,108 @@ func TestEveryMemberServesTheFleetsDomain(t *testing.T) {
 	}
 }
 
+// A MEMBER ASKED FOR ANY LEAF PORT BINDS ONE AND SAYS WHICH, and the port it
+// names is the one accepting. A member with no leaf listener names none, and a
+// negative port other than [AnyPort] is refused rather than handed to
+// nats-server as a port to bind.
+func TestAMemberOnAnyLeafPortSaysWhichItBound(t *testing.T) {
+	t.Parallel()
+	member, err := StartServer(t.Context(), testTimings(Config{ServerName: "member",
+		LeafHost: "127.0.0.1", LeafPort: AnyPort, StoreDir: t.TempDir()}))
+	if err != nil {
+		t.Fatalf("start a member on any leaf port: %v", err)
+	}
+	t.Cleanup(member.Shutdown)
+	port := member.LeafPort()
+	if port <= 0 {
+		t.Fatalf("a member asked for any leaf port names %d, so no leaf can be "+
+			"told where to join it", port)
+	}
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 5*time.Second)
+	if err != nil {
+		t.Fatalf("the leaf port the member named, %d, accepts nothing: %v", port, err)
+	}
+	_ = conn.Close()
+
+	plain, err := StartServer(t.Context(), testTimings(Config{}))
+	if err != nil {
+		t.Fatalf("start a member with no leaf listener: %v", err)
+	}
+	t.Cleanup(plain.Shutdown)
+	if got := plain.LeafPort(); got != 0 {
+		t.Errorf("a member with no leaf listener names leaf port %d", got)
+	}
+
+	if _, _, err := embeddedOptions(Config{ServerName: "member", LeafPort: -2,
+		StoreDir: t.TempDir()}, systemUser{}); err == nil {
+		t.Error("a leaf port of -2 was accepted")
+	}
+}
+
+// A MEMBER WHOSE LEAF PORT SOMEBODY HOLDS IS REFUSED AS ITS LEAF PORT — named
+// by the setting and the sentinel of the leaf listener, never the route
+// listener's. It shared [ErrRoutePortTaken] once, and a member with no cluster
+// block at all was told its "cluster route port" was taken.
+func TestATakenLeafPortIsNamedAsTheLeafPort(t *testing.T) {
+	t.Parallel()
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("hold a port: %v", err)
+	}
+	defer held.Close()
+	port := held.Addr().(*net.TCPAddr).Port
+
+	member, err := StartServer(t.Context(), testTimings(Config{ServerName: "member",
+		LeafHost: "127.0.0.1", LeafPort: port, StoreDir: t.TempDir()}))
+	if err == nil {
+		member.Shutdown()
+		t.Fatalf("a member started on leaf port %d, which something else holds", port)
+	}
+	if !errors.Is(err, ErrLeafPortTaken) {
+		t.Errorf("a held leaf port answered %v, want %v", err, ErrLeafPortTaken)
+	}
+	if errors.Is(err, ErrRoutePortTaken) {
+		t.Errorf("a held leaf port is reported as a route port: %v", err)
+	}
+	if want := fmt.Sprintf("stream.leaf.port %d", port); !strings.Contains(err.Error(), want) {
+		t.Errorf("the refusal does not name %q, the setting to change: %v", want, err)
+	}
+}
+
 // A LEAF THAT CANNOT REACH A MEMBER SAYS SO, rather than booting and then
-// timing out on its first stream with a message about the stream.
+// timing out on its first stream with a message about the stream — and what
+// it says is the SETTING to fix.
+//
+// That sentence is reached only when the leaf's own wait runs out — sixty
+// seconds in production — so the wait is shortened on the server itself and
+// the caller's context is left long. Cut short by the caller instead, which is
+// how this case used to run, the wait ends with the caller's deadline and
+// names nothing: and the assertion then read "leaf", which every error this
+// wait can return contains, so it passed whatever the message said.
 func TestALeafWithNoMemberToReachNamesTheLink(t *testing.T) {
 	t.Parallel()
-	ctx, cancel := context.WithTimeout(t.Context(), clusterReadyTimeout/10)
-	defer cancel()
-	_, err := Open(ctx, testTimings(Config{
-		ServerName: "leaf",
+	cfg := testTimings(Config{
+		ServerName: "edge-1",
 		LeafURLs:   []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", unusedPort(t))},
-	}))
+	})
+	e, err := startEmbedded(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("start the leaf: %v", err)
+	}
+	t.Cleanup(e.shutdown)
+	e.ready = readiness{timeout: 300 * time.Millisecond, poll: 10 * time.Millisecond,
+		ask: 100 * time.Millisecond}
+
+	q, err := newQueueOn(t.Context(), cfg, e, false, queue.Resolve())
 	if err == nil {
+		_ = q.Stop(context.WithoutCancel(t.Context()))
 		t.Fatal("a leaf with no member listening opened a queue")
 	}
-	if !strings.Contains(err.Error(), "leaf") {
-		t.Errorf("the refusal %q does not name the leaf link", err)
+	for _, want := range []string{"stream.leaf.urls", "made no link"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %q, so an operator is not told "+
+				"which setting reaches no member:\n%v", want, err)
+		}
 	}
 }
 

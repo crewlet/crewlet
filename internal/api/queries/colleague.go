@@ -71,7 +71,7 @@ func (s Sources) colleague(ctx context.Context, p Params) (any, error) {
 			"most %d — send the name, not the sentence around it",
 			ErrBadParams, len(text), ColleagueQueryMax)
 	}
-	corpus := builtin.Corpus(s.organization())
+	corpus := builtin.Corpus(s.organization(), s.Env)
 	if operatorFrom(ctx) == "" {
 		for i := range corpus {
 			corpus[i].External = nil

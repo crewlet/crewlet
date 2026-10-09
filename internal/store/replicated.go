@@ -169,7 +169,7 @@ func (d *DB) OpenReplicated(ctx context.Context, logs int) (*DB, error) {
 		}
 		return held, nil
 	}
-	db, err := openEstate(ctx, EstateReplicated, path, d.replicatedOptions(logs), &d.caps)
+	db, err := openEstate(ctx, EstateReplicated, path, d.replicatedOptions(logs))
 	if err != nil {
 		return nil, fmt.Errorf("store: open the replicated estate: %w", err)
 	}
@@ -332,9 +332,9 @@ func (h ReplicatedHandle) Writer(ctx context.Context) (*Writer, error) {
 	return db.Writer(ctx)
 }
 
-// Caps answers the open file's probe, and the zero value while none is open:
-// the caller is sizing a statement, not reading state, and [RowsPerInsert]
-// reads a zero limit as one row per statement.
+// Caps answers the open file's capabilities ([DB.Caps]), and the zero value
+// while none is open: the caller is sizing a statement, not reading state, and
+// [RowsPerInsert] reads a zero limit as one row per statement.
 func (h ReplicatedHandle) Caps() Capabilities {
 	db, err := h.DB()
 	if err != nil {
@@ -367,7 +367,7 @@ func (r ReplicatedReader) Read(ctx context.Context, fn func(*sql.Tx) error) erro
 	return r.h.Read(ctx, fn)
 }
 
-// Caps is [ReplicatedHandle.Caps]: the open file's probe, or the zero value
-// while none is open. A reader sizes its own statements by it, which is why a
-// read handle carries it.
+// Caps is [ReplicatedHandle.Caps]: the open file's capabilities, or the zero
+// value while none is open. A reader sizes its own statements by it, which is
+// why a read handle carries it.
 func (r ReplicatedReader) Caps() Capabilities { return r.h.Caps() }

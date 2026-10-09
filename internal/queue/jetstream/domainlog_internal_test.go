@@ -41,6 +41,16 @@ func (f *notYetVisibleJS) Stream(context.Context, string) (jetstream.Stream, err
 	return nil, nil
 }
 
+// shortReadBack is the production timing with a read-back window short enough
+// for a case to wait out, and a placement cadence to match: what the cases
+// below discriminate on is how many looks the window held and what the last
+// one said, which is the same at a tenth of a second as at five.
+func shortReadBack() jsprovision.Timing {
+	t := jsprovision.Clustered(false).Timing()
+	t.ReadBack, t.PlacementRetry = 100*time.Millisecond, 5*time.Millisecond
+	return t
+}
+
 // A CREATE THAT HAS NOT PROPAGATED YET IS WAITED OUT, not reported.
 //
 // This is the failure it was found by: a clustered boot died with `open the
@@ -53,7 +63,7 @@ func TestALookupWaitsOutACreateThatHasNotPropagated(t *testing.T) {
 	t.Parallel()
 	js := &notYetVisibleJS{}
 	js.notFound.Store(3)
-	q := &Queue{js: js}
+	q := &Queue{js: js, timing: shortReadBack()}
 
 	if _, err := q.openProvisioned(t.Context(), "CREWLET_TRACKER_VECTORS"); err != nil {
 		t.Fatalf("a stream that appeared on the fourth look was reported as %v", err)
@@ -75,9 +85,10 @@ func TestAMissingStreamIsStillReportedAsMissing(t *testing.T) {
 	t.Parallel()
 	js := &notYetVisibleJS{}
 	// More not-founds than the budget can hold at the retry cadence, so the
-	// wait runs out rather than succeeding late.
+	// wait runs out rather than succeeding late — at [shortReadBack]'s
+	// window, which is the half this case waits out.
 	js.notFound.Store(1 << 30)
-	q := &Queue{js: js}
+	q := &Queue{js: js, timing: shortReadBack()}
 
 	_, err := q.openProvisioned(t.Context(), "CREWLET_NOTHING")
 	if !errors.Is(err, jetstream.ErrStreamNotFound) {
@@ -222,6 +233,7 @@ func TestAConsumerFoundByTheReadBackIsNotReportedAsCreated(t *testing.T) {
 type heldCreateJS struct {
 	jetstream.JetStream
 	lookups int
+	creates atomic.Int32
 }
 
 func (f *heldCreateJS) Consumer(context.Context, string, string) (jetstream.Consumer, error) {
@@ -234,10 +246,14 @@ func (f *heldCreateJS) Consumer(context.Context, string, string) (jetstream.Cons
 	return foundConsumer{}, nil
 }
 
-func (f *heldCreateJS) CreateConsumer(context.Context, string,
-	jetstream.ConsumerConfig) (jetstream.Consumer, error) {
+// CreateConsumer is HELD: no reply comes, and the request ends when its own
+// term does — the deadline the caller set, never one the server chose.
+func (f *heldCreateJS) CreateConsumer(ctx context.Context, _ string,
+	_ jetstream.ConsumerConfig) (jetstream.Consumer, error) {
 
-	return nil, context.DeadlineExceeded
+	f.creates.Add(1)
+	<-ctx.Done()
+	return nil, ctx.Err()
 }
 
 // foundConsumer is the consumer the read-back finds: its state AGREES with a
@@ -269,10 +285,27 @@ func (foundConsumer) Info(context.Context) (*jetstream.ConsumerInfo, error) {
 // failing over a consumer that was there, which is the failure this whole
 // change exists to remove and the one [Queue.ensureDurableConsumer] has always
 // handled for mailbox consumers.
+//
+// # Why the budget is a third of a second
+//
+// The read-back runs only once the create's WHOLE budget is spent: a held
+// create is an unanswered request, so [jsprovision.Timing.Place] asks it again
+// until the budget ends, and only then is the question handed to the read-back.
+// At the clustered budget that is two minutes of a case doing nothing, and
+// handing the open a caller's deadline instead would not reach the branch
+// honestly — the read-back runs on that same context and would find it spent.
+// So the queue's own timing is shortened, keeping the one relation that makes
+// the re-ask observable: the budget holds several terms and the pauses between
+// them, so a create that is asked once and never again is told apart from one
+// re-asked until the budget ran out.
 func TestAHeldConsumerCreateIsReadBackRatherThanReported(t *testing.T) {
 	t.Parallel()
 	js := &heldCreateJS{}
-	q := &Queue{js: js, cfg: Config{ClusterName: "crewlet-test"}, log: slog.Default()}
+	timing := jsprovision.Clustered(true).Timing()
+	timing.Budget, timing.AskTerm, timing.ReAsk =
+		300*time.Millisecond, 50*time.Millisecond, 20*time.Millisecond
+	q := &Queue{js: js, cfg: Config{ClusterName: "crewlet-test"}, log: slog.Default(),
+		timing: timing}
 
 	cons, err := q.DomainConsumer(t.Context(), "CREWLET_TRACKER_LOG", "node-a", 0)
 	if err != nil {
@@ -282,9 +315,113 @@ func TestAHeldConsumerCreateIsReadBackRatherThanReported(t *testing.T) {
 	if cons == nil {
 		t.Fatal("no consumer came back")
 	}
+	// EXHAUSTED, NOT ANSWERED: a held request is one nobody replied to, so
+	// it is asked again until the budget ends — one create would be a
+	// branch reached by something other than the budget running out.
+	if got := js.creates.Load(); got < 2 {
+		t.Errorf("the held create was sent %d time(s); an unanswered create is "+
+			"asked again until its budget is spent", got)
+	}
 	if js.lookups < 2 {
 		t.Errorf("the consumer was looked up %d time(s); the read-back after "+
 			"the timed-out create never ran", js.lookups)
+	}
+}
+
+// unsettledLookupJS is a metadata group that answers no read of the consumer
+// until the consumer's create reaches it: every lookup is DROPPED — no reply,
+// so it ends when its own term does — and the create is what settles the
+// question. It records how long the create was given to be answered in.
+type unsettledLookupJS struct {
+	jetstream.JetStream
+
+	lookups int
+	creates int
+	// left is the time the create's context had left when the create
+	// arrived — negative for one handed no deadline at all.
+	left time.Duration
+	made *jetstream.ConsumerInfo
+}
+
+func (f *unsettledLookupJS) Consumer(ctx context.Context, _, _ string) (jetstream.Consumer, error) {
+	f.lookups++
+	if f.made == nil {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return reportingConsumer{info: f.made}, nil
+}
+
+func (f *unsettledLookupJS) CreateConsumer(ctx context.Context, _ string,
+	cfg jetstream.ConsumerConfig) (jetstream.Consumer, error) {
+
+	f.creates++
+	f.left = -1
+	if deadline, ok := ctx.Deadline(); ok {
+		f.left = time.Until(deadline)
+	}
+	if err := ctx.Err(); err != nil {
+		// A REQUEST ON A SPENT CONTEXT NEVER LEAVES THE CLIENT: nats.go
+		// answers it with the context's own error and sends nothing.
+		return nil, err
+	}
+	f.made = &jetstream.ConsumerInfo{Config: cfg}
+	return reportingConsumer{info: f.made}, nil
+}
+
+// AN EXHAUSTED LOOKUP LEAVES THE CREATE ITS WHOLE BUDGET.
+//
+// # What it was
+//
+// The create's deadline was derived BEFORE the lookup, so it ran while the
+// lookup did, and a lookup nobody answered spent up to its whole ceiling of the
+// create's budget. On a solo broker the two are equal — thirty seconds each —
+// so a lookup asked until its ceiling ran out handed the create a context that
+// had already expired: the create never reached the broker, the read-back found
+// nothing, and the open failed reporting a consumer that "is not there" over a
+// create that was never sent. On a fleet the create kept ninety seconds of the
+// two minutes [jsprovision.Budget] promises it. Every other create site derives
+// the create's deadline after its lookup returns, which is what the lookup's
+// own comment already said this one did.
+//
+// # Staged where the failure is total, scaled down
+//
+// Budget equal to Lookup, as production's solo timing has them, so a create
+// whose budget the lookup shared is handed nothing at all — and the time the
+// create was handed is asserted too, which also catches the share a fleet's
+// larger budget would lose. The read term and the pause are a fraction of the
+// ceiling so the lookup is asked several times before it gives up: EXHAUSTED
+// rather than answered, which is the only way the create reaches the budget
+// question at all. The group answers nothing until the create arrives, as one
+// that is still forming does.
+func TestAnExhaustedLookupLeavesTheCreateItsWholeBudget(t *testing.T) {
+	t.Parallel()
+	timing := jsprovision.Clustered(false).Timing()
+	timing.Budget, timing.Lookup = 500*time.Millisecond, 500*time.Millisecond
+	timing.ReadTerm, timing.ReAsk = 50*time.Millisecond, 20*time.Millisecond
+	timing.ReadBack = 200 * time.Millisecond
+	js := &unsettledLookupJS{}
+	q := &Queue{js: js, log: slog.Default(), timing: timing}
+
+	if _, err := q.DomainConsumer(t.Context(), "CREWLET_TRACKER_LOG", "node-a", 0); err != nil {
+		t.Fatalf("an open whose lookup went unanswered failed rather than "+
+			"creating the consumer: %v", err)
+	}
+	// HALF THE LOOKUP'S CEILING AS SLACK: a create derived after the lookup
+	// arrives with all but a scheduling delay of its budget left, and one
+	// whose budget ran beside an exhausted lookup arrives with at most the
+	// budget less the whole ceiling.
+	if floor := timing.Budget - timing.Lookup/2; js.left < floor {
+		t.Errorf("the create was handed %v of its %v budget, want at least %v — "+
+			"the lookup before it spent the rest", js.left, timing.Budget, floor)
+	}
+	if js.creates != 1 {
+		t.Errorf("the consumer was created %d time(s), want once", js.creates)
+	}
+	if js.lookups < 2 {
+		t.Errorf("the consumer was looked up %d time(s) before the create; the "+
+			"lookup is asked again until its ceiling is spent, and once means "+
+			"this case never reached the exhaustion it is about", js.lookups)
 	}
 }
 
@@ -785,9 +922,13 @@ func (f *firstReadJS) CreateConsumer(_ context.Context, _ string,
 func TestTheFirstSequenceIsAReadAskedOnlyWhereItCounts(t *testing.T) {
 	t.Parallel()
 	// A LOOKUP CEILING FAR BELOW THE PROVISIONING BUDGET, so which of the
-	// two bounded the read is visible in the deadline it carried.
+	// two bounded the read is visible in the deadline it carried. Every
+	// other duration is production's, which is what the deadlines are read
+	// against.
 	const ceiling = 3 * time.Second
-	cfg := Config{ClusterName: "crewlet-test", LookupBudget: ceiling}
+	cfg := Config{ClusterName: "crewlet-test"}
+	timing := jsprovision.Clustered(true).Timing()
+	timing.Lookup = ceiling
 	name := domainConsumerName("CREWLET_PAGES_LOG", "node-0")
 
 	t.Run("placed at the first survivor", func(t *testing.T) {
@@ -796,7 +937,7 @@ func TestTheFirstSequenceIsAReadAskedOnlyWhereItCounts(t *testing.T) {
 			Config:    domainConsumerConfig(name, 2),
 			Delivered: jetstream.SequenceInfo{Stream: 4},
 			AckFloor:  jetstream.SequenceInfo{Stream: 4}}}
-		q := &Queue{js: js, cfg: cfg, log: slog.Default()}
+		q := &Queue{js: js, cfg: cfg, log: slog.Default(), timing: timing}
 		if _, err := q.DomainConsumer(t.Context(), "CREWLET_PAGES_LOG", "node-0", 2); err != nil {
 			t.Fatalf("open: %v", err)
 		}
@@ -812,6 +953,10 @@ func TestTheFirstSequenceIsAReadAskedOnlyWhereItCounts(t *testing.T) {
 			if left := time.Until(js.until[i]); left > ceiling {
 				t.Errorf("ask %d was given %v, past the %v lookup ceiling — it "+
 					"is bounded as a write", i+1, left, ceiling)
+			} else if left > timing.ReadTerm {
+				t.Errorf("ask %d was given %v, past the %v read term — a "+
+					"read the server dropped is held for a write's term "+
+					"rather than asked again", i+1, left, timing.ReadTerm)
 			}
 		}
 		if js.deletes != 0 {
@@ -827,7 +972,7 @@ func TestTheFirstSequenceIsAReadAskedOnlyWhereItCounts(t *testing.T) {
 			Delivered:     jetstream.SequenceInfo{Stream: 4},
 			AckFloor:      jetstream.SequenceInfo{Stream: 2},
 			NumAckPending: 2}}
-		q := &Queue{js: js, cfg: cfg, log: slog.Default()}
+		q := &Queue{js: js, cfg: cfg, log: slog.Default(), timing: timing}
 		if _, err := q.DomainConsumer(t.Context(), "CREWLET_PAGES_LOG", "node-0", 4); err != nil {
 			t.Fatalf("open: %v", err)
 		}

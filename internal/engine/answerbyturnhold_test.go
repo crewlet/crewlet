@@ -33,6 +33,7 @@ import (
 // resumed it a second time, with Q1's answer presented as Q2's. It names its
 // question now, and is spent as not_awaiting.
 func TestAnAnswerByTurnHeldBehindItsRunsNextJobDoesNotAnswerItsNextQuestion(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	q := memory.New()
 	if err := q.Start(ctx); err != nil {

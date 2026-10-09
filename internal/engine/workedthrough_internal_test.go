@@ -15,6 +15,7 @@ import (
 // would ever match it — a guard that cannot fire, passing every test that
 // stubs one side.
 func TestTheWorkedThroughRecordAndTheDropAgreeOnAMessagesKey(t *testing.T) {
+	t.Parallel()
 	message := func(ts string) *events.Event {
 		return events.New(types.ExternalNotification{
 			NotificationSource: "mattermost", SourceEventType: "message",

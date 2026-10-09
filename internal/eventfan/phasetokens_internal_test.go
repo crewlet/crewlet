@@ -12,15 +12,13 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // spendNode is one member holding spend records and answering the scatter.
 func spendNode(t *testing.T, b *memory.Broker, id string) (*store.EventLog, queue.EventQueue) {
 	t.Helper()
-	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), id+".db"), store.Options{})
-	if err != nil {
-		t.Fatalf("open %s: %v", id, err)
-	}
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), id+".db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	q := memberQueue(t, b)
 	stop, err := Serve(t.Context(), q, id, db.Events())

@@ -2,7 +2,6 @@ package kv
 
 import (
 	"fmt"
-	"net"
 	"testing"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -23,6 +22,7 @@ import (
 // holds what is to run every case a member's store runs against one. The
 // queue's own half is internal/queue/jetstream's TestConformanceThroughALeaf.
 func TestContractThroughALeaf(t *testing.T) {
+	t.Parallel()
 	client := leafClient(t)
 	coordtest.Run(t, func(t *testing.T) coord.Backend {
 		return openStoreVia(t, client, coordtest.LongTTL)
@@ -33,6 +33,7 @@ func TestContractThroughALeaf(t *testing.T) {
 // secrets, whose every write is a compare-and-set a leaf's request has to
 // reach a member's stream leader to win or lose.
 func TestFleetContractThroughALeaf(t *testing.T) {
+	t.Parallel()
 	client := leafClient(t)
 	coordtest.RunFleet(t, func(t *testing.T) coord.Fleet {
 		return openFleetVia(t, client, fmt.Sprintf("f%d", bucketSeq.Add(1)))
@@ -44,14 +45,7 @@ func TestFleetContractThroughALeaf(t *testing.T) {
 // a leaf's broker carries across its link.
 func leafClient(t *testing.T) jetstream.JetStream {
 	t.Helper()
-	port := unusedPort(t)
-	// A MEMBER THAT SERVES LEAVES PERSISTS, or it is refused.
-	member, err := js.StartServer(t.Context(), js.Config{ServerName: "member",
-		LeafHost: "127.0.0.1", LeafPort: port, StoreDir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("start the member: %v", err)
-	}
-	t.Cleanup(member.Shutdown)
+	port := leafMember(t)
 	leaf, err := js.StartServer(t.Context(), js.Config{ServerName: "leaf",
 		LeafURLs: []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", port)}})
 	if err != nil {
@@ -70,14 +64,23 @@ func leafClient(t *testing.T) jetstream.JetStream {
 	return client
 }
 
-// unusedPort is a loopback port nothing held a moment ago. The race to bind
-// it is the test's to lose, and the member's own probe names it if it does.
-func unusedPort(t *testing.T) int {
+// leafMember starts a member serving leaves and returns the port its leaf
+// listener bound.
+//
+// ON [js.AnyPort], which the OS binds and the member names afterwards
+// ([js.Server.LeafPort]), so nothing else can take the port between its
+// choosing and its binding — in this binary, most likely one of the cluster
+// cases running beside these. It used to reserve a loopback port nothing held
+// a moment ago and name it, and to retry on another whenever the member's own
+// probe found it taken: a retry for a race this way has no window for.
+func leafMember(t *testing.T) int {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	// A MEMBER THAT SERVES LEAVES PERSISTS, or it is refused.
+	member, err := js.StartServer(t.Context(), js.Config{ServerName: "member",
+		LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: t.TempDir()})
 	if err != nil {
-		t.Fatalf("find a free port: %v", err)
+		t.Fatalf("start a member serving leaves: %v", err)
 	}
-	defer l.Close()
-	return l.Addr().(*net.TCPAddr).Port
+	t.Cleanup(member.Shutdown)
+	return member.LeafPort()
 }

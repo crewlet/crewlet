@@ -17,6 +17,7 @@ import (
 // with a fresh one and broke every delivery in flight until the config
 // caught up.
 func TestAProvisioningRunResolvesThroughTheSecretStore(t *testing.T) {
+	t.Parallel()
 	cfg := bootstrapWithKeyring(t, "k1")
 	if _, errs, err := secretsCmd(t, cfg, "set", "GITLAB_SIGNING_SECRET",
 		"-value", "whsec_c3RvcmVkLXNpZ25pbmcta2V5LW9mLTMyLWJ5dGVzIQ=="); err != nil {

@@ -30,6 +30,7 @@ import (
 // seat silently loses its checkout the moment a coding agent asks a question,
 // which is the case a paused box exists for.
 func TestTheSeatsPauseOverrideDistinguishesInheritFromNever(t *testing.T) {
+	t.Parallel()
 	never := 0.0
 	held := 600.0
 
@@ -275,6 +276,7 @@ roles:
 // named a variable in role.sandbox.env meant that value — including the
 // deliberate choice to point one seat's coding runs at a different account.
 func TestTheOperatorsSandboxEnvWinsOverTheResolvedCredential(t *testing.T) {
+	t.Parallel()
 	got := underlay(
 		map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "the operator's own"},
 		map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "resolved", "OTHER": "added"},
@@ -385,6 +387,7 @@ func TestTheDoubleAnswersEveryPlacement(t *testing.T) {
 // a record that is not active is read by no recovery pass and polled by no
 // waiter, so the job ran on in a box billed to its provider's TTL.
 func TestAnUnrecordableSuspensionReclaimsTheRunsBox(t *testing.T) {
+	t.Parallel()
 	store := sandbox.NewCoordStore(memory.NewFleet())
 	provider := sandbox.NewFakeProvider()
 	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
@@ -625,6 +628,7 @@ func dayCap(n int) coord.Caps {
 // passes collected the same finished job and charged it to both counters: the
 // seat's allowance and the company's shrank by one run per retry.
 func TestARetriedCodingRunIsChargedToTheFleetOnce(t *testing.T) {
+	t.Parallel()
 	rig := newChargeRig(t, 1000, 0, 0, &movedSeat{fails: 2})
 	for attempt := range 2 {
 		if err := rig.deliver(t); !errors.Is(err, sandbox.ErrResumeUnavailable) {
@@ -653,6 +657,7 @@ func TestARetriedCodingRunIsChargedToTheFleetOnce(t *testing.T) {
 // had already used. Recorded, the next round is refused against the figure
 // that includes it.
 func TestAnOverCapCodingRunIsRecordedOnBothCounters(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name            string
 		orgCap, seatCap int
@@ -682,6 +687,7 @@ func TestAnOverCapCodingRunIsRecordedOnBothCounters(t *testing.T) {
 // again". Read the other way, the one company a cap is binding on is charged
 // for its over-cap run once per completion retry.
 func TestAnOverCapCodingRunIsChargedToTheFleetOnce(t *testing.T) {
+	t.Parallel()
 	rig := newChargeRig(t, 1000, 500, 0, &movedSeat{fails: 2})
 	for attempt := range 2 {
 		if err := rig.deliver(t); !errors.Is(err, sandbox.ErrResumeUnavailable) {
@@ -757,6 +763,7 @@ func TestACodingRunIsRefusedBelowTheBudgetFloor(t *testing.T) {
 // the seat, because a node that cannot reach a box must not delete the
 // subscriptions that run's completion and answer travel on.
 func TestRetiringASeatEndsItsRunsOrRefusesWithoutACoordinator(t *testing.T) {
+	t.Parallel()
 	fleet := memory.NewFleet()
 	store := sandbox.NewCoordStore(fleet)
 	if _, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{

@@ -162,6 +162,24 @@ func TestAPriorityListRecordsTheOrderItMoved(t *testing.T) {
 
 		t.Errorf("a re-ordered priority list recorded %s", got)
 	}
+
+	// AND THE FIRST WRITE, onto a person with no list at all, has a delta
+	// of its own: the applier compares the stored document with the
+	// record's, so the list arriving is recorded as the move it is rather
+	// than as the bare word "prioritised".
+	first := r.strings(`SELECT fields_json FROM tracker_history
+		WHERE kind = ? ORDER BY log_seq ASC LIMIT 1`, string(tracker.ChangePrioritised))
+	if len(first) == 0 {
+		t.Fatal("the first priorities write left no history row")
+	}
+	var moved map[string]tracker.Delta
+	if err := json.Unmarshal([]byte(first[0]), &moved); err != nil {
+		t.Fatalf("the first write's deltas %s: %v", first[0], err)
+	}
+	if got := moved["priorities"]; got.From != "" || got.To != "t-1, t-2" {
+		t.Errorf("the first priorities write recorded %s, want the list arriving "+
+			"from nothing", first[0])
+	}
 }
 
 // A DEPENDENCY RECORDS BOTH ENDS, EACH ON ITS OWN SUBJECT.

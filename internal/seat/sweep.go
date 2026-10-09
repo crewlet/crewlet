@@ -13,17 +13,60 @@ import (
 
 // sweepLoop re-evaluates placement on its own cadence, separate from the
 // heartbeat because the two answer different questions: the heartbeat keeps
-// what this node has, the sweep looks for what it should take.
-func (h *Host) sweepLoop(ctx context.Context) {
+// what this node has, the sweep looks for what it should take — and at once
+// when [Host.Resweep] asks, at most once per interval.
+//
+// THE INTERVAL STARTS AGAIN after an asked-for pass, so that pass stands in
+// for the tick rather than adding one beside it: a node's passes stay one per
+// interval apart but for the one an ask brings forward, which is what keeps
+// the per-sweep claim limit a bound on the rate — two passes' claims in any
+// interval at most, however many applies ask. An ask inside the interval of
+// the last one it honoured waits for the tick, which is the latency it would
+// have had without asking. Wall-clock, like the ticker, never the injected
+// clock the leases are judged by.
+func (h *Host) sweepLoop(ctx context.Context, asks <-chan struct{}) {
 	ticker := time.NewTicker(h.sweepEvery)
 	defer ticker.Stop()
+	var asked time.Time
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+		case <-asks:
+			if !asked.IsZero() && time.Since(asked) < h.sweepEvery {
+				continue
+			}
+			asked = time.Now()
+			ticker.Reset(h.sweepEvery)
 		}
 		h.safely("seat_sweep_tick_failed", func() { h.Sweep(ctx) })
+	}
+}
+
+// Resweep asks for a placement pass now rather than at the sweep's next tick,
+// without waiting for it. For a change to the seats [Config.Seats] answers —
+// a role added or removed, a placement moved, a node's first company — which
+// the next tick would otherwise be the first to see, up to [SweepInterval]
+// later with every new seat unclaimed and every removed one still held.
+//
+// DROPPED BY A HOST THAT IS NOT RUNNING, whose [Host.Start] begins with a pass
+// of its own over the seats as they are by then. Kept, an ask made before the
+// start — an apply while the engine around the host is still being built — was
+// taken straight after that first pass: a second pass with nothing new to see,
+// which spent the one ask an interval honours, so the first apply after the
+// boot waited for the tick. Coalesced while running: an ask that finds one
+// pending adds nothing, and one inside the interval of the last honoured waits
+// for the tick ([Host.sweepLoop]).
+func (h *Host) Resweep() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.resweep == nil {
+		return
+	}
+	select {
+	case h.resweep <- struct{}{}:
+	default:
 	}
 }
 
@@ -486,7 +529,18 @@ func (h *Host) tryClaim(ctx context.Context, handle string) (took bool, refused 
 	h.mu.Lock()
 	_, alreadyHeld := h.held[handle]
 	_, alreadyDead := h.undead[handle]
+	draining := h.draining
 	h.mu.Unlock()
+	// A DRAIN THAT BEGAN AFTER THIS PASS READ THE HOST ends the pass. The
+	// pass decided to claim from a host that was not draining, and a drain
+	// begun since has handed its seats back — under this same seat lock, so
+	// a claim waiting on it would take straight back the seat the drain had
+	// just let go, onto a node that is leaving: attached after the drain's
+	// quiesce, held through the teardown, and, when the stop cancelled the
+	// pass mid-acquire, left to lapse on its TTL.
+	if draining {
+		return false, "", true
+	}
 	if alreadyHeld || alreadyDead {
 		return false, "", false // re-claimed under us while we waited
 	}
@@ -513,13 +567,25 @@ func (h *Host) tryClaim(ctx context.Context, handle string) (took bool, refused 
 	if lease == nil {
 		return false, refused, false
 	}
-	log.InfoContext(ctx, "seat_claimed", "seat", handle, "epoch", lease.Epoch)
 
 	// Held from here so the heartbeat renews it while the hook runs, but
 	// ESTABLISHING so nothing may start a turn on it yet. See heldSeat.
+	//
+	// UNLESS A DRAIN BEGAN WHILE THE LEASE WAS BEING TAKEN, decided under
+	// the lock [Host.BeginDrain] sets its flag under: a seat entered here
+	// before the flag is one the drain's release reads in the held set and
+	// gives back, and once the flag is set nothing is entered — so no claim
+	// can slip between the drain's decision and its release. The lease
+	// just taken goes straight back, with nothing attached to it.
 	h.mu.Lock()
+	if h.draining {
+		h.mu.Unlock()
+		h.giveBackUnattached(ctx, handle, *lease)
+		return false, "", true
+	}
 	h.held[handle] = &heldSeat{lease: *lease, renewedAt: h.now(), establishing: true}
 	h.mu.Unlock()
+	log.InfoContext(ctx, "seat_claimed", "seat", handle, "epoch", lease.Epoch)
 
 	if err := h.notifyAcquire(ctx, handle, *lease); err != nil {
 		// A seat whose takeover pipeline failed must not stay claimed: it
@@ -534,7 +600,14 @@ func (h *Host) tryClaim(ctx context.Context, handle string) (took bool, refused 
 		// Fenced, and already inside this seat's lock. The reason tells the
 		// hook the seat was never fully established, so it must tolerate
 		// half-spawned children and a consumer that was never attached.
-		h.releaseLocked(ctx, handle, ReasonAcquireFailed)
+		//
+		// NOT ON THE PASS'S CONTEXT, for the reason [Host.Stop] gives: the
+		// commonest way a hook fails mid-pass is the host stopping, which
+		// cancels the pass, and a give-back that inherits that releases
+		// nothing — the seat then lapses on its TTL, outside the held set
+		// the stop gives back.
+		h.releaseLocked(WithinStop(context.WithoutCancel(ctx), h.ttl),
+			handle, ReasonAcquireFailed)
 		return false, "", false
 	}
 
@@ -556,6 +629,22 @@ func (h *Host) tryClaim(ctx context.Context, handle string) (took bool, refused 
 	// resolving to nothing — so counting it earlier meant a seat nothing
 	// runs still burned a claim slot and still logged as claimed.
 	return true, "", false
+}
+
+// giveBackUnattached hands back a seat lease this node took and never
+// entered in its held set, so nothing — no hook, no consumer — was attached to
+// it. The caller holds the seat's lock.
+//
+// On a context free of the pass's cancellation, bounded as every give-back of
+// a stop is ([WithinStop]), because the pass that took it is one a stopping
+// host cancels; past the bound the lease lapses on its TTL, the outcome of not
+// trying.
+func (h *Host) giveBackUnattached(ctx context.Context, handle string, lease coord.Lease) {
+	stepCtx, done := StopStep(WithinStop(context.WithoutCancel(ctx), h.ttl))
+	defer done()
+	if _, err := h.backend.Release(stepCtx, lease.Resource, h.owner, lease.Epoch); err != nil {
+		log.WarnContext(ctx, "seat_release_unavailable", "seat", handle, "error", err)
+	}
 }
 
 // candidate is a seat a pass may try, and the index of its group in the
@@ -998,6 +1087,9 @@ func (h *Host) releaseNodePresence(ctx context.Context) {
 }
 
 func (h *Host) giveUpLease(ctx context.Context, lease coord.Lease) {
+	// ONE STEP OF A STOP, when a stop is what asks ([StopStep]).
+	ctx, done := StopStep(ctx)
+	defer done()
 	if _, err := h.backend.Release(ctx, lease.Resource, h.owner, lease.Epoch); err != nil {
 		log.WarnContext(ctx, "node_presence_release_unavailable", "node", h.nodeID, "error", err)
 	}

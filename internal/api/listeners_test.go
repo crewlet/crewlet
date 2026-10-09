@@ -77,7 +77,7 @@ func listenerApp(t *testing.T, public bool, draining bool) *api.App {
 		OtelReceiver: otlpReceiver(t, "http://127.0.0.1:1"),
 		Bridge:       mcpbridge.New(mcpbridge.Options{Key: []byte("k"), BaseURL: "http://x"}),
 		Operator: operatorSurface(t, operator.Options{
-			Work: builtin.WorkDeps{Reader: stubWorkReader{}, Actor: operator.WorkActor(nil)},
+			Work: builtin.WorkDeps{Reader: stubWorkReader{}, Actor: operator.WorkActor(nil, nil)},
 		}),
 		Sources: queries.Sources{Company: active()},
 	})

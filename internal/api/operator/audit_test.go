@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -25,14 +26,24 @@ import (
 // auditedSurface is [actSurface] auditing into a log the case reads.
 func auditedSurface(t *testing.T) (*operator.Server, *auditLog) {
 	t.Helper()
+	return auditedSurfaceOver(t, boundChart, nil)
+}
+
+// auditedSurfaceOver is [auditedSurface] over chart, its bindings resolved
+// through lookup as [operator.Options.Env] resolves them.
+func auditedSurfaceOver(t *testing.T, chart func() *org.Organization,
+	lookup org.EnvLookup) (*operator.Server, *auditLog) {
+
+	t.Helper()
 	audit := &auditLog{}
 	work := &recordingWork{}
 	s := newSurface(t, operator.Options{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Writer: work.writer,
-			Actor: operator.WorkActor(boundChart),
+			Actor: operator.WorkActor(chart, lookup),
 		},
-		Org:   boundChart,
+		Org:   chart,
+		Env:   lookup,
 		Audit: audit,
 	})
 	return s, audit
@@ -110,13 +121,64 @@ func TestBothTransportsAuditAWriteAndNeitherAuditsARead(t *testing.T) {
 	}
 }
 
+// AND A BINDING THE SURFACE'S LOOKUP RESOLVES ADMITS AND RECORDS ITS PERSON, on
+// both transports. [operator.Options.Env] is the serving node's own chain, and
+// the binding here is a `${VAR}` set in no process: resolved from the process
+// environment instead, the founder's own press is refused as nobody's and
+// their assistant's write is recorded against no seat.
+func TestBothTransportsResolveABindingThroughTheSurfacesLookup(t *testing.T) {
+	t.Parallel()
+	const variable = "CREWLET_OPERATOR_TEST_HANDED_ADMISSION"
+	if _, set := os.LookupEnv(variable); set {
+		t.Fatalf("the premise: %s is set in no process", variable)
+	}
+	chart := func() *org.Organization {
+		o := &org.Organization{Name: "Nimbus", Roles: []*org.Role{
+			{Name: "Jane Founder", Kind: org.KindHuman,
+				Contact: &org.HumanContact{CrewletOperatorID: "${" + variable + "}"}},
+		}}
+		o.Normalize()
+		return o
+	}
+	s, audit := auditedSurfaceOver(t, chart, func(name string) (string, bool) {
+		if name == variable {
+			return "founder", true
+		}
+		return "", false
+	})
+
+	if status, answer := act(t, guarded(s, false), "founder-secret", tracker.CreateWorkItemTool,
+		"application/json", createBody(requestA)); status != http.StatusOK {
+		t.Fatalf("the bound person's press answered %d %v", status, answer)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if _, err := dialOperator(t, s, "founder").CallTool(ctx, &mcp.CallToolParams{
+		Name:      tracker.CreateWorkItemTool,
+		Arguments: map[string]any{"title": "Rotate the signing key", "project": "ENG"},
+	}); err != nil {
+		t.Fatalf("create over MCP: %v", err)
+	}
+
+	recorded := audit.published()
+	if len(recorded) != 2 {
+		t.Fatalf("two writes left %d audit records, want one each", len(recorded))
+	}
+	for _, ev := range recorded {
+		if p := payloadOf(t, ev); p.ActorSeat != "jane-founder" {
+			t.Errorf("the %s record names seat %q, want the person the surface's "+
+				"lookup binds the token to", p.Transport, p.ActorSeat)
+		}
+	}
+}
+
 // A SURFACE THAT WOULD WRITE AND RECORD NOTHING IS NOT BUILT. The audit is
 // required exactly where there is something to audit: a surface with nothing
 // to serve is nil and fine without one.
 func TestASurfaceWithToolsAndNoAuditIsRefused(t *testing.T) {
 	t.Parallel()
 	s, err := operator.New(operator.Options{
-		Work: builtin.WorkDeps{Reader: stubWorkReader{}, Actor: operator.WorkActor(nil)},
+		Work: builtin.WorkDeps{Reader: stubWorkReader{}, Actor: operator.WorkActor(nil, nil)},
 	})
 	if !errors.Is(err, operator.ErrNoAudit) || s != nil {
 		t.Fatalf("a surface with tools and no audit answered %v, %v; want ErrNoAudit", s, err)
@@ -233,7 +295,7 @@ func TestACallIsMadeAndAuditedAsTheSeatItWasAdmittedAs(t *testing.T) {
 			s := newSurface(t, operator.Options{
 				Work: builtin.WorkDeps{
 					Reader: stubWorkReader{}, Writer: work.writer,
-					Actor: operator.WorkActor(chart),
+					Actor: operator.WorkActor(chart, nil),
 				},
 				Org:   chart,
 				Audit: audit,

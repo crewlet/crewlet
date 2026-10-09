@@ -31,6 +31,7 @@ import (
 // for a requirement no case can discover, and it is deliberately the load
 // this test does not carry.
 func TestBacklogReportsMailThePublishAlreadyAcked(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	q := openForTest(t, Config{})
 	// Read through the SECOND client, because that is the connection the
@@ -100,6 +101,7 @@ func TestBacklogReportsMailThePublishAlreadyAcked(t *testing.T) {
 // is what sizing the read from the consumer and starting from the head used
 // to do, and this case fails every time against it.
 func TestBacklogNamesThisGroupsOwnMail(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	q := newQueue(t)
 	const topic = "seat.shared"
@@ -153,6 +155,7 @@ func TestBacklogNamesThisGroupsOwnMail(t *testing.T) {
 // subject still carries — so the window is closed at the bottom by this
 // group's own ack floor, and this case is what says so.
 func TestBacklogExcludesMailThisGroupHasAcked(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	q := newQueue(t)
 	const topic = "seat.finished"

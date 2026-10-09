@@ -77,6 +77,7 @@ func successorOf(t *testing.T, rig *coordRig, store PendingStore) *coordRig {
 // takes the answer off the row: a node that stops between a write that landed
 // and a spend that had not leaves nobody anything to spend.
 func TestADeclineSpendsTheReplyBeforeItsWrite(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	witness := &spentAtWrite{PendingStore: rig.pending, spent: func() int { return len(rig.spentDeliveries()) }}
 	rig.coordinator.pending = witness
@@ -98,6 +99,7 @@ func TestADeclineSpendsTheReplyBeforeItsWrite(t *testing.T) {
 // run's, and the next holder resumes the run with it — the reply reaches the
 // seat once, as the answer, and never as a message as well.
 func TestADeclineStoppedBeforeItsWriteHandsNothingBack(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	store := &refusingStore{inner: rig.pending}
 	rig.coordinator.pending = store
@@ -132,6 +134,7 @@ func TestADeclineStoppedBeforeItsWriteHandsNothingBack(t *testing.T) {
 // owes, so the next holder publishes the copy — once — before it opens the
 // seat's mailbox.
 func TestADeclineStoppedBeforeItsPublishIsFinishedByTheNextHolder(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	holds := rig.withHold()
 	r1 := owedAnAnswerItCannotResume(t, rig)
@@ -166,6 +169,7 @@ func TestADeclineStoppedBeforeItsPublishIsFinishedByTheNextHolder(t *testing.T) 
 // copy again, and it is THE SAME MESSAGE — the same id — which the inbox's
 // same-id dedupe and the completion ledger collapse into one.
 func TestADeclineStoppedBeforeItsClearRepublishesTheSameMessage(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	store := &refusingStore{inner: rig.pending}
 	rig.coordinator.pending = store
@@ -195,6 +199,7 @@ func TestADeclineStoppedBeforeItsClearRepublishesTheSameMessage(t *testing.T) {
 // the bound, every answer let go of while the broker or the store kept failing
 // grew the row by one more batch of copies.
 func TestADeclineWaitsForTheCopiesAlreadyOwed(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	store := &refusingStore{inner: rig.pending}
 	rig.coordinator.pending = store
@@ -253,6 +258,7 @@ func TestADeclineWaitsForTheCopiesAlreadyOwed(t *testing.T) {
 // is recorded and its first resume fails: it is retried on its own count, not
 // let go of on the strength of R1's.
 func TestASecondAnswerGetsItsOwnAttempts(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	r1 := owedAnAnswerItCannotResume(t, rig)
 	rig.failPublishes(errors.New("the broker is unreachable"))
@@ -277,6 +283,7 @@ func TestASecondAnswerGetsItsOwnAttempts(t *testing.T) {
 // Here the next reply is recorded and resumes the run to its end before the
 // retry that would have published R1's copy comes round.
 func TestARunThatEndsHandsBackWhatItStillOwes(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	r1 := owedAnAnswerItCannotResume(t, rig)
 	rig.failPublishes(errors.New("the broker is unreachable"))

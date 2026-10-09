@@ -17,6 +17,7 @@ import (
 // profile has to ALLOW it, not merely stop denying it — print mode never
 // prompts, and an unlisted permission-gated tool is refused.
 func TestNoShippedProfileDeniesTheWeb(t *testing.T) {
+	t.Parallel()
 	for _, name := range BuiltinNames() {
 		p, _ := Builtin(name)
 		for i, arg := range p.CompleteArgs {
@@ -71,6 +72,7 @@ func TestNoShippedProfileDeniesTheWeb(t *testing.T) {
 // HAS one would cut the web silently, which is the rule this file exists for,
 // so the carve-out is named rather than left to whoever reads the argv next.
 func TestOnlyTheProfileWithNoWebToolDeniesEveryTool(t *testing.T) {
+	t.Parallel()
 	for _, name := range BuiltinNames() {
 		p, _ := Builtin(name)
 		for _, arg := range p.CompleteArgs {
@@ -136,6 +138,7 @@ func TestThePiProfileAdmitsNothingFromTheHost(t *testing.T) {
 // own missing-credential failure, which is far enough to prove the flags were
 // understood.
 func TestThePiProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
+	t.Parallel()
 	binary, err := exec.LookPath("pi")
 	if err != nil {
 		t.Skip("no pi on PATH")
@@ -189,6 +192,7 @@ func allowsAfterFlag(args []string, flag string, want ...string) bool {
 // profile that admits them says why — the silent hole this field closes is a
 // profile whose isolation was assumed rather than declared.
 func TestEveryShippedProfileDeclaresItsLocalToolsStance(t *testing.T) {
+	t.Parallel()
 	for _, name := range BuiltinNames() {
 		if name == "custom" {
 			continue
@@ -215,6 +219,7 @@ func TestEveryShippedProfileDeclaresItsLocalToolsStance(t *testing.T) {
 // The vendors that take their policy from a file get a file that parses and
 // says what the profile claims: local tools off, web on.
 func TestSeededSettingsFilesAreValidJSONThatKeepsTheWebOn(t *testing.T) {
+	t.Parallel()
 	cases := map[string]struct {
 		path  string
 		scope SeedScope
@@ -267,6 +272,7 @@ func TestSeededSettingsFilesAreValidJSONThatKeepsTheWebOn(t *testing.T) {
 // generation, work files on every call, both rooted so an override cannot
 // write outside the seat.
 func TestSeedFilesLandInTheirScope(t *testing.T) {
+	t.Parallel()
 	p := fakeProvider(t, nil, map[string]any{
 		"seed_files": []any{
 			map[string]any{"path": ".vendor/settings.json", "content": `{"home":true}`},
@@ -299,6 +305,7 @@ func TestSeedFilesLandInTheirScope(t *testing.T) {
 // A seed path that escapes its scope is refused at validation — prune and
 // seed both root their targets, and an override is operator input.
 func TestASeedFileMayNotEscapeItsScope(t *testing.T) {
+	t.Parallel()
 	for _, path := range []string{"../outside.json", "/etc/settings.json"} {
 		_, err := New(Config{
 			Key: "sub", Agent: "custom", StateDir: t.TempDir(), Timeout: time.Second, MaxConcurrent: 1,
@@ -344,6 +351,7 @@ func nowEpoch() string { return strconv.FormatInt(time.Now().Unix(), 10) }
 // The evidence both probes turn on: a current epoch means the tool ran; a
 // refusal, an old epoch, or a plausible-looking guess does not.
 func TestReportsCurrentClockBelievesOnlyTheClock(t *testing.T) {
+	t.Parallel()
 	now := time.Unix(1_800_000_000, 0)
 	cases := map[string]bool{
 		"1800000000":                  true,
@@ -366,6 +374,7 @@ func TestReportsCurrentClockBelievesOnlyTheClock(t *testing.T) {
 
 // A profile that says "denied" and a CLI that refused is the healthy case.
 func TestDoctorProbesReportADeniedShellAndAReachableWeb(t *testing.T) {
+	t.Parallel()
 	p := probeProvider(t, LocalToolsDenied, noLocalToolsReply, "ts="+nowEpoch()+".123")
 	d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
 	if !strings.HasPrefix(d.LocalTools, "denied by profile — probe: refused") {
@@ -397,6 +406,7 @@ func probeProblem(d Diagnosis) string {
 // A profile that says "denied" and a CLI that ran the command is the finding
 // the probe exists for: the vendor's flag is not taking effect on this build.
 func TestDoctorReportsAShellThatRanDespiteTheProfile(t *testing.T) {
+	t.Parallel()
 	p := probeProvider(t, LocalToolsDenied, nowEpoch()+"\n", "ts="+nowEpoch())
 	d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
 	if !strings.Contains(d.LocalTools, "SHELL RAN") {
@@ -411,6 +421,7 @@ func TestDoctorReportsAShellThatRanDespiteTheProfile(t *testing.T) {
 // A vendor-default profile whose CLI ran the command is reported as what it
 // is — a CLI with a shell on the engine host — with the note the profile gave.
 func TestDoctorReportsAVendorDefaultShellHonestly(t *testing.T) {
+	t.Parallel()
 	p := probeProvider(t, LocalToolsVendorDefault, nowEpoch(), "ts="+nowEpoch())
 	d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
 	if !strings.HasPrefix(d.LocalTools, "vendor default (no denial flag on this fake) — probe: SHELL RAN") {
@@ -425,6 +436,7 @@ func TestDoctorReportsAVendorDefaultShellHonestly(t *testing.T) {
 // Web is meant to stay on; a CLI that cannot reach it is a problem naming
 // the usual causes.
 func TestDoctorReportsAnUnreachableWeb(t *testing.T) {
+	t.Parallel()
 	p := probeProvider(t, LocalToolsDenied, noLocalToolsReply, noWebReply)
 	d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
 	if !strings.HasPrefix(d.Web, "failed") {
@@ -439,6 +451,7 @@ func TestDoctorReportsAnUnreachableWeb(t *testing.T) {
 // -no-smoke skips the probes and says so on both lines, rather than reporting
 // an unmeasured stance as a measurement.
 func TestDoctorWithoutSmokeSkipsTheProbesVisibly(t *testing.T) {
+	t.Parallel()
 	p := probeProvider(t, LocalToolsDenied, nowEpoch(), "ts="+nowEpoch())
 	d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: false})
 	if !strings.Contains(d.LocalTools, "probe skipped") || !strings.Contains(d.Web, "skipped") {

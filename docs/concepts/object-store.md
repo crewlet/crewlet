@@ -105,6 +105,22 @@ logs survive, on the same members:
   cross.
 - **A node without `data` reaches the bucket across its leaf link**, with the
   rest of the fleet's JetStream API — it holds nothing.
+- **The bucket is created once and never rewritten.** A node looks the bucket
+  up at boot and creates it only when it is not there; a node that finds it
+  binds it as it is, whichever node made it. A bucket kept at fewer copies
+  than this node's `stream.replicas` stops the node from starting, naming the
+  setting, rather than taking uploads it would prove fewer copies of. Every
+  node used to write the bucket's configuration on every boot, and on a fleet
+  booting together that write was never answered for fifteen seconds. A
+  lookup and create still running after ten seconds says so, once, as
+  `natsobj_bucket_slow` — see [Deployment](../guides/deployment.md#a-clustered-node-is-given-longer-to-create-them).
+- **A read the broker loses its reader under carries on.** A download, a
+  listing and a page's walk each read through a consumer the broker keeps for
+  them, and a broker that loses it part way — reaped under a slow reader, or
+  gone in a leader change — gets a new one, made from the last message read,
+  so every byte and every name still arrives exactly once. It is made within
+  **ten seconds** of the loss (the request it was waiting on expiring), where
+  it used to take thirty.
 - **A delete marker another client left is no object.** The engine deletes by
   purging, but `nats object rm` — or any other client of the format — leaves a
   marker under the name. The engine reads the name as holding nothing, and

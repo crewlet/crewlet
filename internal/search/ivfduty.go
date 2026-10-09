@@ -371,7 +371,7 @@ func (e *Embedder) trainFrom(ctx context.Context, dim int, set trainingSet, basi
 	}
 	if choice.Worthwhile(lists) {
 		record.Lists, record.Probes = lists, choice.Probes
-		record.Centroids, record.Rollout = index.Bytes(), RolloutRanges(set.ids)
+		record.Centroids, record.Rollout = index.Bytes(), RolloutRanges(set.ids, IVFReassignBatch)
 	} else {
 		record.Why, record.Largest = VerdictNotWorthwhile, 0
 	}
@@ -700,19 +700,28 @@ func batchOf(ranges []RolloutRange, source Source, id string) (int, bool) {
 	return 0, false
 }
 
-// RolloutRanges cuts a rollout over the ids each source holds, ascending.
+// RolloutRanges cuts a rollout over the ids each source holds, ascending,
+// every batch ids — [IVFReassignBatch] for every rollout the duty publishes.
 //
 // THE WHOLE KEY SPACE, not only the ids read: each source's ids are cut every
-// [IVFReassignBatch], its first range starts at the source's beginning and its
-// last runs to its end — and every source this build embeds gets at least one
-// open range, whether or not the corpus holds a row of it — so a row
-// written anywhere in the key space falls in exactly one batch.
-func RolloutRanges(ids map[Source][]string) []RolloutRange {
+// batch, its first range starts at the source's beginning and its last runs
+// to its end — and every source this build embeds gets at least one open
+// range, whether or not the corpus holds a row of it — so a row written
+// anywhere in the key space falls in exactly one batch.
+//
+// The batch is an argument rather than the constant read here because the
+// tiling is the same at any size, and a case about which batches a log keeps
+// should not need thousands of rows to have several of them.
+func RolloutRanges(ids map[Source][]string, batch int) []RolloutRange {
+	if batch < 1 {
+		panic(fmt.Sprintf("search: a rollout cut every %d ids — a batch "+
+			"re-files at least one", batch))
+	}
 	var out []RolloutRange
 	for _, source := range sourcesIn(withEverySource(ids)) {
 		held := ids[source]
 		from := ""
-		for start := IVFReassignBatch; start < len(held); start += IVFReassignBatch {
+		for start := batch; start < len(held); start += batch {
 			out = append(out, RolloutRange{Source: source, From: from, To: held[start]})
 			from = held[start]
 		}

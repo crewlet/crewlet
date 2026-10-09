@@ -48,6 +48,7 @@ func (e *Engine) startUsage(ctx context.Context, s *stateLog) {
 		// by its new handle from the next flush.
 		Zone:   e.Zone,
 		Handle: e.seatHandle,
+		Every:  e.usageEvery,
 		// NO LOGGER: the publisher's own lines carry `component=usage`,
 		// the subsystem that wrote them, rather than this package's.
 	})

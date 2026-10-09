@@ -8,8 +8,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // ONLY THE RUNTIME REACHES THE REPLICATED ESTATE.
@@ -72,8 +70,7 @@ func TestOnlyTheRuntimeReachesTheReplicatedEstate(t *testing.T) {
 		}
 	}
 
-	root := sourcetree.Root(t)
-	files := parseTree(t, root, "internal", "cmd")
+	files := moduleTree(t)
 	var found []site
 	for _, f := range files {
 		ast.Inspect(f.file, func(n ast.Node) bool {

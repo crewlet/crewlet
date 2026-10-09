@@ -32,6 +32,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Marker is the prefix every replacement carries, so a reader can tell
@@ -41,7 +43,59 @@ const Marker = "[REDACTED:"
 
 type rule struct {
 	pattern *regexp.Regexp
-	with    string
+
+	// with is what each match becomes, written as it stands — a marker,
+	// never a template — on every rule alike. ReplaceAllString would read a
+	// $ in it as a submatch to expand, and a [keyed] rule writes it itself,
+	// so the literal reading is the one both paths can give.
+	with string
+
+	// keyed is the pattern again, for a rule that opens with no literal RE2
+	// can skip ahead on: the rule then runs only where one of its words
+	// begins. Nil for a rule that opens with one, which RE2 finds by itself.
+	// Set by [keyed.rule] and never by hand, so it is always pattern's own.
+	keyed *keyed
+}
+
+// in reports whether the rule matches anywhere in text, allocating nothing.
+func (r rule) in(text string) bool {
+	if r.keyed != nil {
+		return r.keyed.index(text) >= 0
+	}
+	return r.pattern.MatchString(text)
+}
+
+// apply is text with every match of the rule replaced, or text itself —
+// the same string, nothing copied — when there is none.
+//
+// MATCH BEFORE REPLACING, because ReplaceAllLiteralString allocates even when
+// it changes nothing: with no match it still copies the whole input into a
+// fresh buffer and then converts that buffer to a string. Ten rules over a
+// clean transcript would be twenty full copies of it — and a clean transcript
+// is the overwhelming case, since this runs on every sandbox result and every
+// coding-run transcript whether or not a credential is in it.
+func (r rule) apply(text string) string {
+	if r.keyed == nil {
+		if !r.pattern.MatchString(text) {
+			return text
+		}
+		return r.pattern.ReplaceAllLiteralString(text, r.with)
+	}
+	start, end, found := r.keyed.next(text, 0)
+	if !found {
+		return text
+	}
+	var b strings.Builder
+	b.Grow(len(text))
+	done := 0
+	for found {
+		b.WriteString(text[done:start])
+		b.WriteString(r.with)
+		done = end
+		start, end, found = r.keyed.next(text, end)
+	}
+	b.WriteString(text[done:])
+	return b.String()
 }
 
 // rules are applied in order, and order matters where one shape is a prefix of
@@ -50,34 +104,195 @@ type rule struct {
 //
 // Go's regexp is RE2: no backtracking, so matching is linear in the input
 // whatever the pattern — which matters here, because this pass runs over
-// coding-agent transcripts, the largest free text the engine moves.
+// coding-agent transcripts, the largest free text the engine moves. Every rule
+// opens with a literal RE2 skips ahead on, or is [keyed] on the words it opens
+// with instead.
 //
 // A PRIVATE KEY IS NOT A RULE HERE. It is the one shape that spans lines, and
 // the one whose end may not have been written yet, so it is found by
 // [keyBlocks] — before every rule below, so a token shape that happens to occur
 // inside a key's body is taken with the block rather than leaving it split.
 var rules = []rule{
-	{regexp.MustCompile(`sk-proj-[A-Za-z0-9_-]{20,}`), Marker + "api-key]"},
-	{regexp.MustCompile(`sk-ant-[A-Za-z0-9_-]{20,}`), Marker + "api-key]"},
-	{regexp.MustCompile(`sk-[A-Za-z0-9_-]{20,}`), Marker + "api-key]"},
-	{regexp.MustCompile(`xox[bpsare]-[A-Za-z0-9-]{20,}`), Marker + "slack-token]"},
-	{regexp.MustCompile(`AKIA[A-Z0-9]{16}`), Marker + "aws-key]"},
-	{regexp.MustCompile(`gh[pousr]_[A-Za-z0-9]{36,}`), Marker + "github-token]"},
-	{regexp.MustCompile(`github_pat_[A-Za-z0-9_]{50,}`), Marker + "github-token]"},
-	{regexp.MustCompile(`glpat-[A-Za-z0-9_-]{20,}`), Marker + "gitlab-token]"},
-	{regexp.MustCompile(`gl(?:rt|soat|ptt)-[A-Za-z0-9_-]{20,}`), Marker + "gitlab-token]"},
-	{passwordRule, Marker + "password]"},
+	{regexp.MustCompile(`sk-proj-[A-Za-z0-9_-]{20,}`), Marker + "api-key]", nil},
+	{regexp.MustCompile(`sk-ant-[A-Za-z0-9_-]{20,}`), Marker + "api-key]", nil},
+	{regexp.MustCompile(`sk-[A-Za-z0-9_-]{20,}`), Marker + "api-key]", nil},
+	{regexp.MustCompile(`xox[bpsare]-[A-Za-z0-9-]{20,}`), Marker + "slack-token]", nil},
+	{regexp.MustCompile(`AKIA[A-Z0-9]{16}`), Marker + "aws-key]", nil},
+	{regexp.MustCompile(`gh[pousr]_[A-Za-z0-9]{36,}`), Marker + "github-token]", nil},
+	{regexp.MustCompile(`github_pat_[A-Za-z0-9_]{50,}`), Marker + "github-token]", nil},
+	{regexp.MustCompile(`glpat-[A-Za-z0-9_-]{20,}`), Marker + "gitlab-token]", nil},
+	{regexp.MustCompile(`gl(?:rt|soat|ptt)-[A-Za-z0-9_-]{20,}`), Marker + "gitlab-token]", nil},
+	passwordRule.rule(Marker + "password]"),
 }
+
+// passwordKeys are the words a password's assignment opens with, and THE ONE
+// SPELLING of them: [passwordRule], [pendingPassword] and the scan that finds
+// where either can begin are all built from this list, so a word added here is
+// redacted, held back by [Settled] and scanned for at once, with no second list
+// to drift from it.
+var passwordKeys = []string{"password", "passwd", "pwd"}
 
 // passwordRule is the one rule besides a private key whose match can cross a
 // line break: `\s` is a newline too, so a key on one line and its value on the
 // next is one match — which [Settled] has to hold back for.
-var passwordRule = regexp.MustCompile(`(?i)(?:password|passwd|pwd)\s*[:=]\s*\S+`)
+var passwordRule = keyedOn(passwordKeys, `\s*[:=]\s*\S+`)
 
 // pendingPassword is a password key at the very END of a text, with nothing
 // but whitespace or its separator after it: the start of a [passwordRule]
 // match whose value has not been written yet.
-var pendingPassword = regexp.MustCompile(`(?i)(?:password|passwd|pwd)\s*(?:[:=]\s*)?\z`)
+var pendingPassword = keyedOn(passwordKeys, `\s*(?:[:=]\s*)?\z`)
+
+// keyed is a case-insensitive pattern every match of which opens with one of a
+// fixed list of words, together with the scan that finds where those words
+// are — both built from that one list by [keyedOn].
+//
+// THE SHAPE RE2 CANNOT SKIP AHEAD ON. Every other rule opens with a literal —
+// `sk-`, `AKIA`, `xox` — which Go's regexp finds with a byte scan at gigabytes
+// a second, starting its machine only where one is. A case-insensitive
+// alternation has no literal, so the machine stepped through every byte of
+// every text this package was handed: over two mebibytes of a coding run's
+// transcript, 42 ms of a 45 ms pass (measured, [BenchmarkSecrets]), and 0.7 s
+// of it under the race detector — at every one of the places a run's
+// transcript and failure are redacted, and on every read of a live view
+// through [Settled].
+//
+// So the words are found by a byte scan for the runes they can open with, and
+// the pattern is run only where one is. A word is read as (?i) reads it: each
+// of its runes matches every rune in that rune's [unicode.SimpleFold] orbit,
+// which is the set regexp/syntax compiles a case-folded literal to — so
+// password's s matches ſ as well as S. The words open a group the rest of the
+// pattern cannot reach outside, so no match begins anywhere else, and where
+// one does, the pattern held to begin there decides exactly what the
+// unanchored one would from there. The matches are the pattern's own —
+// leftmost, non-overlapping — found in what a byte scan costs, and a text with
+// no word in it runs no pattern at all.
+type keyed struct {
+	words    []string
+	firsts   string         // every rune a word opens with, folds included
+	pattern  *regexp.Regexp // the pattern, as it reads anywhere in a text
+	anchored *regexp.Regexp // the same pattern, held to begin where it is tried
+}
+
+// keyedOn is the pattern that opens with one of words, in any case, followed by
+// what after matches: `(?i)(?:words…)(?:after)`.
+//
+// after is compiled on its own first, so one that is not a whole expression —
+// an unbalanced `)|other(` that would close the words' group and let a match
+// begin outside it — panics here rather than compiling into a pattern the
+// scan does not describe. Like [regexp.MustCompile], it runs at package
+// initialisation, so a bad word or a bad after is a binary that does not start.
+func keyedOn(words []string, after string) *keyed {
+	regexp.MustCompile(after)
+	quoted := make([]string, len(words))
+	var firsts []rune
+	for i, word := range words {
+		if word == "" {
+			panic("redact: a keyed pattern's word is empty, so every place in a text would be one")
+		}
+		quoted[i] = regexp.QuoteMeta(word)
+		first, _ := utf8.DecodeRuneInString(word)
+		for f := first; ; {
+			if !slices.Contains(firsts, f) {
+				firsts = append(firsts, f)
+			}
+			if f = unicode.SimpleFold(f); f == first {
+				break
+			}
+		}
+	}
+	source := `(?i)(?:` + strings.Join(quoted, "|") + `)(?:` + after + `)`
+	return &keyed{
+		words:    slices.Clone(words),
+		firsts:   string(firsts),
+		pattern:  regexp.MustCompile(source),
+		anchored: regexp.MustCompile(`^(?:` + source + `)`),
+	}
+}
+
+// rule is k as a rule that replaces each of its matches with with.
+func (k *keyed) rule(with string) rule {
+	return rule{pattern: k.pattern, with: with, keyed: k}
+}
+
+// begins is the first place at or after from where one of k's words opens, as
+// (?i) reads it, or -1. from is where a rune starts: the start of text, the
+// end of a match, or [beyond] a place already tried.
+func (k *keyed) begins(text string, from int) int {
+	for from < len(text) {
+		i := strings.IndexAny(text[from:], k.firsts)
+		if i < 0 {
+			return -1
+		}
+		i += from
+		for _, word := range k.words {
+			if foldedPrefix(text[i:], word) {
+				return i
+			}
+		}
+		from = beyond(text, i)
+	}
+	return -1
+}
+
+// next is the first match of k beginning at or after from: leftmost first, as
+// k.pattern's own scan finds it, so matches taken one after another from each
+// one's end are exactly the non-overlapping matches ReplaceAllLiteralString
+// replaces.
+func (k *keyed) next(text string, from int) (start, end int, found bool) {
+	for i := k.begins(text, from); i >= 0; i = k.begins(text, beyond(text, i)) {
+		if loc := k.anchored.FindStringIndex(text[i:]); loc != nil {
+			return i, i + loc[1], true
+		}
+	}
+	return 0, 0, false
+}
+
+// index is where k's leftmost match in text begins, or -1, allocating nothing.
+func (k *keyed) index(text string) int {
+	for i := k.begins(text, 0); i >= 0; i = k.begins(text, beyond(text, i)) {
+		if k.anchored.MatchString(text[i:]) {
+			return i
+		}
+	}
+	return -1
+}
+
+// beyond is the place after the rune at i: where a scan resumes once i has
+// been tried, so it never starts inside a rune, which the pattern's own scan
+// never does either.
+func beyond(text string, i int) int {
+	_, size := utf8.DecodeRuneInString(text[i:])
+	return i + size
+}
+
+// foldedPrefix reports whether text opens with word as (?i) reads it: rune for
+// rune, each of text's in the [unicode.SimpleFold] orbit of word's.
+func foldedPrefix(text, word string) bool {
+	for _, w := range word {
+		if text == "" {
+			return false
+		}
+		r, size := utf8.DecodeRuneInString(text)
+		if !sameFold(r, w) {
+			return false
+		}
+		text = text[size:]
+	}
+	return true
+}
+
+// sameFold reports whether (?i) reads r as w: whether r is w or another rune
+// in w's [unicode.SimpleFold] orbit.
+func sameFold(r, w rune) bool {
+	for f := w; ; {
+		if f == r {
+			return true
+		}
+		if f = unicode.SimpleFold(f); f == w {
+			return false
+		}
+	}
+}
 
 // The private-key armour lines. ENCRYPTED is PKCS#8's encrypted form, which is
 // still the key — under a passphrase that may sit in the same environment. And
@@ -148,18 +363,7 @@ func Secrets(text string) string {
 		text = b.String()
 	}
 	for _, r := range rules {
-		// MATCH BEFORE REPLACING, because ReplaceAllString allocates even
-		// when it changes nothing: with no match it still copies the
-		// whole input into a fresh buffer and then converts that buffer
-		// to a string. Ten rules over a clean transcript is therefore
-		// twenty full copies of it — and a clean transcript is the
-		// overwhelming case, since this runs on every sandbox result and
-		// every coding-run transcript whether or not a credential is
-		// in it.
-		// MatchString allocates nothing.
-		if r.pattern.MatchString(text) {
-			text = r.pattern.ReplaceAllString(text, r.with)
-		}
+		text = r.apply(text)
 	}
 	return text
 }
@@ -179,7 +383,7 @@ func Contains(text string) bool {
 		return true
 	}
 	for _, r := range rules {
-		if r.pattern.MatchString(text) {
+		if r.in(text) {
 			return true
 		}
 	}
@@ -1220,8 +1424,8 @@ func Settled(text string) int {
 				settled, moved = lineStart(whole, s[0]), true
 			}
 		}
-		if loc := pendingPassword.FindStringIndex(whole[:settled]); loc != nil {
-			settled, moved = lineStart(whole, loc[0]), true
+		if at := pendingPassword.index(whole[:settled]); at >= 0 {
+			settled, moved = lineStart(whole, at), true
 		}
 		if !moved {
 			return settled

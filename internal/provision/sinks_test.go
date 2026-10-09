@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // ONE SUITE OVER ALL THREE SINKS, because the contract is what the
@@ -29,11 +30,7 @@ func sinkCases() []sinkCase {
 		{
 			name: "the secret store",
 			build: func(t *testing.T) (provision.TokenSink, func(*testing.T) map[string]string) {
-				db, err := store.OpenNode(t.Context(),
-					filepath.Join(t.TempDir(), "s.db"), store.Options{})
-				if err != nil {
-					t.Fatalf("store.OpenNode: %v", err)
-				}
+				db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "s.db"), store.Options{})
 				t.Cleanup(func() { _ = db.Close() })
 				key, err := secrets.GenerateKey()
 				if err != nil {

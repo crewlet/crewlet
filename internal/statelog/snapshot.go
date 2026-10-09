@@ -416,10 +416,11 @@ func (s *Snapshotter) Take(ctx context.Context) (Manifest, error) {
 		// A SKIP IS RETURNED, NOT LOGGED. The error is an [ErrSkipped]
 		// carrying the reason AND the detail, so the caller already has
 		// everything a line here could say — and it is the caller that
-		// knows what the skip MEANS: the loop retries every thirty
-		// seconds for as long as the reason holds, so a line written
-		// here is one per attempt, for ever, on a `sole_node` skip that
-		// is the steady state of a healthy single-node company.
+		// knows what the skip MEANS: the loop retries for as long as the
+		// reason holds — every thirty seconds once its retry has settled
+		// — so a line written here is one per attempt, for ever, on a
+		// `sole_node` skip that is the steady state of a healthy
+		// single-node company.
 		//
 		// Logging in both places is how that survived being fixed once:
 		// the loop learned to report a skip only when the reason

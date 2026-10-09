@@ -19,6 +19,8 @@ import (
 
 	"github.com/nats-io/nats.go"
 
+	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -89,6 +91,7 @@ func startPartitionableCluster(t *testing.T, n int) *cluster {
 // attempts identically and with nothing to say which of the two causes it was.
 func startMesh(t *testing.T, mesh func(context.Context, *testing.T, int) *jetstreamtest.Relays, n int) *cluster {
 	t.Helper()
+	logs.attribute(t)
 	// BOUNDED IN WALL CLOCK AS WELL AS IN TRIES — see
 	// [jetstreamtest.ClusterStartBudget]. Three attempts at an unbounded
 	// cost each is a product nobody declared, and on this package it was
@@ -186,6 +189,21 @@ func startMeshOnce(ctx context.Context, t *testing.T, relays *jetstreamtest.Rela
 	t.Helper()
 	c := &cluster{relays: relays, nodes: make([]*node, n)}
 
+	// EVERY MEMBER'S BOOTSTRAP IS ASSEMBLED, AND ITS STORE SEEDED, HERE, on
+	// the test's own goroutine before any member starts: a seed that cannot
+	// be written fails the test, which a member's goroutine may not do (see
+	// below), and none of it binds anything, so nothing about it has to wait
+	// for the moment a member starts.
+	boots := make([]config.Bootstrap, n)
+	for i := range n {
+		boot, err := memberBootstrap(t, relays, i, n)
+		if err != nil {
+			return nil, fmt.Errorf("member %d: %w", i, err)
+		}
+		seedStore(t, &boot)
+		boots[i] = boot
+	}
+
 	// CONCURRENTLY, which is what a fleet actually does: n machines boot
 	// independently. Sequentially is not merely slower — it does not work.
 	// A clustered member does not finish starting until its JetStream has
@@ -194,7 +212,7 @@ func startMeshOnce(ctx context.Context, t *testing.T, relays *jetstreamtest.Rela
 	// peers this loop has not started yet and then fail naming a cluster
 	// nobody could have formed.
 	errs := make([]error, n)
-	stops := make([][]func(), n)
+	stops := make([]teardown, n)
 	var wg sync.WaitGroup
 	for i := range n {
 		wg.Add(1)
@@ -204,7 +222,7 @@ func startMeshOnce(ctx context.Context, t *testing.T, relays *jetstreamtest.Rela
 			// failure is carried back rather than raised here — a
 			// FailNow from another goroutine ends that goroutine and
 			// leaves the test running with a nil member.
-			c.nodes[i], stops[i], errs[i] = buildMember(ctx, t, relays, i, n)
+			c.nodes[i], stops[i], errs[i] = buildMember(ctx, t, &boots[i], i)
 		}()
 	}
 	wg.Wait()
@@ -244,15 +262,51 @@ func startMeshOnce(ctx context.Context, t *testing.T, relays *jetstreamtest.Rela
 	return nil, fmt.Errorf("member %d: %w", failed, errs[failed])
 }
 
-// stopAll runs every member's teardown, in reverse order within each member.
+// teardown is one member's undo, in the three phases [stopAll] runs a fleet's
+// in: the API in front of the engine, the engine, and what the engine runs on
+// — its broker and store ([engine.Backends]) and its model server. Each
+// phase's pieces are in the order they came up.
+type teardown struct {
+	api, engine, backends []func()
+}
+
+// stopAll takes a fleet down, one phase at a time and each phase on every
+// member AT ONCE: every API, then every engine, then every broker and store.
+// It returns when all of it is down.
 //
-// REVERSE, because that is the order the pieces were built in and each one's
-// stop assumes the ones after it are still there: the projector reads the
-// queue the engine owns, and the server serves the app.
-func stopAll(stops [][]func()) {
-	for _, member := range stops {
-		stopInReverse(member)
+// THE BROKERS GO LAST, AFTER EVERY ENGINE HAS STOPPED, which is why a member's
+// backends are opened by the harness and lent to its engine rather than owned
+// by it ([engine.Options.Backends]). An engine's stop takes coordination steps
+// — the stop event, the presence release, the seat and duty releases — that
+// need a quorum of the fleet's brokers. Stopped one member after another, the
+// last always stopped alone, its peers' brokers already gone, and spent its
+// whole stop allowance on steps that could not succeed: measured, 10 to 25 s
+// per teardown. Stopped together but each closing its own broker on the way
+// out, whichever finished first still took its broker with it, and a slower
+// peer was stranded the same way in about half the runs (a case's teardown
+// took 1 s or 16 s). With every broker up until every engine is down, each
+// stop takes its steps against a fleet that can answer them.
+//
+// EVERY API BEFORE ANY ENGINE, so nothing serves a request into an engine that
+// is stopping. Within a member, each phase runs in REVERSE, because that is
+// the order the pieces were built in and each one's stop assumes the ones
+// after it are still there: the projector reads the queue the engine owns,
+// and the server serves the app.
+func stopAll(members []teardown) {
+	phase := func(of func(teardown) []func()) {
+		var wg sync.WaitGroup
+		for _, m := range members {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				stopInReverse(of(m))
+			}()
+		}
+		wg.Wait()
 	}
+	phase(func(m teardown) []func() { return m.api })
+	phase(func(m teardown) []func() { return m.engine })
+	phase(func(m teardown) []func() { return m.backends })
 }
 
 // clusterStartAttempts is how many times a fleet is stood up before the case
@@ -271,12 +325,6 @@ func stopAll(stops [][]func()) {
 // that makes "trying again" mean something. See [startMesh].
 const clusterStartAttempts = jetstreamtest.ClusterStartAttempts
 
-// startMember brings up one member of the fleet.
-//
-// EVERY NODE HAS ITS OWN STORE AND ITS OWN STREAM DIRECTORY, because that is
-// what a fleet is: n machines, each with its own disk. Sharing either would
-// make this one node wearing three hats, and every fleet mechanism under it
-// would pass for the wrong reason.
 // clusterHost is the interface every member of a test mesh binds its route
 // listener on. LOOPBACK, because the mesh's own route URLs are loopback and a
 // member listening wider would be reachable from outside the harness — and
@@ -284,67 +332,25 @@ const clusterStartAttempts = jetstreamtest.ClusterStartAttempts
 // wildcard bind.
 const clusterHost = "127.0.0.1"
 
-// ctx is the ATTEMPT's, so the retry loop's wall-clock ceiling can interrupt a
-// bring-up rather than only refuse the next one — see [startMesh].
-func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays, i, n int) (
-	*node, []func(), error) {
-
-	// THE TEARDOWN IS RETURNED, NOT REGISTERED WITH t.Cleanup, because an
-	// attempt that fails has to stop what it started BEFORE the next one
-	// starts — see [startMeshOnce]. It is built up as each piece comes up,
-	// so a member that fails halfway still hands back a way to undo the
-	// half that worked.
-	var stops []func()
-	fail := func(err error) (*node, []func(), error) { return nil, stops, err }
-
-	model := newScriptedModel(t)
-	// THE MODEL SERVER IS THIS ATTEMPT'S, not the test's. Its own
-	// constructor registers a t.Cleanup as well, which is right for the
-	// single-node cases — but a cluster case that retries three times would
-	// otherwise leave one live server per member per failed attempt running
-	// until the case ends. Close is idempotent, so both fire safely.
-	stops = append(stops, model.close)
-	cfg, err := config.ParseCompany([]byte(fmt.Sprintf(companyDoc, model.url)))
-	if err != nil {
-		// THE SAME FILE PARSES THE SAME WAY on every attempt.
-		return fail(fmt.Errorf("%w: company config: %w", errNotRetryable, err))
-	}
-
+// memberBootstrap is member i's half of Tier A: where it keeps its data, the
+// mesh it routes through, and the fleet-wide settings every member shares.
+//
+// EVERY NODE HAS ITS OWN STORE AND ITS OWN STREAM DIRECTORY, because that is
+// what a fleet is: n machines, each with its own disk. Sharing either would
+// make this one node wearing three hats, and every fleet mechanism under it
+// would pass for the wrong reason.
+func memberBootstrap(t *testing.T, relays *jetstreamtest.Relays, i, n int) (config.Bootstrap, error) {
 	port, routes, advertise := relays.Member(i)
 	peers, err := otherMembers(routes, port)
 	if err != nil {
-		return fail(fmt.Errorf("%w: member %d's routes: %w", errNotRetryable, i, err))
-	}
-	// PROBED IMMEDIATELY BEFORE THE ENGINE BINDS IT, which is the guard
-	// [jetstreamtest.Cluster.start] has and this path did not.
-	//
-	// It cannot close the race — nothing can, short of never letting the
-	// port go — but it shortens the window from however long engine.New
-	// takes to get there down to microseconds, and it names the CAUSE. Its
-	// partner is the engine's own post-bind check, which is what catches a
-	// port lost inside that window: together they turn a member that comes
-	// up, serves clients and silently never routes into an immediate,
-	// named retry.
-	//
-	// THE SAME HOST THE MEMBER BINDS, set below — a probe against a
-	// different address answers about a port the server never asks for.
-	switch free, err := jetstreamtest.PortFree(ctx, clusterHost, port); {
-	case err != nil:
-		// NOT A RACE: an address this host does not have, or a probe
-		// that never ran. Retrying it would spend every attempt on a
-		// mistake that answers the same way each time.
-		return fail(fmt.Errorf("%w: route port %d on %q cannot be probed for "+
-			"member %d: %w", errNotRetryable, port, clusterHost, i, err))
-	case !free:
-		return fail(fmt.Errorf("%w — route port %d went between this mesh "+
-			"reserving it and member %d starting",
-			jetstream.ErrRoutePortTaken, port, i))
+		return config.Bootstrap{}, fmt.Errorf("%w: member %d's routes: %w",
+			errNotRetryable, i, err)
 	}
 	boot := config.DefaultBootstrap()
 	boot.Node.ID = fmt.Sprintf("node-%d", i)
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
-	boot.Stream.Cluster.Name = jetstreamtest.RelayClusterName
+	boot.Stream.Cluster.Name = relays.ClusterName()
 	boot.Stream.Cluster.Port = port
 	// THE OTHER MEMBERS, which is what Tier A says the field holds and what
 	// its member count is taken from — see [otherMembers].
@@ -379,35 +385,108 @@ func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays
 	// names and a member with none refuses every one — the file uploads
 	// cross the fleet through the API.
 	boot.API.Auth.Tokens = []config.APIToken{{ID: e2eOperatorID, Token: e2eOperatorToken}}
+	return boot, nil
+}
 
-	e, err := engine.New(ctx, engine.Options{
-		Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation,
-	})
+// buildMember brings up member i of the fleet on the bootstrap
+// [memberBootstrap] assembled for it.
+//
+// ctx is the ATTEMPT's, so the retry loop's wall-clock ceiling can interrupt a
+// bring-up rather than only refuse the next one — see [startMesh].
+func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i int) (
+	*node, teardown, error) {
+
+	// THE TEARDOWN IS RETURNED, NOT REGISTERED WITH t.Cleanup, because an
+	// attempt that fails has to stop what it started BEFORE the next one
+	// starts — see [startMeshOnce]. It is built up as each piece comes up,
+	// so a member that fails halfway still hands back a way to undo the
+	// half that worked.
+	var stops teardown
+	fail := func(err error) (*node, teardown, error) { return nil, stops, err }
+
+	model := newScriptedModel(t)
+	// THE MODEL SERVER IS THIS ATTEMPT'S, not the test's. Its own
+	// constructor registers a t.Cleanup as well, which is right for the
+	// single-node cases — but a cluster case that retries three times would
+	// otherwise leave one live server per member per failed attempt running
+	// until the case ends. Close is idempotent, so both fire safely.
+	stops.backends = append(stops.backends, model.close)
+	cfg, err := config.ParseCompany([]byte(fmt.Sprintf(companyDoc, model.url)))
 	if err != nil {
-		// A CONFIG THE ENGINE REFUSED is refused identically on every
-		// attempt — the same file parses the same way — so a fresh mesh
-		// would spend the whole start budget re-asking a question already
-		// answered, and then report it as a cluster that never came up.
-		var fault *config.Fault
-		if errors.As(err, &fault) {
-			return fail(fmt.Errorf("%w: engine.New: %w", errNotRetryable, err))
-		}
-		return fail(fmt.Errorf("engine.New: %w", err))
+		// THE SAME FILE PARSES THE SAME WAY on every attempt.
+		return fail(fmt.Errorf("%w: company config: %w", errNotRetryable, err))
+	}
+
+	// TIER A'S OWN RULES, held — and the bootstrap normalized — before the
+	// broker is opened from it, as engine.New does before it opens its own:
+	// the backends below are opened HERE, so this is the first frame that
+	// reads the bootstrap. A refusal is the same on every attempt.
+	if err := boot.Validate(); err != nil {
+		return fail(fmt.Errorf("%w: bootstrap: %w", errNotRetryable, err))
+	}
+
+	// PROBED IMMEDIATELY BEFORE THE BROKER BINDS IT, which is the guard
+	// [jetstreamtest.Cluster.start] has and this path did not.
+	//
+	// It cannot close the race — nothing can, short of never letting the
+	// port go — but it shortens the window from however long a broker
+	// takes to get there down to microseconds, and it names the CAUSE. Its
+	// partner is the engine's own post-bind check, which is what catches a
+	// port lost inside that window: together they turn a member that comes
+	// up, serves clients and silently never routes into an immediate,
+	// named retry.
+	//
+	// THE SAME HOST THE MEMBER BINDS, set by [memberBootstrap] — a probe
+	// against a different address answers about a port the server never
+	// asks for.
+	port := boot.Stream.Cluster.Port
+	switch free, err := jetstreamtest.PortFree(ctx, boot.Stream.Cluster.Host, port); {
+	case err != nil:
+		// NOT A RACE: an address this host does not have, or a probe
+		// that never ran. Retrying it would spend every attempt on a
+		// mistake that answers the same way each time.
+		return fail(fmt.Errorf("%w: route port %d on %q cannot be probed for "+
+			"member %d: %w", errNotRetryable, port, boot.Stream.Cluster.Host, i, err))
+	case !free:
+		return fail(fmt.Errorf("%w — route port %d went between this mesh "+
+			"reserving it and member %d starting",
+			jetstream.ErrRoutePortTaken, port, i))
+	}
+
+	// THE BROKER AND STORE ARE THE HARNESS'S, LENT TO THE ENGINE
+	// ([engine.Options.Backends]), so they outlive it: a fleet's brokers go
+	// only once every member's engine has stopped — see [stopAll]. Opened by
+	// the call engine.New makes for an engine that owns them, so the member
+	// runs on what `crewlet run` would have opened.
+	backends, err := engine.OpenBackends(ctx, boot, cfg)
+	if err != nil {
+		return fail(refusal("open backends", err))
 	}
 	// ON WithoutCancel, like every teardown here: the attempt's context is
 	// cancelled the moment the attempt ends, and a stop that inherited it
 	// would be handed a dead context exactly when it has work to do — the
 	// rule internal/engine states for a rollback, applied to a harness.
-	stops = append(stops, func() { e.Stop(context.WithoutCancel(ctx)) })
+	stops.backends = append(stops.backends,
+		func() { backends.Close(context.WithoutCancel(ctx)) })
+
+	e, err := engine.New(ctx, engine.Options{
+		Bootstrap: boot, Company: cfg, ActivatedAt: harnessActivation,
+		Environment: nodeEnvironment(nil), Backends: backends,
+	})
+	if err != nil {
+		return fail(refusal("engine.New", err))
+	}
+	stops.engine = append(stops.engine, func() { e.Stop(context.WithoutCancel(ctx)) })
 	if err := e.Start(ctx); err != nil {
 		return fail(fmt.Errorf("engine.Start: %w", err))
 	}
 
 	// THROUGH wireAPI, NOT serveAPI: this runs off the test's goroutine,
 	// where t.Fatalf would end only this goroutine, and the API's teardown
-	// belongs in this member's list, after the engine's, so a failed
-	// attempt stops the listener, the projector and the app before the
-	// engine they read from, and before the next attempt starts.
+	// belongs in this member's own, in the phase [stopAll] runs before the
+	// engines', so a failed attempt stops the listener, the projector and
+	// the app before the engine they read from, and before the next
+	// attempt starts.
 	//
 	// THE SUPPRESSION BELOW: the context handed over is deliberately NOT
 	// this attempt's. `ctx` is cancelled the moment the bring-up ends, and
@@ -415,8 +494,12 @@ func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays
 	// projector — serves for the whole case. The test's own context is
 	// that lifetime exactly: longer than the attempt, and still ended when
 	// the case is over, which [context.WithoutCancel] would not be.
-	app, srv, apiStops, err := wireAPI(t.Context(), e, &boot, nil) //nolint:contextcheck // see above
-	stops = append(stops, apiStops...)
+	//
+	// AT THE PRODUCTION TICK, not the single-node cases' 25 ms — see
+	// [tickInterval] for what that costs a fleet.
+	app, srv, apiStops, err := wireAPI(t.Context(), e, boot, //nolint:contextcheck // see above
+		func(opts *api.Options) { opts.HealthInterval = stream.HealthInterval })
+	stops.api = apiStops
 	if err != nil {
 		return fail(fmt.Errorf("api: %w", err))
 	}
@@ -426,6 +509,19 @@ func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays
 		id:          boot.Node.ID,
 		snapshotDir: boot.Store.SnapshotDirFor(),
 	}, stops, nil
+}
+
+// refusal names what failed to come up, and marks a refused CONFIG as not
+// worth another attempt: it is refused identically on every one — the same
+// file parses the same way — so a fresh mesh would spend the whole start
+// budget re-asking a question already answered, and then report it as a
+// cluster that never came up.
+func refusal(what string, err error) error {
+	var fault *config.Fault
+	if errors.As(err, &fault) {
+		return fmt.Errorf("%w: %s: %w", errNotRetryable, what, err)
+	}
+	return fmt.Errorf("%s: %w", what, err)
 }
 
 // otherMembers is a mesh's route list without this member's own route.
@@ -476,6 +572,12 @@ func (c *cluster) hydrated(t *testing.T) {
 // scheduler, and what gives way first is raft: measured here, each case passes
 // alone in under forty seconds and both fail together — a member's metadata
 // read timing out after thirty, reported as a boot failure naming a stream.
+//
+// AND NOT BESIDE THE SINGLE-ENGINE CASES EITHER, which do run in parallel:
+// `go test` starts a parallel top-level test only once every sequential one
+// has returned, so every fleet here stands up, runs and comes down before the
+// first of them starts. A fleet's start budget is spent against a quiet
+// runner, and the single-engine cases share it only with each other.
 //
 // A function rather than a bare comment because the absence of a call is not
 // something a reader notices, and "why is this one not parallel" is exactly
@@ -529,6 +631,107 @@ const fleetSize = 3
 // suite timeout naming nothing.
 const clusterSettle = 10 * time.Second
 
+// whole is the condition a member of a healthy fleet meets: its native
+// backends have hydrated, and it counts every member live. HYDRATED ALONE
+// does not say a fleet is whole — an engine that stopped keeps the answer it
+// last had — so the member's own view of the fleet's presence is read too,
+// which a member that stopped or lost its peers changes at once.
+//
+// Each presence read is bounded by [engine.ProbeReadBudget], the bound the
+// health envelope gives the same read: it is a scan no client timeout covers,
+// and an unbounded one against a store that stopped answering would hold the
+// wait past its own budget.
+func (c *cluster) whole(t *testing.T, n *node) func() bool {
+	t.Helper()
+	return func() bool {
+		if !n.engine.NativeHydrated(t.Context()) {
+			return false
+		}
+		ctx, cancel := context.WithTimeout(t.Context(), engine.ProbeReadBudget)
+		defer cancel()
+		live, err := n.engine.LiveNodes(ctx)
+		return err == nil && live == len(c.nodes)
+	}
+}
+
+// fleetClaims are the claims [TestAFleetOfThree] makes of one fleet, in the
+// order it makes them. Each is a subtest under the name it had when it was a
+// case of its own, standing up a fleet of its own.
+//
+// THE ORDER IS PART OF THE CLAIMS, which is what sharing a fleet costs:
+//   - the snapshots claim is FIRST, because what it holds is a snapshot taken
+//     AT BOOT, and on a fleet several claims old an artefact on disk could be
+//     one any of them caused;
+//   - the agreement claim is LAST, because it compares every replicated row
+//     of every member, and placed last that is every row every claim before
+//     it wrote — tasks, keys minted three ways at once, pages, a file —
+//     rather than only its own (which is why it waits on every log's end:
+//     [cluster.digestsAtOneEnd]);
+//   - the rest read only what they wrote, under op ids, titles and paths no
+//     other claim uses, so another claim's rows only add to what they read:
+//     the search's coverage is computed from its own pages and every match
+//     another page adds is still a match.
+var fleetClaims = []struct {
+	name string
+	run  func(*testing.T, *cluster)
+}{
+	{"AFleetTakesAndOffersSnapshots", claimAFleetTakesAndOffersSnapshots},
+	{"ARecordOneNodeWritesReachesEveryNodesRows", claimARecordOneNodeWritesReachesEveryNodesRows},
+	{"EveryNodeMintsIntoOneKeySpace", claimEveryNodeMintsIntoOneKeySpace},
+	{"TheFleetAnswersOneSearchBetweenItsMembers", claimTheFleetAnswersOneSearchBetweenItsMembers},
+	{"AFileUploadedToOneNodeDownloadsFromAnother", claimAFileUploadedToOneNodeDownloadsFromAnother},
+	{"TheCollectorsReportReadsOnEveryNode", claimTheCollectorsReportReadsOnEveryNode},
+	{"AFleetAgreesAboutOneCompany", claimAFleetAgreesAboutOneCompany},
+}
+
+// A FLEET OF THREE, AND WHAT ONLY A FLEET CAN SHOW — on ONE fleet.
+//
+// Every claim here stood up a fleet of its own: three members over the same
+// company and the same bootstrap, a boot and a teardown apiece around a body
+// that was often the shorter part. The claims are about a running fleet, not
+// about its boot, so they share one.
+//
+// WHAT THAT COSTS, and what pays for each:
+//   - the claims are ordered — see [fleetClaims] for why each sits where it
+//     does;
+//   - one fleet that cannot be stood up fails every claim at once, where it
+//     failed one; [startMesh] retries it on fresh ports as it always has;
+//   - a claim that leaves the fleet unhealthy would fail every claim after
+//     it, each on its own budget. So every claim starts on a fleet whose
+//     members have all hydrated — the state each case started from — and
+//     each count the whole fleet live ([cluster.whole]); when they do not
+//     after a claim, the case stops there naming that claim, rather than
+//     spending a budget per claim reporting it again;
+//   - a run boots one fleet rather than seven, so a defect in booting one
+//     shows once a run where it showed seven times — boot is still exercised
+//     by every case in this package and by the partition case's own fleet.
+//
+// THE PARTITION CLAIM KEEPS A FLEET OF ITS OWN
+// ([TestAPartitionedMemberIsSilentRatherThanSlow]): it needs every route to
+// run through a relay this process can cut, which is cost and risk under
+// every claim that never cuts one ([jetstreamtest.StartDirectMesh] says
+// why), and it is the one claim that breaks its fleet on purpose.
+func TestAFleetOfThree(t *testing.T) {
+	noParallel(t)
+	c := startCluster(t, fleetSize)
+	for i, claim := range fleetClaims {
+		after := "the fleet came up"
+		if i > 0 {
+			after = "the " + fleetClaims[i-1].name + " claim"
+		}
+		var rest []string
+		for _, later := range fleetClaims[i:] {
+			rest = append(rest, later.name)
+		}
+		for m, n := range c.nodes {
+			waitFor(t, fmt.Sprintf("member %d to be hydrated and see all %d members "+
+				"live after %s — %v are not run on a fleet that is not",
+				m, len(c.nodes), after, rest), c.whole(t, n))
+		}
+		t.Run(claim.name, func(t *testing.T) { claim.run(t, c) })
+	}
+}
+
 // A RECORD ONE NODE WRITES REACHES EVERY NODE'S ROWS.
 //
 // This is the whole claim of the state log stated as a product fact, and it is
@@ -540,11 +743,7 @@ const clusterSettle = 10 * time.Second
 // The failure it protects against is not "the record was lost". It is the
 // quieter one: two nodes' boards disagreeing about the same company, which
 // from either screen looks exactly like the other node being idle.
-func TestARecordOneNodeWritesReachesEveryNodesRows(t *testing.T) {
-	noParallel(t)
-	c := startCluster(t, fleetSize)
-	c.hydrated(t)
-
+func claimARecordOneNodeWritesReachesEveryNodesRows(t *testing.T, c *cluster) {
 	// THE CHART FIRST. A create takes its key from its project's own
 	// counter, so the project has to exist — every node applies the chart
 	// at boot, and this is also the first assertion that it did.
@@ -596,11 +795,7 @@ func TestARecordOneNodeWritesReachesEveryNodesRows(t *testing.T) {
 // On one node that arbitration is untested — there is nobody to lose to. Here
 // all three file into one project simultaneously, which is exactly the shape
 // that produced two ENG-1s in the design this replaced.
-func TestEveryNodeMintsIntoOneKeySpace(t *testing.T) {
-	noParallel(t)
-	c := startCluster(t, fleetSize)
-	c.hydrated(t)
-
+func claimEveryNodeMintsIntoOneKeySpace(t *testing.T, c *cluster) {
 	type filed struct {
 		key string
 		err error
@@ -666,11 +861,7 @@ func TestEveryNodeMintsIntoOneKeySpace(t *testing.T) {
 // a trim, which needs a backup, which is [internal/backup]'s own suite. What
 // this establishes is that if one ever did fall behind, there would be
 // something to adopt.
-func TestAFleetTakesAndOffersSnapshots(t *testing.T) {
-	noParallel(t)
-	c := startCluster(t, fleetSize)
-	c.hydrated(t)
-
+func claimAFleetTakesAndOffersSnapshots(t *testing.T, c *cluster) {
 	// A SNAPSHOT IS TAKEN AT BOOT, not only on the interval — the
 	// interval is measured against the newest artefact on DISK, so a node
 	// restarted more often than it would otherwise never take one.
@@ -892,11 +1083,7 @@ func (c *cluster) nodeIDs() []string {
 // that floor would measure the applier rather than the fan-out. The floor's own
 // decision is [search]'s to test; what a fleet can see is the network, so this
 // case hands out the table the floor would have produced.
-func TestTheFleetAnswersOneSearchBetweenItsMembers(t *testing.T) {
-	noParallel(t)
-	c := startCluster(t, fleetSize)
-	c.hydrated(t)
-
+func claimTheFleetAnswersOneSearchBetweenItsMembers(t *testing.T, c *cluster) {
 	table := search.Divide(c.nodeIDs())
 	if len(table) != fleetSize {
 		t.Fatalf("a fleet of %d divided into %d assignments", fleetSize, len(table))
@@ -1048,13 +1235,14 @@ func TestTheFleetAnswersOneSearchBetweenItsMembers(t *testing.T) {
 
 // WHAT A FLEET GUARANTEES A READER, AND THAT ITS MEMBERS AGREE.
 //
-// Three claims that only a fleet can make, in one case because they need one
-// fleet: standing three of these up costs three embedded brokers and six
-// databases, and the arms do not interfere.
+// Three things only a fleet can show, in one claim because they are about the
+// same writes every member must see alike, and the arms do not interfere. It
+// is the LAST claim [TestAFleetOfThree] makes, so the twins arm compares every
+// row the claims before it wrote as well as its own.
 //
 //  1. A LINEARIZABLE READ ON ANOTHER MEMBER SEES AN ACKNOWLEDGED WRITE, with
 //     no wait loop. That is what the barrier append buys and the one thing
-//     [TestARecordOneNodeWritesReachesEveryNodesRows] deliberately does not
+//     [claimARecordOneNodeWritesReachesEveryNodesRows] deliberately does not
 //     assert — it polls at session level, because its subject is that the
 //     record arrives at all rather than when.
 //  2. THE MEMBERS ARE TWINS. Every domain is N identical SQL copies, so two
@@ -1064,11 +1252,7 @@ func TestTheFleetAnswersOneSearchBetweenItsMembers(t *testing.T) {
 //  3. THE KNOWLEDGE BASE IS ONE OF THOSE DOMAINS TOO. Pages arrived on the log
 //     later than the tracker did, and the arm that would have caught a
 //     half-adopted domain is this one.
-func TestAFleetAgreesAboutOneCompany(t *testing.T) {
-	noParallel(t)
-	c := startCluster(t, fleetSize)
-	c.hydrated(t)
-
+func claimAFleetAgreesAboutOneCompany(t *testing.T, c *cluster) {
 	written, err := operator(t, c.nodes[0]).CreateTask(t.Context(),
 		"fleet-agrees-1", newTask("ENG", "the linearizable one"), nil)
 	if err != nil {
@@ -1172,9 +1356,11 @@ func TestAFleetAgreesAboutOneCompany(t *testing.T) {
 	}
 
 	// (4) AND THE MEMBERS ARE TWINS, ROW FOR ROW — LAST, because it can
-	// only mean anything once every member has applied everything above.
-	// The board listing was one query's answer; this is every REPLICATED
-	// table of every registered domain, compared as a digest.
+	// only mean anything once every member has applied everything above,
+	// and on EVERY domain's log rather than the two this case wrote to
+	// ([cluster.digestsAtOneEnd]). The board listing was one query's
+	// answer; this is every REPLICATED table of every registered domain,
+	// compared as a digest.
 	//
 	// The class is what makes the comparison meaningful rather than
 	// merely strict: `Divergent` tables are written by an apply and still
@@ -1182,9 +1368,9 @@ func TestAFleetAgreesAboutOneCompany(t *testing.T) {
 	// ones are this node's own — so comparing every table would fail on a
 	// healthy fleet, and comparing only the board would pass on one whose
 	// domains had quietly diverged underneath it.
+	digests := c.digestsAtOneEnd(t)
 	twins := map[string]string{}
-	for i, n := range c.nodes {
-		digest := replicatedDigest(t, n)
+	for i, digest := range digests {
 		if len(digest) == 0 {
 			t.Fatalf("member %d reported no replicated tables — the comparison "+
 				"below would hold between two empty maps", i)
@@ -1209,6 +1395,79 @@ func TestAFleetAgreesAboutOneCompany(t *testing.T) {
 			}
 		}
 	}
+}
+
+// digestsAtOneEnd is every member's [replicatedDigest], taken once every member
+// has applied every registered domain's log to the same end — and taken again
+// should any log have grown while they were read.
+//
+// EVERY DOMAIN, NOT THE ONES A CASE WROTE TO. The digest covers every
+// replicated table of every domain the engine registers, and a member that
+// had not yet applied a record on a log the case never wrote — a node's usage
+// day, published at boot and whenever a fingerprint moves; an embedding the
+// duty filed — would differ from its peers for a reason that is timing rather
+// than divergence. The domain list is the engine's ([engine.Engine.Domains]),
+// for the reason [replicatedDigest] reads it there.
+//
+// AT ONE END, which is what makes the comparison a property of the rows: a
+// log that grew between the first member's read and the last's could hand two
+// healthy members different rows. So the ends are read before and after, and
+// the digests count only when nothing was appended in between.
+func (c *cluster) digestsAtOneEnd(t *testing.T) []map[string]string {
+	t.Helper()
+	var digests []map[string]string
+	waitFor(t, "every member to hold every log to one end", func() bool {
+		ends := c.logEnds(t)
+		for i, n := range c.nodes {
+			for _, end := range ends {
+				ctx, cancel := context.WithTimeout(t.Context(), waitBudget)
+				err := n.engine.WaitCommitted(ctx, end)
+				cancel()
+				if err != nil {
+					t.Fatalf("member %d never applied %s to its end %s: %v",
+						i, end.Stream, end, err)
+				}
+			}
+		}
+		digests = digests[:0]
+		for _, n := range c.nodes {
+			digests = append(digests, replicatedDigest(t, n))
+		}
+		return slices.Equal(ends, c.logEnds(t))
+	})
+	return digests
+}
+
+// logEnds is every registered domain's log end: its last sequence as the
+// stream's leader answers it, at the generation member 0's applier stands
+// at — the position a member has applied the whole log at.
+func (c *cluster) logEnds(t *testing.T) []statelog.Position {
+	t.Helper()
+	n := c.nodes[0]
+	js, err := n.engine.Backends().API().Client(n.engine.Backends().Conn())
+	if err != nil {
+		t.Fatalf("a JetStream client on member 0: %v", err)
+	}
+	var out []statelog.Position
+	for _, domain := range n.engine.Domains() {
+		name := domain.Stream().Name
+		stream, err := js.Stream(t.Context(), name)
+		if err != nil {
+			t.Fatalf("look up %s: %v", name, err)
+		}
+		info, err := stream.Info(t.Context())
+		if err != nil {
+			t.Fatalf("read %s's end: %v", name, err)
+		}
+		generation, err := n.engine.StreamGeneration(name)
+		if err != nil {
+			t.Fatalf("read %s's generation on member 0: %v", name, err)
+		}
+		out = append(out, statelog.Position{
+			Stream: name, Generation: generation, Seq: info.State.LastSeq,
+		})
+	}
+	return out
 }
 
 // replicatedDigest is one member's REPLICATED rows, per table, as a digest.
@@ -1359,10 +1618,21 @@ func TestAPartitionedMemberIsSilentRatherThanSlow(t *testing.T) {
 		return out, time.Since(started)
 	}
 
+	// ONE ASK, WHILE A WAIT BELOW WANTS EVERY PEER TO ANSWER, is short and
+	// asked again rather than long. A healthy scatter on loopback answers in
+	// milliseconds, so an ask that has not heard from every peer within a
+	// second is waiting on a route rather than on an answer — and NATS
+	// re-dials a lost route once a second (measured in this case's own log:
+	// "attempt 1", "attempt 2" a second apart). An ask given clusterSettle
+	// instead waited out all ten seconds when it went out a moment before
+	// the route came back, before the next ask could find it. waitFor's
+	// budget still bounds the whole wait.
+	const askEach = time.Second
+
 	// EVERY PEER ANSWERS FIRST. Without this the silence below is
 	// unfalsifiable: a responder that never registered looks the same.
 	waitFor(t, "every peer to answer a scatter", func() bool {
-		got, _ := scatter(clusterSettle)
+		got, _ := scatter(askEach)
 		return len(got) == len(peers)
 	})
 
@@ -1402,7 +1672,7 @@ func TestAPartitionedMemberIsSilentRatherThanSlow(t *testing.T) {
 	// report would be a permanent state rather than a passing one.
 	c.relays.Heal(t, 1)
 	waitFor(t, "the healed member to answer again", func() bool {
-		back, _ := scatter(clusterSettle)
+		back, _ := scatter(askEach)
 		return len(back) == len(peers)
 	})
 }

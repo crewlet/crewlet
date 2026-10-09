@@ -48,6 +48,7 @@ func (s *readThenRecover) Get(ctx context.Context, turnID string) (PendingRun, b
 // revived run was then resumed into. The next holder resumes into it once, and
 // the old holder announces nothing about an answer that is not its own.
 func TestASlowHoldersSettleNeverKillsTheBoxItsSuccessorRevived(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
 	rig.coordinator.lease = leased(rigLease)
@@ -97,6 +98,7 @@ func TestASlowHoldersSettleNeverKillsTheBoxItsSuccessorRevived(t *testing.T) {
 // read; a successor that fenced the row first keeps it — box and all — and the
 // old holder says nothing.
 func TestASlowHoldersFailureNeverEndsARunItsSuccessorFenced(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
 	rig.coordinator.lease = leased(rigLease)
@@ -191,6 +193,7 @@ func leftToTheSuccessor(t *testing.T, rig *coordRig) {
 // which constrains nothing: the answer was recorded and claimed past the
 // successor's fence, taken, and its turn run on a seat this node did not hold.
 func TestANodeThatLostTheSeatRecordsNoAnswerOnIt(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	reply, given, ev := fencedBySuccessor(t, rig)
 	rig.coordinator.lease = notLeased
@@ -212,6 +215,7 @@ func TestANodeThatLostTheSeatRecordsNoAnswerOnIt(t *testing.T) {
 // waiting — where nothing would ever drive it, the successor having nothing
 // owed and this node about to let the seat go.
 func TestAStaleHoldersAnswerIsRefusedByTheSuccessorsFence(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	reply, given, ev := fencedBySuccessor(t, rig)
 	rig.coordinator.lease = leased(Fence{Owner: "node-x", Epoch: 5})
@@ -233,6 +237,7 @@ func TestAStaleHoldersAnswerIsRefusedByTheSuccessorsFence(t *testing.T) {
 // fenced it and owes it the resume. The old holder's claim is refused under the
 // newer fence and drops the answer; the successor resumes the run with it once.
 func TestAFenceBetweenTheRecordAndTheClaimLeavesTheAnswerToTheSuccessor(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
 	var next *coordRig
@@ -284,6 +289,7 @@ func (s *claimFirst) ClaimForResume(ctx context.Context, turnID string, tail Tai
 // as one this node cannot resume — to reach the holder, the poll firing it again
 // while the job's row is running — and nothing is claimed or collected here.
 func TestACompletionOnANodeThatLostTheSeatIsRoutedOn(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true, Text: "done"})
@@ -317,6 +323,7 @@ func TestACompletionOnANodeThatLostTheSeatIsRoutedOn(t *testing.T) {
 // A LAUNCH ON A SEAT THIS NODE DOES NOT HOLD IS REFUSED, and writes no row: the
 // turn asking for it is one the seat's lease no longer stands behind.
 func TestALaunchOnASeatNotHeldIsRefused(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.coordinator.lease = notLeased
 	if _, err := rig.coordinator.Launch(t.Context(), rig.manager, launchReq("t1")); !errors.Is(err, ErrSeatNotHeld) {
@@ -337,6 +344,7 @@ func TestALaunchOnASeatNotHeldIsRefused(t *testing.T) {
 // find on the row and revive, and a give-back under this node's lease would only
 // race that holder's fence. The seat's mail is no longer held behind it here.
 func TestASeriesOnASeatThisNodeLostStopsWithoutAWrite(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	holds := rig.withHold()
 	parkOnAQuestion(t, rig)

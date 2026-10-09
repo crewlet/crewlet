@@ -123,7 +123,8 @@ type Config struct {
 
 	// LeafPort opens a leaf LISTENER on this member, which is where the
 	// fleet's leaves dial in. Zero opens none, and a fleet with no member
-	// listening has nowhere for a stateless node to join.
+	// listening has nowhere for a stateless node to join. [AnyPort] binds
+	// whichever port the OS hands out, read back with [Server.LeafPort].
 	//
 	// It accepts any connection that reaches it, exactly as the route port
 	// does, and for the same reason: the fleet is one trust domain on a
@@ -210,26 +211,6 @@ type Config struct {
 	// NakDelay shrinks this too, or the doubling puts its later
 	// redeliveries minutes apart.
 	NakCeiling time.Duration
-
-	// LookupBudget overrides the ceiling on one existence probe — the
-	// "does this object already exist" read that decides
-	// create-versus-observe, including however many times
-	// [jsprovision.Ask] re-issues it. Zero takes [jsprovision.LookupBudget].
-	//
-	// IT EXISTS SO THE EXHAUSTED PROBE IS TESTABLE, which is the same
-	// reason the four knobs above it exist and is not a lesser one. The
-	// fall-through that keeps a boot alive when the broker says nothing
-	// only runs once a probe has spent its WHOLE ceiling; at the shipped
-	// thirty seconds a case proving it costs thirty seconds, so the case
-	// written for it stalled one attempt instead — and [jsprovision.Ask]
-	// re-asked, got a real answer, and left the branch unexercised. The
-	// test passed with the branch deleted, which is the one thing a test
-	// must never do.
-	//
-	// Nothing in the engine sets it. A deployment that wanted a different
-	// ceiling would be arguing with the server's own timing, which is
-	// where the number comes from.
-	LookupBudget time.Duration
 
 	// Debug hands nats-server its own debug flag, which is what unlocks
 	// the broker's internal `Debugf` population.
@@ -325,6 +306,25 @@ type Queue struct {
 	// inFlight counts handler invocations, which is the number an
 	// operator watches converge to zero during a drain.
 	inFlight queue.Inflight
+
+	// timing is every duration this client's provisioning calls wait on,
+	// and the ZERO VALUE IS PRODUCTION: [Queue.provisioning] answers
+	// [jsprovision.Clustered.Timing] for this queue's topology whenever it
+	// is unset, which is always outside this package's own tests.
+	//
+	// UNEXPORTED, AND THE ONE SEAM, because the branches it reaches are
+	// the ones only an EXHAUSTED budget reaches — a create the server held
+	// past its whole budget and then read back, a probe nobody answered
+	// for its whole ceiling — and at the production numbers a case proving
+	// one waits out two minutes. It replaced an exported lookup-ceiling
+	// field on [Config] that nothing in the engine set, while the other
+	// numbers had no seam at all. Unexported because an operator has no
+	// reason to argue with the server's own timing, which is where every
+	// one of them comes from.
+	//
+	// Set only while nothing else is using the queue: nothing reads it
+	// under the lock.
+	timing jsprovision.Timing
 }
 
 type attachKey struct{ topic, group string }
@@ -399,7 +399,7 @@ func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns 
 	// actually depends on it: doing it in StartServer instead would make
 	// the first member of a fresh cluster wait for a quorum that cannot
 	// exist until the peers it is blocking have started.
-	if err := embedded.awaitClusterReady(ctx, q.cfg.Replicas); err != nil {
+	if err := embedded.awaitClusterReady(ctx, q.js, q.cfg.Replicas); err != nil {
 		q.nc.Close()
 		return nil, err
 	}
@@ -420,8 +420,7 @@ func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns 
 // WithTimeout only ever shortens, each create below still takes the lesser of
 // its own budget and what is left of this one.
 func (q *Queue) ensureStreams(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx,
-		q.Clustered().SequenceBudget())
+	ctx, cancel := context.WithTimeout(ctx, q.provisioning().Sequence)
 	defer cancel()
 
 	for _, spec := range engineStreams(q.cfg.EventRetention) {
@@ -449,7 +448,7 @@ func (q *Queue) ensureStreams(ctx context.Context) error {
 // would turn a config mistake into a thirty-second hang with the same
 // message at the end.
 func (q *Queue) createStream(ctx context.Context, config jetstream.StreamConfig) error {
-	return jsprovision.Place(ctx, q.Clustered().AskTerm(), func(ctx context.Context) error {
+	return q.provisioning().Place(ctx, func(ctx context.Context) error {
 		// CREATE, NOT CreateOrUpdate, and the difference is the whole
 		// race guard above rather than a preference.
 		//
@@ -468,7 +467,7 @@ func (q *Queue) createStream(ctx context.Context, config jetstream.StreamConfig)
 		// configuration at boot is how a ceiling an operator raised gets
 		// silently lowered".
 		_, err := q.js.CreateStream(ctx, config)
-		if refusedStorage(err) {
+		if jsprovision.OutOfCapacity(err) {
 			// NAMED, because the broker's own words name no number: see
 			// [ErrInsufficientStorage]. Named INSIDE the placement
 			// retry rather than around it, so the refusal that is not
@@ -484,19 +483,14 @@ func (q *Queue) createStream(ctx context.Context, config jetstream.StreamConfig)
 	})
 }
 
-// provisionBudget is how long one stream create on this queue gets, which
-// depends on whether it has peers to agree with — see [jsprovision].
-func (q *Queue) provisionBudget() time.Duration {
-	return q.Clustered().Budget()
-}
-
-// lookupBudget is the ceiling on one existence probe on this queue — see
-// [Config.LookupBudget] for why it is overridable at all.
-func (q *Queue) lookupBudget() time.Duration {
-	if q.cfg.LookupBudget > 0 {
-		return q.cfg.LookupBudget
+// provisioning is every duration this queue's provisioning calls wait on:
+// the production timing for its topology — see [jsprovision] — unless this
+// package's own tests set [Queue.timing].
+func (q *Queue) provisioning() jsprovision.Timing {
+	if q.timing != (jsprovision.Timing{}) {
+		return q.timing
 	}
-	return jsprovision.LookupBudget
+	return q.Clustered().Timing()
 }
 
 // Clustered is whether this queue's broker has peers, which is the fact every
@@ -672,7 +666,7 @@ func (q *Queue) createOrObserveStream(
 	// the sequence ceiling [Queue.ensureStreams] applies effective, and
 	// what keeps two deadlines from costing more than the one they
 	// replaced.
-	lookupCtx, cancelLookup := context.WithTimeout(ctx, q.lookupBudget())
+	lookupCtx, cancelLookup := context.WithTimeout(ctx, q.provisioning().Lookup)
 	// A BREADCRUMB ON THE LOOKUP TOO, and it is the one that was missing:
 	// this is the FIRST call to reach the metadata group for this stream,
 	// so a member stalled against a group that has not settled waits here
@@ -685,10 +679,12 @@ func (q *Queue) createOrObserveStream(
 				"fleet that is a metadata group that has not settled, and the "+
 				"create has not been attempted yet")
 	})
-	// THROUGH [jsprovision.Ask], so a request the group never answered is
-	// re-issued inside the ceiling above rather than being the whole of it.
+	// THROUGH [jsprovision.Timing.Read], so a request the group never
+	// answered is re-issued inside the ceiling above rather than being the
+	// whole of it — a second after it was sent, because a read is answered
+	// when the server processes it or never ([jsprovision.ReadTerm]).
 	var info jetstream.Stream
-	err := jsprovision.Ask(lookupCtx, q.Clustered().AskTerm(),
+	err := q.provisioning().Read(lookupCtx,
 		func(ctx context.Context) error {
 			var e error
 			info, e = q.js.Stream(ctx, spec.name)
@@ -716,33 +712,11 @@ func (q *Queue) createOrObserveStream(
 		return fmt.Errorf("ensure stream %s: %w", spec.name, err)
 	}
 
-	createCtx, cancel := context.WithTimeout(ctx, q.provisionBudget())
+	createCtx, cancel := context.WithTimeout(ctx, q.provisioning().Budget)
 	defer cancel()
 	createErr := q.createStream(createCtx, config)
 	if createErr == nil {
 		return nil
-	}
-	if jsprovision.Unplaceable(createErr) || errors.Is(createErr, ErrInsufficientStorage) {
-		// NOTHING WAS PLACED, so there is nothing to become visible.
-		// Two refusals say that, and both must skip the read-back:
-		// reading back would spend the whole window asking after an
-		// object nobody made, and append a misleading not-found to the
-		// error that says what is actually wrong. [openBucket] has
-		// always gated the first; the stream path did not, which is
-		// the same rule written twice and drifting.
-		//
-		// STILL FORMING is the metadata leader refusing to PLACE this
-		// stream, after createStream waited out the whole budget.
-		//
-		// AND A REFUSED RESERVATION is it refusing the ceiling: the
-		// limits check runs only once no peer holds an assignment for
-		// the name (a peer that already made it answers "name already
-		// in use"), so this code is never a race a read-back could
-		// resolve. Left to fall through, the boot's clearest error —
-		// the one naming the bytes, the limit and the Tier A field —
-		// arrived wrapped in "(and it is not there)", five seconds
-		// later, once per refused log.
-		return fmt.Errorf("ensure stream %s: %w", spec.name, createErr)
 	}
 	if jsprovision.NoApplicableLimit(createErr) {
 		// NO LIMIT APPLIES TO THIS STREAM AT ALL, which is a different
@@ -750,16 +724,29 @@ func (q *Queue) createOrObserveStream(
 		// account's limits are tiered and it carries none for the class
 		// `stream.replicas` puts this node in, so the broker refuses
 		// the create before comparing a byte and no smaller ceiling
-		// would be accepted either.
-		//
-		// TERMINAL AND NOT READ BACK, for the arm above's reason:
-		// nothing was placed. Unclassified it fell through to the
-		// read-back below and came back as `(and it is not there:
-		// stream not found)` appended to the one sentence that said
-		// what was wrong — a missing stream on a cluster whose account
-		// never had a limit for it.
+		// would be accepted either. Asked BEFORE the general refusal
+		// below, which it is one of, because it is the one worded
+		// differently.
 		return fmt.Errorf("ensure stream %s: %w%s", spec.name, createErr,
 			jsprovision.NoApplicableLimitDetail(q.cfg.Replicas))
+	}
+	if jsprovision.Refused(createErr) {
+		// NOTHING WAS PLACED, so there is nothing to become visible:
+		// the broker refused this create on the request alone — still
+		// unplaceable after createStream waited the whole budget out, a
+		// reservation the limit has no room for, subjects another stream
+		// already holds — for a reason no peer creating the same stream
+		// can have produced. See [jsprovision.Refused] for which, and why
+		// a list.
+		//
+		// Read back, each of them spent the whole read-back window
+		// asking after a stream nobody made, then reported the refusal
+		// wrapped in "(and it is not there: stream not found)" — a
+		// not-found an operator reads as the cause. A publish to a
+		// subject whose derived stream overlapped the engine's own paid
+		// that on every call, because a stream is remembered only once
+		// it exists.
+		return fmt.Errorf("ensure stream %s: %w", spec.name, createErr)
 	}
 	// A PEER MAY HAVE WON THE RACE, and it announces that in two shapes
 	// rather than one.
@@ -786,7 +773,7 @@ func (q *Queue) createOrObserveStream(
 	// fails the boot before [Queue.DomainLog]'s own retry could help. ON
 	// ctx AND NOT createCtx, because createCtx is the deadline that just
 	// expired — [jsprovision.Settle] owns this read's own short window.
-	err = jsprovision.Settle(ctx, func(ctx context.Context) error {
+	err = q.provisioning().Settle(ctx, func(ctx context.Context) error {
 		var e error
 		info, e = q.js.Stream(ctx, spec.name)
 		return e
@@ -1140,7 +1127,7 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 	// exceeded` failed the same boot. What removes the shape is reading an
 	// unanswered lookup as the third value it is and falling through to
 	// the create below.
-	lookupCtx, cancelLookup := context.WithTimeout(ctx, q.lookupBudget())
+	lookupCtx, cancelLookup := context.WithTimeout(ctx, q.provisioning().Lookup)
 	defer cancelLookup()
 	// AND ITS BREADCRUMB, because a budget without one just moves where
 	// the silence is. This is the FIRST call to reach the metadata group
@@ -1154,7 +1141,7 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 				"fleet that is a metadata group that has not settled, and the "+
 				"create has not been attempted yet")
 	})
-	getErr := jsprovision.Ask(lookupCtx, q.Clustered().AskTerm(),
+	getErr := q.provisioning().Read(lookupCtx,
 		func(ctx context.Context) error {
 			_, e := q.js.Consumer(ctx, stream, name)
 			return e
@@ -1251,7 +1238,7 @@ func (q *Queue) ensureDurableConsumer(ctx context.Context, stream string,
 	//
 	// NOT SHADOWING ctx, because the read-back at the end runs when THIS
 	// deadline has expired and must not inherit it.
-	createCtx, cancel := context.WithTimeout(ctx, q.provisionBudget())
+	createCtx, cancel := context.WithTimeout(ctx, q.provisioning().Budget)
 	defer cancel()
 
 	// THE SAME BREADCRUMB the stream and bucket creates carry, and this
@@ -1271,7 +1258,7 @@ func (q *Queue) ensureDurableConsumer(ctx context.Context, stream string,
 	// transient here — and without the retry the clustered budget above
 	// bought this call nothing, because the one condition it exists to
 	// wait out was the one condition this create did not wait on.
-	createErr := jsprovision.Place(createCtx, q.Clustered().AskTerm(), func(ctx context.Context) error {
+	createErr := q.provisioning().Place(createCtx, func(ctx context.Context) error {
 		var e error
 		cons, e = q.js.CreateConsumer(ctx, stream, cfg)
 		return e
@@ -1285,12 +1272,6 @@ func (q *Queue) ensureDurableConsumer(ctx context.Context, stream string,
 	if createErr == nil {
 		return cons, true, nil
 	}
-	if jsprovision.Unplaceable(createErr) {
-		// STILL UNPLACEABLE after the whole budget, so nothing was
-		// placed and there is nothing to read back — the same gate the
-		// stream and bucket creates take.
-		return nil, false, createErr
-	}
 	if jsprovision.NoApplicableLimit(createErr) {
 		// NO LIMIT APPLIES TO THIS CONSUMER EITHER. A consumer is
 		// resolved through the same table as a stream
@@ -1302,13 +1283,21 @@ func (q *Queue) ensureDurableConsumer(ctx context.Context, stream string,
 		return nil, false, fmt.Errorf("%w%s", createErr,
 			jsprovision.NoApplicableLimitDetail(q.cfg.Replicas))
 	}
+	if jsprovision.Refused(createErr) {
+		// NOTHING WAS PLACED and no peer's race explains the answer —
+		// still unplaceable after the whole budget, or refused on the
+		// request alone — so there is nothing to read back: the same
+		// gate the stream create takes, through the one predicate
+		// [jsprovision.Refused] for every create site.
+		return nil, false, createErr
+	}
 	// RE-ASKED, like the stream and bucket read-backs: a peer's create is
 	// visible to this member only on its next metadata update, so one
 	// lookup answers at an arbitrary instant inside that window and fails
 	// a boot over a consumer that exists. ON ctx AND NOT createCtx, for
 	// the reason [jsprovision.Settle] gives: createCtx may be the deadline
 	// that just expired.
-	err := jsprovision.Settle(ctx, func(ctx context.Context) error {
+	err := q.provisioning().Settle(ctx, func(ctx context.Context) error {
 		var e error
 		cons, e = q.js.Consumer(ctx, stream, cfg.Durable)
 		return e
@@ -1536,6 +1525,10 @@ func (q *Queue) WaitForHandlers(ctx context.Context, timeout time.Duration) (int
 // handler finishing: WaitForHandlers is the API for that, and a graceful
 // drain calls it first. Waiting on handlers here would make Stop hang for as
 // long as the longest turn — on a path whose whole job is to let go.
+//
+// AN IDLE LOOP DOES NOT SPEND IT: Stop ends every outstanding fetch (see
+// [attachment.stop]), so a loop parked in one exits at once. What it bounds
+// is a loop inside a handler that ignores its context.
 const stopGrace = 250 * time.Millisecond
 
 // Stop closes every attachment and the connection, and shuts down the
@@ -1560,7 +1553,7 @@ func (q *Queue) Stop(ctx context.Context) error {
 	var wg sync.WaitGroup
 	for _, a := range atts {
 		wg.Go(func() {
-			a.close()
+			a.stop()
 			a.wait(stopGrace)
 		})
 	}

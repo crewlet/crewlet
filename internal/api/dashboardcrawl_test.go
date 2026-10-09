@@ -27,6 +27,8 @@ package api_test
 // what a screen fetches later.
 
 import (
+	"bytes"
+	"compress/gzip"
 	"fmt"
 	"io"
 	"io/fs"
@@ -149,11 +151,45 @@ func (c crawled) ofKind(ext string) []reachedFile {
 // crawlDashboard fetches the shell from the server and then everything it
 // reaches, the way a browser would, and reports every failure rather than the
 // first: a build that lost three chunks should say so once.
+//
+// For a tree a case builds itself — the stand-in bundle and its mutations,
+// which certify the crawler. The binary's own bundle is crawled ONCE for the
+// whole suite ([embeddedDashboard]).
 func crawlDashboard(t *testing.T, a *api.App) crawled {
 	t.Helper()
+	return crawl(a)
+}
+
+// embedded is the binary's own dashboard as the server answers it: one app
+// over the embedded tree, and one crawl of it.
+type embedded struct {
+	app   *api.App
+	crawl crawled
+}
+
+// embeddedDashboard is built in TestMain, before any case runs, and every case
+// about the dashboard the binary embeds reads it.
+//
+// ONCE because the crawl is a deterministic function of the embedded tree and
+// the handlers, and six cases each building an app and crawling it paid six
+// times for the same answer: a level-9 gzip of every file the shell reaches —
+// the server compresses an asset on its first serve — and a pass of the
+// reference patterns over every module, minutes of the suite under the race
+// detector. In TestMain rather than behind a sync.OnceValues, because the
+// cases that arrived while the first one was still crawling would each sit on
+// a parallel slot doing nothing until it finished. What each case asserts is
+// unchanged and still read off the server's own answers; what is no longer
+// exercised six times is an app's FIRST serve of each asset, which
+// dashboard_test.go's own cases cover, revalidation and gzip negotiation
+// included.
+var embeddedDashboard embedded
+
+// crawl is crawlDashboard with no test to report through: everything it finds
+// wrong is a problem it returns rather than a failure.
+func crawl(a *api.App) crawled {
 	var c crawled
 
-	res := fetch(t, a, "/dashboard", nil)
+	res := serve(a, "/dashboard", nil)
 	shell, err := io.ReadAll(res.Body)
 	_ = res.Body.Close()
 	if err != nil || res.StatusCode != http.StatusOK {
@@ -193,7 +229,7 @@ func crawlDashboard(t *testing.T, a *api.App) crawled {
 				"check; teach servedAs its type rather than dropping the file", where))
 			continue
 		}
-		res := fetch(t, a, next.url, nil)
+		res := serve(a, next.url, nil)
 		body, err := io.ReadAll(res.Body)
 		_ = res.Body.Close()
 		switch {
@@ -466,7 +502,7 @@ func TestTheCrawlNamesEveryFileABrowserWouldMiss(t *testing.T) {
 // drift gate both carry without complaint.
 func TestEveryFileUnderAssetsIsReachedFromTheShell(t *testing.T) {
 	t.Parallel()
-	c := crawlDashboard(t, newApp(t, api.Options{}))
+	c := embeddedDashboard.crawl
 	for _, p := range c.problems {
 		t.Error(p)
 	}
@@ -537,6 +573,59 @@ func initialLoad(c crawled) map[string]bool {
 		}
 	}
 	return initial
+}
+
+// servedSize is how many bytes the server sends for one file to a browser that
+// asks for gzip — the gzip it answers with, or the file as it is where gzip
+// would not be smaller — which is what a budget over the bundle is about.
+//
+// READ OFF THE ANSWER rather than recomputed: compressing the body again here
+// agrees with what is sent only while this copy keeps the server's level and
+// its "only when smaller" rule in step by hand, and it was a second level-9
+// pass over every module the shell reaches.
+func servedSize(t *testing.T, a *api.App, url string) int {
+	t.Helper()
+	res := fetch(t, a, url, map[string]string{"Accept-Encoding": "gzip"})
+	defer func() { _ = res.Body.Close() }()
+	body, err := io.ReadAll(res.Body)
+	if err != nil || res.StatusCode != http.StatusOK {
+		t.Fatalf("%s answered %d (%v), so its size is unknown", url, res.StatusCode, err)
+	}
+	return len(body)
+}
+
+// TestTheServedSizeIsWhatTheServerSends certifies the measurement the size
+// budget is taken with, both ways: a file gzip shrinks is counted as the gzip
+// that goes out — the same file, decoded — and one it cannot shrink, which
+// the server sends as it is, at its own length.
+func TestTheServedSizeIsWhatTheServerSends(t *testing.T) {
+	t.Parallel()
+	big := []byte(strings.Repeat(`export const label=t("Spend over the window");`, 1500))
+	tiny := []byte(`export{};`)
+	tree := fstest.MapFS{
+		"dashboard/assets/big-Ab12Cd34.js":  {Data: big},
+		"dashboard/assets/tiny-Ab12Cd34.js": {Data: tiny},
+	}
+	a := newApp(t, api.Options{Assets: tree})
+
+	sent := servedSize(t, a, dashboardBase+"assets/big-Ab12Cd34.js")
+	if sent >= len(big)/10 {
+		t.Errorf("a %d-byte module of one repeated line was counted at %d bytes: that is "+
+			"not the gzip the server sends a browser that asks for it", len(big), sent)
+	}
+	res := fetch(t, a, dashboardBase+"assets/big-Ab12Cd34.js", map[string]string{"Accept-Encoding": "gzip"})
+	defer func() { _ = res.Body.Close() }()
+	zr, err := gzip.NewReader(res.Body)
+	if err != nil {
+		t.Fatalf("the answer counted is not gzip: %v", err)
+	}
+	if decoded, err := io.ReadAll(zr); err != nil || !bytes.Equal(decoded, big) {
+		t.Errorf("the gzip counted does not decode to the module (%v)", err)
+	}
+	if got := servedSize(t, a, dashboardBase+"assets/tiny-Ab12Cd34.js"); got != len(tiny) {
+		t.Errorf("a module gzip cannot shrink was counted at %d bytes, want the %d it is sent as",
+			got, len(tiny))
+	}
 }
 
 // TestTheInitialLoadIsTheShellAndItsStaticGraph certifies the partition the

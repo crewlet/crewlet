@@ -418,7 +418,24 @@ func retentionReanchor(args []string, stdout, stderr io.Writer) error {
 			"-confirm <the live stream's created_at>")
 		return errors.New("name the log")
 	}
+	return reanchor(context.Background(), client, reanchorAsk{
+		stream: *stream, confirm: *confirm, force: *force, discard: *discard,
+	}, stdout)
+}
 
+// reanchorAsk is what an operator asked `crewlet retention reanchor` for.
+type reanchorAsk struct {
+	stream, confirm string
+	force, discard  bool
+}
+
+// reanchor asks client's node about the log ask names, and — once the operator
+// has confirmed its created_at — for the transition itself, waiting
+// [reanchorRequestTimeout] for that answer rather than the client's own
+// timeout. The client is a parameter so the suite can prove that wait against
+// an ordinary timeout it can afford to outlast, rather than sitting out the
+// real ten seconds.
+func reanchor(ctx context.Context, client *nodeClient, ask reanchorAsk, stdout io.Writer) error {
 	var status struct {
 		Stream     string                `json:"stream"`
 		CreatedAt  time.Time             `json:"created_at"`
@@ -429,11 +446,11 @@ func retentionReanchor(args []string, stdout, stderr io.Writer) error {
 		Discards   *statelog.TailRecord  `json:"discards"`
 		Discarding string                `json:"discarding"`
 	}
-	if err := client.get(context.Background(),
-		"/work/retention/reanchor?stream="+url.QueryEscape(*stream), &status); err != nil {
+	if err := client.get(ctx,
+		"/work/retention/reanchor?stream="+url.QueryEscape(ask.stream), &status); err != nil {
 		return err
 	}
-	if strings.TrimSpace(*confirm) == "" {
+	if strings.TrimSpace(ask.confirm) == "" {
 		// PRINTED RATHER THAN ACCEPTED. The confirmation says "I looked
 		// at the thing I am re-anchoring", and a verb that read the
 		// value and fed it straight back would be confirming against
@@ -466,11 +483,11 @@ func retentionReanchor(args []string, stdout, stderr io.Writer) error {
 	}
 
 	path := fmt.Sprintf("/work/retention/reanchor?stream=%s&confirm=%s",
-		url.QueryEscape(*stream), url.QueryEscape(*confirm))
-	if *force {
+		url.QueryEscape(ask.stream), url.QueryEscape(ask.confirm))
+	if ask.force {
 		path += "&force=true"
 	}
-	if *discard {
+	if ask.discard {
 		path += "&discard=true"
 	}
 	var answer struct {
@@ -480,7 +497,7 @@ func retentionReanchor(args []string, stdout, stderr io.Writer) error {
 		Cursor     uint64                `json:"cursor"`
 		Discarded  *statelog.TailRecord  `json:"discarded"`
 	}
-	if err := client.patiently(reanchorRequestTimeout).post(context.Background(),
+	if err := client.patiently(reanchorRequestTimeout).post(ctx,
 		path, &answer); err != nil {
 		return err
 	}

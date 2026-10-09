@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 func companyWith(t *testing.T, doc string) *Company {
@@ -105,17 +106,11 @@ func TestAConfiguredEmbedderIsBuiltAtItsDeclaredWidth(t *testing.T) {
 // only part of Backends any of this reads.
 func engineOverStore(t *testing.T, width int) *Engine {
 	t.Helper()
-	db, err := store.OpenNode(t.Context(), t.TempDir()+"/index.db",
-		store.Options{EmbeddingDim: width})
-	if err != nil {
-		t.Fatalf("store.OpenNode: %v", err)
-	}
+	// WITH A DATA NODE'S REPLICATED ESTATE, which it opens at boot and
+	// every domain-level reader here reads through.
+	db, _ := storetest.OpenEstate(t, t.TempDir()+"/index.db",
+		store.Options{EmbeddingDim: width}, estateLogs())
 	t.Cleanup(func() { db.Close() })
-	// A DATA NODE'S REPLICATED ESTATE, which it opens at boot and every
-	// domain-level reader here reads through.
-	if _, err := db.OpenReplicated(t.Context(), estateLogs()); err != nil {
-		t.Fatalf("open the replicated estate: %v", err)
-	}
 	return &Engine{backends: &Backends{Store: db}}
 }
 
