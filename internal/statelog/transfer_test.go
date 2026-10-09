@@ -5,12 +5,15 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -202,6 +205,322 @@ func TestADonorSaysWhetherItIsServing(t *testing.T) {
 		t.Fatal("a donor whose Serve has returned says it is serving")
 	}
 }
+
+// A DONOR SAYS IT IS SERVING ONLY ONCE THE SERVER WILL ROUTE AN ASK TO IT.
+//
+// A subscription is registered when its interest reaches the server, not when
+// Subscribe returns, and a join on the donor's own node asks on ANOTHER
+// connection — so a donor that said it was serving the moment it subscribed
+// could be named by a join whose ask then reached nobody, and that join waited
+// out its whole offer window. Here everything the donor's connection writes
+// after it has connected is held short of the server, as a slow link holds
+// it: an ask on another connection finds nobody listening, and the donor does
+// not say it serves. Once the held bytes arrive it does, and an ask made the
+// moment it says so is answered.
+func TestADonorSaysItIsServingOnlyOnceTheServerWillRouteAnAskToIt(t *testing.T) {
+	t.Parallel()
+	ns := coreBroker(t)
+	link := &heldLink{server: ns}
+	donor, err := statelog.NewDonor(statelog.DonorDeps{
+		NodeID: "probe",
+		Dial: func(context.Context) (*nats.Conn, error) {
+			nc, err := nats.Connect("", nats.InProcessServer(link))
+			if err != nil {
+				return nil, err
+			}
+			link.hold()
+			return nc, nil
+		},
+		Newest: func() (statelog.Manifest, bool) { return statelog.Manifest{}, false },
+		Path:   func(statelog.Manifest) string { return "" },
+	})
+	if err != nil {
+		t.Fatalf("NewDonor: %v", err)
+	}
+	asker, err := nats.Connect("", nats.InProcessServer(ns))
+	if err != nil {
+		t.Fatalf("connect the asker: %v", err)
+	}
+	t.Cleanup(asker.Close)
+	ask := []byte(`{"node_id":"joiner"}`)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	served := make(chan struct{})
+	go func() { defer close(served); _ = donor.Serve(ctx) }()
+	t.Cleanup(func() { cancel(); <-served })
+
+	// THE PREMISE: the donor has subscribed, and the server does not know.
+	link.waitFor(t, "SUB "+statelog.SubjectOffer)
+	if _, err := asker.Request(statelog.SubjectOffer, ask, 5*time.Second); !errors.Is(err, nats.ErrNoResponders) {
+		t.Fatalf("the premise: an ask while the donor's subscription is held "+
+			"short of the server is answered %v, want %v", err, nats.ErrNoResponders)
+	}
+	for until := time.Now().Add(200 * time.Millisecond); time.Now().Before(until); {
+		if donor.Serving() {
+			t.Fatal("a donor whose subscriptions have not reached the server says " +
+				"it is serving: a join that named it would ask nobody and wait out " +
+				"its window")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	link.release(t)
+	for until := time.Now().Add(10 * time.Second); !donor.Serving(); {
+		if time.Now().After(until) {
+			t.Fatal("a donor whose subscriptions reached the server never said it was serving")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	reply, err := asker.Request(statelog.SubjectOffer, ask, 5*time.Second)
+	if err != nil {
+		t.Fatalf("an ask the moment the donor said it was serving: %v", err)
+	}
+	var offer statelog.Offer
+	if err := json.Unmarshal(reply.Data, &offer); err != nil {
+		t.Fatalf("decode the answer: %v", err)
+	}
+	if offer.Donor != "probe" || !offer.Declined() {
+		t.Fatalf("the answer is %+v, want the empty donor's own decline", offer)
+	}
+}
+
+// A DONOR WHOSE CONFIRMATION FAILED IS CONFIRMED AGAIN, AND SERVES.
+//
+// A confirmation the client gave up on — here the connection drops while the
+// ping is in flight, which fails it at once — is not a subscription the server
+// refused: the connection sends both again when it reconnects. A donor that
+// ended there would be gone for the node's whole life, since nothing starts a
+// donor twice, over a link that dropped once at the wrong moment.
+func TestADonorWhoseConfirmationFailedIsConfirmedAgain(t *testing.T) {
+	t.Parallel()
+	ns := coreBroker(t)
+	link := &heldLink{server: ns}
+	donor, err := statelog.NewDonor(statelog.DonorDeps{
+		NodeID: "probe",
+		Dial: func(context.Context) (*nats.Conn, error) {
+			// RECONNECTING AT ONCE, so the case measures the donor
+			// rather than the client's back-off.
+			nc, err := nats.Connect("", nats.InProcessServer(link),
+				nats.ReconnectWait(time.Millisecond), nats.MaxReconnects(-1))
+			if err != nil {
+				return nil, err
+			}
+			link.hold()
+			return nc, nil
+		},
+		Newest: func() (statelog.Manifest, bool) { return statelog.Manifest{}, false },
+		Path:   func(statelog.Manifest) string { return "" },
+	})
+	if err != nil {
+		t.Fatalf("NewDonor: %v", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	served := make(chan error, 1)
+	go func() { served <- donor.Serve(ctx) }()
+	t.Cleanup(func() { cancel(); <-served })
+
+	// THE CONFIRMATION IS IN FLIGHT, and the link drops beneath it.
+	link.waitFor(t, "PING")
+	link.drop(t)
+
+	for until := time.Now().Add(10 * time.Second); !donor.Serving(); {
+		select {
+		case err := <-served:
+			served <- err
+			t.Fatalf("the donor ended when its confirmation failed (%v): a "+
+				"node whose link dropped once at its start would donate nothing "+
+				"for the rest of its life", err)
+		default:
+		}
+		if time.Now().After(until) {
+			t.Fatal("a donor whose connection came back never said it was serving")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	asker, err := nats.Connect("", nats.InProcessServer(ns))
+	if err != nil {
+		t.Fatalf("connect the asker: %v", err)
+	}
+	defer asker.Close()
+	reply, err := asker.Request(statelog.SubjectOffer, []byte(`{"node_id":"joiner"}`), 5*time.Second)
+	if err != nil {
+		t.Fatalf("an ask once the donor said it was serving again: %v", err)
+	}
+	var offer statelog.Offer
+	if err := json.Unmarshal(reply.Data, &offer); err != nil {
+		t.Fatalf("decode the answer: %v", err)
+	}
+	if offer.Donor != "probe" || !offer.Declined() {
+		t.Fatalf("the answer is %+v, want the empty donor's own decline", offer)
+	}
+}
+
+// A DONOR WHOSE CONNECTION CLOSED FOR GOOD ENDS, AND SAYS WHY.
+//
+// The one failure a confirmation is not asked again after: a closed connection
+// sends nothing again, so every later attempt would fail at once, and a loop
+// that went on asking would spin for the node's whole life on a donor that
+// answers nobody.
+func TestADonorWhoseConnectionClosedEnds(t *testing.T) {
+	t.Parallel()
+	ns := coreBroker(t)
+	link := &heldLink{server: ns}
+	dialled := make(chan *nats.Conn, 1)
+	donor, err := statelog.NewDonor(statelog.DonorDeps{
+		NodeID: "probe",
+		Dial: func(context.Context) (*nats.Conn, error) {
+			nc, err := nats.Connect("", nats.InProcessServer(link))
+			if err != nil {
+				return nil, err
+			}
+			link.hold()
+			dialled <- nc
+			return nc, nil
+		},
+		Newest: func() (statelog.Manifest, bool) { return statelog.Manifest{}, false },
+		Path:   func(statelog.Manifest) string { return "" },
+	})
+	if err != nil {
+		t.Fatalf("NewDonor: %v", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	served := make(chan error, 1)
+	go func() { served <- donor.Serve(ctx) }()
+
+	link.waitFor(t, "PING")
+	(<-dialled).Close()
+	select {
+	case err := <-served:
+		if err == nil || ctx.Err() != nil {
+			t.Fatalf("Serve returned %v on a closed connection, want the reason", err)
+		}
+	case <-time.After(10 * time.Second):
+		cancel()
+		<-served
+		t.Fatal("a donor whose connection closed for good went on confirming it")
+	}
+	if donor.Serving() {
+		t.Fatal("a donor that has ended says it is serving")
+	}
+}
+
+// coreBroker is a broker with no JetStream and no listener, for a case about
+// core request and reply alone.
+func coreBroker(t *testing.T) *server.Server {
+	t.Helper()
+	ns, err := server.NewServer(&server.Options{
+		ServerName: "statelog-donor", Port: -1, DontListen: true,
+	})
+	if err != nil {
+		t.Fatalf("configure the broker: %v", err)
+	}
+	go ns.Start()
+	if !ns.ReadyForConnections(30 * time.Second) {
+		ns.Shutdown()
+		t.Fatal("the broker did not become ready")
+	}
+	t.Cleanup(func() {
+		ns.Shutdown()
+		ns.WaitForShutdown()
+	})
+	return ns
+}
+
+// heldLink is an in-process connection to server whose writes, once held, go
+// no further than the link until it is released — what a slow network does
+// to the bytes a client believes it has sent.
+type heldLink struct {
+	server *server.Server
+
+	mu      sync.Mutex
+	conn    net.Conn
+	holding bool
+	held    []byte
+}
+
+func (l *heldLink) InProcessConn() (net.Conn, error) {
+	conn, err := l.server.InProcessConn()
+	if err != nil {
+		return nil, err
+	}
+	l.mu.Lock()
+	l.conn = conn
+	l.mu.Unlock()
+	return heldWrites{link: l, conn: conn}, nil
+}
+
+// hold keeps every later write on the link.
+func (l *heldLink) hold() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.holding = true
+}
+
+// release sends what was held, in order, and every later write straight on.
+func (l *heldLink) release(t *testing.T) {
+	t.Helper()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.holding = false
+	if _, err := l.conn.Write(l.held); err != nil {
+		t.Fatalf("deliver the held writes: %v", err)
+	}
+	l.held = nil
+}
+
+// drop closes the link's connection beneath its client, discarding what it
+// held, and lets the client's next connection through.
+func (l *heldLink) drop(t *testing.T) {
+	t.Helper()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.holding, l.held = false, nil
+	if err := l.conn.Close(); err != nil {
+		t.Fatalf("drop the link: %v", err)
+	}
+}
+
+// waitFor waits until the held writes carry want.
+func (l *heldLink) waitFor(t *testing.T, want string) {
+	t.Helper()
+	for until := time.Now().Add(10 * time.Second); ; {
+		l.mu.Lock()
+		carried := strings.Contains(string(l.held), want)
+		l.mu.Unlock()
+		if carried {
+			return
+		}
+		if time.Now().After(until) {
+			t.Fatalf("the link never carried %q", want)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// heldWrites is the client's end of a [heldLink].
+type heldWrites struct {
+	link *heldLink
+	conn net.Conn
+}
+
+func (w heldWrites) Write(p []byte) (int, error) {
+	w.link.mu.Lock()
+	defer w.link.mu.Unlock()
+	if w.link.holding {
+		w.link.held = append(w.link.held, p...)
+		return len(p), nil
+	}
+	return w.conn.Write(p)
+}
+
+func (w heldWrites) Read(p []byte) (int, error)         { return w.conn.Read(p) }
+func (w heldWrites) Close() error                       { return w.conn.Close() }
+func (w heldWrites) LocalAddr() net.Addr                { return w.conn.LocalAddr() }
+func (w heldWrites) RemoteAddr() net.Addr               { return w.conn.RemoteAddr() }
+func (w heldWrites) SetDeadline(t time.Time) error      { return w.conn.SetDeadline(t) }
+func (w heldWrites) SetReadDeadline(t time.Time) error  { return w.conn.SetReadDeadline(t) }
+func (w heldWrites) SetWriteDeadline(t time.Time) error { return w.conn.SetWriteDeadline(t) }
 
 // serveEmptyDonor runs a donor that holds no artefact, as node id, on its own
 // connection to q for the rest of the test, and returns the id.

@@ -242,7 +242,8 @@ type Donor struct {
 	deps DonorDeps
 	log  *slog.Logger
 
-	// serving is whether [Donor.Serve] is listening — see [Donor.Serving].
+	// serving is whether the server has confirmed [Donor.Serve] is
+	// listening — see [Donor.Serving].
 	serving atomic.Bool
 }
 
@@ -287,14 +288,73 @@ func (d *Donor) Serve(ctx context.Context) error {
 	}
 	defer func() { _ = fetches.Unsubscribe() }()
 
-	d.serving.Store(true)
+	// SERVING ONCE THE SERVER HAS BOTH SUBSCRIPTIONS, never when Subscribe
+	// returns: Subscribe only queues the interest on this connection, and a
+	// subscription is registered when that interest reaches the server. A join
+	// on this node asks on ANOTHER connection, so one that named this donor
+	// the instant Subscribe returned could publish its request first and wait
+	// out the whole [OfferWindow] for an answer nobody was asked for.
 	defer d.serving.Store(false)
+	if err := d.confirmListening(ctx, nc); err != nil {
+		return err
+	}
+	d.serving.Store(true)
 	<-ctx.Done()
 	return ctx.Err()
 }
 
+// confirmListening returns once the server has acknowledged everything nc has
+// sent so far — [Donor.Serve]'s two subscriptions — or when ctx ends, or when
+// nc has closed for good.
+//
+// A CONFIRMATION THAT FAILS IS ASKED AGAIN rather than ending the donor. A
+// flush the client gave up on is not a subscription the server refused: both
+// stay on the connection, which sends them again when it reconnects, so the
+// donor answers whatever reaches it meanwhile and only waits to SAY it serves.
+// Ending Serve instead would end it for the node's whole life — nothing starts
+// a donor twice — over a broker that was slow for a moment at the wrong time.
+//
+// EACH ATTEMPT IS BOUNDED BY [OfferWindow], the longest a joiner listens for
+// an answer: a server that has not confirmed the subscriptions in that long
+// would have left a join that asked meanwhile unanswered anyway, so a longer
+// attempt buys nothing and a shorter one only asks the server more often while
+// it is not answering. No pause between attempts is needed: an attempt fails
+// at once only when its connection has just dropped, and the next one's ping
+// waits in the connection's reconnect buffer.
+func (d *Donor) confirmListening(ctx context.Context, nc *nats.Conn) error {
+	unconfirmed := false
+	for {
+		attempt, cancel := context.WithTimeout(ctx, OfferWindow)
+		err := nc.FlushWithContext(attempt)
+		cancel()
+		switch {
+		case err == nil:
+			if unconfirmed {
+				d.log.InfoContext(ctx, "statelog_donor_serving", "node", d.deps.NodeID)
+			}
+			return nil
+		case ctx.Err() != nil:
+			return ctx.Err()
+		case nc.IsClosed():
+			return fmt.Errorf("statelog: the donor's connection closed before the "+
+				"server confirmed its subscriptions: %w", err)
+		}
+		// SAID ONCE, not at every attempt: a broker that does not answer
+		// for minutes is reported by everything else that talks to it.
+		if !unconfirmed {
+			unconfirmed = true
+			d.log.WarnContext(ctx, "statelog_donor_unconfirmed",
+				"node", d.deps.NodeID, "error", err.Error(),
+				"detail", "the server has not confirmed this node's donor is "+
+					"listening, so a join on this node does not wait for it; "+
+					"asked again until it does")
+		}
+	}
+}
+
 // Serving reports whether this donor is answering offer requests: from the
-// moment [Donor.Serve] is listening until it returns.
+// moment the server has confirmed [Donor.Serve]'s subscriptions until Serve
+// returns.
 //
 // WHAT A JOIN ON THIS SAME NODE ASKS before it names this node among the
 // donors it waits for ([AdoptDeps.Donors]). A node's own donor is the one a
