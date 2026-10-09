@@ -268,11 +268,15 @@ config mistake into a half-minute hang with the same message at the end.
 a restart loses that member's replicas, and the same server holds the KV
 buckets carrying the fleet's shared records — the token counter, the
 completion ledger, open agent-to-agent asks, claimed scheduled fires, detached
-(and billed) sandbox runs. No node is an exception for its roles, an
-ingress-only one included: every node runs the engine, and an in-memory member
-creates every stream it provisions in memory. That is tolerable only for a
-company whose tracker and knowledge base are both a vendor's; on either native
-backend the engine refuses it outright, as the next paragraph describes.
+(and billed) sandbox runs. The rule is asked of the broker, not of the roles:
+every **member** — every `data` node on the embedded broker — sets `store_dir`
+whatever else it does, because an in-memory member creates every stream it
+provisions in memory. A leaf and a client of an external cluster hold no
+streams of their own, so both are refused a `store_dir`; see
+[Satellite nodes](satellite-nodes.md). For a member, an in-memory stream is
+tolerable only for a company whose tracker and knowledge base are both a
+vendor's; on either native backend the engine refuses it outright, as the next
+paragraph describes.
 
 **On the native backends it is the company's own record, and it is
 refused.** With `tracker.backend: native` or `knowledge.backend: native` (the
@@ -758,11 +762,14 @@ usually looks like, is exposed to the bottom two rows by construction.
 **Declining the fsync is a legitimate trade and it is made explicitly.** Set
 `sync` to a duration — `30s` — and that duration is the window: the most an
 acknowledged write may be behind the disk. Tier A refuses the value in the
-three places where it would be recorded and then not honoured:
+four places where it would be recorded and then not honoured:
 
 - **against `stream.type: nats`**, because the field configures the embedded
   server's file store and an external cluster stores its own data (set
   `sync_interval` on that cluster instead);
+- **on a leaf** (`stream.leaf.urls`), because a leaf's broker runs no
+  JetStream and has no file store at all — the members it joins decide what
+  an acknowledged write has reached, in their own `stream.sync`;
 - **below `replicas: 3`**, because the disk being traded away is the only copy
   there is, so the window buys nothing;
 - **on a cluster whose peers are all on this host**, because the majority the

@@ -127,6 +127,12 @@ coordination:
                                   #   the same link
 ```
 
+There is no `stream.store_dir` here, and there must not be: a leaf runs no
+JetStream, so it has no stream store to keep, and Tier A refuses one beside
+`stream.leaf.urls`. Every stream the satellite's seats use lives on the
+members, in theirs — which is also why `crewlet validate` raises no in-memory
+stream warning for this file.
+
 The members open that listener with `stream.leaf.port`, and a member that
 opens one must persist (`stream.store_dir`), as every member of a fleet must:
 the nodes that join it keep nothing, so it keeps everything they do.

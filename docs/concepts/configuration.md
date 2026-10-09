@@ -131,7 +131,8 @@ kind this build does not know — a newer build's — shows as `unknown`. The ru
 are asked of the kind, whatever the roles: a member of a fleet — one naming a
 cluster, peers or a leaf listener — must set `stream.store_dir`, because it
 holds the fleet's streams for every node that reaches it; a leaf carries no
-cluster block, no store directory and no leaf listener.
+cluster block, no store directory, no leaf listener and no declined
+`stream.sync` — it runs no JetStream, so it has no file store to keep.
 
 Three pairings of roles and broker are **refused**, and each refusal names
 both ways out: a data node on a leaf, a broker member without `data`, and

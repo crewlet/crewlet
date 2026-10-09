@@ -435,10 +435,11 @@ func embeddedOptions(cfg Config, system systemUser) (*server.Options, string, er
 	}
 	var scratch string
 	if opts.StoreDir == "" {
-		// An in-memory server. Streams are memory-backed too (see
-		// ensureStreams), which suits a test and no node serving a
-		// company: every node, an ingress-only one included, runs the
-		// engine and provisions the streams its company lives on.
+		// A member with no StoreDir keeps its streams in memory (see
+		// ensureStreams), which suits a test and no member serving a
+		// company: a restart loses every replica it held. A leaf never
+		// reaches here — it returned above with JetStream off — so this
+		// branch is only ever a member's.
 		opts.JetStreamMaxStore = -1
 
 		// It still needs somewhere to put its own metadata, and left

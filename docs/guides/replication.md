@@ -305,6 +305,12 @@ that named a mechanism it cannot reach would let an operator hold a durability
 belief nothing delivers. Ask the NATS operator for `sync_interval: always`
 instead; `crewlet validate` says it cannot check it.
 
+A declined `stream.sync` is refused **on a leaf** (`stream.leaf.urls`) for the
+same reason: a leaf's broker runs no JetStream and has no file store at all —
+the members it joins decide what an acknowledged write has reached, in their
+own `stream.sync`. A satellite's durability is the members' row of the table
+above, never its own.
+
 ## Above the floor and below it — two different regimes
 
 This is the sentence the backup schedule hangs on.

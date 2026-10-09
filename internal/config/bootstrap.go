@@ -1378,7 +1378,7 @@ type Stream struct {
 	// first production deployment looks like, is exposed to the second by
 	// construction. Three copies of the same unflushed page cache is one
 	// copy.
-	Sync string `yaml:"sync,omitempty" json:"sync,omitempty" desc:"always (default) fsyncs every write before acknowledging it; a duration (30s) declines the fsync and names the window an acknowledged write may be behind the disk."`
+	Sync string `yaml:"sync,omitempty" json:"sync,omitempty" desc:"always (default) fsyncs every write before acknowledging it; a duration (30s) declines the fsync and names the window an acknowledged write may be behind the disk. A duration is refused for type: nats and on a leaf, which have no file store of this node's to configure."`
 
 	// TrackerLogMaxBytes is the byte ceiling on the mutation log — the
 	// ordered stream a state-log domain writes through.
@@ -1801,7 +1801,7 @@ func (s *Stream) validate(path Path) error {
 				"with more replicas than that, so every stream and bucket this "+
 				"node provisions would fail at boot", MaxStreamReplicas, s.Replicas)
 	}
-	if err := s.validateSync(path, external); err != nil {
+	if err := s.validateSync(path, external, s.Leaf.Joins()); err != nil {
 		p.wrap(err)
 	}
 	if s.EventRetentionHours < 0 {
@@ -2391,7 +2391,7 @@ func (s *Secrets) Cipher() (secrets.Cipher, error) {
 	return secrets.NewCipher(ring)
 }
 
-// validateSync checks stream.sync, and its three refusals are the cases where
+// validateSync checks stream.sync, and its four refusals are the cases where
 // the value is a claim the deployment cannot make.
 //
 // The refusals are about MEANING rather than about syntax. Declining the fsync
@@ -2399,7 +2399,7 @@ func (s *Secrets) Cipher() (secrets.Cipher, error) {
 // place where the choice would be recorded and then not honoured — which is
 // worse than either answer, because the operator believes the number they
 // wrote.
-func (s *Stream) validateSync(path Path, external bool) error {
+func (s *Stream) validateSync(path Path, external, leaf bool) error {
 	var p problems
 	raw := s.Sync
 	if raw == "" || raw == StreamSyncAlways {
@@ -2424,6 +2424,22 @@ func (s *Stream) validateSync(path Path, external bool) error {
 		return p.err()
 	}
 
+	// (2) NOR IS A LEAF'S, because a leaf has no file store at all. Its
+	// embedded broker runs no JetStream — that is what `leaf.urls` makes
+	// it — so the option reaches a server that stores nothing, and what an
+	// acknowledged write has reached is decided by the members it joins,
+	// in their own `stream.sync`. Accepted, the window was recorded here,
+	// warned about as this node's own exposure, and honoured nowhere: the
+	// same lie `store_dir` on a leaf is refused for ([StreamLeaf.validate]).
+	if leaf {
+		p.add(at(path, "sync"), ErrConflict,
+			"stream.sync configures the EMBEDDED server's file store, and a "+
+				"leaf runs no JetStream, so it has none: what an acknowledged "+
+				"write has reached is decided by the members it joins. Set "+
+				"sync on those members instead, or remove this field")
+		return p.err()
+	}
+
 	d, err := time.ParseDuration(raw)
 	switch {
 	case err != nil:
@@ -2438,7 +2454,7 @@ func (s *Stream) validateSync(path Path, external bool) error {
 		return p.err()
 	}
 
-	// (2) BELOW THREE REPLICAS THERE IS NO QUORUM TO SPEND INSTEAD. The
+	// (3) BELOW THREE REPLICAS THERE IS NO QUORUM TO SPEND INSTEAD. The
 	// whole argument for declining the fsync is that a majority holds the
 	// write; a solo member's disk is the only copy there is, so the
 	// window is not a trade, it is a straight loss.
@@ -2450,7 +2466,7 @@ func (s *Stream) validateSync(path Path, external bool) error {
 			max(s.Replicas, 1), s.Sync)
 	}
 
-	// (3) A SAME-HOST CLUSTER IS ONE FAILURE DOMAIN. Peers that resolve to
+	// (4) A SAME-HOST CLUSTER IS ONE FAILURE DOMAIN. Peers that resolve to
 	// this host share its power, its kernel and its page cache, so the
 	// majority the window is traded for dies with the member that has it.
 	//

@@ -279,3 +279,160 @@ func TestTheBrokerWarnings(t *testing.T) {
 		})
 	}
 }
+
+// THE IN-MEMORY STREAM IS A MEMBER'S WARNING, because only a member holds a
+// stream: it is the one broker running JetStream in this process. A stateless
+// leaf runs none and is REFUSED a store directory, so warning it that its
+// stream is in memory told a correct node to set the one field it may not; a
+// client's streams are its external cluster's. Every shape below is valid, and
+// each case pins which of the two in-memory warnings it raises — none, or
+// exactly the ones a member with no store directory earns.
+func TestOnlyABrokerThatHoldsStreamsIsWarnedTheyAreInMemory(t *testing.T) {
+	t.Parallel()
+	const (
+		kv       = "coordination:\n  type: embedded-kv\n"
+		data     = "node:\n  roles: [data, seats]\n"
+		seats    = "node:\n  roles: [seats]\nstore:\n  scratch: true\n"
+		inMemory = "stream.store_dir"
+		limit    = "stream.store_max_bytes"
+	)
+	for _, tc := range []struct {
+		name string
+		doc  string
+		want []string
+	}{
+		{"a solo data member with a store directory",
+			data + "stream:\n  store_dir: /var/js\n", nil},
+		{"a solo data member with no store directory", data, []string{inMemory}},
+		{"the every-role default with no store directory", "", []string{inMemory}},
+		{"a data member with a store limit and no store directory",
+			data + "stream:\n  store_max_bytes: 5368709120\n", []string{inMemory, limit}},
+		{"a data member with a store limit inside its store directory",
+			data + "stream:\n  store_dir: /var/js\n  store_max_bytes: 5368709120\n", nil},
+		{"a clustered member", data + brokerStreams[placement.BrokerMember], nil},
+		{"a member opening a leaf listener",
+			data + kv + "stream:\n  store_dir: /var/js\n  leaf:\n    port: 7422\n", nil},
+		{"a stateless leaf", seats + brokerStreams[placement.BrokerLeaf], nil},
+		{"a data node on an external cluster", data + brokerStreams[placement.BrokerClient], nil},
+		{"a stateless node on an external cluster",
+			seats + brokerStreams[placement.BrokerClient], nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			b, err := ParseBootstrap([]byte(tc.doc), EnvOnly())
+			if err != nil {
+				t.Fatalf("the fixture must be valid, since a warning is: %v", err)
+			}
+			var got []string
+			for _, w := range b.Warnings() {
+				if w.Path == inMemory || w.Path == limit {
+					got = append(got, w.Path)
+				}
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("%s broker: warnings at %v, want %v", b.BrokerKind(), got, tc.want)
+			}
+		})
+	}
+}
+
+// A LEAF HAS NO FILE STORE, SO IT DECLINES NO FSYNC. `stream.sync` configures
+// the embedded server's file store and a leaf's server runs no JetStream: a
+// window written there reached nothing, and was then warned about as this
+// node's own exposure. The members it joins decide what an acknowledged write
+// has reached, so a declined fsync on a leaf is refused exactly as it is
+// against an external cluster — and the same window on a member that can
+// honour it still loads, so the refusal is about the leaf and not the value.
+func TestALeafDeclinesNoFsync(t *testing.T) {
+	t.Parallel()
+	const seats = "node:\n  roles: [seats]\nstore:\n  scratch: true\n" +
+		"coordination:\n  type: embedded-kv\n"
+	const leaf = "  leaf:\n    urls: [nats-leaf://data-a.example.com:7422]\n"
+
+	// THREE REPLICAS, the count that let it through: below three the
+	// no-quorum rule refused it anyway, naming a member's disk the leaf
+	// does not have.
+	err := rejectsBootstrap(t, seats+"stream:\n  replicas: 3\n  sync: 30s\n"+leaf, "stream.sync")
+	problems := Problems(err)
+	if len(problems) != 1 || problems[0].Kind != "conflict" ||
+		!strings.Contains(problems[0].Message, "leaf runs no JetStream") {
+		t.Fatalf("want one conflict at stream.sync saying why, got %+v", problems)
+	}
+	// One reason, not two: the no-quorum rule is a member's and must not
+	// pile on.
+	err = rejectsBootstrap(t, seats+"stream:\n  sync: 30s\n"+leaf, "stream.sync")
+	if problems := Problems(err); len(problems) != 1 ||
+		!strings.Contains(problems[0].Message, "leaf runs no JetStream") {
+		t.Fatalf("want only the leaf's refusal, got %+v", problems)
+	}
+
+	for name, doc := range map[string]string{
+		"a leaf saying the default out loud": seats + "stream:\n  sync: always\n" + leaf,
+		"the same window on a three-member fleet": "node:\n  roles: [data, seats]\n" +
+			"coordination:\n  type: embedded-kv\nstream:\n  store_dir: /var/js\n" +
+			"  replicas: 3\n  sync: 30s\n  cluster:\n    name: acme\n" +
+			"    peers: [nats://b.example.com:6222, nats://c.example.com:6222]\n",
+	} {
+		if _, err := ParseBootstrap([]byte(doc), EnvOnly()); err != nil {
+			t.Errorf("%s must load: %v", name, err)
+		}
+	}
+}
+
+// THE OPERATOR FLOOR IS A WARNING ABOUT THE TRIM, and only a node holding the
+// estate runs the trim: it reads the estate's own eviction rows, so a node
+// without `data` never arms it and reads `stream.tracker_retention` for
+// nothing else. Warning a stateless node that its floor stops the trim
+// described the members' trim from a value they never see. The backup owner
+// is a different question — who owns the deployment's backups — and is asked
+// of every node, so it stays.
+func TestOnlyANodeThatRunsTheTrimIsWarnedAboutItsFloor(t *testing.T) {
+	t.Parallel()
+	const (
+		floor = "stream.tracker_retention.backup_floor"
+		owner = "retention.backup_owner"
+		data  = "node:\n  roles: [data, seats]\n"
+		seats = "node:\n  roles: [seats]\nstore:\n  scratch: true\n"
+	)
+	operator := func(stream string) string {
+		return strings.Replace(stream, "stream:\n",
+			"stream:\n  tracker_retention:\n    backup_floor: operator\n", 1)
+	}
+	for _, tc := range []struct {
+		name string
+		doc  string
+		want []string
+	}{
+		{"the every-role default", operator("stream:\n"), []string{floor, owner}},
+		{"a solo data member", data + operator("stream:\n  store_dir: /var/js\n"),
+			[]string{floor, owner}},
+		{"a clustered data member", data + operator(brokerStreams[placement.BrokerMember]),
+			[]string{floor, owner}},
+		{"a data node on an external cluster", data + operator(brokerStreams[placement.BrokerClient]),
+			[]string{floor, owner}},
+		{"a stateless leaf", seats + operator(brokerStreams[placement.BrokerLeaf]),
+			[]string{owner}},
+		{"a stateless node on an external cluster", seats + operator(brokerStreams[placement.BrokerClient]),
+			[]string{owner}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			b, err := ParseBootstrap([]byte(tc.doc), EnvOnly())
+			if err != nil {
+				t.Fatalf("the fixture must be valid, since a warning is: %v", err)
+			}
+			if b.Stream.TrackerRetention.Floor() != BackupFloorOperator {
+				t.Fatalf("the fixture must declare the operator floor: %q", tc.doc)
+			}
+			var got []string
+			for _, w := range b.Warnings() {
+				if w.Path == floor || w.Path == owner {
+					got = append(got, w.Path)
+				}
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("warnings at %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

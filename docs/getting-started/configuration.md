@@ -882,12 +882,15 @@ stream:
                                     #   window is refused where it would be
                                     #   recorded and not honoured: against an
                                     #   external cluster (which stores its own
-                                    #   data), below 3 replicas (no quorum to
-                                    #   trade the disk for), and on a cluster
-                                    #   whose peers are all on this host (one
-                                    #   failure domain). Declining it on a real
-                                    #   three-host fleet is a legitimate trade
-                                    #   and costs 1–3 ms per write on NVMe
+                                    #   data), on a leaf (which runs no
+                                    #   JetStream, so the members' own `sync`
+                                    #   decides), below 3 replicas (no quorum
+                                    #   to trade the disk for), and on a
+                                    #   cluster whose peers are all on this
+                                    #   host (one failure domain). Declining
+                                    #   it on a real three-host fleet is a
+                                    #   legitimate trade and costs 1–3 ms per
+                                    #   write on NVMe
   # debug: true                     # the EMBEDDED broker's OWN debug logging,
                                     #   which is a SEPARATE question from
                                     #   `logging.level` — that one is how loud
@@ -997,7 +1000,9 @@ stream:
   # tracker_retention:              # when the log may be trimmed. Every term
                                     #   here is a statement about the OPERATOR's
                                     #   estate rather than the company's policy,
-                                    #   which is why it is Tier A
+                                    #   which is why it is Tier A. Read only on
+                                    #   a node with the `data` role, which is
+                                    #   where the trim and the snapshots run
   #   min_age: 7d                   #   the age floor NO trim may cross, whatever
                                     #   the other terms say (24h..90d). It can
                                     #   only make a trim more conservative, so it
@@ -1234,9 +1239,11 @@ separate on purpose: the exit code turns on refusals alone, so a CI step gates
 on what cannot run and still prints what its operator should read. A warning is
 a configuration that is valid and carries a consequence worth knowing before it
 is applied — a declined fsync's window, a trim that will never advance until
-somebody acknowledges a backup, an embedded stream with nowhere to persist, a
-`stream.cluster.peers` entry left out of the member count because it is this
-node's own route or a repeat, a unit keyed on a name somebody will rename.
+somebody acknowledges a backup, a broker member with nowhere to persist the
+streams it holds (never a leaf or a client of an external cluster, which hold
+no stream of their own), a `stream.cluster.peers` entry left out of the member
+count because it is this node's own route or a repeat, a unit keyed on a name
+somebody will rename.
 
 `api.host` and `api.port` are what this node **binds**, which is rarely where it
 **answers**: a fleet behind a load balancer binds `0.0.0.0:8000` and is reached

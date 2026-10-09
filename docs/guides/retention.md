@@ -140,7 +140,10 @@ Two policies decide which copies count:
   ```
 
   Under this policy the trim does not advance until that acknowledgement has
-  been given at least once.
+  been given at least once, and `crewlet validate` warns about it on every
+  node that holds data — the nodes that run the trim. A node without `data`
+  runs no trim and reads none of `stream.tracker_retention`, so it is not
+  warned.
 
 The **backup-age alarm** (`backup_age`) ages the same point the trim reads,
 under the same policy: under `operator` a node's nightly copies are fresh
@@ -165,7 +168,7 @@ Free text — a person, a team, a scheduler's name. The engine does not run your
 backups and cannot; `crewlet backup` is a node-client command because the
 coordination broker binds no socket. Ownership is still a person. What this
 field changes is that the fleet can name which one, in four places: `crewlet
-validate` warns when it is unset under `backup_floor: engine`, `crewlet
+validate` warns whenever it is unset (under either `backup_floor`), `crewlet
 retention status` names it in the backup term's remedy, the retention answer
 renders it, and **`crewlet backup`'s manifest records it** — which is where it
 stops being configuration and becomes durable evidence.

@@ -622,8 +622,8 @@ func validateOne(file string, tier Tier, asJSON bool, stdout io.Writer) error {
 		}
 		res.Valid = true
 		// TIER A HAS WARNINGS OF ITS OWN: a declined fsync, a trim that
-		// will never advance on its own, an embedded stream with nowhere
-		// to persist. Every one of them describes a correct deployment
+		// will never advance on its own, a broker member with nowhere to
+		// persist. Every one of them describes a correct deployment
 		// for somebody, so none is a refusal, and `crewlet validate` is
 		// the one moment the consequence can still change the decision.
 		//

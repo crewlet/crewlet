@@ -73,7 +73,7 @@ func TestTierAWarnsAboutWhatItCannotRefuse(t *testing.T) {
 		},
 		"an in-memory stream loses everything": {
 			func(b *config.Bootstrap) { b.Stream.StoreDir = "" },
-			"stream.store_dir", "keeps everything in memory",
+			"stream.store_dir", "keeps them in memory",
 		},
 		// A BROKER ASKED TO BE VERBOSE INTO A SINK THAT TAKES NO DEBUG
 		// produces nothing at all: `stream.debug` unlocks nats-server's

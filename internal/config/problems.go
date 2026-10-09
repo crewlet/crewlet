@@ -576,7 +576,25 @@ func (b *Bootstrap) Warnings() []Warning {
 	// trim until somebody tells it, and the log grows until its ceiling
 	// refuses writes. That is the configuration working as asked; it is
 	// also a state nobody discovers until the refusal.
-	if b.Stream.TrackerRetention.Floor() == BackupFloorOperator {
+	//
+	// ONLY WHERE THE FLOOR IS READ, which is a node holding the estate. Two
+	// readers decide which backups count under it, and both are armed with
+	// the state log, so only on a `data` node: the trim itself, a fleet
+	// singleton that only a data node with `workers` may claim, and the
+	// `backup_age` alarm, evaluated on EVERY data node whether or not it
+	// ever holds the trim — so a [data, seats] node still reads the floor
+	// for the alarm it raises. That is why the gate is
+	// [placement.NodeProfile.HoldsData] and not
+	// [placement.NodeProfile.RunsWorkers]: tightening it would drop the
+	// warning on a node whose alarm still depends on the value. Every other
+	// reader of `stream.tracker_retention` — the snapshot cadence, the
+	// retention report, the API's backup surface — is a data node's too. On
+	// a stateless node the block is read by nothing, so a warning about what
+	// it does to the trim described the members' trim from a value they
+	// never see. (`retention.backup_owner`, below, is not gated: who owns
+	// the deployment's backups is a question every node's operator answers.)
+	if b.Profile("").HoldsData() &&
+		b.Stream.TrackerRetention.Floor() == BackupFloorOperator {
 		out = append(out, advisory(field("stream.tracker_retention.backup_floor"),
 			"`operator` means the trim advances only as far as somebody "+
 				"has acknowledged a backup. Until the first acknowledgement the log "+
@@ -597,38 +615,53 @@ func (b *Bootstrap) Warnings() []Warning {
 				"so has nobody to name"))
 	}
 
-	// AN EMBEDDED STREAM WITH NOWHERE TO PERSIST loses everything on a
-	// restart. It is the right configuration for a test and the wrong one
-	// for any node serving a company. An ingress-only node is no exception:
-	// it runs the engine like every other node, and an embedded server with
-	// no store directory creates every stream it provisions in memory.
-	if b.Stream.Type != StreamNATS && strings.TrimSpace(b.Stream.StoreDir) == "" {
+	// A BROKER THAT HOLDS STREAMS WITH NOWHERE TO PERSIST THEM loses
+	// everything on a restart. It is the right configuration for a test and
+	// the wrong one for any node serving a company.
+	//
+	// ASKED OF THE BROKER KIND, and only a MEMBER holds a stream: it is the
+	// one broker that runs JetStream in this process, so it is the one whose
+	// streams an empty `store_dir` puts in memory. A LEAF runs no JetStream —
+	// every stream its clients use is a member's, kept in that member's
+	// store directory — and is refused a store directory outright
+	// ([StreamLeaf.validate]), so a correct stateless node would otherwise
+	// be told to set the one field it may not; a CLIENT's streams are its
+	// external cluster's. Both used to be caught by a predicate that asked
+	// only "is the stream embedded", which is a question about the process
+	// rather than about who keeps the data.
+	//
+	// The ROLES are not the question either: a member is a data node
+	// ([Bootstrap.checkRolesAndBroker]), and what its broker keeps in memory
+	// is lost whatever else the node does.
+	inMemory := b.BrokerKind() == placement.BrokerMember &&
+		strings.TrimSpace(b.Stream.StoreDir) == ""
+	if inMemory {
 		out = append(out, advisory(field("stream.store_dir"),
-			"an embedded stream with no store directory keeps everything in "+
-				"memory: a restart loses every mailbox, every coordination record and "+
-				"the company's own history. Correct for a test; not for a node that "+
-				"serves a company, whatever its node.roles"))
+			"this node's broker holds the company's streams and has no store "+
+				"directory, so it keeps them in memory: a restart loses every "+
+				"mailbox, every coordination record and the company's own history. "+
+				"Correct for a test; not for a node that serves a company"))
 	}
 
-	// A STORE LIMIT ON A BROKER WITH NO STORE bounds nothing. An embedded
-	// server with no `store_dir` keeps its streams in MEMORY, and a
-	// memory-backed stream's ceiling is reserved against the broker's
-	// memory allowance rather than against this number — so the pair that
-	// reads as "I have bounded this node's broker" is the pair that has
-	// not.
+	// A STORE LIMIT ON A BROKER WITH NO STORE bounds nothing. A member with
+	// no `store_dir` keeps its streams in MEMORY, and a memory-backed
+	// stream's ceiling is reserved against the broker's memory allowance
+	// rather than against this number — so the pair that reads as "I have
+	// bounded this node's broker" is the pair that has not. (A leaf and a
+	// client are refused the limit outright: neither runs a store it could
+	// bound — see [Stream.validate].)
 	//
 	// A WARNING RATHER THAN A REFUSAL, because the pair is still valid: a
 	// company on external backends keeps nothing of its own on the stream,
 	// and a test runs this way on purpose. What is NOT valid is a native
 	// tracker or knowledge base on it, and that is refused already — see
-	// [Company.validate] — so this never softens that rule, it covers the
+	// [CheckTiers] — so this never softens that rule, it covers the
 	// deployments the rule leaves standing.
-	if b.Stream.Type != StreamNATS && b.Stream.StoreMaxBytes > 0 &&
-		strings.TrimSpace(b.Stream.StoreDir) == "" {
+	if inMemory && b.Stream.StoreMaxBytes > 0 {
 		out = append(out, advisory(field("stream.store_max_bytes"),
-			"this embedded stream has no `store_dir`, so its streams are held in "+
-				"memory and this limit bounds none of them: what bounds them is the "+
-				"broker's memory allowance. Name a `store_dir`, or drop the limit"))
+			"this node's broker has no `store_dir`, so the streams it holds are "+
+				"kept in memory and this limit bounds none of them: what bounds them "+
+				"is the broker's memory allowance. Name a `store_dir`, or drop the limit"))
 	}
 
 	// A PEER ENTRY THAT IS NOT ANOTHER MEMBER is not counted as one by any
