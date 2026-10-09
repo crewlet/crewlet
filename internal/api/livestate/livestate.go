@@ -318,8 +318,8 @@ type LiveState struct {
 	// whatever a reconnect left behind.
 	//
 	// These are the DATED records, oldest first by the instant each is aged
-	// from (ageingStamp) — the order they age out in, which is what makes an
-	// arrival constant work (see holdSpend).
+	// from (ageingStamp) — the order they age out in, which makes an arrival
+	// in that order an append and an expiry a prefix (see holdSpend).
 	spend []spendEntry
 
 	// undatedSpend are the records whose stamp did not parse, in the order

@@ -150,7 +150,7 @@ func length(payload map[string]any, key string) int {
 }
 
 // THE WINDOW IS HELD IN THE ORDER ITS RECORDS AGE OUT, which is what makes an
-// arrival constant work.
+// arrival in that order an append and what the window has aged past a prefix.
 //
 // The dated records ([LiveState.spend]) are kept oldest first by the instant
 // each is aged from ([ageingStamp] — its stamp, or its arrival when the stamp is
@@ -159,7 +159,12 @@ func length(payload map[string]any, key string) int {
 // records are the same prefix. An arrival in stamp order — nearly every one,
 // and every one stamped ahead — is an append; one that lost a cross-topic race,
 // or was stamped by a node whose clock runs behind, is inserted at its place,
-// which costs a move of the records aged after it and nothing else.
+// which costs a move of the records aged after it and nothing else. That cost
+// is proportional to how far out of order the arrival is, not constant: a
+// record lost to a cross-topic race moves the handful published beside it, but
+// a node whose clock lags an hour moves an hour of the company's records for
+// every one it publishes — about a thousand of them at the cap, which holds a
+// day — under the projection's lock.
 //
 // The window used to be held in ARRIVAL order, and that order cannot be aged
 // from the front: a broadcast subscription reads across topics with no order
@@ -238,8 +243,8 @@ func (s *LiveState) capSpend() {
 // company published. The dropped entries are cleared so their strings are not
 // held, and the backing array is replaced by append's own growth — which
 // copies only the live records, once per quarter of the cap's worth of
-// arrivals — so the work per arrival is constant and the memory at most a
-// growth step past the window.
+// arrivals — so the trim's work per arrival is constant once amortised, and the
+// memory at most a growth step past the window.
 func (s *LiveState) dropSpend(list []spendEntry, n int) []spendEntry {
 	if n == 0 {
 		return list
