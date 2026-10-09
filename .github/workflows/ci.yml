@@ -31,11 +31,6 @@ concurrency:
   group: ${{ github.event_name == 'pull_request' && format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) || format('{0}-run-{1}', github.workflow, github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-env:
-  # The module pins its own toolchain in go.mod; auto lets the setup-go
-  # toolchain fetch it rather than failing on a mismatch.
-  GOTOOLCHAIN: auto
-
 # THE GO CACHES. Every Go job below runs the same six steps around its own
 # work, written ONCE here as YAML anchors (`&name`) and repeated by alias
 # (`*name`), so the jobs cannot drift apart. GitHub Actions and Dependabot both
@@ -79,6 +74,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # go.mod's own toolchain, installed exactly, and no GOTOOLCHAIN of this
+      # file's: setup-go exports GOTOOLCHAIN=local to every later step, so a
+      # workflow-level `auto` was overridden and never reached a Go command.
       - &setup-go
         uses: actions/setup-go@v7
         with:

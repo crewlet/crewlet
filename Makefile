@@ -39,7 +39,9 @@
 # engine's own CLI is the interface to the engine.
 
 # The module pins its own toolchain in go.mod. `auto` fetches it rather than
-# failing on a version mismatch — the value ci.yml sets for every job.
+# failing on a version mismatch. In CI nothing needs fetching: setup-go
+# installs go.mod's own toolchain and exports GOTOOLCHAIN=local, which this
+# `?=` leaves as it is.
 export GOTOOLCHAIN ?= auto
 
 GO ?= go
