@@ -29,8 +29,9 @@
 // does not come: a failover that retries a write on "whoever answers next" is
 // only safe where the write itself says so. So the router picks the node —
 // this node first where its copy serves, then the node that answered last,
-// then a rendezvous order, with a node that went silent last — and the
-// failover rule is stated per operation (see [opClass]).
+// then the order [internal/rendezvous] gives this node's own id, with a node
+// that went silent last — and the failover rule is stated per operation (see
+// [opClass]).
 //
 // # What makes a retry safe, per operation
 //

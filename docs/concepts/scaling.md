@@ -126,9 +126,19 @@ flowchart TD
   copy is **out of service**: wrong rather than behind (an applier stopped,
   the node evicted, its rows below the log), in which case its seats' calls
   go to the other data nodes and it keeps every seat.
-- **Otherwise the data nodes, in order**: the node that last answered, then an
-  order that spreads askers across the data nodes the fleet's presence names,
-  with a node that went silent in the last thirty seconds asked last.
+- **Otherwise the data nodes, in order**: the node that last answered, then a
+  rendezvous order keyed on the asking node's own id, with a node that went
+  silent in the last thirty seconds asked last. The rendezvous order picks an
+  asker's first data node and every node it fails over to, spread evenly
+  across the data nodes the fleet's presence names however those nodes are
+  named (`node-0` … `node-4`, a StatefulSet's ordinals), so the askers of a
+  node that goes silent scatter over the others rather than all landing on
+  one. It does not decide where an asker stays: an asker keeps asking the node
+  that last answered until that node goes silent. So the spread is where
+  askers *start*, not where they settle — a data node that joins is asked only
+  by askers with no such node yet or whose node went silent, and after a
+  rolling restart each restarted node's askers stay on the node they failed
+  over to.
 - **A node that ran nothing is passed over, whatever the operation**: one whose
   copy is out of service (`out_of_service`), whose copy lags its logs (asked
   again last), or that is behind the caller's floor. What may be repeated once

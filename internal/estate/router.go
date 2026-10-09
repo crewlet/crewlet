@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"reflect"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/rendezvous"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -95,10 +95,17 @@ type RouterOptions struct {
 //
 // This node first, where its copy serves. Then the node that answered last
 // (sticky: its applier is the one most likely to have this node's writes),
-// then a rendezvous order that spreads askers across the data nodes, with
-// every node that recently went silent last. A node that ran nothing is
-// passed over by every class of operation; what may be repeated after a node
-// MAY have run it is the class's ([opClass]).
+// then [rendezvous.Order] keyed on this node's own id, with every node that
+// recently went silent last. The rendezvous order picks an asker's FIRST data
+// node and every node it fails over to, spread evenly across the data nodes —
+// so the askers of a node that goes silent scatter over the survivors rather
+// than fall on one neighbour — but not where an asker STAYS: it keeps asking
+// the sticky node until that node goes silent. So a data node that joins is
+// asked only by askers with no sticky node yet or whose sticky node goes
+// silent, and after a rolling restart each restarted node's askers stay where
+// they failed over to. A node that ran nothing is passed over by every class
+// of operation; what may be repeated after a node MAY have run it is the
+// class's ([opClass]).
 type Router struct {
 	self      string
 	queue     Asker
@@ -631,11 +638,16 @@ func (r *Router) ask(ctx context.Context, node string, req request, budget time.
 	return rep, true, nil
 }
 
-// order is the order the data nodes are asked in: sticky first, then
-// rendezvous, with every suspect node last — and never this node, which the
-// router asks in-process or not at all.
+// order is the order the data nodes are asked in: STICKY first, SUSPECT last,
+// and [rendezvous.Order] on this node's own id within each class — kept by a
+// STABLE sort, so the classes only move nodes between them — and never this
+// node, which the router asks in-process or not at all.
 func (r *Router) order(nodes []string) []string {
-	nodes = slices.DeleteFunc(slices.Clone(nodes), func(n string) bool { return n == r.self || n == "" })
+	// rendezvous.Order hands back a slice of its own, so the placement's
+	// listing is never the one trimmed or sorted here; and removing members
+	// from its answer leaves the rest in rendezvous order.
+	nodes = slices.DeleteFunc(rendezvous.Order(r.self, nodes),
+		func(n string) bool { return n == r.self || n == "" })
 	r.mu.Lock()
 	sticky := r.sticky
 	now := r.now()
@@ -649,7 +661,8 @@ func (r *Router) order(nodes []string) []string {
 	}
 	r.mu.Unlock()
 	slices.SortStableFunc(nodes, func(a, b string) int {
-		// SUSPECT LAST, then STICKY FIRST, then rendezvous.
+		// SUSPECT LAST, then STICKY FIRST; between them the rendezvous
+		// order stands, because the sort is stable.
 		if suspect[a] != suspect[b] {
 			if suspect[a] {
 				return 1
@@ -662,25 +675,9 @@ func (r *Router) order(nodes []string) []string {
 			}
 			return 1
 		}
-		wa, wb := weight(r.self, a), weight(r.self, b)
-		switch {
-		case wa > wb:
-			return -1
-		case wa < wb:
-			return 1
-		}
 		return 0
 	})
 	return nodes
-}
-
-// weight is a rendezvous score for one asker and one serving node.
-func weight(asker, node string) uint64 {
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(asker))
-	_, _ = h.Write([]byte{0})
-	_, _ = h.Write([]byte(node))
-	return h.Sum64()
 }
 
 // attemptContext is one attempt's context: the caller's, capped by budget.

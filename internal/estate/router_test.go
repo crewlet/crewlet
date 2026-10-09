@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/rendezvous"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -1104,6 +1105,35 @@ func TestACopyThatAdmitsNoSeatStillServesRequests(t *testing.T) {
 	// AND ADMISSION STILL REFUSES IT: the two gates disagree on purpose.
 	if trackerServed, _, err := r.Serves(t.Context()); err != nil || trackerServed {
 		t.Fatalf("a copy that admits no seat was admitted (%v, %v)", trackerServed, err)
+	}
+}
+
+// THE ROUTER ASKS IN THE RENDEZVOUS ORDER OF ITS OWN ID: never itself or an
+// empty id, the placement's listing untouched, and — once a node has answered
+// and another gone silent — the answerer first and the silent node last with
+// the rendezvous order kept between them. Keyed on the ASKER's id, so a
+// fleet's askers make their first ask, and every failover, across the data
+// nodes rather than all to one; where an asker then stays is the sticky
+// node's business.
+func TestTheRouterAsksInTheRendezvousOrderOfItsOwnID(t *testing.T) {
+	t.Parallel()
+	r := newFleet(t).router(t, "agent-2", nil)
+	held := []string{"data-a", "data-b", "", "data-c", "agent-2", "data-d"}
+	listed := slices.Clone(held)
+	want := rendezvous.Order("agent-2", []string{"data-a", "data-b", "data-c", "data-d"})
+
+	if got := r.order(held); !slices.Equal(got, want) {
+		t.Fatalf("agent-2 asks %q, want the rendezvous order of its own id %q", got, want)
+	}
+	if !slices.Equal(held, listed) {
+		t.Fatalf("ordering rewrote the placement's own listing %q to %q", listed, held)
+	}
+
+	r.markAnswered(want[3])
+	r.markSuspect(want[0])
+	if got, w := r.order(held), []string{want[3], want[1], want[2], want[0]}; !slices.Equal(got, w) {
+		t.Fatalf("with %s answered last and %s silent, agent-2 asks %q, want %q", want[3],
+			want[0], got, w)
 	}
 }
 
