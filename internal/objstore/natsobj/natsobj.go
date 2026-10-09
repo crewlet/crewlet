@@ -324,8 +324,11 @@ func createBucket(ctx context.Context, js jetstream.JetStream, timing jsprovisio
 		return e
 	})
 	if readErr != nil {
+		// BOTH WRAPPED, as at every other create site: the create's error
+		// says what went wrong and the read-back's whether the bucket is
+		// really absent, and a caller asks either with [errors.Is].
 		return nil, fmt.Errorf("natsobj: create the %s bucket at %d copies: %w "+
-			"(and reading it back: %v)", Bucket, replicas, err, readErr)
+			"(and reading it back: %w)", Bucket, replicas, err, readErr)
 	}
 	return store, nil
 }

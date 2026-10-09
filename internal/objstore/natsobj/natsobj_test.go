@@ -1038,6 +1038,36 @@ func TestABucketWithNoApplicableLimitNamesTheClass(t *testing.T) {
 	}
 }
 
+// A CREATE THAT FAILED AND A READ-BACK THAT FOUND NOTHING ARE BOTH IN THE
+// ERROR, as they are at every other create site: the create's says what went
+// wrong, and the read-back's says the bucket really is absent — each still
+// recognisable by [errors.Is], so neither is reduced to text a caller can only
+// print.
+//
+// Staged as a create answered "name in use" — a peer's win, which is read back
+// rather than final — whose read-back never finds the bucket, at a read-back
+// window of a tenth of a second.
+func TestAFailedCreatesReadBackKeepsBothErrors(t *testing.T) {
+	t.Parallel()
+	c := memberClient(t)
+	inUse := &jetstream.APIError{ErrorCode: 10058, Code: 400,
+		Description: "stream name already in use with a different configuration"}
+	w := &bucketJS{JetStream: c, hidden: 1 << 20, refusals: 1, refusal: inUse}
+	timing := jsprovision.Clustered(false).Timing()
+	timing.ReadBack = 100 * time.Millisecond
+
+	_, err := natsobj.OpenAt(t.Context(), w, natsobj.Config{Replicas: 1}, timing)
+	if err == nil {
+		t.Fatal("a bucket the read-back never found was reported as opened")
+	}
+	if !errors.Is(err, inUse) {
+		t.Errorf("the create's own error is not in the report:\n%v", err)
+	}
+	if !errors.Is(err, jetstream.ErrBucketNotFound) {
+		t.Errorf("the read-back's not-found is in the report only as text:\n%v", err)
+	}
+}
+
 // EVERY READ OPEN MAKES IS ASKED AT THE READ TERM, never at a write's.
 //
 // The bucket's lookup, the read-back after a create whose name was taken, and
