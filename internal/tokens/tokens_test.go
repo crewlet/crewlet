@@ -55,10 +55,11 @@ func TestOneTurnFoldsIntoEveryDimension(t *testing.T) {
 
 func TestOrderOfArrivalDoesNotChangeTheAnswer(t *testing.T) {
 	t.Parallel()
-	// The live window is append-ordered by arrival and the store's is by
-	// (time, id) DESCENDING, so the same records reach this in opposite
-	// orders — and a rollup that depended on order would make the live
-	// number and the queried one disagree for no visible reason.
+	// Every figure is a sum, a min or a max, so the same records handed over
+	// in any order fold to the same rollup — and a figure that depended on
+	// the order would move when nothing it counts had. The runtime id is the
+	// one value that is order-dependent by design, latest wins, so each role
+	// here keeps one.
 	forward := []tokens.Record{
 		rec("CEO", "onboarding", "sonnet", "t1", "2026-06-14T12:00:00Z", 60, 20),
 		rec("CEO", "execute", "sonnet", "t1", "2026-06-14T12:00:05Z", 90, 30),

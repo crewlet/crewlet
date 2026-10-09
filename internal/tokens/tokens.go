@@ -456,10 +456,14 @@ type Options struct {
 
 // Aggregate folds records into the breakdown.
 //
-// Order-independent: every bucket is a sum and the two timestamps are a min
-// and a max, so records may arrive in any order. That matters because they do
-// — the live window is append-ordered by arrival and the store's is by
-// (time, id) descending.
+// Every bucket is a sum and every instant a min or a max, so no figure here
+// depends on the order the records are handed over in. One value does, on
+// purpose: a seat's and a turn's runtime id is the LAST one seen, because the
+// current id is what a cross-link must use, and only the order can say which
+// one is current. What production hands it is the live projection's window:
+// undateable records first, then the rest in the order they age out — oldest
+// stamp first, one stamped ahead in its arrival's place, whatever order they
+// arrived in — so the id kept is the one the newest record carries.
 func Aggregate(records []Record, opts Options) Rollup {
 	limit := opts.RecentTurns
 	switch {
@@ -536,6 +540,7 @@ func Aggregate(records []Record, opts Options) Rollup {
 		}
 		// The LATEST id seen wins: a seat's runtime id changes across
 		// sessions, and the current one is what a cross-link must use.
+		// The caller's order says which is latest (see Aggregate).
 		if r.AgentID != "" {
 			agent.AgentID = r.AgentID
 		}
