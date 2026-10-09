@@ -218,10 +218,12 @@ store's objects as nothing at all. Credentials are not part of the record — tw
 nodes may reach one bucket with different keys.
 
 Moving a company from one store to the other is a migration, not a config
-change: copy every object across (on S3, `objects/` in a backup is exactly the
-bucket's layout under the prefix), stop the fleet, delete the `backend` record
+change: copy every object across, stop the fleet, delete the `backend` record
 from the `crewlet_objects` coordination bucket, and boot every node with the
-new block.
+new block. The copy is of the old store's whole `files/` corner, never of a
+backup's `objects/`, which holds only the objects
+[live](#live-and-retired-references) rows name and none a retired row still
+keeps for a reader catching up.
 
 ---
 
@@ -280,15 +282,16 @@ judged against the replicated estate the data node holds:
 - **Collection, hourly.** It pins the estate (a barrier on the tracker's log,
   so it reads every row committed when it began), lists the store, and deletes
   every object **stored more than a day ago, whose key was minted more than a
-  day ago, that no row names**. The day is the grace an upload in flight is
-  given between storing its object and writing its row. Only a name under the
+  day ago, that no row — [live or retired](#live-and-retired-references) —
+  names**. The day is the grace an upload in flight is given between storing
+  its object and writing its row. Only a name under the
   engine's `files/` corner is the collector's: anything else in the bucket, or
   under the prefix, is never counted, judged or deleted. A collection that
   cannot read the whole estate — this node holds a record it could not apply
   — **stops deleting**: a row it could not read may name any object, and the
   report says what it deleted before it stopped and why it stopped.
-- **Audit, daily.** It asks the store about every object a row names, a page
-  of rows at a time. An object the store does not hold (**missing** — asked
+- **Audit, daily.** It asks the store about every object a **live** row names,
+  a page of rows at a time. An object the store does not hold (**missing** — asked
   about once more at the end of the pass, before it is called so) or holds at
   another size, or under another SHA-256 where the store keeps one
   (**damaged** — `nats` keeps one, S3 does not), is a file that cannot be
@@ -302,6 +305,30 @@ and a node taking the duty over picks up the schedule and the last audit's
 findings where the last holder left them, rather than running both passes
 again or forgetting what was missing. An audit that fails never hides what the
 last one to run to its end found.
+
+### Live and retired references
+
+Every table whose rows name objects declares which of two kinds its rows are:
+
+- **Live** — the object is part of something the company holds, such as a
+  file's bytes. The collector keeps it, the audit checks it, and a backup
+  carries it.
+- **Retired** — the object has been replaced and nothing new will read it,
+  but a reader that has not caught up may still be fetching it. A retired row
+  keeps the object from the collector until the part of the engine that wrote
+  it deletes the row once its grace has passed; the collector then deletes the
+  object at its next pass, as it does any object no row names. The audit never
+  asks after it — a replaced object the store lost is not a file anybody can
+  miss — and a backup never copies, counts or asks after it: on `s3` it stays
+  out of the backup's `objects/`, and on `nats` its bytes ride the bucket's
+  stream snapshot, as everything the bucket holds does, uncounted and
+  unchecked.
+
+A project's files are live rows, and a file never retires one: a replaced
+file's bytes go at the first hourly pass once nothing names them and they were
+uploaded more than a day ago (see
+[One object per upload](#one-object-per-upload)). The decision is
+[ADR-0033](https://github.com/crewlet/crewlet/blob/main/adr/0033-a-retired-reference-keeps-its-object-for-a-grace.md).
 
 ### Unfinished uploads
 
@@ -413,9 +440,10 @@ dashboard draws the same under **Settings › Nodes**.
 - **The collector lists the whole store.** A listing streams rather than
   holding the inventory in memory, and judges it 500 keys to a query against
   an index on the file row's object column, so a pass over a few million
-  objects takes minutes, once an hour, on one node. The audit reads the rows
-  a page at a time and asks the store about each between pages, so it never
-  holds a read of the estate open across the store's round trips.
+  objects takes minutes, once an hour, on one node. The audit reads the live
+  rows a page at a time and asks the store about each between pages, so it
+  never holds a read of the estate open across the store's round trips; a
+  retired row costs it nothing, and costs a backup on `s3` no request.
 - **The estate is still whole on every data node.** Only file bytes leave it.
   Every row — a file's included — is on every data node.
 

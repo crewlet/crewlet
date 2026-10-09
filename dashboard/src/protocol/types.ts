@@ -1562,7 +1562,7 @@ export interface ObjectFindings {
   missing_files?: ObjectMissingFile[];
 }
 
-/** The last audit attempt: every object a row names, asked of the store. */
+/** The last audit attempt: every object a live (required) row names, asked of the store. */
 export interface ObjectAudit {
   at: string;
   /** Asked about every named object, over an estate that was complete. */

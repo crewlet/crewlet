@@ -353,8 +353,8 @@ var pinnedDomains = sync.OnceValue(func() map[string]bool {
 var errNoObjectStore = errors.New("engine: this node runs no object store")
 
 // OpenObject streams one object back, checked against the row that names it
-// ([objstore.Store.Open]) — the backup's read, which copies every object its
-// copy of the estate names.
+// ([objstore.Store.Open]) — the backup's read, which copies every object a
+// required table of its copy of the estate names.
 func (e *Engine) OpenObject(ctx context.Context, o objstore.Object) (io.ReadCloser, error) {
 	if e.objects == nil {
 		return nil, errNoObjectStore

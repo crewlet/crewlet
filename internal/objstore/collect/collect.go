@@ -19,6 +19,16 @@
 // would be a second answer to which objects exist, and the two would drift
 // the first time a write landed in one and not the other.
 //
+// Every declared table is REQUIRED or RETIRED (ADR-0033). Both keep the
+// objects their rows name from collection; only a required table's are the
+// company's to account for, so only those are audited, and only those a backup
+// copies, counts or asks after (on `nats` a retired object's bytes still ride
+// the bucket's stream snapshot, uncounted). A retired row keeps a replaced
+// object for a grace a reader still on it needs; the grace is the row's
+// lifetime, and once its domain deletes the row the object goes at the next
+// pass like any other nobody names. Nothing here reads when a reference was
+// retired.
+//
 // # Collection: deletion is the only dangerous thing, and it needs no lock (ADR-0027)
 //
 // What a name in the store MEANS is read here, never by a backend: a backend
@@ -44,12 +54,12 @@
 //     objstore.RecordWithin, which is shorter than the grace by more than
 //     any two nodes' clocks disagree — so a key past the grace is one no
 //     write can name any more, however late a record arrives.
-//   - No declared table names it in an estate that is CURRENT — the pass
-//     first waits for everything each domain's log had committed when it
-//     started ([Source.Barrier]) — and COMPLETE: a record this node could not
-//     decode might be the one naming the object, so a pass that meets one
-//     stops judging. What it deleted before is reported beside why it
-//     stopped.
+//   - No declared table, a retired one included, names it in an estate that
+//     is CURRENT — the pass first waits for everything each domain's log had
+//     committed when it started ([Source.Barrier]) — and COMPLETE: a record
+//     this node could not decode might be the one naming the object, so a
+//     pass that meets one stops judging. What it deleted before is reported
+//     beside why it stopped.
 //
 // THE GRACE IS AN UPLOAD'S, NEVER A REPLACED VERSION'S. Both instants date
 // the object's upload, and nothing records when a row stopped naming it: an
@@ -80,8 +90,8 @@
 //
 // # Audit: what the store has lost
 //
-// Every object the estate names should be in the backend, whole — a file's
-// record is written only after its object is stored. The audit asks the
+// Every object a REQUIRED table names should be in the backend, whole — a
+// file's record is written only after its object is stored. The audit asks the
 // backend for each one and finds two things: an object it does not hold
 // (MISSING, asked about once more at the end of the pass before it is called
 // so) and one it holds at another size, or under another digest where the
@@ -89,7 +99,9 @@
 // `objects_missing` alarm and the list `crewlet objects status` prints, each
 // named as the file that holds it, since a person restores files rather
 // than keys. A durable backend loses nothing, so a non-zero count is the
-// backend failing at the one thing it is for.
+// backend failing at the one thing it is for. A retired reference is never
+// asked after: the company has let its object go, and a store that lost it
+// lost nothing anybody can miss.
 //
 // THE ESTATE IS READ A PAGE AT A TIME AND THE BACKEND IS ASKED BETWEEN PAGES,
 // never inside a read: a read of the estate holds one of the node's few
@@ -140,8 +152,8 @@ const PendingGrace = 24 * time.Hour
 // garbage kept a little longer beside a grace that is already a day.
 const CollectInterval = time.Hour
 
-// AuditInterval is how often the store is asked for every object the estate
-// names.
+// AuditInterval is how often the store is asked for every object a required
+// table names.
 //
 // A DAY: an audit is one stat per referenced object, and what it looks for is a
 // backend losing acknowledged bytes — an event, not a drift — so a day is
@@ -184,7 +196,7 @@ type CollectionReport struct {
 	// Listed is how many objects the store held under the engine's
 	// namespace; Aged how many of them were past the grace; Deleted how
 	// many of those no row named and the pass deleted; Referenced how
-	// many a row still named.
+	// many a row — live or retired — still named.
 	Listed     int `json:"listed"`
 	Aged       int `json:"aged"`
 	Deleted    int `json:"deleted"`
@@ -215,10 +227,11 @@ type CollectionReport struct {
 // attempt are [AuditReport.Found], beside them. The record is the fleet's, so
 // it evolves additively: a successor build reads it during a rolling upgrade.
 type AuditReport struct {
-	// Completed is whether the attempt asked about every object the estate
-	// names, in an estate that was complete; Referenced how many it asked
-	// about, Missing how many the store does not hold and Damaged how
-	// many it holds wrong — floors, for an attempt that did not complete.
+	// Completed is whether the attempt asked about every object the
+	// estate's required tables name, in an estate that was complete;
+	// Referenced how many it asked about, Missing how many the store does
+	// not hold and Damaged how many it holds wrong — floors, for an
+	// attempt that did not complete.
 	Completed  bool `json:"completed"`
 	Referenced int  `json:"referenced"`
 	Missing    int  `json:"missing"`
@@ -242,9 +255,9 @@ type AuditFindings struct {
 	At        time.Time `json:"at"`
 	Completed bool      `json:"completed"`
 
-	// Referenced is how many objects the estate named; Missing how many
-	// of them the store does not hold, and Damaged how many it holds at
-	// another size, or under another digest where it keeps one.
+	// Referenced is how many objects its required tables named; Missing
+	// how many of them the store does not hold, and Damaged how many it
+	// holds at another size, or under another digest where it keeps one.
 	Referenced int `json:"referenced"`
 	Missing    int `json:"missing"`
 	Damaged    int `json:"damaged"`
@@ -485,8 +498,8 @@ func (c *Collector) sweep(ctx context.Context, r *CollectionReport, cutoff time.
 	}
 }
 
-// Audit asks the store for every object the estate names, and counts the ones
-// it does not hold and the ones it holds wrong.
+// Audit asks the store for every object a required table names, and counts the
+// ones it does not hold and the ones it holds wrong.
 func (c *Collector) Audit(ctx context.Context) (AuditReport, error) {
 	var r AuditReport
 	files, err := c.audit(ctx, &r)
@@ -550,7 +563,7 @@ func (c *Collector) audit(ctx context.Context, r *AuditReport) ([]MissingFile, e
 		// a key is named only by the write that uploaded it, so no two
 		// rows name one, and a set would hold the company's whole
 		// inventory in memory for nothing.
-		whole, err := s.Each(ctx, v[i], func(ref Reference) error {
+		whole, err := s.EachRequired(ctx, v[i], func(ref Reference) error {
 			r.Referenced++
 			held, err := judge(ref)
 			if err == nil && !held {

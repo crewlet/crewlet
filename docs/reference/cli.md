@@ -648,9 +648,9 @@ partial copy as a backup.
 
 **The company's files come too**, as an `objects` line. On the default `nats`
 object store their objects are in the `OBJ_crewlet_files` stream the backup
-snapshots with the rest, and the line counts the objects the copy names
-that the stream holds (lost ones are listed beneath); on
-`s3` each object the copy names is read from the bucket into `objects/` and
+snapshots with the rest, and the line counts the objects the copy's live rows
+name that the stream holds (lost ones are listed beneath); on `s3` each object
+a live row of the copy names is read from the bucket into `objects/` and
 checked against its file's size and SHA-256 as it is written, and the line
 gives their count and size. A file whose object the store answered it does
 not hold, or holds wrong, does not fail the backup: it is listed beneath, as

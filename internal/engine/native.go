@@ -495,8 +495,9 @@ func (e *Engine) startNativeFor(ctx context.Context, c *Company) (bool, error) {
 // would free.
 //
 // THE DECLARED LIST, read through each domain's estate — never a source written
-// here — so the tables the collector keeps alive are the ones the backup
-// carries and the schema gate holds.
+// here — so the tables the collector keeps alive, and the Required ones among
+// them the audit checks and the backup carries, are the ones the schema gate
+// holds.
 func (e *Engine) startNativeCollector(ctx context.Context) {
 	n := e.native.Load()
 	if n == nil {

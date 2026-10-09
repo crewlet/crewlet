@@ -635,7 +635,7 @@ Every node reaches it directly, a node without `data` included. Nothing here is
 derived by replay, and the engine places nothing: the store keeps its own
 copies, and the one thing the engine runs beside it is the `object-collector`
 duty, which deletes the objects no row names, abandons uploads that never
-finished, and audits that every object a row names is there and whole. See
+finished, and audits that every object a live row names is there and whole. See
 [Object Store](object-store.md).
 
 **Mailboxes and event history are different kinds of stream.** The two

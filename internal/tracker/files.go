@@ -134,10 +134,17 @@ func (f File) Content() (objstore.Object, bool) {
 // the declaration internal/objstore/references collects. See
 // [objstore.ReferenceTable] for why a table missing from that list is the
 // mistake that deletes files.
+//
+// REQUIRED: a file's bytes are the company's, so the audit asks after them
+// and a backup carries them. A file never retires its object: a replaced
+// file's object goes at the collector's first hourly pass once nothing names
+// it and it was uploaded more than a day ago, by both the store's clock and
+// its key's own (ADR-0027).
 var FileObjectReferences = objstore.ReferenceTable{
 	Domain: Domain{}.Name(), Table: "tracker_files",
 	Key: "object", Hash: "hash", Size: "size",
-	Owner: []string{"project_key", "path"},
+	Owner:    []string{"project_key", "path"},
+	Standing: objstore.Required,
 }
 
 // NormalizeFilePath is a path as it is stored and addressed: slash-separated

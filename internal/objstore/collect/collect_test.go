@@ -18,7 +18,9 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// fakeSource is one domain's references, held in memory.
+// fakeSource is one domain's references, held in memory — all of them in a
+// required table, so its walk hands on every one (standing_test.go has what a
+// retired table does, through the real declarations).
 type fakeSource struct {
 	mu    sync.Mutex
 	named map[objstore.Key]Reference
@@ -56,7 +58,7 @@ func (s *fakeSource) Referenced(_ context.Context, among []objstore.Key,
 	return out, !s.incomplete, nil
 }
 
-func (s *fakeSource) Each(_ context.Context, _ statelog.Position, visit func(Reference) error) (bool, error) {
+func (s *fakeSource) EachRequired(_ context.Context, _ statelog.Position, visit func(Reference) error) (bool, error) {
 	s.mu.Lock()
 	named := slices.Collect(maps.Values(s.named))
 	incomplete := s.incomplete

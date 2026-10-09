@@ -1606,10 +1606,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// raw field is empty on a node named through CREWLET_NODE_ID, and
 		// this id keys the node's trim hold and its announced backup point.
 		NodeID: nodeID,
-		// Every object the store copy names, streamed from the one store
-		// the fleet shares and checked against the row naming it — or,
-		// where they ride the broker's own bucket, asked after once its
-		// stream is snapshotted.
+		// Every object a required table of the store copy names,
+		// streamed from the one store the fleet shares and checked
+		// against the row naming it — or, where they ride the broker's
+		// own bucket, asked after once its stream is snapshotted.
 		Objects: &backup.Objects{Open: e.OpenObject, Stat: e.StatObject,
 			Stream: e.ObjectsStream()},
 		// THE PROCESS'S OWN RECORDER, never a second one: the copy's

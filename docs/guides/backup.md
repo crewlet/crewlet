@@ -92,9 +92,9 @@ why the manifest is written last.
 ├── manifest.json                          what was captured, from which node
 ├── store.db                               the node estate, self-contained
 ├── store-replicated.db                    the replicated estate, self-contained
-├── objects/                               s3 only: every object that copy names,
-│   └── files/                               one file per object, under its key —
-│       └── 0199a3c2-…                       the bucket's own layout under its prefix
+├── objects/                               s3 only: every object a live row of that
+│   └── files/                               copy names, one file per object, under
+│       └── 0199a3c2-…                       its key — the bucket's layout under its prefix
 └── streams/
     ├── CREWLET_AGENT.snapshot             a mailbox stream
     ├── KV_crewlet_secrets.snapshot        a coordination bucket
@@ -131,16 +131,20 @@ What is worth knowing about it:
   `nats` they are already a stream — `OBJ_crewlet_files` — and the stream
   snapshot the backup takes anyway carries them, so no object is copied on its
   own: the manifest's `objects.stream` names the stream. Once the snapshot is
-  taken, the backup asks the stream's leader about every object the replicated
-  copy names, and `objects.objects` and `objects.bytes` count the ones it holds
-  — a key is never reused, so an object the store holds after the snapshot
-  finished is one the snapshot holds too. On `s3` the backup reads every
-  object the replicated copy **names** — read from the copy itself, for the
-  position's reason below — from the bucket, four at a time so a backup never
-  saturates the store every upload and download also uses, and streams each
-  to disk, checking it against its file's size and SHA-256 as it is written.
-  Each lands under `objects/files/<key>` — the bucket's own layout under its
-  prefix — first under a temporary name, renamed only once it has checked out.
+  taken, the backup asks the stream's leader about every object a live row of
+  the replicated copy names, and `objects.objects` and `objects.bytes` count
+  the ones it holds — a key is never reused, so an object the store holds after
+  the snapshot finished is one the snapshot holds too. On `s3` the backup reads
+  every object a **live** row of the replicated copy names — read from the copy
+  itself, for the position's reason below — from the bucket, four at a time so
+  a backup never saturates the store every upload and download also uses, and
+  streams each to disk, checking it against its file's size and SHA-256 as it
+  is written. Each lands under `objects/files/<key>` — the bucket's own layout
+  under its prefix — first under a temporary name, renamed only once it has
+  checked out. An object only a
+  [retired](../concepts/object-store.md#live-and-retired-references) row names
+  is neither copied nor asked after: a restore brings the row back without it,
+  and nothing is owed it.
 - **A backup takes what its previous one holds** (`s3`). A key is minted for
   one upload and never names other bytes, so an object this node's previous
   backup already holds is the same object: when that backup's directory is
@@ -451,9 +455,13 @@ aws s3 sync objects/ s3://acme-files/crewlet/
 ```
 
 — with the bucket and prefix from `store.objects.s3`, and the provider's own
-tool or `--endpoint-url` for a store that is not Amazon's. An object the
-restored rows name and the store does not hold is reported by the collector's
-next audit (`objects_missing`); `crewlet objects status` lists the files.
+tool or `--endpoint-url` for a store that is not Amazon's. An object a live
+row of the restored copy names and the store does not hold is reported by the
+collector's next audit (`objects_missing`); `crewlet objects status` lists the
+files. One only a
+[retired](../concepts/object-store.md#live-and-retired-references) row names
+is never reported: the backup never carried it, nothing is owed it, and the
+row goes once its grace has passed.
 The stream half is restored into a broker with `nats stream restore` per
 snapshot for an external cluster; for the embedded topology, restore into a
 fresh `stream.store_dir` on a node started for that purpose. Then:
