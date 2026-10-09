@@ -150,8 +150,8 @@ const (
 	BodyRevisionsKept = 100
 
 	// MaxReferencesPerBody bounds the key scan the applier runs on every
-	// body and comment, so a pathological body is 64 lookups on every node
-	// rather than five thousand.
+	// task's description, so a pathological body is 64 lookups on every
+	// node rather than five thousand.
 	MaxReferencesPerBody = 64
 )
 
