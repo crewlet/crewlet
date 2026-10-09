@@ -377,12 +377,21 @@ below the published floor whose missing records the log still holds reports
    appliers, adopts, moves its consumers to the artefact's position and
    resumes, with no restart. It takes a **hold** on every domain's log first,
    which pins the trim for the duration of the transfer — so a join cannot
-   race the trim that made it necessary. It collects offers until every live
-   data node has answered — each runs a donor, the asking node's own among
-   them, and one holding no artefact answers that it has none — or for five
-   seconds at most, which is what a data node whose donor never answers costs.
-   Which data nodes are live is read while the offers arrive, so a
-   coordination store slow to say costs nothing past those five seconds.
+   race the trim that made it necessary. It collects offers until every node
+   that can donate has answered, or for five seconds at most. That is every
+   live data node — each runs a donor, and one holding no artefact answers
+   that it has none — and every node whose row in the positions register was
+   written within the last forty seconds and names an artefact. The second
+   half is how a **draining** node is waited for: it gives up its presence as
+   its drain begins, so its peers stop counting it for seats, but it goes on
+   serving its donor until it stops, and in a rolling upgrade it is the
+   likeliest holder of the newest artefact. The asking node counts itself only
+   once its own donor is serving, which at boot it is not yet. A node named
+   that never answers — one that died within its row's forty seconds — costs
+   the five seconds and no more. Who is live and what the register says are
+   read while the offers arrive, so a coordination store slow to say costs
+   nothing past those five seconds, and one that cannot say leaves the five
+   seconds to decide.
    A running node that finds no donor stays as it is, refusing, and asks again
    on an interval that doubles up to five minutes. Stopping a node mid-join —
    a signal during its boot, or a shutdown while it is asking or fetching —

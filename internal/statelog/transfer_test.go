@@ -162,6 +162,47 @@ func TestAnExpectedDonorThatNeverAnswersCostsTheWindow(t *testing.T) {
 	}
 }
 
+// A DONOR SAYS WHETHER IT IS SERVING, and is not before Serve listens or after
+// it returns.
+//
+// A join on the donor's own node names that node among the donors it waits
+// for only while its donor answers: the boot's join runs before any donor
+// starts, and a node that named itself there waited the whole offer window for
+// an answer that could not come.
+func TestADonorSaysWhetherItIsServing(t *testing.T) {
+	t.Parallel()
+	h := newTransferHarness(t, 4096)
+	donor, err := statelog.NewDonor(statelog.DonorDeps{
+		NodeID: "probe",
+		Dial:   func(context.Context) (*nats.Conn, error) { return h.q.DialOwned() },
+		Newest: func() (statelog.Manifest, bool) { return statelog.Manifest{}, false },
+		Path:   func(statelog.Manifest) string { return "" },
+	})
+	if err != nil {
+		t.Fatalf("NewDonor: %v", err)
+	}
+	if donor.Serving() {
+		t.Fatal("a donor nobody has started says it is serving")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	served := make(chan struct{})
+	go func() { defer close(served); _ = donor.Serve(ctx) }()
+	deadline := time.Now().Add(10 * time.Second)
+	for !donor.Serving() {
+		if time.Now().After(deadline) {
+			cancel()
+			<-served
+			t.Fatal("a donor listening for offers never said it was serving")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	<-served
+	if donor.Serving() {
+		t.Fatal("a donor whose Serve has returned says it is serving")
+	}
+}
+
 // serveEmptyDonor runs a donor that holds no artefact, as node id, on its own
 // connection to q for the rest of the test, and returns the id.
 func serveEmptyDonor(t *testing.T, q *js.Queue, id string) string {

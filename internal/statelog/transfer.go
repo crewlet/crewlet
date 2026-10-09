@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -240,6 +241,9 @@ type DonorDeps struct {
 type Donor struct {
 	deps DonorDeps
 	log  *slog.Logger
+
+	// serving is whether [Donor.Serve] is listening — see [Donor.Serving].
+	serving atomic.Bool
 }
 
 // NewDonor builds the donor half.
@@ -283,9 +287,22 @@ func (d *Donor) Serve(ctx context.Context) error {
 	}
 	defer func() { _ = fetches.Unsubscribe() }()
 
+	d.serving.Store(true)
+	defer d.serving.Store(false)
 	<-ctx.Done()
 	return ctx.Err()
 }
+
+// Serving reports whether this donor is answering offer requests: from the
+// moment [Donor.Serve] is listening until it returns.
+//
+// WHAT A JOIN ON THIS SAME NODE ASKS before it names this node among the
+// donors it waits for ([AdoptDeps.Donors]). A node's own donor is the one a
+// lone node below the floor ends its collection on, so it is named whenever it
+// answers — and never when it does not, which is every BOOT: the boot's join
+// runs before any donor starts, and a node naming itself there waited the
+// whole [OfferWindow] for an answer that could not come.
+func (d *Donor) Serving() bool { return d.serving.Load() }
 
 // answerOffer replies with this node's artefact, or with a decline when it
 // holds none.
@@ -450,14 +467,17 @@ func (d *Donor) terminate(nc *nats.Conn, deliver string, status int, detail stri
 //
 // # Unless every donor it expects has answered
 //
-// expect names the donors the joiner knows of — the engine's live data nodes,
-// each of which runs one — and the collection ends the moment each has
+// expect names every donor that can answer — the engine names the live data
+// nodes and every node whose register row says it holds an artefact
+// ([AdoptDeps.Donors]) — and the collection ends the moment each has
 // answered, an offer or a decline, because no later answer can come from
-// anybody it is waiting for. With none named, the window decides. A donor it
-// did not name is still heard while the window is open, and one it named that
-// never answers — not up yet, or gone — costs the window and nothing more,
-// which is the most an expectation can cost: the window was what every join
-// paid before it. The expectation may also be READ while the collection runs
+// anybody it is waiting for. With none named, the window decides. So an
+// expectation must be a SUPERSET of who can offer: a donor it does not name is
+// heard only while somebody named has still to answer, and its offer arriving
+// after the last named answer is not waited for. One it named that never
+// answers — not up yet, or gone — costs the window and nothing more, which is
+// the most an expectation can cost: the window was what every join paid
+// before it. The expectation may also be READ while the collection runs
 // rather than handed in, which is how [Adopter.Join] names its donors — see
 // [collectOffers].
 //

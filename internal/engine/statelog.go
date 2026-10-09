@@ -232,6 +232,14 @@ type stateLog struct {
 	// loop has not concluded anything yet.
 	snapshot atomic.Pointer[snapshotHeld]
 
+	// donor is this node's own donor once [Engine.startSnapshots] has built
+	// it, and nil before — which is every boot's join, since that runs
+	// first. A join asks it whether it is serving before naming this node
+	// among the donors it waits for ([Engine.joinExpectation]). An atomic
+	// pointer because the runtime rejoin reading it runs on the heartbeat,
+	// which starts before the donor is built.
+	donor atomic.Pointer[statelog.Donor]
+
 	// snapshotNudge wakes the snapshot loop out of its interval, for the
 	// events that make the artefact this node holds one nobody can adopt:
 	// a reanchor moved one of its domains to a new generation, an adoption
@@ -2052,27 +2060,11 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 		LivePath: e.backends.Store.ReplicatedFile(),
 		NodeID:   s.nodeID,
 		Conn:     conn.Conn(),
-		// EVERY LIVE DATA NODE, each of which runs a donor — this one's
-		// own among them: the join stops collecting once each has
-		// answered, an offer or a decline, rather than refusing every read
-		// and write for the whole offer window while it waits for answers
-		// that are not coming. LISTED NOW ([Engine.holdersOf]) rather than
-		// read from the watched view, which re-lists on a heartbeat: a
-		// donor the view has not seen yet is one the join could stop
-		// before hearing, and a join is rare enough that one listing is
-		// nothing — read while the offers arrive, inside the window, so a
-		// slow one costs nothing past it and one that fails waits it out.
-		Donors: func(ctx context.Context) ([]string, error) {
-			live, listErr := e.holdersOf().LiveData(ctx)
-			if listErr != nil {
-				return nil, listErr
-			}
-			ids := make([]string, 0, len(live))
-			for _, p := range live {
-				ids = append(ids, p.NodeID)
-			}
-			return ids, nil
-		},
+		// EVERY NODE THAT CAN DONATE ([Engine.joinExpectation]): the join
+		// stops collecting once each has answered, an offer or a decline,
+		// rather than refusing every read and write for the whole offer
+		// window while it waits for answers that are not coming.
+		Donors: e.joinExpectation(s),
 		Need: func(context.Context) (statelog.OfferRequest, error) {
 			return want, nil
 		},
@@ -2153,6 +2145,110 @@ const (
 	// has no broker connection to ask one over.
 	joinNoDonor joinOutcome = "no_donor"
 )
+
+// joinExpectation is who a join on this node waits to hear from
+// ([statelog.AdoptDeps.Donors]): the live data nodes, LISTED NOW
+// ([Engine.holdersOf]), and the positions register, read beside them — see
+// [joinDonors] for what each half adds.
+//
+// LISTED rather than read from the watched view, which re-lists on a
+// heartbeat: a donor the view has not seen yet is one the join could stop
+// before hearing, and a join is rare enough that one listing is nothing. Both
+// are read while the offers arrive, inside the window, so a slow read costs
+// nothing past it, and either one failing leaves the window to decide: an
+// expectation missing a donor that can offer would end the collection before
+// that donor's offer.
+func (e *Engine) joinExpectation(s *stateLog) func(context.Context) ([]string, error) {
+	return func(ctx context.Context) ([]string, error) {
+		live, err := e.holdersOf().LiveData(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("list the live data nodes: %w", err)
+		}
+		// NO REGISTER, NO ROWS: nothing on this node publishes one, so
+		// there is nobody a row could add.
+		var rows []coord.NodePositions
+		if s.fleet != nil {
+			if rows, err = s.fleet.Positions(ctx); err != nil {
+				return nil, fmt.Errorf("read the positions register: %w", err)
+			}
+		}
+		own := s.donor.Load()
+		return joinDonors(time.Now(), s.nodeID, own != nil && own.Serving(), live, rows), nil
+	}
+}
+
+// joinDonors is every node a join on node own waits to hear from: the donors
+// that can answer it, and so a superset of every node that can offer — the
+// collection ends on the last one named, and an offer arriving after that is
+// not waited for ([statelog.CollectOffers]).
+//
+//   - EVERY LIVE DATA NODE, each of which runs a donor — one that has taken
+//     an artefact since it last wrote its row among them, the row being up to
+//     a heartbeat behind what the node holds.
+//   - EVERY NODE WHOSE FRESH ROW NAMES AN ARTEFACT ([donorRowFresh]), whatever
+//     its presence says. A DRAINING node gives its presence up first, so its
+//     peers stop counting it for seats, and goes on serving its donor — and
+//     heartbeating its row — until its state log stops, after a drain that
+//     waits for every running turn. In a rolling upgrade that node is the
+//     likeliest holder of the newest artefact, and named from presence alone
+//     it was not waited for: its offer was dropped whenever it landed after
+//     the listed donors had answered, and every retry ran the same race until
+//     the node had gone and there was no donor at all.
+//   - THIS NODE when, and only when, its own donor is serving (ownServing),
+//     whatever its presence or its row says. A lone node below the floor ends
+//     its collection on its own answer; but the boot's join runs before any
+//     donor starts, and a node that named itself there — off its previous
+//     incarnation's row, or a presence lease that had not lapsed — waited the
+//     whole window for an answer that could not come.
+//
+// Sorted, so the same fleet is the same expectation on every node.
+func joinDonors(now time.Time, own string, ownServing bool,
+	live []statelog.Presence, rows []coord.NodePositions) []string {
+
+	named := make(map[string]bool, len(live)+len(rows)+1)
+	for _, p := range live {
+		named[p.NodeID] = true
+	}
+	for _, row := range rows {
+		if now.Sub(row.At) <= donorRowFresh && namesArtefact(row) {
+			named[row.NodeID] = true
+		}
+	}
+	if ownServing {
+		named[own] = true
+	} else {
+		delete(named, own)
+	}
+	return slices.Sorted(maps.Keys(named))
+}
+
+// donorRowFresh is how recently a node must have written its register row
+// for a join to wait on the artefact the row names ([joinDonors]).
+//
+// FOUR HEARTBEATS ([PositionHeartbeat]), the derivation every other cached
+// coordination fact here uses ([statelog.TrimHoldStale]): a node may miss
+// three beats and still be running its donor, so a row older than four is a
+// node that has stopped. The two errors are not the same size. Waiting on a
+// node that has just died costs the join the [statelog.OfferWindow], which is
+// what every join paid before it named anybody; leaving out one that is
+// running costs the offer it would have made, which may be the only one.
+const donorRowFresh = 4 * PositionHeartbeat
+
+// namesArtefact reports whether a register row says its node holds an
+// artefact of the estate ([stampSnapshot]): a size on the row, or a snapshot
+// instant on any log's entry — the instant rather than the sequence, because
+// an artefact taken while a log was still empty covers it at position zero.
+func namesArtefact(row coord.NodePositions) bool {
+	if row.SnapshotBytes > 0 {
+		return true
+	}
+	for _, pos := range row.Domains {
+		if !pos.SnapshotAt.IsZero() {
+			return true
+		}
+	}
+	return false
+}
 
 // rejoin is the runtime adoption: end the appliers, join, start them again.
 //
@@ -2937,6 +3033,7 @@ func (e *Engine) startSnapshots(ctx context.Context, boot *config.Bootstrap, s *
 		s.snapshot.Store(&held)
 	}
 
+	s.donor.Store(donor)
 	s.done.Add(1)
 	go func() {
 		defer s.done.Done()

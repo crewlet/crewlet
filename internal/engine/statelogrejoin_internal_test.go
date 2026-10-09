@@ -170,11 +170,12 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 //
 // A SILENT listener on the offer subject tells the case the moment the rejoin
 // has asked, so the Stop lands inside the window rather than before the ask or
-// after it. A join collects until every live data node has answered, so the
-// window stays open only while one has not: a live data node is named here
-// whose donor never answers — one not up yet, or gone — which is the window
-// spent exactly as it would be in production. The heartbeat's publish is run
-// once rather than waited for, as in [TestANodeBelowTheFloorAdoptsWhileRunning].
+// after it. A join collects until every donor it names has answered — every
+// live data node among them — so the window stays open only while one has
+// not: a live data node is named here whose donor never answers — one not up
+// yet, or gone — which is the window spent exactly as it would be in
+// production. The heartbeat's publish is run once rather than waited for, as
+// in [TestANodeBelowTheFloorAdoptsWhileRunning].
 func TestAStopMidRejoinEndsTheJoinAndWaitsForItsAppliers(t *testing.T) {
 	t.Parallel()
 	e, _, q := bootRejoinNode(t)

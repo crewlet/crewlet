@@ -39,9 +39,16 @@ type AdoptDeps struct {
 	// Conn is the transfer's own connection.
 	Conn *nats.Conn
 
-	// Donors answers the donors this join expects to hear from — every
-	// live data node, each of which runs one — so its collection ends once
-	// each has answered rather than at the [OfferWindow] ([CollectOffers]).
+	// Donors answers the donors this join expects to hear from, so its
+	// collection ends once each has answered rather than at the
+	// [OfferWindow] ([CollectOffers]). It must name EVERY node that can
+	// offer, because the collection stops on the last one it names and an
+	// offer arriving after that is not waited for: the engine names every
+	// live data node — each runs a donor — and every node whose fresh
+	// register row names an artefact, which is how a DRAINING node is
+	// named, since it gives up its presence first and goes on serving its
+	// donor until its state log stops.
+	//
 	// Nil, or an error, waits out the window: an expectation is a way to
 	// stop early and never a reason not to ask. It is called WHILE the
 	// offers are collected, on a context the window ends, and must return
