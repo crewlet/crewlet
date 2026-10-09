@@ -8,8 +8,8 @@
 // and the IN-FLIGHT LLM call. Beside the seats it keeps the coding runs in
 // flight, reconciled against their durable record (sandbox.go).
 // What a seat has SPENT is not held per seat: it is the per-agent row of the
-// spend rollup, folded from the same records by internal/tokens, so a seat
-// card and the Spend screen cannot disagree about one seat.
+// spend rollup, folded from the same records by internal/tokens, so the
+// projection holds no second total that could disagree with its own rollup.
 //
 // It solves two problems, and both are worth stating because they are why this
 // exists at all rather than the dashboard querying the store.

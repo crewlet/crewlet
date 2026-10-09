@@ -492,14 +492,16 @@ func (s *Service) flushTokens() {
 	s.hub.Broadcast(Push(KindTokens, rollup, s.now()))
 }
 
-// TokenRollup folds the live window into the breakdown the dashboard renders.
+// TokenRollup folds the live window into the breakdown the `tokens` push and
+// the snapshot carry, which no screen of the bundled dashboard draws: its spend
+// screens read named windows.
 //
 // Exported because the snapshot needs the same answer: a client that connected
 // mid-window and one that has been receiving pushes must hold the same rollup,
 // and two constructions of it is how they come to differ.
 func (s *Service) TokenRollup() tokens.Rollup {
 	// The window this rollup actually covers, reported rather than assumed:
-	// the client prints it beside the numbers, and a figure labelled with
+	// a reader prints it beside the numbers, and a figure labelled with
 	// the wrong window is worse than an unlabelled one. The projection ages
 	// its window on its own clock and names the two instants it cut it at.
 	window := s.state.Spend()

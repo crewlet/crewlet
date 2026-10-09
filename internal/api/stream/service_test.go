@@ -376,7 +376,7 @@ func TestSpendIsFoldedOnTheTickAndNotOnThePublishPath(t *testing.T) {
 	if len(rollup.ByPhase) != 1 || rollup.ByPhase[0].Phase != "plan" {
 		t.Errorf("by_phase = %+v", rollup.ByPhase)
 	}
-	// The window, which the client prints beside the numbers. Two instants
+	// The window, which a reader prints beside the numbers. Two instants
 	// an hour apart at least — the projection's own rolling window — rather
 	// than a day count that could not name a window ending in the past.
 	at, err := time.Parse(time.RFC3339, rollup.Since)
