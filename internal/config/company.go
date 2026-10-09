@@ -846,8 +846,10 @@ const (
 	// own tools and never mirrors.
 	TrackerJira TrackerBackend = "jira"
 
-	// TrackerNone is a company with no tracker at all — schedules and chat
-	// are the only things that wake a seat.
+	// TrackerNone is a company with no tracker at all: nothing is filed or
+	// routed as a work item, and a seat is woken by everything else — chat,
+	// schedules, an A2A ask, and its connected integrations' webhooks (a
+	// GitHub or GitLab issue among them).
 	TrackerNone TrackerBackend = "none"
 )
 

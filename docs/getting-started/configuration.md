@@ -1638,7 +1638,7 @@ tracker:
   backend: native                        # native (default) | jira | none
 ```
 
-Which **work tracker** this company runs, on exactly the terms `knowledge.backend` runs on. Unset derives `jira` when an `integrations.jira` block is declared and `native` otherwise; `native` beside `integrations.jira` is refused, because work would be filed in two places and a unit's `project` key would name two trackers. `none` is a company where schedules and chat are the only things that wake a seat.
+Which **work tracker** this company runs, on exactly the terms `knowledge.backend` runs on. Unset derives `jira` when an `integrations.jira` block is declared and `native` otherwise; `native` beside `integrations.jira` is refused, because work would be filed in two places and a unit's `project` key would name two trackers. `none` is a company with no work tracker at all: nothing is filed or routed as a work item, and a seat is woken by everything else — chat, schedules, an `a2a_ask`, and the webhooks of the integrations the company has connected, a GitHub or GitLab issue among them.
 
 The two axes are **separate** on purpose. A company running a native tracker against a Confluence wiki, or Jira against native pages, is an ordinary arrangement rather than a mixture to refuse — they are two products with separate routing and separate lead maps.
 
