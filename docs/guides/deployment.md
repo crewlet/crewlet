@@ -525,7 +525,11 @@ naming it (`coord_kv_bucket_slow`, `natsobj_bucket_slow`,
 that precedes it (`jetstream_stream_lookup_slow`,
 `jetstream_consumer_lookup_slow`) — that lookup is the first call to reach the
 metadata group, so a member stalled against a group that has not settled
-waits there, where nothing used to report it at all. The object store's
+waits there, where nothing used to report it at all. The read of each state
+log's ceiling that sizes the logs before any of them is created is the same
+kind of lookup and says so the same way (`statelog_ceiling_read_slow`); the
+four are asked at once, so a broker that answers none of them costs one
+lookup ceiling rather than four in a row. The object store's
 bucket is looked up and created as one step, and writes one line over the two
 (`natsobj_bucket_slow`). A probe that went unanswered is named as such
 (`jetstream_stream_lookup_unanswered`, `jetstream_consumer_lookup_unanswered`,

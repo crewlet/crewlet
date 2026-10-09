@@ -649,6 +649,17 @@ It is never created above that `fit`, even where the existing logs leave more:
 every later boot reports its stream against that figure, and a log created
 past it would be reported as a capacity difference on every one of them.
 
+**A ceiling the broker would not report is counted as absent.** Before it
+sizes anything a node reads every existing log's ceiling from the broker — all
+four at once, each asked again every two seconds for up to thirty while nobody
+answers. A read still unanswered after that, or one the broker refused, counts
+that log as one this boot would create. A log that does exist keeps the
+ceiling it holds, but every log this boot creates is sized without knowing
+what it holds, so it can come out larger or smaller than a boot that read it
+would make, and keeps that ceiling. The node logs `statelog_ceiling_unread`
+naming the stream; once it is up, `crewlet retention set-capacity` changes
+either log.
+
 **A boot that still cannot reserve a log says why.** When even the floors, or
 a ceiling you set, do not fit, the node refuses to boot with an error naming
 the stream, the bytes it needed, the bytes the broker had left and what sets
