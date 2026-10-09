@@ -319,9 +319,8 @@ func TestTokensAnswersTheLiveWindow(t *testing.T) {
 	if want := projected.Format(time.RFC3339); got.Until != want {
 		t.Errorf("until = %s, want the projection's clock %s", got.Until, want)
 	}
-	// The high-water mark the client folds live events onto. Without it an
-	// event that is both in this baseline and redelivered on the stream is
-	// counted twice.
+	// The rollup's own freshness: the newest record it counted. A total with
+	// no instant beside it cannot be told from a stale one.
 	if got.AggregatedThrough != "2026-06-14T12:00:00Z" {
 		t.Errorf("aggregated_through = %q", got.AggregatedThrough)
 	}
