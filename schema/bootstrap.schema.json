@@ -206,7 +206,7 @@
               "type": "string"
             }
           ],
-          "description": "Seat and presence lease TTL; 0 takes the measured default. Fleet duties size their own."
+          "description": "Seat and presence lease TTL; 0 takes the measured default. Every other lease — a fleet duty, a tracker walk's claim — sizes its own."
         },
         "type": {
           "anyOf": [

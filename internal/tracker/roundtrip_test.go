@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -48,8 +49,13 @@ type roundTrip struct {
 
 	// claims is the coordination the writer takes a walking sequence's
 	// claim from, so a case can hold one as ANOTHER node — a walk that is
-	// running somewhere else — and see what the duty makes of it.
-	claims *memory.Backend
+	// running somewhere else — and see what the duty makes of it. The
+	// in-memory twin unless a case moves it ([roundTrip.claimOn]).
+	claims coord.Backend
+
+	// publisher is what the harness's writer appends through, kept so a
+	// writer rebuilt over other coordination writes exactly as this one did.
+	publisher *statelog.Publisher
 
 	// at is the writer's AUTHORED clock, which a case moves when it is
 	// about the order of instants somebody typed. It defaults to
@@ -183,21 +189,13 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, node *store.DB
 	if err != nil {
 		t.Fatalf("build the publisher: %v", err)
 	}
-	writer, err := tracker.NewWriter(tracker.WriterDeps{
-		Publisher: publisher, DB: db.Reader(), NodeID: nodeID,
-		// A REAL CLAIM BACKEND, because the WALKING sequences refuse
-		// without one and a harness that could not run them left the
-		// cross-project move — and everything it reads, including the
-		// subtree walk the trash shares — with no test at all. In-memory
-		// is the whole of what a single-node harness needs: the claim is
-		// there to exclude a SECOND node.
-		Claims: r.claims,
-		Actor:  "ana", ActorKind: tracker.AuthorHuman,
-		Now: func() time.Time { return r.at },
-	})
-	if err != nil {
-		t.Fatalf("build the writer: %v", err)
-	}
+	r.publisher = publisher
+	// A REAL CLAIM BACKEND, because the WALKING sequences refuse without
+	// one and a harness that could not run them left the cross-project
+	// move — and everything it reads, including the subtree walk the trash
+	// shares — with no test at all. In-memory is the whole of what most
+	// cases need: the claim is there to exclude a SECOND node.
+	writer := r.writerClaiming(r.claims)
 	// THE READ AUTHORITY IS LOCAL HERE, because this harness drives the
 	// applier itself rather than running a framework loop: what it is
 	// about is one record's journey from writer to row, and the barrier
@@ -214,6 +212,33 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, node *store.DB
 	r.writer, r.applier = writer, tracker.NewApplier(nodeID)
 	r.reader, r.waiter = reader, waiter
 	return r
+}
+
+// writerClaiming is this harness's writer — its publisher, its estate, its
+// actor and its authored clock — taking its walk claims from claims.
+func (r *roundTrip) writerClaiming(claims coord.Backend) *tracker.Writer {
+	r.t.Helper()
+	writer, err := tracker.NewWriter(tracker.WriterDeps{
+		Publisher: r.publisher, DB: r.db.Reader(), NodeID: r.nodeID,
+		Claims: claims,
+		Actor:  "ana", ActorKind: tracker.AuthorHuman,
+		Now: func() time.Time { return r.at },
+	})
+	if err != nil {
+		r.t.Fatalf("build the writer: %v", err)
+	}
+	return writer
+}
+
+// claimOn moves this node's coordination to claims: the writer is rebuilt to
+// take its walk claims there, and a case holding a claim as another node
+// holds it there too. The twin is what most cases need; a case about what the
+// fleet's own store will HONOUR needs that store, because the twin keeps any
+// deadline a claim asks for.
+func (r *roundTrip) claimOn(claims coord.Backend) {
+	r.t.Helper()
+	r.claims = claims
+	r.writer = r.writerClaiming(claims)
 }
 
 // holdTheAppliersPin takes the pinned writer this harness's replicated estate

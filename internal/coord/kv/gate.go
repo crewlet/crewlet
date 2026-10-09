@@ -54,13 +54,15 @@ import (
 // # So the view is incremental, and exact by a sequence barrier
 //
 // The view is a WATCH of the seat lease bucket — the one holding `seat:` and
-// `node:` leases — keeping the newest record of every key of a counted class
-// as it arrives, indexed by the protocol the gate judges. The duty bucket is
-// not watched at all: no record in it is counted, and its writes are the
-// fleet's duty re-claims, which the view would only take in to throw away.
-// The bucket's other classes (the tracker's walk claims) are taken in, so the
-// view reaches the bucket's last sequence, and dropped as they arrive. The
-// cost of a gate is then the lower-protocol records — none outside a rolling
+// `node:` leases and nothing else — keeping the newest record of every key of
+// a counted class as it arrives, indexed by the protocol the gate judges. The
+// duty bucket is not watched at all: no record in it is counted, and its
+// writes are the fleet's duty re-claims and the tracker's walk-claim
+// heartbeats, which the view would only take in to throw away. The view still
+// keeps only what [coord.ProtocolGateCounts] counts, rather than trusting
+// where a record was written: which bucket a class lives in is this store's
+// layout, and which classes the gate judges is the contract's. The cost of a
+// gate is then the lower-protocol records — none outside a rolling
 // upgrade — plus one BARRIER, and the barrier is what makes it exact rather
 // than merely recent. Before a gate is judged, the bucket's last sequence is
 // read from the stream LEADER (a stream info refused when it names no leader,

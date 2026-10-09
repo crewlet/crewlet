@@ -24,6 +24,11 @@
 //     ceil(seats / that count). A node that stops renewing its presence is
 //     not merely idle — it raises everyone else's share.
 //
+// A caller may lease under a class of its own as well — the tracker's walk
+// claims are `move:`, `merge:` and `bulk:` — and every such class is held to
+// the same ceiling a duty is, never to the seat lease TTL: only a seat and a
+// presence lease run on the seat heartbeat ([HeldToSeatTTL]).
+//
 // What belongs here rather than in a node's own database is ADR-0003, the
 // tri-state below is ADR-0005, why [ProtocolVersion] REFUSES a lower-protocol
 // peer where an event envelope round-trips one is ADR-0016, and why a token
@@ -223,17 +228,23 @@ var ErrUnavailable = errors.New("coordination store unavailable")
 // it still holds.
 var ErrTTLTooLong = errors.New("coord: ttl exceeds what the store can honour")
 
-// MaxDutyTTL is the longest TTL a fleet duty (a `worker:` resource) may be
-// claimed with, and the TTL every backend must be able to honour for one.
+// MaxDutyTTL is the longest TTL any lease outside seats and presence may be
+// claimed with — a fleet duty (a `worker:` resource), a tracker walk's claim,
+// a bulk admission, any class a caller leases under a name of its own — and
+// the TTL every backend must be able to honour for one, whatever TTL it runs
+// its seat leases on. Named for the duty that sizes it.
 //
-// # Why a duty's ceiling is the contract's and not the seat lease's
+// # Why this ceiling is the contract's and not the seat lease's
 //
 // A seat lease and a duty lease want opposite TTLs. A seat is renewed on a
 // heartbeat, so its TTL is a few heartbeats and a dead node's seats move within
 // a minute. A duty is re-claimed once per TICK of the work it guards, and a
 // tick runs from ten seconds (the scheduler) to an hour (the learning passes),
 // so a duty TTL has to outlive several of its own ticks or it moves to a peer
-// on ordinary jitter.
+// on ordinary jitter. A caller's claim is the same kind of lease: the tracker
+// sizes a walk's claim from the walk's own heartbeat and a bulk admission from
+// the rows it projects, and neither has anything to do with how fast a dead
+// node's seats should move.
 //
 // The embedded KV backend fixes a lease's expiry as its BUCKET's age, so it
 // can only honour TTLs up to the bucket it writes into. For as long as duties
@@ -242,12 +253,18 @@ var ErrTTLTooLong = errors.New("coord: ttl exceeds what the store can honour")
 // the retention sweep, the mailbox retirement, the integration reconcile, the
 // skill curator and every integration setup pass failed on their lease claim
 // and never ran at all, with one warning per attempt as the only symptom. The
-// in-memory twin honoured any TTL, so no single-node test could see it.
+// in-memory twin honoured any TTL, so no single-node test could see it. Moving
+// the duties out fixed exactly the duties: every other class stayed in the
+// seat lease bucket, so the tracker's 60-second walk claim was refused on the
+// same fleets — every cross-project move and every merge failed before its
+// first append, and a large bulk edit's admission failed open — and the twin
+// hid that too, because the ceiling it enforced was the duties' alone.
 //
-// So the ceiling is stated HERE, every backend enforces it through
-// [CheckDutyTTL], and a duty TTL the embedded KV cannot keep is refused by the
-// twin too, in the tests that run against it. The contract suite certifies
-// both halves on every backend: a duty at exactly this TTL is honoured, one
+// So the ceiling is stated HERE, for every class [HeldToSeatTTL] leaves out,
+// every backend enforces it through [CheckLeaseTTL], and a TTL the embedded KV
+// cannot keep is refused by the twin too, in the tests that run against it.
+// The contract suite certifies both halves on every backend, for a duty and
+// for a class of a caller's: a lease at exactly this TTL is honoured, one
 // beyond it is an error wrapping [ErrTTLTooLong].
 //
 // # Why three hours
@@ -256,10 +273,12 @@ var ErrTTLTooLong = errors.New("coord: ttl exceeds what the store can honour")
 // their lease survives three of those ticks, the same
 // "one missed tick must not move the duty" ratio every other duty follows. An
 // engine test asserts that this is exactly the longest duty TTL, so the number
-// cannot drift away from the duty that justifies it. Raising it is safe on a
-// running fleet (the KV backend only ever raises its duty bucket's age);
-// lowering it leaves an existing bucket older than it needs to be, which costs
-// nothing, because no duty record is judged by the bucket's age.
+// cannot drift away from the duty that justifies it; every other lease it
+// bounds is far shorter (the tracker's longest, a bulk admission at its
+// largest, asks for about two minutes). Raising it is safe on a running fleet
+// (the KV backend only ever raises its duty bucket's age); lowering it leaves
+// an existing bucket older than it needs to be, which costs nothing, because
+// no record there is judged by the bucket's age.
 //
 // It is also the removal-marker horizon, [MarkerRetention], by definition
 // rather than by coincidence: no operation that read a record before it was
@@ -268,20 +287,45 @@ var ErrTTLTooLong = errors.New("coord: ttl exceeds what the store can honour")
 // shortens the tail of markers a listing re-reads and changes no answer.
 const MaxDutyTTL = 3 * time.Hour
 
-// CheckDutyTTL refuses a claim on a duty resource whose TTL exceeds
-// [MaxDutyTTL], and accepts everything else.
+// HeldToSeatTTL reports whether a lease on resource is one a backend holds to
+// the TTL it runs its SEAT leases on — a seat or a node's presence — rather
+// than to [MaxDutyTTL]. Every backend asks this one function, so the twin and
+// the store cannot disagree about which leases the seat TTL bounds.
+//
+// SEATS AND PRESENCE, AND NOTHING ELSE, because those two are the leases
+// renewed on the seat heartbeat: the operator's
+// `coordination.lease_ttl_seconds` is how fast a dead node's seats move and
+// how soon its presence stops counting, and that is the whole of what it is
+// for. Every other lease is sized from the work it guards, so tying one to
+// the seat TTL makes a knob tuned for failover silently refuse — or, set long,
+// silently permit — a duty or a walk nobody tuned it for.
+//
+// The same two classes as [ProtocolGateCounts], for a different reason: that
+// one asks which leases say a node of some build is alive or still running
+// seats, this one which leases share the seat heartbeat. Neither answer is
+// derived from the other, so a class added to one is not thereby added to
+// the other.
+func HeldToSeatTTL(resource string) bool {
+	return Class(ResourceSegments(resource)[0]).HeldToSeatTTL()
+}
+
+// CheckLeaseTTL refuses a claim or a renew whose TTL exceeds [MaxDutyTTL] on
+// any lease the seat lease TTL does not hold ([HeldToSeatTTL]), and accepts
+// everything else. A seat or presence lease is left to the backend, which
+// holds it to the seat lease TTL it runs on.
 //
 // Backends MUST call this rather than comparing the constant themselves, so the
 // rule and its message have one implementation, and so a backend that can
 // honour longer TTLs (the in-memory twin can honour any) still refuses the
 // ones another backend cannot.
-func CheckDutyTTL(resource string, ttl time.Duration) error {
-	if !IsWorkerResource(resource) || ttl <= MaxDutyTTL {
+func CheckLeaseTTL(resource string, ttl time.Duration) error {
+	if HeldToSeatTTL(resource) || ttl <= MaxDutyTTL {
 		return nil
 	}
-	return fmt.Errorf("%w: duty %q asked for a %v lease and a duty may hold one for at most "+
-		"coord.MaxDutyTTL (%v); shorten the duty's TTL, or raise coord.MaxDutyTTL together "+
-		"with the duty that needs the longer lease", ErrTTLTooLong, resource, ttl, MaxDutyTTL)
+	return fmt.Errorf("%w: %q asked for a %v lease, and a lease outside seats and presence "+
+		"may be held for at most coord.MaxDutyTTL (%v), the longest duty's; shorten the TTL "+
+		"its caller asks for, or, for a duty, raise coord.MaxDutyTTL together with it",
+		ErrTTLTooLong, resource, ttl, MaxDutyTTL)
 }
 
 // Lease is a held lease. Epoch is the fencing token: thread it into writes.
@@ -492,14 +536,17 @@ type Backend interface {
 	// held at a lower protocol, unless Ungated. See [Refusal] for why the
 	// reason is part of the answer.
 	//
-	// A duty (a `worker:` resource) is honoured at any TTL up to
-	// [MaxDutyTTL] whatever TTL the backend's seat leases run on, and
-	// refused beyond it with an error wrapping [ErrTTLTooLong].
+	// Any lease outside seats and presence ([HeldToSeatTTL]) — a duty, a
+	// tracker walk's claim, any class a caller leases — is honoured at any
+	// TTL up to [MaxDutyTTL] whatever TTL the backend's seat leases run on,
+	// and refused beyond it with an error wrapping [ErrTTLTooLong]. A seat
+	// or presence lease may be refused beyond the seat lease TTL the
+	// backend runs on, the same way.
 	TryAcquire(ctx context.Context, resource string, opts AcquireOptions) (*Lease, Refusal, error)
 
 	// Renew extends a lease the caller already holds at this epoch.
-	// Reports false when the lease is definitively no longer theirs. A
-	// duty's TTL is bounded exactly as TryAcquire's is.
+	// Reports false when the lease is definitively no longer theirs. Its
+	// TTL is bounded exactly as TryAcquire's is.
 	Renew(ctx context.Context, resource, owner string, epoch int64, ttl time.Duration) (bool, error)
 
 	// Release gives up a lease the caller holds.
@@ -597,9 +644,12 @@ const ResourceSeparator = ":"
 // with no members at every caller. [Class.Valid] is what refuses one.
 //
 // Classes are deliberately NOT enumerated here. This package owns the three
-// the fleet itself leases; the tracker's claims are leases in the same bucket
-// under classes of their own, and an enumeration here would either be wrong
-// or drag every caller's vocabulary into this package.
+// the fleet itself leases; the tracker's claims are leases under classes of
+// their own, held to the same contract as a duty, and an enumeration here
+// would either be wrong or drag every caller's vocabulary into this package.
+// What this package does say about a class is which of its own the seat lease
+// TTL holds ([Class.HeldToSeatTTL]) — and so, by elimination, which leases it
+// does not, whoever's they are.
 type Class string
 
 // The classes the fleet leases directly.
@@ -624,6 +674,13 @@ const (
 // own encoding.
 func (c Class) Valid() bool {
 	return c != "" && DocumentKey(string(c)) == string(c)
+}
+
+// HeldToSeatTTL reports whether this class's leases are held to the seat
+// lease TTL: seats and presence, and nothing else. See [HeldToSeatTTL] for
+// the resource form and the reason; this is the one place the set is spelled.
+func (c Class) HeldToSeatTTL() bool {
+	return c == ClassSeat || c == ClassNode
 }
 
 // Resource names the lease for one member of this class.
@@ -710,9 +767,6 @@ func NodeResource(nodeID string) string { return ClassNode.Resource(nodeID) }
 
 // IsSeatResource reports whether a resource names a seat.
 func IsSeatResource(resource string) bool { return ClassSeat.Holds(resource) }
-
-// IsWorkerResource reports whether a resource names a fleet duty.
-func IsWorkerResource(resource string) bool { return ClassWorker.Holds(resource) }
 
 // IsNodeResource reports whether a resource names a node's presence.
 func IsNodeResource(resource string) bool { return ClassNode.Holds(resource) }

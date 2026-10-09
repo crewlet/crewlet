@@ -10,6 +10,10 @@ var (
 	MoveClaim  = moveClaim
 )
 
+// BulkClaim is the name of the one fleet-wide bulk admission, for the cases
+// that read who holds it.
+func BulkClaim() string { return bulkClaim(trackerStream) }
+
 // Hold takes resource as one of w's walks does, for the cases that hold a
 // claim the way a live walk on this very node holds it, and hands back its
 // release.

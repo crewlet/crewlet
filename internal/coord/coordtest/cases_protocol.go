@@ -206,9 +206,9 @@ var protocolCases = []testCase{
 		})
 		// Nor any other class a claim takes: a tracker walk's claim
 		// follows the walk's length and is not the seat-host protocol.
-		// (On the KV store it shares the seat lease bucket, so this is
-		// what holds the gate's view to the classes rather than to the
-		// bucket.)
+		// (The KV store keeps it beside the duties, out of the bucket its
+		// gate watches; a backend that kept it with the seats would have
+		// only the classes to go by, and this is what holds it to them.)
 		h.claim("move:task-1", coord.AcquireOptions{
 			Owner: "old:1", TTL: LongTTL, Protocol: 1,
 		})

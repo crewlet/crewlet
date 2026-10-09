@@ -23,8 +23,11 @@
 //     is the arbiter clock (the role Postgres now() played), and nodes never
 //     compare their own wall clocks.
 //
-//   - crewlet_duties, holding `worker:` leases, the fleet singletons. See
-//     "Two lease buckets" below for why they cannot share the first.
+//   - crewlet_duties, holding every OTHER lease: the `worker:` leases of the
+//     fleet singletons, and every class a caller leases under a name of its
+//     own (the tracker's `move:`, `merge:` and `bulk:` claims). Named for the
+//     duties, which are why it exists. See "Two lease buckets" below for why
+//     none of them can share the first.
 //
 //   - crewlet_epochs, with NO TTL. One persistent record per resource holding
 //     the monotonic counter and the placement hint, for both lease buckets.
@@ -51,23 +54,32 @@
 // deadline carried in the record, judged against the STORE's clock (see
 // Store.storeNow), never the caller's.
 //
-// # Two lease buckets, because seats and duties want opposite TTLs
+// # Two lease buckets, because seats and everything else want opposite TTLs
 //
-// A seat lease is renewed on the heartbeat, so its TTL is a few heartbeats. A
-// duty lease is re-claimed once per tick of the work it guards, and a tick
-// runs from ten seconds to an hour, so a duty TTL runs up to
-// coord.MaxDutyTTL. One bucket cannot serve both. Its age at the seat TTL
-// refused every duty longer than 45 seconds, which is how the retention sweep,
-// the integration reconcile, the skill curator and every integration pass
-// never ran on any fleet. Its age at the longest duty would put a clock read
-// under every seat renew, and a dead node's seats would sit claimable only by
-// deadline arithmetic rather than by the broker reaping them.
+// A seat lease is renewed on the heartbeat, so its TTL is a few heartbeats,
+// and so is a node's presence. Every other lease is sized from the work it
+// guards: a duty is re-claimed once per tick, and a tick runs from ten seconds
+// to an hour; a tracker walk's claim is renewed on the walk's own heartbeat
+// and lasts a minute; a bulk admission lasts twice the rows it projects. So
+// their TTLs run up to coord.MaxDutyTTL. One bucket cannot serve both. Its age
+// at the seat TTL refused every duty longer than 45 seconds, which is how the
+// retention sweep, the integration reconcile, the skill curator and every
+// integration pass never ran on any fleet — and, once the duties had moved
+// and the rest had not, every tracker walk claim, which is how every
+// cross-project move and merge failed on every fleet. Its age at the longest
+// duty would put a clock read under every seat renew, and a dead node's seats
+// would sit claimable only by deadline arithmetic rather than by the broker
+// reaping them.
 //
-// So the duty bucket's age is coord.MaxDutyTTL and EVERY duty record is judged
-// by its own deadline against the duty bucket's clock, while the seat bucket
-// keeps the production shape where a record that can still be read is live. A
-// duty is claimed per tick rather than per heartbeat, so the clock read costs
-// one round trip per tick of each duty, fleet-wide.
+// So WHICH BUCKET is decided by the class, and by the one rule coord states
+// for it (coord.HeldToSeatTTL): seats and presence in the seat lease bucket,
+// every other class — the duties and any caller's — in the duty bucket. The
+// duty bucket's age is coord.MaxDutyTTL and EVERY record in it is judged by
+// its own deadline against that bucket's clock, while the seat bucket keeps
+// the production shape where a record that can still be read is live. What
+// lives in the duty bucket is claimed per tick or renewed on a walk's
+// heartbeat rather than per seat heartbeat, so the clock read costs one round
+// trip per tick of each duty and per beat of each running walk, fleet-wide.
 //
 // THE DUTY BUCKET'S AGE IS ONLY EVER RAISED, and it is the ONE value this
 // store still writes to a bucket that already exists; every other bucket
@@ -77,7 +89,7 @@
 // lower. A reassertion of this node's own ceiling in either direction lets a
 // build with a shorter one shrink the age under a peer that holds a longer
 // duty, and the broker then reaps a live duty early. An age longer than a
-// duty's TTL costs nothing, because no duty record is judged by the age.
+// lease's TTL costs nothing, because no record there is judged by the age.
 //
 // # A claim is three writes, and the order carries the invariant
 //
@@ -316,8 +328,10 @@ type Config struct {
 	//
 	// It is a property of the BUCKET, not of a call: see the package doc.
 	// A per-call seat or presence TTL longer than the age in force is
-	// refused; a shorter one is honoured against the store's own clock. Duty
-	// TTLs do not depend on it: they are bounded by coord.MaxDutyTTL.
+	// refused; a shorter one is honoured against the store's own clock. No
+	// other lease's TTL depends on it — a duty's, a tracker walk's — since
+	// every other class is kept in the duty bucket and bounded by
+	// coord.MaxDutyTTL.
 	//
 	// A bucket a peer created first is ADOPTED rather than rewritten, so the
 	// age in force may not be this number at all. [Store.TTL] reports the one
@@ -401,9 +415,10 @@ type lane struct {
 type Store struct {
 	js jetstream.JetStream
 
-	// leases holds seat and presence leases.
+	// leases holds seat and presence leases, and nothing else.
 	leases *lane
-	// duties holds every duty lease this build claims.
+	// duties holds every other lease this build claims: every duty, and
+	// every class a caller leases (see [Store.laneFor]).
 	duties *lane
 	epochs jetstream.KeyValue
 	// epochRead is the epochs bucket's leader read, as [lane.read] is a
@@ -580,14 +595,15 @@ func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Store, erro
 // can honour, so a bucket created by a build with a shorter ceiling reaps a
 // live duty lease early and the fleet then runs that duty on two nodes at
 // once. Raising it is safe in the only direction that matters, and it is ONLY
-// ever raised, because an age longer than a duty's TTL costs nothing: no duty
-// record is judged by the age, every one carries its own deadline.
+// ever raised, because an age longer than a lease's TTL costs nothing: no
+// record here is judged by the age, every one carries its own deadline.
 func openDuties(ctx context.Context, js jetstream.JetStream, cfg Config) (jetstream.KeyValue, error) {
 	name := cfg.BucketPrefix + dutiesSuffix
 	want := jetstream.KeyValueConfig{
 		Bucket: name,
-		Description: "Crewlet duty leases; every record is judged by its own deadline, and the " +
-			"bucket age is only ever raised to cover the longest duty",
+		Description: "Crewlet duty leases and every other lease outside seats and presence; every " +
+			"record is judged by its own deadline, and the bucket age is only ever raised to " +
+			"cover the longest duty",
 		TTL:      coord.MaxDutyTTL,
 		Replicas: cfg.Replicas,
 	}
@@ -692,8 +708,9 @@ func readBucket(ctx context.Context, bucket jetstream.KeyValue) (bucketFacts, er
 // NOT NECESSARILY THIS NODE'S CONFIGURED VALUE: the bucket is adopted rather
 // than rewritten, so on a fleet it carries whatever the member that created it
 // asked for. See [Open], and [engine.effectiveLeaseTTL] for why the caller
-// must acquire with this rather than with its own. A duty's ceiling is not
-// this number at all: it is coord.MaxDutyTTL, whatever the seat leases run on.
+// must acquire with this rather than with its own. No other lease's ceiling
+// is this number at all — a duty's, a tracker walk's, any caller class's: it
+// is coord.MaxDutyTTL, whatever the seat leases run on.
 func (s *Store) TTL() time.Duration { return s.ttl }
 
 // each walks a whole bucket — see [eachEntry], which is the one implementation
@@ -737,23 +754,28 @@ func checkClass(class coord.Class) error {
 		"contain no %q", string(class), coord.ResourceSeparator)
 }
 
-// laneFor is the bucket a resource's lease is written into by this build.
+// laneFor is the bucket a resource's lease is written into by this build:
+// the seat lease bucket for the leases the seat lease TTL holds
+// ([coord.HeldToSeatTTL] — seats and presence), and the duty bucket for EVERY
+// other one, whoever's class it is. Routing the duties alone there left a
+// caller's class — the tracker's walk claims — held to the seat bucket's age,
+// which refused the 60-second walk claim beside a 45-second seat TTL.
 func (s *Store) laneFor(resource string) *lane {
-	if coord.ClassWorker.Holds(resource) {
-		return s.duties
+	if coord.HeldToSeatTTL(resource) {
+		return s.leases
 	}
-	return s.leases
+	return s.duties
 }
 
 // laneOf is the one bucket a listing of one class reads: the class lives
 // wherever laneFor writes it. Seats and presence live in the seat lease
 // bucket alone, so each membership read on a heartbeat costs what it did
-// before duties had a bucket of their own.
+// before anything had a bucket of its own.
 func (s *Store) laneOf(class coord.Class) *lane {
-	if class == coord.ClassWorker {
-		return s.duties
+	if class.HeldToSeatTTL() {
+		return s.leases
 	}
-	return s.leases
+	return s.duties
 }
 
 // --- the lease surface ----------------------------------------------------
@@ -1336,8 +1358,8 @@ func (s *Store) ListOwned(ctx context.Context, owner string) ([]coord.Lease, err
 // THE BROKER NARROWS THIS ONE. A class is the leading segment of a resource
 // and therefore a subject token of its key, so each scan asks for that class
 // and nothing else, where it used to read every lease in the bucket (seats and
-// duties alike) to count the nodes. And only the duty class opens the duty
-// bucket at all; see [Store.laneOf].
+// duties alike) to count the nodes. And a seat or presence listing never opens
+// the duty bucket, nor any other class's the seat bucket; see [Store.laneOf].
 func (s *Store) ListLive(ctx context.Context, class coord.Class) ([]coord.Lease, error) {
 	scan := func(ctx context.Context, l *lane) ([]entry, error) { return s.scanIn(ctx, l, class) }
 	// Nothing is filtered here: the broker has already answered with this
@@ -1821,8 +1843,9 @@ func (s *Store) validateTTL(l *lane, resource, owner string, ttl time.Duration) 
 	}
 	if l == s.duties {
 		// The duty bucket's ceiling IS the contract's, so the contract's
-		// check and its message are the whole answer.
-		return coord.CheckDutyTTL(resource, ttl)
+		// check and its message are the whole answer, for a duty and for
+		// every other class laneFor sends here.
+		return coord.CheckLeaseTTL(resource, ttl)
 	}
 	if ttl > l.maxTTL {
 		// The bucket's MaxAge would reap the record before this deadline,

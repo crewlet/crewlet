@@ -1184,7 +1184,9 @@ coordination:
                                     #   recover in. Shorter speeds failover and
                                     #   sheds healthy seats on ordinary jitter.
                                     #   Seats and presence only: a fleet duty
-                                    #   sizes its lease from its own tick.
+                                    #   sizes its lease from its own tick and
+                                    #   a tracker move, merge or bulk edit
+                                    #   from its own work.
                                     #   IT IS THE BUCKET'S TTL, set by whichever
                                     #   node created the lease bucket first and
                                     #   ADOPTED by every node after it — a peer

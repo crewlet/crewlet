@@ -108,9 +108,18 @@ type Claims interface {
 // concurrency it was taken to exclude.
 //
 // Built through [coord.Class] like every other lease, because these land in
-// the SAME bucket as the fleet's own and a bucket with two naming conventions
-// in it has two grammars to keep right. The class is the key's leading
-// SUBJECT TOKEN, so each of these is filterable on its own.
+// the SAME store as the fleet's own — on the KV backend the same bucket as the
+// fleet's duties — and a store with two naming conventions in it has two
+// grammars to keep right. The class is the key's leading SUBJECT TOKEN, so
+// each of these is filterable on its own.
+//
+// AND HELD TO THE CONTRACT'S CEILING, NEVER TO THE SEAT LEASE TTL: a class
+// that is not a seat or a node's presence is honoured at any TTL up to
+// [coord.MaxDutyTTL] on every backend ([coord.HeldToSeatTTL]), so [ClaimTTL]
+// and a bulk admission's projection are this package's own arithmetic and
+// move with nothing an operator tunes for failover. Until that was the
+// contract's, the KV store held these to its seat lease bucket's age, and at
+// the shipped 45 seconds refused the 60-second walk claim on every fleet.
 const (
 	classBulk  coord.Class = "bulk"
 	classMove  coord.Class = "move"

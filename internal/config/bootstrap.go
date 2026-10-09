@@ -2128,10 +2128,11 @@ type Coordination struct {
 	// default; shortening it speeds up failover at the cost of shedding
 	// seats over a store blip.
 	//
-	// It does not bound a fleet duty's lease: a duty's TTL follows its own
-	// tick, up to coord.MaxDutyTTL, which is why duties are kept in a lease
-	// bucket of their own.
-	LeaseTTLSeconds float64 `yaml:"lease_ttl_seconds,omitempty" json:"lease_ttl_seconds,omitempty" js:"min=0" desc:"Seat and presence lease TTL; 0 takes the measured default. Fleet duties size their own."`
+	// It bounds nothing else (coord.HeldToSeatTTL): a fleet duty's TTL
+	// follows its own tick and a tracker walk's claim its own heartbeat, each
+	// up to coord.MaxDutyTTL, which is why every lease but a seat's and a
+	// presence lease is kept in a lease bucket of its own.
+	LeaseTTLSeconds float64 `yaml:"lease_ttl_seconds,omitempty" json:"lease_ttl_seconds,omitempty" js:"min=0" desc:"Seat and presence lease TTL; 0 takes the measured default. Every other lease — a fleet duty, a tracker walk's claim — sizes its own."`
 }
 
 // NATSTLS is the transport material for an external NATS server.

@@ -100,9 +100,10 @@ func openStoreVia(t *testing.T, client jetstream.JetStream, ttl time.Duration) *
 // honour rather than quietly shortening it. The suite's ShortTTL and churnTTL
 // leases are honoured by the deadline the record carries, judged against the
 // STORE's clock (Store.storeNow), never the test process's. The duty cases
-// are the exception the suite names: they claim at coord.MaxDutyTTL, far past
-// this bucket's age, and are honoured by the duty bucket, whose ceiling is the
-// contract's rather than this configuration's.
+// are the exception the suite names: they claim a duty and a caller's class at
+// coord.MaxDutyTTL, far past this bucket's age, and both are honoured by the
+// duty bucket, whose ceiling is the contract's rather than this
+// configuration's.
 //
 // And there is no coordtest.Advancer: a real broker's clock is its own and
 // cannot be moved, which is exactly the case the hook was made optional for.
@@ -604,7 +605,7 @@ func TestAClassReadMovesOnlyItsOwnClass(t *testing.T) {
 	s := openStore(t, nc, time.Minute)
 	ctx := context.Background()
 
-	for _, r := range []string{"seat:ceo", "seat:eng", "seat:ops", "worker:scheduler"} {
+	for _, r := range []string{"seat:ceo", "seat:eng", "seat:ops", "worker:scheduler", "move:task-1"} {
 		if _, _, err := s.TryAcquire(ctx, r, coord.AcquireOptions{
 			Owner: "node-a", TTL: time.Minute, Preferred: "node-a",
 		}); err != nil {
@@ -627,11 +628,11 @@ func TestAClassReadMovesOnlyItsOwnClass(t *testing.T) {
 		return n
 	}
 
-	// Five resources across three classes, each in the lease bucket its
+	// Six resources across four classes, each in the lease bucket its
 	// class is written to: seats and presence in the seat lease bucket, the
-	// duty in the duty bucket. The epochs bucket holds all five whichever
-	// lease bucket the lease itself is in, which is what keeps a duty's
-	// counter monotonic across the move between them.
+	// duty and the caller's walk claim in the duty bucket. The epochs bucket
+	// holds all six whichever lease bucket the lease itself is in, which is
+	// what keeps a counter monotonic across a move between them.
 	for _, c := range []struct {
 		lane  *lane
 		class coord.Class
@@ -640,6 +641,7 @@ func TestAClassReadMovesOnlyItsOwnClass(t *testing.T) {
 		{s.leases, coord.ClassSeat, 3},
 		{s.leases, coord.ClassNode, 1},
 		{s.duties, coord.ClassWorker, 1},
+		{s.duties, coord.Class("move"), 1},
 	} {
 		if got := count(c.lane.kv, c.class); got != c.want {
 			t.Errorf("the %s lease walk was handed %d records for the %d it wanted; "+
@@ -653,12 +655,15 @@ func TestAClassReadMovesOnlyItsOwnClass(t *testing.T) {
 		}
 	}
 
-	// AND THE SEAT LEASE BUCKET CARRIES NO DUTY OF THIS BUILD'S, which is
-	// the other half of what keeps the membership read cheap: a class the
-	// bucket does not hold is a bucket the read never opens at all.
-	if got := count(s.leases.kv, coord.ClassWorker); got != 0 {
-		t.Errorf("the seat lease bucket holds %d duty records; this build writes "+
-			"every duty it claims to the duty bucket", got)
+	// AND THE SEAT LEASE BUCKET CARRIES NOTHING BUT SEATS AND PRESENCE,
+	// which is the other half of what keeps the membership read cheap: a
+	// class the bucket does not hold is a bucket the read never opens at
+	// all, and a write the gate's view of it never takes in.
+	for _, class := range []coord.Class{coord.ClassWorker, coord.Class("move")} {
+		if got := count(s.leases.kv, class); got != 0 {
+			t.Errorf("the seat lease bucket holds %d %s records; this build writes "+
+				"every lease outside seats and presence to the duty bucket", got, class)
+		}
 	}
 
 	// And the answers are still right, which is the half a narrowing bug
