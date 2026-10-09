@@ -118,7 +118,7 @@ Reading those two tables together is what lets a node distinguish *"I am behind 
 ```mermaid
 flowchart TD
     START{"applied ≥ target?"}
-    CONF{"lag <b>confirmed</b>?<br/>(own failure, or<br/>behind &gt; 3 ticks)"}
+    CONF{"lag <b>confirmed</b>?<br/>(own failed attempt, or<br/>behind &gt; 45 s)"}
     PEERS{"any peer<br/>applied it?"}
     ATT{"attempts<br/>exhausted?"}
     ANY{"any peer reported,<br/>or did <i>we</i> fail?"}
@@ -152,11 +152,17 @@ The rule that matters, and the one an obvious design gets backwards:
 
 Every successful rollout produces lag. The first node to apply advances the pointer, and every peer is behind until it polls. A node that sheds on that makes the fastest node the cause of a fleet-wide outage — and the faster it is, the longer everyone else is down.
 
-So lag has to be **confirmed** before it means anything: either this node recorded a failure for that epoch, or the lag outlasted what propagation could explain (three poll intervals, ~45 s — comfortably longer than a poll plus a normal apply, short enough that a genuinely stuck node leaves rotation quickly).
+So lag has to be **confirmed** before it means anything: either an attempt of this node's at that epoch concluded in failure, or the lag outlasted what propagation could explain (three poll intervals, 45 s — comfortably longer than a poll plus a normal apply, short enough that a genuinely stuck node leaves rotation quickly).
+
+**An attempt still running is neither.** A node in the middle of applying the epoch is doing exactly what propagation means, so it reports `wait` for the whole of the apply, its first company on an unconfigured node included, and moves to `serve` the moment the apply succeeds. An attempt counts toward the retry bound, and its failure counts as evidence, only when it **concludes**. Counted when it started, the attempt in flight read as a failed one: for the length of every successful apply a lone node reported `isolated`, a node beside current peers `shed`, and a node on its last retry `stuck`, so a client polling `/health` across a config write could not tell the transient from a revision that genuinely does not apply. A failed attempt stays the node's evidence while a retry runs, so a node that is shedding does not flap back into rotation for the length of each retry.
+
+The 45 s is measured **in time**, from the moment the node first saw *that* epoch, rather than in reconcile ticks: the case it exists for is an apply that hangs, and a hung apply holds the very tick that would count it. Past 45 s a node still applying is confirmed lag like any other: `shed` if a peer has the epoch, and still `wait` if none has reported either way, because silence is not evidence.
+
+Both the 45 s and the retry budget start again **with each epoch**, so a node is judged on the epoch the pointer names and on nothing it went through before it. That is what makes the recovery from a bad revision an ordinary apply: a revision failed everywhere, the fleet sat `isolated` on it for ten minutes, and the operator activates a corrected one — every node applying the fix reads `wait`, not `shed`, once the fastest has recorded it, and a node that ran out of retries on the bad revision is not `stuck` on the fix before it has tried it. The one thing that does carry over is an attempt that is **still running**: a node whose apply of an older epoch hangs cannot begin on the newer one, so it is late on the newer one by as long as that apply has held it, and a hang stays confirmed lag however many activations are made while it lasts.
 
 Only then does peer health pick the action. And when *no* peer managed the epoch either, the honest conclusion is that the **revision** is bad rather than this node — so it keeps serving the epoch it already had, which a refused apply leaves untouched, and raises divergence loudly. Shedding there would take the whole fleet down over one bad revision, which is precisely what publishing rather than mutating exists to avoid.
 
-Retry is **bounded** (three attempts). Without a bound, a revision that fails on one node only — a missing per-node env var, an MCP binary absent from that image — would re-apply every tick forever, restarting that node's MCP children each time.
+Retry is **bounded** (three attempts, each counted when it fails). Without a bound, a revision that fails on one node only — a missing per-node env var, an MCP binary absent from that image — would re-apply every tick forever, restarting that node's MCP children each time.
 
 Note where exhaustion sits in that chart: **after** peer health, not before it. The bound itself is unconditional — a node stops re-applying at three attempts whatever posture it reports — but `STUCK` is a claim about *this node* being the anomaly, and that claim is only true when the epoch demonstrably applies somewhere else. With no healthy peer there is nowhere for the work to go, so stepping out of rotation is not shedding, it is stopping; and every node in a fleet that cannot apply a revision exhausts its attempts at roughly the same moment, so ranking exhaustion first took the whole company dark about 45 s after a bad activation. A single-node deployment reaches the same place by a shorter path: no peer will ever report anything, so its own failure is the only evidence there is, and it stays `isolated` — serving the config it already had — rather than failing readiness over a revision nothing else in the fleet ever saw.
 
@@ -250,10 +256,10 @@ That is the whole exposure, and it is small enough that **the apply does not wai
 | Posture | `/ready` | Why |
 |---|---|---|
 | `serve` | 200 | Converged. |
-| `wait` | 200 | Ordinary propagation during a rollout. Failing here is the fleet-wide-outage bug. |
+| `wait` | 200 | Ordinary propagation during a rollout, this node's own apply included while it runs. Failing here is the fleet-wide-outage bug. |
 | `isolated` | 200 | *No* node applied the revision — taking this one out would take the fleet out over one bad revision. |
 | `shed` | 503 | Confirmed: cannot apply an epoch its peers have. |
-| `stuck` | 503 | Retries exhausted. Needs an operator. |
+| `stuck` | 503 | Retries exhausted: the last attempt has failed, not merely started. Needs an operator. |
 
 Both probes say *why*, because "draining" and "cannot apply epoch 41" call for opposite responses. `/health` carries the posture itself, and `/ready` names what took the node out of rotation in `reason`: `draining`, `unconfigured`, `shed` or `stuck`. A drain outranks a posture in both, because it is the operator's own action.
 
