@@ -50,7 +50,7 @@ type Reconciler struct {
 	// node: the seat heartbeat through SetPosture, the readiness probe,
 	// and each runtime-state HTTP handler, all on their own goroutines.
 	//
-	// ONE POINTER rather than three fields, because the three are read
+	// ONE POINTER rather than separate fields, because they are read
 	// TOGETHER and have to agree. `applied` alone was atomic, with a
 	// comment naming this exact hazard; `attempts` and `target` were left
 	// bare beside it and were a plain data race — invisible to -race only
@@ -220,8 +220,14 @@ func (e *Engine) NewReconciler(opts ReconcilerOptions) (*Reconciler, error) {
 
 // applyProgress is what the tick has achieved against what it is aiming at.
 //
-// A value type, stored and replaced whole, so every reader sees a triple
+// A value type, stored and replaced whole, so every reader sees a progress
 // that was true at one instant.
+//
+// IT HOLDS CONCLUSIONS ONLY. The tick runs on one goroutine and every surface
+// that reports on this node reads this from others, in the middle of an apply
+// as often as not — so a value written before an attempt and meaning "this
+// attempt" is read by them as that attempt's outcome. That is how every
+// successful apply used to spend its whole duration reported as a failure.
 type applyProgress struct {
 	// applied is the epoch this node is serving, 0 before its first
 	// successful apply.
@@ -230,13 +236,34 @@ type applyProgress struct {
 	// target is the epoch the pointer named when this node last saw it.
 	target int64
 
-	// attempts counts tries at target, reset when target moves. Per epoch,
-	// not per node lifetime: re-activating a fixed revision resets the
-	// budget, so the runbook's fix actually works.
+	// attempts counts the attempts at target that CONCLUDED IN FAILURE,
+	// reset when target moves and when one succeeds. Per epoch, not per
+	// node lifetime: re-activating a fixed revision resets the budget, so
+	// the runbook's fix actually works. Counted when an attempt ends,
+	// never when it starts — see [configplane.FleetView.Attempts].
 	attempts int
+
+	// behindSince is when this node first saw a target above the epoch it
+	// serves, zero while it is not behind. It is what lets a lag be
+	// confirmed by TIME while an apply is still running, which a counter
+	// of ticks never could: a hung apply holds the tick that started it.
+	// See [configplane.LagGrace].
+	behindSince time.Time
 }
 
-// snapshot reads the triple. The zero value is a node that has not ticked.
+// behindFor is how long the progress has been behind, as of now.
+//
+// The reconciler's own clock, the one the peer-freshness rule reads: a step
+// in it moves the moment a lag is confirmed by the size of the step, the same
+// exposure that rule already has, and a step backwards only delays it.
+func (p applyProgress) behindFor(now time.Time) time.Duration {
+	if p.behindSince.IsZero() {
+		return 0
+	}
+	return max(now.Sub(p.behindSince), 0)
+}
+
+// snapshot reads the progress. The zero value is a node that has not ticked.
 func (r *Reconciler) snapshot() applyProgress {
 	if p := r.progress.Load(); p != nil {
 		return *p
@@ -244,7 +271,7 @@ func (r *Reconciler) snapshot() applyProgress {
 	return applyProgress{}
 }
 
-// publish replaces the triple. Callers are the tick alone, which is why a
+// publish replaces the progress. Callers are the tick alone, which is why a
 // plain load-modify-store needs no compare-and-swap.
 func (r *Reconciler) publish(p applyProgress) { r.progress.Store(&p) }
 
@@ -354,31 +381,27 @@ func (r *Reconciler) view(ctx context.Context) (configplane.FleetView, error) {
 		TargetEpoch:  target.Epoch,
 		AppliedEpoch: applied,
 		SelfStatus:   selfStatus(progress),
-		// ALWAYS ZERO, and that is the honest value here rather than an
-		// unset field. TicksBehind exists so a reconciler whose apply is
-		// asynchronous can distinguish "behind and still working on it"
-		// from "behind and stalled". This one applies synchronously
-		// inside the tick, so by the time a posture is asked for, the
-		// node has either reached the epoch or recorded a failure — and
-		// the failure is what SelfStatus already carries. A counter
-		// incremented beside it would move only when SelfStatus was
-		// already error, so it could never change a decision. Mutation
-		// testing found exactly that: removing the increment changed no
-		// outcome.
-		TicksBehind:   0,
+		// MEASURED, because the tick is synchronous and the readers are
+		// not. A posture is asked for by the probes and the heartbeat
+		// WHILE an apply runs, when this node has neither reached the
+		// epoch nor failed it — which is propagation, and reads wait,
+		// until it has lasted longer than propagation could explain.
+		BehindFor:     progress.behindFor(r.now()),
 		Attempts:      progress.attempts,
 		PeersOK:       ok,
 		PeersReported: reported,
 	}, nil
 }
 
-// selfStatus is this node's own last outcome for the current target.
+// selfStatus is this node's own outcome for the current target.
 //
 // Derived rather than stored: the store row is what PEERS read, and a second
 // copy of the same fact in memory is one restart away from disagreeing with
-// it. A node that has applied the target reports ok; one that has tried and
-// not reached it reports error, which is the honest reading of "still serving
-// the prior epoch".
+// it. A node with no failed attempt at the target reports ok — it has either
+// applied it or not concluded an attempt yet, and neither is a failure; one
+// with a failed attempt reports error, which is the honest reading of "still
+// serving the prior epoch" and stays its outcome while a retry runs, until the
+// retry concludes otherwise.
 func selfStatus(p applyProgress) configplane.ApplyStatus {
 	if p.attempts == 0 {
 		return configplane.StatusOK
@@ -407,6 +430,12 @@ func (r *Reconciler) Tick(ctx context.Context) error {
 		// A new target resets the attempt budget, which is what makes
 		// "re-activate the fixed revision" the documented recovery.
 		progress.target, progress.attempts = target.Epoch, 0
+		// And starts the lag clock, unless this node was already
+		// behind: a target that moves again while it is still behind
+		// does not make it any less late.
+		if progress.applied != target.Epoch && progress.behindSince.IsZero() {
+			progress.behindSince = r.now()
+		}
 		r.publish(progress)
 	}
 	if progress.applied == target.Epoch {
@@ -422,20 +451,32 @@ func (r *Reconciler) Tick(ctx context.Context) error {
 		r.refresh(ctx, target)
 		return nil
 	}
-	progress.attempts++
-	r.publish(progress)
+	// NOTHING IS PUBLISHED BEFORE THE ATTEMPT. The count used to be
+	// raised here, ahead of the apply, and every reader of the progress
+	// took the attempt in flight for a failed one: a lone node reported
+	// isolated, and a node beside current peers shed, for the whole of
+	// an apply that then succeeded.
 	return r.apply(ctx, target)
 }
 
 // apply loads, opens, parses and publishes one revision, then records what
 // happened for the rest of the fleet to read.
+//
+// THE OUTCOME REACHES THIS NODE'S OWN PROGRESS FIRST, before the record that
+// tells its peers: that record is two network writes, and a node already
+// serving the epoch has no reason to report itself behind on it while they
+// are made.
 func (r *Reconciler) apply(ctx context.Context, target coord.Activation) error {
 	status, applied, err := r.applyRevision(ctx, target)
+	progress := r.snapshot()
+	if status == configplane.StatusOK {
+		progress.applied, progress.attempts, progress.behindSince = target.Epoch, 0, time.Time{}
+	} else {
+		progress.attempts++
+	}
+	r.publish(progress)
 	r.record(ctx, target, status, applied, err)
 	if status == configplane.StatusOK {
-		progress := r.snapshot()
-		progress.applied, progress.attempts = target.Epoch, 0
-		r.publish(progress)
 		r.holdLocalCopy(ctx, target)
 	}
 	if r.onApply != nil {

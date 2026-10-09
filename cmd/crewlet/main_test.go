@@ -597,6 +597,15 @@ func TestANodeNamedByTheEnvironmentAnswersAsItself(t *testing.T) {
 // reconciler that owns the posture, then the listener.
 func serveNode(t *testing.T, boot *config.Bootstrap, e *engine.Engine) (*httpSurface, error) {
 	t.Helper()
+	surface, _, err := serveNodeWith(t, boot, e)
+	return surface, err
+}
+
+// serveNodeWith is [serveNode] handing back the reconciler too, for a case
+// that runs the reconcile loop the way runEngine does rather than serving a
+// node whose epoch never moves.
+func serveNodeWith(t *testing.T, boot *config.Bootstrap, e *engine.Engine) (*httpSurface, *engine.Reconciler, error) {
+	t.Helper()
 	cipher, err := boot.Secrets.Cipher()
 	if err != nil {
 		t.Fatalf("keyring: %v", err)
@@ -620,8 +629,9 @@ func serveNode(t *testing.T, boot *config.Bootstrap, e *engine.Engine) (*httpSur
 	if err != nil {
 		t.Fatalf("reconciler: %v", err)
 	}
-	return serveAPI(t.Context(), boot, e, reconciler, cipher, configSurface,
+	surface, err := serveAPI(t.Context(), boot, e, reconciler, cipher, configSurface,
 		logging.Get("test"))
+	return surface, reconciler, err
 }
 
 // testEngine builds a real engine on an embedded stream in a temp directory.

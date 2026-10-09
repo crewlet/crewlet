@@ -82,11 +82,17 @@ const (
 	// only, never to the apply itself.
 	ReconcileJitter = 0.2
 
-	// LagGraceTicks is how many reconcile intervals a node may be behind
-	// before the lag counts as confirmed rather than as propagation. Three
-	// ticks is roughly 45 seconds — long enough that a normal rollout
-	// never trips it, short enough that a real divergence is noticed.
-	LagGraceTicks = 3
+	// LagGrace is how long a node may be behind before the lag counts as
+	// confirmed rather than as propagation. Three reconcile intervals,
+	// 45 seconds — long enough that a poll plus a normal apply never trips
+	// it, short enough that a real divergence is noticed.
+	//
+	// A DURATION RATHER THAN A COUNT OF TICKS, because the case it exists
+	// for is the one in which ticks stop: an apply that hangs holds the
+	// tick that started it, so a counter of ticks never reaches its
+	// threshold, and a node wedged on its first attempt would read as
+	// ordinary propagation for as long as the wedge lasted.
+	LagGrace = 3 * ReconcileInterval
 
 	// MaxApplyAttempts bounds re-applying ONE epoch. Per epoch, not per
 	// node lifetime: re-activating a fixed revision resets the budget, so
@@ -111,11 +117,26 @@ type FleetView struct {
 	TargetEpoch int64
 	// AppliedEpoch is the epoch this node is actually serving.
 	AppliedEpoch int64
-	// SelfStatus is this node's own last reported outcome.
+	// SelfStatus is this node's own outcome for the target epoch: the
+	// outcome of an attempt that has CONCLUDED, and StatusOK while none
+	// has failed.
+	//
+	// An attempt still in flight is not an outcome. Read as one, every
+	// successful apply spent its whole duration as a failure — a lone node
+	// reported isolated, a node beside current peers reported shed, and a
+	// client polling /health could not tell that from a revision that
+	// genuinely does not apply. A node mid-apply is doing exactly what
+	// propagation means, and what it reports is wait.
 	SelfStatus ApplyStatus
-	// TicksBehind is how many reconcile ticks this node has been behind.
-	TicksBehind int
-	// Attempts is how many times this node has tried the target epoch.
+	// BehindFor is how long this node has known it is behind: since it
+	// first saw a target above the epoch it serves. Zero while it is not
+	// behind, or has not yet seen the target it is behind on.
+	BehindFor time.Duration
+	// Attempts is how many attempts at the target epoch have concluded in
+	// failure. Counted when an attempt ENDS, never when it starts, for the
+	// reason SelfStatus gives: the third attempt in flight is not three
+	// failures, and counting it as one reported stuck — out of rotation —
+	// for the whole duration of an apply that then succeeded.
 	Attempts int
 	// PeersOK counts peers with FRESH status reporting the target epoch
 	// applied cleanly.
@@ -134,9 +155,9 @@ type FleetView struct {
 // makes the fastest node the cause of a fleet-wide outage, and the faster it
 // is, the longer the outage.
 //
-// So lag must be CONFIRMED before it means anything: either this node tried
-// the epoch and failed, or it has been behind longer than propagation could
-// explain. Only then does peer health pick the action — and when no peer
+// So lag must be CONFIRMED before it means anything: either an attempt of this
+// node's at the epoch concluded in failure, or it has been behind longer than
+// propagation could explain. An attempt still running is neither. Only then does peer health pick the action — and when no peer
 // managed the epoch either, the honest conclusion is that the revision is
 // bad rather than this node, so it keeps serving what rollback preserved.
 func DecidePosture(v FleetView) Posture {
@@ -145,7 +166,7 @@ func DecidePosture(v FleetView) Posture {
 	}
 
 	triedAndFailed := v.SelfStatus == StatusError || v.SelfStatus == StatusDegraded
-	if !triedAndFailed && v.TicksBehind < LagGraceTicks {
+	if !triedAndFailed && v.BehindFor < LagGrace {
 		// Ordinary propagation. Never shed here.
 		return PostureWait
 	}

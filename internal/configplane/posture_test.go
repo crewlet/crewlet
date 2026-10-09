@@ -32,17 +32,17 @@ func TestDecidePosture(t *testing.T) {
 			name: "ordinary propagation never sheds",
 			// THE rule. Every successful rollout produces lag; shedding
 			// on it makes the fastest node cause a fleet-wide outage.
-			view: FleetView{TargetEpoch: 8, AppliedEpoch: 7, TicksBehind: 1, PeersOK: 3},
+			view: FleetView{TargetEpoch: 8, AppliedEpoch: 7, BehindFor: ReconcileInterval, PeersOK: 3},
 			want: PostureWait,
 		},
 		{
-			name: "still propagation one tick before the grace expires",
-			view: FleetView{TargetEpoch: 8, AppliedEpoch: 7, TicksBehind: LagGraceTicks - 1, PeersOK: 3},
+			name: "still propagation an instant before the grace expires",
+			view: FleetView{TargetEpoch: 8, AppliedEpoch: 7, BehindFor: LagGrace - time.Nanosecond, PeersOK: 3},
 			want: PostureWait,
 		},
 		{
 			name: "confirmed by time with healthy peers sheds",
-			view: FleetView{TargetEpoch: 8, AppliedEpoch: 7, TicksBehind: LagGraceTicks, PeersOK: 2},
+			view: FleetView{TargetEpoch: 8, AppliedEpoch: 7, BehindFor: LagGrace, PeersOK: 2},
 			want: PostureShed,
 		},
 		{
@@ -60,6 +60,26 @@ func TestDecidePosture(t *testing.T) {
 				Attempts: MaxApplyAttempts, PeersOK: 1,
 			},
 			want: PostureStuck,
+		},
+		{
+			name: "a first attempt in flight on a lone node waits",
+			// No attempt has concluded, so there is no failure to read:
+			// the node is applying, which is propagation. Read as
+			// isolated, every successful apply on a lone node spent its
+			// whole duration reporting a divergence it never had.
+			view: FleetView{TargetEpoch: 8, AppliedEpoch: 7, SelfStatus: StatusOK},
+			want: PostureWait,
+		},
+		{
+			name: "the last attempt in flight is not yet stuck",
+			// Two attempts failed and the third is running: shed on the
+			// two, but stuck is a claim about retries being EXHAUSTED,
+			// and they are not until the third concludes.
+			view: FleetView{
+				TargetEpoch: 8, AppliedEpoch: 7, SelfStatus: StatusError,
+				Attempts: MaxApplyAttempts - 1, PeersOK: 1,
+			},
+			want: PostureShed,
 		},
 		{
 			name: "nobody managed the epoch is isolated, not shed",
@@ -98,7 +118,7 @@ func TestDecidePosture(t *testing.T) {
 			name: "silence is not evidence",
 			// Behind longer than propagation explains, but this node
 			// never attempted the epoch and no peer reported either way.
-			view: FleetView{TargetEpoch: 8, AppliedEpoch: 7, TicksBehind: 10},
+			view: FleetView{TargetEpoch: 8, AppliedEpoch: 7, BehindFor: 10 * LagGrace},
 			want: PostureWait,
 		},
 	} {
@@ -116,11 +136,11 @@ func TestDecidePosture(t *testing.T) {
 // peer count, may produce a shed while the node has not tried and failed.
 func TestLagAloneNeverSheds(t *testing.T) {
 	t.Parallel()
-	for ticks := range LagGraceTicks {
+	for behind := time.Duration(0); behind < LagGrace; behind += ReconcileInterval / 2 {
 		for peers := range 5 {
-			v := FleetView{TargetEpoch: 2, AppliedEpoch: 1, TicksBehind: ticks, PeersOK: peers}
+			v := FleetView{TargetEpoch: 2, AppliedEpoch: 1, BehindFor: behind, PeersOK: peers}
 			if got := DecidePosture(v); got != PostureWait {
-				t.Errorf("ticks=%d peers=%d gave %s, want wait", ticks, peers, got)
+				t.Errorf("behind=%s peers=%d gave %s, want wait", behind, peers, got)
 			}
 		}
 	}

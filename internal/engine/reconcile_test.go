@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -1270,5 +1272,302 @@ func TestTheProgressTripleIsReadAsOneMoment(t *testing.T) {
 	}
 	if row.Epoch != epoch {
 		t.Errorf("reported epoch = %d, want %d", row.Epoch, epoch)
+	}
+}
+
+// --- posture during an apply ------------------------------------------------
+
+// midApplyPlane is the control plane with a window INTO an attempt: the
+// reconciler reads a revision's payload from it only while an attempt is
+// fetching a revision this node does not hold, so [midApplyPlane.during] runs
+// on the tick's own goroutine after the attempt has started and before the
+// epoch is swapped — exactly where the probes and the heartbeat, on their own
+// goroutines, used to read the attempt in flight as a failed one.
+//
+// A payload it is told to WITHHOLD it answers as absent — a pointer naming a
+// revision whose body is nowhere — so every attempt at that revision fails
+// and none of them keeps a local copy that would let the next one skip the
+// window.
+type midApplyPlane struct {
+	planeBackend
+	during   atomic.Pointer[func()]
+	withheld atomic.Pointer[string]
+}
+
+func (m *midApplyPlane) Payload(ctx context.Context, revisionID string) ([]byte, bool, error) {
+	if fn := m.during.Load(); fn != nil {
+		(*fn)()
+	}
+	if id := m.withheld.Load(); id != nil && *id == revisionID {
+		return nil, false, nil
+	}
+	return m.planeBackend.Payload(ctx, revisionID)
+}
+
+// observe makes fn the window's observer.
+func (m *midApplyPlane) observe(fn func()) { m.during.Store(&fn) }
+
+// sighting is one posture read, with where in the apply it was taken and
+// whether the node had a company at that instant — the two facts /health
+// derives its status from.
+type sighting struct {
+	where      string
+	posture    configplane.Posture
+	configured bool
+}
+
+// activateRemotely points the fleet at a revision this node's own store does
+// not hold, which is how every peer but the writer meets a revision — and
+// what makes the attempt fetch it through the window above.
+func activateRemotely(t *testing.T, p *plane, doc string) int64 {
+	t.Helper()
+	document := yamlToJSON(t, doc)
+	published, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: newRevisionID(t), Summary: "revision", Payload: document,
+		At: pinnedNow, Origin: anOrigin,
+	})
+	if err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	return published.Epoch
+}
+
+// newRevisionID is a revision id no store holds.
+func newRevisionID(t *testing.T) string {
+	t.Helper()
+	id, err := uuid.NewV7()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id.String()
+}
+
+// A SUCCESSFUL APPLY IS NEVER REPORTED AS A DIVERGENCE — the first one, on a
+// node with no company at all, and a later one alike.
+//
+// The attempt counter used to be raised BEFORE the attempt was made, and the
+// posture read any counted attempt at an epoch not yet reached as a failed
+// one. So for the whole of every successful apply a lone node reported
+// isolated, and its /health said `isolated` (or `unconfigured`, the first
+// time), indistinguishable from a revision that genuinely does not apply.
+//
+// Observed three ways: inside the attempt before the epoch is swapped (the
+// payload fetch), inside it after (the engine's applied hook, which runs
+// before the outcome is recorded), and by a reader polling the posture from
+// another goroutine for the whole run, as the probes and the heartbeat do.
+// The two windows are what make the case able to fail: the poller alone could
+// miss a hundred-millisecond apply entirely.
+func TestASuccessfulApplyIsNeverReportedAsADivergence(t *testing.T) {
+	t.Parallel()
+	e := unconfiguredEngine(t)
+	window := &midApplyPlane{planeBackend: e.Backends().Fleet}
+	p := planeFor(t, e, func(o *engine.ReconcilerOptions) { o.Fleet = window })
+
+	var (
+		mu    sync.Mutex
+		seen  []sighting
+		where string
+	)
+	look := func(at string) {
+		posture := p.recon.Posture(t.Context())
+		mu.Lock()
+		defer mu.Unlock()
+		seen = append(seen, sighting{at + " (" + where + ")", posture, e.Company() != nil})
+	}
+	window.observe(func() { look("before the swap") })
+	e.SetOnApplied(func(context.Context) { look("after the swap") })
+
+	ctx, cancel := context.WithCancel(t.Context())
+	var polled []configplane.Posture
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for ctx.Err() == nil {
+			polled = append(polled, p.recon.Posture(ctx))
+		}
+	})
+
+	for _, step := range []struct {
+		name, doc  string
+		configured bool
+	}{
+		{"the first apply, on an unconfigured node", companyDoc, false},
+		{"a later apply", grownCompanyDoc, true},
+	} {
+		mu.Lock()
+		where, seen = step.name, nil
+		mu.Unlock()
+		epoch := activateRemotely(t, p, step.doc)
+		if err := p.recon.Tick(t.Context()); err != nil {
+			t.Fatalf("%s: tick: %v", step.name, err)
+		}
+		if p.recon.Applied() != epoch {
+			t.Fatalf("%s: applied = %d, want %d", step.name, p.recon.Applied(), epoch)
+		}
+		mu.Lock()
+		got := slices.Clone(seen)
+		mu.Unlock()
+		if len(got) != 2 {
+			t.Fatalf("%s: %d sightings inside the apply, want one either side of the swap: %+v",
+				step.name, len(got), got)
+		}
+		for _, s := range got {
+			if s.posture != configplane.PostureWait {
+				t.Errorf("%s: posture = %s, want wait — a node applying a revision is "+
+					"propagating it, not diverged from it", s.where, s.posture)
+			}
+		}
+		// What /health's status is derived from beside the posture: no
+		// company until the swap on a node that had none, so the first
+		// apply reads `unconfigured` before it and `ok` after — each true
+		// at its instant — and never a divergence.
+		if got[0].configured != step.configured || !got[1].configured {
+			t.Errorf("%s: configured = %v before the swap and %v after, want %v and true",
+				step.name, got[0].configured, got[1].configured, step.configured)
+		}
+		if posture := p.recon.Posture(t.Context()); posture != configplane.PostureServe {
+			t.Errorf("%s: posture after the apply = %s, want serve", step.name, posture)
+		}
+	}
+	cancel()
+	wg.Wait()
+	if len(polled) == 0 {
+		t.Fatal("the poller read no posture at all, so it observed nothing")
+	}
+	for _, posture := range polled {
+		if posture != configplane.PostureServe && posture != configplane.PostureWait {
+			t.Fatalf("a reader polling through two successful applies saw %s", posture)
+		}
+	}
+}
+
+// AND A FAILED APPLY STILL SAYS SO — from the moment its attempt concludes,
+// never before. The fix must not have bought the transient's silence with the
+// divergence's: an attempt at a revision this node cannot reach reads wait only
+// while it is running, then isolated on its own, shed once a peer has the
+// epoch, and stuck only when the LAST attempt has failed — not while it runs.
+func TestAFailedApplyIsReportedOnceItConcludes(t *testing.T) {
+	t.Parallel()
+	e := newEngine(t, engine.Options{})
+	window := &midApplyPlane{planeBackend: e.Backends().Fleet}
+	p := planeFor(t, e, func(o *engine.ReconcilerOptions) { o.Fleet = window })
+	p.activate(t.Context(), t, grownCompanyDoc)
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("the starting revision did not apply: %v", err)
+	}
+
+	// A pointer naming a revision whose body is nowhere: every attempt
+	// fetches it through the window and fails, so each one can be watched
+	// while it runs.
+	ghost := newRevisionID(t)
+	window.withheld.Store(&ghost)
+	published, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: ghost, Summary: "ghost", At: pinnedNow, Origin: anOrigin,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var during configplane.Posture
+	window.observe(func() { during = p.recon.Posture(t.Context()) })
+
+	attempt := func(want, wantAfter configplane.Posture) {
+		t.Helper()
+		during = ""
+		if err := p.recon.Tick(t.Context()); !errors.Is(err, store.ErrNoRevision) {
+			t.Fatalf("tick = %v, want the revision reported missing", err)
+		}
+		if during != want {
+			t.Errorf("posture while the attempt ran = %q, want %s", during, want)
+		}
+		if after := p.recon.Posture(t.Context()); after != wantAfter {
+			t.Errorf("posture once it failed = %s, want %s", after, wantAfter)
+		}
+	}
+
+	// Alone: nothing has concluded while the first attempt runs, and its
+	// failure is then the only evidence there is.
+	attempt(configplane.PostureWait, configplane.PostureIsolated)
+
+	// A peer has the epoch: this node is the anomaly, and its retry runs
+	// on the evidence of the failure before it.
+	if err := p.fleet.RecordApply(t.Context(), coord.NodeApply{
+		NodeID: "node-b", Epoch: published.Epoch, Status: string(configplane.StatusOK),
+		UpdatedAt: pinnedNow,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.recon.Posture(t.Context()); got != configplane.PostureShed {
+		t.Fatalf("posture beside a peer that has the epoch = %s, want shed", got)
+	}
+	for range configplane.MaxApplyAttempts - 2 {
+		attempt(configplane.PostureShed, configplane.PostureShed)
+	}
+	// The last attempt in flight has not exhausted anything yet.
+	attempt(configplane.PostureShed, configplane.PostureStuck)
+}
+
+// AN APPLY THAT OUTLASTS PROPAGATION IS CONFIRMED LAG, while it is still
+// running. With attempts counted only when they conclude, a hung apply would
+// otherwise read as ordinary propagation for as long as it hung — a tick
+// blocked in it never comes round to count anything — so the lag is measured
+// in time, from the moment this node first saw the epoch.
+func TestAnApplyThatOutlastsTheGraceIsConfirmedLag(t *testing.T) {
+	t.Parallel()
+	var clock atomic.Int64
+	clock.Store(pinnedNow.UnixNano())
+	now := func() time.Time { return time.Unix(0, clock.Load()).UTC() }
+
+	e := newEngine(t, engine.Options{})
+	window := &midApplyPlane{planeBackend: e.Backends().Fleet}
+	p := planeFor(t, e, func(o *engine.ReconcilerOptions) {
+		o.Fleet = window
+		o.Now = now
+	})
+	epoch := activateRemotely(t, p, grownCompanyDoc)
+
+	var early, late, healthyPeer configplane.Posture
+	window.observe(func() {
+		early = p.recon.Posture(t.Context())
+		clock.Add(int64(configplane.LagGrace))
+		late = p.recon.Posture(t.Context())
+		// A peer that has the epoch, fresh on the clock as it now reads.
+		if err := p.fleet.RecordApply(t.Context(), coord.NodeApply{
+			NodeID: "node-b", Epoch: epoch, Status: string(configplane.StatusOK),
+			UpdatedAt: now(),
+		}); err != nil {
+			t.Error(err)
+		}
+		healthyPeer = p.recon.Posture(t.Context())
+	})
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if early != configplane.PostureWait {
+		t.Errorf("posture as the apply began = %s, want wait", early)
+	}
+	// Behind past the grace with no peer reporting: silence, not evidence.
+	if late != configplane.PostureWait {
+		t.Errorf("posture past the grace with no peer = %s, want wait", late)
+	}
+	if healthyPeer != configplane.PostureShed {
+		t.Errorf("posture past the grace beside a peer that has the epoch = %s, want shed",
+			healthyPeer)
+	}
+	// And the apply that did finish takes the node back to serving, with
+	// the lag clock stopped: nothing it waited out counts against the next
+	// epoch.
+	if got := p.recon.Posture(t.Context()); got != configplane.PostureServe {
+		t.Errorf("posture after the apply = %s, want serve", got)
+	}
+	window.observe(func() {})
+	clock.Add(int64(time.Hour))
+	next := activateRemotely(t, p, companyDoc)
+	if err := p.fleet.RecordApply(t.Context(), coord.NodeApply{
+		NodeID: "node-b", Epoch: next, Status: string(configplane.StatusOK), UpdatedAt: now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.recon.Posture(t.Context()); got != configplane.PostureWait {
+		t.Errorf("posture on a new epoch an hour after the last apply = %s, want wait — "+
+			"the lag the last epoch waited out was counted against this one", got)
 	}
 }
