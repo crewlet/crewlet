@@ -4,6 +4,8 @@
 #   go.mod                    the engine's own Go dependencies
 #   dashboard/package.json    the dashboard's build and runtime dependencies
 #   Dockerfile                the base image a release ships
+#   internal/e2e/testdata/sandbox.Dockerfile
+#                             the image the e2e container leg pulls
 #   docker-compose.yml        the images the local dev stack runs
 #
 # A new surface needs its entry here in the same change. Nothing reports the
@@ -185,8 +187,27 @@ updates:
   # The base image a release ships. Distinct from docker-compose below: that
   # entry reads compose files and this one reads Dockerfiles, and neither
   # ecosystem sees the other's manifests.
+  #
+  # A docker entry reads the Dockerfiles in ITS OWN DIRECTORY and nowhere
+  # below it — "/" is the whole repository only for github-actions — so a
+  # Dockerfile anywhere else is a surface of its own and takes the entry after
+  # this one.
   - package-ecosystem: docker
     directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build(deps)"
+
+  # The image internal/e2e's container leg pulls, pinned in a Dockerfile that
+  # nothing builds precisely so that this entry can move it: the pin used to be
+  # a Go string, and nothing bumps one of those. The image is on mirror.gcr.io,
+  # whose tags Dependabot reads with no credentials and no `registries:` entry,
+  # and a bump runs the container leg against the new image in the `end-to-end
+  # gates` job before dependabot-merge.yml lets it land. The file's own comment
+  # says why a mirror and why an exact tag with its digest.
+  - package-ecosystem: docker
+    directory: "/internal/e2e/testdata"
     schedule:
       interval: weekly
     commit-message:
