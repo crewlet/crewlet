@@ -218,18 +218,14 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 	// [DomainConsumer.resumeAt] — see the doc comment for why the obvious
 	// create-or-update cannot do either job.
 	//
-	// THE PROVISIONING BUDGET AND ITS BREADCRUMB, because this is a
-	// replicated create on the boot path like every other one — and it does
-	// not come through [Queue.ensureDurableConsumer], whose create-or-
-	// read-back shape is wrong here (see above: an existing consumer is
-	// judged, not merely found). Without them the caller's context
-	// reached nats.go with no deadline and the client's five-second default
-	// decided a clustered boot, silently.
+	// A BREADCRUMB, and a provisioning budget on the create below, because
+	// this is a replicated create on the boot path like every other one —
+	// and it does not come through [Queue.ensureDurableConsumer], whose
+	// create-or-read-back shape is wrong here (see above: an existing
+	// consumer is judged, not merely found). Without them the caller's
+	// context reached nats.go with no deadline and the client's five-second
+	// default decided a clustered boot, silently.
 	//
-	// NOT SHADOWING ctx, for [jsprovision.Settle]'s reason: the read-back
-	// below must not inherit a deadline this create may have spent.
-	createCtx, cancel := context.WithTimeout(ctx, q.provisioning().Budget)
-	defer cancel()
 	// IT SPANS THE LOOKUP AND THE CREATE, AND SAYS SO — and it stops where
 	// the create ends rather than where this function does.
 	//
@@ -251,9 +247,11 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 	})
 
 	// THE LOOKUP IS SIZED AS A READ AND RE-ASKED, like its three siblings —
-	// see [Queue.askRead]. It shared the create's term, so a probe the
-	// metadata group never answered spent the whole clustered budget and
-	// left none of it for the create that would have settled the question.
+	// see [Queue.askRead] — on a ceiling of its own, and the create's budget
+	// starts only once it has returned. It shared the create's term, so a
+	// probe the metadata group never answered spent the whole clustered
+	// budget and left none of it for the create that would have settled the
+	// question.
 	cons, err := handle.lookup(ctx)
 	if jsprovision.Unanswered(ctx, err) {
 		// TOLD NOTHING, which is not "it is not there" — see
@@ -272,6 +270,23 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 	}
 	switch {
 	case errors.Is(err, jetstream.ErrConsumerNotFound):
+		// THE CREATE'S BUDGET IS DERIVED HERE, ONCE THE LOOKUP HAS
+		// RETURNED: the lookup and the create get separate deadlines, as
+		// at every other create site — see
+		// [Queue.createOrObserveStream]. Derived before the lookup, it
+		// ran while the lookup did, so an unanswered lookup spent up to
+		// its whole ceiling of the create's budget: on a solo broker,
+		// where the two are equal, an exhausted lookup handed the create
+		// a context that had already expired, the create never reached
+		// the broker, and the open failed over a consumer that "is not
+		// there"; on a fleet the create kept ninety seconds of its two
+		// minutes.
+		//
+		// NOT SHADOWING ctx, for [jsprovision.Settle]'s reason: the
+		// read-back below must not inherit a deadline this create may
+		// have spent.
+		createCtx, cancel := context.WithTimeout(ctx, q.provisioning().Budget)
+		defer cancel()
 		// WAITED OUT, for the reason [Queue.ensureDurableConsumer]
 		// gives: this consumer is placed by the same metadata group as
 		// the stream it reads, so "no suitable peers" is transient here
