@@ -212,11 +212,14 @@ var allowed = []Allowance{
 	},
 
 	// -----------------------------------------------------------------
-	// Environment: a container runtime. It does NOT skip in CI — the run's
-	// own log carries zero SKIP lines and `--- PASS:
-	// TestTheContainerModeRunsTheSameProtocol` — so this entry covers a
-	// workstation without docker or podman. If it ever starts skipping in
-	// CI, this gate is what says so.
+	// Environment: a container runtime. It cannot skip in CI: with `CI`
+	// set the test FAILS instead (runningInCI, the rule nodeBinary
+	// follows), so this entry covers a workstation without docker or
+	// podman and nothing else. This gate is NOT what would catch a CI
+	// skip — an Environment entry is checked in the undeclared direction
+	// only, so a declared skip passes here wherever it fires. That matters
+	// more than usual: Dependabot's bump of the leg's image pin
+	// (internal/e2e/testdata/sandbox.Dockerfile) merges on a green run.
 	// -----------------------------------------------------------------
 	{
 		Package: "internal/e2e",

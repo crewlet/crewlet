@@ -852,11 +852,20 @@ func TestAnEngineRestartMidRunStillFinishesTheSameTurn(t *testing.T) {
 // Skipped where no container runtime is usable rather than dropped: it is the
 // half of the gate a workstation cannot always run, and a suite that quietly
 // tested only the easy mode would report a gate it had not met.
+//
+// EXCEPT IN CI, where it is a red build, by nodeBinary's rule. The skip is
+// declared, so internal/skipgate passes it — and Dependabot's bump of
+// testdata/sandbox.Dockerfile merges itself on a green run, so a runner that
+// lost its daemon would merge an image nothing ever pulled.
 func TestTheContainerModeRunsTheSameProtocol(t *testing.T) {
 	t.Parallel()
-	runtime := usableContainerRuntime(t)
-	if runtime == "" {
-		t.Skip("no usable container runtime; the direct mode covers the protocol here")
+	runtime, err := usableContainerRuntime(t)
+	if err != nil {
+		if runningInCI() {
+			t.Fatalf("no usable container runtime, so the container leg would skip and "+
+				"the build would still pass: %v", err)
+		}
+		t.Skipf("no usable container runtime (%v); the direct mode covers the protocol here", err)
 	}
 	local, err := sandbox.NewLocal(sandbox.LocalOptions{
 		Placement: sandbox.Container, StateDir: t.TempDir(),
@@ -992,20 +1001,43 @@ func TestTheContainerLegsImageIsAnExactPinOffDockerHub(t *testing.T) {
 }
 
 // usableContainerRuntime returns a runtime that can actually start a
-// container, or "". Present-on-PATH is not enough: a daemon can be installed
-// and unreachable, which is the ordinary case in a container-in-container CI.
-func usableContainerRuntime(t *testing.T) string {
+// container, or why there is none. Present-on-PATH is not enough: a daemon can
+// be installed and unreachable, which is the ordinary case in a
+// container-in-container CI — and the runtime's own account of that is what
+// a red CI run has to show.
+func usableContainerRuntime(t *testing.T) (string, error) {
 	t.Helper()
 	found, err := sandbox.ResolveContainerRuntime("auto")
 	if err != nil {
-		return ""
+		return "", err
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	const budget = 20 * time.Second
+	ctx, cancel := context.WithTimeout(t.Context(), budget)
 	defer cancel()
-	if err := exec.CommandContext(ctx, found, "info").Run(); err != nil {
-		return ""
+	// Stderr alone: stdout is the CLIENT's half of the report, which a
+	// runtime with no daemon prints in full before the line that matters.
+	var stderr strings.Builder
+	probe := exec.CommandContext(ctx, found, "info")
+	probe.Stderr = &stderr
+	// Capturing stderr puts a pipe between the probe and this process, and
+	// Wait reads it to EOF — which a child of the runtime still holding the
+	// pipe (a wrapper that did not exec, podman's re-exec into its user
+	// namespace) never sends, so the budget above would bound nothing. Two
+	// seconds is for draining what the killed probe already wrote.
+	probe.WaitDelay = 2 * time.Second
+	err = probe.Run()
+	switch {
+	case ctx.Err() != nil:
+		// The kill reports itself as `signal: killed`, which reads as a
+		// crashed runtime rather than a daemon that never answered.
+		return "", fmt.Errorf("`%s info` did not answer within %s", found, budget)
+	case err != nil:
+		if said := strings.TrimSpace(stderr.String()); said != "" {
+			return "", fmt.Errorf("`%s info`: %w: %s", found, err, said)
+		}
+		return "", fmt.Errorf("`%s info`: %w", found, err)
 	}
-	return found
+	return found, nil
 }
 
 // THE RESEED LEG. A person can take days, and a paused box is held and paid
