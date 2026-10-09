@@ -91,6 +91,14 @@ func AskInstruction(roster []string, manager string) string {
 // when an agent finishes but never exits, and a tool-only run leaves no parsed
 // text at all — so a durable structured report at a known path is required,
 // and Collect always reads it.
+//
+// WHAT THE RUN DELIVERED IS NAMED, one `Delivered:` line per branch pushed and
+// per pull or merge request opened, because that is the only account of it
+// the engine can read on any code host: which hosts a box pushes to is the
+// seat's own environment's business, and a pushed branch has no URL at all.
+// Those lines are the run's delivered refs ([deliveredRefs]); a report that
+// writes none is scraped for pull-request URLs instead, which cannot tell one
+// the run opened from one it only read.
 func FindingsInstruction(findingsPath string) string {
 	return strings.Join([]string{
 		"\n## Before you finish — write your report",
@@ -100,7 +108,12 @@ func FindingsInstruction(findingsPath string) string {
 			"report to `" + findingsPath + "`:",
 		"- Outcome: succeeded / partial / blocked.",
 		"- What you did and verified (tests run and their results).",
-		"- The pull request or branch you opened, if any (full URL).",
+		"- What you delivered: a line of its own for each branch you pushed and " +
+			"each pull or merge request you opened, written exactly as " +
+			"`Delivered: <branch name or full URL>` with nothing else on it — " +
+			"for example `Delivered: fix/retry-backoff` and " +
+			"`Delivered: https://git.example.com/acme/api/pull/42`. Write no such " +
+			"line for anything you did not push or open yourself.",
 		"- What remains and what the Crewlet agent should do next.",
 		"Write that file even if you also print a summary — it is the " +
 			"authoritative report that gets read back to continue the task.",

@@ -243,13 +243,15 @@ const MaxQuestionBytes = 16 << 10
 // MaxDeliveredRefBytes bounds the branches and pull requests a run's record
 // lists as delivered.
 //
-// THEY ARE SCRAPED FROM THE WHOLE REPORT, by a pattern with no count to it, so
-// a report that pasted a list of pull requests — or a run that wrote one URL
-// on every line of a 30 MiB file — handed the record one entry per match. A
-// pull-request URL is typically under a hundred bytes, so 16 KiB lists more
-// than a hundred and sixty of them, past what any one run delivers; the refs
-// are deduplicated first, and what does not fit is COUNTED on the record and
-// in the resumed executor's text rather than dropped unsaid.
+// THEY ARE READ FROM THE WHOLE REPORT WITH NO COUNT TO THEM — every
+// `Delivered:` line it writes, or every pull-request URL its prose holds where
+// it names none — so a report that pasted a list of pull requests, or a run
+// that wrote one ref on every line of a 30 MiB file, handed the record one
+// entry per line. A pull-request URL is typically under a hundred bytes, so
+// 16 KiB lists more than a hundred and sixty of them, past what any one run
+// delivers; the refs are deduplicated first, and what does not fit is COUNTED
+// on the record and in the resumed executor's text rather than dropped
+// unsaid.
 const MaxDeliveredRefBytes = 16 << 10
 
 // MaxCondenseBytes is the most text one [Condenser] call reads: what the
@@ -392,15 +394,23 @@ func questionRefusal(bytes int) string {
 		"was asked it", kib(bytes), MaxQuestionBytes>>10)
 }
 
-// boundRefs is a run's delivered refs, deduplicated in the order they were
-// found and held to [MaxDeliveredRefBytes], with how many did not fit.
+// boundRefs is a run's delivered refs, redacted, deduplicated in the order
+// they were found and held to [MaxDeliveredRefBytes], with how many did not
+// fit.
 //
 // WHOLE REFS ONLY: a ref is an identifier, and a shortened URL names nothing.
+//
+// REDACTED FIRST, here rather than trusted to the runner, for the reason the
+// transcript is ([Coordinator.fitResult]): a ref is whatever word a run's
+// report put on its `Delivered:` line, which a box can make a credential, and
+// every reader of the record — its event, the resumed executor's text — reads
+// these. First, so the bound measures what is carried.
 func boundRefs(refs []string) ([]string, int) {
 	seen := make(map[string]bool, len(refs))
 	var kept []string
 	size, left := 0, 0
 	for _, ref := range refs {
+		ref = redact.Secrets(ref)
 		if seen[ref] {
 			continue
 		}

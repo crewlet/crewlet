@@ -92,10 +92,34 @@ func TestAnUncondensedQuestionKeepsWholeLinesOrIsNotAsked(t *testing.T) {
 	}
 }
 
-// THE REFS ARE DEDUPLICATED AND BOUNDED, the rest counted. They are scraped
-// from the whole report by a pattern with no count to it, so a report that
-// listed pull requests put every one of them on the record, as many times as
-// it named them.
+// A REF IS REDACTED BEFORE ANYTHING READS IT. It is whatever word a report
+// put on its `Delivered:` line, and a box holds the seat's credentials — so
+// the coordinator, which trusts no runner to have redacted what it hands back,
+// redacts each before the record, the resumed executor's text and the bound
+// that measures them.
+func TestADeliveredRefIsRedactedBeforeItIsRecorded(t *testing.T) {
+	t.Parallel()
+	secret := "ghp_" + strings.Repeat("c", 36)
+	got := (&Coordinator{}).fitResult(t.Context(), PendingRun{},
+		Result{Success: true, DeliveredRefs: []string{"wip/t1", secret}})
+	rec := runPhase(PendingRun{}, LaunchRecord{}, got, time.Now())
+	for where, refs := range map[string][]string{
+		"the result": got.DeliveredRefs, "the record": rec.DeliveredRefs,
+		"the resumed text": {resumeText(got)},
+	} {
+		if strings.Contains(strings.Join(refs, " "), secret) {
+			t.Errorf("a credential survived in %s: %q", where, refs)
+		}
+	}
+	if len(got.DeliveredRefs) != 2 || got.DeliveredRefs[0] != "wip/t1" {
+		t.Errorf("refs = %q, want both, the ordinary one as it was", got.DeliveredRefs)
+	}
+}
+
+// THE REFS ARE DEDUPLICATED AND BOUNDED, the rest counted. They are read from
+// the whole report with no count to them, so a report that listed pull
+// requests put every one of them on the record, as many times as it named
+// them.
 func TestDeliveredRefsAreDedupedAndBoundedWithTheRestCounted(t *testing.T) {
 	t.Parallel()
 	var refs []string

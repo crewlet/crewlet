@@ -131,9 +131,9 @@ type ResumeRequest struct {
 	Trigger *events.Event
 
 	// DeliveredRefs are what the run reported producing, for the resumed
-	// phase's own event — the executor's delivery is judged on them. Empty
-	// when a PERSON's answer resumes a parked clarification: no new run
-	// finished.
+	// phase's own event to display — nothing judges the executor's delivery
+	// on them ([Result.DeliveredRefs]). Empty when a PERSON's answer resumes
+	// a parked clarification: no new run finished.
 	//
 	// The run's COST is deliberately not here. It is the run's own fact and
 	// rides the run's own record ([Coordinator.OnCompleted] publishes it as

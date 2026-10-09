@@ -428,7 +428,7 @@ func (d *openCodeEvents) Result() sandbox.Result {
 			text += fmt.Sprintf("\n(%s more of the output not read: past the %s a run's plain "+
 				"output is read to)", humanSize(d.plainDropped), humanSize(sandbox.MaxFileBytes))
 		}
-		return sandbox.Result{Text: text, Success: true, DeliveredRefs: prPattern.FindAllString(text, -1)}
+		return sandbox.Result{Text: text, Success: true, DeliveredRefs: deliveredRefs(text)}
 	}
 	body := strings.TrimSpace(strings.Join(d.answers, "\n"))
 	success := body != "" && d.errText == ""
@@ -436,7 +436,7 @@ func (d *openCodeEvents) Result() sandbox.Result {
 		Text:          body,
 		Success:       success,
 		Transcript:    d.transcript.String(),
-		DeliveredRefs: prPattern.FindAllString(body, -1),
+		DeliveredRefs: deliveredRefs(body),
 	}
 	if !success {
 		res.Error = d.errText

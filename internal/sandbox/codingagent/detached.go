@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/url"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/redact"
@@ -17,12 +19,99 @@ import (
 
 var log = logging.Get("sandbox.coding_agent")
 
-// prPattern matches a pull-request URL, on either of the two hosts this engine
-// integrates with. It is a FALLBACK: a runner whose output names its delivered
-// refs explicitly is preferred, and this scrapes the findings for one when the
-// agent only wrote the URL in prose.
+// deliveredRefs is what a run delivered, as its own account names it: the
+// branches it pushed and the pull or merge requests it opened, read from the
+// texts given in the order given — the report before the CLI's last message.
+//
+// THE RUN NAMES THEM, ON LINES OF THEIR OWN. The report is asked for one
+// `Delivered: <branch or URL>` line per ref ([FindingsInstruction]), and the
+// first text holding any such line is the answer, whole and in its order: a
+// branch as well as a pull request, on any host and any scheme. WHICH HOSTS a
+// box can push to is set by the seat's own environment and setup steps, which
+// the engine deliberately never names, and a seat can push to a host no
+// integration block mentions — so no list of hosts the engine knows can say
+// what a run delivered, and the two it used to know left a GitHub Enterprise,
+// a self-managed GitLab and the walkthrough's own GitLab on a port delivering
+// nothing, and a pushed branch, which no URL pattern matches, never delivered
+// at all.
+//
+// A RUN THAT NAMES NONE is read by the URL's shape instead ([prPattern]):
+// the first text holding a pull request's URL gives every one it holds. A
+// named ref outranks a scraped one wherever each is found, because a scrape
+// cannot tell a pull request the run opened from one it only read.
+func deliveredRefs(texts ...string) []string {
+	for _, text := range texts {
+		if refs := namedRefs(text); len(refs) > 0 {
+			return refs
+		}
+	}
+	for _, text := range texts {
+		if refs := prPattern.FindAllString(text, -1); len(refs) > 0 {
+			return refs
+		}
+	}
+	return nil
+}
+
+// deliveredLine is one line naming a delivered ref — `Delivered: <ref>` — read
+// whatever a report lays it out with: a list marker before it, emphasis
+// around the label, any case. What follows the colon is [namedRef]'s to judge.
+var deliveredLine = regexp.MustCompile(
+	`(?im)^[ \t]*(?:[-*+][ \t]+|\d+[.)][ \t]+)?[*_]*delivered[*_]*[ \t]*:[*_]*[ \t]*(.*)$`)
+
+// namedRefs is every ref a text names on a `Delivered:` line, in its order.
+func namedRefs(text string) []string {
+	var refs []string
+	for _, m := range deliveredLine.FindAllStringSubmatch(text, -1) {
+		if ref, ok := namedRef(m[1]); ok {
+			refs = append(refs, ref)
+		}
+	}
+	return refs
+}
+
+// namedRef is the ref a `Delivered:` line holds after its label, if it holds
+// one: a URL, or a name git accepts for a branch ([sandbox.ValidBranch]),
+// unwrapped from the backticks, emphasis or angle brackets a report puts
+// around it and from the full stop a sentence puts after it.
+//
+// ALONE ON ITS LINE, because the label is not proof of a ref: "Delivered: the
+// fix for the flake" is a sentence, and its first word is no branch anybody
+// pushed. And NEVER A URL CARRYING A CREDENTIAL — that is a remote an agent
+// pasted, not a ref to show anybody.
+func namedRef(rest string) (string, bool) {
+	ref := strings.TrimSuffix(strings.TrimSpace(rest), ".")
+	ref = strings.Trim(ref, "`*")
+	if strings.HasPrefix(ref, "<") && strings.HasSuffix(ref, ">") {
+		ref = ref[1 : len(ref)-1]
+	}
+	ref = strings.TrimSuffix(ref, ".")
+	if ref == "" || strings.ContainsFunc(ref, unicode.IsSpace) {
+		return "", false
+	}
+	if u, err := url.Parse(ref); err == nil && u.Scheme != "" && u.Host != "" {
+		return ref, u.User == nil
+	}
+	return ref, sandbox.ValidBranch(ref)
+}
+
+// prPattern is a pull or merge request's URL by its SHAPE, on any host: the
+// fallback for an account that names no ref on a line of its own.
+//
+// THE HOST IS NOT THE ENGINE'S TO KNOW (see [deliveredRefs]), so what is
+// matched is the path every forge spells one with — `/pull/N` (GitHub, GitHub
+// Enterprise), `/pulls/N` (Gitea, Forgejo), `/-/merge_requests/N` (GitLab),
+// `/pull-requests/N` (Bitbucket), `/pullrequest/N` (Azure DevOps) — after any
+// host, with or without a port, over http or https. Never a host carrying
+// credentials (`https://user:token@…`), which is a remote, not a ref. The
+// number ends at a word boundary, so `/pull/12` is not read out of `/pull/12abc`.
+//
+// A GUESS, and the reason it is the fallback: a URL the run only referenced —
+// the pull request it followed, the one it was asked to fix — reads exactly
+// like one it opened, which is why a report that names its refs is never
+// scraped. And it can never match a branch.
 var prPattern = regexp.MustCompile(
-	`https://(?:github\.com|gitlab\.com)/[\w.\-/]+/(?:pull|merge_requests|-/merge_requests)/\d+`)
+	`https?://[^\s/?#@:]+(?::\d+)?/[\w.\-/]+/(?:pull|pulls|pull-requests|pullrequest|merge_requests)/\d+\b`)
 
 // CLI is what one coding agent contributes on top of the shared plumbing.
 //
@@ -483,10 +572,14 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	errStream := ""
 	switch {
 	case findings != "":
+		// THE REFS ARE THE REPORT'S BEFORE THE MESSAGE'S, read by one rule
+		// over both ([deliveredRefs]) — the message being what the CLI's
+		// Parse already read its own refs from, by the same rule — so a
+		// report that names its refs is never outranked by a pull request
+		// the message only mentions, nor a message that names its refs by
+		// one the report only mentions.
+		result.DeliveredRefs = deliveredRefs(findings, result.Text)
 		result.Text = findings
-		if len(result.DeliveredRefs) == 0 {
-			result.DeliveredRefs = prPattern.FindAllString(findings, -1)
-		}
 		if !crashed {
 			result.Success = true
 			result.Error = ""
@@ -526,6 +619,11 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 
 	result.Text = redact.Secrets(result.Text)
 	result.Error = redact.Secrets(result.Error)
+	// The refs too: a ref is whatever word the report put on its line,
+	// and a word from inside the box can be a credential.
+	for i, ref := range result.DeliveredRefs {
+		result.DeliveredRefs[i] = redact.Secrets(ref)
+	}
 	// WHOLE, as the report and the failure leave here: the coordinator is
 	// the one home of the record's bound, and holds the transcript to it
 	// after redacting it again ([sandbox.MaxRunTextBytes]).
