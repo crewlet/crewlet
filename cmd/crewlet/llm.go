@@ -68,7 +68,7 @@ const llmUsage = `crewlet llm — subscription CLI backends: logins, health and 
 and the health of the anthropic entries beside them
 
 Usage:
-  crewlet llm list                        Providers, agent, model and login state
+  crewlet llm list                        Providers, agent, model and how each is signed in
   crewlet llm doctor [KEY]                Verify cli-agent and anthropic entries end to end
                                           (-no-smoke skips the real calls)
   crewlet llm login KEY                   Broker the vendor's own interactive login
@@ -270,7 +270,7 @@ func providerKeys(providers []cliAgentProvider) []string {
 
 func listLLMProviders(providers []cliAgentProvider, stdout io.Writer) error {
 	w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "PROVIDER\tAGENT\tMODEL\tLOGIN\tSTATE DIR")
+	fmt.Fprintln(w, "PROVIDER\tAGENT\tMODEL\tSIGN-IN\tSTATE DIR")
 	for _, p := range providers {
 		model := p.provider.Model()
 		if model == "" {
@@ -278,7 +278,7 @@ func listLLMProviders(providers []cliAgentProvider, stdout io.Writer) error {
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 			p.key, p.provider.Agent(), model,
-			p.provider.LoginState(), p.provider.Workspace().Root())
+			p.provider.SignInState(), p.provider.Workspace().Root())
 	}
 	return w.Flush()
 }

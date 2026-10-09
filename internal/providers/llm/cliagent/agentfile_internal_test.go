@@ -12,6 +12,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // THE SEAT'S IDENTITY REACHES A STRUCTURED PROMPT CHANNEL INTACT.
@@ -19,7 +20,7 @@ import (
 // A vendor whose per-call prompt channel is an agent DEFINITION rather than a
 // bare prompt needs an envelope around the text, and the envelope has to be
 // per-profile data rather than something this package invents — see
-// [SystemPromptFile]. Asked from inside the child, for the reason every other
+// [cliprofile.SystemPromptFile]. Asked from inside the child, for the reason every other
 // file probe here is: the per-call directory is removed on release, so a
 // parent reading the path afterwards would be reading a file the CLI never
 // saw.
@@ -119,7 +120,7 @@ func TestASystemPromptTemplateWithoutAFileChannelIsRefused(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			if _, err := Load("claude-code", overrides); err == nil ||
+			if _, err := cliprofile.Load("claude-code", overrides); err == nil ||
 				!strings.Contains(err.Error(), "system_prompt_file") {
 				t.Fatalf("err = %v, want a refusal naming system_prompt_file", err)
 			}
@@ -132,7 +133,7 @@ func TestASystemPromptTemplateWithoutAFileChannelIsRefused(t *testing.T) {
 // works.
 func TestASystemPromptTemplateWithoutThePlaceholderIsRefused(t *testing.T) {
 	t.Parallel()
-	_, err := Load("claude-code", map[string]any{
+	_, err := cliprofile.Load("claude-code", map[string]any{
 		"system_prompt_file": map[string]any{"template": "---\ntools: []\n---\nhello"},
 	})
 	if err == nil || !strings.Contains(err.Error(), "{system}") {
@@ -145,7 +146,7 @@ func TestASystemPromptTemplateWithoutThePlaceholderIsRefused(t *testing.T) {
 func TestASystemPromptFileNameMayNotBeAPath(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{"../escape.md", "sub/dir.md", "..", "."} {
-		_, err := Load("claude-code", map[string]any{
+		_, err := cliprofile.Load("claude-code", map[string]any{
 			"system_prompt_file": map[string]any{"name": name, "template": "{system}"},
 		})
 		if err == nil || !strings.Contains(err.Error(), "system_prompt_file.name") {
@@ -164,7 +165,7 @@ func TestASystemPromptFileNameMayNotBeAPath(t *testing.T) {
 // this rather than with nothing.
 func TestTheKimiProfilesAgentFileDeniesItsToolsAndKeepsTheWeb(t *testing.T) {
 	t.Parallel()
-	p, ok := Builtin("kimi-code")
+	p, ok := cliprofile.Builtin("kimi-code")
 	if !ok {
 		t.Fatal("no built-in kimi-code profile")
 	}
@@ -257,7 +258,7 @@ func TestTheKimiProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 	if err != nil {
 		t.Skip("no kimi on PATH")
 	}
-	p, ok := Builtin("kimi-code")
+	p, ok := cliprofile.Builtin("kimi-code")
 	if !ok {
 		t.Fatal("no built-in kimi-code profile")
 	}
@@ -283,9 +284,9 @@ func TestTheKimiProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	agentFile := filepath.Join(dir, p.SystemPromptFile.fileName())
+	agentFile := filepath.Join(dir, p.SystemPromptFile.FileName())
 	if err := os.WriteFile( //nolint:gosec // a test's own temp dir
-		agentFile, []byte(p.SystemPromptFile.render("You are Agent CTO.")), 0o600,
+		agentFile, []byte(p.SystemPromptFile.Render("You are Agent CTO.")), 0o600,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +325,7 @@ func TestTheKimiProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 // with no `content` to hit. The `role` discriminator is what keeps them out.
 func TestTheKimiProfileReadsOnlyTheAssistantsLines(t *testing.T) {
 	t.Parallel()
-	p, ok := Builtin("kimi-code")
+	p, ok := cliprofile.Builtin("kimi-code")
 	if !ok {
 		t.Fatal("no built-in kimi-code profile")
 	}
@@ -351,7 +352,7 @@ func TestTheKimiProfileReadsOnlyTheAssistantsLines(t *testing.T) {
 // silent until somebody hits their cap.
 func TestTheKimiProfileClassifiesTheFailuresItsCLIActuallyPrints(t *testing.T) {
 	t.Parallel()
-	p, ok := Builtin("kimi-code")
+	p, ok := cliprofile.Builtin("kimi-code")
 	if !ok {
 		t.Fatal("no built-in kimi-code profile")
 	}

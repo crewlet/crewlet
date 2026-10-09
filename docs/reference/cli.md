@@ -45,7 +45,7 @@ subcommand below is served by it.
 | `crewlet secrets get <NAME> -reveal` | Print one stored value to stdout — break-glass, audited, CLI-only |
 | `crewlet secrets rekey [-dry-run]` | Re-encrypt stored secrets under the active keyring key |
 | `crewlet search eval [-store PATH]` | Measure the two-stage semantic search against the exact scan, on the vectors a store file actually holds. Ground truth is the exact scan's own top-K, so nobody authors a judgement; exits non-zero below the floor for that corpus size |
-| `crewlet llm list` | Every `cli-agent` provider the company declares, with its CLI, model and login state |
+| `crewlet llm list` | Every `cli-agent` provider the company declares, with its CLI, model and how it is signed in |
 | `crewlet llm doctor [KEY]` | Verify a subscription backend end to end — the CLI is installed, the login answers, a real completion returns, the CLI's own shell is refused and its web tool reaches the network — and an `anthropic` entry against its model: the Models API's record compared with the request shape the engine sends, and one real round that must come back as a tool call (`-no-smoke` stops before every real completion) |
 | `crewlet llm login <KEY>` | Establish the vendor's own login for a provider: brokered interactively, `-from-host` to adopt one this machine already has, `-capture-token` to mint a headless token into the [secret store](../concepts/secret-store.md) (add `-print-token` to send it to stdout and store nothing), `-token-stdin` for one you already hold |
 | `crewlet llm status <KEY>` | Ask the CLI who it is currently logged in as |
@@ -1536,9 +1536,9 @@ that work is established here rather than in the config document. `KEY` is the
 `type: anthropic` entry; the other subcommands are `cli-agent` only, since an
 API entry has no login to broker, list or export.
 
-**`list`** is the inventory — provider key, CLI, model and whether it is
-logged in. **`doctor`** is the one to run before a company's first turn: it
-checks the CLI is installed, the credentials answer, and — unless you pass
+**`list`** is the inventory — provider key, CLI, model and how it is signed
+in. **`doctor`** is the one to run before a company's first turn: it
+checks the CLI is installed, that something signs it in, and — unless you pass
 `-no-smoke` — that a real completion comes back, which is the only check that
 catches a plan whose quota is exhausted, or a profile whose `text_paths` no
 longer find the answer in what the CLI prints. The same run measures two claims the
@@ -1548,6 +1548,27 @@ seat reading whatever the engine user can read) and that its **web tool
 reaches the network** (the one local tool every profile deliberately keeps
 on). Both are believed only on evidence a model cannot invent — the current
 clock, read by the tool.
+
+Both commands answer "signed in" the same way, from the environment the CLI is
+actually given rather than from the configuration: credential files a login
+wrote, a headless token, an `api_keys` value under `auth.mode: api-key`, a
+variable `auth.mode: inherit-env` forwards, or — for a CLI whose profile reads
+its provider's key from its own environment (`hermes`, `pi`, `opencode`) — a
+[credential-named](../concepts/subscription-llm-backends.md#5-a-provider-key-in-clienv-hermes-pi-opencode)
+variable in `cli.env`. `doctor`'s `sign-in` line names every one it found, and
+an entry with none is a `no sign-in` problem naming the route to take — unless
+the smoke test was answered, which proves the CLI authenticates some way the
+engine does not hand it (an endpoint that takes no key, a credential in its
+own configuration). A token `auth.mode: api-key` removes from the child is not
+counted. `${VAR}` references and the variables `inherit-env` forwards are
+resolved in the process running `crewlet llm` — the secret store first, then
+that shell's environment — so run it with the engine's environment to get the
+engine's answer.
+
+`llm list`'s `SIGN-IN` column is the first route `doctor` would name:
+`credentials` (files a login wrote), `token` (a headless token), `api key`
+(under `auth.mode: api-key`), `inherited token` or `inherited key` (forwarded
+by `auth.mode: inherit-env`), `environment` (a `cli.env` key), or `none`.
 
 On an **`anthropic` entry** `doctor` checks the two things that make every
 call on it a 400 while the config validates clean. The request is

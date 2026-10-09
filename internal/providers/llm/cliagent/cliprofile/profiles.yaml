@@ -339,6 +339,14 @@ opencode:
     - ".local/share/opencode/log"
     - ".local/share/opencode/project"
   host_credential_paths: [".local/share/opencode/auth.json"]
+  # NO api_key_env, and env_sign_in instead: OpenCode keys each provider by
+  # that provider's own variable — its providers page (opencode.ai/docs/
+  # providers) documents NVIDIA_API_KEY, AWS_BEARER_TOKEN_BEDROCK,
+  # DIGITALOCEAN_ACCESS_TOKEN and GITLAB_TOKEN as read from the environment
+  # in place of a stored login — so there is no one variable to name, exactly
+  # as for hermes and pi. A key goes through `cli.env`; `/connect`'s
+  # auth.json is the other route.
+  env_sign_in: true
   login_args: ["auth", "login"]
   logout_args: ["auth", "logout"]
   status_args: ["auth", "list"]
@@ -394,6 +402,15 @@ cursor-agent:
   credential_paths: [".cursor/cli-config.json", ".cursor/auth.json"]
   volatile_paths: [".cursor/chats", ".cursor/logs", ".cursor/sessions"]
   host_credential_paths: [".cursor/cli-config.json", ".cursor/auth.json"]
+  # The CLI's own authentication reference (cursor.com/docs/cli/reference/
+  # authentication) gives CURSOR_API_KEY as the recommended headless sign-in,
+  # "for automation, scripts, or CI environments", beside `--api-key`. It was
+  # missing here, so `auth.mode: api-key` had nowhere to put the key and a
+  # subscription run did not remove one an operator left in cli.env. The key
+  # is a Cursor account key rather than a vendor's metered model key, but the
+  # route is the same: api_keys under auth.mode api-key, never forwarded
+  # otherwise.
+  api_key_env: "CURSOR_API_KEY"
   login_args: ["login"]
   logout_args: ["logout"]
   status_args: ["status"]
@@ -1125,7 +1142,9 @@ hermes:
   # NOUS_API_KEY — so there is no one key variable a profile could name, and
   # naming one would silently be wrong for every other entry. A metered key
   # goes in the credential home's .env (which travels to every seat) or
-  # through `cli.env`, where it is ${VAR}-resolved like any other secret.
+  # through `cli.env`, where it is ${VAR}-resolved like any other secret —
+  # which is what env_sign_in declares, so `crewlet llm doctor` counts it.
+  env_sign_in: true
   #
   # THESE SENTINELS ARE GENERIC, and unusually so for this file, because this
   # CLI publishes no verbatim exhausted-plan wording: it rotates its OWN
@@ -1301,7 +1320,9 @@ pi:
   # `--api-key` exists as a flag but the environment variable is per provider
   # — ANTHROPIC_API_KEY, OPENAI_API_KEY, one for each of the twenty-odd — so
   # there is no single key variable to name, exactly as for hermes. A metered
-  # key goes in auth.json (which travels to every seat) or through `cli.env`.
+  # key goes in auth.json (which travels to every seat) or through `cli.env`,
+  # which is what env_sign_in declares.
+  env_sign_in: true
   #
   # THE SENTINELS ARE THE UPSTREAM VENDOR'S, not this CLI's, and a
   # measurement is what settles that rather than a guess: a failing call

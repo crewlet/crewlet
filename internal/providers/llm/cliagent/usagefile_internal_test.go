@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // usageProfile is the shape a usage-file profile has: a report written where
@@ -32,7 +33,7 @@ func usageProfile() map[string]any {
 // the vendor has them. An entry point whose whole contract is "the final
 // response text and nothing else" leaves no envelope for a usage path to
 // walk, so the report rides a file instead — and it is read back through the
-// same [UsagePaths] every other profile uses.
+// same [cliprofile.UsagePaths] every other profile uses.
 func TestAUsageFileReportsRealTokensWhereStdoutCannot(t *testing.T) {
 	t.Parallel()
 	p := fakeProvider(t, map[string]string{
@@ -126,13 +127,13 @@ func TestAUsageFileThatSaysNothingThisProfileReadsIsStillEstimated(t *testing.T)
 // trouble is the one reported as estimating.
 func TestTheDoctorCallsAUsageFileWhatItIs(t *testing.T) {
 	t.Parallel()
-	hermes, ok := Builtin("hermes")
+	hermes, ok := cliprofile.Builtin("hermes")
 	if !ok {
 		t.Fatal("no built-in hermes profile")
 	}
-	if hermes.output() != OutputText {
+	if hermes.EffectiveOutput() != cliprofile.OutputText {
 		t.Fatalf("output = %q — this case exists for the text profile that reads a "+
-			"report anyway", hermes.output())
+			"report anyway", hermes.EffectiveOutput())
 	}
 	if !hermes.ReadsUsage() {
 		t.Error("the doctor reports estimated tokens for a profile whose CLI writes " +
@@ -140,7 +141,7 @@ func TestTheDoctorCallsAUsageFileWhatItIs(t *testing.T) {
 	}
 	// And the rule it is an exception to still holds: a text profile with
 	// no report to read estimates.
-	copilot, _ := Builtin("copilot")
+	copilot, _ := cliprofile.Builtin("copilot")
 	if copilot.ReadsUsage() {
 		t.Error("copilot has no usage report of any kind and must report estimated")
 	}
@@ -180,7 +181,7 @@ func TestAUsageFileWithNothingToSubstituteOrNothingToReadIsRefused(t *testing.T)
 			if name == "no placeholder" {
 				base = "claude-code"
 			}
-			_, err := Load(base, tc.overrides)
+			_, err := cliprofile.Load(base, tc.overrides)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want a refusal naming %q", err, tc.want)
 			}
@@ -192,7 +193,7 @@ func TestAUsageFileWithNothingToSubstituteOrNothingToReadIsRefused(t *testing.T)
 // to argue with this rather than with nothing.
 func TestTheHermesProfileDeniesItsToolsAndReadsItsRealTokens(t *testing.T) {
 	t.Parallel()
-	p, ok := Builtin("hermes")
+	p, ok := cliprofile.Builtin("hermes")
 	if !ok {
 		t.Fatal("no built-in hermes profile")
 	}
@@ -229,9 +230,9 @@ func TestTheHermesProfileDeniesItsToolsAndReadsItsRealTokens(t *testing.T) {
 		t.Error("complete_args carries -p, which selects a profile named after " +
 			"whatever followed it")
 	}
-	if p.mode() != PromptArgv || p.output() != OutputText {
+	if p.EffectivePromptMode() != cliprofile.PromptArgv || p.EffectiveOutput() != cliprofile.OutputText {
 		t.Errorf("prompt_mode/output = %q/%q, want argv/text: `-z` is documented as "+
-			"the final response text and nothing else", p.mode(), p.output())
+			"the final response text and nothing else", p.EffectivePromptMode(), p.EffectiveOutput())
 	}
 
 	// THE DENIAL IS ON ARGV. `--toolsets` is a TOP-LEVEL flag whose own help
@@ -265,17 +266,17 @@ func TestTheHermesProfileDeniesItsToolsAndReadsItsRealTokens(t *testing.T) {
 			"estimate although the CLI writes the real figures")
 	}
 	for field, want := range map[string]string{
-		PathList(p.Usage.Input):      "input_tokens",
-		PathList(p.Usage.Output):     "output_tokens",
-		PathList(p.Usage.CacheRead):  "cache_read_tokens",
-		PathList(p.Usage.CacheWrite): "cache_write_tokens",
+		cliprofile.PathList(p.Usage.Input):      "input_tokens",
+		cliprofile.PathList(p.Usage.Output):     "output_tokens",
+		cliprofile.PathList(p.Usage.CacheRead):  "cache_read_tokens",
+		cliprofile.PathList(p.Usage.CacheWrite): "cache_write_tokens",
 	} {
 		if field != want {
 			t.Errorf("usage path %q, want %q", field, want)
 		}
 	}
 	if strings.Contains(strings.Join([]string{
-		PathList(p.Usage.Input), PathList(p.Usage.Output),
+		cliprofile.PathList(p.Usage.Input), cliprofile.PathList(p.Usage.Output),
 	}, " "), "reasoning_tokens") {
 		t.Error("reasoning_tokens is read, and it is a SUBSET of output_tokens — " +
 			"adding it double-charges a thinking model's budget")
@@ -297,7 +298,7 @@ func TestTheHermesProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 	if err != nil {
 		t.Skip("no hermes on PATH")
 	}
-	p, ok := Builtin("hermes")
+	p, ok := cliprofile.Builtin("hermes")
 	if !ok {
 		t.Fatal("no built-in hermes profile")
 	}

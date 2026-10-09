@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // A SYSTEM PROMPT IS NOT A USER MESSAGE, where the CLI has a channel for it.
@@ -76,7 +77,7 @@ func TestSplitSystemReportsNothingToLift(t *testing.T) {
 // {system} here and this fails.
 func TestTheClaudeProfileKeepsTheSystemPromptOffArgv(t *testing.T) {
 	t.Parallel()
-	profile, ok := cliagent.Builtin("claude-code")
+	profile, ok := cliprofile.Builtin("claude-code")
 	if !ok {
 		t.Fatal("no built-in claude-code profile")
 	}
@@ -168,7 +169,7 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 	// simply absent from the map and covered by nothing — the failure is
 	// that adopting a system-prompt flag for a new CLI never has to state
 	// the argv trade here, which is the whole reason the table exists.
-	for _, name := range cliagent.BuiltinNames() {
+	for _, name := range cliprofile.BuiltinNames() {
 		if name == "custom" {
 			// Ships nothing on purpose; an operator declares its
 			// channel, and there is no built-in claim to check.
@@ -180,7 +181,7 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 		}
 	}
 	for name, placeholder := range want {
-		profile, ok := cliagent.Builtin(name)
+		profile, ok := cliprofile.Builtin(name)
 		if !ok {
 			t.Errorf("no built-in %q profile", name)
 			continue

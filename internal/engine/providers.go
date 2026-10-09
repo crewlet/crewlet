@@ -28,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/anthropic"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 	"github.com/crewlet/crewlet/internal/providers/llm/openai"
 )
 
@@ -287,17 +288,22 @@ func buildCLIAgent(key string, spec config.LLMProvider, r *config.Resolver, apiK
 		auth.APIKey = apiKeys[0]
 	}
 
+	// Config loads this same merged profile under its runnable rules
+	// (LLMProvider.validateCLIProfile), so a failure here is a document
+	// that never went through validation.
+	profile, err := cliprofile.Load(cli.Name(), cli.Overrides)
+	if err != nil {
+		return nil, fmt.Errorf("engine: provider %q: %w", key, err)
+	}
+
 	// Both credentials fall back to a CONVENTIONAL name when the entry
 	// points at none, and both go through the resolver, which reads the
 	// secret store BEFORE the environment. That order is the whole point:
 	// `crewlet llm login <key> -capture-token` writes the token into the
 	// store, and an entry that had to name it explicitly would leave every
 	// operator wiring up a ${VAR} for a value Crewlet itself just wrote.
-	profile, err := cliagent.Load(cli.Name(), cli.Overrides)
-	if err != nil {
-		return nil, fmt.Errorf("engine: provider %q: %w", key, err)
-	}
 	auth.Token = resolveOrConvention(r, cli.Auth.Token, profile.TokenEnv)
+	auth.TokenConfigured = cli.Auth.Token != ""
 	bundle := resolveOrConvention(r, cli.Auth.CredentialBundle, cliagent.BundleVarName(key))
 
 	return cliagent.New(cliagent.Config{

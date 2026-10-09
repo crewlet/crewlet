@@ -43,8 +43,8 @@ func TestDoctorReportsAMissingBinary(t *testing.T) {
 	}
 }
 
-// "No login" on a machine where the CLI plainly works must explain itself, or
-// an operator goes looking for a bug that is a missing --from-host.
+// "No sign-in" on a machine where the CLI plainly works must explain itself, or
+// an operator goes looking for a bug that is a missing -from-host.
 func TestDoctorNamesAnUnadoptedHostLogin(t *testing.T) {
 	dir := t.TempDir()
 	t.Cleanup(func() { forgetWorkspace(dir) })
@@ -78,7 +78,7 @@ func TestDoctorNamesAnUnadoptedHostLogin(t *testing.T) {
 		t.Fatal("the host login was not found, so the report cannot explain itself")
 	}
 	joined := strings.Join(d.Problems, "\n")
-	for _, want := range []string{"--from-host", "--capture-token", "FAKE_OAUTH_TOKEN"} {
+	for _, want := range []string{"login sub -from-host`", "with `-capture-token`", "FAKE_OAUTH_TOKEN"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("the problem does not offer %q:\n%s", want, joined)
 		}
@@ -257,14 +257,15 @@ func TestTheReportCarriesEveryLineTheDocsPromise(t *testing.T) {
 		Provider: "subscription", Agent: "claude-code", Binary: "/usr/local/bin/claude",
 		BinaryPath: "/usr/local/bin/claude", Version: "2.0.31 (Claude Code)",
 		WrittenFor: "Claude Code CLI 2.x", StateDir: "/var/lib/crewlet/llm-cli/subscription",
-		Credentials: "present", TokenEnv: "set", TokenUsage: "reported by CLI",
-		Smoke: "ok — 812 in / 34 out",
+		Credentials: "present", TokenEnv: "set", SignIn: "credential files in /var/lib",
+		TokenUsage: "reported by CLI",
+		Smoke:      "ok — 812 in / 34 out",
 	}
 	var out strings.Builder
 	d.Render(&out)
 	for _, want := range []string{
 		"provider", "cli agent", "binary", "version", "written for",
-		"state dir", "credentials", "token env", "token usage", "smoke test", "problems",
+		"state dir", "credentials", "token env", "sign-in", "token usage", "smoke test", "problems",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the report is missing the %q line:\n%s", want, out.String())

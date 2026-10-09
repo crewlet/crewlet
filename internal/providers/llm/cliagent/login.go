@@ -15,6 +15,8 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // maxBundle bounds a credential bundle on the way IN, decompressed.
@@ -152,7 +154,7 @@ func (p *Provider) CredentialLogin(ctx context.Context, username, password strin
 		return fmt.Errorf("%w: the %q CLI authenticates through the vendor's browser "+
 			"OAuth flow — there is no username/password login to drive. Run "+
 			"`crewlet llm login` (which brokers that flow), or "+
-			"`crewlet llm login --capture-token` where the vendor mints a headless "+
+			"`crewlet llm login -capture-token` where the vendor mints a headless "+
 			"token. If your build of this CLI does accept a credential, declare it "+
 			"under providers.llm.%s.cli.overrides.stdin_login",
 			ErrNoLoginCommand, p.agent, p.key)
@@ -233,7 +235,7 @@ func (p *Provider) AdoptHostLogin(home string) ([]string, error) {
 	}
 	var taken []string
 	for _, rel := range sources {
-		src, err := underRoot(home, rel)
+		src, err := cliprofile.UnderRoot(home, rel)
 		if err != nil {
 			return nil, err
 		}
@@ -262,9 +264,9 @@ func (p *Provider) AdoptHostLogin(home string) ([]string, error) {
 // HostLogin reports where this CLI's login sits in a human's home directory,
 // whether or not it has been adopted.
 //
-// So that "no login" on a machine where the CLI plainly works explains
+// So that "no sign-in" on a machine where the CLI plainly works explains
 // itself, rather than sending an operator to look for a bug that is a missing
-// `--from-host`.
+// `-from-host`.
 func (p *Provider) HostLogin(home string) []string {
 	if home == "" {
 		var err error
@@ -279,7 +281,7 @@ func (p *Provider) HostLogin(home string) []string {
 	}
 	var found []string
 	for _, rel := range sources {
-		src, err := underRoot(home, rel)
+		src, err := cliprofile.UnderRoot(home, rel)
 		if err != nil {
 			continue
 		}

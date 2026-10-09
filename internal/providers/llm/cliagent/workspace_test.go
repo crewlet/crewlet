@@ -6,16 +6,18 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // testProfile is a minimal profile whose credential and volatile paths are
 // what the workspace tests exercise.
-func testProfile(t *testing.T) Profile {
+func testProfile(t *testing.T) cliprofile.Profile {
 	t.Helper()
-	return Profile{
+	return cliprofile.Profile{
 		Binary:          "fake",
 		CompleteArgs:    []string{"-p"},
-		Output:          OutputText,
+		Output:          cliprofile.OutputText,
 		CredentialPaths: []string{".fake/creds.json"},
 		VolatilePaths:   []string{".fake/sessions", ".fake/history.jsonl"},
 	}
@@ -212,11 +214,11 @@ func TestAMissingLoginDoesNotRefuseTheCheckout(t *testing.T) {
 func TestAVolatilePathCannotEscapeTheSeatHome(t *testing.T) {
 	t.Parallel()
 	for _, rel := range []string{"../../.ssh", "..", "/etc"} {
-		if _, err := underRoot("/var/lib/crewlet/seats/dev/home", rel); err == nil {
+		if _, err := cliprofile.UnderRoot("/var/lib/crewlet/seats/dev/home", rel); err == nil {
 			t.Errorf("underRoot accepted %q", rel)
 		}
 	}
-	if _, err := underRoot("/var/lib/crewlet/seats/dev/home", ".fake/sessions"); err != nil {
+	if _, err := cliprofile.UnderRoot("/var/lib/crewlet/seats/dev/home", ".fake/sessions"); err != nil {
 		t.Errorf("a legitimate relative path was refused: %v", err)
 	}
 }

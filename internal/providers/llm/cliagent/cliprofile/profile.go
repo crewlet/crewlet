@@ -1,7 +1,8 @@
-package cliagent
+package cliprofile
 
 import (
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -258,8 +259,8 @@ type SeedFile struct {
 // is relative and climbs out of nothing.
 var seedValidationRoot = filepath.Join(string(filepath.Separator), "seat")
 
-// scope is the seed scope with its default applied.
-func (f SeedFile) scope() SeedScope {
+// Scope is the seed scope with its default applied.
+func (f SeedFile) Scope() SeedScope {
 	if f.In == "" {
 		return SeedHome
 	}
@@ -298,21 +299,31 @@ type SystemPromptFile struct {
 	Template string `yaml:"template,omitempty"`
 }
 
-// render returns the bytes to write for one call's system prompt.
-func (f *SystemPromptFile) render(system string) string {
+// Render returns the bytes to write for one call's system prompt.
+func (f *SystemPromptFile) Render(system string) string {
 	if f == nil || f.Template == "" {
 		return system
 	}
 	return strings.ReplaceAll(f.Template, "{system}", system)
 }
 
-// fileName returns the name to write under.
-func (f *SystemPromptFile) fileName() string {
+// FileName returns the name to write under.
+func (f *SystemPromptFile) FileName() string {
 	if f == nil || f.Name == "" {
-		return systemPromptFile
+		return DefaultSystemPromptFile
 	}
 	return f.Name
 }
+
+// DefaultSystemPromptFile is what a {file} substitution writes, in the per-call
+// working directory.
+//
+// That directory and not the seat home: it is created empty for one call and
+// removed on release, so the text cannot outlive the call that needed it or
+// reach the next one. The name is deliberately not one a coding CLI reads on
+// its own (CLAUDE.md, AGENTS.md), because this is an argument to the CLI, not
+// context for it to discover.
+const DefaultSystemPromptFile = "crewlet-system-prompt.txt"
 
 // AuthMarker recognises a login the CLI has stopped honouring.
 //
@@ -416,7 +427,7 @@ type Profile struct {
 	// takes this one for exactly that reason.
 	//
 	// The two are mutually exclusive — a profile declaring both would hand
-	// the CLI its system prompt twice — and [Profile.validate] refuses it.
+	// the CLI its system prompt twice — and [Profile.Validate] refuses it.
 	SystemPromptEnv string `yaml:"system_prompt_env,omitempty"`
 
 	// SystemPromptFile shapes the file either `{file}` channel writes —
@@ -509,16 +520,17 @@ type Profile struct {
 	// dotfiles and every seat shares one set of sessions.
 	ConfigEnv map[string]string `yaml:"config_env,omitempty"`
 
-	// Env is fixed child environment the CLI needs. Never a credential:
-	// see [Profile.validate].
+	// Env is fixed child environment the CLI needs. Never a credential,
+	// and never the profile's own token_env or api_key_env, both refused
+	// by [Profile.ValidateCredentials].
 	Env map[string]string `yaml:"env,omitempty"`
 
 	// PassthroughEnv names engine environment variables forwarded to the
-	// child. It MAY NOT name a credential, and the engine refuses a
-	// profile that does — everything here is forwarded before auth.mode is
-	// consulted, so a key listed here would reach every seat whatever the
-	// mode said, which is exactly the metered-bill-on-a-flat-rate-plan
-	// failure auth.mode exists to prevent.
+	// child. It MAY NOT name a credential, and config refuses a profile
+	// that does ([Profile.ValidateCredentials]): everything here is
+	// forwarded before auth.mode is consulted, so a key listed here would
+	// reach every seat whatever the mode said, which is exactly the
+	// metered-bill-on-a-flat-rate-plan failure auth.mode exists to prevent.
 	PassthroughEnv []string `yaml:"passthrough_env,omitempty"`
 
 	// TokenEnv is the variable carrying a long-lived headless
@@ -528,6 +540,30 @@ type Profile struct {
 	// APIKeyEnv is the variable carrying a metered API key, set only
 	// under auth.mode api-key or inherit-env.
 	APIKeyEnv string `yaml:"api_key_env,omitempty"`
+
+	// EnvSignIn declares that the CLI reads its model provider's credential
+	// from its OWN environment, under that provider's own variable — so a
+	// credential-named variable the operator sets in `cli.env` signs it in.
+	// False, the default, means a credential in cli.env is not a sign-in
+	// this CLI reads, which is the right answer for a profile that says
+	// nothing.
+	//
+	// A DECLARATION RATHER THAN A LIST OF NAMES, because the CLIs that need
+	// it front dozens of providers each (hermes thirty-odd, pi twenty-odd,
+	// OpenCode every provider on its catalogue) and every one has its own
+	// variable: a list would be wrong for whichever provider it missed, and
+	// a profile naming one variable would be wrong for every other entry —
+	// which is why these profiles have no api_key_env at all.
+	//
+	// And a declaration at all, rather than counting any credential in
+	// cli.env, because only the profile knows whether the CLI reads one:
+	// kimi-code is handed KIMI_API_KEY and ignores it, reading its key only
+	// from config.toml.
+	//
+	// Read by `crewlet llm doctor` and `crewlet llm list` to decide whether
+	// an entry is signed in, and by config to say where the key of an entry
+	// that has no api_key_env goes instead.
+	EnvSignIn bool `yaml:"env_sign_in,omitempty"`
 
 	// CredentialPaths are the login files, relative to the seat home.
 	// They are what a bundle may carry and what is synced back after a
@@ -567,7 +603,7 @@ type Profile struct {
 	MarkerScope MarkerScope `yaml:"marker_scope,omitempty"`
 
 	// HostCredentialPaths are where this CLI keeps its login in a human's
-	// own home directory, for `crewlet llm login --from-host` to adopt.
+	// own home directory, for `crewlet llm login -from-host` to adopt.
 	// Paths are relative to that home.
 	HostCredentialPaths []string `yaml:"host_credential_paths,omitempty"`
 
@@ -587,44 +623,72 @@ type Profile struct {
 	SeedFiles []SeedFile `yaml:"seed_files,omitempty"`
 }
 
-// credentialish matches an environment variable name that carries a secret.
+// credentialWords are the name components that mark a variable as carrying a
+// secret.
 //
-// Substrings rather than an exact list because passthrough_env is
-// operator-supplied and the set of vendor key names is open: GOOGLE_API_KEY,
-// GH_TOKEN and OPENAI_API_KEY have nothing in common but the shape of the
-// name. A false positive costs an operator one explicit override; a false
-// negative bills them for a plan they thought was flat-rate.
-var credentialish = []string{"KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "AUTH"}
+// WHOLE COMPONENTS, NOT SUBSTRINGS. The set of vendor key names is open —
+// GOOGLE_API_KEY, GH_TOKEN and OPENROUTER_API_KEY have nothing in common but
+// the shape of the name — so the rule reads that shape: a name is cut at every
+// character that is not a letter or a digit, and it is a credential when one of
+// its components is one of these words. A substring match read
+// CLAUDE_CODE_MAX_OUTPUT_TOKENS and HERMES_MAX_TOKENS as credentials, which
+// refused a real tuning variable in a profile's env and counted an entry with
+// no key at all as signed in — a predicate that decides whether an entry is
+// healthy cannot be that loose. The joined forms (APIKEY, ACCESSKEY,
+// SECRETKEY) are listed because some vendors write their names that way, and
+// KEYS because a variable holding several keys (GEMINI_API_KEYS) is still a
+// credential — TOKENS is deliberately absent, being how every CLI spells a
+// count of model tokens.
+var credentialWords = []string{
+	"KEY", "KEYS", "APIKEY", "ACCESSKEY", "SECRETKEY", "TOKEN", "SECRET",
+	"PASSWORD", "PASSWD", "CREDENTIAL", "CREDENTIALS", "AUTH", "OAUTH", "PAT",
+}
 
-// IsCredentialName reports whether name looks like it carries a secret.
+// IsCredentialName reports whether an environment variable's name says it
+// carries a secret: whether any of its components, cut at every character
+// that is not a letter or a digit and compared without regard to case, is
+// one of [credentialWords].
+//
+// One predicate for every question this backend asks of a name — which
+// passthrough_env and env entries are refused, which cli.env entries sign a
+// CLI in, and which travel into a coding box — so the answers cannot drift.
 func IsCredentialName(name string) bool {
-	upper := strings.ToUpper(name)
-	for _, frag := range credentialish {
-		if strings.Contains(upper, frag) {
+	components := strings.FieldsFunc(strings.ToUpper(name), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	for _, component := range components {
+		if slices.Contains(credentialWords, component) {
 			return true
 		}
 	}
 	return false
 }
 
-// markerScope is the scope with its default applied.
-func (p *Profile) markerScope() MarkerScope {
+// TakesModel reports whether this profile passes a model to its CLI — whether
+// it declares model_args.
+//
+// One predicate for the two places that refuse a model the CLI would never
+// see: config, which every write path runs, and the backend's constructor.
+func (p *Profile) TakesModel() bool { return len(p.ModelArgs) > 0 }
+
+// EffectiveMarkerScope is the scope with its default applied.
+func (p *Profile) EffectiveMarkerScope() MarkerScope {
 	if p.MarkerScope == "" {
 		return MarkerScopeAnswerAndStderr
 	}
 	return p.MarkerScope
 }
 
-// hasSystemChannel reports whether this profile carries the system prompt on
+// HasSystemChannel reports whether this profile carries the system prompt on
 // a channel of its own rather than leaving it in the transcript.
-func (p *Profile) hasSystemChannel() bool {
+func (p *Profile) HasSystemChannel() bool {
 	return len(p.SystemPromptArgs) > 0 || p.SystemPromptEnv != ""
 }
 
-// writesSystemPromptFile reports whether this profile's system-prompt channel
+// WritesSystemPromptFile reports whether this profile's system-prompt channel
 // puts the text in a FILE — either `{file}` on argv, or the env-var channel,
 // which is a path by construction.
-func (p *Profile) writesSystemPromptFile() bool {
+func (p *Profile) WritesSystemPromptFile() bool {
 	if p.SystemPromptEnv != "" {
 		return true
 	}
@@ -647,9 +711,9 @@ func isBareFileName(name string) bool {
 	return !strings.ContainsRune(name, '/') && !strings.ContainsRune(name, filepath.Separator)
 }
 
-// validate reports what is wrong with a profile, naming the override field an
+// Validate reports what is wrong with a profile, naming the override field an
 // operator would edit rather than the Go field they cannot see.
-func (p *Profile) validate(name string) error {
+func (p *Profile) Validate(name string) error {
 	var bad []string
 	add := func(format string, args ...any) {
 		bad = append(bad, fmt.Sprintf(format, args...))
@@ -658,7 +722,7 @@ func (p *Profile) validate(name string) error {
 	if strings.TrimSpace(p.Binary) == "" {
 		add("binary is empty — set cli.overrides.binary")
 	}
-	if len(p.CompleteArgs) == 0 && p.mode() == PromptStdin {
+	if len(p.CompleteArgs) == 0 && p.EffectivePromptMode() == PromptStdin {
 		// Only stdin mode can end up with NO argv at all. The other two
 		// build one from prompt_args and the prompt itself, so a CLI
 		// invoked as `mycli --prompt-file <path>` and nothing else is a
@@ -673,29 +737,20 @@ func (p *Profile) validate(name string) error {
 		add("output %q (want json, jsonl or text)", p.Output)
 	}
 	if p.Output != OutputText && len(p.TextPaths) == 0 {
-		add("text_paths is empty — a %s profile must say where the answer is", p.Output)
-	}
-	for _, env := range p.PassthroughEnv {
-		if IsCredentialName(env) {
-			// Refused rather than dropped: an operator who wrote it
-			// meant it to arrive, and a variable that vanished
-			// silently is a debugging session.
-			add("passthrough_env names %q, which looks like a credential — "+
-				"passthrough is forwarded before auth.mode is consulted, so it would "+
-				"reach every seat whatever the mode says; use auth.mode api-key or "+
-				"inherit-env instead", env)
-		}
+		// The DEFAULTED mode, not the field: a profile that names no
+		// output is a json profile, and the raw field printed "a  profile".
+		add("text_paths is empty — a %s profile must say where the answer is", p.EffectiveOutput())
 	}
 	for dir := range p.ConfigEnv {
 		if dir == "HOME" {
 			add("config_env may not name HOME — it is set from the seat home already")
 		}
 	}
-	if len(p.PromptArgs) > 0 && p.mode() != PromptArgv && p.mode() != PromptFile {
+	if len(p.PromptArgs) > 0 && p.EffectivePromptMode() != PromptArgv && p.EffectivePromptMode() != PromptFile {
 		add("prompt_args is set but prompt_mode is %q — the flag introduces a prompt "+
-			"on argv and there is none to introduce", p.mode())
+			"on argv and there is none to introduce", p.EffectivePromptMode())
 	}
-	if p.mode() == PromptFile && !hasPlaceholder(p.PromptArgs, "{file}") {
+	if p.EffectivePromptMode() == PromptFile && !hasPlaceholder(p.PromptArgs, "{file}") {
 		// Refused rather than defaulted to a bare append: a file-mode
 		// profile whose argv never carries the path runs the CLI with no
 		// prompt, which a vendor answers by opening an interactive
@@ -711,12 +766,12 @@ func (p *Profile) validate(name string) error {
 	case len(p.EventTypePath) == 0 && len(p.TextEvents) > 0:
 		add("text_events is set but event_type_path is empty — there is nothing to " +
 			"compare the event names against")
-	case len(p.EventTypePath) > 0 && p.output() != OutputJSONL:
+	case len(p.EventTypePath) > 0 && p.EffectiveOutput() != OutputJSONL:
 		// Refused rather than ignored: an operator who wrote it meant the
 		// answer to be picked out of an event stream, and a filter that
 		// silently did nothing is a debugging session.
 		add("event_type_path is set but output is %q — an event discriminator "+
-			"only exists in a jsonl stream", p.output())
+			"only exists in a jsonl stream", p.EffectiveOutput())
 	}
 	if len(p.SystemPromptArgs) > 0 && p.SystemPromptEnv != "" {
 		// One channel or the other. Both would hand the CLI the same
@@ -741,7 +796,7 @@ func (p *Profile) validate(name string) error {
 			"machine; keep the {file} form and drop {system}")
 	}
 	if p.SystemPromptFile != nil {
-		if !p.writesSystemPromptFile() {
+		if !p.WritesSystemPromptFile() {
 			// A template with no file to write is not a harmless
 			// extra: on a `{system}` profile the seat's identity goes
 			// on argv bare, and an operator who wrote frontmatter
@@ -824,13 +879,13 @@ func (p *Profile) validate(name string) error {
 		if f.In != "" && !f.In.Valid() {
 			add("seed_files[%d].in %q (want home or work)", i, f.In)
 		}
-		// underRoot against a stand-in root proves the same two things
+		// UnderRoot against a stand-in root proves the same two things
 		// seeding will: relative, and not escaping the scope. No seat
 		// home exists at load time, and the root directory itself will
 		// not do — nothing can sit "inside" it by this test.
-		if _, err := underRoot(seedValidationRoot, f.Path); err != nil {
+		if _, err := UnderRoot(seedValidationRoot, f.Path); err != nil {
 			add("seed_files[%d].path %q must be relative and stay inside the %s directory",
-				i, f.Path, f.scope())
+				i, f.Path, f.Scope())
 		}
 		if f.Content == "" {
 			add("seed_files[%d].content is empty — a settings file with nothing in it "+
@@ -843,16 +898,77 @@ func (p *Profile) validate(name string) error {
 	return fmt.Errorf("cli-agent profile %q: %s", name, strings.Join(bad, "; "))
 }
 
-// mode is the prompt mode with its default applied.
-func (p *Profile) mode() PromptMode {
+// ValidateCredentials reports every place this profile routes a credential
+// around cli.auth: a passthrough_env or env entry whose name says it carries a
+// secret, and an env entry naming the profile's own token_env or api_key_env.
+//
+// APART FROM [Profile.Validate], which [Load] runs, because these are
+// ADMISSION rules and that one is RUNNABLE. A profile that breaks one still
+// builds, starts and answers: what it gets wrong is where a credential comes
+// from. Config refuses a document that breaks one on every write and only
+// warns about a revision being applied, because an apply that refused it would
+// take a node off the fleet's epoch over a revision that runs — and the rule
+// set here is the one a later build is free to change, as this predicate
+// itself changed from substrings to whole name components.
+func (p *Profile) ValidateCredentials(name string) error {
+	var bad []string
+	add := func(format string, args ...any) {
+		bad = append(bad, fmt.Sprintf(format, args...))
+	}
+	for _, env := range p.PassthroughEnv {
+		if IsCredentialName(env) {
+			// Refused rather than dropped: an operator who wrote it
+			// meant it to arrive, and a variable that vanished
+			// silently is a debugging session.
+			add("passthrough_env names %q, which looks like a credential — "+
+				"passthrough is forwarded before auth.mode is consulted, so it would "+
+				"reach every seat whatever the mode says; use auth.mode api-key or "+
+				"inherit-env instead", env)
+		}
+	}
+	for _, env := range slices.Sorted(maps.Keys(p.Env)) {
+		switch {
+		case env != "" && (env == p.TokenEnv || env == p.APIKeyEnv):
+			// Named apart from the shape rule below because an
+			// overridden token_env or api_key_env need not LOOK like a
+			// credential. cli.env and then cli.auth are layered over
+			// this one, so whether a value here reaches the CLI turns on
+			// the mode and on whether the secret store or the engine's
+			// environment holds a credential of its own — which no
+			// document can see.
+			add("env names %q, which is this profile's token_env or api_key_env — "+
+				"cli.auth owns that variable, and whether a value here reaches the CLI "+
+				"depends on auth.mode and on whether the secret store or the engine's "+
+				"environment holds one; give the credential through cli.auth "+
+				"(auth.token, or api_keys with auth.mode api-key)", env)
+		case IsCredentialName(env):
+			// The same reason passthrough_env refuses one, and a second:
+			// the profile's env is forwarded whatever auth.mode says,
+			// and cli.overrides is neither ${VAR}-resolved nor marked
+			// secret, so a key written here sits in the stored revision
+			// in plain text and is shown unredacted on every read.
+			add("env names %q, which looks like a credential — the profile's env "+
+				"is forwarded whatever auth.mode says, and cli.overrides is stored "+
+				"and shown unredacted; put it in cli.env, which is ${VAR}-resolved "+
+				"and redacted, or give it through cli.auth", env)
+		}
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	return fmt.Errorf("cli-agent profile %q: %s", name, strings.Join(bad, "; "))
+}
+
+// EffectivePromptMode is the prompt mode with its default applied.
+func (p *Profile) EffectivePromptMode() PromptMode {
 	if p.PromptMode == "" {
 		return PromptStdin
 	}
 	return p.PromptMode
 }
 
-// output is the output mode with its default applied.
-func (p *Profile) output() OutputMode {
+// EffectiveOutput is the output mode with its default applied.
+func (p *Profile) EffectiveOutput() OutputMode {
 	if p.Output == "" {
 		return OutputJSON
 	}
@@ -919,5 +1035,22 @@ func (p *Profile) ReadsUsage() bool {
 	if len(p.UsageFileArgs) > 0 {
 		return true
 	}
-	return p.output() != OutputText
+	return p.EffectiveOutput() != OutputText
+}
+
+// UnderRoot joins a profile-declared relative path onto a root and refuses
+// one that escapes it.
+//
+// Profile paths are operator-overridable, so "../../.ssh" is reachable from
+// config — and the backend's prune calls RemoveAll on whatever this returns.
+func UnderRoot(root, rel string) (string, error) {
+	if filepath.IsAbs(rel) {
+		return "", fmt.Errorf("cli-agent: path %q must be relative to the seat home", rel)
+	}
+	joined := filepath.Join(root, rel)
+	cleanRoot := filepath.Clean(root)
+	if joined != cleanRoot && !strings.HasPrefix(joined, cleanRoot+string(filepath.Separator)) {
+		return "", fmt.Errorf("cli-agent: path %q escapes the seat home", rel)
+	}
+	return joined, nil
 }

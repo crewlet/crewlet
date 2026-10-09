@@ -1,8 +1,9 @@
-package cliagent
+package cliprofile
 
 import (
 	"bytes"
 	_ "embed"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -28,7 +29,7 @@ var builtins = sync.OnceValue(func() map[string]Profile {
 		// The file is embedded from this repository, so a decode failure
 		// is a build that shipped a broken table — there is no operator
 		// input to blame and no correct behaviour to fall back to.
-		panic(fmt.Sprintf("cliagent: profiles.yaml does not decode: %v", err))
+		panic(fmt.Sprintf("cliprofile: profiles.yaml does not decode: %v", err))
 	}
 	return table
 })
@@ -50,12 +51,12 @@ func Builtin(name string) (Profile, bool) {
 	if !ok {
 		return Profile{}, false
 	}
-	return p.clone(), true
+	return p.Clone(), true
 }
 
-// clone deep-copies a profile. Every slice and map is copied because
+// Clone deep-copies a profile. Every slice and map is copied because
 // overrides replace them in place.
-func (p Profile) clone() Profile {
+func (p Profile) Clone() Profile {
 	out := p
 	out.VersionArgs = append([]string(nil), p.VersionArgs...)
 	out.CompleteArgs = append([]string(nil), p.CompleteArgs...)
@@ -120,6 +121,12 @@ func cloneMap(in map[string]string) map[string]string {
 	return out
 }
 
+// ErrOverrides marks a `cli.overrides` map that does not decode into a
+// profile — a key no profile field has, or a value of the wrong shape — as
+// opposed to a merged profile that decodes and breaks a rule. Config reports
+// the two under different kinds, so an editor can be pointed at the typo.
+var ErrOverrides = errors.New("cli.overrides does not decode into a profile")
+
 // Load resolves the profile for one provider entry: the built-in table
 // entry for name, with overrides merged in, validated.
 //
@@ -137,11 +144,11 @@ func Load(name string, overrides map[string]any) (Profile, error) {
 	if len(overrides) > 0 {
 		merged, err := applyOverrides(base, overrides)
 		if err != nil {
-			return Profile{}, fmt.Errorf("cli-agent %q: cli.overrides: %w", name, err)
+			return Profile{}, fmt.Errorf("cli-agent %q: %w: %w", name, ErrOverrides, err)
 		}
 		base = merged
 	}
-	if err := base.validate(name); err != nil {
+	if err := base.Validate(name); err != nil {
 		return Profile{}, err
 	}
 	return base, nil
@@ -177,8 +184,8 @@ func applyOverrides(base Profile, overrides map[string]any) (Profile, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(out))
 	dec.KnownFields(true)
 	if err := dec.Decode(&merged); err != nil {
-		return Profile{}, fmt.Errorf("%w — see the field list in "+
-			"docs/concepts/subscription-llm-backends.md", err)
+		return Profile{}, fmt.Errorf("%w — the fields are listed under "+
+			"\"Profile fields\" in docs/concepts/subscription-llm-backends.md", err)
 	}
 	return merged, nil
 }

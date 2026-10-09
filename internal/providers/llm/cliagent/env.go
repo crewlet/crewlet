@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // hostAllowlist is the engine environment a child ALWAYS inherits.
@@ -47,18 +49,43 @@ type Auth struct {
 	// Token is a resolved long-lived subscription token, or empty when
 	// the login lives in the credential files instead.
 	Token string
+	// TokenConfigured reports that the entry NAMED a token (cli.auth.token),
+	// whatever it resolved to. Only the doctor reads it: an empty Token is
+	// either "this entry signs in some other way" or "the reference it
+	// wrote resolved to nothing", and only the second is worth telling the
+	// operator about by name.
+	TokenConfigured bool
 	// APIKey is a resolved metered key, used only under AuthAPIKey.
 	APIKey string
 }
 
 // buildEnv is the complete environment for one call, as KEY=VALUE.
+func buildEnv(p cliprofile.Profile, c *Checkout, extra map[string]string, auth Auth) []string {
+	env := childEnv(p, c, extra, auth)
+	out := make([]string, 0, len(env))
+	for name, value := range env {
+		out = append(out, name+"="+value)
+	}
+	// Sorted so a failing invocation is reproducible from a log line and
+	// so tests compare an environment rather than a map iteration order.
+	slices.Sort(out)
+	return out
+}
+
+// childEnv is the environment a child is given, by name.
 //
 // Layered lowest-precedence first, so the reason each layer can override the
 // one below is visible in the order: host allowlist, then the isolation
 // variables (which nothing may override — they ARE the isolation), then the
 // profile's own fixed environment, then the profile's passthrough, then the
 // operator's cli.env, then auth.
-func buildEnv(p Profile, c *Checkout, extra map[string]string, auth Auth) []string {
+//
+// A map of its own, apart from [buildEnv]'s rendering, because it is also
+// what decides whether an entry is signed in ([Provider.signIn]): whether a
+// key reaches the CLI is a fact about this map after [applyAuth] has run,
+// and a second reading of the configuration beside it is what the doctor
+// had, and what drifted from it in both directions.
+func childEnv(p cliprofile.Profile, c *Checkout, extra map[string]string, auth Auth) map[string]string {
 	env := map[string]string{}
 
 	for _, name := range hostAllowlist {
@@ -86,7 +113,8 @@ func buildEnv(p Profile, c *Checkout, extra map[string]string, auth Auth) []stri
 	}
 
 	// Forwarded BEFORE auth is consulted, which is exactly why a profile
-	// may not name a credential here — see Profile.validate.
+	// may not name a credential here — see
+	// cliprofile.Profile.ValidateCredentials.
 	for _, name := range p.PassthroughEnv {
 		if value, ok := os.LookupEnv(name); ok {
 			env[name] = value
@@ -98,15 +126,7 @@ func buildEnv(p Profile, c *Checkout, extra map[string]string, auth Auth) []stri
 	}
 
 	applyAuth(env, p, auth)
-
-	out := make([]string, 0, len(env))
-	for name, value := range env {
-		out = append(out, name+"="+value)
-	}
-	// Sorted so a failing invocation is reproducible from a log line and
-	// so tests compare an environment rather than a map iteration order.
-	slices.Sort(out)
-	return out
+	return env
 }
 
 // applyAuth puts the credential the mode asks for into the child environment,
@@ -117,7 +137,7 @@ func buildEnv(p Profile, c *Checkout, extra map[string]string, auth Auth) []stri
 // by an operator into cli.env — would bill the metered account silently while
 // the plan sat unused, which is the failure the default mode exists to
 // prevent.
-func applyAuth(env map[string]string, p Profile, auth Auth) {
+func applyAuth(env map[string]string, p cliprofile.Profile, auth Auth) {
 	switch auth.Mode {
 	case AuthAPIKey:
 		if p.APIKeyEnv != "" && auth.APIKey != "" {
@@ -180,7 +200,7 @@ func (p *Provider) probeEnv() []string {
 
 // TokenVarName is the environment variable a profile's headless token lives
 // in, for the messages `crewlet llm login` and `doctor` print.
-func TokenVarName(p Profile) (string, error) {
+func TokenVarName(p cliprofile.Profile) (string, error) {
 	if p.TokenEnv == "" {
 		return "", fmt.Errorf("this CLI mints no headless token")
 	}

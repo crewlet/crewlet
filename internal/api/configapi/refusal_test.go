@@ -278,3 +278,36 @@ func TestRefusalFieldsIsAlwaysWritable(t *testing.T) {
 		t.Errorf("a document refusal carries nothing: %v", document)
 	}
 }
+
+// A CLI-AGENT ENTRY IS JUDGED AGAINST ITS PROFILE AT ADMISSION.
+//
+// No API write builds a provider, so a rule that lived only in the epoch build
+// — an unloadable profile, a key the CLI has no variable for — was admitted
+// here, activated, and then refused by every node's apply. The validator the
+// API runs now holds the entry to its profile, so the write is refused where
+// the person making it can see why.
+func TestAPutIsRefusedForACLIAgentEntryItsProfileCannotRun(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, entry, path string }{
+		{"a profile that cannot load",
+			"      type: cli-agent\n      model: m\n      cli: {agent: custom}\n",
+			"providers.llm.sub.cli.overrides"},
+		{"an api key the CLI has no variable for",
+			"      type: cli-agent\n      model: m\n      api_keys: [\"${OPENROUTER_API_KEY}\"]\n" +
+				"      cli: {agent: hermes, auth: {mode: api-key}}\n",
+			"providers.llm.sub.cli.auth.mode"},
+		{"a profile with no model flag for the model every entry names",
+			"      type: cli-agent\n      model: m\n      cli: {agent: codex, overrides: {model_args: []}}\n",
+			"providers.llm.sub.cli.overrides.model_args"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := newSurface(t, nil)
+			s.seed(t, companyDoc, nil)
+			doc := strings.Replace(companyDoc, "integrations:\n", "    sub:\n"+tc.entry+"integrations:\n", 1)
+			body := refusalOf(t, s.do(t, http.MethodPut, "/config?dry_run=true", doc, summaryHeader),
+				http.StatusBadRequest, "validation_error")
+			problemAt(t, body, tc.path)
+		})
+	}
+}

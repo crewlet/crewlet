@@ -1692,3 +1692,41 @@ func TestTheConfigWriterIsInstalledOutsideTheHTTPSurface(t *testing.T) {
 			"loop with no way to write the company document")
 	}
 }
+
+// A CLI-AGENT ENTRY'S PROFILE IS JUDGED BY THE VALIDATOR, NOT ONLY BY THE
+// EPOCH BUILD — so the refusal is located at the field to change. Built-only,
+// an unloadable profile came back with an empty path and an `engine:` prefix,
+// and a key with no variable to go in validated clean.
+func TestValidateLocatesACLIAgentProfileRefusal(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, entry, path string }{
+		{"an unloadable profile", "      cli: {agent: custom}\n", "providers.llm.sub.cli.overrides"},
+		{"an api key with nowhere to go",
+			"      api_keys: [\"${OPENROUTER_API_KEY}\"]\n      cli: {agent: hermes, auth: {mode: api-key}}\n",
+			"providers.llm.sub.cli.auth.mode"},
+		{"a profile with no model flag",
+			"      cli: {agent: codex, overrides: {model_args: []}}\n",
+			"providers.llm.sub.cli.overrides.model_args"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			doc := "name: Acme\nproviders:\n  llm:\n    sub:\n      type: cli-agent\n      model: m\n" + tc.entry
+			path := writeYAML(t, "company.yaml", doc)
+			var out, errOut bytes.Buffer
+			if err := run([]string{"validate", path, "-tier", "company", "-json"}, &out, &errOut); err == nil {
+				t.Fatalf("the entry validated: %s", out.String())
+			}
+			var report struct {
+				Problems []struct {
+					Path string `json:"path"`
+				} `json:"problems"`
+			}
+			if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+				t.Fatalf("decode: %v (%s)", err, out.String())
+			}
+			if len(report.Problems) == 0 || report.Problems[0].Path != tc.path {
+				t.Errorf("problems = %+v, want one at %s", report.Problems, tc.path)
+			}
+		})
+	}
+}

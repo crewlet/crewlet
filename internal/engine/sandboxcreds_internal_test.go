@@ -160,3 +160,70 @@ func TestTheGuardAsksTheEntryTheRunActuallyRunsOn(t *testing.T) {
 		t.Error("run_sandbox work on a login that cannot follow it was launched")
 	}
 }
+
+// A CLI THAT SIGNS IN THROUGH cli.env TAKES THAT SIGN-IN INTO ITS BOX.
+//
+// OpenCode reads its provider's key from its own environment, so an entry's
+// whole sign-in can be one variable in cli.env — which the doctor counts. The
+// run environment carried only the token and the api-key variable, so an
+// agent-mode or sandbox run on such an entry started its CLI signed in to
+// nothing, and a remote one was refused as having no credential at all.
+func TestACLIEnvSignInTravelsIntoTheRun(t *testing.T) {
+	t.Parallel()
+	company := func(env map[string]string) (*Company, *org.Role) {
+		provider, err := cliagent.New(cliagent.Config{
+			Key: "sub", Agent: "opencode", StateDir: t.TempDir(), Timeout: time.Minute, Env: env,
+		})
+		if err != nil {
+			t.Fatalf("cliagent.New: %v", err)
+		}
+		models, err := phase.NewRegistry([]phase.Entry{{Key: "sub", Provider: provider}})
+		if err != nil {
+			t.Fatalf("NewRegistry: %v", err)
+		}
+		cfg := &config.Company{Providers: config.Providers{LLM: map[string]config.LLMProvider{
+			"sub": {Type: config.LLMCLIAgent, Model: "anthropic/claude-sonnet-4"},
+		}}}
+		return &Company{Models: models, Config: cfg},
+			&org.Role{Name: "SWE", LLM: org.ProviderKeys{"sub"}}
+	}
+
+	c, seat := company(map[string]string{
+		"ANTHROPIC_API_KEY": "sk-ant-not-real", "HTTPS_PROXY": "http://proxy.example.com",
+	})
+	_, _, env := runLLM(c, seat, phase.Sandbox)
+	if env["ANTHROPIC_API_KEY"] != "sk-ant-not-real" {
+		t.Fatalf("the run environment does not carry the cli.env sign-in: %v", env)
+	}
+	if _, leaked := env["HTTPS_PROXY"]; leaked {
+		t.Errorf("a cli.env variable that is no credential was offered as one: %v", env)
+	}
+	if err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, env); err != nil {
+		t.Errorf("a remote run carrying its cli.env key was refused: %v", err)
+	}
+
+	// THE KEY IN THE SEAT'S OWN SANDBOX ENV passes too: which variable this
+	// CLI reads depends on the provider its model names, so the guard
+	// cannot ask the profile, and an operator legitimately declares their
+	// own key in role.sandbox.env.
+	c, seat = company(nil)
+	if err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B,
+		map[string]string{"OPENROUTER_API_KEY": "sk-or-not-real"}); err != nil {
+		t.Errorf("a remote run carrying its key in role.sandbox.env was refused: %v", err)
+	}
+	// A count of model tokens is not a key.
+	if err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B,
+		map[string]string{"OPENCODE_MAX_TOKENS": "4096"}); err == nil {
+		t.Error("a remote run whose only variable is a token count was launched")
+	}
+
+	err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, nil)
+	if err == nil {
+		t.Fatal("a remote run with no sign-in was launched")
+	}
+	for _, route := range []string{"providers.llm.sub.cli.env", "role.sandbox.env"} {
+		if !strings.Contains(err.Error(), route) {
+			t.Errorf("the refusal does not name the %s route this CLI takes: %v", route, err)
+		}
+	}
+}

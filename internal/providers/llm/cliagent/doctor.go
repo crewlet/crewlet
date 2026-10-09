@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // probeTimeout caps a version or status probe.
@@ -93,10 +95,14 @@ type Diagnosis struct {
 	// Credentials is what the shared directory holds.
 	Credentials string
 	// HostLogin names a login on this machine that has NOT been adopted,
-	// so "no login" on a box where the CLI plainly works explains itself.
+	// so "no sign-in" on a box where the CLI plainly works explains itself.
 	HostLogin []string
 	// TokenEnv reports whether the headless token variable is resolved.
 	TokenEnv string
+	// SignIn is every route that authenticates the child — the credential
+	// files, a token, a key, the CLI's own environment — read off the
+	// environment the child is actually given, or "none".
+	SignIn string
 	// TokenUsage is "reported by CLI" or "estimated", because a budget
 	// built on estimates is a different promise.
 	TokenUsage string
@@ -197,21 +203,9 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 				"provider run on estimates", p.agent))
 	}
 
-	if d.Credentials == "none on disk" && d.TokenEnv != "set" {
-		problem := fmt.Sprintf("no login of its own for %q", p.key)
-		if len(d.HostLogin) > 0 {
-			problem += fmt.Sprintf(
-				", but this machine has one at %s — adopt it with "+
-					"`crewlet llm login %s --from-host`", strings.Join(d.HostLogin, ", "), p.key)
-			if len(p.profile.CaptureTokenArgs) > 0 {
-				problem += fmt.Sprintf(", or mint a headless %s with `--capture-token` "+
-					"(preferred: no shared refresh token)", p.profile.TokenEnv)
-			}
-		} else {
-			problem += fmt.Sprintf(" — run `crewlet llm login %s`", p.key)
-		}
-		d.Problems = append(d.Problems, problem)
-	}
+	signIn := p.signIn()
+	d.SignIn = signIn.line()
+	answered := false
 
 	stance := p.localToolsStance()
 	switch {
@@ -224,7 +218,7 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 		d.LocalTools = stance + " — probe skipped, no binary to run"
 		d.Web = "probe skipped — no binary to run"
 	default:
-		d.Smoke = p.smokeTest(ctx)
+		d.Smoke, answered = p.smokeTest(ctx)
 		if strings.HasPrefix(d.Smoke, "failed") {
 			d.Problems = append(d.Problems, d.Smoke)
 		}
@@ -238,7 +232,74 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 			d.Problems = append(d.Problems, d.Web)
 		}
 	}
+
+	// NOTHING THE ENGINE HANDS THE CLI SIGNS IT IN — which is a problem
+	// unless the CLI answered anyway. A model served by an endpoint that
+	// takes no key (a hermes or pi entry pointed at a local server through
+	// cli.env) is signed in to nothing and works, and so is a CLI holding a
+	// key in a configuration file of its own that no profile names. The
+	// configuration cannot tell those from a missing key; the smoke test's
+	// answer can, so it decides, and without it the report says what it
+	// sees and asks for the run that settles it.
+	if len(signIn.sources) == 0 {
+		if answered {
+			d.SignIn = "none the engine hands the CLI — but the smoke test was " +
+				"answered, so it authenticates some other way (an endpoint that takes " +
+				"no key, or a credential in its own configuration)"
+		} else {
+			d.Problems = append(d.Problems, p.noSignIn(d.HostLogin, signIn.unresolved))
+		}
+	}
 	return d
+}
+
+// noSignIn is the problem for an entry nothing authenticates, naming every
+// route this CLI could take and, first, the one the operator already
+// configured and this process could not resolve.
+func (p *Provider) noSignIn(hostLogin, unresolved []string) string {
+	problem := fmt.Sprintf("no sign-in for %q: no credential files in %s, and nothing "+
+		"in the environment the CLI is given authenticates it", p.key, p.ws.CredentialsDir())
+	if len(unresolved) > 0 {
+		problem += fmt.Sprintf(" — cli.env sets %s, but the ${VAR} it references "+
+			"resolved to nothing: export it, or store it with `crewlet secrets set`",
+			strings.Join(unresolved, ", "))
+	}
+	if p.auth.Mode == AuthAPIKey && p.auth.APIKey == "" {
+		problem += " — auth.mode is api-key and its api_keys value resolved to " +
+			"nothing: export it, or store it with `crewlet secrets set`"
+	}
+	if p.auth.Mode == AuthSubscription && p.auth.TokenConfigured && p.auth.Token == "" {
+		problem += " — cli.auth.token is set, but the ${VAR} it references resolved " +
+			"to nothing: export it, or store it with `crewlet secrets set`"
+	}
+	if len(hostLogin) > 0 {
+		problem += fmt.Sprintf(
+			" — this machine has a login at %s: adopt it with "+
+				"`crewlet llm login %s -from-host`", strings.Join(hostLogin, ", "), p.key)
+		if len(p.profile.CaptureTokenArgs) > 0 {
+			problem += fmt.Sprintf(", or mint a headless %s with `-capture-token` "+
+				"(preferred: no shared refresh token)", p.profile.TokenEnv)
+		}
+	} else {
+		problem += fmt.Sprintf(" — run `crewlet llm login %s`", p.key)
+	}
+	// Offered only when cli.env does not already try it: an entry whose
+	// reference resolved to nothing was told so above, and being told to
+	// do what it did would read as a second, different fault.
+	if p.profile.EnvSignIn && len(unresolved) == 0 {
+		problem += fmt.Sprintf(", or set the key of the provider its model names in "+
+			"cli.env, under that provider's own variable (the %q CLI reads it from "+
+			"its environment)", p.agent)
+	}
+	// Said last because it is the one case where nothing needs doing — a
+	// CLI that fronts any provider may be pointed at a local server — and
+	// only the smoke test can tell it apart: a run with it skipped has not
+	// asked the CLI anything.
+	if p.profile.EnvSignIn {
+		problem += ". If this entry's model is served by an endpoint that takes no " +
+			"key, run the doctor without -no-smoke: an answered smoke test clears this"
+	}
+	return problem
 }
 
 // modeName is how this entry runs, for the report.
@@ -304,9 +365,9 @@ func BridgeURLVar() string { return bridgeURLVar }
 // localToolsStance renders the profile's declared stance.
 func (p *Provider) localToolsStance() string {
 	switch p.profile.LocalTools {
-	case LocalToolsDenied:
+	case cliprofile.LocalToolsDenied:
 		return "denied by profile"
-	case LocalToolsVendorDefault:
+	case cliprofile.LocalToolsVendorDefault:
 		return "vendor default (" + p.profile.LocalToolsNote + ")"
 	default:
 		return "not declared by profile"
@@ -330,7 +391,7 @@ func (p *Provider) shellProbe(ctx context.Context) (verdict, problem string) {
 	}
 	ran := reportsCurrentClock(comp.Content, time.Now())
 	switch {
-	case ran && p.profile.LocalTools == LocalToolsDenied:
+	case ran && p.profile.LocalTools == cliprofile.LocalToolsDenied:
 		return "probe: SHELL RAN", fmt.Sprintf(
 			"the %q profile says local tools are denied, but the CLI ran a shell "+
 				"command on the engine host — the vendor's denial flag is not taking "+
@@ -460,10 +521,14 @@ func (p *Provider) probeVersion(ctx context.Context) string {
 // It used to force a call, which rendered the envelope's "you MUST request a
 // tool call" contract that no phase ever receives; a CLI that only called a
 // tool when told it must would have passed here and failed every seat.
-func (p *Provider) smokeTest(ctx context.Context) string {
+//
+// answered reports whether the model replied at all, however badly: a reply
+// is proof the CLI reached its model signed in, which the doctor needs apart
+// from whether the reply was usable.
+func (p *Provider) smokeTest(ctx context.Context) (verdict string, answered bool) {
 	comp, err := p.Complete(ctx, smokeRequest())
 	if err != nil {
-		return "failed — " + err.Error()
+		return "failed — " + err.Error(), false
 	}
 	if len(comp.ToolCalls) == 0 {
 		// TWO DIFFERENT FAILURES, and `It said: ""` describes only one of
@@ -480,15 +545,15 @@ func (p *Provider) smokeTest(ctx context.Context) string {
 					"Every phase a seat runs on this provider will spend corrective rounds "+
 					"asking again and then end without its submission: point this entry "+
 					"at a stronger model",
-				comp.OutputTokens)
+				comp.OutputTokens), true
 		}
 		return fmt.Sprintf(
 			"failed — the CLI answered but produced no parseable tool call, so every phase "+
 				"a seat runs on this provider will spend a corrective round asking again, and "+
 				"end without its submission whenever the model never manages one. It said: %q",
-			strings.TrimSpace(comp.Content))
+			strings.TrimSpace(comp.Content)), true
 	}
-	return fmt.Sprintf("ok — %d in / %d out", comp.InputTokens, comp.OutputTokens)
+	return fmt.Sprintf("ok — %d in / %d out", comp.InputTokens, comp.OutputTokens), true
 }
 
 // smokeRequest is the one call [Provider.smokeTest] makes: the crewlet_smoke
@@ -531,6 +596,7 @@ func (d Diagnosis) Render(w io.Writer) {
 		line("host login", strings.Join(d.HostLogin, ", ")+" (not adopted)")
 	}
 	line("token env", d.TokenEnv)
+	line("sign-in", d.SignIn)
 	line("token usage", d.TokenUsage)
 	line("smoke test", d.Smoke)
 	line("local tools", d.LocalTools)
@@ -559,27 +625,10 @@ func orNone(s string) string {
 	return s
 }
 
-// LoginState is a one-word summary for `crewlet llm list`.
-func (p *Provider) LoginState() string {
-	switch {
-	case p.ws.HasLogin():
-		return "credentials"
-	case p.auth.Token != "":
-		return "token"
-	case p.auth.Mode == AuthAPIKey && p.auth.APIKey != "":
-		return "api key"
-	case p.auth.Mode == AuthInheritEnv:
-		if p.profile.TokenEnv != "" && os.Getenv(p.profile.TokenEnv) != "" {
-			return "inherited token"
-		}
-		if p.profile.APIKeyEnv != "" && os.Getenv(p.profile.APIKeyEnv) != "" {
-			return "inherited key"
-		}
-		return "none"
-	default:
-		return "none"
-	}
-}
+// SignInState is a one-word summary for `crewlet llm list`: the first route
+// the doctor's sign-in line names, or "none" — the same answer, so the two
+// commands cannot disagree about whether an entry is signed in.
+func (p *Provider) SignInState() string { return p.signIn().state() }
 
 // Vendor is the model FAMILY this provider's CLI addresses.
 //
@@ -625,25 +674,22 @@ func (p *Provider) SandboxCredentials() map[string]string {
 // api-key entry contributes its key here instead, and a subscription entry
 // with neither contributes nothing at all: the run then needs the credential
 // files, which is why a CLI that mints no token needs a local box.
+//
+// A CLI that reads its model provider's key from its own environment
+// ([cliprofile.Profile.EnvSignIn]) signs in through cli.env, and that key
+// travels for the same reason a token does — it is the whole sign-in, and a
+// run that dropped it would start the CLI signed in to nothing while the
+// doctor reported the entry healthy.
+//
+// Read off [childEnv] like [Provider.signIn], so a run carries exactly the
+// credentials a text-mode call is given: what the auth mode removes from the
+// child it removes from the box.
 func (p *Provider) SandboxEnv() map[string]string {
+	env := childEnv(p.profile, &Checkout{}, p.env, p.auth)
 	out := map[string]string{}
-	switch p.auth.Mode {
-	case AuthAPIKey:
-		if p.profile.APIKeyEnv != "" && p.auth.APIKey != "" {
-			out[p.profile.APIKeyEnv] = p.auth.APIKey
-		}
-	case AuthInheritEnv:
-		for _, name := range []string{p.profile.TokenEnv, p.profile.APIKeyEnv} {
-			if name == "" {
-				continue
-			}
-			if value, ok := os.LookupEnv(name); ok {
-				out[name] = value
-			}
-		}
-	default:
-		if p.profile.TokenEnv != "" && p.auth.Token != "" {
-			out[p.profile.TokenEnv] = p.auth.Token
+	for _, name := range p.CredentialEnvNames() {
+		if value := env[name]; strings.TrimSpace(value) != "" {
+			out[name] = value
 		}
 	}
 	if len(out) == 0 {
@@ -660,7 +706,9 @@ func (p *Provider) MintsHeadlessToken() bool {
 }
 
 // CredentialEnvNames are the variables that authenticate this CLI inside a
-// box: the headless token's and the API key's.
+// box: the headless token's and the API key's, and — for a CLI that reads its
+// model provider's key from its own environment — the credential-named
+// variables the entry's cli.env sets.
 //
 // Exported because the launch has to answer a question only it can — whether
 // ANYTHING in the run environment authenticates, including a value the
@@ -674,5 +722,17 @@ func (p *Provider) CredentialEnvNames() []string {
 			names = append(names, name)
 		}
 	}
+	if p.profile.EnvSignIn {
+		for _, name := range slices.Sorted(maps.Keys(p.env)) {
+			if cliprofile.IsCredentialName(name) && !slices.Contains(names, name) {
+				names = append(names, name)
+			}
+		}
+	}
 	return names
 }
+
+// SignsInThroughEnv reports whether this CLI reads its model provider's key
+// from its own environment, so the launch's refusal can name cli.env as the
+// route that travels to a remote box.
+func (p *Provider) SignsInThroughEnv() bool { return p.profile.EnvSignIn }
