@@ -924,10 +924,13 @@ func NoApplicableLimit(err error) bool {
 // the shape [Unplaceable]'s and [OutOfCapacity]'s callers already use: a
 // leading-space sentence appended to the broker's own words.
 //
-// ONE WORDING FOR FOUR CALLERS — the stream create, the bucket create and the
-// two consumer creates — because the remedy is the same at each and the server
-// makes no distinction between them either. Written per caller it would drift
-// the way every other pair in this tree has.
+// ONE WORDING FOR FIVE CALLERS — the stream create, the coordination bucket
+// create, the object store's bucket create and the two consumer creates —
+// because the remedy is the same at each and the server makes no distinction
+// between them either. Written per caller it would drift the way every other
+// pair in this tree has — and asked for at only four of them, it did: the
+// object store's create reported the broker's bare text, naming neither the
+// class nor the field.
 //
 // IT NAMES THE CLASS RATHER THAN THE OBJECT, because the class is the whole
 // fact: the account's limits are per replica class and this node's number is

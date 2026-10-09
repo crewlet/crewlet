@@ -985,6 +985,59 @@ func TestABucketCreateTheClusterCannotAnswerYetIsAskedAgain(t *testing.T) {
 	}
 }
 
+// A BUCKET THE ACCOUNT HAS NO LIMIT FOR NAMES THE CLASS, as every other create
+// does.
+//
+// `no JetStream default or applicable tiered limit present` (10120) is the
+// broker answering that the account's limits are TIERED and carry none for the
+// replica class `stream.replicas` puts this node in — decided before a byte is
+// compared, and this bucket reserves none anyway, so there is nothing here to
+// make smaller. It is one of [jsprovision.Refused]'s, so it was already final
+// rather than read back. But it came back as the broker's bare text, while the
+// stream, the coordination buckets and both consumers attach
+// [jsprovision.NoApplicableLimitDetail], which names the class and the field
+// that picks it: an operator meeting it at this one create had nothing to move.
+func TestABucketWithNoApplicableLimitNamesTheClass(t *testing.T) {
+	t.Parallel()
+	c := memberClient(t)
+	refusal := &jetstream.APIError{ErrorCode: 10120, Code: 400,
+		Description: "no JetStream default or applicable tiered limit present"}
+	w := &bucketJS{JetStream: c, refusals: 1, refusal: refusal}
+
+	// THREE COPIES, because the class is what the clause has to name; the
+	// refusal arrives before the member is asked, so its having no peers
+	// never comes into it.
+	b, err := natsobj.Open(t.Context(), w, natsobj.Config{Replicas: 3})
+	if err == nil {
+		t.Fatal("a bucket the account carries no limit for was reported as opened")
+	}
+	if b != nil {
+		t.Error("a backend was returned beside the refusal, and nothing was " +
+			"placed for it to bind")
+	}
+	if !errors.Is(err, refusal) {
+		t.Errorf("the refusal is not the broker's own:\n%v", err)
+	}
+	for _, needle := range []string{
+		"R3",              // the class the account has no limit for
+		"stream.replicas", // the field that decides which class is wanted
+	} {
+		if !strings.Contains(err.Error(), needle) {
+			t.Errorf("the refusal does not mention %q, so an operator gets the "+
+				"broker's bare text and nothing to move:\n%v", needle, err)
+		}
+	}
+	if strings.Contains(err.Error(), "reading it back") {
+		t.Errorf("the refusal was read back, so an account with no applicable "+
+			"limit is reported as a bucket that is not there:\n%v", err)
+	}
+	// ASKED ONCE: a limit table is not changed by a member arriving, so the
+	// placement retry has nothing to wait for.
+	if sent := w.sent(); !slices.Equal(sent, []string{"create"}) {
+		t.Errorf("the node sent %v, want one create", sent)
+	}
+}
+
 // EVERY READ OPEN MAKES IS ASKED AT THE READ TERM, never at a write's.
 //
 // The bucket's lookup, the read-back after a create whose name was taken, and

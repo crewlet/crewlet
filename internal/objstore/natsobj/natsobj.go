@@ -299,6 +299,18 @@ func createBucket(ctx context.Context, js jetstream.JetStream, timing jsprovisio
 	if err == nil {
 		return store, nil
 	}
+	if jsprovision.NoApplicableLimit(err) {
+		// NO LIMIT APPLIES TO THIS BUCKET AT ALL, which is not the bucket
+		// failing to fit: the account's limits are tiered and carry none
+		// for the class `stream.replicas` puts this node in, so the broker
+		// refused before it compared a byte — and a bucket reserves no
+		// ceiling, so there is nothing here to make smaller either. Asked
+		// BEFORE the general refusal below, which it is one of, because it
+		// is the one worded differently: bare, it is the broker's own text
+		// and names neither the class nor the field that picks it.
+		return nil, fmt.Errorf("natsobj: create the %s bucket at %d copies: %w%s",
+			Bucket, replicas, err, jsprovision.NoApplicableLimitDetail(replicas))
+	}
 	if jsprovision.Refused(err) {
 		// REFUSED OUTRIGHT, so nothing was made and there is nothing to
 		// read back — the refusal is the answer.
