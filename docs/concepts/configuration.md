@@ -8,8 +8,8 @@ Crewlet splits configuration into **two tiers** so a founder can evolve their co
 
 | Tier | Storage | Owner | Update model | Contents |
 |------|---------|-------|--------------|----------|
-| **A** | `crewlet.yaml` on disk | Ops / SRE | Restart-only | The store file, the stream and coordination slots, this node's identity and roles, API host/port and auth, the secret keyring, logging (level, shape and an optional rotating log file) |
-| **B** | The store (`company_config`, versioned) | Founder | Live, API-editable, validated, versioned | Everything else: name, mission, vision, policies, the company's one clock (`timezone`), providers (LLM + embeddings), turn engine, learning, MCP servers, notification transports, integrations (Jira / Confluence / Slack / GitHub / GitLab / Forge), org roles & units, and token budgets |
+| **A** | `crewlet.yaml` on disk | Ops / SRE | Restart-only | The store files and the object store's backend (`store.objects`), the stream and coordination slots, this node's identity and roles, API host/port, auth and the optional published listener (`api.public`), the secret keyring, the retention estate (`store.snapshot_dir`, `stream.tracker_retention` and backup ownership, `retention.backup_owner`), logging (level, shape and an optional rotating log file) |
+| **B** | The store (`company_config`, versioned) | Founder | Live, API-editable, validated, versioned | Everything else: name, mission, vision, policies, the company's one clock (`timezone`), providers (LLM + embeddings), turn engine, learning, MCP servers, delegate `workers`, `scheduling`, `skill_variables`, the `tracker` and `knowledge` backends, notification coalescing and rate limit, integrations (Slack / Mattermost / Jira / Confluence / GitHub / GitLab / Datadog / Atlassian, plus the Forge app id that verifies relayed Cloud events), org roles & units, and token budgets |
 
 **Tier A** controls *how the engine boots*. **Tier B** is *what the company is*.
 
