@@ -44,9 +44,6 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  GOTOOLCHAIN: auto
-
 jobs:
   snapshot:
     name: goreleaser snapshot
@@ -61,11 +58,14 @@ jobs:
         with:
           fetch-depth: 0
 
-      # THE GO CACHES, on ci.yml's policy. setup-go's own cache is OFF: its key
-      # is go.sum alone, which nothing on main writes any more (ci.yml keeps a
-      # cache per job), so a pull request here would restore nothing and then
-      # SAVE under its own ref — an entry no other ref can read, which only
-      # pushes main's entries out of the repository's 10 GB. The module cache
+      # THE GO CACHES, on ci.yml's policy. setup-go's own cache is OFF: its one
+      # entry, keyed on the runner, the Go version and go.mod, is one nothing
+      # on main writes any more (ci.yml keeps a cache per job), so a pull
+      # request here would restore nothing and then SAVE under its own ref —
+      # an entry no other ref can read, which only pushes main's entries out
+      # of the repository's 10 GB. No GOTOOLCHAIN is set: setup-go installs
+      # go.mod's own toolchain and exports GOTOOLCHAIN=local to every later
+      # step, which overrode the workflow-level `auto` this file used to set. The module cache
       # ci.yml's build + vet saves on main is restored, read-only, under the
       # same exact key. No build cache is: goreleaser builds four targets with
       # -trimpath and its own -ldflags, which share no build action with any
