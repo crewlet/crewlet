@@ -14,7 +14,7 @@ glibc (`libc.so.6`) — a pure-Go build does not avoid that. They will not run o
 `scratch`, on a distroless image without a C library, or on Alpine and other
 musl systems, where the failure is `no such file or directory` about a file
 that plainly exists. Use a glibc base, or the published container image, which
-is `debian:trixie-slim` for exactly this reason. macOS binaries are unaffected.
+is Debian 13 (trixie) slim for exactly this reason. macOS binaries are unaffected.
 
 Two things are worth having anyway, for what runs *around* it:
 

@@ -40,7 +40,28 @@
 # stdio MCP servers whose runtime is NOT here (node, python, uv) still need a
 # derived image. That is deliberate: an image that guessed at three runtimes
 # would be wrong for everyone and large for everyone.
-FROM debian:trixie-slim
+#
+# # Why a point release and a digest, and not `trixie-slim`
+#
+# `trixie-slim` carries no version Dependabot can compare, so the docker entry
+# watching this file never opened a pull request, and every release shipped
+# whatever the tag pointed at on the day it was cut — a base nobody could name
+# afterwards. Pinned, Dependabot moves the point release, and the digest when
+# Debian rebuilds that point release with security fixes, each as a pull
+# request on which release.yml's snapshot job builds this image. So the base
+# stays as current as the floating tag kept it, to within a week, and a
+# release records which one it was. The digest is the multi-arch index, which
+# both release platforms resolve from.
+#
+# THE MAJOR IS HELD AT 13, by an `ignore` on the docker entry in
+# .github/dependabot.yml — the hold `trixie-slim` made by its name. Those
+# bumps merge themselves once ci.yml's required checks pass, and the snapshot
+# job is not one of them: a bump it fails to build still merges, and the first
+# `v*` tag after it is where the image build breaks. A point release within a
+# stable major keeps its package names; a new major renames and drops them, so
+# moving to Debian 14 is a change somebody makes on purpose, with the image
+# built before it lands.
+FROM debian:13.7-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
 
 # ca-certificates: every vendor call is HTTPS, and a container with no trust
 # store fails them all with an error that names the certificate rather than
