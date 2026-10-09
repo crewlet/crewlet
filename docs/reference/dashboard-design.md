@@ -3010,15 +3010,17 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
 Every empty state names what would fill it.
 
 **And a restart is not an empty company.** The pushed surfaces come from the
-engine's live projection, which is seeded from the node's own event store when
-the process starts: the newest events for the activity feed, and the 24-hour
-spend window the Overview and Spend screens are folded from. Until that read
-existed, every one of these screens started blank after a restart, a deploy or
-a node joining a fleet, which is the one empty state a reader has no way to
-question. What the seed cannot cover is a fleet peer's history, because the
-event store is per node; that is what the `events` query's fleet scatter and
-the `tokens` query's replicated company days are for, and what the window badge
-on Spend names.
+engine's live projection, which is seeded from the fleet's event stores when
+the process starts — every live data node's, through the scatter the history
+queries use: the newest events for the activity feed, and each seat's newest
+turns for the last one it ended. Until that read existed, every one of these
+screens started blank after a restart, a deploy or a node joining a fleet,
+which is the one empty state a reader has no way to question; a seed that
+missed a node is named on `/health` (`seeded_from`) rather than drawn as a
+quieter company. Spend is not among them: the Overview and Spend screens read
+named windows — whole company days from the replicated `usage` domain, the
+same on every node — so a restart never empties them, and the 24-hour spend
+window the seed also fills is the `tokens` push's, which no screen draws.
 
 ---
 

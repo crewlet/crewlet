@@ -534,11 +534,14 @@ the integrations' delivery counts and what became of those deliveries (the
 notifications per third-party app, counted over the window the delivery
 counts name) — is answered by **every live node at query time**
 (`internal/eventfan`, ADR-0021). The same scatter seeds the live
-projection when a node starts: its feed, its 24-hour spend window (the
-`phase_tokens` question, cut to the asker's window and floored at the asker's
-instant, so every node answers the same one) and each seat's last turn, so a
-restarted node's screens show the company rather than the part of it this node
-published:
+projection when a node starts. It seeds the feed and each seat's last turn,
+so a restarted node's screens show the company rather than the part of it
+this node published, and the 24-hour spend window (the `phase_tokens`
+question, cut to the asker's window and floored at the asker's instant, so
+every node answers the same one) behind the
+[`tokens` push](../reference/api-endpoints.md#pushes), which no screen draws:
+the Overview and Spend screens read the replicated `usage` domain's company
+days instead. Every one of these reads crosses the fleet the same way:
 
 ```mermaid
 sequenceDiagram
