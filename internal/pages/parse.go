@@ -271,11 +271,21 @@ func wakeBody(record MutationRecord) string {
 	return n.Excerpt
 }
 
+// link is where the person a change woke opens the page: the DASHBOARD's
+// address of it ([AddressPrefix]), on the dashboard's base.
+//
+// Never the REST route /pages/<id>, which it used to be: that answers JSON to a
+// browser, and behind the guard when anonymous reads are off, so a seat that
+// forwarded the link — as the shipped tool skill teaches it to forward links —
+// handed a person an endpoint rather than a page. And never a base of the
+// parser's own choosing: the dashboard address is the one the backlinks read
+// ([Links]) and the one the dashboard's router resolves, so the three agree by
+// construction.
 func (p *Parser) link(pageID string) string {
 	if p.baseURL == "" || pageID == "" {
 		return ""
 	}
-	return p.baseURL + "/pages/" + pageID
+	return p.baseURL + "/" + AddressPrefix + pageID
 }
 
 func withVia(base notify.Inbound, via string) notify.Inbound {
