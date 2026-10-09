@@ -270,8 +270,6 @@ type Result struct {
 	// DeliveredRefsElided is how many more refs the run reported than its
 	// record lists ([MaxDeliveredRefBytes]). Set by the coordinator.
 	DeliveredRefsElided int
-	ChangedFiles        []string
-	Commands            []string
 
 	Error string
 
