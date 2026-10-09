@@ -5170,7 +5170,9 @@ Notes:
   `aggregated_through`, the newest record counted, are the **live window's
   only**. A company day holds no turn and no per-call instant, so a named
   window has neither. Per-turn spend over any window is
-  [`GET /turns?sort=-tokens`](#queries).
+  [`GET /turns?sort=-tokens`](#queries). Both carry each record's stamp as it
+  was published, so a record from a node whose clock runs fast puts them past
+  `until` for the day the window holds it — which is how that node is found.
 - A seat is one row per derived agent id, named by the newest day's record: a
   role renamed mid-window is one row under its current name.
 - A **person** is a row of their own with `person: true`, on both windows:

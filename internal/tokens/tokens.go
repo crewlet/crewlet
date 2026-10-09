@@ -411,12 +411,20 @@ type Rollup struct {
 
 	// AggregatedThrough is the latest timestamp this rollup counted.
 	//
-	// THE ROLLUP'S OWN FRESHNESS, rendered as "counted through": a total
-	// with no instant beside it cannot be told from a stale one. It is not
-	// a baseline anything folds onto. The client used to do that, with this
-	// as the watermark it skipped already-counted events by; the server
+	// THE ROLLUP'S OWN FRESHNESS, what a reader shows as "counted through": a
+	// total with no instant beside it cannot be told from a stale one. It is
+	// not a baseline anything folds onto. The client used to do that, with
+	// this as the watermark it skipped already-counted events by; the server
 	// holds the records and re-folds the whole window now, which is what
 	// leaves exactly one implementation of the aggregation.
+	//
+	// A RECORD'S OWN STAMP, never cut to Until. A node whose clock runs fast
+	// stamps its records past the window's end — by milliseconds, or by a
+	// garbled year — and the live window holds such a record for a day from
+	// its ARRIVAL rather than by that stamp, so for that day this reads past
+	// Until. Cut to Until it would hide what says a node's clock is wrong,
+	// and disagree with every by_turn bound beside it, which carries the
+	// record's stamp regardless.
 	//
 	// The live window's only: a day's row carries no instant per call, so
 	// a named window has no watermark to report and says nothing.

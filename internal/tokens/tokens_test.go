@@ -344,6 +344,35 @@ func TestTheWatermarkOrdersByInstantNotByBytes(t *testing.T) {
 	}
 }
 
+// THE WATERMARK IS A RECORD'S OWN STAMP, past the window's end included.
+//
+// A node whose clock runs fast stamps its spend ahead of the window the live
+// projection cuts, and the projection holds that record a day from its arrival.
+// The watermark reports the stamp the record carries rather than the window's
+// end, because that is what says a node's clock is wrong — and the turn bounds
+// beside it carry the same stamp regardless.
+//
+// Mutation: cut the watermark to Options.Until, and it reads the window's end.
+func TestTheWatermarkIsTheRecordsStampEvenPastTheWindow(t *testing.T) {
+	t.Parallel()
+	const ahead = "2099-01-01T00:00:00Z"
+	got := tokens.Aggregate([]tokens.Record{
+		rec("CEO", "execute", "sonnet", "t1", "2026-06-14T12:00:00Z", 10, 0),
+		rec("CEO", "execute", "sonnet", "t2", ahead, 10, 0),
+	}, tokens.Options{Since: since, Until: until})
+
+	if got.Until != until.Format(time.RFC3339) {
+		t.Fatalf("until = %s, want the window the caller cut, %s", got.Until, until)
+	}
+	if got.AggregatedThrough != ahead {
+		t.Errorf("aggregated_through = %s, want the stamp the newest record carries, %s",
+			got.AggregatedThrough, ahead)
+	}
+	if got.ByTurn[0].EndedAt != ahead {
+		t.Errorf("by_turn[0] ended %s, want the same stamp %s", got.ByTurn[0].EndedAt, ahead)
+	}
+}
+
 // AND ORDINARY STAMPS STILL ORDER, so the fix is a correction rather than a
 // change of basis.
 func TestOrdinaryStampsStillOrder(t *testing.T) {
