@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // probeTimeout caps a version or status probe.
@@ -304,9 +305,9 @@ func BridgeURLVar() string { return bridgeURLVar }
 // localToolsStance renders the profile's declared stance.
 func (p *Provider) localToolsStance() string {
 	switch p.profile.LocalTools {
-	case LocalToolsDenied:
+	case cliprofile.LocalToolsDenied:
 		return "denied by profile"
-	case LocalToolsVendorDefault:
+	case cliprofile.LocalToolsVendorDefault:
 		return "vendor default (" + p.profile.LocalToolsNote + ")"
 	default:
 		return "not declared by profile"
@@ -330,7 +331,7 @@ func (p *Provider) shellProbe(ctx context.Context) (verdict, problem string) {
 	}
 	ran := reportsCurrentClock(comp.Content, time.Now())
 	switch {
-	case ran && p.profile.LocalTools == LocalToolsDenied:
+	case ran && p.profile.LocalTools == cliprofile.LocalToolsDenied:
 		return "probe: SHELL RAN", fmt.Sprintf(
 			"the %q profile says local tools are denied, but the CLI ran a shell "+
 				"command on the engine host — the vendor's denial flag is not taking "+

@@ -28,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/anthropic"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 	"github.com/crewlet/crewlet/internal/providers/llm/openai"
 )
 
@@ -293,7 +294,7 @@ func buildCLIAgent(key string, spec config.LLMProvider, r *config.Resolver, apiK
 	// `crewlet llm login <key> -capture-token` writes the token into the
 	// store, and an entry that had to name it explicitly would leave every
 	// operator wiring up a ${VAR} for a value Crewlet itself just wrote.
-	profile, err := cliagent.Load(cli.Name(), cli.Overrides)
+	profile, err := cliprofile.Load(cli.Name(), cli.Overrides)
 	if err != nil {
 		return nil, fmt.Errorf("engine: provider %q: %w", key, err)
 	}

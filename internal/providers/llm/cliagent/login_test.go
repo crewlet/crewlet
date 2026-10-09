@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // loginProvider builds a provider over a temp state dir, with a profile whose
@@ -286,11 +288,11 @@ func TestACLIWithNoCredentialLoginExplainsItself(t *testing.T) {
 // serve.
 func TestOnlyOpencodeShipsACredentialLogin(t *testing.T) {
 	t.Parallel()
-	for _, name := range BuiltinNames() {
+	for _, name := range cliprofile.BuiltinNames() {
 		if name == "custom" {
 			continue
 		}
-		p, err := Load(name, nil)
+		p, err := cliprofile.Load(name, nil)
 		if err != nil {
 			t.Fatalf("Load(%q): %v", name, err)
 		}
@@ -337,11 +339,11 @@ func bundleOf(t *testing.T, name, body string) string {
 // A leading "/" is how that mistake is spelled for every CLI here.
 func TestNoProfileBrokersAnAuthCommandAsAPrompt(t *testing.T) {
 	t.Parallel()
-	for _, name := range BuiltinNames() {
+	for _, name := range cliprofile.BuiltinNames() {
 		if name == "custom" {
 			continue
 		}
-		p, err := Load(name, nil)
+		p, err := cliprofile.Load(name, nil)
 		if err != nil {
 			t.Fatalf("Load(%q): %v", name, err)
 		}
@@ -368,7 +370,7 @@ func TestNoProfileBrokersAnAuthCommandAsAPrompt(t *testing.T) {
 // vendor — an operator who believed they had revoked a login had not.
 func TestTheClaudeProfileCanBrokerInspectAndRevokeItsLogin(t *testing.T) {
 	t.Parallel()
-	p, err := Load("claude-code", nil)
+	p, err := cliprofile.Load("claude-code", nil)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -442,7 +444,7 @@ func TestATerminalFrameIsNotMistakenForAToken(t *testing.T) {
 // fallback chain never carried the seat onto another model.
 func TestTheClaudeProfilesMarkersAreStringsTheCLIStillEmits(t *testing.T) {
 	t.Parallel()
-	p, err := Load("claude-code", nil)
+	p, err := cliprofile.Load("claude-code", nil)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -467,12 +469,12 @@ func TestTheClaudeProfilesMarkersAreStringsTheCLIStillEmits(t *testing.T) {
 		}
 	}
 	for _, want := range []string{"Usage limit reached", `"type":"rate_limit_error"`} {
-		if !slices.ContainsFunc(p.LimitMarkers, func(m LimitMarker) bool { return m.Sentinel == want }) {
+		if !slices.ContainsFunc(p.LimitMarkers, func(m cliprofile.LimitMarker) bool { return m.Sentinel == want }) {
 			t.Errorf("limit_markers lacks %q: %+v", want, p.LimitMarkers)
 		}
 	}
 	for _, want := range []string{"Invalid API key", "OAuth token has been revoked", "Please run /login"} {
-		if !slices.ContainsFunc(p.AuthMarkers, func(m AuthMarker) bool { return m.Sentinel == want }) {
+		if !slices.ContainsFunc(p.AuthMarkers, func(m cliprofile.AuthMarker) bool { return m.Sentinel == want }) {
 			t.Errorf("auth_markers lacks %q: %+v", want, p.AuthMarkers)
 		}
 	}

@@ -1,4 +1,4 @@
-package cliagent
+package cliprofile
 
 import (
 	"fmt"
@@ -258,8 +258,8 @@ type SeedFile struct {
 // is relative and climbs out of nothing.
 var seedValidationRoot = filepath.Join(string(filepath.Separator), "seat")
 
-// scope is the seed scope with its default applied.
-func (f SeedFile) scope() SeedScope {
+// Scope is the seed scope with its default applied.
+func (f SeedFile) Scope() SeedScope {
 	if f.In == "" {
 		return SeedHome
 	}
@@ -298,21 +298,31 @@ type SystemPromptFile struct {
 	Template string `yaml:"template,omitempty"`
 }
 
-// render returns the bytes to write for one call's system prompt.
-func (f *SystemPromptFile) render(system string) string {
+// Render returns the bytes to write for one call's system prompt.
+func (f *SystemPromptFile) Render(system string) string {
 	if f == nil || f.Template == "" {
 		return system
 	}
 	return strings.ReplaceAll(f.Template, "{system}", system)
 }
 
-// fileName returns the name to write under.
-func (f *SystemPromptFile) fileName() string {
+// FileName returns the name to write under.
+func (f *SystemPromptFile) FileName() string {
 	if f == nil || f.Name == "" {
-		return systemPromptFile
+		return DefaultSystemPromptFile
 	}
 	return f.Name
 }
+
+// DefaultSystemPromptFile is what a {file} substitution writes, in the per-call
+// working directory.
+//
+// That directory and not the seat home: it is created empty for one call and
+// removed on release, so the text cannot outlive the call that needed it or
+// reach the next one. The name is deliberately not one a coding CLI reads on
+// its own (CLAUDE.md, AGENTS.md), because this is an argument to the CLI, not
+// context for it to discover.
+const DefaultSystemPromptFile = "crewlet-system-prompt.txt"
 
 // AuthMarker recognises a login the CLI has stopped honouring.
 //
@@ -416,7 +426,7 @@ type Profile struct {
 	// takes this one for exactly that reason.
 	//
 	// The two are mutually exclusive — a profile declaring both would hand
-	// the CLI its system prompt twice — and [Profile.validate] refuses it.
+	// the CLI its system prompt twice — and [Profile.Validate] refuses it.
 	SystemPromptEnv string `yaml:"system_prompt_env,omitempty"`
 
 	// SystemPromptFile shapes the file either `{file}` channel writes —
@@ -510,7 +520,7 @@ type Profile struct {
 	ConfigEnv map[string]string `yaml:"config_env,omitempty"`
 
 	// Env is fixed child environment the CLI needs. Never a credential:
-	// see [Profile.validate].
+	// see [Profile.Validate].
 	Env map[string]string `yaml:"env,omitempty"`
 
 	// PassthroughEnv names engine environment variables forwarded to the
@@ -607,24 +617,24 @@ func IsCredentialName(name string) bool {
 	return false
 }
 
-// markerScope is the scope with its default applied.
-func (p *Profile) markerScope() MarkerScope {
+// EffectiveMarkerScope is the scope with its default applied.
+func (p *Profile) EffectiveMarkerScope() MarkerScope {
 	if p.MarkerScope == "" {
 		return MarkerScopeAnswerAndStderr
 	}
 	return p.MarkerScope
 }
 
-// hasSystemChannel reports whether this profile carries the system prompt on
+// HasSystemChannel reports whether this profile carries the system prompt on
 // a channel of its own rather than leaving it in the transcript.
-func (p *Profile) hasSystemChannel() bool {
+func (p *Profile) HasSystemChannel() bool {
 	return len(p.SystemPromptArgs) > 0 || p.SystemPromptEnv != ""
 }
 
-// writesSystemPromptFile reports whether this profile's system-prompt channel
+// WritesSystemPromptFile reports whether this profile's system-prompt channel
 // puts the text in a FILE — either `{file}` on argv, or the env-var channel,
 // which is a path by construction.
-func (p *Profile) writesSystemPromptFile() bool {
+func (p *Profile) WritesSystemPromptFile() bool {
 	if p.SystemPromptEnv != "" {
 		return true
 	}
@@ -647,9 +657,9 @@ func isBareFileName(name string) bool {
 	return !strings.ContainsRune(name, '/') && !strings.ContainsRune(name, filepath.Separator)
 }
 
-// validate reports what is wrong with a profile, naming the override field an
+// Validate reports what is wrong with a profile, naming the override field an
 // operator would edit rather than the Go field they cannot see.
-func (p *Profile) validate(name string) error {
+func (p *Profile) Validate(name string) error {
 	var bad []string
 	add := func(format string, args ...any) {
 		bad = append(bad, fmt.Sprintf(format, args...))
@@ -658,7 +668,7 @@ func (p *Profile) validate(name string) error {
 	if strings.TrimSpace(p.Binary) == "" {
 		add("binary is empty — set cli.overrides.binary")
 	}
-	if len(p.CompleteArgs) == 0 && p.mode() == PromptStdin {
+	if len(p.CompleteArgs) == 0 && p.EffectivePromptMode() == PromptStdin {
 		// Only stdin mode can end up with NO argv at all. The other two
 		// build one from prompt_args and the prompt itself, so a CLI
 		// invoked as `mycli --prompt-file <path>` and nothing else is a
@@ -691,11 +701,11 @@ func (p *Profile) validate(name string) error {
 			add("config_env may not name HOME — it is set from the seat home already")
 		}
 	}
-	if len(p.PromptArgs) > 0 && p.mode() != PromptArgv && p.mode() != PromptFile {
+	if len(p.PromptArgs) > 0 && p.EffectivePromptMode() != PromptArgv && p.EffectivePromptMode() != PromptFile {
 		add("prompt_args is set but prompt_mode is %q — the flag introduces a prompt "+
-			"on argv and there is none to introduce", p.mode())
+			"on argv and there is none to introduce", p.EffectivePromptMode())
 	}
-	if p.mode() == PromptFile && !hasPlaceholder(p.PromptArgs, "{file}") {
+	if p.EffectivePromptMode() == PromptFile && !hasPlaceholder(p.PromptArgs, "{file}") {
 		// Refused rather than defaulted to a bare append: a file-mode
 		// profile whose argv never carries the path runs the CLI with no
 		// prompt, which a vendor answers by opening an interactive
@@ -711,12 +721,12 @@ func (p *Profile) validate(name string) error {
 	case len(p.EventTypePath) == 0 && len(p.TextEvents) > 0:
 		add("text_events is set but event_type_path is empty — there is nothing to " +
 			"compare the event names against")
-	case len(p.EventTypePath) > 0 && p.output() != OutputJSONL:
+	case len(p.EventTypePath) > 0 && p.EffectiveOutput() != OutputJSONL:
 		// Refused rather than ignored: an operator who wrote it meant the
 		// answer to be picked out of an event stream, and a filter that
 		// silently did nothing is a debugging session.
 		add("event_type_path is set but output is %q — an event discriminator "+
-			"only exists in a jsonl stream", p.output())
+			"only exists in a jsonl stream", p.EffectiveOutput())
 	}
 	if len(p.SystemPromptArgs) > 0 && p.SystemPromptEnv != "" {
 		// One channel or the other. Both would hand the CLI the same
@@ -741,7 +751,7 @@ func (p *Profile) validate(name string) error {
 			"machine; keep the {file} form and drop {system}")
 	}
 	if p.SystemPromptFile != nil {
-		if !p.writesSystemPromptFile() {
+		if !p.WritesSystemPromptFile() {
 			// A template with no file to write is not a harmless
 			// extra: on a `{system}` profile the seat's identity goes
 			// on argv bare, and an operator who wrote frontmatter
@@ -824,13 +834,13 @@ func (p *Profile) validate(name string) error {
 		if f.In != "" && !f.In.Valid() {
 			add("seed_files[%d].in %q (want home or work)", i, f.In)
 		}
-		// underRoot against a stand-in root proves the same two things
+		// UnderRoot against a stand-in root proves the same two things
 		// seeding will: relative, and not escaping the scope. No seat
 		// home exists at load time, and the root directory itself will
 		// not do — nothing can sit "inside" it by this test.
-		if _, err := underRoot(seedValidationRoot, f.Path); err != nil {
+		if _, err := UnderRoot(seedValidationRoot, f.Path); err != nil {
 			add("seed_files[%d].path %q must be relative and stay inside the %s directory",
-				i, f.Path, f.scope())
+				i, f.Path, f.Scope())
 		}
 		if f.Content == "" {
 			add("seed_files[%d].content is empty — a settings file with nothing in it "+
@@ -843,16 +853,16 @@ func (p *Profile) validate(name string) error {
 	return fmt.Errorf("cli-agent profile %q: %s", name, strings.Join(bad, "; "))
 }
 
-// mode is the prompt mode with its default applied.
-func (p *Profile) mode() PromptMode {
+// EffectivePromptMode is the prompt mode with its default applied.
+func (p *Profile) EffectivePromptMode() PromptMode {
 	if p.PromptMode == "" {
 		return PromptStdin
 	}
 	return p.PromptMode
 }
 
-// output is the output mode with its default applied.
-func (p *Profile) output() OutputMode {
+// EffectiveOutput is the output mode with its default applied.
+func (p *Profile) EffectiveOutput() OutputMode {
 	if p.Output == "" {
 		return OutputJSON
 	}
@@ -919,5 +929,22 @@ func (p *Profile) ReadsUsage() bool {
 	if len(p.UsageFileArgs) > 0 {
 		return true
 	}
-	return p.output() != OutputText
+	return p.EffectiveOutput() != OutputText
+}
+
+// UnderRoot joins a profile-declared relative path onto a root and refuses
+// one that escapes it.
+//
+// Profile paths are operator-overridable, so "../../.ssh" is reachable from
+// config — and the backend's prune calls RemoveAll on whatever this returns.
+func UnderRoot(root, rel string) (string, error) {
+	if filepath.IsAbs(rel) {
+		return "", fmt.Errorf("cli-agent: path %q must be relative to the seat home", rel)
+	}
+	joined := filepath.Join(root, rel)
+	cleanRoot := filepath.Clean(root)
+	if joined != cleanRoot && !strings.HasPrefix(joined, cleanRoot+string(filepath.Separator)) {
+		return "", fmt.Errorf("cli-agent: path %q escapes the seat home", rel)
+	}
+	return joined, nil
 }

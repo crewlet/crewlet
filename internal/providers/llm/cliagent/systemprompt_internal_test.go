@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // THE CHILD ACTUALLY RECEIVES THE VARIABLE, POINTING AT A FILE THAT EXISTS.
@@ -113,7 +114,7 @@ func TestTheSystemPromptEnvVarTakesTheTextOutOfThePrompt(t *testing.T) {
 // a CLI honours when handed the same prompt twice is the vendor's business.
 func TestAProfileCannotDeclareBothSystemPromptChannels(t *testing.T) {
 	t.Parallel()
-	_, err := Load("custom", map[string]any{
+	_, err := cliprofile.Load("custom", map[string]any{
 		"binary":             "x",
 		"complete_args":      []any{"run"},
 		"output":             "text",

@@ -15,6 +15,8 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // maxBundle bounds a credential bundle on the way IN, decompressed.
@@ -233,7 +235,7 @@ func (p *Provider) AdoptHostLogin(home string) ([]string, error) {
 	}
 	var taken []string
 	for _, rel := range sources {
-		src, err := underRoot(home, rel)
+		src, err := cliprofile.UnderRoot(home, rel)
 		if err != nil {
 			return nil, err
 		}
@@ -279,7 +281,7 @@ func (p *Provider) HostLogin(home string) []string {
 	}
 	var found []string
 	for _, rel := range sources {
-		src, err := underRoot(home, rel)
+		src, err := cliprofile.UnderRoot(home, rel)
 		if err != nil {
 			continue
 		}

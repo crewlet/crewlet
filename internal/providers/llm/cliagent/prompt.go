@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // RenderPrompt flattens one request into the single text a CLI accepts.
@@ -59,7 +60,7 @@ func RenderPrompt(req llm.Request) (string, error) {
 }
 
 // SplitSystem lifts the system messages out of a request, for a profile whose
-// CLI takes them on their own channel ([Profile.SystemPromptArgs]).
+// CLI takes them on their own channel ([cliprofile.Profile.SystemPromptArgs]).
 //
 // Returned as PLAIN TEXT with no `## system` heading: the heading exists to
 // tell one section of a flattened transcript from the next, and a real system
@@ -179,25 +180,15 @@ func EstimateTokens(text string) int {
 	return (len(text) + 3) / 4
 }
 
-// systemPromptFile is what a {file} substitution writes, in the per-call
-// working directory.
-//
-// That directory and not the seat home: it is created empty for one call and
-// removed on release, so the text cannot outlive the call that needed it or
-// reach the next one. The name is deliberately not one a coding CLI reads on
-// its own (CLAUDE.md, AGENTS.md), because this is an argument to the CLI, not
-// context for it to discover.
-const systemPromptFile = "crewlet-system-prompt.txt"
-
-// promptFileName is what [PromptFile] mode writes, beside the system prompt
-// and for the same reasons — see [systemPromptFile].
+// promptFileName is what [cliprofile.PromptFile] mode writes, beside the system prompt
+// and for the same reasons — see [cliprofile.DefaultSystemPromptFile].
 //
 // A SEPARATE FILE rather than the same one under a general name: a phase that
 // has both writes both, and one path serving two arguments would hand the CLI
 // its system prompt as the user turn.
 const promptFileName = "crewlet-prompt.txt"
 
-// usageFileName is where a [Profile.UsageFileArgs] report lands, beside the
+// usageFileName is where a [cliprofile.Profile.UsageFileArgs] report lands, beside the
 // other two and for the same reason: it is written by the CLI rather than by
 // this package, so it is one more thing a call must not leave behind.
 const usageFileName = "crewlet-usage.json"
@@ -207,7 +198,7 @@ const usageFileName = "crewlet-usage.json"
 //
 // 0600, and on disk rather than on argv, because a rendered prompt is the
 // whole flattened transcript: the seat's identity, its tool catalogue, the
-// conversation and every tool result in it. See [PromptFile].
+// conversation and every tool result in it. See [cliprofile.PromptFile].
 func promptArgs(template []string, prompt, dir string) ([]string, error) {
 	var path string
 	out := make([]string, 0, len(template))
@@ -243,7 +234,7 @@ func writePromptFile(prompt, dir string) (string, error) {
 // prompt carries the company's org chart, its policies and that seat's own
 // memory, and the box it runs in is a directory on a machine other accounts
 // share.
-func systemArgs(template []string, spec *SystemPromptFile, system, dir string) ([]string, error) {
+func systemArgs(template []string, spec *cliprofile.SystemPromptFile, system, dir string) ([]string, error) {
 	var path string
 	out := make([]string, 0, len(template))
 	for _, arg := range template {
@@ -271,7 +262,7 @@ func systemArgs(template []string, spec *SystemPromptFile, system, dir string) (
 // The same private file [systemArgs] writes for `{file}`, because it is the
 // same decision: the text is on disk in the per-call directory and never on
 // argv. Only the channel that carries the PATH differs.
-func systemEnv(name string, spec *SystemPromptFile, system, dir string) (string, error) {
+func systemEnv(name string, spec *cliprofile.SystemPromptFile, system, dir string) (string, error) {
 	path, err := writeSystemPrompt(spec, system, dir)
 	if err != nil {
 		return "", err
@@ -282,12 +273,12 @@ func systemEnv(name string, spec *SystemPromptFile, system, dir string) (string,
 // writeSystemPrompt puts the text in the per-call working directory, 0600.
 //
 // The spec decides the NAME and the CONTENT where a vendor's channel takes a
-// structured file rather than a bare one — see [SystemPromptFile]. A nil spec
+// structured file rather than a bare one — see [cliprofile.SystemPromptFile]. A nil spec
 // writes the prompt alone, under the default name, which is what every other
 // `{file}` profile takes.
-func writeSystemPrompt(spec *SystemPromptFile, system, dir string) (string, error) {
-	path := filepath.Join(dir, spec.fileName())
-	if err := os.WriteFile(path, []byte(spec.render(system)), 0o600); err != nil {
+func writeSystemPrompt(spec *cliprofile.SystemPromptFile, system, dir string) (string, error) {
+	path := filepath.Join(dir, spec.FileName())
+	if err := os.WriteFile(path, []byte(spec.Render(system)), 0o600); err != nil {
 		return "", fmt.Errorf("cli-agent: writing the system prompt: %w", err)
 	}
 	return path, nil

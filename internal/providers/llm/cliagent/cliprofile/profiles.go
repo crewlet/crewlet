@@ -1,4 +1,4 @@
-package cliagent
+package cliprofile
 
 import (
 	"bytes"
@@ -28,7 +28,7 @@ var builtins = sync.OnceValue(func() map[string]Profile {
 		// The file is embedded from this repository, so a decode failure
 		// is a build that shipped a broken table — there is no operator
 		// input to blame and no correct behaviour to fall back to.
-		panic(fmt.Sprintf("cliagent: profiles.yaml does not decode: %v", err))
+		panic(fmt.Sprintf("cliprofile: profiles.yaml does not decode: %v", err))
 	}
 	return table
 })
@@ -50,12 +50,12 @@ func Builtin(name string) (Profile, bool) {
 	if !ok {
 		return Profile{}, false
 	}
-	return p.clone(), true
+	return p.Clone(), true
 }
 
-// clone deep-copies a profile. Every slice and map is copied because
+// Clone deep-copies a profile. Every slice and map is copied because
 // overrides replace them in place.
-func (p Profile) clone() Profile {
+func (p Profile) Clone() Profile {
 	out := p
 	out.VersionArgs = append([]string(nil), p.VersionArgs...)
 	out.CompleteArgs = append([]string(nil), p.CompleteArgs...)
@@ -141,7 +141,7 @@ func Load(name string, overrides map[string]any) (Profile, error) {
 		}
 		base = merged
 	}
-	if err := base.validate(name); err != nil {
+	if err := base.Validate(name); err != nil {
 		return Profile{}, err
 	}
 	return base, nil

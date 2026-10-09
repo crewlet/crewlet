@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // hostAllowlist is the engine environment a child ALWAYS inherits.
@@ -58,7 +60,7 @@ type Auth struct {
 // variables (which nothing may override — they ARE the isolation), then the
 // profile's own fixed environment, then the profile's passthrough, then the
 // operator's cli.env, then auth.
-func buildEnv(p Profile, c *Checkout, extra map[string]string, auth Auth) []string {
+func buildEnv(p cliprofile.Profile, c *Checkout, extra map[string]string, auth Auth) []string {
 	env := map[string]string{}
 
 	for _, name := range hostAllowlist {
@@ -86,7 +88,7 @@ func buildEnv(p Profile, c *Checkout, extra map[string]string, auth Auth) []stri
 	}
 
 	// Forwarded BEFORE auth is consulted, which is exactly why a profile
-	// may not name a credential here — see Profile.validate.
+	// may not name a credential here — see cliprofile.Profile.Validate.
 	for _, name := range p.PassthroughEnv {
 		if value, ok := os.LookupEnv(name); ok {
 			env[name] = value
@@ -117,7 +119,7 @@ func buildEnv(p Profile, c *Checkout, extra map[string]string, auth Auth) []stri
 // by an operator into cli.env — would bill the metered account silently while
 // the plan sat unused, which is the failure the default mode exists to
 // prevent.
-func applyAuth(env map[string]string, p Profile, auth Auth) {
+func applyAuth(env map[string]string, p cliprofile.Profile, auth Auth) {
 	switch auth.Mode {
 	case AuthAPIKey:
 		if p.APIKeyEnv != "" && auth.APIKey != "" {
@@ -180,7 +182,7 @@ func (p *Provider) probeEnv() []string {
 
 // TokenVarName is the environment variable a profile's headless token lives
 // in, for the messages `crewlet llm login` and `doctor` print.
-func TokenVarName(p Profile) (string, error) {
+func TokenVarName(p cliprofile.Profile) (string, error) {
 	if p.TokenEnv == "" {
 		return "", fmt.Errorf("this CLI mints no headless token")
 	}

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // A SENTENCE THE MODEL WROTE MUST NOT BENCH THE SEAT'S CREDENTIAL.
@@ -25,26 +26,26 @@ func TestOnlyAVendorThatFailsIntoItsAnswerHasItSearched(t *testing.T) {
 		"or see a usage limit message, the turn falls back to the metered key."
 
 	for name, tc := range map[string]struct {
-		scope     MarkerScope
+		scope     cliprofile.MarkerScope
 		wantFired bool
 		why       string
 	}{
 		"the default searches the answer": {
-			scope: MarkerScopeAnswerAndStderr, wantFired: true,
+			scope: cliprofile.MarkerScopeAnswerAndStderr, wantFired: true,
 			why: "a CLI that reports a spent plan AS its answer needs this, and " +
 				"this is the false-positive it costs",
 		},
 		"stderr-scoped ignores the answer": {
-			scope: MarkerScopeStderr, wantFired: false,
+			scope: cliprofile.MarkerScopeStderr, wantFired: false,
 			why: "a CLI that reports failures only on stderr must not classify " +
 				"on anything the model said",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			p := Profile{
+			p := cliprofile.Profile{
 				MarkerScope:  tc.scope,
-				LimitMarkers: []LimitMarker{{Sentinel: "rate limit"}, {Sentinel: "quota"}},
+				LimitMarkers: []cliprofile.LimitMarker{{Sentinel: "rate limit"}, {Sentinel: "quota"}},
 			}
 			_, fired := classifyMarkers(p, innocent, "")
 			if fired != tc.wantFired {
@@ -55,10 +56,10 @@ func TestOnlyAVendorThatFailsIntoItsAnswerHasItSearched(t *testing.T) {
 
 	// And a stderr-scoped profile still classifies a REAL failure, which is
 	// the half that makes the narrowing safe rather than merely quiet.
-	p := Profile{
-		MarkerScope:  MarkerScopeStderr,
-		LimitMarkers: []LimitMarker{{Sentinel: "provider.rate_limit"}},
-		AuthMarkers:  []AuthMarker{{Sentinel: "provider.auth_error"}},
+	p := cliprofile.Profile{
+		MarkerScope:  cliprofile.MarkerScopeStderr,
+		LimitMarkers: []cliprofile.LimitMarker{{Sentinel: "provider.rate_limit"}},
+		AuthMarkers:  []cliprofile.AuthMarker{{Sentinel: "provider.auth_error"}},
 	}
 	for _, tc := range []struct {
 		stderr string
@@ -82,12 +83,12 @@ func TestOnlyAVendorThatFailsIntoItsAnswerHasItSearched(t *testing.T) {
 func TestTheDefaultMarkerScopeSurvivesForTheVendorsThatNeedIt(t *testing.T) {
 	t.Parallel()
 	narrowed := map[string]bool{"kimi-code": true, "hermes": true, "pi": true}
-	for _, name := range BuiltinNames() {
-		p, _ := Builtin(name)
-		got := p.markerScope()
-		want := MarkerScopeAnswerAndStderr
+	for _, name := range cliprofile.BuiltinNames() {
+		p, _ := cliprofile.Builtin(name)
+		got := p.EffectiveMarkerScope()
+		want := cliprofile.MarkerScopeAnswerAndStderr
 		if narrowed[name] {
-			want = MarkerScopeStderr
+			want = cliprofile.MarkerScopeStderr
 		}
 		if got != want {
 			t.Errorf("%s: marker_scope = %q, want %q", name, got, want)
@@ -100,7 +101,7 @@ func TestTheDefaultMarkerScopeSurvivesForTheVendorsThatNeedIt(t *testing.T) {
 // haystack back out is exactly the silent failure this field exists to close.
 func TestAnUnknownMarkerScopeIsRefused(t *testing.T) {
 	t.Parallel()
-	_, err := Load("claude-code", map[string]any{"marker_scope": "stdout"})
+	_, err := cliprofile.Load("claude-code", map[string]any{"marker_scope": "stdout"})
 	if err == nil || !strings.Contains(err.Error(), "marker_scope") {
 		t.Fatalf("err = %v, want a refusal naming marker_scope", err)
 	}
@@ -116,7 +117,7 @@ func TestAnUnknownMarkerScopeIsRefused(t *testing.T) {
 // the one place a hand-written argv actually appears — were held to nothing.
 func TestAnArgvTemplateNamingBothPlaceholdersIsRefused(t *testing.T) {
 	t.Parallel()
-	_, err := Load("kimi-code", map[string]any{
+	_, err := cliprofile.Load("kimi-code", map[string]any{
 		"system_prompt_args": []any{"--agent-file", "{file}", "--system-prompt", "{system}"},
 	})
 	if err == nil {
@@ -140,7 +141,7 @@ func TestAnArgvTemplateNamingBothPlaceholdersIsRefused(t *testing.T) {
 			// elsewhere. Use a profile that ships neither.
 			base = "grok"
 		}
-		if _, err := Load(base, map[string]any{"system_prompt_args": override}); err != nil {
+		if _, err := cliprofile.Load(base, map[string]any{"system_prompt_args": override}); err != nil {
 			t.Errorf("%s: a single-placeholder override was refused: %v", name, err)
 		}
 	}
@@ -166,14 +167,14 @@ func TestAUsageFileProfileMustDeclareBothPromptCounts(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			_, err := Load("hermes", map[string]any{"usage": usage})
+			_, err := cliprofile.Load("hermes", map[string]any{"usage": usage})
 			if err == nil || !strings.Contains(err.Error(), "usage.input and usage.output") {
 				t.Fatalf("err = %v, want a refusal naming both counts", err)
 			}
 		})
 	}
 	// The shipped profile declares both, so the doctor's claim is true.
-	p, _ := Builtin("hermes")
+	p, _ := cliprofile.Builtin("hermes")
 	if !p.ReadsUsage() {
 		t.Error("hermes stopped reporting real usage")
 	}

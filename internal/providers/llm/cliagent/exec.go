@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/procgroup"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // termGrace is how long a terminated CLI has to exit before it is killed.
@@ -311,13 +312,13 @@ type extracted struct {
 }
 
 // extract pulls the answer and the usage out of one CLI's stdout.
-func extract(p Profile, stdout string) extracted {
-	switch p.output() {
-	case OutputText:
+func extract(p cliprofile.Profile, stdout string) extracted {
+	switch p.EffectiveOutput() {
+	case cliprofile.OutputText:
 		// Located by definition: a text profile declares that stdout IS
 		// the answer, so there is no path that could fail to resolve.
 		return extracted{text: strings.TrimSpace(stdout), located: true}
-	case OutputJSONL:
+	case cliprofile.OutputJSONL:
 		return extractStream(p, stdout)
 	default:
 		return extractObject(p, stdout)
@@ -329,7 +330,7 @@ func extract(p Profile, stdout string) extracted {
 // A CLI that printed a banner before its JSON is common enough to handle
 // here: the outermost braces are tried when the whole of stdout does not
 // parse, which costs nothing and saves an operator an override.
-func extractObject(p Profile, stdout string) extracted {
+func extractObject(p cliprofile.Profile, stdout string) extracted {
 	doc, ok := decodeObject(strings.TrimSpace(stdout))
 	if !ok {
 		if bare, found := outermostObject(stdout); found {
@@ -366,7 +367,7 @@ func extractObject(p Profile, stdout string) extracted {
 // Text CONCATENATES in stream order — an event stream spells one answer
 // across several events — while usage figures take the LAST value found,
 // because a stream reports a running total and the final one is the total.
-func extractStream(p Profile, stdout string) extracted {
+func extractStream(p cliprofile.Profile, stdout string) extracted {
 	var out extracted
 	var text strings.Builder
 	for line := range strings.SplitSeq(stdout, "\n") {
@@ -414,14 +415,14 @@ func extractStream(p Profile, stdout string) extracted {
 }
 
 // applyUsageFile overlays a vendor's SEPARATE usage report on what stdout
-// said, for a profile whose CLI writes one — see [Profile.UsageFileArgs].
+// said, for a profile whose CLI writes one — see [cliprofile.Profile.UsageFileArgs].
 //
 // BOTH PROMPT COUNTS COME FROM THE FILE OR NEITHER DOES. A partial overlay
 // would pair one source's input count with another's output count, and the
 // sum is what a budget is charged. The two cache figures are not part of that
 // test: a provider that caches nothing reports neither, and zero is the true
 // answer there.
-func (e *extracted) applyUsageFile(p Profile, raw string) {
+func (e *extracted) applyUsageFile(p cliprofile.Profile, raw string) {
 	if len(p.UsageFileArgs) == 0 || strings.TrimSpace(raw) == "" {
 		return
 	}
@@ -454,7 +455,7 @@ func (e *extracted) applyUsageFile(p Profile, raw string) {
 // count as "located": a stream that spliced a tool's output into the reply
 // and then repeated the reply would look, to every frame downstream, exactly
 // like a model that had said all of it.
-func textOf(p Profile, doc map[string]any) (string, bool) {
+func textOf(p cliprofile.Profile, doc map[string]any) (string, bool) {
 	if len(p.EventTypePath) == 0 {
 		return firstString(doc, p.TextPaths)
 	}
@@ -481,7 +482,7 @@ func decodeObject(s string) (map[string]any, bool) {
 }
 
 // lookup walks one path into a decoded document.
-func lookup(doc map[string]any, path Path) (any, bool) {
+func lookup(doc map[string]any, path cliprofile.Path) (any, bool) {
 	var current any = doc
 	for _, step := range path {
 		switch node := current.(type) {
@@ -518,7 +519,7 @@ func lookup(doc map[string]any, path Path) (any, bool) {
 // override, and cursor-agent's `[["result"], ["response"]]` depends on an
 // empty `result` falling through to `response`. So the first NON-EMPTY hit
 // wins, and an all-empty walk still reports located.
-func firstString(doc map[string]any, paths []Path) (string, bool) {
+func firstString(doc map[string]any, paths []cliprofile.Path) (string, bool) {
 	located := false
 	for _, path := range paths {
 		v, ok := lookup(doc, path)
@@ -537,7 +538,7 @@ func firstString(doc map[string]any, paths []Path) (string, bool) {
 	return "", located
 }
 
-func firstBool(doc map[string]any, paths []Path) bool {
+func firstBool(doc map[string]any, paths []cliprofile.Path) bool {
 	for _, path := range paths {
 		v, ok := lookup(doc, path)
 		if !ok {
@@ -552,7 +553,7 @@ func firstBool(doc map[string]any, paths []Path) bool {
 
 // firstInt reads a token count, accepting the float64 every JSON number
 // decodes to as well as a string, which some CLIs emit for large counts.
-func firstInt(doc map[string]any, paths []Path) (int, bool) {
+func firstInt(doc map[string]any, paths []cliprofile.Path) (int, bool) {
 	for _, path := range paths {
 		v, ok := lookup(doc, path)
 		if !ok {

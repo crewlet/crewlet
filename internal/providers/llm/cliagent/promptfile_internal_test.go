@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // THE TRANSCRIPT MUST NOT REACH ARGV WHEN THE CLI OFFERS A FILE.
@@ -117,7 +118,7 @@ func TestFileModeWithoutAFilePlaceholderIsRefused(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			_, err := Load("custom", map[string]any{
+			_, err := cliprofile.Load("custom", map[string]any{
 				"binary": "x", "complete_args": []any{"exec"}, "output": "text",
 				"prompt_mode": "file", "prompt_args": args,
 			})
@@ -145,7 +146,7 @@ func TestTheMuseProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 	if err != nil {
 		t.Skip("no muse on PATH")
 	}
-	p, ok := Builtin("muse-code")
+	p, ok := cliprofile.Builtin("muse-code")
 	if !ok {
 		t.Fatal("no built-in muse-code profile")
 	}
@@ -188,7 +189,7 @@ func TestTheMuseProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 // process-group teardown can kill mid-write.
 func TestTheMuseProfilePinsTheBinaryItWasGiven(t *testing.T) {
 	t.Parallel()
-	p, ok := Builtin("muse-code")
+	p, ok := cliprofile.Builtin("muse-code")
 	if !ok {
 		t.Fatal("no built-in muse-code profile")
 	}
@@ -202,7 +203,7 @@ func TestTheMuseProfilePinsTheBinaryItWasGiven(t *testing.T) {
 // one has to argue with this rather than with nothing.
 func TestTheMuseProfileDeniesItsToolsAndReadsItsFailures(t *testing.T) {
 	t.Parallel()
-	p, ok := Builtin("muse-code")
+	p, ok := cliprofile.Builtin("muse-code")
 	if !ok {
 		t.Fatal("no built-in muse-code profile")
 	}
@@ -217,7 +218,7 @@ func TestTheMuseProfileDeniesItsToolsAndReadsItsFailures(t *testing.T) {
 			t.Errorf("complete_args = %v lacks %q", p.CompleteArgs, want)
 		}
 	}
-	if p.Output != OutputJSONL {
+	if p.Output != cliprofile.OutputJSONL {
 		t.Errorf("output = %q, want jsonl", p.Output)
 	}
 	// --no-session-log is this CLI's isolation: without it every turn
@@ -234,7 +235,7 @@ func TestTheMuseProfileDeniesItsToolsAndReadsItsFailures(t *testing.T) {
 	// The flags are defence in depth; run.toolset is what actually removes
 	// the tools from the model's surface, and web_search is the one name
 	// kept because web is the tool this backend never denies.
-	var settings *SeedFile
+	var settings *cliprofile.SeedFile
 	for i := range p.SeedFiles {
 		if p.SeedFiles[i].Path == ".config/muse/settings.json" {
 			settings = &p.SeedFiles[i]
@@ -284,7 +285,7 @@ func TestTheMuseProfileDeniesItsToolsAndReadsItsFailures(t *testing.T) {
 // envelope shape through the shipped profile.
 func TestTheMuseProfileReadsOneAnswerOutOfItsEventStream(t *testing.T) {
 	t.Parallel()
-	p, ok := Builtin("muse-code")
+	p, ok := cliprofile.Builtin("muse-code")
 	if !ok {
 		t.Fatal("no built-in muse-code profile")
 	}
@@ -345,7 +346,7 @@ func TestTheMuseProfileReadsOneAnswerOutOfItsEventStream(t *testing.T) {
 // a config_env here would point one of them somewhere the CLI does not read.
 func TestTheMuseProfileIsIsolatedByXDGAlone(t *testing.T) {
 	t.Parallel()
-	p, ok := Builtin("muse-code")
+	p, ok := cliprofile.Builtin("muse-code")
 	if !ok {
 		t.Fatal("no built-in muse-code profile")
 	}
@@ -379,7 +380,7 @@ func TestTheMuseProfileIsIsolatedByXDGAlone(t *testing.T) {
 
 // A BUILT-IN PROFILE IS A COPY, ALL OF IT.
 //
-// [Builtin] promises one because callers merge overrides into what they get,
+// [cliprofile.Builtin] promises one because callers merge overrides into what they get,
 // and the table behind it is a package-level map decoded once — so a caller
 // that appends to a slice it was handed rewrites what every later provider
 // reads. Two argv fields were backed by the embedded table this way,
@@ -388,11 +389,11 @@ func TestTheMuseProfileIsIsolatedByXDGAlone(t *testing.T) {
 // the actual failure mode.
 func TestBuiltinHandsBackAnIndependentCopy(t *testing.T) {
 	t.Parallel()
-	for _, name := range BuiltinNames() {
+	for _, name := range cliprofile.BuiltinNames() {
 		if name == "custom" {
 			continue
 		}
-		first, _ := Builtin(name)
+		first, _ := cliprofile.Builtin(name)
 		// Every []string on the struct, poisoned in place through the
 		// slice header the caller was given.
 		for _, s := range [][]string{
@@ -406,7 +407,7 @@ func TestBuiltinHandsBackAnIndependentCopy(t *testing.T) {
 				s[i] = "POISONED"
 			}
 		}
-		for _, paths := range [][]Path{first.TextPaths, first.ErrorPaths} {
+		for _, paths := range [][]cliprofile.Path{first.TextPaths, first.ErrorPaths} {
 			for _, path := range paths {
 				for i := range path {
 					path[i] = "POISONED"
@@ -414,7 +415,7 @@ func TestBuiltinHandsBackAnIndependentCopy(t *testing.T) {
 			}
 		}
 
-		second, _ := Builtin(name)
+		second, _ := cliprofile.Builtin(name)
 		if strings.Contains(fmt.Sprintf("%+v", second), "POISONED") {
 			t.Errorf("%s: a caller's edit reached the shipped table:\n%+v", name, second)
 		}
@@ -430,7 +431,7 @@ func TestBuiltinHandsBackAnIndependentCopy(t *testing.T) {
 // limit was reported, correctly classified, as `run.lifecycle.started`.
 func TestAClassifiedFailureNamesTheLineItMatched(t *testing.T) {
 	t.Parallel()
-	p, ok := Builtin("muse-code")
+	p, ok := cliprofile.Builtin("muse-code")
 	if !ok {
 		t.Fatal("no built-in muse-code profile")
 	}
@@ -543,7 +544,7 @@ func TestTheVersionProbeGetsTheAllowlistedEnvironment(t *testing.T) {
 // act on.
 func TestAnUnknownPromptModeNamesFileToo(t *testing.T) {
 	t.Parallel()
-	_, err := Load("custom", map[string]any{
+	_, err := cliprofile.Load("custom", map[string]any{
 		"binary": "x", "complete_args": []any{"-p"}, "output": "text",
 		"prompt_mode": "files",
 	})
@@ -556,7 +557,7 @@ func TestAnUnknownPromptModeNamesFileToo(t *testing.T) {
 // file mode always contributes prompt_args, so the argv is never empty.
 func TestFileModeNeedsNoCompleteArgs(t *testing.T) {
 	t.Parallel()
-	if _, err := Load("custom", map[string]any{
+	if _, err := cliprofile.Load("custom", map[string]any{
 		"binary": "mycli", "complete_args": []any{}, "output": "text",
 		"prompt_mode": "file", "prompt_args": []any{"--prompt-file", "{file}"},
 	}); err != nil {
