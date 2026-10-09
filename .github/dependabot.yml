@@ -16,8 +16,8 @@
 #
 # Beyond the schedule there are two knobs here, and each is written down where
 # it is set. Every entry pins its own `commit-message.prefix`; one entry — npm —
-# also carries two `groups:` rules, because two families there are broken unless
-# their packages move in one pull request. A group raises the members that have
+# also carries three `groups:` rules, because three families there are broken
+# unless their packages move in one pull request. A group raises the members that have
 # an update TOGETHER, in one pull request titled for the group rather than for
 # any package in it — so it costs a less precise subject on every bump, and it
 # puts one member's bad release in front of the rest. Pay that only where the
@@ -148,11 +148,11 @@ updates:
   # itself and Dependabot therefore moves with it. The @csstools chain is
   # transitive throughout, and every vite peer outside the group above
   # (@vitest/mocker's, vite's own on @types/node and the bundlers) is
-  # OPTIONAL — npm does not fail on an unsatisfied optional peer. So a third
+  # OPTIONAL — npm does not fail on an unsatisfied optional peer. So a fourth
   # group would buy nothing and cost a vaguer subject on every bump in it.
   #
-  # `applies-to` is left at its default of version-updates on both: a security
-  # advisory must not wait for the rest of a family to have a release.
+  # `applies-to` is left at its default of version-updates on all three: a
+  # security advisory must not wait for the rest of a family to have a release.
   #
   # Of fifteen direct dependencies, ten are grouped (react 4, vite 3,
   # crewlethq 3); the remaining five — @testing-library/react, @types/node,
