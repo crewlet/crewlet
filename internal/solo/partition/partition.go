@@ -398,8 +398,9 @@ func main() {
 
 	parallel, solo := partition(pkgs)
 
-	// Four guards, and each one covers a way a partition reports a pass over
-	// nothing. The filter this replaced had only the first.
+	// Three guards, and with list's refusal of a failed `go list` above them
+	// each covers a way a partition reports a pass over nothing. The filter
+	// this replaced had only the first of the three.
 	switch {
 	case len(parallel) == 0:
 		fmt.Fprintln(os.Stderr, "the parallel partition is empty: go list returned no ordinary packages")
