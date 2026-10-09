@@ -6,6 +6,11 @@ the agents in one process; a node with `-roles data,ingress` serves only these
 routes and reaches the rest of the fleet over the event stream. The routes
 below are identical either way.
 
+A node **without** the `ingress` role binds `api.port` too, and serves only
+its two probes there — `/health` and `/ready` — plus a seats node's agent-mode
+tool bridge, unless `api.public` moves the bridge to its own listener: see
+[Probes on a node without ingress](#probes-on-a-node-without-ingress).
+
 There is nothing to install for it — it is compiled into the binary, along
 with the dashboard it serves and the WebSocket that is the dashboard's data
 plane (see [`WS /ws/stream`](#ws-wsstream)).
@@ -35,9 +40,10 @@ nothing about the admin routes behind it. It requires no operator token and
 decides before the guard runs, so a guarded route there is that same `404`
 whatever credential is sent. The probes are deliberately
 **not** public: `/health` describes the node to whoever runs it, so point every
-health check at `api.port`. A node without the `ingress` role serves only
-`/mcp/{token}`, on `api.public` when it is set and on `api.port` otherwise —
-and nothing at all when its `api.port` is `0`. See
+health check at `api.port`. A node without the `ingress` role serves its
+[probes](#probes-on-a-node-without-ingress) on `api.port` and `/mcp/{token}`
+on `api.public` when it is set, beside the probes otherwise — and nothing at
+all when its `api.port` is `0`. See
 [Deployment → Exposing webhooks without the admin API](../guides/deployment.md#exposing-webhooks-without-the-admin-api).
 
 ---
@@ -111,7 +117,7 @@ node means nothing was done.
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/health` | Liveness + the engine-health envelope (see [below](#the-health-envelope)). Stays `200` through a drain (see [During a drain](#during-a-drain)); use `/ready` to steer traffic |
-| `GET` | `/ready` | Readiness for a load balancer: `503` while draining, before the first config revision applies, or on a `shed` or `stuck` posture, and `200` otherwise. A `503` names why in `reason`: `draining`, `unconfigured`, `shed` or `stuck`, in that order of precedence. It never reads the fleet's presence or alarm counts, which decide nothing here |
+| `GET` | `/ready` | Readiness for a load balancer: `503` while draining, before the first config revision applies, or on a `shed` or `stuck` posture, and `200` otherwise. A `503` names why in `reason`: `draining`, `unconfigured`, `shed` or `stuck`, in that order of precedence. It never reads the fleet's presence or alarm counts, which decide nothing here. A node without the `ingress` role answers a different question on the same route — whether it is doing its work — see [Probes on a node without ingress](#probes-on-a-node-without-ingress) |
 | `GET` | `/agents` | List agent roles, each merged with live state from the in-memory projection (including the in-flight `live_call`). [Human seats](../concepts/humans-in-the-org.md) are excluded — they appear only in `/org` with `"kind": "human"` |
 | `GET` | `/agents/{id}` | Single agent — `role`, the live overlay (incl. `live_call`), and `llm_history`: the seat's finished phases newest first, capped at 50. `{id}` is the seat's **handle**, which is what every roster row carries as its `id`; a role name is accepted too |
 | `GET` | `/agents/{id}/memory` | Durable memories (personal, episodic, counterparty, synthesized skills). Same `{id}` — the handle resolves to the derived agent id the diary is keyed by |
@@ -1717,6 +1723,78 @@ it disconnects.
 `unconfigured` or a diverged posture: the status code is liveness, and an
 engine waiting for a configuration is alive. Steer traffic with
 [`GET /ready`](#routes) instead, which answers `503` and names the reason.
+
+### Probes on a node without ingress
+
+A node whose `node.roles` leave out `ingress` — a [satellite](../guides/satellite-nodes.md),
+or the seats and workers half of a split deployment — serves no API, no
+dashboard and no webhook. But an orchestrator runs every node, and one it
+cannot probe it can neither restart when it wedges nor wait on during a
+rollout. So such a node binds `api.port` for exactly two routes, and on a seats
+node with `CREWLET_MCP_BRIDGE_URL` set the [tool bridge](#routes) beside them —
+or, with `api.public` set, on that [public listener](#which-listener-serves-what)
+alone, where it is the only route; every other path answers `404 no_route`, or
+`401` for a write and for an always-guarded prefix, as an unknown path does on
+an ingress node. The node logs `api_probes_listening` with `tool_bridge` saying
+whether the bridge is mounted and `public_addr` naming the public listener when
+the bridge has one. `api.port: 0` binds nothing, on this node as on any other.
+
+`GET /health` is liveness, `200` while the process is alive — through a drain
+and through a broker link that is down. Its body is the node's half of
+[the health envelope](#the-health-envelope), under the same field names, plus
+the node's `roles`; it leaves out what describes a dashboard this node does not
+serve (`clients`, `event_history_seconds`, `spend_history_seconds`,
+`seeded_from`):
+
+```json
+{
+  "status": "ok",
+  "node": "sat-eu-1",
+  "roles": ["seats"],
+  "configured": true,
+  "version": "v0.4.0",
+  "started_at": "2026-04-01T11:58:03Z",
+  "queue": "jetstream-embedded",
+  "in_flight": 1,
+  "shutting_down": false,
+  "posture": "serve",
+  "applied_epoch": 41,
+  "seats": ["eu-support"],
+  "nodes": 4
+}
+```
+
+`GET /ready` answers whether the node is **doing its work**, because it takes
+no traffic for the probe to steer: what waits on it is a rollout that must not
+replace the next node until this one has joined. `200` once every condition
+below holds; otherwise `503`, with the first that does not in `reason`, in this
+order of precedence:
+
+| `reason` | The node is not ready because |
+|---|---|
+| `draining` | It is stopping. |
+| `broker_unlinked` | It cannot reach the fleet's broker: a leaf whose link to every member is down, or a connection to an external cluster that is reconnecting. `detail` carries the cause. Ahead of what follows, because each of those is what a lost broker looks like. |
+| `unconfigured` | No company revision is active here. |
+| `shed`, `stuck` | Its [config posture](../concepts/control-plane.md#operator-surface) is diverged. `wait` and `isolated` stay ready, as they do on an ingress node. |
+| `no_presence` | It does not hold its presence lease — its last renew is older than the lease's TTL — so no peer counts it and nothing routes to it. |
+| `admission_withheld` | It runs seats, and its latest placement pass was not admitted to claim: no data node has yet answered that a copy of the estate admits a seat (a stateless node), its own copy is behind (a data node), or it cannot serve the seats it holds. A node that runs no seats, or one started in a [maintenance mode](../guides/retention.md#the-three-modes), is not judged on this. |
+
+```json
+{
+  "ready": false,
+  "node": "sat-eu-1",
+  "configured": true,
+  "draining": false,
+  "posture": "serve",
+  "reason": "broker_unlinked",
+  "detail": "jetstream: this leaf has no link to any member of the fleet, so every stream and bucket it uses is out of reach"
+}
+```
+
+An ingress node's `/ready` is unchanged by any of this: it answers whether
+traffic should come to it, on `draining`, `unconfigured`, `shed` and `stuck`
+alone. The two share one judgement (`judgeReadiness`, `internal/api/health.go`)
+and one precedence, so a reason both can give means the same thing on both.
 
 ### Paging the event history
 

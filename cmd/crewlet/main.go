@@ -1252,11 +1252,19 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	// stays 200 sends them to a refused connection, which is exactly what a
 	// node that died mid-drain looks like — the confusion the rest of this
 	// change exists to remove.
+	//
+	// And what the WORK ROUTES say is conditional on there being any: a node
+	// without the ingress role serves only its probes (and a bridge whose
+	// calls belong to runs already under way), so it has no route that would
+	// start new work to refuse.
 	probes := "this node binds no HTTP listener, so its drain is visible " +
 		"only in this log"
-	if surface != nil {
+	switch {
+	case surface != nil && surface.app != nil:
 		probes = "/health stays 200, /ready answers 503 and every route " +
 			"that would start new work answers 503"
+	case surface != nil:
+		probes = "/health stays 200 and /ready answers 503"
 	}
 	log.InfoContext(ctx, "engine_draining",
 		"in_flight", e.Backends().Queue.InFlightCount(),
@@ -1306,9 +1314,10 @@ func shutdown(ctx context.Context, e *engine.Engine, surface *httpSurface, log *
 
 // httpSurface is the HTTP listeners a node binds: the whole API on a node with
 // the ingress role — on api.port, with the routes outside parties call on a
-// public listener of their own when api.public is set — or only its seats'
-// tool bridge on a node without it. The app, the projector and the public
-// server are nil in the second shape.
+// public listener of their own when api.public is set — or, on a node without
+// it, its probes on api.port and its seats' tool bridge, beside them or on
+// api.public when that is set. The app and the projector are nil in the second
+// shape, and so is the public server unless the bridge has one.
 type httpSurface struct {
 	app       *api.App
 	server    *http.Server
@@ -1337,12 +1346,12 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 	defer cancel()
 	// After the listeners, so no socket can be reading the projection while
 	// its feed is torn down, and after the drain, so a dashboard watching
-	// the drain saw its turns finish. Both are nil on a bridge-only node,
-	// which has neither.
+	// the drain saw its turns finish. Both are nil on a node without the
+	// ingress role, which has neither.
 	if s.projector != nil {
 		s.projector.Stop(grace)
 	}
-	// Nil-safe, and nil on a bridge-only node: it has no panel to keep.
+	// Nil-safe, and nil on a node without ingress: it has no panel to keep.
 	s.runs.Stop()
 	if s.app != nil {
 		s.app.Stop()
@@ -1438,14 +1447,30 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	configSurface *configapi.Service, log *slog.Logger,
 ) (*httpSurface, error) {
 	if boot.API.Port == 0 {
-		// A real posture: a worker-only node runs no dashboard, no REST
-		// API and no webhook endpoint. Saying so is the point — an
-		// operator who expected an integration to work should learn it
-		// here rather than from a webhook that never arrives.
-		log.WarnContext(ctx, "api_disabled",
-			"hint", "api.port is 0, so this node serves no dashboard, no REST "+
-				"API, no webhook endpoint and no agent-mode tool bridge; every "+
-				"integration is deaf here")
+		// A real posture: a node with no listener at all. Saying so is the
+		// point — an operator who expected an integration to work, or an
+		// orchestrator's probe to answer, should learn it here rather than
+		// from a webhook that never arrives or a restart loop.
+		//
+		// A WARNING ONLY WHERE SOMETHING WAS PROMISED. A node with the
+		// ingress role is the one integrations and a dashboard expect to
+		// find, so without a port every integration is deaf here. A node
+		// without it serves only its probes and its tool bridge, and a
+		// satellite with nothing inbound is a shape an operator chooses;
+		// it is told what it gave up, at info. The roles are read off Tier A,
+		// whose answer is the presence lease's: the profile's id is the one
+		// field it does not need.
+		if boot.Profile("").RunsIngress() {
+			log.WarnContext(ctx, "api_disabled",
+				"hint", "api.port is 0, so this node serves no dashboard, no REST "+
+					"API, no webhook endpoint, no probe and no agent-mode tool "+
+					"bridge; every integration is deaf here")
+		} else {
+			log.InfoContext(ctx, "api_disabled",
+				"hint", "api.port is 0, so this node binds no listener: no "+
+					"orchestrator can probe it (/health, /ready) and an agent-mode "+
+					"seat's box finds no tool bridge here")
+		}
 		return nil, nil
 	}
 
@@ -1464,14 +1489,15 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// The port stays the hard off switch above; this is the role saying the
 	// same thing for a node whose file sets a port for its peers' sake.
 	//
-	// Except for the one route that is not ingress's to serve: the tool
-	// bridge. A bridged session is a live tool surface in the process that
-	// opened it, so a seats node running an agent-mode seat is the only node
-	// its box can reach. Gating the bridge on ingress as well took agent mode
-	// away from every node without that role, with the box launching and
-	// every one of its tool calls finding nothing listening.
+	// Except for the routes that are not ingress's to serve, which such a
+	// node serves on api.port and nothing beside them: its PROBES, because an
+	// orchestrator runs every node and has to be able to restart one that
+	// wedged and wait on one that has not joined, and the TOOL BRIDGE, because
+	// a bridged session is a live tool surface in the process that opened it,
+	// so a seats node running an agent-mode seat is the only node its box can
+	// reach. See [api.Probes].
 	if profile := boot.Profile(nodeID); !profile.RunsIngress() {
-		return serveBridgeOnly(ctx, boot, profile, e.Bridge(), nodeID, log)
+		return serveProbes(ctx, boot, profile, e, reconciler, log)
 	}
 	// The config surface is the caller's, built before this function so a
 	// node with no HTTP listener still has a config WRITER (see runEngine).
@@ -1989,52 +2015,74 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	return surface, nil
 }
 
-// serveBridgeOnly is serveAPI for a node whose roles leave out ingress: it
-// binds api.port for the node's own tool bridge when there is one to serve,
-// and binds nothing otherwise.
+// serveProbes is serveAPI for a node whose roles leave out ingress: it binds
+// api.port for the node's probes, and for its tool bridge where it has one, and
+// serves nothing else.
 //
 // The bridge needs a seats node and a bridge URL. A node that runs no seats
-// opens no session, so a listener there would answer every box with 401; and
-// with no CREWLET_MCP_BRIDGE_URL the engine built no bridge at all. Either way
-// the node keeps the posture node.roles asked for, and says why.
-func serveBridgeOnly(ctx context.Context, boot *config.Bootstrap, profile placement.NodeProfile,
-	bridge *mcpbridge.Bridge, nodeID string, log *slog.Logger,
+// opens no session, so the route there could only answer every box with 401;
+// and with no CREWLET_MCP_BRIDGE_URL the engine built no bridge at all. Either
+// way the route is absent rather than refusing.
+func serveProbes(ctx context.Context, boot *config.Bootstrap, profile placement.NodeProfile,
+	e *engine.Engine, reconciler *engine.Reconciler, log *slog.Logger,
 ) (*httpSurface, error) {
-	if !profile.RunsSeats() || bridge == nil {
-		log.InfoContext(ctx, "api_not_started", "node", nodeID,
-			"roles", profile.Roles.Names(),
-			"hint", "node.roles does not include ingress, so this node binds no "+
-				"HTTP listener although api.port is set; a peer with the ingress "+
-				"role serves webhooks, the dashboard and the REST API, and a node "+
-				"running seats binds one only to serve its agent-mode tool bridge "+
-				"("+mcpbridge.BaseURLVar+")")
-		return nil, nil
-	}
-	// THE BRIDGE IS A PUBLIC ROUTE — a box outside this network calls it —
-	// so with api.public set it is served there, on every node, and api.port
-	// stays unbound here: one file serves every role, and the bridge address
-	// follows one rule across the fleet.
-	addr := boot.API.Addr()
-	if boot.API.Public.Enabled() {
-		addr = boot.API.Public.Addr()
-	}
-	server, addr, err := listenAPI(ctx, addr, api.BridgeOnly(boot, bridge), log)
+	nodeID := e.Node().ID()
+	runtime, err := api.NewEngineProbeRuntime(e, reconciler)
 	if err != nil {
 		return nil, err
 	}
-	log.InfoContext(ctx, "api_bridge_listening", "addr", addr, "node", nodeID,
-		"roles", profile.Roles.Names(),
-		"hint", "node.roles does not include ingress, so this listener serves only "+
-			"the agent-mode tool bridge ("+mcpbridge.PathPrefix+"{token}) for the "+
-			"seats this node runs; webhooks, the dashboard and the REST API are a "+
-			"peer's with the ingress role")
-	return &httpSurface{server: server}, nil
+	var bridge *mcpbridge.Bridge
+	if profile.RunsSeats() {
+		bridge = e.Bridge()
+	}
+	// THE BRIDGE IS A PUBLIC ROUTE — a box outside this network calls it —
+	// so with api.public set it is served there, on every node, and api.port
+	// carries the probes alone: one file serves every role, and the bridge
+	// address follows one rule across the fleet. Without api.public it rides
+	// api.port beside the probes.
+	probeBridge := bridge
+	if boot.API.Public.Enabled() {
+		probeBridge = nil
+	}
+	handler, err := api.Probes(api.ProbeOptions{
+		Bootstrap: boot, Runtime: runtime, NodeID: nodeID,
+		Roles: profile.Roles.Names(), QueueBackend: e.Backends().Queue.Backend(),
+		Bridge: probeBridge,
+	})
+	if err != nil {
+		return nil, err
+	}
+	server, addr, err := listenAPI(ctx, boot.API.Addr(), handler, log)
+	if err != nil {
+		return nil, err
+	}
+	surface := &httpSurface{server: server}
+	publicAddr := ""
+	if probeBridge == nil && bridge != nil {
+		surface.public, publicAddr, err = listenAPI(ctx, boot.API.Public.Addr(),
+			api.BridgeOnly(boot, bridge), log)
+		if err != nil {
+			surface.stop(context.WithoutCancel(ctx), log)
+			return nil, err
+		}
+	}
+	log.InfoContext(ctx, "api_probes_listening", "addr", addr, "node", nodeID,
+		"roles", profile.Roles.Names(), "tool_bridge", bridge != nil,
+		// Empty unless the bridge has a listener of its own on api.public.
+		"public_addr", publicAddr,
+		"hint", "node.roles does not include ingress, so this node serves only "+
+			"/health and /ready, and the agent-mode tool bridge ("+
+			mcpbridge.PathPrefix+"{token}) where it runs seats with "+
+			mcpbridge.BaseURLVar+" set — on api.public when the file sets one; "+
+			"webhooks, the dashboard and the REST API are a peer's with the "+
+			"ingress role")
+	return surface, nil
 }
 
 // listenAPI binds addr and serves handler on it, in the background.
 //
 // ONE PATH for every listener a node opens — the whole API, the public
-// listener beside it and the bridge-only surface — so they cannot drift apart
+// listener beside it, the probe surface and the bridge's own — so they cannot drift apart
 // on the timeouts that bound an unauthenticated client or on how a bind failure
 // is reported.
 func listenAPI(ctx context.Context, addr string, handler http.Handler,

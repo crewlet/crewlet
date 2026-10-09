@@ -2,15 +2,19 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -35,6 +39,7 @@ import (
 type statelessPair struct {
 	data, agent *node
 	agentStore  string
+	agentBoot   *config.Bootstrap
 }
 
 func startStatelessPair(t *testing.T) statelessPair {
@@ -79,7 +84,7 @@ func startStatelessPairWith(t *testing.T, amend func(doc string) string) statele
 	agentBoot.Stream.Leaf.URLs = []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", port)}
 	agentBoot.Coordination.Type = config.CoordinationEmbeddedKV
 	agent := bootNode(t, &agentBoot, cfg, model)
-	return statelessPair{data: data, agent: agent, agentStore: agentDir}
+	return statelessPair{data: data, agent: agent, agentStore: agentDir, agentBoot: &agentBoot}
 }
 
 // bootNode builds and starts one engine.
@@ -201,4 +206,131 @@ func TestAStatelessNodesAuditTrailLandsOnADataNode(t *testing.T) {
 		}
 		return slices.ContainsFunc(rows, func(r store.EventRecord) bool { return r.Type == completed })
 	})
+}
+
+// A NODE THAT SERVES NO API CAN STILL BE PROBED, and its readiness is whether
+// it is doing its work. A stateless node binds no API, no dashboard and no
+// webhook — so an orchestrator running it had no way to restart one that
+// wedged or to wait for one to join before replacing the next. Its probe
+// surface answers both, from the real engine on both sides of a real leaf
+// link: ready once a data node has admitted it, unready while no data node
+// admits it, unready from the first moment of its own drain while /health
+// stays 200, and every route that is not a probe refused throughout.
+func TestAStatelessNodeAnswersItsProbes(t *testing.T) {
+	p := startStatelessPair(t)
+	probes := serveProbes(t, p.agent, p.agentBoot)
+
+	waitFor(t, "the stateless node to be ready", func() bool {
+		status, _ := probeAt(t, probes, http.MethodGet, "/ready")
+		return status == http.StatusOK
+	}, func() string {
+		_, body := probeAt(t, probes, http.MethodGet, "/ready")
+		return fmt.Sprint(body)
+	})
+	waitForSeat(t, p.agent, "ceo")
+	status, health := probeAt(t, probes, http.MethodGet, "/health")
+	if status != http.StatusOK || health["node"] != "agent-1" ||
+		health["status"] != api.StatusOK || health["configured"] != true {
+		t.Errorf("/health = %d %v, want 200 naming agent-1, ok and configured", status, health)
+	}
+	if roles := fmt.Sprint(health["roles"]); roles != "[seats]" {
+		t.Errorf("/health roles = %s, want [seats]", roles)
+	}
+	waitFor(t, "/health to list the seat the node holds", func() bool {
+		_, health := probeAt(t, probes, http.MethodGet, "/health")
+		return fmt.Sprint(health["seats"]) == "[ceo]"
+	})
+
+	// NOTHING BUT THE PROBES. Every route the full surface serves is refused
+	// here, by the router or by the guard in front of it.
+	for _, route := range [][2]string{
+		{http.MethodGet, "/"}, {http.MethodGet, "/dashboard"}, {http.MethodGet, "/agents"},
+		{http.MethodGet, "/events"}, {http.MethodGet, "/query/viewer"},
+		{http.MethodGet, "/ws/stream"}, {http.MethodGet, "/config"},
+		{http.MethodPost, "/webhooks/github"}, {http.MethodPost, "/work"},
+		{http.MethodPost, "/operator/act/create_work_item"},
+	} {
+		if status, _ := probeAt(t, probes, route[0], route[1]); status != http.StatusNotFound &&
+			status != http.StatusUnauthorized {
+			t.Errorf("%s %s = %d on a stateless node, want it refused", route[0], route[1], status)
+		}
+	}
+
+	// NO DATA NODE ADMITS IT. The data node drains — it drops its presence,
+	// so no copy of the estate is any longer one the stateless node can be
+	// admitted by — while its broker, and so the leaf link and the
+	// coordination store, stay up. The stateless node is linked and present,
+	// and is not doing its work.
+	p.data.engine.Drain(t.Context())
+	waitFor(t, "the stateless node to report its admission withheld", func() bool {
+		status, body := probeAt(t, probes, http.MethodGet, "/ready")
+		return status == http.StatusServiceUnavailable &&
+			body["reason"] == api.ReasonAdmissionWithheld
+	}, func() string {
+		_, body := probeAt(t, probes, http.MethodGet, "/ready")
+		return fmt.Sprint(body)
+	})
+
+	// ITS OWN DRAIN outranks everything, from the first moment, and liveness
+	// stays 200 for as long as the process is finishing its turns.
+	p.agent.engine.Drain(t.Context())
+	status, ready := probeAt(t, probes, http.MethodGet, "/ready")
+	if status != http.StatusServiceUnavailable || ready["reason"] != api.ReasonDraining {
+		t.Errorf("/ready during the drain = %d %v, want 503 naming the drain", status, ready)
+	}
+	status, health = probeAt(t, probes, http.MethodGet, "/health")
+	if status != http.StatusOK || health["shutting_down"] != true ||
+		health["status"] != api.StatusShuttingDown {
+		t.Errorf("/health during the drain = %d %v, want 200 and shutting_down", status, health)
+	}
+}
+
+// serveProbes is a stateless node's probe surface, wired to its engine the way
+// cmd/crewlet wires a node without the ingress role, on a test listener torn
+// down when the test ends.
+func serveProbes(t *testing.T, n *node, boot *config.Bootstrap) *httptest.Server {
+	t.Helper()
+	backends := n.engine.Backends()
+	reconciler, err := n.engine.NewReconciler(engine.ReconcilerOptions{
+		Store: backends.Store, Fleet: backends.Fleet, Queue: backends.Queue,
+		NodeID: n.engine.Node().ID(),
+	})
+	if err != nil {
+		t.Fatalf("reconciler: %v", err)
+	}
+	runtime, err := api.NewEngineProbeRuntime(n.engine, reconciler)
+	if err != nil {
+		t.Fatalf("probe runtime: %v", err)
+	}
+	profile := boot.Profile(n.engine.Node().ID())
+	handler, err := api.Probes(api.ProbeOptions{
+		Bootstrap: boot, Runtime: runtime, NodeID: n.engine.Node().ID(),
+		Roles: profile.Roles.Names(), QueueBackend: backends.Queue.Backend(),
+	})
+	if err != nil {
+		t.Fatalf("probe surface: %v", err)
+	}
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// probeAt is one request to a probe surface: its status and its JSON body.
+func probeAt(t *testing.T, srv *httptest.Server, method, path string) (int, map[string]any) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), method, srv.URL+path, strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, path, err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	var body map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		t.Fatalf("%s %s answered %d with a body that is not JSON: %v", method, path,
+			res.StatusCode, err)
+	}
+	return res.StatusCode, body
 }

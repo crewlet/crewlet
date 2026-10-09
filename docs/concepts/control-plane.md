@@ -261,6 +261,8 @@ That is the whole exposure, and it is small enough that **the apply does not wai
 | `shed` | 503 | Confirmed: cannot apply an epoch its peers have. |
 | `stuck` | 503 | Retries exhausted: the last attempt has failed, not merely started. Needs an operator. |
 
+That is an ingress node's `/ready`. A node without the `ingress` role takes no traffic, so its `/ready` asks whether it is doing its work — the same postures fail it, beside a broken broker link, a lapsed presence lease and a withheld seat admission; see [Probes on a node without ingress](../reference/api-endpoints.md#probes-on-a-node-without-ingress).
+
 Both probes say *why*, because "draining" and "cannot apply epoch 41" call for opposite responses. `/health` carries the posture itself, and `/ready` names what took the node out of rotation in `reason`: `draining`, `unconfigured`, `shed` or `stuck`. A drain outranks a posture in both, because it is the operator's own action.
 
 ### Reading a stuck node

@@ -731,6 +731,29 @@ func (b *Bootstrap) Warnings() []Warning {
 		}
 	}
 
+	// THE INGRESS ROLE WITH NO LISTENER. `api.port` is the one listener a
+	// node binds, and its roles decide what it carries: the API, the
+	// dashboard, the webhooks and the probes with `ingress`, the probes
+	// alone without it. A node told to run ingress is the one integrations,
+	// a browser and an orchestrator all look for, and a port of 0 binds
+	// nothing for any of them.
+	//
+	// DECLARED ROLES ONLY. An omitted node.roles is every role, which is also
+	// the single-process shape before anybody has chosen a port, and a fleet
+	// node that left them out is warned about that already.
+	//
+	// A WARNING RATHER THAN A REFUSAL, because `crewlet run -api-port` sets
+	// the port at run time and no file can show it: a file that leaves the
+	// port to the flag is valid, and only this file's half of the pair is
+	// visible here.
+	if b.Node.Roles != nil && b.API.Port == 0 && b.Profile("").RunsIngress() {
+		out = append(out, advisory(field("api.port"), fmt.Sprintf(
+			"is 0, so this node binds no listener although node.roles names %q: "+
+				"no webhook reaches it, it serves no dashboard and no REST API, "+
+				"and no orchestrator can probe it. Set a port, or drop %q",
+			placement.RoleIngress, placement.RoleIngress)))
+	}
+
 	out = append(out, b.API.Auth.writerWarnings(field("api.auth"))...)
 
 	// A BROKER TOLD TO BE VERBOSE INTO A SINK THAT TAKES NO DEBUG says

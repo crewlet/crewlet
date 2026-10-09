@@ -33,8 +33,8 @@ import (
 // only node that can answer a box is the one that opened the run's session (see
 // [mcpbridge.Bridge.Mounted]). Every other route here is the ingress role's:
 // webhooks, the dashboard and the REST surface can be served by any peer. That
-// is why a node whose roles leave out ingress still serves this one route, and
-// only this one, through [BridgeOnly].
+// is why a node whose roles leave out ingress still serves this route, beside
+// its probes and nothing else, through [Probes].
 
 // mountBridge registers the bridge, or says why it did not.
 //
@@ -55,8 +55,11 @@ func mountBridge(mux httpjson.Router, bridge *mcpbridge.Bridge) {
 	log.Info("mcp_bridge_mounted", "path", mcpbridge.PathPrefix+"{token}")
 }
 
-// BridgeOnly is the HTTP handler of a node that runs seats without the ingress
-// role: the tool bridge and no other route.
+// BridgeOnly is the HTTP handler a node that runs seats without the ingress role
+// binds on api.public: the tool bridge and no other route. Without api.public
+// the bridge rides api.port beside the node's probes instead (see [Probes]), so
+// the bridge is served where the file says public routes are served, on every
+// node.
 //
 // It is wrapped in the same guard and security headers as the full [App], so a
 // request for any other path is refused or answered 404 exactly as the full
@@ -67,11 +70,6 @@ func mountBridge(mux httpjson.Router, bridge *mcpbridge.Bridge) {
 // A nil bridge returns nil: there is nothing for such a node to serve, and the
 // caller binds no listener rather than one that answers every request with a
 // refusal.
-//
-// No partition stands in front of it as one does on the full surface (see
-// [App.Public]): the bridge is a public route and the only one here, so this
-// handler is what a node binds on api.public when the file sets one, and on
-// api.port when it does not.
 func BridgeOnly(bootstrap *config.Bootstrap, bridge *mcpbridge.Bridge) http.Handler {
 	if bridge == nil {
 		return nil

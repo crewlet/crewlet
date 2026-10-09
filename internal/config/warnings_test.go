@@ -71,6 +71,14 @@ func TestTierAWarnsAboutWhatItCannotRefuse(t *testing.T) {
 			func(b *config.Bootstrap) {},
 			"retention.backup_owner", "backup owner",
 		},
+		// THE INGRESS ROLE WITH NO LISTENER: the node integrations, a
+		// browser and an orchestrator all look for binds nothing.
+		"an ingress node with no port": {
+			func(b *config.Bootstrap) {
+				b.Node.Roles = []string{"data", "ingress", "seats", "workers"}
+			},
+			"api.port", "no orchestrator can probe it",
+		},
 		"an in-memory stream loses everything": {
 			func(b *config.Bootstrap) { b.Stream.StoreDir = "" },
 			"stream.store_dir", "keeps them in memory",
@@ -167,6 +175,9 @@ func TestAPeerListOfOtherMembersWarnsAboutNothing(t *testing.T) {
 	// them to the every-role default is warned about that, which is not
 	// what this case is about.
 	b.Node.Roles = []string{"data", "ingress", "seats", "workers"}
+	// AND A PORT, as an ingress node's is: one with none is warned about
+	// that, which is not what this case is about either.
+	b.API.Port = 8080
 	b.Stream.Cluster = config.StreamCluster{
 		Name: "crewlet", Port: 6222, Host: "10.0.0.11", Advertise: "node-a.internal",
 		Peers: []string{"nats://node-b.internal:6222", "nats://node-c.internal:6222"},
@@ -398,6 +409,42 @@ func TestANativeBackendNeedsAStreamThatSurvivesARestart(t *testing.T) {
 			} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("refusal = %q, want it to say %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+// THE PORT IS WARNED ABOUT ONLY WHERE INGRESS WAS ASKED FOR. A node without the
+// role that binds nothing is a satellite with nothing inbound, which an
+// operator chooses; an omitted role list is the single-process default before
+// anybody chose a port; and a declared ingress node with a port is the shape
+// the warning asks for. Each is held quiet here, so a warning that fired on
+// every port of 0 fails this rather than training its reader to skip it.
+func TestOnlyADeclaredIngressNodeIsWarnedForBindingNothing(t *testing.T) {
+	t.Parallel()
+	for name, mutate := range map[string]func(*config.Bootstrap){
+		"a data node without ingress": func(b *config.Bootstrap) {
+			b.Node.Roles = []string{"data", "seats", "workers"}
+		},
+		"roles left to the default": func(b *config.Bootstrap) {},
+		"a declared ingress node with a port": func(b *config.Bootstrap) {
+			b.Node.Roles = []string{"data", "ingress", "seats", "workers"}
+			b.API.Port = 8080
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			b := config.DefaultBootstrap()
+			b.Stream.StoreDir = "/var/lib/crewlet/stream"
+			b.Retention.BackupOwner = "platform-oncall"
+			mutate(&b)
+			if err := b.Validate(); err != nil {
+				t.Fatalf("the fixture does not validate: %v", err)
+			}
+			for _, w := range b.Warnings() {
+				if w.Path == "api.port" {
+					t.Errorf("warned about api.port: %s", w.Message)
 				}
 			}
 		})

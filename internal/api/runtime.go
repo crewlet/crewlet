@@ -6,7 +6,9 @@
 // the engine's own process, over the engine's own store, broker and
 // coordination plane. What `node.roles` changes is what that engine does (an
 // ingress-only node claims no seats and runs no worker duties), never whether
-// it exists, and a node with `api.port: 0` builds no App at all. There is no
+// it exists, and a node with `api.port: 0` builds no App at all. A node
+// without the ingress role builds none either: it serves its two probes
+// alone, through [Probes], answered by the same engine runtime. There is no
 // API process without an engine.
 //
 // So every dependency the engine supplies is REQUIRED, and [New] refuses a

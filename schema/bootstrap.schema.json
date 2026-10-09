@@ -30,7 +30,7 @@
               "type": "string"
             }
           ],
-          "description": "Bind port; 0 disables the HTTP surface entirely."
+          "description": "Bind port of this node's HTTP listener: the whole API with the ingress role (less the routes api.public moves to its own listener), only /health and /ready without it (and a seats node's agent-mode tool bridge, where api.public is unset). 0 binds nothing."
         },
         "public": {
           "$ref": "#/$defs/APIPublic"

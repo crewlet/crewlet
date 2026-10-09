@@ -133,9 +133,10 @@ func TestAnUnbindablePublicPortFailsTheNode(t *testing.T) {
 }
 
 // THE BRIDGE IS A PUBLIC ROUTE ON EVERY NODE. A seats node without ingress
-// serves nothing but its tool bridge, so with api.public set it binds that
-// address for it and leaves api.port unbound — one file for every role, and one
-// bridge address rule across the fleet.
+// serves its probes on api.port and its tool bridge beside them, so with
+// api.public set it binds that address for the bridge alone and api.port
+// carries the probes alone — one file for every role, and one bridge address
+// rule across the fleet.
 func TestASeatsNodeServesItsBridgeOnThePublicListener(t *testing.T) {
 	t.Parallel()
 	var logged bytes.Buffer
@@ -150,7 +151,7 @@ func TestASeatsNodeServesItsBridgeOnThePublicListener(t *testing.T) {
 	boot.API.Public = config.APIPublic{Host: "127.0.0.1", Port: publicPort}
 	boot.Node.Roles = []string{"seats"}
 
-	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, log)
+	surface, err := serveNodeLogged(t, boot, e, log)
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}
@@ -164,8 +165,21 @@ func TestASeatsNodeServesItsBridgeOnThePublicListener(t *testing.T) {
 		t.Errorf("POST %snot-a-token on the public listener = %d, want the bridge's own 401",
 			mcpbridge.PathPrefix, status)
 	}
-	if bound(boot.API.Port) {
-		t.Error("api.port is bound on a node whose one route is on the public listener")
+	if status, _ := answer(t, http.MethodGet, public+"/health"); status == http.StatusOK {
+		t.Error("GET /health answered on the public listener; the probes stay on api.port")
+	}
+	private := "http://127.0.0.1:" + strconv.Itoa(boot.API.Port)
+	if status, _ := answer(t, http.MethodGet, private+"/health"); status != http.StatusOK {
+		t.Errorf("GET /health on api.port = %d, want the liveness probe's 200", status)
+	}
+	// The guard exempts the bridge's prefix wholesale, so a 404 here is the
+	// router finding no bridge on api.port, where a mounted one answers 401.
+	if status, _ := answer(t, http.MethodPost, private+mcpbridge.PathPrefix+"not-a-token"); status != http.StatusNotFound {
+		t.Errorf("POST %snot-a-token on api.port = %d, want 404: the bridge is "+
+			"served on the public listener only", mcpbridge.PathPrefix, status)
+	}
+	if !strings.Contains(logged.String(), "public_addr=127.0.0.1:"+strconv.Itoa(publicPort)) {
+		t.Errorf("the node did not name the bridge's public listener:\n%s", logged.String())
 	}
 }
 

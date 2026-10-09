@@ -27,14 +27,51 @@ type engineRuntime struct {
 // posture and the applied epoch blank: exactly the two facts an operator reads
 // to learn why a node left rotation. Every node builds one before it serves.
 func NewEngineRuntime(e *engine.Engine, reconciler *engine.Reconciler) (NodeRuntime, error) {
+	runtime, err := newEngineRuntime(e, reconciler)
+	if err != nil {
+		return nil, err
+	}
+	return runtime, nil
+}
+
+func newEngineRuntime(e *engine.Engine, reconciler *engine.Reconciler) (engineRuntime, error) {
 	switch {
 	case e == nil:
-		return nil, errors.New("api: the engine runtime needs the engine it reports on")
+		return engineRuntime{}, errors.New("api: the engine runtime needs the engine it reports on")
 	case reconciler == nil:
-		return nil, errors.New("api: the engine runtime needs the engine's reconciler: " +
+		return engineRuntime{}, errors.New("api: the engine runtime needs the engine's reconciler: " +
 			"it is the only source of the config posture and the applied epoch")
 	}
 	return engineRuntime{engine: e, reconciler: reconciler}, nil
+}
+
+// NewEngineProbeRuntime is the runtime a node's probe surface asks — see
+// [Probes] — over the same engine and reconciler, under the same requirements,
+// as [NewEngineRuntime]: one implementation answers both surfaces, so a node's
+// /health says the same thing whichever of them serves it.
+func NewEngineProbeRuntime(e *engine.Engine, reconciler *engine.Reconciler) (ProbeRuntime, error) {
+	runtime, err := newEngineRuntime(e, reconciler)
+	if err != nil {
+		return nil, err
+	}
+	return runtime, nil
+}
+
+// Configured reports whether a company revision is active: whether the
+// engine's live epoch holds one, read on every call so an apply that brings
+// this node its first revision flips it.
+func (r engineRuntime) Configured() bool { return r.engine.Company() != nil }
+
+// Work is what a node without the ingress role must hold to be doing its work,
+// each fact read from what already tracks it — see the engine's readiness.go.
+func (r engineRuntime) Work() WorkState {
+	admission, admitted := r.engine.SeatAdmission()
+	return WorkState{
+		Broker:    r.engine.BrokerLink(),
+		Presence:  r.engine.HoldsPresence(),
+		Admission: admission,
+		Admitted:  admitted,
+	}
 }
 
 // Tools is the catalogue this node serves, for the dashboard's tool screen.

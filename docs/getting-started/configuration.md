@@ -1203,7 +1203,12 @@ coordination:
 
 api:
   host: "0.0.0.0"
-  port: 8000
+  port: 8000        # node.roles decides what it carries. With `ingress`:
+                    #   the dashboard, the REST API, the webhooks and the
+                    #   probes. Without it: /health and /ready only (plus a
+                    #   seats node's agent-mode tool bridge, unless
+                    #   api.public is set). 0 (the default) binds nothing
+                    #   at all
   public:           # optional — a second listener for the routes outside
     port: 8443      #   parties call: /webhooks/*, /otlp/{token}, /mcp/{token}.
                     #   Once set they are served ONLY here (404 on api.port),
@@ -1255,8 +1260,22 @@ is applied — a declined fsync's window, a trim that will never advance until
 somebody acknowledges a backup, a broker member with nowhere to persist the
 streams it holds (never a leaf or a client of an external cluster, which hold
 no stream of their own), a `stream.cluster.peers` entry left out of the member
-count because it is this node's own route or a repeat, a unit keyed on a name
-somebody will rename.
+count because it is this node's own route or a repeat, a node that declares
+the `ingress` role and binds no port, a unit keyed on a name somebody will
+rename.
+
+`api.port` is **one** listener per node, on every node, and `node.roles`
+decides what it carries rather than whether it exists. A node without the
+`ingress` role serves its two
+[probes](../reference/api-endpoints.md#probes-on-a-node-without-ingress) there
+and nothing else, so an orchestrator can probe a satellite exactly as it
+probes an ingress node, and one Tier A file serves both shapes. There is
+deliberately no separate probe port: on an ingress node the probes are already
+on this listener, and a second address for the same two routes would be one
+more thing to keep in step. `crewlet validate` warns about a node whose
+declared roles include `ingress` while its port is `0`: the node every
+integration, browser and probe looks for would bind nothing. It warns rather
+than refuses, because `crewlet run -api-port` sets the port at run time.
 
 `api.host` and `api.port` are what this node **binds**, which is rarely where it
 **answers**: a fleet behind a load balancer binds `0.0.0.0:8000` and is reached

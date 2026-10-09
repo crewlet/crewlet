@@ -2213,9 +2213,19 @@ type API struct {
 	// Host is the bind address.
 	Host string `yaml:"host,omitempty" json:"host,omitempty" desc:"Bind address for the HTTP surface."`
 
-	// Port is the bind port. 0 serves no HTTP at all — no dashboard, no
-	// REST API, and no webhook endpoint, so every integration goes deaf.
-	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"Bind port; 0 disables the HTTP surface entirely."`
+	// Port is the bind port of this node's ONE listener, and node.roles
+	// decides what it carries. With the ingress role it is the whole HTTP
+	// surface: the dashboard, the REST API, the webhooks and the probes,
+	// less the routes [API.Public] moves to a listener of their own.
+	// Without it, the probes alone (/health and /ready) — plus a seats
+	// node's agent-mode tool bridge where api.public is unset — because an
+	// orchestrator runs every node and must be able to probe each, while
+	// the API is placed only where traffic is meant to arrive. ONE PORT rather than a second
+	// setting for the probes: the probes are already on this listener on
+	// an ingress node, so a probe port beside it would be a second address
+	// for the same two routes there, and one Tier A file keeps working for
+	// both shapes. 0 binds nothing at all, on any node.
+	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"Bind port of this node's HTTP listener: the whole API with the ingress role (less the routes api.public moves to its own listener), only /health and /ready without it (and a seats node's agent-mode tool bridge, where api.public is unset). 0 binds nothing."`
 
 	// Public is the optional dedicated listener for the routes outside
 	// parties call. See [APIPublic].
@@ -2258,10 +2268,11 @@ type API struct {
 //
 // # On a node without the ingress role
 //
-// Such a node serves one route at all, its seats' tool bridge, and that is a
-// public route: with this block set it binds HERE for it rather than on
-// api.port, so one file still works for every role and the bridge address
-// follows one rule across the fleet.
+// Such a node serves its probes on api.port and one route beside them, its
+// seats' tool bridge, and that is a public route: with this block set it binds
+// HERE for it rather than on api.port, so one file still works for every role
+// and the bridge address follows one rule across the fleet. The probes stay on
+// api.port, for the reason above.
 type APIPublic struct {
 	// Host is the bind address. Empty binds every interface, which is the
 	// point of a listener meant to be reached from outside.
