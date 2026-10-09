@@ -2,10 +2,12 @@ package jetstream
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -145,5 +147,70 @@ func TestALeafWithNoMemberToReachNamesTheLink(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "leaf") {
 		t.Errorf("the refusal %q does not name the leaf link", err)
+	}
+}
+
+// A LEAF WHOSE LINK IS DOWN SAYS SO, while its own connection still reads as
+// healthy. The connection is to the broker in this process, which stays up when
+// the member across the link goes away — so a readiness check that asked only
+// the connection would call a leaf that can reach no stream ready. And a
+// stopped client is not linked to anything.
+func TestALeafReportsItsLinkGoingDown(t *testing.T) {
+	t.Parallel()
+	cfg := testTimings(Config{})
+	memberCfg := cfg
+	memberCfg.ServerName = "member"
+	memberCfg.LeafHost = "127.0.0.1"
+	memberCfg.LeafPort = unusedPort(t)
+	memberCfg.StoreDir = t.TempDir()
+	member, err := StartServer(t.Context(), memberCfg)
+	if err != nil {
+		t.Fatalf("start the member: %v", err)
+	}
+	t.Cleanup(member.Shutdown)
+
+	leafCfg := cfg
+	leafCfg.ServerName = "leaf"
+	leafCfg.LeafURLs = []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", memberCfg.LeafPort)}
+	leaf, err := StartServer(t.Context(), leafCfg)
+	if err != nil {
+		t.Fatalf("start the leaf: %v", err)
+	}
+	t.Cleanup(leaf.Shutdown)
+	q, err := leaf.Client(t.Context())
+	if err != nil {
+		t.Fatalf("leaf client: %v", err)
+	}
+
+	if err := q.Link(); err != nil {
+		t.Fatalf("a leaf linked to a running member reports %v", err)
+	}
+	member.Shutdown()
+	deadline := time.Now().Add(10 * time.Second)
+	for q.Link() == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("a leaf whose only member shut down still reports its link up")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := q.Link(); !strings.Contains(err.Error(), "leaf") {
+		t.Errorf("the link error %q does not name the leaf link", err)
+	}
+
+	if err := q.Stop(context.WithoutCancel(t.Context())); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if err := q.Link(); !errors.Is(err, ErrClosed) {
+		t.Errorf("a stopped client reports its link as %v, want ErrClosed", err)
+	}
+}
+
+// A MEMBER'S BROKER IS IN ITS OWN PROCESS, so its client is linked for as long
+// as it runs.
+func TestAMemberIsLinkedWhileItRuns(t *testing.T) {
+	t.Parallel()
+	q := openForTest(t, Config{})
+	if err := q.Link(); err != nil {
+		t.Errorf("a solo member's client reports %v", err)
 	}
 }

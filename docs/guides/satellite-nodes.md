@@ -161,17 +161,22 @@ anywhere else, so an orchestrator injects both from the environment
 without templating the file. There is a `-roles` flag for the same
 reason; labels have no flag, because `${VAR}` already covers it.
 
-`api.port` can stay set: a node without the `ingress` role does not
-bind it, and logs `api_not_started` saying why. That means one config
-file works for both shapes. The one exception is a seat in
-[agent mode](../concepts/subscription-llm-backends.md#the-tool-bridge):
-its box calls the seat's tools back over `/mcp/{token}`, and only the
-node that runs the seat can answer, so a satellite with
-`CREWLET_MCP_BRIDGE_URL` set binds `api.port` for that route alone
-(`api_bridge_listening`) and serves nothing else on it — or `api.public.port`
-when the file sets one, since the bridge is a route a sandbox outside your
-network calls (see
+`api.port` can stay set, and one config file works for both shapes: a node
+without the `ingress` role binds it for its [probes](#probe-it) alone —
+`/health` and `/ready` — and serves no API, no dashboard and no webhook on it
+(`api_probes_listening`). Every other path answers `404`, or `401` for a write
+or an always-guarded prefix, exactly as an unknown path does on an ingress
+node. The one route it adds is for a seat in
+[agent mode](../concepts/subscription-llm-backends.md#the-tool-bridge): its box
+calls the seat's tools back over `/mcp/{token}`, and only the node that runs
+the seat can answer, so a satellite with `CREWLET_MCP_BRIDGE_URL` set serves
+that route (`tool_bridge=true` on the same line) — beside the probes, or on
+`api.public.port` when the file sets one (`public_addr` on the same line names
+it), since the bridge is a route a sandbox outside your network calls (see
 [Deployment → Exposing webhooks without the admin API](deployment.md#exposing-webhooks-without-the-admin-api)).
+With `api.port: 0` the satellite binds nothing at all, which is the shape for a
+host that must accept no connection of any kind — at the price of no probe
+and no agent mode.
 
 ### 2. Pin the role
 
@@ -243,6 +248,36 @@ seat_claimed    seat=eu-support epoch=3
 inbox_attached  seat=eu-support epoch=3 elapsed_ms=5.1
 ```
 
+### Probe it
+
+A satellite with `api.port` set answers the same two probes every node
+does, so an orchestrator can restart one that wedged and wait for one to
+join before it replaces the next:
+
+```bash
+curl -s http://sat-eu-1.internal:8000/ready
+# {"ready":true,"node":"sat-eu-1","configured":true,"draining":false,"posture":"serve"}
+```
+
+`/health` is liveness, and answers `200` for as long as the process is
+alive — through a drain, and through a broker link that is down — with the
+node's half of the [health envelope](../reference/api-endpoints.md#probes-on-a-node-without-ingress):
+its id, its roles, its posture and applied epoch, the seats it holds, and
+`shutting_down`.
+
+`/ready` answers whether the node is **doing its work**, because a
+satellite takes no traffic for a probe to steer. It is `503` until all of
+these hold, naming the first that does not in `reason`:
+
+| `reason` | What it means here |
+|---|---|
+| `draining` | The node is stopping: its turns finish and it claims nothing new. |
+| `broker_unlinked` | Its leaf link to every member is down (or, on an external cluster, its connection is reconnecting); `detail` says which. Its seats can neither receive nor publish anything. |
+| `unconfigured` | No company revision has reached it yet. |
+| `shed` or `stuck` | Its [config posture](../concepts/control-plane.md#operator-surface): it cannot apply the revision its peers run. |
+| `no_presence` | It does not hold its presence lease, so its peers do not count it and nothing routes to it. |
+| `admission_withheld` | No data node has yet answered that a copy of the estate admits a seat — or the node cannot serve the seats it holds — so it claims nothing. This is the state a fresh satellite sits in until it is admitted, and the one it returns to while no data node is reachable. |
+
 Two failures to know by sight:
 
 - **`seats_unplaceable`** — no live node matches the selector, or the
@@ -288,11 +323,14 @@ the dependency surface before choosing a host for it:
   satellite decrypts the company document and the
   [secret store](../concepts/secret-store.md) itself; without the
   keyring it cannot read the config at all.
-- **Nothing inbound**, unless a seat pinned here runs in agent mode. No
-  port, no ingress rule, no public URL. That is what makes this shape
-  workable in a zone the rest of the fleet is not in. An agent-mode seat
-  is the exception: its box must reach this node's `/mcp/{token}`
-  bridge, which is the one route the satellite then serves.
+- **Nothing inbound from the fleet or the outside world.** No ingress
+  rule, no public URL: the satellite dials out to the broker and
+  coordination slot and is never dialled back. That is what makes this
+  shape workable in a zone the rest of the fleet is not in. What reaches
+  `api.port` is the orchestrator's probes and, if a seat pinned here runs
+  in agent mode, that seat's box calling its `/mcp/{token}` bridge — the
+  box must be able to dial this node for that one. `api.port: 0` closes
+  both.
 
 ---
 

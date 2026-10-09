@@ -255,7 +255,7 @@ node:
 | Role | What it does |
 |---|---|
 | `data` | Keeps the company's durable state on this node's disk: a full copy of the replicated estate (the tracker, the knowledge base, the vectors) and the event log. The company's files are not under it: they are in the [object store](../concepts/object-store.md), which on the default `nats` backend is a stream the broker's members keep. The one role that is a promise about the **disk** rather than about work — see [Nodes that hold no data](#nodes-that-hold-no-data). It says nothing about the broker, which is the node's [broker kind](#the-broker-members-and-leaves) |
-| `ingress` | Serves the HTTP API: webhooks from every integration, the dashboard, the REST endpoints |
+| `ingress` | Serves the HTTP API: webhooks from every integration, the dashboard, the REST endpoints. A node without it serves only its [probes](../reference/api-endpoints.md#probes-on-a-node-without-ingress) on `api.port` |
 | `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns. Serves its own seats' `/mcp/{token}` tool bridge when `CREWLET_MCP_BRIDGE_URL` is set, because a bridged session lives in the process that opened it |
 | `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the state-log trim, the embedding duty, the object store's collector, the sandbox waiter, the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
 
@@ -528,7 +528,11 @@ TTL, which for the retention sweep is 45 minutes and for the learning
 passes three hours. Point load-balancer readiness at `/ready` (`503` while
 draining) and liveness at `/health` (stays `200` through a drain), and
 give the orchestrator a termination grace period longer than your longest
-turn. The engine does not impose its own cutoff, because that would be a
+turn. A node without `ingress` answers both on `api.port` too, and its
+`/ready` is what a rollout should wait on before replacing the next node:
+it turns `200` only once the node has linked to the broker, holds its
+presence lease and — running seats — has been admitted to claim (see
+[Probes on a node without ingress](../reference/api-endpoints.md#probes-on-a-node-without-ingress)). The engine does not impose its own cutoff, because that would be a
 guess at yours.
 
 The node keeps its listener for the whole drain, so both probes answer

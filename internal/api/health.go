@@ -161,10 +161,18 @@ type Readiness struct {
 
 	// Reason names what took this node out of rotation, and is absent while
 	// it is in rotation: [ReasonDraining], [ReasonUnconfigured], or the
-	// diverged posture itself. ONE FIELD, decided here in the precedence the
-	// health status uses, so a load balancer's record of a failed probe says
-	// why without its reader re-deriving it from the three fields above.
+	// diverged posture itself — and on a node without the ingress role also
+	// [ReasonBrokerUnlinked], [ReasonNoPresence] or
+	// [ReasonAdmissionWithheld]. ONE FIELD, decided by [judgeReadiness] in
+	// one precedence, so a record of a failed probe says why without its
+	// reader re-deriving it from the fields above.
 	Reason string `json:"reason,omitempty"`
+
+	// Detail says what is down, where the reason alone cannot: the broker
+	// link's own error beside [ReasonBrokerUnlinked], since a leaf with no
+	// link and an external connection reconnecting are fixed in different
+	// places. Absent with every other reason.
+	Detail string `json:"detail,omitempty"`
 }
 
 // The reasons a refused /ready names, beside the diverged postures, which are
@@ -176,6 +184,28 @@ type Readiness struct {
 const (
 	ReasonDraining     = string(httpjson.CodeDraining)
 	ReasonUnconfigured = StatusUnconfigured
+)
+
+// The reasons only a node WITHOUT the ingress role refuses readiness on — see
+// [judgeReadiness]. A node that takes no traffic is ready while it is doing
+// its work, and each of these is a way of not doing it while the process stays
+// perfectly alive.
+const (
+	// ReasonBrokerUnlinked: this node cannot reach the fleet's broker — a
+	// leaf whose link to every member is down, or a connection to an
+	// external cluster that is reconnecting. Its seats can neither receive
+	// nor publish anything.
+	ReasonBrokerUnlinked = "broker_unlinked"
+
+	// ReasonNoPresence: this node does not hold its presence lease, so no
+	// peer counts it and the estate's router asks it nothing.
+	ReasonNoPresence = "no_presence"
+
+	// ReasonAdmissionWithheld: this node runs seats and its latest
+	// placement pass was not admitted to claim — no data node has yet
+	// answered that a copy of the estate admits a seat, or it cannot serve
+	// the seats it holds — or it has made no pass yet.
+	ReasonAdmissionWithheld = "admission_withheld"
 )
 
 // divergedPostures take a node out of rotation.
@@ -190,30 +220,9 @@ var divergedPostures = map[string]struct{}{"shed": {}, "stuck": {}}
 // health builds the body every health surface shares.
 func (a *App) health(ctx context.Context) Health {
 	configured := a.Configured()
-	// THE FLEET COUNTS BESIDE THE SNAPSHOT, NOT AFTER IT, and under their
-	// own budget. This body answers the LIVENESS probe, and both reads can
-	// reach the coordination plane: the posture inside the snapshot is
-	// bounded to engine.ProbeReadBudget, and run one after the other a
-	// wedged broker would cost the probe twice that — most of a 5 s
-	// liveness timeout, which an orchestrator answers by killing a healthy
-	// node over a coordination blip. Concurrent, the probe's worst case is
-	// one budget. The counts are the part of the envelope it can best
-	// afford to lose: an out-of-budget presence read is an absent `nodes`,
-	// which is already what "cannot say" means here.
-	fleetCtx, cancel := context.WithTimeout(ctx, engine.ProbeReadBudget)
-	defer cancel()
-	fleetRead := make(chan FleetState, 1)
-	go func() { fleetRead <- a.runtime.Fleet(fleetCtx) }()
-	state := a.runtime.Snapshot(ctx)
-	fleet := <-fleetRead
-	seats := state.Seats
-	if seats == nil {
-		// A node holding no seats holds an empty list, and says so as one:
-		// a null here would read as "cannot say", which this node can.
-		seats = []string{}
-	}
+	state, fleet := readNode(ctx, a.runtime)
 	body := Health{
-		Status:       StatusOK,
+		Status:       healthStatus(state, configured),
 		Node:         a.nodeID,
 		Configured:   configured,
 		Version:      version.String(),
@@ -224,53 +233,109 @@ func (a *App) health(ctx context.Context) Health {
 		ShuttingDown: state.ShuttingDown,
 		Posture:      state.Posture,
 		AppliedEpoch: state.AppliedEpoch,
-		Seats:        seats,
+		Seats:        heldSeats(state),
 		// The floor is the store's own, not a number this package picked:
 		// it is what every read is bounded by.
 		EventHistorySeconds: int(store.EventHistory.Seconds()),
 		SpendHistorySeconds: int(usage.History.Seconds()),
 	}
-	if state.StallLag > 0 {
-		// Only when there is something to say. A field that is always
-		// present and always 0 trains a reader to skip it, which is the
-		// one line of this body that must be read when it appears.
-		lag := state.StallLag.Seconds()
-		body.StallLagSeconds = &lag
-	}
-	if len(state.Unproven) > 0 {
-		body.UnprovenSeconds = make(map[string]float64, len(state.Unproven))
-		for seat, stranded := range state.Unproven {
-			body.UnprovenSeconds[seat] = stranded.Seconds()
-		}
-	}
-	if fleet.LiveNodes != nil {
-		nodes := *fleet.LiveNodes
-		body.Nodes = &nodes
-	}
-	if fleet.Alarms != nil {
-		body.Alarms = &HealthAlarms{Count: len(fleet.Alarms)}
-		if len(fleet.Alarms) > 0 {
-			body.Alarms.Worst = fleet.Alarms[0]
-		}
-	}
+	body.StallLagSeconds, body.UnprovenSeconds = stallAndStranded(state)
+	body.Nodes, body.Alarms = fleetCounts(fleet)
 	if coverage, seeded := a.state.SeededFrom(); seeded {
 		body.SeededFrom = &coverage
 	}
+	return body
+}
 
-	// IN THE PRECEDENCE THE STATUSES DECLARE. The posture case used to be
-	// reached whether or not the node was configured, so a node with no
-	// revision that had also concluded `shed` reported the posture, and the
-	// one fact that matters on such a node, that it refuses every
-	// delivery, was the one its status did not say.
+// nodeReader is what a health body reads the engine through — the part of
+// [NodeRuntime] and [ProbeRuntime] the two surfaces share.
+type nodeReader interface {
+	Snapshot(ctx context.Context) RuntimeState
+	Fleet(ctx context.Context) FleetState
+}
+
+// readNode takes the snapshot and the fleet counts a health body is built from.
+//
+// THE FLEET COUNTS BESIDE THE SNAPSHOT, NOT AFTER IT, and under their own
+// budget. This body answers the LIVENESS probe, and both reads can reach the
+// coordination plane: the posture inside the snapshot is bounded to
+// engine.ProbeReadBudget, and run one after the other a wedged broker would
+// cost the probe twice that — most of a 5 s liveness timeout, which an
+// orchestrator answers by killing a healthy node over a coordination blip.
+// Concurrent, the probe's worst case is one budget. The counts are the part of
+// the envelope it can best afford to lose: an out-of-budget presence read is
+// an absent `nodes`, which is already what "cannot say" means here.
+func readNode(ctx context.Context, runtime nodeReader) (RuntimeState, FleetState) {
+	fleetCtx, cancel := context.WithTimeout(ctx, engine.ProbeReadBudget)
+	defer cancel()
+	fleetRead := make(chan FleetState, 1)
+	go func() { fleetRead <- runtime.Fleet(fleetCtx) }()
+	state := runtime.Snapshot(ctx)
+	return state, <-fleetRead
+}
+
+// healthStatus is a health body's `status`, IN THE PRECEDENCE THE STATUSES
+// DECLARE. The posture case used to be reached whether or not the node was
+// configured, so a node with no revision that had also concluded `shed`
+// reported the posture, and the one fact that matters on such a node, that it
+// refuses every delivery, was the one its status did not say.
+func healthStatus(state RuntimeState, configured bool) string {
 	switch {
 	case state.ShuttingDown:
-		body.Status = StatusShuttingDown
+		return StatusShuttingDown
 	case !configured:
-		body.Status = StatusUnconfigured
+		return StatusUnconfigured
 	case state.Posture != "" && state.Posture != "serve" && state.Posture != "wait":
-		body.Status = state.Posture
+		return state.Posture
 	}
-	return body
+	return StatusOK
+}
+
+// heldSeats is the seats a node holds, as a body carries them. A node holding
+// no seats holds an empty list, and says so as one: a null here would read as
+// "cannot say", which this node can.
+func heldSeats(state RuntimeState) []string {
+	if state.Seats == nil {
+		return []string{}
+	}
+	return state.Seats
+}
+
+// stallAndStranded are the two fields present only when there is something to
+// say. A field that is always present and always 0 trains a reader to skip it,
+// which is the one line of the body that must be read when it appears.
+func stallAndStranded(state RuntimeState) (*float64, map[string]float64) {
+	var lag *float64
+	if state.StallLag > 0 {
+		seconds := state.StallLag.Seconds()
+		lag = &seconds
+	}
+	var stranded map[string]float64
+	if len(state.Unproven) > 0 {
+		stranded = make(map[string]float64, len(state.Unproven))
+		for seat, since := range state.Unproven {
+			stranded[seat] = since.Seconds()
+		}
+	}
+	return lag, stranded
+}
+
+// fleetCounts are the fleet's size and alarm count as a public body carries
+// them — absent where the read did not happen, never a zero standing in for it.
+func fleetCounts(fleet FleetState) (*int, *HealthAlarms) {
+	var nodes *int
+	if fleet.LiveNodes != nil {
+		live := *fleet.LiveNodes
+		nodes = &live
+	}
+	var alarms *HealthAlarms
+	if fleet.Alarms != nil {
+		alarms = &HealthAlarms{Count: len(fleet.Alarms)}
+		if len(fleet.Alarms) > 0 {
+			alarms.Worst = fleet.Alarms[0]
+		}
+	}
+	return nodes, alarms
 }
 
 // tickReadBudget bounds a read done for a push tick rather than a request.
@@ -296,22 +361,43 @@ const tickReadBudget = 5 * time.Second
 // IT NEVER ASKS [NodeRuntime.Fleet]. The fleet counts decide nothing here, and
 // the presence count is a scan of the fleet's keys: a readiness probe paying
 // for one on every call, to throw it away, is a probe a wedged broker can
-// slow for a fact it never reads.
+// slow for a fact it never reads. Nor does it ask what the probe surface's
+// /ready asks ([WorkState]): this node is ready while traffic should come to
+// it, and none of those facts decides that.
 func (a *App) readiness(ctx context.Context) (Readiness, int) {
-	configured := a.Configured()
-	state := a.runtime.Snapshot(ctx)
+	return judgeReadiness(a.nodeID, a.Configured(), a.runtime.Snapshot(ctx), nil)
+}
+
+// judgeReadiness is the ONE readiness judgement, for both surfaces: the full
+// API's, which passes no work state, and the probe surface's, which passes the
+// node's ([WorkState]).
+//
+// ONE PRECEDENCE, so a reason the two share means one thing on both. A drain
+// first, whatever else is true. Then a broken broker link, because it is the
+// cause most of what follows would be a symptom of — a node that cannot reach
+// the broker cannot apply a revision, renew its presence or be admitted. Then
+// the full surface's own reasons, in its own order. Then the two facts only a
+// node doing work without taking traffic is judged on: whether its fleet can
+// see it, and whether it was admitted to claim seats.
+func judgeReadiness(node string, configured bool, state RuntimeState, work *WorkState) (Readiness, int) {
 	body := Readiness{
-		Node: a.nodeID, Configured: configured,
+		Node: node, Configured: configured,
 		Draining: state.ShuttingDown, Posture: state.Posture,
 	}
 	_, diverged := divergedPostures[body.Posture]
 	switch {
 	case body.Draining:
 		body.Reason = ReasonDraining
+	case work != nil && work.Broker != nil:
+		body.Reason, body.Detail = ReasonBrokerUnlinked, work.Broker.Error()
 	case !configured:
 		body.Reason = ReasonUnconfigured
 	case diverged:
 		body.Reason = body.Posture
+	case work != nil && !work.Presence:
+		body.Reason = ReasonNoPresence
+	case work != nil && work.Admission && !work.Admitted:
+		body.Reason = ReasonAdmissionWithheld
 	}
 	body.Ready = body.Reason == ""
 	if body.Ready {

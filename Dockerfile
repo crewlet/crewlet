@@ -73,12 +73,14 @@ COPY ${TARGETPLATFORM}/crewlet /usr/local/bin/crewlet
 COPY LICENSE build/notices/THIRD_PARTY_NOTICES.txt /usr/share/doc/crewlet/
 COPY static/dashboard/THIRD_PARTY_NOTICES.txt /usr/share/doc/crewlet/dashboard/
 
-# The API's port: the dashboard, the REST API and every webhook route are
-# served on it whenever Tier A's `api.port` is set, which is the operator's
-# choice rather than the company's — `api.port: 0` serves no HTTP at all.
-# EXPOSE documents 8080, the port the docs' container examples pass as
-# `-api-port`; it binds nothing by itself, and publishing it is the operator's
-# call.
+# The node's one HTTP port, bound whenever Tier A's `api.port` is set — the
+# operator's choice rather than the company's; `api.port: 0` serves no HTTP at
+# all. `node.roles` decides what it carries: with `ingress`, the whole API (the
+# dashboard, the REST API and every webhook route); without it, only the
+# /health and /ready probes, and a seats node's agent-mode tool bridge.
+# EXPOSE documents 8080, the port the container examples in the docs pass
+# (the Kubernetes probes in docs/guides/deployment.md among them); it binds
+# nothing by itself, and publishing it is the operator's call.
 EXPOSE 8080
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/crewlet"]

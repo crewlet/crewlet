@@ -704,11 +704,13 @@ What to point where:
   hold the same address; they are two fields because here they cannot.
 - **The dashboard and the CLI** stay on `api.port`: `crewlet` commands that
   read a node's own Tier A file dial `api.host:api.port`, which is unchanged.
-- **A node without the `ingress` role** serves one route, its seats' tool
-  bridge, and with `api.public` set it binds the public port for it and leaves
-  `api.port` unbound — so one Tier A file still serves every role, and every
-  node's `CREWLET_MCP_BRIDGE_URL` names its own public port. Its `api.port: 0`
-  (or `-api-port 0`) is still the hard off switch: it binds nothing, the public
+- **A node without the `ingress` role** serves its
+  [probes](../reference/api-endpoints.md#probes-on-a-node-without-ingress) on
+  `api.port` and one route beside them, its seats' tool bridge, and with
+  `api.public` set it binds the public port for the bridge alone — so one
+  Tier A file still serves every role, and every node's
+  `CREWLET_MCP_BRIDGE_URL` names its own public port. Its `api.port: 0` (or
+  `-api-port 0`) is still the hard off switch: it binds nothing, the public
   port included, whatever the shared file says about `api.public`.
 
 `api.host` may stay `0.0.0.0` where the network keeps `api.port` private — a
@@ -745,20 +747,24 @@ Both nodes can read the same Tier A file: against an external NATS server
 nothing in it is per-node except `node.id`, and `CREWLET_NODE_ID` injects
 that without templating anything. A clustered embedded stream is the one
 exception — each member also names its own route port and its own peers. So
-give each node its roles at the command line, and its own `-api-port`, since
-only the ingress node should bind one:
+give each node its roles at the command line, and its own `-api-port`: on one
+host two listeners cannot share a port, and only the ingress node's carries
+the API — the other's carries its [probes](#probes) and nothing else:
 
 ```bash
-# Terminal 1: the agents and the fleet duties, no HTTP
-crewlet run -config crewlet.yaml -roles data,seats,workers -api-port 0
+# Terminal 1: the agents and the fleet duties — /health and /ready only
+crewlet run -config crewlet.yaml -roles data,seats,workers -api-port 8001
 
 # Terminal 2: the webhook receiver and the dashboard
 crewlet run -config crewlet.yaml -roles data,ingress -api-host 0.0.0.0 -api-port 8000
 ```
 
+`-api-port 0` on the first binds nothing at all, which is fine on a host where
+nothing probes it.
+
 Give each node a distinct `node.id` (or `CREWLET_NODE_ID`) — two nodes sharing an id miscount the fleet. See [Running a Fleet](fleet.md).
 
-If any seat runs in [agent mode](../concepts/subscription-llm-backends.md), give the seats node a port instead of `-api-port 0`, and set its `CREWLET_MCP_BRIDGE_URL` to that port as a sandbox reaches it. Without the `ingress` role that listener serves the `/mcp/{token}` tool bridge and nothing else (`api_bridge_listening`); with `-api-port 0` the node refuses every agent-mode launch, naming `api.port`.
+If any seat runs in [agent mode](../concepts/subscription-llm-backends.md), the seats node needs its port, and its `CREWLET_MCP_BRIDGE_URL` set to that port as a sandbox reaches it. Without the `ingress` role that listener serves the `/mcp/{token}` tool bridge beside the probes and nothing else (`api_probes_listening … tool_bridge=true`); with `-api-port 0` the node refuses every agent-mode launch, naming `api.port`.
 
 **With a [public listener](#exposing-webhooks-without-the-admin-api) on one host,** the two processes would both bind `api.public.port` — the ingress node for its webhooks, an agent-mode seats node for its bridge — and the second fails at boot. Give each process its own public port through a whole `${VAR}`, which a Tier A number accepts:
 
@@ -791,11 +797,65 @@ Both take the **Tier A** bootstrap file (`crewlet.yaml`) — the founder-owned c
 
 They are one command, and they build the **same** application: every node learns the company from the active config revision and the live picture from the broadcast event stream. Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` at whichever node is externally reachable: an `ingress` one, which serves the `/otlp/{token}/v1/{signal}` receiver. Its tokens are per-run and signed, so the node that mints and the node that verifies need no shared memory, and signing uses the Tier A keyring, so a split deployment needs one configured (`crewlet secrets keygen`); without it each process signs with an ephemeral key, logs `sandbox_otel_signing_key_ephemeral`, and every token one process mints is forged as far as the other is concerned. `CREWLET_MCP_BRIDGE_URL`, if any seat runs in [agent mode](../concepts/subscription-llm-backends.md), is the opposite: a bridge session lives in the process that opened it, so each `seats` node sets it to **its own** address and serves `/mcp/{token}` itself, on its own `-api-port`, even without the `ingress` role.
 
-Point liveness probes at `/health` (stays `200` through a drain) and load-balancer readiness at `/ready` (`503` while draining or before the first config revision applies, with the cause in its `reason` field). A draining node keeps its listener until the drain completes, so both probes answer throughout, and it refuses any request that would start new work with `503` and a `Retry-After`; see [During a drain](../reference/api-endpoints.md#during-a-drain). A node with nothing in flight drains in milliseconds, which is also the whole of an `ingress` node's drain, so give such a pod a `preStop` sleep of a few readiness periods if you need the load balancer to have acted on that `503` before the listener goes. The engine will not sleep on its own: a delay long enough to matter would eat the `terminationGracePeriodSeconds` the drain itself has to finish inside, and only the deployment knows how much of that grace its longest turn needs.
+Point liveness probes at `/health` (stays `200` through a drain) and load-balancer readiness at `/ready` (`503` while draining or before the first config revision applies, with the cause in its `reason` field). Every node answers both, whatever its roles — see [Probes](#probes) for what `/ready` means on a node that takes no traffic. A draining node keeps its listener until the drain completes, so both probes answer throughout, and it refuses any request that would start new work with `503` and a `Retry-After`; see [During a drain](../reference/api-endpoints.md#during-a-drain). A node with nothing in flight drains in milliseconds, which is also the whole of an `ingress` node's drain, so give such a pod a `preStop` sleep of a few readiness periods if you need the load balancer to have acted on that `503` before the listener goes. The engine will not sleep on its own: a delay long enough to matter would eat the `terminationGracePeriodSeconds` the drain itself has to finish inside, and only the deployment knows how much of that grace its longest turn needs.
 
 Both communicate through the stream, and through the coordination KV riding
 the same connection — never with each other. Both accept `-debug` for verbose
 logging.
+
+### Probes
+
+Every node with an `api.port` answers `/health` and `/ready` on it, whatever
+its roles, so an orchestrator can probe each one the same way. What the two
+answer is fixed; what `/ready` *means* follows from whether the node takes
+traffic:
+
+| | `/health` (liveness) | `/ready` |
+|---|---|---|
+| A node with `ingress` | `200` while the process is alive, through a drain | Should traffic come here: `503` while draining, unconfigured, or on a `shed` or `stuck` posture |
+| A node without it | The same, with the node's half of the health envelope | Is it doing its work: also `503` while its broker link is down, it does not hold its presence lease, or — running seats — it has not been admitted to claim them |
+
+A node without `ingress` serves **nothing else** on that port — no API, no
+dashboard, no webhook — and a seats node's agent-mode tool bridge only when
+`CREWLET_MCP_BRIDGE_URL` is set. The reasons, their precedence and both bodies
+are in [Probes on a node without ingress](../reference/api-endpoints.md#probes-on-a-node-without-ingress).
+
+On Kubernetes that is one probe block for every node, with `api.host: 0.0.0.0`
+so the kubelet can reach the pod's address, and `api.port: 8080` — the port the
+image's `EXPOSE` documents:
+
+```yaml
+# the engine container of any node — ingress, seats, satellite
+ports:
+  - {name: http, containerPort: 8080}
+livenessProbe:
+  httpGet: {path: /health, port: http}
+  periodSeconds: 10
+  timeoutSeconds: 5        # /health reads the coordination plane under a
+  failureThreshold: 6      #   budget well inside this; a minute of silence
+                           #   is a wedged process, not a slow broker
+readinessProbe:
+  httpGet: {path: /ready, port: http}
+  periodSeconds: 5
+  timeoutSeconds: 5
+```
+
+Liveness tolerates a minute because the engine ends a wedged process itself:
+the [watchdog](../concepts/seat-ownership.md#the-wedged-node-and-why-it-leaves)
+exits once its watched duty stalls for a seat lease TTL (45 s), so a liveness
+failure is the backstop for a process that cannot even do that. Readiness on a
+node without `ingress` is what a rolling update waits on before it replaces
+the next pod, so a satellite that cannot reach its fleet holds the rollout
+rather than letting it take the next one down too. Give every pod a
+`terminationGracePeriodSeconds` longer than its longest turn, for the drain.
+
+A StatefulSet of [clustered broker members](fleet.md#the-broker-members-and-leaves)
+needs `podManagementPolicy: Parallel`. The default, `OrderedReady`, starts a
+member only once the one before it is ready, and no member can be ready alone:
+the company revision it applies and the presence lease it holds are both in a
+coordination store that writes through a quorum of the members — so the first
+waits for peers the StatefulSet will not start until it is ready, and the set
+never comes up.
 
 ### Replica count
 

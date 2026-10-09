@@ -941,6 +941,11 @@ func (h *Host) renewNodePresence(ctx context.Context) {
 	if h.Draining() {
 		return
 	}
+	// BEFORE THE CALL, as a seat's renew takes it: what a successful claim
+	// proves is the row's TTL from the moment it was asked for, and a stamp
+	// taken after a slow store answered would credit this node with time it
+	// never held.
+	asked := h.now()
 	lease, _, err := h.backend.TryAcquire(ctx, coord.NodeResource(h.nodeID), coord.AcquireOptions{
 		Owner:     h.owner,
 		TTL:       h.ttl,
@@ -968,6 +973,7 @@ func (h *Host) renewNodePresence(ctx context.Context) {
 	draining := h.draining
 	if !draining {
 		h.nodeLease = lease
+		h.presenceRenewedAt = asked
 	}
 	h.mu.Unlock()
 	if draining {

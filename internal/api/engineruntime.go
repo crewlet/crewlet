@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -27,14 +28,80 @@ type engineRuntime struct {
 // posture and the applied epoch blank: exactly the two facts an operator reads
 // to learn why a node left rotation. Every node builds one before it serves.
 func NewEngineRuntime(e *engine.Engine, reconciler *engine.Reconciler) (NodeRuntime, error) {
+	runtime, err := newEngineRuntime(e, reconciler)
+	if err != nil {
+		return nil, err
+	}
+	return runtime, nil
+}
+
+func newEngineRuntime(e *engine.Engine, reconciler *engine.Reconciler) (engineRuntime, error) {
 	switch {
 	case e == nil:
-		return nil, errors.New("api: the engine runtime needs the engine it reports on")
+		return engineRuntime{}, errors.New("api: the engine runtime needs the engine it reports on")
 	case reconciler == nil:
-		return nil, errors.New("api: the engine runtime needs the engine's reconciler: " +
+		return engineRuntime{}, errors.New("api: the engine runtime needs the engine's reconciler: " +
 			"it is the only source of the config posture and the applied epoch")
 	}
 	return engineRuntime{engine: e, reconciler: reconciler}, nil
+}
+
+// EngineProbeOptions is the [ProbeOptions] of a node without the ingress role
+// that runs e: its runtime over the same engine and reconciler, under the same
+// requirements, as [NewEngineRuntime] — so a node's /health says the same thing
+// whichever surface serves it — its node id, the roles its presence lease
+// advertises, and its agent-mode tool bridge where it runs seats. With
+// api.public set the command serves that bridge on a listener of its own
+// ([BridgeOnly]) rather than beside the probes.
+//
+// ONE WIRING, here rather than in the command that serves it, so that
+// `crewlet run` and the end-to-end suite probe a node through the same code: a
+// copy in the suite is a harness that agrees with itself, and a regression in
+// which runtime, which roles or which bridge the command hands the surface
+// would pass every suite that probed the copy.
+func EngineProbeOptions(boot *config.Bootstrap, e *engine.Engine,
+	reconciler *engine.Reconciler,
+) (ProbeOptions, error) {
+	if boot == nil {
+		return ProbeOptions{}, errors.New("api: the probe surface needs the node's Tier A")
+	}
+	runtime, err := newEngineRuntime(e, reconciler)
+	if err != nil {
+		return ProbeOptions{}, err
+	}
+	// THE NAME THE ENGINE RUNS UNDER, which is what its presence lease
+	// carries, and the profile Tier A gives that name — the one the engine
+	// itself placed seats by.
+	nodeID := e.Node().ID()
+	profile := boot.Profile(nodeID)
+	opts := ProbeOptions{
+		Bootstrap: boot, Runtime: runtime, NodeID: nodeID,
+		Roles: profile.Roles.Names(), QueueBackend: e.Backends().Queue.Backend(),
+	}
+	// A BRIDGED SESSION IS A LIVE TOOL SURFACE IN THE PROCESS THAT OPENED IT,
+	// so the node running the agent-mode seat is the only node its box can
+	// reach — and only a node running seats opens one.
+	if profile.RunsSeats() {
+		opts.Bridge = e.Bridge()
+	}
+	return opts, nil
+}
+
+// Configured reports whether a company revision is active: whether the
+// engine's live epoch holds one, read on every call so an apply that brings
+// this node its first revision flips it.
+func (r engineRuntime) Configured() bool { return r.engine.Company() != nil }
+
+// Work is what a node without the ingress role must hold to be doing its work,
+// each fact read from what already tracks it — see the engine's readiness.go.
+func (r engineRuntime) Work() WorkState {
+	admission, admitted := r.engine.SeatAdmission()
+	return WorkState{
+		Broker:    r.engine.BrokerLink(),
+		Presence:  r.engine.HoldsPresence(),
+		Admission: admission,
+		Admitted:  admitted,
+	}
 }
 
 // Tools is the catalogue this node serves, for the dashboard's tool screen.

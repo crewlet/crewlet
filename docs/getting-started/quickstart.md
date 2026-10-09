@@ -561,6 +561,12 @@ crewlet run -config crewlet.yaml -api-port 8000   # terminal 1
 crewlet run -config agents.yaml -api-port 0       # terminal 2
 ```
 
+`-api-port 0` binds nothing on the agents node. Give it a port of its own
+instead (`-api-port 8001`) when something should probe it: without the
+`ingress` role it serves `/health` and `/ready` there and nothing else, and its
+`/ready` turns `200` once it has joined the fleet and been admitted — see
+[Probes on a node without ingress](../reference/api-endpoints.md#probes-on-a-node-without-ingress).
+
 The agents node claims the seats once the data node answers that its copy of
 the company's records is level with its logs, and its seats' tracker and knowledge
 tools read and write through it. See

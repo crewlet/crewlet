@@ -982,6 +982,40 @@ func (q *Queue) DialOwned() (*nats.Conn, error) {
 	return dial(q.cfg)
 }
 
+// Link reports whether this client reaches the fleet's broker right now: nil
+// while it does, and an error naming what is down while it does not.
+//
+// # What "the broker" is depends on the node, and the client knows which
+//
+// A MEMBER's broker is in this process, so its connection is an in-memory pipe
+// or a loopback socket that cannot drop while the process runs; what it shares
+// with the rest of the fleet is raft's concern, answered by the state log's
+// own health. A LEAF's broker is in this process too, but runs no JetStream:
+// every stream, consumer and bucket it uses is a member's, across its leaf
+// link, so a leaf whose link is down is a node whose seats can neither receive
+// nor publish anything while its own connection reads as healthy. And a node
+// that DIALLED an external cluster reaches it over its one client connection,
+// which reconnects on its own and is unusable while it does.
+//
+// So both are asked: the client connection always, and the leaf link where
+// there is one. Neither is a network round trip — the connection's state and
+// the server's link count are what the NATS libraries already track — which is
+// what lets a readiness probe ask on every call.
+func (q *Queue) Link() error {
+	if q.isClosed() {
+		return ErrClosed
+	}
+	if status := q.nc.Status(); status != nats.CONNECTED {
+		return fmt.Errorf("jetstream: this node's connection to the broker is %s",
+			strings.ToLower(status.String()))
+	}
+	if q.embedded != nil && q.embedded.leaf && q.embedded.ns.NumLeafNodes() == 0 {
+		return errors.New("jetstream: this leaf has no link to any member of the " +
+			"fleet, so every stream and bucket it uses is out of reach")
+	}
+	return nil
+}
+
 // Backend names this backend for operator display. Nothing may branch on it.
 func (q *Queue) Backend() string {
 	if q.embedded != nil {

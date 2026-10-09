@@ -222,7 +222,8 @@ type Options struct {
 	// Unlike OtelReceiver it is NOT a split-deployment surface: a session
 	// is a live tool surface in the process that opened it, so it must be
 	// the ENGINE's own bridge, served by the node that runs the seat. A
-	// node without the ingress role serves it alone, through [BridgeOnly].
+	// node without the ingress role serves it beside its probes and
+	// nothing else, through [Probes].
 	Bridge *mcpbridge.Bridge
 
 	// Operator is the company's own tracker and knowledge base as ONE tool
