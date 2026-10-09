@@ -169,18 +169,24 @@ jobs:
       # EXECUTABLE (what `go run` keeps since Go 1.24) is a `-d` DIRECTORY,
       # and using it re-stamps the directory and not the binary inside, so a
       # file-by-file prune would empty an entry this job had just used.
-      # Saved even when the job failed, since a compile is no less right for
-      # a test that failed after it; never when it was cancelled.
+      # Saved only from a job that SUCCEEDED, because only a job that ran to
+      # its end is known to have compiled its whole working set. One that
+      # failed early — a module download refused, a partition that listed
+      # nothing — used nothing, so the prune above would leave an empty
+      # directory, and saved, that would become the newest entry: every
+      # pull request after it would restore nothing and compile cold until
+      # a later main run saved a whole one. A failed main run saves nothing
+      # instead, and the last good entry stays the one restored.
       - &gobuild-prune
         name: keep only what this job used of the build cache
-        if: ${{ !cancelled() && env.GOCACHE != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        if: ${{ success() && env.GOCACHE != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         run: |
           find "$GOCACHE" -mindepth 2 -maxdepth 2 \( -name '*-a' -o -name '*-d' \) \
             ! -newer "$RUNNER_TEMP/gocache-epoch" -exec rm -rf {} +
           du -sh "$GOCACHE"
       - &gobuild-save
         name: save this job's build cache
-        if: ${{ !cancelled() && env.GOCACHE != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        if: ${{ success() && env.GOCACHE != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@v6
         with:
           path: ${{ env.GOCACHE }}
