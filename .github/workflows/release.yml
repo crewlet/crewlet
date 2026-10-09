@@ -61,10 +61,26 @@ jobs:
         with:
           fetch-depth: 0
 
+      # THE GO CACHES, on ci.yml's policy. setup-go's own cache is OFF: its key
+      # is go.sum alone, which nothing on main writes any more (ci.yml keeps a
+      # cache per job), so a pull request here would restore nothing and then
+      # SAVE under its own ref — an entry no other ref can read, which only
+      # pushes main's entries out of the repository's 10 GB. The module cache
+      # ci.yml's build + vet saves on main is restored, read-only, under the
+      # same exact key. No build cache is: goreleaser builds four targets with
+      # -trimpath and its own -ldflags, which share no build action with any
+      # ci.yml job, so a release compiles cold, once per tag.
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.sum
+          cache: false
+      - name: locate the module cache
+        run: echo "GOMODCACHE=$(go env GOMODCACHE)" >> "$GITHUB_ENV"
+      - name: restore the module cache main saved
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.GOMODCACHE }}
+          key: gomod-${{ runner.os }}-${{ hashFiles('go.sum') }}
 
       # The image is built for linux/arm64 as well as amd64, and the base
       # image's package install RUNs on the target architecture. Without
@@ -141,10 +157,19 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The Go caches as in the snapshot job, for its reasons: the module
+      # cache main saved, read-only, and no build cache.
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.sum
+          cache: false
+      - name: locate the module cache
+        run: echo "GOMODCACHE=$(go env GOMODCACHE)" >> "$GITHUB_ENV"
+      - name: restore the module cache main saved
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.GOMODCACHE }}
+          key: gomod-${{ runner.os }}-${{ hashFiles('go.sum') }}
 
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4

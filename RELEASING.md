@@ -176,6 +176,13 @@ CI runs the same thing for you: the snapshot job fires on demand
 workflow. That is what stops the release pipeline running for the first time
 on the tag that publishes.
 
+Neither release job saves a cache. Both restore the module cache `ci.yml`'s
+`build + vet` job saves on `main`, read-only, and neither restores a build
+cache: goreleaser builds with `-trimpath` and its own `-ldflags`, which share
+no build action with any `ci.yml` job, so a release compiles its four targets
+cold — a few minutes, once per tag — and a pull request touching the release
+surface never stores an entry only its own ref could read.
+
 ---
 
 ## What CI already guards
