@@ -1554,10 +1554,21 @@ actually given rather than from the configuration: credential files a login
 wrote, a headless token, an `api_keys` value under `auth.mode: api-key`, a
 variable `auth.mode: inherit-env` forwards, or — for a CLI whose profile reads
 its provider's key from its own environment (`hermes`, `pi`, `opencode`) — a
-credential-named variable in `cli.env`. `doctor`'s `sign-in` line names every
-one it found, and an entry with none is a `no sign-in` problem naming the
-route to take. A token `auth.mode: api-key` removes from the child, or a
-metered key subscription mode removes, is not counted.
+[credential-named](../concepts/subscription-llm-backends.md#5-a-provider-key-in-clienv-hermes-pi-opencode)
+variable in `cli.env`. `doctor`'s `sign-in` line names every one it found, and
+an entry with none is a `no sign-in` problem naming the route to take — unless
+the smoke test was answered, which proves the CLI authenticates some way the
+engine does not hand it (an endpoint that takes no key, a credential in its
+own configuration). A token `auth.mode: api-key` removes from the child is not
+counted. `${VAR}` references and the variables `inherit-env` forwards are
+resolved in the process running `crewlet llm` — the secret store first, then
+that shell's environment — so run it with the engine's environment to get the
+engine's answer.
+
+`llm list`'s `SIGN-IN` column is the first route `doctor` would name:
+`credentials` (files a login wrote), `token` (a headless token), `api key`
+(under `auth.mode: api-key`), `inherited token` or `inherited key` (forwarded
+by `auth.mode: inherit-env`), `environment` (a `cli.env` key), or `none`.
 
 On an **`anthropic` entry** `doctor` checks the two things that make every
 call on it a 400 while the config validates clean. The request is

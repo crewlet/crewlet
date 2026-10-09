@@ -238,7 +238,7 @@ A `cli-agent` entry is authenticated once, on the engine host, and then
 verified:
 
 ```bash
-crewlet llm login subscription --capture-token   # or plain `login` for the
+crewlet llm login subscription -capture-token    # or plain `login` for the
                                                  # vendor's browser flow
 crewlet llm doctor subscription
 ```
@@ -247,8 +247,12 @@ Each seat gets its own isolated CLI home, so agents never inherit one
 another's sessions or memory — that and the auth options are covered in
 [Subscription LLM Backends](../concepts/subscription-llm-backends.md).
 
-Useful knobs on every entry: `api_keys` accepts **multiple** keys (the
-provider rotates on rate-limit/auth errors), `reasoning_effort` sets how
+Useful knobs: on an API entry (`anthropic`, `openai`, `openai-compatible`)
+`api_keys` accepts **multiple** keys (the provider rotates on
+rate-limit/auth errors) — a `cli-agent` entry takes one, and only under
+`cli.auth.mode: api-key` (see [what a cli-agent entry
+refuses](../concepts/subscription-llm-backends.md#configuration-reference)) —
+`reasoning_effort` sets how
 hard the model thinks (`low` to `max`; an `anthropic` entry thinks on every
 call and defaults to `high`, an `openai` one sends it once `reasoning: true`
 — see [Claude models](configuration.md#claude-models-thinking-effort-and-sampling)

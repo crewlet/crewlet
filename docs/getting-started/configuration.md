@@ -446,16 +446,17 @@ providers:
         auth:
           mode: subscription            # subscription | api-key | inherit-env.
                                         #   api-key puts the entry's ONE api_keys value
-                                        #   in the CLI's key variable, and is refused on
-                                        #   a CLI with none (hermes, pi, opencode,
-                                        #   kimi-code); api_keys is refused in any
-                                        #   other mode, since nothing would read it
+                                        #   in the CLI's key variable, and a write is
+                                        #   refused for a CLI with none (hermes, pi,
+                                        #   opencode, kimi-code); api_keys is refused in
+                                        #   any other mode, since nothing would read it
           token: ""                     # optional — ${VAR} holding a headless
                                         #   subscription token; empty falls back to the
                                         #   profile's own var (CLAUDE_CODE_OAUTH_TOKEN).
                                         #   subscription mode only, and only on a CLI
-                                        #   that mints one (claude-code); refused
-                                        #   elsewhere, where it would reach nothing
+                                        #   that mints one (claude-code); a write is
+                                        #   refused elsewhere, where it would reach
+                                        #   nothing
           credential_bundle: ""         # optional — ${VAR} holding a `crewlet llm export`
                                         #   blob; empty falls back to
                                         #   CREWLET_LLM_CLI_<KEY>_CREDENTIALS

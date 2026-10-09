@@ -869,55 +869,21 @@ machine where the CLI plainly works explains itself:
 
 ```
 credentials   : none on disk
-host login    : .claude/.credentials.json (not adopted)
+host login    : /home/you/.claude/.credentials.json (not adopted)
 token env     : unset
 sign-in       : none
 problems:
   - no sign-in for "default": no credential files in
     /var/lib/crewlet/llm-cli/default/credentials, and nothing in the
     environment the CLI is given authenticates it — this machine has
-    a login at ~/.claude/.credentials.json: adopt it with
-    `crewlet llm login default --from-host`, or mint a headless
-    CLAUDE_CODE_OAUTH_TOKEN with `--capture-token` (preferred: no
+    a login at /home/you/.claude/.credentials.json: adopt it with
+    `crewlet llm login default -from-host`, or mint a headless
+    CLAUDE_CODE_OAUTH_TOKEN with `-capture-token` (preferred: no
     shared refresh token)
 ```
 
-The `sign-in` line is read off the environment the CLI is actually given,
-after `auth.mode` has set and removed what it does — never off the
-configuration beside it. So a token that `auth.mode: api-key` removes is not
-a sign-in, a metered key that subscription mode removes from `cli.env` is not
-one either, and both `doctor` and `crewlet llm list` give the same answer.
-
-### Signing in with a provider key through `cli.env` (hermes, pi, opencode)
-
-`hermes`, `pi` and `opencode` each front many model providers and read each
-provider's key from its own variable — `OPENROUTER_API_KEY`,
-`ANTHROPIC_API_KEY`, `NVIDIA_API_KEY` and so on — so their profiles name no
-single `api_key_env`. Their key goes in `cli.env` instead, as a `${VAR}`,
-with `auth.mode` left at `subscription`:
-
-```yaml
-providers:
-  llm:
-    herm:
-      type: cli-agent
-      model: anthropic/claude-sonnet-4
-      cli:
-        agent: hermes
-        env:
-          OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"
-```
-
-Their profiles declare `env_sign_in`, which is what makes `doctor` count a
-credential-named variable in `cli.env` as a sign-in (`sign-in : cli.env sets
-OPENROUTER_API_KEY`) and report one whose `${VAR}` resolved to nothing. It
-counts the name, not whether the provider accepts the key: the smoke test is
-what proves that. The key also goes with the entry's runs into a coding box —
-an [agent-mode](#agent-mode) run, or a code-sandbox run on this entry — the way
-a headless token does, so it works in a remote cell; the rest of `cli.env` is
-not carried there. A CLI that does not read its key from the environment —
-`kimi-code` reads its metered key only from `config.toml` in the credential
-directory — does not declare it, and a key in its `cli.env` is not counted.
+How `doctor` decides what the `sign-in` line says is under [Operating
+it](#how-doctor-judges-a-sign-in).
 
 ### 1. Broker the vendor's own login (any CLI)
 
@@ -1052,6 +1018,54 @@ already has. A host that has been running holds the fresher refresh token, and
 restoring a boot-time blob over it is how a fleet logs itself out; `crewlet
 llm logout <KEY>` first if you mean to replace it.
 
+### 5. A provider key in `cli.env` (hermes, pi, opencode)
+
+`hermes`, `pi` and `opencode` each front many model providers and read each
+provider's key from its own variable — `OPENROUTER_API_KEY`,
+`ANTHROPIC_API_KEY`, `NVIDIA_API_KEY` and so on — so their profiles name no
+single `api_key_env`. Their key goes in `cli.env` instead, as a `${VAR}`,
+with `auth.mode` left at `subscription`:
+
+```yaml
+providers:
+  llm:
+    herm:
+      type: cli-agent
+      model: anthropic/claude-sonnet-4
+      cli:
+        agent: hermes
+        env:
+          OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"
+```
+
+Their profiles declare `env_sign_in`, which is what makes `doctor` and
+`crewlet llm list` count a **credential-named** variable in `cli.env` as a
+sign-in (`sign-in : cli.env sets OPENROUTER_API_KEY`) and report one whose
+`${VAR}` resolved to nothing. A name is credential-named when one of its
+parts — the name cut at every character that is not a letter or a digit,
+compared ignoring case — is `KEY`, `KEYS`, `APIKEY`, `ACCESSKEY`,
+`SECRETKEY`, `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `CREDENTIAL`,
+`CREDENTIALS`, `AUTH`, `OAUTH` or `PAT`. So `OPENROUTER_API_KEY` and
+`GH_TOKEN` are, and `HERMES_MAX_TOKENS` and `OPENAI_BASE_URL` are not: a
+count of model tokens is configuration. It is the same rule that refuses a
+credential in a profile's `passthrough_env` or `env`
+([below](#configuration-reference)). `doctor` counts the name, not whether
+the provider accepts the key: the smoke test is what proves that — and for a
+model served by an endpoint that takes no key, an answered smoke test is what
+clears the "no sign-in" problem.
+
+**The key also goes into a coding box**, the way a headless token does, so
+it works in a remote cell; the rest of `cli.env` is not carried there.
+[Agent mode](#agent-mode) is `opencode`'s alone — `hermes` and `pi` have no
+coding-agent runner — and a code-sandbox run on any of the three exports the
+key into the box, where the seat's coding agent reads it if it reads that
+variable: `opencode` reads every provider's own, Claude Code only
+Anthropic's. A key given in the seat's `role.sandbox.env` instead is counted
+by the remote-box check as well. A CLI that does not read its key from the
+environment — `kimi-code` reads its metered key only from `config.toml` in
+the credential directory — does not declare `env_sign_in`, and a key in its
+`cli.env` is not counted.
+
 ### Token refresh across seats
 
 OAuth access tokens expire in hours, and the CLI refreshes them
@@ -1073,13 +1087,13 @@ entirely.
 | `codex` | `codex` | ChatGPT Plus / Pro | `codex login`. Streams JSONL events; runs `--sandbox read-only`. |
 | `gemini-cli` | `gemini` | Google AI Pro / free tier | First run starts the auth picker. `GOOGLE_CLOUD_PROJECT` passes through. |
 | `qwen-code` | `qwen` | Qwen OAuth | Gemini CLI fork; same shape. |
-| `opencode` | `opencode` | Anthropic / Copilot / any | `opencode auth login`; the one built-in profile with a credential login. A provider key goes in `cli.env` under that provider's own variable, and `doctor` counts it — see [Signing in with a provider key](#signing-in-with-a-provider-key-through-clienv-hermes-pi-opencode). |
+| `opencode` | `opencode` | Anthropic / Copilot / any | `opencode auth login`; the one built-in profile with a credential login. A provider key goes in `cli.env` under that provider's own variable, and `doctor` counts it — see [Signing in with a provider key](#5-a-provider-key-in-clienv-hermes-pi-opencode). |
 | `cursor-agent` | `cursor-agent` | Cursor seat | `cursor-agent login`. A Cursor API key (`CURSOR_API_KEY`, its `api_key_env`) is the headless alternative, reached through `auth.mode: api-key`. |
 | `copilot` | `copilot` | GitHub Copilot seat | Prompt goes on argv, so very long transcripts are bounded by `ARG_MAX`. Authenticates with a GitHub token, so `GITHUB_TOKEN` is its `api_key_env` — reached via `auth.mode: api-key` or `inherit-env`, never forwarded silently. |
 | `grok` | `grok` | xAI | **xAI's own CLI** from [x.ai/cli](https://x.ai/cli), not the same-named npm package. Accepts `XAI_API_KEY` (the variable its own signed-out message names) through `auth.mode: api-key`. |
 | `muse-code` | `muse` | Muse Code subscription (Everyday / High / Power Usage), or pay-as-you-go | `muse login` / `muse logout`; the browser sign-in stores `~/.config/muse/auth.json`, which `-from-host` adopts. **No status command** — this CLI has none. Mints no headless token: `META_API_KEY` is a *metered* Model API key, reached through `auth.mode: api-key`. Runs `muse exec --json`, denies its tools through a seeded `run.toolset`, and puts the prompt in a **file** rather than on argv. Reports no token counts anywhere on its stream, so they are estimated. |
 | `kimi-code` | `kimi` | Kimi Code OAuth (Moonshot) | **MoonshotAI's own CLI**, `@moonshot-ai/kimi-code` — not the unscoped `kimi-code` package on npm, which wraps Claude Code behind a proxy and installs its own `kimi` (a `1.0.x` version is the other one). `kimi login` runs a device-code flow; there is no logout or status subcommand. Runs `--output-format stream-json`, because the default `text` output prefixes every line with `• ` and re-wraps it, which destroys the tool envelope. Its tools are denied in the **agent file** that also carries the system prompt — measured, that is 25 tools down to 1, and an 8.8 KB vendor system prompt replaced by the seat's own. Reports no token counts on its stream, so they are estimated. |
-| `hermes` | `hermes` | Nous Portal, or any of 30+ providers it fronts | `hermes auth` for the credential wizard, `hermes status` for state; `hermes auth logout` needs a provider name, so no logout is declared. Runs `hermes -z`, whose contract is the final response text and nothing else — so the tokens come from `--usage-file` instead. Tools are denied with `--toolsets web` on argv, which replaces the run's enabled set; **`-p` selects a profile on this CLI**, not a prompt. A provider key (`OPENROUTER_API_KEY`, …) goes in `cli.env`, and `doctor` counts it — see [Signing in with a provider key](#signing-in-with-a-provider-key-through-clienv-hermes-pi-opencode). |
+| `hermes` | `hermes` | Nous Portal, or any of 30+ providers it fronts | `hermes auth` for the credential wizard, `hermes status` for state; `hermes auth logout` needs a provider name, so no logout is declared. Runs `hermes -z`, whose contract is the final response text and nothing else — so the tokens come from `--usage-file` instead. Tools are denied with `--toolsets web` on argv, which replaces the run's enabled set; **`-p` selects a profile on this CLI**, not a prompt. A provider key (`OPENROUTER_API_KEY`, …) goes in `cli.env`, and `doctor` counts it — see [Signing in with a provider key](#5-a-provider-key-in-clienv-hermes-pi-opencode). |
 | `pi` | `pi` | Claude Pro/Max, ChatGPT Plus/Pro, GitHub Copilot — whichever it is logged into | `@earendil-works/pi-coding-agent`. **No headless login**: `/login` is a slash command, so `crewlet llm login` starts its TUI in the credential directory and you type it there. Denies every tool with `--no-tools`, which is honest here because its built-in set ships no web tool at all. Prompt *and* system prompt both on argv. Tokens estimated — see [Token accounting](#token-accounting). A provider key goes in `cli.env` under that provider's own variable, and `doctor` counts it. |
 | `custom` | — | — | Ships nothing; declare everything under `overrides`. |
 
@@ -1173,8 +1187,9 @@ through to its metered key.
 ### Profile fields
 
 Every field a profile has, and therefore every key `cli.overrides` accepts.
-A key not in this table is refused by name. Maps (`config_env`, `env`,
-`usage`) merge key by key; everything else replaces wholesale.
+A key not in this table is refused by name. Every mapping field
+(`config_env`, `env`, `usage`, `stdin_login`, `system_prompt_file`) merges
+key by key; lists and single values replace wholesale.
 
 | Field | What it is |
 |---|---|
@@ -1183,7 +1198,7 @@ A key not in this table is refused by name. Maps (`config_env`, `env`,
 | `written_for` | The CLI version the profile was written against, printed by `doctor` beside the one installed. |
 | `version_args` | The argv of the version probe. |
 | `complete_args` | The argv of one completion, before the model and the prompt. |
-| `model_args` | The model flag, with `{model}` substituted. Empty means the CLI takes no model, and an entry naming one is refused. |
+| `model_args` | The model flag, with `{model}` substituted. Required in effect: every entry names a `model`, so a merged profile with none is refused. |
 | `prompt_mode` | How the prompt travels: `stdin` (default), `argv` or `file`. |
 | `system_prompt_args` | The flag carrying the system prompt, with `{file}` (preferred) or `{system}`. Empty leaves it in the transcript. |
 | `system_prompt_env` | A variable naming a file the CLI reads its system prompt from; exclusive with `system_prompt_args`. |
@@ -1201,7 +1216,7 @@ A key not in this table is refused by name. Maps (`config_env`, `env`,
 | `passthrough_env` | Engine variables forwarded to the child. Never a credential. |
 | `token_env` | The variable a headless subscription token goes in (`cli.auth.token`). |
 | `api_key_env` | The variable a metered key goes in (`api_keys` under `auth.mode: api-key`). |
-| `env_sign_in` | The CLI reads its model provider's key from its own environment, so a credential-named variable in `cli.env` signs it in. |
+| `env_sign_in` | The CLI reads its model provider's key from its own environment, so a [credential-named](#5-a-provider-key-in-clienv-hermes-pi-opencode) variable in `cli.env` signs it in. |
 | `credential_paths` | The login files, relative to the seat home. |
 | `volatile_paths` | Sessions, transcripts and history, deleted before and after every call. |
 | `login_args` | The vendor's own interactive login, for `crewlet llm login`. |
@@ -1278,27 +1293,36 @@ purpose: a backend that silently picked up a stray `ANTHROPIC_API_KEY`
 would bill the metered account while you believed you were on a flat-rate
 plan.
 
-**Every credential an entry configures has to reach the CLI, or the entry
-is refused.** The engine puts a credential only into a variable the profile
-names for it — `api_key_env` for a key, `token_env` for a headless token —
-so each of these used to validate and then run signed in to nothing:
+**Every credential an entry configures has to reach the CLI, or a write
+keeping it is refused.** The engine puts a credential only into a variable
+the profile names for it — `api_key_env` for a key, `token_env` for a
+headless token — so each of these would run with the credential unused:
 
 | Written | Refused because | Instead |
 |---|---|---|
-| `auth.mode: api-key` on a CLI whose profile names no `api_key_env` (`hermes`, `pi`, `opencode`, `kimi-code`) | the key has no variable to go in | `hermes`, `pi`, `opencode`: leave `auth.mode` at `subscription` and set the key in `cli.env` under its provider's own variable ([above](#signing-in-with-a-provider-key-through-clienv-hermes-pi-opencode)). `kimi-code`: `crewlet llm login`. A build of the CLI that does read a key variable: name it with `cli.overrides.api_key_env` |
+| `auth.mode: api-key` on a CLI whose profile names no `api_key_env` (`hermes`, `pi`, `opencode`, `kimi-code`) | the key has no variable to go in | `hermes`, `pi`, `opencode`: leave `auth.mode` at `subscription` and set the key in `cli.env` under its provider's own variable ([above](#5-a-provider-key-in-clienv-hermes-pi-opencode)). `kimi-code`: put the key in the credential directory's `config.toml` — `crewlet llm login`, or a [credential bundle](#4-move-a-login-onto-another-host). A build of the CLI that does read a key variable: name it with `cli.overrides.api_key_env` |
 | `auth.mode: api-key` with no `api_keys` | there is no key to put in the variable | add one, e.g. `api_keys: ["${ANTHROPIC_API_KEY}"]` |
 | `api_keys` under `subscription` or `inherit-env` | only `api-key` mode reads it | set `auth.mode: api-key`, or drop it |
 | more than one `api_keys` value | an entry holds one login and rotates nothing | one key per entry; another key on an entry of its own in the seat's fallback chain |
 | `auth.token` on a CLI whose profile names no `token_env` (every built-in profile but `claude-code`) | the CLI mints no headless token | remove it |
 | `auth.token` under `api-key` or `inherit-env` | `api-key` removes the token variable and `inherit-env` forwards the engine's own | `auth.mode: subscription` |
 | `auth.mode: inherit-env` on a CLI that names neither variable | nothing would be forwarded | `subscription`, with the key in `cli.env` or a login |
-| the profile's `token_env` or `api_key_env` in `cli.env` | `cli.auth` sets or removes those on every call | `auth.token`, or `api_keys` with `auth.mode: api-key` |
+| the profile's `token_env` or `api_key_env` in `cli.env` | `cli.auth` owns those: whether a value there reaches the CLI depends on `auth.mode` and on whether a credential resolves from the secret store or the engine's environment, which the document cannot show | `auth.token`, or `api_keys` with `auth.mode: api-key` |
 
-Each is checked against the profile with `cli.overrides` merged in, by every
-write path, and each refusal names the field and the route to take.
+Each is checked against the profile with `cli.overrides` merged in, and each
+refusal names the field and the route to take. They are **admission** rules:
+every write path — `crewlet validate`, a `PUT` or `PATCH` of the config, a
+setup write, a revert — refuses a document that breaks one, while a revision
+being *applied* that breaks one is applied and warned about, because the
+entry still runs (signed in by whatever the CLI does read) and refusing it
+there would take a node off the fleet's configuration during a rolling
+upgrade. A profile that cannot drive its CLI at all — an override typo, a
+missing `binary`, no `model_args` — is different: no node can build it, so it
+is refused at apply too.
 
-**A profile's `passthrough_env` may not name a credential**, and the
-engine refuses one that does. Everything listed there is forwarded from
+**A profile's `passthrough_env` may not name a
+[credential](#5-a-provider-key-in-clienv-hermes-pi-opencode)** — an admission
+rule like the ones above. Everything listed there is forwarded from
 the engine's own environment *before* `auth.mode` is consulted, so a key
 named there would reach every seat whatever the mode says — the same
 metered-bill-on-a-flat-rate-plan failure the mode exists to prevent. Use
@@ -1312,8 +1336,10 @@ through.
 there would sit in the stored revision in plain text and come back on every
 config read. A credential the CLI needs goes in `cli.env`, which is both, or
 through `cli.auth`. `env` may not name the profile's `token_env` or
-`api_key_env` either, whatever they are called: `cli.auth` sets or removes
-those on every call, so a value there would never decide anything.
+`api_key_env` either, whatever they are called: `cli.auth` owns those, and
+`cli.env` and `cli.auth` are both layered over `env`, so whether a value
+there reached the CLI would turn on the mode and the secret store rather
+than on anything the profile says.
 
 ---
 
@@ -1614,6 +1640,32 @@ seat's tools cannot answer anybody, touch a ticket or submit its work.
 A text-mode entry reports neither, rather than reporting that it would
 not work in a mode it is not in.
 
+### How `doctor` judges a sign-in
+
+The `sign-in` line names every route that authenticates the CLI, read off
+the environment the CLI is actually given, after `auth.mode` has set and
+removed what it does — never off the configuration beside it. So a token
+that `auth.mode: api-key` removes is not a sign-in, and `crewlet llm list`'s
+`SIGN-IN` column is the first route the line names, so the two commands
+cannot disagree. The routes are credential files in the entry's directory,
+a headless token, an API key under `api-key`, a token or key forwarded under
+`inherit-env`, and a [credential-named](#5-a-provider-key-in-clienv-hermes-pi-opencode)
+variable in `cli.env` on a CLI that reads its key from its environment.
+
+`${VAR}` references, and the variables `inherit-env` forwards, are resolved
+in the process running `crewlet llm` — the secret store first, then *that
+shell's* environment — so run it with the engine's environment to get the
+engine's answer.
+
+When none of those authenticates the CLI, `doctor` reports "no sign-in" as a
+problem, naming first a route you configured whose `${VAR}` resolved to
+nothing. One case is not a fault: a CLI pointed at an endpoint that takes no
+key (a `hermes` or `pi` entry aimed at a local server through `cli.env`), or
+one holding a key in a configuration file of its own. The configuration
+cannot tell that from a missing key, so the smoke test decides: when it is
+answered, the problem is dropped and the `sign-in` line says the CLI
+authenticates some way the engine does not hand it.
+
 A profile that says `denied` while the shell ran is a problem naming the
 installed version, because the vendor's switch is not taking effect on
 it; a `vendor-default` profile whose shell ran is a problem stating the
@@ -1670,17 +1722,18 @@ reference](../reference/cli.md#crewlet-llm).
   bridge URL a box can dial. `crewlet llm doctor` checks all of it —
   see [Operating it](#operating-it).
 - **Code work needs one more decision.** A subscription *can* back the
-  [code sandbox](code-sandbox.md), two ways. On any backend including
-  remote E2B, the headless token travels: `crewlet llm login <key>
-  -capture-token` and Claude Code in the box bills your plan. For a CLI
-  that mints no such token — Codex, Gemini CLI, Kimi Code, Hermes and Pi
-  among them — use
-  a [local cell](code-sandbox.md#local-sandboxes) — `providers.sandbox.local`
-  plus `run_in: direct` or `container` — where the coding agent runs on
-  the engine host and reads the login directly. The credential *files* never travel to a remote box: they
-  carry a refresh token whose rotation is shared fleet state. A key an
-  `opencode` entry signs in with through `cli.env` travels the way a token
-  does, so that entry works in a remote cell too.
+  [code sandbox](code-sandbox.md). On any backend including remote E2B,
+  what travels into the box is the environment that signs the CLI in: a
+  headless token (`crewlet llm login <key> -capture-token`, and Claude
+  Code in the box bills your plan), an `api-key` entry's key, what
+  `inherit-env` forwards, and the [`cli.env` key](#5-a-provider-key-in-clienv-hermes-pi-opencode)
+  of a CLI that reads one (`opencode`, `hermes`, `pi`). The credential
+  *files* never travel to a remote box: they carry a refresh token whose
+  rotation is shared fleet state. So a CLI that signs in only through its
+  files — Codex, Gemini CLI or Kimi Code with no key — needs a
+  [local cell](code-sandbox.md#local-sandboxes) (`providers.sandbox.local`
+  plus `run_in: direct` or `container`), where the coding agent runs on the
+  engine host and reads the login directly.
 - **Latency.** Process launch plus model call. Point `llm_auxiliary` at
   a cheap API-key model rather than paying process startup for every
   summarisation.
