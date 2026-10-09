@@ -42,15 +42,24 @@ env:
 # resolve aliases; merge keys (`<<:`) are NOT supported, which is why each
 # anchor is a whole step.
 #
-# Why not setup-go's own cache, which this used to be: it keys on go.sum alone,
-# so every Go job here shared ONE key, and a key is saved only by the first job
-# to miss it. That was always the leg
-# `cross-compile the release targets (linux, amd64)` — the fastest job,
-# building CGO_ENABLED=0 without -race — so every later run restored 461 MB of
-# a non-race, no-cgo build into the race, cgo, lint and other-platform jobs,
-# which could use none of it: `test (race)` compiled cold for 152s before
-# its first package started, and its own save was refused ("Unable to reserve
-# cache") every time. Measured on runs 37517249211 and 37699674195.
+# Why not setup-go's own cache, which this used to be: it keeps BOTH Go caches
+# in ONE entry under ONE key, made of the runner, the Go version and a
+# dependency file's hash (this workflow pointed it at go.sum), with nothing for
+# the job, the target or the build flags. So every Go job here shared one key.
+# A key is saved only by the first job to finish without finding it, and never
+# again: there are no restore-keys to fall back to and no refresh, no way to
+# save from main alone, and no prune. On main the first to finish was always
+# one of the four cross-compile legs, CGO_ENABLED=0 and no -race, and which leg
+# varied from run to run; every other job restored its ~450 MB and could use
+# only the module half. `test (race)` reached its first package result
+# 101-158 s in with that cache restored and 103-160 s without it, and its own
+# build was never stored: refused ("Unable to reserve cache") on the run that
+# created the key, skipped as a hit on every run after. Measured on main's
+# runs from 35184635644 to 37918882598: the eight that created a key, and the
+# ones that restored it. setup-go has declined a key prefix (its issue #358)
+# and has no restore-only mode (#316, open), and its own docs ("Parallel
+# builds") send this case to `cache: false` and actions/cache, which is what
+# this file does.
 #
 # So: ONE MODULE CACHE, keyed exactly on go.sum and saved by `build + vet`
 # after `go mod download` has fetched the test-only modules too; and ONE BUILD
