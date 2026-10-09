@@ -53,45 +53,37 @@
 // An [Environment] entry is only checked in the unlisted direction, since
 // whether it fires is a fact about the machine.
 //
-// # The report a CI shard leaves behind
+// # The timings a run leaves behind
 //
-//	go run ./internal/skipgate -report DIR -- go test -json <packages>
+//	go run ./internal/skipgate -timings FILE -- go test -json <packages>
 //
-// writes two files into DIR, from the package-level records this program
-// already reads to reach its verdict:
+// writes `importpath<TAB>seconds` into FILE for every package that passed or
+// had no test files, read from the package-level records this program already
+// reads to reach its verdict. It is the file internal/solo/partition reads
+// with -weights to start the longest packages first, and ci.yml keeps it from
+// each passing run on main as the next run's weights. A FAILED package is left
+// out: its elapsed time stops wherever the failure stopped it, so it is not a
+// measurement of the package — and ci.yml keeps only a passing run's file
+// anyway.
 //
-//   - ran.txt, every package whose test binary reported a result (pass, fail,
-//     or skip for a package with no test files), one import path a line. ci.yml
-//     runs each half of the suite as SHARDS on separate runners, and its
-//     `tests` job holds the shards' ran.txt against the half they were cut
-//     from: every package in exactly one shard, none in two, none in neither.
-//     That is the cross-job half of an exact-cover guarantee whose in-process
-//     half is internal/solo/partition's own check, and it is read from what
-//     RAN rather than from what was planned, so it also catches a shard whose
-//     command line was not the list the partition printed.
-//   - timings.tsv, `importpath<TAB>seconds` for every package that passed or
-//     had no tests, which is the file internal/solo/partition reads with
-//     -weights to start the longest packages first and to balance the shards.
-//     A FAILED package is left out: its elapsed time stops wherever the
-//     failure stopped it, so it is not a measurement of the package, and
-//     ci.yml keeps the timings of passing runs only.
-//
-// Both are written whatever the verdict, so a red shard's report still says
-// what it got through; a report that cannot be written fails the run, since
-// the job that reads it would otherwise fail later and say less.
+// The file is CREATED before the test command starts, so a path that cannot
+// be written fails in a second rather than after the whole suite, and a
+// previous run's file at the same path is emptied rather than left to be read
+// as this run's. It is FILLED after the verdict has been printed, whatever the
+// verdict, so a write that fails can add to the verdict and never hide it.
 package main
 
 import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"maps"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -158,17 +150,16 @@ type report struct {
 	// ran is every package the stream carried a record for.
 	//
 	// Load-bearing for the staleness half: BOTH test targets run a SUBSET of
-	// the tree — `make test` the shared partition, `make test-solo` the rest,
-	// and in CI each job runs one SHARD of its half — so without this, every
-	// Always entry belonging to another run reads as "declared and did not
-	// skip" and each run fails on the others' entries. Staleness is only a
-	// question about a package that ran.
+	// the tree — `make test` the shared partition, `make test-solo` the rest —
+	// so without this, every Always entry belonging to the other run reads as
+	// "declared and did not skip" and each run fails on the other's entries.
+	// Staleness is only a question about a package that ran.
 	ran map[string]bool
 
 	// finished is every package whose binary reported its own result, by
 	// FULL import path — the form `go test` was handed and the partition
-	// prints, which is what the -report files are compared against. Narrower
-	// than ran: a stream cut off mid-package has records for it and no result.
+	// prints, which is what the -timings file is read against. Narrower than
+	// ran: a stream cut off mid-package has records for it and no result.
 	finished map[string]finish
 }
 
@@ -319,41 +310,31 @@ func flush(out *os.File, buffered map[string][]string, pkg string) int {
 	return len(names)
 }
 
-// writeReport writes ran.txt and timings.tsv into dir; see the package doc.
+// writeTimings writes the -timings file's body; see the package doc.
 //
-// Both sorted by import path, so a report is a function of what ran and
-// diffs cleanly against another shard's. Seconds to the millisecond, which is
-// test2json's own precision.
+// Sorted by import path, so the file is a function of what ran. Seconds to
+// the millisecond, which is test2json's own precision.
 //
-// timings.tsv's shape is internal/solo/partition's to read, strictly, and it
-// outlives this run: ci.yml keeps it as the next run's weights. Change it
-// freely — that cache is keyed on a hash of this package's source and the
-// partition's, so no run ever restores a file a different writer produced.
-func writeReport(dir string, r report) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("-report %s: %w", dir, err)
-	}
-	var ran, timings strings.Builder
+// Its shape is internal/solo/partition's to read, strictly, and it outlives
+// this run: ci.yml keeps it as the next run's weights. Change it freely — that
+// cache is keyed on a hash of this package's source and the partition's, so no
+// run ever restores a file a different writer produced.
+func writeTimings(w io.Writer, r report) error {
+	var timings strings.Builder
 	for _, p := range slices.Sorted(maps.Keys(r.finished)) {
-		f := r.finished[p]
-		fmt.Fprintln(&ran, p)
-		if f.action != "fail" {
+		if f := r.finished[p]; f.action != "fail" {
 			fmt.Fprintf(&timings, "%s\t%s\n", p, strconv.FormatFloat(f.elapsed, 'f', 3, 64))
 		}
 	}
-	for name, body := range map[string]string{"ran.txt": ran.String(), "timings.tsv": timings.String()} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
-			return fmt.Errorf("-report %s: %w", dir, err)
-		}
-	}
-	return nil
+	_, err := io.WriteString(w, timings.String())
+	return err
 }
 
 func main() {
 	fs := flag.NewFlagSet("skipgate", flag.ContinueOnError)
-	reportDir := fs.String("report", "", "write ran.txt and timings.tsv for this run into `dir`")
+	timingsPath := fs.String("timings", "", "write how long each package that passed took to `file`")
 	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "usage: %s [-report DIR] -- go test -json <packages>\n", os.Args[0])
+		fmt.Fprintf(fs.Output(), "usage: %s [-timings FILE] -- go test -json <packages>\n", os.Args[0])
 		fs.PrintDefaults()
 	}
 	// The flag package stops at the first non-flag argument and consumes a
@@ -368,16 +349,42 @@ func main() {
 		os.Exit(2)
 	}
 
+	// Created before anything runs; see the package doc.
+	var timings *os.File
+	if *timingsPath != "" {
+		f, err := os.Create(*timingsPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "skipgate: -timings (make's TEST_TIMINGS): %v\n", err)
+			os.Exit(2)
+		}
+		timings = f
+	}
+	// exit fills the timings file, if one was asked for, from what the run
+	// got through, and exits with code — or with 1 if the file could not be
+	// written, since a run whose measurement was lost has not done everything
+	// it was asked. Before the stream is read r is empty, and so is the file.
+	var r report
+	exit := func(code int) {
+		if timings != nil {
+			err := errors.Join(writeTimings(timings, r), timings.Close())
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "\nskipgate: -timings %s: %v\n", *timingsPath, err)
+				code = max(code, 1)
+			}
+		}
+		os.Exit(code)
+	}
+
 	cmd := exec.CommandContext(context.Background(), argv[0], argv[1:]...)
 	cmd.Stderr = os.Stderr
 	stream, err := cmd.StdoutPipe()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "skipgate: %v\n", err)
-		os.Exit(1)
+		exit(1)
 	}
 	if err := cmd.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "skipgate: starting %q: %v\n", argv[0], err)
-		os.Exit(1)
+		exit(1)
 	}
 
 	in := bufio.NewScanner(stream)
@@ -387,7 +394,7 @@ func main() {
 	// judgement with it.
 	in.Buffer(make([]byte, 0, 1<<20), 16<<20)
 
-	r := read(in, os.Stdout)
+	r = read(in, os.Stdout)
 	scanErr := in.Err()
 	// DRAINED BEFORE WAITING, always. If the scan stopped early — a line past
 	// the buffer cap is the reachable case, since a t.Log can carry one — the
@@ -400,17 +407,9 @@ func main() {
 	// Waited for BEFORE anything is decided, so the producer's own verdict is
 	// in hand rather than inferred from what it managed to say.
 	producer := cmd.Wait()
-	// The report first, before any branch can exit: it says what the run got
-	// through, which a stream that could not be read is the case for most.
-	if *reportDir != "" {
-		if err := writeReport(*reportDir, r); err != nil {
-			fmt.Fprintf(os.Stderr, "\nskipgate: %v\n", err)
-			os.Exit(1)
-		}
-	}
 	if scanErr != nil {
 		fmt.Fprintf(os.Stderr, "\nskipgate: reading the test stream: %v\n", scanErr)
-		os.Exit(1)
+		exit(1)
 	}
 
 	unlisted, stale := Judge(r.skipped, r.ran)
@@ -443,7 +442,7 @@ func main() {
 	code, note := Verdict(r, producer,
 		len(unlisted) > 0 || len(stale) > 0 || len(staleMeasured) > 0)
 	fmt.Fprintln(os.Stderr, note)
-	os.Exit(code)
+	exit(code)
 }
 
 // Verdict decides the run from what the stream said and what the producer did.

@@ -1,10 +1,10 @@
-// Command partition prints one half of the test-package partition, or one
-// shard of a half, so that `make test` and `make test-solo` — and each CI job
-// running a shard of them — run exactly the packages they own.
+// Command partition prints one half of the test-package partition, so that
+// `make test` and `make test-solo` — and the CI job that runs each of them —
+// run exactly the packages they own.
 //
 //	go run ./internal/solo/partition parallel   # everything that shares a runner
 //	go run ./internal/solo/partition solo       # everything that needs one to itself
-//	go run ./internal/solo/partition -weights test-weights.tsv -shard 2/2 parallel
+//	go run ./internal/solo/partition -weights test-weights.tsv parallel
 //
 // The rule is one line: a package is solo iff its tests import
 // [github.com/crewlet/crewlet/internal/solo], whose doc says why that is the
@@ -19,36 +19,33 @@
 // $(shell ...), so a listing that failed halfway ran a SUBSET of the suite and
 // reported success.
 //
-// # Weights decide ORDER and PLACEMENT, never MEMBERSHIP
+// # Weights decide ORDER, never MEMBERSHIP
 //
 // `-weights FILE` names the seconds each package's test binary took on a
-// measured run (`importpath<TAB>seconds`, what internal/skipgate's -report
-// writes). They change two things and nothing else:
-//
-//   - The ORDER a half is printed in, longest first. `go test` starts package
-//     runs strictly in command-line order — cmd/go chains a barrier action
-//     between consecutive runs, so run i starts only once run i-1 has — and go
-//     list's order is alphabetical. Measured on CI before this existed:
-//     internal/search (472s), internal/store (203s) and internal/tracker
-//     (412s) started at +752s, +802s and +823s of a 1235s step, and the step
-//     ended on those three with the rest of the runner idle.
-//   - Which SHARD a package lands in, under `-shard I/N`: longest-processing-
-//     time-first, each package to the shard with the least measured time so
-//     far. One runner per half was the floor when this was added — the
-//     parallel half held a four-vCPU runner 90-99% busy for fifteen minutes,
-//     and the solo half ran internal/e2e plus five minutes of everything
-//     else, serially. ci.yml's plan step says how many shards each half has
-//     today and the measurement that number rests on.
+// measured run (`importpath<TAB>seconds`, what internal/skipgate's -timings
+// writes), and it changes the ORDER a half is printed in, longest first, and
+// nothing else. `go test` starts package runs strictly in command-line order —
+// cmd/go chains a barrier action between consecutive runs, so run i starts
+// only once run i-1 has — and go list's order is alphabetical. Measured on CI
+// before this existed: internal/search (472s), internal/store (203s) and
+// internal/tracker (412s) started at +752s, +802s and +823s of a 1235s step,
+// and the step ended on those three with the rest of the runner idle.
 //
 // Which packages are in the half is go list plus the marker, exactly as without
-// weights, and main ASSERTS that the shards cover the half exactly once before
-// it prints any of them: every way a weight can be wrong — missing, zero,
-// stale, naming a package that no longer exists — moves a package to another
-// runner or later in a queue, and none of them can drop one. A package the
-// file does not name weighs the median of the half's measured packages, so a
-// new package lands mid-queue rather than first or last; a file naming none of
-// the half weighs every package alike, which is go list's order and an even
-// split by count, and says so on stderr.
+// weights: every way a weight can be wrong — missing, zero, stale, naming a
+// package that no longer exists — moves a package earlier or later in the
+// queue, and none of them can drop one. A package the file does not name
+// weighs the median of the half's measured packages, so a new package lands
+// mid-queue rather than first or last; a file naming none of the half weighs
+// every package alike, which is go list's order, and says so on stderr.
+//
+// The Makefile weighs the PARALLEL half only. The solo half runs at -p 1,
+// where cmd/go's one worker links and runs every test binary in turn, so it
+// takes their sum in any order and a weight could not end it sooner.
+//
+// There is no flag that prints part of a half. Each half runs whole on one
+// runner, and ci.yml's `test` job says what dealing it across several cost
+// and bought when that was tried.
 package main
 
 import (
@@ -59,7 +56,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"maps"
 	"math"
 	"os"
 	"os/exec"
@@ -127,9 +123,9 @@ func partition(pkgs []pkg) (parallel, solo []string) {
 
 // readWeights parses a weights file: one `importpath<TAB>seconds` per line.
 //
-// STRICT, because the only producer is internal/skipgate's -report and a line
+// STRICT, because the only producer is internal/skipgate's -timings and a line
 // it did not write is a bug somewhere upstream that would otherwise surface
-// as a mysteriously unbalanced run. A blank line is skipped (a file that ends
+// as a mysteriously ordered run. A blank line is skipped (a file that ends
 // in one is still that file); anything else that is not a path, one tab and a
 // finite, non-negative number of seconds is refused naming the line, and so
 // is a path named twice — one run measures each package once, so two entries
@@ -140,7 +136,7 @@ func partition(pkgs []pkg) (parallel, solo []string) {
 // internal/skipgate's: a CI run whose reader or writer differs from the ones
 // that produced a saved file never restores it. Keyed on anything less, a
 // tighter rule here would refuse the saved file on every later run, and no run
-// could save one it accepts — only a run whose shards all pass saves at all.
+// could save one it accepts — only a run whose half passed saves at all.
 //
 // Pure over a reader so the refusals can be stated directly.
 func readWeights(r io.Reader, name string) (map[string]float64, error) {
@@ -154,7 +150,7 @@ func readWeights(r io.Reader, name string) (map[string]float64, error) {
 		path, secs, ok := strings.Cut(text, "\t")
 		if !ok || path == "" || strings.ContainsAny(path, " \t") {
 			return nil, fmt.Errorf("%s:%d: %q is not `importpath<TAB>seconds` — "+
-				"the file internal/skipgate -report writes is the only format read here", name, line, text)
+				"the file internal/skipgate -timings writes is the only format read here", name, line, text)
 		}
 		w, err := strconv.ParseFloat(secs, 64)
 		if err != nil || math.IsNaN(w) || math.IsInf(w, 0) || w < 0 {
@@ -179,9 +175,9 @@ func readWeights(r io.Reader, name string) (map[string]float64, error) {
 // since the measured run, or renamed — weighs the MEDIAN of the half's measured
 // packages: neither the first thing started nor the last, which is the honest
 // position for a package nothing is known about. The median is of THIS half
-// only, so the other half's durations (internal/e2e's, in particular) cannot
-// drag it. With nothing measured at all every package weighs one, and the
-// result is go list's order and an even split by count.
+// only, so a file that also times the other half (internal/e2e, in
+// particular) cannot drag it. With nothing measured at all every package
+// weighs one, and the result is go list's order.
 //
 // measured == nil means no weights were asked for, and is the same answer as
 // a measurement that names nothing.
@@ -239,84 +235,6 @@ func order(half []string, weights map[string]float64) []string {
 	return out
 }
 
-// shard deals an ordered half into n shards, longest first, each package to
-// the shard with the least weight so far.
-//
-// LPT — longest processing time first — and the tie-break is part of the
-// rule rather than an afterthought: least total, then FEWEST PACKAGES, then
-// lowest index. Without the middle term a run of zero weights (a half of
-// packages with no tests, or a measurement that recorded zeros) would all tie
-// at a total of 0 and all go to the first shard, leaving the others empty.
-// With it, an empty shard always wins, so no shard is empty while n ≤
-// len(ordered). Each shard keeps the order it was dealt in, which is longest
-// first.
-func shard(ordered []string, weights map[string]float64, n int) [][]string {
-	shards := make([][]string, n)
-	totals := make([]float64, n)
-	for _, p := range ordered {
-		best := 0
-		for i := 1; i < n; i++ {
-			switch {
-			case totals[i] < totals[best]:
-				best = i
-			case totals[i] == totals[best] && len(shards[i]) < len(shards[best]):
-				best = i
-			}
-		}
-		shards[best] = append(shards[best], p)
-		totals[best] += weights[p]
-	}
-	return shards
-}
-
-// cover reports how the shards fail to cover the half exactly once, or nil.
-//
-// The in-process half of the exact-cover guarantee; ci.yml's `tests` job
-// checks the same thing again across the jobs, from what each shard's run
-// actually executed. Unreachable while shard deals each package once, and
-// asserted anyway, because the one thing no single shard's caller can notice
-// is a package that went to none of them.
-func cover(half []string, shards [][]string) error {
-	seen := make(map[string]int, len(half))
-	for i, s := range shards {
-		if len(s) == 0 {
-			return fmt.Errorf("shard %d/%d is empty", i+1, len(shards))
-		}
-		for _, p := range s {
-			if prev, dup := seen[p]; dup {
-				return fmt.Errorf("%s is in shard %d/%d and shard %d/%d", p, prev, len(shards), i+1, len(shards))
-			}
-			seen[p] = i + 1
-		}
-	}
-	for _, p := range half {
-		if _, ok := seen[p]; !ok {
-			return fmt.Errorf("%s is in no shard", p)
-		}
-		delete(seen, p)
-	}
-	if len(seen) > 0 {
-		extra := slices.Sorted(maps.Keys(seen))
-		return fmt.Errorf("%s is in a shard but not in the half", strings.Join(extra, ", "))
-	}
-	return nil
-}
-
-// parseShard reads `I/N`: run shard I of N, both counted from one.
-func parseShard(spec string) (i, n int, err error) {
-	a, b, ok := strings.Cut(spec, "/")
-	if ok {
-		i, err = strconv.Atoi(a)
-		if err == nil {
-			n, err = strconv.Atoi(b)
-		}
-	}
-	if !ok || err != nil || n < 1 || i < 1 || i > n {
-		return 0, 0, fmt.Errorf("-shard %q is not I/N with 1 ≤ I ≤ N (1/1 is the whole half)", spec)
-	}
-	return i, n, nil
-}
-
 // list runs `go list -json` over the module and decodes the stream.
 //
 // NEVER with -e. That flag turns a broken package into a record with an Error
@@ -365,10 +283,9 @@ func loadWeights(path string) (map[string]float64, error) {
 
 func main() {
 	fs := flag.NewFlagSet("partition", flag.ContinueOnError)
-	weightsPath := fs.String("weights", "", "measured `file` of importpath<TAB>seconds: run the longest first, and place shards by it")
-	shardSpec := fs.String("shard", "1/1", "print only shard `I/N` of the half")
+	weightsPath := fs.String("weights", "", "measured `file` of importpath<TAB>seconds: print the longest first")
 	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "usage: %s [-weights FILE] [-shard I/N] parallel|solo\n", os.Args[0])
+		fmt.Fprintf(fs.Output(), "usage: %s [-weights FILE] parallel|solo\n", os.Args[0])
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(os.Args[1:]); err != nil {
@@ -379,11 +296,6 @@ func main() {
 		os.Exit(2)
 	}
 	which := fs.Arg(0)
-	index, n, err := parseShard(*shardSpec)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
-	}
 	measured, err := loadWeights(*weightsPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -421,29 +333,19 @@ func main() {
 	if which == "solo" {
 		half = solo
 	}
-	if n > len(half) {
-		fmt.Fprintf(os.Stderr, "-shard %s: the %s half has %d package(s), so it cannot be split %d ways\n",
-			*shardSpec, which, len(half), n)
-		os.Exit(1)
-	}
 
 	weights, unmeasured := weigh(half, measured)
 	switch {
 	case measured == nil:
 	case unmeasured == len(half):
 		fmt.Fprintf(os.Stderr, "partition: %s times none of the %d packages in the %s half, so every "+
-			"package weighs the same: go list's order, split by count\n", *weightsPath, len(half), which)
+			"package weighs the same: go list's order\n", *weightsPath, len(half), which)
 	case unmeasured > 0:
 		fmt.Fprintf(os.Stderr, "partition: %d of the %d packages in the %s half are not in %s, and "+
 			"each weighs the half's median\n", unmeasured, len(half), which, *weightsPath)
 	}
 
-	shards := shard(order(half, weights), weights, n)
-	if err := cover(half, shards); err != nil {
-		fmt.Fprintf(os.Stderr, "partition lost a package between shards: %v\n", err)
-		os.Exit(1)
-	}
-	for _, p := range shards[index-1] {
+	for _, p := range order(half, weights) {
 		fmt.Println(p)
 	}
 }

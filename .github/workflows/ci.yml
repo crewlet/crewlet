@@ -15,8 +15,8 @@ permissions:
 
 # A PUSH TO A PULL REQUEST CANCELS THAT PULL REQUEST'S RUN FOR THE COMMIT IT
 # REPLACED, and nothing else is ever cancelled. Nobody can merge the replaced
-# commit, so its run only holds runners — fourteen jobs of them now that the
-# test halves are sharded — that the new commit's run is queueing for.
+# commit, so its run only holds runners — ten jobs of them — that the new
+# commit's run is queueing for.
 #
 # The group is UNIQUE PER RUN for every other event, and that is the half that
 # is easy to get wrong. A group keyed on the ref would put every push to main
@@ -326,140 +326,77 @@ jobs:
             exit 1
           fi
 
-  # THE TEST SUITE RUNS AS SHARDS: each half of the partition (below) is cut
-  # into N pieces that run on N runners at once. One runner per half was the
-  # floor of the whole workflow — the parallel half held a four-vCPU runner
-  # 90-99% busy for fifteen minutes, and the solo half ran internal/e2e and
-  # five minutes of everything else one after another.
+  # ONE RUNNER PER HALF, and the two halves (below) are not split further.
+  # They were, for one pull request: each half cut into two shards by measured
+  # duration, on four runners. GitHub Actions has no native way to split one
+  # job across runners (its only fan-out is `strategy.matrix`), so that took a
+  # job to cut the shards, matrix legs named for their shard (`test (race)
+  # 1/2`), and an aggregate job for `main`'s ruleset to require in their
+  # place: a rule matches a check by its exact name, so one naming a leg would
+  # have stopped matching the day the shard count changed, and a required check
+  # that never reports blocks every pull request. Against that, its first run
+  # (37900112073) put the parallel half at 1,144 package-seconds with
+  # internal/engine (193s) its longest, which put the split's gain over one
+  # runner at about a minute and a half a run once the caches and the
+  # measurements below are warm: an estimate from that run's logs, not a
+  # measurement. Not worth the machinery while the slower half's job ends a
+  # minute or two after lint's and the dashboard's.
   #
-  # THIS JOB DECIDES ONCE what every shard is cut by, and that is its whole
-  # reason to exist. internal/solo/partition deals packages to shards by their
-  # measured durations, and each shard computes its own slice — so two shards
-  # reading two DIFFERENT measurements could each leave out a package the other
-  # thought it had. A prefix restore answers with the newest entry, and a main
-  # run can save a newer one between two shards' restores; restored ONCE here
-  # and handed to every shard as an artifact, they all read one file.
-  #
-  # The measurement is the `tests` job's, saved from the last run on main. When
-  # there is none (the first run, or the entry was evicted after a week unread)
-  # the file is empty, every package weighs the same and the shards split by
-  # count: slower, and exactly as complete.
+  # THE LONGEST PACKAGES START FIRST in `test (race)`, which needs no second
+  # runner. `go test` starts package runs in command-line order and go list's
+  # is alphabetical, which started internal/search, internal/store and
+  # internal/tracker last of their half; `go doc ./internal/solo/partition` has
+  # the measurement. So the job restores the package durations main's last
+  # passing run of it measured, hands them to the partition as TEST_WEIGHTS,
+  # and on main keeps its own run's as the next one's. With none (the first
+  # run, or an entry evicted after a week unread) the file is empty and the
+  # half runs in go list's order: slower, and exactly as complete, since a
+  # weight decides when a package starts and never whether it runs. The
+  # `end-to-end gates` job takes no weights: its half runs at -p 1, where
+  # cmd/go's one worker links and runs every test binary in turn, so the half
+  # takes their sum in any order.
   #
   # A MEASUREMENT IS KEYED ON THE CODE THAT WROTE IT AND THE CODE THAT READS
   # IT, because a prefix restore otherwise hands every run the newest entry
   # whatever its shape, and that can wedge CI for good. internal/solo/partition
   # reads the file strictly and refuses a line internal/skipgate did not write;
-  # a refusal fails every shard; and only a main run whose shards ALL passed
-  # saves a replacement. So a change to either side of the format — a new
-  # column, a tighter reader — would leave every later run, on every pull
-  # request and on main, restoring a file it refuses, with nothing able to save
-  # one it accepts, and the eviction that would end it never comes, since the
-  # entry is read on every run. Keyed on a hash of both packages' sources, a
-  # change to either starts from no measurement — the bootstrap above, which
-  # runs complete — and an entry a later change cannot read is never offered
-  # to it. That holds for a bug too: a file the same code wrote and cannot
-  # read is retired by the change that fixes the code. The `tests` job only
-  # sorts the shards' lines together, which can make no line unreadable and,
-  # once its cover check has passed, name no package twice — so these two
-  # packages are the whole of the format. A change to either one, test files
-  # and the skip allowlist included, costs a run split by count, which is
-  # cheaper than a key that misses the one edit that mattered.
-  plan:
-    name: plan the test shards
-    runs-on: ubuntu-latest
-    outputs:
-      parallel: ${{ steps.shards.outputs.parallel }}
-      solo: ${{ steps.shards.outputs.solo }}
-      weights-key: ${{ steps.weights-key.outputs.prefix }}
-    steps:
-      # The two packages the key is hashed over, and nothing else: this job
-      # runs no Go.
-      - uses: actions/checkout@v7
-        with:
-          sparse-checkout: |
-            internal/skipgate
-            internal/solo/partition
-      - name: name the measurements this code can read
-        id: weights-key
-        env:
-          FORMAT: ${{ hashFiles('internal/skipgate/**', 'internal/solo/partition/**') }}
-        run: |
-          if [ -z "$FORMAT" ]; then
-            echo "::error::internal/skipgate and internal/solo/partition hashed to nothing; the checkout above did not fetch them."
-            exit 1
-          fi
-          echo "prefix=test-weights-$FORMAT-" >> "$GITHUB_OUTPUT"
-      - name: restore the newest measured package durations
-        uses: actions/cache/restore@v6
-        with:
-          path: test-weights.tsv
-          key: ${{ steps.weights-key.outputs.prefix }}${{ github.sha }}
-          restore-keys: ${{ steps.weights-key.outputs.prefix }}
-      # ONE NUMBER PER HALF, and every shard name is derived from it, so the
-      # matrix and the `I/N` each shard is handed cannot disagree.
-      #
-      # TWO EACH, and both are measured rather than chosen — on the suite as it
-      # stands, not as it stood when sharding was added. Each half was timed
-      # whole on a four-vCPU box shaped like a runner and then dealt by this
-      # partition. The parallel half holds 1058 package-seconds: two ways it
-      # is 530 and 529, which a runner works through in about the time its
-      # longest package takes alone — internal/engine (169s) on one shard,
-      # internal/search (163s) on the other — so a third shard would leave
-      # those two as the floor and buy a runner nearly nothing. The solo half
-      # holds 275: two ways it is 135 and 140, against internal/coord/kv
-      # (121s) alone, so a third would save about fifteen seconds. Each shard
-      # is a whole runner, and a run already has fourteen jobs. Raise a half's
-      # number when the measured durations put its shards well above its
-      # longest package; the plan step above prints what they were.
-      - name: cut each half into shards
-        id: shards
-        run: |
-          touch test-weights.tsv
-          echo "measured durations: $(wc -l < test-weights.tsv) package(s)"
-          shards() { jq -cn --argjson n "$1" '[range(1; $n + 1) | "\(.)/\($n)"]'; }
-          parallel="$(shards 2)"
-          solo="$(shards 2)"
-          echo "parallel=$parallel" >> "$GITHUB_OUTPUT"
-          echo "solo=$solo" >> "$GITHUB_OUTPUT"
-      # overwrite: a re-run of the whole workflow runs this again in the same
-      # run, where the name is taken. Retained as long as the repository keeps
-      # artifacts, because a re-run of one failed shard — which GitHub allows
-      # for thirty days — reads THIS file, and must cut its shard as before.
-      - uses: actions/upload-artifact@v7
-        with:
-          name: test-weights
-          path: test-weights.tsv
-          if-no-files-found: error
-          overwrite: true
-
+  # a refusal fails the job; and only a main run whose job passed saves a
+  # replacement. So a change to either side of the format — a new column, a
+  # tighter reader — would leave every later run, on every pull request and on
+  # main, restoring a file it refuses, with nothing able to save one it
+  # accepts, and the eviction that would end it never comes, since the entry is
+  # read on every run. Keyed on a hash of both packages' sources, a change to
+  # either starts from no measurement — the bootstrap above, which runs
+  # complete — and an entry a later change cannot read is never offered to it.
+  # That holds for a bug too: a file the same code wrote and cannot read is
+  # retired by the change that fixes the code. A change to either package, test
+  # files and the skip allowlist included, runs in go list's order on every run
+  # of the pull request that makes it, since only main saves, and on every run
+  # after its merge until a run on main passes and saves a measurement under
+  # the new key. That is still cheaper than a key that misses the one edit
+  # that mattered.
   test:
-    name: test (race) ${{ matrix.shard }}
-    needs: plan
+    name: test (race)
     runs-on: ubuntu-latest
-    strategy:
-      # Every shard reports, for the reason `cross` gives below.
-      fail-fast: false
-      matrix:
-        shard: ${{ fromJSON(needs.plan.outputs.parallel) }}
     steps:
       - uses: actions/checkout@v7
       - *setup-go
       - *go-caches
       - *gomod-restore
       - *gobuild-restore
-      - &test-weights
-        name: fetch the measured durations the plan cut the shards by
-        uses: actions/download-artifact@v8
+      - name: restore the package durations main last measured
+        uses: actions/cache/restore@v6
         with:
-          name: test-weights
-          path: ${{ runner.temp }}
+          path: ${{ runner.temp }}/test-weights.tsv
+          key: test-weights-${{ hashFiles('internal/skipgate/**', 'internal/solo/partition/**') }}-${{ github.sha }}
+          restore-keys: test-weights-${{ hashFiles('internal/skipgate/**', 'internal/solo/partition/**') }}-
       # THE MAKEFILE IS THE COMMAND, rather than a copy of it. Every other job
       # here inlines its own, and CLAUDE.md's rule that "the Makefile is the
       # same command CI runs, or it is a lie" was therefore held by hand —
       # by nothing, since internal/version/makefile_test.go was dropped. The
       # test jobs call `make` so that for them it is true by construction:
-      # TEST_SHARD, TEST_WEIGHTS and TEST_REPORT are the Makefile's own knobs,
-      # and their defaults are what `make test` runs on a laptop.
+      # TEST_WEIGHTS and TEST_TIMINGS are the Makefile's own knobs, and left
+      # unset they are what `make test` runs on a laptop.
       #
       # The race detector is not optional: the engine's concurrency model is
       # real parallelism, so every "atomic because single-threaded" assumption
@@ -469,7 +406,7 @@ jobs:
       # PACKAGE.
       #
       # THE PACKAGES THAT RUN ALONE ARE EXCLUDED, and run in the `end-to-end
-      # gates` shards below. Not a coverage cut — CI runs both and `make check`
+      # gates` job below. Not a coverage cut — CI runs both and `make check`
       # depends on both targets — a CONTENTION cut, and which packages those
       # are is COMPUTED from a marker import rather than named here: `go doc
       # ./internal/solo` carries the measurement and the reason, and
@@ -480,47 +417,43 @@ jobs:
       # it named ONE package while THREE others stood up multi-member clusters
       # inside this job.
       #
-      # Weights and reports live in the runner's temp directory, never in the
-      # checkout, which the suite's own gates read as this repository's tree.
-      - name: one shard of the suite, minus the packages that run alone
-        env:
-          TEST_SHARD: ${{ matrix.shard }}
-        run: make test TEST_SHARD="$TEST_SHARD" TEST_WEIGHTS="$RUNNER_TEMP/test-weights.tsv" TEST_REPORT="$RUNNER_TEMP/report"
-      # What this shard ran, for the `tests` job to hold against the half.
-      # Uploaded after a failure too, so a red shard's report says how far it
-      # got; overwrite, because a re-run of a failed shard uploads it again.
-      - &test-report
-        name: keep what this shard ran
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v7
+      # The weights and the timings live in the runner's temp directory, never
+      # in the checkout, which the suite's own gates read as this repository's
+      # tree. An empty weights file is what a cache miss leaves: go list's
+      # order.
+      - name: the suite, minus the packages that run alone
+        run: |
+          touch "$RUNNER_TEMP/test-weights.tsv"
+          make test TEST_WEIGHTS="$RUNNER_TEMP/test-weights.tsv" TEST_TIMINGS="$RUNNER_TEMP/test-timings.tsv"
+      # What this run measured, kept as the next run's weights: on main only,
+      # like every cache here, and only from a job that passed. Moved onto the
+      # restored file's path because a cache entry is matched on its path as
+      # well as its key.
+      - name: keep this run's package durations for the next run
+        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: mv "$RUNNER_TEMP/test-timings.tsv" "$RUNNER_TEMP/test-weights.tsv"
+      - name: save the package durations
+        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v6
         with:
-          name: report-${{ github.job }}-${{ strategy.job-index }}
-          path: ${{ runner.temp }}/report
-          if-no-files-found: error
-          overwrite: true
+          path: ${{ runner.temp }}/test-weights.tsv
+          key: test-weights-${{ hashFiles('internal/skipgate/**', 'internal/solo/partition/**') }}-${{ github.sha }}
       - *gobuild-prune
       - *gobuild-save
 
   gates:
-    name: end-to-end gates ${{ matrix.shard }}
-    needs: plan
+    name: end-to-end gates
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: ${{ fromJSON(needs.plan.outputs.solo) }}
     steps:
       - uses: actions/checkout@v7
       - *setup-go
       - *go-caches
       - *gomod-restore
       - *gobuild-restore
-      - *test-weights
       # THE PACKAGES THAT RUN ALONE — `make test-solo`, which is every package
       # importing internal/solo, run at -p 1 so their brokers do not contend
       # with each other either. Which packages those are is computed, never
-      # written here: `go doc ./internal/solo`. A shard is a runner of its
-      # own, so sharding takes contention away rather than adding it.
+      # written here: `go doc ./internal/solo`.
       #
       # internal/e2e is why this job installs node: it runs a real engine, a
       # real broker and the real API, then replays the frames its socket
@@ -538,97 +471,10 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: latest
-      - name: one shard of the packages that run alone
-        env:
-          TEST_SHARD: ${{ matrix.shard }}
-        run: make test-solo TEST_SHARD="$TEST_SHARD" TEST_WEIGHTS="$RUNNER_TEMP/test-weights.tsv" TEST_REPORT="$RUNNER_TEMP/report"
-      - *test-report
+      - name: the packages that run alone
+        run: make test-solo
       - *gobuild-prune
       - *gobuild-save
-
-  # THE ONE CHECK THAT SAYS THE SUITE PASSED, and the one `main`'s protection
-  # rule must require in place of the shards: their names carry the shard
-  # count, and a required check that names a shard stops being reported the
-  # day N changes — which blocks every pull request, or, if it was never
-  # added, lets them merge with no test result at all. CONTRIBUTING.md, "A
-  # bump merges itself", says what the rule must name.
-  #
-  # `always()`, because a required check that is SKIPPED counts as passing: if
-  # this job were skipped whenever a shard failed or the run was cancelled, the
-  # merge button would treat a red suite as a green one.
-  #
-  # It certifies two things the shards cannot certify about themselves:
-  #   - each shard passed, read from the jobs' results through the environment
-  #     rather than pasted into the script;
-  #   - the shards of each half covered it EXACTLY ONCE. internal/solo/partition
-  #     asserts that before it prints a shard, from the list it computed; this
-  #     holds what each shard actually RAN (skipgate's ran.txt) against the
-  #     half every shard says it was cut from (half.txt), after checking all
-  #     the shards were cut from the same one. A package no shard ran, or one
-  #     that ran twice, fails here whatever went wrong upstream.
-  #
-  # And on main it keeps what this run measured as the next run's weights:
-  # only from a run where every shard passed, since a failed package's time
-  # stops wherever the failure stopped it.
-  tests:
-    name: tests
-    needs: [plan, test, gates]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: every shard of both halves passed
-        env:
-          NEEDS: ${{ toJSON(needs) }}
-        run: |
-          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<<"$NEEDS"
-          if ! jq -e 'all(.[]; .result == "success")' <<<"$NEEDS" >/dev/null; then
-            echo "::error::the test shards, or the plan they were cut by, did not all succeed (above)."
-            exit 1
-          fi
-      - uses: actions/download-artifact@v8
-        with:
-          pattern: report-*
-          path: reports
-      - name: every package of each half ran in exactly one shard
-        run: |
-          for half in parallel solo; do
-            lists=(reports/*/"$half"/half.txt)
-            if [ ! -e "${lists[0]}" ]; then
-              echo "::error::no shard of the $half half left a report."
-              exit 1
-            fi
-            for list in "${lists[@]}"; do
-              if ! cmp -s "${lists[0]}" "$list"; then
-                echo "::error::the $half shards were not cut from one list: ${lists[0]} and $list differ."
-                diff "${lists[0]}" "$list" || true
-                exit 1
-              fi
-            done
-            sort "${lists[0]}" > "$RUNNER_TEMP/$half.half"
-            sort reports/*/"$half"/ran.txt > "$RUNNER_TEMP/$half.ran"
-            twice="$(uniq -d "$RUNNER_TEMP/$half.ran")"
-            if [ -n "$twice" ]; then
-              echo "::error::these ran in more than one $half shard:"
-              echo "$twice"
-              exit 1
-            fi
-            if ! diff "$RUNNER_TEMP/$half.half" "$RUNNER_TEMP/$half.ran"; then
-              echo "::error::the $half shards did not run exactly the $half half: '<' is in the half and ran in no shard, '>' ran in a shard and is not in the half."
-              exit 1
-            fi
-            echo "$half: $(wc -l < "$RUNNER_TEMP/$half.ran") package(s), each in exactly one of ${#lists[@]} shard(s)"
-          done
-      - name: the package durations this run measured
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: sort reports/*/*/timings.tsv > test-weights.tsv
-      # Under the plan's key, so the next run whose two programs are these
-      # ones restores it and no other run does.
-      - name: keep them for the next run's plan
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v6
-        with:
-          path: test-weights.tsv
-          key: ${{ needs.plan.outputs.weights-key }}${{ github.sha }}
 
   # THERE IS NO SEPARATE "stores" JOB ANY MORE. One existed, running the store
   # contract suites twice over CREWLET_STORE_DRIVER=turso|sqlite, because

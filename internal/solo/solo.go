@@ -66,9 +66,8 @@
 // starved machine trades the retries for one long wait on the attempt that is
 // starving.
 //
-// So the solo half runs at -p 1, one package binary at a time, and in CI on
-// runners of its own; ci.yml cuts it into shards by measured duration, each a
-// separate machine, which takes contention away rather than adding any.
+// So the solo half runs at -p 1, one package binary at a time, and in CI on a
+// runner of its own, beside nothing else of the suite.
 //
 // # Why a marker rather than one of the obvious mechanisms
 //
