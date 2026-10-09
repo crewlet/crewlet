@@ -398,14 +398,19 @@ jobs:
       # ONE NUMBER PER HALF, and every shard name is derived from it, so the
       # matrix and the `I/N` each shard is handed cannot disagree.
       #
-      # TWO EACH, and both are measured rather than chosen. The solo half is
-      # internal/e2e (427s on main, 562s on a pull request) against 300s for
-      # the other six together, so e2e is the floor at two and a third runner
-      # would idle. The parallel half dealt two ways by CI's own measured
-      # durations simulates at 472s and 423s, the first of them
-      # internal/search alone — so a third shard would buy little until search
-      # itself is shorter. Each shard is a whole runner, which is what this
-      # costs.
+      # TWO EACH, and both are measured rather than chosen — on the suite as it
+      # stands, not as it stood when sharding was added. Each half was timed
+      # whole on a four-vCPU box shaped like a runner and then dealt by this
+      # partition. The parallel half holds 1058 package-seconds: two ways it
+      # is 530 and 529, which a runner works through in about the time its
+      # longest package takes alone — internal/engine (169s) on one shard,
+      # internal/search (163s) on the other — so a third shard would leave
+      # those two as the floor and buy a runner nearly nothing. The solo half
+      # holds 275: two ways it is 135 and 140, against internal/coord/kv
+      # (121s) alone, so a third would save about fifteen seconds. Each shard
+      # is a whole runner, and a run already has fourteen jobs. Raise a half's
+      # number when the measured durations put its shards well above its
+      # longest package; the plan step above prints what they were.
       - name: cut each half into shards
         id: shards
         run: |

@@ -297,9 +297,11 @@ func TestEveryShardingCoversTheHalfExactlyOnce(t *testing.T) {
 // THE SHARDS BALANCE BY MEASURED TIME, which is what makes a second runner
 // worth having.
 //
-// The solo half's own measured shape (CI seconds on main): internal/e2e alone
-// is longer than the other six together, so two shards are e2e and everything
-// else — and a third would buy nothing, since e2e is the floor.
+// The shape is a fixture, modelled on the solo half as CI measured it before
+// the suite's own speed-ups (CI seconds on main at bee5152): one package
+// longer than the other six together, which is the shape that tests the deal
+// hardest — two shards must be that package and everything else, and a third
+// buys nothing while it is the floor.
 func TestTheShardsBalanceByMeasuredTime(t *testing.T) {
 	t.Parallel()
 

@@ -14,8 +14,9 @@
 // CPU, that round trip does not merely slow down: it has gone UNANSWERED for
 // the whole of the deadline it was given, at thirty seconds and at forty-five
 // (below). `go test ./...` runs package binaries in parallel at
-// -p=GOMAXPROCS, and the rest of this suite holds a four-vCPU runner 90-99%
-// busy for fifteen minutes under -race.
+// -p=GOMAXPROCS, and the rest of this suite runs a four-vCPU runner flat out
+// under -race while it runs: 90-99% busy for fifteen minutes at bee5152, and
+// still CPU-bound in the shorter run it takes now.
 //
 // Two measurements stand behind that, and only the first is of the case this
 // package exists for:

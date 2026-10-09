@@ -34,9 +34,11 @@
 //     ended on those three with the rest of the runner idle.
 //   - Which SHARD a package lands in, under `-shard I/N`: longest-processing-
 //     time-first, each package to the shard with the least measured time so
-//     far. One runner per half was the floor — the parallel half held a
-//     four-vCPU runner 90-99% busy for fifteen minutes, and the solo half is
-//     internal/e2e plus five minutes of everything else, serially.
+//     far. One runner per half was the floor when this was added — the
+//     parallel half held a four-vCPU runner 90-99% busy for fifteen minutes,
+//     and the solo half ran internal/e2e plus five minutes of everything
+//     else, serially. ci.yml's plan step says how many shards each half has
+//     today and the measurement that number rests on.
 //
 // Which packages are in the half is go list plus the marker, exactly as without
 // weights, and main ASSERTS that the shards cover the half exactly once before
