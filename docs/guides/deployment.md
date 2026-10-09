@@ -821,12 +821,13 @@ dashboard, no webhook — and a seats node's agent-mode tool bridge only when
 are in [Probes on a node without ingress](../reference/api-endpoints.md#probes-on-a-node-without-ingress).
 
 On Kubernetes that is one probe block for every node, with `api.host: 0.0.0.0`
-so the kubelet can reach the pod's address:
+so the kubelet can reach the pod's address, and `api.port: 8080` — the port the
+image's `EXPOSE` documents:
 
 ```yaml
 # the engine container of any node — ingress, seats, satellite
 ports:
-  - {name: http, containerPort: 8000}
+  - {name: http, containerPort: 8080}
 livenessProbe:
   httpGet: {path: /health, port: http}
   periodSeconds: 10
@@ -847,6 +848,14 @@ node without `ingress` is what a rolling update waits on before it replaces
 the next pod, so a satellite that cannot reach its fleet holds the rollout
 rather than letting it take the next one down too. Give every pod a
 `terminationGracePeriodSeconds` longer than its longest turn, for the drain.
+
+A StatefulSet of [clustered broker members](fleet.md#the-broker-members-and-leaves)
+needs `podManagementPolicy: Parallel`. The default, `OrderedReady`, starts a
+member only once the one before it is ready, and no member can be ready alone:
+the company revision it applies and the presence lease it holds are both in a
+coordination store that writes through a quorum of the members — so the first
+waits for peers the StatefulSet will not start until it is ready, and the set
+never comes up.
 
 ### Replica count
 
