@@ -231,10 +231,12 @@ var allowed = []Allowance{
 	},
 
 	// -----------------------------------------------------------------
-	// Environment: a Bourne shell. Listed for the same reason as the
-	// container entry — it does not fire on any machine the gates run on,
-	// and an entry is what makes the day it starts firing visible rather
-	// than a quiet loss of the only case that proves the quoting.
+	// Environment: a Bourne shell. It does not fire on any machine the
+	// gates run on, and the entry is what lets one without `sh` pass. It
+	// does NOT make a CI skip visible: a declared Environment skip passes
+	// this gate wherever it fires, with only its SKIP line and the summary's
+	// count in the log, so the day it starts firing in CI is a quiet loss of
+	// the only case that proves the quoting unless somebody reads that line.
 	// -----------------------------------------------------------------
 	{
 		Package: "internal/envfile",
@@ -253,9 +255,11 @@ var allowed = []Allowance{
 	// cannot choose. What it can choose is how much of that cap is already
 	// reserved, so each case reserves all but the headroom it needs and
 	// skips, naming the figures, on a machine whose disk cannot hold even
-	// that. It does not fire on any machine the gates run on; an entry is
-	// what makes the day it starts firing visible rather than a quiet loss
-	// of the only cases that hold the arithmetic against a broker.
+	// that. It does not fire on any machine the gates run on. Like the
+	// shell entry above, the entry lets such a machine pass and does NOT
+	// make a CI skip visible: a declared Environment skip passes here
+	// wherever it fires, so a runner whose disk shrank would lose the only
+	// cases that hold the arithmetic against a broker behind a green run.
 	// -----------------------------------------------------------------
 	{
 		Package: "internal/engine",
