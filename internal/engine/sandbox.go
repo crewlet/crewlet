@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -2330,10 +2331,11 @@ func runLLM(c *Company, seat *org.Role, ph phase.Phase) (*sandbox.AgentLLM, map[
 // SandboxCredentialError reports a coding run whose box could never
 // authenticate, refused before the box is minted.
 //
-// A distinct type because the two remedies are different config edits and an
-// operator has to be told which one is theirs — and because this is the one
-// launch failure that is a CONFIGURATION mistake rather than a provider
-// outage, so it must not be retried as if the vendor were down.
+// A distinct type because the remedies (a token that travels, a provider key
+// that travels, a local cell) are different config edits and an operator has
+// to be told which one is theirs — and because this is the one launch failure
+// that is a CONFIGURATION mistake rather than a provider outage, so it must
+// not be retried as if the vendor were down.
 type SandboxCredentialError struct{ msg string }
 
 func (e *SandboxCredentialError) Error() string { return e.msg }
@@ -2394,6 +2396,22 @@ func sandboxCredentials(c *Company, seat *org.Role, ph phase.Phase, placement sa
 			return nil
 		}
 	}
+	// A CLI THAT READS ITS PROVIDER'S KEY FROM ITS OWN ENVIRONMENT has no one
+	// variable to ask about: which one it reads depends on the provider the
+	// entry's model names, and an operator may give it in role.sandbox.env
+	// rather than cli.env. So any credential-named variable the run carries
+	// passes. That is looser than the question — a code-host token the seat
+	// declared for git passes too — and deliberately so: this guard refuses,
+	// and a refusal of a run whose key it could not recognise would block a
+	// seat that works, which is worse than the vendor's own "not
+	// authenticated" it exists to pre-empt.
+	if agent.SignsInThroughEnv() {
+		for name, value := range env {
+			if cliprofile.IsCredentialName(name) && strings.TrimSpace(value) != "" {
+				return nil
+			}
+		}
+	}
 	remedy := fmt.Sprintf("give this seat a local cell — role.sandbox.run_in: %q or %q",
 		sandbox.Direct, sandbox.Container)
 	switch {
@@ -2404,9 +2422,10 @@ func sandboxCredentials(c *Company, seat *org.Role, ph phase.Phase, placement sa
 	case agent.SignsInThroughEnv():
 		// This CLI's key travels the way a token does, so the one-line
 		// fix is the key rather than a placement change.
-		remedy = fmt.Sprintf("set the key of the provider its model names in "+
-			"providers.llm.%s.cli.env, under that provider's own variable, which travels "+
-			"to any box — or give this seat a local cell (role.sandbox.run_in: %q or %q)",
+		remedy = fmt.Sprintf("set the key of the provider its model names, under "+
+			"that provider's own variable, in providers.llm.%s.cli.env or in this "+
+			"seat's role.sandbox.env — both are exported into the box — or give this "+
+			"seat a local cell (role.sandbox.run_in: %q or %q)",
 			member.Key, sandbox.Direct, sandbox.Container)
 	}
 	return &SandboxCredentialError{msg: fmt.Sprintf(

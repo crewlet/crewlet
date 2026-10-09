@@ -202,12 +202,28 @@ func TestACLIEnvSignInTravelsIntoTheRun(t *testing.T) {
 		t.Errorf("a remote run carrying its cli.env key was refused: %v", err)
 	}
 
+	// THE KEY IN THE SEAT'S OWN SANDBOX ENV passes too: which variable this
+	// CLI reads depends on the provider its model names, so the guard
+	// cannot ask the profile, and an operator legitimately declares their
+	// own key in role.sandbox.env.
 	c, seat = company(nil)
+	if err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B,
+		map[string]string{"OPENROUTER_API_KEY": "sk-or-not-real"}); err != nil {
+		t.Errorf("a remote run carrying its key in role.sandbox.env was refused: %v", err)
+	}
+	// A count of model tokens is not a key.
+	if err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B,
+		map[string]string{"OPENCODE_MAX_TOKENS": "4096"}); err == nil {
+		t.Error("a remote run whose only variable is a token count was launched")
+	}
+
 	err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, nil)
 	if err == nil {
 		t.Fatal("a remote run with no sign-in was launched")
 	}
-	if !strings.Contains(err.Error(), "providers.llm.sub.cli.env") {
-		t.Errorf("the refusal does not name the cli.env route this CLI takes: %v", err)
+	for _, route := range []string{"providers.llm.sub.cli.env", "role.sandbox.env"} {
+		if !strings.Contains(err.Error(), route) {
+			t.Errorf("the refusal does not name the %s route this CLI takes: %v", route, err)
+		}
 	}
 }
