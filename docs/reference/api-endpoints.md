@@ -1545,12 +1545,11 @@ spend records for its own 24-hour window — each phase's, and each
 of them, the WHOLE COMPANY's since every projection is fed fleet-wide (about
 2 600 turns a day; a company past that sees a rollup covering slightly less
 than a day rather than a wrong total) and folds them with
-`internal/tokens`, which is the same aggregation the event store's wider
-windows are folded with, so changing the window on screen cannot change
-what a phase is counted as. The window is a ROLLING one, aged on the
-serving node's clock and never on a record's own stamp — every read leaves
-out what the window has aged past, and both an arriving record and the
-shared tick drop it:
+`internal/tokens`, which folds the named windows' company days into the
+same breakdown, so changing the window cannot change what a phase is
+counted as. The window is a ROLLING one, aged on the serving node's clock
+and never on a record's own stamp — every read leaves out what the window
+has aged past, and both an arriving record and the shared tick drop it:
 
 - a record stamped before the window is not counted, however late it
   arrives;
@@ -1564,11 +1563,12 @@ shared tick drop it:
 
 The rollup's `since` and `until` are the two instants the window was cut
 at. It ships in the snapshot and is re-pushed on the shared 5-second tick
-after any phase completed or any record aged out, so the Spend screen and the
-overview widget stay live without a fetch — and a company that has gone
-quiet sees its spend leave the window as it ages rather than keep its last
-busy day — without a second implementation of the aggregation in the
-browser. What a seat has spent is that rollup's per-agent row: the
+after any phase completed or any record aged out, so a client holding it
+stays live without a fetch — and a company that has gone quiet sees its
+spend leave the window as it ages rather than keep its last busy day —
+without a second implementation of the aggregation in the browser. (The
+bundled dashboard's Spend screen reads [named windows](#token-spend-breakdown)
+instead.) What a seat has spent is that rollup's per-agent row: the
 projection keeps no second total of its own.
 
 **The projection is seeded from the fleet's event stores when the process
@@ -5043,12 +5043,12 @@ Two sources, one aggregation, and which one answers is decided by the
 parameters:
 
 - **The live window** — a request naming no `days`, no dates, no `seat` and no
-  `previous` — is the projection's: the phase records of the last
+  `previous` — is the projection's: the spend records of the last
   24 hours (`livestate.LiveSpendWindow`, rolling), held in memory and pushed as
-  the [`tokens` push](#pushes). The dashboard's live views read it; the Spend
-  screen reads named windows only, so its figures are the company's. It is the
-  only answer with a per-turn tail (`by_turn`) and a watermark
-  (`aggregated_through`).
+  the [`tokens` push](#pushes), for a client that wants the last day as it
+  happens. No screen of the bundled dashboard draws it: the Spend screen reads
+  named windows only, so its figures are the company's. It is the only answer
+  with a per-turn tail (`by_turn`) and a watermark (`aggregated_through`).
 - **Every named window** is whole **company days** read from the replicated
   [`usage` domain](../guides/replication.md#two-compacted-domains-the-embeddings-and-each-nodes-day) (ADR-0020): every
   node's day, applied on every node. So the answer is the same whichever node
