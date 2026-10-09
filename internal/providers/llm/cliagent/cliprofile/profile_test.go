@@ -320,3 +320,38 @@ func TestTheDocsListEveryProfileField(t *testing.T) {
 		}
 	}
 }
+
+// Which variable each CLI reads a key and a headless token from, as each
+// profile's note records it from the vendor. A variable missing here is a key
+// `auth.mode: api-key` has nowhere to put — cursor-agent's CURSOR_API_KEY was
+// — and one named here that the CLI ignores is a key that reaches nothing.
+func TestEachProfileNamesTheVariablesItsCLIReads(t *testing.T) {
+	t.Parallel()
+	want := map[string][2]string{ // agent: {api_key_env, token_env}
+		"claude-code":  {"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"},
+		"codex":        {"OPENAI_API_KEY", ""},
+		"gemini-cli":   {"GEMINI_API_KEY", ""},
+		"qwen-code":    {"DASHSCOPE_API_KEY", ""},
+		"opencode":     {"", ""},
+		"cursor-agent": {"CURSOR_API_KEY", ""},
+		"copilot":      {"GITHUB_TOKEN", ""},
+		"grok":         {"XAI_API_KEY", ""},
+		"muse-code":    {"META_API_KEY", ""},
+		"kimi-code":    {"", ""},
+		"hermes":       {"", ""},
+		"pi":           {"", ""},
+		"custom":       {"", ""},
+	}
+	for _, name := range BuiltinNames() {
+		p, _ := Builtin(name)
+		w, ok := want[name]
+		if !ok {
+			t.Errorf("profile %q ships with no expectation here", name)
+			continue
+		}
+		if p.APIKeyEnv != w[0] || p.TokenEnv != w[1] {
+			t.Errorf("%s: api_key_env %q token_env %q, want %q %q",
+				name, p.APIKeyEnv, p.TokenEnv, w[0], w[1])
+		}
+	}
+}

@@ -394,6 +394,15 @@ cursor-agent:
   credential_paths: [".cursor/cli-config.json", ".cursor/auth.json"]
   volatile_paths: [".cursor/chats", ".cursor/logs", ".cursor/sessions"]
   host_credential_paths: [".cursor/cli-config.json", ".cursor/auth.json"]
+  # The CLI's own authentication reference (cursor.com/docs/cli/reference/
+  # authentication) gives CURSOR_API_KEY as the recommended headless sign-in,
+  # "for automation, scripts, or CI environments", beside `--api-key`. It was
+  # missing here, so `auth.mode: api-key` had nowhere to put the key and a
+  # subscription run did not remove one an operator left in cli.env. The key
+  # is a Cursor account key rather than a vendor's metered model key, but the
+  # route is the same: api_keys under auth.mode api-key, never forwarded
+  # otherwise.
+  api_key_env: "CURSOR_API_KEY"
   login_args: ["login"]
   logout_args: ["logout"]
   status_args: ["status"]
