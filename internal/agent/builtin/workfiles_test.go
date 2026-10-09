@@ -364,9 +364,10 @@ func TestCorruptContentIsNotAReadToRetry(t *testing.T) {
 }
 
 // WRITING WHAT THE FILE ALREADY HOLDS STORES NOTHING: every upload is an
-// object of its own, so a seat re-saving an unchanged file would store all of
-// it again and leave the copy it replaced in the store for a day. A change of
-// content, or of type, is written.
+// object of its own, so a seat re-saving an unchanged file would upload all of
+// it again, and the store would hold both copies until the collector's first
+// pass after the replaced one is a day old. A change of content, or of type,
+// is written.
 func TestWritingTheSameContentAgainStoresNothing(t *testing.T) {
 	t.Parallel()
 	files, objects := newFakeFiles(), newFakeObjects()

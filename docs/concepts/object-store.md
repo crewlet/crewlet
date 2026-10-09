@@ -63,7 +63,11 @@ That one rule is what the rest of this page leans on:
   so is a file that is moved: a move is a write at the new path and a removal
   of the old one, and the write uploads the bytes again. A seat writing a file
   whose content is exactly what the file already holds is told so and writes
-  nothing. The older copy goes a day after nothing names it.
+  nothing. The older copy is deleted by the collector's next hourly pass once
+  nothing names it and it was uploaded more than a day ago, so a copy older
+  than a day goes within the hour of being replaced or removed. The day is the
+  grace an upload gets before the row naming it lands, not a window in which a
+  replaced version can be recovered from the store.
 
 ---
 
@@ -421,7 +425,8 @@ dashboard draws the same under **Settings › Nodes**.
   whole on every data node; only what a row names by key is in the store.
 - **It does not version bytes on its own.** A new version of a file is a new
   upload, a new object and a new row naming it; the previous version's object
-  is collected a day after no row names it.
+  is collected at the first hourly pass after no row names it, once it is more
+  than a day old.
 - **It does not dedupe.** Identical bytes uploaded twice are two objects — see
   [One object per upload](#one-object-per-upload).
 - **It is not for artefacts larger than 1 GiB.** Those belong in a store built

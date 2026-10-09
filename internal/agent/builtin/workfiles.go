@@ -470,9 +470,10 @@ func (t *writeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 //
 // SKIPPED RATHER THAN WRITTEN AGAIN because a write is no longer free when its
 // content is: every upload is an object of its own (ADR-0026), so a seat that
-// re-saves a report it did not change would store the whole of it again, and
-// leave the copy it replaced in the store for a day. The tool holds the
-// content in memory, so the comparison is one digest against the row's.
+// re-saves a report it did not change would upload the whole of it again, and
+// the store would hold both copies until the collector's first pass after the
+// one it replaced is a day old. The tool holds the content in memory, so the
+// comparison is one digest against the row's.
 // Anything this read cannot settle — no reader, a failed read — is written.
 func (t *writeProjectFile) unchanged(ctx context.Context, project, filePath,
 	contentType string, content []byte, ifVersion uint64) (tracker.File, bool) {
