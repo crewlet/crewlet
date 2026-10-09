@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -641,25 +642,22 @@ func (p *Provider) SandboxCredentials() map[string]string {
 // api-key entry contributes its key here instead, and a subscription entry
 // with neither contributes nothing at all: the run then needs the credential
 // files, which is why a CLI that mints no token needs a local box.
+//
+// A CLI that reads its model provider's key from its own environment
+// ([cliprofile.Profile.EnvSignIn]) signs in through cli.env, and that key
+// travels for the same reason a token does — it is the whole sign-in, and a
+// run that dropped it would start the CLI signed in to nothing while the
+// doctor reported the entry healthy.
+//
+// Read off [childEnv] like [Provider.signIn], so a run carries exactly the
+// credentials a text-mode call is given: what the auth mode removes from the
+// child it removes from the box.
 func (p *Provider) SandboxEnv() map[string]string {
+	env := childEnv(p.profile, &Checkout{}, p.env, p.auth)
 	out := map[string]string{}
-	switch p.auth.Mode {
-	case AuthAPIKey:
-		if p.profile.APIKeyEnv != "" && p.auth.APIKey != "" {
-			out[p.profile.APIKeyEnv] = p.auth.APIKey
-		}
-	case AuthInheritEnv:
-		for _, name := range []string{p.profile.TokenEnv, p.profile.APIKeyEnv} {
-			if name == "" {
-				continue
-			}
-			if value, ok := os.LookupEnv(name); ok {
-				out[name] = value
-			}
-		}
-	default:
-		if p.profile.TokenEnv != "" && p.auth.Token != "" {
-			out[p.profile.TokenEnv] = p.auth.Token
+	for _, name := range p.CredentialEnvNames() {
+		if value := env[name]; strings.TrimSpace(value) != "" {
+			out[name] = value
 		}
 	}
 	if len(out) == 0 {
@@ -676,7 +674,9 @@ func (p *Provider) MintsHeadlessToken() bool {
 }
 
 // CredentialEnvNames are the variables that authenticate this CLI inside a
-// box: the headless token's and the API key's.
+// box: the headless token's and the API key's, and — for a CLI that reads its
+// model provider's key from its own environment — the credential-named
+// variables the entry's cli.env sets.
 //
 // Exported because the launch has to answer a question only it can — whether
 // ANYTHING in the run environment authenticates, including a value the
@@ -690,5 +690,17 @@ func (p *Provider) CredentialEnvNames() []string {
 			names = append(names, name)
 		}
 	}
+	if p.profile.EnvSignIn {
+		for _, name := range slices.Sorted(maps.Keys(p.env)) {
+			if cliprofile.IsCredentialName(name) && !slices.Contains(names, name) {
+				names = append(names, name)
+			}
+		}
+	}
 	return names
 }
+
+// SignsInThroughEnv reports whether this CLI reads its model provider's key
+// from its own environment, so the launch's refusal can name cli.env as the
+// route that travels to a remote box.
+func (p *Provider) SignsInThroughEnv() bool { return p.profile.EnvSignIn }

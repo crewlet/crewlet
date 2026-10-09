@@ -2396,9 +2396,17 @@ func sandboxCredentials(c *Company, seat *org.Role, ph phase.Phase, placement sa
 	}
 	remedy := fmt.Sprintf("give this seat a local cell — role.sandbox.run_in: %q or %q",
 		sandbox.Direct, sandbox.Container)
-	if agent.MintsHeadlessToken() {
+	switch {
+	case agent.MintsHeadlessToken():
 		remedy = fmt.Sprintf("mint a token that travels with `crewlet llm login %s "+
 			"-capture-token`, or give this seat a local cell (role.sandbox.run_in: %q or %q)",
+			member.Key, sandbox.Direct, sandbox.Container)
+	case agent.SignsInThroughEnv():
+		// This CLI's key travels the way a token does, so the one-line
+		// fix is the key rather than a placement change.
+		remedy = fmt.Sprintf("set the key of the provider its model names in "+
+			"providers.llm.%s.cli.env, under that provider's own variable, which travels "+
+			"to any box — or give this seat a local cell (role.sandbox.run_in: %q or %q)",
 			member.Key, sandbox.Direct, sandbox.Container)
 	}
 	return &SandboxCredentialError{msg: fmt.Sprintf(

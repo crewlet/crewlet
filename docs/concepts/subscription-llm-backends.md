@@ -912,7 +912,10 @@ Their profiles declare `env_sign_in`, which is what makes `doctor` count a
 credential-named variable in `cli.env` as a sign-in (`sign-in : cli.env sets
 OPENROUTER_API_KEY`) and report one whose `${VAR}` resolved to nothing. It
 counts the name, not whether the provider accepts the key: the smoke test is
-what proves that. A CLI that does not read its key from the environment —
+what proves that. The key also goes with the entry's runs into a coding box —
+an [agent-mode](#agent-mode) run, or a code-sandbox run on this entry — the way
+a headless token does, so it works in a remote cell; the rest of `cli.env` is
+not carried there. A CLI that does not read its key from the environment —
 `kimi-code` reads its metered key only from `config.toml` in the credential
 directory — does not declare it, and a key in its `cli.env` is not counted.
 
@@ -1675,7 +1678,9 @@ reference](../reference/cli.md#crewlet-llm).
   a [local cell](code-sandbox.md#local-sandboxes) — `providers.sandbox.local`
   plus `run_in: direct` or `container` — where the coding agent runs on
   the engine host and reads the login directly. The credential *files* never travel to a remote box: they
-  carry a refresh token whose rotation is shared fleet state.
+  carry a refresh token whose rotation is shared fleet state. A key an
+  `opencode` entry signs in with through `cli.env` travels the way a token
+  does, so that entry works in a remote cell too.
 - **Latency.** Process launch plus model call. Point `llm_auxiliary` at
   a cheap API-key model rather than paying process startup for every
   summarisation.
