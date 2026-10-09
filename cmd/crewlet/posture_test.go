@@ -27,8 +27,12 @@ type healthSample struct {
 }
 
 // A CLIENT POLLING /health THROUGH A CONFIG WRITE NEVER SEES A DIVERGENCE, on
-// the node's first company and on a later one — the node as runEngine wires
-// it, the write through PUT /config, the apply by the running reconcile loop.
+// the node's first company and on a later one — the node's API and reconcile
+// loop as serveNodeWith wires them, the write through PUT /config, the apply
+// by the running loop. One part of that wiring is replaced: the engine's
+// applied hook, which the API installs only to re-broadcast the dashboard's
+// config-derived surfaces and which nothing /health reports reads, is taken
+// over below as the observer inside each apply.
 //
 // For about a tenth of a second during every apply that then succeeded, the
 // body used to say `posture: isolated` — and `status: isolated`, or
