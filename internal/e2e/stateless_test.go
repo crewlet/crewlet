@@ -326,6 +326,7 @@ func TestAStatelessNodesAuditTrailLandsOnADataNode(t *testing.T) {
 // admits it, unready from the first moment of its own drain while /health
 // stays 200, and every route that is not a probe refused throughout.
 func TestAStatelessNodeAnswersItsProbes(t *testing.T) {
+	t.Parallel()
 	p := startStatelessPair(t)
 	probes, _ := serveProbes(t, p.agent, p.agentBoot)
 
@@ -402,6 +403,7 @@ func TestAStatelessNodeAnswersItsProbes(t *testing.T) {
 // exists for. Each of the two rules is what keeps such a node out of
 // admission_withheld, and each case here is the one its rule decides.
 func TestANodeAdmissionDoesNotApplyToIsReadyOnItsPresence(t *testing.T) {
+	t.Parallel()
 	model := newScriptedModel(t)
 	cfg, err := config.ParseCompany([]byte(fmt.Sprintf(companyDoc, model.url)))
 	if err != nil {
