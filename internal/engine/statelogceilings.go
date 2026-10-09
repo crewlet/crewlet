@@ -10,10 +10,12 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/sys/unix"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
@@ -342,14 +344,32 @@ type heldCeiling struct {
 // Nothing orders them: each names one stream, and nothing one answers decides
 // another. What the caller reports follows the register's order all the same,
 // because the answers are handed back only once the last read has returned.
+//
+// # And each says so while it is still waiting
+//
+// A breadcrumb per stream, for [jsprovision.WhenSlow]'s reason. Under nats.go's
+// five-second default a read never outlived [jsprovision.SlowAfter]; asked
+// again for a lookup ceiling, a silent one is quiet for thirty seconds until
+// `statelog_ceiling_unread` reports how it ended, and every other lookup on the
+// boot path names the object it is waiting on.
 func readHeld(ctx context.Context, host domainHost, domains []statelog.Domain) []heldCeiling {
 	reads := make([]heldCeiling, len(domains))
 	var wg sync.WaitGroup
 	for i, domain := range domains {
 		reads[i].domain = domain
+		stream := domain.Stream().Name
 		wg.Go(func() {
-			reads[i].holds, reads[i].found, reads[i].err =
-				host.DomainStreamCeiling(ctx, domain.Stream().Name)
+			stop := jsprovision.WhenSlow(ctx, func(after time.Duration) {
+				log.WarnContext(ctx, "statelog_ceiling_read_slow",
+					"domain", domain.Name(), "stream", stream, "waited", after,
+					"detail", "still asking the broker what ceiling this log's "+
+						"stream already holds, before any log is created; on a "+
+						"fleet that is usually a stream another node has in "+
+						"flight, and `statelog_ceilings` or "+
+						"`statelog_ceiling_unread` says how it ended")
+			})
+			defer stop()
+			reads[i].holds, reads[i].found, reads[i].err = host.DomainStreamCeiling(ctx, stream)
 		})
 	}
 	wg.Wait()
