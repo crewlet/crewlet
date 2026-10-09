@@ -1127,6 +1127,52 @@ answer would read fine without it, and a spent plan would arrive as a
 bare exit 1 that no marker could classify, so the seat would never fall
 through to its metered key.
 
+### Profile fields
+
+Every field a profile has, and therefore every key `cli.overrides` accepts.
+A key not in this table is refused by name. Maps (`config_env`, `env`,
+`usage`) merge key by key; everything else replaces wholesale.
+
+| Field | What it is |
+|---|---|
+| `binary` | The executable, looked up on `PATH` unless it is a path. |
+| `vendor` | The model family the CLI addresses (`anthropic`, `openai`, `google`, `meta`, …), for a coding agent that resolves `<family>/<model>`. |
+| `written_for` | The CLI version the profile was written against, printed by `doctor` beside the one installed. |
+| `version_args` | The argv of the version probe. |
+| `complete_args` | The argv of one completion, before the model and the prompt. |
+| `model_args` | The model flag, with `{model}` substituted. Empty means the CLI takes no model, and an entry naming one is refused. |
+| `prompt_mode` | How the prompt travels: `stdin` (default), `argv` or `file`. |
+| `system_prompt_args` | The flag carrying the system prompt, with `{file}` (preferred) or `{system}`. Empty leaves it in the transcript. |
+| `system_prompt_env` | A variable naming a file the CLI reads its system prompt from; exclusive with `system_prompt_args`. |
+| `system_prompt_file` | `{name, template}`: the file a `{file}` channel writes, and the text around `{system}`. |
+| `prompt_args` | The flag introducing the prompt in `argv` mode, or carrying `{file}` in `file` mode. |
+| `output` | How stdout is encoded: `json` (default), `jsonl` or `text`. |
+| `text_paths` | Where the answer is in a `json`/`jsonl` document. |
+| `event_type_path` | Where a `jsonl` line names its event kind. |
+| `text_events` | The event kinds whose text is the answer. |
+| `error_paths` | A boolean the CLI sets when it failed despite exiting zero. |
+| `usage` | `{input, output, cache_read, cache_write}`: where the token counts are. |
+| `usage_file_args` | The flag asking the CLI to write its counts to a file, with `{usage_file}`. |
+| `config_env` | A vendor's own relocation variable, mapped to a directory under the seat home. |
+| `env` | Fixed child environment. Never a credential, and never `token_env` or `api_key_env`. |
+| `passthrough_env` | Engine variables forwarded to the child. Never a credential. |
+| `token_env` | The variable a headless subscription token goes in (`cli.auth.token`). |
+| `api_key_env` | The variable a metered key goes in (`api_keys` under `auth.mode: api-key`). |
+| `credential_paths` | The login files, relative to the seat home. |
+| `volatile_paths` | Sessions, transcripts and history, deleted before and after every call. |
+| `login_args` | The vendor's own interactive login, for `crewlet llm login`. |
+| `capture_token_args` | The command that mints a headless token on stdout (`-capture-token`). |
+| `status_args` | The command reporting who the CLI is logged in as. |
+| `logout_args` | The command revoking the login. |
+| `stdin_login` | `{args, stdin_template, password_env}`: a real credential login, where the CLI has one. |
+| `limit_markers` | Sentences recognising a spent plan — see above. |
+| `auth_markers` | Sentences recognising an expired login. |
+| `marker_scope` | Where markers match: `answer-and-stderr` (default) or `stderr`. |
+| `host_credential_paths` | Where the CLI keeps its login in a person's own home, for `-from-host`. |
+| `local_tools` | The profile's stance on the CLI's own tools: `denied` or `vendor-default`. |
+| `local_tools_note` | Why a `vendor-default` stance is one. |
+| `seed_files` | `{path, in, content}` (`in` is `home` or `work`): settings files written before a call. |
+
 ---
 
 ## Configuration reference
@@ -1164,7 +1210,7 @@ providers:
           token: "${MY_OAUTH_TOKEN}"   # else the profile's own token var
           credential_bundle: "${MY_BUNDLE}"  # else CREWLET_LLM_CLI_<KEY>_CREDENTIALS
 
-        overrides: {}                  # any CLIAgentProfile field
+        overrides: {}                  # any field under Profile fields
 ```
 
 **`timeout_seconds` is separate from the entry's own
@@ -1197,6 +1243,14 @@ it for genuine non-secret configuration (`GOOGLE_CLOUD_PROJECT`, a
 region); a CLI's key belongs in `api_key_env` or `token_env`, and
 `auth.mode: inherit-env` is the deliberate way to let the host's value
 through.
+
+**Nor may a profile's `env`**, for the same reason and one more:
+`cli.overrides` is neither `${VAR}`-resolved nor redacted, so a key written
+there would sit in the stored revision in plain text and come back on every
+config read. A credential the CLI needs goes in `cli.env`, which is both, or
+through `cli.auth`. `env` may not name the profile's `token_env` or
+`api_key_env` either, whatever they are called: `cli.auth` sets or removes
+those on every call, so a value there would never decide anything.
 
 ---
 

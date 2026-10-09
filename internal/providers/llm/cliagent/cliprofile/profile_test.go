@@ -1,8 +1,14 @@
 package cliprofile
 
 import (
+	"os"
+	"path/filepath"
+	"reflect"
+	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // Every shipped profile must be usable as-is. A profile that needs an
@@ -220,6 +226,97 @@ func TestNoShippedSentinelCanMatchOrdinaryText(t *testing.T) {
 			if problem := sentinelProblem(m.Sentinel); problem != "" {
 				t.Errorf("%s auth marker %s", name, problem)
 			}
+		}
+	}
+}
+
+// A profile's env is forwarded whatever auth.mode says, and cli.overrides is
+// stored and shown unredacted — so a key written there is both a silent bill
+// and a credential in plain text. The field's own comment always said "never
+// a credential"; nothing held it to that.
+func TestAProfileMayNotCarryACredentialInItsEnv(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		agent, name string
+		extra       map[string]any
+		want        string
+	}{
+		{"hermes", "OPENROUTER_API_KEY", nil, "cli.env"},
+		{"claude-code", "ANTHROPIC_AUTH_TOKEN", nil, "cli.env"},
+		// Named by the profile as its key variable: refused as auth's
+		// to set, even though the name does not look like a credential.
+		{"grok", "XAI_LOGIN", map[string]any{"api_key_env": "XAI_LOGIN"}, "api_key_env"},
+	} {
+		overrides := map[string]any{"env": map[string]any{tc.name: "sk-literal"}}
+		for k, v := range tc.extra {
+			overrides[k] = v
+		}
+		_, err := Load(tc.agent, overrides)
+		if err == nil {
+			t.Errorf("%s: env %s was accepted", tc.agent, tc.name)
+			continue
+		}
+		for _, want := range []string{tc.name, tc.want} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: error does not mention %q: %v", tc.agent, want, err)
+			}
+		}
+	}
+	// And a genuine setting still loads, or the rule refuses what env is for.
+	if _, err := Load("muse-code", map[string]any{"env": map[string]any{"MUSE_NO_AUTO_UPDATE": "1"}}); err != nil {
+		t.Errorf("a non-credential env was refused: %v", err)
+	}
+}
+
+// The rule judges the DEFAULTED output mode, and so must its sentence: a
+// profile naming no output is a json profile, and the message used to print
+// the empty field — "a  profile must say where the answer is".
+func TestTheTextPathsRuleNamesTheDefaultedOutput(t *testing.T) {
+	t.Parallel()
+	_, err := Load("custom", map[string]any{"binary": "x", "complete_args": []any{"-p"}})
+	if err == nil {
+		t.Fatal("a json profile with no text_paths loaded")
+	}
+	if !strings.Contains(err.Error(), "a json profile must say where the answer is") {
+		t.Errorf("message does not name the defaulted mode: %v", err)
+	}
+}
+
+// A typo in cli.overrides is refused with a pointer to the field list in the
+// docs, so the list has to exist and be THE list: every field the decoder
+// accepts, and nothing it refuses. It did not exist when the pointer was
+// first written.
+func TestTheDocsListEveryProfileField(t *testing.T) {
+	t.Parallel()
+	page := filepath.Join(sourcetree.Root(t), "docs", "concepts", "subscription-llm-backends.md")
+	raw, err := os.ReadFile(page) //nolint:gosec // a fixed path under the module root
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, section, found := strings.Cut(string(raw), "\n### Profile fields\n")
+	if !found {
+		t.Fatal(`the page has no "### Profile fields" section, which Load's error points at`)
+	}
+	section, _, _ = strings.Cut(section, "\n#")
+	documented := map[string]bool{}
+	for _, m := range regexp.MustCompile("(?m)^\\| `([a-z_]+)` \\|").FindAllStringSubmatch(section, -1) {
+		documented[m[1]] = true
+	}
+
+	accepted := map[string]bool{}
+	profile := reflect.TypeFor[Profile]()
+	for i := range profile.NumField() {
+		name, _, _ := strings.Cut(profile.Field(i).Tag.Get("yaml"), ",")
+		accepted[name] = true
+	}
+	for name := range accepted {
+		if !documented[name] {
+			t.Errorf("profile field %q is accepted by cli.overrides but missing from the docs' field list", name)
+		}
+	}
+	for name := range documented {
+		if !accepted[name] {
+			t.Errorf("the docs list %q, which cli.overrides refuses", name)
 		}
 	}
 }

@@ -2,6 +2,7 @@ package cliprofile
 
 import (
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -519,8 +520,9 @@ type Profile struct {
 	// dotfiles and every seat shares one set of sessions.
 	ConfigEnv map[string]string `yaml:"config_env,omitempty"`
 
-	// Env is fixed child environment the CLI needs. Never a credential:
-	// see [Profile.Validate].
+	// Env is fixed child environment the CLI needs. Never a credential,
+	// and never the profile's own token_env or api_key_env, both refused
+	// by [Profile.Validate].
 	Env map[string]string `yaml:"env,omitempty"`
 
 	// PassthroughEnv names engine environment variables forwarded to the
@@ -683,7 +685,9 @@ func (p *Profile) Validate(name string) error {
 		add("output %q (want json, jsonl or text)", p.Output)
 	}
 	if p.Output != OutputText && len(p.TextPaths) == 0 {
-		add("text_paths is empty — a %s profile must say where the answer is", p.Output)
+		// The DEFAULTED mode, not the field: a profile that names no
+		// output is a json profile, and the raw field printed "a  profile".
+		add("text_paths is empty — a %s profile must say where the answer is", p.EffectiveOutput())
 	}
 	for _, env := range p.PassthroughEnv {
 		if IsCredentialName(env) {
@@ -694,6 +698,30 @@ func (p *Profile) Validate(name string) error {
 				"passthrough is forwarded before auth.mode is consulted, so it would "+
 				"reach every seat whatever the mode says; use auth.mode api-key or "+
 				"inherit-env instead", env)
+		}
+	}
+	for _, env := range slices.Sorted(maps.Keys(p.Env)) {
+		switch {
+		case env != "" && (env == p.TokenEnv || env == p.APIKeyEnv):
+			// Named apart from the shape rule below because an
+			// overridden token_env or api_key_env need not LOOK like a
+			// credential: whatever it is called, auth.mode sets or
+			// removes it after this layer, so a value here is one the
+			// operator wrote and the mode then silently replaced.
+			add("env names %q, which is this profile's token_env or api_key_env — "+
+				"cli.auth sets or removes that variable on every call, so a value "+
+				"here never decides anything; give the credential through cli.auth "+
+				"(auth.token, or api_keys with auth.mode api-key)", env)
+		case IsCredentialName(env):
+			// The same reason passthrough_env refuses one, and a second:
+			// the profile's env is forwarded whatever auth.mode says,
+			// and cli.overrides is neither ${VAR}-resolved nor marked
+			// secret, so a key written here sits in the stored revision
+			// in plain text and is shown unredacted on every read.
+			add("env names %q, which looks like a credential — the profile's env "+
+				"is forwarded whatever auth.mode says, and cli.overrides is stored "+
+				"and shown unredacted; put it in cli.env, which is ${VAR}-resolved "+
+				"and redacted, or give it through cli.auth", env)
 		}
 	}
 	for dir := range p.ConfigEnv {

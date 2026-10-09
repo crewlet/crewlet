@@ -177,8 +177,8 @@ func applyOverrides(base Profile, overrides map[string]any) (Profile, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(out))
 	dec.KnownFields(true)
 	if err := dec.Decode(&merged); err != nil {
-		return Profile{}, fmt.Errorf("%w — see the field list in "+
-			"docs/concepts/subscription-llm-backends.md", err)
+		return Profile{}, fmt.Errorf("%w — the fields are listed under "+
+			"\"Profile fields\" in docs/concepts/subscription-llm-backends.md", err)
 	}
 	return merged, nil
 }
