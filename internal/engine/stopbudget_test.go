@@ -24,17 +24,19 @@ import (
 
 // A STOP AGAINST A COORDINATION STORE THAT HAS GONE AWAY SPENDS ONE ALLOWANCE.
 //
-// A member that has lost quorum still stops in order: it gives its presence
-// and its seats back, withdraws its admission and releases its duties — and
-// every one of those fails, each falling back to a lease lapsing on its TTL.
-// Each used to wait out a bound of its own, so the stop spent their sum (the
-// e2e fleet measured 25 s for one member), close to an orchestrator's kill
-// grace and past it once the flushes behind them ran. Here every round trip to
-// the lease and fleet stores stalls for five seconds once the stop begins,
-// against a lease TTL of three — an allowance of one second — so the old sum
-// is past half a minute and one allowance is a second. (The stream stays up:
-// the native backends this company runs are reached through the broker's own
-// client, which a stand-in cannot be.)
+// A member that has lost its coordination store still stops in order: it
+// gives its presence and its seats back, releases its duties and withdraws its
+// admission — and every one of those fails. The leases fall back to lapsing on
+// their TTL; the admission has no TTL and falls back to nothing, so it runs on
+// a share of the allowance no step before it can spend — carved out of the
+// allowance rather than added to it. Each step used to wait out a bound of its
+// own, so the stop spent their sum, close to an orchestrator's kill grace and
+// past it once the flushes behind them ran. Here every round trip to the lease
+// and fleet stores stalls for five seconds once the stop begins, against a
+// lease TTL of three — an allowance of one second, the admission's share
+// included — so the old sum is past half a minute and one allowance is a
+// second. (The stream stays up: the native backends this company runs are
+// reached through the broker's own client, which a stand-in cannot be.)
 //
 // A RECONCILE PASS IS IN FLIGHT WHEN THE STOP BEGINS, under the hold on its
 // surface: the integration loop's first grant is held back until then. The

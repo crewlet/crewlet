@@ -1683,7 +1683,10 @@ func lifecycleContext(ctx context.Context) (context.Context, context.CancelFunc)
 // not drain first, both wait for the first to finish and then do nothing more,
 // so one shutdown is announced once and no seat is handed back twice.
 //
-// Bounded only by ctx, for the reason [node.Node.Drain] gives.
+// Bounded by ctx for its wait, for the reason [node.Node.Drain] gives — and
+// past it by at most [lifecyclePublishBudget], for the stop's announcement:
+// the drain joins that publish before it returns, and it is free of ctx's
+// cancellation for the reason [lifecycleContext] gives.
 func (e *Engine) Drain(ctx context.Context) {
 	// ONE ALLOWANCE FOR EVERY LEASE THE STOP GIVES BACK, from its first —
 	// see [Engine.stopping].
