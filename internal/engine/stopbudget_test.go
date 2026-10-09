@@ -10,12 +10,15 @@ import (
 	"testing"
 	"time"
 
+	natsjs "github.com/nats-io/nats.go/jetstream"
+
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/seat"
 )
 
@@ -204,6 +207,13 @@ func (f stallingFleet) ForgetAdmission(ctx context.Context, nodeID, incarnation 
 // over then announces it after this node let it go, where the other order
 // shows the live projection a running seat as terminated.
 //
+// AND IT RUNS BESIDE THE SEAT'S TEARDOWN, not in front of it. Each seat holds
+// a memory row here, and the memory changelog acknowledges the release's last
+// publish of it only after [teardownHold], so each seat's teardown takes
+// seconds of its own. Beside it, the event costs the seat no time the teardown
+// is not already spending; in front of it, every seat's lease waits for the
+// sum of the two.
+//
 // AND THE ANNOUNCEMENT RUNS BESIDE THE DRAIN, so the stream's silence costs
 // the stop one of its bounds while the seats' run, not one after the other.
 //
@@ -228,7 +238,7 @@ func TestAStopOnAStreamThatWillNotAcknowledgeLeavesNothingHeld(t *testing.T) {
 	if !ok {
 		t.Fatalf("the premise: the engine's broker is JetStream, got %T", back.Queue)
 	}
-	stream := &unacknowledgedLastEvents{Queue: broker}
+	stream := &unacknowledgedLastRecords{Queue: broker}
 	back.Queue = stream
 	leases := &recordedReleases{coordBackend: back.Coord}
 	back.Coord = leases
@@ -239,6 +249,7 @@ func TestAStopOnAStreamThatWillNotAcknowledgeLeavesNothingHeld(t *testing.T) {
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
 	}
+	stream.engine.Store(e)
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -256,6 +267,18 @@ func TestAStopOnAStreamThatWillNotAcknowledgeLeavesNothingHeld(t *testing.T) {
 	})
 	if admissions, err := back.Fleet.Admissions(ctx); err != nil || len(admissions) == 0 {
 		t.Fatalf("the premise: the node is admitted, got %v (%v)", admissions, err)
+	}
+	// A MEMORY ROW FOR EACH SEAT, which its release publishes whole on its
+	// way out — so each seat's teardown has a record of its own on the
+	// silent stream for its last event to run beside.
+	now := time.Now().UTC().UnixMicro()
+	for _, handle := range []string{"ceo", "cto"} {
+		if _, err := back.Store.SQL().ExecContext(ctx, `INSERT INTO counterparty_profiles
+			(observer_handle, subject_handle, first_seen_at, last_updated_at,
+			 last_corroborated_at) VALUES (?, 'founder', ?, ?, ?)`,
+			handle, now, now, now); err != nil {
+			t.Fatalf("give seat %s a memory row: %v", handle, err)
+		}
 	}
 
 	started := time.Now()
@@ -292,17 +315,35 @@ func TestAStopOnAStreamThatWillNotAcknowledgeLeavesNothingHeld(t *testing.T) {
 	}
 
 	for role, handle := range map[string]string{"CEO": "ceo", "CTO": "cto"} {
-		ended, published := stream.terminated(role)
+		began, ended, published := stream.terminated(role)
+		flushed, carried := stream.flushed(handle)
 		released, gaveBack := leases.released(coord.SeatResource(handle))
 		switch {
 		case !published:
 			t.Errorf("seat %s was released with no `agent_terminated` asked for", handle)
+		case !carried:
+			t.Errorf("the premise: seat %s's release published no memory, so its "+
+				"teardown held nothing for its last event to run beside", handle)
 		case !gaveBack:
 			t.Errorf("seat %s's lease was never given back", handle)
 		case released.Before(ended):
 			t.Errorf("seat %s's lease was given back %v before its last event was "+
 				"over: a peer taking it over could announce it first",
 				handle, ended.Sub(released))
+		default:
+			// THE EVENT'S BOUND FROM THE SEAT'S FIRST HELD RECORD TO ITS
+			// LEASE, and half the teardown's hold for the machine: beside
+			// each other the teardown ends inside the event's wait, and one
+			// after the other the lease waits for the sum of them.
+			start := began
+			if flushed.Before(start) {
+				start = flushed
+			}
+			if took, limit := released.Sub(start), streamClientTimeout+teardownHold/2; took >= limit {
+				t.Errorf("seat %s's lease was given back %v after its release began, "+
+					"past %v: its last event and its teardown waited one after the "+
+					"other rather than beside each other", handle, took, limit)
+			}
 		}
 	}
 	// TWO OF THE STREAM'S BOUNDS separate the outcomes: beside the drain the
@@ -322,22 +363,107 @@ const streamClientTimeout = 5 * time.Second
 // errNoQuorum is what the stalled stream answers once its wait is over.
 var errNoQuorum = errors.New("the event stream has lost quorum")
 
-// unacknowledgedLastEvents is the engine's own broker with an event stream
+// teardownHold is how long the memory changelog takes to acknowledge a seat's
+// last memory publish once the stop has begun.
+//
+// SHORTER THAN THE EVENT'S BOUND BY SECONDS, and seconds long itself, so each
+// order the case tells apart misses by seconds rather than by a scheduler's
+// whim: a lease given back without waiting for the seat's event comes two
+// seconds before the event is over, and an event published in front of the
+// teardown makes the lease three seconds late. A hold that ran to the flush's
+// own deadline would end with the event, and the first of those would be told
+// apart by microseconds.
+const teardownHold = 3 * time.Second
+
+// unacknowledgedLastRecords is the engine's own broker with an event stream
 // that never acknowledges a stop's last events — `org_stopped` and
-// `agent_terminated` — recording when each seat's was over, keyed by the role
-// it names. Every other publish is the broker's.
-type unacknowledgedLastEvents struct {
+// `agent_terminated` — and a memory changelog that acknowledges each seat's
+// last memory publish only after [teardownHold], recording when each seat's
+// were asked for and when its event was over. Every other publish is the
+// broker's.
+type unacknowledgedLastRecords struct {
 	*jetstream.Queue
-	ended sync.Map // role name → time.Time
+	engine atomic.Pointer[engine.Engine]
+
+	terminating sync.Map // role name → time.Time its event was asked for
+	ended       sync.Map // role name → time.Time its event was over
+	flushing    sync.Map // seat handle → time.Time its memory was first published
 }
 
-func (q *unacknowledgedLastEvents) Publish(ctx context.Context, subject string, ev *events.Event) error {
+func (q *unacknowledgedLastRecords) Publish(ctx context.Context, subject string, ev *events.Event) error {
 	if ev.Type != (types.OrgStopped{}).EventType() &&
 		ev.Type != (types.AgentTerminated{}).EventType() {
 		return q.Queue.Publish(ctx, subject, ev)
 	}
-	// AS THE CLIENT WAITS for an acknowledgement that never comes: until
-	// the request's deadline, or its own timeout for one with none.
+	terminated := ev.Type == (types.AgentTerminated{}).EventType()
+	if terminated {
+		q.terminating.LoadOrStore(ev.Source, time.Now())
+	}
+	unacknowledged(ctx)
+	if terminated {
+		q.ended.Store(ev.Source, time.Now())
+	}
+	return errNoQuorum
+}
+
+// JetStream is the broker's own, but for a seat's memory publishes once the
+// stop has begun — what the release's last flush makes — which are held.
+func (q *unacknowledgedLastRecords) JetStream() natsjs.JetStream {
+	return heldMemory{JetStream: q.Queue.JetStream(), records: q}
+}
+
+// stopping is whether the engine's stop has begun.
+func (q *unacknowledgedLastRecords) stopping() bool {
+	e := q.engine.Load()
+	return e != nil && e.ShuttingDown()
+}
+
+// terminated is when role's last event was asked for and when it was over, if
+// one was asked for.
+func (q *unacknowledgedLastRecords) terminated(role string) (began, ended time.Time, ok bool) {
+	b, asked := q.terminating.Load(role)
+	e, over := q.ended.Load(role)
+	if !asked || !over {
+		return time.Time{}, time.Time{}, false
+	}
+	return b.(time.Time), e.(time.Time), true
+}
+
+// flushed is when handle's memory was first published once the stop began, if
+// it was.
+func (q *unacknowledgedLastRecords) flushed(handle string) (time.Time, bool) {
+	at, ok := q.flushing.Load(handle)
+	if !ok {
+		return time.Time{}, false
+	}
+	return at.(time.Time), true
+}
+
+// heldMemory is a JetStream context whose publishes of a seat's memory are
+// acknowledged only after [teardownHold] once the stop has begun.
+type heldMemory struct {
+	natsjs.JetStream
+	records *unacknowledgedLastRecords
+}
+
+func (j heldMemory) Publish(ctx context.Context, subject string, data []byte,
+	opts ...natsjs.PublishOpt) (*natsjs.PubAck, error) {
+	rest, memory := strings.CutPrefix(subject, topics.MemoryPrefix)
+	if memory && j.records.stopping() {
+		handle, _, _ := strings.Cut(rest, ".")
+		j.records.flushing.LoadOrStore(handle, time.Now())
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(teardownHold):
+		}
+	}
+	return j.JetStream.Publish(ctx, subject, data, opts...)
+}
+
+// unacknowledged waits as the client waits for an acknowledgement that never
+// comes: until the request's deadline, or its own timeout for one with none.
+func unacknowledged(ctx context.Context) {
 	wait := streamClientTimeout
 	if deadline, ok := ctx.Deadline(); ok {
 		wait = time.Until(deadline)
@@ -346,19 +472,6 @@ func (q *unacknowledgedLastEvents) Publish(ctx context.Context, subject string, 
 	case <-ctx.Done():
 	case <-time.After(wait):
 	}
-	if ev.Type == (types.AgentTerminated{}).EventType() {
-		q.ended.Store(ev.Source, time.Now())
-	}
-	return errNoQuorum
-}
-
-// terminated is when role's last event was over, if one was asked for.
-func (q *unacknowledgedLastEvents) terminated(role string) (time.Time, bool) {
-	at, ok := q.ended.Load(role)
-	if !ok {
-		return time.Time{}, false
-	}
-	return at.(time.Time), true
 }
 
 // recordedReleases is the lease store, recording when each lease's give-back
