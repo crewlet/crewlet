@@ -398,8 +398,11 @@ func TestARecordStampedAheadLeavesADayAfterItArrived(t *testing.T) {
 // RECORDS ARRIVING OUT OF ORDER AGE OUT IN STAMP ORDER. A broadcast
 // subscription reads across topics with no order between them and a fleet's
 // clocks disagree, so the window is fed out of order — and it is held in the
-// order its records age out regardless, so what leaves is always the oldest
-// stamped, never whatever happened to arrive first.
+// order its records age out regardless, so what leaves is always the first to
+// age out, never whatever happened to arrive first. For these records, all
+// stamped behind the clock, that is the oldest stamped; a record stamped ahead
+// ages out in its arrival's place instead
+// (TestARecordStampedAheadLeavesADayAfterItArrived).
 func TestRecordsArrivingOutOfOrderAgeOutInStampOrder(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
@@ -426,7 +429,7 @@ func TestRecordsArrivingOutOfOrderAgeOutInStampOrder(t *testing.T) {
 
 // THE ROLLUP NAMES A SEAT BY THE ID ITS NEWEST RECORD CARRIES.
 //
-// tokens.Aggregate keeps the LAST runtime id it is handed for a seat and for a
+// tokens.Aggregate keeps the LAST agent id it is handed for a seat and for a
 // turn, so the order the window hands its records over in is what decides which
 // id a row links by — and that order is the one the records age out in,
 // whatever order they arrived in. Held in arrival order, a record that lost a
