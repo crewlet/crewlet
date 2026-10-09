@@ -531,8 +531,8 @@ test("the element scanner reads a multi-line prop", () => {
  * `GridColumn.header` is drawn in the head row, so a column twenty pixels wide
  * carries a mark or nothing at all — a work item's type, a row's actions, a
  * pair of state tags. That is right for the wide table and wrong for the card a
- * grid becomes below 860px, where the head is gone and every value draws its
- * own name beside it: a cell with no name draws none, and the card gets a bare
+ * grid becomes below the phone breakpoint (640px, `breakpoint.phone`), where
+ * the head is gone and every value draws its own name beside it: a cell with no name draws none, and the card gets a bare
  * mark floating on a line of its own between two labelled ones. Measured on the
  * tracker at 390px, it reads as a rendering fault rather than as a value.
  *

@@ -8,10 +8,11 @@
  * band is, what a row's inset is, what the head does, what happens on a phone
  * and which of the two could be sorted at a column head. Every rule the grid
  * had — the track list declared once, the cap on a shrink column, the card the
- * row becomes below 860px, the cursor `j` and `k` walk — the list simply did
- * not have, and every rule the list had the table did not: the table drew a
- * band per group with NO rows in it the moment a second axis was asked for,
- * because sub-groups replace a group's rows and it only ever read `rows`.
+ * row becomes below the phone breakpoint (640px, `breakpoint.phone`), the
+ * cursor `j` and `k` walk — the list simply did not have, and every rule the
+ * list had the table did not: the table drew a band per group with NO rows in
+ * it the moment a second axis was asked for, because sub-groups replace a
+ * group's rows and it only ever read `rows`.
  *
  * So there is one renderer and the shape picks a column SET. That is the whole
  * of the difference, which is what `docs/reference/dashboard-design.md` means
