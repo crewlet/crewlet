@@ -5178,7 +5178,8 @@ Notes:
 - A **person** is a row of their own with `person: true`, on both windows:
   what the auxiliary model spent for a human seat — a question answered with
   `answer_knowledge`, a background pass on a unit a person leads — named by
-  that seat's `handle` and `role`, with no `agent_id` and, on a named window,
+  that seat's `handle` and the `role` its newest record or day names (a
+  record naming none leaves it), with no `agent_id` and, on a named window,
   no `turns` or `failed`, since a person takes no turns. `seat=<handle>`
   narrows a window to one person as it does to one seat. A person's spend
   reaches the named windows as its own usage record, published with the rest

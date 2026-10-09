@@ -457,13 +457,25 @@ type Options struct {
 // Aggregate folds records into the breakdown.
 //
 // Every bucket is a sum and every instant a min or a max, so no figure here
-// depends on the order the records are handed over in. One value does, on
-// purpose: a seat's and a turn's runtime id is the LAST one seen, because the
-// current id is what a cross-link must use, and only the order can say which
-// one is current. What production hands it is the live projection's window:
-// undateable records first, then the rest in the order they age out — oldest
-// stamp first, one stamped ahead in its arrival's place, whatever order they
-// arrived in — so the id kept is the one the newest record carries.
+// depends on the order the records are handed over in.
+//
+// Every value that NAMES something — a seat's agent id, a person's role, a
+// turn's agent id, work key and role — is the LAST one a record carried, and a
+// record carrying none leaves it be. Never the FIRST: a turn whose first record
+// in window order came without its work key was listed with none, and the same
+// records handed over the other way round named it.
+//
+// For a turn that is no choice at all: a run is one turn of one seat, on one
+// configuration, for one unit of work, so every record of it that names one of
+// these names the same one, and the order cannot change the answer. For a seat's
+// agent id and a person's role it is the point — the id is derived from the
+// org's name and the seat's handle and a role is a name, so a rename changes
+// either, the current one is what a row must show, and only the order can say
+// which one is current. What production hands this is the live projection's
+// window: undateable records first, then the rest in the order they age out —
+// oldest stamp first, one stamped ahead in its arrival's place, whatever order
+// they arrived in — so the value kept is the one the newest record carries, as
+// a named window's seat is named by its newest day ([FoldDaily]).
 func Aggregate(records []Record, opts Options) Rollup {
 	limit := opts.RecentTurns
 	switch {
@@ -538,11 +550,21 @@ func Aggregate(records []Record, opts Options) Rollup {
 				ByPhase: map[string]*Bucket{}}
 			byAgent[key] = agent
 		}
-		// The LATEST id seen wins: a seat's runtime id changes across
-		// sessions, and the current one is what a cross-link must use.
-		// The caller's order says which is latest (see Aggregate).
+		// The LATEST id seen wins: a seat's id is derived from its handle,
+		// so a renamed seat's records carry two, and the current one is what
+		// a cross-link must use. The caller's order says which is latest
+		// (see Aggregate).
 		if r.AgentID != "" {
 			agent.AgentID = r.AgentID
+		}
+		// And the latest ROLE: a seat's row is keyed on its role, so this
+		// changes nothing there, but a person's is keyed on their handle and
+		// names their seat's role, which a rename changes — named by the
+		// first record, a person renamed mid-window kept the name they
+		// started it with here while a named window ([FoldDaily]) gave the
+		// newest, and a first record carrying no role left them "unknown".
+		if r.AgentRole != "" {
+			agent.Role = r.AgentRole
 		}
 		agent.Bucket.add(r)
 		bucketFor(agent.ByPhase, phase).add(r)
@@ -558,12 +580,21 @@ func Aggregate(records []Record, opts Options) Rollup {
 		turn := byTurn[r.TurnID]
 		if turn == nil {
 			turn = &TurnRow{
-				TurnID: r.TurnID, WorkKey: r.WorkKey,
-				Role: role, Handle: opts.Handles[role],
+				TurnID: r.TurnID, Role: role, Handle: opts.Handles[role],
 				StartedAt: r.Timestamp, EndedAt: r.Timestamp,
 				ByPhase: map[string]*Bucket{},
 			}
 			byTurn[r.TurnID] = turn
+		}
+		// FILLED from whichever record carries it, never fixed by the first:
+		// each is the run's own and the same on every record of it that
+		// names one, so a record without one says nothing about it (see
+		// Aggregate).
+		if r.WorkKey != "" {
+			turn.WorkKey = r.WorkKey
+		}
+		if r.AgentRole != "" {
+			turn.Role, turn.Handle = r.AgentRole, opts.Handles[r.AgentRole]
 		}
 		if r.AgentID != "" {
 			turn.AgentID = r.AgentID

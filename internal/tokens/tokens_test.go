@@ -55,22 +55,51 @@ func TestOneTurnFoldsIntoEveryDimension(t *testing.T) {
 
 func TestOrderOfArrivalDoesNotChangeTheAnswer(t *testing.T) {
 	t.Parallel()
-	// Every figure is a sum, a min or a max, so the same records handed over
-	// in any order fold to the same rollup — and a figure that depended on
-	// the order would move when nothing it counts had. The runtime id is the
-	// one value that is order-dependent by design, latest wins, so each role
-	// here keeps one.
-	forward := []tokens.Record{
-		rec("CEO", "onboarding", "sonnet", "t1", "2026-06-14T12:00:00Z", 60, 20),
-		rec("CEO", "execute", "sonnet", "t1", "2026-06-14T12:00:05Z", 90, 30),
-		rec("CTO", "onboarding", "haiku", "t2", "2026-06-14T12:00:07Z", 10, 5),
-	}
-	backward := []tokens.Record{forward[2], forward[1], forward[0]}
+	// Every figure is a sum, a min or a max, and a turn's work key and role are
+	// one value on every record of the run that names them, so the same
+	// records handed over in any order fold to the same rollup — and a figure
+	// or a name that depended on the order would move when nothing it counts
+	// had. Each turn here has a record naming neither its work key nor (t2) its
+	// role, handed over first one way and last the other, which is what tells
+	// a field filled from whichever record carries it from one taken off the
+	// first. A seat's agent id is order-dependent by design, latest wins, so
+	// each role here keeps one.
+	//
+	// Mutation: take a turn's work key, or its role, from its first record
+	// only, and the forward order lists t1 with no key and t2 as "unknown".
+	keyless := rec("CEO", "onboarding", "sonnet", "t1", "2026-06-14T12:00:00Z", 60, 20)
+	keyed := rec("CEO", "execute", "sonnet", "t1", "2026-06-14T12:00:05Z", 90, 30)
+	keyed.WorkKey = "wk-1"
+	roleless := rec("", "review", "haiku", "t2", "2026-06-14T12:00:06Z", 4, 1)
+	roleless.AgentID = "id-CTO"
+	cto := rec("CTO", "onboarding", "haiku", "t2", "2026-06-14T12:00:07Z", 10, 5)
+	cto.WorkKey = "wk-2"
+	forward := []tokens.Record{keyless, keyed, roleless, cto}
+	backward := []tokens.Record{cto, roleless, keyed, keyless}
+	opts := tokens.Options{Handles: map[string]string{"CEO": "ceo", "CTO": "cto"}}
 
-	a, _ := json.Marshal(tokens.Aggregate(forward, tokens.Options{}))
-	b, _ := json.Marshal(tokens.Aggregate(backward, tokens.Options{}))
-	if string(a) != string(b) {
-		t.Errorf("the rollup depends on arrival order:\n%s\n%s", a, b)
+	want := map[string]tokens.TurnRow{
+		"t1": {WorkKey: "wk-1", Role: "CEO", Handle: "ceo"},
+		"t2": {WorkKey: "wk-2", Role: "CTO", Handle: "cto"},
+	}
+	var answers [2][]byte
+	for i, records := range [][]tokens.Record{forward, backward} {
+		got := tokens.Aggregate(records, opts)
+		if len(got.ByTurn) != len(want) {
+			t.Fatalf("order %d: by_turn = %+v, want one row per run", i, got.ByTurn)
+		}
+		for _, turn := range got.ByTurn {
+			w := want[turn.TurnID]
+			if turn.WorkKey != w.WorkKey || turn.Role != w.Role || turn.Handle != w.Handle {
+				t.Errorf("order %d: turn %s is %s/%s/%s, want %s/%s/%s from whichever "+
+					"of its records names them", i, turn.TurnID, turn.WorkKey, turn.Role,
+					turn.Handle, w.WorkKey, w.Role, w.Handle)
+			}
+		}
+		answers[i], _ = json.Marshal(got)
+	}
+	if string(answers[0]) != string(answers[1]) {
+		t.Errorf("the rollup depends on arrival order:\n%s\n%s", answers[0], answers[1])
 	}
 }
 
