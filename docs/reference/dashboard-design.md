@@ -5881,7 +5881,11 @@ change the configuration: it reads the entry (`GET
 be kept, removed or replaced in its place, never shown — and while one is in
 the list the list neither grows nor shrinks and no removal moves it, because
 the engine puts an inline value back **by its position** and a moved mask
-would come back as its neighbour's key), its endpoint and its two bench times
+would come back as its neighbour's key; a `cli-agent` entry is no key pool, so
+its list is one **API key**, offered only under `cli.auth.mode: api-key`, and
+in any other mode it offers none and says how the entry signs in — a key it
+already holds is drawn to be removed, with the reason, since the engine
+refuses one there), its endpoint and its two bench times
 (named for what benches a key — *rate limit 1h · auth 5m* — rather than by
 status code), checks
 the whole company with the change in it and says only a warning the edit

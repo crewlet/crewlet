@@ -1,6 +1,7 @@
 /**
  * Editing one model from Settings › Models & keys: its model id, the keys it
- * rotates through, its endpoint and its bench times.
+ * rotates through, its endpoint and its bench times. A cli-agent entry holds
+ * at most one key, and only under `cli.auth.mode: api-key` (see [keySlots]).
  *
  * A NEW CONFIGURATION REVISION, not an act: a model is a `providers.llm`
  * entry, so the write is the entity PUT at `/config/llm-providers/{id}`
@@ -40,12 +41,14 @@ import {
   formOf,
   inlinePlaceWords,
   keysKeepInlinePlaces,
+  keySlots,
   MAX_BENCH_SECONDS,
   MIN_BENCH_SECONDS,
   modelEntity,
   newKeyField,
   problemsByField,
   type KeyField,
+  type KeySlots,
   type ModelField,
   type ModelForm,
 } from "~/lib/models.ts";
@@ -152,7 +155,10 @@ export function EditModelDialog({
   useEffect(() => () => inflight.current?.abort(), []);
 
   const local = useMemo(
-    () => (form && loaded.kind === "entity" ? formErrors(form, loaded.read) : {}),
+    () =>
+      form && loaded.kind === "entity"
+        ? formErrors(form, loaded.read, keySlots(loaded.entity))
+        : {},
     [form, loaded],
   );
   const engine = state.kind === "refused" ? state.fields : {};
@@ -321,7 +327,7 @@ export function EditModelDialog({
             onSecretsNeeded={refresh}
             disabled={busy}
             error={errorOf("keys")}
-            cli={cli}
+            slots={keySlots(loaded.entity)}
           />
           {!cli && (
             <ConfigField
@@ -383,7 +389,7 @@ function KeysEditor({
   onSecretsNeeded,
   disabled,
   error,
-  cli,
+  slots,
 }: {
   keys: ModelForm["keys"];
   /** The keys as read, whose inline places every gesture must keep. */
@@ -393,7 +399,7 @@ function KeysEditor({
   onSecretsNeeded: () => void;
   disabled: boolean;
   error: string | undefined;
-  cli: boolean;
+  slots: KeySlots;
 }) {
   const set = (i: number, value: string) =>
     onChange(keys.map((k, j) => (j === i ? { ...k, value } : k)));
@@ -402,16 +408,14 @@ function KeysEditor({
   const added = [...keys, newKeyField()];
   const held = inlinePlaceWords(keys);
   const lastLocked = keys.map((k) => k.value).lastIndexOf(REDACTED);
+  // AT ITS LIMIT, Add says why rather than offering a row the engine refuses:
+  // a cli-agent entry holds one key under api-key and none in any other mode.
+  const atLimit = keys.length >= slots.max;
+  const addReason = atLimit ? slots.full : kept(added) ? undefined : held;
   return (
     <fieldset className="mcp-add-pairs">
-      <legend className="t-label">{cli ? "Tokens" : "Keys"}</legend>
-      {keys.length === 0 && (
-        <p className="t-caption">
-          {cli
-            ? "None: the CLI uses the login in its state directory."
-            : "None: the model reads its vendor's own variable (ANTHROPIC_API_KEY or OPENAI_API_KEY). Add one as ${NAME} — typing $ offers the company's sealed secrets."}
-        </p>
-      )}
+      <legend className="t-label">{slots.legend}</legend>
+      {keys.length === 0 && <p className="t-caption">{slots.empty}</p>}
       {keys.map((k, i) => {
         const removable = kept(without(i));
         return (
@@ -475,19 +479,21 @@ function KeysEditor({
           {error}
         </p>
       )}
-      <div>
-        <Button
-          variant="secondary"
-          size="small"
-          leadingIcon={<PlusGlyph size="sm" />}
-          disabled={disabled}
-          disabledReason={kept(added) ? undefined : held}
-          title={kept(added) ? undefined : held}
-          onClick={() => onChange(added)}
-        >
-          Add key
-        </Button>
-      </div>
+      {slots.max > 0 && (
+        <div>
+          <Button
+            variant="secondary"
+            size="small"
+            leadingIcon={<PlusGlyph size="sm" />}
+            disabled={disabled}
+            disabledReason={addReason}
+            title={addReason}
+            onClick={() => onChange(added)}
+          >
+            Add key
+          </Button>
+        </div>
+      )}
     </fieldset>
   );
 }

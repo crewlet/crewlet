@@ -9,6 +9,7 @@ import {
   keyBackWords,
   keyMark,
   keysKeepInlinePlaces,
+  keySlots,
   modelEntity,
   modelLine,
   nextLift,
@@ -217,5 +218,46 @@ describe("a key on the list", () => {
     expect(keyBackWords(key({}))).toBe("Now");
     expect(keyBackWords(key({ state: "duplicate", same_as: 1 }))).toBe("As key 1");
     expect(keyBackWords(key({ state: "unresolved" }))).toBe("Not in the pool");
+  });
+});
+
+// A CLI-AGENT ENTRY IS NOT A KEY POOL. The engine reads its api_keys only
+// under cli.auth.mode api-key, and only the one value — so the form offers
+// exactly that, and a key it holds in any other mode is a fault to remove,
+// said before the engine is asked.
+describe("the keys a cli-agent entry may hold", () => {
+  const cli = (auth?: Record<string, unknown>) => ({
+    type: "cli-agent",
+    model: "sonnet",
+    cli: { agent: "claude-code", ...(auth ? { auth } : {}) },
+  });
+
+  test("an API entry rotates through as many keys as it is given", () => {
+    const slots = keySlots({ type: "anthropic", model: "m" });
+    expect(slots.max).toBe(Number.POSITIVE_INFINITY);
+    expect(slots.legend).toBe("Keys");
+  });
+
+  test("api-key mode holds one key, and a second is refused before asking", () => {
+    const slots = keySlots(cli({ mode: "api-key" }));
+    expect(slots.max).toBe(1);
+    const read = formOf({ ...cli({ mode: "api-key" }), api_keys: ["${A}"] });
+    expect(formErrors(read, read, slots).keys).toBeUndefined();
+    const two = { ...read, keys: [...read.keys, { id: "b", value: "${B}" }] };
+    expect(formErrors(two, read, slots).keys).toMatch(/holds one key and rotates nothing/);
+  });
+
+  test("any other mode holds none, naming the mode, and a held key is a fault", () => {
+    for (const [auth, mode] of [
+      [undefined, "subscription"],
+      [{ mode: "inherit-env" }, "inherit-env"],
+    ] as const) {
+      const slots = keySlots(cli(auth));
+      expect(slots.max).toBe(0);
+      expect(slots.empty).toContain(`this entry's is ${mode}`);
+      const read = formOf({ ...cli(auth), api_keys: ["${A}"] });
+      expect(formErrors(read, read, slots).keys).toMatch(/read only under cli.auth.mode api-key/);
+      expect(formErrors({ ...read, keys: [] }, read, slots).keys).toBeUndefined();
+    }
   });
 });

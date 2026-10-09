@@ -347,15 +347,74 @@ export function inlinePlaceWords(keys: readonly KeyField[]): string {
 }
 
 /**
+ * How many keys an entry's form may hold, and the words around the list.
+ *
+ * A `cli-agent` entry is not a key pool. It holds ONE login and rotates
+ * nothing, and the engine reads its `api_keys` only under
+ * `cli.auth.mode: api-key`, where the one value goes in the CLI's own key
+ * variable; in any other mode, or past one value, a write keeping them is
+ * refused, because nothing would read them. So under api-key the form offers
+ * one key, and in any other mode none — a key it already holds is drawn so it
+ * can be removed, with the reason. Every other entry rotates through as many
+ * keys as it is given.
+ */
+export interface KeySlots {
+  /** How many keys the entry may hold. */
+  max: number;
+  legend: string;
+  /** Said when the list is empty. */
+  empty: string;
+  /** Why no key can be added once the list is at `max`, or why it is over it. */
+  full: string;
+}
+
+const KEY_POOL: KeySlots = {
+  max: Number.POSITIVE_INFINITY,
+  legend: "Keys",
+  empty:
+    "None: the model reads its vendor's own variable (ANTHROPIC_API_KEY or OPENAI_API_KEY). Add one as ${NAME} — typing $ offers the company's sealed secrets.",
+  full: "",
+};
+
+/** The key slots of the entity as the engine served it. */
+export function keySlots(entity: Record<string, unknown>): KeySlots {
+  if (entity.type !== "cli-agent") return KEY_POOL;
+  const cli = isRecord(entity.cli) ? entity.cli : {};
+  const auth = isRecord(cli.auth) ? cli.auth : {};
+  const mode = typeof auth.mode === "string" && auth.mode ? auth.mode : "subscription";
+  if (mode === "api-key") {
+    return {
+      max: 1,
+      legend: "API key",
+      empty:
+        "None yet: auth.mode is api-key, so this entry needs the metered key its CLI reads. Add it as ${NAME} — typing $ offers the company's sealed secrets.",
+      full: "A cli-agent entry holds one key and rotates nothing. Put another key on an entry of its own in the seat's fallback chain.",
+    };
+  }
+  return {
+    max: 0,
+    legend: "API key",
+    empty: `None: this entry signs in through its CLI's login, cli.auth.token, or a provider key in cli.env. A key is read only under cli.auth.mode api-key, and this entry's is ${mode}.`,
+    full: `A key is read only under cli.auth.mode api-key, and this entry's is ${mode}, so the engine refuses one here. Remove it.`,
+  };
+}
+
+/**
  * What stops a save before the engine is asked. The engine validates the
  * whole company again; this is only what a person can see is wrong while
  * typing — and the one thing the engine cannot see at all, an inline key
  * moved to another key's place (see [keysKeepInlinePlaces]).
  */
-export function formErrors(form: ModelForm, read: ModelForm): Partial<Record<ModelField, string>> {
+export function formErrors(
+  form: ModelForm,
+  read: ModelForm,
+  slots: KeySlots = KEY_POOL,
+): Partial<Record<ModelField, string>> {
   const out: Partial<Record<ModelField, string>> = {};
   if (!form.model.trim()) out.model = "Name the model this entry serves.";
-  if (form.keys.some((k) => !k.value.trim())) {
+  if (form.keys.length > slots.max) {
+    out.keys = slots.full;
+  } else if (form.keys.some((k) => !k.value.trim())) {
     out.keys = "A key row is empty. Fill it in or remove it.";
   } else if (!keysKeepInlinePlaces(read.keys, form.keys)) {
     out.keys = inlinePlaceWords(form.keys);
