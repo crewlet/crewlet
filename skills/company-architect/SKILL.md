@@ -230,7 +230,11 @@ refused as one key, exactly like two units of the same name.
 **Secrets are `${VAR}` references, never literals.** Every string field
 supports `${ENV_VAR}`. Put the reference in the YAML and the value in
 `.env`. Never write a token, key, or webhook secret into a config file,
-even a draft, even one you expect to be deleted.
+even a draft, even one you expect to be deleted. The schema says where
+they go: every position that holds a credential carries
+`"x-crewlet-secret": true` (on a list's `items` and a map's
+`additionalProperties` for the members), and each of those takes a
+`${VAR}`.
 
 **Seats you will provision need a *whole-value* `${VAR}`.**
 `crewlet mattermost provision` / `crewlet gitlab provision` mint per-agent

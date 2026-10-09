@@ -19,6 +19,12 @@ This page documents the **Tier B** fields below.  For Tier A see [Configuration 
 > and warnings, see [the validation loop](ai-authoring.md#the-validation-loop));
 > it reads no environment, so it works before any secret is exported.
 >
+> **Credential positions are marked.** Every field, list member or map
+> value that holds a credential carries `"x-crewlet-secret": true` in the
+> schema, so an editor or a tool writing this file knows where a `${VAR}`
+> reference belongs instead of a value — see
+> [Credential positions](../reference/cli.md#credential-positions-x-crewlet-secret).
+>
 > **Unknown keys are rejected.** Every config model forbids extra
 > fields, at every level including roles and units — a mistyped
 > `backstroy:` fails validation naming the exact path rather than being

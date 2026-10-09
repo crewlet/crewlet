@@ -53,6 +53,16 @@ verdict:
 A fraction in a whole-number field is refused by the loader rather than
 truncated, so `integer` in these files is exactly what the engine reads.
 
+Every position that holds a credential carries the vendor annotation
+`"x-crewlet-secret": true` — the field itself, a list's `items`, or a map's
+`additionalProperties` (never its keys) — derived from the same
+`secret:"true"` tag that config reads redact by.
+`internal/config/schemasecret_test.go` runs the redactor over a fully
+populated document and holds the marked positions to the masked ones in
+both directions. It is an annotation, not a rule: a literal there still
+validates. What a consumer should do with it is in
+[`docs/reference/cli.md`](../docs/reference/cli.md#credential-positions-x-crewlet-secret).
+
 There is no `extensions` block in the company schema, and the absence is
 deliberate: this engine has no in-process extension system for a schema to
 describe. What a company extends it extends through MCP servers and the

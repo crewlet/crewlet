@@ -169,6 +169,13 @@ schema-only check catches:
   and bad enums (`kind: robot`, `type: openaii`)
 - malformed handles and unit ids, and numbers out of range
 
+It also says where a credential goes: every field, list member or map
+value that holds one carries `"x-crewlet-secret": true`. That is an
+annotation rather than a check — a literal there still validates — so it
+is the assistant that reads it and writes a `${VAR}` reference instead of
+a value, without guessing from a field's name. See
+[Credential positions](../reference/cli.md#credential-positions-x-crewlet-secret).
+
 It does **not** flag a number or a boolean written into a text field:
 YAML reads `name: 2024` as a number and `org_webhook: false` as a
 boolean, the engine takes each as the text it was written as, and the

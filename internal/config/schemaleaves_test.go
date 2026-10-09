@@ -289,14 +289,14 @@ func schemaSites(t *testing.T, root reflect.Type) []schemaSite {
 	return sites
 }
 
-// yamlFields is a struct's decoded fields in declaration order, embedded
+// yamlFields is a struct's decoded fields in declaration order, `,inline`
 // structs flattened into their parent as yaml.v3 flattens them.
 func yamlFields(typ reflect.Type) []reflect.StructField {
 	var out []reflect.StructField
 	for i := range typ.NumField() {
 		f := typ.Field(i)
-		if f.Anonymous && f.Type.Kind() == reflect.Struct {
-			out = append(out, yamlFields(f.Type)...)
+		if inlined(f) {
+			out = append(out, yamlFields(indirect(f.Type))...)
 			continue
 		}
 		if f.PkgPath != "" {
@@ -402,12 +402,12 @@ func valueAt(v reflect.Value, path []string) reflect.Value {
 	return v
 }
 
-// fieldNamed is the field a struct decodes a YAML key into, embedded
+// fieldNamed is the field a struct decodes a YAML key into, `,inline`
 // structs included.
 func fieldNamed(v reflect.Value, key string) reflect.Value {
 	for i := range v.NumField() {
 		f := v.Type().Field(i)
-		if f.Anonymous && f.Type.Kind() == reflect.Struct {
+		if inlined(f) {
 			if inner := fieldNamed(v.Field(i), key); inner.IsValid() {
 				return inner
 			}
