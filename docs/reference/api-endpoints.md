@@ -1548,16 +1548,23 @@ than a day rather than a wrong total) and folds them with
 `internal/tokens`, which is the same aggregation the event store's wider
 windows are folded with, so changing the window on screen cannot change
 what a phase is counted as. The window is a ROLLING one, aged on the
-serving node's clock — every read leaves out what the window has aged
-past, and both an arriving record and the shared tick drop it — and
-never on a record's own stamp: a record stamped
-before the window is not counted however late it arrives, one stamped
-ahead by a node whose clock runs fast is held until the window passes it
-rather than moving the window, and one whose stamp does not parse is kept
-(nothing can age it) and is the first the 24 000 cap drops. The rollup's
-`since` and `until` are the two instants the window was cut at. It ships
-in the snapshot and is re-pushed on the shared 5-second tick after any
-phase completed or any record aged out, so the Spend screen and the
+serving node's clock and never on a record's own stamp — every read leaves
+out what the window has aged past, and both an arriving record and the
+shared tick drop it:
+
+- a record stamped before the window is not counted, however late it
+  arrives;
+- one stamped ahead, by a node whose clock runs fast, is aged from when it
+  arrived — from the startup seed, for one read from history — so it leaves
+  a day after it came and the cap takes it in that place, rather than moving
+  the window or outliving it. It still shows the stamp it was published
+  with, which is how the node with the wrong clock is found;
+- one whose stamp does not parse is kept (nothing can age it) and is the
+  first the 24 000 cap drops.
+
+The rollup's `since` and `until` are the two instants the window was cut
+at. It ships in the snapshot and is re-pushed on the shared 5-second tick
+after any phase completed or any record aged out, so the Spend screen and the
 overview widget stay live without a fetch — and a company that has gone
 quiet sees its spend leave the window as it ages rather than keep its last
 busy day — without a second implementation of the aggregation in the

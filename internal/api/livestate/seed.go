@@ -172,14 +172,16 @@ func (s *LiveState) seedSpend(records []tokens.Record) bool {
 		return false
 	}
 	// Aged against the CLOCK, as every arrival is: the window a seed has to
-	// respect is the one ending now.
+	// respect is the one ending now. A stored record stamped ahead of it is
+	// aged from now, its arrival here, as one off the stream would be
+	// ([ageingStamp]).
 	now := s.clock()
 	moved := s.expireSpend(now)
 	cutoff := now.Add(-LiveSpendWindow)
 
 	entries := make([]spendEntry, 0, len(records))
 	for _, r := range records {
-		entries = append(entries, spendEntry{at: newStamp(r.Timestamp), Record: r})
+		entries = append(entries, spendEntry{at: ageingStamp(r.Timestamp, now), Record: r})
 	}
 	// OLDEST FIRST — the order the window is held in — so only the newest
 	// records the window can hold are worth an id: the count cap below would

@@ -41,6 +41,10 @@ const auxiliarySpendType = "auxiliary_spend"
 // the last one, and one record stamped ahead by a node with a fast clock moved
 // the cutoff forward, dropped every correctly stamped record a day behind it
 // and forgot their ids — so a redelivery of one of them counted it again.
+//
+// A RECORD STAMPED AHEAD IS AGED FROM ITS ARRIVAL ([ageingStamp]): it leaves
+// the window a day after it arrived, never a day after a stamp the clock may
+// not reach for decades.
 func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 	now := s.clock()
 	moved := s.expireSpend(now)
@@ -54,7 +58,7 @@ func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 	// held stamp — up to three layouts each — would happen inside the
 	// projection's write lock, which is the mutex every /agents request and
 	// every websocket snapshot waits on.
-	at := newStamp(env.Timestamp)
+	at := ageingStamp(env.Timestamp, now)
 	if at.valid && at.t.Before(now.Add(-LiveSpendWindow)) {
 		// ALREADY AGED: the window it would have counted in has passed.
 		// Not indexed either, so a redelivery is refused the same way
@@ -111,6 +115,34 @@ func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 	return true
 }
 
+// ageingStamp is a spend record's stamp as the window ages it: the instant the
+// record carries, or now — its arrival — when that instant is ahead of now.
+//
+// A record is aged by its own stamp because that is when its spend happened,
+// which a record arriving late behind a cross-topic race still says truly. A
+// stamp AHEAD of the clock names an instant that has not come: a node whose
+// clock runs fast, by milliseconds or by a garbled year. Aged by that stamp, a
+// record was held until the clock passed it plus a day — for the garbled year,
+// counted in "the last 24 hours" for the life of the process, under a window
+// label that excluded it, and the last record the count cap would ever drop,
+// since it sorted newest. Aged from its arrival it leaves a day after it came,
+// the cap takes it in its arrival's place, and every held record's ageing
+// instant lies inside the window [LiveState.Spend] labels.
+//
+// Only the AGEING instant moves. The record keeps the stamp it was published
+// with ([tokens.Record.Timestamp]), which is what every screen shows of it —
+// an hour no clock has reached yet is how an operator finds the node whose
+// clock is wrong. Nor is a record stamped past the window's end left out of a
+// read: every fresh record from a node a few milliseconds ahead is one, and
+// nothing would re-push the rollup when it later fell inside.
+func ageingStamp(raw string, now time.Time) stamp {
+	at := newStamp(raw)
+	if at.valid && at.t.After(now) {
+		at.t = now
+	}
+	return at
+}
+
 // length is the number of elements of a list field, zero for anything else.
 func length(payload map[string]any, key string) int {
 	list, _ := payload[key].([]any)
@@ -120,13 +152,14 @@ func length(payload map[string]any, key string) int {
 // THE WINDOW IS HELD IN THE ORDER ITS RECORDS AGE OUT, which is what makes an
 // arrival constant work.
 //
-// The dated records ([LiveState.spend]) are kept oldest stamp first, records
-// sharing an instant in the order they arrived, so what the window has aged
-// past is always a PREFIX, and the count cap's oldest records are the same
-// prefix. An arrival in stamp order — nearly every one — is an append; one
-// that lost a cross-topic race, or was stamped by a node whose clock runs
-// behind, is inserted at its place, which costs a move of the records stamped
-// after it and nothing else.
+// The dated records ([LiveState.spend]) are kept oldest first by the instant
+// each is aged from ([ageingStamp] — its stamp, or its arrival when the stamp is
+// ahead of the clock), records sharing an instant in the order they arrived, so
+// what the window has aged past is always a PREFIX, and the count cap's oldest
+// records are the same prefix. An arrival in stamp order — nearly every one,
+// and every one stamped ahead — is an append; one that lost a cross-topic race,
+// or was stamped by a node whose clock runs behind, is inserted at its place,
+// which costs a move of the records aged after it and nothing else.
 //
 // The window used to be held in ARRIVAL order, and that order cannot be aged
 // from the front: a broadcast subscription reads across topics with no order
@@ -182,7 +215,7 @@ func (s *LiveState) agedSpend(now time.Time) int {
 }
 
 // capSpend holds the window to [SpendRecordLimit], dropping the OLDEST: the
-// undateable records first, then the earliest stamped.
+// undateable records first, then the first the window would age out.
 //
 // The count cap binds before the window for an org emitting more than the cap
 // in a day. Truncating the oldest is what makes a rollup past the cap cover
@@ -227,11 +260,14 @@ func (s *LiveState) forgetSpend(leaving []spendEntry) {
 	}
 }
 
-// spendEntry is one record with its timestamp already parsed.
+// spendEntry is one record with the instant the window ages it from already
+// parsed ([ageingStamp]).
 //
 // The parse is the point. tokens.Record is the WIRE shape — it carries the
 // stamp as the string the dashboard renders — and this is the projection's
-// own copy, so the parsed instant lives beside it rather than in it.
+// own copy, so the parsed instant lives beside it rather than in it. Beside
+// it, too, because the two can differ: a record stamped ahead of the clock is
+// aged from its arrival and still shows the stamp it was published with.
 type spendEntry struct {
 	tokens.Record
 	at stamp
@@ -245,7 +281,8 @@ type spendEntry struct {
 // is a heading over records that nothing ever cut to it.
 type SpendWindow struct {
 	// Records are the records inside the window: the undateable ones first,
-	// then the rest oldest first.
+	// in the order they arrived, then the rest in the order they age out —
+	// oldest stamp first, a record stamped ahead in its arrival's place.
 	Records []tokens.Record
 
 	// Until is the projection's clock at the read, and Since is

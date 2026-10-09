@@ -78,7 +78,7 @@ const (
 	// SpendRecordLimit is a memory and latency backstop on retained spend
 	// records. The real bound is the window above; this only binds for an
 	// org emitting more than this in a day. Truncation drops the OLDEST
-	// records — any whose stamp does not parse, then the earliest stamped —
+	// records — any whose stamp does not parse, then the first to age out —
 	// so an org past the cap sees a rollup covering slightly less than a day
 	// rather than a wrong total.
 	//
@@ -317,8 +317,9 @@ type LiveState struct {
 	// had — the endpoint's, a re-implementation in the browser, and
 	// whatever a reconnect left behind.
 	//
-	// These are the DATED records, oldest stamp first — the order they age
-	// out in, which is what makes an arrival constant work (see holdSpend).
+	// These are the DATED records, oldest first by the instant each is aged
+	// from (ageingStamp) — the order they age out in, which is what makes an
+	// arrival constant work (see holdSpend).
 	spend []spendEntry
 
 	// undatedSpend are the records whose stamp did not parse, in the order

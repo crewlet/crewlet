@@ -335,7 +335,8 @@ func TestTheWindowAgesOnTheClockWithNothingArriving(t *testing.T) {
 // A RECORD STAMPED AHEAD AGES NOTHING. One node's fast clock used to move the
 // whole window's cutoff with the record it stamped, dropping every correctly
 // stamped record a day behind it; the cutoff is the projection's clock now,
-// and a record from the future is simply held until the clock passes it.
+// and a record from the future is held and aged from its arrival, behind
+// every record stamped before that arrival.
 func TestARecordStampedAheadAgesNothing(t *testing.T) {
 	t.Parallel()
 	s := stoppedAt(t, "2026-06-14T14:00:00Z")
@@ -344,7 +345,53 @@ func TestARecordStampedAheadAgesNothing(t *testing.T) {
 	s.Apply(phaseSpend("p2", "2026-06-14T13:00:00Z", 5))
 
 	if ids := spendIDs(s); !slices.Equal(ids, []string{"p1", "p2", "ahead"}) {
-		t.Errorf("records = %v, want every one held, oldest stamp first", ids)
+		t.Errorf("records = %v, want every one held, in the order they age out", ids)
+	}
+}
+
+// A RECORD STAMPED AHEAD LEAVES A DAY AFTER IT ARRIVED.
+//
+// Aged by its own stamp, a record from a node whose clock is badly wrong — a
+// garbled year — was held until the clock passed that stamp plus a day: in the
+// rollup labelled "the last 24 hours" for the life of the process, under a
+// window that excluded it. It is aged from its arrival on the projection's
+// clock, it leaves when a record that arrived beside it would, and the expiry
+// reports it leaving so the rollup is pushed again. It keeps the stamp it was
+// published with, which is how an operator finds the node with the wrong
+// clock.
+//
+// Mutation: age a record by its stamp alone ([ageingStamp] returning
+// newStamp), and the record is still held a day after it arrived.
+func TestARecordStampedAheadLeavesADayAfterItArrived(t *testing.T) {
+	t.Parallel()
+	const far = "2099-01-01T00:00:00Z"
+	arrived := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	now := arrived
+	s := livestate.New(livestate.WithClock(func() time.Time { return now }))
+	if !s.Apply(phaseSpend("far", far, 1000)).Tokens {
+		t.Fatal("a record stamped ahead was not counted when it arrived")
+	}
+	window := s.Spend()
+	if len(window.Records) != 1 || window.Records[0].Timestamp != far {
+		t.Fatalf("the window holds %+v, want the record with the stamp it was published with",
+			window.Records)
+	}
+
+	now = arrived.Add(livestate.LiveSpendWindow - time.Hour)
+	if s.ExpireSpend() {
+		t.Error("the record aged out before a day had passed since it arrived")
+	}
+	if ids := spendIDs(s); !slices.Equal(ids, []string{"far"}) {
+		t.Errorf("records = %v, want the record held until a day after it arrived", ids)
+	}
+
+	now = arrived.Add(livestate.LiveSpendWindow + time.Hour)
+	if !s.ExpireSpend() {
+		t.Error("the expiry found nothing to drop a day after the record arrived: " +
+			"it is aged by a stamp the clock will not reach for decades")
+	}
+	if ids := spendIDs(s); len(ids) != 0 {
+		t.Errorf("records = %v, want the window empty a day after its only record arrived", ids)
 	}
 }
 

@@ -261,6 +261,40 @@ func TestSeedingRespectsTheRingAndTheWindow(t *testing.T) {
 	}
 }
 
+// A STORED RECORD STAMPED AHEAD IS AGED FROM THE SEED, as a record off the
+// stream is aged from its arrival: it lands in the window's order behind a
+// record that arrives after it, however far ahead its stamp, and leaves a day
+// after the seed rather than a day after a stamp the clock may never reach.
+//
+// Mutation: seed by the record's own stamp (newStamp in seedSpend), and the
+// record sorts behind the later arrival and is still held a day later.
+func TestASeededRecordStampedAheadIsAgedFromTheSeed(t *testing.T) {
+	t.Parallel()
+	seeded := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
+	now := seeded
+	s := livestate.New(livestate.WithClock(func() time.Time { return now }))
+	if !s.Seed(livestate.History{Spend: []tokens.Record{
+		storedSpend("far", "2099-01-01T00:00:00Z", 1000),
+	}}).Tokens {
+		t.Fatal("a stored record stamped ahead was not seeded")
+	}
+
+	now = seeded.Add(time.Minute)
+	s.Apply(phaseSpend("next", now.Format(time.RFC3339Nano), 10))
+	if ids := spendIDs(s); !slices.Equal(ids, []string{"far", "next"}) {
+		t.Errorf("records = %v, want the seeded record first: it was aged from the seed, "+
+			"before the record that arrived a minute later", ids)
+	}
+
+	now = seeded.Add(livestate.LiveSpendWindow + 30*time.Second)
+	if !s.ExpireSpend() {
+		t.Error("the expiry found nothing to drop a day after the seed")
+	}
+	if ids := spendIDs(s); !slices.Equal(ids, []string{"next"}) {
+		t.Errorf("records = %v, want the seeded record gone a day after the seed", ids)
+	}
+}
+
 // AN EMPTY STORE MOVES NOTHING, so a caller cannot report a seed that had
 // nothing to seed as a change.
 func TestSeedingNothingMovesNothing(t *testing.T) {

@@ -83,6 +83,7 @@ func TestTheSpendIndexHoldsExactlyTheWindowsIDs(t *testing.T) {
 
 	s.foldSpend(Envelope{ID: "early", Timestamp: start.Format(time.RFC3339Nano)},
 		map[string]any{"total_tokens": 5})
+	now = start.Add(2 * time.Hour) // fresh arrives when it was stamped
 	s.foldSpend(Envelope{ID: "fresh", Timestamp: fresh}, map[string]any{"total_tokens": 5})
 	now = start.Add(LiveSpendWindow + time.Hour) // early has aged, fresh has not
 	if !s.ExpireSpend() || len(s.spend) != 1 {

@@ -106,6 +106,41 @@ func TestTheCapDropsTheOldestStampedAndTheUndateableFirst(t *testing.T) {
 	}
 }
 
+// THE CAP TAKES A RECORD STAMPED AHEAD IN ITS ARRIVAL'S PLACE.
+//
+// Held by its own stamp, a record from a node whose clock is years fast sorted
+// NEWEST, so the cap — which drops from the front — reached it only after every
+// other record in the window, and a busy company kept it for good. Aged from its
+// arrival, it is as old as the records that arrived beside it, and the cap
+// drops it when it drops them.
+//
+// Mutation: age a record by its stamp alone, and the far record outlives the
+// oldest record that arrived after it.
+func TestTheCapTakesARecordStampedAheadInItsArrivalsPlace(t *testing.T) {
+	t.Parallel()
+	base := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
+	now := base
+	s := New(WithClock(func() time.Time { return now }))
+	s.foldSpend(Envelope{ID: "far", Timestamp: "2099-01-01T00:00:00Z"},
+		map[string]any{"total_tokens": 1})
+	// The window's worth of records, each arriving a millisecond after the
+	// last and stamped on arrival: the last of them is one past the cap.
+	for i := range SpendRecordLimit {
+		now = base.Add(time.Duration(i+1) * time.Millisecond)
+		s.foldSpend(Envelope{ID: fmt.Sprintf("w%d", i), Timestamp: now.Format(time.RFC3339Nano)},
+			map[string]any{"total_tokens": 1})
+	}
+	ids := s.spendHeld()
+	if slices.Contains(ids, "far") {
+		t.Errorf("the cap kept the record stamped ahead and dropped one that arrived after "+
+			"it: the window starts at %s", ids[0])
+	}
+	if len(ids) != SpendRecordLimit || ids[0] != "w0" {
+		t.Errorf("the window holds %d records from %s, want the cap's %d from w0",
+			len(ids), ids[0], SpendRecordLimit)
+	}
+}
+
 // AN EXPIRY READS THE FRONT OF THE WINDOW AND STOPS.
 //
 // This asserts the expiry's COST rather than its result, because the result is
