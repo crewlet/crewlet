@@ -21,6 +21,9 @@ How to brief it well:
   agent has its own shell and git, plus whatever code-host token your role
   gives it — it clones, edits, runs tests, pushes a branch, and opens the
   pull request or merge request **as your own identity**.
+- The coding agent does not hold your tools: it knows the work item only
+  through what your brief tells it. Copy in the facts and the acceptance
+  criteria it needs rather than pointing it at the item.
 - Say what DONE means inside the brief itself: the coding agent and the
   reviewer measure against the same bar, so "endpoint returns 200 and tests
   pass" beats "do the thing".

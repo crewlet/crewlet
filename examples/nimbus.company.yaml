@@ -962,7 +962,14 @@ units:
               # `e2b`, once that backend is in the catalogue) here and
               # nothing else changes.
               mcp:                                # MCP surface inside the sandbox
-                servers: [mattermost, tavily]              # the coding agent reads work items through the engine's own builtins; code-host MCP not needed — it pushes + opens the MR via git push options
+                servers: [mattermost, tavily]
+                # No tracker in the box: the engine's builtins stay with the
+                # seat (docs/concepts/code-sandbox.md, "The tool bridge"), so
+                # the coding agent knows the work item only through the
+                # brief the executor writes — the bundled skill:code_runtime
+                # tells it to copy in the facts and acceptance criteria.
+                # Code-host MCP not needed either — it pushes + opens the MR
+                # via git push options.
                 # Scoping is server-level only — the coding agent gets every
                 # tool the listed servers expose (there is no per-tool allowlist:
                 # OpenCode has none, and claude-code runs bypassPermissions).
@@ -1048,7 +1055,14 @@ units:
             sandbox:
               enabled: true
               mcp:                                # MCP surface inside the sandbox
-                servers: [mattermost, tavily]              # the coding agent reads work items through the engine's own builtins; code-host MCP not needed — it pushes + opens the MR via git push options
+                servers: [mattermost, tavily]
+                # No tracker in the box: the engine's builtins stay with the
+                # seat (docs/concepts/code-sandbox.md, "The tool bridge"), so
+                # the coding agent knows the work item only through the
+                # brief the executor writes — the bundled skill:code_runtime
+                # tells it to copy in the facts and acceptance criteria.
+                # Code-host MCP not needed either — it pushes + opens the MR
+                # via git push options.
                 # Scoping is server-level only — the coding agent gets every
                 # tool the listed servers expose (there is no per-tool allowlist:
                 # OpenCode has none, and claude-code runs bypassPermissions).
@@ -1127,7 +1141,14 @@ units:
             sandbox:
               enabled: true
               mcp:                                # MCP surface inside the sandbox
-                servers: [mattermost, tavily]              # the coding agent reads work items through the engine's own builtins; code-host MCP not needed — it pushes + opens the MR via git push options
+                servers: [mattermost, tavily]
+                # No tracker in the box: the engine's builtins stay with the
+                # seat (docs/concepts/code-sandbox.md, "The tool bridge"), so
+                # the coding agent knows the work item only through the
+                # brief the executor writes — the bundled skill:code_runtime
+                # tells it to copy in the facts and acceptance criteria.
+                # Code-host MCP not needed either — it pushes + opens the MR
+                # via git push options.
                 # Scoping is server-level only — the coding agent gets every
                 # tool the listed servers expose (there is no per-tool allowlist:
                 # OpenCode has none, and claude-code runs bypassPermissions).
