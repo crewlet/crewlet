@@ -202,13 +202,32 @@ func sizeCeilings(ctx context.Context, host domainHost, stream config.Stream,
 		holds, found, err := host.DomainStreamCeiling(ctx, domain.Stream().Name)
 		switch {
 		case err != nil:
-			// CARRIED AS ABSENT. The provision that follows asks the
-			// same broker the same question and fails with its own
-			// answer if it still cannot give one; counted here as
-			// absent, the stream is merely sized as though this boot
-			// were creating it.
+			// CARRIED AS ABSENT, and it costs more than this stream.
+			//
+			// Not a failed boot: the read was already asked again for
+			// the whole lookup ceiling
+			// ([jetstream.Queue.DomainStreamCeiling]), and the
+			// provision that follows asks the same broker again and
+			// settles whether the stream exists by its own create if
+			// it has to. Counted as absent, the stream itself is
+			// merely sized as though this boot were creating it, which
+			// changes nothing for one that exists — it keeps its
+			// ceiling. But the ceiling it holds is also left out of
+			// `holding`, so the pool every log this boot DOES create is
+			// divided from is understated by that reservation's share,
+			// and a created ceiling is kept for good. The line says
+			// so, because the boot that follows succeeds and nothing
+			// else will.
 			log.WarnContext(ctx, "statelog_ceiling_unread",
-				"domain", domain.Name(), "error", err.Error())
+				"domain", domain.Name(), "stream", domain.Stream().Name,
+				"error", err.Error(),
+				"detail", "the broker did not say whether this log's stream "+
+					"exists or what ceiling it holds, so it is counted as "+
+					"absent: if it exists, its reservation is missing from "+
+					"the pool the logs this boot creates are sized from, and "+
+					"they are created smaller than a boot that read it "+
+					"would make them, for good — `crewlet retention "+
+					"set-capacity` raises one once this node is up")
 		case found:
 			held[domain.Name()] = holds
 			holding += holds

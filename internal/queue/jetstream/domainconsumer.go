@@ -912,9 +912,10 @@ func (c *DomainConsumer) lookup(ctx context.Context) (jetstream.Consumer, error)
 	return cons, err
 }
 
-// askRead runs one metadata READ on a domain consumer's open: under the
-// lookup ceiling of [Queue.provisioning], re-issued by [jsprovision.Timing.Read]
-// while nobody answers.
+// askRead runs one metadata READ on a state log's bring-up — its stream's
+// ceiling when the logs are sized, and everything a domain consumer's open
+// reads: under the lookup ceiling of [Queue.provisioning], re-issued by
+// [jsprovision.Timing.Read] while nobody answers.
 //
 // # Why a read on this path is not sized like the writes beside it
 //

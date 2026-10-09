@@ -189,6 +189,133 @@ func TestADomainStreamsCeilingIsReadBack(t *testing.T) {
 	}
 }
 
+// droppedCeilingJS answers a stream's info the way a member answers a read of a
+// stream another node has in flight: the first drops requests are never
+// answered — each ends when its own deadline does — and every later one is
+// answered with the ceiling the stream holds. A negative drops answers none.
+type droppedCeilingJS struct {
+	jetstream.JetStream
+	ceiling int64
+	drops   int
+
+	// terms is what each request was given to answer in, in order — or a
+	// negative duration for one handed no deadline at all.
+	terms []time.Duration
+}
+
+func (f *droppedCeilingJS) Stream(ctx context.Context, _ string) (jetstream.Stream, error) {
+	deadline, bounded := ctx.Deadline()
+	left := time.Duration(-1)
+	if bounded {
+		left = time.Until(deadline)
+	}
+	f.terms = append(f.terms, left)
+	if f.drops >= 0 && len(f.terms) > f.drops {
+		return ceilingStream{maxBytes: f.ceiling}, nil
+	}
+	if !bounded {
+		// NATS.GO'S OWN DEFAULT ends a request handed no deadline, five
+		// seconds on; spent at once here, because the caller is told
+		// the same nothing either way.
+		return nil, context.DeadlineExceeded
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// ceilingStream reports the byte ceiling a stream was created with.
+type ceilingStream struct {
+	jetstream.Stream
+	maxBytes int64
+}
+
+func (s ceilingStream) CachedInfo() *jetstream.StreamInfo {
+	return &jetstream.StreamInfo{Config: jetstream.StreamConfig{MaxBytes: s.maxBytes}}
+}
+
+// A DOMAIN STREAM'S CEILING IS A READ: a request nobody answered is asked
+// again, and a stream nobody would describe is unknown rather than absent.
+//
+// # What it was
+//
+// One request on the boot's context, which carries no deadline, so nats.go's
+// five-second default decided it. It is asked while the logs are sized at
+// state-log start — on a fleet, while the peers booting beside this node are
+// creating these same streams, which is when a member drops a read of a stream
+// another node has in flight ([jsprovision.ReadTerm]). A dropped request cost
+// the boot five seconds and came back unknown, and the sizing counts an unknown
+// as absent: the ceiling the stream holds left the pool, and a log created
+// beside it was sized smaller for good.
+//
+// # The two stagings
+//
+// A first request dropped, which must be asked again — at the read term, never
+// on the caller's open-ended context nor at a write's term — and then answered
+// with the ceiling. And every request dropped until the lookup ceiling is
+// spent, which must come back as the silence it is: reported as a missing
+// stream, it would be sized as one and nothing would say so.
+func TestADomainStreamsCeilingIsAReadAskedAgainWhenDropped(t *testing.T) {
+	t.Parallel()
+	// THE READ TERM AND THE PAUSE SCALED DOWN, and the lookup ceiling with
+	// them, because each dropped request waits out its whole term: at the
+	// production second apiece the first staging costs two seconds and the
+	// second thirty. The write's term stays production's clustered fifteen
+	// seconds, so a read asked as a write is told apart by the deadline it
+	// carried — and by a ceiling it could never fit inside.
+	timing := jsprovision.Clustered(true).Timing()
+	timing.ReadTerm, timing.ReAsk = 50*time.Millisecond, 20*time.Millisecond
+	timing.Lookup = 10 * (timing.ReadTerm + timing.ReAsk)
+	const ceiling = int64(3) << 30
+
+	t.Run("its first request dropped", func(t *testing.T) {
+		t.Parallel()
+		js := &droppedCeilingJS{ceiling: ceiling, drops: 1}
+		q := &Queue{js: js, timing: timing}
+		held, found, err := q.DomainStreamCeiling(t.Context(), "CREWLET_TRACKER_LOG")
+		if err != nil || !found || held != ceiling {
+			t.Fatalf("a stream whose first read was dropped = (%d, %v, %v), want "+
+				"(%d, true, nil) — a request nobody answered is asked again "+
+				"rather than being the answer", held, found, err, ceiling)
+		}
+		if len(js.terms) != 2 {
+			t.Errorf("the ceiling was asked for %d time(s), want 2: the dropped "+
+				"request and the one that was answered", len(js.terms))
+		}
+		for i, left := range js.terms {
+			switch {
+			case left < 0:
+				t.Errorf("ask %d carried no deadline of its own, so the client's "+
+					"five-second default decided it", i+1)
+			case left > timing.ReadTerm:
+				t.Errorf("ask %d was given %v, past the %v read term — a read "+
+					"the server dropped is held for a write's term rather than "+
+					"asked again", i+1, left, timing.ReadTerm)
+			}
+		}
+	})
+
+	t.Run("every request dropped", func(t *testing.T) {
+		t.Parallel()
+		js := &droppedCeilingJS{ceiling: ceiling, drops: -1}
+		q := &Queue{js: js, timing: timing}
+		held, found, err := q.DomainStreamCeiling(t.Context(), "CREWLET_TRACKER_LOG")
+		if err == nil || found || held != 0 {
+			t.Fatalf("a stream no request was answered about = (%d, %v, %v), "+
+				"want (0, false, an error) — silence is neither a ceiling nor "+
+				"an absent stream", held, found, err)
+		}
+		if !jsprovision.Unanswered(t.Context(), err) {
+			t.Errorf("the error is not the silence itself, so the caller cannot "+
+				"tell a broker that said nothing from one that refused: %v", err)
+		}
+		if len(js.terms) < 2 {
+			t.Errorf("the ceiling was asked for %d time(s) before the read gave "+
+				"up; the lookup ceiling holds several, and one means it was "+
+				"never asked again", len(js.terms))
+		}
+	})
+}
+
 // AN ACCOUNT'S BUDGET IS IN CEILING UNITS, from whichever shape the account
 // has.
 //
