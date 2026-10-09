@@ -57,7 +57,7 @@ type ProjectFiles interface {
 }
 
 // mountFiles registers the byte routes, where the engine serves files.
-func (a *App) mountFiles(mux *http.ServeMux) {
+func (a *App) mountFiles(mux httpjson.Router) {
 	if a.files == nil {
 		return
 	}

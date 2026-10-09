@@ -133,9 +133,11 @@ var (
 // whose script varies per request needs a nonce rather than this, and the
 // tests of each page check a real response's blocks against its real header.
 //
-// img-src 'self' lets a page show the product's mark from /static. A script
-// with a src attribute is refused: the pages this serves are self-contained so
-// they render when the dashboard bundle is not built.
+// img-src data: lets a page show the product's mark, INLINED, and nothing else:
+// the pages this serves are self-contained, so they render when the dashboard
+// bundle is not built, and they are public routes, served on the public
+// listener when a deployment sets one, where /static is not served at all. A
+// script with a src attribute is refused for the same reason.
 func ForTemplate(page *template.Template, views ...any) (string, error) {
 	if len(views) == 0 {
 		return "", fmt.Errorf("pagepolicy: %s: render it with at least one view", page.Name())
@@ -153,7 +155,7 @@ func ForTemplate(page *template.Template, views ...any) (string, error) {
 			return "", err
 		}
 	}
-	return "default-src 'none'; img-src 'self'; " +
+	return "default-src 'none'; img-src data:; " +
 		"style-src " + sources(styles) + "; script-src " + sources(scripts) + "; " +
 		"base-uri 'none'; form-action 'none'; frame-ancestors 'none'", nil
 }

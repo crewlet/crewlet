@@ -393,8 +393,128 @@ func (b *Bootstrap) Validate() error {
 	p.wrap(b.Secrets.validate(field("secrets")))
 	p.wrap(b.Logging.validate(field("logging")))
 	p.wrap(b.validateTopology())
+	p.wrap(b.ValidateListeners())
 	p.wrap(b.ValidateRoles())
 	return p.err()
+}
+
+// listener is one socket this file has a node bind.
+type listener struct {
+	field string
+	host  string
+	port  int
+}
+
+// ValidateListeners refuses the sockets this node cannot open as configured.
+//
+// EXPORTED FOR THE ONE CALLER THAT CHANGES THEM AFTER [Bootstrap.Validate] HAS
+// RUN: `crewlet run -roles`, `-api-host` and `-api-port` are applied to a loaded
+// file, and a flag that moved api.port onto api.public.port, or to 0 under a
+// public listener on an ingress node, would otherwise bind what validation never
+// saw. It reads the roles, so the caller runs it once every flag is applied.
+//
+// # A public listener on an ingress node needs api.port
+//
+// api.port 0 is the hard off switch — no HTTP surface at all — and api.public
+// MOVES routes off that surface rather than adding one beside it. An ingress
+// node serving only the public routes would answer no probe, so an
+// orchestrator could neither steer traffic from it while it drains nor tell it
+// from a dead one.
+//
+// ONLY ON AN INGRESS NODE. A node without the role serves no probe on any
+// port, so the reason does not reach it, and refusing it there broke the one
+// file every role reads: the documented `-roles data,seats,workers -api-port 0`
+// for a node that binds nothing was refused the moment the shared file set
+// api.public for its ingress peer. On such a node api.port 0 is still the hard
+// off switch — it binds no tool bridge on api.public either.
+//
+// # No two listeners on one port
+//
+// Every one of them binds on the same host, so a shared port is a bind that
+// fails at boot — after the broker started, or with the API answering on one
+// of the two and the other silent — long after `crewlet validate` called the
+// file good. Worse is the pair that does NOT fail: nothing here can bind a
+// port twice, but an operator who wrote api.public.port equal to api.port
+// meant two sockets, and the admin API and the routes published to the
+// internet would have been one.
+//
+// Two listeners on DIFFERENT specific addresses may share a port — an
+// interface each is a real deployment — so a port is refused only when the
+// hosts are equal or either binds every interface. A host name that resolves
+// to another listener's address cannot be compared here without a lookup, and
+// fails at bind naming the address.
+func (b *Bootstrap) ValidateListeners() error {
+	var p problems
+	// An unreadable role list is Node.validate's to report, naming the
+	// field, and the -roles flag parsed it before calling; it is not a
+	// reason to refuse a listener.
+	roles, rolesErr := b.Node.RoleSet()
+	ingress := rolesErr == nil && roles.Has(placement.RoleIngress)
+	if ingress && b.API.Public.Port > 0 && b.API.Port == 0 {
+		p.add(field("api.public.port"), ErrConflict,
+			"api.port is 0, so this ingress node serves no HTTP surface, and the "+
+				"public listener moves routes off api.port rather than serving "+
+				"without it — no probe would answer. Set api.port (bind it to a "+
+				"private address to keep it unreachable from outside), or remove "+
+				"api.public")
+	}
+	var open []listener
+	if b.API.Port > 0 {
+		open = append(open, listener{"api.port", b.API.Host, b.API.Port})
+	}
+	if b.API.Public.Port > 0 {
+		open = append(open, listener{"api.public.port", b.API.Public.Host, b.API.Public.Port})
+	}
+	// THE EMBEDDED BROKER'S OWN LISTENERS, and only where it opens them: an
+	// external cluster's are not this host's, and a leaf opens neither.
+	if b.BrokerKind() == placement.BrokerMember {
+		if b.Stream.Cluster.Port > 0 {
+			open = append(open, listener{"stream.cluster.port", b.Stream.Cluster.Host, b.Stream.Cluster.Port})
+		}
+		if b.Stream.Leaf.Port > 0 {
+			open = append(open, listener{"stream.leaf.port", b.Stream.Leaf.Host, b.Stream.Leaf.Port})
+		}
+	}
+	for i, l := range open {
+		for _, earlier := range open[:i] {
+			if l.port != earlier.port || !bindsOverlap(l.host, earlier.host) {
+				continue
+			}
+			p.add(field(l.field), ErrConflict,
+				"port %d is also %s, and both bind %s: one node cannot open two "+
+					"listeners on one port. Pick another port, or bind the two to "+
+					"different addresses", l.port, earlier.field, bindLabel(l.host, earlier.host))
+		}
+	}
+	return p.err()
+}
+
+// bindsOverlap reports whether two bind hosts can claim the same socket: they
+// are the same address, or either is every interface.
+func bindsOverlap(a, b string) bool {
+	a, b = bindHost(a), bindHost(b)
+	return a == "" || b == "" || a == b
+}
+
+// bindHost is a bind address in one spelling, "" for every interface.
+func bindHost(host string) string {
+	h := strings.ToLower(strings.Trim(strings.TrimSpace(host), "[]"))
+	switch h {
+	case "0.0.0.0", "::":
+		return ""
+	}
+	if ip := net.ParseIP(h); ip != nil {
+		return ip.String()
+	}
+	return h
+}
+
+// bindLabel says which address two overlapping listeners share.
+func bindLabel(a, b string) string {
+	if bindHost(a) == "" || bindHost(b) == "" {
+		return "every interface"
+	}
+	return strconv.Quote(strings.TrimSpace(a))
 }
 
 // ValidateRoles refuses the settings a node's roles contradict.
@@ -2097,8 +2217,72 @@ type API struct {
 	// REST API, and no webhook endpoint, so every integration goes deaf.
 	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"Bind port; 0 disables the HTTP surface entirely."`
 
+	// Public is the optional dedicated listener for the routes outside
+	// parties call. See [APIPublic].
+	Public APIPublic `yaml:"public,omitempty" json:"public,omitzero"`
+
 	Auth APIAuth `yaml:"auth,omitempty" json:"auth"`
 }
+
+// APIPublic is a second listener that serves the routes outside parties call
+// without an operator credential, and nothing else: the vendor webhooks and the
+// vendor app landings under /webhooks/, and the per-run sandbox endpoints
+// /otlp/{token} and /mcp/{token}. Once it is set those routes are served ONLY
+// here, and api.port answers 404 for them, so the address an integration or a
+// remote sandbox must reach is a different socket from the one that serves the
+// admin API, the dashboard and the probes.
+//
+// # Why a listener rather than a path filter in a proxy
+//
+// Without it, a deployment that must accept vendor webhooks from the internet
+// but keep /config, /secrets and the read surface private has one socket to
+// expose and must filter it by path in front. That filter is an allow-list
+// somebody else maintains: one route it forgets, or one prefix it matches too
+// widely, puts the admin API on the internet, and nothing here can see it.
+// Two sockets make the split a fact about the network — the public one is
+// published, the other is not — and the engine itself decides which routes
+// each answers, from one predicate in the API's auth package.
+//
+// # Why the sandbox endpoints are public and the probes are not
+//
+// The sandbox endpoints are reached from INSIDE a box, which on E2B's cloud
+// is somebody else's network: a box can reach only what the deployment
+// publishes. They hold no operator credential by design — the signed per-run
+// token in the path is theirs — so they are exactly the routes this listener
+// is for, and leaving them on api.port would force that port public for any
+// company running remote sandboxes.
+//
+// The probes stay on api.port. /health describes the node — its seats, its
+// version, its posture — for whoever operates it, and an orchestrator or a
+// load balancer can probe a port other than the one it routes traffic to.
+//
+// # On a node without the ingress role
+//
+// Such a node serves one route at all, its seats' tool bridge, and that is a
+// public route: with this block set it binds HERE for it rather than on
+// api.port, so one file still works for every role and the bridge address
+// follows one rule across the fleet.
+type APIPublic struct {
+	// Host is the bind address. Empty binds every interface, which is the
+	// point of a listener meant to be reached from outside.
+	Host string `yaml:"host,omitempty" json:"host,omitempty" desc:"Bind address for the public listener. Empty binds every interface."`
+
+	// Port is the bind port. 0 (the default) opens no public listener, and
+	// every route stays on api.port.
+	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"Bind port for the dedicated public listener serving only /webhooks/, /otlp/ and /mcp/; 0 keeps every route on api.port."`
+}
+
+// IsZero lets an unset public block drop out of a JSON round trip.
+func (p APIPublic) IsZero() bool { return p.Host == "" && p.Port == 0 }
+
+// Enabled reports whether the public routes have a listener of their own.
+func (p APIPublic) Enabled() bool { return p.Port != 0 }
+
+// Addr is the listener's bind address, host and port.
+func (p APIPublic) Addr() string { return net.JoinHostPort(p.Host, strconv.Itoa(p.Port)) }
+
+// Addr is the API listener's bind address, host and port.
+func (a *API) Addr() string { return net.JoinHostPort(a.Host, strconv.Itoa(a.Port)) }
 
 func (a *API) validate(path Path) error {
 	var p problems
@@ -2108,8 +2292,23 @@ func (a *API) validate(path Path) error {
 		p.add(at(path, "port"), ErrOutOfRange,
 			"must be 0 (no HTTP surface) or a port 1..65535, got %d", a.Port)
 	}
+	p.wrap(a.Public.validate(at(path, "public")))
 	p.wrap(a.Auth.validate(at(path, "auth")))
 	return p.err()
+}
+
+func (p *APIPublic) validate(path Path) error {
+	var probs problems
+	if p.Port < 0 || p.Port > 65535 {
+		probs.add(at(path, "port"), ErrOutOfRange,
+			"must be 0 (no public listener) or a port 1..65535, got %d", p.Port)
+	}
+	if p.Port == 0 && p.Host != "" {
+		probs.add(at(path, "port"), ErrMissing,
+			"is required once host is set: host describes the public LISTENER, "+
+				"and without a port this node opens none")
+	}
+	return probs.err()
 }
 
 // APIAuth is the bearer-token policy for the HTTP surface.

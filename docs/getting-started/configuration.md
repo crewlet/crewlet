@@ -1204,6 +1204,13 @@ coordination:
 api:
   host: "0.0.0.0"
   port: 8000
+  public:           # optional — a second listener for the routes outside
+    port: 8443      #   parties call: /webhooks/*, /otlp/{token}, /mcp/{token}.
+                    #   Once set they are served ONLY here (404 on api.port),
+                    #   and everything else — the dashboard, the REST API,
+                    #   /config, /secrets, the probes — ONLY on api.port.
+                    #   host defaults to every interface. 0 / unset keeps
+                    #   every route on api.port
   auth:
     tokens:
       - id: founder
@@ -1256,6 +1263,30 @@ somebody will rename.
 at `https://crewlet.example.com`. That outside address is Tier B's
 [`integrations.public_base_url`](#integrations), written once and read by every
 provisioner and every link the engine composes.
+
+**`api.public` splits the routes outside parties call onto a socket of their
+own.** With `api.public.port` set, the vendor webhooks and app landings
+(`/webhooks/*`) and the sandbox endpoints (`/otlp/{token}`, `/mcp/{token}`) are
+served on that listener and nowhere else, and every other route — the
+dashboard, the REST API, `/config`, `/secrets`, `/setup`, `/operator`, the live
+socket and the `/health` and `/ready` probes — only on `api.port`. `api.port`
+answers a public route with a `404 no_route` whose hint names `api.public`; the
+public listener answers every other route exactly as it answers a path nothing
+serves, with no hint, so the published socket says nothing about an admin port
+behind it, and it does so whatever credential is sent, since it requires none. Publish `api.public.port`, keep
+`api.port` private, and point `integrations.public_base_url` (and
+`CREWLET_MCP_BRIDGE_URL` / `CREWLET_SANDBOX_OTEL_RECEIVER_URL` for remote
+sandboxes) at the public address — see
+[Deployment → Exposing webhooks without the admin API](../guides/deployment.md#exposing-webhooks-without-the-admin-api).
+On a node without the `ingress` role, whose only route is its seats' tool
+bridge, the bridge moves to `api.public` too, so one file still serves every
+role. `crewlet validate` refuses a public listener beside `api.port: 0` on a node
+with the `ingress` role (that is no HTTP surface at all, and no probe would
+answer); on a node without it `api.port: 0` stays the hard off switch and binds
+nothing, the bridge included. It also refuses any two listeners the
+file opens on one port — `api.port`, `api.public.port`, `stream.cluster.port`
+and `stream.leaf.port` — when they bind the same address or either binds every
+interface; `-roles`, `-api-host` and `-api-port` are held to the same rules.
 
 Binding a person to a credential crosses the tiers the other way: an
 `api.auth.tokens[].id` is named from the company document's

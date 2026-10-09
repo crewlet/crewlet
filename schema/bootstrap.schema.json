@@ -31,6 +31,9 @@
             }
           ],
           "description": "Bind port; 0 disables the HTTP surface entirely."
+        },
+        "public": {
+          "$ref": "#/$defs/APIPublic"
         }
       },
       "type": [
@@ -112,6 +115,41 @@
             "array",
             "null"
           ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "APIPublic": {
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "description": "Bind address for the public listener. Empty binds every interface.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "port": {
+          "anyOf": [
+            {
+              "maximum": 65535,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Bind port for the dedicated public listener serving only /webhooks/, /otlp/ and /mcp/; 0 keeps every route on api.port."
         }
       },
       "type": [

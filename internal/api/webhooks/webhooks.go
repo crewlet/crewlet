@@ -200,7 +200,7 @@ func New(opts Options) (*Receiver, error) {
 // auth middleware that exempts /webhooks/ wraps these exactly as it wraps
 // everything else — a nested handler would put the exemption and the routes in
 // two places that have to agree.
-func (r *Receiver) Routes(mux *http.ServeMux) {
+func (r *Receiver) Routes(mux httpjson.Router) {
 	mux.HandleFunc("POST /webhooks/github", r.github)
 	// The seat form, for an app belonging to one agent. Same handler:
 	// what differs is only whether the path names a seat.

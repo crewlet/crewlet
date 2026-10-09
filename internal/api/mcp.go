@@ -42,7 +42,7 @@ import (
 // mode — and the route is then ABSENT rather than answering 503: an endpoint
 // that exists and refuses everything reads to an operator as broken, while one
 // that is not there matches what the config says.
-func mountBridge(mux *http.ServeMux, bridge *mcpbridge.Bridge) {
+func mountBridge(mux httpjson.Router, bridge *mcpbridge.Bridge) {
 	if bridge == nil {
 		return
 	}
@@ -67,6 +67,11 @@ func mountBridge(mux *http.ServeMux, bridge *mcpbridge.Bridge) {
 // A nil bridge returns nil: there is nothing for such a node to serve, and the
 // caller binds no listener rather than one that answers every request with a
 // refusal.
+//
+// No partition stands in front of it as one does on the full surface (see
+// [App.Public]): the bridge is a public route and the only one here, so this
+// handler is what a node binds on api.public when the file sets one, and on
+// api.port when it does not.
 func BridgeOnly(bootstrap *config.Bootstrap, bridge *mcpbridge.Bridge) http.Handler {
 	if bridge == nil {
 		return nil
@@ -84,7 +89,7 @@ func BridgeOnly(bootstrap *config.Bootstrap, bridge *mcpbridge.Bridge) http.Hand
 // ABSENT rather than answering 404 from a registered handler: an endpoint
 // that exists and lists no tools reads to an operator as broken, while one
 // that is not there matches what their config says.
-func (a *App) mountOperator(mux *http.ServeMux, server *operator.Server) {
+func (a *App) mountOperator(mux httpjson.Router, server *operator.Server) {
 	if server == nil {
 		return
 	}

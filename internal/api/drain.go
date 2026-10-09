@@ -91,6 +91,10 @@ func servedWhileDraining(r *http.Request) bool {
 
 // drainGate refuses new work once this node has begun to drain.
 //
+// ONE GATE FOR BOTH LISTENERS: a node with a public listener serves it the
+// same chain api.port is served (see [App.Public]), so the webhook edge there
+// is refused and the sandbox edges served by exactly this rule.
+//
 // Inside the auth guard, so a credential is still the first question a guarded
 // route asks, and inside the browser posture, so a cross-origin dashboard can
 // read the refusal rather than seeing an opaque network error.

@@ -91,6 +91,36 @@ type App struct {
 	company func() *config.Company
 
 	handler http.Handler
+
+	// public is the handler of the dedicated public listener, or nil when
+	// there is none and every route is [App.ServeHTTP]'s. See [App.Public].
+	public http.Handler
+
+	// routes is every pattern mounted, in mount order. See [routeTable].
+	routes []string
+}
+
+// routeTable is the one mux every surface mounts on, keeping the pattern of
+// each route it is handed.
+//
+// KEPT because the listeners split ONE table by a predicate over paths
+// ([auth.Public]), and a predicate cannot say which paths exist: a route
+// mounted under a public prefix is published and unguarded whatever it was
+// meant to be, and one an outside party calls mounted outside them is
+// unreachable the day a deployment sets api.public. Only the table can be
+// walked to catch either, and [net/http.ServeMux] does not list its own.
+type routeTable struct {
+	mux      *http.ServeMux
+	patterns []string
+}
+
+func (t *routeTable) Handle(pattern string, handler http.Handler) {
+	t.patterns = append(t.patterns, pattern)
+	t.mux.Handle(pattern, handler)
+}
+
+func (t *routeTable) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
+	t.Handle(pattern, http.HandlerFunc(handler))
 }
 
 // routeMounter is what the API needs of a surface it mounts and never calls
@@ -100,7 +130,7 @@ type App struct {
 // standing up the store, the plane or the keyring the real surface is built
 // from.
 type routeMounter interface {
-	Routes(mux *http.ServeMux)
+	Routes(mux httpjson.Router)
 }
 
 // Options configure the app.
@@ -123,9 +153,11 @@ type routeMounter interface {
 // on Jira), an operator MCP surface, a telemetry receiver or a tool bridge (an
 // unset environment variable), and the defaults a test injects.
 type Options struct {
-	// Bootstrap supplies the auth posture. Nil is permitted and is not the
-	// same as absent config: the guard then refuses every write, because
-	// nobody has said who may make one.
+	// Bootstrap supplies the auth posture, and whether the public routes
+	// have a listener of their own (api.public — see [App.Public]). Nil is
+	// permitted and is not the same as absent config: the guard then
+	// refuses every write, because nobody has said who may make one, and
+	// every route is served on the one listener.
 	//
 	// It does NOT supply the node's name. The raw `node.id` is empty on a
 	// node named through CREWLET_NODE_ID and may itself be a ${VAR}; the
@@ -365,7 +397,8 @@ func New(opts Options) (*App, error) {
 	a.capacity = opts.Capacity
 	a.fleetBroker = opts.FleetBroker
 
-	mux := http.NewServeMux()
+	// ONE TABLE, keeping every pattern it is handed: see [routeTable].
+	mux := &routeTable{mux: http.NewServeMux()}
 	mux.Handle("GET /health", http.HandlerFunc(a.serveHealth))
 	mux.Handle("GET /ready", http.HandlerFunc(a.serveReady))
 	mux.Handle("GET /query/{what}", http.HandlerFunc(a.serveQuery))
@@ -455,10 +488,64 @@ func New(opts Options) (*App, error) {
 	// does not serve — the purge on a company with no native tracker, any
 	// route a newer client asks an older node for — read as a write whose
 	// outcome was unknown.
+	//
+	// ONE ROUTE TABLE AND ONE CHAIN, whatever the listeners. With a dedicated
+	// public listener (Tier A api.public) the two sockets serve the same
+	// handler behind a partition — the public one only [auth.Public]'s
+	// routes, this one everything else — so a route is mounted, guarded and
+	// drained exactly once, and which socket answers it is decided by one
+	// predicate rather than by which of two muxes somebody registered it on.
 	a.cors = auth.NewCORS(opts.Bootstrap)
-	a.handler = pagepolicy.Apply(a.cors.Middleware(a.guard.Middleware(
-		a.drainGate(httpjson.Mux(mux)))))
+	a.routes = mux.patterns
+	chain := a.cors.Middleware(a.guard.Middleware(a.drainGate(httpjson.Mux(mux.mux))))
+	if opts.Bootstrap == nil || !opts.Bootstrap.API.Public.Enabled() {
+		a.handler = pagepolicy.Apply(chain)
+		return a, nil
+	}
+	a.handler = pagepolicy.Apply(partition(false, chain))
+	a.public = pagepolicy.Apply(partition(true, chain))
 	return a, nil
+}
+
+// partition serves the requests on one side of [auth.Public] and answers every
+// other with a 404.
+//
+// BEFORE THE GUARD, which is the point on the public side: a route this
+// listener does not serve is absent there before any credential is asked for,
+// so the socket a deployment publishes answers a missing token, a wrong one and
+// the right one alike, and cannot be used to tell a valid operator token from an
+// invalid one.
+//
+// THE PUBLIC SIDE'S 404 IS THE MUX'S OWN, byte for byte ([httpjson.NoRoute]):
+// absent as on a node whose build lacks the route. Anything more — a hint naming
+// api.port, a wording of its own — would tell whoever scans the published
+// socket that a private admin port exists and which paths it serves.
+//
+// THE ADMIN SIDE'S 404 NAMES THE RIGHT LISTENER, for the reverse reason: the
+// caller there is on the operator's own network, and the likeliest one is a
+// vendor somebody configured with the wrong port, who must learn it from the
+// first delivery rather than from one quietly accepted on the socket nobody
+// published.
+//
+// Inside the security headers, so the 404 carries them like every other answer.
+func partition(public bool, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch serves := auth.Public(r.URL.Path); {
+		case serves == public:
+			next.ServeHTTP(w, r)
+		case public:
+			httpjson.NoRoute(w, r)
+		default:
+			httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoRoute, map[string]string{
+				"detail": fmt.Sprintf("this listener serves nothing at %s %s",
+					r.Method, r.URL.Path),
+				"hint": "This node has a public listener (api.public): the " +
+					"webhooks, the vendor app landings and the sandbox " +
+					"endpoints are served there and only there. Point the " +
+					"sender at that address.",
+			})
+		}
+	})
 }
 
 // missing names every required dependency these options leave nil, or reports
@@ -536,7 +623,7 @@ type Inbound struct {
 }
 
 // mountWebhooks registers the inbound edge.
-func (a *App) mountWebhooks(mux *http.ServeMux, in Inbound, now func() time.Time) error {
+func (a *App) mountWebhooks(mux httpjson.Router, in Inbound, now func() time.Time) error {
 	receiver, err := webhooks.New(webhooks.Options{
 		Secrets:    in.Secrets,
 		Publisher:  in.Publisher,
@@ -554,8 +641,14 @@ func (a *App) mountWebhooks(mux *http.ServeMux, in Inbound, now func() time.Time
 	return nil
 }
 
-// ServeHTTP makes the app the process's handler.
+// ServeHTTP makes the app the handler of api.port: every route, or every route
+// but the public ones when the node has a public listener.
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) { a.handler.ServeHTTP(w, r) }
+
+// Public is the handler of the dedicated public listener (Tier A api.public):
+// the routes outside parties call — see [auth.PublicPrefixes] — and nothing
+// else. Nil when the node has none, and every route is then [App.ServeHTTP]'s.
+func (a *App) Public() http.Handler { return a.public }
 
 // Stream exposes the live channel, for the engine to feed.
 func (a *App) Stream() *stream.Service { return a.stream }

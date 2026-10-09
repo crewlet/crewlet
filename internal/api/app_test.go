@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
@@ -95,7 +96,7 @@ func (f *fakeRuntime) ShuttingDown() bool { return f.state.ShuttingDown }
 // /config, /secrets or /setup.
 type noRoutes struct{}
 
-func (noRoutes) Routes(*http.ServeMux) {}
+func (noRoutes) Routes(httpjson.Router) {}
 
 // noAppFlow is a GitHub App completer that completes nothing.
 type noAppFlow struct{}

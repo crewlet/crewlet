@@ -21,7 +21,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -1305,33 +1304,38 @@ func shutdown(ctx context.Context, e *engine.Engine, surface *httpSurface, log *
 	e.Stop(ctx)
 }
 
-// httpSurface is the HTTP listener a node binds: the whole API on a node with
-// the ingress role, or only its seats' tool bridge on a node without it. The
-// app and the projector are nil in the second shape.
+// httpSurface is the HTTP listeners a node binds: the whole API on a node with
+// the ingress role — on api.port, with the routes outside parties call on a
+// public listener of their own when api.public is set — or only its seats'
+// tool bridge on a node without it. The app, the projector and the public
+// server are nil in the second shape.
 type httpSurface struct {
 	app       *api.App
 	server    *http.Server
+	public    *http.Server
 	projector *observe.Projector
 	runs      *observe.SandboxReconciler
 }
 
 // stop closes the HTTP surface, once the engine has drained. See [shutdown]
 // for why it is then and not earlier.
+//
+// THE PUBLIC LISTENER FIRST, then api.port. The probes are on api.port, and
+// an orchestrator reads them for as long as the process lives: closing that
+// socket while the public one spends its grace — which an open bridge session
+// spends whole, see [apiShutdownGrace] — would fail a liveness probe on a node
+// that is doing exactly what it should. Each gets its own grace, so a bridge
+// session holding the public listener open never cuts a dashboard request.
 func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
+	if s.public != nil {
+		shutdownListener(ctx, s.public, "public", log)
+	}
+	if s.server != nil {
+		shutdownListener(ctx, s.server, "api", log)
+	}
 	grace, cancel := context.WithTimeout(ctx, apiShutdownGrace)
 	defer cancel()
-	if err := s.server.Shutdown(grace); err != nil {
-		// The grace is over and a request is still running. It is CUT,
-		// which cancels its context, rather than left to run on into
-		// the teardown that is about to close the store and the broker
-		// it is reading.
-		log.WarnContext(ctx, "api_shutdown_failed", "error", err,
-			"detail", "requests still running after the shutdown grace were cut")
-		if closeErr := s.server.Close(); closeErr != nil {
-			log.WarnContext(ctx, "api_close_failed", "error", closeErr)
-		}
-	}
-	// After the listener, so no socket can be reading the projection while
+	// After the listeners, so no socket can be reading the projection while
 	// its feed is torn down, and after the drain, so a dashboard watching
 	// the drain saw its turns finish. Both are nil on a bridge-only node,
 	// which has neither.
@@ -1346,7 +1350,25 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 	log.InfoContext(ctx, "api_stopped")
 }
 
-// apiShutdownGrace bounds how long the listener waits for in-flight REQUESTS,
+// shutdownListener closes one listener, waiting at most [apiShutdownGrace] for
+// the requests it is serving.
+func shutdownListener(ctx context.Context, server *http.Server, listener string, log *slog.Logger) {
+	grace, cancel := context.WithTimeout(ctx, apiShutdownGrace)
+	defer cancel()
+	if err := server.Shutdown(grace); err != nil {
+		// The grace is over and a request is still running. It is CUT,
+		// which cancels its context, rather than left to run on into
+		// the teardown that is about to close the store and the broker
+		// it is reading.
+		log.WarnContext(ctx, "api_shutdown_failed", "listener", listener, "error", err,
+			"detail", "requests still running after the shutdown grace were cut")
+		if closeErr := server.Close(); closeErr != nil {
+			log.WarnContext(ctx, "api_close_failed", "listener", listener, "error", closeErr)
+		}
+	}
+}
+
+// apiShutdownGrace bounds how long a listener waits for in-flight REQUESTS,
 // and CUTS whatever is still running when it expires.
 //
 // Requests, not turns: the turns are the drain's to wait for, and that one is
@@ -1900,7 +1922,13 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	cancelSeed()
 	runs.Start(ctx)
 
-	server, addr, err := listenAPI(ctx, boot, app, log)
+	surface := &httpSurface{app: app, projector: projector, runs: runs}
+	// api.port FIRST, then the public listener: the probes are on api.port,
+	// so the moment anything is reachable an orchestrator can read it. A
+	// public bind that fails takes the admin one down with it, through the
+	// one stop every shutdown takes, rather than leaving a node serving its
+	// dashboard while every webhook finds nothing listening.
+	server, addr, err := listenAPI(ctx, boot.API.Addr(), app, log)
 	if err != nil {
 		// THE PROJECTOR FIRST, in the order httpSurface.stop takes: it is
 		// already running, on a broadcast subscription to the engine's
@@ -1910,8 +1938,20 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		app.Stop()
 		return nil, err
 	}
+	surface.server = server
+	publicAddr := ""
+	if app.Public() != nil {
+		surface.public, publicAddr, err = listenAPI(ctx, boot.API.Public.Addr(), app.Public(), log)
+		if err != nil {
+			surface.stop(context.WithoutCancel(ctx), log)
+			return nil, err
+		}
+	}
 
 	log.InfoContext(ctx, "api_listening", "addr", addr,
+		// WHERE THE ROUTES OUTSIDE PARTIES CALL ARE SERVED: empty is
+		// api.port itself, which is every deployment without api.public.
+		"public_addr", publicAddr,
 		"anonymous_read", app.Guard().AnonymousRead(),
 		"tokens", app.Guard().Tokens(),
 		// THE BROWSER POSTURE BESIDE THE CREDENTIAL ONE. Zero is
@@ -1946,7 +1986,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		app.Stream().Broadcast(stream.KindSchedules, app.Stream().Schedules())
 	})
 
-	return &httpSurface{app: app, server: server, projector: projector, runs: runs}, nil
+	return surface, nil
 }
 
 // serveBridgeOnly is serveAPI for a node whose roles leave out ingress: it
@@ -1970,7 +2010,15 @@ func serveBridgeOnly(ctx context.Context, boot *config.Bootstrap, profile placem
 				"("+mcpbridge.BaseURLVar+")")
 		return nil, nil
 	}
-	server, addr, err := listenAPI(ctx, boot, api.BridgeOnly(boot, bridge), log)
+	// THE BRIDGE IS A PUBLIC ROUTE — a box outside this network calls it —
+	// so with api.public set it is served there, on every node, and api.port
+	// stays unbound here: one file serves every role, and the bridge address
+	// follows one rule across the fleet.
+	addr := boot.API.Addr()
+	if boot.API.Public.Enabled() {
+		addr = boot.API.Public.Addr()
+	}
+	server, addr, err := listenAPI(ctx, addr, api.BridgeOnly(boot, bridge), log)
 	if err != nil {
 		return nil, err
 	}
@@ -1983,15 +2031,15 @@ func serveBridgeOnly(ctx context.Context, boot *config.Bootstrap, profile placem
 	return &httpSurface{server: server}, nil
 }
 
-// listenAPI binds api.port and serves handler on it, in the background.
+// listenAPI binds addr and serves handler on it, in the background.
 //
-// ONE PATH for both shapes a node's listener takes, so the whole API and the
-// bridge-only surface cannot drift apart on the timeouts that bound an
-// unauthenticated client or on how a bind failure is reported.
-func listenAPI(ctx context.Context, boot *config.Bootstrap, handler http.Handler,
+// ONE PATH for every listener a node opens — the whole API, the public
+// listener beside it and the bridge-only surface — so they cannot drift apart
+// on the timeouts that bound an unauthenticated client or on how a bind failure
+// is reported.
+func listenAPI(ctx context.Context, addr string, handler http.Handler,
 	log *slog.Logger,
 ) (*http.Server, string, error) {
-	addr := net.JoinHostPort(boot.API.Host, strconv.Itoa(boot.API.Port))
 	// Through a ListenConfig so a shutdown signal arriving while the bind
 	// is in flight aborts it, rather than leaving a listener nobody will
 	// serve from: the bind can block on a DNS lookup for the host.
@@ -2400,7 +2448,31 @@ func overrideNode(boot *config.Bootstrap, fs *flag.FlagSet,
 		}
 		boot.API.Port = apiPort
 	}
+	// AND WHAT THE FILE'S LISTENERS REQUIRE OF THEM, for -roles' reason
+	// above: the file was validated with its own api.port and its own roles,
+	// and a flag that moved api.port onto the public listener's port, or to
+	// 0 beneath one on an ingress node, would otherwise bind what validation
+	// never saw. AFTER EVERY FLAG IS APPLIED, because the rule reads both: the
+	// same `-api-port 0` is the documented shape of a node that binds nothing
+	// under `-roles data,seats,workers` and a node answering no probe under
+	// `-roles ingress`.
+	if given := givenFlags(fs, "roles", "api-host", "api-port"); len(given) > 0 {
+		if err := boot.ValidateListeners(); err != nil {
+			return fmt.Errorf("%s: %w", strings.Join(given, " "), err)
+		}
+	}
 	return nil
+}
+
+// givenFlags names, as `-name`, the flags among names the command line set.
+func givenFlags(fs *flag.FlagSet, names ...string) []string {
+	var given []string
+	for _, name := range names {
+		if isFlagSet(fs, name) {
+			given = append(given, "-"+name)
+		}
+	}
+	return given
 }
 
 // splitRoles reads a comma-separated role list, ignoring blank entries so a

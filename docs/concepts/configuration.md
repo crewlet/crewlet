@@ -204,7 +204,7 @@ The engine boots in this order:
    refuse
 5. Open the store file and start or dial the stream
 6. Run migrations — every file, in one pass. There is no lock and no phase ordering to serialize: this process owns its file, so nothing can be racing it, and no DDL depends on a value only the config knows. Embedding columns are declared as plain blobs and the vector width is validated in Go against the active revision at write time, so a schema step never has to read the config first (see [`crewlet migrate`](../reference/cli.md#crewlet-migrate)).
-7. Start the API inside this process, bound to `api.host:api.port`, wire up auth middleware, register `/config/*` routes
+7. Start the API inside this process, bound to `api.host:api.port` — and, when `api.public.port` is set, the routes outside parties call (`/webhooks/*`, `/otlp/{token}`, `/mcp/{token}`) on that second listener instead (see [Deployment → Exposing webhooks without the admin API](../guides/deployment.md#exposing-webhooks-without-the-admin-api)) — wire up auth middleware, register `/config/*` routes
 8. Start the [control plane](control-plane.md) — the reconcile loop that polls the activation pointer, plus a broadcast `crewlet.config.revision_activated` nudge that wakes it early
 9. `SELECT payload FROM company_config WHERE is_active <> 0`
    - **Row present**: apply the payload, which spawns the full company

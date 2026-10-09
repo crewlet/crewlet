@@ -5,6 +5,24 @@ import (
 	"net/http"
 )
 
+// Router is what a surface mounts its routes on: the two registration verbs of
+// [net/http.ServeMux], and nothing else.
+//
+// AN INTERFACE rather than the mux itself so the API can KEEP every pattern a
+// surface mounts. Both of a node's listeners serve one route table behind a
+// partition that is a predicate over paths, and only the table says which
+// paths exist, so the table is what the listener cases walk whole rather than
+// a sample somebody chose. A surface's own tests still hand it a plain
+// *http.ServeMux.
+//
+// Declared here rather than by each consumer because the API's own interface
+// over a mountable surface names it in a method signature, and two interfaces
+// with one method set are still two types there.
+type Router interface {
+	Handle(pattern string, handler http.Handler)
+	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
+}
+
 // Mux serves mux with the mux's OWN refusals answered as JSON.
 //
 // # Why it exists
@@ -57,13 +75,7 @@ func (m *muxRefusal) WriteHeader(status int) {
 	switch status {
 	case http.StatusNotFound:
 		m.refused = true
-		FailWith(m.ResponseWriter, status, CodeNoRoute, map[string]string{
-			"detail": fmt.Sprintf("this node serves nothing at %s %s",
-				m.r.Method, m.r.URL.Path),
-			"hint": "Check the path. A route this node's build does not have, " +
-				"or one its configuration does not enable, is absent rather " +
-				"than refused.",
-		})
+		NoRoute(m.ResponseWriter, m.r)
 	case http.StatusMethodNotAllowed:
 		m.refused = true
 		// The mux set `Allow` before it wrote the status, so it is still
@@ -83,4 +95,19 @@ func (m *muxRefusal) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 	return m.ResponseWriter.Write(p)
+}
+
+// NoRoute answers r with the mux's own 404: the path is served by nothing here.
+//
+// Exported for the one other answer that must be INDISTINGUISHABLE from it: the
+// public listener's refusal of a route that exists on api.port. A different
+// wording there would tell anybody on the internet that a private admin port
+// exists and which paths it serves, so that refusal is this one, byte for byte.
+func NoRoute(w http.ResponseWriter, r *http.Request) {
+	FailWith(w, http.StatusNotFound, CodeNoRoute, map[string]string{
+		"detail": fmt.Sprintf("this node serves nothing at %s %s", r.Method, r.URL.Path),
+		"hint": "Check the path. A route this node's build does not have, " +
+			"or one its configuration does not enable, is absent rather " +
+			"than refused.",
+	})
 }

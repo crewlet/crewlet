@@ -38,7 +38,10 @@ crewlet run -config crewlet.yaml -company company.yaml
 ```
 
 That is the deployment. Point a reverse proxy at the API port for inbound
-webhooks and the dashboard, and there is nothing else to operate.
+webhooks and the dashboard, and there is nothing else to operate. When the
+webhooks have to come from the internet and the dashboard must not, give them
+a listener of their own instead: see
+[Exposing webhooks without the admin API](#exposing-webhooks-without-the-admin-api).
 
 Give that proxy a **read timeout above fifty seconds** on the API port.
 Nearly every request is answered in well under a second, but a node eviction
@@ -627,6 +630,98 @@ Do **not** also start a second node on the same host with such a file — both r
 
 While seats are still being claimed the node reports what is true rather than pretending: `/health` lists the seats it holds so far, and nothing is lost in the meantime because every seat's mailbox is created before any claiming (see [Event System](../concepts/event-system.md#a-seats-mailbox-exists-before-the-seat-is-running)). A seat's own children still start before its mailbox is attached, so a turn never begins without its tools — that ordering is unchanged; what changed is that they start **concurrently** rather than one after another, so a seat attaches in the time its slowest server takes rather than the sum of all of them.
 
+### Exposing webhooks without the admin API
+
+Every route an outside party calls shares `api.port` with everything else by
+default: the vendor webhooks, the admin API (`/config`, `/secrets`, `/setup`,
+`/operator`, the fleet and retention gestures), the read surface and the
+dashboard. A deployment that must accept GitLab or Slack deliveries from the
+internet but keep the rest private would then have to publish that one port
+and filter it **by path** in a proxy — an allow-list kept outside the engine,
+where one forgotten route or one prefix matched too widely puts `/config` on
+the internet and nothing here can see it.
+
+`api.public` splits the two onto separate sockets instead:
+
+```yaml
+# crewlet.yaml (Tier A)
+api:
+  host: "10.0.0.5"     # private: the dashboard, the REST API, the probes
+  port: 8000
+  public:
+    port: 8443         # published: webhooks and the sandbox endpoints only
+                       #   (host defaults to every interface)
+```
+
+| Route | Served on |
+|---|---|
+| `/webhooks/*` — every vendor delivery, the Slack OAuth landing, the GitHub App return | `api.public` only |
+| `/otlp/{token}/v1/{signal}` — sandbox telemetry | `api.public` only |
+| `/mcp/{token}` — the agent-mode tool bridge | `api.public` only |
+| everything else: `/health`, `/ready`, `/dashboard` and its assets, every REST read, `/ws/stream`, `/config`, `/secrets`, `/setup`, `/operator/*`, `/backup`, `/fleet/*`, `/work/*` | `api.port` only |
+
+`api.port` answers a public route with `404 no_route` and a hint naming
+`api.public` — a vendor pointed at the wrong port learns it from the first
+delivery rather than from a delivery quietly accepted on the socket nobody
+published. The public listener answers every other route exactly as it answers
+a path nothing serves: the same `404`, the same generic hint, nothing that says
+an admin port exists behind it. It requires no operator token and decides
+before the guard runs, so `/config` there is that same `404` whatever
+credential is sent. The split
+is the engine's own, from one list (the `/webhooks/`, `/otlp/` and `/mcp/`
+prefixes, the routes that authenticate by a provider signature or a signed
+per-run token rather than an operator credential), so there is no allow-list to
+keep in step with the routes a release adds.
+
+**Why the sandbox endpoints are public.** A remote sandbox (E2B's cloud) runs
+on somebody else's network and reaches only what you publish; it calls
+`/otlp/{token}` and `/mcp/{token}` with the signed per-run token in the path and
+never holds an operator credential. Leaving them on `api.port` would force that
+port public for every company running remote sandboxes. Point
+`CREWLET_SANDBOX_OTEL_RECEIVER_URL` and `CREWLET_MCP_BRIDGE_URL` at the public
+address.
+
+**Why the probes are not.** `/health` describes the node — its version, its
+seats, its posture — for whoever runs it, and an orchestrator or a load balancer
+can probe a port other than the one it routes traffic to. Point the public load
+balancer's health check, and the orchestrator's liveness and readiness probes,
+at `api.port`'s `/health` and `/ready`; on Kubernetes that is the pod's own
+address, which the kubelet reaches whether or not the port is in the public
+Service. Readiness is per process, so a draining node leaves rotation on both
+sockets at once.
+
+What to point where:
+
+- **`integrations.public_base_url`** (Tier B) is unchanged in meaning — the
+  address outside parties reach this deployment at — so it is now the **public**
+  listener's address as your proxy or load balancer publishes it. Every webhook
+  the engine registers and every vendor app it provisions uses it.
+- **The dashboard and the CLI** stay on `api.port`: `crewlet` commands that
+  read a node's own Tier A file dial `api.host:api.port`, which is unchanged.
+- **A node without the `ingress` role** serves one route, its seats' tool
+  bridge, and with `api.public` set it binds the public port for it and leaves
+  `api.port` unbound — so one Tier A file still serves every role, and every
+  node's `CREWLET_MCP_BRIDGE_URL` names its own public port. Its `api.port: 0`
+  (or `-api-port 0`) is still the hard off switch: it binds nothing, the public
+  port included, whatever the shared file says about `api.public`.
+
+`api.host` may stay `0.0.0.0` where the network keeps `api.port` private — a
+container whose public Service or load balancer forwards only `api.public.port`
+— or name a private interface where the host itself is reachable.
+`crewlet validate` refuses a public listener beside `api.port: 0` on a node with
+the `ingress` role (no probe would answer) and a public port that is also
+`api.port`, `stream.cluster.port` or
+`stream.leaf.port` on the same address or with either binding every interface.
+
+**Draining.** Both sockets go through the one drain gate: from the first moment
+of a drain the webhook routes answer `503` with a `Retry-After` on the public
+listener, while the sandbox endpoints keep serving the runs already in flight,
+and `api.port` keeps `/health` at `200`. Once the drain completes the public
+listener closes first and `api.port` after it, each waiting up to five seconds
+for its requests, so the probes answer until the very end — an open bridge
+session can hold the public listener for its whole five seconds, and a
+liveness probe must not fail while it does.
+
 ### Separate processes (a split deployment)
 
 Run ingress as its own node when you want the webhook receiver to stay up
@@ -658,6 +753,22 @@ crewlet run -config crewlet.yaml -roles data,ingress -api-host 0.0.0.0 -api-port
 Give each node a distinct `node.id` (or `CREWLET_NODE_ID`) — two nodes sharing an id miscount the fleet. See [Running a Fleet](fleet.md).
 
 If any seat runs in [agent mode](../concepts/subscription-llm-backends.md), give the seats node a port instead of `-api-port 0`, and set its `CREWLET_MCP_BRIDGE_URL` to that port as a sandbox reaches it. Without the `ingress` role that listener serves the `/mcp/{token}` tool bridge and nothing else (`api_bridge_listening`); with `-api-port 0` the node refuses every agent-mode launch, naming `api.port`.
+
+**With a [public listener](#exposing-webhooks-without-the-admin-api) on one host,** the two processes would both bind `api.public.port` — the ingress node for its webhooks, an agent-mode seats node for its bridge — and the second fails at boot. Give each process its own public port through a whole `${VAR}`, which a Tier A number accepts:
+
+```yaml
+api:
+  port: 8000
+  public:
+    port: ${CREWLET_PUBLIC_PORT}
+```
+
+```bash
+CREWLET_PUBLIC_PORT=8443 crewlet run -config crewlet.yaml -roles data,ingress -api-host 0.0.0.0 -api-port 8000
+CREWLET_PUBLIC_PORT=8444 crewlet run -config crewlet.yaml -roles data,seats,workers
+```
+
+The seats node binds only its public port, for its bridge; one started with `-api-port 0` binds nothing, so it needs no public port of its own.
 
 `crewlet migrate` is idempotent and safe to re-run. Each node also
 auto-migrates its own store file on boot, and two nodes starting together

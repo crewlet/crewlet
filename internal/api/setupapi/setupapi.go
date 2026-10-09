@@ -240,7 +240,7 @@ func New(opts Options) (*Service, error) {
 }
 
 // Routes registers the surface.
-func (s *Service) Routes(mux *http.ServeMux) {
+func (s *Service) Routes(mux httpjson.Router) {
 	mux.HandleFunc("GET /setup/integrations", s.list)
 	mux.HandleFunc("GET /setup/integrations/{kind}", s.one)
 	mux.HandleFunc("POST /setup/integrations/{kind}/inputs", s.inputs)

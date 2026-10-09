@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/queries"
 )
 
@@ -157,7 +158,7 @@ var namedRoutes = []struct {
 }
 
 // mountReads registers the named read routes.
-func (a *App) mountReads(mux *http.ServeMux) {
+func (a *App) mountReads(mux httpjson.Router) {
 	for _, route := range namedRoutes {
 		mux.Handle(route.method+" "+route.pattern, a.serveNamed(route.what, route.path))
 	}

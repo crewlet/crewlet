@@ -12,6 +12,36 @@ plane (see [`WS /ws/stream`](#ws-wsstream)).
 
 ---
 
+## Which listener serves what
+
+Every route below is served on `api.port`, unless the node's Tier A sets
+`api.public.port`. Then the routes **outside parties** call — the ones that
+authenticate by a provider signature or a signed per-run token, never an
+operator credential — move to that listener and are served nowhere else:
+
+| Prefix | Who calls it | Without `api.public` | With `api.public` |
+|---|---|---|---|
+| `/webhooks/*` | Vendors (deliveries) and a person's browser returning from a vendor's app flow (`/webhooks/slack-oauth`, `/webhooks/github-app`) | `api.port` | `api.public` only |
+| `/otlp/{token}/v1/{signal}` | A sandbox exporting a coding run's telemetry | `api.port` | `api.public` only |
+| `/mcp/{token}` | A sandbox calling its seat's tools (agent mode) | `api.port` | `api.public` only |
+| Everything else — `/health`, `/ready`, `/`, `/dashboard`, `/favicon.ico`, `/static/*`, `/ws/stream`, `/query/*`, every REST read, `/config`, `/secrets`, `/setup`, `/operator/*`, `/backup`, the `/work/*` and `/fleet/*` gestures | Operators, the dashboard, the CLI, orchestrators | `api.port` | `api.port` only |
+
+A public route asked of `api.port` answers `404` with the code `no_route` and a
+`hint` naming `api.public`, since whoever asks there is on the operator's own
+network, most likely a vendor configured with the wrong port. Every other route
+asked of the public listener answers exactly what a path nothing serves answers
+— the same `404 no_route`, the same generic hint — so the published socket says
+nothing about the admin routes behind it. It requires no operator token and
+decides before the guard runs, so a guarded route there is that same `404`
+whatever credential is sent. The probes are deliberately
+**not** public: `/health` describes the node to whoever runs it, so point every
+health check at `api.port`. A node without the `ingress` role serves only
+`/mcp/{token}`, on `api.public` when it is set and on `api.port` otherwise —
+and nothing at all when its `api.port` is `0`. See
+[Deployment → Exposing webhooks without the admin API](../guides/deployment.md#exposing-webhooks-without-the-admin-api).
+
+---
+
 ## Request timeouts
 
 Three deadlines bound a request on **every** route below, and each covers a phase the others do not. None is configurable — they are properties of what the surface is for, not of a deployment.
@@ -52,6 +82,8 @@ A refusal is `503` with a `Retry-After` of 30 seconds, long enough for a load ba
 ```
 
 A write still needs its token first: an unauthenticated write answers `401` whether or not the node is draining. And a request that was already running when the drain began is not interrupted by it; it is cut only if it is still running five seconds after the listener starts to close.
+
+A node with a [public listener](#which-listener-serves-what) drains both by this one table — its webhooks are refused on `api.public` and its sandbox endpoints served there — and closes `api.public` first, then `api.port`, each with its own five seconds, so `/health` answers until the very end even while an open bridge session holds the public listener for its whole grace.
 
 ---
 
@@ -213,7 +245,7 @@ The policy depends on what was served:
 | Response | `Content-Security-Policy` |
 |---|---|
 | The dashboard shell (`/dashboard`), `/favicon.ico` and every `/static/*` asset | `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self' https:` |
-| The landing pages [`/webhooks/github-app`](#get-webhooksgithub-app) and [`/webhooks/slack-oauth`](#get-webhooksslack-oauth) | `default-src 'none'; img-src 'self'`, then `style-src` and `script-src` naming the `sha256` hash of each page's own inline block (`'none'` where a page has none), then `base-uri 'none'; form-action 'none'; frame-ancestors 'none'` |
+| The landing pages [`/webhooks/github-app`](#get-webhooksgithub-app) and [`/webhooks/slack-oauth`](#get-webhooksslack-oauth) | `default-src 'none'; img-src data:` (a page's mark is inlined, since `/static/` is not served on the [public listener](#which-listener-serves-what) these pages move to), then `style-src` and `script-src` naming the `sha256` hash of each page's own inline block (`'none'` where a page has none), then `base-uri 'none'; form-action 'none'; frame-ancestors 'none'` |
 | Everything else: JSON, plain text, the redirect from `/`, a `404` or a `401` | `default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'` |
 
 These matter because the operator token the dashboard stores lives in the
