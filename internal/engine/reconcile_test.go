@@ -1249,11 +1249,11 @@ func TestPostureIsSafeToReadWhileTheReconcilerTicks(t *testing.T) {
 	wg.Wait()
 }
 
-// AND THE TRIPLE IS NEVER TORN. Three separate atomics would silence the
-// race detector and still let a reader see an applied epoch from one moment
-// beside an attempt count from another — "converged, but still retrying",
-// which is not a state this node was ever in.
-func TestTheProgressTripleIsReadAsOneMoment(t *testing.T) {
+// AND THE PROGRESS IS NEVER TORN. Separate atomics would silence the race
+// detector and still let a reader see an applied epoch from one moment beside
+// an attempt count from another — "converged, but still retrying", which is
+// not a state this node was ever in.
+func TestTheProgressIsReadAsOneMoment(t *testing.T) {
 	t.Parallel()
 	p := newPlane(t)
 	epoch := p.activate(t.Context(), t, grownCompanyDoc)
@@ -1569,5 +1569,180 @@ func TestAnApplyThatOutlastsTheGraceIsConfirmedLag(t *testing.T) {
 	if got := p.recon.Posture(t.Context()); got != configplane.PostureWait {
 		t.Errorf("posture on a new epoch an hour after the last apply = %s, want wait — "+
 			"the lag the last epoch waited out was counted against this one", got)
+	}
+}
+
+// failEverywhere activates a revision whose payload is withheld from the
+// window, so every attempt at it fails, and runs `attempts` of them.
+func failEverywhere(t *testing.T, p *plane, window *midApplyPlane, attempts int) int64 {
+	t.Helper()
+	ghost := newRevisionID(t)
+	window.withheld.Store(&ghost)
+	published, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: ghost, Summary: "ghost", At: pinnedNow, Origin: anOrigin,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range attempts {
+		if err := p.recon.Tick(t.Context()); !errors.Is(err, store.ErrNoRevision) {
+			t.Fatalf("tick at the withheld revision = %v, want the revision reported missing", err)
+		}
+	}
+	return published.Epoch
+}
+
+// peerApplied records a fresh ok row for epoch from another node.
+func peerApplied(t *testing.T, p *plane, epoch int64, at time.Time) {
+	t.Helper()
+	if err := p.fleet.RecordApply(t.Context(), coord.NodeApply{
+		NodeID: "node-b", Epoch: epoch, Status: string(configplane.StatusOK), UpdatedAt: at,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// THE RECOVERY GESTURE IS AN ORDINARY APPLY. A revision failed everywhere, the
+// node has been isolated on it for ten minutes, and the operator activates the
+// corrected one: a faster peer records it first, and this node — mid-apply of
+// a fix it will apply — is propagating, not late. The lag clock used to carry
+// across the new target, so the ten minutes waited out on the bad revision
+// read as confirmed lag on the fix and the node shed for the whole of an apply
+// that succeeded, on every node but the fastest.
+func TestTheRecoveryApplyIsJudgedOnTheCorrectedEpochAlone(t *testing.T) {
+	t.Parallel()
+	var clock atomic.Int64
+	clock.Store(pinnedNow.UnixNano())
+	now := func() time.Time { return time.Unix(0, clock.Load()).UTC() }
+	e := newEngine(t, engine.Options{})
+	window := &midApplyPlane{planeBackend: e.Backends().Fleet}
+	p := planeFor(t, e, func(o *engine.ReconcilerOptions) {
+		o.Fleet = window
+		o.Now = now
+	})
+	p.activate(t.Context(), t, grownCompanyDoc)
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("the starting revision did not apply: %v", err)
+	}
+	failEverywhere(t, p, window, 1)
+	if got := p.recon.Posture(t.Context()); got != configplane.PostureIsolated {
+		t.Fatalf("posture after a revision that failed alone = %s, want isolated", got)
+	}
+
+	clock.Add(int64(10 * time.Minute))
+	fixed := activateRemotely(t, p, companyDoc)
+	var during configplane.Posture
+	window.observe(func() {
+		peerApplied(t, p, fixed, now())
+		during = p.recon.Posture(t.Context())
+	})
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("the corrected revision did not apply: %v", err)
+	}
+	if p.recon.Applied() != fixed {
+		t.Fatalf("applied = %d, want the corrected epoch %d", p.recon.Applied(), fixed)
+	}
+	if during != configplane.PostureWait {
+		t.Errorf("posture while applying the corrected revision beside a peer that has it = %s, "+
+			"want wait — the lag waited out on the bad revision was counted against the fix", during)
+	}
+	if got := p.recon.Posture(t.Context()); got != configplane.PostureServe {
+		t.Errorf("posture once the fix applied = %s, want serve", got)
+	}
+}
+
+// AN EPOCH THE TICK HAS NOT MET YET HAS NO ATTEMPTS AND NO LAG. Between an
+// activation and the tick that first sees it — a nudge's latency, or a whole
+// poll interval when the nudge is lost — the posture reads the fresh pointer
+// beside progress that describes the previous target. Paired that way, a node
+// that exhausted its retries on a bad revision long ago read as STUCK on the
+// corrected one the moment a peer applied it, out of rotation before it had
+// made any attempt at it.
+func TestAnEpochNotYetMetCarriesNothingFromTheLastOne(t *testing.T) {
+	t.Parallel()
+	var clock atomic.Int64
+	clock.Store(pinnedNow.UnixNano())
+	now := func() time.Time { return time.Unix(0, clock.Load()).UTC() }
+	e := newEngine(t, engine.Options{})
+	window := &midApplyPlane{planeBackend: e.Backends().Fleet}
+	p := planeFor(t, e, func(o *engine.ReconcilerOptions) {
+		o.Fleet = window
+		o.Now = now
+	})
+	p.activate(t.Context(), t, grownCompanyDoc)
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("the starting revision did not apply: %v", err)
+	}
+	bad := failEverywhere(t, p, window, configplane.MaxApplyAttempts)
+	peerApplied(t, p, bad, now())
+	if got := p.recon.Posture(t.Context()); got != configplane.PostureStuck {
+		t.Fatalf("posture out of retries beside a peer that has the epoch = %s, want stuck", got)
+	}
+
+	clock.Add(int64(10 * time.Minute))
+	fixed := activateRemotely(t, p, companyDoc)
+	peerApplied(t, p, fixed, now())
+	// No tick yet: this node has not attempted the corrected epoch at all.
+	if got := p.recon.Posture(t.Context()); got != configplane.PostureWait {
+		t.Errorf("posture before any attempt at the corrected epoch = %s, want wait", got)
+	}
+	if !p.recon.Admits() {
+		t.Error("a node that has not yet attempted the corrected epoch refuses work")
+	}
+}
+
+// AND A HUNG APPLY STAYS LATE ACROSS A NEW ACTIVATION. Restarting the lag
+// clock with each epoch must not hand a wedged node a fresh 45 s every time
+// the operator activates something: its tick is held in the attempt at the
+// older epoch and cannot begin on the new one, so it is late on the new epoch
+// by as long as that attempt has held it — wait while that is short, shed
+// once it outlasts propagation beside a peer that has the new epoch.
+func TestAHungApplyStaysLateAcrossANewActivation(t *testing.T) {
+	t.Parallel()
+	var clock atomic.Int64
+	clock.Store(pinnedNow.UnixNano())
+	now := func() time.Time { return time.Unix(0, clock.Load()).UTC() }
+	e := newEngine(t, engine.Options{})
+	p := planeFor(t, e, func(o *engine.ReconcilerOptions) { o.Now = now })
+	activateRemotely(t, p, grownCompanyDoc)
+
+	// From inside the attempt at the older epoch — after its epoch is
+	// swapped and before its outcome is recorded, where a hung apply would
+	// sit — the fleet moves on and a peer applies the newer epoch.
+	var (
+		next        int64
+		early, hung configplane.Posture
+		once        sync.Once
+	)
+	moveOn := func() {
+		next = activateRemotely(t, p, companyDoc)
+		peerApplied(t, p, next, now())
+		early = p.recon.Posture(t.Context())
+		clock.Add(int64(configplane.LagGrace))
+		peerApplied(t, p, next, now())
+		hung = p.recon.Posture(t.Context())
+	}
+	e.SetOnApplied(func(context.Context) { once.Do(moveOn) })
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if early != configplane.PostureWait {
+		t.Errorf("posture moments into an attempt at the older epoch = %s, want wait", early)
+	}
+	if hung != configplane.PostureShed {
+		t.Errorf("posture with an attempt at the older epoch held past the grace, beside a peer "+
+			"on the newer one = %s, want shed", hung)
+	}
+	// The attempt ended, so the tick is free to meet the newer epoch: the
+	// time it was held no longer counts against it.
+	if got := p.recon.Posture(t.Context()); got != configplane.PostureWait {
+		t.Errorf("posture once the attempt ended, before the tick meets the newer epoch = %s, "+
+			"want wait", got)
+	}
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("tick at the newer epoch: %v", err)
+	}
+	if p.recon.Applied() != next {
+		t.Fatalf("applied = %d, want %d", p.recon.Applied(), next)
 	}
 }

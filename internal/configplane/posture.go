@@ -128,15 +128,26 @@ type FleetView struct {
 	// genuinely does not apply. A node mid-apply is doing exactly what
 	// propagation means, and what it reports is wait.
 	SelfStatus ApplyStatus
-	// BehindFor is how long this node has known it is behind: since it
-	// first saw a target above the epoch it serves. Zero while it is not
-	// behind, or has not yet seen the target it is behind on.
+	// BehindFor is how long this node has been behind on THIS target:
+	// since it first saw the target epoch while serving an older one.
+	// Zero while it is not behind.
+	//
+	// Per epoch, like Attempts. A lag already waited out on an earlier
+	// target says nothing about this one, and counted against it, every
+	// node still applying a corrected revision read as confirmed lag the
+	// moment a faster peer had applied it. The one exception is a node
+	// that has not yet been able to look at the target because an attempt
+	// at an older one is still running: it is behind by as long as that
+	// attempt has held it, which is what keeps a hung apply confirmed lag
+	// across every activation made while it hangs.
 	BehindFor time.Duration
 	// Attempts is how many attempts at the target epoch have concluded in
 	// failure. Counted when an attempt ENDS, never when it starts, for the
 	// reason SelfStatus gives: the third attempt in flight is not three
 	// failures, and counting it as one reported stuck — out of rotation —
-	// for the whole duration of an apply that then succeeded.
+	// for the whole duration of an apply that then succeeded. None at a
+	// target this node has not attempted yet: an earlier target's
+	// exhausted budget is not a failure at this one.
 	Attempts int
 	// PeersOK counts peers with FRESH status reporting the target epoch
 	// applied cleanly.
@@ -156,8 +167,9 @@ type FleetView struct {
 // is, the longer the outage.
 //
 // So lag must be CONFIRMED before it means anything: either an attempt of this
-// node's at the epoch concluded in failure, or it has been behind longer than
-// propagation could explain. An attempt still running is neither. Only then does peer health pick the action — and when no peer
+// node's at the epoch concluded in failure, or it has been behind on that
+// epoch longer than propagation could explain. An attempt still running is
+// neither. Only then does peer health pick the action — and when no peer
 // managed the epoch either, the honest conclusion is that the revision is
 // bad rather than this node, so it keeps serving what rollback preserved.
 func DecidePosture(v FleetView) Posture {
