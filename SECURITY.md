@@ -32,6 +32,19 @@ A few things worth knowing when deploying Crewlet:
   decision to make deliberately anywhere else — set
   `api.auth.allow_anonymous_read: false` to require a token for reads too, and
   never expose the API publicly with a dev-literal token.
+- **Only the webhook and sandbox routes need to be public.** The routes
+  outside parties call — `/webhooks/*` (vendor deliveries, verified by each
+  vendor's signature or shared token) and the sandbox endpoints
+  `/otlp/{token}` and `/mcp/{token}` (a signed, expiring per-run token in the
+  path) — hold no operator credential. Setting `api.public.port` serves them
+  on a listener of their own and nowhere else, and every other route,
+  `/config` and `/secrets` included, only on `api.port`, so a deployment can
+  publish the first and keep the second private without filtering paths in a
+  proxy. The public listener requires no operator token, and answers every
+  route it does not serve with the same `404` it gives a path nothing serves,
+  whatever credential is sent — so the published socket neither reveals the
+  admin routes behind it nor answers differently to a valid token
+  (`docs/guides/deployment.md#exposing-webhooks-without-the-admin-api`).
 - **`api.auth.company_writers` prevents drift; it is not a privilege
   boundary.** It refuses a change to a managed company document from any
   token it does not list, but every token still writes the secret store and

@@ -107,7 +107,7 @@ func New(opts Options) (*Service, error) {
 }
 
 // Routes registers the surface on the API's mux.
-func (s *Service) Routes(mux *http.ServeMux) {
+func (s *Service) Routes(mux httpjson.Router) {
 	mux.HandleFunc("GET /secrets", s.list)
 	// REKEY IS A POST, and that is what keeps it from swallowing a secret
 	// a company legitimately calls "rekey". Registration order is NOT what

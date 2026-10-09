@@ -969,12 +969,17 @@ func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 		prompts = append(prompts, tracker.Prompt{})
 	}
 	if runWiki {
-		parsers = append(parsers, pages.NewParser(pages.ParserOptions{
-			Leads: containerLeads(c.Org), BaseURL: e.publicBase(c),
-		}))
+		parsers = append(parsers, pages.NewParser(pagesParserOptions(e.resolver(), c)))
 		prompts = append(prompts, pages.Prompt{})
 	}
 	return parsers, prompts
+}
+
+// pagesParserOptions is what the knowledge base's parser is built from: the lead
+// map, and the base its notifications link a person to — the DASHBOARD's, since
+// the link is opened by whoever the change woke, never by a vendor.
+func pagesParserOptions(env *config.Resolver, c *Company) pages.ParserOptions {
+	return pages.ParserOptions{Leads: containerLeads(c.Org), BaseURL: dashboardBase(env, c)}
 }
 
 // reconcileNative swaps the native parsers for a newly applied epoch.

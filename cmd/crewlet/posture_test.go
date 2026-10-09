@@ -56,7 +56,7 @@ func TestHealthNeverReportsASuccessfulApplyAsADivergence(t *testing.T) {
 		t.Fatalf("an engine with no company was refused: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
-	surface, reconciler, err := serveNodeWith(t, boot, e)
+	surface, reconciler, err := serveNodeWith(t, boot, e, logging.Get("test"))
 	if err != nil {
 		t.Fatalf("serve: %v", err)
 	}

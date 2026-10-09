@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -192,7 +193,7 @@ func (a *App) generationOf(stream string) (uint32, error) {
 }
 
 // mountRetention registers the write half of the retention surface.
-func (a *App) mountRetention(mux *http.ServeMux) {
+func (a *App) mountRetention(mux httpjson.Router) {
 	mux.Handle("POST /work/retention/ack", http.HandlerFunc(a.serveRetentionAck))
 	mux.Handle("POST /work/retention/evict/{node}", a.gate(true))
 	mux.Handle("POST /work/retention/readmit/{node}", a.gate(false))
@@ -485,7 +486,7 @@ type capacityRunner interface {
 // procedure requires to be stopped. Both cannot hold. What resolves it is that
 // the maintenance-mode node runs its API: these are that mode's own control
 // surface rather than the write routes the mode withholds.
-func (a *App) mountCapacity(mux *http.ServeMux) {
+func (a *App) mountCapacity(mux httpjson.Router) {
 	mux.Handle("POST /work/retention/capacity", http.HandlerFunc(a.serveSetCapacity))
 	mux.Handle("GET /work/retention/maintenance", http.HandlerFunc(a.serveMaintenanceStatus))
 	mux.Handle("POST /work/retention/maintenance/abandon", http.HandlerFunc(a.serveAbandon))

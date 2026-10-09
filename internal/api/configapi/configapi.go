@@ -147,7 +147,7 @@ func New(opts Options) (*Service, error) {
 }
 
 // Routes registers the surface on the API's mux.
-func (s *Service) Routes(mux *http.ServeMux) {
+func (s *Service) Routes(mux httpjson.Router) {
 	// ONE SUB-MUX BEHIND ONE WRAPPER, so no response under /config can be
 	// written without the Cache-Control below: not a route added later, not
 	// an error path, not the 404 or 405 this mux answers for a path or a

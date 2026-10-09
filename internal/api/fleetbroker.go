@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -111,7 +112,7 @@ func RenderBrokerRefusal(err error) (BrokerRefusal, bool) {
 // mountFleetBroker registers the two removals. The listing is a named read
 // route over the `fleet_broker` question, so the socket's query channel and
 // REST answer it from one implementation — see rest.go.
-func (a *App) mountFleetBroker(mux *http.ServeMux) {
+func (a *App) mountFleetBroker(mux httpjson.Router) {
 	mux.Handle("POST /fleet/broker/remove/{node}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		a.serveBrokerRemove(w, r, voterByNode, r.PathValue("node"))
 	}))

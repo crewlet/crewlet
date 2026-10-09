@@ -597,14 +597,25 @@ func TestANodeNamedByTheEnvironmentAnswersAsItself(t *testing.T) {
 // reconciler that owns the posture, then the listener.
 func serveNode(t *testing.T, boot *config.Bootstrap, e *engine.Engine) (*httpSurface, error) {
 	t.Helper()
-	surface, _, err := serveNodeWith(t, boot, e)
+	return serveNodeLogged(t, boot, e, logging.Get("test"))
+}
+
+// serveNodeLogged is [serveNode] logging to log, for a case that asserts what
+// the node said about its listener.
+func serveNodeLogged(t *testing.T, boot *config.Bootstrap, e *engine.Engine,
+	log *slog.Logger,
+) (*httpSurface, error) {
+	t.Helper()
+	surface, _, err := serveNodeWith(t, boot, e, log)
 	return surface, err
 }
 
-// serveNodeWith is [serveNode] handing back the reconciler too, for a case
-// that runs the reconcile loop the way runEngine does rather than serving a
-// node whose epoch never moves.
-func serveNodeWith(t *testing.T, boot *config.Bootstrap, e *engine.Engine) (*httpSurface, *engine.Reconciler, error) {
+// serveNodeWith is [serveNodeLogged] handing back the reconciler too, for a
+// case that runs the reconcile loop the way runEngine does rather than serving
+// a node whose epoch never moves.
+func serveNodeWith(t *testing.T, boot *config.Bootstrap, e *engine.Engine,
+	log *slog.Logger,
+) (*httpSurface, *engine.Reconciler, error) {
 	t.Helper()
 	cipher, err := boot.Secrets.Cipher()
 	if err != nil {
@@ -629,8 +640,7 @@ func serveNodeWith(t *testing.T, boot *config.Bootstrap, e *engine.Engine) (*htt
 	if err != nil {
 		t.Fatalf("reconciler: %v", err)
 	}
-	surface, err := serveAPI(t.Context(), boot, e, reconciler, cipher, configSurface,
-		logging.Get("test"))
+	surface, err := serveAPI(t.Context(), boot, e, reconciler, cipher, configSurface, log)
 	return surface, reconciler, err
 }
 
@@ -800,6 +810,75 @@ func TestARolesFlagThatDropsDataFromADurableNodeIsRefused(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "store.scratch") {
 		t.Errorf("the refusal does not name the setting to change: %v", err)
+	}
+}
+
+// A FLAG CANNOT PUT THE API ON THE PUBLIC LISTENER'S SOCKET, NOR TURN IT OFF
+// BENEATH ONE. The file validated with its own api.port, so without the
+// listener rules re-run here `-api-port 8443` would bind the admin API on the
+// socket the deployment publishes, and `-api-port 0` would leave a public
+// listener that no probe stands beside.
+func TestAnAPIFlagThatContradictsThePublicListenerIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"the public listener's port", []string{"-api-port", "8443"}},
+		{"no HTTP surface", []string{"-api-port", "0"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			boot := &config.Bootstrap{API: config.API{Host: "0.0.0.0", Port: 8080,
+				Public: config.APIPublic{Port: 8443}}}
+			fs, roles, host, port := parseOverrides(t, tc.args)
+			err := overrideNode(boot, fs, roles, host, port)
+			if err == nil {
+				t.Fatalf("%v was accepted beside api.public.port 8443", tc.args)
+			}
+			if !strings.Contains(err.Error(), "api.public.port") {
+				t.Errorf("the refusal does not name the setting it contradicts: %v", err)
+			}
+		})
+	}
+}
+
+// THE PUBLIC LISTENER'S api.port RULE IS AN INGRESS NODE'S. The shared file sets
+// api.public for its ingress peer, and the satellite the deployment guide
+// starts with `-roles data,seats,workers -api-port 0` serves no probe on any
+// port — so it is accepted, while the same flag under `-roles data,ingress` is
+// the node answering no probe the rule exists to refuse. Both flags are read
+// together, whichever order the rule would otherwise have seen them in.
+func TestThePublicListenersAPIPortRuleReadsTheRolesFlag(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		args   []string
+		refuse bool
+	}{
+		{"a satellite with no HTTP surface", []string{"-roles", "data,seats,workers", "-api-port", "0"}, false},
+		{"an ingress node with no HTTP surface", []string{"-roles", "data,ingress", "-api-port", "0"}, true},
+		{"the roles alone, on a file with no API port", []string{"-roles", "data,ingress"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			boot := &config.Bootstrap{API: config.API{Host: "0.0.0.0", Port: 8080,
+				Public: config.APIPublic{Port: 8443}}}
+			if !slices.Contains(tc.args, "-api-port") {
+				boot.API.Port = 0
+				boot.Node.Roles = []string{"data", "seats"}
+			}
+			fs, roles, host, port := parseOverrides(t, tc.args)
+			err := overrideNode(boot, fs, roles, host, port)
+			switch {
+			case tc.refuse && err == nil:
+				t.Fatalf("%v was accepted beside api.public", tc.args)
+			case tc.refuse && !strings.Contains(err.Error(), "api.public.port"):
+				t.Errorf("the refusal does not name the setting it contradicts: %v", err)
+			case !tc.refuse && err != nil:
+				t.Fatalf("%v was refused: %v", tc.args, err)
+			}
+		})
 	}
 }
 

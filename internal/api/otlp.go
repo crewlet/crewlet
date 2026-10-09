@@ -39,7 +39,7 @@ const maxOtelBody = 4 << 20
 // sandbox telemetry — and the route is then ABSENT rather than answering
 // 503: an endpoint that exists and refuses everything reads to an operator
 // as broken, while one that is not there matches what the config says.
-func (a *App) mountOTLP(mux *http.ServeMux, receiver *sandbox.OtelReceiver) {
+func (a *App) mountOTLP(mux httpjson.Router, receiver *sandbox.OtelReceiver) {
 	if receiver == nil {
 		return
 	}

@@ -168,7 +168,10 @@ file works for both shapes. The one exception is a seat in
 its box calls the seat's tools back over `/mcp/{token}`, and only the
 node that runs the seat can answer, so a satellite with
 `CREWLET_MCP_BRIDGE_URL` set binds `api.port` for that route alone
-(`api_bridge_listening`) and serves nothing else on it.
+(`api_bridge_listening`) and serves nothing else on it — or `api.public.port`
+when the file sets one, since the bridge is a route a sandbox outside your
+network calls (see
+[Deployment → Exposing webhooks without the admin API](deployment.md#exposing-webhooks-without-the-admin-api)).
 
 ### 2. Pin the role
 

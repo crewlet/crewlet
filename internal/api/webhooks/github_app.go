@@ -2,12 +2,15 @@ package webhooks
 
 import (
 	"context"
+	"encoding/base64"
 	"html/template"
+	"io/fs"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/pagepolicy"
+	"github.com/crewlet/crewlet/static"
 )
 
 // Where GitHub returns a browser after an operator creates or installs one
@@ -25,18 +28,42 @@ import (
 // the reconcile loop discovers the installation on its own, so it renders the
 // same page rather than failing for having no code.
 
-var githubAppPage = template.Must(template.New("github-app").Parse(`<!doctype html>
+// brandMark is the product's mark as a data: URL, which is how this page shows
+// it.
+//
+// INLINED rather than linked to /static/dashboard/crewlet-icon.svg, because
+// this page is a public route: with a dedicated public listener (Tier A
+// api.public) it is served there and only there, and /static/ is the admin
+// listener's, so a linked mark is a broken image on exactly the socket the page
+// is published on. Read from the embedded dashboard build rather than copied
+// beside this file, because that build is the one copy of the drawing (see
+// package static), and two copies of one drawing drift silently.
+var brandMark = func() template.URL {
+	svg, err := fs.ReadFile(static.FS(), "dashboard/crewlet-icon.svg")
+	if err != nil {
+		// The file is embedded into this binary, so a failure is a
+		// defect of the build, not a condition to serve around.
+		panic("webhooks: the embedded dashboard has no crewlet-icon.svg: " + err.Error())
+	}
+	// A trusted value: the bytes are this binary's own, never a request's.
+	return template.URL("data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString(svg))
+}()
+
+var githubAppPage = template.Must(template.New("github-app").Funcs(template.FuncMap{
+	"mark": func() template.URL { return brandMark },
+}).Parse(`<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Crewlet: {{.Heading}}</title>
-    <link rel="icon" href="/static/dashboard/crewlet-icon.svg">
+    <link rel="icon" href="{{mark}}">
     <style>
       /* The dashboard's own dark palette, restated rather than imported: this
          page is served by the webhook mux to a browser arriving from GitHub,
          so it cannot depend on the dashboard bundle being loaded or even
-         built. The values are tokens.css's dark set. */
+         built, nor on /static/ being served by the listener it is on. The
+         values are tokens.css's dark set. */
       :root {
         color-scheme: dark;
         --bg: #0a0c11;
@@ -116,7 +143,7 @@ var githubAppPage = template.Must(template.New("github-app").Parse(`<!doctype ht
   </head>
   <body>
     <div class="wrap">
-      <img class="mark" src="/static/dashboard/crewlet-icon.svg" alt="Crewlet">
+      <img class="mark" src="{{mark}}" alt="Crewlet">
       <h1>{{.Heading}}{{if .Seat}} <span class="seat">{{.Seat}}</span>{{end}}</h1>
       <div class="card">
         <div class="row">

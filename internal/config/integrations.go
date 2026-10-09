@@ -43,6 +43,14 @@ type Integrations struct {
 	// PublicBaseURL is where a third-party app reaches THIS deployment: the HTTPS
 	// base every webhook path is built on.
 	//
+	// OUTSIDE PARTIES ONLY. Every address composed on it is one a vendor or
+	// a sandbox calls — a registered webhook, a provisioner's -public-url, an
+	// app's redirect — and never a link a PERSON follows, which is
+	// [Integrations.DashboardBaseURL]'s. The two are the same address on a
+	// deployment with one listener and different ones on a deployment with a
+	// public listener (Tier A api.public), which serves the webhooks and not
+	// the dashboard, so one field could not be right for both.
+	//
 	// # Why it belongs in the company document
 	//
 	// It was a flag on five subcommands (`-public-url`) and nowhere else,
@@ -68,6 +76,30 @@ type Integrations struct {
 	// pointing at the wrong host is worse than no hook, and a subcommand's
 	// `-public-url` still overrides it for a one-off run.
 	PublicBaseURL string `yaml:"public_base_url,omitempty" json:"public_base_url,omitempty" desc:"HTTPS base a vendor reaches this deployment on, e.g. https://crewlet.example.com. Empty means no inbound address."`
+
+	// DashboardBaseURL is where a PERSON reaches this deployment's dashboard:
+	// the base every link an agent composes for somebody to click is built on
+	// — the reserved tool-skill variable `${crewlet_base_url}` and the `url`
+	// a page change's notification carries.
+	//
+	// # Why it is not public_base_url
+	//
+	// That one is where VENDORS reach the deployment, and with a public
+	// listener (Tier A api.public) the two are different sockets: the public
+	// one serves the webhooks and answers the dashboard 404, while api.port
+	// serves the dashboard and answers a webhook 404. Read from one field,
+	// every link an agent posted pointed at a socket that cannot serve it, or
+	// every webhook registered did, with nothing anywhere saying so.
+	//
+	// NO FALLBACK to public_base_url when it is unset, for that same reason:
+	// the vendor address is the wrong one exactly where the two differ, and a
+	// link that silently lands on a 404 is worse than none. Unset composes no
+	// link — a skill then renders `${crewlet_base_url}` literally, and the
+	// registry warns that it is undefined.
+	//
+	// A whole `${VAR}` like public_base_url, stored verbatim and resolved
+	// where a link is built ([Integrations.DashboardBase]).
+	DashboardBaseURL string `yaml:"dashboard_base_url,omitempty" json:"dashboard_base_url,omitempty" desc:"HTTPS base a person reaches this deployment's dashboard on, e.g. https://crewlet.example.com; links agents compose for people are built on it. Empty means no link is composed."`
 
 	// CheckIntervalSeconds is how long a CONVERGED integration is trusted
 	// before the loop reads it back, and therefore how long access somebody
@@ -155,7 +187,22 @@ func (i *Integrations) CheckInterval() time.Duration {
 // EMPTY RATHER THAN THE REFERENCE when it will not resolve, for the same
 // reason: no manifest beats a manifest built from a value nothing can read.
 func (i *Integrations) WebhookBase(resolve func(string) (string, bool)) string {
-	base := strings.TrimSpace(i.PublicBaseURL)
+	return resolveBase(i.PublicBaseURL, resolve)
+}
+
+// DashboardBase is the base every link a person follows is built on, without a
+// trailing slash, or empty when this deployment names none THIS PROCESS CAN
+// READ. Resolved and trimmed by [Integrations.WebhookBase]'s rules, and for its
+// reasons: a link built on the seven characters of a reference is a link
+// nobody can follow.
+func (i *Integrations) DashboardBase(resolve func(string) (string, bool)) string {
+	return resolveBase(i.DashboardBaseURL, resolve)
+}
+
+// resolveBase is one base URL field read: a whole ${VAR} resolved, or "" when
+// it will not resolve, and the trailing slash dropped.
+func resolveBase(raw string, resolve func(string) (string, bool)) string {
+	base := strings.TrimSpace(raw)
 	if name, isRef := envref.Whole(base); isRef {
 		if resolve == nil {
 			return ""
@@ -181,6 +228,12 @@ func (i *Integrations) validate(path Path) error {
 			"%q must start with http:// or https://: it is the base every "+
 				"webhook URL is built on, so a value without a scheme yields "+
 				"an address the third-party app accepts and never reaches", i.PublicBaseURL)
+	}
+	if base := strings.TrimSpace(i.DashboardBaseURL); base != "" && !hasHTTPScheme(base) {
+		p.add(at(path, "dashboard_base_url"), ErrUnknownValue,
+			"%q must start with http:// or https://: it is the base every link "+
+				"an agent composes for a person is built on, so a value without "+
+				"a scheme yields a link nobody can follow", i.DashboardBaseURL)
 	}
 
 	// A CHECK INTERVAL BELOW THE FLOOR IS REFUSED RATHER THAN CLAMPED.

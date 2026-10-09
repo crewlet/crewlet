@@ -245,6 +245,47 @@ func TestAnUnreadableWebhookBaseIsEmptyRatherThanTheReference(t *testing.T) {
 	}
 }
 
+// TWO ADDRESSES, NEITHER STANDING IN FOR THE OTHER. A vendor reaches the
+// deployment at public_base_url and a person at dashboard_base_url, and with a
+// public listener those are two sockets, each answering the other's routes 404:
+// every webhook is built on the first and every link a person follows on the
+// second, and an unset dashboard base composes no link rather than borrowing
+// the vendor address, which is the wrong one exactly where the two differ.
+func TestTheDashboardBaseIsNotTheWebhookBase(t *testing.T) {
+	t.Parallel()
+	held := func(name string) (string, bool) {
+		if name == "DASHBOARD_URL" {
+			return "https://crewlet.example.com/", true
+		}
+		return "", false
+	}
+	both := config.Integrations{
+		PublicBaseURL:    "https://hooks.example.com",
+		DashboardBaseURL: "${DASHBOARD_URL}",
+	}
+	if got := both.WebhookBase(held); got != "https://hooks.example.com" {
+		t.Errorf("WebhookBase() = %q, want the vendor address", got)
+	}
+	if got := both.DashboardBase(held); got != "https://crewlet.example.com" {
+		t.Errorf("DashboardBase() = %q, want the resolved dashboard address", got)
+	}
+	vendorOnly := config.Integrations{PublicBaseURL: "https://hooks.example.com"}
+	if got := vendorOnly.DashboardBase(held); got != "" {
+		t.Errorf("DashboardBase() = %q with no dashboard_base_url, want \"\": the "+
+			"vendor address serves no dashboard behind a public listener", got)
+	}
+}
+
+// A DASHBOARD BASE WITHOUT A SCHEME IS REFUSED, naming the field, for the
+// reason a webhook base is: every link built on it is one nobody can follow.
+func TestADashboardBaseWithoutASchemeIsRefused(t *testing.T) {
+	t.Parallel()
+	err := validateCompanyDoc(t, "integrations:\n  dashboard_base_url: crewlet.example.com\n")
+	if err == nil || !strings.Contains(err.Error(), "integrations.dashboard_base_url") {
+		t.Fatalf("a dashboard base with no scheme: %v", err)
+	}
+}
+
 // validateCompanyDoc parses and validates a company document carrying body at
 // the top level.
 func validateCompanyDoc(t *testing.T, body string) error {

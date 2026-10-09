@@ -118,7 +118,44 @@ var unguardedExact = map[string]struct{}{
 	"/": {}, "/dashboard": {}, "/favicon.ico": {}, "/health": {}, "/ready": {},
 }
 
-var unguardedPrefixes = []string{WebhookPrefix, OTLPPrefix, mcpbridge.PathPrefix, "/static/"}
+var unguardedPrefixes = slices.Concat(publicPrefixes, []string{"/static/"})
+
+// publicPrefixes are the routes OUTSIDE PARTIES call: a vendor delivering a
+// webhook or returning a browser from its app flow, and a sandbox box exporting
+// telemetry or calling its seat's tools. None of them holds an operator
+// credential, each authenticates by its own (a provider signature, a per-run
+// signed token), and they are the only routes a deployment has to publish
+// beyond the people who run it.
+//
+// What the dedicated public listener (Tier A api.public) serves and api.port
+// then refuses, decided by [Public] and nothing else. DERIVED INTO the guard's
+// exemptions rather than listed beside them, so a route can never be public
+// without also being exempt: the public listener is reached by callers that
+// hold no token, and a guarded route there would answer every one of them 401.
+//
+// The dashboard's /static/ is exempt and NOT public: it is the shell of the
+// admin surface, served where that surface is.
+//
+// UNEXPORTED, and read outside this package only through [PublicPrefixes]'
+// copy: [unguardedPrefixes] is derived from it once, at init, so a slice
+// anybody could append to would move the partition without moving the
+// exemptions, and the guarantee above would stop holding with nothing failing.
+var publicPrefixes = []string{WebhookPrefix, OTLPPrefix, mcpbridge.PathPrefix}
+
+// PublicPrefixes is a copy of the prefixes of the routes outside parties call.
+// See [publicPrefixes].
+func PublicPrefixes() []string { return slices.Clone(publicPrefixes) }
+
+// Public reports whether a path is one of the routes outside parties call. See
+// [publicPrefixes].
+func Public(path string) bool {
+	for _, prefix := range publicPrefixes {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
+}
 
 // WebhookPrefix and OTLPPrefix are the two exempt edges a second rule also
 // reads. Named here, beside the exemption, for the reason [SocketPath] is: the

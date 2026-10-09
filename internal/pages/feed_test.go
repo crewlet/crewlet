@@ -212,6 +212,14 @@ func (r *roundTrip) routeVia(payload []byte, leads pages.Leads,
 	reg *notify.Registry) []notify.Routed {
 
 	r.t.Helper()
+	return r.routeWith(payload, pages.ParserOptions{Leads: leads}, reg)
+}
+
+// routeWith is the same path through a parser built from opts.
+func (r *roundTrip) routeWith(payload []byte, opts pages.ParserOptions,
+	reg *notify.Registry) []notify.Routed {
+
+	r.t.Helper()
 	delivery, wake, err := pages.NewTranslator(nil).Translate(r.t.Context(),
 		changefeed.Record{Payload: payload, Key: "k"})
 	if err != nil {
@@ -221,7 +229,7 @@ func (r *roundTrip) routeVia(payload []byte, leads pages.Leads,
 		r.t.Fatal("the feed declined to relay a record that carries a " +
 			"notification")
 	}
-	parser := pages.NewParser(pages.ParserOptions{Leads: leads})
+	parser := pages.NewParser(opts)
 	routed, err := parser.Parse(r.t.Context(), types.RawWebhook{Body: delivery.Body}, reg)
 	if err != nil {
 		r.t.Fatalf("parse: %v", err)
@@ -290,5 +298,40 @@ func TestAPageCommentWakesItsWatchersWithTheWholeComment(t *testing.T) {
 	}
 	if got := routed[0].Inbound.Body; got != long {
 		t.Fatalf("the woken seat read %d bytes of a %d-byte comment", len(got), len(long))
+	}
+}
+
+// A WAKE LINKS THE PERSON TO THE PAGE, not to its JSON. The `url` a page change
+// carries is the dashboard's address of the page on the dashboard's base — the
+// address the dashboard's router resolves and the backlinks read back — and a
+// parser with no base composes none rather than a rooted path nobody can open.
+func TestAPageWakeLinksToTheDashboardsAddressOfThePage(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{
+		Title: "Runbook", Body: "prose", Watchers: []string{"carla"},
+	})
+	if _, err := r.store.SavePage(t.Context(), author("jane"), page.Page.ID,
+		pages.Save{BaseVersion: 1, Body: ptr("the deploy steps changed")}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	record := r.lastRecord()
+
+	routed := r.routeWith(record, pages.ParserOptions{BaseURL: "https://crewlet.example.com/"}, nil)
+	if len(routed) != 1 {
+		t.Fatalf("woke %d seats, want carla alone: %+v", len(routed), routed)
+	}
+	url := routed[0].Inbound.Metadata["url"]
+	if want := "https://crewlet.example.com/" + pages.AddressPrefix + page.Page.ID; url != want {
+		t.Errorf("the wake links to %q, want the dashboard's address %q", url, want)
+	}
+	if got := pages.Links(url); !slices.Equal(got, []string{page.Page.ID}) {
+		t.Errorf("the backlinks read %v out of the wake's own link, want [%s]", got, page.Page.ID)
+	}
+
+	for _, c := range r.routeWith(record, pages.ParserOptions{}, nil) {
+		if url, ok := c.Inbound.Metadata["url"]; ok {
+			t.Errorf("a parser with no base linked the wake to %q, want no link", url)
+		}
 	}
 }

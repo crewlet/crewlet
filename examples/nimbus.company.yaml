@@ -62,9 +62,9 @@ token_budget:
 # Skill variables — generic name->value facts substituted into tool-skill
 # text wherever a skill writes ${name}.  NIMBUS DECLARES NONE, and that is
 # what running the engine's own tracker and wiki buys here: the one address
-# its skills need is where this deployment answers, and the engine injects
-# that itself as ${crewlet_base_url} from ``integrations.public_base_url``
-# below.  The bundled platform-mentions skill builds every shareable link
+# its skills need is where people reach this deployment's dashboard, and the
+# engine injects that itself as ${crewlet_base_url} from
+# ``integrations.dashboard_base_url`` below.  The bundled platform-mentions skill builds every shareable link
 # on it — ${crewlet_base_url}/#/work/ENG-42 and
 # ${crewlet_base_url}/#/knowledge/pages/{page-id} — so there is nothing
 # for an operator to keep in step.
@@ -387,11 +387,10 @@ integrations:
   # large one should lengthen it.
   # check_interval_seconds: 600
 
-  # Where this deployment answers FROM OUTSIDE — the base every webhook URL
-  # a provisioner registers is built on, and what tool-skill prose reaches
-  # as ${crewlet_base_url}.  A bare origin: consumers append their own
-  # rooted paths, so a path, query or fragment here would land in the
-  # middle of every link.
+  # Where VENDORS reach this deployment from outside — the base every webhook
+  # URL a provisioner registers is built on, and never a link a person
+  # follows.  A bare origin: consumers append their own rooted paths, so a
+  # path, query or fragment here would land in the middle of every address.
   #
   # WRITTEN AS A WHOLE ${VAR} so staging and production answer at their own
   # addresses off this one revision.  It is stored verbatim like every
@@ -399,6 +398,14 @@ integrations:
   # a process that cannot read it registers nothing rather than a webhook
   # at the literal text of a variable.
   public_base_url: "${CREWLET_PUBLIC_URL}"
+
+  # Where PEOPLE reach the dashboard — what tool-skill prose reaches as
+  # ${crewlet_base_url}, and what a page change's notification links to.
+  # The same address as public_base_url on a deployment with one listener;
+  # behind a public listener (Tier A api.public) the dashboard is on
+  # api.port and this names that address instead.  Never borrowed from
+  # public_base_url: unset, no link is composed.
+  dashboard_base_url: "${CREWLET_DASHBOARD_URL}"
 
   # NO TRACKER OR WIKI INTEGRATION, and that is the point of this example:
   # Nimbus runs the engine's OWN work tracker and knowledge base, so there

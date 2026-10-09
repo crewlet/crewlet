@@ -238,7 +238,9 @@ coding agent with none of the seat's tools cannot answer anybody, cannot
 touch a ticket and cannot submit its work. The URL has to reach a
 listener, so the node also needs `api.port`: a node that binds none
 (`api.port: 0`) refuses agent mode by naming `api.port`, rather than
-handing a box an endpoint nothing answers.
+handing a box an endpoint nothing answers. With `api.public.port` set the
+bridge is served on that public listener and nowhere else, so the URL
+names it.
 
 > **In a fleet, that URL must address the node itself, not a load
 > balancer in front of several.** A

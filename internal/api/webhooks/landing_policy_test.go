@@ -72,6 +72,18 @@ func TestTheLandingPagesAllowExactlyTheirOwnInlineBlocks(t *testing.T) {
 				} else if got != policy {
 					t.Errorf("%s: the policy differs between arrivals:\n%s\n%s", name, got, policy)
 				}
+				// NOTHING FROM ITS OWN ORIGIN. A landing is a public
+				// route, served on the public listener when a deployment
+				// sets one, and nothing else is served there: a rooted
+				// link to /static/ is a broken image on exactly the
+				// socket the page is published on. And no reference the
+				// template refused to trust, which it writes as ZgotmplZ.
+				for _, ref := range []string{`src="/`, `href="/`, "ZgotmplZ"} {
+					if strings.Contains(res.Body.String(), ref) {
+						t.Errorf("%s: the page carries %s, which the public listener "+
+							"cannot serve", name, ref)
+					}
+				}
 				styles, scripts := pagepolicy.InlineBlocks(res.Body.Bytes())
 				for _, block := range styles {
 					rendered["style-src"] = append(rendered["style-src"], pagepolicy.Hash(block))
@@ -84,7 +96,7 @@ func TestTheLandingPagesAllowExactlyTheirOwnInlineBlocks(t *testing.T) {
 			directives := parsePolicy(policy)
 			for key, want := range map[string]string{
 				"default-src":     "'none'",
-				"img-src":         "'self'",
+				"img-src":         "data:",
 				"base-uri":        "'none'",
 				"form-action":     "'none'",
 				"frame-ancestors": "'none'",
