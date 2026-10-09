@@ -57,7 +57,7 @@ sequenceDiagram
     A->>L: acquire seat:ceo, seat:eng, seat:ops
     Note over A: alone — share is 3
     B->>L: acquire node:node-b
-    A->>L: ListLive("node:") → 2
+    A->>L: ListLive(ClassNode) → 2
     Note over A: share is now 2
     A->>A: release seat:ceo (voluntary)
     A->>L: expire seat:ceo in place
