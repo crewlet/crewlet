@@ -499,19 +499,19 @@ which settles the question either way: absent and it is made, present and it
 comes back as a peer having won the race. A node no longer fails to start
 because it could not hear.
 
-**A stream or consumer lookup is asked again after a second; a create after
-fifteen.** The broker decides a read — does this stream, this consumer exist —
+**A dropped stream or consumer lookup is asked again within two seconds; a
+create after sixteen.** The broker decides a read — does this stream, this consumer exist —
 when it processes it: it answers, or it returns without a word, and nothing
 answers that request later. Every fleet booting together meets the second
 case. An object another node has just asked for is *in flight*, assigned by
 the metadata leader but not yet applied by the member chosen to lead it, and
 until that member has applied it every other member drops a lookup of it. So
 a lookup of one of the engine's streams or consumers, of a coordination
-bucket, or of the object store's bucket, waits one second for its answer
-before it is asked again, for up to thirty seconds in all. A create is the
-opposite case: the broker keeps its reply until the object it made has a
-leader, which can take an election, so a create waits fifteen seconds before
-it is re-sent. A lookup used to wait the create's fifteen too, and a fresh
+bucket, or of the object store's bucket, waits one second for its answer and
+is asked again a second later — every two seconds, for up to thirty in all. A
+create is the opposite case: the broker keeps its reply until the object it
+made has a leader, which can take an election, so a create waits fifteen
+seconds for its answer and is re-sent a second after that. A lookup used to wait the create's fifteen too, and a fresh
 three-member fleet was measured idling sixteen seconds of its boot on one
 dropped stream lookup.
 
