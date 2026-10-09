@@ -44,10 +44,11 @@ env:
 #
 # Why not setup-go's own cache, which this used to be: it keys on go.sum alone,
 # so every Go job here shared ONE key, and a key is saved only by the first job
-# to miss it. That was always `cross-compile (linux, amd64)` — the fastest
-# job, building CGO_ENABLED=0 without -race — so every later run restored 461
-# MB of a non-race, no-cgo build into the race, cgo, lint and other-platform
-# jobs, which could use none of it: `test (race)` compiled cold for 152s before
+# to miss it. That was always the leg
+# `cross-compile the release targets (linux, amd64)` — the fastest job,
+# building CGO_ENABLED=0 without -race — so every later run restored 461 MB of
+# a non-race, no-cgo build into the race, cgo, lint and other-platform jobs,
+# which could use none of it: `test (race)` compiled cold for 152s before
 # its first package started, and its own save was refused ("Unable to reserve
 # cache") every time. Measured on runs 37517249211 and 37699674195.
 #
