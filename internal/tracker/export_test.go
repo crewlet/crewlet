@@ -28,5 +28,6 @@ func (w *Writer) Hold(ctx context.Context, resource string) (func(), error) {
 // Admit takes the bulk admission one of w's bulk edits takes, for rows rows,
 // and hands back its release.
 func (w *Writer) Admit(ctx context.Context, rows int) (func(), error) {
-	return w.admit(ctx, rows)
+	release, _, err := w.admit(ctx, rows)
+	return release, err
 }

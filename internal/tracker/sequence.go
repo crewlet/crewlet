@@ -2211,7 +2211,11 @@ var ErrBulkInFlight = errors.New("tracker: a bulk edit is already applying")
 // It fails open because a refused bulk on a coordination blip is a seat told a
 // colleague is editing when nobody is, and the log is CORRECT with two bulks in
 // flight and merely slow. That is coordination's founding rule applied to
-// admission: unknown is not "somebody else holds it".
+// admission: unknown is not "somebody else holds it". But a bulk let through
+// that way runs outside the bound, so it is counted as `fail_open` rather than
+// `admitted` and warned about (`tracker_bulk_admitted_unbounded`): failing
+// open is a decision about the caller, never a reason to stop telling the
+// operator the bound is not being kept.
 //
 // # What this costs the caller's NEXT write, stated because it is the ordinary case
 //
@@ -2262,13 +2266,12 @@ func (w *Writer) UpdateTasks(ctx context.Context, opID string, ids []string,
 			"fewer tasks per call", len(subjects), total, MaxBulkBytes)
 	}
 
-	release, err := w.admit(ctx, len(subjects))
+	release, admission, err := w.admit(ctx, len(subjects))
+	w.count(metrics.TrackerBulkCalls, metrics.Attrs{"result": string(admission)})
 	if err != nil {
-		w.count(metrics.TrackerBulkCalls, metrics.Attrs{"result": "refused"})
 		return WriteResult{}, err
 	}
 	defer release()
-	w.count(metrics.TrackerBulkCalls, metrics.Attrs{"result": "admitted"})
 
 	result := WriteResult{Failed: map[string]string{}}
 	for _, id := range subjects {
@@ -2291,6 +2294,28 @@ func (w *Writer) UpdateTasks(ctx context.Context, opID string, ids []string,
 	return result, nil
 }
 
+// bulkAdmission is how a bulk edit's admission was answered, and the `result`
+// the bulk calls counter ([metrics.TrackerBulkCalls]) records — a closed set,
+// as every attribute there is.
+type bulkAdmission string
+
+const (
+	// bulkAdmitted is a bulk running under the fleet's bulk lease, the one
+	// shape in which the fleet-wide bound holds.
+	bulkAdmitted bulkAdmission = "admitted"
+
+	// bulkRefused is a bulk turned away because another is applying.
+	bulkRefused bulkAdmission = "refused"
+
+	// bulkFailedOpen is a bulk let through with NO lease held: the
+	// coordination store did not answer the claim, the mixed-version gate
+	// refused it, or the writer has no coordination at all. Admitting it is
+	// right (see [Writer.UpdateTasks]) and counting it `admitted` was not:
+	// it runs outside the bound, and a store that refused every admission
+	// looked exactly like a fleet whose bulks never collided.
+	bulkFailedOpen bulkAdmission = "fail_open"
+)
+
 // admit takes the fleet-wide bulk lease, or reports why it did not.
 //
 // THREE ANSWERS AND THREE BEHAVIOURS, which is why [Claims] is not a bool: a
@@ -2299,9 +2324,15 @@ func (w *Writer) UpdateTasks(ctx context.Context, opID string, ids []string,
 // see the sequence's own doc for why those last two must differ. A claim the
 // mixed-version gate refused admits too: it is a refusal that names no peer,
 // and the admission bounds a rate rather than guarding a correctness.
-func (w *Writer) admit(ctx context.Context, rows int) (func(), error) {
+//
+// AN ADMISSION THAT FAILED OPEN SAYS SO, in the answer it hands back
+// ([bulkFailedOpen]) and in a warning naming why, because it is the one
+// outcome that leaves nothing else behind: the bulk applies exactly as a
+// bounded one does, and a fleet whose store refused every admission's TTL ran
+// with no bulk bound and no sign of it.
+func (w *Writer) admit(ctx context.Context, rows int) (func(), bulkAdmission, error) {
 	if w.claims == nil {
-		return func() {}, nil
+		return func() {}, bulkFailedOpen, nil
 	}
 	resource := bulkClaim(trackerStream)
 	// TWICE THE PROJECTED APPLY TIME, so the lease outlives the work it
@@ -2333,8 +2364,13 @@ func (w *Writer) admit(ctx context.Context, rows int) (func(), error) {
 		// FAIL OPEN. See the doc above: the log is correct with two
 		// bulks in flight and merely slow, and refusing here on an
 		// unknown is a seat told a colleague is editing when nobody is.
+		log.WarnContext(ctx, "tracker_bulk_admitted_unbounded",
+			"resource", resource, "rows", rows, "ttl", ttl, "cause", "unknown", "error", err,
+			"detail", "the coordination store did not answer the bulk admission, so this bulk "+
+				"edit runs outside the fleet-wide bound on bulk edits; the log stays correct "+
+				"with two in flight, and every node's reads are behind for longer")
 		//nolint:nilerr // Deliberate fail-open: see the paragraph above.
-		return func() {}, nil
+		return func() {}, bulkFailedOpen, nil
 	case lease == nil && refused != coord.RefusedHeld:
 		// FAIL OPEN, for the unknown's reason: the protocol gate refused
 		// the claim, which says a node on a lower lease protocol is live
@@ -2342,20 +2378,27 @@ func (w *Writer) admit(ctx context.Context, rows int) (func(), error) {
 		// flight, every seat's bulk edit would be told to retry "in about
 		// a second" — the hint reading the remaining time off a holder
 		// there is none of — for as long as that node stayed.
-		return func() {}, nil
+		log.WarnContext(ctx, "tracker_bulk_admitted_unbounded",
+			"resource", resource, "rows", rows, "ttl", ttl, "cause", "refused",
+			"refused", string(refused),
+			"detail", "the bulk admission was refused by a rule that names no bulk in flight "+
+				"(a node on a lower lease protocol is live, and this node takes no claim beside "+
+				"it), so this bulk edit runs outside the fleet-wide bound on bulk edits until "+
+				"that node has left")
+		return func() {}, bulkFailedOpen, nil
 	case lease == nil:
 		remaining := time.Duration(0)
 		if held, err := w.claims.Get(ctx, resource); err == nil && held != nil {
 			remaining = time.Until(held.ExpiresAt)
 		}
-		return nil, fmt.Errorf("%w; retry in about %d seconds: %w",
+		return nil, bulkRefused, fmt.Errorf("%w; retry in about %d seconds: %w",
 			ErrBulkInFlight, int(max(remaining.Seconds(), 1)),
 			statelog.ErrUnavailable)
 	}
 	epoch := lease.Epoch
 	return func() {
 		_, _ = w.claims.Release(context.WithoutCancel(ctx), resource, owner, epoch)
-	}, nil
+	}, bulkAdmitted, nil
 }
 
 // drainRows is the applier's measured rows a second, and the divisor of every

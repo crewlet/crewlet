@@ -215,13 +215,16 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, node *store.DB
 }
 
 // writerClaiming is this harness's writer — its publisher, its estate, its
-// actor and its authored clock — taking its walk claims from claims.
+// recorder, its actor and its authored clock — taking its walk claims from
+// claims. The recorder is the publisher's, as a node's writer and publisher
+// share the process's one, so what the writer counts is readable beside what
+// the framework does.
 func (r *roundTrip) writerClaiming(claims coord.Backend) *tracker.Writer {
 	r.t.Helper()
 	writer, err := tracker.NewWriter(tracker.WriterDeps{
 		Publisher: r.publisher, DB: r.db.Reader(), NodeID: r.nodeID,
-		Claims: claims,
-		Actor:  "ana", ActorKind: tracker.AuthorHuman,
+		Claims: claims, Metrics: r.metrics,
+		Actor: "ana", ActorKind: tracker.AuthorHuman,
 		Now: func() time.Time { return r.at },
 	})
 	if err != nil {
