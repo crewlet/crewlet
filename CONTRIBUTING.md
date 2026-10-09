@@ -12,8 +12,9 @@ Prerequisites: **Go 1.27+** and
 building and running the ENGINE needs neither, but changing the dashboard or
 running `internal/e2e`'s client replay does. Nothing in the tree pins a node
 version; CI installs the latest — see *Which node* under
-[A skip is not a pass](#a-skip-is-not-a-pass). **Docker** only for the vendor
-loops below; the engine itself needs no services.
+[A skip is not a pass](#a-skip-is-not-a-pass). **Docker** for the vendor loops
+below, which run `docker compose` and `docker exec` by name, and Docker or
+Podman for `internal/e2e`'s container leg; the engine itself needs no services.
 
 Take golangci-lint as a **prebuilt release**, not via `go install ...@latest`:
 that builds it with the linter module's own minimum Go rather than the newest,
@@ -282,6 +283,17 @@ What follows are the prerequisites that legitimately vary by machine.
   unset, it is `static/dashboard`, the tree the binary embeds. Spell the path
   in the script instead and it becomes a fact that can only ever be corrected
   in most of the places it appears.
+
+- **A container runtime** — docker, or podman — runs `internal/e2e`'s
+  container leg, the only place a coding run's box is a real container rather
+  than a directory on the host. Without one the leg SKIPS on a workstation, and
+  that skip is declared in `internal/skipgate/allowed.go`; with `CI` set it
+  FAILS instead, because a declared skip passes the gate and Dependabot's bump
+  of the leg's image merges itself on a green run. The image is the one `FROM`
+  line of `internal/e2e/testdata/sandbox.Dockerfile` — an exact tag and its
+  digest on `mirror.gcr.io`, never Docker Hub, whose token service timing out
+  on GitHub's runners is why the pin lives there. Nothing builds that file; it
+  is a Dockerfile so that Dependabot moves it.
 
 - **`npm`** builds and tests the dashboard itself. Its assertions — the
   wire protocol, the router's history rules, the ordering comparators, the

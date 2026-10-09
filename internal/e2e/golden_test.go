@@ -1176,13 +1176,23 @@ func nodeBinary(t *testing.T) string {
 	if err == nil {
 		return node
 	}
-	switch strings.ToLower(os.Getenv("CI")) {
-	case "1", "true", "yes":
+	if runningInCI() {
 		t.Fatalf("node is not on PATH, so the client half of the wire-protocol "+
 			"gate would skip and the build would still pass: %v", err)
 	}
 	t.Skip("node is not installed; the dashboard client replay needs it")
 	return ""
+}
+
+// runningInCI is whether this run is a CI one, where a gate that would skip for
+// want of a tool fails instead: a skip there retires the gate behind a green
+// tick. `CI` is what GitHub Actions and every other mainstream runner set.
+func runningInCI() bool {
+	switch strings.ToLower(os.Getenv("CI")) {
+	case "1", "true", "yes":
+		return true
+	}
+	return false
 }
 
 func TestTheSeatCanReachItsBuiltins(t *testing.T) {
