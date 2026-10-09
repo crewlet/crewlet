@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -117,13 +118,86 @@ func TestAnExpectationThatFailsLeavesTheWindowToDecide(t *testing.T) {
 	}
 }
 
+// AN ANSWER THAT ARRIVED WITH THE LAST ONE EXPECTED IS READ.
+//
+// The collection ends the moment the last donor it names has answered, and a
+// wait whose context has ended answers that end even with a message in hand —
+// so an answer already in the subscription when the last expected one was
+// read was never read at all, and the only offer there was could be dropped.
+// Here the donor the join names declines with an answer large enough that
+// reading it takes a while, and a donor it does not name offers right behind
+// it, into the subscription while that decline is read: the offer arrived in
+// time, and is taken.
+func TestAnAnswerThatArrivedWithTheLastExpectedOneIsRead(t *testing.T) {
+	t.Parallel()
+	// FOUR MEBIBYTES of a field no build reads: tens of milliseconds to
+	// decode, against the microseconds the offer behind it takes to arrive.
+	const padding = 4 << 20
+	nc := offerBrokerOf(t, 2*padding)
+	declined := make(chan struct{})
+	decline, err := json.Marshal(struct {
+		Offer
+		Padding string `json:"padding"`
+	}{Offer: Offer{Donor: "named"}, Padding: strings.Repeat("x", padding)})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	named, err := nc.Subscribe(SubjectOffer, func(msg *nats.Msg) {
+		// AFTER THE EXPECTATION IS IN, so the decline is the answer that
+		// leaves nobody named to wait for. And NOT FLUSHED before the
+		// offer is let go: both are written on one connection, so the
+		// offer follows the decline's last byte on the wire and reaches
+		// the subscription while the decline is still being decoded.
+		time.Sleep(100 * time.Millisecond)
+		_ = msg.Respond(decline)
+		close(declined)
+	})
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	t.Cleanup(func() { _ = named.Unsubscribe() })
+	offer, err := json.Marshal(Offer{Donor: "unnamed", Fetch: SubjectFetchPrefix + "unnamed"})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	unnamed, err := nc.Subscribe(SubjectOffer, func(msg *nats.Msg) {
+		<-declined
+		_ = msg.Respond(offer)
+	})
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	t.Cleanup(func() { _ = unnamed.Unsubscribe() })
+	if err := nc.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	offers, err := CollectOffers(t.Context(), nc, OfferRequest{NodeID: "joiner"},
+		OfferWindow, "named")
+	if err != nil {
+		t.Fatalf("CollectOffers: %v", err)
+	}
+	if len(offers) != 1 || offers[0].Donor != "unnamed" {
+		t.Fatalf("offers = %+v, want the unnamed donor's: it was in the "+
+			"subscription when the collection ended, and was never read", offers)
+	}
+}
+
 // offerBroker is an in-process broker and a connection to it.
 func offerBroker(t *testing.T) *nats.Conn {
+	t.Helper()
+	return offerBrokerOf(t, 0)
+}
+
+// offerBrokerOf is [offerBroker] carrying messages up to maxPayload bytes, or
+// the broker's own limit for zero.
+func offerBrokerOf(t *testing.T, maxPayload int32) *nats.Conn {
 	t.Helper()
 	ns, err := server.NewServer(&server.Options{
 		ServerName: "statelog-offers",
 		Port:       -1,
 		DontListen: true,
+		MaxPayload: maxPayload,
 	})
 	if err != nil {
 		t.Fatalf("configure the broker: %v", err)

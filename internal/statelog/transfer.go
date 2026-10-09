@@ -561,6 +561,17 @@ func collectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window 
 	var waiting map[string]bool
 	answered := map[string]bool{}
 	var out []Offer
+	take := func(msg *nats.Msg) {
+		var o Offer
+		if err := json.Unmarshal(msg.Data, &o); err != nil {
+			return
+		}
+		answered[o.Donor] = true
+		delete(waiting, o.Donor)
+		if !o.Declined() {
+			out = append(out, o)
+		}
+	}
 	for waiting == nil || len(waiting) > 0 {
 		msg, err := sub.NextMsgWithContext(wait)
 		if err != nil {
@@ -574,7 +585,8 @@ func collectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window 
 			// window still open, and its answer sent before it: fold it
 			// in, less whoever has answered already, and go on waiting on
 			// the window alone. An answer that came in with it is still in
-			// the subscription, read on the next turn.
+			// the subscription, read on the next turn — or, when nobody
+			// it names is left to wait for, below.
 			if expected != nil && wait.Err() != nil && collect.Err() == nil {
 				named := <-expected
 				expected, wait = nil, collect
@@ -601,15 +613,22 @@ func collectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window 
 			// as a fleet with nothing to give.
 			return nil, fmt.Errorf("statelog: collect offers: %w", err)
 		}
-		var o Offer
-		if err := json.Unmarshal(msg.Data, &o); err != nil {
-			continue
+		take(msg)
+	}
+	// WHAT HAS ALREADY ARRIVED IS READ BEFORE RETURNING, without waiting for
+	// more. The loop ends the moment the last donor it expects has answered
+	// or the window closes, and a wait whose context has ended answers that
+	// end even with a message in hand — so an answer that reached the
+	// subscription in the same instant, from a donor the join did not name
+	// or as the window closed, is one that arrived in time and was never
+	// read. Left there, the only usable offer could be dropped while the
+	// join reports that nobody could donate.
+	for {
+		msg, err := sub.NextMsg(0)
+		if err != nil {
+			break
 		}
-		answered[o.Donor] = true
-		delete(waiting, o.Donor)
-		if !o.Declined() {
-			out = append(out, o)
-		}
+		take(msg)
 	}
 	// NEWEST FIRST, so a caller's own refusals run against the best
 	// artefact before the worse ones.
