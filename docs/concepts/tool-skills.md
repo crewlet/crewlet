@@ -89,13 +89,14 @@ Skills are authored as markdown files with YAML frontmatter — the same format 
 ---
 key: skill:code_runtime
 trigger:
-  mcp_server: gitlab
+  tool: run_sandbox
 phases: [execute]
 required: false
 title: Running code work in the sandbox
 summary: |
   For real code work, call the run_sandbox tool: a coding agent
-  implements in an isolated checkout and opens an MR.
+  implements in an isolated checkout and pushes a branch or opens a pull
+  or merge request.
 ---
 
 When a task needs you to implement or modify code, run tests, or
@@ -120,7 +121,7 @@ Exactly one of these fields:
 | Trigger | Fires when |
 |---|---|
 | `tool: <name>` | `<name>` is in the phase's tool surface |
-| `mcp_server: <server>` | `<server>` is a key in the role's `mcp_env` |
+| `mcp_server: <server>` | `<server>`'s tools reach the seat: a shared server (the default) reaches every agent seat, and a `shared: false` one only a seat that declares it under `mcp_env`, its own or its unit's |
 | `any_of: [...]` | Any sub-trigger fires (logical OR) |
 | `all_of: [...]` | Every sub-trigger fires (logical AND) |
 
@@ -200,7 +201,7 @@ A skill is **catalogued** in a phase's prompt when its declared `phases` include
 
 | Phase | Tool surface seen | Notes |
 |---|---|---|
-| **Execute** | every first-party tool plus whatever the executor has activated, and the role's MCP server names | The executor's live surface, so a skill for a tool it discovered mid-run is catalogued from the next round. |
+| **Execute** | every first-party tool plus whatever the executor has activated, and the names of the MCP servers whose tools reach the seat | The executor's live surface, so a skill for a tool it discovered mid-run is catalogued from the next round. `run_sandbox` is on it only for a seat whose `role.sandbox` is enabled and whose executor is not itself a coding agent in agent mode, so a `tool: run_sandbox` trigger reaches exactly the seats that can launch a run. |
 | **Review** | empty (Review has no domain tools) | MCP-server-keyed skills still appear when an operator scopes a skill to the Review phase (lists it in the skill's `phases`), even though Review has no domain-tool surface. |
 | **Sub-agent** | the delegated task's allowlist | Same matching as Execute, against the worker's narrower surface. `subagent` is the wire name of the worker phase |
 
@@ -286,7 +287,7 @@ Enforcement gates exactly the tools the trigger names:
 - The guard only arms when the session can satisfy it: `load_tool_skill` is an Execute always-on and rides along on every worker surface that can reach it. A surface without it (e.g. a custom always-on override that removed the loader) disables enforcement for that session rather than soft-locking the LLM, with a `skill_guard_disabled_no_loader` warning.
 - A failed `load_tool_skill` call (wrong key, registry error) does **not** unlock anything.
 
-An enforced skill costs the session one extra tool round plus the body tokens, only in sessions that actually use a covered tool — cheap when triggers are narrow and bodies are sized to their blast radius (the tokens are the point: the practices end up in context before the call). When several enforced skills cover the same tool, the block message lists every missing key and the LLM can load them all in a single round of parallel `load_tool_skill` calls. **Most bundled examples ship enforced**: narrow practices like `skill:platform_mentions` gate only their exact tools, and the server-wide enforced skills (`mcp:github` / `mcp:gitlab`) keep their bodies to ~100-token orientation one-pagers so the per-session load is near-free. Three bundled skills are advisory (`required: false`): `skill:code_runtime` (a "plan a sandbox Execute for code work" hint, not markup correctness), and `skill:getting_unstuck` / `skill:retrieval_research` — each carries a server-wide `mcp_server: atlassian` leaf in its trigger, and *enforcing* advisory practice prose at that width would gate every Jira and Confluence read, inverting the trigger-width rule above.
+An enforced skill costs the session one extra tool round plus the body tokens, only in sessions that actually use a covered tool — cheap when triggers are narrow and bodies are sized to their blast radius (the tokens are the point: the practices end up in context before the call). When several enforced skills cover the same tool, the block message lists every missing key and the LLM can load them all in a single round of parallel `load_tool_skill` calls. **Most bundled examples ship enforced**: narrow practices like `skill:platform_mentions` gate only their exact tools, and the server-wide enforced skills (`mcp:github` / `mcp:gitlab`) keep their bodies to ~100-token orientation one-pagers so the per-session load is near-free. Three bundled skills are advisory (`required: false`): `skill:code_runtime` (advice on briefing `run_sandbox`, not markup correctness, triggered on that tool so it reaches exactly the seats offered it, whichever code host they push to or none), and `skill:getting_unstuck` / `skill:retrieval_research` — each carries a server-wide `mcp_server: atlassian` leaf in its trigger, and *enforcing* advisory practice prose at that width would gate every Jira and Confluence read, inverting the trigger-width rule above.
 
 ---
 
