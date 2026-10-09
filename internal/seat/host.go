@@ -254,9 +254,16 @@ type Host struct {
 	unmannedRoles map[placement.NodeRole]struct{}
 
 	nodeLease *coord.Lease
-	last      *SweepResult
-	running   bool
-	draining  bool
+
+	// presenceRenewedAt is when the last SUCCESSFUL claim of nodeLease was
+	// asked for — what [Host.HoldsPresence] measures, for the reason
+	// heldSeat.renewedAt gives: a lease this node can no longer renew is
+	// held only until its TTL runs out, whatever this node can see.
+	presenceRenewedAt time.Time
+
+	last     *SweepResult
+	running  bool
+	draining bool
 
 	// withdrawn is whether this node has stepped out of placement because it
 	// cannot serve its seats (see [Host.setWithdrawn]), as of the last sweep.
@@ -687,6 +694,24 @@ func (h *Host) ResumeClaiming(ctx context.Context) {
 	h.mu.Unlock()
 	h.renewNodePresence(ctx)
 	log.InfoContext(ctx, "seat_host_resumed", "node", h.nodeID)
+}
+
+// HoldsPresence reports whether this node holds its presence lease now: it is
+// not draining, and its last successful claim of the lease was inside the
+// lease's TTL.
+//
+// THE RENEW'S AGE, NOT THE LEASE'S EXISTENCE. A store that stops answering
+// leaves the last lease in hand while the row behind it lapses, and from then
+// on every peer reads this node as gone: it is no longer in their divisor, and
+// the estate's router no longer asks it anything. What a successful claim at t
+// proves is the row through t+ttl, so that is how long this answers yes — the
+// same bound a seat's grace is held to ([heldSeat.renewedAt]). It is what a
+// readiness probe reads, because a node its fleet cannot see is not doing the
+// work it was started for, however healthy it looks from inside.
+func (h *Host) HoldsPresence() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.nodeLease != nil && !h.draining && h.now().Sub(h.presenceRenewedAt) < h.ttl
 }
 
 // Draining reports whether this node has stopped claiming.
