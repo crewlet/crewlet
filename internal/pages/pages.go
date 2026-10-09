@@ -108,11 +108,13 @@ const (
 	// MaxBody bounds a page.
 	//
 	// Five hundred and twelve kibibytes, sixteen times a work item's, because
-	// a runbook or a design document genuinely is that long. It is also
-	// the number the broker's max_payload has to clear: the embedded
-	// server allows 8 MiB, but an external NATS cluster defaults to 1 MiB,
-	// so a native knowledge base refuses to start against a broker that
-	// could not carry a full page.
+	// a runbook or a design document genuinely is that long. A record
+	// carries a page's body once, and JSON escapes a byte into at most six,
+	// so a page at this size is at most 3 MiB on the wire — inside the
+	// transport's 8 MiB message ceiling ([queue.MaxPayloadBytes]). Nothing
+	// here checks the broker: every node, knowledge base or not, refuses
+	// at connect an external NATS server configured below that ceiling
+	// (nats-server's own default is 1 MiB).
 	MaxBody = 512 << 10
 
 	// MaxComment bounds one comment on a page.

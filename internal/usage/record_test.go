@@ -4,9 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/knowledge"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/usage"
 )
@@ -205,5 +213,76 @@ func TestANewerBuildsKindStillNamesItsNodeAndDay(t *testing.T) {
 	}
 	if _, err := (usage.Domain{}).Envelope(payload); err == nil {
 		t.Fatal("a newer build's record with no readable day was admitted")
+	}
+}
+
+// A FULL SEAT-DAY FITS ONE MESSAGE. A record is published whole, so one the
+// transport cannot carry is refused on every attempt and its day never
+// replicates. [usage.ReadsPerSeatDay] is what keeps a seat-day small, and this
+// measures it at its worst: every read entry present, every id a UUID, every
+// entry carrying the longest query a search accepts — once as typed and once
+// spelled in the bytes JSON escapes to six — beside a generous set of spend
+// cells and a full duration histogram. The record has to fit
+// [queue.MaxPayloadBytes], and it is held under the 1 MiB that ADR-0020 and
+// the cap's own comment state, so a record that outgrows the figure goes red
+// here rather than leaving the prose to go stale.
+//
+// Mutation: raise ReadsPerSeatDay to 4096, and the escaped case outgrows the
+// transport while the typed one outgrows the documented figure.
+func TestAFullSeatDayRecordFitsOneMessage(t *testing.T) {
+	t.Parallel()
+	const documented = 1 << 20
+	for name, query := range map[string]string{
+		"a full-length query as typed":         strings.Repeat("q", knowledge.MaxQueryBytes),
+		"a full-length query JSON escapes all": strings.Repeat("<", knowledge.MaxQueryBytes),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			at := time.Date(2026, 9, 23, 23, 59, 59, 999_999_999, time.UTC)
+			r := usage.Record{
+				RecordEnvelope: usage.RecordEnvelope{Writer: "node-b",
+					Subject: usage.Subject{Kind: usage.KindSeat, Node: "node-b",
+						Day: "2026-09-23", Seat: uuid.NewString()}},
+				Handle: strings.Repeat("h", 64), Role: strings.Repeat("r", 128),
+				Turns: &usage.Turns{Count: 1000, LastEndedAt: at},
+			}
+			for i := range 1000 {
+				r.Turns.Durations.Add(time.Duration(i) * 7 * time.Second)
+			}
+			for _, phase := range []string{"execute", "review", "subagent", "auxiliary", "judge", "onboarding"} {
+				for m := range 4 {
+					for _, key := range []string{"primary", "fallback"} {
+						r.Tokens = append(r.Tokens, usage.Tokens{Phase: phase,
+							Worker: "worker-" + strconv.Itoa(m), Model: "model-" + strconv.Itoa(m),
+							ProviderKey: key, Input: math.MaxInt32, Output: math.MaxInt32,
+							CacheRead: math.MaxInt32, CacheWrite: math.MaxInt32,
+							Total: math.MaxInt64, Calls: math.MaxInt32})
+					}
+				}
+			}
+			for range usage.ReadsPerSeatDay {
+				r.Reads = append(r.Reads, usage.Read{PageID: uuid.NewString(),
+					Backend: "confluence", Via: "skill_injected", Count: math.MaxInt64,
+					LastAt: at, LastTurnID: uuid.NewString(), LastWorkKey: uuid.NewString(),
+					LastQuery: query})
+			}
+			r.ReadsElided = math.MaxInt32
+			encoded, err := r.Encode()
+			if err != nil {
+				t.Fatalf("encode: %v", err)
+			}
+			t.Logf("a seat-day at the cap encodes to %d bytes (%.0f KiB)",
+				len(encoded), float64(len(encoded))/1024)
+			if len(encoded) >= queue.MaxPayloadBytes {
+				t.Fatalf("a seat-day at the cap is %d bytes and the transport carries "+
+					"at most %d: the record could never be published", len(encoded),
+					queue.MaxPayloadBytes)
+			}
+			if len(encoded) >= documented {
+				t.Errorf("a seat-day at the cap is %d bytes, past the %d ADR-0020 and "+
+					"usage.ReadsPerSeatDay state — measure it again and correct both",
+					len(encoded), documented)
+			}
+		})
 	}
 }
