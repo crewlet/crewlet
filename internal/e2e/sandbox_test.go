@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -857,21 +858,9 @@ func TestTheContainerModeRunsTheSameProtocol(t *testing.T) {
 	if runtime == "" {
 		t.Skip("no usable container runtime; the direct mode covers the protocol here")
 	}
-	image := os.Getenv("CREWLET_TEST_SANDBOX_IMAGE")
-	if image == "" {
-		// PINNED, like every image docker-compose.yml names. `alpine:3` is a
-		// floating tag, and CLAUDE.md's rule against those is not about
-		// tidiness: a green run under one is a claim about a build nobody can
-		// name afterwards, and the day the tag moves this gate's subject
-		// changes with no commit to point at. 3.24.1 is the version `3`
-		// resolves to today (Docker Hub puts 3, 3.24, 3.24.1 and latest on one
-		// digest); nothing bumps a literal in Go source, so a failure here that
-		// names the image IS the bump signal.
-		image = "alpine:3.24.1"
-	}
 	local, err := sandbox.NewLocal(sandbox.LocalOptions{
 		Placement: sandbox.Container, StateDir: t.TempDir(),
-		Image: image, Runtime: filepath.Base(runtime),
+		Image: pinnedSandboxImage(t), Runtime: filepath.Base(runtime),
 	})
 	if err != nil {
 		t.Fatalf("NewLocal: %v", err)
@@ -911,6 +900,94 @@ func TestTheContainerModeRunsTheSameProtocol(t *testing.T) {
 	blob, err := box.ReadFile(t.Context(), p.Ask())
 	if err != nil || !strings.Contains(string(blob), "which branch?") {
 		t.Fatalf("ask.json = %q, %v", blob, err)
+	}
+}
+
+// sandboxImageFile pins the container leg's image. It is a Dockerfile nothing
+// builds, because a Dockerfile is the manifest Dependabot's docker ecosystem
+// reads and a Go string is one nothing moves; the file says the rest.
+var sandboxImageFile = filepath.Join("testdata", "sandbox.Dockerfile")
+
+// pinnedSandboxImage is the reference sandboxImageFile names, read from its
+// one FROM line and handed to the runtime unchanged.
+//
+// STRICT, because the file has two readers that must agree: this test and
+// Dependabot. A stage name, a --platform, an ARG reference or a second FROM
+// each leave a reading under which another image was meant, so each is a
+// failure here rather than a choice. So is an indented FROM, which Docker
+// would build from and Dependabot's parser (`^FROM\s+`, line by line) never
+// sees — the one edit that would leave the pin aging behind a green gate,
+// which is what the file exists to stop. And never a skip: a pin that cannot
+// be read is a broken tree, not a machine that lacks something.
+func pinnedSandboxImage(t *testing.T) string {
+	t.Helper()
+	blob, err := os.ReadFile(sandboxImageFile)
+	if err != nil {
+		t.Fatalf("the container leg's image pin: %v", err)
+	}
+	var refs []string
+	for i, line := range strings.Split(string(blob), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 || strings.HasPrefix(fields[0], "#") {
+			continue
+		}
+		if line[0] == ' ' || line[0] == '\t' ||
+			!strings.EqualFold(fields[0], "FROM") || len(fields) != 2 ||
+			strings.HasPrefix(fields[1], "-") || strings.Contains(fields[1], "$") {
+			t.Fatalf("%s:%d: %q is not `FROM <image>` at the start of its line; the "+
+				"file holds one such line and comments, because nothing builds it and "+
+				"Dependabot reads no other shape", sandboxImageFile, i+1, line)
+		}
+		refs = append(refs, fields[1])
+	}
+	if len(refs) != 1 {
+		t.Fatalf("%s names %d images %v, want exactly one", sandboxImageFile, len(refs), refs)
+	}
+	return refs[0]
+}
+
+// THE PIN'S SHAPE, held on every machine. The container leg itself needs a
+// runtime and skips without one; what it is pinned TO must not depend on that.
+//
+// Each clause is a way the gate goes red, or goes quiet, for a reason that is
+// not the engine. No registry host is Docker Hub, whose token service timing
+// out on GitHub's runners is why the pin moved. A floating tag (`latest`, `3`,
+// `3.24`) is one Dependabot cannot move and a green run cannot name. And no
+// digest is a tag a registry can re-point under a pull request that already
+// passed.
+func TestTheContainerLegsImageIsAnExactPinOffDockerHub(t *testing.T) {
+	t.Parallel()
+	ref := pinnedSandboxImage(t)
+
+	named, digest, ok := strings.Cut(ref, "@")
+	if !ok || !regexp.MustCompile(`^sha256:[0-9a-f]{64}$`).MatchString(digest) {
+		t.Errorf("%s: %q carries no sha256 digest", sandboxImageFile, ref)
+	}
+	slash := strings.LastIndex(named, "/")
+	repo, tag, ok := strings.Cut(named[slash+1:], ":")
+	if !ok || !regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`).MatchString(tag) {
+		t.Errorf("%s: %q is not pinned to an exact major.minor.patch tag", sandboxImageFile, ref)
+	}
+	if repo == "" {
+		t.Errorf("%s: %q names no repository", sandboxImageFile, ref)
+	}
+
+	// The registry is the first path component, and it must carry a dot.
+	// That is DEPENDABOT's rule (its registry is a domain of two or more
+	// labels, then an optional port) and narrower than the runtime's, which
+	// also takes `localhost` and a bare `host:port`: Dependabot reads either
+	// of those as an image named after the host with no digest, and moves
+	// nothing. Without a host at all, the runtime pulls from Docker Hub.
+	host, _, _ := strings.Cut(named, "/")
+	domain, _, _ := strings.Cut(host, ":")
+	if slash < 0 || !strings.Contains(domain, ".") {
+		t.Fatalf("%s: %q names no registry domain, so the runtime pulls it from Docker "+
+			"Hub or Dependabot reads it as something else", sandboxImageFile, ref)
+	}
+	switch strings.ToLower(domain) {
+	case "docker.io", "index.docker.io", "registry-1.docker.io", "registry.hub.docker.com":
+		t.Errorf("%s: %q is pulled from Docker Hub; name the same digest on a mirror",
+			sandboxImageFile, ref)
 	}
 }
 

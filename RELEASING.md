@@ -243,7 +243,9 @@ doing the thing, or starts doing more — so read the file when you touch it:
   nobody told Dependabot about produces no pull requests, which looks exactly
   like a manifest with nothing to update — that is how `go.mod` went unwatched
   for the length of the rewrite. Ecosystem names must match whole: as a
-  substring, `docker` is satisfied by the `docker-compose` entry.
+  substring, `docker` is satisfied by the `docker-compose` entry. And a
+  `docker` entry covers only its own directory, so the release `Dockerfile`
+  and `internal/e2e/testdata/sandbox.Dockerfile` each need one.
 - **`.github/workflows/dependabot-merge.yml`'s guard and its merge flags.** The
   job holds `contents: write` and `pull-requests: write` and approves a pull
   request; its `if:` is the only thing stopping it approving a commit a person

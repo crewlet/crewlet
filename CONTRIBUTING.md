@@ -542,6 +542,7 @@ pull request when any of them has a newer release:
 | `go.mod` | `gomod` | the engine's own Go dependencies |
 | `dashboard/package.json` | `npm` | the dashboard's build and runtime dependencies |
 | `Dockerfile` | `docker` | the base image a release ships |
+| `internal/e2e/testdata/sandbox.Dockerfile` | `docker` | the image `internal/e2e`'s container leg pulls — a `FROM` line nothing builds |
 | `docker-compose.yml` | `docker-compose` | the images the local dev stack runs |
 
 Dependabot keeps a version moving once it is in the tree; **choosing one in
@@ -623,18 +624,22 @@ worth knowing:
   down.
 - **`docker` and `docker-compose` are two ecosystems, not one.** The first
   reads `Dockerfile`s and the second reads Compose files; neither sees the
-  other's manifests, so a repository with both needs both entries.
+  other's manifests, so a repository with both needs both entries. And a
+  `docker` entry reads only the Dockerfiles in its own directory — `/` is the
+  whole repository for `github-actions` alone — which is why the e2e sandbox
+  pin has an entry of its own.
 - **An action pinned to a non-version ref is invisible.** A branch pointer
   (`@release/v1`) or `@main` yields no update pull requests at all, so pin
   actions to a version tag or a full SHA. That matters most for the one
   handed an OIDC token: pinned, its updates arrive as reviewable pull
   requests instead of moving under the workflow unannounced.
 
-Adding a new dependency surface — a second `package.json`, a second module — means
-adding its `updates:` entry in the same change. Nothing reports the omission:
-a manifest Dependabot has not been told about simply never produces a pull
-request, which is indistinguishable from one that has nothing to update. The
-Go module itself went the length of the rewrite that way.
+Adding a new dependency surface — a second `package.json`, a second module, a
+Dockerfile in another directory — means adding its `updates:` entry in the same
+change. Nothing reports the omission: a manifest Dependabot has not been told
+about simply never produces a pull request, which is indistinguishable from one
+that has nothing to update. The Go module itself went the length of the rewrite
+that way.
 
 Security updates are separate: they come from published advisories rather than
 this file, are enabled in the repository's settings, and are held back by
