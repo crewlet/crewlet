@@ -14,19 +14,34 @@ import (
 //
 // Every one of those steps races a lease, and every one falls back to the
 // same thing when it cannot reach the store: the lease lapses on its TTL.
-// Each used to run under a bound of its own, so a member that had lost quorum
-// spent the SUM of them: the e2e fleet measured a lone member's stop at 25 s,
-// five seconds per step, every one of them failing. A process under an
-// orchestrator's thirty-second kill grace that spends that long on deadlines
-// that cannot succeed is killed before its custody flush and its store close.
+// Each used to run under a bound of its own, so a member whose store had gone
+// spent the SUM of them, five seconds a step and every one failing. A process
+// under an orchestrator's thirty-second kill grace that spends that long on
+// deadlines that cannot succeed is killed before its custody flush and its
+// store close.
 //
 // So the steps draw on one allowance, [StopAllowance] of the lease TTL: on a
 // healthy fleet each takes milliseconds and the allowance never binds; on an
-// unreachable one the stop's coordination costs one allowance in total, after
-// which every remaining step fails at once and takes its documented fallback.
-// A store that blinks during a healthy stop costs the steps the blink, not the
+// unreachable store the give-backs cost one allowance in total, after which
+// every remaining step fails at once and takes its documented fallback. A
+// store that blinks during a healthy stop costs the steps the blink, not the
 // stop its allowance — the alternative, abandoning every step after the first
 // failure, turns one transient error into a TTL of dark seats for every peer.
+//
+// # What it bounds, and what it does not
+//
+// The give-backs, and nothing else. A member that has lost its coordination
+// store ALONE stops in about one allowance: 15 s at the shipped 45 s TTL. A
+// member that has lost BOTH stores — a lone embedded member whose peers have
+// gone, where the event stream and the buckets lose their quorum together —
+// also pays every bound the stream's records keep, which this allowance
+// cannot share because none of them falls back to a lease (see "Only what
+// lapses" below): each seat's last event beside its last memory publish, and
+// the engine's auxiliary-spend flush, five seconds each. With the engine's
+// admission share, that stop still takes about 25 s at the shipped TTL — what
+// the e2e fleet measured a lone member's stop at before this allowance
+// existed — and fits a thirty-second kill grace by five seconds, not by the
+// fifteen a member that lost only its store has to spare.
 //
 // # Only what lapses
 //
