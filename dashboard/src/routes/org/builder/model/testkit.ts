@@ -141,9 +141,7 @@ export function fixtureCompany(): CompanyDocument {
           {
             name: "Platform",
             type: "team",
-            roles: [
-              { name: "SRE", goal: "Keep it up", integrations: { jira: { project: "OPS" } } },
-            ],
+            roles: [{ name: "SRE", goal: "Keep it up", project: "OPS" }],
           },
         ],
       },

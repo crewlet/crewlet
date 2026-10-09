@@ -24,13 +24,16 @@
  * every key it does not model.
  *
  * A FIELD FOR A TOOL IS DRAWN ONLY WHERE THE TOOL IS. A seat's GitHub tier,
- * Slack channel, Mattermost channel, GitLab access level, Jira project and
- * Confluence space mean something only when the company has connected that
- * tool, so each says "<Tool> is not connected" instead of offering a setting
- * that does nothing. Two of them change more than their field, and say so
- * beside it: a GitHub tier on a seat with no GitHub block enrols the seat,
- * and a tier change on a seat whose app exists does not reach the app, whose
- * permissions were fixed when it was created.
+ * Slack channel, Mattermost channel and GitLab access level mean something
+ * only when the company has connected that tool, so each says "<Tool> is not
+ * connected" instead of offering a setting that does nothing. A project and a
+ * space are NOT a tool's: they are the seat's or unit's own `project` and
+ * `space`, naming a container on whichever tracker and knowledge base the
+ * company runs — the engine's own by default — so they are drawn unless the
+ * company runs none. Two of the tool fields change more than their field,
+ * and say so beside it: a GitHub tier on a seat with no GitHub block enrols
+ * the seat, and a tier change on a seat whose app exists does not reach the
+ * app, whose permissions were fixed when it was created.
  *
  * NO CREDENTIAL IS RENDERED. Tool credentials appear as server and variable
  * names, a seat's chat app blocks as the settings a person writes (a channel,
@@ -97,6 +100,7 @@ import { CONTACT_IDENTITIES } from "./model/templates.ts";
 import { datadogEnabled, datadogFallback } from "./chartModel.ts";
 import {
   PHASE_MODEL_FIELDS,
+  backendFor,
   currentCheck,
   defaultGitLabAccessLevel,
   derivedSeatOf,
@@ -440,24 +444,35 @@ function ToolCredentialFact({ data }: { data: ConfigRole | ConfigUnit }) {
   );
 }
 
-const JIRA_PROJECT: Segment[] = ["integrations", "jira", "project"];
-const CONFLUENCE_SPACE: Segment[] = ["integrations", "confluence", "space"];
+const PROJECT: Segment[] = ["project"];
+const SPACE: Segment[] = ["space"];
 
-/** Jira project and Confluence space: ownership for routing, not a permission. */
+/** The ownership fields the company has a backend for, as field paths. */
+function ownsFieldPaths(company: CompanyDocument): Segment[][] {
+  return [
+    ...(backendFor(company, "tracker") !== "none" ? [PROJECT] : []),
+    ...(backendFor(company, "knowledge") !== "none" ? [SPACE] : []),
+  ];
+}
+
+/**
+ * The tracker project and knowledge space a seat or unit owns: ownership for
+ * routing, not a permission, on whichever backend the company runs.
+ */
 function Owns({
   who,
-  jira,
-  confluence,
-  onJira,
-  onConfluence,
+  project,
+  space,
+  onProject,
+  onSpace,
   errorFor,
   disabled,
 }: {
   who: "seat" | "unit";
-  jira: string;
-  confluence: string;
-  onJira: (next: string) => void;
-  onConfluence: (next: string) => void;
+  project: string;
+  space: string;
+  onProject: (next: string) => void;
+  onSpace: (next: string) => void;
   errorFor: (path: readonly Segment[]) => string | undefined;
   disabled: boolean;
 }) {
@@ -468,31 +483,37 @@ function Owns({
       title="Owns"
       hint={`Where unrouted work for this ${who} goes. Not a permission.`}
     >
-      {isConnected(company, "jira") ? (
+      {backendFor(company, "tracker") !== "none" ? (
         <ConfigField
-          label="Jira project"
+          label="Tracker project"
           kind="id"
-          value={jira}
-          onChange={onJira}
+          value={project}
+          onChange={onProject}
           required={false}
           disabled={disabled}
-          error={errorFor(JIRA_PROJECT)}
+          error={errorFor(PROJECT)}
         />
       ) : (
-        <NotConnected tool="jira" />
+        <p className="builder-note muted">
+          The company runs no work tracker (<InlineCode>tracker.backend: none</InlineCode>), so
+          there is no project to own.
+        </p>
       )}
-      {isConnected(company, "confluence") ? (
+      {backendFor(company, "knowledge") !== "none" ? (
         <ConfigField
-          label="Confluence space"
+          label="Knowledge space"
           kind="id"
-          value={confluence}
-          onChange={onConfluence}
+          value={space}
+          onChange={onSpace}
           required={false}
           disabled={disabled}
-          error={errorFor(CONFLUENCE_SPACE)}
+          error={errorFor(SPACE)}
         />
       ) : (
-        <NotConnected tool="confluence" />
+        <p className="builder-note muted">
+          The company runs no knowledge base (<InlineCode>knowledge.backend: none</InlineCode>), so
+          there is no space to own.
+        </p>
       )}
     </EditorSection>
   );
@@ -601,9 +622,8 @@ function CompanyEditor({ onClose }: { onClose: () => void }) {
 
 /**
  * The field paths a unit's form draws, so a problem the engine reported on a
- * field this form does NOT draw (a Jira project on a company that has not
- * connected Jira) is listed at the top rather than attached to a field nobody
- * can see.
+ * field this form does NOT draw (a project on a company that runs no tracker)
+ * is listed at the top rather than attached to a field nobody can see.
  */
 function unitFieldPaths(company: CompanyDocument, data: ConfigUnit): Segment[][] {
   return [
@@ -614,8 +634,7 @@ function unitFieldPaths(company: CompanyDocument, data: ConfigUnit): Segment[][]
     ["goals"],
     ["channel"],
     ["knowledge"],
-    ...(isConnected(company, "jira") ? [JIRA_PROJECT] : []),
-    ...(isConnected(company, "confluence") ? [CONFLUENCE_SPACE] : []),
+    ...ownsFieldPaths(company),
     ...(schedulesOf(data).length > 0 ? [["schedules"] as Segment[]] : []),
   ];
 }
@@ -759,10 +778,10 @@ function UnitEditor({
 
       <Owns
         who="unit"
-        jira={form.jira}
-        confluence={form.confluence}
-        onJira={(jira) => set({ jira })}
-        onConfluence={(confluence) => set({ confluence })}
+        project={form.project}
+        space={form.space}
+        onProject={(project) => set({ project })}
+        onSpace={(space) => set({ space })}
         errorFor={errorFor}
         disabled={disabled}
       />
@@ -826,8 +845,7 @@ function seatFieldPaths(
           ...(isConnected(company, "github") ? [GITHUB_TIER, GITHUB_REPOS] : []),
           ...(seatBlock("slack") ? [SLACK_CHANNEL] : []),
           ...(seatBlock("mattermost") ? [MATTERMOST_CHANNEL, MATTERMOST_USERNAME] : []),
-          ...(isConnected(company, "jira") ? [JIRA_PROJECT] : []),
-          ...(isConnected(company, "confluence") ? [CONFLUENCE_SPACE] : []),
+          ...ownsFieldPaths(company),
         ]),
   ];
 }
@@ -1056,10 +1074,10 @@ function SeatEditor({
           />
           <Owns
             who="seat"
-            jira={form.jira}
-            confluence={form.confluence}
-            onJira={(jira) => set({ jira })}
-            onConfluence={(confluence) => set({ confluence })}
+            project={form.project}
+            space={form.space}
+            onProject={(project) => set({ project })}
+            onSpace={(space) => set({ space })}
             errorFor={errorFor}
             disabled={disabled}
           />

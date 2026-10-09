@@ -364,7 +364,7 @@ not a field somebody sets.
 | Lead | Any seat. The empty choice shows the lead the unit inherits from the unit above it, as the last check reported it. |
 | Channel | An empty channel inherits the one above it. |
 | Knowledge | Free-text references, not a read scope. |
-| Owns: Jira project, Confluence space | Where unrouted work for the unit goes. Not a permission. Shown only when the company has connected Jira or Confluence. |
+| Owns: tracker project, knowledge space | The unit's `project` and `space`: where unrouted work for the unit goes. Not a permission. Each names a container on whichever tracker and knowledge base the company runs, the engine's own included, so each is shown unless the company runs none (`tracker.backend: none`, `knowledge.backend: none`). |
 | Schedules: enabled | Each schedule can be switched on or off. |
 
 Shown and not changed: each schedule's cron, timezone, runner and task, and the
@@ -393,7 +393,7 @@ as `${NAME}` first; a reference is a name, so it survives the rename.
 | Token ceilings: daily, weekly, monthly | Agent seats. One box per calendar window on the company's clock, each optional: an empty box is no ceiling on that window, and a 0 is refused rather than read as unlimited. A turn runs only while every capped window has room, and the company's own `token_budget` applies on top. The check warns about a ceiling that can never refuse anything — a week at or above seven days of the daily one, a seat at or above the company. |
 | Schedules: enabled | Agent seats. |
 | Integrations | Agent seats; see below. |
-| Owns: Jira project, Confluence space | Agent seats. Where unrouted work for the seat goes. Not a permission. |
+| Owns: tracker project, knowledge space | Agent seats. The seat's own `project` and `space`: where unrouted work for the seat goes. Not a permission. Shown unless the company runs no tracker or no knowledge base, as for a unit. |
 
 Shown with the reason they are not changed here: per-phase models
 (`llm_review` and the other `llm_*` fields), sandbox (enabled, where it runs),

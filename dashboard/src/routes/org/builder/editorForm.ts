@@ -65,8 +65,10 @@ export interface UnitForm {
   readonly goals: readonly string[];
   readonly channel: string;
   readonly knowledge: readonly string[];
-  readonly jira: string;
-  readonly confluence: string;
+  /** The tracker project the unit owns: a vendor-neutral key, on the unit. */
+  readonly project: string;
+  /** The knowledge container the unit writes in, on the unit. */
+  readonly space: string;
   /** Schedule name to whether it runs. */
   readonly schedules: Readonly<Record<string, boolean>>;
 }
@@ -99,8 +101,10 @@ export interface SeatForm {
   readonly mattermostUsername: string;
   /** The seat's own GitLab access level override; "" for the company default. */
   readonly accessLevel: string;
-  readonly jira: string;
-  readonly confluence: string;
+  /** The tracker project the seat owns: a vendor-neutral key, on the seat. */
+  readonly project: string;
+  /** The knowledge container the seat writes in, on the seat. */
+  readonly space: string;
 }
 
 /** A calendar window a `token_budget:` caps: `day`, `week` or `month`. */
@@ -148,8 +152,8 @@ export function unitForm(data: ConfigUnit): UnitForm {
     goals: strings(data.goals),
     channel: text(data.channel),
     knowledge: strings(data.knowledge),
-    jira: text(getPath(data, ["integrations", "jira", "project"])),
-    confluence: text(getPath(data, ["integrations", "confluence", "space"])),
+    project: text(data.project),
+    space: text(data.space),
     schedules: scheduleToggles(data),
   };
 }
@@ -205,8 +209,8 @@ export function seatForm(data: ConfigRole, accessLevel: string): SeatForm {
     mattermostChannel: text(getPath(data, ["integrations", "mattermost", "channel"])),
     mattermostUsername: text(getPath(data, ["integrations", "mattermost", "username"])),
     accessLevel,
-    jira: text(getPath(data, ["integrations", "jira", "project"])),
-    confluence: text(getPath(data, ["integrations", "confluence", "space"])),
+    project: text(data.project),
+    space: text(data.space),
   };
 }
 
@@ -311,8 +315,8 @@ export function unitParts(key: NodeKey, initial: UnitForm, form: UnitForm): Edit
     ...changed(["goals"], listValue(initial.goals), listValue(form.goals)),
     ...textPart(["channel"], initial.channel, form.channel, line),
     ...changed(["knowledge"], listValue(initial.knowledge), listValue(form.knowledge)),
-    ...textPart(["integrations", "jira", "project"], initial.jira, form.jira, line),
-    ...textPart(["integrations", "confluence", "space"], initial.confluence, form.confluence, line),
+    ...textPart(["project"], initial.project, form.project, line),
+    ...textPart(["space"], initial.space, form.space, line),
   ];
   if (set.length > 0) parts.push({ type: "updateUnit", target: key, set });
   if (form.lead !== initial.lead) {
@@ -413,8 +417,8 @@ export function seatParts(
       form.mattermostUsername,
       line,
     ),
-    ...textPart(["integrations", "jira", "project"], initial.jira, form.jira, line),
-    ...textPart(["integrations", "confluence", "space"], initial.confluence, form.confluence, line),
+    ...textPart(["project"], initial.project, form.project, line),
+    ...textPart(["space"], initial.space, form.space, line),
   ];
   const levelChanged = form.accessLevel !== initial.accessLevel;
   if (set.length > 0 || levelChanged) {

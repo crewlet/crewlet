@@ -965,6 +965,13 @@ export interface ConfigRole {
   sandbox?: Record<string, unknown>;
   placement?: Record<string, unknown>;
   integrations?: ConfigRoleIntegrations;
+  /**
+   * The tracker project a root-level seat owns. Vendor-neutral, so on the seat
+   * itself and never under `integrations:`; a unit member takes its unit's.
+   */
+  project?: string;
+  /** The knowledge container a root-level seat writes in, beside `project`. */
+  space?: string;
   schedules?: ScheduleSpec[];
   [key: string]: unknown;
 }
@@ -982,7 +989,11 @@ export type HumanContactKey =
   | "github_login"
   | "gitlab_username";
 
-/** A seat's own integration blocks, as `config.RoleIntegrations` writes them. */
+/**
+ * A seat's own integration blocks, as `config.RoleIntegrations` writes them:
+ * the chat apps it speaks as and the GitHub App it acts as. Its project and
+ * space are not here — they are [ConfigRole]'s own `project` and `space`.
+ */
 export interface ConfigRoleIntegrations {
   github?: {
     tier?: string;
@@ -996,8 +1007,6 @@ export interface ConfigRoleIntegrations {
   };
   slack?: { bot_token?: string; signing_secret?: string; channel?: string; [key: string]: unknown };
   mattermost?: { bot_token?: string; username?: string; channel?: string; [key: string]: unknown };
-  jira?: { project?: string; [key: string]: unknown };
-  confluence?: { space?: string; [key: string]: unknown };
   [key: string]: unknown;
 }
 
@@ -1023,7 +1032,6 @@ export interface ConfigUnit {
   project?: string;
   /** The knowledge container this unit writes pages in. Guarded. */
   space?: string;
-  integrations?: { jira?: { project?: string }; confluence?: { space?: string } };
   roles?: ConfigRole[];
   children?: ConfigUnit[];
   schedules?: ScheduleSpec[];

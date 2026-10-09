@@ -149,6 +149,24 @@ export function isConnected(company: CompanyDocument, tool: Tool): boolean {
   return isRecord(getPath(company, ["integrations", tool]));
 }
 
+/**
+ * The backend a company's tracker or knowledge base runs on, derived as the
+ * engine derives it (`config.Company.TrackerBackendFor` and
+ * `KnowledgeBackendFor`): the backend the document names, else the vendor
+ * whose block is connected, else the engine's own.
+ *
+ * NOT `isConnected`: a seat's or a unit's `project` and `space` are
+ * vendor-neutral, so they mean something on the engine's own tracker and
+ * knowledge base — the default, which needs no block at all — and only a
+ * company that runs NONE has nothing for them to name.
+ */
+export function backendFor(company: CompanyDocument, axis: "tracker" | "knowledge"): string {
+  const named = getPath(company, [axis, "backend"]);
+  if (typeof named === "string" && named !== "") return named;
+  if (axis === "tracker") return isConnected(company, "jira") ? "jira" : "native";
+  return isConnected(company, "confluence") ? "confluence" : "native";
+}
+
 /** Whether GitLab provisioning is connected: the block per-seat access levels live in. */
 export function hasGitLabProvisioning(company: CompanyDocument): boolean {
   return isRecord(getPath(company, ["integrations", "gitlab", "provisioning"]));

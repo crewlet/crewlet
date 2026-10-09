@@ -97,9 +97,9 @@ describe("an untouched form", () => {
       integrations: {
         slack: { channel: "C1 " },
         mattermost: { channel: " eng", username: "dev-bot " },
-        jira: { project: "OPS " },
-        confluence: { space: " ENG" },
       },
+      project: "OPS ",
+      space: " ENG",
     };
     const initial = seatForm(padded, "");
     expect(
@@ -134,7 +134,7 @@ describe("an untouched form", () => {
       name: "Ops",
       type: "team ",
       channel: " ops",
-      integrations: { jira: { project: " OPS" } },
+      project: " OPS",
     };
     const unitInitial = unitForm(unit);
     expect(unitParts("unit:Ops", unitInitial, { ...unitInitial, purpose: "Run it" })).toEqual([
@@ -301,7 +301,6 @@ describe("a seat", () => {
       ...initial,
       githubTier: "review",
       githubRepos: ["acme/api"],
-      jira: " OPS ",
     };
     expect(seatParts("seat:dev", dev(), initial, form, { editableHandle: false })).toEqual([
       {
@@ -310,9 +309,36 @@ describe("a seat", () => {
         set: [
           { path: ["integrations", "github", "tier"], value: "review" },
           { path: ["integrations", "github", "repos"], value: ["acme/api"] },
-          { path: ["integrations", "jira", "project"], value: "OPS" },
         ],
       },
+    ]);
+  });
+
+  // A seat's project and space are VENDOR-NEUTRAL keys at the top of the seat
+  // (`config.Role.Project`, `config.Role.Space`): they name a container on
+  // whichever tracker and knowledge base the company runs, the engine's own
+  // included. Under `integrations:` they were a block the engine does not
+  // have, so the box read empty over a seat's real project and a save that
+  // wrote one was refused as an unknown key.
+  test("a seat's project and space are read and written at the top of the seat", () => {
+    const owner: ConfigRole = { name: "Dev", project: "OPS", space: "DOCS" };
+    const initial = seatForm(owner, "");
+    expect([initial.project, initial.space]).toEqual(["OPS", "DOCS"]);
+    const form = { ...initial, project: " SUP ", space: "" };
+    expect(seatParts("seat:dev", owner, initial, form, { editableHandle: false })).toEqual([
+      {
+        type: "updateSeat",
+        target: "seat:dev",
+        set: [{ path: ["project"], value: "SUP" }, { path: ["space"] }],
+      },
+    ]);
+
+    // A unit's are the same two keys, at the top of the unit.
+    const unit = { name: "Ops", project: "OPS", space: "RUN" };
+    const unitInitial = unitForm(unit);
+    expect([unitInitial.project, unitInitial.space]).toEqual(["OPS", "RUN"]);
+    expect(unitParts("unit:Ops", unitInitial, { ...unitInitial, space: "OPS" })).toEqual([
+      { type: "updateUnit", target: "unit:Ops", set: [{ path: ["space"], value: "OPS" }] },
     ]);
   });
 });

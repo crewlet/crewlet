@@ -109,10 +109,10 @@ export function getPath(value: unknown, path: readonly string[]): unknown {
  * is `undefined`.
  *
  * Setting creates the objects on the way. Removing PRUNES the objects the
- * removal emptied: clearing the only key of `integrations.jira` leaves no
- * `integrations: { jira: {} }` behind, because an empty block is not "the
- * same document minus one field" to the engine (an empty Jira block still
- * decodes as a block) and it would show up as an edit nobody made.
+ * removal emptied: clearing the only key of a seat's `integrations.slack`
+ * leaves no `integrations: { slack: {} }` behind, because an empty block is
+ * not "the same document minus one field" to the engine (an empty Slack block
+ * still decodes as a block) and it would show up as an edit nobody made.
  */
 export function setPath(record: JsonRecord, path: readonly string[], value: unknown): JsonRecord {
   if (path.length === 0) throw new RangeError("setPath: the path is empty");
