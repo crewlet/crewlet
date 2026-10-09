@@ -444,17 +444,26 @@ providers:
                                         #   never the engine's, so declare anything else
                                         #   the CLI needs here
         auth:
-          mode: subscription            # subscription | api-key | inherit-env
+          mode: subscription            # subscription | api-key | inherit-env.
+                                        #   api-key puts the entry's ONE api_keys value
+                                        #   in the CLI's key variable, and is refused on
+                                        #   a CLI with none (hermes, pi, opencode,
+                                        #   kimi-code); api_keys is refused in any
+                                        #   other mode, since nothing would read it
           token: ""                     # optional — ${VAR} holding a headless
                                         #   subscription token; empty falls back to the
-                                        #   profile's own var (CLAUDE_CODE_OAUTH_TOKEN)
+                                        #   profile's own var (CLAUDE_CODE_OAUTH_TOKEN).
+                                        #   subscription mode only, and only on a CLI
+                                        #   that mints one (claude-code); refused
+                                        #   elsewhere, where it would reach nothing
           credential_bundle: ""         # optional — ${VAR} holding a `crewlet llm export`
                                         #   blob; empty falls back to
                                         #   CREWLET_LLM_CLI_<KEY>_CREDENTIALS
         overrides: {}                   # optional — replace any profile field when a
                                         #   vendor renames a flag OR moves the field the
                                         #   answer lives in (`text_paths`); validated
-                                        #   here, so a typo fails `crewlet validate`.
+                                        #   here, so a typo is refused by `crewlet
+                                        #   validate` and by every API write.
                                         #   A moved answer field is the drift that
                                         #   passes validation and fails at a seat's
                                         #   first turn — `crewlet llm doctor` names it

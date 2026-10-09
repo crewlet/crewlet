@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/providers/llm/anthropic/claudemodel"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // Providers is the Tier B model surface: which LLMs a seat can be pointed
@@ -633,6 +635,7 @@ func (l *LLMProvider) validate(path Path) error {
 				"Remove the block, or change the type", kind)
 	case l.CLI != nil:
 		p.wrap(l.CLI.validate(at(path, "cli")))
+		p.wrap(l.validateCLIProfile(path))
 	}
 
 	if kind == LLMOpenAICompatible && strings.TrimSpace(l.BaseURL) == "" {
@@ -871,8 +874,10 @@ const (
 	// secret store, or the credential files `crewlet llm login` wrote.
 	// The default, and the point of this backend.
 	AuthSubscription CLIAgentAuthMode = "subscription"
-	// AuthAPIKey puts the first configured api_key into the CLI's key
-	// variable, billing the metered account.
+	// AuthAPIKey puts the entry's one api_keys value into the CLI's key
+	// variable (its profile's api_key_env), billing the metered account.
+	// Refused on a CLI whose profile names no such variable, where the key
+	// would reach nothing.
 	AuthAPIKey CLIAgentAuthMode = "api-key"
 	// AuthInheritEnv forwards whichever of the two variables the engine's
 	// own environment has — an escape hatch for an unusual CLI, and the
@@ -896,6 +901,9 @@ type CLIAgentAuth struct {
 	// Empty falls back to the profile's own token variable. This is the
 	// best headless path where a CLI offers one: no credential files to
 	// sync, no refresh rotation, and it survives an ephemeral container.
+	// Read only under auth.mode subscription and only by a CLI whose
+	// profile names a token_env; set anywhere else it is refused, because
+	// it would reach nothing.
 	Token string `secret:"true" yaml:"token,omitempty" json:"token,omitempty" desc:"${VAR} holding a long-lived subscription token."`
 
 	// CredentialBundle is a ${VAR} reference to a bundle exported by
@@ -1084,6 +1092,138 @@ func (c *CLIAgent) validate(path Path) error {
 		// backend for self".
 		p.add(at(path, "run_in"), ErrUnknownValue, "%q (want %s)",
 			c.RunIn, names(BackendPlacements()))
+	}
+	return p.err()
+}
+
+// validateCLIProfile holds a cli-agent entry to the profile it drives — the
+// built-in profile with cli.overrides merged in, loaded by the same
+// [cliprofile.Load] the backend is built from — and its credentials to the
+// variables that profile names.
+//
+// HERE, AND NOT ONLY WHERE THE BACKEND IS BUILT, because building it is what
+// `crewlet validate` and every node's apply do and what no API write does: a
+// PUT, a PATCH, a setup write or a revert runs these rules and never builds a
+// provider. Judged at the build alone, an override typo or a key with nowhere
+// to go was admitted by the API, activated, and then refused by every node.
+//
+// RUNNABLE rather than admission rules, because each says the entry cannot
+// run as written: the profile does not load, or a credential the operator
+// configured never reaches the CLI. The cost is the rolling-upgrade case a
+// runnable rule always has — a newer build whose profile gained a variable
+// admits an entry an older node refuses — and refusing it there is the honest
+// answer, since the older node would drop the credential.
+//
+// The credential rules exist because the backend's applyAuth (in
+// internal/providers/llm/cliagent) places a credential only where the profile
+// names a variable for it and drops it silently otherwise: an api-key entry on a CLI with no api_key_env
+// ran signed in to nothing, and so did a token on a CLI with no token_env.
+// Every such shape is refused, naming the route the CLI does read.
+func (l *LLMProvider) validateCLIProfile(path Path) error {
+	cli := l.CLI
+	if cli.Agent != "" && !cli.Agent.Valid() {
+		return nil // reported at cli.agent; there is no profile to judge
+	}
+	var p problems
+	profile, err := cliprofile.Load(cli.Name(), cli.Overrides)
+	switch {
+	case errors.Is(err, cliprofile.ErrOverrides):
+		p.add(at(path, "cli.overrides"), ErrShape, "%v", err)
+		return p.err()
+	case err != nil:
+		p.add(at(path, "cli.overrides"), ErrConflict, "%v", err)
+		return p.err()
+	}
+
+	mode := cli.Auth.Mode
+	if mode == "" {
+		mode = AuthSubscription
+	}
+	agent := cli.Name()
+
+	switch {
+	case len(l.APIKeys) > 0 && mode != AuthAPIKey:
+		p.add(at(path, "api_keys"), ErrConflict,
+			"a cli-agent entry reads api_keys only under cli.auth.mode api-key, which "+
+				"puts the first one in the CLI's key variable; under %s it reaches "+
+				"nothing. Set auth.mode: api-key, or drop api_keys", mode)
+	case len(l.APIKeys) > 1:
+		p.add(at(path, "api_keys"), ErrConflict,
+			"a cli-agent entry holds one login and rotates nothing, so only the "+
+				"first key would ever reach the CLI: keep one, and put another key "+
+				"on an entry of its own in the seat's fallback chain")
+	}
+
+	if mode == AuthAPIKey {
+		switch {
+		case profile.APIKeyEnv == "" && profile.EnvSignIn:
+			p.add(at(path, "cli.auth.mode"), ErrConflict,
+				"api-key puts the api_keys value in the CLI's key variable, and the "+
+					"%q profile names none (api_key_env): this CLI reads each model "+
+					"provider's key from that provider's own variable. Leave auth.mode "+
+					"at subscription, drop api_keys, and set the key in cli.env under "+
+					"the variable of the provider its model names, as a ${VAR} — e.g. "+
+					`OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"`, agent)
+		case profile.APIKeyEnv == "":
+			p.add(at(path, "cli.auth.mode"), ErrConflict,
+				"api-key puts the api_keys value in the CLI's key variable, and the "+
+					"%q profile names none (api_key_env), so the key would reach "+
+					"nothing: sign the CLI in with `crewlet llm login` instead, or, if "+
+					"your build of the CLI does read a key variable, name it with "+
+					"cli.overrides.api_key_env", agent)
+		case len(l.APIKeys) == 0:
+			p.add(at(path, "api_keys"), ErrMissing,
+				"auth.mode api-key puts the first api_keys value in %s, and this entry "+
+					`names none: add one, e.g. ["${%s}"]`, profile.APIKeyEnv, profile.APIKeyEnv)
+		}
+	}
+
+	if cli.Auth.Token != "" {
+		switch {
+		case profile.TokenEnv == "":
+			p.add(at(path, "cli.auth.token"), ErrConflict,
+				"the %q profile names no token_env — this CLI mints no headless "+
+					"token — so the token would reach nothing: remove it, or name the "+
+					"variable your build of the CLI reads with cli.overrides.token_env", agent)
+		case mode != AuthSubscription:
+			p.add(at(path, "cli.auth.token"), ErrConflict,
+				"a token is read only under auth.mode subscription: %s removes %s "+
+					"from the CLI's environment or forwards the engine's own. Remove "+
+					"it, or set auth.mode: subscription", mode, profile.TokenEnv)
+		}
+	}
+
+	if mode == AuthInheritEnv && profile.TokenEnv == "" && profile.APIKeyEnv == "" {
+		remedy := "sign the CLI in with `crewlet llm login`"
+		if profile.EnvSignIn {
+			remedy = "set the key in cli.env under the variable of the provider " +
+				"its model names, as a ${VAR}"
+		}
+		p.add(at(path, "cli.auth.mode"), ErrConflict,
+			"inherit-env forwards the profile's token_env and api_key_env from the "+
+				"engine's own environment, and the %q profile names neither, so "+
+				"nothing would be forwarded: leave auth.mode at subscription and %s",
+			agent, remedy)
+	}
+
+	// The two variables cli.auth owns. applyAuth sets or removes each on
+	// every call AFTER cli.env is layered in, so a value here was either
+	// replaced or deleted before the CLI started — and which, depended on
+	// the mode and on whether the store held a token, which is the
+	// "configured it and nothing happened" this file refuses everywhere.
+	for _, name := range slices.Sorted(maps.Keys(cli.Env)) {
+		switch name {
+		case "":
+			continue
+		case profile.TokenEnv:
+			p.add(entry(at(path, "cli.env"), name), ErrConflict,
+				"%s is this CLI's token variable, which cli.auth sets or removes on "+
+					"every call: give the token as cli.auth.token", name)
+		case profile.APIKeyEnv:
+			p.add(entry(at(path, "cli.env"), name), ErrConflict,
+				"%s is this CLI's key variable, which cli.auth sets or removes on "+
+					"every call: give the key as api_keys with cli.auth.mode api-key", name)
+		}
 	}
 	return p.err()
 }

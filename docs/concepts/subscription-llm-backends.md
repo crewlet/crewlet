@@ -1095,8 +1095,10 @@ cli:
 ```
 
 Lists replace wholesale (position matters in an argv). Overrides are
-validated against the profile model, so a typo fails `crewlet validate`
-rather than an agent's first turn. `crewlet llm doctor` prints the CLI
+validated against the profile model, so a typo is refused by `crewlet
+validate` and by every API write of the configuration — `PUT` and `PATCH
+/config`, a per-entity write, a revert — rather than by an agent's first
+turn or by every node's apply after the API had already activated it. `crewlet llm doctor` prints the CLI
 version the built-in profile was written against next to the version you
 actually have.
 
@@ -1272,6 +1274,25 @@ errors. Raise it on a large host with a plan that permits it.
 purpose: a backend that silently picked up a stray `ANTHROPIC_API_KEY`
 would bill the metered account while you believed you were on a flat-rate
 plan.
+
+**Every credential an entry configures has to reach the CLI, or the entry
+is refused.** The engine puts a credential only into a variable the profile
+names for it — `api_key_env` for a key, `token_env` for a headless token —
+so each of these used to validate and then run signed in to nothing:
+
+| Written | Refused because | Instead |
+|---|---|---|
+| `auth.mode: api-key` on a CLI whose profile names no `api_key_env` (`hermes`, `pi`, `opencode`, `kimi-code`) | the key has no variable to go in | `hermes`, `pi`, `opencode`: leave `auth.mode` at `subscription` and set the key in `cli.env` under its provider's own variable ([above](#signing-in-with-a-provider-key-through-clienv-hermes-pi-opencode)). `kimi-code`: `crewlet llm login`. A build of the CLI that does read a key variable: name it with `cli.overrides.api_key_env` |
+| `auth.mode: api-key` with no `api_keys` | there is no key to put in the variable | add one, e.g. `api_keys: ["${ANTHROPIC_API_KEY}"]` |
+| `api_keys` under `subscription` or `inherit-env` | only `api-key` mode reads it | set `auth.mode: api-key`, or drop it |
+| more than one `api_keys` value | an entry holds one login and rotates nothing | one key per entry; another key on an entry of its own in the seat's fallback chain |
+| `auth.token` on a CLI whose profile names no `token_env` (every built-in profile but `claude-code`) | the CLI mints no headless token | remove it |
+| `auth.token` under `api-key` or `inherit-env` | `api-key` removes the token variable and `inherit-env` forwards the engine's own | `auth.mode: subscription` |
+| `auth.mode: inherit-env` on a CLI that names neither variable | nothing would be forwarded | `subscription`, with the key in `cli.env` or a login |
+| the profile's `token_env` or `api_key_env` in `cli.env` | `cli.auth` sets or removes those on every call | `auth.token`, or `api_keys` with `auth.mode: api-key` |
+
+Each is checked against the profile with `cli.overrides` merged in, by every
+write path, and each refusal names the field and the route to take.
 
 **A profile's `passthrough_env` may not name a credential**, and the
 engine refuses one that does. Everything listed there is forwarded from

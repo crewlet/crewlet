@@ -3,6 +3,7 @@ package cliprofile
 import (
 	"bytes"
 	_ "embed"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -120,6 +121,12 @@ func cloneMap(in map[string]string) map[string]string {
 	return out
 }
 
+// ErrOverrides marks a `cli.overrides` map that does not decode into a
+// profile — a key no profile field has, or a value of the wrong shape — as
+// opposed to a merged profile that decodes and breaks a rule. Config reports
+// the two under different kinds, so an editor can be pointed at the typo.
+var ErrOverrides = errors.New("cli.overrides does not decode into a profile")
+
 // Load resolves the profile for one provider entry: the built-in table
 // entry for name, with overrides merged in, validated.
 //
@@ -137,7 +144,7 @@ func Load(name string, overrides map[string]any) (Profile, error) {
 	if len(overrides) > 0 {
 		merged, err := applyOverrides(base, overrides)
 		if err != nil {
-			return Profile{}, fmt.Errorf("cli-agent %q: cli.overrides: %w", name, err)
+			return Profile{}, fmt.Errorf("cli-agent %q: %w: %w", name, ErrOverrides, err)
 		}
 		base = merged
 	}

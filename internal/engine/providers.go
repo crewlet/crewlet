@@ -294,6 +294,9 @@ func buildCLIAgent(key string, spec config.LLMProvider, r *config.Resolver, apiK
 	// `crewlet llm login <key> -capture-token` writes the token into the
 	// store, and an entry that had to name it explicitly would leave every
 	// operator wiring up a ${VAR} for a value Crewlet itself just wrote.
+	// Config has already loaded this same merged profile and held the
+	// entry's credentials to it (LLMProvider.validateCLIProfile), so a
+	// failure here is a document that never went through validation.
 	profile, err := cliprofile.Load(cli.Name(), cli.Overrides)
 	if err != nil {
 		return nil, fmt.Errorf("engine: provider %q: %w", key, err)
