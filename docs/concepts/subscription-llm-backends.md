@@ -864,19 +864,57 @@ entirely — `crewlet llm login -from-host` says so after it runs.
 for a deployment where the engine runs as a different user than the one
 that logged the CLI in.
 
-`crewlet llm doctor` looks for a host login too, so "no login" on a
+`crewlet llm doctor` looks for a host login too, so "no sign-in" on a
 machine where the CLI plainly works explains itself:
 
 ```
 credentials   : none on disk
 host login    : .claude/.credentials.json (not adopted)
+token env     : unset
+sign-in       : none
 problems:
-  - no login of its own, but this machine has one at
-    ~/.claude/.credentials.json — adopt it with
-    `crewlet llm login default -from-host`, or mint a headless
-    CLAUDE_CODE_OAUTH_TOKEN with `-capture-token` (preferred: no
+  - no sign-in for "default": no credential files in
+    /var/lib/crewlet/llm-cli/default/credentials, and nothing in the
+    environment the CLI is given authenticates it — this machine has
+    a login at ~/.claude/.credentials.json: adopt it with
+    `crewlet llm login default --from-host`, or mint a headless
+    CLAUDE_CODE_OAUTH_TOKEN with `--capture-token` (preferred: no
     shared refresh token)
 ```
+
+The `sign-in` line is read off the environment the CLI is actually given,
+after `auth.mode` has set and removed what it does — never off the
+configuration beside it. So a token that `auth.mode: api-key` removes is not
+a sign-in, a metered key that subscription mode removes from `cli.env` is not
+one either, and both `doctor` and `crewlet llm list` give the same answer.
+
+### Signing in with a provider key through `cli.env` (hermes, pi, opencode)
+
+`hermes`, `pi` and `opencode` each front many model providers and read each
+provider's key from its own variable — `OPENROUTER_API_KEY`,
+`ANTHROPIC_API_KEY`, `NVIDIA_API_KEY` and so on — so their profiles name no
+single `api_key_env`. Their key goes in `cli.env` instead, as a `${VAR}`,
+with `auth.mode` left at `subscription`:
+
+```yaml
+providers:
+  llm:
+    herm:
+      type: cli-agent
+      model: anthropic/claude-sonnet-4
+      cli:
+        agent: hermes
+        env:
+          OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"
+```
+
+Their profiles declare `env_sign_in`, which is what makes `doctor` count a
+credential-named variable in `cli.env` as a sign-in (`sign-in : cli.env sets
+OPENROUTER_API_KEY`) and report one whose `${VAR}` resolved to nothing. It
+counts the name, not whether the provider accepts the key: the smoke test is
+what proves that. A CLI that does not read its key from the environment —
+`kimi-code` reads its metered key only from `config.toml` in the credential
+directory — does not declare it, and a key in its `cli.env` is not counted.
 
 ### 1. Broker the vendor's own login (any CLI)
 
@@ -1032,14 +1070,14 @@ entirely.
 | `codex` | `codex` | ChatGPT Plus / Pro | `codex login`. Streams JSONL events; runs `--sandbox read-only`. |
 | `gemini-cli` | `gemini` | Google AI Pro / free tier | First run starts the auth picker. `GOOGLE_CLOUD_PROJECT` passes through. |
 | `qwen-code` | `qwen` | Qwen OAuth | Gemini CLI fork; same shape. |
-| `opencode` | `opencode` | Anthropic / Copilot / any | `opencode auth login`; the one built-in profile with a credential login. |
+| `opencode` | `opencode` | Anthropic / Copilot / any | `opencode auth login`; the one built-in profile with a credential login. A provider key goes in `cli.env` under that provider's own variable, and `doctor` counts it — see [Signing in with a provider key](#signing-in-with-a-provider-key-through-clienv-hermes-pi-opencode). |
 | `cursor-agent` | `cursor-agent` | Cursor seat | `cursor-agent login`. A Cursor API key (`CURSOR_API_KEY`, its `api_key_env`) is the headless alternative, reached through `auth.mode: api-key`. |
 | `copilot` | `copilot` | GitHub Copilot seat | Prompt goes on argv, so very long transcripts are bounded by `ARG_MAX`. Authenticates with a GitHub token, so `GITHUB_TOKEN` is its `api_key_env` — reached via `auth.mode: api-key` or `inherit-env`, never forwarded silently. |
 | `grok` | `grok` | xAI | **xAI's own CLI** from [x.ai/cli](https://x.ai/cli), not the same-named npm package. Accepts `XAI_API_KEY` (the variable its own signed-out message names) through `auth.mode: api-key`. |
 | `muse-code` | `muse` | Muse Code subscription (Everyday / High / Power Usage), or pay-as-you-go | `muse login` / `muse logout`; the browser sign-in stores `~/.config/muse/auth.json`, which `-from-host` adopts. **No status command** — this CLI has none. Mints no headless token: `META_API_KEY` is a *metered* Model API key, reached through `auth.mode: api-key`. Runs `muse exec --json`, denies its tools through a seeded `run.toolset`, and puts the prompt in a **file** rather than on argv. Reports no token counts anywhere on its stream, so they are estimated. |
 | `kimi-code` | `kimi` | Kimi Code OAuth (Moonshot) | **MoonshotAI's own CLI**, `@moonshot-ai/kimi-code` — not the unscoped `kimi-code` package on npm, which wraps Claude Code behind a proxy and installs its own `kimi` (a `1.0.x` version is the other one). `kimi login` runs a device-code flow; there is no logout or status subcommand. Runs `--output-format stream-json`, because the default `text` output prefixes every line with `• ` and re-wraps it, which destroys the tool envelope. Its tools are denied in the **agent file** that also carries the system prompt — measured, that is 25 tools down to 1, and an 8.8 KB vendor system prompt replaced by the seat's own. Reports no token counts on its stream, so they are estimated. |
-| `hermes` | `hermes` | Nous Portal, or any of 30+ providers it fronts | `hermes auth` for the credential wizard, `hermes status` for state; `hermes auth logout` needs a provider name, so no logout is declared. Runs `hermes -z`, whose contract is the final response text and nothing else — so the tokens come from `--usage-file` instead. Tools are denied with `--toolsets web` on argv, which replaces the run's enabled set; **`-p` selects a profile on this CLI**, not a prompt. |
-| `pi` | `pi` | Claude Pro/Max, ChatGPT Plus/Pro, GitHub Copilot — whichever it is logged into | `@earendil-works/pi-coding-agent`. **No headless login**: `/login` is a slash command, so `crewlet llm login` starts its TUI in the credential directory and you type it there. Denies every tool with `--no-tools`, which is honest here because its built-in set ships no web tool at all. Prompt *and* system prompt both on argv. Tokens estimated — see [Token accounting](#token-accounting). |
+| `hermes` | `hermes` | Nous Portal, or any of 30+ providers it fronts | `hermes auth` for the credential wizard, `hermes status` for state; `hermes auth logout` needs a provider name, so no logout is declared. Runs `hermes -z`, whose contract is the final response text and nothing else — so the tokens come from `--usage-file` instead. Tools are denied with `--toolsets web` on argv, which replaces the run's enabled set; **`-p` selects a profile on this CLI**, not a prompt. A provider key (`OPENROUTER_API_KEY`, …) goes in `cli.env`, and `doctor` counts it — see [Signing in with a provider key](#signing-in-with-a-provider-key-through-clienv-hermes-pi-opencode). |
+| `pi` | `pi` | Claude Pro/Max, ChatGPT Plus/Pro, GitHub Copilot — whichever it is logged into | `@earendil-works/pi-coding-agent`. **No headless login**: `/login` is a slash command, so `crewlet llm login` starts its TUI in the credential directory and you type it there. Denies every tool with `--no-tools`, which is honest here because its built-in set ships no web tool at all. Prompt *and* system prompt both on argv. Tokens estimated — see [Token accounting](#token-accounting). A provider key goes in `cli.env` under that provider's own variable, and `doctor` counts it. |
 | `custom` | — | — | Ships nothing; declare everything under `overrides`. |
 
 ### CLI flags drift — and that's a config edit, not a release
@@ -1158,6 +1196,7 @@ A key not in this table is refused by name. Maps (`config_env`, `env`,
 | `passthrough_env` | Engine variables forwarded to the child. Never a credential. |
 | `token_env` | The variable a headless subscription token goes in (`cli.auth.token`). |
 | `api_key_env` | The variable a metered key goes in (`api_keys` under `auth.mode: api-key`). |
+| `env_sign_in` | The CLI reads its model provider's key from its own environment, so a credential-named variable in `cli.env` signs it in. |
 | `credential_paths` | The login files, relative to the seat home. |
 | `volatile_paths` | Sessions, transcripts and history, deleted before and after every call. |
 | `login_args` | The vendor's own interactive login, for `crewlet llm login`. |
@@ -1493,7 +1532,7 @@ key you were issued. That is just an endpoint.
 ## Operating it
 
 ```bash
-crewlet llm list                      # providers, agent, model, login state
+crewlet llm list                      # providers, agent, model, sign-in
 crewlet llm doctor                    # verify them all, anthropic entries too
 crewlet llm doctor default -no-smoke # skip the real completions
 crewlet llm status default            # ask the CLI who it's logged in as
@@ -1501,7 +1540,7 @@ crewlet llm logout default            # revoke locally + delete credentials
 ```
 
 `doctor` is the command that matters. It checks the binary is on `PATH`,
-runs its version probe, reports whether a login is present, says whether
+runs its version probe, reports how it is signed in, says whether
 token counts will be real or estimated — and then runs **three real
 completions**: a smoke test with a real tool, because a profile can look
 perfect and still not produce a parseable tool call; a **shell probe**,
@@ -1521,6 +1560,7 @@ written for   : Claude Code CLI 2.x (`claude --version`)
 state dir     : /var/lib/crewlet/llm-cli/subscription
 credentials   : present
 token env     : set
+sign-in       : credential files in /var/lib/crewlet/llm-cli/subscription/credentials; headless token in CLAUDE_CODE_OAUTH_TOKEN
 token usage   : reported by CLI
 smoke test    : ok — 812 in / 34 out
 local tools   : denied by profile — probe: refused

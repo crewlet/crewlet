@@ -541,6 +541,30 @@ type Profile struct {
 	// under auth.mode api-key or inherit-env.
 	APIKeyEnv string `yaml:"api_key_env,omitempty"`
 
+	// EnvSignIn declares that the CLI reads its model provider's credential
+	// from its OWN environment, under that provider's own variable — so a
+	// credential-named variable the operator sets in `cli.env` signs it in.
+	// False, the default, means a credential in cli.env is not a sign-in
+	// this CLI reads, which is the right answer for a profile that says
+	// nothing.
+	//
+	// A DECLARATION RATHER THAN A LIST OF NAMES, because the CLIs that need
+	// it front dozens of providers each (hermes thirty-odd, pi twenty-odd,
+	// OpenCode every provider on its catalogue) and every one has its own
+	// variable: a list would be wrong for whichever provider it missed, and
+	// a profile naming one variable would be wrong for every other entry —
+	// which is why these profiles have no api_key_env at all.
+	//
+	// And a declaration at all, rather than counting any credential in
+	// cli.env, because only the profile knows whether the CLI reads one:
+	// kimi-code is handed KIMI_API_KEY and ignores it, reading its key only
+	// from config.toml.
+	//
+	// Read by `crewlet llm doctor` and `crewlet llm list` to decide whether
+	// an entry is signed in, and by config to say where the key of an entry
+	// that has no api_key_env goes instead.
+	EnvSignIn bool `yaml:"env_sign_in,omitempty"`
+
 	// CredentialPaths are the login files, relative to the seat home.
 	// They are what a bundle may carry and what is synced back after a
 	// refresh; anything else in the home is conversation state.

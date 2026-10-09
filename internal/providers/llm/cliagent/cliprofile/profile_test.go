@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -353,5 +354,34 @@ func TestEachProfileNamesTheVariablesItsCLIReads(t *testing.T) {
 			t.Errorf("%s: api_key_env %q token_env %q, want %q %q",
 				name, p.APIKeyEnv, p.TokenEnv, w[0], w[1])
 		}
+	}
+}
+
+// Which CLIs read their model provider's key from their own environment, as
+// each profile's note records it from the vendor. Declared where it is not
+// true, `doctor` reports a key the CLI ignores as a sign-in (kimi-code is
+// handed KIMI_API_KEY and reads only config.toml); missing where it is, the
+// supported route is reported as no sign-in at all, which is what hermes
+// suffered.
+func TestEnvSignInIsDeclaredExactlyWhereTheCLIReadsItsKeyFromItsEnvironment(t *testing.T) {
+	t.Parallel()
+	reads := []string{"hermes", "opencode", "pi"}
+	for _, name := range BuiltinNames() {
+		p, _ := Builtin(name)
+		if got, want := p.EnvSignIn, slices.Contains(reads, name); got != want {
+			t.Errorf("%s: env_sign_in = %v, want %v", name, got, want)
+		}
+	}
+	// And like every field it is an operator's to declare for a CLI this
+	// build does not ship.
+	p, err := Load("custom", map[string]any{
+		"binary": "my-gateway-cli", "complete_args": []any{"-p"}, "output": "text",
+		"env_sign_in": true,
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !p.EnvSignIn {
+		t.Error("cli.overrides.env_sign_in did not reach the profile")
 	}
 }

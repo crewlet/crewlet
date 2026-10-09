@@ -68,7 +68,7 @@ const llmUsage = `crewlet llm — subscription CLI backends: logins, health and 
 and the health of the anthropic entries beside them
 
 Usage:
-  crewlet llm list                        Providers, agent, model and login state
+  crewlet llm list                        Providers, agent, model and how each is signed in
   crewlet llm doctor [KEY]                Verify cli-agent and anthropic entries end to end
                                           (-no-smoke skips the real calls)
   crewlet llm login KEY                   Broker the vendor's own interactive login

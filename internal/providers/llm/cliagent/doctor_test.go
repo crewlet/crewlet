@@ -257,14 +257,15 @@ func TestTheReportCarriesEveryLineTheDocsPromise(t *testing.T) {
 		Provider: "subscription", Agent: "claude-code", Binary: "/usr/local/bin/claude",
 		BinaryPath: "/usr/local/bin/claude", Version: "2.0.31 (Claude Code)",
 		WrittenFor: "Claude Code CLI 2.x", StateDir: "/var/lib/crewlet/llm-cli/subscription",
-		Credentials: "present", TokenEnv: "set", TokenUsage: "reported by CLI",
-		Smoke: "ok — 812 in / 34 out",
+		Credentials: "present", TokenEnv: "set", SignIn: "credential files in /var/lib",
+		TokenUsage: "reported by CLI",
+		Smoke:      "ok — 812 in / 34 out",
 	}
 	var out strings.Builder
 	d.Render(&out)
 	for _, want := range []string{
 		"provider", "cli agent", "binary", "version", "written for",
-		"state dir", "credentials", "token env", "token usage", "smoke test", "problems",
+		"state dir", "credentials", "token env", "sign-in", "token usage", "smoke test", "problems",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the report is missing the %q line:\n%s", want, out.String())

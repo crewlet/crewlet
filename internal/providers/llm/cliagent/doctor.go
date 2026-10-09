@@ -98,6 +98,10 @@ type Diagnosis struct {
 	HostLogin []string
 	// TokenEnv reports whether the headless token variable is resolved.
 	TokenEnv string
+	// SignIn is every route that authenticates the child — the credential
+	// files, a token, a key, the CLI's own environment — read off the
+	// environment the child is actually given, or "none".
+	SignIn string
 	// TokenUsage is "reported by CLI" or "estimated", because a budget
 	// built on estimates is a different promise.
 	TokenUsage string
@@ -198,20 +202,10 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 				"provider run on estimates", p.agent))
 	}
 
-	if d.Credentials == "none on disk" && d.TokenEnv != "set" {
-		problem := fmt.Sprintf("no login of its own for %q", p.key)
-		if len(d.HostLogin) > 0 {
-			problem += fmt.Sprintf(
-				", but this machine has one at %s — adopt it with "+
-					"`crewlet llm login %s --from-host`", strings.Join(d.HostLogin, ", "), p.key)
-			if len(p.profile.CaptureTokenArgs) > 0 {
-				problem += fmt.Sprintf(", or mint a headless %s with `--capture-token` "+
-					"(preferred: no shared refresh token)", p.profile.TokenEnv)
-			}
-		} else {
-			problem += fmt.Sprintf(" — run `crewlet llm login %s`", p.key)
-		}
-		d.Problems = append(d.Problems, problem)
+	signIn := p.signIn()
+	d.SignIn = signIn.line()
+	if len(signIn.sources) == 0 {
+		d.Problems = append(d.Problems, p.noSignIn(d.HostLogin, signIn.unresolved))
 	}
 
 	stance := p.localToolsStance()
@@ -240,6 +234,43 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 		}
 	}
 	return d
+}
+
+// noSignIn is the problem for an entry nothing authenticates, naming every
+// route this CLI could take and, first, the one the operator already
+// configured and this process could not resolve.
+func (p *Provider) noSignIn(hostLogin, unresolved []string) string {
+	problem := fmt.Sprintf("no sign-in for %q: no credential files in %s, and nothing "+
+		"in the environment the CLI is given authenticates it", p.key, p.ws.CredentialsDir())
+	if len(unresolved) > 0 {
+		problem += fmt.Sprintf(" — cli.env sets %s, but the ${VAR} it references "+
+			"resolved to nothing: export it, or store it with `crewlet secrets set`",
+			strings.Join(unresolved, ", "))
+	}
+	if p.auth.Mode == AuthAPIKey && p.auth.APIKey == "" {
+		problem += " — auth.mode is api-key and its api_keys value resolved to " +
+			"nothing: export it, or store it with `crewlet secrets set`"
+	}
+	if len(hostLogin) > 0 {
+		problem += fmt.Sprintf(
+			" — this machine has a login at %s: adopt it with "+
+				"`crewlet llm login %s --from-host`", strings.Join(hostLogin, ", "), p.key)
+		if len(p.profile.CaptureTokenArgs) > 0 {
+			problem += fmt.Sprintf(", or mint a headless %s with `--capture-token` "+
+				"(preferred: no shared refresh token)", p.profile.TokenEnv)
+		}
+	} else {
+		problem += fmt.Sprintf(" — run `crewlet llm login %s`", p.key)
+	}
+	// Offered only when cli.env does not already try it: an entry whose
+	// reference resolved to nothing was told so above, and being told to
+	// do what it did would read as a second, different fault.
+	if p.profile.EnvSignIn && len(unresolved) == 0 {
+		problem += fmt.Sprintf(", or set the key of the provider its model names in "+
+			"cli.env, under that provider's own variable (the %q CLI reads it from "+
+			"its environment)", p.agent)
+	}
+	return problem
 }
 
 // modeName is how this entry runs, for the report.
@@ -532,6 +563,7 @@ func (d Diagnosis) Render(w io.Writer) {
 		line("host login", strings.Join(d.HostLogin, ", ")+" (not adopted)")
 	}
 	line("token env", d.TokenEnv)
+	line("sign-in", d.SignIn)
 	line("token usage", d.TokenUsage)
 	line("smoke test", d.Smoke)
 	line("local tools", d.LocalTools)
@@ -560,27 +592,10 @@ func orNone(s string) string {
 	return s
 }
 
-// LoginState is a one-word summary for `crewlet llm list`.
-func (p *Provider) LoginState() string {
-	switch {
-	case p.ws.HasLogin():
-		return "credentials"
-	case p.auth.Token != "":
-		return "token"
-	case p.auth.Mode == AuthAPIKey && p.auth.APIKey != "":
-		return "api key"
-	case p.auth.Mode == AuthInheritEnv:
-		if p.profile.TokenEnv != "" && os.Getenv(p.profile.TokenEnv) != "" {
-			return "inherited token"
-		}
-		if p.profile.APIKeyEnv != "" && os.Getenv(p.profile.APIKeyEnv) != "" {
-			return "inherited key"
-		}
-		return "none"
-	default:
-		return "none"
-	}
-}
+// LoginState is a one-word summary for `crewlet llm list`: the first route
+// the doctor's sign-in line names, or "none" — the same answer, so the two
+// commands cannot disagree about whether an entry is signed in.
+func (p *Provider) LoginState() string { return p.signIn().state() }
 
 // Vendor is the model FAMILY this provider's CLI addresses.
 //

@@ -54,13 +54,32 @@ type Auth struct {
 }
 
 // buildEnv is the complete environment for one call, as KEY=VALUE.
+func buildEnv(p cliprofile.Profile, c *Checkout, extra map[string]string, auth Auth) []string {
+	env := childEnv(p, c, extra, auth)
+	out := make([]string, 0, len(env))
+	for name, value := range env {
+		out = append(out, name+"="+value)
+	}
+	// Sorted so a failing invocation is reproducible from a log line and
+	// so tests compare an environment rather than a map iteration order.
+	slices.Sort(out)
+	return out
+}
+
+// childEnv is the environment a child is given, by name.
 //
 // Layered lowest-precedence first, so the reason each layer can override the
 // one below is visible in the order: host allowlist, then the isolation
 // variables (which nothing may override — they ARE the isolation), then the
 // profile's own fixed environment, then the profile's passthrough, then the
 // operator's cli.env, then auth.
-func buildEnv(p cliprofile.Profile, c *Checkout, extra map[string]string, auth Auth) []string {
+//
+// A map of its own, apart from [buildEnv]'s rendering, because it is also
+// what decides whether an entry is signed in ([Provider.signIn]): whether a
+// key reaches the CLI is a fact about this map after [applyAuth] has run,
+// and a second reading of the configuration beside it is what the doctor
+// had, and what drifted from it in both directions.
+func childEnv(p cliprofile.Profile, c *Checkout, extra map[string]string, auth Auth) map[string]string {
 	env := map[string]string{}
 
 	for _, name := range hostAllowlist {
@@ -100,15 +119,7 @@ func buildEnv(p cliprofile.Profile, c *Checkout, extra map[string]string, auth A
 	}
 
 	applyAuth(env, p, auth)
-
-	out := make([]string, 0, len(env))
-	for name, value := range env {
-		out = append(out, name+"="+value)
-	}
-	// Sorted so a failing invocation is reproducible from a log line and
-	// so tests compare an environment rather than a map iteration order.
-	slices.Sort(out)
-	return out
+	return env
 }
 
 // applyAuth puts the credential the mode asks for into the child environment,
