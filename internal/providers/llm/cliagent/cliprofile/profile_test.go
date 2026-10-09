@@ -107,11 +107,17 @@ func TestAnOverrideTypoIsRefused(t *testing.T) {
 
 // passthrough_env is forwarded BEFORE auth.mode is consulted, so a credential
 // named there reaches every seat whatever the mode says — the exact
-// metered-bill-on-a-flat-rate-plan failure auth.mode exists to prevent.
+// metered-bill-on-a-flat-rate-plan failure auth.mode exists to prevent. An
+// ADMISSION rule: the profile still loads, because it still runs.
 func TestAProfileMayNotPassThroughACredential(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{"ANTHROPIC_API_KEY", "GITHUB_TOKEN", "MY_SECRET", "DB_PASSWORD"} {
-		_, err := Load("claude-code", map[string]any{"passthrough_env": []any{name}})
+		p, err := Load("claude-code", map[string]any{"passthrough_env": []any{name}})
+		if err != nil {
+			t.Errorf("passthrough_env %q failed the runnable rules, which it does not break: %v", name, err)
+			continue
+		}
+		err = p.ValidateCredentials("claude-code")
 		if err == nil {
 			t.Errorf("passthrough_env accepted %q", name)
 			continue
@@ -121,10 +127,44 @@ func TestAProfileMayNotPassThroughACredential(t *testing.T) {
 		}
 	}
 	// And a genuine non-secret is still allowed, or the check is useless.
-	if _, err := Load("claude-code", map[string]any{
-		"passthrough_env": []any{"GOOGLE_CLOUD_PROJECT"},
-	}); err != nil {
+	p, err := Load("claude-code", map[string]any{"passthrough_env": []any{"GOOGLE_CLOUD_PROJECT"}})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := p.ValidateCredentials("claude-code"); err != nil {
 		t.Errorf("a non-credential passthrough was refused: %v", err)
+	}
+}
+
+// THE PREDICATE READS WHOLE NAME COMPONENTS. It decides whether an entry is
+// signed in, which keys travel into a coding box and which profile entries are
+// refused, so a loose match is wrong three ways: as substrings it read
+// HERMES_MAX_TOKENS as a key — the doctor then called an entry with no key
+// healthy — and refused Claude Code's own CLAUDE_CODE_MAX_OUTPUT_TOKENS.
+func TestACredentialNameIsJudgedByItsWholeComponents(t *testing.T) {
+	t.Parallel()
+	for name, want := range map[string]bool{
+		"OPENROUTER_API_KEY":             true,
+		"GH_TOKEN":                       true,
+		"AWS_SECRET_ACCESS_KEY":          true,
+		"GOOGLE_APPLICATION_CREDENTIALS": true,
+		"ANTHROPIC_AUTH_TOKEN":           true,
+		"CLAUDE_CODE_OAUTH_TOKEN":        true,
+		"DB_PASSWORD":                    true,
+		"MINIO_ACCESSKEY":                true,
+		"openai_api_key":                 true,
+		"GITHUB_PAT":                     true,
+		"GEMINI_API_KEYS":                true,
+		"CLAUDE_CODE_MAX_OUTPUT_TOKENS":  false,
+		"HERMES_MAX_TOKENS":              false,
+		"OPENAI_BASE_URL":                false,
+		"HTTPS_PROXY":                    false,
+		"MONKEY_PATH":                    false,
+		"AUTHOR_NAME":                    false,
+	} {
+		if got := IsCredentialName(name); got != want {
+			t.Errorf("IsCredentialName(%q) = %v, want %v", name, got, want)
+		}
 	}
 }
 
@@ -234,7 +274,8 @@ func TestNoShippedSentinelCanMatchOrdinaryText(t *testing.T) {
 // A profile's env is forwarded whatever auth.mode says, and cli.overrides is
 // stored and shown unredacted — so a key written there is both a silent bill
 // and a credential in plain text. The field's own comment always said "never
-// a credential"; nothing held it to that.
+// a credential"; nothing held it to that. An ADMISSION rule, like the
+// passthrough one: the profile loads and runs.
 func TestAProfileMayNotCarryACredentialInItsEnv(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -252,7 +293,12 @@ func TestAProfileMayNotCarryACredentialInItsEnv(t *testing.T) {
 		for k, v := range tc.extra {
 			overrides[k] = v
 		}
-		_, err := Load(tc.agent, overrides)
+		p, err := Load(tc.agent, overrides)
+		if err != nil {
+			t.Errorf("%s: env %s failed the runnable rules, which it does not break: %v", tc.agent, tc.name, err)
+			continue
+		}
+		err = p.ValidateCredentials(tc.agent)
 		if err == nil {
 			t.Errorf("%s: env %s was accepted", tc.agent, tc.name)
 			continue
@@ -263,9 +309,19 @@ func TestAProfileMayNotCarryACredentialInItsEnv(t *testing.T) {
 			}
 		}
 	}
-	// And a genuine setting still loads, or the rule refuses what env is for.
-	if _, err := Load("muse-code", map[string]any{"env": map[string]any{"MUSE_NO_AUTO_UPDATE": "1"}}); err != nil {
-		t.Errorf("a non-credential env was refused: %v", err)
+	// And genuine settings pass, or the rule refuses what env is for — the
+	// second one a real Claude Code variable a substring match refused.
+	for agent, env := range map[string]string{
+		"muse-code":   "MUSE_NO_AUTO_UPDATE",
+		"claude-code": "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+	} {
+		p, err := Load(agent, map[string]any{"env": map[string]any{env: "1"}})
+		if err != nil {
+			t.Fatalf("Load %s: %v", agent, err)
+		}
+		if err := p.ValidateCredentials(agent); err != nil {
+			t.Errorf("%s: a non-credential env %s was refused: %v", agent, env, err)
+		}
 	}
 }
 

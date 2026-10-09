@@ -129,7 +129,10 @@ func New(cfg Config) (*Provider, error) {
 	if err != nil {
 		return nil, err
 	}
-	if cfg.Model != "" && len(profile.ModelArgs) == 0 {
+	// Config refuses the same shape (on every write and at apply), so a
+	// document that reaches here with it was never validated — a caller
+	// building the provider from code.
+	if cfg.Model != "" && !profile.TakesModel() {
 		return nil, fmt.Errorf(
 			"cli-agent %q: the %q CLI takes no model flag, so model %q would be ignored — "+
 				"remove it, or declare cli.overrides.model_args",

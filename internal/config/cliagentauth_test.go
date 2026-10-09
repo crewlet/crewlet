@@ -42,7 +42,7 @@ func TestACLIAgentCredentialWithNowhereToGoIsRefused(t *testing.T) {
 			name:  "api-key on a CLI that reads no key from its environment",
 			lines: []string{`api_keys: ["${KIMI_API_KEY}"]`, "cli: {agent: kimi-code, auth: {mode: api-key}}"},
 			path:  "providers.llm.sub.cli.auth.mode", kind: ErrConflict,
-			says: "sign the CLI in with `crewlet llm login` instead",
+			says: "config.toml), so put it there",
 		},
 		{
 			name:  "api-key with no key",
@@ -85,13 +85,19 @@ func TestACLIAgentCredentialWithNowhereToGoIsRefused(t *testing.T) {
 			name:  "the key variable written into cli.env",
 			lines: []string{`cli: {agent: grok, env: {XAI_API_KEY: "${XAI_API_KEY}"}}`},
 			path:  "providers.llm.sub.cli.env.XAI_API_KEY", kind: ErrConflict,
-			says: "give the key as api_keys with cli.auth.mode api-key",
+			says: "the key as api_keys with cli.auth.mode api-key",
 		},
 		{
 			name:  "the token variable written into cli.env",
 			lines: []string{`cli: {agent: claude-code, env: {CLAUDE_CODE_OAUTH_TOKEN: "${TOK}"}}`},
 			path:  "providers.llm.sub.cli.env.CLAUDE_CODE_OAUTH_TOKEN", kind: ErrConflict,
-			says: "give the token as cli.auth.token",
+			says: "the token as cli.auth.token",
+		},
+		{
+			name:  "a credential in the profile's own env",
+			lines: []string{`cli: {agent: hermes, overrides: {env: {OPENROUTER_API_KEY: sk-or-literal}}}`},
+			path:  "providers.llm.sub.cli.overrides", kind: ErrConflict,
+			says: "put it in cli.env, which is ${VAR}-resolved",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -103,7 +109,72 @@ func TestACLIAgentCredentialWithNowhereToGoIsRefused(t *testing.T) {
 			if !strings.Contains(err.Error(), tc.says) {
 				t.Errorf("the refusal does not say %q:\n%v", tc.says, err)
 			}
+			assertAdmissionOnly(t, cliEntry(tc.lines...), tc.path)
 		})
+	}
+}
+
+// assertAdmissionOnly holds a refusal to the ADMISSION set: the revision is
+// refused on a write but applies — runnable, with the fault reported as a
+// warning at the same path — because the entry it is about still runs. An
+// apply that refused it would take a node off the fleet's epoch during a
+// rolling upgrade over a revision a newer peer admitted.
+func assertAdmissionOnly(t *testing.T, doc, path string) {
+	t.Helper()
+	cfg, err := ParseCompanyDocument([]byte(doc))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if err := cfg.ValidateRunnable(); err != nil {
+		t.Errorf("ValidateRunnable() = %v, want nil: the entry runs, so an apply must not refuse it", err)
+	}
+	if err := cfg.ValidateAdmission(); err == nil || !strings.Contains(err.Error(), path) {
+		t.Errorf("ValidateAdmission() = %v, want a refusal at %s", err, path)
+	}
+	warned := false
+	for _, w := range cfg.AdmissionWarnings() {
+		warned = warned || w.Path == path
+	}
+	if !warned {
+		t.Errorf("an applied revision is not warned about at %s: %+v", path, cfg.AdmissionWarnings())
+	}
+}
+
+// AN UNKNOWN AUTH MODE IS ONE FAULT, reported where it is. The credential
+// rules each state what a mode does with a credential, and judged against a
+// mode that does not exist they drew refusals naming "apikey" as though it
+// removed a token and ignored a key.
+func TestAnUnknownCLIAuthModeIsReportedOnce(t *testing.T) {
+	t.Parallel()
+	doc := cliEntry(`api_keys: ["${K}"]`, `cli: {agent: claude-code, auth: {mode: apikey, token: "${T}"}}`)
+	cfg, err := ParseCompanyDocument([]byte(doc))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	problems := Problems(cfg.Validate())
+	if len(problems) != 1 || problems[0].Path != "providers.llm.sub.cli.auth.mode" {
+		t.Errorf("want exactly one problem, at cli.auth.mode; got %+v", problems)
+	}
+}
+
+// A PROFILE WITH NO MODEL FLAG CANNOT RUN AN ENTRY, and every entry names a
+// model: the backend refuses to build rather than drop it. That refusal lived
+// only in the backend, so every API write admitted the shape and every node's
+// apply then refused it. A RUNNABLE rule, unlike the credential ones: the
+// provider cannot be built.
+func TestAProfileWithNoModelFlagIsRefusedOnEveryPath(t *testing.T) {
+	t.Parallel()
+	doc := cliEntry("cli: {agent: codex, overrides: {model_args: []}}")
+	err := rejects(t, doc, "providers.llm.sub.cli.overrides.model_args")
+	if !errors.Is(err, ErrMissing) || !strings.Contains(err.Error(), `"--model", "{model}"`) {
+		t.Errorf("want a missing-field refusal showing the flag to declare, got %v", err)
+	}
+	cfg, err := ParseCompanyDocument([]byte(doc))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if err := cfg.ValidateRunnable(); err == nil {
+		t.Error("ValidateRunnable() admitted an entry whose backend cannot be built")
 	}
 }
 

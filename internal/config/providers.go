@@ -1098,27 +1098,19 @@ func (c *CLIAgent) validate(path Path) error {
 
 // validateCLIProfile holds a cli-agent entry to the profile it drives — the
 // built-in profile with cli.overrides merged in, loaded by the same
-// [cliprofile.Load] the backend is built from — and its credentials to the
-// variables that profile names.
+// [cliprofile.Load] the backend is built from — and its model to that
+// profile's model flag.
 //
 // HERE, AND NOT ONLY WHERE THE BACKEND IS BUILT, because building it is what
 // `crewlet validate` and every node's apply do and what no API write does: a
 // PUT, a PATCH, a setup write or a revert runs these rules and never builds a
-// provider. Judged at the build alone, an override typo or a key with nowhere
-// to go was admitted by the API, activated, and then refused by every node.
+// provider. Judged at the build alone, an override typo was admitted by the
+// API, activated, and then refused by every node.
 //
-// RUNNABLE rather than admission rules, because each says the entry cannot
-// run as written: the profile does not load, or a credential the operator
-// configured never reaches the CLI. The cost is the rolling-upgrade case a
-// runnable rule always has — a newer build whose profile gained a variable
-// admits an entry an older node refuses — and refusing it there is the honest
-// answer, since the older node would drop the credential.
-//
-// The credential rules exist because the backend's applyAuth (in
-// internal/providers/llm/cliagent) places a credential only where the profile
-// names a variable for it and drops it silently otherwise: an api-key entry on a CLI with no api_key_env
-// ran signed in to nothing, and so did a token on a CLI with no token_env.
-// Every such shape is refused, naming the route the CLI does read.
+// RUNNABLE, because each says the backend cannot be built: the profile does
+// not load, or it has no model flag, and every entry names a model (the
+// backend refuses to drop one silently). Where the entry's CREDENTIALS go is
+// the admission half, [LLMProvider.validateCLICredentials].
 func (l *LLMProvider) validateCLIProfile(path Path) error {
 	cli := l.CLI
 	if cli.Agent != "" && !cli.Agent.Valid() {
@@ -1134,19 +1126,90 @@ func (l *LLMProvider) validateCLIProfile(path Path) error {
 		p.add(at(path, "cli.overrides"), ErrConflict, "%v", err)
 		return p.err()
 	}
+	if strings.TrimSpace(l.Model) != "" && !profile.TakesModel() {
+		p.add(at(path, "cli.overrides.model_args"), ErrMissing,
+			"the %q profile declares no model flag, so the model %q this entry "+
+				"names would never reach the CLI, and every entry names one: declare "+
+				`the flag, e.g. cli.overrides.model_args: ["--model", "{model}"]`,
+			cli.Name(), l.Model)
+	}
+	return p.err()
+}
 
+// validateCLIAgentCredentials is [LLMProvider.validateCLICredentials] over
+// every cli-agent entry of the company, in key order.
+func (c *Company) validateCLIAgentCredentials() error {
+	var p problems
+	for _, key := range sortedKeys(c.Providers.LLM) {
+		spec := c.Providers.LLM[key]
+		if spec.Type != LLMCLIAgent || spec.CLI == nil {
+			continue
+		}
+		p.wrap(spec.validateCLICredentials(entryPath(key)))
+	}
+	return p.err()
+}
+
+// validateCLICredentials holds a cli-agent entry's credentials to the
+// variables its merged profile names, and the profile itself to keeping every
+// credential behind cli.auth ([cliprofile.Profile.ValidateCredentials]).
+//
+// The rules exist because the backend's applyAuth (in
+// internal/providers/llm/cliagent) places a credential only where the profile
+// names a variable for it and drops it silently otherwise: an api-key entry
+// on a CLI with no api_key_env ran signed in to nothing, and so did a token on
+// a CLI with no token_env. Every such shape is refused, naming the route the
+// CLI does read.
+//
+// ADMISSION rather than runnable, because an entry that breaks one still
+// runs: the provider builds, the CLI starts, and it signs in from whatever it
+// does read — its credential files, a bundle, its own environment — while only
+// the misplaced credential goes unused. So a write that keeps one is refused,
+// and a revision being applied is only warned about. Refusing it at apply
+// would take this node off the fleet's epoch during a rolling upgrade over a
+// revision a newer peer admitted — one whose profile gained the very variable
+// this build's lacks, which is how a guess like an api_key_env for opencode
+// would arrive.
+//
+// Skipped where the runnable half already refused the entry (an unknown agent,
+// a profile that does not load): there is no profile to judge credentials
+// against, and the refusal that matters is already reported.
+func (l *LLMProvider) validateCLICredentials(path Path) error {
+	cli := l.CLI
+	if cli.Agent != "" && !cli.Agent.Valid() {
+		return nil
+	}
+	profile, err := cliprofile.Load(cli.Name(), cli.Overrides)
+	if err != nil {
+		//nolint:nilerr // Deliberate: a profile that does not load is a
+		// runnable fault validateCLIProfile already reports at
+		// cli.overrides, and there is no profile to judge credentials by.
+		return nil
+	}
+	var p problems
+	agent := cli.Name()
+	if err := profile.ValidateCredentials(agent); err != nil {
+		p.add(at(path, "cli.overrides"), ErrConflict, "%v", err)
+	}
+
+	// The mode-dependent rules each state what a mode does with a
+	// credential, and an unknown mode does nothing this file can describe:
+	// judged as one, a typo drew refusals naming a mode that does not exist.
+	// The fault is reported once, at cli.auth.mode.
 	mode := cli.Auth.Mode
 	if mode == "" {
 		mode = AuthSubscription
 	}
-	agent := cli.Name()
+	if !slices.Contains(CLIAgentAuthModes, mode) {
+		return p.err()
+	}
 
 	switch {
 	case len(l.APIKeys) > 0 && mode != AuthAPIKey:
 		p.add(at(path, "api_keys"), ErrConflict,
 			"a cli-agent entry reads api_keys only under cli.auth.mode api-key, which "+
-				"puts the first one in the CLI's key variable; under %s it reaches "+
-				"nothing. Set auth.mode: api-key, or drop api_keys", mode)
+				"puts the key in the CLI's key variable; under %s it reaches nothing. "+
+				"Set auth.mode: api-key, or drop api_keys", mode)
 	case len(l.APIKeys) > 1:
 		p.add(at(path, "api_keys"), ErrConflict,
 			"a cli-agent entry holds one login and rotates nothing, so only the "+
@@ -1168,12 +1231,14 @@ func (l *LLMProvider) validateCLIProfile(path Path) error {
 			p.add(at(path, "cli.auth.mode"), ErrConflict,
 				"api-key puts the api_keys value in the CLI's key variable, and the "+
 					"%q profile names none (api_key_env), so the key would reach "+
-					"nothing: sign the CLI in with `crewlet llm login` instead, or, if "+
-					"your build of the CLI does read a key variable, name it with "+
-					"cli.overrides.api_key_env", agent)
+					"nothing: this CLI reads a key only from its credential files "+
+					"(%s), so put it there — `crewlet llm login`, or a credential "+
+					"bundle — or, if your build of the CLI does read a key variable, "+
+					"name it with cli.overrides.api_key_env",
+				agent, strings.Join(profile.CredentialPaths, ", "))
 		case len(l.APIKeys) == 0:
 			p.add(at(path, "api_keys"), ErrMissing,
-				"auth.mode api-key puts the first api_keys value in %s, and this entry "+
+				"auth.mode api-key puts the api_keys value in %s, and this entry "+
 					`names none: add one, e.g. ["${%s}"]`, profile.APIKeyEnv, profile.APIKeyEnv)
 		}
 	}
@@ -1206,23 +1271,27 @@ func (l *LLMProvider) validateCLIProfile(path Path) error {
 			agent, remedy)
 	}
 
-	// The two variables cli.auth owns. applyAuth sets or removes each on
-	// every call AFTER cli.env is layered in, so a value here was either
-	// replaced or deleted before the CLI started — and which, depended on
-	// the mode and on whether the store held a token, which is the
-	// "configured it and nothing happened" this file refuses everywhere.
+	// The two variables cli.auth owns. It is layered over cli.env, and
+	// whether it then replaces, removes or leaves a value written here turns
+	// on the mode and on whether the secret store or the engine's own
+	// environment holds a credential — which the document cannot see, so an
+	// entry relying on cli.env for one is configured to work only sometimes.
 	for _, name := range slices.Sorted(maps.Keys(cli.Env)) {
 		switch name {
 		case "":
 			continue
 		case profile.TokenEnv:
 			p.add(entry(at(path, "cli.env"), name), ErrConflict,
-				"%s is this CLI's token variable, which cli.auth sets or removes on "+
-					"every call: give the token as cli.auth.token", name)
+				"%s is this CLI's token variable, which cli.auth owns: whether a value "+
+					"here reaches the CLI depends on auth.mode and on whether the secret "+
+					"store or the engine's environment holds a token of its own. Give "+
+					"the token as cli.auth.token", name)
 		case profile.APIKeyEnv:
 			p.add(entry(at(path, "cli.env"), name), ErrConflict,
-				"%s is this CLI's key variable, which cli.auth sets or removes on "+
-					"every call: give the key as api_keys with cli.auth.mode api-key", name)
+				"%s is this CLI's key variable, which cli.auth owns: whether a value "+
+					"here reaches the CLI depends on auth.mode, and on whether api_keys "+
+					"resolves or the engine's environment holds a key of its own. Give "+
+					"the key as api_keys with cli.auth.mode api-key", name)
 		}
 	}
 	return p.err()

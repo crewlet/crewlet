@@ -296,6 +296,9 @@ func TestAPutIsRefusedForACLIAgentEntryItsProfileCannotRun(t *testing.T) {
 			"      type: cli-agent\n      model: m\n      api_keys: [\"${OPENROUTER_API_KEY}\"]\n" +
 				"      cli: {agent: hermes, auth: {mode: api-key}}\n",
 			"providers.llm.sub.cli.auth.mode"},
+		{"a profile with no model flag for the model every entry names",
+			"      type: cli-agent\n      model: m\n      cli: {agent: codex, overrides: {model_args: []}}\n",
+			"providers.llm.sub.cli.overrides.model_args"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

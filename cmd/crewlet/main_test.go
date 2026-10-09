@@ -1704,6 +1704,9 @@ func TestValidateLocatesACLIAgentProfileRefusal(t *testing.T) {
 		{"an api key with nowhere to go",
 			"      api_keys: [\"${OPENROUTER_API_KEY}\"]\n      cli: {agent: hermes, auth: {mode: api-key}}\n",
 			"providers.llm.sub.cli.auth.mode"},
+		{"a profile with no model flag",
+			"      cli: {agent: codex, overrides: {model_args: []}}\n",
+			"providers.llm.sub.cli.overrides.model_args"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

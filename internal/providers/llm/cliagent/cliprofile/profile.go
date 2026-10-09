@@ -522,15 +522,15 @@ type Profile struct {
 
 	// Env is fixed child environment the CLI needs. Never a credential,
 	// and never the profile's own token_env or api_key_env, both refused
-	// by [Profile.Validate].
+	// by [Profile.ValidateCredentials].
 	Env map[string]string `yaml:"env,omitempty"`
 
 	// PassthroughEnv names engine environment variables forwarded to the
-	// child. It MAY NOT name a credential, and the engine refuses a
-	// profile that does — everything here is forwarded before auth.mode is
-	// consulted, so a key listed here would reach every seat whatever the
-	// mode said, which is exactly the metered-bill-on-a-flat-rate-plan
-	// failure auth.mode exists to prevent.
+	// child. It MAY NOT name a credential, and config refuses a profile
+	// that does ([Profile.ValidateCredentials]): everything here is
+	// forwarded before auth.mode is consulted, so a key listed here would
+	// reach every seat whatever the mode said, which is exactly the
+	// metered-bill-on-a-flat-rate-plan failure auth.mode exists to prevent.
 	PassthroughEnv []string `yaml:"passthrough_env,omitempty"`
 
 	// TokenEnv is the variable carrying a long-lived headless
@@ -623,25 +623,53 @@ type Profile struct {
 	SeedFiles []SeedFile `yaml:"seed_files,omitempty"`
 }
 
-// credentialish matches an environment variable name that carries a secret.
+// credentialWords are the name components that mark a variable as carrying a
+// secret.
 //
-// Substrings rather than an exact list because passthrough_env is
-// operator-supplied and the set of vendor key names is open: GOOGLE_API_KEY,
-// GH_TOKEN and OPENAI_API_KEY have nothing in common but the shape of the
-// name. A false positive costs an operator one explicit override; a false
-// negative bills them for a plan they thought was flat-rate.
-var credentialish = []string{"KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "AUTH"}
+// WHOLE COMPONENTS, NOT SUBSTRINGS. The set of vendor key names is open —
+// GOOGLE_API_KEY, GH_TOKEN and OPENROUTER_API_KEY have nothing in common but
+// the shape of the name — so the rule reads that shape: a name is cut at every
+// character that is not a letter or a digit, and it is a credential when one of
+// its components is one of these words. A substring match read
+// CLAUDE_CODE_MAX_OUTPUT_TOKENS and HERMES_MAX_TOKENS as credentials, which
+// refused a real tuning variable in a profile's env and counted an entry with
+// no key at all as signed in — a predicate that decides whether an entry is
+// healthy cannot be that loose. The joined forms (APIKEY, ACCESSKEY,
+// SECRETKEY) are listed because some vendors write their names that way, and
+// KEYS because a variable holding several keys (GEMINI_API_KEYS) is still a
+// credential — TOKENS is deliberately absent, being how every CLI spells a
+// count of model tokens.
+var credentialWords = []string{
+	"KEY", "KEYS", "APIKEY", "ACCESSKEY", "SECRETKEY", "TOKEN", "SECRET",
+	"PASSWORD", "PASSWD", "CREDENTIAL", "CREDENTIALS", "AUTH", "OAUTH", "PAT",
+}
 
-// IsCredentialName reports whether name looks like it carries a secret.
+// IsCredentialName reports whether an environment variable's name says it
+// carries a secret: whether any of its components, cut at every character
+// that is not a letter or a digit and compared without regard to case, is
+// one of [credentialWords].
+//
+// One predicate for every question this backend asks of a name — which
+// passthrough_env and env entries are refused, which cli.env entries sign a
+// CLI in, and which travel into a coding box — so the answers cannot drift.
 func IsCredentialName(name string) bool {
-	upper := strings.ToUpper(name)
-	for _, frag := range credentialish {
-		if strings.Contains(upper, frag) {
+	components := strings.FieldsFunc(strings.ToUpper(name), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	for _, component := range components {
+		if slices.Contains(credentialWords, component) {
 			return true
 		}
 	}
 	return false
 }
+
+// TakesModel reports whether this profile passes a model to its CLI — whether
+// it declares model_args.
+//
+// One predicate for the two places that refuse a model the CLI would never
+// see: config, which every write path runs, and the backend's constructor.
+func (p *Profile) TakesModel() bool { return len(p.ModelArgs) > 0 }
 
 // EffectiveMarkerScope is the scope with its default applied.
 func (p *Profile) EffectiveMarkerScope() MarkerScope {
@@ -712,41 +740,6 @@ func (p *Profile) Validate(name string) error {
 		// The DEFAULTED mode, not the field: a profile that names no
 		// output is a json profile, and the raw field printed "a  profile".
 		add("text_paths is empty — a %s profile must say where the answer is", p.EffectiveOutput())
-	}
-	for _, env := range p.PassthroughEnv {
-		if IsCredentialName(env) {
-			// Refused rather than dropped: an operator who wrote it
-			// meant it to arrive, and a variable that vanished
-			// silently is a debugging session.
-			add("passthrough_env names %q, which looks like a credential — "+
-				"passthrough is forwarded before auth.mode is consulted, so it would "+
-				"reach every seat whatever the mode says; use auth.mode api-key or "+
-				"inherit-env instead", env)
-		}
-	}
-	for _, env := range slices.Sorted(maps.Keys(p.Env)) {
-		switch {
-		case env != "" && (env == p.TokenEnv || env == p.APIKeyEnv):
-			// Named apart from the shape rule below because an
-			// overridden token_env or api_key_env need not LOOK like a
-			// credential: whatever it is called, auth.mode sets or
-			// removes it after this layer, so a value here is one the
-			// operator wrote and the mode then silently replaced.
-			add("env names %q, which is this profile's token_env or api_key_env — "+
-				"cli.auth sets or removes that variable on every call, so a value "+
-				"here never decides anything; give the credential through cli.auth "+
-				"(auth.token, or api_keys with auth.mode api-key)", env)
-		case IsCredentialName(env):
-			// The same reason passthrough_env refuses one, and a second:
-			// the profile's env is forwarded whatever auth.mode says,
-			// and cli.overrides is neither ${VAR}-resolved nor marked
-			// secret, so a key written here sits in the stored revision
-			// in plain text and is shown unredacted on every read.
-			add("env names %q, which looks like a credential — the profile's env "+
-				"is forwarded whatever auth.mode says, and cli.overrides is stored "+
-				"and shown unredacted; put it in cli.env, which is ${VAR}-resolved "+
-				"and redacted, or give it through cli.auth", env)
-		}
 	}
 	for dir := range p.ConfigEnv {
 		if dir == "HOME" {
@@ -897,6 +890,67 @@ func (p *Profile) Validate(name string) error {
 		if f.Content == "" {
 			add("seed_files[%d].content is empty — a settings file with nothing in it "+
 				"configures nothing", i)
+		}
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	return fmt.Errorf("cli-agent profile %q: %s", name, strings.Join(bad, "; "))
+}
+
+// ValidateCredentials reports every place this profile routes a credential
+// around cli.auth: a passthrough_env or env entry whose name says it carries a
+// secret, and an env entry naming the profile's own token_env or api_key_env.
+//
+// APART FROM [Profile.Validate], which [Load] runs, because these are
+// ADMISSION rules and that one is RUNNABLE. A profile that breaks one still
+// builds, starts and answers: what it gets wrong is where a credential comes
+// from. Config refuses a document that breaks one on every write and only
+// warns about a revision being applied, because an apply that refused it would
+// take a node off the fleet's epoch over a revision that runs — and the rule
+// set here is the one a later build is free to change, as this predicate
+// itself changed from substrings to whole name components.
+func (p *Profile) ValidateCredentials(name string) error {
+	var bad []string
+	add := func(format string, args ...any) {
+		bad = append(bad, fmt.Sprintf(format, args...))
+	}
+	for _, env := range p.PassthroughEnv {
+		if IsCredentialName(env) {
+			// Refused rather than dropped: an operator who wrote it
+			// meant it to arrive, and a variable that vanished
+			// silently is a debugging session.
+			add("passthrough_env names %q, which looks like a credential — "+
+				"passthrough is forwarded before auth.mode is consulted, so it would "+
+				"reach every seat whatever the mode says; use auth.mode api-key or "+
+				"inherit-env instead", env)
+		}
+	}
+	for _, env := range slices.Sorted(maps.Keys(p.Env)) {
+		switch {
+		case env != "" && (env == p.TokenEnv || env == p.APIKeyEnv):
+			// Named apart from the shape rule below because an
+			// overridden token_env or api_key_env need not LOOK like a
+			// credential. cli.env and then cli.auth are layered over
+			// this one, so whether a value here reaches the CLI turns on
+			// the mode and on whether the secret store or the engine's
+			// environment holds a credential of its own — which no
+			// document can see.
+			add("env names %q, which is this profile's token_env or api_key_env — "+
+				"cli.auth owns that variable, and whether a value here reaches the CLI "+
+				"depends on auth.mode and on whether the secret store or the engine's "+
+				"environment holds one; give the credential through cli.auth "+
+				"(auth.token, or api_keys with auth.mode api-key)", env)
+		case IsCredentialName(env):
+			// The same reason passthrough_env refuses one, and a second:
+			// the profile's env is forwarded whatever auth.mode says,
+			// and cli.overrides is neither ${VAR}-resolved nor marked
+			// secret, so a key written here sits in the stored revision
+			// in plain text and is shown unredacted on every read.
+			add("env names %q, which looks like a credential — the profile's env "+
+				"is forwarded whatever auth.mode says, and cli.overrides is stored "+
+				"and shown unredacted; put it in cli.env, which is ${VAR}-resolved "+
+				"and redacted, or give it through cli.auth", env)
 		}
 	}
 	if len(bad) == 0 {
