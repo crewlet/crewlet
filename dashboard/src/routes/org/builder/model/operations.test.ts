@@ -724,9 +724,14 @@ describe("changing kind", () => {
       token_budget: { day: 10, month: 200 },
       mcp_env: { git: { TOKEN: "__redacted__" } },
       behavioral_guidelines: ["Be kind"],
+      placement: { labels: { zone: "eu" } },
+      // A seat's tracker project and knowledge container are top-level keys,
+      // never under `integrations:` — a list naming them there stripped
+      // nothing and left a draft the engine refuses.
+      project: "ENG",
+      space: "DOCS",
       integrations: {
-        github: { tier: "developer" },
-        jira: { project: "ENG" },
+        github: { tier: "review" },
         slack: { channel: "C1" },
       },
       goal: "Build",
@@ -740,8 +745,10 @@ describe("changing kind", () => {
     expect(report.stripped).toEqual([
       "llm",
       "token_budget",
+      "placement",
       "integrations.slack",
-      "integrations.jira",
+      "project",
+      "space",
       "mcp_env",
       "behavioral_guidelines",
       "integrations.github",
@@ -873,7 +880,7 @@ describe("evaluating", () => {
     const trackerMoved = run(draft, {
       type: "updateSeat",
       target: "seat:sre",
-      set: [{ path: ["integrations", "jira", "project"], value: "SUP" }],
+      set: [{ path: ["project"], value: "SUP" }],
     }).draft;
     expect(shapes(trackerMoved, toHuman)).toContainEqual(["fields the new kind removes", "fields"]);
 

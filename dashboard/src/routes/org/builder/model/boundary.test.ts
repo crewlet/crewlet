@@ -12,7 +12,9 @@
  *
  * - runtime imports name a file in this directory, `~/lib/format.ts` (pure
  *   formatting), `~/lib/storage.ts` (the table of storage KEYS, which is
- *   constants and imports nothing — the storage itself is still injected) or
+ *   constants and imports nothing — the storage itself is still injected), a
+ *   module of `~/contract/` (the engine's own sets, which that directory's
+ *   suite holds to data and shapes importing nothing but each other) or
  *   `~/protocol/configAnswer.ts` (the ONE reading of a `/config` refusal,
  *   which imports nothing but types — held below); the rest of `~/protocol`
  *   is imported for TYPES only, because its runtime half is the socket and
@@ -91,7 +93,7 @@ describe("the builder core", () => {
     expect(sources.map((s) => s.name)).toEqual(expect.arrayContaining(["keys.ts", "document.ts"]));
   });
 
-  test("imports at runtime only its own files and pure formatting, and the protocol for types only", () => {
+  test("imports at runtime only its own files, pure formatting and the contract, and the protocol for types only", () => {
     const offending: string[] = [];
     for (const { name, text } of sources) {
       for (const { spec, typeOnly } of imports(text)) {
@@ -99,6 +101,7 @@ describe("the builder core", () => {
           spec.startsWith("./") ||
           spec === "~/lib/format.ts" ||
           spec === "~/lib/storage.ts" ||
+          spec.startsWith("~/contract/") ||
           spec === CONFIG_ANSWER ||
           (typeOnly && spec.startsWith("~/protocol/"));
         if (!allowed) offending.push(`${name}: ${typeOnly ? "import type" : "import"} "${spec}"`);

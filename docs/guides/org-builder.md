@@ -530,15 +530,15 @@ seat goes:
 
 **Change to human seat** and **Change to agent seat** are their own step,
 because the change removes fields: the engine refuses a human seat every
-runtime field (models, token budget, workers, learning, schedules, chat app
-blocks, Jira and Confluence ownership, tool credentials, behavioral guidelines
-and its own GitHub App), and refuses an agent seat `contact` and
-`availability`. The dialog lists the fields by name before anything is
-recorded, and calls out the ones that hold credentials: the builder never shows
-a credential, so it cannot type one back in and the value is gone for good once
-the change is saved. Removing a field tears nothing down at a vendor, so the
-seat's apps, bots and accounts, and the secret store entries the removed fields
-referenced, are listed as they are for a deleted seat.
+runtime field (models, sandbox, token budget, workers, learning, schedules,
+placement, chat app blocks, the project and space it owns, tool credentials,
+behavioral guidelines and its own GitHub App), and refuses an agent seat
+`contact` and `availability`. The dialog lists the fields by name before
+anything is recorded, and calls out the ones that hold credentials: the builder
+never shows a credential, so it cannot type one back in and the value is gone
+for good once the change is saved. Removing a field tears nothing down at a
+vendor, so the seat's apps, bots and accounts, and the secret store entries the
+removed fields referenced, are listed as they are for a deleted seat.
 
 Becoming a human seat needs one contact identity, and cannot be done to the
 Datadog fallback (while Datadog is enabled) without choosing the agent seat
