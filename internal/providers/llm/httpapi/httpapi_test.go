@@ -400,10 +400,12 @@ func TestDecodeArgs(t *testing.T) {
 }
 
 // The named landmine: encoding/json populates what it managed BEFORE it
-// failed, so `1e1000` yields an error and a map holding +Inf — a value that
-// marshals back out as nothing at all. Keeping it would put a round-trip
-// failure in the conversation that fires a round later, on a request that has
-// nothing to do with the tool that caused it.
+// failed, so `1e1000` yields an error and a map still holding a residue under
+// the key. WHICH residue is the toolchain's business, not a contract: through
+// go1.27.0 it is +Inf, which marshals back out as nothing at all, and from
+// go1.27.2 it is 0, which marshals cleanly as a number nobody sent. Either one
+// kept would put a value in the conversation that the model never wrote — a
+// round-trip failure a round later, or a silent rewrite of the call.
 func TestDecodeArgsAlwaysProducesAReSerialisableMap(t *testing.T) {
 	t.Parallel()
 	// The property that matters: whatever a model sends, what comes out can
@@ -412,19 +414,24 @@ func TestDecodeArgsAlwaysProducesAReSerialisableMap(t *testing.T) {
 	// encode, and every subsequent round of the turn fails with it.
 	//
 	// 1e1000 is the case that found this. Plain unmarshalling HALF-decodes
-	// it: an error is returned but the map already holds +Inf, which
-	// json.Marshal then refuses. Decoding with UseNumber accepts it as an
-	// exact json.Number and it round-trips unchanged — so the guard is now
-	// "it survives", not "it is discarded".
+	// it: an error is returned but the map already holds a float64 under
+	// "n" that is not the number sent. Decoding with UseNumber accepts it as
+	// an exact json.Number and it round-trips unchanged — so the guard is
+	// now "it survives", not "it is discarded".
+	//
+	// The premise asks only what every toolchain agrees on: the plain decode
+	// fails, and what it leaves behind does not round-trip to the input.
+	// Pinning the residue itself (+Inf, then 0 from go1.27.2) made this test
+	// a test of encoding/json's internals that broke on a patch release.
 	var direct map[string]any
 	if err := json.Unmarshal([]byte(`{"n":1e1000}`), &direct); err == nil {
 		t.Fatal("premise broken: 1e1000 unmarshalled cleanly without UseNumber")
 	}
-	if !math.IsInf(direct["n"].(float64), 1) {
-		t.Fatalf("premise broken: the partial decode left %v, want +Inf", direct["n"])
+	if _, ok := direct["n"].(float64); !ok {
+		t.Fatalf("premise broken: the partial decode left %#v under n, want a float64 residue", direct["n"])
 	}
-	if _, err := json.Marshal(direct); err == nil {
-		t.Fatal("premise broken: the partial decode marshalled back out")
+	if blob, err := json.Marshal(direct); err == nil && string(blob) == `{"n":1e1000}` {
+		t.Fatal("premise broken: the partial decode round-tripped the value it refused")
 	}
 
 	got, err := DecodeArgs([]byte(`{"n":1e1000}`), "some_tool")

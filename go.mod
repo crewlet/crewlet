@@ -1,6 +1,6 @@
 module github.com/crewlet/crewlet
 
-go 1.27.0
+go 1.27.2
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.78.0
