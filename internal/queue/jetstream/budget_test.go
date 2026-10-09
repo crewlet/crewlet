@@ -244,8 +244,8 @@ func (s ceilingStream) CachedInfo() *jetstream.StreamInfo {
 // creating these same streams, which is when a member drops a read of a stream
 // another node has in flight ([jsprovision.ReadTerm]). A dropped request cost
 // the boot five seconds and came back unknown, and the sizing counts an unknown
-// as absent: the ceiling the stream holds left the pool, and a log created
-// beside it was sized smaller for good.
+// as absent: a log created beside it was sized without what the stream holds,
+// and kept that ceiling for good.
 //
 // # The two stagings
 //

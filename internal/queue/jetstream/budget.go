@@ -359,11 +359,10 @@ var ErrInsufficientStorage = errors.New("jetstream: the broker cannot reserve th
 // carries no deadline, it was nats.go's own five-second default that decided
 // it: each dropped read stalled the boot five seconds and then came back
 // unknown. And the sizing that reads this carries an unknown as an absent
-// stream, so the ceiling the stream holds fell out of the pool every log this
-// boot creates is divided from, and the smaller ceiling such a log was given
-// is the one it keeps. Measured on a stream holding 3 GiB whose first request
-// went unanswered: asked once, five seconds and no ceiling; asked as a read,
-// two seconds and the 3 GiB.
+// stream, so every log that boot created was sized without what the stream
+// holds, and kept the ceiling that gave it for good. Measured on a stream
+// holding 3 GiB whose first request went unanswered: asked once, five seconds
+// and no ceiling; asked as a read, two seconds and the 3 GiB.
 //
 // What that costs is a read the broker never answers, which now takes the
 // whole lookup ceiling rather than five seconds — so [internal/engine] asks

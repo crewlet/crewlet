@@ -207,30 +207,35 @@ func sizeCeilings(ctx context.Context, host domainHost, stream config.Stream,
 		case read.err != nil:
 			// CARRIED AS ABSENT, and it costs more than this stream.
 			//
-			// Not a failed boot: the read was already asked again for
-			// the whole lookup ceiling
-			// ([jetstream.Queue.DomainStreamCeiling]), and the
-			// provision that follows asks the same broker again and
-			// settles whether the stream exists by its own create if
-			// it has to. Counted as absent, the stream itself is
-			// merely sized as though this boot were creating it, which
-			// changes nothing for one that exists — it keeps its
-			// ceiling. But the ceiling it holds is also left out of
-			// `holding`, so the pool every log this boot DOES create is
-			// divided from is understated by that reservation's share,
-			// and a created ceiling is kept for good. The line says
-			// so, because the boot that follows succeeds and nothing
-			// else will.
+			// Not a failed boot. A read nobody answered was asked again
+			// for the whole lookup ceiling first
+			// ([jetstream.Queue.DomainStreamCeiling]), and any other
+			// error is the broker's own answer, returned at once;
+			// either way the provision that follows asks the same
+			// broker again and settles whether the stream exists by its
+			// own create if it has to. Counted as absent, the stream
+			// itself is merely sized as though this boot were creating
+			// it, which changes nothing for one that exists — it keeps
+			// its ceiling.
+			//
+			// But every log this boot DOES create is sized without
+			// knowing what that one holds: the division counts it at
+			// its ask rather than at its ceiling, and where the pool is
+			// the broker's figure its reservation is not added back to
+			// it either. Either can move a created log's ceiling up or
+			// down, and a created ceiling is kept for good — so the
+			// line says so, because the boot that follows succeeds and
+			// nothing else will.
 			log.WarnContext(ctx, "statelog_ceiling_unread",
 				"domain", read.domain.Name(), "stream", read.domain.Stream().Name,
 				"error", read.err.Error(),
 				"detail", "the broker did not say whether this log's stream "+
 					"exists or what ceiling it holds, so it is counted as "+
-					"absent: if it exists, its reservation is missing from "+
-					"the pool the logs this boot creates are sized from, and "+
-					"they are created smaller than a boot that read it "+
-					"would make them, for good — `crewlet retention "+
-					"set-capacity` raises one once this node is up")
+					"absent: if it exists, every log this boot creates is "+
+					"sized without knowing what it holds, and keeps the "+
+					"ceiling that gives it — larger or smaller than a boot "+
+					"that read it would make — until `crewlet retention "+
+					"set-capacity` changes it once this node is up")
 		case read.found:
 			held[read.domain.Name()] = read.holds
 			holding += read.holds
