@@ -1761,22 +1761,24 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// it registered on every node is the other half of the same
 			// protocol, and a node serving no API may be the owner.
 			SandboxTail: sandboxTails(e),
-			// THIS NODE'S PROJECTION of the company's own tracker and
-			// knowledge base — the same copy a seat's tools read, so an
-			// operator and an agent looking at one item see one item.
+			// THE COMPANY'S OWN TRACKER AND KNOWLEDGE BASE through the
+			// estate router, exactly as a seat's tools reach them
+			// (engine.OperatorWork), so an operator and an agent looking
+			// at one item see one item: answered from this node's copy
+			// while it serves and from another data node's while it does
+			// not, which is also how a node without `data` answers at all.
 			//
 			// Nil on a company running Jira or Confluence, which leaves
 			// their questions unregistered: there is no native record
-			// for this node to have a copy of, and an empty board would
-			// claim otherwise.
+			// to read, and an empty board would claim otherwise.
 			//
 			// A METHOD VALUE is safe here where [Sources.Knowledge]
-			// needs a function: the readers belong to the NODE and are
-			// not rebuilt by an apply — see engine/native.go for why a
-			// projector's lifetime is the process rather than the
-			// epoch. Nil-typed-nil is not a risk either, because these
-			// accessors return an untyped nil for a node with no
-			// backend.
+			// needs a function: the router and the native runtime belong
+			// to the NODE and are not rebuilt by an apply — see
+			// engine/native.go for why their lifetime is the process
+			// rather than the epoch. Nil-typed-nil is not a risk either,
+			// because these accessors return an untyped nil for a node
+			// with no backend.
 			Work:  nativeWork(e),
 			Pages: nativePages(e),
 			// A PROJECT'S FILES, the rows only: the bytes stream from

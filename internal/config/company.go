@@ -676,11 +676,14 @@ func (c *Company) validateKnowledgeBackend() error {
 type Knowledge struct {
 	// Backend is which knowledge base this company runs.
 	//
-	// Empty DERIVES, and the derivation is the compatible half of a rename:
-	// a company that declares integrations.confluence gets `confluence`,
-	// and one that declares nothing gets `native` — so a quickstart company
-	// has a wiki without asking for one, and an Atlassian company that has
-	// not read this note keeps the backend it had.
+	// Empty DERIVES from what the company connected: one that declares
+	// integrations.confluence gets `confluence`, and one that declares
+	// nothing gets `native`, so a quickstart company has a wiki without
+	// asking for one. Connecting Confluence already says where the pages
+	// live — a native knowledge base beside it is refused, as two places
+	// pages live with nothing keeping them in step — so requiring
+	// `backend: confluence` as well would be a second spelling of one
+	// decision, with a refusal for the company that wrote only the first.
 	Backend KnowledgeBackend `yaml:"backend,omitempty" json:"backend,omitempty" js:"enum=native|confluence|none" desc:"Which knowledge base: native, confluence, or none. Empty derives from integrations.confluence."`
 
 	// KnowledgeScope narrows the search to these containers. Empty is
@@ -723,8 +726,10 @@ type KnowledgeBackend string
 
 // The knowledge backends.
 const (
-	// KnowledgeNative is the engine's own: pages held as fleet documents
-	// and projected into every node.
+	// KnowledgeNative is the engine's own knowledge base: the state log's
+	// pages domain. Every change is one record on the pages log, applied
+	// into the replicated estate every data node holds, and a node without
+	// `data` reads it through the estate router. See internal/pages.
 	KnowledgeNative KnowledgeBackend = "native"
 
 	// KnowledgeConfluence is Confluence, read live at query time.
@@ -831,8 +836,10 @@ type TrackerBackend string
 
 // The trackers.
 const (
-	// TrackerNative is the engine's own: work items held as fleet
-	// documents and projected into every node.
+	// TrackerNative is the engine's own work tracker: the state log's
+	// first domain. Every change is one record on the tracker log, applied
+	// into the replicated estate every data node holds, and a node without
+	// `data` reads it through the estate router. See internal/tracker.
 	TrackerNative TrackerBackend = "native"
 
 	// TrackerJira is Jira, whose state the engine reads through a seat's

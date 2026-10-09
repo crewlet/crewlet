@@ -214,8 +214,9 @@ func delta(have, want []string) (add, remove []string) {
 // sequence.
 //
 // A PAGE REFERENCE IS NOT RESOLVED AS A TASK. Its other end is a knowledge-base
-// page id, and there is no write to the pages family at all — which is why it
-// is a separate argument rather than a `kind` on one list.
+// page id, the edge rides the task's own record and there is no write to the
+// pages log at all — which is why it is a separate argument rather than a
+// `kind` on one list.
 func (d WorkDeps) inertRelations(ctx context.Context, tool string,
 	args map[string]any, task tracker.Task) (*tracker.RelationIntent, *tools.Result) {
 

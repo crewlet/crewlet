@@ -281,8 +281,9 @@ const (
 	// RelationDuplicates is authored on the duplicate and derives
 	// "duplicated_by" on the canonical.
 	RelationDuplicates RelationKind = "duplicates"
-	// RelationPage names a knowledge-base page, with no write to the
-	// pages family at all.
+	// RelationPage names a knowledge-base page. The edge rides the task's
+	// own record and the page is never touched: there is no write to the
+	// pages log at all.
 	RelationPage RelationKind = "page"
 )
 
