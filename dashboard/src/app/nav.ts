@@ -12,8 +12,8 @@
  *
  * The approved design keeps the trees and moves them: a workspace's own
  * SECTIONS are paths drawn as tabs in the page header (Settings draws them as
- * a column, because it has eight of its own and a cross-link to Budgets, in
- * three groups — a tab strip of nine is a row nobody reads to the end of), and its
+ * a column, because its own row in WORKSPACES holds more sections, in three
+ * groups, than a tab strip can — a row nobody reads to the end of), and its
  * OBJECTS — a unit, a container, a node — are rows on the section that lists
  * them. What is left for the sidebar is the part every workspace shares: where
  * you can go, and the few objects this reader keeps coming back to.

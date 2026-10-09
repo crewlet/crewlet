@@ -17,8 +17,8 @@
  * fourth kind of list.
  *
  * Settings draws its sections as a COLUMN instead (`SectionColumn`), because
- * it has eight of its own and a cross-link to Budgets, in three groups, and a
- * tab strip of nine is a row nobody reads to the end of.
+ * its own row in WORKSPACES holds more sections, in three groups, than a tab
+ * strip can — a row nobody reads to the end of.
  *
  * # A section is a path
  *
