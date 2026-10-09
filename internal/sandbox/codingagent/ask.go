@@ -51,15 +51,18 @@ set -eu
 question=""
 to="requester"
 branch=""
+# A flag whose value was left off takes none: a shift past the end would end
+# the script under set -e before it recorded the question.
 while [ $# -gt 0 ]; do
   case "$1" in
-    --to) to="${2:-requester}"; shift 2 ;;
+    --to) shift; if [ $# -gt 0 ]; then to=$1; shift; fi ;;
     --to=*) to="${1#--to=}"; shift ;;
-    --branch) branch="${2:-}"; shift 2 ;;
+    --branch) shift; if [ $# -gt 0 ]; then branch=$1; shift; fi ;;
     --branch=*) branch="${1#--branch=}"; shift ;;
     *) if [ -z "$question" ]; then question="$1"; fi; shift ;;
   esac
 done
+if [ -z "$to" ]; then to="requester"; fi
 if [ -z "$question" ]; then
   echo "usage: crewlet-ask \"<question>\" [--to requester|team|manager|<name>] [--branch <the branch you pushed>]" >&2
   exit 2
@@ -78,9 +81,22 @@ if [ -z "$branch" ] && command -v git >/dev/null 2>&1; then
     fi
   fi
 fi
-# Escape for JSON: backslashes first, then quotes, then newlines.
+# Escape for JSON: a backslash, a quote and every control character, each of
+# which JSON refuses raw, and the newlines between lines. Byte by byte
+# (LC_ALL=C), printed as it goes rather than built up, so a long question
+# costs one pass.
 esc() {
-  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | awk 'BEGIN{ORS=""} {print sep $0; sep="\\n"}'
+  printf '%s' "$1" | LC_ALL=C awk '
+    BEGIN { for (i = 1; i < 32; i++) ctl[sprintf("%c", i)] = sprintf("\\u%04x", i) }
+    NR > 1 { printf "%s", "\\n" }
+    {
+      for (j = 1; j <= length($0); j++) {
+        c = substr($0, j, 1)
+        if (c in ctl) printf "%s", ctl[c]
+        else if (c == "\\" || c == "\"") printf "%s%s", "\\", c
+        else printf "%s", c
+      }
+    }'
 }
 mkdir -p ` + shellQuote(dir) + `
 printf '{"question":"%s","to":"%s","branch":"%s"}' "$(esc "$question")" "$(esc "$to")" "$(esc "$branch")" > ` + shellQuote(outputPath) + `

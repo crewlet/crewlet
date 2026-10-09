@@ -82,6 +82,63 @@ func TestTheAskShimRecordsAQuestionFromInsideARealBox(t *testing.T) {
 	}
 }
 
+// A QUESTION IS RECORDED WHATEVER IT HOLDS. The shim writes its JSON by hand,
+// and JSON refuses a raw control character inside a string — so a question
+// carrying a tab (a line of Go, indented), a carriage return (anything pasted
+// from a CRLF file) or a terminal's colour codes wrote a file the runner could
+// not decode, and the run read as finished rather than parked: the question
+// was lost, and the agent had already stopped to wait for its answer.
+func TestTheAskShimRecordsAQuestionWhateverItHolds(t *testing.T) {
+	t.Parallel()
+	question := "Which of these should the fix target?\n\tmain\r\n\trelease/2 \\ \"lts\"\x01 \x1b[1mbold\x1b[0m\x7f end"
+	runner, box := realBox(t)
+	q := codingagent.PathsFor(box).WorkDir() + "/question.txt"
+	if err := box.WriteFile(t.Context(), q, []byte(question)); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	inBox(t, box, `crewlet-ask "$(cat '`+q+`')" --to team --branch wip/t1`)
+
+	result, err := runner.Collect(t.Context(), box, sandbox.RunHandle{})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if !result.NeedsInput || result.Question != question || result.AskTo != "team" || result.WIPBranch != "wip/t1" {
+		t.Fatalf("Collect = needs input %v, question %q, to %q, branch %q; want the question exactly "+
+			"as asked\nask.json = %q", result.NeedsInput, result.Question, result.AskTo,
+			result.WIPBranch, askFile(t, box))
+	}
+}
+
+// A FLAG WITH NO VALUE IS NOT A REASON TO LOSE THE QUESTION. `--to` or
+// `--branch` at the end of the line, its value forgotten, made the shim's
+// `shift 2` fail, and under `set -e` the shim exited before it recorded
+// anything — so the agent stopped to wait for an answer to a question nobody
+// was ever shown. The audience falls back to the requester, as it does when
+// --to is not given, and the branch to what git says.
+func TestAFlagWithNoValueStillRecordsTheQuestion(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		ask, to string
+	}{
+		"--to":     {`crewlet-ask "which branch?" --branch wip/t1 --to`, "requester"},
+		"--branch": {`crewlet-ask "which branch?" --to team --branch`, "team"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner, box := realBox(t)
+			inBox(t, box, tc.ask)
+			result, err := runner.Collect(t.Context(), box, sandbox.RunHandle{})
+			if err != nil {
+				t.Fatalf("Collect: %v", err)
+			}
+			if !result.NeedsInput || result.Question != "which branch?" || result.AskTo != tc.to {
+				t.Fatalf("Collect = needs input %v, question %q, to %q; want the question put to %q",
+					result.NeedsInput, result.Question, result.AskTo, tc.to)
+			}
+		})
+	}
+}
+
 // THE BRANCH THE RUN PUSHED IS RECORDED WITH ITS QUESTION, because it is what
 // a run re-seeded on a fresh machine starts from — and the only thing that
 // knows it is the agent, at the moment it asks. Named with --branch, it needs
