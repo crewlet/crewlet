@@ -99,6 +99,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/references"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -179,8 +180,8 @@ type Manifest struct {
 	// are backed up at that cluster (see [Options.Conn]).
 	Streams []StreamArtifact `json:"streams,omitempty"`
 
-	// Objects describes the objects the store copy names, carried beside
-	// it — absent when it names none.
+	// Objects describes the objects the store copy's required tables
+	// name, carried beside it — absent when they name none.
 	Objects *ObjectArtifact `json:"objects,omitempty"`
 
 	// Domains is where each state-log domain's applier stood IN THE COPY,
@@ -296,9 +297,9 @@ type Options struct {
 	// behind it — the most confusing shape this gate has.
 	Backups coord.BackupRegister
 
-	// Objects is how the objects the copy names are reached. Nil is a node
-	// that runs no object store, which is refused only when the copy names
-	// an object — see [ErrObjectsUnreachable].
+	// Objects is how the objects the copy's required tables name are
+	// reached. Nil is a node that runs no object store, which is refused
+	// only when they name an object — see [ErrObjectsUnreachable].
 	Objects *Objects
 
 	// Metrics is where the copy's duration is recorded. Nil records
@@ -348,6 +349,10 @@ type Service struct {
 	backups coord.BackupRegister
 	nodeID  string
 	objects *Objects
+	// tables is the declared tables a copy is read against —
+	// references.All, which only a test replaces (export_test.go), since a
+	// table no migration creates can never be in the one list.
+	tables  []objstore.ReferenceTable
 	metrics *metrics.Recorder
 	now     func() time.Time
 }
@@ -404,7 +409,7 @@ func New(opts Options) (*Service, error) {
 	}
 	return &Service{store: opts.Store, holding: opts.Estate, conn: opts.Conn, api: opts.API, holds: opts.Holds,
 		backups: opts.Backups, nodeID: opts.NodeID, objects: opts.Objects,
-		metrics: opts.Metrics, now: now}, nil
+		tables: references.All, metrics: opts.Metrics, now: now}, nil
 }
 
 // Take writes a complete backup into dir and returns its manifest.
@@ -505,12 +510,12 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 		for stream, cursor := range cursors {
 			manifest.Domains[stream] = cursor.Position
 		}
-		// THE OBJECTS THE COPY NAMES, read from the copy for the reason
-		// the positions are: the rows a restore brings back are the
-		// ones in this file, and a file created after the copy is one
-		// whose record the restore replays and whose bytes the fleet
-		// still holds.
-		refs, err = referencedIn(ctx, path, references.All)
+		// THE OBJECTS THE COPY'S REQUIRED TABLES NAME, read from the
+		// copy for the reason the positions are: the rows a restore
+		// brings back are the ones in this file, and a file created
+		// after the copy is one whose record the restore replays and
+		// whose bytes the fleet still holds.
+		refs, err = referencedIn(ctx, path, s.tables)
 		if err != nil {
 			return Manifest{}, err
 		}

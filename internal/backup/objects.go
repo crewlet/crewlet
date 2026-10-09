@@ -26,19 +26,29 @@ const objectsDirName = "objects"
 
 // Objects is how a backup reaches the company's files' bytes.
 //
-// # Why a backup carries every object the copy names
+// # Why a backup carries every object a live row of the copy names
 //
 // A tracker restored without the bytes of its files names files nobody can
 // open, and the collector deletes a removed file's object at its next pass
 // once the object is more than a day old — within the hour of the removal for
 // any file older than that — so a restore from a week-old backup brings back
-// rows whose objects a live store may no longer hold. The backup is a copy of the COMPANY, so it
-// carries every object the store copy refers to.
+// rows whose objects a live store may no longer hold. The backup is a copy of
+// the COMPANY, so it carries every object a REQUIRED table of the store copy
+// names.
+//
+// A RETIRED REFERENCE IS NOT CARRIED (ADR-0033). A retired row keeps a
+// replaced object from the collector for a grace and names nothing the
+// company is owed, so it is never copied, never asked after and never
+// recorded lost: on S3 its object stays out of objects/, and on the broker's
+// bucket the stream snapshot holds whatever the bucket holds without this
+// package counting it. A restore brings the row back without its object,
+// which nothing owes it, and its domain deletes the row once its grace has
+// passed.
 //
 // WHICH OBJECTS is not an option: the copy is read against
-// internal/objstore/references, the one list its schema gate holds, so a
-// backup can never be built knowing fewer referencing tables than the
-// collector does.
+// internal/objstore/references, the one list its schema gate holds, and walks
+// exactly the Required tables the collector's audit walks — so a backup can
+// never be built knowing fewer required tables than the audit does.
 type Objects struct {
 	// Open streams one object back, checked against the row naming it
 	// ([objstore.Store.Open]): a stream of the wrong bytes ends in
@@ -66,9 +76,9 @@ type ObjectArtifact struct {
 
 	// Objects and Bytes are how many and how large — every object the
 	// artefact holds, a reused one included, since shipping the directory
-	// ships it. On a stream, every object the copy names and the store was
-	// found holding once the snapshot was taken, whose bytes that stream's
-	// snapshot already counts.
+	// ships it. On a stream, every object a required table of the copy
+	// names and the store was found holding once the snapshot was taken,
+	// whose bytes that stream's snapshot already counts.
 	Objects int   `json:"objects"`
 	Bytes   int64 `json:"bytes"`
 
@@ -82,10 +92,10 @@ type ObjectArtifact struct {
 	Reused     int    `json:"reused,omitempty"`
 	ReusedFrom string `json:"reused_from,omitempty"`
 
-	// Lost is every object the copy names that the object store answered
-	// it does not hold, or holds only as bytes that are not the ones the
-	// row records — each with the file that named it, which is what a
-	// person restores.
+	// Lost is every object a required table of the copy names that the
+	// object store answered it does not hold, or holds only as bytes that
+	// are not the ones the row records — each with the file that named it,
+	// which is what a person restores.
 	//
 	// RECORDED RATHER THAN REFUSED. Refusing would not bring the object
 	// back, and every later backup would be refused for the same one —
@@ -131,23 +141,42 @@ const backupFetchConcurrency = 4
 // hundred bytes, and a smaller page is more statements for nothing.
 const referencePage = 500
 
-// reference is one object the copy names: what it must be, and the file that
-// names it.
+// reference is one object a required table of the copy names: what it must
+// be, and the file that names it.
 type reference struct {
 	object  objstore.Object
 	namedBy string
 }
 
-// referencedIn is every object the replicated copy at path names, in key
-// order — read from the copy itself, so the objects a backup carries are the
-// ones the rows it carries name.
+// referencedIn is every object a REQUIRED table of the replicated copy at path
+// names, in key order — read from the copy itself, so the objects a backup
+// carries are the ones the rows it carries name.
+//
+// A RETIRED TABLE IS LEFT OUT before the copy is opened — see [Objects] — and
+// [objstore.ReferenceTable.ReferencesAfter] refuses one, so a walk that forgot
+// to leave it out fails rather than carrying it. EVERY declaration is
+// validated before any is left out: sorted by `Standing == Required` alone, one
+// stating no standing would be skipped as though it were retired — a live
+// table missing from the backup with nothing failing, the default the
+// standing exists to forbid — and no statement is ever built for a table that
+// is skipped, so ReferencesAfter's own validation would never see it.
 //
 // A KEY NAMED AS TWO DIFFERENT OBJECTS refuses the backup: a key is minted for
 // one upload, so two rows giving it two digests or two sizes are a copy that
 // contradicts itself, and a backup that verified the object against either
 // would be certifying the other wrong.
 func referencedIn(ctx context.Context, path string, tables []objstore.ReferenceTable) ([]reference, error) {
-	if len(tables) == 0 {
+	var required []objstore.ReferenceTable
+	for _, t := range tables {
+		if err := t.Validate(); err != nil {
+			return nil, fmt.Errorf("backup: %w", err)
+		}
+		// AFTER Validate, which has refused a standing that is neither.
+		if t.Standing == objstore.Required {
+			required = append(required, t)
+		}
+	}
+	if len(required) == 0 {
 		return nil, nil
 	}
 	db, err := store.OpenEstate(ctx, store.EstateReplicated, path, store.Options{})
@@ -156,7 +185,7 @@ func referencedIn(ctx context.Context, path string, tables []objstore.ReferenceT
 	}
 	defer func() { _ = db.Close() }()
 	seen := map[objstore.Key]reference{}
-	for _, t := range tables {
+	for _, t := range required {
 		query, err := t.ReferencesAfter(referencePage)
 		if err != nil {
 			return nil, fmt.Errorf("backup: %w", err)
@@ -214,12 +243,12 @@ func readReferences(ctx context.Context, tx *sql.Tx, t objstore.ReferenceTable,
 	return page, err
 }
 
-// copyObjects writes every object the copy names into the backup, taking each
-// from prev — the object directory of this node's previous backup, empty when
-// there is none — where it is there and intact, and reading the rest from the
-// store. Where the objects live in a stream the backup snapshots anyway, it
-// copies none and names the stream; [checkStreamObjects] then asks the store
-// for each once the snapshot is taken.
+// copyObjects writes every object a required table of the copy names into the
+// backup, taking each from prev — the object directory of this node's previous
+// backup, empty when there is none — where it is there and intact, and reading
+// the rest from the store. Where the objects live in a stream the backup
+// snapshots anyway, it copies none and names the stream; [checkStreamObjects]
+// then asks the store for each once the snapshot is taken.
 func copyObjects(ctx context.Context, dir string, refs []reference, objs *Objects,
 	prev string) (*ObjectArtifact, error) {
 	if len(refs) == 0 {
@@ -323,9 +352,9 @@ func sortLost(lost []LostObject) {
 }
 
 // checkStreamObjects asks the store, once the stream snapshot is taken, for
-// every object the copy names, and records as lost what it answers it does not
-// hold — or holds as other bytes than the row records, by the size and the
-// digest the backend keeps.
+// every object a required table of the copy names, and records as lost what it
+// answers it does not hold — or holds as other bytes than the row records, by
+// the size and the digest the backend keeps.
 //
 // AFTER THE SNAPSHOT, and that order is what makes a present answer mean the
 // snapshot holds it: the copy is taken before the streams, and the collector

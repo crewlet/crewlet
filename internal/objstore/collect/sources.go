@@ -25,17 +25,24 @@ type Source interface {
 	// apply that far.
 	Barrier(ctx context.Context) (statelog.Position, error)
 
-	// Referenced answers which of among the domain refers to, read no
-	// earlier than at (zero: whatever this node holds), and whether the
-	// answer is COMPLETE: false while this node holds a record it could
-	// not apply that might refer to an object.
+	// Referenced answers which of among any of the domain's declared
+	// tables names — a retired one included, since a retired row keeps its
+	// object from collection as surely as a live one — read no earlier than
+	// at (zero: whatever this node holds), and whether the answer is
+	// COMPLETE: false while this node holds a record it could not apply
+	// that might refer to an object.
 	Referenced(ctx context.Context, among []objstore.Key, at statelog.Position) (map[objstore.Key]struct{}, bool, error)
 
-	// Each hands every reference the domain holds to visit, read no
-	// earlier than at, and reports whether the walk was COMPLETE. visit is
-	// NEVER CALLED INSIDE A READ of the estate: it asks the backend about
-	// each, a round trip a read's connection must not be held across.
-	Each(ctx context.Context, at statelog.Position, visit func(Reference) error) (bool, error)
+	// EachRequired hands every reference the domain holds in a REQUIRED
+	// table to visit — never a retired one's, whose object the company is
+	// not owed (ADR-0033) — read no earlier than at, and reports whether
+	// the walk was COMPLETE. visit is NEVER CALLED INSIDE A READ of the
+	// estate: it asks the backend about each, a round trip a read's
+	// connection must not be held across.
+	//
+	// NAMED FOR WHAT IT LEAVES OUT, beside a Referenced that leaves out
+	// nothing: a reader seeing a bare Each would take it for every table.
+	EachRequired(ctx context.Context, at statelog.Position, visit func(Reference) error) (bool, error)
 }
 
 // Reference is one row naming an object: the object as the row records it, and
@@ -81,6 +88,11 @@ type Estate interface {
 // failure that deletes files; an estate no table names is a barrier every
 // pass takes for nothing, and a wiring mistake besides; one named twice would
 // be read twice under two positions.
+//
+// Each source keeps its objects from collection through every one of its
+// tables and walks only its Required ones. A domain whose every table is
+// retired is accepted: its walk reads nothing and is complete, and nothing
+// about it is wrong.
 func Sources(tables []objstore.ReferenceTable, estates ...Estate) (References, error) {
 	if len(tables) == 0 {
 		return nil, errors.New("objstore/collect: no table is declared as naming objects — " +
@@ -110,6 +122,10 @@ func Sources(tables []objstore.ReferenceTable, estates ...Estate) (References, e
 				"as unreferenced", t.Table, t.Domain)
 		}
 		src.tables = append(src.tables, t)
+		// AFTER Validate, which has refused a standing that is neither.
+		if t.Standing == objstore.Required {
+			src.required = append(src.required, t)
+		}
 	}
 	out := make(References, 0, len(built))
 	for _, src := range built {
@@ -122,10 +138,14 @@ func Sources(tables []objstore.ReferenceTable, estates ...Estate) (References, e
 	return out, nil
 }
 
-// tableSource is one domain's declared tables, read through its estate.
+// tableSource is one domain's declared tables, read through its estate:
+// tables is every one of them, each of whose rows keeps the object it names
+// from collection; required is those declared objstore.Required, the only ones
+// the audit walks.
 type tableSource struct {
-	estate Estate
-	tables []objstore.ReferenceTable
+	estate   Estate
+	tables   []objstore.ReferenceTable
+	required []objstore.ReferenceTable
 }
 
 func (s *tableSource) Name() string { return s.estate.Name() }
@@ -134,8 +154,9 @@ func (s *tableSource) Barrier(ctx context.Context) (statelog.Position, error) {
 	return s.estate.Barrier(ctx)
 }
 
-// Referenced reads every declared table of the domain in ONE read, so the
-// tables are judged at one position and one completeness.
+// Referenced reads every declared table of the domain — required and retired
+// alike — in ONE read, so the tables are judged at one position and one
+// completeness.
 func (s *tableSource) Referenced(ctx context.Context, among []objstore.Key,
 	at statelog.Position) (map[objstore.Key]struct{}, bool, error) {
 
@@ -183,16 +204,16 @@ func (s *tableSource) Referenced(ctx context.Context, among []objstore.Key,
 // anybody needed back.
 const eachPage = judgeBatch
 
-// Each walks every declared table of the domain a keyset page at a time, EACH
-// PAGE IN A READ OF ITS OWN and visited after that read has ended — see
-// [Source.Each]. The walk is complete only where every read was: each is no
-// earlier than at, so a record the node could not apply at any of them is
-// seen.
-func (s *tableSource) Each(ctx context.Context, at statelog.Position,
+// EachRequired walks every REQUIRED table of the domain a keyset page at a
+// time, EACH PAGE IN A READ OF ITS OWN and visited after that read has ended —
+// see [Source.EachRequired]. The walk is complete only where every read was:
+// each is no earlier than at, so a record the node could not apply at any of
+// them is seen. With no required table it reads nothing and is complete.
+func (s *tableSource) EachRequired(ctx context.Context, at statelog.Position,
 	visit func(Reference) error) (bool, error) {
 
 	complete := true
-	for _, t := range s.tables {
+	for _, t := range s.required {
 		query, err := t.ReferencesAfter(eachPage)
 		if err != nil {
 			return false, err

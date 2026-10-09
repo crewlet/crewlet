@@ -100,7 +100,7 @@ func (r *roundTrip) every(t *testing.T) map[objstore.Key][]collect.Reference {
 		t.Fatal(err)
 	}
 	out := map[objstore.Key][]collect.Reference{}
-	complete, err := sources[0].Each(t.Context(), statelog.Position{}, func(ref collect.Reference) error {
+	complete, err := sources[0].EachRequired(t.Context(), statelog.Position{}, func(ref collect.Reference) error {
 		if watch.open.Load() {
 			// RETURNED, never t.Fatal: a goroutine exit inside the
 			// read would leave the read's connection held.

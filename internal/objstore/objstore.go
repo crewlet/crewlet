@@ -46,13 +46,17 @@
 //
 // Which objects SHOULD exist is not a list this package keeps: every row that
 // refers to an object names it, and the declared tables
-// (internal/objstore/references) are the whole inventory. The collector
-// (internal/objstore/collect) deletes what nothing names once it is past a
-// grace measured both from when the backend stored it and from when its key
-// was minted — and [RecordWithin] is the bound on the write that names a key
-// that makes the second of those safe. It also abandons, past the same grace,
-// the uploads a backend began and never finished ([Backend.Pending]), which no
-// listing of the objects shows.
+// (internal/objstore/references) are the whole inventory. Each declared table
+// is Required or Retired (ADR-0033): both keep the objects their rows name
+// from collection, and only a Required table's are audited, and copied,
+// counted or asked after by a backup — a retired object's bytes ride a `nats`
+// backup's stream snapshot uncounted, like anything else the bucket holds. The
+// collector (internal/objstore/collect) deletes what nothing names once it is
+// past a grace measured both from when the backend stored it and from when its
+// key was minted — and [RecordWithin] is the bound on the write that names a
+// key that makes the second of those safe. It also abandons, past the same
+// grace, the uploads a backend began and never finished ([Backend.Pending]),
+// which no listing of the objects shows.
 package objstore
 
 import (
@@ -293,7 +297,9 @@ var identifier = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 // names objects and is missing from that list is the one mistake here that
 // destroys data: its objects read as unreferenced and are collected a day
 // after they were written. So the list is held against the schema by a test
-// rather than by a reader's memory.
+// rather than by a reader's memory. Every declaration also states its
+// [Standing]: whether its rows are references the company is owed, or retired
+// ones that only keep their objects from collection.
 type ReferenceTable struct {
 	// Domain is the state log whose applier writes the table. A pass must
 	// be current on THAT log before it may call an object unnamed, so the
@@ -316,16 +322,69 @@ type ReferenceTable struct {
 	// is reported as the file it belonged to rather than as a key nobody
 	// can look up.
 	Owner []string
+
+	// Standing is whether the rows are references the company is owed
+	// ([Required]: kept from collection, audited, accounted for by every
+	// backup) or retired ones whose rows only keep their objects from
+	// collection ([Retired]). Stated by every declaration — see [Standing]
+	// for why there is no default.
+	Standing Standing
 }
 
+// Standing is what a declared table's rows are to the company: references it
+// is owed, or retired ones that keep their objects only for a grace — ADR-0033,
+// whose rationale is internal/objstore/references' package doc.
+//
+// A NAMED TYPE WITH NO DEFAULT. Its zero value is refused
+// ([ReferenceTable.Validate]), because either default is a silent failure: a
+// live table read as retired is audited by nobody and accounted for by no
+// backup, and a retired table read as live pages somebody about bytes nobody
+// needs and has every backup copy them, or list them lost. A bool could not
+// refuse: its zero value is one of the two answers.
+type Standing string
+
+const (
+	// Required is a live reference: the object is part of something the
+	// company holds — a file's bytes. It keeps the object from collection,
+	// the collector's audit asks the store for it, and a backup accounts for
+	// it: copied on `s3`, asked after once the bucket's stream snapshot is
+	// taken on `nats`, and recorded lost where the store does not hold it.
+	Required Standing = "required"
+
+	// Retired is a reference the company has stopped relying on and keeps
+	// only for a grace — a replaced object a reader that has not caught up
+	// may still be fetching. It keeps the object from collection and does
+	// nothing else: the audit never asks after it, and no backup copies,
+	// counts or asks after it — on `nats` its bytes ride the bucket's stream
+	// snapshot like any other object the bucket holds, uncounted. Its
+	// domain deletes the row once the grace has passed, and the
+	// collector's next pass deletes the object as it deletes any object
+	// nothing names.
+	Retired Standing = "retired"
+)
+
+// Valid reports whether s is [Required] or [Retired] — never the zero value.
+func (s Standing) Valid() bool { return s == Required || s == Retired }
+
 // Validate refuses a declaration that cannot be read safely: no domain, no
-// owner, or a table or column spelled as anything but a plain identifier.
+// owner, no standing, or a table or column spelled as anything but a plain
+// identifier.
 func (t ReferenceTable) Validate() error {
 	if strings.TrimSpace(t.Domain) == "" {
 		return fmt.Errorf("objstore: %s names objects and no state log that writes it", t.Table)
 	}
 	if len(t.Owner) == 0 {
 		return fmt.Errorf("objstore: %s names objects and no column saying whose", t.Table)
+	}
+	switch {
+	case t.Standing == "":
+		return fmt.Errorf("objstore: %s declares no Standing: set objstore.Required "+
+			"(its objects are audited and a backup carries them) or objstore.Retired "+
+			"(they are only kept from collection until its domain deletes the row) — "+
+			"neither is a default", t.Table)
+	case !t.Standing.Valid():
+		return fmt.Errorf("objstore: %s declares Standing %q, which is neither "+
+			"objstore.Required nor objstore.Retired", t.Table, t.Standing)
 	}
 	for _, name := range append([]string{t.Table, t.Key, t.Hash, t.Size}, t.Owner...) {
 		if !identifier.MatchString(name) {
@@ -342,6 +401,9 @@ func (t ReferenceTable) Validate() error {
 // rather than the company's whole inventory, and each question is n seeks of
 // the key column's index rather than a scan. A NULL key matches no IN list,
 // so a row naming no object is never an answer.
+//
+// ASKED OF EVERY DECLARED TABLE, a retired one included: a retired row keeps
+// its object from collection exactly as a live one does.
 func (t ReferenceTable) ObjectsAmong(n int) (string, error) {
 	if n <= 0 {
 		return "", fmt.Errorf("objstore: a question about %d objects", n)
@@ -358,16 +420,28 @@ func (t ReferenceTable) ObjectsAmong(n int) (string, error) {
 // the page before, or "" for the first. Each row is the key, the digest, the
 // size and then the owner columns.
 //
-// A KEYSET PAGE ON THE KEY COLUMN'S INDEX, so a walk of every reference — the
-// audit's and the backup's — holds a page in memory and seeks to each next
-// one, and NULL is excluded by name: a row naming no object (a removed file)
-// is no reference.
+// A KEYSET PAGE ON THE KEY COLUMN'S INDEX, so a walk of every REQUIRED
+// reference — the audit's and the backup's — holds a page in memory and seeks
+// to each next one, and NULL is excluded by name: a row naming no object (a
+// removed file) is no reference.
+//
+// ONLY FOR A REQUIRED TABLE, and refused for a retired one: its rows name no
+// object the company is owed, so neither the audit nor the backup has any
+// reason to walk them — and a consumer that forgot to leave a retired table
+// out fails here, on its first pass, rather than paging somebody about a
+// replaced object or copying it into every backup.
 func (t ReferenceTable) ReferencesAfter(n int) (string, error) {
 	if n <= 0 {
 		return "", fmt.Errorf("objstore: a page of %d references", n)
 	}
 	if err := t.Validate(); err != nil {
 		return "", err
+	}
+	if t.Standing != Required {
+		return "", fmt.Errorf("objstore: %s is declared %s: its rows keep objects from "+
+			"collection and name none the company is owed, so nothing walks them as "+
+			"references — the audit and the backup read Required tables alone",
+			t.Table, t.Standing)
 	}
 	return `SELECT ` + t.Key + `, ` + t.Hash + `, ` + t.Size + `, ` +
 		strings.Join(t.Owner, `, `) + ` FROM ` + t.Table +

@@ -59,7 +59,7 @@ func (*namedNothing) Referenced(context.Context, []objstore.Key,
 	return map[objstore.Key]struct{}{}, true, nil
 }
 
-func (*namedNothing) Each(context.Context, statelog.Position, func(collect.Reference) error) (bool, error) {
+func (*namedNothing) EachRequired(context.Context, statelog.Position, func(collect.Reference) error) (bool, error) {
 	return true, nil
 }
 
@@ -262,7 +262,7 @@ func (s *namedObject) Referenced(_ context.Context, among []objstore.Key,
 	return out, true, nil
 }
 
-func (s *namedObject) Each(_ context.Context, _ statelog.Position, visit func(collect.Reference) error) (bool, error) {
+func (s *namedObject) EachRequired(_ context.Context, _ statelog.Position, visit func(collect.Reference) error) (bool, error) {
 	return true, visit(collect.Reference{
 		Object:  objstore.Object{Key: s.k, Hash: objstore.HashOf(nil), Size: 0},
 		NamedBy: "ENG/lost.md",

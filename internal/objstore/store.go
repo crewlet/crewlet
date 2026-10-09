@@ -362,8 +362,9 @@ func (s *Store) ReadAt(ctx context.Context, o Object, off, n int64) ([]byte, err
 	return page, nil
 }
 
-// Stat answers what the backend holds under k — for the backup, which checks
-// that an object its copy names is there.
+// Stat answers what the backend holds under k — for the collector's audit and
+// the backup, each of which checks that an object a required table names is
+// there.
 func (s *Store) Stat(ctx context.Context, k Key) (Info, error) {
 	info, err := s.backend.Stat(ctx, k.Name())
 	if err != nil {

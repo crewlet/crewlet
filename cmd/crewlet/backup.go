@@ -118,10 +118,11 @@ func runBackup(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(w, "store (%s)\t%s\t%s\t%d migrations\n",
 			st.Estate, st.File, humanBytes(st.Bytes), len(st.Migrations))
 	}
-	// THE OBJECTS ARE THE COMPANY'S: absent only where the copy names no
-	// file at all. On the broker's own bucket they ride that stream's
-	// snapshot, which is what the row names rather than a directory —
-	// and their bytes are that snapshot's, so they are not counted twice.
+	// THE OBJECTS ARE THE COMPANY'S: absent only where no live row of the
+	// copy names a file at all. On the broker's own bucket they ride that
+	// stream's snapshot, which is what the row names rather than a
+	// directory — and their bytes are that snapshot's, so they are not
+	// counted twice.
 	if o := manifest.Objects; o != nil {
 		switch {
 		case o.Stream != "":
