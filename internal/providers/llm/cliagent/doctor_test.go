@@ -43,8 +43,8 @@ func TestDoctorReportsAMissingBinary(t *testing.T) {
 	}
 }
 
-// "No login" on a machine where the CLI plainly works must explain itself, or
-// an operator goes looking for a bug that is a missing --from-host.
+// "No sign-in" on a machine where the CLI plainly works must explain itself, or
+// an operator goes looking for a bug that is a missing -from-host.
 func TestDoctorNamesAnUnadoptedHostLogin(t *testing.T) {
 	dir := t.TempDir()
 	t.Cleanup(func() { forgetWorkspace(dir) })
@@ -78,7 +78,7 @@ func TestDoctorNamesAnUnadoptedHostLogin(t *testing.T) {
 		t.Fatal("the host login was not found, so the report cannot explain itself")
 	}
 	joined := strings.Join(d.Problems, "\n")
-	for _, want := range []string{"--from-host", "--capture-token", "FAKE_OAUTH_TOKEN"} {
+	for _, want := range []string{"login sub -from-host`", "with `-capture-token`", "FAKE_OAUTH_TOKEN"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("the problem does not offer %q:\n%s", want, joined)
 		}

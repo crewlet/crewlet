@@ -603,7 +603,7 @@ type Profile struct {
 	MarkerScope MarkerScope `yaml:"marker_scope,omitempty"`
 
 	// HostCredentialPaths are where this CLI keeps its login in a human's
-	// own home directory, for `crewlet llm login --from-host` to adopt.
+	// own home directory, for `crewlet llm login -from-host` to adopt.
 	// Paths are relative to that home.
 	HostCredentialPaths []string `yaml:"host_credential_paths,omitempty"`
 

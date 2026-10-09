@@ -95,7 +95,7 @@ type Diagnosis struct {
 	// Credentials is what the shared directory holds.
 	Credentials string
 	// HostLogin names a login on this machine that has NOT been adopted,
-	// so "no login" on a box where the CLI plainly works explains itself.
+	// so "no sign-in" on a box where the CLI plainly works explains itself.
 	HostLogin []string
 	// TokenEnv reports whether the headless token variable is resolved.
 	TokenEnv string
@@ -205,9 +205,7 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 
 	signIn := p.signIn()
 	d.SignIn = signIn.line()
-	if len(signIn.sources) == 0 {
-		d.Problems = append(d.Problems, p.noSignIn(d.HostLogin, signIn.unresolved))
-	}
+	answered := false
 
 	stance := p.localToolsStance()
 	switch {
@@ -220,7 +218,7 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 		d.LocalTools = stance + " — probe skipped, no binary to run"
 		d.Web = "probe skipped — no binary to run"
 	default:
-		d.Smoke = p.smokeTest(ctx)
+		d.Smoke, answered = p.smokeTest(ctx)
 		if strings.HasPrefix(d.Smoke, "failed") {
 			d.Problems = append(d.Problems, d.Smoke)
 		}
@@ -232,6 +230,24 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 		d.Web = p.webProbe(ctx)
 		if strings.HasPrefix(d.Web, "failed") {
 			d.Problems = append(d.Problems, d.Web)
+		}
+	}
+
+	// NOTHING THE ENGINE HANDS THE CLI SIGNS IT IN — which is a problem
+	// unless the CLI answered anyway. A model served by an endpoint that
+	// takes no key (a hermes or pi entry pointed at a local server through
+	// cli.env) is signed in to nothing and works, and so is a CLI holding a
+	// key in a configuration file of its own that no profile names. The
+	// configuration cannot tell those from a missing key; the smoke test's
+	// answer can, so it decides, and without it the report says what it
+	// sees and asks for the run that settles it.
+	if len(signIn.sources) == 0 {
+		if answered {
+			d.SignIn = "none the engine hands the CLI — but the smoke test was " +
+				"answered, so it authenticates some other way (an endpoint that takes " +
+				"no key, or a credential in its own configuration)"
+		} else {
+			d.Problems = append(d.Problems, p.noSignIn(d.HostLogin, signIn.unresolved))
 		}
 	}
 	return d
@@ -252,12 +268,16 @@ func (p *Provider) noSignIn(hostLogin, unresolved []string) string {
 		problem += " — auth.mode is api-key and its api_keys value resolved to " +
 			"nothing: export it, or store it with `crewlet secrets set`"
 	}
+	if p.auth.Mode == AuthSubscription && p.auth.TokenConfigured && p.auth.Token == "" {
+		problem += " — cli.auth.token is set, but the ${VAR} it references resolved " +
+			"to nothing: export it, or store it with `crewlet secrets set`"
+	}
 	if len(hostLogin) > 0 {
 		problem += fmt.Sprintf(
 			" — this machine has a login at %s: adopt it with "+
-				"`crewlet llm login %s --from-host`", strings.Join(hostLogin, ", "), p.key)
+				"`crewlet llm login %s -from-host`", strings.Join(hostLogin, ", "), p.key)
 		if len(p.profile.CaptureTokenArgs) > 0 {
-			problem += fmt.Sprintf(", or mint a headless %s with `--capture-token` "+
+			problem += fmt.Sprintf(", or mint a headless %s with `-capture-token` "+
 				"(preferred: no shared refresh token)", p.profile.TokenEnv)
 		}
 	} else {
@@ -270,6 +290,14 @@ func (p *Provider) noSignIn(hostLogin, unresolved []string) string {
 		problem += fmt.Sprintf(", or set the key of the provider its model names in "+
 			"cli.env, under that provider's own variable (the %q CLI reads it from "+
 			"its environment)", p.agent)
+	}
+	// Said last because it is the one case where nothing needs doing — a
+	// CLI that fronts any provider may be pointed at a local server — and
+	// only the smoke test can tell it apart: a run with it skipped has not
+	// asked the CLI anything.
+	if p.profile.EnvSignIn {
+		problem += ". If this entry's model is served by an endpoint that takes no " +
+			"key, run the doctor without -no-smoke: an answered smoke test clears this"
 	}
 	return problem
 }
@@ -493,10 +521,14 @@ func (p *Provider) probeVersion(ctx context.Context) string {
 // It used to force a call, which rendered the envelope's "you MUST request a
 // tool call" contract that no phase ever receives; a CLI that only called a
 // tool when told it must would have passed here and failed every seat.
-func (p *Provider) smokeTest(ctx context.Context) string {
+//
+// answered reports whether the model replied at all, however badly: a reply
+// is proof the CLI reached its model signed in, which the doctor needs apart
+// from whether the reply was usable.
+func (p *Provider) smokeTest(ctx context.Context) (verdict string, answered bool) {
 	comp, err := p.Complete(ctx, smokeRequest())
 	if err != nil {
-		return "failed — " + err.Error()
+		return "failed — " + err.Error(), false
 	}
 	if len(comp.ToolCalls) == 0 {
 		// TWO DIFFERENT FAILURES, and `It said: ""` describes only one of
@@ -513,15 +545,15 @@ func (p *Provider) smokeTest(ctx context.Context) string {
 					"Every phase a seat runs on this provider will spend corrective rounds "+
 					"asking again and then end without its submission: point this entry "+
 					"at a stronger model",
-				comp.OutputTokens)
+				comp.OutputTokens), true
 		}
 		return fmt.Sprintf(
 			"failed — the CLI answered but produced no parseable tool call, so every phase "+
 				"a seat runs on this provider will spend a corrective round asking again, and "+
 				"end without its submission whenever the model never manages one. It said: %q",
-			strings.TrimSpace(comp.Content))
+			strings.TrimSpace(comp.Content)), true
 	}
-	return fmt.Sprintf("ok — %d in / %d out", comp.InputTokens, comp.OutputTokens)
+	return fmt.Sprintf("ok — %d in / %d out", comp.InputTokens, comp.OutputTokens), true
 }
 
 // smokeRequest is the one call [Provider.smokeTest] makes: the crewlet_smoke
@@ -593,10 +625,10 @@ func orNone(s string) string {
 	return s
 }
 
-// LoginState is a one-word summary for `crewlet llm list`: the first route
+// SignInState is a one-word summary for `crewlet llm list`: the first route
 // the doctor's sign-in line names, or "none" — the same answer, so the two
 // commands cannot disagree about whether an entry is signed in.
-func (p *Provider) LoginState() string { return p.signIn().state() }
+func (p *Provider) SignInState() string { return p.signIn().state() }
 
 // Vendor is the model FAMILY this provider's CLI addresses.
 //

@@ -52,6 +52,22 @@ func signInCases() []signInCase {
 			problem: "cli.env, under that provider's own variable",
 		},
 		{
+			// A count of model tokens is configuration: read as a
+			// credential by a substring match, it reported an entry with
+			// no key at all as signed in.
+			name:  "a cli.env tuning variable whose name holds TOKENS",
+			agent: "hermes", env: map[string]string{"HERMES_MAX_TOKENS": "4096"},
+			problem: "cli.env, under that provider's own variable",
+		},
+		{
+			// A CLI that fronts any provider may be pointed at a server
+			// that takes no key, which only the smoke test can tell
+			// apart — so the problem says how to settle it.
+			name:  "a CLI that may be served by a keyless endpoint",
+			agent: "pi", env: map[string]string{"OPENAI_BASE_URL": "http://127.0.0.1:11434/v1"},
+			problem: "served by an endpoint that takes no key, run the doctor without -no-smoke",
+		},
+		{
 			name:  "a cli.env key whose ${VAR} resolved to nothing",
 			agent: "pi", env: map[string]string{"ANTHROPIC_API_KEY": ""},
 			problem: "cli.env sets ANTHROPIC_API_KEY, but the ${VAR} it references resolved to nothing",
@@ -66,6 +82,17 @@ func signInCases() []signInCase {
 			agent: "claude-code", env: map[string]string{"ANTHROPIC_API_KEY": "sk-ant-x"},
 			auth:    Auth{Mode: AuthSubscription},
 			problem: "run `crewlet llm login sub`",
+			// Claude Code reaches only Anthropic: no keyless endpoint to
+			// point it at, so no such note.
+			without: "endpoint that takes no key",
+		},
+		{
+			// The operator wrote a token reference; that it resolved to
+			// nothing is the fault to name, ahead of the routes they did
+			// not take.
+			name: "a cli.auth.token whose ${VAR} resolved to nothing", agent: "claude-code",
+			auth:    Auth{Mode: AuthSubscription, TokenConfigured: true},
+			problem: "cli.auth.token is set, but the ${VAR} it references resolved to nothing",
 		},
 		{
 			// THE FALSE HEALTHY: api-key mode removes the token, so a
@@ -133,7 +160,7 @@ func checkSignIn(t *testing.T, p *Provider, c signInCase) {
 			problem = line
 		}
 	}
-	state := p.LoginState()
+	state := p.SignInState()
 
 	// THE TWO SURFACES CANNOT DISAGREE: they did, because each kept its
 	// own idea of what "logged in" meant.
@@ -186,10 +213,65 @@ func TestAnInheritedTokenIsASignInOnlyWhenThisProcessHasOne(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	checkSignIn(t, newSignInProvider(t, c), c)
 
-	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "inherited")
-	c.signedIn, c.line = true, "CLAUDE_CODE_OAUTH_TOKEN from this process's environment"
+	// The KEY half, read off the child as well: an inherit-env entry's key
+	// is in no configuration field at all, only in this process's
+	// environment, so a sign-in judged from the configuration could not see
+	// it.
+	t.Setenv("ANTHROPIC_API_KEY", "inherited")
+	c.signedIn, c.line = true, "ANTHROPIC_API_KEY from this process's environment"
 	checkSignIn(t, newSignInProvider(t, c), c)
-	if got := newSignInProvider(t, c).LoginState(); got != "inherited token" {
-		t.Errorf("LoginState = %q, want inherited token", got)
+	if got := newSignInProvider(t, c).SignInState(); got != "inherited key" {
+		t.Errorf("SignInState = %q, want inherited key", got)
+	}
+
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "inherited")
+	c.line = "CLAUDE_CODE_OAUTH_TOKEN from this process's environment"
+	checkSignIn(t, newSignInProvider(t, c), c)
+	if got := newSignInProvider(t, c).SignInState(); got != "inherited token" {
+		t.Errorf("SignInState = %q, want inherited token", got)
+	}
+}
+
+// AN ANSWERED SMOKE TEST IS A SIGN-IN, whatever the configuration shows. A
+// CLI pointed at an endpoint that takes no key, or holding a key in a file of
+// its own, is signed in to nothing this engine hands it and works — and a
+// "no sign-in" problem beside a passing completion is the false problem the
+// doctor was raising for hermes. Without an answer the problem stands.
+func TestAnAnsweredSmokeTestClearsANoSignInProblem(t *testing.T) {
+	t.Parallel()
+	reply := "```json\n{\"message\":\"\",\"tool_calls\":" +
+		"[{\"name\":\"crewlet_smoke\",\"arguments\":{\"ok\":true}}]}\n```"
+	for _, tc := range []struct {
+		name     string
+		env      map[string]string
+		answered bool
+	}{
+		{"the CLI answers", map[string]string{"FAKE_STDOUT": reply}, true},
+		{"the CLI fails", map[string]string{"FAKE_STDERR": "unauthorized", "FAKE_EXIT": "1"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			p := fakeProvider(t, tc.env, map[string]any{"usage": map[string]any{"input": []any{[]any{"in"}}}})
+			d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
+			var problem string
+			for _, line := range d.Problems {
+				if strings.HasPrefix(line, "no sign-in") {
+					problem = line
+				}
+			}
+			if tc.answered {
+				if problem != "" {
+					t.Errorf("a CLI that answered was reported as signed in to nothing: %s", problem)
+				}
+				if !strings.Contains(d.SignIn, "the smoke test was answered") {
+					t.Errorf("sign-in line %q does not say why no problem was raised", d.SignIn)
+				}
+				return
+			}
+			if problem == "" {
+				t.Errorf("a CLI that failed with nothing to sign it in raised no problem (sign-in: %q)", d.SignIn)
+			}
+		})
 	}
 }

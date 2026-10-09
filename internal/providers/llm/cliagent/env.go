@@ -49,6 +49,12 @@ type Auth struct {
 	// Token is a resolved long-lived subscription token, or empty when
 	// the login lives in the credential files instead.
 	Token string
+	// TokenConfigured reports that the entry NAMED a token (cli.auth.token),
+	// whatever it resolved to. Only the doctor reads it: an empty Token is
+	// either "this entry signs in some other way" or "the reference it
+	// wrote resolved to nothing", and only the second is worth telling the
+	// operator about by name.
+	TokenConfigured bool
 	// APIKey is a resolved metered key, used only under AuthAPIKey.
 	APIKey string
 }
@@ -107,7 +113,8 @@ func childEnv(p cliprofile.Profile, c *Checkout, extra map[string]string, auth A
 	}
 
 	// Forwarded BEFORE auth is consulted, which is exactly why a profile
-	// may not name a credential here — see cliprofile.Profile.Validate.
+	// may not name a credential here — see
+	// cliprofile.Profile.ValidateCredentials.
 	for _, name := range p.PassthroughEnv {
 		if value, ok := os.LookupEnv(name); ok {
 			env[name] = value

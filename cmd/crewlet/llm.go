@@ -270,7 +270,7 @@ func providerKeys(providers []cliAgentProvider) []string {
 
 func listLLMProviders(providers []cliAgentProvider, stdout io.Writer) error {
 	w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "PROVIDER\tAGENT\tMODEL\tLOGIN\tSTATE DIR")
+	fmt.Fprintln(w, "PROVIDER\tAGENT\tMODEL\tSIGN-IN\tSTATE DIR")
 	for _, p := range providers {
 		model := p.provider.Model()
 		if model == "" {
@@ -278,7 +278,7 @@ func listLLMProviders(providers []cliAgentProvider, stdout io.Writer) error {
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 			p.key, p.provider.Agent(), model,
-			p.provider.LoginState(), p.provider.Workspace().Root())
+			p.provider.SignInState(), p.provider.Workspace().Root())
 	}
 	return w.Flush()
 }
