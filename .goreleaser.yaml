@@ -200,7 +200,7 @@ changelog:
 # GHCR rather than Docker Hub: the release workflow already holds a GitHub
 # token scoped to this repository, so publishing needs no second account and
 # no second credential.
-# The image is debian:trixie-slim, and that is not a size preference — see
+# The image is Debian 13 (trixie) slim, and that is not a size preference — see
 # the Dockerfile, and the GLIBC note on the build above. A musl base does not
 # work at all.
 dockers_v2:

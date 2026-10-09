@@ -1031,7 +1031,7 @@ re-extracts a cache entry that will not verify. Two consequences worth knowing:
   dynamically linked against `libc.so.6` even though it is pure Go and built
   with `CGO_ENABLED=0`. On Alpine and other musl systems it fails at `execve`,
   reported as `no such file or directory` about a file that plainly exists.
-  Use a glibc base image — the published one is `debian:trixie-slim` for
+  Use a glibc base image — the published one is Debian 13 (trixie) slim for
   exactly this reason — or run the engine on a glibc host. macOS is
   unaffected.
 

@@ -192,12 +192,20 @@ updates:
   # below it — "/" is the whole repository only for github-actions — so a
   # Dockerfile anywhere else is a surface of its own and takes the entry after
   # this one.
+  #
+  # DEBIAN'S MAJOR IS HELD, and the reason is at the pin in the Dockerfile:
+  # this entry's bumps merge on ci.yml's required checks, none of which builds
+  # the image, and a new Debian major renames and drops packages the image
+  # installs. Point releases and digest refreshes within 13 still arrive.
   - package-ecosystem: docker
     directory: "/"
     schedule:
       interval: weekly
     commit-message:
       prefix: "build(deps)"
+    ignore:
+      - dependency-name: "debian"
+        update-types: ["version-update:semver-major"]
 
   # The image internal/e2e's container leg pulls, pinned in a Dockerfile that
   # nothing builds precisely so that this entry can move it: the pin used to be

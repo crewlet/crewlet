@@ -306,7 +306,7 @@ The binary is self-contained: the dashboard's assets are embedded, the store is
 a file it creates, and the event stream is an embedded NATS JetStream server.
 There is no runtime to install and nothing to point a DSN at.
 
-The image is `debian:trixie-slim` with `ca-certificates`, `git` and `tini`
+The image is Debian 13 (trixie) slim with `ca-certificates`, `git` and `tini`
 rather than `distroless` or `scratch`, because the engine **spawns process
 trees** — the local sandbox backend runs a coding agent as a child process,
 setup recipes are shell, and stdio MCP servers are child processes launched by
