@@ -150,6 +150,174 @@ func TestAnOrgRuleIsLocatedWhereItWasWritten(t *testing.T) {
 	}
 }
 
+// The two rules that refuse a key on a human seat, by their messages: the org
+// model's, over every field a running seat alone reads, and the config
+// layer's admission rule over a seat's own GitHub App, which the org model
+// carries no field for.
+const (
+	agentOnlyOnHuman = "agent-only field set on a human seat"
+	githubAppOnHuman = "a human seat has no GitHub App"
+)
+
+// humanSeatKey is one key a seat is authored with, as a human seat would
+// carry it.
+type humanSeatKey struct {
+	// key is the authored key, dotted under `integrations:`.
+	key string
+	// value is the key's value, in YAML flow style.
+	value string
+	// refusal is the message of the rule that refuses the key on a human
+	// seat, or empty where a human seat keeps it.
+	refusal string
+}
+
+// humanSeatKeys is EVERY key a seat is authored with — bar the name, kind and
+// contact that every human seat writes — with the org model's refusals in the
+// order its message lists them.
+var humanSeatKeys = []humanSeatKey{
+	{"availability", "CET business hours", ""},
+	{"handle", "sarah", ""},
+	{"email", "sarah@example.com", ""},
+	{"unit", "Eng", ""},
+	{"goal", "Keep the team unblocked", ""},
+	{"backstory", "Twenty years in infrastructure", ""},
+	{"responsibilities", "[Approvals]", ""},
+	{"manages", "[Dev]", ""},
+	{"llm", "main", agentOnlyOnHuman},
+	{"llm_review", "main", agentOnlyOnHuman},
+	{"llm_subagent", "main", agentOnlyOnHuman},
+	{"llm_auxiliary", "main", agentOnlyOnHuman},
+	{"llm_judge", "main", agentOnlyOnHuman},
+	{"llm_sandbox", "main", agentOnlyOnHuman},
+	{"sandbox", "{enabled: true}", agentOnlyOnHuman},
+	{"token_budget", "{day: 5}", agentOnlyOnHuman},
+	{"workers", "[researcher]", agentOnlyOnHuman},
+	{"learning_enabled", "false", agentOnlyOnHuman},
+	{"schedules", `[{name: digest, cron: "0 9 * * *", task: post}]`, agentOnlyOnHuman},
+	{"placement", "{node: n1}", agentOnlyOnHuman},
+	{"integrations.slack", `{bot_token: "${SARAH_SLACK_BOT}", signing_secret: "${SARAH_SLACK_SIGNING}"}`, agentOnlyOnHuman},
+	{"integrations.mattermost", `{bot_token: "${SARAH_MM_BOT}"}`, agentOnlyOnHuman},
+	{"project", "ENG", agentOnlyOnHuman},
+	{"space", "DOCS", agentOnlyOnHuman},
+	{"mcp_env", "{atlassian: {JIRA_USERNAME: sarah}}", agentOnlyOnHuman},
+	{"behavioral_guidelines", "[Reply fast]", agentOnlyOnHuman},
+	{"integrations.github", "{tier: read_only}", githubAppOnHuman},
+}
+
+// humanSeatWith is a company whose first seat is a human one carrying keys,
+// beside a unit and an agent seat for its references to name.
+func humanSeatWith(keys ...humanSeatKey) string {
+	var b, integrations strings.Builder
+	b.WriteString("name: Acme\nunits:\n  - name: Eng\nroles:\n" +
+		"  - name: Sarah\n    kind: human\n    contact: {slack_user_id: U0SARAH}\n")
+	for _, k := range keys {
+		if sub, ok := strings.CutPrefix(k.key, "integrations."); ok {
+			if integrations.Len() > 0 {
+				integrations.WriteString(", ")
+			}
+			integrations.WriteString(sub + ": " + k.value)
+			continue
+		}
+		b.WriteString("    " + k.key + ": " + k.value + "\n")
+	}
+	if integrations.Len() > 0 {
+		b.WriteString("    integrations: {" + integrations.String() + "}\n")
+	}
+	b.WriteString("  - name: Dev\n")
+	return b.String()
+}
+
+// A HUMAN SEAT'S AGENT-ONLY KEYS ARE REFUSED WHERE THEY WERE WRITTEN, each named
+// as the operator wrote it, and EVERY KEY A SEAT IS AUTHORED WITH IS ACCOUNTED
+// FOR. The org model labels each field it refuses and this layer extends the
+// seat's path with the label, so a label that is not the authored key pins the
+// refusal to a line the document does not have — `integrations.jira` for a
+// seat's top-level `project`, which also reads as the company's Jira block. And
+// a seat key nobody classified is how an agent-only one went unrefused:
+// `placement` validated on a human seat, a constraint on a claim that never
+// happens.
+func TestEveryAgentOnlyKeyIsRefusedOnAHumanSeatWhereItWasWritten(t *testing.T) {
+	t.Parallel()
+
+	t.Run("every seat key is classified", func(t *testing.T) {
+		t.Parallel()
+		classified := []string{"name", "kind", "contact"}
+		for _, k := range humanSeatKeys {
+			classified = append(classified, k.key)
+		}
+		var authored []string
+		role := reflect.TypeFor[config.Role]()
+		for i := range role.NumField() {
+			field := role.Field(i)
+			key, _, _ := strings.Cut(field.Tag.Get("yaml"), ",")
+			if key == "" || key == "-" {
+				t.Fatalf("config.Role.%s has no yaml key to classify", field.Name)
+			}
+			if field.Type != reflect.TypeFor[config.RoleIntegrations]() {
+				authored = append(authored, key)
+				continue
+			}
+			for j := range field.Type.NumField() {
+				sub, _, _ := strings.Cut(field.Type.Field(j).Tag.Get("yaml"), ",")
+				authored = append(authored, key+"."+sub)
+			}
+		}
+		slices.Sort(classified)
+		slices.Sort(authored)
+		if !slices.Equal(classified, authored) {
+			t.Errorf("classified seat keys %v, want the authored ones %v: say whether a "+
+				"human seat keeps each, and which rule refuses it if not", classified, authored)
+		}
+	})
+
+	for _, k := range humanSeatKeys {
+		t.Run(k.key, func(t *testing.T) {
+			t.Parallel()
+			problems := config.Problems(parsed(t, humanSeatWith(k)).Validate())
+			got := append(locatedOf(problems, agentOnlyOnHuman), locatedOf(problems, githubAppOnHuman)...)
+			var want []located
+			if k.refusal != "" {
+				want = []located{{"roles[0]." + k.key, "conflict", "sarah", ""}}
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("human-seat refusals = %+v, want %+v\nall: %+v", got, want, problems)
+			}
+			for _, p := range problems {
+				if strings.Contains(p.Message, agentOnlyOnHuman) && !strings.HasSuffix(p.Message, ": "+k.key) {
+					t.Errorf("refusal does not name exactly %q: %s", k.key, p.Message)
+				}
+			}
+		})
+	}
+
+	// ONE MESSAGE NAMES THEM ALL, at the seat, in the table's order — so the
+	// org model refuses exactly the keys the table says it does, and nothing
+	// the table says a human seat keeps.
+	t.Run("every key at once", func(t *testing.T) {
+		t.Parallel()
+		problems := config.Problems(parsed(t, humanSeatWith(humanSeatKeys...)).Validate())
+		var refused []string
+		for _, k := range humanSeatKeys {
+			if k.refusal == agentOnlyOnHuman {
+				refused = append(refused, k.key)
+			}
+		}
+		want := []located{{"roles[0]", "conflict", "sarah", ""}}
+		if got := locatedOf(problems, agentOnlyOnHuman); !reflect.DeepEqual(got, want) {
+			t.Fatalf("agent-only refusals = %+v, want %+v\nall: %+v", got, want, problems)
+		}
+		for _, p := range problems {
+			if strings.Contains(p.Message, agentOnlyOnHuman) && !strings.HasSuffix(p.Message, ": "+strings.Join(refused, ", ")) {
+				t.Errorf("refusal lists other keys than %v: %s", refused, p.Message)
+			}
+		}
+		want = []located{{"roles[0].integrations.github", "conflict", "sarah", ""}}
+		if got := locatedOf(problems, githubAppOnHuman); !reflect.DeepEqual(got, want) {
+			t.Errorf("GitHub App refusals = %+v, want %+v", got, want)
+		}
+	})
+}
+
 // assertProblemsAreTheRefusal holds the contract between the text and the
 // structure: every problem's message is a whole line of the refusal, its
 // segments are its path, and no line of the refusal goes unaccounted for.

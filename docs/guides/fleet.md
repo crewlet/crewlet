@@ -429,7 +429,9 @@ roles:
 Give both and both must hold — a placement only ever narrows. Labels come
 from `node.labels` in each node's Tier A file and are compared exactly;
 they are advertised on the node's presence lease, so a label change takes
-effect one heartbeat after the restart that made it.
+effect one heartbeat after the restart that made it. Only an agent seat
+takes a placement: a [human seat](../concepts/humans-in-the-org.md) is never
+claimed, so one carrying a placement is refused.
 
 **A selector is held to what a node can advertise.** Everything is matched
 exactly against a node's own Tier A values, so a selector no node could

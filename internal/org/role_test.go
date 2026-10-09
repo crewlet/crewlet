@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/period"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
 // human returns a minimal valid human seat, with mutators applied.
@@ -111,10 +112,11 @@ func TestHumanSeatRejectsEveryRuntimeField(t *testing.T) {
 		{"schedules", func(r *Role) {
 			r.Schedules = []Schedule{{Name: "standup", Cron: "0 9 * * *", Task: "post"}}
 		}},
+		{"placement", func(r *Role) { r.Placement = placement.SeatPlacement{Node: "n1"} }},
 		{"integrations.slack", func(r *Role) { r.Slack = SlackIdentity{BotToken: "xoxb-1"} }},
 		{"integrations.mattermost", func(r *Role) { r.Mattermost = MattermostIdentity{BotToken: "mm-1"} }},
-		{"integrations.jira", func(r *Role) { r.Project = "ENG" }},
-		{"integrations.confluence", func(r *Role) { r.Space = "ENG" }},
+		{"project", func(r *Role) { r.Project = "ENG" }},
+		{"space", func(r *Role) { r.Space = "ENG" }},
 		{"mcp_env", func(r *Role) { r.MCPEnv = MCPEnv{"atlassian": {"JIRA_USERNAME": "s"}} }},
 		{"behavioral_guidelines", func(r *Role) { r.BehavioralGuidelines = []string{"Reply fast"} }},
 	} {
@@ -128,9 +130,26 @@ func TestHumanSeatRejectsEveryRuntimeField(t *testing.T) {
 			// its whole job is pointing at a line in their config. The WHOLE
 			// key, and nothing else: a message ending in "slack" contains
 			// "slack" and still names a key no seat has, because a seat's
-			// chat apps are written under integrations.
+			// chat apps are written under integrations — and one ending in
+			// "integrations.jira" names a key no seat has either, because a
+			// seat's project is written at the top of the seat.
 			if !strings.HasSuffix(err.Error(), ": "+tc.field) {
 				t.Errorf("error does not name exactly %q: %v", tc.field, err)
+			}
+			// And it is LOCATED at that key: the config layer extends the
+			// seat's path with these segments and a form marks the field they
+			// name, so a label that is not the authored key pins the refusal
+			// to a line the document does not have.
+			var seatErr *SeatError
+			if !errors.As(err, &seatErr) {
+				t.Fatalf("Validate() = %v, want a *SeatError", err)
+			}
+			var want []any
+			for _, part := range strings.Split(tc.field, ".") {
+				want = append(want, part)
+			}
+			if !slices.Equal(seatErr.Field, want) {
+				t.Errorf("located at %#v, want %#v", seatErr.Field, want)
 			}
 		})
 	}
@@ -138,6 +157,11 @@ func TestHumanSeatRejectsEveryRuntimeField(t *testing.T) {
 	// seat must not carry — the tri-state is what makes that detectable.
 	if err := human(func(r *Role) { r.LearningEnabled = Off() }).Validate(); !errors.Is(err, ErrHumanSeatField) {
 		t.Errorf("learning_enabled: false accepted on a human seat: %v", err)
+	}
+	// A placement of labels alone is a constraint as much as a pin is.
+	labels := human(func(r *Role) { r.Placement = placement.SeatPlacement{Labels: map[string]string{"zone": "eu"}} })
+	if err := labels.Validate(); !errors.Is(err, ErrHumanSeatField) {
+		t.Errorf("placement: {labels: …} accepted on a human seat: %v", err)
 	}
 }
 
