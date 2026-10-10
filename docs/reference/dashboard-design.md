@@ -2883,11 +2883,13 @@ held from a member names who to ask, and only one the engine makes for nobody
 here says it does not make it.
 
 **Whose it is to change is the engine's to say.** Past the role, which object
-you may act on — whose queue you may order, whose project's settings you may
-change — is decided by the tool from the org chart when it has read the
-object, and a press it refuses comes back `forbidden` with the engine's own
-sentence. The control draws that sentence as it stands, beside itself, because
-the engine is the one that knows who may.
+you may act on — whose seat you may pause, whose turn you may steer, which
+coding run's question you may answer, whose queue you may order — is decided by
+the tool from the org chart when it has read the object, and a press it
+refuses comes back `forbidden` with the engine's own sentence naming who may
+("Only Jane Founder or an admin can pause Agent SWE."). The control draws that
+sentence as it stands, beside itself, because the engine is the one that knows
+who may.
 
 ### Writes are confirmed, not optimistic
 

@@ -2372,7 +2372,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// the turn missed precedes the record that the turn ended — and the
 	// defer is the backstop for every other way out of this frame. Closing
 	// twice records nothing twice. See steer.go.
-	closeSteer := e.openSteer(req.RunID, req.Handle, box, r)
+	closeSteer := e.openSteer(req.RunID, req.Handle, tel.workItem, box, r)
 	defer closeSteer(ctx)
 
 	// BEFORE THE EXECUTOR, on its own budget. A seat's first ever turn used

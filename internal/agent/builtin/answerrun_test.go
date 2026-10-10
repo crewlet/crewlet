@@ -52,9 +52,11 @@ func answerRunTool(t *testing.T, desk *deskFake) tools.Callable {
 	return nil
 }
 
+// parked is a run in status, its question put to the founder these cases
+// answer as — who else may answer one is seatauthority_test.go's.
 func parked(turnID, status string) sandbox.PendingRun {
 	return sandbox.PendingRun{TurnID: turnID, AgentHandle: "swe", Status: status, Question: "which branch?",
-		LaunchID: "launch-" + turnID}
+		LaunchID: "launch-" + turnID, AudienceHandles: []string{"founder"}}
 }
 
 // AN ANSWER IS PUT ON THE SEAT'S INBOX AS THE PERSON WHO GAVE IT, naming the

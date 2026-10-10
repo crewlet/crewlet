@@ -923,6 +923,24 @@ func (r PendingRun) Paused() bool { return !r.PausedAt.IsZero() }
 // HasBox reports whether a box exists for this run at all.
 func (r PendingRun) HasBox() bool { return r.SandboxID != "" }
 
+// AskedOf reports whether this run's question was put to any of identities —
+// one person's names, their seat and the key their own rows may carry
+// (`tracker.Party.Handles`) — by the audience the park resolved
+// ([PendingRun.AudienceHandles]).
+//
+// ONE RULE FOR TWO READERS: the list of what is waiting on a person and the
+// tool that lets them answer it. Spelled twice, a person could be shown a
+// question they are then refused the answer to, or answer one nobody showed
+// them.
+func (r PendingRun) AskedOf(identities []string) bool {
+	for _, handle := range r.AudienceHandles {
+		if handle != "" && slices.Contains(identities, handle) {
+			return true
+		}
+	}
+	return false
+}
+
 // HeldSince is when this run's box started being held as a snapshot nothing is
 // driving, and whether it is being held at all.
 //

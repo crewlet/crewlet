@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -44,6 +45,11 @@ type RunDeps struct {
 	// resolution every other operator write takes ([WorkDeps.Actor]).
 	// Required with Desk: an answer nobody can be named for is refused.
 	Actor func(ctx context.Context, turn *turnctx.Turn) (Actor, error)
+
+	// Org is the company, read per call, for the one thing this tool says
+	// about people it has only handles for: who a refused answer belongs
+	// to, by the name the chart gives them. Nil names them by handle.
+	Org func() *org.Organization
 }
 
 // answerRun answers a coding run that stopped to ask a person something, by
@@ -79,6 +85,20 @@ type RunDeps struct {
 // person never saw. Carrying the question, it resumes the run only while the
 // run still waits on that one, and is announced `not_awaiting` otherwise
 // ([sandbox.Coordinator.AnswerByTurn]).
+//
+// # It is answered by whoever it was asked of
+//
+// The park resolved WHO the question was put to — the requester, a manager,
+// a team, a colleague by name — and recorded it on the run
+// ([sandbox.PendingRun.AudienceHandles]). That person, under either of their
+// names, may answer it, and so may an admin, who runs the engine the run is
+// parked in; anybody else is refused `forbidden`, naming who it was asked of.
+// The audience is the rule rather than the lead line because a coding agent
+// asking its requester whether to keep the old API is asking for THAT
+// person's decision, and an answer from a stranger to the work would resume
+// the run on a guess. The rule is the run's own ([sandbox.PendingRun.AskedOf])
+// — the one the list of what is waiting on a person is drawn by — so nobody is
+// shown a question they would then be refused the answer to.
 type answerRun struct {
 	deps RunDeps
 }
@@ -94,7 +114,8 @@ func (t *answerRun) Description() string {
 		"once that seat is free of any other coding run. Use this for any " +
 		"parked run — including one started by a schedule, an assignment or a " +
 		"colleague, which has no conversation to reply in. Find parked runs " +
-		"and their questions on the sandbox-runs board."
+		"and their questions on the sandbox-runs board. A question is answered " +
+		"by the people it was put to, or by an admin."
 }
 
 func (t *answerRun) Parameters() map[string]any {
@@ -164,6 +185,11 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return refused(tools.RefusalNotRunning, fmt.Sprintf("Run %s is %s, not "+
 			"waiting for an answer — there is no question for this to answer.",
 			clip(turnID), run.Status)), nil
+	case !actor.Admin && !run.AskedOf(actor.Party().Handles()):
+		return refused(tools.RefusalForbidden, fmt.Sprintf("Only %s can answer the "+
+			"question %s's coding run is waiting on: it was put to them, and an "+
+			"answer resumes the run on it. Nothing was sent.",
+			onlyWho(t.audienceNames(run)...), t.named(run.AgentHandle))), nil
 	}
 	given := types.SandboxAnswerGiven{
 		TurnID: run.TurnID, AgentHandle: run.AgentHandle, Answer: answer,
@@ -187,4 +213,23 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		"turn_id": run.TurnID, "agent_handle": run.AgentHandle,
 		"question": run.Question, "outcome": string(outcome),
 	})
+}
+
+// audienceNames is who a run's question was put to, by the names the chart
+// gives them.
+func (t *answerRun) audienceNames(run sandbox.PendingRun) []string {
+	out := make([]string, 0, len(run.AudienceHandles))
+	for _, handle := range run.AudienceHandles {
+		out = append(out, t.named(handle))
+	}
+	return out
+}
+
+// named is the chart's name for handle, read per call because an apply
+// replaces the chart.
+func (t *answerRun) named(handle string) string {
+	if t.deps.Org == nil {
+		return handle
+	}
+	return seatNamed(t.deps.Org(), handle)
 }

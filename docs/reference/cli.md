@@ -866,7 +866,10 @@ the dashboard's buttons call, over the same route
 terminal and one from a profile screen are one gesture with one record. It acts
 as the **person** your key is linked to (`contact.crewlet_operator_id` on
 their seat), member or admin alike; a key no seat links is refused `unbound`,
-and the refusal names the seat to link it on.
+and the refusal names the seat to link it on. A member pauses and resumes the
+seats that report to them — any seat in their
+[line](../concepts/organization-model.md#a-leads-line) — and an admin any seat;
+anybody else is refused `forbidden`, naming who may.
 
 A paused seat starts no new turn, its incoming mail waits on its inbox in
 order, and its scheduled runs are recorded `skipped_paused` rather than sent.

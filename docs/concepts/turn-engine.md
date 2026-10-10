@@ -734,6 +734,9 @@ sequenceDiagram
     participant F as Every node
     participant N as Node running the turn
     participant L as The turn's tool loop
+    P->>F: describe turn_id — scattered on crewlet.steer.note, offering nothing
+    N-->>P: running, its seat, the work item it is charged to
+    Note over P: may this person steer it? (the chart, the item) — else forbidden
     P->>F: steer_turn{turn_id, note} — scattered on crewlet.steer.note
     F-->>P: nothing (not their turn)
     N-->>P: accepted → outcome "pending"
@@ -766,6 +769,16 @@ sequenceDiagram
   A turn whose executor runs as a [coding CLI's own agentic
   loop](subscription-llm-backends.md) cannot take a note at all — its rounds are
   the CLI's — and says so: `steer_unsupported`.
+- **Only the people the work answers to may send one.** The people the turn's
+  seat reports to — anybody whose
+  [line](organization-model.md#a-leads-line) it is in — the people on the work
+  item the turn is charged to (whoever owns it, filed it or follows it), and an
+  admin. Both halves are facts about a turn that runs elsewhere, so the tool
+  first **describes** it: the same scatter, asking what the turn is and offering
+  nothing, answered by its node with the seat and the item the turn was charged
+  to at dispatch. The person's node decides from its own chart and tracker, and
+  offers the note only then; anybody else is refused `forbidden`, naming who
+  may, with nothing sent. An admin's note skips the describe.
 - **One node answers.** Every node serves the subject and the note names the
   turn; the node running it is the only one that can answer, so nothing has to
   know where a turn runs. It keeps answering `closed` (the tool's

@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/steer"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
@@ -33,6 +34,18 @@ import (
 // [steerClosedMemory] turns this node ran, and a note for one is answered
 // `closed`. Past that the node forgets it, and the asker says `unknown`, which
 // is honest about what nobody could confirm.
+//
+// # A note is offered only once its sender may send it
+//
+// Who may steer a turn is the tool's rule, decided on the node the person
+// asked from, and it turns on what only this node knows: which seat the turn
+// runs and which work item it is charged to. So a request may DESCRIBE the
+// turn rather than offer it a note ([steer.Request.Describe]), and this node
+// answers with both and takes nothing. The item is the one the turn was
+// charged to at dispatch, filed with its box — never re-derived, because a
+// turn's item is fixed for the run (ADR-0022) and a describe that read it
+// from anywhere else could answer a different one than the turn is charged
+// to.
 //
 // # What becomes of a note is on the turn's record
 //
@@ -69,19 +82,22 @@ type steerDesk struct {
 type steerTurn struct {
 	box    *steer.Box
 	handle string
+	// item is the work item the turn is charged to, nil for none — what a
+	// describe answers beside the seat.
+	item *types.WorkItem
 }
 
 func newSteerDesk() *steerDesk {
 	return &steerDesk{open: map[string]steerTurn{}, closed: map[string]string{}}
 }
 
-// open files a turn's box under its run id. A box whose runtime cannot read a
-// note is filed too, so a note for it is answered `unsupported` rather than
-// not at all.
-func (d *steerDesk) register(runID, handle string, box *steer.Box) {
+// register files a turn's box under its run id, with the seat it runs and the
+// work item it is charged to. A box whose runtime cannot read a note is filed
+// too, so a note for it is answered `unsupported` rather than not at all.
+func (d *steerDesk) register(runID, handle string, item *types.WorkItem, box *steer.Box) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.open[runID] = steerTurn{box: box, handle: handle}
+	d.open[runID] = steerTurn{box: box, handle: handle, item: item}
 	// A resumed segment reuses its run id: it is running again, not ended.
 	delete(d.closed, runID)
 }
@@ -125,8 +141,28 @@ func (d *steerDesk) offer(turnID string, n steer.Note) (steer.Status, string, er
 	return "", "", errNotThisNode
 }
 
-// answer is the serve handler: one scattered note, answered only by the node
-// that runs or remembers its turn.
+// describe says what a turn this node runs or remembers is: running, with its
+// seat and its item, or closed, with its seat.
+func (d *steerDesk) describe(turnID string) (steer.Reply, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if t, running := d.open[turnID]; running {
+		return steer.Reply{
+			Version: steer.WireVersion, TurnID: turnID, AgentHandle: t.handle,
+			Status: steer.StatusRunning, WorkItem: t.item,
+		}, nil
+	}
+	if handle, ended := d.closed[turnID]; ended {
+		return steer.Reply{
+			Version: steer.WireVersion, TurnID: turnID, AgentHandle: handle,
+			Status: steer.StatusClosed,
+		}, nil
+	}
+	return steer.Reply{}, errNotThisNode
+}
+
+// answer is the serve handler: one scattered note — or one question about what
+// a turn is — answered only by the node that runs or remembers its turn.
 func (d *steerDesk) answer(_ context.Context, raw []byte) ([]byte, error) {
 	var req steer.Request
 	if err := json.Unmarshal(raw, &req); err != nil {
@@ -135,6 +171,15 @@ func (d *steerDesk) answer(_ context.Context, raw []byte) ([]byte, error) {
 	turnID := strings.TrimSpace(req.TurnID)
 	if turnID == "" {
 		return nil, errors.New("engine: a steer request names no turn")
+	}
+	if req.Describe {
+		// NOTHING IS OFFERED: the asker has not yet decided whether this
+		// person may steer the turn, which is what this answer is for.
+		reply, err := d.describe(turnID)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(reply)
 	}
 	// THE SAME RULE THE TOOL ENFORCED, held again where the note lands: a
 	// peer on another build may bound a note differently, and the turn is
@@ -196,7 +241,11 @@ func steerBox(agentRun runner.AgentLauncher) *steer.Box {
 //
 // Filed only once the runner exists, so a turn whose runner could not be built
 // never answers a note it could not have read.
-func (e *Engine) openSteer(runID, handle string, box *steer.Box,
+//
+// item is the work item the turn is charged to (nil for none), which a
+// describe answers beside the seat — the one the turn's own records carry, so
+// the authority a note is judged by is the charge the turn is judged by.
+func (e *Engine) openSteer(runID, handle string, item *types.WorkItem, box *steer.Box,
 	r *runner.Runner,
 ) func(context.Context) {
 	if e.steers == nil {
@@ -208,7 +257,7 @@ func (e *Engine) openSteer(runID, handle string, box *steer.Box,
 			}
 		}
 	}
-	e.steers.register(runID, handle, box)
+	e.steers.register(runID, handle, item, box)
 	return func(ctx context.Context) {
 		if expired := e.steers.close(runID); len(expired) > 0 {
 			r.SteerExpired(context.WithoutCancel(ctx), expired)

@@ -114,7 +114,8 @@ func (t *pauseSeat) Description() string {
 		"incoming work waits on its inbox in order, and its scheduled runs are skipped. " +
 		"The turn it is on finishes first unless `stop_running` is true, which ends that " +
 		"turn at its next round instead. Pausing a paused seat changes nothing, except to " +
-		"add `stop_running`. Resume it with resume_seat."
+		"add `stop_running`. Resume it with resume_seat. Only the people the seat " +
+		"reports to — anybody whose line it is in — or an admin may pause it."
 }
 
 func (t *pauseSeat) Parameters() map[string]any {
@@ -222,7 +223,8 @@ func (t *resumeSeat) Name() string { return ResumeSeatTool }
 func (t *resumeSeat) Description() string {
 	return "Resume a paused agent seat: it takes work again, starting with what waited " +
 		"on its inbox while it was paused, in order. Scheduled runs skipped during the " +
-		"pause are not replayed. Resuming a seat that is not paused changes nothing."
+		"pause are not replayed. Resuming a seat that is not paused changes nothing. " +
+		"Only the people the seat reports to, or an admin, may resume it."
 }
 
 func (t *resumeSeat) Parameters() map[string]any {
@@ -285,8 +287,20 @@ func (t *resumeSeat) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		pauseAttempts, seat.Handle())), nil
 }
 
-// resolvePauseCall resolves who is calling and which seat, refusing in the
-// class a person's surface acts on.
+// resolvePauseCall resolves who is calling and which seat, and whether the one
+// may pause or resume the other, refusing in the class a person's surface acts
+// on.
+//
+// # Who may
+//
+// Whether a seat works is a decision about somebody else's work, so it is the
+// people the seat reports to who make it — anybody whose line it is in — or an
+// admin, who runs the engine its agents run on ([leadsSeat], authority.go). A
+// member who leads nobody above the seat is refused `forbidden`, naming who
+// may: being a person in the company does not make every agent in it theirs
+// to stop. Pausing and resuming are one authority, because a seat somebody may
+// stop and nobody but its lead may start again is one stuck behind whoever
+// happened to be holding the key.
 func resolvePauseCall(ctx context.Context, deps SeatPauseDeps, turn *turnctx.Turn,
 	tool string, args map[string]any) (Actor, *org.Role, *tools.Result) {
 
@@ -308,11 +322,20 @@ func resolvePauseCall(ctx context.Context, deps SeatPauseDeps, turn *turnctx.Tur
 	if company != nil {
 		seat = company.AgentSeatByHandle(handle)
 	}
+	verb := strings.TrimSuffix(tool, "_seat")
 	if seat == nil {
 		return Actor{}, nil, refusalOf(refused(tools.RefusalNotFound, fmt.Sprintf(
 			"No agent seat has the handle %q, so there is nothing to %s. Only an agent "+
 				"seat takes work a pause can hold; a person's seat does not.",
-			clip(handle), strings.TrimSuffix(tool, "_seat"))))
+			clip(handle), verb)))
+	}
+	// FROM THE CHART THE SEAT WAS RESOLVED IN, so the seat and the line it
+	// is checked against are one reading of the company.
+	if !actor.Admin && !leadsSeat(company, actor, seat.Handle()) {
+		return Actor{}, nil, refusalOf(refused(tools.RefusalForbidden, fmt.Sprintf(
+			"Only %s can %s %s: whether a seat works is decided by the people it "+
+				"reports to, or by an admin. Nothing was changed.",
+			onlyWho(leadsOf(company, seat)...), verb, nameOf(seat))))
 	}
 	return actor, seat, nil
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/config"
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -220,6 +221,92 @@ func TestAnAssistantIsListedOnlyWhatItsKeyMayCall(t *testing.T) {
 	}
 	if made := catalogue.made(); len(made) != 0 {
 		t.Errorf("a member's call reached the catalogue writer as %+v", made)
+	}
+}
+
+// THE ACTOR SAYS WHETHER ITS KEY IS AN ADMIN'S, from the principal the guard
+// resolved — the one authority a tool grants past the chart (pause any seat,
+// steer any turn, answer any parked run). A member's key, linked or not, is
+// not one; a disabled guard's caller is, as the guard makes every caller.
+func TestTheWorkActorSaysWhetherItsKeyIsAnAdmins(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		caller auth.Principal
+		admin  bool
+	}{
+		{"a linked member key", asMember("founder"), false},
+		{"a linked admin key", asAdmin("cofounder"), true},
+		{"an unlinked admin key", asAdmin("ops-bot"), true},
+		{"a disabled guard's caller", auth.Principal{ID: auth.AnonymousOperator,
+			Role: config.RoleAdmin, Reach: auth.ReachAdmin}, true},
+	} {
+		actor, err := operator.WorkActor(twoPeopleChart, nil)(
+			auth.WithPrincipal(t.Context(), tc.caller), nil)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if actor.Admin != tc.admin {
+			t.Errorf("%s resolved Admin=%v, want %v", tc.name, actor.Admin, tc.admin)
+		}
+	}
+}
+
+// A PERSON'S PRESS ON A SEAT THEY DO NOT LEAD IS REFUSED NAMING WHO MAY, at the
+// act transport as the tool refused it: 403 `forbidden`, the tool's own
+// sentence as `detail` — which the dashboard draws as it stands — and the
+// refusal audited. The same press by an admin's key is made.
+func TestAPressOnASeatThePersonDoesNotLeadIsRefusedNamingWhoMay(t *testing.T) {
+	t.Parallel()
+	chart := func() *org.Organization {
+		o := &org.Organization{
+			Name: "Nimbus",
+			Roles: []*org.Role{
+				{Name: "Jane Founder", Kind: org.KindHuman, Manages: []string{"Agent CTO"},
+					Contact: &org.HumanContact{CrewletOperatorID: "cofounder"}},
+				{Name: "Rui Santos", Kind: org.KindHuman,
+					Contact: &org.HumanContact{CrewletOperatorID: "founder"}},
+				{Name: "Agent CTO"},
+			},
+		}
+		o.Normalize()
+		return o
+	}
+	audit := &auditLog{}
+	s := newSurface(t, operator.Options{
+		Pauses: builtin.SeatPauseDeps{
+			Pauses: coordmem.NewFleet(), Announce: &auditLog{}, Org: chart,
+			Actor: operator.WorkActor(chart, nil),
+		},
+		Org: chart, Audit: audit,
+	})
+	h := guarded(s, false)
+	pause := func(requestID string) string {
+		raw, _ := json.Marshal(map[string]any{"request_id": requestID,
+			"args": map[string]any{"handle": "agent-cto"}})
+		return string(raw)
+	}
+
+	// Rui's key is a member's, linked to a seat that leads nobody.
+	status, answer := act(t, h, "founder-secret", builtin.PauseSeatTool,
+		"application/json", pause(requestA))
+	if status != http.StatusForbidden || answer["error"] != string(tools.RefusalForbidden) {
+		t.Fatalf("a member's pause of a seat they do not lead answered %d %v, want 403 forbidden",
+			status, answer)
+	}
+	if detail, _ := answer["detail"].(string); !strings.HasPrefix(detail,
+		"Only Jane Founder or an admin can pause Agent CTO") {
+		t.Errorf("the refusal says %q, want it to name who may", detail)
+	}
+	if recorded := audit.published(); len(recorded) != 1 ||
+		payloadOf(t, recorded[0]).Refusal != string(tools.RefusalForbidden) {
+		t.Errorf("the refused pause was not audited as refused forbidden: %d records", len(recorded))
+	}
+
+	// Jane's key is an admin's AND she leads the seat: either would do.
+	if status, answer := act(t, h, "cofounder-secret", builtin.PauseSeatTool,
+		"application/json", pause(requestB)); status != http.StatusOK {
+		t.Fatalf("Jane's pause answered %d %v, want it made", status, answer)
 	}
 }
 

@@ -71,6 +71,7 @@ confirms one, or which queries it refetches — that is the dashboard's, over th
 outcome and position the answer carries. It does not move `/config`,
 `/secrets`, `/setup` or `/backup`, which are admin surfaces of their own
 (ADR-0031). And past the reach a tool is served at, it does not decide who
-may act on what: whose queue a person may order, whose project's settings
-they may change is the tool's own rule over the chart, exactly as on
-`/operator/mcp`, because only the tool has read the object.
+may act on what: whose seat a person may pause, whose turn they may steer,
+which run's question they may answer, whose queue they may order is the tool's
+own rule over the chart, exactly as on `/operator/mcp`, because only the tool
+has read the object.
