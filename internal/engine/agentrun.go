@@ -109,7 +109,11 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	// colleagues, its channels, its memory, its submission.
 	servers = withBridge(servers, endpoint)
 
-	run := l.executorRun(company, e.sandboxEnv(l.seat, gate, setup))
+	run, refused := l.executorRun(company, e.sandboxEnv(l.seat, gate, setup))
+	if refused != nil {
+		e.bridge.Close(l.turn.RunID)
+		return refused
+	}
 	agentLLM, env := run.llm, run.env
 	spec := manager.BuildSpec(sandbox.SpecInput{
 		Placement:       l.placement,
@@ -153,8 +157,10 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 // method rather than an inline call so the choice has a name a test can hold:
 // see [newCodingRun] for what the two phases mean, and why sending an
 // agent-mode run to llm_sandbox would silently run a seat's whole turn on the
-// model it chose for a subordinate job.
-func (l *agentLauncher) executorRun(c *Company, seatEnv map[string]string) codingRun {
+// model it chose for a subordinate job. Its runner is the one the turn
+// resolved from that same entry, so the run is refused only when an apply
+// since moved the executor onto another CLI.
+func (l *agentLauncher) executorRun(c *Company, seatEnv map[string]string) (codingRun, error) {
 	return newCodingRun(c, l.seat, phase.Execute, l.codingAgent, seatEnv)
 }
 

@@ -1083,17 +1083,20 @@ the provider accepts the key: the smoke test is what proves that — and for a
 model served by an endpoint that takes no key, an answered smoke test is what
 clears the "no sign-in" problem.
 
-**The key also goes into a coding box**, the way a headless token does, so
-it works in a remote cell; the rest of `cli.env` is not carried there.
-[Agent mode](#agent-mode) is `opencode`'s alone — `hermes` and `pi` have no
-coding-agent runner — and a code-sandbox run on any of the three exports the
-key into the box, where the seat's coding agent reads it if it reads that
-variable: `opencode` reads every provider's own, Claude Code only
-Anthropic's. A key given in the seat's `role.sandbox.env` instead is counted
-by the remote-box check as well. A CLI that does not read its key from the
-environment — `kimi-code` reads its metered key only from `config.toml` in
-the credential directory — does not declare `env_sign_in`, and a key in its
-`cli.env` is not counted.
+**On an `opencode` entry the key also goes into a coding box**, the way a
+headless token does, so it works in a remote cell; the rest of `cli.env`
+is not carried there. That is `opencode`'s alone: [agent mode](#agent-mode)
+and code-sandbox work both need a coding-agent runner for the entry's own
+CLI, and `hermes` and `pi` have none. A cli-agent entry's model is written
+for its own CLI and its sign-in is that CLI's, so a `run_sandbox` launch on
+one needs that CLI as the seat's coding agent
+(`role.sandbox.coding_agent: opencode`), and any other pairing is
+[refused](code-sandbox.md#failure-modes). A `hermes` or `pi` seat that runs
+code points `role.llm_sandbox` at an API entry instead. A key given in the
+seat's `role.sandbox.env` is counted by the remote-box check as well. A CLI
+that does not read its key from the environment — `kimi-code` reads its
+metered key only from `config.toml` in the credential directory — does not
+declare `env_sign_in`, and a key in its `cli.env` is not counted.
 
 ### Token refresh across seats
 
@@ -1750,18 +1753,24 @@ reference](../reference/cli.md#crewlet-llm).
   bridge URL a box can dial. `crewlet llm doctor` checks all of it —
   see [Operating it](#operating-it).
 - **Code work needs one more decision.** A subscription *can* back the
-  [code sandbox](code-sandbox.md). On any backend including remote E2B,
-  what travels into the box is the environment that signs the CLI in: a
-  headless token (`crewlet llm login <key> -capture-token`, and Claude
+  [code sandbox](code-sandbox.md), on its own CLI only: code work on a
+  cli-agent entry needs that CLI as the seat's coding agent, and only
+  `claude-code` and `opencode` have one (an `opencode` entry takes
+  `role.sandbox.coding_agent: opencode`). On any backend including remote
+  E2B, what travels into the box is the environment that signs the CLI in:
+  a headless token (`crewlet llm login <key> -capture-token`, and Claude
   Code in the box bills your plan), an `api-key` entry's key, what
-  `inherit-env` forwards, and the [`cli.env` key](#5-a-provider-key-in-clienv-hermes-pi-opencode)
-  of a CLI that reads one (`opencode`, `hermes`, `pi`). The credential
-  *files* never travel to a remote box: they carry a refresh token whose
-  rotation is shared fleet state. So a CLI that signs in only through its
-  files — Codex, Gemini CLI or Kimi Code with no key — needs a
+  `inherit-env` forwards, and `opencode`'s
+  [`cli.env` key](#5-a-provider-key-in-clienv-hermes-pi-opencode). The
+  credential *files* never travel to a remote box: they carry a refresh
+  token whose rotation is shared fleet state. So a `claude-code` entry with
+  no headless token, or an `opencode` entry signed in only by
+  `opencode auth login`, needs a
   [local cell](code-sandbox.md#local-sandboxes) (`providers.sandbox.local`
   plus `run_in: direct` or `container`), where the coding agent runs on the
-  engine host and reads the login directly.
+  engine host and reads the login directly. Any other CLI — Codex, Gemini
+  CLI, Kimi Code, `hermes`, `pi` — points `role.llm_sandbox` at an API
+  entry; see [Code Sandbox](code-sandbox.md#failure-modes).
 - **Latency.** Process launch plus model call. Point `llm_auxiliary` at
   a cheap API-key model rather than paying process startup for every
   summarisation.

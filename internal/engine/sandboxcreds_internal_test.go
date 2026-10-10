@@ -191,7 +191,11 @@ func TestACLIEnvSignInTravelsIntoTheRun(t *testing.T) {
 	c, seat := company(map[string]string{
 		"ANTHROPIC_API_KEY": "sk-ant-not-real", "HTTPS_PROXY": "http://proxy.example.com",
 	})
-	env := newCodingRun(c, seat, phase.Sandbox, "opencode", nil).env
+	run, err := newCodingRun(c, seat, phase.Sandbox, "opencode", nil)
+	if err != nil {
+		t.Fatalf("an opencode entry under its own runner was refused: %v", err)
+	}
+	env := run.env
 	if env["ANTHROPIC_API_KEY"] != "sk-ant-not-real" {
 		t.Fatalf("the run environment does not carry the cli.env sign-in: %v", env)
 	}
@@ -217,7 +221,7 @@ func TestACLIEnvSignInTravelsIntoTheRun(t *testing.T) {
 		t.Error("a remote run whose only variable is a token count was launched")
 	}
 
-	err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, nil)
+	err = sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, nil)
 	if err == nil {
 		t.Fatal("a remote run with no sign-in was launched")
 	}

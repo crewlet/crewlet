@@ -200,7 +200,9 @@ type Spec struct {
 // Model is written in the grammar of the CLI that entry drives — OpenCode
 // reads `<provider>/<model>`, Claude Code an alias or an id — and CLI names
 // that CLI: such a model reaches a runner VERBATIM, and only a runner driving
-// that same CLI can read it — a runner never rebuilds an id it cannot know.
+// that same CLI can read it, which is why the engine refuses a run pairing a
+// cli-agent entry with another CLI's runner rather than letting a runner
+// rebuild an id it cannot know.
 //
 // THE API KEY IS NOT HERE. It rides the run env, and a written config
 // references it by variable name, so the secret is never duplicated into a

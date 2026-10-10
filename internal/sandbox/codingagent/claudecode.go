@@ -74,7 +74,7 @@ func (ClaudeCode) Command(req sandbox.RunRequest, _ Paths, configPath string) st
 	// VERBATIM, because the entry that reached this runner already names
 	// the model in Claude Code's own terms: an `anthropic` entry's model id,
 	// or a claude-code cli-agent entry's alias exactly as its text calls
-	// pass it.
+	// pass it. The engine refuses every other cli-agent entry here.
 	if req.LLM != nil && req.LLM.Model != "" {
 		parts = append(parts, "--model", shellQuote(req.LLM.Model))
 	}

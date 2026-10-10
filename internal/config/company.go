@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"iter"
 	"maps"
 	"regexp"
@@ -249,9 +250,11 @@ func (c *Company) ValidateRunnable() error {
 // Today they are the org's duplicate seat names, duplicate unit names and a
 // unit reference on a seat declared inside another unit (see
 // [org.Organization.ValidateAdmission]), duplicate sandbox setup step names
-// within one list, a GitHub App on a human seat, and a cli-agent entry's
+// within one list, a GitHub App on a human seat, a cli-agent entry's
 // credential configured where its CLI never reads it
-// ([LLMProvider.validateCLICredentials]).
+// ([LLMProvider.validateCLICredentials]), and a seat whose code work hands a
+// cli-agent entry to another CLI's coding agent
+// ([Company.validateSandboxCodingAgents]).
 func (c *Company) ValidateAdmission() error {
 	o, index := c.organization()
 	return index.locate(c.validateAdmission(o))
@@ -261,7 +264,8 @@ func (c *Company) ValidateAdmission() error {
 // caller already built.
 func (c *Company) validateAdmission(o *org.Organization) error {
 	return errors.Join(o.ValidateAdmission(), c.validateSetupStepNames(),
-		c.validateHumanSeatApps(), c.validateCLIAgentCredentials())
+		c.validateHumanSeatApps(), c.validateCLIAgentCredentials(),
+		c.validateSandboxCodingAgents())
 }
 
 // validateHumanSeatApps refuses a per-seat GitHub App on a human seat.
@@ -1329,6 +1333,116 @@ func (c *Company) executorProvider(role *Role, fallback string) (string, LLMProv
 		}
 	}
 	return fallback, c.Providers.LLM[fallback], true
+}
+
+// SandboxProvider is the providers.llm entry a seat's CODE WORK — a
+// run_sandbox launch — runs on, resolved exactly as the phase registry
+// resolves its sandbox phase: the seat's llm_sandbox keys when it names any,
+// else its `llm` keys, the first the company configures; then the entry
+// called "default", then the first declared.
+//
+// The same second resolution [Company.ExecutorProvider] is, for the same
+// reason — validation must answer before anything is built — and held to the
+// registry by the same kind of test. False for a human seat and for a company
+// with no provider.
+func (c *Company) SandboxProvider(role *Role) (string, LLMProvider, bool) {
+	fallback, ok := c.executorFallback()
+	if !ok {
+		return "", LLMProvider{}, false
+	}
+	return c.sandboxProvider(role, fallback)
+}
+
+// sandboxProvider is [Company.SandboxProvider] over a resolved fallback.
+func (c *Company) sandboxProvider(role *Role, fallback string) (string, LLMProvider, bool) {
+	if role.Kind == org.KindHuman {
+		return "", LLMProvider{}, false
+	}
+	// The sandbox phase's own keys, from either spelling — the flat
+	// llm_sandbox wins over the mapping form's `sandbox`, as it does on the
+	// org role the registry reads. Only when it names NONE does it fall to
+	// the seat's `llm`: a seat that names keys none of which exist falls
+	// to the company's fallback, not to its own model.
+	keys := role.LLMSandbox
+	if len(keys) == 0 {
+		keys = role.LLM.Sandbox
+	}
+	if len(keys) == 0 {
+		keys = role.LLM.Default
+	}
+	for _, key := range keys {
+		if entry, ok := c.Providers.LLM[key]; ok {
+			return key, entry, true
+		}
+	}
+	return fallback, c.Providers.LLM[fallback], true
+}
+
+// codingAgent is the runner a seat's code work is driven by: its own
+// coding_agent, then the catalogue's default, then Claude Code — the order
+// the sandbox manager resolves it in at launch.
+func (c *Company) codingAgent(gate *RoleSandbox) CodingAgent {
+	if gate.CodingAgent != "" {
+		return gate.CodingAgent
+	}
+	if s := c.Providers.Sandbox; s != nil && s.DefaultCodingAgent != "" {
+		return s.DefaultCodingAgent
+	}
+	return CodingAgentClaudeCode
+}
+
+// validateSandboxCodingAgents refuses a seat whose code work would hand a
+// cli-agent entry to ANOTHER CLI's coding agent.
+//
+// A cli-agent entry's model is written in its own CLI's grammar and its
+// sign-in is that CLI's, so a different runner can read neither: Claude Code
+// was handed `--model openrouter/anthropic/claude-sonnet-5` from an OpenCode
+// entry, and OpenCode `anthropic/sonnet` from a Claude Code one. The launch
+// refuses such a run; this says so on the write instead of at the seat's
+// first coding call.
+//
+// ADMISSION rather than runnable: the company runs, and only that seat's
+// run_sandbox launches are refused, each with this same remedy. `self` is
+// exempt — its code work rides the executor's own run, which is always its
+// entry's own CLI.
+func (c *Company) validateSandboxCodingAgents() error {
+	fallback, ok := c.executorFallback()
+	if !ok || !c.Providers.Sandbox.Enabled() {
+		return nil
+	}
+	var p problems
+	for role, path := range c.EachRole() {
+		gate := role.Sandbox
+		if gate == nil || !gate.Enabled || gate.RunIn == PlacementSelf {
+			continue
+		}
+		key, entry, resolved := c.sandboxProvider(role, fallback)
+		if !resolved || entry.Type != LLMCLIAgent || entry.CLI == nil {
+			continue
+		}
+		runner := c.codingAgent(gate)
+		cli := entry.CLI.Name()
+		if cli == string(runner) {
+			continue
+		}
+		p.add(at(path, "llm_sandbox"), ErrConflict, "%s", CodingAgentMismatch(string(runner), key, cli))
+	}
+	return p.err()
+}
+
+// CodingAgentMismatch is the one sentence for a coding run whose runner is not
+// the CLI its cli-agent entry drives, shared by the config rule and the
+// engine's launch refusal so the write and the run say the same thing.
+func CodingAgentMismatch(runner, key, cli string) string {
+	remedy := fmt.Sprintf("point role.llm_sandbox at an API entry (type anthropic, openai "+
+		"or openai-compatible) or at a cli-agent entry with cli.agent: %s", runner)
+	if slices.Contains(CodingAgents, CodingAgent(cli)) {
+		remedy += fmt.Sprintf(", or set role.sandbox.coding_agent: %s", cli)
+	}
+	return fmt.Sprintf("this seat's code work runs the %s coding agent on providers.llm.%s, "+
+		"a cli-agent entry driving %s: that entry's model is written for %s and its "+
+		"sign-in is %s's, so %s can read neither. To fix it, %s",
+		runner, key, cli, cli, cli, runner, remedy)
 }
 
 // validateSandboxPlacement holds the rules that need BOTH the catalogue and

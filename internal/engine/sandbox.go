@@ -1095,12 +1095,16 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 	// The seat's own model and login, resolved from llm_sandbox — which
 	// falls back to `llm`, because sandboxed work IS this seat's own work
 	// running somewhere else, and `llm` is what that work runs on — for the
-	// runner that will read them, resolved here as BuildSpec resolves it.
+	// runner that will read them, resolved here as BuildSpec resolves it, so
+	// a pairing that runner cannot drive is refused before a box exists.
 	runner := string(gate.CodingAgent)
 	if runner == "" {
 		runner = manager.DefaultCodingAgent()
 	}
-	run := newCodingRun(company, seat, phase.Sandbox, runner, e.sandboxEnv(seat, gate, setup))
+	run, refused := newCodingRun(company, seat, phase.Sandbox, runner, e.sandboxEnv(seat, gate, setup))
+	if refused != nil {
+		return sandbox.LaunchResult{}, refused
+	}
 	agentLLM, env := run.llm, run.env
 	spec := manager.BuildSpec(sandbox.SpecInput{
 		// The seat's cell, empty inheriting providers.sandbox's default.
@@ -2272,7 +2276,8 @@ func (e *Engine) SeatHeldBySandbox(handle string) bool {
 //
 //   - The MODEL and its endpoint, so the agent addresses the model the seat
 //     runs on at the right host rather than its catalogue's default — a
-//     cli-agent entry's model exactly as its text calls name it.
+//     cli-agent entry's model exactly as its text calls name it, for its own
+//     CLI only.
 //   - A TOKEN OR A KEY, in the run environment, which reaches any box
 //     including a remote one: it is one scoped, revocable variable — a
 //     subscription's headless token or cli.env key, or an API entry's own
@@ -2290,7 +2295,8 @@ type codingRun struct {
 
 // newCodingRun resolves the [codingRun] of a box driven by runner on the
 // entry seat's phase resolves to, over seatEnv — the environment the seat's
-// own config assembled ([Engine.sandboxEnv]).
+// own config assembled ([Engine.sandboxEnv]) — or refuses one that runner
+// cannot drive with a [SandboxModelError], before a box exists.
 //
 // TWO CALLERS, TWO PHASES, and the difference is load-bearing. A run_sandbox
 // call is CODE WORK the executor delegated, so it runs on llm_sandbox — a seat
@@ -2301,24 +2307,39 @@ type codingRun struct {
 // both.
 //
 // THE RUNNER IS AN INPUT, because what an entry can give a box depends on
-// which coding agent reads it ([apiEntryEnv]).
+// which coding agent reads it ([apiEntryEnv]). A run_sandbox launch takes its
+// runner from role.sandbox.coding_agent and its model from llm_sandbox
+// independently, so the pairing is the operator's, and one of them cannot
+// work and used to start a box that failed inside it: a cli-agent entry under
+// ANOTHER CLI's runner. Its model is written in its own CLI's grammar and its
+// sign-in is that CLI's, so Claude Code was handed an OpenCode entry's
+// `openrouter/anthropic/claude-sonnet-5`, and OpenCode a Claude Code entry's
+// `sonnet` with a login it never reads. An agent-mode run never meets this
+// while its turn's epoch holds: its runner is its entry's own CLI. Config
+// refuses the same pairing on a write
+// ([config.Company.validateSandboxCodingAgents]) and both say one sentence
+// ([config.CodingAgentMismatch]).
 //
 // A seat with no resolvable model is not an error here: a company with no
 // models takes no turn, so launches no run (see nomodels.go), and the run
 // carries the seat's own environment and nothing else.
 func newCodingRun(c *Company, seat *org.Role, ph phase.Phase, runner string,
-	seatEnv map[string]string) codingRun {
+	seatEnv map[string]string) (codingRun, error) {
 	run := codingRun{env: seatEnv}
 	if c == nil || c.Models == nil {
-		return run
+		return run, nil
 	}
 	member, err := c.Models.Head(seat, ph)
 	if err != nil {
 		log.Warn("sandbox_llm_unresolved", "seat", seat.Handle(),
 			"phase", ph.String(), "error", err)
-		return run
+		return run, nil
 	}
 	if agent, isCLI := member.Provider.(*cliagent.Provider); isCLI {
+		if agent.Agent() != runner {
+			return codingRun{}, &SandboxModelError{msg: fmt.Sprintf("seat %q: %s",
+				seat.Handle(), config.CodingAgentMismatch(runner, member.Key, agent.Agent()))}
+		}
 		// THE MODEL AS THE ENTRY'S TEXT CALLS PASS IT, AND THE CLI IT IS
 		// WRITTEN FOR. A cli-agent entry's model is in that CLI's own
 		// grammar — OpenCode reads `<provider>/<model>`, Claude Code an
@@ -2339,16 +2360,16 @@ func newCodingRun(c *Company, seat *org.Role, ph phase.Phase, runner string,
 		run.llm = &sandbox.AgentLLM{Model: agent.ModelArgument(), CLI: agent.Agent()}
 		run.files = agent.SandboxCredentials()
 		run.env = underlay(seatEnv, agent.SandboxEnv())
-		return run
+		return run, nil
 	}
 	spec, ok := c.Config.Providers.LLM[member.Key]
 	if !ok {
-		return run
+		return run, nil
 	}
 	ep := c.endpoints[member.Key]
 	run.llm = &sandbox.AgentLLM{Model: ep.model, ProviderType: string(spec.Type), BaseURL: ep.baseURL}
 	run.env = underlay(seatEnv, apiEntryEnv(spec, ep, runner, seatEnv))
-	return run
+	return run, nil
 }
 
 // apiEntryEnv is the sign-in an API entry contributes to a box its runner
@@ -2413,6 +2434,17 @@ func signsIn(env map[string]string, names []string) bool {
 	}
 	return false
 }
+
+// SandboxModelError reports a coding run whose coding agent cannot use the
+// model and sign-in its providers.llm entry gives it, refused before the box
+// is minted.
+//
+// Its own type for the reason [SandboxCredentialError] is one: the remedy is a
+// config edit — another entry, another coding agent — and never a retry, since
+// nothing about the vendor being up changes what a runner can read.
+type SandboxModelError struct{ msg string }
+
+func (e *SandboxModelError) Error() string { return e.msg }
 
 // SandboxCredentialError reports a coding run whose box could never
 // authenticate, refused before the box is minted.
@@ -2491,6 +2523,15 @@ func sandboxCredentials(c *Company, seat *org.Role, ph phase.Phase, placement sa
 	// and a refusal of a run whose key it could not recognise would block a
 	// seat that works, which is worse than the vendor's own "not
 	// authenticated" it exists to pre-empt.
+	//
+	// IT JUDGES THE RIGHT CLI, and the key it lets through is one the run can
+	// read: the box is handed the entry's model exactly as its text calls
+	// name it, so its provider is the one the operator keyed for those calls,
+	// and a run whose runner is another CLI never gets here ([newCodingRun]).
+	// Narrowing it to the variable the model's provider segment "should" use
+	// would need a table of that CLI's providers the engine does not ship and
+	// would be wrong anyway: OpenCode's `zai` reads ZHIPU_API_KEY,
+	// `moonshotai` MOONSHOT_API_KEY, `amazon-bedrock` the AWS pair.
 	if agent.SignsInThroughEnv() {
 		for name, value := range env {
 			if cliprofile.IsCredentialName(name) && strings.TrimSpace(value) != "" {

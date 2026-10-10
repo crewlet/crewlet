@@ -75,10 +75,11 @@ func (OpenCode) Command(req sandbox.RunRequest, _ Paths, _ string) string {
 // entry's own key unread: no value of `model` worked for both the box and the
 // text calls.
 //
-// Otherwise the entry is an API one: a custom base URL means the run's own
-// declared provider, and with none the model is addressed under the OpenCode
-// provider of the entry's wire, whose built-in key variable the run
-// environment carries.
+// Otherwise the entry is an API one (the engine refuses another CLI's entry
+// before a run starts): a custom base URL means the run's own declared
+// provider, and with none the model is addressed under the OpenCode provider
+// of the entry's wire, whose built-in key variable the run environment
+// carries.
 func openCodeModelArg(llm *sandbox.AgentLLM) string {
 	if llm == nil || llm.Model == "" {
 		return ""

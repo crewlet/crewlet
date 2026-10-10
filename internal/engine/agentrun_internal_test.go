@@ -248,14 +248,16 @@ func TestAnAgentModeRunUsesTheExecutorsModelNotTheSandboxOne(t *testing.T) {
 	// under test is which phase the agent-mode path chooses, and a test
 	// that named the phase itself would pass whatever the launcher did.
 	launcher := &agentLauncher{seat: seat, codingAgent: "claude-code"}
-	executor := launcher.executorRun(c, nil).llm
-	if executor == nil || executor.Model != "opus" {
-		t.Fatalf("an agent-mode run resolved to %+v, want the executor's own model", executor)
+	executor, err := launcher.executorRun(c, nil)
+	if err != nil || executor.llm == nil || executor.llm.Model != "opus" {
+		t.Fatalf("an agent-mode run resolved to %+v (err %v), want the executor's own model",
+			executor.llm, err)
 	}
 	// And a run_sandbox call still goes to the model the seat chose for it.
-	delegated := newCodingRun(c, seat, phase.Sandbox, "claude-code", nil).llm
-	if delegated == nil || delegated.Model != "haiku" {
-		t.Fatalf("a delegated coding run resolved to %+v, want llm_sandbox's model", delegated)
+	delegated, err := newCodingRun(c, seat, phase.Sandbox, "claude-code", nil)
+	if err != nil || delegated.llm == nil || delegated.llm.Model != "haiku" {
+		t.Fatalf("a delegated coding run resolved to %+v (err %v), want llm_sandbox's model",
+			delegated.llm, err)
 	}
 }
 
@@ -486,10 +488,12 @@ func TestTheLauncherGuardsTheExecutorsOwnLogin(t *testing.T) {
 			Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil),
 		}
 	}
-	launcherFor := func(e *Engine, seat *org.Role) *agentLauncher {
+	// The runner the turn resolved from the executor's own entry, as
+	// executorRuntime resolves it: a CLI's agent mode runs on that CLI.
+	launcherFor := func(e *Engine, seat *org.Role, runner string) *agentLauncher {
 		return &agentLauncher{
 			engine: e, turn: &turnctx.Turn{RunID: "t1", Seat: seat}, seat: seat,
-			codingAgent: "claude-code", placement: sandbox.E2B,
+			codingAgent: runner, placement: sandbox.E2B,
 		}
 	}
 
@@ -497,7 +501,7 @@ func TestTheLauncherGuardsTheExecutorsOwnLogin(t *testing.T) {
 	// session opened for the run is closed with the refusal.
 	c, seat := splitLoginCompany(t, "codex", "api")
 	e := launchReadyEngine(t, c)
-	err := launcherFor(e, seat).LaunchExecutor(t.Context(), request())
+	err := launcherFor(e, seat, "codex").LaunchExecutor(t.Context(), request())
 	var credErr *SandboxCredentialError
 	if !errors.As(err, &credErr) {
 		t.Fatalf("an agent-mode run on a login that cannot follow it was launched "+
@@ -510,7 +514,7 @@ func TestTheLauncherGuardsTheExecutorsOwnLogin(t *testing.T) {
 	// And the mirror image, or a launcher that always refused would pass.
 	c, seat = splitLoginCompany(t, "api", "codex")
 	e = launchReadyEngine(t, c)
-	if err := launcherFor(e, seat).LaunchExecutor(t.Context(), request()); err != nil {
+	if err := launcherFor(e, seat, "claude-code").LaunchExecutor(t.Context(), request()); err != nil {
 		t.Fatalf("an agent-mode run on an API-key executor was refused: %v", err)
 	}
 }

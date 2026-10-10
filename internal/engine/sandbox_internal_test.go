@@ -89,9 +89,14 @@ func seatNamed(t *testing.T, c *Company, name string) *org.Role {
 }
 
 // runOn is the coding run seat's code work resolves to under runner, over the
-// given seat environment.
-func runOn(c *Company, seat *org.Role, runner string, seatEnv map[string]string) codingRun {
-	return newCodingRun(c, seat, phase.Sandbox, runner, seatEnv)
+// given seat environment, failing the test on a refusal.
+func runOn(t *testing.T, c *Company, seat *org.Role, runner string, seatEnv map[string]string) codingRun {
+	t.Helper()
+	run, err := newCodingRun(c, seat, phase.Sandbox, runner, seatEnv)
+	if err != nil {
+		t.Fatalf("%s's code work under %s was refused: %v", seat.Name, runner, err)
+	}
+	return run
 }
 
 // A coding run needs the model its seat was pointed at. Nothing filled this
@@ -114,7 +119,7 @@ roles:
     handle: eng
     llm: gateway
 `)
-	run := runOn(c, seatNamed(t, c, "Engineer"), codingagent.OpenCodeName, nil)
+	run := runOn(t, c, seatNamed(t, c, "Engineer"), codingagent.OpenCodeName, nil)
 	got, credentials, env := run.llm, run.files, run.env
 	if got == nil {
 		t.Fatal("the sandbox got no model at all")
@@ -175,7 +180,7 @@ roles:
     llm: direct
 `)
 	seat := seatNamed(t, c, "Engineer")
-	run := runOn(c, seat, codingagent.ClaudeCodeName, nil)
+	run := runOn(t, c, seat, codingagent.ClaudeCodeName, nil)
 	if run.llm == nil || run.llm.Model != "claude-sonnet-5" || run.llm.BaseURL != "https://gateway.example.com" {
 		t.Fatalf("the box's model = %+v, want the resolved model and endpoint", run.llm)
 	}
@@ -190,7 +195,7 @@ roles:
 
 	// OPENCODE IS HANDED ITS ENDPOINT IN opencode.json, so only the key
 	// its declared provider reads through {env:…} travels.
-	run = runOn(c, seat, codingagent.OpenCodeName, nil)
+	run = runOn(t, c, seat, codingagent.OpenCodeName, nil)
 	if !maps.Equal(run.env, map[string]string{"ANTHROPIC_API_KEY": "sk-ant-first"}) {
 		t.Errorf("OpenCode's run environment = %v, want the key alone", run.env)
 	}
@@ -198,7 +203,7 @@ roles:
 	// An entry with NO base_url exports no endpoint variable at all: an
 	// empty ANTHROPIC_BASE_URL is not "the default", it is a URL that is
 	// not one.
-	run = runOn(c, seatNamed(t, c, "Reviewer"), codingagent.ClaudeCodeName, nil)
+	run = runOn(t, c, seatNamed(t, c, "Reviewer"), codingagent.ClaudeCodeName, nil)
 	if !maps.Equal(run.env, map[string]string{"ANTHROPIC_API_KEY": "sk-ant-first"}) {
 		t.Errorf("an entry with no base_url gave the run environment %v, want the key alone", run.env)
 	}
@@ -235,7 +240,7 @@ roles:
 		{"ANTHROPIC_API_KEY": "sk-ant-seat"},
 		{"CLAUDE_CODE_USE_BEDROCK": "1"},
 	} {
-		run := runOn(c, seat, codingagent.ClaudeCodeName,
+		run := runOn(t, c, seat, codingagent.ClaudeCodeName,
 			e.sandboxEnv(seat, &config.RoleSandbox{Env: own}, nil))
 		for name, value := range own {
 			if run.env[name] != value {
@@ -252,7 +257,7 @@ roles:
 
 	// A seat that brings no sign-in still gets the entry's, or this would
 	// just be an entry whose key never travels.
-	run := runOn(c, seat, codingagent.ClaudeCodeName,
+	run := runOn(t, c, seat, codingagent.ClaudeCodeName,
 		e.sandboxEnv(seat, &config.RoleSandbox{Env: map[string]string{"GITHUB_TOKEN": "ghp_x"}}, nil))
 	if run.env["ANTHROPIC_API_KEY"] != "sk-ant-company" || run.env["GITHUB_TOKEN"] != "ghp_x" {
 		t.Errorf("a seat with no sign-in of its own: run environment %v", run.env)
@@ -281,7 +286,7 @@ roles:
     handle: eng
     llm: big
 `)
-	got := runOn(c, seatNamed(t, c, "Engineer"), codingagent.OpenCodeName, nil).llm
+	got := runOn(t, c, seatNamed(t, c, "Engineer"), codingagent.OpenCodeName, nil).llm
 	if got == nil || got.Model != "gpt-4o" {
 		t.Fatalf("the sandbox model = %+v, want the seat's own model", got)
 	}
@@ -304,13 +309,13 @@ roles:
     llm: big
     llm_sandbox: coder
 `)
-	got = runOn(c, seatNamed(t, c, "Engineer"), codingagent.OpenCodeName, nil).llm
+	got = runOn(t, c, seatNamed(t, c, "Engineer"), codingagent.OpenCodeName, nil).llm
 	if got == nil || got.Model != "gpt-4o-coder" {
 		t.Fatalf("the sandbox model = %+v, want llm_sandbox's own", got)
 	}
 }
 
-// A CLI-AGENT ENTRY'S RUN NAMES THE MODEL AS ITS TEXT CALLS DO.
+// A CLI-AGENT ENTRY'S RUN NAMES THE MODEL AS ITS TEXT CALLS DO, FOR ITS OWN CLI.
 //
 // Every subscription entry shares one providers.llm type, and the run used to
 // be handed a FAMILY instead — the profile's vendor — from which OpenCode
@@ -339,7 +344,11 @@ roles:
     llm: oc
 `)
 	seat := seatNamed(t, c, "Engineer")
-	got := newCodingRun(c, seat, phase.Execute, codingagent.OpenCodeName, nil).llm
+	run, err := newCodingRun(c, seat, phase.Execute, codingagent.OpenCodeName, nil)
+	if err != nil {
+		t.Fatalf("an opencode entry under its own runner was refused: %v", err)
+	}
+	got := run.llm
 	if got == nil {
 		t.Fatal("the run got no model at all")
 	}
@@ -357,6 +366,59 @@ roles:
 	cmd := codingagent.OpenCode{}.Command(sandbox.RunRequest{Brief: "x", LLM: got}, codingagent.Paths{}, "")
 	if !strings.Contains(cmd, "--model '"+text+"'") {
 		t.Errorf("the agent run gave:\n%s\nwant --model %q, the value every text call passes", cmd, text)
+	}
+}
+
+// A RUNNER NEVER READS ANOTHER CLI'S ENTRY.
+//
+// A run_sandbox launch takes its runner from role.sandbox.coding_agent (Claude
+// Code when nothing names one) and its model from llm_sandbox independently,
+// so an OpenCode text seat that enabled a sandbox handed Claude Code
+// `--model openrouter/…`, and a Claude Code entry under the OpenCode runner
+// became `anthropic/sonnet` with a login OpenCode never reads. Both are
+// refused before a box exists, naming the fix.
+func TestACodingRunOnAnotherCLIsEntryIsRefused(t *testing.T) {
+	t.Setenv(config.CLIHomeEnv, t.TempDir())
+	c := companyFor(t, `
+name: Acme
+providers:
+  llm:
+    oc:
+      type: cli-agent
+      model: anthropic/claude-sonnet-5
+      cli: {agent: opencode}
+    cc:
+      type: cli-agent
+      model: sonnet
+      cli: {agent: claude-code}
+roles:
+  - name: Writer
+    handle: writer
+    llm: oc
+  - name: Coder
+    handle: coder
+    llm: cc
+`)
+	for _, tc := range []struct {
+		seat, runner, cli string
+	}{
+		{"Writer", codingagent.ClaudeCodeName, "opencode"},
+		{"Coder", codingagent.OpenCodeName, "claude-code"},
+	} {
+		seat := seatNamed(t, c, tc.seat)
+		_, err := newCodingRun(c, seat, phase.Sandbox, tc.runner, nil)
+		var modelErr *SandboxModelError
+		if !errors.As(err, &modelErr) {
+			t.Fatalf("%s under %s: err = %v (%T), want *SandboxModelError", tc.seat, tc.runner, err, err)
+		}
+		if !strings.Contains(err.Error(), "role.sandbox.coding_agent: "+tc.cli) {
+			t.Errorf("%s: the refusal does not offer the entry's own runner:\n%v", tc.seat, err)
+		}
+		// And the entry's own runner is let through, or this would just
+		// refuse every cli-agent entry.
+		if _, err := newCodingRun(c, seat, phase.Sandbox, tc.cli, nil); err != nil {
+			t.Errorf("%s under its own CLI's runner was refused: %v", tc.seat, err)
+		}
 	}
 }
 
@@ -391,7 +453,7 @@ roles:
     handle: eng
     llm: subscription
 `)
-	run := runOn(c, seatNamed(t, c, "Engineer"), codingagent.ClaudeCodeName, nil)
+	run := runOn(t, c, seatNamed(t, c, "Engineer"), codingagent.ClaudeCodeName, nil)
 	files, env := run.files, run.env
 	host, mapped := files[".claude/.credentials.json"]
 	if !mapped {
@@ -423,7 +485,7 @@ roles:
     handle: eng
     llm: subscription
 `)
-	files := runOn(c, seatNamed(t, c, "Engineer"), codingagent.ClaudeCodeName, nil).files
+	files := runOn(t, c, seatNamed(t, c, "Engineer"), codingagent.ClaudeCodeName, nil).files
 	if len(files) != 0 {
 		t.Errorf("files that do not exist were offered to the box: %v", files)
 	}
