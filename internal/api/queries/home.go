@@ -211,9 +211,36 @@ const feedSourceReads = 4
 // skipped however the three interleave, and a source that has nothing more
 // stops being asked.
 func (s Sources) companyFeed(ctx context.Context, p Params) (any, error) {
-	kinds, err := feedKinds(p.String("kinds"), s.feedKept())
+	// ONE PERSON'S FEED, under the personal-question rule: their own, or
+	// somebody in their line (see [Sources.viewerParty]).
+	var involving tracker.Party
+	if p.Has("involving") {
+		asked := strings.TrimSpace(p.String("involving"))
+		if asked == "" {
+			return nil, fmt.Errorf("%w: involving names the person whose feed this is, "+
+				"and it is empty — leave it out for the whole company's", ErrBadParams)
+		}
+		var err error
+		if involving, err = s.viewerParty(ctx, asked); err != nil {
+			return nil, err
+		}
+	}
+	kept := s.feedKept()
+	if involving.Named() {
+		// THE TRACKER'S KINDS ALONE: who is in a task is the tracker's to
+		// say, and a page saved or a schedule fired names nobody in it.
+		kept = []FeedKind{FeedCompleted, FeedCreated, FeedHandoff}
+	}
+	kinds, err := feedKinds(p.String("kinds"), kept)
 	if err != nil {
 		return nil, err
+	}
+	for _, kind := range kinds {
+		if involving.Named() && (kind == FeedPage || kind == FeedSchedule) {
+			return nil, fmt.Errorf("%w: kinds=%s involves nobody — involving= narrows "+
+				"the feed to the tasks a person is in, so it reads completed, created "+
+				"and handoff", ErrBadParams, kind)
+		}
 	}
 	for _, kind := range kinds {
 		if (kind == FeedPage && s.Pages == nil) || (kind == FeedSchedule && s.Usage == nil) {
@@ -246,7 +273,7 @@ func (s Sources) companyFeed(ctx context.Context, p Params) (any, error) {
 	}
 	if work := trackerKinds(kinds); len(work) > 0 && cursor[feedSourceWork] != feedEnd {
 		if openErr := open(feedSourceWork, func(position string) (feedPageOf, error) {
-			page, done, lvl, readErr := s.feedWork(ctx, work, actor, position, limit, fresh)
+			page, done, lvl, readErr := s.feedWork(ctx, work, actor, involving, position, limit, fresh)
 			complete = complete && done
 			if level == "" {
 				level = lvl
@@ -421,8 +448,8 @@ func trackerKinds(kinds []FeedKind) []tracker.FeedKind {
 	return out
 }
 
-func (s Sources) feedWork(ctx context.Context, kinds []tracker.FeedKind, actor,
-	position string, limit int, fresh statelog.Freshness) (
+func (s Sources) feedWork(ctx context.Context, kinds []tracker.FeedKind, actor string,
+	involving tracker.Party, position string, limit int, fresh statelog.Freshness) (
 	feedPageOf, bool, statelog.ReadLevel, error) {
 
 	var src feedPageOf
@@ -430,7 +457,7 @@ func (s Sources) feedWork(ctx context.Context, kinds []tracker.FeedKind, actor,
 		return src, true, "", nil
 	}
 	q := tracker.FeedQuery{
-		Kinds: kinds, Actor: actor, Limit: limit,
+		Kinds: kinds, Actor: actor, Involving: involving, Limit: limit,
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
 		MinPosition: fresh.MinPosition,
 	}

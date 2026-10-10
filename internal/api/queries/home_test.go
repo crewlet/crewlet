@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/period"
@@ -230,5 +231,64 @@ func TestTheFeedFoldsASchedulesRunsAndLeavesItsSkippedTicksOut(t *testing.T) {
 			t.Errorf("kinds=%q read the schedule as %+v, want one row of six runs since "+
 				"the oldest fire, and no skipped tick", kinds, runs)
 		}
+	}
+}
+
+// ONE PERSON'S FEED IS A PERSONAL QUESTION. `involving=` hands the tracker the
+// whole party — the seat and the key bound to it — and is answered for the
+// caller and the people in their line only, a member or an admin alike; it
+// reads the tracker's kinds alone, refusing a page or schedule kind by name,
+// and an empty one names nobody.
+func TestAPersonsFeedIsTheirsAndTheirLinesOnly(t *testing.T) {
+	t.Parallel()
+	work := &stubWork{feed: tracker.FeedPage{Rows: []tracker.FeedRow{}, Complete: true}}
+	sources := partySources(t, work)
+	// A NODE THAT KEEPS EVERY SOURCE, so a page or schedule kind beside
+	// involving= is refused for what it is rather than for being absent here.
+	sources.Pages, sources.Usage = &stubPages{}, openStore(t).Replicated()
+
+	// ANA'S OWN, as a member: both of her names reach the tracker, and the
+	// pages are not read at all.
+	got, err := askAs(t, sources, "company_feed", map[string]any{"involving": "ana"},
+		asMember("ops-1"))
+	if err != nil {
+		t.Fatalf("ana's own feed: %v", err)
+	}
+	wantParty(t, work.feedQuery.Involving, "ana", "ops-1")
+	if pageStore := sources.Pages.(*stubPages); pageStore.activity.Kinds != nil {
+		t.Errorf("a person's feed read the pages too: %v", pageStore.activity.Kinds)
+	}
+	if rows := got.(map[string]any)["rows"].([]queries.FeedEntry); len(rows) != 0 {
+		t.Errorf("rows = %+v", rows)
+	}
+	// A REPORT'S, by their lead.
+	if _, err := askAs(t, sources, "company_feed", map[string]any{"involving": "cy"},
+		asMember("ops-1")); err != nil {
+		t.Errorf("ana reading cy's feed: %v", err)
+	}
+	wantParty(t, work.feedQuery.Involving, "cy", "ops-2")
+	// NOT THE LEAD'S, by her report — and an admin key adds nothing to that.
+	for _, caller := range []auth.Principal{asMember("ops-2"), asAdmin("ops-2")} {
+		if _, err := askAs(t, sources, "company_feed", map[string]any{"involving": "ana"},
+			caller); !errors.Is(err, queries.ErrForbidden) {
+			t.Errorf("cy (%s) reading ana's feed = %v, want forbidden", caller.Reach, err)
+		}
+	}
+	for _, params := range []map[string]any{
+		{"involving": "ana", "kinds": "page"},
+		{"involving": "ana", "kinds": "completed,schedule"},
+		{"involving": " "},
+	} {
+		if _, err := askAs(t, sources, "company_feed", params,
+			asMember("ops-1")); !errors.Is(err, queries.ErrBadParams) {
+			t.Errorf("company_feed %v = %v, want bad params", params, err)
+		}
+	}
+	// AND WITHOUT IT, THE COMPANY'S: nobody narrows it.
+	if _, err := askAs(t, sources, "company_feed", nil, asMember("ops-2")); err != nil {
+		t.Fatalf("the company's feed: %v", err)
+	}
+	if work.feedQuery.Involving.Named() {
+		t.Errorf("the company's feed was narrowed to %+v", work.feedQuery.Involving)
 	}
 }

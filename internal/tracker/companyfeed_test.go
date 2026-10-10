@@ -153,3 +153,99 @@ func TestACreateFromAChatThreadSaysWhere(t *testing.T) {
 		t.Errorf("a create nothing on a chat surface caused carries origin %+v", got)
 	}
 }
+
+// A PERSON'S FEED IS THE COMPANY'S ROWS ABOUT THE TASKS THEY ARE IN: one they
+// filed (under either of their names), own, were handed or handed on, asked or
+// were asked something on, or watch — and not one they muted, nor one they
+// have nothing to do with. Each task below is in it through exactly one arm,
+// so a dropped arm is a missing task rather than a passing case.
+func TestAPersonsFeedIsTheTasksTheyAreIn(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	ana := tracker.Party{Handle: "ana", OperatorID: "ops-1"}
+	create := func(id string, edit func(*tracker.Task)) {
+		t.Helper()
+		task := newTask(id)
+		task.Key = "ENG-" + id
+		edit(&task)
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+id, task, nil); err != nil {
+			t.Fatalf("file %s: %v", id, err)
+		}
+		r.drain()
+	}
+	watch := func(id, handle string, on bool) {
+		t.Helper()
+		if _, err := r.writer.UpdateTask(t.Context(), fmt.Sprintf("op-watch-%s-%v", id, on), id,
+			"ENG", tracker.NoIfMatch, tracker.TaskPatch{Watch: &tracker.WatchIntent{
+				Handle: handle, Watch: on}}, tracker.ChangeWatchers, nil); err != nil {
+			t.Fatalf("watch %s: %v", id, err)
+		}
+		r.drain()
+	}
+	create("filed", func(task *tracker.Task) { task.Reporter = "ops-1"; task.Assignee = "bo" })
+	create("owned", func(task *tracker.Task) { task.Assignee = "ana" })
+	// A CHANGE THAT MOVES NO ASSIGNEE, on a task she owns: hers by ownership alone.
+	r.setStatus("owned", tracker.StatusDone)
+	create("handed", func(task *tracker.Task) { task.Assignee = "bo" })
+	handed := "ana"
+	if _, err := r.writer.UpdateTask(t.Context(), "op-hand-in", "handed", "ENG", tracker.NoIfMatch,
+		tracker.TaskPatch{Assignee: &handed}, tracker.ChangeAssignee, nil); err != nil {
+		t.Fatalf("hand handed to ana: %v", err)
+	}
+	r.drain()
+	onward := "cy"
+	if _, err := r.writer.UpdateTask(t.Context(), "op-hand-on", "handed", "ENG", tracker.NoIfMatch,
+		tracker.TaskPatch{Assignee: &onward}, tracker.ChangeAssignee, nil); err != nil {
+		t.Fatalf("hand handed on to cy: %v", err)
+	}
+	r.drain()
+	// ASKED, then muted: the ask is what keeps her in it, not the watch.
+	create("asked", func(task *tracker.Task) { task.Assignee = "bo" })
+	askOn(t, r, "op-asked", "asked", tracker.Comment{ID: "c-asked", Task: "asked", Author: "bo",
+		AuthorKind: tracker.AuthorAgent, Body: "which region?", Ask: "ana", CreatedAt: wednesday})
+	watch("asked", "ana", false)
+	// SHE ASKED, then muted.
+	create("asker", func(task *tracker.Task) { task.Assignee = "bo" })
+	askOn(t, r, "op-asker", "asker", tracker.Comment{ID: "c-asker", Task: "asker", Author: "ana",
+		AuthorKind: tracker.AuthorHuman, Body: "ship it?", Ask: "bo", CreatedAt: wednesday})
+	watch("asker", "ana", false)
+	create("watched", func(task *tracker.Task) { task.Assignee = "bo" })
+	watch("watched", "ana", true)
+	create("muted", func(task *tracker.Task) { task.Assignee = "bo" })
+	watch("muted", "ana", true)
+	watch("muted", "ana", false)
+	// ON THE WATCHERS AND MUTED TOO — watching, but not for her — which is the
+	// row the tracker keeps as `muted = 1` rather than as no row at all.
+	create("silenced", func(task *tracker.Task) {
+		task.Assignee = "bo"
+		task.Watchers, task.Muted = []string{"ana"}, []string{"ana"}
+	})
+	create("theirs", func(task *tracker.Task) { task.Assignee = "bo" })
+
+	got := map[string][]string{}
+	for _, row := range r.companyFeed(tracker.FeedQuery{Involving: ana}).Rows {
+		got[row.Task] = append(got[row.Task], string(row.Kind))
+	}
+	want := map[string][]string{
+		"filed": {"created"},
+		"owned": {"completed", "created"},
+		// THE HAND-OFFS TO HER AND ON FROM HER, and not the create: it was
+		// filed to bo, and she neither owns nor watches the task now.
+		"handed":  {"handoff", "handoff"},
+		"asked":   {"created"},
+		"asker":   {"created"},
+		"watched": {"created"},
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("ana's feed is %v, want %v", got, want)
+	}
+	// THE WHOLE COMPANY WITHOUT IT — the control, so a predicate that matched
+	// nothing would not pass as one that matched only ana's.
+	all := map[string]bool{}
+	for _, row := range r.companyFeed(tracker.FeedQuery{}).Rows {
+		all[row.Task] = true
+	}
+	if !all["muted"] || !all["silenced"] || !all["theirs"] {
+		t.Errorf("the company's feed is %v, and it lacks the tasks ana is not in", all)
+	}
+}
