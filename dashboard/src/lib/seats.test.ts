@@ -149,7 +149,7 @@ const org: OrgProjection = {
 const index = indexOrg(org);
 
 // A LEAD IS ANYBODY ABOVE IN THE CHART, as the engine reads "somebody in
-// their line" (`leadsOf` walks every ancestor): a founder leads everybody.
+// their line" (`org.Organization.LeadsInLine`): a founder leads everybody.
 describe("who leads whom", () => {
   test("a direct manager and every manager above are in the line", () => {
     expect(leadsInLine(index, "ceo", "dev-a")).toBe(true);
@@ -177,14 +177,50 @@ describe("who leads whom", () => {
       derived: {
         units: [],
         seats: [
-          seat({ handle: "a", name: "A", managers: ["b"], reports: ["b"] }),
-          seat({ handle: "b", name: "B", managers: ["a"], reports: ["a"] }),
+          seat({ handle: "a", name: "A", manager: "b", managers: ["b"], reports: ["b"] }),
+          seat({ handle: "b", name: "B", manager: "a", managers: ["a"], reports: ["a"] }),
           seat({ handle: "c", name: "C" }),
         ],
       },
     });
     expect(leadsInLine(loop, "c", "a")).toBe(false);
     expect(leadsInLine(loop, "b", "a")).toBe(true);
+  });
+
+  // THE PRIMARY CHAIN, as the engine walks it: a member with two managers —
+  // the CEO through the unit's name, the unit's lead by leading it — is in
+  // the line of the one the chart hangs it under, and a reorder offered to
+  // the other would be one the engine refuses.
+  test("a second manager does not lead a seat", () => {
+    const two = indexOrg({
+      name: "Two",
+      roles: [{ name: "CEO", handle: "ceo", manages: ["Backend"] }],
+      units: [
+        {
+          name: "Backend",
+          type: "team",
+          lead: "Backend Lead",
+          roles: [{ name: "Backend Lead" }, { name: "Dev" }],
+        },
+      ],
+      derived: {
+        units: [],
+        seats: [
+          seat({ handle: "ceo", name: "CEO", reports: ["backend-lead", "dev"] }),
+          seat({
+            handle: "backend-lead",
+            name: "Backend Lead",
+            manager: "ceo",
+            managers: ["ceo"],
+            reports: ["dev"],
+            auto_reports: ["dev"],
+          }),
+          seat({ handle: "dev", name: "Dev", manager: "ceo", managers: ["ceo", "backend-lead"] }),
+        ],
+      },
+    });
+    expect(leadsInLine(two, "ceo", "dev")).toBe(true);
+    expect(leadsInLine(two, "backend-lead", "dev")).toBe(false);
   });
 });
 

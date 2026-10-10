@@ -509,28 +509,27 @@ export function reportsCaption(seat: Seat): string {
  * Whether `lead` is anywhere above `handle` in the chart — a lead in their
  * LINE.
  *
- * ANY ANCESTOR, not only the direct manager, which is the engine's own reading
- * of "a lead may set what somebody in their line does next" (`leadsOf` in
- * `cmd/crewlet/main.go` walks every manager up the chain): a founder leads
- * everybody, and an authority that stopped one level up would make a line mean
- * the people directly under you. The walk is over [Seat.managers], the
- * engine's derived relation, never a second reading of `manages:` here.
+ * THE ENGINE'S LINE, READ AGAIN: `org.Organization.LeadsInLine` is the one
+ * definition, and it is what decides whether a lead's reorder of somebody's
+ * queue is allowed. Any depth, so a founder leads everybody — and along the
+ * PRIMARY chain, [Seat.manager] up, never every manager a seat has: a member
+ * reached both by an outside seat managing its unit by name and by its own
+ * lead has two managers, and it is in the line of the one the org chart hangs
+ * it under. This walked [Seat.managers] once, and offered that unit's lead a
+ * reorder the engine refused.
  */
 export function leadsInLine(index: OrgIndex, lead: string, handle: string): boolean {
   if (!lead || !handle || lead === handle) return false;
   const start = index.byHandle.get(handle);
   if (!start) return false;
   // A CONFIG CAN EXPRESS A MANAGEMENT CYCLE, which the engine's own walk
-  // ends rather than refuses (`internal/org/hierarchy.go`), so this one
-  // remembers where it has been rather than looping the tab forever.
+  // ends at the first repeat rather than refuses (`internal/org/hierarchy.go`),
+  // so this one remembers where it has been rather than looping the tab
+  // forever.
   const seen = new Set<string>([start.key]);
-  const queue = [...start.managers];
-  while (queue.length > 0) {
-    const next = queue.shift()!;
+  for (let next = start.manager; next && !seen.has(next.key); next = next.manager) {
     if (next.handle === lead) return true;
-    if (seen.has(next.key)) continue;
     seen.add(next.key);
-    queue.push(...next.managers);
   }
   return false;
 }

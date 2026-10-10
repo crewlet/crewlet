@@ -2044,8 +2044,9 @@ row speaks about them ("Rui is the approver") and every change on the page is
 HELD (`HoldWrites`): drawn, disabled, and explained once in words above the
 rows, because the questions put to them are theirs to answer and their work is
 changed from the work screens. The one change released there is a LEAD's
-reorder — anybody above them in the chart, as the tracker defines a lead — and
-the page says before the press that the reorder is stamped with the reader's
+reorder — anybody above them in the chart, as the engine defines
+[a lead's line](../concepts/organization-model.md#a-leads-line) — and the page
+says before the press that the reorder is stamped with the reader's
 name and tells them what is now first.
 
 ### A task's page is one reading
