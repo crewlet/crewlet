@@ -1825,6 +1825,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Backups:     e.Backends().Fleet,
 			BackupFloor: boot.Stream.TrackerRetention.Floor(),
 			NodeID:      nodeID,
+			// THE TABLE THIS PROCESS ADMITS, as its presence publishes
+			// it — the engine's one derivation, never a second — which
+			// `fleet` and `access` hold every live node's against.
+			AuthDigest: e.AuthDigest(),
 		},
 		// The fleet's record of what the log may delete, for the one
 		// retention gesture the engine cannot make on its own: an

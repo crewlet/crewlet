@@ -131,7 +131,7 @@ node means nothing was done.
 | `GET` | `/tokens/series` | The same spend **with a time axis** — one bucket per company day or ISO week, split into bands (see [below](#get-tokensseries)) |
 | `GET` | `/agents/activity` | Every seat's turns over a window of company days — counts, the first-pass rate over reviewed turns, turn-duration quantiles and a day-by-day series (see [`seat_activity`](#queries)) |
 | `GET` | `/schedules` | Configured role/unit schedules + next-run + recent dispatch ledger |
-| `GET` | `/fleet` | Every live node, its roles and labels, seat ownership, singleton duties, per-node config epoch, and where the company's files are kept with what the object store's collector last found. **Admin** — it describes how the engine is run rather than the company, and the dashboard locks the screen that draws it (see [below](#get-fleet)) |
+| `GET` | `/fleet` | Every live node, its roles and labels, whether its API admits the same keys as the node answering, seat ownership, singleton duties, per-node config epoch, and where the company's files are kept with what the object store's collector last found. **Admin** — it describes how the engine is run rather than the company, and the dashboard locks the screen that draws it (see [below](#get-fleet)) |
 | `GET` | `/sandbox-runs` | Every detached [sandbox](../concepts/code-sandbox.md) run the engine still holds, read from the durable run record in the [coordination store](../concepts/coordination.md) (see [below](#get-sandbox-runs)) |
 | `GET` | `/budgets` | Token caps, the durable shared counter they are enforced against — per calendar window — and which scopes are being refused (see [below](#get-budgets)) |
 | `POST` | `/backup` | Copy this node's store and stream estate into `?dir=` **on the engine's host**. **Admin** — it writes every credential the company holds to a path the caller names (see [below](#post-backup)) |
@@ -139,7 +139,7 @@ node means nothing was done.
 | `POST` | `/fleet/broker/remove/{node}` | Remove a member from the metadata group through a live member's system account. `?confirm=` repeats the node id; refused while the node holds a live presence lease as a member unless `?force=true`. **Admin** |
 | `POST` | `/fleet/broker/remove-peer/{peer}` | The same removal, naming the voter by the raft peer id `GET /fleet/broker` shows — for a voter whose name no member has heard. `?confirm=` repeats the peer id. **Admin** |
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
-| `GET` | `/access` | Who can reach the company through this engine and as whom: the API key LABELS the guard accepts (never a value), each one's role and the person it acts as, every human seat with its contacts and the state of its binding, and the auth posture — the anonymous posture, and `company_writers`, the admin keys that alone may change a managed company document. **Admin** (see [below](#get-access)) |
+| `GET` | `/access` | Who can reach the company through this engine and as whom: the API key LABELS the guard accepts (never a value), each one's role and the person it acts as, every human seat with its contacts and the state of its binding, the auth posture — the anonymous posture, and `company_writers`, the admin keys that alone may change a managed company document — and whether every other node serving the API admits the same keys. **Admin** (see [below](#get-access)) |
 | `GET` | `/credential-pool` | Every `providers.llm` entry, each key it rotates through by variable name, and which of them a vendor is refusing and until when — this node's pools beside the fleet's cooldown ledger (never a value). **Admin** (see [below](#get-credential-pool)) |
 | `GET` | `/backups` | What the fleet has backed up: each owner's newest point as the trim reads it, and every backup a person asked a node for, failures included. **Admin** (see [below](#get-backups)) |
 | `GET` | `/mcp-servers` | What each configured MCP server did on each live node — started, failed, tools served and the first failure — read off every node's presence heartbeat, beside what the configuration declares (never a credential). **Admin** (see [below](#get-mcp-servers)) |
@@ -4412,6 +4412,18 @@ a list, and `[]` means every admin key may. The screen names the writers beside
 the keys, so an admin reading the deployment's `api.auth` sees whether the
 document is managed and by which key.
 
+`fleet` says whether the keys this answer lists are the keys every other node
+serving the API admits — Tier A is per node, so a key listed here as a member's
+may be an admin's on a node behind the same address. `digests` is the answering
+node's own keyed fingerprint of its table (one `{"key_id", "digest"}` per
+keyring key, empty with no keyring), and `nodes` every **other** live node that
+serves the API, in id order, each with its `agreement` against this node's
+table — `same`, `different` or `incomparable` — and its own `digests`, exactly
+as [`GET /fleet`](#get-fleet) gives them. `listed` is false when the presence
+listing failed or the node has no fleet to list, and an empty `nodes` then
+means nothing: never read it as every node agreeing. While two live nodes
+disagree the [`auth_diverged`](alarms.md) alarm fires.
+
 ```json
 {
   "auth": {"disabled": false, "anonymous": "public", "allowed_origins": [], "company_writers": []},
@@ -4424,7 +4436,15 @@ document is managed and by which key.
     {"handle": "ana", "name": "Ana Diaz", "email": "ana@example.com", "availability": "",
      "operator_id": "founder", "binding": "bound",
      "contacts": [{"key": "slack_user_id", "value": "U0FOUNDER", "reference": false, "resolves": true}]}
-  ]
+  ],
+  "fleet": {
+    "digests": [{"key_id": "k1", "digest": "3f9a1c2b0d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c"}],
+    "listed": true,
+    "nodes": [
+      {"id": "core-2", "agreement": "same",
+       "digests": [{"key_id": "k1", "digest": "3f9a1c2b0d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c"}]}
+    ]
+  }
 }
 ```
 
@@ -4659,6 +4679,27 @@ writes.
 
 A collection runs hourly and an audit daily, on one data node at a time; a pass
 that fails is tried again ten minutes later.
+
+Each node row that serves the API — the `ingress` role on a bound `api.port`
+— carries `auth`: how the key table its API admits stands against the table of
+the node answering. Tier A is per node, so a key that is a member's on one node
+may be an admin's on another, and this is where you see it. `agreement` is
+`same`, `different`, or `incomparable` — the two nodes share no keyring key,
+usually because one has no keyring at all — and `digests` is what the node
+published: one `{"key_id", "digest"}` per Tier A keyring key, a keyed
+fingerprint of every key's id, role and value and the `anonymous`, `disabled`
+and `company_writers` posture, never the table itself (empty on a node with no
+keyring). Two nodes with one digest under one key id admit the same keys. The
+answering node's own row is the table its process admits, not its presence row,
+which for a lease TTL after a restart is still the previous process's. A node
+that serves no API carries no `auth`: it admits nobody by a key. While two live
+nodes disagree, the [`auth_diverged`](alarms.md) alarm fires — see
+[Configuration § Auth](../concepts/configuration.md#every-node-that-serves-the-api-holds-the-same-keys).
+
+```json
+{"id": "core-2", "auth": {"agreement": "different",
+  "digests": [{"key_id": "k1", "digest": "3f9a1c2b0d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c"}]}}
+```
 
 Each node row carries `broker`: how the node's broker takes part in the
 fleet's — `member` (embedded, a voter in the JetStream cluster), `leaf`

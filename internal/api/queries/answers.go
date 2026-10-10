@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/schedule"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/usage"
 )
@@ -334,6 +335,14 @@ type Sources struct {
 	// (config.ResolveNodeID), which is also the name the node's presence
 	// lease carries, never the raw `node.id` field.
 	NodeID string
+
+	// AuthDigest is the fingerprint of the key table THIS node's API admits,
+	// as its presence publishes it (engine.Engine.AuthDigest), which `fleet`
+	// and `access` hold every live node's against. This PROCESS's rather than
+	// its presence row's: for a lease TTL after a restart the row is still
+	// the previous process's, whose table may be the one the restart
+	// replaced. The zero digest compares with nobody.
+	AuthDigest placement.AuthDigest
 
 	// Now is injectable so a test can pin the lease countdowns and the
 	// next-run projection.

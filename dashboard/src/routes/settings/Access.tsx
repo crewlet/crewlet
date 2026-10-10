@@ -24,6 +24,14 @@
  * grid draws the two as two columns, and the posture above it says in words
  * what each role and a caller with no key reach.
  *
+ * # The same keys on every node
+ *
+ * Tier A is per node, so a key this page lists as a member's may be an
+ * admin's on another node behind the same address. The engine compares a
+ * keyed fingerprint of every live node's table against this one's, and the
+ * posture says in words whether the others hold these keys — never "they
+ * agree" for a fleet nobody could list, or a node nothing can compare.
+ *
  * # Labels, never values
  *
  * The answer has no member a token's value could travel in, and this screen
@@ -61,12 +69,15 @@ import type {
   AccessAuth,
   AccessBinding,
   AccessContact,
+  AccessFleet,
+  AccessNode,
   AccessPerson,
   AccessSeat,
   AccessToken,
   AnonymousAccess,
   TokenRole,
 } from "~/contract/access.ts";
+import { AGREEMENT_WORDS, digestLine } from "./keyTable.tsx";
 
 /**
  * How often the answer is asked again, in ms.
@@ -182,6 +193,7 @@ export function PeopleAndAccess() {
       {data && (
         <>
           <TierACallout auth={data.auth} />
+          <FleetKeys fleet={data.fleet} />
           {data.auth.disabled && (
             <Callout variant="danger" role="alert">
               <InlineCode>api.auth.disabled</InlineCode> is on: every caller is{" "}
@@ -405,6 +417,73 @@ function TierACallout({ auth }: { auth: AccessAuth }) {
       </span>
     </Callout>
   );
+}
+
+/**
+ * Whether every other node serving the API admits the keys this page lists.
+ *
+ * A DIVERGENCE IS AN ALERT, because it is a way to reach more: a key may be a
+ * member's here and an admin's on the next node. Everything else is a plain
+ * sentence, and the three readings that are not an agreement are each said as
+ * what they are — a fleet nobody could list, a node with no keyring, a node
+ * that shares no key with this one — never as "every node agrees".
+ */
+function FleetKeys({ fleet }: { fleet: AccessFleet }) {
+  const differ = fleet.nodes.filter((n) => n.agreement === "different");
+  const same = fleet.nodes.filter((n) => n.agreement === "same");
+  const unknown = fleet.nodes.filter((n) => n.agreement === "incomparable");
+  if (differ.length > 0) {
+    return (
+      <Callout variant="danger" role="alert" icon={<KeyGlyph size="md" />}>
+        <span>
+          <NodeList nodes={differ} /> {differ.length === 1 ? "judges" : "judge"} API keys by a
+          different table from this node, so a key listed here can reach more — or less — through{" "}
+          {differ.length === 1 ? "it" : "them"}. {AGREEMENT_WORDS.different.hint}
+        </span>
+      </Callout>
+    );
+  }
+  let says: string;
+  if (!fleet.listed) {
+    says =
+      "The fleet could not be listed, so whether every other node serving the API admits these same keys is not known.";
+  } else if (fleet.digests.length === 0 && fleet.nodes.length > 0) {
+    says =
+      "This node has no keyring, so it publishes no fingerprint of its keys and cannot be compared with the other nodes serving the API.";
+  } else if (fleet.nodes.length === 0) {
+    says = "This is the only node serving the API.";
+  } else {
+    says = same.length
+      ? `${nodeNames(same)} ${same.length === 1 ? "admits" : "admit"} these same keys.`
+      : "";
+    if (unknown.length) {
+      says += `${says ? " " : ""}${nodeNames(unknown)} cannot be compared: ${lowerFirst(AGREEMENT_WORDS.incomparable.hint)}`;
+    }
+  }
+  return (
+    <p className="t-caption" title={fleet.digests.length ? digestLine(fleet.digests) : undefined}>
+      {says}
+    </p>
+  );
+}
+
+/** Node ids as a comma list, each in code. */
+function NodeList({ nodes }: { nodes: AccessNode[] }) {
+  return (
+    <>
+      {nodes.map((n, i) => (
+        <span key={n.id}>
+          {i > 0 && ", "}
+          <InlineCode>{n.id}</InlineCode>
+        </span>
+      ))}
+    </>
+  );
+}
+
+/** Node ids as plain text, for a sentence that is a string. */
+function nodeNames(nodes: AccessNode[]): string {
+  return nodes.map((n) => n.id).join(", ");
 }
 
 /** Where agents reach a person: one chip per field, as written. */

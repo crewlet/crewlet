@@ -426,6 +426,26 @@ func TestFleetReadsTheLeaseTable(t *testing.T) {
 	}
 }
 
+// THE NODES SCREEN READS EXACTLY THE KEY TABLE EVERY ROW SENDS, in both
+// directions: the row's NodeAuth and each digest's TableDigest.
+func TestTheNodesScreenReadsTheKeyTableEveryRowSends(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	body := asMap(t, answer(t, queries.Sources{
+		Coord: keyFleet(t), NodeID: "core-1", AuthDigest: tableDigest(t, "table"),
+		Company: func() *config.Company { return cfg },
+	}, "fleet", nil))
+	var auths, digests []map[string]any
+	for _, row := range rowsOf(t, body["nodes"]) {
+		if auth, ok := row["auth"].(map[string]any); ok {
+			auths = append(auths, auth)
+			digests = append(digests, rowsOf(t, auth["digests"])...)
+		}
+	}
+	holdShape(t, "NodeAuth", auths, false)
+	holdShape(t, "TableDigest", digests, false)
+}
+
 // EACH NODE ROW SAYS WHAT ITS BROKER IS, off the node's own presence: a member,
 // a leaf or a client — and `unknown` for a presence that does not say or names
 // a kind this build does not know. Never an empty cell, and never a guess

@@ -79,6 +79,7 @@ import { useNow } from "~/lib/clock.ts";
 import type { FleetAnswer, FleetDutyLease, FleetNode, FleetSeatLease } from "~/protocol/index.ts";
 import { BrokerKindTag, BrokerMembership } from "./FleetBroker.tsx";
 import { FileStorage } from "./FileStorage.tsx";
+import { AGREEMENT_WORDS, KeyTableTag } from "./keyTable.tsx";
 
 /**
  * The lease table has no push behind it, so it polls — at 15 seconds, chosen
@@ -141,6 +142,9 @@ function FleetScreen() {
   // activation pointer names. Epoch 0 means it has not reported at all, which
   // is a different thing from being behind and is called out on the row.
   const behind = nodes.filter((n) => data && (n.config_epoch ?? 0) < data.target_epoch);
+  // A NODE WHOSE API ADMITS OTHER KEYS than this one's, by the engine's own
+  // comparison: a key that is a member's here may be an admin's there.
+  const otherKeys = nodes.filter((n) => n.auth?.agreement === "different");
 
   return (
     <>
@@ -271,6 +275,7 @@ function FleetScreen() {
                       <InlineCode>{n.id}</InlineCode>
                       {n.id === data?.this_node && <Tag variant="brand">this one</Tag>}
                       {n.draining && <Tag variant="warning">draining</Tag>}
+                      <OtherKeys node={n} thisNode={data?.this_node} />
                     </span>
                   ),
                 },
@@ -409,6 +414,32 @@ function FleetScreen() {
               ]}
             />
           </Card>
+
+          {otherKeys.length > 0 && (
+            <Card>
+              <Card.Header icon={<KeyGlyph size="sm" />}>Key tables differ</Card.Header>
+              {/* THE ALARM'S OWN REMEDY, where the rows it is about are: the
+                  `auth_diverged` alarm names which nodes hold which table, and
+                  this says what that means for a key and what to do. */}
+              <Callout variant="danger" role="alert">
+                <span>
+                  {otherKeys.map((n, i) => (
+                    <span key={n.id}>
+                      {i > 0 && ", "}
+                      <InlineCode>{n.id}</InlineCode>
+                    </span>
+                  ))}{" "}
+                  {otherKeys.length === 1 ? "judges" : "judge"} API keys by a different table from{" "}
+                  <InlineCode>{data.this_node}</InlineCode>, so a key can reach more through one of
+                  them — a member&rsquo;s key here may be an admin&rsquo;s there. Give every node
+                  that serves the API the same <InlineCode>api.auth</InlineCode> — the same keys,
+                  roles and values, and the same <InlineCode>anonymous</InlineCode> — and restart
+                  the ones that differ. Mid-way through a rolling key rotation this is expected
+                  until the last node restarts.
+                </span>
+              </Callout>
+            </Card>
+          )}
 
           {nodes.some((n) => n.config_error) && (
             <Card>
@@ -644,14 +675,41 @@ export function HeldSince({ lease, now }: { lease: FleetSeatLease; now: number }
  */
 function nodeFlags(node: FleetNode, thisNode?: string): React.ReactNode {
   const here = node.id === thisNode;
-  if (!here && !node.draining) return undefined;
+  if (!here && !node.draining && !admitsOtherKeys(node, thisNode)) return undefined;
   return (
     <span className="row gap-1">
       {/* The accent says WHERE THE READER IS, which is the one thing it is
           reserved for; `draining` is a state and takes a state's tone. */}
       {here && <Tag variant="brand">this one</Tag>}
       {node.draining && <Tag variant="warning">draining</Tag>}
+      <OtherKeys node={node} thisNode={thisNode} />
     </span>
+  );
+}
+
+/**
+ * Whether a node's API judges keys by a different table from the node serving
+ * this dashboard — the engine's comparison, never this screen's.
+ */
+function admitsOtherKeys(node: FleetNode, thisNode?: string): boolean {
+  return node.id !== thisNode && node.auth?.agreement === "different";
+}
+
+/**
+ * A node whose API admits other keys, marked BESIDE ITS NAME rather than in a
+ * column of its own: on a healthy fleet every row would say "same keys", a
+ * column that reads healthy by construction and costs the table a track its
+ * other facts need. A divergence is a state of the node, like draining, and
+ * is drawn where a reader scanning for what is wrong already looks. "Cannot
+ * compare" is not marked here — it is not a divergence — and the node's peek
+ * says it (`Keys`).
+ */
+function OtherKeys({ node, thisNode }: { node: FleetNode; thisNode?: string }) {
+  if (!admitsOtherKeys(node, thisNode)) return null;
+  return (
+    <Tag variant="danger" title={AGREEMENT_WORDS.different.hint}>
+      different keys
+    </Tag>
   );
 }
 
@@ -696,7 +754,12 @@ export function NodeScreen({ id }: { id: string }) {
                 // saying one thing.
                 title={node.id}
                 status={nodeFlags(node, data.this_node)}
-                facts={nodeFacts({ node, target: data.target_epoch, version })}
+                facts={nodeFacts({
+                  node,
+                  target: data.target_epoch,
+                  version,
+                  here: node.id === data.this_node,
+                })}
               />
               <NodePanels node={node} answer={data} now={now} />
               <Card>
@@ -766,7 +829,12 @@ export function NodePeek({ id }: { id: string }) {
                 icon="server"
                 title={node.id}
                 status={nodeFlags(node, data.this_node)}
-                facts={nodeFacts({ node, target: data.target_epoch, version })}
+                facts={nodeFacts({
+                  node,
+                  target: data.target_epoch,
+                  version,
+                  here: node.id === data.this_node,
+                })}
               />
               <div className="col gap-3">
                 <NodePanels node={node} answer={data} now={now} />
@@ -806,12 +874,15 @@ export function nodeFacts({
   node,
   target,
   version,
+  here,
 }: {
   node: FleetNode;
   /** The epoch the whole fleet is converging on. */
   target: number;
   /** The engine build — known only for the node that served this socket. */
   version?: string;
+  /** Whether this node is the one serving this dashboard. */
+  here?: boolean;
 }): Fact[] {
   const applied = node.config_epoch ?? 0;
   const behind = target - applied;
@@ -894,6 +965,13 @@ export function nodeFacts({
       // a column hidden in favour of the peek has to be in it.
       label: "Broker",
       value: <BrokerCell broker={node.broker} />,
+    },
+    {
+      // WHICH KEYS ITS API ADMITS, against the node serving this dashboard —
+      // a fact for the reason Broker is, and the one a reader opening a node
+      // the `auth_diverged` alarm named came here for.
+      label: "Keys",
+      value: <KeyTableTag auth={node.auth} here={here} />,
     },
     version
       ? {

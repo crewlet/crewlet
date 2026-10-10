@@ -620,7 +620,8 @@ The consequences worth stating plainly:
   different `api.auth` tables, so a key may reach more through one of them.
   Give every such node the same keys, roles and values and restart the odd
   ones; mid-way through a rolling key rotation it is expected and clears when
-  the last node restarts. See
+  the last node restarts. Settings › Nodes marks which node holds which table
+  against the one you are on. See
   [Every node that serves the API holds the same keys](../concepts/configuration.md#every-node-that-serves-the-api-holds-the-same-keys).
 - **`/health`** carries this node's seats, its in-flight count and its
   config posture; the dashboard's **Settings › Nodes** screen puts every node's

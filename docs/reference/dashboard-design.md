@@ -5891,6 +5891,13 @@ a person. When the company document is
 callout names its writers (`auth.company_writers`): only those admin keys may
 change the company, and every other admin key reads it and can still rotate a
 credential it names. Nothing is said when every admin key may write.
+Below the callout, one sentence says whether **every other node serving the
+API admits these same keys** (`access.fleet`) — Tier A is per node, so a key
+this page calls a member's may be an admin's elsewhere. A node judging keys by
+another table is a red alert naming it; otherwise the sentence names who
+agrees, who cannot be compared and why, that this node has no keyring, that it
+is the only node serving the API, or that the fleet could not be listed —
+never "every node agrees" for a reading that is not one.
 
 **Integrations** is a grid of **tiles, one per tool** — Slack, Mattermost,
 Atlassian, GitHub, GitLab, Datadog — each with the vendor's mark, the
@@ -6067,7 +6074,17 @@ most, named again by the Broker members panel), **Up since**, **Roles**, then
 Lease and Broker give way; beside a peek at 1440, Node, Seats, In flight,
 Posture and Config stay. The **Broker** column is the kind the node's presence
 advertises — `member`, `leaf` or `client` as a neutral tag, `unknown` as a
-warning since it is the one reading that is a guess. Then
+warning since it is the one reading that is a guess. **Which keys a node's API
+admits** is not a column: on a healthy fleet every row would read "same keys",
+a column healthy by construction that costs the table a track. A node whose
+table the engine says is `different` from this node's wears a danger
+**different keys** tag beside its name, as `draining` is a state beside it, and
+a **Key tables differ** alert names every such node with what to do — the
+`auth_diverged` alarm's remedy, where the rows it is about are. The node's
+header facts carry **Keys** for every reading: *Same keys*, *Different keys*,
+*Cannot compare* (no keyring key in common), *No keyring*, *This node's* for
+the node serving the dashboard, and a worded empty for a node that serves no
+API — each with the digests it published in its title. Then
 **Seat placement** — each seat, the node holding it, its lease and **Since**:
 the tenure's start (`acquired_at`), stamped when the epoch is minted and
 carried through every renewal, so "since 2h ago" means the seat has not moved

@@ -6,7 +6,8 @@
  *
  * EXACTLY WHAT `internal/api/queries` SENDS — held there by
  * `TestTheAccessScreenReadsWhatThisAnswerSends` in both directions, and the
- * closed sets by `TestTheDashboardKnowsExactlyTheAccessStates`.
+ * closed sets by `TestTheDashboardKnowsExactlyTheAccessStates`. The key-table
+ * shapes are the fleet answer's too (`contract/fleet.ts`'s `NodeAuth`).
  */
 
 /**
@@ -102,6 +103,52 @@ export interface AccessPerson {
   contacts: AccessContact[];
 }
 
+/**
+ * How one node's API key table stands against the table of the node answering
+ * — `secrets.Agreement`. `same` and `different` are what a keyring key both
+ * nodes hold says; `incomparable` is two nodes that share no keyring key —
+ * usually one of them runs with no keyring at all — and is never read as
+ * either of the others.
+ */
+export type AuthAgreement = "same" | "different" | "incomparable";
+
+/**
+ * One keyring key's digest of a node's API key table: every key's id, role and
+ * value, and the anonymous, disabled and company_writers posture. Two nodes
+ * with one digest under one key id admit the same keys. A keyed fingerprint,
+ * never the table — it says nothing to anybody without the keyring.
+ */
+export interface TableDigest {
+  key_id: string;
+  digest: string;
+}
+
+/** Another live node that serves the API, against the answering node's table. */
+export interface AccessNode {
+  id: string;
+  agreement: AuthAgreement;
+  /** Empty for a node with no keyring, which is why it compares with nobody. */
+  digests: TableDigest[];
+}
+
+/**
+ * Whether the keys this answer lists are the keys every other node serving
+ * the API admits. Tier A is per node, so a key listed as a member's may be an
+ * admin's on a node behind the same address — what `auth_diverged` alarms on.
+ */
+export interface AccessFleet {
+  /** The answering node's own digests. Empty: it has no keyring. */
+  digests: TableDigest[];
+  /**
+   * Whether `nodes` is the fleet rather than what could be read of it: false
+   * when the presence listing failed or the node has no fleet to list, and an
+   * empty `nodes` then means nothing — never "every node agrees".
+   */
+  listed: boolean;
+  /** The OTHER live nodes that serve the API, in id order. */
+  nodes: AccessNode[];
+}
+
 /** The whole answer. */
 export interface AccessAnswer {
   auth: AccessAuth;
@@ -109,4 +156,6 @@ export interface AccessAnswer {
   tokens: AccessToken[];
   /** Human seats in handle order. */
   people: AccessPerson[];
+  /** Whether every other node serving the API admits these keys. */
+  fleet: AccessFleet;
 }

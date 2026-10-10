@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // accessCompany has one human seat for every binding state, an agent seat
@@ -247,8 +248,12 @@ func TestTheAccessScreenReadsWhatThisAnswerSends(t *testing.T) {
 	posture := queries.AccessPosture{Keys: keys("founder", "gitops", "ci"),
 		Anonymous: config.AnonymousPublic, AllowedOrigins: []string{"https://example.com"},
 		CompanyWriters: []string{"gitops"}}
+	// A FLEET TO COMPARE AGAINST, so the key-table half carries a row of
+	// every shape it can send — a peer with digests, and one with none.
+	s := accessSources(t, posture)
+	s.Coord, s.NodeID, s.AuthDigest = keyFleet(t), "core-1", tableDigest(t, "table")
 	r := queries.NewRegistry()
-	queries.Register(r, accessSources(t, posture))
+	queries.Register(r, s)
 	raw, err := r.Answer(t.Context(), "access", nil, asAdmin("founder"))
 	if err != nil {
 		t.Fatal(err)
@@ -272,6 +277,15 @@ func TestTheAccessScreenReadsWhatThisAnswerSends(t *testing.T) {
 		contacts = append(contacts, rowsOf(t, p["contacts"])...)
 	}
 	holdShape(t, "AccessContact", contacts, false)
+	fleet := asMap(t, body["fleet"])
+	holdShape(t, "AccessFleet", []map[string]any{fleet}, false)
+	nodes := rowsOf(t, fleet["nodes"])
+	holdShape(t, "AccessNode", nodes, false)
+	digests := rowsOf(t, fleet["digests"])
+	for _, n := range nodes {
+		digests = append(digests, rowsOf(t, n["digests"])...)
+	}
+	holdShape(t, "TableDigest", digests, false)
 }
 
 // THE DASHBOARD KNOWS EXACTLY THE ROLES AND BINDING STATES THE ENGINE SENDS: a
@@ -284,6 +298,7 @@ func TestTheDashboardKnowsExactlyTheAccessStates(t *testing.T) {
 		"AnonymousAccess": stringsOf(config.AnonymousAccesses),
 		"Reach":           stringsOf(auth.Reaches),
 		"AccessBinding":   stringsOf(queries.AccessBindings),
+		"AuthAgreement":   stringsOf(secrets.Agreements),
 	} {
 		got, err := clientsource.Union(clientsource.Tree(t), name)
 		if err != nil {
