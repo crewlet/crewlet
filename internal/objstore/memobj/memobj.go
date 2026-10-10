@@ -58,9 +58,13 @@ func (b *Backend) Put(ctx context.Context, name string, r io.Reader, _ objstore.
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("memobj: put %s: %w", name, err)
 	}
+	// HASHED BEFORE THE LOCK: the digest is the whole object's, four tenths of a
+	// second for the largest a benchmark puts on a CPU without SHA
+	// instructions, and every other call on the twin would wait it out.
+	digest := objstore.HashOf(data)
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.objects[name] = held{data: data, written: b.now().UTC(), digest: objstore.HashOf(data)}
+	b.objects[name] = held{data: data, written: b.now().UTC(), digest: digest}
 	return nil
 }
 
