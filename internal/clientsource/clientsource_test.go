@@ -475,12 +475,12 @@ func TestAUnionThatIsNotAllStringsIsRefused(t *testing.T) {
 func TestAQuotedKeyIsAKey(t *testing.T) {
 	t.Parallel()
 	root := tree(t, map[string]string{
-		"lib/turnstory.ts": "export const ABSORBED: Record<string, string> = { agent_phase_started: " +
+		"contract/reasons.ts": "export const PHRASES: Record<string, string> = { agent_phase_started: " +
 			"\"the phase card it opens\", \"turn.guard_breach\": 'the header: its own', " +
 			"'prompt.size': `the ${'prompt'} line`, nested: { inner: \"x\", deeper: [\"y\"] }, " +
 			"shorthand, method() { return { notAKey: 1 }; }, get read() { return 2; }, 3: \"n\" };",
 	})
-	body, err := clientsource.Literal(root, "ABSORBED")
+	body, err := clientsource.Literal(root, "PHRASES")
 	if err != nil {
 		t.Fatalf("Literal: %v", err)
 	}

@@ -562,8 +562,8 @@ func prepareEvent(rec EventRecord) (eventRow, error) {
 	// pulls off the event's `turn_id` FIELD — so the scheduler's cron fire,
 	// a trigger the dispatcher declined to work, and every other payload
 	// with no such field write an empty column and cannot be read back by
-	// turn at all. The Turn screen's bands are held against exactly that in
-	// internal/events/types/turnbands_client_test.go.
+	// turn at all. The bands a turn's rows are filed in are held against
+	// exactly that in internal/events/types/turnband_test.go.
 	//
 	// The A2A audit records used to be this comment's example and are no
 	// longer: internal/a2a stamps the publishing turn on all three, so an

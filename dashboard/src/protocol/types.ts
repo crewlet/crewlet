@@ -3374,6 +3374,29 @@ export interface PhasesPage {
   coverage?: Coverage;
 }
 
+/**
+ * Which question a turn's row answers — `types.TurnBand`, filed by the engine
+ * (`types.BandOf`) so the Turn screen and a member's story of the same turn
+ * read one rule. A band a newer engine names is drawn as `rest`.
+ */
+export type TurnBand = "went_wrong" | "given" | "did" | "left_behind" | "absorbed" | "rest";
+
+/** One row of a turn's answer, and the band the engine filed it in. */
+export interface TurnEventRow extends EventRecord {
+  band: TurnBand;
+}
+
+/**
+ * One kind of row the Turn screen draws somewhere better — a phase card, the
+ * header — how many of it the turn published, and where it went, in the
+ * engine's own words (`types.AbsorbedInto`).
+ */
+export interface AbsorbedGroup {
+  type: string;
+  destination: string;
+  count: number;
+}
+
 /** Every stored event of one RUN of a turn, ordered oldest first. */
 export interface TurnAnswer {
   turn_id: string;
@@ -3389,7 +3412,18 @@ export interface TurnAnswer {
    */
   work_key?: string;
   attempts?: TurnRow[];
-  events: EventRecord[];
+  events: TurnEventRow[];
+  /**
+   * The rows that are not listed, by type and counted across the whole turn,
+   * each with where it is drawn instead — the "Already on this page" note.
+   */
+  absorbed: AbsorbedGroup[];
+  /**
+   * How many things went wrong: every `went_wrong` row, plus the turn's own
+   * failure when no stop record already describes it — so a guard breach and
+   * the failed completion beside it are one problem, not two.
+   */
+  problems: number;
   /**
    * True when the store stopped at its per-turn cap rather than at the end of
    * the turn.

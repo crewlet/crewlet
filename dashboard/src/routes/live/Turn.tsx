@@ -136,26 +136,25 @@ import {
   type PhaseRecord,
 } from "~/lib/phases.ts";
 import {
-  absorbedGroups,
   prefetchBlocks,
   promptWeights,
   collapseRuns,
   isFailed,
   tellStory,
-  type AbsorbedGroup,
   type PrefetchBlock,
   type PromptWeight,
   type Run,
   type Story,
 } from "~/lib/turnstory.ts";
-import { TURN_STOP } from "~/contract/turnbands.ts";
 import { useAgents, useConnection, useEvents, usePhaseEvents } from "~/lib/store-hooks.ts";
 import { seatOnTurn, UNSETTLED, WATCH_TAB } from "~/lib/turns.ts";
 import type {
+  AbsorbedGroup,
   EventEnvelope,
   EventRecord,
   FeedRow,
   LiveCall,
+  TurnEventRow,
   TurnRow,
   TurnStage,
   WorkItemRef,
@@ -268,32 +267,6 @@ export function outcomeOf(rec: TurnRecord): {
   };
 }
 
-/**
- * How many problems this turn had, counted as the page can show them.
- *
- * ONE STOP IS ONE PROBLEM, however many records the engine wrote about it.
- * `agent_turn_completed.failed` and the dedicated record behind it — a guard
- * breach, an exhausted chain, an unavailable provider — are published in the
- * same breath about the SAME stop (`internal/engine/telemetry.go` closes a
- * failed turn with `publishEvent` and then `publishFailure`), so adding the
- * flag to the rows counted that one event twice: the header badge said
- * "2 problems" over a panel holding one row, and the reader went looking for
- * a second that is nowhere on the page.
- *
- * The flag is deduped against THAT RECORD, never against the row count. A
- * turn the reviewer decided against carries the flag with no dedicated record
- * behind it — `publishFailure` writes nothing when no guard fired and no
- * error was returned — and it can carry an unrelated `provider_fallback` in
- * the same breath. Against the count, the flag would have been swallowed by
- * that fallback and a genuinely failed turn reported as one problem rather
- * than two; against the count and with no rows at all, `clean` would have
- * gone on to claim "nothing went wrong" about it.
- */
-export function problemCount(wentWrong: readonly EventRecord[], failed: boolean): number {
-  const stopped = wentWrong.some((e) => TURN_STOP.has(e.type));
-  return wentWrong.length + (failed && !stopped ? 1 : 0);
-}
-
 // ---------------------------------------------------------------------------
 // One turn, as both frames read it
 // ---------------------------------------------------------------------------
@@ -318,8 +291,8 @@ export interface TurnView {
   turnId: string;
   loading: boolean;
   error: string | null;
-  /** Oldest first: a turn is read forwards. */
-  events: EventRecord[];
+  /** Oldest first: a turn is read forwards. Each row carries its band. */
+  events: TurnEventRow[];
   /** The store stopped at its per-turn cap, so what is missing is the MIDDLE. */
   cut: boolean;
   /** Every phase record in hand, the workers a delegate spawned included. */
@@ -356,7 +329,7 @@ export interface TurnView {
   /** The highest self-iterate round its own phases reached. */
   iterations: number;
   /**
-   * The turn's own events, sorted into the bands both frames read them in.
+   * The turn's own events, collected by the band the engine filed each in.
    *
    * ON THE VIEW rather than on the screen, because the header's state marks
    * are made from it and the header is one component in two frames. Computed
@@ -366,7 +339,13 @@ export interface TurnView {
    * the badge above it.
    */
   story: Story;
-  /** How many things went wrong, counted the way [problemCount] counts. */
+  /** The rows not listed, and where each kind is drawn — the answer's own. */
+  absorbed: AbsorbedGroup[];
+  /**
+   * How many things went wrong — the answer's `problems`, counted by the
+   * engine over the same rows it banded, so the badge and the panel under it
+   * read one count.
+   */
   trouble: number;
   /**
    * Nothing went wrong, AND this turn is in a position to claim it.
@@ -606,7 +585,8 @@ export function useTurnView(turnId: string): TurnView {
   // by the header, which is one component in two frames, so they are derived
   // once here rather than on each screen — see the fields' own notes above.
   const story = useMemo(() => tellStory(events), [events]);
-  const trouble = problemCount(story.wentWrong, field(rec.summary, "failed") === true);
+  const trouble = data?.problems ?? 0;
+  const absorbed = useMemo(() => data?.absorbed ?? [], [data]);
 
   const workItem =
     seatRow?.turn?.turn_id === turnId && seatRow.turn.work_item
@@ -702,6 +682,7 @@ export function useTurnView(turnId: string): TurnView {
     // the same turn on the same screen.
     iterations: own.reduce((n, p) => Math.max(n, p.iteration), 0),
     story,
+    absorbed,
     trouble,
     clean: trouble === 0 && !running && !cut && Boolean(rec.summary || rec.learning),
   };
@@ -1003,7 +984,7 @@ function turnStatus(view: TurnView, now: number): ReactNode {
         </Tag>
       )}
       {/* FROM WHAT ACTUALLY WENT WRONG, not from the phase records alone —
-          see [problemCount]. */}
+          the answer's `problems`, which counts a stop once. */}
       {view.trouble > 0 && (
         <Tag variant="danger" leadingIcon={<CircleAlertGlyph size="xs" />}>
           {view.trouble === 1 ? "1 problem" : `${view.trouble} problems`}
@@ -1482,15 +1463,15 @@ function EventList({ events, actor }: { events: EventRecord[]; actor: string }) 
  *
  * Every panel above this one draws a SUBSET of the turn's answer, and on an
  * ordinary turn the rows left over are most of it: a phase start and a phase
- * record per phase, plus both halves of the turn's own record. `ABSORBED` in
- * ./lib/turnstory.ts has named a destination per type all along — "the phase
- * card it opens", "the turn's header and record" — and `Story.absorbed` said
- * in as many words that it was counted "so the screen can say where they
- * went". No screen said. The rows simply stopped at the band, which is the
- * one shape this page was rebuilt to stop repeating: a row the query returned
- * and the page silently dropped is indistinguishable from a row the store
- * never held, and it is the reader counting a `cut` turn's stated event total
- * against the panels who finds out.
+ * record per phase, plus both halves of the turn's own record. The engine names
+ * a destination per type — "the phase card it opens", "the turn's header and
+ * record" (`types.AbsorbedInto`) — and counts them into the answer's
+ * `absorbed` inventory. Before this note no screen said where they went: the
+ * rows simply stopped at the band, which is the one shape this page was
+ * rebuilt to stop repeating — a row the query returned and the page silently
+ * dropped is indistinguishable from a row the store never held, and it is the
+ * reader counting a `cut` turn's stated event total against the panels who
+ * finds out.
  *
  * FOLDED, because it is bookkeeping about rows already drawn rather than news
  * — the trigger alone answers "is that everything?" and the panel answers
@@ -1503,9 +1484,8 @@ function EventList({ events, actor }: { events: EventRecord[]; actor: string }) 
  */
 function Absorbed({ groups }: { groups: AbsorbedGroup[] }) {
   if (groups.length === 0) return null;
-  // THE SUM OF THE ROWS, never a second count beside them. `story.absorbed`
-  // holds the same number and handing both in was two ways to say one thing,
-  // which is the shape a heading that disagrees with its own list comes from.
+  // THE SUM OF THE ROWS, never a second count beside them: two ways to say one
+  // thing is the shape a heading that disagrees with its own list comes from.
   const total = groups.reduce((n, g) => n + g.count, 0);
   return (
     <Disclosure title="Already on this page" count={total} headingLevel="none">
@@ -1647,7 +1627,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   // attaches to a bug report.
   const view = useTurnView(turnId);
   const { loading, error, events, cut, attempt, phases, own, nested, rec, role } = view;
-  const { running, durationMs, story } = view;
+  const { running, durationMs, story, absorbed } = view;
   const [tab, setTab] = useTab<TurnTab>("tab", TURN_TABS);
   const [span, setSpan] = useParam("span", "", "filter");
   const panelId = useId();
@@ -1657,7 +1637,6 @@ export function TurnScreen({ turnId }: { turnId: string }) {
     [story],
   );
   const weights = useMemo(() => promptWeights(story.given), [story]);
-  const absorbed = useMemo(() => absorbedGroups(story.absorbed), [story]);
 
   // THE CLOCK MOVES THE WATERFALL ONLY WHILE THE TURN RUNS. A settled turn's
   // spans all have ends, so ticking it every second would rebuild the same
@@ -2064,7 +2043,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                     count={story.did.length}
                     // "COLLEAGUES" IS A PROMISE the wire keeps: the A2A records
                     // carry the publishing turn (internal/a2a/service.go), and
-                    // internal/events/types/turnbands_client_test.go holds it.
+                    // internal/events/types/turnband_test.go holds it.
                     subtitle="work outside the tool loop: coding runs, delegations, colleagues, skills"
                   >
                     <Card.Title>What else it did</Card.Title>

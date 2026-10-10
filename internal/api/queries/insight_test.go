@@ -93,6 +93,22 @@ func TestTurnAnswersEveryEventOfOneUnitOfWork(t *testing.T) {
 	if events[0]["payload"] == nil {
 		t.Errorf("turn events carry no payload: %v", events[0])
 	}
+	// EVERY ROW CARRIES ITS BAND, filed by the engine so no client sorts the
+	// rows a second time — the phase record absorbed into its card, the
+	// fallback what went wrong — and the answer counts what it absorbed and
+	// what went wrong beside them, on the wire a client reads.
+	for i, want := range []string{"absorbed", "went_wrong", "absorbed"} {
+		if events[i]["band"] != want {
+			t.Errorf("row %v band = %#v, want %q", events[i]["id"], events[i]["band"], want)
+		}
+	}
+	if got["problems"] != float64(1) {
+		t.Errorf("problems = %#v, want the one fallback", got["problems"])
+	}
+	if absorbed, _ := got["absorbed"].([]any); len(absorbed) != 2 {
+		t.Errorf("absorbed = %#v, want the phase record and the completion, by type",
+			got["absorbed"])
+	}
 	if got["turn_id"] != "t-1" {
 		t.Errorf("answer does not name its turn: %v", got)
 	}

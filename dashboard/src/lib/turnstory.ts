@@ -1,6 +1,6 @@
 /**
- * What a turn published BESIDE its phases, sorted into the three questions a
- * reader actually brings to it.
+ * What a turn published BESIDE its phases, sorted into the questions a reader
+ * actually brings to it.
  *
  * The Turn screen used to render all of it as one flat list under "Everything
  * else this turn published". Three things were wrong with that, and only the
@@ -11,10 +11,7 @@
  *     above, saying "started execute (iter 2)" beside the card that already
  *     says EXECUTE, iter 2, its model, its rounds, its tokens and its outcome.
  *     A seventh was `agent_turn_completed`, which the same screen also renders
- *     as the stat strip AND as a JSON dump. The list read as a duplicate
- *     because it largely was one — a phase start says which phase opened, and
- *     its own completed record says that, its duration included (see
- *     `phaseDuration` in ./phases.ts).
+ *     as the stat strip AND as a JSON dump.
  *
  *  2. **Everything left had the same weight.** `reflection_completed` is a
  *     sentinel whose own payload doc says it carries no per-worker outcome
@@ -26,84 +23,24 @@
  *     "nothing went wrong here" was not a state the screen could reach — and
  *     a section that is always full is a section nobody reads.
  *
- * So the rows are split by the question they answer. WENT_WRONG is loud and
- * usually absent. GIVEN is what the turn was given to work from — its prompt,
- * before it ran, and any note a person sent it while it ran. LEFT_BEHIND is what the company learned from it, after. Anything this
- * build has no opinion about falls through to REST rather than being dropped:
- * the event registry is additive-only and a type published by a newer node
- * must still render.
+ * # The engine files the rows; this file only collects them
  *
- * The sets themselves are the engine's, not this file's: which types reach a
- * turn's answer at all is a fact about the wire, so they are declared once in
- * `contract/turnbands.ts`, where a Go gate holds them against it. This file
- * is the rules that FILE a row into one of them.
+ * Which band a row is in is the ENGINE'S answer: the `turn` answer tags every
+ * row with it (`types.BandOf`, beside the event catalogue in
+ * `internal/events/types/turnband.go`), and answers the absorbed inventory and
+ * the problem count beside them. It used to be decided here, over sets this
+ * dashboard declared and a Go gate read back out of TypeScript — until a
+ * member's account of the same turn had to be built from the same rows on the
+ * server, which is the only place that can withhold what a member may not
+ * read. One rule in two languages is two accounts of one turn the day they
+ * disagree, so the rule moved to the side that owns the rows.
+ *
+ * What is left here is presentation over the answer: collecting the bands the
+ * screen draws, collapsing a run of identical rows, and reading the payloads
+ * of the two kinds of row whose numbers the screen tabulates.
  */
 
-import { ABSORBED, DID, GIVEN, LEFT_BEHIND, WENT_WRONG } from "~/contract/turnbands.ts";
-import type { EventRecord } from "~/protocol/index.ts";
-
-/**
- * Which question a row answers — the WHOLE taxonomy, `absorbed` inside it
- * rather than beside it.
- *
- * This union was missing that member and the rule was therefore written
- * twice. [bandOf] answered `rest` for every type in [ABSORBED] and [tellStory]
- * short-circuited those same types into `Story.absorbed` before bandOf ever
- * ran, so the two exported readers of one rule disagreed on all five of them:
- * the screen filed a phase start as absorbed while the function called it
- * residual, and nothing compared the two answers. A band a row can land in is
- * a member of this union, or it is a second rule waiting to drift from the
- * first.
- */
-export type Band = "went_wrong" | "given" | "did" | "left_behind" | "absorbed" | "rest";
-
-/**
- * Where this row already is, in the words [ABSORBED] names it with — and the
- * empty string for a row that is a row.
- *
- * ONE READER OF THE MAP, because there are two callers now and the second is a
- * screen: [bandOf] asks whether a row is absorbed and the Turn screen asks
- * where each absorbed row went. Written out at each site, the `in` check and
- * the lookup are the same rule stated twice over a map whose own values are
- * the answer.
- */
-export function absorbedInto(event: EventRecord): string {
-  return Object.hasOwn(ABSORBED, event.type) ? (ABSORBED[event.type] ?? "") : "";
-}
-
-/**
- * Which band a row belongs in — the ONE rule, and [tellStory] is a filing
- * clerk over it rather than a second copy of it.
- *
- * A FAILED row is `went_wrong` whatever its SET says. The failure taxonomy is
- * the engine's (`events.Failed` — the type, the payload's own flag, or the
- * store's tag), and a sandbox run that came back failed is something that went
- * wrong on this turn even though `sandbox_run_completed` is ordinary work.
- *
- * ABSORPTION OUTRANKS EVEN THAT, which is the one precedence worth stating
- * because it looks like an exception and is not: the destination draws the
- * failure itself. A failed `agent_phase_completed` is a phase card carrying
- * the engine's own error kind and its error text (`PhaseCard`), so banding it
- * `went_wrong` as well would put a red row above the card that already says
- * so, and add one to a count of problems that has not gained a problem.
- *
- * `Object.hasOwn`, NEVER `in`. Every key of `Object.prototype` answers `in` on
- * an object literal — `"toString" in ABSORBED` is true — so an event type
- * colliding with one would be absorbed to a destination that does not exist
- * and vanish off the screen, which is exactly the silent drop this file's
- * residual band exists to prevent. No type in `internal/events/types` collides
- * today, so this is a hazard rather than an incident; it costs one call to
- * make it neither.
- */
-export function bandOf(event: EventRecord): Band {
-  if (absorbedInto(event)) return "absorbed";
-  if (isFailed(event)) return "went_wrong";
-  if (WENT_WRONG.has(event.type)) return "went_wrong";
-  if (GIVEN.has(event.type)) return "given";
-  if (LEFT_BEHIND.has(event.type)) return "left_behind";
-  if (DID.has(event.type)) return "did";
-  return "rest";
-}
+import type { EventRecord, TurnEventRow } from "~/protocol/index.ts";
 
 /**
  * Whether a row is a failure, read the way the server writes it.
@@ -112,7 +49,9 @@ export function bandOf(event: EventRecord): Band {
  * event is live, and the `failed` TAG the event-store writer stamps, which is
  * all that survives into history. Reading only one of them makes the same turn
  * red on one surface and not on another, which is the exact reason
- * `events.FailureEventTypes` is declared once in Go.
+ * `events.FailureEventTypes` is declared once in Go. The BAND a row is in
+ * already counted its failure on the server; this is what draws the red edge
+ * on the row itself.
  */
 export function isFailed(event: EventRecord): boolean {
   if (event.failed) return true;
@@ -120,57 +59,39 @@ export function isFailed(event: EventRecord): boolean {
   return payload?.failed === true;
 }
 
+/**
+ * A turn's listed rows, collected by the band the engine filed each in.
+ *
+ * NO `absorbed` HERE: an absorbed row is not listed, and the screen prints
+ * where each kind went from the answer's own `absorbed` inventory, which the
+ * engine counted over the same rows.
+ */
 export interface Story {
-  wentWrong: EventRecord[];
-  given: EventRecord[];
-  did: EventRecord[];
-  leftBehind: EventRecord[];
+  wentWrong: TurnEventRow[];
+  given: TurnEventRow[];
+  did: TurnEventRow[];
+  leftBehind: TurnEventRow[];
   /**
-   * Everything this build has no opinion about — and NOTHING absorbed.
-   *
-   * The two used to be one sentence here ("plus absorbed duplicates"), which
-   * no row has ever satisfied: [tellStory] has always filed an absorbed row
-   * under `absorbed`, so a reader of this doc looking for a phase start in
-   * the residual list was looking in the one band it can never be in.
+   * Everything the engine has no opinion about — a type a newer build
+   * publishes among them — AND any band this build does not know. The
+   * registry is additive-only, so a row must still render however new it is.
    */
-  rest: EventRecord[];
-  /**
-   * The absorbed rows alone, so the screen can say where each went rather
-   * than leaving a reader to wonder why the numbers do not add up.
-   *
-   * Rendered by the Turn screen through [absorbedGroups] — which is what this
-   * field says and, until that panel existed, was not true: the value was
-   * built on every frame, asserted by this file's own test and read by no
-   * screen, so a turn's answer quietly lost twelve of its rows between the
-   * query and the page. A count nothing prints is indistinguishable from a
-   * row the store never returned.
-   */
-  absorbed: EventRecord[];
+  rest: TurnEventRow[];
 }
 
 /**
- * Sort one turn's non-phase events into the story it tells.
+ * Collect one turn's rows by the band the engine gave each.
  *
- * EVERY ROW GOES THROUGH [bandOf], including an absorbed one. This loop used
- * to test [ABSORBED] itself and `continue` before the call, which made it a
- * second implementation of the first line of that function — and the two
- * answered differently, because bandOf called the same rows `rest`. One
- * switch over one rule is what stops a band existing in one reader and not in
- * the other.
+ * A PURE FUNCTION OVER THE ANSWER: it decides nothing a second time, so it
+ * cannot disagree with the inventory or the problem count the same answer
+ * carries. An unknown band — a newer engine's — falls through to `rest`
+ * rather than vanishing.
  */
-export function tellStory(events: readonly EventRecord[]): Story {
-  const story: Story = {
-    wentWrong: [],
-    given: [],
-    did: [],
-    leftBehind: [],
-    rest: [],
-    absorbed: [],
-  };
+export function tellStory(events: readonly TurnEventRow[]): Story {
+  const story: Story = { wentWrong: [], given: [], did: [], leftBehind: [], rest: [] };
   for (const event of events) {
-    switch (bandOf(event)) {
+    switch (event.band) {
       case "absorbed":
-        story.absorbed.push(event);
         break;
       case "went_wrong":
         story.wentWrong.push(event);
@@ -189,52 +110,6 @@ export function tellStory(events: readonly EventRecord[]): Story {
     }
   }
   return story;
-}
-
-/** One absorbed TYPE, and how many rows of it this turn published. */
-export interface AbsorbedGroup {
-  type: string;
-  /** Where those rows already are, in [ABSORBED]'s own words. */
-  destination: string;
-  count: number;
-}
-
-/**
- * What the absorbed rows were, and where each kind went — the inventory the
- * Turn screen prints so a reader can check the claim this file makes.
- *
- * BY TYPE, NOT BY DESTINATION, because the destination is the claim and the
- * type is what makes it checkable: two types share "the turn's header and
- * record", and merged into one line a reader cannot tell which pair of
- * records that stands for. It is also the only key [ABSORBED] is written in.
- *
- * ACROSS THE WHOLE TURN, which is the opposite of [collapseRuns] and for the
- * reason that rule gives for its own shape: the axis of a BAND is time, so a
- * repeat there may only merge with its neighbour. Nothing here prints an
- * instant. A turn's phase starts and phase records interleave one for one, so
- * a consecutive-only rule would report twelve groups of one and say nothing
- * at all.
- *
- * A PURE FUNCTION OVER VALUES, like the rest of this file: handed a whole
- * turn or handed `Story.absorbed`, it answers the same, because it files on
- * [absorbedInto] rather than on where the caller got the rows.
- */
-export function absorbedGroups(events: readonly EventRecord[]): AbsorbedGroup[] {
-  const out: AbsorbedGroup[] = [];
-  const seen = new Map<string, AbsorbedGroup>();
-  for (const event of events) {
-    const destination = absorbedInto(event);
-    if (!destination) continue;
-    const already = seen.get(event.type);
-    if (already) {
-      already.count += 1;
-      continue;
-    }
-    const group: AbsorbedGroup = { type: event.type, destination, count: 1 };
-    seen.set(event.type, group);
-    out.push(group);
-  }
-  return out;
 }
 
 /** One phase's final prompt, as the engine measured it. */
@@ -475,9 +350,9 @@ function block(
  * had to find among them.
  *
  * COUNTED, NOT DROPPED. Eight attempts is the fact: it is the difference
- * between one provider that is misconfigured and one that is flapping, and
- * `problemCount` goes on counting every one of them, because the heading is a
- * count of what went wrong rather than of what this list draws.
+ * between one provider that is misconfigured and one that is flapping, and the
+ * answer's `problems` goes on counting every one of them, because the heading
+ * is a count of what went wrong rather than of what this list draws.
  *
  * CONSECUTIVE ONLY. The axis of every band is time — each row renders its own
  * instant — so merging across an intervening different row would either lie

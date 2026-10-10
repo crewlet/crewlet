@@ -1,24 +1,20 @@
 /**
- * The rules that decide what a turn's non-phase events MEAN.
+ * What the Turn screen does with a turn's rows once the engine has filed them.
  *
- * Each case here is one of the ways the flat "Everything else this turn
- * published" list misled a reader: a duplicate presented as news, a sentinel
- * given the same weight as a failure, a healthy turn unable to say it was
- * healthy, and a type this build has never seen quietly disappearing.
+ * WHICH BAND A ROW IS IN IS NOT TESTED HERE. The engine files every row of the
+ * `turn` answer (`types.BandOf`) and its cases — a phase start absorbed, a
+ * failed run what went wrong, a type a newer build publishes falling through,
+ * a band entry that could never fill — are Go tests now, in
+ * `internal/events/types/turnband_test.go` beside the sets they pin. What is
+ * left for this file is the client's half: collecting the filed rows without
+ * deciding anything twice, collapsing a run of identical rows, and reading the
+ * payloads the screen tabulates.
  */
 
 import { describe, expect, test } from "vitest";
-import { ABSORBED } from "~/contract/turnbands.ts";
-import {
-  absorbedGroups,
-  bandOf,
-  collapseRuns,
-  prefetchBlocks,
-  promptWeights,
-  tellStory,
-} from "./turnstory.ts";
+import { collapseRuns, isFailed, prefetchBlocks, promptWeights, tellStory } from "./turnstory.ts";
 import type { PromptWeight } from "./turnstory.ts";
-import type { EventRecord } from "~/protocol/index.ts";
+import type { EventRecord, TurnBand, TurnEventRow } from "~/protocol/index.ts";
 
 function event(type: string, over: Partial<EventRecord> = {}): EventRecord {
   return {
@@ -37,267 +33,78 @@ function event(type: string, over: Partial<EventRecord> = {}): EventRecord {
   };
 }
 
-describe("what is not 'else'", () => {
-  test("a phase start is absorbed, not listed", () => {
-    // Six of the twelve rows on the turn this was rebuilt against were
-    // `agent_phase_started` — one per phase card directly above, saying
-    // "started execute (iter 2)" beside a card that already says EXECUTE,
-    // iter 2, its model, its rounds, its tokens and what it decided.
-    const story = tellStory([event("agent_phase_started")]);
-    expect(story.absorbed).toHaveLength(1);
-    expect(story.rest).toHaveLength(0);
-    expect(story.did).toHaveLength(0);
-  });
+/** A row of a turn's answer, filed in `band` as the engine would file it. */
+function filed(
+  type: string,
+  band: TurnBand | string,
+  over: Partial<EventRecord> = {},
+): TurnEventRow {
+  return { ...event(type, over), band: band as TurnBand };
+}
 
-  test("both halves of the turn's own record are absorbed", () => {
-    // `agent_turn_completed` and `turn_completed` describe the same turn for
-    // two different consumers and land at the same instant. As two near
-    // identical rows they read as noise; as the screen's header and record
-    // they are the answer.
-    const story = tellStory([event("agent_turn_completed"), event("turn_completed")]);
-    expect(story.absorbed).toHaveLength(2);
-    expect(story.rest).toHaveLength(0);
-  });
-
-  test("every absorbed type names where it went", () => {
-    // The claim is checkable, which is the point: nothing here is dropped,
-    // and the next reader can go and confirm each destination exists.
-    for (const [type, destination] of Object.entries(ABSORBED)) {
-      expect(destination, type).toBeTruthy();
-    }
-  });
-
-  test("both readers of the rule put an absorbed row in the same band", () => {
-    // THE CASE NOTHING HELD, which is how the two drifted apart: `bandOf`
-    // answered `rest` for all five of these while `tellStory` filed every one
-    // of them under `absorbed` before the call, and no case compared the two
-    // answers — so the screen and the function disagreed about every type in
-    // the map and the suite stayed green.
-    for (const type of Object.keys(ABSORBED)) {
-      expect(bandOf(event(type)), type).toBe("absorbed");
-      const story = tellStory([event(type)]);
-      expect(story.absorbed, type).toHaveLength(1);
-      expect(story.rest, type).toHaveLength(0);
-    }
-  });
-
-  test("a phase record that failed is still its own phase card's", () => {
-    // ABSORPTION OUTRANKS THE FAILURE TAXONOMY, which is the one precedence
-    // that looks like an exception: the destination draws the failure itself
-    // — the phase card carries the error kind and the error text — so banding
-    // it `went_wrong` too would put a red row above the card that already
-    // says so, and add one to a count of problems that gained no problem.
-    expect(bandOf(event("agent_phase_completed", { failed: true }))).toBe("absorbed");
-  });
-
-  test("a type that merely collides with Object.prototype is not absorbed", () => {
-    // `"toString" in ABSORBED` is TRUE on an object literal, so the `in` this
-    // rule used to be written with would absorb such a type to a destination
-    // that does not exist and drop it off the screen — the one thing the
-    // residual band is here to stop. No type in `internal/events/types`
-    // collides today; the point is that the check cannot be what decides it.
-    expect(bandOf(event("toString"))).toBe("rest");
-    expect(tellStory([event("toString")]).rest).toHaveLength(1);
-  });
-});
-
-describe("where the absorbed rows went", () => {
-  test("grouped by type, counted, and each carrying its destination", () => {
-    // BY TYPE, because the destination is the claim and the type is what
-    // makes it checkable: `agent_turn_completed` and `turn_completed` share
-    // one destination, and merged into a single line a reader cannot tell
-    // which pair of records it stands for.
-    const groups = absorbedGroups([
-      event("agent_phase_started", { timestamp: "1" }),
-      event("agent_phase_completed", { timestamp: "2" }),
-      event("agent_phase_started", { timestamp: "3" }),
-      event("agent_phase_completed", { timestamp: "4" }),
-      event("agent_turn_completed", { timestamp: "5" }),
-      event("turn_completed", { timestamp: "6" }),
-    ]);
-    expect(groups.map((g) => [g.type, g.count])).toEqual([
-      ["agent_phase_started", 2],
-      ["agent_phase_completed", 2],
-      ["agent_turn_completed", 1],
-      ["turn_completed", 1],
-    ]);
-    // The words are the map's own, so the screen states the claim this file
-    // makes rather than a second paraphrase of it.
-    expect(groups.map((g) => g.destination)).toEqual([
-      ABSORBED.agent_phase_started,
-      ABSORBED.agent_phase_completed,
-      ABSORBED.agent_turn_completed,
-      ABSORBED.turn_completed,
-    ]);
-  });
-
-  test("across the whole turn, not only where the repeats are adjacent", () => {
-    // The opposite of `collapseRuns`, and deliberately: the axis of a BAND is
-    // time and nothing here prints an instant. A turn's starts and records
-    // interleave one for one, so a consecutive-only rule would report a group
-    // per row and say nothing at all — which is what the case above would
-    // read as if this rule were borrowed from that one.
-    const groups = absorbedGroups([
-      event("agent_phase_started", { timestamp: "1" }),
-      event("agent_phase_completed", { timestamp: "2" }),
-      event("agent_phase_started", { timestamp: "3" }),
-    ]);
-    expect(groups).toHaveLength(2);
-    expect(groups[0]!.count).toBe(2);
-  });
-
-  test("a row that is a row is not in it", () => {
-    // Handed a whole turn or handed `Story.absorbed`, it answers the same,
-    // because it files on the map rather than on where the caller got the
-    // rows.
-    const turn = [
-      event("agent_phase_started", { timestamp: "1" }),
-      event("provider_fallback", { timestamp: "2" }),
-      event("episode_written", { timestamp: "3" }),
-    ];
-    expect(absorbedGroups(turn).map((g) => g.type)).toEqual(["agent_phase_started"]);
-    expect(absorbedGroups(tellStory(turn).absorbed).map((g) => g.type)).toEqual([
-      "agent_phase_started",
-    ]);
-  });
-});
-
-describe("weight", () => {
-  test("a guard breach is what went wrong, not bookkeeping", () => {
-    expect(bandOf(event("turn.guard_breach"))).toBe("went_wrong");
-    expect(bandOf(event("llm_unavailable"))).toBe("went_wrong");
-    expect(bandOf(event("budget_exhausted"))).toBe("went_wrong");
-    expect(bandOf(event("provider_fallback"))).toBe("went_wrong");
-  });
-
-  test("a failed row is what went wrong whatever its type says", () => {
-    // The failure taxonomy is the engine's — the type, the payload's own
-    // flag, or the store's tag — and a coding run that came back failed is
-    // something that went wrong on this turn even though a completed run is
-    // ordinary work.
-    expect(bandOf(event("sandbox_run_completed"))).toBe("did");
-    expect(bandOf(event("sandbox_run_completed", { failed: true }))).toBe("went_wrong");
-  });
-
-  test("the failed flag is read from the payload too", () => {
-    // It reaches the client two ways: the payload's own field while the event
-    // is live, and the `failed` tag the store writer stamps, which is all
-    // that survives into history. Reading only one makes the same turn red on
-    // one surface and clean on another.
-    expect(bandOf(event("skill_used", { payload: { failed: true } }))).toBe("went_wrong");
-  });
-
-  test("the learning aftermath is its own question, not a failure and not work", () => {
-    for (const type of [
-      "episode_written",
-      "persist_decider_completed",
-      "counterparty_profile_updated",
-      "reflection_completed",
-      "skill_synthesized",
-    ]) {
-      expect(bandOf(event(type)), type).toBe("left_behind");
-    }
-  });
-
-  test("a healthy turn can say nothing went wrong", () => {
-    // The old panel was never empty, so "nothing went wrong here" was not a
-    // state the screen could reach — and a section that is always full is a
-    // section nobody reads.
+describe("collecting a turn's rows", () => {
+  test("each row lands where the engine filed it, and nowhere else", () => {
+    // THE CLIENT DECIDES NOTHING A SECOND TIME: a row the engine called
+    // `did` is listed under what else it did whatever its type would suggest,
+    // because a second rule here is how the screen and a member's story of the
+    // same turn would come to disagree.
     const story = tellStory([
-      event("agent_phase_started"),
-      event("agent_phase_completed"),
-      event("prefetch_summary"),
-      event("episode_written"),
-      event("reflection_completed"),
-      event("agent_turn_completed"),
-      event("turn_completed"),
+      filed("provider_fallback", "went_wrong"),
+      filed("prefetch_summary", "given"),
+      filed("knowledge_read", "did"),
+      filed("episode_written", "left_behind"),
+      filed("something.unbanded", "rest"),
     ]);
-    expect(story.wentWrong).toHaveLength(0);
-    expect(story.given).toHaveLength(1);
-    expect(story.leftBehind).toHaveLength(2);
+    expect(story.wentWrong.map((e) => e.type)).toEqual(["provider_fallback"]);
+    expect(story.given.map((e) => e.type)).toEqual(["prefetch_summary"]);
+    expect(story.did.map((e) => e.type)).toEqual(["knowledge_read"]);
+    expect(story.leftBehind.map((e) => e.type)).toEqual(["episode_written"]);
+    expect(story.rest.map((e) => e.type)).toEqual(["something.unbanded"]);
+  });
+
+  test("an absorbed row is not listed — the answer's inventory says where it went", () => {
+    // Six of the twelve rows on the turn the bands were built against were
+    // `agent_phase_started`, one per phase card directly above. The screen
+    // prints where each kind went from the answer's own `absorbed`, so a row
+    // collected here as well would be drawn twice.
+    const story = tellStory([filed("agent_phase_started", "absorbed")]);
+    const listed = [
+      ...story.wentWrong,
+      ...story.given,
+      ...story.did,
+      ...story.leftBehind,
+      ...story.rest,
+    ];
+    expect(listed).toHaveLength(0);
+  });
+
+  test("a band this build does not know is still drawn, under the rest", () => {
+    // The registry is additive-only and so is the band set: a newer engine's
+    // band must not make its rows vanish from an older dashboard's page.
+    const story = tellStory([filed("later.type", "a_band_from_a_later_build")]);
+    expect(story.rest.map((e) => e.type)).toEqual(["later.type"]);
+  });
+
+  test("the order a band lists is the order the turn published", () => {
+    // The axis of every band is time; collecting must not reorder it.
+    const story = tellStory([
+      filed("provider_fallback", "went_wrong", { id: "first" }),
+      filed("prefetch_summary", "given"),
+      filed("provider_fallback", "went_wrong", { id: "second" }),
+    ]);
+    expect(story.wentWrong.map((e) => e.id)).toEqual(["first", "second"]);
   });
 });
 
-describe("a type this build has never seen", () => {
-  test("falls through to the residual list rather than disappearing", () => {
-    // The event registry is additive-only precisely so a rolling upgrade can
-    // put unknown types on the wire. A banding rule that dropped what it did
-    // not recognise would make the newer node's turns look emptier than they
-    // were.
-    const story = tellStory([event("something.a_later_build_publishes")]);
-    expect(story.rest).toHaveLength(1);
-    expect(story.rest[0]!.type).toBe("something.a_later_build_publishes");
-  });
-
-  test("and is still loud if it is marked failed", () => {
-    expect(bandOf(event("something.a_later_build_publishes", { failed: true }))).toBe("went_wrong");
-  });
-});
-
-describe("a band entry is a query predicate", () => {
-  // Every row these sets sort came from `EventLog.Turn`, which is
-  // `WHERE turn_id = ?`. Eight types were banded whose payloads declare no
-  // `turn_id` key at all, so they could never be in the answer and each band
-  // failed EMPTY — the one way a panel cannot say it is broken.
-  //
-  // FOUR OF THEM WERE REPAIRED IN THE ENGINE and are banded again; the four
-  // below describe no single turn and never will be. These cases pin what the
-  // screen does with each group NOW, and the wire half is held by
-  // `internal/events/types/turnbands_client_test.go`: this file cannot read a
-  // Go struct tag, so it asserts the banding and the engine asserts the key.
-  // Neither half is the whole claim on its own.
-
-  test("an A2A ask is 'What else it did' again", () => {
-    // The band advertised "colleagues" for these three while none of them
-    // carried a turn id, so an ask was never once drawn under that heading.
-    // The engine stamps the publishing turn on all three now, which is what
-    // makes banding them a promise the wire can keep — and the Go gate's
-    // roster is what announced that the repair had landed.
-    for (const type of ["a2a_channel_opened", "a2a_message_sent", "a2a_channel_closed"]) {
-      expect(bandOf(event(type)), type).toBe("did");
-    }
-  });
-
-  test("a skill the reflection could not stamp is what went wrong", () => {
-    // Published by the SkillUse worker, which holds the turn id and did not
-    // put it on this one payload — so the panel an operator opens after a
-    // failed counter write could not draw it however it was banded.
-    expect(bandOf(event("skill_telemetry_write_failed"))).toBe("went_wrong");
-  });
-
-  test("a skill this turn brought back is what it left behind", () => {
-    // The same worker's other event. Its second producer — the curator
-    // reviving a row an operator restored — carries no turn id and simply is
-    // not in any turn's answer, which is the correct half.
-    expect(bandOf(event("skill_revived"))).toBe("left_behind");
-  });
-
-  test("the scheduler's cron fire is the trigger, not work the turn did", () => {
-    // `task_assigned` is published by internal/schedule to WAKE a seat, so it
-    // precedes every turn id there could be. It is already on the screen as
-    // the brief.
-    expect(bandOf(event("task_assigned"))).toBe("rest");
-  });
-
-  test("a record that no turn ran is not this turn's failure", () => {
-    // Both say a delivery was never worked — one at the dispatcher, one at
-    // the notification gate — so neither names a turn, and both sat in
-    // "What went wrong" contributing nothing to a count the header prints.
-    expect(bandOf(event("turn_trigger_skipped"))).toBe("rest");
-    expect(bandOf(event("notification_skipped"))).toBe("rest");
-  });
-
-  test("work spanning many turns is not what THIS turn left behind", () => {
-    // The curator duty promotes a unit's skill off a cluster of many seats'
-    // turns, so there is no single right turn to name.
-    expect(bandOf(event("skill_promoted"))).toBe("rest");
-  });
-
-  test("but a failed one is still loud, exactly as an unknown type is", () => {
-    // Falling through to `rest` is about the BAND, never about the weight: the
-    // failure taxonomy is the engine's and outranks every set in this file, so
-    // a de-banded type that comes back failed is still what went wrong.
-    expect(bandOf(event("skill_promoted", { failed: true }))).toBe("went_wrong");
+describe("a failed row", () => {
+  test("is read from the store's flag or from the payload's own", () => {
+    // It reaches the client two ways: the payload's own field while the event
+    // is live, and the `failed` tag the store writer stamps, which is all that
+    // survives into history. Reading only one makes the same turn red on one
+    // surface and clean on another.
+    expect(isFailed(event("sandbox_run_completed", { failed: true }))).toBe(true);
+    expect(isFailed(event("skill_used", { payload: { failed: true } }))).toBe(true);
+    expect(isFailed(event("skill_used"))).toBe(false);
   });
 });
 
