@@ -508,16 +508,19 @@ func writeArtefact(t *testing.T, dir string, at time.Time) {
 // went on to finish; the node had also been running it on the request's own
 // context, so the cancellation stopped it halfway.
 //
-// Against a client whose ORDINARY timeout is half a second and a node that
-// answers the transition after a second: the status read before it is
-// answered at once, so only a transition sent through
-// [nodeClient.patiently] can be waited for. The command's own wiring — the
+// Against a client whose ORDINARY timeout is two seconds and a node that
+// answers the transition after four: the status read before it is answered
+// at once, so only a transition sent through [nodeClient.patiently] can be
+// waited for. Two seconds rather than half of one, because "at once" is a
+// loopback round trip under the race detector on a runner the rest of the
+// suite shares, and at half a second a starved machine timed the status read
+// out and failed the case on the call it does not test. The command's own wiring — the
 // flags, the client nodeClientFor builds at nodeRequestTimeout — is the other
 // reanchor cases' and [TestAnOperatorCallIsGivenTenSeconds]'s; this one would
 // otherwise sit out the real ten seconds to prove a relation.
 func TestAReanchorIsWaitedForPastTheOrdinaryTimeout(t *testing.T) {
 	t.Parallel()
-	const ordinary = 500 * time.Millisecond
+	const ordinary = 2 * time.Second
 	node := newFakeCapacityNode(t)
 	node.reanchorCase, node.reanchorCursor = "restored", 7000
 	node.reanchorTakes = 2 * ordinary
