@@ -628,7 +628,11 @@ worth knowing:
   (`@release/v1`) or `@main` yields no update pull requests at all, so pin
   actions to a version tag or a full SHA. That matters most for the one
   handed an OIDC token: pinned, its updates arrive as reviewable pull
-  requests instead of moving under the workflow unannounced.
+  requests instead of moving under the workflow unannounced. The release
+  workflow pins every action by **full commit SHA**, with the release in a
+  trailing comment (`@<sha> # v7.2.3`) that Dependabot rewrites with the pin:
+  it holds the registry, the Releases and the signing identity, and a version
+  tag is a ref its owner can move under it.
 
 Adding a new dependency surface — a second `package.json`, a second module — means
 adding its `updates:` entry in the same change. Nothing reports the omission:
