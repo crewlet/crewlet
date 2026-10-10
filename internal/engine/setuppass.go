@@ -500,7 +500,8 @@ func (p *datadogPass) Run(ctx context.Context, in setup.PassInput) ([]integratio
 	// configuration and not a credential, and as a missing credential it
 	// read Failed and offered the API and application keys — which are
 	// set — as the fields that clear it.
-	if !datadog.KnownSite(cfg.Provisioning.Site) {
+	site := datadogSite(cfg, env)
+	if !datadog.KnownSite(site) {
 		return []integration.Finding{{
 			Kind:    integration.FindingConfigFault,
 			Subject: "integrations.datadog.provisioning.site",
@@ -508,7 +509,7 @@ func (p *datadogPass) Run(ctx context.Context, in setup.PassInput) ([]integratio
 				"Datadog serves, so no call can be built from it",
 		}}, nil
 	}
-	client, err := datadog.NewClient(datadog.ClientOptions{Site: cfg.Provisioning.Site})
+	client, err := datadog.NewClient(datadog.ClientOptions{Site: site})
 	if err != nil {
 		return nil, fmt.Errorf("engine: datadog pass: %w", err)
 	}
@@ -542,6 +543,18 @@ func (p *datadogPass) Run(ctx context.Context, in setup.PassInput) ([]integratio
 	return res.Findings(), nil
 }
 
+// datadogSite is the region a Datadog client is built for: the field
+// RESOLVED, as every other value of this block is.
+//
+// Config validation accepts a whole `${VAR}` here and leaves the membership
+// check to the resolved value, saying so at the field — and both passes built
+// the client from the field VERBATIM, so a region held in a variable reached
+// KnownSite as the literal "${DD_SITE}": every pass reported a region Datadog
+// does not serve, and every disconnect failed to build a client at all.
+func datadogSite(cfg *config.Datadog, env *config.Resolver) string {
+	return strings.TrimSpace(env.Value(cfg.Provisioning.Site))
+}
+
 // Teardown disables the accounts this pass created, when asked.
 func (p *datadogPass) Teardown(ctx context.Context, in setup.TeardownInput) (provision.Removed, error) {
 	company := p.engine.Company()
@@ -550,7 +563,7 @@ func (p *datadogPass) Teardown(ctx context.Context, in setup.TeardownInput) (pro
 		return provision.Removed{}, nil
 	}
 	env := p.engine.resolver()
-	client, err := datadog.NewClient(datadog.ClientOptions{Site: cfg.Provisioning.Site})
+	client, err := datadog.NewClient(datadog.ClientOptions{Site: datadogSite(cfg, env)})
 	if err != nil {
 		return provision.Removed{}, fmt.Errorf("engine: datadog teardown: %w", err)
 	}
