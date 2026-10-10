@@ -196,9 +196,12 @@ func TestAPersonsInboxIsCountedAndTheirQueueIsOrdered(t *testing.T) {
 	}
 	// WHEN IS NOT RECORDED, ONLY WHO. The row's own instant already says
 	// when, and a stamp that moves on every write would make a lead
-	// re-stating an unchanged list look like a change.
+	// re-stating an unchanged list look like a change. The caught-up
+	// instant is the same kind of stamp: it moves with `seen_through`,
+	// which is recorded.
 	restated := after
 	restated.PrioritiesSetAt = restated.PrioritiesSetAt.AddDate(0, 0, 1)
+	restated.SeenAt = restated.SeenAt.AddDate(0, 0, 1)
 	if moved := personDeltas(after, restated); moved != nil {
 		t.Errorf("re-stating an unchanged queue recorded %v", moved)
 	}

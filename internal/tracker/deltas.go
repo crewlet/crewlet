@@ -443,7 +443,9 @@ func fileDeltas(before, after File) map[string]Delta {
 // `priorities_set_at` IS NOT RECORDED although `priorities_set_by` is. Who
 // re-ordered somebody else's queue is news; when is what the history row's own
 // instant already says, and a stamp that moves on every write would make every
-// re-statement of an unchanged list look like a change.
+// re-statement of an unchanged list look like a change. `seen_at` is not
+// recorded for the same reason: it moves exactly when `seen_through` does,
+// which is recorded, and at the instant the row already carries.
 func personDeltas(before, after Person) map[string]Delta {
 	moved := deltaSet{}
 	moved.add("priorities", listText(before.Priorities), listText(after.Priorities))

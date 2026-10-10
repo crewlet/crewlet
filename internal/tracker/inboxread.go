@@ -144,6 +144,11 @@ type InboxAnswer struct {
 	// read.
 	SeenThrough Position `json:"seen_through,omitzero"`
 
+	// SinceAt is WHEN they moved it — [Person.SeenAt] — so a screen says
+	// "since you caught up at 18:40" without turning a log position into a
+	// time itself. Absent until the person has marked anything.
+	SinceAt *time.Time `json:"since_at,omitempty"`
+
 	// Counts are over the PAGE, and say so: a total over the table would
 	// be a second scan of rows this answer did not return.
 	Unread  int `json:"unread"`
@@ -326,7 +331,7 @@ func (r *Reader) Inbox(ctx context.Context, q InboxQuery, now time.Time) (
 		if err != nil {
 			return err
 		}
-		answer.SeenThrough = person.SeenThrough
+		answer.SeenThrough, answer.SinceAt = person.SeenThrough, sinceOf(person)
 		answer.PrimaryReasons = effectivePrimary(person.PrimaryReasons)
 		marks = person.marks(answer.PrimaryReasons)
 
@@ -361,6 +366,17 @@ func (r *Reader) Inbox(ctx context.Context, q InboxQuery, now time.Time) (
 		answer.Incomplete = incompleteFrom(served.Incomplete)
 	}
 	return answer, nil
+}
+
+// sinceOf is when a person last caught up, or nil for one who never has —
+// the ABSENT key the inbox and the person answers both serve, never a zero
+// instant a screen would render as 1970 or 0001.
+func sinceOf(person Person) *time.Time {
+	if person.SeenAt.IsZero() {
+		return nil
+	}
+	at := person.SeenAt
+	return &at
 }
 
 // effectivePrimary is the person's split, or the shipped default.

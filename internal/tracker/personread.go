@@ -52,7 +52,12 @@ type PersonState struct {
 	PrioritiesSetAt time.Time `json:"priorities_set_at,omitzero"`
 
 	SeenThrough Position `json:"seen_through,omitzero"`
-	Version     uint64   `json:"version"`
+
+	// SinceAt is when SeenThrough was last moved — the instant the inbox
+	// answers too ([Person.SeenAt]) — and absent until it has been.
+	SinceAt *time.Time `json:"since_at,omitempty"`
+
+	Version uint64 `json:"version"`
 
 	// MaxSnoozeAhead is how far ahead a snooze may be set, in SECONDS —
 	// [MaxSnoozeAhead], served so a screen offers only the presets the
@@ -131,6 +136,7 @@ func (r *Reader) Person(ctx context.Context, q PersonQuery, now time.Time) (Pers
 		out.PrioritiesSetBy = person.PrioritiesSetBy
 		out.PrioritiesSetAt = person.PrioritiesSetAt
 		out.SeenThrough, out.Version = person.SeenThrough, person.Version
+		out.SinceAt = sinceOf(person)
 		out.Snoozed, out.Due = splitSnoozes(person.Snoozed, now)
 		position, applied, err := readCheckpoint(ctx, tx)
 		if err != nil {

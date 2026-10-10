@@ -224,15 +224,16 @@ func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key str
 		}
 		res, err = tx.ExecContext(ctx, `
 			INSERT INTO tracker_persons
-				(handle, generation, seen_through, seen_through_stream, read_json,
-				 unread_json, snoozed_json, primary_reasons_json, priorities_json,
-				 pinned_views_json, favorites_json, priorities_set_by,
-				 priorities_set_at, version)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+				(handle, generation, seen_through, seen_through_stream, seen_at,
+				 read_json, unread_json, snoozed_json, primary_reasons_json,
+				 priorities_json, pinned_views_json, favorites_json,
+				 priorities_set_by, priorities_set_at, version)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 			ON CONFLICT (handle) DO UPDATE SET
 				generation = excluded.generation,
 				seen_through = excluded.seen_through,
 				seen_through_stream = excluded.seen_through_stream,
+				seen_at = excluded.seen_at,
 				read_json = excluded.read_json, unread_json = excluded.unread_json,
 				snoozed_json = excluded.snoozed_json,
 				primary_reasons_json = excluded.primary_reasons_json,
@@ -244,7 +245,8 @@ func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key str
 				version = excluded.version
 			WHERE excluded.version > tracker_persons.version`,
 			key, person.Generation, int64(person.SeenThrough.packed()),
-			person.SeenThrough.Stream, jsonOf(person.Read), jsonOf(person.Unread),
+			person.SeenThrough.Stream, store.EncodeTime(person.SeenAt),
+			jsonOf(person.Read), jsonOf(person.Unread),
 			jsonOf(person.Snoozed), jsonOf(person.PrimaryReasons),
 			jsonOf(person.Priorities), jsonOf(person.PinnedViews),
 			jsonOf(person.Favorites), person.PrioritiesSetBy,

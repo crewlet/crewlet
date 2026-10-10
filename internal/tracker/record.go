@@ -1369,6 +1369,19 @@ type Person struct {
 	// number from a dead sequence space compares as if it were current.
 	SeenThrough Position `json:"seen_through,omitzero"`
 
+	// SeenAt is WHEN the person last moved SeenThrough — the writer's own
+	// instant on the gesture that advanced it, and zero until one has.
+	//
+	// STAMPED ON THE RECORD rather than looked up beside it, because the
+	// position and the instant answer different questions: the position is
+	// how far the log had got when the person rendered what they read, and a
+	// person who opens a page written at 09:00 and marks it at 18:40 caught
+	// up at 18:40. Nothing else holds that instant — the history row of
+	// the mark is one of many on the person's subject and its deltas name
+	// the position, not the gesture — and a screen that put its own clock on
+	// the mark would date it from when the page was drawn.
+	SeenAt time.Time `json:"seen_at,omitzero"`
+
 	Read    []InboxEntry `json:"read,omitempty"`
 	Unread  []InboxEntry `json:"unread,omitempty"`
 	Snoozed []InboxEntry `json:"snoozed,omitempty"`

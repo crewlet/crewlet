@@ -121,18 +121,18 @@ func readTagSet(ctx context.Context, tx *sql.Tx, project string) (TagSet, bool, 
 // ordinary state of every human on their first day and every seat for ever.
 func readPerson(ctx context.Context, tx *sql.Tx, handle string) (Person, bool, error) {
 	var person Person
-	var seenSeq int64
+	var seenSeq, seenAt int64
 	var setAt int64
 	var version int64
 	var read, unread, snoozed, reasons, priorities, pins, favorites []byte
 	switch err := tx.QueryRowContext(ctx, `
-		SELECT generation, seen_through, seen_through_stream, read_json,
-		       unread_json, snoozed_json, primary_reasons_json, priorities_json,
-		       pinned_views_json, favorites_json, priorities_set_by,
-		       priorities_set_at, version
+		SELECT generation, seen_through, seen_through_stream, seen_at,
+		       read_json, unread_json, snoozed_json, primary_reasons_json,
+		       priorities_json, pinned_views_json, favorites_json,
+		       priorities_set_by, priorities_set_at, version
 		FROM tracker_persons WHERE handle = ?`, handle).
-		Scan(&person.Generation, &seenSeq, &person.SeenThrough.Stream, &read,
-			&unread, &snoozed, &reasons, &priorities, &pins, &favorites,
+		Scan(&person.Generation, &seenSeq, &person.SeenThrough.Stream, &seenAt,
+			&read, &unread, &snoozed, &reasons, &priorities, &pins, &favorites,
 			&person.PrioritiesSetBy, &setAt, &version); {
 	case errors.Is(err, sql.ErrNoRows):
 		return Person{V: DocumentVersion, Handle: handle}, false, nil
@@ -147,6 +147,10 @@ func readPerson(ctx context.Context, tx *sql.Tx, handle string) (Person, bool, e
 	// generation zero, which is exactly what it was.
 	person.SeenThrough.Generation = uint32(seenSeq / statelog.GenerationStride)
 	person.SeenThrough.Seq = uint64(seenSeq % statelog.GenerationStride)
+	if seenAt != 0 {
+		// ZERO IS UNSET, for the reason the priorities' stamp below gives.
+		person.SeenAt = store.DecodeTime(seenAt)
+	}
 	if setAt != 0 {
 		// ZERO IS UNSET, not the epoch: the ordinary state is a
 		// person's own list, and decoding a zero into 1970 would put a
