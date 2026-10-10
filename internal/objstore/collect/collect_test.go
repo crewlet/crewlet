@@ -119,6 +119,12 @@ type backend struct {
 	// before it answers what the twin holds.
 	lagging map[string]int
 	statErr error
+	// asks is how many times each name has been asked about; hold, when
+	// set, is called before a stat is answered — outside every lock, so it
+	// may block — with the name and which ask of it this is, counting from
+	// one.
+	asks map[string]int
+	hold func(name string, nth int)
 }
 
 func (b *backend) Pending(ctx context.Context, visit func(objstore.Pending) error) error {
@@ -153,6 +159,13 @@ func (b *backend) Abandon(_ context.Context, p objstore.Pending) error {
 }
 
 func (b *backend) Stat(ctx context.Context, name string) (objstore.Info, error) {
+	b.mu.Lock()
+	b.asks[name]++
+	nth, hold := b.asks[name], b.hold
+	b.mu.Unlock()
+	if hold != nil {
+		hold(name, nth)
+	}
 	b.mu.Lock()
 	failure := b.statErr
 	lag := b.lagging[name]
@@ -200,7 +213,7 @@ type harness struct {
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	clk := &clock{now: time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)}
-	b := &backend{Backend: memobj.NewAt(clk.Now), lagging: map[string]int{}}
+	b := &backend{Backend: memobj.NewAt(clk.Now), lagging: map[string]int{}, asks: map[string]int{}}
 	store, err := objstore.NewStoreAt(b, clk.Now)
 	if err != nil {
 		t.Fatal(err)
@@ -651,6 +664,104 @@ func TestALaggingNotFoundIsNotMissing(t *testing.T) {
 	h.backend.lagging[o.Key.Name()] = 2
 	if r, err = h.c.Audit(t.Context()); err != nil || r.Missing != 1 {
 		t.Fatalf("Audit = %+v, %v; an object not found twice is missing", r, err)
+	}
+}
+
+// THE SECOND LOOK HOLDS AT MOST ITS LIMIT, oldest first: a push past it hands
+// back the oldest, and a drain hands back the rest in the order they came.
+func TestTheSecondLookQueueHoldsAtMostItsLimit(t *testing.T) {
+	t.Parallel()
+	ref := func(i int) Reference { return Reference{NamedBy: fmt.Sprintf("ENG/%d.md", i)} }
+	q := suspects{limit: 3}
+	for i := 1; i <= 7; i++ {
+		due, over := q.push(ref(i))
+		switch {
+		case i <= 3 && over:
+			t.Fatalf("push %d handed back %q while the queue had room", i, due.NamedBy)
+		case i > 3 && (!over || due != ref(i-3)):
+			t.Fatalf("push %d handed back %q (%v), want the oldest, %q", i, due.NamedBy, over, ref(i-3).NamedBy)
+		}
+		if len(q.held) > 3 {
+			t.Fatalf("after push %d the queue holds %d, past its limit of 3", i, len(q.held))
+		}
+	}
+	if got, want := q.drain(), []Reference{ref(5), ref(6), ref(7)}; !slices.Equal(got, want) {
+		t.Fatalf("drain = %v, want %v", got, want)
+	}
+	if rest := q.drain(); len(rest) != 0 {
+		t.Fatalf("a drained queue still holds %v", rest)
+	}
+	// A LIMIT BELOW ONE HOLDS ONE rather than dropping what it is handed.
+	one := suspects{}
+	if _, over := one.push(ref(1)); over {
+		t.Fatal("a queue with no limit set dropped the first reference it was handed")
+	}
+	if due, over := one.push(ref(2)); !over || due != ref(1) {
+		t.Fatalf("a queue with no limit set handed back %q (%v), want the first", due.NamedBy, over)
+	}
+}
+
+// AN AUDIT TAKES ITS SECOND LOOK BEFORE ITS WALK ENDS ONCE IT HOLDS ITS BOUND:
+// a store that lost everything must not have the audit hold the company's
+// whole inventory until the end of the walk. Every reference the store
+// answered "not found" for still gets exactly one second look, the ones asked
+// early included, and only those not found twice are missing.
+//
+// The last first look waits for a second look to have been taken, so an audit
+// that saved every second look for the end of its walk never finishes it.
+func TestTheAuditTakesItsSecondLookBeforeItsWalkEndsOnceItHoldsItsBound(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.c.suspectsHeld = 3
+	var names []string
+	for i := range 12 {
+		o := h.file(fmt.Sprintf("lagging-%02d.md", i), fmt.Sprintf("lagging %d", i))
+		h.backend.lagging[o.Key.Name()] = 1
+		names = append(names, o.Key.Name())
+	}
+	for i := range 2 {
+		o := h.file(fmt.Sprintf("lost-%d.md", i), fmt.Sprintf("lost %d", i))
+		if err := h.store.Delete(t.Context(), o.Key); err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, o.Key.Name())
+	}
+	var (
+		mu        sync.Mutex
+		firsts    int
+		second    = make(chan struct{})
+		sawSecond sync.Once
+	)
+	h.backend.hold = func(_ string, nth int) {
+		if nth == 2 {
+			sawSecond.Do(func() { close(second) })
+			return
+		}
+		mu.Lock()
+		firsts++
+		last := firsts == len(names)
+		mu.Unlock()
+		if !last {
+			return
+		}
+		select {
+		case <-second:
+		case <-time.After(10 * time.Second):
+			t.Error("the last first look came with no second look taken: every " +
+				"suspect was held for the end of the walk")
+		}
+	}
+
+	r, err := h.c.Audit(t.Context())
+	if err != nil || r.Missing != 2 || r.Referenced != len(names) || r.Found == nil || r.Found.Missing != 2 {
+		t.Fatalf("Audit = %+v, %v; want the two lost files missing of %d", r, err, len(names))
+	}
+	h.backend.mu.Lock()
+	defer h.backend.mu.Unlock()
+	for _, name := range names {
+		if got := h.backend.asks[name]; got != 2 {
+			t.Errorf("%s was asked about %d times, want a first look and exactly one second", name, got)
+		}
 	}
 }
 
