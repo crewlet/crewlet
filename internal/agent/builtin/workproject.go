@@ -75,8 +75,9 @@ func (t *writeProject) Description() string {
 		"may add to — declare a label before filing work under it, because " +
 		"create_work_item refuses one this project does not have. Renaming or " +
 		"archiving a tag, declaring project fields, setting the default " +
-		"assignee and setting the target date are the project lead's; archiving " +
-		"the project itself takes a person. A project's name, purpose and " +
+		"assignee and setting the target date are the project lead's or an " +
+		"admin's; archiving the project itself takes an admin. A project's " +
+		"name, purpose and " +
 		"owning unit come from the org chart and are not writable here."
 }
 
@@ -148,8 +149,8 @@ func (t *writeProject) Parameters() map[string]any {
 			},
 			"archived": map[string]any{
 				"type": "boolean",
-				"description": "Stops the project taking new work. Takes a " +
-					"person's own credential, not a seat's.",
+				"description": "Stops the project taking new work. Takes an " +
+					"admin's key, not a seat's or a lead's.",
 			},
 		},
 	}
@@ -213,20 +214,20 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// THE AUTHORITY IS RESOLVED ONCE, before either write, so a call that
 	// holds both facets cannot land the tag half and then be refused the
 	// policy half on a different answer to the same question.
-	// EITHER AUTHORITY IS ENOUGH, and the operator half is why the lookup
-	// below is not the whole answer: it resolves the lead from the ORG
-	// CHART by handle, and a token nobody bound is in no chart at all — so
-	// for an unbound operator it answers false whatever they lead. See
+	// EITHER AUTHORITY IS ENOUGH: the project's lead (or anybody above
+	// them), from the ORG CHART, or an ADMIN's key ([Actor.Admin]), whose
+	// reach is how the company is run — a project's policy included — and
+	// which a key nobody linked has no other way to hold. A member's key is
+	// held to the chart: it used to be admitted as "a person's own
+	// credential", from when every key was an operator's, which let every
+	// teammate redeclare any project's fields and archive it. See
 	// [tracker.ProjectAuthority].
 	//
 	// ASKED ABOUT [Actor.Record], which is the person behind the
 	// credential: a bound founder's own seat leads their projects, and
-	// asked about the token's name instead the lookup matched nobody and
-	// fell through to `Operator` for an authority their seat actually
-	// holds — so a lead-only edit refused for a seat that leads the
-	// project read as a person's override in the history.
+	// asked about the token's name instead the lookup matched nobody.
 	lead := t.leads != nil && t.leads(ctx, actor.Record(), key)
-	person := actor.Kind.Person()
+	admin := actor.Admin
 	writer := t.deps.ProjectWriter(actor)
 	out := map[string]any{"project": key}
 	// THE CALL ANSWERS FOR BOTH RECORDS at the top, and each facet keeps its
@@ -243,7 +244,7 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if !tagEdit.Empty() {
 		opID := opIDFor(actor, t.Name(), "tags", key, args)
 		result, err := writer.WriteTags(ctx, opID, key,
-			tagEdit, tracker.TagAuthority{Lead: lead, Operator: person})
+			tagEdit, tracker.TagAuthority{Lead: lead, Admin: admin})
 		if err != nil {
 			return writeFailure(actor, tracker.WriteProjectTool, err), nil
 		}
@@ -272,7 +273,7 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if !edit.Empty() {
 		opID := opIDFor(actor, t.Name(), "policy", key, args)
 		result, err := writer.WriteProject(ctx, opID, key,
-			edit, tracker.ProjectAuthority{Lead: lead, Operator: person})
+			edit, tracker.ProjectAuthority{Lead: lead, Admin: admin})
 		if err != nil {
 			failure := writeFailure(actor, tracker.WriteProjectTool, err)
 			if !tagEdit.Empty() {

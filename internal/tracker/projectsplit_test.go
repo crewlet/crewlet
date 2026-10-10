@@ -201,7 +201,7 @@ func TestATargetDateIsTheLeadsOrAPersons(t *testing.T) {
 		target    string
 	}{
 		{"the lead", tracker.ProjectAuthority{Lead: true}, "2026-12-18"},
-		{"a person", tracker.ProjectAuthority{Operator: true}, "2027-01-29"},
+		{"an admin", tracker.ProjectAuthority{Admin: true}, "2027-01-29"},
 	} {
 		if _, err := r.writer.WriteProject(t.Context(), "op-"+c.target, "ENG",
 			tracker.ProjectEdit{TargetDate: day(c.target)}, c.authority); err != nil {

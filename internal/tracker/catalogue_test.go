@@ -399,7 +399,7 @@ func TestResubmittingAProjectsFieldsWritesNothing(t *testing.T) {
 	r := newRoundTrip(t)
 	fields := []tracker.FieldDef{{ID: "f1", Slug: "impact", Name: "Impact",
 		Type: tracker.FieldText}}
-	authority := tracker.ProjectAuthority{Operator: true}
+	authority := tracker.ProjectAuthority{Admin: true}
 
 	if _, err := r.writer.WriteProject(t.Context(), "op-fields", "ENG",
 		tracker.ProjectEdit{Fields: &fields}, authority); err != nil {

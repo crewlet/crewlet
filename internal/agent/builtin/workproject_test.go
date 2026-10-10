@@ -128,42 +128,52 @@ func TestWriteProjectTellsAbsentFromEmpty(t *testing.T) {
 	}
 }
 
-// AN OPERATOR IS AN OPERATOR AND A SEAT IS NOT, which is what the archive
-// facet turns on. The tool reports the caller's kind and never decides it.
-func TestWriteProjectReportsTheCallerKind(t *testing.T) {
+// AN ADMIN'S KEY IS AN ADMIN AND NOTHING ELSE IS, which is what the archive
+// facet turns on. The tool reports the caller's role and never decides it: a
+// seat is no admin, and neither is a member's key, however much of the chart
+// the person behind it leads — that is the OTHER arm, the lead, which the
+// lookup answers separately.
+func TestWriteProjectReportsWhetherTheCallerIsAnAdmin(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	reg := projectRegistry(t, trk, leadAlways)
 	callWork(t, reg, tracker.WriteProjectTool, map[string]any{
 		"project": "ENG", "archived": true,
 	})
-	if trk.projectAuthority[0].Operator {
-		t.Error("a seat was sent as an operator, so the archive gate is open " +
+	if trk.projectAuthority[0].Admin {
+		t.Error("a seat was sent as an admin, so the archive gate is open " +
 			"to every lead")
 	}
 
-	// AND AN OPERATOR SURFACE, whose actor IS a person, reports one.
-	operator := newFakeTracker()
-	opReg := tools.NewRegistry()
-	if _, err := builtin.Register(opReg, builtin.Deps{
-		Work: builtin.WorkDeps{
-			Reader: operator, Writer: operator.as,
-			ProjectWriter:  func(builtin.Actor) builtin.ProjectWriter { return operator },
-			DefaultProject: func(string) string { return "ENG" },
-			Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
-				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
+	for name, tc := range map[string]struct {
+		admin bool
+	}{
+		"a member's key": {false},
+		"an admin's key": {true},
+	} {
+		operator := newFakeTracker()
+		opReg := tools.NewRegistry()
+		if _, err := builtin.Register(opReg, builtin.Deps{
+			Work: builtin.WorkDeps{
+				Reader: operator, Writer: operator.as,
+				ProjectWriter:  func(builtin.Actor) builtin.ProjectWriter { return operator },
+				DefaultProject: func(string) string { return "ENG" },
+				Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
+					return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator,
+						Admin: tc.admin}, nil
+				},
 			},
-		},
-		LeadsProject: leadAlways,
-	}); err != nil {
-		t.Fatalf("register: %v", err)
-	}
-	callWork(t, opReg, tracker.WriteProjectTool, map[string]any{
-		"project": "ENG", "archived": true,
-	})
-	if !operator.projectAuthority[0].Operator {
-		t.Error("a person's own credential was not reported as an operator, " +
-			"so nothing can ever archive a project")
+			LeadsProject: leadAlways,
+		}); err != nil {
+			t.Fatalf("register: %v", err)
+		}
+		callWork(t, opReg, tracker.WriteProjectTool, map[string]any{
+			"project": "ENG", "archived": true,
+		})
+		if got := operator.projectAuthority[0].Admin; got != tc.admin {
+			t.Errorf("%s was reported Admin=%v, want %v — the archive gate is "+
+				"an admin's, and a member's key is held to the chart", name, got, tc.admin)
+		}
 	}
 }
 

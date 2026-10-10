@@ -199,24 +199,19 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// THE PERSON, NOT THE CREDENTIAL — see the file head.
 		handle = actor.Record()
 	}
-	authority := tracker.PersonAuthority{
-		// A HUMAN OR AN OPERATOR MAY WRITE ANYBODY'S, which is the
-		// design's own rule and the one the gate was missing. It matters
-		// here specifically: this tool is registered on the operator MCP
-		// alone, and an operator's actor is a TOKEN's name rather than a
-		// handle in the chart — so no ancestor walk can ever match it,
-		// `Lead` is false for every operator by construction, and the
-		// only shipped surface for the verb could not use it.
-		Person: actor.Kind.Person(),
-	}
-	// AND THE LEAD RELATION IS RESOLVED HERE and passed as a value,
-	// because the tracker has no chart — see the file head. A surface that
-	// wired no lookup resolves false, which degrades to "your own only".
+	// THE LEAD RELATION, AND NOTHING ELSE, decides somebody else's queue —
+	// resolved here and passed as a value, because the tracker has no chart
+	// (see the file head). A surface that wired no lookup resolves false,
+	// which degrades to "your own only". No credential adds to it, an
+	// admin's included: a queue is part of a person's own record, which an
+	// admin key reaches no further than a member's (ADR-0031), and the
+	// person behind any key is a lead by the chart like anybody else.
 	//
 	// ASKED ABOUT [Actor.Record]: a lead relation is between two PEOPLE in
-	// the chart, and a credential is in no chart at all. A bound founder
-	// asked about under their token matched nobody and fell through to
-	// `Person` for an authority their seat actually holds.
+	// the chart, and a credential is in no chart at all — asked about the
+	// token, a bound founder matched nobody and was refused the queue of
+	// every report their seat leads.
+	var authority tracker.PersonAuthority
 	if t.leads != nil && handle != actor.Record() {
 		authority.Lead = t.leads(ctx, actor.Record(), handle)
 	}

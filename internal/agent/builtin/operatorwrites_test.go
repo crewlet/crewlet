@@ -54,10 +54,14 @@ import (
 //
 // It is what `operator.WorkActor` builds — the operator's own name as the
 // handle, the kind saying it is not a seat, and NO TURN ID, which is the whole
-// point of the case.
+// point of the case. AN ADMIN'S KEY, because a token acting for the company
+// rather than as a person is one (a member's key acts only as the person it is
+// linked to), and so the lead-or-admin gates these writes pass through admit
+// it without a chart.
 func operatorActor(context.Context, *turnctx.Turn) (builtin.Actor, error) {
 	return builtin.Actor{
 		Handle: "founder", Kind: tracker.AuthorOperator, OperatorID: "founder",
+		Admin: true,
 	}, nil
 }
 

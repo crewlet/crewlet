@@ -301,7 +301,7 @@ func TestAReorderThroughABoundTokenNamesThePersonNotTheToken(t *testing.T) {
 		OperatorID: "founder", Seat: "jane-founder",
 	})
 	if _, err := token.WritePriorities(t.Context(), "op-bound", "alice",
-		[]string{task.ID}, nil, tracker.PersonAuthority{Person: true}); err != nil {
+		[]string{task.ID}, nil, tracker.PersonAuthority{Lead: true}); err != nil {
 		t.Fatalf("a bound person reordering alice's queue: %v", err)
 	}
 	wake := r.lastWake()
@@ -387,15 +387,15 @@ func candidateHandles(wake *tracker.Notify) []string {
 	return out
 }
 
-// AN OPERATOR MAY WRITE ANYBODY'S PRIORITIES, and a SEAT may not.
+// SOMEBODY ELSE'S PRIORITIES ARE WRITTEN BY THEIR LEADS, AND BY NOBODY ELSE.
 //
-// This is the case that decides whether the wake above can fire at all.
-// `set_priorities` is registered on the operator MCP alone, and an operator's
-// actor is an API TOKEN's name — never a handle in the chart — so no ancestor
-// walk can match it and `Lead` is false for every operator by construction.
-// With the gate reading `own || Lead`, the only shipped surface for this verb
-// refused every cross-person write, and omitting the handle silently wrote a
-// person record for the token instead.
+// The lead relation is the one authority that reaches across people, and the
+// caller resolves it — for an operator, for the seat the key is linked to, so a
+// founder ordering a report's queue through their own key is a lead like any
+// other. WHAT KIND OF WRITER IT IS ADDS NOTHING: a key, or a person's seat,
+// that leads nobody is refused exactly as a seat is. That arm existed, from
+// when every key was an operator's, and once a key could be a member's it let
+// every teammate re-order the founder's day.
 func TestWhoMayWriteSomebodyElsesPriorities(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -407,12 +407,14 @@ func TestWhoMayWriteSomebodyElsesPriorities(t *testing.T) {
 		authority tracker.PersonAuthority
 		allowed   bool
 	}{
-		"an operator": {"ops", tracker.AuthorOperator,
-			tracker.PersonAuthority{Person: true}, true},
-		"a human": {"founder", tracker.AuthorHuman,
-			tracker.PersonAuthority{Person: true}, true},
-		"a lead": {"lead", tracker.AuthorAgent,
+		"a person who leads them, through their own key": {"founder",
+			tracker.AuthorOperator, tracker.PersonAuthority{Lead: true}, true},
+		"a lead seat": {"lead", tracker.AuthorAgent,
 			tracker.PersonAuthority{Lead: true}, true},
+		"a key that leads nobody": {"ops", tracker.AuthorOperator,
+			tracker.PersonAuthority{}, false},
+		"a person's seat that leads nobody": {"rui", tracker.AuthorHuman,
+			tracker.PersonAuthority{}, false},
 		// A SEAT IS THE ONE PARTY THAT MAY NOT. An agent re-ordering a
 		// colleague's list is a hand-off in disguise: an Addressed wake
 		// that bypasses the guarded take and the reassignment budget.

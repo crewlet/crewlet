@@ -273,7 +273,7 @@ export function PinButton({ view, name, pinned }: { view: string; name: string; 
  * A COMPANY WRITE (`contract/actions.ts` scope `company`): a project's
  * settings are what every seat's tracker reads, so it is offered on the
  * project's own page and nowhere else. WHO MAY is the engine's rule, not this
- * control's — the project's lead, or a person acting as themselves — and a
+ * control's — the project's lead or anybody above them, or an admin — and a
  * refusal says so in the engine's sentence.
  *
  * ONE FIELD, because it is the one project setting that is a person's

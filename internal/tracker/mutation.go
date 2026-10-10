@@ -159,8 +159,8 @@ const (
 	// recorded — the dashboard writes through /operator/act and their
 	// assistant through /operator/mcp, both as [AuthorOperator] with the
 	// bound seat beside the token (ADR-0024) — so no write path in this build
-	// stamps it on a record. The gates and [AuthorKind.Person] still count
-	// it as a person, because a record carrying it names one.
+	// stamps it on a record. [AuthorKind.Person] still counts it as a
+	// person, because a record carrying it names one.
 	AuthorHuman AuthorKind = "human"
 	// AuthorOperator is an API token, recorded under its own label.
 	AuthorOperator AuthorKind = "operator"
@@ -180,19 +180,22 @@ func (a AuthorKind) Valid() bool { return slices.Contains(AuthorKinds, a) }
 // than as a seat: somebody at the dashboard, or the token they run the company
 // through.
 //
-// IT IS THE PREDICATE EVERY AUTHORITY GATE ASKS, and it is here because it was
-// written out at each of them and they did not agree: `set_priorities` tested
-// both kinds, while `write_project` tested only `operator`. So a human
-// teammate could arrange somebody's priority list from the dashboard and could
-// not declare their own team's fields — one rule, two answers, and no single
-// place a reader could go to find out which was meant.
+// WHO WROTE, NEVER WHAT THEY MAY DO. It is what a purge requires — the one
+// write with no inverse, licensed by a confirmation only a person can give —
+// and what resets an item's hand-off budget, because a person looked. It is
+// NOT authority over anybody else's work: it used to be the arm every
+// authority gate fell back to, from when every API key was an operator's, and
+// once a key could be a member's it let every teammate order the founder's
+// queue and archive any project. Who may act on what is the chart's, plus the
+// ADMIN role where the company's running is concerned (ADR-0031) — values the
+// caller resolves, because this package holds neither a chart nor a key.
 //
 // (`pages` carries its own `Actor.IsHuman` over its own three-valued
 // `AuthorKind`. That is a different closed set answering a different question
 // — who a NOTIFICATION treats as a person — and folding the two would make one
 // name mean both.)
 //
-// A METHOD ON THE CLOSED SET rather than a helper beside one caller, for
+// A METHOD ON THE CLOSED SET rather than a list beside each caller, for
 // [AuthorKind.Valid]'s reason: a fifth kind is added here, and a predicate
 // over the set belongs where the set is.
 func (a AuthorKind) Person() bool {

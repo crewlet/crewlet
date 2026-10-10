@@ -358,7 +358,7 @@ func writeSurface(w *ledgerFake) map[string]tools.Callable {
 			Inbox:           trk,
 			Actor: func(ctx context.Context, _ *turnctx.Turn) (builtin.Actor, error) {
 				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator,
-					OperatorID: "ops", Operation: operationOf(ctx)}, nil
+					OperatorID: "ops", Operation: operationOf(ctx), Admin: true}, nil
 			},
 		},
 		Pages: builtin.PageDeps{
