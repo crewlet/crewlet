@@ -354,6 +354,17 @@ findings where the last holder left them, rather than running both passes
 again or forgetting what was missing. An audit that fails, or is stopped part
 way, never hides what the last one to run to its end found.
 
+**A pass keeps the duty while it runs.** The duty's lease is renewed four
+times a lease — every 45 seconds — through the pass, so an audit of a few
+million objects stays on the node running it however long it takes. A pass is
+stopped the moment a renewal answers that another node holds the duty, and
+once no renewal has confirmed it for two and a quarter minutes — the duty's
+three-minute lease less one renewal, the longest no other node can have taken
+it — so a single renewal the coordination store refuses, or holds on to while
+its leader moves, costs it nothing: no renewal waits longer than 45 seconds for
+an answer, so the next is always asked in time. A stopped pass records
+nothing: the node that holds the duty records its own.
+
 ### Live and retired references
 
 Every table whose rows name objects declares which of two kinds its rows are:

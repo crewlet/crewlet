@@ -28,6 +28,29 @@ import (
 // COLLECTOR — deleting what no row names, and auditing what the backend has
 // lost — which needs the replicated estate, so it runs on a data node, as a
 // fleet duty ([objectCollectorDuty]).
+//
+// # A pass keeps the duty it runs under
+//
+// The duty's turn — the read of the fleet's record when the duty has just been
+// taken, and the pass — runs on a KEPT duty ([dutyRenewal.keep]): the lease is
+// renewed four times a [collectorDutyTTL], every 45 seconds, for as long as the
+// pass runs, so a pass may outlive any number of leases. It is stopped the
+// moment a renewal answers that another node holds the duty, and once no
+// renewal has confirmed it for two and a quarter minutes — the lease less one
+// renewal, the longest no other node can have claimed it — while a renewal the
+// store refuses, or holds on to while its leader moves, costs it nothing: the
+// call gives up within one renewal, and the next is asked inside the window.
+//
+// Renewed only between passes, as it was, the lease lapsed under any pass
+// longer than it: an audit asks the store about every object a live row
+// names, which at a large company's two million objects is longer than any
+// lease a dead holder should be allowed to keep the duty dark for. A peer took
+// the duty mid-pass and ran its own beside it, and both wrote the fleet's ONE
+// record of the collector (coord's ObjectStores.RecordObjectCollection), whose
+// contract is one writer at a time — the older pass's report, written last,
+// replacing the new holder's. So a pass that ends without the duty, or unable
+// to say it still holds it, RECORDS NOTHING: the node that holds the duty
+// records its own.
 
 // objectStore is this node's part in the object store.
 type objectStore struct {
@@ -81,19 +104,22 @@ const collectorPoll = time.Minute
 // collectorDutyTTL is how long the duty outlives a holder that stopped
 // renewing it.
 //
-// TEN MINUTES, ten polls rather than the three every other singleton uses: the
-// lease is renewed between passes, never during one, and a collection lists
-// the whole store — a pass that outlived a three-poll lease would hand the
-// duty to a peer mid-pass. Two collectors at once are safe — a deletion needs
-// no lock (ADR-0027), and deleting what the other already deleted is not an
-// error — and only wasteful; ten minutes is what a listing of a few million
-// objects takes, and a dead holder costs no more than ten minutes of a pass
-// that is due hourly.
-const collectorDutyTTL = 10 * collectorPoll
+// THREE POLLS, the ratio every other singleton here keeps: one missed claim
+// must not hand the duty to a peer. It no longer has to outlive a PASS, which
+// renews it as it runs ([collectorDuty.renewal]). Sized to outlive one, it was
+// ten minutes, and an audit of a large store outlived that many times over: a
+// peer took the duty mid-audit, ran its own beside it, and the two wrote the
+// fleet's one record in turn. What it bounds now is how long the duty stays
+// dark after its holder dies — three minutes, against a collection due hourly.
+const collectorDutyTTL = 3 * collectorPoll
 
 // collectorDuty is what the collector's duty remembers between turns.
 type collectorDuty struct {
 	collector *collect.Collector
+
+	// renewal is how a turn keeps the duty while it runs: renewed four times
+	// a [collectorDutyTTL], on a test's own clock in the tests.
+	renewal dutyRenewal
 
 	// mu guards the schedule, which only the loop writes and the alarm
 	// tick reads.
@@ -107,6 +133,12 @@ type collectorDuty struct {
 	// resumed is whether the schedule has been read back from the fleet's
 	// record since this node took the duty.
 	resumed bool
+}
+
+// newCollectorDuty is the duty's state over c, renewed on the system's clock.
+func newCollectorDuty(c *collect.Collector) *collectorDuty {
+	return &collectorDuty{collector: c,
+		renewal: newDutyRenewal(objectCollectorDuty, collectorDutyTTL)}
 }
 
 // collectionReport is what the collector's duty records in the coordination
@@ -135,7 +167,7 @@ func (e *Engine) startObjectCollector(ctx context.Context, refs collect.Referenc
 	if err != nil {
 		return fmt.Errorf("engine: the object collector: %w", err)
 	}
-	duty := &collectorDuty{collector: c}
+	duty := newCollectorDuty(c)
 	o.duty.Store(duty)
 	claim := e.workerDuty(objectCollectorDuty, collectorDutyTTL)
 	o.collector = startLoop(ctx, sleep, func(ctx context.Context) time.Duration {
@@ -145,54 +177,82 @@ func (e *Engine) startObjectCollector(ctx context.Context, refs collect.Referenc
 	return nil
 }
 
-// collectorTurn is one turn of the duty: claim it, and run whichever pass is
-// due.
+// collectorTurn is one turn of the duty: claim it, keep it while whichever
+// pass is due runs, and record what the pass found if the duty is still this
+// node's when it ends.
 func (e *Engine) collectorTurn(ctx context.Context, claim func(context.Context) (bool, error),
 	duty *collectorDuty) {
 
-	mine := claim == nil // a node with nobody to claim from runs it alone
+	asked := duty.renewal.clock.Now() // BEFORE the claim: what it confirms runs from here
+	held, err := true, error(nil)     // a node with nobody to claim from runs it alone
 	if claim != nil {
-		held, err := claim(ctx)
-		if err != nil {
-			// UNKNOWN IS NEITHER: a claim that could not be answered
-			// says nothing about who holds the duty, so this node runs
-			// no pass — it cannot say the duty is its own — and keeps
-			// whatever it believed before, the alarm its last audit
-			// raised included. Read as "not mine", a two-second store
-			// blip would clear an alarm about lost files on the one
-			// node reporting it.
-			//
-			// BUT IT FORGETS THE RESUME. While nobody can say who holds
-			// the duty, another node may take it and record a newer
-			// pass — an audit that found files lost — so the next claim
-			// that answers held reads the fleet's record again rather
-			// than run from this node's own, older status and write
-			// those findings out of the record. Resuming twice costs a
-			// read: Restore keeps the newer of each half.
-			duty.mu.Lock()
-			duty.resumed = false
-			duty.mu.Unlock()
-			if ctx.Err() == nil {
-				log.WarnContext(ctx, "object_collector_duty_unclaimed", "error", err)
-			}
-			return
-		}
-		mine = held
+		held, err = claim(ctx)
 	}
-	duty.mu.Lock()
-	duty.holding = mine
-	if !mine {
-		duty.resumed = false
+	mine, resume := duty.settle(held, err)
+	if err != nil && ctx.Err() == nil {
+		log.WarnContext(ctx, "object_collector_duty_unclaimed", "error", err)
 	}
-	resume := mine && !duty.resumed
-	duty.mu.Unlock()
 	if !mine {
 		return
 	}
+	// FROM HERE THE TURN KEEPS THE DUTY AS IT GOES — the resume's read and
+	// the pass alike — so a pass may outlive any number of leases
+	// ([dutyRenewal.keep]), and is stopped once the duty is not this node's.
+	work, kept := duty.renewal.keep(ctx, claim, asked)
+	ran := e.collectorPass(work, duty, resume)
+	held, err = kept.Stop()
+	// A PASS THAT ENDED WITHOUT THE DUTY RECORDS NOTHING: the fleet's record
+	// has one writer at a time, and a node that lost the duty — or cannot say
+	// it still holds it — writing its report would replace the holder's.
+	// Settled by the same rule as the claim, so the two answers cannot be
+	// read differently.
+	mine, _ = duty.settle(held, err)
+	if !mine || !ran || ctx.Err() != nil {
+		return
+	}
+	e.recordCollection(ctx, duty)
+}
+
+// settle applies an answer to "does this node hold the duty?" — the claim at
+// the top of a turn, or what a pass's renewals concluded as it ended — to what
+// the duty remembers, and reports whether this node may act as its holder, and
+// whether it has to read the fleet's record first. THREE-VALUED (ADR-0005):
+// held holds; not held lets the duty and its alarm go; unknown keeps both.
+func (d *collectorDuty) settle(held bool, err error) (mine, resume bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if err != nil {
+		// UNKNOWN IS NEITHER: an answer the store could not give says
+		// nothing about who holds the duty, so this node acts as no
+		// holder — it cannot say the duty is its own — and keeps whatever
+		// it believed before, the alarm its last audit raised included.
+		// Read as "not mine", a two-second store blip would clear an
+		// alarm about lost files on the one node reporting it.
+		//
+		// BUT IT FORGETS THE RESUME. While nobody can say who holds the
+		// duty, another node may take it and record a newer pass — an
+		// audit that found files lost — so the next claim that answers
+		// held reads the fleet's record again rather than run from this
+		// node's own, older status and write those findings out of the
+		// record. Resuming twice costs a read: Restore keeps the newer of
+		// each half.
+		d.resumed = false
+		return false, false
+	}
+	d.holding = held
+	if !held {
+		d.resumed = false
+		return false, false
+	}
+	return true, !d.resumed
+}
+
+// collectorPass reads the fleet's record first if the turn has to, runs
+// whichever pass is due, and reports whether one ran.
+func (e *Engine) collectorPass(ctx context.Context, duty *collectorDuty, resume bool) bool {
 	if resume {
 		e.resumeCollector(ctx, duty)
 	}
-
 	now := time.Now()
 	duty.mu.Lock()
 	collectDue := now.Sub(duty.collected) >= collect.CollectInterval
@@ -206,11 +266,9 @@ func (e *Engine) collectorTurn(ctx context.Context, claim func(context.Context) 
 		_, err := duty.collector.Audit(ctx)
 		duty.ran(&duty.audited, collect.AuditInterval, err)
 	default:
-		return
+		return false
 	}
-	if ctx.Err() == nil {
-		e.recordCollection(ctx, duty)
-	}
+	return true
 }
 
 // collectorRetry is how soon a pass that failed is tried again.
