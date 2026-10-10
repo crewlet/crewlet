@@ -179,10 +179,14 @@ agent carries its own [GitHub App](#one-github-app-per-agent), and a seat that n
 no `mcp_env.github` credential is acting through it — so the reconcile reports
 that seat as *unclaimed* rather than as a failed identity, and the provisioning
 command prints it under "act through their own GitHub App" rather than under a
-list of things to fix. The three outcomes a seat can have are therefore
+list of things to fix. The four outcomes a seat can have are therefore
 **resolved** (a token named an account), **unclaimed** (no token, which is
-expected) and **refused** (a token this run could not turn into an account,
-and the only one that becomes a finding).
+expected), **unset** (a slot whose `${VAR}` resolved to nothing) and
+**refused** (a token GitHub would not turn into an account). The last two are
+findings, and different people's: an unset slot never reached GitHub, so it
+is a `config_fault` the company's admin fixes in this deployment's
+configuration, while a refused token is `identity_failed`, for a GitHub
+organization owner to look at.
 
 That distinction was missing, and its absence was loud: every agent seat in a
 company on the app design was reported as a failed identity, permanently
@@ -480,6 +484,13 @@ pass and corrects the document from what it finds.
 | An app id GitHub answers 404 to | Clears `app_id`, `app_slug`, `installation_id`, `private_key` and `webhook_secret` | Create an app for this seat |
 | A **disconnect** uninstalled the app | `installation_id: 0` | Install it, with the link |
 
+**A write the loop cannot make is this deployment's, not GitHub's.** When it
+finds an installation and cannot record it — the node has no config surface, or
+the store refused the revision — the seat mints no token until the write lands,
+and nothing at GitHub changes that. It is reported as a `config_fault` naming
+the seat and the write that failed, owed by the company's admin, with no
+install link: the click was already made.
+
 **An agent with no app at all is reported too, and it used to be invisible.** The loop builds its seat list from the seats carrying an `integrations.github` block, because that block is where an app's id, slug and key are recorded — so a seat that has never had one was absent from the pass's input and produced no finding. Measured on a live connect: a company with one agent, no app, `phase: ready`, `findings: []`, and the seat's own row three screens away saying "no app of its own yet, so this agent acts as nobody on GitHub". They are reported as **one** `approval_required` naming the count and up to three handles, because creating an app is the same act for every one of them and a fifty-agent company does not need fifty rows saying it; the whole list travels beside the sentence. `approval_required` rather than `identity_missing` because the engine can never do it — an app is created by a form POST from a page carrying your own GitHub session — so a card reading *Setting up agents* would wait for an act nobody is performing.
 
 **And the card is not Connected while no agent can act.** One GitHub App is one bot identity, so an agent without its own app acts as nobody there. The satisfaction check asks only about seats that have *started*, which is what lets a company running GitHub for three of its ten agents be finished when those three are — and a company where nobody had started passed it vacuously: `satisfied: true` beside `seats_required: true`, over an agent that could do nothing.
@@ -768,7 +779,7 @@ So it does the two things GitHub genuinely allows:
 | `-recreate-webhooks` | Delete and remake every hook to mint a fresh secret. **Destructive**: it invalidates the secret every other deployment of this company holds |
 | `-dry-run` | Read and report; register nothing, and do not open the secret store |
 
-**A hook the company DEMANDED and could not get is reported; the fallback is not.** `integrations.github.token` is optional and the connect form does not ask for it, both deliberately — routing needs nothing from it, because each agent's own app answers who is participating in a thread. With no token the pass reads nothing and writes nothing at the organization, and it used to say so only in its *notes*, which are not findings, so a surface that had authenticated with nobody reported `ready` with an empty finding list. Measured on a live connect: `phase: ready`, `routes: true`, and exactly one webhook on the organization, belonging to a different deployment and never triggered. It is now `ingress_blocked` against `integrations.github.token`.
+**A hook the company DEMANDED and could not get is reported; the fallback is not.** `integrations.github.token` is optional and the connect form does not ask for it, both deliberately — routing needs nothing from it, because each agent's own app answers who is participating in a thread. With no token the pass reads nothing and writes nothing at the organization, and it used to say so only in its *notes*, which are not findings, so a surface that had authenticated with nobody reported `ready` with an empty finding list. Measured on a live connect: `phase: ready`, `routes: true`, and exactly one webhook on the organization, belonging to a different deployment and never triggered. It is now a `config_fault` against `integrations.github.token`: both ways out — set the token, or stop demanding the hook — are this company's own configuration, so it is owed by the company's admin rather than a GitHub organization owner.
 
 **But only where the company actually asked for a hook this credential must register, and has no other coverage.** Two clauses, and both were learned the same way. The first is `org_webhook: true` (no fallback) or a non-empty `repos` list (no agent's own app covers a named repository): the form *requires* `provisioning.org` — that is where the agents' apps are installed — so reading "the block names an organization" as "this company wants an organization-wide webhook" put a permanent finding on every company that connects GitHub from the dashboard.
 
@@ -796,9 +807,12 @@ and something rebuilding that snapshot the resolver answers empty for a
 variable the fleet already holds — and without the read-back the loop minted
 again on every tick, rotating the key GitHub signs with until the snapshot
 caught up. On a node with **no keyring** at all (`secrets.keys` unset) nothing
-is minted and no hook is registered: the surface reports `ingress_blocked`
-against `integrations.github.webhook_secret`, naming `secrets.keys`, rather
-than failing every pass as though the engine were working on it.
+is minted and no hook is registered: the surface reports a `config_fault`
+against `integrations.github.webhook_secret`, naming `secrets.keys` and owed by
+the company's admin, rather than failing every pass as though the engine were
+working on it. With no `integrations.public_base_url` at all the same kind
+names that field instead: nothing at GitHub has an address to deliver to, and
+only this deployment can give it one.
 
 **A repository that cannot be hooked is reported, not raised.** A company's
 list will contain one that was renamed, archived, or made private to a team

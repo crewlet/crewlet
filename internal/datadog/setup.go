@@ -55,6 +55,9 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 			Choices:    siteChoices(),
 			Default:    DefaultSite,
 			Help:       "The region your organization is in.",
+			// A region Datadog does not serve is reported against this
+			// field, as this deployment's own configuration.
+			Blocks: integration.FindingConfigFault,
 		},
 		{
 			Field:      "api_key",
@@ -202,7 +205,12 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 			// field that clears it — and the token that does declared
 			// nothing. [setup.Requirement.Blocks] is the join a status
 			// row picks its fields from.
-			Blocks: integration.FindingIngressBlocked,
+			//
+			// AND IT BLOCKS NOTHING, because no finding reports it absent:
+			// an alert no tag claims and no floor catches is dismissed,
+			// which is a decision the form offers rather than a fault. It
+			// claimed the ingress block next, which is a refusal at
+			// Datadog and was never this field's.
 		},
 	}
 

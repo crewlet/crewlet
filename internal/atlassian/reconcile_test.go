@@ -15,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/integration/integrationtest"
 	"github.com/crewlet/crewlet/internal/provision"
 )
 
@@ -144,6 +145,10 @@ type sink struct {
 	// happens to the pass's OWN error when it does not answer nil.
 	flushErr error
 
+	// recordErr is what sealing a value answers, for the test about a
+	// failure that is this deployment's own store rather than Atlassian.
+	recordErr error
+
 	// flushes counts the completions, and flushLive records whether the
 	// context the last one was handed was still alive. The second is not a
 	// detail: a completion that inherits the cancellation it is completing
@@ -153,6 +158,9 @@ type sink struct {
 }
 
 func (s *sink) Record(_ context.Context, name, value string) error {
+	if s.recordErr != nil {
+		return s.recordErr
+	}
 	if s.wrote == nil {
 		s.wrote = map[string]string{}
 	}
@@ -418,8 +426,12 @@ func TestANodeWithNoKeyringCreatesNoAccountAndNamesTheSetting(t *testing.T) {
 	}
 	var named bool
 	for _, f := range res.Findings() {
-		if f.Kind == integration.FindingCredentialMissing && f.Subject == "secrets.keys" {
+		if f.Subject == "secrets.keys" {
 			named = true
+			// THE BOOTSTRAP FILE'S, so a config fault, the company
+			// admin's: as a missing credential it read Failed and offered
+			// the organization key this deployment already holds.
+			integrationtest.AssertConfigFault(t, f)
 		}
 		if f.Kind == integration.FindingIdentityFailed {
 			t.Errorf("reported the seat as failed over a company that is fine: %+v", f)
@@ -727,4 +739,45 @@ func TestASeatGrantedAndThenRefusedReportsTheFailureRatherThanAWait(t *testing.T
 	if phase, actor := got.Kind.Verdict(); actor != integration.ActorVendorAdmin {
 		t.Errorf("classified %s/%s, want an Atlassian admin owed it", phase, actor)
 	}
+}
+
+// A FAILURE IN THIS ENGINE'S OWN STORE IS THE COMPANY ADMIN'S, NOT ATLASSIAN'S.
+//
+// Every seat failure was an identity_failed, owed by an Atlassian admin and
+// asked about from fifteen seconds on — including a keyring that refused to
+// keep the address Atlassian had just assigned, over an account that was
+// fine. Where it went wrong decides whose it is: the mint refusal above stays
+// the Atlassian admin's, and this one is this deployment's configuration.
+func TestASeatThisEngineCouldNotSealForIsTheCompanyAdmins(t *testing.T) {
+	t.Parallel()
+	o := &stubOrg{tokens: 0}
+	s := &sink{recordErr: errors.New("seal: keyring unavailable")}
+
+	res := run(t, o, s)
+
+	findings := res.Findings()
+	if len(findings) != 1 || findings[0].Subject != "sre-lead" {
+		t.Fatalf("findings = %+v, want the one seat reported", findings)
+	}
+	integrationtest.AssertConfigFault(t, findings[0])
+	if !strings.Contains(findings[0].Detail, "keyring unavailable") {
+		t.Errorf("detail = %q, want the store's own refusal in it", findings[0].Detail)
+	}
+}
+
+// AND THE PLAN'S CAVEATS ARE THE COMPANY DOCUMENT'S. A seat whose mcp_env
+// slot is not a whole ${VAR} has nowhere for a minted token or an assigned
+// address to be written, and only an edit of the document fixes that. They
+// were short grants, owed by an Atlassian admin who can widen nothing that
+// is missing here.
+func TestAPlanNoteIsTheCompanyAdmins(t *testing.T) {
+	t.Parallel()
+	res := &atlassian.Result{Notes: []string{
+		"data-analyst: mcp_env jira.JIRA_API_TOKEN is not a whole ${VAR} reference",
+	}}
+	findings := res.Findings()
+	if len(findings) != 1 {
+		t.Fatalf("findings = %+v, want the one note", findings)
+	}
+	integrationtest.AssertConfigFault(t, findings[0])
 }

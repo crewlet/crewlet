@@ -1018,11 +1018,18 @@ func TestANodeWithNoKeyringReportsTheFieldThatFixesIt(t *testing.T) {
 	for _, f := range res.Findings() {
 		if f.Subject == "integrations.github.webhook_secret" {
 			found = true
-			if f.Kind != integration.FindingIngressBlocked {
-				t.Errorf("reported as %s, want ingress_blocked: a webhook "+
-					"secret is not how this engine authenticates AT GitHub",
-					f.Kind)
+			// THE JOIN, READ FROM BOTH ENDS: the field's own requirement
+			// says what an absent value produces, and this is the pass
+			// producing it. And it is the company admin's, asked about
+			// hourly: the keyring and the variable are both this
+			// deployment's, and a GitHub admin can supply neither.
+			for _, req := range github.Requirements(nil, nil) {
+				if req.Field == "webhook_secret" && req.Blocks != f.Kind {
+					t.Errorf("reported as %s, and the webhook_secret requirement "+
+						"says an absent value produces %s", f.Kind, req.Blocks)
+				}
 			}
+			integrationtest.AssertConfigFault(t, f)
 			if !strings.Contains(f.Detail, "secrets.keys") {
 				t.Errorf("the finding does not name the bootstrap field that "+
 					"fixes it:\n%s", f.Detail)

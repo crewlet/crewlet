@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/integration/integrationtest"
 	"github.com/crewlet/crewlet/internal/provision"
 )
 
@@ -1630,9 +1631,19 @@ func TestANodeWithNoKeyringReportsTheFieldThatFixesIt(t *testing.T) {
 					continue
 				}
 				found = true
-				if f.Kind != integration.FindingIngressBlocked {
-					t.Errorf("reported as %s, want ingress_blocked", f.Kind)
+				// THE JOIN, READ FROM BOTH ENDS: the field's own
+				// requirement says what its absence produces, and this is
+				// the pass producing it.
+				resolve := func(string) (string, bool) { return "", false }
+				for _, req := range confluence.Requirements(nil, tc.cloud, resolve) {
+					if req.ConfigPath == tc.field && req.Blocks != f.Kind {
+						t.Errorf("reported as %s, and %s says an absent value "+
+							"produces %s", f.Kind, tc.field, req.Blocks)
+					}
 				}
+				// AND IT IS THE COMPANY ADMIN'S, asked about hourly: the
+				// keyring and the variable are both this deployment's.
+				integrationtest.AssertConfigFault(t, f)
 				if !strings.Contains(f.Detail, "secrets.keys") {
 					t.Errorf("the finding does not name the bootstrap field "+
 						"that fixes it:\n%s", f.Detail)

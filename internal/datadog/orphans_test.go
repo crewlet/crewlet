@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/datadog"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/integration/integrationtest"
 	"github.com/crewlet/crewlet/internal/provision"
 )
 
@@ -636,6 +637,11 @@ func TestAStoreFailureLinksNowhereAtTheVendor(t *testing.T) {
 		if f.ActionURL != "" {
 			t.Errorf("a store failure this engine owns links to %q", f.ActionURL)
 		}
+		// AND IT IS NOT THE DATADOG ADMIN'S AT ALL. Taking the link away
+		// left it a failed identity owed at Datadog and asked about from
+		// fifteen seconds on; the keyring it needs fixing is this
+		// deployment's.
+		integrationtest.AssertConfigFault(t, f)
 	}
 	if !found {
 		t.Fatalf("findings = %v, none about the seat", res.Findings())

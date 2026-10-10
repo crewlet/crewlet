@@ -91,7 +91,9 @@ type WebhookResult struct {
 // [integration.FindingCredentialMissing] — which nothing in this package
 // produced. A single kind for both cases would offer an operator the fallback
 // seat to fix a missing token, which is what that requirement's own comment
-// says the join exists to stop.
+// says the join exists to stop. The address is the other kind,
+// [integration.FindingConfigFault]: both are this deployment's to set, and
+// only the token is a credential.
 type Unregistered struct {
 	// Kind is the finding this becomes.
 	Kind integration.FindingKind
@@ -165,9 +167,11 @@ func ensureWebhook(ctx context.Context, opts Options) WebhookResult {
 		// registering none: Datadog would report a healthy webhook over
 		// deliveries that go nowhere. But neither is nothing to say —
 		// this company's alerts reach nobody until somebody sets the
-		// field, so it is reported as the blocked ingress it is.
+		// field. And that somebody is the company's admin, since the
+		// field is this deployment's: a config fault, not the Datadog
+		// admin's ingress block it was filed as.
 		out.Blocked = &Unregistered{
-			Kind:    integration.FindingIngressBlocked,
+			Kind:    integration.FindingConfigFault,
 			Subject: "integrations.public_base_url",
 			Detail: "no webhook was registered at Datadog: this deployment has " +
 				"no public base URL, so there is no address to point one at " +

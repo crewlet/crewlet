@@ -239,18 +239,23 @@ at Datadog at all.
 
 ### What the reconcile reports
 
-Three states the pass reaches and, until recently, could say nothing about —
-each one leaving the surface reporting `ready` while alerts went nowhere:
+What the pass can reach, and what it reports. The two unregistered webhooks and
+the disabled account are states it once could say nothing about — each one
+leaving the surface reporting `ready` while alerts went nowhere. A
+`config_fault` is this deployment's own configuration and is owed by the
+company's admin; an `identity_failed` is settled at Datadog:
 
 | What it found | What it reports | What clears it |
 |---|---|---|
-| No webhook was registered because this deployment has no inbound address | `ingress_blocked` | set `integrations.public_base_url` |
-| No webhook was registered because `webhook_token` resolved to nothing, or because this node has no keyring to seal one with | `credential_missing` | set `integrations.datadog.webhook_token`, or install `secrets.keys` |
+| No webhook was registered because this deployment has no inbound address | `config_fault` | set `integrations.public_base_url` |
+| No webhook was registered because `webhook_token` resolved to nothing | `credential_missing` | set `integrations.datadog.webhook_token` |
+| No service account was created because this node has no keyring to seal an application key with | `config_fault` | install `secrets.keys` |
 | A seat's service account exists but is **disabled**, with no Crewlet marker | `identity_failed` | re-enable it in Datadog — it was not disabled by this engine |
 | A seat's service account is disabled **by a Crewlet disconnect** | — | the next pass re-enables it |
 | A seat holds a sealed key and its account holds **no application key at all** | — | the next pass mints a replacement and seals it |
 | A seat's account holds an application key and its `${VAR}` is **empty** | — | the next pass deletes that key and mints a replacement |
-| The engine could not read its own secret store for a seat | `identity_failed` | fix the keyring on the engine — this one carries **no** Datadog link, because Datadog is not where it is settled |
+| The engine could not read or keep a seat's key in its own secret store | `config_fault` | fix the keyring on the engine — this one carries **no** Datadog link, because Datadog is not where it is settled |
+| A key minted for a seat could not be kept **and** could not be revoked | `identity_failed` | delete the named key at Datadog — it is live and held by nobody |
 | **Enabled** service accounts at this company's own email domain that match **no seat** | `registration_orphaned` | disable or delete them in Datadog — nothing here touches them, and either one clears the finding |
 
 A finding a person settles **at Datadog** carries a link to the organization's user administration; one the engine owns carries none, because sending somebody to a vendor page over a fault on this side costs them the trip and teaches them the link means nothing.

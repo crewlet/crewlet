@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/integration/integrationtest"
 	"github.com/crewlet/crewlet/internal/provision"
 )
 
@@ -1637,13 +1638,17 @@ func TestASinklessPassReportsRatherThanFailing(t *testing.T) {
 		t.Fatal("a sinkless pass returned no result to report from")
 	}
 	findings := res.Findings()
-	if len(findings) != 1 || findings[0].Kind != integration.FindingCredentialMissing {
+	if len(findings) != 1 {
 		t.Fatalf("findings = %+v, want the missing keyring reported", findings)
 	}
 	if findings[0].Subject != "secrets.keys" {
 		t.Errorf("the finding names %q rather than the setting to add",
 			findings[0].Subject)
 	}
+	// A CONFIG FAULT, the company admin's: the keyring is the bootstrap
+	// file's. As a missing credential it read Failed and offered the group
+	// token — which this deployment already holds — as the field to fix.
+	integrationtest.AssertConfigFault(t, findings[0])
 	// AND NOTHING WAS CREATED AT THE INSTANCE. This pass makes an ACCOUNT
 	// before it mints a token and the rollback can only revoke the token,
 	// so reaching the first Record on a sink that cannot record leaves an
@@ -2111,13 +2116,17 @@ func TestNoPublicBaseURLIsReportedRatherThanNoted(t *testing.T) {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	findings := res.Findings()
-	if len(findings) != 1 || findings[0].Kind != integration.FindingIngressBlocked {
-		t.Fatalf("findings = %+v, want the delivery path reported as blocked", findings)
+	if len(findings) != 1 {
+		t.Fatalf("findings = %+v, want the missing address reported", findings)
 	}
 	if findings[0].Subject != "integrations.public_base_url" {
 		t.Errorf("the finding names %q rather than the setting to fill in",
 			findings[0].Subject)
 	}
+	// THIS DEPLOYMENT'S OWN SETTING, so the company admin's and asked about
+	// hourly — it was a GitLab admin's ingress block, asked about from
+	// fifteen seconds on, for a value nobody at GitLab can set.
+	integrationtest.AssertConfigFault(t, findings[0])
 	if report := integration.Classify(findings); report.Phase == integration.PhaseReady {
 		t.Errorf("a GitLab that delivers nothing classifies as %+v", report)
 	}

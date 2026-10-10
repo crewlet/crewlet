@@ -85,7 +85,7 @@ type SeatResult struct {
 	// A STATE, NOT AN ERROR, and the distinction is the whole reason this
 	// field exists. It used to travel in Err, with a sentence saying exactly
 	// what it is — "waiting for Atlassian to make its new account grantable"
-	// — and [Result.Findings] turns any Err into an identity_failed, which
+	// — and [Result.Findings] turned any Err into an identity_failed, which
 	// classifies as DEGRADED and owed by a VENDOR ADMIN. So the card said
 	// "Action required" and "you, at the third-party app" about a seat nobody
 	// could do anything for, on the brisk vendor-admin cadence, over a
@@ -116,6 +116,20 @@ type SeatResult struct {
 
 	// Err is why this seat could not be provisioned, if it could not.
 	Err error
+
+	// AtVendor reports an Err a person settles AT ATLASSIAN — a create, a
+	// grant or a mint the organization refused — rather than one this
+	// engine's own sealed store refused, which is this deployment's.
+	//
+	// SET WHERE THE ERROR IS RAISED, as [datadog.SeatResult.AtVendor] is and
+	// for its reason: only that frame knows which it was, and telling them
+	// apart from the message afterwards would be matching on error text. It
+	// decides whose finding the failure is — an Atlassian admin's failed
+	// identity, or the company admin's config fault — where every seat
+	// failure used to be the first, so a keyring that refused to seal the
+	// address Atlassian assigned sent an Atlassian admin looking at an
+	// account that was fine.
+	AtVendor bool
 }
 
 // Reconcile brings this company's Atlassian identities in line with its org.
@@ -304,6 +318,7 @@ func reconcileSeat(
 			AccountName(seat.Role, seat.Handle), "")
 		if err != nil {
 			out.Err = fmt.Errorf("atlassian: create the account for %s: %w", seat.Handle, err)
+			out.AtVendor = true
 			return out
 		}
 		account, out.AccountID, out.Created = *created, created.ID, true
@@ -359,6 +374,7 @@ func reconcileSeat(
 			return out
 		default:
 			out.Err = fmt.Errorf("atlassian: grant %s product access: %w", seat.Handle, err)
+			out.AtVendor = true
 			return out
 		}
 	}
@@ -406,6 +422,7 @@ func reconcileSeat(
 	token, err := opts.Client.MintToken(ctx, opts.Key, out.AccountID, seat.Handle, opts.now())
 	if err != nil {
 		out.Err = fmt.Errorf("atlassian: mint a token for %s: %w", seat.Handle, err)
+		out.AtVendor = true
 		return out
 	}
 	if err := opts.Sink.Record(ctx, seat.TokenVar, token.Token); err != nil {
@@ -580,9 +597,14 @@ func (r *Result) Findings() []integration.Finding {
 	// pass on this node will ever get further until somebody sets
 	// secrets.keys, which a retry cannot bring about. See
 	// [provision.CanMint].
+	//
+	// A CONFIG FAULT — the bootstrap file's keyring — not the missing
+	// credential it was filed as, which is a ${VAR} pointing at nothing,
+	// reads as Failed, and offered the organization key this deployment
+	// already holds as the field that clears it.
 	if r.NoKeyring {
 		out = append(out, integration.Finding{
-			Kind:    integration.FindingCredentialMissing,
+			Kind:    integration.FindingConfigFault,
 			Subject: "secrets.keys",
 			Detail: "this node has no keyring, so an Atlassian API token minted " +
 				"for a seat could not be sealed and no service account was " +
@@ -610,8 +632,18 @@ func (r *Result) Findings() []integration.Finding {
 			// and AccountID == "" is the create that failed, whose Err is
 			// the better sentence. So the ordering rule is simply: what
 			// went wrong beats what is being waited for.
+			//
+			// AND WHOSE IT IS FOLLOWS WHERE IT WENT WRONG: a create, grant
+			// or mint Atlassian refused is an Atlassian admin's failed
+			// identity; a value this engine's own sealed store would not
+			// read or keep is this deployment's config fault. See
+			// [SeatResult.AtVendor].
+			kind := integration.FindingIdentityFailed
+			if !seat.AtVendor {
+				kind = integration.FindingConfigFault
+			}
 			out = append(out, integration.Finding{
-				Kind: integration.FindingIdentityFailed, Subject: seat.Handle,
+				Kind: kind, Subject: seat.Handle,
 				Detail: seat.Err.Error(),
 			})
 		case seat.Granted:
@@ -651,9 +683,16 @@ func (r *Result) Findings() []integration.Finding {
 			})
 		}
 	}
+	// THE PLAN'S CAVEATS ARE THE COMPANY DOCUMENT'S: a seat whose mcp_env
+	// slot is not a whole ${VAR}, so a minted token or the address Atlassian
+	// assigns has nowhere to be written. Every one of them is fixed by an
+	// edit here, so a config fault, the company admin's. They were short
+	// grants — a seat holding less than its tier, which only a person AT
+	// Atlassian can widen — and sent an Atlassian admin to look for access
+	// that was never the problem.
 	for _, note := range r.Notes {
 		out = append(out, integration.Finding{
-			Kind: integration.FindingGrantShort, Detail: note,
+			Kind: integration.FindingConfigFault, Detail: note,
 		})
 	}
 	return out

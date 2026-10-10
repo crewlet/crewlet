@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/datadog"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/integration/integrationtest"
 	"github.com/crewlet/crewlet/internal/provision"
 )
 
@@ -545,6 +546,27 @@ func TestAKeyThatCannotBeRecordedIsRevoked(t *testing.T) {
 	if !strings.Contains(res.Seats[0].Err.Error(), "the keyring refused the write") {
 		t.Errorf("the revocation replaced the cause: %v", res.Seats[0].Err)
 	}
+	// AND NOTHING IS LEFT AT DATADOG, so nobody there owes anything: the
+	// store that refused is this deployment's, the company admin's.
+	integrationtest.AssertConfigFault(t, findingAbout(t, res, "sre"))
+}
+
+// findingAbout is the one finding a pass made about a subject. These passes
+// carry no public base, so the unregistered webhook is reported beside the
+// seat and a test about the seat has to pick its own out.
+func findingAbout(t *testing.T, res *datadog.Result, subject string) integration.Finding {
+	t.Helper()
+	var about []integration.Finding
+	for _, f := range res.Findings() {
+		if f.Subject == subject {
+			about = append(about, f)
+		}
+	}
+	if len(about) != 1 {
+		t.Fatalf("findings about %s = %+v, want exactly one (all: %+v)",
+			subject, about, res.Findings())
+	}
+	return about[0]
 }
 
 // AND WHEN THE REVOCATION ALSO FAILS, somebody is told to do it by hand —
@@ -586,6 +608,21 @@ func TestAKeyThatCannotBeRevokedIsReportedForARealPerson(t *testing.T) {
 	}
 	if !strings.Contains(res.Seats[0].Err.Error(), "delete the key named") {
 		t.Errorf("nobody was told the key is live: %v", res.Seats[0].Err)
+	}
+	// AND THE PERSON IS AT DATADOG, with the link to where the key is
+	// deleted. A store failure on its own is this deployment's; a key left
+	// live is the one step that has to be taken at the vendor, so filing it
+	// with the store's config fault would send the company admin to their
+	// own configuration for something that is not there.
+	live := findingAbout(t, res, "sre")
+	if live.Kind != integration.FindingIdentityFailed {
+		t.Errorf("kind = %q, want %q", live.Kind, integration.FindingIdentityFailed)
+	}
+	if _, actor := live.Kind.Verdict(); actor != integration.ActorVendorAdmin {
+		t.Errorf("a key live at Datadog is owed by %q, want the Datadog admin", actor)
+	}
+	if live.ActionURL == "" {
+		t.Error("the live key names no page at Datadog to delete it from")
 	}
 }
 
@@ -633,9 +670,10 @@ func TestANodeWithNoKeyringCreatesNoAccount(t *testing.T) {
 		switch f.Subject {
 		case "secrets.keys":
 			keyring++
-			if f.Kind != integration.FindingCredentialMissing {
-				t.Errorf("kind = %q, want credential_missing", f.Kind)
-			}
+			// THE BOOTSTRAP FILE'S, so a config fault, the company
+			// admin's: as a missing credential it read Failed over a
+			// credential that was never the problem.
+			integrationtest.AssertConfigFault(t, f)
 		case "sre", "oncall":
 			perSeat++
 		}

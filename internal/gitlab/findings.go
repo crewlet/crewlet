@@ -39,9 +39,14 @@ func (r *Result) Findings() []integration.Finding {
 	// here creates an ACCOUNT and then a token on it, so a node with
 	// nowhere to seal the token must not create the account either — see
 	// [provision.CanMint].
+	//
+	// A CONFIG FAULT — the bootstrap file's keyring — and not the missing
+	// credential it was filed as: that kind is a ${VAR} pointing at nothing
+	// and reads as Failed, and the field it offered to clear it was the
+	// group token, which this deployment already holds.
 	if r.NoKeyring {
 		return append(out, integration.Finding{
-			Kind:    integration.FindingCredentialMissing,
+			Kind:    integration.FindingConfigFault,
 			Subject: "secrets.keys",
 			Detail: "this node has no keyring, so a token minted for a seat " +
 				"could not be sealed and no account was created — set " +
@@ -66,9 +71,12 @@ func (r *Result) Findings() []integration.Finding {
 	// no retry fixes it — but changing it also changes what
 	// `crewlet gitlab provision` prints and the status it exits with, so it
 	// is a coordinated change rather than a line here.
+	//
+	// The address is this deployment's own field, so a config fault, the
+	// company admin's — not the GitLab admin's ingress block it was.
 	if r.NoIngress != "" {
 		out = append(out, integration.Finding{
-			Kind:    integration.FindingIngressBlocked,
+			Kind:    integration.FindingConfigFault,
 			Subject: "integrations.public_base_url",
 			Detail:  r.NoIngress,
 		})

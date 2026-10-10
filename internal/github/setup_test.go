@@ -80,9 +80,21 @@ func TestTheOrgTokenIsAskableWithoutLeadingTheForm(t *testing.T) {
 	// THE JOIN IS WHAT PUTS IT ON THE RIGHT SCREEN. Without it the field is
 	// offered to everybody and to nobody in particular, which is the same
 	// as not offering it to the person reading the warning.
-	if token.Blocks != integration.FindingIngressBlocked {
-		t.Errorf("the token blocks %q, so the ingress finding that names it "+
-			"offers no field that clears it", token.Blocks)
+	//
+	// Read from BOTH ENDS: the finding a pass reports when no token resolves
+	// for a hook the company asked for, and the kind this field says it
+	// clears. They are the same, or the warning offers no field.
+	warning := (&github.Result{NoRegistrar: "no webhook on acme"}).Findings()
+	if len(warning) != 1 || warning[0].Subject != "integrations.github.token" {
+		t.Fatalf("the missing-token warning is %+v, want one finding naming the token", warning)
+	}
+	if token.Blocks != warning[0].Kind {
+		t.Errorf("the token blocks %q and the warning that names it is %q, so "+
+			"that warning offers no field that clears it", token.Blocks, warning[0].Kind)
+	}
+	if token.Blocks != integration.FindingConfigFault {
+		t.Errorf("the token blocks %q; a token this company has not set is its "+
+			"own configuration, not something a GitHub admin can change", token.Blocks)
 	}
 	if !reqs["provisioning.org"].Required {
 		t.Error("the organization is optional, so a company could connect GitHub " +

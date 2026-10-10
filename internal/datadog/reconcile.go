@@ -137,7 +137,9 @@ type SeatResult struct {
 	// Err is why this seat could not be provisioned, if it could not.
 	Err error
 	// AtVendor reports a failure a person settles AT DATADOG, which is what
-	// decides whether the finding carries a link there.
+	// decides whether the finding carries a link there — and whose finding
+	// it is: the Datadog admin's failed identity, or, where it is false,
+	// the company admin's config fault.
 	//
 	// SET WHERE THE ERROR IS RAISED, because that is the only frame that
 	// knows. Every seat failure used to carry the console link, on the
@@ -543,7 +545,13 @@ func provisionSeat(
 		// read a value for and reports the seat stuck, a state this
 		// engine created and could not leave without somebody logging
 		// into Datadog.
-		out.Err = revoke(ctx, opts, seat, account.ID, minted, err)
+		//
+		// WHOSE STEP IT IS FOLLOWS WHAT REVOKE LEFT. Taken back, the
+		// failure is this engine's own store and nothing at Datadog needs
+		// a person; left live, the one step that matters is deleting the
+		// key there, so the finding is the Datadog admin's and carries
+		// the link to where it is done.
+		out.AtVendor, out.Err = revoke(ctx, opts, seat, account.ID, minted, err)
 		return out
 	}
 	out.KeyMinted = true
@@ -561,20 +569,24 @@ func provisionSeat(
 // DETACHED, because the failure is frequently the cancellation itself, and a
 // revocation inheriting a dead context does nothing at all — which is exactly
 // when the credential most needs taking back.
+//
+// The bool reports a key the revocation could NOT take back, which is the one
+// outcome that leaves a person something to do at Datadog — see
+// [SeatResult.AtVendor].
 func revoke(
 	ctx context.Context, opts Options, seat provision.Seat, accountID string,
 	key AppKey, cause error,
-) error {
+) (bool, error) {
 	if err := opts.Client.DeleteAppKey(
 		context.WithoutCancel(ctx), opts.Creds, accountID, key.ID,
 	); err != nil {
-		return fmt.Errorf(
+		return true, fmt.Errorf(
 			"minted a key for %s and could not record it (%w) AND could not "+
 				"revoke it — it is live at Datadog, held by nobody: delete "+
 				"the key named %q on %s's service account and run this again",
 			seat.Handle, cause, key.Name, seat.Handle)
 	}
-	return fmt.Errorf(
+	return false, fmt.Errorf(
 		"minted a key for %s and could not record it, so it was revoked "+
 			"again — nothing is left at Datadog and the next pass will mint "+
 			"another: %w", seat.Handle, cause)
@@ -719,11 +731,13 @@ func (r *Result) Findings() []integration.Finding {
 		// THE OPERATOR'S WORK, not a fault the engine is retrying. No
 		// pass will ever provision a seat until somebody sets
 		// secrets.keys, so reporting it as a wait leaves them watching a
-		// retry that cannot succeed. The same finding gitlab, jira and
-		// mattermost report, on the same subject, because it is one
-		// bootstrap field rather than seven third-party app problems.
+		// retry that cannot succeed. The same finding gitlab, mattermost
+		// and atlassian report, on the same subject, and the same kind
+		// jira, github and confluence report against their webhook
+		// secrets, because it is one bootstrap field rather than seven
+		// third-party app problems: a config fault, the company admin's.
 		out = append(out, integration.Finding{
-			Kind:    integration.FindingCredentialMissing,
+			Kind:    integration.FindingConfigFault,
 			Subject: "secrets.keys",
 			Detail: "this node has no keyring, so an application key minted " +
 				"for a seat could not be sealed and no service account was " +
@@ -769,14 +783,25 @@ func (r *Result) Findings() []integration.Finding {
 			// is a wasted trip that teaches an operator the link means
 			// nothing. [SeatResult.AtVendor] is set where the error is
 			// raised, which is the only frame that knows which it is.
-			action := ""
-			if seat.AtVendor {
-				action = r.UsersURL
+			//
+			// AND THE KIND FOLLOWS IT, not only the link. A failure at
+			// Datadog is a failed identity, the Datadog admin's; the
+			// other kind — this engine's own sealed store, which the
+			// docs send the reader to fix the keyring for — is a config
+			// fault, the company admin's, and was filed on the Datadog
+			// admin with only the link taken away.
+			if !seat.AtVendor {
+				out = append(out, integration.Finding{
+					Kind:    integration.FindingConfigFault,
+					Subject: seat.Handle,
+					Detail:  seat.Err.Error(),
+				})
+				continue
 			}
 			out = append(out, integration.Finding{
 				Kind:      integration.FindingIdentityFailed,
 				Subject:   seat.Handle,
-				ActionURL: action,
+				ActionURL: r.UsersURL,
 				Detail:    seat.Err.Error(),
 			})
 		case seat.AccountID == "":

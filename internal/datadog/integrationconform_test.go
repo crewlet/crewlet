@@ -729,7 +729,7 @@ func TestTheOutstandingWorldReportsEveryFaultItHolds(t *testing.T) {
 	// row offers somebody to act on: a finding naming the wrong thing is a
 	// person sent to the wrong field.
 	want := map[integration.FindingKind]string{
-		integration.FindingIngressBlocked: "integrations.public_base_url",
+		integration.FindingConfigFault:    "integrations.public_base_url",
 		integration.FindingIdentityFailed: seatOne,
 	}
 	for _, f := range findings {
@@ -741,6 +741,14 @@ func TestTheOutstandingWorldReportsEveryFaultItHolds(t *testing.T) {
 		}
 		if f.Subject != subject {
 			t.Errorf("%s names %q, want %q", f.Kind, f.Subject, subject)
+		}
+		// AND WHOSE IT IS: the address is this deployment's own, so the
+		// company admin's on the hourly cadence, where the disabled
+		// account is the Datadog admin's.
+		if f.Kind == integration.FindingConfigFault {
+			integrationtest.AssertConfigFault(t, f)
+		} else if _, actor := f.Kind.Verdict(); actor != integration.ActorVendorAdmin {
+			t.Errorf("%s on %q is owed by %q, want the Datadog admin", f.Kind, f.Subject, actor)
 		}
 		delete(want, f.Kind)
 	}

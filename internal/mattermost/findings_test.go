@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/integration/integrationtest"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/org"
 )
@@ -192,7 +193,11 @@ func TestANodeWithNoKeyringReportsOnlyThat(t *testing.T) {
 		Disabled:  []mattermost.DisabledSetting{{Key: "EnableBotAccountCreation"}},
 	}
 	findings := res.Findings()
-	if len(findings) != 1 || findings[0].Kind != integration.FindingCredentialMissing {
+	if len(findings) != 1 || findings[0].Subject != "secrets.keys" {
 		t.Fatalf("findings = %+v, want only the missing keyring", findings)
 	}
+	// THE BOOTSTRAP FILE'S, so a config fault owed by the company's admin
+	// and asked about hourly — not a missing credential, which read Failed
+	// and offered the administrator token this deployment already holds.
+	integrationtest.AssertConfigFault(t, findings[0])
 }

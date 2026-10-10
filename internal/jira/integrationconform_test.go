@@ -87,7 +87,7 @@ func (c *conformer) Reconcile(ctx context.Context) ([]integration.Finding, error
 // NOT company(). That fixture is deliberately UNCONVERGED — a seat whose
 // token the instance refuses and a seat with no credential at all are the
 // whole point of it — and a suite run over it would certify a world that
-// reports two identity_failed findings as the steady state, which is a
+// reports two unreachable seats as the steady state, which is a
 // different claim from the one being made here.
 func convergedCompany() *org.Organization {
 	o := &org.Organization{
@@ -288,9 +288,11 @@ func assertConverged(t *testing.T, inst *instance, recorder *sink, opts jira.Opt
 // TWO SEATS THAT CANNOT BE REACHED, by the two different routes there are:
 // the lead holds a token this instance refuses (a rotated credential nobody
 // re-provisioned, which is the everyday one) and the SWE holds no Jira
-// credential at all. Both render as `identity_failed` and both are owed by an
-// ADMIN, but their Detail comes from opposite branches of resolveSeats, so a
-// fixture with only one of them leaves the other's sentence unread.
+// credential at all. They are two people's work — the refusal is
+// `identity_failed`, the vendor's admin's, and the empty seat a
+// `config_fault`, the company admin's — and their Detail comes from opposite
+// branches of resolveSeats, so a fixture with only one of them leaves the
+// other's sentence unread.
 //
 // The human seat stays, for the reason it is in the converged fixture: a walk
 // that probed it would report an unreachable seat over a company that is fine,
@@ -323,8 +325,9 @@ func outstandingCompany() *org.Organization {
 // a world that exercises one certifies nothing about the other two:
 //
 //   - THE SEAT WALK. Two seats with no account — see outstandingCompany —
-//     which is `identity_failed`, owed by the Jira admin who can issue a
-//     token.
+//     one `identity_failed`, owed by the Jira admin who can issue a token,
+//     and one `config_fault`, owed by the company admin who has to put a
+//     credential in its mcp_env.
 //   - THE PROJECT WALK. The org names ENG and this instance does not have it,
 //     which is `ingress_blocked` on the key: every issue routed by that
 //     project reaches nobody, and Jira answers the same 404 for a project a
@@ -332,7 +335,8 @@ func outstandingCompany() *org.Organization {
 //   - THE INGRESS HALF. The signing secret resolves to nothing and the sink
 //     is [provision.ReadOnly] — a node with no keyring — so the pass has
 //     nothing to sign deliveries with, mints nothing and registers nothing.
-//     That is `ingress_blocked` on `integrations.jira.webhook_secret`.
+//     That is `config_fault` on `integrations.jira.webhook_secret`: the
+//     keyring and the variable are both this deployment's to supply.
 //
 // WebhookBase IS SET even so, and deliberately. The obvious way to produce an
 // ingress finding is to leave the public base empty, and it is the wrong one
@@ -490,7 +494,7 @@ func TestTheSealCounterSeesAMintAndItsCompletion(t *testing.T) {
 // person owing something, which a world can satisfy by accident and keep
 // satisfying while the two walks this fixture is actually about stop running:
 // a pass that bailed after the seat walk would still report two
-// identity_failed findings and still look like a world with work in it. So
+// seat findings and still look like a world with work in it. So
 // the fixture states exactly which three walks it expects to hear from, and
 // which finding each owes.
 //
@@ -506,13 +510,20 @@ func assertOutstanding(t *testing.T, inst *instance, opts jira.Options) {
 		t.Fatalf("the outstanding world raised rather than reporting, so the "+
 			"findings cases will read a fault instead of findings: %v", err)
 	}
-	want := []integration.Finding{
+	want := []struct {
+		kind    integration.FindingKind
+		subject string
+		owner   integration.Actor
+	}{
 		// The ingress half, the seat walk twice, the project walk — in
-		// Findings' own order, which two passes have to agree on.
-		{Kind: integration.FindingIngressBlocked, Subject: "integrations.jira.webhook_secret"},
-		{Kind: integration.FindingIdentityFailed, Subject: "lead"},
-		{Kind: integration.FindingIdentityFailed, Subject: "swe"},
-		{Kind: integration.FindingIngressBlocked, Subject: "ENG"},
+		// Findings' own order, which two passes have to agree on. WHOSE each
+		// one is is part of what is pinned: the keyring and an empty seat
+		// are this deployment's configuration, a refused credential and a
+		// project Jira will not show are Jira's.
+		{integration.FindingConfigFault, "integrations.jira.webhook_secret", integration.ActorAdmin},
+		{integration.FindingIdentityFailed, "lead", integration.ActorVendorAdmin},
+		{integration.FindingConfigFault, "swe", integration.ActorAdmin},
+		{integration.FindingIngressBlocked, "ENG", integration.ActorVendorAdmin},
 	}
 	got := res.Findings()
 	if len(got) != len(want) {
@@ -521,14 +532,16 @@ func assertOutstanding(t *testing.T, inst *instance, opts jira.Options) {
 			len(got), len(want), got, want)
 	}
 	for i, f := range got {
-		if f.Kind != want[i].Kind || f.Subject != want[i].Subject {
+		if f.Kind != want[i].kind || f.Subject != want[i].subject {
 			t.Errorf("finding %d is %s on %q, want %s on %q", i,
-				f.Kind, f.Subject, want[i].Kind, want[i].Subject)
+				f.Kind, f.Subject, want[i].kind, want[i].subject)
 		}
-		if _, actor := f.Kind.Verdict(); !actor.WaitsOnAPerson() {
-			t.Errorf("%s on %q is owed by %s rather than by a person, so the "+
-				"case about what an operator is told skips it",
-				f.Kind, f.Subject, actor)
+		_, actor := f.Kind.Verdict()
+		if actor != want[i].owner {
+			t.Errorf("%s on %q is owed by %q, want %q", f.Kind, f.Subject, actor, want[i].owner)
+		}
+		if f.Kind == integration.FindingConfigFault {
+			integrationtest.AssertConfigFault(t, f)
 		}
 	}
 	// AND NOTHING WAS REGISTERED. The ingress finding says this deployment
@@ -858,11 +871,23 @@ func TestANodeWithNoKeyringReportsTheMissingSigningSecretRatherThanFaulting(t *t
 	if found == nil {
 		t.Fatalf("nothing reports why no hook was registered: %+v", findings)
 	}
-	if found.Kind != integration.FindingIngressBlocked {
-		t.Errorf("kind is %q, want %q — the field's own setup requirement "+
-			"declares that this is what an absent value produces",
-			found.Kind, integration.FindingIngressBlocked)
+	// THE JOIN, READ FROM BOTH ENDS: the field's own setup requirement
+	// declares what an absent value produces, and this is the pass producing
+	// it. Compared against the declaration rather than a literal, so moving
+	// one end without the other fails here.
+	var blocks integration.FindingKind
+	for _, req := range jira.Requirements(nil, false, func(string) (string, bool) { return "", false }) {
+		if req.Field == "webhook_secret" {
+			blocks = req.Blocks
+		}
 	}
+	if found.Kind != blocks {
+		t.Errorf("kind is %q, and the webhook_secret requirement says an absent "+
+			"value produces %q", found.Kind, blocks)
+	}
+	// And it is the company admin's, asked about hourly: the keyring and the
+	// variable are both this deployment's, and nobody at Jira can set either.
+	integrationtest.AssertConfigFault(t, *found)
 	// BOTH WAYS OUT, because either one clears it and an operator who is
 	// told only about the keyring cannot use the one they already have.
 	for _, want := range []string{"secrets.keys", "integrations.jira.webhook_secret"} {

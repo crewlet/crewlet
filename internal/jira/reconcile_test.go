@@ -17,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/integration/integrationtest"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provision"
@@ -1072,6 +1073,40 @@ func TestFindingsReportASeatWithNoAccount(t *testing.T) {
 	}
 }
 
+// A SEAT JIRA REFUSED AND A SEAT THAT HOLDS NOTHING ARE TWO PEOPLE'S WORK.
+//
+// Both receive no issue and both were identity_failed, owed by the VENDOR's
+// admin. Only the first is: Jira looked at that credential and said no, so the
+// account at Atlassian is what somebody has to look at. The second was never
+// asked anything — its mcp_env names no credential — and nobody at Atlassian
+// can put one in this company's document. Filed at the vendor it sent an
+// Atlassian admin to edit somebody else's configuration and asked again from
+// fifteen seconds on.
+func TestASeatWithNoCredentialIsTheCompanyAdminsAndARefusedOneTheVendors(t *testing.T) {
+	t.Parallel()
+	inst := newInstance(t)
+	inst.accounts["Bearer org-token"] = "acct-org"
+	inst.accounts["Bearer lead-token"] = acctLead
+	// swe holds swe-token, which the instance refuses; qa holds nothing.
+
+	res, err := run(t, inst, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused := findingFor(t, res, "swe")
+	if refused.Kind != integration.FindingIdentityFailed {
+		t.Errorf("the refused seat is %q, want %q", refused.Kind, integration.FindingIdentityFailed)
+	}
+	if _, actor := refused.Kind.Verdict(); actor != integration.ActorVendorAdmin {
+		t.Errorf("a credential Jira refused is owed by %q, want the vendor's admin", actor)
+	}
+	empty := findingFor(t, res, "qa")
+	integrationtest.AssertConfigFault(t, empty)
+	if !strings.Contains(empty.Detail, "mcp_env") {
+		t.Errorf("the seat with no credential is not told where one goes: %q", empty.Detail)
+	}
+}
+
 // A PROJECT THE INSTANCE DOES NOT HAVE is almost always a typo in the company
 // document, and a silent one: the webhook arrives, the key matches no lead,
 // and the issue reaches nobody.
@@ -1094,7 +1129,7 @@ func TestFindingsReportAProjectTheInstanceDoesNotHave(t *testing.T) {
 		// defines it as an access tier the company names and the vendor
 		// does not have, and whose fallback sentence says exactly that —
 		// on a finding about a project key.
-		if f.Kind == integration.FindingIngressBlocked && f.Subject != "integrations.public_base_url" {
+		if f.Kind == integration.FindingIngressBlocked {
 			found = true
 			if f.Subject == "" {
 				t.Errorf("a missing project finding names no project: %+v", f)
@@ -1166,7 +1201,8 @@ func TestAProjectReadThatBrokeIsNotACredentialRefusal(t *testing.T) {
 	}
 }
 
-// A DATA CENTER INSTANCE WITH NOWHERE TO DELIVER TO IS AN INGRESS BLOCK.
+// A DATA CENTER INSTANCE WITH NOWHERE TO DELIVER TO IS THE COMPANY ADMIN'S
+// CONFIG FAULT.
 //
 // The pass registers no hook, which used to be silence — on the reasoning
 // that the public base "is not on the integrations block" and ingress belonged
@@ -1174,7 +1210,10 @@ func TestAProjectReadThatBrokeIsNotACredentialRefusal(t *testing.T) {
 // integrations.public_base_url, and the reconcile loop feeds it into every
 // pass, so the silence meant a company that never set it saw Jira reported
 // Ready while the instance had no address to send anything to.
-func TestADataCenterInstanceWithNoPublicBaseReportsIngressBlocked(t *testing.T) {
+//
+// And it is this deployment's field: reported as an ingress block it was a
+// Jira admin's to fix, asked about again from fifteen seconds on.
+func TestADataCenterInstanceWithNoPublicBaseIsAConfigFault(t *testing.T) {
 	t.Parallel()
 	inst := newInstance(t)
 	inst.accounts["Bearer org-token"] = "acct-org"
@@ -1193,17 +1232,18 @@ func TestADataCenterInstanceWithNoPublicBaseReportsIngressBlocked(t *testing.T) 
 	}
 	var found bool
 	for _, f := range res.Findings() {
-		if f.Kind == integration.FindingIngressBlocked {
+		if f.Subject == "integrations.public_base_url" {
 			found = true
-			if f.Subject != "integrations.public_base_url" {
-				t.Errorf("the finding names %q rather than the field to set",
-					f.Subject)
-			}
+			integrationtest.AssertConfigFault(t, f)
+		}
+		if f.Kind == integration.FindingIngressBlocked {
+			t.Errorf("an ingress block beside the missing address puts the "+
+				"vendor's admin on it: %+v", f)
 		}
 	}
 	if !found {
-		t.Fatalf("an instance with no address to deliver to reported no ingress "+
-			"problem: %+v", res.Findings())
+		t.Fatalf("an instance with no address to deliver to reported no finding "+
+			"naming the field to set: %+v", res.Findings())
 	}
 }
 
@@ -1235,8 +1275,8 @@ func TestACloudCompanySaysNothingAboutIngress(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, f := range res.Findings() {
-		if f.Kind == integration.FindingIngressBlocked {
-			t.Fatalf("a Cloud company reported ingress blocked: %+v", f)
+		if f.Kind == integration.FindingIngressBlocked || f.Subject == "integrations.public_base_url" {
+			t.Fatalf("a Cloud company reported an ingress problem: %+v", f)
 		}
 	}
 }

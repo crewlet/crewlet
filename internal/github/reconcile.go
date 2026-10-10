@@ -93,13 +93,15 @@ type Options struct {
 }
 
 // IdentityOutcome is what one run learned about a seat's own code-host
-// credential, and it has THREE values because two of them are an empty Login
-// and they lead to opposite conclusions.
+// credential, and it has FOUR values because three of them are an empty Login
+// and they lead to three different conclusions.
 //
 // A seat that NAMES a credential which does not authenticate has a fault
-// somebody can fix: every call its tools make is refused, and an operator has
-// a variable to set or a token to reissue. A seat that names NONE has not
-// asked for one — identity on this host is each agent's OWN GitHub App, which
+// somebody can fix: every call its tools make is refused. Which somebody turns
+// on whether GitHub was asked: a token GitHub refused is reissued THERE, and a
+// slot whose variable resolved to nothing never reached GitHub at all — the
+// variable is this deployment's to set. A seat that names NONE has not asked
+// for one — identity on this host is each agent's OWN GitHub App, which
 // [ReconcileSeatApps] is the authority on and which this run cannot see from
 // the org chart it was handed.
 //
@@ -117,14 +119,19 @@ type Options struct {
 // Reason changes what [Result.Findings] does with it.
 type IdentityOutcome string
 
-// The three outcomes.
+// The four outcomes.
 const (
 	// IdentityResolved is a seat whose credential named an account.
 	IdentityResolved IdentityOutcome = "resolved"
 
-	// IdentityRefused is a seat that names a credential this run could
-	// not turn into an account. THE ONE THAT BECOMES A FINDING.
+	// IdentityRefused is a seat whose credential GitHub was shown and this
+	// run could not turn into an account. A finding owed at GitHub.
 	IdentityRefused IdentityOutcome = "refused"
+
+	// IdentityUnset is a seat whose mcp_env names a credential slot that
+	// resolved to nothing, so there was nothing to show GitHub. A finding
+	// owed HERE, in this deployment's configuration.
+	IdentityUnset IdentityOutcome = "unset"
 
 	// IdentityUnclaimed is a seat that names no code-host credential at
 	// all. Not a fault, and not a finding: the reason travels in Reason
@@ -136,7 +143,7 @@ const (
 // rather than a panic.
 func (o IdentityOutcome) Valid() bool {
 	switch o {
-	case IdentityResolved, IdentityRefused, IdentityUnclaimed:
+	case IdentityResolved, IdentityRefused, IdentityUnset, IdentityUnclaimed:
 		return true
 	default:
 		return false
@@ -170,7 +177,8 @@ type SeatIdentity struct {
 func (s SeatIdentity) Routes() bool { return s.Login != "" }
 
 // Refused reports a seat that named a credential this run could not turn
-// into an account — the only case [Result.Findings] reports.
+// into an account at GitHub — the case [Result.Findings] reports as the
+// vendor's, beside [IdentityUnset], which it reports as this deployment's.
 //
 // Stated as what was NOT established rather than as an equality, so that a
 // seat nothing positively concluded about is reported: silence is the answer
@@ -178,7 +186,7 @@ func (s SeatIdentity) Routes() bool { return s.Login != "" }
 // are broken" the forgiving reading of silence is the one that loses a
 // finding.
 func (s SeatIdentity) Refused() bool {
-	return !s.Routes() && s.Outcome != IdentityUnclaimed
+	return !s.Routes() && s.Outcome != IdentityUnclaimed && s.Outcome != IdentityUnset
 }
 
 // HookOutcome is what happened at one webhook target, and it has THREE
@@ -312,7 +320,7 @@ type Result struct {
 	// NoKeyring is a run that had to mint the webhook signing secret and
 	// had nowhere to seal one.
 	//
-	// SEPARATE FROM NoIngress although both end as one ingress finding,
+	// SEPARATE FROM NoIngress although both end as one config fault,
 	// because they name DIFFERENT FIELDS to change and the subject is the
 	// whole value of the report: NoIngress is answered by setting
 	// integrations.public_base_url, and this is answered by setting
@@ -530,13 +538,16 @@ func resolveSeats(ctx context.Context, opts Options) []SeatIdentity {
 			// NAMED AND EMPTY IS A FAULT. The operator wrote this seat a
 			// credential slot and nothing came out of it, so its tools
 			// authenticate as nobody — and the field to edit is the one
-			// thing they need told.
+			// thing they need told. UNSET rather than refused, because
+			// GitHub was never shown anything: the fix is this
+			// deployment's configuration, not an account at GitHub.
 			//
 			// THE KEY, NEVER THE VALUE, for the reason [webhookSecret]
 			// does not quote its own: the slot normally holds a `${VAR}`
 			// and printing it would be helpful, but one way to reach
 			// this line is a LITERAL somebody pasted, and then the thing
 			// it would print is the credential.
+			out[i].Outcome = IdentityUnset
 			out[i].Reason = "mcp_env." + SeatEnv + "." + key + " resolved to " +
 				"nothing — set the variable it names, or drop the entry if this " +
 				"seat acts through its own GitHub App instead"
