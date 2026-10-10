@@ -252,7 +252,10 @@ export function Budgets() {
   );
   // EVERY ROW IS A SEAT OF THE CHART, so it carries the handle the peek is
   // addressed by: the engine builds this list from the active org's own seats
-  // (`role.Handle()`), never from a spend that outlived one.
+  // (`role.Handle()`), never from a spend that outlived one. The handle is
+  // also what each row is keyed and badged by — its `role` is a name two seats
+  // can share, and a badge looked up by name is the first such seat's, a
+  // person's outline included.
   usePeekNeighbours(
     useMemo(() => seats.map((s) => ({ kind: "seat" as const, id: s.handle })), [seats]),
   );
@@ -261,7 +264,7 @@ export function Budgets() {
   const seatWindow = (s: BudgetsAnswer["seats"][number], period: Period) => (
     <SeatWindow
       seat={s.handle}
-      name={seatBadge(s.role).name}
+      name={seatBadge(s.handle).name}
       w={windowOf(s.windows, period)}
       period={period}
       zone={zone}
@@ -328,7 +331,7 @@ export function Budgets() {
             </Card.Header>
             <DataGrid
               rows={seats}
-              rowKey={(s) => s.agent_id || s.role}
+              rowKey={(s) => s.handle}
               defaultSort="-month"
               // THE SEAT BESIDE ITS BUDGET: the rail answers "what is it, what
               // was it doing" without losing the row that raised it.
@@ -346,8 +349,8 @@ export function Budgets() {
                 {
                   key: "seat",
                   header: "Seat",
-                  sortValue: (s) => s.role,
-                  cell: (s) => <SeatLabel {...seatBadge(s.role)} />,
+                  sortValue: (s) => seatBadge(s.handle).name,
+                  cell: (s) => <SeatLabel {...seatBadge(s.handle)} />,
                 },
                 // ONE COLUMN PER WINDOW, spelled out: each heading is a word
                 // the phone's card layout reads beside its value.

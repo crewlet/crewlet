@@ -23,7 +23,7 @@ import { FrameReadings } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
-import type { BudgetWindow, BudgetsAnswer } from "~/protocol/index.ts";
+import type { BudgetWindow, BudgetsAnswer, OrgSeat } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 
@@ -104,13 +104,17 @@ const READER = { token_id: "", role: "", reach: "public", handle: "", name: "", 
 
 let budgetAsks = 0;
 
-function mount(budgets: BudgetsAnswer, viewer: Record<string, unknown> = ADMIN) {
+function mount(
+  budgets: BudgetsAnswer,
+  viewer: Record<string, unknown> = ADMIN,
+  roles: OrgSeat[] = [{ name: "PM", handle: "pm" }],
+) {
   location.hash = "#/spend/budgets";
   budgetAsks = 0;
   const store = new Store();
   store.applyHealth(healthFrame({ applied_epoch: 4 }));
   store.setConnected(true);
-  store.applyOrg(withDerived({ timezone: "UTC", roles: [{ name: "PM", handle: "pm" }] }));
+  store.applyOrg(withDerived({ timezone: "UTC", roles }));
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
     if (what === "budgets") {
@@ -208,6 +212,21 @@ test("every scope states its three windows, the company's first", async () => {
     expect(screen.getAllByText(heading).length).toBeGreaterThan(0);
   }
   expect(screen.getByText(/last refused a call/i)).toBeTruthy();
+});
+
+// A SEAT IS BADGED BY ITS HANDLE. Two seats can share a name — unique names
+// are an admission rule, so a revision a newer engine admitted can carry a
+// collision — and a badge looked up by the name is the first such seat's: here
+// a person's, so the agent seat whose budget this is was drawn in a person's
+// outline.
+test("a seat sharing its name with a person is badged as the agent it is", async () => {
+  mount(answer(), ADMIN, [
+    { name: "PM", handle: "pm-person", kind: "human" },
+    { name: "PM", handle: "pm" },
+  ]);
+  await settle();
+  const marks = [...document.querySelectorAll(".cell-seat .crewlet-avatar")];
+  expect(marks.map((mark) => mark.classList.contains("crewlet-avatar--agent"))).toEqual([true]);
 });
 
 // THE ENGINE'S STATE, AS SERVED. 95% served `ok` is drawn ok and 50% served

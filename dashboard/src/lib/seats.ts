@@ -885,10 +885,12 @@ export function seatLookup(index: OrgIndex): (handle: string) => { name: string;
 /**
  * A seat by HANDLE or, failing that, by NAME — the pair a badge needs.
  *
- * Half the rows that name a seat carry its handle (a lease, a channel end) and
- * half carry its role NAME (a turn, a budget, a spend row), so a screen drawing
- * the badge in both kinds of column needs both lookups. Handle first, because
- * a handle is unique and a name only the first seat's.
+ * Most rows that name a seat carry its handle (a lease, a channel end, a
+ * budget, a spend row) and some carry only its role NAME (a turn, the spend of
+ * a seat that has left the chart), so a screen drawing the badge in both kinds
+ * of column needs both lookups. Handle first, because a handle is unique and a
+ * name only the first seat's — so a row that carries a handle is looked up by
+ * it, never by its name.
  */
 export function seatBadgeOf(index: OrgIndex): (key: string) => { name: string; kind?: SeatKind } {
   return (key) => {
