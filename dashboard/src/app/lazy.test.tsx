@@ -270,7 +270,7 @@ describe("a sidebar row", () => {
       serve(chunk, async () => {
         asked.push(chunk);
         return chunk === "spend"
-          ? import("~/routes/spend/index.ts")
+          ? import("~/routes/admin/spend/index.ts")
           : import("~/routes/knowledge/index.ts");
       });
     }

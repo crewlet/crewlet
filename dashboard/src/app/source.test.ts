@@ -23,7 +23,7 @@ import {
   walk,
 } from "../test/source.ts";
 import { ACTIONS } from "~/contract/actions.ts";
-import { AGENT_TABS } from "~/routes/agents/seat/profile.ts";
+import { AGENT_TABS } from "~/routes/team/seat/profile.ts";
 import { WORKSPACES } from "./nav.ts";
 import { resolves } from "./routes.ts";
 

@@ -39,7 +39,7 @@ let undo: (() => void)[] = [];
 function breakExport(chunk: "spend" | "work", name: string, component: unknown) {
   const real =
     chunk === "spend"
-      ? () => import("~/routes/spend/index.ts")
+      ? () => import("~/routes/admin/spend/index.ts")
       : () => import("~/routes/work/index.ts");
   undo.push(overrideChunkForTest(chunk, async () => ({ ...(await real()), [name]: component })));
 }
@@ -136,7 +136,7 @@ describe("a chunk that never arrives", () => {
     undo.push(
       overrideChunkForTest("spend", async () => {
         if (fail) throw new TypeError("Failed to fetch dynamically imported module");
-        return { ...(await import("~/routes/spend/index.ts")), Spend: () => <p>spend, loaded</p> };
+        return { ...(await import("~/routes/admin/spend/index.ts")), Spend: () => <p>spend, loaded</p> };
       }),
     );
     location.hash = "#/spend";
