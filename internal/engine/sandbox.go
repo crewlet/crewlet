@@ -2307,18 +2307,21 @@ type codingRun struct {
 // both.
 //
 // THE RUNNER IS AN INPUT, because what an entry can give a box depends on
-// which coding agent reads it ([apiEntryEnv]). A run_sandbox launch takes its
-// runner from role.sandbox.coding_agent and its model from llm_sandbox
-// independently, so the pairing is the operator's, and one of them cannot
-// work and used to start a box that failed inside it: a cli-agent entry under
-// ANOTHER CLI's runner. Its model is written in its own CLI's grammar and its
-// sign-in is that CLI's, so Claude Code was handed an OpenCode entry's
-// `openrouter/anthropic/claude-sonnet-5`, and OpenCode a Claude Code entry's
-// `sonnet` with a login it never reads. An agent-mode run never meets this
-// while its turn's epoch holds: its runner is its entry's own CLI. Config
-// refuses the same pairing on a write
-// ([config.Company.validateSandboxCodingAgents]) and both say one sentence
-// ([config.CodingAgentMismatch]).
+// which coding agent reads it. A run_sandbox launch takes its runner from
+// role.sandbox.coding_agent and its model from llm_sandbox independently, so
+// the pairing is the operator's and two of them cannot work, which used to
+// start a box that failed inside it:
+//
+//   - A cli-agent entry under ANOTHER CLI's runner. Its model is written in
+//     its own CLI's grammar and its sign-in is that CLI's, so Claude Code was
+//     handed an OpenCode entry's `openrouter/anthropic/claude-sonnet-5`, and
+//     OpenCode a Claude Code entry's `sonnet` with a login it never reads. An
+//     agent-mode run never meets this while its turn's epoch holds: its
+//     runner is its entry's own CLI. Config refuses the same pairing on a
+//     write ([config.Company.validateSandboxCodingAgents]) and both say one
+//     sentence ([config.CodingAgentMismatch]).
+//   - Claude Code on an API entry that does not speak Anthropic's wire. See
+//     [claudeCodeOnForeignEntry].
 //
 // A seat with no resolvable model is not an error here: a company with no
 // models takes no turn, so launches no run (see nomodels.go), and the run
@@ -2367,6 +2370,9 @@ func newCodingRun(c *Company, seat *org.Role, ph phase.Phase, runner string,
 		return run, nil
 	}
 	ep := c.endpoints[member.Key]
+	if runner == codingagent.ClaudeCodeName && spec.Type != config.LLMAnthropic {
+		return claudeCodeOnForeignEntry(seat, member.Key, spec.Type, seatEnv)
+	}
 	run.llm = &sandbox.AgentLLM{Model: ep.model, ProviderType: string(spec.Type), BaseURL: ep.baseURL}
 	run.env = underlay(seatEnv, apiEntryEnv(spec, ep, runner, seatEnv))
 	return run, nil
@@ -2433,6 +2439,33 @@ func signsIn(env map[string]string, names []string) bool {
 		}
 	}
 	return false
+}
+
+// claudeCodeOnForeignEntry is a Claude Code run on an `openai` or
+// `openai-compatible` entry: refused, unless the seat's own environment signs
+// Claude Code in, when the run carries none of the entry at all.
+//
+// CLAUDE CODE SPEAKS ANTHROPIC'S API ONLY, so such an entry has nothing it can
+// read — not its key, which is OpenAI's, and not its model, an OpenAI-side id
+// (`gpt-5`, or a gateway's `anthropic/claude-sonnet-5`) that `claude --model`
+// refuses at its first call however the run is signed in. So a seat that
+// brought its own sign-in — an Anthropic key, a plan token, a Bedrock, Vertex
+// or Foundry toggle — runs on THAT, under Claude Code's own model choice
+// (ANTHROPIC_MODEL in role.sandbox.env picks one), and the entry's key does
+// not ride into a box that cannot use it. One that brought none is refused
+// with the three edits that make it run.
+func claudeCodeOnForeignEntry(seat *org.Role, key string, kind config.LLMProviderType,
+	seatEnv map[string]string) (codingRun, error) {
+	if signsIn(seatEnv, codingagent.ClaudeCodeCredentialEnv) {
+		return codingRun{env: seatEnv}, nil
+	}
+	return codingRun{}, &SandboxModelError{msg: fmt.Sprintf("seat %q runs code with Claude "+
+		"Code, which speaks the Anthropic API only, on providers.llm.%s, a %q entry whose "+
+		"model and key it cannot use. Point role.llm_sandbox at an anthropic entry, set "+
+		"role.sandbox.coding_agent: %s (which reads OpenAI's wire too), or give the seat a "+
+		"Claude Code sign-in of its own in role.sandbox.env (%s), on which it runs under its "+
+		"own model choice", seat.Handle(), key, kind, codingagent.OpenCodeName,
+		strings.Join(codingagent.ClaudeCodeCredentialEnv, ", "))}
 }
 
 // SandboxModelError reports a coding run whose coding agent cannot use the

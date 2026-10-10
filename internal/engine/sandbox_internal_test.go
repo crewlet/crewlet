@@ -422,6 +422,67 @@ roles:
 	}
 }
 
+// CLAUDE CODE SPEAKS ONLY ANTHROPIC'S API, so an `openai` entry gives it
+// nothing it can read: refused, unless the seat brought a Claude Code sign-in
+// of its own — and then the run carries NONE of the entry, not its model,
+// which `claude --model` refuses whatever signs the run in, and not its key,
+// which would only ride into a box that cannot use it.
+func TestClaudeCodeOnAnOpenAIEntryRunsOnlyOnTheSeatsOwnSignIn(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "sk-test")
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+	c := companyFor(t, `
+name: Acme
+providers:
+  llm:
+    gpt:
+      type: openai
+      model: gpt-5
+    claude:
+      type: anthropic
+      model: claude-sonnet-5
+roles:
+  - name: Engineer
+    handle: eng
+    llm: gpt
+  - name: Reviewer
+    handle: rev
+    llm: claude
+`)
+	eng := seatNamed(t, c, "Engineer")
+	_, err := newCodingRun(c, eng, phase.Sandbox, codingagent.ClaudeCodeName, nil)
+	var modelErr *SandboxModelError
+	if !errors.As(err, &modelErr) {
+		t.Fatalf("Claude Code on an openai entry: err = %v, want *SandboxModelError", err)
+	}
+	if !strings.Contains(err.Error(), "role.sandbox.coding_agent: opencode") {
+		t.Errorf("the refusal does not offer the runner that reads the entry:\n%v", err)
+	}
+	if run := runOn(t, c, eng, codingagent.OpenCodeName, nil); run.env["OPENAI_API_KEY"] != "sk-test" {
+		t.Errorf("OpenCode on an openai entry was not handed its key: %v", run.env)
+	}
+	for _, own := range []map[string]string{
+		{"CLAUDE_CODE_USE_BEDROCK": "1"},
+		// The plan token signs Claude Code in as surely as a key does.
+		{"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat-plan"},
+	} {
+		run := runOn(t, c, eng, codingagent.ClaudeCodeName, own)
+		if run.llm != nil {
+			t.Errorf("%v: the run was handed %+v, a model Claude Code cannot name", own, run.llm)
+		}
+		if _, leaked := run.env["OPENAI_API_KEY"]; leaked {
+			t.Errorf("%v: an OpenAI key rode into a Claude Code box: %v", own, run.env)
+		}
+	}
+	// A blank value signs nothing in: an unresolved ${VAR} lands as one.
+	if _, err := newCodingRun(c, eng, phase.Sandbox, codingagent.ClaudeCodeName,
+		map[string]string{"ANTHROPIC_API_KEY": " "}); !errors.As(err, &modelErr) {
+		t.Errorf("a blank Anthropic key let Claude Code onto an openai entry: %v", err)
+	}
+	if run := runOn(t, c, seatNamed(t, c, "Reviewer"), codingagent.ClaudeCodeName, nil); run.llm == nil {
+		t.Error("Claude Code on an anthropic entry was handed no model")
+	}
+}
+
 // The login travels as a host-path MAP for the local backend to seed, and as
 // a token in the run environment. The files are offered rather than exported
 // because they carry a refresh token whose rotation is shared fleet state.
