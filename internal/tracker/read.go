@@ -724,6 +724,14 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 			placeholders(len(q.AskedBy.Handles()))+") AND m.resolved = 0 "+
 			"AND m.answered_by IS NULL AND m.removed = 0)", q.AskedBy.args()...)
 	}
+	if q.HandedOffBy.Named() {
+		// FILED UNDER ANY OF THE PARTY'S NAMES AND HELD UNDER NONE OF THEM —
+		// see [Query.HandedOffBy]. The empty assignee is never one of a
+		// party's names, so the work still waiting for somebody is in.
+		names := placeholders(len(q.HandedOffBy.Handles()))
+		bound := append(q.HandedOffBy.args(), q.HandedOffBy.args()...)
+		add("(t.reporter IN ("+names+") AND t.assignee NOT IN ("+names+"))", bound...)
+	}
 	// BLOCKING IS THE OTHER END OF BLOCKED, not its negation: "this task
 	// is holding something up" reads the dependency table by BLOCKER_ID
 	// where blocked reads it by task_id, and a task can be both.

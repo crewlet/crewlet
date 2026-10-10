@@ -856,6 +856,73 @@ func TestAskedByMatchesEveryIdentityOfTheParty(t *testing.T) {
 	}
 }
 
+// `handed_off_by` IS WORK THE PARTY FILED AND DOES NOT HOLD.
+//
+// A hand-off is the founder's main verb, and "Handed off" is the list of them:
+// what they filed for somebody else — or for nobody yet, since a task routed to
+// a unit waits for its lead to pick somebody — and not what they filed for
+// themselves, which is their own queue. Both ends are a PARTY: a founder files
+// through their own assistant as the token and from the dashboard as the seat,
+// and a task the token filed for the seat is their own work, not a hand-off.
+func TestHandedOffByIsWorkThePartyFiledAndDoesNotHold(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	file := func(id, reporter, assignee string) {
+		task := newTask(id)
+		task.Reporter, task.Assignee = reporter, assignee
+		create(t, r, id, task, nil)
+	}
+	file("to-ana", "jane-founder", "ana")           // handed off
+	file("to-nobody", "jane-founder", "")           // handed off, waiting for a lead
+	file("by-token", "founder", "cy")               // handed off through the token
+	file("own", "jane-founder", "jane-founder")     // their own queue
+	file("own-by-token", "founder", "jane-founder") // their own, filed by the token
+	file("token-holds", "jane-founder", "founder")  // their own, held by the token
+	file("someone-else", "cy", "ana")               // somebody else's hand-off
+	board := func(viewer tracker.Viewer, params map[string]any) []string {
+		q, err := r.reader.ExpandedQuery(t.Context(), params, viewer, wednesday, berlin)
+		if err != nil {
+			t.Fatalf("ExpandedQuery: %v", err)
+		}
+		q.Level = statelog.ReadStale
+		answer, err := r.reader.Tasks(t.Context(), q, wednesday)
+		if err != nil {
+			t.Fatalf("Tasks: %v", err)
+		}
+		var ids []string
+		for _, row := range answer.Rows {
+			ids = append(ids, row.ID)
+		}
+		slices.Sort(ids)
+		return ids
+	}
+	top := map[string]any{"handed_off_by": "jane-founder"}
+	// THE SEAT ALONE: what it filed and does not hold, the unassigned
+	// included — and, knowing no second name, it reads a task held by the
+	// token as somebody else's.
+	if got := board(tracker.Viewer{Handle: "jane-founder"}, top); !slices.Equal(got,
+		[]string{"to-ana", "to-nobody", "token-holds"}) {
+
+		t.Fatalf("handed_off_by with no alias answers %v", got)
+	}
+	founder := tracker.Viewer{Handle: "jane-founder", OperatorID: "founder"}
+	if got := board(founder, top); !slices.Equal(got,
+		[]string{"by-token", "to-ana", "to-nobody"}) {
+
+		t.Fatalf("handed_off_by=jane-founder for the viewer bound to `founder` "+
+			"answers %v, want every hand-off under either name and none of "+
+			"their own work", got)
+	}
+	branch := map[string]any{
+		"any": `[{"handed_off_by":"jane-founder"},{"key":"NOPE-1"}]`,
+	}
+	if got := board(founder, branch); !slices.Equal(got,
+		[]string{"by-token", "to-ana", "to-nobody"}) {
+
+		t.Fatalf("handed_off_by inside an any= branch answers %v", got)
+	}
+}
+
 // A REASON FILTER KEEPS THE REASON THE CHANGE IS HEARD UNDER.
 //
 // A party of two holds one row per identity for a change, and the collapse

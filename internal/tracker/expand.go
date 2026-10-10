@@ -415,17 +415,29 @@ func (q Query) forViewer(viewer Party) Query {
 	// top level and "asked by me, or assigned to me" is a disjunction a
 	// person writes. A COPY of the branches, because a Query is a value
 	// and its slice is shared with whoever holds the original.
-	if q.AskedBy.Named() && q.AskedBy.Handle == viewer.Handle {
-		q.AskedBy = viewer
-	}
+	//
+	// AND THE PERSON WHO HANDED WORK OFF, for the same reason again: work a
+	// founder filed through their own credential is reported by the token,
+	// and "Handed off" is a question they ask about themselves.
+	q = q.partiesForViewer(viewer)
 	if len(q.Any) > 0 {
 		branches := slices.Clone(q.Any)
 		for i := range branches {
-			if branches[i].AskedBy.Named() && branches[i].AskedBy.Handle == viewer.Handle {
-				branches[i].AskedBy = viewer
-			}
+			branches[i] = branches[i].partiesForViewer(viewer)
 		}
 		q.Any = branches
+	}
+	return q
+}
+
+// partiesForViewer gives the viewer's second name to the predicate keys that
+// name a person and may appear in an `any=` branch — see [Query.forViewer].
+func (q Query) partiesForViewer(viewer Party) Query {
+	if q.AskedBy.Named() && q.AskedBy.Handle == viewer.Handle {
+		q.AskedBy = viewer
+	}
+	if q.HandedOffBy.Named() && q.HandedOffBy.Handle == viewer.Handle {
+		q.HandedOffBy = viewer
 	}
 	return q
 }
