@@ -337,7 +337,7 @@ func TestAnAdvisoryFindingLeavesASeatSatisfied(t *testing.T) {
 	}
 	mustSaveStatus(t, status, integration.State{
 		Kind:   integration.KindJira,
-		Report: integration.Report{Phase: integration.PhaseReady, Actor: integration.ActorAdmin},
+		Report: integration.Report{Phase: integration.PhaseReady, Actor: integration.ActorVendorAdmin},
 		Findings: []integration.Finding{{
 			Kind: integration.FindingGrantExcess, Subject: "sre-lead",
 			Detail: "sre-lead holds more access than its role asks for",

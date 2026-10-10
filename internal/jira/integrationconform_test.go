@@ -323,7 +323,8 @@ func outstandingCompany() *org.Organization {
 // a world that exercises one certifies nothing about the other two:
 //
 //   - THE SEAT WALK. Two seats with no account — see outstandingCompany —
-//     which is `identity_failed`, owed by the admin who can issue a token.
+//     which is `identity_failed`, owed by the Jira admin who can issue a
+//     token.
 //   - THE PROJECT WALK. The org names ENG and this instance does not have it,
 //     which is `ingress_blocked` on the key: every issue routed by that
 //     project reaches nobody, and Jira answers the same 404 for a project a
@@ -887,8 +888,8 @@ func TestANodeWithNoKeyringReportsTheMissingSigningSecretRatherThanFaulting(t *t
 //
 // Every failure in the seat walk became the same empty account, which
 // [jira.Result.Findings] renders as identity_failed — "this seat has no Jira
-// account", owed by an ADMIN and never clearing on its own. That is true of a
-// token the instance refused and a fabrication about an instance that never
+// account", owed by a Jira ADMIN and never clearing on its own. That is true
+// of a token the instance refused and a fabrication about an instance that never
 // answered: one blip, or one node cancelling mid-pass on its way down,
 // reported every credentialled seat as an account somebody has to go and
 // create. The refused half stays a finding; it is asserted by

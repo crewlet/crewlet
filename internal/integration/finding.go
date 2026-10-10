@@ -49,8 +49,8 @@ const (
 	// roll-up ([Rollup]) reads it as needing attention although the phase
 	// says ready.
 	//
-	// The OPERATOR's, like a rejected credential: the fix is a new value in
-	// this deployment's own secret store, whoever mints it at the vendor.
+	// The company ADMIN's, like a rejected credential: the fix is a new value
+	// in this deployment's own secret store, whoever mints it at the vendor.
 	FindingCredentialExpiring FindingKind = "credential_expiring"
 
 	// FindingApprovalRequired is an app or scope a person must install or
@@ -240,57 +240,59 @@ func (f FindingKind) severity() int {
 func (f FindingKind) Verdict() (Phase, Actor) {
 	switch f {
 	case FindingCredentialMissing:
-		return PhaseUnconfigured, ActorOperator
+		return PhaseUnconfigured, ActorAdmin
 	case FindingCredentialRejected:
 		// UNCONFIGURED, which the phase doc defines as "cannot talk to
 		// the surface at all" — true of a refused credential exactly as
-		// it is of an absent one. And the OPERATOR's, not the engine's:
-		// no retry fixes a token the third-party app will not accept.
-		return PhaseUnconfigured, ActorOperator
+		// it is of an absent one. And the company ADMIN's, not the
+		// engine's: no retry fixes a token the third-party app will not
+		// accept.
+		return PhaseUnconfigured, ActorAdmin
 	case FindingCredentialExpiring:
-		// READY, because the credential works today, and the OPERATOR's,
-		// because the replacement lands in this deployment's secret store.
-		// An advisory with a deadline; see [Rollup] for how a tool reads it.
-		return PhaseReady, ActorOperator
+		// READY, because the credential works today, and the company
+		// ADMIN's, because the replacement lands in this deployment's
+		// secret store. An advisory with a deadline; see [Rollup] for how
+		// a tool reads it.
+		return PhaseReady, ActorAdmin
 	case FindingApprovalRequired:
-		return PhaseAwaitingAdmin, ActorAdmin
+		return PhaseAwaitingAdmin, ActorVendorAdmin
 	case FindingIngressBlocked:
-		return PhaseDegraded, ActorAdmin
+		return PhaseDegraded, ActorVendorAdmin
 	case FindingIngressPending:
 		return PhaseActivating, ActorEngine
 	case FindingIdentityMissing:
 		return PhaseProvisioning, ActorEngine
 	case FindingIdentityFailed:
-		return PhaseDegraded, ActorAdmin
+		return PhaseDegraded, ActorVendorAdmin
 	case FindingGrantPending:
 		return PhaseActivating, ActorProvider
 	case FindingUnknownTier:
-		return PhaseDegraded, ActorOperator
-	case FindingGrantShort:
 		return PhaseDegraded, ActorAdmin
+	case FindingGrantShort:
+		return PhaseDegraded, ActorVendorAdmin
 	case FindingGrantExcess:
 		// READY, not degraded. It is a note on a working integration.
-		return PhaseReady, ActorAdmin
+		return PhaseReady, ActorVendorAdmin
 	case FindingRegistrationOrphaned:
-		// READY too, and owed by the ADMIN: what has to happen is at the
-		// third-party app — repoint the monitors, then remove the
+		// READY too, and owed by the VENDOR's admin: what has to happen is
+		// at the third-party app — repoint the monitors, then remove the
 		// definition nothing points at any more.
-		return PhaseReady, ActorAdmin
+		return PhaseReady, ActorVendorAdmin
 	case FindingCoveragePartial:
-		// READY, and the OPERATOR's — which is the pairing that makes it
-		// honest. Ready because the integration is doing what it was
-		// asked; the operator's because widening it is a choice in this
-		// company's own configuration, not a grant somebody at the
-		// third-party app has to make. Reported as the admin's it would
-		// have sent a person to GitHub to fix a decision taken here.
-		return PhaseReady, ActorOperator
+		// READY, and the company ADMIN's — which is the pairing that makes
+		// it honest. Ready because the integration is doing what it was
+		// asked; the company admin's because widening it is a choice in
+		// this company's own configuration, not a grant somebody at the
+		// third-party app has to make. Reported as the vendor admin's it
+		// would have sent a person to GitHub to fix a decision taken here.
+		return PhaseReady, ActorAdmin
 	default:
 		// A kind this build does not know is reported as degraded rather
 		// than ready, and pointed at the person who can read the peer's
 		// logs. Claiming a surface is fine on the strength of a word this
 		// binary cannot interpret is the one answer that is certainly
 		// wrong.
-		return PhaseDegraded, ActorOperator
+		return PhaseDegraded, ActorAdmin
 	}
 }
 
@@ -314,7 +316,10 @@ func (f FindingKind) sentence(subject string) string {
 	case FindingCredentialExpiring:
 		return "this integration's credential expires soon" + about
 	case FindingApprovalRequired:
-		return "an administrator must approve this integration at the third-party app" + about
+		// The third-party app's admin, said so: this sentence does not know
+		// which vendor it is about, and a bare "an administrator" reads as
+		// the company's own admin, who may hold no account there at all.
+		return "the third-party app's admin must approve this integration" + about
 	case FindingIngressBlocked:
 		return "events cannot be delivered to this engine" + about
 	case FindingIngressPending:

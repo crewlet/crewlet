@@ -1,6 +1,11 @@
 package integration
 
-import "testing"
+import (
+	"slices"
+	"testing"
+
+	"github.com/crewlet/crewlet/internal/clientsource"
+)
 
 // THE READER'S VOCABULARY IS SHORTER THAN THE WIRE'S, and this is the seam.
 //
@@ -50,5 +55,87 @@ func TestAnUnknownPhaseIsNotLabelled(t *testing.T) {
 	got := Phase("something_a_newer_build_wrote").Label()
 	if got != "something a newer build wrote" {
 		t.Errorf("unknown phase labelled %q; it must render as its own value", got)
+	}
+}
+
+// THE BARE WORD "admin" IS THE COMPANY'S.
+//
+// Two people can owe an integration a step, and they are not the same person:
+// somebody AT THE THIRD-PARTY APP (a Slack workspace admin, a GitHub
+// organization owner) and the company's own admin, whose fix is in this
+// deployment's configuration. "admin" is a role a person holds in this company,
+// so the bare value names that person and the vendor's is spelled out — a
+// value that called the vendor's person "admin" would send the company's admin
+// to a console they may hold no account on.
+//
+// Pinned on the wire values AND on every known kind's verdict, because the
+// rename that introduced the split swapped what "admin" meant: a kind left on
+// the old reading would now point at the other person without a compile error.
+func TestTheBareAdminIsTheCompanys(t *testing.T) {
+	t.Parallel()
+	if ActorAdmin != "admin" || ActorVendorAdmin != "vendor_admin" {
+		t.Fatalf("admin is %q and the vendor's is %q; the bare word belongs to "+
+			"the company", ActorAdmin, ActorVendorAdmin)
+	}
+	// Whose step each kind is. The company's admin edits this deployment's
+	// configuration or its secret store; the vendor's acts at the app.
+	want := map[FindingKind]Actor{
+		FindingCredentialMissing:    ActorAdmin,
+		FindingCredentialRejected:   ActorAdmin,
+		FindingCredentialExpiring:   ActorAdmin,
+		FindingUnknownTier:          ActorAdmin,
+		FindingCoveragePartial:      ActorAdmin,
+		FindingApprovalRequired:     ActorVendorAdmin,
+		FindingIngressBlocked:       ActorVendorAdmin,
+		FindingIdentityFailed:       ActorVendorAdmin,
+		FindingGrantShort:           ActorVendorAdmin,
+		FindingGrantExcess:          ActorVendorAdmin,
+		FindingRegistrationOrphaned: ActorVendorAdmin,
+		FindingIngressPending:       ActorEngine,
+		FindingIdentityMissing:      ActorEngine,
+		FindingGrantPending:         ActorProvider,
+	}
+	for _, kind := range knownKinds {
+		wantActor, ok := want[kind]
+		if !ok {
+			t.Errorf("%s has no expected actor here; decide whose step it is", kind)
+			continue
+		}
+		if _, got := kind.Verdict(); got != wantActor {
+			t.Errorf("%s is owed by %q, want %q", kind, got, wantActor)
+		}
+	}
+	// A kind this build cannot read goes to the person who can read the
+	// peer's logs, which is the company's admin, never the vendor's.
+	if _, got := FindingKind("a kind a newer build found").Verdict(); got != ActorAdmin {
+		t.Errorf("an unknown kind is owed by %q, want the company's admin", got)
+	}
+	// And the phase that awaits an admin awaits the VENDOR's: its name is the
+	// control plane's and stays, so the actor beside it is what says whose.
+	if phase, actor := FindingApprovalRequired.Verdict(); phase != PhaseAwaitingAdmin ||
+		actor != ActorVendorAdmin {
+		t.Errorf("approval_required is %s/%s, want awaiting_admin owed by the vendor's admin",
+			phase, actor)
+	}
+}
+
+// The dashboard declares the actors it can be sent, and that declaration is
+// held to the engine's: a screen that knew "operator" after the company's
+// admin took the bare word would label the wrong person, and nothing else
+// would fail.
+func TestTheDashboardKnowsExactlyTheActors(t *testing.T) {
+	t.Parallel()
+	got, err := clientsource.Union(clientsource.Tree(t), "ReconcileActor")
+	if err != nil {
+		t.Fatalf("%v — this gate cannot run without the client's declaration", err)
+	}
+	want := make([]string, 0, len(Actors))
+	for _, a := range Actors {
+		want = append(want, string(a))
+	}
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("the dashboard's ReconcileActor is %q; the engine sends %q", got, want)
 	}
 }

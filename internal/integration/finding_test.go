@@ -154,8 +154,8 @@ func TestSeverityIsAStrictOrder(t *testing.T) {
 //
 // Checked on the RANK rather than on the phase and actor, because a known
 // kind is allowed to share a verdict with the default (an unknown tier is
-// genuinely degraded and genuinely the operator's, which is what the default
-// says too). The rank is what proves the switch has a case for it: the
+// genuinely degraded and genuinely the company admin's, which is what the
+// default says too). The rank is what proves the switch has a case for it: the
 // default's rank sits between the short grant and the advisory, and no known
 // kind may land there.
 func TestEveryKnownKindIsRankedAndJudged(t *testing.T) {
@@ -256,12 +256,12 @@ func TestOutcomeTurnsOnTheActorNotThePhase(t *testing.T) {
 		want Outcome
 	}{
 		{"ready", Ready(), OutcomeSettled},
-		{"degraded on an admin", Report{Phase: PhaseDegraded, Actor: ActorAdmin}, OutcomeBlocked},
-		{"degraded on the operator", Report{Phase: PhaseDegraded, Actor: ActorOperator}, OutcomeBlocked},
+		{"degraded on a vendor admin", Report{Phase: PhaseDegraded, Actor: ActorVendorAdmin}, OutcomeBlocked},
+		{"degraded on the company admin", Report{Phase: PhaseDegraded, Actor: ActorAdmin}, OutcomeBlocked},
 		{"degraded on the engine", Report{Phase: PhaseDegraded, Actor: ActorEngine}, OutcomeWaiting},
 		{"activating on the vendor", Report{Phase: PhaseActivating, Actor: ActorProvider}, OutcomeWaiting},
 		{"provisioning", Report{Phase: PhaseProvisioning, Actor: ActorEngine}, OutcomeWaiting},
-		{"awaiting an admin", Report{Phase: PhaseAwaitingAdmin, Actor: ActorAdmin}, OutcomeBlocked},
+		{"awaiting a vendor admin", Report{Phase: PhaseAwaitingAdmin, Actor: ActorVendorAdmin}, OutcomeBlocked},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

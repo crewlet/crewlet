@@ -29,6 +29,12 @@ const (
 	// administrator has to approve, a GitHub App installation, the
 	// Atlassian Forge app. The engine cannot do it and retrying does not
 	// help, but it resumes on its own the moment they finish.
+	//
+	// The admin it awaits is the VENDOR's — its actor is [ActorVendorAdmin],
+	// never the company's [ActorAdmin]. The wire value is not renamed to
+	// match because it is not this engine's alone: it is the control plane's
+	// phase vocabulary (see [Phase.Label]), and the actor beside it is what
+	// says whose admin.
 	PhaseAwaitingAdmin Phase = "awaiting_admin"
 
 	// PhaseProvisioning means the engine is creating identities. Its own
@@ -156,28 +162,35 @@ const (
 	// ActorProvider means the third-party app is applying what it already accepted.
 	ActorProvider Actor = "provider"
 
-	// ActorAdmin means a person must act AT THE THIRD-PARTY APP: install
-	// the app, approve the scopes, widen the grant, remove access somebody
-	// else added. Watched briskly, because somebody told to install an app
-	// is usually installing it as they read, and the point of the loop is
-	// that it resumes without them pressing anything.
-	ActorAdmin Actor = "admin"
-
-	// ActorOperator means a person must change THIS DEPLOYMENT'S OWN
-	// configuration: a ${VAR} that resolves to nothing, a public base URL
-	// nothing set, a tier the company document spells wrong. Re-checked
-	// slowly, because nothing at the third-party app will ever change it and asking
-	// often only spends requests.
+	// ActorVendorAdmin means a person must act AT THE THIRD-PARTY APP:
+	// install the app, approve the scopes, widen the grant, remove access
+	// somebody else added — a Slack workspace admin, a GitHub organization
+	// owner, an Atlassian organization admin. Watched briskly, because
+	// somebody told to install an app is usually installing it as they read,
+	// and the point of the loop is that it resumes without them pressing
+	// anything.
 	//
-	// Separate from ActorAdmin even though both are "a person", because
-	// the two differ in the one way the cadence cares about: one is being
-	// done right now in another browser tab, and the other is waiting for
-	// somebody to edit a file.
-	ActorOperator Actor = "operator"
+	// VENDOR, because the bare word belongs to the company: "admin" is the
+	// role a person holds in THIS company, the one [ActorAdmin] names, and a
+	// value that spelled the vendor's person the same way would send the
+	// company's admin to a console they may hold no account on.
+	ActorVendorAdmin Actor = "vendor_admin"
+
+	// ActorAdmin means the company's own admin must change THIS
+	// DEPLOYMENT'S OWN configuration: a ${VAR} that resolves to nothing, a
+	// public base URL nothing set, a tier the company document spells
+	// wrong. Re-checked slowly, because nothing at the third-party app will
+	// ever change it and asking often only spends requests.
+	//
+	// Separate from ActorVendorAdmin even though both are "a person",
+	// because the two differ in the one way the cadence cares about: one is
+	// being done right now in another browser tab, and the other is waiting
+	// for somebody to edit the company's configuration.
+	ActorAdmin Actor = "admin"
 )
 
 // Actors is every actor, engine-owned work first.
-var Actors = []Actor{ActorNobody, ActorEngine, ActorProvider, ActorAdmin, ActorOperator}
+var Actors = []Actor{ActorNobody, ActorEngine, ActorProvider, ActorVendorAdmin, ActorAdmin}
 
 // Valid reports whether a is an actor this build knows.
 func (a Actor) Valid() bool { return slices.Contains(Actors, a) }
@@ -186,7 +199,7 @@ func (a Actor) Valid() bool { return slices.Contains(Actors, a) }
 func (a Actor) String() string { return string(a) }
 
 // WaitsOnAPerson reports whether the phase ends only when somebody acts.
-func (a Actor) WaitsOnAPerson() bool { return a == ActorAdmin || a == ActorOperator }
+func (a Actor) WaitsOnAPerson() bool { return a == ActorVendorAdmin || a == ActorAdmin }
 
 // Outcome is how the loop treats a report, and it exists so the cadence is
 // derived from one small closed set rather than from a phase switch repeated

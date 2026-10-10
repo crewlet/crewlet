@@ -110,7 +110,7 @@ func (r *Result) Findings() []integration.Finding {
 		// A seat with no usable account receives NO Jira events at all,
 		// which is the one finding this command exists to surface.
 		//
-		// AN ADMIN'S, and that is still right for everything that reaches
+		// A PERSON'S, and that is still right for everything that reaches
 		// here: a credential the instance refuses outside the grant window
 		// is one somebody has to look at, and a seat with no credential on
 		// a company whose Atlassian organization is not provisioning is a
@@ -144,8 +144,8 @@ func (r *Result) Findings() []integration.Finding {
 			// third-party app does not have" and whose fallback sentence
 			// says exactly that — a sentence about tiers, on a finding
 			// about a project key. A routing path that will not fix
-			// itself, owed by the admin who can grant the permission or
-			// correct the key, is FindingIngressBlocked.
+			// itself, owed by the Jira admin who can grant the permission
+			// or correct the key, is FindingIngressBlocked.
 			out = append(out, integration.Finding{
 				Kind:    integration.FindingIngressBlocked,
 				Subject: project.Key,

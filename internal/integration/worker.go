@@ -20,10 +20,10 @@ var log = logging.Get("integration")
 // Interval is how often the loop wakes to see what is due.
 //
 // Fifteen seconds, which is the FINEST CADENCE [Schedule] can ask for
-// ([Schedule.AdminBase]): a tick slower than that would make the shortest
-// wait in the system a lie, and the whole point of the brisk admin cadence is
-// that an operator who installs an app sees provisioning continue without
-// pressing anything.
+// ([Schedule.VendorAdminBase]): a tick slower than that would make the
+// shortest wait in the system a lie, and the whole point of the brisk
+// vendor-admin cadence is that somebody who installs an app at the vendor
+// sees provisioning continue without pressing anything.
 //
 // It is also what the control plane's own reconcile poll ticks at, and the
 // two cost about the same: a tick with nothing due is one duty claim and one
@@ -133,8 +133,8 @@ var ErrNotConfigured = errors.New("integration: this surface is not configured")
 //
 // A third-party app wraps this around its own error when it can tell the
 // difference (an auth probe that came back 401 or 403), and [Observe] then
-// reports the surface as the operator's to fix instead of folding it in with
-// the transport faults that clear on their own. Without it every refusal read
+// reports the surface as the company admin's to fix instead of folding it in
+// with the transport faults that clear on their own. Without it every refusal read
 // as "the engine is working on it", which is the one thing that is certainly
 // not happening: the credential will be refused identically on every pass
 // until a person changes it.
@@ -550,9 +550,9 @@ func (w *Worker) MarkStale() {
 //
 // # What this is for, and why it is not a write
 //
-// The cadence is a BACKOFF — [Schedule.Next] takes an admin-owed surface from
-// fifteen seconds to ten minutes — and the thing it is backing off from is
-// asking a person to do something at their third-party app. So the moment
+// The cadence is a BACKOFF — [Schedule.Next] takes a surface owed by a vendor
+// admin from fifteen seconds to ten minutes — and the thing it is backing off
+// from is asking a person to do something at their third-party app. So the moment
 // that person DOES it is exactly the moment the backoff is longest and most
 // wrong. Measured: an operator finished installing an agent's GitHub App in
 // about eight seconds and then watched the card ask them to install it for

@@ -601,12 +601,12 @@ func TestACheckWithNoSinkHasNothingToComplete(t *testing.T) {
 // and answers the invite with a 404 saying the account is not in the
 // directory. The next pass grants it; nobody has to do anything.
 //
-// It was reported as identity_failed, which classifies DEGRADED and owed by an
-// ADMIN — so the card read "Action required" and "you, at the third-party app"
-// about a seat no person could help, on the brisk admin cadence, over a
-// condition that clears itself within a minute. The sentence under it even
-// said what was really happening: "waiting for Atlassian to make its new
-// account grantable".
+// It was reported as identity_failed, which classifies DEGRADED and owed by a
+// VENDOR ADMIN — so the card read "Action required" and "you, at the
+// third-party app" about a seat no person could help, on the brisk
+// vendor-admin cadence, over a condition that clears itself within a minute.
+// The sentence under it even said what was really happening: "waiting for
+// Atlassian to make its new account grantable".
 //
 // grant_pending is the kind for exactly this, and until now nothing in the
 // tree produced it.
@@ -724,7 +724,7 @@ func TestASeatGrantedAndThenRefusedReportsTheFailureRatherThanAWait(t *testing.T
 		t.Errorf("detail = %q, want the vendor's refusal in it", got.Detail)
 	}
 	// AND THE VERDICT IS THE ONE THAT NAMES SOMEBODY.
-	if phase, actor := got.Kind.Verdict(); actor != integration.ActorAdmin {
-		t.Errorf("classified %s/%s, want an admin owed it", phase, actor)
+	if phase, actor := got.Kind.Verdict(); actor != integration.ActorVendorAdmin {
+		t.Errorf("classified %s/%s, want an Atlassian admin owed it", phase, actor)
 	}
 }

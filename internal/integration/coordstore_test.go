@@ -21,7 +21,7 @@ func TestCoordStoreRoundTrip(t *testing.T) {
 	want := State{
 		Kind: KindGitLab,
 		Report: Report{
-			Phase: PhaseDegraded, Actor: ActorAdmin,
+			Phase: PhaseDegraded, Actor: ActorVendorAdmin,
 			Detail: "ceo needs maintainer on api-gateway", ActionURL: "https://example.com/x",
 		},
 		Findings:      []Finding{{Kind: FindingGrantShort, Subject: "ceo", Detail: "needs maintainer"}},

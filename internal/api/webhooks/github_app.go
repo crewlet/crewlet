@@ -376,9 +376,9 @@ func (r *Receiver) githubAppLanding(w http.ResponseWriter, req *http.Request) {
 		// id and makes no claim, so the pass that follows is the same
 		// verified one, listing the app's own installations. What the
 		// arrival supplies is the TIMING, and the timing is the whole
-		// problem: an admin-owed surface backs off from fifteen seconds
-		// to ten minutes, so the instant a person finishes the thing the
-		// card is asking for is the instant the wait is longest. Measured:
+		// problem: a surface owed to a GitHub admin backs off from fifteen
+		// seconds to ten minutes, so the instant a person finishes the thing
+		// the card is asking for is the instant the wait is longest. Measured:
 		// an install done in about eight seconds, then several minutes of
 		// a card still asking for it, reloaded repeatedly, read as the
 		// install not having worked.

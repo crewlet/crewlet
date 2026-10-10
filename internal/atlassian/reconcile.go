@@ -86,10 +86,10 @@ type SeatResult struct {
 	// field exists. It used to travel in Err, with a sentence saying exactly
 	// what it is — "waiting for Atlassian to make its new account grantable"
 	// — and [Result.Findings] turns any Err into an identity_failed, which
-	// classifies as DEGRADED and owed by an ADMIN. So the card said "Action
-	// required" and "you, at the third-party app" about a seat nobody could
-	// do anything for, on the brisk admin cadence, over a condition the very
-	// next pass clears on its own.
+	// classifies as DEGRADED and owed by a VENDOR ADMIN. So the card said
+	// "Action required" and "you, at the third-party app" about a seat nobody
+	// could do anything for, on the brisk vendor-admin cadence, over a
+	// condition the very next pass clears on its own.
 	//
 	// Carried as a value so the classification cannot be lost again: an error
 	// string is a sentence a reader has to interpret, and every path that

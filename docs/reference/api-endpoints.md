@@ -1084,7 +1084,7 @@ A check **does** get `integrations.public_base_url`, and the `409
 no_public_base_url` refusal above is the writing route's alone. Withholding
 the address from a check made it report the wrong fact: a vendor handed no
 base reads that as *this deployment has no inbound address* and reports
-`ingress_blocked` owed by an admin — and a check records its findings through
+`ingress_blocked` owed by a person — and a check records its findings through
 the same fold as everything else, so pressing Check on a healthy company wrote
 "every monitor that fires reaches nobody" into the live status row and flipped
 the card to **Action required** over a value that was already set. Supplying

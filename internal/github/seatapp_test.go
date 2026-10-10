@@ -42,7 +42,7 @@ func TestASeatWithNoAppReportsTheClickThatIsLeft(t *testing.T) {
 	if got := kinds(res.Findings); len(got) != 1 || got[0] != string(integration.FindingApprovalRequired) {
 		t.Fatalf("findings = %v", got)
 	}
-	if phase, actor := res.Findings[0].Kind.Verdict(); actor != integration.ActorAdmin {
+	if phase, actor := res.Findings[0].Kind.Verdict(); actor != integration.ActorVendorAdmin {
 		t.Errorf("a seat needing an app waits on %v in phase %v, and only a "+
 			"person at GitHub can create one", actor, phase)
 	}

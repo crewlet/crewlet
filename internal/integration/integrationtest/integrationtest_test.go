@@ -165,7 +165,7 @@ func violations() []violation {
 				Converged: func(integrationtest.TB) integration.Reconciler { return compliant{} },
 				// Carries a detail, so the only clause it breaks is the
 				// one it is here for: an unknown kind is owed by the
-				// operator, and a detail-less one would trip the
+				// company's admin, and a detail-less one would trip the
 				// actionability clause as well.
 				Outstanding: world(integration.Finding{
 					Kind: integration.FindingKind("pager_rota_stale"), Subject: "ceo",

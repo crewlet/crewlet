@@ -24,20 +24,21 @@ type Schedule struct {
 	WaitingBase time.Duration
 	WaitingMax  time.Duration
 
-	// AdminBase and AdminMax bound the wait for something a person must do
-	// AT THE THIRD-PARTY APP. Short at first, because they are usually
-	// doing it as they read, and the point of the loop is that it resumes
-	// the moment they finish without them pressing anything. Stretching out
-	// is what stops a tab left open overnight costing a request every
-	// fifteen seconds until morning.
-	AdminBase time.Duration
-	AdminMax  time.Duration
+	// VendorAdminBase and VendorAdminMax bound the wait for something a
+	// person must do AT THE THIRD-PARTY APP ([ActorVendorAdmin]). Short at
+	// first, because they are usually doing it as they read, and the point
+	// of the loop is that it resumes the moment they finish without them
+	// pressing anything. Stretching out is what stops a tab left open
+	// overnight costing a request every fifteen seconds until morning.
+	VendorAdminBase time.Duration
+	VendorAdminMax  time.Duration
 
-	// Operator is how often an integration waiting on THIS DEPLOYMENT'S own
-	// configuration is retried. Flat and long: nothing at the third-party app will
-	// ever change it, so backing off buys nothing and asking often only
-	// spends requests against a credential that does not work.
-	Operator time.Duration
+	// Admin is how often an integration waiting on the company's admin to
+	// change THIS DEPLOYMENT'S own configuration ([ActorAdmin]) is retried.
+	// Flat and long: nothing at the third-party app will ever change it, so
+	// backing off buys nothing and asking often only spends requests
+	// against a credential that does not work.
+	Admin time.Duration
 }
 
 // DefaultSchedule is tuned to what the third-party apps actually do.
@@ -66,20 +67,20 @@ type Schedule struct {
 //     here. Starting shorter would poll a propagation delay, and capping
 //     higher would leave a company idle long after the third-party app was done.
 //
-//   - AdminBase at fifteen seconds is fast enough that "install the app"
-//     followed by installing the app looks immediate. AdminMax at ten
-//     minutes is where a person who has not acted in ten minutes is not
+//   - VendorAdminBase at fifteen seconds is fast enough that "install the
+//     app" followed by installing the app looks immediate. VendorAdminMax at
+//     ten minutes is where a person who has not acted in ten minutes is not
 //     acting right now.
 //
-//   - Operator at one hour catches a credential somebody fixed without
+//   - Admin at one hour catches a credential somebody fixed without
 //     telling anyone, at a cost of twenty-four failed calls a day.
 var DefaultSchedule = Schedule{
-	Settled:     10 * time.Minute,
-	WaitingBase: 30 * time.Second,
-	WaitingMax:  5 * time.Minute,
-	AdminBase:   15 * time.Second,
-	AdminMax:    10 * time.Minute,
-	Operator:    time.Hour,
+	Settled:         10 * time.Minute,
+	WaitingBase:     30 * time.Second,
+	WaitingMax:      5 * time.Minute,
+	VendorAdminBase: 15 * time.Second,
+	VendorAdminMax:  10 * time.Minute,
+	Admin:           time.Hour,
 }
 
 // WithDefaults fills anything left unset.
@@ -98,14 +99,14 @@ func (s Schedule) WithDefaults() Schedule {
 	if s.WaitingMax <= 0 {
 		s.WaitingMax = DefaultSchedule.WaitingMax
 	}
-	if s.AdminBase <= 0 {
-		s.AdminBase = DefaultSchedule.AdminBase
+	if s.VendorAdminBase <= 0 {
+		s.VendorAdminBase = DefaultSchedule.VendorAdminBase
 	}
-	if s.AdminMax <= 0 {
-		s.AdminMax = DefaultSchedule.AdminMax
+	if s.VendorAdminMax <= 0 {
+		s.VendorAdminMax = DefaultSchedule.VendorAdminMax
 	}
-	if s.Operator <= 0 {
-		s.Operator = DefaultSchedule.Operator
+	if s.Admin <= 0 {
+		s.Admin = DefaultSchedule.Admin
 	}
 	return s
 }
@@ -126,10 +127,10 @@ func (s Schedule) Next(report Report, attempts int) time.Duration {
 	switch {
 	case report.Phase == PhaseReady:
 		return s.Settled
+	case report.Actor == ActorVendorAdmin:
+		return backoff.Doubling(attempts, s.VendorAdminBase, s.VendorAdminMax)
 	case report.Actor == ActorAdmin:
-		return backoff.Doubling(attempts, s.AdminBase, s.AdminMax)
-	case report.Actor == ActorOperator:
-		return s.Operator
+		return s.Admin
 	default:
 		return backoff.Doubling(attempts, s.WaitingBase, s.WaitingMax)
 	}
@@ -145,10 +146,10 @@ type Cadence string
 
 // The four waits, one per branch of [Schedule.Next].
 const (
-	CadenceSettled  Cadence = "settled"
-	CadenceAdmin    Cadence = "admin"
-	CadenceOperator Cadence = "operator"
-	CadenceWaiting  Cadence = "waiting"
+	CadenceSettled     Cadence = "settled"
+	CadenceVendorAdmin Cadence = "vendor_admin"
+	CadenceAdmin       Cadence = "admin"
+	CadenceWaiting     Cadence = "waiting"
 )
 
 // CadenceOf is which wait a report is on. It mirrors [Schedule.Next]'s own
@@ -158,10 +159,10 @@ func CadenceOf(report Report) Cadence {
 	switch {
 	case report.Phase == PhaseReady:
 		return CadenceSettled
+	case report.Actor == ActorVendorAdmin:
+		return CadenceVendorAdmin
 	case report.Actor == ActorAdmin:
 		return CadenceAdmin
-	case report.Actor == ActorOperator:
-		return CadenceOperator
 	default:
 		return CadenceWaiting
 	}

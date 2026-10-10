@@ -1879,8 +1879,8 @@ func TestAPassWithNoOrgTokenStillReportsAMissingPublicBase(t *testing.T) {
 //
 // It emits no events, so a hook on it would be correct and pointless — the
 // reconcile says so deliberately. Reported as a refusal it parked the whole
-// integration in PhaseDegraded, retried on the admin backoff for ever, over a
-// repository somebody archived on purpose. The old shape could not tell the
+// integration in PhaseDegraded, retried on the vendor-admin backoff for ever,
+// over a repository somebody archived on purpose. The old shape could not tell the
 // two apart: both were an empty URL with prose in Detail.
 func TestAnArchivedRepositoryIsNotAFinding(t *testing.T) {
 	t.Parallel()

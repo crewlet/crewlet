@@ -1154,7 +1154,7 @@ func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 			return []integration.State{{
 				Kind: integration.KindGitLab,
 				Report: integration.Report{
-					Phase: integration.PhaseDegraded, Actor: integration.ActorAdmin,
+					Phase: integration.PhaseDegraded, Actor: integration.ActorVendorAdmin,
 					Detail:    "2 seats need maintainer on api-gateway",
 					ActionURL: "https://gitlab.example.com/api-gateway/-/settings",
 				},
@@ -2179,7 +2179,7 @@ func TestIntegrationsCarriesWhatTheReconcileLoopFound(t *testing.T) {
 				return []integration.State{{
 					Kind: integration.KindGitLab,
 					Report: integration.Report{
-						Phase: integration.PhaseDegraded, Actor: integration.ActorAdmin,
+						Phase: integration.PhaseDegraded, Actor: integration.ActorVendorAdmin,
 						Detail:    "ceo needs maintainer on api-gateway",
 						ActionURL: "https://gitlab.example.com/api-gateway/-/settings",
 					},
@@ -2197,8 +2197,8 @@ func TestIntegrationsCarriesWhatTheReconcileLoopFound(t *testing.T) {
 		if got == nil {
 			t.Fatalf("gitlab carries no reconcile status: %v", rows["gitlab"]["reconcile"])
 		}
-		if got["phase"] != "degraded" || got["actor"] != "admin" {
-			t.Errorf("phase/actor = %v/%v, want degraded/admin", got["phase"], got["actor"])
+		if got["phase"] != "degraded" || got["actor"] != "vendor_admin" {
+			t.Errorf("phase/actor = %v/%v, want degraded/vendor_admin", got["phase"], got["actor"])
 		}
 		if got["detail"] != "ceo needs maintainer on api-gateway" {
 			t.Errorf("detail = %v", got["detail"])
@@ -2215,8 +2215,8 @@ func TestIntegrationsCarriesWhatTheReconcileLoopFound(t *testing.T) {
 		// keeping a second copy of the closed set.
 		//
 		// These two findings are the discriminating pair: grant_short is a
-		// real problem owed by an admin, grant_excess is an ADVISORY on a
-		// working integration — same subject shape, same wire shape, and
+		// real problem owed by a vendor admin, grant_excess is an ADVISORY on
+		// a working integration — same subject shape, same wire shape, and
 		// nothing but the kind string to tell them apart until now. The
 		// dashboard guessed, treating any finding naming an agent as that
 		// agent not working, so one spare permission badged a healthy agent
@@ -2229,11 +2229,11 @@ func TestIntegrationsCarriesWhatTheReconcileLoopFound(t *testing.T) {
 			actor, _ := f["actor"].(string)
 			verdicts[kind] = [2]string{phase, actor}
 		}
-		if got := verdicts["grant_short"]; got != [2]string{"degraded", "admin"} {
-			t.Errorf("grant_short verdict = %v, want degraded/admin", got)
+		if got := verdicts["grant_short"]; got != [2]string{"degraded", "vendor_admin"} {
+			t.Errorf("grant_short verdict = %v, want degraded/vendor_admin", got)
 		}
-		if got := verdicts["grant_excess"]; got != [2]string{"ready", "admin"} {
-			t.Errorf("grant_excess verdict = %v, want ready/admin — an advisory "+
+		if got := verdicts["grant_excess"]; got != [2]string{"ready", "vendor_admin"} {
+			t.Errorf("grant_excess verdict = %v, want ready/vendor_admin — an advisory "+
 				"that reads as a fault reports a working agent as broken", got)
 		}
 		// A surface the loop has not reached is absent rather than

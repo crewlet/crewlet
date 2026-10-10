@@ -107,8 +107,8 @@ type Options struct {
 // and every agent seat on the current per-seat-app shape — where by design no
 // `mcp_env.github` token exists anywhere — became one
 // [integration.FindingIdentityFailed]. A healthy company sat in
-// [integration.PhaseDegraded] for ever, retried on the admin backoff, over a
-// credential the design had deliberately removed: the permanent note on a
+// [integration.PhaseDegraded] for ever, retried on the vendor-admin backoff,
+// over a credential the design had deliberately removed: the permanent note on a
 // card with nothing wrong with it that [Result.Findings] refuses one
 // paragraph up, arrived at from the other direction.
 //
@@ -189,8 +189,8 @@ func (s SeatIdentity) Refused() bool {
 // nobody and somebody has to widen a credential. A target with NOTHING TO
 // HOOK is not — an archived repository emits no events, so a hook on it
 // would be correct and pointless — and reporting it as a block put a company
-// permanently in [integration.PhaseDegraded], retried on the admin backoff
-// for ever, over a repository that is finished.
+// permanently in [integration.PhaseDegraded], retried on the vendor-admin
+// backoff for ever, over a repository that is finished.
 //
 // Both used to be "URL is empty, Detail says why", which is why the
 // distinction has to be a value rather than a convention: an empty URL is
@@ -922,7 +922,7 @@ func ensureRepoWebhook(
 		// correct and pointless. Saying so is what stops an operator
 		// debugging a repository that is finished — and the outcome is
 		// what stops the loop reporting the company degraded over it,
-		// for ever, on the admin backoff.
+		// for ever, on the vendor-admin backoff.
 		state.Outcome = HookSkipped
 		state.Detail = "archived, so it emits no events — no hook registered"
 		return state

@@ -10,43 +10,44 @@ import (
 // the actor, which is the property the whole schedule rests on.
 func TestNextTurnsOnTheActor(t *testing.T) {
 	s := DefaultSchedule
+	degradedVendorAdmin := Report{Phase: PhaseDegraded, Actor: ActorVendorAdmin}
 	degradedAdmin := Report{Phase: PhaseDegraded, Actor: ActorAdmin}
-	degradedOperator := Report{Phase: PhaseDegraded, Actor: ActorOperator}
 
+	vendorAdmin := s.Next(degradedVendorAdmin, 1)
 	admin := s.Next(degradedAdmin, 1)
-	operator := s.Next(degradedOperator, 1)
-	if admin != s.AdminBase {
-		t.Fatalf("a first admin wait is %s, want %s", admin, s.AdminBase)
+	if vendorAdmin != s.VendorAdminBase {
+		t.Fatalf("a first vendor-admin wait is %s, want %s", vendorAdmin, s.VendorAdminBase)
 	}
-	if operator != s.Operator {
-		t.Fatalf("an operator wait is %s, want the flat %s", operator, s.Operator)
+	if admin != s.Admin {
+		t.Fatalf("an admin wait is %s, want the flat %s", admin, s.Admin)
 	}
-	if admin >= operator {
+	if vendorAdmin >= admin {
 		t.Fatalf("a person acting at the third-party app (%s) is not watched more "+
-			"closely than a config nobody has edited (%s)", admin, operator)
+			"closely than a config nobody has edited (%s)", vendorAdmin, admin)
 	}
 }
 
-// An operator wait is FLAT. Backing it off buys nothing, because nothing at
-// the third-party app will ever change a ${VAR} this deployment did not set, and a
-// stretching interval only delays noticing the moment somebody does.
-func TestOperatorWaitDoesNotBackOff(t *testing.T) {
+// A wait on the company's admin is FLAT. Backing it off buys nothing,
+// because nothing at the third-party app will ever change a ${VAR} this
+// deployment did not set, and a stretching interval only delays noticing the
+// moment somebody does.
+func TestAdminWaitDoesNotBackOff(t *testing.T) {
 	s := DefaultSchedule
-	report := Report{Phase: PhaseUnconfigured, Actor: ActorOperator}
+	report := Report{Phase: PhaseUnconfigured, Actor: ActorAdmin}
 	for _, attempts := range []int{1, 2, 10, 1000} {
-		if got := s.Next(report, attempts); got != s.Operator {
-			t.Fatalf("after %d attempts the operator wait is %s, want %s",
-				attempts, got, s.Operator)
+		if got := s.Next(report, attempts); got != s.Admin {
+			t.Fatalf("after %d attempts the admin wait is %s, want %s",
+				attempts, got, s.Admin)
 		}
 	}
 }
 
-// A wait on a person starts brisk and stretches out. Somebody told to install
-// an app is usually installing it as they read; somebody who has not acted in
-// ten minutes is not acting right now.
-func TestAdminWaitDoublesAndCaps(t *testing.T) {
+// A wait on a person AT THE VENDOR starts brisk and stretches out. Somebody
+// told to install an app is usually installing it as they read; somebody who
+// has not acted in ten minutes is not acting right now.
+func TestVendorAdminWaitDoublesAndCaps(t *testing.T) {
 	s := DefaultSchedule
-	report := Report{Phase: PhaseAwaitingAdmin, Actor: ActorAdmin}
+	report := Report{Phase: PhaseAwaitingAdmin, Actor: ActorVendorAdmin}
 
 	var previous time.Duration
 	for attempts := 1; attempts <= 20; attempts++ {
@@ -55,8 +56,8 @@ func TestAdminWaitDoublesAndCaps(t *testing.T) {
 			t.Fatalf("attempt %d produced a wait of %s, which every caller "+
 				"reads as already due", attempts, got)
 		}
-		if got > s.AdminMax {
-			t.Fatalf("attempt %d produced %s, past the %s ceiling", attempts, got, s.AdminMax)
+		if got > s.VendorAdminMax {
+			t.Fatalf("attempt %d produced %s, past the %s ceiling", attempts, got, s.VendorAdminMax)
 		}
 		if got < previous {
 			t.Fatalf("attempt %d produced %s, shorter than the previous %s",
@@ -64,8 +65,8 @@ func TestAdminWaitDoublesAndCaps(t *testing.T) {
 		}
 		previous = got
 	}
-	if previous != s.AdminMax {
-		t.Fatalf("twenty attempts settled at %s, want the %s ceiling", previous, s.AdminMax)
+	if previous != s.VendorAdminMax {
+		t.Fatalf("twenty attempts settled at %s, want the %s ceiling", previous, s.VendorAdminMax)
 	}
 }
 
@@ -102,8 +103,8 @@ func TestWithDefaultsFillsEveryField(t *testing.T) {
 	if custom.Settled != time.Minute {
 		t.Fatalf("a set Settled became %s", custom.Settled)
 	}
-	if custom.Operator != DefaultSchedule.Operator {
-		t.Fatalf("setting one field cleared another: Operator is %s", custom.Operator)
+	if custom.Admin != DefaultSchedule.Admin {
+		t.Fatalf("setting one field cleared another: Admin is %s", custom.Admin)
 	}
 }
 
@@ -112,22 +113,23 @@ func TestWithDefaultsFillsEveryField(t *testing.T) {
 func TestDefaultScheduleIsOrdered(t *testing.T) {
 	s := DefaultSchedule
 	switch {
-	case s.AdminBase >= s.AdminMax:
-		t.Errorf("AdminBase %s is not below AdminMax %s", s.AdminBase, s.AdminMax)
+	case s.VendorAdminBase >= s.VendorAdminMax:
+		t.Errorf("VendorAdminBase %s is not below VendorAdminMax %s",
+			s.VendorAdminBase, s.VendorAdminMax)
 	case s.WaitingBase >= s.WaitingMax:
 		t.Errorf("WaitingBase %s is not below WaitingMax %s", s.WaitingBase, s.WaitingMax)
-	case s.AdminBase >= s.WaitingBase:
+	case s.VendorAdminBase >= s.WaitingBase:
 		t.Errorf("a person acting now (%s) is watched no more closely than a "+
-			"third-party app applying a grant (%s)", s.AdminBase, s.WaitingBase)
-	case s.Operator <= s.AdminMax:
+			"third-party app applying a grant (%s)", s.VendorAdminBase, s.WaitingBase)
+	case s.Admin <= s.VendorAdminMax:
 		t.Errorf("an unedited config (%s) is retried as often as a person "+
-			"mid-install (%s)", s.Operator, s.AdminMax)
+			"mid-install (%s)", s.Admin, s.VendorAdminMax)
 	}
 	// Interval has to be no coarser than the finest wait the schedule can
 	// ask for, or that wait is a claim the loop cannot keep.
-	if Interval > s.AdminBase {
+	if Interval > s.VendorAdminBase {
 		t.Errorf("the loop ticks every %s but the schedule asks for %s",
-			Interval, s.AdminBase)
+			Interval, s.VendorAdminBase)
 	}
 }
 
@@ -138,10 +140,10 @@ func TestDefaultScheduleIsOrdered(t *testing.T) {
 // straight into another. A surface that spent ten ticks waiting on the engine
 // entered the wait for a PERSON already at its ceiling.
 //
-// That is the one cadence where the ceiling is wrong. The brisk admin
-// interval exists so an operator who installs an app sees provisioning
-// continue without pressing anything, and inherited attempts skipped every
-// fast retry: the screen would not move for ten minutes.
+// That is the one cadence where the ceiling is wrong. The brisk vendor-admin
+// interval exists so somebody who installs an app at the vendor sees
+// provisioning continue without pressing anything, and inherited attempts
+// skipped every fast retry: the screen would not move for ten minutes.
 func TestTheBackoffRestartsWhenTheWaitChanges(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
@@ -165,11 +167,11 @@ func TestTheBackoffRestartsWhenTheWaitChanges(t *testing.T) {
 	state, _ = Observe(state, KindGitHub,
 		[]Finding{{Kind: FindingApprovalRequired}}, nil, now)
 
-	admin := schedule.Next(state.Report, state.Attempts)
-	if admin > 2*schedule.AdminBase {
-		t.Errorf("the first wait for a person is %s, want it near %s: an operator "+
-			"installing the app sees nothing happen for %s",
-			admin, schedule.AdminBase, admin)
+	vendorAdmin := schedule.Next(state.Report, state.Attempts)
+	if vendorAdmin > 2*schedule.VendorAdminBase {
+		t.Errorf("the first wait for a person is %s, want it near %s: a vendor "+
+			"admin installing the app sees nothing happen for %s",
+			vendorAdmin, schedule.VendorAdminBase, vendorAdmin)
 	}
 }
 

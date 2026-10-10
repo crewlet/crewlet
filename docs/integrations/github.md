@@ -261,7 +261,7 @@ sequenceDiagram
 
 An agent's App is **private**, so GitHub sends this engine nothing when you install it — there is no webhook for it to arrive on, and the reconcile loop is what finds the installation, by listing the App's own installations with the App's own key.
 
-That discovery used to wait out the loop's admin backoff, which runs from fifteen seconds to **ten minutes**, and the backoff is longest exactly when you have just done the thing it is waiting for. Measured: an install completed in about eight seconds, then several minutes of a card still asking for it, reloaded by hand, reasonably read as the install not having worked.
+That discovery used to wait out the loop's vendor-admin backoff, which runs from fifteen seconds to **ten minutes**, and the backoff is longest exactly when you have just done the thing it is waiting for. Measured: an install completed in about eight seconds, then several minutes of a card still asking for it, reloaded by hand, reasonably read as the install not having worked.
 
 Two things now close that gap:
 
@@ -778,7 +778,7 @@ The second is that **an agent's own app is a registrar too**. Even a company tha
 
 A company whose events arrive through its agents' own apps gets one sentence on a **ready** card: *covering the repositories your agents' apps are installed on. Not covering the rest of `<org>` — supply `integrations.github.token` to add one organization-wide hook.*
 
-It is a `coverage_partial` finding, whose verdict is ready and whose actor is the **operator**: nothing is broken, and widening it is a value in this company's own configuration rather than a grant somebody at GitHub has to make. The two alternatives were both worse. Reported as `ingress_blocked` it read as Action required over agents that were working. Reported as a *note* it reached nobody at all — the engine's pass returns findings and discards notes, so a person would learn the limits of their coverage only by noticing the first repository nobody hears about.
+It is a `coverage_partial` finding, whose verdict is ready and whose actor is an **admin** — the company's own: nothing is broken, and widening it is a value in this company's own configuration rather than a grant somebody at GitHub has to make. The two alternatives were both worse. Reported as `ingress_blocked` it read as Action required over agents that were working. Reported as a *note* it reached nobody at all — the engine's pass returns findings and discards notes, so a person would learn the limits of their coverage only by noticing the first repository nobody hears about.
 
 The same sentence covers the company that chose this arrangement and the one left on `org_webhook: true` with no token, because the two are the same arrangement whatever the mode field says. And it never prescribes installing an app: that cannot widen it.
 

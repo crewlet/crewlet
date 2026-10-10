@@ -371,8 +371,8 @@ func TestTheCoverageIsStatedOnAReadyCard(t *testing.T) {
 			"admin:org_hook:\n%s", remedy)
 	}
 	if phase, actor := got.Kind.Verdict(); phase != integration.PhaseReady ||
-		actor != integration.ActorOperator {
-		t.Errorf("verdict is %s/%s, want ready and the operator's: widening "+
+		actor != integration.ActorAdmin {
+		t.Errorf("verdict is %s/%s, want ready and the company admin's: widening "+
 			"this is a value in the company's own configuration", phase, actor)
 	}
 }

@@ -36,7 +36,7 @@ func toolNamed(t *testing.T, key string) Tool {
 func TestTheRollupTable(t *testing.T) {
 	t.Parallel()
 	ready := Report{Phase: PhaseReady}
-	degraded := Report{Phase: PhaseDegraded, Actor: ActorAdmin, Detail: "swe has no Jira account"}
+	degraded := Report{Phase: PhaseDegraded, Actor: ActorVendorAdmin, Detail: "swe has no Jira account"}
 	activating := Report{Phase: PhaseActivating, Actor: ActorEngine, Detail: "coming up"}
 	expiry := Finding{
 		Kind: FindingCredentialExpiring, Subject: "integrations.gitlab.provisioning.admin_token",
@@ -133,7 +133,7 @@ func TestTheRollupTable(t *testing.T) {
 		// tool being removed is not one anybody should be sent to fix.
 		name: "a teardown outranks a failing surface", tool: "atlassian",
 		present: []SurfaceStatus{
-			reported("jira", Report{Phase: PhaseUnconfigured, Actor: ActorOperator}),
+			reported("jira", Report{Phase: PhaseUnconfigured, Actor: ActorAdmin}),
 			func() SurfaceStatus {
 				s := reported("confluence", ready)
 				s.State.Disconnecting = true

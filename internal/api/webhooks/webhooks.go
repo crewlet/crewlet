@@ -109,9 +109,10 @@ type Options struct {
 	// the moment a person finishes installing an agent's app there.
 	//
 	// Nil waits out the cadence, which is what happened before this
-	// existed: an admin-owed surface backs off from fifteen seconds to ten
-	// minutes ([integration.Schedule]), so the instant somebody DOES the
-	// thing the card is asking for is the instant the wait is longest.
+	// existed: a surface owed to a GitHub admin backs off from fifteen
+	// seconds to ten minutes ([integration.Schedule]), so the instant
+	// somebody DOES the thing the card is asking for is the instant the wait
+	// is longest.
 	Recheck GitHubRechecker
 
 	// Claims is the FLEET-WIDE dedupe.

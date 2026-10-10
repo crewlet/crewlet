@@ -52,8 +52,9 @@ func (e *Engine) Company() *Company { return e.epoch.current.Load() }
 // FOR THE MOMENT A PERSON FINISHES SOMETHING THERE. Installing an agent's App
 // is a click at GitHub that this engine cannot perform and cannot be told
 // about — an agent's App is private, so it sends no webhook here — so the
-// card asking for it is owed to an admin, and an admin-owed surface backs off
-// from fifteen seconds to ten minutes ([integration.Schedule]). The instant
+// card asking for it is owed to a GitHub admin, and a surface owed to a
+// vendor's admin backs off from fifteen seconds to ten minutes
+// ([integration.Schedule]). The instant
 // somebody DOES it is therefore the instant the wait is longest and least
 // deserved: measured at an install completed in about eight seconds, followed
 // by minutes of a card still asking for it.
