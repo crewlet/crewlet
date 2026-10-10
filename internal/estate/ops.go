@@ -19,9 +19,9 @@ import (
 // Declared here, by the consumer, and kept to exactly what the operations
 // below call — the seat surface's tools, and the operator's own surfaces: the
 // dashboard and REST routes and the operator's MCP. Those reach the estate
-// through this node's router as a seat's tools do, so a node whose copy is out
-// of service answers its operator from a peer's copy rather than its own, and a
-// node holding no data serves them at all.
+// through this node's router as a seat's tools do, so a node whose copy of the
+// operation's domain is out of service answers its operator from a peer's copy
+// rather than its own, and a node holding no data serves them at all.
 
 // TrackerReader is the tracker's read side the surfaces ask of.
 type TrackerReader interface {
@@ -171,13 +171,15 @@ type Backend struct {
 	// position — the floor every request carries, the node's own included.
 	Committed func(ctx context.Context, at statelog.Position) error
 
-	// Answers is whether this copy may answer a request now
-	// ([statelog.Health.Answers]): serving — drained since its appliers
-	// started and within the snapshot slack of every log's end — or level
-	// this instant. A copy that does not LAGS: it is asked only once every
-	// data node whose copy does not has run nothing, by a remote asker and
-	// by this node's own router alike — a worse node to ask, never no node
-	// ([Router.route]).
+	// Answers is whether this copy OF THE OPERATION'S DOMAIN may answer a
+	// request now ([statelog.Health.Answers]): serving — drained since its
+	// applier started and within the snapshot slack of its log's end — or
+	// level this instant. A copy that does not LAGS: it is asked only once
+	// every data node whose copy does not has run nothing, by a remote asker
+	// and by this node's own router alike — a worse node to ask, never no
+	// node ([Router.route]). A lagging knowledge base never holds back a
+	// tracker read (ADR-0031), for the reason a floor on another domain's log
+	// is not waited for ([ready]).
 	//
 	// NOT A SEAT'S ADMISSION, which refuses at a lag of one: a busy
 	// company has a record in flight on most instants, and a request gate
@@ -187,8 +189,9 @@ type Backend struct {
 	Answers func(ctx context.Context) bool
 
 	// Admits is whether a SEAT may attach to this copy now: established at
-	// a lag of zero — the gate every node's seat admission asks of the copy
-	// that will serve it ([Router.Serves]). Only admission's ping reads it.
+	// a lag of zero on every domain that gates seat admission — the gate
+	// every node's seat admission asks of the copy that will serve it
+	// ([Router.Serves]). Only admission's ping reads it.
 	Admits func(ctx context.Context) bool
 
 	// ServerSeams are the node's own: the dispatcher sets them on every
@@ -218,9 +221,21 @@ var errNoHalf = errors.New("estate: this node runs no native backend for this op
 // ([Backend.Admits]): nothing ran, and the asker moves on.
 var errNotAdmitting = errors.New("estate: this copy admits no seat yet")
 
-// The domains an operation's floor may be on, and each one's stream, from the
-// domain's own declaration. An operation's floor is on its OWN domain's log and
-// no other: see [ready].
+// SeatCopy is the domain an operation names when what it asks about is the
+// copy a SEAT is served by, rather than one domain's: every domain whose health
+// gates seat admission ([statelog.Domain.GatesSeatAdmission]) in service at
+// once (ADR-0031). Admission's ping names it ([opPing]), and so does
+// [Router.Serves].
+//
+// EMPTY, and no operation that reads a domain's rows may name it: the gate over
+// the registry holds every other operation to a domain this package knows
+// (TestEveryOperationNamesTheCopyItReads).
+const SeatCopy = ""
+
+// The domains an operation may read, and each one's log — the one its floor is
+// on unless it is floorless ([op.floorless]), from the domain's own
+// declaration. An operation's floor is on its OWN domain's log and no other:
+// see [ready].
 var (
 	trackerDomain = tracker.Domain{}.Name()
 	pagesDomain   = pages.Domain{}.Name()
@@ -437,16 +452,18 @@ type workSearchArgs struct {
 	Mode knowledge.Mode
 }
 
-// THE RANKED SEARCH CARRIES NO FLOOR: it reads the lexical index, which each
-// node's own walk maintains on its own schedule behind the applier, so a floor
-// on the log would promise a visibility the index does not give.
-var opWorkSearch = define("tracker.search", opRead, "", false,
+// THE RANKED SEARCH READS THE INDEX OVER THE TRACKER'S ROWS, so it runs only on
+// a copy whose tracker is in service — and it CARRIES NO FLOOR: the lexical
+// index is maintained by each node's own walk on its own schedule behind the
+// applier, so a floor on the log would promise a visibility the index does not
+// give.
+var opWorkSearch = define("tracker.search", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a workSearchArgs) (tracker.SearchAnswer, error) {
 		if b.WorkSearch == nil {
 			return tracker.SearchAnswer{}, errNoHalf
 		}
 		return b.WorkSearch.Search(ctx, tracker.SearchQuery{Text: a.Text, Limit: a.Limit, Mode: a.Mode})
-	})
+	}).floorless()
 
 type workloadArgs struct {
 	Query tracker.WorkloadQuery
@@ -1251,25 +1268,28 @@ func (a knowledgeArgs) query(b Backend) knowledge.Query {
 	return q
 }
 
-// THE KNOWLEDGE SEARCH CARRIES NO FLOOR, for [opWorkSearch]'s reason: it
-// reads the index, which no log position describes.
-var opKnowledgeSearch = define("knowledge.search", opRead, "", false,
+// THE KNOWLEDGE SEARCH READS THE INDEX OVER THE KNOWLEDGE BASE'S ROWS, so it
+// runs only on a copy whose knowledge base is in service — and it carries no
+// floor, for [opWorkSearch]'s reason: the index is one no log position
+// describes.
+var opKnowledgeSearch = define("knowledge.search", opRead, pagesDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a knowledgeArgs) (knowledge.Result, error) {
 		if b.Knowledge == nil {
 			return knowledge.Result{}, errNoHalf
 		}
 		return b.Knowledge.Answer(ctx, a.query(b))
-	})
+	}).floorless()
 
 // WHETHER THE INDEX IS STILL BUILDING, which is what turns an empty search into
-// "still indexing" — asked, like the search, of the index rather than the log.
-var opKnowledgeBuilding = define("knowledge.building", opRead, "", false,
+// "still indexing" — asked, like the search, of the index over the knowledge
+// base's rows rather than of the log.
+var opKnowledgeBuilding = define("knowledge.building", opRead, pagesDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, _ struct{}) (bool, error) {
 		if b.Knowledge == nil {
 			return false, errNoHalf
 		}
 		return b.Knowledge.Building(ctx), nil
-	})
+	}).floorless()
 
 // served is what a node runs, as a seat's admission asks it.
 type served struct {
@@ -1282,14 +1302,16 @@ type served struct {
 // copy that does not is passed over, like a node that ran nothing — see
 // [Router.Serves].
 //
-// NO FLOOR, and past the serving gate on purpose: it asks whether the copy is
-// ready for a seat, which is its own stricter gate, not whether it has
-// reached this node's writes. And NO ARGUMENTS: the one estate is the only
-// thing it can be about.
-var opPing = define("estate.ping", opRead, "", false,
+// IT ASKS THE SEAT COPY ([SeatCopy]): a data node one of whose seat-gating
+// domains is out of service answers `out_of_service`, and a wrong copy of any
+// other domain withholds nothing. NO FLOOR, and past the serving gate on
+// purpose: it asks whether the copy is ready for a seat, which is its own
+// stricter gate, not whether it has reached this node's writes. And NO
+// ARGUMENTS: the one estate is the only thing it can be about.
+var opPing = define("estate.ping", opRead, SeatCopy, false,
 	func(ctx context.Context, b Backend, _ *Actor, _ struct{}) (served, error) {
 		if b.Admits != nil && !b.Admits(ctx) {
 			return served{}, errNotAdmitting
 		}
 		return served{Tracker: b.Tracker != nil, Pages: b.Pages != nil}, nil
-	}).ungated()
+	}).floorless().ungated()

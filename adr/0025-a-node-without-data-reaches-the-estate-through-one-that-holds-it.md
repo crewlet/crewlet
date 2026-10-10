@@ -98,3 +98,5 @@ leases, a data node's reads waiting on its floors, and the request gate asking
 whether a copy lags rather than whether it is level this instant — and choosing
 a lagging copy last rather than never.
 `internal/estate` states the rules; the authority and the gate are unchanged.
+
+A copy goes out of service one DOMAIN at a time — ADR-0031.

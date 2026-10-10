@@ -227,6 +227,14 @@ Four of them are worth coming back to **this** node for — `behind`,
 distinction is in the code rather than in a retry loop's guesswork: a caller
 that retried `deferred` would loop forever.
 
+Every refusal is about **one domain's copy**. A node whose tracker copy refuses
+`stalled` or `below_floor` still answers knowledge-base reads from its own
+pages, and the estate's router sends a seat's call on the tracker to a data
+node whose copy of the tracker is in service, while the node's other logs keep
+answering here
+([ADR-0031](https://github.com/crewlet/crewlet/blob/main/adr/0031-a-domains-fault-takes-only-its-own-copy-out-of-service.md);
+see [how a request reaches the estate](../concepts/scaling.md#how-a-request-reaches-the-estate)).
+
 ## Completeness is a different fact from freshness
 
 Every set answer carries **`complete`** beside its level, and the two fail

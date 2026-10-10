@@ -136,7 +136,7 @@ func (loggerProbe) Tables() map[string]TableClass     { return nil }
 func (loggerProbe) DeferredTable() string             { return "logger_probe_deferred" }
 func (loggerProbe) ScopeIndex() string                { return "logger_probe_scope" }
 func (loggerProbe) OpsTable() string                  { return "" }
-func (loggerProbe) ReadinessInput() bool              { return false }
+func (loggerProbe) GatesSeatAdmission() bool          { return false }
 func (loggerProbe) ClaimsIdentity() bool              { return false }
 func (loggerProbe) FeedGroup() string                 { return "" }
 

@@ -44,9 +44,9 @@ const (
 
 	// FloorBelow is below the log itself: the next record this node needs
 	// has been removed, so its rows are missing state no replay can
-	// supply. Reads and writes both refuse, the node stops serving its
-	// copy (its seats read the estate from another data node), and it
-	// adopts a peer's snapshot.
+	// supply. Reads and writes both refuse, the node takes its copy of
+	// this domain out of service (its operations go to another data node,
+	// and its seats stay — ADR-0031), and it adopts a peer's snapshot.
 	FloorBelow
 
 	// FloorUnknown is the fourth value, and it takes the SAME branch as
@@ -174,8 +174,8 @@ func Replayable(checkpoint, first uint64) bool {
 
 // ApplyRetryBudget is how long a transient apply error is retried in place
 // before the applier reports itself faulted — which its readers treat as
-// stalled: reads refuse naming the error, and the node stops serving its copy
-// until a retry succeeds.
+// stalled: reads refuse naming the error, and the node takes its copy of that
+// domain out of service until a retry succeeds.
 //
 // HALF THE STALL GRACE, deliberately: a retry that outlasted the grace would
 // let a node report itself healthy while it made no progress, and one much
@@ -436,10 +436,11 @@ func (h Health) AheadOfLog() bool {
 	return h.LastSeq != nil && pastEnd(h.Position.Seq, *h.LastSeq)
 }
 
-// Healthy reports whether this copy of the domain's log is SOUND — the copy
-// its node may keep serving the estate from. One that is not stops serving,
-// and the node's seats read the estate from the other data nodes; the seats
-// themselves stay, since a copy being wrong is no fault of theirs.
+// Healthy reports whether this copy of the domain's log is SOUND — the copy its
+// node may keep serving that DOMAIN's operations from. One that is not goes out
+// of service for that domain alone (ADR-0031): its operations go to the other
+// data nodes, every other domain's copy keeps serving, and the node's seats
+// stay, since a copy being wrong is no fault of theirs.
 //
 // # It answers "is this copy WRONG", never "is this copy BEHIND"
 //
@@ -485,22 +486,41 @@ func (h Health) AheadOfLog() bool {
 // A compacted domain's coverage does not make it false either: a derived row's
 // gaps are the compaction policy working.
 func (h Health) Healthy(now time.Time, deferredSince DeferredSince) bool {
+	return h.Fault(now, deferredSince) == ""
+}
+
+// Fault is WHY this copy is wrong ([Health.Healthy] false), or empty while it
+// is sound: the refusal its reads answer for the same state, in
+// [Health.Refusal]'s order, and [RefuseDeferred] for a record held past the
+// deferral grace, which no read refuses on by itself. It is what the line
+// announcing a copy going out of service names, because WHICH fault holds is
+// what an operator acts on — an eviction is lifted, a copy below its log
+// adopts a snapshot, an undecodable record needs an upgrade.
+//
+// ONE LIST, the one [Health.Healthy] reads: a reason computed beside the
+// predicate rather than by it would be a second opinion about one copy.
+func (h Health) Fault(now time.Time, deferredSince DeferredSince) ReadRefusal {
 	floor := h.Floor.Effective(now)
-	if h.Err != "" || h.Evicted || floor == FloorBelow || floor == FloorUnknown ||
-		h.AheadOfLog() || h.StreamRecreated || h.GenerationPassed || h.LogDiverged {
-		return false
-	}
+	switch {
+	case h.Evicted:
+		return RefuseEvicted
+	case floor == FloorUnknown:
+		return RefuseFloorUnknown
+	case floor == FloorBelow:
+		return RefuseBelowFloor
+	case h.AheadOfLog() || h.StreamRecreated || h.GenerationPassed || h.LogDiverged:
+		return RefuseWrongStream
 	// A FROZEN PREFIX, which is the one term here that a lag resembles and
 	// is not: a node that owes progress and has made none for the stall
 	// grace answers every expectation out of rows that stopped, where a
-	// node that is merely behind is applying its way out of it.
-	if h.Stalled {
-		return false
+	// node that is merely behind is applying its way out of it. An applier
+	// that stopped, or has faulted past its budget, is the same report.
+	case h.Err != "" || h.Stalled:
+		return RefuseStalled
+	case h.Deferred > 0 && deferredSince.Held && now.Sub(deferredSince.Since) > DeferralGrace:
+		return RefuseDeferred
 	}
-	if h.Deferred > 0 && deferredSince.Held && now.Sub(deferredSince.Since) > DeferralGrace {
-		return false
-	}
-	return true
+	return ""
 }
 
 // Established is the two-sided inequality plus a drain, and it is

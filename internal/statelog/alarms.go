@@ -47,8 +47,9 @@ const (
 	StallGrace = 60 * time.Second
 
 	// DeferralGrace is how long a node may hold records it could not
-	// apply before it stops serving its copy of the estate — its seats
-	// stay, and read the estate from the other data nodes. The alarm and
+	// apply before its copy of that log goes out of service — its seats
+	// stay, and that log's operations go to the other data nodes
+	// (ADR-0031). The alarm and
 	// that step share the number deliberately: an operator who sees this
 	// alarm has thirty minutes, and one who sees a different number has no
 	// idea how long they have.
@@ -443,9 +444,9 @@ var table = []rule{
 			"domain and its position. A node that is behind keeps the seats it " +
 			"holds and claims no new ones. Only if its position stops moving for " +
 			"the stall grace, or it holds a record it cannot decode past the " +
-			"deferral grace, is its copy wrong rather than behind: it then stops " +
-			"serving its copy of the estate, and its seats stay and read the " +
-			"estate from the other data nodes until the copy recovers.",
+			"deferral grace, is its copy wrong rather than behind: that log's copy " +
+			"then goes out of service, and its operations go to the other data " +
+			"nodes until the copy recovers; the node's seats stay.",
 	},
 	{
 		kind: KindReadRefusals,
@@ -533,13 +534,14 @@ var table = []rule{
 		kind: KindDeferredOld,
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("the oldest record this node cannot apply is %s old, "+
-					"and it stops serving its copy of the estate at %s", spoken(r.DeferredAge),
-					spoken(DeferralGrace)),
+					"and the copy of the log holding it goes out of service at %s",
+					spoken(r.DeferredAge), spoken(DeferralGrace)),
 				r.DeferredAge > DeferralGrace
 		},
 		remedy: "This node is running a build that cannot decode records its peers " +
-			"are writing. Upgrade it; it has already stopped serving its copy of " +
-			"the estate, and its seats read the estate from the other data nodes.",
+			"are writing. Upgrade it; its copy of that log has already gone out " +
+			"of service, and that log's operations are answered by the other data " +
+			"nodes.",
 	},
 	{
 		kind: KindFloorUnknown,

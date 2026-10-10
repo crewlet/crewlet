@@ -273,12 +273,12 @@ func (controlBase) Tables() map[string]statelog.TableClass {
 	}
 }
 
-func (controlBase) DeferredTable() string { return "control_log_deferred" }
-func (controlBase) ScopeIndex() string    { return "control_deferred_scope" }
-func (controlBase) OpsTable() string      { return "control_ops" }
-func (controlBase) ReadinessInput() bool  { return true }
-func (controlBase) ClaimsIdentity() bool  { return true }
-func (controlBase) FeedGroup() string     { return "" }
+func (controlBase) DeferredTable() string    { return "control_log_deferred" }
+func (controlBase) ScopeIndex() string       { return "control_deferred_scope" }
+func (controlBase) OpsTable() string         { return "control_ops" }
+func (controlBase) GatesSeatAdmission() bool { return true }
+func (controlBase) ClaimsIdentity() bool     { return true }
+func (controlBase) FeedGroup() string        { return "" }
 
 // controlDomain is the identity-claiming control: the base, plus the eviction
 // record and table every domain the trim counts nodes on has to have.
@@ -356,9 +356,9 @@ func (c compactedControl) Stream() statelog.StreamSpec {
 	return s
 }
 
-func (compactedControl) OpsTable() string     { return "" }
-func (compactedControl) ReadinessInput() bool { return false }
-func (compactedControl) ClaimsIdentity() bool { return false }
+func (compactedControl) OpsTable() string         { return "" }
+func (compactedControl) GatesSeatAdmission() bool { return false }
+func (compactedControl) ClaimsIdentity() bool     { return false }
 
 func (compactedControl) Tables() map[string]statelog.TableClass {
 	return map[string]statelog.TableClass{
@@ -459,6 +459,14 @@ func TestTheSuiteCatchesADomainThatMisdeclaresItself(t *testing.T) {
 		},
 		"an operation ledger scrubbed out of every snapshot": {
 			domain: scrubbedLedger{controlDomain{}}, names: "must be divergent",
+		},
+		"a compacted domain that gates seat admission": {
+			domain: gatingCompacted{compactedControl{}},
+			names:  "gates seat admission and replays compacted",
+		},
+		"a domain with no operation ledger that gates seat admission": {
+			domain: ledgerlessGate{controlDomain{}},
+			names:  "keeps no operation ledger and gates seat admission",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -809,6 +817,40 @@ type scrubbedLedger struct{ controlDomain }
 func (scrubbedLedger) Tables() map[string]statelog.TableClass {
 	tables := controlDomain{}.Tables()
 	tables["control_ops"] = statelog.Local
+	return tables
+}
+
+// gatingCompacted is the compacted control claiming that a seat depends on
+// it — with an operation ledger, so the only rule it breaks is that one: a
+// compacted domain's gap is a coverage number, and admission waiting on it
+// withholds every seat claim on a node over one.
+type gatingCompacted struct{ compactedControl }
+
+func (gatingCompacted) GatesSeatAdmission() bool { return true }
+func (gatingCompacted) OpsTable() string         { return "control_ops" }
+
+func (gatingCompacted) Tables() map[string]statelog.TableClass {
+	tables := compactedControl{}.Tables()
+	tables["control_ops"] = statelog.Divergent
+	return tables
+}
+
+// ledgerlessGate is the strict control with no operation ledger and nothing
+// arbitrated, still claiming that a seat depends on it — the pairing the
+// ledger rule refuses, with every other rule satisfied.
+type ledgerlessGate struct{ controlDomain }
+
+func (ledgerlessGate) OpsTable() string { return "" }
+
+func (ledgerlessGate) Stream() statelog.StreamSpec {
+	s := controlDomain{}.Stream()
+	s.ArbitratedKinds = nil
+	return s
+}
+
+func (ledgerlessGate) Tables() map[string]statelog.TableClass {
+	tables := controlDomain{}.Tables()
+	delete(tables, "control_ops")
 	return tables
 }
 

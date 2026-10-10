@@ -223,7 +223,8 @@ func TestANodeWhoseRestoredLogWasWrittenPastItRefusesAndAppliesNothing(t *testin
 	}
 
 	// THE HEALTH AND THE STATUS SAY SO.
-	health, err := e.native.Load().log.health(t.Context(), running)
+	s := e.native.Load().log
+	health, err := s.health(t.Context(), running, s.readFloors(t.Context()))
 	if err != nil {
 		t.Fatalf("read the tracker's health: %v", err)
 	}

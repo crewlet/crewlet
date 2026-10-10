@@ -70,7 +70,7 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 		"a deferral past the grace": {
 			statelog.KindDeferredOld,
 			statelog.Reading{DeferredAge: 31 * time.Minute},
-			"stops serving its copy of the estate",
+			"goes out of service at",
 		},
 		"a floor nobody can read": {
 			statelog.KindFloorUnknown,

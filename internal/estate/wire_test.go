@@ -182,17 +182,17 @@ var floorless = map[string]string{
 	"knowledge.search": "reads the indexes, as tracker.search does",
 	"knowledge.building": "asks whether the lexical index has caught up, which no " +
 		"log position describes",
-	"estate.ping": "asks whether the copy admits a seat, its own stricter gate, " +
-		"not whether it has reached the asker's writes",
+	"estate.ping": "asks whether the seat copy admits a seat, its own stricter " +
+		"gate, not whether it has reached the asker's writes",
 }
 
 // EVERY OPERATION SAYS WHICH LOG ITS FLOORS ARE ON: an operation that carries a
 // floor names its domain, the domain is one whose log a floor can be on, and
 // the stream it waits on is that domain's own log — the tracker's
 // CREWLET_TRACKER_LOG or the knowledge base's CREWLET_PAGES_LOG, named as they
-// have always been. One that named none would carry no floor at all, and one
-// that named another domain's would wait on an applier it does not depend on
-// ([ready]).
+// have always been. One that waited on none would carry no floor at all, and
+// one that named another domain's would wait on an applier it does not depend
+// on ([ready]).
 func TestEveryOperationSaysWhichLogItsFloorsAreOn(t *testing.T) {
 	t.Parallel()
 	logs := map[string]string{
@@ -203,15 +203,12 @@ func TestEveryOperationSaysWhichLogItsFloorsAreOn(t *testing.T) {
 		spec := registry[name]
 		_, listed := floorless[name]
 		switch {
-		case spec.domain == "" && !listed:
+		case spec.floorStream == "" && !listed:
 			t.Errorf("%s carries no floor: declare the domain whose log it reads, or "+
 				"name why no floor holds it in floorless", name)
-		case spec.domain != "" && listed:
-			t.Errorf("floorless lists %s, which carries a floor on the %s log", name, spec.domain)
-		case spec.domain == "":
-			if spec.floorStream != "" {
-				t.Errorf("%s carries no floor and still names the stream %q", name, spec.floorStream)
-			}
+		case spec.floorStream != "" && listed:
+			t.Errorf("floorless lists %s, which carries a floor on %s", name, spec.floorStream)
+		case listed:
 		case logs[spec.domain] == "":
 			t.Errorf("%s carries a floor on the %q domain's log, want one of %v",
 				name, spec.domain, slices.Sorted(maps.Keys(logs)))
@@ -223,6 +220,47 @@ func TestEveryOperationSaysWhichLogItsFloorsAreOn(t *testing.T) {
 	for _, name := range slices.Sorted(maps.Keys(floorless)) {
 		if _, known := registry[name]; !known {
 			t.Errorf("floorless lists %s, which is no operation", name)
+		}
+	}
+}
+
+// seatCopyOps is every operation that asks about the copy a SEAT is served by
+// ([SeatCopy]) rather than one domain's, and why.
+//
+// TWO-SIDED, like [floorless]: an operation naming the seat copy that is not
+// listed fails — it would run on a copy whose own domain the verdict never
+// asked about — and a listed one that names a domain fails too.
+var seatCopyOps = map[string]string{
+	"estate.ping": "asks whether the copy a seat is served by admits one — every " +
+		"domain that gates seat admission, not one domain's",
+}
+
+// EVERY OPERATION NAMES THE COPY IT READS, because that is the verdict the
+// router and the server ask before running it here: a domain's copy that is
+// wrong runs none of that domain's operations and every other domain's
+// (ADR-0031). An operation naming no domain — the search ops once did, since
+// they carry no floor — would be asked of no domain's verdict at all: run from
+// a copy out of service, or held to one it does not read.
+func TestEveryOperationNamesTheCopyItReads(t *testing.T) {
+	t.Parallel()
+	domains := []string{trackerDomain, pagesDomain}
+	for _, name := range slices.Sorted(maps.Keys(registry)) {
+		spec := registry[name]
+		_, seat := seatCopyOps[name]
+		switch {
+		case seat && spec.domain != SeatCopy:
+			t.Errorf("seatCopyOps lists %s, which reads the %q domain's copy", name, spec.domain)
+		case seat:
+		case spec.domain == SeatCopy:
+			t.Errorf("%s names the seat copy: declare the domain whose copy it reads, "+
+				"or name why it asks about the seat's in seatCopyOps", name)
+		case !slices.Contains(domains, spec.domain):
+			t.Errorf("%s reads the %q domain's copy, want one of %v", name, spec.domain, domains)
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(seatCopyOps)) {
+		if _, known := registry[name]; !known {
+			t.Errorf("seatCopyOps lists %s, which is no operation", name)
 		}
 	}
 }

@@ -202,7 +202,7 @@ func TestAStreamRebuiltUnderARunningNodeIsNamed(t *testing.T) {
 	// THE HEARTBEAT IS WHAT SEES IT, on the round trip it already makes.
 	s.publishPositions(t.Context())
 
-	health, err := s.health(t.Context(), running)
+	health, err := s.health(t.Context(), running, s.readFloors(t.Context()))
 	if err != nil {
 		t.Fatalf("health: %v", err)
 	}
@@ -314,7 +314,7 @@ func TestAStreamRebuiltUnderARunningNodeRefusesItsWrites(t *testing.T) {
 		barrierOn(t, running)
 	}
 	s.publishPositions(t.Context())
-	health, err := s.health(t.Context(), running)
+	health, err := s.health(t.Context(), running, s.readFloors(t.Context()))
 	if err != nil {
 		t.Fatalf("health: %v", err)
 	}
@@ -461,7 +461,8 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 	}
 
 	// AND THE READS, FROM THE SAME FACT, and the operator surface with them.
-	health, err := e2.native.Load().log.health(t.Context(), running)
+	s2 := e2.native.Load().log
+	health, err := s2.health(t.Context(), running, s2.readFloors(t.Context()))
 	if err != nil {
 		t.Fatalf("health: %v", err)
 	}

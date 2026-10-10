@@ -67,9 +67,15 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 	// AN UNREADABLE FLOOR REGISTER IS NOT AN EMPTY ONE: every domain then
 	// reports its trim as unreadable rather than as a trim that has
 	// concluded nothing, which is a different thing to go and look at.
+	//
+	// READ ONCE, for the rows below and for every domain's readiness: the
+	// register is a certified listing, and two reads of it a round trip
+	// apart could disagree about the floor a row prints and the floor its
+	// refusal was judged by.
+	read := readFloorsOf(ctx, r.fleet)
 	floors := map[string]coord.TrimFloor{}
-	rows, floorsErr := r.fleet.Floors(ctx)
-	for _, row := range rows {
+	floorsErr := read.err
+	for _, row := range read.floors {
 		floors[row.Domain] = row
 	}
 	backups, _ := r.fleet.BackupPoints(ctx)
@@ -135,7 +141,7 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 		// THIS NODE'S OWN REFUSAL OF THE DOMAIN, from the readiness its
 		// probe reads — so the not-ready state the guides send an operator
 		// here to find is a line this report prints, naming the finding.
-		health, healthErr := r.state.health(ctx, running)
+		health, healthErr := r.state.health(ctx, running, read)
 		healths[name] = domainHealth{health: health, err: healthErr}
 		if healthErr != nil {
 			// THE PROBE'S OWN ANSWER to a health nobody could read.
@@ -384,14 +390,18 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 	// alarm then told a company four seconds old that its newest verified
 	// backup was twenty-five hours old, one line above the trim term
 	// reporting that no backup had been recorded at all.
+	// THE FLOORS ARE READ AT MOST ONCE, and only where a health was not
+	// handed in: one register read answers every domain's floor.
+	var floors *publishedFloors
 	for _, running := range r.state.running() {
 		name := running.domain.Name()
-		if running == nil {
-			continue
-		}
 		read, ok := healths[name]
 		if !ok {
-			read.health, read.err = r.state.health(ctx, running)
+			if floors == nil {
+				read := r.state.readFloors(ctx)
+				floors = &read
+			}
+			read.health, read.err = r.state.health(ctx, running, *floors)
 		}
 		if read.err != nil {
 			continue

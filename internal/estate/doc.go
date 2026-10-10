@@ -17,8 +17,8 @@
 // serves and asks another data node otherwise. So are the operator's surfaces
 // — the API's tracker and knowledge-base routes and the operator's own MCP —
 // for the reason a data node's own seats are: read straight off the node's
-// copy, a node whose copy was out of service answered its operator from the
-// very copy it had stopped serving its seats from.
+// copy, a node whose copy of a domain was out of service answered its operator
+// from the very copy it had stopped serving its seats from.
 //
 // # One subject per serving node, never a scatter
 //
@@ -28,10 +28,11 @@
 // which leaves the router unable to say which node it asked when the answer
 // does not come: a failover that retries a write on "whoever answers next" is
 // only safe where the write itself says so. So the router picks the node —
-// this node first where its copy serves, then the node that answered last,
-// then the order [internal/rendezvous] gives this node's own id, with a node
-// that went silent last — and the failover rule is stated per operation (see
-// [opClass]).
+// this node first where its copy serves, then the node that answered the
+// operation's domain last, then the order [internal/rendezvous] gives this
+// node's own id, with a node whose copy of that domain said it is out of
+// service after the rest and a node that went silent last — and the failover
+// rule is stated per operation (see [opClass]).
 //
 // # What makes a retry safe, per operation
 //
@@ -48,23 +49,34 @@
 // the honest answer, and the one a tool turns into "read the page before
 // writing again".
 //
-// A node that answers "I did not run it" — its copy is out of service, it runs
-// no native backend, its copy lags its logs, or it could not reach the
+// A node that answers "I did not run it" — its copy of the operation's domain
+// is out of service, it runs no native backend, that copy lags its log, or it
+// could not reach the
 // caller's floor in time — did not execute anything, so every class moves on
 // from it. When no data node runs the operation, it is refused as [ErrUnserved],
 // naming who was asked and what each said — never an empty answer, which would
 // say the company has none of what was asked for.
 //
-// # A copy that is WRONG is out of service; one that LAGS is a worse node
+// # A domain's copy that is WRONG is out of service; one that LAGS is a worse node
 //
-// A copy that is wrong — an applier halted, the node evicted, its rows below
-// the log — answers nothing ([LocalBackends.For] false): a peer asking is told
-// `out_of_service`, and the node's own seats are answered by the other data
-// nodes. The seats were never the problem, the copy was, so the node keeps
-// them.
+// A domain's copy that is wrong — its applier halted, the node evicted from
+// its log, its rows below that log — answers none of that domain's operations
+// ([LocalBackends.For] false for it): a peer asking for one is told
+// `out_of_service`, and the node's own seats' calls on that domain are
+// answered by the other data nodes. Every other domain's copy keeps answering
+// here, because an operation's routing is on its OWN domain: the rows it
+// answers from are that domain's. The one read that crosses into a second
+// domain's rows — a search's semantic half, over the vectors — is best effort
+// and never routes: the search is answered from the copy of its own domain.
+// And the seats were never the problem, the copy was, so the node keeps them.
+// This is ADR-0031,
+// which refines ADR-0025's amendment to one domain at a time; the copy a SEAT
+// is served by — what admission asks of — is every domain that gates seat
+// admission at once ([SeatCopy]).
 //
-// Whether a copy answers requests ([Backend.Answers]) is a different question:
-// its distance from its logs, not its correctness. The floors and the read's
+// Whether a copy answers requests ([Backend.Answers]) is a different question,
+// asked of the operation's own domain too: its distance from its log, not its
+// correctness. The floors and the read's
 // own level hold an answer to what the caller must see, and a write is decided
 // from the authority's own snapshot and arbitrated by the broker. So a copy
 // that lags is passed over only for one that does not, and asked again — told
@@ -100,12 +112,15 @@
 // data node's own copy is held to its floors like any other because its seats
 // may have written through another data node while its copy was out of
 // service. Floors on another DOMAIN's log are never waited for, though the
-// estate carries every domain's log: no operation reads another domain's
-// rows, so that applier's lag is not one the operation should wait out
-// ([ready]).
+// estate carries every domain's log: no operation reads another domain's rows
+// AT A POSITION — the one cross-domain read, a search's semantic half, is of
+// an index no log position describes — so that applier's lag is not one the
+// operation should wait out ([ready]).
 //
 // The searches carry no floor at all: they read an index each node's own walk
-// maintains behind its applier, which no log position describes.
+// maintains behind its applier, which no log position describes. They still
+// name the domain whose rows that index is over, so a node whose copy of it is
+// out of service runs none of them.
 //
 // # What does not cross the wire, and who supplies it
 //

@@ -21,9 +21,10 @@ import (
 // holding a nil adapter, which [App] would read as a surface and mount.
 //
 // THE ROWS THROUGH THIS NODE'S ESTATE ROUTER, as a seat's file tools reach
-// them ([engine.OperatorWork]): a data node whose copy is out of service is
-// answered by a holder whose copy serves, rather than refusing a download its
-// peers could have named.
+// them ([engine.OperatorWork]): a data node whose copy of the tracker — the
+// domain a file's row is — is out of service is answered by a holder whose
+// copy of it serves (ADR-0031), rather than refusing a download its peers
+// could have named.
 func EngineFiles(e *engine.Engine) ProjectFiles {
 	if e == nil {
 		return nil

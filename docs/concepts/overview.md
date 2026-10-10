@@ -220,7 +220,8 @@ internal/
 │                         #   the replicated one a state log's applier writes
 ├── estate/               # The replicated estate ROUTED: one router on every
 │                         #   node, answering in-process where this node's
-│                         #   copy serves and asking a data node otherwise
+│                         #   copy of the operation's domain serves and
+│                         #   asking a data node otherwise
 ├── objstore/             # The object store: one object per upload, under a
 │                         #   key minted for it and never reused, in one store
 │                         #   the fleet shares — natsobj/ (the default) or

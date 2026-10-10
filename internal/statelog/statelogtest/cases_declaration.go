@@ -88,12 +88,24 @@ func Declaration(c Candidate) []error {
 		}
 	}
 
+	// A DOMAIN THAT GATES SEAT ADMISSION REPLAYS STRICTLY. Admission waits
+	// for the domain's copy to be level, and a compacted domain's gap is a
+	// coverage number rather than a fault — withholding every seat claim on
+	// a node for one is the outage the number exists to avoid. Whether its
+	// copy is JUDGED is not this declaration's to say: every domain's is
+	// (ADR-0031).
+	if c.Domain.GatesSeatAdmission() && spec.Replay != statelog.ReplayStrict {
+		add("%s gates seat admission and replays %s — a compacted domain's gap is a "+
+			"coverage number, and gating every seat claim on it is the outage the "+
+			"number exists to avoid", name, spec.Replay)
+	}
+
 	// THE OPERATION LEDGER'S ABSENCE IS PAIRED WITH A CLAIM, and the
 	// pairing is asserted rather than assumed because half of it is not
 	// enough: a domain with a total apply whose writer answers a caller
 	// still has to say whether the answer landed.
 	if c.Domain.OpsTable() == "" {
-		if c.Domain.ReadinessInput() {
+		if c.Domain.GatesSeatAdmission() {
 			add("%s keeps no operation ledger and gates seat admission — a "+
 				"domain whose apply is total enough to need no ledger is one "+
 				"whose gaps are a coverage number rather than a fault, and "+

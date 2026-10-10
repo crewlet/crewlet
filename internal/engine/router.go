@@ -37,8 +37,8 @@ import (
 // within the snapshot slack) is asked only once every data node whose copy
 // does not has run nothing, by this node's router and by every other node's
 // alike: a worse node to ask, never no node (estate's [estate.Router] doc). A
-// copy that is WRONG is out of service ([localEstate.For]), and the node keeps
-// its seats.
+// domain's copy that is WRONG is out of service for that domain's operations
+// alone ([localEstate.For], ADR-0031), and the node keeps its seats.
 
 // The placement the router is handed.
 var _ estate.Placement = wholeEstate{}
@@ -47,10 +47,10 @@ var _ estate.Placement = wholeEstate{}
 // whether it answers requests — is trusted by the request gate
 // ([localEstate.For]) before it is read again.
 //
-// ONE SECOND. The verdict reads the broker for every log whose health judges a
-// copy — a JetStream API request per log at least — and a gate that asked per
-// request would put those round trips in front of every tool call a data node
-// answers. Refreshed
+// ONE SECOND. The verdict reads the broker for every log — a JetStream API
+// request per log at least — and the published floors once
+// ([stateLog.readFloors]), and a gate that asked per request would put those
+// round trips in front of every tool call a data node answers. Refreshed
 // at most once a second, and never on a request's own path once it has been
 // read — see [localEstate.verdict] — a node pays at most one verdict's reads a
 // second however many requests it answers; and a verdict a second old errs
@@ -173,34 +173,39 @@ type heldVerdict struct {
 	copyVerdict
 }
 
-// For implements [estate.LocalBackends]: the backend over this node's copy,
-// or false while the copy is out of service.
+// For implements [estate.LocalBackends]: the backend over this node's copy of
+// domain — or of the seat copy, for [estate.SeatCopy] — or false while that
+// copy is out of service.
 //
-// A COPY THAT IS WRONG IS NOT SERVED. An applier halted at a record it cannot
-// decode or held one past the deferral grace, an eviction, rows below the
-// log's first record, a checkpoint on another stream, a stalled prefix: a copy
-// in any of those states goes OUT OF SERVICE — this node's router sends its
-// own seats' calls to the other data nodes, and another node asking is told
-// `out_of_service` — and never sheds the node's seats, which read the estate
-// from a data node whose copy is sound. That is the whole of the remedy a
-// fault needs: the seats were never the problem, the copy was, and moving them
-// cost every one of them its processes and its memory to be served by the very
+// A DOMAIN'S COPY THAT IS WRONG IS NOT SERVED — for that domain's operations
+// alone (ADR-0031). An applier halted at a record it cannot decode or held one
+// past the deferral grace, an eviction, rows below the log's first record, a
+// checkpoint on another stream, a stalled prefix: a domain's copy in any of
+// those states goes OUT OF SERVICE — this node's router sends its own seats'
+// calls on that domain to the other data nodes, and another node asking for
+// one is told `out_of_service` — while every other domain's copy keeps
+// answering here: a tracker applier halted at a record sends the node's
+// tracker calls to a peer and its knowledge-base calls are still answered
+// from its own pages. It never sheds the node's seats, which are served by a
+// data node whose copy is sound. That is the whole of the remedy a fault
+// needs: the seats were never the problem, the copy was, and moving them cost
+// every one of them its processes and its memory to be served by the very
 // same peers.
 //
 // A COPY WITH NO RUNTIME YET — a data node that booted with no company — is
 // served with no halves, so every operation on it is answered "no native
 // backend here" and moves on, while the node still answers for it.
-func (l *localEstate) For(ctx context.Context) (estate.Backend, bool) {
+func (l *localEstate) For(ctx context.Context, domain string) (estate.Backend, bool) {
 	n := l.e.native.Load()
 	if n == nil {
 		return estate.Backend{}, true
 	}
 	v := l.verdict(ctx, n)
-	if v.fault != "" {
+	if !v.serves(domain) {
 		return estate.Backend{}, false
 	}
 	b := l.e.estateBackend(n)
-	b.Answers = func(context.Context) bool { return v.answers }
+	b.Answers = func(context.Context) bool { return v.answers(domain) }
 	return b, true
 }
 
@@ -223,10 +228,12 @@ func (l *localEstate) For(ctx context.Context) (estate.Backend, bool) {
 //
 // # A reading that could not reach the broker changes nothing it could not see
 //
-// A copy that was answering keeps answering, and one that was faulted stays so
-// unless a log that was read says otherwise — a broker blip must not send every
-// request away from a sound copy, nor bring a wrong one back into service on no
-// information. A copy never judged answers nothing: nobody has measured it.
+// A domain's copy that was answering keeps answering, and one that was wrong
+// stays so, unless its own log was read and says otherwise
+// ([copyVerdict.carried]) — a broker blip must not send every request away from
+// a sound copy, nor bring a wrong one back into service on no information, and
+// one domain's unread health says nothing about any other's. A copy never
+// judged answers nothing: nobody has measured it.
 func (l *localEstate) verdict(ctx context.Context, n *native) copyVerdict {
 	v, known, reading := l.peek(ctx, n)
 	if known {
@@ -269,9 +276,11 @@ func (l *localEstate) peek(ctx context.Context, n *native) (v copyVerdict, known
 	return slot.held.copyVerdict, slot.known, reading
 }
 
-// servesUnasked reports whether this node answers from its own copy as far as
-// it can tell WITHOUT WAITING: it runs its native runtime, and the last
-// verdict read of the copy — where one has been — found it sound.
+// servesUnasked reports whether this node answers its SEATS from its own copy
+// as far as it can tell WITHOUT WAITING: it runs its native runtime, and the
+// last verdict read of the copy — where one has been — found every domain a
+// seat depends on in service ([estate.SeatCopy]). A wrong copy of any other
+// domain costs that domain's calls a peer and never the seats (ADR-0031).
 //
 // For serviceability, which asks it on every sweep and may not wait on the
 // broker. A copy nobody has judged yet is not read as a wrong one — its first
@@ -284,7 +293,7 @@ func (l *localEstate) servesUnasked() bool {
 		return false
 	}
 	v, known, _ := l.peek(context.Background(), n)
-	return !known || v.fault == ""
+	return !known || v.serves(estate.SeatCopy)
 }
 
 // refresh reads the copy's verdict once and stores it, stamped with the
@@ -299,20 +308,28 @@ func (l *localEstate) refresh(ctx context.Context, n *native, done chan struct{}
 
 	l.mu.Lock()
 	known, held := l.slot.known, l.slot.held
-	if v.refusal == statelog.RefuseBrokerUnreachable {
-		v.answers = known && held.answers
-		if v.fault == "" && known {
-			v.fault = held.fault
-		}
-	}
+	v = v.carried(held.copyVerdict, known)
 	l.slot.held, l.slot.known, l.slot.reading = heldVerdict{at: l.now(), copyVerdict: v}, true, nil
 	l.mu.Unlock()
 
-	if v.fault != "" && (!known || held.fault == "") {
-		log.WarnContext(ctx, "estate_copy_not_served", "log", v.fault,
-			"detail", "this node's copy of the estate is wrong rather than behind, "+
-				"so it goes out of service; its seats read the estate from the "+
-				"other data nodes until the copy recovers")
+	// ONE LINE PER DOMAIN that went out of service, naming it and the fault
+	// that holds: which log's copy is wrong, and why, is what an operator
+	// acts on, and every other domain's copy is still serving.
+	for _, out := range v.newlyWrong(held.copyVerdict, known) {
+		if out.domain == shutEstate {
+			log.WarnContext(ctx, "estate_copy_not_served", "domain", out.domain,
+				"detail", "this node's copy of the estate is not open, so every "+
+					"domain's copy goes out of service: their operations go to the "+
+					"other data nodes until the file is open again, and the node's "+
+					"seats stay")
+			continue
+		}
+		log.WarnContext(ctx, "estate_copy_not_served", "domain", out.domain,
+			"reason", string(out.why),
+			"detail", "this node's copy of "+out.domain+" is wrong rather than behind, so it "+
+				"goes out of service: that domain's operations go to the other data "+
+				"nodes until the copy recovers, every other domain's copy keeps "+
+				"serving, and the node's seats stay")
 	}
 }
 

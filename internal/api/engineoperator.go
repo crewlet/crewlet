@@ -59,8 +59,8 @@ func engineOperatorWriter(as func(estate.Actor) estate.WorkWriter, actor builtin
 //
 // THROUGH THIS NODE'S ESTATE ROUTER, every read and every write, as a seat's
 // tools are ([engine.OperatorWork]) — so an operator's assistant on a node
-// whose copy is out of service is answered from a peer's, not from the copy
-// this node stopped serving.
+// whose copy of an operation's domain is out of service is answered from a
+// peer's copy of it (ADR-0031), not from the copy this node stopped serving.
 func NewEngineOperator(e *engine.Engine) (*operator.Server, error) {
 	return operator.New(EngineOperatorOptions(e))
 }

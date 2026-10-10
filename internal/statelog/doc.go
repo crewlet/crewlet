@@ -170,10 +170,25 @@
 //
 // The exception is a record that INSTALLS AN APPLY GATE — a rule under which
 // a durable record produces no rows on ANY node. That is a STOP: the applier
-// halts, health goes false immediately, and the node takes its copy of the
-// estate out of service — its seats read it from another data node that can
-// decode it. A deferred gate does not postpone one record's effect on one
-// node; it silently licenses every record above it.
+// halts, health goes false immediately, and the node takes its copy of THAT
+// DOMAIN out of service (ADR-0031) — that domain's operations go to another
+// data node that can decode it, and its seats stay. A deferred gate does not
+// postpone one record's effect on one node; it silently licenses every record
+// above it.
+//
+// # A domain's fault takes only its own copy out of service
+//
+// Every domain's copy is judged on every reading, by the one predicate that
+// judges any ([Health.Healthy]), and a copy that is WRONG — not behind — goes
+// out of service for that domain alone: the node answers none of that
+// domain's operations from it, and every other domain it holds keeps
+// answering from its own copy. Which domains a SEAT depends on is a separate
+// declaration ([Domain.GatesSeatAdmission]): admission waits for those to be
+// level, and a node whose copy of one of them is out of service routes its
+// seats through its peers. Whether a copy is judged is never declared, because
+// a domain allowed to opt out is a domain whose wrong copy is served for ever.
+// This is ADR-0031; the engine computes the verdict per domain and the
+// estate's router asks it of each operation's own domain.
 //
 // # Retention rests on the ENVELOPE, so a writer can ask who reads what
 //

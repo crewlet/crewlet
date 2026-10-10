@@ -120,13 +120,25 @@ const (
 	// the read budget.
 	unservedBehind unservedReason = "behind"
 
-	// unservedOutOfService: this data node's copy of the estate is out of
-	// service — WRONG rather than behind (an applier halted, the node
-	// evicted, its rows below the log), so it answers nothing from it until
-	// the copy recovers, while its own seats read the estate from the other
-	// data nodes ([LocalBackends.For]).
+	// unservedOutOfService: this data node's copy of the operation's domain
+	// is out of service — WRONG rather than behind (an applier halted, the
+	// node evicted, its rows below the log), so it answers none of that
+	// domain's operations until the copy recovers, while every other
+	// domain's copy keeps serving and its own seats' calls on this one go to
+	// the other data nodes ([LocalBackends.For], ADR-0031).
 	unservedOutOfService unservedReason = "out_of_service"
 )
+
+// outOfService says which copy of this node's is out of service, in the words
+// a walk's note and a peer's reply carry.
+func outOfService(domain string) string {
+	if domain == SeatCopy {
+		return "its copy of a domain seat admission depends on is out of service — " +
+			"wrong rather than behind"
+	}
+	return "its copy of " + domain + " is out of service — wrong rather than behind, " +
+		"so it answers none of " + domain + "'s operations until it recovers"
+}
 
 // reply is what a serving node answers.
 type reply struct {
@@ -164,12 +176,14 @@ type opSpec struct {
 	args   reflect.Type
 	result reflect.Type
 
-	// domain is the domain whose log the operation depends on, and
-	// floorStream that log's stream — the one log its floors are on
-	// ([Router.floorsFor], [ready]). Both empty for an operation that
-	// carries no floor, because what it reads is not the log's rows at a
-	// position (see [opWorkSearch]) or it asks about the copy itself
-	// ([opPing]); a gate over the registry names every such operation.
+	// domain is the domain whose COPY the operation reads — the verdict the
+	// router and the server ask before running it here ([LocalBackends.For],
+	// ADR-0031) — or [SeatCopy] for admission's ping. floorStream is that
+	// domain's log, the one log its floors are on ([Router.floorsFor],
+	// [ready]), or empty for an operation that carries no floor
+	// ([op.floorless]): what it reads is not the log's rows at a position
+	// (see [opWorkSearch]) or it asks about the copy itself ([opPing]). A
+	// gate over the registry names every such operation.
 	domain      string
 	floorStream string
 
@@ -208,11 +222,12 @@ type op[A, R any] struct {
 // so a new operation's types are checked the moment it is declared.
 var registry = map[string]*opSpec{}
 
-// define declares an operation, with the domain whose log its floor is on —
-// empty for one that carries no floor. Package-level, at init: a duplicate
-// name is a build that cannot serve, so it panics rather than silently
-// shadowing, and so does a domain with no log this package knows, which
-// would carry no floor while declaring one.
+// define declares an operation, with the domain whose copy it reads — and
+// whose log its floor is on, unless it is declared [op.floorless] — or
+// [SeatCopy] for one that asks about the copy a seat is served by.
+// Package-level, at init: a duplicate name is a build that cannot serve, so it
+// panics rather than silently shadowing, and so does a domain this package
+// knows no log for, whose copy no verdict judges and whose floor no log holds.
 func define[A, R any](name string, class opClass, domain string, actor bool,
 	serve func(ctx context.Context, b Backend, actor *Actor, args A) (R, error),
 ) op[A, R] {
@@ -223,11 +238,11 @@ func define[A, R any](name string, class opClass, domain string, actor bool,
 		name: name, class: class, actor: actor, domain: domain,
 		args: reflect.TypeFor[A](), result: reflect.TypeFor[R](),
 	}
-	if domain != "" {
+	if domain != SeatCopy {
 		stream, known := floorStreams[domain]
 		if !known {
-			panic(fmt.Sprintf("estate: operation %q carries its floor on the %q "+
-				"domain's log, which is no log this package knows", name, domain))
+			panic(fmt.Sprintf("estate: operation %q reads the %q domain's copy, "+
+				"which is no domain this package knows", name, domain))
 		}
 		spec.floorStream = stream
 	}
@@ -258,6 +273,16 @@ func define[A, R any](name string, class opClass, domain string, actor bool,
 	}
 	registry[name] = spec
 	return op[A, R]{spec: spec, serve: checked}
+}
+
+// floorless declares that this operation carries no floor: what it reads is
+// not its domain's rows at a log position — an index maintained behind the
+// applier, or the copy's own readiness — so no floor could hold its answer to
+// anything. Its domain still names the copy it reads, and a wrong copy of that
+// domain still runs none of it.
+func (o op[A, R]) floorless() op[A, R] {
+	o.spec.floorStream = ""
+	return o
 }
 
 // ungated declares that the serving gate does not hold this operation back —

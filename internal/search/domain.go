@@ -196,16 +196,17 @@ func (Domain) ScopeIndex() string { return "vectors_log_deferred_scope" }
 // monotone version guard, so a redelivery writes the same rows or none.
 func (Domain) OpsTable() string { return "" }
 
-// ReadinessInput reports that this domain's health does NOT gate seat
-// admission.
+// GatesSeatAdmission reports that a seat does NOT depend on this domain's
+// copy: admission never waits for it to be level.
 //
 // FALSE, and it is the same fact the compaction states from the other side: a
 // gap here is a coverage number rather than a fault, so a node behind on
-// vectors serves an answer that is less complete and says so. Shedding a
+// vectors serves an answer that is less complete and says so. Withholding a
 // company's seats for that is the outage the coverage number exists to avoid —
-// and it would be shed for the one subsystem every design note calls best
-// effort.
-func (Domain) ReadinessInput() bool { return false }
+// and it would be withheld for the one subsystem every design note calls best
+// effort. Its copy is still judged, and a wrong one — not one that is behind —
+// goes out of service on its own, its seats untouched — ADR-0031.
+func (Domain) GatesSeatAdmission() bool { return false }
 
 // ClaimsIdentity reports that two nodes at one checkpoint are NOT asserted to
 // hold the same rows.

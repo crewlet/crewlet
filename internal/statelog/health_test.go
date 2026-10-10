@@ -152,6 +152,56 @@ func TestADeferralTakesACopyOutOfServiceOnlyPastTheGrace(t *testing.T) {
 	}
 }
 
+// A WRONG COPY NAMES ITS FAULT, and a sound one names none: every state that
+// makes [statelog.Health.Healthy] false answers the reason the line announcing
+// the copy going out of service carries, and being behind — replaying up to
+// the floor, or holding a record inside the grace — is no fault at all. The
+// predicate is the reason's emptiness, so the two can never disagree.
+func TestAWrongCopyNamesItsFault(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	end := uint64(10)
+	sound := statelog.Health{
+		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 10},
+		LastSeq:  &end, Drained: true,
+		Floor: statelog.Floor{State: statelog.FloorOK, ReadAt: now},
+	}
+	ahead := uint64(9)
+	old := statelog.DeferredSince{Since: now.Add(-statelog.DeferralGrace - time.Second), Held: true}
+	fresh := statelog.DeferredSince{Since: now.Add(-time.Minute), Held: true}
+	for name, tc := range map[string]struct {
+		change func(*statelog.Health)
+		since  statelog.DeferredSince
+		want   statelog.ReadRefusal
+	}{
+		"sound":                {change: func(*statelog.Health) {}},
+		"replaying":            {change: func(h *statelog.Health) { h.Floor.State = statelog.FloorReplaying }},
+		"deferred, in grace":   {change: func(h *statelog.Health) { h.Deferred = 1 }, since: fresh},
+		"evicted":              {change: func(h *statelog.Health) { h.Evicted = true }, want: statelog.RefuseEvicted},
+		"floor unknown":        {change: func(h *statelog.Health) { h.Floor.ReadAt = time.Time{} }, want: statelog.RefuseFloorUnknown},
+		"below the log":        {change: func(h *statelog.Health) { h.Floor.State = statelog.FloorBelow }, want: statelog.RefuseBelowFloor},
+		"ahead of the log":     {change: func(h *statelog.Health) { h.LastSeq = &ahead }, want: statelog.RefuseWrongStream},
+		"a recreated stream":   {change: func(h *statelog.Health) { h.StreamRecreated = true }, want: statelog.RefuseWrongStream},
+		"a passed generation":  {change: func(h *statelog.Health) { h.GenerationPassed = true }, want: statelog.RefuseWrongStream},
+		"a diverged log":       {change: func(h *statelog.Health) { h.LogDiverged = true }, want: statelog.RefuseWrongStream},
+		"a stopped applier":    {change: func(h *statelog.Health) { h.Err = "halted at 7" }, want: statelog.RefuseStalled},
+		"a stalled prefix":     {change: func(h *statelog.Health) { h.Stalled = true }, want: statelog.RefuseStalled},
+		"deferred, past grace": {change: func(h *statelog.Health) { h.Deferred = 1 }, since: old, want: statelog.RefuseDeferred},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := sound
+			tc.change(&h)
+			if got := h.Fault(now, tc.since); got != tc.want {
+				t.Fatalf("Fault = %q, want %q", got, tc.want)
+			}
+			if got := h.Healthy(now, tc.since); got != (tc.want == "") {
+				t.Fatalf("Healthy = %v with fault %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // A SERVING COPY HOLDS A WHOLE STATE AND IS CLOSE TO THE LOG, WHATEVER THE
 // INSTANT SAYS: an established copy that has drained serves at a lag of one —
 // the record in flight a busy log has on most heartbeats — and at the snapshot
