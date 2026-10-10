@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/seat"
 )
 
 // newEngine stands up a real engine on an embedded stream in a temp directory.
@@ -512,17 +513,29 @@ func TestStartAndStopAreSurvivable(t *testing.T) {
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	// The seat host claims what it can; with local coordination and no
-	// peers that is every seat.
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if len(e.Node().Host().Held()) == 2 {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if got := e.Node().Host().Held(); len(got) != 2 {
-		t.Errorf("held seats = %v, want both", got)
+	// THE FIRST PASS THIS NODE IS ADMITTED TO CLAIMS EVERY SEAT: with local
+	// coordination and no peers its share is the whole company, inside one
+	// pass's claim limit.
+	//
+	// WHICH PASS THAT IS, NOTHING FIXES. Start runs one before it returns,
+	// but a node with any record unapplied on its log claims nothing on that
+	// pass and takes its share at the next, an interval later — and on a
+	// fresh node the object collector's first collection appends a read
+	// barrier to the tracker's log at about the moment Start runs. A
+	// deadline of one interval from Start's return races that next pass
+	// rather than waiting for it — under the full suite it ran out between
+	// the pass's two claims, holding [ceo] — so the wait is for a pass the
+	// node was admitted to, and the assertion is on what that pass took.
+	// TestANodeBehindAtStartTakesItsSeatsAtTheFirstPassItIsAdmittedTo stages
+	// the withheld pass every time.
+	var pass seat.SweepResult
+	waitFor(t, "a placement pass this node is admitted to", func() bool {
+		last, ok := e.Node().Host().LastSweep()
+		pass = last
+		return ok && !last.Withheld
+	})
+	if got := e.Node().Host().Held(); !slices.Equal(got, []string{"ceo", "cto"}) {
+		t.Errorf("held seats = %v after an admitted pass (%+v), want both", got, pass)
 	}
 	e.Stop(context.Background())
 	if got := e.Node().Host().Held(); len(got) != 0 {
