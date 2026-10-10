@@ -152,8 +152,10 @@ type Config struct {
 	// the company's records going stale is a reason to stop taking work,
 	// never a reason to drop the work already in hand.
 	//
-	// It runs on the sweep path and must not block: read a flag, do not
-	// query a store.
+	// It runs on the sweep path under the pass's own context, and an answer
+	// that needs a request — the engine's asks the broker where its copy of
+	// the estate stands — is bounded by that context: a pass a stopping host
+	// cancels must not wait on it.
 	Ready func(ctx context.Context) bool
 
 	// Serviceable reports whether this node may KEEP the seats it holds,
@@ -177,8 +179,9 @@ type Config struct {
 	// Abandoning a turn mid-flight would cost more than finishing it.
 	//
 	// Nil keeps every seat, which is the single-node case and the case
-	// before a state log exists. It runs on the sweep path and, like
-	// Ready, must not block.
+	// before a state log exists. It runs on the sweep path and, unlike
+	// Ready, is handed no context to bound a wait with, so it must not
+	// block: read what is already known, do not ask a store.
 	Serviceable func() (bool, string)
 
 	TTL               time.Duration
@@ -636,9 +639,17 @@ func (h *Host) stampBeat() {
 //
 // Presence is announced BEFORE the first sweep: capacity divides by the live
 // node count, and a node that has not registered itself would compute a
-// share that excludes itself. The first sweep runs synchronously, so boot is
-// not eventually-consistent — a node is useful the moment it reports
-// started.
+// share that excludes itself. The first sweep runs synchronously, so a node
+// that is ready holds its share the moment it reports started.
+//
+// ONLY A READY ONE. That pass asks [Config.Ready] like every other, and a node
+// that is not ready at that instant claims nothing on it and takes its share
+// at the first pass that finds it ready, up to an interval later — so a caller
+// waiting for this node's seats waits for a pass that was not
+// [SweepResult.Withheld], never for a fixed time after Start. In the engine
+// that instant is a race the node runs against itself: a record its own duties
+// appended moments before is unapplied on its log, and the gate reads that as
+// behind.
 //
 // It reports no error because none of its work has a failure a caller could
 // act on: an unreachable store means this node claims nothing yet and
