@@ -58,13 +58,14 @@ else. A tool the company has not set up keeps its mark, drained of its
 colour (the kit's `muted` mark) — the mark rather than the tile, because the
 mark is decoration beside the name and the tile's text keeps its contrast.
 
-The second exception is **Agents › Edit org**, which draws the organization
-the way the console's org chart does: every agent seat is the Crewlet figure
-on a card toned purple, with the branch arriving at it and its table row in
-the same hue. It is held to that: ONE hue for ONE kind, never a hash of a
-name and never one per agent, drawn only in the builder, where a draft is
-doing nothing a state could say; nothing reads state from it, and the live
-org chart keeps colour for state alone.
+The second exception is the organization's two charts, **Agents › Org chart**
+and **Agents › Edit org**, which draw it the way the console's org chart does:
+every agent seat is the Crewlet figure on a node toned purple, with the branch
+arriving at it (and, in Edit org's table, its row) in the same hue. It is held
+to that: ONE hue for ONE kind, never a hash of a name and never one per agent,
+drawn only on those two charts. Nothing reads state from it: on the live chart
+what a seat is doing is the state's dot and word under its name, as it is
+everywhere else.
 
 A seat's chrome takes one of three **rings**, or none, from what it is DOING —
 and what it is doing is the ENGINE'S word, never the dashboard's. Every seat row carries
@@ -1829,7 +1830,10 @@ company did.** Top to bottom:
   into its turn. **Open live view** for the rest, including a working seat
   whose turn has no id yet: it is counted here and listed there.
 - **Tasks completed** per company day over the last fourteen (today in the
-  accent), **Tokens by team** over the window (tokens, never money), and
+  accent), **Tokens by team** over the window (tokens, never money), each
+  team's bar split by the seats that spent in it and keyed under the bar (the
+  engine's `parts`; a team of more than four seats names its three biggest and
+  draws the rest as one part in the residual hue), and
   **Projects**: each project's done, active and to-do work as one bar, its
   lead and its target date.
 - **Recent activity** (`company_feed`): work delivered ("approved on first
@@ -2135,50 +2139,58 @@ identity as its head, the rail above the body, and no cost or record.
 
 ### The org chart is the company running
 
-`#/agents` is the approved Org artboard: one card per seat, each under its
-primary manager — the engine's derived `manager`, the line escalation goes up —
-drawn on the design system's tree canvas with elbow connectors. The seats of a
-unit under the lead they report to sit in one dashed box labelled with the unit
-("Engineering · Core", or "Developer Relations" where the lead's own card
-already says "Product") and the key of the tracker project its work is filed
-under. A lead's own unit is not boxed round the seats beside the lead: the CEO
-and the CTO who share Executives are peers on a line, not a team. The chart is
-built by `lib/orgchart.ts` from the projection this node has APPLIED, never the
-builder's draft — a test holds that it imports none of the builder's model —
-so between a save and this node applying it the chart has not moved, and the
-"still applying revision …" note says so. Every reporting line is the
-engine's derived one; the client draws no hierarchy of its own. **The field
-runs to the sheet's edges**, dotted, under the tabs, as the artboard draws it
-— the screen's padding and the canvas's own frame are taken back for this one
-screen, because every pixel of them was a pixel of every card. **The chart opens fitted and centred**, and so
-does Fit to view: all of it, in the middle of the canvas. A person who reports
-to nobody and leads nobody is a root with no tree, and the canvas packs such a
-card beside the root it follows on the top row; placed after a founder whose
-tree already leans right, it pushed the top of the chart further right, so the
-chart read as sitting right of centre even with its box centred. Such roots go
-to whichever side of the tree centres the top row over the drawing
-(`balanceRoots`), a tie keeping the document's order.
+`#/agents` draws the company in the two arrangements Edit org draws a draft
+in, and with the same drawing: the design system's tree canvas in its `node`
+appearance, elbow connectors on a dotted field, and the switch between the two
+under the zoom bar (`chart=`, the builder's own section param, so a link names
+the same chart on either screen). What a node LOOKS like is shared
+(`ui/orgNodes.tsx`); what it is drawn FROM is not. The **Structure** is the
+default: the company at the root, its root seats and top units off it, and
+each unit's seats and child units off that unit, seats first. A unit's node
+says its type and the key of the tracker project its work is filed under
+("Team · ENG"), and its lead stands in a pill along its bottom edge ("Lead:
+CTO", with "(inherited)" where it is). The **Reporting** chart is every seat
+under its primary manager, the engine's derived `manager`, the line escalation
+goes up. Both are built by `lib/orgchart.ts` from the projection this node has
+APPLIED, never the builder's draft (a test holds that it imports none of the
+builder's model), so between a save and this node applying it the chart has
+not moved, and the "still applying revision …" note says so. Every reporting
+line and every unit's seats are the engine's derived ones; the client draws no
+hierarchy of its own. **The field runs to the sheet's edges**, dotted, under
+the tabs, as the artboard draws it: the screen's padding and the canvas's own
+frame are taken back for this one screen, because every pixel of them was a
+pixel of every node. **The chart opens fitted and centred**, and so does Fit to
+view: all of it, in the middle of the canvas. On the Reporting chart a person
+who reports to nobody and leads nobody is a root with no tree, and the canvas
+packs such a node beside the root it follows on the top row; placed after a
+founder whose tree already leans right, it pushed the top of the chart further
+right, so the chart read as sitting right of centre even with its box
+centred. Such roots go to whichever side of the tree centres the top row over
+the drawing (`balanceRoots`), a tie keeping the document's order.
 
-**A card says who, where and what, in that order**, in the artboard's 184 px:
-the badge (a circle for a person, a squircle for an agent) with the state ring
-and the NAME, which has the first line to itself; then the Agent/Human pill
-leading the unit path, where the unit is what gives way (beside the pill the
-name had some sixty pixels, and every "Agent …" seat read "Agent S…"); then
-the engine's state line ("Executing
-ENG-412", "3 workers on ENG-405", "Needs you · run parked", "Stopped · budget",
-"Idle · last turn 24m ago") after a dot in the state's hue. **Colour shows what
-a seat is doing — never who it is**, which the section tabs say at the end of
-their row on every Agents section, wherever the row has room for it beside
-every tab (it gives way to the tabs, so a phone does without it): the ring, the dot and the line are the only
-hue on a card, and no seat has a colour of its own. The legend at the chart's
-foot counts Working, Needs you, Stopped and Idle from the engine's `activity` —
-a seat with no row yet is counted nowhere, and a person never.
+**A node says who and what, and its title says the rest.** A seat leads with
+the console chart's mark (the Crewlet figure on an agent's purple node, a
+person's glyph in a dashed ring) and its NAME. Under the name an agent's node
+says what it is doing in the engine's word, behind the state's dot
+("Working", "Needs you", "Stopped", "Idle"), and a person's says "Human seat".
+The word is one of a few short ones on purpose: a node is as wide as its name,
+and a caption that grew with the engine's state line would relay the whole
+chart twice a tool-loop round. That line ("Executing ENG-412", "3 workers on
+ENG-405", "Needs you · run parked", "Stopped · budget", "Idle · last turn 24m
+ago") is the node's title, and it is read after the node's name. **A seat's
+dot shows what it is doing**, which the section tabs say at the end of their
+row on every Agents section, wherever the row has room for it beside every tab
+(it gives way to the tabs, so a phone does without it): the dot and the word
+are the only state hue on a node, and the purple says what a seat IS (see "The
+one rule"). The legend at the chart's foot counts Working, Needs you, Stopped
+and Idle from the engine's `activity`: a seat with no row yet is counted
+nowhere, and a person never.
 
-**A card opens the seat beside the chart** (`peek=seat:{handle}`); Enter does
-the same, the arrows walk the tree, `[` and `]` step the seats in the order the
-tree reads — pressed on a card as well as in the peek, since a card's own keys
-would otherwise read them as type-ahead — and while the peek is open it follows
-the card that has focus. A step replaces the address rather than adding to the
+**A node opens beside the chart**: a seat its seat (`peek=seat:{handle}`) and
+a unit its unit (`peek=unit:{name}`). Enter does the same, the arrows walk the
+tree, `[` and `]` step the seats in the order the tree reads (pressed on a node
+as well as in the peek, since a node's own keys would otherwise read them as
+type-ahead), and while the peek is open it follows the node that has focus. A step replaces the address rather than adding to the
 history, so Back closes the peek however many seats it walked through. **A new
 width is fitted again**: the canvas fits the chart once, and the peek then
 takes a share of it — so whenever the canvas's width changes (the peek opening
@@ -2186,17 +2198,16 @@ or closing, the window resized) a chart still at the view it was last fitted to
 is fitted again, all of it and centred, as the approved chart draws it beside a
 peek. **But never shrunk past reading**: a view the chart chooses on its own —
 its first fit and every refit — is drawn at exactly 85% where the fit would
-fall below it (the card's 12 px place and state lines then draw at 10 px),
-centred across on the seat the peek is on, or on the root the company hangs
+fall below it, centred across on the node the peek is on, or on the root the company hangs
 from where nobody is selected, and down the canvas where the kit's own fit
-would put the chart, pulled just far enough to keep that seat on it. Beside a peek
-the Nimbus chart is whole at 94% at 1440 and drawn at 85% at 1280, where a fit
-was 54%; only a Fit the reader presses draws it smaller. A view the reader moved — zoomed in to read the cards, say — stays
-theirs. Either way the card the peek is about is revealed (the least pan that
+would put the chart, pulled just far enough to keep that seat on it. Only a Fit
+the reader presses draws a chart smaller than that. A view the reader moved
+(zoomed in to read the nodes, say) stays theirs. Either way the node the peek
+is about is revealed (the least pan that
 shows it), and a reader stepping in the peek keeps their focus. **On a phone the chart is rows**: a chart of
-cards has no size a phone can read it at, so below the phone breakpoint the
-same tree is the design system's tree grid — every seat a row indented under
-its manager, with the badge, ring, name, kind, place and state line a card
+nodes has no size a phone can read it at, so below the phone breakpoint the
+reporting tree is the design system's tree grid, every seat a row indented
+under its manager, with the badge, ring, name, kind, place and state line a card
 carries — headed by the legend; a row's name or Enter opens the seat. The page
 bar carries **Find a seat** (name, handle or unit; the found seat is focused on
 the canvas and opened — its list grows past the field so a seat's name is never
@@ -2223,8 +2234,8 @@ every other reader reads what the public health push says — this node by name,
 or "another node" — which is what the profile's Setup card says too, and no
 guarded read is sent), Open work (`work_workload`), where its tools come from,
 and its goal, drawn as the inline markdown it is written in. It asks at most three questions. While the
-seat is working the state card ends with **Watch live**, the turn's watch link
-— so the chart's card, then that link, is the way from the company running to
+seat is working the state card ends with **Watch live**, the turn's watch link,
+so the chart's node, then that link, is the way from the company running to
 a turn running: two presses, with no link nested inside the chart's tree item,
 which a keyboard and a screen reader could not reach as itself. **Open profile** and **Message** are the
 rail's foot, pinned to its bottom edge; Message opens the New task sheet with
@@ -6607,16 +6618,13 @@ while the screen binds the real chart, table, editor and dialogs, and
   canvas takes what is left under the toolbar and the shell's scroller has
   nothing to scroll. The table view withdraws the request, and so does the
   posture screen the builder draws before the engine has answered.
-- **Every node is neutral.** Colour is state, and a draft is doing nothing:
-  the chart asks the design system for no `cardTone`, so no seat carries a hue
-  of its own, a person's seat is told from an agent's by its badge's outline,
-  and the one colour a node takes is the selection's accent ring. Its branches
-  are the design system's elbows, the shape the live org chart draws, so the
-  chart a reader edits and the one they watch are one drawing
-  (`CanvasView.test.tsx`, "colour is not identity"). They are drawn at the
-  weight the design system gives a chart of NODES, twice a card chart's,
-  because a node is half a card's height and the branch keeps its ratio to
-  what it joins; the builder sets no stroke of its own.
+- **One drawing with the live chart.** The nodes, their marks, the agent hue
+  and the branches are the live org chart's (`ui/orgNodes.tsx`), so the chart
+  a reader edits and the one they watch are one drawing. The branches are the
+  design system's elbows, drawn at the weight the design system gives a chart
+  of NODES, twice a card chart's, because a node is half a card's height and
+  the branch keeps its ratio to what it joins; the builder sets no stroke of
+  its own.
 - **Fullscreen takes the builder container**, never the canvas: the toolbar,
   the view, the dialog host, a toast outlet of its own and the live region all
   render inside it, because a fullscreen element renders only its subtree.
@@ -6788,8 +6796,9 @@ to.
   performs it.
 - **An agent seat is toned, and nothing else is.** This is the console org
   chart's drawing and the colour rule's second, bounded exception (see "The one
-  rule"): every agent seat takes the same purple, on its card, the branch into
-  it and its table row, and every other node is neutral. No seat has a hue of
+  rule"), and the live org chart's: every agent seat takes the same purple, on
+  its card, the branch into it and its table row, and every other node is
+  neutral. No seat has a hue of
   its own (one hashed from its key, stated in its editor as a "Colour" fact,
   was removed: a legend nobody could decode). A seat leads with the console
   chart's mark rather than a badge: the Crewlet figure for an agent, a
@@ -6851,13 +6860,13 @@ to.
 
 1. **Colour is state, never identity.** No hash-to-hue, no per-agent tint, no
    per-category chip colour. If you need to tell two things apart, use their
-   names. The third-party app marks in `@crewlethq/icons` and Edit org's one
-   purple for every agent seat are the two bounded exceptions (see "The one
-   rule" above); nothing else is.
-   **A seat's identity badge is `Avatar`, everywhere but Edit org, through
-   `SeatAvatar`** (Edit org's chart and table draw the console chart's marks
-   instead, `routes/org/builder/nodeMarks.tsx`'s `seatMark`: see "An agent
-   seat is toned, and nothing else is") (`ui/SeatAvatar.tsx`; `seatBadge` for
+   names. The third-party app marks in `@crewlethq/icons` and the org charts'
+   one purple for every agent seat (Agents › Org chart and Edit org) are the
+   two bounded exceptions (see "The one rule" above); nothing else is.
+   **A seat's identity badge is `Avatar`, everywhere but the org charts,
+   through `SeatAvatar`** (both charts and Edit org's table draw the console
+   chart's marks instead, `ui/orgNodes.tsx`'s `seatMark`: see "An agent seat
+   is toned, and nothing else is") (`ui/SeatAvatar.tsx`; `seatBadge` for
    a kit component that draws the badge itself), drawn from its name or handle so
    the initials are what tell one seat from another. For an AGENT a leading
    word "agent" is dropped before the initials are made, because the squircle
