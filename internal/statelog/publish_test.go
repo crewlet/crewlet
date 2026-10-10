@@ -201,7 +201,8 @@ func TestEvictedNodeRefusesBeforeTheAppend(t *testing.T) {
 				OpID:    "op-1",
 				Pattern: pattern,
 				Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-					return statelog.Decision{Payload: probeRecord(stamp, "op-1", "x")}, nil
+					return statelog.Decision{Payload: probeRecord(stamp, probeSubject("a"),
+						statelog.ScopeSet{Paths: []string{"object.a"}}, "op-1", "x")}, nil
 				},
 			})
 			var refusal *statelog.Unavailable
@@ -267,7 +268,8 @@ func TestARebuiltLogRefusesEveryWriteBeforeTheAppend(t *testing.T) {
 				OpID:    "op-1",
 				Pattern: pattern,
 				Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-					return statelog.Decision{Payload: probeRecord(stamp, "op-1", "x"), Version: 1}, nil
+					return statelog.Decision{Payload: probeRecord(stamp, probeSubject("a"),
+						statelog.ScopeSet{Paths: []string{"object.a"}}, "op-1", "x"), Version: 1}, nil
 				},
 			})
 			requireWrongStream(t, err)
@@ -364,7 +366,8 @@ func TestFenceZeroAtTheAppendRefusesAsItselfInTheSameRound(t *testing.T) {
 						Pattern: pattern,
 						Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 							tc.trip(h)
-							return statelog.Decision{Payload: probeRecord(stamp, "op-1", "x"), Version: 1}, nil
+							return statelog.Decision{Payload: probeRecord(stamp, probeSubject("a"),
+								statelog.ScopeSet{Paths: []string{"object.a"}}, "op-1", "x"), Version: 1}, nil
 						},
 					})
 					tc.require(t, err)
@@ -573,7 +576,8 @@ func TestACreateIsGuardedByTheRowAndByTheDeletionMarker(t *testing.T) {
 			OpID:    "op-1",
 			Pattern: statelog.PatternCreate,
 			Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-				return statelog.Decision{Payload: probeRecord(stamp, "op-1", "x")}, nil
+				return statelog.Decision{Payload: probeRecord(stamp, probeSubject("a"),
+					statelog.ScopeSet{Paths: []string{"object.a"}}, "op-1", "x")}, nil
 			},
 		})
 	}
@@ -742,7 +746,8 @@ func TestARecordMustDeclareWhatItMakesStale(t *testing.T) {
 		Subject: probeSubject("a"),
 		OpID:    "op-1",
 		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			return statelog.Decision{Payload: probeRecord(stamp, "op-1", "x")}, nil
+			return statelog.Decision{Payload: probeRecord(stamp, probeSubject("a"),
+				statelog.ScopeSet{}, "op-1", "x")}, nil
 		},
 	})
 	if err == nil || !strings.Contains(err.Error(), "scope") {
@@ -912,7 +917,8 @@ func TestTheWaitForAPeersPositionIsBoundedAndSaysWhy(t *testing.T) {
 		Pattern: statelog.PatternArbitrated,
 		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			return statelog.Decision{
-				Payload: probeRecord(stamp, "op-1", "mine"),
+				Payload: probeRecord(stamp, probeSubject("a"),
+					statelog.ScopeSet{Paths: []string{"p/a"}}, "op-1", "mine"),
 			}, nil
 		},
 	})

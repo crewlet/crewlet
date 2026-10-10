@@ -439,7 +439,11 @@ batch 1 000 to a statement, and an 8 000-row apply is 8 statements rather than
 Measured unloaded that shape drains about four times faster than one statement
 per row; measured on a loaded CI runner under the race detector, closer to
 1.5 times. The floor above is the loaded, contended figure, so a fleet sized
-against it has margin rather than a number it has to hope for.
+against it has margin rather than a number it has to hope for. `make bench`
+re-measures the unloaded side: on four vCPUs the multi-row shape drained
+52 000–63 000 rows/s and one statement a row 16 000–17 400, and the applier
+itself about 5 900 single-row records a second, each with its anchor, ledger
+row and checkpoint.
 
 One maximal bulk update is about 31 800 rows, which is **about 16 seconds of
 applier occupancy on every peer**. For those 16 seconds two things degrade

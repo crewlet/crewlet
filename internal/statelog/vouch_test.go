@@ -292,7 +292,8 @@ func TestARefusalTheLedgerCannotVouchForIsUnknown(t *testing.T) {
 			OpID:    op,
 			Pattern: statelog.PatternCreate,
 			Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-				return statelog.Decision{Payload: probeRecord(stamp, op, "x")}, nil
+				return statelog.Decision{Payload: probeRecord(stamp, probeSubject("a"),
+					statelog.ScopeSet{Paths: []string{"object.a"}}, op, "x")}, nil
 			},
 		})
 	}
@@ -392,7 +393,8 @@ func TestAnUnknownSaysWhetherTheLedgerCouldVouch(t *testing.T) {
 				// resolution has something to weigh...
 				seq, _, err := h.log.Append(t.Context(), probePrefix+".object.a",
 					"peer-op", nil, probeRecord(statelog.Stamp{
-						Gen: h.gen.Load(), Writer: "node-b"}, "peer-op", "theirs"))
+						Gen: h.gen.Load(), Writer: "node-b"}, probeSubject("a"),
+						statelog.ScopeSet{Paths: []string{"object.a"}}, "peer-op", "theirs"))
 				if err != nil {
 					t.Errorf("land the peer's record: %v", err)
 					return
