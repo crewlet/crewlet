@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -187,6 +189,19 @@ type opSpec struct {
 	domain      string
 	floorStream string
 
+	// alsoReads is every OTHER domain whose rows the operation reads
+	// ([op.alsoReads]): its verdict is asked too, and a copy of any of them
+	// out of service runs none of it here. Its floor and its domain stay
+	// the one above.
+	alsoReads []string
+
+	// copies is what the router keys where it STAYS and whom it passes
+	// over by: the domain, and every domain the operation also reads —
+	// since a node that serves one of them may not serve the other, and a
+	// node that ran an operation over both copies is the one to ask for
+	// that operation, not for either domain's alone ([Router.order]).
+	copies string
+
 	// actor says whether the operation acts AS somebody, which a request
 	// then has to name.
 	actor bool
@@ -235,7 +250,7 @@ func define[A, R any](name string, class opClass, domain string, actor bool,
 		panic(fmt.Sprintf("estate: operation %q declared twice", name))
 	}
 	spec := &opSpec{
-		name: name, class: class, actor: actor, domain: domain,
+		name: name, class: class, actor: actor, domain: domain, copies: domain,
 		args: reflect.TypeFor[A](), result: reflect.TypeFor[R](),
 	}
 	if domain != SeatCopy {
@@ -283,6 +298,42 @@ func define[A, R any](name string, class opClass, domain string, actor bool,
 func (o op[A, R]) floorless() op[A, R] {
 	o.spec.floorStream = ""
 	return o
+}
+
+// alsoReads declares that this operation reads the rows of other domains as
+// well as its own — a page's backlinks name the tasks that link to it — so
+// the verdict of each is asked before it runs here, and a node whose copy of
+// any of them is out of service answers `out_of_service` naming that copy,
+// which sends the asker on to a node whose copies of all of them serve
+// (ADR-0031). Routed on its own domain alone, it answered from a copy the node
+// had stopped serving. Its FLOOR stays on its own domain's log: a second
+// floor would hold it to an applier its answer does not wait on.
+func (o op[A, R]) alsoReads(domains ...string) op[A, R] {
+	for _, d := range domains {
+		if _, known := floorStreams[d]; !known || d == o.spec.domain {
+			panic(fmt.Sprintf("estate: %s also reads %q, which is no other domain "+
+				"this package knows", o.spec.name, d))
+		}
+	}
+	o.spec.alsoReads = slices.Sorted(slices.Values(domains))
+	o.spec.copies = strings.Join(append([]string{o.spec.domain}, o.spec.alsoReads...), "+")
+	return o
+}
+
+// unservedCopy is the first copy op reads that local holds out of service —
+// its own domain's, then each it also reads — or false where every one
+// serves, with the backend over the operation's own domain.
+func unservedCopy(ctx context.Context, local LocalBackends, spec *opSpec) (Backend, string, bool) {
+	b, serves := local.For(ctx, spec.domain)
+	if !serves {
+		return Backend{}, spec.domain, true
+	}
+	for _, d := range spec.alsoReads {
+		if _, serves := local.For(ctx, d); !serves {
+			return Backend{}, d, true
+		}
+	}
+	return b, "", false
 }
 
 // ungated declares that the serving gate does not hold this operation back —

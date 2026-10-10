@@ -130,22 +130,23 @@ type Router struct {
 	readBudget, writeBudget, admissionBudget time.Duration
 
 	mu sync.Mutex
-	// sticky is, per domain, the node that answered that domain's operation
-	// last — asked first for it next time.
+	// sticky is, per set of copies an operation reads ([opSpec.copies]) —
+	// one domain's for nearly every operation — the node that answered such
+	// an operation last, asked first for one next time.
 	sticky map[string]string
 	// suspect is when each node that went unanswered may be asked first
 	// again.
 	suspect map[string]time.Time
 	// passedOver is when each node that answered `out_of_service` for a
-	// domain may be asked ahead of the rest for it again.
+	// set of copies may be asked ahead of the rest for it again.
 	passedOver map[nodeCopy]time.Time
 	// admitted caches a REMOTE node's answer to the admission question —
 	// see [Router.Serves] — nil until one has been asked.
 	admitted *admission
 }
 
-// nodeCopy is one node's copy of one domain.
-type nodeCopy struct{ node, domain string }
+// nodeCopy is one node's copies of what an operation reads ([opSpec.copies]).
+type nodeCopy struct{ node, copies string }
 
 // admission is one cached answer to [Router.Serves].
 type admission struct {
@@ -416,7 +417,7 @@ func (r *Router) route(ctx context.Context, spec *opSpec, actor *Actor, x exchan
 		}
 		return nil, fmt.Errorf("estate: %s: read who holds the estate: %w", spec.name, err)
 	}
-	for _, node := range r.order(spec.domain, nodes) {
+	for _, node := range r.order(spec.copies, nodes) {
 		rep, answered, err := r.askFor(ctx, spec, actor, x, node, budget, false)
 		if err != nil {
 			return nil, err
@@ -482,12 +483,12 @@ func (r *Router) tryLocal(ctx context.Context, spec *opSpec, x exchange, acceptL
 	if r.local == nil {
 		return nil, false, nil
 	}
-	b, ok := r.local.For(ctx, spec.domain)
-	if !ok {
+	b, wrong, unserved := unservedCopy(ctx, r.local, spec)
+	if unserved {
 		// SAID, like every other node that ran nothing: an estate nobody
 		// serves names why this node's own copy was passed over, which
 		// on a single data node is the whole of the answer.
-		w.note("%s: %s", r.self, outOfService(spec.domain))
+		w.note("%s: %s", r.self, outOfService(wrong))
 		return nil, false, nil
 	}
 	b.ServerSeams = r.seams
@@ -553,12 +554,12 @@ func (r *Router) settle(spec *opSpec, x exchange, node string, rep reply, w *wal
 		case unservedLagging:
 			w.lagging = append(w.lagging, node)
 		case unservedOutOfService:
-			r.markOutOfService(node, spec.domain)
+			r.markOutOfService(node, spec.copies)
 		}
 		w.note("%s: %s", node, rep.Detail)
 		return nil, false, nil
 	}
-	r.markAnswered(node, spec.domain)
+	r.markAnswered(node, spec.copies)
 	if rep.Err != nil {
 		failure := decodeError(rep.Err)
 		if unvouched(spec, nil, failure) {
@@ -672,9 +673,10 @@ func (r *Router) ask(ctx context.Context, node string, req request, budget time.
 	return rep, true, nil
 }
 
-// order is the order the data nodes are asked in for an operation on domain:
-// that domain's STICKY node first, then the rest, then every node that
-// answered `out_of_service` for that domain inside [suspectFor], and every
+// order is the order the data nodes are asked in for an operation reading
+// copies ([opSpec.copies] — its own domain's, and any other's it also reads):
+// the STICKY node for those copies first, then the rest, then every node that
+// answered `out_of_service` for them inside [suspectFor], and every
 // SUSPECT node last — [rendezvous.Order] on this node's own id within each
 // class, kept by a STABLE sort, so the classes only move nodes between them —
 // and never this node, which the router asks in-process or not at all.
@@ -691,14 +693,14 @@ func (r *Router) ask(ctx context.Context, node string, req request, budget time.
 // second, was answered by the first and made it sticky back — every call paid
 // a round trip that ran nothing, and a third node serving both was never asked
 // first at all.
-func (r *Router) order(domain string, nodes []string) []string {
+func (r *Router) order(copies string, nodes []string) []string {
 	// rendezvous.Order hands back a slice of its own, so the placement's
 	// listing is never the one trimmed or sorted here; and removing members
 	// from its answer leaves the rest in rendezvous order.
 	nodes = slices.DeleteFunc(rendezvous.Order(r.self, nodes),
 		func(n string) bool { return n == r.self || n == "" })
 	r.mu.Lock()
-	sticky := r.sticky[domain]
+	sticky := r.sticky[copies]
 	now := r.now()
 	suspect := map[string]bool{}
 	for n, until := range r.suspect {
@@ -713,7 +715,7 @@ func (r *Router) order(domain string, nodes []string) []string {
 		switch {
 		case !now.Before(until):
 			delete(r.passedOver, c)
-		case c.domain == domain:
+		case c.copies == copies:
 			passedOver[c.node] = true
 		}
 	}
@@ -760,26 +762,26 @@ func (r *Router) markSuspect(node string) {
 	r.placement.Unanswered(node)
 }
 
-// markOutOfService asks node last for domain's operations for [suspectFor]:
-// its copy of that domain is out of service (ADR-0031), and every other
-// domain's place it holds stays — so does the node, which answered.
-func (r *Router) markOutOfService(node, domain string) {
+// markOutOfService asks node last for [suspectFor] for the operations that read
+// copies: one of its copies of them is out of service (ADR-0031), and every
+// other place it holds stays — so does the node, which answered.
+func (r *Router) markOutOfService(node, copies string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.passedOver[nodeCopy{node: node, domain: domain}] = r.now().Add(suspectFor)
-	if r.sticky[domain] == node {
-		delete(r.sticky, domain)
+	r.passedOver[nodeCopy{node: node, copies: copies}] = r.now().Add(suspectFor)
+	if r.sticky[copies] == node {
+		delete(r.sticky, copies)
 	}
 }
 
-// markAnswered makes node the one asked first for domain's operations: it ran
-// one, so its copy of that domain serves.
-func (r *Router) markAnswered(node, domain string) {
+// markAnswered makes node the one asked first for the operations that read
+// copies: it ran one, so its copies of them serve.
+func (r *Router) markAnswered(node, copies string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.sticky[domain] = node
+	r.sticky[copies] = node
 	delete(r.suspect, node)
-	delete(r.passedOver, nodeCopy{node: node, domain: domain})
+	delete(r.passedOver, nodeCopy{node: node, copies: copies})
 }
 
 // unvouched reports an idempotent write's answer that is NOT final: an

@@ -80,13 +80,13 @@ func (s server) answer(ctx context.Context, raw []byte) []byte {
 		ctx, cancel = context.WithDeadline(ctx, req.Deadline)
 		defer cancel()
 	}
-	b, serves := s.local.For(ctx, spec.domain)
-	if !serves {
+	b, wrong, unserved := unservedCopy(ctx, s.local, spec)
+	if unserved {
 		// NOTHING RAN, so every class moves on — a page write
 		// included, whose never-repeat rule is about a request that
 		// may have run.
 		out.Unserved = unservedOutOfService
-		out.Detail = s.self + "'s " + outOfService(spec.domain)
+		out.Detail = s.self + "'s " + outOfService(wrong)
 		return encodeReply(out)
 	}
 	reason, detail, obsolete := ready(ctx, s.self, spec, b, req.Floors, req.AcceptLagging)
@@ -163,10 +163,11 @@ func encodeResult(result any) ([]byte, error) {
 //
 // A FLOOR ON ANOTHER DOMAIN'S LOG IS NOT WAITED FOR, though the estate carries
 // every domain's log: no operation reads another domain's rows at a position —
-// each domain's tables are written by its own applier alone, and the one
-// cross-domain read, a search's semantic half over the vectors, is of an index
-// no position describes — so a floor there buys nothing, and costs a refusal
-// whenever THAT log's applier lags. The seat a
+// each domain's tables are written by its own applier alone, and the reads
+// that cross into another's, a search's semantic half over the vectors and a
+// page's backlinks over the tracker, are of indexes no position describes — so
+// a floor there buys nothing, and costs a refusal whenever THAT log's applier
+// lags. The seat a
 // page comment woke would otherwise hold every tracker read and write its node
 // routes until the pages applier reached the comment, and be refused them
 // `behind` while that applier was faulted. This node's own router never sends

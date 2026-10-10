@@ -333,7 +333,12 @@ and the same read extracts the page ids that body links to — `/pages/<id>` or
 the dashboard's `#/knowledge/pages/<id>`, outside code — into this node's
 `page_links` table. That is where a page's **Linked from** comes from (the
 `page` answer's `linked_from`), so it has the index's staleness: a body saved a
-moment ago lists its links once the next lap reads it.
+moment ago lists its links once the next lap reads it. The links are read from
+the pages' and the tasks' rows both, so they are answered by a data node whose
+copies of **both** the knowledge base and the tracker are in service — the
+node asked, when its own copy of either is out of service, is another one
+([ADR-0031](https://github.com/crewlet/crewlet/blob/main/adr/0031-a-domains-fault-takes-only-its-own-copy-out-of-service.md)) —
+and `linked_from_status: unavailable` when no data node's are.
 
 It has the index's first lap too. Until a node has finished its first lap over
 both pages and tasks it cannot say what links to a page, and the `page` answer

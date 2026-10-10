@@ -824,18 +824,6 @@ func (e *Engine) Pages() *pages.Reader {
 	return n.pageReader
 }
 
-// Backlinks is this node's "linked from" reader — the lexical index, which
-// derives the links from the bodies it reads — or nil for a node with no
-// native backend. Nil only where the index is: a company on Jira and
-// Confluence has no body this engine indexes, so no link it could list.
-func (e *Engine) Backlinks() *search.Indexer {
-	n := e.native.Load()
-	if n == nil {
-		return nil
-	}
-	return n.indexer
-}
-
 // PagesStore is this node's knowledge write side, or nil — nil in a
 // maintenance mode too; see [Engine.writeSide].
 func (e *Engine) PagesStore() *pages.Store {
@@ -1911,7 +1899,9 @@ func OperatorWorkWriter(e *Engine) (func(estate.Actor) estate.WorkWriter, bool) 
 
 // OperatorPages is the knowledge base's read side as the operator's surfaces
 // reach it, through the router for [OperatorWork]'s reason — or false where
-// this company runs no native knowledge base here.
+// this company runs no native knowledge base here. A page's backlinks are read
+// through it too ([estate.Pages.LinkedFrom]): they read the tracker's copy as
+// well as the knowledge base's, and are answered only where both serve.
 func OperatorPages(e *Engine) (estate.Pages, bool) {
 	_, wiki, ok := e.nativeHalves()
 	if !ok || !wiki || e.router == nil {
