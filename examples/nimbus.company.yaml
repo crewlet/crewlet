@@ -117,8 +117,10 @@ providers:
   # ${LLM_API_KEY} provider, so the sandbox needs NO extra secret.  Claude
   # Code only speaks the Anthropic API, so choosing it here would require
   # adding an 'anthropic' providers.llm entry and pointing each engineer's
-  # role.llm_sandbox at it (otherwise the sandbox run fails credential
-  # validation — SandboxCredentialError — at launch).
+  # role.llm_sandbox at it, or giving each engineer a Claude Code sign-in
+  # of its own in role.sandbox.env (otherwise the launch is refused with a
+  # SandboxModelError: Claude Code can read neither this entry's model nor
+  # its key).
   sandbox:
     # THE PROVIDER BLOCK IS A CATALOGUE: it says which boxes EXIST, and each
     # seat picks one with `role.sandbox.run_in`. Configure `local:`, `e2b:`,

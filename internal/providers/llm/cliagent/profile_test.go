@@ -27,6 +27,25 @@ func TestAProfileWithoutAModelFlagRefusesAModel(t *testing.T) {
 	}
 }
 
+// A MODEL FLAG WITHOUT {model} TAKES NO MODEL. `["--model", "fixed"]` passes
+// `fixed` on every call whatever the entry's model says, which drops the model
+// exactly as silently as declaring no flag — so it is refused beside a model,
+// like an empty one.
+func TestModelArgsWithNoPlaceholderTakeNoModel(t *testing.T) {
+	t.Parallel()
+	_, err := New(Config{
+		Key: "oc", Agent: "opencode", Model: "anthropic/claude-sonnet-5",
+		Overrides: map[string]any{"model_args": []any{"--model", "anthropic/fixed"}},
+		StateDir:  t.TempDir(), Timeout: 1, MaxConcurrent: 1,
+	})
+	if err == nil {
+		t.Fatal("an entry whose model never reaches its CLI was built")
+	}
+	if !strings.Contains(err.Error(), "{model}") {
+		t.Errorf("error %q does not name the placeholder", err)
+	}
+}
+
 // `crewlet llm doctor` exists to settle one question — are these token counts
 // the vendor's or this engine's guess — so the predicate behind it has to ask
 // what the EXTRACTOR asks, not a narrower question that happens to agree on

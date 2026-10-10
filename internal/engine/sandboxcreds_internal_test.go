@@ -172,7 +172,8 @@ func TestACLIEnvSignInTravelsIntoTheRun(t *testing.T) {
 	t.Parallel()
 	company := func(env map[string]string) (*Company, *org.Role) {
 		provider, err := cliagent.New(cliagent.Config{
-			Key: "sub", Agent: "opencode", StateDir: t.TempDir(), Timeout: time.Minute, Env: env,
+			Key: "sub", Agent: "opencode", Model: "anthropic/claude-sonnet-4",
+			StateDir: t.TempDir(), Timeout: time.Minute, Env: env,
 		})
 		if err != nil {
 			t.Fatalf("cliagent.New: %v", err)
@@ -191,7 +192,11 @@ func TestACLIEnvSignInTravelsIntoTheRun(t *testing.T) {
 	c, seat := company(map[string]string{
 		"ANTHROPIC_API_KEY": "sk-ant-not-real", "HTTPS_PROXY": "http://proxy.example.com",
 	})
-	_, _, env := runLLM(c, seat, phase.Sandbox)
+	run, err := newCodingRun(c, seat, phase.Sandbox, "opencode", nil)
+	if err != nil {
+		t.Fatalf("an opencode entry under its own runner was refused: %v", err)
+	}
+	env := run.env
 	if env["ANTHROPIC_API_KEY"] != "sk-ant-not-real" {
 		t.Fatalf("the run environment does not carry the cli.env sign-in: %v", env)
 	}
@@ -217,7 +222,7 @@ func TestACLIEnvSignInTravelsIntoTheRun(t *testing.T) {
 		t.Error("a remote run whose only variable is a token count was launched")
 	}
 
-	err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, nil)
+	err = sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, nil)
 	if err == nil {
 		t.Fatal("a remote run with no sign-in was launched")
 	}
@@ -225,5 +230,10 @@ func TestACLIEnvSignInTravelsIntoTheRun(t *testing.T) {
 		if !strings.Contains(err.Error(), route) {
 			t.Errorf("the refusal does not name the %s route this CLI takes: %v", route, err)
 		}
+	}
+	// And WHOSE key: the provider segment of the model the box is handed is
+	// the one fact that says which provider has to sign the run in.
+	if !strings.Contains(err.Error(), `"anthropic", the provider its model names`) {
+		t.Errorf("the refusal does not name the provider whose key is missing: %v", err)
 	}
 }

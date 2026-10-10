@@ -346,23 +346,6 @@ type Profile struct {
 	// Binary is the executable, resolved on PATH unless it is a path.
 	Binary string `yaml:"binary,omitempty"`
 
-	// Vendor is the model FAMILY this CLI addresses — anthropic, openai,
-	// google or meta.
-	//
-	// An OPEN set, not a closed one: it names whatever family the CLI's
-	// models belong to, and a coding-agent catalogue that does not know a
-	// family falls back to its own default rather than refusing. Writing
-	// `openai` for a vendor that merely speaks OpenAI's wire protocol
-	// would make the field say something false to buy nothing, since the
-	// fallback lands in the same place.
-	//
-	// Needed because every cli-agent entry shares one providers.llm type,
-	// so a coding agent that resolves "<family>/<model>" against a
-	// catalogue would address a Claude subscription's "sonnet" as an
-	// OpenAI model. The provider type names the family for an API entry;
-	// this names it for a subscription one.
-	Vendor string `yaml:"vendor,omitempty"`
-
 	// WrittenFor is the CLI version this profile was written against,
 	// printed by `crewlet llm doctor` beside the version actually
 	// installed. A profile that silently stopped matching its CLI is the
@@ -378,10 +361,25 @@ type Profile struct {
 	// command line neither side wrote.
 	CompleteArgs []string `yaml:"complete_args,omitempty"`
 
-	// ModelArgs carries the model, with {model} substituted. Empty means
-	// the CLI takes no model flag, and an entry naming a model gets a
-	// validation error rather than a silently ignored setting.
+	// ModelArgs carries the model, with {model} substituted. One with no
+	// {model} — empty included — means the CLI takes no model, and an entry
+	// naming a model gets a validation error rather than a silently ignored
+	// setting ([Profile.TakesModel]). The placeholder may stand as the
+	// flag's own element or after `=` in a joined `--model={model}`.
 	ModelArgs []string `yaml:"model_args,omitempty"`
+
+	// ModelNamesProvider declares that the CLI reads its model flag's value
+	// as `<provider>/<model>` and splits it at the FIRST slash, so a value
+	// with nothing before or after that slash names no model at all and
+	// every call fails inside the CLI. Config refuses such a `model` on a
+	// write, judged on the value the CLI is handed ([Profile.ModelArgument]).
+	//
+	// A DECLARATION OF A VENDOR FACT, measured per CLI and overridable like
+	// every other: a release that starts accepting a bare id is an override,
+	// not a Crewlet release. Only opencode's is measured — its `run --model`
+	// splits the value at the first slash and a bare id is "Model not
+	// found: <id>/." — so only opencode declares it.
+	ModelNamesProvider bool `yaml:"model_names_provider,omitempty"`
 
 	// PromptMode is stdin (the default), argv or file.
 	PromptMode PromptMode `yaml:"prompt_mode,omitempty"`
@@ -665,11 +663,56 @@ func IsCredentialName(name string) bool {
 }
 
 // TakesModel reports whether this profile passes a model to its CLI — whether
-// it declares model_args.
+// an element of its model_args carries {model}.
 //
 // One predicate for the two places that refuse a model the CLI would never
 // see: config, which every write path runs, and the backend's constructor.
-func (p *Profile) TakesModel() bool { return len(p.ModelArgs) > 0 }
+// The PLACEHOLDER, not merely a flag: `["--model", "fixed"]` passes `fixed`
+// on every call whatever the entry's `model` says, which drops the entry's
+// model exactly as silently as declaring no flag at all.
+func (p *Profile) TakesModel() bool {
+	return slices.ContainsFunc(p.ModelArgs, func(arg string) bool {
+		return strings.Contains(arg, modelPlaceholder)
+	})
+}
+
+// modelPlaceholder is what a model_args element carries the entry's model as.
+const modelPlaceholder = "{model}"
+
+// ModelArgument is the model as a text call hands it to the CLI: the VALUE of
+// the model_args element carrying {model}, rendered with model — so an
+// override such as ["--model", "openrouter/{model}"] is part of it. The model
+// itself when no element carries the placeholder, which config and the
+// backend both refuse beside a model ([Profile.TakesModel]).
+//
+// ONE RENDERING FOR EVERY PLACE THE MODEL GOES, because a cli-agent entry's
+// `model` is written in its CLI's own grammar and every reader of it has to
+// see the same string: a text call's argv, an agent-mode or code-sandbox run
+// of the same CLI in a box, and the config rule that judges the value as that
+// CLI reads it. A run that rebuilt the value its own way named one model to
+// the box and another to every text call on the same entry.
+//
+// THE VALUE, NOT THE ELEMENT. A box's runner writes its own flag
+// (`--model <value>`), so an element that spells flag and value as one —
+// `--model={model}`, which every CLI here also accepts — is read past its
+// first `=`: returned whole it reached the box as `--model
+// '--model=anthropic/claude-sonnet-5'`, and the config rule judged
+// `--model=anthropic` as the provider.
+func (p *Profile) ModelArgument(model string) string {
+	for _, arg := range p.ModelArgs {
+		at := strings.Index(arg, modelPlaceholder)
+		if at < 0 {
+			continue
+		}
+		if strings.HasPrefix(arg, "-") {
+			if eq := strings.IndexByte(arg, '='); eq >= 0 && eq < at {
+				arg = arg[eq+1:]
+			}
+		}
+		return strings.ReplaceAll(arg, modelPlaceholder, model)
+	}
+	return model
+}
 
 // EffectiveMarkerScope is the scope with its default applied.
 func (p *Profile) EffectiveMarkerScope() MarkerScope {

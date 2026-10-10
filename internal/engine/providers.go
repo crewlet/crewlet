@@ -48,12 +48,22 @@ import (
 // had just called valid. The epoch carries a nil registry instead, which is
 // what [Company.Models] documents and what the dispatcher reads to hold every
 // seat's work until a provider arrives.
-func buildProviders(c *config.Company, r *config.Resolver) (*phase.Registry, error) {
+//
+// IT ALSO RETURNS EVERY API ENTRY'S RESOLVED ENDPOINT, keyed on the entry: the
+// model, base URL and keys its backend was built with, which is what a coding
+// box run on that entry is handed ([runLLM]). Kept from THIS resolution rather
+// than resolved again at launch, because a box must address the endpoint and
+// carry the key the seat's own calls use, and a second resolution through a
+// resolver whose store moved since would hand it ones no call of this epoch
+// ever made. A cli-agent entry is not in it: its provider holds its own
+// resolved model and sign-in.
+func buildProviders(c *config.Company, r *config.Resolver) (*phase.Registry, map[string]endpoint, error) {
 	order := c.Providers.ProviderOrder()
 	if len(order) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	entries := make([]phase.Entry, 0, len(order))
+	endpoints := make(map[string]endpoint, len(order))
 	for _, key := range order {
 		spec, ok := c.Providers.LLM[key]
 		if !ok {
@@ -61,28 +71,46 @@ func buildProviders(c *config.Company, r *config.Resolver) (*phase.Registry, err
 			// happen — but a silent skip here would produce a registry
 			// missing a provider the operator configured, and the seat
 			// using it would fall back to another model with nothing said.
-			return nil, fmt.Errorf("engine: provider %q is in the order but not in the map", key)
+			return nil, nil, fmt.Errorf("engine: provider %q is in the order but not in the map", key)
 		}
-		p, err := buildProvider(key, spec, r)
+		p, e, err := buildProvider(key, spec, r)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
+		}
+		if spec.Type != config.LLMCLIAgent {
+			endpoints[key] = e
 		}
 		entries = append(entries, phase.Entry{Key: key, Provider: p})
 	}
-	return phase.NewRegistry(entries)
+	registry, err := phase.NewRegistry(entries)
+	if err != nil {
+		return nil, nil, err
+	}
+	return registry, endpoints, nil
 }
 
-// buildProvider constructs one backend.
+// buildProvider constructs one backend, and returns the endpoint it resolved
+// for it — the one resolution [buildProviders] keeps for the entry's coding
+// boxes, so a box and the backend can never be handed two.
 //
 // A provider whose credentials are missing still BUILDS. Every call then comes
 // back a clean 401, which names the provider and the vendor, far easier to
 // diagnose than a constructor that refused to exist and took the whole company
 // down at boot with a message about one key.
-func buildProvider(key string, spec config.LLMProvider, r *config.Resolver) (llm.Provider, error) {
+func buildProvider(key string, spec config.LLMProvider, r *config.Resolver) (llm.Provider, endpoint, error) {
 	e, err := resolveEndpoint(key, spec, r)
 	if err != nil {
-		return nil, err
+		return nil, endpoint{}, err
 	}
+	p, err := buildBackend(key, spec, r, e)
+	if err != nil {
+		return nil, endpoint{}, err
+	}
+	return p, e, nil
+}
+
+// buildBackend is the backend of spec's type over its resolved endpoint.
+func buildBackend(key string, spec config.LLMProvider, r *config.Resolver, e endpoint) (llm.Provider, error) {
 	switch spec.Type {
 	case config.LLMAnthropic:
 		return buildAnthropic(key, spec, e)

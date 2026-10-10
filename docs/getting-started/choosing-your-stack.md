@@ -368,12 +368,16 @@ agent-mode entry) would fall to it on a catalogue offering more than one cell
 needs none — as long as *something* names a cell, since a backend is only
 built for a cell that is reached.
 
-Coding-agent choice: **OpenCode** is provider-agnostic (reuses any
-OpenAI-compatible provider you already configured — no extra secret);
-**Claude Code** requires an `anthropic` provider entry, a
-[`cli-agent`](../concepts/subscription-llm-backends.md) one, or an
-`ANTHROPIC_*` credential in `role.sandbox.env` (select it per role via
-`role.llm_sandbox`).
+Coding-agent choice: **OpenCode** is provider-agnostic (reuses the key of
+any `anthropic`, `openai` or OpenAI-compatible provider you already
+configured — no extra secret — and runs an `opencode`
+[`cli-agent`](../concepts/subscription-llm-backends.md) entry);
+**Claude Code** requires an `anthropic` provider entry, a `claude-code`
+`cli-agent` one, or a Claude Code sign-in of the seat's own in
+`role.sandbox.env` (select the entry per role via `role.llm_sandbox`). A
+`cli-agent` entry's code work needs that same CLI as the seat's
+`coding_agent` — an `opencode` entry needs `coding_agent: opencode` — and
+any other pairing is [refused](../concepts/code-sandbox.md#failure-modes).
 
 One networking caveat for local development: a **cloud** E2B sandbox cannot
 reach services on your laptop (`localhost` GitLab) — in-sandbox tool

@@ -176,6 +176,14 @@ func TestAProfileWithNoModelFlagIsRefusedOnEveryPath(t *testing.T) {
 	if err := cfg.ValidateRunnable(); err == nil {
 		t.Error("ValidateRunnable() admitted an entry whose backend cannot be built")
 	}
+
+	// A flag WITHOUT the placeholder drops the model as silently: it
+	// passes the same fixed value on every call.
+	err = rejects(t, cliEntry(`cli: {agent: codex, overrides: {model_args: ["--model", "gpt-5"]}}`),
+		"providers.llm.sub.cli.overrides.model_args")
+	if !errors.Is(err, ErrMissing) || !strings.Contains(err.Error(), "{model}") {
+		t.Errorf("want a missing-placeholder refusal, got %v", err)
+	}
 }
 
 // The routes each CLI does read are accepted, or the rules above refuse what

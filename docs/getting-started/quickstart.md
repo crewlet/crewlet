@@ -228,6 +228,7 @@ providers:
     subscription:
       type: cli-agent
       model: sonnet                   # whatever the CLI's --model accepts
+                                      #   (opencode: <provider>/<model>)
       cli:
         agent: claude-code            # or codex | gemini-cli | opencode
                                       #    | muse-code | kimi-code | hermes

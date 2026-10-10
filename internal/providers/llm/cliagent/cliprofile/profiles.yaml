@@ -12,7 +12,6 @@
 
 claude-code:
   binary: claude
-  vendor: anthropic
   written_for: "Claude Code CLI 2.1.x (`claude --version`)"
   version_args: ["--version"]
   # --no-session-persistence and --safe-mode are the isolation the rest of
@@ -161,7 +160,6 @@ claude-code:
 
 codex:
   binary: codex
-  vendor: openai
   written_for: "Codex CLI 0.153.x (`codex --version`)"
   version_args: ["--version"]
   # read-only sandbox for the same reason as Claude's tool denials, and
@@ -215,7 +213,6 @@ codex:
 
 gemini-cli:
   binary: gemini
-  vendor: google
   written_for: "Gemini CLI 0.58.x (`gemini --version`)"
   version_args: ["--version"]
   complete_args: ["--output-format", "json", "--approval-mode", "default"]
@@ -270,7 +267,6 @@ gemini-cli:
 
 qwen-code:
   binary: qwen
-  vendor: openai
   written_for: "Qwen Code 0.23.x (`qwen --version`), a Gemini CLI fork"
   version_args: ["--version"]
   complete_args: ["--output-format", "json", "--approval-mode", "default"]
@@ -317,7 +313,6 @@ qwen-code:
 
 opencode:
   binary: opencode
-  vendor: anthropic
   written_for: "OpenCode 1.18.x (`opencode --version`)"
   version_args: ["--version"]
   complete_args: ["run", "--print-logs=false"]
@@ -331,6 +326,13 @@ opencode:
     - path: .config/opencode/opencode.json
       content: '{"$schema":"https://opencode.ai/config.json","permission":{"read":"deny","edit":"deny","glob":"deny","grep":"deny","bash":"deny","task":"deny","skill":"deny","lsp":"deny","question":"deny","external_directory":"deny","webfetch":"allow","websearch":"allow"}}'
   model_args: ["--model", "{model}"]
+  # `opencode run --model` takes `provider/model` and splits it at the FIRST
+  # slash (packages/opencode/src/cli/cmd/run.ts: `const [providerID,
+  # ...rest] = value.split("/")`), so `openrouter/anthropic/claude-sonnet-5`
+  # is the openrouter provider's `anthropic/claude-sonnet-5`, and a bare
+  # `claude-sonnet-5` is a provider with no model, which every call refuses
+  # with "Model not found: claude-sonnet-5/.". Config refuses that on a write.
+  model_names_provider: true
   prompt_mode: argv
   output: text
   credential_paths: [".local/share/opencode/auth.json"]
@@ -376,7 +378,6 @@ opencode:
 
 cursor-agent:
   binary: cursor-agent
-  vendor: anthropic
   written_for: "Cursor Agent 2026.09.x (`cursor-agent --version`), which versions by DATE"
   version_args: ["--version"]
   complete_args: ["-p", "--output-format", "json"]
@@ -422,7 +423,6 @@ cursor-agent:
 
 copilot:
   binary: copilot
-  vendor: openai
   written_for: "GitHub Copilot CLI 1.0.x (`copilot --version`)"
   version_args: ["--version"]
   # The tool flags come BEFORE -p, so nothing here can be read as the prompt,
@@ -465,7 +465,6 @@ copilot:
 
 grok:
   binary: grok
-  vendor: openai
   # xAI'S OWN CLI (github.com/xai-org/grok-build, installed from x.ai/cli),
   # NOT the same-named community package on npm. Both put a `grok` on PATH
   # and they are different programs: this profile's `.grok/auth.json`,
@@ -532,7 +531,6 @@ muse-code:
   # writing `openai` because Meta's Model API also speaks chat-completions
   # would make the profile say something false about the model to buy nothing
   # — an unknown family already falls back to the same catalogue default.
-  vendor: meta
   written_for: "Muse Code 1.0.3 (`muse --version` prints `1.0.3-R2198.1`)"
   version_args: ["--version"]
   # `muse exec`, the vendor's own headless surface: one prompt, run to
@@ -736,11 +734,6 @@ muse-code:
 
 kimi-code:
   binary: kimi
-  # Moonshot's own family. The managed service the OAuth login reaches is
-  # api.kimi.com/coding/v1 and its model aliases are `kimi-code/k3`,
-  # `kimi-code/kimi-for-coding` and `kimi-code/kimi-for-coding-highspeed` —
-  # none of which any other vendor's catalogue would resolve.
-  vendor: moonshot
   # MOONSHOT'S OWN CLI, `@moonshot-ai/kimi-code` — NOT the unscoped `kimi-code`
   # package on npm, which is a community wrapper that starts an
   # anthropic-proxy and runs Claude Code behind it. Both install a `kimi` on
@@ -1004,13 +997,6 @@ kimi-code:
 
 hermes:
   binary: hermes
-  # NO VENDOR, and that is a statement rather than an omission: this CLI is a
-  # front end over 300+ models across Nous Portal, OpenRouter, Anthropic,
-  # OpenAI and a dozen more, and its `model` carries its own `provider/id`
-  # prefix. Naming one family here would make the field say something false
-  # about every entry that chose another; empty falls back to the coding-agent
-  # catalogue's own default, which is the honest answer.
-  vendor: ""
   # MEASURED AGAINST 0.21.2: the argv driven through the CLI's own argparse
   # (hermes_cli/_parser.py), the toolset resolved through its own registry,
   # the usage-report keys read off hermes_cli/oneshot.py, and the version
@@ -1175,10 +1161,6 @@ hermes:
 
 pi:
   binary: pi
-  # NO VENDOR, for the same reason as hermes: this is a harness over 20+
-  # providers and its `--model` takes a `provider/id` pattern, so the family
-  # belongs to the entry's model rather than to the CLI.
-  vendor: ""
   # `@earendil-works/pi-coding-agent`. The project moved from Mario Zechner's
   # `@mariozechner` scope to Earendil Works, so the older package name is a
   # different, frozen thing.

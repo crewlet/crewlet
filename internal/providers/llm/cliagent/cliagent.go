@@ -134,8 +134,8 @@ func New(cfg Config) (*Provider, error) {
 	// building the provider from code.
 	if cfg.Model != "" && !profile.TakesModel() {
 		return nil, fmt.Errorf(
-			"cli-agent %q: the %q CLI takes no model flag, so model %q would be ignored — "+
-				"remove it, or declare cli.overrides.model_args",
+			"cli-agent %q: no model_args element of the %q CLI carries {model}, so model %q "+
+				"would be ignored — remove it, or declare cli.overrides.model_args with {model}",
 			cfg.Key, cfg.Agent, cfg.Model)
 	}
 	if cfg.StateDir == "" {
@@ -182,6 +182,11 @@ func New(cfg Config) (*Provider, error) {
 
 // Model is the configured model identity.
 func (p *Provider) Model() string { return p.model }
+
+// ModelArgument is the model exactly as this entry's text calls hand it to the
+// CLI ([cliprofile.Profile.ModelArgument]) — what a coding run of the same CLI
+// is handed too, so a box and a text call on one entry name one model.
+func (p *Provider) ModelArgument() string { return p.profile.ModelArgument(p.model) }
 
 // AgentMode reports whether this entry runs a seat's executor as the CLI's own
 // agentic run rather than as a text completion behind the engine's tool loop.

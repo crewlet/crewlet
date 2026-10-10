@@ -1108,9 +1108,9 @@ func (c *CLIAgent) validate(path Path) error {
 // API, activated, and then refused by every node.
 //
 // RUNNABLE, because each says the backend cannot be built: the profile does
-// not load, or it has no model flag, and every entry names a model (the
-// backend refuses to drop one silently). Where the entry's CREDENTIALS go is
-// the admission half, [LLMProvider.validateCLICredentials].
+// not load, or no model_args element carries {model}, and every entry names a
+// model (the backend refuses to drop one silently). Where the entry's
+// CREDENTIALS go is the admission half, [LLMProvider.validateCLICredentials].
 func (l *LLMProvider) validateCLIProfile(path Path) error {
 	cli := l.CLI
 	if cli.Agent != "" && !cli.Agent.Valid() {
@@ -1128,9 +1128,9 @@ func (l *LLMProvider) validateCLIProfile(path Path) error {
 	}
 	if strings.TrimSpace(l.Model) != "" && !profile.TakesModel() {
 		p.add(at(path, "cli.overrides.model_args"), ErrMissing,
-			"the %q profile declares no model flag, so the model %q this entry "+
+			"the %q profile's model_args carry no {model}, so the model %q this entry "+
 				"names would never reach the CLI, and every entry names one: declare "+
-				`the flag, e.g. cli.overrides.model_args: ["--model", "{model}"]`,
+				`the flag with the placeholder, e.g. cli.overrides.model_args: ["--model", "{model}"]`,
 			cli.Name(), l.Model)
 	}
 	return p.err()
@@ -1147,6 +1147,80 @@ func (c *Company) validateCLIAgentCredentials() error {
 		}
 		p.wrap(spec.validateCLICredentials(entryPath(key)))
 	}
+	return p.err()
+}
+
+// validateCLIAgentModels is [LLMProvider.validateCLIModel] over every
+// cli-agent entry of the company, in key order.
+func (c *Company) validateCLIAgentModels() error {
+	var p problems
+	for _, key := range sortedKeys(c.Providers.LLM) {
+		spec := c.Providers.LLM[key]
+		if spec.Type != LLMCLIAgent || spec.CLI == nil {
+			continue
+		}
+		p.wrap(spec.validateCLIModel(entryPath(key)))
+	}
+	return p.err()
+}
+
+// validateCLIModel holds a cli-agent entry's model to the grammar its CLI
+// reads it in, where the merged profile declares one
+// ([cliprofile.Profile.ModelNamesProvider]): OpenCode splits its model flag at
+// the first slash into a provider and a model, so a bare `claude-sonnet-5`
+// names the provider "claude-sonnet-5" and no model, and every call the entry
+// makes — the text calls and an agent-mode run alike, which are handed the
+// same value — fails inside the CLI with "Model not found".
+//
+// JUDGED ON THE VALUE THE CLI IS HANDED, the model rendered through the
+// profile's model_args, so an override that puts the provider in the flag
+// (["--model", "anthropic/{model}"]) admits a bare model. A model written as a
+// `${VAR}` is not judged: its value is the secret store's and the
+// environment's, which a write cannot see.
+//
+// ADMISSION rather than runnable: the provider builds and the CLI starts, the
+// refusal is the CLI's grammar — a vendor fact that moves between releases,
+// which is why it is a profile declaration — and a newer peer may admit what
+// this build would not. So a write is refused and an apply only warns.
+func (l *LLMProvider) validateCLIModel(path Path) error {
+	cli := l.CLI
+	if (cli.Agent != "" && !cli.Agent.Valid()) || envref.Has(l.Model) || strings.TrimSpace(l.Model) == "" {
+		return nil
+	}
+	profile, err := cliprofile.Load(cli.Name(), cli.Overrides)
+	if err != nil || !profile.ModelNamesProvider {
+		//nolint:nilerr // Deliberate: a profile that does not load is a
+		// runnable fault validateCLIProfile already reports at
+		// cli.overrides, and there is no grammar to judge the model by.
+		return nil
+	}
+	value := profile.ModelArgument(l.Model)
+	provider, model, _ := strings.Cut(value, "/")
+	if strings.TrimSpace(provider) != "" && strings.TrimSpace(model) != "" {
+		return nil
+	}
+	var p problems
+	what := fmt.Sprintf("names the provider %q and no model", provider)
+	if strings.TrimSpace(provider) == "" {
+		what = "names no provider"
+	}
+	// THE VENDOR'S OWN WORDS ONLY FOR THE CLI THEY ARE MEASURED ON. Any
+	// profile can declare the grammar through cli.overrides, and an
+	// operator pointed at `opencode models` for a hermes entry is sent to
+	// a tool that entry does not run.
+	failure, listing := "with the CLI's own model-not-found error", ""
+	if cli.Name() == string(CLIOpenCode) {
+		failure = `with OpenCode's "Model not found"`
+		listing = " (`opencode models` lists them)"
+	}
+	p.add(at(path, "model"), ErrConflict,
+		"the %s CLI reads its model as <provider>/<model> and splits it at the first "+
+			"slash, so %q %s: every call this entry makes, an agent-mode run included, "+
+			"would fail inside the CLI %s. Name the provider as the CLI spells it%s, e.g. "+
+			"anthropic/claude-sonnet-5 or openrouter/anthropic/claude-sonnet-5, with that "+
+			"provider's key in cli.env (e.g. ANTHROPIC_API_KEY, OPENROUTER_API_KEY) or a "+
+			"login of the CLI's own",
+		cli.Name(), value, what, failure, listing)
 	return p.err()
 }
 

@@ -66,14 +66,26 @@ func (OpenCode) Command(req sandbox.RunRequest, _ Paths, _ string) string {
 
 // openCodeModelArg is the fully-formed --model value.
 //
-// A custom base URL means the run's own declared provider; otherwise the model
-// is addressed under its vendor FAMILY. The family comes from the provider
-// type rather than being assumed, because a subscription entry's type is the
-// same for every vendor — reading it would address a Claude subscription's
-// model as an OpenAI one.
+// AN OPENCODE ENTRY'S MODEL IS PASSED AS WRITTEN. It is the string every text
+// call on the same providers.llm entry hands `opencode run --model`, which
+// OpenCode splits at its first slash into a provider and a model — so
+// `anthropic/claude-sonnet-5` or `openrouter/anthropic/claude-sonnet-5` means
+// one thing in both places, signed in by the key of the provider it names.
+// Prefixing a family here addressed `anthropic/openrouter/…` and left the
+// entry's own key unread: no value of `model` worked for both the box and the
+// text calls.
+//
+// Otherwise the entry is an API one (the engine refuses another CLI's entry
+// before a run starts): a custom base URL means the run's own declared
+// provider, and with none the model is addressed under the OpenCode provider
+// of the entry's wire, whose built-in key variable the run environment
+// carries.
 func openCodeModelArg(llm *sandbox.AgentLLM) string {
 	if llm == nil || llm.Model == "" {
 		return ""
+	}
+	if llm.CLI == OpenCodeName {
+		return llm.Model
 	}
 	if llm.BaseURL != "" {
 		return OpenCodeProviderID + "/" + llm.Model
@@ -81,15 +93,15 @@ func openCodeModelArg(llm *sandbox.AgentLLM) string {
 	return openCodeFamily(llm.ProviderType) + "/" + llm.Model
 }
 
+// openCodeFamily is the OpenCode provider an API entry's wire is served by:
+// Anthropic's for an `anthropic` entry, OpenAI's for an `openai` or
+// `openai-compatible` one — the two wires the engine's own providers speak,
+// and the two key variables the run environment carries.
 func openCodeFamily(providerType string) string {
-	switch providerType {
-	case "anthropic", "claude":
+	if providerType == "anthropic" {
 		return "anthropic"
-	case "google", "gemini":
-		return "google"
-	default:
-		return "openai"
 	}
+	return "openai"
 }
 
 // WriteConfig renders opencode.json: the run's posture, the custom provider
@@ -151,20 +163,35 @@ func (OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbo
 	return path, nil
 }
 
+// openCodeProvider is the `crewlet` provider declared for an API entry with a
+// base URL: the entry's wire's AI SDK package, pointed at the entry's endpoint,
+// signed in by the variable the run environment carries the entry's key under.
+//
+// THE ENDPOINT IS TRANSLATED FOR THE ANTHROPIC SDK, because the two
+// conventions disagree about where /v1 lives. An `anthropic` entry's base_url
+// is the host ROOT — the convention of Anthropic's own SDK, which the engine's
+// provider is built on and which appends /v1/messages, and of Claude Code's
+// ANTHROPIC_BASE_URL — while @ai-sdk/anthropic takes a prefix that already
+// ends in /v1 and posts to `<baseURL>/messages`. Handed the root, OpenCode
+// called <gateway>/messages and every request was a 404 on a gateway every
+// engine call on the same entry reached. An `openai` or `openai-compatible`
+// entry's base_url already ends where both its readers expect, so it passes
+// through as written.
 func openCodeProvider(llm sandbox.AgentLLM) map[string]any {
-	anthropic := openCodeFamily(llm.ProviderType) == "anthropic"
 	npm := "@ai-sdk/openai-compatible"
 	keyEnv := "OPENAI_API_KEY"
-	if anthropic {
+	baseURL := llm.BaseURL
+	if openCodeFamily(llm.ProviderType) == "anthropic" {
 		npm = "@ai-sdk/anthropic"
 		keyEnv = "ANTHROPIC_API_KEY"
+		baseURL = strings.TrimRight(baseURL, "/") + "/v1"
 	}
 	return map[string]any{
 		OpenCodeProviderID: map[string]any{
 			"npm":  npm,
 			"name": "Crewlet role LLM",
 			"options": map[string]any{
-				"baseURL": llm.BaseURL,
+				"baseURL": baseURL,
 				"apiKey":  "{env:" + keyEnv + "}",
 			},
 			"models": map[string]any{llm.Model: map[string]any{}},

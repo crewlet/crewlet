@@ -630,13 +630,6 @@ func orNone(s string) string {
 // commands cannot disagree about whether an entry is signed in.
 func (p *Provider) SignInState() string { return p.signIn().state() }
 
-// Vendor is the model FAMILY this provider's CLI addresses.
-//
-// Not the providers.llm type, which is "cli-agent" for every one of them: a
-// coding agent that resolves "<family>/<model>" against a catalogue would
-// otherwise address a Claude subscription's "sonnet" as an OpenAI model.
-func (p *Provider) Vendor() string { return p.profile.Vendor }
-
 // SandboxCredentials maps this provider's login onto a coding box's home:
 // each credential path RELATIVE to the box home, against the absolute path of
 // the shared file on the engine host.

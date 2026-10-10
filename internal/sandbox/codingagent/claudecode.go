@@ -14,6 +14,22 @@ import (
 // ClaudeCodeName is this runner's config name.
 const ClaudeCodeName = "claude-code"
 
+// ClaudeCodeCredentialEnv is every variable that signs Claude Code in to a
+// model from its environment: a Pro/Max plan's headless token, an Anthropic
+// key or bearer token, or a toggle moving it onto a cloud provider's own
+// credentials (Bedrock, Vertex AI, Microsoft Foundry).
+//
+// The engine reads it twice, and both readings need every member. One of them
+// in a seat's own environment is what lets the seat run this runner on an
+// entry that is not Anthropic's, and it is what stops an `anthropic` entry's
+// key and endpoint being added beside it — Claude Code ranks an API key above
+// the plan token, so a company key underlaid beside a seat's plan token moved
+// that seat onto metered billing without a word.
+var ClaudeCodeCredentialEnv = []string{
+	"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+	"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
+}
+
 // ClaudeCode drives Claude Code headless.
 //
 // It reaches its model through the run ENVIRONMENT rather than a config file,
@@ -57,6 +73,12 @@ func (ClaudeCode) Command(req sandbox.RunRequest, _ Paths, configPath string) st
 		"--output-format", "stream-json", "--verbose",
 		"--permission-mode", "bypassPermissions",
 	}
+	// VERBATIM, because whichever entry reached this runner already names
+	// the model in Claude Code's own terms: an `anthropic` entry's model id,
+	// or a claude-code cli-agent entry's alias exactly as its text calls
+	// pass it. The engine refuses every other cli-agent entry here, and a
+	// run on the seat's own sign-in over an OpenAI-wire entry carries no
+	// model, so Claude Code's own choice stands.
 	if req.LLM != nil && req.LLM.Model != "" {
 		parts = append(parts, "--model", shellQuote(req.LLM.Model))
 	}

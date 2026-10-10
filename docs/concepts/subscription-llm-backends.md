@@ -196,6 +196,35 @@ it (see [Code Sandbox](code-sandbox.md#failure-modes)) reads **this**
 entry for an agent-mode run — the run *is* the executor — and the seat's
 `llm_sandbox` only for `run_sandbox` work.
 
+**The run names the model exactly as the entry's text calls do.** An
+entry's `model` is written in its CLI's own grammar, and an agent-mode
+run — like every text call the same entry makes for the reviewer, a
+worker, the auxiliary model, the round-cap judge or a fallback — hands it
+to the CLI as written (its `${VAR}` resolved, through the profile's
+`model_args`). For `opencode` that grammar is `<provider>/<model>`, split
+at the first slash, so one value serves both:
+
+```yaml
+providers:
+  llm:
+    oc:
+      type: cli-agent
+      model: anthropic/claude-sonnet-5     # or openrouter/anthropic/claude-sonnet-5
+      cli:
+        agent: opencode
+        mode: agent
+        run_in: e2b                    # or empty: providers.sandbox.default_run_in
+        env:
+          ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"   # the key of the provider the model names
+```
+
+The key of the provider the model names goes in `cli.env`, and it
+travels into a box in any cell, a remote one included, like a headless
+token — see [Signing in with a provider key](#5-a-provider-key-in-clienv-hermes-pi-opencode).
+An `opencode auth login` signs that provider in too, but only in a local
+cell (`run_in: direct` or `container`): the login is a file on the engine
+host, and the files never follow a run to a remote box.
+
 An agent-mode run is a **detached coding run** and reuses that machinery
 whole: the executor phase suspends, the run's state goes on a durable row
 in the [coordination store](coordination.md), the completion poll collects
@@ -1054,17 +1083,20 @@ the provider accepts the key: the smoke test is what proves that — and for a
 model served by an endpoint that takes no key, an answered smoke test is what
 clears the "no sign-in" problem.
 
-**The key also goes into a coding box**, the way a headless token does, so
-it works in a remote cell; the rest of `cli.env` is not carried there.
-[Agent mode](#agent-mode) is `opencode`'s alone — `hermes` and `pi` have no
-coding-agent runner — and a code-sandbox run on any of the three exports the
-key into the box, where the seat's coding agent reads it if it reads that
-variable: `opencode` reads every provider's own, Claude Code only
-Anthropic's. A key given in the seat's `role.sandbox.env` instead is counted
-by the remote-box check as well. A CLI that does not read its key from the
-environment — `kimi-code` reads its metered key only from `config.toml` in
-the credential directory — does not declare `env_sign_in`, and a key in its
-`cli.env` is not counted.
+**On an `opencode` entry the key also goes into a coding box**, the way a
+headless token does, so it works in a remote cell; the rest of `cli.env`
+is not carried there. That is `opencode`'s alone: [agent mode](#agent-mode)
+and code-sandbox work both need a coding-agent runner for the entry's own
+CLI, and `hermes` and `pi` have none. A cli-agent entry's model is written
+for its own CLI and its sign-in is that CLI's, so a `run_sandbox` launch on
+one needs that CLI as the seat's coding agent
+(`role.sandbox.coding_agent: opencode`), and any other pairing is
+[refused](code-sandbox.md#failure-modes). A `hermes` or `pi` seat that runs
+code points `role.llm_sandbox` at an API entry instead. A key given in the
+seat's `role.sandbox.env` is counted by the remote-box check as well. A CLI
+that does not read its key from the environment — `kimi-code` reads its
+metered key only from `config.toml` in the credential directory — does not
+declare `env_sign_in`, and a key in its `cli.env` is not counted.
 
 ### Token refresh across seats
 
@@ -1087,7 +1119,7 @@ entirely.
 | `codex` | `codex` | ChatGPT Plus / Pro | `codex login`. Streams JSONL events; runs `--sandbox read-only`. |
 | `gemini-cli` | `gemini` | Google AI Pro / free tier | First run starts the auth picker. `GOOGLE_CLOUD_PROJECT` passes through. |
 | `qwen-code` | `qwen` | Qwen OAuth | Gemini CLI fork; same shape. |
-| `opencode` | `opencode` | Anthropic / Copilot / any | `opencode auth login`; the one built-in profile with a credential login. A provider key goes in `cli.env` under that provider's own variable, and `doctor` counts it — see [Signing in with a provider key](#5-a-provider-key-in-clienv-hermes-pi-opencode). |
+| `opencode` | `opencode` | Anthropic / Copilot / any | `opencode auth login`; the one built-in profile with a credential login. A provider key goes in `cli.env` under that provider's own variable, and `doctor` counts it — see [Signing in with a provider key](#5-a-provider-key-in-clienv-hermes-pi-opencode). `model` is `<provider>/<model>` (`anthropic/claude-sonnet-5`, `openrouter/anthropic/claude-sonnet-5`); a bare id is refused on a write. |
 | `cursor-agent` | `cursor-agent` | Cursor seat | `cursor-agent login`. A Cursor API key (`CURSOR_API_KEY`, its `api_key_env`) is the headless alternative, reached through `auth.mode: api-key`. |
 | `copilot` | `copilot` | GitHub Copilot seat | Prompt goes on argv, so very long transcripts are bounded by `ARG_MAX`. Authenticates with a GitHub token, so `GITHUB_TOKEN` is its `api_key_env` — reached via `auth.mode: api-key` or `inherit-env`, never forwarded silently. |
 | `grok` | `grok` | xAI | **xAI's own CLI** from [x.ai/cli](https://x.ai/cli), not the same-named npm package. Accepts `XAI_API_KEY` (the variable its own signed-out message names) through `auth.mode: api-key`. |
@@ -1194,11 +1226,10 @@ key by key; lists and single values replace wholesale.
 | Field | What it is |
 |---|---|
 | `binary` | The executable, looked up on `PATH` unless it is a path. |
-| `vendor` | The model family the CLI addresses (`anthropic`, `openai`, `google`, `meta`, …), for a coding agent that resolves `<family>/<model>`. |
 | `written_for` | The CLI version the profile was written against, printed by `doctor` beside the one installed. |
 | `version_args` | The argv of the version probe. |
 | `complete_args` | The argv of one completion, before the model and the prompt. |
-| `model_args` | The model flag, with `{model}` substituted. Required in effect: every entry names a `model`, so a merged profile with none is refused. |
+| `model_args` | The model flag, with `{model}` substituted. Required in effect: every entry names a `model`, so a merged profile with no element carrying `{model}` — none at all, or a flag with a fixed value — is refused. |
 | `prompt_mode` | How the prompt travels: `stdin` (default), `argv` or `file`. |
 | `system_prompt_args` | The flag carrying the system prompt, with `{file}` (preferred) or `{system}`. Empty leaves it in the transcript. |
 | `system_prompt_env` | A variable naming a file the CLI reads its system prompt from; exclusive with `system_prompt_args`. |
@@ -1216,6 +1247,7 @@ key by key; lists and single values replace wholesale.
 | `passthrough_env` | Engine variables forwarded to the child. Never a credential. |
 | `token_env` | The variable a headless subscription token goes in (`cli.auth.token`). |
 | `api_key_env` | The variable a metered key goes in (`api_keys` under `auth.mode: api-key`). |
+| `model_names_provider` | The CLI reads its model as `<provider>/<model>`, split at the first slash, so a `model` with nothing before or after that slash (as the CLI is handed it, through `model_args`) is refused on a write. Declared by `opencode` only — measured from its source; `hermes` and `pi` document a `provider/id` model but are not known to refuse a bare one. |
 | `env_sign_in` | The CLI reads its model provider's key from its own environment, so a [credential-named](#5-a-provider-key-in-clienv-hermes-pi-opencode) variable in `cli.env` signs it in. |
 | `credential_paths` | The login files, relative to the seat home. |
 | `volatile_paths` | Sessions, transcripts and history, deleted before and after every call. |
@@ -1241,7 +1273,8 @@ providers:
   llm:
     subscription:
       type: cli-agent
-      model: sonnet                    # passed to the CLI's --model
+      model: sonnet                    # passed to the CLI's --model, in its own grammar:
+                                       # opencode takes <provider>/<model>
       cli:
         agent: claude-code             # or codex | gemini-cli | opencode
                                        #    | muse-code | kimi-code
@@ -1317,8 +1350,28 @@ being *applied* that breaks one is applied and warned about, because the
 entry still runs (signed in by whatever the CLI does read) and refusing it
 there would take a node off the fleet's configuration during a rolling
 upgrade. A profile that cannot drive its CLI at all — an override typo, a
-missing `binary`, no `model_args` — is different: no node can build it, so it
-is refused at apply too.
+missing `binary`, no `model_args` carrying `{model}` — is different: no
+node can build it, so it is refused at apply too.
+
+**A model has to be one the CLI can read, or a write naming it is
+refused.** `opencode` reads its model as `<provider>/<model>` and splits it
+at the first slash, so a model with nothing before or after that slash —
+`claude-sonnet-5`, `anthropic/` — names no model at all, and every call the
+entry makes, an agent-mode run included, fails inside the CLI with its own
+"Model not found". Name the provider as the CLI spells it:
+`anthropic/claude-sonnet-5`, `openrouter/anthropic/claude-sonnet-5`
+(`opencode models` lists them). It is judged on the value the CLI is
+handed — the model rendered through `model_args`, a joined
+`--model={model}` read past its `=` — and a `${VAR}` model is not judged,
+since its value is the secret store's and the environment's. The grammar is
+a profile declaration, `model_names_provider`, so there are two ways past
+it when a CLI release relaxes it: `cli.overrides.model_names_provider:
+false`, or a `model_args` override that writes the provider into the flag
+itself (`["--model", "anthropic/{model}"]`), which makes a bare model whole.
+This too is an **admission** rule, for its own reason: the entry builds and
+the CLI starts, and the grammar is a vendor fact that moves between releases
+— a newer build, or a newer peer, may know it better — so a revision being
+applied is warned about rather than refused.
 
 **A profile's `passthrough_env` may not name a
 [credential](#5-a-provider-key-in-clienv-hermes-pi-opencode)** — an admission
@@ -1722,18 +1775,24 @@ reference](../reference/cli.md#crewlet-llm).
   bridge URL a box can dial. `crewlet llm doctor` checks all of it —
   see [Operating it](#operating-it).
 - **Code work needs one more decision.** A subscription *can* back the
-  [code sandbox](code-sandbox.md). On any backend including remote E2B,
-  what travels into the box is the environment that signs the CLI in: a
-  headless token (`crewlet llm login <key> -capture-token`, and Claude
+  [code sandbox](code-sandbox.md), on its own CLI only: code work on a
+  cli-agent entry needs that CLI as the seat's coding agent, and only
+  `claude-code` and `opencode` have one (an `opencode` entry takes
+  `role.sandbox.coding_agent: opencode`). On any backend including remote
+  E2B, what travels into the box is the environment that signs the CLI in:
+  a headless token (`crewlet llm login <key> -capture-token`, and Claude
   Code in the box bills your plan), an `api-key` entry's key, what
-  `inherit-env` forwards, and the [`cli.env` key](#5-a-provider-key-in-clienv-hermes-pi-opencode)
-  of a CLI that reads one (`opencode`, `hermes`, `pi`). The credential
-  *files* never travel to a remote box: they carry a refresh token whose
-  rotation is shared fleet state. So a CLI that signs in only through its
-  files — Codex, Gemini CLI or Kimi Code with no key — needs a
+  `inherit-env` forwards, and `opencode`'s
+  [`cli.env` key](#5-a-provider-key-in-clienv-hermes-pi-opencode). The
+  credential *files* never travel to a remote box: they carry a refresh
+  token whose rotation is shared fleet state. So a `claude-code` entry with
+  no headless token, or an `opencode` entry signed in only by
+  `opencode auth login`, needs a
   [local cell](code-sandbox.md#local-sandboxes) (`providers.sandbox.local`
   plus `run_in: direct` or `container`), where the coding agent runs on the
-  engine host and reads the login directly.
+  engine host and reads the login directly. Any other CLI — Codex, Gemini
+  CLI, Kimi Code, `hermes`, `pi` — points `role.llm_sandbox` at an API
+  entry; see [Code Sandbox](code-sandbox.md#failure-modes).
 - **Latency.** Process launch plus model call. Point `llm_auxiliary` at
   a cheap API-key model rather than paying process startup for every
   summarisation.

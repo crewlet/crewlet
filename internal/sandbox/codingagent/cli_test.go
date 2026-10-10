@@ -201,8 +201,9 @@ func TestTheOpenCodeInvocationAlwaysStreamsJson(t *testing.T) {
 	}
 }
 
-// A custom base URL means the run's own declared provider; otherwise the model
-// is addressed under its vendor family.
+// AN API ENTRY'S MODEL IS ADDRESSED IN OPENCODE'S GRAMMAR: a custom base URL
+// means the run's own declared provider, and otherwise the OpenCode provider
+// of the entry's wire, whose key variable the run environment carries.
 func TestTheOpenCodeModelIsAddressedUnderTheRightProvider(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -211,10 +212,11 @@ func TestTheOpenCodeModelIsAddressedUnderTheRightProvider(t *testing.T) {
 	}{
 		{sandbox.AgentLLM{Model: "claude-opus-5", ProviderType: "anthropic"}, "anthropic/claude-opus-5"},
 		{sandbox.AgentLLM{Model: "gpt-5", ProviderType: "openai"}, "openai/gpt-5"},
-		{sandbox.AgentLLM{Model: "gemini-3", ProviderType: "google"}, "google/gemini-3"},
 		// A gateway: the catalogue cannot resolve it, so the run declares
 		// its own provider and addresses the model there.
-		{sandbox.AgentLLM{Model: "house-model", ProviderType: "openai", BaseURL: "https://example.com/v1"},
+		{sandbox.AgentLLM{Model: "house-model", ProviderType: "openai-compatible", BaseURL: "https://example.com/v1"},
+			codingagent.OpenCodeProviderID + "/house-model"},
+		{sandbox.AgentLLM{Model: "house-model", ProviderType: "anthropic", BaseURL: "https://example.com"},
 			codingagent.OpenCodeProviderID + "/house-model"},
 	}
 	for _, c := range cases {
@@ -225,16 +227,25 @@ func TestTheOpenCodeModelIsAddressedUnderTheRightProvider(t *testing.T) {
 	}
 }
 
-// A subscription entry's provider type is the same for every vendor, so
-// reading it would address a Claude subscription's model as an OpenAI one —
-// which is why the family comes from the declared type, not from the entry.
-func TestAnUnknownProviderTypeFallsBackToTheOpenAiFamily(t *testing.T) {
+// AN OPENCODE ENTRY'S MODEL REACHES THE BOX AS WRITTEN.
+//
+// It is the string every text call on the same entry passes to `opencode run
+// --model`, which OpenCode splits at its first slash into a provider and a
+// model. The runner used to put a family in front of it, so an entry naming
+// `openrouter/anthropic/claude-sonnet-5` ran its box on
+// `anthropic/openrouter/anthropic/claude-sonnet-5` — a provider-qualified id
+// broke the agent run, and a bare one broke every text call.
+func TestAnOpenCodeEntrysModelIsPassedAsWritten(t *testing.T) {
 	t.Parallel()
-	cmd := opencode().Command(sandbox.RunRequest{
-		Brief: "x", LLM: &sandbox.AgentLLM{Model: "m", ProviderType: "something-new"},
-	}, codingagent.Paths{}, "")
-	if !strings.Contains(cmd, "--model 'openai/m'") {
-		t.Fatalf("cmd = %s", cmd)
+	for _, model := range []string{
+		"anthropic/claude-sonnet-5",
+		"openrouter/anthropic/claude-sonnet-5",
+	} {
+		llm := sandbox.AgentLLM{Model: model, CLI: codingagent.OpenCodeName}
+		cmd := opencode().Command(sandbox.RunRequest{Brief: "x", LLM: &llm}, codingagent.Paths{}, "")
+		if !strings.Contains(cmd, "--model '"+model+"'") {
+			t.Errorf("%q gave:\n%s\nwant the model as written", model, cmd)
+		}
 	}
 }
 
@@ -250,7 +261,7 @@ func TestTheOpenCodeConfigReferencesTheKeyRatherThanInliningIt(t *testing.T) {
 	path, err := opencode().WriteConfig(t.Context(), b, sandbox.RunRequest{
 		LLM: &sandbox.AgentLLM{
 			Model: "house-model", ProviderType: "anthropic",
-			BaseURL: "https://example.com/v1",
+			BaseURL: "https://example.com",
 		},
 	}, codingagent.PathsFor(b))
 	if err != nil || path == "" {
@@ -264,11 +275,56 @@ func TestTheOpenCodeConfigReferencesTheKeyRatherThanInliningIt(t *testing.T) {
 	if !strings.Contains(body, "{env:ANTHROPIC_API_KEY}") {
 		t.Fatalf("the key is not referenced through the environment:\n%s", body)
 	}
-	if !strings.Contains(body, "https://example.com/v1") {
+	if !strings.Contains(body, "https://example.com") {
 		t.Fatalf("the endpoint was not declared:\n%s", body)
 	}
 	if !strings.Contains(body, `"share": "disabled"`) {
 		t.Fatalf("sharing was left on — a run's transcript is company work:\n%s", body)
+	}
+}
+
+// THE DECLARED ENDPOINT IS WHERE EACH SDK EXPECTS IT.
+//
+// An `anthropic` entry's base_url is the host root, which the engine's own
+// provider and Claude Code's ANTHROPIC_BASE_URL both append /v1/messages to;
+// @ai-sdk/anthropic posts to `<baseURL>/messages`, so the root handed to it
+// as written sent every OpenCode request on an Anthropic gateway to a path
+// that does not exist. An OpenAI-wire base_url already ends in its version and
+// passes through untouched.
+func TestTheOpenCodeProviderEndpointIsWhereItsSDKExpectsIt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		providerType, baseURL, npm, want string
+	}{
+		{"anthropic", "https://gateway.example.com", "@ai-sdk/anthropic", "https://gateway.example.com/v1"},
+		{"anthropic", "https://gateway.example.com/", "@ai-sdk/anthropic", "https://gateway.example.com/v1"},
+		{"openai-compatible", "https://llm.example.com/v1", "@ai-sdk/openai-compatible", "https://llm.example.com/v1"},
+		{"openai", "https://llm.example.com/v1/", "@ai-sdk/openai-compatible", "https://llm.example.com/v1/"},
+	} {
+		b := sandbox.NewFakeSandbox("box-1")
+		path, err := opencode().WriteConfig(t.Context(), b, sandbox.RunRequest{LLM: &sandbox.AgentLLM{
+			Model: "house-model", ProviderType: tc.providerType, BaseURL: tc.baseURL,
+		}}, codingagent.PathsFor(b))
+		if err != nil {
+			t.Fatalf("WriteConfig: %v", err)
+		}
+		blob, _ := b.ReadFile(t.Context(), path)
+		var cfg struct {
+			Provider map[string]struct {
+				NPM     string `json:"npm"`
+				Options struct {
+					BaseURL string `json:"baseURL"`
+				} `json:"options"`
+			} `json:"provider"`
+		}
+		if err := json.Unmarshal(blob, &cfg); err != nil {
+			t.Fatalf("unmarshal: %v\n%s", err, blob)
+		}
+		got := cfg.Provider[codingagent.OpenCodeProviderID]
+		if got.NPM != tc.npm || got.Options.BaseURL != tc.want {
+			t.Errorf("%s entry at %q declared %s at %q, want %s at %q",
+				tc.providerType, tc.baseURL, got.NPM, got.Options.BaseURL, tc.npm, tc.want)
+		}
 	}
 }
 

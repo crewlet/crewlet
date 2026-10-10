@@ -70,7 +70,7 @@ func TestBuildProviderResolvesBaseURLAndConventionalKey(t *testing.T) {
 	})
 
 	// No api_keys: the entry leans on the conventional name entirely.
-	p, err := buildProvider("gateway", config.LLMProvider{
+	p, _, err := buildProvider("gateway", config.LLMProvider{
 		Type:    config.LLMOpenAICompatible,
 		Model:   "gpt-test",
 		BaseURL: "${LLM_BASE_URL}",
@@ -128,7 +128,7 @@ func TestBuildProviderResolvesAnthropicBaseURLAndConventionalKey(t *testing.T) {
 		"ANTHROPIC_API_KEY": "sk-ant-from-the-store",
 	})
 
-	p, err := buildProvider("gateway", config.LLMProvider{
+	p, _, err := buildProvider("gateway", config.LLMProvider{
 		Type:    config.LLMAnthropic,
 		Model:   "claude-test",
 		BaseURL: "${LLM_BASE_URL}",
@@ -164,7 +164,7 @@ func TestBuildProviderResolvesModel(t *testing.T) {
 		config.LLMOpenAI, config.LLMAnthropic,
 	} {
 		t.Run(string(kind), func(t *testing.T) {
-			p, err := buildProvider("cheap", config.LLMProvider{
+			p, _, err := buildProvider("cheap", config.LLMProvider{
 				Type:    kind,
 				Model:   "${LLM_MODEL}",
 				APIKeys: []string{"sk-test"},
@@ -185,7 +185,7 @@ func TestBuildCLIAgentResolvesModel(t *testing.T) {
 	t.Parallel()
 	r := tierB(map[string]string{"CLI_MODEL": "sonnet"})
 
-	p, err := buildProvider("subscription", config.LLMProvider{
+	p, _, err := buildProvider("subscription", config.LLMProvider{
 		Type:  config.LLMCLIAgent,
 		Model: "${CLI_MODEL}",
 		CLI: &config.CLIAgent{
@@ -234,7 +234,7 @@ func TestOpenAICompatibleNamesItsEndpoint(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			p, err := buildProvider("vllm", tc.spec, r)
+			p, _, err := buildProvider("vllm", tc.spec, r)
 			if err != nil {
 				t.Fatalf("buildProvider: %v", err)
 			}
@@ -259,7 +259,7 @@ func TestOpenAICompatibleNamesItsEndpoint(t *testing.T) {
 func TestAnUnresolvedModelNamesTheVariable(t *testing.T) {
 	t.Parallel()
 	r := tierB(nil)
-	_, err := buildProvider("default", config.LLMProvider{
+	_, _, err := buildProvider("default", config.LLMProvider{
 		Type: config.LLMOpenAICompatible, Model: "${LLM_MODEL}",
 		BaseURL: "https://gateway.example.com/v1",
 	}, r)
@@ -285,7 +285,7 @@ func TestAnUnresolvedModelNamesTheVariable(t *testing.T) {
 func TestACompatibleEntryWithNoEndpointIsRefusedRatherThanSentToOpenAI(t *testing.T) {
 	t.Parallel()
 	r := tierB(nil)
-	_, err := buildProvider("gateway", config.LLMProvider{
+	_, _, err := buildProvider("gateway", config.LLMProvider{
 		Type: config.LLMOpenAICompatible, Model: "llama-3",
 		BaseURL: "${LLM_BASE_URL}",
 	}, r)
@@ -306,7 +306,7 @@ func TestACompatibleEntryWithNoEndpointIsRefusedRatherThanSentToOpenAI(t *testin
 func TestAPlainOpenAIEntryNeedsNoEndpoint(t *testing.T) {
 	t.Parallel()
 	r := tierB(map[string]string{"OPENAI_API_KEY": "sk-test"})
-	if _, err := buildProvider("gpt", config.LLMProvider{
+	if _, _, err := buildProvider("gpt", config.LLMProvider{
 		Type: config.LLMOpenAI, Model: "gpt-4o",
 	}, r); err != nil {
 		t.Fatalf("a plain openai entry with no base_url was refused: %v", err)
@@ -320,7 +320,7 @@ func TestAPlainOpenAIEntryNeedsNoEndpoint(t *testing.T) {
 func TestAMissingCredentialStillBuilds(t *testing.T) {
 	t.Parallel()
 	r := tierB(nil)
-	if _, err := buildProvider("default", config.LLMProvider{
+	if _, _, err := buildProvider("default", config.LLMProvider{
 		Type: config.LLMOpenAICompatible, Model: "llama-3",
 		BaseURL: "https://gateway.example.com/v1",
 		APIKeys: []string{"${NOBODY_SET_THIS}"},
@@ -372,7 +372,7 @@ func TestAnAnthropicEntryIsShapedFromItsModel(t *testing.T) {
 			defer srv.Close()
 			spec := tc.spec
 			spec.Type, spec.BaseURL, spec.APIKeys = config.LLMAnthropic, srv.URL, []string{"sk-ant-test"}
-			p, err := buildProvider("claude", spec, tierB(map[string]string{"LLM_MODEL": "claude-sonnet-5-5"}))
+			p, _, err := buildProvider("claude", spec, tierB(map[string]string{"LLM_MODEL": "claude-sonnet-5-5"}))
 			if err != nil {
 				t.Fatalf("buildProvider: %v", err)
 			}
@@ -398,7 +398,7 @@ func TestAnAnthropicEntryIsShapedFromItsModel(t *testing.T) {
 // model it resolved to and the field to change.
 func TestADialTheResolvedModelRefusesFailsTheBuildByName(t *testing.T) {
 	t.Parallel()
-	_, err := buildProvider("claude", config.LLMProvider{
+	_, _, err := buildProvider("claude", config.LLMProvider{
 		Type: config.LLMAnthropic, Model: "${LLM_MODEL}", ReasoningBudgetTokens: 4096,
 	}, tierB(map[string]string{"LLM_MODEL": "claude-sonnet-5-5"}))
 	if err == nil {
@@ -461,7 +461,7 @@ func TestBuildAnthropicIsTheBuildASeatGets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildAnthropic: %v", err)
 	}
-	seat, err := buildProvider("claude", spec, r)
+	seat, _, err := buildProvider("claude", spec, r)
 	if err != nil {
 		t.Fatalf("buildProvider: %v", err)
 	}

@@ -194,21 +194,38 @@ type Spec struct {
 // bypassing both. An agent that reads its credentials from the environment
 // ignores it.
 //
+// TWO KINDS OF ENTRY, and they name a model in different grammars. An API
+// entry's Model is a vendor's model id and ProviderType names that vendor's
+// wire, so a runner may address it in its own grammar. A cli-agent entry's
+// Model is written in the grammar of the CLI that entry drives — OpenCode
+// reads `<provider>/<model>`, Claude Code an alias or an id — and CLI names
+// that CLI: such a model reaches a runner VERBATIM, and only a runner driving
+// that same CLI can read it, which is why the engine refuses a run pairing a
+// cli-agent entry with another CLI's runner rather than letting a runner
+// rebuild an id it cannot know.
+//
 // THE API KEY IS NOT HERE. It rides the run env, and a written config
 // references it by variable name, so the secret is never duplicated into a
 // config file inside the box.
 type AgentLLM struct {
+	// Model is the model the run works under: an API entry's resolved model
+	// id, or a cli-agent entry's model exactly as its text calls hand it to
+	// its CLI.
 	Model string
 
-	// ProviderType is the model FAMILY to address. For an API entry that is
-	// the providers.llm type, which already names the family; for a
-	// subscription entry every provider shares one type, so it carries the
-	// CLI profile's VENDOR instead — otherwise a Claude subscription's
-	// "sonnet" would be addressed as "openai/sonnet".
+	// CLI is the cli-agent profile a cli-agent entry drives (claude-code,
+	// opencode, …), and empty for an API entry.
+	CLI string
+
+	// ProviderType is an API entry's providers.llm type (anthropic,
+	// openai, openai-compatible): the wire its model is served on. Empty
+	// for a cli-agent entry, whose provider is named by its Model in its
+	// CLI's own grammar rather than by a family the engine could know.
 	ProviderType string
 
 	// BaseURL is the endpoint. Empty means the vendor default, and so no
-	// custom provider declaration at all.
+	// custom provider declaration at all. Always empty for a cli-agent
+	// entry, which talks to its vendor.
 	BaseURL string
 }
 
