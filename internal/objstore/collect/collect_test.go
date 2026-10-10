@@ -8,11 +8,13 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -119,12 +121,14 @@ type backend struct {
 	// before it answers what the twin holds.
 	lagging map[string]int
 	statErr error
-	// asks is how many times each name has been asked about; hold, when
+	// asks is how many times each name has been asked about. onStat, when
 	// set, is called before a stat is answered — outside every lock, so it
 	// may block — with the name and which ask of it this is, counting from
-	// one.
-	asks map[string]int
-	hold func(name string, nth int)
+	// one, and an error it returns is the answer; onDelete is the same for a
+	// deletion.
+	asks     map[string]int
+	onStat   func(ctx context.Context, name string, nth int) error
+	onDelete func(ctx context.Context, name string) error
 }
 
 func (b *backend) Pending(ctx context.Context, visit func(objstore.Pending) error) error {
@@ -161,10 +165,12 @@ func (b *backend) Abandon(_ context.Context, p objstore.Pending) error {
 func (b *backend) Stat(ctx context.Context, name string) (objstore.Info, error) {
 	b.mu.Lock()
 	b.asks[name]++
-	nth, hold := b.asks[name], b.hold
+	nth, hook := b.asks[name], b.onStat
 	b.mu.Unlock()
-	if hold != nil {
-		hold(name, nth)
+	if hook != nil {
+		if err := hook(ctx, name, nth); err != nil {
+			return objstore.Info{}, err
+		}
 	}
 	b.mu.Lock()
 	failure := b.statErr
@@ -180,6 +186,18 @@ func (b *backend) Stat(ctx context.Context, name string) (objstore.Info, error) 
 		return objstore.Info{}, objstore.ErrNotFound
 	}
 	return b.Backend.Stat(ctx, name)
+}
+
+func (b *backend) Delete(ctx context.Context, name string) error {
+	b.mu.Lock()
+	hook := b.onDelete
+	b.mu.Unlock()
+	if hook != nil {
+		if err := hook(ctx, name); err != nil {
+			return err
+		}
+	}
+	return b.Backend.Delete(ctx, name)
 }
 
 func (b *backend) begin(p objstore.Pending) {
@@ -732,17 +750,17 @@ func TestTheAuditTakesItsSecondLookBeforeItsWalkEndsOnceItHoldsItsBound(t *testi
 		second    = make(chan struct{})
 		sawSecond sync.Once
 	)
-	h.backend.hold = func(_ string, nth int) {
+	h.backend.onStat = func(_ context.Context, _ string, nth int) error {
 		if nth == 2 {
 			sawSecond.Do(func() { close(second) })
-			return
+			return nil
 		}
 		mu.Lock()
 		firsts++
 		last := firsts == len(names)
 		mu.Unlock()
 		if !last {
-			return
+			return nil
 		}
 		select {
 		case <-second:
@@ -750,6 +768,7 @@ func TestTheAuditTakesItsSecondLookBeforeItsWalkEndsOnceItHoldsItsBound(t *testi
 			t.Error("the last first look came with no second look taken: every " +
 				"suspect was held for the end of the walk")
 		}
+		return nil
 	}
 
 	r, err := h.c.Audit(t.Context())
@@ -825,5 +844,434 @@ func TestRestoreKeepsTheNewerOfEachHalf(t *testing.T) {
 	if again := h.c.Status(); again.Audit.Error != "stopped" || again.Audit.Found == nil ||
 		again.Audit.Found.Missing != 1 {
 		t.Fatalf("a newer failed attempt took the findings with it: %+v", again.Audit)
+	}
+}
+
+// gate holds every call that passes it until it is opened, counting how many
+// it holds at once.
+type gate struct {
+	open chan struct{}
+
+	mu         sync.Mutex
+	held, peak int
+}
+
+func newGate() *gate { return &gate{open: make(chan struct{})} }
+
+// pass is a call arriving: counted, then held until the gate opens or ctx
+// ends — whose error it answers.
+func (g *gate) pass(ctx context.Context) error {
+	g.mu.Lock()
+	g.held++
+	g.peak = max(g.peak, g.held)
+	g.mu.Unlock()
+	defer func() {
+		g.mu.Lock()
+		g.held--
+		g.mu.Unlock()
+	}()
+	select {
+	case <-g.open:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// counts is how many calls the gate holds now, and the most it has held.
+func (g *gate) counts() (held, peak int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.held, g.peak
+}
+
+// waitHeld fails the test unless n calls are held at once within ten seconds.
+func (g *gate) waitHeld(t *testing.T, n int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		held, peak := g.counts()
+		if held >= n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the gate never held %d calls at once (at most %d): the calls are not "+
+				"made concurrently", n, peak)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// THE AUDIT ASKS UP TO ITS BOUND AT ONCE, AND NEVER MORE. Asked one at a time,
+// an audit of two million objects on S3 is most of a day; asked without a
+// bound, it floods the store it is auditing.
+func TestTheAuditAsksAtMostItsBoundAtOnce(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	for i := range 3 * auditConcurrency {
+		h.file(fmt.Sprintf("%03d.md", i), fmt.Sprintf("object %d", i))
+	}
+	g := newGate()
+	h.backend.onStat = func(ctx context.Context, _ string, _ int) error { return g.pass(ctx) }
+	type result struct {
+		r   AuditReport
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		r, err := h.c.Audit(t.Context())
+		done <- result{r, err}
+	}()
+	g.waitHeld(t, auditConcurrency)
+	// AND NO FURTHER while every one of them is held: the walk waits for a
+	// question to be answered before it asks the next.
+	time.Sleep(50 * time.Millisecond)
+	if _, peak := g.counts(); peak != auditConcurrency {
+		t.Fatalf("the audit asked %d questions at once, past its bound of %d", peak, auditConcurrency)
+	}
+	close(g.open)
+	got := <-done
+	if got.err != nil || !got.r.Completed || got.r.Referenced != 3*auditConcurrency || got.r.Missing != 0 {
+		t.Fatalf("Audit = %+v, %v; want every object asked about and held", got.r, got.err)
+	}
+	if held, peak := g.counts(); held != 0 || peak != auditConcurrency {
+		t.Fatalf("after the audit the gate holds %d and held at most %d; want nothing left "+
+			"asking and the bound reached, never passed", held, peak)
+	}
+}
+
+// A COLLECTION DELETES UP TO ITS BOUND AT ONCE, AND NEVER MORE, while its
+// listing goes on — and every deletion it began is counted.
+func TestACollectionDeletesAtMostItsBoundAtOnce(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	var orphans []objstore.Key
+	for i := range 2 * judgeBatch {
+		orphans = append(orphans, h.put(fmt.Sprintf("orphan %d", i)))
+	}
+	h.clock.advance(PendingGrace + time.Hour)
+	g := newGate()
+	h.backend.onDelete = func(ctx context.Context, _ string) error { return g.pass(ctx) }
+	type result struct {
+		r   CollectionReport
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		r, err := h.c.Collect(t.Context())
+		done <- result{r, err}
+	}()
+	g.waitHeld(t, deleteConcurrency)
+	time.Sleep(50 * time.Millisecond)
+	if _, peak := g.counts(); peak != deleteConcurrency {
+		t.Fatalf("the collection had %d deletions in flight, past its bound of %d", peak, deleteConcurrency)
+	}
+	close(g.open)
+	got := <-done
+	if got.err != nil || !got.r.Completed || got.r.Deleted != len(orphans) {
+		t.Fatalf("Collect = %+v, %v; want all %d orphans deleted", got.r, got.err, len(orphans))
+	}
+	if held, peak := g.counts(); held != 0 || peak != deleteConcurrency {
+		t.Fatalf("after the collection the gate holds %d and held at most %d", held, peak)
+	}
+	for _, k := range orphans {
+		if h.held(k) {
+			t.Fatalf("%s survived a collection that reported it deleted", k)
+		}
+	}
+}
+
+// THE FILES A STATUS SHOWS ARE THE FIRST BY NAME, whatever order the audit
+// found them in: its questions run at once, so the order they are answered
+// in is chance, and a list chosen by it would name a different hundred each
+// day for the same lost files.
+func TestTheFilesShownAreTheFirstByName(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	lost := MissingShown + 50
+	// CREATED IN REVERSE, so the keys' order — which is their minting
+	// order — and the files' order disagree.
+	for i := lost - 1; i >= 0; i-- {
+		o := h.file(fmt.Sprintf("f%03d.md", i), fmt.Sprintf("lost %d", i))
+		if err := h.store.Delete(t.Context(), o.Key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, err := h.c.Audit(t.Context())
+	if err != nil || r.Missing != lost || r.Found == nil {
+		t.Fatalf("Audit = %+v, %v; want %d missing", r, err, lost)
+	}
+	var got, want []string
+	for _, f := range r.Found.MissingFiles {
+		got = append(got, f.NamedBy)
+	}
+	for i := range MissingShown {
+		want = append(want, fmt.Sprintf("ENG/f%03d.md", i))
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("the files shown are %v, want the first %d by name: %v", got, MissingShown, want)
+	}
+}
+
+// A PASS ITS CALLER STOPPED SAYS WHY — the engine stops one when its duty
+// moves to another node — rather than reporting "context canceled", and
+// leaves no call to the store running behind it.
+func TestAStoppedPassSaysWhy(t *testing.T) {
+	t.Parallel()
+	for _, pass := range []string{"audit", "collection"} {
+		t.Run(pass, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			g := newGate()
+			h.file("a.md", "a file")
+			run := func(ctx context.Context) (string, error) {
+				r, err := h.c.Audit(ctx)
+				return r.Error, err
+			}
+			h.backend.onStat = func(ctx context.Context, _ string, _ int) error { return g.pass(ctx) }
+			if pass == "collection" {
+				h.put("an orphan")
+				h.clock.advance(PendingGrace + time.Hour)
+				h.backend.onStat = nil
+				h.backend.onDelete = func(ctx context.Context, _ string) error { return g.pass(ctx) }
+				run = func(ctx context.Context) (string, error) {
+					r, err := h.c.Collect(ctx)
+					return r.Error, err
+				}
+			}
+			why := errors.New("another node holds the duty now")
+			ctx, stop := context.WithCancelCause(t.Context())
+			type result struct {
+				reported string
+				err      error
+			}
+			done := make(chan result, 1)
+			go func() {
+				reported, err := run(ctx)
+				done <- result{reported, err}
+			}()
+			g.waitHeld(t, 1)
+			stop(why)
+			got := <-done
+			if !errors.Is(got.err, why) || !strings.Contains(got.reported, why.Error()) {
+				t.Fatalf("a stopped %s returned %v and reported %q; want it to say why it "+
+					"was stopped", pass, got.err, got.reported)
+			}
+			if held, _ := g.counts(); held != 0 {
+				t.Fatalf("%d calls to the store outlived the %s", held, pass)
+			}
+		})
+	}
+}
+
+// AN AUDIT STOPPED BEFORE ITS SECOND LOOKS HAS NOT RUN TO ITS END, although no
+// question it asked failed: the one first look ANSWERS — "not found" needs no
+// context — so nothing is in flight when the stop lands, and the drain stops
+// between two questions rather than inside one. Reported as complete, its
+// floor counts would replace the last whole audit's findings and clear the
+// alarm; the engine stops an audit exactly this way when its duty moves.
+func TestAnAuditStoppedBeforeItsSecondLooksHasNotRunToItsEnd(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	late := h.file("late.md", "an object the store lists late")
+	h.backend.mu.Lock()
+	h.backend.lagging[late.Key.Name()] = 1
+	h.backend.mu.Unlock()
+	ctx, stop := context.WithCancelCause(t.Context())
+	defer stop(nil)
+	why := errors.New("the duty moved")
+	h.backend.onStat = func(_ context.Context, _ string, nth int) error {
+		if nth == 1 {
+			stop(why)
+		}
+		return nil
+	}
+	r, err := h.c.Audit(ctx)
+	if !errors.Is(err, why) {
+		t.Fatalf("an audit stopped before its second looks returned %v, want it to say "+
+			"it was stopped by %v", err, why)
+	}
+	if r.Completed || r.Found != nil || !strings.Contains(r.Error, "the audit was stopped") {
+		t.Fatalf("an audit stopped before its second looks reported %+v; want it "+
+			"incomplete, with no findings of its own and the stop as its error", r)
+	}
+	if found := h.c.Status().Audit.Found; found != nil {
+		t.Fatalf("an audit stopped before its second looks recorded findings %+v", found)
+	}
+}
+
+// A QUESTION THAT FAILS STOPS THE AUDIT WITH ITS OWN ERROR, and the audit
+// returns only once every question it asked has ended — a question to the
+// store never outlives the pass that asked it. The findings the last audit
+// made stand.
+func TestAFailedQuestionStopsTheAuditWithNothingLeftAsking(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	lost := h.file("lost.md", "lost")
+	if err := h.store.Delete(t.Context(), lost.Key); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := h.c.Audit(t.Context()); err != nil || r.Found == nil || r.Found.Missing != 1 {
+		t.Fatalf("the first audit = %+v, %v", r, err)
+	}
+	for i := range 3 * auditConcurrency {
+		h.file(fmt.Sprintf("%03d.md", i), fmt.Sprintf("object %d", i))
+	}
+	broke := errors.New("the store stopped answering")
+	var (
+		mu       sync.Mutex
+		answered int
+		inFlight atomic.Int64
+	)
+	h.backend.onStat = func(ctx context.Context, _ string, _ int) error {
+		mu.Lock()
+		answered++
+		n := answered
+		mu.Unlock()
+		switch {
+		case n <= 5:
+			return nil
+		case n == 6:
+			return broke
+		}
+		inFlight.Add(1)
+		defer inFlight.Add(-1)
+		<-ctx.Done()
+		// A REQUEST TORN DOWN TAKES A MOMENT TO GIVE ITS SLOT BACK, so an
+		// audit that returned without waiting for its questions is caught
+		// with them still running.
+		time.Sleep(20 * time.Millisecond)
+		return ctx.Err()
+	}
+	h.clock.advance(AuditInterval)
+	r, err := h.c.Audit(t.Context())
+	if !errors.Is(err, broke) || r.Completed || !strings.Contains(r.Error, broke.Error()) {
+		t.Fatalf("Audit = %+v, %v; want it failed with the store's own error", r, err)
+	}
+	if n := inFlight.Load(); n != 0 {
+		t.Fatalf("%d questions were still running when the audit returned", n)
+	}
+	if r.Found == nil || r.Found.Missing != 1 || r.Found.MissingFiles[0].NamedBy != "ENG/lost.md" {
+		t.Fatalf("the findings after a failed audit = %+v; want the last whole audit's", r.Found)
+	}
+}
+
+// A DELETION THAT FAILS STOPS THE COLLECTION WITH ITS OWN ERROR — never the
+// cancellation it caused — and the pass returns only once every deletion it
+// began has ended, counting exactly those that took effect.
+//
+// THE COUNT IS JUDGED AGAINST THE STORE, never against a number: a deletion
+// the store let through before the failure can still reach the twin after the
+// failure cancelled the pass, and fail there, so how many of the nineteen
+// before it take effect is the scheduler's to decide. What is not is that the
+// report counts every one that did and none that did not, and that nothing
+// after the failure is deleted.
+func TestAFailedDeletionStopsTheCollection(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	var orphans []objstore.Key
+	for i := range 2 * judgeBatch {
+		orphans = append(orphans, h.put(fmt.Sprintf("orphan %d", i)))
+	}
+	h.clock.advance(PendingGrace + time.Hour)
+	broke := errors.New("the store refused a deletion")
+	var (
+		mu       sync.Mutex
+		calls    int
+		inFlight atomic.Int64
+	)
+	h.backend.onDelete = func(ctx context.Context, _ string) error {
+		mu.Lock()
+		calls++
+		n := calls
+		mu.Unlock()
+		switch {
+		case n < 20:
+			return nil
+		case n == 20:
+			return broke
+		}
+		inFlight.Add(1)
+		defer inFlight.Add(-1)
+		<-ctx.Done()
+		time.Sleep(20 * time.Millisecond)
+		return ctx.Err()
+	}
+	r, err := h.c.Collect(t.Context())
+	if !errors.Is(err, broke) || errors.Is(err, context.Canceled) || r.Completed {
+		t.Fatalf("Collect = %+v, %v; want it failed with the deletion's own error alone", r, err)
+	}
+	if n := inFlight.Load(); n != 0 {
+		t.Fatalf("%d deletions were still running when the collection returned", n)
+	}
+	gone := 0
+	for _, k := range orphans {
+		if !h.held(k) {
+			gone++
+		}
+	}
+	if r.Deleted != gone || gone >= 20 {
+		t.Fatalf("the collection reported %d deleted and the store lost %d; want the report "+
+			"to count exactly the deletions that took effect, all of them before the 20th", r.Deleted, gone)
+	}
+}
+
+// EVERY REFERENCE IS ASKED ABOUT ONCE, AND A SUSPECT EXACTLY TWICE, however
+// the questions interleave: nothing held asked about again, nothing called
+// missing on one answer, nothing damaged counted as missing.
+func TestEveryReferenceIsAskedOnceAndASuspectTwice(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	const total, deleted, corrupted, lagging = 1507, 37, 13, 5
+	twice := map[string]bool{}
+	for i := range total {
+		o := h.file(fmt.Sprintf("%04d.md", i), fmt.Sprintf("object %d", i))
+		switch {
+		case i < deleted:
+			if err := h.store.Delete(t.Context(), o.Key); err != nil {
+				t.Fatal(err)
+			}
+			twice[o.Key.Name()] = true
+		case i < deleted+corrupted:
+			h.backend.Corrupt(o.Key.Name(), []byte("rot"))
+		case i < deleted+corrupted+lagging:
+			h.backend.lagging[o.Key.Name()] = 1
+			twice[o.Key.Name()] = true
+		}
+	}
+	r, err := h.c.Audit(t.Context())
+	if err != nil || r.Referenced != total || r.Missing != deleted || r.Damaged != corrupted {
+		t.Fatalf("Audit = %+v, %v; want %d asked, %d missing and %d damaged", r, err, total, deleted, corrupted)
+	}
+	h.backend.mu.Lock()
+	defer h.backend.mu.Unlock()
+	if len(h.backend.asks) != total {
+		t.Fatalf("%d names asked about, want %d", len(h.backend.asks), total)
+	}
+	for name, n := range h.backend.asks {
+		want := 1
+		if twice[name] {
+			want = 2
+		}
+		if n != want {
+			t.Errorf("%s asked about %d times, want %d", name, n, want)
+		}
+	}
+}
+
+// THE AUDIT ASKS NO MORE AT ONCE THAN THE TRANSPORT KEEPS WARM, and deletes
+// fewer at once than it asks. On S3 an audit past the shared transport's warm
+// connections to one host pays a fresh TLS handshake for every question over
+// the pool; a deletion is a WRITE, on the share of the bucket's request rate
+// the company's own uploads spend.
+func TestTheAuditAsksNoMoreAtOnceThanTheTransportKeepsWarm(t *testing.T) {
+	t.Parallel()
+	if auditConcurrency > httpx.MaxIdleConnsPerHost {
+		t.Errorf("the audit asks %d at once and the transport keeps %d connections warm per host",
+			auditConcurrency, httpx.MaxIdleConnsPerHost)
+	}
+	if deleteConcurrency >= auditConcurrency {
+		t.Errorf("a collection deletes %d at once, not fewer than the %d questions an audit asks",
+			deleteConcurrency, auditConcurrency)
 	}
 }

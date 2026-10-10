@@ -38,7 +38,9 @@ type Source interface {
 	// not owed (ADR-0033) — read no earlier than at, and reports whether
 	// the walk was COMPLETE. visit is NEVER CALLED INSIDE A READ of the
 	// estate: it asks the backend about each, a round trip a read's
-	// connection must not be held across.
+	// connection must not be held across. And it may BLOCK — the audit's
+	// does while its questions are at their bound — so a walk reads its
+	// next page only once every visit of the last has returned.
 	//
 	// NAMED FOR WHAT IT LEAVES OUT, beside a Referenced that leaves out
 	// nothing: a reader seeing a bare Each would take it for every table.
@@ -205,8 +207,9 @@ func (s *tableSource) Referenced(ctx context.Context, among []objstore.Key,
 const eachPage = judgeBatch
 
 // EachRequired walks every REQUIRED table of the domain a keyset page at a
-// time, EACH PAGE IN A READ OF ITS OWN and visited after that read has ended —
-// see [Source.EachRequired]. The walk is complete only where every read was:
+// time, EACH PAGE IN A READ OF ITS OWN and visited after that read has ended,
+// the next page read only once every visit of this one has returned — see
+// [Source.EachRequired]. The walk is complete only where every read was:
 // each is no earlier than at, so a record the node could not apply at any of
 // them is seen. With no required table it reads nothing and is complete.
 func (s *tableSource) EachRequired(ctx context.Context, at statelog.Position,

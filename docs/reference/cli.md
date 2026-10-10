@@ -762,7 +762,7 @@ for each pass:
   many it holds at the wrong size or digest (**damaged**). An audit that
   failed after it is said beneath, never in its place. When any file cannot
   be read it lists them — the file, whether it is missing or damaged, and its
-  object's key; the first hundred, and how many more — to restore from a
+  object's key; the first hundred by name, and how many more — to restore from a
   [backup](../guides/backup.md) or upload again.
 
 Before the collector has finished a pass — on a new fleet, in the minute or so
