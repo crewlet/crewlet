@@ -495,16 +495,6 @@ func (s *LiveState) overlayOf(handle string) Overlay {
 	return o
 }
 
-// RuntimeIDFor returns the running instance id for a seat, or "".
-func (s *LiveState) RuntimeIDFor(handle string) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if live := s.agents[handle]; live != nil {
-		return live.runtimeID
-	}
-	return ""
-}
-
 // RecentEvents returns feed rows newest-first, capped at limit.
 func (s *LiveState) RecentEvents(limit int) []FeedRow {
 	s.mu.Lock()
