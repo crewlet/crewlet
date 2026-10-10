@@ -128,6 +128,147 @@ func TestAncestorsClimbThroughARootSeat(t *testing.T) {
 	}
 }
 
+// lineCharts are the shapes a lead's line is interesting on, each built fresh
+// because Normalize writes into the seats it is handed.
+var lineCharts = map[string]func() *Organization{
+	// A person above everybody, a unit lead who wrote no manages at all,
+	// a member another member manages, and a human report.
+	"company": func() *Organization {
+		return normalized(&Organization{
+			Name: "Acme",
+			Roles: []*Role{
+				{Name: "Jane Founder", Kind: KindHuman, DeclaredHandle: "jane", Manages: []string{"CEO"}},
+				{Name: "CEO", Manages: []string{"VP Engineering", "Head of Product"}},
+			},
+			Units: []*Unit{
+				{Name: "Engineering", Lead: "VP Engineering", Roles: []*Role{
+					{Name: "VP Engineering"},
+					{Name: "Tech Lead", Manages: []string{"Dev A"}},
+					{Name: "Dev A"},
+				}},
+				{Name: "Product", Lead: "Head of Product", Roles: []*Role{
+					{Name: "Head of Product"},
+					{Name: "Designer", Kind: KindHuman},
+				}},
+			},
+		})
+	},
+	// Dev has TWO managers: the CEO through the unit name, and the unit's
+	// lead through auto-management. The CEO is walked first, so it is the
+	// primary one.
+	"two managers": func() *Organization {
+		return normalized(&Organization{
+			Name:  "T",
+			Roles: []*Role{{Name: "CEO", Manages: []string{"Backend"}}},
+			Units: []*Unit{{Name: "Backend", Lead: "Backend Lead", Roles: []*Role{
+				{Name: "Backend Lead"}, {Name: "Dev"},
+			}}},
+		})
+	},
+	// The remedy the org model documents for the shape above: the outside
+	// seat manages the lead rather than the unit.
+	"outside seat manages the lead": func() *Organization {
+		return normalized(&Organization{
+			Name:  "T",
+			Roles: []*Role{{Name: "CEO", Manages: []string{"Backend Lead"}}},
+			Units: []*Unit{{Name: "Backend", Lead: "Backend Lead", Roles: []*Role{
+				{Name: "Backend Lead"}, {Name: "Dev"},
+			}}},
+		})
+	},
+	"cycle": func() *Organization {
+		return normalized(&Organization{Name: "T", Roles: []*Role{
+			{Name: "A", Manages: []string{"B"}},
+			{Name: "B", Manages: []string{"C"}},
+			{Name: "C", Manages: []string{"A"}},
+			{Name: "D"},
+		}})
+	},
+}
+
+func TestLeadsInLine(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		chart string
+		lead  string
+		want  []string
+	}{
+		// A founder leads everybody: the line runs to the bottom of the
+		// chart, humans included, and names each seat by its handle.
+		{"the top of the chart leads every seat below it", "company", "Jane Founder",
+			[]string{"ceo", "vp-engineering", "tech-lead", "dev-a", "head-of-product", "designer"}},
+		{"a line is every depth, not only direct reports", "company", "CEO",
+			[]string{"vp-engineering", "tech-lead", "dev-a", "head-of-product", "designer"}},
+		// VP Engineering wrote no manages: Tech Lead is in its line by
+		// leading the unit, and Dev A through Tech Lead.
+		{"unit leadership puts a lead's team in its line", "company", "VP Engineering",
+			[]string{"tech-lead", "dev-a"}},
+		{"a human lead's report is in its line", "company", "Head of Product",
+			[]string{"designer"}},
+		{"a seat nobody reports to leads nobody", "company", "Dev A", nil},
+		// THE PRIMARY CHAIN: Dev's primary manager is the CEO, so the
+		// unit lead that also manages Dev does not lead it.
+		{"the primary manager leads a two-manager seat", "two managers", "CEO",
+			[]string{"backend-lead", "dev"}},
+		{"a second manager does not", "two managers", "Backend Lead", nil},
+		{"managing the lead rather than the unit gives the lead its team", "outside seat manages the lead",
+			"Backend Lead", []string{"dev"}},
+		{"and keeps the team in the outside seat's line", "outside seat manages the lead", "CEO",
+			[]string{"backend-lead", "dev"}},
+		// A loop ends the walk: every seat on it is in every other's line,
+		// never its own, and a seat off the loop is in nobody's.
+		{"a cycle puts the rest of the loop in a seat's line", "cycle", "A", []string{"b", "c"}},
+		{"and never the seat itself", "cycle", "B", []string{"a", "c"}},
+		{"a seat off the loop leads nobody on it", "cycle", "D", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			o := lineCharts[tc.chart]()
+			lead := o.Role(tc.lead)
+			if lead == nil {
+				t.Fatalf("no seat named %q in %q", tc.lead, tc.chart)
+			}
+			if got := o.LeadsInLine(lead); !slices.Equal(got, tc.want) {
+				t.Errorf("LeadsInLine(%s) = %v, want %v", tc.lead, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestLeadsInLineOfNobodyIsEmpty(t *testing.T) {
+	t.Parallel()
+	if got := lineCharts["company"]().LeadsInLine(nil); got != nil {
+		t.Errorf("LeadsInLine(nil) = %v, want none", got)
+	}
+}
+
+// TestALineIsTheChainReadDownward: a seat is in a lead's line exactly when the
+// lead is in that seat's management chain. That is what the lead authority
+// over a person's queue asked of [Organization.Ancestors] before the line was
+// derived here, so it is what keeps every answer it gave the same — for every
+// pair of seats on every chart, cycles and two-manager seats included.
+func TestALineIsTheChainReadDownward(t *testing.T) {
+	t.Parallel()
+	for name, chart := range lineCharts {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			o := chart()
+			for lead := range o.AllRoles() {
+				line := o.LeadsInLine(lead)
+				for seat := range o.AllRoles() {
+					inLine := slices.Contains(line, seat.Handle())
+					inChain := seat != lead && slices.Contains(o.Ancestors(seat), lead)
+					if inLine != inChain {
+						t.Errorf("%s in %s's line = %t, but %s in %s's chain = %t",
+							seat.Name, lead.Name, inLine, lead.Name, seat.Name, inChain)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestUnitForAndUnitChain(t *testing.T) {
 	t.Parallel()
 	o := hierarchyOrg()

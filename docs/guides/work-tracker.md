@@ -1793,7 +1793,9 @@ stamped as their seat, never as the credential's id, which is nobody the report
 knows — the history row that write leaves still names the token, because
 attribution is the audit trail's question and "who decided this order" is the
 queue's. The lead relation is any ancestor in the management chain, not just
-the direct manager: a founder leads everybody.
+the direct manager: a founder leads everybody. It is the chain the org chart
+draws, so a member with two managers is in the line of the one it hangs under
+and not the other's — see [a lead's line](../concepts/organization-model.md#a-leads-line).
 
 It also **wakes the seat**, and that is the other half of the same authority:
 a stamp is seen by somebody who opens a screen, and a seat has no screen. The
