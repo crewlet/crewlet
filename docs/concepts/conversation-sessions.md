@@ -325,29 +325,42 @@ the pre-ledger prompt) and logs that it could not read it. Swallowing it in the
 store would make "unreadable" and "nothing said yet" one answer, and a seat
 would run without its history with nothing anywhere to say why.
 
-The ledger lives in the store of the node running the seat, which every node
-opens, so it is never replicated: a seat that moves between nodes simply arrives
-with no history, which is the same fail-open answer.
+The ledger is written to the store of the node running the seat, and it travels
+with the seat: it is one of the tables
+[memory replication](seat-ownership.md#a-seats-memory-follows-it) carries,
+named across the fleet by its `entry_id`, and a node acquiring the seat replays
+it before the seat's mailbox attaches. A seat that moves between nodes
+therefore arrives with its history. Every node that ever ran the seat keeps a
+copy, and only the holder's is current, which is why the read below asks the
+holder.
 
 ---
 
 ## Reading it
 
-**There is no read surface, deliberately.** The ledger is prompt context: the
-engine renders it into the next turn of the same conversation and nothing else
-consumes it.
+The ledger is prompt context first: the engine renders it into the next turn
+of the same conversation. It is also the engine's only account of what a seat
+said on a surface it does not own, so it is readable as that seat's own
+record: `GET /agents/{id}/conversations` (the `conversations` query on the
+socket) lists every conversation the seat holds entries in, and naming one in
+`conversation=` adds that conversation's turns. Each turn carries its reply as
+`reply` or as `unsent`, and which of the two holds it is the whole record of
+whether anybody received it. A seat's **Memory** tab on the dashboard draws
+both halves. See
+[the `conversations` query](../reference/api-endpoints.md#queries).
 
-A dashboard tab and a `/conversations` endpoint did exist, and both were
-removed. They were a viewer for somebody ELSE's threads — a Slack channel, a
-Jira issue — reconstructed from what the engine happened to record about them,
-always a worse version of the thread than the surface it lives on, and a
-conversations screen in this product is meant to be Crewlet's own messaging
-when there is one to show. Keeping a half-view until then would have promised
-a chat system the engine does not have.
+It is **answered by the node holding the seat**, which it names (`held_by`),
+for the reason the rest of a seat's memory is: only the holder's copy is
+current. And it is a personal record, so an anonymous caller is refused it
+whatever `api.auth.allow_anonymous_read` says (see
+[Configuration § Auth](configuration.md#auth)).
 
-The entries reach a person through the prompt they shape, and through the
-`conversation_key` shown on a phase, which names the external thread a turn
-served so a reader can go to it.
+What it is not is a viewer for the thread itself. A company-wide conversations
+screen once drew the ledger that way, as a worse copy of a Slack channel or a
+Jira issue than the surface it lives on, and it was removed. What remains is
+the seat's account of its own part, which is the one thing the surface cannot
+show: a reply that never landed is not in the thread at all. To read the thread,
+follow its `conversation_key`, which a phase shows too.
 
 ---
 
