@@ -196,6 +196,26 @@ type GroupRow struct {
 	Other  bool `json:"other"`
 	Folded int  `json:"folded"`
 
+	// Parts splits a UNIT band by the seats that spent in it, biggest first,
+	// so a team's bar can be drawn in its seats' shares from the same cells
+	// that made the band, without a second query whose seats would have to be
+	// placed in units again by a second reading of the chart. They sum to the
+	// band. Absent on every other grouping and on the residual row, which
+	// holds several units.
+	Parts []GroupPart `json:"parts,omitempty"`
+
+	Bucket
+}
+
+// GroupPart is one seat's share of a UNIT band over the window.
+type GroupPart struct {
+	// Group is the seat as the seat grouping keys its band: its handle, else
+	// its role, else its agent id.
+	Group string `json:"group"`
+
+	// Handle is the seat's handle, so a part can link to the seat it names.
+	Handle string `json:"handle,omitempty"`
+
 	Bucket
 }
 
@@ -387,6 +407,10 @@ func BucketDaily(cells []Cell, opts SeriesOptions) Series {
 	}
 	seats := map[string]map[string]bool{}
 	handles := map[string]string{}
+	// A UNIT BAND'S SEATS, by the seat grouping's key, and each seat's
+	// handle where it has one.
+	parts := map[string]map[string]*Bucket{}
+	partHandles := map[string]string{}
 	for _, c := range cells {
 		if _, inside := index[c.Day]; !inside {
 			continue
@@ -406,15 +430,22 @@ func BucketDaily(cells []Cell, opts SeriesOptions) Series {
 		case GroupUnit:
 			if seats[key] == nil {
 				seats[key] = map[string]bool{}
+				parts[key] = map[string]*Bucket{}
 			}
 			seats[key][c.who()] = true
+			seat := seatName(c.Handle, c.Role, c.AgentID)
+			bucketFor(parts[key], seat).merge(c.Bucket)
+			if c.Handle != "" {
+				partHandles[seat] = c.Handle
+			}
 		}
 	}
 
 	ranked := make([]GroupRow, 0, len(total))
 	for key, b := range total {
 		ranked = append(ranked, GroupRow{
-			Group: key, Handle: handles[key], Seats: len(seats[key]), Bucket: *b,
+			Group: key, Handle: handles[key], Seats: len(seats[key]),
+			Parts: rankParts(parts[key], partHandles), Bucket: *b,
 		})
 	}
 	if opts.Group == GroupPhase {
@@ -462,5 +493,20 @@ func BucketDaily(cells []Cell, opts SeriesOptions) Series {
 			point.Residual.merge(c.Bucket)
 		}
 	}
+	return out
+}
+
+// rankParts is a unit band's seats as parts, biggest first, ties on the seat's
+// key so an equal split reads the same on every node. Nil for a band with
+// none, which is every band of every grouping but the unit's.
+func rankParts(seats map[string]*Bucket, handles map[string]string) []GroupPart {
+	if len(seats) == 0 {
+		return nil
+	}
+	out := make([]GroupPart, 0, len(seats))
+	for seat, b := range seats {
+		out = append(out, GroupPart{Group: seat, Handle: handles[seat], Bucket: *b})
+	}
+	byTokensThen(out, func(p GroupPart) (int, string) { return p.TotalTokens, p.Group })
 	return out
 }

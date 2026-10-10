@@ -1,41 +1,49 @@
 /**
- * Agents › Org chart: the company as it is running, one card per seat.
+ * Agents › Org chart: the company as it is running, one node per seat.
  *
- * # What the chart draws, and from what
+ * # One drawing with the builder
  *
- * The tree is who reports to whom — each card under its primary manager — with
- * a box round the seats of a unit under the lead they report to, and the
- * unit's project key on the box. It is built by `lib/orgchart.ts` from the org
- * projection this node has APPLIED, never the builder's draft: between a save
- * and this node applying it the chart has not moved, and [PreviousRevisionNote]
- * says so rather than letting the chart read as a save that did nothing.
+ * The chart is drawn as Agents › Edit org draws a draft: the design system's
+ * tree canvas in its `node` appearance, elbow connectors on the dotted field,
+ * an agent seat toned and marked with the Crewlet figure, a person inside a
+ * dashed ring, each unit's lead in a pill along its bottom edge, and the
+ * switch between the two arrangements under the zoom bar. What a node LOOKS
+ * like is shared (`ui/orgNodes.tsx`); what it is drawn FROM is not. The
+ * STRUCTURE is the company, its units and the seats in each; the REPORTING
+ * chart is who each seat reports to. Both are built by `lib/orgchart.ts` from
+ * the org projection this node has APPLIED, never the builder's draft: between
+ * a save and this node applying it the chart has not moved, and
+ * [PreviousRevisionNote] says so rather than letting the chart read as a save
+ * that did nothing.
  *
- * # Colour is what a seat is doing, never who it is
+ * # A seat's caption is what it is doing
  *
- * The one hue on a card is its STATE — the ring round the badge and the dot
- * before the state line — and the words come from the engine's own
- * vocabulary (`activity`, `lib/seats.ts`). Cards carry no hue of their own:
- * a colour per seat reads as a state, and a reader scanning for the amber
- * one that needs them would find a seat that is merely called something.
- * The legend counts the same four words.
+ * Under a seat's name is the engine's word for its state behind the state's
+ * dot (`lib/seats.ts`), and the legend counts the same four words. The dot is
+ * the one mark on the chart that says what a seat is DOING; the tone and the
+ * figure say what it IS. The word is one of a few short ones on purpose: a node
+ * is as wide as its name, so a caption that grew with every push would relay
+ * the whole chart twice a tool-loop round. The engine's full state line is the
+ * node's title, and it is read after the node's name.
  *
- * # A card opens the seat's peek
+ * # A node opens its peek
  *
- * The chart is where a reader looks at the company; a card opens the seat
- * beside it (`peek=seat:{handle}`), which keeps the chart on screen. Enter
+ * A seat opens the seat beside the chart (`peek=seat:{handle}`) and a unit
+ * opens the unit (`peek=unit:{name}`), which keeps the chart on screen. Enter
  * does the same, the arrows walk the tree (the kit's tree pattern), and while
- * the peek is open it follows the card that has focus. The chart stays fitted
+ * the peek is open it follows the node that has focus. The chart stays fitted
  * and centred as the peek takes and gives back its width ([useChartView]).
  *
  * # On a phone it is rows
  *
- * Below the phone breakpoint the same tree is drawn as the kit's tree grid
- * ([OrgOutline]): no size of card chart can be read on a phone.
+ * Below the phone breakpoint the reporting tree is drawn as the kit's tree grid
+ * ([OrgOutline]): no size of chart can be read on a phone.
  */
 
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -45,23 +53,30 @@ import {
 } from "react";
 import {
   EmptyState,
+  OrgNodeLabel,
+  OrgNodeLead,
   StatusDot,
   Tag,
   TreeCanvas,
   TreeGrid,
-  type TreeCanvasGroup,
+  VisuallyHidden,
   type TreeCanvasHandle,
+  type TreeCanvasProps,
   type TreeCardContext,
   type TreeCardInput,
+  type TreeInput,
   type TreeItemAction,
   type TreeModel,
 } from "@crewlethq/ui";
 import { NetworkGlyph } from "@crewlethq/icons/glyphs";
 import { useFillScreen } from "~/app/fill.tsx";
 import { peekHref, rowPeekHandler, usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { refToken, type ObjectRef } from "~/app/frame/objects.ts";
 import { usePeekNeighbours, usePeekStep } from "~/app/frame/PeekHost.tsx";
 import { usePeekWidth } from "~/app/frame/peekWidth.ts";
+import { useParam } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
+import { plural } from "~/lib/format.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useMediaQuery } from "~/lib/media.ts";
@@ -73,11 +88,24 @@ import {
   nameOfIn,
   ringOf,
   stateLine,
+  stateWord,
   toneOf,
   type NameOf,
+  type OrgIndex,
   type Seat,
+  type Unit,
 } from "~/lib/seats.ts";
-import { buildOrgChart, placeLine, stateCounts, type StateCounts } from "~/lib/orgchart.ts";
+import {
+  COMPANY_NODE,
+  buildReportingChart,
+  buildStructureChart,
+  placeLine,
+  projectsByUnit,
+  stateCounts,
+  unitNodeId,
+  type OrgChartModel,
+  type StateCounts,
+} from "~/lib/orgchart.ts";
 import type { AgentRow } from "~/protocol/types.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import {
@@ -87,22 +115,30 @@ import {
   holdLegible,
   largestRoot,
 } from "~/ui/canvasView.ts";
+import {
+  ChartSwitch,
+  NodeGlyph,
+  NodeToggle,
+  chartKindOf,
+  leadPill,
+  leadSentenceOf,
+  seatKindLabel,
+  seatMark,
+  seatTone,
+  unitTypeLabel,
+  type LeadName,
+} from "~/ui/orgNodes.tsx";
 import { PreviousRevisionNote } from "~/routes/org/builder/AfterSaveStrip.tsx";
 import { AgentsHeader, useAgentsCounts } from "./header.tsx";
 
 /** The project page the chart reads its unit keys from: every live project. */
 const PROJECT_PAGE = 200;
 
-/** The legend's four words, in the order a reader acts on them. */
-const LEGEND: readonly { state: keyof StateCounts; label: string }[] = [
-  { state: "working", label: "Working" },
-  { state: "needs", label: "Needs you" },
-  { state: "stopped", label: "Stopped" },
-  { state: "idle", label: "Idle" },
-];
+/** The legend's four states, in the order a reader acts on them. */
+const LEGEND: readonly (keyof StateCounts)[] = ["working", "needs", "stopped", "idle"];
 
 export function OrgChart() {
-  // BELOW A PHONE'S WIDTH THE CHART IS ROWS — see [OrgOutline] — and rows
+  // BELOW A PHONE'S WIDTH THE CHART IS ROWS (see [OrgOutline]), and rows
   // scroll with the page as any list does; the canvas takes the height the
   // page leaves.
   const phone = useMediaQuery(`(width < ${PHONE_BREAKPOINT}px)`);
@@ -118,12 +154,22 @@ export function OrgChart() {
   const nameOf = useMemo(() => nameOfIn(index), [index]);
   useAgentsCounts(index);
 
-  // THE KEY ON A UNIT'S BOX is the project its work is filed under, which
+  // WHICH ARRANGEMENT, chosen as the builder's is: the same section param
+  // and the same switch, so a link names the same chart on either screen.
+  const [chartParam, setChart] = useParam("chart", "structure", "section");
+  const kind = chartKindOf(chartParam);
+  const panelId = useId();
+
+  // THE KEY ON A UNIT'S NODE is the project its work is filed under, which
   // only the tracker knows. A company on another tracker answers nothing and
-  // the boxes carry their names alone.
+  // a unit's node carries its type alone.
   const projects = useQuery("work_projects", { limit: PROJECT_PAGE }, { pollMs: 120_000 });
   const projectRows = projects.error ? undefined : projects.data?.projects;
-  const chart = useMemo(() => buildOrgChart(index, projectRows ?? []), [index, projectRows]);
+  const keysOf = useMemo(() => projectsByUnit(projectRows ?? []), [projectRows]);
+  const company = org?.name ?? "";
+  const structure = useMemo(() => buildStructureChart(index, company), [index, company]);
+  const reporting = useMemo(() => buildReportingChart(index), [index]);
+  const chart = kind === "reporting" ? reporting : structure;
   const counts = useMemo(() => stateCounts(index, agents), [index, agents]);
   const byRole = useMemo(() => new Map(agents.map((a) => [a.role, a])), [agents]);
 
@@ -132,15 +178,22 @@ export function OrgChart() {
   const { open, move } = usePeekControls();
   const peeked =
     peek?.kind === "seat" ? (index.byHandle.get(peek.id) ?? index.byName.get(peek.id)) : undefined;
+  const peekedUnit =
+    peek?.kind === "unit" ? index.units.find((u) => u.name === peek.id) : undefined;
+  // THE NODE THE PEEK IS ABOUT, where the chart on screen draws one: a unit
+  // is a node of the structure only.
+  const peekedUnitNode = peekedUnit ? unitNodeId(peekedUnit) : null;
+  const selected =
+    peeked?.key ?? (peekedUnitNode && chart.units.has(peekedUnitNode) ? peekedUnitNode : null);
 
   // `[` AND `]` WALK THE SEATS in the order the tree reads them.
   const order = useMemo(() => {
     const out: Seat[] = [];
-    const walk = (nodes: readonly { id: string; children?: readonly unknown[] }[]) => {
+    const walk = (nodes: readonly TreeInput[]) => {
       for (const n of nodes) {
         const seat = chart.seats.get(n.id);
         if (seat) out.push(seat);
-        if (n.children) walk(n.children as { id: string }[]);
+        if (n.children) walk(n.children);
       }
     };
     walk(chart.nodes);
@@ -151,37 +204,42 @@ export function OrgChart() {
   );
   const step = usePeekStep();
 
-  // THE ROOT THE COMPANY HANGS FROM — the root with the most seats under it —
-  // which a chart held above its fit with nobody selected is anchored on.
+  // THE ROOT THE COMPANY HANGS FROM: the company on the structure, and on the
+  // reporting chart the root with the most seats under it. A chart held above
+  // its fit with nothing selected is anchored on it.
   const anchor = useMemo(() => largestRoot(chart.nodes), [chart]);
 
-  // ONE PRESS, ONE NAVIGATION. A pointer press on a card reaches the peek
-  // twice — the tree's selection follows the focus the press gave the card,
-  // and the card's own click opens it — and both land before the address has
-  // moved, so each read the peek as still showing the last seat. What was
+  // ONE PRESS, ONE NAVIGATION. A pointer press on a node reaches the peek
+  // twice (the tree's selection follows the focus the press gave the node,
+  // and the node's own click opens it), and both land before the address has
+  // moved, so each read the peek as still showing the last node. What was
   // ASKED FOR is remembered until the address answers, and asking again for
-  // the same seat is nothing.
+  // the same node is nothing.
   const asked = useRef<string | null>(null);
-  const peekId = peek?.kind === "seat" ? peek.id : null;
+  const peekToken = peek ? refToken(peek) : null;
   useEffect(() => {
-    asked.current = peekId;
-  }, [peekId]);
-  const peekSeat = useCallback(
-    (seat: Seat) => {
-      const id = seat.handle;
-      if (asked.current === id) return;
-      asked.current = id;
-      const ref = { kind: "seat" as const, id };
+    asked.current = peekToken;
+  }, [peekToken]);
+  const peekTo = useCallback(
+    (ref: ObjectRef) => {
+      const token = refToken(ref);
+      if (asked.current === token) return;
+      asked.current = token;
       if (peek) move(ref);
       else open(ref);
     },
     [peek, move, open],
   );
-
-  // A STATE RATHER THAN A REF: the chart is not drawn until the org has
-  // loaded, and what watches its box has to start when it is.
-  const [host, setHost] = useState<HTMLDivElement | null>(null);
-  const chartBox = useChartView(host, view, peeked?.key ?? null, anchor);
+  // WHAT A NODE OPENS: a seat, a unit, or nothing for the company.
+  const subjectOf = useCallback(
+    (id: string): ObjectRef | null => {
+      const seat = chart.seats.get(id);
+      if (seat) return { kind: "seat", id: seat.handle };
+      const unit = chart.units.get(id);
+      return unit ? { kind: "unit", id: unit.name } : null;
+    },
+    [chart],
+  );
 
   const cards = useCallback((model: TreeModel, expanded: ReadonlySet<string>): TreeCardInput[] => {
     const card = (id: string): TreeCardInput => ({
@@ -190,39 +248,20 @@ export function OrgChart() {
     });
     return model.roots.map(card);
   }, []);
-  const groups = useMemo<TreeCanvasGroup[]>(
-    () =>
-      chart.groups.map((g) => ({
-        id: g.id,
-        label: g.label,
-        memberIds: g.memberIds,
-        ...(g.projectKeys.length
-          ? {
-              lead: (
-                <span className="oc-key" title={g.projectKeys.join(", ")}>
-                  {g.projectKeys[0]}
-                  {g.projectKeys.length > 1 ? ` +${g.projectKeys.length - 1}` : ""}
-                </span>
-              ),
-            }
-          : {}),
-      })),
-    [chart.groups],
-  );
   const onNodeKey = useCallback(
     (id: string, action: Exclude<TreeItemAction, "menu">): boolean => {
-      const seat = chart.seats.get(id);
-      if (!seat || action !== "activate") return false;
-      peekSeat(seat);
+      const subject = subjectOf(id);
+      if (!subject || action !== "activate") return false;
+      peekTo(subject);
       return true;
     },
-    [chart.seats, peekSeat],
+    [subjectOf, peekTo],
   );
-  // `[` AND `]` ON A CARD STEP THE PEEK. The tree reads every printable key a
-  // card is sent as type-ahead, so the rail's own binding never heard them
-  // from the chart — and pressing a card, then `]`, is the way a reader walks
-  // the company. The card claims the two keys and steps the ONE stepper the
-  // rail's buttons use; focus follows the peek to the next card, as the
+  // `[` AND `]` ON A NODE STEP THE PEEK. The tree reads every printable key a
+  // node is sent as type-ahead, so the rail's own binding never heard them
+  // from the chart, and pressing a node, then `]`, is the way a reader walks
+  // the company. The node claims the two keys and steps the ONE stepper the
+  // rail's buttons use; focus follows the peek to the next node, as the
   // selection follows focus.
   const onNodeKeyDown = useCallback(
     (_id: string, event: ReactKeyboardEvent<HTMLElement>): boolean => {
@@ -233,6 +272,36 @@ export function OrgChart() {
     },
     [step],
   );
+  const renderCard = (id: string, card: TreeCardContext) => {
+    const seat = chart.seats.get(id);
+    if (seat) {
+      return (
+        <SeatNode
+          seat={seat}
+          agent={byRole.get(seat.name)}
+          card={card}
+          now={now}
+          nameOf={nameOf}
+          onOpen={() => peekTo({ kind: "seat", id: seat.handle })}
+        />
+      );
+    }
+    const unit = chart.units.get(id);
+    if (unit) {
+      return (
+        <UnitNode
+          id={id}
+          unit={unit}
+          keys={keysOf.get(unit.name) ?? []}
+          card={card}
+          onOpen={() => peekTo({ kind: "unit", id: unit.name })}
+        />
+      );
+    }
+    return id === COMPANY_NODE ? (
+      <CompanyNode name={structure.nodes[0]?.label ?? ""} index={index} card={card} />
+    ) : null;
+  };
 
   if (!index.seats.length) {
     return (
@@ -259,57 +328,87 @@ export function OrgChart() {
       <PreviousRevisionNote />
       {phone ? (
         <OrgOutline
-          chart={chart}
+          chart={reporting}
           byRole={byRole}
           counts={counts}
           now={now}
           nameOf={nameOf}
           peeked={peeked}
           following={peek?.kind === "seat"}
-          onOpen={peekSeat}
+          onOpen={(seat) => peekTo({ kind: "seat", id: seat.handle })}
         />
       ) : (
-        <div className="oc-chart" ref={setHost} {...chartBox}>
-          <TreeCanvas
-            className="oc-canvas"
-            ref={view}
-            label="Org chart"
-            labels={CANVAS_LABELS}
-            // THE FIELD IS DOTTED, as the approved chart draws it: a surface
-            // that pans says so before anybody drags it.
-            ground="dotted"
-            connector="elbow"
-            nodes={chart.nodes}
-            cards={cards}
-            cardOf={(id) => id}
-            groups={groups}
-            selectedId={peeked?.key ?? null}
-            onSelect={(id) => {
-              // THE PEEK FOLLOWS FOCUS while it is open, so the arrows walk the
-              // company with the seat beside it; with it shut, focus is focus.
-              const seat = chart.seats.get(id);
-              if (peek?.kind === "seat" && seat && seat !== peeked) peekSeat(seat);
-            }}
-            onNodeKey={onNodeKey}
-            onNodeKeyDown={onNodeKeyDown}
-            controlsPlacement="bottom-right"
-            overlay={<OrgLegend counts={counts} />}
-            renderCard={(id, card) => {
-              const seat = chart.seats.get(id);
-              return seat ? (
-                <SeatCardNode
-                  seat={seat}
-                  agent={byRole.get(seat.name)}
-                  card={card}
-                  now={now}
-                  nameOf={nameOf}
-                  onOpen={() => peekSeat(seat)}
-                />
-              ) : null;
-            }}
-          />
-        </div>
+        <ChartCanvas
+          // ONE CANVAS PER ARRANGEMENT, as the builder mounts one per chart:
+          // the two draw different trees, so each is fitted and held legible
+          // from its own first layout rather than inheriting the other's view.
+          key={kind}
+          view={view}
+          panelId={panelId}
+          selected={selected}
+          anchor={anchor}
+          className="oc-canvas"
+          label={kind === "reporting" ? "Reporting chart" : "Structure chart"}
+          labels={CANVAS_LABELS}
+          // THE BUILDER'S DRAWING (`ui/orgNodes.tsx`): nodes as wide as their
+          // names on the dotted field, joined by the design system's elbows.
+          appearance="node"
+          ground="dotted"
+          connector="elbow"
+          // AN AGENT SEAT IS TONED, as the builder draws one, and every other
+          // node keeps the chart's neutral surface.
+          cardTone={(id) => {
+            const seat = chart.seats.get(id);
+            return seat ? seatTone(seat.kind) : undefined;
+          }}
+          nodes={chart.nodes}
+          cards={cards}
+          cardOf={(id) => id}
+          onSelect={(id) => {
+            // THE PEEK FOLLOWS FOCUS while it is open, so the arrows walk the
+            // company with the node beside it; with it shut, focus is focus.
+            const subject = subjectOf(id);
+            if (!peek || (peek.kind !== "seat" && peek.kind !== "unit") || !subject) return;
+            if (refToken(subject) !== peekToken) peekTo(subject);
+          }}
+          onNodeKey={onNodeKey}
+          onNodeKeyDown={onNodeKeyDown}
+          // THE SWITCH UNDER THE ZOOM BAR, in the chart's own corner, where
+          // the builder keeps it.
+          controlsBelow={<ChartSwitch value={kind} onValueChange={setChart} panelId={panelId} />}
+          overlay={<OrgLegend counts={counts} />}
+          renderCard={renderCard}
+        />
       )}
+    </div>
+  );
+}
+
+/**
+ * The canvas one arrangement is drawn on, with the view rules of
+ * [useChartView] held for as long as that arrangement is on screen.
+ */
+function ChartCanvas({
+  view,
+  panelId,
+  selected,
+  anchor,
+  ...canvas
+}: {
+  view: RefObject<TreeCanvasHandle | null>;
+  /** The element the chart switch controls. */
+  panelId: string;
+  /** The node the peek is about, or `null`. */
+  selected: string | null;
+  anchor: string | null;
+} & Omit<TreeCanvasProps, "ref" | "selectedId">) {
+  // A STATE RATHER THAN A REF: the chart is not drawn until the org has
+  // loaded, and what watches its box has to start when it is.
+  const [host, setHost] = useState<HTMLDivElement | null>(null);
+  const chartBox = useChartView(host, view, selected, anchor);
+  return (
+    <div className="oc-chart" id={panelId} ref={setHost} {...chartBox}>
+      <TreeCanvas ref={view} selectedId={selected} {...canvas} />
     </div>
   );
 }
@@ -345,7 +444,7 @@ function OrgOutline({
   following,
   onOpen,
 }: {
-  chart: ReturnType<typeof buildOrgChart>;
+  chart: OrgChartModel;
   byRole: ReadonlyMap<string, AgentRow>;
   counts: StateCounts;
   now: number;
@@ -650,10 +749,10 @@ function useChartView(
 }
 
 /**
- * One seat's card: its badge with the state ring and its name, then its kind
- * and where it sits, then the engine's state line.
+ * One seat's node: its mark and its name, then what it is doing. A person's
+ * node says it is a person, as the builder's does.
  */
-function SeatCardNode({
+function SeatNode({
   seat,
   agent,
   card,
@@ -670,51 +769,113 @@ function SeatCardNode({
 }) {
   const human = seat.kind === "human";
   const state = human ? undefined : activityOf(agent);
-  const ring = human ? undefined : ringOf(state);
+  const line = cardLine(seat, agent, now, nameOf);
+  const handle = handleLabel(seat.handle);
   const item = card.item(seat.key);
   return (
-    <div
-      {...item}
-      className="oc-card"
-      data-state={state}
-      onClick={(event: MouseEvent<HTMLElement>) => {
-        item.onClick(event);
-        onOpen();
-      }}
-    >
-      <div className="oc-head">
-        <SeatAvatar
+    <>
+      <div
+        {...item}
+        data-state={state}
+        title={[line, handle].filter(Boolean).join(" · ")}
+        onClick={(event: MouseEvent<HTMLElement>) => {
+          item.onClick(event);
+          onOpen();
+        }}
+      >
+        <OrgNodeLabel
+          {...seatMark(seat.kind)}
           name={seat.name}
-          size="sm"
-          kind={human ? "human" : "agent"}
-          {...(ring ? { ring } : {})}
-          decorative
+          caption={
+            state === undefined ? (
+              seatKindLabel(seat)
+            ) : (
+              <StatusDot tone={toneOf(state)} pulse={state === "working"}>
+                {stateWord(state)}
+              </StatusDot>
+            )
+          }
         />
-        {/* THE NAME HAS THE LINE TO ITSELF. Beside the kind pill, in the
-            approved card's 184px, a name had about sixty pixels and every
-            "Agent …" seat read "Agent S…", "Agent C…": the one word that tells
-            two seats apart was the word cut. The pill leads the line under it,
-            where the unit is the text that gives way. A name longer than the
-            card is still cut, and said whole on hover as it is to a screen
-            reader (the card's text is its name). */}
-        <strong className="oc-name" title={seat.name}>
-          {seat.name}
-        </strong>
+        <VisuallyHidden>{[handle, line].filter(Boolean).join(". ")}</VisuallyHidden>
       </div>
-      <span className="oc-place">
-        <span className="oc-kind">
-          <Tag size="xs" appearance="outline">
-            {human ? "Human" : "Agent"}
-          </Tag>
-        </span>
-        <span className="oc-place-text">{placeLine(seat)}</span>
-        <span className="sr-only"> {handleLabel(seat.handle)}</span>
-      </span>
-      <span className="oc-state">
-        <StatusDot tone={human ? "neutral" : toneOf(state)} pulse={state === "working"} />
-        <span className="oc-line">{cardLine(seat, agent, now, nameOf)}</span>
-      </span>
-    </div>
+      <NodeToggle card={card} id={seat.key} name={seat.name} />
+    </>
+  );
+}
+
+/**
+ * One unit's node: its mark, its name, its type and the project its work is
+ * filed under, with its lead in a pill along the bottom edge.
+ *
+ * THE LEAD STAYS DRAWN, as it does on the builder's node: who leads a unit is
+ * a fact about the organization, and a chart that hid it would be a chart you
+ * could not read the leads off. The press on the pill lands on the unit's own
+ * node.
+ */
+function UnitNode({
+  id,
+  unit,
+  keys,
+  card,
+  onOpen,
+}: {
+  id: string;
+  unit: Unit;
+  /** The tracker projects this unit's work is filed under, by key. */
+  keys: readonly string[];
+  card: TreeCardContext;
+  onOpen: () => void;
+}) {
+  const lead: LeadName | null = unit.effectiveLead
+    ? { name: unit.effectiveLead.name, inherited: unit.leadInherited }
+    : null;
+  const key = keys.length ? `${keys[0]}${keys.length > 1 ? ` +${keys.length - 1}` : ""}` : "";
+  const caption = [unitTypeLabel({ unitType: unit.type }), key].filter(Boolean).join(" · ");
+  const seats = plural(unit.seats.length, "seat");
+  const item = card.item(id);
+  return (
+    <>
+      <div
+        {...item}
+        title={keys.length ? `${seats}. Projects: ${keys.join(", ")}` : seats}
+        onClick={(event: MouseEvent<HTMLElement>) => {
+          item.onClick(event);
+          onOpen();
+        }}
+      >
+        <OrgNodeLabel icon={<NodeGlyph kind="unit" />} name={unit.name} caption={caption} />
+        <VisuallyHidden>{seats}</VisuallyHidden>
+        <VisuallyHidden>{leadSentenceOf(lead)}</VisuallyHidden>
+      </div>
+      <NodeToggle card={card} id={id} name={unit.name} />
+      <div aria-hidden="true" {...card.press(id)}>
+        <OrgNodeLead empty={lead === null}>
+          <span className="truncate">{leadPill(lead)}</span>
+        </OrgNodeLead>
+      </div>
+    </>
+  );
+}
+
+/** The structure's root: the company, with how many seats and units hang off it. */
+function CompanyNode({
+  name,
+  index,
+  card,
+}: {
+  name: string;
+  index: OrgIndex;
+  card: TreeCardContext;
+}) {
+  const counts = `${plural(index.rootSeats.length, "root seat")}, ${plural(index.topUnits.length, "unit")}`;
+  return (
+    <>
+      <div {...card.item(COMPANY_NODE)} title={counts}>
+        <OrgNodeLabel icon={<NodeGlyph kind="company" />} name={name} caption="Company" />
+        <VisuallyHidden>{counts}</VisuallyHidden>
+      </div>
+      <NodeToggle card={card} id={COMPANY_NODE} name={name} />
+    </>
   );
 }
 
@@ -746,10 +907,10 @@ export function OrgLegend({ counts, inline = false }: { counts: StateCounts; inl
       role="group"
       aria-label="Seats by what they are doing"
     >
-      {LEGEND.map(({ state, label }) => (
+      {LEGEND.map((state) => (
         <span key={state} className="oc-legend-item">
           <StatusDot tone={toneOf(state)} />
-          {label} <span className="t-num">{counts[state]}</span>
+          {stateWord(state)} <span className="t-num">{counts[state]}</span>
         </span>
       ))}
     </div>

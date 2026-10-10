@@ -146,18 +146,17 @@ person's glyph in a dashed ring; a unit and the company are their own glyphs;
 and every node but an agent seat is drawn on the same neutral surface. One hue
 for one kind: it is never a hash of a name, so a renamed seat keeps it. The
 selected node's card takes the accent on its own edge. The live org chart
-keeps colour for what a seat is doing, which a draft is not doing yet. The
-chart is drawn on the same dotted field as the live org chart, which says it
-pans before you drag it.
+(Agents › Org chart) draws the same nodes, marks and hue, with what each seat
+is doing under its name, and both are drawn on the same dotted field, which
+says it pans before you drag it.
 
 ### The structure chart
 
 The company is the root. The seats declared at the top level and the units
 hang off it, and each unit's seats and child units hang off that unit: every
 seat is a node of its own, joined to the unit it sits in by the same
-orthogonal branch the live org chart draws. The branch is heavier here: a node
-is half the height of the live chart's card, and the design system keeps the
-branch at the same weight against the node it joins. A node shows its mark (an
+orthogonal branch the live org chart draws, at the weight the design system
+gives a chart of nodes. A node shows its mark (an
 agent's figure, a person's ringed glyph, or a unit's or the company's glyph),
 its name and, under it, what kind of thing it
 is, with the marks that apply as small glyphs on that line. Each mark says its

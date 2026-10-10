@@ -29,15 +29,16 @@
  * under a unit are the engine's, because only the engine knows what a seat, a
  * unit and a reporting cycle are.
  *
- * EVERY NODE IS THE CHART'S OWN NEUTRAL SURFACE. Colour on this dashboard
- * says what a seat is DOING and never who it is, and a draft is not doing
- * anything: an agent seat used to carry one of six hues hashed from its key,
- * reaching its fill, its edge, its halo, its name and the branch arriving at
- * it, which is a legend a reader had to learn and could never decode — the
- * same seat was purple here and neutral on the chart they had just left. What
- * tells a person's seat from an agent's is the badge's outline, a shape the
- * design system draws, so it reads to somebody who cannot separate a hue at
- * all. The one colour a node takes is the accent ring of the selection.
+ * ONE HUE, FOR WHAT A SEAT IS, ON BOTH CHARTS. An agent seat is toned in the
+ * agent hue and every other node keeps the chart's neutral surface
+ * (`ui/orgNodes.tsx`), here and on the live org chart alike. An agent seat
+ * used to carry one of six hues hashed from its key, reaching its fill, its
+ * edge, its halo, its name and the branch arriving at it, which was a legend a
+ * reader had to learn and could never decode, and the same seat was purple
+ * here and neutral on the chart they had just left. The kind is told by shape
+ * as well (the Crewlet figure, or a person inside a dashed ring), so it reads
+ * to somebody who cannot separate a hue at all. What a seat is DOING is the
+ * live chart's dot, and never a node's hue.
  *
  * EVERY SEAT IS A NODE OF ITS OWN. A unit's seats used to be drawn as ROWS
  * stacked inside the unit's card, which made a unit as tall as its membership
@@ -124,27 +125,16 @@ import {
   reportingMenu,
   type OpenScreen,
 } from "./nodeActions.tsx";
-import {
-  NodeGlyph,
-  nodeTone,
-  seatMark,
-  ReportingMarks,
-  SeatMarks,
-  UnitMarks,
-  handleLabel,
-  seatKindLabel,
-  unitTypeLabel,
-} from "./nodeMarks.tsx";
+import { nodeTone, ReportingMarks, SeatMarks, UnitMarks, handleLabel } from "./nodeMarks.tsx";
+import { NodeGlyph, NodeToggle, seatKindLabel, seatMark, unitTypeLabel } from "~/ui/orgNodes.tsx";
 import { useReorder, type Reorder } from "./reorder.ts";
 import { useOpenScreen, useReporting, useStructure } from "./useCharts.ts";
 import {
   NetworkGlyph,
-  ChevronRightGlyph,
   XGlyph,
   Repeat2Glyph,
   TrashGlyph,
   PencilGlyph,
-  ChevronDownGlyph,
 } from "@crewlethq/icons/glyphs";
 import {
   AddPill,
@@ -153,7 +143,6 @@ import {
   Kbd,
   Menu,
   type MenuEntry,
-  OrgNodeDisclosure,
   OrgNodeLabel,
   OrgNodeLead,
   TreeCanvas,
@@ -683,7 +672,7 @@ function StructureCard({
           />
           <VisuallyHidden>{handleLabel(view.handle)}</VisuallyHidden>
         </div>
-        <ToggleButton card={card} id={id} name={view.name} />
+        <NodeToggle card={card} id={id} name={view.name} />
         <NodeActions
           api={api}
           card={card}
@@ -708,7 +697,7 @@ function StructureCard({
           />
           <VisuallyHidden>{counts}</VisuallyHidden>
         </div>
-        <ToggleButton card={card} id={id} name={view.name || "the company"} />
+        <NodeToggle card={card} id={id} name={view.name || "the company"} />
         <NodeActions
           api={api}
           card={card}
@@ -734,7 +723,7 @@ function StructureCard({
         <VisuallyHidden>{counts}</VisuallyHidden>
         <VisuallyHidden>{leadSentence(view)}</VisuallyHidden>
       </div>
-      <ToggleButton card={card} id={id} name={view.name} />
+      <NodeToggle card={card} id={id} name={view.name} />
       <NodeActions
         api={api}
         card={card}
@@ -800,7 +789,7 @@ function ReportingCard({
         <VisuallyHidden>{handleLabel(item.handle)}</VisuallyHidden>
         {standing !== "" && <VisuallyHidden>{standing}</VisuallyHidden>}
       </div>
-      <ToggleButton card={card} id={item.id} name={item.name} />
+      <NodeToggle card={card} id={item.id} name={item.name} />
       <div {...card.actions(item.id)}>
         {seat && (
           <KeyboardMenu
@@ -828,7 +817,7 @@ function CycleGroupCard({ card, count }: { card: TreeCardContext; count: number 
         />
         <VisuallyHidden>{note}</VisuallyHidden>
       </div>
-      <ToggleButton card={card} id={CYCLE_GROUP} name="the reporting cycles" />
+      <NodeToggle card={card} id={CYCLE_GROUP} name="the reporting cycles" />
     </>
   );
 }
@@ -953,48 +942,6 @@ function FullscreenHint() {
       <Kbd keys={["Esc"]} />
       <span>to leave fullscreen</span>
     </>
-  );
-}
-
-/**
- * The control that opens and closes what hangs under a node, on its leading
- * edge.
- *
- * BESIDE THE TREEITEM, NEVER INSIDE IT, which is what `OrgNodeDisclosure` is
- * for: a tree's items hold nothing focusable, so the design system draws this
- * as a sibling of the node's own item, exactly where the actions strip goes,
- * and places it on the card's boundary from there. It used to hang on the
- * BRANCH beside the Add, where the add pill splitting open into its three
- * kinds covered it, which is the one gesture a reader makes right next to it.
- *
- * A NODE WITH NOTHING UNDER IT DRAWS NONE, so a leaf of the chart is a card
- * with no disclosure rather than one with an empty slot.
- *
- * AND THE PRESS LANDS ON THE NODE, never in the control, which is why
- * `card.press` is spread on the region rather than on the button inside it:
- * it is the same rule the actions strip gets from `card.actions`, and the
- * design system asks a caller for it here because only the chart knows which
- * node this belongs to. Focus in a subtree hidden from assistive technology is
- * focus nowhere, so a press that left it on the expander would leave the chart
- * with no announced position at all.
- */
-function ToggleButton({ card, id, name }: { card: TreeCardContext; id: string; name: string }) {
-  if (!card.expandable(id)) return null;
-  const expanded = card.expanded(id);
-  return (
-    <OrgNodeDisclosure {...card.press(id)}>
-      <IconButton
-        label={expanded ? `Collapse ${name}` : `Expand ${name}`}
-        icon={expanded ? <ChevronDownGlyph /> : <ChevronRightGlyph />}
-        size="sm"
-        variant="ghost"
-        tabIndex={-1}
-        onClick={(e) => {
-          e.stopPropagation();
-          card.toggle(id);
-        }}
-      />
-    </OrgNodeDisclosure>
   );
 }
 

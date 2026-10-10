@@ -1149,6 +1149,15 @@ export function activityWord(state: SeatState): string {
 }
 
 /**
+ * The same word capitalised, as a line of its own writes it: a chart node's
+ * caption and the legend that counts those captions.
+ */
+export function stateWord(state: SeatState): string {
+  const word = activityWord(state);
+  return word.charAt(0).toUpperCase() + word.slice(1);
+}
+
+/**
  * Who a seat's pauser is, by the name a reader knows them by.
  *
  * `paused.by` is the person's SEAT HANDLE (the seat their token is bound to)

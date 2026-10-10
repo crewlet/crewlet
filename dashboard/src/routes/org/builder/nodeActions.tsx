@@ -21,6 +21,7 @@
 
 import type { KeyboardEvent, ReactNode } from "react";
 import { seatPath } from "~/lib/seats.ts";
+import { leadName, leadPill, leadSentenceOf } from "~/ui/orgNodes.tsx";
 import type { AddKind, BuilderApi } from "./BuilderContext.tsx";
 import type { NodeView, SeatView, Structure, UnitView } from "./chartModel.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
@@ -358,7 +359,7 @@ export function reportingMenu(api: BuilderApi, view: SeatView, open: OpenScreen)
 export function leadLabel(unit: UnitView): string {
   if (unit.lead === undefined) return "Lead after the check";
   if (unit.lead === null) return "No lead";
-  return unit.lead.inherited ? `${unit.lead.name} (inherited)` : unit.lead.name;
+  return leadName(unit.lead);
 }
 
 /**
@@ -381,15 +382,13 @@ export function leadLabel(unit: UnitView): string {
  */
 export function leadChipLabel(unit: UnitView): string {
   if (unit.lead === undefined) return "Lead after the check";
-  if (unit.lead === null) return "Lead";
-  return `Lead: ${leadLabel(unit)}`;
+  return leadPill(unit.lead);
 }
 
 /** What a unit's treeitem says about its lead to a screen reader: one sentence. */
 export function leadSentence(unit: UnitView): string {
   if (unit.lead === undefined) return "Lead after the check.";
-  if (unit.lead === null) return "No lead.";
-  return `Lead: ${leadLabel(unit)}.`;
+  return leadSentenceOf(unit.lead);
 }
 
 /**

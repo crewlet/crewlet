@@ -1,7 +1,8 @@
 /**
- * The live org chart as a reader meets it: a card per seat off the applied
- * projection, a unit box with its project, the legend's counts, and a card
- * that opens the seat beside the chart.
+ * The live org chart as a reader meets it: the builder's drawing of the
+ * applied company in either arrangement, a node per seat saying what it is
+ * doing, a node per unit with its project and its lead, the legend's counts,
+ * and a node that opens its seat or unit beside the chart.
  */
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
@@ -116,34 +117,76 @@ async function mount(viewer: Record<string, unknown> = { operator_id: "", acts: 
 function card(name: string): HTMLElement {
   // BY ROLE ATTRIBUTE rather than the accessibility tree: the canvas holds
   // its world out of it until a layout has been measured, which jsdom never
-  // reports as done.
+  // reports as done. The name is the kit's node label's.
   const found = [...document.querySelectorAll<HTMLElement>("[role=treeitem]")].find(
-    (el) => el.querySelector(".oc-name")?.textContent === name,
+    (el) => el.querySelector(".crewlet-org-label__name")?.textContent === name,
   );
   if (!found) throw new Error(`no card for ${name}`);
   return found;
 }
 
-// A CARD PER SEAT, SAYING WHAT THE ENGINE SAYS IT IS DOING.
-test("every seat of the applied chart is a card with its place and state line", async () => {
+/** What a node writes under its name. */
+function caption(name: string): string {
+  return (card(name).querySelector(".crewlet-org-label__caption")?.textContent ?? "").trim();
+}
+
+/** The lead pill along a unit node's bottom edge. */
+function leadOf(name: string): string {
+  return chartCard(card(name)).querySelector(".crewlet-org-node-lead")?.textContent ?? "";
+}
+
+// A NODE PER SEAT, SAYING WHAT THE ENGINE SAYS IT IS DOING: the engine's word
+// under the name, and its whole state line in the node's title.
+test("every seat of the applied chart is a node with its state word and state line", async () => {
   await mount();
   for (const name of ["Jane Founder", "CEO", "CTO", "SWE", "FE", "PM", "DevRel"]) {
     expect(card(name)).toBeTruthy();
   }
-  expect(within(card("SWE")).getByText("Engineering · Core")).toBeTruthy();
-  expect(within(card("SWE")).getByText("Executing ENG-412")).toBeTruthy();
-  expect(within(card("PM")).getByText("Stopped · budget")).toBeTruthy();
-  expect(within(card("Jane Founder")).getByText("Human · reviews releases")).toBeTruthy();
+  expect(caption("SWE")).toBe("Working");
+  expect(card("SWE").getAttribute("title")).toBe("Executing ENG-412 · @swe");
   expect(card("SWE").getAttribute("data-state")).toBe("working");
+  expect(caption("FE")).toBe("Needs you");
+  expect(caption("PM")).toBe("Stopped");
+  expect(card("PM").getAttribute("title")).toBe("Stopped · budget · @pm");
+  expect(caption("Jane Founder")).toBe("Human seat");
+  expect(card("Jane Founder").getAttribute("title")).toBe("Human · reviews releases · @jane");
 });
 
-// THE BOX NAMES THE UNIT AND ITS PROJECT.
-test("a unit under its lead is boxed with the project its work is filed under", async () => {
+// THE STRUCTURE IS THE BUILDER'S: the company at the root, each unit with its
+// type and the project its work is filed under, and its lead in a pill.
+test("the structure draws the company, and each unit with its project and its lead", async () => {
   await mount();
-  const head = [...document.querySelectorAll(".crewlet-tree-canvas__group-head")].map(
-    (el) => el.textContent,
-  );
-  expect(head).toContain("ENG Engineering · Core");
+  expect(caption("Acme")).toBe("Company");
+  expect(caption("Core")).toBe("Unit · ENG");
+  expect(card("Core").getAttribute("title")).toBe("2 seats. Projects: ENG");
+  expect(leadOf("Core")).toBe("Lead: CTO");
+  expect(leadOf("Developer Relations")).toBe("Lead: PM (inherited)");
+  expect(leadOf("Leadership")).toBe("Lead");
+});
+
+// AN AGENT SEAT IS TONED, as the builder tones one; a person, a unit and the
+// company keep the chart's neutral surface.
+test("an agent seat is toned and nothing else is", async () => {
+  await mount();
+  expect(chartCard(card("SWE")).getAttribute("data-tone")).toBe("purple");
+  for (const name of ["Jane Founder", "Core", "Acme"]) {
+    expect(chartCard(card(name)).getAttribute("data-tone"), name).toBeNull();
+  }
+});
+
+// THE SWITCH UNDER THE ZOOM BAR draws who reports to whom instead: the same
+// seats, under their primary managers, and no company or unit.
+test("the switch draws the reporting chart, and the address names it", async () => {
+  await mount();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("tab", { name: "Reporting" }));
+  });
+  act(() => LayoutObserver.settle());
+  expect(location.hash).toContain("chart=reporting");
+  for (const name of ["Jane Founder", "CEO", "SWE", "DevRel"]) expect(card(name)).toBeTruthy();
+  expect(() => card("Acme")).toThrow();
+  expect(() => card("Core")).toThrow();
+  expect(screen.getByRole("tab", { name: "Reporting" }).getAttribute("aria-selected")).toBe("true");
 });
 
 // THE LEGEND IS THE ENGINE'S COUNT, and the same one `stateCounts` takes.
@@ -157,13 +200,22 @@ test("the legend's figures are the activity counts", async () => {
   expect(counts).toEqual({ working: 2, needs: 1, stopped: 1, idle: 2 });
 });
 
-// A CARD OPENS THE SEAT BESIDE THE CHART, addressed by its handle.
-test("pressing a card opens that seat's peek", async () => {
+// A NODE OPENS ITS SEAT BESIDE THE CHART, addressed by its handle.
+test("pressing a seat opens that seat's peek", async () => {
   await mount();
   await act(async () => {
     fireEvent.click(card("SWE"));
   });
   expect(location.hash).toContain("peek=seat%3Aswe");
+});
+
+// AND A UNIT OPENS THE UNIT, addressed by its name, as Teams opens one.
+test("pressing a unit opens that unit's peek", async () => {
+  await mount();
+  await act(async () => {
+    fireEvent.click(card("Core"));
+  });
+  expect(location.hash).toContain("peek=unit%3ACore");
 });
 
 // ADD SEAT IS NEVER HIDDEN: a reader who may not change the org sees it held,
@@ -224,12 +276,7 @@ test("find a seat ranks a prefix before a substring, and reads the unit", () => 
 /** The canvas's width as the harness reports it, which a suite may narrow. */
 let canvasWidth = VIEWPORT.width;
 
-/**
- * Report the canvas — the kit's viewport and the chart's own box — at a width,
- * and the two probes a UNIT BOX is laid out by (its padding and the height of
- * its label), which the builder's harness has no groups to know about. Named
- * by the kit's classes for the reason the box test above names its head.
- */
+/** Report the canvas (the kit's viewport and the chart's own box) at a width. */
 function standCanvasAt(width: number): void {
   canvasWidth = width;
   const base = LayoutObserver.sizer;
@@ -237,8 +284,6 @@ function standCanvasAt(width: number): void {
     if (isCanvasViewport(el) || el.classList.contains("oc-chart")) {
       return { width: canvasWidth, height: VIEWPORT.height };
     }
-    if (el.classList.contains("crewlet-tree-canvas__group-pad")) return { width: 12, height: 12 };
-    if (el.classList.contains("crewlet-tree-canvas__group-head")) return { width: 160, height: 28 };
     return base(el);
   };
 }
@@ -340,13 +385,22 @@ function spread(width: number): { left: number; right: number; margins: [number,
   return { left, right, margins: [left, width - right] };
 }
 
+/**
+ * The reporting chart's address. THE TWO FITS BELOW ARE RECKONED ON IT: its
+ * seven seats are the chart those widths were chosen for, where the structure
+ * of the same company (the company, seven units and their seats) is a drawing
+ * no width in this suite fits whole above the floor.
+ */
+const REPORTING = "#/agents?chart=reporting";
+
 // A NEW WIDTH IS FITTED AGAIN. The canvas fits once; the peek then took a
 // third of it away, and the least pan that kept the pressed card in view left
 // the rest of the company cut at the other edge — and closing the peek left it
 // cut there, with the freed third of the canvas empty. The chart is fitted
-// again, all of it, in the middle, whenever the canvas's width moves — at 800
-// this chart fits at 92%, above the floor.
+// again, all of it, in the middle, whenever the canvas's width moves, and at
+// 800 the reporting chart fits above the floor.
 test("a peek that narrows the canvas fits the whole chart into it, centred", async () => {
+  location.hash = REPORTING;
   standCanvasAt(VIEWPORT.width);
   await mount();
   await act(async () => {
@@ -439,6 +493,7 @@ test("] and [ pressed on a card step the peek through the chart's order", async 
 });
 
 test("closing the peek fits the chart to the width it gets back, centred", async () => {
+  location.hash = REPORTING;
   standCanvasAt(VIEWPORT.width);
   await mount();
   const opened = spread(VIEWPORT.width);
@@ -448,7 +503,7 @@ test("closing the peek fits the chart to the width it gets back, centred", async
   standCanvasAt(700);
   await settleChart();
   await act(async () => {
-    location.hash = "#/agents";
+    location.hash = REPORTING;
     window.dispatchEvent(new HashChangeEvent("hashchange"));
   });
   standCanvasAt(VIEWPORT.width);

@@ -111,6 +111,7 @@ import { addMenu, nodeMenu } from "./nodeActions.tsx";
 import { useOpenScreen, useStructure } from "./useCharts.ts";
 import { screenPath } from "./dialogParts.tsx";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
+import { ChartSwitch, chartKindOf } from "~/ui/orgNodes.tsx";
 import {
   type GlyphProps,
   NetworkGlyph,
@@ -615,7 +616,7 @@ function BuilderScreen({
   );
   const view = viewParam === "table" ? "table" : "visualization";
   const [chartParam, setChart] = useParam("chart", "structure", "section");
-  const chart: ChartKind = chartParam === "reporting" ? "reporting" : "structure";
+  const chart: ChartKind = chartKindOf(chartParam);
   const [unitParam] = useParam("unit", "", "filter");
   const [seatParam] = useParam("seat", "", "filter");
   const [addParam] = useParam("add", "", "filter");
@@ -1347,20 +1348,7 @@ function BuilderScreen({
    */
   const chartChrome = {
     controls: <FullscreenToggle container={container} />,
-    switcher: (
-      <SegmentedControl
-        label="Chart"
-        semantics="tabs"
-        panelId={chartPanel}
-        value={chart}
-        onValueChange={setChart}
-        size="sm"
-        options={[
-          { value: "structure", label: "Structure" },
-          { value: "reporting", label: "Reporting" },
-        ]}
-      />
-    ),
+    switcher: <ChartSwitch value={chart} onValueChange={setChart} panelId={chartPanel} />,
   };
 
   /*
