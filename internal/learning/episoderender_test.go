@@ -178,6 +178,7 @@ func TestARenderHoldsEveryRewriteToOneDeadline(t *testing.T) {
 	}
 	start := time.Now()
 	PastTurns(context.Background(), episodes, fit, EpisodeAccountBytes)
+	end := time.Now()
 
 	model.mu.Lock()
 	defer model.mu.Unlock()
@@ -192,8 +193,12 @@ func TestARenderHoldsEveryRewriteToOneDeadline(t *testing.T) {
 				i, deadline.Sub(start), first.Sub(start))
 		}
 	}
-	if first.IsZero() || first.Sub(start) > EpisodeRewriteTimeout+time.Millisecond {
-		t.Fatalf("the render's deadline is %v after its start, want at most %v",
-			first.Sub(start), EpisodeRewriteTimeout)
+	// The render takes its deadline at some instant inside the call, so the
+	// deadline lies within EpisodeRewriteTimeout of the call's own two ends —
+	// a bracket rather than a slack after `start`, which a scheduler under the
+	// race detector overran by milliseconds while the rule held.
+	if first.IsZero() || first.Before(start.Add(EpisodeRewriteTimeout)) || first.After(end.Add(EpisodeRewriteTimeout)) {
+		t.Fatalf("the render's deadline is %v after its start in a call that took %v, want %v from an instant inside it",
+			first.Sub(start), end.Sub(start), EpisodeRewriteTimeout)
 	}
 }
