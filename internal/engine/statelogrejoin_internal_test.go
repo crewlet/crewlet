@@ -238,7 +238,7 @@ func TestAStopMidRejoinEndsTheJoinAndWaitsForItsAppliers(t *testing.T) {
 
 // bootRejoinNode starts one node over its own embedded broker and returns it
 // with its backends and that broker.
-func bootRejoinNode(t *testing.T) (*Engine, *Backends, *jetstream.Queue) {
+func bootRejoinNode(t testing.TB) (*Engine, *Backends, *jetstream.Queue) {
 	t.Helper()
 	b := config.DefaultBootstrap()
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
@@ -396,7 +396,7 @@ func copyAdvancedTo(t *testing.T, back *Backends, running *runningLog,
 	}
 }
 
-func waitUntil(t *testing.T, within time.Duration, what string, cond func() bool) {
+func waitUntil(t testing.TB, within time.Duration, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(within)
 	for time.Now().Before(deadline) {
@@ -860,7 +860,7 @@ func TestARestoreWaitsForARecoveryInProgress(t *testing.T) {
 
 // hydrated is [Engine.NativeHydrated] as the condition a wait polls, under the
 // test's own context.
-func hydrated(t *testing.T, e *Engine) func() bool {
+func hydrated(t testing.TB, e *Engine) func() bool {
 	t.Helper()
 	return func() bool { return e.NativeHydrated(t.Context()) }
 }

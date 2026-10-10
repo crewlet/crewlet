@@ -96,7 +96,10 @@ const (
 	RefuseEvicted ReadRefusal = "evicted"
 
 	// RefuseBrokerUnreachable — the broker did not answer, so no read
-	// index could be established.
+	// index could be established: to the barrier a linearizable read
+	// appends, or to this node's own reading of what every read is checked
+	// against — its log's ends, its eviction row — so that no readiness
+	// could be established either ([ReaderDeps.Health]).
 	RefuseBrokerUnreachable ReadRefusal = "broker_unreachable"
 
 	// RefuseNoQuorum — the barrier did not commit. It is not the same as
@@ -378,7 +381,7 @@ type Reader struct {
 	db      readStore
 	index   *ReadIndex
 	waiter  Waiter
-	health  func() Health
+	health  func() (Health, error)
 	drain   func() float64
 	metrics *metrics.Recorder
 }
@@ -417,9 +420,43 @@ type ReaderDeps struct {
 	Index  *ReadIndex
 	Waiter Waiter
 
-	// Health is this domain's readiness, read fresh on every read because
-	// every one of its terms can change between two of them.
-	Health func() Health
+	// Health is this domain's readiness, asked on every read — and again
+	// after a read that waited — because every one of its terms can change
+	// between two of them.
+	//
+	// ASKED PER READ, SO IT MUST COST NO ROUND TRIP. The terms that live on
+	// a broker — the published trim floor, the log's two ends — may be
+	// served from memory, provided each AGES at a bound of its own:
+	//
+	//   - the floor carries the instant it was read ([Floor]), and one read
+	//     longer ago than [FloorCacheStale] is [FloorUnknown], which
+	//     refuses;
+	//   - the ends — [Health.FirstSeq], [Health.LastSeq] and the
+	//     [Health.Lag] a bounded read is checked against — are served no
+	//     older than the provider's own refresh leaves them, and past that
+	//     they are unread and the health is not served at all. A minute's
+	//     bound is the floor's, and on the ends it served a
+	//     `max_lag_seq` read a lag nobody had measured for that minute.
+	//
+	// The engine re-reads both off the read's path once a second and
+	// serves ends at most three seconds old (a second's recheck plus the
+	// [ReadBudget] the re-read is bounded by), so the stale level's "no
+	// broker call at all" holds for the health too.
+	//
+	// AN ERROR IS A HEALTH NOBODY COULD READ, and every read refuses it
+	// [RefuseBrokerUnreachable], naming it — at every level, since a read
+	// certified against a readiness nobody could establish is certified
+	// against nothing. ITS OWN RETURN rather than a [Health] with a
+	// sentence in it: folded into [Health.Err], which is an applier's stop,
+	// the zero floor beside it was refused first, and an unreadable log end
+	// reached a caller as "the published trim floor has never been read on
+	// this node" — the wrong code, a false sentence, and an operator sent
+	// to coordination over a stream leader that had stopped answering.
+	// Where the FLOOR is what could not be read, a provider hands the floor
+	// it last read, carrying its instant, and the read refuses
+	// [RefuseFloorUnknown] naming how long ago, as the alarm of that name
+	// does.
+	Health func() (Health, error)
 
 	// Drain is the observed records-per-second, which every retry hint
 	// divides by. A hint derived from a rate nobody measured is a
@@ -500,7 +537,10 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 			"and resolves one — an object named by reference has no scope " +
 			"until its rows are read")
 	}
-	h := r.health()
+	h, unread := r.health()
+	if unread != nil {
+		return r.refuse(Health{}, q, RefuseBrokerUnreachable, unreadHealth(unread), started)
+	}
 
 	// 1. THE LOCAL REFUSALS, in order.
 	now := time.Now()
@@ -595,7 +635,10 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 		// beside post-wait rows is the same defect the bound itself was
 		// fixed for once: a number that describes a different moment
 		// from the answer it is printed beside.
-		post := r.health()
+		post, unread := r.health()
+		if unread != nil {
+			return r.refuse(Health{}, q, RefuseBrokerUnreachable, unreadHealth(unread), started)
+		}
 		answer.Lag = post.Lag
 		if refusal := r.pastBound(q, post); refusal != nil {
 			return r.refuse(post, q, refusal.Code, refusal.Detail, started)
@@ -832,6 +875,14 @@ func (r *Reader) pastBound(q Query, h Health) *Refused {
 		}
 	}
 	return nil
+}
+
+// unreadHealth is the detail of a read refused because this node's own
+// readiness could not be read ([ReaderDeps.Health]).
+func unreadHealth(err error) string {
+	return fmt.Sprintf("this node could not read its own readiness — %v — and a "+
+		"read certified against a readiness nobody could establish is certified "+
+		"against nothing", err)
 }
 
 // barrierRefusal maps the read index's own failures onto refusal codes.

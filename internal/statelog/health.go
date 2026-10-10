@@ -285,6 +285,13 @@ type Health struct {
 	// A POINTER because a zero-because-unknown lag serves a bounded
 	// stale read without any bound at all: the read asks "how far behind
 	// may this answer be", and an unreadable broker answers "not at all".
+	//
+	// AS OF THE LAST READ OF THE LOG'S ENDS, which a read's health may be
+	// served from memory rather than asked per read ([ReaderDeps.Health])
+	// — a few seconds at most, since a lag older than that is no bound on
+	// a log that can run on by thousands of records meanwhile. Ends nobody
+	// could refresh for that long are not a lag of any age: the health that
+	// would carry them is not served at all.
 	Lag *uint64
 
 	// FirstSeq is the stream's first surviving sequence as last read, and
@@ -305,7 +312,10 @@ type Health struct {
 	// stale-low value reports a node as replaying records that are already
 	// gone. What bounds that is where a stale value comes from: only a
 	// replica of a group with no leader answers the stream info, and every
-	// health read and every heartbeat asks afresh rather than from a cache.
+	// heartbeat, verdict and admission check asks afresh — a READ is served
+	// the value last read, and never one older than the few seconds a
+	// working refresh leaves it ([ReaderDeps.Health]), which can call a
+	// node replaying for those seconds and never longer.
 	// The heartbeat, asking of this value alone, is what requests the
 	// rejoin once a reading shows the record gone — a LATER reading of the
 	// same stream info, not an independent source — and meanwhile a strict

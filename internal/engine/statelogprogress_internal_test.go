@@ -56,9 +56,10 @@ func TestEveryHealthInputIsPopulated(t *testing.T) {
 
 	// THE FUNCTIONS A HEALTH IS ASSEMBLED IN: the entry point, the half a
 	// reading takes before the published floors land, and the floor that
-	// completes it ([readHealthsWith] reads the logs and the floors at once).
-	// A field any of them sets is set.
-	assemblers := map[string]bool{"health": false, "observe": false, "floored": false}
+	// completes it ([readHealthsWith] reads the logs and the floors at once),
+	// whether the log's ends are read now or served from memory
+	// ([stateLog.observeWith]). A field any of them sets is set.
+	assemblers := map[string]bool{"health": false, "observeWith": false, "floored": false}
 
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "statelog.go", nil, 0)
