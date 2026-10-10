@@ -461,6 +461,16 @@
 //     it: the whole wait 1.7–1.8 / 4.3–4.6 ms solo and 4.8–5.5 / 10–12.5 ms at
 //     three, 535–555 reads a second from one reader solo and 171–197 at
 //     three.
+//   - SIXTEEN READERS AT ONCE on one node SHARE their barriers
+//     ([ReadIndex.Read]): 0.12 appends a read for the barrier alone, and
+//     0.14–0.23 for whole reads, whose waits for the applier spread their
+//     arrivals. A read may use only a barrier that started after it arrived,
+//     so readers calling back to back divide into two halves, each served by
+//     every other barrier — about eight a barrier. The node served
+//     4,600–4,700 linearizable reads a second solo and 1,120–1,610 at three
+//     replicas — eight times one reader's solo and six to eight at three —
+//     each read waiting at most two barriers: 3.3 / 8.3–8.5 ms solo and
+//     9.6–12.5 / 19–31 ms at three.
 //
 // The ranges are two runs on a VM shared with other work, where one run can
 // land a third away from another: compare two trees on one idle machine with

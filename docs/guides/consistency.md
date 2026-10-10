@@ -166,19 +166,34 @@ record durably, so any position at or below it is one the whole group agrees
 on. At `replicas: 1` there is no group and the acknowledgement proves only
 that the one member has it — which is exactly as strong as that deployment is.
 
-The barrier is a real record with a real cost. It is not free for most reads
-and cheap for a few: **every** linearizable read waits for exactly one append
-to come back. Measured by `make bench` on one four-vCPU machine holding all
-three members, with `stream.sync: always`:
+The barrier is a real record with a real cost, and every `linearizable` read
+waits for one to come back — but concurrent reads on one node **share** them.
+A read may use only a barrier that started after the read arrived: one already
+in flight was proposed before the read existed, so it proves nothing about the
+writes the read must see. A read that arrives while a barrier is in flight
+waits that one out and joins the next, which serves every read that arrived in
+the meantime. So a lone read costs one append, and a read on a busy node waits
+for at most two and appends none of its own.
+
+Measured by `make bench` on one four-vCPU machine holding all three members,
+with `stream.sync: always`:
 
 | | solo | three replicas |
 |---|---|---|
 | the barrier append alone (median) | 0.6 ms (0.2 ms with the fsync declined) | 3.5–3.9 ms (0.9–1.3 ms declined) |
 | one reader: the whole read, median / p99 | 1.7–1.8 / 4.3–4.6 ms | 4.8–5.5 / 10–12.5 ms |
 | one reader: reads a second | 535–555 | 171–197 |
+| sixteen readers at once: barriers appended per read | 0.22 | 0.14–0.20 |
+| sixteen readers at once: reads a second, together | 4,600–4,700 | 1,120–1,610 |
+| sixteen readers at once: the whole read, median / p99 | 3.3 / 8.3–8.5 ms | 9.6–12.5 / 19–31 ms |
 
-Treat all of it as a floor rather than a budget: real members add a network
-hop between them and do not share one machine.
+Sixteen readers calling back to back get at most about eight reads out of a
+barrier rather than sixteen, because the readers one barrier served call again
+while the next is already in flight and wait for the one after it: measured,
+each barrier alone served eight, and whole reads — whose waits for the applier
+spread the readers out — four to seven. Treat all of it as a floor rather than
+a budget: real members add a network hop between them and do not share one
+machine.
 
 The reason it is an append and not a `STREAM.INFO` field is that a field read
 can be served by a member that has been partitioned away from its own group:

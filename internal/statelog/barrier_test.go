@@ -208,6 +208,118 @@ func TestConcurrentReadersAreAllServedAboveTheirOwnArrival(t *testing.T) {
 	}
 }
 
+// READERS THAT ARRIVE DURING ONE BARRIER ARE ALL SERVED BY THE NEXT ONE.
+//
+// The arrival rule says a reader may use only a barrier that started after it
+// arrived — and so the barrier that starts once the one in flight is done
+// serves EVERY reader that arrived during it: that is the coalescing that
+// keeps a company's linearizable reads off the raft log, and the "at most one
+// extra round trip under contention" [statelog.ReadIndex.Read] promises. A
+// reader that took its arrival again each time it woke instead held itself to
+// a barrier started after IT WOKE, which the first reader to wake had already
+// claimed — so every waiter but one went round again, and sixteen readers on
+// one node made sixteen appends between them, measured.
+//
+// The staging is exact: the first barrier is held in a gate while fifteen
+// readers arrive and wait on it, and each reader's context reports every time
+// the reader settles to wait ([waitReporter]), so the second barrier is held
+// too until all fifteen are waiting on it. Released, it must serve all of them,
+// and no third barrier may start.
+func TestReadersThatArriveDuringOneBarrierAreServedByTheNext(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	gate := &gatedBarrier{inner: h.log, started: make(chan struct{}), release: make(chan struct{})}
+	idx, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), gate, noCeiling(t), probeEncode, h.gen.Load, nil)
+	if err != nil {
+		t.Fatalf("NewReadIndex: %v", err)
+	}
+
+	firstErr := make(chan error, 1)
+	var first statelog.Position
+	go func() {
+		var err error
+		first, err = idx.Read(t.Context())
+		firstErr <- err
+	}()
+	<-gate.started // the first barrier is in flight, and held
+
+	const readers = 15
+	waits := make(chan struct{}, 4*readers)
+	out := make([]statelog.Position, readers)
+	errs := make([]error, readers)
+	var wg sync.WaitGroup
+	for i := range readers {
+		wg.Go(func() {
+			out[i], errs[i] = idx.Read(&waitReporter{Context: t.Context(), waits: waits})
+		})
+	}
+	for range readers {
+		<-waits // every reader is waiting on the first barrier
+	}
+	gate.release <- struct{}{}
+	<-gate.started // the second barrier is in flight, and held
+	for range readers {
+		<-waits // every reader is waiting on the second barrier
+	}
+	gate.release <- struct{}{}
+
+	// ANY FURTHER BARRIER is let through and counted rather than left to
+	// hang its readers, so a failure names how many there were.
+	stop, more := make(chan struct{}), make(chan int)
+	go func() {
+		n := 0
+		for {
+			select {
+			case <-gate.started:
+				n++
+				gate.release <- struct{}{}
+			case <-stop:
+				more <- n
+				return
+			}
+		}
+	}()
+	wg.Wait()
+	close(stop)
+	if n := <-more; n != 0 {
+		t.Fatalf("%d readers that arrived during one barrier took %d more after the next — "+
+			"each must be served by the first barrier that started after it arrived", readers, n)
+	}
+	if err := <-firstErr; err != nil {
+		t.Fatalf("the first read: %v", err)
+	}
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("reader %d: %v", i, err)
+		}
+		if out[i] != out[0] || out[i].Seq <= first.Seq {
+			t.Fatalf("reader %d was served %s and reader 0 %s, after a first barrier at %s; "+
+				"want every one served by the one barrier after the first", i, out[i], out[0], first)
+		}
+	}
+}
+
+// waitReporter is a reader's context that reports each time the reader settles
+// to wait on a barrier: [statelog.ReadIndex.Read] asks its context for Done
+// only once it has claimed the barrier it will wait on, so the n-th report is
+// the reader waiting on its n-th.
+//
+// A REPORT NOBODY HAS ROOM FOR IS DROPPED rather than waited on: the staging
+// reads every report it stages on, and a reader that goes round more times
+// than that — the failure the case exists to catch — must still finish.
+type waitReporter struct {
+	context.Context
+	waits chan<- struct{}
+}
+
+func (w *waitReporter) Done() <-chan struct{} {
+	select {
+	case w.waits <- struct{}{}:
+	default:
+	}
+	return w.Context.Done()
+}
+
 // gatedBarrier lets a test hold an append open, so a staging that depends on
 // one being in flight is exact rather than a sleep.
 type gatedBarrier struct {

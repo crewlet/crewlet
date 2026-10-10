@@ -159,6 +159,19 @@ func NewReadIndex(d Domain, spec StreamSpec, log Appender, admission Admission,
 // So a caller that arrives mid-flight waits for that run to finish and then
 // starts or joins the NEXT one. The cost is at most one extra round trip
 // under contention; the alternative is a linearizable read that is not.
+//
+// # The arrival is taken ONCE
+//
+// Every run that starts after a caller arrived bounds its read, however long
+// the caller then waited, so its arrival is the instant it called and is
+// never taken again. Taken again each time the caller woke from a run it
+// could not use, it held itself to a run started after IT WOKE — and the
+// first waiter to wake claims the next run at once, before the rest have
+// woken, so every waiter but that one went round again, and the next, and the
+// one after: sixteen readers on one node made sixteen appends between them
+// where one round trip should have served fifteen
+// (TestReadersThatArriveDuringOneBarrierAreServedByTheNext; `make bench`'s
+// read arms at readers=16 report the appends a read made).
 func (r *ReadIndex) Read(ctx context.Context) (Position, error) {
 	arrived := time.Now()
 	for {
@@ -178,9 +191,8 @@ func (r *ReadIndex) Read(ctx context.Context) (Position, error) {
 			return Position{Stream: r.stream, Generation: run.gen, Seq: run.seq}, nil
 		}
 		// The run we joined had already started when we arrived, so its
-		// sequence bounds nothing for this reader. Go round again; the
-		// next run starts from here.
-		arrived = time.Now()
+		// sequence bounds nothing for this reader. Go round again: the
+		// next run starts after this one ended, which is after we arrived.
 	}
 }
 
