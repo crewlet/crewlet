@@ -155,13 +155,19 @@ checksum:
 # credential anywhere in this repository. The certificate is minted from the
 # workflow's OIDC token and logged to Rekor; there is no private key to leak
 # because there is no private key.
+#
+# ONE BUNDLE, `checksums.txt.sigstore.json`, carrying the signature, the
+# certificate and the Rekor entry together. That is cosign 3's format and the
+# only one its sign-blob writes by default: handed the old pair of
+# --output-signature/--output-certificate without --bundle it fails, so a
+# release workflow whose cosign-installer moved to v4 (cosign 3) stopped
+# signing at the tag while every snapshot, which skips signing, stayed green.
 signs:
   - cmd: cosign
-    certificate: "${artifact}.pem"
+    signature: "${artifact}.sigstore.json"
     args:
       - sign-blob
-      - "--output-certificate=${certificate}"
-      - "--output-signature=${signature}"
+      - "--bundle=${signature}"
       - "${artifact}"
       - "--yes"
     artifacts: checksum

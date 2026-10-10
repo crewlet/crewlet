@@ -228,6 +228,15 @@ doing the thing, or starts doing more — so read the file when you touch it:
 - **`prerelease: auto`, and the `latest` image tag stays guarded on the release
   being stable.** Lose either and a release candidate becomes GitHub's "Latest"
   or answers `docker pull crewlet` for everyone who pinned nothing.
+- **The `signs:` arguments match the cosign the publish job installs.** The
+  snapshot job and `make snapshot` both pass `--skip=sign`, so the checksum
+  signature is first exercised by the tag that publishes. cosign 3 (from
+  `sigstore/cosign-installer` v4) writes one `.sigstore.json` bundle and
+  refuses the older `--output-signature`/`--output-certificate` pair without
+  `--bundle`; a cosign major that changes the form again lands as a
+  Dependabot bump of the installer, which CI passes green. Read the cosign
+  release notes against `signs:` before merging one, and update the verify
+  commands here and in `docs/getting-started/installation.md` with it.
 - **`changelog.use: github-native`.** Any other mode builds the body from commit
   subjects instead of pull request titles and makes `.github/release.yml` a dead
   file that keeps being maintained.
@@ -297,7 +306,7 @@ doing the thing, or starts doing more — so read the file when you touch it:
 |---|---|
 | **archives** (`crewlet_X.Y.Z_<os>_<arch>.tar.gz`) | one `crewlet` binary, `LICENSE`, `README.md`, `THIRD_PARTY_NOTICES.txt` (the license and notice files of the Go toolchain and every Go module the binary links, written by `scripts/notices` in goreleaser's before hook) and `dashboard/THIRD_PARTY_NOTICES.txt` (the embedded dashboard's bundled packages, fonts and icon paths, from the committed bundle). Four of them: linux and darwin × amd64 and arm64. **No Windows**, and **no musl**; see below |
 | **`checksums.txt`** | SHA-256 over every archive |
-| **`checksums.txt.sig` + `checksums.txt.pem`** | the keyless cosign signature and its certificate |
+| **`checksums.txt.sigstore.json`** | the keyless cosign signature, its certificate and its Rekor entry, as one Sigstore bundle |
 | **`ghcr.io/crewlet/crewlet:X.Y.Z`** | a multi-arch image (linux/amd64, linux/arm64), also `:latest` on a stable tag. `LICENSE` and both notices files are under `/usr/share/doc/crewlet/` |
 
 The binary is self-contained: the dashboard's assets are embedded, the store is
@@ -316,9 +325,8 @@ of the [`Dockerfile`](Dockerfile).
 
 ```bash
 cosign verify-blob checksums.txt \
-  --certificate checksums.txt.pem \
-  --signature checksums.txt.sig \
-  --certificate-identity-regexp '^https://github\.com/crewlet/crewlet/' \
+  --bundle checksums.txt.sigstore.json \
+  --certificate-identity 'https://github.com/crewlet/crewlet/.github/workflows/release.yml@refs/tags/v0.2.0' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
 sha256sum -c checksums.txt --ignore-missing
@@ -327,7 +335,12 @@ sha256sum -c checksums.txt --ignore-missing
 One signature over the file that covers every artifact: verify the checksums
 file, then the checksum of what you downloaded. The identity flags are not
 optional — `verify-blob` without them accepts a signature from *any* identity,
-which proves the file was signed by someone rather than by this repository.
+which proves the file was signed by someone rather than by this repository —
+and the identity names the release workflow at the one tag you downloaded,
+exactly, rather than the repository as a whole, because any workflow here that
+is granted an OIDC token can sign. Not a `refs/tags/v` prefix either: that
+accepts the run of any release for this one. The bundle is cosign 3's format; an older cosign reads it only with
+`--new-bundle-format`.
 
 ---
 

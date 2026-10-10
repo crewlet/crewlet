@@ -32,7 +32,8 @@ go install github.com/crewlet/crewlet/cmd/crewlet@latest
 
 Or take a signed release binary — every tag publishes archives for linux and
 macOS on amd64 and arm64, plus a `checksums.txt` with a keyless
-[Sigstore](https://www.sigstore.dev/) signature beside it:
+[Sigstore](https://www.sigstore.dev/) signature beside it
+(`checksums.txt.sigstore.json`, which [cosign](https://docs.sigstore.dev/cosign/) 3 verifies):
 
 > **There is no Windows build**, and no musl build. The store driver ships its
 > database engine as a native library that upstream embeds for windows/amd64
@@ -47,8 +48,8 @@ macOS on amd64 and arm64, plus a `checksums.txt` with a keyless
 tar xzf crewlet_<version>_<os>_<arch>.tar.gz
 
 cosign verify-blob checksums.txt \
-  --certificate checksums.txt.pem --signature checksums.txt.sig \
-  --certificate-identity-regexp '^https://github\.com/crewlet/crewlet/' \
+  --bundle checksums.txt.sigstore.json \
+  --certificate-identity 'https://github.com/crewlet/crewlet/.github/workflows/release.yml@refs/tags/v<version>' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 sha256sum -c checksums.txt --ignore-missing
 ```
