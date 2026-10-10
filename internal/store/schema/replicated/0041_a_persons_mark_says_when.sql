@@ -1,0 +1,24 @@
+-- A person's caught-up mark records WHEN they moved it.
+--
+-- # Why the position is not enough
+--
+-- `seen_through` is a log position: how far the log had got when the person
+-- rendered what they read. A screen says "since you caught up at 18:40", and
+-- the instant somebody caught up is when they made the gesture, not when the
+-- newest change they read was written — a person who opens a morning's notices
+-- in the evening caught up in the evening. Nothing else in the estate holds
+-- that instant: the history row of the mark is one of many on the person's
+-- subject, and its deltas name the position rather than the gesture.
+--
+-- # Why the writer's instant rather than the applier's
+--
+-- Every node writes this row from the same record, so the value is the one the
+-- record carries — the writer stamps it on the gesture that advanced the
+-- position, exactly as `priorities_set_at` (0007) is stamped. NOT NULL with a
+-- default of zero, because the ordinary state of every person on their first
+-- day is never having marked anything, and zero IS that state.
+--
+-- No index: this is read only as part of the person's own row, which the
+-- primary key already reaches.
+
+ALTER TABLE tracker_persons ADD COLUMN seen_at INTEGER NOT NULL DEFAULT 0;

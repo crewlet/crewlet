@@ -550,3 +550,63 @@ func TestYourOwnChangeIsNotInYourInbox(t *testing.T) {
 		t.Errorf("bob's change wrote notification rows for %v, want jane among them", rows)
 	}
 }
+
+// A CAUGHT-UP MARK SAYS WHEN: the inbox and the person's own record both
+// answer `since_at`, the instant the person last MOVED their seen-through
+// position — never when the newest notice they read was written, because a
+// person who reads a morning's notices in the evening caught up in the
+// evening. A person who has marked nothing is told no instant, and a gesture
+// that leaves the position where it was does not re-date it.
+func TestACaughtUpMarkSaysWhen(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	routeTo(t, r, "t-1", "ENG-1", "bob")
+	routeTo(t, r, "t-2", "ENG-2", "bob")
+	inbox := func() tracker.InboxAnswer {
+		return r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob")})
+	}
+	got := inbox()
+	if got.SinceAt != nil || r.person("bob").SinceAt != nil {
+		t.Fatalf("bob has marked nothing and is told he caught up at %v", got.SinceAt)
+	}
+	newest, oldest := got.Notices[0], got.Notices[1]
+	mark := func(op string, gesture tracker.InboxGesture) {
+		t.Helper()
+		if _, err := asBob(r).MarkInbox(t.Context(), op, "bob", gesture); err != nil {
+			t.Fatalf("%s: %v", op, err)
+		}
+		r.drain()
+	}
+	want := func(when time.Time, after string) {
+		t.Helper()
+		if since := inbox().SinceAt; since == nil || !since.Equal(when) {
+			t.Errorf("after %s, the inbox says since %v, want %v", after, since, when)
+		}
+		if since := r.person("bob").SinceAt; since == nil || !since.Equal(when) {
+			t.Errorf("after %s, bob's record says since %v, want %v", after, since, when)
+		}
+	}
+
+	// HOURS AFTER BOTH NOTICES WERE WRITTEN, so the instant answered cannot
+	// be either notice's own.
+	evening := wednesday.Add(9 * time.Hour)
+	if !oldest.At.Before(evening) || !newest.At.Before(evening) {
+		t.Fatalf("the notices were written at %v and %v, not before %v",
+			oldest.At, newest.At, evening)
+	}
+	r.at = evening
+	mark("op-through-oldest", tracker.InboxGesture{ReadThrough: positionOf(oldest)})
+	want(evening, "catching up through the older notice")
+
+	// NEITHER a notice read on its own NOR a read-through that is not
+	// further moves the position, so neither re-dates it.
+	r.at = evening.Add(time.Hour)
+	mark("op-read-one", tracker.InboxGesture{Read: []string{newest.RecordID}})
+	r.at = evening.Add(2 * time.Hour)
+	mark("op-through-oldest-again", tracker.InboxGesture{ReadThrough: positionOf(oldest)})
+	want(evening, "a single read and a read-through that went no further")
+
+	r.at = evening.Add(3 * time.Hour)
+	mark("op-through-newest", tracker.InboxGesture{ReadThrough: positionOf(newest)})
+	want(evening.Add(3*time.Hour), "catching up through the newest notice")
+}

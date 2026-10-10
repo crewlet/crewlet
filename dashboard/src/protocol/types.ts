@@ -2779,6 +2779,9 @@ export interface WorkPersonState {
   /** How far this person has read. The generation is OMITTED when it is
    *  zero — a record carrying one is stamped for the build that stores it. */
   seen_through?: { stream: string; generation?: number; seq: number };
+  /** WHEN this person last moved `seen_through` — the instant they caught
+   *  up, resolved by the engine — and absent until they have. */
+  since_at?: string;
   /** The record's version: what `set_priorities`' `if_match` states. */
   version: number;
   /** How far ahead a snooze may be set, in SECONDS — the engine's bound, so a
@@ -4187,6 +4190,9 @@ export interface WorkInboxAnswer {
   primary_reasons: string[];
   /** Where this person's own record says they have read to. */
   seen_through?: { stream?: string; generation?: number; seq?: number };
+  /** When they moved it there — the instant they caught up — and absent
+   *  until they have. */
+  since_at?: string;
   next_cursor?: string;
   /** Counts over THIS PAGE, and the answer says so: a total over the table
    *  would be a second scan of rows this answer did not return. A badge built

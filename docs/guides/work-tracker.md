@@ -1831,7 +1831,7 @@ person actually says about their inbox, naming each notice by the `record_id`
 | `unread` | Marks notices unread again, including one you have already read past. |
 | `snooze` | `[{record_id, until}]` — puts notices off until an instant: in the future, and at most a year away, because a snooze past the horizon is a delete that does not say so. |
 | `unsnooze` | Brings snoozed notices back now. |
-| `read_through` | Reads everything up to a log position, `<stream>@<generation>:<sequence>` — the newest notice you have seen. It only ever moves **forward**: a position at or behind the one you have read to changes nothing, so "mark all read" from yesterday's tab cannot un-read what today's read. |
+| `read_through` | Reads everything up to a log position, `<stream>@<generation>:<sequence>` — the newest notice you have seen. It only ever moves **forward**: a position at or behind the one you have read to changes nothing, so "mark all read" from yesterday's tab cannot un-read what today's read. A move also records WHEN you made it, which your inbox and your record answer as `since_at` — the instant you caught up, not the time of the newest notice you read. |
 | `primary_reasons` | Which wake reasons are yours to act on — see below. Omitted, your choice stands; an empty list takes the default back. |
 
 Everything you do not name stays exactly as it was — every other mark, every

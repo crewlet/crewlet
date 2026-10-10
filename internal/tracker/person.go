@@ -702,7 +702,10 @@ func applyInboxGesture(p *Person, g InboxGesture,
 		next := Position{Stream: g.ReadThrough.Stream,
 			Generation: g.ReadThrough.Generation, Seq: g.ReadThrough.Seq}
 		if advances(p.SeenThrough, next) {
-			p.SeenThrough = next
+			// THE INSTANT MOVES WITH THE POSITION AND ONLY WITH IT: a
+			// gesture naming an older position changes nothing, so it
+			// must not re-date the mark either — see [Person.SeenAt].
+			p.SeenThrough, p.SeenAt = next, at
 			// THE STREAM'S OWN IDENTITY rides beside the position — the
 			// third belt [Person.Generation] describes.
 			p.Generation = next.Stream
