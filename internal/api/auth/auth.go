@@ -7,18 +7,23 @@
 // operator id to the request context or answers 401.
 //
 // WHAT IT GUARDS IS A POLICY DECISION, NOT A FIXED PREFIX. Writes and the whole
-// of /config, /secrets and /setup always need a token — see [GuardedPrefixes],
-// which is the list, and the per-prefix rationale beside it. Reads follow
-// allow_anonymous_read, which defaults to open — [Guard.Requires] is the one place that rule is written
-// down, and both the HTTP middleware and the WebSocket handshake consult it, so
-// the two cannot end up guarded in one place and open in the other.
+// of /config, /secrets, /setup and /operator always need a token — see
+// [GuardedPrefixes], which is the list, and the per-prefix rationale beside it.
+// Reads follow allow_anonymous_read, which defaults to open — [Guard.Requires]
+// is the one place that rule is written down, and both the HTTP middleware and
+// the WebSocket handshake consult it, so the two cannot end up guarded in one
+// place and open in the other. What the route rule cannot see is a QUESTION:
+// the reads that describe the deployment are refused to an anonymous caller by
+// the query registry (`RegisterOperator`) on both transports, however the
+// route that carried them was judged here, and so is somebody else's personal
+// record.
 //
 // The guard is mounted UNCONDITIONALLY. Mounting it only when Tier A is
 // present, while gating the /config write surface on a store being configured,
 // is two independent conditions deciding one security property — coinciding
 // only because every real caller happens to supply both. Tier A supplies the POSTURE, never the existence of
 // a check: with no tokens at all, no candidate can match, so reads serve and
-// every write and all of /config, /secrets and /setup is refused.
+// every write and all of /config, /secrets, /setup and /operator is refused.
 package auth
 
 import (
