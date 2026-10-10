@@ -338,7 +338,8 @@ judged against the replicated estate the data node holds:
   report says what it deleted before it stopped and why it stopped.
 - **Audit, daily.** It asks the store about every object a **live** row names,
   a page of rows at a time. An object the store does not hold (**missing** — asked
-  about once more at the end of the pass, before it is called so) or holds at
+  about once more before it is called so, at the end of the pass or, once a
+  hundred thousand others are waiting for theirs, at once) or holds at
   another size, or under another SHA-256 where the store keeps one
   (**damaged** — `nats` keeps one, S3 does not), is a file that cannot be
   downloaded, and raises [`objects_missing`](#alarms) naming the first hundred

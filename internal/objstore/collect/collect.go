@@ -93,9 +93,11 @@
 // Every object a REQUIRED table names should be in the backend, whole — a
 // file's record is written only after its object is stored. The audit asks the
 // backend for each one and finds two things: an object it does not hold
-// (MISSING, asked about once more at the end of the pass before it is called
-// so) and one it holds at another size, or under another digest where the
-// backend keeps one (DAMAGED). Both are files the company cannot read: the
+// (MISSING, asked about once more before it is called so — at the end of the
+// pass, or sooner once [maxSuspects] others are waiting for theirs, so a store
+// that lost everything never has the audit hold the whole inventory) and one
+// it holds at another size, or under another digest where the backend keeps
+// one (DAMAGED). Both are files the company cannot read: the
 // `objects_missing` alarm and the list `crewlet objects status` prints, each
 // named as the file that holds it, since a person restores files rather
 // than keys. A durable backend loses nothing, so a non-zero count is the
@@ -196,6 +198,24 @@ const judgeBatch = 500
 // MissingShown is how many unreadable files a status names: the counts are
 // always whole, and the list is what an operator restores first.
 const MissingShown = 100
+
+// maxSuspects is how many references the audit holds at once for their second
+// look ([Collector.audit]).
+//
+// A HUNDRED THOUSAND, about fifteen mebibytes of references at some hundred
+// and fifty bytes each. The second look is for a store that had not caught up
+// with an upload when it was asked — a handful of "not found" answers at a
+// time — and a store that has given a hundred thousand of them has lost those
+// objects rather than lagged. Past the bound the OLDEST is asked again at once
+// rather than at the end of the walk, so an audit of a store that lost
+// everything holds fifteen mebibytes rather than the company's whole inventory
+// — two million references, three hundred mebibytes, on the one node whose
+// alarm is the only thing saying the files are gone. Every object still gets
+// its one second look, and the oldest gets it no sooner than a hundred
+// thousand questions later — however fast the store answers, a hundred
+// thousand of its answers after the one that missed, which is the room a
+// store that lists a new object late is given to show it.
+const maxSuspects = 100_000
 
 // Status is what the collector last found, for the alarm, the status surface
 // and the next duty holder.
@@ -324,6 +344,10 @@ type Options struct {
 type Collector struct {
 	opts Options
 
+	// suspectsHeld is [maxSuspects], held on the value so a test can
+	// overflow it without a hundred thousand references.
+	suspectsHeld int
+
 	mu     sync.Mutex
 	status Status
 }
@@ -342,7 +366,7 @@ func New(opts Options) (*Collector, error) {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
-	return &Collector{opts: opts}, nil
+	return &Collector{opts: opts, suspectsHeld: maxSuspects}, nil
 }
 
 // Status is what the last passes found.
@@ -548,11 +572,12 @@ func (c *Collector) audit(ctx context.Context, r *AuditReport) ([]MissingFile, e
 	}
 	var (
 		shown []MissingFile
-		// suspects is every reference the store answered "not found"
-		// for, asked about again once the walk is over: a store that had
+		// q is the references the store answered "not found" for, asked
+		// about again once the walk is over — or sooner, once
+		// [maxSuspects] others are waiting for theirs: a store that had
 		// not caught up with an object a moment ago — a bucket that lists
 		// a new object late — is not one that lost it.
-		suspects []Reference
+		q        = suspects{limit: c.suspectsHeld}
 		complete = true
 	)
 	note := func(ref Reference, damaged bool) {
@@ -576,6 +601,19 @@ func (c *Collector) audit(ctx context.Context, r *AuditReport) ([]MissingFile, e
 		}
 		return true, nil
 	}
+	// recheck is a suspect's second look: missing once the store has not
+	// found it twice.
+	recheck := func(ref Reference) error {
+		held, err := judge(ref)
+		if err != nil {
+			return err
+		}
+		if !held {
+			r.Missing++
+			note(ref, false)
+		}
+		return nil
+	}
 	for i, s := range c.opts.References {
 		// ONE QUESTION PER REFERENCE, and no set of the keys asked about:
 		// a key is named only by the write that uploaded it, so no two
@@ -584,24 +622,22 @@ func (c *Collector) audit(ctx context.Context, r *AuditReport) ([]MissingFile, e
 		whole, err := s.EachRequired(ctx, v[i], func(ref Reference) error {
 			r.Referenced++
 			held, err := judge(ref)
-			if err == nil && !held {
-				suspects = append(suspects, ref)
+			if err != nil || held {
+				return err
 			}
-			return err
+			if due, over := q.push(ref); over {
+				return recheck(due)
+			}
+			return nil
 		})
 		if err != nil {
 			return nil, fmt.Errorf("objstore/collect: audit %s's references: %w", s.Name(), err)
 		}
 		complete = complete && whole
 	}
-	for _, ref := range suspects {
-		held, err := judge(ref)
-		if err != nil {
+	for _, ref := range q.drain() {
+		if err := recheck(ref); err != nil {
 			return nil, fmt.Errorf("objstore/collect: %w", err)
-		}
-		if !held {
-			r.Missing++
-			note(ref, false)
 		}
 	}
 	slices.SortFunc(shown, func(a, b MissingFile) int {
@@ -612,6 +648,40 @@ func (c *Collector) audit(ctx context.Context, r *AuditReport) ([]MissingFile, e
 	})
 	r.Completed = complete
 	return shown, nil
+}
+
+// suspects is the references the store answered "not found" for, waiting for
+// their second look: a queue of at most limit — a limit below one holds one —
+// so the oldest is the one handed back when a push would pass it.
+//
+// A RING ONCE FULL rather than a slice re-sliced from the front, so what it
+// holds is exactly the limit: re-slicing keeps the references it handed back
+// reachable from the array behind it until the next append happens to copy.
+type suspects struct {
+	held  []Reference
+	head  int // the oldest, once held is full
+	limit int
+}
+
+// push holds ref, and hands back the oldest reference held when holding ref
+// would pass the limit — the caller asks about it at once.
+func (q *suspects) push(ref Reference) (due Reference, overflowed bool) {
+	limit := max(q.limit, 1)
+	if len(q.held) < limit {
+		q.held = append(q.held, ref)
+		return Reference{}, false
+	}
+	due = q.held[q.head]
+	q.held[q.head] = ref
+	q.head = (q.head + 1) % limit
+	return due, true
+}
+
+// drain hands back everything still held, oldest first, and holds nothing.
+func (q *suspects) drain() []Reference {
+	out := slices.Concat(q.held[q.head:], q.held[:q.head])
+	q.held, q.head = nil, 0
+	return out
 }
 
 // keyNamed is the key a listed name stores, and whether it is one at all —
