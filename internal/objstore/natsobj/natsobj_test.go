@@ -158,27 +158,23 @@ func (c *cancelAfter) Read(p []byte) (int, error) {
 }
 
 // A DOWNLOAD WHOSE CONSUMER IS LOST PART WAY IS FINISHED BY ITS REPLACEMENT,
-// byte for byte.
+// byte for byte, and within [lostConsumerBound].
 //
 // A get is an ordered consumer of the object's messages, and the broker can
 // take that consumer away under a reader — reaped while the reader was slow,
 // dropped in a leader change. The client then makes a new one from the last
-// message the reader took, which is the path every one of those failures goes
-// down, and the one this case stages: the consumer is deleted a few messages
-// into a 4 MiB read, past what the read held in hand, so the rest can only
-// come from a replacement. This replaced a read paced over twelve seconds to
-// outlast two of the consumer's heartbeats; the vendored client arms none
-// between reads, so that read tripped nothing and never asserted that a
-// replacement was made.
+// message the reader took, once two of the broker's heartbeats have gone
+// missing — the path every one of those failures goes down, and every pull a
+// clustered fleet drops at a consumer's creation too — and the one this case
+// stages: the consumer is deleted a few messages into a 4 MiB read, past what
+// the read held in hand, so the rest can only come from a replacement. This
+// replaced a read paced over twelve seconds to outlast two of the consumer's
+// heartbeats; the vendored client arms none between reads, so that read
+// tripped nothing and never asserted that a replacement was made.
 func TestAReadWhoseConsumerIsLostFinishesOnItsReplacement(t *testing.T) {
 	t.Parallel()
 	client := memberClient(t)
 	b := open(t, client)
-	// THE REPLACEMENT WAITS FOR THE OUTSTANDING PULL TO EXPIRE, so the
-	// expiry is the client's floor of a second rather than the production
-	// ten: what is held is that the rest of the read comes from a new
-	// consumer, not how long that takes ([TestTheTimeALostReaderCostsIsBounded]).
-	natsobj.ShortenPulls(b, time.Second)
 	data := bytes.Repeat([]byte("read across a lost consumer "), 4<<20/28)
 	if err := b.Put(t.Context(), "lost", bytes.NewReader(data), objstore.PutMeta{}); err != nil {
 		t.Fatal(err)
@@ -190,7 +186,10 @@ func TestAReadWhoseConsumerIsLostFinishesOnItsReplacement(t *testing.T) {
 	defer r.Close()
 	var got bytes.Buffer
 	buf := make([]byte, natsobj.MessageBytes/2)
-	var deleted []string
+	var (
+		deleted []string
+		lost    time.Time
+	)
 	for {
 		n, err := r.Read(buf)
 		got.Write(buf[:n])
@@ -201,13 +200,17 @@ func TestAReadWhoseConsumerIsLostFinishesOnItsReplacement(t *testing.T) {
 			t.Fatalf("a read whose consumer was deleted failed at %d bytes: %v", got.Len(), err)
 		}
 		if deleted == nil && got.Len() >= 3*natsobj.MessageBytes {
-			deleted = dropConsumers(t, client)
+			deleted, lost = dropConsumers(t, client), time.Now()
 		}
 	}
 	if !bytes.Equal(got.Bytes(), data) {
 		t.Fatalf("a read across a lost consumer answered %d bytes, want %d exactly", got.Len(), len(data))
 	}
 	replacedBy(t, client, deleted)
+	if took := time.Since(lost); took > lostConsumerBound {
+		t.Fatalf("the read finished %v after its consumer was lost, past the %v a lost "+
+			"consumer may cost", took, lostConsumerBound)
+	}
 }
 
 // A LISTING ENDS EVEN WHEN THE NEWEST METADATA CANNOT BE READ. The library's
@@ -520,7 +523,7 @@ func TestAnObjectWhosePiecesAreGoneReadsEmpty(t *testing.T) {
 }
 
 // A LISTING WHOSE CONSUMER IS LOST PART WAY IS FINISHED BY ITS REPLACEMENT,
-// visiting every name exactly once.
+// visiting every name exactly once, and within [lostConsumerBound].
 //
 // The listing is an ordered consumer over the metadata, holding
 // [natsobj.WalkAhead] messages at a time, so the bucket holds more names than
@@ -538,7 +541,6 @@ func TestAListingWhoseConsumerIsLostFinishesOnItsReplacement(t *testing.T) {
 	t.Parallel()
 	client := memberClient(t)
 	b := open(t, client)
-	natsobj.ShortenPulls(b, time.Second) // for the read case's reason
 	const extra = 50
 	names := natsobj.WalkAhead + extra
 	for i := range names {
@@ -554,18 +556,25 @@ func TestAListingWhoseConsumerIsLostFinishesOnItsReplacement(t *testing.T) {
 		}
 	}
 	seen := map[string]int{}
-	var deleted, last []string
+	var (
+		deleted, last []string
+		lost          time.Time
+	)
 	if err := b.List(t.Context(), func(info objstore.Info) error {
 		seen[info.Name]++
 		switch len(seen) {
 		case 10:
-			deleted = dropConsumers(t, client)
+			deleted, lost = dropConsumers(t, client), time.Now()
 		case names:
 			last = consumerNames(t, client)
 		}
 		return nil
 	}); err != nil {
 		t.Fatalf("a listing whose consumer was deleted: %v", err)
+	}
+	if took := time.Since(lost); took > lostConsumerBound {
+		t.Fatalf("the listing finished %v after its consumer was lost, past the %v a lost "+
+			"consumer may cost", took, lostConsumerBound)
 	}
 	if len(seen) != names {
 		t.Fatalf("the listing visited %d names of %d", len(seen), names)
@@ -588,27 +597,415 @@ func TestAListingWhoseConsumerIsLostFinishesOnItsReplacement(t *testing.T) {
 	}
 }
 
-// THE TIME A LOST READER COSTS IS BOUNDED, and by a number that keeps the
-// client's own heartbeat.
+// lostConsumerBound is the most a consumer lost under a read may cost it: the
+// quiet second the read waits before it waits again ([natsobj.QuietWait]), the
+// two heartbeats the client then waits out before it replaces the consumer
+// ([natsobj.PullHeartbeat]), and room for a loaded runner to make the
+// replacement and hand over what it reads first. A lost consumer is the one
+// case the heartbeats are for, so the bound is theirs; what holds THEM is
+// [TestAReadsHeartbeatOutlastsItsHandAtTheFloor].
+const lostConsumerBound = natsobj.QuietWait + 2*natsobj.PullHeartbeat + 5*time.Second
+
+// A READ'S HEARTBEATS OUTLAST ITS HAND CROSSING A LINK AT THE FLOOR, TWICE
+// OVER — AND A CONSUMER LOST UNDER IT IS REPLACED INSIDE THE STALL.
 //
-// A get or a listing whose consumer the broker loses is silent until its
-// outstanding pull expires — that is when the client makes the replacement the
-// two cases above stage — so the expiry IS the stall, and the client's default
-// made it thirty seconds. Below ten, the client halves its five-second
-// heartbeat for an ordered consumer, and missed heartbeats replace the
-// consumer too, with a metadata request each, on a broker already too slow to
-// send them. And it stays well inside the minute a read that hears nothing is
-// ended at.
-func TestTheTimeALostReaderCostsIsBounded(t *testing.T) {
+// The client replaces a read's consumer when two heartbeats go missing while
+// it waits, and hears of a heartbeat or a message only once the whole of it
+// has arrived — on a compressed link, once the whole block the broker flushed
+// has, and a get's first pull puts its whole hand on the wire in one flush. So
+// on a link at [objstore.MiBPace], the slowest every object store leg accepts,
+// a healthy read can hear nothing for as long as its hand takes to cross, and
+// two heartbeats must outlast that or the reader is replaced before its hand
+// arrives, and again before its replacement's, and fails a minute later at
+// [objstore.ReadStall] having read nothing. Twice over, the room the stall
+// gives a mebibyte.
+//
+// And a consumer the broker loses under a read costs a quiet second, two
+// heartbeats and then its replacement's first hand — which must fit in the
+// stall, or the read the replacement was made for is ended before it arrives.
+// That is what bounds the hand: at eight messages, a mebibyte, the two could
+// not both hold.
+func TestAReadsHeartbeatOutlastsItsHandAtTheFloor(t *testing.T) {
 	t.Parallel()
-	if natsobj.PullExpiry < 10*time.Second {
-		t.Errorf("a pull expires after %v; below ten seconds the client halves the "+
-			"heartbeat its ordered consumers are replaced on", natsobj.PullExpiry)
+	hand := time.Duration(natsobj.ReadAhead*natsobj.MessageBytes) * objstore.MiBPace / objstore.MiB
+	if 2*natsobj.PullHeartbeat < 2*hand {
+		t.Errorf("two heartbeats of %v are under twice the %v a hand of %d messages takes to "+
+			"cross a link at the floor: a read at the floor is replaced before its hand arrives",
+			natsobj.PullHeartbeat, hand, natsobj.ReadAhead)
 	}
-	if natsobj.PullExpiry > objstore.ReadStall/4 {
-		t.Errorf("a lost reader stays silent for %v, too close to the %v a read is "+
-			"ended at for hearing nothing", natsobj.PullExpiry, objstore.ReadStall)
+	if lost := natsobj.QuietWait + 2*natsobj.PullHeartbeat + hand; lost > objstore.ReadStall {
+		t.Errorf("a consumer lost under a read at the floor costs a quiet wait, two heartbeats "+
+			"and a hand, %v, past the %v a read waits before it is ended as stalled",
+			lost, objstore.ReadStall)
 	}
+}
+
+// A READ ACROSS A LINK NEAR THE FLOOR FINISHES ON THE CONSUMER IT BEGAN WITH.
+//
+// A leaf reaches the bucket across its link to a member, and the link is held
+// to a quarter above [objstore.MiBPace]'s floor towards the leaf. The link is
+// compressed, as a leaf's is by default, so what the member flushes at once
+// arrives as one block: the read's first hand, [natsobj.ReadAhead] messages,
+// in twelve seconds and nothing of it sooner, then what its next pull asked
+// for. The object is a hand and a half, so the read waits on the link twice.
+// It also asks its consumer about its first message a second in — which the
+// consumer answers, behind the hand, as being read — and must not remake it.
+// At a heartbeat whose two went missing in either wait, the read's consumer
+// was replaced before its messages arrived, and again before each of the
+// replacement's, which queued behind what its predecessor had been sent: the
+// read never completed a message and failed when its deadline ran out.
+//
+// A QUARTER ABOVE THE FLOOR rather than at it, so a scheduler running late on
+// a loaded runner cannot push the link under the floor, where no heartbeat is
+// promised to hold; the floor itself is held by the arithmetic
+// ([TestAReadsHeartbeatOutlastsItsHandAtTheFloor]).
+func TestAReadAcrossALinkNearTheFloorKeepsItsConsumer(t *testing.T) {
+	t.Parallel()
+	member, err := js.StartServer(t.Context(), js.Config{ServerName: "member",
+		LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("start the member: %v", err)
+	}
+	t.Cleanup(member.Shutdown)
+	gate := holdGate(t)
+	floor := int64(objstore.MiB) * int64(time.Second) / int64(objstore.MiBPace)
+	gate.slow(floor * 5 / 4)
+	gate.open(fmt.Sprintf("127.0.0.1:%d", member.LeafPort()))
+	leaf := client(t, startLeaf(t, gate.port()))
+	awaitLink(t, leaf)
+	b := open(t, leaf)
+	data := make([]byte, 3*natsobj.ReadAhead*natsobj.MessageBytes/2)
+	if _, err := rand.Read(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Put(t.Context(), "slow", bytes.NewReader(data), objstore.PutMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	// EVERY CONSUMER THE READ MAKES IS COUNTED, nothing made deaf: the get
+	// waits for its first message before it returns, so a consumer it
+	// remade in that wait is gone before the reader is handed back.
+	made := &deafStream{}
+	natsobj.SwapStream(b, func(s jetstream.Stream) jetstream.Stream { made.Stream = s; return made })
+
+	// THE MEMBER'S OWN CLIENT names the consumers, so asking adds nothing to
+	// the slow link the read is waiting on.
+	direct := client(t, member)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	r, err := b.Get(ctx, "slow", 0, -1)
+	if err != nil {
+		t.Fatalf("a get across a link a quarter above the floor: %v", err)
+	}
+	defer r.Close()
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("a read across a link a quarter above the floor failed after %d bytes of %d: %v",
+			len(got), len(data), err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatalf("a read across a slow link answered %d bytes, want %d exactly", len(got), len(data))
+	}
+	made.mu.Lock()
+	began := made.names
+	made.mu.Unlock()
+	if ended := consumerNames(t, direct); len(began) != 1 || !slices.Equal(began, ended) {
+		t.Fatalf("the read made the consumers %v and ended on %v: a link above the floor "+
+			"remade or replaced the consumer it began with", began, ended)
+	}
+}
+
+// A READ WHOSE FIRST PULL NEVER REACHED ITS CONSUMER REMAKES THE CONSUMER, A
+// SECOND IN — a whole get, a ranged get's walk to its offset, and a listing.
+//
+// On a clustered fleet a new consumer's first pull is dropped one read in 25
+// to one in 1,500 ([natsobj.QuietWait]), and nothing tells the reader:
+// it hears only heartbeats, and waiting on them cost the read two of them —
+// thirty seconds at a heartbeat that honours the floor. The read asks its
+// consumer instead, and one that holds no pull and has delivered nothing is
+// made again. A [deafStream] stages exactly that: the first consumer it is
+// asked for is made on the broker as asked, so what the read asks it is the
+// broker's answer, but its pull goes elsewhere and never reaches it.
+func TestAReadWhoseFirstPullNeverArrivedRemakesItsConsumer(t *testing.T) {
+	t.Parallel()
+	data := bytes.Repeat([]byte("asked again "), 3*natsobj.MessageBytes/12)
+	for _, c := range []struct {
+		name string
+		// makes is how many consumers the read makes when none is deaf: a
+		// ranged get walks to its offset on one and reads on another.
+		makes int32
+		read  func(t *testing.T, b *natsobj.Backend) error
+	}{
+		{"get", 1, func(t *testing.T, b *natsobj.Backend) error {
+			return readsBack(t, b, 0, data)
+		}},
+		{"ranged", 2, func(t *testing.T, b *natsobj.Backend) error {
+			return readsBack(t, b, natsobj.MessageBytes+5, data[natsobj.MessageBytes+5:])
+		}},
+		{"listing", 1, func(t *testing.T, b *natsobj.Backend) error {
+			var names []string
+			err := b.List(t.Context(), func(info objstore.Info) error {
+				names = append(names, info.Name)
+				return nil
+			})
+			if err == nil && !slices.Equal(names, []string{"asked"}) {
+				return fmt.Errorf("the listing named %v, want the one object", names)
+			}
+			return err
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			client := memberClient(t)
+			b := open(t, client)
+			if err := b.Put(t.Context(), "asked", bytes.NewReader(data), objstore.PutMeta{}); err != nil {
+				t.Fatal(err)
+			}
+			deaf := &deafStream{}
+			deaf.deaf.Store(1)
+			natsobj.SwapStream(b, func(s jetstream.Stream) jetstream.Stream { deaf.Stream = s; return deaf })
+			began := time.Now()
+			if err := c.read(t, b); err != nil {
+				t.Fatalf("a read whose first pull never reached its consumer: %v", err)
+			}
+			if took, bound := time.Since(began), natsobj.QuietWait+5*time.Second; took > bound {
+				t.Fatalf("the read took %v, past the %v asking its consumer and remaking it may "+
+					"cost: it waited for its heartbeats", took, bound)
+			}
+			if made := deaf.made.Load(); made != c.makes+1 {
+				t.Fatalf("the read made %d consumers, want its own %d and the deaf one's remake",
+					made, c.makes)
+			}
+			if left := consumers(t, client); left != 0 {
+				t.Fatalf("the read left %d consumers behind, the deaf one among them", left)
+			}
+		})
+	}
+}
+
+// A READ REMAKES A CONSUMER THAT NEVER GETS ITS PULL [natsobj.FirstPullRemakes]
+// TIMES, THEN WAITS. A consumer still without its pull after that is behind a
+// link holding the pull itself back rather than a cluster that dropped it, and
+// remaking it on every second would only add consumers for the cluster to
+// create; its heartbeats and the read's own deadline are still over it.
+func TestAReadRemakesAnUnpulledConsumerOnlySoOften(t *testing.T) {
+	t.Parallel()
+	client := memberClient(t)
+	b := open(t, client)
+	if err := b.Put(t.Context(), "unheard", bytes.NewReader([]byte("never pulled")), objstore.PutMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	deaf := &deafStream{}
+	deaf.deaf.Store(1 << 20)
+	natsobj.SwapStream(b, func(s jetstream.Stream) jetstream.Stream { deaf.Stream = s; return deaf })
+	wait := time.Duration(natsobj.FirstPullRemakes+3) * natsobj.QuietWait
+	ctx, cancel := context.WithTimeout(t.Context(), wait)
+	defer cancel()
+	if _, err := b.Get(ctx, "unheard", 0, -1); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a get no consumer ever heard the pull of = %v, want its deadline", err)
+	}
+	if made, want := deaf.made.Load(), int32(1+natsobj.FirstPullRemakes); made != want {
+		t.Fatalf("the get made %d consumers in %v, want %d: the first and %d remakes",
+			made, wait, want, natsobj.FirstPullRemakes)
+	}
+	if left := consumers(t, client); left != 0 {
+		t.Fatalf("the get left %d consumers behind", left)
+	}
+}
+
+// A READ WHOSE CLIENT SKIPPED A PULL GOES ON A SECOND LATER, not two
+// heartbeats later.
+//
+// The client decides whether to send its next pull only as a wait begins, and
+// now and then decides not to ([natsobj.QuietWait]): its consumer has
+// delivered the hand, holds no pull, and has nothing to say, and nothing
+// tells the reader — which heard only heartbeats, and replaced the consumer
+// once two went missing. A [skippingStream] stages exactly that: after the
+// first hand the reader's next wait is spent hearing nothing, and only a wait
+// begun after it reads on, as only a wait begun again makes the client send
+// the pull. The object is two hands, so the skip falls in the middle of it.
+func TestAReadWhoseClientSkippedAPullGoesOn(t *testing.T) {
+	t.Parallel()
+	client := memberClient(t)
+	b := open(t, client)
+	data := bytes.Repeat([]byte("skipped once "), 2*natsobj.ReadAhead*natsobj.MessageBytes/13)
+	if err := b.Put(t.Context(), "asked", bytes.NewReader(data), objstore.PutMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	skip := &skippingStream{after: natsobj.ReadAhead}
+	natsobj.SwapStream(b, func(s jetstream.Stream) jetstream.Stream { skip.Stream = s; return skip })
+	began := time.Now()
+	if err := readsBack(t, b, 0, data); err != nil {
+		t.Fatalf("a read whose client skipped a pull: %v", err)
+	}
+	if took, bound := time.Since(began), natsobj.QuietWait+5*time.Second; took > bound {
+		t.Fatalf("the read took %v, past the %v waiting again costs: it waited out the stall "+
+			"its skipped pull left it in", took, bound)
+	}
+	if skipped := skip.skipped.Load(); skipped != 1 {
+		t.Fatalf("%d waits were spent hearing nothing, want the one this case is for", skipped)
+	}
+	if left := consumers(t, client); left != 0 {
+		t.Fatalf("the read left %d consumers behind", left)
+	}
+}
+
+// skippingStream stands between a backend and its bucket's stream, and makes
+// a reader of every ordered consumer it is asked for SPEND ONE WAIT ON
+// NOTHING once it has taken after messages: that wait is handed to a second
+// consumer over a subject nothing is on, so it hears heartbeats and nothing
+// else until it ends, and only a wait begun after it reads on — a client that
+// skipped its next pull, exactly, which sends it as the next wait begins.
+type skippingStream struct {
+	jetstream.Stream
+	after int
+	// skipped counts the waits spent hearing nothing.
+	skipped atomic.Int32
+}
+
+func (s *skippingStream) OrderedConsumer(ctx context.Context, cfg jetstream.OrderedConsumerConfig) (jetstream.Consumer, error) {
+	cons, err := s.Stream.OrderedConsumer(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &skippingConsumer{Consumer: cons, s: s}, nil
+}
+
+// skippingConsumer is a consumer whose reader spends one wait on nothing.
+type skippingConsumer struct {
+	jetstream.Consumer
+	s *skippingStream
+}
+
+func (c *skippingConsumer) Messages(opts ...jetstream.PullMessagesOpt) (jetstream.MessagesContext, error) {
+	msgs, err := c.Consumer.Messages(opts...)
+	if err != nil {
+		return nil, err
+	}
+	silent, err := c.s.Stream.OrderedConsumer(context.Background(), jetstream.OrderedConsumerConfig{
+		FilterSubjects: []string{"$O." + natsobj.Bucket + ".C.silent"}})
+	if err != nil {
+		msgs.Stop()
+		return nil, err
+	}
+	quiet, err := silent.Messages(opts...)
+	if err != nil {
+		msgs.Stop()
+		return nil, err
+	}
+	return &skippingMessages{MessagesContext: msgs, quiet: &silentMessages{MessagesContext: quiet,
+		silent: silent, stream: c.s.Stream}, s: c.s}, nil
+}
+
+// skippingMessages hands a reader its consumer's messages, and its wait after
+// the s.after-th one to quiet.
+type skippingMessages struct {
+	jetstream.MessagesContext
+	quiet *silentMessages
+	s     *skippingStream
+	taken int
+	spent bool
+}
+
+func (m *skippingMessages) Next(opts ...jetstream.NextOpt) (jetstream.Msg, error) {
+	if m.taken == m.s.after && !m.spent {
+		m.spent = true
+		m.s.skipped.Add(1)
+		return m.quiet.Next(opts...)
+	}
+	msg, err := m.MessagesContext.Next(opts...)
+	if err == nil {
+		m.taken++
+	}
+	return msg, err
+}
+
+func (m *skippingMessages) Stop() {
+	m.MessagesContext.Stop()
+	m.quiet.Stop()
+}
+
+// readsBack reads b's object "asked" from off, wanting want.
+func readsBack(t *testing.T, b *natsobj.Backend, off int64, want []byte) error {
+	r, err := b.Get(deadline(t), "asked", off, -1)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	got, err := io.ReadAll(r)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(got, want) {
+		return fmt.Errorf("read back %d bytes from %d, want %d exactly", len(got), off, len(want))
+	}
+	return nil
+}
+
+// deafStream stands between a backend and its bucket's stream, and makes the
+// next deaf ordered consumers it is asked for DEAF: each is made on the broker
+// as asked — so a read asking it about itself has the broker's own answer —
+// but the read is handed the messages of a second consumer over a subject
+// nothing is on, so its pull reaches somebody else and the consumer it asked
+// for never has one. A pull a cluster dropped, exactly: the consumer exists,
+// holds no pull and has delivered nothing, and the read hears heartbeats.
+type deafStream struct {
+	jetstream.Stream
+	// deaf is how many more consumers to make deaf, and made how many
+	// ordered consumers the stream has been asked for.
+	deaf, made atomic.Int32
+
+	mu sync.Mutex
+	// names is the broker's name for every consumer made, in order.
+	names []string
+}
+
+func (s *deafStream) OrderedConsumer(ctx context.Context, cfg jetstream.OrderedConsumerConfig) (jetstream.Consumer, error) {
+	s.made.Add(1)
+	cons, err := s.Stream.OrderedConsumer(ctx, cfg)
+	if err == nil {
+		s.mu.Lock()
+		s.names = append(s.names, cons.CachedInfo().Name)
+		s.mu.Unlock()
+	}
+	if err != nil || s.deaf.Add(-1) < 0 {
+		return cons, err
+	}
+	silent, err := s.Stream.OrderedConsumer(ctx, jetstream.OrderedConsumerConfig{
+		FilterSubjects: []string{"$O." + natsobj.Bucket + ".C.silent"}})
+	if err != nil {
+		return nil, err
+	}
+	return &deafConsumer{Consumer: cons, silent: silent, stream: s.Stream}, nil
+}
+
+// deafConsumer is a consumer whose reader is handed silent's messages.
+type deafConsumer struct {
+	jetstream.Consumer
+	silent jetstream.Consumer
+	stream jetstream.Stream
+}
+
+func (c *deafConsumer) Messages(opts ...jetstream.PullMessagesOpt) (jetstream.MessagesContext, error) {
+	msgs, err := c.silent.Messages(opts...)
+	if err != nil {
+		return nil, err
+	}
+	return &silentMessages{MessagesContext: msgs, silent: c.silent, stream: c.stream}, nil
+}
+
+// silentMessages are a silent consumer's messages, whose consumer is deleted
+// with them, so a case can count the consumers its read left behind.
+type silentMessages struct {
+	jetstream.MessagesContext
+	silent jetstream.Consumer
+	stream jetstream.Stream
+}
+
+func (m *silentMessages) Stop() {
+	m.MessagesContext.Stop()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = m.stream.DeleteConsumer(ctx, m.silent.CachedInfo().Name)
 }
 
 // dropConsumers deletes every consumer on the bucket's stream — the get's or
@@ -1324,10 +1721,13 @@ func client(t testing.TB, srv *js.Server) jetstream.JetStream {
 // a member that is not up yet: until [gate.open], every connection to it is
 // closed as it arrives — which a leaf reads as it reads a refused dial, no
 // member to reach, and dials again — and after it each one is piped to the
-// member's own leaf listener.
+// member's own leaf listener, at the rate [gate.slow] set towards the leaf.
 type gate struct {
 	ln     net.Listener
 	target atomic.Pointer[string]
+	// rate is how many bytes a second a connection opened from now on
+	// carries from the member to the leaf; zero is as fast as loopback.
+	rate atomic.Int64
 
 	mu    sync.Mutex
 	shut  bool
@@ -1377,6 +1777,10 @@ func (g *gate) port() int { return g.ln.Addr().(*net.TCPAddr).Port }
 // open pipes every connection from now on to target.
 func (g *gate) open(target string) { g.target.Store(&target) }
 
+// slow holds every connection opened from now on to rate bytes a second from
+// the member to the leaf — the direction a read's messages cross.
+func (g *gate) slow(rate int64) { g.rate.Store(rate) }
+
 // track records c for the case's end to close, and refuses it once that end
 // has begun, so no connection outlives the gate.
 func (g *gate) track(c net.Conn) bool {
@@ -1402,11 +1806,49 @@ func (g *gate) pipe(in net.Conn, target string) {
 		_ = out.Close()
 		return
 	}
+	rate := g.rate.Load()
 	done := make(chan struct{}, 2)
 	go func() { _, _ = io.Copy(out, in); done <- struct{}{} }()
-	go func() { _, _ = io.Copy(in, out); done <- struct{}{} }()
+	go func() { throttle(in, out, rate); done <- struct{}{} }()
 	<-done
 	_ = in.Close()
 	_ = out.Close()
 	<-done
+}
+
+// throttle copies src to dst until either ends, at no more than rate bytes a
+// second — or as fast as it can where rate is zero.
+//
+// A PIECE IS WRITTEN WHEN A LINK AT RATE WOULD HAVE FINISHED CARRYING IT, each
+// one's time counted from when the one before it finished or from when it
+// arrived, whichever is later: a link that was idle has carried nothing ahead,
+// so it never lets a burst through at once.
+func throttle(dst io.Writer, src io.Reader, rate int64) {
+	if rate == 0 {
+		_, _ = io.Copy(dst, src)
+		return
+	}
+	buf := make([]byte, 4<<10)
+	carried := time.Now()
+	for {
+		n, err := src.Read(buf)
+		if n > 0 {
+			carried = later(carried, time.Now()).Add(time.Duration(n) * time.Second / time.Duration(rate))
+			time.Sleep(time.Until(carried))
+			if _, werr := dst.Write(buf[:n]); werr != nil {
+				return
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+// later is whichever of a and b is later.
+func later(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
 }

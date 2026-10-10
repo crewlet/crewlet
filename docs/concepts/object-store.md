@@ -122,9 +122,27 @@ logs survive, on the same members:
   listing and a page's walk each read through a consumer the broker keeps for
   them, and a broker that loses it part way — reaped under a slow reader, or
   gone in a leader change — gets a new one, made from the last message read,
-  so every byte and every name still arrives exactly once. It is made within
-  **ten seconds** of the loss (the request it was waiting on expiring), where
-  it used to take thirty.
+  so every byte and every name still arrives exactly once. It is made about
+  **thirty seconds** after the loss, once two of the broker's fifteen-second
+  heartbeats have gone missing — and no sooner, because a read on a slow link
+  hears nothing at all while its next half mebibyte is crossing: a leaf's
+  link is compressed, and what the member sends at once arrives as one block,
+  which at the slowest rate the store accepts takes fifteen seconds. A
+  heartbeat shorter than that replaced such a read's consumer before anything
+  arrived, again and again, until the read failed having delivered nothing.
+- **On a clustered fleet a read can lose its first request.** The broker can
+  answer the creation of a read's consumer before the read's own member has
+  learned where to send its requests, and a request sent in that gap is
+  dropped. Measured on a three-member fleet, from one download in 1,500 to one
+  in 25 met it, as the machine's load rose. A read that has heard nothing a
+  second after it began
+  asks its consumer whether the request ever arrived, and makes the consumer
+  again if it did not — so it costs that download about a second, where
+  waiting for the heartbeats would have cost thirty. A read waiting on any
+  later message also looks again after a quiet second, because the NATS
+  client now and then decides not to send its next request (measured on one
+  member, one download in ten to twenty thousand); looking again sends it,
+  and that costs a second too.
 - **A delete marker another client left is no object.** The engine deletes by
   purging, but `nats object rm` — or any other client of the format — leaves a
   marker under the name. The engine reads the name as holding nothing, and
@@ -427,7 +445,11 @@ Take **`s3`** when:
   broker's bucket across its leaf link, where whole reads measured about half
   a member's rate;
 - seats will read pages deep into large files — on `nats` a page costs a walk
-  to its offset, on `s3` one ranged request wherever it is.
+  to its offset, on `s3` one ranged request wherever it is;
+- the fleet is clustered and reads many small files — on `nats` every read
+  makes a consumer, which a cluster decides on together, and one read in a
+  few hundred waits a second for a request the cluster dropped; on `s3` a
+  read is one request.
 
 **A versioned bucket keeps every object the collector deletes**, as a
 noncurrent version, for as long as the bucket's own rules say — and every
