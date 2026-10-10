@@ -1108,9 +1108,9 @@ func (c *CLIAgent) validate(path Path) error {
 // API, activated, and then refused by every node.
 //
 // RUNNABLE, because each says the backend cannot be built: the profile does
-// not load, or it has no model flag, and every entry names a model (the
-// backend refuses to drop one silently). Where the entry's CREDENTIALS go is
-// the admission half, [LLMProvider.validateCLICredentials].
+// not load, or no model_args element carries {model}, and every entry names a
+// model (the backend refuses to drop one silently). Where the entry's
+// CREDENTIALS go is the admission half, [LLMProvider.validateCLICredentials].
 func (l *LLMProvider) validateCLIProfile(path Path) error {
 	cli := l.CLI
 	if cli.Agent != "" && !cli.Agent.Valid() {
@@ -1128,9 +1128,9 @@ func (l *LLMProvider) validateCLIProfile(path Path) error {
 	}
 	if strings.TrimSpace(l.Model) != "" && !profile.TakesModel() {
 		p.add(at(path, "cli.overrides.model_args"), ErrMissing,
-			"the %q profile declares no model flag, so the model %q this entry "+
+			"the %q profile's model_args carry no {model}, so the model %q this entry "+
 				"names would never reach the CLI, and every entry names one: declare "+
-				`the flag, e.g. cli.overrides.model_args: ["--model", "{model}"]`,
+				`the flag with the placeholder, e.g. cli.overrides.model_args: ["--model", "{model}"]`,
 			cli.Name(), l.Model)
 	}
 	return p.err()

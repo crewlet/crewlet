@@ -134,8 +134,8 @@ func New(cfg Config) (*Provider, error) {
 	// building the provider from code.
 	if cfg.Model != "" && !profile.TakesModel() {
 		return nil, fmt.Errorf(
-			"cli-agent %q: the %q CLI takes no model flag, so model %q would be ignored — "+
-				"remove it, or declare cli.overrides.model_args",
+			"cli-agent %q: no model_args element of the %q CLI carries {model}, so model %q "+
+				"would be ignored — remove it, or declare cli.overrides.model_args with {model}",
 			cfg.Key, cfg.Agent, cfg.Model)
 	}
 	if cfg.StateDir == "" {

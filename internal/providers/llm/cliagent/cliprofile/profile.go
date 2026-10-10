@@ -378,9 +378,10 @@ type Profile struct {
 	// command line neither side wrote.
 	CompleteArgs []string `yaml:"complete_args,omitempty"`
 
-	// ModelArgs carries the model, with {model} substituted. Empty means
-	// the CLI takes no model flag, and an entry naming a model gets a
-	// validation error rather than a silently ignored setting.
+	// ModelArgs carries the model, with {model} substituted. One with no
+	// {model} — empty included — means the CLI takes no model, and an entry
+	// naming a model gets a validation error rather than a silently ignored
+	// setting ([Profile.TakesModel]).
 	ModelArgs []string `yaml:"model_args,omitempty"`
 
 	// PromptMode is stdin (the default), argv or file.
@@ -665,11 +666,21 @@ func IsCredentialName(name string) bool {
 }
 
 // TakesModel reports whether this profile passes a model to its CLI — whether
-// it declares model_args.
+// an element of its model_args carries {model}.
 //
 // One predicate for the two places that refuse a model the CLI would never
 // see: config, which every write path runs, and the backend's constructor.
-func (p *Profile) TakesModel() bool { return len(p.ModelArgs) > 0 }
+// The PLACEHOLDER, not merely a flag: `["--model", "fixed"]` passes `fixed`
+// on every call whatever the entry's `model` says, which drops the entry's
+// model exactly as silently as declaring no flag at all.
+func (p *Profile) TakesModel() bool {
+	return slices.ContainsFunc(p.ModelArgs, func(arg string) bool {
+		return strings.Contains(arg, modelPlaceholder)
+	})
+}
+
+// modelPlaceholder is what a model_args element carries the entry's model as.
+const modelPlaceholder = "{model}"
 
 // EffectiveMarkerScope is the scope with its default applied.
 func (p *Profile) EffectiveMarkerScope() MarkerScope {

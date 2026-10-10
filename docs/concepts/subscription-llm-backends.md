@@ -1198,7 +1198,7 @@ key by key; lists and single values replace wholesale.
 | `written_for` | The CLI version the profile was written against, printed by `doctor` beside the one installed. |
 | `version_args` | The argv of the version probe. |
 | `complete_args` | The argv of one completion, before the model and the prompt. |
-| `model_args` | The model flag, with `{model}` substituted. Required in effect: every entry names a `model`, so a merged profile with none is refused. |
+| `model_args` | The model flag, with `{model}` substituted. Required in effect: every entry names a `model`, so a merged profile with no element carrying `{model}` — none at all, or a flag with a fixed value — is refused. |
 | `prompt_mode` | How the prompt travels: `stdin` (default), `argv` or `file`. |
 | `system_prompt_args` | The flag carrying the system prompt, with `{file}` (preferred) or `{system}`. Empty leaves it in the transcript. |
 | `system_prompt_env` | A variable naming a file the CLI reads its system prompt from; exclusive with `system_prompt_args`. |
@@ -1317,8 +1317,8 @@ being *applied* that breaks one is applied and warned about, because the
 entry still runs (signed in by whatever the CLI does read) and refusing it
 there would take a node off the fleet's configuration during a rolling
 upgrade. A profile that cannot drive its CLI at all — an override typo, a
-missing `binary`, no `model_args` — is different: no node can build it, so it
-is refused at apply too.
+missing `binary`, no `model_args` carrying `{model}` — is different: no
+node can build it, so it is refused at apply too.
 
 **A profile's `passthrough_env` may not name a
 [credential](#5-a-provider-key-in-clienv-hermes-pi-opencode)** — an admission
