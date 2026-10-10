@@ -88,7 +88,7 @@ import {
   UnitTypeField,
   placeOnFields,
 } from "./dialogParts.tsx";
-import { NodeGlyph, type NodeGlyphKind } from "./nodeMarks.tsx";
+import { NodeGlyph, type NodeGlyphKind } from "~/ui/orgNodes.tsx";
 import { declaredHandle, type Segment } from "./model/document.ts";
 import { allSeats, allUnits, locate, type DraftSeat, type DraftUnit } from "./model/draft.ts";
 import { getPath, isRecord, jsonEqual } from "./model/json.ts";

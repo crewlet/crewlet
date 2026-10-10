@@ -23,7 +23,7 @@ import type { AgentRow, SandboxEntry } from "~/protocol/index.ts";
 import type { BuilderApi } from "./BuilderContext.tsx";
 import type { SeatView } from "./chartModel.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
-import { LiveState, seatKindLabel, unitTypeLabel } from "./nodeMarks.tsx";
+import { LiveState } from "./nodeMarks.tsx";
 
 afterEach(cleanup);
 
@@ -160,24 +160,5 @@ describe("a seat's live state", () => {
     const slot = container.querySelector(".bnode-state");
     expect(slot).not.toBeNull();
     expect(slot!.textContent).toBe("working");
-  });
-});
-
-describe("what a node is called", () => {
-  test("a seat says which of the two kinds it is", () => {
-    expect(seatKindLabel({ kind: "agent" })).toBe("Agent seat");
-    expect(seatKindLabel({ kind: "human" })).toBe("Human seat");
-  });
-
-  /*
-   * A UNIT'S TYPE IS THE FOUNDER'S OWN WORD, capitalised in ONE place: written
-   * out on both surfaces it drifted, and one draft read "Team" on the card and
-   * "team" on the row beside it.
-   */
-  test("a unit's type is the founder's word, capitalised, or Unit for none", () => {
-    expect(unitTypeLabel({ unitType: "team" })).toBe("Team");
-    expect(unitTypeLabel({ unitType: "Guild" })).toBe("Guild");
-    expect(unitTypeLabel({ unitType: "  " })).toBe("Unit");
-    expect(unitTypeLabel({ unitType: "" })).toBe("Unit");
   });
 });

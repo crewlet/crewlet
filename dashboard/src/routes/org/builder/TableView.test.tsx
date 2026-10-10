@@ -32,7 +32,7 @@ import { Tag } from "@crewlethq/ui";
 import { fixtureCompany } from "./model/testkit.ts";
 import { checkedEdit } from "./testState.ts";
 import { TableView } from "./TableView.tsx";
-import { NodeGlyph } from "./nodeMarks.tsx";
+import { NodeGlyph } from "~/ui/orgNodes.tsx";
 import { builderSpies, BuilderHarness, harnessProbe } from "./viewTestkit.tsx";
 import { render } from "@testing-library/react";
 

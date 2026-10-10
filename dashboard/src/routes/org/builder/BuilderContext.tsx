@@ -82,11 +82,13 @@ export function keepsTheLens(to: Route): boolean {
 }
 
 /**
- * Which chart the canvas draws. The Builder owns the `chart` section param
- * (its toolbar is where it is chosen), so the canvas is HANDED the answer
- * rather than reading the URL a second time, where the two could disagree.
+ * Which chart the canvas draws, one of the two arrangements both charts of a
+ * company share (`ui/orgNodes.tsx`). The Builder owns the `chart` section
+ * param (its toolbar is where it is chosen), so the canvas is HANDED the
+ * answer rather than reading the URL a second time, where the two could
+ * disagree.
  */
-export type ChartKind = "structure" | "reporting";
+export type { ChartKind } from "~/ui/orgNodes.tsx";
 
 /** The engine's derivation of the current draft, with its lists always present. */
 export interface BuilderDerived {

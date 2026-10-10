@@ -50,17 +50,14 @@ import type { NodeKey } from "./model/keys.ts";
 import { addSections, isDeletable, leadLabel, rowMenu, type OpenScreen } from "./nodeActions.tsx";
 import {
   LiveState,
-  NodeGlyph,
   nodeTone,
-  seatMark,
   SeatMarks,
   UnitMarks,
   handleLabel,
   managerLabel,
   nodeGlyphKind,
-  seatKindLabel,
-  unitTypeLabel,
 } from "./nodeMarks.tsx";
+import { NodeGlyph, seatKindLabel, seatMark, unitTypeLabel } from "~/ui/orgNodes.tsx";
 import { addLabel } from "./AddNodeDialog.tsx";
 import { useReorder, type Reorder } from "./reorder.ts";
 import { useOpenScreen, useStructure } from "./useCharts.ts";
