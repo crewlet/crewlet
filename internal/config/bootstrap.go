@@ -1,7 +1,10 @@
 package config
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -1126,6 +1129,55 @@ func (b *Bootstrap) Profile(id string) placement.NodeProfile {
 	return placement.NodeProfile{
 		ID: id, Roles: roles, Labels: labels, Broker: b.BrokerKind(),
 	}
+}
+
+// ServesAPI reports whether this node serves the keyed API: the dashboard,
+// the REST surface and the socket, judged by `api.auth`. It takes the ingress
+// role AND a bound api.port — a node without the role serves its probes and
+// its seats' tool bridge on the port and admits nobody by a key, and port 0
+// binds nothing at all.
+//
+// THE ONE READING, for the process that decides what to mount on its listener
+// and for the fingerprint its peers compare ([Bootstrap.AuthDigest]): a node
+// that published a table it does not serve would raise a divergence over keys
+// nobody can present to it, and one that served a table it did not publish
+// would be the escalation path the comparison exists to find.
+func (b *Bootstrap) ServesAPI() bool {
+	return b.API.Port != 0 && b.Profile("").RunsIngress()
+}
+
+// AuthDigestDomain is what a node's key-table fingerprint is a fingerprint OF
+// ([secrets.Keyring.Fingerprint]). The version is the input's shape: a build
+// that changes what [APIAuth]'s digest covers names a new one, and publishes
+// under a new presence key, because a changed input compared against this one
+// reads as two different tables.
+const AuthDigestDomain = "api-auth/v1"
+
+// AuthDigest is this node's key table as its peers compare it — see
+// [placement.AuthDigest] — or the zero digest on a node that serves no API.
+//
+// UNDER THE TIER A KEYRING, which every node of a fleet shares. A node serving
+// the API with no keyring publishes that it serves and nothing to compare: the
+// documented cost of running without one, rather than an unkeyed hash of
+// credentials on a record every peer can read.
+//
+// The id is the node's resolved id, as [Bootstrap.Profile] takes it.
+func (b *Bootstrap) AuthDigest(id string) (placement.AuthDigest, error) {
+	if !b.ServesAPI() {
+		return placement.AuthDigest{}, nil
+	}
+	ring, enabled, err := b.Secrets.Keyring()
+	if err != nil {
+		return placement.AuthDigest{}, err
+	}
+	out := placement.AuthDigest{Serves: true}
+	if !enabled {
+		return out, nil
+	}
+	if out.Keys, err = ring.Fingerprint(AuthDigestDomain, b.API.Auth.digestInput()); err != nil {
+		return placement.AuthDigest{}, fmt.Errorf("node %s: fingerprint api.auth: %w", id, err)
+	}
+	return out, nil
 }
 
 // BrokerKind is how this node's broker takes part in the fleet's, derived from
@@ -2415,6 +2467,57 @@ func (a *APIAuth) MayWriteCompany(id string) bool {
 	return !a.CompanyManaged() || slices.Contains(a.CompanyWriters, id)
 }
 
+// digestInput is everything in this block that decides what a caller reaches,
+// in one canonical form, for the fingerprint a node's peers compare
+// ([Bootstrap.AuthDigest]).
+//
+// # What it covers
+//
+// Every key's id, its role and a SHA-256 of its VALUE: without the value, a
+// member's key pasted under the id an admin's carries elsewhere would digest
+// identically on both nodes and reach admin through one of them — exactly the
+// divergence this exists to find. `disabled`, because a node with the guard
+// off serves every caller as an admin. `anonymous`, what a caller with no key
+// reaches. And `company_writers`, because a managed document whose writers
+// differ between nodes is one an admin key may change through one node and not
+// the next.
+//
+// Not `allowed_origins`: it decides which pages a browser lets read an answer,
+// and no caller reaches more through a node because of it.
+//
+// CANONICAL: keys sorted by id and writers sorted, because neither list's
+// order means anything and two nodes listing one table in two orders hold the
+// same table.
+func (a *APIAuth) digestInput() []byte {
+	type key struct {
+		ID    string    `json:"id"`
+		Role  TokenRole `json:"role"`
+		Value string    `json:"value_sha256"`
+	}
+	keys := make([]key, 0, len(a.Tokens))
+	for _, t := range a.Tokens {
+		sum := sha256.Sum256([]byte(t.Token))
+		keys = append(keys, key{ID: t.ID, Role: t.Role, Value: hex.EncodeToString(sum[:])})
+	}
+	slices.SortFunc(keys, func(x, y key) int { return strings.Compare(x.ID, y.ID) })
+	writers := slices.Sorted(slices.Values(a.CompanyWriters))
+	if writers == nil {
+		writers = []string{}
+	}
+	input, err := json.Marshal(struct {
+		Disabled       bool            `json:"disabled"`
+		Anonymous      AnonymousAccess `json:"anonymous"`
+		Keys           []key           `json:"keys"`
+		CompanyWriters []string        `json:"company_writers"`
+	}{a.Disabled, a.Anonymous, keys, writers})
+	if err != nil {
+		// Strings, a bool and slices of them: there is nothing here the
+		// encoder can refuse.
+		panic(fmt.Sprintf("config: encode api.auth's digest input: %v", err))
+	}
+	return input
+}
+
 // APIToken is one accepted key: the label every write it makes is recorded
 // under, the role it grants, and its value.
 type APIToken struct {
@@ -2766,8 +2869,24 @@ func (s *Secrets) Enabled() bool { return len(s.Keys) > 0 }
 // document before decoding, because the values it carries are needed the
 // instant the process starts.
 func (s *Secrets) Cipher() (secrets.Cipher, error) {
+	ring, enabled, err := s.Keyring()
+	if err != nil || !enabled {
+		return nil, err
+	}
+	return secrets.NewCipher(ring)
+}
+
+// Keyring is the keyring this Tier A configures, decoded, and false when
+// secret encryption is disabled.
+//
+// THE ONE DECODING of the material, for the cipher that seals with it and for
+// the fingerprints a node publishes under it ([Bootstrap.AuthDigest]): two
+// decodings are two chances to disagree about which bytes a key is, and a node
+// whose fingerprint was taken under one reading and whose envelopes were
+// sealed under another would compare with nobody.
+func (s *Secrets) Keyring() (secrets.Keyring, bool, error) {
 	if !s.Enabled() {
-		return nil, nil
+		return secrets.Keyring{}, false, nil
 	}
 	ring := secrets.Keyring{
 		ActiveID: s.ActiveKeyID,
@@ -2780,12 +2899,15 @@ func (s *Secrets) Cipher() (secrets.Cipher, error) {
 			// path is the element's own material field: `keys` is a list, so
 			// a path naming the id as if it were a map key pointed at nothing
 			// in the file.
-			return nil, fault(at(idx(field("secrets.keys"), i), "material"), ErrShape,
+			return secrets.Keyring{}, false, fault(at(idx(field("secrets.keys"), i), "material"), ErrShape,
 				"key %q: key material must be base64 (generate one with `crewlet secrets keygen`)", key.ID)
 		}
 		ring.Keys[key.ID] = material
 	}
-	return secrets.NewCipher(ring)
+	if err := ring.Validate(); err != nil {
+		return secrets.Keyring{}, false, err
+	}
+	return ring, true, nil
 }
 
 // validateSync checks stream.sync, and its four refusals are the cases where

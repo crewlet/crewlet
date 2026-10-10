@@ -160,6 +160,11 @@ type retention struct {
 	// reads as nothing to report.
 	objects func(now time.Time, out *statelog.Reading)
 
+	// auth fills the `auth_diverged` input: the live nodes serving the API
+	// grouped by the key table they hold, where two groups disagree. Nil on
+	// an engine with no fleet to compare, which reads as nothing to report.
+	auth func(out *statelog.Reading)
+
 	// seats is the running company's agent-seat count, which the census a
 	// log's read rate is held against scales with
 	// ([statelog.Census]). READ AT EVERY EVALUATION, because a
@@ -233,6 +238,7 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		coverage:    e.vectorCoverage,
 		index:       e.indexReading,
 		objects:     e.objectsReading,
+		auth:        e.authReading,
 		seats:       func() int { return seatCount(e.Company()) },
 		background:  e.backgroundBarriers,
 		pooled:      map[string]poolCounters{},

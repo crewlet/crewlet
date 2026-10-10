@@ -159,6 +159,11 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			statelog.Reading{ObjectsMissing: 2},
 			"2 file(s) are missing from the object store or damaged in it",
 		},
+		"two live nodes judging keys by different tables": {
+			statelog.KindAuthDiverged,
+			statelog.Reading{AuthDiverged: [][]string{{"core-1", "core-3"}, {"core-2"}}},
+			"2 different tables: {core-1, core-3} against {core-2}",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := statelog.Evaluate(tc.reading)

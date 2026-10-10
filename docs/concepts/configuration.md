@@ -806,6 +806,41 @@ refused for reaching less logs `api_reach_refused` at INFO with `token_id`,
 
 See the [API endpoints reference](../reference/api-endpoints.md#config--live-config-management-admin) for the per-route reach and status semantics.
 
+### Every node that serves the API holds the same keys
+
+`api.auth` is Tier A, and Tier A is per node: each node serving the API judges
+a request by its own file. Two that disagree are a way to reach more through
+one of them — a key that is a member's on one node and an admin's on the next
+reads every agent's transcript through whichever node a load balancer picks.
+So give every node that serves the API — the `ingress` role on a bound
+`api.port` — the same keys under the same ids, each with the same role and
+value, and the same `anonymous`, `disabled` and `company_writers`. A node that
+serves no API is not compared: nothing reaches the company through it, and
+keeping keys off the nodes that need none is a posture you are free to choose.
+
+The fleet checks this for you. Each node serving the API publishes a
+**fingerprint** of its table on its presence lease: an HMAC, under a key
+derived from the Tier A keyring every node already shares, over every key's id,
+role and a SHA-256 of its value, and the `anonymous`, `disabled` and
+`company_writers` posture. It covers the value, so a member's key pasted under
+the id an admin's carries elsewhere is caught; it is keyed, so it says nothing
+about any key to somebody without the keyring; and it is taken under every
+keyring key, so a [keyring rotation](secret-store.md#operational-notes) never
+leaves two nodes with nothing to compare. `allowed_origins` is not part of it:
+it decides which pages a browser lets read an answer, and no caller reaches more
+through a node because of it.
+
+While two live nodes disagree, the [`auth_diverged`](../reference/alarms.md)
+alarm fires, naming which nodes hold which table. A node counts while its
+presence lease is live and stops counting when it lapses, so a node that has
+gone stops holding the alarm up within one lease TTL. It is an **alarm and not
+a refusal**: a rolling key rotation passes through exactly this state — each
+node is restarted with the new table while its peers still hold the old one —
+and a node that refused to serve beside a peer with another table would make
+every rotation an outage. A node serving the API **with no keyring** has
+nothing to key a fingerprint with, so it publishes none and cannot be compared,
+and the alarm does not fire on it.
+
 ### Managed configuration
 
 Some deployments do not edit the company document by hand at all: a GitOps

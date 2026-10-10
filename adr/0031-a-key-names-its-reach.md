@@ -83,4 +83,8 @@ decide which admin keys may change a managed company document — that is
 not decide what a tool permits once a caller reaches it; every authority rule
 is the tool's. And it does not make Tier A agree across a fleet: keys and their
 roles are per node, like the rest of `api.auth`, and every node serving the API
-should carry the same ones.
+should carry the same ones. What the fleet does is NOTICE when they do not —
+each such node publishes a keyed fingerprint of its table on its presence, and
+`auth_diverged` fires while two live ones disagree — as an alarm rather than a
+refusal, because a rolling key rotation passes through that state by
+construction.

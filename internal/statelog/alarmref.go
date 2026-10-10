@@ -93,6 +93,16 @@ var alarmMeaning = map[Kind]string{
 		"and some were not there, or were there at the wrong size or under the " +
 		"wrong digest. Those files cannot be downloaded or read until they are " +
 		"restored.",
+	KindAuthDiverged: "Two live nodes that serve the API judge keys by different " +
+		"tables — a key, its role or its value, or what a caller with no key " +
+		"reaches, differs between their Tier A files — so a request can reach " +
+		"more through one node than through another. A node is compared while " +
+		"its presence lease is live and stops counting when the lease lapses. It " +
+		"is an alarm and not a refusal: a rolling key rotation passes through " +
+		"this state by construction, and a node that refused to serve beside a " +
+		"peer with another table would make every rotation an outage. A node " +
+		"with no keyring cannot be compared, which Settings › Nodes says rather " +
+		"than this alarm.",
 }
 
 const alarmHeader = `# Alarms

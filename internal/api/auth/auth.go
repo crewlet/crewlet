@@ -27,6 +27,25 @@
 // The guard is mounted UNCONDITIONALLY. Tier A supplies the POSTURE, never the
 // existence of a check: with no keys at all, no candidate can match, so every
 // caller is anonymous and is served what the anonymous posture opens.
+//
+// # Every node holds its own table
+//
+// Tier A is per node, so the guard on each node judges a request by that
+// node's `api.auth`, and with roles a node whose table differs is a way to
+// reach more: a key that is a member's on one node and an admin's on the next
+// reads every agent's transcript through whichever node a load balancer picks.
+// So each node serving the API publishes a fingerprint of its table on its
+// presence — every key's id, role and value, and the anonymous, disabled and
+// company_writers posture, under the Tier A keyring every node shares
+// (config.Bootstrap.AuthDigest) — and the `auth_diverged` alarm fires while
+// two live nodes disagree.
+//
+// AN ALARM AND NOT A REFUSAL. A rolling key rotation passes through divergence
+// by construction — each node restarts with the new table while its peers hold
+// the old one — so a guard that refused to serve beside a peer with another
+// table would make every rotation an outage, and a fleet could change a key
+// only by stopping all of it. It is the posture the configuration rollout
+// already takes: each node says what it holds, and lag alone never sheds.
 package auth
 
 import (
