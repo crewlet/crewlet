@@ -113,14 +113,21 @@ linters:
       # here: a helper whose parameter takes one value today is a helper
       # the next case widens.
       #
-      # THE LIST IS EVERY DIRECTORY MATCHING `internal/**/*test/`, and it
-      # was six of nine. `statelogtest` and `integrationtest` are named in
-      # CLAUDE.md as being in this exact idiom, and `jetstreamtest` starts
-      # a real embedded cluster for the same reason the others exist —
-      # they were simply never added. A rule the config states and applies
-      # to two thirds of its subject is one the next author cannot tell
-      # from a deliberate exception.
-      - path: (a2atest|coordtest|storetest|queuetest|jetstreamtest|scheduletest|sandboxtest|statelogtest|integrationtest)/
+      # THE RULE IS A PATTERN, NOT A LIST: every directory whose name ends
+      # in `test` is a harness in this tree's idiom (a2atest, coordtest,
+      # objstoretest, statelogtest, ...), so the pattern is the rule
+      # itself. It was a list twice, and short both times — six of nine,
+      # and then, once `statelogtest`, `integrationtest` and
+      # `jetstreamtest` had been added, nine of thirteen, missing
+      # `eventfantest`, `httpxtest`, `objstoretest` and `procgrouptest`.
+      # A rule the config states and applies to part of its subject is one
+      # the next author cannot tell from a deliberate exception, and a new
+      # harness should not have to remember to be named here.
+      #
+      # The cost is that a package named `*test` that is NOT a harness
+      # would be excused from these three linters too: name one that way
+      # and this has to become a list again.
+      - path: (^|/)[a-z0-9]+test/
         linters: [unparam, errcheck, gocritic]
 
       # A test's own HTTP call has no caller to cancel it and no connection
