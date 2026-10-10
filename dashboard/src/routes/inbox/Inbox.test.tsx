@@ -444,6 +444,68 @@ describe("the unread count", () => {
   });
 });
 
+// THE BADGE'S FIGURE IS SAID HERE TOO, under its own words and from the
+// frame's one reading. Unread counts every notice it lists; the badge counts
+// only what waits on the reader; and with only the first on this screen the
+// badge said 2 over "Unread 3" and nothing told the two apart.
+describe("what waits on you", () => {
+  /** The frame's question, `primary_only`, and the screen's, answered apart. */
+  const twoQuestions =
+    (waiting: unknown[], unread: unknown[], waitingMore = false) =>
+    (p: Record<string, unknown>) =>
+      Promise.resolve(
+        p.primary_only
+          ? inboxOf(waiting, waitingMore ? { next_cursor: "c-w" } : {})
+          : inboxOf(unread, { next_cursor: "c-u" }),
+      );
+  const primary = (id: string) => notice(id, { reason: "mention", primary: true });
+
+  test("is the frame's reading beside the scope, whatever this page holds", async () => {
+    // A PAGE FULL OF NOTICES THAT MERELY INFORMED: counted from this page's
+    // own primary rows the figure would be none at all.
+    mount({
+      answers: {
+        work_inbox: twoQuestions(
+          [primary("r-7"), primary("r-8")],
+          [notice("r-1"), notice("r-2"), notice("r-3")],
+        ),
+      },
+    });
+    await settle();
+    const head = document.querySelector(".inbox-list-head") as HTMLElement;
+    const unread = within(head).getByRole("radio", { name: /Unread/ });
+    expect(unread.querySelector(".count-chip")?.textContent).toBe("3+");
+    const line = within(head).getByText("2 notices waiting on you");
+    expect(line.getAttribute("title")).toContain("Inbox badge");
+    // ASKED ONCE, by the frame: the screen never asks the badge's question.
+    expect(asked.filter((a) => a.kind === "work_inbox" && a.params.primary_only)).toHaveLength(1);
+    // A FACT ABOUT ALL THREE SCOPES, so it stays when the scope moves.
+    fireEvent.click(within(head).getByRole("radio", { name: /All/ }));
+    await settle();
+    expect(within(head).getByText("2 notices waiting on you")).toBeTruthy();
+  });
+
+  test("one is a notice, and a floor is plural", async () => {
+    mount({ answers: { work_inbox: twoQuestions([primary("r-7")], [notice("r-1")]) } });
+    await settle();
+    expect(screen.getByText("1 notice waiting on you")).toBeTruthy();
+    cleanup();
+    mount({ answers: { work_inbox: twoQuestions([primary("r-7")], [notice("r-1")], true) } });
+    await settle();
+    const line = screen.getByText("1+ notices waiting on you");
+    expect(line.getAttribute("title")).toContain("more lie past them");
+  });
+
+  // NOTHING WAITING IS NO FIGURE, here as in the sidebar: a zero is a mark a
+  // reader checks, and Unread already says what there is to read.
+  test("nothing waiting draws no line, whatever Unread holds", async () => {
+    mount({ answers: { work_inbox: twoQuestions([], [notice("r-1"), notice("r-2")]) } });
+    await settle();
+    expect(screen.getByRole("radio", { name: /Unread/ }).textContent).toContain("2");
+    expect(screen.queryByText(/notices? waiting on you/)).toBeNull();
+  });
+});
+
 describe("the pane", () => {
   test("an option answers the ask's own comment with that choice, and nothing else", async () => {
     location.hash = "#/inbox?row=ask%3Ac-12";

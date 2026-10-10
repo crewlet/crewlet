@@ -66,7 +66,7 @@ import { routeProject } from "../palette/hits.ts";
 import { useOpenNewTask } from "../newTask.ts";
 import { useStarred } from "~/lib/starred.ts";
 import { capsOf, keyRow, useKeymap } from "../keymap.ts";
-import { inboxFigure, useInboxCounts } from "~/lib/useInboxCounts.ts";
+import { inboxFigure, useInboxCounts, waitingWords } from "~/lib/useInboxCounts.ts";
 import { useOwnQueueCount } from "~/lib/useQueueCount.ts";
 import { HealthCard, healthReading } from "./HealthCard.tsx";
 import { RailBoundary } from "../boundaries.tsx";
@@ -125,7 +125,9 @@ export function Sidebar({
   const figures: Partial<Record<WorkspaceRow["key"], Pick<NavRowProps, "badge" | "count">>> = {
     inbox:
       inbox.waiting !== null && inbox.waiting > 0
-        ? { badge: { value: inboxFigure(inbox), label: "unread, waiting on you" } }
+        ? // THE FIGURE'S ONE NAME, which the Inbox's own line says too: never
+          // "unread", which on that screen is every unread notice it lists.
+          { badge: { value: inboxFigure(inbox), label: waitingWords(inbox) } }
         : {},
     // NOTHING ON YOU IS NO FIGURE, as nothing waiting is no badge: a zero
     // beside the row is a mark a reader checks, and it would be there for

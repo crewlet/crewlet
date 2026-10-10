@@ -20,7 +20,7 @@ import { plainText } from "~/lib/markdown.ts";
 import { ENGINE_SENTENCES, authorOf, nameAuthor } from "~/lib/work.ts";
 import { fmtDateTime, humanize } from "~/lib/format.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
-import { INBOX_PAGE } from "~/lib/useInboxCounts.ts";
+import { INBOX_PAGE, inboxFigure, waitingWords, type InboxCounts } from "~/lib/useInboxCounts.ts";
 import { CHIPS, rowPill, type Chip, type DayGroup, type InboxRow, type Scope } from "./model.ts";
 import type { WorkInboxNotice } from "~/protocol/index.ts";
 
@@ -31,6 +31,16 @@ import type { WorkInboxNotice } from "~/protocol/index.ts";
  * the decisions, a page of their own — and either may be the one that stopped.
  */
 export const PAGE_LOCAL_CHIPS = "Counted over what this page loaded — more lie past it.";
+
+/**
+ * What the two figures in the list head count, each as its own title — they
+ * are two numbers on one line, and each says what it is not as well as what it
+ * is, so a reader who hovers one learns why the other differs.
+ */
+const UNREAD_IS =
+  "Every notice you have not read yet: what waits on you and what you were only told.";
+const WAITING_IS =
+  "The unread notices under the reasons your record counts as yours to act on, such as a mention, a question or work assigned to you. The sidebar's Inbox badge is this figure; the rest of Unread is what you were only told.";
 
 /** Who a row is about, as its badge and its first words draw it. */
 export interface Who {
@@ -184,6 +194,7 @@ export function NoticeList({
   scope,
   onScope,
   unread,
+  waiting,
   chip,
   onChip,
   counts,
@@ -205,6 +216,9 @@ export function NoticeList({
   onScope: (scope: Scope) => void;
   /** Unread notices on the loaded page, for the Unread option; null when unknown. */
   unread: { count: number; floor: boolean } | null;
+  /** The notices waiting on the reader — the FRAME's reading, the badge's
+   *  figure — said beside the scope under the badge's own words. */
+  waiting: InboxCounts;
   chip: Chip;
   onChip: (chip: Chip) => void;
   counts: Record<Chip, number>;
@@ -257,8 +271,8 @@ export function NoticeList({
               value: "unread",
               label: "Unread",
               title: unread?.floor
-                ? `What you have not read yet. The engine answers ${INBOX_PAGE} at a time, and more lie past this page.`
-                : "What you have not read yet.",
+                ? `${UNREAD_IS} The engine answers ${INBOX_PAGE} at a time, and more lie past this page.`
+                : UNREAD_IS,
               ...(unread ? { count: unread.count, capped: unread.floor } : {}),
             },
             { value: "all", label: "All", title: "Everything that reached you, read or not." },
@@ -269,6 +283,26 @@ export function NoticeList({
             },
           ]}
         />
+        {/* THE BADGE'S FIGURE, UNDER THE BADGE'S WORDS. Unread counts every
+            notice it lists and the badge only those waiting on the reader, so
+            without this the screen the badge opens said "Unread 12" under a
+            badge saying 3 and nothing told the two apart. Beside the group
+            rather than in an option, because it IS a fact about all three:
+            what waits on you does not change with the scope you read it in.
+            Drawn where the badge is drawn and nowhere else — nothing waiting
+            is no figure, here as in the sidebar. */}
+        {waiting.waiting !== null && waiting.waiting > 0 && (
+          <span
+            className="t-caption inbox-waiting"
+            title={
+              waiting.capped
+                ? `${WAITING_IS} The engine counts ${INBOX_PAGE} at a time, and more lie past them.`
+                : WAITING_IS
+            }
+          >
+            {`${inboxFigure(waiting)} ${waitingWords(waiting)}`}
+          </span>
+        )}
       </div>
       <div className="inbox-chips">
         {/* A PAGE IS A PAGE: the chip counts are over the rows LOADED. Where

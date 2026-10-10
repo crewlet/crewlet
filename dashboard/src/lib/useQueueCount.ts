@@ -10,9 +10,9 @@
  * tell which figure was wrong, because none of them was. So the figure a
  * person meets first — the sidebar's — is the Queue's, and it is ASKED ONCE,
  * by the frame ([QueueCountProvider], which `app/Shell.tsx` mounts): the two
- * surfaces read one answer, the way the Inbox badge and the Inbox's own count
- * do (`useInboxCounts.ts`), rather than polling on two clocks and naming two
- * numbers for most of a minute after a change.
+ * surfaces read one answer, the way the Inbox badge and the line the Inbox
+ * draws beside its scope do (`useInboxCounts.ts`), rather than polling on two
+ * clocks and naming two numbers for most of a minute after a change.
  *
  * # What is counted
  *

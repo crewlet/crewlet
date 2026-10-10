@@ -215,7 +215,14 @@ function answering(
         },
       );
     }
-    return Promise.resolve(answers[what] ?? EMPTY[what] ?? {});
+    const answer = answers[what] ?? EMPTY[what] ?? {};
+    // A FUNCTION ANSWERS BY THE PARAMETERS, for a case whose screen and frame
+    // put two different questions to one query.
+    return Promise.resolve(
+      typeof answer === "function"
+        ? (answer as (params?: Record<string, unknown>) => unknown)(params)
+        : answer,
+    );
   };
   return { store, socket };
 }
@@ -658,23 +665,69 @@ describe("the sidebar's figures", () => {
   });
 
   // AND WHAT IS WAITING ON THEM IS ONE READING, whichever surfaces say it.
-  // The badge, Home's status line and the Inbox's own band each asked for
-  // their own count on their own minute, so on Home and the Inbox the badge
-  // and the sentence beside it came from two reads and could disagree; and
-  // Home asked who the viewer is a second time besides.
+  // Home asked who the viewer is a second time, and a screen that asks the
+  // badge's question for itself polls it on its own minute, so the badge and
+  // the figure beside it come from two reads and disagree for most of one.
+  // The Inbox asks a question of its own — its Unread list, every unread
+  // notice — which is not this one, and is not counted here.
   test.each([
     ["Home", "#/home", <Home key="home" />],
     ["the Inbox", "#/inbox", <Inbox key="inbox" />],
-  ])("%s in the frame reads the frame's count and the frame's viewer", async (_, hash, child) => {
+  ])(
+    "%s in the frame asks again neither who the viewer is nor what waits on them",
+    async (_, hash, child) => {
+      const asked: { what: string; params?: Record<string, unknown> }[] = [];
+      location.hash = hash;
+      const { store, socket } = answering(
+        { work_workload: { rows: [] }, sandbox_runs: { runs: [] } },
+        asked,
+      );
+      mountShell(store, socket, child);
+      await settle();
+      expect(asked.filter((a) => a.what === "viewer")).toHaveLength(1);
+      expect(
+        asked.filter((a) => a.what === "work_inbox" && a.params?.primary_only === true),
+      ).toHaveLength(1);
+    },
+  );
+
+  // TWO FIGURES ON THE INBOX, AND NEVER ONE NAME FOR BOTH. Unread lists every
+  // unread notice and the badge counts only those waiting on the reader, so
+  // the screen the badge opens said "Unread 3+" under a badge saying 2 with
+  // nothing to tell the two apart. The screen says the badge's figure as well,
+  // from the frame's one reading and in the badge's own words — and the page
+  // here is full of notices that merely informed, which is exactly where a
+  // count of the page's own primary notices would have said nothing at all.
+  test("on the Inbox the badge's figure is said again, in the badge's words", async () => {
     const asked: { what: string; params?: Record<string, unknown> }[] = [];
-    location.hash = hash;
+    location.hash = "#/inbox";
+    const informed = (n: number) => ({ ...notice("watcher", n), primary: false });
     const { store, socket } = answering(
-      { work_workload: { rows: [] }, sandbox_runs: { runs: [] } },
+      {
+        work_workload: { rows: [] },
+        sandbox_runs: { runs: [] },
+        work_inbox: (params?: Record<string, unknown>) =>
+          params?.primary_only
+            ? {
+                handle: "ada",
+                notices: [notice("mention", 7), notice("assignee", 8)],
+                primary_reasons: [],
+              }
+            : {
+                handle: "ada",
+                notices: [informed(1), informed(2), informed(3)],
+                primary_reasons: [],
+                next_cursor: "c-3",
+              },
+      },
       asked,
     );
-    mountShell(store, socket, child);
+    mountShell(store, socket, <Inbox key="inbox" />);
     await settle();
-    expect(asked.filter((a) => a.what === "viewer")).toHaveLength(1);
+    const badge = screen.getByRole("link", { name: /^Inbox.*2 notices waiting on you/ });
+    expect(badge.textContent).toContain("2");
+    expect(screen.getByRole("radio", { name: /Unread/ }).textContent).toContain("3+");
+    expect(screen.getByText("2 notices waiting on you")).toBeTruthy();
     expect(
       asked.filter((a) => a.what === "work_inbox" && a.params?.primary_only === true),
     ).toHaveLength(1);

@@ -2,13 +2,15 @@
  * How many notices are waiting on the viewer — ONE reading, for every surface
  * that says it.
  *
- * The sidebar's Inbox badge, Home's status line and the Inbox's own Notices
- * band all say how much is waiting, and a read per surface was a chance per
- * surface to disagree: each polled on its own minute, so on the Inbox the
- * badge and the band could name two numbers for most of a minute. So the
- * question is asked ONCE, by the frame ([InboxCountsProvider], which
- * `app/Shell.tsx` mounts), and every surface reads that one answer
- * ([useInboxCounts]).
+ * Three surfaces say how much is waiting on the viewer: the sidebar's Inbox
+ * badge, the line the Inbox draws beside its own scope control, and the
+ * Waiting tile on the viewer's own profile ([useInboxCountsOf]). A read per
+ * surface was a chance per surface to disagree — each polled on its own
+ * minute, so the badge and the screen beside it could name two numbers for
+ * most of a minute. So the question is asked ONCE, by the frame
+ * ([InboxCountsProvider], which `app/Shell.tsx` mounts), every surface reads
+ * that one answer ([useInboxCounts]), and every one calls it by one name
+ * ([waitingWords]).
  *
  * # What is counted, and why it is not `unread`
  *
@@ -33,6 +35,19 @@
  * ONE PAGE, and `capped` says so: past [INBOX_PAGE] the engine hands back a
  * cursor, the count is a floor and is written as one ("50+"), never as a total
  * the engine did not compute.
+ *
+ * # The other figure, under the other name
+ *
+ * The Inbox's Unread option counts something else, and has to: it lists EVERY
+ * unread notice — what waits on you and what you were only told — so its count
+ * is that list's, from the screen's own read (`unread` alone), and a count
+ * that was not the option's own rows would misstate the option it sits in. It
+ * used to be the only figure on that screen, so the badge said 3 and the
+ * screen it opened said "Unread 12" with nothing to tell the two apart, while
+ * the profile's tile called THIS reading "Unread" as well. Now "Unread" is only
+ * ever that list's count and this reading is only ever "notices waiting on
+ * you" — said on the Inbox too, so the screen the badge opens names the
+ * badge's number under the badge's name.
  */
 
 import { createContext, createElement, useContext, useMemo, type ReactNode } from "react";
@@ -118,4 +133,21 @@ export function useInboxCountsOf(handle: string, enabled: boolean): InboxCounts 
 export function inboxFigure(counts: InboxCounts): string {
   if (counts.waiting === null) return "";
   return counts.capped ? `${counts.waiting}+` : String(counts.waiting);
+}
+
+/**
+ * What the figure is CALLED, read after it wherever it is said: the badge's
+ * words ("Inbox, 3 notices waiting on you"), the Inbox's line beside its scope
+ * and a profile's Waiting tile. Written ONCE, because the bug the section
+ * above describes was a name — "Unread" for two different counts — and a
+ * phrase each surface spells for itself is how the next one starts calling
+ * the figure something else.
+ *
+ * "Notices", never a bare "waiting on you": on the Inbox the line sits above
+ * "Needs a decision", where a bare figure reads as a count of decisions, which
+ * this is not. A floor is plural ("1+ notices").
+ */
+export function waitingWords(counts: InboxCounts, who: "you" | "them" = "you"): string {
+  const one = counts.waiting === 1 && !counts.capped;
+  return `${one ? "notice" : "notices"} waiting on ${who}`;
 }

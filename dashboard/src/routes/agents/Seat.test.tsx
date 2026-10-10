@@ -1183,10 +1183,13 @@ const inboxPage = (n: number, more: boolean) => ({
   ...(more ? { next_cursor: "c1" } : {}),
 });
 
-// THE INBOX'S OWN COUNT, NEVER THE RECORD'S `unread`. That list holds the
+// THE BADGE'S COUNT, NEVER THE RECORD'S `unread`. That list holds the
 // EXCEPTIONS below the read mark — notices marked unread again — so a person
-// with fifty waiting read "Unread 0" beside a sidebar badge saying 50+.
-test("your own day's Unread is the sidebar badge's count, and the day is yours", async () => {
+// with fifty waiting read "Unread 0" beside a sidebar badge saying 50+. AND
+// UNDER THE BADGE'S WORDS: "Unread" on the Inbox is every unread notice, a
+// larger number, so the tile called this figure "Unread" too named two counts
+// with one word.
+test("your own day's Waiting is the sidebar badge's count, and the day is yours", async () => {
   storeToken("t");
   mount("#/agents/seats/jane", {
     shell: true,
@@ -1196,11 +1199,15 @@ test("your own day's Unread is the sidebar badge's count, and the day is yours",
       work_person: { handle: "jane", unread: [], version: 1, held: true, complete: true },
     },
   });
-  await waitFor(() => expect(tile("Unread").textContent).toContain("50+"));
-  // THE SIDEBAR'S INBOX ROW, which carries the same figure as its badge.
+  await waitFor(() => expect(tile("Waiting").textContent).toContain("50+"));
+  // THE SIDEBAR'S INBOX ROW, which carries the same figure as its badge —
+  // and the same words, so the two read as one fact.
   const nav = document.querySelector(".crewlet-sidebar-nav") as HTMLElement;
   const row = within(nav).getByRole("link", { name: /Inbox/ });
   expect(row.textContent).toContain("50+");
+  expect(within(nav).getByRole("link", { name: /notices waiting on you/ })).toBe(row);
+  expect(tile("Waiting").textContent).toContain("notices waiting on you");
+  expect(screen.queryByText("Unread")).toBeNull();
   // ONE READING: the frame's, never a second read of the same inbox.
   expect(askedFor("work_inbox")).toHaveLength(1);
   expect(screen.getByText("Your day")).toBeTruthy();
@@ -1219,10 +1226,10 @@ test("an operator reading a colleague's day asks that colleague's inbox", async 
       work_person: { handle: "jane", unread: [], version: 1, held: true, complete: true },
     },
   });
-  await waitFor(() => expect(tile("Unread").textContent).toContain("7"));
+  await waitFor(() => expect(tile("Waiting").textContent).toContain("7"));
   expect(askedFor("work_inbox").map((a) => a.params.handle)).toContain("jane");
   expect(screen.getByText("Their day")).toBeTruthy();
-  expect(tile("Unread").textContent).toContain("waiting on them");
+  expect(tile("Waiting").textContent).toContain("notices waiting on them");
 });
 
 /** The chart with SWE's charter replaced. */

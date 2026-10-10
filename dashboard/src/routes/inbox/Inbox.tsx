@@ -29,6 +29,18 @@
  * design draws it; the chips narrow the rows loaded, and where the page is not
  * every row each chip says its count is the page's.
  *
+ * # Two figures, two names
+ *
+ * Unread lists every unread notice, so its count is every unread notice —
+ * what waits on the person and what they were only told. The sidebar's badge
+ * counts the first half alone (`lib/useInboxCounts.ts` says why), so this
+ * screen used to open on "Unread 12" under a badge saying 3, with nothing to
+ * say which was right. Both are: the badge's figure is drawn here too, beside
+ * the scope, under the badge's own words and from the FRAME's reading — never
+ * a second read of it, and never a count of this page's primary notices, which
+ * is a different number whenever the page fills with notices that merely
+ * informed.
+ *
  * # Every mark is a gesture, made as you
  *
  * Done, Snooze and "Mark all read" each name exactly what they mark
@@ -59,7 +71,7 @@ import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { conditionsToDecide, watchedIn } from "~/lib/attention.ts";
 import { useAttention } from "~/lib/useAttention.ts";
-import { INBOX_PAGE } from "~/lib/useInboxCounts.ts";
+import { INBOX_PAGE, useInboxCounts } from "~/lib/useInboxCounts.ts";
 import { NoticeList } from "./NoticeList.tsx";
 import { DecisionPane } from "./DecisionPane.tsx";
 import {
@@ -123,6 +135,9 @@ export function Inbox() {
     enabled: bound,
   });
   const attention = useAttention();
+  // THE BADGE'S FIGURE, read where the badge reads it — the frame — and never
+  // asked again here: see "Two figures, two names" above.
+  const waiting = useInboxCounts();
 
   const rows = useMemo(
     () =>
@@ -217,6 +232,7 @@ export function Inbox() {
             scope={scope}
             onScope={(next) => setScope(next)}
             unread={unreadOnPage}
+            waiting={waiting}
             chip={chip}
             onChip={(next) => setChip(next)}
             counts={counts}
