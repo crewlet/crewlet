@@ -267,7 +267,7 @@ GET /query/integrations
 
 The **findings list travels as well as the report**, because the two answer different questions. The report says what to do next; the findings say what is actually wrong. A company with a broken webhook and four under-granted seats reports the webhook, and an operator who fixes it should not have to wait a full pass to discover there were four more things behind it.
 
-`phase_label` is the same phase in the words a person reads, derived **once, in the engine**, so a client never has to know what a phase value means. **The words are the control plane's**, so one company reads the same status whichever console it is looking at: backlet's `ReconcilePhase` is this vocabulary under another name, and these are the labels its console renders.
+`phase_label` is the same phase in the words a person reads, derived **once, in the engine**, so a client never has to know what a phase value means. **The words are decided here, once**, so one company reads the same status on every screen that shows it: the dashboard renders these labels, and any other client renders them too rather than mapping the phases itself.
 
 | Phase | Label |
 |---|---|
@@ -281,9 +281,9 @@ The **findings list travels as well as the report**, because the two answer diff
 
 `unconfigured` reads as **Failed** rather than "not connected" because this phase is only ever reached with a block present: an absent one is `ErrNotConfigured`, and the row is forgotten rather than reported. So what it names is an integration somebody configured whose credential is missing or the third-party app refused, and "not connected" would read as nobody having tried. A phase a newer node wrote is rendered as its own value with the underscores opened up, never guessed at.
 
-One of backlet's phases has no counterpart here, and it is not an omission:
+There is no `disconnected` phase, and it is not an omission:
 
-- `disconnected` is a tenant who has not connected an integration yet. Here that is a company document with no block, so there is no row and no phase. The screen shows **no status badge at all**, only a Connect button. A tool nobody has configured has nothing to report.
+- An integration nobody has connected yet is a company document with no block, so there is no row and no phase. The screen shows **no status badge at all**, only a Connect button. A tool nobody has configured has nothing to report.
 
 `disconnecting` is a phase this engine does have, and it sorts **first**, so it wins a tool row's tag over every other surface: disconnect asks the third-party app to remove what the engine registered there before the block leaves the document, so a surface sits in `disconnecting` for as long as that takes and reports it if it fails. Nothing about a surface that is going away is worth reporting over the fact that it is going away.
 
