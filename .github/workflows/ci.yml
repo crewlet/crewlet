@@ -576,12 +576,12 @@ jobs:
       - *go-caches
       - *gomod-restore
       - *gobuild-restore
-      # `latest` is deliberate, and it is one of the five floating versions
+      # `latest` is deliberate, and it is one of the four floating versions
       # in this repository: the others are the `node-version: latest` in the
       # `dashboard` and `end-to-end gates` jobs above and in
-      # dependabot-dashboard.yml's `build` job, and goreleaser's `~> v2` in
-      # release.yml, each held that way for its own reason stated at its own
-      # line.
+      # dependabot-dashboard.yml's `build` job, each held that way for its
+      # own reason stated at its own line. (goreleaser does NOT float, though
+      # it has this linter's problem: release.yml says why at its pin.)
       #
       # Here the reason is that Dependabot bumps the ACTION ref
       # (`golangci-lint-action@v9`) and never a `with:` input, so a pinned

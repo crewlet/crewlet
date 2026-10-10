@@ -556,7 +556,7 @@ a comment at the pin, as the Compose stack's Postgres image already does.
 The configuration is [`.github/dependabot.yml`](.github/dependabot.yml): one
 entry per surface on a weekly schedule, plus the commit prefix that surface's
 bumps carry, plus three grouping rules on the npm entry. CI runs on each pull
-request, and — as below — CI is what decides whether it lands. Eight things are
+request, and — as below — CI is what decides whether it lands. Nine things are
 worth knowing:
 
 - **The React family is grouped.** `react`, `react-dom`, `@types/react` and
@@ -633,6 +633,15 @@ worth knowing:
   trailing comment (`@<sha> # v7.2.3`) that Dependabot rewrites with the pin:
   it holds the registry, the Releases and the signing identity, and a version
   tag is a ref its owner can move under it.
+- **One pin nothing watches: goreleaser itself.** Every goreleaser step in
+  `.github/workflows/release.yml` asks for an exact goreleaser
+  (`version: v2.18.3`), and Dependabot bumps the action's ref but never a
+  `with:` input. It is exact anyway, because a range would download whatever
+  goreleaser released last into the job that publishes and signs, with
+  nobody reviewing it. So move it by hand: take the newest release from
+  [goreleaser's releases](https://github.com/goreleaser/goreleaser/releases),
+  change every step together, and rehearse with `make snapshot` on that
+  version.
 
 Adding a new dependency surface — a second `package.json`, a second module — means
 adding its `updates:` entry in the same change. Nothing reports the omission:

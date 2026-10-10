@@ -95,22 +95,26 @@ jobs:
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      # goreleaser ITSELF floats within its major, for the reason ci.yml
-      # floats golangci-lint: Dependabot bumps the action's ref and never a
-      # `with:` input, so an exact goreleaser here would be a version nothing
-      # watches. Every goreleaser step in this file asks for the same range,
-      # so the snapshot never rehearses with a different major than the tag
-      # publishes with; the cost is that a re-run can build with a newer minor.
+      # goreleaser ITSELF IS PINNED EXACTLY, in every goreleaser step, and
+      # the same version in each, so the snapshot rehearses with the build
+      # that publishes. Not a range like `~> v2`: the action downloads the
+      # newest release in it on every run and checks it only against the
+      # checksums file of that same release, so a new goreleaser — broken or
+      # compromised — would run here unreviewed, in the job holding the
+      # Releases, the registry and the signing identity. The cost is that
+      # Dependabot never bumps a `with:` input, so this pin is moved by hand
+      # (CONTRIBUTING.md says how): take the newest v2 release from
+      # goreleaser's own releases.
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
-          version: "~> v2"
+          version: v2.18.3
           # `check` first so a config error is reported as a config error
           # rather than as whatever the build does with a bad field.
           args: check
 
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
-          version: "~> v2"
+          version: v2.18.3
           args: release --snapshot --clean --skip=sign
 
       - name: Prove the built binary reports the stamped version
@@ -216,12 +220,12 @@ jobs:
 
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
-          version: "~> v2"
+          version: v2.18.3
           args: check
 
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
-          version: "~> v2"
+          version: v2.18.3
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
