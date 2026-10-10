@@ -18,10 +18,9 @@
  *  - AN ADDRESS NAMING NO MODE RUNS IN ONE THE ENGINE SERVES. With no
  *    embeddings provider that is Keyword, and the search waits for the probe
  *    to say so rather than running Hybrid and reporting its degradation.
- *  - WHO FILES HERE HAS FIVE STATES, and "needs an admin key" is said only to
- *    a browser that holds none — never to an admin whose read of the company
- *    document is merely in flight, nor to a member, whose key is not the
- *    problem.
+ *  - WHO FILES HERE IS THE ENGINE'S ANSWER ON THE CONTAINER, read by every
+ *    reader of it — a member included — and never the company document,
+ *    which is an admin's.
  *  - A PHRASE PAST THE ENGINE'S SEARCH BOUND IS NOT ASKED, and the screen says
  *    why where the results would be.
  */
@@ -185,14 +184,16 @@ test("a search that did not run says why, with the remedy its reason names", asy
 });
 
 test("the copy never claims there is no local copy", async () => {
-  mount(ran, [{ key: "ENG", name: "Engineering", pages: 3 }]);
+  mount(ran, [{ key: "ENG", name: "Engineering", pages: 3, owners: [] }]);
   await waitFor(() => expect(screen.getByText("Provisioner runbook")).toBeTruthy());
   expect(document.body.textContent).not.toMatch(/no local copy|no staleness window/i);
   expect(screen.getByText(/this node’s own copy of the pages/)).toBeTruthy();
 
   cleanup();
   location.hash = "#/knowledge";
-  mount({ ...ran, hits: [], served_mode: "" }, [{ key: "ENG", name: "Engineering", pages: 3 }]);
+  mount({ ...ran, hits: [], served_mode: "" }, [
+    { key: "ENG", name: "Engineering", pages: 3, owners: [] },
+  ]);
   await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
   expect(document.body.textContent).not.toMatch(/no local copy|no staleness window/i);
 });
@@ -200,8 +201,8 @@ test("the copy never claims there is no local copy", async () => {
 test("the home lists every space with its page count", async () => {
   location.hash = "#/knowledge";
   mount({ ...ran, hits: [], served_mode: "" }, [
-    { key: "ENG", name: "Engineering", pages: 412, purpose: "How the platform runs" },
-    { key: "PROD", name: "Product", pages: 0 },
+    { key: "ENG", name: "Engineering", pages: 412, purpose: "How the platform runs", owners: [] },
+    { key: "PROD", name: "Product", pages: 0, owners: [] },
   ]);
   await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
   expect(screen.getByText("412 pages")).toBeTruthy();
@@ -227,16 +228,10 @@ function pageRow(n: number) {
 }
 
 /**
- * Render the container rail; `config` undefined leaves that read in flight,
- * and `viewer` undefined leaves the viewer unread, so the stored key decides.
+ * Render the container rail; `owners` are the units the engine says file into
+ * it, none when unnamed.
  */
-function mountPeek(options: {
-  rows: number;
-  total: number;
-  after?: string;
-  config?: unknown;
-  viewer?: unknown;
-}) {
+function mountPeek(options: { rows: number; total: number; after?: string; owners?: unknown[] }) {
   const store = new Store();
   const socket = new LiveSocket(store);
   const asked: { what: string; params: Record<string, unknown> }[] = [];
@@ -244,7 +239,9 @@ function mountPeek(options: {
     asked.push({ what, params });
     if (what === "containers")
       return Promise.resolve({
-        containers: [{ key: "ENG", name: "Engineering", pages: options.total }],
+        containers: [
+          { key: "ENG", name: "Engineering", pages: options.total, owners: options.owners ?? [] },
+        ],
       });
     if (what === "pages")
       return Promise.resolve({
@@ -253,10 +250,6 @@ function mountPeek(options: {
         total: options.total,
         after: options.after,
       });
-    if (what === "config")
-      return options.config === undefined ? new Promise(() => {}) : Promise.resolve(options.config);
-    if (what === "viewer")
-      return options.viewer === undefined ? new Promise(() => {}) : Promise.resolve(options.viewer);
     return Promise.resolve({});
   }) as typeof socket.query;
   render(
@@ -294,40 +287,31 @@ test("a container read whole says nothing about a window", async () => {
   expect(screen.getByText("creators, not editors")).toBeTruthy();
 });
 
-test("who files here: no key is told so, and a key whose read is in flight is not", async () => {
-  mountPeek({ rows: 1, total: 1 });
-  await waitFor(() =>
-    expect(screen.getByText("Who files here needs an admin key to read")).toBeTruthy(),
-  );
-
-  cleanup();
-  localStorage.setItem("crewlet_api_token", "tok");
-  mountPeek({ rows: 1, total: 1 });
-  await waitFor(() => expect(screen.getByText("Who files here is still being read")).toBeTruthy());
-  expect(screen.queryByText(/needs an admin key/)).toBeNull();
-
-  // A MEMBER'S KEY: the document is an admin's, so the sentence says who it
-  // is for rather than waiting on a read the engine refuses.
-  cleanup();
-  mountPeek({
+// WHO FILES HERE IS THE ENGINE'S ANSWER ON THE CONTAINER, so a member reads it
+// as an admin does — no company document asked for, and no sentence about a
+// key — and a container no unit names says so.
+test("who files here is the container's own answer, read by any reader", async () => {
+  const asked = mountPeek({
     rows: 1,
     total: 1,
-    viewer: { token_id: "ada", role: "member", reach: "member", linked: true },
-  });
-  await waitFor(() =>
-    expect(screen.getByText("Who files here is for admins to read")).toBeTruthy(),
-  );
-  expect(screen.queryByText(/needs an admin key|still being read/)).toBeNull();
-
-  cleanup();
-  mountPeek({
-    rows: 1,
-    total: 1,
-    config: { units: [{ name: "Engineering", space: "eng", project: "ENG" }] },
+    owners: [
+      {
+        unit: { key: "eng", name: "Engineering", resolved: true },
+        lead: { handle: "jane", kind: "human" },
+        project: "ENG",
+      },
+    ],
   });
   // THE TITLE AND THE FACT: the unit that files here, named.
   await waitFor(() => expect(screen.getAllByText("Engineering").length).toBe(2));
-  expect(screen.queryByText(/Who files here/)).toBeNull();
+  expect(screen.queryByText(/admin|token/)).toBeNull();
+  expect(asked.some((a) => a.what === "config")).toBe(false);
+
+  cleanup();
+  mountPeek({ rows: 1, total: 1 });
+  await waitFor(() =>
+    expect(screen.getByText("No unit names this container in its space:")).toBeTruthy(),
+  );
 });
 
 test("an address naming no mode runs in a mode the engine serves, never a degraded default", async () => {

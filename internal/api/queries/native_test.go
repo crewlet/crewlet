@@ -225,11 +225,12 @@ func (s *stubWork) Task(_ context.Context, _ string, want tracker.DetailWants,
 }
 
 type stubPages struct {
-	filter pages.Filter
-	list   []pages.Summary
-	total  int
-	after  string
-	err    error
+	containers []pages.ContainerListing
+	filter     pages.Filter
+	list       []pages.Summary
+	total      int
+	after      string
+	err        error
 
 	// level is what the surface asked for, so a route that stopped naming
 	// one is visible: an unset level is what made every page read on this
@@ -274,7 +275,7 @@ func (s *stubPages) Containers(_ context.Context,
 	fresh statelog.Freshness,
 ) ([]pages.ContainerListing, error) {
 	s.level, s.fresh = fresh.Level, fresh
-	return nil, s.err
+	return s.containers, s.err
 }
 
 func (s *stubPages) Activity(_ context.Context, q pages.PageActivityQuery) (

@@ -165,7 +165,7 @@ function mount(children: ReactNode, answers: Record<string, Answer>) {
       viewer: JANE,
       work_inbox: { handle: "jane", notices: [], primary_reasons: [], unread: 0, primary: 0 },
       decisions: { handle: "jane", items: [], total: 0, capped: false },
-      containers: { containers: [{ key: "ENG", name: "Engineering", pages: 3 }] },
+      containers: { containers: [{ key: "ENG", name: "Engineering", pages: 3, owners: [] }] },
       page_activity: { changes: [] },
       ...answers,
     };

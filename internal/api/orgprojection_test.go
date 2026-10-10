@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,6 +19,8 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // The org projection is READABLE WITHOUT A KEY, and served to three reaches, so
@@ -36,6 +39,10 @@ const (
 	// named by `into`, which carries the labels the value decides (a
 	// provider key, a server name) and never the value's own contents.
 	exposureResolved
+	// exposureMember: not in the anonymous projection, and served to a
+	// MEMBER key (ADR-0031) by the question named by `into`, which resolves
+	// it against the chart beside the thing it is about.
+	exposureMember
 )
 
 // classified is one field's decision and the reason for it. The reason is
@@ -48,7 +55,9 @@ type classified struct {
 	// published for its people, admin for how it is run.
 	reach auth.Reach
 	why   string
-	// into is the api.OrgSeat wire field a resolved value reaches.
+	// into is where a value the projection does not carry does reach a
+	// reader: the api.OrgSeat wire field a resolved value reaches, or the
+	// member question that serves a member value.
 	into string
 }
 
@@ -88,19 +97,27 @@ var projectionOnly = map[string]classified{
 
 // A tracker project and a knowledge space are the decision here that is not
 // about credentials: `project` and `space` hold neither a secret nor a ${VAR},
-// and both are guarded anyway. A project key or a space key names a
-// THIRD-PARTY CONTAINER, so handing one to an anonymous reader says where this
-// company files its work and writes its pages, and what to go looking at. It
-// is the reasoning internal/api/setupapi's package doc records for guarding
-// even its reads: what a company has wired up, and to what, is a map of what
-// to attack. They are read with the rest of the integration picture instead,
-// through the admin `config` and `integrations` answers.
+// and neither reaches an anonymous reader anyway. A project key or a space key
+// names a THIRD-PARTY CONTAINER, so handing one to a stranger says where this
+// company files its work and writes its pages, and what to go looking at — the
+// reasoning internal/api/setupapi's package doc records for guarding even its
+// reads. A UNIT's are a member's (ADR-0031), because a teammate cannot read the
+// company's work without knowing which team a project or a space is:
+// `work_projects` serves each project's unit, and `containers` each space's
+// units and their projects, both resolved against the running chart. A SEAT's
+// stay guarded: where one person files is not structure a colleague needs.
 
 func servedAt(reach auth.Reach, why string) classified {
 	return classified{exposure: exposureCarried, reach: reach, why: why}
 }
 
 func withheld(why string) classified { return classified{exposure: exposureGuarded, why: why} }
+
+// servedBy is a field the projection does not carry and a MEMBER question does,
+// resolved against the chart beside the thing it is about.
+func servedBy(question, why string) classified {
+	return classified{exposure: exposureMember, reach: auth.ReachMember, why: why, into: question}
+}
 
 func resolvedInto(into, why string) classified {
 	return classified{exposure: exposureResolved, reach: auth.ReachAdmin, why: why, into: into}
@@ -149,8 +166,8 @@ var unitFields = map[string]classified{
 	"Channel":   servedAt(auth.ReachMember, "where the unit talks, which a colleague needs and a stranger does not"),
 	"Knowledge": servedAt(auth.ReachMember, "free-text references for the unit's people, not a read scope"),
 	"MCPEnv":    withheld("tool credentials inherited by members"),
-	"Project":   withheld("a tracker project key: the container this unit's work is filed in"),
-	"Space":     withheld("a knowledge container key: where this unit's pages are written"),
+	"Project":   servedBy("work_projects", "a tracker project key: the container this unit's work is filed in"),
+	"Space":     servedBy("containers", "a knowledge container key: where this unit's pages are written"),
 	"Roles":     servedAt(auth.ReachPublic, "the tree itself"),
 	"Children":  servedAt(auth.ReachPublic, "the tree itself"),
 	"Schedules": withheld("configured work, not structure; /schedules is the surface that describes it"),
@@ -207,6 +224,30 @@ type projectionPair struct {
 	extra      map[string]classified
 }
 
+// noPages is a knowledge base that holds nothing: what registers the page
+// questions, for a test that reads their reach and asks none of them.
+type noPages struct{}
+
+func (noPages) List(context.Context, pages.Filter, statelog.Freshness) (pages.Listing, error) {
+	return pages.Listing{}, nil
+}
+
+func (noPages) Get(context.Context, string, statelog.Freshness) (pages.Detail, error) {
+	return pages.Detail{}, nil
+}
+
+func (noPages) Containers(context.Context, statelog.Freshness) ([]pages.ContainerListing, error) {
+	return nil, nil
+}
+
+func (noPages) Activity(context.Context, pages.PageActivityQuery) (pages.PageActivity, error) {
+	return pages.PageActivity{}, nil
+}
+
+func (noPages) Revision(context.Context, string, int, statelog.Freshness) (pages.Revision, bool, error) {
+	return pages.Revision{}, false, nil
+}
+
 // EVERY AUTHORED FIELD HAS A DECISION, the carried ones are exactly what the
 // projection carries, and every projected field is served at the reach its
 // decision names.
@@ -233,13 +274,22 @@ func TestEveryOrgFieldIsClassified(t *testing.T) {
 	// table: a seat's chain is resolved from its own llm fields AND the
 	// company's provider keys.
 	resolvedInto := map[string]classified{}
+	// THE QUESTIONS AS REGISTERED, so a member field names a question a
+	// member key is actually served — not a name somebody typed.
+	questions := queries.NewRegistry()
+	queries.Register(questions, queries.Sources{Work: stubWorkReader{}, Pages: noPages{}})
 	for _, table := range []map[string]classified{companyFields, roleFields, unitFields} {
 		for name, decision := range table {
 			switch {
 			case decision.exposure == exposureResolved && !seatWire[decision.into]:
 				t.Errorf("%s is resolved into %q, which api.OrgSeat does not carry", name, decision.into)
-			case decision.exposure != exposureResolved && decision.into != "":
-				t.Errorf("%s names a field it is resolved into but is not classified resolved", name)
+			case decision.exposure == exposureMember &&
+				questions.ReachOf(decision.into) != auth.ReachMember:
+				t.Errorf("%s is said to be served to members by %q, which is registered at %q",
+					name, decision.into, questions.ReachOf(decision.into))
+			case decision.exposure != exposureResolved && decision.exposure != exposureMember &&
+				decision.into != "":
+				t.Errorf("%s names where it is served but is classified %d", name, decision.exposure)
 			case decision.exposure == exposureResolved:
 				if prior, ok := resolvedInto[decision.into]; ok && prior.reach != decision.reach {
 					t.Errorf("%q is resolved from fields served at %s and %s; one field has one reach",
