@@ -34,9 +34,11 @@ its signature.
 
 **The tag is the version.** Nothing in the tree records one, so there is nothing
 for a tag to disagree with and no version bump to make. goreleaser stamps the
-tag into `internal/version.value` at link time; a binary built any other way
-(`go install`, a local `go build`) reports its module build info instead, so it
-names itself honestly rather than claiming to be a release.
+tag into `internal/version.value` at link time — the tag itself, `v` included,
+so `crewlet version` from the release, `go install …@v0.2.0`, the image tag
+`v0.2.0` and the Go module version all read the same string. A binary built any
+other way (`go install`, a local `go build`) reports its module build info
+instead, so it names itself honestly rather than claiming to be a release.
 
 That single source of truth is the one thing this pipeline improves on the
 package-index one it replaced, and it costs something in exchange: a mistyped
@@ -132,7 +134,7 @@ checksummed.
    ```
 
 6. **Watch the run.** When it is green the archives, checksums and signature
-   are on the Release, `ghcr.io/crewlet/crewlet:0.2.0` is pullable, and there
+   are on the Release, `ghcr.io/crewlet/crewlet:v0.2.0` is pullable, and there
    is nothing to publish by hand.
 
 ---
@@ -160,10 +162,12 @@ manifest without pushing it, so `dockers_v2` builds and pushes in one step and
 runs in goreleaser's **publish** phase. `--skip=publish` therefore skips the
 image build entirely and leaves the `Dockerfile` untested — which is why both
 the CI job and `make snapshot` skip only signing. A snapshot pushes nothing
-regardless: it builds each
-architecture locally under its own suffixed tag
-(`ghcr.io/crewlet/crewlet:0.2.1-SNAPSHOT-amd64` and `-arm64`), so there is no
-`latest` and no manifest to find afterwards.
+regardless: it loads each architecture into the local Docker under its own
+suffixed tags — `ghcr.io/crewlet/crewlet:v0.2.0-SNAPSHOT-<commit>-amd64` and
+`-arm64` after a `v0.2.0` tag, the version every binary of the build reports
+too, and `latest-amd64` and `latest-arm64` beside them — so nothing reaches the
+registry and there is no multi-platform manifest to find afterwards. (A
+shallow clone has no tag to start from and builds `v0.0.0-SNAPSHOT-…`.)
 
 Building the `linux/arm64` image on an amd64 machine needs binfmt registered
 (`docker run --privileged --rm tonistiigi/binfmt --install all`), or the arm64
@@ -209,7 +213,12 @@ release pipeline does when it runs:
   `dev` is what this used to do, and since Go 1.24 an unstamped build in a
   repository reports a tag-derived pseudo-version instead, so a stamp that
   applied to nothing shipped green. The publish job also checks that the tag
-  goreleaser built is the ref the run was triggered by.
+  goreleaser built is the ref the run was triggered by. Only the **snapshot**
+  comparison can fail on a stamp that applies to nothing: a release builds at
+  its tagged commit, where the module version an unstamped binary falls back to
+  is the tag itself, so the publish job's check proves the published binary
+  names its tag but not that the `-X` flag put it there. Keep the snapshot
+  job's paths covering `internal/version/**` for that reason.
 
 ### What nothing guards — check these by hand
 
@@ -307,7 +316,7 @@ doing the thing, or starts doing more — so read the file when you touch it:
 | **archives** (`crewlet_X.Y.Z_<os>_<arch>.tar.gz`) | one `crewlet` binary, `LICENSE`, `README.md`, `THIRD_PARTY_NOTICES.txt` (the license and notice files of the Go toolchain and every Go module the binary links, written by `scripts/notices` in goreleaser's before hook) and `dashboard/THIRD_PARTY_NOTICES.txt` (the embedded dashboard's bundled packages, fonts and icon paths, from the committed bundle). Four of them: linux and darwin × amd64 and arm64. **No Windows**, and **no musl**; see below |
 | **`checksums.txt`** | SHA-256 over every archive |
 | **`checksums.txt.sigstore.json`** | the keyless cosign signature, its certificate and its Rekor entry, as one Sigstore bundle |
-| **`ghcr.io/crewlet/crewlet:X.Y.Z`** | a multi-arch image (linux/amd64, linux/arm64), also `:latest` on a stable tag. `LICENSE` and both notices files are under `/usr/share/doc/crewlet/` |
+| **`ghcr.io/crewlet/crewlet:vX.Y.Z`** | a multi-arch image (linux/amd64, linux/arm64), tagged with the release tag itself, also `:latest` on a stable tag. `LICENSE` and both notices files are under `/usr/share/doc/crewlet/` |
 
 The binary is self-contained: the dashboard's assets are embedded, the store is
 a file it creates, and the event stream is an embedded NATS JetStream server.

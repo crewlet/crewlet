@@ -1,7 +1,9 @@
 // Package version is the one place the engine's version lives.
 //
 // The value is stamped at build time by the release tooling
-// (-ldflags "-X github.com/crewlet/crewlet/internal/version.value=v1.2.3").
+// (-ldflags "-X github.com/crewlet/crewlet/internal/version.value=v1.2.3"):
+// the release's tag itself, `v` included, so it reads exactly as the Go module
+// version of that tag does, and as the image tag the release publishes.
 // A build with no stamp reports the module's own build info, so a
 // `go install`ed binary still names itself honestly instead of claiming to be
 // a release it is not.

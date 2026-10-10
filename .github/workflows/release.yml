@@ -126,9 +126,21 @@ jobs:
         # v0.0.0-20260829195106-ce2beccb7330, which contains no "dev" — so a
         # stamp that applied to nothing shipped green. `dev` is only ever
         # reachable when debug.ReadBuildInfo fails outright.
+        #
+        # goreleaser records .version without its `v`, and the stamp is
+        # `v` + .version (.goreleaser.yaml), so the expected string is built
+        # the same way here.
+        #
+        # THIS IS THE CHECK THAT CAN SEE A DEAD STAMP, and the publish job's
+        # cannot. A release builds at a commit that carries its tag, so the
+        # build info an unstamped binary falls back to is that same tag, and
+        # its comparison passes either way — it proves the published binary
+        # names its tag, not how. Here the snapshot's version
+        # (v0.2.0-SNAPSHOT-<commit>) is never what Go derives from the
+        # repository, so a stamp that applied to nothing fails.
         run: |
           set -euo pipefail
-          built="$(jq -er .version dist/metadata.json)"
+          built="v$(jq -er .version dist/metadata.json)"
           reported="$(./dist/crewlet_linux_amd64_v1/crewlet --version | awk '{print $2}')"
           echo "goreleaser built ${built}; the binary reports ${reported}"
           if [ "${reported}" != "${built}" ]; then
@@ -218,19 +230,28 @@ jobs:
         # this is the artifact people download, and a wrong version on it is
         # permanent.
         #
-        # One assertion more than the snapshot makes, because here there is a
-        # tag to be wrong about: goreleaser's recorded tag must be the ref
-        # this run was triggered by. Comparing the raw tags rather than
-        # stripping a "v" off .Version keeps the check on what was actually
-        # pushed.
+        # Two assertions more than the snapshot makes, because here there is
+        # a tag to be wrong about: goreleaser's recorded tag must be the ref
+        # this run was triggered by, and the version it stamps must be that
+        # tag exactly, `v` included — the version a release reports IS its
+        # tag.
+        #
+        # What this cannot see is HOW the binary came to report it: an
+        # unstamped build falls back to its module version, which at a
+        # tagged commit is the same tag. The snapshot job's comparison is the
+        # one that catches a stamp that applies to nothing.
         run: |
           set -euo pipefail
-          built="$(jq -er .version dist/metadata.json)"
+          built="v$(jq -er .version dist/metadata.json)"
           tag="$(jq -er .tag dist/metadata.json)"
           reported="$(./dist/crewlet_linux_amd64_v1/crewlet --version | awk '{print $2}')"
           echo "tag ${tag}; goreleaser built ${built}; the binary reports ${reported}"
           if [ "${tag}" != "${GITHUB_REF_NAME}" ]; then
             echo "::error::goreleaser built ${tag}, but this run was triggered by ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+          if [ "${built}" != "${tag}" ]; then
+            echo "::error::goreleaser stamps ${built}, which is not the tag ${tag} it built"
             exit 1
           fi
           if [ "${reported}" != "${built}" ]; then

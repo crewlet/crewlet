@@ -93,7 +93,14 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
-      - -X github.com/crewlet/crewlet/internal/version.value={{ .Version }}
+      # `v` + .Version, which is the TAG ITSELF: goreleaser's .Version is the
+      # tag with its `v` stripped. So `crewlet version` from a release prints
+      # exactly what `go install …@v0.2.0` prints, the name the image is
+      # tagged with and the Go module version a deployment pins — one
+      # spelling of one version everywhere. Not `.Tag`: in snapshot mode that
+      # is the PREVIOUS tag, and a rehearsal would stamp an old release's
+      # name into a build that is not it.
+      - -X github.com/crewlet/crewlet/internal/version.value=v{{ .Version }}
     # Pinned to the commit's own timestamp rather than the build's, for the
     # same reason as -trimpath: a rebuild of a tag must be verifiable
     # against the artifact that shipped.
@@ -218,7 +225,10 @@ dockers_v2:
       - linux/amd64
       - linux/arm64
     tags:
-      - "{{ .Version }}"
+      # The version as the binary inside reports it, `v` included (see the
+      # ldflags above), so the tag a deployment pulls and the version the
+      # engine it runs prints are the same string.
+      - "v{{ .Version }}"
       # `latest` follows STABLE releases only. A pre-release that took it
       # would hand `docker pull crewlet` to every operator who pinned
       # nothing, which is the container equivalent of a pre-release becoming
@@ -234,7 +244,7 @@ dockers_v2:
       - static/dashboard/THIRD_PARTY_NOTICES.txt
     labels:
       org.opencontainers.image.title: "{{ .ProjectName }}"
-      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.version: "v{{ .Version }}"
       org.opencontainers.image.revision: "{{ .FullCommit }}"
       org.opencontainers.image.created: "{{ .Date }}"
       org.opencontainers.image.source: "https://github.com/crewlet/crewlet"
