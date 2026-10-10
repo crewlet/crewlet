@@ -200,6 +200,8 @@ Events are delivered via Forge Remote to `POST /webhooks/forge`. The Forge platf
 
 ### Confluence Data Center — Direct Webhook Registration
 
+The reconcile loop registers this hook itself at `integrations.public_base_url`. With **no** public base set there is no address to put in a hook, so the instance delivers nothing — and on Data Center that is reported as a `config_fault` naming `integrations.public_base_url`, owed by the company's admin, rather than as a ready integration with no hook anywhere. Cloud is exempt, because its events can arrive through the Forge app at an address this engine never registered.
+
 Data Center supports webhook registration via the admin UI or REST API:
 
 1. Go to **Administration** > **Further Configuration** > **Webhooks**

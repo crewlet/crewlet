@@ -95,6 +95,21 @@ type Result struct {
 	// permanent-fault posture [provision.ReadOnly] exists to remove, and
 	// the posture jira has had since it hit the same wall.
 	NoKeyring bool
+
+	// NoIngress says why this run left a DATA CENTER instance with no
+	// delivery path at all, and is empty when it had an address to register
+	// one against or when a registered hook is not how events arrive.
+	//
+	// A SEPARATE FIELD because an empty Hooks list means three unrelated
+	// things — the field jira.Result.NoIngress gives for the same shape — and
+	// only one is a problem. Without it a Data Center company that never set
+	// integrations.public_base_url saw Confluence reported Ready while the
+	// instance had nowhere to send anything: the pass said so in a note, and
+	// a note is not a finding.
+	//
+	// The zero value is "nothing to report", deliberately: a Result built
+	// anywhere but Reconcile must not invent an ingress problem.
+	NoIngress string
 }
 
 // Reconcile runs one pass.
@@ -178,6 +193,15 @@ func converge(ctx context.Context, opts Options, res *Result) error {
 			"no webhook was registered: set integrations.public_base_url or pass "+
 				"-public-url to register one. Without it the instance delivers "+
 				"nothing and the integration looks idle rather than unconfigured")
+		// DATA CENTER ONLY, on jira's reasoning: a Cloud site can deliver
+		// through the Forge app at an address this engine never registered,
+		// so no hook there is a working company rather than a gap. On Data
+		// Center the hook this pass registers IS how events arrive.
+		if res.Deployment != Cloud {
+			res.NoIngress = "integrations.public_base_url is unset, so this " +
+				"Confluence instance has no address to deliver to and no page " +
+				"or comment event reaches this deployment"
+		}
 		return nil
 	}
 	switch res.Deployment {
@@ -666,16 +690,28 @@ func detailOr(detail string) string {
 
 // Findings reads this run as the integration-neutral vocabulary.
 //
-// Only what a run that was ASKED to register can establish. A run with no
-// base registers nothing and reports nothing about ingress, for the reason
-// jira.Result.Findings states: an empty hook list is what a read-only pass
-// produces by construction, and reading it as "no webhook" would park every
-// company on a block nobody can clear.
+// An empty hook list is never read as "no webhook" on its own: it is what a
+// read-only pass produces by construction, and what a Cloud company
+// delivering through the Forge app has. What IS reported is [Result.NoIngress],
+// the one state of the three that is a problem. This used to say a run with
+// no base reports nothing about ingress "for the reason jira.Result.Findings
+// states" — which by then stated the opposite, and a Data Center company that
+// never set its public base read as Ready.
 func (r *Result) Findings() []integration.Finding {
 	if r == nil {
 		return nil
 	}
 	var out []integration.Finding
+
+	// NO ADDRESS TO DELIVER TO, on Data Center. This deployment's own
+	// field, so a config fault, the company admin's.
+	if r.NoIngress != "" {
+		out = append(out, integration.Finding{
+			Kind:    integration.FindingConfigFault,
+			Subject: "integrations.public_base_url",
+			Detail:  r.NoIngress,
+		})
+	}
 
 	// NOTHING TO AUTHENTICATE A DELIVERY WITH IS A CONFIG FAULT, said
 	// against the field that fixes it — and which field that is depends on
