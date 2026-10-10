@@ -326,6 +326,13 @@ opencode:
     - path: .config/opencode/opencode.json
       content: '{"$schema":"https://opencode.ai/config.json","permission":{"read":"deny","edit":"deny","glob":"deny","grep":"deny","bash":"deny","task":"deny","skill":"deny","lsp":"deny","question":"deny","external_directory":"deny","webfetch":"allow","websearch":"allow"}}'
   model_args: ["--model", "{model}"]
+  # `opencode run --model` takes `provider/model` and splits it at the FIRST
+  # slash (packages/opencode/src/cli/cmd/run.ts: `const [providerID,
+  # ...rest] = value.split("/")`), so `openrouter/anthropic/claude-sonnet-5`
+  # is the openrouter provider's `anthropic/claude-sonnet-5`, and a bare
+  # `claude-sonnet-5` is a provider with no model, which every call refuses
+  # with "Model not found: claude-sonnet-5/.". Config refuses that on a write.
+  model_names_provider: true
   prompt_mode: argv
   output: text
   credential_paths: [".local/share/opencode/auth.json"]

@@ -368,6 +368,19 @@ type Profile struct {
 	// flag's own element or after `=` in a joined `--model={model}`.
 	ModelArgs []string `yaml:"model_args,omitempty"`
 
+	// ModelNamesProvider declares that the CLI reads its model flag's value
+	// as `<provider>/<model>` and splits it at the FIRST slash, so a value
+	// with nothing before or after that slash names no model at all and
+	// every call fails inside the CLI. Config refuses such a `model` on a
+	// write, judged on the value the CLI is handed ([Profile.ModelArgument]).
+	//
+	// A DECLARATION OF A VENDOR FACT, measured per CLI and overridable like
+	// every other: a release that starts accepting a bare id is an override,
+	// not a Crewlet release. Only opencode's is measured — its `run --model`
+	// splits the value at the first slash and a bare id is "Model not
+	// found: <id>/." — so only opencode declares it.
+	ModelNamesProvider bool `yaml:"model_names_provider,omitempty"`
+
 	// PromptMode is stdin (the default), argv or file.
 	PromptMode PromptMode `yaml:"prompt_mode,omitempty"`
 

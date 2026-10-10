@@ -1119,7 +1119,7 @@ entirely.
 | `codex` | `codex` | ChatGPT Plus / Pro | `codex login`. Streams JSONL events; runs `--sandbox read-only`. |
 | `gemini-cli` | `gemini` | Google AI Pro / free tier | First run starts the auth picker. `GOOGLE_CLOUD_PROJECT` passes through. |
 | `qwen-code` | `qwen` | Qwen OAuth | Gemini CLI fork; same shape. |
-| `opencode` | `opencode` | Anthropic / Copilot / any | `opencode auth login`; the one built-in profile with a credential login. A provider key goes in `cli.env` under that provider's own variable, and `doctor` counts it — see [Signing in with a provider key](#5-a-provider-key-in-clienv-hermes-pi-opencode). |
+| `opencode` | `opencode` | Anthropic / Copilot / any | `opencode auth login`; the one built-in profile with a credential login. A provider key goes in `cli.env` under that provider's own variable, and `doctor` counts it — see [Signing in with a provider key](#5-a-provider-key-in-clienv-hermes-pi-opencode). `model` is `<provider>/<model>` (`anthropic/claude-sonnet-5`, `openrouter/anthropic/claude-sonnet-5`); a bare id is refused on a write. |
 | `cursor-agent` | `cursor-agent` | Cursor seat | `cursor-agent login`. A Cursor API key (`CURSOR_API_KEY`, its `api_key_env`) is the headless alternative, reached through `auth.mode: api-key`. |
 | `copilot` | `copilot` | GitHub Copilot seat | Prompt goes on argv, so very long transcripts are bounded by `ARG_MAX`. Authenticates with a GitHub token, so `GITHUB_TOKEN` is its `api_key_env` — reached via `auth.mode: api-key` or `inherit-env`, never forwarded silently. |
 | `grok` | `grok` | xAI | **xAI's own CLI** from [x.ai/cli](https://x.ai/cli), not the same-named npm package. Accepts `XAI_API_KEY` (the variable its own signed-out message names) through `auth.mode: api-key`. |
@@ -1247,6 +1247,7 @@ key by key; lists and single values replace wholesale.
 | `passthrough_env` | Engine variables forwarded to the child. Never a credential. |
 | `token_env` | The variable a headless subscription token goes in (`cli.auth.token`). |
 | `api_key_env` | The variable a metered key goes in (`api_keys` under `auth.mode: api-key`). |
+| `model_names_provider` | The CLI reads its model as `<provider>/<model>`, split at the first slash, so a `model` with nothing before or after that slash (as the CLI is handed it, through `model_args`) is refused on a write. Declared by `opencode` only — measured from its source; `hermes` and `pi` document a `provider/id` model but are not known to refuse a bare one. |
 | `env_sign_in` | The CLI reads its model provider's key from its own environment, so a [credential-named](#5-a-provider-key-in-clienv-hermes-pi-opencode) variable in `cli.env` signs it in. |
 | `credential_paths` | The login files, relative to the seat home. |
 | `volatile_paths` | Sessions, transcripts and history, deleted before and after every call. |
@@ -1272,7 +1273,8 @@ providers:
   llm:
     subscription:
       type: cli-agent
-      model: sonnet                    # passed to the CLI's --model
+      model: sonnet                    # passed to the CLI's --model, in its own grammar:
+                                       # opencode takes <provider>/<model>
       cli:
         agent: claude-code             # or codex | gemini-cli | opencode
                                        #    | muse-code | kimi-code
@@ -1350,6 +1352,26 @@ there would take a node off the fleet's configuration during a rolling
 upgrade. A profile that cannot drive its CLI at all — an override typo, a
 missing `binary`, no `model_args` carrying `{model}` — is different: no
 node can build it, so it is refused at apply too.
+
+**A model has to be one the CLI can read, or a write naming it is
+refused.** `opencode` reads its model as `<provider>/<model>` and splits it
+at the first slash, so a model with nothing before or after that slash —
+`claude-sonnet-5`, `anthropic/` — names no model at all, and every call the
+entry makes, an agent-mode run included, fails inside the CLI with its own
+"Model not found". Name the provider as the CLI spells it:
+`anthropic/claude-sonnet-5`, `openrouter/anthropic/claude-sonnet-5`
+(`opencode models` lists them). It is judged on the value the CLI is
+handed — the model rendered through `model_args`, a joined
+`--model={model}` read past its `=` — and a `${VAR}` model is not judged,
+since its value is the secret store's and the environment's. The grammar is
+a profile declaration, `model_names_provider`, so there are two ways past
+it when a CLI release relaxes it: `cli.overrides.model_names_provider:
+false`, or a `model_args` override that writes the provider into the flag
+itself (`["--model", "anthropic/{model}"]`), which makes a bare model whole.
+This too is an **admission** rule, for its own reason: the entry builds and
+the CLI starts, and the grammar is a vendor fact that moves between releases
+— a newer build, or a newer peer, may know it better — so a revision being
+applied is warned about rather than refused.
 
 **A profile's `passthrough_env` may not name a
 [credential](#5-a-provider-key-in-clienv-hermes-pi-opencode)** — an admission

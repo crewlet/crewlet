@@ -441,3 +441,25 @@ func TestEnvSignInIsDeclaredExactlyWhereTheCLIReadsItsKeyFromItsEnvironment(t *t
 		t.Error("cli.overrides.env_sign_in did not reach the profile")
 	}
 }
+
+// Which CLIs read their model as `<provider>/<model>` split at the first
+// slash, as measured from each CLI's own source. Declared where it is not
+// true, config refuses a model the CLI accepts; hermes and pi document a
+// `provider/id` model too, but whether they REFUSE a bare one is unmeasured,
+// so they do not declare it and a bare model is theirs to judge.
+func TestModelNamesProviderIsDeclaredOnlyWhereItIsMeasured(t *testing.T) {
+	t.Parallel()
+	for _, name := range BuiltinNames() {
+		p, _ := Builtin(name)
+		if got, want := p.ModelNamesProvider, name == "opencode"; got != want {
+			t.Errorf("%s: model_names_provider = %v, want %v", name, got, want)
+		}
+	}
+	p, err := Load("opencode", map[string]any{"model_names_provider": false})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if p.ModelNamesProvider {
+		t.Error("cli.overrides.model_names_provider did not reach the profile")
+	}
+}

@@ -163,7 +163,10 @@ providers:
       cli:
         agent: claude-code          # or codex | gemini-cli | opencode
                                     #    | muse-code | kimi-code | hermes
-                                    #    | pi | …
+                                    #    | pi | …  Another CLI reads
+                                    #   `model` in its own grammar:
+                                    #   opencode's is <provider>/<model>
+                                    #   (anthropic/claude-sonnet-5).
         mode: text                  # the default: a model behind the
                                     #   engine's own tool loop.  `agent`
                                     #   hands the executor to the CLI's own

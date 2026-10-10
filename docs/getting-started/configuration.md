@@ -419,6 +419,8 @@ providers:
                                         # See concepts/subscription-llm-backends.md
       type: cli-agent
       model: sonnet                     # whatever the CLI's --model accepts
+                                        #   (opencode: <provider>/<model>,
+                                        #   e.g. anthropic/claude-sonnet-5)
       cli:
         agent: claude-code              # claude-code | codex | gemini-cli | qwen-code
                                         #   | opencode | cursor-agent | copilot | grok
