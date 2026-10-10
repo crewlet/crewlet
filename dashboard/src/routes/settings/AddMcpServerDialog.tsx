@@ -316,7 +316,10 @@ export function AddMcpServerDialog({
               {
                 value: "per_seat",
                 label: "One per seat",
-                hint: "Launched only for a seat that declares credentials for it under mcp_env — add those in Edit org.",
+                // NOT "add those in Edit org": the org builder shows a seat's
+                // and a unit's mcp_env as names and writes neither, and no
+                // other screen does, so the hint names the write that does.
+                hint: "Launched only for a seat that declares credentials for it under mcp_env, which no screen writes: add them with crewlet config import or PUT /config.",
               },
             ]}
           />
