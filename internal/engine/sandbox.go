@@ -2270,9 +2270,9 @@ func (e *Engine) SeatHeldBySandbox(handle string) bool {
 //
 // THREE things travel, and they travel differently on purpose:
 //
-//   - The MODEL and its endpoint, so an agent that resolves
-//     "<family>/<model>" against a catalogue addresses the right vendor at
-//     the right host rather than the catalogue's default.
+//   - The MODEL and its endpoint, so the agent addresses the model the seat
+//     runs on at the right host rather than its catalogue's default — a
+//     cli-agent entry's model exactly as its text calls name it.
 //   - A TOKEN OR A KEY, in the run environment, which reaches any box
 //     including a remote one: it is one scoped, revocable variable — a
 //     subscription's headless token or cli.env key, or an API entry's own
@@ -2318,27 +2318,31 @@ func newCodingRun(c *Company, seat *org.Role, ph phase.Phase, runner string,
 			"phase", ph.String(), "error", err)
 		return run
 	}
-	spec, ok := c.Config.Providers.LLM[member.Key]
-	if !ok {
-		return run
-	}
 	if agent, isCLI := member.Provider.(*cliagent.Provider); isCLI {
-		run.llm = &sandbox.AgentLLM{Model: spec.Model}
-		// Every subscription entry shares one providers.llm type, so the
-		// type does not name the family. The profile's vendor does.
-		if vendor := agent.Vendor(); vendor != "" {
-			run.llm.ProviderType = vendor
-		}
-		// A cli-agent entry has no base URL of its own: the CLI talks to
-		// its vendor, and declaring a custom provider for it would point a
-		// coding agent at an endpoint nothing is serving.
+		// THE MODEL AS THE ENTRY'S TEXT CALLS PASS IT, AND THE CLI IT IS
+		// WRITTEN FOR. A cli-agent entry's model is in that CLI's own
+		// grammar — OpenCode reads `<provider>/<model>`, Claude Code an
+		// alias — so the run is handed the exact string every text call on
+		// the entry gives the CLI, resolved and rendered as they render it.
+		// Every cli-agent entry shares one providers.llm type, so no family
+		// is sent: one inferred from the CLI addressed an OpenCode entry's
+		// `openrouter/…` as `anthropic/openrouter/…`, which no key signs in.
+		//
+		// No base URL: a cli-agent entry has none of its own — the CLI
+		// talks to its vendor, and declaring a custom provider for it would
+		// point a coding agent at an endpoint nothing is serving.
 		//
 		// Its sign-in UNDERLAID BY NAME, so a variable the seat names in
 		// role.sandbox.env wins: each CLI ranks its own credentials, and a
 		// subscription token is the lowest of Claude Code's, so whatever the
 		// seat brought is what signs the run in.
+		run.llm = &sandbox.AgentLLM{Model: agent.ModelArgument(), CLI: agent.Agent()}
 		run.files = agent.SandboxCredentials()
 		run.env = underlay(seatEnv, agent.SandboxEnv())
+		return run
+	}
+	spec, ok := c.Config.Providers.LLM[member.Key]
+	if !ok {
 		return run
 	}
 	ep := c.endpoints[member.Key]

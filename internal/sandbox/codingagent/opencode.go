@@ -66,14 +66,25 @@ func (OpenCode) Command(req sandbox.RunRequest, _ Paths, _ string) string {
 
 // openCodeModelArg is the fully-formed --model value.
 //
-// A custom base URL means the run's own declared provider; otherwise the model
-// is addressed under its vendor FAMILY. The family comes from the provider
-// type rather than being assumed, because a subscription entry's type is the
-// same for every vendor — reading it would address a Claude subscription's
-// model as an OpenAI one.
+// AN OPENCODE ENTRY'S MODEL IS PASSED AS WRITTEN. It is the string every text
+// call on the same providers.llm entry hands `opencode run --model`, which
+// OpenCode splits at its first slash into a provider and a model — so
+// `anthropic/claude-sonnet-5` or `openrouter/anthropic/claude-sonnet-5` means
+// one thing in both places, signed in by the key of the provider it names.
+// Prefixing a family here addressed `anthropic/openrouter/…` and left the
+// entry's own key unread: no value of `model` worked for both the box and the
+// text calls.
+//
+// Otherwise the entry is an API one: a custom base URL means the run's own
+// declared provider, and with none the model is addressed under the OpenCode
+// provider of the entry's wire, whose built-in key variable the run
+// environment carries.
 func openCodeModelArg(llm *sandbox.AgentLLM) string {
 	if llm == nil || llm.Model == "" {
 		return ""
+	}
+	if llm.CLI == OpenCodeName {
+		return llm.Model
 	}
 	if llm.BaseURL != "" {
 		return OpenCodeProviderID + "/" + llm.Model
@@ -81,15 +92,15 @@ func openCodeModelArg(llm *sandbox.AgentLLM) string {
 	return openCodeFamily(llm.ProviderType) + "/" + llm.Model
 }
 
+// openCodeFamily is the OpenCode provider an API entry's wire is served by:
+// Anthropic's for an `anthropic` entry, OpenAI's for an `openai` or
+// `openai-compatible` one — the two wires the engine's own providers speak,
+// and the two key variables the run environment carries.
 func openCodeFamily(providerType string) string {
-	switch providerType {
-	case "anthropic", "claude":
+	if providerType == "anthropic" {
 		return "anthropic"
-	case "google", "gemini":
-		return "google"
-	default:
-		return "openai"
 	}
+	return "openai"
 }
 
 // WriteConfig renders opencode.json: the run's posture, the custom provider

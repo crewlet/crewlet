@@ -201,8 +201,9 @@ func TestTheOpenCodeInvocationAlwaysStreamsJson(t *testing.T) {
 	}
 }
 
-// A custom base URL means the run's own declared provider; otherwise the model
-// is addressed under its vendor family.
+// AN API ENTRY'S MODEL IS ADDRESSED IN OPENCODE'S GRAMMAR: a custom base URL
+// means the run's own declared provider, and otherwise the OpenCode provider
+// of the entry's wire, whose key variable the run environment carries.
 func TestTheOpenCodeModelIsAddressedUnderTheRightProvider(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -211,10 +212,11 @@ func TestTheOpenCodeModelIsAddressedUnderTheRightProvider(t *testing.T) {
 	}{
 		{sandbox.AgentLLM{Model: "claude-opus-5", ProviderType: "anthropic"}, "anthropic/claude-opus-5"},
 		{sandbox.AgentLLM{Model: "gpt-5", ProviderType: "openai"}, "openai/gpt-5"},
-		{sandbox.AgentLLM{Model: "gemini-3", ProviderType: "google"}, "google/gemini-3"},
 		// A gateway: the catalogue cannot resolve it, so the run declares
 		// its own provider and addresses the model there.
-		{sandbox.AgentLLM{Model: "house-model", ProviderType: "openai", BaseURL: "https://example.com/v1"},
+		{sandbox.AgentLLM{Model: "house-model", ProviderType: "openai-compatible", BaseURL: "https://example.com/v1"},
+			codingagent.OpenCodeProviderID + "/house-model"},
+		{sandbox.AgentLLM{Model: "house-model", ProviderType: "anthropic", BaseURL: "https://example.com"},
 			codingagent.OpenCodeProviderID + "/house-model"},
 	}
 	for _, c := range cases {
@@ -225,16 +227,25 @@ func TestTheOpenCodeModelIsAddressedUnderTheRightProvider(t *testing.T) {
 	}
 }
 
-// A subscription entry's provider type is the same for every vendor, so
-// reading it would address a Claude subscription's model as an OpenAI one —
-// which is why the family comes from the declared type, not from the entry.
-func TestAnUnknownProviderTypeFallsBackToTheOpenAiFamily(t *testing.T) {
+// AN OPENCODE ENTRY'S MODEL REACHES THE BOX AS WRITTEN.
+//
+// It is the string every text call on the same entry passes to `opencode run
+// --model`, which OpenCode splits at its first slash into a provider and a
+// model. The runner used to put a family in front of it, so an entry naming
+// `openrouter/anthropic/claude-sonnet-5` ran its box on
+// `anthropic/openrouter/anthropic/claude-sonnet-5` — a provider-qualified id
+// broke the agent run, and a bare one broke every text call.
+func TestAnOpenCodeEntrysModelIsPassedAsWritten(t *testing.T) {
 	t.Parallel()
-	cmd := opencode().Command(sandbox.RunRequest{
-		Brief: "x", LLM: &sandbox.AgentLLM{Model: "m", ProviderType: "something-new"},
-	}, codingagent.Paths{}, "")
-	if !strings.Contains(cmd, "--model 'openai/m'") {
-		t.Fatalf("cmd = %s", cmd)
+	for _, model := range []string{
+		"anthropic/claude-sonnet-5",
+		"openrouter/anthropic/claude-sonnet-5",
+	} {
+		llm := sandbox.AgentLLM{Model: model, CLI: codingagent.OpenCodeName}
+		cmd := opencode().Command(sandbox.RunRequest{Brief: "x", LLM: &llm}, codingagent.Paths{}, "")
+		if !strings.Contains(cmd, "--model '"+model+"'") {
+			t.Errorf("%q gave:\n%s\nwant the model as written", model, cmd)
+		}
 	}
 }
 

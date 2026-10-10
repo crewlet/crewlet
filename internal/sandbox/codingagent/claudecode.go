@@ -71,6 +71,10 @@ func (ClaudeCode) Command(req sandbox.RunRequest, _ Paths, configPath string) st
 		"--output-format", "stream-json", "--verbose",
 		"--permission-mode", "bypassPermissions",
 	}
+	// VERBATIM, because the entry that reached this runner already names
+	// the model in Claude Code's own terms: an `anthropic` entry's model id,
+	// or a claude-code cli-agent entry's alias exactly as its text calls
+	// pass it.
 	if req.LLM != nil && req.LLM.Model != "" {
 		parts = append(parts, "--model", shellQuote(req.LLM.Model))
 	}

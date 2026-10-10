@@ -196,6 +196,35 @@ it (see [Code Sandbox](code-sandbox.md#failure-modes)) reads **this**
 entry for an agent-mode run — the run *is* the executor — and the seat's
 `llm_sandbox` only for `run_sandbox` work.
 
+**The run names the model exactly as the entry's text calls do.** An
+entry's `model` is written in its CLI's own grammar, and an agent-mode
+run — like every text call the same entry makes for the reviewer, a
+worker, the auxiliary model, the round-cap judge or a fallback — hands it
+to the CLI as written (its `${VAR}` resolved, through the profile's
+`model_args`). For `opencode` that grammar is `<provider>/<model>`, split
+at the first slash, so one value serves both:
+
+```yaml
+providers:
+  llm:
+    oc:
+      type: cli-agent
+      model: anthropic/claude-sonnet-5     # or openrouter/anthropic/claude-sonnet-5
+      cli:
+        agent: opencode
+        mode: agent
+        run_in: e2b                    # or empty: providers.sandbox.default_run_in
+        env:
+          ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"   # the key of the provider the model names
+```
+
+The key of the provider the model names goes in `cli.env`, and it
+travels into a box in any cell, a remote one included, like a headless
+token — see [Signing in with a provider key](#5-a-provider-key-in-clienv-hermes-pi-opencode).
+An `opencode auth login` signs that provider in too, but only in a local
+cell (`run_in: direct` or `container`): the login is a file on the engine
+host, and the files never follow a run to a remote box.
+
 An agent-mode run is a **detached coding run** and reuses that machinery
 whole: the executor phase suspends, the run's state goes on a durable row
 in the [coordination store](coordination.md), the completion poll collects
@@ -1194,7 +1223,6 @@ key by key; lists and single values replace wholesale.
 | Field | What it is |
 |---|---|
 | `binary` | The executable, looked up on `PATH` unless it is a path. |
-| `vendor` | The model family the CLI addresses (`anthropic`, `openai`, `google`, `meta`, …), for a coding agent that resolves `<family>/<model>`. |
 | `written_for` | The CLI version the profile was written against, printed by `doctor` beside the one installed. |
 | `version_args` | The argv of the version probe. |
 | `complete_args` | The argv of one completion, before the model and the prompt. |

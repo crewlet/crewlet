@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 )
@@ -309,37 +310,53 @@ roles:
 	}
 }
 
-// A subscription entry's providers.llm type is "cli-agent" for every vendor,
-// so a coding agent resolving "<family>/<model>" would address a Claude
-// subscription's "sonnet" as an OpenAI model. The profile's vendor is what
-// names the family.
-func TestASubscriptionSeatAddressesItsRealVendor(t *testing.T) {
+// A CLI-AGENT ENTRY'S RUN NAMES THE MODEL AS ITS TEXT CALLS DO.
+//
+// Every subscription entry shares one providers.llm type, and the run used to
+// be handed a FAMILY instead — the profile's vendor — from which OpenCode
+// rebuilt `anthropic/<model>`. So an agent-mode OpenCode entry ran its box on
+// a model its text calls never named, and no value of `model` worked for both.
+// The model is resolved (a `${VAR}` reaches the CLI as its value) and passed
+// as written, beside the CLI it is written for.
+func TestACLIAgentRunNamesItsModelAsItsTextCallsDo(t *testing.T) {
 	state := t.TempDir()
 	t.Setenv(config.CLIHomeEnv, state)
+	t.Setenv("OC_MODEL", "openrouter/anthropic/claude-sonnet-5")
 	c := companyFor(t, `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
-    subscription:
+    oc:
       type: cli-agent
-      model: sonnet
+      model: ${OC_MODEL}
       cli:
-        agent: claude-code
+        agent: opencode
+        mode: agent
 roles:
   - name: Engineer
     handle: eng
-    llm: subscription
+    llm: oc
 `)
-	got := runOn(c, seatNamed(t, c, "Engineer"), codingagent.ClaudeCodeName, nil).llm
+	seat := seatNamed(t, c, "Engineer")
+	got := newCodingRun(c, seat, phase.Execute, codingagent.OpenCodeName, nil).llm
 	if got == nil {
-		t.Fatal("the sandbox got no model at all")
+		t.Fatal("the run got no model at all")
 	}
-	if got.ProviderType != "anthropic" {
-		t.Errorf("ProviderType = %q, want the CLI's own vendor family", got.ProviderType)
+	if got.CLI != "opencode" || got.ProviderType != "" || got.BaseURL != "" {
+		t.Errorf("AgentLLM = %+v, want the CLI named and no family or endpoint", got)
 	}
-	if got.BaseURL != "" {
-		t.Errorf("BaseURL = %q. A cli-agent entry talks to its vendor, so declaring "+
-			"a custom endpoint points the coding agent at nothing", got.BaseURL)
+	member, err := c.Models.Head(seat, phase.Execute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := member.Provider.(*cliagent.Provider).ModelArgument()
+	if text != "openrouter/anthropic/claude-sonnet-5" {
+		t.Fatalf("the text calls' model = %q, want the resolved model as written", text)
+	}
+	cmd := codingagent.OpenCode{}.Command(sandbox.RunRequest{Brief: "x", LLM: got}, codingagent.Paths{}, "")
+	if !strings.Contains(cmd, "--model '"+text+"'") {
+		t.Errorf("the agent run gave:\n%s\nwant --model %q, the value every text call passes", cmd, text)
 	}
 }
 
