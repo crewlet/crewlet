@@ -19,7 +19,7 @@ import { EMPTY_VALUE, LayerHost, ToastProvider } from "@crewlethq/ui";
 import { ItemPeek, RemovedNote, WorkItem as WorkItemPage, itemFlags, liveOn } from "./WorkItem.tsx";
 import { Subtasks } from "./item/Body.tsx";
 import { ItemRail, Relations, linkHeading, standingWords } from "./item/Rail.tsx";
-import { Routing, TurnCard, changeSentence, turnPills } from "./item/Activity.tsx";
+import { Routing, StoryCard, changeSentence } from "./item/Activity.tsx";
 import { Router, href } from "~/app/router.tsx";
 import { pathOf, refToken } from "~/app/frame/objects.ts";
 import { PeekHost, PeekNeighbours } from "~/app/frame/PeekHost.tsx";
@@ -32,7 +32,7 @@ import type {
   WorkActivityRecord,
   WorkItem,
   WorkItemDetail,
-  WorkItemTurn,
+  TurnStory,
   WorkProjectDetail,
   WorkRoutingAnswer,
 } from "~/protocol/index.ts";
@@ -140,18 +140,24 @@ const project = (over: Partial<WorkProjectDetail> = {}): WorkProjectDetail => ({
   ...over,
 });
 
-const turn = (over: Partial<WorkItemTurn> = {}): WorkItemTurn => ({
+const story = (over: Partial<TurnStory> = {}): TurnStory => ({
   turn_id: "run-1",
-  ordinal: 1,
   seat: "swe",
-  segments: 1,
-  tokens: 38_400,
-  cache_read: 0,
-  rounds: 7,
-  wall_ms: 842_000,
-  outcome: "done",
-  phases: ["execute", "review"],
-  at: "2031-04-15T16:40:00Z",
+  work_item: {
+    backend: "native",
+    id: "t-1",
+    key: "ENG-42",
+    title: "Fix the login race",
+    ordinal: 1,
+  },
+  started_at: "2031-04-15T16:26:00Z",
+  duration_ms: 842_000,
+  why: { origin: "task", summary: "jane assigned ENG-42", by: "jane" },
+  did: [],
+  left_behind: [],
+  outcome: "approved",
+  helpers: 0,
+  consulted: [],
   ...over,
 });
 
@@ -166,7 +172,7 @@ const QUIET: Record<string, Answer> = {
   work_items: { items: [], complete: true },
   work_activity: { records: [], complete: true },
   work_comments: { item: "t-1", key: "ENG-42", title: "Fix the login race", comments: [] },
-  work_item_turns: { item: "t-1", key: "ENG-42", turns: [], complete: true },
+  turn_stories: { stories: [], complete: true },
 };
 
 let asked: { kind: string; params: Record<string, unknown> }[];
@@ -859,89 +865,137 @@ test("who a change reached opens from the end of its line", async () => {
   expect(reached.getAttribute("aria-expanded")).toBe("true");
 });
 
-// A TURN CARD SAYS WHAT THE TURN DID AND WHAT THE REVIEWER ASKED FOR: "SWE ran
-// turn 1", its phases, "sent back for another pass" with the reviewer's
-// request quoted, the tools it called, wall time and tokens, and its trace.
-test("a turn card shows the send-back notes", async () => {
+// A STORY CARD TELLS THE SESSION AS A TEAMMATE ASKS ABOUT IT: who, which turn
+// on the task and how it ended, why it started, what it did and what it left
+// behind, who else it involved and what became of the reader's own note — and
+// nothing the machine processed, because the story carries none of it.
+test("a story card tells the session and nothing the machine processed", async () => {
   mount(
     <ol>
-      <TurnCard
-        turn={turn({
-          sent_back: 1,
-          summary: "Added a backoff helper to provisioner/dhcp.",
-          review: "the timeout path has no test.",
-          tools: [
-            { name: "create_branch", calls: 1 },
-            { name: "run_sandbox", calls: 4 },
+      <StoryCard
+        story={story({
+          outcome: "sent_back",
+          did: [
+            {
+              kind: "read_page",
+              at: "2031-04-15T16:27:00Z",
+              pages: [{ backend: "native", id: "p-1", title: "Login runbook" }],
+            },
+            { kind: "coding_started", at: "2031-04-15T16:28:00Z" },
+            { kind: "coding_finished", at: "2031-04-15T16:38:00Z" },
           ],
+          left_behind: [
+            {
+              kind: "task",
+              id: "t-1",
+              key: "ENG-42",
+              title: "Fix the login race",
+              change: "status",
+              status: "in_review",
+              at: "2031-04-15T16:39:00Z",
+            },
+            {
+              kind: "page",
+              id: "p-1",
+              title: "Login runbook",
+              change: "saved",
+              at: "2031-04-15T16:39:30Z",
+            },
+          ],
+          helpers: 2,
+          consulted: ["cto"],
+          your_note: {
+            note: "check the retry path too",
+            status: "delivered",
+            sent_at: "2031-04-15T16:30:00Z",
+            at: "2031-04-15T16:31:00Z",
+          },
         })}
-        chrome={{ seatName: (h: string) => (h === "swe" ? "SWE" : h) }}
-        now={NOW}
+        chrome={{ seatName: (h: string) => ({ swe: "SWE", cto: "CTO" })[h] ?? h }}
       />
     </ol>,
   );
   await settle();
   const card = screen.getByRole("article", { name: "Turn 1" });
   expect(within(card).getByText("ran turn 1")).toBeTruthy();
-  expect(within(card).getByText("sent back for another pass")).toBeTruthy();
-  expect(within(card).getByText("the timeout path has no test.")).toBeTruthy();
-  expect(within(card).getByText("Reviewer:")).toBeTruthy();
-  expect(within(card).getByText("run_sandbox ×4")).toBeTruthy();
-  expect(within(card).getByText("14m 2s · 38.4k tokens")).toBeTruthy();
-  expect(within(card).getByText("Trace").getAttribute("href")).toBe(
+  expect(within(card).getByText("Sent back for another pass")).toBeTruthy();
+  expect(within(card).getByText("jane assigned ENG-42")).toBeTruthy();
+  const did = within(card).getByRole("list", { name: "What it did" });
+  expect([...did.querySelectorAll("li")].map((li) => li.textContent)).toEqual([
+    "Read Login runbook",
+    "Started a coding job",
+    "The coding job finished",
+  ]);
+  const left = within(card).getByRole("list", { name: "What it left behind" });
+  expect([...left.querySelectorAll("li")].map((li) => li.textContent)).toEqual([
+    "ENG-42 moved it to In review",
+    "Login runbook edited the page",
+  ]);
+  expect(within(left).getByRole("link", { name: "ENG-42" }).getAttribute("href")).toBe(
+    href(["work", "ENG-42"]),
+  );
+  expect(within(left).getByRole("link", { name: "Login runbook" }).getAttribute("href")).toBe(
+    href(["knowledge", "pages", "p-1"]),
+  );
+  expect(
+    within(card).getByText("Handed parts of the work to 2 helpers and asked CTO"),
+  ).toBeTruthy();
+  expect(card.textContent).toContain("It read your note:");
+  expect(card.textContent).toContain("check the retry path too");
+  expect(within(card).getByText("worked 14m 2s")).toBeTruthy();
+  // NOTHING THE MACHINE PROCESSED: no spend, no tool, no phase.
+  expect(card.textContent).not.toMatch(/tokens|[$€£]|Execute|Review/);
+});
+
+// THE TRACE IS HOW A SESSION RAN, which is an admin's to read: offered to a
+// member it is a link to a refusal, so a member's card has none.
+test("only an admin's story card links to the trace", async () => {
+  const draw = (viewer: Record<string, unknown>) => {
+    mount(
+      <ol>
+        <StoryCard story={story()} chrome={{}} />
+      </ol>,
+      { viewer },
+    );
+  };
+  draw(JANE);
+  await settle();
+  expect(screen.getByRole("link", { name: "Trace" }).getAttribute("href")).toBe(
     href(["live", "turns", "run-1"]),
   );
-  // Tokens only, never money.
-  expect(card.textContent).not.toMatch(/[$€£]/);
+  cleanup();
+  draw({ ...JANE, role: "member", reach: "member" });
+  await settle();
+  expect(screen.queryByRole("link", { name: "Trace" })).toBeNull();
 });
 
-// A TURN WITH NO COUNT HERE IS NOT NUMBERED, and a turn still out on a coding
-// run says it is parked rather than done.
-test("a turn's pills say how it went, and only what is worth a pill", () => {
-  expect(turnPills(turn())).toEqual([]);
-  expect(turnPills(turn({ sent_back: 2 })).map((p) => p.label)).toEqual([
-    "sent back 2 times for another pass",
-  ]);
-  expect(turnPills(turn({ outcome: "suspended" })).map((p) => p.label)).toEqual([
-    "parked on a coding run",
-  ]);
-  expect(turnPills(turn({ outcome: "failed" }))[0]?.variant).toBe("danger");
-  expect(turnPills(turn({ outcome: "failed" }))[0]?.label).toBe("failed");
-  expect(turnPills(turn({ outcome: "failed", failed_in: "review" }))[0]?.label).toBe(
-    "failed in review",
-  );
-});
-
-// A FAILED TURN SAYS WHICH STEP BROKE: the phase it failed in wears the cross
-// and says "failed" to a screen reader, the phases that held keep their tick,
-// and the wall time and tokens sit on their own line under the chips.
-test("a failed turn marks the phase it broke in", async () => {
+// EVERY ENDING IS WORDED, and a session still working says it is on its turn
+// rather than that it ran it. A session the task does not count is not
+// numbered.
+test("a story card words every ending, and numbers only what the task counts", async () => {
   mount(
     <ol>
-      <TurnCard
-        turn={turn({
+      <StoryCard story={story({ outcome: "waiting_on_you" })} chrome={{}} />
+      <StoryCard
+        story={story({
+          turn_id: "run-2",
           outcome: "failed",
-          failed_in: "review",
-          summary: "",
-          tools: [{ name: "run_sandbox", calls: 1 }],
+          work_item: { backend: "native", id: "t-1", key: "ENG-42" },
+          why: { origin: "private" },
         })}
         chrome={{}}
-        now={NOW}
       />
     </ol>,
   );
   await settle();
-  const card = screen.getByRole("article", { name: "Turn 1" });
-  const phases = [...card.querySelectorAll(".task-phase")];
-  expect(phases.map((p) => p.hasAttribute("data-failed"))).toEqual([false, true]);
-  expect(phases[1]!.textContent).toContain("(failed)");
-  expect(within(card).getByText("failed in review")).toBeTruthy();
-  // No account recorded: one quiet line, the reason on hover.
-  expect(within(card).getByText("No summary recorded — see the trace")).toBeTruthy();
-  // The meta line is its own row, after the tool chips.
-  const meta = card.querySelector(".task-turn-meta")!;
-  expect(meta.previousElementSibling?.classList.contains("task-turn-tools")).toBe(true);
-  expect(within(meta as HTMLElement).getByText("Trace")).toBeTruthy();
+  const waiting = screen.getByRole("article", { name: "Turn 1" });
+  expect(within(waiting).getByText("is on turn 1")).toBeTruthy();
+  expect(within(waiting).getByText("Waiting on an answer")).toBeTruthy();
+  const uncounted = screen.getByRole("article", { name: "A turn" });
+  expect(within(uncounted).getByText("worked on this task")).toBeTruthy();
+  expect(within(uncounted).getByText("Did not finish")).toBeTruthy();
+  // A SESSION TOLD ONLY BECAUSE IT IS ON THIS TASK says nothing of why.
+  expect(uncounted.querySelector(".task-turn-why")).toBeNull();
 });
 
 // THE LIVE ROW IS THE TURN RUNNING ON *THIS* TASK: joined on the item the
@@ -974,11 +1028,25 @@ test("the live row appears only for a turn on this item", async () => {
   mount(<WorkItemPage id="ENG-42" />, {
     agents: [on("ENG-42")],
     answers: {
-      work_item: detail({ task: task({ spend: { turns: 2 } }) }),
-      work_item_turns: {
-        item: "t-1",
-        key: "ENG-42",
-        turns: [turn({ ordinal: 2, turn_id: "run-2" })],
+      // THREE TURNS COUNTED: the running session parked once and its segment
+      // is charged already, so "the one after every turn counted" would call
+      // it the fourth. Its own story says which it is.
+      work_item: detail({ task: task({ spend: { turns: 3 } }) }),
+      // A FINISHED SESSION, and the running one's own story — which is the
+      // live row, never a card as well, and carries the task's count.
+      turn_stories: {
+        stories: [
+          story({
+            turn_id: "run-9",
+            outcome: "running",
+            started_at: "2031-04-16T11:57:00Z",
+            work_item: { backend: "native", id: "t-1", key: "ENG-42", ordinal: 3 },
+          }),
+          story({
+            turn_id: "run-2",
+            work_item: { backend: "native", id: "t-1", key: "ENG-42", ordinal: 2 },
+          }),
+        ],
         complete: true,
       },
     },
@@ -986,6 +1054,13 @@ test("the live row appears only for a turn on this item", async () => {
   await settle();
   const live = screen.getByRole("link", { name: /is on turn 3 of ENG-42/ });
   expect(live.textContent).toContain("SWE is on turn 3");
+  expect(screen.getByRole("article", { name: "Turn 2" })).toBeTruthy();
+  expect(screen.queryByRole("article", { name: "Turn 3" })).toBeNull();
+  // ASKED BY THE TASK'S IDENTITY, which the turns charged to it are filed
+  // under — never its key, which a move renames.
+  expect(asked.filter((a) => a.kind === "turn_stories").map((a) => a.params.work_item)).toContain(
+    "native:t-1",
+  );
   expect(live.textContent).toContain("executing · round 7 of 25");
   // BOTH ARE WATCH LINKS — the turn's Transcript, its running phase open —
   // where a settled turn's "Trace" is the record, on the Timeline.

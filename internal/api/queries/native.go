@@ -101,8 +101,6 @@ type WorkReader interface {
 	Tasks(ctx context.Context, q tracker.Query, now time.Time) (tracker.Answer, error)
 	Task(ctx context.Context, idOrKey string, want tracker.DetailWants,
 		fresh statelog.Freshness) (tracker.TaskDetail, error)
-	TurnsOf(ctx context.Context, idOrKey, cursor string, limit int,
-		fresh statelog.Freshness) (tracker.TaskTurns, error)
 	Views(ctx context.Context, q tracker.ViewQuery) (tracker.ViewListing, error)
 	EveryView(ctx context.Context, q tracker.EveryViewQuery) (tracker.ViewListing, error)
 	ExpandedQuery(ctx context.Context, params map[string]any,
@@ -129,6 +127,8 @@ type WorkReader interface {
 		loc *time.Location) (tracker.DecisionsAnswer, error)
 	TurnPlaces(ctx context.Context, runs []string,
 		fresh statelog.Freshness) (map[string]tracker.TurnPlace, error)
+	TurnWrites(ctx context.Context, runs []string,
+		fresh statelog.Freshness) (map[string][]tracker.TurnWrite, error)
 }
 
 // PageReader is the knowledge read side this surface calls.
@@ -139,6 +139,8 @@ type PageReader interface {
 	Activity(ctx context.Context, q pages.PageActivityQuery) (pages.PageActivity, error)
 	Revision(ctx context.Context, pageID string, version int,
 		fresh statelog.Freshness) (pages.Revision, bool, error)
+	TurnWrites(ctx context.Context, runs []string,
+		fresh statelog.Freshness) (map[string][]pages.TurnWrite, error)
 }
 
 // ---- work -------------------------------------------------------------- //
@@ -406,40 +408,6 @@ func (s Sources) workComments(ctx context.Context, p Params) (any, error) {
 		out["incomplete"] = detail.Incomplete
 	}
 	return out, nil
-}
-
-// workItemTurns answers one page of the turns charged to a task, newest first,
-// each numbered "Turn n" by the task — see [tracker.Reader.TurnsOf].
-//
-// ITS OWN QUESTION BESIDE `work_item`, for the reason `work_comments` is: the
-// list has no bound of its own, and the task page asks for it on its Agent
-// turns tab rather than on every poll of the detail.
-//
-// FROM THE TRACKER'S ROWS, NOT THE EVENT HISTORY. `turns{work_item=}` answers
-// a similar-looking question from each node's event store, which keeps thirty
-// days and is scattered across the fleet; this is the task's own durable
-// account — the same rows its `spend` sums — so a turn listed here is a turn
-// the cost panel counted, on any node, at any age.
-func (s Sources) workItemTurns(ctx context.Context, p Params) (any, error) {
-	ref := strings.TrimSpace(p.String("id"))
-	if ref == "" {
-		return nil, badParams("id", "", nil)
-	}
-	fresh, err := freshness(p)
-	if err != nil {
-		return nil, err
-	}
-	page, err := s.Work.TurnsOf(ctx, ref, strings.TrimSpace(p.String("cursor")),
-		Clamp(p.Int("limit", 0), tracker.DefaultTaskTurns, tracker.MaxTaskTurns), fresh)
-	switch {
-	case errors.Is(err, tracker.ErrNoTask):
-		return nil, ErrNotFound
-	case errors.Is(err, tracker.ErrInvalid):
-		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
-	case err != nil:
-		return nil, err
-	}
-	return page, nil
 }
 
 // workViews answers one container's view strip.

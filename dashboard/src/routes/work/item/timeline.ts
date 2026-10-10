@@ -1,11 +1,11 @@
 /**
  * A task's activity as ONE list: what changed on it, what was said on it and
- * the agent turns charged to it, in the order it happened.
+ * the stories of the agent turns charged to it, in the order it happened.
  *
  * # Three histories, each paged on its own
  *
  * The three are three questions (`work_activity`, `work_comments`,
- * `work_item_turns`), each answered a page at a time from the newest. Merged
+ * `turn_stories`), each answered a page at a time from the newest. Merged
  * naively, a page of fifty changes beside a page of twenty turns draws a
  * stretch of time in which only changes appear — the turns of that stretch are
  * on the turns' second page, not yet asked for — and reads as a fortnight in
@@ -15,7 +15,16 @@
  * pages stopped at. Everything newer than it is complete in all three, and
  * nothing older is drawn until the history that stopped there is asked for
  * its next page. It is the rule the fleet's own keyset merge keeps
- * (`internal/eventfan`), for the same reason.
+ * (`internal/eventfan`), for the same reason — and it holds only because each
+ * entry is placed at the instant its own history pages by: a change at when it
+ * took effect, a comment at when it was written, a story at when the session
+ * began, which is what the story list orders and cuts its cursor on. The one
+ * exception is the fleet's: a session resumed on another node, whose first
+ * half names no work item, is paged where the half that names this task is
+ * listed (`api-endpoints.md`, "Reading the fleet's history") — so its card can
+ * sit older than the page it came on, and the stretch between the two can be
+ * drawn before every story in it is read. Nothing is lost: the next page of
+ * stories fills it.
  *
  * # A comment is drawn once
  *
@@ -25,7 +34,7 @@
  * dropped from both the merged list and the Changes tab.
  */
 
-import type { WorkActivityRecord, WorkComment, WorkItemTurn } from "~/protocol/index.ts";
+import type { TurnStory, WorkActivityRecord, WorkComment } from "~/protocol/index.ts";
 
 /** The four views of a task's activity. */
 export const ACTIVITY_TABS = ["all", "comments", "turns", "changes"] as const;
@@ -37,7 +46,7 @@ export type Source = "changes" | "comments" | "turns";
 export type Entry =
   | { kind: "change"; id: string; at: number; record: WorkActivityRecord }
   | { kind: "comment"; id: string; at: number; comment: WorkComment }
-  | { kind: "turn"; id: string; at: number; turn: WorkItemTurn };
+  | { kind: "turn"; id: string; at: number; story: TurnStory };
 
 /** One history as far as it has been read. */
 export interface Loaded<T> {
@@ -77,7 +86,7 @@ export function timeline(
   loaded: {
     changes: Loaded<WorkActivityRecord>;
     comments: Loaded<WorkComment>;
-    turns: Loaded<WorkItemTurn>;
+    turns: Loaded<TurnStory>;
   },
 ): Timeline {
   const shown = SOURCES[tab];
@@ -96,11 +105,11 @@ export function timeline(
       at: instant(comment.created_at),
       comment,
     })),
-    turns: loaded.turns.items.map((turn) => ({
+    turns: loaded.turns.items.map((story) => ({
       kind: "turn" as const,
-      id: `turn:${turn.turn_id}`,
-      at: instant(turn.at),
-      turn,
+      id: `turn:${story.turn_id}`,
+      at: instant(story.started_at),
+      story,
     })),
   };
   // THE HORIZON: the newest point any shown history with more pages stopped

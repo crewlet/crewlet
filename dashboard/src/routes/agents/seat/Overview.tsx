@@ -80,7 +80,8 @@ import type {
   WorkSummary,
 } from "~/protocol/index.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
-import { toolSourceLabel, turnOrdinal } from "../SeatPeek.tsx";
+import { toolSourceLabel } from "../SeatPeek.tsx";
+import { useTurnOrdinal } from "~/lib/useTurnOrdinal.ts";
 import {
   companyCeilings,
   companyCeilingShort,
@@ -325,13 +326,9 @@ function CurrentTurn({
   const turnId = turnIdOf(agent);
   const key = call?.work_item?.key || turn?.work_item?.key || "";
   const onTurn = turnId !== "" && !!agent;
-  // WHICH TURN ON THE TASK, from the task's own turn list — the same reading
-  // the seat's peek makes.
-  const itemTurns = useQuery(
-    "work_item_turns",
-    { id: key, limit: 1 },
-    { enabled: onTurn && key !== "" },
-  );
+  // WHICH TURN ON THE TASK, by the task's own count off the turn's story —
+  // the same reading the seat's peek and the turn's crumb make.
+  const ordinal = useTurnOrdinal(onTurn ? key : "", turnId);
   // WHAT THE TASK IS CALLED, read by its key — the turn's own item, never a
   // lookup in the Assigned-work card's top five: a turn on a task outside
   // those five (one just asked of it, with no priority) read "On ENG-35" with
@@ -380,13 +377,6 @@ function CurrentTurn({
       </Card>
     );
   }
-  const ordinal = key
-    ? turnOrdinal(
-        turnId,
-        itemTurns.data?.turns?.[0],
-        !!itemTurns.data && itemTurns.data.key === key,
-      )
-    : null;
   // THE ANSWER FOR THIS KEY ONLY: while a turn moves to another task the last
   // read is still the previous one's, and its title under the new key would
   // name the wrong task.

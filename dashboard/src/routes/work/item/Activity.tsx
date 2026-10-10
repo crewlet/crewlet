@@ -10,13 +10,16 @@
  * their own and merged at a horizon ([timeline]), so a stretch of time drawn
  * here is complete in every history it shows.
  *
- * # A turn card is the task's own account
+ * # A turn card is the session's story
  *
- * `work_item_turns` is read from the tracker's rows — the account the task's
- * cost sums — so "Turn 3" on a card and "3 turns" in the cost panel are one
- * count, and a turn that ran months ago on a node that has since left still
- * says what it did. Its Trace link is the event history's, which keeps a
- * month; the card does not depend on it.
+ * `turn_stories` tells each agent session charged to the task as the
+ * published facts of it — why it started, what it did and left behind, how it
+ * ended — and nothing the machine processed, so the tab reads the same to
+ * every teammate. "Turn 3" on a card is the task's own count, the one the cost
+ * panel's "3 turns" is, read where the count lives. A story is turn-level
+ * detail and lives as long as the event history does — a month; what outlives
+ * it is the count. Its Trace link is offered to an admin alone, who may read
+ * how the session ran.
  *
  * # The live row is the turn running on THIS task
  *
@@ -37,7 +40,6 @@ import { Button, EmptyState, Skeleton, Tag } from "@crewlethq/ui";
 import {
   ArrowRightGlyph,
   BellGlyph,
-  CheckGlyph,
   ChevronDownGlyph,
   ChevronRightGlyph,
   ChevronUpGlyph,
@@ -45,7 +47,6 @@ import {
   ClockGlyph,
   CornerDownLeftGlyph,
   UsersGlyph,
-  XGlyph,
 } from "@crewlethq/icons/glyphs";
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
@@ -57,16 +58,17 @@ import { Segmented } from "~/ui/primitives.tsx";
 import { useQuery, withFloor } from "~/lib/useQuery.ts";
 import { useClient } from "~/lib/store-hooks.ts";
 import { turnIdOf, watchHref } from "~/lib/turns.ts";
-import { renderMarkdown, plainText } from "~/lib/markdown.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import {
-  fmtCount,
-  fmtDateCompact,
-  fmtDateTime,
-  fmtDuration,
-  fmtElapsed,
-  fmtMinute,
-  humanize,
-} from "~/lib/format.ts";
+  OUTCOME_WORDS,
+  actionLine,
+  involvedLine,
+  linkLine,
+  noteLine,
+  whyLine,
+} from "~/lib/stories.ts";
+import { renderMarkdown, plainText } from "~/lib/markdown.ts";
+import { fmtDateCompact, fmtDateTime, fmtDuration, fmtElapsed, fmtMinute } from "~/lib/format.ts";
 import { reasonAbout } from "~/lib/reasons.ts";
 import { activityOf, doingWords, ringOf, type OrgIndex } from "~/lib/seats.ts";
 import {
@@ -80,8 +82,8 @@ import type {
   AgentRow,
   WorkActivityRecord,
   WorkComment,
+  TurnStory,
   WorkItem,
-  WorkItemTurn,
   WorkRoutingAnswer,
 } from "~/protocol/index.ts";
 import { ACTIVITY_TABS, timeline, type ActivityTab, type Entry, type Source } from "./timeline.ts";
@@ -93,7 +95,8 @@ const ACTIVITY_POLL_MS = 30_000;
 /** The pages each history is read in — the engine's own ceilings. */
 const CHANGES_PAGE = 50;
 const COMMENTS_PAGE = 50;
-const TURNS_PAGE = 20;
+/** A story costs the fleet a read of its turn's record — see `queries.DefaultStoryPage`. */
+const STORIES_PAGE = 10;
 
 const TAB_LABEL: Record<ActivityTab, string> = {
   all: "All",
@@ -161,18 +164,18 @@ export function Activity({
     commentId,
     nextCursor,
   );
-  const turnsAsked = { id: item.key, limit: TURNS_PAGE };
+  // BY THE TASK'S IDENTITY, `native:<id>` — the one the turns it is charged
+  // are filed under — never its key, which a move renames. NOT AT A READ
+  // FLOOR: a story is read from the event history, which no write a person
+  // makes on this screen is read back through.
+  const turnsAsked = { work_item: `native:${item.id}`, limit: STORIES_PAGE };
   const turns = usePaged(
-    useQuery("work_item_turns", turnsAsked, { pollMs: ACTIVITY_POLL_MS }),
+    useQuery("turn_stories", turnsAsked, { pollMs: ACTIVITY_POLL_MS }),
     turnsAsked,
-    (cursor) =>
-      socket.query(
-        "work_item_turns",
-        withFloor("work_item_turns", JSON.stringify({ ...turnsAsked, cursor })),
-      ),
-    pickTurns,
-    turnId,
-    nextCursor,
+    (before) => socket.query("turn_stories", { ...turnsAsked, before }),
+    pickStories,
+    storyId,
+    nextStories,
   );
   const paged = { changes, comments, turns };
 
@@ -190,14 +193,23 @@ export function Activity({
     return seats;
   }, [comments.answers]);
 
+  const runningHere = live && (tab === "all" || tab === "turns") ? live : null;
+  const liveTurn = runningHere ? turnIdOf(runningHere) : "";
+  // THE RUNNING SESSION IS THE LIVE ROW, not a card as well: its story is
+  // listed from the moment it starts, and drawn twice it would say "Working"
+  // above the row that says what it is doing.
+  const stories = useMemo(
+    () => (liveTurn ? turns.items.filter((s) => s.turn_id !== liveTurn) : turns.items),
+    [turns.items, liveTurn],
+  );
   const drawn = useMemo(
     () =>
       timeline(tab, {
         changes: { items: changes.items, more: changes.more },
         comments: { items: comments.items, more: comments.more },
-        turns: { items: turns.items, more: turns.more },
+        turns: { items: stories, more: turns.more },
       }),
-    [tab, changes.items, changes.more, comments.items, comments.more, turns.items, turns.more],
+    [tab, changes.items, changes.more, comments.items, comments.more, stories, turns.more],
   );
   const shown: readonly Source[] =
     tab === "all" ? ["changes", "comments", "turns"] : [tab === "turns" ? "turns" : tab];
@@ -205,16 +217,14 @@ export function Activity({
   const errors = shown.map((source) => paged[source].error).filter(Boolean);
   const paging = shown.some((source) => paged[source].paging);
   const pageError = shown.map((source) => paged[source].pageError).find(Boolean) ?? null;
-  const runningHere = live && (tab === "all" || tab === "turns") ? live : null;
 
-  // THE NUMBER THE RUNNING TURN WILL HAVE: its own, where a parked segment was
-  // already charged, and otherwise the one after every turn counted so far.
+  // THE NUMBER THE RUNNING TURN HAS: its story's, which is the task's own
+  // count read where it lives, and otherwise the one after every turn counted
+  // so far — the story is a page away, or not answered yet.
   const liveOrdinal = useMemo(() => {
-    const id = live?.turn?.turn_id ?? live?.live_call?.turn_id ?? "";
-    const charged = turns.items.find((t) => t.turn_id === id);
-    if (charged?.ordinal) return charged.ordinal;
-    return (item.spend?.turns ?? 0) + 1;
-  }, [live, turns.items, item.spend?.turns]);
+    const told = turns.items.find((s) => s.turn_id === liveTurn)?.work_item?.ordinal;
+    return told && told > 0 ? told : (item.spend?.turns ?? 0) + 1;
+  }, [liveTurn, turns.items, item.spend?.turns]);
 
   const compose: ComposeMode = replyTo
     ? { kind: "reply", replyTo: replyTo.id }
@@ -328,8 +338,10 @@ const pickRecords = (a: { records: WorkActivityRecord[] }) => a.records ?? [];
 const recordId = (r: WorkActivityRecord) => r.id;
 const pickComments = (a: { comments: WorkComment[] }) => a.comments ?? [];
 const commentId = (c: WorkComment) => c.id;
-const pickTurns = (a: { turns: WorkItemTurn[] }) => a.turns ?? [];
-const turnId = (t: WorkItemTurn) => t.turn_id;
+const pickStories = (a: { stories: TurnStory[] }) => a.stories ?? [];
+const storyId = (s: TurnStory) => s.turn_id;
+/** The story list's own cursor, `next` — not the tracker's `next_cursor`. */
+const nextStories = (a: { next?: string }) => a.next ?? "";
 
 function FeedEntry({
   entry,
@@ -363,7 +375,7 @@ function FeedEntry({
         />
       );
     case "turn":
-      return <TurnCard turn={entry.turn} chrome={chrome} now={now} />;
+      return <StoryCard story={entry.story} chrome={chrome} />;
   }
 }
 
@@ -572,145 +584,108 @@ function CommentRow({
   );
 }
 
-/** What a phase is called on a turn card. */
-const PHASE_WORD: Record<string, string> = {
-  execute: "Execute",
-  review: "Review",
-  sandbox: "Coding run",
-  subagent: "Workers",
-  judge: "Judge",
-  onboarding: "Onboarding",
-  auxiliary: "Auxiliary",
-};
-
-/** The pills a turn wears for how it went — only for what is worth a pill. */
-export function turnPills(
-  turn: WorkItemTurn,
-): { label: string; variant: "warning" | "danger" | "info" | "neutral" }[] {
-  const out: { label: string; variant: "warning" | "danger" | "info" | "neutral" }[] = [];
-  if (turn.sent_back) {
-    out.push({
-      label:
-        turn.sent_back === 1
-          ? "sent back for another pass"
-          : `sent back ${turn.sent_back} times for another pass`,
-      variant: "warning",
-    });
-  }
-  switch (turn.outcome) {
-    case "failed":
-      // THE PILL NAMES THE STEP THAT BROKE where the record says: "failed"
-      // alone beside a row of ticked phases left the reader to guess.
-      out.push({
-        label: turn.failed_in
-          ? `failed in ${(PHASE_WORD[turn.failed_in] ?? humanize(turn.failed_in)).toLowerCase()}`
-          : "failed",
-        variant: "danger",
-      });
-      break;
-    case "suspended":
-      out.push({ label: "parked on a coding run", variant: "info" });
-      break;
-    case "skipped":
-      out.push({ label: "skipped — nothing to do", variant: "neutral" });
-      break;
-  }
-  return out;
-}
-
-/** One agent turn charged to the task, as the card the artboard draws. */
-export function TurnCard({
-  turn,
+/**
+ * One agent session on the task, told as its story: who worked on it and which
+ * turn on the task it was, how it ended, why it started, what it did and what
+ * it left behind — in that order, because it is the order a teammate asks.
+ *
+ * NOTHING THE MACHINE PROCESSED: no prompt, tool, model, round or token count
+ * reaches the story (`turn_stories` is a member's answer), so none can reach
+ * the card. What the session cost is the cost panel's, as a count of turns;
+ * how it ran is the trace's, which only an admin is offered.
+ */
+export function StoryCard({
+  story,
   chrome,
-  now,
 }: {
-  turn: WorkItemTurn;
-  chrome: RowChrome;
-  now: number;
+  story: TurnStory;
+  chrome: RowChrome & LabelContext;
 }) {
-  const name = chrome.seatName?.(turn.seat) ?? turn.seat;
-  const kind = chrome.seatKind?.(turn.seat) === "human" ? "human" : "agent";
+  const viewer = useViewer();
+  const nameOf = (handle: string) => chrome.seatName?.(handle) ?? handle;
+  const name = nameOf(story.seat);
+  const kind = chrome.seatKind?.(story.seat) === "human" ? "human" : "agent";
+  const ordinal = story.work_item?.ordinal ?? 0;
+  const running = story.outcome === "running" || story.outcome === "waiting_on_you";
+  const outcome = OUTCOME_WORDS[story.outcome];
+  const why = whyLine(story, nameOf);
+  const involved = involvedLine(story, nameOf);
   return (
     <li className="task-entry" data-kind="turn">
       <span className="task-entry-avatar">
         <SeatAvatar name={name} kind={kind} size={28} decorative />
       </span>
-      <article className="task-turn" aria-label={turn.ordinal ? `Turn ${turn.ordinal}` : "A turn"}>
+      <article className="task-turn" aria-label={ordinal ? `Turn ${ordinal}` : "A turn"}>
         <header className="task-turn-head">
           <b>{name}</b>
           <span className="muted">
-            {turn.ordinal ? `ran turn ${turn.ordinal}` : "continued a turn charged elsewhere"}
+            {ordinal
+              ? running
+                ? `is on turn ${ordinal}`
+                : `ran turn ${ordinal}`
+              : "worked on this task"}
           </span>
-          <span className="task-phases">
-            {turn.phases.map((phase, i) => {
-              // A TICK SAYS THE PHASE RAN AND HELD; the one a failed turn
-              // broke in wears the cross, in the danger tone, and says so.
-              const broke = turn.outcome === "failed" && turn.failed_in === phase;
-              return (
-                <span key={phase} className="row gap-1">
-                  {i > 0 && <span className="task-phase-join" aria-hidden="true" />}
-                  <span className="task-phase" data-failed={broke || undefined}>
-                    {broke ? <XGlyph size="xs" /> : <CheckGlyph size="xs" />}
-                    {PHASE_WORD[phase] ?? humanize(phase)}
-                    {broke && <span className="sr-only"> (failed)</span>}
-                  </span>
-                </span>
-              );
-            })}
-          </span>
-          {turnPills(turn).map((pill) => (
-            <Tag key={pill.label} variant={pill.variant} size="sm">
-              {pill.label}
-            </Tag>
-          ))}
+          <Tag variant={outcome.tone} size="sm">
+            {outcome.label}
+          </Tag>
           <span className="spacer" />
-          <time className="task-when" dateTime={turn.at} title={fmtDateTime(turn.at)}>
-            {fmtMinute(turn.at)}
+          <time
+            className="task-when"
+            dateTime={story.started_at}
+            title={fmtDateTime(story.started_at)}
+          >
+            {fmtMinute(story.started_at)}
           </time>
         </header>
         <div className="task-turn-body">
-          {/* A TURN NO SEGMENT WROTE AN ACCOUNT FOR (it failed, or parked,
-              before one was written) says so in one quiet line: a card per
-              turn repeating the reason in full body text read as the turn's
-              content. The reason is the title. */}
-          {turn.summary ? (
-            <p className="task-turn-summary">{turn.summary}</p>
-          ) : (
-            <p
-              className="task-turn-nosummary"
-              title="This turn failed or parked before it wrote an account of itself. The trace has the detail while the event history holds it."
-            >
-              No summary recorded — see the trace
-            </p>
+          {why && <p className="task-turn-why">{why}</p>}
+          {story.did.length > 0 && (
+            <ul className="task-turn-did" aria-label="What it did">
+              {story.did.map((action, i) => (
+                <li key={`${action.kind}:${action.at}:${i}`}>{actionLine(action)}</li>
+              ))}
+            </ul>
           )}
-          {turn.review && (
-            <div className="task-turn-review">
-              <CornerDownLeftGlyph size="sm" />
-              <p>
-                <b>Reviewer:</b> {turn.review}
-              </p>
-            </div>
-          )}
-          {(turn.tools ?? []).length > 0 && (
-            <ul className="task-turn-tools" aria-label="Tools it called">
-              {(turn.tools ?? []).map((tool) => (
-                <li key={tool.name} className="task-tool mono">
-                  {tool.calls > 1 ? `${tool.name} ×${tool.calls}` : tool.name}
+          {story.left_behind.length > 0 && (
+            <ul className="task-turn-left" aria-label="What it left behind">
+              {story.left_behind.map((link, i) => (
+                <li key={`${link.kind}:${link.id}:${link.change}:${i}`}>
+                  <a
+                    className="prose-link"
+                    href={
+                      link.kind === "task"
+                        ? href(["work", link.key || link.id])
+                        : href(["knowledge", "pages", link.id])
+                    }
+                  >
+                    {link.kind === "task" ? link.key || link.title : link.title}
+                  </a>{" "}
+                  {linkLine(link, chrome.statuses)}
                 </li>
               ))}
             </ul>
           )}
-          {/* WHAT IT TOOK, on its own line under the chips and read from the
-              left, as the artboard sets it: a figure floated to the far edge
-              of a row of chips reads as belonging to the last chip. */}
-          <p className="task-turn-meta">
-            <span className="task-num">
-              {`${fmtDuration(turn.wall_ms)} · ${fmtCount(turn.tokens)} tokens`}
-            </span>
-            <a className="t-link task-trace" href={href(["live", "turns", turn.turn_id])}>
-              Trace
-            </a>
-          </p>
+          {involved && <p className="task-turn-involved">{involved}</p>}
+          {story.your_note && (
+            <p className="task-turn-note">
+              <b>{noteLine(story.your_note)}:</b> “{story.your_note.note}”
+            </p>
+          )}
+          {(story.duration_ms > 0 || viewer.admin) && (
+            <p className="task-turn-meta">
+              {story.duration_ms > 0 && (
+                <span className="task-num">{`worked ${fmtDuration(story.duration_ms)}`}</span>
+              )}
+              {/* THE TRACE IS HOW IT RAN, which is an admin's to read
+                  (ADR-0031): offered to anybody else it is a link to a
+                  refusal. */}
+              {viewer.admin && (
+                <a className="t-link task-trace" href={href(["live", "turns", story.turn_id])}>
+                  Trace
+                </a>
+              )}
+            </p>
+          )}
         </div>
       </article>
     </li>

@@ -321,19 +321,23 @@ when the purge landed is dropped on every node rather than stopping them. The
 tokens are still on the seat's own counters and in the spend history; only the
 task's share is gone, with the task.
 
-**A task lists its own turns.** Every charged segment is a row the task keeps
-for good — in the replicated estate, beside the counters it added to — so the
-task's page lists its turns long after the thirty days a node keeps its own
-event history, on any node, including turns that ran on a node that has since
-left. The list is `work_item_turns`: one entry per TURN, its segments folded
-(tokens, rounds and wall time summed; the phases in the order each first ran;
-the outcome, summary and review of its newest segment), newest first, paged by
-the position of each turn's first segment so a turn that gains a segment while
-you read never moves between pages. Each entry is numbered **"Turn n"** by the
-task: the position of its counted segment among every counted segment on the
-task, so the newest turn's number IS `spend_turns` and a card reading "Turn 3"
-sits beside a cost reading "3 turns". A turn whose segments on this task
-counted none — more of a turn charged elsewhere — carries no number.
+**A task tells its own turns, as stories.** Every charged segment is a row the
+task keeps for good — in the replicated estate, beside the counters it added
+to — and that row is what NUMBERS a turn: **"Turn n"** is the position of the
+turn's counted segment among every counted segment on the task, so the newest
+turn's number IS `spend_turns` and a card reading "Turn 3" sits beside a cost
+reading "3 turns". A turn whose segments on this task counted none — more of a
+turn charged elsewhere — carries no number.
+
+What the task page SHOWS of each turn is its **story** (`turn_stories` with
+`work_item=native:<id>`, see the [API reference](../reference/api-endpoints.md#queries)):
+who worked on it and which turn it was, why it started, the pages it read and
+the coding jobs it ran, every task and page it changed, who else it involved,
+and how it ended — the published facts, read alike by every teammate, and
+nothing the machine processed: no prompt, tool, model or token count. How it
+ran is the turn's trace, which an admin opens from the card. A story is read
+from the event history, so it lives as long as that does — thirty days on each
+data node; what outlives it is the count above and the task's spend.
 
 **What a turn did rides on its record.** Beside its spend, a segment's record
 carries the turn's own account of what it did (the reviewer's summary of what
@@ -345,7 +349,7 @@ the card by the seat's auxiliary model and marked `(condensed)`, never cut; wher
 no rewrite can be had the card says how long the account is and to open the
 turn for it — and, for a segment that failed because one of its phases did,
 which phase that was. The arguments and results of every call stay on the
-turn's trace, which a task's turn card links to.
+turn's trace.
 
 The counters are `spend_turns`, `spend_rounds`, `spend_input`, `spend_output`,
 `spend_cache_read`, `spend_cache_write`, `spend_wall_ms`, `spend_tokens`

@@ -292,6 +292,12 @@ type turnsParams struct {
 	Sort      store.TurnSort `json:"sort,omitempty"`
 	Limit     int            `json:"limit"`
 
+	// StartedBy is [store.TurnQuery.StartedBy]: the turns a person set going.
+	// A peer that read the listing without it would answer every turn in its
+	// window, and the merge would page the company's turns under one
+	// person's name.
+	StartedBy []string `json:"started_by,omitempty"`
+
 	Since time.Time `json:"since,omitzero"`
 	Until time.Time `json:"until,omitzero"`
 
@@ -309,7 +315,8 @@ func turnsParamsOf(q store.TurnQuery) turnsParams {
 		Since: q.Since, Until: q.Until, At: q.At,
 		SinceDays: q.SinceDays, AgentID: q.AgentID,
 		Model: q.Model, WorkKey: q.WorkKey, WorkItem: q.WorkItem,
-		Failed: q.Failed, Sort: q.Sort, Limit: q.Limit,
+		StartedBy: q.StartedBy,
+		Failed:    q.Failed, Sort: q.Sort, Limit: q.Limit,
 	}
 	if q.Before != nil {
 		p.Before, p.BeforeID = q.Before.Start, q.Before.TurnID
@@ -324,7 +331,8 @@ func (p turnsParams) query(ids []string) store.TurnQuery {
 		Since: p.Since, Until: p.Until, At: p.At,
 		SinceDays: p.SinceDays, AgentID: p.AgentID,
 		Model: p.Model, WorkKey: p.WorkKey, WorkItem: p.WorkItem,
-		Failed: p.Failed, Sort: p.Sort, Limit: p.Limit,
+		StartedBy: p.StartedBy,
+		Failed:    p.Failed, Sort: p.Sort, Limit: p.Limit,
 		IDs: ids,
 	}
 	if !p.Before.IsZero() {

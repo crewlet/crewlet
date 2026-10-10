@@ -132,13 +132,6 @@ func (w Work) Routing(ctx context.Context, q tracker.RoutingQuery, now time.Time
 	return call(ctx, w.r, opRouting, nil, routingArgs{Query: q, Now: now})
 }
 
-// TurnsOf answers a page of the turns charged to one task.
-func (w Work) TurnsOf(ctx context.Context, idOrKey, cursor string, limit int,
-	fresh statelog.Freshness) (tracker.TaskTurns, error) {
-	return call(ctx, w.r, opTurnsOf, nil,
-		turnsOfArgs{IDOrKey: idOrKey, Cursor: cursor, Limit: limit, Fresh: fresh})
-}
-
 // EveryView answers every saved view, whoever owns it.
 func (w Work) EveryView(ctx context.Context, q tracker.EveryViewQuery) (tracker.ViewListing, error) {
 	return call(ctx, w.r, opEveryView, nil, everyViewArgs{Query: q, Zone: zoneArg(q.Zone)})
@@ -166,6 +159,12 @@ func (w Work) Decisions(ctx context.Context, q tracker.DecisionsQuery, now time.
 func (w Work) TurnPlaces(ctx context.Context, runs []string,
 	fresh statelog.Freshness) (map[string]tracker.TurnPlace, error) {
 	return call(ctx, w.r, opTurnPlaces, nil, turnPlacesArgs{Runs: runs, Fresh: fresh})
+}
+
+// TurnWrites answers what each run changed on the tracker.
+func (w Work) TurnWrites(ctx context.Context, runs []string,
+	fresh statelog.Freshness) (map[string][]tracker.TurnWrite, error) {
+	return call(ctx, w.r, opTrackerTurnWrites, nil, turnWritesArgs{Runs: runs, Fresh: fresh})
 }
 
 // WorkWriter is the tracker's write side, acting as one party.
@@ -431,6 +430,12 @@ func (p Pages) Revision(ctx context.Context, pageID string, version int,
 	fresh statelog.Freshness) (pages.Revision, bool, error) {
 	out, err := call(ctx, p.r, opRevision, nil, revisionArgs{PageID: pageID, Version: version, Fresh: fresh})
 	return out.Revision, out.Found, err
+}
+
+// TurnWrites answers what each run changed in the knowledge base.
+func (p Pages) TurnWrites(ctx context.Context, runs []string,
+	fresh statelog.Freshness) (map[string][]pages.TurnWrite, error) {
+	return call(ctx, p.r, opPageTurnWrites, nil, turnWritesArgs{Runs: runs, Fresh: fresh})
 }
 
 // Create writes a new page. Never repeated when unanswered — see

@@ -68,6 +68,11 @@ var namedRoutes = []struct {
 	// filing it there would put the unit of work under the log that
 	// records it.
 	{method: "GET", pattern: "/turns", what: "turns"},
+	// THE SAME TURNS TOLD AS STORIES, under /turns/ because a story is a
+	// reading of one — and at member reach where the list above is admin,
+	// which each route takes from its own question.
+	{method: "GET", pattern: "/turns/stories", what: "turn_stories"},
+	{method: "GET", pattern: "/turns/stories/{turn_id}", what: "turn_story", path: map[string]string{"turn_id": "turn_id"}},
 	{method: "GET", pattern: "/tokens/breakdown", what: "tokens"},
 	// THE SAME SPEND WITH A TIME AXIS. Beside the breakdown rather than a
 	// parameter of it: the two answers have different shapes, and one route
@@ -127,9 +132,6 @@ var namedRoutes = []struct {
 	// net/http refuses beside /work/projects/{key}: neither is more specific
 	// for "/work/projects/comments", so the mux would not start.
 	{method: "GET", pattern: "/work/comments", what: "work_comments"},
-	// A TASK'S TURNS, beside its thread and for the same reason: a literal
-	// segment with `id=` rather than /work/{id}/turns.
-	{method: "GET", pattern: "/work/turns", what: "work_item_turns"},
 	// SEARCH AND ROUTING, both above /work/{id} for the reason the comment
 	// there gives: a literal segment beats the wildcard, so neither is read
 	// as a task whose key is "search" or "routing".

@@ -26,10 +26,8 @@ import (
 type stubWork struct {
 	places        map[string]tracker.TurnPlace
 	placesAsked   []string
-	turns         tracker.TaskTurns
-	turnsRef      string
-	turnsCursor   string
-	turnsLimit    int
+	writes        map[string][]tracker.TurnWrite
+	writesAsked   []string
 	inbox         tracker.InboxAnswer
 	inboxQuery    tracker.InboxQuery
 	routing       tracker.RoutingAnswer
@@ -204,11 +202,17 @@ func (s *stubWork) Search(_ context.Context, q tracker.SearchQuery) (tracker.Sea
 	return tracker.SearchAnswer{Hits: s.ranked, Outcome: s.searchOutcome}, s.err
 }
 
-func (s *stubWork) TurnsOf(_ context.Context, ref, cursor string, limit int,
-	fresh statelog.Freshness) (tracker.TaskTurns, error) {
+func (s *stubWork) TurnWrites(_ context.Context, runs []string,
+	_ statelog.Freshness) (map[string][]tracker.TurnWrite, error) {
 
-	s.turnsRef, s.turnsCursor, s.turnsLimit, s.taskFresh = ref, cursor, limit, fresh
-	return s.turns, s.err
+	s.writesAsked = runs
+	out := map[string][]tracker.TurnWrite{}
+	for _, run := range runs {
+		if wrote, ok := s.writes[run]; ok {
+			out[run] = wrote
+		}
+	}
+	return out, s.err
 }
 
 func (s *stubWork) Tasks(_ context.Context, q tracker.Query, _ time.Time) (tracker.Answer, error) {
@@ -231,6 +235,9 @@ type stubPages struct {
 	total      int
 	after      string
 	err        error
+
+	// writes is what each run changed in the knowledge base, for a story.
+	writes map[string][]pages.TurnWrite
 
 	// level is what the surface asked for, so a route that stopped naming
 	// one is visible: an unset level is what made every page read on this
@@ -294,6 +301,18 @@ func (s *stubPages) Revision(_ context.Context, pageID string, version int,
 	s.askedPage, s.askedVersion = pageID, version
 	s.level, s.fresh = fresh.Level, fresh
 	return s.revision, s.revisionHeld, s.err
+}
+
+func (s *stubPages) TurnWrites(_ context.Context, runs []string,
+	_ statelog.Freshness) (map[string][]pages.TurnWrite, error) {
+
+	out := map[string][]pages.TurnWrite{}
+	for _, run := range runs {
+		if wrote, ok := s.writes[run]; ok {
+			out[run] = wrote
+		}
+	}
+	return out, s.err
 }
 
 // personalQuestions are the four scoped by the caller's own seat and line —
@@ -465,44 +484,6 @@ func TestTheItemQueryAsksWithTheChart(t *testing.T) {
 	if w.taskWants.Units == nil {
 		t.Error("work_item read the item with no chart, so its unit fields " +
 			"render as a key nobody reads and as a team the chart has lost")
-	}
-}
-
-// A TASK'S TURNS ARE ASKED AT THE CALLER'S CURSOR AND PAGE, HELD TO THE CEILING.
-//
-// The page walks back through a task's turns by the cursor the previous page
-// handed out, and a page bigger than the tracker's own ceiling is the
-// ceiling rather than a refusal or an unbounded read. A task that does not
-// exist is `not_found`, never an empty list a screen would draw as "no agent
-// has worked on this".
-func TestTheTurnsQuestionFollowsTheCursorAtTheCallersPage(t *testing.T) {
-	w := &stubWork{turns: tracker.TaskTurns{
-		Task: "t-1", Key: "ENG-1",
-		Turns: []tracker.TaskTurn{{TurnID: "run-2", Ordinal: 2, Tokens: 900}},
-		Next:  "41",
-	}}
-	got, err := askNative(t, queries.Sources{Work: w}, "work_item_turns",
-		map[string]any{"id": "ENG-1", "cursor": "88", "limit": 500})
-	if err != nil {
-		t.Fatalf("work_item_turns: %v", err)
-	}
-	if w.turnsRef != "ENG-1" || w.turnsCursor != "88" || w.turnsLimit != tracker.MaxTaskTurns {
-		t.Errorf("asked the reader for (%q, %q, %d), want (ENG-1, 88, %d)",
-			w.turnsRef, w.turnsCursor, w.turnsLimit, tracker.MaxTaskTurns)
-	}
-	page, ok := got.(tracker.TaskTurns)
-	if !ok || page.Next != "41" || len(page.Turns) != 1 || page.Turns[0].Ordinal != 2 {
-		t.Errorf("answered %#v, want the reader's page with its cursor", got)
-	}
-
-	if _, err := askNative(t, queries.Sources{Work: w}, "work_item_turns",
-		map[string]any{}); !errors.Is(err, queries.ErrBadParams) {
-		t.Errorf("no id answered %v, want bad_params", err)
-	}
-	gone := &stubWork{err: tracker.ErrNoTask}
-	if _, err := askNative(t, queries.Sources{Work: gone}, "work_item_turns",
-		map[string]any{"id": "ENG-404"}); !errors.Is(err, queries.ErrNotFound) {
-		t.Errorf("a task that does not exist answered %v, want not_found", err)
 	}
 }
 
@@ -1199,8 +1180,6 @@ var sessionQuestions = []sessionQuestion{
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.taskLevel }, nil},
 	{"work_comments", "tracker", map[string]any{"item": "ENG-1"},
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.taskLevel }, nil},
-	{"work_item_turns", "tracker", map[string]any{"id": "ENG-1"},
-		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.taskFresh.Level }, nil},
 	{"work_views", "tracker", map[string]any{"container": "workspace"},
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.views.Level }, nil},
 	{"work_saved_views", "tracker", map[string]any{},
@@ -1466,8 +1445,6 @@ func TestTheCallersFloorReachesEveryNativeQuestion(t *testing.T) {
 		{"work_item", map[string]any{"id": "ENG-1"},
 			func(w *stubWork, _ *stubPages) statelog.Position { return w.taskFresh.MinPosition }},
 		{"work_comments", map[string]any{"item": "ENG-1"},
-			func(w *stubWork, _ *stubPages) statelog.Position { return w.taskFresh.MinPosition }},
-		{"work_item_turns", map[string]any{"id": "ENG-1"},
 			func(w *stubWork, _ *stubPages) statelog.Position { return w.taskFresh.MinPosition }},
 		{"work_views", map[string]any{"container": "workspace"},
 			func(w *stubWork, _ *stubPages) statelog.Position { return w.views.MinPosition }},

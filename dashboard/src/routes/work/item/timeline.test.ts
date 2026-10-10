@@ -8,7 +8,7 @@
  */
 
 import { expect, test } from "vitest";
-import type { WorkActivityRecord, WorkComment, WorkItemTurn } from "~/protocol/index.ts";
+import type { TurnStory, WorkActivityRecord, WorkComment } from "~/protocol/index.ts";
 import { timeline } from "./timeline.ts";
 
 const change = (id: string, at: string, over: Partial<WorkActivityRecord> = {}) =>
@@ -27,20 +27,20 @@ const change = (id: string, at: string, over: Partial<WorkActivityRecord> = {}) 
   }) as WorkActivityRecord;
 const comment = (id: string, at: string) =>
   ({ id, task: "t-1", author: "ada", body: id, created_at: at }) as WorkComment;
+/** A story, placed at when its session began — the instant its list pages by. */
 const turn = (id: string, at: string) =>
   ({
     turn_id: id,
-    ordinal: 1,
     seat: "swe",
-    segments: 1,
-    tokens: 1,
-    cache_read: 0,
-    rounds: 1,
-    wall_ms: 1,
-    outcome: "done",
-    phases: [],
-    at,
-  }) as WorkItemTurn;
+    started_at: at,
+    duration_ms: 1,
+    why: { origin: "task" },
+    did: [],
+    left_behind: [],
+    outcome: "approved",
+    helpers: 0,
+    consulted: [],
+  }) as TurnStory;
 
 // THE MERGE IS CUT AT THE NEWEST POINT ANY HISTORY WITH MORE PAGES STOPPED AT.
 // The turns stopped at the 10th with more behind them, so the change of the

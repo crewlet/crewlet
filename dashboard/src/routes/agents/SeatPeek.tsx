@@ -23,8 +23,9 @@
  *     public health push says (`heldBy`: this node, by name, or another),
  *     exactly as the profile's Setup card tells them, rather than being sent
  *     a refusal to draw or told a fact already on their screen is withheld;
- *   * `work_item_turns` — which turn this is on its task ("Turn 2") — asked
- *     only while the seat is working on one.
+ *   * `turn_story` — which turn this is on its task ("Turn 2"), by the task's
+ *     own count — asked only while the seat is working on one
+ *     (`lib/useTurnOrdinal.ts`).
  *
  * The company document is NOT read: the model chain a turn resolves is on the
  * public projection, so a per-peek read of the whole guarded configuration
@@ -62,6 +63,7 @@ import {
 } from "~/lib/format.ts";
 import { useAgents, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useTurnOrdinal } from "~/lib/useTurnOrdinal.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import {
   activityOf,
@@ -113,24 +115,6 @@ export function budgetLine(
     label: `Budget ${PERIOD_WORDS[w.period]}`,
     figure: `${fmtCount(w.used)} of ${fmtCount(w.limit ?? 0)}${resets ? ` · ${resets}` : ""}`,
   };
-}
-
-/**
- * Which turn this is on the task it is charged to, from the task's own turn
- * list (newest first): the running turn's own ordinal once a segment of it is
- * recorded (a coding run parks the turn and resumes it), else the one after
- * the newest recorded — the running turn is written when it ends. Null when
- * the list is not in hand.
- */
-export function turnOrdinal(
-  turnId: string,
-  newest: { turn_id: string; ordinal: number } | undefined,
-  answered: boolean,
-): number | null {
-  if (!answered) return null;
-  if (!newest) return 1;
-  if (newest.turn_id === turnId) return newest.ordinal || null;
-  return newest.ordinal + 1;
 }
 
 /** "Turn 2 · round 7 of 25 · coding run in progress". */
@@ -199,16 +183,7 @@ function SeatPeekBody({
   // THE THREE READS — see the file's doc.
   const workload = useQuery("work_workload", undefined, { pollMs: 60_000 });
   const fleet = useQuery("fleet", undefined, { enabled: viewer.admin, pollMs: 60_000 });
-  const turns = useQuery(
-    "work_item_turns",
-    { id: item, limit: 1 },
-    { enabled: state === "working" && item !== "" },
-  );
-
-  const ordinal =
-    turn && item
-      ? turnOrdinal(turn.turn_id, turns.data?.turns?.[0], !!turns.data && turns.data.key === item)
-      : null;
+  const ordinal = useTurnOrdinal(state === "working" ? item : "", turn?.turn_id ?? "");
   const started = turn?.started_at ?? call?.started_at;
   const elapsed = started ? now - Date.parse(started) : null;
   const facts = turnFacts(turn, call, ordinal);

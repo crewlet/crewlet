@@ -2,6 +2,7 @@ package eventfan
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -72,6 +73,27 @@ func TestATurnCursorCrossesTheWireWhole(t *testing.T) {
 	}
 	if got := back.query(nil).Before; got == nil || *got != *cursor {
 		t.Errorf("the cursor %+v came back off the wire as %+v", cursor, got)
+	}
+}
+
+// A PERSON'S TURNS STAY THEIRS ACROSS THE WIRE: a peer that read the listing
+// without `started_by` would answer every turn in its window, and the merge
+// would page the company's turns under one person's name.
+//
+// Mutation: drop StartedBy from turnsParamsOf or query.
+func TestWhoSetATurnGoingCrossesTheWire(t *testing.T) {
+	t.Parallel()
+	who := []string{"ada", "ada-key"}
+	raw, err := json.Marshal(turnsParamsOf(store.TurnQuery{StartedBy: who, At: time.Now()}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back turnsParams
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatal(err)
+	}
+	if got := back.query(nil).StartedBy; !slices.Equal(got, who) {
+		t.Errorf("started_by %v came back off the wire as %v", who, got)
 	}
 }
 

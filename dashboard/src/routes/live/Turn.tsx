@@ -62,7 +62,7 @@ import { pathOf } from "~/app/frame/objects.ts";
 import { auxiliaryRecords, auxiliaryTokens } from "~/lib/auxiliary.ts";
 import type { Coverage } from "~/contract/coverage.ts";
 import { ToolsTab } from "./trace/Tools.tsx";
-import { useTurnOrdinal } from "./trace/useTurnOrdinal.ts";
+import { useTurnOrdinal } from "~/lib/useTurnOrdinal.ts";
 import { LiveOutput, NoJobCaption, steerMarks, Waterfall } from "./trace/Waterfall.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
@@ -1541,8 +1541,8 @@ const TURN_TAB_LABELS: Record<TurnTab, string> = {
  * What the trail, the browser tab and the palette's recents call this turn.
  *
  * ON A TASK IT IS THE TASK'S OWN COUNT: "Turn 3 · ENG-42", the ordinal off
- * the task's turn list (`work_item_turns`) — the name the task page gives the
- * same turn, so a reader who came from there finds it. Before the ordinal is
+ * the turn's story (`turn_story`, through `useTurnOrdinal`) — the name the
+ * task page gives the same turn, so a reader who came from there finds it. Before the ordinal is
  * known it is "Turn · ENG-42", which still says which task and never guesses a
  * number. Off a task it is the lead of what the turn did, as it always was —
  * or the empty string where nothing has named it, so the trail keeps the id.
@@ -1690,12 +1690,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   // THE TRAIL: Live › {agent} › Turn n · KEY — see [turnCrumbLabel], and
   // `app/crumbs.ts` for the seat crumb, which leads back to what is running
   // for that seat.
-  const ordinal = useTurnOrdinal(
-    view.workItem?.key ?? "",
-    turnId,
-    running,
-    view.startedAt || view.span.from,
-  );
+  const ordinal = useTurnOrdinal(view.workItem?.key ?? "", turnId);
   const crumb = turnCrumbLabel(view, ordinal);
   usePageLabels({
     ...(crumb ? { [turnId]: crumb } : {}),

@@ -88,9 +88,13 @@ func (deskBoard) Decisions(_ context.Context, q tracker.DecisionsQuery, _ time.T
 	return tracker.DecisionsAnswer{Asks: []tracker.AskRow{}, Complete: q.Who.Handle == "founder"}, nil
 }
 
-func (deskBoard) TurnsOf(_ context.Context, ref, cursor string, limit int,
-	_ statelog.Freshness) (tracker.TaskTurns, error) {
-	return tracker.TaskTurns{Task: ref, Next: cursor + "+" + strconv.Itoa(limit)}, nil
+func (deskBoard) TurnWrites(_ context.Context, runs []string,
+	fresh statelog.Freshness) (map[string][]tracker.TurnWrite, error) {
+	out := map[string][]tracker.TurnWrite{}
+	for _, run := range runs {
+		out[run] = []tracker.TurnWrite{{TaskID: "t-" + run, Status: string(fresh.Level)}}
+	}
+	return out, nil
 }
 
 func (deskBoard) TurnPlaces(_ context.Context, runs []string,
@@ -123,6 +127,15 @@ func (deskPages) Activity(_ context.Context, q pages.PageActivityQuery) (pages.P
 func (deskPages) Revision(_ context.Context, pageID string, version int,
 	_ statelog.Freshness) (pages.Revision, bool, error) {
 	return pages.Revision{PageID: pageID, Version: version}, version > 0, nil
+}
+
+func (deskPages) TurnWrites(_ context.Context, runs []string,
+	_ statelog.Freshness) (map[string][]pages.TurnWrite, error) {
+	out := map[string][]pages.TurnWrite{}
+	for _, run := range runs {
+		out[run] = []pages.TurnWrite{{PageID: "p-" + run, Kind: pages.ChangeSaved}}
+	}
+	return out, nil
 }
 
 type deskWriter struct {
@@ -235,9 +248,11 @@ func TestEveryOperatorOperationCrossesWhole(t *testing.T) {
 		now, berlin); err != nil || !asks.Complete {
 		t.Errorf("decisions = (%+v, %v), want the founder's on the asker's clock", asks, err)
 	}
-	if turns, err := work.TurnsOf(ctx, "t-1", "c-3", 5, statelog.Freshness{}); err != nil ||
-		turns.Task != "t-1" || turns.Next != "c-3+5" {
-		t.Errorf("turns = (%+v, %v), want t-1's from c-3 by 5", turns, err)
+	if wrote, err := work.TurnWrites(ctx, []string{"r-1"},
+		statelog.Freshness{Level: statelog.ReadStale}); err != nil ||
+		len(wrote["r-1"]) != 1 || wrote["r-1"][0].TaskID != "t-r-1" ||
+		wrote["r-1"][0].Status != string(statelog.ReadStale) {
+		t.Errorf("turn writes = (%+v, %v), want r-1's, read at the level asked", wrote, err)
 	}
 	if places, err := work.TurnPlaces(ctx, []string{"r-1", "r-2"}, statelog.Freshness{}); err != nil ||
 		places["r-2"].TaskID != "t-r-2" || places["r-2"].Ordinal != 2 {
@@ -266,6 +281,10 @@ func TestEveryOperatorOperationCrossesWhole(t *testing.T) {
 	}
 	if _, found, err := kb.Revision(ctx, "p-7", 0, statelog.Freshness{}); err != nil || found {
 		t.Errorf("a revision the page has none of = (%v, %v), want not found", found, err)
+	}
+	if wrote, err := kb.TurnWrites(ctx, []string{"r-1"}, statelog.Freshness{}); err != nil ||
+		len(wrote["r-1"]) != 1 || wrote["r-1"][0].PageID != "p-r-1" {
+		t.Errorf("page turn writes = (%+v, %v), want r-1's", wrote, err)
 	}
 
 	operator := Actor{Handle: "founder", Kind: tracker.AuthorOperator,

@@ -2,8 +2,9 @@
  * A history the engine answers a page at a time, followed back past its
  * newest page.
  *
- * The task page draws three — its comments (`work_comments`), the agent turns
- * charged to it (`work_item_turns`) and what changed on it (`work_activity`) —
+ * The task page draws three — its comments (`work_comments`), the stories of
+ * the agent turns charged to it (`turn_stories`) and what changed on it
+ * (`work_activity`) —
  * and a seat's profile draws its turns (`turns {seat}`). Each is answered
  * newest first with a cursor to the page before, and each used to be read as
  * its first page and nothing more, so a task past twenty comments or a seat
@@ -18,8 +19,8 @@
  *
  * WHERE THE CURSOR IS is the caller's to say (`cursorOf`), because the
  * answers do not agree on a key: the tracker's histories carry `next_cursor`
- * and the turn list `next`, and a hook that read one of them would page the
- * other as a list with nothing before it.
+ * and the turn and story lists `next`, and a hook that read one of them would
+ * page the other as a list with nothing before it.
  */
 
 import { useCallback, useMemo, useState } from "react";

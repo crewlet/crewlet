@@ -12,14 +12,14 @@ import (
 
 // TurnPlace is where one run sits in the tracker: the task it was charged to
 // and its "Turn n" there — what a page's reader line says as "turn 3 on
-// ENG-412".
+// ENG-412", and a turn's story as "session 3".
 type TurnPlace struct {
 	TaskID string `json:"id"`
 	Key    string `json:"key"`
 	Title  string `json:"title"`
 
-	// Ordinal is the task's own count, exactly [TaskTurn.Ordinal]: zero for
-	// a run with no counted row on the task.
+	// Ordinal is the task's own count of turns (`turnOrdinals`): zero for a
+	// run with no counted row on the task.
 	Ordinal int `json:"ordinal"`
 }
 
@@ -41,10 +41,11 @@ const MaxTurnPlaces = 200
 // counted row; a run with no counted row anywhere is placed on the task of its
 // newest row, with ordinal zero rather than an invented one.
 //
-// # The ordinal is the task page's
+// # The ordinal is the task's count
 //
-// Read by the same numbering [Reader.TurnsOf] uses (`turnOrdinals`), so "turn
-// 3" beside a reader and "Turn 3" on the task's own page are one count.
+// Numbered by `turnOrdinals`, the one numbering of a task's turns, so "turn 3"
+// beside a reader, "session 3" on a story and the task's `spend.turns` are one
+// count.
 func (r *Reader) TurnPlaces(ctx context.Context, runs []string,
 	fresh statelog.Freshness) (map[string]TurnPlace, error) {
 
@@ -137,4 +138,47 @@ func readTurnPlaces(ctx context.Context, tx *sql.Tx, runs []string,
 		out[run] = place
 	}
 	return nil
+}
+
+// turnOrdinals numbers every counted row on a task in log order and answers,
+// per turn, the number of its first counted row. One pass over the task's own
+// rows through the task's index; the count is read off the record, which is
+// where [TurnSpend.Turns] lives.
+//
+// A TURN'S COUNT, NOT A ROW'S. A turn that parks on a coding run completes more
+// than once under one run id, and each completion charges a row of its own (the
+// engine's turnspend.go) — so the rows are SEGMENTS, and numbered by row one
+// turn would be three. A row whose spend carries `turns` is the one segment of
+// a charged turn that counts it (the dispatch, or the segment that paid for a
+// dispatch charged to nothing), so the newest turn's number IS the task's
+// `spend.turns`: "turn 3" beside a reader and "3 turns" in the task's cost are
+// one fact counted once. A turn whose every segment here carries no count —
+// more of a turn charged to another item — has no number, which is answered as
+// zero rather than invented.
+func turnOrdinals(ctx context.Context, tx *sql.Tx, task string) (map[string]int, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT turn_id
+		  FROM tracker_turns
+		 WHERE task_id = ? AND COALESCE(json_extract(document, '$.spend.turns'), 0) > 0
+		 ORDER BY log_seq`, task)
+	if err != nil {
+		return nil, fmt.Errorf("tracker: number the turns of task %s: %w", task, err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]int{}
+	n := 0
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, fmt.Errorf("tracker: number the turns of task %s: %w", task, err)
+		}
+		n++
+		if _, seen := out[key]; !seen {
+			out[key] = n
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("tracker: number the turns of task %s: %w", task, err)
+	}
+	return out, nil
 }

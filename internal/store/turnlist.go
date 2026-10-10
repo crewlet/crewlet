@@ -71,6 +71,7 @@ import (
 var (
 	phaseCompleted = types.AgentPhaseCompleted{}.EventType()
 	turnCompleted  = types.TurnCompleted{}.EventType()
+	turnStarted    = types.AgentTurnStarted{}.EventType()
 	runLost        = types.SandboxRunFailed{}.EventType()
 )
 
@@ -270,6 +271,15 @@ type TurnQuery struct {
 	// and every record it has is folded, so the row is the same row the
 	// unfiltered list shows. See schema/0033 for the column and its index.
 	WorkItem string
+
+	// StartedBy narrows to the turns a PERSON set going: the trigger their
+	// opening record names was raised by one of these identities — a seat's
+	// handle and the credential bound to it, which are the two names a
+	// person's own writes carry (a write through a key is attributed to the
+	// key, so a comment that woke a seat names the token). ON THE TURN, read
+	// off its `agent_turn_started` rows, for WorkItem's reason. Empty is
+	// everybody.
+	StartedBy []string
 
 	// Failed narrows to turns that carried a failure, or to those that did
 	// not. Nil is both, which is not the same as false.
@@ -1047,5 +1057,33 @@ func (q TurnQuery) turnWhere(floor time.Time, read turnRead) ([]string, []any) {
 				"WHERE work_item = ? AND work_item <> '' AND event_time >= ? AND turn_id != '')")
 		args = append(args, q.WorkItem, EncodeTime(floor))
 	}
+	if who := nonEmpty(q.StartedBy); len(who) > 0 && !shares {
+		// OFF THE DISPATCH'S OPENING RECORD, never a resumed segment's: a
+		// parked run re-enters on the box's completion, whose trigger is the
+		// engine's rather than whoever asked for the work. AND ONLY THE
+		// NAMES GIVEN — an empty identity bound here would match every
+		// trigger nobody raised, which is every schedule fire there is.
+		where = append(where,
+			"turn_id IN (SELECT turn_id FROM crewlet_events "+
+				"WHERE event_type = ? AND event_time >= ? AND turn_id != '' "+
+				"AND COALESCE(json_extract(payload, '$.resumed'), 0) = 0 "+
+				"AND json_extract(payload, '$.trigger.actor') IN (?"+
+				strings.Repeat(",?", len(who)-1)+"))")
+		args = append(args, turnStarted, EncodeTime(floor))
+		for _, id := range who {
+			args = append(args, id)
+		}
+	}
 	return where, args
+}
+
+// nonEmpty is names without the blank ones, in their order.
+func nonEmpty(names []string) []string {
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		if name != "" {
+			out = append(out, name)
+		}
+	}
+	return out
 }

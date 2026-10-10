@@ -152,10 +152,10 @@ func (emptyWork) Task(context.Context, string, tracker.DetailWants,
 	return tracker.TaskDetail{}, nil
 }
 
-func (emptyWork) TurnsOf(context.Context, string, string, int,
-	statelog.Freshness) (tracker.TaskTurns, error) {
+func (emptyWork) TurnWrites(context.Context, []string, statelog.Freshness) (
+	map[string][]tracker.TurnWrite, error) {
 
-	return tracker.TaskTurns{Turns: []tracker.TaskTurn{}}, nil
+	return map[string][]tracker.TurnWrite{}, nil
 }
 
 func (emptyWork) EveryView(context.Context, tracker.EveryViewQuery) (tracker.ViewListing, error) {
@@ -260,6 +260,11 @@ func (emptyPages) Activity(context.Context, pages.PageActivityQuery) (pages.Page
 func (emptyPages) Revision(context.Context, string, int, statelog.Freshness) (
 	pages.Revision, bool, error) {
 	return pages.Revision{}, false, nil
+}
+
+func (emptyPages) TurnWrites(context.Context, []string, statelog.Freshness) (
+	map[string][]pages.TurnWrite, error) {
+	return map[string][]pages.TurnWrite{}, nil
 }
 
 func (emptyPages) Containers(context.Context, statelog.Freshness) ([]pages.ContainerListing, error) {

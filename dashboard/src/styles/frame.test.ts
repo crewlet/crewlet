@@ -1368,7 +1368,7 @@ describe("a task's activity", () => {
   // sentence renders a clause each, so the cut landed inside `Status: ` — and
   // took the `turn →` link with it, clipped out of sight and still in the tab
   // order. The task page's activity keeps the rule: every line a change, a
-  // turn's account or a reviewer's request is written in WRAPS.
+  // story's why, what it did or a reader's own note is written in WRAPS.
   //
   // IN THE SHEET because there is nowhere else: jsdom computes no layout, so
   // every case that renders these stays green whether the text wraps or
@@ -1377,8 +1377,17 @@ describe("a task's activity", () => {
   // classes.test.ts fails if either side alone goes back.
   test("a task's activity wraps rather than ellipsing what changed", () => {
     const css = sheet("screens.css");
-    for (const selector of [".task-entry-line p", ".task-turn-summary", ".task-turn-review p"]) {
-      const rule = block(css, selector);
+    for (const selector of [
+      ".task-entry-line p",
+      ".task-turn-why",
+      ".task-turn-did",
+      ".task-turn-left",
+      ".task-turn-involved",
+      ".task-turn-note",
+    ]) {
+      // EVERY rule naming it, a grouped one included — what the story lists
+      // say about wrapping they say once, for both.
+      const rule = rules(css, selector).join("\n");
       expect(rule, selector).toMatch(/overflow-wrap:\s*anywhere/);
       // The three halves of `.truncate`, none of which may come back here.
       expect(rule, selector).not.toMatch(/white-space:\s*nowrap/);

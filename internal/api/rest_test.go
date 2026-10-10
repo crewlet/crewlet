@@ -339,9 +339,9 @@ func (stubWorkReader) Task(context.Context, string, tracker.DetailWants,
 	return tracker.TaskDetail{}, tracker.ErrNoTask
 }
 
-func (stubWorkReader) TurnsOf(context.Context, string, string, int,
-	statelog.Freshness) (tracker.TaskTurns, error) {
-	return tracker.TaskTurns{}, tracker.ErrNoTask
+func (stubWorkReader) TurnWrites(context.Context, []string,
+	statelog.Freshness) (map[string][]tracker.TurnWrite, error) {
+	return map[string][]tracker.TurnWrite{}, nil
 }
 
 func (stubWorkReader) EveryView(context.Context, tracker.EveryViewQuery) (tracker.ViewListing, error) {
