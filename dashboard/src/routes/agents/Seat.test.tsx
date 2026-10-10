@@ -421,7 +421,7 @@ test("a person's profile has three tabs and asks nothing a runtime answers", asy
     "turns",
     "tokens",
     "conversations",
-    "work_item_turns",
+    "turn_story",
   ]) {
     expect(askedFor(what), `a person's profile asked ${what}`).toEqual([]);
   }
@@ -1073,7 +1073,11 @@ test("the current turn names its round against the granted cap, its calls and th
         p.id === "ENG-412"
           ? { task: { id: "i-412", key: "ENG-412", title: "Retry PXE boot on DHCP timeout" } }
           : { task: { id: "x", key: String(p.id), title: "the wrong task" } },
-      work_item_turns: { item: "i-412", key: "ENG-412", turns: [], complete: true },
+      // THE TASK'S FIRST TURN, by the task's own count off the turn's story.
+      turn_story: (p: Record<string, unknown>) => ({
+        complete: true,
+        story: { turn_id: p.turn_id, work_item: { key: "ENG-412", ordinal: 1 } },
+      }),
       turns: { turns: [], next: null },
     },
   });

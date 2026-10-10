@@ -216,6 +216,11 @@ var contract = []Entry{
 	{"LIVE_OUTPUT_MAX_BYTES", ReadScalar, "internal/sandbox.TestTheDashboardHoldsWhatTheRecordWillHold"},
 	{"SANDBOX_TAIL_POLL_MS", ReadScalar, "internal/sandbox.TestTheDashboardPollsPastTheOwnersReuse"},
 
+	// stories.ts
+	{"STORY_OUTCOMES", ReadLiteral, "internal/api/queries.TestTheDashboardNamesEveryStoryValue"},
+	{"STORY_ORIGINS", ReadLiteral, "internal/api/queries.TestTheDashboardNamesEveryStoryValue"},
+	{"STORY_ACTIONS", ReadLiteral, "internal/api/queries.TestTheDashboardNamesEveryStoryValue"},
+
 	// stops.ts
 	{"StopReason", ReadUnion, "internal/providers/llm.TestTheDashboardKnowsEveryStopReason"},
 

@@ -31,6 +31,7 @@ import type { BUDGET_WINDOWS } from "../contract/config.ts";
 import type { OBJECTS_STATES } from "../contract/fleet.ts";
 import type { BudgetState, GROUPS } from "../contract/spend.ts";
 import type { SANDBOX_TAIL_OUTCOMES } from "../contract/sandbox.ts";
+import type { STORY_ACTIONS, STORY_ORIGINS, STORY_OUTCOMES } from "../contract/stories.ts";
 import type { LIVE_CALL_DETAIL } from "../contract/wire.ts";
 import type { AccessAnswer, Reach, TokenRole } from "../contract/access.ts";
 import type { McpServersStatusAnswer } from "../contract/mcp.ts";
@@ -2850,64 +2851,6 @@ export interface WorkTaskRef {
   status: WorkStatus;
 }
 
-/** One tool a turn called, and how many times (`tracker.TurnTool`). */
-export interface WorkTurnTool {
-  name: string;
-  calls: number;
-}
-
-/** One turn charged to a task, its segments folded (`tracker.TaskTurn`). */
-export interface WorkItemTurn {
-  /** The run the segments share — what the trace link carries. */
-  turn_id: string;
-  /** "Turn n": the task's own count of turns. Zero for a turn with no counted
-   *  segment on this task (more of a turn charged elsewhere). */
-  ordinal: number;
-  seat: string;
-  trigger?: string;
-  /** How many completions were charged here; more than one for a turn that
-   *  parked on a coding run. */
-  segments: number;
-  /** Input plus output, over every segment — what the task's spend sums. */
-  tokens: number;
-  cache_read: number;
-  rounds: number;
-  wall_ms: number;
-  workers?: number;
-  sent_back?: number;
-  /** How the turn ended, off its newest segment: its decision, `failed`, or
-   *  `suspended` while a coding run is still out. */
-  outcome: string;
-  phases: string[];
-  /** The phase that failed, when `outcome` is `failed` because one did.
-   *  `phases` lists it too — it ran — so a card marks that chip rather than
-   *  ticking every phase beside a pill that names none. */
-  failed_in?: string;
-  /** What it did, in the agent's own words. Absent when the turn failed or
-   *  parked before any segment wrote one. */
-  summary?: string;
-  /** What the newest review that sent the work back asked for. */
-  review?: string;
-  tools?: WorkTurnTool[];
-  /** When the newest segment landed. */
-  at: string;
-}
-
-/** One page of the turns charged to a task, newest first (`work_item_turns`).
- *  From the tracker's own rows — the account the task's spend sums — so it
- *  outlives the event history and answers on any node. */
-export interface WorkItemTurnsAnswer {
-  item: string;
-  key: string;
-  turns: WorkItemTurn[];
-  next_cursor?: string;
-  read_level?: ReadLevel;
-  log_seq?: number;
-  applied_through?: number;
-  complete: boolean;
-  incomplete?: WorkIncomplete;
-}
-
 export interface WorkChange {
   id: string;
   kind: string;
@@ -4419,6 +4362,106 @@ export interface TurnsAnswer {
   coverage?: Coverage;
 }
 
+/** How a session ended, or that it has not (`queries.StoryOutcome`). */
+export type StoryOutcome = (typeof STORY_OUTCOMES)[number];
+
+/** The kind of surface a session was set going from (`queries.StoryOrigin`). */
+export type StoryOrigin = (typeof STORY_ORIGINS)[number];
+
+/** One kind of thing a session did beyond answering (`queries.StoryActionKind`). */
+export type StoryActionKind = (typeof STORY_ACTIONS)[number];
+
+/** The work a session was charged to (`queries.StoryItem`). */
+export interface StoryItem {
+  backend: string;
+  id: string;
+  key: string;
+  /** The task's title as it reads now, where the tracker holds the task. */
+  title?: string;
+  /** Which session on the task this is, by the task's own count of its
+   *  turns — absent where the task cannot say (a vendor's issue, or a
+   *  session counted on another item). */
+  ordinal?: number;
+}
+
+/** One thing a session did (`queries.StoryAction`). */
+export interface StoryAction {
+  kind: StoryActionKind;
+  at: string;
+  /** The pages a read opened, for `read_page`. */
+  pages?: { backend: string; id: string; title?: string }[];
+}
+
+/** One change a session made to the company's work or pages (`queries.StoryLink`). */
+export interface StoryLink {
+  kind: "task" | "page";
+  id: string;
+  /** A task's key; absent for a page. */
+  key?: string;
+  title: string;
+  /** What the change was, in its own domain's vocabulary: the tracker's
+   *  change kinds for a task, the pages' for a page. */
+  change: string;
+  /** The status a task was moved to, when the change moved one. */
+  status?: string;
+  at: string;
+}
+
+/** One agent session told for a member (`queries.TurnStory`): the published
+ *  facts of a turn and nothing the machine processed — no prompt, tool,
+ *  model, node or spend. */
+export interface TurnStory {
+  turn_id: string;
+  /** The handle of the agent whose session it was. */
+  seat: string;
+  work_item?: StoryItem;
+  /** Its first record — the instant a list of stories pages by. */
+  started_at: string;
+  /** How long it worked, every segment summed — the hours a parked session
+   *  waited on a coding job are not counted. Zero before a segment ends. */
+  duration_ms: number;
+  why: {
+    origin: StoryOrigin;
+    /** The trigger's own one-line label, absent where it may not be quoted. */
+    summary?: string;
+    /** The handle of who set it going, where the chart knows them. */
+    by?: string;
+  };
+  did: StoryAction[];
+  left_behind: StoryLink[];
+  outcome: StoryOutcome;
+  /** How many short-lived helpers it handed parts of the work to. */
+  helpers: number;
+  /** The colleagues it asked, by handle — never what was said. */
+  consulted: string[];
+  /** The CALLER'S newest note to it while it ran, and what became of it. */
+  your_note?: {
+    note: string;
+    status: "delivered" | "expired";
+    sent_at: string;
+    /** When it was read, or when it expired. */
+    at: string;
+  };
+}
+
+/** A page of turn stories, newest first (`turn_stories`). */
+export interface TurnStoriesAnswer {
+  stories: TurnStory[];
+  /** The cursor to the page before, handed back as `before` exactly as it
+   *  came; absent at the end. A page can hold fewer stories than it listed
+   *  sessions — the ones that are not stories are left out — and still have
+   *  one. */
+  next?: string;
+  /** False when a node that may hold part of this history did not answer. */
+  complete: boolean;
+}
+
+/** One session's story (`turn_story`). */
+export interface TurnStoryAnswer {
+  story: TurnStory;
+  complete: boolean;
+}
+
 /** One person holding an admin key: the human seat linked to it. */
 export interface ViewerAdmin {
   handle: string;
@@ -4739,6 +4782,8 @@ export interface QueryMap {
   trace: TraceAnswer;
   turn: TurnAnswer;
   turns: TurnsAnswer;
+  turn_stories: TurnStoriesAnswer;
+  turn_story: TurnStoryAnswer;
   phases: PhasesPage;
   tokens: Rollup;
   token_series: TokenSeries;
@@ -4759,7 +4804,6 @@ export interface QueryMap {
   work_items: WorkItemsAnswer;
   work_item: WorkItemDetail;
   work_comments: WorkCommentsAnswer;
-  work_item_turns: WorkItemTurnsAnswer;
   work_views: WorkViewsAnswer;
   work_files: WorkFilesAnswer;
   /** Every saved view a viewer can see, across every container. */

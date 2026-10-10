@@ -458,6 +458,15 @@ func Register(r *Registry, s Sources) {
 		// serve this: its listing never selects the payload, and a phase
 		// record without one has no prompts, no response and no decision.
 		r.Register("phases", auth.ReachAdmin, s.phases)
+		// THE SAME TURNS TOLD AS STORIES, which a member may read: who did
+		// what on which work, why, what it left behind and how it ended —
+		// the published facts of a turn and nothing the machine processed.
+		// MEMBER where `turn` is admin, and the difference is the whole of
+		// story.go. Gated on the event history alone: the tracker and the
+		// pages only add where a session sits and what it changed, and a
+		// company on Jira and Confluence still has stories to tell.
+		r.Register("turn_stories", auth.ReachMember, s.turnStories)
+		r.Register("turn_story", auth.ReachMember, s.turnStory)
 	}
 	if s.Usage != nil {
 		// AND THE TIME AXIS. `tokens` is a breakdown whose every row is a
@@ -584,10 +593,6 @@ func Register(r *Registry, s Sources) {
 		// no bound of its own, so the detail returns its newest page and
 		// this walks the rest. See [Sources.workComments].
 		r.Register("work_comments", auth.ReachMember, s.workComments)
-		// A TASK'S TURNS, PAGED, from the tracker's own rows — the
-		// durable account its cost panel sums. See
-		// [Sources.workItemTurns].
-		r.Register("work_item_turns", auth.ReachAdmin, s.workItemTurns)
 		// A SEPARATE QUESTION from `work_items`, for the reason
 		// `containers` is separate from `pages`: a screen draws the tab
 		// strip once and the rows in it on every filter change.

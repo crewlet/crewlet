@@ -2106,7 +2106,7 @@ the task has no sub-tasks.
 
 **Activity is one timeline read down**, over three histories each read a page
 at a time — `work_activity` for what changed, `work_comments` for what was
-said, `work_item_turns` for the agent turns charged to the task — and merged
+said, `turn_stories` for the stories of the agent turns charged to the task — and merged
 only down to the newest point any of them with more pages stopped at, so a
 stretch it draws is complete in all three; **Earlier activity** reads the
 history that stopped there. All | Comments | Agent turns | Changes narrows it.
@@ -2115,15 +2115,20 @@ A change is a sentence about the task ("Jane Founder filed this in ENG",
 Acceptance — 1 of 4 done"), with a quiet **· Who this reached ›** at the end of
 its line opening its routing: the reason each person was woken, whether it asked
 anything, and the three different empty answers in three sentences. A comment
-is a card with its ask, answer or choice and a **Reply**. A turn is the
-artboard's card: "SWE ran turn 1", its phases as checked steps — the one a failed
-turn broke in wears a cross in the danger tone, and its pill says "failed in
-review" — a pill for a send-back ("sent back for another pass") or a park, what
-it did in the agent's own words (a turn that failed or parked before it wrote an
-account of itself says "No summary recorded — see the trace" in one quiet line), the reviewer's request on the raised rung with the
-caution ink on its mark, the tools it called as chips ("run_sandbox ×4"), and under them, on
-a line of its own read from the left, its wall time and tokens and **Trace**. The number is the TASK's count of turns,
-so the newest card and the cost panel agree. While a seat's turn is running on
+is a card with its ask, answer or choice and a **Reply**. A turn is its
+STORY, the same card for every teammate: "SWE ran turn 1" and how it ended
+("Done", "Sent back for another pass", "Did not finish", "Waiting on an
+answer"), then why it started in the trigger's own words ("jane assigned
+ENG-42") — nothing at all for a session told only because it is charged to the
+task — what it did ("Read Login runbook", "Started a coding job"), what it left
+behind as links ("ENG-42 moved it to In review", "Login runbook edited the
+page"), who else it involved ("Handed parts of the work to 2 helpers and asked
+CTO"), the reader's own note and whether the session read it, and how long it
+worked. No phase, tool, model or token count: those are what the machine
+processed, and the story does not carry them. **Trace** is on an admin's card
+alone. The number is the TASK's count of turns, so the newest card and the
+cost panel agree; the running session's story is the live row rather than a
+card beside it. While a seat's turn is running on
 this task — joined on the item the engine charges it to, and only while the
 seat is `working` — the foot of the timeline is the live row in the working
 state's own ground ("SWE is on turn 3 · executing · round 7 of 25 · for 2m",
@@ -2243,7 +2248,7 @@ with no introduction above it.
 **The seat peek answers "who is this, and what is it doing".** A state card
 tinted by the state — the line, how long the turn has run, "Turn 2 · round 7 of
 25 · coding run in progress", where the turn number is the task's own count
-(`work_item_turns`) — then Reports to, Model (the phase chain from the public
+(off the turn's story, `turn_story`) — then Reports to, Model (the phase chain from the public
 projection and the model serving the call in flight), one row per capped
 budget window labelled by its own period ("Budget today", "Budget this week")
 with a meter in the engine's state and when it resets on the company's
@@ -5283,10 +5288,10 @@ later push, and never by `scrollIntoView`, which would scroll every ancestor
 that can.
 
 - **The trail names the turn the way its task does.** On a work item it reads
-  *Live › {agent} › Turn n · KEY* — the ordinal off the task's own turn list
-  (`work_item_turns`, walked a page at a time until the turn is found; a turn
-  still running is the next one after the newest, and before any of that is
-  known it is *Turn · KEY*, never a guessed number). Off a task it is the lead
+  *Live › {agent} › Turn n · KEY* — the ordinal off the turn's own story
+  (`turn_story`, asked once by the turn's id: the task's count, which for a
+  turn still running is the next one after every turn counted), and before it
+  is known it is *Turn · KEY*, never a guessed number). Off a task it is the lead
   of what the turn did. The agent crumb leads to *Live* narrowed to that seat.
 - **The status is state, beside the title.** *Running · 6m 12s* off the turn's
   own start, *Parked on a coding run* while a detached run holds it, how it
@@ -6242,7 +6247,7 @@ separate language and cannot import a Go identifier — so where a screen must
 know a set the engine owns (the event categories, the wake reasons, the work tracker's sort keys, change kinds and grouping axes, the
 config kinds, the query error codes, the push kinds, the feed length, the
 write vocabulary and its refusal codes, the questions a write is read back
-through) or read
+through, a turn story's outcomes, origins and actions) or read
 an answer an engine test holds it to (the integrations row, a seat's memory,
 the health envelope), the declaration lives in one module per concern there,
 and nowhere else. Each is held against the engine by ONE Go test, through

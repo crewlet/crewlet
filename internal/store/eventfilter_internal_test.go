@@ -76,6 +76,10 @@ func TestEveryTurnFilterSeeksItsIndex(t *testing.T) {
 			Before: &TurnCursor{Start: now().Add(-time.Hour), TurnID: "t-1"}}, "crewlet_events_work_key_idx"},
 		{"work_item from a cursor", TurnQuery{WorkItem: "native:t-1",
 			Before: &TurnCursor{Start: now().Add(-time.Hour), TurnID: "t-1"}}, "crewlet_events_work_item_idx"},
+		// A PERSON'S TURNS are found through their opening records, which
+		// are one type over a window: the type's own index, never a read of
+		// the window's every row for a JSON key no index covers.
+		{"started_by", TurnQuery{StartedBy: []string{"ada", "ada-key"}}, "crewlet_events_type_time_idx"},
 	} {
 		query, args := c.q.partialsSQL(now(), readPage, DefaultTurnPage+1)
 		plan := planOf(t, db, query, args)

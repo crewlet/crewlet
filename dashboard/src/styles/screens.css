@@ -6571,78 +6571,48 @@ span.list-position-step {
   margin: 0;
   padding-left: var(--spacing-4);
 }
-.task-phases {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-1);
-}
-.task-phase {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 20px;
-  padding: 0 7px;
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-pill);
-  font-size: var(--font-size-2xs);
-  color: var(--color-text-secondary);
-}
-/* The phase a failed turn broke in: the cross, in the danger ink and border. */
-.task-phase[data-failed] {
-  border-color: var(--color-feedback-danger-ink);
-  color: var(--color-feedback-danger-ink);
-}
-.task-phase-join {
-  width: 8px;
-  height: 1px;
-  background: var(--color-border-strong);
-}
 .task-turn-body {
   display: flex;
   flex-direction: column;
   gap: 10px;
   padding: 12px 14px;
 }
-.task-turn-summary {
+/* WHY IT STARTED, in the trigger's own words: the lead line of the story. */
+.task-turn-why {
   margin: 0;
   color: var(--color-text-secondary);
   line-height: 1.55;
   overflow-wrap: anywhere;
 }
-/* THE REVIEWER'S REQUEST, on the raised rung inside the card, with the
-   caution ink on its mark: it is what the next pass answered. */
-.task-turn-review {
+/* What it did and what it left behind: a sentence a line, read down. */
+.task-turn-did,
+.task-turn-left {
   display: flex;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: var(--radius-md);
-  background: var(--color-surface-elevated);
-}
-.task-turn-review > svg {
-  flex: none;
-  margin-top: 2px;
-  color: var(--color-feedback-warning-ink);
-}
-.task-turn-review p {
+  flex-direction: column;
+  gap: 4px;
   margin: 0;
+  padding-left: var(--spacing-4);
   color: var(--color-text-secondary);
+  line-height: 1.5;
   overflow-wrap: anywhere;
 }
-.task-turn-nosummary {
+.task-turn-involved {
   margin: 0;
   color: var(--color-text-tertiary);
   font-size: var(--font-size-xs);
+  overflow-wrap: anywhere;
 }
-.task-turn-tools {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
+/* THE READER'S OWN NOTE, on the raised rung inside the card: the one line on
+   it that is theirs. */
+.task-turn-note {
   margin: 0;
-  padding: 0;
-  list-style: none;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-elevated);
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
 }
-/* What the turn took, under the chips, read from the left. */
+/* How long it worked, and an admin's way to the trace, read from the left. */
 .task-turn-meta {
   display: flex;
   flex-wrap: wrap;
@@ -6651,16 +6621,6 @@ span.list-position-step {
   margin: 0;
   color: var(--color-text-tertiary);
   font-size: var(--font-size-xs);
-}
-.task-tool {
-  display: inline-flex;
-  align-items: center;
-  height: 20px;
-  padding: 0 7px;
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-sm);
-  font-size: var(--font-size-2xs);
-  color: var(--color-text-secondary);
 }
 .task-trace {
   font-size: var(--font-size-xs);

@@ -628,6 +628,74 @@ func TestATurnWithNoItemListsNone(t *testing.T) {
 	}
 }
 
+// A PERSON'S TURNS ARE THE ONES THEY SET GOING, under either of their names.
+//
+// A write through a person's key is attributed to the KEY, so a comment that
+// woke a seat names the token as its trigger's actor, and a write as the seat
+// names the handle — a filter on one name would show a person half of what
+// they started. The dispatch's opening record decides: a resumed segment's
+// trigger is the box's completion, and a turn nobody raised — a schedule's
+// fire — is nobody's, so an empty name matches none of them.
+//
+// Mutation: read the trigger off any `agent_turn_started` rather than the
+// dispatch's, or bind an empty name, and a case below fails.
+func TestATurnIsListedForThePersonWhoSetItGoing(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	at := time.Now().UTC().Add(-time.Hour)
+	started := func(turn, actor string, resumed bool, offset time.Duration) {
+		t.Helper()
+		payload, err := json.Marshal(map[string]any{
+			"turn_id": turn, "resumed": resumed,
+			"trigger": map[string]any{"type": "external_notification", "actor": actor},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: turn + "-start-" + actor, Type: "agent_turn_started", Time: at.Add(offset),
+			Category: "lifecycle", Tags: map[string]string{"turn_id": turn},
+			Payload: payload,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	started("by-handle", "ada", false, 0)
+	started("by-key", "ada-key", false, time.Minute)
+	started("by-ben", "ben", false, 2*time.Minute)
+	// A parked run of Ben's work, resumed by the box — whose trigger names
+	// nobody, so a resumed segment's actor must not decide whose it is.
+	started("resumed", "ben", false, 3*time.Minute)
+	started("resumed", "ada", true, 4*time.Minute)
+	// A schedule's fire, which nobody raised.
+	started("fired", "", false, 5*time.Minute)
+
+	ids := func(q store.TurnQuery) []string {
+		t.Helper()
+		got, err := log.Turns(t.Context(), q)
+		if err != nil {
+			t.Fatalf("Turns(%+v): %v", q, err)
+		}
+		out := make([]string, 0, len(got))
+		for _, turn := range got {
+			out = append(out, turn.TurnID)
+		}
+		slices.Sort(out)
+		return out
+	}
+	if got := ids(store.TurnQuery{StartedBy: []string{"ada", "ada-key"}}); !slices.Equal(got,
+		[]string{"by-handle", "by-key"}) {
+		t.Errorf("Ada's turns = %v, want the two she set going under her two names", got)
+	}
+	if got := ids(store.TurnQuery{StartedBy: []string{"ben"}}); !slices.Equal(got,
+		[]string{"by-ben", "resumed"}) {
+		t.Errorf("Ben's turns = %v, want his two — the resumed one is still his", got)
+	}
+	if got := ids(store.TurnQuery{StartedBy: []string{"", "nobody"}}); len(got) != 0 {
+		t.Errorf("an empty name matched %v — a turn nobody raised is nobody's", got)
+	}
+}
+
 // A WINDOW IS TWO INSTANTS ON THE TURN'S START, and a window in the past has an
 // upper edge. The read took whole days back from now and nothing else, so a
 // one-hour bar picked three days ago was answered with the newest turns of the

@@ -209,14 +209,12 @@ test("a turn on a task is named by its place on the task, under its seat", async
         turnRecord("Cut the 0.2.0 release."),
       ],
     },
-    work_item_turns: {
-      item: "i-42",
-      key: "ENG-42",
+    turn_story: {
       complete: true,
-      turns: [
-        { turn_id: "later", ordinal: 4 },
-        { turn_id: TURN, ordinal: 3 },
-      ],
+      story: {
+        turn_id: TURN,
+        work_item: { backend: "native", id: "i-42", key: "ENG-42", ordinal: 3 },
+      },
     },
   });
   await settle();

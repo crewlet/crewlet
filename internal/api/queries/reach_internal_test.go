@@ -44,6 +44,9 @@ var questionReach = map[string]auth.Reach{
 	"seat_activity": auth.ReachMember, "schedules": auth.ReachMember,
 	"work_my_work": auth.ReachMember, "work_inbox": auth.ReachMember,
 	"work_person": auth.ReachMember, "decisions": auth.ReachMember,
+	// A turn told as the company's published facts — see story.go, and
+	// TestEveryTurnStoryFieldIsClassified for what it may carry.
+	"turn_stories": auth.ReachMember, "turn_story": auth.ReachMember,
 
 	"agent": auth.ReachAdmin, "live_call": auth.ReachAdmin, "turn": auth.ReachAdmin,
 	"turns": auth.ReachAdmin, "phases": auth.ReachAdmin, "events": auth.ReachAdmin,
@@ -53,7 +56,7 @@ var questionReach = map[string]auth.Reach{
 	"sandbox_tail": auth.ReachAdmin, "page_reads": auth.ReachAdmin,
 	"agent_memory": auth.ReachAdmin, "agent_episode": auth.ReachAdmin,
 	"memory_overview": auth.ReachAdmin, "conversations": auth.ReachAdmin,
-	"work_item_turns": auth.ReachAdmin, "access": auth.ReachAdmin,
+	"access":  auth.ReachAdmin,
 	"backups": auth.ReachAdmin, "config": auth.ReachAdmin, "config_audit": auth.ReachAdmin,
 	"config_diff": auth.ReachAdmin, "config_entities": auth.ReachAdmin,
 	"credential_pool": auth.ReachAdmin, "fleet": auth.ReachAdmin,

@@ -174,10 +174,13 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 		// feed; `phases` is the company-wide phase record WITH its
 		// payloads, which the event listing deliberately cannot serve;
 		// and `event_series` is the log's own time axis, which a page of
-		// rows has no dimension for.
+		// rows has no dimension for. The two story questions are the same
+		// turns told for a member, and need nothing but the history: the
+		// tracker and the pages only add where a session sits and what it
+		// changed.
 		{"the fleet's history alone", queries.Sources{Events: fleetOf(db.Events())},
 			[]string{"event", "event_series", "events", "phases",
-				"trace", "turn", "turns", "viewer"}},
+				"trace", "turn", "turn_stories", "turn_story", "turns", "viewer"}},
 		// `token_series` is the spend with a time axis, which the
 		// breakdown has no dimension for — folded from the usage domain's
 		// company days, a source of its own rather than the fleet's turn
@@ -188,7 +191,8 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 		{"all of them", queries.Sources{
 			State: state, Events: fleetOf(db.Events()), Usage: db.Replicated(),
 		}, []string{"agent", "event", "event_series", "events", "live_call", "page_reads",
-			"phases", "seat_activity", "token_series", "tokens", "trace", "turn", "turns", "viewer"}},
+			"phases", "seat_activity", "token_series", "tokens", "trace", "turn", "turn_stories",
+			"turn_story", "turns", "viewer"}},
 	} {
 		if got := registryOver(t, c.sources).Names(); !slices.Equal(got, c.names) {
 			t.Errorf("%s answers\n  %v\nwant\n  %v", c.what, got, c.names)

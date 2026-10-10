@@ -6,7 +6,7 @@
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test } from "vitest";
 
-import { SeatPeek, budgetLine, turnOrdinal } from "./SeatPeek.tsx";
+import { SeatPeek, budgetLine } from "./SeatPeek.tsx";
 import { PERIOD_WORDS } from "~/lib/budget.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -125,8 +125,13 @@ async function mount(
     if (what === "work_workload") {
       return Promise.resolve({ rows: [{ handle: "swe", open: 4, blocked: 1, overdue: 0 }] });
     }
-    if (what === "work_item_turns") {
-      return Promise.resolve({ key: "ENG-412", turns: [{ turn_id: "turn-1", ordinal: 1 }] });
+    if (what === "turn_story") {
+      // THE RUNNING TURN'S OWN STORY, numbered by the task's count — the
+      // engine's reading, where the peek used to add one to the newest row.
+      return Promise.resolve({
+        complete: true,
+        story: { turn_id: "turn-2", work_item: { key: "ENG-412", ordinal: 2 } },
+      });
     }
     return Promise.reject(new Error(`the peek asked for ${what}`));
   };
@@ -309,13 +314,4 @@ test("the tools name their source, and more than three fold into a count", async
   expect(screen.getByText("built-in")).toBeTruthy();
   expect(screen.getByText("gitlab")).toBeTruthy();
   expect(screen.getByText("+1")).toBeTruthy();
-});
-
-// WHICH TURN THIS IS: the running turn is written when it ends, so it is the
-// one after the newest recorded — unless a segment of it is already recorded.
-test("the turn ordinal follows the task's own turn list", () => {
-  expect(turnOrdinal("t3", { turn_id: "t2", ordinal: 2 }, true)).toBe(3);
-  expect(turnOrdinal("t2", { turn_id: "t2", ordinal: 2 }, true)).toBe(2);
-  expect(turnOrdinal("t1", undefined, true)).toBe(1);
-  expect(turnOrdinal("t1", undefined, false)).toBeNull();
 });

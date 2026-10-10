@@ -248,6 +248,10 @@ func (noPages) Revision(context.Context, string, int, statelog.Freshness) (pages
 	return pages.Revision{}, false, nil
 }
 
+func (noPages) TurnWrites(context.Context, []string, statelog.Freshness) (map[string][]pages.TurnWrite, error) {
+	return nil, nil
+}
+
 // EVERY AUTHORED FIELD HAS A DECISION, the carried ones are exactly what the
 // projection carries, and every projected field is served at the reach its
 // decision names.

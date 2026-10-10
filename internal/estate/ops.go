@@ -50,8 +50,6 @@ type TrackerReader interface {
 		loc *time.Location) (tracker.WorkloadAnswer, error)
 	Inbox(ctx context.Context, q tracker.InboxQuery, now time.Time) (tracker.InboxAnswer, error)
 	Routing(ctx context.Context, q tracker.RoutingQuery, now time.Time) (tracker.RoutingAnswer, error)
-	TurnsOf(ctx context.Context, idOrKey, cursor string, limit int,
-		fresh statelog.Freshness) (tracker.TaskTurns, error)
 	EveryView(ctx context.Context, q tracker.EveryViewQuery) (tracker.ViewListing, error)
 	Flow(ctx context.Context, q tracker.FlowQuery, now time.Time,
 		loc *time.Location) (tracker.FlowAnswer, error)
@@ -60,6 +58,8 @@ type TrackerReader interface {
 		loc *time.Location) (tracker.DecisionsAnswer, error)
 	TurnPlaces(ctx context.Context, runs []string,
 		fresh statelog.Freshness) (map[string]tracker.TurnPlace, error)
+	TurnWrites(ctx context.Context, runs []string,
+		fresh statelog.Freshness) (map[string][]tracker.TurnWrite, error)
 }
 
 // TrackerWriter is the tracker's write side, as ONE actor — see [Actor].
@@ -124,6 +124,8 @@ type PageReader interface {
 	Activity(ctx context.Context, q pages.PageActivityQuery) (pages.PageActivity, error)
 	Revision(ctx context.Context, pageID string, version int,
 		fresh statelog.Freshness) (pages.Revision, bool, error)
+	TurnWrites(ctx context.Context, runs []string,
+		fresh statelog.Freshness) (map[string][]pages.TurnWrite, error)
 }
 
 // PageWriter is the knowledge base's write side. The author is an argument
@@ -499,23 +501,6 @@ var opRouting = define("tracker.routing", opRead, trackerDomain, false,
 		return b.Tracker.Routing(ctx, a.Query, a.Now)
 	})
 
-type turnsOfArgs struct {
-	IDOrKey string
-	Cursor  string
-	Limit   int
-	Fresh   statelog.Freshness
-}
-
-// A TASK'S TURNS are the tracker's: the turn records are charged to the task
-// (ADR-0022) and live beside its rows.
-var opTurnsOf = define("tracker.turns_of", opRead, trackerDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, a turnsOfArgs) (tracker.TaskTurns, error) {
-		if b.Tracker == nil {
-			return tracker.TaskTurns{}, errNoHalf
-		}
-		return b.Tracker.TurnsOf(ctx, a.IDOrKey, a.Cursor, a.Limit, a.Fresh)
-	})
-
 // everyViewArgs is [viewsArgs] for every saved view.
 type everyViewArgs struct {
 	Query tracker.EveryViewQuery
@@ -595,6 +580,23 @@ var opTurnPlaces = define("tracker.turn_places", opRead, trackerDomain, false,
 			return nil, errNoHalf
 		}
 		return b.Tracker.TurnPlaces(ctx, a.Runs, a.Fresh)
+	})
+
+// turnWritesArgs is [TrackerReader.TurnWrites]' and [PageReader.TurnWrites]'
+// question: the runs, and the level.
+type turnWritesArgs struct {
+	Runs  []string
+	Fresh statelog.Freshness
+}
+
+// WHAT A RUN CHANGED on the tracker: the history rows that name it, which is
+// what a turn's story says it left behind.
+var opTrackerTurnWrites = define("tracker.turn_writes", opRead, trackerDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a turnWritesArgs) (map[string][]tracker.TurnWrite, error) {
+		if b.Tracker == nil {
+			return nil, errNoHalf
+		}
+		return b.Tracker.TurnWrites(ctx, a.Runs, a.Fresh)
 	})
 
 // ---- the tracker's writes ------------------------------------------------ //
@@ -1122,6 +1124,15 @@ var opRevision = define("pages.revision", opRead, pagesDomain, false,
 		}
 		rev, found, err := b.Pages.Revision(ctx, a.PageID, a.Version, a.Fresh)
 		return aRevision{Revision: rev, Found: found}, err
+	})
+
+// WHAT A RUN CHANGED in the knowledge base, for its story.
+var opPageTurnWrites = define("pages.turn_writes", opRead, pagesDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a turnWritesArgs) (map[string][]pages.TurnWrite, error) {
+		if b.Pages == nil {
+			return nil, errNoHalf
+		}
+		return b.Pages.TurnWrites(ctx, a.Runs, a.Fresh)
 	})
 
 type createPageArgs struct {
