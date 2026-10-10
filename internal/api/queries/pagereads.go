@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
 	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/usage"
@@ -27,17 +28,26 @@ import (
 //   - `page_reads{page, days}` — the seats that READ the page, how, how often
 //     and in which turn, over up to [PageReadsMaxDays] company days, from the
 //     replicated `usage` domain (ADR-0020): every node's reads, a departed
-//     node's included, the same on whichever node answers.
+//     node's included, the same on whichever node answers. An ADMIN's
+//     question (ADR-0031): it names the turn each read happened in and the
+//     query a search ran, which is what the machine processed.
+//   - the `page` answer's `readers` — the same reads, per seat: how often and
+//     how lately, and nothing about how or in which turn. A member's, because
+//     "which agents read this" is who is working with the company's pages.
 //   - the `page` answer's `skill_loaded_by` — the seats a TOOL-SKILL page was
 //     loaded or offered to, from the same rows.
 //   - the `page` answer's `linked_from` — the pages and tasks whose bodies
 //     carry this page's address, from this node's index ([search.Backlinks]).
 
-// PageReadsMaxDays is how far back a page's readers are read: thirty company
-// days, the event log's own retention and the window a knowledge base is
+// PageReadsMaxDays is how far back a page's readers are read: the window the
+// node's event log keeps ([store.EventHistory], thirty days), in company
+// days. DERIVED FROM IT rather than written beside it, because the two answer
+// one question — how far back this engine can say what its agents did — and
+// a read named here is a turn `page_reads` links to, which the event log
+// stops serving past that floor. It is also the window a knowledge base is
 // curated over ("nobody has opened this in a month"). The usage domain holds
 // more; a reader list over a quarter would be a list of who used to care.
-const PageReadsMaxDays = 30
+const PageReadsMaxDays = int(store.EventHistory / (24 * time.Hour))
 
 // MaxPageReaders is how many (seat, via) rows one answer names, newest read
 // first. A hundred: a rail shows a handful, and a page read by more seats than
@@ -108,6 +118,94 @@ type PageReadRow struct {
 	LastWorkItem *tracker.TurnPlace `json:"last_work_item,omitempty"`
 }
 
+// PageReaders is which seats read a page and how lately, as anybody who reads
+// the page may see it — the "read by agents" a page draws.
+//
+// PER SEAT, AND NOTHING ABOUT HOW: the reads `page_reads` lists per way of
+// reaching the page are summed here into one row per seat, and the newest
+// read's turn, unit of work and search text are left out — those are what the
+// machine processed (ADR-0031), and the question a person reading a page asks
+// is who is using it. The same reads, so the two answers count alike.
+type PageReaders struct {
+	// Since and Until are the window's first and last company day, both
+	// inclusive, and Days its length — [PageReadsMaxDays].
+	Since string `json:"since"`
+	Until string `json:"until"`
+	Days  int    `json:"days"`
+
+	// Seats is one row per seat that read the page, newest read first — at
+	// most [MaxPageReaders] of Total. Always a list: "nobody read it" is an
+	// answer.
+	Seats []PageReaderSeat `json:"seats"`
+	Total int              `json:"total"`
+
+	// Complete is false when the per-seat-day cap on recorded reads dropped
+	// entries anywhere in the window — entries some of which may have been
+	// this page's, so the list may be short of a reader or a count.
+	Complete bool `json:"complete"`
+}
+
+// PageReaderSeat is one seat's reads of a page over the window.
+type PageReaderSeat struct {
+	Handle string    `json:"handle"`
+	Reads  int64     `json:"reads"`
+	LastAt time.Time `json:"last_at"`
+}
+
+// throughVias keeps the rows whose via is one of vias.
+func throughVias(rows []usage.PageRead, vias []types.KnowledgeReadVia) []usage.PageRead {
+	return slices.DeleteFunc(slices.Clone(rows), func(r usage.PageRead) bool {
+		return !slices.Contains(vias, types.KnowledgeReadVia(r.Via))
+	})
+}
+
+// foldPageReaders sums every node's days and every way of reading into one
+// row per seat, newest read first.
+//
+// PURE over its inputs, like [foldPageReads], and named by the same rule
+// ([namesSeat]), so a seat renamed within the window carries one name in
+// both answers.
+func foldPageReaders(rows []usage.PageRead, handles map[string]chartSeat) PageReaders {
+	folded := map[string]*PageReaderSeat{}
+	var order []string
+	for _, row := range rows {
+		r, ok := folded[row.AgentID]
+		if !ok {
+			r = &PageReaderSeat{}
+			folded[row.AgentID] = r
+			order = append(order, row.AgentID)
+		}
+		r.Reads += row.Count
+		if namesSeat(row, r.Handle, r.LastAt) {
+			r.Handle = row.Handle
+		}
+		if row.LastAt.After(r.LastAt) {
+			r.LastAt = row.LastAt
+		}
+	}
+	out := PageReaders{Seats: make([]PageReaderSeat, 0, len(order))}
+	for _, agent := range order {
+		r := folded[agent]
+		if r.Handle == "" {
+			if seat, ok := handles[agent]; ok {
+				r.Handle = seat.handle
+			} else {
+				r.Handle = agent
+			}
+		}
+		out.Seats = append(out.Seats, *r)
+	}
+	slices.SortFunc(out.Seats, func(a, b PageReaderSeat) int {
+		if c := b.LastAt.Compare(a.LastAt); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Handle, b.Handle)
+	})
+	out.Total = len(out.Seats)
+	out.Seats = out.Seats[:min(len(out.Seats), MaxPageReaders)]
+	return out
+}
+
 // SkillLoad is one seat a tool-skill page reached as a skill.
 type SkillLoad struct {
 	Handle string    `json:"handle"`
@@ -130,6 +228,11 @@ type PageBacklinks interface {
 // the engine knows about it beside the page itself.
 type PageAnswer struct {
 	pages.Detail
+
+	// Readers is which seats read the page over the last [PageReadsMaxDays]
+	// company days — absent on a node that reads no usage domain, which
+	// cannot say. See [PageReaders].
+	Readers *PageReaders `json:"readers,omitempty"`
 
 	// SkillLoadedBy is the seats this TOOL-SKILL page reached as a skill
 	// over the last [PageReadsMaxDays] company days, most recent first —
@@ -202,15 +305,28 @@ func (s Sources) page(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	out := PageAnswer{Detail: detail}
-	if detail.Skill && s.Usage != nil {
+	if s.Usage != nil {
+		// ONE READ FOR BOTH SIGNALS, the reads and — on a tool-skill page —
+		// the loads, each folded from its own vias.
 		window := tokens.LastDays(PageReadsMaxDays, s.clock(), s.zone())
 		rows, err := usage.PageReads(ctx, s.Usage, usage.PageReadsQuery{
 			PageIDs: []string{detail.Page.ID}, From: window.First.Label, To: window.Last.Label,
-			Vias: names(skillVias)})
+			Vias: names(slices.Concat(readVias, skillVias))})
 		if err != nil {
 			return nil, usageErr(err)
 		}
-		out.SkillLoadedBy = foldSkillLoads(rows, s.chartHandles())
+		elided, err := usage.ReadsElided(ctx, s.Usage, window.First.Label, window.Last.Label)
+		if err != nil {
+			return nil, usageErr(err)
+		}
+		handles := s.chartHandles()
+		readers := foldPageReaders(throughVias(rows, readVias), handles)
+		readers.Since, readers.Until, readers.Days = window.First.Label, window.Last.Label, window.Days()
+		readers.Complete = elided == 0
+		out.Readers = &readers
+		if detail.Skill {
+			out.SkillLoadedBy = foldSkillLoads(throughVias(rows, skillVias), handles)
+		}
 	}
 	if s.Backlinks != nil {
 		links, err := s.Backlinks.LinkedFrom(ctx, detail.Page.ID)

@@ -665,7 +665,10 @@ Two properties differ from the vendor path and both are visible:
   is a recorded `knowledge_read`, and the replicated `usage` domain keeps it
   per company day, so `page_reads` names each seat, how the page reached it
   and in which turn — the same answer on every node, a departed node's reads
-  included. Backlinks are this node's: the lexical indexer extracts every
+  included. That is an admin's read, because the turn and the search text are
+  what the machine processed; anybody who reads the page reads its `readers`
+  — each seat, how often and how lately, over the 30 days a node's event log
+  keeps — and nothing about how. Backlinks are this node's: the lexical indexer extracts every
   page id a body links to (`pages.Links` — `/pages/<id>` or the dashboard's
   `#/knowledge/pages/<id>`, outside code) into `page_links` in the node
   estate, beside the index it is derived with, and a task links a page either

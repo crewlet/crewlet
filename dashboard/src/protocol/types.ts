@@ -3303,6 +3303,19 @@ export interface PageRevisionBody {
   created_at: string;
 }
 
+/** A page's readers, per seat, summed across every node and way of reading. */
+export interface PageReaders {
+  since: string;
+  until: string;
+  days: number;
+  /** Newest read first; at most 100 of `total`. `[]` when nobody read it. */
+  seats: { handle: string; reads: number; last_at: string }[];
+  total: number;
+  /** False when the per-seat-day cap dropped recorded reads in the window, so
+   *  the list may be short. */
+  complete: boolean;
+}
+
 export interface PageDetail {
   page: Page;
   revision: number;
@@ -3311,6 +3324,10 @@ export interface PageDetail {
    *  wrote. */
   skill: boolean;
   onboarding: boolean;
+  /** Which seats READ the page over the thirty company days a node's event
+   *  log keeps — who and how lately, never how (that is `page_reads`', an
+   *  admin's). Absent where the answering node reads no usage domain. */
+  readers?: PageReaders;
   /** For a tool-skill page: the seats it reached as a skill over thirty
    *  company days, most recent first. Absent on any other page. */
   skill_loaded_by?: SkillLoad[];
