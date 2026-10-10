@@ -535,10 +535,98 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		d, err := entityDraft(kind, id, sent, active.ID, create)
+		d, err := entityDraft(kind, id, entityWrite{
+			body: sent, create: create, self: s.selfServiceOf(r),
+		}, active.ID)
 		if err != nil {
 			// A create of a kind that has none is the caller's request to
 			// correct, answered like every other entity refusal.
+			s.refuseEntity(w, kind, id, err)
+			return
+		}
+		d.author = authorOf(r)
+		prepared, err := s.prepare(r.Context(), d)
+		if err != nil {
+			s.refuseEntity(w, kind, id, err)
+			return
+		}
+		if dryRun {
+			writeChecked(w, prepared)
+			return
+		}
+		applied, err := s.commit(r.Context(), prepared, summary)
+		if err != nil {
+			s.refuseApply(w, err)
+			return
+		}
+		writeApplied(w, applied)
+	}
+}
+
+// patchEntity serves PATCH /config/{kind}/{id}: a JSON Merge Patch (RFC 7396)
+// over ONE entity, and otherwise the write [Service.putEntity] makes.
+//
+// THE NARROW FORM OF THE ENTITY WRITE, for the reason PATCH /config is the
+// narrow form of the document's: a PUT carries the entity whole, so changing
+// one line of a seat means reading the seat first and sending every other
+// line back. A caller who may not read the seat at all — a member setting
+// their own availability (selfservice.go) — has no other way to change it.
+//
+// It patches an entity that EXISTS: `If-None-Match: *` is refused, because a
+// create says what the whole entity is, which is PUT's to say.
+func (s *Service) patchEntity(kind string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.refusedManaged(w, r) {
+			return
+		}
+		id := r.PathValue("id")
+		dryRun, ok := dryRunOf(w, r)
+		if !ok {
+			return
+		}
+		if !s.checkPatchMediaType(w, r) {
+			return
+		}
+		if strings.TrimSpace(r.Header.Get("If-None-Match")) != "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "patch_creates_nothing",
+				"hint": "a patch edits " + kind + "/" + id + " as it stands; " +
+					"to add one, PUT the whole entity with If-None-Match: *",
+			})
+			return
+		}
+		body, err := readBody(w, r)
+		if err != nil {
+			refuseBody(w, err)
+			return
+		}
+		summary, sent, ok := takeSummary(w, r, body, !dryRun,
+			"this write needs an audit summary: the X-Summary header, "+
+				"or a top-level _summary key in the patch. Name what changed "+
+				"about "+kind+"/"+id)
+		if !ok {
+			return
+		}
+		active, found, err := s.configs.Active(r.Context())
+		if err != nil {
+			s.fail(w, "read the active revision", err)
+			return
+		}
+		if !found {
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"error": "no_active_revision",
+				"hint": "this node has no active company revision to edit: " +
+					"import one with `crewlet config import`",
+			})
+			return
+		}
+		if _, ok := s.checkPrecondition(w, r, active, found); !ok {
+			return
+		}
+		d, err := entityDraft(kind, id, entityWrite{
+			body: sent, patch: true, self: s.selfServiceOf(r),
+		}, active.ID)
+		if err != nil {
 			s.refuseEntity(w, kind, id, err)
 			return
 		}
@@ -600,6 +688,10 @@ func (s *Service) refuseEntity(w http.ResponseWriter, kind, id string, err error
 	switch {
 	case !errors.As(err, &entityErr):
 		s.refuseApply(w, err)
+	case refuseSelfService(w, err):
+		// A MEMBER'S WRITE BEYOND THEIR OWN AVAILABILITY, answered 403
+		// before any other reading of it: which entity was missing or how
+		// its body failed is not this caller's to be told.
 	case errors.Is(err, ErrNoSuchEntity):
 		// NEVER CREATED. A PUT naming an id nothing carries is far more
 		// often a typo than an intent to add one, and adding through this

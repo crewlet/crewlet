@@ -1172,6 +1172,10 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 		// And this node's Tier A, which a document is judged against as
 		// the apply judges it — see configapi.Options.Bootstrap.
 		Bootstrap: boot,
+		// AND WHAT A `${VAR}` IN A SEAT'S BINDING RESOLVES TO: the same
+		// chain the guard binds a token to a person through, so the seat a
+		// member's own write is held to is the one their key signs in as.
+		Env: e.LookupSecret,
 	})
 	if err != nil {
 		e.Stop(context.WithoutCancel(ctx))

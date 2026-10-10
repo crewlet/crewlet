@@ -69,7 +69,7 @@ roles:
 // mounted is the API's route table as this suite needs it: every route on a
 // plain mux, behind no guard — enforcing a route's reach is the app's route
 // table's, which its own gate walks — and the reach each route declared, which
-// [TestEveryConfigRouteIsAnAdminsAlone] holds.
+// [TestEveryConfigRouteIsAnAdminsButAPersonsOwnSeatWrite] holds.
 type mounted struct {
 	mux     *http.ServeMux
 	reaches map[string]auth.Reach
@@ -81,7 +81,20 @@ func newMounted() *mounted {
 
 func (m *mounted) Handle(pattern string, reach auth.Reach, h http.Handler) {
 	m.reaches[pattern] = reach
-	m.mux.Handle(pattern, h)
+	m.mux.Handle(pattern, asCaller(h))
+}
+
+// asCaller attaches the principal the guard would have: the one a case
+// attached itself, and otherwise an admin's — every case that is not about WHO
+// is asking is an admin editing the company, and a write judges its caller
+// (selfservice.go), so a request the guard never saw is refused as nobody's.
+func asCaller(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !auth.PrincipalFrom(r.Context()).Authenticated() {
+			r = r.WithContext(auth.WithPrincipal(r.Context(), asAdmin("operator")))
+		}
+		h.ServeHTTP(w, r)
+	})
 }
 
 func (m *mounted) HandleFunc(pattern string, reach auth.Reach, h func(http.ResponseWriter, *http.Request)) {
@@ -122,7 +135,7 @@ func newSurfaceWith(t *testing.T, mutate func(*configapi.Options)) *surface {
 		plane: coordmemory.NewFleet(),
 	}
 	opts := configapi.Options{
-		Store: db, Plane: s.plane, Bootstrap: durableBoot(t),
+		Store: db, Plane: s.plane, Bootstrap: durableBoot(t), Env: noSecrets,
 		Now: func() time.Time { return pinned },
 	}
 	if mutate != nil {
@@ -1099,12 +1112,15 @@ func TestADocumentCarryingTheSummaryKeyKeepsItsLineNumbers(t *testing.T) {
 	}
 }
 
-// A STORE AND A PLANE ARE REQUIRED, and a missing one is refused by name.
+// A STORE, A PLANE, A TIER A AND A SECRET CHAIN ARE REQUIRED, and a missing
+// one is refused by name.
 //
-// The engine beside every API holds both, so a nil is a wiring mistake, and a
-// narrower surface built around it (an unregistered /config, every write
-// answering 503) would hide the mistake behind an answer that looks deliberate.
-func TestNewRefusesAMissingStorePlaneOrBootstrap(t *testing.T) {
+// The engine beside every API holds all four, so a nil is a wiring mistake,
+// and a narrower surface built around it (an unregistered /config, every write
+// answering 503, a member's own seat resolved through the process environment
+// rather than the chain their key is bound through) would hide the mistake
+// behind an answer that looks deliberate.
+func TestNewRefusesAMissingDependencyByName(t *testing.T) {
 	t.Parallel()
 	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "c.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
@@ -1112,7 +1128,8 @@ func TestNewRefusesAMissingStorePlaneOrBootstrap(t *testing.T) {
 	for field, opts := range map[string]configapi.Options{
 		"Store":     {Plane: coordmemory.NewFleet(), Bootstrap: durableBoot(t)},
 		"Plane":     {Store: db, Bootstrap: durableBoot(t)},
-		"Bootstrap": {Store: db, Plane: coordmemory.NewFleet()},
+		"Bootstrap": {Store: db, Plane: coordmemory.NewFleet(), Env: noSecrets},
+		"Env":       {Store: db, Plane: coordmemory.NewFleet(), Bootstrap: durableBoot(t)},
 	} {
 		svc, err := configapi.New(opts)
 		if err == nil {
@@ -1605,19 +1622,38 @@ func TestReferencesCarriesTheDocumentsOwnValidator(t *testing.T) {
 	}
 }
 
-// EVERY ROUTE ON /config IS AN ADMIN'S, reads included (ADR-0031): reading the
-// document exposes every integration and every ${VAR} it names, and writing
-// it changes what the company does. A member key — one a teammate holds —
-// reaches none of it.
-func TestEveryConfigRouteIsAnAdminsAlone(t *testing.T) {
+// EVERY ROUTE ON /config IS AN ADMIN'S, reads included (ADR-0031), BUT A
+// SEAT'S TWO WRITES: reading the document exposes every integration and every
+// ${VAR} it names, and writing it changes what the company does, so a member
+// key — one a teammate holds — reaches nothing here except the write that
+// sets their own availability, which the write itself holds them to
+// (selfservice.go). The seat's READ stays admin.
+func TestEveryConfigRouteIsAnAdminsButAPersonsOwnSeatWrite(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t, nil)
 	if len(s.mux.reaches) == 0 {
 		t.Fatal("the surface mounted nothing, so this asserts nothing")
 	}
+	member := map[string]bool{
+		"PUT /config/" + configapi.EntityRoles + "/{id}":   true,
+		"PATCH /config/" + configapi.EntityRoles + "/{id}": true,
+	}
 	for pattern, reach := range s.mux.reaches {
-		if reach != auth.ReachAdmin {
-			t.Errorf("%s is mounted at %q, want admin", pattern, reach)
+		want := auth.ReachAdmin
+		if member[pattern] {
+			want = auth.ReachMember
+		}
+		if reach != want {
+			t.Errorf("%s is mounted at %q, want %q", pattern, reach, want)
+		}
+	}
+	for pattern := range member {
+		if _, mounted := s.mux.reaches[pattern]; !mounted {
+			t.Errorf("%s is not mounted, so a person cannot set their own availability", pattern)
 		}
 	}
 }
+
+// noSecrets is a secret chain holding nothing, for a surface whose company
+// binds no key through a `${VAR}`.
+func noSecrets(string) (string, bool) { return "", false }

@@ -121,6 +121,7 @@ PUT /config/roles/{handle}
 PUT /config/units/{name}
 PUT /config/llm-providers/{key}
 PUT /config/mcp-servers/{name}
+PATCH /config/{kind}/{id}      # a merge patch over one of them
 ```
 
 Why bother, when `PUT /config` already works? Because that write makes every
@@ -207,8 +208,9 @@ consequences worth knowing before you script against it:
   with no `handle` is refused too: an omitted handle is derived from the name,
   which makes a display-name edit a rename by accident. Keep `handle` in the
   body and change whatever else you like. Renaming is a full-document edit.
-- **`PUT` is the only verb.** There is no `DELETE /config/roles/ceo`; the path
-  answers `405`. Removal is a full-document edit — deleting a seat strands its
+- **`PUT` and `PATCH` are the only writes.** `PATCH` takes a JSON Merge Patch
+  over the one entity — `{"goal": "Ship the platform"}` — and is otherwise the
+  same write. There is no `DELETE /config/roles/ceo`; the path answers `405`. Removal is a full-document edit — deleting a seat strands its
   mailbox and its in-flight work, and deleting a provider silently repoints every role that named it. If
   that is going to happen, it should happen in a document you looked at, and
   land as one reviewable revision. Export, edit, `PUT /config`.

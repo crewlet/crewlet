@@ -1,11 +1,14 @@
 // Package configapi serves /config: the versioned company document, its
 // history, and the write path that activates a new revision.
 //
-// EVERY ROUTE HERE IS ADMIN, reads included (ADR-0031). Reading this surface
-// exposes the whole company document — its org chart, its integrations, and
-// the shape of every credential it holds — and writing it changes what the
-// company does. That is how the engine is RUN, which is the side of the
-// withholding rule a member key never reaches.
+// EVERY ROUTE HERE IS ADMIN, reads included (ADR-0031), but ONE. Reading this
+// surface exposes the whole company document — its org chart, its
+// integrations, and the shape of every credential it holds — and writing it
+// changes what the company does. That is how the engine is RUN, which is the
+// side of the withholding rule a member key never reaches. The exception is a
+// person's own availability: the seat writes are mounted at member reach, and
+// a member's write is held in the write itself to the availability of the
+// seat their key is linked to (selfservice.go).
 //
 // A WRITE HERE DOES NOT APPLY ANYTHING. It stores a revision and moves the
 // activation pointer; every node, including this one, applies it on its own
@@ -38,6 +41,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -78,6 +82,7 @@ type Service struct {
 	queue   queue.Publisher
 	cipher  secrets.Cipher
 	boot    *config.Bootstrap
+	env     org.EnvLookup
 	now     func() time.Time
 }
 
@@ -104,6 +109,14 @@ type Options struct {
 	// accepted, activated, and then refused by every node, leaving the
 	// fleet on the old epoch and the operator with a 201.
 	Bootstrap *config.Bootstrap
+
+	// Env resolves a `${VAR}` a seat's `contact.crewlet_operator_id` names:
+	// this node's own chain, the one its guard binds a key to a person
+	// through. Required, because a member's write is judged against the
+	// seat their key is linked to (selfservice.go), and a nil lookup would
+	// read the process environment instead — a person bound through a
+	// sealed secret would be told their own seat is not theirs.
+	Env org.EnvLookup
 
 	// Queue publishes the activation NUDGE, so an operator's change lands
 	// on every node in milliseconds instead of at the next reconcile poll.
@@ -134,6 +147,10 @@ func New(opts Options) (*Service, error) {
 		return nil, errors.New("configapi: Options.Bootstrap is required: a " +
 			"company document is valid only against the deployment it runs on, " +
 			"and every node's apply judges it against its own")
+	case opts.Env == nil:
+		return nil, errors.New("configapi: Options.Env is required: a member's " +
+			"own write is judged against the seat their key is linked to, " +
+			"resolved through this node's own secret chain")
 	}
 	now := opts.Now
 	if now == nil {
@@ -141,17 +158,19 @@ func New(opts Options) (*Service, error) {
 	}
 	return &Service{
 		configs: opts.Store.Configs(), plane: opts.Plane,
-		cipher: opts.Cipher, queue: opts.Queue, boot: opts.Bootstrap, now: now,
+		cipher: opts.Cipher, queue: opts.Queue, boot: opts.Bootstrap, env: opts.Env,
+		now: now,
 	}, nil
 }
 
 // Routes registers the surface on the API's mux.
 //
-// ADMIN, ALL OF IT, reads included (ADR-0031): reading the document exposes
-// the whole company — every integration it wires and every ${VAR} it names —
-// and writing it changes what the company does. company_writers narrows which
+// ADMIN, reads included (ADR-0031): reading the document exposes the whole
+// company — every integration it wires and every ${VAR} it names — and
+// writing it changes what the company does. company_writers narrows which
 // admin keys may write it ([Service.Authorize]); it never opens it to anybody
-// below.
+// below. The ONE route a member reaches is a seat's write, and only to set
+// their own availability — see selfservice.go.
 func (s *Service) Routes(mux auth.Router) {
 	// ONE SUB-MUX BEHIND ONE WRAPPER, so no response under /config can be
 	// written without the Cache-Control below: not a route added later, not
@@ -194,12 +213,20 @@ func (s *Service) Routes(mux auth.Router) {
 		// round-trips with nothing in between.
 		routes.HandleFunc("GET /config/"+kind+"/{id}", s.getEntity(kind))
 		routes.HandleFunc("PUT /config/"+kind+"/{id}", s.putEntity(kind))
+		routes.HandleFunc("PATCH /config/"+kind+"/{id}", s.patchEntity(kind))
 	}
-	// AND THOSE TWO ARE JSON, like every other answer here: see
-	// [httpjson.Mux].
+	// AND THOSE ARE JSON, like every other answer here: see [httpjson.Mux].
 	surface := noStore(httpjson.Mux(routes))
 	mux.Handle("/config", auth.ReachAdmin, surface)
 	mux.Handle("/config/", auth.ReachAdmin, surface)
+	// A PERSON'S OWN AVAILABILITY, the one write a member makes: the seat
+	// writes are mounted at member reach, more specific than the admin
+	// prefix above so they win for these two methods alone — the seat's
+	// READ stays admin — and the write holds a member to their own seat's
+	// availability itself ([selfService]), since a reach is a property of
+	// the route and this rule is a property of the change.
+	mux.Handle("PUT /config/"+EntityRoles+"/{id}", auth.ReachMember, surface)
+	mux.Handle("PATCH /config/"+EntityRoles+"/{id}", auth.ReachMember, surface)
 }
 
 // noStore marks every response it wraps as never to be stored.
@@ -394,7 +421,7 @@ func (s *Service) checkPatchMediaType(w http.ResponseWriter, r *http.Request) bo
 		"hint": "PATCH /config takes a JSON Merge Patch (RFC 7396): an object " +
 			"shaped like the document. A JSON Patch (RFC 6902) list of " +
 			"operations is a different format this surface does not serve; " +
-			"editing one seat is PUT /config/roles/{handle}",
+			"editing one seat is PATCH /config/roles/{handle}",
 	})
 	return false
 }

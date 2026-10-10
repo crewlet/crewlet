@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -43,6 +44,13 @@ import (
 // and the reach each must be mounted at. A REVIEWED LIST, held against the
 // table in both directions: a new route is a decision somebody makes in a
 // diff, never a side effect of where it was mounted.
+// selfServiceRoutes are the routes under /config a member reaches: a seat's
+// two writes, held in the write itself to the caller's own availability.
+var selfServiceRoutes = []string{
+	"PUT /config/" + configapi.EntityRoles + "/{id}",
+	"PATCH /config/" + configapi.EntityRoles + "/{id}",
+}
+
 var reachedRoutes = map[string]auth.Reach{
 	// The probes and the dashboard shell: an orchestrator and a browser
 	// that has not signed in hold no key.
@@ -80,7 +88,8 @@ func reachApp(t *testing.T) *api.App {
 	t.Cleanup(func() { _ = db.Close() })
 	b := closedPosture()
 	boot := config.Bootstrap{Stream: config.Stream{StoreDir: t.TempDir()}}
-	cfg, err := configapi.New(configapi.Options{Store: db, Plane: coordmemory.NewFleet(), Bootstrap: &boot})
+	cfg, err := configapi.New(configapi.Options{Store: db, Plane: coordmemory.NewFleet(),
+		Bootstrap: &boot, Env: func(string) (string, bool) { return "", false }})
 	if err != nil {
 		t.Fatalf("configapi.New: %v", err)
 	}
@@ -163,6 +172,16 @@ func TestEveryRouteDeclaresTheReachItServes(t *testing.T) {
 				t.Errorf("%q is under a public prefix and mounted at %q: no caller there "+
 					"holds a key", route.Pattern, route.Reach)
 			}
+		// A PERSON'S OWN AVAILABILITY, the one write onto the company a
+		// member makes — held in the write to their own seat's
+		// availability (configapi's selfservice.go). Named here pattern
+		// by pattern, so a member route under /config is a decision this
+		// diff shows rather than a prefix that widened.
+		case slices.Contains(selfServiceRoutes, route.Pattern):
+			if route.Reach != auth.ReachMember {
+				t.Errorf("%q is a person's own write and is mounted at %q, want member",
+					route.Pattern, route.Reach)
+			}
 		// HOW THE ENGINE IS RUN, reads included.
 		case path == "/config" || strings.HasPrefix(path, "/config/") ||
 			path == "/secrets" || strings.HasPrefix(path, "/secrets/") ||
@@ -209,6 +228,12 @@ func TestEveryRouteDeclaresTheReachItServes(t *testing.T) {
 		if !mounted[pattern] {
 			t.Errorf("%q is classified and this app mounts no such route: the list has "+
 				"drifted from the table", pattern)
+		}
+	}
+	for _, pattern := range selfServiceRoutes {
+		if !mounted[pattern] {
+			t.Errorf("%q is a person's own write and this app mounts no such route: "+
+				"the exception names a route that is not there", pattern)
 		}
 	}
 	// THE SURFACES THIS GATE EXISTS FOR ARE ACTUALLY IN THE TABLE, or the

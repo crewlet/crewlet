@@ -101,7 +101,7 @@ func wireAPI(
 	}
 	configSurface, err := configapi.New(configapi.Options{
 		Store: backends.Store, Plane: backends.Fleet, Queue: backends.Queue,
-		Bootstrap: boot,
+		Bootstrap: boot, Env: e.LookupSecret,
 	})
 	if err != nil {
 		return fail("config surface", err)
