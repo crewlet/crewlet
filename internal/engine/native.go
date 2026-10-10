@@ -314,6 +314,11 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	// per query, because an apply replaces the provider and can turn
 	// `knowledge.vectors` off.
 	vectors := search.NewQueryVectors(e.queryModel)
+	// EVERY SCAN THIS NODE RUNS ASKS ITS COPIES' VERDICT FIRST — its own
+	// searches' range and every peer's slice alike (ADR-0031): a range
+	// over a copy out of service is counted missing, never answered from
+	// rows this node has stopped serving.
+	copies := e.copies()
 	// AND THE TRACKER'S OWN SEARCH over it, with its own fan-out rather
 	// than the knowledge searcher's: each verb's corpus filter is its own,
 	// and neither can widen into the other's.
@@ -321,7 +326,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		index: n.indexer,
 		fan: &search.FanOut{
 			Self:    nodeID,
-			Local:   search.NodeScanner{Index: n.indexer},
+			Local:   search.NodeScanner{Index: n.indexer, Copies: copies},
 			Peers:   e.searchPeers(),
 			Roster:  e.dataRoster,
 			Corpus:  n.indexer.Corpus,
@@ -336,7 +341,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	// searches.
 	if e.backends.Queue != nil {
 		stop, err := search.ServeSlices(runCtx, e.backends.Queue, nodeID,
-			search.NodeScanner{Index: n.indexer})
+			search.NodeScanner{Index: n.indexer, Copies: copies})
 		if err != nil {
 			return fmt.Errorf("engine: serve search slices: %w", err)
 		}
@@ -379,6 +384,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			Report:  e.reportSearch,
 			Enter:   e.enterSearch,
 			Vectors: vectors,
+			Copies:  copies,
 		})
 	}
 

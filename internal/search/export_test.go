@@ -3,6 +3,7 @@ package search
 import (
 	"context"
 	"database/sql"
+	"time"
 )
 
 // SemanticStatement is [semanticStatement], for the plan gate: it explains the
@@ -106,3 +107,9 @@ const (
 	StaleRowsStatement     = staleRowsStatement
 	StoredVectorStatement  = storedVectorStatement
 )
+
+// SetClock times f's passes by now, for the cases that let a pass lapse.
+func SetClock(f *FanOut, now func() time.Time) { f.now = now }
+
+// PassOverFor is [passOverFor].
+const PassOverFor = passOverFor

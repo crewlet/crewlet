@@ -25,7 +25,8 @@ import (
 // floors: the rows it answers from are that domain's, so no operation is
 // routed away for another domain's fault. The one read that crosses into a
 // second domain's rows — a search's semantic half, over the vectors — is best
-// effort, and never moves the search it belongs to.
+// effort, and never moves the search it belongs to: the scanner asks the
+// vectors' verdict itself and skips the half ([searchCopies]).
 type copyVerdict struct {
 	// shut is a copy whose FILE is not open: no log is to blame, and every
 	// domain's copy is out of service at once.

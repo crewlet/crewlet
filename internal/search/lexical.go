@@ -762,6 +762,24 @@ func (x *Indexer) ReadyFor(sources ...string) bool {
 	return true
 }
 
+// covered is every source this index covers that a query naming sources reads
+// — every one it covers when it names none — the selection [Indexer.ReadyFor]
+// makes, so a scan asks about exactly the corpora it would read.
+func (x *Indexer) covered(sources ...string) []Source {
+	if x == nil {
+		return nil
+	}
+	out := make([]Source, 0, len(x.sources))
+	for _, source := range x.sources {
+		name := source.Source()
+		if len(sources) > 0 && !slices.Contains(sources, name) {
+			continue
+		}
+		out = append(out, Source(name))
+	}
+	return out
+}
+
 // Run indexes in batches until the context ends.
 //
 // It sleeps only when it finds nothing, so a catch-up runs flat out and a

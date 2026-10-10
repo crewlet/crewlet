@@ -246,13 +246,37 @@ and can find none of them. Such a node answers its range and says so, and the
 coordinator counts its buckets missing rather than merging an almost-empty
 answer under complete coverage. It clears itself when that node finishes its
 first lap, and it applies to the asking node too: a freshly booted node reports
-its own range missing rather than reporting an empty corpus.
+its own range missing on the search that finds it so, and gives that range to
+its peers for the half minute after.
 
-Either way the answer is **labelled partial**, in the answer itself rather than
+And a third: a node whose **copy is out of service** for what the search reads
+— its copy of the tracker for a work-item search, of the knowledge base for a
+knowledge search — is wrong rather than behind (its applier stopped, its rows
+below the log), and its index is over rows that stopped being the fleet's. It
+answers its range saying so, and is counted missing the same way
+([ADR-0031](https://github.com/crewlet/crewlet/blob/main/adr/0031-a-domains-fault-takes-only-its-own-copy-out-of-service.md)).
+One whose copy of the **vectors** is out of service still covers its range with
+the keyword half and answers without the vector scan, which is reported as
+`semantic_partial` rather than as a missing range.
+
+The second and third ways **last** — a first lap takes minutes, and a copy stays
+out of service until it recovers or its node adopts a snapshot — while every
+node holds the whole corpus, so the others can scan that share. So a node that
+hears a participant answer that it covered nothing (or skipped the vector scan
+for its vectors copy) gives that node — **itself included**, when its own scan
+said so — **no range for half a minute** for searches of the same kind — the
+same sources, or any search ranking by meaning — and divides every bucket among
+the rest; when every node is known not to cover, all are asked again. Only the
+search that hears it is partial; the next is complete, and the node is asked
+again once the half minute is up, which is what brings a recovered node back.
+
+Every way the answer is **labelled partial**, in the answer itself rather than
 in a log line on the asking node: every answer carries
 `coverage{nodes:[{id,answered,error}], complete, buckets_missing}` — every
 participant, whether it covered its range and, if not, why (silent inside the
-budget, still building its index, or the fleet could not be asked). A seat's
+budget, still building its index, its copy out of service, or the fleet could
+not be asked — and whether the asking node scanned that range in its place).
+A seat's
 own `search_knowledge` and `search_work_items` answers say so in words, because a seat reading five
 results out of what should have been eight otherwise concludes the other three
 do not exist. The `search_scoped` alarm reports the fraction of searches
@@ -262,8 +286,8 @@ The three search alarms are kept apart because they cost different things:
 
 | Alarm | What happened | What the answer lost |
 |---|---|---|
-| `search_scoped` | A node did not cover its assignment — it was silent, or its own lexical index has not finished its first lap. | A range of the corpus went unscanned. |
-| `search_degraded` | A semantic ranking was asked for and did not run — a node's vector scan failed, or the provider could not compute the query's vector. | Over the range it *did* scan, only what shares words with the query was found. |
+| `search_scoped` | A node did not cover its assignment — it was silent, its own lexical index has not finished its first lap, or its copy of what the search reads is out of service. | A range of the corpus went unscanned. |
+| `search_degraded` | A semantic ranking was asked for and did not run — a node's vector scan failed or its copy of the vectors is out of service, or the provider could not compute the query's vector. | Over the range it *did* scan, only what shares words with the query was found. |
 | `search_slow` | Interactive search is over its p95 target. | Nothing — yet. The corpus has outgrown what one node's share can scan in the budget. |
 
 **A company with no embeddings provider is not degraded** as far as the alarm
@@ -273,10 +297,20 @@ meaning with — an alarm red for the life of a deployment is one nobody reads.
 The answer itself still says `no_embeddings`, because the person reading it is
 the one who can configure a provider.
 
-**The asking node always scans its own range itself**, never through the
-broker. A search that returned nothing because the broker hiccupped would be a
-fleet-wide outage of a read every node can serve alone, so only the *peers'*
-ranges can go missing.
+**The asking node never needs the broker for what it can scan itself.** It
+scans its own range itself, never through the broker. And when it has given
+itself no range — its own last search said it could not cover that kind, so
+its peers took its share — it still holds the whole corpus, so whatever range
+the peers then leave uncovered (the broker could not be asked, a peer stayed
+silent, a peer answered covering nothing) it scans in their place before it
+answers. A search that returned nothing because the broker hiccupped would be a
+fleet-wide outage of a read every node can serve alone. Standing in for its
+peers while its own vectors copy is out of service, it answers those ranges by
+the keyword half, reported as `semantic_partial`; the peers that did not answer
+are named in the coverage, which stays complete. A range goes missing only
+when neither the node it was assigned to nor the asking node could cover it —
+the asking node's own index still building, or its own copy of what the search
+reads out of service, which its coverage entry for each missing range says.
 
 ### When the estate does not answer
 

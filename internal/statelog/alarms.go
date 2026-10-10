@@ -580,8 +580,12 @@ var table = []rule{
 					"semantic half", r.SearchDegradedFraction*100),
 				r.SearchDegradedFraction > 0
 		},
-		remedy: "The embeddings provider or the vector domain is failing. Search " +
-			"still answers; it answers less well, and silently.",
+		remedy: "The embeddings provider or the vector domain is failing — or a " +
+			"node's copy of the vectors is out of service (its " +
+			"`estate_copy_not_served` line names the fault), which the asking " +
+			"node answers by giving that node's range — its own included — to " +
+			"the others for half a minute. Search still answers; it answers " +
+			"less well, and silently.",
 	},
 	{
 		kind: KindSearchScoped,
@@ -590,11 +594,18 @@ var table = []rule{
 				"corpus", r.SearchScopedFraction*100), r.SearchScopedFraction > 0
 		},
 		remedy: "A node did not cover its bucket range, so part of the corpus " +
-			"went unscanned — it was unreachable, or its own lexical index has " +
+			"went unscanned — it was unreachable; or its own lexical index has " +
 			"not finished its first lap, which is what a node that joined a " +
-			"few minutes ago looks like and clears itself. The answers were " +
-			"complete for what was searched and silent about what was not; the " +
-			"log line names who was absent.",
+			"few minutes ago looks like and clears itself; or its copy of what " +
+			"the search reads is out of service (its `estate_copy_not_served` " +
+			"line names the domain and the fault), which does NOT clear itself: " +
+			"it lasts until that copy recovers or the node adopts a snapshot. " +
+			"Either reply costs only the search that hears it — the asking node " +
+			"gives that node's range — its own included — to the others for " +
+			"half a minute — so a " +
+			"fraction that stays up is a node that keeps answering so. The " +
+			"answers were complete for what was searched and silent about what " +
+			"was not; the log line names who was absent.",
 	},
 	{
 		// THE BUDGET IS BORROWED (ADR-0015): what makes a history answer
