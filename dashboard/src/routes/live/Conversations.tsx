@@ -11,9 +11,11 @@
  * viewer for somebody ELSE's threads — a Slack channel, a Jira issue — which
  * is not what a conversations screen in this product is meant to be, and the
  * name promised a chat system the engine does not have. The ledger itself
- * stays exactly where it was: it is prior-turn context for the agent's prompt
- * (see internal/engine, `req.History`), not a display feature, and removing it
- * would make every threaded seat forget what it said last turn.
+ * stays: it is prior-turn context for the agent's prompt (see internal/engine,
+ * `req.History`), and removing it would make every threaded seat forget what it
+ * said last turn. It is read as the SEAT's own record instead, on the seat's
+ * Memory tab (`conversations`), which shows the one part a thread cannot: a
+ * reply that never landed is not in the thread at all.
  *
  * # The whole record, not the open half
  *
