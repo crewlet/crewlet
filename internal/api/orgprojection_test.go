@@ -94,6 +94,7 @@ var roleFields = map[string]classified{
 	"Kind":                 {exposurePublic, "agent or human, which the chart draws differently", ""},
 	"Contact":              {exposureGuarded, "a person's account ids on external services", ""},
 	"Availability":         {exposurePublic, "free text written to be read by colleagues", ""},
+	"Avatar":               {exposureResolved, "the character and colour an agent seat is drawn as, its defaults filled in", "avatar"},
 	"Handle":               {exposurePublic, "the declared slug every other surface addresses the seat by", ""},
 	"Email":                {exposureGuarded, "a personal identifier, and it may hold a ${VAR} name", ""},
 	"Unit":                 {exposureGuarded, "a placement reference; where a seat sits is derived, not authored prose", ""},
@@ -306,6 +307,7 @@ var publicKeys = func() map[string]bool {
 		reflect.TypeFor[api.OrgSeat](),
 		reflect.TypeFor[api.OrgUnit](),
 		reflect.TypeFor[api.OrgTokenBudget](),
+		reflect.TypeFor[api.OrgAvatar](),
 		// The derived hierarchy is the values above, resolved: handles,
 		// names, unit names and the effective lead and channel. Its own
 		// keys belong to the public shape for that reason.
@@ -462,12 +464,26 @@ func (f *filler) role() config.Role {
 		case exposurePublic:
 			f.public(target)
 		case exposureResolved:
-			f.resolvedLLM(target)
+			f.resolved(target)
 		default:
 			f.guarded(target, 0)
 		}
 	}
 	return r
+}
+
+// resolved fills a seat field the projection resolves, by what it resolves.
+func (f *filler) resolved(v reflect.Value) {
+	if avatar, ok := v.Addr().Interface().(**config.RoleAvatar); ok {
+		// Both parts written, so each must reach the seat's avatar as written:
+		// a default standing in for a part the seat named is a dropped field.
+		*avatar = &config.RoleAvatar{
+			Character: config.AvatarCharacter(f.prose()),
+			Color:     config.AvatarColor(f.prose()),
+		}
+		return
+	}
+	f.resolvedLLM(v)
 }
 
 // resolvedLLM fills a seat's model field with a provider key the company
@@ -814,5 +830,37 @@ func TestTheOrgProjectionPublishesWhatASeatRunsOn(t *testing.T) {
 	if seat := orgOf(t, b).Roles[0]; seat.LLM != nil || !slices.Equal(seat.ToolSources, []string{"builtin"}) {
 		t.Errorf("with no provider and no server, the seat carries %v and %v; want no chain and only the builtins",
 			seat.LLM, seat.ToolSources)
+	}
+}
+
+// AN AGENT SEAT IS PUBLISHED WITH THE AVATAR IT IS DRAWN AS, its defaults
+// filled in, and A PERSON WITH NONE. Every screen draws a seat from this one
+// answer, so a seat that names one part keeps the other's default here rather
+// than in a copy of the default each screen would keep.
+func TestTheOrgProjectionPublishesHowEachAgentIsDrawn(t *testing.T) {
+	t.Parallel()
+	company := &config.Company{
+		Name: "Acme",
+		Roles: []config.Role{
+			{Name: "CTO", Avatar: &config.RoleAvatar{Character: "hexlet", Color: config.AvatarCyan}},
+			{Name: "PM", Avatar: &config.RoleAvatar{Color: config.AvatarRose}},
+			{Name: "SWE"},
+			{Name: "Founder", Kind: org.KindHuman, Contact: &org.HumanContact{SlackUserID: "U0FOUNDER"}},
+		},
+	}
+	a := newApp(t, api.Options{
+		Sources: queries.Sources{Company: func() *config.Company { return company }},
+	})
+	got := orgOf(t, a)
+	for i, want := range []*api.OrgAvatar{
+		{Character: "hexlet", Color: "cyan"},
+		{Character: "crewlet", Color: "rose"},
+		{Character: "crewlet", Color: "purple"},
+		nil,
+	} {
+		seat := got.Roles[i]
+		if !reflect.DeepEqual(seat.Avatar, want) {
+			t.Errorf("%s's avatar = %+v, want %+v", seat.Name, seat.Avatar, want)
+		}
 	}
 }

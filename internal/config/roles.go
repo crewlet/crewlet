@@ -43,6 +43,11 @@ type Role struct {
 	// ~4h".
 	Availability string `yaml:"availability,omitempty" json:"availability,omitempty" desc:"Human seats: free-text availability shown in rosters."`
 
+	// Avatar is how an AGENT seat is drawn wherever the dashboard shows who
+	// it is: a Crewlet character in a colour of its own. Presentation only;
+	// see [RoleAvatar].
+	Avatar *RoleAvatar `yaml:"avatar,omitempty" json:"avatar,omitempty" desc:"Agent seats: the Crewlet character and colour the seat is drawn as. Absent = the original Crewlet, in purple."`
+
 	// Handle is the canonical identity slug, derived from Name when empty.
 	//
 	// EFFECTIVELY PERMANENT: the seat's durable id is derived from the

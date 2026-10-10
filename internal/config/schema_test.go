@@ -121,6 +121,8 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		{"CLIAgent", "mode", strs(CLIAgentModes)},
 		{"SandboxProvider", "default_coding_agent", strs(CodingAgents)},
 		{"RoleSandbox", "run_in", strs(Placements)},
+		{"RoleAvatar", "character", strs(AvatarCharacters)},
+		{"RoleAvatar", "color", strs(AvatarColors)},
 		{"LocalSandbox", "runtime", strs(ContainerRuntimes)},
 		{"MCPServer", "transport", strs(MCPTransports)},
 		{"Slack", "typing_status", strs(WorkingStatuses)},
