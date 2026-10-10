@@ -2,7 +2,9 @@ package s3fake_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/xml"
+	"errors"
 	"io"
 	"net/http"
 	"slices"
@@ -105,6 +107,62 @@ func TestABegunUploadRefusesACompletionNamingNoTag(t *testing.T) {
 	}
 	if got := srv.Uploads(); len(got) != 1 {
 		t.Fatalf("the refused completion left the uploads %q, want the begun one still there", got)
+	}
+}
+
+// A HELD PART IS ANSWERED TO NOBODY, AND ITS CLIENT GIVING UP IS NEWS: the
+// fake takes the held part's bytes and sends nothing back for as long as its
+// client waits, and closes the channel [s3fake.Server.HoldPart] answered once
+// the client goes away — while a part of another number is answered as ever.
+// A hold the client could wait out would let a case read an answer as the
+// upload acting on a failure; a giving-up the fake never noticed would hang it.
+func TestAHeldPartIsAnsweredToNobodyUntilItsClientGivesUp(t *testing.T) {
+	t.Parallel()
+	srv := s3fake.Start(t, "files")
+	id := srv.Begin("held")
+	givenUp := srv.HoldPart(2)
+	put := func(ctx context.Context, number string) (*http.Response, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPut,
+			srv.URL+"/files/held?partNumber="+number+"&uploadId="+id, strings.NewReader("a part"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return srv.Client().Do(req)
+	}
+
+	answered, err := put(t.Context(), "3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = answered.Body.Close()
+	if answered.StatusCode != http.StatusOK {
+		t.Fatalf("a part of a number nobody holds answered %d", answered.StatusCode)
+	}
+
+	ctx, giveUp := context.WithCancel(t.Context())
+	sent := make(chan error, 1)
+	go func() {
+		resp, err := put(ctx, "2")
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+		sent <- err
+	}()
+	select {
+	case err := <-sent:
+		t.Fatalf("the held part was answered (%v) while its client still waited", err)
+	case <-givenUp:
+		t.Fatal("the hold reported a client giving up before it had")
+	case <-time.After(200 * time.Millisecond):
+	}
+	giveUp()
+	if err := <-sent; !errors.Is(err, context.Canceled) {
+		t.Fatalf("the client that gave up on the held part got %v, want its own cancellation", err)
+	}
+	select {
+	case <-givenUp:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the fake never noticed the held part's client give up")
 	}
 }
 

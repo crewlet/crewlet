@@ -29,23 +29,40 @@
 //
 // A put STREAMS without knowing its length, which S3 can only take in parts:
 // a body that ends inside its first [PartBytes] is one PutObject, and a longer
-// one a multipart upload of equal parts sent one after another through ONE
-// buffer — so an upload holds a part in memory and never the object. A body
-// ENDS only where its reader answers io.EOF itself ([objstore.Fill]): one cut
-// short fails the put rather than being stored as far as it got. A part that
-// fails, or a read, abandons the upload, under a context of its own, because
-// an upload nobody completes or aborts is invisible to a listing and billed
-// until somebody does — and one a process killed mid-upload leaves is what
-// [Backend.Pending] lists for the collector to abandon.
+// one a multipart upload of equal parts — so an upload holds a few parts in
+// memory and never the object. A body ENDS only where its reader answers
+// io.EOF itself ([objstore.Fill]): one cut short fails the put rather than
+// being stored as far as it got. A part that fails, or a read, abandons the
+// upload, under a context of its own, because an upload nobody completes or
+// aborts is invisible to a listing and billed until somebody does — and one a
+// process killed mid-upload leaves is what [Backend.Pending] lists for the
+// collector to abandon.
+//
+// # A large upload's parts are in flight together
+//
+// Up to [partsInFlight] parts of one upload are sent at once, each on a
+// connection of its own, while the next is read — and hashed, by the store —
+// into a buffer of its own; the parts are independent until the completion
+// names them by number. Sent one after another, every part paid a whole round
+// trip before the next could start and one connection's throughput carried
+// the whole object. The buffers past an upload's first come from ONE ALLOWANCE
+// the node's uploads share ([spareParts]), taken only while it has one free,
+// so many large uploads at once cost the node a bounded amount of memory and
+// each still finishes on the one buffer it holds. A part that fails ends its
+// upload AT ONCE — the others in flight cancelled, the body read no further —
+// rather than when the upload next needs a buffer, which was after up to
+// three more parts of a client's body.
 //
 // # Every request is bounded
 //
 // The bucket is reached through the engine's shared transport with no
 // client-wide timeout (internal/httpx), which is right only where every
 // request is bounded some other way — so every request is: a request that
-// moves no body gets [callBudget], one that carries a part gets that plus the
-// part's size at [objstore.MiBPace], and a read is bounded by the deadline its
-// caller must carry ([objstore.CheckRead]).
+// moves no body gets [callBudget]; a body sent as one put gets that plus its
+// size at [objstore.MiBPace]; a part of an upload gets that plus its size at
+// the floor once for every part the upload may keep in flight, because they
+// share one link and the floor is the upload's ([partBudget]); and a read is
+// bounded by the deadline its caller must carry ([objstore.CheckRead]).
 //
 // # What it costs the node, measured
 //
@@ -53,38 +70,40 @@
 // Bench) against s3fake, at the production [PartBytes] and S3's own page of a
 // thousand keys — on four vCPUs of a KVM Intel Xeon at 2.8 GHz WITHOUT SHA
 // instructions (it has AES-NI), Go 1.27.2, aws-sdk-go-v2/service/s3 v1.114.0,
-// 2026-10-10, one run on a VM shared with other work:
+// 2026-10-10, two runs on a VM shared with other work:
 //
 //   - ON LOOPBACK, over https, the NODE'S SIDE of a bucket: the SDK, the
 //     signature, TLS and the store's own hashing, with the fake's half of
 //     every request on the same CPUs, and none of the provider's — no round
-//     trip, no per-prefix request rate, no link. A 64 KiB put took 0.77 ms
-//     and larger ones ran at 157–168 MB/s; a whole read at 760–990 MB/s from
-//     1 MiB up, and 200–240 MB/s verified ([objstore.Store.Open]), which is
-//     this CPU's SHA-256 rate; eight verified reads at once at 630 MB/s
-//     together; a 64 KiB page at a random offset of a 128 MiB object took
-//     0.51 ms — ONE ranged request wherever the page is. A HEAD across ten
-//     thousand objects ran 2,900–3,100 a second from one goroutine and
-//     19,000–20,000 at 32 in flight, and a listing named 112,000–120,000
-//     objects a second, a thousand to a request.
-//   - A ROUND TRIP AWAY — the fake holding every request 20 or 50 ms before
-//     it answers (`rtt=`) — every loop of one request at a time is the round
-//     trip's, and the node's CPU stops being what it waits on. A HEAD runs
-//     47 a second at 20 ms and 19 at 50 for each request in flight: 1,480
-//     and 615 a second at 32, so asking after two million objects takes
-//     twelve hours one at a time at 20 ms and 23 minutes 32 at a time. A
-//     listing's page costs its round trip and about ten milliseconds of the
-//     node's own parsing — 33,000 names a second at 20 ms, 16,500 at 50 —
-//     so a pass over two million objects is one to two minutes. A 64 KiB
-//     page at any offset is one request, 21 and 51 ms. And a 128 MiB put —
-//     eighteen requests, a part at a time — ran at 121 MB/s at 20 ms and 79
-//     at 50, where on loopback it ran at 166.
+//     trip, no per-prefix request rate, no link. A 64 KiB put took 0.73 ms and
+//     larger ones ran at 177–229 MB/s; a whole read — of an object written
+//     moments before, held in the fake's memory, as every read figure here
+//     is — at 670–1,020 MB/s from 1 MiB up, and 215–245 MB/s verified
+//     ([objstore.Store.Open]), which is this CPU's SHA-256 rate; eight
+//     verified reads at once at 660–700 MB/s together; a 64 KiB page at a
+//     random offset of a 128 MiB object took 0.49 ms — ONE ranged request
+//     wherever the page is. A HEAD across ten thousand objects ran 3,200–3,600
+//     a second from one goroutine and 19,300–22,700 at 32 in flight, and a
+//     listing named 117,000–123,000 objects a second, a thousand to a request.
+//   - A ROUND TRIP AWAY — the fake holding every request 20 or 50 ms before it
+//     answers (`rtt=`) — every loop of one request at a time is the round
+//     trip's, and the node's CPU stops being what it waits on. A HEAD runs 47
+//     a second at 20 ms and 19 at 50 for each request in flight: 1,380–1,450
+//     and about 610 a second at 32 (what that makes of an audit is
+//     internal/objstore/collect's to say, since it decides how many it asks at
+//     once). A listing's page costs its round trip and about ten milliseconds
+//     of the node's own parsing — 31,400–33,000 names a second at 20 ms,
+//     15,600–16,900 at 50 — so a pass over two million objects is one to two
+//     minutes. A 64 KiB page at any offset is one request, 21 and 51 ms. And a
+//     128 MiB put, eighteen requests, ran at 220–228 MB/s at 20 ms and 153–196
+//     at 50 with [partsInFlight] parts in flight — 192–229 on loopback — where
+//     one part at a time had run at 121 and 79, and 166 on loopback.
 //
 // OVER PLAIN HTTP THE SDK SIGNS EVERY BODY: it hashes each byte it uploads to
 // put the digest in the signature, where over https it sends UNSIGNED-PAYLOAD
 // instead. On this CPU, where the hash is what a put waits on, puts from
-// 1 MiB up ran at 110–119 MB/s over http against 157–168 over https; reads
-// over http, with no TLS to decrypt, ran at 1.7–2.2 GB/s unverified. Reach a
+// 1 MiB up ran at 105–175 MB/s over http against 177–229 over https; reads
+// over http, with no TLS to decrypt, ran at 1.8–2.1 GB/s unverified. Reach a
 // bucket over https.
 //
 // # Measuring a real bucket
@@ -118,6 +137,7 @@ package s3obj
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -126,6 +146,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -166,7 +187,8 @@ type Config struct {
 }
 
 // PartBytes is the size of every part of a multipart upload but its last, and
-// the most one upload holds in memory.
+// of each buffer an upload holds a part in — one per part in flight, so at
+// most [partsInFlight] of them, 32 MiB, for one upload however large.
 //
 // EIGHT MEBIBYTES. S3 takes parts of five at the least, all but the last;
 // Cloudflare R2 takes them only all of one size, which is why every part is
@@ -177,6 +199,33 @@ const PartBytes = 8 * objstore.MiB
 
 // maxParts is the most parts S3 assembles into one object.
 const maxParts = 10_000
+
+// partsInFlight is the most parts of one upload sent at once.
+//
+// FOUR, which is where a bucket a round trip away stops being what an upload
+// waits on and the node's own hashing starts to be. A part costs its round
+// trip on top of its bytes, so one part at a time moved a 128 MiB object at
+// 121 MB/s with the bucket 20 ms away and 79 at 50, against 166 on loopback
+// (the `rtt=` arms of BenchmarkBackend; the package doc has the machine).
+// Four in flight overlap the round trips — 220–228 and 153–196 MB/s — and
+// more would only queue parts behind the one goroutine that reads and hashes
+// the body, which on that CPU, without SHA instructions, hashes 324–353 MB/s
+// (internal/objstore's BenchmarkHashOf). It is also four connections'
+// throughput from a provider that limits each connection's, and 32 MiB of
+// parts held by the largest upload.
+const partsInFlight = 4
+
+// spareParts is the most part buffers the node's uploads hold BEYOND the one
+// each holds for its own first part — 96 MiB, room for four uploads at full
+// width at once.
+//
+// AN ALLOWANCE, NEVER A QUEUE: an upload takes a spare only while one is free
+// and otherwise goes on with the buffers it has, so the fifth large upload at
+// once runs a part at a time rather than waiting for memory, and none ever
+// waits on another to finish. What bounds the memory is then one part per
+// upload in progress — what the uploads before this allowance held — plus
+// this.
+const spareParts = 3 * partsInFlight
 
 // callBudget bounds a request that carries no body of its own: a head, a
 // delete, a page of a listing, the start or the abandonment of an upload.
@@ -194,9 +243,31 @@ const callBudget = 30 * time.Second
 // with whitespace while it works.
 const completeBudget = 5 * time.Minute
 
-// sendBudget bounds a request carrying n bytes: [callBudget] for the request
-// and [objstore.MiBPace] for every mebibyte of its body.
+// sendBudget bounds a request carrying n bytes that has the link to itself —
+// a body that fit one part, sent as one put: [callBudget] for the request and
+// [objstore.MiBPace] for every mebibyte of its body.
 func sendBudget(n int64) time.Duration { return callBudget + objstore.PaceFor(n) }
+
+// partBudget bounds the request carrying one part of size bytes: [callBudget]
+// for the request, and [objstore.MiBPace] for every mebibyte of the part
+// [partsInFlight] times over.
+//
+// THE PART HAS A SHARE OF THE LINK, NOT THE LINK: an upload's parts in flight
+// cross one link to the bucket together, and the floor is the UPLOAD's — the
+// slowest an object may cross a link, which one part at a time held it to. A
+// part given only its own bytes at the floor, on a link the upload crosses at
+// the floor, misses its deadline once others share it, and the upload is
+// abandoned where one part at a time would have finished.
+//
+// EVERY PART AN UPLOAD MAY KEEP IN FLIGHT, not the parts in flight when it is
+// sent: an upload sends parts behind one already on its way — its first goes
+// alone and three more join it as fast as the body arrives — and each one
+// that joins slows the parts before it for the rest of their way. A part's
+// share is at worst one in [partsInFlight] while the link divides fairly
+// between the connections carrying them, which is what it is given. What it
+// costs is the notice a part that has stopped moving gets: sixteen and a half
+// minutes for a full part, where the link to itself was four and a half.
+func partBudget(size int64) time.Duration { return sendBudget(size * partsInFlight) }
 
 // Backend is the objects in a bucket.
 type Backend struct {
@@ -224,6 +295,10 @@ type Backend struct {
 	// — the standard library says so of RoundTrip — and a buffer handed
 	// straight to the next upload would be written under that read.
 	parts *sync.Pool
+
+	// spare is the node's allowance of part buffers beyond each upload's
+	// first ([spareParts]): a token in it is one taken.
+	spare chan struct{}
 }
 
 // cutParts sizes every part but the last at n bytes, and the buffers that
@@ -234,6 +309,31 @@ func (b *Backend) cutParts(n int) {
 		buf := make([]byte, n)
 		return &buf
 	}}
+	b.spare = make(chan struct{}, spareParts)
+}
+
+// takeSpare takes one buffer of the node's spare allowance, or answers false
+// when none is free — never waiting for one.
+func (b *Backend) takeSpare() bool {
+	select {
+	case b.spare <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+// returnSpares gives n buffers back to the node's spare allowance.
+//
+// AT THE UPLOAD'S END, whatever became of it, because the allowance counts
+// memory rather than vouching for it: a buffer a failed part's request may
+// still be read from is dropped rather than pooled, and is the collector's
+// once the transport lets go — a moment over the allowance, never a buffer
+// written under a read.
+func (b *Backend) returnSpares(n int) {
+	for range n {
+		<-b.spare
+	}
 }
 
 // Open builds the client and checks the bucket is reachable with these
@@ -293,22 +393,23 @@ func Open(ctx context.Context, cfg Config) (*Backend, error) {
 func (b *Backend) key(name string) string { return b.prefix + name }
 
 // Put implements [objstore.Backend].
-func (b *Backend) Put(ctx context.Context, name string, r io.Reader, m objstore.PutMeta) (err error) {
+func (b *Backend) Put(ctx context.Context, name string, r io.Reader, m objstore.PutMeta) error {
 	r = objstore.ContextReader(ctx, r)
 	buf := b.parts.Get().(*[]byte)
-	defer func() {
-		if err == nil {
-			b.parts.Put(buf)
-		}
-	}()
 	n, end, err := objstore.Fill(r, *buf)
 	switch {
 	case err != nil:
 		return fmt.Errorf("s3obj: read %s: %w", name, err)
-	case end:
-		return b.putObject(ctx, name, (*buf)[:n], m)
+	case !end:
+		// THE UPLOAD OWNS THE BUFFER from here, beside the others it
+		// takes, and gives them all back when it succeeds.
+		return b.putParts(ctx, name, r, buf, m)
 	}
-	return b.putParts(ctx, name, r, *buf, m)
+	if err := b.putObject(ctx, name, (*buf)[:n], m); err != nil {
+		return err
+	}
+	b.parts.Put(buf)
+	return nil
 }
 
 // contentType is a put's media type as the API takes it: nil records none.
@@ -337,13 +438,26 @@ func (b *Backend) putObject(ctx context.Context, name string, data []byte, m obj
 }
 
 // putParts streams a body longer than one part as a multipart upload whose
-// first part is already in buf, reading each next part into the same buffer
-// once the one before it is stored.
+// first part is already in first. Up to [partsInFlight] parts are sent at
+// once, each from a buffer of its own, while the next is read into another:
+// one whose part has landed, a spare from the node's allowance while one is
+// free, or — with neither — the buffer of the next part to land, once it has.
+//
+// A PART THAT FAILS ENDS THE UPLOAD AT ONCE: its sender ends the upload's
+// context with the failure as the cause, which cancels every other part in
+// flight and stops the read of the body at its next piece, and nothing is
+// sent once the upload has ended. An upload that heard of a failure only when
+// it next needed a buffer read the client's body on and sent up to three more
+// parts — minutes of a slow client's body, and three more part buffers held
+// — for an upload already lost, and told its caller last.
 //
 // EVERY FAILURE ABANDONS THE UPLOAD, under a context the caller's cannot end:
 // the failure being cleaned up after is often the caller giving up, and an
-// abort inheriting that context would abort nothing.
-func (b *Backend) putParts(ctx context.Context, name string, r io.Reader, buf []byte,
+// abort inheriting that context would abort nothing. And only ONCE EVERY PART
+// SENT HAS ANSWERED, the rest cancelled first: S3 documents that a part still
+// uploading when its upload is aborted may land anyway, holding storage no
+// listing shows until somebody aborts the upload a second time.
+func (b *Backend) putParts(ctx context.Context, name string, r io.Reader, first *[]byte,
 	m objstore.PutMeta) (err error) {
 
 	key := b.key(name)
@@ -356,8 +470,32 @@ func (b *Backend) putParts(ctx context.Context, name string, r io.Reader, buf []
 		return fmt.Errorf("s3obj: start the upload of %s: %w", name, err)
 	}
 	upload := started.UploadId
+
+	// parts is the life of the upload's part requests and of its read of the
+	// body, ended by the first part that fails — that part's failure its
+	// cause — or by the caller's own context.
+	parts, end := context.WithCancelCause(ctx)
+	r = objstore.ContextReader(parts, r)
+	// BUFFERED FOR EVERY PART THAT CAN BE IN FLIGHT, so a sender never
+	// waits to be heard and always returns.
+	landed := make(chan sentPart, partsInFlight)
+	var (
+		held     = []*[]byte{first} // every buffer this upload holds
+		idle     []*[]byte          // held buffers whose part has landed
+		inFlight int
+		spares   int
+		done     []types.CompletedPart
+	)
 	defer func() {
+		end(nil)
+		for ; inFlight > 0; inFlight-- {
+			<-landed
+		}
+		b.returnSpares(spares)
 		if err == nil {
+			for _, buf := range held {
+				b.parts.Put(buf)
+			}
 			return
 		}
 		abort, cancel := context.WithTimeout(context.WithoutCancel(ctx), callBudget)
@@ -371,34 +509,120 @@ func (b *Backend) putParts(ctx context.Context, name string, r io.Reader, buf []
 		}
 	}()
 
-	var done []types.CompletedPart
-	size, last := len(buf), false
-	for number := int32(1); size > 0; number++ {
+	// ended is why the upload stopped before its body did: the first part
+	// that failed, or the caller giving up.
+	ended := func() error {
+		cause := context.Cause(parts)
+		if _, failed := errors.AsType[*partError](cause); failed {
+			return cause
+		}
+		return fmt.Errorf("s3obj: put %s: %w", name, cause)
+	}
+	// send puts part number on its way from the first size bytes of buf, its
+	// answer handed to landed.
+	send := func(number int32, buf *[]byte, size int) {
+		inFlight++
+		go func() {
+			sent, serr := call(parts, partBudget(int64(size)), func(ctx context.Context) (*s3.UploadPartOutput, error) {
+				return b.client.UploadPart(ctx, &s3.UploadPartInput{
+					Bucket: aws.String(b.bucket), Key: aws.String(key), UploadId: upload,
+					PartNumber: aws.Int32(number), Body: bytes.NewReader((*buf)[:size]),
+					ContentLength: aws.Int64(int64(size)),
+				})
+			})
+			p := sentPart{number: number, buf: buf, err: serr}
+			if serr != nil {
+				// THE UPLOAD ENDS BEFORE THE ANSWER LANDS, so whatever
+				// hears of the end first — the read it stops, or the loop
+				// taking this answer or a cancelled sibling's — finds this
+				// failure, or an earlier one, as its cause.
+				end(&partError{number: number, name: name, err: serr})
+			} else {
+				p.etag = sent.ETag
+			}
+			landed <- p
+		}()
+	}
+	// settle takes one part's answer: its tag for the completion and its
+	// buffer for a later part — or, from a part that failed, the upload's end.
+	settle := func(p sentPart) error {
+		inFlight--
+		if p.err != nil {
+			return ended()
+		}
+		done = append(done, types.CompletedPart{ETag: p.etag, PartNumber: aws.Int32(p.number)})
+		idle = append(idle, p.buf)
+		return nil
+	}
+	// reap settles every part that has answered, waiting for none: a landed
+	// part's buffer is filled next rather than a spare taken from the node,
+	// and a part that failed ends the upload before its body is read on.
+	reap := func() error {
+		for {
+			select {
+			case p := <-landed:
+				if lerr := settle(p); lerr != nil {
+					return lerr
+				}
+			default:
+				return nil
+			}
+		}
+	}
+
+	buf, size, last := first, len(*first), false
+	for number := int32(1); ; number++ {
 		if number > maxParts {
 			return fmt.Errorf("s3obj: %s is longer than the %d parts of %d bytes one "+
 				"upload can hold", name, maxParts, b.partBytes)
 		}
-		part := buf[:size]
-		sent, perr := call(ctx, sendBudget(int64(size)),
-			func(ctx context.Context) (*s3.UploadPartOutput, error) {
-				return b.client.UploadPart(ctx, &s3.UploadPartInput{
-					Bucket: aws.String(b.bucket), Key: aws.String(key), UploadId: upload,
-					PartNumber: aws.Int32(number), Body: bytes.NewReader(part),
-					ContentLength: aws.Int64(int64(size)),
-				})
-			})
-		if perr != nil {
-			return fmt.Errorf("s3obj: store part %d of %s: %w", number, name, perr)
+		if parts.Err() != nil {
+			return ended()
 		}
-		done = append(done, types.CompletedPart{ETag: sent.ETag, PartNumber: aws.Int32(number)})
+		send(number, buf, size)
 		if last {
 			break
 		}
+		if lerr := reap(); lerr != nil {
+			return lerr
+		}
+		for buf = nil; buf == nil; {
+			switch {
+			case len(idle) > 0:
+				buf, idle = idle[len(idle)-1], idle[:len(idle)-1]
+			case len(held) < partsInFlight && b.takeSpare():
+				spares++
+				buf = b.parts.Get().(*[]byte)
+				held = append(held, buf)
+			default:
+				if lerr := settle(<-landed); lerr != nil {
+					return lerr
+				}
+			}
+		}
 		var rerr error
-		if size, last, rerr = objstore.Fill(r, buf); rerr != nil {
+		if size, last, rerr = objstore.Fill(r, *buf); rerr != nil {
+			if parts.Err() != nil {
+				return ended()
+			}
 			return fmt.Errorf("s3obj: read %s: %w", name, rerr)
 		}
+		if size == 0 {
+			// THE BODY ENDED WHERE A PART DID, so there is no part
+			// left to send.
+			break
+		}
 	}
+	for inFlight > 0 {
+		if lerr := settle(<-landed); lerr != nil {
+			return lerr
+		}
+	}
+	// IN THE ORDER OF THEIR NUMBERS, which a completion must name them in,
+	// where they landed in whatever order their requests answered.
+	slices.SortFunc(done, func(a, b types.CompletedPart) int {
+		return cmp.Compare(aws.ToInt32(a.PartNumber), aws.ToInt32(b.PartNumber))
+	})
 	_, err = call(ctx, completeBudget, func(ctx context.Context) (*s3.CompleteMultipartUploadOutput, error) {
 		return b.client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
 			Bucket: aws.String(b.bucket), Key: aws.String(key), UploadId: upload,
@@ -410,6 +634,30 @@ func (b *Backend) putParts(ctx context.Context, name string, r io.Reader, buf []
 	}
 	return nil
 }
+
+// sentPart is one part's answer: its number, the tag the bucket gave it, and
+// the buffer it was sent from.
+type sentPart struct {
+	number int32
+	etag   *string
+	buf    *[]byte
+	err    error
+}
+
+// partError is a part of an upload that failed: the cause the upload's
+// context is ended with, so whatever hears of the end reports this part
+// rather than a sibling the end cancelled.
+type partError struct {
+	number int32
+	name   string
+	err    error
+}
+
+func (e *partError) Error() string {
+	return fmt.Sprintf("s3obj: store part %d of %s: %v", e.number, e.name, e.err)
+}
+
+func (e *partError) Unwrap() error { return e.err }
 
 // call runs one request under its own budget.
 func call[T any](ctx context.Context, budget time.Duration, fn func(context.Context) (T, error)) (T, error) {
