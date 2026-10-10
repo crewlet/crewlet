@@ -30,7 +30,8 @@ func peerCopyIn(t *testing.T, h *harness, writer, opID string, gen uint32) state
 	h.applier.auto = false
 	h.applier.mu.Unlock()
 	seq, _, err := h.log.Append(t.Context(), probePrefix+".object.a", opID, nil,
-		probeRecord(statelog.Stamp{Gen: gen, Writer: writer}, opID, "the peer's"))
+		probeRecord(statelog.Stamp{Gen: gen, Writer: writer}, probeSubject("a"),
+			statelog.ScopeSet{Paths: []string{"object.a"}}, opID, "the peer's"))
 	if err != nil {
 		t.Fatalf("land %s's copy: %v", writer, err)
 	}
@@ -374,7 +375,8 @@ func reanchorRules(t *testing.T, generation, voidAfter, voidBefore uint32,
 func land(t *testing.T, h *harness, opID string) {
 	t.Helper()
 	if _, _, err := h.log.Append(t.Context(), probePrefix+".object.filler", opID, nil,
-		probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-c"}, opID, "filler")); err != nil {
+		probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-c"}, probeSubject("filler"),
+			statelog.ScopeSet{Paths: []string{"object.filler"}}, opID, "filler")); err != nil {
 		t.Fatalf("land %s: %v", opID, err)
 	}
 }

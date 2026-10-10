@@ -35,7 +35,8 @@ func TestEveryRecordNamesItsWriterAndTheGenerationItWasDecidedIn(t *testing.T) {
 		Pattern: statelog.PatternArbitrated,
 		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			handed = append(handed, stamp)
-			return statelog.Decision{Payload: probeRecord(stamp, "op-stamp", "x")}, nil
+			return statelog.Decision{Payload: probeRecord(stamp, probeSubject("a"),
+				statelog.ScopeSet{Paths: []string{"object.a"}}, "op-stamp", "x")}, nil
 		},
 	})
 	if err != nil {
@@ -79,27 +80,31 @@ func TestARecordWithoutItsStampIsRefusedBeforeItIsAppended(t *testing.T) {
 		"no writer": {
 			record: func(s statelog.Stamp) []byte {
 				s.Writer = ""
-				return probeRecord(s, "op-1", "x")
+				return probeRecord(s, probeSubject("a"),
+					statelog.ScopeSet{Paths: []string{"object.a"}}, "op-1", "x")
 			},
 			names: "writer",
 		},
 		"another node's id": {
 			record: func(s statelog.Stamp) []byte {
 				s.Writer = "node-b"
-				return probeRecord(s, "op-1", "x")
+				return probeRecord(s, probeSubject("a"),
+					statelog.ScopeSet{Paths: []string{"object.a"}}, "op-1", "x")
 			},
 			names: "writer",
 		},
 		"another generation": {
 			record: func(s statelog.Stamp) []byte {
 				s.Gen++
-				return probeRecord(s, "op-1", "x")
+				return probeRecord(s, probeSubject("a"),
+					statelog.ScopeSet{Paths: []string{"object.a"}}, "op-1", "x")
 			},
 			names: "generation",
 		},
 		"another operation": {
 			record: func(s statelog.Stamp) []byte {
-				return probeRecord(s, "op-someone-else", "x")
+				return probeRecord(s, probeSubject("a"),
+					statelog.ScopeSet{Paths: []string{"object.a"}}, "op-someone-else", "x")
 			},
 			names: "operation",
 		},

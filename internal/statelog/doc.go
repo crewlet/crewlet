@@ -434,6 +434,47 @@
 // manifest name the log by the domain's; and a barrier proves where that one
 // log ends, single-flighted per node per log ([ReadIndex]).
 //
+// # What a write costs, measured
+//
+// `make bench`'s BenchmarkArbitratedWrite runs ONE WRITE END TO END on a node
+// whose every seam a healthy write takes is real — the fence's read of this
+// node's own eviction row, the session wait for the writer's own last write,
+// one snapshot of the rows, the decision, the append the broker arbitrates,
+// this node's applier reaching it, WaitApplied — on a test domain that writes
+// one row a record, so its figures are the FRAMEWORK'S FLOOR, and a real
+// domain's decision and apply add to them. On four vCPUs of a KVM Intel Xeon
+// at 2.8 GHz, Go 1.27.2, nats-server v2.15.0, tursogo v0.8.1, 2026-10-10, at
+// `stream.sync: always` unless said, p50 / p99:
+//
+//   - SOLO, one subject's serial chain — each write arbitrated against the
+//     anchor the one before it advanced — took 3.2–3.3 / 7.1–7.2 ms, about
+//     295 writes a second; sixteen subjects written at once, 1,335–1,430 a
+//     second together. With the fsync declined, 3.0 ms and 310 a second.
+//   - AT THREE REPLICAS — the three members, their brokers, appliers and
+//     estates all on that one machine, so pessimistic per node and with no
+//     network hop — the serial chain took 7.0–7.6 / 15–18 ms from the
+//     stream's leader and from a follower alike, 124–133 writes a second on
+//     one subject; sixteen subjects, 520–570 a second. With the fsync
+//     declined the chain took 4.1–5.1 ms, 183–228 a second.
+//   - A LINEARIZABLE READ is a barrier append — 0.57–0.59 ms solo,
+//     3.5–3.9 ms at three replicas — and then this node's applier reaching
+//     it: the whole wait 1.7–1.8 / 4.3–4.6 ms solo and 4.8–5.5 / 10–12.5 ms at
+//     three, 535–555 reads a second from one reader solo and 171–197 at
+//     three.
+//
+// The ranges are two runs on a VM shared with other work, where one run can
+// land a third away from another: compare two trees on one idle machine with
+// benchstat rather than against these.
+//
+// BenchmarkApplierDrain prices the apply lane every domain on a node shares:
+// it drained a burst of one-row records at about 5,900 a second — each
+// record's anchor, ledger row and checkpoint are what a small record costs —
+// and internal/store's BenchmarkLogApplyDrain prices large ones, 52,000–63,000
+// rows a second as multi-row statements and 16,000–17,400 one statement a row.
+// The serial chain on one subject is what one object, or one repository's
+// committer, can do before it batches; the drain is the node's ceiling across
+// every domain at once.
+//
 // # Who may write a log: every writer is counted by construction
 //
 // The floor theorem above rests on a premise none of its three clauses states:

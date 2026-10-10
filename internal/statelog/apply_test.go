@@ -488,11 +488,21 @@ func (h *applyHarness) counter(name string) uint64 {
 	return total
 }
 
+// probeDDL is the probe domain's tables. probe_evictions is its eviction row
+// per node and log, as tracker_evictions is the tracker's — keyed so the read
+// every append makes of it is one row by its primary key.
 const probeDDL = `
 CREATE TABLE probe_rows (
     position  INTEGER NOT NULL PRIMARY KEY,
     kind      TEXT    NOT NULL,
     stored_at INTEGER NOT NULL
+);
+CREATE TABLE probe_evictions (
+    node_id             TEXT    NOT NULL,
+    log_stream          TEXT    NOT NULL,
+    from_position       INTEGER NOT NULL,
+    readmitted_position INTEGER,
+    PRIMARY KEY (node_id, log_stream)
 );
 CREATE TABLE probe_ops (
     op_id      TEXT    NOT NULL PRIMARY KEY,

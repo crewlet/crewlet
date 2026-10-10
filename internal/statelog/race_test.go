@@ -480,7 +480,8 @@ func TestLostPubAckIsUnknownNotSuccess(t *testing.T) {
 		h.appends.beforeLastSeq = func() {
 			h.sweep(minted.Add(time.Hour))
 			if _, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op", nil,
-				probeRecord(statelog.Stamp{Gen: 1, Writer: "node-b"}, "peer-op", "peer")); err != nil {
+				probeRecord(statelog.Stamp{Gen: 1, Writer: "node-b"}, probeSubject("a"),
+					statelog.ScopeSet{Paths: []string{"object.a"}}, "peer-op", "peer")); err != nil {
 				t.Errorf("the peer's write: %v", err)
 			}
 		}

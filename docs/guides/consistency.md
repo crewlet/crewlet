@@ -168,10 +168,17 @@ that the one member has it — which is exactly as strong as that deployment is.
 
 The barrier is a real record with a real cost. It is not free for most reads
 and cheap for a few: **every** linearizable read waits for exactly one append
-to come back. Measured on an idle loopback cluster that is about 1.5 ms from a
-follower at three replicas, and about 0.4 ms solo with `stream.sync: always` —
-plus whatever the applier takes to reach it. Treat those as a floor rather
-than a budget.
+to come back. Measured by `make bench` on one four-vCPU machine holding all
+three members, with `stream.sync: always`:
+
+| | solo | three replicas |
+|---|---|---|
+| the barrier append alone (median) | 0.6 ms (0.2 ms with the fsync declined) | 3.5–3.9 ms (0.9–1.3 ms declined) |
+| one reader: the whole read, median / p99 | 1.7–1.8 / 4.3–4.6 ms | 4.8–5.5 / 10–12.5 ms |
+| one reader: reads a second | 535–555 | 171–197 |
+
+Treat all of it as a floor rather than a budget: real members add a network
+hop between them and do not share one machine.
 
 The reason it is an append and not a `STREAM.INFO` field is that a field read
 can be served by a member that has been partitioned away from its own group:
