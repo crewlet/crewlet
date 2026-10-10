@@ -172,7 +172,8 @@ func TestACLIEnvSignInTravelsIntoTheRun(t *testing.T) {
 	t.Parallel()
 	company := func(env map[string]string) (*Company, *org.Role) {
 		provider, err := cliagent.New(cliagent.Config{
-			Key: "sub", Agent: "opencode", StateDir: t.TempDir(), Timeout: time.Minute, Env: env,
+			Key: "sub", Agent: "opencode", Model: "anthropic/claude-sonnet-4",
+			StateDir: t.TempDir(), Timeout: time.Minute, Env: env,
 		})
 		if err != nil {
 			t.Fatalf("cliagent.New: %v", err)
@@ -229,5 +230,10 @@ func TestACLIEnvSignInTravelsIntoTheRun(t *testing.T) {
 		if !strings.Contains(err.Error(), route) {
 			t.Errorf("the refusal does not name the %s route this CLI takes: %v", route, err)
 		}
+	}
+	// And WHOSE key: the provider segment of the model the box is handed is
+	// the one fact that says which provider has to sign the run in.
+	if !strings.Contains(err.Error(), `"anthropic", the provider its model names`) {
+		t.Errorf("the refusal does not name the provider whose key is missing: %v", err)
 	}
 }

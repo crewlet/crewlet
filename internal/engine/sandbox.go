@@ -2572,21 +2572,28 @@ func sandboxCredentials(c *Company, seat *org.Role, ph phase.Phase, placement sa
 			}
 		}
 	}
-	remedy := fmt.Sprintf("give this seat a local cell — role.sandbox.run_in: %q or %q",
+	remedy := fmt.Sprintf("Give this seat a local cell — role.sandbox.run_in: %q or %q",
 		sandbox.Direct, sandbox.Container)
 	switch {
 	case agent.MintsHeadlessToken():
-		remedy = fmt.Sprintf("mint a token that travels with `crewlet llm login %s "+
+		remedy = fmt.Sprintf("Mint a token that travels with `crewlet llm login %s "+
 			"-capture-token`, or give this seat a local cell (role.sandbox.run_in: %q or %q)",
 			member.Key, sandbox.Direct, sandbox.Container)
 	case agent.SignsInThroughEnv():
 		// This CLI's key travels the way a token does, so the one-line
-		// fix is the key rather than a placement change.
-		remedy = fmt.Sprintf("set the key of the provider its model names, under "+
-			"that provider's own variable, in providers.llm.%s.cli.env or in this "+
-			"seat's role.sandbox.env — both are exported into the box — or give this "+
-			"seat a local cell (role.sandbox.run_in: %q or %q)",
-			member.Key, sandbox.Direct, sandbox.Container)
+		// fix is the key rather than a placement change — named by the
+		// provider segment of the very value the box is handed, the one
+		// fact here that says which provider it is. The VARIABLE stays
+		// the CLI's to name (see above), so it is not guessed at.
+		provider := "the provider its model names"
+		if name, _, found := strings.Cut(agent.ModelArgument(), "/"); found && name != "" {
+			provider = fmt.Sprintf("%q, the provider its model names", name)
+		}
+		remedy = fmt.Sprintf("Set the key of %s, under the variable %s reads for "+
+			"that provider, in providers.llm.%s.cli.env or in this seat's "+
+			"role.sandbox.env — both are exported into the box — or give this seat a "+
+			"local cell (role.sandbox.run_in: %q or %q)",
+			provider, agent.Agent(), member.Key, sandbox.Direct, sandbox.Container)
 	}
 	return &SandboxCredentialError{msg: fmt.Sprintf(
 		"seat %q runs code in %q, where the %q subscription login cannot follow it: "+
