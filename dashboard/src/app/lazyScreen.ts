@@ -107,18 +107,25 @@ export class ChunkLoadError extends Error {
   }
 }
 
-/** The loads in flight or settled. A rejected load is removed — see the file's doc. */
-const pending = new Map<Chunk, Promise<unknown>>();
-/** The chunks that arrived, so a screen whose code is in memory never suspends. */
-const loaded = new Map<Chunk, unknown>();
+/**
+ * A load as React's `use` reads it: a promise that marks itself once its chunk
+ * is in. React reads a thenable's `status` before it suspends, so one already
+ * marked `fulfilled` is answered at once, while one React has not seen is
+ * suspended on for a frame even when it has settled.
+ */
+type Load<T> = Promise<T> & { status?: "fulfilled"; value?: T };
+
+/** The loads in flight or settled. A rejected load is removed: see the file's doc. */
+const pending = new Map<Chunk, Load<unknown>>();
 
 /** Fetch a chunk, once; a failed fetch is forgotten, so the next ask retries. */
 export function loadChunk<C extends Chunk>(chunk: C): Promise<ChunkModule<C>> {
   let load = pending.get(chunk);
   if (!load) {
-    load = (overrides.get(chunk) ?? LOADERS[chunk])().then(
+    const started: Load<unknown> = (overrides.get(chunk) ?? LOADERS[chunk])().then(
       (module) => {
-        loaded.set(chunk, module);
+        started.status = "fulfilled";
+        started.value = module;
         return module;
       },
       (cause: unknown) => {
@@ -126,7 +133,8 @@ export function loadChunk<C extends Chunk>(chunk: C): Promise<ChunkModule<C>> {
         throw new ChunkLoadError(chunk, cause);
       },
     );
-    pending.set(chunk, load);
+    pending.set(chunk, started);
+    load = started;
   }
   return load as Promise<ChunkModule<C>>;
 }
@@ -139,14 +147,20 @@ export function loadChunk<C extends Chunk>(chunk: C): Promise<ChunkModule<C>> {
  * A CHUNK ALREADY IN MEMORY IS READ SYNCHRONOUSLY. `use` on a promise React
  * has not seen suspends once even when it has settled, so a screen whose chunk
  * the idle prefetch fetched a minute ago would still flash its skeleton for a
- * frame; the `loaded` map is what spares it.
+ * frame; the load marking itself fulfilled ([Load]) is what spares it.
+ *
+ * `use` IS CALLED ON EVERY RENDER. A component that suspended on it must call
+ * it again on the render that resumes, and a fast path that skipped it once
+ * the chunk was in (a map of arrived modules read before `use`) did exactly
+ * that: every screen that suspended logged React's "did not call use() when
+ * it finished" on the render that drew it.
  */
 export function lazyScreen<C extends Chunk, P extends object>(
   chunk: C,
   pick: (module: ChunkModule<C>) => ComponentType<P>,
 ): ComponentType<P> {
   function Lazy(props: P) {
-    const module = (loaded.get(chunk) as ChunkModule<C> | undefined) ?? use(loadChunk(chunk));
+    const module = use(loadChunk(chunk));
     return createElement(pick(module), props);
   }
   Lazy.displayName = `Lazy(${chunk})`;
@@ -244,5 +258,4 @@ export function overrideChunkForTest(chunk: Chunk, load: () => Promise<unknown>)
 /** For a suite: forget every chunk, so a load can be watched from the start. */
 export function resetChunksForTest(): void {
   pending.clear();
-  loaded.clear();
 }

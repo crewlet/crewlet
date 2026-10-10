@@ -9,6 +9,7 @@
  * `boundaries.test.tsx`.
  */
 
+import { startTransition, useState } from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
@@ -150,6 +151,39 @@ describe("a lazy screen", () => {
     await act(async () => load.release({ Spend: () => <p>the spend screen</p> }));
     expect(await screen.findByText("the spend screen")).toBeDefined();
     expect(screen.queryByText("Loading this screen")).toBeNull();
+  });
+
+  // A COMPONENT THAT SUSPENDED ON `use` CALLS IT AGAIN when it resumes. A
+  // navigation renders in a TRANSITION, where React keeps the screen it has
+  // and replays the suspended component in place once its chunk arrives; a
+  // fast path that read the arrived chunk before `use` skipped it on exactly
+  // that replay, and React logged "did not call use() when it finished" for
+  // every screen a reader opened before its chunk was in.
+  test("calls use on the render that resumes, so React reports nothing", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const load = held();
+      serve("spend", () => load.promise);
+      const Spend = lazyScreen("spend", (m) => m.Spend);
+      let open: () => void = () => {};
+      function Navigation() {
+        const [opened, setOpened] = useState(false);
+        open = () => startTransition(() => setOpened(true));
+        return (
+          <ScreenBoundary resetKey="spend">
+            {opened ? <Spend /> : <p>the home screen</p>}
+          </ScreenBoundary>
+        );
+      }
+      render(<Navigation />);
+      await act(async () => open());
+      expect(screen.getByText("the home screen")).toBeDefined();
+      await act(async () => load.release({ Spend: () => <p>the spend screen</p> }));
+      expect(await screen.findByText("the spend screen")).toBeDefined();
+      expect(errors.mock.calls.map((call) => String(call[0]))).toEqual([]);
+    } finally {
+      errors.mockRestore();
+    }
   });
 
   // A chunk the idle prefetch already fetched must not flash its skeleton:
