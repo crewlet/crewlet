@@ -250,7 +250,7 @@ func TestTheOpenCodeConfigReferencesTheKeyRatherThanInliningIt(t *testing.T) {
 	path, err := opencode().WriteConfig(t.Context(), b, sandbox.RunRequest{
 		LLM: &sandbox.AgentLLM{
 			Model: "house-model", ProviderType: "anthropic",
-			BaseURL: "https://example.com/v1",
+			BaseURL: "https://example.com",
 		},
 	}, codingagent.PathsFor(b))
 	if err != nil || path == "" {
@@ -264,11 +264,56 @@ func TestTheOpenCodeConfigReferencesTheKeyRatherThanInliningIt(t *testing.T) {
 	if !strings.Contains(body, "{env:ANTHROPIC_API_KEY}") {
 		t.Fatalf("the key is not referenced through the environment:\n%s", body)
 	}
-	if !strings.Contains(body, "https://example.com/v1") {
+	if !strings.Contains(body, "https://example.com") {
 		t.Fatalf("the endpoint was not declared:\n%s", body)
 	}
 	if !strings.Contains(body, `"share": "disabled"`) {
 		t.Fatalf("sharing was left on — a run's transcript is company work:\n%s", body)
+	}
+}
+
+// THE DECLARED ENDPOINT IS WHERE EACH SDK EXPECTS IT.
+//
+// An `anthropic` entry's base_url is the host root, which the engine's own
+// provider and Claude Code's ANTHROPIC_BASE_URL both append /v1/messages to;
+// @ai-sdk/anthropic posts to `<baseURL>/messages`, so the root handed to it
+// as written sent every OpenCode request on an Anthropic gateway to a path
+// that does not exist. An OpenAI-wire base_url already ends in its version and
+// passes through untouched.
+func TestTheOpenCodeProviderEndpointIsWhereItsSDKExpectsIt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		providerType, baseURL, npm, want string
+	}{
+		{"anthropic", "https://gateway.example.com", "@ai-sdk/anthropic", "https://gateway.example.com/v1"},
+		{"anthropic", "https://gateway.example.com/", "@ai-sdk/anthropic", "https://gateway.example.com/v1"},
+		{"openai-compatible", "https://llm.example.com/v1", "@ai-sdk/openai-compatible", "https://llm.example.com/v1"},
+		{"openai", "https://llm.example.com/v1/", "@ai-sdk/openai-compatible", "https://llm.example.com/v1/"},
+	} {
+		b := sandbox.NewFakeSandbox("box-1")
+		path, err := opencode().WriteConfig(t.Context(), b, sandbox.RunRequest{LLM: &sandbox.AgentLLM{
+			Model: "house-model", ProviderType: tc.providerType, BaseURL: tc.baseURL,
+		}}, codingagent.PathsFor(b))
+		if err != nil {
+			t.Fatalf("WriteConfig: %v", err)
+		}
+		blob, _ := b.ReadFile(t.Context(), path)
+		var cfg struct {
+			Provider map[string]struct {
+				NPM     string `json:"npm"`
+				Options struct {
+					BaseURL string `json:"baseURL"`
+				} `json:"options"`
+			} `json:"provider"`
+		}
+		if err := json.Unmarshal(blob, &cfg); err != nil {
+			t.Fatalf("unmarshal: %v\n%s", err, blob)
+		}
+		got := cfg.Provider[codingagent.OpenCodeProviderID]
+		if got.NPM != tc.npm || got.Options.BaseURL != tc.want {
+			t.Errorf("%s entry at %q declared %s at %q, want %s at %q",
+				tc.providerType, tc.baseURL, got.NPM, got.Options.BaseURL, tc.npm, tc.want)
+		}
 	}
 }
 

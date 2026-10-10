@@ -151,20 +151,35 @@ func (OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbo
 	return path, nil
 }
 
+// openCodeProvider is the `crewlet` provider declared for an API entry with a
+// base URL: the entry's wire's AI SDK package, pointed at the entry's endpoint,
+// signed in by the variable the run environment carries the entry's key under.
+//
+// THE ENDPOINT IS TRANSLATED FOR THE ANTHROPIC SDK, because the two
+// conventions disagree about where /v1 lives. An `anthropic` entry's base_url
+// is the host ROOT — the convention of Anthropic's own SDK, which the engine's
+// provider is built on and which appends /v1/messages, and of Claude Code's
+// ANTHROPIC_BASE_URL — while @ai-sdk/anthropic takes a prefix that already
+// ends in /v1 and posts to `<baseURL>/messages`. Handed the root, OpenCode
+// called <gateway>/messages and every request was a 404 on a gateway every
+// engine call on the same entry reached. An `openai` or `openai-compatible`
+// entry's base_url already ends where both its readers expect, so it passes
+// through as written.
 func openCodeProvider(llm sandbox.AgentLLM) map[string]any {
-	anthropic := openCodeFamily(llm.ProviderType) == "anthropic"
 	npm := "@ai-sdk/openai-compatible"
 	keyEnv := "OPENAI_API_KEY"
-	if anthropic {
+	baseURL := llm.BaseURL
+	if openCodeFamily(llm.ProviderType) == "anthropic" {
 		npm = "@ai-sdk/anthropic"
 		keyEnv = "ANTHROPIC_API_KEY"
+		baseURL = strings.TrimRight(baseURL, "/") + "/v1"
 	}
 	return map[string]any{
 		OpenCodeProviderID: map[string]any{
 			"npm":  npm,
 			"name": "Crewlet role LLM",
 			"options": map[string]any{
-				"baseURL": llm.BaseURL,
+				"baseURL": baseURL,
 				"apiKey":  "{env:" + keyEnv + "}",
 			},
 			"models": map[string]any{llm.Model: map[string]any{}},
