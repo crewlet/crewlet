@@ -169,8 +169,9 @@ jobs:
       # The container image, to this repository's own GHCR namespace.
       packages: write
       # The ONLY credential in play beyond the run's own token: an OIDC
-      # identity cosign mints a short-lived certificate from. There is no
-      # private key, so there is none to leak.
+      # identity cosign mints a short-lived certificate from, to sign the
+      # checksums and the image. There is no private key, so there is none
+      # to leak.
       id-token: write
     steps:
       # Full history and tags. goreleaser reads the tag it was triggered by

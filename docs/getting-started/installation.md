@@ -65,7 +65,17 @@ with Feather's MIT text for the glyphs derived from it). The container image car
 
 Or run the container image, `ghcr.io/crewlet/crewlet` — a Debian userland
 rather than a distroless one, because the engine spawns process trees (stdio
-MCP servers, and the local sandbox's coding agent).
+MCP servers, and the local sandbox's coding agent). Each release pushes it as
+`ghcr.io/crewlet/crewlet:<tag>` (`v0.2.0`, the tag itself) for linux/amd64 and
+linux/arm64, and a stable release also moves `latest`. The image is signed by
+digest with the same keyless identity as the checksums, which names the release
+workflow at that exact tag (cosign 3, or cosign 2 with `--new-bundle-format`):
+
+```bash
+cosign verify ghcr.io/crewlet/crewlet:<tag> \
+  --certificate-identity 'https://github.com/crewlet/crewlet/.github/workflows/release.yml@refs/tags/<tag>' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
 
 A binary from `go install` reports its module version and one from a release
 reports its tag; neither ever claims to be something it is not.

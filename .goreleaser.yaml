@@ -249,3 +249,23 @@ dockers_v2:
       org.opencontainers.image.created: "{{ .Date }}"
       org.opencontainers.image.source: "https://github.com/crewlet/crewlet"
       org.opencontainers.image.licenses: MIT
+
+# Keyless Sigstore signing over every image pushed above, BY DIGEST — the same
+# identity and the same short-lived certificate as the checksum signature,
+# and still no key anywhere. A tag can be moved; the digest a signature names
+# cannot, so a deployment that verifies an image verifies the bytes it pulls.
+#
+# The default `artifacts` for a dockers_v2 image is the image itself, once per
+# tag it was pushed under. A stable release pushes one digest as both its tag
+# and `latest`, so that digest carries two equivalent signatures; that costs
+# a Rekor entry and buys not having to filter tags here.
+#
+# Verify with `cosign verify` naming the workflow that built it (RELEASING.md,
+# "Verifying an image"): the identity is what tells a release's image from any
+# other image a workflow of this repository could sign.
+docker_signs:
+  - cmd: cosign
+    args:
+      - sign
+      - "${artifact}@${digest}"
+      - "--yes"
