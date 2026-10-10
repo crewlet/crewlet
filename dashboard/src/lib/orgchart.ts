@@ -1,33 +1,31 @@
 /**
- * The live org chart, as data: which seat hangs under which, which runs of
- * seats sit in one unit's box, and how many seats are in each state.
+ * The live org chart, as data: the company in either of the two arrangements
+ * the org builder draws (`ui/orgNodes.tsx` `ChartKind`), and how many seats
+ * are in each state.
  *
  * # Pure, and fed the APPLIED company
  *
  * Its inputs are the org index built over the projection this node has
- * APPLIED (`lib/seats.ts` `indexOrg`), the `agents` push and the tracker's
- * `work_projects` rows — never the builder's draft. The builder
- * (`routes/org/builder/chartModel.ts`) draws a document somebody is editing,
- * and a chart that shared its model would draw a seat nobody has saved as if
- * it were running; `orgchart.test.ts` holds that as a boundary this module
- * never imports across.
+ * APPLIED (`lib/seats.ts` `indexOrg`) and the `agents` push, never the
+ * builder's draft. The builder (`routes/org/builder/chartModel.ts`) draws a
+ * document somebody is editing, and a chart that shared its model would draw a
+ * seat nobody has saved as if it were running; `orgchart.test.ts` holds that
+ * as a boundary this module never imports across. What the two charts SHARE
+ * is the drawing of a node, which is not a fact about either model.
  *
- * # The tree is who reports to whom
+ * # The structure is the company, its units and the seats in each
  *
- * A card hangs under its PRIMARY MANAGER, which is the engine's derived
- * `manager` — the one line the engine routes escalation up. Every seat has at
+ * The company is the one root. Its root seats and its top units hang off it,
+ * and each unit's seats and child units hang off that unit, seats first, as
+ * the builder's structure chart draws a draft. A unit's seats are the ones the
+ * engine placed in it, a root seat placed by its `unit:` reference included.
+ *
+ * # The reporting chart is who reports to whom
+ *
+ * A seat hangs under its PRIMARY MANAGER, which is the engine's derived
+ * `manager`, the one line the engine routes escalation up. Every seat has at
  * most one, so the chart is a forest rather than a graph, and a seat the
  * engine gave none is a root. Nothing here re-derives a reporting line.
- *
- * # A box is a unit under the lead it reports to
- *
- * The lines say who reports to whom; they cannot say which seats WORK
- * TOGETHER — two teams under one lead are two runs of children with nothing
- * between them. So the children of a card that are members of a unit that
- * card LEADS from outside it are drawn in one box, labelled with the unit.
- * A lead's own unit gets no box round the seats beside the lead: the CEO and
- * the CTO sharing Executives are peers on a line, and a box round the CTO
- * alone would say the CTO is a team.
  */
 
 import type { TreeInput } from "@crewlethq/ui";
@@ -35,25 +33,27 @@ import type { SeatActivity } from "~/contract/wire.ts";
 import type { AgentRow, WorkProjectRow } from "~/protocol/types.ts";
 import type { OrgIndex, Seat, Unit } from "./seats.ts";
 
-/** One box round a run of sibling cards: a unit, under its lead. */
-export interface ChartGroup {
-  /** Never a card's id: a seat key is a handle or `#n`, and this is `unit:`. */
-  id: string;
-  unit: Unit;
-  /** The unit's path BELOW what the lead's own card already says. */
-  label: string;
-  /** The tracker projects this unit's work is filed under, by key. */
-  projectKeys: string[];
-  /** The cards inside, consecutive children of one card, in chart order. */
-  memberIds: string[];
+/**
+ * The structure chart's root, the company. Never a seat's key, which is a
+ * handle or `#n`, and never a unit's (`unitNodeId`).
+ */
+export const COMPANY_NODE = "company:";
+
+/** What the structure chart's root is called when the company writes no name. */
+export const UNNAMED_COMPANY = "Unnamed company";
+
+/** A unit's node: never a seat's key, which is a handle or `#n`. */
+export function unitNodeId(unit: Pick<Unit, "key">): string {
+  return `unit:${unit.key}`;
 }
 
 export interface OrgChartModel {
-  /** Every seat as the tree pattern reads it, nested by primary manager. */
+  /** The nodes as the tree pattern reads them. */
   nodes: TreeInput[];
-  groups: ChartGroup[];
-  /** A card's seat, by the card's id (the seat's key). */
+  /** A seat node's seat, by the node's id (the seat's key). */
   seats: Map<string, Seat>;
+  /** A unit node's unit, by the node's id. Empty on the reporting chart. */
+  units: Map<string, Unit>;
 }
 
 /** A unit's path as a reader names it: "Engineering · Core". */
@@ -79,8 +79,8 @@ export function projectsByUnit(
 ): Map<string, string[]> {
   const out = new Map<string, string[]>();
   for (const p of projects) {
-    // AN ARCHIVED PROJECT IS NOT WHERE A UNIT'S WORK GOES: its key on the box
-    // would send a reader to a board nobody files to.
+    // AN ARCHIVED PROJECT IS NOT WHERE A UNIT'S WORK GOES: its key on the
+    // unit's node would send a reader to a board nobody files to.
     if (p.archived || !p.unit?.name) continue;
     out.set(p.unit.name, [...(out.get(p.unit.name) ?? []), p.key]);
   }
@@ -89,22 +89,42 @@ export function projectsByUnit(
 }
 
 /**
- * Build the chart.
- *
- * Children are ordered so a unit's members are CONSECUTIVE — a box encloses a
- * run of siblings, and a unit whose members were interleaved with another's
- * could not be drawn as one — by the unit's place in the tree (depth first,
- * as the document writes units) and then by the chart's own seat order.
+ * The structure chart: the company, its root seats and units, and each unit's
+ * seats and child units under it.
  */
-export function buildOrgChart(
-  index: OrgIndex,
-  projects: readonly Pick<WorkProjectRow, "key" | "unit" | "archived">[] = [],
-): OrgChartModel {
+export function buildStructureChart(index: OrgIndex, company: string): OrgChartModel {
+  const seats = new Map<string, Seat>();
+  const units = new Map<string, Unit>();
+  const seatNode = (seat: Seat): TreeInput => {
+    seats.set(seat.key, seat);
+    return { id: seat.key, label: seat.name };
+  };
+  const unitNode = (unit: Unit): TreeInput => {
+    const id = unitNodeId(unit);
+    units.set(id, unit);
+    const children = [...unit.seats.map(seatNode), ...unit.children.map(unitNode)];
+    return { id, label: unit.name, ...(children.length ? { children } : {}) };
+  };
+  const children = [...index.rootSeats.map(seatNode), ...index.topUnits.map(unitNode)];
+  const root: TreeInput = {
+    id: COMPANY_NODE,
+    label: company.trim() || UNNAMED_COMPANY,
+    ...(children.length ? { children } : {}),
+  };
+  return { nodes: [root], seats, units };
+}
+
+/**
+ * The reporting chart: every seat under its primary manager.
+ *
+ * Children are ordered by the unit they sit in (depth first, as the document
+ * writes units) and then by the chart's own seat order, so the members of one
+ * team read side by side under the lead they report to.
+ */
+export function buildReportingChart(index: OrgIndex): OrgChartModel {
   const seats = new Map(index.seats.map((s) => [s.key, s]));
   const unitOrder = new Map(index.units.map((u, i) => [u, i]));
   const seatOrder = new Map(index.seats.map((s, i) => [s, i]));
-  const keysOf = projectsByUnit(projects);
-
   // A MANAGER CHAIN THAT LOOPS cannot be a tree. The engine's derivation
   // cannot produce one, but a chart that trusted that would recurse for ever
   // on a projection that did; such a seat is drawn as a root instead.
@@ -116,7 +136,6 @@ export function buildOrgChart(
     }
     return seat.manager && seats.has(seat.manager.key) ? seat.manager : null;
   };
-
   const children = new Map<Seat | null, Seat[]>();
   for (const seat of index.seats) {
     const parent = parentOf(seat);
@@ -133,33 +152,8 @@ export function buildOrgChart(
       return ua - ub || sa - sb;
     });
   }
-
-  const groups: ChartGroup[] = [];
   const build = (seat: Seat): TreeInput => {
     const kids = children.get(seat) ?? [];
-    // THE RUNS OF CHILDREN IN A UNIT THIS SEAT LEADS FROM OUTSIDE IT.
-    let run: { unit: Unit; ids: string[] } | null = null;
-    const close = () => {
-      if (!run) return;
-      groups.push({
-        id: `unit:${run.unit.key}:${seat.key}`,
-        unit: run.unit,
-        label: pathBelow(run.unit, seat.unit),
-        projectKeys: keysOf.get(run.unit.name) ?? [],
-        memberIds: run.ids,
-      });
-      run = null;
-    };
-    for (const kid of kids) {
-      const boxed = kid.unit && kid.unit.effectiveLead === seat && seat.unit !== kid.unit;
-      if (boxed && run?.unit === kid.unit) {
-        run.ids.push(kid.key);
-        continue;
-      }
-      close();
-      if (boxed) run = { unit: kid.unit!, ids: [kid.key] };
-    }
-    close();
     return {
       id: seat.key,
       label: seat.name,
@@ -167,7 +161,7 @@ export function buildOrgChart(
     };
   };
   const nodes = balanceRoots((children.get(null) ?? []).map(build));
-  return { nodes, groups, seats };
+  return { nodes, seats, units: new Map() };
 }
 
 /**
@@ -194,9 +188,9 @@ export function buildOrgChart(
  * split whose top row is centred closest to the middle of the whole drawing.
  * Positions are reckoned the way a tidy tree places cards of one width: a leaf
  * one slot along from the last, a parent midway between its first and last
- * child. That is not the canvas's exact arithmetic — a unit's box adds its
- * padding — but it is the same shape, which is all the side depends on. A tie
- * keeps the document's order.
+ * child. That is not the canvas's exact arithmetic, since nodes are as wide
+ * as their names, but it is the same shape, which is all the side depends on.
+ * A tie keeps the document's order.
  */
 export function balanceRoots(nodes: readonly TreeInput[]): TreeInput[] {
   const trees = nodes.filter((n) => n.children?.length);
@@ -237,30 +231,6 @@ export function balanceRoots(nodes: readonly TreeInput[]): TreeInput[] {
     }
   }
   return [...lone.slice(0, best), ...trees, ...lone.slice(best)];
-}
-
-/**
- * A unit's path below the part the lead's card already names.
- *
- * "Engineering · Core" under a CTO who sits in Leadership · Executives says
- * everything; "Product · Developer Relations" under a PM who sits in
- * Product · Management says Product twice, once on the card and once on the
- * box under it, so the box drops what the two share.
- */
-function pathBelow(unit: Unit, leadUnit: Unit | null): string {
-  const lead = leadUnit?.chain ?? [];
-  let shared = 0;
-  while (
-    shared < lead.length &&
-    shared < unit.chain.length - 1 &&
-    lead[shared] === unit.chain[shared]
-  ) {
-    shared++;
-  }
-  return unit.chain
-    .slice(shared)
-    .map((u) => u.name)
-    .join(" · ");
 }
 
 /** How many seats are in each of the four states the legend names. */

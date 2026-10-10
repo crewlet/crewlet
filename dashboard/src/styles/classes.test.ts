@@ -538,11 +538,6 @@ interface Allowed {
 
 const ALLOWED: Allowed[] = [
   {
-    name: "crewlet-canvas__controls",
-    why: "uilet's Canvas writes it on the zoom bar a TreeCanvas draws. styles/screens.css moves it to the bottom LEFT corner on the live org chart (`.oc-canvas`), where the approved chart puts it, because the legend takes the bottom right and the kit offers only the right-hand corners. Another rule about OUR composition of the package's component.",
-    pkg: "@crewlethq/ui/styles.css",
-  },
-  {
     name: "crewlet-canvas",
     why: "uilet's Canvas writes it on the canvas's root, inside the TreeCanvas the live org chart draws. styles/screens.css takes its frame away inside `.oc-canvas`, so the field runs to the sheet's edges as the approved chart draws it; the dots on that field are the kit's own `ground=\"dotted\"`. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",

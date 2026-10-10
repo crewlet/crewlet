@@ -71,7 +71,7 @@ function useUnitProjects(): Map<string, string[]> {
   return useMemo(() => projectsByUnit(rows ?? []), [rows]);
 }
 
-/** A unit's project keys, as the chips the chart's boxes carry. */
+/** A unit's project keys, as chips that open each project's board. */
 function ProjectKeys({ keys }: { keys: readonly string[] }) {
   return (
     <>

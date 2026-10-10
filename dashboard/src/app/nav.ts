@@ -282,10 +282,11 @@ export const WORKSPACES: WorkspaceRow[] = [
     chord: "a",
     place: "workspace",
     renderer: "tabs",
-    // THE ONE HUE RULE, said where the colour is: every ring, dot and state
-    // line on these sections is what a seat is DOING, and no seat has a
-    // colour of its own.
-    note: "Colour shows what a seat is doing — never who it is",
+    // THE STATE RULE, said where the state is drawn: every dot, ring and
+    // state line on these sections is what a seat is DOING. The charts also
+    // tone an agent seat, as the org builder does, which says what a seat IS,
+    // so the note names the dot rather than every colour on the page.
+    note: "A seat's dot shows what it is doing",
     sections: [
       {
         key: "chart",

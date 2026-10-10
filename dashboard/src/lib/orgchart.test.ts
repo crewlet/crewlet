@@ -1,13 +1,24 @@
 /**
- * The live org chart's model: its tree, its unit boxes and its legend, off
- * the APPLIED projection alone.
+ * The live org chart's model: its two arrangements and its legend, off the
+ * APPLIED projection alone.
  */
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { TreeInput } from "@crewlethq/ui";
-import { balanceRoots, buildOrgChart, placeLine, stateCounts, unitPath } from "./orgchart.ts";
+import {
+  COMPANY_NODE,
+  UNNAMED_COMPANY,
+  balanceRoots,
+  buildReportingChart,
+  buildStructureChart,
+  placeLine,
+  projectsByUnit,
+  stateCounts,
+  unitNodeId,
+  unitPath,
+} from "./orgchart.ts";
 import { indexOrg } from "./seats.ts";
 import type { AgentRow, OrgProjection, WorkProjectRow } from "~/protocol/types.ts";
 import { CHART_ORG } from "~/test/orgchart.ts";
@@ -23,9 +34,42 @@ function edges(nodes: readonly TreeInput[], parent = ""): string[] {
   return nodes.flatMap((n) => [`${parent}>${n.id}`, ...edges(n.children ?? [], n.id)]);
 }
 
-// THE TREE IS WHO REPORTS TO WHOM, off the engine's derived primary manager.
-test("each card hangs under its primary manager", () => {
-  const chart = buildOrgChart(indexOrg(CHART_ORG), PROJECTS);
+// THE STRUCTURE IS THE COMPANY, ITS UNITS AND THE SEATS IN EACH, as the
+// builder's structure chart draws a draft: root seats and top units off the
+// company, then each unit's seats before its child units.
+test("the structure hangs every unit and seat off the company, seats first", () => {
+  const chart = buildStructureChart(indexOrg(CHART_ORG), "Acme");
+  expect(edges(chart.nodes)).toEqual([
+    `>${COMPANY_NODE}`,
+    `${COMPANY_NODE}>jane`,
+    `${COMPANY_NODE}>unit:u0`,
+    "unit:u0>unit:u1",
+    "unit:u1>ceo",
+    "unit:u1>cto",
+    `${COMPANY_NODE}>unit:u2`,
+    "unit:u2>unit:u3",
+    "unit:u3>swe",
+    "unit:u3>fe",
+    `${COMPANY_NODE}>unit:u4`,
+    "unit:u4>unit:u5",
+    "unit:u5>pm",
+    "unit:u4>unit:u6",
+    "unit:u6>devrel",
+  ]);
+  expect(chart.nodes[0]!.label).toBe("Acme");
+  expect(chart.seats.get("swe")?.name).toBe("SWE");
+  expect(chart.units.get(unitNodeId({ key: "u3" }))?.name).toBe("Core");
+  expect(chart.units.size).toBe(7);
+});
+
+test("a company that writes no name is still a root, named as such", () => {
+  expect(buildStructureChart(indexOrg(CHART_ORG), "  ").nodes[0]!.label).toBe(UNNAMED_COMPANY);
+});
+
+// THE REPORTING CHART IS WHO REPORTS TO WHOM, off the engine's derived
+// primary manager, and it draws no unit.
+test("each seat of the reporting chart hangs under its primary manager", () => {
+  const chart = buildReportingChart(indexOrg(CHART_ORG));
   expect(edges(chart.nodes)).toEqual([
     ">jane",
     "jane>ceo",
@@ -35,18 +79,15 @@ test("each card hangs under its primary manager", () => {
     "ceo>pm",
     "pm>devrel",
   ]);
+  expect(chart.units.size).toBe(0);
 });
 
-// A BOX IS A UNIT UNDER THE LEAD IT REPORTS TO: Core under the CTO, who
-// leads it from Executives, and Developer Relations under the PM, who leads it
-// by inheritance from Management. The CTO beside the CEO in their own unit is
-// NOT boxed — peers in the lead's own unit are a line, not a team.
-test("the seats of a unit its lead leads from outside are boxed, with the unit's project", () => {
-  const chart = buildOrgChart(indexOrg(CHART_ORG), PROJECTS);
-  expect(chart.groups.map((g) => [g.label, g.memberIds, g.projectKeys])).toEqual([
-    ["Engineering · Core", ["swe", "fe"], ["ENG"]],
-    // The box drops "Product", which the PM's own card already says.
-    ["Developer Relations", ["devrel"], []],
+// A UNIT'S KEY IS THE PROJECT ITS WORK IS FILED UNDER, and an archived project
+// is not where its work goes.
+test("each unit's live projects are listed by the unit's name", () => {
+  expect([...projectsByUnit(PROJECTS)]).toEqual([
+    ["Core", ["ENG"]],
+    ["Management", ["PROD"]],
   ]);
 });
 
@@ -167,6 +208,6 @@ describe("a root that leads nobody is placed to centre the top row", () => {
     } as unknown as OrgProjection;
     // CHART_ORG's CEO has a CTO with two reports and a PM with one, so its
     // tree leans right and Maya is drawn on the founder's left.
-    expect(buildOrgChart(indexOrg(org), PROJECTS).nodes.map((n) => n.id)).toEqual(["maya", "jane"]);
+    expect(buildReportingChart(indexOrg(org)).nodes.map((n) => n.id)).toEqual(["maya", "jane"]);
   });
 });

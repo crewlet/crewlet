@@ -890,14 +890,6 @@
 .oc-canvas {
   flex: 1;
   min-height: 0;
-  /* THE APPROVED CARD, 184px (11.5rem): three lines at the approved density.
-     The name has the first line to itself (the kind pill leads the second),
-     so "Agent Frontend SWE" is read whole; a name longer than the card is cut
-     with an ellipsis and read whole from its title and the peek's heading.
-     208px was tried to keep that word beside the pill; it did not — the card
-     read "Agent Front…" — and the 24px on each of four cards in a row was
-     zoom the whole chart lost beside the peek. */
-  --crewlet-tree-canvas-card-width: 11.5rem;
 }
 /* NO FRAME OF ITS OWN: the field runs to the sheet's edges (see `.oc`). Its
    dots are the design system's (`ground="dotted"` on the chart). Two classes,
@@ -907,24 +899,8 @@
   border: 0;
   border-radius: 0;
 }
-/* THE ZOOM BAR AT THE BOTTOM LEFT, THE LEGEND AT THE BOTTOM RIGHT, as the
-   approved chart has them: the kit offers the right-hand corners only, and the
-   legend is the chart's own overlay. */
-.oc-canvas .crewlet-canvas__controls {
-  left: var(--spacing-3);
-  right: auto;
-}
-
-/* ONE CARD: the kit draws its frame; this is what it says. */
-.oc-card {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  min-width: 0;
-  padding: var(--spacing-3);
-  cursor: pointer;
-  outline: none;
-}
+/* WHAT AN OUTLINE ROW SAYS, on a phone (`OrgOutline`). The canvas draws the
+   kit's own nodes and needs none of these. */
 .oc-head {
   display: flex;
   align-items: center;
@@ -953,32 +929,10 @@
   align-items: center;
   gap: var(--spacing-2);
 }
-/* THE KIND LEADS THE PLACE LINE and never gives way; the unit does. */
-.oc-card .oc-place {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-1);
-}
-.oc-kind {
-  display: inline-flex;
-  flex: none;
-}
-.oc-place-text,
 .oc-line {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-/* THE STATE LINE IN THE STATE'S INK — the one hue a card carries. Idle and a
-   person stay in the tertiary ink: an idle seat is not a state to notice. */
-.oc-card[data-state="working"] .oc-state {
-  color: var(--color-feedback-info-ink);
-}
-.oc-card[data-state="needs"] .oc-state {
-  color: var(--color-feedback-warning-ink);
-}
-.oc-card[data-state="stopped"] .oc-state {
-  color: var(--color-feedback-danger-ink);
 }
 /* A UNIT'S PROJECT KEY, as the sidebar's project rows draw one. */
 .oc-key {
