@@ -326,7 +326,13 @@ core** trains on it, as it always did, and with searches always in flight on
 that core the same training is about three and a half minutes of reading and
 seven and a half of arithmetic. The training renews the duty's lease as it
 runs, and stops publishing — handing its cores back within a fraction of a
-second — the moment it cannot. And a tick is cut off once it has gone **five
+second — the moment a renewal answers that another node holds the duty, or
+once no renewal has confirmed it for two and a quarter minutes (its
+three-minute lease less one of the four renewals it makes in a lease); a
+renewal the coordination store refuses, or holds on to while its leader moves,
+costs it nothing, since none waits longer than one renewal for its answer. And
+a tick is
+cut off once it has gone **five
 minutes without progress**, never after five minutes of running: every request
 answered, every vector published or withdrawn, every 1 024 rows a training reads
 and the end of its k-means and filing are progress, so a wedged tick never holds

@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
 	"github.com/crewlet/crewlet/internal/objstore/references"
+	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -79,7 +82,7 @@ func collectorNode(t *testing.T, source collect.Source) (*Engine, *collectorDuty
 	e := &Engine{id: "data-a",
 		backends: &Backends{Fleet: fleet, objectsIdentity: "nats"},
 		objects:  &objectStore{store: store}}
-	duty := &collectorDuty{collector: c}
+	duty := newCollectorDuty(c)
 	e.objects.duty.Store(duty)
 	return e, duty, fleet
 }
@@ -419,5 +422,254 @@ func TestAnUnknownClaimKeepsTheAlarm(t *testing.T) {
 	if f := rec.Status.Audit.Found; f == nil || f.Missing != 2 || len(f.MissingFiles) != 2 {
 		t.Fatalf("the pass after an unknown claim recorded findings %+v; "+
 			"want the two files the holder in between found lost", f)
+	}
+}
+
+// heldPass is a source naming one object the store never held, whose pin — the
+// first thing every pass does — waits while hold is set, until release is
+// closed or the pass is stopped: a pass exactly as long as a test wants.
+type heldPass struct {
+	namedObject
+	hold    atomic.Bool
+	release chan struct{}
+}
+
+func newHeldPass() *heldPass {
+	return &heldPass{namedObject: namedObject{k: objstore.KeyAt(time.Now())}, release: make(chan struct{})}
+}
+
+func (s *heldPass) Barrier(ctx context.Context) (statelog.Position, error) {
+	if !s.hold.Load() {
+		return statelog.Position{}, nil
+	}
+	select {
+	case <-s.release:
+		return statelog.Position{}, nil
+	case <-ctx.Done():
+		return statelog.Position{}, context.Cause(ctx)
+	}
+}
+
+// turnAside runs one turn of the duty on a goroutine of its own, as the loop
+// does: done is closed when it returns, and wait waits for that.
+func turnAside(t *testing.T, e *Engine, claim func(context.Context) (bool, error),
+	duty *collectorDuty) (done <-chan struct{}, wait func()) {
+	t.Helper()
+	returned := make(chan struct{})
+	go func() {
+		defer close(returned)
+		e.collectorTurn(t.Context(), claim, duty)
+	}()
+	return returned, func() {
+		t.Helper()
+		select {
+		case <-returned:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the turn never returned")
+		}
+	}
+}
+
+// heldDutyNode is collectorNode over a source that holds every pass until it
+// is released, whose duty is renewed on a test's clock — and which has run a
+// collection and an audit already, so the fleet holds a record, the alarm
+// reads the one object the store lost, and the next pass is a collection the
+// test forces due.
+func heldDutyNode(t *testing.T) (*Engine, *collectorDuty, *coordmemory.Fleet, *fakeDutyClock) {
+	t.Helper()
+	source := newHeldPass()
+	e, duty, fleet := collectorNode(t, source)
+	e.collectorTurn(t.Context(), nil, duty) // collect
+	e.collectorTurn(t.Context(), nil, duty) // audit
+	var r statelog.Reading
+	e.objectsReading(time.Now(), &r)
+	if r.ObjectsMissing != 1 {
+		t.Fatalf("the premise: the audit left the alarm at %d, want 1", r.ObjectsMissing)
+	}
+	clk := newFakeDutyClock()
+	duty.renewal.clock = clk
+	duty.mu.Lock()
+	duty.collected = time.Time{}
+	duty.mu.Unlock()
+	source.hold.Store(true)
+	return e, duty, fleet, clk
+}
+
+// A COLLECTOR'S PASS KEEPS ITS DUTY FOR AS LONG AS IT RUNS: a pass five leases
+// long is renewed throughout, no peer can claim the duty at any point of it,
+// and what it found is recorded as this node's when it ends. Renewed only
+// between passes, the lease lapsed under a long audit, a peer ran its own
+// beside it, and the two wrote the fleet's one record in turn.
+func TestACollectorPassLongerThanItsLeaseKeepsTheDuty(t *testing.T) {
+	t.Parallel()
+	source := newHeldPass()
+	source.hold.Store(true)
+	e, duty, fleet := collectorNode(t, source)
+	clk := newFakeDutyClock()
+	duty.renewal.clock = clk
+	store := &coordmemory.Backend{Clock: clk.Now}
+	mine := schedule.ClaimNamedDuty(store, objectCollectorDuty, "a:1", "data-a", collectorDutyTTL)
+	peer := schedule.ClaimNamedDuty(store, objectCollectorDuty, "b:1", "data-b", collectorDutyTTL)
+	claim := newScriptedClaim()
+	claim.next = mine
+
+	_, wait := turnAside(t, e, claim.claim, duty)
+	if a := claim.await(t); !a.held || a.err != nil {
+		t.Fatalf("the premise: the turn's claim answered %v, %v", a.held, a.err)
+	}
+	for i := range 20 { // fifteen minutes: five leases
+		clk.tick(t, duty.renewal.every())
+		if a := claim.await(t); !a.held || a.err != nil {
+			t.Fatalf("renewal %d answered %v, %v", i+1, a.held, a.err)
+		}
+		if held, err := peer(t.Context()); held || err != nil {
+			t.Fatalf("a peer claimed the duty %v into the pass (%v, %v)",
+				time.Duration(i+1)*duty.renewal.every(), held, err)
+		}
+	}
+	close(source.release)
+	wait()
+
+	r, found := collectionRecorded(t, fleet)
+	if !found || r.Node != "data-a" || !r.Status.Collect.Completed {
+		t.Fatalf("the pass recorded %+v (found %v), want this node's completed collection", r, found)
+	}
+	duty.mu.Lock()
+	defer duty.mu.Unlock()
+	if !duty.holding {
+		t.Error("the node that kept the duty through its pass no longer reads as holding it")
+	}
+}
+
+// A PASS IS STOPPED THE MOMENT A RENEWAL ANSWERS THAT ANOTHER NODE HOLDS THE
+// DUTY, and records nothing: that node records its own, and the fleet's record
+// has one writer at a time. The duty, its resume and its alarm go with it, as
+// they do for a claim answering the same.
+func TestACollectorPassStopsWhenAnotherNodeHoldsTheDuty(t *testing.T) {
+	t.Parallel()
+	e, duty, fleet, clk := heldDutyNode(t)
+	before, _ := collectionRecorded(t, fleet)
+	claim := newScriptedClaim(answer{held: true}, answer{held: false})
+
+	_, wait := turnAside(t, e, claim.claim, duty)
+	claim.await(t)
+	clk.tick(t, duty.renewal.every())
+	claim.await(t)
+	wait() // never released: only the lost duty ends the pass
+
+	if after, _ := collectionRecorded(t, fleet); !after.Status.Collect.At.Equal(before.Status.Collect.At) {
+		t.Fatalf("a pass stopped because another node held the duty recorded a collection at %v",
+			after.Status.Collect.At)
+	}
+	duty.mu.Lock()
+	holding, resumed := duty.holding, duty.resumed
+	duty.mu.Unlock()
+	if holding || resumed {
+		t.Fatalf("a node that lost the duty mid-pass reads as holding %v, resumed %v", holding, resumed)
+	}
+	var r statelog.Reading
+	e.objectsReading(time.Now(), &r)
+	if r.ObjectsMissing != 0 {
+		t.Errorf("a node that lost the duty mid-pass still reports %d missing", r.ObjectsMissing)
+	}
+	if got := duty.collector.Status().Collect.Error; !strings.Contains(got, errDutyLost.Error()) {
+		t.Errorf("the stopped pass reports %q, want why it was stopped: %q", got, errDutyLost)
+	}
+}
+
+// A PASS IS STOPPED ONCE NO RENEWAL HAS CONFIRMED ITS DUTY FOR AS LONG AS THE
+// LEASE IS SURE TO LAST, and records nothing — another node may hold the duty
+// by then. But unknown is not lost: the node keeps the alarm its last audit
+// raised and only forgets its resume, as for a claim nobody answered.
+func TestACollectorPassStopsWhenItsDutyCannotBeConfirmed(t *testing.T) {
+	t.Parallel()
+	e, duty, fleet, clk := heldDutyNode(t)
+	before, _ := collectionRecorded(t, fleet)
+	claim := newScriptedClaim(answer{held: true}, unanswered, unanswered)
+
+	returned, wait := turnAside(t, e, claim.claim, duty)
+	claim.await(t)
+	clk.tick(t, duty.renewal.every())
+	claim.await(t) // unanswered, with two renewals' intervals still confirmed
+	clk.tick(t, duty.renewal.every())
+	claim.await(t) // unanswered, with one still confirmed
+	clk.tickToTheEnd(t, duty.renewal.every(), returned)
+	wait() // never released: only the unconfirmed duty ends the pass
+
+	if n := claim.count(); n != 3 {
+		t.Fatalf("the duty was asked for %d times; want the turn's claim and two renewals, "+
+			"and none once nothing confirmed it", n)
+	}
+	if after, _ := collectionRecorded(t, fleet); !after.Status.Collect.At.Equal(before.Status.Collect.At) {
+		t.Fatalf("a pass whose duty could not be confirmed recorded a collection at %v",
+			after.Status.Collect.At)
+	}
+	duty.mu.Lock()
+	holding, resumed := duty.holding, duty.resumed
+	duty.mu.Unlock()
+	if !holding || resumed {
+		t.Fatalf("an unconfirmed duty reads as holding %v, resumed %v; want the duty kept "+
+			"and the resume forgotten", holding, resumed)
+	}
+	var r statelog.Reading
+	e.objectsReading(time.Now(), &r)
+	if r.ObjectsMissing != 1 {
+		t.Errorf("an unconfirmed duty left the alarm at %d, want the 1 the audit found", r.ObjectsMissing)
+	}
+	if got := duty.collector.Status().Collect.Error; !strings.Contains(got, errDutyUnconfirmed.Error()) {
+		t.Errorf("the stopped pass reports %q, want why it was stopped: %q", got, errDutyUnconfirmed)
+	}
+}
+
+// A RENEWAL THE STORE DID NOT ANSWER COSTS A PASS NOTHING — refused at once,
+// or held on to until its call gives up, which is what a request to a
+// coordination stream whose leader is moving meets: the next is asked inside
+// the window the last confirmation bought, answers held, and the pass runs to
+// its end and is recorded — a coordination store's leader election does not
+// throw away half an hour of audit.
+func TestACollectorPassSurvivesARenewalTheStoreDidNotAnswer(t *testing.T) {
+	t.Parallel()
+	for _, heldOn := range []bool{false, true} {
+		name := "refused"
+		if heldOn {
+			name = "held on to"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			source := newHeldPass()
+			source.hold.Store(true)
+			e, duty, fleet := collectorNode(t, source)
+			clk := newFakeDutyClock()
+			duty.renewal.clock = clk
+			claim := newScriptedClaim(answer{held: true}, unanswered)
+			store := newHoldOn(0)
+			if heldOn {
+				claim = newScriptedClaim(answer{held: true})
+				claim.next = store.claim
+			}
+
+			_, wait := turnAside(t, e, claim.claim, duty)
+			claim.await(t)
+			clk.tick(t, duty.renewal.every())
+			if heldOn {
+				store.held(t)
+				clk.advance(duty.renewal.every()) // the call's own deadline
+				claim.await(t)
+				clk.tick(t, 0) // the next renewal, already due
+			} else {
+				claim.await(t)
+				clk.tick(t, duty.renewal.every())
+			}
+			claim.await(t)
+			clk.tick(t, duty.renewal.every()) // the first confirmation's window ends
+			claim.await(t)
+			close(source.release)
+			wait()
+
+			r, found := collectionRecorded(t, fleet)
+			if !found || r.Node != "data-a" || !r.Status.Collect.Completed {
+				t.Fatalf("the pass recorded %+v (found %v), want this node's completed collection", r, found)
+			}
+		})
 	}
 }

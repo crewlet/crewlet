@@ -60,11 +60,12 @@ import (
 // corpus — the training by the k-means and the one exact pass, the rollout
 // by one Hamming search per row against every centroid on every holder — and a
 // tick is bounded by the duty's lease (the engine cuts it off when a renewal
-// does not confirm it, and a step cut off publishes nothing) and by a budget
-// of PROGRESS rather than of time ([Budget]): the budget cuts off a tick that
-// wedged, and a training on a slow node is not one. The minute between them
-// costs nothing: until the rollout has applied, a search reads the
-// not-yet-filed rows in full ([Stage1]).
+// answers that another node holds the duty, or when none has confirmed it for
+// as long as the lease is sure to last, and a step cut off publishes nothing)
+// and by a budget of PROGRESS rather than of time ([Budget]): the budget cuts
+// off a tick that wedged, and a training on a slow node is not one. The minute
+// between them costs nothing: until the rollout has applied, a search reads
+// the not-yet-filed rows in full ([Stage1]).
 //
 // # What a tick reads
 //
