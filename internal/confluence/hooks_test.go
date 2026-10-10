@@ -1180,6 +1180,64 @@ func TestAPassWithNoBaseOnADeadContextIsAFaultRatherThanHealth(t *testing.T) {
 	}
 }
 
+// A DATA CENTER INSTANCE WITH NOWHERE TO DELIVER TO IS REPORTED, AS THE
+// COMPANY ADMIN'S CONFIG FAULT — AND A CLOUD SITE IS NOT.
+//
+// The pass registers nothing with no public base, and said so only in a note,
+// which is not a finding: a Data Center company that never set
+// integrations.public_base_url saw Confluence reported Ready while the
+// instance had no address to send a single page event to. Jira, GitHub, GitLab
+// and Datadog each report that state; this pass's own doc claimed it stayed
+// silent "for the reason jira.Result.Findings states", which by then stated
+// the opposite. Cloud stays silent, because a Cloud site can deliver through
+// the Forge app at an address this engine never registered.
+func TestAnInstanceWithNoPublicBaseIsReportedOnDataCenterOnly(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		cloud  bool
+		report bool
+	}{
+		{"data center", false, true},
+		{"cloud", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			site := newCloudSite(t)
+			client := dataCenterClient(t, site)
+			if tc.cloud {
+				client = cloudClient(t, site)
+			}
+			res, err := confluence.Reconcile(context.Background(), confluence.Options{
+				Client:      client,
+				Config:      &config.Confluence{URL: site.URL, Token: "t"},
+				Value:       func(v string) string { return v },
+				WebhookBase: "",
+			})
+			if err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			var found []integration.Finding
+			for _, f := range res.Findings() {
+				if f.Subject == "integrations.public_base_url" {
+					found = append(found, f)
+				}
+			}
+			switch {
+			case !tc.report && len(found) != 0:
+				t.Fatalf("a Cloud site reported a missing address: %+v", found)
+			case tc.report && len(found) != 1:
+				t.Fatalf("findings = %+v, want one naming the public base", res.Findings())
+			case tc.report:
+				integrationtest.AssertConfigFault(t, found[0])
+				if integration.Classify(res.Findings()).Phase == integration.PhaseReady {
+					t.Error("an instance nothing can deliver to classified as ready")
+				}
+			}
+		})
+	}
+}
+
 // A CLOUD HOOK SUBSCRIBED TO THE WRONG EVENT IS RE-SUBSCRIBED.
 //
 // The event list is the third thing a listing reports, and it is the one that
