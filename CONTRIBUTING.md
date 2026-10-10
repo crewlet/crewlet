@@ -628,20 +628,23 @@ worth knowing:
   (`@release/v1`) or `@main` yields no update pull requests at all, so pin
   actions to a version tag or a full SHA. That matters most for the one
   handed an OIDC token: pinned, its updates arrive as reviewable pull
-  requests instead of moving under the workflow unannounced. The release
-  workflow pins every action by **full commit SHA**, with the release in a
-  trailing comment (`@<sha> # v7.2.3`) that Dependabot rewrites with the pin:
-  it holds the registry, the Releases and the signing identity, and a version
-  tag is a ref its owner can move under it.
+  requests instead of moving under the workflow unannounced. The release and
+  main-image workflows pin every action by **full commit SHA**, with the
+  release in a trailing comment (`@<sha> # v7.2.3`) that Dependabot rewrites
+  with the pin: they hold the registry and the signing identity (and the
+  release workflow the Releases), and a version tag is a ref its owner can move
+  under them.
 - **One pin nothing watches: goreleaser itself.** Every goreleaser step in
-  `.github/workflows/release.yml` asks for an exact goreleaser
+  `.github/workflows/release.yml` and `.github/workflows/main-image.yml` asks
+  for an exact goreleaser
   (`version: v2.18.3`), and Dependabot bumps the action's ref but never a
   `with:` input. It is exact anyway, because a range would download whatever
   goreleaser released last into the job that publishes and signs, with
-  nobody reviewing it. So move it by hand: take the newest release from
+  nobody reviewing it — and main-image.yml runs on every merge and every
+  hour. So move it by hand: take the newest release from
   [goreleaser's releases](https://github.com/goreleaser/goreleaser/releases),
-  change every step together, and rehearse with `make snapshot` on that
-  version.
+  change every step in both files together, and rehearse with `make snapshot`
+  on that version.
 
 Adding a new dependency surface — a second `package.json`, a second module — means
 adding its `updates:` entry in the same change. Nothing reports the omission:
@@ -850,12 +853,22 @@ touches
 ## Releasing
 
 Releases are cut by pushing a `v*` tag; GitHub Actions builds every target
-with [goreleaser](https://goreleaser.com), signs the checksums with keyless
-Sigstore, publishes the container image to GHCR and creates the GitHub
-Release. **The tag is the version** — nothing in the tree records one, so
-there is nothing for a tag to disagree with. The whole pipeline rehearses
-locally with `make snapshot`, without a tag and without touching GitHub; the
-full process is in [RELEASING.md](RELEASING.md).
+with [goreleaser](https://goreleaser.com), signs the checksums and the
+container image with keyless Sigstore, publishes the image to GHCR and creates
+the GitHub Release. **The tag is the version** — nothing in the tree records
+one, so there is nothing for a tag to disagree with. The whole pipeline
+rehearses locally with `make snapshot`, without a tag and without touching
+GitHub; the full process is in [RELEASING.md](RELEASING.md).
+
+The commit at the head of every push to `main` also gets a signed image, from
+the same goreleaser config, and so does `main`'s tip at each hourly run:
+`ghcr.io/crewlet/crewlet:<the commit's Go module pseudo-version>`, which never
+moves, and `ghcr.io/crewlet/crewlet:main`, which follows the tip
+([RELEASING.md](RELEASING.md#images-from-main)). A commit reached only through
+a merge's second parent, or pushed together with later commits, gets none. That
+image is **not a release**: it creates no Release, carries no notes, and is
+owed nothing below — a deployment that pins a `main` commit has opted out of the
+compatibility a tag promises.
 
 ### Nothing is released until a tag ships it
 

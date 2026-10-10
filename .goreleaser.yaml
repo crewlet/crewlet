@@ -17,6 +17,15 @@
 # the target passes the `--skip=sign` that stops it (RELEASING.md). That a
 # rehearsal exists at all is the whole point of keeping this declarative: the
 # PyPI pipeline it replaced could only rehearse by uploading to TestPyPI.
+#
+# THE SAME CONFIG BUILDS THE IMAGES OF MAIN (.github/workflows/main-image.yml):
+# goreleaser runs with the commit's Go module pseudo-version as its tag,
+# `--skip=archive,sign`, and CREWLET_MAIN_IMAGE set, which disables the GitHub
+# Release and its changelog below. Those are the only two places this file
+# reads that variable, and the image, its tags, its labels and the ldflags are
+# the release's own — so "the engine image" has one recipe, not one per
+# trigger. The signature is docker_signs' own command too, run by that
+# workflow after the image has proved its version rather than inside the push.
 version: 2
 
 project_name: crewlet
@@ -205,10 +214,23 @@ release:
   # regenerated too.
   mode: replace
 
+  # NO RELEASE FOR AN IMAGE OF MAIN. main-image.yml sets CREWLET_MAIN_IMAGE;
+  # nothing else does. A commit on main is not a release: it gets an image
+  # and nothing on the Releases page, and the run holds no token that could
+  # create one.
+  disable: '{{ isEnvSet "CREWLET_MAIN_IMAGE" }}'
+
 changelog:
   use: github-native
+  # And no changelog, for the same run: github-native asks GitHub's API to
+  # generate notes between two tags, and a pseudo-version is not a tag
+  # GitHub has.
+  disable: '{{ isEnvSet "CREWLET_MAIN_IMAGE" }}'
 
 # The container image, built once per architecture and joined under one tag.
+# A release pushes it as its tag (and `latest`, when stable); main-image.yml
+# pushes the image of a commit on main as that commit's pseudo-version, which
+# always has a pre-release part and so never takes `latest`.
 #
 # GHCR rather than Docker Hub: the release workflow already holds a GitHub
 # token scoped to this repository, so publishing needs no second account and
@@ -260,9 +282,14 @@ dockers_v2:
 # and `latest`, so that digest carries two equivalent signatures; that costs
 # a Rekor entry and buys not having to filter tags here.
 #
-# Verify with `cosign verify` naming the workflow that built it (RELEASING.md,
-# "Verifying an image"): the identity is what tells a release's image from any
-# other image a workflow of this repository could sign.
+# Verify with `cosign verify` naming the workflow that built it at its tag
+# (RELEASING.md, "Verifying an image"): the identity is what tells a release's
+# image from any other image a workflow of this repository could sign.
+#
+# An image of main is signed with these same arguments by main-image.yml, which
+# passes `--skip=sign` here (it skips docker_signs as it skips signs) and runs
+# them itself once the image has passed its proof, so that a signature from
+# that workflow means the image passed. Change one, change the other.
 docker_signs:
   - cmd: cosign
     args:

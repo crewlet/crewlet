@@ -4,7 +4,10 @@ Maintainer runbook for publishing Crewlet. A release is one command — pushing 
 `v*` tag — and everything else is done by
 [`.github/workflows/release.yml`](.github/workflows/release.yml) driving
 [goreleaser](https://goreleaser.com) from
-[`.goreleaser.yaml`](.goreleaser.yaml).
+[`.goreleaser.yaml`](.goreleaser.yaml). The same config also builds images of
+commits on `main`, from
+[`.github/workflows/main-image.yml`](.github/workflows/main-image.yml); those
+are not releases, and [Images from main](#images-from-main) covers them.
 
 Nothing here is needed to *use* Crewlet; it is process for people with commit
 rights on this repository, which is why it lives beside
@@ -67,7 +70,15 @@ Trusted Publishing: a compromised workflow has nothing long-lived to steal.
 
 The one thing worth checking once, in **Settings → Actions → General**, is that
 the default workflow token is allowed to write packages — otherwise the image
-push fails at the end of an otherwise complete release.
+push fails at the end of an otherwise complete release. The image of `main`
+uses the same token and the same permission, so the first push to `main` after
+`main-image.yml` lands is usually where a missing one shows first.
+
+Once the package exists, check two things on it (**Package settings** for
+`ghcr.io/crewlet/crewlet`): its visibility is **public** — GHCR makes a package
+that a workflow creates private, and then nobody without a token can pull it —
+and **Manage Actions access** lists this repository with write access, which
+both workflows need.
 
 Releasing from a workstation is not supported. It skips the signature and the
 provenance the OIDC identity carries, and it would produce binaries nobody
@@ -176,8 +187,9 @@ leg fails inside `apt-get` with an exit code and no explanation. Add
 
 CI runs the same thing for you: the snapshot job fires on demand
 (**Actions → release → Run workflow**) and on any pull request touching
-`.goreleaser.yaml`, `Dockerfile`, `go.mod`, `internal/version/**` or the
-workflow. That is what stops the release pipeline running for the first time
+`.goreleaser.yaml`, `Dockerfile`, `go.mod`, `internal/version/**`,
+`scripts/notices/**`, the workflow itself or `main-image.yml`. That is what
+stops the release pipeline running for the first time
 on the tag that publishes.
 
 Neither release job saves a cache. Both restore the module cache `ci.yml`'s
@@ -186,6 +198,179 @@ cache: goreleaser builds with `-trimpath` and its own `-ldflags`, which share
 no build action with any `ci.yml` job, so a release compiles its four targets
 cold — a few minutes, once per tag — and a pull request touching the release
 surface never stores an entry only its own ref could read.
+
+---
+
+## Images from main
+
+The commit at the head of every push to `main` gets an engine image too, from
+[`.github/workflows/main-image.yml`](.github/workflows/main-image.yml), and so
+does `main`'s tip at every hourly run. It is built by **the release's own
+pipeline** — `goreleaser release` over the same `.goreleaser.yaml`,
+`Dockerfile`, ldflags and buildx call — and pushed to the release's repository,
+`ghcr.io/crewlet/crewlet`, for linux/amd64 and linux/arm64, signed the same
+keyless way. Three things differ: the run sets `CREWLET_MAIN_IMAGE`, which
+disables the GitHub Release and its changelog (`.goreleaser.yaml` says so); it
+passes `--skip=archive`, so there are no archives and no checksums; and it
+passes `--skip=sign` and signs the image itself, with `docker_signs`' own
+arguments, as the job's **last** step — after the image has proved its version
+on every platform — so a signature from this workflow means the image passed.
+**An image of `main` is not a release**: it gets no Release page, no notes,
+and none of what a tag promises (see
+[CONTRIBUTING.md](CONTRIBUTING.md#nothing-is-released-until-a-tag-ships-it)).
+
+**Not every commit `main` contains has an image.** A merge's second parent and
+the branch commits behind it, a commit pushed together with later ones, and a
+commit superseded before the next hourly run (below) all have a Go module
+version — `go get github.com/crewlet/crewlet@<commit>` resolves each — but no
+image. A deployment that pins a `main` commit should pin one that has: the
+merge commit, or a pull request's squash commit.
+
+### Its tags
+
+| Tag | Names | Moves? |
+|---|---|---|
+| `v0.1.1-0.20261010171839-4e45c6b992a2` | that one commit: its **Go module pseudo-version**, exactly as `proxy.golang.org` reports it, and exactly what `crewlet version` in the image prints | **never** — written once, never rebuilt |
+| `main` | the image of `main`'s tip once that image is published; until then, the last tip whose image was | when the tip's image is published — usually minutes after a merge, within the hour for one that started no run |
+
+The pseudo-version is the point of the first tag. A deployment that pins a
+`main` commit pins it by that string already — it is what `go get
+github.com/crewlet/crewlet@<commit>` writes into a `go.mod` — so the module, the
+image and the running engine's own report agree with no translation. Go derives
+it, not this workflow: the newest `v*` tag the commit descends from with its
+patch plus one, then `-0.<UTC committer time>-<12 hex of the commit>`. The
+workflow builds a small package of the module and reads the version Go stamped
+into it, asserts the suffix is this commit's own time and hash (a shallow clone
+would have answered `v0.0.0-…`, which no proxy reports), and before publishing
+asks `proxy.golang.org` for the same commit and requires the same answer.
+
+One disagreement is expected and harmless: a release tag pushed onto an
+**ancestor** of `main`'s tip (an earlier commit rather than the tip) changes
+Go's base for the tip at once, while the proxy may keep serving the version it
+cached before the tag existed. Every hourly run for that tip then fails the
+cross-check — saying so — until the next merge, whose commit nobody asked the
+proxy about before; nothing is published wrongly meanwhile.
+
+Neither tag can be `latest` or a release's tag. A pseudo-version always has a
+pre-release part, so the `{{ if not .Prerelease }}latest{{ end }}` guard drops
+`latest` — that template is what prevents it. After the push, the image job
+also asserts the run pushed exactly one tag, the commit's own: that detects a
+template change that let another tag through (it cannot undo the push), and
+fails the run before the image is signed. A commit that carries a release tag
+reports that tag instead of a pseudo-version, and the workflow publishes
+nothing for it: the release owns that image.
+
+### Never rebuilt
+
+A rebuild is never the same image — the `created` label is the build's time —
+so the per-commit tag is written once. The `plan` job asks the registry for the
+tag directly and acts on the HTTP status: 404 builds, 200 skips, and anything
+else fails the run rather than being read as "absent". It asks with the same
+`pull,push` scope the push uses, so it can only see "absent" where the push
+would be creating the tag. The `image` job then asks **again**, under its own
+token, immediately before goreleaser runs, and goes on only on a 404: GitHub's
+*Re-run failed jobs* re-runs `image` without `plan` and reuses `plan`'s old
+answer, so without the second check a re-run after a failed proof would push
+the same tag a second time with a different digest. If that check stops a
+re-run, use *Re-run all jobs*, so `plan` judges the tag.
+
+A tag that exists must carry the main workflow's signature **for that commit**
+(`--certificate-github-workflow-sha`). The signature is the image job's last
+step, so a tag without one was pushed by a run that failed its proof or its
+signing, and it fails every later run for that commit: signing bytes a run did
+not build would vouch for them, and treating them as published would let
+`main` name an image the workflow rejected. **Delete that version in the
+package's settings and re-run**; nothing deletes it for you.
+
+### How `main` stays on the newest commit
+
+Two quick merges build in parallel and can finish in either order, and GitHub
+keeps only one *pending* run per concurrency group, cancelling it when another
+queues. So the job that moves `main` never points it at its own commit. Each run
+of it — one at a time, in one group — asks GitHub for `main`'s tip at that
+moment, asks the proxy for the tip's version, and points `main` at that image if
+it is published and signed for that commit — by this workflow, or by the
+release workflow at that tag when the tip is a tagged release, each checked as
+an exact identity plus the tip's commit (`--certificate-github-workflow-sha`),
+so a wrong answer from the proxy names an image whose certificate carries
+another commit and fails. If the tip's image is not published yet, `main`
+stays where it is — on the last tip whose image was, even if a commit between
+them has one: the tip's own run comes later and moves it, and for a tip whose
+build failed, the next hourly run does. So `main` only ever moves forward, and
+never onto anything but the image of a commit that was `main`'s tip.
+The move is a retag of the same manifest, and the job asserts the digest is
+unchanged, so the signature over that digest covers `main` too.
+
+### Commits that start no run
+
+Dependabot's bumps are merged with `GITHUB_TOKEN`, and GitHub starts no `push`
+workflow for an event that token authored. The workflow therefore also runs
+**hourly**: it builds `main`'s tip if that has no image and otherwise only
+checks that `main` names it. So `main` lags a Dependabot merge by up to an
+hour, and a commit that was superseded before the next hourly run gets no image
+of its own — pin the commit after it.
+
+### Verifying an image of main
+
+```bash
+cosign verify ghcr.io/crewlet/crewlet:v0.1.1-0.20261010171839-4e45c6b992a2 \
+  --certificate-identity 'https://github.com/crewlet/crewlet/.github/workflows/main-image.yml@refs/heads/main' \
+  --certificate-github-workflow-sha 4e45c6b992a2133639abebeec271236969b4ead4 \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+The identity names `main-image.yml` on `main`, which no release image carries,
+so a check that an image came from `main` is never satisfied by a release and
+the other way round. The identity alone names the workflow, not the commit:
+every image of `main` carries it. `--certificate-github-workflow-sha` with the
+commit's **full** hash is what proves this image was built from the commit
+you pinned — Fulcio writes the commit a run was based on into the
+certificate — so a deployment pinning a commit passes it. The signature is
+cosign 3's (`cosign sign` writes the Sigstore bundle format by default); verify
+with cosign 3, or cosign 2 with `--new-bundle-format`. When `main` names a
+tagged release's image, verify it as a release:
+[Verifying an image](#verifying-an-image).
+
+### What it costs
+
+Each image job compiles all four release targets from cold — goreleaser builds
+the darwin binaries even with `--skip=archive`, though only the linux ones go
+into the image — and builds the arm64 image under QEMU: the price of building
+with the release's one recipe rather than a second one. The hourly `plan` run
+is a full clone and one small build when there is nothing to publish.
+
+Every image adds one tag and its signature to the package, and
+nothing prunes them. Pruning is safe only for a version no deployment pins; a
+pin to a commit's tag is a promise that tag keeps resolving. If the package ever
+needs pruning, prune by age with a generous window and never touch a `v*` tag
+that is a release.
+
+### Rehearsing it
+
+A pull request that touches `main-image.yml`, `.goreleaser.yaml`, the
+`Dockerfile`, `go.mod`, `internal/version/**` or `scripts/notices/**` runs the
+workflow's **dry run**: the same version computation on the pull request's merge
+commit, the same local tag and the same goreleaser run with
+`--skip=archive,sign,docker` and **no `GITHUB_TOKEN`**, then the binary's
+version compared with the commit's. The publish phase still runs there, so if
+`CREWLET_MAIN_IMAGE` stopped disabling the Release, goreleaser fails with
+`missing GITHUB_TOKEN`; `--skip=publish` would hide that, because a skipped
+publisher never asks for its token. The image itself is skipped (`dockers_v2`
+builds and pushes in one step); its build is release.yml's snapshot job, whose
+paths include `main-image.yml` for that reason and which builds the same
+`dockers_v2` block. **What no pull request runs is this workflow's own image
+path** — its goreleaser invocation with the push, the proof, the signing and
+the `main` retag. A change to those is first exercised on `main`; read the
+image job's run after the merge.
+Locally, in a full clone with a clean tree (Go adds `+dirty` otherwise, and a
+shallow clone has no tags to start from):
+
+```bash
+v="$(go build -o /tmp/stamp ./scripts/notices && go version -m /tmp/stamp | awk '$1=="mod"{print $3}')"
+git tag "$v"   # local only; never push it
+CREWLET_MAIN_IMAGE=true GORELEASER_CURRENT_TAG="$v" goreleaser release --clean --skip=archive,docker
+git tag -d "$v"
+```
 
 ---
 
@@ -201,9 +386,10 @@ release pipeline does when it runs:
   as whatever the build does with it.
 - **The snapshot job builds everything** — all four targets, the archives, the
   checksums and the container image — on demand and on any pull request
-  touching `.goreleaser.yaml`, `Dockerfile`, `go.mod`, `internal/version/**` or
-  the workflow. A dependency that needs cgo, or a `Dockerfile` that no longer
-  copies from `${TARGETPLATFORM}`, fails there rather than at tag time.
+  touching `.goreleaser.yaml`, `Dockerfile`, `go.mod`, `internal/version/**`,
+  `scripts/notices/**`, the workflow or `main-image.yml`. A dependency that
+  needs cgo, or a `Dockerfile` that no longer copies from `${TARGETPLATFORM}`,
+  fails there rather than at tag time.
 - **Both release jobs run the built binary** and compare what it reports against
   the version goreleaser recorded in `dist/metadata.json`. That is the only
   symptom the ldflags stamp has: rename `internal/version.value`, move the
@@ -219,6 +405,20 @@ release pipeline does when it runs:
   is the tag itself, so the publish job's check proves the published binary
   names its tag but not that the `-X` flag put it there. Keep the snapshot
   job's paths covering `internal/version/**` for that reason.
+- **Every image of `main` proves itself before it is signed, and `main` names
+  only a signed one.** The `plan` job checks the version against
+  `proxy.golang.org`; the image job asks the registry again that the tag is
+  absent, then checks that goreleaser built that version, that the run pushed
+  exactly one tag and it is the commit's own (never `latest` or a release's),
+  that the tag resolves to the digest goreleaser pushed and that the image
+  prints the commit's version on every platform it was built for — and only
+  then signs it and verifies the signature under the main workflow's identity
+  and the commit. Like the publish job's, that version check cannot see a
+  stamp that applies to nothing (the commit carries its version as a local
+  tag); the snapshot job is the one that can. The `main` retag checks the
+  signature of what it points at against the tip's commit and that the digest
+  did not change. The pull-request dry run proves the version path and that
+  `CREWLET_MAIN_IMAGE` disables the Release, with no token to create one.
 
 ### What nothing guards — check these by hand
 
@@ -253,6 +453,38 @@ doing the thing, or starts doing more — so read the file when you touch it:
   Release for one tag and the loser fails after its artifacts are built — and
   the opposite mistake, a trigger that ends up somewhere Actions ignores, means
   pushing a tag publishes nothing at all. Both `.yml` and `.yaml` count.
+- **`CREWLET_MAIN_IMAGE` is read in exactly two places in `.goreleaser.yaml`,
+  `release.disable` and `changelog.disable`, and set by `main-image.yml` alone.**
+  Set it in release.yml and a tag publishes an image with no Release. Drop
+  `release.disable` and a merge to `main` fails with `missing GITHUB_TOKEN` —
+  the dry run catches that one first — or, if someone hands the image job a
+  token with `contents: write` to "fix" it, creates a Release for a
+  pseudo-version. Drop `changelog.disable` and every run asks GitHub's API to
+  generate release notes from the last tag to a commit that is not a release,
+  holding no token to ask with; the dry run does not catch that one.
+- **`main-image.yml` publishes only from `push` and `schedule`.** Its `plan` job
+  requires `github.event_name != 'pull_request'` and this repository's name, the
+  `image` and `tag-main` jobs run only behind it (`needs`), and there is no
+  `pull_request_target`, `workflow_run` or `workflow_dispatch` trigger. Adding
+  one, or loosening the `if:`, would hand `packages: write` and an OIDC signing
+  identity to a run something other than a merge started. The `dry-run` job
+  must keep the workflow-level `contents: read` and no secret: it runs for
+  forks' pull requests.
+- **The `tag-main` job keeps its own concurrency group with
+  `cancel-in-progress: false`, and keeps resolving `main`'s tip itself.** Point
+  it at its own run's commit, or let two of it run at once, and two quick merges
+  can leave `main` naming the older image with every run green.
+- **The image job signs last and checks the registry first.** Move the
+  signature before the proof (back into goreleaser's `docker_signs`, say) and
+  an image that failed its proof is signed, which `plan` then reads as
+  published and `tag-main` points `main` at; drop the image job's own
+  existence check and a *Re-run failed jobs* rebuilds a published tag. Drop a
+  `--certificate-github-workflow-sha` and any image of `main` passes for any
+  commit. All of it stays green.
+- **The image of `main` is its own workflow, named `main image`.** Fold it into
+  `release.yml` and `docs-publish.yml`, which reads every completed `release`
+  run whose event was a push as a new tag, republishes the docs site on every
+  merge.
 - **`docs-publish.yml` watches the release workflow by its exact `name:`.**
   GitHub reports nothing when that string matches no workflow, so a rename on
   either side just means the trigger never fires again and the site falls back

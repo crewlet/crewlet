@@ -3,7 +3,10 @@
 // The value is stamped at build time by the release tooling
 // (-ldflags "-X github.com/crewlet/crewlet/internal/version.value=v1.2.3"):
 // the release's tag itself, `v` included, so it reads exactly as the Go module
-// version of that tag does, and as the image tag the release publishes.
+// version of that tag does, and as the image tag the release publishes. An
+// image of a commit on main is stamped the same way with that commit's Go
+// module pseudo-version, the string the build-info fallback below would
+// report for it, and the image tag it is published under.
 // A build with no stamp reports the module's own build info, so a
 // `go install`ed binary still names itself honestly instead of claiming to be
 // a release it is not.

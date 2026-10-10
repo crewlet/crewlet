@@ -77,8 +77,39 @@ cosign verify ghcr.io/crewlet/crewlet:<tag> \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
-A binary from `go install` reports its module version and one from a release
-reports its tag; neither ever claims to be something it is not.
+Commits on `main` are published too, **unreleased** — the commit at the head
+of every push to `main`, and `main`'s tip at least hourly — as
+`ghcr.io/crewlet/crewlet:<version>`, where the version is the commit's Go module
+pseudo-version (`v0.1.1-0.20261010171839-4e45c6b992a2`, exactly what
+`go get github.com/crewlet/crewlet@<commit>` resolves and what `crewlet version`
+in that image prints). A commit that only arrived inside a merge (a merged
+branch's own commits) or together with later commits has a module version but no
+image: pin the merge commit, or the pull request's squash commit.
+
+`ghcr.io/crewlet/crewlet:main` follows `main`'s newest commit: it moves to that
+commit's image once the image is published — usually within minutes of a merge,
+within the hour for a merge that started no run of its own — and until then
+stays on the previous one. When `main`'s newest commit is a tagged release,
+`main` names that release's image, which verifies as a release (above). The
+per-commit tag is written once and never rebuilt, so pin that one (or its
+digest) rather than `main`. Neither is a release and neither ever becomes
+`latest`; compatibility is promised only between tags. They are signed by a
+different workflow, so they verify under a different identity, and
+`--certificate-github-workflow-sha` with the commit's **full** hash proves the
+image was built from the commit you pinned rather than from any commit on
+`main` (cosign 3, or cosign 2 with `--new-bundle-format`):
+
+```bash
+cosign verify ghcr.io/crewlet/crewlet:<version> \
+  --certificate-identity 'https://github.com/crewlet/crewlet/.github/workflows/main-image.yml@refs/heads/main' \
+  --certificate-github-workflow-sha <full commit hash> \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+A binary from `go install` reports its module version, one from a release
+reports its tag and one from an image of `main` reports that commit's module
+version — the same string Go uses for that version, however it was
+installed — and none ever claims to be something it is not.
 
 ## Install from source
 
