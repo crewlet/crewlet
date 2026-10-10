@@ -677,6 +677,10 @@ question it asks:
   through `list_work_items`, where every byte is context on every listing —
   and `list_work_items` never asks for them, even through a saved view that
   does. `sort=-spend_tokens` with `fields=spend` is the most expensive work.
+  What a task cost is an **admin key's** to read (ADR-0031): a member key
+  asking for `spend`, ordering or filtering on `spend_tokens`, or totalling a
+  `spend_` column is refused `forbidden` naming the terms, and a member's
+  `work_item` carries no `spend`.
 
 **A priority list is paged in its own order.** `priorities=<person>` answers
 the tasks on somebody's list in the order they arranged, and a page smaller

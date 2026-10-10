@@ -1568,6 +1568,27 @@ test("a unit filter is one chip that clears its own key", () => {
 // The scope segment
 // ---------------------------------------------------------------------------
 
+// A CARD ASKS FOR ITS COST ONLY FOR A READER WHO READS IT: the engine refuses
+// `fields=spend` to a member key (ADR-0031), and a board that asked regardless
+// would be refused whole rather than drawn without the figure.
+test("a board asks for a card's cost only where the reader reads it", () => {
+  const fields = (spend?: boolean) =>
+    String(
+      buildItemsParams({
+        container: "workspace",
+        shape: "board",
+        view: {},
+        filters: NO_FILTERS,
+        spend,
+      }).fields,
+    ).split(",");
+  expect(fields(true)).toContain("spend");
+  for (const member of [false, undefined]) {
+    expect(fields(member)).not.toContain("spend");
+    expect(fields(member)).toContain("open_asks");
+  }
+});
+
 // ONE SPELLING OF THE SCOPE MAPPING, because two readers turn on it: the query
 // builder writes the key and `scopeOf` reads it back off a saved view. Written
 // twice it drifts silently — a segment whose group nothing reads back snaps the

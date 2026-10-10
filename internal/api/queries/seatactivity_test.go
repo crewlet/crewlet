@@ -47,6 +47,15 @@ func (f *spendFixture) seatDay(node, day, handle string, turns usage.Turns, cell
 	}
 }
 
+// spentOf reads a withholdable token figure, -1 where it was withheld, so an
+// assertion on an absent figure fails rather than reading it as zero.
+func spentOf(p *int64) int64 {
+	if p == nil {
+		return -1
+	}
+	return *p
+}
+
 func activityOf(t *testing.T, f *spendFixture, params map[string]any) queries.SeatActivityAnswer {
 	t.Helper()
 	got, ok := askRaw(t, registryOver(t, f.sources()), "seat_activity", params).(queries.SeatActivityAnswer)
@@ -98,18 +107,19 @@ func TestSeatActivityCountsEveryNodesDaysExactly(t *testing.T) {
 			got.Since, got.Until, got.Days)
 	}
 	lead := seatRow(t, got, "lead")
-	if lead.Turns != 6 || lead.Failed != 1 || lead.Tokens != 147 {
+	if lead.Turns != 6 || lead.Failed != 1 || spentOf(lead.Tokens) != 147 {
 		t.Errorf("lead = %d turns, %d failed, %d tokens; want both nodes' days in the "+
-			"window summed: 6, 1, 147", lead.Turns, lead.Failed, lead.Tokens)
+			"window summed: 6, 1, 147", lead.Turns, lead.Failed, spentOf(lead.Tokens))
 	}
 	if len(lead.PerDay) != 7 {
 		t.Fatalf("per_day has %d days, want every day of the window", len(lead.PerDay))
 	}
-	if d := lead.PerDay[5]; d.Day != "2026-09-24" || d.Turns != 5 || d.Failed != 1 || d.Tokens != 140 {
+	if d := lead.PerDay[5]; d.Day != "2026-09-24" || d.Turns != 5 || d.Failed != 1 || spentOf(d.Tokens) != 140 {
 		t.Errorf("the 24th = %+v, want both nodes' rows for that day summed", d)
 	}
-	if d := lead.PerDay[0]; d.Day != "2026-09-19" || d.Turns != 0 {
-		t.Errorf("the first day = %+v, want a quiet day drawn as zeros", d)
+	if d := lead.PerDay[0]; d.Day != "2026-09-19" || d.Turns != 0 || spentOf(d.Tokens) != 0 {
+		t.Errorf("the first day = %+v, want a quiet day drawn as zeros — its "+
+			"tokens PRESENT at zero for a caller who reads spend", d)
 	}
 	if lead.LastTurnAt == nil || !lead.LastTurnAt.Equal(time.Date(2026, 9, 24, 9, 0, 0, 0, time.UTC)) {
 		t.Errorf("last_turn_at = %v, want the newest ended turn across nodes", lead.LastTurnAt)
@@ -214,7 +224,7 @@ func TestSeatActivityCarriesThePreviousWindowsTotals(t *testing.T) {
 	if lead.Turns != 4 {
 		t.Errorf("turns = %d, want this window's 4 only", lead.Turns)
 	}
-	if p := lead.Previous; p == nil || p.Turns != 5 || p.Failed != 1 || p.Reviewed != 1 || p.Tokens != 16 {
+	if p := lead.Previous; p == nil || p.Turns != 5 || p.Failed != 1 || p.Reviewed != 1 || spentOf(p.Tokens) != 16 {
 		t.Errorf("previous = %+v, want 5 turns, 1 failed, 1 reviewed, 16 tokens", lead.Previous)
 	}
 	// AND ITS DAYS, every one of the previous window's seven, oldest first —

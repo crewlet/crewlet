@@ -138,10 +138,15 @@ func TestAnUnboundTokenCannotAsk(t *testing.T) {
 		t.Fatalf("the bound person was refused an answer: %d %v", status, answer)
 	}
 	receipt, _ := answer["receipt"].(map[string]any)
-	tokens, _ := receipt["tokens"].(map[string]any)
-	if !strings.Contains(receipt["answer_md"].(string), "make deploy") ||
-		tokens["input"] != float64(300) || tokens["output"] != float64(40) {
-		t.Errorf("the bound person's answer = %v, want the model's answer and its 340 tokens", receipt)
+	if !strings.Contains(receipt["answer_md"].(string), "make deploy") {
+		t.Errorf("the bound person's answer = %v, want the model's answer", receipt)
+	}
+	// A MEMBER'S KEY, so what the answer cost and which model wrote it are
+	// left out (ADR-0031) — see builtin's TestAMemberIsServedTheAnswerWithoutWhatItCost.
+	for _, key := range []string{"tokens", "model"} {
+		if _, has := receipt[key]; has {
+			t.Errorf("a member's answer carries %q: %v", key, receipt)
+		}
 	}
 	// THE PERSON'S SPEND, as the seam files it: the operator stage, which it
 	// charges to the company's windows alone and records for the person.

@@ -800,7 +800,7 @@ sequenceDiagram
     A->>M: numbered sources + the question
     M-->>A: answer citing [n]
     A->>C: record the tokens it spent (company only)
-    A-->>P: answer_md, sources, tokens, model
+    A-->>P: answer_md, sources (+ tokens, model to an admin key)
 ```
 
 - **From the sources and nothing else.** The model is told to say only what the
@@ -812,6 +812,10 @@ sequenceDiagram
   spend is on somebody's behalf — and no seat is given the tool: a seat has
   `search_knowledge` and its own model, and a second model's summary in its
   context would be one it could not check.
+- **What it cost is an admin's to read.** The answer and its sources are what
+  the company published; the tokens it spent and the model that wrote it are
+  what the machine processed (ADR-0031), so a member key is served neither —
+  absent, never zero.
 - **Charged to the company.** It runs on the asker's own seat's auxiliary model
   and is judged against the company's day, week and month — a person has no seat
   budget. A company window with no room refuses it before the call; after the

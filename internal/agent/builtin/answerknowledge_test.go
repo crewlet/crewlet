@@ -135,6 +135,9 @@ type answerRig struct {
 	budget   *answerBudget
 	position string
 	seat     string
+	// admin is the asking key's reach: an admin's by default, so a case
+	// about the answer reads what it cost; a member's is the withholding.
+	admin bool
 }
 
 func newAnswerRig() *answerRig {
@@ -156,6 +159,7 @@ func newAnswerRig() *answerRig {
 		budget:   &answerBudget{},
 		position: "tracker@1:10,pages@1:20,vectors@1:5",
 		seat:     "founder",
+		admin:    true,
 	}
 }
 
@@ -172,7 +176,7 @@ func (r *answerRig) tool(t *testing.T) tools.Callable {
 			Corpus: func() (string, bool) { return r.position, r.position != "" },
 			Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
 				return builtin.Actor{Handle: "founder-token", Kind: tracker.AuthorOperator,
-					OperatorID: "founder-token", Seat: r.seat}, nil
+					OperatorID: "founder-token", Seat: r.seat, Admin: r.admin}, nil
 			},
 		},
 	}) {
@@ -182,6 +186,22 @@ func (r *answerRig) tool(t *testing.T) tools.Callable {
 	}
 	t.Fatal("the operator catalogue serves no answer_knowledge with every seam wired")
 	return nil
+}
+
+// tokensOf and modelOf read what an answer cost and which model wrote it,
+// failing the read where the answer withheld them.
+func tokensOf(a builtin.KnowledgeAnswer) builtin.AnswerTokens {
+	if a.Tokens == nil {
+		return builtin.AnswerTokens{Input: -1, Output: -1}
+	}
+	return *a.Tokens
+}
+
+func modelOf(a builtin.KnowledgeAnswer) string {
+	if a.Model == nil {
+		return "<withheld>"
+	}
+	return *a.Model
 }
 
 func ask(t *testing.T, tool tools.Callable, q string) (tools.Result, builtin.KnowledgeAnswer, map[string]any) {
@@ -221,9 +241,9 @@ func TestAnAnswerIsResolvedAsThePersonsSpend(t *testing.T) {
 	if err := want.Validate(); err != nil {
 		t.Errorf("the answer's attribution is one the seam refuses: %v", err)
 	}
-	if answer.Tokens != (builtin.AnswerTokens{Input: 700, Output: 120}) || answer.Model != "aux-small" ||
-		answer.Cached {
-		t.Errorf("answered tokens %+v, model %q, cached %v", answer.Tokens, answer.Model, answer.Cached)
+	if tokensOf(answer) != (builtin.AnswerTokens{Input: 700, Output: 120}) ||
+		modelOf(answer) != "aux-small" || answer.Cached {
+		t.Errorf("answered tokens %+v, model %q, cached %v", answer.Tokens, modelOf(answer), answer.Cached)
 	}
 	if rig.model.role == nil || rig.model.role.Handle() != "founder" {
 		t.Errorf("resolved the model for %v, want the asker's own seat's auxiliary model",
@@ -248,7 +268,8 @@ func TestASecondIdenticalQuestionIsServedFromCache(t *testing.T) {
 	if res.Failed {
 		t.Fatalf("refused: %s", res.Output)
 	}
-	if !again.Cached || again.Tokens != (builtin.AnswerTokens{}) || rig.model.calls != 1 ||
+	if !again.Cached || again.Tokens == nil || *again.Tokens != (builtin.AnswerTokens{}) ||
+		modelOf(again) != "aux-small" || rig.model.calls != 1 ||
 		len(rig.model.uses) != 1 {
 		t.Fatalf("second ask: cached %v, tokens %+v, model calls %d, resolutions %d — want a "+
 			"cache hit that spent nothing", again.Cached, again.Tokens, rig.model.calls, len(rig.model.uses))
@@ -378,6 +399,41 @@ func TestAnAnswerNeverCarriesAPrice(t *testing.T) {
 	}
 }
 
+// A MEMBER IS SERVED THE ANSWER AND NOT WHAT IT COST (ADR-0031): the answer
+// and its sources are what the company published, and the tokens spent and
+// the model that wrote it are what the machine processed — absent from the
+// member's answer, not zero. The cache keeps the whole answer, so an admin
+// asking the same question next is told the model the member's call paid for.
+func TestAMemberIsServedTheAnswerWithoutWhatItCost(t *testing.T) {
+	t.Parallel()
+	rig := newAnswerRig()
+	rig.admin = false
+	tool := rig.tool(t)
+	res, answer, raw := ask(t, tool, "How do we deploy?")
+	if res.Failed {
+		t.Fatalf("refused: %s", res.Output)
+	}
+	for _, key := range []string{"tokens", "model"} {
+		if _, has := raw[key]; has {
+			t.Errorf("a member's answer carries %q: %s", key, res.Output)
+		}
+	}
+	if !strings.Contains(answer.AnswerMD, "make deploy") || len(answer.Sources) == 0 {
+		t.Errorf("a member's answer lost what the company published: %s", res.Output)
+	}
+	// AND A CACHED ANSWER IS WITHHELD THE SAME WAY, on the second ask.
+	if res, _, raw = ask(t, tool, "how do we deploy?"); res.Failed || raw["cached"] != true {
+		t.Fatalf("the second ask was not served from the cache: %s", res.Output)
+	} else if _, has := raw["model"]; has {
+		t.Errorf("a member's cached answer carries the model: %s", res.Output)
+	}
+	rig.admin = true
+	if _, kept, _ := ask(t, tool, "How do we deploy?"); modelOf(kept) != "aux-small" {
+		t.Errorf("the answer the member's call cached is served to an admin with model %q, "+
+			"want the one that wrote it", modelOf(kept))
+	}
+}
+
 // AN UNBOUND TOKEN CANNOT ASK, on either transport: the spend is on a
 // person's behalf, and a credential nobody bound is not a person. Nothing is
 // searched, nothing asked of a model and nothing charged.
@@ -431,7 +487,7 @@ func TestNoSourcesIsAnsweredWithoutAModelAndNoSearchIsRefused(t *testing.T) {
 	rig := newAnswerRig()
 	rig.search.hits, rig.items.hits = nil, nil
 	res, answer, _ := ask(t, rig.tool(t), "Who owns billing?")
-	if res.Failed || len(answer.Sources) != 0 || answer.Model != "" || rig.model.calls != 0 ||
+	if res.Failed || len(answer.Sources) != 0 || modelOf(answer) != "" || rig.model.calls != 0 ||
 		len(rig.model.uses) != 0 {
 		t.Fatalf("nothing matched: %+v (model calls %d, resolutions %d)", res, rig.model.calls,
 			len(rig.model.uses))

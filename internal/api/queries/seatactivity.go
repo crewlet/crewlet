@@ -87,7 +87,12 @@ type SeatActivity struct {
 	P50Ms *int64 `json:"p50_ms,omitempty"`
 	P90Ms *int64 `json:"p90_ms,omitempty"`
 
-	Tokens int64 `json:"tokens"`
+	// Tokens is what the seat's turns spent over the window — ABSENT for a
+	// caller whose key does not read spend (ADR-0031; see withhold.go), and
+	// present at zero for one that does, so "spent nothing" and "not yours
+	// to read" are never one answer. The same on every day and on the window
+	// before.
+	Tokens *int64 `json:"tokens,omitempty"`
 
 	// PerDay is every day of the window, oldest first, a quiet one included.
 	PerDay []SeatActivityDay `json:"per_day"`
@@ -106,17 +111,17 @@ type SeatActivityDay struct {
 	Day    string `json:"day"`
 	Turns  int64  `json:"turns"`
 	Failed int64  `json:"failed"`
-	Tokens int64  `json:"tokens"`
+	Tokens *int64 `json:"tokens,omitempty"`
 }
 
 // SeatActivityTotals is a seat's totals over the previous window.
 type SeatActivityTotals struct {
-	Turns     int64 `json:"turns"`
-	Failed    int64 `json:"failed"`
-	Reviewed  int64 `json:"reviewed"`
-	FirstPass int64 `json:"first_pass"`
-	SentBack  int64 `json:"sent_back"`
-	Tokens    int64 `json:"tokens"`
+	Turns     int64  `json:"turns"`
+	Failed    int64  `json:"failed"`
+	Reviewed  int64  `json:"reviewed"`
+	FirstPass int64  `json:"first_pass"`
+	SentBack  int64  `json:"sent_back"`
+	Tokens    *int64 `json:"tokens,omitempty"`
 
 	// PerDay is every day of the previous window, oldest first, a quiet one
 	// included — so a profile draws the fortnight a week-on-week comparison
@@ -202,7 +207,30 @@ func (s Sources) seatActivity(ctx context.Context, p Params) (any, error) {
 		window: window, previous: previous, seat: seat, agentID: agentID,
 		chart: s.chartSeats(),
 	})
+	if !readsSpend(ctx) {
+		withholdSeatSpend(answer.Seats)
+	}
 	return answer, nil
+}
+
+// withholdSeatSpend takes every token figure out of a fold — the window's,
+// each day's and the window before's — for a caller who does not read spend
+// (see withhold.go). Turns, failures, reviews and durations stay: they are
+// how a seat's work went, which a member reads about a colleague.
+func withholdSeatSpend(seats []SeatActivity) {
+	for i := range seats {
+		seat := &seats[i]
+		seat.Tokens = nil
+		for d := range seat.PerDay {
+			seat.PerDay[d].Tokens = nil
+		}
+		if prev := seat.Previous; prev != nil {
+			prev.Tokens = nil
+			for d := range prev.PerDay {
+				prev.PerDay[d].Tokens = nil
+			}
+		}
+	}
 }
 
 // chartSeat is one agent seat of the current chart, as the fold keys it.
@@ -271,6 +299,9 @@ func foldSeatActivity(rows []usage.SeatDay, f seatActivityFold) []SeatActivity {
 			return sf
 		}
 		sf := &seatFold{days: map[string]*SeatActivityDay{}}
+		// PRESENT AT ZERO, every one: the fold answers an admin's shape
+		// and [withholdSeatSpend] takes it away for anybody else.
+		sf.row.Tokens, sf.prev.Tokens = new(int64), new(int64)
 		folds[key] = sf
 		return sf
 	}
@@ -317,19 +348,19 @@ func foldSeatActivity(rows []usage.SeatDay, f seatActivityFold) []SeatActivity {
 		}
 		d := sf.days[r.Day]
 		if d == nil {
-			d = &SeatActivityDay{Day: r.Day}
+			d = &SeatActivityDay{Day: r.Day, Tokens: new(int64)}
 			sf.days[r.Day] = d
 		}
 		d.Turns += r.Turns
 		d.Failed += r.Failed
-		d.Tokens += r.Tokens
+		*d.Tokens += r.Tokens
 		if !inWindow(r.Day) {
 			sf.prev.Turns += r.Turns
 			sf.prev.Failed += r.Failed
 			sf.prev.Reviewed += r.Reviewed
 			sf.prev.FirstPass += r.FirstPass
 			sf.prev.SentBack += r.SentBack
-			sf.prev.Tokens += r.Tokens
+			*sf.prev.Tokens += r.Tokens
 			continue
 		}
 		sf.row.Turns += r.Turns
@@ -337,7 +368,7 @@ func foldSeatActivity(rows []usage.SeatDay, f seatActivityFold) []SeatActivity {
 		sf.row.Reviewed += r.Reviewed
 		sf.row.FirstPass += r.FirstPass
 		sf.row.SentBack += r.SentBack
-		sf.row.Tokens += r.Tokens
+		*sf.row.Tokens += r.Tokens
 		sf.hist.Merge(r.Durations)
 		if !r.LastEndedAt.IsZero() && (sf.row.LastTurnAt == nil || r.LastEndedAt.After(*sf.row.LastTurnAt)) {
 			at := r.LastEndedAt.UTC()
@@ -384,7 +415,7 @@ func everyDay(windows []period.Window, days map[string]*SeatActivityDay) []SeatA
 		if d := days[w.Label]; d != nil {
 			out = append(out, *d)
 		} else {
-			out = append(out, SeatActivityDay{Day: w.Label})
+			out = append(out, SeatActivityDay{Day: w.Label, Tokens: new(int64)})
 		}
 	}
 	return out

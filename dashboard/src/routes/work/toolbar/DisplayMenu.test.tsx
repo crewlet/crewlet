@@ -88,7 +88,13 @@ function openDisplay(over: Partial<DisplayMenuProps> = {}) {
 
 /** Group by and Sort, as the bar draws them. */
 function arrange(
-  over: Partial<{ shape: Shape; workspace: boolean; groupBy: string; sort: string }> = {},
+  over: Partial<{
+    shape: Shape;
+    workspace: boolean;
+    groupBy: string;
+    sort: string;
+    spend: boolean;
+  }> = {},
 ) {
   const calls = { onGroupBy: vi.fn(), onSort: vi.fn() };
   render(
@@ -97,6 +103,7 @@ function arrange(
       workspace={over.workspace ?? true}
       groupBy={over.groupBy ?? ""}
       sort={over.sort ?? ""}
+      spend={over.spend ?? true}
       {...calls}
     />,
   );
@@ -290,6 +297,17 @@ test("Sort offers the grammar's own keys and writes them as written", () => {
   expect(SORTS.find((s) => s.label === "Recently updated")?.value).toBe("-updated");
   // AND THE ONE MEASURE OF COST IS TOKENS, never money.
   expect(SORTS.find((s) => s.label === "Most tokens")?.value).toBe("-spend_tokens");
+});
+
+// A MEMBER IS NOT OFFERED THE ORDER BY COST: the engine refuses it to a key
+// that does not read spend (ADR-0031), so every press would take the list down
+// with a refusal. Every other order stays.
+test("Sort offers a member every order but the one by cost", () => {
+  arrange({ spend: false });
+  expect(optionsOf("Sort")).toEqual([
+    defaultOrderLabel("list", true),
+    ...SORTS.filter((s) => s.value !== "-spend_tokens").map((s) => s.label),
+  ]);
 });
 
 // THE DEFAULT SAYS WHICH ORDER IT IS, because it is a different one per

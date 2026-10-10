@@ -460,9 +460,20 @@ export const SORTS: { value: string; label: string }[] = [
   { value: "title", label: "Title" },
   // TOKENS, NEVER MONEY: the engine keeps each task's spend as the tokens its
   // turns were charged (`internal/tracker`'s `spend_tokens`), and that is the
-  // one measure of cost this dashboard draws.
+  // one measure of cost this dashboard draws. AN ADMIN'S ORDER: see
+  // [sortsFor].
   { value: "-spend_tokens", label: "Most tokens" },
 ];
+
+/**
+ * The orderings THIS reader may ask for: every one for a key that reads what
+ * a task cost, and every one but the order by cost for anybody else — an order
+ * by cost is the cost by another name, which the engine refuses a member
+ * (ADR-0031), and a menu entry whose every press is refused is a dead control.
+ */
+export function sortsFor(spend: boolean): { value: string; label: string }[] {
+  return spend ? SORTS : SORTS.filter((s) => !s.value.replace(/^-/, "").startsWith("spend_"));
+}
 
 /**
  * Whether the rows are in the MANUAL order — the one order a drag can change.
@@ -1550,6 +1561,13 @@ export function buildItemsParams(args: {
   /** The calendar's own bounds, as `YYYY-MM-DD` — see [gridRange]. */
   range?: { from: string; to: string };
   /**
+   * Whether the reader's key reads what a task COST (`viewer.admin`). Only
+   * then does a card ask for its spend: the engine refuses a member who asks
+   * for it by name (ADR-0031), so asking regardless would take the whole
+   * board down with the refusal. Absent is a reader who does not.
+   */
+  spend?: boolean;
+  /**
    * THE HOST SCREEN'S OWN NARROWING, and it is the last word on the key it
    * names.
    *
@@ -1601,6 +1619,7 @@ function itemsParams(args: {
   view: Record<string, string>;
   filters: TrackerFilters;
   range?: { from: string; to: string };
+  spend?: boolean;
 }): Record<string, unknown> {
   const { container, shape, view, filters, range } = args;
   // A VIEW'S PARAMS GO STRAIGHT ONTO THE WIRE, and they can only ever be
@@ -1760,7 +1779,7 @@ function itemsParams(args: {
     // blocks, the questions still open on it and what it has cost. OPT-IN on
     // the wire (`fields=`), because `list_work_items` — the row a model reads
     // on every turn — must not grow by four facts it never uses.
-    params.fields = CARD_FIELDS;
+    params.fields = args.spend ? `${CARD_FIELDS},${CARD_SPEND}` : CARD_FIELDS;
     delete params.limit;
     delete params.cursor;
     delete params.group;
@@ -1897,7 +1916,14 @@ export const BOARD_LANE_ROWS = 50;
  * The opt-in row facts a board card draws (`fields=`), as the wire spells
  * them. See [buildItemsParams]'s board branch for why they are opt-in.
  */
-export const CARD_FIELDS = "tags,dependents_count,open_asks,spend";
+export const CARD_FIELDS = "tags,dependents_count,open_asks";
+
+/**
+ * The card's cost, asked BESIDE [CARD_FIELDS] only for a reader whose key
+ * reads it: what a task cost is an admin's (ADR-0031), and a member's board
+ * that asked for it would be refused whole.
+ */
+export const CARD_SPEND = "spend";
 
 /**
  * Where a board column's overflow lands: the same rows as a list.

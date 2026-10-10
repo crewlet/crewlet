@@ -551,6 +551,31 @@ describe("the knowledge answer", () => {
     expect(lead.textContent).not.toMatch(/[$€£¥]|USD|cost|price/i);
   });
 
+  // A MEMBER'S ANSWER CARRIES NEITHER ITS TOKENS NOR ITS MODEL (ADR-0031), so
+  // the footnote says where the cost went and draws no figure it was not sent.
+  test("a member's answer is drawn without what it cost", async () => {
+    vi.useFakeTimers();
+    engine((tool) =>
+      tool === "answer_knowledge"
+        ? json({
+            tool,
+            outcome: "applied",
+            position: "",
+            receipt: { ...RECEIPT, tokens: undefined, model: undefined },
+          })
+        : json({ error: "not_found", detail: "no" }, 404),
+    );
+    const p = mount();
+    await p.type(QUESTION);
+    await settle(ANSWER_IDLE_MS);
+    await settle(0);
+    const lead = screen
+      .getByText("Answer from your company’s knowledge")
+      .closest(".palette-answer")!;
+    expect(lead.querySelector(".palette-answer-foot")?.textContent).toBe("Charged to the company");
+    expect(lead.textContent).not.toMatch(/small-model|\d tokens/);
+  });
+
   test("a new term abandons the question before it, which is never drawn", async () => {
     vi.useFakeTimers();
     let release: (r: Response) => void = () => {};

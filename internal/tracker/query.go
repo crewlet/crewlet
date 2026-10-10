@@ -1268,6 +1268,59 @@ func (q *Query) parseRowFields(p Params) error {
 // Wants reports whether the caller asked for one row fact.
 func (q Query) Wants(field RowField) bool { return slices.Contains(q.RowFields, field) }
 
+// SpendPrefix is what every column holding a task's cost is named under —
+// `spend_tokens`, `spend_turns` and the seven others the applier derives from
+// a task's turn records — and so what makes a sort, a filter or a total read
+// what the task COST rather than what it is.
+//
+// A PREFIX RATHER THAN A LIST, because the list is generated (the struct, the
+// DDL and the applier's statement share one) and grows with it: a tenth
+// counter added there is spend here without anybody remembering this file.
+const SpendPrefix = "spend_"
+
+// SpendTerms is every part of this question that reads what a task cost —
+// the `spend` row fact, a sort or a filter on a `spend_` column, and a total
+// over one, at the top level or inside an `any` branch — each spelled the way
+// the caller would write it, in that order. Empty for a question that reads
+// none.
+//
+// IT EXISTS FOR A SURFACE THAT WITHHOLDS SPEND (ADR-0031: a member key reads
+// what the company published, and what its agents spent is what the machine
+// processed). Dropping the row fact silently would break the promise every
+// opt-in fact here makes — asked for, it is present, even at zero — and an
+// ORDER or a THRESHOLD on cost is cost by another name: a member sorting by
+// `spend_tokens`, or bisecting `spend_tokens=gt:` over one task, reads the
+// number the row would have carried. So such a surface refuses the question
+// by the terms named here, and the caller drops them.
+//
+// ON THE PARSED QUESTION, after a view or a preset was expanded into it, so a
+// saved view that sorts by cost is caught exactly as a typed parameter is.
+func (q Query) SpendTerms() []string {
+	var out []string
+	if q.Wants(RowFieldSpend) {
+		out = append(out, "fields="+string(RowFieldSpend))
+	}
+	for _, s := range q.Sort {
+		if strings.HasPrefix(s.Key, SpendPrefix) {
+			out = append(out, "sort="+s.Key)
+		}
+	}
+	if q.Spend != nil {
+		out = append(out, "spend_tokens")
+	}
+	for _, total := range q.Totals {
+		if column, _, _ := strings.Cut(total, ":"); strings.HasPrefix(column, SpendPrefix) {
+			out = append(out, "totals="+total)
+		}
+	}
+	for i, branch := range q.Any {
+		for _, term := range branch.SpendTerms() {
+			out = append(out, fmt.Sprintf("any[%d].%s", i, term))
+		}
+	}
+	return out
+}
+
 // ParseFreshness reads the four freshness keys — `read_level`,
 // `max_lag_seconds`, `max_lag_seq` and `min_position` — and is the ONE place
 // their rules are stated.

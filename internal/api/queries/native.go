@@ -208,6 +208,12 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 	// the grammar, so `unit=` takes a team's id or its name and finds the
 	// work filed under either — see [tracker.Units].
 	q.Units = s.chartUnits()
+	// COST IS AN ADMIN'S, asked for by name or not — see [spendTerms]. On
+	// the EXPANDED question, so a saved view ordering by cost is refused to
+	// a member exactly as the same order typed by hand is.
+	if err = spendTerms(ctx, q); err != nil {
+		return nil, err
+	}
 	answer, err := s.Work.Tasks(ctx, q, now)
 	switch {
 	case errors.Is(err, tracker.ErrTooBroad):
@@ -323,6 +329,12 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 		return nil, ErrNotFound
 	case err != nil:
 		return nil, err
+	}
+	if !readsSpend(ctx) {
+		// WHAT THE TASK COST, withheld from a member as absent rather than
+		// zero — see withhold.go. The record's own field, which `omitzero`
+		// drops from the wire once it is the zero value.
+		detail.Task.Spend = tracker.Spend{}
 	}
 	return detail, nil
 }

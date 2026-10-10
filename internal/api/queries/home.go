@@ -445,8 +445,15 @@ func (s Sources) feedWork(ctx context.Context, kinds []tracker.FeedKind, actor,
 	if err != nil {
 		return src, false, "", err
 	}
+	withhold := !readsSpend(ctx)
 	for i := range page.Rows {
 		row := page.Rows[i]
+		if withhold {
+			// WHAT A COMPLETION COST, absent for a member — see
+			// withhold.go. Whether it passed review first time stays: that
+			// is how the work went, not what the machine spent on it.
+			row.Spend = nil
+		}
 		src.entries = append(src.entries, FeedEntry{Kind: FeedKind(row.Kind), At: row.At, Work: &row})
 		src.positions = append(src.positions, row.Cursor)
 	}

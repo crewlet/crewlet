@@ -2257,6 +2257,9 @@ export interface WorkSummary {
   dependents_count?: number;
   /** Questions on the task still waiting for their answer. */
   open_asks?: number;
+  /** Only when asked for (`fields=spend`), and only to an admin key: a member
+   *  asking for it — or sorting, filtering or totalling on a `spend_` column —
+   *  is refused `forbidden` (ADR-0031). */
   spend?: WorkRowSpend;
 }
 
@@ -4458,7 +4461,8 @@ export interface FeedWorkRow {
   key?: string;
   title?: string;
   project?: string;
-  /** On a completion: the task's running totals, tokens only. */
+  /** On a completion: the task's running totals, tokens only — never sent
+   *  to a member key (ADR-0031). */
   spend?: { tokens: number; turns: number };
   /** On a completion with a charged turn: no reviewer ever sent it back. */
   first_pass?: boolean;
@@ -4548,7 +4552,8 @@ export interface SeatActivityDay {
   day: string;
   turns: number;
   failed: number;
-  tokens: number;
+  /** ABSENT to a member key: what the machine spent is an admin's (ADR-0031). */
+  tokens?: number;
 }
 
 /** One seat's totals over the window before, with `previous=true`. */
@@ -4558,7 +4563,8 @@ export interface SeatActivityTotals {
   reviewed: number;
   first_pass: number;
   sent_back: number;
-  tokens: number;
+  /** ABSENT to a member key (ADR-0031). */
+  tokens?: number;
   /** Every day of the previous window, oldest first — so the fortnight a
    *  week-on-week figure is made over comes from the same answer. */
   per_day: SeatActivityDay[];
@@ -4586,7 +4592,9 @@ export interface SeatActivityRow {
   /** Duration quantiles within `quantile_resolution`; absent with no turn. */
   p50_ms?: number;
   p90_ms?: number;
-  tokens: number;
+  /** What the seat's turns spent — ABSENT to a member key, never zero: what
+   *  the machine spent is an admin's to read (ADR-0031). */
+  tokens?: number;
   /** Every day of the window, oldest first, a quiet day as zeros. */
   per_day: SeatActivityDay[];
   last_turn_at?: string;
