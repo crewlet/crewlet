@@ -461,7 +461,7 @@ The lead's system prompt includes a **roster** of direct reports. Each member's 
 
 #### A lead's line
 
-A seat's **line** is everybody below it in the chart, at any depth: its reports, theirs, and so on, so a founder at the top leads everybody. It is the authority a lead holds over somebody else's queue ([A person's own state](../guides/work-tracker.md#a-persons-own-state)), and the engine derives it in one place, `org.Organization.LeadsInLine`.
+A seat's **line** is everybody below it in the chart, at any depth: its reports, theirs, and so on, so a founder at the top leads everybody. It is the authority a lead holds over somebody else's queue ([A person's own state](../guides/work-tracker.md#a-persons-own-state)), and the engine derives it in one place, `org.Organization.LeadsInLine`. The dashboard offers a lead that reorder along exactly the same chain, so it never offers one the engine refuses.
 
 It follows the same **primary line** the org chart draws. Auto-management and unit-name expansion are already folded into `manages` by the time it is read, so a lead who wrote no `manages` at all still has the team it leads in its line. But a member with two managers is in the line of the primary one only — in the two-manager shape above, the CEO that manages `Backend` by name leads its members and `Backend`'s own lead does not, so the lead cannot reorder their queues. Managing the lead rather than the unit (`manages: ["Backend Lead"]`) puts the team in the lead's line and keeps it in the CEO's. A management cycle ends the walk at its first repeat: every seat on the loop is in every other's line, and none is in its own.
 

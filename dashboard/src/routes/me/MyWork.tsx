@@ -559,8 +559,9 @@ export function MyWork({ section }: { section: MeSection }) {
  * YOUR OWN DAY HOLDS NOTHING. SOMEBODY ELSE'S HOLDS EVERYTHING — the questions
  * put to them are theirs to answer, which the engine enforces, and their work
  * is changed from the work screens — except the reorder a lead may make. A lead
- * is anybody above them in the chart (`leadsInLine`), which is the tracker's
- * own reading of "somebody in their line".
+ * is anybody above them in the chart (`leadsInLine`), which is the engine's
+ * own reading of "somebody in their line" (`org.Organization.LeadsInLine`);
+ * the tracker derives no chart and asks the engine.
  */
 export function dayHolds({
   ownDay,
