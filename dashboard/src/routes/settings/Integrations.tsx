@@ -87,6 +87,7 @@ import {
   type IntegrationToolState,
   type ReconcileActor,
   type ReconcileFinding,
+  type ReconcilePhase,
   type ReconcileStatus,
 } from "~/contract/integrations.ts";
 import type { SetupListing, SetupSeatState, SetupToolState } from "~/protocol/types.ts";
@@ -226,8 +227,16 @@ export const CATALOG: Entry[] = [
  * The screen polls faster while any surface is in one, because each is a
  * state that RESOLVES ON ITS OWN within seconds and the row is the only place
  * that says how it resolved.
+ *
+ * Built from the contract's `ReconcilePhase`, so a phase the engine renamed is
+ * a compile error here rather than a surface the screen stops watching.
  */
-export const IN_FLIGHT = new Set(["awaiting_admin", "provisioning", "activating", "disconnecting"]);
+export const IN_FLIGHT: ReadonlySet<string> = new Set<ReconcilePhase>([
+  "awaiting_vendor_admin",
+  "provisioning",
+  "activating",
+  "disconnecting",
+]);
 
 /**
  * COLOUR CARRIES STATE, NEVER IDENTITY (see reference/dashboard-design.md), so
@@ -236,33 +245,32 @@ export const IN_FLIGHT = new Set(["awaiting_admin", "provisioning", "activating"
  * `ready` is the only positive one, and `degraded` is caution rather than
  * critical on purpose: agents are still working, which is exactly what
  * separates it from a surface that cannot authenticate at all.
+ *
+ * A TABLE OVER EVERY PHASE rather than a switch, so the compiler refuses a
+ * phase the engine sends and this screen has no tone for; the union itself is
+ * held to the engine's by the gate on `ReconcilePhase`.
  */
+const PHASE_TONE: Record<ReconcilePhase, Tone> = {
+  ready: "success",
+  degraded: "warning",
+  unconfigured: "danger",
+  // IN PROGRESS IS NOT NEUTRAL. Every one of these is an integration
+  // that does not work YET — setting up agents, waiting for the provider,
+  // waiting for a person, being taken away — and neutral is the tone this
+  // screen uses for a state nobody needs to come back to. Amber is the
+  // word for incomplete: it says look again, without saying broken, which
+  // is what critical and caution's red neighbour would say.
+  awaiting_vendor_admin: "warning",
+  provisioning: "warning",
+  activating: "warning",
+  disconnecting: "warning",
+};
+
 export function phaseTone(phase: string): Tone {
-  switch (phase) {
-    case "ready":
-      return "success";
-    case "degraded":
-      return "warning";
-    case "unconfigured":
-      return "danger";
-    // IN PROGRESS IS NOT NEUTRAL. Every one of these is an integration
-    // that does not work YET — setting up agents, waiting for the provider,
-    // waiting for a person, being taken away — and neutral is the tone this
-    // screen uses for a state nobody needs to come back to. Amber is the
-    // word for incomplete: it says look again, without saying broken, which
-    // is what critical and caution's red neighbour would say.
-    case "awaiting_admin":
-    case "provisioning":
-    case "activating":
-    case "disconnecting":
-      return "warning";
-    default:
-      // A phase a newer node wrote. Rendered as-is in a neutral tone
-      // rather than guessed at: claiming a surface is fine on the
-      // strength of a word this build cannot interpret is the one answer
-      // that is certainly wrong.
-      return "neutral";
-  }
+  // A phase a newer node wrote is rendered as-is in a neutral tone rather
+  // than guessed at: claiming a surface is fine on the strength of a word
+  // this build cannot interpret is the one answer that is certainly wrong.
+  return Object.hasOwn(PHASE_TONE, phase) ? PHASE_TONE[phase as ReconcilePhase] : "neutral";
 }
 
 /** Who has to act, phrased for the person reading it. */

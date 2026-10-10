@@ -172,8 +172,8 @@ func TestAPassAskedForNoHookReportsNoRegistrar(t *testing.T) {
 // pass's input and the "no app" arm cannot be reached for it. The card read
 // Connected over an agent that could do nothing.
 //
-// APPROVAL_REQUIRED, so the phase is awaiting_admin and the actor is a
-// person: the engine can do nothing at all until somebody creates the app at
+// APPROVAL_REQUIRED, so the phase is awaiting_vendor_admin and the actor is
+// a person: the engine can do nothing at all until somebody creates the app at
 // GitHub, and "Setting up agents" would wait for an act nobody is performing.
 func TestAgentsWithNoAppAreReportedAsNeedingAPerson(t *testing.T) {
 	t.Parallel()

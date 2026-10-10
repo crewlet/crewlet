@@ -47,7 +47,7 @@ func TestAdminWaitDoesNotBackOff(t *testing.T) {
 // has not acted in ten minutes is not acting right now.
 func TestVendorAdminWaitDoublesAndCaps(t *testing.T) {
 	s := DefaultSchedule
-	report := Report{Phase: PhaseAwaitingAdmin, Actor: ActorVendorAdmin}
+	report := Report{Phase: PhaseAwaitingVendorAdmin, Actor: ActorVendorAdmin}
 
 	var previous time.Duration
 	for attempts := 1; attempts <= 20; attempts++ {

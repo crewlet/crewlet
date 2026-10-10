@@ -29,15 +29,15 @@ A pass produces **findings**, and a finding is one observation that is not "fine
 
 Those findings fold into one **report**, which is what an operator reads:
 
-- **`phase`** is where the integration got to: `disconnecting`, `unconfigured`, `awaiting_admin`, `provisioning`, `activating`, `degraded` or `ready`.
-- **`actor`** is who has to act for the phase to end: nobody, the `engine`, the `provider`, a `vendor_admin` (a person at the third-party app — a Slack workspace admin, a GitHub organization owner), or an `admin` (the company's own admin, in this deployment's configuration). The two people are kept apart because *admin* is a role in this company: a bare `admin` meaning the vendor's would send the company's admin to a console they may hold no account on. The phase `awaiting_admin` keeps its name — it is the control plane's vocabulary, below — and its actor is always `vendor_admin`.
+- **`phase`** is where the integration got to: `disconnecting`, `unconfigured`, `awaiting_vendor_admin`, `provisioning`, `activating`, `degraded` or `ready`.
+- **`actor`** is who has to act for the phase to end: nobody, the `engine`, the `provider`, a `vendor_admin` (a person at the third-party app — a Slack workspace admin, a GitHub organization owner), or an `admin` (the company's own admin, in this deployment's configuration). The two people are kept apart because *admin* is a role in this company: a bare `admin` meaning the vendor's would send the company's admin to a console they may hold no account on. The phase that waits on the vendor's admin says whose admin in its own value too — `awaiting_vendor_admin`, whose actor is always `vendor_admin` — because what this engine shares with the control plane (below) is a phase's *label*, not the value it stores.
 - **`detail`** is one sentence naming what is outstanding, and **`action_url`** is where the person named by `actor` goes to do it. Both are filled only when a person owes something.
 
 ### The advisories are always last
 
 **A finding about many things names three of them, and carries the rest beside the sentence.** A finding's detail is the card's one-line status, and the engine caps it at 500 characters — not for tidiness but because an oversized status row is **refused** by the coordination store rather than truncated, which would stop the surface recording anything at all. A finding that listed its subjects inline therefore arrived as a wall cut off mid-item: measured, 36 Datadog service accounts ending `…@agents.cr…`. So the sentence says the count and up to three examples, and the whole list travels in the finding's own `subjects`, which the screen folds away under the sentence. A finding about one thing names it and carries no list.
 
-**And a seat that needs a person shows action required, never a finished status.** Where an act belongs to somebody at the third-party app and the engine can never perform it — creating a GitHub App, installing one — the finding is `approval_required`, whose verdict is *awaiting_admin*, owed to the vendor's admin. `identity_missing` is the engine's own work and reads as *Setting up agents*, which over an act nobody is performing is a card waiting for a pass that will never change anything. The rule extends to the tool's own `satisfied`: a surface that requires per-seat identities and has no working seat at all is not satisfied, whatever its company block says.
+**And a seat that needs a person shows action required, never a finished status.** Where an act belongs to somebody at the third-party app and the engine can never perform it — creating a GitHub App, installing one — the finding is `approval_required`, whose verdict is *awaiting_vendor_admin*, owed to the vendor's admin. `identity_missing` is the engine's own work and reads as *Setting up agents*, which over an act nobody is performing is a card waiting for a pass that will never change anything. The rule extends to the tool's own `satisfied`: a surface that requires per-seat identities and has no working seat at all is not satisfied, whatever its company block says.
 
 Four findings have a verdict of **ready**: `credential_expiring`, `grant_excess`, `registration_orphaned` and `coverage_partial`. `credential_expiring` ranks first among them because it is the only note with a deadline — it becomes `credential_rejected` on its own date — and it is the one advisory the [tool roll-up](#one-state-per-tool) reads as needing attention. Everything below is about `grant_excess`, and applies to the other two.
 
@@ -267,13 +267,13 @@ GET /query/integrations
 
 The **findings list travels as well as the report**, because the two answer different questions. The report says what to do next; the findings say what is actually wrong. A company with a broken webhook and four under-granted seats reports the webhook, and an operator who fixes it should not have to wait a full pass to discover there were four more things behind it.
 
-`phase_label` is the same phase in the words a person reads, derived **once, in the engine**, so a client never has to know what a phase value means. **The words are the control plane's**, so one company reads the same status whichever console it is looking at: backlet's `ReconcilePhase` is this vocabulary under another name, and these are the labels its console renders.
+`phase_label` is the same phase in the words a person reads, derived **once, in the engine**, so a client never has to know what a phase value means. **The words are the control plane's**, so one company reads the same status whichever console it is looking at: backlet's `ReconcilePhase` is the same stations under values of its own, and these are the labels its console renders. Only the labels are shared — no other product reads the value this engine stores — which is why a stored value here may say more than its label does: `awaiting_vendor_admin` names whose admin it waits on and still reads *Action needed*.
 
 | Phase | Label |
 |---|---|
 | `ready` | Connected |
 | `degraded` | Action required |
-| `awaiting_admin` | Action needed |
+| `awaiting_vendor_admin` | Action needed |
 | `provisioning` | Setting up agents |
 | `activating` | Waiting for the provider |
 | `unconfigured` | Failed |

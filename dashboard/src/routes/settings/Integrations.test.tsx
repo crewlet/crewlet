@@ -69,7 +69,7 @@ test("the tone follows how much is not working", () => {
   // EVERY IN-PROGRESS PHASE IS AMBER. Each one is an integration that does
   // not work yet, and neutral is the tone this screen uses for a state
   // nobody needs to come back to.
-  for (const phase of ["provisioning", "activating", "awaiting_admin", "disconnecting"]) {
+  for (const phase of ["provisioning", "activating", "awaiting_vendor_admin", "disconnecting"]) {
     expect(phaseTone(phase)).toBe("warning");
   }
 });
@@ -417,7 +417,7 @@ test("a card's header says what the tool is, not what is wrong with it", () => {
     configured: true,
     secret_usable: false,
     reconcile: {
-      phase: "awaiting_admin",
+      phase: "awaiting_vendor_admin",
       actor: "vendor_admin",
       detail: "sre-lead has no GitHub App of its own",
     },
@@ -1293,7 +1293,13 @@ test("every in-flight phase is amber, and the only amber phase that settles is d
   for (const phase of IN_FLIGHT) {
     expect(phaseTone(phase)).toBe("warning");
   }
-  const amber = ["awaiting_admin", "provisioning", "activating", "disconnecting", "degraded"];
+  const amber = [
+    "awaiting_vendor_admin",
+    "provisioning",
+    "activating",
+    "disconnecting",
+    "degraded",
+  ];
   for (const phase of amber) {
     expect(phaseTone(phase)).toBe("warning");
     expect(IN_FLIGHT.has(phase)).toBe(phase !== "degraded");
@@ -1956,7 +1962,7 @@ test("a finding renders its problem, subjects and remedy as separate parts", () 
     <Reconcile
       appName="GitHub"
       status={{
-        phase: "awaiting_admin",
+        phase: "awaiting_vendor_admin",
         actor: "vendor_admin",
         detail: "4 agents have no GitHub App of their own",
         findings: [
@@ -2024,7 +2030,7 @@ test("one subject is shown, not hidden behind a count", () => {
     <Reconcile
       appName="GitHub"
       status={{
-        phase: "awaiting_admin",
+        phase: "awaiting_vendor_admin",
         detail: "sre-lead has no GitHub App of its own",
         findings: [
           {

@@ -24,6 +24,28 @@ import type { Coverage } from "./coverage.ts";
  */
 export type ReconcileActor = "" | "engine" | "provider" | "vendor_admin" | "admin";
 
+/**
+ * Where a surface's integration has got to, from `integration.Phases`, held by
+ * `internal/integration.TestTheDashboardKnowsExactlyThePhases`.
+ *
+ * A screen keys its tone and its polling on these, so a copy that drifted
+ * would draw a surface waiting on a person in a tone that says nobody needs
+ * to come back to it. `awaiting_vendor_admin` awaits a person AT THE
+ * THIRD-PARTY APP — its actor is always `vendor_admin` — and says so in its
+ * own value, because the bare word is the company's.
+ *
+ * A row's `phase` stays a `string`: a newer node can write a phase this build
+ * does not know, and that is a value to render as itself, never an error.
+ */
+export type ReconcilePhase =
+  | "disconnecting"
+  | "unconfigured"
+  | "awaiting_vendor_admin"
+  | "provisioning"
+  | "activating"
+  | "degraded"
+  | "ready";
+
 /** One observation a reconcile pass made that is not "fine". */
 export interface ReconcileFinding {
   kind: string;
@@ -89,12 +111,7 @@ export interface ReconcileFinding {
  * that the surface is healthy.
  */
 export interface ReconcileStatus {
-  /**
-   * disconnecting | unconfigured | awaiting_admin | provisioning | activating
-   * | degraded | ready. `awaiting_admin` awaits the VENDOR's admin — its actor
-   * is always `vendor_admin` — and keeps its name because the phase words are
-   * the control plane's.
-   */
+  /** A `ReconcilePhase`, or one a newer node wrote — see that type. */
   phase: string;
   /**
    * The phase in a reader's words, from [integration.Phase.Label] in Go.
