@@ -164,6 +164,23 @@ test("a managed document names its writers beside the tokens", async () => {
   expect(screen.queryByText(/The company document is managed/)).toBeNull();
 });
 
+// THE OPEN POSTURE IS NOT "EVERY READ BUT THREE PREFIXES". Anonymous read
+// opens reads, and the guard still refuses an anonymous caller all four of its
+// always-guarded prefixes (`auth.GuardedPrefixes`), every operator-only answer
+// — this page's own among them — and anything personal to one person. The line
+// named three prefixes and nothing else, so it told an operator that the
+// operator surface and this map of credentials were readable by anyone who
+// could reach the port.
+test("the open read posture names everything that still needs a token", async () => {
+  mount(async (what) => (what === "access" ? answer : null));
+  const line = (await screen.findByText(/\(allow_anonymous_read\)/)).textContent ?? "";
+  for (const prefix of ["/config", "/secrets", "/setup", "/operator"]) {
+    expect(line).toContain(prefix);
+  }
+  expect(line).toMatch(/describe the deployment \(this page among them\)/);
+  expect(line).toMatch(/personal to one person/);
+});
+
 test("a refused reader sees the refusal alone — no tiles, no empty lists", async () => {
   const view = mount((what) =>
     what === "access" ? Promise.reject(new QueryError("unauthorized")) : Promise.resolve(null),
