@@ -32,6 +32,7 @@ import type { ConfigRole, ConfigUnit, HumanContactKey } from "~/protocol/index.t
 import { ConfigField } from "~/components/ConfigField.tsx";
 import { useBuilder, type AddKind, type BuilderApi } from "./BuilderContext.tsx";
 import {
+  AvatarField,
   ContactField,
   ReadOnlyNote,
   Refusal,
@@ -39,7 +40,8 @@ import {
   UnitTypeField,
 } from "./dialogParts.tsx";
 import { suggestUniqueName } from "./model/document.ts";
-import { locate, seatNames, siblingsAt, unitNames } from "./model/draft.ts";
+import { locate, seatNames, siblingsAt, suggestAvatar, unitNames } from "./model/draft.ts";
+import type { AgentAvatar } from "~/lib/avatar.ts";
 import { COMPANY_KEY, mintKey, type NodeKey } from "./model/keys.ts";
 import type { Intent } from "./model/operations.ts";
 import { recordIntent } from "./model/reducer.ts";
@@ -127,6 +129,9 @@ interface AddForm {
   setIdentity: (next: HumanContactKey) => void;
   contact: string;
   setContact: (next: string) => void;
+  /** How the agent seat is drawn: suggested when the form opens, its author's to change. */
+  avatar: AgentAvatar;
+  setAvatar: (next: AgentAvatar) => void;
   clash: boolean;
   suggestion: string;
   trimmed: string;
@@ -160,6 +165,9 @@ function useAddNode({ parent, kind: initialKind = "agent", onClose }: AddProps):
   const [type, setType] = useState("");
   const [identity, setIdentity] = useState<HumanContactKey>("slack_user_id");
   const [contact, setContact] = useState("");
+  // SUGGESTED ONCE, when the form opens: the first character no agent wears
+  // and the next colour round, which the author may change before adding.
+  const [avatar, setAvatar] = useState<AgentAvatar>(() => suggestAvatar(state.draft));
   const [refusal, setRefusal] = useState<string | null>(null);
 
   const trimmed = name.trim();
@@ -180,6 +188,8 @@ function useAddNode({ parent, kind: initialKind = "agent", onClose }: AddProps):
       if (kind === "human") {
         data.kind = "human";
         if (contact.trim()) data.contact = { [identity]: contact.trim() };
+      } else {
+        data.avatar = { character: avatar.character, color: avatar.color };
       }
       intent = { type: "addSeat", key, placement, data };
     }
@@ -212,6 +222,8 @@ function useAddNode({ parent, kind: initialKind = "agent", onClose }: AddProps):
     setIdentity,
     contact,
     setContact,
+    avatar,
+    setAvatar,
     clash,
     suggestion: clash ? suggestUniqueName(taken(kind), trimmed) : "",
     trimmed,
@@ -271,6 +283,7 @@ function AddNodeFields({ form }: { form: AddForm }) {
         </p>
       )}
       {form.kind === "unit" && <UnitTypeField value={form.type} onChange={form.setType} />}
+      {form.kind === "agent" && <AvatarField value={form.avatar} onChange={form.setAvatar} />}
       {form.kind === "human" && (
         <>
           <ContactField

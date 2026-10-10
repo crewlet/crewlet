@@ -142,6 +142,10 @@ var contract = []Entry{
 	// attribution.ts
 	{"CHANGE_FIELDS", ReadLiteral, "internal/tracker.TestAttributionFieldsAreTheEngines"},
 
+	// avatar.ts
+	{"AVATAR_CHARACTERS", ReadLiteral, "internal/config.TestTheAvatarSetsAreTheDashboards"},
+	{"AVATAR_COLORS", ReadLiteral, "internal/config.TestTheAvatarSetsAreTheDashboards"},
+
 	// config.ts
 	{"ENTITY_KINDS", ReadLiteral, "internal/api/configapi.TestEntityKindsMatchTheClient"},
 	{"BUDGET_WINDOWS", ReadLiteral, "internal/config.TestTheBudgetEditorOffersExactlyTheEnginesWindows"},

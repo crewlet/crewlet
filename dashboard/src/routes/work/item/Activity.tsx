@@ -510,6 +510,7 @@ function CommentRow({
         <SeatAvatar
           name={name}
           kind={person?.kind === "human" ? "human" : "agent"}
+          avatar={person?.avatar}
           size={28}
           decorative
         />
@@ -633,7 +634,13 @@ export function TurnCard({
   return (
     <li className="task-entry" data-kind="turn">
       <span className="task-entry-avatar">
-        <SeatAvatar name={name} kind={kind} size={28} decorative />
+        <SeatAvatar
+          name={name}
+          kind={kind}
+          avatar={chrome.seatAvatar?.(turn.seat)}
+          size={28}
+          decorative
+        />
       </span>
       <article className="task-turn" aria-label={turn.ordinal ? `Turn ${turn.ordinal}` : "A turn"}>
         <header className="task-turn-head">
@@ -746,7 +753,14 @@ function LiveRow({
   return (
     <li className="task-entry" data-kind="live">
       <span className="task-entry-avatar">
-        <SeatAvatar name={name} kind="agent" size={28} ring={ringOf(activityOf(row))} decorative />
+        <SeatAvatar
+          name={name}
+          kind="agent"
+          avatar={chrome.seatAvatar?.(handle)}
+          size={28}
+          ring={ringOf(activityOf(row))}
+          decorative
+        />
       </span>
       <a
         className="task-live"
@@ -812,6 +826,7 @@ export function Routing({ answer, chrome }: { answer: WorkRoutingAnswer; chrome:
                 name={chrome.seatName?.(r.handle) ?? r.handle}
                 handle={r.handle}
                 kind={chrome.seatKind?.(r.handle)}
+                avatar={chrome.seatAvatar?.(r.handle)}
               />
               <span className="spacer" />
               {/* WHETHER IT ASKED IS ITS OWN MARK, never a tint on the reason:

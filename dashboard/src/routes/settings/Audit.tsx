@@ -83,7 +83,8 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { OPERATOR_SOURCE, RUNTIME_AUDIT_TYPES } from "~/contract/audit.ts";
 import { useNow } from "~/lib/clock.ts";
-import { indexOrg, kindOfAuthor, seatLookup, type SeatKind } from "~/lib/seats.ts";
+import type { AgentAvatar } from "~/lib/avatar.ts";
+import { indexOrg, kindOfAuthor, seatLookup, type SeatBadge, type SeatKind } from "~/lib/seats.ts";
 import { useTimeRange, type Offer } from "~/lib/range.ts";
 import { rest } from "~/protocol/index.ts";
 import { useRest } from "~/lib/useRest.ts";
@@ -313,14 +314,21 @@ function list<T>(value: T[] | null | undefined): T[] {
  *    engine itself.
  */
 export type Writer =
-  | { as: "seat"; handle: string; name: string; kind?: SeatKind; token?: string }
+  | {
+      as: "seat";
+      handle: string;
+      name: string;
+      kind?: SeatKind;
+      avatar?: AgentAvatar | null;
+      token?: string;
+    }
   | { as: "token"; name: string }
   | { as: "system"; name: string }
   | { as: "engine" };
 
 export function writerOf(
   row: Pick<AuditEntry, "actor" | "actorKind" | "actorSeat">,
-  who: (handle: string) => { name: string; kind?: SeatKind },
+  who: (handle: string) => SeatBadge,
 ): Writer {
   if (!row.actor) return { as: "engine" };
   if (row.actorKind === "operator") {
@@ -348,6 +356,7 @@ export function writerOf(
     handle: row.actor,
     name: seat.name,
     kind: seat.kind ?? kindOfAuthor(row.actorKind),
+    avatar: seat.avatar,
   };
 }
 
@@ -360,6 +369,7 @@ function WriterCell({ writer }: { writer: Writer }) {
           handle={writer.handle}
           name={writer.name}
           kind={writer.kind}
+          avatar={writer.avatar}
           {...(writer.token
             ? { title: `${writer.name}, through the operator token ${writer.token}` }
             : {})}

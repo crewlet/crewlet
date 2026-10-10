@@ -19,6 +19,7 @@ import { PERIOD_ADJECTIVE } from "~/lib/budget.ts";
 import { plainText } from "~/lib/markdown.ts";
 import { ENGINE_SENTENCES, authorOf, nameAuthor } from "~/lib/work.ts";
 import { fmtDateTime, humanize } from "~/lib/format.ts";
+import type { AgentAvatar } from "~/lib/avatar.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
 import { INBOX_PAGE } from "~/lib/useInboxCounts.ts";
 import { CHIPS, rowPill, type Chip, type DayGroup, type InboxRow, type Scope } from "./model.ts";
@@ -36,6 +37,8 @@ export const PAGE_LOCAL_CHIPS = "Counted over what this page loaded — more lie
 export interface Who {
   name: string;
   kind: "agent" | "human";
+  /** How an agent the chart holds is drawn; null for a person or a seat the chart has lost. */
+  avatar: AgentAvatar | null;
   /** Null where the row is about no seat at all (the company's budget). */
   handle: string | null;
 }
@@ -45,7 +48,12 @@ export function whoOf(index: OrgIndex, handle: string | null | undefined): Who |
   const h = (handle ?? "").trim();
   if (!h) return null;
   const seat = index.byHandle.get(h);
-  return { name: seat?.name ?? h, kind: seat?.kind ?? "agent", handle: h };
+  return {
+    name: seat?.name ?? h,
+    kind: seat?.kind ?? "agent",
+    avatar: seat?.avatar ?? null,
+    handle: h,
+  };
 }
 
 /**
@@ -392,7 +400,14 @@ function Row({
         onClick={onOpen}
       >
         {who ? (
-          <SeatAvatar name={who.name} kind={who.kind} size={30} ring={ring} decorative />
+          <SeatAvatar
+            name={who.name}
+            kind={who.kind}
+            avatar={who.avatar}
+            size={30}
+            ring={ring}
+            decorative
+          />
         ) : row.kind === "condition" ? (
           <span className="attention-icon inbox-row-mark" data-severity={row.item.severity}>
             <Mark name={row.item.icon} size="sm" />

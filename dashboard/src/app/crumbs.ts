@@ -24,6 +24,7 @@
  * the chrome, and it is drawn in the mono face so it reads as one.
  */
 
+import { avatarOf, type AgentAvatar } from "~/lib/avatar.ts";
 import type { GlyphName } from "@crewlethq/icons/glyphs";
 import { workspaceRow, type Section, type WorkspaceRow } from "./nav.ts";
 import { ITEM_KEY_SHAPE, resolve } from "./routes.ts";
@@ -50,7 +51,7 @@ export interface Crumb {
    * A seat's badge before its name, the way every row and card draws a seat —
    * the kind is its outline. Only on the seat's own crumb.
    */
-  seat?: { name: string; kind: "agent" | "human" };
+  seat?: { name: string; kind: "agent" | "human"; avatar?: AgentAvatar | null };
 }
 
 /**
@@ -65,6 +66,22 @@ export interface Crumb {
 export const seatUnitKey = (handle: string) => `\u0000unit:${handle}`;
 export const seatPlaceKey = (handle: string) => `\u0000place:${handle}`;
 export const seatKindKey = (handle: string) => `\u0000kind:${handle}`;
+/**
+ * How an agent seat is drawn, as its page publishes it for the crumb's badge:
+ * the character and the colour as one label ([avatarLabel]), read back with
+ * [avatarOfLabel]. A label is a string, and the badge needs both parts.
+ */
+export const seatAvatarKey = (handle: string) => `\u0000avatar:${handle}`;
+
+/** An agent's avatar as the one label [seatAvatarKey] carries. */
+export const avatarLabel = (avatar: AgentAvatar): string => `${avatar.character} ${avatar.color}`;
+
+/** The avatar a [seatAvatarKey] label names, or nothing where no page published one. */
+function avatarOfLabel(label: string | undefined): AgentAvatar | undefined {
+  if (!label) return undefined;
+  const [character, color] = label.split(" ");
+  return avatarOf({ character, color });
+}
 
 /**
  * The label keys a turn's page publishes besides its own name: the seat that
@@ -199,10 +216,11 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
       const unit = labels[seatUnitKey(where.handle)];
       const place = labels[seatPlaceKey(where.handle)];
       const kind = labels[seatKindKey(where.handle)];
+      const avatar = avatarOfLabel(labels[seatAvatarKey(where.handle)]);
       const seat = named(labels, where.handle);
       const object: Crumb =
         !seat.mono && (kind === "agent" || kind === "human")
-          ? { ...seat, seat: { name: seat.label, kind: kind as "agent" | "human" } }
+          ? { ...seat, seat: { name: seat.label, kind: kind as "agent" | "human", avatar } }
           : seat;
       return unit
         ? [root(row, true), { label: place || unit, path: ["agents", "teams", unit] }, object]
@@ -224,7 +242,11 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
           label: seat,
           path: ["live"],
           ...(handle ? { query: { seat: handle } } : {}),
-          seat: { name: seat, kind: "agent" },
+          seat: {
+            name: seat,
+            kind: "agent",
+            avatar: handle ? avatarOfLabel(labels[seatAvatarKey(handle)]) : undefined,
+          },
         },
         named(labels, where.id),
       ];

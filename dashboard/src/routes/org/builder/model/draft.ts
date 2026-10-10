@@ -21,6 +21,8 @@
  * it did not change.
  */
 
+import { AVATAR_CHARACTERS, AVATAR_COLORS } from "~/contract/avatar.ts";
+import { avatarOf, type AgentAvatar } from "~/lib/avatar.ts";
 import type { CompanyDocument, ConfigRole, ConfigUnit } from "~/protocol/index.ts";
 import { COMPANY_KEY, type NodeKey } from "./keys.ts";
 
@@ -335,4 +337,24 @@ export function seatNames(draft: Draft): string[] {
 /** Every unit name in the draft, depth-first, repeats included. */
 export function unitNames(draft: Draft): string[] {
   return [...allUnits(draft)].map(({ unit }) => unit.data.name);
+}
+
+/**
+ * How a new agent seat is drawn until its author picks otherwise: the first
+ * character no agent seat in the draft wears yet, in the order the picker
+ * offers them, and the next colour round the six, so a company growing one
+ * agent at a time is told apart at a glance before anybody has chosen.
+ *
+ * A SUGGESTION, written into the new seat's own block where its author can
+ * change it in the same form. Once every character is worn the characters go
+ * round again too, still in order.
+ */
+export function suggestAvatar(draft: Draft): AgentAvatar {
+  const agents = [...allSeats(draft)].filter(({ seat }) => seat.data.kind !== "human");
+  const worn = new Set(agents.map(({ seat }) => avatarOf(seat.data.avatar).character));
+  const fresh = AVATAR_CHARACTERS.find((character) => !worn.has(character));
+  return {
+    character: fresh ?? AVATAR_CHARACTERS[agents.length % AVATAR_CHARACTERS.length]!,
+    color: AVATAR_COLORS[agents.length % AVATAR_COLORS.length]!,
+  };
 }

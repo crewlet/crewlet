@@ -211,6 +211,7 @@ function SeatPeekBody({
           name={seat.name}
           size="lg"
           kind={human ? "human" : "agent"}
+          avatar={seat.avatar}
           {...(ring ? { ring } : {})}
           decorative
         />
@@ -267,6 +268,7 @@ function SeatPeekBody({
                 name={seat.manager.name}
                 size="xs"
                 kind={seat.manager.kind === "human" ? "human" : "agent"}
+                avatar={seat.manager.avatar}
                 decorative
               />
               {seat.manager.name}

@@ -60,12 +60,30 @@ mark is decoration beside the name and the tile's text keeps its contrast.
 
 The second exception is the organization's two charts, **Agents › Org chart**
 and **Agents › Edit org**, which draw it the way the console's org chart does:
-every agent seat is the Crewlet figure on a node toned purple, with the branch
-arriving at it (and, in Edit org's table, its row) in the same hue. It is held
-to that: ONE hue for ONE kind, never a hash of a name and never one per agent,
-drawn only on those two charts. Nothing reads state from it: on the live chart
-what a seat is doing is the state's dot and word under its name, as it is
-everywhere else.
+every agent seat is its own Crewlet character on a node toned in its own
+colour, with the branch arriving at it (and, in Edit org's table, its row) in
+the same hue. It is held to that: the hue is the one the seat's profile icon
+names (the third exception, below), never a hash of a name, a person's node
+and a unit's stay neutral, and the tone is drawn only on those two charts.
+Nothing reads state from it: on the live chart what a seat is doing is the
+state's dot and word under its name, as it is everywhere else.
+
+The third exception is **an agent's profile icon**: the Crewlet character and
+the colour its author chose for it, written in the seat's own `avatar` block
+(see the [Role Fields Summary](../getting-started/configuration.md#role-fields-summary)).
+A hash of a name is identity by accident; this is identity by CHOICE, so
+renaming the seat keeps it and it says exactly what somebody meant. It is held
+to exactly that. Its six colours are the design system's node hues
+(`--color-node-*`), a family no state, accent or data series draws from. A
+seat that chose nothing is the original Crewlet in purple, never a look the
+dashboard picked for it. Only an agent wears one: a person is drawn as
+themself and a unit is neutral. It is drawn as the agent's own badge
+(`SeatAvatar`) and its node on the two charts, and nothing reads state from
+it, so the ring and the dot beside it still say what the seat is doing. The
+org builder's Add dialog suggests a character no agent in the draft wears yet
+and the next colour round the six, so a company growing one agent at a time is
+told apart before anybody has chosen; the suggestion is written into the new
+seat, where its author can change it.
 
 A seat's chrome takes one of three **rings**, or none, from what it is DOING —
 and what it is doing is the ENGINE'S word, never the dashboard's. Every seat row carries
@@ -1102,7 +1120,11 @@ four clauses that travel together because each one was got wrong separately:
   the resolved name rather than from the handle — initials off a handle make
   every seat whose handle begins with the same letter the same mark. It takes
   no colour, by [the one rule](#the-one-rule): a seat is identity, and identity
-  is carried by the name, the mark and the position. The only variant it has is
+  is carried by the name, the mark and the position. **An agent the chart holds
+  is drawn as itself instead**: its own Crewlet character on a plate of its own
+  colour, the look its author chose (the one rule's third exception), where its
+  initials would be. A person, and a handle the chart does not hold, keep the
+  initials. Beyond that its only variant is
   STRUCTURAL — its outline, a circle for a person and a squircle for an agent —
   and **every** cell that draws a person resolves the kind and draws it. That is the same resolution as the name and it arrives with it:
   `seatLookup` answers both, the row chrome carries both, and the two cells a
@@ -2169,7 +2191,7 @@ centred. Such roots go to whichever side of the tree centres the top row over
 the drawing (`balanceRoots`), a tie keeping the document's order.
 
 **A node says who and what, and its title says the rest.** A seat leads with
-the console chart's mark (the Crewlet figure on an agent's purple node, a
+the console chart's mark (an agent's own character on a node in its own colour, a
 person's glyph in a dashed ring) and its NAME. Under the name an agent's node
 says what it is doing in the engine's word, behind the state's dot
 ("Working", "Needs you", "Stopped", "Idle"), and a person's says "Human seat".
@@ -2181,7 +2203,7 @@ ago") is the node's title, and it is read after the node's name. **A seat's
 dot shows what it is doing**, which the section tabs say at the end of their
 row on every Agents section, wherever the row has room for it beside every tab
 (it gives way to the tabs, so a phone does without it): the dot and the word
-are the only state hue on a node, and the purple says what a seat IS (see "The
+are the only state hue on a node, and an agent's colour is its own look (see "The
 one rule"). The legend at the chart's foot counts Working, Needs you, Stopped
 and Idle from the engine's `activity`: a seat with no row yet is counted
 nowhere, and a person never.
@@ -2260,7 +2282,7 @@ A unit's own page is `#/agents/teams/{unit}`.
 ### A seat's profile
 
 `#/agents/seats/{handle}` is the approved Agent artboard: a head flush with the
-sheet — the seat's badge (a squircle for an agent, a circle for a person) with
+sheet — the seat's badge (an agent's own character on its squircle, a person's initials in a circle) with
 its state ring, the name, an **Agent** or **Person** pill and, for an agent, the
 state in the engine's word ("Working", "Needs you", "Paused", "Stopped ·
 budget", "Not placed", "Idle"); under it the line that places the seat
@@ -6796,13 +6818,16 @@ to.
   performs it.
 - **An agent seat is toned, and nothing else is.** This is the console org
   chart's drawing and the colour rule's second, bounded exception (see "The one
-  rule"), and the live org chart's: every agent seat takes the same purple, on
-  its card, the branch into it and its table row, and every other node is
-  neutral. No seat has a hue of
-  its own (one hashed from its key, stated in its editor as a "Colour" fact,
-  was removed: a legend nobody could decode). A seat leads with the console
-  chart's mark rather than a badge: the Crewlet figure for an agent, a
-  person's glyph in a dashed ring for a person (drawn alone in a table row). A
+  rule"), and the live org chart's: every agent seat takes the colour its
+  profile icon names (purple until its author chooses), on its card, the
+  branch into it and its table row, and every other node is neutral. No hue is
+  made from a seat (one hashed from its key, stated in its editor as a
+  "Colour" fact, was removed: a legend nobody could decode); the editor offers
+  an agent's character and colour as two pickers instead, under **Profile
+  icon**, and a person's and a unit's editor offers neither. A seat leads with
+  the console chart's mark rather than a badge: the agent's own character for
+  an agent, a person's glyph in a dashed ring for a person (drawn alone in a
+  table row). A
   dashed edge on a node means only "a place nothing fills yet": the ghost of a
   node being added, and a unit's lead slot while no lead is set. A reference
   that names nothing takes the caution tone, and the Datadog fallback seat
@@ -6858,17 +6883,24 @@ to.
 
 ## Rules a change has to keep
 
-1. **Colour is state, never identity.** No hash-to-hue, no per-agent tint, no
-   per-category chip colour. If you need to tell two things apart, use their
-   names. The third-party app marks in `@crewlethq/icons` and the org charts'
-   one purple for every agent seat (Agents › Org chart and Edit org) are the
-   two bounded exceptions (see "The one rule" above); nothing else is.
+1. **Colour is state, never a derived identity.** No hash-to-hue, no tint the
+   dashboard picks for an agent, no per-category chip colour. If you need to
+   tell two things apart, use their names. The third-party app marks in
+   `@crewlethq/icons`, the org charts' toned agent nodes (Agents › Org chart
+   and Edit org) and an agent's own profile icon, a Crewlet character in the
+   colour its author chose, are the three bounded exceptions (see "The one
+   rule" above); nothing else is. The character and colour lists are the
+   contract's (`contract/avatar.ts`), held to the engine's and to the design
+   system's, and one reading of them (`lib/avatar.ts`'s `avatarOf`) draws a
+   part this build does not know as the default part rather than as nothing.
    **A seat's identity badge is `Avatar`, everywhere but the org charts,
    through `SeatAvatar`** (both charts and Edit org's table draw the console
    chart's marks instead, `ui/orgNodes.tsx`'s `seatMark`: see "An agent seat
    is toned, and nothing else is") (`ui/SeatAvatar.tsx`; `seatBadge` for
-   a kit component that draws the badge itself), drawn from its name or handle so
-   the initials are what tell one seat from another. For an AGENT a leading
+   a kit component that draws the badge itself), handed the seat's `avatar`
+   wherever the chart holds the seat, so an agent is drawn as its own character
+   and a person, or a seat the chart does not hold, by initials made from its
+   name or handle. For an AGENT a leading
    word "agent" is dropped before the initials are made, because the squircle
    already says it: "Agent CEO" and "Agent CTO" are `CE` and `CT`, where the
    kit alone drew both as `AC`. What a screen reader hears is still the whole
@@ -6883,7 +6915,9 @@ to.
    same engineer was "FE" on the board and an identical generic robot on
    Search and on a project's Lead panel. `ring="brand"` — the accent drawn as a
    ring round the neutral badge, meaning *selected* — is for the one badge that
-   IS the reader, in the sidebar's own account row, and for nothing else.
+   IS the reader, in the sidebar's own account row, and for nothing else in
+   the dashboard (the kit's `CharacterPicker` wears it on the chosen
+   character, which is the same word: selected).
 2. **No new colour, size, radius or spacing literal.** If a component needs
    one, the TOKEN is what gets added.
 3. **A fill step is never text and an `-ink` step is never a background.** The

@@ -1946,6 +1946,10 @@
             "null"
           ]
         },
+        "avatar": {
+          "$ref": "#/$defs/RoleAvatar",
+          "description": "Agent seats: the Crewlet character and colour the seat is drawn as. Absent = the original Crewlet, in purple."
+        },
         "backstory": {
           "description": "Who this seat is; reaches its prompt.",
           "type": [
@@ -2447,6 +2451,65 @@
       "required": [
         "name"
       ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "RoleAvatar": {
+      "additionalProperties": false,
+      "properties": {
+        "character": {
+          "description": "The Crewlet character this agent seat is drawn as. Absent = crewlet, the original.",
+          "enum": [
+            "crewlet",
+            "hexlet",
+            "peaklet",
+            "prismlet",
+            "towerlet",
+            "bricklet",
+            "gemlet",
+            "coglet",
+            "pluslet",
+            "shieldlet",
+            "stacklet",
+            "sparklet",
+            "cloudlet",
+            "foxlet",
+            "rocketlet",
+            "crownlet",
+            "cactlet",
+            "wisplet",
+            "heartlet",
+            "flasklet",
+            "chiplet",
+            "duolet",
+            "chatlet",
+            "pagelet",
+            "archlet",
+            "dashlet",
+            "octlet",
+            "conelet",
+            "hivelet",
+            "folderlet",
+            "",
+            null
+          ]
+        },
+        "color": {
+          "description": "The colour this agent seat is drawn in. Absent = purple.",
+          "enum": [
+            "purple",
+            "cyan",
+            "green",
+            "amber",
+            "rose",
+            "blue",
+            "",
+            null
+          ]
+        }
+      },
       "type": [
         "object",
         "null"

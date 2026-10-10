@@ -287,7 +287,9 @@ function OpenPane({
 function Byline({ children, who }: { children: ReactNode; who: Who | null }) {
   return (
     <p className="inbox-pane-meta">
-      {who && <SeatAvatar name={who.name} kind={who.kind} size="xs" decorative />}
+      {who && (
+        <SeatAvatar name={who.name} kind={who.kind} avatar={who.avatar} size="xs" decorative />
+      )}
       {children}
     </p>
   );

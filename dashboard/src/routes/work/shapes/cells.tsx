@@ -288,6 +288,7 @@ export function AssigneeCell({
           handle={row.assignee}
           seatName={chrome.seatName}
           seatKind={chrome.seatKind}
+          seatAvatar={chrome.seatAvatar}
           name={named}
         />
       }

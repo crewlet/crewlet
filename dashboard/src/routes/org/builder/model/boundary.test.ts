@@ -14,7 +14,9 @@
  *   formatting), `~/lib/storage.ts` (the table of storage KEYS, which is
  *   constants and imports nothing — the storage itself is still injected), a
  *   module of `~/contract/` (the engine's own sets, which that directory's
- *   suite holds to data and shapes importing nothing but each other) or
+ *   suite holds to data and shapes importing nothing but each other),
+ *   `~/lib/avatar.ts` (the ONE reading of a seat's avatar, which imports
+ *   nothing but the contract, held below) or
  *   `~/protocol/configAnswer.ts` (the ONE reading of a `/config` refusal,
  *   which imports nothing but types — held below); the rest of `~/protocol`
  *   is imported for TYPES only, because its runtime half is the socket and
@@ -28,6 +30,9 @@ import { modules } from "~/test/source.ts";
 
 /** The one runtime import the model may make from `~/protocol`. */
 const CONFIG_ANSWER = "~/protocol/configAnswer.ts";
+
+/** The one runtime import the model may make from `~/lib` beyond formatting and storage keys. */
+const AVATAR = "~/lib/avatar.ts";
 
 /** This directory, relative to `src/`. */
 const MODEL = "routes/org/builder/model/";
@@ -103,6 +108,7 @@ describe("the builder core", () => {
           spec === "~/lib/storage.ts" ||
           spec.startsWith("~/contract/") ||
           spec === CONFIG_ANSWER ||
+          spec === AVATAR ||
           (typeOnly && spec.startsWith("~/protocol/"));
         if (!allowed) offending.push(`${name}: ${typeOnly ? "import type" : "import"} "${spec}"`);
       }
@@ -119,6 +125,23 @@ describe("the builder core", () => {
     const runtime = imports(answer!.text).filter(({ typeOnly }) => !typeOnly);
     expect(runtime).toEqual([]);
     const body = code(answer!.text);
+    const reached = FORBIDDEN_GLOBALS.filter(([, pattern]) => pattern.test(body)).map(
+      ([label]) => label,
+    );
+    expect(reached).toEqual([]);
+  });
+
+  test("reads a seat's avatar through a module that imports nothing but the contract", () => {
+    // THE SAME KIND OF DOOR, for the same reason: a new agent's suggested
+    // look is decided over the draft, and it reads the worn characters the
+    // way every screen does. It stays a door only while what is behind it
+    // reaches nothing but the engine's own sets.
+    const avatar = modules().find(({ path }) => path === "lib/avatar.ts");
+    expect(avatar, "lib/avatar.ts is gone").toBeDefined();
+    const runtime = imports(avatar!.text).filter(({ typeOnly }) => !typeOnly);
+    expect(runtime.length).toBeGreaterThan(0);
+    expect(runtime.filter(({ spec }) => !/^(?:\.\.\/|~\/)contract\//.test(spec))).toEqual([]);
+    const body = code(avatar!.text);
     const reached = FORBIDDEN_GLOBALS.filter(([, pattern]) => pattern.test(body)).map(
       ([label]) => label,
     );

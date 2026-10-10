@@ -49,13 +49,14 @@
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
-import { turnHandleKey, turnSeatKey } from "~/app/crumbs.ts";
+import { avatarLabel, seatAvatarKey, turnHandleKey, turnSeatKey } from "~/app/crumbs.ts";
 import { ObjectTabs } from "~/app/frame/ObjectTabs.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { PauseSeatButton, SteerTurnButton } from "~/components/writes.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { roundOf } from "~/lib/seats.ts";
+import type { AgentAvatar } from "~/lib/avatar.ts";
+import { roundOf, useSeatBadgeOf } from "~/lib/seats.ts";
 import { buildWaterfall, phaseLabel, type Span } from "~/lib/waterfall.ts";
 import { screenScroller } from "~/lib/scroller.ts";
 import { pathOf } from "~/app/frame/objects.ts";
@@ -817,7 +818,14 @@ function tokenNote(view: TurnView): string | undefined {
 export function turnFacts(
   view: TurnView,
   now: number = Date.now(),
-  { seat = false }: { seat?: boolean } = {},
+  {
+    seat = false,
+    avatar,
+  }: {
+    seat?: boolean;
+    /** How the seat's agent is drawn, where the chart holds it. */
+    avatar?: AgentAvatar | null;
+  } = {},
 ): Fact[] {
   const counted = view.own.length > 0;
   const { from, to, timed } = view.span;
@@ -837,7 +845,12 @@ export function turnFacts(
           {
             label: "Seat",
             value: view.role ? (
-              <SeatChip name={view.role} handle={view.handle || view.role} kind="agent" />
+              <SeatChip
+                name={view.role}
+                handle={view.handle || view.role}
+                kind="agent"
+                avatar={avatar}
+              />
             ) : (
               "the engine"
             ),
@@ -1639,6 +1652,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   // the prompt weights, every trace the turn touched, and the JSON somebody
   // attaches to a bug report.
   const view = useTurnView(turnId);
+  const badgeOf = useSeatBadgeOf();
   const { loading, error, events, cut, attempt, phases, own, nested, rec, role } = view;
   const { running, durationMs, story } = view;
   const [tab, setTab] = useTab<TurnTab>("tab", TURN_TABS);
@@ -1711,10 +1725,12 @@ export function TurnScreen({ turnId }: { turnId: string }) {
     view.startedAt || view.span.from,
   );
   const crumb = turnCrumbLabel(view, ordinal);
+  const seatAvatar = view.handle ? badgeOf(view.handle).avatar : null;
   usePageLabels({
     ...(crumb ? { [turnId]: crumb } : {}),
     ...(role ? { [turnSeatKey(turnId)]: role } : {}),
     ...(view.handle ? { [turnHandleKey(turnId)]: view.handle } : {}),
+    ...(view.handle && seatAvatar ? { [seatAvatarKey(view.handle)]: avatarLabel(seatAvatar) } : {}),
   });
 
   const title = turnTitle(view);
@@ -2290,6 +2306,7 @@ function PhaseStrip({ phases }: { phases: PhaseRecord[] }) {
 export function TurnPeek({ turnId }: { turnId: string }) {
   const view = useTurnView(turnId);
   const now = useNow();
+  const badgeOf = useSeatBadgeOf();
   // NOTHING HAS BEEN READ, which is three states and only one of them is an
   // empty rail: an answer that has not landed is a skeleton, a refusal is the
   // engine's own words, and a turn no event names is said plainly. A header
@@ -2318,7 +2335,10 @@ export function TurnPeek({ turnId }: { turnId: string }) {
         identifier={turnId}
         title={title}
         status={turnStatus(view, now)}
-        facts={turnFacts(view, now, { seat: true })}
+        facts={turnFacts(view, now, {
+          seat: true,
+          avatar: badgeOf(view.handle || view.role).avatar,
+        })}
       />
       <div className="col gap-3">
         {/* LOADING IS SETTLED ABOVE. The rail draws only once it holds

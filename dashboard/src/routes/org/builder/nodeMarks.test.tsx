@@ -34,6 +34,7 @@ function seat(over: Partial<SeatView> = {}): SeatView {
     key: "seat:dev" as NodeKey,
     name: "Dev",
     kind: "agent",
+    avatar: null,
     handle: "dev",
     saved: { handle: "dev", name: "Dev" },
     running: true,

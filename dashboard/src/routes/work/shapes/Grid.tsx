@@ -314,7 +314,12 @@ function listColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
           chrome={chrome}
           seats={ctx.seats ?? []}
           readOnly={
-            <Assignee handle={row.assignee} seatName={chrome.seatName} seatKind={chrome.seatKind} />
+            <Assignee
+              handle={row.assignee}
+              seatName={chrome.seatName}
+              seatKind={chrome.seatKind}
+              seatAvatar={chrome.seatAvatar}
+            />
           }
         />
       ),
@@ -389,6 +394,7 @@ function tableColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
                 handle={row.assignee}
                 name={chrome.seatName?.(row.assignee)}
                 kind={chrome.seatKind?.(row.assignee)}
+                avatar={chrome.seatAvatar?.(row.assignee)}
               />
             ) : (
               <EmptyValue label="Nobody holds this" />
@@ -863,7 +869,12 @@ function trashColumns(
         const who = record.actor_seat || record.actor;
         return (
           <span className="row gap-1">
-            <SeatCell handle={who} name={chrome.seatName?.(who)} kind={chrome.seatKind?.(who)} />
+            <SeatCell
+              handle={who}
+              name={chrome.seatName?.(who)}
+              kind={chrome.seatKind?.(who)}
+              avatar={chrome.seatAvatar?.(who)}
+            />
             {/* WHICH KIND OF WRITER, because that is the question a trash
                 screen exists to answer: an assistant removing a subtree and
                 a person removing one task look identical without it.

@@ -43,6 +43,7 @@
  */
 
 import { useMemo } from "react";
+import { avatarOf, type AgentAvatar } from "./avatar.ts";
 import { parseUTC, plural } from "./format.ts";
 import { useQuery } from "./useQuery.ts";
 import { useOrg } from "./store-hooks.ts";
@@ -142,6 +143,11 @@ export interface Seat {
    */
   handle: string;
   kind: SeatKind;
+  /**
+   * How an agent seat is drawn: its character and colour, as the engine
+   * published them. Null for a person, who is drawn as themself.
+   */
+  avatar: AgentAvatar | null;
   goal: string;
   backstory: string;
   responsibilities: string[];
@@ -247,6 +253,7 @@ function newSeat(raw: OrgSeat, handle: string, key: string): Seat {
     name: raw.name ?? "",
     handle,
     kind: raw.kind === "human" ? "human" : "agent",
+    avatar: raw.kind === "human" ? null : avatarOf(raw.avatar),
     goal: raw.goal ?? "",
     backstory: raw.backstory ?? "",
     responsibilities: list(raw.responsibilities),
@@ -864,11 +871,25 @@ function dedupe(keys: string[]): string[] {
  * holds its work. The name it was filed under is what a reader needs to find
  * that work, and a dash would lose it.
  */
-export function seatLookup(index: OrgIndex): (handle: string) => { name: string; kind?: SeatKind } {
-  return (handle) => {
-    const seat = index.byHandle.get(handle);
-    return seat ? { name: seat.name, kind: seat.kind } : { name: handle };
-  };
+export function seatLookup(index: OrgIndex): (handle: string) => SeatBadge {
+  return (handle) => badgeOfSeat(index.byHandle.get(handle), handle);
+}
+
+/**
+ * What a seat's badge is drawn from: its name, its kind, and how an agent is
+ * drawn. KIND AND AVATAR ARE ABSENT for a key the chart does not hold, which
+ * is a third answer rather than a missing one (see [seatResolvers]): a renamed
+ * or removed seat keeps its name and is drawn with the kit's defaults.
+ */
+export interface SeatBadge {
+  name: string;
+  kind?: SeatKind;
+  avatar?: AgentAvatar | null;
+}
+
+/** A seat's badge, or the key's own words where the chart has no such seat. */
+function badgeOfSeat(seat: Seat | undefined, key: string): SeatBadge {
+  return seat ? { name: seat.name, kind: seat.kind, avatar: seat.avatar } : { name: key };
 }
 
 /**
@@ -879,11 +900,8 @@ export function seatLookup(index: OrgIndex): (handle: string) => { name: string;
  * the badge in both kinds of column needs both lookups. Handle first, because
  * a handle is unique and a name only the first seat's.
  */
-export function seatBadgeOf(index: OrgIndex): (key: string) => { name: string; kind?: SeatKind } {
-  return (key) => {
-    const seat = index.byHandle.get(key) ?? index.byName.get(key);
-    return seat ? { name: seat.name, kind: seat.kind } : { name: key };
-  };
+export function seatBadgeOf(index: OrgIndex): (key: string) => SeatBadge {
+  return (key) => badgeOfSeat(index.byHandle.get(key) ?? index.byName.get(key), key);
 }
 
 /**
@@ -898,7 +916,7 @@ export function seatBadgeOf(index: OrgIndex): (key: string) => { name: string; k
  * "useClient outside a ClientContext provider". This module already reads
  * the store; the store no longer reads this module.
  */
-export function useSeatBadgeOf(): (key: string) => { name: string; kind?: SeatKind } {
+export function useSeatBadgeOf(): (key: string) => SeatBadge {
   const org = useOrg();
   return useMemo(() => seatBadgeOf(indexOrg(org)), [org]);
 }
@@ -929,11 +947,13 @@ export function useSeatBadgeOf(): (key: string) => { name: string; kind?: SeatKi
 export function seatResolvers(index: OrgIndex): {
   seatName: (handle: string) => string;
   seatKind: (handle: string) => SeatKind | undefined;
+  seatAvatar: (handle: string) => AgentAvatar | null | undefined;
 } {
   const lookup = seatLookup(index);
   return {
     seatName: (handle) => lookup(handle).name,
     seatKind: (handle) => lookup(handle).kind,
+    seatAvatar: (handle) => lookup(handle).avatar,
   };
 }
 

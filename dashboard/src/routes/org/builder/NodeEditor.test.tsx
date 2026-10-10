@@ -31,6 +31,7 @@ import {
   warningAt,
 } from "./testState.ts";
 import { Callout } from "@crewlethq/ui";
+import { AVATAR_CHARACTERS } from "~/contract/avatar.ts";
 import { drawnClasses, isDrawnAs } from "~/testing.tsx";
 
 afterEach(cleanup);
@@ -133,7 +134,6 @@ function connected(): CompanyDocument {
       slack: {
         bot_token: "Bearer sk-live-${SUFFIX}",
         signing_secret: "${DEV_SLACK_SECRET}",
-        channel: "C1",
       },
       mattermost: { bot_token: "${DEV_MM_TOKEN}", channel: "eng", username: "dev-bot" },
     },
@@ -300,20 +300,66 @@ describe("the head", () => {
  * agent seat's form with a read-only "Colour" fact naming a hue hashed from
  * the seat's key — a legend for a decoration the live chart never drew.
  */
-test("no node's editor states or offers a colour", () => {
-  const human = fixtureCompany();
-  human.units![0]!.roles![1] = { name: "Dev", kind: "human", contact: { github_login: "dev" } };
-  for (const [doc, key] of [
-    [fixtureCompany(), "seat:dev"],
-    [human, "seat:dev"],
-    [fixtureCompany(), "unit:Engineering"],
-  ] as const) {
-    edit(keyedState(doc), key);
-    expect(screen.queryByText("Colour"), key).toBeNull();
-    expect(screen.queryByText(/\bhue\b/i), key).toBeNull();
-    expect(screen.queryByRole("radio", { name: /purple|cyan|green|amber|rose|blue/i })).toBeNull();
-    cleanup();
-  }
+/*
+ * HOW AN AGENT IS DRAWN IS ITS AUTHOR'S CHOICE, and only an agent's: its
+ * editor offers a Crewlet character and a colour, both written to the seat's
+ * own `avatar` block, and a person's editor and a unit's offer neither. A
+ * colour is never offered on a node that is not an agent: a person is drawn
+ * as themself and a unit is the chart's neutral surface.
+ */
+describe("an agent seat's profile icon", () => {
+  test("only an agent seat's editor offers a character and a colour", () => {
+    const human = fixtureCompany();
+    human.units![0]!.roles![1] = { name: "Dev", kind: "human", contact: { github_login: "dev" } };
+    for (const [doc, key] of [
+      [human, "seat:dev"],
+      [fixtureCompany(), "unit:Engineering"],
+    ] as const) {
+      edit(keyedState(doc), key);
+      expect(screen.queryByRole("radiogroup", { name: "Character" }), key).toBeNull();
+      expect(screen.queryByRole("radiogroup", { name: "Color" }), key).toBeNull();
+      cleanup();
+    }
+    edit(keyedState(fixtureCompany()), "seat:dev");
+    expect(screen.getAllByRole("radio", { name: /let$/ })).toHaveLength(AVATAR_CHARACTERS.length);
+    const colors = within(screen.getByRole("radiogroup", { name: "Color" })).getAllByRole("radio");
+    expect(colors.map((c) => c.textContent)).toEqual([
+      "Purple",
+      "Cyan",
+      "Green",
+      "Amber",
+      "Rose",
+      "Blue",
+    ]);
+  });
+
+  test("a seat that chose nothing shows the original Crewlet in purple, and writes nothing untouched", () => {
+    const view = edit(keyedState(fixtureCompany()), "seat:dev");
+    expect(screen.getByRole("radio", { name: "Crewlet", checked: true })).toBeDefined();
+    expect(
+      within(screen.getByRole("radiogroup", { name: "Color" })).getByRole("radio", {
+        checked: true,
+      }).textContent,
+    ).toBe("Purple");
+    type("Goal", "Ship");
+    apply();
+    expect(seatData(view.state(), "seat:dev").avatar).toBeUndefined();
+  });
+
+  test("the chosen character and colour are written to the seat's avatar, part by part", () => {
+    const view = edit(keyedState(fixtureCompany()), "seat:dev");
+    fireEvent.click(screen.getByRole("radio", { name: "Hexlet" }));
+    fireEvent.click(
+      within(screen.getByRole("radiogroup", { name: "Color" })).getByRole("radio", {
+        name: "Cyan",
+      }),
+    );
+    apply();
+    expect(seatData(view.state(), "seat:dev").avatar).toEqual({
+      character: "hexlet",
+      color: "cyan",
+    });
+  });
 });
 
 describe("the unsaved-changes prompt", () => {
@@ -783,7 +829,11 @@ describe("integrations", () => {
     // A tool's section is a part of Integrations, and is heard as one.
     expect(screen.getByRole("heading", { name: "Integrations", level: 2 })).toBeDefined();
     expect(screen.getByRole("heading", { name: "GitHub", level: 3 })).toBeDefined();
-    expect((field("Slack channel ID") as HTMLInputElement).value).toBe("C1");
+    // A seat's Slack app has no channel of its own: the seat speaks in its
+    // unit's, so the section says so rather than offering a box the engine
+    // refuses on every save.
+    expect(screen.getByText(/speaks as its own Slack app, in its unit's channel/)).toBeDefined();
+    expect(screen.queryByLabelText(labelled("Slack channel ID"))).toBeNull();
     expect((field("Mattermost channel") as HTMLInputElement).value).toBe("eng");
     expect(screen.queryByLabelText(labelled("Bot username"))).toBeNull();
     expect(
@@ -853,7 +903,7 @@ describe("integrations", () => {
     expect(screen.getByText(/This enrols the seat in GitHub/)).toBeDefined();
   });
 
-  test("a Slack channel needs the seat's own app, and the Datadog fallback is named on its seat", () => {
+  test("a seat with no chat app of its own says so, and the Datadog fallback is named on its seat", () => {
     edit(keyedState(connected()), "seat:sre");
     expect(screen.queryByLabelText(labelled("Slack channel ID"))).toBeNull();
     expect(screen.getByText(/has no Slack app of its own/)).toBeDefined();

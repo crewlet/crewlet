@@ -250,8 +250,9 @@ func (c *Company) ValidateRunnable() error {
 // Today they are the org's duplicate seat names, duplicate unit names and a
 // unit reference on a seat declared inside another unit (see
 // [org.Organization.ValidateAdmission]), duplicate sandbox setup step names
-// within one list, a GitHub App on a human seat, a cli-agent entry's
-// credential configured where its CLI never reads it
+// within one list, a GitHub App on a human seat, an avatar the dashboard
+// cannot draw or one on a human seat ([Company.validateAvatars]), a
+// cli-agent entry's credential configured where its CLI never reads it
 // ([LLMProvider.validateCLICredentials]), a cli-agent model with no provider
 // segment on a CLI that reads one ([LLMProvider.validateCLIModel]), and a
 // seat whose code work hands a
@@ -266,7 +267,7 @@ func (c *Company) ValidateAdmission() error {
 // caller already built.
 func (c *Company) validateAdmission(o *org.Organization) error {
 	return errors.Join(o.ValidateAdmission(), c.validateSetupStepNames(),
-		c.validateHumanSeatApps(), c.validateCLIAgentCredentials(),
+		c.validateHumanSeatApps(), c.validateAvatars(), c.validateCLIAgentCredentials(),
 		c.validateCLIAgentModels(), c.validateSandboxCodingAgents())
 }
 

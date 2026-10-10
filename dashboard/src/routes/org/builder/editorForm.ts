@@ -29,6 +29,7 @@
  * seat a new id. So every text field first asks whether its box changed.
  */
 
+import { avatarOf, type AgentAvatar } from "~/lib/avatar.ts";
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import { readCeiling, tokenBudgetError } from "~/lib/budget.ts";
 import type {
@@ -87,6 +88,11 @@ export interface SeatForm {
   readonly contact: Readonly<Record<HumanContactKey, string>>;
   readonly availability: string;
   /**
+   * How an agent seat is drawn, each part as the document writes it or its
+   * default where it is absent; null for a person, who has no avatar.
+   */
+  readonly avatar: AgentAvatar | null;
+  /**
    * The model chain, provider keys in order; `null` when the seat's `llm` is
    * a per-phase mapping, which the editor shows but does not edit.
    */
@@ -96,7 +102,6 @@ export interface SeatForm {
   readonly schedules: Readonly<Record<string, boolean>>;
   readonly githubTier: string;
   readonly githubRepos: readonly string[];
-  readonly slackChannel: string;
   readonly mattermostChannel: string;
   readonly mattermostUsername: string;
   /** The seat's own GitLab access level override; "" for the company default. */
@@ -200,12 +205,12 @@ export function seatForm(data: ConfigRole, accessLevel: string): SeatForm {
       CONTACT_IDENTITIES.map(({ key }) => [key, text(contact[key])]),
     ) as Record<HumanContactKey, string>,
     availability: text(data.availability),
+    avatar: data.kind === "human" ? null : avatarOf(data.avatar),
     llm: llmChain(data.llm),
     tokenBudget: budgetForm(data.token_budget),
     schedules: scheduleToggles(data),
     githubTier: text(getPath(data, ["integrations", "github", "tier"])),
     githubRepos: strings(getPath(data, ["integrations", "github", "repos"])),
-    slackChannel: text(getPath(data, ["integrations", "slack", "channel"])),
     mattermostChannel: text(getPath(data, ["integrations", "mattermost", "channel"])),
     mattermostUsername: text(getPath(data, ["integrations", "mattermost", "username"])),
     accessLevel,
@@ -379,6 +384,16 @@ export function seatParts(
       textPart(["contact", identity], initial.contact[identity], form.contact[identity], line),
     ),
     ...textPart(["availability"], initial.availability, form.availability, prose),
+    // ONE PART PER HALF, never the whole block: a colleague's new character
+    // survives an update that only changed this seat's colour, and a half
+    // nobody touched is never written, so a part the document leaves to its
+    // default stays left to it.
+    ...(initial.avatar !== null && form.avatar !== null
+      ? [
+          ...changed(["avatar", "character"], initial.avatar.character, form.avatar.character),
+          ...changed(["avatar", "color"], initial.avatar.color, form.avatar.color),
+        ]
+      : []),
     ...(form.llm !== null && initial.llm !== null
       ? changed(
           ["llm"],
@@ -398,12 +413,6 @@ export function seatParts(
       ["integrations", "github", "repos"],
       listValue(initial.githubRepos),
       listValue(form.githubRepos),
-    ),
-    ...textPart(
-      ["integrations", "slack", "channel"],
-      initial.slackChannel,
-      form.slackChannel,
-      line,
     ),
     ...textPart(
       ["integrations", "mattermost", "channel"],

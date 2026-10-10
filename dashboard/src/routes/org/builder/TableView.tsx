@@ -189,7 +189,7 @@ export function TableView() {
               // A SEAT IS ITS MARK, as it is on the chart: the Crewlet figure
               // for an agent, a person for a human. A container keeps its glyph.
               {...(view.type === "seat"
-                ? seatMark(view.kind)
+                ? seatMark(view.kind, view.avatar)
                 : { icon: NodeGlyph({ kind: nodeGlyphKind(view) }) })}
               // AN AGENT'S ROW IS TONED, as its card is.
               tone={nodeTone(view)}

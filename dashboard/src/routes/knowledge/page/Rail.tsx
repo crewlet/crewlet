@@ -22,7 +22,7 @@ import { StatusMark } from "~/components/work.tsx";
 import { SeatAvatar, seatBadge } from "~/ui/SeatAvatar.tsx";
 import { fmtDateCompact, fmtDateTime, plural, relTime } from "~/lib/format.ts";
 import { readCount, readVia } from "~/lib/pageReads.ts";
-import { shortAge } from "~/lib/seats.ts";
+import { type SeatBadge, shortAge } from "~/lib/seats.ts";
 import { REDUCED_MOTION } from "~/components/time/SpanBar.tsx";
 import type { Heading } from "~/lib/markdown.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
@@ -35,7 +35,7 @@ import type {
 } from "~/contract/pages.ts";
 import type { PageRevision, PageSummary } from "~/protocol/index.ts";
 
-type Who = (handle: string) => { name: string; kind?: "agent" | "human" };
+type Who = (handle: string) => SeatBadge;
 
 /** How many readers, backlinks and revisions a section draws before "Show all". */
 const RAIL_ROWS = 5;
@@ -222,7 +222,13 @@ export function ReadBy({
               const count = readCount(r);
               return (
                 <li key={`${r.handle}/${r.via}`} className="kpage-reader">
-                  <SeatAvatar name={seat.name} kind={seat.kind ?? "agent"} size="sm" decorative />
+                  <SeatAvatar
+                    name={seat.name}
+                    kind={seat.kind ?? "agent"}
+                    avatar={seat.avatar}
+                    size="sm"
+                    decorative
+                  />
                   <span className="kpage-reader-text">
                     {/* TWO LINES, as the artboard draws them: who and how
                         often, then how and when. The count sits on the name's
@@ -297,7 +303,10 @@ export function ReadToday({ count, faces, who }: { count: number; faces: string[
       <AvatarStack
         max={3}
         decorative
-        members={faces.map((h) => ({ id: h, ...seatBadge(who(h).name, who(h).kind) }))}
+        members={faces.map((h) => ({
+          id: h,
+          ...seatBadge(who(h).name, who(h).kind, who(h).avatar),
+        }))}
       />
       <span>read by {plural(count, "agent")} today</span>
     </span>
@@ -451,6 +460,7 @@ export function Revisions({
                       <SeatAvatar
                         name={seat.name}
                         kind={seat.kind ?? "agent"}
+                        avatar={seat.avatar}
                         size="xs"
                         decorative
                       />
@@ -516,7 +526,13 @@ export function Watchers({ watchers, who }: { watchers: string[]; who: Who }) {
           return (
             <li key={h}>
               <a className="kpage-link" href={href(["agents", "seats", h])}>
-                <SeatAvatar name={seat.name} kind={seat.kind ?? "agent"} size="xs" decorative />
+                <SeatAvatar
+                  name={seat.name}
+                  kind={seat.kind ?? "agent"}
+                  avatar={seat.avatar}
+                  size="xs"
+                  decorative
+                />
                 <span className="kpage-link-title">{seat.name}</span>
               </a>
             </li>

@@ -665,7 +665,7 @@ function StructureCard({
             // dashed ring on the neutral one. The card's own edge stays solid
             // for both, since a dashed card means only "a place nothing fills
             // yet".
-            {...seatMark(view.kind)}
+            {...seatMark(view.kind, view.avatar)}
             name={view.name}
             caption={seatKindLabel(view)}
             captionMarks={<SeatMarks view={view} />}
@@ -781,7 +781,7 @@ function ReportingCard({
     <>
       <div {...card.item(item.id)} title={title}>
         <OrgNodeLabel
-          {...seatMark(item.kind)}
+          {...seatMark(item.kind, item.avatar)}
           name={item.name}
           caption={seatKindLabel(item)}
           captionMarks={<ReportingMarks item={item} />}

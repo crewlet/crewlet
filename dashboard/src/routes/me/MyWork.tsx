@@ -631,7 +631,13 @@ function WhoseDay({
             person appears in a list. A handle the chart does not name still
             gets one: the name falls back to the handle, which is what the
             seat page resolves on too. */}
-        <SeatChip name={seat?.name ?? handle} handle={handle} kind={seat?.kind} size="md" />
+        <SeatChip
+          name={seat?.name ?? handle}
+          handle={handle}
+          kind={seat?.kind}
+          avatar={seat?.avatar}
+          size="md"
+        />
         <span className="mono t-caption">{handle}</span>
         <Tag>{ownDay ? "yours" : "their day"}</Tag>
       </div>

@@ -49,7 +49,7 @@ import type { ObjectRef } from "~/app/frame/objects.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { seatBadge } from "~/ui/SeatAvatar.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg, seatLookup, type SeatKind } from "~/lib/seats.ts";
+import { indexOrg, seatLookup, type SeatBadge, type SeatKind } from "~/lib/seats.ts";
 import { describe as describeCron, nextFires } from "~/lib/cron.ts";
 import {
   fmtDateTime,
@@ -132,7 +132,7 @@ export function Wakes({ runners, who }: { runners: string[]; who: Who }) {
         decorative
         members={runners.map((h) => {
           const seat = who(h);
-          return { id: h, ...seatBadge(seat.name, seat.kind) };
+          return { id: h, ...seatBadge(seat.name, seat.kind, seat.avatar) };
         })}
       />
       {/* ELLIPSISED, never clipped: in a column held at its cap beside a
@@ -253,7 +253,7 @@ export function scheduleFacts(row: ScheduleRow, now: number, who: Who): Fact[] {
 }
 
 /** Who a handle is: its seat's name and kind, off the chart the screen holds. */
-type Who = (handle: string) => { name: string; kind?: SeatKind };
+type Who = (handle: string) => SeatBadge;
 
 /**
  * A cron expression and what it means: the expression's chip, and the

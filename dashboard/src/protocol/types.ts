@@ -972,6 +972,12 @@ export interface ConfigRole {
   /** A human seat's identities: one per surface, keyed by [HumanContactKey]. */
   contact?: Record<string, string>;
   availability?: string;
+  /**
+   * How an agent seat is drawn: a Crewlet character and a colour, each
+   * optional, an absent one the first of its list in `contract/avatar.ts`.
+   * Agent seats only; the engine refuses it on a human seat.
+   */
+  avatar?: { character?: string; color?: string; [key: string]: unknown };
   /** Server name to variable name to a `${VAR}` reference or the mask. */
   mcp_env?: Record<string, Record<string, string>>;
   sandbox?: Record<string, unknown>;
@@ -1017,7 +1023,7 @@ export interface ConfigRoleIntegrations {
     webhook_secret?: string;
     [key: string]: unknown;
   };
-  slack?: { bot_token?: string; signing_secret?: string; channel?: string; [key: string]: unknown };
+  slack?: { bot_token?: string; signing_secret?: string; [key: string]: unknown };
   mattermost?: { bot_token?: string; username?: string; channel?: string; [key: string]: unknown };
   [key: string]: unknown;
 }
@@ -1204,6 +1210,12 @@ export interface OrgSeat {
    * says whether a server started. Absent on a human seat.
    */
   tool_sources?: string[];
+  /**
+   * The Crewlet character and the colour this agent seat is drawn as, as
+   * the engine resolved them: its defaults are already filled in. Absent on
+   * a human seat, which is drawn as the person it is.
+   */
+  avatar?: { character: string; color: string };
 }
 
 /**

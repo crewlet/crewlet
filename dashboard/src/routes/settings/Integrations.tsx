@@ -74,7 +74,8 @@ import { useRecheck } from "./recheck.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useManagedConfig } from "~/lib/useWriteAccess.ts";
-import { indexOrg, seatLookup } from "~/lib/seats.ts";
+import type { AgentAvatar } from "~/lib/avatar.ts";
+import { indexOrg, seatLookup, useSeatBadgeOf } from "~/lib/seats.ts";
 import { SetupDialog } from "./SetupDialog.tsx";
 import { DisconnectDialog } from "./DisconnectDialog.tsx";
 import { requestToken, rest, RestError } from "~/protocol/index.ts";
@@ -1559,11 +1560,14 @@ export function EntryRow({
   publicBase,
   guarded = false,
   managed = null,
+  avatarOf,
   onOpen,
   onDisconnect,
 }: {
   entry: Entry;
   rows: Map<string, IntegrationRow>;
+  /** How an agent on the tool's roster is drawn, by handle, off the chart. */
+  avatarOf?: (handle: string) => AgentAvatar | null | undefined;
   /** The answer's `tools`: the engine's roll-up of every tool. */
   rollups?: IntegrationTool[];
   /**
@@ -1766,7 +1770,13 @@ export function EntryRow({
                     the console does on its roster: a row of bare names reads
                     as configuration, and a row with the agent's mark reads
                     as the person it stands for. */}
-                <SeatAvatar name={seat.name || seat.handle} kind="agent" size="sm" decorative />
+                <SeatAvatar
+                  name={seat.name || seat.handle}
+                  kind="agent"
+                  avatar={avatarOf?.(seat.handle)}
+                  size="sm"
+                  decorative
+                />
                 <div className="int-row-identity">
                   <span className="int-row-name">
                     {seat.name || seat.handle}
@@ -3011,6 +3021,11 @@ export function Integrations({ kind }: { kind?: string }) {
   // A MANAGED DOCUMENT (ADR-0030): what writes it is held on every card, with
   // who manages it; a credential's rotation stays open.
   const managed = useManagedConfig();
+  // HOW EACH AGENT IS DRAWN on a tool's roster and in its disconnect dialog,
+  // off the chart: both are handed the resolver rather than reaching for the
+  // store, so they draw in a test with no provider above them.
+  const badgeOf = useSeatBadgeOf();
+  const avatarOf = useCallback((handle: string) => badgeOf(handle).avatar, [badgeOf]);
   // Traffic counters are not pushed, and they move slowly; a minute is the
   // right cadence for "is anything arriving at all".
   //
@@ -3279,6 +3294,7 @@ export function Integrations({ kind }: { kind?: string }) {
           stuck={dropping.stuck || undefined}
           apps={dropping.apps}
           appPath={dropping.appPath}
+          avatarOf={avatarOf}
           onClose={() => setDropping(null)}
           // The row does not vanish here: the engine keeps the block until
           // the third-party app teardown succeeds, so what a re-read shows
@@ -3400,6 +3416,7 @@ export function Integrations({ kind }: { kind?: string }) {
             publicBase={setup.base?.value}
             guarded={setup.guarded}
             managed={managed}
+            avatarOf={avatarOf}
             onOpen={(action, reason) => openForm(focus, action, reason)}
             onDisconnect={() =>
               setDropping({

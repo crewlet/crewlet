@@ -16,6 +16,7 @@ import { href } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
+import type { AgentAvatar } from "~/lib/avatar.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { companyDateLabel, plural } from "~/lib/format.ts";
 import type { WorkProjectRow } from "~/protocol/index.ts";
@@ -76,6 +77,9 @@ export function Projects() {
               leadName={
                 p.lead.handle ? (index.byHandle.get(p.lead.handle)?.name ?? p.lead.handle) : ""
               }
+              leadAvatar={
+                p.lead.handle ? (index.byHandle.get(p.lead.handle)?.avatar ?? null) : null
+              }
             />
           ))}
         </ul>
@@ -93,7 +97,15 @@ function open(p: WorkProjectRow): number {
   return p.task_counts.todo + p.task_counts.active;
 }
 
-function ProjectRow({ project, leadName }: { project: WorkProjectRow; leadName: string }) {
+function ProjectRow({
+  project,
+  leadName,
+  leadAvatar,
+}: {
+  project: WorkProjectRow;
+  leadName: string;
+  leadAvatar: AgentAvatar | null;
+}) {
   const { todo, active, done } = project.task_counts;
   const whole = todo + active + done;
   const pct = whole > 0 ? Math.round((done / whole) * 100) : null;
@@ -124,6 +136,7 @@ function ProjectRow({ project, leadName }: { project: WorkProjectRow; leadName: 
                 name={leadName}
                 size="xs"
                 kind={project.lead.kind === "human" ? "human" : "agent"}
+                avatar={leadAvatar}
               />
             )}
             {project.target_date && <span>{companyDateLabel(project.target_date)}</span>}

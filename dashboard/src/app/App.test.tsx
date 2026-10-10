@@ -140,7 +140,7 @@ describe("routing", () => {
   // Live row carries the count everywhere else. Drawn in every bar it sat
   // between a task's trail and its actions, and pushed a profile's controls
   // past a phone's edge.
-  test("the working chip is in Home's page bar and in no other", () => {
+  test("the working chip is in Home's page bar and in no other", async () => {
     for (const [hash, drawn] of [
       ["#/", true],
       ["#/work", false],
@@ -150,7 +150,10 @@ describe("routing", () => {
     ] as const) {
       location.hash = hash;
       const { store, view } = mount();
-      act(() => {
+      // AWAITED: a screen reads its chunk through `use`, and a synchronous
+      // act stops flushing at the first render that used a promise, settled
+      // or not, so the re-render this push causes would be left unflushed.
+      await act(async () => {
         store.applyAgents([{ id: "a1", role: "Agent SWE", activity: "working" }] as never);
       });
       const chip = view.container.querySelector(".page-bar .working-now");
@@ -159,7 +162,7 @@ describe("routing", () => {
     }
   }, 30_000);
 
-  test("every destination renders a screen rather than a blank", () => {
+  test("every destination renders a screen rather than a blank", async () => {
     const visited = DESTINATIONS.map((item) => buildHash(item.path));
     // The two-level routes are the reason the list is derived: a hand-written
     // one would not have them.
@@ -168,6 +171,9 @@ describe("routing", () => {
     for (const hash of visited) {
       location.hash = hash;
       const { view } = mount();
+      // AWAITED, for the reason the working chip's case gives: what a screen
+      // renders after its first pass is flushed only by an awaited act.
+      await act(async () => {});
       expect(
         view.container.querySelector(".crewlet-app-shell__content")?.children.length,
         hash,

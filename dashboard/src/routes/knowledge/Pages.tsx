@@ -500,7 +500,14 @@ export function Pages({ container: fromPath }: { container?: string }) {
                 cell: (r) => {
                   if (!r.author) return <span className="muted">the engine</span>;
                   const who = index.byHandle.get(r.author);
-                  return <SeatCell handle={r.author} name={who?.name} kind={who?.kind} />;
+                  return (
+                    <SeatCell
+                      handle={r.author}
+                      name={who?.name}
+                      kind={who?.kind}
+                      avatar={who?.avatar}
+                    />
+                  );
                 },
               },
               {

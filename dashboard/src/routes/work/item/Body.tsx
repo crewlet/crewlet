@@ -237,6 +237,7 @@ export function Checklists({ item, chrome }: { item: WorkItem; chrome: RowChrome
                         handle={entry.assignee}
                         seatName={chrome.seatName}
                         seatKind={chrome.seatKind}
+                        seatAvatar={chrome.seatAvatar}
                       />
                     )}
                   </li>
@@ -340,6 +341,7 @@ export function Subtasks({
             handle={row.assignee}
             seatName={chrome.seatName}
             seatKind={chrome.seatKind}
+            seatAvatar={chrome.seatAvatar}
             ring={row.assignee ? ringOf?.(row.assignee) : undefined}
           />
         </a>

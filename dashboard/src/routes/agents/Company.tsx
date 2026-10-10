@@ -113,6 +113,7 @@ function SeatLinks({ seats, style }: { seats: Seat[]; style?: CSSProperties }) {
             name={seat.name}
             size="sm"
             kind={seat.kind === "human" ? "human" : "agent"}
+            avatar={seat.avatar}
             decorative
             title={seat.name}
           />

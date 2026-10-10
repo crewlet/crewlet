@@ -140,11 +140,13 @@ check", "Lead after the check" or "Manager after the check" for a moment
 rather than show an answer the engine has not given.
 
 The builder draws the organization the way the console's org chart does. An
-agent seat is the Crewlet figure on a card toned purple, with the branch
-arriving at it and its table row in the same hue; a person's seat is a
-person's glyph in a dashed ring; a unit and the company are their own glyphs;
-and every node but an agent seat is drawn on the same neutral surface. One hue
-for one kind: it is never a hash of a name, so a renamed seat keeps it. The
+agent seat is its own Crewlet character on a card toned in its own colour,
+with the branch arriving at it and its table row in the same hue; a person's
+seat is a person's glyph in a dashed ring; a unit and the company are their
+own glyphs; and every node but an agent seat is drawn on the same neutral
+surface. An agent's character and colour are the ones its author chose (see
+[A seat](#a-seat)), the original Crewlet in purple until somebody does: they
+are never a hash of a name, so a renamed seat keeps them. The
 selected node's card takes the accent on its own edge. The live org chart
 (Agents › Org chart) draws the same nodes, marks and hue, with what each seat
 is doing under its name, and both are drawn on the same dotted field, which
@@ -327,7 +329,11 @@ unit reference names exactly one unit. The dialog starts with a name nobody
 holds, and when you type a name that is taken it offers the next free one,
 such as "Software Engineer 2". A human seat needs one contact identity before
 the company can be saved; the dialog asks for it, and it can also be added
-later in the seat's editor.
+later in the seat's editor. An agent seat is added with a profile icon: the
+dialog suggests the first Crewlet character no agent in the draft wears yet
+and the next colour round the six, so a company growing one agent at a time is
+told apart before anybody has chosen, and you can pick another character and
+colour before adding it.
 
 ## Editing a node
 
@@ -396,6 +402,7 @@ as `${NAME}` first; a reference is a name, so it survives the rename.
 |---|---|
 | Name | Seat names are unique. An existing seat keeps its handle through a rename, and with it its memory and mailbox, but an agent seat that is renamed onboards again: its onboarding progress is stamped with its own name and the names of the units above it. |
 | Handle | Only on a seat added in this draft. Leave it empty and the engine derives one from the name; the editor shows the derived handle once a check has seen the seat under the name it has now. An existing seat's handle is its identity (its memory and mailbox attach to it), so it is not editable. |
+| Profile icon: character, color | Agent seats. One of the thirty Crewlet characters and one of six colours, written to the seat's `avatar`. The chosen character and colour are the seat's badge on every screen and its node on both charts. A seat that never chose is drawn as the original Crewlet in purple, and changing only one of the two writes only that one. |
 | Email, goal, backstory, responsibilities | |
 | Behavioral guidelines | Agent seats. |
 | Manages | Seats and units. Seats this seat manages automatically as a unit's lead are listed apart, because the engine adds them whatever the list says. |
@@ -432,7 +439,7 @@ credential is ever shown.
   block enrols the seat in GitHub; create its app from Integrations. A seat's
   app permissions are fixed when the app is created, so after changing the tier
   of a seat whose app exists, raise the app's permissions at GitHub as well.
-- **Slack:** the default channel ID, for a seat that has its own Slack app.
+- **Slack:** whether the seat speaks as its own Slack app. A seat's app has no channel of its own: it speaks in its unit's `channel`.
 - **Mattermost:** the default channel name, for a seat that has its own bot.
   The engine provisions a bot only where the seat's `bot_token` is a whole
   `${NAME}` reference, so for such a seat the bot username is read-only:
@@ -451,10 +458,10 @@ Datadog or Mattermost (the engine provisions every agent seat), a per-seat
 Datadog role, GitLab tiers beyond developer and maintainer, and flags that
 grant access to everything (an empty repository list already does).
 
-Two more things the builder deliberately does not have. A seat has no colour
-of its own beyond its kind's: every agent seat takes the same purple and every
-person's seat none, so seats are told apart by their names and their marks.
-And the zoom is the chart's own:
+Two more things the builder deliberately does not have. A colour nobody
+chose: an agent seat is drawn in the colour its profile icon names and a
+person's seat and a unit in none, so no hue is ever made from a name. And the
+zoom is the chart's own:
 zoom in, zoom out and fit are buttons on the chart and keys while it has focus
 (plus, minus and zero), the percentage between the buttons opens a field to
 type one into, and Ctrl or Command with the wheel zooms toward the pointer.
@@ -544,7 +551,7 @@ seat goes:
 because the change removes fields: the engine refuses a human seat every
 runtime field (models, sandbox, token budget, workers, learning, schedules,
 placement, chat app blocks, the project and space it owns, tool credentials,
-behavioral guidelines and its own GitHub App), and refuses an agent seat
+behavioral guidelines, its own GitHub App and its profile icon), and refuses an agent seat
 `contact` and `availability`. The dialog lists the fields by name before
 anything is recorded, and calls out the ones that hold credentials: the builder
 never shows a credential, so it cannot type one back in and the value is gone

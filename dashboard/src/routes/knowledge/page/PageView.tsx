@@ -46,7 +46,7 @@ import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg, seatLookup } from "~/lib/seats.ts";
+import { type SeatBadge, indexOrg, seatLookup } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
 import { useMediaQuery } from "~/lib/media.ts";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
@@ -69,7 +69,7 @@ import {
   Watchers,
 } from "./Rail.tsx";
 
-type Who = (handle: string) => { name: string; kind?: "agent" | "human" };
+type Who = (handle: string) => SeatBadge;
 
 /** How often a page re-reads itself, and how often who read it. */
 const PAGE_POLL_MS = 20_000;
@@ -142,7 +142,15 @@ function DocHead({ detail, who, now }: { detail: PageDetail; who: Who; now: numb
     <header className="kpage-head">
       <h1 className="kpage-title">{page.title}</h1>
       <div className="kpage-meta">
-        {seat && <SeatAvatar name={seat.name} kind={seat.kind ?? "agent"} size="xs" decorative />}
+        {seat && (
+          <SeatAvatar
+            name={seat.name}
+            kind={seat.kind ?? "agent"}
+            avatar={seat.avatar}
+            size="xs"
+            decorative
+          />
+        )}
         <span>
           Updated by <b>{seat ? seat.name : "the engine"}</b>{" "}
           <time dateTime={at} title={fmtDateTime(at)}>

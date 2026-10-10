@@ -45,6 +45,7 @@
  * vanishing with every edit and coming back a moment later.
  */
 
+import { avatarOf, type AgentAvatar } from "~/lib/avatar.ts";
 import type { CompanyDocument, ConfigWarning, DerivedSeat, DerivedUnit } from "~/protocol/index.ts";
 import type { TreeInput } from "@crewlethq/ui";
 import { checkedDocument, type BuilderState } from "./model/reducer.ts";
@@ -161,6 +162,8 @@ export interface SeatView {
   readonly key: NodeKey;
   readonly name: string;
   readonly kind: SeatKind;
+  /** How an agent seat is drawn, from the draft's own block; null for a person. */
+  readonly avatar: AgentAvatar | null;
   /**
    * The handle the engine runs it under: declared, carried by its key, or
    * reported by the last check while the seat is still called what that
@@ -362,6 +365,7 @@ export function structure(inputs: ChartInputs): Structure {
       key: seat.key,
       name: seat.data.name,
       kind,
+      avatar: kind === "agent" ? avatarOf(seat.data.avatar) : null,
       handle,
       saved: savedSeat,
       running,
@@ -507,6 +511,12 @@ export interface ReportingItem {
   readonly name: string;
   readonly kind: SeatKind;
   /**
+   * How an agent seat is drawn: the draft's own block for a seat still in it,
+   * the original Crewlet in purple for one the derivation alone names, and
+   * null for a person.
+   */
+  readonly avatar: AgentAvatar | null;
+  /**
    * The handle, read as the structure chart reads it for a seat still in the
    * draft (`undefined` while no check has reported it), else the one the
    * derivation carries.
@@ -548,11 +558,13 @@ export function reporting(inputs: ChartInputs): Reporting {
     const key = node.seat.path === undefined ? undefined : sent.index.byPath.get(node.seat.path);
     const found = key === undefined ? undefined : locate(draft, key);
     const current = found?.kind === "seat" ? found.node : undefined;
+    const kind = current ? kindOf(current.data) : node.seat.kind === "human" ? "human" : "agent";
     const item: ReportingItem = {
       id: key ?? `reporting:${node.index}`,
       key: current ? key! : null,
       name: current?.data.name ?? node.seat.name,
-      kind: current ? kindOf(current.data) : node.seat.kind === "human" ? "human" : "agent",
+      kind,
+      avatar: kind === "agent" ? avatarOf(current?.data.avatar) : null,
       handle: current ? engine.handles.get(current.key) : node.seat.handle,
       root,
       ...(node.cycle ? { cycleSize: node.cycle.length } : {}),

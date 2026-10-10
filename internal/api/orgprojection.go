@@ -56,7 +56,7 @@ import (
 //
 // # Resolved values: what a seat runs on and what it can reach
 //
-// Two seat fields are RESOLVED rather than authored, and both for the reason
+// Three seat fields are RESOLVED rather than authored, and all for the reason
 // the derived hierarchy is: the rule is one a second implementation gets
 // wrong. [OrgSeat.LLM] is every phase's provider chain as a turn resolves it
 // ([phase.Resolve], the function the turn's own chain goes through) — a seat
@@ -66,9 +66,12 @@ import (
 // to re-run four levels of precedence. [OrgSeat.ToolSources] is the servers
 // the seat is GRANTED ([config.MCPServer.Grants], the rule the engine starts
 // a seat's children by), which depends on the company's server list and on
-// credentials the seat may inherit from its unit.
+// credentials the seat may inherit from its unit. [OrgSeat.Avatar] is the
+// character and colour an agent seat is drawn as ([config.RoleAvatar.Resolved]),
+// its defaults filled in, so no screen keeps a copy of what an unset avatar
+// looks like.
 //
-// Neither carries anything a reader could act with. A provider KEY is the
+// None carries anything a reader could act with. A provider KEY is the
 // label a document gives a model entry (`fast`, `review`), never the model's
 // account, endpoint or key, and a server NAME is the label its tools are
 // already prefixed with in every prompt; the entries they name, and every
@@ -138,6 +141,13 @@ type OrgSeat struct {
 	Manages              []string `json:"manages,omitempty"`
 	Availability         string   `json:"availability,omitempty"`
 
+	// Avatar is RESOLVED (see the package doc): the Crewlet character and the
+	// colour an agent seat is drawn as, each as written or its default where
+	// the seat names none, so every reader draws the same seat the same way
+	// without knowing the defaults. Absent on a human seat, which is drawn as
+	// the person it is.
+	Avatar *OrgAvatar `json:"avatar,omitempty"`
+
 	// TokenBudget is this seat's own ceilings, as written; a window it does
 	// not name is capped only by the company's.
 	TokenBudget *OrgTokenBudget `json:"token_budget,omitempty"`
@@ -157,6 +167,13 @@ type OrgSeat struct {
 	// that failed to start is still listed, and the node heartbeat's MCP
 	// report is what says it failed. Absent on a human seat.
 	ToolSources []string `json:"tool_sources,omitempty"`
+}
+
+// OrgAvatar is how an agent seat is drawn: a character id and a colour name,
+// as plain strings for the reason OrgSeat spells its enums as strings.
+type OrgAvatar struct {
+	Character string `json:"character"`
+	Color     string `json:"color"`
 }
 
 // OrgTokenBudget is a token budget on the wire: the most one scope may spend
@@ -267,6 +284,8 @@ func (b orgBuilder) seats(roles []config.Role) []OrgSeat {
 		if run := b.asRun[r]; run != nil && run.IsAgent() {
 			seat.LLM = b.llm(run)
 			seat.ToolSources = b.toolSources(run)
+			look := r.Avatar.Resolved()
+			seat.Avatar = &OrgAvatar{Character: string(look.Character), Color: string(look.Color)}
 		}
 		out = append(out, seat)
 	}

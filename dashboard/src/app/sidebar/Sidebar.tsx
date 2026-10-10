@@ -57,6 +57,7 @@ import { glyphFor } from "~/ui/glyph.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useAgents, useConnection, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
+import type { AgentAvatar } from "~/lib/avatar.ts";
 import { activityOf, indexOrg, ringOf, turnItemKey } from "~/lib/seats.ts";
 import { runningShortList, turnIdOf, watchLink } from "~/lib/turns.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
@@ -119,6 +120,10 @@ export function Sidebar({
   const seatName = index.byHandle.get(viewer.handle)?.name ?? "";
   const names = useMemo(
     () => (row: AgentRow) => index.byHandle.get(row.handle ?? "")?.name ?? row.role,
+    [index],
+  );
+  const avatars = useMemo(
+    () => (row: AgentRow) => index.byHandle.get(row.handle ?? "")?.avatar ?? null,
     [index],
   );
 
@@ -282,7 +287,7 @@ export function Sidebar({
         </RailBoundary>
         {/* LAST, so a turn starting or ending moves nothing above it. */}
         <RailBoundary label="Running" resetKey={at}>
-          <RunningSection path={route.path} running={running} names={names} />
+          <RunningSection path={route.path} running={running} names={names} avatars={avatars} />
         </RailBoundary>
       </SidebarNav>
     </AppShell.Rail>
@@ -493,10 +498,13 @@ function RunningSection({
   path,
   running,
   names,
+  avatars,
 }: {
   path: string[];
   running: ReturnType<typeof runningShortList>;
   names: (row: AgentRow) => string;
+  /** How each running agent is drawn, off the chart; null where it holds no such seat. */
+  avatars: (row: AgentRow) => AgentAvatar | null;
 }) {
   const { working, shown, more } = running;
   if (working.length === 0) return null;
@@ -514,6 +522,7 @@ function RunningSection({
               <SeatAvatar
                 name={name}
                 kind="agent"
+                avatar={avatars(row)}
                 size="xs"
                 ring={ringOf(activityOf(row))}
                 decorative

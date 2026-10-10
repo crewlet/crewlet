@@ -57,6 +57,7 @@ import type { GlyphName } from "@crewlethq/icons/glyphs";
 import { Mark } from "~/ui/glyph.tsx";
 import { type Tone } from "~/ui/primitives.tsx";
 import { fmtCount, fmtDateTime, fmtDuration, relTime } from "~/lib/format.ts";
+import type { AgentAvatar } from "~/lib/avatar.ts";
 import { handleLabel, type SeatKind } from "~/lib/seats.ts";
 import { workItemLabel } from "~/lib/turns.ts";
 import type { WorkItemRef } from "~/protocol/index.ts";
@@ -202,6 +203,7 @@ export function SeatCell({
   handle,
   name,
   kind,
+  avatar,
   title,
 }: {
   handle?: string | null;
@@ -223,6 +225,8 @@ export function SeatCell({
    * in lib/seats.ts), which is what draws an operator as the person they are.
    */
   kind?: SeatKind;
+  /** How an agent is drawn, where the chart holds the seat. */
+  avatar?: AgentAvatar | null | undefined;
 }) {
   if (!handle) return <EmptyValue label="Nobody" />;
   return (
@@ -235,6 +239,7 @@ export function SeatCell({
         name={name || handle}
         size="xs"
         kind={kind === "human" ? "human" : "agent"}
+        avatar={avatar}
         decorative
       />
       <span className="truncate">{name || handle}</span>
@@ -253,10 +258,24 @@ export function SeatCell({
  * identifies a seat by its badge, so the same seat was a squircle on Work and
  * a processor on Activity. This is the badge, without the link.
  */
-export function SeatLabel({ name, kind }: { name: string; kind?: SeatKind }) {
+export function SeatLabel({
+  name,
+  kind,
+  avatar,
+}: {
+  name: string;
+  kind?: SeatKind;
+  avatar?: AgentAvatar | null | undefined;
+}) {
   return (
     <span className="cell-seat" title={name}>
-      <SeatAvatar name={name} size="xs" kind={kind === "human" ? "human" : "agent"} decorative />
+      <SeatAvatar
+        name={name}
+        size="xs"
+        kind={kind === "human" ? "human" : "agent"}
+        avatar={avatar}
+        decorative
+      />
       <span className="truncate">{name}</span>
     </span>
   );

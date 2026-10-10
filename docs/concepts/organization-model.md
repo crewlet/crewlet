@@ -91,6 +91,12 @@ Role (a SEAT: can live at root level OR inside a unit)
                                         [Scheduling](scheduling.md))
 ```
 
+How an agent seat is DRAWN (its `avatar`: a Crewlet character and a colour)
+is deliberately not on the runtime `Role`. It is presentation only, so it
+travels from the document to the org the dashboard reads (`GET /org`) and
+stops there: no prompt, route or placement reads it. See the
+[Role Fields Summary](../getting-started/configuration.md#role-fields-summary).
+
 Roles can live in two places:
 
 - **Inside a unit** (`units[].roles`): scoped to that unit for MCP env inheritance and lead auto-management. The unit's `project` gives the team its tracker "home" (routing + write target), but does not scope what the role can *read*.

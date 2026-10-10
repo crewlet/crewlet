@@ -622,6 +622,7 @@ function Reports({ seat }: { seat: Seat }) {
                   name={r.name}
                   size="sm"
                   kind={r.kind === "human" ? "human" : "agent"}
+                  avatar={r.avatar}
                   decorative
                 />
                 <span className="truncate t-cell prof-report-name">{r.name}</span>

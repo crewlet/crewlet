@@ -24,8 +24,8 @@
  * every key it does not model.
  *
  * A FIELD FOR A TOOL IS DRAWN ONLY WHERE THE TOOL IS. A seat's GitHub tier,
- * Slack channel, Mattermost channel and GitLab access level mean something
- * only when the company has connected that tool, so each says "<Tool> is not
+ * Mattermost channel and GitLab access level mean something only when the
+ * company has connected that tool, so each says "<Tool> is not
  * connected" instead of offering a setting that does nothing. A project and a
  * space are NOT a tool's: they are the seat's or unit's own `project` and
  * `space`, naming a container on whichever tracker and knowledge base the
@@ -78,6 +78,7 @@ import {
 } from "./editorForm.ts";
 import {
   ACKNOWLEDGEMENT_TEXT,
+  AvatarField,
   EditorSection,
   NodeProblems,
   NotConnected,
@@ -89,6 +90,7 @@ import {
   placeOnFields,
 } from "./dialogParts.tsx";
 import { NodeGlyph, type NodeGlyphKind } from "~/ui/orgNodes.tsx";
+import type { AvatarCharacter } from "~/lib/avatar.ts";
 import { declaredHandle, type Segment } from "./model/document.ts";
 import { allSeats, allUnits, locate, type DraftSeat, type DraftUnit } from "./model/draft.ts";
 import { getPath, isRecord, jsonEqual } from "./model/json.ts";
@@ -224,6 +226,7 @@ const READ_ONLY_REASON = "These fields are for reading, so there is nothing to a
 function EditorShell({
   title,
   mark,
+  character,
   name,
   dirty,
   blocked,
@@ -237,6 +240,8 @@ function EditorShell({
   title: string;
   /** What is being edited, for the panel's own mark: see `NodeGlyph`. */
   mark: NodeGlyphKind;
+  /** The character an agent seat's mark is drawn as, as the form holds it now. */
+  character?: AvatarCharacter;
   /** How the node is named in the discard prompt. */
   name: string;
   dirty: boolean;
@@ -282,7 +287,7 @@ function EditorShell({
         // the chart card carry for this node, so the three surfaces mark it
         // identically and the panel says what it is editing before its title
         // is read.
-        icon={<NodeGlyph kind={mark} size="md" />}
+        icon={<NodeGlyph kind={mark} size="md" character={character} />}
         onClose={requestClose}
         // ALWAYS A FORM. The panel is a <form> only while it has a submit
         // handler, and swapping the element as Apply became unavailable would
@@ -810,7 +815,6 @@ function UnitEditor({
 
 const GITHUB_TIER: Segment[] = ["integrations", "github", "tier"];
 const GITHUB_REPOS: Segment[] = ["integrations", "github", "repos"];
-const SLACK_CHANNEL: Segment[] = ["integrations", "slack", "channel"];
 const MATTERMOST_CHANNEL: Segment[] = ["integrations", "mattermost", "channel"];
 const MATTERMOST_USERNAME: Segment[] = ["integrations", "mattermost", "username"];
 
@@ -835,6 +839,9 @@ function seatFieldPaths(
     ...(human
       ? [["contact"] as Segment[], ["availability"] as Segment[]]
       : [
+          ["avatar"] as Segment[],
+          ["avatar", "character"] as Segment[],
+          ["avatar", "color"] as Segment[],
           ["behavioral_guidelines"] as Segment[],
           ["llm"] as Segment[],
           // The block, for a problem about its shape, and each window, so a
@@ -843,7 +850,6 @@ function seatFieldPaths(
           ...BUDGET_WINDOWS.map(({ period }) => ["token_budget", period] as Segment[]),
           ...(schedulesOf(data).length > 0 ? [["schedules"] as Segment[]] : []),
           ...(isConnected(company, "github") ? [GITHUB_TIER, GITHUB_REPOS] : []),
-          ...(seatBlock("slack") ? [SLACK_CHANNEL] : []),
           ...(seatBlock("mattermost") ? [MATTERMOST_CHANNEL, MATTERMOST_USERNAME] : []),
           ...ownsFieldPaths(company),
         ]),
@@ -899,6 +905,7 @@ function SeatEditor({
     <EditorShell
       title={`Edit ${data.name || "seat"}`}
       mark={human ? "human" : "agent"}
+      character={form.avatar?.character}
       name={data.name || "this seat"}
       dirty={dirty}
       blocked={blocked}
@@ -944,6 +951,17 @@ function SeatEditor({
         </ReadOnlyFact>
       )}
       <KindFact seatKey={key} human={human} dirty={dirty} onClose={onClose} />
+      {form.avatar && (
+        <EditorSection title="Profile icon">
+          <AvatarField
+            value={form.avatar}
+            onChange={(avatar) => set({ avatar })}
+            disabled={disabled}
+            characterError={errorFor(["avatar", "character"]) ?? errorFor(["avatar"])}
+            colorError={errorFor(["avatar", "color"])}
+          />
+        </EditorSection>
+      )}
       <ConfigField
         label="Email"
         kind="email"
@@ -1401,19 +1419,13 @@ function IntegrationsSection({
         {!isConnected(company, "slack") ? (
           <NotConnected tool="slack" />
         ) : isRecord(slack) ? (
-          <ConfigField
-            label="Slack channel ID"
-            kind="id"
-            value={form.slackChannel}
-            onChange={(slackChannel) => set({ slackChannel })}
-            required={false}
-            disabled={disabled}
-            help="The ID of this seat's default channel, such as C0123ABCD, not its name."
-            error={errorFor(SLACK_CHANNEL)}
-          />
+          <p className="builder-note muted">
+            This seat speaks as its own Slack app, in its unit's channel.{" "}
+            <ScreenLink to="integrations">Open Integrations</ScreenLink>
+          </p>
         ) : (
           <p className="builder-note muted">
-            This seat has no Slack app of its own, so it has no channel to set.{" "}
+            This seat has no Slack app of its own.{" "}
             <ScreenLink to="integrations">Open Integrations</ScreenLink>
           </p>
         )}
