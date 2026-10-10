@@ -1357,9 +1357,14 @@ one list differently:
 }
 ```
 
-`payload` is present only where the event was fetched by id or by trace: a
-listing deliberately never selects it, because a page of events with every
-payload attached is the query that makes a live screen slow.
+`payload` is on the live `event` push — the event as it was published, which
+is how a screen watching a phase keeps its record once the phase completes —
+and on the reads that exist to show a record whole: `event` (one event by id),
+`turn` (every event of one run) and `phases` (completed-phase records, at most
+60 to a page because of what each one carries). A general listing deliberately
+never selects it — `events`, a `trace`, and the snapshot's feed rows, which are
+the same payload-free row — because a page of events with every payload
+attached is the query that makes a live screen slow.
 
 Every stored type reaches the activity feed — the snapshot's `events` and each
 `event` frame — except `auxiliary_spend`, which is accounting rather than
@@ -1410,8 +1415,9 @@ across with the rounds and the tokens, so the one record the phase publishes
 reports the run rather than the seconds spent collecting its answer.
 
 A finished row carries the phase's **timeline** too, and so does every other
-reader of the record — `phases`, `turn`, `trace` and `event` answer the stored
-payload verbatim: `started_at` (when this segment began — not published minus
+reader of the record — `phases`, `turn` and `event` answer the stored payload
+verbatim, and the live `event` push carries it as published: `started_at`
+(when this segment began — not published minus
 `duration_ms`, which on a resumed phase spans a coding run), `rounds[]` (one
 `{round, started_at, duration_ms, model, input_tokens, output_tokens,
 cache_read_tokens, cache_write_tokens, tool_calls}` per provider call, the
@@ -2300,7 +2306,7 @@ Server → client kinds:
 | `kind` | When | `data` |
 |--------|------|--------|
 | `snapshot` | First envelope after the upgrade succeeds, and again on reconnect. | Same payload as `GET /stream/snapshot` — agents carry their in-flight `live_call` and its `live_call_seq`, so a reconnect re-renders the live row and starts the ordering of the call slot afresh. |
-| `event`    | Every engine event published to `crewlet.events.>`. | `{ id, type, timestamp, source, actor, summary, category, trace_id, span_id, parent_span_id, topic, agent_id?, channel_id?, payload }` — `agent_id` the seat the event concerns and `channel_id` the agent-to-agent channel it belongs to, each read by the rule that fills the store's own column, so the event log narrows its live rows to a seat or a channel exactly as the store narrows its pages — the same shape as a `/events` row, plus the full event `payload` (from which the snapshot feed's `failed` flag is derived).  `agent_phase_completed` events carry the system prompt, response, and tool calls, so LLM invocations stream live; `agent_turn_progress` events (per tool-call round, tagged with `turn_id` / `phase` / `iteration`) stream the in-flight call before its phase record exists. |
+| `event`    | Every event the activity feed carries, as it arrives: each persisted type, inbound deliveries included, except `auxiliary_spend`. A live-only type (`agent_turn_progress`, `agent_spawned`, `agent_terminated`, `budget_meters`) never is one — it moves the projection, which goes out as `agents` or `budget`. | `{ id, type, timestamp, source, actor, summary, category, trace_id, span_id, parent_span_id, topic, failed, agent_id?, channel_id?, payload }` — `agent_id` the seat the event concerns and `channel_id` the agent-to-agent channel it belongs to, each read by the rule that fills the store's own column, so the event log narrows its live rows to a seat or a channel exactly as the store narrows its pages — the same shape as a `/events` row, plus the full event `payload`. `failed` is stamped on the server by the rule that stamps the snapshot's own feed rows, so a failure watched live and the same row after a reload read alike.  `agent_phase_completed` events carry the system prompt, response, and tool calls, so LLM invocations stream live; the call in flight before its phase record exists reaches a client as the seat's `live_call` on the `agents` push, which `agent_turn_progress` (per tool-call round) moves. |
 | `agents`   | After an event moved one or more agents — or a read moved their state: a run record reconcile, or the seat-lease read the five-second tick makes. | The changed agents' overlays, each with its `role`, its `activity` and its `stopped_reason` — the *result* of applying the change, so a client merges them rather than running its own state machine over the raw stream. A `live_call` carries its heavy fields only when their `versions` moved since the last push for the same call, and a client keeps the copy it holds of one left out; every row carries the seat's `live_call_seq`, a `null` call included, which orders the call slot against a `live_call` answer (see [What the projection carries, and what the wire sends](#what-the-projection-carries-and-what-the-wire-sends)). |
 | `seats`    | After a config revision changed the roster. | The COMPLETE seat list, replacing what the client holds. Distinct from `agents` on purpose: that one is a per-role merge, and a merge cannot express the deletion of a role a revision removed. |
 | `sandboxes`| After a detached sandbox run started, asked a question, finished or was lost, and after a reconcile against the durable run record changed the set. | The full in-flight sandbox list. |
