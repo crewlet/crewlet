@@ -357,6 +357,19 @@ type Query struct {
 	// handle and [Reader.ExpandedQuery] adds the viewer's alias.
 	AskedBy Party
 
+	// HandedOffBy is whose HAND-OFFS to narrow to — the work a person filed
+	// and somebody else holds, or nobody yet: what they are following
+	// rather than doing. "Filed by me" alone is the reporter filter, and it
+	// holds the work a person filed for themselves, which is their queue
+	// rather than anything they handed to anybody. A [Party] for the
+	// reason [Query.AskedBy] is one: work a founder filed through their own
+	// assistant is reported by the TOKEN and work they filed from the
+	// dashboard by their SEAT, and a hand-off from one name to the other is
+	// still their own work, not a hand-off. Unassigned work counts: a task
+	// routed to a unit waits for its lead to pick somebody, and that is the
+	// hand-off a founder most needs to see.
+	HandedOffBy Party
+
 	LinkedPage string
 	References string
 	Batch      string
@@ -524,8 +537,8 @@ var QueryKeys = []string{
 	"closed_since", "collaborator",
 	"container", "created", "cursor", "done", "due", "estimate",
 	"fields", "finished", "flag", "group", "group_by", "group_by2",
-	"group_limit", "has_children", "has_dependencies", "has_open_asks",
-	"has_parent", "key", "limit", "linked_page",
+	"group_limit", "handed_off_by", "has_children", "has_dependencies",
+	"has_open_asks", "has_parent", "key", "limit", "linked_page",
 	"max_lag_seconds", "max_lag_seq", "min_position", "parent", "points", "preset",
 	"priorities", "priority", "q", "read_level", "references", "removed",
 	"reporter",
@@ -622,9 +635,10 @@ func ParseQuery(p Params, now time.Time, loc *time.Location) (Query, error) {
 		PriorityListOf: PartyOf(strings.TrimSpace(p.String("priorities"))),
 		// THE SEAT ALONE, for the reason `priorities=` above is: the
 		// alias is the viewer's, added by [Reader.ExpandedQuery].
-		AskedBy: PartyOf(strings.TrimSpace(p.String("asked_by"))),
-		Parent:  p.String("parent"),
-		Root:    p.String("root"),
+		AskedBy:     PartyOf(strings.TrimSpace(p.String("asked_by"))),
+		HandedOffBy: PartyOf(strings.TrimSpace(p.String("handed_off_by"))),
+		Parent:      p.String("parent"),
+		Root:        p.String("root"),
 	}
 
 	if err := q.parseScope(p); err != nil {
