@@ -328,6 +328,30 @@ func CheckLeaseTTL(resource string, ttl time.Duration) error {
 		ErrTTLTooLong, resource, ttl, MaxDutyTTL)
 }
 
+// ExclusiveThrough is the last instant a holder may count on a lease that a
+// claim or a renewal answered as held, having been ASKED at asked: its TTL from
+// that moment, less margin.
+//
+// FROM THE ASKING, never from the answer: the store stamps a lease's expiry on
+// its own clock when it applies the call, which is after the caller asked, so
+// on the caller's clock the lease ends no earlier than asked plus its TTL. It
+// is an interval the caller measures on its own clock from an instant of its
+// own — never its clock compared with the store's deadline, which
+// [Lease.ExpiresAt] forbids. LESS A MARGIN, which the caller names as one
+// interval of its own cadence: the store's clock is not the caller's — a step
+// forward on it ends the lease early — and a caller that looks once an interval
+// learns the end has come up to an interval late. Inside the window no peer can
+// have claimed the lease, so the holder's work is exclusive; past it the holder
+// cannot say so, which is the unknown ADR-0005 has a holder stop at. A margin
+// at or past the TTL leaves a window that has already ended.
+//
+// ONE RULE FOR EVERY CALLER (ADR-0008): the sandbox waiter bounds each box's
+// poll by the claim that started it, and the engine keeps a long duty's work
+// going on what its renewals confirmed.
+func ExclusiveThrough(asked time.Time, ttl, margin time.Duration) time.Time {
+	return asked.Add(ttl - margin)
+}
+
 // Lease is a held lease. Epoch is the fencing token: thread it into writes.
 type Lease struct {
 	Resource string
