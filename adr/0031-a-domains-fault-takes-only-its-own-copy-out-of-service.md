@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/statelog`
-- **Enforced-by:** `internal/engine.TestEveryDomainsCopyIsJudged`, `internal/engine.TestAWrongCopyOfOneDomainLeavesTheOthersInService`, `internal/engine.TestAFaultInADomainThatGatesNoSeatShedsNone`, `internal/estate.TestAFaultInOneDomainRoutesOnlyThatDomainsOperations`, `internal/statelog/statelogtest.TestTheSuiteCatchesADomainThatMisdeclaresItself`
+- **Enforced-by:** `internal/engine.TestEveryDomainsCopyIsJudged`, `internal/engine.TestAWrongCopyOfOneDomainLeavesTheOthersInService`, `internal/engine.TestAFaultInADomainThatGatesNoSeatShedsNone`, `internal/estate.TestAFaultInOneDomainRoutesOnlyThatDomainsOperations`, `internal/search.TestAnOutOfServiceSliceIsCountedMissing`, `internal/search.TestACoordinatorGivenNoRangeStandsInForWhatItsPeersLeftUncovered`, `internal/statelog/statelogtest.TestTheSuiteCatchesADomainThatMisdeclaresItself`
 - **Cost-when-tried:** one declaration (whether a domain's health was a readiness input) answered two questions: does a seat depend on this domain, and is its copy judged at all. The compacted domains answered no, and so escaped the judgement: a vectors or usage copy whose applier stopped, whose rows fell below the log or that held an undecodable record past the grace was served for ever, and nothing said so. The two that answered yes took the WHOLE copy out of service for one log's fault — a knowledge-base applier halted on one page sent every tracker call the node's seats made to a peer, and on a single node refused them all — and a knowledge base that merely lagged its log made every tracker read a last resort. The native code host's design had to choose between gating every seat claim on a busy git log's lag and never judging that log at all.
 - **Tag-status:** unreleased
 
@@ -28,6 +28,15 @@ is per domain the same way. No fault sheds a seat by itself (ADR-0025's
 amendment stands): a fault in a domain that gates seats takes the seat copy out
 with it, so admission is answered by a peer and the node's seats need its view
 of the fleet to be routed; a fault in any other domain never does either.
+
+A search fan-out participant asks the same verdict: a range over a copy that
+is out of service is counted missing, and a vectors copy out of service skips
+the semantic half. A node that answers either — the coordinator itself
+included — is given no range for that kind of search for a while, since every
+node holds the whole corpus: a copy out of service costs one search a slice,
+never every search. A coordinator given no range still scans whatever range
+its peers then leave uncovered, so a broker that fails never empties a search
+it could answer.
 
 ## Why the obvious alternative is wrong
 

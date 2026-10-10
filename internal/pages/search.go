@@ -97,6 +97,11 @@ type SearcherOptions struct {
 	// or one returning empty, excludes nothing — which is the company that
 	// has turned tool skills off.
 	SkillsContainer func() string
+
+	// Copies is this node's verdict on the copies its own range is scanned
+	// from (ADR-0031): a copy out of service covers none of the range,
+	// which the answer counts missing. Nil scans every copy.
+	Copies search.Copies
 }
 
 // NewSearcher builds the native knowledge searcher.
@@ -105,7 +110,7 @@ func NewSearcher(opts SearcherOptions) *Searcher {
 	if opts.Index != nil {
 		s.fan = &search.FanOut{
 			Self:    cmp.Or(opts.Node, soloNode),
-			Local:   search.NodeScanner{Index: opts.Index},
+			Local:   search.NodeScanner{Index: opts.Index, Copies: opts.Copies},
 			Peers:   opts.Peers,
 			Roster:  opts.Roster,
 			Corpus:  opts.Index.Corpus,
@@ -256,7 +261,9 @@ func (s *Searcher) Answer(ctx context.Context, q knowledge.Query) (knowledge.Res
 
 // failed is the answer to a search this node could not run at all: no hits,
 // nothing served, and THIS node named as the participant that did not cover
-// its range — the coordinator always scans, so a failure here is its own.
+// its range — a search fails only on this node's own plan or its own scan, its
+// range or a range it scanned in a silent peer's place, since a peer that does
+// not answer costs a partial answer rather than an error.
 func (s *Searcher) failed(err error) knowledge.Result {
 	return knowledge.Result{Outcome: knowledge.Outcome{
 		Modes: s.fan.Modes(),

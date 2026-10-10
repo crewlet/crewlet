@@ -209,6 +209,18 @@ func (l *localEstate) For(ctx context.Context, domain string) (estate.Backend, b
 	return b, true
 }
 
+// serves reports whether this node's copy of domain is in service, waiting
+// only as [localEstate.For] does — on a copy never judged, up to ctx. For a
+// reader of the copy that is not an estate operation ([searchCopies]), which
+// must not answer from a copy the router has stopped serving.
+func (l *localEstate) serves(ctx context.Context, domain string) bool {
+	n := l.e.native.Load()
+	if n == nil {
+		return true
+	}
+	return l.verdict(ctx, n).serves(domain)
+}
+
 // verdict is the copy's verdict, read again once it is older than
 // [servingRecheck].
 //

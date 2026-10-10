@@ -59,9 +59,11 @@ var alarmMeaning = map[Kind]string{
 	KindSearchSlow: "Interactive search is over its target. The corpus has " +
 		"outgrown what one node's share of it can scan in the budget.",
 	KindSearchDegraded: "Searches are being answered without their semantic " +
-		"half — the embeddings provider or the vector domain is failing.",
+		"half — the embeddings provider or the vector domain is failing, or a " +
+		"node's copy of the vectors is out of service.",
 	KindSearchScoped: "Searches are being answered over part of the corpus " +
-		"because a node did not answer its bucket range.",
+		"because a node did not answer its bucket range, or its copy of what it " +
+		"scans is out of service.",
 	KindHistoryPartial: "Fleet history reads — turns, traces, the event log — " +
 		"are being answered without every node, because one did not answer " +
 		"inside the fleet read budget.",
