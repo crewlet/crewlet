@@ -193,20 +193,17 @@ type events struct {
 	seq int
 }
 
-func (e *events) add(typ string, at time.Time, agent, role string, payload map[string]any) {
+func (e *events) add(typ string, at time.Time, role string, payload map[string]any) {
 	e.t.Helper()
 	e.seq++
 	body, err := json.Marshal(payload)
 	if err != nil {
 		e.t.Fatalf("encode a payload: %v", err)
 	}
-	tags := map[string]string{"agent_id": agent, "agent_role": role}
-	if turn, ok := payload["turn_id"].(string); ok {
-		tags["turn_id"] = turn
-	}
-	if failed, ok := payload["failed"].(bool); ok && failed {
-		tags["failed"] = "true"
-	}
+	// THE WRITER'S OWN TAGS, so every column a day is derived from — the
+	// seat's handle among them — is filled by the rule the publish listener
+	// fills it with, never a hand-picked subset of it.
+	tags := store.ExtractTags(body)
 	if err := e.db.Events().Append(e.t.Context(), store.EventRecord{
 		ID: fmt.Sprintf("ev-%04d", e.seq), Type: typ, Source: role, Category: "agent",
 		Time: at, Actor: role, Tags: tags, Payload: body,
@@ -217,7 +214,7 @@ func (e *events) add(typ string, at time.Time, agent, role string, payload map[s
 
 // phase records one completed phase.
 func (e *events) phase(at time.Time, agent, turn, ph, decision string, input, output int) {
-	e.add("agent_phase_completed", at, agent, "Dev", map[string]any{
+	e.add("agent_phase_completed", at, "Dev", map[string]any{
 		"agent_id": agent, "role": "Dev", "turn_id": turn, "phase": ph,
 		"model": "m-1", "provider_key": "primary", "decision": decision,
 		"input_tokens": input, "output_tokens": output,
@@ -227,10 +224,10 @@ func (e *events) phase(at time.Time, agent, turn, ph, decision string, input, ou
 
 // turn records a turn's two completion records.
 func (e *events) turn(at time.Time, agent, handle, turn string, failed bool, duration time.Duration) {
-	e.add("agent_turn_completed", at, agent, "Dev", map[string]any{
+	e.add("agent_turn_completed", at, "Dev", map[string]any{
 		"agent_id": agent, "role": "Dev", "turn_id": turn, "failed": failed,
 	})
-	e.add("turn_completed", at, agent, "Dev", map[string]any{
+	e.add("turn_completed", at, "Dev", map[string]any{
 		"agent_id": agent, "agent_handle": handle, "role": "Dev", "turn_id": turn,
 		"duration_ms": duration.Milliseconds(),
 	})
@@ -242,7 +239,7 @@ func (e *events) read(at time.Time, agent, turn, via, query string, pages ...str
 	for i, p := range pages {
 		list = append(list, map[string]any{"id": p, "rank": i + 1})
 	}
-	e.add("knowledge_read", at, agent, "Dev", map[string]any{
+	e.add("knowledge_read", at, "Dev", map[string]any{
 		"agent_id": agent, "agent_handle": "dev", "role": "Dev", "turn_id": turn,
 		"via": via, "backend": "native", "query": query, "pages": list,
 	})

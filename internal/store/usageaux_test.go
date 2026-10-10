@@ -148,3 +148,40 @@ func TestAPersonsAuxiliarySpendIsTheirDayNotASeats(t *testing.T) {
 		t.Fatalf("maya's cell = %+v, want both questions' 530 tokens over 3 calls", cell)
 	}
 }
+
+// A SEAT'S DAY NAMES ITS HANDLE FROM ITS SPEND ALONE.
+//
+// The day's spend was folded off columns that named the seat by its id and its
+// role only, so a day on which a seat spent and ended no turn carried no
+// handle, and a seat that has since left the chart — whose handle the
+// publisher cannot take from the organisation — was a named window's row
+// linked nowhere. Every spend record names its seat's handle, and the event
+// log keeps it in a column (node/0047), so the day names it from there.
+//
+// Mutation: name the seat from the spend fold with no handle, and the day
+// carries none.
+func TestASeatsDayNamesItsHandleFromItsSpendAlone(t *testing.T) {
+	t.Parallel()
+	db := open(t)
+	day := time.Now().UTC().Truncate(24 * time.Hour)
+	payload, err := json.Marshal(types.AuxiliarySpend{
+		Agent: "seat-1", AgentHandle: "dev", RoleName: "Dev", Stage: types.AuxStageTurn,
+		Purpose: types.AuxMemoryFilter, Model: "haiku", Calls: 1, TotalTokens: 55,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Events().Append(t.Context(), store.EventRecord{
+		ID: "aux", Type: types.AuxiliarySpend{}.EventType(), Time: day.Add(time.Hour),
+		Category: "system", Tags: store.ExtractTags(payload), Payload: payload,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.UsageForDay(t.Context(), store.UsageWindow{Start: day, End: day.Add(24 * time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Seats) != 1 || got.Seats[0].Handle != "dev" || got.Seats[0].Role != "Dev" {
+		t.Errorf("seats = %+v, want seat-1 named dev by its spend", got.Seats)
+	}
+}
