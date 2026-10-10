@@ -53,14 +53,13 @@ import { SeatLabel } from "~/app/frame/cells.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
-import { CeilingEditor, resetsWords } from "~/components/budgetWrite.tsx";
+import { CeilingEditor } from "~/components/budgetWrite.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
-import { PERIOD_ADJECTIVE, windowOf } from "~/lib/budget.ts";
+import { PERIOD_ADJECTIVE, resetsWords, turnsOverWords, windowOf } from "~/lib/budget.ts";
 import type { CeilingScope, Period } from "~/lib/ceilings.ts";
 import { useNow } from "~/lib/clock.ts";
 import { companyDateLabel, fmtCount, fmtExact, relTime } from "~/lib/format.ts";
-import { dayLabelIn } from "~/lib/range.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
@@ -89,7 +88,7 @@ function stateWords(w: BudgetWindow): string {
       : "within the ceiling";
 }
 
-/** The label a window's span carries: `Sep 29`, `W40`, `September`. */
+/** The label a window's span carries: `Sep 29`, `Week 40`, `September`. */
 function windowName(w: BudgetWindow, zone: string): string {
   if (w.period === "day") return companyDateLabel(w.window);
   if (w.period === "week") return `Week ${w.window.slice(-2).replace(/^0/, "")}`;
@@ -224,15 +223,10 @@ function SeatWindow({
 
 /** When each window turns over, once for every seat: they share the company clock. */
 function resetLine(answer: BudgetsAnswer): string {
-  const zone = answer.timezone;
   const parts = BUDGET_WINDOWS.flatMap(({ period }) => {
     const w = windowOf(answer.org.windows, period);
-    if (!w) return [];
-    const at = Date.parse(w.resets_at);
-    if (!Number.isFinite(at)) return [];
-    return period === "day"
-      ? ["today at midnight"]
-      : [`the ${period} on ${companyDateLabel(dayLabelIn(at, zone))}`];
+    const when = w ? turnsOverWords(w, answer.timezone) : "";
+    return when ? [`the ${period} ${when}`] : [];
   });
   return parts.length ? `Resets ${parts.join(", ")}` : "";
 }

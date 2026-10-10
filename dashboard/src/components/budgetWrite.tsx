@@ -34,10 +34,16 @@ import {
 } from "@crewlethq/ui";
 import { PencilGlyph, SlidersVerticalGlyph } from "@crewlethq/icons/glyphs";
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
-import { PERIOD_ADJECTIVE, PERIOD_WORDS, readCeiling, waitedOn, windowOf } from "~/lib/budget.ts";
+import {
+  PERIOD_ADJECTIVE,
+  PERIOD_WORDS,
+  readCeiling,
+  resetsWords,
+  waitedOn,
+  windowOf,
+} from "~/lib/budget.ts";
 import { ceilingText, whoseCeiling, type CeilingScope, type Period } from "~/lib/ceilings.ts";
-import { companyDateLabel, fmtCount, fmtDateTime, fmtExact } from "~/lib/format.ts";
-import { dayLabelIn } from "~/lib/range.ts";
+import { fmtCount, fmtDateTime, fmtExact } from "~/lib/format.ts";
 import { useOrgBudget } from "~/lib/store-hooks.ts";
 import { useCeilingWrite, type CeilingWrite, type TypedCeilings } from "~/lib/useCeilingWrite.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -48,18 +54,6 @@ import type { BudgetWindow } from "~/protocol/types.ts";
 function periodTitle(period: Period): string {
   const word = PERIOD_ADJECTIVE[period];
   return word.charAt(0).toUpperCase() + word.slice(1);
-}
-
-/**
- * When a window's allowance comes back, as the company's calendar says it:
- * the date for a week or a month ("Oct 1"), the time for a day, which always
- * turns over at the company's midnight.
- */
-export function resetsWords(w: BudgetWindow, zone: string): string {
-  const at = Date.parse(w.resets_at);
-  if (!Number.isFinite(at)) return "";
-  if (w.period === "day") return `resets at midnight (${zone || "UTC"})`;
-  return `resets ${companyDateLabel(dayLabelIn(at, zone))}`;
 }
 
 // ---------------------------------------------------------------------------

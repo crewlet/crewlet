@@ -2438,6 +2438,18 @@ Ordered by what it costs to ignore, then newest first inside a severity. Every
 row says what happened AND what it costs to leave it, and carries a link to
 where the answer is.
 
+**A row is read, not parsed**, so every value in it is said the way the rest of
+the dashboard says it — never as the engine sent it. A budget window is its
+span on the company clock ("97 of 100 tokens are spent this week"), when it
+turns over is read on that clock by the same helper the Budgets screen captions
+with (`lib/budget.ts`'s `turnsOverWords`: "on Oct 12", "at midnight
+(Asia/Tokyo)"), the gate's last refusal is how long ago it was, a quiet round
+is how long it has been quiet, and a setting is named by what it is ("raise the
+company's weekly ceiling", "an API token the engine is configured to accept")
+rather than by its config key. The rows used to print `2026-W41`, two raw ISO
+instants and `token_budget.week` in the one sentence a person opens when the
+company stops working.
+
 **Each condition has ONE home**, by its subject (`WHERE_OF`), so none is drawn
 twice and none nowhere:
 
