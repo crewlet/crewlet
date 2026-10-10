@@ -214,8 +214,11 @@ owns, written at the top of the seat rather than under `integrations:`),
 acts on GitHub as their own `contact.github_login`. That refusal is an
 [admission rule](configuration.md#what-a-stored-revision-is-held-to): a
 revision being applied that carries the block still runs, and the next write
-that keeps it is refused. The reverse holds too: `contact` or `availability`
-on an agent seat is refused with a hint to set `kind: human`.
+that keeps it is refused. So is an `avatar` (an agent's Crewlet character
+and colour): a person is drawn as themself, the circle and their initials,
+and the block would read as a setting and change nothing. The reverse holds
+too: `contact` or `availability` on an agent seat is refused with a hint to
+set `kind: human`.
 
 A unit's `mcp_env` is shared with its direct **agent** members only. A
 human member inherits none of it, so a human seat can sit in, and lead, a

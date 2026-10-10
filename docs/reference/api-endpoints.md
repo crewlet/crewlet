@@ -2622,6 +2622,7 @@ push, so all three surfaces carry exactly one shape.
           "behavioral_guidelines": ["..."],
           "manages": ["Platform"],
           "token_budget": {"day": 2000000},
+          "avatar": {"character": "hexlet", "color": "cyan"},
           "llm": {
             "execute": ["fast", "backup"], "review": ["big", "fast"],
             "subagent": ["fast", "backup"], "auxiliary": ["cheap"], "judge": ["cheap"],
@@ -2634,7 +2635,13 @@ push, so all three surfaces carry exactly one shape.
         {
           "name": "Platform",
           "purpose": "...",
-          "roles": [{"name": "Platform Engineer", "goal": "..."}]
+          "roles": [
+            {
+              "name": "Platform Engineer",
+              "goal": "...",
+              "avatar": {"character": "crewlet", "color": "purple"}
+            }
+          ]
         }
       ]
     }
@@ -2681,7 +2688,7 @@ with paths comes back from [a configuration write or dry run](#what-a-write-answ
 **What it carries, and nothing else.** The company's `name`, `mission`,
 `vision`, `policies`, `timezone`, `token_budget` and `derived`; for each seat its `name`, `kind`, `handle`, `goal`,
 `backstory`, `responsibilities`, `behavioral_guidelines`, `manages`,
-`availability`, `token_budget`, `llm` and `tool_sources`; for each unit its `name`, `type`, `purpose`, `lead`, `goals`,
+`availability`, `token_budget`, `avatar`, `llm` and `tool_sources`; for each unit its `name`, `type`, `purpose`, `lead`, `goals`,
 `channel`, `knowledge`, `roles` and `children`. Every value is the one the
 company document holds, as written: a seat with no declared `handle` has none
 here (the engine derives it from the name), and a unit that inherits its lead
@@ -2703,9 +2710,17 @@ an absent key is "no ceiling", never zero. How much of each window is spent,
 and when it resets, is [`GET /budgets`](#get-budgets); this is the rule those
 meters count against.
 
-**A seat's `llm` and `tool_sources` are RESOLVED**, for the reason `derived`
-is: the rule is one a client would get wrong. Both are absent on a human seat,
-which runs neither.
+**A seat's `avatar`, `llm` and `tool_sources` are RESOLVED**, for the reason
+`derived` is: the rule is one a client would get wrong. All three are absent on
+a human seat, which is drawn as the person it is and runs neither.
+
+- **`avatar`** is how the agent seat is drawn: its `character` and its
+  `color`, each as the seat's own `avatar` block writes it and the default
+  where it writes none (`crewlet`, the original, and `purple`), so every agent
+  seat carries both and a seat that never chose is drawn as every agent was
+  before a seat could. A value a newer engine admitted that this dashboard
+  does not draw arrives as written; the dashboard draws that part as the
+  default.
 
 - **`llm`** is every phase's provider chain exactly as a turn resolves it —
   keyed by phase (`execute`, `review`, `subagent`, `auxiliary`, `judge`,
