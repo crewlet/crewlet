@@ -234,7 +234,7 @@ describe("applying", () => {
     cleanup();
 
     edit(keyedState(fixtureCompany()), "unit:Engineering", readOnly);
-    expect(field("Type")).toBeDefined();
+    expect(screen.getByRole("group", { name: labelled("Type") })).toBeDefined();
     expect(enabled()).toEqual([]);
     cleanup();
 
@@ -1069,27 +1069,66 @@ describe("a unit", () => {
   });
 
   /*
-   * ONE CONTROL FOR ONE STRING. The type used to be a select whose "Custom
-   * type" option revealed a SECOND labelled field below it, so a custom type
-   * cost two stacked controls. It is one field that offers the engine's nine
-   * names and takes whatever is typed, which is exactly what the engine
-   * accepts.
+   * ONE ROW OF CHIPS, THE CONSOLE'S: a chip per name the engine knows, and a
+   * Custom chip whose box opens in the row after it. Every answer is on screen
+   * at once, where the box before it offered the names behind a click.
    */
-  test("a unit type the engine does not name is typed in the same one box", () => {
+  test("the nine names the engine knows are chips, and choosing one sets the type", () => {
     const view = edit(keyedState(fixtureCompany()), "unit:Platform");
-    expect(screen.queryByLabelText(labelled("Custom type"))).toBeNull();
-    type("Type", "tribe");
+    const row = screen.getByRole("radiogroup", { name: "Unit type" });
+    expect(
+      within(row)
+        .getAllByRole("radio")
+        .map((chip) => chip.textContent),
+    ).toEqual([
+      "Division",
+      "Department",
+      "Group",
+      "Team",
+      "Squad",
+      "Pod",
+      "Guild",
+      "Chapter",
+      "Unit",
+      "Custom",
+    ]);
+    fireEvent.click(within(row).getByRole("radio", { name: "Department" }));
+    apply();
+    const found = locate(view.state().draft, "unit:Platform");
+    expect(found?.kind === "unit" && found.node.data.type).toBe("department");
+  });
+
+  // A UNIT THAT NAMES NO TYPE IS A TEAM to the engine, so that is the chip on.
+  test("a unit with no type shows the engine's default, Team, as the chosen chip", () => {
+    edit(keyedState(fixtureCompany()), "unit:Platform");
+    const row = screen.getByRole("radiogroup", { name: "Unit type" });
+    expect(within(row).getByRole("radio", { name: "Team" }).getAttribute("aria-checked")).toBe(
+      "true",
+    );
+  });
+
+  test("a unit type the engine does not name is typed in the Custom chip's box", () => {
+    const view = edit(keyedState(fixtureCompany()), "unit:Platform");
+    expect(screen.queryByRole("textbox", { name: "Custom type" })).toBeNull();
+    fireEvent.click(screen.getByRole("radio", { name: "Custom" }));
+    const box = screen.getByRole("textbox", { name: "Custom type" });
+    // The reader is put in the box the chip asked for.
+    expect(document.activeElement).toBe(box);
+    fireEvent.change(box, { target: { value: "tribe" } });
     apply();
     const found = locate(view.state().draft, "unit:Platform");
     expect(found?.kind === "unit" && found.node.data.type).toBe("tribe");
   });
 
-  test("the nine names the engine knows are offered in that same box", () => {
-    const view = edit(keyedState(fixtureCompany()), "unit:Platform");
-    choose("Type", "Department");
-    apply();
-    const found = locate(view.state().draft, "unit:Platform");
-    expect(found?.kind === "unit" && found.node.data.type).toBe("department");
+  // A TYPE ALREADY CUSTOM opens with its box, so the value is never hidden.
+  test("a unit whose type is custom opens with Custom chosen and its box holding the type", () => {
+    const doc = fixtureCompany();
+    doc.units![0]!.type = "tribe";
+    edit(keyedState(doc), `unit:${doc.units![0]!.name}` as NodeKey);
+    expect(screen.getByRole("radio", { name: "Custom" }).getAttribute("aria-checked")).toBe("true");
+    expect((screen.getByRole("textbox", { name: "Custom type" }) as HTMLInputElement).value).toBe(
+      "tribe",
+    );
   });
 
   test("renaming a unit names its masked literal credentials and links to Secrets", () => {

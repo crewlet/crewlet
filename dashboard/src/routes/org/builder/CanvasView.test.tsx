@@ -255,24 +255,26 @@ describe("the tree", () => {
     expect(document.activeElement).toBe(item("Engineering"));
   });
 
-  test("a human seat is drawn with a person's badge, by kind rather than by colour", () => {
+  test("a human seat is drawn as a person in a dashed ring, an agent seat as the Crewlet figure", () => {
     const doc = fixtureCompany();
     doc.roles![0] = { name: "CEO", kind: "human", contact: { slack: "U0CEO" } };
     mount(checkedEdit(doc));
-    // THE BADGE'S OUTLINE IS THE ONE CUE: a person's circle, an agent's
-    // squircle, on the same solid card. The kit names the two outlines by the
-    // kind they draw, which is the claim — a card-level mark is gone, because
-    // two cues for one fact are two things to keep agreeing.
-    expect(item("CEO").querySelector(".crewlet-avatar--human")).not.toBeNull();
-    expect(item("CEO").querySelector(".crewlet-avatar--agent")).toBeNull();
-    // EVERY SEAT IS A NODE OF ITS OWN, so an agent seat inside a unit wears an
-    // agent's badge rather than a row that is merely not marked.
-    expect(item("Dev").querySelector(".crewlet-avatar--agent")).not.toBeNull();
+    // THE CONSOLE CHART'S MARKS: a person's glyph inside a dashed ring, and
+    // the Crewlet figure at the larger step for an agent. No monogram badge:
+    // the mark says what holds the seat and the name beside it says who.
+    const ring = "crewlet-org-label__icon--ring";
+    expect(item("CEO").querySelector(`.${ring}`)).not.toBeNull();
+    expect(item("CEO").querySelector(".crewlet-avatar")).toBeNull();
+    // EVERY SEAT IS A NODE OF ITS OWN, so an agent seat inside a unit wears
+    // the agent's mark rather than a row that is merely not marked.
+    expect(item("Dev").querySelector(`.${ring}`)).toBeNull();
+    expect(item("Dev").querySelector(`.${largeStep()}`)).not.toBeNull();
+    expect(item("Dev").querySelector(".crewlet-avatar")).toBeNull();
     expect(within(item("CEO")).getByText("Human seat")).toBeDefined();
-    // And neither card is tinted: the outline is the whole of the difference
-    // (see "colour is not identity" below).
+    // And the agent's card is toned where the person's is not (see "an agent
+    // seat is toned" below).
     expect(chartCard(item("CEO")).getAttribute("data-tone")).toBeNull();
-    expect(chartCard(item("Dev")).getAttribute("data-tone")).toBeNull();
+    expect(chartCard(item("Dev")).getAttribute("data-tone")).toBe("purple");
   });
 
   test("a root seat placed by reference is a row of its unit, and a dangling reference is marked at the root", () => {
@@ -330,26 +332,25 @@ describe("the tree", () => {
   });
 
   /*
-   * A SEAT LEADS WITH ITS BADGE AND A CONTAINER WITH ITS GLYPH, because the
+   * A SEAT LEADS WITH ITS MARK AND A CONTAINER WITH ITS GLYPH, because the
    * chart this is drawn from sizes a mark by what it stands for: the seats
-   * are what the chart is ABOUT, so each is its own person or agent, and a
-   * unit or the company is a glyph at half its zone. The badge's outline is
-   * who holds the seat — an agent's squircle, a person's circle — which is the
-   * one cue: the dashed ring round a person's figure is gone with the kit's
-   * second cue for the same fact.
+   * are what the chart is ABOUT. An agent's figure takes the large step, and a
+   * person's glyph sits in a ring the size of that step; a unit or the company
+   * is a plain glyph at half its zone.
    */
-  test("a seat leads with its badge and a container with its glyph", () => {
+  test("a seat leads with its mark and a container with its glyph", () => {
     const doc = fixtureCompany();
     doc.roles![0] = { name: "CEO", kind: "human", contact: { slack: "U0CEO" } };
     mount(checkedEdit(doc));
-    expect(item("Dev").querySelector(".crewlet-avatar--agent")).not.toBeNull();
-    expect(item("CEO").querySelector(".crewlet-avatar--human")).not.toBeNull();
     const large = largeStep();
+    expect(item("Dev").querySelector(`.${large}`)).not.toBeNull();
+    expect(item("CEO").querySelector(".crewlet-org-label__icon--ring")).not.toBeNull();
     for (const container of ["Engineering", "Acme"]) {
       expect(item(container).querySelector(".crewlet-avatar"), container).toBeNull();
       const zone = item(container).querySelector("[aria-hidden='true']")!;
       expect(zone.querySelector("svg"), container).not.toBeNull();
       expect(zone.className, container).not.toContain(large);
+      expect(zone.className, container).not.toContain("crewlet-org-label__icon--ring");
     }
   });
 
@@ -717,40 +718,51 @@ describe("what a node offers a pointer", () => {
 });
 
 /*
- * EVERY NODE IS THE CHART'S NEUTRAL SURFACE. Colour on this dashboard says
- * what a seat is DOING, never who it is, and a draft is doing nothing: an
- * agent seat used to carry one of six hues hashed from its key, on its card
- * and on the branch arriving at it, which the live chart a reader had just
- * left never drew. What tells a person's seat from an agent's is the badge's
- * outline, a shape. So no card and no connector on either chart asks the
- * design system for a tone — the mutation that re-adds `cardTone` turns this
- * red on the first seat it tints.
+ * AN AGENT SEAT IS TONED, AND NOTHING ELSE IS. The console org chart this is
+ * drawn from paints an agent seat in its purple, on its card and on the
+ * branch arriving at it, and keeps every unit, the company and a person's
+ * seat on the chart's neutral surface. ONE HUE FOR ONE KIND, never a hash of
+ * a key: an agent seat used to carry one of six hues hashed from its key, a
+ * legend a reader could never decode and a renamed seat changed. The mutation
+ * that drops `cardTone` turns this red on the first agent seat it leaves
+ * neutral, and one that tones anything else on the first card it tints.
  */
-describe("colour is not identity", () => {
-  const toned = (container: HTMLElement) => [
-    ...chartCards(container)
-      .filter((card) => card.hasAttribute("data-tone"))
-      .map((card) => `card ${card.textContent}`),
-    ...[...chartLinks(container).querySelectorAll("path")]
-      .filter((path) => path.hasAttribute("data-tone"))
-      .map((path) => `branch ${path.getAttribute("d")}`),
-  ];
+describe("an agent seat is toned, and nothing else is", () => {
+  const byKind = (container: HTMLElement) => {
+    const cards = chartCards(container);
+    const agent = (card: HTMLElement) => (card.textContent ?? "").includes("Agent seat");
+    return { agents: cards.filter(agent), others: cards.filter((card) => !agent(card)) };
+  };
 
-  test("no node or branch of the structure chart is tinted, an agent seat's included", () => {
+  test("on the structure chart every agent seat, and only an agent seat, is purple", () => {
     const doc = fixtureCompany();
     doc.roles![0] = { name: "CEO", kind: "human", contact: { slack_user_id: "U0CEO" } };
     const { container } = mount(checkedEdit(doc));
-    // The chart really drew agent seats and branches, so an empty list below
-    // is a statement about them rather than about a chart that drew nothing.
-    expect(chartCard(item("Dev"))).toBeDefined();
-    expect(chartLinks(container).querySelectorAll("path").length).toBeGreaterThan(0);
-    expect(toned(container)).toEqual([]);
+    const { agents, others } = byKind(container);
+    // The chart really drew both kinds, so each loop below is a statement
+    // about cards rather than about a chart that drew none.
+    expect(agents.length).toBeGreaterThan(0);
+    expect(others.length).toBeGreaterThan(0);
+    for (const card of agents)
+      expect(card.getAttribute("data-tone"), card.textContent ?? "").toBe("purple");
+    for (const card of others)
+      expect(card.getAttribute("data-tone"), card.textContent ?? "").toBeNull();
+    // The branch into an agent seat carries its tone, and the rest are neutral.
+    const branches = [...chartLinks(container).querySelectorAll("path")];
+    const toned = branches.filter((path) => path.hasAttribute("data-tone"));
+    expect(toned.length).toBeGreaterThan(0);
+    expect(toned.length).toBeLessThan(branches.length);
+    for (const path of toned) expect(path.getAttribute("data-tone")).toBe("purple");
   });
 
-  test("no node or branch of the reporting chart is tinted either", () => {
+  test("on the reporting chart the same rule holds", () => {
     const { container } = mount(checkedEdit(fixtureCompany()), { chart: "reporting" });
-    expect(chartCards(container).length).toBeGreaterThan(0);
-    expect(toned(container)).toEqual([]);
+    const { agents, others } = byKind(container);
+    expect(agents.length).toBeGreaterThan(0);
+    for (const card of agents)
+      expect(card.getAttribute("data-tone"), card.textContent ?? "").toBe("purple");
+    for (const card of others)
+      expect(card.getAttribute("data-tone"), card.textContent ?? "").toBeNull();
   });
 
   /*

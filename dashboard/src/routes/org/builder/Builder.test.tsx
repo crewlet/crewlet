@@ -506,6 +506,43 @@ describe("the selection in the URL", () => {
     await waitFor(() => expect(location.hash).toContain("unit=Engineering+Two"));
   });
 
+  // A CLICK ON NOTHING LETS THE SELECTION GO, and only a click on nothing: a
+  // control acts and keeps it, and nothing under an open dialog is the space
+  // beside the views. A selection used to stay put wherever the reader
+  // clicked next.
+  test("a click on nothing clears the selection, and a click on a control keeps it", async () => {
+    const engine = new Engine(company());
+    mountBuilder({ engine });
+    await screen.findByText("No problems");
+    fireEvent.click(screen.getByRole("button", { name: "Select Engineering" }));
+    await waitFor(() => expect(location.hash).toContain("unit=Engineering"));
+
+    // The toolbar's own actions for the selection are a control.
+    fireEvent.click(await screen.findByRole("button", { name: "Engineering" }));
+    const menu = await screen.findByRole("menu", { name: "Actions for Engineering" });
+    fireEvent.keyDown(menu, { key: "Escape" });
+    expect(location.hash).toContain("unit=Engineering");
+
+    // Words on the page are nothing to select.
+    fireEvent.click(screen.getByText("editable"));
+    await waitFor(() => expect(location.hash).not.toContain("unit="));
+    expect(screen.queryByRole("button", { name: "Engineering" })).toBeNull();
+  });
+
+  test("a click under an open dialog keeps the selection the dialog is about", async () => {
+    const engine = new Engine(company());
+    mountBuilder({ engine });
+    await screen.findByText("No problems");
+    fireEvent.click(screen.getByRole("button", { name: "Select CEO" }));
+    await waitFor(() => expect(location.hash).toContain("seat=ceo"));
+    fireEvent.click(await screen.findByRole("button", { name: "CEO" }));
+    const menu = await screen.findByRole("menu", { name: "Actions for CEO" });
+    fireEvent.click(within(menu).getByRole("menuitem", { name: /^Edit\b/ }));
+    await screen.findByRole("dialog", { name: "Edit CEO" });
+    fireEvent.click(screen.getByText("editable"));
+    expect(location.hash).toContain("seat=ceo");
+  });
+
   // THE COMPANY IS A NODE TOO, and the only one the draft's tree cannot
   // locate: it is the root rather than an element of a list. Read as absent,
   // the card an operator selected was deselected again on the next answer,

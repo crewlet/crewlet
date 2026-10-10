@@ -58,6 +58,14 @@ else. A tool the company has not set up keeps its mark, drained of its
 colour (the kit's `muted` mark) — the mark rather than the tile, because the
 mark is decoration beside the name and the tile's text keeps its contrast.
 
+The second exception is **Agents › Edit org**, which draws the organization
+the way the console's org chart does: every agent seat is the Crewlet figure
+on a card toned purple, with the branch arriving at it and its table row in
+the same hue. It is held to that: ONE hue for ONE kind, never a hash of a
+name and never one per agent, drawn only in the builder, where a draft is
+doing nothing a state could say; nothing reads state from it, and the live
+org chart keeps colour for state alone.
+
 A seat's chrome takes one of three **rings**, or none, from what it is DOING —
 and what it is doing is the ENGINE'S word, never the dashboard's. Every seat row carries
 `activity` (`working`, `needs`, `stopped` or `idle`) and, when stopped, a
@@ -6778,14 +6786,27 @@ to.
   opening a collapsed unit on the way. The Builder decides which node is
   focused after an add, a delete, a move, an undo or a redo; the mounted view
   performs it.
-- **Colour stays state.** A node is neutral whatever it holds: no seat has a
-  hue of its own (one hashed from its key, stated in its editor as a
-  "Colour" fact, was removed — a legend for a decoration the live chart never
-  drew). A seat leads with its badge, a person's circle or an agent's
-  squircle, on the same solid node — a dashed edge means only "a place nothing
-  fills yet" — a reference that names nothing takes the caution tone, and the
-  Datadog fallback seat carries a neutral mark while Datadog is enabled, the
-  only time the engine routes an alert to it.
+- **An agent seat is toned, and nothing else is.** This is the console org
+  chart's drawing and the colour rule's second, bounded exception (see "The one
+  rule"): every agent seat takes the same purple, on its card, the branch into
+  it and its table row, and every other node is neutral. No seat has a hue of
+  its own (one hashed from its key, stated in its editor as a "Colour" fact,
+  was removed: a legend nobody could decode). A seat leads with the console
+  chart's mark rather than a badge: the Crewlet figure for an agent, a
+  person's glyph in a dashed ring for a person (drawn alone in a table row). A
+  dashed edge on a node means only "a place nothing fills yet": the ghost of a
+  node being added, and a unit's lead slot while no lead is set. A reference
+  that names nothing takes the caution tone, and the Datadog fallback seat
+  carries a neutral mark while Datadog is enabled, the only time the engine
+  routes an alert to it.
+- **One line round every box.** A card is framed once: the selected node's
+  card takes the accent on its own boundary rather than a ring inside it, its
+  focus ring is drawn over that boundary, a toned card has no halo, and a set
+  lead is a raised pill with no frame of its own. The chart stands on the
+  same dotted field as the live org chart.
+- **A click on nothing puts the selection down**, on the chart's field, round
+  the table or on the page under either (`ui/clickOnNothing.ts`). A click on a
+  node, a row or a control is that thing's own, and a pan keeps the selection.
 - **A chart node says what it is, not how it is doing.** It carries neither
   the seat's live state nor a problem count: drawn on every node they were a
   column of "idle" dots and an empty box beside every node with nothing wrong.
@@ -6830,11 +6851,14 @@ to.
 
 1. **Colour is state, never identity.** No hash-to-hue, no per-agent tint, no
    per-category chip colour. If you need to tell two things apart, use their
-   names. The third-party app marks in `@crewlethq/icons` are the one, bounded
-   exception (see "The one rule" above); nothing else is.
-   **A seat's identity badge is `Avatar`, everywhere, through `SeatAvatar`**
-   (`ui/SeatAvatar.tsx`; `seatBadge` for a kit component that draws the badge
-   itself, such as the chart's `OrgLabel`), drawn from its name or handle so
+   names. The third-party app marks in `@crewlethq/icons` and Edit org's one
+   purple for every agent seat are the two bounded exceptions (see "The one
+   rule" above); nothing else is.
+   **A seat's identity badge is `Avatar`, everywhere but Edit org, through
+   `SeatAvatar`** (Edit org's chart and table draw the console chart's marks
+   instead, `routes/org/builder/nodeMarks.tsx`'s `seatMark`: see "An agent
+   seat is toned, and nothing else is") (`ui/SeatAvatar.tsx`; `seatBadge` for
+   a kit component that draws the badge itself), drawn from its name or handle so
    the initials are what tell one seat from another. For an AGENT a leading
    word "agent" is dropped before the initials are made, because the squircle
    already says it: "Agent CEO" and "Agent CTO" are `CE` and `CT`, where the

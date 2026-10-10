@@ -139,12 +139,16 @@ the check saw, so just after a change a node can read "Handle after the
 check", "Lead after the check" or "Manager after the check" for a moment
 rather than show an answer the engine has not given.
 
-Colour is state, never identity. Every node is drawn on the same neutral
-surface whatever it holds; what tells a person's seat from an agent's is its
-badge, a circle for a person and a squircle for an agent, and the one colour a
-node takes is the accent ring of the selection. The live org chart follows the
-same rule, and there colour says what a seat is doing: a draft is doing
-nothing, so here there is nothing for colour to say.
+The builder draws the organization the way the console's org chart does. An
+agent seat is the Crewlet figure on a card toned purple, with the branch
+arriving at it and its table row in the same hue; a person's seat is a
+person's glyph in a dashed ring; a unit and the company are their own glyphs;
+and every node but an agent seat is drawn on the same neutral surface. One hue
+for one kind: it is never a hash of a name, so a renamed seat keeps it. The
+selected node's card takes the accent on its own edge. The live org chart
+keeps colour for what a seat is doing, which a draft is not doing yet. The
+chart is drawn on the same dotted field as the live org chart, which says it
+pans before you drag it.
 
 ### The structure chart
 
@@ -153,8 +157,9 @@ hang off it, and each unit's seats and child units hang off that unit: every
 seat is a node of its own, joined to the unit it sits in by the same
 orthogonal branch the live org chart draws. The branch is heavier here: a node
 is half the height of the live chart's card, and the design system keeps the
-branch at the same weight against the node it joins. A node shows its badge (or a
-unit's or the company's glyph), its name and, under it, what kind of thing it
+branch at the same weight against the node it joins. A node shows its mark (an
+agent's figure, a person's ringed glyph, or a unit's or the company's glyph),
+its name and, under it, what kind of thing it
 is, with the marks that apply as small glyphs on that line. Each mark says its
 sentence as its name and its tooltip:
 
@@ -272,6 +277,13 @@ builder cannot write (a guarded or read-only posture, or a draft waiting to be
 updated) the actions stay in the menu and are marked unavailable, so what the
 builder does is still legible.
 
+A click on empty space puts the selection down: on the chart's field, in the
+space round the table, or on the page under either. The node's card or row
+lets go of the accent, the URL drops it and the toolbar's actions with it. A
+click on a node, a row or a control is that thing's own, nothing inside a
+menu or an editor counts, and dragging the chart to pan it keeps the
+selection.
+
 ### The check
 
 The check status beside the view controls says what the engine made of the
@@ -359,7 +371,7 @@ not a field somebody sets.
 | You can change | Notes |
 |---|---|
 | Name | Unit names are unique. Renaming an existing unit re-keys what is attached to its name: agent seats in it and in its units onboard again, onboarding pages are looked up under the new name, and its schedules get a new identity, so a run due that minute may fire again. |
-| Type | One of the well-known types or a custom one. It is informational; an empty type is `team`. |
+| Type | A row of chips, one per type the engine knows (division, department, group, team, squad, pod, guild, chapter, unit), and **Custom**, which opens a box in the row for any other name. It is informational; a unit that names no type is a `team`, so Team shows as chosen. |
 | Purpose, goals | |
 | Lead | Any seat. The empty choice shows the lead the unit inherits from the unit above it, as the last check reported it. |
 | Channel | An empty channel inherits the one above it. |
@@ -441,8 +453,9 @@ Datadog role, GitLab tiers beyond developer and maintainer, and flags that
 grant access to everything (an empty repository list already does).
 
 Two more things the builder deliberately does not have. A seat has no colour
-of its own: colour on the dashboard shows state, never identity, so seats are
-told apart by their names and their badges. And the zoom is the chart's own:
+of its own beyond its kind's: every agent seat takes the same purple and every
+person's seat none, so seats are told apart by their names and their marks.
+And the zoom is the chart's own:
 zoom in, zoom out and fit are buttons on the chart and keys while it has focus
 (plus, minus and zero), the percentage between the buttons opens a field to
 type one into, and Ctrl or Command with the wheel zooms toward the pointer.

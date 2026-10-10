@@ -15,9 +15,9 @@
     "format:check": "prettier --check ."
   },
   "dependencies": {
-    "@crewlethq/icons": "0.6.2",
-    "@crewlethq/tokens": "0.6.2",
-    "@crewlethq/ui": "0.6.2",
+    "@crewlethq/icons": "0.7.0",
+    "@crewlethq/tokens": "0.7.0",
+    "@crewlethq/ui": "0.7.0",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },

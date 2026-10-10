@@ -51,6 +51,8 @@ import { addSections, isDeletable, leadLabel, rowMenu, type OpenScreen } from ".
 import {
   LiveState,
   NodeGlyph,
+  nodeTone,
+  seatMark,
   SeatMarks,
   UnitMarks,
   handleLabel,
@@ -77,7 +79,6 @@ import {
   type TreeItemAction,
   type TreeViewHandle,
 } from "@crewlethq/ui";
-import { seatBadge } from "~/ui/SeatAvatar.tsx";
 
 /**
  * What a row says, beside its name.
@@ -188,13 +189,13 @@ export function TableView() {
                cell happens to mention a name. */
             <OrgTableName
               className="btable-name"
-              // A SEAT IS ITS BADGE, as it is on the chart: the outline says
-              // who holds it. A container keeps its glyph.
+              // A SEAT IS ITS MARK, as it is on the chart: the Crewlet figure
+              // for an agent, a person for a human. A container keeps its glyph.
               {...(view.type === "seat"
-                ? {
-                    avatar: seatBadge(view.name, view.kind),
-                  }
+                ? seatMark(view.kind)
                 : { icon: NodeGlyph({ kind: nodeGlyphKind(view) }) })}
+              // AN AGENT'S ROW IS TONED, as its card is.
+              tone={nodeTone(view)}
               name={<span className="btable-label">{view.name || "Unnamed company"}</span>}
               caption={kindLabel(view)}
               // THE SAME GLYPHS THE CHART DRAWS, for the same reason: a row is
@@ -296,6 +297,9 @@ export function TableView() {
       controls={false}
       columns={COLUMNS}
       rows={structure.tree}
+      // The branch arriving at an agent's row takes the agent's hue, as the
+      // branch into its card does on the chart.
+      tone={(id) => nodeTone(structure.nodes.get(id as NodeKey))}
       ref={grid}
       renderCell={cell}
       cellHasControl={(_id, column) => column === ACTIONS_COLUMN}
