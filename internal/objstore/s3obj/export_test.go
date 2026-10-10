@@ -24,3 +24,9 @@ const CallBudget = callBudget
 // SparesHeld is how many of the node's spare part buffers b's uploads hold
 // now — none, once every upload has ended, whatever became of it.
 func SparesHeld(b *Backend) int { return len(b.spare) }
+
+// Rebucket points b at another bucket of the same endpoint without opening
+// it: the SDK reaches a directory bucket only through S3 Express's
+// CreateSession, which the fake does not speak, so a case refusing one's
+// ranges stands one up this way.
+func Rebucket(b *Backend, name string) { b.bucket = name }

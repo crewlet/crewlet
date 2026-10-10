@@ -88,10 +88,11 @@ func (w *readWatch) Read(ctx context.Context, at statelog.Position, fn func(*sql
 	return w.ObjectEstate.Read(ctx, at, fn)
 }
 
-// every is every reference the collector's audit walk finds, by the object it
-// names — and the walk is held to visiting each OUTSIDE a read of the estate,
-// since the audit asks the backend about each one and a read must not be held
-// open across those round trips.
+// every is every reference the collector's audit walks find, by the object it
+// names — and each walk is held to handing a page back only once the read
+// that answered it has ended, since the audit asks the backend about each
+// reference and a read must not be held open across those round trips, and to
+// key order, which the audit's ranged listings are cut from.
 func (r *roundTrip) every(t *testing.T) map[objstore.Key][]collect.Reference {
 	t.Helper()
 	watch := &readWatch{ObjectEstate: tracker.ObjectEstate{Reader: r.reader}}
@@ -100,17 +101,27 @@ func (r *roundTrip) every(t *testing.T) map[objstore.Key][]collect.Reference {
 		t.Fatal(err)
 	}
 	out := map[objstore.Key][]collect.Reference{}
-	complete, err := sources[0].EachRequired(t.Context(), statelog.Position{}, func(ref collect.Reference) error {
-		if watch.open.Load() {
-			// RETURNED, never t.Fatal: a goroutine exit inside the
-			// read would leave the read's connection held.
-			return fmt.Errorf("the audit walk visited %s inside a read of the estate", ref.Object.Key)
+	for _, w := range sources[0].Required(statelog.Position{}) {
+		var last objstore.Key
+		for {
+			page, complete, err := w.Next(t.Context())
+			if err != nil || !complete {
+				t.Fatalf("the audit walk = %v (complete %v)", err, complete)
+			}
+			if watch.open.Load() {
+				t.Fatal("the audit walk handed a page back inside a read of the estate")
+			}
+			if len(page) == 0 {
+				break
+			}
+			for _, ref := range page {
+				if ref.Object.Key.Compare(last) < 0 {
+					t.Fatalf("the audit walk handed %s after %s, out of key order", ref.Object.Key, last)
+				}
+				last = ref.Object.Key
+				out[ref.Object.Key] = append(out[ref.Object.Key], ref)
+			}
 		}
-		out[ref.Object.Key] = append(out[ref.Object.Key], ref)
-		return nil
-	})
-	if err != nil || !complete {
-		t.Fatalf("the audit walk = %v (complete %v)", err, complete)
 	}
 	return out
 }

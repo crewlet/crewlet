@@ -13,7 +13,10 @@
 // it is read — that an upload begun and never finished, which no listing
 // of the names shows, is found and removed by the two verbs that exist for it,
 // and that a name holding something the backend cannot read as an object is a
-// definite answer, listed and deletable, rather than a failure.
+// definite answer, listed and deletable, rather than a failure. A backend that
+// lists a range of its names in order ([objstore.Ranged]) is held to that too,
+// and one that does not claim it is held to not offering it — an ordering
+// nothing certified is one an audit would read objects as lost by.
 //
 // And ONE BENCHMARK SUITE ([Bench]) every backend runs from a
 // `BenchmarkBackend` of its own, as it runs [Run] from `TestContract`: the
@@ -73,6 +76,12 @@ type Options struct {
 	// can never hold one: an S3 bucket answers a name with an object or
 	// with nothing.
 	Spoil func(t *testing.T, b objstore.Backend, name string)
+
+	// Ranged says the backend lists a range of its names in order
+	// ([objstore.Ranged]), which the suite then holds it to. Unset, the
+	// suite holds it to NOT implementing the interface, so no backend can
+	// offer an ordering nothing certified.
+	Ranged bool
 }
 
 // defaultPiece is a piece for a backend with none of its own.
@@ -108,6 +117,7 @@ func Run(t *testing.T, newBackend Factory, opts Options) {
 		{"names_are_kept_verbatim", namesAreKeptVerbatim},
 		{"an_unfinished_upload_is_pending_until_abandoned", anUnfinishedUploadIsPendingUntilAbandoned},
 		{"a_name_holding_no_object_is_corrupt_listed_and_deletable", aNameHoldingNoObjectIsCorrupt},
+		{"a_range_lists_its_names_in_order", aRangeListsItsNamesInOrder},
 	}
 	for _, c := range cases {
 		// IN PARALLEL: each case is handed a backend of its own from the
@@ -703,3 +713,100 @@ func aNameHoldingNoObjectIsCorrupt(t *testing.T, b objstore.Backend, opts Option
 		t.Fatalf("the whole object beside the spoiled name read back %q, %v", got, err)
 	}
 }
+
+// A RANGE LISTS EXACTLY ITS NAMES, IN THE BYTE ORDER OF THE NAMES: every name
+// after its start and through its end, once, ascending — a name equal to the
+// start left out and one equal to the end kept, so ranges cut at the names a
+// caller already holds tile the store with nothing read twice and nothing
+// skipped — whatever the names spell, across the backend's own pages, and
+// stopping at its visitor's error. An audit reads an object missing from a
+// range as one the store does not hold.
+func aRangeListsItsNamesInOrder(t *testing.T, b objstore.Backend, opts Options) {
+	r, ok := b.(objstore.Ranged)
+	if !opts.Ranged {
+		if ok {
+			t.Fatal("the backend lists ranges and the suite was not told to certify it: " +
+				"set Options.Ranged")
+		}
+		return
+	}
+	if !ok {
+		t.Fatal("the suite was told the backend lists ranges, and it does not implement objstore.Ranged")
+	}
+	// NAMES WHOSE ORDER A STRING SORT AND A NAIVE ONE DISAGREE ON: a prefix
+	// before its extensions, a digit before a letter, an upper case before a
+	// lower, a slash before a dash — and more than any backend's page.
+	names := []string{"a", "a-b", "a/b", "a0", "aa", "B", "b", "files/", "files/0", "files/a", "z"}
+	for i := range 2*defaultPageOf + 3 {
+		names = append(names, fmt.Sprintf("files/k%03d", i))
+	}
+	for _, n := range names {
+		put(t, b, n, []byte(n))
+	}
+	sorted := slices.Sorted(slices.Values(names))
+	within := func(after, through string) []string {
+		var out []string
+		for _, n := range sorted {
+			if n > after && n <= through {
+				out = append(out, n)
+			}
+		}
+		return out
+	}
+	listRange := func(after, through string) []string {
+		t.Helper()
+		var got []string
+		if err := r.ListRange(t.Context(), after, through, func(info objstore.Info) error {
+			if info.Size != int64(len(info.Name)) || info.Written.IsZero() {
+				t.Errorf("ListRange said %q holds %+v", info.Name, info)
+			}
+			got = append(got, info.Name)
+			return nil
+		}); err != nil {
+			t.Fatalf("ListRange(%q, %q): %v", after, through, err)
+		}
+		return got
+	}
+	for _, c := range []struct{ after, through string }{
+		{"", "zz"},                   // everything
+		{"", "a"},                    // from the first, through one name
+		{"a", "a0"},                  // the start left out, the end kept
+		{"a-", "a/b"},                // bounds that are no name at all
+		{"files/", "files/k" + "ÿ"},  // the namespace, across pages
+		{"files/k005", "files/k017"}, // inside a page and across one
+		{"z", "zz"},                  // past the last name: nothing
+		{"b", "a"},                   // an end before its start: nothing
+	} {
+		if got, want := listRange(c.after, c.through), within(c.after, c.through); !slices.Equal(got, want) {
+			t.Errorf("ListRange(%q, %q) = %q, want %q", c.after, c.through, got, want)
+		}
+	}
+
+	// RANGES CUT AT THE LAST NAME EACH ONE LISTED TILE THE STORE.
+	var tiled []string
+	for after := ""; ; {
+		page := within(after, "zz")
+		if len(page) == 0 {
+			break
+		}
+		through := page[min(len(page), 5)-1]
+		tiled = append(tiled, listRange(after, through)...)
+		after = through
+	}
+	if !slices.Equal(tiled, sorted) {
+		t.Errorf("ranges cut at the names they ended on listed %q, want every name once: %q", tiled, sorted)
+	}
+
+	stop := errors.New("enough")
+	visits := 0
+	if err := r.ListRange(t.Context(), "", "zz", func(objstore.Info) error {
+		visits++
+		return stop
+	}); !errors.Is(err, stop) || visits != 1 {
+		t.Fatalf("ListRange = %v after %d visits; want the visitor's error after one", err, visits)
+	}
+}
+
+// defaultPageOf is more names than any backend's listing page in the suite
+// holds — s3fake pages seven at a time — so a range crosses pages.
+const defaultPageOf = 10

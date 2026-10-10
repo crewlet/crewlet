@@ -13,5 +13,5 @@ import (
 func TestContract(t *testing.T) {
 	t.Parallel()
 	objstoretest.Run(t, func(*testing.T) objstore.Backend { return memobj.New() },
-		objstoretest.Options{Digest: true})
+		objstoretest.Options{Digest: true, Ranged: true})
 }

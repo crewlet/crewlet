@@ -134,6 +134,28 @@ func (b *Backend) List(ctx context.Context, visit func(objstore.Info) error) err
 	return nil
 }
 
+// ListRange implements [objstore.Ranged]: the names after after and at or
+// before through, in byte order, over a snapshot as [Backend.List] is.
+func (b *Backend) ListRange(ctx context.Context, after, through string, visit func(objstore.Info) error) error {
+	b.mu.Lock()
+	var snapshot []objstore.Info
+	for _, name := range slices.Sorted(maps.Keys(b.objects)) {
+		if name > after && name <= through {
+			snapshot = append(snapshot, b.objects[name].info(name))
+		}
+	}
+	b.mu.Unlock()
+	for _, info := range snapshot {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := visit(info); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Pending implements [objstore.Backend]: the twin has no upload in pieces —
 // a put reads its whole body before it stores anything — so nothing is ever
 // begun and left unfinished.

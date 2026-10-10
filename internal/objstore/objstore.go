@@ -82,6 +82,7 @@
 package objstore
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
@@ -197,6 +198,13 @@ func ParseKey(s string) (Key, error) {
 
 // String is the key's canonical spelling.
 func (k Key) String() string { return uuid.UUID(k).String() }
+
+// Compare orders two keys as their canonical spellings sort as bytes — which
+// is how a backend lists the names they are stored under, and how a table's
+// key column sorts them — answering -1, 0 or +1. It compares the bytes
+// themselves: lowercase hex digits sort as the nibbles they spell, and the
+// hyphens sit at the same places in every key.
+func (k Key) Compare(o Key) int { return bytes.Compare(k[:], o[:]) }
 
 // IsZero reports whether k is no key — what a row that names no object
 // carries.

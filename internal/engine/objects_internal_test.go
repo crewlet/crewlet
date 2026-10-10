@@ -62,9 +62,7 @@ func (*namedNothing) Referenced(context.Context, []objstore.Key,
 	return map[objstore.Key]struct{}{}, true, nil
 }
 
-func (*namedNothing) EachRequired(context.Context, statelog.Position, func(collect.Reference) error) (bool, error) {
-	return true, nil
-}
+func (*namedNothing) Required(statelog.Position) []collect.Walk { return nil }
 
 // collectorNode is an engine holding just enough to run the collector's duty
 // by hand: an in-memory store and fleet, and a collector over source.
@@ -265,11 +263,25 @@ func (s *namedObject) Referenced(_ context.Context, among []objstore.Key,
 	return out, true, nil
 }
 
-func (s *namedObject) EachRequired(_ context.Context, _ statelog.Position, visit func(collect.Reference) error) (bool, error) {
-	return true, visit(collect.Reference{
+func (s *namedObject) Required(statelog.Position) []collect.Walk {
+	return []collect.Walk{&onePage{page: []collect.Reference{{
 		Object:  objstore.Object{Key: s.k, Hash: objstore.HashOf(nil), Size: 0},
 		NamedBy: "ENG/lost.md",
-	})
+	}}}}
+}
+
+// onePage is a walk of one page, and then none.
+type onePage struct {
+	page []collect.Reference
+	read bool
+}
+
+func (w *onePage) Next(context.Context) ([]collect.Reference, bool, error) {
+	if w.read {
+		return nil, true, nil
+	}
+	w.read = true
+	return w.page, true, nil
 }
 
 // THE COLLECTOR NEVER STARTS ONCE IT HAS BEEN STOPPED. The native runtime
