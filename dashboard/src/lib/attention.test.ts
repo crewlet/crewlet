@@ -133,13 +133,29 @@ describe("what it surfaces", () => {
   });
 
   // THE DEADLINE IS THE COST OF IGNORING IT: the box is reclaimed at the
-  // pause TTL and the work is gone, so a row that said only "waiting on an
-  // answer" gave no reason to answer today rather than tomorrow.
+  // engine's `keeps_place_until` and the work is gone, so a row that said only
+  // "waiting on an answer" gave no reason to answer today rather than tomorrow.
   test("a pause window that runs out says when", () => {
     const items = attentionQueue(
-      input({ runs: [parked("awaiting_clarification", { pause_ttl_seconds: 7_200 })] }),
+      input({
+        runs: [parked("awaiting_clarification", { keeps_place_until: "2026-01-01T13:00:00Z" })],
+      }),
     );
     expect(items[0]?.detail).toContain("reclaimed in 1h 0m");
+  });
+
+  // THE DEADLINE IS THE ENGINE'S AND NOBODY ELSE'S: a stamp and a TTL beside a
+  // null deadline are the record of a box the engine holds on no timer, and
+  // adding them up here would be a second clock with a second opinion.
+  test("the stamp and the TTL are never added up into a deadline", () => {
+    const items = attentionQueue(
+      input({
+        runs: [
+          parked("awaiting_clarification", { pause_ttl_seconds: 7_200, keeps_place_until: null }),
+        ],
+      }),
+    );
+    expect(items[0]?.detail).not.toContain("reclaimed");
   });
 
   // NO CLOCK READS SIXTY MINUTES. The hours and the minutes come off one
@@ -147,21 +163,26 @@ describe("what it surfaces", () => {
   // seconds before every hour boundary of a countdown that reruns every
   // second — and a bare "60m" through the last hour of one.
   test("a countdown never carries into a sixtieth minute", () => {
-    // 2h 59m 45s left: parked an hour before `now`, on a window of 14,385s.
+    // 2h 59m 45s left of a box held until 14:59:45, an hour after `now`'s 12:00
+    // plus two.
     const nearly = attentionQueue(
-      input({ runs: [parked("awaiting_clarification", { pause_ttl_seconds: 14_385 })] }),
+      input({
+        runs: [parked("awaiting_clarification", { keeps_place_until: "2026-01-01T14:59:45Z" })],
+      }),
     );
     expect(nearly[0]?.detail).toContain("reclaimed in 3h 0m");
     // And 59m 45s left, where there is no hour to carry into.
     const under = attentionQueue(
-      input({ runs: [parked("awaiting_clarification", { pause_ttl_seconds: 7_185 })] }),
+      input({
+        runs: [parked("awaiting_clarification", { keeps_place_until: "2026-01-01T12:59:45Z" })],
+      }),
     );
     expect(under[0]?.detail).toContain("reclaimed in 1h 0m");
   });
 
-  // A TTL OF ZERO IS NOT A DEADLINE OF NOW. Zero means the box is not
-  // reclaimed on a timer at all, and inventing a countdown for it would be
-  // the zero-value-as-a-setting mistake on a screen.
+  // NO DEADLINE IS NOT A DEADLINE OF NOW. A box the engine reclaims on no
+  // timer carries none, and inventing a countdown for it would be the
+  // zero-value-as-a-setting mistake on a screen.
   test("a run with no pause window is given no false deadline", () => {
     const items = attentionQueue(input({ runs: [parked("awaiting_clarification")] }));
     expect(items[0]?.detail).not.toContain("reclaimed");

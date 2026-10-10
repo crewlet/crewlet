@@ -99,6 +99,24 @@ func TestALocalKeyIsNamespacedByItsSource(t *testing.T) {
 	}
 }
 
+// THE SURFACE A REPLY REACHES A CONVERSATION FROM is the source its key was
+// namespaced by, read back by the inverse of the one function that wrote it —
+// and nothing for a key that names no conversation, or one with no namespace.
+func TestSourceOfReadsBackTheNamespace(t *testing.T) {
+	cases := map[string]string{
+		notify.Namespaced("slack", "C1:1718.003"): "slack",
+		notify.Namespaced("jira", "ENG-42"):       "jira",
+		notify.Fallback("018f-abc"):               "",
+		"":                                        "",
+		"no-namespace":                            "",
+	}
+	for key, want := range cases {
+		if got := notify.SourceOf(key); got != want {
+			t.Errorf("SourceOf(%q) = %q, want %q", key, got, want)
+		}
+	}
+}
+
 // The question a parked sandbox run asks before telling somebody to reply in
 // a thread that may not exist.
 func TestDerivedTellsAReplyableConversationFromAnEventFallback(t *testing.T) {

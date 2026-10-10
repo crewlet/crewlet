@@ -188,12 +188,20 @@ func serialiseRun(run sandbox.PendingRun) map[string]any {
 		// The two facts the board draws, rather than the ids themselves: a
 		// non-empty sandbox id means a box exists, and a set paused_at
 		// means it is currently held as a snapshot and being paid for.
-		"box_exists":         run.SandboxID != "",
-		"paused_at":          isoOrEmpty(heldSince),
-		"pause_ttl_seconds":  run.PauseTTLSeconds,
+		"box_exists":        run.SandboxID != "",
+		"paused_at":         isoOrEmpty(heldSince),
+		"pause_ttl_seconds": run.PauseTTLSeconds,
+		// WHEN THE ENGINE RECLAIMS THE BOX, by the reaper's own rule
+		// ([keepsPlaceUntil]) — null once nothing is held — so no screen
+		// adds a TTL to a stamp on its own clock: the two halves above are
+		// the record, and this is the deadline they make.
+		"keeps_place_until": keepsPlaceUntil(run),
+		// WHEN THE QUESTION WAS PUT, empty on a run not parked on one.
+		"asked_at":           isoOrEmpty(run.AskedAt),
 		"started_at":         isoOrEmpty(run.CreatedAt),
 		"updated_at":         isoOrEmpty(run.UpdatedAt),
 		"answerable_in_chat": answerableInChat(run.ConversationKey),
+		"chat_surface":       notify.SourceOf(run.ConversationKey),
 		// WHO IS WAITING, which is the question a board full of parked
 		// runs exists to answer and had no field for. Persisted rather
 		// than re-derived precisely because the resumed turn does not see

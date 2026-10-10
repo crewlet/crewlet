@@ -238,16 +238,12 @@ export function RunStatus({ status }: { status: SandboxStatus }) {
 /**
  * When the hold on the box runs out, or null when nothing is holding it.
  *
- * BOTH HALVES OR NEITHER. A TTL with no `paused_at` names no instant, and a
- * `paused_at` carrying a zero TTL is a run the engine parked with no hold at
- * all rather than one held for no time — the zero is a missing setting, not a
- * deadline in the past, and rendering it as one would tell a reader the box
- * was reclaimed in 1970.
+ * THE ENGINE'S DEADLINE (`keeps_place_until`, the reaper's own), never a TTL
+ * added to `paused_at` here: that sum was a second clock beside the one that
+ * actually reclaims the box, and a zero TTL read as a deadline in 1970.
  */
 function pauseDeadline(run: SandboxRun): string | null {
-  const paused = tsKey(run.paused_at);
-  if (!paused || run.pause_ttl_seconds <= 0) return null;
-  return new Date(paused + run.pause_ttl_seconds * 1000).toISOString();
+  return run.keeps_place_until ?? null;
 }
 
 /**

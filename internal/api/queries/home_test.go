@@ -42,9 +42,14 @@ func TestDecisionsCountsAsksAndRunsForTheParty(t *testing.T) {
 	sources := partySources(t, work)
 	sources.Sandbox = fixedRuns{
 		{TurnID: "mine", AgentHandle: "swe", Status: sandbox.StatusAwaiting,
-			AudienceHandles: []string{"ops-1"}, UpdatedAt: parkedAt},
+			AudienceHandles: []string{"ops-1"}, AskedAt: parkedAt, UpdatedAt: parkedAt},
+		// RE-SEEDED AFTER EVERYTHING ELSE HERE: its box was reclaimed an
+		// hour after the newest ask, which is its row's last write. It is
+		// still the question asked a minute before `mine`, and is placed
+		// by that — never by the reclaim.
 		{TurnID: "reseeded", AgentHandle: "swe", Status: sandbox.StatusReseed,
-			AudienceHandles: []string{"ana"}, UpdatedAt: parkedAt.Add(-time.Minute)},
+			AudienceHandles: []string{"ana"}, AskedAt: parkedAt.Add(-time.Minute),
+			UpdatedAt: askedAt.Add(time.Hour)},
 		{TurnID: "running", AgentHandle: "swe", Status: sandbox.StatusRunning,
 			AudienceHandles: []string{"ana"}, UpdatedAt: askedAt},
 		{TurnID: "theirs", AgentHandle: "swe", Status: sandbox.StatusAwaiting,
@@ -66,7 +71,7 @@ func TestDecisionsCountsAsksAndRunsForTheParty(t *testing.T) {
 		if item.Ask != nil {
 			order = append(order, item.Ask.Comment)
 		} else {
-			order = append(order, item.Run["turn_id"].(string))
+			order = append(order, item.Run.TurnID)
 		}
 	}
 	want := []string{"c-1", "mine", "reseeded", "c-2"}

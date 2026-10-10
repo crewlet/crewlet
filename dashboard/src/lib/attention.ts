@@ -161,10 +161,9 @@ export interface AttentionInput {
    * The DURABLE coding-run rows, which is what is still waiting.
    *
    * THE WAITING ROW NEEDS THE RECORD, not the live entry: how long a person
-   * has left to answer is the run's pause window (`pause_ttl_seconds`)
-   * counted from `paused_at`, and only the durable row
-   * carries the window. The live entry says a run is waiting; the record says
-   * for how much longer its box is held.
+   * has left to answer is the engine's `keeps_place_until`, and only the
+   * durable row carries it. The live entry says a run is waiting; the record
+   * says for how much longer its box is held.
    */
   runs: SandboxRun[];
   /** `null` before the first report: nothing to judge, so nothing is raised. */
@@ -432,24 +431,26 @@ export function attentionQueue(input: AttentionInput): Attention[] {
  * What a parked run's row says, with its deadline where there is one.
  *
  * THE DEADLINE IS THE COST OF IGNORING IT, which is what this whole list is
- * ordered by: a paused box is reclaimed at `pause_ttl_seconds` and the run
- * comes back as `reseed` — the question survives, the working tree does not.
- * A row that said only "waiting on an answer" gave a reader no reason to
- * answer today rather than tomorrow.
+ * ordered by: a paused box is reclaimed at the engine's `keeps_place_until`
+ * and the run comes back as `reseed` — the question survives, the working
+ * tree does not. A row that said only "waiting on an answer" gave a reader no
+ * reason to answer today rather than tomorrow.
  *
- * A RUN WITH NO TTL IS NOT GIVEN A FALSE ONE. Zero means the box is not
- * reclaimed on a timer (see the `pause_ttl_seconds` zero-value rule), so the
- * sentence simply ends.
+ * A RUN HELD ON NO TIMER IS NOT GIVEN A FALSE ONE. The engine sends no
+ * deadline for a box it does not reclaim on a timer, so the sentence simply
+ * ends.
  */
 function waitingDetail(run: SandboxRun, now: number): string {
   const asked = run.question || "A coding run paused on a clarification and cannot continue.";
   if (run.status === "reseed") {
     return `${asked} The box was already reclaimed, so answering restarts the work from the question.`;
   }
-  const ttl = run.pause_ttl_seconds;
-  const parked = run.paused_at ? Date.parse(run.paused_at) : NaN;
-  if (!(ttl > 0) || Number.isNaN(parked)) return asked;
-  const left = parked + ttl * 1_000 - now;
+  // THE ENGINE'S DEADLINE, never a TTL added to a stamp on this clock: the
+  // reaper reclaims the box at `keeps_place_until`, so that is the instant a
+  // reader is told about. Null or absent is a box held on no timer.
+  const until = run.keeps_place_until ? Date.parse(run.keeps_place_until) : NaN;
+  if (Number.isNaN(until)) return asked;
+  const left = until - now;
   if (left <= 0) return `${asked} Its box is past its pause window and may be reclaimed.`;
   // ONE ROUNDED MINUTE TOTAL, split afterwards. Flooring the hours out of
   // `left` and rounding the remainder independently rounds the same value two

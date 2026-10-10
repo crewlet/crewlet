@@ -953,7 +953,7 @@ func (r PendingRun) AskedOf(identities []string) bool {
 // park is the one state whose box is deliberately held for an open-ended human
 // wait, the completion poll skips it so nothing refreshes its keepalive, and
 // no tail is coming to settle it. Reading the missing stamp as "no snapshot"
-// is what made such a box invisible to the reaper ([pauseExpired]) for good.
+// is what made such a box invisible to the reaper ([PendingRun.HeldUntil]) for good.
 //
 // THE FALLBACK IS THE ROW'S OWN LAST WRITE, because on a parked row that write
 // IS the park — the one write that has to land for the run to be parked at all
@@ -983,6 +983,43 @@ func (r PendingRun) HeldSince() (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return r.UpdatedAt, true
+}
+
+// HeldUntil is when the reaper reclaims this run's held box — the instant its
+// question stops keeping the run's place, after which an answer restarts the
+// work from the question on a fresh box — and false where no such instant
+// exists.
+//
+// SCOPED TO A RUN PARKED ON A QUESTION or holding the answer to one: that is
+// the one state whose box is deliberately held for an open-ended human wait,
+// so it is the one that needs an engine-side expiry. Every other paused box
+// belongs to a tail that is actively being driven — a completion being
+// collected, an Execute loop resuming — and is settled by that tail within
+// the turn; a deadline on one of those would kill a box out from under live
+// work. (An ANSWERED run's box is held for as long as its resume waits — see
+// [PendingStore.ExpirePause].)
+//
+// WHETHER A BOX IS HELD IS THE ROW'S ANSWER, NOT A STAMP'S: the deadline is
+// counted from [PendingRun.HeldSince], which dates an unstamped parked row
+// from the park itself. Skipping an unstamped row instead made a run whose
+// pause record failed — one warn-only store write — a remote box billed until
+// a person noticed.
+//
+// A ZERO TTL HAS NO DEADLINE: it means "never hold a blocked box", so the
+// coordinator tore the box down when the run blocked and there is nothing to
+// reclaim — the run is re-seeded, and a re-seeded run holds no box at all.
+//
+// THE ROW'S OWN TTL, resolved at launch ([CoordStore] stamps the box's), so a
+// configuration applied since the park moves no deadline already running.
+func (r PendingRun) HeldUntil() (time.Time, bool) {
+	if r.Status != StatusAwaiting && r.Status != StatusAnswered {
+		return time.Time{}, false
+	}
+	heldSince, held := r.HeldSince()
+	if !held || r.PauseTTLSeconds <= 0 {
+		return time.Time{}, false
+	}
+	return heldSince.Add(time.Duration(r.PauseTTLSeconds * float64(time.Second))), true
 }
 
 // PendingStore is the persistence surface for detached runs.

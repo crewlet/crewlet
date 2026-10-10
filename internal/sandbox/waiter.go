@@ -823,38 +823,13 @@ func (w *Waiter) succeed(turnID string) {
 }
 
 // pauseExpired reports whether a run's paused box is past its pause TTL and
-// is the reaper's to reclaim.
-//
-// Scoped to runs parked on a clarification: that is the one state whose box is
-// deliberately held for an open-ended human wait, so it is the one that needs
-// an engine-side expiry. Every other paused box belongs to a tail that is
-// actively being driven — a completion being collected, an Execute loop
-// resuming — and is settled by that tail within the turn. Expiring those from
-// here would kill a box out from under live work.
-//
-// WHETHER A BOX IS HELD IS THE ROW'S ANSWER, NOT A STAMP'S. A parked row
-// naming a box describes a box being paid for whether or not the pause
-// instant was ever written, so the reading is [PendingRun.HeldSince] — see
-// there for why the deadline can be dated from the park itself. Skipping an
-// unstamped row instead made a run whose pause record failed — one warn-only
-// store write — a remote box billed until a person noticed.
+// is the reaper's to reclaim: whether now has reached the instant
+// [PendingRun.HeldUntil] names, which is where the scope and the arithmetic
+// are stated — ONE deadline, so the reaper and a person told when the box
+// goes can never disagree about it.
 func pauseExpired(run PendingRun, now time.Time) bool {
-	// An ANSWERED run's box is held for as long as its resume waits, which
-	// on a seat nobody holds is open-ended — see [PendingStore.ExpirePause].
-	if run.Status != StatusAwaiting && run.Status != StatusAnswered {
-		return false
-	}
-	heldSince, held := run.HeldSince()
-	if !held {
-		return false
-	}
-	// A zero TTL is not a deadline to enforce here: it means "never hold a
-	// blocked box", so the coordinator already tore this one down when the
-	// run blocked and there is no snapshot left to expire.
-	if run.PauseTTLSeconds <= 0 {
-		return false
-	}
-	return now.Sub(heldSince) >= time.Duration(run.PauseTTLSeconds*float64(time.Second))
+	until, held := run.HeldUntil()
+	return held && !now.Before(until)
 }
 
 // reapOne reclaims one run's paused box past its TTL ([pauseExpired]),
