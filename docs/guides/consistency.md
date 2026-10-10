@@ -114,6 +114,15 @@ actually answers, and the duration is derived from it through this node's own
 drain rate, so a caller who can say "at most 250 records behind" is naming the
 measured quantity instead of an estimate made from it.
 
+The lag a bound is checked against is this node's reading of its log's ends,
+which a read is served from memory rather than asked of the broker per read: it
+is re-read at most once a second, off the read's path, and **never more than
+three seconds old** — a second's recheck plus the two seconds that re-read may
+take. So a node may be up to three seconds' worth of the log's writes further
+behind than the lag it reports. Ends nobody could re-read for those three
+seconds are not served at all: the read is refused rather than checked against
+a lag nobody has measured since.
+
 Both are refused at every other level, because they are a staleness bound and
 nothing else is — asking for `linearizable&max_lag_seq=250` is a caller who
 believes they asked for something they did not.
@@ -212,12 +221,12 @@ rather than downgraded. Each code names a different thing to do.
 | `too_stale` | This node's lag is past what the read said it would accept. | Same, or accept more staleness. |
 | `stalled` | This node's applied prefix has stopped moving — its applier halted, or has been retrying a failure it cannot get past for longer than the retry budget. | Its rows are frozen, so a short answer would be wrong rather than old. Check the applier — `crewlet retention status` names the domain, its position and the error it is retrying. A retried failure clears on its own the moment an attempt succeeds. A `consistent_prefix` read, which makes no statement about age, is still answered by a stalled node at or above the published trim floor — a frozen prefix is still a coherent one — and refused by one below it. |
 | `no_quorum` | The barrier did not commit: the broker answered and a majority did not agree. | Retry after the hint (4 s, the broker's own minimum election timeout). If it persists, a member is down or partitioned. |
-| `broker_unreachable` | The broker did not answer at all. | Retry. Not the same as `no_quorum`, and the difference is where to look. |
+| `broker_unreachable` | The broker did not answer at all — the barrier a linearizable read appends, or this node's own reading of its log's ends (not re-read for three seconds) or its eviction row. | Retry. Not the same as `no_quorum`, and the difference is where to look. |
 | `log_full` | The log is at the byte ceiling its ordinary appends are held to — on the tracker and pages logs a sixteenth below the broker's, the rest being [kept for gate records](retention.md#the-gate-reserve) — so no barrier can be written. | Raise the ceiling with `crewlet retention set-capacity`, or unblock the trim — `crewlet retention status` names the term. **`stale` keeps answering**, so a full log costs `linearizable` reads — every seat tool read among them — rather than every read. |
 | `deferred` | This node holds a record it cannot decode covering what this read is about. | Ask another node, or upgrade this one. No amount of waiting changes it. |
 | `deferred_scope_unknown` | The deferred record's own scope could not be read, so nothing can be said about what it covers. | It blocks the whole domain, which is why it is a different code. Upgrade the node that is behind on the record version. |
 | `below_floor` | Records this node never applied are gone from the log. | Its rows are missing state no replay can supply. The node adopts a peer's snapshot on its own; ask another node meanwhile. See [Retention](retention.md#the-join-runbook). |
-| `floor_unknown` | The published trim floor could not be read. | An unreadable floor blocks: guessing here keeps a node serving over a hole it cannot see. Check coordination. |
+| `floor_unknown` | The published trim floor has not been read for four heartbeats (a minute). A read is served the floor this node last read — refreshed at most once a second, off the read's path, so a read asks the broker nothing — and a blip of coordination therefore refuses nothing; a floor nobody could refresh for the minute is no answer, and the refusal names how long ago it was last read. | An unreadable floor blocks: guessing here keeps a node serving over a hole it cannot see. Check coordination. |
 | `evicted` | This node has been removed from the fleet. | Nothing it holds is authoritative. Readmit it, or route elsewhere. |
 | `maintenance` | This node runs in a [capacity window](retention.md#changing-a-logs-ceiling) (`-mode maintenance` or `-mode seal`), which publishes nothing — and a `linearizable` read proves the log's end by appending a barrier to it. | Ask again once the fleet is back in normal mode. Every other level appends nothing and is still answered. Every node of a fleet in a window is in one, so no other node answers it either. |
 | `wrong_stream` | The position this read was asked to reach is on another stream — including a `min_position` naming another domain's log, which is refused at every level rather than quietly dropped. Or this node's own log is not the one its rows are keyed to: its checkpoint is past the log's end — what a broker restored from an older copy looks like, since it keeps the stream's creation instant — or the log holds, at that checkpoint, another record than the one it consumed there, which is the same restore written past this node's rows, or the stream was deleted and rebuilt — found at boot against the checkpoint, or under a running node by the position heartbeat and by any write at an expectation of zero, from the broker's own creation instant — or a peer re-anchored the log past this node's generation, so it continues from that peer's rows rather than this node's. Every one of these findings refuses the node's **writes** with the same word. | A caller bug, a cursor from before a reanchor, a recreated stream or a restored broker; see [Retention](retention.md#re-anchoring-a-recreated-or-restored-log). A peer's reanchor clears on its own, once this node has [adopted](retention.md#a-node-a-peer-re-anchored-past) a snapshot from the new generation. |

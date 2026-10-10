@@ -148,6 +148,10 @@ type runningLog struct {
 	// [statelog.Health].
 	progress progress
 
+	// ends is the log's two ends as a READ is served them: the last read
+	// that answered, refreshed off the read's path (servedhealth.go).
+	ends memo[streamEnds]
+
 	// reader is this domain's READ authority — the four levels, the
 	// refusal ladder, the coverage probe and the barrier wait — and it is
 	// what a domain's own reader answers through.
@@ -189,6 +193,10 @@ type stateLog struct {
 	// floorReads is how this node's reads of the published floors have been
 	// going, which is what the `floor_unknown` alarm ages.
 	floorReads floorReads
+
+	// floorMemo is the published floors as a READ is served them: the last
+	// read that answered, refreshed off the read's path (servedhealth.go).
+	floorMemo memo[publishedFloors]
 
 	// publishing serializes [stateLog.publishPositions], whose reading of
 	// the runners and write of the row must not interleave with another's.
@@ -1251,9 +1259,17 @@ func (s *stateLog) readerFor(domain statelog.Domain, spec statelog.StreamSpec,
 		Mode:   s.mode,
 		DB:     s.estate().Reader(),
 		Waiter: runner,
-		// READ FRESH ON EVERY READ, because every one of its terms can
+		// ASSEMBLED ON EVERY READ, because every one of its terms can
 		// change between two of them — and because a captured value
-		// would freeze the very refusals this seam exists to deliver.
+		// would freeze the very refusals this seam exists to deliver —
+		// but THE TWO REMOTE TERMS ARE SERVED FROM MEMORY: the published
+		// floors and the log's ends, re-read off the read's path once they
+		// are [servingRecheck] old and never served past their own bound
+		// — the floors' [statelog.FloorCacheStale], the ends' [endsStale]
+		// ([stateLog.servedHealth]). Read per read, they put the company's
+		// whole read rate on the coordination stream's leader and queued
+		// every read of a domain behind one stream-info round trip at a
+		// time.
 		//
 		// UNDER THIS NODE'S OWN CONTEXT, which is the only one that can
 		// be right here: [statelog.ReaderDeps.Health] takes none, and
@@ -1262,16 +1278,14 @@ func (s *stateLog) readerFor(domain statelog.Domain, spec statelog.StreamSpec,
 		// moment boot finished and turn every later read into a refusal.
 		// [stateLog.run] ends with the domain the health describes,
 		// which is what stops a probe outliving its own apply loop.
-		Health: func() statelog.Health {
-			h, err := s.health(s.run, running, s.readFloors(s.run))
-			if err != nil {
-				// AN UNREADABLE TERM REFUSES rather than serving. The
-				// health read reaches the broker and coordination, and
-				// a read certified against a health nobody could
-				// establish is certified against nothing.
-				return statelog.Health{Err: err.Error()}
-			}
-			return h
+		//
+		// AN ERROR IS A READINESS NOBODY COULD READ — the log's ends, the
+		// eviction row — which the reader refuses `broker_unreachable`
+		// naming it. A FLOOR nobody could refresh is not one: it is a
+		// health with an aged floor, refused `floor_unknown` naming how
+		// long ago it was read ([stateLog.servedHealth]).
+		Health: func() (statelog.Health, error) {
+			return s.servedHealth(s.run, running)
 		},
 		Drain:   runner.Drain,
 		Metrics: s.metrics,
@@ -1371,11 +1385,15 @@ type publishedFloors struct {
 	at time.Time
 }
 
-// readFloors reads the published floors once, and notes how the read went
-// ([stateLog.noteFloors]).
+// readFloors reads the published floors once, notes how the read went
+// ([stateLog.noteFloors]), and keeps a read that answered for the reads served
+// after it ([stateLog.servedFloors]).
 func (s *stateLog) readFloors(ctx context.Context) publishedFloors {
 	read := readFloorsOf(ctx, s.fleet)
 	s.noteFloors(read)
+	if read.err == nil {
+		s.floorMemo.store(read, read.at)
+	}
 	return read
 }
 
@@ -1925,10 +1943,32 @@ func (s *stateLog) health(ctx context.Context, running *runningLog,
 }
 
 // observe is every term of one domain's health but its floor: the checkpoint,
-// the applier's own state, the eviction row and the stream's bounds — the half
-// a reading can take before the published floors land ([readHealthsWith]).
-// [floored] completes it.
+// the applier's own state, the eviction row and the stream's bounds, read now
+// — the half a reading can take before the published floors land
+// ([readHealthsWith]). [floored] completes it.
 func (s *stateLog) observe(ctx context.Context, running *runningLog) (statelog.Health, error) {
+	return s.observeWith(ctx, running, func(ctx context.Context,
+		at statelog.Position) (streamEnds, error) {
+		return freshEnds(ctx, running, at)
+	})
+}
+
+// observeWith is [stateLog.observe] with the log's ends from endsOf — read now,
+// or served from memory to a read ([servedEnds]) — handed the checkpoint this
+// health describes.
+//
+// # A held end and a checkpoint that has moved past it
+//
+// Ends served from memory were read before this checkpoint, which may since
+// have applied records past them — records that are ON the log, since the
+// applier reads them from it. So where the checkpoint the ends were read
+// beside was not past them, the end is at least this checkpoint, and a node
+// that applied past a second-old end is not reported ahead of its log. Where
+// it WAS past them, the node was ahead of its log when they were read, and
+// stays so: a checkpoint past the end is a refusal no later apply could have
+// cleared. Read now, the two checkpoints are one and the rule changes nothing.
+func (s *stateLog) observeWith(ctx context.Context, running *runningLog,
+	endsOf func(context.Context, statelog.Position) (streamEnds, error)) (statelog.Health, error) {
 	now := time.Now()
 	at := running.runner.Committed()
 	health := statelog.Health{Position: at, AppliedThrough: at.Seq}
@@ -1977,7 +2017,7 @@ func (s *stateLog) observe(ctx context.Context, running *runningLog) (statelog.H
 		}
 		health.Evicted = evicted
 	}
-	first, end, err := running.log.Bounds(ctx)
+	ends, err := endsOf(ctx, at)
 	if err != nil {
 		// NEITHER HALF OF THE INEQUALITY CAN BE EVALUATED, and both
 		// failures are silent: a consumer above the stream's last
@@ -1985,6 +2025,10 @@ func (s *stateLog) observe(ctx context.Context, running *runningLog) (statelog.H
 		// its first is clamped upward with no error and reports itself
 		// caught up over a hole.
 		return health, err
+	}
+	first, end := ends.first, ends.last
+	if ends.before.Seq <= end && at.Seq > end {
+		end = at.Seq
 	}
 	health.FirstSeq = &first
 	// THE END ITSELF, beside the lag derived from it: the lag is clamped

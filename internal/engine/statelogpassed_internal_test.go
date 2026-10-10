@@ -396,7 +396,7 @@ func standUpDonor(t *testing.T, e *Engine, q *jetstream.Queue, rows string,
 // presentAsDataNode claims a presence lease for id as a data node on e's
 // fleet, so a join e makes lists it and expects its answer
 // ([statelog.AdoptDeps.Donors]).
-func presentAsDataNode(t *testing.T, e *Engine, id string) {
+func presentAsDataNode(t testing.TB, e *Engine, id string) {
 	t.Helper()
 	claimPresences(t, e.backends.Coord, map[string][]string{id: {"data"}})
 }

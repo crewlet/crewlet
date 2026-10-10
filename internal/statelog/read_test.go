@@ -94,13 +94,19 @@ func newReader(t *testing.T, db interface {
 		DB:     db,
 		Index:  index,
 		Waiter: waiter,
-		Health: h,
+		Health: readable(h),
 		Drain:  func() float64 { return 2000 },
 	})
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
 	return r
+}
+
+// readable is a health provider that always manages to read the health it
+// reports — every case here but the one about a health nobody could read.
+func readable(h func() statelog.Health) func() (statelog.Health, error) {
+	return func() (statelog.Health, error) { return h(), nil }
 }
 
 func pointQuery(level statelog.ReadLevel) statelog.Query {
@@ -646,6 +652,71 @@ func TestAStaleReadRefusesPastTheBoundItAsksFor(t *testing.T) {
 	}
 }
 
+// A READINESS NOBODY COULD READ REFUSES `broker_unreachable`, NAMING WHY — at
+// every level, and after a wait as well as before one.
+//
+// The provider's failure is its own return rather than a sentence in
+// [statelog.Health.Err]: folded into a zero health, the zero floor beside it
+// was refused first, and a stream leader that stopped answering the log's ends
+// reached a caller as "the published trim floor has never been read on this
+// node" — the wrong code and a false sentence, sending an operator to
+// coordination.
+func TestAnUnreadableReadinessRefusesBrokerUnreachable(t *testing.T) {
+	t.Parallel()
+	const why = "the stream's leader does not answer"
+	refusedFor := func(t *testing.T, err error, level statelog.ReadLevel) {
+		t.Helper()
+		var refusal *statelog.Refused
+		if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseBrokerUnreachable ||
+			!strings.Contains(refusal.Detail, why) {
+			t.Fatalf("a %s read over an unreadable readiness = %v, want %q naming %q",
+				level, err, statelog.RefuseBrokerUnreachable, why)
+		}
+	}
+	unread := func() (statelog.Health, error) { return statelog.Health{}, errors.New(why) }
+	db := newStubStore(t)
+	r, err := statelog.NewReader(statelog.ReaderDeps{
+		Domain: probeDomain{}, Spec: specOf(probeDomain{}), Mode: statelog.ModeNormal,
+		DB: db, Waiter: &stubWaiter{at: healthy().Position}, Health: unread,
+		Drain: func() float64 { return 2000 },
+	})
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	for _, level := range statelog.ReadLevels {
+		_, err := r.Read(t.Context(), pointQuery(level), func(*sql.Tx) error { return nil })
+		refusedFor(t, err, level)
+	}
+	if got := db.reads.Load(); got != 0 {
+		t.Fatalf("reads over an unreadable readiness opened %d transaction(s)", got)
+	}
+
+	// AFTER A WAIT: the readiness answered before it and not after.
+	var asked atomic.Int64
+	waited := func() (statelog.Health, error) {
+		if asked.Add(1) == 1 {
+			return healthy(), nil
+		}
+		return unread()
+	}
+	w := &stubWaiter{at: healthy().Position}
+	r, err = statelog.NewReader(statelog.ReaderDeps{
+		Domain: probeDomain{}, Spec: specOf(probeDomain{}), Mode: statelog.ModeNormal,
+		DB: db, Waiter: w, Health: waited, Drain: func() float64 { return 2000 },
+	})
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	q := pointQuery(statelog.ReadSession)
+	q.Session = statelog.Position{Stream: probeStream, Generation: 1, Seq: 42}
+	_, err = r.Read(t.Context(), q, func(*sql.Tx) error { return nil })
+	if w.waited.Load() != 1 {
+		t.Fatalf("the session read waited %d time(s), want once — the case is "+
+			"about a readiness read after a wait", w.waited.Load())
+	}
+	refusedFor(t, err, statelog.ReadSession)
+}
+
 // EVERY READ LEVEL IS ONE THIS BUILD KNOWS, and consistent-prefix is never a
 // default.
 //
@@ -1070,7 +1141,7 @@ func TestANodeThatPublishesNothingAppendsNoBarrier(t *testing.T) {
 	deps := func(mode statelog.MaintenanceMode, index *statelog.ReadIndex) statelog.ReaderDeps {
 		return statelog.ReaderDeps{
 			Domain: probeDomain{}, Spec: specOf(probeDomain{}), Mode: mode,
-			DB: newStubStore(t), Index: index, Health: healthy,
+			DB: newStubStore(t), Index: index, Health: readable(healthy),
 			Waiter: &stubWaiter{at: healthy().Position},
 		}
 	}

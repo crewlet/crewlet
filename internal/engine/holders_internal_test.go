@@ -75,7 +75,7 @@ func TestTheHoldersAreTheLiveDataNodes(t *testing.T) {
 }
 
 // claimPresences claims a presence lease for every node, with its roles.
-func claimPresences(t *testing.T, backend coord.Backend, roles map[string][]string) {
+func claimPresences(t testing.TB, backend coord.Backend, roles map[string][]string) {
 	t.Helper()
 	for id, r := range roles {
 		if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource(id), coord.AcquireOptions{

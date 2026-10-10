@@ -59,8 +59,11 @@ type DomainLog struct {
 	// at open and read immutably thereafter.
 	//
 	// The mutex is still needed HERE, because two state reads share this
-	// handle. Its callers are the readiness check, the trim tick and the
-	// operator report — none of them hot.
+	// handle. Its callers are the readiness checks, the trim tick and the
+	// operator report — none of them hot. NOT A READ'S: a read's readiness
+	// is served the log's ends from memory, refreshed from here at most once
+	// a second whatever the read rate, because asked per read this mutex
+	// queued every read of a domain behind one state round trip at a time.
 	state   jetstream.Stream
 	stateMu sync.Mutex
 }
