@@ -2420,7 +2420,11 @@ node holds says why it shows nothing. **Settings** is the company document's
 half — identity and contacts, the model and budget with each capped window's
 live meter, and a seat's tool credentials by server and **variable name only**:
 no value the engine sent for a credential reaches the page, not the reference,
-not the mask. Every value there is changed in the org editor ("Edit in org").
+not the mask. The org editor ("Edit in org") changes what it draws as a field;
+what it only shows — the auxiliary model, learning, tool credentials — no
+screen edits, and the tab says so with the two ways it is changed,
+`crewlet config import` or `PUT /config`, rather than promising that every
+value there is the editor's.
 
 ### The attention queue
 

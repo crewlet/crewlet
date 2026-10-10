@@ -4,9 +4,12 @@
  *
  * # Read-only here, and it says where the change is made
  *
- * Every value on this tab is one the org editor writes, so the tab offers
+ * Most values on this tab are ones the org editor writes, so the tab offers
  * "Edit in org" (`#/agents/edit?seat=`) rather than a second, narrower form
- * that would have its own idea of which fields exist.
+ * that would have its own idea of which fields exist. NOT EVERY ONE: the
+ * auxiliary model, learning and tool credentials are drawn there as facts it
+ * does not edit, and no screen writes them, so the lede says so rather than
+ * sending a reader to an editor with no field for the change they came for.
  *
  * # A credential is named, never shown
  *
@@ -25,7 +28,7 @@
  */
 
 import { useMemo, type ReactNode } from "react";
-import { ButtonLink, Callout, Card, EmptyState } from "@crewlethq/ui";
+import { ButtonLink, Callout, Card, EmptyState, InlineCode } from "@crewlethq/ui";
 import { CpuGlyph, KeyGlyph, PencilGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { PropertiesRail, type Property } from "~/app/frame/PropertiesRail.tsx";
@@ -132,8 +135,10 @@ export function Settings({
     <div className="col gap-4">
       <div className="row gap-2 wrap">
         <p className="t-caption prof-lede">
-          From the company document. Every value here is changed in the org editor, where the change
-          is validated and applied as a new revision.
+          From the company document. The org editor changes what it draws as a field, validated and
+          applied as a new revision. What it only shows, such as the auxiliary model, learning and
+          tool credentials, no screen edits: it is changed with{" "}
+          <InlineCode>crewlet config import</InlineCode> or <InlineCode>PUT /config</InlineCode>.
         </p>
         <span className="spacer" />
         <ButtonLink

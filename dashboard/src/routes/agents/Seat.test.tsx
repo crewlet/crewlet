@@ -2114,6 +2114,14 @@ test("the settings tab names a seat's credentials and prints none of their value
   expect(screen.getByRole("link", { name: "Edit in org" }).getAttribute("href")).toBe(
     "#/agents/edit?seat=swe",
   );
+  // NOT "every value here is changed in the org editor": the editor shows a
+  // seat's tool credentials, auxiliary model and learning and edits none of
+  // them, so the lede says what does.
+  const lede = screen.getByText(/From the company document/);
+  expect(lede.textContent).not.toContain("Every value here");
+  expect(lede.textContent).toContain(
+    "no screen edits: it is changed with crewlet config import or PUT /config.",
+  );
 });
 
 // THE GUARDED DOCUMENT IS READ ONCE FOR THE WHOLE PROFILE. The shell reads it

@@ -669,3 +669,20 @@ test("removing an environment row keeps every other row's field its own", async 
   expect(left.value).toBe("SECOND");
   expect(left).toBe(second);
 });
+
+// A PER-SEAT SERVER'S GRANT IS WRITTEN WHERE NO SCREEN IS. The hint sent the
+// operator to Edit org, which shows a seat's and a unit's mcp_env as names and
+// writes neither, so it names the write that does.
+test("a per-seat server says how its seats' credentials are written", async () => {
+  stubConfig(() => json(company, 200, { ETag: '"r1"' }));
+  const dialog = await openAdd();
+  await act(async () => {
+    fireEvent.click(within(dialog).getByRole("combobox", { name: "Instances" }));
+  });
+  fireEvent.mouseDown(screen.getByRole("option", { name: /One per seat/ }));
+  const hint = within(dialog).getByText(/Launched only for a seat/);
+  expect(hint.textContent).toContain(
+    "under mcp_env, which no screen writes: add them with crewlet config import or PUT /config.",
+  );
+  expect(hint.textContent).not.toContain("Edit org");
+});
