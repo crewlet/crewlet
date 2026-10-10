@@ -186,6 +186,10 @@ type stateLog struct {
 	db     *store.DB
 	fleet  coord.Fleet
 
+	// floorReads is how this node's reads of the published floors have been
+	// going, which is what the `floor_unknown` alarm ages.
+	floorReads floorReads
+
 	// publishing serializes [stateLog.publishPositions], whose reading of
 	// the runners and write of the row must not interleave with another's.
 	publishing sync.Mutex
@@ -1367,9 +1371,12 @@ type publishedFloors struct {
 	at time.Time
 }
 
-// readFloors reads the published floors once.
+// readFloors reads the published floors once, and notes how the read went
+// ([stateLog.noteFloors]).
 func (s *stateLog) readFloors(ctx context.Context) publishedFloors {
-	return readFloorsOf(ctx, s.fleet)
+	read := readFloorsOf(ctx, s.fleet)
+	s.noteFloors(read)
+	return read
 }
 
 // readFloorsOf reads fleet's published floors once — the one read every
@@ -1378,9 +1385,56 @@ func (s *stateLog) readFloors(ctx context.Context) publishedFloors {
 func readFloorsOf(ctx context.Context, fleet coord.Fleet) publishedFloors {
 	floors, err := fleet.Floors(ctx)
 	if err != nil {
-		return publishedFloors{err: fmt.Errorf("engine: read the fleet's published trim floors: %w", err)}
+		return publishedFloors{at: time.Now(),
+			err: fmt.Errorf("engine: read the fleet's published trim floors: %w", err)}
 	}
 	return publishedFloors{floors: floors, at: time.Now()}
+}
+
+// floorReads is how this node's reads of the published floors have been going:
+// since when every one has failed, or zero while the last one answered.
+//
+// THE NODE'S OWN EXPERIENCE OF THE REGISTER, not a probe of its own: every
+// read that refuses a request or a verdict over an unread floor is one noted
+// here, so the `floor_unknown` alarm ages exactly the outage those refusals
+// are — and a node nobody asks anything still reads the register on every
+// alarm evaluation, through the report.
+type floorReads struct {
+	mu sync.Mutex
+
+	// failingSince is when the first of the reads that have failed since
+	// the last one answered landed.
+	failingSince time.Time
+}
+
+// noteFloors records one read of the published floors, at the instant it
+// landed. Nil-safe, for a report over no state log.
+func (s *stateLog) noteFloors(read publishedFloors) {
+	if s == nil {
+		return
+	}
+	s.floorReads.mu.Lock()
+	defer s.floorReads.mu.Unlock()
+	switch {
+	case read.err == nil:
+		s.floorReads.failingSince = time.Time{}
+	case s.floorReads.failingSince.IsZero():
+		s.floorReads.failingSince = read.at
+	}
+}
+
+// floorsUnreadFor is how long every read of the published floors has failed,
+// as of now — zero while the last one answered.
+func (s *stateLog) floorsUnreadFor(now time.Time) time.Duration {
+	if s == nil {
+		return 0
+	}
+	s.floorReads.mu.Lock()
+	defer s.floorReads.mu.Unlock()
+	if s.floorReads.failingSince.IsZero() {
+		return 0
+	}
+	return max(0, now.Sub(s.floorReads.failingSince))
 }
 
 // floor is domain's floor at generation out of this read ([floorFor]); a
