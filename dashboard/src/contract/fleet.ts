@@ -1,3 +1,5 @@
+import type { AuthAgreement, TableDigest } from "./access.ts";
+
 /**
  * The fleet's broker and object store, as the engine bounds them: the kinds
  * a node's broker can be and the disagreements named between the two records
@@ -48,3 +50,15 @@ export const BROKER_REMOVE_TIMEOUT_MS = 185_000;
  * would not give up.
  */
 export const OBJECTS_STATES = ["unavailable", "not_yet", "reported"] as const;
+
+/**
+ * One node row's API key table — `queries.NodeAuth` — against the table of
+ * the node answering. ABSENT from a node that serves no API, which admits
+ * nobody by a key. Held member for member by `internal/api/queries`'
+ * `TestTheNodesScreenReadsTheKeyTableEveryRowSends`.
+ */
+export interface NodeAuth {
+  agreement: AuthAgreement;
+  /** What the node published, one per keyring key id. Empty: no keyring. */
+  digests: TableDigest[];
+}

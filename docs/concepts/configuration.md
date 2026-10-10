@@ -831,15 +831,17 @@ it decides which pages a browser lets read an answer, and no caller reaches more
 through a node because of it.
 
 While two live nodes disagree, the [`auth_diverged`](../reference/alarms.md)
-alarm fires, naming which nodes hold which table. A node counts while its
-presence lease is live and stops counting when it lapses, so a node that has
-gone stops holding the alarm up within one lease TTL. It is an **alarm and not
-a refusal**: a rolling key rotation passes through exactly this state — each
-node is restarted with the new table while its peers still hold the old one —
-and a node that refused to serve beside a peer with another table would make
-every rotation an outage. A node serving the API **with no keyring** has
-nothing to key a fingerprint with, so it publishes none and cannot be compared,
-and the alarm does not fire on it.
+alarm fires, naming which nodes hold which table, and Settings › Nodes and
+Settings › People & access show each node's table against the one you are on
+(`GET /fleet`, `GET /access`). A node counts while its presence lease is live
+and stops counting when it lapses, so a node that has gone stops holding the
+alarm up within one lease TTL. It is an **alarm and not a refusal**: a rolling
+key rotation passes through exactly this state — each node is restarted with
+the new table while its peers still hold the old one — and a node that refused
+to serve beside a peer with another table would make every rotation an outage.
+A node serving the API **with no keyring** has nothing to key a fingerprint
+with, so it publishes none and cannot be compared: the screens say so, and the
+alarm does not fire on it.
 
 ### Managed configuration
 

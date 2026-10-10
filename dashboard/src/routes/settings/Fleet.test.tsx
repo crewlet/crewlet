@@ -584,3 +584,89 @@ describe("the Nodes table", () => {
     });
   });
 });
+
+// TIER A IS PER NODE, so a node's API may admit other keys than this one's —
+// a key that is a member's here may be an admin's there. The engine compares
+// every live node's key table against the node answering, and the screen draws
+// its verdict: a divergence beside the node's name and as an alert naming it,
+// and every reading in the node's own facts.
+describe("which keys each node admits", () => {
+  class InertWebSocket {
+    static CONNECTING = 0;
+    static OPEN = 1;
+    static CLOSED = 3;
+    readyState = InertWebSocket.CONNECTING;
+    send(): void {}
+    close(): void {}
+  }
+
+  afterEach(() => {
+    cleanup();
+    location.hash = "#/";
+  });
+
+  const table = (d: string) => [{ key_id: "k1", digest: d }];
+
+  test("a node judging keys by another table is marked by name and named in an alert", async () => {
+    Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
+    location.hash = "#/settings/nodes";
+    const answer = {
+      nodes: [
+        node({ id: "core-1", auth: { agreement: "same", digests: table("aa") } }),
+        node({ id: "core-2", auth: { agreement: "same", digests: table("aa") } }),
+        node({ id: "core-3", auth: { agreement: "different", digests: table("bb") } }),
+        node({ id: "core-4", auth: { agreement: "incomparable", digests: [] } }),
+        node({ id: "worker-1" }),
+      ],
+      seats: [],
+      duties: [],
+      unplaceable: [],
+      unmanned_roles: [],
+      this_node: "core-1",
+      target_epoch: 3,
+    };
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
+      what === "fleet" ? Promise.resolve(answer) : new Promise(() => {});
+    render(
+      <ClientContext.Provider value={{ store, socket }}>
+        <Router>
+          <Fleet />
+        </Router>
+      </ClientContext.Provider>,
+    );
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/core-3 judges API keys by a different table from core-1/);
+    // ONE MARK, on the one node that differs: not on this node, not on a node
+    // nothing can compare, and not on one that serves no API.
+    const marks = screen.getAllByText("different keys");
+    expect(marks).toHaveLength(1);
+    expect(marks[0]!.closest(".grid-row")?.textContent).toContain("core-3");
+  });
+
+  test("a node's facts say how its keys stand, whichever reading it is", () => {
+    const keys = (n: FleetNode, here?: boolean) => {
+      const f = nodeFacts({ node: n, target: 3, here }).find((x) => x.label === "Keys");
+      render(<>{f?.value}</>);
+      const text = document.body.textContent ?? "";
+      cleanup();
+      return text;
+    };
+    expect(keys(node({ auth: { agreement: "different", digests: table("bb") } }))).toBe(
+      "Different keys",
+    );
+    expect(keys(node({ auth: { agreement: "same", digests: table("aa") } }))).toBe("Same keys");
+    expect(keys(node({ auth: { agreement: "incomparable", digests: table("cc") } }))).toBe(
+      "Cannot compare",
+    );
+    // No keyring is its own reading — its remedy is a keyring, not a restart.
+    expect(keys(node({ auth: { agreement: "incomparable", digests: [] } }))).toBe("No keyring");
+    expect(keys(node({ auth: { agreement: "same", digests: table("aa") } }), true)).toBe(
+      "This node’s",
+    );
+    // ABSENT IS A NODE SERVING NO API, worded rather than blank.
+    render(<>{nodeFacts({ node: node(), target: 3 }).find((x) => x.label === "Keys")?.value}</>);
+    expect(document.body.innerHTML).toMatch(/Serves no API/);
+  });
+});

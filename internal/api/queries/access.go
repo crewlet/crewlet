@@ -108,6 +108,10 @@ type AccessAnswer struct {
 	Tokens []AccessToken `json:"tokens"`
 	// People are the chart's human seats, in handle order. Always a list.
 	People []AccessPerson `json:"people"`
+	// Fleet is how the table these keys are holds against every other live
+	// node's that serves the API: Tier A is per node, so a key this screen
+	// names a member may be an admin's on a node behind the same address.
+	Fleet AccessFleet `json:"fleet"`
 }
 
 // AccessAuth is the posture the guard enforces.
@@ -209,6 +213,7 @@ func (s Sources) access(ctx context.Context, _ Params) (any, error) {
 		},
 		Tokens: make([]AccessToken, 0, len(posture.Keys)),
 		People: []AccessPerson{},
+		Fleet:  s.accessFleet(ctx),
 	}
 	keys := slices.SortedFunc(slices.Values(posture.Keys), func(a, b AccessKey) int {
 		return strings.Compare(a.ID, b.ID)

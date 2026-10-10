@@ -30,6 +30,9 @@ class InertWebSocket {
 /** The token this browser presents — which must appear nowhere on the page. */
 const HELD = "held-token-value-8Hq2";
 
+/** One table's digest under the fleet's one keyring key. */
+const DIGEST = "3f9a1c2b0d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c";
+
 const answer: AccessAnswer = {
   auth: { disabled: false, anonymous: "public", allowed_origins: [], company_writers: [] },
   tokens: [
@@ -77,6 +80,11 @@ const answer: AccessAnswer = {
       contacts: [{ key: "slack_user_id", value: "U0DEE", reference: false, resolves: true }],
     },
   ],
+  fleet: {
+    digests: [{ key_id: "k1", digest: DIGEST }],
+    listed: true,
+    nodes: [{ id: "core-2", agreement: "same", digests: [{ key_id: "k1", digest: DIGEST }] }],
+  },
 };
 
 function mount(query: (what: string) => Promise<unknown>) {
@@ -209,4 +217,51 @@ test("a refused reader sees the refusal alone — no tiles, no empty lists", asy
   expect(view.container.querySelector(".crewlet-statcard")).toBeNull();
   expect(screen.queryByText("People", { selector: "*" })).toBeNull();
   expect(screen.queryByText(/No token is configured/)).toBeNull();
+});
+
+// TIER A IS PER NODE, so the keys this page lists may not be the keys every
+// node admits. A node judging keys by another table is an alert — a key may
+// reach more through it — and every reading that is not an agreement is said
+// as what it is, never as "every node agrees".
+test("a node admitting other keys is an alert, and nothing unknown reads as agreement", async () => {
+  const fleet = (over: Partial<AccessAnswer["fleet"]>) => ({
+    ...answer,
+    fleet: { ...answer.fleet, ...over },
+  });
+
+  mount(async (what) =>
+    what === "access"
+      ? fleet({
+          nodes: [
+            { id: "core-2", agreement: "same", digests: [{ key_id: "k1", digest: DIGEST }] },
+            { id: "core-3", agreement: "different", digests: [{ key_id: "k1", digest: "00" }] },
+          ],
+        })
+      : null,
+  );
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toMatch(/core-3 judges API keys by a different table from this node/);
+  expect(alert.textContent).not.toMatch(/core-2/);
+  cleanup();
+
+  mount(async (what) => (what === "access" ? answer : null));
+  expect(await screen.findByText("core-2 admits these same keys.")).toBeDefined();
+  expect(screen.queryByRole("alert")).toBeNull();
+  cleanup();
+
+  const cases: [Partial<AccessAnswer["fleet"]>, RegExp][] = [
+    [{ listed: false, nodes: [] }, /could not be listed/],
+    [{ digests: [] }, /This node has no keyring/],
+    [{ nodes: [] }, /the only node serving the API/],
+    [
+      { nodes: [{ id: "core-4", agreement: "incomparable", digests: [] }] },
+      /core-4 cannot be compared/,
+    ],
+  ];
+  for (const [over, says] of cases) {
+    mount(async (what) => (what === "access" ? fleet(over) : null));
+    expect((await screen.findByText(says)).textContent).not.toMatch(/admits? these same keys\./);
+    expect(screen.queryByRole("alert")).toBeNull();
+    cleanup();
+  }
 });

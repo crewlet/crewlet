@@ -2061,6 +2061,13 @@ func (e *Engine) StallLag() time.Duration {
 // surfaces that report which seats it holds.
 func (e *Engine) Node() *node.Node { return e.node }
 
+// AuthDigest is the fingerprint of the key table this node's API admits, as
+// its presence publishes it ([placement.AuthDigest]) — the zero digest on a
+// node that serves no API. For the API's own answers, which compare every
+// live node against the one answering, and must compare against what this
+// process admits rather than a second derivation of it.
+func (e *Engine) AuthDigest() placement.AuthDigest { return e.profile.Auth }
+
 // Backends exposes the infrastructure this engine runs on.
 //
 // For the API `crewlet run` serves beside the engine, in the same process: the

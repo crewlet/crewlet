@@ -104,6 +104,10 @@ var contract = []Entry{
 	{"AnonymousAccess", ReadUnion, "internal/api/queries.TestTheDashboardKnowsExactlyTheAccessStates"},
 	{"Reach", ReadUnion, "internal/api/queries.TestTheDashboardKnowsExactlyTheAccessStates"},
 	{"AccessBinding", ReadUnion, "internal/api/queries.TestTheDashboardKnowsExactlyTheAccessStates"},
+	{"AuthAgreement", ReadUnion, "internal/api/queries.TestTheDashboardKnowsExactlyTheAccessStates"},
+	{"AccessFleet", ReadInterface, "internal/api/queries.TestTheAccessScreenReadsWhatThisAnswerSends"},
+	{"AccessNode", ReadInterface, "internal/api/queries.TestTheAccessScreenReadsWhatThisAnswerSends"},
+	{"TableDigest", ReadInterface, "internal/api/queries.TestTheAccessScreenReadsWhatThisAnswerSends"},
 
 	// credentials.ts
 	{"CredentialPoolAnswer", ReadInterface, "internal/api/queries.TestTheModelsScreenReadsWhatTheCredentialPoolSends"},
@@ -229,6 +233,7 @@ var contract = []Entry{
 	{"BROKER_FINDING_KINDS", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryBrokerFinding"},
 	{"BROKER_REMOVE_TIMEOUT_MS", ReadScalar, "internal/api.TestTheDashboardWaitsPastABrokerRemoval"},
 	{"OBJECTS_STATES", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryObjectsState"},
+	{"NodeAuth", ReadInterface, "internal/api/queries.TestTheNodesScreenReadsTheKeyTableEveryRowSends"},
 
 	// links.ts
 	{"PAGE_ADDRESS_PREFIX", ReadScalar, "internal/pages.TestTheDashboardAddressesAPageTheWayTheBacklinksReadIt"},

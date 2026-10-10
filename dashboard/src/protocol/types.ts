@@ -34,6 +34,7 @@ import type { SANDBOX_TAIL_OUTCOMES } from "../contract/sandbox.ts";
 import type { STORY_ACTIONS, STORY_ORIGINS, STORY_OUTCOMES } from "../contract/stories.ts";
 import type { LIVE_CALL_DETAIL } from "../contract/wire.ts";
 import type { AccessAnswer, Reach, TokenRole } from "../contract/access.ts";
+import type { NodeAuth } from "../contract/fleet.ts";
 import type { McpServersStatusAnswer } from "../contract/mcp.ts";
 import type { CredentialPoolAnswer } from "../contract/credentials.ts";
 import type { Coverage } from "../contract/coverage.ts";
@@ -1608,6 +1609,12 @@ export interface FleetNode {
   draining?: boolean;
   started_at?: string;
   posture?: string;
+  /**
+   * Which key table the node's API admits, against the node answering —
+   * absent on a node that serves no API. Tier A is per node, so a key that is
+   * a member's here may be an admin's there, and this is where it shows.
+   */
+  auth?: NodeAuth;
 }
 
 /**

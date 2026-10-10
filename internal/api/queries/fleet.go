@@ -83,6 +83,17 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 			"seats":      held[id],
 			"expires_in": secondsLeft(lease.ExpiresAt, now),
 		}
+		// WHICH KEY TABLE ITS API ADMITS, against the one this node does —
+		// absent on a node that serves no API. This node's own row is this
+		// PROCESS's table rather than its presence row's, which for a lease
+		// TTL after a restart is still the previous process's.
+		published := profile.Auth
+		if id == s.NodeID {
+			published = s.AuthDigest
+		}
+		if auth := s.nodeAuth(published); auth != nil {
+			row["auth"] = auth
+		}
 		status := applied[id]
 		row["config_epoch"] = status.Epoch
 		row["config_status"] = status.Status
