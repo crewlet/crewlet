@@ -37,7 +37,10 @@ type ViewReader interface {
 	Views(ctx context.Context, q tracker.ViewQuery) (tracker.ViewListing, error)
 }
 
-type listWorkViews struct{ deps WorkDeps }
+type listWorkViews struct {
+	deps  WorkDeps
+	leads Leads
+}
 
 var _ tools.Callable = (*listWorkViews)(nil)
 
@@ -60,7 +63,8 @@ func (t *listWorkViews) Parameters() map[string]any {
 			"viewer": map[string]any{
 				"type": "string",
 				"description": "Whose strip to render: their personal views " +
-					"and their pins first. Omit for the shared strip.",
+					"and their pins first — yours, or somebody's in your " +
+					"line. Omit for the shared strip.",
 			},
 		},
 		"required": []string{"container"},
@@ -75,16 +79,35 @@ func (t *listWorkViews) Call(ctx context.Context, args map[string]any) (tools.Re
 	if refusal != "" {
 		return failed(refusal), nil
 	}
+	// AN UNNAMED VIEWER IS THE SHARED STRIP, which is everybody's and asks
+	// nothing of the caller. A NAMED one is a person's personal views and
+	// pins — their own record, read by them and the leads whose line they
+	// are in ([readsRecordOf]), exactly as the API's strip is
+	// (`viewerPins`). Unchecked, a reader could walk the chart and page
+	// through every person's private views by handle.
+	var viewer tracker.Party
+	if named := strings.TrimSpace(argString(args, "viewer")); named != "" {
+		actor, err := t.deps.actor(ctx, nil)
+		if err != nil {
+			//nolint:nilerr // A tool failure is a RESULT the caller reads.
+			return notInATurn(tracker.ListWorkViewsTool), nil
+		}
+		if !readsRecordOf(ctx, actor, named, t.leads) {
+			return notTheirs(named, "views and pins"), nil
+		}
+		// BOTH OF THAT PERSON'S NAMES, resolved from the chart ([WorkDeps.Party]):
+		// a view and a pin are written through the person's own key, so
+		// they are OWNED by the key's id while the strip is asked for under
+		// the seat's — asked about one name, a founder's own strip came
+		// back with none of what their assistant saved.
+		viewer = t.deps.partyOf(named)
+	}
 	listing, err := t.deps.Reader.Views(ctx, tracker.ViewQuery{
 		Container: container,
 		// THE CHART, so `unit:engineering` and `unit:eng` are one
 		// strip rather than two — see [tracker.Units].
-		Units: t.deps.Units,
-		// ONE IDENTITY, because that is all a tool argument carries —
-		// see the same note on `get_my_work`. Resolving a credential to
-		// the seat it is bound to is the CHART's answer and this
-		// package holds none.
-		Viewer: tracker.PartyOf(strings.TrimSpace(argString(args, "viewer"))),
+		Units:  t.deps.Units,
+		Viewer: viewer,
 		// THE SEAT'S OWN LEVEL, like every other tool read here: a
 		// caller that saves a view and then lists the strip sees the
 		// view it just saved — see [seatReadLevel].

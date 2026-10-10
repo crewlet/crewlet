@@ -168,12 +168,13 @@ credential's the fallback.
 One change that concerned you under both names is **one** notice, under the
 stronger of the two reasons — the same rule that already gives one handle one
 reason. And whoever reads somebody else's day — a lead reading a person in
-their line, or an agent seat reading its lead's inbox or state with
-`work_inbox` or `get_person` — is handed *that* person's two names from the
-chart, never the credential in anybody's hand. Nobody else reads it through
-the API, an admin key included: a key's role is reach over the engine, and
-whose inbox somebody may open is the chart's
-([A lead's line](organization-model.md#a-leads-line)).
+their line, on the dashboard or through their assistant with `work_inbox` or
+`get_person` — is handed *that* person's two names from the chart, never the
+credential in anybody's hand. Nobody else reads it, through the API or the
+operator tools, an admin key included: a key's role is reach over the engine,
+and whose inbox somebody may open is the chart's
+([A lead's line](organization-model.md#a-leads-line)). No agent seat reads a
+person's record at all — it holds none of those tools.
 
 **The binding is written on the seat, not on the token.** Tier A is the root of
 trust and may never read Tier B — it holds the keys to the secret store — so a

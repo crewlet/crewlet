@@ -245,11 +245,12 @@ type WorkDeps struct {
 	// mention them. This is the attribution key, asked for by name.
 	//
 	// A FUNCTION OF THE HANDLE rather than of the caller, because the
-	// party belongs to the person ASKED ABOUT: an operator reading a
-	// report's inbox, or a seat reading its lead's, is handed THAT person's
-	// two names from the chart, never the credential in anybody's hand.
-	// Both surfaces wire it — an agent seat's own rows are filed under its
-	// handle alone, but the person it asks about may be bound to a token.
+	// party belongs to the person ASKED ABOUT: a lead reading a report's
+	// inbox is handed THAT person's two names from the chart, never the
+	// credential in anybody's hand. The tools that ask it — `get_person`,
+	// `work_inbox` and a named `list_work_views` viewer — are the operator
+	// surface's, and each is held to whose record the caller may read
+	// before it asks ([readsRecordOf]).
 	//
 	// Nil answers the handle alone, which is the honest state for a
 	// surface with no chart loaded.
