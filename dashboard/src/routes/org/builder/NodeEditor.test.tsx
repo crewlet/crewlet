@@ -133,7 +133,6 @@ function connected(): CompanyDocument {
       slack: {
         bot_token: "Bearer sk-live-${SUFFIX}",
         signing_secret: "${DEV_SLACK_SECRET}",
-        channel: "C1",
       },
       mattermost: { bot_token: "${DEV_MM_TOKEN}", channel: "eng", username: "dev-bot" },
     },
@@ -783,7 +782,11 @@ describe("integrations", () => {
     // A tool's section is a part of Integrations, and is heard as one.
     expect(screen.getByRole("heading", { name: "Integrations", level: 2 })).toBeDefined();
     expect(screen.getByRole("heading", { name: "GitHub", level: 3 })).toBeDefined();
-    expect((field("Slack channel ID") as HTMLInputElement).value).toBe("C1");
+    // A seat's Slack app has no channel of its own: the seat speaks in its
+    // unit's, so the section says so rather than offering a box the engine
+    // refuses on every save.
+    expect(screen.getByText(/speaks as its own Slack app, in its unit's channel/)).toBeDefined();
+    expect(screen.queryByLabelText(labelled("Slack channel ID"))).toBeNull();
     expect((field("Mattermost channel") as HTMLInputElement).value).toBe("eng");
     expect(screen.queryByLabelText(labelled("Bot username"))).toBeNull();
     expect(
@@ -853,7 +856,7 @@ describe("integrations", () => {
     expect(screen.getByText(/This enrols the seat in GitHub/)).toBeDefined();
   });
 
-  test("a Slack channel needs the seat's own app, and the Datadog fallback is named on its seat", () => {
+  test("a seat with no chat app of its own says so, and the Datadog fallback is named on its seat", () => {
     edit(keyedState(connected()), "seat:sre");
     expect(screen.queryByLabelText(labelled("Slack channel ID"))).toBeNull();
     expect(screen.getByText(/has no Slack app of its own/)).toBeDefined();

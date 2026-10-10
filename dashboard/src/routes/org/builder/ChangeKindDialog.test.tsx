@@ -46,7 +46,7 @@ function withFields(): CompanyDocument {
     behavioral_guidelines: ["Be kind"],
     mcp_env: { tracker: { TOKEN: "__redacted__" } },
     integrations: {
-      slack: { bot_token: "${DEV_SLACK}", signing_secret: "${DEV_SIGN}", channel: "C1" },
+      slack: { bot_token: "${DEV_SLACK}", signing_secret: "${DEV_SIGN}" },
       github: { tier: "review", app_slug: "acme-dev", private_key: "${DEV_KEY}" },
     },
   };
@@ -89,7 +89,7 @@ test("what stays at the vendors and in the secret store is named, and nothing fo
       data: {
         name: "QA",
         mcp_env: { tracker: { TOKEN: "${QA_TRACKER}" } },
-        integrations: { slack: { channel: "C9" } },
+        integrations: { slack: { bot_token: "${QA_SLACK_BOT}" } },
       },
     },
   });

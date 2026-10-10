@@ -432,7 +432,7 @@ credential is ever shown.
   block enrols the seat in GitHub; create its app from Integrations. A seat's
   app permissions are fixed when the app is created, so after changing the tier
   of a seat whose app exists, raise the app's permissions at GitHub as well.
-- **Slack:** the default channel ID, for a seat that has its own Slack app.
+- **Slack:** whether the seat speaks as its own Slack app. A seat's app has no channel of its own: it speaks in its unit's `channel`.
 - **Mattermost:** the default channel name, for a seat that has its own bot.
   The engine provisions a bot only where the seat's `bot_token` is a whole
   `${NAME}` reference, so for such a seat the bot username is read-only:

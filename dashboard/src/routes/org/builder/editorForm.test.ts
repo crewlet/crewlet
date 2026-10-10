@@ -95,7 +95,6 @@ describe("an untouched form", () => {
       email: "dev@example.com ",
       contact: { github_login: " dev" },
       integrations: {
-        slack: { channel: "C1 " },
         mattermost: { channel: " eng", username: "dev-bot " },
       },
       project: "OPS ",
