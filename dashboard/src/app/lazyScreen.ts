@@ -48,15 +48,15 @@ import { resolve, type Resolved } from "./routes.ts";
  * splits on, so each is spelled out rather than built from the key.
  */
 const LOADERS = {
-  home: () => import("~/routes/home/index.ts"),
+  home: () => import("~/routes/admin/overview/index.ts"),
   inbox: () => import("~/routes/inbox/index.ts"),
   me: () => import("~/routes/me/index.ts"),
   work: () => import("~/routes/work/index.ts"),
-  agents: () => import("~/routes/agents/index.ts"),
-  org: () => import("~/routes/org/index.ts"),
-  live: () => import("~/routes/live/index.ts"),
+  agents: () => import("~/routes/team/index.ts"),
+  org: () => import("~/routes/admin/org/index.ts"),
+  live: () => import("~/routes/admin/live/index.ts"),
   knowledge: () => import("~/routes/knowledge/index.ts"),
-  spend: () => import("~/routes/spend/index.ts"),
+  spend: () => import("~/routes/admin/spend/index.ts"),
   settings: () => import("~/routes/settings/index.ts"),
 } satisfies Record<Workspace | "org", () => Promise<unknown>>;
 

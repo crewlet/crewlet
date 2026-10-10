@@ -63,6 +63,7 @@ import {
 } from "react";
 
 import { screenScroller } from "~/lib/scroller.ts";
+import { shellOf, type Shell } from "./nav.ts";
 
 export interface Route {
   /** Path segments, already decoded. `#/seats/pm` → `["seats", "pm"]`. */
@@ -102,6 +103,22 @@ export function useIsCurrent(path: readonly string[]): boolean {
   // Throwing here would make a router the price of drawing a phase card.
   const route = useContext(RouteContext);
   return route ? samePath(route.path, path) : false;
+}
+
+/**
+ * Which shell the reader is in — the address's first segment ([shellOf]),
+ * for a link a component draws without knowing which shell it is drawn in: a
+ * seat's name is a link to its profile in the person shell and to its setup
+ * in the console, and a component that guessed would send an admin reading
+ * the console out of it on every click.
+ *
+ * NOT `useRoute`, for the reason [useIsCurrent] gives: a leaf that renders
+ * perfectly well on its own asks this, and outside a router there is no
+ * address to read — so the answer is the shell everybody lands in.
+ */
+export function useShell(): Shell {
+  const route = useContext(RouteContext);
+  return route ? shellOf(route.path) : "person";
 }
 
 /**

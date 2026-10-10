@@ -21,7 +21,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store, type FleetAnswer } from "~/protocol/index.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
 import { setDensity } from "~/lib/prefs.ts";
-import { Home } from "~/routes/home/Home.tsx";
+import { Home } from "~/routes/admin/overview/Overview.tsx";
 import { Inbox } from "~/routes/inbox/Inbox.tsx";
 import { installWindow } from "~/testing.tsx";
 import { PAGE_ACTIONS_SLOT, PAGE_LENSES_SLOT } from "./frame/PageActions.tsx";
