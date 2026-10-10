@@ -2735,10 +2735,13 @@ func nativePages(e *engine.Engine) queries.PageReader {
 	return nil
 }
 
-// nativeBacklinks is the node's "linked from" reader, or an untyped nil.
+// nativeBacklinks is the "linked from" reader — the knowledge base's own
+// reader, through the estate's router, so a page's backlinks are answered by a
+// data node whose copies of both the knowledge base and the tracker serve
+// (ADR-0031) — or an untyped nil.
 func nativeBacklinks(e *engine.Engine) queries.PageBacklinks {
-	if x := e.Backlinks(); x != nil {
-		return x
+	if p, ok := engine.OperatorPages(e); ok {
+		return p
 	}
 	return nil
 }

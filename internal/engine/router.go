@@ -389,6 +389,9 @@ func (e *Engine) estateBackend(n *native) estate.Backend {
 	if n.searcher != nil {
 		b.Knowledge = n.searcher
 	}
+	if n.indexer != nil {
+		b.Backlinks = n.indexer
+	}
 	writer, store := e.writeSide()
 	if writer != nil {
 		b.Writer = func(a estate.Actor) estate.TrackerWriter {

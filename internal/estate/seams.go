@@ -427,6 +427,14 @@ func (p Pages) Activity(ctx context.Context, q pages.PageActivityQuery) (pages.P
 	return call(ctx, p.r, opPageActivity, nil, q)
 }
 
+// LinkedFrom answers which pages and tasks link to a page, by its id — from a
+// data node whose copies of both the knowledge base and the tracker serve —
+// or [search.ErrIndexBuilding] from one whose index has not finished its
+// first lap.
+func (p Pages) LinkedFrom(ctx context.Context, pageID string) (search.Backlinks, error) {
+	return call(ctx, p.r, opLinkedFrom, nil, linkedFromArgs{PageID: pageID})
+}
+
 // Revision answers one revision of a page's body, and false where the page
 // has none at that version.
 func (p Pages) Revision(ctx context.Context, pageID string, version int,

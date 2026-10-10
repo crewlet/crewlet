@@ -185,6 +185,8 @@ var floorless = map[string]string{
 	"knowledge.search": "reads the indexes, as tracker.search does",
 	"knowledge.building": "asks whether the lexical index has caught up, which no " +
 		"log position describes",
+	"knowledge.linked_from": "reads the links the lexical index derives from the " +
+		"bodies it has read, which no log position describes",
 	"estate.ping": "asks whether the seat copy admits a seat, its own stricter " +
 		"gate, not whether it has reached the asker's writes",
 
@@ -273,6 +275,48 @@ func TestEveryOperationNamesTheCopyItReads(t *testing.T) {
 	for _, name := range slices.Sorted(maps.Keys(seatCopyOps)) {
 		if _, known := registry[name]; !known {
 			t.Errorf("seatCopyOps lists %s, which is no operation", name)
+		}
+	}
+}
+
+// readsSeveral is every operation that reads another domain's rows beside its
+// own ([op.alsoReads]), with the domains it reads and why.
+//
+// TWO-SIDED, like [floorless]: an operation that declares a second domain and
+// is not listed fails, and so does a listed one that no longer declares what
+// the list says — because which copies an operation reads is what decides
+// where it may run, and a second domain an operation reads and does not
+// declare is one whose wrong copy it answers from.
+var readsSeveral = map[string][]string{
+	// The links come from both corpora's bodies, and a task names the page
+	// as a linked page in the tracker's own relation rows.
+	"knowledge.linked_from": {pagesDomain, trackerDomain},
+}
+
+// AN OPERATION THAT READS SEVERAL DOMAINS DECLARES EACH ONE, and is routed by
+// all of them: a node whose copy of any is out of service runs none of it
+// (ADR-0031), and the router's memory of where it stays is kept for that set
+// of copies rather than for one domain's.
+func TestAnOperationThatReadsSeveralDomainsDeclaresThem(t *testing.T) {
+	t.Parallel()
+	for _, name := range slices.Sorted(maps.Keys(registry)) {
+		spec := registry[name]
+		got := append([]string{spec.domain}, spec.alsoReads...)
+		want, listed := readsSeveral[name]
+		switch {
+		case len(spec.alsoReads) > 0 && !listed:
+			t.Errorf("%s reads %v: name it and why in readsSeveral", name, got)
+		case listed && !slices.Equal(got, want):
+			t.Errorf("%s reads %v, and readsSeveral says %v", name, got, want)
+		case listed && spec.copies != strings.Join(want, "+"):
+			t.Errorf("%s is routed by %q, want every copy it reads", name, spec.copies)
+		case !listed && spec.copies != spec.domain:
+			t.Errorf("%s is routed by %q, want its domain %q", name, spec.copies, spec.domain)
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(readsSeveral)) {
+		if _, known := registry[name]; !known {
+			t.Errorf("readsSeveral lists %s, which is no operation", name)
 		}
 	}
 }

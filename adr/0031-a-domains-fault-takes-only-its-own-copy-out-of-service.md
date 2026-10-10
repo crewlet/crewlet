@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/statelog`
-- **Enforced-by:** `internal/engine.TestEveryDomainsCopyIsJudged`, `internal/engine.TestAWrongUsageCopyAnswersNoSpendRead`, `internal/engine.TestAWrongCopyOfOneDomainLeavesTheOthersInService`, `internal/engine.TestAFaultInADomainThatGatesNoSeatShedsNone`, `internal/estate.TestAFaultInOneDomainRoutesOnlyThatDomainsOperations`, `internal/search.TestAnOutOfServiceSliceIsCountedMissing`, `internal/search.TestACoordinatorGivenNoRangeStandsInForWhatItsPeersLeftUncovered`, `internal/statelog/statelogtest.TestTheSuiteCatchesADomainThatMisdeclaresItself`
+- **Enforced-by:** `internal/engine.TestEveryDomainsCopyIsJudged`, `internal/engine.TestAWrongUsageCopyAnswersNoSpendRead`, `internal/engine.TestAWrongCopyOfOneDomainLeavesTheOthersInService`, `internal/engine.TestAFaultInADomainThatGatesNoSeatShedsNone`, `internal/estate.TestAFaultInOneDomainRoutesOnlyThatDomainsOperations`, `internal/estate.TestAPagesBacklinksRunOnlyWhereBothCopiesServe`, `internal/search.TestAnOutOfServiceSliceIsCountedMissing`, `internal/search.TestACoordinatorGivenNoRangeStandsInForWhatItsPeersLeftUncovered`, `internal/statelog/statelogtest.TestTheSuiteCatchesADomainThatMisdeclaresItself`
 - **Cost-when-tried:** one declaration (whether a domain's health was a readiness input) answered two questions: does a seat depend on this domain, and is its copy judged at all. The compacted domains answered no, and so escaped the judgement: a vectors or usage copy whose applier stopped, whose rows fell below the log or that held an undecodable record past the grace was served for ever, and nothing said so. The two that answered yes took the WHOLE copy out of service for one log's fault — a knowledge-base applier halted on one page sent every tracker call the node's seats made to a peer, and on a single node refused them all — and a knowledge base that merely lagged its log made every tracker read a last resort. The native code host's design had to choose between gating every seat claim on a busy git log's lag and never judging that log at all.
 - **Tag-status:** unreleased
 
@@ -46,10 +46,12 @@ undeclared domain served for ever, and one log's fault charged to every other
 log the node holds. It also contradicts a rule the estate already applies to
 floors: an operation answers from its own domain's rows, which is why a
 request's floor is on its own domain's log and never on another's. A verdict for
-the whole copy is the one place that rule was broken. The one read that crosses
-into a second domain's rows — a search's semantic half, over the vectors — is
-best effort and of an index no log position describes, so it routes nothing and
-waits on no floor.
+the whole copy is the one place that rule was broken. The reads that cross into
+a second domain's rows ask its verdict too, and wait on no floor of it, since
+each reads an index no log position describes: an operation that reads another
+domain's rows declares it and runs only where every copy it reads serves (a
+page's backlinks, which name the tasks linking to it), and a search's semantic
+half, over the vectors, is best effort and degrades rather than routes.
 
 The second obvious alternative is to keep a per-domain declaration and ask a
 second question of it: does this domain want its copy judged? That is the same

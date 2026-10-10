@@ -23,10 +23,13 @@ import (
 // the domains a seat depends on, so a wrong vectors or usage copy was served
 // for ever. An operation's routing is on its own domain, and so are its
 // floors: the rows it answers from are that domain's, so no operation is
-// routed away for another domain's fault. The one read that crosses into a
-// second domain's rows — a search's semantic half, over the vectors — is best
-// effort, and never moves the search it belongs to: the scanner asks the
-// vectors' verdict itself and skips the half ([searchCopies]).
+// routed away for another domain's fault it does not read. The reads that
+// cross into a second domain's rows ask that domain's verdict too: an
+// operation that declares one runs only where both copies serve (a page's
+// backlinks, over the tracker's), and a search's semantic half, over the
+// vectors, is best effort and never moves the search it belongs to — the
+// scanner asks the vectors' verdict itself and skips the half
+// ([searchCopies]).
 type copyVerdict struct {
 	// shut is a copy whose FILE is not open: no log is to blame, and every
 	// domain's copy is out of service at once.

@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -74,6 +75,9 @@ var sentinels = []sentinel{
 	{"pages.ErrStaleVersion", pages.ErrStaleVersion},
 	{"pages.ErrTitleTaken", pages.ErrTitleTaken},
 
+	{"search.ErrIndexBuilding", search.ErrIndexBuilding},
+	{"search.ErrNoMethods", search.ErrNoMethods},
+
 	{"statelog.ErrAheadOfLog", statelog.ErrAheadOfLog},
 	{"statelog.ErrConflict", statelog.ErrConflict},
 	{"statelog.ErrEstateNotRestored", statelog.ErrEstateNotRestored},
@@ -118,6 +122,8 @@ var typedKinds = []typedKind{
 
 	{"pages.ErrFutureVersion", reflect.TypeFor[*pages.ErrFutureVersion]()},
 	{"pages.ErrUnknownVersion", reflect.TypeFor[pages.ErrUnknownVersion]()},
+
+	{"search.ErrFutureVersion", reflect.TypeFor[*search.ErrFutureVersion]()},
 
 	{"usage.ErrFutureVersion", reflect.TypeFor[*usage.ErrFutureVersion]()},
 

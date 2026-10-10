@@ -65,16 +65,17 @@
 // `out_of_service`, and the node's own seats' calls on that domain are
 // answered by the other data nodes. Every other domain's copy keeps answering
 // here, because an operation's routing is on its OWN domain: the rows it
-// answers from are that domain's. The one read that crosses into a second
-// domain's rows — a search's semantic half, over the vectors — is best effort
-// and never routes: the search is answered from the copy of its own domain,
-// and a participant whose VECTORS copy is out of service asks that verdict
-// itself, in the scanner, and answers without the half, saying so
-// ([search.Copies]). And the seats were never the problem, the copy was, so
-// the node keeps them.
-// This is ADR-0031,
-// which refines ADR-0025's amendment to one domain at a time; the copy a SEAT
-// is served by — what admission asks of — is every domain that gates seat
+// answers from are that domain's. The reads that cross into a second domain's
+// rows say so. An OPERATION that reads another domain's rows declares it
+// ([op.alsoReads]) — a page's backlinks, which name the tasks linking to it —
+// and runs only where every copy it reads serves. A search's semantic half,
+// over the vectors, is best effort and never routes: the search is answered
+// from the copy of its own domain, and a participant whose VECTORS copy is
+// out of service asks that verdict itself, in the scanner, and answers
+// without the half, saying so ([search.Copies]). And the seats were never the
+// problem, the copy was, so the node keeps them. This is ADR-0031, which
+// refines ADR-0025's amendment to one domain at a time; the copy a SEAT is
+// served by — what admission asks of — is every domain that gates seat
 // admission at once ([SeatCopy]).
 //
 // Whether a copy answers requests ([Backend.Answers]) is a different question,
@@ -116,9 +117,9 @@
 // may have written through another data node while its copy was out of
 // service. Floors on another DOMAIN's log are never waited for, though the
 // estate carries every domain's log: no operation reads another domain's rows
-// AT A POSITION — the one cross-domain read, a search's semantic half, is of
-// an index no log position describes — so that applier's lag is not one the
-// operation should wait out ([ready]).
+// AT A POSITION — the reads that cross into one, a search's semantic half and
+// a page's backlinks, are of indexes no log position describes — so that
+// applier's lag is not one the operation should wait out ([ready]).
 //
 // The searches carry no floor at all: they read an index each node's own walk
 // maintains behind its applier, which no log position describes. They still

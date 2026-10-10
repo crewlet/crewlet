@@ -31,7 +31,9 @@ import (
 //   - the `page` answer's `skill_loaded_by` — the seats a TOOL-SKILL page was
 //     loaded or offered to, from the same rows.
 //   - the `page` answer's `linked_from` — the pages and tasks whose bodies
-//     carry this page's address, from this node's index ([search.Backlinks]).
+//     carry this page's address, from a data node's own index
+//     ([search.Backlinks]) — the one the estate's router picks, whose copies
+//     of both the knowledge base and the tracker serve (ADR-0031).
 
 // PageReadsMaxDays is how far back a page's readers are read: thirty company
 // days, the event log's own retention and the window a knowledge base is
@@ -121,7 +123,11 @@ type SkillLoad struct {
 	Offered int64 `json:"offered"`
 }
 
-// PageBacklinks is the "linked from" reader: this node's lexical index.
+// PageBacklinks is the "linked from" reader: a data node's lexical index,
+// reached through the estate's router — answered only where that node's
+// copies of both domains the links are read from serve, since a node whose
+// copy of either had stopped serving listed links derived from rows it no
+// longer answered for, beside a page a peer had answered.
 type PageBacklinks interface {
 	LinkedFrom(ctx context.Context, pageID string) (search.Backlinks, error)
 }
@@ -168,11 +174,12 @@ const (
 	// tasks ([search.ErrIndexBuilding]).
 	LinkedFromBuilding LinkedFromStatus = "building"
 
-	// LinkedFromUnavailable is sent when the read failed — the node's own index, or
-	// the replicated estate the names are read from (closed for an
-	// adoption, say). The PAGE is still answered: the backlinks are a
-	// signal beside the document, and a document made unreadable by its
-	// rail would be the wrong way round.
+	// LinkedFromUnavailable is sent when the read failed — the answering
+	// node's index, the replicated estate the names are read from (closed
+	// for an adoption, say), or no data node whose copies of the knowledge
+	// base and the tracker both serve. The PAGE is still answered: the
+	// backlinks are a signal beside the document, and a document made
+	// unreadable by its rail would be the wrong way round.
 	LinkedFromUnavailable LinkedFromStatus = "unavailable"
 )
 

@@ -176,7 +176,7 @@ func TestEveryErrorOfTheCrossingPackagesIsRegistered(t *testing.T) {
 	var found int
 	// THIS PACKAGE'S OWN TOO: a router refuses with them, and a node that
 	// answers on another's behalf carries them back across a second hop.
-	for _, pkg := range []string{"tracker", "pages", "usage", "statelog", "estate"} {
+	for _, pkg := range []string{"tracker", "pages", "search", "usage", "statelog", "estate"} {
 		vars, types := declaredErrors(t, filepath.Join(root, "internal", pkg))
 		for _, name := range vars {
 			found++

@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/usage"
@@ -154,6 +155,13 @@ type KnowledgeSearcher interface {
 	Building(ctx context.Context) bool
 }
 
+// BacklinkReader is a page's "linked from": the pages and tasks whose bodies
+// link to it, from a node's own index over both corpora and named from the
+// rows of each ([search.Backlinks]).
+type BacklinkReader interface {
+	LinkedFrom(ctx context.Context, pageID string) (search.Backlinks, error)
+}
+
 // UsageReader is the usage domain's read side (ADR-0020): what each node's
 // seats, schedules and people did each company day — the spend, activity and
 // skill-reader answers the operator's surfaces draw.
@@ -189,6 +197,7 @@ type Backend struct {
 	Pages      PageReader
 	PageWriter PageWriter
 	Knowledge  KnowledgeSearcher
+	Backlinks  BacklinkReader
 	Usage      UsageReader
 
 	// Committed waits until this node's applier of the floor's log holds a
@@ -1432,6 +1441,27 @@ var opUsageReadsElided = define("usage.reads_elided", opRead, usageDomain, false
 		}
 		return b.Usage.ReadsElided(ctx, a.From, a.To)
 	}).floorless()
+
+// linkedFromArgs names the page whose backlinks are asked for, by its id.
+type linkedFromArgs struct {
+	PageID string
+}
+
+// A PAGE'S BACKLINKS READ BOTH CORPORA — the pages and the tasks whose bodies
+// link to it, named from the rows of each, a task's linked-page relations
+// included — so they run only where this node's copies of the knowledge base
+// AND the tracker are in service ([op.alsoReads], ADR-0031). Read straight off
+// a node's own index, a node whose pages or tracker copy had stopped serving
+// merged a peer's page with links derived from rows it no longer answered for,
+// presented as complete. They carry no floor, for [opKnowledgeSearch]'s
+// reason: the links are rows of an index no log position describes.
+var opLinkedFrom = define("knowledge.linked_from", opRead, pagesDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a linkedFromArgs) (search.Backlinks, error) {
+		if b.Backlinks == nil {
+			return search.Backlinks{}, errNoHalf
+		}
+		return b.Backlinks.LinkedFrom(ctx, a.PageID)
+	}).floorless().alsoReads(trackerDomain)
 
 // served is what a node runs, as a seat's admission asks it.
 type served struct {

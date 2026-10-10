@@ -101,6 +101,9 @@ type fakeNode struct {
 	// requests is every request that reached this node over the broker,
 	// whatever it answered — run, refused or silent.
 	requests int
+
+	// indexBuilding is a node whose index has not finished its first lap.
+	indexBuilding bool
 }
 
 func (f *fakeNode) note(op string) {
@@ -196,6 +199,20 @@ func (f *fakeNode) Answer(_ context.Context, q knowledge.Query) (knowledge.Resul
 
 func (f *fakeNode) Building(context.Context) bool { return false }
 
+// LinkedFrom answers one page link naming this node, or that its index is
+// still building.
+func (f *fakeNode) LinkedFrom(_ context.Context, pageID string) (search.Backlinks, error) {
+	f.note("linked_from")
+	f.mu.Lock()
+	building := f.indexBuilding
+	f.mu.Unlock()
+	if building {
+		return search.Backlinks{}, search.ErrIndexBuilding
+	}
+	return search.Backlinks{Pages: []search.PageLink{{ID: pageID, Title: "linked on " + f.name}},
+		Tasks: []search.TaskLink{}, PagesTotal: 1}, nil
+}
+
 // fakeUsage is a node's usage half: every read answers one page of one row
 // naming the node, so a case can tell which copy answered — except the spend
 // of a node given rows of it to page ([fakeNode.spend]).
@@ -263,7 +280,7 @@ func (f fakeUsage) ReadsElided(context.Context, string, string) (int64, error) {
 // backend is this node as a [Backend] over its copy of the estate.
 func (f *fakeNode) backend() Backend {
 	return Backend{
-		Tracker: f, PageWriter: f, Knowledge: f, Usage: fakeUsage{f},
+		Tracker: f, PageWriter: f, Knowledge: f, Backlinks: f, Usage: fakeUsage{f},
 		Writer: func(a Actor) TrackerWriter {
 			f.mu.Lock()
 			f.actors = append(f.actors, a)
@@ -1487,6 +1504,57 @@ func TestAFaultInOneDomainRoutesOnlyThatDomainsOperations(t *testing.T) {
 		!strings.Contains(unserved.Detail, "data-self: its copy of "+trackerDomain) {
 		t.Fatalf("a single node whose tracker copy is wrong answered %v — want an "+
 			"unserved estate that names this node's own copy", err)
+	}
+}
+
+// A PAGE'S BACKLINKS RUN ONLY WHERE BOTH COPIES THEY READ SERVE — ADR-0031.
+// The links are derived from the pages' AND the tasks' bodies and named from
+// both domains' rows, so a node whose tracker copy is out of service runs none
+// of them though its knowledge base serves: its own router asks a peer, and a
+// peer asking it is told `out_of_service` naming the tracker. Read straight
+// off the node's own index, they merged a peer's page with links derived from
+// rows the node had stopped serving. And an index still building says so
+// across the wire, which is what the page answer's `building` status reads.
+func TestAPagesBacklinksRunOnlyWhereBothCopiesServe(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a", "data-b")
+	local := &fakeNode{name: "data-self", units: chartOf("self"),
+		outOfServiceOn: map[string]bool{trackerDomain: true}}
+	r := f.router(t, "data-self", local)
+
+	links, err := r.Pages().LinkedFrom(t.Context(), "p1")
+	if err != nil || len(links.Pages) != 1 || links.Pages[0].Title == "linked on data-self" {
+		t.Fatalf("backlinks on a node whose tracker copy is wrong = (%+v, %v), want a peer's", links, err)
+	}
+	if local.askedFor("linked_from") {
+		t.Fatal("a node whose tracker copy is out of service read its own backlinks")
+	}
+	found := r.Knowledge().Search(t.Context(), knowledge.Query{Text: "runbook"})
+	if len(found.Hits) != 1 || found.Hits[0].Title != "found on data-self" {
+		t.Fatalf("the knowledge base's own search left this node: %+v", found)
+	}
+
+	peer := f.nodes["data-a"]
+	peer.set(func(n *fakeNode) { n.outOfServiceOn = map[string]bool{trackerDomain: true} })
+	raw, err := json.Marshal(request{Op: opLinkedFrom.spec.name})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replies, err := f.start(t).Ask(t.Context(), Subject(peer.name), raw, 1)
+	var rep reply
+	if err != nil || len(replies) != 1 || json.Unmarshal(replies[0], &rep) != nil {
+		t.Fatalf("ask = (%d replies, %v)", len(replies), err)
+	}
+	if rep.Unserved != unservedOutOfService || !strings.Contains(rep.Detail, "its copy of "+trackerDomain) {
+		t.Fatalf("a peer whose tracker copy is wrong answered backlinks %+v, want %q naming "+
+			"the tracker", rep, unservedOutOfService)
+	}
+
+	other := f.nodes["data-b"]
+	other.set(func(n *fakeNode) { n.indexBuilding = true })
+	if _, err := r.Pages().LinkedFrom(t.Context(), "p1"); !errors.Is(err, search.ErrIndexBuilding) {
+		t.Fatalf("backlinks from a node whose index is building = %v, want "+
+			"search.ErrIndexBuilding across the wire", err)
 	}
 }
 
