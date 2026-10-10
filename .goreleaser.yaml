@@ -149,7 +149,7 @@ checksum:
 #
 # One signature covering the file that covers every artifact, rather than a
 # signature per archive: verifying the checksums file and then the checksum
-# is the same proof with one fetch instead of six.
+# is the same proof with one fetch instead of four.
 #
 # It replaces the property PyPI Trusted Publishing gave — no long-lived
 # credential anywhere in this repository. The certificate is minted from the

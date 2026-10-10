@@ -19,7 +19,7 @@ on:
     tags: ["v*"]
   workflow_dispatch:
   pull_request:
-    # Only when the release surface itself changes. A full six-target build
+    # Only when the release surface itself changes. A full four-target build
     # on every engine pull request would buy nothing: what breaks here is
     # this config, the Dockerfile, the module's own toolchain, or the
     # variable the -X flag stamps — internal/version is release surface
@@ -132,7 +132,6 @@ jobs:
           # under a gigabyte.
           path: |
             dist/*.tar.gz
-            dist/*.zip
             dist/checksums.txt
           if-no-files-found: error
 
