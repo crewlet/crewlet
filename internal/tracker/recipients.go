@@ -289,7 +289,15 @@ func (n *Notify) assigneeAddressed(finishedEdge bool) bool {
 	case ChangeCreated, ChangeAssignee:
 		return true
 	case ChangeStatus:
-		return finishedEdge
+		// A MOVE ACROSS THE FINISHED EDGE asks the assignee something —
+		// their work was closed under them, or reopened — and so does a
+		// move that carries a NOTE: the one status change a note may ride
+		// is a send-back ([SendsBack], admitted by the update tool), and
+		// the note is somebody telling the assignee what to do again.
+		// Without this arm a review returned from in_review to in_progress
+		// — two open statuses — was a wake the assignee's turn was
+		// entitled to absorb without a word, note and all.
+		return finishedEdge || n.Excerpt != ""
 	case ChangeComment:
 		return n.Snapshot.CommentAuthorKind == AuthorHuman ||
 			n.Snapshot.CommentAuthorKind == AuthorOperator

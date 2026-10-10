@@ -11,29 +11,34 @@ import (
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// The two arguments update_work_item grew for the item's own page: a REASON an
-// assignment carries, and a CHECKLIST gesture.
+// The two arguments update_work_item grew for the item's own page: a REASON a
+// hand-off or a send-back carries, and a CHECKLIST gesture.
 
-// MaxAssignmentReason is how long the one line an assignment carries may be,
-// in characters.
+// MaxChangeReason is how long the one line a hand-off or a send-back carries
+// may be, in characters.
 //
 // FIVE HUNDRED because it is a sentence to the person receiving the work —
-// "you own the rollout now, ops has the rest" — and anything longer is the
-// conversation, which has a comment thread of its own. It rides the change's
-// excerpt ([tracker.Notify.Excerpt]), which is what the history row stores and
-// the wake renders, so it is also held to that excerpt's byte ceiling
-// ([tracker.MaxExcerpt]) and REFUSED past either rather than cut: a reason
-// silently truncated is a reason somebody reads as finished.
-const MaxAssignmentReason = 500
+// "you own the rollout now, ops has the rest", "the timeout path has no
+// test" — and anything longer is the conversation, which has a comment thread
+// of its own. It rides the change's excerpt ([tracker.Notify.Excerpt]), which
+// is what the history row stores and the wake renders, so it is also held to
+// that excerpt's byte ceiling ([tracker.MaxExcerpt]) and REFUSED past either
+// rather than cut: a reason silently truncated is a reason somebody reads as
+// finished.
+const MaxChangeReason = 500
 
-// assignmentReason is the `reason` argument checked, or the refusal.
+// changeReason is the `reason` argument checked against the change the call
+// makes, or the refusal.
 //
-// ONLY BESIDE AN ASSIGNEE. A reason is what an assignment says to the person
-// it moves the work to; on any other edit it would land on a history row as an
-// excerpt nothing announced and nobody asked for — and the explanation of a
-// status change or a close belongs in a comment, which the tool's own
-// description already asks for.
-func assignmentReason(args map[string]any) (string, string) {
+// TWO CHANGES CARRY ONE, and both hand the work to somebody with something to
+// say about it: an ASSIGNMENT, which says why the work is the new assignee's
+// now, and a SEND-BACK — a status move back to an open status from one
+// further along ([tracker.SendsBack]) — which says what to do again, and is
+// how a person reviewing work returns it. On any other edit a reason would
+// land on a history row as an excerpt nothing announced and nobody asked for:
+// a move forward is reported by the move, and the explanation of a close
+// belongs in a comment, which the tool's own description already asks for.
+func changeReason(args map[string]any, before tracker.Task, patch tracker.TaskPatch) (string, string) {
 	raw, held := args["reason"]
 	if !held {
 		return "", ""
@@ -42,19 +47,23 @@ func assignmentReason(args map[string]any) (string, string) {
 	if reason == "" {
 		return "", ""
 	}
-	if _, assigning := args["assignee"]; !assigning {
-		return "", "`reason` explains an ASSIGNMENT and this call sets no " +
-			"`assignee`. To explain any other change, comment on the item " +
-			"with comment_on_work_item."
+	_, assigning := args["assignee"]
+	sendingBack := patch.Status != nil && tracker.SendsBack(before.Status, *patch.Status)
+	if !assigning && !sendingBack {
+		return "", fmt.Sprintf("`reason` explains a hand-off (an `assignee`) or "+
+			"work SENT BACK (a `status` back to an open status from one further "+
+			"along — %s is %s), and this call makes neither. To explain any other "+
+			"change, comment on the item with comment_on_work_item.",
+			before.Key, before.Status)
 	}
-	if n := utf8.RuneCountInString(reason); n > MaxAssignmentReason {
-		return "", fmt.Sprintf("`reason` is %d characters and an assignment "+
-			"carries at most %d — say it in a sentence, and put the rest in a "+
-			"comment.", n, MaxAssignmentReason)
+	if n := utf8.RuneCountInString(reason); n > MaxChangeReason {
+		return "", fmt.Sprintf("`reason` is %d characters and a hand-off or a "+
+			"send-back carries at most %d — say it in a sentence, and put the "+
+			"rest in a comment.", n, MaxChangeReason)
 	}
 	if len(reason) > tracker.MaxExcerpt {
-		return "", fmt.Sprintf("`reason` is %d bytes and the line an "+
-			"assignment carries holds at most %d — shorten it, and put the "+
+		return "", fmt.Sprintf("`reason` is %d bytes and the line a hand-off "+
+			"or a send-back carries holds at most %d — shorten it, and put the "+
 			"rest in a comment.", len(reason), tracker.MaxExcerpt)
 	}
 	return reason, ""

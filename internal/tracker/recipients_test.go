@@ -361,3 +361,64 @@ func TestTheReasonsAreAClosedSetAndTheTwoEightsAreNotTheSame(t *testing.T) {
 			"a thread you are in asks something and is not what an inbox opens with")
 	}
 }
+
+// WORK SENT BACK WITH A NOTE ADDRESSES ITS ASSIGNEE; A BARE MOVE DOES NOT.
+//
+// A review returned from in_review to in_progress moves between two OPEN
+// statuses, so the finished edge that addresses a close or a reopen says
+// nothing about it — and without the note's arm the assignee's turn was
+// entitled to absorb "the timeout path has no test" without acting on it.
+func TestASendBackWithANoteAddressesTheAssignee(t *testing.T) {
+	t.Parallel()
+	addressed := func(n *tracker.Notify) bool {
+		for _, c := range tracker.Candidates(n, false) {
+			if c.Handle == "ana" {
+				return c.Addressed
+			}
+		}
+		t.Fatalf("the assignee is not a candidate of %+v", n)
+		return false
+	}
+	open := tracker.Snapshot{Assignee: "ana",
+		PrevStatusGroup: tracker.GroupActive, StatusGroup: tracker.GroupActive}
+	if !addressed(&tracker.Notify{Kind: tracker.ChangeStatus, Snapshot: open,
+		Excerpt: "the timeout path has no test"}) {
+		t.Error("work sent back with a note did not address its assignee")
+	}
+	if addressed(&tracker.Notify{Kind: tracker.ChangeStatus, Snapshot: open}) {
+		t.Error("a bare move between two open statuses addressed the assignee")
+	}
+	reopened := tracker.Snapshot{Assignee: "ana",
+		PrevStatusGroup: tracker.GroupDone, StatusGroup: tracker.GroupActive}
+	if !addressed(&tracker.Notify{Kind: tracker.ChangeStatus, Snapshot: reopened}) {
+		t.Error("a reopen stopped addressing the assignee")
+	}
+}
+
+// A SEND-BACK IS A MOVE TO AN OPEN STATUS FROM ONE FURTHER ALONG the board,
+// and nothing else: a promotion, a move between finished statuses and a
+// status this build does not know are not one.
+func TestASendBackIsAMoveBackToAnOpenStatus(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		from, to tracker.Status
+		want     bool
+	}{
+		{tracker.StatusInReview, tracker.StatusInProgress, true},
+		{tracker.StatusInReview, tracker.StatusTodo, true},
+		{tracker.StatusDone, tracker.StatusInProgress, true},
+		{tracker.StatusClosed, tracker.StatusTodo, true},
+		{tracker.StatusCancelled, tracker.StatusInReview, true},
+		{tracker.StatusInProgress, tracker.StatusInReview, false},
+		{tracker.StatusTodo, tracker.StatusInProgress, false},
+		{tracker.StatusInProgress, tracker.StatusInProgress, false},
+		{tracker.StatusClosed, tracker.StatusDone, false},
+		{tracker.StatusDone, tracker.StatusCancelled, false},
+		{"on_hold", tracker.StatusTodo, false},
+		{tracker.StatusInReview, "doing", false},
+	} {
+		if got := tracker.SendsBack(c.from, c.to); got != c.want {
+			t.Errorf("SendsBack(%s, %s) = %v, want %v", c.from, c.to, got, c.want)
+		}
+	}
+}

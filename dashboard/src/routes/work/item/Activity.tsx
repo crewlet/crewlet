@@ -413,7 +413,10 @@ export function changeSentence(
     }
     case "status": {
       const to = String(delta("status")?.to ?? "");
-      if (to) return { what: `moved it to ${statusLabel(to, chrome.statuses)}`, why: "" };
+      // AND OF WORK SENT BACK, its note: the one status change that carries
+      // an excerpt, saying what to do again (`update_work_item{reason}`).
+      const why = record.excerpt ? plainText(record.excerpt) : "";
+      if (to) return { what: `moved it to ${statusLabel(to, chrome.statuses)}`, why };
       break;
     }
   }

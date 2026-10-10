@@ -778,6 +778,19 @@ test("a hand-off is a sentence with its reason", () => {
       chrome,
     ),
   ).toEqual({ what: "assigned it to SWE", why: "owns the provisioner" });
+  // AND SO DOES WORK SENT BACK: the note a send-back carries is its excerpt
+  // too, and the history quotes it beside the move it explains.
+  expect(
+    changeSentence(
+      record({
+        kind: "status",
+        excerpt: "the timeout path has no test",
+        fields: { status: { from: "in_review", to: "in_progress" } },
+      }),
+      task(),
+      chrome,
+    ),
+  ).toEqual({ what: "moved it to In progress", why: "the timeout path has no test" });
 });
 
 // A CHANGE ROW IS A SENTENCE, with the actor in front of it: a checklist move
