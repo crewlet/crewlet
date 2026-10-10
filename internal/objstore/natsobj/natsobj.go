@@ -72,6 +72,44 @@
 //     pieces no metadata names, which a put killed before its last message
 //     and a delete interrupted between its purges both leave, and which no
 //     listing of the names shows. The library has no word for them at all.
+//
+// # What it costs, measured
+//
+// `make bench` (BenchmarkBackend, through internal/objstore/objstoretest's
+// Bench) at `stream.sync: always`, production's default — on four vCPUs of a
+// KVM Intel Xeon at 2.8 GHz without SHA instructions, Go 1.27.2, nats-server
+// v2.15.0, nats.go v1.54.0, 2026-10-10, two runs on a VM shared with other
+// work. Every read figure is of an object written moments before, read warm:
+//
+//   - ON A MEMBER'S OWN CLIENT, as a data node of a solo fleet: a 64 KiB put
+//     took 1.9–2.8 ms — every message is fsynced — and larger ones ran at
+//     74–117 MB/s; a whole read ran at 450–740 MB/s from 1 MiB up, and
+//     200–250 MB/s verified ([objstore.Store.Open]), which is this CPU's
+//     SHA-256 rate; eight verified reads at once at 560–590 MB/s together. A
+//     Stat, which is a leader read, ran 10,700–10,800 a second from one
+//     goroutine over one object, 4,800–8,600 across ten thousand, and
+//     15,000–19,000 across them at 32 in flight; a listing named
+//     75,000–94,000 objects a second, at a hundred thousand as at ten
+//     thousand.
+//   - A PAGE IS PAID FOR BY ITS OFFSET: 64 KiB at a random offset of a
+//     128 MiB object took 32–36 ms, the walk of the headers of the 512
+//     messages before it on average, where the S3 backend's one ranged request
+//     took half a millisecond on the node's side. A page deep in a large file
+//     costs that walk again every time it is read.
+//   - THROUGH A LEAF, as a node without `data`: a 64 KiB put took 2.6–2.7 ms
+//     and larger ones ran at 82–105 MB/s; a whole read at 250–360 MB/s, about
+//     half a member's, and 144–226 MB/s verified; eight verified reads at
+//     once at 370–470 MB/s; a page 38–43 ms. A Stat from one goroutine pays
+//     the link's round trip — 2,900–4,200 a second — and 32 in flight recover
+//     it, at 15,000–25,000; a listing named 63,000–92,000 objects a second.
+//   - AT THREE REPLICAS (internal/objstore/natsobj/replicated: three members
+//     on that one machine, each fsyncing its own copy to the one disk, driven
+//     from a follower's client, as two of a three-member fleet's data nodes
+//     reach the bucket): every 128 KiB message is a quorum append, and a
+//     64 KiB put took 4.2–4.9 ms and larger ones ran at 39–80 MB/s, a third
+//     to three quarters of one member's. A Stat is a leader read across a
+//     route — 2,100–2,800 a second from one goroutine, 5,600–23,400 at 32 in
+//     flight — and a listing named 80,000–92,000 objects a second.
 package natsobj
 
 import (

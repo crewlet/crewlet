@@ -1152,7 +1152,7 @@ func TestABucketReplicatedBelowThisNodeIsRefused(t *testing.T) {
 	}
 }
 
-func open(t *testing.T, client jetstream.JetStream) *natsobj.Backend {
+func open(t testing.TB, client jetstream.JetStream) *natsobj.Backend {
 	t.Helper()
 	b, err := natsobj.Open(t.Context(), client, natsobj.Config{Replicas: 1})
 	if err != nil {
@@ -1163,9 +1163,15 @@ func open(t *testing.T, client jetstream.JetStream) *natsobj.Backend {
 	return b
 }
 
-func memberClient(t *testing.T) jetstream.JetStream {
+func memberClient(t testing.TB) jetstream.JetStream { return memberClientAt(t, js.Config{}) }
+
+// memberClientAt is a client of a fresh member started from base, whose
+// server name and store directory are its own — the rest of base, the file
+// store's sync among it, is the caller's.
+func memberClientAt(t testing.TB, base js.Config) jetstream.JetStream {
 	t.Helper()
-	srv, err := js.StartServer(t.Context(), js.Config{ServerName: "member", StoreDir: t.TempDir()})
+	base.ServerName, base.StoreDir = "member", t.TempDir()
+	srv, err := js.StartServer(t.Context(), base)
 	if err != nil {
 		t.Fatalf("start the member: %v", err)
 	}
@@ -1184,10 +1190,15 @@ func memberClient(t *testing.T) jetstream.JetStream {
 //
 // The member binds [js.AnyPort] and names it afterwards, so nothing else can
 // take the port between its choosing and its binding.
-func leafClient(t *testing.T) jetstream.JetStream {
+func leafClient(t testing.TB) jetstream.JetStream { return leafClientAt(t, js.Config{}) }
+
+// leafClientAt is [leafClient] with its member started from base, as
+// [memberClientAt] starts one.
+func leafClientAt(t testing.TB, base js.Config) jetstream.JetStream {
 	t.Helper()
-	member, err := js.StartServer(t.Context(), js.Config{ServerName: "member",
-		LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: t.TempDir()})
+	base.ServerName, base.StoreDir = "member", t.TempDir()
+	base.LeafHost, base.LeafPort = "127.0.0.1", js.AnyPort
+	member, err := js.StartServer(t.Context(), base)
 	if err != nil {
 		t.Fatalf("start the member: %v", err)
 	}
@@ -1199,7 +1210,7 @@ func leafClient(t *testing.T) jetstream.JetStream {
 }
 
 // startLeaf starts a leaf that dials a member's leaf listener on port.
-func startLeaf(t *testing.T, port int) *js.Server {
+func startLeaf(t testing.TB, port int) *js.Server {
 	t.Helper()
 	leaf, err := js.StartServer(t.Context(), js.Config{ServerName: "leaf",
 		LeafURLs: []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", port)}})
@@ -1212,7 +1223,7 @@ func startLeaf(t *testing.T, port int) *js.Server {
 
 // awaitLink waits until the members' JetStream answers across the leaf's
 // link: a leaf runs none of its own, so an answer is the link.
-func awaitLink(t *testing.T, c jetstream.JetStream) {
+func awaitLink(t testing.TB, c jetstream.JetStream) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	for {
@@ -1295,7 +1306,7 @@ func TestOpeningOnALeafWaitsOutItsLink(t *testing.T) {
 	}
 }
 
-func client(t *testing.T, srv *js.Server) jetstream.JetStream {
+func client(t testing.TB, srv *js.Server) jetstream.JetStream {
 	t.Helper()
 	nc, err := srv.Conn()
 	if err != nil {

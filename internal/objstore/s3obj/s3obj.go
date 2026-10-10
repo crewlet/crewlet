@@ -46,6 +46,74 @@
 // moves no body gets [callBudget], one that carries a part gets that plus the
 // part's size at [objstore.MiBPace], and a read is bounded by the deadline its
 // caller must carry ([objstore.CheckRead]).
+//
+// # What it costs the node, measured
+//
+// `make bench` (BenchmarkBackend, through internal/objstore/objstoretest's
+// Bench) against s3fake, at the production [PartBytes] and S3's own page of a
+// thousand keys — on four vCPUs of a KVM Intel Xeon at 2.8 GHz WITHOUT SHA
+// instructions (it has AES-NI), Go 1.27.2, aws-sdk-go-v2/service/s3 v1.114.0,
+// 2026-10-10, one run on a VM shared with other work:
+//
+//   - ON LOOPBACK, over https, the NODE'S SIDE of a bucket: the SDK, the
+//     signature, TLS and the store's own hashing, with the fake's half of
+//     every request on the same CPUs, and none of the provider's — no round
+//     trip, no per-prefix request rate, no link. A 64 KiB put took 0.77 ms
+//     and larger ones ran at 157–168 MB/s; a whole read at 760–990 MB/s from
+//     1 MiB up, and 200–240 MB/s verified ([objstore.Store.Open]), which is
+//     this CPU's SHA-256 rate; eight verified reads at once at 630 MB/s
+//     together; a 64 KiB page at a random offset of a 128 MiB object took
+//     0.51 ms — ONE ranged request wherever the page is. A HEAD across ten
+//     thousand objects ran 2,900–3,100 a second from one goroutine and
+//     19,000–20,000 at 32 in flight, and a listing named 112,000–120,000
+//     objects a second, a thousand to a request.
+//   - A ROUND TRIP AWAY — the fake holding every request 20 or 50 ms before
+//     it answers (`rtt=`) — every loop of one request at a time is the round
+//     trip's, and the node's CPU stops being what it waits on. A HEAD runs
+//     47 a second at 20 ms and 19 at 50 for each request in flight: 1,480
+//     and 615 a second at 32, so asking after two million objects takes
+//     twelve hours one at a time at 20 ms and 23 minutes 32 at a time. A
+//     listing's page costs its round trip and about ten milliseconds of the
+//     node's own parsing — 33,000 names a second at 20 ms, 16,500 at 50 —
+//     so a pass over two million objects is one to two minutes. A 64 KiB
+//     page at any offset is one request, 21 and 51 ms. And a 128 MiB put —
+//     eighteen requests, a part at a time — ran at 121 MB/s at 20 ms and 79
+//     at 50, where on loopback it ran at 166.
+//
+// OVER PLAIN HTTP THE SDK SIGNS EVERY BODY: it hashes each byte it uploads to
+// put the digest in the signature, where over https it sends UNSIGNED-PAYLOAD
+// instead. On this CPU, where the hash is what a put waits on, puts from
+// 1 MiB up ran at 110–119 MB/s over http against 157–168 over https; reads
+// over http, with no TLS to decrypt, ran at 1.7–2.2 GB/s unverified. Reach a
+// bucket over https.
+//
+// # Measuring a real bucket
+//
+// BenchmarkBackend's `bucket=real` arm runs only when CREWLET_BENCH_S3_BUCKET
+// names a bucket, and otherwise skips, saying so under `go test -v` (which
+// `make bench` passes). No real bucket's figures are recorded here: none has
+// been measured. The variables are read by the benchmark and never by the
+// engine:
+//
+//   - CREWLET_BENCH_S3_BUCKET, the bucket; setting it turns the arm on.
+//   - CREWLET_BENCH_S3_REGION, required with it.
+//   - CREWLET_BENCH_S3_ENDPOINT, the S3 API's base URL; empty is Amazon's own.
+//   - CREWLET_BENCH_S3_PATH_STYLE, `true` for MinIO and most gateways.
+//   - CREWLET_BENCH_S3_PREFIX, what every key is put under; empty is
+//     `crewlet-bench/`.
+//
+// NO CREDENTIAL IS ONE OF THEM: the arm takes the SDK's own chain —
+// AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, AWS_PROFILE, a web identity, the
+// instance's role — and honours AWS_CA_BUNDLE as [Open] does. For example:
+//
+//	CREWLET_BENCH_S3_BUCKET=acme-bench CREWLET_BENCH_S3_REGION=eu-west-1 \
+//	  make bench BENCH_PKGS=./internal/objstore/s3obj BENCH_PATTERN=Backend/bucket=real
+//
+// Every object the arm writes it deletes; a run killed part way can leave
+// objects and an unfinished upload under the prefix, and a lifecycle rule
+// aborting incomplete uploads removes the second. Run it from inside the
+// bucket's region: each case moves as much as the link carries in its
+// benchtime, which at the default is gigabytes.
 package s3obj
 
 import (

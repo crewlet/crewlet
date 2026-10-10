@@ -8,6 +8,16 @@
 // runs the object store's conformance suite on a test machine with no network
 // and no credentials, against the wire format the SDK actually speaks.
 //
+// It does its OWN WORK AT MEMORY SPEED — a body read into one buffer of its
+// declared length, an entity tag computed once per part by a
+// hardware-accelerated checksum, an assembly sized before it is copied into, a
+// listing paged from a sorted index rather than by sorting every key a page —
+// so a benchmark run through it measures the node's side of a bucket rather
+// than the fake's arithmetic. And it can be made as FAR AWAY as a provider
+// ([Server.Latency]): loopback answers in microseconds, and what bounds a
+// node's requests to a real bucket is the round trip, which a measurement of
+// the node's side alone never shows.
+//
 // # It routes on the query before the method
 //
 // A multipart upload is spelled with the same methods as everything else — a
@@ -20,14 +30,17 @@ package s3fake
 import (
 	"encoding/xml"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -41,11 +54,35 @@ type Server struct {
 	*httptest.Server
 	bucket string
 	// PageSize is how many keys one listing page holds; zero or less is
-	// [defaultPageSize].
+	// [defaultPageSize]. Set it before the first request: a benchmark sets
+	// S3's own thousand, where a test of a few dozen objects needs a small
+	// page to cross pages at all.
 	PageSize int
 
-	mu       sync.Mutex
-	objects  map[string]object
+	// Latency is how long the bucket waits before it answers each request —
+	// a provider's round trip and first byte, of which loopback has none.
+	// Zero answers at once. Set it before the first request.
+	//
+	// IT CHARGES NO BANDWIDTH: a body moves at loopback's rate once the wait
+	// is over, so what it adds is what a round trip costs each request — a
+	// multipart upload's every part, a listing's every page, a ranged read's
+	// first byte — and nothing a link's throughput would.
+	Latency time.Duration
+
+	// requests is every request the bucket has been sent ([Server.Requests]).
+	requests atomic.Int64
+
+	mu      sync.Mutex
+	objects map[string]object
+	// sorted is every key objects holds, in order, for a listing to page
+	// through; nil once a write has changed the keys since it was built.
+	//
+	// BUILT AT MOST ONCE BETWEEN WRITES, where a listing used to collect and
+	// sort every key past its marker for each page it answered: a hundred
+	// thousand objects listed a thousand at a time sorted five million keys
+	// a pass — the fake's cost, which a benchmark would report as the
+	// backend's.
+	sorted   []string
 	uploads  map[string]*upload
 	nextID   int
 	failPart int32
@@ -66,18 +103,51 @@ type upload struct {
 	key         string
 	contentType string
 	started     time.Time
-	parts       map[int32][]byte
+	parts       map[int32]part
 }
 
-// Start serves bucket until the test ends.
-func Start(t *testing.T, bucket string) *Server {
+// part is one part of an upload as it arrived: its bytes, and the entity tag
+// it was answered with — which a completion is checked against, so the tag is
+// kept rather than worked out again from the bytes.
+type part struct {
+	data []byte
+	etag string
+}
+
+// Start serves bucket over plain http until the test ends.
+func Start(t testing.TB, bucket string) *Server {
 	t.Helper()
-	s := &Server{bucket: bucket, PageSize: defaultPageSize,
-		objects: map[string]object{}, uploads: map[string]*upload{}}
+	s := newServer(bucket)
 	s.Server = httptest.NewServer(http.HandlerFunc(s.serve))
 	t.Cleanup(s.Close)
 	return s
 }
+
+// StartTLS serves bucket over https until the test ends, on a certificate of
+// the server's own that a client trusts through AWS_CA_BUNDLE.
+//
+// What real S3 is reached over — and the scheme on which the SDK leaves a
+// request's body out of its signature (UNSIGNED-PAYLOAD), where over plain
+// http it hashes every byte it sends to sign it. A measurement of the node's
+// side of a bucket taken over http alone would be of a cost no deployment
+// reaching a bucket over https pays.
+func StartTLS(t testing.TB, bucket string) *Server {
+	t.Helper()
+	s := newServer(bucket)
+	s.Server = httptest.NewTLSServer(http.HandlerFunc(s.serve))
+	t.Cleanup(s.Close)
+	return s
+}
+
+func newServer(bucket string) *Server {
+	return &Server{bucket: bucket, PageSize: defaultPageSize,
+		objects: map[string]object{}, uploads: map[string]*upload{}}
+}
+
+// Requests is how many requests the bucket has been sent since it started —
+// every verb, a refused one included — which is what a provider's round trip
+// multiplies and what it bills by.
+func (s *Server) Requests() int64 { return s.requests.Load() }
 
 // Keys is every key the bucket holds, sorted.
 func (s *Server) Keys() []string {
@@ -107,8 +177,13 @@ func (s *Server) Begin(key string) string {
 	defer s.mu.Unlock()
 	s.nextID++
 	id := fmt.Sprintf("upload-%d", s.nextID)
+	// THE PART CARRIES THE TAG IT WAS ANSWERED WITH, as every part
+	// [Server.putPart] stores does: a completion is checked against the
+	// tag held, so a part held with none would take a completion naming an
+	// empty tag, which S3 refuses.
+	data := []byte("a part of an upload nobody finished")
 	s.uploads[id] = &upload{key: key, started: now(),
-		parts: map[int32][]byte{1: []byte("a part of an upload nobody finished")}}
+		parts: map[int32]part{1: {data: data, etag: etag(data)}}}
 	return id
 }
 
@@ -151,6 +226,10 @@ func (s *Server) FailPart(n int32) {
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
+	s.requests.Add(1)
+	if !s.wait(r) {
+		return
+	}
 	path := strings.TrimPrefix(r.URL.Path, "/")
 	bucket, key, _ := strings.Cut(path, "/")
 	if bucket != s.bucket {
@@ -179,7 +258,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		s.abortUpload(w, r, q.Get("uploadId"))
 
 	case r.Method == http.MethodPut:
-		data, err := io.ReadAll(r.Body)
+		data, err := readBody(r)
 		if err != nil {
 			s.fail(w, r, http.StatusBadRequest, "IncompleteBody")
 			return
@@ -187,6 +266,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		s.objects[key] = object{data: data, modified: now(),
 			contentType: r.Header.Get("Content-Type")}
+		s.sorted = nil
 		s.mu.Unlock()
 		w.Header().Set("ETag", etag(data))
 		w.WriteHeader(http.StatusOK)
@@ -195,10 +275,28 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodDelete:
 		s.mu.Lock()
 		delete(s.objects, key)
+		s.sorted = nil
 		s.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		s.fail(w, r, http.StatusNotImplemented, "NotImplemented")
+	}
+}
+
+// wait holds a request for [Server.Latency] before it is answered, and
+// answers false — the request then answered nothing at all — for one whose
+// client gave up meanwhile.
+func (s *Server) wait(r *http.Request) bool {
+	if s.Latency <= 0 {
+		return true
+	}
+	t := time.NewTimer(s.Latency)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-r.Context().Done():
+		return false
 	}
 }
 
@@ -271,7 +369,7 @@ func (s *Server) startUpload(w http.ResponseWriter, r *http.Request, key string)
 	s.nextID++
 	id := fmt.Sprintf("upload-%d", s.nextID)
 	s.uploads[id] = &upload{key: key, contentType: r.Header.Get("Content-Type"),
-		started: now(), parts: map[int32][]byte{}}
+		started: now(), parts: map[int32]part{}}
 	s.mu.Unlock()
 	s.writeXML(w, initiateResult{Bucket: s.bucket, Key: key, UploadID: id})
 }
@@ -283,7 +381,7 @@ func (s *Server) putPart(w http.ResponseWriter, r *http.Request, q map[string][]
 		s.fail(w, r, http.StatusBadRequest, "InvalidArgument")
 		return
 	}
-	data, err := io.ReadAll(r.Body)
+	data, err := readBody(r)
 	if err != nil {
 		s.fail(w, r, http.StatusBadRequest, "IncompleteBody")
 		return
@@ -299,8 +397,9 @@ func (s *Server) putPart(w http.ResponseWriter, r *http.Request, q map[string][]
 		s.fail(w, r, http.StatusNotFound, "NoSuchUpload")
 		return
 	}
-	u.parts[int32(number)] = data
-	w.Header().Set("ETag", etag(data))
+	tag := etag(data)
+	u.parts[int32(number)] = part{data: data, etag: tag}
+	w.Header().Set("ETag", tag)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -319,7 +418,7 @@ type completeResult struct {
 }
 
 // completeUpload assembles the parts the request names, in its order, each
-// checked against the part stored under its number.
+// checked against the tag the part stored under its number was answered with.
 //
 // THE OBJECT'S LastModified IS WHEN ITS UPLOAD STARTED, as Amazon documents
 // for an object assembled from parts — not when it was completed.
@@ -336,18 +435,26 @@ func (s *Server) completeUpload(w http.ResponseWriter, r *http.Request, key, id 
 		s.fail(w, r, http.StatusNotFound, "NoSuchUpload")
 		return
 	}
-	var data []byte
+	size := 0
 	for i, p := range req.Parts {
-		part, held := u.parts[p.PartNumber]
-		if !held || p.ETag != etag(part) || (i > 0 && p.PartNumber <= req.Parts[i-1].PartNumber) {
+		held, ok := u.parts[p.PartNumber]
+		if !ok || p.ETag != held.etag || (i > 0 && p.PartNumber <= req.Parts[i-1].PartNumber) {
 			s.mu.Unlock()
 			s.fail(w, r, http.StatusBadRequest, "InvalidPart")
 			return
 		}
-		data = append(data, part...)
+		size += len(held.data)
+	}
+	// SIZED ONCE AND COPIED INTO, where appending part after part grew the
+	// object through a reallocation and a copy of everything so far at
+	// each doubling.
+	data := make([]byte, 0, size)
+	for _, p := range req.Parts {
+		data = append(data, u.parts[p.PartNumber].data...)
 	}
 	s.objects[key] = object{data: data, modified: u.started,
 		contentType: u.contentType, parts: len(req.Parts)}
+	s.sorted = nil
 	delete(s.uploads, id)
 	s.mu.Unlock()
 	s.writeXML(w, completeResult{Bucket: s.bucket, Key: key, ETag: etag(data)})
@@ -378,12 +485,33 @@ func first(values []string) string {
 
 // etag is a stand-in entity tag: quoted, as S3 sends one, and different for
 // different bytes of different lengths, which is all a test needs of it.
+//
+// A CRC-32C, which the CPU computes at memory speed, where the byte-at-a-time
+// arithmetic it replaced ran over every byte of every part at upload, again
+// at completion and once more over the assembled object — a cost a benchmark
+// through the fake would have reported as the backend's.
 func etag(data []byte) string {
-	var sum uint32
-	for _, b := range data {
-		sum = sum*31 + uint32(b)
+	return fmt.Sprintf(`"%d-%08x"`, len(data), crc32.Checksum(data, castagnoli))
+}
+
+var castagnoli = crc32.MakeTable(crc32.Castagnoli)
+
+// readBody reads a request's body: into ONE buffer of its declared length
+// where it declares one, as every request the SDK sends does, and grown as it
+// arrives where it does not.
+//
+// io.ReadAll alone grows its buffer through a dozen reallocations and copies
+// on the way to an eight-mebibyte part — the fake's cost, not the backend's.
+// A body shorter than its declared length fails here, as it does at S3.
+func readBody(r *http.Request) ([]byte, error) {
+	if r.ContentLength < 0 {
+		return io.ReadAll(r.Body)
 	}
-	return fmt.Sprintf(`"%d-%08x"`, len(data), sum)
+	data := make([]byte, r.ContentLength)
+	if _, err := io.ReadFull(r.Body, data); err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 type listResult struct {
@@ -411,16 +539,20 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 		pageSize = defaultPageSize
 	}
 	s.mu.Lock()
-	var keys []string
-	for k := range s.objects {
-		if strings.HasPrefix(k, prefix) && k > after {
-			keys = append(keys, k)
-		}
+	if s.sorted == nil {
+		s.sorted = slices.Sorted(maps.Keys(s.objects))
 	}
-	slices.Sort(keys)
+	keys := s.sorted
+	// THE FIRST KEY PAST THE MARKER THAT CARRIES THE PREFIX: each half holds
+	// of every key from some point of the sorted order on, so the two
+	// together do too, and the page starts there.
+	from := sort.Search(len(keys), func(i int) bool { return keys[i] > after && keys[i] >= prefix })
 	out := listResult{Name: s.bucket, Prefix: prefix, MaxKeys: pageSize}
-	for i, k := range keys {
-		if i == pageSize {
+	for _, k := range keys[from:] {
+		if !strings.HasPrefix(k, prefix) {
+			break
+		}
+		if len(out.Contents) == pageSize {
 			out.IsTruncated = true
 			out.NextContinuationToken = out.Contents[len(out.Contents)-1].Key
 			break
