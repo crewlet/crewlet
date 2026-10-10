@@ -535,7 +535,13 @@ type DecisionItem struct {
 	At   time.Time `json:"at"`
 
 	Ask *tracker.AskRow `json:"ask,omitempty"`
-	Run map[string]any  `json:"run,omitempty"`
+	Run *DecisionRun    `json:"run,omitempty"`
+
+	// RunDetail is the sandbox board's whole record of the run
+	// ([serialiseRun]) — to an ADMIN key only, which reads the board anyway;
+	// absent for everybody else. See decisionrun.go for why a member reads
+	// [DecisionRun] and nothing more.
+	RunDetail map[string]any `json:"run_detail,omitempty"`
 }
 
 // decisions answers what is waiting on one person — the open asks put to
@@ -591,16 +597,33 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 			return nil, err
 		}
 		handles := who.Handles()
+		var waiting []sandbox.PendingRun
 		for _, run := range runs {
 			// WAITING ON AN ANSWER — [sandbox.Awaiting], a reseeded run
 			// included, since its answer can still arrive — and put to
 			// this person: [putTo] asks both, as the board's audience
 			// filter does.
-			if !putTo(run, handles) {
-				continue
+			if putTo(run, handles) {
+				waiting = append(waiting, run)
 			}
-			at := waitingSince(run)
-			items = append(items, DecisionItem{Kind: "run", At: at, Run: serialiseRun(run)})
+		}
+		titles := s.runTitles(ctx, waiting)
+		admin := callerFrom(ctx).IsAdmin()
+		for _, run := range waiting {
+			// WHEN THE QUESTION WAS PUT, which is what "waiting since"
+			// means and what an answer is measured against. It used to be
+			// when the box was HELD, or failing that the row's last write —
+			// and a re-seeded run holds no box, so its last write is the
+			// reaper's: a question asked days ago jumped to the instant its
+			// box was reclaimed, moving up the list and shortening
+			// `oldest_at` by the hold it had already waited out.
+			at := run.AskedAt
+			decision := decisionRunOf(run, titles)
+			item := DecisionItem{Kind: "run", At: at, Run: &decision}
+			if admin {
+				item.RunDetail = serialiseRun(run)
+			}
+			items = append(items, item)
 			total++
 			older(at)
 		}
@@ -619,13 +642,4 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 		answer["oldest_at"] = oldest.UTC()
 	}
 	return answer, nil
-}
-
-// waitingSince is when a parked run began waiting on its question: when its
-// box was held, or — for a run whose hold was never stamped — its last update.
-func waitingSince(run sandbox.PendingRun) time.Time {
-	if held, ok := run.HeldSince(); ok {
-		return held
-	}
-	return run.UpdatedAt
 }

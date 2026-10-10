@@ -451,6 +451,9 @@ test("a parked run is a row of Waiting on a person with its audience and Answer"
             updated_at: ago(2_000_000),
             paused_at: ago(2_280_000),
             pause_ttl_seconds: 7_200,
+            // THE ENGINE'S DEADLINE, the stamp plus the TTL: what the row draws.
+            keeps_place_until: ago(2_280_000 - 7_200_000),
+            asked_at: ago(2_280_000),
             task_description: "fleet map",
             placement: "remote",
             coding_agent: "claude",

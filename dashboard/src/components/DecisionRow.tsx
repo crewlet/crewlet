@@ -48,6 +48,7 @@ import { relTime } from "~/lib/format.ts";
 import type {
   AgentRow,
   BudgetWindow,
+  DecisionRun,
   DecisionsAnswer,
   SandboxRun,
   WorkAskRow,
@@ -64,7 +65,7 @@ export interface SeatCondition {
 
 export type DecisionSubject =
   | { kind: "ask"; at: string; ask: WorkAskRow }
-  | { kind: "run"; at: string; run: SandboxRun }
+  | { kind: "run"; at: string; run: DecisionRun }
   | { kind: "seat"; at?: string; seat: SeatCondition };
 
 /**
@@ -368,10 +369,10 @@ function AskRow({
   );
 }
 
-function RunRow({ run, index, now }: { run: SandboxRun; index: OrgIndex; now: number }) {
+function RunRow({ run, index, now }: { run: DecisionRun; index: OrgIndex; now: number }) {
   const who = seatOf(index, run.agent_handle);
-  const key = run.work_item?.key ?? "";
-  const since = run.paused_at || run.updated_at;
+  const key = run.task?.key ?? "";
+  const since = run.asked_at;
   const sub = joined([
     key ? <Key key="k" value={key} /> : "",
     run.question ? `“${run.question}”` : "",
@@ -393,32 +394,53 @@ function RunRow({ run, index, now }: { run: SandboxRun; index: OrgIndex; now: nu
 /**
  * WHO THE QUESTION IS PUT TO, as the chart names them: the handles the engine
  * resolved when the run parked — the seat's lead chain, where the audience
- * the run wrote named nobody the chart has. Where that resolved to nobody
- * either (a seat with no lead chain, a park on a node holding no company), or
- * the row reached this screen before its durable record was read, the
- * audience as the run wrote it. Nothing where it named no audience at all.
+ * the run wrote named nobody the chart has. Nothing where it resolved to
+ * nobody: the agent's own free label for its audience is the machine's word,
+ * which the engine does not send a member (ADR-0031).
  */
-export function audienceOf(run: SandboxRun, index: OrgIndex): string {
-  const handles = run.audience_handles ?? [];
-  if (handles.length > 0) {
-    return `asks ${handles.map((h) => index.byHandle.get(h)?.name ?? h).join(", ")}`;
-  }
-  return run.audience ? `asks ${run.audience}` : "";
+export function audienceOf(run: DecisionRun, index: OrgIndex): string {
+  if (run.asked.length === 0) return "";
+  return `asks ${run.asked.map((h) => index.byHandle.get(h)?.name ?? h).join(", ")}`;
+}
+
+/**
+ * A board row (`sandbox_runs`) as the decision it asks, for a screen that
+ * draws the board's parked runs with the row the decisions draw. A FIELD
+ * MAPPING: every value is one the engine served, the deadline included —
+ * `keeps_place_until` is left absent rather than derived on a live entry the
+ * store has not caught up with. The one stand-in is that entry's `asked_at`,
+ * which the live projection does not hold: its last update is the nearest
+ * instant it has, until the durable row replaces it.
+ */
+export function decisionOfRun(run: SandboxRun): DecisionRun {
+  return {
+    turn_id: run.turn_id,
+    question: run.question,
+    task: run.work_item ? { id: run.work_item.id, key: run.work_item.key } : null,
+    agent_handle: run.agent_handle,
+    asked: run.audience_handles ?? [],
+    asked_fallback: run.audience_fallback,
+    asked_at: run.asked_at || run.updated_at,
+    keeps_place_until: run.keeps_place_until,
+    answerable_in_chat: run.answerable_in_chat,
+    chat_surface: run.chat_surface,
+  };
 }
 
 /**
  * How long the run's box is still held — the cost of leaving the question: a
  * box past its pause window is reclaimed and the run restarts from the
- * question. Nothing where the run is held on no timer.
+ * question. The DEADLINE IS THE ENGINE'S (`keeps_place_until`, the reaper's
+ * own), so this only says how far off it is; null is a box no longer held.
  */
-export function holdLine(run: SandboxRun, now: number): string | undefined {
-  if (run.status === "reseed")
-    return "Its box was reclaimed: answering restarts the work from the question";
-  const ttl = run.pause_ttl_seconds;
-  const parked = Date.parse(run.paused_at);
-  if (!(ttl > 0) || !Number.isFinite(parked)) return undefined;
-  const left = parked + ttl * 1_000 - now;
-  if (left <= 0) return "Its box is past its pause window and may be reclaimed";
+export function holdLine(run: DecisionRun, now: number): string | undefined {
+  // NOT KNOWN YET — a live entry whose durable row has not been read — says
+  // nothing rather than guessing either way.
+  if (run.keeps_place_until === undefined) return undefined;
+  if (run.keeps_place_until === null)
+    return "Its box is not held: answering restarts the work from the question";
+  const left = Date.parse(run.keeps_place_until) - now;
+  if (!(left > 0)) return "Its box is past its pause window and may be reclaimed";
   const minutes = Math.round(left / 60_000);
   const hours = Math.floor(minutes / 60);
   return `Its box is held for ${hours > 0 ? `${hours}h ${minutes % 60}m` : `${minutes}m`} more`;

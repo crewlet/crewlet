@@ -250,6 +250,26 @@ func Derived(key string) bool {
 	return key != "" && !strings.HasPrefix(key, EventPrefix)
 }
 
+// SourceOf is the source a derived key was namespaced by ([Namespaced]) — the
+// surface a reply reaches that conversation from: `slack`, `mattermost`, or
+// the tracker or vendor whose thread it is — and "" for a key that names no
+// conversation ([Derived]).
+//
+// THE INVERSE OF [Namespaced], beside it, so the one place that writes the
+// prefix is the one place that reads it back: a screen saying "answer it in
+// Slack" names the surface the key says, never one it guessed from a channel
+// id.
+func SourceOf(key string) string {
+	if !Derived(key) {
+		return ""
+	}
+	source, _, found := strings.Cut(key, ":")
+	if !found {
+		return ""
+	}
+	return source
+}
+
 // Stamp writes both keys onto an event's payload.
 //
 // THE ONE WRITER FOR BOTH, so a producer cannot spell either field

@@ -563,8 +563,8 @@ export function ItemsView({
   const waiting = useMemo(() => {
     const out = new Map<string, CardWaiting>();
     for (const item of decisions.data?.items ?? []) {
-      const key = item.run?.work_item?.key;
-      if (item.kind === "run" && key && !out.has(key)) out.set(key, { since: item.run?.paused_at });
+      const key = item.run?.task?.key;
+      if (item.kind === "run" && key && !out.has(key)) out.set(key, { since: item.run?.asked_at });
     }
     return out;
   }, [decisions.data]);

@@ -99,7 +99,7 @@ export function rowKey(row: InboxRow): string {
         case "ask":
           return row.subject.ask.key;
         case "run":
-          return row.subject.run.work_item?.key ?? "";
+          return row.subject.run.task?.key ?? "";
         case "seat": {
           const r = row.subject.seat.row;
           return r.turn?.work_item?.key ?? r.live_call?.work_item?.key ?? "";

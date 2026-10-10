@@ -665,9 +665,17 @@ export interface SandboxRun {
   box_exists: boolean;
   paused_at: string;
   pause_ttl_seconds: number;
+  /** When the engine reclaims the held box — the reaper's own deadline, the
+   *  two halves above made one instant by the engine; null once nothing is
+   *  held. ABSENT on a live entry whose durable row has not been read yet. */
+  keeps_place_until?: string | null;
+  /** When the question was put; empty on a run not parked on one. */
+  asked_at?: string;
   started_at: string;
   updated_at: string;
   answerable_in_chat: boolean;
+  /** The surface a thread reply reaches the run from; absent when none can. */
+  chat_surface?: string;
   /** The item the launching turn was charged to; null when it was on none. */
   work_item?: WorkItemRef | null;
 
@@ -4523,12 +4531,47 @@ export interface CompanyFeedAnswer {
   complete: boolean;
 }
 
+/**
+ * A coding run parked on a question put to the reader — the DECISION it asks,
+ * never the run: what the machine ran (its tool log, branch, session, trace,
+ * node and brief) is an admin's (ADR-0031), and rides beside it as
+ * `run_detail` to an admin key only.
+ */
+export interface DecisionRun {
+  /** What `answer_run` is called with. */
+  turn_id: string;
+  question: string;
+  /** The work item it is charged to; `title` as the tracker holds it now,
+   *  absent for a vendor's item. Null when it is charged to none. */
+  task: { id: string; key: string; title?: string } | null;
+  agent_handle: string;
+  /** Who the question is put to, resolved against the chart when it parked. */
+  asked: string[];
+  /** It went to the seat's lead chain: the agent named nobody the chart has. */
+  asked_fallback?: boolean;
+  /** When the question was put. */
+  asked_at: string;
+  /** When the engine reclaims the run's held box — after it an answer
+   *  restarts the work from the question. The ENGINE's deadline, never a
+   *  countdown a screen derives; null once nothing is held. The engine always
+   *  sends it; it is absent only on a run the dashboard drew from the live
+   *  projection before its durable row was read ([decisionOfRun]). */
+  keeps_place_until?: string | null;
+  answerable_in_chat: boolean;
+  /** The surface a thread reply reaches it from: `slack`, `mattermost`, or the
+   *  tracker or vendor it was asked on. Absent when no thread can. */
+  chat_surface?: string;
+}
+
 /** One thing waiting on a person's decision. */
 export interface DecisionItem {
   kind: "ask" | "run";
+  /** When it was asked — a run's `asked_at`. */
   at: string;
   ask?: WorkAskRow;
-  run?: SandboxRun;
+  run?: DecisionRun;
+  /** The run's whole board row, to an admin key only. */
+  run_detail?: SandboxRun;
 }
 
 /** `decisions`: the open asks put to a person and the coding runs parked on

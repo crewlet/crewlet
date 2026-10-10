@@ -48,7 +48,7 @@ import { reasonPhrase, reasonWhy } from "~/lib/reasons.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
 import type { Attention } from "~/lib/attention.ts";
 import type {
-  SandboxRun,
+  DecisionRun,
   WorkAskRow,
   WorkDecisionEvidence,
   WorkInboxNotice,
@@ -526,7 +526,7 @@ function TaskEvidence({ id, label }: { id: string; label?: string }) {
   );
 }
 
-function RunBody({ run, who, now }: { run: SandboxRun; who: Who | null; now: number }) {
+function RunBody({ run, who, now }: { run: DecisionRun; who: Who | null; now: number }) {
   const write = useAct("answer_run");
   const [answer, setAnswer] = useState("");
   const name = who?.name ?? run.agent_handle;
@@ -545,7 +545,7 @@ function RunBody({ run, who, now }: { run: SandboxRun; who: Who | null; now: num
       <div className="inbox-pane-head">
         <h1 className="inbox-pane-question">{`${name}’s coding run is parked on a question`}</h1>
         <Byline who={who}>
-          <span>{`Parked ${relTime(run.paused_at || run.updated_at, now)}`}</span>
+          <span>{`Parked ${relTime(run.asked_at, now)}`}</span>
           {hold && (
             <>
               <span aria-hidden="true">·</span>

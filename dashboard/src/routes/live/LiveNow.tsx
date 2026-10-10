@@ -57,7 +57,7 @@ import {
 import { href, useParam } from "~/app/router.tsx";
 import { EventRow, QueryState } from "~/components/common.tsx";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
-import { DecisionRow } from "~/components/DecisionRow.tsx";
+import { DecisionRow, decisionOfRun } from "~/components/DecisionRow.tsx";
 import { LiveDot, LiveTurnRow } from "~/components/LiveTurnRow.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -343,7 +343,11 @@ export function LiveNow() {
                 {waiting.map((run) => (
                   <DecisionRow
                     key={run.turn_id}
-                    subject={{ kind: "run", at: run.paused_at || run.updated_at, run }}
+                    subject={{
+                      kind: "run",
+                      at: run.asked_at || run.updated_at,
+                      run: decisionOfRun(run),
+                    }}
                     decider={{ handle: viewer.handle }}
                     now={now}
                   />
