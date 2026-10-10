@@ -180,6 +180,14 @@ func newFakeTracker() *fakeTracker {
 	return &fakeTracker{tasks: tasks}
 }
 
+// status puts one of the fake's tasks at a status, its group with it, as the
+// applier would have left it.
+func (f *fakeTracker) status(key string, status tracker.Status) {
+	detail := f.tasks[key]
+	detail.Task.Status, detail.Task.StatusGroup = status, status.Group()
+	f.tasks[key] = detail
+}
+
 func (f *fakeTracker) Tasks(_ context.Context, q tracker.Query, _ time.Time) (tracker.Answer, error) {
 	f.query = q
 	if f.readErr != nil {

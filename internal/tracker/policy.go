@@ -150,6 +150,23 @@ func (s Status) Group() StatusGroup { return statusTable[s].group }
 // Description is what an agent chooses by.
 func (s Status) Description() string { return statusTable[s].description }
 
+// SendsBack reports whether moving a task from `from` to `to` RETURNS the
+// work: to an OPEN status from one further along the board — a review that
+// hands the work back to be done again, or finished work reopened.
+//
+// THE BOARD'S ORDER IS THE WORKFLOW'S ([Statuses]), so "further along" needs
+// no second table to drift from the first. Only an open destination counts,
+// because a move between two finished statuses (done to closed) hands the
+// work back to nobody; and a move forward is reported by the move itself,
+// which is why a note may ride a send-back and not a promotion — what was
+// wrong with work somebody returns is the one thing the move cannot say.
+func SendsBack(from, to Status) bool {
+	if !from.Valid() || !to.Valid() || !to.Group().Open() {
+		return false
+	}
+	return slices.Index(Statuses, to) < slices.Index(Statuses, from)
+}
+
 // Delivered is THE measurement predicate, and there is exactly one.
 //
 // Read by children_done, cycle and lead time and created-vs-resolved. NO BIT

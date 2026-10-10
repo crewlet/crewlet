@@ -36,24 +36,65 @@ func TestAReassignmentReasonReachesTheWakeAndTheHistory(t *testing.T) {
 	}
 }
 
-// A REASON EXPLAINS AN ASSIGNMENT AND NOTHING ELSE, and it is refused past its
-// bounds rather than cut: a reason silently truncated reads as finished.
-func TestAnAssignmentReasonIsBoundedAndOnlyBesideAnAssignee(t *testing.T) {
+// WORK SENT BACK CARRIES ITS NOTE TO THE ASSIGNEE. A person reviewing work
+// returns it — in_review to in_progress — with one line saying what to do
+// again, and that line is the change's excerpt exactly as a hand-off's reason
+// is: what the assignee's wake renders and the history row shows beside the
+// move. Refused, the note had nowhere to go but a separate comment, and the
+// wake the assignee got said only that the status changed.
+func TestWorkSentBackCarriesItsNoteToTheAssignee(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	trk.status("ENG-1", tracker.StatusInReview)
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	const why = "The timeout path has no test."
+	if got := callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
+		"item": "ENG-1", "status": "in_progress", "reason": why,
+	}); got.Failed {
+		t.Fatalf("work sent back with a note failed: %s", got.Output)
+	}
+	if len(trk.notified) != 1 || trk.notified[0] == nil {
+		t.Fatalf("the send-back was published with %v", trk.notified)
+	}
+	if got := trk.notified[0].Excerpt; got != why {
+		t.Errorf("the send-back's excerpt is %q, want the note %q", got, why)
+	}
+	if trk.kinds[0] != tracker.ChangeStatus {
+		t.Errorf("the change kind is %q, want status", trk.kinds[0])
+	}
+}
+
+// A REASON EXPLAINS A HAND-OFF OR A SEND-BACK AND NOTHING ELSE, and it is
+// refused past its bounds rather than cut: a reason silently truncated reads
+// as finished.
+func TestAReasonIsBoundedAndOnlyBesideAHandOffOrASendBack(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
+		from tracker.Status
 		args map[string]any
 		want string
 	}{
-		"no assignee": {map[string]any{"item": "ENG-1", "status": "done",
-			"reason": "shipped"}, "comment"},
-		"too many characters": {map[string]any{"item": "ENG-1", "assignee": "ops",
-			"reason": strings.Repeat("a", builtin.MaxAssignmentReason+1)}, "characters"},
-		"too many bytes": {map[string]any{"item": "ENG-1", "assignee": "ops",
-			"reason": strings.Repeat("語", builtin.MaxAssignmentReason)}, "bytes"},
+		"a close": {tracker.StatusTodo, map[string]any{"item": "ENG-1",
+			"status": "done", "reason": "shipped"}, "comment"},
+		"a move forward": {tracker.StatusInProgress, map[string]any{"item": "ENG-1",
+			"status": "in_review", "reason": "ready for a look"}, "comment"},
+		"between finished statuses": {tracker.StatusDone, map[string]any{"item": "ENG-1",
+			"status": "closed", "reason": "tidying"}, "comment"},
+		"no change at all": {tracker.StatusInReview, map[string]any{"item": "ENG-1",
+			"priority": "high", "reason": "urgent"}, "comment"},
+		"too many characters": {tracker.StatusTodo, map[string]any{"item": "ENG-1", "assignee": "ops",
+			"reason": strings.Repeat("a", builtin.MaxChangeReason+1)}, "characters"},
+		"too many bytes": {tracker.StatusTodo, map[string]any{"item": "ENG-1", "assignee": "ops",
+			"reason": strings.Repeat("語", builtin.MaxChangeReason)}, "bytes"},
+		"a send-back's too many characters": {tracker.StatusInReview, map[string]any{
+			"item": "ENG-1", "status": "in_progress",
+			"reason": strings.Repeat("a", builtin.MaxChangeReason+1)}, "characters"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			trk := newFakeTracker()
+			trk.status("ENG-1", c.from)
 			reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
 			got := callWork(t, reg, builtin.UpdateWorkItemTool, c.args)
 			if !got.Failed || !strings.Contains(got.Output, c.want) {

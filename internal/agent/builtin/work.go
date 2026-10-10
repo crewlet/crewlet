@@ -2344,7 +2344,9 @@ func (t *updateWorkItem) Description() string {
 	return "Change a work item: its status, assignee, priority, title, " +
 		"description, labels, checklists, or whether you watch it. Only the " +
 		"fields you pass are changed. An assignment can carry a `reason` the " +
-		"new assignee reads. Say WHY you closed something with " +
+		"new assignee reads, and so can sending work BACK — a status back to " +
+		"an open status, say in_review to in_progress — saying what to do " +
+		"again. Say WHY you closed something with " +
 		"comment_on_work_item — an item that went to `cancelled` with no " +
 		"word is one somebody has to reconstruct. Closing as a duplicate " +
 		"also names the item that survives, in `duplicate_of`."
@@ -2362,11 +2364,14 @@ func (t *updateWorkItem) Parameters() map[string]any {
 			"assignee": map[string]any{"type": "string", "description": "A seat's handle, or \"\" to unassign."},
 			"reason": map[string]any{
 				"type": "string",
-				"description": fmt.Sprintf("Only with `assignee`: one line "+
-					"saying why the work is theirs now, at most %d "+
-					"characters. It is what the new assignee is woken with "+
-					"and what the item's history shows beside the hand-off.",
-					MaxAssignmentReason),
+				"description": fmt.Sprintf("Only with `assignee`, saying why "+
+					"the work is theirs now, or with a `status` that sends the "+
+					"work BACK to an open status from one further along "+
+					"(in_review to in_progress, a finished item reopened), "+
+					"saying what to do again. One line, at most %d "+
+					"characters. It is what the assignee is woken with and "+
+					"what the item's history shows beside the change.",
+					MaxChangeReason),
 			},
 			"checklist": checklistSchema(),
 			"priority":  map[string]any{"type": "string", "description": "One of: " + priorityList() + "."},
@@ -2497,7 +2502,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// patch is built, because a checklist gesture mints the ids of the lists
 	// and items it adds from it.
 	opID := opIDFor(actor, t.Name(), "update", before.Task.ID, args)
-	reason, refusal := assignmentReason(args)
+	reason, refusal := changeReason(args, before.Task, patch)
 	if refusal != "" {
 		return failed(refusal), nil
 	}
@@ -2646,8 +2651,10 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 				Parent: t.deps.parentParty(ctx, before.Task, patch),
 				// THE REASON IS THE CHANGE'S EXCERPT, which is the one line
 				// both the history row and the wake already carry — so the
-				// new assignee is woken with it and the item's history
-				// shows it beside the hand-off, with no field of its own.
+				// assignee is woken with it and the item's history shows it
+				// beside the hand-off or the send-back, with no field of its
+				// own. A send-back's note also makes its wake ADDRESSED
+				// ([tracker.Candidates]): it asks the assignee to act.
 				Excerpt: reason,
 			}.Notify(t.deps.Leads))
 		if err != nil {
