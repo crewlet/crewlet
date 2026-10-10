@@ -622,6 +622,14 @@ stream, the spend or the tool catalogue. The chart is classified the same way,
 field by field: anybody reads its names and shape, a member also the founder's
 prose, an admin also the ceilings, the model chains and the tool sources.
 
+**Spend is withheld on the wire, not only off the screen.** A member answer
+that would carry what a task, a completion, a seat or an answer cost — a task's
+`spend`, a seat's `tokens`, the model and tokens of a ⌘K answer — answers a
+member key without it, absent rather than zero; and a member asking for cost by
+name (`fields=spend`, an order, filter or total on a `spend_` column) is
+refused `403 forbidden` naming the terms. The API reference lists
+[what a member's answer leaves out](../reference/api-endpoints.md#who-reaches-what).
+
 **A record about a person is theirs.** A person's inbox, their day and their
 saved views are read by that person and by the leads whose line they are in —
 and by nobody else, whatever the key's role: an admin key is reach over the

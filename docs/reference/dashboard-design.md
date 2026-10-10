@@ -2712,7 +2712,9 @@ all of them and the three changes stay in the first screen. A term that reads
 as a question also trims All to two task and two page hits, from the moment it
 is typed rather than when the answer lands, so the list does not shrink under
 the highlight. The answer ends with a footnote in **tokens** — "1,440 tokens, charged to
-the company", or "Answered before — no tokens spent" — never money. An
+the company", or "Answered before — no tokens spent" — never money; to a
+member key, which the engine sends no figure and no model (ADR-0031), it is
+"Charged to the company". An
 anonymous or unbound reader gets one line instead: *Set a token bound to your
 seat to get an answer from your company's knowledge.*
 
@@ -4972,7 +4974,10 @@ is one of the rules on this page applied to a tracker.
   cards for is told why once, above the lanes, in the sentence every write
   control uses.
 - **A card's mark row is one line.** Priority, blocked, due, "blocks N" and
-  open asks stay whole and the token count stays at the row's right end; the
+  open asks stay whole and the token count stays at the row's right end — for
+  an admin, the one reader whose board asks for a card's cost: a member's
+  board leaves `spend` out of `fields=` and its Sort offers no "Most tokens",
+  because the engine refuses either to a member key (ADR-0031); the
   LABELS give way first, to a "+N" that names the rest in its title and to a
   screen reader. The row wrapped once, and the count stood on a line of its
   own under a full row of chips.

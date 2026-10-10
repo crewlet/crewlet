@@ -1160,7 +1160,7 @@ function AnswerLead({
       );
     case "answered": {
       const { answer } = state;
-      const spent = answer.tokens.input + answer.tokens.output;
+      const spent = answer.tokens ? answer.tokens.input + answer.tokens.output : null;
       return (
         <div className="palette-answer">
           <AnswerHead />
@@ -1198,11 +1198,15 @@ function AnswerLead({
               )}
             </div>
           )}
-          {/* TOKENS, NEVER MONEY — the unit the company's budget counts. */}
+          {/* TOKENS, NEVER MONEY — the unit the company's budget counts — and
+              only to a key that reads them: a member is told the answer is
+              charged to the company, never how much (ADR-0031). */}
           <p className="palette-answer-foot">
             {answer.cached
               ? "Answered before — no tokens spent"
-              : `${fmtCount(spent)} tokens, charged to the company`}
+              : spent !== null
+                ? `${fmtCount(spent)} tokens, charged to the company`
+                : "Charged to the company"}
             {answer.model ? ` · ${answer.model}` : ""}
           </p>
         </div>

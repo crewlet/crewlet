@@ -53,10 +53,11 @@ export interface AnswerSource {
 export interface KnowledgeAnswerReceipt {
   answer_md: string;
   sources: AnswerSource[];
-  /** What THIS call spent; zero on a cached answer. */
-  tokens: { input: number; output: number };
+  /** What THIS call spent; zero on a cached answer. ABSENT to a member key,
+   *  with `model`: what the machine spent is an admin's (ADR-0031). */
+  tokens?: { input: number; output: number };
   /** The model that wrote it; "" when nothing matched and no model ran. */
-  model: string;
+  model?: string;
   cached: boolean;
 }
 

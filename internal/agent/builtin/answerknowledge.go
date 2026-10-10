@@ -248,14 +248,38 @@ type AnswerTokens struct {
 //
 // TOKENS, NEVER A PRICE: what an answer cost is reported in the unit the
 // company's budget counts, and nothing here converts it.
+//
+// WHAT IT COST AND WHICH MODEL WROTE IT ARE AN ADMIN'S (ADR-0031): what the
+// machine processed, beside what the company published — the answer and its
+// sources, which a member asked for. So both are pointers, and both are nil
+// on the answer a member is SERVED ([KnowledgeAnswer.servedTo]) — absent
+// rather than zero, because "it cost nothing" is false about a fresh answer.
+// The answer KEPT (the cache) carries both whatever the reach of whoever
+// asked first.
 type KnowledgeAnswer struct {
 	AnswerMD string         `json:"answer_md"`
 	Sources  []AnswerSource `json:"sources"`
-	Tokens   AnswerTokens   `json:"tokens"`
+	Tokens   *AnswerTokens  `json:"tokens,omitempty"`
 	// Model is the model that wrote it — empty for an answer no model
 	// wrote, which is the one where nothing matched.
-	Model  string `json:"model"`
-	Cached bool   `json:"cached"`
+	Model  *string `json:"model,omitempty"`
+	Cached bool    `json:"cached"`
+}
+
+// servedTo is the answer as this caller is served it: whole for an admin key,
+// and without what it cost or which model wrote it for anybody else (see
+// [KnowledgeAnswer]). A copy, so the cached answer is never the one stripped.
+func (a KnowledgeAnswer) servedTo(actor Actor) KnowledgeAnswer {
+	if !actor.Admin {
+		a.Tokens, a.Model = nil, nil
+	}
+	return a
+}
+
+// spentOn is the answer's own record of what it cost and which model wrote it,
+// set on every answer this tool composes and withheld only on delivery.
+func spentOn(a *KnowledgeAnswer, tokens AnswerTokens, model string) {
+	a.Tokens, a.Model = &tokens, &model
 }
 
 // answerKnowledge answers a question from the company's pages and work items.
@@ -276,8 +300,9 @@ func (t *answerKnowledge) Name() string { return AnswerKnowledgeTool }
 func (t *answerKnowledge) Description() string {
 	return "Answer a question from what the company has written down: its " +
 		"knowledge-base pages and its work items. Returns a short Markdown " +
-		"answer that cites its sources, the sources themselves, and the " +
-		"tokens it spent — charged to the company's budget. Only a token " +
+		"answer that cites its sources and the sources themselves — and, to an " +
+		"admin's key, the tokens it spent (charged to the company's budget) " +
+		"and the model that wrote it. Only a token " +
 		"bound to a person may ask. The same question asked again while " +
 		"nothing it was written from has changed is answered from a cache " +
 		"and spends nothing."
@@ -349,10 +374,13 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	key, cacheable := t.cacheKey(question)
 	if cacheable {
 		if hit, ok := t.cache.get(key); ok {
-			hit.Cached, hit.Tokens = true, AnswerTokens{}
+			hit.Cached = true
+			// NOTHING SPENT BY THIS CALL — the cache answered it — and the
+			// model is still the one that wrote the answer kept.
+			spentOn(&hit, AnswerTokens{}, *hit.Model)
 			log.InfoContext(ctx, "knowledge_answered", "seat", actor.Seat,
 				"cached", true, "sources", len(hit.Sources))
-			return jsonResult(hit)
+			return jsonResult(hit.servedTo(actor))
 		}
 	}
 
@@ -383,10 +411,11 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			AnswerMD: "Nothing the company has written down matches this question.",
 			Sources:  []AnswerSource{},
 		}
+		spentOn(&answer, AnswerTokens{}, "")
 		if cacheable {
 			t.cache.put(key, answer)
 		}
-		return jsonResult(answer)
+		return jsonResult(answer.servedTo(actor))
 	}
 
 	// THE OPERATOR STAGE, which the seam charges to the company's windows
@@ -430,19 +459,16 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return refused(tools.RefusalUnavailable, "The model wrote no answer. Try again, "+
 			"or ask the question more narrowly."), nil
 	}
-	answer := KnowledgeAnswer{
-		AnswerMD: text,
-		Sources:  sources,
-		Tokens:   AnswerTokens{Input: completion.InputTokens, Output: completion.OutputTokens},
-		Model:    completion.Model,
-	}
+	answer := KnowledgeAnswer{AnswerMD: text, Sources: sources}
+	spentOn(&answer, AnswerTokens{Input: completion.InputTokens,
+		Output: completion.OutputTokens}, completion.Model)
 	if cacheable {
 		t.cache.put(key, answer)
 	}
 	log.InfoContext(ctx, "knowledge_answered", "seat", actor.Seat, "cached", false,
-		"model", answer.Model, "input_tokens", answer.Tokens.Input,
-		"output_tokens", answer.Tokens.Output, "sources", len(sources))
-	return jsonResult(answer)
+		"model", completion.Model, "input_tokens", completion.InputTokens,
+		"output_tokens", completion.OutputTokens, "sources", len(sources))
+	return jsonResult(answer.servedTo(actor))
 }
 
 // cacheKey is the question's cache key at this node's corpus position, and

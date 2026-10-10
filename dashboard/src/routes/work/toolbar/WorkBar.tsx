@@ -49,7 +49,7 @@ import {
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import { useScrollEdges } from "~/lib/useScrollEdges.ts";
 import { href } from "~/app/router.tsx";
-import { SORTS, groupAxisOptions, type Scope, type Shape } from "~/lib/work.ts";
+import { groupAxisOptions, sortsFor, type Scope, type Shape } from "~/lib/work.ts";
 import type { WorkView } from "~/protocol/index.ts";
 
 /** The five shapes, in the order the approved board draws their tabs. */
@@ -216,11 +216,15 @@ export function ArrangeControls({
   onGroupBy,
   onSort,
   manual = true,
+  spend,
 }: {
   shape: Shape;
   workspace: boolean;
   groupBy: string;
   sort: string;
+  /** Whether the reader's key reads what a task cost (`viewer.admin`), which
+   *  decides whether the order by cost is offered — see [sortsFor]. */
+  spend: boolean;
   /** Whether the order on screen is the manual one a drag changes. */
   manual?: boolean;
   onGroupBy: (axis: string) => void;
@@ -261,7 +265,7 @@ export function ArrangeControls({
           // container and shape — the engine's manual order inside a project,
           // the most recently touched across the company, the start date on a
           // timeline — and "Default" alone names none of them.
-          options={[{ value: "", label: defaultOrderLabel(shape, workspace) }, ...SORTS]}
+          options={[{ value: "", label: defaultOrderLabel(shape, workspace) }, ...sortsFor(spend)]}
         />
       </label>
     </span>

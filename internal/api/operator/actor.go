@@ -136,6 +136,9 @@ func WorkActor(chart func() *org.Organization, lookup org.EnvLookup) func(
 		// fact about, so no tool reaches for the request on its own.
 		actor := builtin.Actor{
 			Handle: id, Kind: tracker.AuthorOperator, OperatorID: id,
+			// THE KEY'S REACH, for what a tool's answer may carry about
+			// the machine — see [builtin.Actor.Admin]. Off the same
+			// principal the transport admitted, so the two cannot differ.
 			Admin: caller.IsAdmin(),
 		}
 		if seat, pinned := pinnedSeat(ctx); pinned {

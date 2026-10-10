@@ -399,15 +399,23 @@ type Actor struct {
 
 	// Admin is whether the credential behind this actor holds the ADMIN
 	// role (ADR-0031): reach over how the company and its agents are RUN,
-	// which a person's place in the chart does not give them. It is the
-	// one authority a tool grants past the chart — an admin may pause any
-	// seat, steer any turn, answer any parked run — and it is never a
-	// person's: it says nothing about whose inbox or queue they may read,
-	// which stays the chart's. False for a seat and for a member's key.
+	// which a person's place in the chart does not give them. It decides
+	// two things and nothing else:
 	//
-	// Set by the surface that resolved the credential, because this
-	// package holds no key: the operator surface reads it off the
-	// request's principal (`operator.WorkActor`).
+	//   - the one authority a tool grants past the chart — an admin may
+	//     pause any seat, steer any turn, answer any parked run; it is
+	//     never a person's, and says nothing about whose inbox or queue
+	//     they may read, which stays the chart's;
+	//   - what an answer may tell its caller about how the machine ran,
+	//     beyond what the company published: what it cost and which model
+	//     wrote it ([KnowledgeAnswer]).
+	//
+	// Never who may call a tool or who a write is attributed to: those are
+	// the act transport's admission and [Actor.Handle]. False for a seat,
+	// whose turn is the machine, and for a member's key. Set by the surface
+	// that resolved the credential, because this package holds no key: the
+	// operator surface reads it off the request's principal
+	// (`operator.WorkActor`).
 	Admin bool
 
 	// TurnID is the RUN that produced this write — provenance, so an

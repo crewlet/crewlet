@@ -206,6 +206,31 @@ func TestTheWorkActorCarriesTheOperation(t *testing.T) {
 
 // asAdmin and asMember are the principals a key of each role named id carries,
 // as the app's guard attaches them.
+// THE ACTOR IS AN ADMIN EXACTLY WHEN ITS KEY IS, off the principal the
+// transport admitted — what decides whether a tool's answer says what it cost
+// ([builtin.Actor.Admin]). A member key, an admin key and a disabled guard's
+// caller (an admin's reach) each resolve once.
+func TestTheWorkActorIsAnAdminExactlyWhenItsKeyIs(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		caller auth.Principal
+		admin  bool
+	}{
+		{asMember("founder"), false},
+		{asAdmin("ci"), true},
+		{auth.Principal{ID: auth.AnonymousOperator, Reach: auth.ReachAdmin}, true},
+	} {
+		got, err := operator.WorkActor(nil, nil)(auth.WithPrincipal(t.Context(), tc.caller), nil)
+		if err != nil {
+			t.Fatalf("WorkActor(%+v): %v", tc.caller, err)
+		}
+		if got.Admin != tc.admin {
+			t.Errorf("a %s caller resolved to an actor with Admin %v, want %v",
+				tc.caller.Reach, got.Admin, tc.admin)
+		}
+	}
+}
+
 func asAdmin(id string) auth.Principal {
 	return auth.Principal{ID: id, Role: config.RoleAdmin, Reach: auth.ReachAdmin}
 }

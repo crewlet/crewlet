@@ -467,6 +467,7 @@ export function ItemsView({
         filters,
         range: weeks.length ? gridRange(weeks) : undefined,
         lock: host?.lock,
+        spend: viewer.admin,
       }),
     // The filters object is a fresh literal on every render; its content is
     // what the query depends on. THE LOCK IS A DEPENDENCY IN ITS OWN RIGHT: it
@@ -483,6 +484,7 @@ export function ItemsView({
       JSON.stringify(host?.lock),
       weeks,
       JSON.stringify(filters),
+      viewer.admin,
     ],
   );
 
@@ -907,6 +909,7 @@ export function ItemsView({
               manual={manualOrder(order, project)}
               onGroupBy={onGroupBy}
               onSort={(next) => setSort(next || off(viewOwn.sort))}
+              spend={viewer.admin}
             />
             {/* THE LANES OUT OF A BOARD'S VIEW are named here, at the bar's end,
               rather than on a row of their own above the lanes: see
