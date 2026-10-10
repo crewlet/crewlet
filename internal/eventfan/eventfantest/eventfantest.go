@@ -176,8 +176,13 @@ func Run(t *testing.T, factory Factory) {
 		nodes := fleet(t, factory)
 		at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
 		for i, n := range nodes {
-			write(t, n, phase(fmt.Sprintf("s%d", i), fmt.Sprintf("t-%d", i),
-				at.Add(time.Duration(i)*time.Minute), 10*(i+1), "m"))
+			rec := phase(fmt.Sprintf("s%d", i), fmt.Sprintf("t-%d", i),
+				at.Add(time.Duration(i)*time.Minute), 10*(i+1), "m")
+			// EACH SEAT BY ITS HANDLE, across the wire too: the live
+			// window keys a seat on it, and a peer's record that lost it
+			// would be filed under no seat.
+			rec.Tags["agent_handle"] = fmt.Sprintf("seat-%d", i)
+			write(t, n, rec)
 		}
 		records, coverage, err := asker(nodes).PhaseTokens(t.Context(),
 			store.PhaseTokenQuery{Since: at.Add(-time.Minute), Limit: 10})
@@ -188,11 +193,11 @@ func Run(t *testing.T, factory Factory) {
 		var got []string
 		total := 0
 		for _, r := range records {
-			got = append(got, r.EventID)
+			got = append(got, r.EventID+"/"+r.Handle)
 			total += r.TotalTokens
 		}
-		if !slices.Equal(got, []string{"s2", "s1", "s0"}) || total != 60 {
-			t.Fatalf("the fleet's spend is %v totalling %d, want s2, s1, s0 and 60", got, total)
+		if !slices.Equal(got, []string{"s2/seat-2", "s1/seat-1", "s0/seat-0"}) || total != 60 {
+			t.Fatalf("the fleet's spend is %v totalling %d, want s2, s1, s0 by their seats and 60", got, total)
 		}
 	})
 

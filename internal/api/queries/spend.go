@@ -236,9 +236,8 @@ func (s Sources) tokens(ctx context.Context, p Params) (any, error) {
 		// names the two instants it cut it at.
 		window := s.State.Spend()
 		return tokens.Aggregate(window.Records, tokens.Options{
-			Handles: s.RoleHandles(),
-			Since:   window.Since,
-			Until:   window.Until,
+			Since: window.Since,
+			Until: window.Until,
 		}), nil
 	}
 	w, err := s.spendWindowOf(p)
@@ -329,35 +328,6 @@ func (s Sources) SeatUnits() map[string]string {
 		if unit := organization.UnitFor(role); unit != nil {
 			out[role.Handle()] = unit.Name
 		}
-	}
-	return out
-}
-
-// RoleHandles maps each seat's role name to its handle, for the live rollup's
-// cross-links. Empty when no revision is active, which links to nothing rather
-// than guessing a handle.
-//
-// EVERY SEAT IN THE CHART, units included. This walked `company.Roles` — the
-// root seats only — so every seat inside a unit rolled up with an empty handle
-// and its row on the Spend screen linked nowhere. The org's own walk and the
-// org's own handle derivation, never a re-spelling of either: a handle that
-// differs from the seat's real one is a cross-link to a page that does not
-// exist.
-//
-// Exported because the live stream needs the same map for the rollup it
-// pushes: two derivations of "which handle is this role" is how a pushed row
-// and a queried one come to link to different pages.
-func (s Sources) RoleHandles() map[string]string {
-	out := map[string]string{}
-	organization := s.organization()
-	if organization == nil {
-		return out
-	}
-	for role := range organization.AllRoles() {
-		if role.Name == "" {
-			continue
-		}
-		out[role.Name] = role.Handle()
 	}
 	return out
 }

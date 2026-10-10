@@ -9,12 +9,12 @@ import (
 	"github.com/crewlet/crewlet/internal/tokens"
 )
 
-// auxRec is an auxiliary record: the `auxiliary` phase, a purpose in the
-// worker field, a stage, and the provider calls it coalesced.
+// auxRec is an auxiliary record of the CEO's seat: the `auxiliary` phase, a
+// purpose in the worker field, a stage, and the provider calls it coalesced.
 func auxRec(stage, purpose, turn, at string, calls, total int) tokens.Record {
 	return tokens.Record{
 		EventID: at + stage + purpose, Timestamp: at,
-		AgentRole: "CEO", AgentID: "id-CEO",
+		AgentRole: "CEO", AgentID: "id-CEO", Handle: "ceo",
 		Phase: tokens.PhaseAuxiliary, Worker: purpose, Stage: stage,
 		Model: "haiku", TurnID: turn, Calls: calls,
 		InputTokens: total, TotalTokens: total,
@@ -101,7 +101,7 @@ func TestAPersonsSpendIsTheirOwnRowOnBothWindows(t *testing.T) {
 	t.Parallel()
 	person := func(handle string, total int) tokens.Record {
 		r := auxRec("operator", "answer_knowledge", "", "2026-06-14T12:00:09Z", 1, total)
-		r.AgentID, r.AgentRole, r.Person = "", "Founder", handle
+		r.AgentID, r.Handle, r.AgentRole, r.Person = "", "", "Founder", handle
 		r.EventID += handle
 		return r
 	}
@@ -160,7 +160,7 @@ func TestAPersonIsNamedByTheRoleTheirNewestRecordCarries(t *testing.T) {
 	t.Parallel()
 	asked := func(role, at string) tokens.Record {
 		r := auxRec("operator", "answer_knowledge", "", at, 1, 10)
-		r.AgentID, r.AgentRole, r.Person = "", role, "maya"
+		r.AgentID, r.Handle, r.AgentRole, r.Person = "", "", role, "maya"
 		r.EventID += role
 		return r
 	}
@@ -200,7 +200,7 @@ func TestEqualPeopleAreOrderedByTheirOwnHandle(t *testing.T) {
 	var cells []tokens.Cell
 	for _, h := range handles {
 		r := auxRec("operator", "answer_knowledge", "", "2026-06-14T12:00:09Z", 1, 40)
-		r.AgentID, r.AgentRole, r.Person, r.EventID = "", "Founder", h, "q-"+h
+		r.AgentID, r.Handle, r.AgentRole, r.Person, r.EventID = "", "", "Founder", h, "q-"+h
 		records = append(records, r)
 		cells = append(cells, tokens.Cell{Day: "2026-06-14", Handle: h, Role: "Founder",
 			Person: true, Phase: tokens.PhaseAuxiliary, Worker: "answer_knowledge",

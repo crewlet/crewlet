@@ -30,7 +30,6 @@ func TestAConnectingTabLeavesTheTicksPushToTheOpenOnes(t *testing.T) {
 	clock := func() time.Time { return time.Unix(0, now.Load()).UTC() }
 	s, err := NewService(livestate.New(livestate.WithClock(clock)), Options{
 		Health:    func() any { return nil },
-		Handles:   func() map[string]string { return map[string]string{} },
 		Roster:    func() []map[string]any { return nil },
 		Org:       func(auth.Reach) any { return nil },
 		Tools:     func() []map[string]any { return nil },
@@ -96,7 +95,6 @@ func TestTheSpendIsFoldedOnlyForAnAdmin(t *testing.T) {
 	clock := func() time.Time { return start }
 	s, err := NewService(livestate.New(livestate.WithClock(clock)), Options{
 		Health:    func() any { return nil },
-		Handles:   func() map[string]string { return map[string]string{} },
 		Roster:    func() []map[string]any { return nil },
 		Org:       func(auth.Reach) any { return nil },
 		Tools:     func() []map[string]any { return nil },

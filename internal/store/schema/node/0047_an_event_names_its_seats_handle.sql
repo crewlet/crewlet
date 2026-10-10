@@ -1,0 +1,29 @@
+-- An event names the agent seat it concerns by its HANDLE, as a column of the
+-- event log beside the derived agent id and the role.
+--
+-- WHAT WAS WRONG. The live spend window — the last day's spend records, held
+-- by the projection and seeded at boot from every node's log (`PhaseTokens`) —
+-- keyed a seat's row and a turn's on the ROLE, and found the handle a row
+-- links by in a map from role name to handle. A role is a name two seats can
+-- share: unique seat names are an admission rule, so a stored revision, or one
+-- a newer node admitted, runs with a collision. Two seats of one name were one
+-- row, their spend summed under whichever seat the name resolved to first.
+-- Every record names its seat's handle (`agent_handle`), so the fold keys on
+-- that — and the seed has to hand it over, which a read of these columns
+-- could not.
+--
+-- A COLUMN rather than a json_extract in that read, for the reason 0015 and
+-- 0032 give for the spend counts: the seed folds up to a day of phase records
+-- on every node, each carrying the phase's whole prompt and response, and a
+-- value read out of the payload is a parse of all of that per row. The price
+-- is the one value still read there, because it is set on a minority of rows;
+-- the handle is set on every row that concerns a seat.
+--
+-- WHO HAS TO AGREE ON IT: this node alone. It is a column of the node's own
+-- audit log, copied by the writer from the tag store.ExtractTags promotes off
+-- the event's `agent_handle` field, exactly as agent_id is.
+--
+-- An empty string, never NULL, for a row that concerns no agent seat — the
+-- shape every promoted column has — and for every row already here, which is
+-- not backfilled: no build this engine supports wrote a row without it.
+ALTER TABLE crewlet_events ADD COLUMN agent_handle TEXT NOT NULL DEFAULT '';

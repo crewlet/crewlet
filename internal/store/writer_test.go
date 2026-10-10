@@ -32,6 +32,7 @@ func TestExtractTagsPromotesTheDimensions(t *testing.T) {
 		"source": "engine",
 		"trace_id": "tr-1",
 		"agent_id": "agent-9",
+		"agent_handle": "eng-2",
 		"role": "engineer",
 		"task_id": "task-4",
 		"turn_id": "turn-3",
@@ -42,6 +43,7 @@ func TestExtractTagsPromotesTheDimensions(t *testing.T) {
 
 	want := map[string]string{
 		"agent_id":         "agent-9",
+		"agent_handle":     "eng-2",
 		"agent_role":       "engineer",
 		"task_id":          "task-4",
 		"turn_id":          "turn-3",

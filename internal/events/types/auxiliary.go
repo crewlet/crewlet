@@ -189,8 +189,9 @@ type AuxiliarySpend struct {
 	// set instead of the three above: on [AuxStageOperator], the seat
 	// handle a person's credential is bound to; on [AuxStageBackground],
 	// the human seat leading a unit whose pass ran on its chain. Each with
-	// its role. NOT `role`: a person is not an agent seat, and the live
-	// projection keys a seat's state on `role`.
+	// its role. NOT `agent_handle` and `role`: a person is not an agent
+	// seat, and the live projection and the spend fold key a seat on
+	// `agent_handle` — a person's spend under it would be a seat's.
 	ActorSeat string `json:"actor_seat,omitempty"`
 	ActorRole string `json:"actor_role,omitempty"`
 

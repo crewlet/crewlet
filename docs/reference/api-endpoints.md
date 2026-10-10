@@ -5569,12 +5569,14 @@ Notes:
   [`GET /turns?sort=-tokens`](#queries). Both carry each record's stamp as it
   was published, so a record from a node whose clock runs fast puts them past
   `until` for the day the window holds it — which is how that node is found.
-- On a named window a seat is one row per derived agent id, named by the
-  newest day's record: a role renamed mid-window is one row under its current
-  name. The live window keys a seat on its role, as the live projection keys
-  every seat's state, so a role renamed inside the last day is two rows until
-  the old name's records age out; a row's `agent_id` is the one its newest
-  record carries.
+- A seat is one row per IDENTITY, never per name: two seats sharing a name
+  (a revision a newer node admitted can carry a collision) are two rows. On a
+  named window that is one row per derived agent id, named by the newest day's
+  record. The live window keys a seat on its `handle`, which every spend record
+  names it by, as the live projection keys every seat's state, and each
+  `by_turn` row carries the `handle` of the seat that ran it; a row's
+  `agent_id` and `role` are the ones its newest record carries. On either
+  window a role renamed mid-window is one row under its current name.
 - A **person** is a row of their own with `person: true`, on both windows:
   what the auxiliary model spent for a human seat — a question answered with
   `answer_knowledge`, a background pass on a unit a person leads — named by

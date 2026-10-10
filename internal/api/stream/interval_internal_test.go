@@ -31,7 +31,6 @@ func TestAnUnsetIntervalTicksAtTheProductionCadence(t *testing.T) {
 			t.Parallel()
 			s, err := NewService(livestate.New(), Options{
 				Health:         func() any { return nil },
-				Handles:        func() map[string]string { return nil },
 				Roster:         func() []map[string]any { return nil },
 				Org:            func(auth.Reach) any { return nil },
 				Tools:          func() []map[string]any { return nil },

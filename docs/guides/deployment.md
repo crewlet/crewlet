@@ -1081,9 +1081,9 @@ event queue. Every event is written at publish time, inline on the node that
 published it — no queue round-trip and no consumer group, which is precisely
 why two nodes can never write the same row and a group rebalance can never
 lose one. Events land with dedicated columns for the common filterable
-dimensions (`event_type`, `source`, `category`, `agent_id`, `agent_role`,
-`task_id`, `channel_id`, `sender`, `trace_id`) plus a JSON column for
-everything else.
+dimensions (`event_type`, `source`, `category`, `agent_id`, `agent_handle`,
+`agent_role`, `task_id`, `channel_id`, `sender`, `trace_id`) plus a JSON
+column for everything else.
 
 That inline write is also why a fleet's event store is *per node*: each holds
 what it published. A history read is therefore asked of **every live node**

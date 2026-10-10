@@ -111,8 +111,8 @@ type EventRecord struct {
 
 	// Tags are the filterable dimensions the writer extracted. The
 	// promoted columns (agent_id, agent_role, task_id, channel_id, sender,
-	// and since schema/0033 work_item) are copies of six of these; the rest
-	// exist only here.
+	// since schema/0033 work_item and since schema/0047 agent_handle) are
+	// copies of seven of these; the rest exist only here.
 	Tags map[string]string `json:"tags,omitempty"`
 
 	// WorkKey is the unit of work this row's run was an attempt at — see
@@ -455,9 +455,9 @@ INSERT INTO crewlet_events (
 	phase, host_phase, worker, model, turn_id, work_key, iteration,
 	input_tokens, output_tokens, total_tokens,
 	cache_read_tokens, cache_write_tokens, provider_key, work_item,
-	calls, spend_stage
+	calls, spend_stage, agent_handle
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (event_time, event_id) DO NOTHING`
 
 // ErrIncompleteRecord reports a record missing part of its identity.
@@ -609,6 +609,9 @@ func (r eventRow) insert(ctx context.Context, tx *sql.Tx) error {
 		// name two different items. See schema/0033.
 		tags["work_item"],
 		spend.Calls, spend.Stage,
+		// THE SEAT'S IDENTITY off its tag, as agent_id's is — see
+		// schema/0047.
+		tags["agent_handle"],
 	); err != nil {
 		return err
 	}
@@ -1531,11 +1534,17 @@ const (
 // and no agent role, since a person is not an agent seat, and carries the role
 // of the person's seat as `actor_role`, which the per-seat breakdown names it
 // by. The person themselves is the envelope's ACTOR, a column already.
+//
+// AND THE SEAT'S HANDLE, a column since schema/0047, because the live fold
+// keys a seat on it: a record read without one is filed under no seat, and
+// the seed of a restarted node's window would put every seat's spend in one
+// row the stream then splits record by record.
 const phaseTokenSQL = `
 SELECT event_time, event_id, agent_id,
        CASE WHEN agent_role = '' AND event_type = 'auxiliary_spend'
             THEN COALESCE(json_extract(payload, '$.actor_role'), '')
             ELSE agent_role END,
+       agent_handle,
        CASE WHEN agent_id = '' AND event_type = 'auxiliary_spend' THEN actor ELSE '' END,
        phase, host_phase, worker, model, turn_id, work_key, iteration,
        input_tokens, output_tokens, total_tokens,
@@ -1710,11 +1719,11 @@ const MaxPhasePage = 60
 // about what a phase costs.
 //
 // EVERY VALUE BUT THE PRICE IS A COLUMN — the counts since schema/0015, the
-// cache counts and the provider key since schema/0032 — so a month of phases
-// folds without reading one payload. A count left in the payload is a count
-// this reads as zero, which is what the cache share did until 0032: every
-// rollup reported a cache that never hit. The price stays in the payload for
-// the reason given at phaseTokenSQL.
+// cache counts and the provider key since schema/0032, the seat's handle since
+// schema/0047 — so a month of phases folds without reading one payload. A count
+// left in the payload is a count this reads as zero, which is what the cache
+// share did until 0032: every rollup reported a cache that never hit. The price
+// stays in the payload for the reason given at phaseTokenSQL.
 func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens.Record, error) {
 	since, until := q.Window(q.at())
 
@@ -1752,7 +1761,7 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens
 			at  int64
 			rec tokens.Record
 		)
-		if err := rows.Scan(&at, &rec.EventID, &rec.AgentID, &rec.AgentRole, &rec.Person,
+		if err := rows.Scan(&at, &rec.EventID, &rec.AgentID, &rec.AgentRole, &rec.Handle, &rec.Person,
 			&rec.Phase, &rec.HostPhase, &rec.Worker, &rec.Model,
 			&rec.TurnID, &rec.WorkKey, &rec.Iteration,
 			&rec.InputTokens, &rec.OutputTokens, &rec.TotalTokens,

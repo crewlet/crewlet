@@ -73,6 +73,7 @@ func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 		Timestamp:    env.Timestamp,
 		AgentID:      str(payload, "agent_id"),
 		AgentRole:    str(payload, "role", "agent_role"),
+		Handle:       str(payload, "agent_handle"),
 		Phase:        str(payload, "phase"),
 		HostPhase:    str(payload, "host_phase"),
 		Worker:       str(payload, "worker"),

@@ -50,11 +50,17 @@ func Category(eventType string) (string, bool) { return events.Category(eventTyp
 // differ in one place — `role` on the event is `agent_role` in the tags,
 // because that is the name every filter and index uses.
 var tagKeys = map[string]string{
-	"agent_id":   "agent_id",
-	"role":       "agent_role",
-	"task_id":    "task_id",
-	"channel_id": "channel_id",
-	"sender":     "sender",
+	"agent_id": "agent_id",
+	// The seat's IDENTITY beside its derived id and its name. Every event
+	// that concerns an agent seat names it, and the role cannot stand in:
+	// it is a label two seats can share, so a read keyed on it — the live
+	// spend window's, which this is promoted for (schema/0047) — gave two
+	// seats of one name one row.
+	"agent_handle": "agent_handle",
+	"role":         "agent_role",
+	"task_id":      "task_id",
+	"channel_id":   "channel_id",
+	"sender":       "sender",
 	// The identity of one unit of agent work. Almost every event a turn
 	// publishes carries it — each phase record, the turn's own completion,
 	// a provider fallback, a guard breach, a sandbox suspend and its

@@ -44,9 +44,6 @@ func buildService(t *testing.T, opts stream.Options) *stream.Service {
 	if opts.Health == nil {
 		opts.Health = func() any { return health{Status: "ok"} }
 	}
-	if opts.Handles == nil {
-		opts.Handles = func() map[string]string { return map[string]string{} }
-	}
 	if opts.Roster == nil {
 		opts.Roster = func() []map[string]any { return nil }
 	}
@@ -85,7 +82,7 @@ func TestNewServiceRefusesEveryMissingFunctionByName(t *testing.T) {
 	if err == nil {
 		t.Fatal("a service with no surface functions was built")
 	}
-	for _, field := range []string{"Health", "Handles", "Roster", "Org", "Tools", "Schedules", "Placement"} {
+	for _, field := range []string{"Health", "Roster", "Org", "Tools", "Schedules", "Placement"} {
 		if !strings.Contains(err.Error(), "Options."+field) {
 			t.Errorf("the refusal does not name Options.%s: %v", field, err)
 		}
