@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 )
 
@@ -32,7 +33,7 @@ func TestAnUnsetIntervalTicksAtTheProductionCadence(t *testing.T) {
 				Health:         func() any { return nil },
 				Handles:        func() map[string]string { return nil },
 				Roster:         func() []map[string]any { return nil },
-				Org:            func() any { return nil },
+				Org:            func(auth.Reach) any { return nil },
 				Tools:          func() []map[string]any { return nil },
 				Schedules:      func() any { return nil },
 				Placement:      func() (map[string]bool, error) { return nil, nil },

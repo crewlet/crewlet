@@ -18,6 +18,8 @@
 
 import type {
   AgentRow,
+  AgentStatus,
+  BudgetStatus,
   CallVersions,
   FeedRow,
   EventEnvelope,
@@ -194,6 +196,15 @@ export interface StoreState {
    * and its operator was offered "Set one".
    */
   budget: OrgBudget | null;
+  /**
+   * The live meter as a MEMBER is served it — which scopes are refusing or
+   * near, and when each turns over, with no figure — and `null` on an admin's
+   * tab, which holds the figures in `budget`, and until a report has arrived.
+   * A slice of its own because the two answer different readers: a screen
+   * drawing an admin's meter must never be handed a shape with no figures in
+   * it, and one telling a person when a seat can work again needs none.
+   */
+  budgetStatus: BudgetStatus | null;
   schedules: ScheduleRow[] | null;
   connected: boolean;
   /**
@@ -233,6 +244,7 @@ function emptyState(): StoreState {
     health: null,
     tokens: null,
     budget: null,
+    budgetStatus: null,
     schedules: null,
     connected: false,
     authRejected: false,
@@ -303,15 +315,24 @@ export class Store {
 
   // ---- pushes ------------------------------------------------------------
 
+  /**
+   * The handshake, assembled by the engine for this socket's reach.
+   *
+   * A SECTION THE REACH IS NOT SERVED IS ABSENT, and stays at its empty value
+   * here: a member is handed no events, runs, spend or tools, and an anonymous
+   * reader may be handed the health alone. The CHART stays `null` when it is
+   * absent — `{}` is the engine's answer for a node running no company, and an
+   * anonymous `none` reader was told nothing about it.
+   */
   applySnapshot(snap: Snapshot | null | undefined): void {
     if (!snap) return;
     this.state.agents = snap.agents ?? [];
     this.state.events = (snap.events ?? []).slice(0, MAX_EVENTS);
     this.state.sandboxes = snap.sandboxes ?? [];
-    this.state.org = snap.org ?? {};
+    this.state.org = snap.org === undefined ? null : (snap.org ?? {});
     this.state.tools = snap.tools ?? [];
     if (snap.tokens && snap.tokens.totals) this.state.tokens = snap.tokens;
-    this.state.budget = snap.budget ?? null;
+    this.setBudget(snap.budget);
     // A bare list here, unlike the push's `{schedules: […]}` object.
     if (snap.schedules) this.state.schedules = snap.schedules;
     // NOT `connected`. That belongs to the transport, which knows whether the
@@ -327,6 +348,9 @@ export class Store {
    * live call this tab now holds behind what the push describes, which the
    * socket fetches whole (`mergeLiveCall`).
    *
+   * A MEMBER'S ROW IS ITS STATE ALONE (`AgentStatus`): no `live_call`, so it is
+   * merged like any patch and can never be behind.
+   *
    * THE HANDLE, NEVER THE NAME: two seats can share a role name, and a merge
    * keyed on it gave one of them both seats' pushes and the other none.
    *
@@ -337,7 +361,7 @@ export class Store {
    * revision had just removed put its card back after the `seats` push that
    * removed it, where nothing took it away again.
    */
-  applyAgents(rows: (Overlay & { handle: string })[] | unknown): string[] {
+  applyAgents(rows: ((Overlay & { handle: string }) | AgentStatus)[] | unknown): string[] {
     // `Array.isArray` is load-bearing. The server sent this as an object keyed
     // by seat once; every push was silently discarded and seats rendered idle
     // for the whole of a turn, with both sides' own suites green. That is the
@@ -460,9 +484,20 @@ export class Store {
     this.emit("tokens");
   }
 
-  applyBudget(budget: OrgBudget | null | undefined): void {
-    this.state.budget = budget ?? null;
+  applyBudget(budget: OrgBudget | BudgetStatus | null | undefined): void {
+    this.setBudget(budget);
     this.emit("budget");
+  }
+
+  /**
+   * Files a meter under the slice its SHAPE says it is: a member's `org` is the
+   * LIST of the company's pressing windows, an admin's is the company's meter —
+   * the engine sends each socket one or the other, never both.
+   */
+  private setBudget(budget: OrgBudget | BudgetStatus | null | undefined): void {
+    const member = !!budget && Array.isArray(budget.org);
+    this.state.budget = budget && !member ? (budget as OrgBudget) : null;
+    this.state.budgetStatus = member ? (budget as BudgetStatus) : null;
   }
 
   applySchedules(payload: { schedules?: ScheduleRow[] } | null): void {

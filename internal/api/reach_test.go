@@ -56,14 +56,16 @@ var reachedRoutes = map[string]auth.Reach{
 	// The company's public face.
 	"GET /org": auth.ReachPublic,
 	// The company's own work, and the person's own transports onto it.
+	// The roster and the bundle answer each caller the variant its reach
+	// is served, as the socket does, so a member reads them too.
+	"GET /agents": auth.ReachMember, "GET /stream/snapshot": auth.ReachMember,
 	"GET /work/files/{project}/{path...}":    auth.ReachMember,
 	"PUT /work/files/{project}/{path...}":    auth.ReachMember,
 	"DELETE /work/files/{project}/{path...}": auth.ReachMember,
 	operator.MCPPath:                         auth.ReachMember,
 	operator.ActPattern:                      auth.ReachMember,
 	// What the machine processes and how it is run.
-	"GET /agents": auth.ReachAdmin, "GET /tools": auth.ReachAdmin,
-	"GET /stream/snapshot":  auth.ReachAdmin,
+	"GET /tools":            auth.ReachAdmin,
 	"POST /backup":          auth.ReachAdmin,
 	"POST /work/{id}/purge": auth.ReachAdmin,
 }
@@ -246,10 +248,12 @@ func TestEachReachIsEnforcedAtTheDoor(t *testing.T) {
 		{"/org", "", http.StatusOK, "the public face, to nobody under anonymous: public"},
 		{"/schedules", "", http.StatusUnauthorized, "a member route, to nobody"},
 		{"/schedules", "member-secret", http.StatusOK, "a member route, to a member"},
-		{"/agents", "member-secret", http.StatusForbidden, "an admin route, to a member"},
+		{"/agents", "member-secret", http.StatusOK, "the roster, to a member, in its member variant"},
+		{"/agents", "", http.StatusUnauthorized, "the roster, to nobody"},
+		{"/tools", "member-secret", http.StatusForbidden, "an admin route, to a member"},
 		{"/config", "member-secret", http.StatusForbidden, "configuration, to a member"},
 		{"/budgets", "member-secret", http.StatusForbidden, "spend, to a member"},
-		{"/agents", "secret", http.StatusOK, "an admin route, to an admin"},
+		{"/tools", "secret", http.StatusOK, "an admin route, to an admin"},
 		{"/config", "secret", http.StatusNoContent, "configuration, to an admin"},
 	} {
 		if got := sendAs(t, a, tc.path, tc.key); got != tc.want {

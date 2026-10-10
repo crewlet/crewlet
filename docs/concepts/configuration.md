@@ -598,9 +598,9 @@ key id could. See [the API reference](../reference/api-endpoints.md#the-config_a
 
 ### What each role reaches
 
-A request is resolved to one **reach**, and every route and every question —
-asked over REST or over the socket — names the reach it serves.
-The four are ordered, and each covers everything before it:
+A request is resolved to one **reach**, and every route, every question —
+asked over REST or over the socket — and every push the socket sends names the
+reach it serves. The four are ordered, and each covers everything before it:
 
 | Reach | Who holds it | What it serves |
 |---|---|---|
@@ -612,7 +612,15 @@ The four are ordered, and each covers everything before it:
 That is the one rule: **members read what the company published; admins also
 read what its agents processed and how the engine runs.** The
 [API reference](../reference/api-endpoints.md#who-reaches-what) gives the reach
-of every route and question.
+of every route and question, and of [every push](../reference/api-endpoints.md#pushes).
+
+**The live socket is held to the same rule.** A socket is pushed what the key
+it was opened with reaches: a member's tab is pushed each seat's state — what
+it is doing, the item it is on, the step of its turn and since when — and
+which budgets are refusing or near, and never the call in flight, the event
+stream, the spend or the tool catalogue. The chart is classified the same way,
+field by field: anybody reads its names and shape, a member also the founder's
+prose, an admin also the ceilings, the model chains and the tool sources.
 
 **A record about a person is theirs.** A person's inbox, their day and their
 saved views are read by that person and by the leads whose line they are in —

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/stream"
 )
 
@@ -30,14 +31,14 @@ func drain(c *stream.Client) []stream.Envelope {
 func TestABroadcastReachesEveryClient(t *testing.T) {
 	t.Parallel()
 	h := stream.NewHub()
-	a, b := stream.NewClient(), stream.NewClient()
+	a, b := stream.NewClient(auth.ReachAdmin), stream.NewClient(auth.ReachAdmin)
 	h.Register(a)
 	h.Register(b)
 	if got := h.Clients(); got != 2 {
 		t.Fatalf("clients = %d, want 2", got)
 	}
 
-	h.Broadcast(stream.Push(stream.KindEvent, map[string]any{"id": "e1"}, clock))
+	h.Broadcast(stream.KindEvent, stream.Same(map[string]any{"id": "e1"}), clock)
 
 	for name, c := range map[string]*stream.Client{"a": a, "b": b} {
 		got := drain(c)
@@ -50,11 +51,11 @@ func TestABroadcastReachesEveryClient(t *testing.T) {
 func TestAnUnregisteredClientStopsReceiving(t *testing.T) {
 	t.Parallel()
 	h := stream.NewHub()
-	c := stream.NewClient()
+	c := stream.NewClient(auth.ReachAdmin)
 	h.Register(c)
 	h.Unregister(c)
 
-	h.Broadcast(stream.Push(stream.KindEvent, nil, clock))
+	h.Broadcast(stream.KindEvent, stream.Same(nil), clock)
 	if got := drain(c); len(got) != 0 {
 		t.Errorf("an unregistered client received %+v", got)
 	}
@@ -70,12 +71,12 @@ func TestASlowClientLosesItsOldestEnvelope(t *testing.T) {
 	// makes the screen right — dropping it to keep an older one would
 	// leave the tab further behind than doing nothing.
 	h := stream.NewHub()
-	c := stream.NewClient()
+	c := stream.NewClient(auth.ReachAdmin)
 	h.Register(c)
 
 	const overflow = stream.QueueDepth + 100
 	for i := range overflow {
-		h.Broadcast(stream.Push(stream.KindEvent, map[string]any{"n": i}, clock))
+		h.Broadcast(stream.KindEvent, stream.Same(map[string]any{"n": i}), clock)
 	}
 
 	got := drain(c)
@@ -103,7 +104,7 @@ func TestOneSlowClientDoesNotStallAnother(t *testing.T) {
 	// is shared by every client, so one tab that stopped reading would
 	// otherwise stop the fan-out for all of them.
 	h := stream.NewHub()
-	slow, fast := stream.NewClient(), stream.NewClient()
+	slow, fast := stream.NewClient(auth.ReachAdmin), stream.NewClient(auth.ReachAdmin)
 	h.Register(slow)
 	h.Register(fast)
 
@@ -111,7 +112,7 @@ func TestOneSlowClientDoesNotStallAnother(t *testing.T) {
 	go func() {
 		defer close(done)
 		for range stream.QueueDepth * 3 {
-			h.Broadcast(stream.Push(stream.KindEvent, nil, clock))
+			h.Broadcast(stream.KindEvent, stream.Same(nil), clock)
 			// The fast client keeps up; the slow one never reads.
 			<-fast.Out()
 		}
@@ -129,7 +130,7 @@ func TestOneSlowClientDoesNotStallAnother(t *testing.T) {
 func TestABroadcastToNoClientsIsHarmless(t *testing.T) {
 	t.Parallel()
 	h := stream.NewHub()
-	h.Broadcast(stream.Push(stream.KindHealth, nil, clock))
+	h.Broadcast(stream.KindHealth, stream.Same(nil), clock)
 	if h.Clients() != 0 {
 		t.Error("broadcasting invented a client")
 	}
@@ -142,7 +143,7 @@ func TestUnregisteringReleasesTheClientsWriter(t *testing.T) {
 	// closing it leaves that goroutine parked for the life of the process,
 	// one per tab that ever connected.
 	h := stream.NewHub()
-	c := stream.NewClient()
+	c := stream.NewClient(auth.ReachAdmin)
 	h.Register(c)
 
 	writerDone := make(chan struct{})
@@ -165,7 +166,7 @@ func TestClosingAClientTwiceIsSafe(t *testing.T) {
 	// Both ends reach it: the transport closes when the socket dies, and
 	// the hub closes when it is shutting down.
 	h := stream.NewHub()
-	c := stream.NewClient()
+	c := stream.NewClient(auth.ReachAdmin)
 	h.Register(c)
 	h.Unregister(c)
 	h.Unregister(c)
@@ -176,17 +177,17 @@ func TestABroadcastAfterCloseDoesNotPanic(t *testing.T) {
 	t.Parallel()
 	// A send on a closed channel panics, and the closing end is not the
 	// broadcasting one — so the race is real rather than theoretical.
-	c := stream.NewClient()
+	c := stream.NewClient(auth.ReachAdmin)
 	h := stream.NewHub()
 	h.Register(c)
 	c.Close()
-	h.Broadcast(stream.Push(stream.KindEvent, nil, clock))
+	h.Broadcast(stream.KindEvent, stream.Same(nil), clock)
 }
 
 func TestClosingTheHubDisconnectsEveryone(t *testing.T) {
 	t.Parallel()
 	h := stream.NewHub()
-	a, b := stream.NewClient(), stream.NewClient()
+	a, b := stream.NewClient(auth.ReachAdmin), stream.NewClient(auth.ReachAdmin)
 	h.Register(a)
 	h.Register(b)
 	h.Close()
@@ -212,7 +213,7 @@ func TestTheHubIsSafeUnderConcurrentUse(t *testing.T) {
 	for range 4 {
 		wg.Go(func() {
 			for range 100 {
-				c := stream.NewClient()
+				c := stream.NewClient(auth.ReachAdmin)
 				h.Register(c)
 				go drain(c)
 				h.Unregister(c)
@@ -221,7 +222,7 @@ func TestTheHubIsSafeUnderConcurrentUse(t *testing.T) {
 	}
 	wg.Go(func() {
 		for range 500 {
-			h.Broadcast(stream.Push(stream.KindEvent, nil, clock))
+			h.Broadcast(stream.KindEvent, stream.Same(nil), clock)
 		}
 	})
 	wg.Wait()

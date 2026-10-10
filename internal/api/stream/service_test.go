@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/tokens"
@@ -19,7 +20,7 @@ import (
 func newService(t *testing.T, opts stream.Options) (*stream.Service, *stream.Client) {
 	t.Helper()
 	s := buildService(t, opts)
-	c := stream.NewClient()
+	c := stream.NewClient(auth.ReachAdmin)
 	s.Hub().Register(c)
 	return s, c
 }
@@ -50,7 +51,7 @@ func buildService(t *testing.T, opts stream.Options) *stream.Service {
 		opts.Roster = func() []map[string]any { return nil }
 	}
 	if opts.Org == nil {
-		opts.Org = func() any { return map[string]any{} }
+		opts.Org = func(auth.Reach) any { return map[string]any{} }
 	}
 	if opts.Tools == nil {
 		opts.Tools = func() []map[string]any { return nil }
@@ -197,7 +198,7 @@ func TestPlacementIsReadAndWhatItMovedIsPushed(t *testing.T) {
 	if rows := agentRows(t, drain(c)); len(rows) != 0 {
 		t.Errorf("a failed read moved seats: %v", rows)
 	}
-	if snap := s.Snapshot()["agents"].([]map[string]any); len(snap) != 0 {
+	if snap := s.Snapshot(auth.ReachAdmin)["agents"].([]map[string]any); len(snap) != 0 {
 		t.Errorf("snapshot = %v with an empty roster", snap)
 	}
 }
@@ -463,7 +464,7 @@ func TestASnapshotIsBuiltFromMemoryAlone(t *testing.T) {
 	s, _ := newService(t, stream.Options{})
 	s.Ingest(envelope("agent_phase_started", map[string]any{"role": "Lead", "agent_handle": "Lead", "task_id": "t-1"}))
 
-	snap := s.Snapshot()
+	snap := s.Snapshot(auth.ReachAdmin)
 	for _, key := range []string{"health", "agents", "events", "sandboxes", "tokens", "budget"} {
 		if _, present := snap[key]; !present {
 			t.Errorf("snapshot is missing %q", key)
@@ -492,7 +493,7 @@ func TestTheHealthTickIsSharedAndKeepsTicking(t *testing.T) {
 		HealthInterval: 20 * time.Millisecond,
 	})
 
-	a, b := stream.NewClient(), stream.NewClient()
+	a, b := stream.NewClient(auth.ReachAdmin), stream.NewClient(auth.ReachAdmin)
 	s.Hub().Register(a)
 	s.Hub().Register(b)
 	s.StartHealthTicks(t.Context())
@@ -525,7 +526,7 @@ func TestTheSnapshotCarriesTheEnginesOwnHealth(t *testing.T) {
 			return health{Status: "shutting_down", InFlight: 2, ShuttingDown: true}
 		},
 	})
-	got, _ := s.Snapshot()["health"].(health)
+	got, _ := s.Snapshot(auth.ReachAdmin)["health"].(health)
 	if got.Status != "shutting_down" || got.InFlight != 2 || !got.ShuttingDown {
 		t.Errorf("health = %#v, want the engine's own answer", got)
 	}
@@ -538,7 +539,7 @@ func TestStartingTheTickTwiceStartsOneTimer(t *testing.T) {
 	// only the later one is the one Stop knows about.
 	const interval = 20 * time.Millisecond
 	s := buildService(t, stream.Options{HealthInterval: interval})
-	c := stream.NewClient()
+	c := stream.NewClient(auth.ReachAdmin)
 	s.Hub().Register(c)
 
 	s.StartHealthTicks(t.Context())
@@ -563,7 +564,7 @@ func TestStartingTheTickTwiceStartsOneTimer(t *testing.T) {
 func TestStoppingEndsTheTickAndTheClients(t *testing.T) {
 	t.Parallel()
 	s := buildService(t, stream.Options{})
-	c := stream.NewClient()
+	c := stream.NewClient(auth.ReachAdmin)
 	s.Hub().Register(c)
 	s.StartHealthTicks(t.Context())
 	s.Stop()

@@ -55,7 +55,7 @@ import type {
   CompanyDocument,
   ConfigRole,
   ConfigUnit,
-  Derived,
+  OrgDerived,
   LiveCall,
   OrgProjection,
   OrgSeat,
@@ -315,7 +315,7 @@ function link(authored: Authored): Unit[] {
  * skipped rather than thrown on, because this runs in the sidebar, outside
  * every error boundary.
  */
-function overlay(authored: Authored, derived: Derived): OrgIndex {
+function overlay(authored: Authored, derived: OrgDerived): OrgIndex {
   const dUnits = list(derived.units);
   const units = link(authored);
   units.forEach((unit, i) => {
@@ -415,7 +415,7 @@ function fillSubtrees(units: Unit[]): void {
 
 /** What `{}` (a node running no company) and an org not read yet describe:
  *  no seats and no units, laid over their empty tree. */
-const NO_HIERARCHY: Derived = { seats: [], units: [] };
+const NO_HIERARCHY: OrgDerived = { seats: [], units: [] };
 
 /** Index the org projection once. Everything a screen needs comes off this. */
 export function indexOrg(org: OrgProjection | null | undefined): OrgIndex {

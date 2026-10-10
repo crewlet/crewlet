@@ -27,7 +27,7 @@ func TestAPausedSeatCarriesWhoPausedIt(t *testing.T) {
 		t.Fatal("a pause did not push the seat")
 	}
 	got := overlayOf(t, s, "CTO").Paused
-	want := livestate.Paused{By: "jane", At: "2026-06-14T11:59:00Z", Reason: "looping", StopRunning: true}
+	want := livestate.Paused{By: "jane", At: "2026-06-14T11:59:00Z", Reason: "looping", StopRunning: true, BySeat: true}
 	if got == nil || *got != want {
 		t.Fatalf("paused = %+v, want %+v", got, want)
 	}

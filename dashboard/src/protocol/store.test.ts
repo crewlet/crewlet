@@ -241,8 +241,103 @@ describe("the org chart", () => {
     store.applyOrg(null);
     expect(store.state.org).toEqual({});
     const fresh = new Store();
-    fresh.applySnapshot({ agents: [] } as never);
+    fresh.applySnapshot({ agents: [], org: {} });
     expect(fresh.state.org).toEqual({});
+  });
+
+  // A HANDSHAKE THAT WAS NOT SERVED THE CHART SAYS NOTHING ABOUT IT. A reader
+  // the engine admits only to the open surfaces (`anonymous: none`) is handed
+  // the health alone, and `{}` is the engine's answer for a node running no
+  // company — so reading the absent key as `{}` would tell a signed-out reader
+  // the company has no mission, rather than that nobody has said.
+  //
+  // Mutation: default an absent chart to `{}`, and this fails.
+  test("stays unknown when the handshake was not served it", () => {
+    const store = new Store();
+    store.applySnapshot({ health: healthFrame() });
+    expect(store.state.org).toBeNull();
+  });
+});
+
+describe("a member's socket", () => {
+  // WHAT A MEMBER IS SERVED (ADR-0031): each seat's state and no call, the
+  // budget's state and no figure, the chart, the routines and the health — and
+  // no key at all for the events, the coding runs, the spend or the tools. The
+  // store holds exactly that and leaves every other slice at its empty value,
+  // and nothing in it reads as an admin's.
+  const status = (over: Record<string, unknown> = {}) => ({
+    handle: "pm",
+    activity: "working",
+    stopped_reason: null,
+    work_item: { backend: "native", id: "t-42", key: "ENG-42", project: "ENG" },
+    step: "execute",
+    since: "2026-10-06T09:00:00Z",
+    paused_by: null,
+    ...over,
+  });
+  const budgetStatus = {
+    timezone: "UTC",
+    org: [],
+    seats: [
+      {
+        handle: "pm",
+        windows: [
+          {
+            period: "day",
+            window: "2026-10-06",
+            state: "refusing",
+            resets_at: "2026-10-07T00:00:00Z",
+          },
+        ],
+      },
+    ],
+  };
+
+  test("its snapshot fills what it was served and leaves the rest empty", () => {
+    const store = new Store();
+    store.applySnapshot({
+      health: healthFrame(),
+      org: { name: "Acme" },
+      agents: [{ id: "pm", role: "PM", ...status() }] as never,
+      schedules: [],
+      budget: budgetStatus as never,
+    });
+    expect(store.state.agents[0]).toMatchObject({ handle: "pm", step: "execute" });
+    expect(store.state.agents[0]?.work_item?.key).toBe("ENG-42");
+    expect("live_call" in (store.state.agents[0] ?? {})).toBe(false);
+    expect(store.state.org).toEqual({ name: "Acme" });
+    expect(store.state.events).toEqual([]);
+    expect(store.state.sandboxes).toEqual([]);
+    expect(store.state.tools).toEqual([]);
+    expect(store.state.tokens).toBeNull();
+    // NEVER IN THE ADMIN'S METER SLOT, where a screen reads figures.
+    //
+    // Mutation: file every meter in `budget`, and the admin slice holds a
+    // shape with no figures in it.
+    expect(store.state.budget).toBeNull();
+    expect(store.state.budgetStatus).toEqual(budgetStatus);
+  });
+
+  test("an agents push merges the seat's state onto its roster row and sheds what it left", () => {
+    const store = rostered();
+    store.applyAgents([status()]);
+    expect(store.state.agents[0]).toMatchObject({
+      id: "pm",
+      role: "PM",
+      activity: "working",
+      step: "execute",
+    });
+    store.applyAgents([status({ activity: "idle", work_item: null, step: null, since: null })]);
+    expect(store.state.agents[0]).toMatchObject({ activity: "idle", work_item: null, step: null });
+  });
+
+  test("an admin's meter after a member's replaces it, and the reverse", () => {
+    const store = new Store();
+    store.applyBudget(budgetStatus as never);
+    expect(store.state.budgetStatus).not.toBeNull();
+    store.applyBudget({ meter_id: "m-1", seq: 1, timezone: "UTC", org: { windows: [] } });
+    expect(store.state.budget?.meter_id).toBe("m-1");
+    expect(store.state.budgetStatus).toBeNull();
   });
 });
 
@@ -303,6 +398,16 @@ describe("connection state", () => {
     expect(store.state.authRejected).toBe(true);
   });
 });
+
+/**
+ * Tells a socket who its reader is, the way the engine does: a `viewer` answer
+ * passing through it. Asked FIRST, so it takes query id 1 and a case's own
+ * answers number from 2.
+ */
+function readerOf(socket: LiveSocket, reach: string): void {
+  void socket.query("viewer").catch(() => {});
+  socket.onMessage(JSON.stringify({ kind: "result", id: 1, data: { reach } }));
+}
 
 /** A store whose roster carries the one seat these cases push about. */
 function rostered(): Store {
@@ -509,6 +614,7 @@ describe("a live call's heavy fields", () => {
   test("the socket fetches a call it holds behind, once", async () => {
     const store = rostered();
     const socket = new LiveSocket(store);
+    readerOf(socket, "admin");
     const ask = vi.spyOn(socket, "query");
     const frame = (data: unknown) => socket.onMessage(JSON.stringify({ kind: "agents", data }));
     frame([pushed({ prompt: 1, narration: 1 }, { ...prompt, ...narration(1) })]);
@@ -520,7 +626,7 @@ describe("a live call's heavy fields", () => {
     socket.onMessage(
       JSON.stringify({
         kind: "result",
-        id: 1,
+        id: 2,
         data: {
           handle: "pm",
           live_call: pushed({ prompt: 1, narration: 4 }, { ...prompt, ...narration(4) }).live_call,
@@ -530,6 +636,33 @@ describe("a live call's heavy fields", () => {
     await vi.waitFor(() =>
       expect(store.state.agents[0]?.live_call?.round_narration).toHaveLength(4),
     );
+  });
+
+  // A SEAT'S CALL IS ASKED FOR FROM AN ADMIN'S TAB ALONE (ADR-0031): it is the
+  // prompt in flight and every tool result, which a member is refused. Until
+  // the viewer has said who the reader is, nothing is asked either — a member's
+  // tab would otherwise put a refusal on the wire for every push.
+  //
+  // Mutation: drop the reach check in `fetchCalls`, and the member's tab asks.
+  test("a tab whose reader is not an admin never asks for a call", () => {
+    const store = rostered();
+    const socket = new LiveSocket(store);
+    const ask = vi.spyOn(socket, "query");
+    const calls = () => ask.mock.calls.filter(([what]) => what === "live_call");
+    const frame = (data: unknown) => socket.onMessage(JSON.stringify({ kind: "agents", data }));
+    // Nobody has said who the reader is.
+    frame([pushed({ prompt: 1, narration: 1 }, { ...prompt, ...narration(1) })]);
+    frame([pushed({ prompt: 1, narration: 3 }, {})]);
+    expect(calls()).toHaveLength(0);
+    // A member.
+    readerOf(socket, "member");
+    frame([pushed({ prompt: 1, narration: 4 }, {})]);
+    expect(calls()).toHaveLength(0);
+    // And once the viewer says this reader is an admin, the call is asked.
+    void socket.query("viewer").catch(() => {});
+    socket.onMessage(JSON.stringify({ kind: "result", id: 2, data: { reach: "admin" } }));
+    frame([pushed({ prompt: 1, narration: 5 }, {})]);
+    expect(calls()).toEqual([["live_call", { handle: "pm" }]]);
   });
 });
 
@@ -669,10 +802,12 @@ describe("a live_call answer the socket delivers late", () => {
   test("the socket asks again for a call a push found behind while its ask was out", async () => {
     const store = new Store();
     const socket = new LiveSocket(store);
+    readerOf(socket, "admin");
     const ask = vi.spyOn(socket, "query");
     const frame = (data: unknown) => socket.onMessage(JSON.stringify({ kind: "agents", data }));
+    // Id 1 was the viewer's, so the case's own asks number from 2.
     const answer = (id: number, row: Overlay & { handle: string }) =>
-      socket.onMessage(JSON.stringify({ kind: "result", id, data: row }));
+      socket.onMessage(JSON.stringify({ kind: "result", id: id + 1, data: row }));
     store.applySnapshot({ agents: [{ id: "pm", role: "PM", handle: "pm", activity: "working" }] });
     frame([call(5, 1, whole(1))]);
     frame([call(10, 3, {})]);

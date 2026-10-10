@@ -138,6 +138,7 @@ function emptyState() {
 		health: null,
 		tokens: null,
 		budget: null,
+		budgetStatus: null,
 		schedules: null,
 		connected: false,
 		authRejected: false
@@ -196,15 +197,24 @@ var Store = class {
 			fn();
 		}
 	}
+	/**
+	* The handshake, assembled by the engine for this socket's reach.
+	*
+	* A SECTION THE REACH IS NOT SERVED IS ABSENT, and stays at its empty value
+	* here: a member is handed no events, runs, spend or tools, and an anonymous
+	* reader may be handed the health alone. The CHART stays `null` when it is
+	* absent — `{}` is the engine's answer for a node running no company, and an
+	* anonymous `none` reader was told nothing about it.
+	*/
 	applySnapshot(snap) {
 		if (!snap) return;
 		this.state.agents = snap.agents ?? [];
 		this.state.events = (snap.events ?? []).slice(0, 400);
 		this.state.sandboxes = snap.sandboxes ?? [];
-		this.state.org = snap.org ?? {};
+		this.state.org = snap.org === void 0 ? null : snap.org ?? {};
 		this.state.tools = snap.tools ?? [];
 		if (snap.tokens && snap.tokens.totals) this.state.tokens = snap.tokens;
-		this.state.budget = snap.budget ?? null;
+		this.setBudget(snap.budget);
 		if (snap.schedules) this.state.schedules = snap.schedules;
 		if (snap.health) this.state.health = snap.health;
 		this.emit(...ALL_DATA_SLICES);
@@ -213,6 +223,9 @@ var Store = class {
 	* Changed seat overlays, keyed by HANDLE — and the handles of the seats whose
 	* live call this tab now holds behind what the push describes, which the
 	* socket fetches whole (`mergeLiveCall`).
+	*
+	* A MEMBER'S ROW IS ITS STATE ALONE (`AgentStatus`): no `live_call`, so it is
+	* merged like any patch and can never be behind.
 	*
 	* THE HANDLE, NEVER THE NAME: two seats can share a role name, and a merge
 	* keyed on it gave one of them both seats' pushes and the other none.
@@ -340,8 +353,18 @@ var Store = class {
 		this.emit("tokens");
 	}
 	applyBudget(budget) {
-		this.state.budget = budget ?? null;
+		this.setBudget(budget);
 		this.emit("budget");
+	}
+	/**
+	* Files a meter under the slice its SHAPE says it is: a member's `org` is the
+	* LIST of the company's pressing windows, an admin's is the company's meter —
+	* the engine sends each socket one or the other, never both.
+	*/
+	setBudget(budget) {
+		const member = !!budget && Array.isArray(budget.org);
+		this.state.budget = budget && !member ? budget : null;
+		this.state.budgetStatus = member ? budget : null;
 	}
 	applySchedules(payload) {
 		if (!payload) return;
@@ -652,6 +675,14 @@ var LiveSocket = class {
 	*  found the call behind again while the fetch was out — see `fetchCalls`. */
 	fetchingCalls = /* @__PURE__ */ new Map();
 	token = "";
+	/**
+	* How far the reader reaches, as the last `viewer` answer through this socket
+	* said — `open` until one has. READ AS THE ANSWER PASSES (`settle`) rather
+	* than handed in, so it holds for whatever asked the question, a frame or
+	* not. Read by `fetchCalls` and nothing else: what the socket is PUSHED is
+	* decided by the engine from the handshake's key, never here.
+	*/
+	viewerReach = "open";
 	/** Whether the shell has already been asked to collect a token. */
 	askedForToken = false;
 	authRejectedHandler = null;
@@ -917,8 +948,16 @@ var LiveSocket = class {
 	* fails — the call is asked for again, once, rather than left behind until
 	* the seat's next push, which a frozen failed call or a long round never
 	* sends. An answer at or past them holds everything they named, and ends it.
+	*
+	* ONLY FROM AN ADMIN'S TAB. `live_call` is the prompt in flight and every
+	* tool result — what the machine processed (ADR-0031) — so a member's tab is
+	* refused it, and is never pushed a call to hold behind in the first place.
+	* Asked before the viewer has answered, it would put a refusal on the wire
+	* from every member's tab; the cost of waiting is a call an admin's tab
+	* holds behind for one push longer, which the seat's next push repairs.
 	*/
 	fetchCalls(handles) {
+		if (this.viewerReach !== "admin") return;
 		for (const handle of handles) {
 			if (this.fetchingCalls.has(handle)) {
 				this.fetchingCalls.set(handle, true);
@@ -938,8 +977,15 @@ var LiveSocket = class {
 		if (!entry) return;
 		this.inflight.delete(id);
 		clearTimeout(entry.timer);
-		if (error) entry.reject(new QueryError(error, retryAfterSeconds, detail));
-		else entry.resolve(data);
+		if (error) {
+			entry.reject(new QueryError(error, retryAfterSeconds, detail));
+			return;
+		}
+		if (entry.what === "viewer") {
+			const reach = data?.reach;
+			this.viewerReach = typeof reach === "string" ? reach : "open";
+		}
+		entry.resolve(data);
 	}
 	failInflight(reason) {
 		for (const entry of this.inflight.values()) {

@@ -36,8 +36,7 @@ type Derived struct {
 // DerivedSeat is one seat as the engine runs it.
 type DerivedSeat struct {
 	// Path is where the seat was written in the document (units[0].roles[1]),
-	// even when its `unit:` reference moved it. Omitted where there is no
-	// document to point into; see [Derived.WithoutPaths].
+	// even when its `unit:` reference moved it.
 	Path string `json:"path,omitempty"`
 	// Handle is the seat's identity: its declared handle, or the slug of its
 	// name.
@@ -46,7 +45,7 @@ type DerivedSeat struct {
 	// Kind is agent or human, never empty: an unannotated seat is an agent.
 	Kind string `json:"kind"`
 	// UnitPath is the authored path of the unit the seat sits in once root
-	// seats are placed, and empty for a seat at the root. Omitted with Path.
+	// seats are placed, and empty for a seat at the root.
 	UnitPath string `json:"unit_path,omitempty"`
 	// PlacedByRef is a seat written at the root that its `unit:` reference
 	// moved into a unit.
@@ -74,7 +73,7 @@ type DerivedSeat struct {
 
 // DerivedUnit is one unit as the engine runs it.
 type DerivedUnit struct {
-	// Path is where the unit was written. Omitted with a seat's.
+	// Path is where the unit was written.
 	Path string `json:"path,omitempty"`
 	Name string `json:"name"`
 	// Type is the effective type: what the unit declares, or team.
@@ -167,29 +166,6 @@ func Derive(c *Company) Derived {
 			unit.Seats = append(unit.Seats, r.Handle())
 		}
 		out.Units = append(out.Units, unit)
-	}
-	return out
-}
-
-// WithoutPaths is the hierarchy with every authored path removed: the form
-// for a reader that is given no document to point into, such as the
-// anonymous organization projection. Membership is still there, in each
-// unit's seats.
-func (d Derived) WithoutPaths() Derived {
-	// Copied rather than written through, so the caller's value keeps its
-	// paths; a nil list stays nil, which is what an empty one marshals as.
-	var out Derived
-	if d.Seats != nil {
-		out.Seats = append([]DerivedSeat(nil), d.Seats...)
-	}
-	if d.Units != nil {
-		out.Units = append([]DerivedUnit(nil), d.Units...)
-	}
-	for i := range out.Seats {
-		out.Seats[i].Path, out.Seats[i].UnitPath = "", ""
-	}
-	for i := range out.Units {
-		out.Units[i].Path = ""
 	}
 	return out
 }

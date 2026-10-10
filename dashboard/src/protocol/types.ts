@@ -51,7 +51,7 @@ import type {
   PageReadsAnswer,
   SkillLoad,
 } from "../contract/pages.ts";
-import type { PushKind, SeatActivity, StoppedReason } from "../contract/wire.ts";
+import type { PushKind, SeatActivity, StoppedReason, TurnStep } from "../contract/wire.ts";
 import type { WorkViewShape } from "../contract/work.ts";
 import type {
   RetentionGenerationState,
@@ -532,12 +532,68 @@ export interface Overlay {
  * revision a newer node admitted, or one stored before the duplicate-name rule),
  * so nothing looks a row up by it.
  */
-export interface AgentRow extends Overlay {
+export interface AgentRow extends Overlay, Partial<Omit<AgentStatus, "handle">> {
   id: string;
   agent_id?: string;
   role: string;
   handle: string;
   [key: string]: unknown;
+}
+
+/**
+ * A seat's state as a MEMBER is served it (ADR-0031): the `agents` push's row
+ * for a member's socket, and the live half of a member's roster row — the
+ * engine's `livestate.AgentStatus`, field for field.
+ *
+ * WHAT THE COMPANY PUBLISHED AND NOTHING THE MACHINE PROCESSED: no live call, no
+ * prompt, response, tool call or round, no node and no figure. So a member's
+ * row never carries `live_call` and the socket never asks for one from a
+ * member's tab (`LiveSocket.fetchCalls`). EVERY FIELD ALWAYS PRESENT, null where
+ * it has no value, so a merged row sheds an item or a step the seat has left.
+ */
+export interface AgentStatus {
+  handle: string;
+  activity: SeatActivity;
+  stopped_reason: StoppedReason | null;
+  /** The item the seat's turn is charged to — never its title. */
+  work_item: WorkItemRef | null;
+  /** Where in its turn the seat is; null while it is on none. */
+  step: TurnStep | null;
+  /** When the seat's state began, RFC 3339; null where the engine holds no
+   *  instant for it. */
+  since: string | null;
+  /** The person who paused the seat, by handle; null while it is not paused
+   *  or a credential no seat binds paused it. */
+  paused_by: string | null;
+}
+
+/** A member's roster row: the seat's public identity and its state. */
+export interface SeatStatus extends AgentStatus {
+  id: string;
+  role: string;
+}
+
+/**
+ * The live token meter as a MEMBER is served it (ADR-0031): which scopes are
+ * refusing or near their ceiling and when each window turns over — and no
+ * figure, which is spend. The engine's `livestate.BudgetStatus`. Told from an
+ * admin's {@link OrgBudget} by its shape: its `org` is a list of windows, where
+ * an admin's is a meter.
+ */
+export interface BudgetStatus {
+  timezone: string;
+  /** The company's own windows that are refusing or near. */
+  org: WindowStatus[];
+  /** Each seat with a window refusing or near, in handle order. */
+  seats: { handle: string; windows: WindowStatus[] }[];
+}
+
+/** One window's judgement and when it turns over, with no figure. */
+export interface WindowStatus {
+  period: BudgetWindow["period"];
+  window: string;
+  state: BudgetState;
+  resets_at: string;
 }
 
 /** One in-flight detached coding run. */
@@ -1226,9 +1282,17 @@ export interface OrgUnit {
 }
 
 /**
- * The company as the anonymous projection carries it: its charter, its seats
- * and units in the positions the document wrote them, and the hierarchy the
- * ENGINE derived from that document.
+ * The company as the org projection carries it: its charter, its seats and
+ * units in the positions the document wrote them, and the hierarchy the ENGINE
+ * derived from that document.
+ *
+ * SERVED PER REACH (ADR-0031), every field omitted where the caller's reach
+ * does not cover it: the public chart is the names, kinds, handles, managers,
+ * units and the derived hierarchy; a member also reads the founder's prose
+ * (goals, backstories, responsibilities, guidelines, availability, a unit's
+ * purpose, goals, knowledge and channel, the policies); an admin also reads the
+ * ceilings, each seat's model chains and its tool sources. A screen treats an
+ * absent field as not served, never as empty.
  *
  * `derived` is absent only on `{}`, a node running no company, and comes from
  * the same document as the tree beside it in the same call, so the two pair
@@ -1253,7 +1317,26 @@ export interface OrgProjection {
   token_budget?: TokenBudget;
   roles?: OrgSeat[];
   units?: OrgUnit[];
-  derived?: Derived;
+  derived?: OrgDerived;
+}
+
+/**
+ * The derived hierarchy as the org projection carries it (`api.OrgDerived`):
+ * {@link Derived} without the document paths, and with each unit's effective
+ * CHANNEL served to a member and above only, as the authored one is — absent
+ * from the public chart rather than empty.
+ */
+export interface OrgDerived {
+  seats: Omit<DerivedSeat, "path" | "unit_path">[] | null;
+  units: OrgDerivedUnit[] | null;
+}
+
+export interface OrgDerivedUnit extends Omit<
+  DerivedUnit,
+  "path" | "channel" | "channel_inherited"
+> {
+  channel?: string;
+  channel_inherited?: boolean;
 }
 
 /**
@@ -3767,7 +3850,14 @@ export interface ConfigReference {
 // ---------------------------------------------------------------------------
 
 /** The connect handshake. Built entirely from memory — no store round trip. */
+/**
+ * The handshake: every section the socket's reach is pushed, and NO KEY for one
+ * it is not — a member is handed no events, sandboxes, tokens or tools, and an
+ * anonymous reader the health and the chart alone (ADR-0031). An absent key is
+ * "not served", never "empty".
+ */
 export interface Snapshot {
+  /** An admin's rows carry the overlay; a member's are {@link SeatStatus}. */
   agents?: AgentRow[];
   events?: FeedRow[];
   sandboxes?: SandboxEntry[];
@@ -3775,8 +3865,9 @@ export interface Snapshot {
   tools?: ToolRow[];
   health?: EngineHealth;
   tokens?: Rollup;
-  /** `null` until a node has reported the counters — see {@link OrgBudget}. */
-  budget?: OrgBudget | null;
+  /** `null` until a node has reported the counters — see {@link OrgBudget}.
+   *  A member is served the {@link BudgetStatus} instead. */
+  budget?: OrgBudget | BudgetStatus | null;
   schedules?: ScheduleRow[];
 }
 

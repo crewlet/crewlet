@@ -32,6 +32,12 @@ type Paused struct {
 	// StopRunning is whether the pause also ended the turn the seat was on
 	// rather than letting it finish.
 	StopRunning bool `json:"stop_running"`
+
+	// BySeat is whether By names a seat rather than a credential. Not on the
+	// wire: an admin reads By either way, and what it decides is whether a
+	// MEMBER is told who paused the seat ([AgentStatus.PausedBy]) — a person
+	// is part of the company, and a credential's name is how it is run.
+	BySeat bool `json:"-"`
 }
 
 func (p *Paused) clone() *Paused {
@@ -60,13 +66,13 @@ func (s *LiveState) applyPause(agent *agentLive, env Envelope, payload map[strin
 	var next *Paused
 	switch env.Type {
 	case "seat_paused":
-		by := str(payload, "paused_by_seat")
+		by, bySeat := str(payload, "paused_by_seat"), true
 		if by == "" {
-			by = str(payload, "paused_by")
+			by, bySeat = str(payload, "paused_by"), false
 		}
 		next = &Paused{
 			By: by, At: str(payload, "paused_at"), Reason: str(payload, "reason"),
-			StopRunning: flag(payload, "stop_running"),
+			StopRunning: flag(payload, "stop_running"), BySeat: bySeat,
 		}
 	case "seat_resumed":
 	default:

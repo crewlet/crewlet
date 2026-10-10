@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -77,32 +76,5 @@ func TestTheDerivedHierarchyMatchesItsGoldenFiles(t *testing.T) {
 					golden, input, got, regenerateDerived)
 			}
 		})
-	}
-}
-
-// THE ANONYMOUS FORM CARRIES NO PATH, and leaves the value it came from alone:
-// a projection built from the same answer as a guarded one must not strip the
-// guarded one's paths.
-func TestTheDerivedHierarchyWithoutPaths(t *testing.T) {
-	t.Parallel()
-	cfg := parsed(t, "name: Acme\nroles:\n  - name: Designer\n    unit: Product\nunits:\n  - name: Product\n")
-	full := config.Derive(cfg)
-	public := full.WithoutPaths()
-	raw, err := json.Marshal(public)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(raw), `"path"`) || strings.Contains(string(raw), `"unit_path"`) {
-		t.Errorf("the anonymous form carries a path: %s", raw)
-	}
-	if full.Seats[0].Path != "roles[0]" || full.Seats[0].UnitPath != "units[0]" || full.Units[0].Path != "units[0]" {
-		t.Errorf("stripping the copy changed the original: %+v", full)
-	}
-	if !public.Seats[0].PlacedByRef || !reflect.DeepEqual(public.Units[0].Seats, []string{"designer"}) {
-		t.Errorf("the anonymous form lost what it is for: %+v", public)
-	}
-	var empty config.Derived
-	if got := empty.WithoutPaths(); got.Seats != nil || got.Units != nil {
-		t.Errorf("an empty hierarchy gained lists: %+v", got)
 	}
 }

@@ -3,10 +3,15 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"maps"
+	"net/http"
+	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -102,7 +107,7 @@ func TestTheSnapshotCarriesTheCompanysSeats(t *testing.T) {
 	t.Parallel()
 	a := rosterApp(t, &fakeRuntime{})
 
-	got := rows(t, a.Stream().Snapshot()["agents"])
+	got := rows(t, a.Stream().Snapshot(auth.ReachAdmin)["agents"])
 	if len(got) != 2 {
 		t.Fatalf("roster = %v, want the two AGENT seats", got)
 	}
@@ -177,7 +182,7 @@ func TestEverySeatHeldAnywhereCarriesAState(t *testing.T) {
 			a := rosterAppWith(t, &fakeRuntime{state: api.RuntimeState{Seats: tc.local}}, leases)
 
 			byHandle := map[string]map[string]any{}
-			for _, row := range rows(t, a.Stream().Snapshot()["agents"]) {
+			for _, row := range rows(t, a.Stream().Snapshot(auth.ReachAdmin)["agents"]) {
 				handle, _ := row["handle"].(string)
 				byHandle[handle] = row
 			}
@@ -219,7 +224,7 @@ func TestPlacingTheSeatsReadsNoPosture(t *testing.T) {
 
 	before := runtime.snapshotReads.Load()
 	byHandle := map[string]map[string]any{}
-	for _, row := range rows(t, a.Stream().Roster()) {
+	for _, row := range rows(t, a.Stream().Roster(auth.ReachAdmin)) {
 		handle, _ := row["handle"].(string)
 		byHandle[handle] = row
 	}
@@ -242,7 +247,7 @@ func TestPlacingTheSeatsReadsNoPosture(t *testing.T) {
 func TestAnUnreadableLeaseTableClaimsNoSeatIsUnplaced(t *testing.T) {
 	t.Parallel()
 	a := rosterAppWith(t, &fakeRuntime{}, unreadableLeases{coordmemory.New()})
-	for _, row := range rows(t, a.Stream().Snapshot()["agents"]) {
+	for _, row := range rows(t, a.Stream().Snapshot(auth.ReachAdmin)["agents"]) {
 		if row["activity"] != "idle" {
 			t.Errorf("seat %v reads %v over a lease table nobody could read, want idle",
 				row["handle"], row["activity"])
@@ -266,7 +271,7 @@ func TestTheSnapshotCarriesTheOrgTree(t *testing.T) {
 	t.Parallel()
 	a := rosterApp(t, &fakeRuntime{})
 
-	org := object(t, a.Stream().Snapshot()["org"])
+	org := object(t, a.Stream().Snapshot(auth.ReachAdmin)["org"])
 	if org["name"] != "Acme" {
 		t.Errorf("org name = %v, want the company's own", org["name"])
 	}
@@ -304,7 +309,7 @@ func TestTheSnapshotCarriesTheToolCatalogue(t *testing.T) {
 		{Name: "tracker_search", Description: "find work", Source: "tracker"},
 	}})
 
-	got := rows(t, a.Stream().Snapshot()["tools"])
+	got := rows(t, a.Stream().Snapshot(auth.ReachAdmin)["tools"])
 	if len(got) != 2 {
 		t.Fatalf("tools = %v, want both", got)
 	}
@@ -344,7 +349,7 @@ func TestTheCatalogueCarriesWhatEachToolDoes(t *testing.T) {
 		},
 	}})
 
-	got := rows(t, a.Stream().Snapshot()["tools"])
+	got := rows(t, a.Stream().Snapshot(auth.ReachAdmin)["tools"])
 	if len(got) != 2 {
 		t.Fatalf("tools = %v", got)
 	}
@@ -389,10 +394,10 @@ func TestAnEngineWithNoToolsStillServesTheRoster(t *testing.T) {
 	t.Parallel()
 	a := rosterApp(t, &fakeRuntime{})
 
-	if got := rows(t, a.Stream().Snapshot()["tools"]); len(got) != 0 {
+	if got := rows(t, a.Stream().Snapshot(auth.ReachAdmin)["tools"]); len(got) != 0 {
 		t.Errorf("tools = %v from an engine serving none", got)
 	}
-	if got := rows(t, a.Stream().Snapshot()["agents"]); len(got) != 2 {
+	if got := rows(t, a.Stream().Snapshot(auth.ReachAdmin)["agents"]); len(got) != 2 {
 		t.Errorf("an engine with no tools lost the roster: %v", got)
 	}
 }
@@ -403,7 +408,7 @@ func TestANodeWithNoCompanyAnswersEmptySurfaces(t *testing.T) {
 	t.Parallel()
 	a := newApp(t, api.Options{})
 
-	snap := a.Stream().Snapshot()
+	snap := a.Stream().Snapshot(auth.ReachAdmin)
 	for _, key := range []string{"agents", "org", "tools"} {
 		if _, present := snap[key]; !present {
 			t.Errorf("snapshot is missing %q; the client reads all three", key)
@@ -433,7 +438,7 @@ func TestTheSnapshotCarriesTheConfiguredSchedules(t *testing.T) {
 	t.Parallel()
 	a := rosterApp(t, &fakeRuntime{})
 
-	snap := a.Stream().Snapshot()
+	snap := a.Stream().Snapshot(auth.ReachAdmin)
 	if _, present := snap["schedules"]; !present {
 		t.Fatal("the snapshot carries no schedules slice, so the screen " +
 			"cannot tell 'none configured' from 'not loaded yet'")
@@ -461,5 +466,82 @@ func TestTheSchedulesPushCarriesOnlyTheConfiguredHalf(t *testing.T) {
 	if _, present := push["recent_runs"]; present {
 		t.Error("the push carries recent_runs; a re-send would blank the " +
 			"ledger the screen fetched for itself")
+	}
+}
+
+// THE ROSTER AND THE BUNDLE ANSWER EACH CALLER THE VARIANT ITS REACH IS SERVED,
+// on REST exactly as on the socket (ADR-0031).
+//
+// A member reading GET /agents is handed each seat's identity and state — the
+// member status, and not one field of the overlay — and GET /stream/snapshot
+// the sections a member socket is handed; an admin reads the overlay rows and
+// every section. The chart inside the member's bundle carries no model chain.
+//
+// Mutation: serve the routes for the admin's reach whoever asks, and the
+// member's key sets fail.
+func TestTheRosterAndTheBundleAnswerTheCallersReach(t *testing.T) {
+	t.Parallel()
+	c, err := config.ParseCompany([]byte(rosterCompany))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	a := chartApp(t, c)
+	read := func(path, key string) any {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer "+key)
+		rec := httptest.NewRecorder()
+		a.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s as %s = %d", path, key, rec.Code)
+		}
+		var out any
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		return out
+	}
+	keysOf := func(v any) []string {
+		m, _ := v.(map[string]any)
+		return slices.Sorted(maps.Keys(m))
+	}
+
+	member, _ := read("/agents", "member-secret").([]any)
+	if len(member) != 2 {
+		t.Fatalf("a member's roster = %v, want the two agent seats", member)
+	}
+	want := []string{"activity", "handle", "id", "paused_by", "role", "since", "step", "stopped_reason", "work_item"}
+	for _, row := range member {
+		if got := keysOf(row); !slices.Equal(got, want) {
+			t.Errorf("a member's roster row carries %v, want the member status %v", got, want)
+		}
+	}
+	admin, _ := read("/agents", "secret").([]any)
+	for _, row := range admin {
+		if got := keysOf(row); !slices.Contains(got, "live_call") || !slices.Contains(got, "agent_id") {
+			t.Errorf("an admin's roster row carries %v, want the overlay", got)
+		}
+	}
+
+	for _, tc := range []struct {
+		key  string
+		want []string
+	}{
+		{"member-secret", []string{"agents", "budget", "health", "org", "schedules"}},
+		{"secret", []string{"agents", "budget", "events", "health", "org", "sandboxes", "schedules", "tokens", "tools"}},
+	} {
+		bundle := read("/stream/snapshot", tc.key)
+		if got := keysOf(bundle); !slices.Equal(got, tc.want) {
+			t.Errorf("GET /stream/snapshot as %s carries %v, want %v", tc.key, got, tc.want)
+		}
+		chart, _ := bundle.(map[string]any)["org"].(map[string]any)
+		roles, _ := chart["roles"].([]any)
+		if len(roles) == 0 {
+			t.Fatalf("the chart in %s's bundle has no seats: %v", tc.key, chart)
+		}
+		ceo, _ := roles[0].(map[string]any)
+		if _, chain := ceo["llm"]; chain != (tc.key == "secret") {
+			t.Errorf("the chart in %s's bundle carries the CEO's model chain: %v; only an admin is served it",
+				tc.key, chain)
+		}
 	}
 }

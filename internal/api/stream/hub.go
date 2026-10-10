@@ -7,6 +7,21 @@
 // loses its oldest envelope rather than stalling every other tab" is a property
 // a test can assert directly, instead of one inferred from a socket that
 // happened not to fall over.
+//
+// # A socket is pushed what its reach is served
+//
+// Every socket carries the reach its handshake resolved (ADR-0031), and every
+// push kind names the lowest reach it is sent to ([KindReach]) in ONE table
+// that covers every [Kind] — TestEveryPushKindHasAReach reads the constants
+// from this package's source and fails on one the table leaves out, so a new
+// kind is a decision rather than a broadcast to everybody. A kind whose
+// content differs by reach is built once PER REACH a connected client holds,
+// never once per client, and each client is sent the richest variant its own
+// reach covers ([Variants]): the `agents` push is an admin's overlay and a
+// member's [livestate.AgentStatus], so a member's tab never holds the prompt a
+// seat is running on. The snapshot a socket is handed on connect is assembled
+// for its reach from the same table, and a key a frame presents upgrades that
+// one question and never the pushes.
 package stream
 
 import (
@@ -16,6 +31,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
@@ -112,21 +128,120 @@ func Push(kind Kind, data any, now time.Time) Envelope {
 	return Envelope{Kind: kind, Data: data, TS: now.UTC().Format(time.RFC3339Nano)}
 }
 
+// route is how a frame of one kind reaches a client.
+type route int
+
+const (
+	// routeBroadcast is a push the hub fans out to every client whose
+	// reach covers the kind's.
+	routeBroadcast route = iota + 1
+	// routeHandshake is the one frame a socket is handed as it connects,
+	// assembled for that socket's own reach and sent to it alone.
+	routeHandshake
+	// routeReply answers one client's own frame. Its reach is the
+	// question's (the query registry's), never the kind's, and it is
+	// never broadcast.
+	routeReply
+)
+
+// delivery is who a kind is sent to, and how.
+type delivery struct {
+	route route
+	// reach is the lowest reach a client must hold to be sent a push of
+	// the kind at all. [auth.ReachOpen] for a handshake or a reply, which
+	// every socket receives: what each CARRIES is decided per reach (the
+	// snapshot) or per question (an answer).
+	reach auth.Reach
+}
+
+// kinds is every frame kind's delivery: TOTAL over [Kind], which
+// TestEveryPushKindHasAReach holds against the constants above.
+//
+// THE WITHHOLDING RULE OF ADR-0031, one kind at a time. `health` is open
+// because it is the body of the open `/health` probe, so withholding the push
+// would be cosmetic; `org` is public because the chart is the company's public
+// face (and what the public reach serves of it is the org projection's own
+// classification); `agents`, `seats` and `budget` are member because who is
+// working on what and which seats are out of budget is what the company
+// published — each with a member variant that carries the state and none of
+// what the machine processed to reach it — and so is `schedules`, the routines
+// a person plans around. `event`, `sandboxes`, `tokens` and `tools` are what
+// the machine processed and how it is run: whole event payloads, coding runs
+// and their boxes, spend, and every tool every server serves with its schema.
+var kinds = map[Kind]delivery{
+	KindSnapshot:  {routeHandshake, auth.ReachOpen},
+	KindEvent:     {routeBroadcast, auth.ReachAdmin},
+	KindAgents:    {routeBroadcast, auth.ReachMember},
+	KindSeats:     {routeBroadcast, auth.ReachMember},
+	KindSandboxes: {routeBroadcast, auth.ReachAdmin},
+	KindTokens:    {routeBroadcast, auth.ReachAdmin},
+	KindBudget:    {routeBroadcast, auth.ReachMember},
+	KindSchedules: {routeBroadcast, auth.ReachMember},
+	KindOrg:       {routeBroadcast, auth.ReachPublic},
+	KindTools:     {routeBroadcast, auth.ReachAdmin},
+	KindHealth:    {routeBroadcast, auth.ReachOpen},
+	KindResult:    {routeReply, auth.ReachOpen},
+	KindError:     {routeReply, auth.ReachOpen},
+	KindPong:      {routeReply, auth.ReachOpen},
+}
+
+// KindReach is the lowest reach a client must hold to be PUSHED kind, and
+// false for a kind that is never broadcast — the snapshot, a query's answer and
+// the pong, each of which is sent to one client — or one this build does not
+// know.
+func KindReach(kind Kind) (auth.Reach, bool) {
+	d, ok := kinds[kind]
+	if !ok || d.route != routeBroadcast {
+		return "", false
+	}
+	return d.reach, true
+}
+
+// Variants builds one push's data for a reach: the richest variant a client
+// holding that reach is served. Called at most once per reach per broadcast,
+// and only for a reach some connected client holds, so a variant nobody is
+// connected to read is never built. ok false sends clients of that reach
+// nothing.
+type Variants func(reach auth.Reach) (data any, ok bool)
+
+// Same is the Variants of a push every reach it is sent to reads alike, from
+// data already in hand.
+func Same(data any) Variants {
+	return func(auth.Reach) (any, bool) { return data, true }
+}
+
+// Shared is the Variants of a push every reach reads alike, built by build at
+// most once — and not at all when no client is sent it.
+func Shared(build func() any) Variants {
+	data := sync.OnceValue(build)
+	return func(auth.Reach) (any, bool) { return data(), true }
+}
+
 // Client is one connected dashboard.
 type Client struct {
 	// out carries envelopes to the socket's own writer goroutine. Buffered
 	// to QueueDepth; a send that would block drops the oldest instead.
 	out chan Envelope
 
+	// reach is what the socket's handshake resolved, fixed for the life of
+	// the connection: a key a frame presents upgrades its own question and
+	// never this.
+	reach auth.Reach
+
 	mu      sync.Mutex
 	closed  bool
 	dropped int
 }
 
-// NewClient builds a client with an empty queue.
-func NewClient() *Client {
-	return &Client{out: make(chan Envelope, QueueDepth)}
+// NewClient builds a client with an empty queue, pushed what reach is served.
+// A reach that is not one of [auth.Reaches] covers nothing, so such a client is
+// pushed nothing at all rather than read as any reach.
+func NewClient(reach auth.Reach) *Client {
+	return &Client{out: make(chan Envelope, QueueDepth), reach: reach}
 }
+
+// Reach is the reach this client is pushed for.
+func (c *Client) Reach() auth.Reach { return c.reach }
 
 // Out is the channel a transport reads envelopes from. Closed by [Client.Close].
 func (c *Client) Out() <-chan Envelope { return c.out }
@@ -237,18 +352,51 @@ func (h *Hub) Clients() int {
 	return len(h.clients)
 }
 
-// Broadcast queues an envelope for every client.
+// Broadcast pushes kind to every client whose reach covers the kind's, each
+// sent the variant built for its own reach.
 //
-// Never blocks on any of them: each client's own queue absorbs the difference,
+// ONCE PER REACH, NEVER PER CLIENT: a variant is built the first time a client
+// of its reach is reached and that one envelope is queued for every other
+// client of the same reach, so a hundred member tabs cost one member build —
+// and a reach nobody connected with costs none.
+//
+// A kind that is not a push — the snapshot, an answer, the pong, or one this
+// build does not know — is refused and logged: each goes to one client, and
+// fanning one out would hand every socket another's answer.
+//
+// Never blocks on any client: each client's own queue absorbs the difference,
 // and one that has fallen behind loses its oldest envelope rather than holding
 // up the publish path.
-func (h *Hub) Broadcast(env Envelope) {
+func (h *Hub) Broadcast(kind Kind, build Variants, now time.Time) {
+	need, ok := KindReach(kind)
+	if !ok {
+		log.Error("stream_broadcast_refused", "kind", kind,
+			"hint", "only a push kind is broadcast; a snapshot, an answer and a "+
+				"pong are sent to the one client they are for")
+		return
+	}
 	h.mu.RLock()
 	targets := slices.Collect(maps.Keys(h.clients))
 	h.mu.RUnlock()
 
+	type built struct {
+		env  Envelope
+		send bool
+	}
+	byReach := map[auth.Reach]built{}
 	for _, c := range targets {
-		c.send(env)
+		if !c.reach.Covers(need) {
+			continue
+		}
+		variant, done := byReach[c.reach]
+		if !done {
+			data, send := build(c.reach)
+			variant = built{env: Push(kind, data, now), send: send}
+			byReach[c.reach] = variant
+		}
+		if variant.send {
+			c.send(variant.env)
+		}
 	}
 }
 

@@ -172,18 +172,24 @@ func (a *App) mountReads(mux auth.Router) {
 	// The four served from the stream service rather than the registry.
 	// They are the CONFIG-DERIVED surfaces plus the whole bundle, and the
 	// socket builds them from these same functions for its handshake —
-	// so a browser that cannot upgrade sees what one that could sees.
+	// so a browser that cannot upgrade sees what one that could sees, AT
+	// THE SAME REACH: each answers the variant the caller's own reach is
+	// served, exactly as the socket's snapshot and pushes do (ADR-0031).
 	//
 	// THE CHART IS PUBLIC: the classified projection is the company's
 	// public face, and the sign-in page names the company it signs you
-	// into from it. The other three are ADMIN: the roster and the bundle
-	// carry every seat's call in flight, its prompt included — what the
-	// machine is processing — and the tool list is how the engine is wired,
-	// every tool every MCP server serves it with its schema.
-	mux.Handle("GET /agents", auth.ReachAdmin, a.serveFrom(func() any { return a.stream.Roster() }))
-	mux.Handle("GET /org", auth.ReachPublic, a.serveFrom(func() any { return a.stream.Org() }))
-	mux.Handle("GET /tools", auth.ReachAdmin, a.serveFrom(func() any { return a.stream.Tools() }))
-	mux.Handle("GET /stream/snapshot", auth.ReachAdmin, a.serveFrom(func() any { return a.stream.Snapshot() }))
+	// into from it — what each reach reads of it is the projection's own
+	// classification. THE ROSTER AND THE BUNDLE ARE MEMBER: a member is
+	// served each seat's state and the sections its pushes keep current,
+	// and an admin the call in flight beside them, its prompt included.
+	// THE TOOL LIST IS ADMIN: it is how the engine is wired, every tool
+	// every MCP server serves it with its schema.
+	mux.Handle("GET /agents", auth.ReachMember, a.serveFrom(a.stream.Roster))
+	mux.Handle("GET /org", auth.ReachPublic, a.serveFrom(a.stream.Org))
+	mux.Handle("GET /tools", auth.ReachAdmin, a.serveFrom(func(auth.Reach) any { return a.stream.Tools() }))
+	mux.Handle("GET /stream/snapshot", auth.ReachMember, a.serveFrom(func(reach auth.Reach) any {
+		return a.stream.Snapshot(reach)
+	}))
 }
 
 // questionReach is the reach a named route is mounted at: its question's own.
@@ -215,15 +221,17 @@ func (a *App) serveNamed(what string, path map[string]string) http.HandlerFunc {
 	}
 }
 
-// serveFrom renders a value the stream service already knows how to build.
+// serveFrom renders a value the stream service already knows how to build,
+// for the caller's own reach.
 //
 // No registry entry, because there is no question to ask: these are the
 // sections of the handshake snapshot, and the socket reads the same functions
-// to assemble it. Each is mounted at the reach its content needs, like every
-// other route.
-func (a *App) serveFrom(build func() any) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, build())
+// to assemble it. Each is mounted at the lowest reach its content is served
+// to, like every other route, and answers the caller the variant its reach is
+// handed — the reach the guard attached, never one the handler decides.
+func (a *App) serveFrom(build func(auth.Reach) any) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, build(auth.PrincipalFrom(r.Context()).Reach))
 	}
 }
 
