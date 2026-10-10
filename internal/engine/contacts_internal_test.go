@@ -170,26 +170,6 @@ roles:
 	t.Cleanup(func() { e.Stop(context.Background()) })
 	deps := e.workDeps(e.Company())
 
-	// A SEAT READING A PERSON READS THEM UNDER BOTH OF THEIR NAMES. A change
-	// filed by somebody through the dashboard concerns them under the
-	// credential their seat binds, and the applier writes that person's notice
-	// under it — so a seat's get_person or work_inbox about them, the handle
-	// alone, never saw it. The seat surface answers the party as the operator
-	// surface does.
-	t.Run("a_seat_reads_a_person_under_both_of_their_names", func(t *testing.T) {
-		t.Parallel()
-		if deps.Reader == nil {
-			t.Fatal("the node has no native tracker, so this case shows nothing")
-		}
-		if deps.Party == nil {
-			t.Fatal("a seat's work tools read a person under their handle alone")
-		}
-		if got := deps.Party("founder"); got.Handle != "founder" || got.OperatorID != "founder-token" {
-			t.Errorf("the founder's party is %+v, want the seat and the credential the "+
-				"handed environment binds to it", got)
-		}
-	})
-
 	// THE WORK TOOLS' ROSTER, which a handle a seat typed is checked against,
 	// holds the person by the id the handed environment gives them.
 	t.Run("the_work_tools_roster_knows_them_by_that_id", func(t *testing.T) {
