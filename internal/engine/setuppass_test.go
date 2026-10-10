@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/integration/integrationtest"
 	"github.com/crewlet/crewlet/internal/setup"
 )
@@ -120,4 +121,64 @@ roles:
 		t.Errorf("the finding names %q rather than the field to set", findings[0].Subject)
 	}
 	integrationtest.AssertConfigFault(t, findings[0])
+}
+
+// A DATADOG REGION HELD IN A VARIABLE IS READ AS THE REGION IT NAMES.
+//
+// Config validation accepts a whole ${VAR} for the region and leaves the
+// membership check to the resolved value, saying so at the field. Both the
+// pass and the teardown built the client from the field verbatim, so the
+// region reached the check as the literal "${DD_SITE}": every pass reported a
+// region Datadog does not serve and every disconnect failed to build a
+// client. Resolved, the pass goes on to the keys — left unresolved here, so it
+// stops at their finding before any request leaves the process.
+func TestADatadogRegionHeldInAVariableIsResolved(t *testing.T) {
+	t.Parallel()
+	e := &Engine{environ: config.MapSource{"DD_SITE": "datadoghq.eu"}}
+	cfg, err := config.ParseCompany([]byte(`
+name: Acme
+providers:
+  llm:
+    zulu:
+      type: anthropic
+      model: claude-sonnet-5
+      api_keys: ["sk-ant-fake-zulu-key"]
+integrations:
+  datadog:
+    enabled: true
+    webhook_token: EXAMPLEDATADOGTOKEN0000000
+    route_to: ceo
+    provisioning:
+      site: "${DD_SITE}"
+      api_key: "${DD_API_KEY_NOBODY_SET}"
+      app_key: "${DD_APP_KEY_NOBODY_SET}"
+roles:
+  - name: CEO
+    handle: ceo
+    llm: zulu
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	company, err := NewCompanyWith(cfg, e.resolver())
+	if err != nil {
+		t.Fatalf("company: %v", err)
+	}
+	e.epoch.current.Store(company)
+
+	findings, err := (&datadogPass{engine: e}).Run(t.Context(), setup.PassInput{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, f := range findings {
+		if f.Subject == "integrations.datadog.provisioning.site" {
+			t.Fatalf("a region the variable resolves to was refused: %+v", f)
+		}
+	}
+	if len(findings) != 1 || findings[0].Kind != integration.FindingCredentialMissing {
+		t.Errorf("findings = %+v, want the pass to reach the unresolved keys", findings)
+	}
+	if got := datadogSite(company.Config.Integrations.Datadog, e.resolver()); got != "datadoghq.eu" {
+		t.Errorf("the teardown's region is %q, want the one the variable names", got)
+	}
 }
