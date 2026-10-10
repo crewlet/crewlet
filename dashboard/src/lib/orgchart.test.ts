@@ -11,6 +11,7 @@ import { balanceRoots, buildOrgChart, placeLine, stateCounts, unitPath } from ".
 import { indexOrg } from "./seats.ts";
 import type { AgentRow, OrgProjection, WorkProjectRow } from "~/protocol/types.ts";
 import { CHART_ORG } from "~/test/orgchart.ts";
+import { seatRow } from "~/test/seats.ts";
 
 const PROJECTS = [
   { key: "ENG", unit: { name: "Core", resolved: true } },
@@ -55,16 +56,31 @@ test("the seats of a unit its lead leads from outside are boxed, with the unit's
 // counted: the engine runs no human seat.
 test("the legend counts each agent seat by its activity and nothing else", () => {
   const index = indexOrg(CHART_ORG);
-  const agents = [
-    { role: "CEO", activity: "idle" },
-    { role: "CTO", activity: "working" },
-    { role: "SWE", activity: "working" },
-    { role: "FE", activity: "needs" },
-    { role: "PM", activity: "stopped" },
-    { role: "Jane Founder", activity: "working" },
-    { role: "Gone", activity: "working" },
-  ] as unknown as AgentRow[];
+  const agents = (
+    [
+      { role: "CEO", activity: "idle" },
+      { role: "CTO", activity: "working" },
+      { role: "SWE", activity: "working" },
+      { role: "FE", activity: "needs" },
+      { role: "PM", activity: "stopped" },
+      { role: "Jane Founder", handle: "jane", activity: "working" },
+      { role: "Gone", activity: "working" },
+    ] as const
+  ).map(seatRow);
   expect(stateCounts(index, agents)).toEqual({ working: 2, needs: 1, stopped: 1, idle: 1 });
+});
+
+// A ROW IS A SEAT'S BY ITS HANDLE, never by a name another seat carries: two
+// seats can share one, and counted by it, one seat's row stood for both.
+//
+// Mutation: look a seat's row up by its name, and DevRel is counted working.
+test("the legend counts a seat by its own row, never a namesake's", () => {
+  const index = indexOrg(CHART_ORG);
+  const agents: AgentRow[] = [
+    seatRow({ role: "DevRel", handle: "pm", activity: "working" }),
+    seatRow({ role: "DevRel", handle: "devrel", activity: "idle" }),
+  ];
+  expect(stateCounts(index, agents)).toEqual({ working: 1, needs: 0, stopped: 0, idle: 1 });
 });
 
 test("a seat's place is its unit path, or above every unit", () => {

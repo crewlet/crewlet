@@ -185,6 +185,7 @@ describe("the figures", () => {
   test("a sub-line names only the parts with somebody in them", () => {
     const row = (activity: AgentRow["activity"]): AgentRow => ({
       id: activity ?? "",
+      handle: activity ?? "",
       role: "r",
       activity,
     });

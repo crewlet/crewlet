@@ -19,7 +19,7 @@ func TestAPausedSeatCarriesWhoPausedIt(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
 	change := s.Apply(env("seat_paused", map[string]any{
-		"role": "CTO", "agent_handle": "cto", "paused_by": "jane-token",
+		"role": "CTO", "agent_handle": "CTO", "paused_by": "jane-token",
 		"paused_by_seat": "jane", "reason": "looping", "stop_running": true,
 		"paused_at": "2026-06-14T11:59:00Z",
 	}, at("2026-06-14T11:59:00Z"), id("p1")))
@@ -33,12 +33,12 @@ func TestAPausedSeatCarriesWhoPausedIt(t *testing.T) {
 	}
 
 	// An older pause arriving after the resume must not put it back.
-	s.Apply(env("seat_resumed", map[string]any{"role": "CTO", "resumed_by": "omar-token"},
+	s.Apply(env("seat_resumed", map[string]any{"role": "CTO", "agent_handle": "CTO", "resumed_by": "omar-token"},
 		at("2026-06-14T12:05:00Z"), id("r1")))
 	if p := overlayOf(t, s, "CTO").Paused; p != nil {
 		t.Fatalf("paused = %+v after a resume, want none", p)
 	}
-	s.Apply(env("seat_paused", map[string]any{"role": "CTO", "paused_by": "old-token"},
+	s.Apply(env("seat_paused", map[string]any{"role": "CTO", "agent_handle": "CTO", "paused_by": "old-token"},
 		at("2026-06-14T12:01:00Z"), id("p0")))
 	if p := overlayOf(t, s, "CTO").Paused; p != nil {
 		t.Errorf("a pause older than the resume put the seat back to paused: %+v", p)
@@ -60,10 +60,10 @@ func TestAPausedSeatCarriesWhoPausedIt(t *testing.T) {
 func TestAPauseIsSeededFromTheRecord(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
-	s.Apply(env("seat_resumed", map[string]any{"role": "CEO"}, at("2026-06-14T12:00:00Z")))
+	s.Apply(env("seat_resumed", map[string]any{"role": "CEO", "agent_handle": "CEO"}, at("2026-06-14T12:00:00Z")))
 	change := s.SeedPauses([]livestate.SeedPause{
-		{Role: "CTO", Paused: livestate.Paused{By: "jane", At: "2026-06-01T09:00:00Z"}},
-		{Role: "CEO", Paused: livestate.Paused{By: "stale", At: "2026-06-01T09:00:00Z"}},
+		{Handle: "CTO", Paused: livestate.Paused{By: "jane", At: "2026-06-01T09:00:00Z"}},
+		{Handle: "CEO", Paused: livestate.Paused{By: "stale", At: "2026-06-01T09:00:00Z"}},
 	})
 	if _, moved := change.Agents["CTO"]; !moved {
 		t.Error("seeding a pause pushed nothing")

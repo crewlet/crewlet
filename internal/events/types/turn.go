@@ -235,11 +235,13 @@ func (e PromptSize) SummaryFor(actor string) string {
 // a failure BY TYPE: a breached guard is a failed turn however the payload
 // reads.
 type TurnGuardBreach struct {
-	Agent    string    `json:"agent_id"`
-	RoleName string    `json:"role"`
-	Kind     GuardKind `json:"kind"`
-	Detail   string    `json:"detail"`
-	TurnID   string    `json:"turn_id"`
+	Agent string `json:"agent_id"`
+	// AgentHandle is the seat's identity — see [AgentPhaseStarted.AgentHandle].
+	AgentHandle string    `json:"agent_handle"`
+	RoleName    string    `json:"role"`
+	Kind        GuardKind `json:"kind"`
+	Detail      string    `json:"detail"`
+	TurnID      string    `json:"turn_id"`
 	// WorkKey is the unit of work this run was dispatched for — see
 	// [AgentPhaseCompleted.WorkKey] and ADR-0017.
 	WorkKey string `json:"work_key,omitempty"`

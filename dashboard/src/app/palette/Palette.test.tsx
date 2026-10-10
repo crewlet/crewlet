@@ -24,6 +24,7 @@ import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { rosterOf, type SeatFixture } from "~/test/seats.ts";
 
 vi.mock("~/lib/viewer.ts", () => ({ useViewer: vi.fn() }));
 
@@ -169,7 +170,7 @@ function mount({
   const store = new Store();
   store.setConnected(true);
   store.applyOrg(withDerived(ORG) as never);
-  store.applyAgents(agents as never);
+  rosterOf(store, agents as SeatFixture[]);
   const socket = new LiveSocket(store);
   socket.query = ((kind: string, params?: Record<string, unknown>) => {
     asked.push({ kind, params: params ?? {} });
@@ -370,8 +371,8 @@ describe("running now", () => {
 
   // AND A TURN THAT STARTS while it is open is not offered until the next ⌘K.
   test("a turn starting while it is open adds no row", () => {
-    const p = mount({ agents });
-    act(() => p.store.applyAgents([...agents, working("CTO", "cto", "t-new", 5)] as never));
+    const p = mount({ agents: [...agents, { role: "CTO", handle: "cto", activity: "idle" }] });
+    act(() => p.store.applyAgents([working("CTO", "cto", "t-new", 5)] as never));
     expect(within(group("Running now")).getAllByRole("option")).toHaveLength(2);
   });
 

@@ -17,9 +17,9 @@ func TestATurnEndingDoesNotClearTheFailureThatCausedIt(t *testing.T) {
 	// seat, and why a reload showed the same.
 	s := livestate.New()
 	s.Apply(env("llm_unavailable", map[string]any{
-		"role": "Lead", "kind": "provider_down", "detail": "429 forever",
+		"role": "Lead", "agent_handle": "Lead", "kind": "provider_down", "detail": "429 forever",
 	}, at("2026-06-14T12:00:00Z")))
-	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead"},
+	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead", "agent_handle": "Lead"},
 		at("2026-06-14T12:00:01Z")))
 
 	got := overlayOf(t, s, "Lead")
@@ -37,10 +37,10 @@ func TestRealWorkClearsTheFailureHold(t *testing.T) {
 	t.Parallel()
 	// A seat leaves the hold only when it does real work again.
 	s := livestate.New()
-	s.Apply(env("budget_exhausted", map[string]any{"role": "Lead", "kind": "budget"},
+	s.Apply(env("budget_exhausted", map[string]any{"role": "Lead", "agent_handle": "Lead", "kind": "budget"},
 		at("2026-06-14T12:00:00Z")))
 	s.Apply(env("agent_phase_started",
-		map[string]any{"role": "Lead", "turn_id": "tn-2", "phase": "plan", "iteration": 0},
+		map[string]any{"role": "Lead", "agent_handle": "Lead", "turn_id": "tn-2", "phase": "plan", "iteration": 0},
 		at("2026-06-14T12:05:00Z")))
 
 	got := overlayOf(t, s, "Lead")
@@ -59,9 +59,9 @@ func TestARespawnClearsTheFailureHold(t *testing.T) {
 	// engine restart and a healthy seat renders as broken until it happens
 	// to do some work.
 	s := livestate.New()
-	s.Apply(env("llm_unavailable", map[string]any{"role": "Lead", "kind": "provider_down"},
+	s.Apply(env("llm_unavailable", map[string]any{"role": "Lead", "agent_handle": "Lead", "kind": "provider_down"},
 		at("2026-06-14T12:00:00Z")))
-	s.Apply(env("agent_spawned", map[string]any{"role": "Lead", "agent_id": "a-2"},
+	s.Apply(env("agent_spawned", map[string]any{"role": "Lead", "agent_handle": "Lead", "agent_id": "a-2"},
 		at("2026-06-14T12:05:00Z")))
 
 	got := overlayOf(t, s, "Lead")
@@ -81,9 +81,9 @@ func TestASpawnDoesNotDisturbAWorkingSeat(t *testing.T) {
 	// turn.
 	s := livestate.New()
 	s.Apply(env("agent_phase_started",
-		map[string]any{"role": "Lead", "turn_id": "tn-1", "phase": "plan", "iteration": 0},
+		map[string]any{"role": "Lead", "agent_handle": "Lead", "turn_id": "tn-1", "phase": "plan", "iteration": 0},
 		at("2026-06-14T12:00:00Z")))
-	s.Apply(env("agent_spawned", map[string]any{"role": "Lead", "agent_id": "a-2"},
+	s.Apply(env("agent_spawned", map[string]any{"role": "Lead", "agent_handle": "Lead", "agent_id": "a-2"},
 		at("2026-06-14T11:59:59Z")))
 
 	got := overlayOf(t, s, "Lead")
@@ -102,9 +102,9 @@ func TestASpawnAfterATurnTakesItsCallWithIt(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
 	s.Apply(env("agent_phase_started",
-		map[string]any{"role": "Lead", "turn_id": "tn-1", "phase": "plan", "iteration": 0},
+		map[string]any{"role": "Lead", "agent_handle": "Lead", "turn_id": "tn-1", "phase": "plan", "iteration": 0},
 		at("2026-06-14T12:00:00Z")))
-	s.Apply(env("agent_spawned", map[string]any{"role": "Lead", "agent_id": "a-2"},
+	s.Apply(env("agent_spawned", map[string]any{"role": "Lead", "agent_handle": "Lead", "agent_id": "a-2"},
 		at("2026-06-14T12:05:00Z")))
 
 	got := overlayOf(t, s, "Lead")
@@ -120,7 +120,7 @@ func TestASpawnAfterATurnTakesItsCallWithIt(t *testing.T) {
 
 func failedPhase(ts string) *livestate.Envelope {
 	return env("agent_phase_completed", map[string]any{
-		"role": "Lead", "turn_id": "tn-1", "phase": "plan", "iteration": 0,
+		"role": "Lead", "agent_handle": "Lead", "turn_id": "tn-1", "phase": "plan", "iteration": 0,
 		"failed": true, "error_kind": "provider_error", "error": "429 from anthropic",
 	}, at(ts))
 }
@@ -175,7 +175,7 @@ func TestAFollowingFailureEventDoesNotWipeTheFailedCall(t *testing.T) {
 	s := livestate.New()
 	s.Apply(env("agent_phase_started", planCall()))
 	s.Apply(failedPhase("2026-06-14T12:00:05Z"))
-	s.Apply(env("llm_unavailable", map[string]any{"role": "Lead", "kind": "provider_down"},
+	s.Apply(env("llm_unavailable", map[string]any{"role": "Lead", "agent_handle": "Lead", "kind": "provider_down"},
 		at("2026-06-14T12:00:06Z")))
 
 	if call := liveCallOf(t, s, "Lead"); call == nil || !call.Failed {
@@ -190,7 +190,7 @@ func TestAFailureEventClearsAHealthyCall(t *testing.T) {
 	// answer.
 	s := livestate.New()
 	s.Apply(env("agent_phase_started", planCall()))
-	s.Apply(env("llm_unavailable", map[string]any{"role": "Lead", "kind": "provider_down"},
+	s.Apply(env("llm_unavailable", map[string]any{"role": "Lead", "agent_handle": "Lead", "kind": "provider_down"},
 		at("2026-06-14T12:00:06Z")))
 
 	if call := liveCallOf(t, s, "Lead"); call != nil {
@@ -217,11 +217,11 @@ func TestTheNextTurnClearsTheFailure(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
 	s.Apply(env("agent_phase_completed", map[string]any{
-		"role": "Lead", "phase": "execute", "turn_id": "tn-8", "failed": true,
+		"role": "Lead", "agent_handle": "Lead", "phase": "execute", "turn_id": "tn-8", "failed": true,
 		"error": "boom",
 	}, at("2026-06-14T12:00:05Z")))
 	s.Apply(env("agent_phase_started", map[string]any{
-		"role": "Lead", "phase": "plan", "turn_id": "tn-9",
+		"role": "Lead", "agent_handle": "Lead", "phase": "plan", "turn_id": "tn-9",
 	}, at("2026-06-14T12:01:00Z")))
 
 	got := overlayOf(t, s, "Lead")
@@ -246,11 +246,11 @@ func TestARetryOpensItsOwnCallRatherThanReusingTheFailedOnes(t *testing.T) {
 	s := livestate.New()
 	// Attempt one: the executor died on an auth failure and its call froze.
 	s.Apply(env("agent_phase_started", map[string]any{
-		"role": "CEO", "turn_id": "run-1", "work_key": "wk-1",
+		"role": "CEO", "agent_handle": "CEO", "turn_id": "run-1", "work_key": "wk-1",
 		"phase": "execute", "iteration": 1,
 	}, at("2026-06-14T12:00:00Z")))
 	s.Apply(env("agent_phase_completed", map[string]any{
-		"role": "CEO", "turn_id": "run-1", "work_key": "wk-1",
+		"role": "CEO", "agent_handle": "CEO", "turn_id": "run-1", "work_key": "wk-1",
 		"phase": "execute", "iteration": 1,
 		"failed": true, "error_kind": "auth", "error": "not authenticated",
 	}, at("2026-06-14T12:00:01Z"), id("e2")))
@@ -263,7 +263,7 @@ func TestARetryOpensItsOwnCallRatherThanReusingTheFailedOnes(t *testing.T) {
 	// Attempt two: the broker redelivered the trigger, so the SAME work key
 	// runs again — under a run id of its own.
 	s.Apply(env("agent_phase_started", map[string]any{
-		"role": "CEO", "turn_id": "run-2", "work_key": "wk-1",
+		"role": "CEO", "agent_handle": "CEO", "turn_id": "run-2", "work_key": "wk-1",
 		"phase": "execute", "iteration": 1,
 	}, at("2026-06-14T12:02:00Z"), id("e3")))
 

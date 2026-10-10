@@ -330,7 +330,8 @@ export function CommandPalette({
   // A fresh keystroke clears what the last press said.
   useEffect(() => setNotice(null), [query, pickQuery, scope]);
 
-  const liveOf = (seat: Seat) => agents.find((a) => a.role === seat.name);
+  // By HANDLE: a role name two seats share would draw one's state on both.
+  const liveOf = (seat: Seat) => agents.find((a) => a.handle === seat.handle);
 
   const seatItem = (seat: Seat, hint: string, onSelect: () => void): CommandPaletteItem => {
     const state = activityOf(liveOf(seat));

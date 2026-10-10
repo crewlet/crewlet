@@ -129,7 +129,7 @@ function SeatLinks({ seats, style }: { seats: Seat[]; style?: CSSProperties }) {
             // screen reader, which does not see the outline.
             <span className="sr-only">human</span>
           ) : (
-            <StateBadge agent={agents.find((a) => a.role === seat.name)} />
+            <StateBadge agent={agents.find((a) => a.handle === seat.handle)} />
           )}
         </a>
       ))}

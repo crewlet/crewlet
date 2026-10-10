@@ -216,12 +216,12 @@ func (c *capture) turnStages(t *testing.T) []string {
 }
 
 // sawRefusal reports whether a seat's pushed meter carried a refused window:
-// stamped, and judged `refusing` by the engine. By ROLE, which is the key an
+// stamped, and judged `refusing` by the engine. By HANDLE, which is the key an
 // `agents` push carries its changed rows under.
-func (c *capture) sawRefusal(t *testing.T, role string) bool {
+func (c *capture) sawRefusal(t *testing.T, handle string) bool {
 	t.Helper()
 	for _, row := range c.agentRows(t) {
-		if row["role"] != role {
+		if row["handle"] != handle {
 			continue
 		}
 		meter, _ := row["budget"].(map[string]any)
@@ -236,15 +236,15 @@ func (c *capture) sawRefusal(t *testing.T, role string) bool {
 	return false
 }
 
-// seatStates reports every activity an `agents` push put a seat in, by role.
+// seatStates reports every activity an `agents` push put a seat in, by handle.
 func (c *capture) seatStates(t *testing.T) map[string][]string {
 	t.Helper()
 	out := map[string][]string{}
 	for _, row := range c.agentRows(t) {
-		role, _ := row["role"].(string)
+		handle, _ := row["handle"].(string)
 		activity, _ := row["activity"].(string)
-		if role != "" && activity != "" {
-			out[role] = append(out[role], activity)
+		if handle != "" && activity != "" {
+			out[handle] = append(out[handle], activity)
 		}
 	}
 	return out
@@ -514,8 +514,8 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 	// moved": the projection put CEO into `working` and hung an in-flight
 	// call off it naming the phase and the model.
 	states := frames.seatStates(t)
-	if !slices.Contains(states["CEO"], "working") {
-		t.Errorf("the seat never showed as working; states = %v", states["CEO"])
+	if !slices.Contains(states["ceo"], "working") {
+		t.Errorf("the seat never showed as working; states = %v", states["ceo"])
 	}
 	calls := frames.liveCalls(t)
 	if len(calls) == 0 {
@@ -1063,7 +1063,7 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	// The meters are published on engine.BudgetReportInterval, so one
 	// carrying the refusal lands within an interval of it at the latest.
 	waitFor(t, "a budget push carrying the refusal", func() bool {
-		return frames.sawRefusal(t, "CFO")
+		return frames.sawRefusal(t, "cfo")
 	})
 	cancel()
 

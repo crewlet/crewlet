@@ -103,13 +103,13 @@ func beginCall(env Envelope, payload map[string]any) *LiveCall {
 const openingRound = -1
 
 // applyProgress folds one progress round into the in-flight call, returning the
-// role whose call moved or "" when the round was stale.
+// handle of the seat whose call moved or "" when the round was stale.
 func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
-	role := str(payload, "role", "agent_role")
-	if role == "" {
+	handle := str(payload, "agent_handle")
+	if handle == "" {
 		return ""
 	}
-	agent := s.ensureAgent(role)
+	agent := s.ensureAgent(handle)
 	if id := str(payload, "agent_id"); id != "" {
 		agent.runtimeID = id
 	}
@@ -154,7 +154,7 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 			}
 			cur.Versions = s.restamp(&was, cur)
 			agent.liveCallSeq = s.versions
-			return role
+			return handle
 		}
 		// A stale earlier round of the SAME call is ignored.
 		if roundNum < cur.RoundNum {
@@ -269,7 +269,7 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 	}
 	agent.liveCall.Versions = s.restamp(held, agent.liveCall)
 	agent.liveCallSeq = s.versions
-	return role
+	return handle
 }
 
 // recordPhaseFailure remembers a failed phase and FREEZES its call rather than

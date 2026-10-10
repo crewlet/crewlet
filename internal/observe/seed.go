@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
@@ -33,7 +33,7 @@ type Seeded interface {
 	Seed(livestate.History) livestate.Change
 }
 
-// SeedTurnsPerRole is how many of a seat's newest turns the seed reads to find
+// SeedTurnsPerSeat is how many of a seat's newest turns the seed reads to find
 // the last one it ENDED.
 //
 // THREE, because a seat runs one turn at a time: its newest turn may be the one
@@ -44,7 +44,7 @@ type Seeded interface {
 // asked per seat, rather than as one company-wide page, because a page of the
 // company's newest turns says nothing about a seat that has been quiet longer
 // than everyone else's recent work.
-const SeedTurnsPerRole = 3
+const SeedTurnsPerSeat = 3
 
 // seedTurnReads is how many seats' turn reads are in flight at once.
 //
@@ -77,8 +77,10 @@ const seedTurnReads = 16
 //     inside the seed's time budget, only to be cut to the cap on arrival.
 //     Read in pages ([eventfan.Fleet.PhaseTokens]), because the cap is more
 //     than one node's reply carries;
-//   - each seat's newest [SeedTurnsPerRole] turns, for the seat's last turn
-//     and a turn it left parked on a coding run.
+//   - each seat's newest [SeedTurnsPerSeat] turns, for the seat's last turn
+//     and a turn it left parked on a coding run — asked BY THE SEAT'S DERIVED
+//     AGENT ID, the one name a stored turn carries that no other seat shares,
+//     and handed to the projection under the seat's handle.
 //
 // FROM EVERY NODE. Each node's event store holds what that node published, so a
 // seed read from this node's alone showed a restarted node only its own share
@@ -107,7 +109,7 @@ const seedTurnReads = 16
 // spent that whole budget and handed the next an expired context, so one slow
 // read cost them all. Side by side, each has the caller's whole budget and the
 // seed costs the slowest of them rather than their sum.
-func Seed(ctx context.Context, history FleetHistory, roles []string, live Seeded) error {
+func Seed(ctx context.Context, history FleetHistory, seats []config.AgentSeat, live Seeded) error {
 	var (
 		h      livestate.History
 		wg     sync.WaitGroup
@@ -147,7 +149,7 @@ func Seed(ctx context.Context, history FleetHistory, roles []string, live Seeded
 		}
 	})
 	wg.Go(func() {
-		turns, cs, asked, err := seedTurns(ctx, history, roles)
+		turns, cs, asked, err := seedTurns(ctx, history, seats)
 		// A company with no agent seat asks nobody anything, and a read
 		// that was never made says nothing about who answered it.
 		if !asked {
@@ -157,7 +159,7 @@ func Seed(ctx context.Context, history FleetHistory, roles []string, live Seeded
 		// nothing, and this is one read per seat. A seat whose read
 		// failed costs that seat — its error is reported and the seed is
 		// incomplete — while every seat that WAS read keeps its last turn
-		// and its parked turn. Routed through report, one silent role
+		// and its parked turn. Routed through report, one silent seat
 		// dropped every seat's turns.
 		mu.Lock()
 		defer mu.Unlock()
@@ -174,51 +176,55 @@ func Seed(ctx context.Context, history FleetHistory, roles []string, live Seeded
 	return errors.Join(errs...)
 }
 
-// seedTurns reads each role's newest turns, [seedTurnReads] roles at a time,
-// and reports whether it asked anybody anything.
+// seedTurns reads each seat's newest turns, [seedTurnReads] seats at a time,
+// keyed by the seat's handle, and reports whether it asked anybody anything.
 //
-// A role whose read fails costs that role, not the others: its turns are
+// A seat whose read fails costs that seat, not the others: its turns are
 // missing and its error is returned, while the turns and the coverage of every
 // read that succeeded are returned beside it. The coverage is returned read by
 // read rather than combined, so the caller folds it into the seed's own
 // combination exactly as it does its other reads.
-func seedTurns(ctx context.Context, history FleetHistory, roles []string) (
-	[]store.Turn, []eventfan.Coverage, bool, error,
+func seedTurns(ctx context.Context, history FleetHistory, seats []config.AgentSeat) (
+	map[string][]store.Turn, []eventfan.Coverage, bool, error,
 ) {
 	var (
 		mu     sync.Mutex
-		out    []store.Turn
+		out    = map[string][]store.Turn{}
 		covers []eventfan.Coverage
 		errs   []error
 		wg     sync.WaitGroup
 		slots  = make(chan struct{}, seedTurnReads)
 	)
 	asked := false
-	for _, role := range slices.Compact(slices.Sorted(slices.Values(roles))) {
-		if role == "" {
+	seen := map[string]bool{}
+	for _, seat := range seats {
+		// A seat with no id has no turns a store could index, and one
+		// listed twice is read once.
+		if seat.Handle == "" || seat.AgentID == "" || seen[seat.Handle] {
 			continue
 		}
+		seen[seat.Handle] = true
 		asked = true
 		wg.Go(func() {
 			select {
 			case slots <- struct{}{}:
 			case <-ctx.Done():
 				mu.Lock()
-				errs = append(errs, fmt.Errorf("role %s: %w", role, ctx.Err()))
+				errs = append(errs, fmt.Errorf("seat %s: %w", seat.Handle, ctx.Err()))
 				mu.Unlock()
 				return
 			}
 			defer func() { <-slots }()
 			page, c, err := history.Turns(ctx, store.TurnQuery{
-				AgentRole: role, Sort: store.TurnSortStarted, Limit: SeedTurnsPerRole,
+				AgentID: seat.AgentID, Sort: store.TurnSortStarted, Limit: SeedTurnsPerSeat,
 			})
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
-				errs = append(errs, fmt.Errorf("role %s: %w", role, err))
+				errs = append(errs, fmt.Errorf("seat %s: %w", seat.Handle, err))
 				return
 			}
-			out = append(out, page.Turns...)
+			out[seat.Handle] = page.Turns
 			covers = append(covers, c)
 		})
 	}

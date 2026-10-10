@@ -96,7 +96,7 @@ type Service struct {
 type HandleFunc func() map[string]string
 
 // PlacementFunc reads which of the company's agent seats some node in the fleet
-// holds, keyed by role: every agent seat in the company, true where a node
+// holds, keyed by handle: every agent seat in the company, true where a node
 // holds it. An error is a read that did not happen, never "none are held".
 type PlacementFunc func() (map[string]bool, error)
 
@@ -290,10 +290,10 @@ func (s *Service) pushAgents(change livestate.Change, now time.Time) {
 	// Sorted, so a push carrying two seats is byte-stable across runs — Go
 	// map iteration is randomised, and a frame whose row order changes for
 	// no reason makes a diff of two captures unreadable.
-	roles := slices.Sorted(maps.Keys(change.Agents))
+	handles := slices.Sorted(maps.Keys(change.Agents))
 	s.pushMu.Lock()
 	defer s.pushMu.Unlock()
-	rows := s.state.OverlayRows(roles)
+	rows := s.state.OverlayRows(handles)
 	if len(rows) == 0 {
 		return
 	}
@@ -316,14 +316,14 @@ type pushedCall struct {
 //
 // Called under pushMu.
 func (s *Service) leaveOutWhatIsHeld(row map[string]any) {
-	role, _ := row["role"].(string)
+	handle, _ := row["handle"].(string)
 	call, _ := row["live_call"].(*livestate.LiveCall)
 	if call == nil {
-		delete(s.pushed, role)
+		delete(s.pushed, handle)
 		return
 	}
-	last, ok := s.pushed[role]
-	s.pushed[role] = pushedCall{key: call.Key(), versions: call.Versions}
+	last, ok := s.pushed[handle]
+	s.pushed[handle] = pushedCall{key: call.Key(), versions: call.Versions}
 	if ok && last.key == call.Key() {
 		row["live_call"] = call.Without(last.versions)
 	}

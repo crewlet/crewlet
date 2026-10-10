@@ -107,7 +107,7 @@ func TestEveryEventReadIsFlooredAtTheInstantItIsAskedAt(t *testing.T) {
 			return len(rows), err
 		}},
 		{"AgentPhases", func(at time.Time) (int, error) {
-			rows, _, err := log.AgentPhases(ctx, "id-pm", "", nil, at)
+			rows, _, err := log.AgentPhases(ctx, "id-pm", nil, at)
 			return len(rows), err
 		}},
 	} {

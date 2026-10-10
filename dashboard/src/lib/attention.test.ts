@@ -310,20 +310,13 @@ describe("what it surfaces", () => {
   });
 
   // A SEAT'S ROW OPENS ITS PAGE BY HANDLE, the one address that page
-  // resolves. A row the overlay appended for a seat the roster does not list
-  // yet carries no handle — its `id` is the role name — so it links nowhere
-  // rather than to "No seat called".
-  test("a seat's row links its page by handle, and a row with none links nowhere", () => {
+  // resolves — never by its name, which two seats can share.
+  test("a seat's row links its page by handle", () => {
     const refusing = { windows: [win({ state: "refusing", refused_at: "2026-01-01T11:59:00Z" })] };
     const [linked] = attentionQueue(
       input({ agents: [{ id: "dev-a", role: "Dev A", handle: "dev-a", budget: refusing }] }),
     );
     expect(linked?.path).toEqual(["agents", "seats", "dev-a"]);
-    const [unlisted] = attentionQueue(
-      input({ agents: [{ id: "Dev A", role: "Dev A", budget: refusing }] }),
-    );
-    expect(unlisted?.id).toBe("seat-budget-Dev A");
-    expect(unlisted?.path).toBeUndefined();
   });
 
   // THE ADVICE IS ONE AN OPERATOR CAN TAKE. The counters are windowed and
@@ -359,6 +352,7 @@ describe("what it surfaces", () => {
         agents: [
           {
             id: "a",
+            handle: "a",
             role: "Dev A",
             last_error: {
               kind: "llm_unavailable",
@@ -639,6 +633,7 @@ describe("ordering", () => {
         agents: [
           {
             id: "a",
+            handle: "a",
             role: "Dev A",
             last_error: {
               kind: "llm_unavailable",
@@ -665,8 +660,8 @@ describe("ordering", () => {
         connected: false,
         engine: healthFrame({ configured: false }),
         agents: [
-          { id: "a", role: "A", activity: "stopped", stopped_reason: "provider" },
-          { id: "b", role: "B", activity: "stopped", stopped_reason: "provider" },
+          { id: "a", handle: "a", role: "A", activity: "stopped", stopped_reason: "provider" },
+          { id: "b", handle: "b", role: "B", activity: "stopped", stopped_reason: "provider" },
         ],
       }),
     );

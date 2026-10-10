@@ -547,11 +547,11 @@ func (c Change) Moved() bool {
 	return len(c.Agents) > 0 || c.Sandboxes || c.Tokens || c.Events || c.Budget
 }
 
-func (c *Change) agentMoved(role string) {
+func (c *Change) agentMoved(handle string) {
 	if c.Agents == nil {
 		c.Agents = map[string]struct{}{}
 	}
-	c.Agents[role] = struct{}{}
+	c.Agents[handle] = struct{}{}
 }
 
 // --- payload accessors ------------------------------------------------- //

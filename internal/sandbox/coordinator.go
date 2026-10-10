@@ -1218,7 +1218,7 @@ func (c *Coordinator) publishPhase(ctx context.Context, run PendingRun, result R
 // interval is inside it, and the coding itself is the rest.
 func runPhase(run PendingRun, facts LaunchRecord, result Result, collected time.Time) types.AgentPhaseCompleted {
 	rec := types.AgentPhaseCompleted{
-		Agent: run.AgentID, RoleName: run.Role,
+		Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
 		TurnID: run.TurnID, WorkKey: run.WorkKey,
 		Iteration: facts.Iteration, Phase: types.PhaseSandbox,
 		Model: facts.Model,

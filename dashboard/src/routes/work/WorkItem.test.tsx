@@ -40,6 +40,7 @@ import { DECISION_QUESTION_MAX_BYTES } from "~/contract/work.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { rosterOf } from "~/test/seats.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -220,7 +221,7 @@ function mount(
   const store = new Store();
   store.applyHealth(healthFrame({ nodes: 1 }));
   store.applyOrg(withDerived(ORG) as never);
-  store.applyAgents(agents as never);
+  rosterOf(store, agents as never);
   const socket = new LiveSocket(store);
   socket.query = ((what: string, params?: Record<string, unknown>) => {
     asked.push({ kind: what, params: params ?? {} });

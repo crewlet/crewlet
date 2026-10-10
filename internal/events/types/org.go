@@ -71,8 +71,14 @@ func (e OrgStopped) SummaryFor(actor string) string {
 
 // AgentSpawned marks a seat starting to run on this node.
 type AgentSpawned struct {
-	Agent    string `json:"agent_id"`
-	RoleName string `json:"role"`
+	// Agent is the seat's DERIVED agent id, as on every other seat event.
+	// It used to carry the handle, so the one field every reader joins a
+	// seat's events on held a different kind of value on these two types
+	// than on the rest.
+	Agent string `json:"agent_id"`
+	// AgentHandle is the seat's identity — see [AgentPhaseStarted.AgentHandle].
+	AgentHandle string `json:"agent_handle"`
+	RoleName    string `json:"role"`
 }
 
 // EventType is the "agent_spawned" wire type.
@@ -81,7 +87,7 @@ func (AgentSpawned) EventType() string { return "agent_spawned" }
 // Role is the seat that was filled.
 func (e AgentSpawned) Role() string { return e.RoleName }
 
-// AgentID is the handle now holding the seat.
+// AgentID is the seat's derived agent id.
 func (e AgentSpawned) AgentID() string { return e.Agent }
 
 // SummaryFor leads with the seat, which the actor chain resolves from Role.
@@ -89,9 +95,12 @@ func (e AgentSpawned) SummaryFor(actor string) string { return lead(actor, "join
 
 // AgentTerminated marks a seat leaving this node.
 type AgentTerminated struct {
-	Agent    string `json:"agent_id"`
-	RoleName string `json:"role"`
-	Reason   string `json:"reason"`
+	// Agent is the seat's derived agent id — see [AgentSpawned.Agent].
+	Agent string `json:"agent_id"`
+	// AgentHandle is the seat's identity — see [AgentPhaseStarted.AgentHandle].
+	AgentHandle string `json:"agent_handle"`
+	RoleName    string `json:"role"`
+	Reason      string `json:"reason"`
 }
 
 // EventType is the "agent_terminated" wire type.
@@ -100,7 +109,7 @@ func (AgentTerminated) EventType() string { return "agent_terminated" }
 // Role is the seat being emptied.
 func (e AgentTerminated) Role() string { return e.RoleName }
 
-// AgentID is the handle giving the seat up.
+// AgentID is the seat's derived agent id.
 func (e AgentTerminated) AgentID() string { return e.Agent }
 
 // SummaryFor appends the reason when one was given: a seat released because a

@@ -81,25 +81,27 @@ func (s *LiveState) applyBudget(env Envelope, payload map[string]any) (change Ch
 
 	// Only metered seats are reported. A seat that LOST its meter — a cap
 	// removed, a role decommissioned — must lose its bar rather than keep
-	// the last figure it had.
+	// the last figure it had. Keyed on the seat's HANDLE, which the report
+	// names beside its role, for the reason every seat here is (see the
+	// package doc).
 	reported := map[string]struct{}{}
 	for _, seat := range report.Seats {
-		if seat.Role == "" {
+		if seat.Handle == "" {
 			continue
 		}
-		reported[seat.Role] = struct{}{}
-		agent := s.ensureAgent(seat.Role)
+		reported[seat.Handle] = struct{}{}
+		agent := s.ensureAgent(seat.Handle)
 		if agent.runtimeID == "" {
 			agent.runtimeID = seat.AgentID
 		}
 		agent.budget = &BudgetMeter{Windows: seat.Windows}
-		change.agentMoved(seat.Role)
+		change.agentMoved(seat.Handle)
 	}
 	for _, agent := range s.agents {
 		if agent.budget != nil {
-			if _, ok := reported[agent.role]; !ok {
+			if _, ok := reported[agent.handle]; !ok {
 				agent.budget = nil
-				change.agentMoved(agent.role)
+				change.agentMoved(agent.handle)
 			}
 		}
 	}

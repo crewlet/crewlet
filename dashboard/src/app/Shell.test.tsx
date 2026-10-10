@@ -29,6 +29,7 @@ import { healthFrame } from "~/test/health.ts";
 import { emptyDay } from "~/test/myWork.ts";
 import { withDerived } from "~/test/org.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { rosterOf } from "~/test/seats.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -317,12 +318,16 @@ describe("the sidebar's figures", () => {
     const { store, socket } = answering({});
     mountShell(store, socket);
     act(() =>
-      store.applyAgents([
+      rosterOf(store, [
         { role: "A", activity: "working" },
         { role: "B", activity: "working" },
-        { role: "C", activity: "idle", live_call: { in_progress: true, versions: ZERO_VERSIONS } },
+        {
+          role: "C",
+          activity: "idle",
+          live_call: { in_progress: true, versions: ZERO_VERSIONS } as never,
+        },
         { role: "D", activity: "needs" },
-      ] as never),
+      ]),
     );
     expect(screen.getByRole("link", { name: /^Live/ }).textContent).toContain("2");
     expect(screen.getByRole("link", { name: /^Agents/ }).textContent).toBe("Agents");
@@ -370,11 +375,12 @@ describe("the sidebar's figures", () => {
     mountShell(store, socket);
     expect(runningRows(), "no group while nothing runs").toEqual([]);
     act(() =>
-      store.applyAgents([
+      rosterOf(store, [
         workingSeat("CTO", "t-late", 9),
         workingSeat("SWE", "t-early", 1, "ENG-412"),
         { role: "PM", handle: "pm", activity: "needs" },
         { role: "QA", handle: "qa", activity: "idle" },
+        { role: "Ops", handle: "ops", activity: "idle" },
       ] as never),
     );
     const rows = runningRows();
@@ -399,7 +405,7 @@ describe("the sidebar's figures", () => {
     const { store, socket } = answering({});
     mountShell(store, socket);
     act(() =>
-      store.applyAgents([
+      rosterOf(store, [
         workingSeat("A", "t-a", 1),
         { role: "Fresh", handle: "fresh", activity: "working", turn: null, live_call: null },
         workingSeat("B", "t-b", 2),
@@ -435,7 +441,7 @@ describe("the sidebar's figures", () => {
     });
     mountShell(store, socket, <Home key="home" />);
     act(() =>
-      store.applyAgents([
+      rosterOf(store, [
         workingSeat("A", "t-a", 1),
         { role: "Fresh", handle: "fresh", activity: "working", turn: null, live_call: null },
         workingSeat("B", "t-b", 2),
@@ -482,7 +488,7 @@ describe("the sidebar's figures", () => {
     const { store, socket } = answering({});
     mountShell(store, socket);
     act(() =>
-      store.applyAgents([
+      rosterOf(store, [
         { role: "P", handle: "p", activity: "working", turn: null, live_call: null },
         { role: "Q", handle: "q", activity: "working", turn: null, live_call: null },
       ] as never),
@@ -499,7 +505,7 @@ describe("the sidebar's figures", () => {
     location.hash = watching("t-b");
     const { store, socket } = answering({});
     mountShell(store, socket);
-    act(() => store.applyAgents([workingSeat("A", "t-a", 1), workingSeat("B", "t-b", 2)] as never));
+    act(() => rosterOf(store, [workingSeat("A", "t-a", 1), workingSeat("B", "t-b", 2)] as never));
     const nav = screen.getByRole("navigation", { name: "Navigation" });
     const current = [...nav.querySelectorAll('a[aria-current="page"]')].map((a) =>
       a.getAttribute("href"),
@@ -519,6 +525,12 @@ describe("the sidebar's figures", () => {
         window.dispatchEvent(new KeyboardEvent("keydown", { key: "g", bubbles: true }));
         window.dispatchEvent(new KeyboardEvent("keydown", { key: "r", bubbles: true }));
       });
+    act(() =>
+      rosterOf(store, [
+        { role: "A", activity: "idle" },
+        { role: "B", activity: "idle" },
+      ]),
+    );
     chord();
     expect(location.hash).toBe("#/live");
     location.hash = "#/";

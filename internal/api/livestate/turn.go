@@ -179,12 +179,12 @@ func (s *LiveState) applyTurnStarted(agent *agentLive, env Envelope, payload map
 // turn that launched it is still running and goes on to complete on its own —
 // so a turn in any other stage only learns that it carried a failure.
 func (s *LiveState) endLostRun(env Envelope, payload map[string]any) bool {
-	role := str(payload, "role", "agent_role")
+	handle := str(payload, "agent_handle")
 	turnID := str(payload, "turn_id")
-	if role == "" || turnID == "" {
+	if handle == "" || turnID == "" {
 		return false
 	}
-	agent := s.agents[role]
+	agent := s.agents[handle]
 	if agent == nil {
 		return false
 	}

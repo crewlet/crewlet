@@ -283,7 +283,6 @@ type traceRowsParams struct {
 
 type turnsParams struct {
 	SinceDays int            `json:"since_days,omitempty"`
-	AgentRole string         `json:"role,omitempty"`
 	AgentID   string         `json:"agent_id,omitempty"`
 	Model     string         `json:"model,omitempty"`
 	WorkKey   string         `json:"work_key,omitempty"`
@@ -308,7 +307,7 @@ type turnsParams struct {
 func turnsParamsOf(q store.TurnQuery) turnsParams {
 	p := turnsParams{
 		Since: q.Since, Until: q.Until, At: q.At,
-		SinceDays: q.SinceDays, AgentRole: q.AgentRole, AgentID: q.AgentID,
+		SinceDays: q.SinceDays, AgentID: q.AgentID,
 		Model: q.Model, WorkKey: q.WorkKey, WorkItem: q.WorkItem,
 		Failed: q.Failed, Sort: q.Sort, Limit: q.Limit,
 	}
@@ -323,7 +322,7 @@ func turnsParamsOf(q store.TurnQuery) turnsParams {
 func (p turnsParams) query(ids []string) store.TurnQuery {
 	q := store.TurnQuery{
 		Since: p.Since, Until: p.Until, At: p.At,
-		SinceDays: p.SinceDays, AgentRole: p.AgentRole, AgentID: p.AgentID,
+		SinceDays: p.SinceDays, AgentID: p.AgentID,
 		Model: p.Model, WorkKey: p.WorkKey, WorkItem: p.WorkItem,
 		Failed: p.Failed, Sort: p.Sort, Limit: p.Limit,
 		IDs: ids,
@@ -334,12 +333,11 @@ func (p turnsParams) query(ids []string) store.TurnQuery {
 	return q
 }
 
-// phasesParams is both phase questions' parameters. The company's phases read
-// only AgentID and a seat's read both, since a seat's history is matched by
-// either identifier its rows were written under.
+// phasesParams is both phase questions' parameters: a seat is named by its
+// derived agent id in each (see [store.EventLog.AgentPhases] for why never by
+// its role name), and only the company's read takes a limit.
 type phasesParams struct {
 	AgentID string      `json:"agent_id,omitempty"`
-	Role    string      `json:"role,omitempty"`
 	Limit   int         `json:"limit,omitempty"`
 	Before  *cursorWire `json:"before,omitempty"`
 
@@ -351,10 +349,9 @@ type phasesParams struct {
 // cuts the same one rather than each counting back from its own clock — and
 // the instant it was cut against, so every node floors it there too.
 type phaseTokenParams struct {
-	Since     time.Time `json:"since"`
-	Until     time.Time `json:"until"`
-	AgentRole string    `json:"role,omitempty"`
-	Limit     int       `json:"limit,omitempty"`
+	Since time.Time `json:"since"`
+	Until time.Time `json:"until"`
+	Limit int       `json:"limit,omitempty"`
 
 	// Before is the record a paged read resumes below — see
 	// [Fleet.PhaseTokens].
@@ -365,12 +362,12 @@ type phaseTokenParams struct {
 }
 
 func phaseTokenParamsOf(q store.PhaseTokenQuery) phaseTokenParams {
-	return phaseTokenParams{Since: q.Since, Until: q.Until, AgentRole: q.AgentRole,
+	return phaseTokenParams{Since: q.Since, Until: q.Until,
 		Limit: q.Limit, Before: cursorOf(q.Before), At: q.At}
 }
 
 func (p phaseTokenParams) query() store.PhaseTokenQuery {
-	return store.PhaseTokenQuery{Since: p.Since, Until: p.Until, AgentRole: p.AgentRole,
+	return store.PhaseTokenQuery{Since: p.Since, Until: p.Until,
 		Limit: p.Limit, Before: p.Before.cursor(), At: p.At}
 }
 
@@ -517,7 +514,7 @@ func answer(ctx context.Context, log *store.EventLog, q Question, params json.Ra
 		if err := decode(&p, func() time.Time { return p.At }); err != nil {
 			return nil, err
 		}
-		rows, more, err := log.AgentPhases(ctx, p.AgentID, p.Role, p.Before.cursor(), p.At)
+		rows, more, err := log.AgentPhases(ctx, p.AgentID, p.Before.cursor(), p.At)
 		if err != nil {
 			return nil, err
 		}

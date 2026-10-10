@@ -46,7 +46,7 @@ func TestAConnectingTabLeavesTheTicksPushToTheOpenOnes(t *testing.T) {
 
 	s.Ingest(livestate.Envelope{
 		ID: "p1", Type: "agent_phase_completed", Timestamp: start.Format(time.RFC3339Nano),
-		Category: "agent", Payload: map[string]any{"role": "Lead", "phase": "plan", "total_tokens": 10},
+		Category: "agent", Payload: map[string]any{"role": "Lead", "agent_handle": "Lead", "phase": "plan", "total_tokens": 10},
 	})
 	s.flushTokens()
 	if got := pushedRollups(open); len(got) != 1 || got[0].Totals.TotalTokens != 10 {

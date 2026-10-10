@@ -439,7 +439,9 @@ export type CallVersions = Record<keyof typeof LIVE_CALL_DETAIL, number>;
 
 /** The `live_call{role}` answer: one seat's call in flight, whole, or null. */
 export interface LiveCallAnswer {
-  role: string;
+  /** The seat the call is on, by its handle — the key every live surface
+   *  addresses a seat by. */
+  handle: string;
   live_call: LiveCall | null;
   /** The overlay sequence this call is at — see `Overlay.live_call_seq`, and
    *  present beside a null call too. The answer can reach the tab after a push
@@ -522,13 +524,19 @@ export interface Overlay {
   paused?: Paused | null;
 }
 
-/** A seat row: static config identity, plus whatever overlay has been merged. */
+/**
+ * A seat row: static config identity, plus whatever overlay has been merged.
+ *
+ * KEYED BY `handle`, the seat's identity — every overlay is merged onto the row
+ * of the same handle. `role` is the seat's NAME, a label two seats can share (a
+ * revision a newer node admitted, or one stored before the duplicate-name rule),
+ * so nothing looks a row up by it.
+ */
 export interface AgentRow extends Overlay {
   id: string;
   agent_id?: string;
   role: string;
-  handle?: string;
-  /** Set by `applyAgents` when an overlay names a role the roster lacks. */
+  handle: string;
   [key: string]: unknown;
 }
 
@@ -3346,6 +3354,10 @@ export interface SandboxTailAnswer {
 
 /** A seat's phase history, newest first, with a cursor. */
 export interface AgentAnswer {
+  /** The seat asked about, by handle. */
+  handle: string;
+  /** The seat's name, for display: the handle itself for a seat the company
+   *  no longer has. */
   role: string;
   live: Overlay | null;
   llm_history: EventRecord[];

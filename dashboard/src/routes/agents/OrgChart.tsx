@@ -125,7 +125,9 @@ export function OrgChart() {
   const projectRows = projects.error ? undefined : projects.data?.projects;
   const chart = useMemo(() => buildOrgChart(index, projectRows ?? []), [index, projectRows]);
   const counts = useMemo(() => stateCounts(index, agents), [index, agents]);
-  const byRole = useMemo(() => new Map(agents.map((a) => [a.role, a])), [agents]);
+  // BY HANDLE, the seat's identity: a role name is a label two seats can
+  // share, and a map keyed on it drew one seat's live state on both cards.
+  const byHandle = useMemo(() => new Map(agents.map((a) => [a.handle, a])), [agents]);
 
   const view = useRef<TreeCanvasHandle>(null);
   const peek = usePeek();
@@ -259,7 +261,7 @@ export function OrgChart() {
       {phone ? (
         <OrgOutline
           chart={chart}
-          byRole={byRole}
+          byHandle={byHandle}
           counts={counts}
           now={now}
           nameOf={nameOf}
@@ -298,7 +300,7 @@ export function OrgChart() {
               return seat ? (
                 <SeatCardNode
                   seat={seat}
-                  agent={byRole.get(seat.name)}
+                  agent={byHandle.get(seat.handle)}
                   card={card}
                   now={now}
                   nameOf={nameOf}
@@ -336,7 +338,7 @@ export function OrgChart() {
  */
 function OrgOutline({
   chart,
-  byRole,
+  byHandle,
   counts,
   now,
   nameOf,
@@ -345,7 +347,7 @@ function OrgOutline({
   onOpen,
 }: {
   chart: ReturnType<typeof buildOrgChart>;
-  byRole: ReadonlyMap<string, AgentRow>;
+  byHandle: ReadonlyMap<string, AgentRow>;
   counts: StateCounts;
   now: number;
   nameOf: NameOf;
@@ -380,7 +382,7 @@ function OrgOutline({
           return seat ? (
             <SeatRowCell
               seat={seat}
-              agent={byRole.get(seat.name)}
+              agent={byHandle.get(seat.handle)}
               now={now}
               nameOf={nameOf}
               tabIndex={grid.tabStop(id, column) ? 0 : -1}

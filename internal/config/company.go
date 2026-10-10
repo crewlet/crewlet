@@ -1112,22 +1112,42 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 	}
 }
 
-// AgentRoles is the name of every seat the engine runs a turn for — every role
-// in the company, in a unit or at the root, bar the human ones, which have no
-// turn. Nil on a nil company (no active revision).
+// AgentSeat is one seat the engine runs a turn for, by both of its identities:
+// the HANDLE every live surface keys the seat on, and the DERIVED AGENT ID a
+// stored turn is indexed by.
+//
+// NOT ITS NAME. A role name is a label two seats can share — the duplicate-name
+// rule is an admission rule, so a stored revision runs with a collision — and
+// the live projection's boot seed read each seat's turns by it, which handed
+// two seats one list and the newest turn of either to both.
+type AgentSeat struct {
+	Handle  string
+	AgentID string
+}
+
+// AgentSeats is every seat the engine runs a turn for — every role in the
+// company, in a unit or at the root, bar the human ones, which have no turn —
+// in the organization's own order. Nil on a nil company (no active revision)
+// and on one that does not resolve into an organization, which no node runs.
 //
 // HERE rather than beside its first caller, because the live projection's boot
 // seed is keyed by it and two wirings build that seed — `crewlet run` and the
 // end-to-end harness that has to wire a node the way it does. Two copies of
 // "which seats have turns" are two answers to which seats a screen seeds.
-func (c *Company) AgentRoles() []string {
+func (c *Company) AgentSeats() []AgentSeat {
 	if c == nil {
 		return nil
 	}
-	var out []string
-	for role := range c.EachRole() {
-		if role.Name != "" && role.Kind != org.KindHuman {
-			out = append(out, role.Name)
+	organization, err := c.Organization()
+	if err != nil {
+		return nil
+	}
+	var out []AgentSeat
+	for role := range organization.AllRoles() {
+		// AgentIDFor refuses a human seat by contract, so the one call both
+		// filters them and produces the id.
+		if id, ok := organization.AgentIDFor(role); ok {
+			out = append(out, AgentSeat{Handle: role.Handle(), AgentID: id.String()})
 		}
 	}
 	return out

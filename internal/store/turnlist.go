@@ -250,10 +250,9 @@ type TurnQuery struct {
 	Since time.Time
 	Until time.Time
 
-	// AgentRole and AgentID each narrow to one seat; a caller passes
-	// whichever it holds, for [EventLog.AgentPhases]' own reason.
-	AgentRole string
-	AgentID   string
+	// AgentID narrows to one seat, by its derived agent id — never by its
+	// role name, for [EventLog.AgentPhases]' own reason.
+	AgentID string
 
 	// Model narrows to turns whose COST used one — a phase or an in-turn
 	// auxiliary call, the rows the turn's Models lists.
@@ -1011,12 +1010,11 @@ func (q TurnQuery) turnWhere(floor time.Time, read turnRead) ([]string, []any) {
 			args = append(args, id)
 		}
 	}
-	// ONLY THE IDENTIFIERS THE CALLER HOLDS — binding an empty one matches
-	// every row that carries none, which is every non-agent event in the
-	// window. See [seatClause].
-	if clause, ids := seatClause(q.AgentID, q.AgentRole); clause != "" {
-		where = append(where, strings.TrimPrefix(clause, " AND "))
-		args = append(args, ids...)
+	// ONLY WHEN THE CALLER NAMED A SEAT — binding an empty id matches every
+	// row that carries none, which is every non-agent event in the window.
+	if q.AgentID != "" {
+		where = append(where, "agent_id = ?")
+		args = append(args, q.AgentID)
 	}
 	if q.WorkKey != "" {
 		// WITH THE PARTIAL INDEX'S OWN PREDICATE, which is what lets the

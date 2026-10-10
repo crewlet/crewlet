@@ -33,6 +33,7 @@ import type {
 } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
+import { rosterOf } from "~/test/seats.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -494,7 +495,7 @@ test("a seat whose day is refusing reads exhausted, and share and per-turn are t
     <Spend />,
     { tokens: rollup(4_000, { by_agent: [ceo, swe] }), viewer: VIEWER },
     (store) =>
-      store.applyAgents([
+      rosterOf(store, [
         {
           role: "SWE",
           handle: "swe",

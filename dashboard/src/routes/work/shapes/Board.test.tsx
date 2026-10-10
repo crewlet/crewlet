@@ -25,6 +25,7 @@ import type { WorkGroup, WorkSummary } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { rosterOf } from "~/test/seats.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -120,7 +121,7 @@ function client(viewer: Record<string, unknown>, agents: Record<string, unknown>
   const store = new Store();
   store.applyHealth(healthFrame({ nodes: 1 }));
   store.applyOrg(withDerived(ORG) as never);
-  store.applyAgents(agents as never);
+  rosterOf(store, agents as never);
   const socket = new LiveSocket(store);
   const asked: { kind: string; params: Record<string, unknown> }[] = [];
   const answers: Record<string, unknown> = { viewer };

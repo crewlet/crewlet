@@ -39,9 +39,11 @@ func dayWindow(used, limit int, refused string) map[string]any {
 	return w
 }
 
-func seatMeter(role string, used, max int) map[string]any {
+// seatMeter is one seat's line of a report, its handle the name it is given:
+// the projection keys a meter on the handle, as it keys every seat.
+func seatMeter(handle string, used, max int) map[string]any {
 	return map[string]any{
-		"role": role, "agent_id": "a-1", "handle": strings.ToLower(role),
+		"role": handle, "agent_id": "a-1", "handle": handle,
 		"windows": []any{dayWindow(used, max, "")},
 	}
 }
@@ -79,7 +81,7 @@ func TestAMeterReportCarriesEachWindowsRefusalAndState(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
 	report := meterReport("m-1", 1, map[string]any{
-		"role": "Lead", "agent_id": "a-1", "handle": "lead",
+		"role": "Lead", "agent_id": "a-1", "handle": "Lead",
 		"windows": []any{dayWindow(400, 400, "2026-06-14T10:00:05.25Z")},
 	})
 	report["org"] = map[string]any{"windows": []any{dayWindow(990, 1000, "2026-06-14T12:00:00Z")}}
@@ -208,7 +210,7 @@ func TestNoMeterReportsAsNoMeter(t *testing.T) {
 	// reporting at all. Either way a bar drawn without one would be a
 	// claim nobody measured.
 	s := livestate.New()
-	s.Apply(env("agent_phase_started", map[string]any{"role": "Lead", "phase": "execute"}))
+	s.Apply(env("agent_phase_started", map[string]any{"role": "Lead", "agent_handle": "Lead", "phase": "execute"}))
 
 	if got := overlayOf(t, s, "Lead").Budget; got != nil {
 		t.Errorf("budget = %+v, want none", got)
@@ -222,7 +224,7 @@ func TestNoMeterReportsAsNoMeter(t *testing.T) {
 
 func phaseSpend(eventID, ts string, total int) *livestate.Envelope {
 	return env("agent_phase_completed", map[string]any{
-		"role": "Lead", "agent_id": "a-1", "phase": "plan",
+		"role": "Lead", "agent_handle": "Lead", "agent_id": "a-1", "phase": "plan",
 		"model": "claude-sonnet-5", "turn_id": "tn-1",
 		"input_tokens": total / 2, "output_tokens": total / 2, "total_tokens": total,
 	}, id(eventID), at(ts))
@@ -442,7 +444,7 @@ func TestTheRollupNamesASeatByItsNewestRecordsID(t *testing.T) {
 	s := stoppedAt(t, "2026-06-14T14:00:00Z")
 	spent := func(eventID, agentID, ts string) *livestate.Envelope {
 		return env("agent_phase_completed", map[string]any{
-			"role": "Lead", "agent_id": agentID, "turn_id": "tn-1", "phase": "execute",
+			"role": "Lead", "agent_handle": "Lead", "agent_id": agentID, "turn_id": "tn-1", "phase": "execute",
 			"total_tokens": 10,
 		}, id(eventID), at(ts))
 	}
@@ -678,7 +680,7 @@ func TestAMeterReportClaimsNothingAboutWhetherASeatIsRunning(t *testing.T) {
 	s.SetPlacement(map[string]bool{"Lead": true})
 	s.Apply(env("budget_meters", meterReport("m-1", 1, seatMeter("Lead", 100, 400)), streamOnly))
 
-	rows := s.MergeAgents([]map[string]any{{"role": "Lead", "handle": "lead"}})
+	rows := s.MergeAgents([]map[string]any{{"role": "Lead", "handle": "Lead"}})
 	if got := rows[0]["activity"]; got != livestate.ActivityIdle {
 		t.Errorf("merged activity = %v, want idle: a meter is not a stop", got)
 	}

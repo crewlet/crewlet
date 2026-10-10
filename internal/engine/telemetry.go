@@ -430,8 +430,9 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 	item, basis := completedWorkItem(t.workItem, t.workItemBasis, t.written, res.Suspended)
 
 	summary := types.AgentTurnCompleted{
-		Agent:    t.agentID,
-		RoleName: t.role,
+		Agent:       t.agentID,
+		AgentHandle: t.handle,
+		RoleName:    t.role,
 		// The model that answered the LAST phase to run, which is what a
 		// one-line row names. The per-phase models are carried beside it
 		// rather than collapsed, because a seat with a fallback chain can
@@ -606,12 +607,13 @@ func (e *Engine) publishFailure(ctx context.Context, t turnTelemetry,
 	// both, and reporting only one would drop the guard that named it.
 	if res.Breach != nil {
 		e.publishEvent(ctx, events.New(types.TurnGuardBreach{
-			Agent:    t.agentID,
-			RoleName: t.role,
-			Kind:     res.Breach.Kind,
-			Detail:   events.ClipDiagnostic(res.Breach.Detail),
-			TurnID:   t.runID,
-			WorkKey:  t.workKey,
+			Agent:       t.agentID,
+			AgentHandle: t.handle,
+			RoleName:    t.role,
+			Kind:        res.Breach.Kind,
+			Detail:      events.ClipDiagnostic(res.Breach.Detail),
+			TurnID:      t.runID,
+			WorkKey:     t.workKey,
 		}, t.trace), t.role)
 	}
 	if err == nil {
@@ -625,16 +627,17 @@ func (e *Engine) publishFailure(ctx context.Context, t turnTelemetry,
 	var budget *toolloop.BudgetError
 	if errors.As(err, &budget) {
 		e.publishEvent(ctx, events.New(types.BudgetExhausted{
-			Agent:      t.agentID,
-			RoleName:   t.role,
-			TurnID:     t.runID,
-			WorkKey:    t.workKey,
-			BudgetType: types.BudgetScope(budget.Scope),
-			UsedTokens: budget.Used,
-			MaxTokens:  budget.Limit,
-			Period:     string(budget.Period),
-			Window:     budget.Window,
-			ResetsAt:   rfc3339(budget.ResetsAt),
+			Agent:       t.agentID,
+			AgentHandle: t.handle,
+			RoleName:    t.role,
+			TurnID:      t.runID,
+			WorkKey:     t.workKey,
+			BudgetType:  types.BudgetScope(budget.Scope),
+			UsedTokens:  budget.Used,
+			MaxTokens:   budget.Limit,
+			Period:      string(budget.Period),
+			Window:      budget.Window,
+			ResetsAt:    rfc3339(budget.ResetsAt),
 		}, t.trace), t.role)
 		return
 	}
@@ -647,6 +650,7 @@ func (e *Engine) publishFailure(ctx context.Context, t turnTelemetry,
 	if errors.As(err, &exhausted) {
 		e.publishEvent(ctx, events.New(types.LLMUnavailable{
 			Agent:         t.agentID,
+			AgentHandle:   t.handle,
 			RoleName:      t.role,
 			ProviderChain: exhausted.Attempted,
 			AttemptCount:  len(exhausted.Attempted),

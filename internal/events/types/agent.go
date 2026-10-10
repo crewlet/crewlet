@@ -322,9 +322,11 @@ func (e AgentTurnStarted) SummaryFor(actor string) string {
 
 // AgentTurnCompleted is the single-phase summary a dashboard reads at turn end.
 type AgentTurnCompleted struct {
-	Agent    string `json:"agent_id"`
-	RoleName string `json:"role"`
-	Model    string `json:"model"`
+	Agent string `json:"agent_id"`
+	// AgentHandle is the seat's identity — see [AgentPhaseStarted.AgentHandle].
+	AgentHandle string `json:"agent_handle"`
+	RoleName    string `json:"role"`
+	Model       string `json:"model"`
 	// Trigger is what woke this turn — see DescribeTrigger.
 	Trigger        Trigger         `json:"trigger"`
 	Prompt         string          `json:"prompt"`
@@ -547,9 +549,17 @@ func (e TurnCompleted) SummaryFor(actor string) string {
 // Not emitted for subagent, judge or auxiliary phases: those nest under a host
 // phase that is already showing.
 type AgentPhaseStarted struct {
-	Agent    string `json:"agent_id"`
-	RoleName string `json:"role"`
-	TurnID   string `json:"turn_id"`
+	Agent string `json:"agent_id"`
+	// AgentHandle is the seat's IDENTITY, and what a live view keys the
+	// seat on. The role is its NAME, which is a label and not a key: two
+	// seats can share one — the duplicate-name rule is an admission rule,
+	// so a stored revision, or one a newer node admitted, runs with a
+	// collision — and a view keyed on the name gave one of them the other's
+	// live state and the other none. Every event that moves a seat's live
+	// state carries it, for that reason.
+	AgentHandle string `json:"agent_handle"`
+	RoleName    string `json:"role"`
+	TurnID      string `json:"turn_id"`
 	// WorkKey is the unit of work this run was dispatched for — see
 	// [AgentPhaseCompleted.WorkKey] and ADR-0017.
 	WorkKey   string `json:"work_key,omitempty"`
@@ -567,8 +577,7 @@ type AgentPhaseStarted struct {
 // EventType is the "agent_phase_started" wire type.
 func (AgentPhaseStarted) EventType() string { return "agent_phase_started" }
 
-// Role is the seat entering the phase; it is what a live view keys the
-// current-phase marker on.
+// Role is the seat entering the phase, by its name.
 func (e AgentPhaseStarted) Role() string { return e.RoleName }
 
 // AgentID is the instance entering the phase.
@@ -589,8 +598,10 @@ func (e AgentPhaseStarted) SummaryFor(actor string) string {
 // times and Iteration tags which; sub-agent spawns emit their own as siblings
 // under the parent Execute phase.
 type AgentPhaseCompleted struct {
-	Agent    string `json:"agent_id"`
-	RoleName string `json:"role"`
+	Agent string `json:"agent_id"`
+	// AgentHandle is the seat's identity — see [AgentPhaseStarted.AgentHandle].
+	AgentHandle string `json:"agent_handle"`
+	RoleName    string `json:"role"`
 	// TurnID names ONE RUN of a turn. (TurnID, Phase, Iteration) is the
 	// identity every reader keys a phase row on — the live projection, the
 	// dashboard's merge, the store's fold — so it has to be unique per
@@ -880,9 +891,11 @@ func (e AgentPhaseCompleted) SummaryFor(actor string) string {
 // consumers correlate these with the turn-grouped history through TurnID,
 // Phase and Iteration, which mirror the same fields on the phase events.
 type AgentTurnProgress struct {
-	Agent    string `json:"agent_id"`
-	RoleName string `json:"role"`
-	TurnID   string `json:"turn_id"`
+	Agent string `json:"agent_id"`
+	// AgentHandle is the seat's identity — see [AgentPhaseStarted.AgentHandle].
+	AgentHandle string `json:"agent_handle"`
+	RoleName    string `json:"role"`
+	TurnID      string `json:"turn_id"`
 	// WorkKey is the unit of work this run was dispatched for — see
 	// [AgentPhaseCompleted.WorkKey] and ADR-0017.
 	WorkKey   string `json:"work_key,omitempty"`

@@ -33,10 +33,17 @@ type History struct {
 	// order. Past [SpendRecordLimit] only the newest are kept.
 	Spend []tokens.Record
 
-	// Turns are each seat's newest turns, in any order: what a seat's last
-	// turn is seeded from, and a turn it left PARKED on a detached coding
-	// run, which is still its turn after the restart.
-	Turns []store.Turn
+	// Turns are each seat's newest turns, in any order, keyed by the HANDLE
+	// of the seat they were read for: what a seat's last turn is seeded
+	// from, and a turn it left PARKED on a detached coding run, which is
+	// still its turn after the restart.
+	//
+	// KEYED BY THE READER, which asked for one seat's turns by its derived
+	// agent id and so knows whose they are. A stored turn names its seat by
+	// that id and by its role NAME, and neither is this projection's key:
+	// the id is not a handle, and the name is a label two seats can share,
+	// which grouped two seats' turns as one and gave the newest to both.
+	Turns map[string][]store.Turn
 
 	// Coverage is which nodes the reads above were answered by. Its
 	// Complete is false when any read failed, since what that read would
@@ -58,8 +65,8 @@ func (s *LiveState) Seed(h History) Change {
 	var change Change
 	change.Events = s.seedFeed(h.Events)
 	change.Tokens = s.seedSpend(h.Spend)
-	for _, role := range s.seedTurns(h.Turns) {
-		change.agentMoved(role)
+	for _, handle := range s.seedTurns(h.Turns) {
+		change.agentMoved(handle)
 	}
 	coverage := h.Coverage
 	coverage.Nodes = slices.Clone(coverage.Nodes)
@@ -82,25 +89,24 @@ func (s *LiveState) SeededFrom() (eventfan.Coverage, bool) {
 }
 
 // seedTurns sets each seat's last turn and parked turn from its stored turns,
-// returning the roles it moved.
+// returning the handles of the seats it moved.
 //
 // Through the same guards the stream moves them under: a last turn replaces
 // only an older one, and a parked turn lands only on a seat the stream has not
 // already put on a turn, and never for a turn the stream has already seen end.
-func (s *LiveState) seedTurns(turns []store.Turn) []string {
-	byRole := map[string][]store.Turn{}
-	for _, t := range turns {
-		if t.AgentRole != "" && t.TurnID != "" {
-			byRole[t.AgentRole] = append(byRole[t.AgentRole], t)
-		}
-	}
+func (s *LiveState) seedTurns(bySeat map[string][]store.Turn) []string {
 	var moved []string
-	for _, role := range slices.Sorted(maps.Keys(byRole)) {
-		list := byRole[role]
+	for _, handle := range slices.Sorted(maps.Keys(bySeat)) {
+		list := slices.DeleteFunc(slices.Clone(bySeat[handle]), func(t store.Turn) bool {
+			return t.TurnID == ""
+		})
+		if handle == "" || len(list) == 0 {
+			continue
+		}
 		slices.SortFunc(list, func(a, b store.Turn) int {
 			return cmp.Or(b.StartedAt.Compare(a.StartedAt), cmp.Compare(b.TurnID, a.TurnID))
 		})
-		agent := s.ensureAgent(role)
+		agent := s.ensureAgent(handle)
 		before := agent.overlay()
 		for _, t := range list {
 			if !t.Complete {
@@ -131,7 +137,7 @@ func (s *LiveState) seedTurns(turns []store.Turn) []string {
 			}
 		}
 		if !sameTurnOverlay(before, agent.overlay()) {
-			moved = append(moved, role)
+			moved = append(moved, handle)
 		}
 	}
 	return moved

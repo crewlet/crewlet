@@ -23,6 +23,7 @@ import { LiveSocket, Store } from "~/protocol/index.ts";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { healthFrame } from "~/test/health.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { rosterOf } from "~/test/seats.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -205,7 +206,7 @@ function mount({
   const store = new Store();
   store.applyHealth(healthFrame({ nodes: 3 }));
   store.applyOrg(ORG as never);
-  store.applyAgents(agents as never);
+  rosterOf(store, agents as never);
   if (budget) store.applyBudget(budget as never);
   const socket = new LiveSocket(store);
   socket.query = ((what: string, params?: Record<string, unknown>) => {

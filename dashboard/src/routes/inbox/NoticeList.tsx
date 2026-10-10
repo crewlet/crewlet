@@ -76,7 +76,7 @@ export function rowWho(row: InboxRow, index: OrgIndex): Who | null {
         case "run":
           return whoOf(index, row.subject.run.agent_handle);
         case "seat":
-          return whoOf(index, row.subject.seat.row.handle ?? row.subject.seat.row.role);
+          return whoOf(index, row.subject.seat.row.handle);
       }
       break;
     case "condition":

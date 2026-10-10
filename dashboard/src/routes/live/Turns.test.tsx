@@ -20,6 +20,7 @@ import type { TurnRow } from "~/protocol/index.ts";
 import { Turns } from "./Turns.tsx";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
+import { rosterOf } from "~/test/seats.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -118,7 +119,7 @@ function mount(turns: TurnRow[], agents: unknown[] = []) {
   const store = new Store();
   store.applyHealth(healthFrame());
   store.applyOrg(withDerived({ roles: [{ name: "CEO", handle: "ceo" }] }));
-  if (agents.length) store.applyAgents(agents);
+  if (agents.length) rosterOf(store, agents as never);
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
     Promise.resolve(

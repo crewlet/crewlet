@@ -43,9 +43,10 @@ func (p *Paused) clone() *Paused {
 }
 
 // SeedPause is one paused seat as the coordination record holds it, named by
-// the ROLE this projection keys seats by.
+// the HANDLE this projection keys seats by — which is also what the record
+// itself is keyed on, so nothing between the two has to resolve a name.
 type SeedPause struct {
-	Role   string
+	Handle string
 	Paused Paused
 }
 
@@ -84,7 +85,7 @@ func (s *LiveState) applyPause(agent *agentLive, env Envelope, payload map[strin
 }
 
 // SeedPauses sets each named seat's pause from the coordination record,
-// reporting the roles it moved.
+// reporting the seats it moved.
 //
 // A seat the stream has already moved keeps what the stream said: that is
 // newer than any record read before it arrived.
@@ -93,10 +94,10 @@ func (s *LiveState) SeedPauses(pauses []SeedPause) Change {
 	defer s.mu.Unlock()
 	var change Change
 	for _, p := range pauses {
-		if p.Role == "" {
+		if p.Handle == "" {
 			continue
 		}
-		agent := s.ensureAgent(p.Role)
+		agent := s.ensureAgent(p.Handle)
 		if !agent.pausedAt.empty() {
 			continue
 		}
@@ -105,7 +106,7 @@ func (s *LiveState) SeedPauses(pauses []SeedPause) Change {
 		if at, err := time.Parse(time.RFC3339Nano, paused.At); err == nil {
 			agent.pausedAt = newStamp(at.UTC().Format(time.RFC3339Nano))
 		}
-		change.agentMoved(p.Role)
+		change.agentMoved(p.Handle)
 	}
 	return change
 }

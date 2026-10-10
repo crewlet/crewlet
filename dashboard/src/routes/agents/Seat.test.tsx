@@ -29,6 +29,7 @@ import type {
 } from "~/protocol/index.ts";
 import { emptyDay } from "~/test/myWork.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { rosterOf } from "~/test/seats.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -267,7 +268,7 @@ function mount(
   location.hash = hash;
   const store = new Store();
   store.applyOrg(org);
-  if (agents.length) store.applyAgents(agents);
+  if (agents.length) rosterOf(store, agents as never);
   if (schedules.length) store.applySchedules({ schedules });
   store.setConnected(true);
   const socket = new LiveSocket(store);

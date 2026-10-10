@@ -198,30 +198,29 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 
 // --- the projection questions -------------------------------------------- //
 
-// A SEAT'S CALL IN FLIGHT IS ANSWERED WHOLE, by role or handle: every heavy
-// field an `agents` push may leave out, and the versions they are at — what a
-// tab that missed a push asks for. A seat with nothing in flight is null, not
-// an error.
+// A SEAT'S CALL IN FLIGHT IS ANSWERED WHOLE, by handle: every heavy field an
+// `agents` push may leave out, and the versions they are at — what a tab that
+// missed a push asks for. A seat with nothing in flight is null, not an error.
 func TestLiveCallAnswersOneSeatsCallWhole(t *testing.T) {
 	t.Parallel()
 	state := livestate.New()
 	state.Apply(&livestate.Envelope{
 		ID: "e1", Type: "agent_turn_progress", Timestamp: "2026-06-14T12:00:00Z", Category: "task",
 		Payload: map[string]any{
-			"role": "Lead", "turn_id": "tn-1", "phase": "execute", "iteration": float64(0),
+			"role": "Lead", "agent_handle": "lead", "turn_id": "tn-1", "phase": "execute", "iteration": float64(0),
 			"round_num": float64(-1), "prompt": "fix the build",
 			"prompt_messages": []any{map[string]any{"role": "system", "content": "you are the lead"}},
 		},
 	})
 	r := registryOver(t, queries.Sources{State: state})
 
-	got := ask(t, r, "live_call", map[string]any{"role": "Lead"})
+	got := ask(t, r, "live_call", map[string]any{"handle": "lead"})
 	call, _ := got["live_call"].(*livestate.LiveCall)
-	if got["role"] != "Lead" || call == nil || call.Prompt != "fix the build" ||
+	if got["handle"] != "lead" || call == nil || call.Prompt != "fix the build" ||
 		len(call.PromptMessages) != 1 || call.Versions.Prompt != 1 {
 		t.Fatalf("answer = %+v; want the call whole, its prompt at version 1", got)
 	}
-	idle := ask(t, r, "live_call", map[string]any{"role": "Reviewer"})
+	idle := ask(t, r, "live_call", map[string]any{"handle": "reviewer"})
 	if idle["live_call"] != nil {
 		t.Errorf("a seat with nothing in flight = %+v; want null", idle)
 	}
@@ -242,14 +241,14 @@ func TestLiveCallAnswersOneSeatsCallWhole(t *testing.T) {
 func TestLiveCallAnswersAtTheSeatsCallSequence(t *testing.T) {
 	t.Parallel()
 	state := livestate.New()
-	call := map[string]any{"role": "Lead", "turn_id": "tn-1", "phase": "execute", "iteration": float64(0)}
+	call := map[string]any{"role": "Lead", "agent_handle": "lead", "turn_id": "tn-1", "phase": "execute", "iteration": float64(0)}
 	state.Apply(&livestate.Envelope{
 		ID: "e1", Type: "agent_phase_started", Timestamp: "2026-06-14T12:00:00Z", Category: "task", Payload: call,
 	})
 	r := registryOver(t, queries.Sources{State: state})
 
-	running := ask(t, r, "live_call", map[string]any{"role": "Lead"})
-	seq := state.AgentOverlay("Lead").LiveCallSeq
+	running := ask(t, r, "live_call", map[string]any{"handle": "lead"})
+	seq := state.AgentOverlay("lead").LiveCallSeq
 	if running["live_call"] == nil || seq == 0 || running["live_call_seq"] != seq {
 		t.Fatalf("answer = %+v; want the running call at the overlay's sequence %d", running, seq)
 	}
@@ -257,8 +256,8 @@ func TestLiveCallAnswersAtTheSeatsCallSequence(t *testing.T) {
 	state.Apply(&livestate.Envelope{
 		ID: "e2", Type: "agent_phase_completed", Timestamp: "2026-06-14T12:00:05Z", Category: "task", Payload: call,
 	})
-	cleared := ask(t, r, "live_call", map[string]any{"role": "Lead"})
-	after := state.AgentOverlay("Lead").LiveCallSeq
+	cleared := ask(t, r, "live_call", map[string]any{"handle": "lead"})
+	after := state.AgentOverlay("lead").LiveCallSeq
 	if cleared["live_call"] != nil || after <= seq || cleared["live_call_seq"] != after {
 		t.Errorf("answer = %+v; want a null call at the clear's sequence %d, past %d", cleared, after, seq)
 	}
@@ -269,11 +268,11 @@ func TestAgentAnswersOneSeatsLiveState(t *testing.T) {
 	state := livestate.New()
 	state.Apply(&livestate.Envelope{
 		ID: "e1", Type: "agent_phase_started", Timestamp: "2026-06-14T12:00:00Z",
-		Category: "task", Payload: map[string]any{"role": "Lead", "turn_id": "tn-1"},
+		Category: "task", Payload: map[string]any{"role": "Lead", "agent_handle": "lead", "turn_id": "tn-1"},
 	})
 	r := registryOver(t, queries.Sources{State: state})
 
-	got := ask(t, r, "agent", map[string]any{"role": "Lead"})
+	got := ask(t, r, "agent", map[string]any{"id": "lead"})
 	live, _ := got["live"].(*livestate.Overlay)
 	if live == nil || live.Activity != livestate.ActivityWorking {
 		t.Fatalf("answer = %+v", got)
@@ -285,13 +284,13 @@ func TestAgentAnswersASeatItHasNeverSeen(t *testing.T) {
 	// A role configured and never spawned is exactly this, and a 404 there
 	// would make a healthy new company look broken.
 	r := registryOver(t, queries.Sources{State: livestate.New()})
-	got := ask(t, r, "agent", map[string]any{"role": "Nobody"})
-	if got["role"] != "Nobody" || got["live"] != nil {
+	got := ask(t, r, "agent", map[string]any{"id": "nobody"})
+	if got["handle"] != "nobody" || got["live"] != nil {
 		t.Errorf("answer = %+v", got)
 	}
 }
 
-func TestAgentNeedsARole(t *testing.T) {
+func TestAgentNeedsAHandle(t *testing.T) {
 	t.Parallel()
 	r := registryOver(t, queries.Sources{State: livestate.New()})
 	if _, err := r.Answer(t.Context(), "agent", nil, asAdmin("ops")); !errors.Is(err, queries.ErrBadParams) {
@@ -979,10 +978,12 @@ func TestAnAgentAnswerCarriesItsFinishedCalls(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
 	log := db.Events()
-	seedPhases(t, log, "Lead", "agent-lead")
+	company := twoEngineers(t)
+	seedPhases(t, log, "Engineer", seatIDOf(t, company, "eng-a"))
 
-	r := registryOver(t, queries.Sources{State: livestate.New(), Events: fleetOf(log)})
-	got := ask(t, r, "agent", map[string]any{"role": "Lead"})
+	r := registryOver(t, queries.Sources{State: livestate.New(), Events: fleetOf(log),
+		Company: func() *config.Company { return company }})
+	got := ask(t, r, "agent", map[string]any{"id": "eng-a"})
 
 	history, _ := got["llm_history"].([]store.EventRecord)
 	if len(history) != 2 {
@@ -1019,19 +1020,76 @@ func TestAnAgentAnswerCarriesItsFinishedCalls(t *testing.T) {
 	}
 }
 
-// A SEAT ADDRESSED BY HANDLE FINDS THE SAME HISTORY. The dashboard holds the
-// handle; the store rows are keyed by the derived agent id and the role.
+// A SEAT'S HISTORY IS ITS OWN, NOT ITS NAMESAKE'S.
+//
+// The dashboard holds the handle, and a stored row names its seat by the
+// derived agent id and the role name. The history was matched on either, and
+// two seats can share a name — the duplicate-name rule is an admission rule —
+// so a seat page listed its namesake's calls as its own. It is matched on the
+// id the handle derives, alone.
+//
+// Mutation: match the role name beside the id again (store.AgentPhases), and
+// eng-a's page lists eng-b's calls.
 func TestAgentHistoryResolvesFromTheHandle(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
 	log := db.Events()
-	seedPhases(t, log, "Lead", "agent-lead")
+	company := twoEngineers(t)
+	seedPhases(t, log, "Engineer", seatIDOf(t, company, "eng-a"))
 
-	r := registryOver(t, queries.Sources{State: livestate.New(), Events: fleetOf(log)})
-	got := ask(t, r, "agent", map[string]any{"role": "Lead"})
-	if history, _ := got["llm_history"].([]store.EventRecord); len(history) != 2 {
-		t.Fatalf("asking by role found %v", got["llm_history"])
+	r := registryOver(t, queries.Sources{State: livestate.New(), Events: fleetOf(log),
+		Company: func() *config.Company { return company }})
+	if history, _ := ask(t, r, "agent", map[string]any{"id": "eng-a"})["llm_history"].([]store.EventRecord); len(history) != 2 {
+		t.Fatalf("eng-a's history = %v, want its own two calls", history)
 	}
+	got := ask(t, r, "agent", map[string]any{"id": "eng-b"})
+	if history, _ := got["llm_history"].([]store.EventRecord); len(history) != 0 {
+		t.Errorf("eng-b's history = %v, want none — the calls are its namesake's", history)
+	}
+	if got["handle"] != "eng-b" || got["role"] != "Engineer" {
+		t.Errorf("answer names %v (%v), want eng-b by its handle and its name", got["handle"], got["role"])
+	}
+}
+
+// twoEngineers is a company of two seats sharing one name, which the
+// duplicate-name ADMISSION rule refuses on a write and a stored revision still
+// runs with — so it is held to the RUNNABLE rules, as an apply holds one.
+func twoEngineers(t *testing.T) *config.Company {
+	t.Helper()
+	cfg, err := config.ParseCompanyDocument([]byte(`
+name: Acme
+providers:
+  llm:
+    p: {type: anthropic, model: m, api_keys: ["${K}"]}
+roles:
+  - name: Engineer
+    handle: eng-a
+    llm: p
+  - name: Engineer
+    handle: eng-b
+    llm: p
+`))
+	if err == nil {
+		err = cfg.ValidateRunnable()
+	}
+	if err != nil {
+		t.Fatalf("a company two seats share a name in does not run: %v", err)
+	}
+	return cfg
+}
+
+// seatIDOf is the derived agent id of the seat with the handle given.
+func seatIDOf(t *testing.T, company *config.Company, handle string) string {
+	t.Helper()
+	organization, err := company.Organization()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, ok := organization.AgentIDFor(organization.AgentSeatByHandle(handle))
+	if !ok {
+		t.Fatalf("no agent id for %s", handle)
+	}
+	return id.String()
 }
 
 // AN UNREADABLE OR ABSENT LOG COSTS THE HISTORY AND NOTHING ELSE. The live
@@ -1040,9 +1098,9 @@ func TestAgentHistoryResolvesFromTheHandle(t *testing.T) {
 func TestAnAgentAnswerSurvivesWithNoEventLog(t *testing.T) {
 	t.Parallel()
 	r := registryOver(t, queries.Sources{State: livestate.New()})
-	got := ask(t, r, "agent", map[string]any{"role": "Lead"})
+	got := ask(t, r, "agent", map[string]any{"id": "lead"})
 
-	if got["role"] != "Lead" {
+	if got["handle"] != "lead" {
 		t.Fatalf("answer = %v", got)
 	}
 	history, ok := got["llm_history"].([]store.EventRecord)
@@ -1157,7 +1215,7 @@ func TestASeatWithNoFinishedPhasesAnswersRatherThanPanics(t *testing.T) {
 	seedEvents(t, db.Events(), 3, nil)
 	r := registryOver(t, queries.Sources{State: livestate.New(), Events: fleetOf(db.Events())})
 
-	got := ask(t, r, "agent", map[string]any{"role": "NobodyHasThisRole"})
+	got := ask(t, r, "agent", map[string]any{"id": "nobody-has-this-seat"})
 	rows, ok := got["llm_history"].([]store.EventRecord)
 	if !ok {
 		t.Fatalf("llm_history = %#v, want a slice", got["llm_history"])

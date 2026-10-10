@@ -18,6 +18,7 @@ import type { BudgetWindow } from "~/protocol/types.ts";
 import type { EngineHealth } from "~/contract/health.ts";
 import { healthFrame } from "~/test/health.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { rosterOf } from "~/test/seats.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -106,7 +107,7 @@ async function mount(
   const store = new Store();
   store.applyHealth(health);
   store.applyOrg(projection);
-  store.applyAgents(agents);
+  rosterOf(store, agents as never);
   const socket = new LiveSocket(store);
   const asked: string[] = [];
   (socket as unknown as { query: (what: string, p?: unknown) => Promise<unknown> }).query = (

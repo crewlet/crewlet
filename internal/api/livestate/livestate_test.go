@@ -77,7 +77,7 @@ func overlayOf(t *testing.T, s *livestate.LiveState, role string) livestate.Over
 func TestASpawnMarksIdleAndRecordsTheRuntimeID(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
-	s.Apply(env("agent_spawned", map[string]any{"role": "Lead", "agent_id": "a-1"}))
+	s.Apply(env("agent_spawned", map[string]any{"role": "Lead", "agent_handle": "Lead", "agent_id": "a-1"}))
 
 	got := overlayOf(t, s, "Lead")
 	if got.Activity != livestate.ActivityIdle {
@@ -104,7 +104,7 @@ func TestATurnRunsAndFinishes(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
 	s.Apply(env("agent_phase_started", map[string]any{
-		"role": "Lead", "phase": "execute", "turn_id": "t-1",
+		"role": "Lead", "agent_handle": "Lead", "phase": "execute", "turn_id": "t-1",
 	}))
 
 	got := overlayOf(t, s, "Lead")
@@ -113,7 +113,7 @@ func TestATurnRunsAndFinishes(t *testing.T) {
 	}
 
 	s.Apply(env("agent_turn_completed", map[string]any{
-		"role": "Lead", "turn_id": "t-1",
+		"role": "Lead", "agent_handle": "Lead", "turn_id": "t-1",
 	}, at("2026-06-14T12:01:00+00:00")))
 	got = overlayOf(t, s, "Lead")
 	if got.Activity != livestate.ActivityIdle {
@@ -127,7 +127,7 @@ func TestATurnRunsAndFinishes(t *testing.T) {
 func TestAGuardBreachIsAFailedTurnNotAStop(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
-	s.Apply(env("turn.guard_breach", map[string]any{"role": "Lead", "kind": "delegation_loop"}))
+	s.Apply(env("turn.guard_breach", map[string]any{"role": "Lead", "agent_handle": "Lead", "kind": "delegation_loop"}))
 
 	got := overlayOf(t, s, "Lead")
 	if got.Activity != livestate.ActivityIdle || got.StoppedReason != nil {
@@ -145,7 +145,7 @@ func TestAGuardBreachIsAFailedTurnNotAStop(t *testing.T) {
 func TestAnUnreachableProviderStopsTheSeat(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
-	s.Apply(env("llm_unavailable", map[string]any{"role": "Lead"}))
+	s.Apply(env("llm_unavailable", map[string]any{"role": "Lead", "agent_handle": "Lead"}))
 	got := overlayOf(t, s, "Lead")
 	if got.Activity != livestate.ActivityStopped || got.StoppedReason == nil ||
 		*got.StoppedReason != livestate.StoppedProvider {
@@ -163,9 +163,9 @@ func TestAnUnreachableProviderStopsTheSeat(t *testing.T) {
 func TestReflectionClearsThePhaseItFollows(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
-	base := map[string]any{"role": "Lead", "turn_id": "tn-1", "phase": "plan", "iteration": 0}
+	base := map[string]any{"role": "Lead", "agent_handle": "Lead", "turn_id": "tn-1", "phase": "plan", "iteration": 0}
 	s.Apply(env("agent_phase_started", base))
-	s.Apply(env("reflection_completed", map[string]any{"role": "Lead"},
+	s.Apply(env("reflection_completed", map[string]any{"role": "Lead", "agent_handle": "Lead"},
 		at("2026-06-14T12:01:00+00:00")))
 
 	got := overlayOf(t, s, "Lead")
@@ -184,9 +184,9 @@ func TestReflectionClearsThePhaseItFollows(t *testing.T) {
 func TestTerminationLeavesTheSeatToItsPlacement(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
-	base := map[string]any{"role": "Lead", "turn_id": "tn-1", "phase": "execute"}
+	base := map[string]any{"role": "Lead", "agent_handle": "Lead", "turn_id": "tn-1", "phase": "execute"}
 	s.Apply(env("agent_phase_started", base))
-	s.Apply(env("agent_terminated", map[string]any{"role": "Lead"},
+	s.Apply(env("agent_terminated", map[string]any{"role": "Lead", "agent_handle": "Lead"},
 		at("2026-06-14T12:00:01+00:00")))
 	got := overlayOf(t, s, "Lead")
 	if got.LiveCall != nil {
@@ -211,9 +211,9 @@ func TestAnOlderStateEventCannotClobberNewerState(t *testing.T) {
 	// topic, and different event types are different topics — so a
 	// state-affecting event can arrive out of order relative to another.
 	s := livestate.New()
-	s.Apply(env("agent_phase_started", map[string]any{"role": "Lead", "phase": "execute"},
+	s.Apply(env("agent_phase_started", map[string]any{"role": "Lead", "agent_handle": "Lead", "phase": "execute"},
 		at("2026-06-14T12:05:00+00:00")))
-	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead"},
+	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead", "agent_handle": "Lead"},
 		at("2026-06-14T12:01:00+00:00")))
 
 	if got := overlayOf(t, s, "Lead").CurrentPhase; got == nil {
@@ -228,8 +228,8 @@ func TestSameInstantEventsAreBothApplied(t *testing.T) {
 	// equal timestamps pass, and the later-applied wins.
 	s := livestate.New()
 	ts := at("2026-06-14T12:05:00+00:00")
-	s.Apply(env("agent_phase_started", map[string]any{"role": "Lead", "phase": "execute"}, ts))
-	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead"}, ts))
+	s.Apply(env("agent_phase_started", map[string]any{"role": "Lead", "agent_handle": "Lead", "phase": "execute"}, ts))
+	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead", "agent_handle": "Lead"}, ts))
 
 	if got := overlayOf(t, s, "Lead").CurrentPhase; got != nil {
 		t.Errorf("current phase = %q: a same-instant event was refused as stale", *got)
@@ -242,9 +242,9 @@ func TestTheReorderGuardComparesInstantsNotStrings(t *testing.T) {
 	// a Z reads as newer than a "+00:00" one and walks the state
 	// backwards.
 	s := livestate.New()
-	s.Apply(env("agent_phase_started", map[string]any{"role": "Lead", "phase": "execute"},
+	s.Apply(env("agent_phase_started", map[string]any{"role": "Lead", "agent_handle": "Lead", "phase": "execute"},
 		at("2026-06-14T12:05:00+00:00")))
-	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead"},
+	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead", "agent_handle": "Lead"},
 		at("2026-06-14T12:01:00Z")))
 
 	if got := overlayOf(t, s, "Lead").CurrentPhase; got == nil {
@@ -255,7 +255,7 @@ func TestTheReorderGuardComparesInstantsNotStrings(t *testing.T) {
 func TestAnUnknownEventTypeMovesNothing(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
-	change := s.Apply(env("something_else", map[string]any{"role": "Lead"}))
+	change := s.Apply(env("something_else", map[string]any{"role": "Lead", "agent_handle": "Lead"}))
 	// It still lands in the feed — it carries a category — but the seat
 	// state machine does not know it.
 	if _, moved := change.Agents["Lead"]; moved {
@@ -288,11 +288,11 @@ func TestATurnCompletingReturnsTheSeatToIdle(t *testing.T) {
 	// turn and stayed there for the life of the process, rendering mid-phase
 	// in a phase that had ended.
 	s := livestate.New()
-	base := map[string]any{"role": "Lead", "turn_id": "tn-1", "phase": "review", "iteration": 1}
+	base := map[string]any{"role": "Lead", "agent_handle": "Lead", "turn_id": "tn-1", "phase": "review", "iteration": 1}
 	s.Apply(env("agent_phase_started", base))
 	s.Apply(env("agent_phase_completed", base, at("2026-06-14T12:00:05+00:00")))
 	s.Apply(env("agent_turn_completed",
-		map[string]any{"role": "Lead", "turn_id": "tn-1", "total_tokens": 10},
+		map[string]any{"role": "Lead", "agent_handle": "Lead", "turn_id": "tn-1", "total_tokens": 10},
 		at("2026-06-14T12:00:06+00:00")))
 
 	got := overlayOf(t, s, "Lead")
@@ -325,7 +325,7 @@ func TestTheEndOfONETurnDoesNotClearTheNEXTOne(t *testing.T) {
 			t.Parallel()
 			s := livestate.New()
 			next := map[string]any{
-				"role": "Lead", "turn_id": "tn-2", "phase": "execute", "iteration": 1,
+				"role": "Lead", "agent_handle": "Lead", "turn_id": "tn-2", "phase": "execute", "iteration": 1,
 			}
 			s.Apply(env("agent_phase_started", next, at("2026-06-14T12:00:10+00:00")))
 			s.Apply(env("agent_turn_progress",
@@ -333,7 +333,7 @@ func TestTheEndOfONETurnDoesNotClearTheNEXTOne(t *testing.T) {
 				streamOnly, at("2026-06-14T12:00:11+00:00")))
 
 			// The previous turn's ending, arriving late.
-			s.Apply(env(ending, map[string]any{"role": "Lead", "turn_id": "tn-1"},
+			s.Apply(env(ending, map[string]any{"role": "Lead", "agent_handle": "Lead", "turn_id": "tn-1"},
 				at("2026-06-14T12:00:12+00:00")))
 
 			got := overlayOf(t, s, "Lead")

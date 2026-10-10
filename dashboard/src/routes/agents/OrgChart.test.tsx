@@ -32,6 +32,7 @@ import { installWindow } from "~/testing.tsx";
 import { LiveSocket, Store, type AgentRow } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { rosterOf, seatRow, type SeatFixture } from "~/test/seats.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -57,7 +58,7 @@ const AGENTS = [
   { role: "FE", activity: "needs", turn: { turn_id: "t", started_at: "", stage: "parked" } },
   { role: "PM", activity: "stopped", stopped_reason: "budget" },
   { role: "DevRel", activity: "idle" },
-] as unknown as AgentRow[];
+].map((row) => seatRow(row as SeatFixture));
 
 let restore: () => void;
 beforeEach(() => {
@@ -79,7 +80,7 @@ async function mount(
   const store = new Store();
   store.applyHealth(healthFrame());
   store.applyOrg(CHART_ORG);
-  store.applyAgents(AGENTS);
+  rosterOf(store, AGENTS);
   const socket = new LiveSocket(store);
   const asked: string[] = [];
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {

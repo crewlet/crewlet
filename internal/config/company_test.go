@@ -957,34 +957,53 @@ func TestTheBaseURLVariableIsReserved(t *testing.T) {
 	mustCompany(t, "name: Acme\nskill_variables:\n  wiki_base_url: https://wiki.example.com\n")
 }
 
-// THE SEATS WITH TURNS ARE EVERY NON-HUMAN ROLE, AT ANY DEPTH.
+// THE SEATS WITH TURNS ARE EVERY NON-HUMAN ROLE, AT ANY DEPTH, BY HANDLE AND ID.
 //
 // The live projection's boot seed is keyed by this list, so a seat it misses
 // starts every screen at this process's boot, and a human it includes is a
 // seat with no turn seeded as one. A unit nested two deep is the case a
-// top-level walk would silently drop.
+// top-level walk would silently drop. Each seat carries its handle and the
+// agent id derived from it — the id is what its stored turns are indexed by.
 //
-// Mutation: walk c.Roles alone, or drop the human filter, and this fails.
-func TestAgentRolesAreEveryNonHumanSeatAtAnyDepth(t *testing.T) {
+// Mutation: walk c.Roles alone, or drop the human filter, or name the seat by
+// its role, and this fails.
+func TestAgentSeatsAreEveryNonHumanSeatAtAnyDepth(t *testing.T) {
 	t.Parallel()
 	c := &Company{
-		Roles: []Role{{Name: "ceo"}, {Name: "founder", Kind: org.KindHuman}},
+		// NAMED, because an agent id is derived from the company's name and
+		// the seat's handle together.
+		Name: "acme",
+		Roles: []Role{{Name: "ceo"}, {Name: "founder", Kind: org.KindHuman,
+			Contact: &org.HumanContact{MattermostUserID: "u-founder"}}},
 		Units: []Unit{{
 			Name:  "eng",
 			Roles: []Role{{Name: "cto"}},
 			Children: []Unit{{
-				Name:  "platform",
-				Roles: []Role{{Name: "sre"}, {Name: "reviewer", Kind: org.KindHuman}},
+				Name: "platform",
+				Roles: []Role{{Name: "sre"}, {Name: "reviewer", Kind: org.KindHuman,
+					Contact: &org.HumanContact{MattermostUserID: "u-reviewer"}}},
 			}},
 		}},
 	}
-	got := c.AgentRoles()
-	slices.Sort(got)
-	if want := []string{"ceo", "cto", "sre"}; !slices.Equal(got, want) {
-		t.Errorf("AgentRoles() = %v, want %v", got, want)
+	organization, err := c.Organization()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var handles []string
+	for _, seat := range c.AgentSeats() {
+		handles = append(handles, seat.Handle)
+		role := organization.AgentSeatByHandle(seat.Handle)
+		id, ok := organization.AgentIDFor(role)
+		if !ok || seat.AgentID != id.String() {
+			t.Errorf("%s carries agent id %q, want the one derived from its handle", seat.Handle, seat.AgentID)
+		}
+	}
+	slices.Sort(handles)
+	if want := []string{"ceo", "cto", "sre"}; !slices.Equal(handles, want) {
+		t.Errorf("AgentSeats() = %v, want %v", handles, want)
 	}
 	var none *Company
-	if got := none.AgentRoles(); got != nil {
-		t.Errorf("a nil company's AgentRoles() = %v, want nil", got)
+	if got := none.AgentSeats(); got != nil {
+		t.Errorf("a nil company's AgentSeats() = %v, want nil", got)
 	}
 }

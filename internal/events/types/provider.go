@@ -26,7 +26,9 @@ func init() {
 // chain succeeded: the agent is effectively AFK and the turn terminates as
 // failed, which is why its type is a failure BY TYPE — see [Failed].
 type LLMUnavailable struct {
-	Agent         string   `json:"agent_id"`
+	Agent string `json:"agent_id"`
+	// AgentHandle is the seat's identity — see [AgentPhaseStarted.AgentHandle].
+	AgentHandle   string   `json:"agent_handle"`
 	RoleName      string   `json:"role"`
 	ProviderChain []string `json:"provider_chain,omitempty"`
 	AttemptCount  int      `json:"attempt_count"`

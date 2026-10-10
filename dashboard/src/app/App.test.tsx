@@ -23,6 +23,7 @@ import { CHUNKS, loadChunk } from "./lazyScreen.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { rosterOf } from "~/test/seats.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -151,7 +152,7 @@ describe("routing", () => {
       location.hash = hash;
       const { store, view } = mount();
       act(() => {
-        store.applyAgents([{ id: "a1", role: "Agent SWE", activity: "working" }] as never);
+        rosterOf(store, [{ role: "Agent SWE", handle: "agent-swe", activity: "working" }]);
       });
       const chip = view.container.querySelector(".page-bar .working-now");
       expect(chip !== null, hash).toBe(drawn);
@@ -477,7 +478,7 @@ describe("live state reaches the screen", () => {
         roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
       }),
     );
-    store.applyAgents([{ role: "CEO", activity: "working" }]);
+    rosterOf(store, [{ role: "CEO", activity: "working" }]);
     view.rerender(
       <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
         <Router>
@@ -565,7 +566,7 @@ describe("live state reaches the screen", () => {
         roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
       }),
     );
-    store.applyAgents([{ role: "CEO", activity: "working" }]);
+    rosterOf(store, [{ role: "CEO", activity: "working" }]);
     view.rerender(
       <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
         <Router>
@@ -630,6 +631,7 @@ describe("a turn watched to its end", () => {
     location.hash = "#/agents/seats/ceo?tab=turns";
     const { store, view } = mount();
     store.applyOrg(withDerived(seat));
+    rosterOf(store, [{ role: "CEO", agent_id: "a-ceo", activity: "idle" }]);
     const redraw = () =>
       view.rerender(
         <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
@@ -649,8 +651,7 @@ describe("a turn watched to its end", () => {
     store.applyEvent(phaseEnvelope("p2", "execute", "2026-01-01T00:00:05Z") as never);
     store.applyAgents([
       {
-        role: "CEO",
-        agent_id: "a-ceo",
+        handle: "ceo",
         activity: "working",
         live_call: {
           versions: ZERO_VERSIONS,
@@ -673,7 +674,7 @@ describe("a turn watched to its end", () => {
     // The review lands. The event goes out first, then the overlay that clears
     // the live call — the order internal/api/stream.Ingest publishes them in.
     store.applyEvent(phaseEnvelope("p3", "review", "2026-01-01T00:00:09Z") as never);
-    store.applyAgents([{ role: "CEO", activity: "idle", live_call: null }] as never);
+    store.applyAgents([{ handle: "ceo", activity: "idle", live_call: null }] as never);
     redraw();
 
     // STILL THERE, all three phases of it, and no longer running.
@@ -696,8 +697,7 @@ describe("a turn watched to its end", () => {
     Object.defineProperty(scroller, "scrollTop", { value: 400, configurable: true });
     store.applyAgents([
       {
-        role: "CEO",
-        agent_id: "a-ceo",
+        handle: "ceo",
         activity: "working",
         live_call: {
           versions: ZERO_VERSIONS,
@@ -715,7 +715,7 @@ describe("a turn watched to its end", () => {
     ] as never);
     redraw();
     store.applyEvent(phaseEnvelope("p1", "execute", "2026-01-01T00:00:05Z") as never);
-    store.applyAgents([{ role: "CEO", activity: "idle", live_call: null }] as never);
+    store.applyAgents([{ handle: "ceo", activity: "idle", live_call: null }] as never);
     redraw();
     expect(screen.queryByText(/finished while you were reading/)).toBeNull();
     expect(screen.getAllByText("execute").length).toBeGreaterThan(0);
