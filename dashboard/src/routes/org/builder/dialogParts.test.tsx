@@ -22,7 +22,7 @@
 
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
-import { ScreenLink } from "./dialogParts.tsx";
+import { ReadOnlyFact, ScreenLink } from "./dialogParts.tsx";
 
 afterEach(cleanup);
 
@@ -66,5 +66,52 @@ describe("ScreenLink", () => {
     // pass just as well.
     const { container } = render(<ScreenLink to="integrations">Open Integrations</ScreenLink>);
     expect(container.querySelector("a")!.getAttribute("href")).toContain("integrations");
+  });
+});
+
+/*
+ * A READ-ONLY FACT'S LINK IS A PROMISE that the screen it opens changes the
+ * value. The seat editor's "Edit in the configuration document" opened
+ * Settings › Configuration, which reads and never writes, and half a dozen
+ * facts beside it said "set in the configuration document" over the same
+ * link. So `where` takes a screen that writes, or "revision" for a value no
+ * screen writes, which says the write that does.
+ */
+describe("ReadOnlyFact", () => {
+  test("a value no screen writes says how it is changed and links nowhere", () => {
+    const { container } = render(
+      <ReadOnlyFact label="Learning" reason="It overrides the company's." where="revision">
+        Off
+      </ReadOnlyFact>,
+    );
+    expect(container.querySelector("p")!.textContent).toBe(
+      "It overrides the company's. No screen edits this: it is changed with crewlet config import or PUT /config.",
+    );
+    expect(container.querySelector("a")).toBeNull();
+  });
+
+  test("a value a screen writes links to that screen", () => {
+    const { container } = render(
+      <ReadOnlyFact
+        label="Datadog fallback"
+        reason="Chosen from Integrations."
+        where={{ to: "integrations", label: "Open Integrations" }}
+      >
+        Not the fallback.
+      </ReadOnlyFact>,
+    );
+    expect(container.querySelector("a")!.getAttribute("href")).toBe("#/settings/integrations");
+  });
+
+  test("a screen that only reads cannot be named as where a value is edited", () => {
+    // Held by the compiler: `tsc --noEmit` fails on an unused directive, so
+    // widening `where` back to every screen turns this line red.
+    const reading = (
+      // @ts-expect-error -- Settings › Configuration reads; it edits nothing.
+      <ReadOnlyFact label="Model" reason="Per phase." where={{ to: "config", label: "Edit" }}>
+        review: smart
+      </ReadOnlyFact>
+    );
+    expect(reading).toBeDefined();
   });
 });

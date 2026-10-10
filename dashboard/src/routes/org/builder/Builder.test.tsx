@@ -482,9 +482,14 @@ test("a company with no model provider is told so, and one with a provider is no
   mountBuilder({ engine });
   // The engine applies the company and holds its agents' work, so the
   // caution says what waits rather than claiming nothing is applied.
-  expect(
-    await screen.findByText(/no agent seat takes a turn: work sent to a seat waits on its inbox/),
-  ).toBeDefined();
+  const caution = await screen.findByText(
+    /no agent seat takes a turn: work sent to a seat waits on its inbox/,
+  );
+  // What no screen does is ADD one: Settings › Models & keys edits a provider
+  // the company has, so "the dashboard does not write providers" was untrue.
+  expect(caution.textContent).toContain(
+    "No screen adds one (Models & keys edits a provider the company has): add it with crewlet config import or PATCH /config.",
+  );
   cleanup();
 
   const engineWith = new Engine(company());

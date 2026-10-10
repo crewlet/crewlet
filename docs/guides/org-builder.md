@@ -113,9 +113,10 @@ company is never applied to one that exists, and never replayed onto it.
 **Keep my draft** leaves it on screen to read, read-only, with the same offer
 beside it.
 
-After a successful create, two steps remain that the dashboard cannot take:
-connecting chat and trackers in Settings › Integrations, and adding a model
-provider, which no dashboard screen writes. The engine applies the new company
+After a successful create, two steps remain that the dashboard cannot take for
+you: connecting chat and trackers in Settings › Integrations, and adding a
+model provider, which no dashboard screen adds (Settings › Models & keys edits
+a provider the company already has). The engine applies the new company
 without one, but until the provider is added no agent seat takes a turn:
 whatever is sent to a seat waits on its inbox and runs once the provider
 exists. The panel gives the exact `crewlet config import` and `PATCH /config`
@@ -293,7 +294,7 @@ current draft:
 |---|---|
 | Checking | a dry run of the current draft is on its way |
 | No problems | the engine would accept the draft as it stands |
-| *N problems* | the engine would refuse it; each problem is marked on the unit or seat it names, and problems about the whole document are listed above the chart |
+| *N problems* | the engine would refuse it; each problem is marked on the unit or seat it names, and problems about the whole document are listed above the chart, each with where it is fixed when that is not the builder (see [Editing a node](#editing-a-node)) |
 | Could not reach the engine to check | the dry run got no answer; the builder retries with an increasing wait |
 | Read-only here | this process cannot write the configuration |
 | The configuration changed | another revision was activated after this draft was started |
@@ -351,6 +352,12 @@ are listed at its top. A warning (a lead that names no seat, for example)
 does not stop a save, so it is listed at the top as a caution with the path
 it names, never shown as a field's error.
 
+A problem about something the builder does not write says where it is fixed:
+a link to **Integrations** for an integration block, and for a schedule or
+the company's `scheduling` block, which no screen writes (Agents › Schedules
+shows when each schedule fires and changes none), the two ways it is changed:
+`crewlet config import` or `PUT /config`.
+
 ### The charter
 
 | You can change | Notes |
@@ -358,9 +365,14 @@ it names, never shown as a field's error.
 | Name | Renaming the company asks you to confirm what it does. An agent seat's id is derived from the company name and its handle, so every agent seat gets a new id: each seat's diary and onboarding progress stay under the old id and are no longer read, and every agent seat onboards again. Handles, mailboxes and episodes are unchanged. |
 | Mission, vision, policies | Policies are an ordered list. |
 
-Everything else in the company document (providers, integrations, workers,
-MCP servers, sandbox and scheduling settings) is edited in the configuration
-document, not in the builder.
+Everything else in the company document is outside the builder. Some of it has
+a screen of its own: Settings › Integrations connects and configures the
+integrations, Settings › Models & keys edits a model provider the company
+already has, and Settings › Tools & MCP adds an MCP server. No screen writes
+the rest (adding a model provider, workers, sandbox and scheduling settings),
+and Settings › Configuration only reads it: it is changed with
+`crewlet config import` or `PUT /config`
+([Configure via the API](configure-via-api.md)).
 
 A company has no lead. The reporting chart's roots are the seats no one
 manages, so the seat at the top of a company is the one nothing else manages,
@@ -380,8 +392,10 @@ not a field somebody sets.
 | Schedules: enabled | Each schedule can be switched on or off. |
 
 Shown and not changed: each schedule's cron, timezone, runner and task, and the
-unit's tool credentials as server and variable names. Schedules and tool
-credentials are written in the configuration document.
+unit's tool credentials as server and variable names. No screen writes either,
+and the editor says so with the two ways they are changed:
+`crewlet config import` or `PUT /config`. Agents › Schedules, which the
+schedules panel links to, shows when each schedule fires; it changes none.
 
 **Renaming a unit that holds literal credentials.** The engine never sends a
 credential to the dashboard: a literal value arrives masked, and a save that
@@ -401,7 +415,7 @@ as `${NAME}` first; a reference is a name, so it survives the rename.
 | Behavioral guidelines | Agent seats. |
 | Manages | Seats and units. Seats this seat manages automatically as a unit's lead are listed apart, because the engine adds them whatever the list says. |
 | Contact identities, availability | Human seats. A human seat needs at least one contact identity. |
-| Model | Agent seats. An ordered chain of the company's `providers.llm` keys, tried in the order chosen; to change the order, remove a provider and choose it again. A seat with no model runs on the provider keyed `default`, else the first provider in the company's order. A per-phase mapping is shown and edited in the configuration document. |
+| Model | Agent seats. An ordered chain of the company's `providers.llm` keys, tried first to last. A chosen provider is moved earlier or later in the chain with its move controls, or with Alt and an arrow key, so the order is changed without removing anything. A seat with no model runs on the provider keyed `default`, else the first provider in the company's order. When the company has no provider at all, the field says how one is added, since no screen adds one. A per-phase mapping is shown and not edited: no screen edits one, and it says so with the two ways it is changed, `crewlet config import` or `PUT /config`. |
 | Token ceilings: daily, weekly, monthly | Agent seats. One box per calendar window on the company's clock, each optional: an empty box is no ceiling on that window, and a 0 is refused rather than read as unlimited. A turn runs only while every capped window has room, and the company's own `token_budget` applies on top. The check warns about a ceiling that can never refuse anything — a week at or above seven days of the daily one, a seat at or above the company. |
 | Schedules: enabled | Agent seats. |
 | Integrations | Agent seats; see below. |
@@ -410,8 +424,13 @@ as `${NAME}` first; a reference is a name, so it survives the rename.
 Shown with the reason they are not changed here: per-phase models
 (`llm_review` and the other `llm_*` fields), sandbox (enabled, where it runs),
 workers, placement, learning, tool credentials (names only) and whether the
-seat is the Datadog fallback. Sandbox, placement, workers and tool credentials
-each depend on a company-level block the builder does not edit.
+seat is the Datadog fallback. Sandbox, workers and tool credentials each name
+a company-level block the builder does not edit (`providers.sandbox`,
+`workers`, `mcp_servers`), and placement says which of the fleet's nodes may
+run the seat. The Datadog fallback is chosen in Settings › Integrations, which
+its fact links to. No screen writes any of the others, so each says so with
+the two ways it is changed, `crewlet config import` or `PUT /config`, rather
+than linking to Settings › Configuration, which only reads.
 
 A seat's kind is changed with **Change to human seat** or **Change to agent
 seat**, in its menu or in the editor, which is its own step because it

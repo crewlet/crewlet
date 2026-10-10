@@ -86,6 +86,7 @@ import {
   ScreenLink,
   UNIQUE_NAME_HELP,
   UnitTypeField,
+  WritePaths,
   placeOnFields,
 } from "./dialogParts.tsx";
 import { NodeGlyph, type NodeGlyphKind } from "./nodeMarks.tsx";
@@ -389,10 +390,13 @@ function ScheduleToggles({
   return (
     <EditorSection
       title="Schedules"
+      // WHERE A SCHEDULE IS WRITTEN, said rather than linked: Schedules shows
+      // when each one fires and writes none, so it is linked as what it is.
       hint={
         <>
-          Schedules are written in the configuration document. Here each can be switched on or off.{" "}
-          <ScreenLink to="schedules">Open Schedules</ScreenLink>
+          Each can be switched on or off here, and <ScreenLink to="schedules">Schedules</ScreenLink>{" "}
+          shows when it fires. No screen writes a schedule: one is added or changed with{" "}
+          <WritePaths />.
         </>
       }
     >
@@ -429,8 +433,8 @@ function ToolCredentialFact({ data }: { data: ConfigRole | ConfigUnit }) {
   return (
     <ReadOnlyFact
       label="Tool credentials"
-      reason="They name servers the company's mcp_servers block defines, so they are set in the configuration document. Values are never shown."
-      link={{ to: "config", label: "Open the configuration" }}
+      reason="They name servers the company's mcp_servers block defines. Values are never shown."
+      where="revision"
     >
       <ul className="builder-list">
         {names.map(({ server, variables }) => (
@@ -1218,6 +1222,22 @@ function Reports({
   );
 }
 
+/**
+ * What a seat's Model says when the company has no provider to choose.
+ *
+ * NO SCREEN ADDS ONE. Settings › Models & keys edits a provider the company
+ * already has (its model, its keys, its endpoint) and adds none, so this
+ * names the write that does rather than a screen — the merge patch the
+ * builder's no-provider caution names, since a provider is one key of a map
+ * and a patch adds it without restating the company.
+ */
+const NO_PROVIDER = (
+  <>
+    The company has no model provider yet, and no screen adds one: add it with{" "}
+    <InlineCode>crewlet config import</InlineCode> or <InlineCode>PATCH /config</InlineCode>.
+  </>
+);
+
 function ModelSection({
   data,
   chain,
@@ -1244,11 +1264,7 @@ function ModelSection({
   return (
     <EditorSection title="Model">
       {chain === null ? (
-        <ReadOnlyFact
-          label="Model"
-          reason="This seat chooses a model per phase."
-          link={{ to: "config", label: "Edit in the configuration document" }}
-        >
+        <ReadOnlyFact label="Model" reason="This seat chooses a model per phase." where="revision">
           <ul className="builder-list">
             {formatPhaseLLM(data.llm).map((row) => (
               <li key={row.phase}>
@@ -1267,7 +1283,7 @@ function ModelSection({
               ? `Tried in this order: ${chain.join(", then ")}.`
               : unpinned
                 ? `Runs on ${unpinned}, the provider a seat that names none runs on.`
-                : "The company has no model provider yet. Add one in the configuration document."
+                : NO_PROVIDER
           }
           error={withProblems(chainError)}
         >
@@ -1499,12 +1515,15 @@ function IntegrationsSection({
   );
 }
 
-/** The seat's settings the builder shows and does not edit, each with why. */
+/**
+ * The seat's settings the builder shows and does not edit, each with why and
+ * where it is changed: the Datadog fallback on Integrations, which writes it,
+ * and every other one by a revision, because no screen writes any of them.
+ */
 function DocumentFacts({ data, handle }: { data: ConfigRole; handle: string | undefined }) {
   const { state } = useBuilder();
   const company = state.draft.company;
   const facts: ReactNode[] = [];
-  const configLink = { to: "config", label: "Open the configuration" } as const;
 
   const phases = PHASE_MODEL_FIELDS.filter((field) => data[field] !== undefined);
   if (phases.length > 0) {
@@ -1512,8 +1531,8 @@ function DocumentFacts({ data, handle }: { data: ConfigRole; handle: string | un
       <ReadOnlyFact
         key="phases"
         label="Models per phase"
-        reason="Set in the configuration document."
-        link={configLink}
+        reason="Each names the model one phase runs on in place of the seat's Model."
+        where="revision"
       >
         <ul className="builder-list">
           {phases.map((field) => (
@@ -1535,8 +1554,8 @@ function DocumentFacts({ data, handle }: { data: ConfigRole; handle: string | un
       <ReadOnlyFact
         key="sandbox"
         label="Sandbox"
-        reason="A sandbox runs on the company's providers.sandbox block, which the builder does not edit."
-        link={configLink}
+        reason="A sandbox runs on the company's providers.sandbox block."
+        where="revision"
       >
         {enabled}
         {runIn}
@@ -1548,8 +1567,8 @@ function DocumentFacts({ data, handle }: { data: ConfigRole; handle: string | un
       <ReadOnlyFact
         key="workers"
         label="Workers"
-        reason="Workers name templates from the company's workers block, which the builder does not edit."
-        link={configLink}
+        reason="Workers name templates from the company's workers block."
+        where="revision"
       >
         {data.workers.join(", ")}
       </ReadOnlyFact>,
@@ -1560,8 +1579,8 @@ function DocumentFacts({ data, handle }: { data: ConfigRole; handle: string | un
       <ReadOnlyFact
         key="placement"
         label="Placement"
-        reason="Placement is a fleet setting for which nodes run this seat, edited in the configuration document."
-        link={configLink}
+        reason="Placement is a fleet setting for which nodes run this seat."
+        where="revision"
       >
         {placementSummary(data.placement)}
       </ReadOnlyFact>,
@@ -1572,8 +1591,8 @@ function DocumentFacts({ data, handle }: { data: ConfigRole; handle: string | un
       <ReadOnlyFact
         key="learning"
         label="Learning"
-        reason="Set in the configuration document."
-        link={configLink}
+        reason="It overrides the company's learning setting for this seat alone."
+        where="revision"
       >
         {data.learning_enabled ? "On" : "Off"}
       </ReadOnlyFact>,
@@ -1591,7 +1610,7 @@ function DocumentFacts({ data, handle }: { data: ConfigRole; handle: string | un
         key="datadog"
         label="Datadog fallback"
         reason="An alert whose tags name no seat wakes the fallback seat. It is chosen from Integrations, or here when the fallback seat is deleted or changed to a human seat."
-        link={{ to: "integrations", label: "Open Integrations" }}
+        where={{ to: "integrations", label: "Open Integrations" }}
       >
         {!on
           ? "Datadog is switched off, so no alert wakes a fallback seat."

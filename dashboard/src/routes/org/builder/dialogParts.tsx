@@ -25,7 +25,7 @@ import { Problems } from "~/ui/Problems.tsx";
 import type { Acknowledgement } from "./model/changes.ts";
 import type { Segment } from "./model/document.ts";
 import { CONTACT_IDENTITIES } from "./model/templates.ts";
-import type { PlacedProblem, ProblemLink } from "./model/problems.ts";
+import type { PlacedProblem, ProblemRemedy } from "./model/problems.ts";
 import { strandedSentence, type StrandedSchedule } from "./preflight.ts";
 import { TOOL_NAMES, workingNote, type Tool } from "./nodeFacts.ts";
 import { Callout, FormField, InlineCode, Input, SegmentedControl } from "@crewlethq/ui";
@@ -104,6 +104,21 @@ export const SCREENS = {
 /** A screen the builder can send a reader to. */
 export type ScreenName = keyof typeof SCREENS;
 
+/**
+ * The screens that WRITE something the builder only shows: the only ones a
+ * read-only fact may name as where its value is changed.
+ *
+ * Configuration, Nodes and Schedules READ. Settings › Configuration is a
+ * viewer by design (`routes/settings/Config.tsx` says why), and the seat
+ * editor's "Edit in the configuration document" opened it, beside half a
+ * dozen facts that said "set in the configuration document" over an "Open the
+ * configuration" link: every one of them a promise of an edit no screen
+ * offered. A setting no screen writes says so instead ([NoScreenWrites]), so a
+ * fact naming a reading screen as its editor is a type error here rather than
+ * a dead end found by the person who clicked it.
+ */
+export type WritingScreen = Extract<ScreenName, "integrations" | "secrets">;
+
 /** The route segments of a named screen, as `href` and `nav.to` take them. */
 export function screenPath(name: ScreenName): string[] {
   return [...SCREENS[name]];
@@ -158,19 +173,51 @@ export function NotConnected({ tool }: { tool: Tool }) {
 }
 
 /**
+ * The engine's two ways of writing what no screen writes, named as Settings ›
+ * Configuration names them: a company file imported with `crewlet config
+ * import`, or `PUT /config`.
+ *
+ * SAID, NEVER LINKED, because no screen is where these are done, and spelled
+ * once for the builder so its facts, its schedules panel and its problems
+ * give one answer to "how do I change this".
+ */
+export function WritePaths() {
+  return (
+    <>
+      <InlineCode>crewlet config import</InlineCode> or <InlineCode>PUT /config</InlineCode>
+    </>
+  );
+}
+
+/** What a setting no screen writes says about where it is changed. */
+export function NoScreenWrites() {
+  return (
+    <>
+      No screen edits this: it is changed with <WritePaths />.
+    </>
+  );
+}
+
+/**
  * A value the builder shows and does not edit, with why and where it is
  * edited instead.
+ *
+ * `where` IS A SCREEN THAT WRITES IT, OR `"revision"`. A link here is a
+ * promise that the screen it opens changes the value, so it takes a
+ * [WritingScreen] and nothing that only reads; a value no screen writes says
+ * so and names the write paths. Absent, the reason itself says where (a lead's
+ * automatic reports change with the unit's lead, in this same builder).
  */
 export function ReadOnlyFact({
   label,
   children,
   reason,
-  link,
+  where,
 }: {
   label: string;
   children: ReactNode;
   reason: ReactNode;
-  link?: { to: ScreenName; label: string };
+  where?: { to: WritingScreen; label: string } | "revision";
 }) {
   return (
     <div className="builder-fact col gap-1">
@@ -178,11 +225,18 @@ export function ReadOnlyFact({
       <div className="t-body">{children}</div>
       <p className="t-caption">
         {reason}
-        {link && (
+        {where === "revision" ? (
           <>
             {" "}
-            <ScreenLink to={link.to}>{link.label}</ScreenLink>
+            <NoScreenWrites />
           </>
+        ) : (
+          where && (
+            <>
+              {" "}
+              <ScreenLink to={where.to}>{where.label}</ScreenLink>
+            </>
+          )
         )}
       </p>
     </div>
@@ -546,28 +600,55 @@ export function placeOnFields(
   };
 }
 
-/** Where a problem the builder cannot fix is fixed instead. */
-const PROBLEM_LINKS: Readonly<Record<ProblemLink, string>> = {
-  integrations: "Open Integrations",
-  schedules: "Open Schedules",
+/** The screen each remedy that IS a screen opens, and what its link says. */
+const REMEDY_SCREENS: Readonly<
+  Record<Exclude<ProblemRemedy, "revision">, { to: WritingScreen; label: string }>
+> = {
+  integrations: { to: "integrations", label: "Open Integrations" },
 };
+
+/**
+ * Where a problem the builder cannot fix is fixed: a link to the screen that
+ * writes it, or the write paths when no screen does. `standalone` as for
+ * [ScreenLink]: a remedy on a line of its own, not trailing a sentence.
+ */
+export function ProblemRemedyNote({
+  remedy,
+  standalone,
+}: {
+  remedy: ProblemRemedy;
+  standalone?: boolean;
+}) {
+  if (remedy === "revision")
+    return (
+      <span>
+        <NoScreenWrites />
+      </span>
+    );
+  const { to, label } = REMEDY_SCREENS[remedy];
+  return (
+    <ScreenLink to={to} standalone={standalone}>
+      {label}
+    </ScreenLink>
+  );
+}
 
 /**
  * The problems a form could not place on a field, at its top.
  *
- * WITH THE LINK EACH ONE CARRIES. A problem that names a field the form draws
- * sits beside that field, so what reaches the top is usually about something
- * the builder does not author at all: a schedule on a seat that may not have
- * one, a company integration block. The problem's own link is then the only
- * thing on screen that says where it is fixed. A check answers with
+ * WITH THE REMEDY EACH ONE CARRIES. A problem that names a field the form
+ * draws sits beside that field, so what reaches the top is usually about
+ * something the builder does not author at all: a schedule on a seat that may
+ * not have one, a company integration block. The problem's own remedy is then
+ * the only thing on screen that says where it is fixed. A check answers with
  * refusals or with warnings, never both, so the banner takes the tone of
  * what it holds.
  */
 export function NodeProblems({ problems }: { problems: readonly PlacedProblem[] }) {
   if (problems.length === 0) return null;
   const critical = problems.some((p) => p.severity === "problem");
-  const links = [...new Set(problems.map((p) => p.link))].filter(
-    (link): link is ProblemLink => link !== null,
+  const remedies = [...new Set(problems.map((p) => p.remedy))].filter(
+    (remedy): remedy is ProblemRemedy => remedy !== null,
   );
   return (
     // ANNOUNCED WHEN IT IS A REFUSAL, and only then. A Callout is silent by
@@ -576,12 +657,10 @@ export function NodeProblems({ problems }: { problems: readonly PlacedProblem[] 
     // operator just ran, and a refusal is what stops the save.
     <Callout variant={critical ? "danger" : "warning"} role={critical ? "alert" : undefined}>
       <Problems detail={problems.map((p) => p.message).join("\n")} />
-      {links.length > 0 && (
+      {remedies.length > 0 && (
         <p className="row wrap gap-3">
-          {links.map((link) => (
-            <ScreenLink key={link} to={link} standalone>
-              {PROBLEM_LINKS[link]}
-            </ScreenLink>
+          {remedies.map((remedy) => (
+            <ProblemRemedyNote key={remedy} remedy={remedy} standalone />
           ))}
         </p>
       )}

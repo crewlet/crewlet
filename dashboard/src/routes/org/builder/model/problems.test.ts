@@ -59,7 +59,7 @@ describe("placeProblems", () => {
     expect(index.byNode.get("seat:dev")?.map((p) => p.field)).toEqual([["goal"]]);
     expect(index.byNode.get("seat:sre")?.[0]).toMatchObject({
       field: ["integrations", "slack", "channel"],
-      link: null,
+      remedy: null,
       severity: "problem",
     });
     expect(index.byNode.get("unit:Sales")?.[0]?.field).toEqual([]);
@@ -87,7 +87,7 @@ describe("placeProblems", () => {
     expect(index.byNode.get(COMPANY_KEY)?.map((p) => p.field)).toEqual([["name"], ["policies", 0]]);
   });
 
-  test("what the builder cannot fix stays at document level, linked to where it is fixed", () => {
+  test("what the builder cannot fix stays at document level, with where it is fixed", () => {
     const { sent } = sentFixture();
     const index = placeProblems(sent, {
       problems: [
@@ -98,16 +98,18 @@ describe("placeProblems", () => {
         problem(["roles", 9, "goal"]),
       ],
     });
-    expect(index.document.map((p) => [p.node, p.link])).toEqual([
+    // The `scheduling` block is a revision: no screen writes it, and
+    // Agents › Schedules, where it used to send the operator, only reads.
+    expect(index.document.map((p) => [p.node, p.remedy])).toEqual([
       [null, "integrations"],
-      [null, "schedules"],
+      [null, "revision"],
       [null, null],
       [null, null],
       [null, null],
     ]);
   });
 
-  test("a node's own schedule links to the Schedules screen, and a tool server named schedules does not", () => {
+  test("a node's own schedule is fixed by a revision, and a tool server named schedules is not", () => {
     const { sent } = sentFixture();
     const index = placeProblems(sent, {
       problems: [
@@ -115,7 +117,7 @@ describe("placeProblems", () => {
         problem(["units", 0, "mcp_env", "schedules", "TOKEN"]),
       ],
     });
-    expect(index.byNode.get("unit:Engineering")?.map((p) => p.link)).toEqual(["schedules", null]);
+    expect(index.byNode.get("unit:Engineering")?.map((p) => p.remedy)).toEqual(["revision", null]);
   });
 
   test("a problem naming only a seat is placed through the derivation that came with it", () => {
