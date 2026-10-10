@@ -153,7 +153,14 @@ type AuthorKind string
 const (
 	// AuthorAgent is a seat, acting inside a turn.
 	AuthorAgent AuthorKind = "agent"
-	// AuthorHuman is a person, through the dashboard or a chat surface.
+	// AuthorHuman is a person's SEAT, named as a party rather than as a
+	// writer: the kind a unit's effective lead carries ([LeadRef]) when the
+	// chart's lead is a human seat. It is NOT how a person's own writes are
+	// recorded — the dashboard writes through /operator/act and their
+	// assistant through /operator/mcp, both as [AuthorOperator] with the
+	// bound seat beside the token (ADR-0024) — so no write path in this build
+	// stamps it on a record. The gates and [AuthorKind.Person] still count
+	// it as a person, because a record carrying it names one.
 	AuthorHuman AuthorKind = "human"
 	// AuthorOperator is an API token, recorded under its own label.
 	AuthorOperator AuthorKind = "operator"
