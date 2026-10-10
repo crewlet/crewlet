@@ -117,9 +117,13 @@ test("the save is a create-only PUT, and says what is left to do", async () => {
     "#/settings/integrations",
   );
   expect(screen.getByText(/crewlet config import company.yaml/)).toBeDefined();
-  expect(
-    screen.getByText(/no agent seat takes a turn, and work sent to a seat waits/),
-  ).toBeDefined();
+  const provider = screen.getByText(/no agent seat takes a turn, and work sent to a seat waits/);
+  // What no screen does is ADD a provider: Settings › Models & keys edits one
+  // the company has, so "no screen writes providers.llm" was not true.
+  expect(provider.textContent).toContain(
+    "No dashboard screen adds one to providers.llm: Models & keys edits a provider the company already has.",
+  );
+  expect(provider.textContent).not.toContain("writes");
   // The first revision has no parent to differ from, so the strip opens the
   // configuration itself rather than an empty diff.
   expect(screen.queryByRole("link", { name: "View changes" })).toBeNull();

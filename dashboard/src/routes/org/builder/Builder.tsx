@@ -109,7 +109,7 @@ import { useCheck } from "./useCheck.ts";
 import { useDraftKeeping } from "./useDraftKeeping.ts";
 import { addMenu, nodeMenu } from "./nodeActions.tsx";
 import { useOpenScreen, useStructure } from "./useCharts.ts";
-import { screenPath } from "./dialogParts.tsx";
+import { ProblemRemedyNote, screenPath } from "./dialogParts.tsx";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import {
   type GlyphProps,
@@ -1329,8 +1329,9 @@ function BuilderScreen({
   const llm = isRecord(providers) ? providers.llm : undefined;
   // THE COMPANY RUNS AND ITS AGENTS WAIT. The engine applies a company with no
   // providers.llm and places its seats, then holds every delivery on the
-  // seat's inbox until an apply brings a provider (engine/nomodels.go). The
-  // dashboard writes none, so the builder says where one comes from.
+  // seat's inbox until an apply brings a provider (engine/nomodels.go). No
+  // screen ADDS one (Settings › Models & keys edits a provider the company
+  // already has), so the builder says where one comes from.
   const noProvider = state.mode === "edit" && !(isRecord(llm) && Object.keys(llm).length > 0);
   const documentProblems = problemsCurrent ? state.check.problems.document : [];
 
@@ -1735,8 +1736,8 @@ function BuilderScreen({
         {noProvider && (
           <Callout variant="warning" icon={<CpuGlyph />}>
             No model provider is configured, so no agent seat takes a turn: work sent to a seat
-            waits on its inbox until one is added. The dashboard does not write providers: add one
-            with <InlineCode>crewlet config import</InlineCode> or{" "}
+            waits on its inbox until one is added. No screen adds one (Models &amp; keys edits a
+            provider the company has): add it with <InlineCode>crewlet config import</InlineCode> or{" "}
             <InlineCode>PATCH /config</InlineCode>.
           </Callout>
         )}
@@ -2083,20 +2084,10 @@ function DocumentProblems({ problems }: { problems: readonly PlacedProblem[] }) 
         {problems.map((p, i) => (
           <li key={i}>
             <span>{p.message}</span>
-            {p.link === "integrations" && (
+            {p.remedy !== null && (
               <>
                 {" "}
-                <a className="t-link prose-link" href={href(screenPath("integrations"))}>
-                  Open Integrations
-                </a>
-              </>
-            )}
-            {p.link === "schedules" && (
-              <>
-                {" "}
-                <a className="t-link prose-link" href={href(screenPath("schedules"))}>
-                  Open Schedules
-                </a>
+                <ProblemRemedyNote remedy={p.remedy} />
               </>
             )}
           </li>

@@ -14,10 +14,11 @@
  * "Leads are people" option therefore creates human leads without identities,
  * and the review lists each one until it has one.
  *
- * WHAT A CREATE CANNOT DO. The dashboard writes no model provider (that is
- * `providers.llm`, which no screen edits), so the next steps after a
- * successful create name the two things left to do and give the command for
- * the one that has no screen at all.
+ * WHAT A CREATE CANNOT DO. No screen ADDS a model provider: Settings › Models
+ * & keys edits a `providers.llm` entry the company already has (its model, its
+ * keys, its endpoint) and has no add, and a new company has none to edit. So
+ * the next steps after a successful create name the two things left to do and
+ * give the command for the one that has no screen at all.
  */
 
 import { useState } from "react";
@@ -211,7 +212,7 @@ export function CreateCompany({
 
 /**
  * What is left to do once the company exists: connect the tools it works in,
- * and give it a model provider, which no dashboard screen writes.
+ * and give it a model provider, which no dashboard screen adds.
  */
 export function NextSteps({ onDismiss }: { onDismiss: () => void }) {
   return (
@@ -243,9 +244,11 @@ export function NextSteps({ onDismiss }: { onDismiss: () => void }) {
           <strong>Add a model provider</strong>
           <span className="t-caption">
             Until one is configured no agent seat takes a turn, and work sent to a seat waits on its
-            inbox until it is. No dashboard screen writes <InlineCode>providers.llm</InlineCode>.
-            Seal the key first with <InlineCode>crewlet secrets set ANTHROPIC_API_KEY</InlineCode>,
-            then either import a company file or patch the configuration:
+            inbox until it is. No dashboard screen adds one to{" "}
+            <InlineCode>providers.llm</InlineCode>: Models &amp; keys edits a provider the company
+            already has. Seal the key first with{" "}
+            <InlineCode>crewlet secrets set ANTHROPIC_API_KEY</InlineCode>, then either import a
+            company file or patch the configuration:
           </span>
           <CodeBlock plain wrap code={PROVIDER_SNIPPET} />
         </div>

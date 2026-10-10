@@ -619,10 +619,24 @@ describe("seat fields", () => {
     doc.units![0]!.roles![1]!.llm = { default: "fast", review: ["smart", "fast"] };
     edit(keyedState(doc), "seat:dev");
     expect(screen.queryByRole("combobox", { name: /^Model/ })).toBeNull();
-    expect(screen.getByText("review: smart, then fast")).toBeDefined();
-    expect(
-      screen.getByRole("link", { name: "Edit in the configuration document" }).getAttribute("href"),
-    ).toBe("#/settings/config");
+    const fact = screen.getByText("review: smart, then fast").closest(".builder-fact")!;
+    // Where it IS changed, and no link: the configuration viewer this used to
+    // open as "Edit in the configuration document" reads and never writes.
+    expect(fact.textContent).toContain(
+      "No screen edits this: it is changed with crewlet config import or PUT /config.",
+    );
+    expect(within(fact as HTMLElement).queryByRole("link")).toBeNull();
+  });
+
+  // No screen ADDS a provider (Settings › Models & keys edits one the company
+  // has), so a company with none is told the write that does.
+  test("a company with no provider is told how one is added, not sent to a screen", () => {
+    edit(keyedState(fixtureCompany()), "seat:dev");
+    const helper = screen.getByText(/The company has no model provider yet/);
+    expect(helper.textContent).toBe(
+      "The company has no model provider yet, and no screen adds one: add it with crewlet config import or PATCH /config.",
+    );
+    expect(within(helper).queryByRole("link")).toBeNull();
   });
 
   // Read only, the banner is the reason Apply is unavailable; a caption asking
@@ -732,9 +746,19 @@ describe("seat fields", () => {
     expect(
       within(section).getByText("5 settings the builder shows and does not edit."),
     ).toBeDefined();
+    // No screen writes these, so each says what does and links nowhere: every
+    // one of them used to link Settings › Configuration, which only reads.
     for (const label of ["Models per phase", "Sandbox", "Workers", "Learning"]) {
-      expect(within(fact(label)).getByRole("link").getAttribute("href")).toBe("#/settings/config");
+      expect(fact(label).textContent).toContain(
+        "No screen edits this: it is changed with crewlet config import or PUT /config.",
+      );
+      expect(within(fact(label)).queryByRole("link")).toBeNull();
     }
+    // The one a screen does write links to it.
+    expect(
+      within(fact("Datadog fallback")).getByRole("link", { name: "Open Integrations" }),
+    ).toBeDefined();
+    expect(document.querySelector('a[href^="#/settings/config"]')).toBeNull();
     expect(section.innerHTML).not.toContain("__redacted__");
   });
 
@@ -745,6 +769,32 @@ describe("seat fields", () => {
     const fact = screen.getByText("Placement").closest(".builder-fact") as HTMLElement;
     expect(fact.textContent).toContain("Nodes labelled region=eu");
     expect(fact.textContent).not.toContain("[object Object]");
+    expect(fact.textContent).toContain("No screen edits this");
+    expect(within(fact).queryByRole("link")).toBeNull();
+  });
+
+  test("a unit's tool credentials say how they are changed, and link no reading screen", () => {
+    edit(keyedState(fixtureCompany()), "unit:Engineering");
+    const fact = screen.getByText("Tool credentials").closest(".builder-fact") as HTMLElement;
+    expect(fact.textContent).toContain("tracker (TOKEN)");
+    expect(fact.textContent).toContain(
+      "No screen edits this: it is changed with crewlet config import or PUT /config.",
+    );
+    expect(within(fact).queryByRole("link")).toBeNull();
+  });
+
+  // Schedules shows when a schedule fires and writes none, so it is linked as
+  // that, and where a schedule IS written is said.
+  test("the schedules panel says no screen writes a schedule, and links Schedules as a view", () => {
+    edit(keyedState(fixtureCompany()), "unit:Engineering");
+    const panel = screen.getByRole("heading", { name: "Schedules" }).closest("section")!;
+    const hint = within(panel as HTMLElement).getByText(/switched on or off here/);
+    expect(hint.textContent).toBe(
+      "Each can be switched on or off here, and Schedules shows when it fires. No screen writes a schedule: one is added or changed with crewlet config import or PUT /config.",
+    );
+    expect(within(hint).getByRole("link", { name: "Schedules" }).getAttribute("href")).toBe(
+      "#/agents/schedules",
+    );
   });
 
   test("a human seat shows contact and availability, and no agent-only field", () => {
@@ -966,9 +1016,11 @@ describe("problems", () => {
   });
 
   // A problem that reaches the top is usually about something the builder does
-  // not author, so the link it carries is the only thing on screen saying
-  // where it is fixed. A human seat draws no schedules panel at all.
-  test("a problem the form cannot place keeps the link that says where it is fixed", () => {
+  // not author, so the remedy it carries is the only thing on screen saying
+  // where it is fixed. A human seat draws no schedules panel at all, and no
+  // screen writes a schedule: the remedy is the write, never a link to
+  // Schedules, which only reads.
+  test("a problem the form cannot place keeps the remedy that says where it is fixed", () => {
     const doc = fixtureCompany();
     doc.units![0]!.roles![1] = {
       name: "Dev",
@@ -985,9 +1037,10 @@ describe("problems", () => {
     edit(state, "seat:dev");
     const alert = screen.getByRole("alert");
     expect(alert.textContent).toContain("must not carry schedules");
-    expect(within(alert).getByRole("link", { name: "Open Schedules" }).getAttribute("href")).toBe(
-      "#/agents/schedules",
+    expect(alert.textContent).toContain(
+      "No screen edits this: it is changed with crewlet config import or PUT /config.",
     );
+    expect(within(alert).queryByRole("link")).toBeNull();
   });
 
   // The engine takes a draft with warnings; a field's error slot says it is

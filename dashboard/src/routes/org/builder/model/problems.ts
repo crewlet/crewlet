@@ -34,8 +34,19 @@ import {
   type Segment,
 } from "./document.ts";
 
-/** Where a problem sends the operator when the builder cannot fix it. */
-export type ProblemLink = "integrations" | "schedules";
+/**
+ * Where a problem the builder cannot fix is fixed: the screen that writes what
+ * it names, or `revision` when no screen writes it at all and the remedy is a
+ * revision written outside the dashboard (`crewlet config import`,
+ * `PUT /config`).
+ *
+ * NEVER A SCREEN THAT ONLY READS. A schedule's problem used to send the
+ * operator to Agents › Schedules, which shows when each schedule fires and
+ * writes none of them, so the one remedy on screen for a schedule a human seat
+ * must not carry, or for a `scheduling` block the engine refused, was a page
+ * that could change neither.
+ */
+export type ProblemRemedy = "integrations" | "revision";
 
 /** One problem or warning, placed. */
 export interface PlacedProblem {
@@ -47,7 +58,7 @@ export interface PlacedProblem {
   readonly node: NodeKey | null;
   /** The segments below the node: `["goal"]`, `["schedules", 0, "cron"]`. Empty for the node itself. */
   readonly field: readonly Segment[];
-  readonly link: ProblemLink | null;
+  readonly remedy: ProblemRemedy | null;
   /** The engine's own record, for a caller that needs `line`, `ref`, `from` or `to`. */
   readonly source: ConfigProblem | ConfigWarning;
 }
@@ -97,7 +108,7 @@ export function placeProblems(sent: IndexedDocument, findings: Findings): Proble
       message: source.message,
       node,
       field,
-      link: linkFor(segments, node, field),
+      remedy: remedyFor(segments, node, field),
       source,
     };
     if (node === null) document.push(placed);
@@ -137,17 +148,18 @@ function locate(
 
 /**
  * Where a problem the builder cannot fix is fixed. A schedule is one of a
- * node's own `schedules`, or the company's `scheduling` block; matching
- * "schedules" anywhere in the segments would also match a tool server of
- * that name under `mcp_env`.
+ * node's own `schedules`, or the company's `scheduling` block, and no screen
+ * writes either (the builder only switches a schedule on or off), so both are
+ * a revision. Matching "schedules" anywhere in the segments would also match
+ * a tool server of that name under `mcp_env`.
  */
-function linkFor(
+function remedyFor(
   segments: readonly Segment[],
   node: NodeKey | null,
   field: readonly Segment[],
-): ProblemLink | null {
-  if (node !== null && node !== COMPANY_KEY) return field[0] === "schedules" ? "schedules" : null;
-  if (segments[0] === "scheduling") return "schedules";
+): ProblemRemedy | null {
+  if (node !== null && node !== COMPANY_KEY) return field[0] === "schedules" ? "revision" : null;
+  if (segments[0] === "scheduling") return "revision";
   if (segments[0] === "integrations") return "integrations";
   return null;
 }
