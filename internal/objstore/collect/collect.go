@@ -203,6 +203,22 @@
 // fleet shares. The sweep of unfinished uploads stays one at a time: it
 // abandons what a crash left, a handful a day.
 //
+// THE DEPTH IS MEASURED, NOT INFERRED (BenchmarkAudit, over a modelled store
+// and estate rather than any real one; 2026-10-11, a four-core 2.8 GHz VM):
+// with a stat answered in 2 ms and a page of the estate read in 1 ms, the
+// audit kept a mean of 31.4 of its 32 questions out across sixteen pages — a
+// page read does not drain the bound. Listing ranges as S3 does, a page of a
+// thousand names a request answered in 10 ms, over a store holding one object
+// no row names to every fifty referenced, it made one request per nine hundred
+// references (0.00111 a reference) and kept about four out: there the walk's
+// own page reads, two a range, set the pace, and a slower listing — S3's —
+// keeps more of the bound out rather than slowing the audit. With one to every
+// five, as the last day's keys may hold, each range spanned two pages: two
+// requests a chunk (0.00222), eight out, and the same pace.
+// These are the model's figures, not any store's, and are taken again with
+//
+//	go test -run '^$' -bench BenchmarkAudit -benchtime 3x ./internal/objstore/collect/
+//
 // What the audit names is chosen by NAME, the first [MissingShown] files by
 // project and path, never by the order its questions were answered in, which
 // running them at once leaves to chance.
