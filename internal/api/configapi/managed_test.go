@@ -33,7 +33,7 @@ func (s *surface) as(t *testing.T, operator, method, path, body string, headers 
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	req = req.WithContext(auth.WithOperator(req.Context(), operator))
+	req = req.WithContext(auth.WithPrincipal(req.Context(), asAdmin(operator)))
 	res := httptest.NewRecorder()
 	s.mux.ServeHTTP(res, req)
 	return res

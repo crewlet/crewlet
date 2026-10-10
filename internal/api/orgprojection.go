@@ -14,9 +14,10 @@ import (
 //
 // # An explicit public type, never a marshal of the config's own structs
 //
-// These three surfaces are ANONYMOUSLY READABLE under the default posture
-// (`api.auth.allow_anonymous_read: true`), and the only surface that shows the
-// whole document, /config, is guarded in full. The projection used to marshal
+// These three surfaces are READABLE WITHOUT A KEY under the default posture
+// (`api.auth.anonymous: public` — GET /org is the public reach's one route),
+// and the only surface that shows the whole document, /config, is admin in
+// full. The projection used to marshal
 // config.Role and config.Unit verbatim and rely on nothing else, which made it
 // deny-by-omission: every field somebody added to a role was public the day it
 // landed. That had already happened. Contact identities (a person's Slack
@@ -28,7 +29,7 @@ import (
 //
 // So the public shape is spelled out here field by field, and a field reaches
 // an anonymous reader only by being written into one of these types on
-// purpose. Everything else stays behind the guarded `config` query, which is
+// purpose. Everything else stays behind the admin `config` query, which is
 // where the dashboard reads it. Configured work that has a read surface of its
 // own is not repeated here either: schedules are described by /schedules. A
 // token budget IS carried, as the ceilings the document writes, beside the

@@ -686,18 +686,17 @@ api:
 delivery rather than from a delivery quietly accepted on the socket nobody
 published. The public listener answers every other route exactly as it answers
 a path nothing serves: the same `404`, the same generic hint, nothing that says
-an admin port exists behind it. It requires no operator token and decides
-before the guard runs, so `/config` there is that same `404` whatever
-credential is sent. The split
+an admin port exists behind it. It requires no key and decides before the
+guard runs, so `/config` there is that same `404` whatever key is sent. The split
 is the engine's own, from one list (the `/webhooks/`, `/otlp/` and `/mcp/`
 prefixes, the routes that authenticate by a provider signature or a signed
-per-run token rather than an operator credential), so there is no allow-list to
+per-run token rather than an API key), so there is no allow-list to
 keep in step with the routes a release adds.
 
 **Why the sandbox endpoints are public.** A remote sandbox (E2B's cloud) runs
 on somebody else's network and reaches only what you publish; it calls
 `/otlp/{token}` and `/mcp/{token}` with the signed per-run token in the path and
-never holds an operator credential. Leaving them on `api.port` would force that
+never holds an API key. Leaving them on `api.port` would force that
 port public for every company running remote sandboxes. Point
 `CREWLET_SANDBOX_OTEL_RECEIVER_URL` and `CREWLET_MCP_BRIDGE_URL` at the public
 address.
@@ -1805,6 +1804,7 @@ inside the process to hook them, because the engine loads no plugins.
 
 ## Security Boundaries
 
+- **Who reaches the API** — every key in `api.auth.tokens` names its `role`. Give `admin` keys to the people and systems that run the engine — its configuration, its secrets, its fleet, backups and every agent's transcripts — and `member` keys to everybody else: a member reads the company's work, pages and chart and acts as the person the key is linked to, and is refused `403 forbidden` anything an agent processed or anything about how the engine runs. A caller with no key reaches the company's public face (`api.auth.anonymous: public`, the default) or nothing (`none`). Each node serving the API judges keys by its own Tier A, so give every such node the same keys and roles. See [Configuration § Auth](../concepts/configuration.md#auth)
 - **Scope isolation** — agents can only access knowledge within their permitted scopes
 - **Tool availability** — all registered tools available; per-role MCP tools carry role-specific credentials
 - **Communication permissions** — agents can only post to channels they're members of

@@ -37,7 +37,7 @@ func TestAnOperatorsAssistantFinishesACreateWithTheOpIDItWasAnswered(t *testing.
 	if s == nil {
 		t.Fatal("a company on the native tracker got no surface")
 	}
-	sess := dialOperator(t, s, "founder")
+	sess := dialOperator(t, s, asAdmin("founder"))
 
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()

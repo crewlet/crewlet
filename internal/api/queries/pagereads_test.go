@@ -114,12 +114,12 @@ func TestPageReadsRefusesAWindowPastItsMonth(t *testing.T) {
 	f := newSpendFixture(t)
 	r := registryOver(t, f.sources())
 	for _, days := range []int{0, 31} {
-		_, err := r.Answer(t.Context(), "page_reads", map[string]any{"page": readPage, "days": days}, "")
+		_, err := r.Answer(t.Context(), "page_reads", map[string]any{"page": readPage, "days": days}, asAdmin("ops"))
 		if !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("days=%d: err = %v, want bad params", days, err)
 		}
 	}
-	if _, err := r.Answer(t.Context(), "page_reads", map[string]any{}, ""); !errors.Is(err, queries.ErrBadParams) {
+	if _, err := r.Answer(t.Context(), "page_reads", map[string]any{}, asAdmin("ops")); !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("no page: err = %v, want bad params", err)
 	}
 }

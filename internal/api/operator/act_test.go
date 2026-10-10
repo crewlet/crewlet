@@ -148,20 +148,23 @@ func actSurface(t *testing.T, work *recordingWork) *operator.Server {
 	return s
 }
 
-// guarded is the act route behind the real bearer guard, as the app mounts
-// it: `founder`, `cofounder` and `ci` are all valid tokens, and `ci` is
-// nobody's.
+// guarded is the act route behind the real guard, at the member reach the app
+// mounts it at: `founder` (a member) and `cofounder` (an admin) are valid keys
+// a chart may link, and `ci` (an admin) and `intern` (a member) are valid keys
+// nobody's seat links.
 func guarded(s *operator.Server, disabled bool) http.Handler {
 	b := config.DefaultBootstrap()
 	b.API.Auth.Tokens = []config.APIToken{
-		{ID: "founder", Token: "founder-secret"},
-		{ID: "cofounder", Token: "cofounder-secret"},
-		{ID: "ci", Token: "ci-secret"},
+		{ID: "founder", Role: config.RoleMember, Token: "founder-secret"},
+		{ID: "cofounder", Role: config.RoleAdmin, Token: "cofounder-secret"},
+		{ID: "ci", Role: config.RoleAdmin, Token: "ci-secret"},
+		{ID: "intern", Role: config.RoleMember, Token: "intern-secret"},
 	}
 	b.API.Auth.Disabled = disabled
+	guard := auth.New(&b)
 	mux := http.NewServeMux()
-	mux.Handle(operator.ActPattern, s.ActHandler())
-	return auth.New(&b).Middleware(mux)
+	mux.Handle(operator.ActPattern, guard.Require(auth.ReachMember, s.ActHandler()))
+	return guard.Middleware(mux)
 }
 
 // act posts one request and decodes the JSON answer.
@@ -212,11 +215,13 @@ func requestOperation(t *testing.T, token, requestID, tool string,
 
 // NOBODY BUT A PERSON ACTS. A disabled guard's caller is nobody — even on a
 // chart that names the reserved id, which the chart's own validation refuses
-// and this transport must not depend on — and a token no seat binds is a
-// credential acting as itself, which is what /operator/mcp is for. Each is
-// refused `unbound`, naming the remedy that fits it, and the tracker is never
-// reached. The bound token beside them is served, so a transport that refused
-// everybody fails here too.
+// and this transport must not depend on — and a key no seat links is a
+// credential acting as itself. Each is refused `unbound`, naming the remedy
+// that fits it, and the tracker is never reached: an unlinked ADMIN key is
+// pointed at /operator/mcp, where it may act as itself, and an unlinked MEMBER
+// key is not, because a member acts only as the person it is linked to and
+// would be refused there too. The linked key beside them is served, so a
+// transport that refused everybody fails here too.
 func TestAnUnboundOrAnonymousCallerCannotAct(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -225,12 +230,16 @@ func TestAnUnboundOrAnonymousCallerCannotAct(t *testing.T) {
 		status      int
 		code        httpjson.Code
 		remedy      string
+		// notRemedy is a way round the refusal the hint must NOT offer.
+		notRemedy string
 	}{
-		{"a disabled guard's caller", "", true, http.StatusForbidden, operator.CodeUnbound, "api.auth"},
-		{"an unbound token", "ci-secret", false, http.StatusForbidden, operator.CodeUnbound,
-			"contact.crewlet_operator_id: ci"},
-		{"no credential", "", false, http.StatusUnauthorized, httpjson.CodeInvalidToken, ""},
-		{"a wrong credential", "guess", false, http.StatusUnauthorized, httpjson.CodeInvalidToken, ""},
+		{"a disabled guard's caller", "", true, http.StatusForbidden, operator.CodeUnbound, "api.auth", ""},
+		{"an unlinked admin key", "ci-secret", false, http.StatusForbidden, operator.CodeUnbound,
+			"contact.crewlet_operator_id: ci", ""},
+		{"an unlinked member key", "intern-secret", false, http.StatusForbidden, operator.CodeUnbound,
+			"contact.crewlet_operator_id: intern", operator.MCPPath},
+		{"no credential", "", false, http.StatusUnauthorized, httpjson.CodeInvalidToken, "", ""},
+		{"a wrong credential", "guess", false, http.StatusUnauthorized, httpjson.CodeInvalidToken, "", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -245,6 +254,10 @@ func TestAnUnboundOrAnonymousCallerCannotAct(t *testing.T) {
 			if tc.remedy != "" && !strings.Contains(answer["hint"].(string), tc.remedy) {
 				t.Errorf("the refusal's hint %q does not name the remedy %q",
 					answer["hint"], tc.remedy)
+			}
+			if tc.notRemedy != "" && strings.Contains(answer["hint"].(string), tc.notRemedy) {
+				t.Errorf("the refusal's hint %q offers %q, which refuses this key too",
+					answer["hint"], tc.notRemedy)
 			}
 			if actors, _ := work.writes(); len(actors) != 0 {
 				t.Errorf("a caller who is not a person reached the tracker as %+v", actors)

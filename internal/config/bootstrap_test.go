@@ -97,17 +97,17 @@ func TestBootstrapValidatorRejections(t *testing.T) {
 			"stream.tls.cert", ErrMissing,
 		},
 		{"port out of range", "api:\n  port: 70000\n", "api.port", ErrOutOfRange},
-		{"token with no id", "api:\n  auth:\n    tokens:\n      - id: \"\"\n        token: abc\n", "api.auth.tokens[0].id", ErrMissing},
-		{"token with no value", "api:\n  auth:\n    tokens:\n      - id: founder\n        token: \"\"\n", "api.auth.tokens[0].token", ErrMissing},
-		{"duplicate token id", "api:\n  auth:\n    tokens:\n      - {id: founder, token: a}\n      - {id: founder, token: b}\n", "api.auth.tokens[1].id", ErrConflict},
+		{"token with no id", "api:\n  auth:\n    tokens:\n      - id: \"\"\n        role: admin\n        token: abc\n", "api.auth.tokens[0].id", ErrMissing},
+		{"token with no value", "api:\n  auth:\n    tokens:\n      - id: founder\n        role: admin\n        token: \"\"\n", "api.auth.tokens[0].token", ErrMissing},
+		{"duplicate token id", "api:\n  auth:\n    tokens:\n      - {id: founder, role: admin, token: a}\n      - {id: founder, role: admin, token: b}\n", "api.auth.tokens[1].id", ErrConflict},
 		// A TOKEN ID IS LOWERCASE, because `contact.crewlet_operator_id`
 		// binds it by its lowercased value while every write made under it
 		// is recorded exactly. `Founder` beside `founder` was two
 		// credentials one seat's binding admitted as the same person, and
 		// `Founder` alone was bound for writes while its own rows never
 		// matched the person's reads.
-		{"mixed-case token id", "api:\n  auth:\n    tokens:\n      - {id: Founder, token: a}\n", "api.auth.tokens[0].id", ErrShape},
-		{"token ids that differ only in case", "api:\n  auth:\n    tokens:\n      - {id: founder, token: a}\n      - {id: FOUNDER, token: b}\n", "api.auth.tokens[1].id", ErrShape},
+		{"mixed-case token id", "api:\n  auth:\n    tokens:\n      - {id: Founder, role: admin, token: a}\n", "api.auth.tokens[0].id", ErrShape},
+		{"token ids that differ only in case", "api:\n  auth:\n    tokens:\n      - {id: founder, role: admin, token: a}\n      - {id: FOUNDER, role: admin, token: b}\n", "api.auth.tokens[1].id", ErrShape},
 
 		// A CORS ALLOW-LIST IS COMPARED AGAINST THE BROWSER'S `Origin`
 		// HEADER EXACTLY, and that header is always `scheme://host[:port]`
@@ -165,7 +165,7 @@ func TestTheWildcardOriginRefusalSaysWhatItWouldExpose(t *testing.T) {
 	if err == nil {
 		t.Fatal("a wildcard origin was accepted")
 	}
-	for _, want := range []string{"any site", "https://ops.example.com"} {
+	for _, want := range []string{"any site", "api.auth.anonymous", "https://ops.example.com"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal does not mention %q: %v", want, err)
 		}

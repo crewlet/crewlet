@@ -40,8 +40,10 @@ class InertWebSocket {
 }
 
 const JANE = {
-  operator_id: "U0FOUNDER",
-  operator: true,
+  token_id: "U0FOUNDER",
+  role: "admin",
+  reach: "admin",
+  linked: true,
   handle: "jane",
   name: "Jane Founder",
   kind: "human",
@@ -371,12 +373,12 @@ test("a refusal is said in the sheet and the sheet stays open", async () => {
 test.each([
   {
     who: "anonymous",
-    viewer: { operator_id: "", operator: false, handle: "", name: "", acts: [] },
+    viewer: { token_id: "", role: "", reach: "public", handle: "", name: "", acts: [] },
     reason: WRITE_REASONS.anonymous,
   },
   {
     who: "unbound",
-    viewer: { operator_id: "U0CI", operator: true, handle: "", name: "", acts: [] },
+    viewer: { token_id: "U0CI", role: "admin", reach: "admin", handle: "", name: "", acts: [] },
     reason: WRITE_REASONS.unbound,
   },
   {

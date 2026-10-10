@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/config"
@@ -188,8 +189,8 @@ type Sources struct {
 	// the question unregistered.
 	SandboxTail SandboxTails
 
-	// Config serves the config family, and every one of those is
-	// operator-gated: reading the document exposes the whole company.
+	// Config serves the config family, and every one of those is admin:
+	// reading the document exposes the whole company.
 	Config *configapi.Service
 
 	// Routed names the integrations whose deliveries can wake a seat, or
@@ -398,24 +399,41 @@ var ErrUnavailable = errors.New("queries: not available on this node")
 // mistyped item key reads to an operator as the server being broken.
 var ErrNotFound = errors.New("queries: no such record")
 
-// Register wires every question these sources can answer.
+// Register wires every question these sources can answer, each at the reach a
+// caller needs to be answered it (ADR-0031).
 //
 // A question whose source is missing is NOT registered, so it comes back as
 // unknown rather than as a failure — the honest answer for a node that does not
 // have that surface at all.
+//
+// # The reach of each question is the withholding rule, applied once
+//
+// MEMBER for what the company PUBLISHED: its work and pages, its chart and its
+// schedules, who is working on what, and what is waiting on somebody. ADMIN
+// for what the machine PROCESSED — a seat's live call, its turns and phases,
+// the event log, a trace, its memory and its conversations, a coding run's
+// output, spend — and for how the engine is RUN: the nodes, the keys, the
+// credential pools, the integrations, configuration, retention and backups.
+// OPEN for one question, `viewer`, because "who am I" is what a sign-in page
+// asks before anybody has signed in.
+//
+// A question that answers about one PERSON is member, and is narrowed past
+// that to the caller's own seat and the seats in their line
+// ([Sources.viewerParty]) — a reach says which side of the rule a question is
+// on, and the line says whose record of it a caller may read.
 func Register(r *Registry, s Sources) {
 	if s.State != nil {
-		r.Register("agent", s.agent)
+		r.Register("agent", auth.ReachAdmin, s.agent)
 		// ONE SEAT'S CALL IN FLIGHT, WHOLE: what a tab asks when an `agents`
 		// push names a version of a heavy field newer than the copy it
 		// holds — the push that carried it was dropped. From the projection
 		// alone, so it costs what a push does; `agent` reads the seat's
 		// history from every node as well.
-		r.Register("live_call", s.liveCall)
-		r.Register("tokens", s.tokens)
+		r.Register("live_call", auth.ReachAdmin, s.liveCall)
+		r.Register("tokens", auth.ReachAdmin, s.tokens)
 	}
 	if s.Events != nil {
-		r.Register("events", s.events)
+		r.Register("events", auth.ReachAdmin, s.events)
 		// THE SAME ROWS WITH A TIME AXIS, which the listing has no
 		// dimension for: a page of rows says what happened and nothing
 		// about when the company was busy. A second question rather than
@@ -423,22 +441,22 @@ func Register(r *Registry, s Sources) {
 		// shapes and one route returning either would make every caller
 		// branch on what came back — the same split `tokens` and
 		// `token_series` already carry.
-		r.Register("event_series", s.eventSeries)
-		r.Register("event", s.event)
-		r.Register("trace", s.trace)
+		r.Register("event_series", auth.ReachAdmin, s.eventSeries)
+		r.Register("event", auth.ReachAdmin, s.event)
+		r.Register("trace", auth.ReachAdmin, s.trace)
 		// A turn is its own question, not a slice of the trace: one trace
 		// can span several turns and one turn several traces. See the
 		// answer, and migration 0015 which made it askable at all.
-		r.Register("turn", s.turn)
+		r.Register("turn", auth.ReachAdmin, s.turn)
 		// AND THE LIST OF THEM, which did not exist: a turn is the unit
 		// of work this engine does and every other surface is a
 		// projection of one. The dashboard faked it by paging the raw
 		// feed sixty-one times and folding in the browser.
-		r.Register("turns", s.turns)
+		r.Register("turns", auth.ReachAdmin, s.turns)
 		// The company's phase records, with their payloads. `events` cannot
 		// serve this: its listing never selects the payload, and a phase
 		// record without one has no prompts, no response and no decision.
-		r.Register("phases", s.phases)
+		r.Register("phases", auth.ReachAdmin, s.phases)
 	}
 	if s.Usage != nil {
 		// AND THE TIME AXIS. `tokens` is a breakdown whose every row is a
@@ -448,236 +466,234 @@ func Register(r *Registry, s Sources) {
 		// the replicated rows hold, and an axis that changed source when a
 		// reader widened the range is a seam across the one comparison the
 		// screen exists to make.
-		r.Register("token_series", s.tokenSeries)
+		r.Register("token_series", auth.ReachAdmin, s.tokenSeries)
 		// EVERY SEAT'S TURNS over a window of company days, from the same
 		// replicated rows: counts, the first-pass rate over reviewed turns,
 		// merged duration quantiles and a day-by-day series. A screen
 		// counting the rows of a list it loaded was counting the list.
-		r.Register("seat_activity", s.seatActivity)
+		r.Register("seat_activity", auth.ReachMember, s.seatActivity)
 	}
 	if s.Coord != nil {
-		// OPERATOR-ONLY, like every other answer Settings › Nodes
-		// draws. It reports the node ids, which node holds which seat,
-		// the lease epochs and how far a config rollout has reached —
-		// the shape of the deployment rather than the company's work.
-		// The dashboard already locks the row and its palette entry
-		// says "needs a token", and its own sidebar asks this beside
-		// `integrations`, which has always been operator-only. So this
-		// was the one destination of the five where the client claimed
-		// a guard the server did not keep, and on a node with
-		// `api.allow_anonymous_read` an anonymous GET read all of it.
-		r.RegisterOperator("fleet", s.fleet)
+		// ADMIN, like every other answer Settings › Nodes draws. It
+		// reports the node ids, which node holds which seat, the lease
+		// epochs and how far a config rollout has reached — the shape of
+		// the deployment rather than the company's work.
+		r.Register("fleet", auth.ReachAdmin, s.fleet)
 		// WHAT EACH MCP SERVER DID ON EACH NODE, off the same lease
 		// table: every node re-publishes its starts on its presence
-		// heartbeat, so one listing answers for the fleet. Operator-only
-		// for fleet's reason — node ids, launch commands and the first
-		// line of each failure. See [Sources.mcpServersStatus].
-		r.RegisterOperator("mcp_servers_status", s.mcpServersStatus)
+		// heartbeat, so one listing answers for the fleet. Admin for
+		// fleet's reason — node ids, launch commands and the first line
+		// of each failure. See [Sources.mcpServersStatus].
+		r.Register("mcp_servers_status", auth.ReachAdmin, s.mcpServersStatus)
 	}
 	if s.Access != nil {
-		// OPERATOR-ONLY: which labels the guard accepts and which person
-		// each is, is a map of which credential to take. See
+		// ADMIN: which labels the guard accepts, what each one reaches and
+		// which person each is, is a map of which credential to take. See
 		// [Sources.access].
-		r.RegisterOperator("access", s.access)
+		r.Register("access", auth.ReachAdmin, s.access)
 	}
 	if s.Backups != nil && s.Events != nil {
-		// OPERATOR-ONLY, for retention's reason and more: every row names
+		// ADMIN, for retention's reason and more: every row names
 		// a directory on a named host that holds the company's sealed
 		// credentials. Gated on BOTH halves, since an answer with the
 		// register and no history would read as a fleet nobody ever asked
 		// for a backup.
-		r.RegisterOperator("backups", s.backups)
+		r.Register("backups", auth.ReachAdmin, s.backups)
 	}
 	if s.CredentialPools != nil {
-		// OPERATOR-ONLY: which variable holds each model's keys and which
+		// ADMIN: which variable holds each model's keys and which
 		// of them a vendor is refusing right now is a map of which
 		// credential to take, and of when. See [Sources.credentialPool].
-		r.RegisterOperator("credential_pool", s.credentialPool)
+		r.Register("credential_pool", auth.ReachAdmin, s.credentialPool)
 	}
 	if s.FleetBroker != nil {
-		// OPERATOR-ONLY, for the fleet question's reason: node ids, their
+		// ADMIN, for the fleet question's reason: node ids, their
 		// roles and which member the broker counts are the deployment's
 		// shape, not the company's work.
-		r.RegisterOperator("fleet_broker", s.fleetBroker)
+		r.Register("fleet_broker", auth.ReachAdmin, s.fleetBroker)
 	}
 	// WHO IS ASKING. Registered unconditionally: a process with no company
-	// still has a credential presented to it, and "this token resolves to
-	// no seat" is the answer a screen needs in order to say what to bind.
-	r.Register("viewer", s.viewer)
+	// still has a credential presented to it, and "this key is linked to no
+	// seat" is the answer a screen needs in order to say what to link. OPEN,
+	// because the sign-in page asks it of a caller who has not signed in.
+	r.Register("viewer", auth.ReachOpen, s.viewer)
 	if s.Runs != nil {
 		// ONE SCHEDULE'S OWN HISTORY, gated on the LEDGER rather than on
 		// the company: the configured rows are a projection of the org
 		// and this is a store read, so a node with one and not the other
-		// is a real shape.
-		r.Register("schedule_runs", s.scheduleRuns)
+		// is a real shape. ADMIN, where `schedules` is member: what a
+		// company declares it does is published, and each run's outcome,
+		// its turn and its failure is what the machine did.
+		r.Register("schedule_runs", auth.ReachAdmin, s.scheduleRuns)
 	}
 	if s.Company != nil {
 		// Gated on the COMPANY, not on the durable counter: the caps are
 		// what the screen is about, and a counter that cannot be read
 		// answers "these are the ceilings, and nobody can read the usage",
 		// which is a real state an operator needs to see and is not the
-		// same as the question being unavailable here.
-		r.Register("budgets", s.budgets)
+		// same as the question being unavailable here. ADMIN: a budget is
+		// spend, which is the machine's.
+		r.Register("budgets", auth.ReachAdmin, s.budgets)
 		// Both are projections of the epoch: what the company DECLARES,
 		// which is a different question from what it has done.
-		r.Register("schedules", s.schedules)
-		// OPERATOR-ONLY, alone among the projections, because of what it
-		// projects. `/setup` is guarded in FULL — reads included — for the
-		// reason its own package doc gives: "the list of which credentials
-		// a company has NOT configured is a map of what to attack." This
-		// answer is that same map, per surface: which are configured, which
-		// hold a secret, which are half-set-up, and the address each is
-		// registered against. Serving it anonymously guarded the write and
-		// published the reconnaissance.
-		r.RegisterOperator("integrations", s.integrations)
+		r.Register("schedules", auth.ReachMember, s.schedules)
+		// ADMIN, because of what it projects. `/setup` is admin in FULL —
+		// reads included — for the reason its own package doc gives: "the
+		// list of which credentials a company has NOT configured is a map
+		// of what to attack." This answer is that same map, per surface:
+		// which are configured, which hold a secret, which are
+		// half-set-up, and the address each is registered against.
+		r.Register("integrations", auth.ReachAdmin, s.integrations)
 		// Gated on the COMPANY, not on the searcher, for the same reason
 		// budgets is: "this company has no knowledge backend configured" is
 		// a fact the company alone establishes, and it is a far more useful
 		// answer than an unknown query. A nil searcher IS the answer here,
 		// not the absence of one.
-		r.Register("knowledge", s.knowledgeSearch)
+		r.Register("knowledge", auth.ReachMember, s.knowledgeSearch)
 		// A NAME TO A SEAT, through the tiers an agent's own lookup uses —
 		// the command palette's assign and ask pickers. A projection of
-		// the chart, so it rides the company like the others here.
-		r.Register("colleague", s.colleague)
+		// the chart, so it rides the company like the others here, and is
+		// member: the chart is published. Its chat-identity tier is an
+		// admin's alone — see [Sources.colleague].
+		r.Register("colleague", auth.ReachMember, s.colleague)
 	}
 	if s.Sandbox != nil {
-		r.Register("sandbox_runs", s.sandboxRuns)
+		r.Register("sandbox_runs", auth.ReachAdmin, s.sandboxRuns)
 	}
 	if s.SandboxTail != nil {
 		// ASKED ONLY WHILE SOMEBODY WATCHES: a trace polls it while a
 		// running coding run's span is open, and nothing else does. There
 		// is no event and no row behind it — see [Sources.SandboxTail].
-		r.Register("sandbox_tail", s.sandboxTail)
+		r.Register("sandbox_tail", auth.ReachAdmin, s.sandboxTail)
 	}
 	if s.Retention != nil {
-		// OPERATOR-ONLY. The answer names every node in the fleet, its
-		// position, its disk and its snapshot repository — a map of
-		// which machine to take out to lose the company's history — and
-		// it is read by a person or their cron, never by the dashboard's
-		// anonymous shell.
-		r.RegisterOperator("retention", s.retention)
+		// ADMIN. The answer names every node in the fleet, its position,
+		// its disk and its snapshot repository — a map of which machine
+		// to take out to lose the company's history.
+		r.Register("retention", auth.ReachAdmin, s.retention)
 	}
 	// The NATIVE backends, each gated on its own reader: a company can run
 	// the native tracker on Confluence, or the native knowledge base on
 	// Jira, and registering the pair together would offer one screen a
 	// question its half of the company cannot answer.
 	if s.Work != nil {
-		r.Register("work_items", s.workItems)
-		r.Register("work_item", s.workItem)
+		r.Register("work_items", auth.ReachMember, s.workItems)
+		r.Register("work_item", auth.ReachMember, s.workItem)
 		// A TASK'S THREAD, PAGED — the one collection on a detail with
 		// no bound of its own, so the detail returns its newest page and
 		// this walks the rest. See [Sources.workComments].
-		r.Register("work_comments", s.workComments)
+		r.Register("work_comments", auth.ReachMember, s.workComments)
 		// A TASK'S TURNS, PAGED, from the tracker's own rows — the
 		// durable account its cost panel sums. See
 		// [Sources.workItemTurns].
-		r.Register("work_item_turns", s.workItemTurns)
+		r.Register("work_item_turns", auth.ReachAdmin, s.workItemTurns)
 		// A SEPARATE QUESTION from `work_items`, for the reason
 		// `containers` is separate from `pages`: a screen draws the tab
 		// strip once and the rows in it on every filter change.
-		r.Register("work_views", s.workViews)
+		r.Register("work_views", auth.ReachMember, s.workViews)
 		// AND EVERY VIEW A PERSON CAN SEE, across the containers: the
 		// inventory and the sidebar's pins are about a person's views,
 		// not one container's tabs. See [Sources.workSavedViews].
-		r.Register("work_saved_views", s.workSavedViews)
+		r.Register("work_saved_views", auth.ReachMember, s.workSavedViews)
 		// A SEPARATE QUESTION from `work_items` for the reason
 		// `work_views` is: a home screen draws the project list once
 		// and its rows' tasks on every navigation, and the counts here
 		// are three MAINTAINED columns rather than an aggregate over
 		// every task in the company.
-		r.Register("work_projects", s.workProjects)
-		r.Register("work_project", s.workProject)
+		r.Register("work_projects", auth.ReachMember, s.workProjects)
+		r.Register("work_project", auth.ReachMember, s.workProject)
 		// AND WHO IS CARRYING HOW MUCH, across every project at once.
 		// A caller that grouped it itself paid one round trip per
 		// project and rewrote the arithmetic per surface.
-		r.Register("work_workload", s.workWorkload)
+		r.Register("work_workload", auth.ReachMember, s.workWorkload)
 		// THE FEED IS ITS OWN QUESTION, because it is ordered by the
 		// LOG rather than by anything a board sorts on: one durable
 		// table at any age, with a cursor that is a position.
-		r.Register("work_activity", s.workActivity)
+		r.Register("work_activity", auth.ReachMember, s.workActivity)
 		// AND ONE PERSON'S DAY, plus the notices that reached them.
 		//
-		// SCOPED RATHER THAN OPERATOR-ONLY — see [Sources.viewerParty].
-		// A caller reads the seat their own token is bound to, and
-		// naming anybody else's needs an operator credential, which is
-		// the same authority the tools that WRITE these records
-		// enforce. Registered operator-only, as `work_my_work` was, the
-		// landing screen becomes the most-gated screen in the product
-		// and the human teammate — one of the two readers this
-		// dashboard is for — is fictional. `work_person` has always
-		// been registered ungated, so this is what already ships rather
-		// than a new posture.
-		r.Register("work_my_work", s.workMyWork)
+		// MEMBER, AND SCOPED PAST THAT — see [Sources.viewerParty]. A
+		// caller reads the seat their own key is linked to and the seats
+		// in their line, which is the same authority a lead holds over a
+		// report's queue; an admin key adds nothing to it. Registered
+		// admin instead, the landing screen becomes the most-gated screen
+		// in the product and the human teammate — one of the two readers
+		// this dashboard is for — is fictional.
+		r.Register("work_my_work", auth.ReachMember, s.workMyWork)
 		// THE READER HAS ALWAYS EXISTED and nothing asked it: eighteen
 		// typed wake reasons, an addressed flag, a fallback flag and
 		// this person's own read and snooze marks, swept on a 365-day
 		// retention and reaching no screen.
-		r.Register("work_inbox", s.workInbox)
+		r.Register("work_inbox", auth.ReachMember, s.workInbox)
 		// WHO ONE CHANGE WOKE. The applier has written the set
 		// since the domain landed and its only trace on any surface
 		// was `work_activity.notified`: a boolean saying that
 		// somebody, somewhere, was told.
-		r.Register("work_routing", s.workRouting)
-		r.Register("work_catalogue", s.workCatalogue)
-		r.Register("work_person", s.workPerson)
+		r.Register("work_routing", auth.ReachMember, s.workRouting)
+		r.Register("work_catalogue", auth.ReachMember, s.workCatalogue)
+		r.Register("work_person", auth.ReachMember, s.workPerson)
 		// THE LANDING SCREEN'S THREE. The series is the tracker's history
 		// replayed backward from today's census; the feed merges the
 		// tracker's completions, creates and hand-offs with the pages'
 		// and the schedules' where this node keeps them; and what is
 		// waiting on a person is their open asks beside the coding runs
 		// parked on a question to them. See home.go.
-		r.Register("work_flow", s.workFlow)
-		r.Register("company_feed", s.companyFeed)
-		r.Register("decisions", s.decisions)
+		r.Register("work_flow", auth.ReachMember, s.workFlow)
+		r.Register("company_feed", auth.ReachMember, s.companyFeed)
+		r.Register("decisions", auth.ReachMember, s.decisions)
 	}
 	if s.Usage != nil {
 		// WHO READ A PAGE, from every node's days — see pagereads.go.
 		// Gated on the USAGE domain rather than on the native pages: a
 		// read is recorded with its backend, so a company on Confluence
 		// has readers too.
-		r.Register("page_reads", s.pageReads)
+		r.Register("page_reads", auth.ReachAdmin, s.pageReads)
 	}
 	if s.Pages != nil {
-		r.Register("pages", s.pageList)
-		r.Register("page", s.page)
+		r.Register("pages", auth.ReachMember, s.pageList)
+		r.Register("page", auth.ReachMember, s.page)
 		// A SEPARATE QUESTION from `pages`, not a facet of it: a browser
 		// draws the container list once and the page list on every
 		// navigation, and folding them together would ship every
 		// container's record with every page listing.
-		r.Register("containers", s.containers)
+		r.Register("containers", auth.ReachMember, s.containers)
 		// WHAT HAPPENED TO THE PAGES, which `pages_history` has recorded
 		// since the domain landed with two indexes naming readers nobody
 		// wrote — and ONE REVISION'S BODY, which the detail's summaries
 		// could say existed and never show.
-		r.Register("page_activity", s.pageActivity)
-		r.Register("page_revision", s.pageRevision)
+		r.Register("page_activity", auth.ReachMember, s.pageActivity)
+		r.Register("page_revision", auth.ReachMember, s.pageRevision)
 	}
 	if s.Memory != nil {
 		// ANSWERED BY THE HOLDER, and saying which node that was — see
 		// [Sources.Memory].
-		r.Register("agent_memory", s.agentMemory)
+		r.Register("agent_memory", auth.ReachAdmin, s.agentMemory)
 		// ONE EPISODE WHOLE, which the listing carries the openings of —
 		// a page of fifty whole asks could be more than the transport
 		// takes.
-		r.Register("agent_episode", s.agentEpisode)
+		r.Register("agent_episode", auth.ReachAdmin, s.agentEpisode)
 		// EVERY AGENT SEAT'S TOTALS IN ONE ANSWER, each counted by its
 		// holder in one scatter — what the diaries list draws, where a
 		// read per seat would be a lease read and a scatter per row.
-		r.Register("memory_overview", s.memoryOverview)
-		// SCOPED, like every other per-seat question — see
-		// [Sources.viewerParty].
-		r.Register("conversations", s.conversations)
+		r.Register("memory_overview", auth.ReachAdmin, s.memoryOverview)
+		// ADMIN, by seat, with no personal narrowing: this is an AGENT's
+		// ledger — what a seat said on a surface this engine does not own
+		// — which is what the machine processed rather than anybody's
+		// own record.
+		r.Register("conversations", auth.ReachAdmin, s.conversations)
 	}
 	if s.Channels != nil {
-		r.Register("a2a_channels", s.a2aChannels)
+		// ADMIN: which seat asked which, and how much they said, is the
+		// machine's own traffic — the conversations themselves are the
+		// event log's, which is admin too.
+		r.Register("a2a_channels", auth.ReachAdmin, s.a2aChannels)
 	}
 	if s.Files != nil {
 		// A PROJECT'S FILES, a page at a time in path order. The bytes are
 		// not an answer on this channel — a download streams from its own
 		// route — so this is everything a file list draws and nothing a
 		// reader opens.
-		r.Register("work_files", s.workFiles)
+		r.Register("work_files", auth.ReachMember, s.workFiles)
 	}
 	if s.WorkSearch != nil {
 		// SEARCH IS A QUESTION, not a filter on the board, and it is
@@ -685,17 +701,16 @@ func Register(r *Registry, s Sources) {
 		// reader is what `search_work_items` gives a seat, and the operator
 		// reading the same company had only `q=` — an escaped LIKE over
 		// the excerpt, gated to a span of days.
-		r.Register("work_search", s.workSearch)
+		r.Register("work_search", auth.ReachMember, s.workSearch)
 	}
 	if s.Config != nil {
-		// OPERATOR-ONLY, all three. Reading the config document exposes
-		// the whole company — its org chart, which integrations are
-		// wired, and every ${VAR} reference by name — which is what makes
-		// /config the one prefix never eligible for anonymous read.
-		r.RegisterOperator("config", s.configDocument)
-		r.RegisterOperator("config_audit", s.configAudit)
-		r.RegisterOperator("config_diff", s.configDiff)
-		r.RegisterOperator("config_entities", s.configEntities)
+		// ADMIN, all four, as /config is. Reading the config document
+		// exposes the whole company — its org chart, which integrations
+		// are wired, and every ${VAR} reference by name.
+		r.Register("config", auth.ReachAdmin, s.configDocument)
+		r.Register("config_audit", auth.ReachAdmin, s.configAudit)
+		r.Register("config_diff", auth.ReachAdmin, s.configDiff)
+		r.Register("config_entities", auth.ReachAdmin, s.configEntities)
 	}
 }
 

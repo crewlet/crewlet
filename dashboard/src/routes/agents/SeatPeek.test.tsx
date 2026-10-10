@@ -144,21 +144,23 @@ async function mount(
   return { asked: asked.filter((w) => w !== "viewer") };
 }
 
-const ANONYMOUS = { operator_id: "", acts: [] };
-const OPERATOR = {
-  operator_id: "ops",
-  operator: true,
+const ANONYMOUS = { token_id: "", role: "", reach: "public", acts: [] };
+const ADMIN = {
+  token_id: "ops",
+  role: "admin",
+  reach: "admin",
+  linked: true,
   handle: "jane",
   name: "Jane Founder",
   acts: ["create_work_item"],
 };
 
 // AN ANONYMOUS READER IS TOLD WHAT THE PUBLIC PUSH SAYS, AND ASKED FOR
-// NOTHING IT WOULD BE REFUSED. `fleet` is operator-only; a read sent anyway
+// NOTHING IT WOULD BE REFUSED. `fleet` is admin-only; a read sent anyway
 // would come back refused and draw a refusal where a sentence belongs. But
 // `/health` is public, so the node's own name and the seats it holds are
 // already on this reader's screen — and the profile's Setup card says them.
-// The peek said "Shown to operators" over the same fact.
+// The peek once said "Shown to operators" over the same fact.
 test("an anonymous reader sees what the health push says of the node, and sends no guarded read", async () => {
   const { asked } = await mount(ANONYMOUS, {
     health: healthFrame({ node: "node-1", seats: ["swe"] }),
@@ -179,7 +181,7 @@ test("an anonymous reader is told a seat another node holds is another node's", 
 });
 
 test("an operator sees the node that holds the seat and since when", async () => {
-  const { asked } = await mount(OPERATOR);
+  const { asked } = await mount(ADMIN);
   expect(asked).toContain("fleet");
   expect(screen.getByText(/node-2/)).toBeTruthy();
 });
@@ -187,7 +189,7 @@ test("an operator sees the node that holds the seat and since when", async () =>
 // AT MOST THREE READS PER OPEN, in the heaviest case: an operator, a seat
 // working on a task.
 test("the peek asks at most three questions", async () => {
-  const { asked } = await mount(OPERATOR);
+  const { asked } = await mount(ADMIN);
   expect(new Set(asked).size).toBeLessThanOrEqual(3);
   expect(asked).not.toContain("config");
 });
@@ -195,7 +197,7 @@ test("the peek asks at most three questions", async () => {
 // THE STATE CARD: the engine's line, and which turn on the task and which
 // round of how many.
 test("the state card names the turn on the task and the round", async () => {
-  await mount(OPERATOR);
+  await mount(ADMIN);
   expect(screen.getByText(/Executing ENG-412/)).toBeTruthy();
   expect(screen.getByText("Turn 2 · round 7 of 25")).toBeTruthy();
   expect(screen.getByText(/serving now: claude-sonnet-5/)).toBeTruthy();
@@ -221,18 +223,18 @@ test("the peek resolves a handle and nothing else", async () => {
 // seat that is not working has no such link, and neither has one whose turn
 // has published no id yet.
 test("the state card watches the running turn, and only a running one", async () => {
-  await mount(OPERATOR);
+  await mount(ADMIN);
   const state = screen.getByRole("region", { name: "Doing now" });
   expect(within(state).getByRole("link", { name: "Watch live" }).getAttribute("href")).toBe(
     "#/live/turns/turn-2?tab=transcript",
   );
   cleanup();
-  await mount(OPERATOR, {
+  await mount(ADMIN, {
     agents: [{ ...SWE, activity: "idle", turn: null, live_call: null } as AgentRow],
   });
   expect(screen.queryByRole("link", { name: "Watch live" })).toBeNull();
   cleanup();
-  await mount(OPERATOR, { agents: [{ ...SWE, turn: null, live_call: null } as AgentRow] });
+  await mount(ADMIN, { agents: [{ ...SWE, turn: null, live_call: null } as AgentRow] });
   expect(screen.queryByRole("link", { name: "Watch live" })).toBeNull();
 });
 
@@ -279,8 +281,8 @@ test("a seat with no budget of its own under a capped company names the company'
 // cannot act, and pressable for one who can.
 test.each([
   ["anonymous", ANONYMOUS, WRITE_REASONS.anonymous],
-  ["unbound", { operator_id: "ci", acts: [] }, WRITE_REASONS.unbound],
-  ["not served", { ...OPERATOR, acts: [] }, WRITE_REASONS.not_served],
+  ["unbound", { token_id: "ci", role: "member", reach: "member", acts: [] }, WRITE_REASONS.unbound],
+  ["not served", { ...ADMIN, acts: [] }, WRITE_REASONS.not_served],
 ])("Message is held with the reason for a reader who is %s", async (_, viewer, reason) => {
   await mount(viewer);
   const message = screen.getByRole("button", { name: /Message/ });
@@ -289,7 +291,7 @@ test.each([
 });
 
 test("Message is pressable for a reader who can file", async () => {
-  await mount(OPERATOR);
+  await mount(ADMIN);
   const message = screen.getByRole("button", { name: /Message/ });
   expect(message.getAttribute("aria-disabled")).not.toBe("true");
 });

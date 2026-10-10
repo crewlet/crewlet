@@ -37,8 +37,8 @@ function scripted<T>() {
   return { read, calls };
 }
 
-const refused = (status: number, retryAfter: string | null = null) =>
-  new RestError(status, { error: "refused" }, retryAfter);
+const refused = (status: number, retryAfter: string | null = null, code = "refused") =>
+  new RestError(status, { error: code }, retryAfter);
 
 describe("an answer belongs to the read that asked for it", () => {
   test("a superseded read's answer is dropped and its request aborted", async () => {
@@ -259,7 +259,6 @@ describe("what makes it read again", () => {
 describe("the code a refusal renders as", () => {
   test.each([
     [401, null, "unauthorized"],
-    [403, null, "unauthorized"],
     [0, null, "closed"],
     [400, null, "bad_params"],
     [404, null, "not_found"],
@@ -268,6 +267,20 @@ describe("the code a refusal renders as", () => {
     [500, null, "query_failed"],
   ] as const)("status %i with Retry-After %j is %s", (status, hint, code) => {
     expect(restErrorCode(refused(status, hint))).toBe(code);
+  });
+
+  // A KEY THE ENGINE ACCEPTED AND THE SURFACE REFUSED IS NOT A SIGN-IN. A
+  // member's key on an admin's route is `403 forbidden` (ADR-0031), and drawn
+  // as `unauthorized` it offered the token dialog to a person whose key
+  // works — they would paste the same key again and be refused again.
+  test("a 403 forbidden is forbidden, never unauthorized", () => {
+    expect(restErrorCode(refused(403, null, "forbidden"))).toBe("forbidden");
+  });
+
+  // Every other 403 names its own remedy and is read by its own code where
+  // it can arrive; reached here, it is not a reach refusal to draw as one.
+  test("a 403 with another code is not a reach refusal", () => {
+    expect(restErrorCode(refused(403, null, "config_managed"))).toBe("query_failed");
   });
 
   test("no error is no code", () => {

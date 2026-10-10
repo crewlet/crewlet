@@ -8,10 +8,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 )
 
@@ -21,8 +24,11 @@ import (
 // that refused everything would pass the refusal half and a gate that refused
 // nothing would pass the other.
 
-// drainingApp is an authenticated, configured node with the webhook edge
-// mounted on a real queue, draining or not.
+// drainingApp is an authenticated, configured node with every surface that
+// starts work mounted — the webhook edge on a real queue, the operator surface,
+// the purge, and the config, secrets and setup doors (stood in for: the gate
+// sits in front of each route, so what is behind it is not the question) —
+// draining or not.
 func drainingApp(t *testing.T, draining bool) *api.App {
 	t.Helper()
 	b := closedPosture()
@@ -36,6 +42,14 @@ func drainingApp(t *testing.T, draining bool) *api.App {
 			Secrets:   func() webhooks.Secrets { return webhooks.Secrets{GitHub: "gh-secret"} },
 			Publisher: memory.New(),
 		},
+		Config: stubSurface{"GET /config", "OPTIONS /config", "PUT /config", "PATCH /config",
+			"POST /config/reload", "POST /config/revisions/{id}/revert"},
+		Secrets: stubSurface{"PUT /secrets/{name}", "DELETE /secrets/{name}"},
+		Setup:   stubSurface{"POST /setup/integrations/{kind}/provision"},
+		Purger:  &fakePurger{},
+		Operator: operatorSurface(t, operator.Options{
+			Work: builtin.WorkDeps{Reader: stubWorkReader{}, Actor: operator.WorkActor(nil, nil)},
+		}),
 		Sources: queries.Sources{Company: active()},
 	})
 	return a
@@ -67,44 +81,31 @@ func refusedForDraining(t *testing.T, rec *httptest.ResponseRecorder) bool {
 // startsWork is every kind of request the gate refuses, one of each route
 // family: the webhook edge (a delivery, and both of its GET landings, one of
 // which acts and the other of which is refused with it), the config and
-// credential writes, the setup pass, the operator writes and the operator MCP
-// surface.
+// credential writes, the setup pass, the backup, the retention gestures, the
+// purge, the operator writes and the operator MCP surface.
 //
-// WHETHER THIS FIXTURE MOUNTS THE ROUTE IS DECLARED, because the gate is
-// middleware and runs BEFORE the mux: it refuses on path and method alone, so
-// a refusal proves the rule whether or not a handler exists behind it. That is
-// what makes the refusal case above meaningful for all twenty — and it is
-// also what would let an entry naming a path nothing serves sit here for ever
-// looking exactly like one that works. [TestNothingIsRefusedForDrainingBeforeADrain]
-// holds the declaration in BOTH directions for that reason, in the idiom
-// [solo]'s roster guard uses: a mounted entry that starts answering 404 has
-// drifted from the routes, and an unmounted one that stops is a fixture that
-// grew a surface and left its declaration behind.
-//
-// [drainingApp] is a node with no store, no coordination store and no company,
-// so the three surfaces that need one (/config, /secrets, /setup) and the two
-// that need a tracker (/work/{id}/purge, /operator/mcp, /operator/act/{tool})
-// are not mounted on it.
-var startsWork = []struct {
-	method, path string
-	mounted      bool
-}{
-	{http.MethodPost, "/webhooks/github", true},
-	{http.MethodPost, "/webhooks/slack/ceo", true},
-	{http.MethodGet, "/webhooks/github-app?code=c&state=s", true},
-	{http.MethodGet, "/webhooks/slack-oauth?code=c", true},
-	{http.MethodPut, "/config", false},
-	{http.MethodPatch, "/config", false},
-	{http.MethodPost, "/config/reload", false},
-	{http.MethodPost, "/config/revisions/r1/revert", false},
-	{http.MethodPut, "/secrets/GITHUB_TOKEN", false},
-	{http.MethodDelete, "/secrets/GITHUB_TOKEN", false},
-	{http.MethodPost, "/setup/integrations/github/provision", false},
-	{http.MethodPost, "/backup", true},
-	{http.MethodPost, "/work/retention/ack", true},
-	{http.MethodPost, "/work/ENG-1/purge", false},
-	{http.MethodPost, "/operator/mcp", false},
-	{http.MethodPost, "/operator/act/create_work_item", false},
+// EVERY ONE IS MOUNTED on [drainingApp], because the gate sits IN FRONT OF
+// EACH ROUTE ([api.App]'s route table puts it there, inside the route's reach
+// check): a path nothing serves is answered by the mux's own 404 and never
+// reaches a gate. [TestNothingIsRefusedForDrainingBeforeADrain] holds that,
+// so an entry that stops being mounted fails rather than passing as refused.
+var startsWork = []struct{ method, path string }{
+	{http.MethodPost, "/webhooks/github"},
+	{http.MethodPost, "/webhooks/slack/ceo"},
+	{http.MethodGet, "/webhooks/github-app?code=c&state=s"},
+	{http.MethodGet, "/webhooks/slack-oauth?code=c"},
+	{http.MethodPut, "/config"},
+	{http.MethodPatch, "/config"},
+	{http.MethodPost, "/config/reload"},
+	{http.MethodPost, "/config/revisions/r1/revert"},
+	{http.MethodPut, "/secrets/GITHUB_TOKEN"},
+	{http.MethodDelete, "/secrets/GITHUB_TOKEN"},
+	{http.MethodPost, "/setup/integrations/github/provision"},
+	{http.MethodPost, "/backup"},
+	{http.MethodPost, "/work/retention/ack"},
+	{http.MethodPost, "/work/ENG-1/purge"},
+	{http.MethodPost, "/operator/mcp"},
+	{http.MethodPost, "/operator/act/create_work_item"},
 }
 
 func TestADrainRefusesEveryRequestThatWouldStartWork(t *testing.T) {
@@ -132,14 +133,10 @@ func TestNothingIsRefusedForDrainingBeforeADrain(t *testing.T) {
 	// that is not draining: the gate is the drain's, and a gate shut all
 	// the time would pass the case above.
 	//
-	// And the declaration is held in both directions, so neither half of
-	// that can go quiet. A route this fixture mounts must reach its handler
-	// — whatever the handler then says — because an entry that silently
-	// started answering 404 would pass this case and the refusal case
-	// alike, the gate being middleware that never consults the mux. An
-	// entry declared unmounted must still be unmounted, so a fixture that
-	// grows a surface cannot leave a stale `false` behind saying the route
-	// is untested when it is not.
+	// And every entry reaches its handler — whatever the handler then says
+	// — because one that answered the mux's own 404 would never have
+	// reached the gate either, and would pass the refusal case for a
+	// route that no longer exists.
 	a := drainingApp(t, false)
 	for _, req := range startsWork {
 		rec := send(t, a, req.method, req.path)
@@ -148,16 +145,9 @@ func TestNothingIsRefusedForDrainingBeforeADrain(t *testing.T) {
 				req.method, req.path)
 			continue
 		}
-		switch routed := rec.Code != http.StatusNotFound; {
-		case req.mounted && !routed:
-			t.Errorf("%s %s answered 404 on a serving node: this entry is "+
-				"declared mounted, so either the route moved or the fixture "+
-				"stopped mounting it, and the refusal case would not notice "+
-				"either", req.method, req.path)
-		case !req.mounted && routed:
-			t.Errorf("%s %s now reaches a handler (%d): flip its `mounted` to "+
-				"true, so this case starts holding the route rather than "+
-				"reporting it untested", req.method, req.path, rec.Code)
+		if absent(t, rec) {
+			t.Errorf("%s %s is not mounted on this fixture, so the refusal case "+
+				"asserts nothing about it", req.method, req.path)
 		}
 	}
 }
@@ -262,14 +252,30 @@ func TestACrossOriginDashboardCanReadADrainRefusal(t *testing.T) {
 
 func TestACredentialIsStillTheFirstQuestionDuringADrain(t *testing.T) {
 	t.Parallel()
-	// Inside the guard: a write with no token is unauthorized whatever the
-	// node is doing, so a drain tells an anonymous caller nothing a guarded
-	// route would not.
-	a := drainingApp(t, true)
+	// Inside the route's reach check: a write with no key is unauthorized
+	// whatever the node is doing, and a member's write to an admin route is
+	// forbidden — so a drain tells a caller below a route's reach nothing
+	// that route would not, and never "retry later" for a refusal that
+	// waiting will not lift.
+	b := closedPosture()
+	b.API.Auth.Tokens = append(b.API.Auth.Tokens,
+		config.APIToken{ID: "ada", Role: config.RoleMember, Token: "member-secret"})
+	a := newApp(t, api.Options{
+		Bootstrap: &b,
+		Runtime:   &fakeRuntime{state: api.RuntimeState{ShuttingDown: true, Posture: "serve"}},
+		Config:    stubSurface{"PUT /config"},
+	})
 	rec := httptest.NewRecorder()
 	a.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/config", strings.NewReader("{}")))
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("an unauthenticated write answered %d during a drain, want 401", rec.Code)
+	}
+	req := httptest.NewRequest(http.MethodPut, "/config", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer member-secret")
+	rec = httptest.NewRecorder()
+	a.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("a member's write to an admin route answered %d during a drain, want 403", rec.Code)
 	}
 }
 

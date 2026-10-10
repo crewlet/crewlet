@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/operator"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -52,7 +53,7 @@ func TestBothTransportsServeTheSameCatalogue(t *testing.T) {
 	if s == nil {
 		t.Fatal("a company on both native backends got no surface")
 	}
-	sess := dialOperator(t, s, "ops-bot")
+	sess := dialOperator(t, s, asAdmin("ops-bot"))
 
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
@@ -84,7 +85,7 @@ func TestBothTransportsServeTheSameCatalogue(t *testing.T) {
 	// a listing and a dispatch that disagreed would be a verb a client sees
 	// and cannot call, or one it can call and never sees.
 	for _, name := range names {
-		if _, served, _ := s.Dispatch(auth.WithOperator(t.Context(), "ops-bot"),
+		if _, served, _ := s.Dispatch(auth.WithPrincipal(t.Context(), asAdmin("ops-bot")),
 			name, nil); !served {
 
 			t.Errorf("the MCP transport lists %q and the catalogue does not serve it", name)
@@ -97,7 +98,7 @@ func TestBothTransportsServeTheSameCatalogue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("call over MCP: %v", err)
 	}
-	direct, served, err := s.Dispatch(auth.WithOperator(t.Context(), "ops-bot"),
+	direct, served, err := s.Dispatch(auth.WithPrincipal(t.Context(), asAdmin("ops-bot")),
 		tracker.GetWorkItemTool, args)
 	if err != nil || !served {
 		t.Fatalf("dispatch: served=%v err=%v", served, err)
@@ -138,7 +139,7 @@ func TestARetriedPageCommentCarriesItsOperation(t *testing.T) {
 		t.Fatalf("RequestOperation: %v", err)
 	}
 	comment := func(op string) {
-		ctx := auth.WithOperator(t.Context(), "founder")
+		ctx := auth.WithPrincipal(t.Context(), asMember("founder"))
 		if op != "" {
 			ctx = operator.WithOperation(ctx, op)
 		}
@@ -180,7 +181,7 @@ func TestARetriedPageCommentCarriesItsOperation(t *testing.T) {
 // asked ([builtin.OperatorTools]).
 func TestTheWorkActorCarriesTheOperation(t *testing.T) {
 	t.Parallel()
-	ctx := auth.WithOperator(t.Context(), "founder")
+	ctx := auth.WithPrincipal(t.Context(), asMember("founder"))
 	op, err := builtin.RequestOperation("founder", requestA, builtin.CreateWorkItemTool,
 		map[string]any{"title": "x"})
 	if err != nil {
@@ -203,16 +204,26 @@ func TestTheWorkActorCarriesTheOperation(t *testing.T) {
 	}
 }
 
-// dialOperator connects an MCP client to the surface as one token.
+// asAdmin and asMember are the principals a key of each role named id carries,
+// as the app's guard attaches them.
+func asAdmin(id string) auth.Principal {
+	return auth.Principal{ID: id, Role: config.RoleAdmin, Reach: auth.ReachAdmin}
+}
+
+func asMember(id string) auth.Principal {
+	return auth.Principal{ID: id, Role: config.RoleMember, Reach: auth.ReachMember}
+}
+
+// dialOperator connects an MCP client to the surface as one caller.
 //
-// THE GUARD IS STOOD IN FOR by stamping the operator on the context, which is
+// THE GUARD IS STOOD IN FOR by stamping the principal on the context, which is
 // all the app's own guard does for a request it admits: this case is about
 // what the transport serves, and the guard has cases of its own.
-func dialOperator(t *testing.T, s *operator.Server, token string) *mcp.ClientSession {
+func dialOperator(t *testing.T, s *operator.Server, caller auth.Principal) *mcp.ClientSession {
 	t.Helper()
 	inner := s.MCPHandler()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		inner.ServeHTTP(w, r.WithContext(auth.WithOperator(r.Context(), token)))
+		inner.ServeHTTP(w, r.WithContext(auth.WithPrincipal(r.Context(), caller)))
 	}))
 	t.Cleanup(srv.Close)
 	client := mcp.NewClient(&mcp.Implementation{Name: "assistant", Version: "1"}, nil)

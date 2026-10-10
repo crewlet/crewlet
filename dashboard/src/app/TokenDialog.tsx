@@ -1,5 +1,5 @@
 /**
- * Collecting the operator's API token.
+ * Collecting this browser's API key.
  *
  * A real dialog, because a credential request has to be able to say who is
  * asking and why. This used to be a `window.prompt`, which arrives in a

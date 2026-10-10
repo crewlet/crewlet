@@ -14,6 +14,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/config"
@@ -123,7 +124,7 @@ func TestABadTokenFailsTheHandshakeRatherThanOpeningAndDying(t *testing.T) {
 	// over. Refusing the handshake is what lets the dashboard show its
 	// token gate instead.
 	f := newSocket(t, func(a *config.APIAuth) {
-		a.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
+		a.Tokens = []config.APIToken{{ID: "founder", Role: config.RoleAdmin, Token: "secret"}}
 	}, nil)
 
 	conn, res, err := f.dial(t, "wrong")
@@ -160,7 +161,7 @@ func TestABadTokenFailsTheHandshakeRatherThanOpeningAndDying(t *testing.T) {
 func TestAPlainGETSeparatesARefusedCredentialFromAnAcceptedOne(t *testing.T) {
 	t.Parallel()
 	f := newSocket(t, func(a *config.APIAuth) {
-		a.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
+		a.Tokens = []config.APIToken{{ID: "founder", Role: config.RoleAdmin, Token: "secret"}}
 	}, nil)
 
 	get := func(t *testing.T, token string) int {
@@ -181,8 +182,8 @@ func TestAPlainGETSeparatesARefusedCredentialFromAnAcceptedOne(t *testing.T) {
 		return res.StatusCode
 	}
 
-	// The reported failure: anonymous reads are open, so this browser
-	// would have connected with no credential at all — but it holds a
+	// The reported failure: the socket is open to a caller with no key, so
+	// this browser would have connected with none at all — but it holds a
 	// stale one, and a credential that is PRESENT and wrong is refused.
 	if got := get(t, "stale-from-last-deployment"); got != http.StatusUnauthorized {
 		t.Errorf("a refused credential = %d, want 401 — the dashboard "+
@@ -194,44 +195,73 @@ func TestAPlainGETSeparatesARefusedCredentialFromAnAcceptedOne(t *testing.T) {
 		t.Errorf("an accepted credential = %d, want 426", got)
 	}
 	if got := get(t, ""); got != http.StatusUpgradeRequired {
-		t.Errorf("no credential under anonymous reads = %d, want 426", got)
+		t.Errorf("no credential = %d, want 426", got)
 	}
 }
 
-func TestAClosedPostureRefusesAnUnauthenticatedSocket(t *testing.T) {
+// THE SOCKET OPENS WITHOUT A KEY WHATEVER THE POSTURE, because what it is sent
+// is judged per question rather than at the door: the sign-in page asks
+// `viewer` on it before anybody has signed in. The caller it opens as is the
+// anonymous posture's, so `anonymous: none` reaches nothing past the open
+// questions on it.
+func TestAKeylessSocketOpensAsTheAnonymousPosture(t *testing.T) {
 	t.Parallel()
-	// The socket carries full LLM transcripts, so it is guarded exactly as
-	// the equivalent HTTP read is.
-	f := newSocket(t, func(a *config.APIAuth) {
-		a.AllowAnonymousRead = false
-		a.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
-	}, nil)
-
-	if conn, _, err := f.dial(t, ""); err == nil {
-		_ = conn.Close(websocket.StatusNormalClosure, "")
-		t.Error("a closed posture opened an unauthenticated socket")
-	}
-	// And the counterfactual: the right token still gets in.
-	conn, _, err := f.dial(t, "secret")
-	if err != nil {
-		t.Fatalf("a valid token was refused: %v", err)
-	}
-	if got := next(t, conn); kindOf(got) != stream.KindSnapshot {
-		t.Errorf("first frame = %v", got["kind"])
+	for posture, want := range map[config.AnonymousAccess]auth.Reach{
+		config.AnonymousNone:   auth.ReachOpen,
+		config.AnonymousPublic: auth.ReachPublic,
+	} {
+		seen := make(chan auth.Principal, 1)
+		f := newSocket(t, func(a *config.APIAuth) {
+			a.Anonymous = posture
+			a.Tokens = []config.APIToken{{ID: "founder", Role: config.RoleAdmin, Token: "secret"}}
+		}, func(_ context.Context, _ string, _ map[string]any, caller auth.Principal) (any, error) {
+			seen <- caller
+			return nil, nil
+		})
+		conn, _, err := f.dial(t, "")
+		if err != nil {
+			t.Fatalf("anonymous %s: a keyless socket was refused: %v", posture, err)
+		}
+		if got := next(t, conn); kindOf(got) != stream.KindSnapshot {
+			t.Errorf("anonymous %s: first frame = %v", posture, got["kind"])
+		}
+		write(t, conn, map[string]any{"kind": "query", "id": 1, "what": "viewer"})
+		select {
+		case got := <-seen:
+			if got.Authenticated() || got.Reach != want {
+				t.Errorf("anonymous %s: the socket asked as %+v, want nobody at %s", posture, got, want)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("anonymous %s: the query never ran", posture)
+		}
 	}
 }
 
-func TestAnAnonymousReadPostureOpensWithoutACredential(t *testing.T) {
+// THE HANDSHAKE'S KEY IS THE SOCKET'S WHOLE PRINCIPAL — its id, its role and
+// its reach — so a question is judged on the socket exactly as on REST.
+func TestTheHandshakesKeyIsTheSocketsPrincipal(t *testing.T) {
 	t.Parallel()
+	seen := make(chan auth.Principal, 1)
 	f := newSocket(t, func(a *config.APIAuth) {
-		a.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
-	}, nil)
-	conn, _, err := f.dial(t, "")
+		a.Tokens = []config.APIToken{{ID: "ada", Role: config.RoleMember, Token: "m-key"}}
+	}, func(_ context.Context, _ string, _ map[string]any, caller auth.Principal) (any, error) {
+		seen <- caller
+		return nil, nil
+	})
+	conn, _, err := f.dial(t, "m-key")
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	if got := next(t, conn); kindOf(got) != stream.KindSnapshot {
-		t.Errorf("first frame = %v", got["kind"])
+	next(t, conn)
+	write(t, conn, map[string]any{"kind": "query", "id": 1, "what": "work_items"})
+	want := auth.Principal{ID: "ada", Role: config.RoleMember, Reach: auth.ReachMember}
+	select {
+	case got := <-seen:
+		if got != want {
+			t.Errorf("the socket asked as %+v, want %+v", got, want)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the query never ran")
 	}
 }
 
@@ -319,7 +349,7 @@ func TestAMalformedFrameDoesNotDropTheSocket(t *testing.T) {
 
 func TestAQueryIsAnsweredWithItsCorrelationID(t *testing.T) {
 	t.Parallel()
-	f := newSocket(t, nil, func(_ context.Context, what string, params map[string]any, _ string) (any, error) {
+	f := newSocket(t, nil, func(_ context.Context, what string, params map[string]any, _ auth.Principal) (any, error) {
 		return map[string]any{"what": what, "role": params["role"]}, nil
 	})
 	conn, _, err := f.dial(t, "")
@@ -350,6 +380,10 @@ func TestEachQueryFailureCarriesItsOwnCode(t *testing.T) {
 	}{
 		{stream.ErrUnknownQuery, stream.CodeUnknownQuery},
 		{stream.ErrUnauthorized, stream.CodeUnauthorized},
+		// A KEY THAT REACHES LESS IS NOT A KEY THAT IS MISSING: told
+		// `unauthorized`, a signed-in member would be sent to sign in
+		// again, which changes nothing.
+		{stream.ErrForbidden, stream.CodeForbidden},
 		{stream.ErrNotFound, stream.CodeNotFound},
 		// A REFUSED REQUEST IS NOT A FAILED ONE. Left to the default it
 		// reached the client as `query_failed` — retried on every poll
@@ -359,7 +393,7 @@ func TestEachQueryFailureCarriesItsOwnCode(t *testing.T) {
 		{stream.ErrUnavailable, stream.CodeUnavailable},
 		{errors.New("the store fell over at /var/lib/crewlet/crewlet.db"), stream.CodeQueryFailed},
 	} {
-		f := newSocket(t, nil, func(context.Context, string, map[string]any, string) (any, error) {
+		f := newSocket(t, nil, func(context.Context, string, map[string]any, auth.Principal) (any, error) {
 			return nil, tc.err
 		})
 		conn, _, err := f.dial(t, "")
@@ -374,8 +408,8 @@ func TestEachQueryFailureCarriesItsOwnCode(t *testing.T) {
 			t.Errorf("%v: answer = %v, want %q", tc.err, got, tc.want)
 		}
 		// The reason reaches the log, not the client: a failure can
-		// carry a database path, and the socket is the one surface an
-		// unauthenticated reader may be holding.
+		// carry a database path, and the socket is open to a caller with
+		// no key at all.
 		if raw, _ := json.Marshal(got); strings.Contains(string(raw), "/var/lib") {
 			t.Errorf("the failure leaked its detail to the client: %s", raw)
 		}
@@ -402,7 +436,7 @@ func TestARefusalCarriesItsSentenceAndNothingElseDoes(t *testing.T) {
 		{&stream.UnavailableError{What: "tokens"}, ""},
 		{errors.New("open /var/lib/crewlet/crewlet.db: " + sentence), ""},
 	} {
-		f := newSocket(t, nil, func(context.Context, string, map[string]any, string) (any, error) {
+		f := newSocket(t, nil, func(context.Context, string, map[string]any, auth.Principal) (any, error) {
 			return nil, tc.err
 		})
 		conn, _, err := f.dial(t, "")
@@ -441,13 +475,13 @@ func TestAQueryWithNoSurfaceIsAnUnknownQuery(t *testing.T) {
 	}
 }
 
-func TestTheSocketsOperatorReachesTheQuery(t *testing.T) {
+func TestTheSocketsKeyReachesTheQuery(t *testing.T) {
 	t.Parallel()
 	seen := make(chan string, 1)
 	f := newSocket(t, func(a *config.APIAuth) {
-		a.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
-	}, func(_ context.Context, _ string, _ map[string]any, operatorID string) (any, error) {
-		seen <- operatorID
+		a.Tokens = []config.APIToken{{ID: "founder", Role: config.RoleAdmin, Token: "secret"}}
+	}, func(_ context.Context, _ string, _ map[string]any, caller auth.Principal) (any, error) {
+		seen <- caller.ID
 		return nil, nil
 	})
 	conn, _, err := f.dial(t, "secret")
@@ -460,7 +494,7 @@ func TestTheSocketsOperatorReachesTheQuery(t *testing.T) {
 	select {
 	case got := <-seen:
 		if got != "founder" {
-			t.Errorf("operator = %q, want founder", got)
+			t.Errorf("caller = %q, want founder", got)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("the query never ran")
@@ -469,14 +503,14 @@ func TestTheSocketsOperatorReachesTheQuery(t *testing.T) {
 
 func TestAFrameTokenUpgradesOneQueryOnly(t *testing.T) {
 	t.Parallel()
-	// How a socket opened for anonymous reads asks one operator-only
-	// question without reconnecting. A browser cannot set a header on a
-	// WebSocket constructor.
+	// How a socket opened before anybody signed in asks one keyed question
+	// without reconnecting. A browser cannot set a header on a WebSocket
+	// constructor.
 	seen := make(chan string, 2)
 	f := newSocket(t, func(a *config.APIAuth) {
-		a.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
-	}, func(_ context.Context, _ string, _ map[string]any, operatorID string) (any, error) {
-		seen <- operatorID
+		a.Tokens = []config.APIToken{{ID: "founder", Role: config.RoleAdmin, Token: "secret"}}
+	}, func(_ context.Context, _ string, _ map[string]any, caller auth.Principal) (any, error) {
+		seen <- caller.ID
 		return nil, nil
 	})
 	conn, _, err := f.dial(t, "")
@@ -500,9 +534,9 @@ func TestAWrongFrameTokenDoesNotUpgrade(t *testing.T) {
 	t.Parallel()
 	seen := make(chan string, 1)
 	f := newSocket(t, func(a *config.APIAuth) {
-		a.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
-	}, func(_ context.Context, _ string, _ map[string]any, operatorID string) (any, error) {
-		seen <- operatorID
+		a.Tokens = []config.APIToken{{ID: "founder", Role: config.RoleAdmin, Token: "secret"}}
+	}, func(_ context.Context, _ string, _ map[string]any, caller auth.Principal) (any, error) {
+		seen <- caller.ID
 		return nil, nil
 	})
 	conn, _, err := f.dial(t, "")
@@ -521,14 +555,14 @@ func TestABadFrameTokenDoesNotDowngradeAnAuthenticatedSocket(t *testing.T) {
 	t.Parallel()
 	// The frame token UPGRADES one query; it must never demote the socket
 	// that is already authenticated. A garbled or expired token on one
-	// frame would otherwise silently answer an operator's question as
-	// anonymous — and an operator-only query would come back unauthorized
-	// on a socket that had every right to ask it.
+	// frame would otherwise silently answer an admin's question as
+	// anonymous — and an admin's query would come back unauthorized on a
+	// socket that had every right to ask it.
 	seen := make(chan string, 1)
 	f := newSocket(t, func(a *config.APIAuth) {
-		a.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
-	}, func(_ context.Context, _ string, _ map[string]any, operatorID string) (any, error) {
-		seen <- operatorID
+		a.Tokens = []config.APIToken{{ID: "founder", Role: config.RoleAdmin, Token: "secret"}}
+	}, func(_ context.Context, _ string, _ map[string]any, caller auth.Principal) (any, error) {
+		seen <- caller.ID
 		return nil, nil
 	})
 	conn, _, err := f.dial(t, "secret")
@@ -541,7 +575,7 @@ func TestABadFrameTokenDoesNotDowngradeAnAuthenticatedSocket(t *testing.T) {
 	select {
 	case got := <-seen:
 		if got != "founder" {
-			t.Errorf("query ran as %q, want the socket's own operator: a bad "+
+			t.Errorf("query ran as %q, want the socket's own key: a bad "+
 				"frame token demoted an authenticated socket", got)
 		}
 	case <-time.After(10 * time.Second):
@@ -556,7 +590,7 @@ func TestQueriesRunConcurrentlyUpToTheBound(t *testing.T) {
 	// writes.
 	entered := make(chan struct{}, stream.MaxInFlightQueries*4)
 	release := make(chan struct{})
-	f := newSocket(t, nil, func(ctx context.Context, _ string, _ map[string]any, _ string) (any, error) {
+	f := newSocket(t, nil, func(ctx context.Context, _ string, _ map[string]any, _ auth.Principal) (any, error) {
 		entered <- struct{}{}
 		select {
 		case <-release:
@@ -593,7 +627,7 @@ func TestASlowQueryDoesNotStallTheLiveFeed(t *testing.T) {
 	t.Parallel()
 	// The reason queries run off the read loop at all.
 	release := make(chan struct{})
-	f := newSocket(t, nil, func(ctx context.Context, _ string, _ map[string]any, _ string) (any, error) {
+	f := newSocket(t, nil, func(ctx context.Context, _ string, _ map[string]any, _ auth.Principal) (any, error) {
 		select {
 		case <-release:
 		case <-ctx.Done():
@@ -638,4 +672,15 @@ func TestADisconnectedClientLeavesTheHub(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Errorf("clients = %d after a disconnect, want 0", f.svc.Hub().Clients())
+}
+
+// THE SOCKET'S `forbidden` IS THE GUARD'S, one word for one fact whether a
+// route or a question refused it — so a screen reads one vocabulary on both
+// transports. Spelled twice only because the socket's vocabulary gate reads
+// its own literals.
+func TestTheSocketsForbiddenIsTheGuardsForbidden(t *testing.T) {
+	t.Parallel()
+	if stream.CodeForbidden != string(httpjson.CodeForbidden) {
+		t.Errorf("the socket says %q and the guard says %q", stream.CodeForbidden, httpjson.CodeForbidden)
+	}
 }

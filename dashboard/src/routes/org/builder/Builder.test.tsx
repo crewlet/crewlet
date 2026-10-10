@@ -98,9 +98,7 @@ describe("the posture table", () => {
     const engine = new Engine(company());
     engine.script = () => json({ error: "unauthorized" }, 401);
     mountBuilder({ engine });
-    expect(
-      await screen.findByText("Editing the organization needs an operator token."),
-    ).toBeDefined();
+    expect(await screen.findByText("Editing the organization needs an admin key.")).toBeDefined();
     expect(screen.getByRole("button", { name: "Set token" })).toBeDefined();
   });
 
@@ -111,9 +109,7 @@ describe("the posture table", () => {
     engine.script = (r) =>
       r.headers.Authorization === "Bearer good" ? null : json({ error: "unauthorized" }, 401);
     mountBuilder({ engine });
-    expect(
-      await screen.findByText("Editing the organization needs an operator token."),
-    ).toBeDefined();
+    expect(await screen.findByText("Editing the organization needs an admin key.")).toBeDefined();
     act(() => {
       storeToken("good");
     });
@@ -128,6 +124,31 @@ describe("the posture table", () => {
     engine.script = () => json({ error: "unauthorized" }, 401);
     mountBuilder({ engine });
     expect(await screen.findByText("The engine refused this browser's token.")).toBeDefined();
+  });
+
+  // A MEMBER'S KEY IS ACCEPTED, and the configuration is an admin's, reads
+  // included (ADR-0031): the screen says so and names who to ask, rather
+  // than calling a working key refused and offering to replace it.
+  test("a member's key is told editing is for admins, and which admin to ask", async () => {
+    storeToken("ada");
+    const engine = new Engine(company());
+    engine.script = () => json({ error: "forbidden" }, 403);
+    mountBuilder({
+      engine,
+      query: (what) =>
+        what === "viewer"
+          ? {
+              token_id: "ada",
+              role: "member",
+              reach: "member",
+              admins: [{ handle: "jane", name: "Jane Founder" }],
+            }
+          : null,
+    });
+    expect(await screen.findByText("Editing the organization is for admins.")).toBeDefined();
+    expect(await screen.findByText(/ask Jane Founder/)).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Set token" })).toBeNull();
+    expect(screen.queryByText("The engine refused this browser's token.")).toBeNull();
   });
 
   test("a plain 404 is a process that does not serve the configuration", async () => {
@@ -155,8 +176,8 @@ describe("the posture table", () => {
   // and answers only into a live region nobody sees is worse than one marked
   // unavailable.
   //
-  // Driven through `guarded`, which is now the halting check state this is
-  // about. `readonly` was the other one, and it went with the 503
+  // Driven through `forbidden`, one of the halting check states this is
+  // about. `readonly` was another, and it went with the 503
   // `no_control_plane` that was its only producer: no process serves the API
   // without the coordination store that refusal described.
   test("a halted builder marks the toolbar's add entries unavailable", async () => {
@@ -165,7 +186,7 @@ describe("the posture table", () => {
     engine.script = (r) =>
       r.query.get("dry_run") === "true" ? json({ error: "forbidden" }, 403) : null;
     mountBuilder({ engine });
-    expect(await screen.findByText("The engine refused the token")).toBeDefined();
+    expect(await screen.findByText("For admins")).toBeDefined();
 
     // An edit is refused before it reaches the log, and says why.
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
@@ -738,8 +759,12 @@ describe("a token change mid-edit", () => {
     act(() => {
       storeToken("reader");
     });
-    expect(await screen.findByText("The engine refused the token")).toBeDefined();
+    expect(await screen.findByText("For admins")).toBeDefined();
     expect(screen.getByText("read only")).toBeDefined();
+    // THE KEY WORKS, so the callout names the role and the admin to ask — and
+    // offers no token, which another paste of the same key would not change.
+    expect(screen.getByText(/Editing the organization is for admins/)).toBeDefined();
+    expect(screen.getByText(/ask an admin/)).toBeDefined();
     expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more");
   });
 
@@ -757,16 +782,16 @@ describe("a token change mid-edit", () => {
     });
     expect(
       await screen.findByText(
-        "Editing the organization needs an operator token. Your draft is kept on this page.",
+        "Editing the organization needs an admin key. Your draft is kept on this page.",
       ),
     ).toBeDefined();
     expect(screen.getByText("read only")).toBeDefined();
     // The status names what is missing: no token was refused, none is set.
-    expect(await screen.findByText("Needs an operator token")).toBeDefined();
-    expect(screen.queryByText("The engine refused the token")).toBeNull();
+    expect(await screen.findByText("Needs an admin key")).toBeDefined();
+    expect(screen.queryByText("The engine refused the key")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await waitFor(() =>
-      expect(liveRegion().textContent).toBe("Editing is paused because no operator token is set."),
+      expect(liveRegion().textContent).toBe("Editing is paused because no admin key is set."),
     );
     // The seats are still drawn from the draft, not replaced by a refusal.
     expect(within(screen.getByRole("list", { name: "Seats" })).getByText("CEO")).toBeDefined();
@@ -821,8 +846,9 @@ describe("a document another system manages", () => {
   const managedViewer = (what: string) =>
     what === "viewer"
       ? {
-          operator_id: "jane",
-          operator: true,
+          token_id: "jane",
+          role: "admin",
+          reach: "admin",
           handle: "",
           name: "",
           kind: "",
@@ -872,7 +898,7 @@ describe("a document another system manages", () => {
         : null;
     mountBuilder({ engine });
     expect(await screen.findByText("Managed by another system")).toBeDefined();
-    expect(screen.queryByText("The engine refused the token")).toBeNull();
+    expect(screen.queryByText("The engine refused the key")).toBeNull();
     expect(screen.getByText(/managed by gitops — change it there/)).toBeDefined();
     const checks = engine.checks().length;
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
@@ -888,8 +914,9 @@ describe("a document another system manages", () => {
       query: (what) =>
         what === "viewer"
           ? {
-              operator_id: "gitops",
-              operator: true,
+              token_id: "gitops",
+              role: "admin",
+              reach: "admin",
               config_writer: true,
               config_managed_by: ["gitops"],
             }

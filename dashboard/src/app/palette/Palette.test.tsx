@@ -39,10 +39,14 @@ class InertWebSocket {
 const EVERY_ACT = ["update_work_item", "create_work_item", "answer_knowledge"];
 
 const JANE: ViewerState = {
-  operatorID: "founder",
-  operator: true,
+  tokenID: "founder",
+  role: "admin",
+  reach: "admin",
+  admin: true,
+  linked: true,
   handle: "jane",
   name: "Jane Founder",
+  line: [],
   acts: EVERY_ACT,
   project: "ENG",
   kind: "human",
@@ -52,12 +56,17 @@ const JANE: ViewerState = {
   asking: false,
   configWriter: true,
   configManagedBy: [],
+  admins: [{ handle: "jane", name: "Jane Founder" }],
 };
 
 const ANONYMOUS: ViewerState = {
   ...JANE,
-  operatorID: "",
-  operator: false,
+  tokenID: "",
+  role: "",
+  reach: "public",
+  admin: false,
+  linked: false,
+  admins: [],
   handle: "",
   name: "",
   acts: [],
@@ -68,8 +77,10 @@ const ANONYMOUS: ViewerState = {
 
 const UNBOUND: ViewerState = {
   ...ANONYMOUS,
-  operatorID: "ci",
-  operator: true,
+  tokenID: "ci",
+  role: "admin",
+  reach: "admin",
+  admin: true,
   anonymous: false,
   unbound: true,
 };

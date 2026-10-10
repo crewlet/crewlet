@@ -823,7 +823,7 @@ export function disconnectOrder(
   //
   // The button is rendered from the ROWS (`!absent && onDisconnect`), and
   // `sections` comes from `GET /setup/integrations`, which is a separate
-  // request that can 401 for want of an operator token or fail transiently.
+  // request that can be refused for want of an admin key or fail transiently.
   // With the key set taken from `sections` alone, that window rendered a
   // Disconnect button whose dialog computed an EMPTY list, issued no DELETE
   // at all, and then ran onDone() and closed exactly as it does after a real
@@ -1325,15 +1325,15 @@ function rosterOf(tools: SetupToolState[]): SetupToolState | undefined {
  * Why an action that opens the settings form cannot be pressed, or undefined.
  *
  * A WRITE CONTROL IS NEVER HIDDEN (dashboard rule 4): it is disabled with the
- * one sentence that says why. `/setup` is guarded in full, so a reader with no
- * operator token has no form to open, and a listing that answered nothing for
- * this tool has none either — which is a different sentence, because the
- * token would not help.
+ * one sentence that says why. `/setup` is an admin's in full (ADR-0031), so a
+ * reader without an admin key has no form to open, and a listing that
+ * answered nothing for this tool has none either — which is a different
+ * sentence, because a key would not help.
  */
 export function formBlocked(sections: unknown[], guarded: boolean): string | undefined {
   if (sections.length > 0) return undefined;
   return guarded
-    ? "Setting an integration up needs an operator token."
+    ? "Setting an integration up needs an admin key."
     : "The engine did not say what this integration needs, so there is no form to open.";
 }
 
@@ -1931,10 +1931,12 @@ function SeatBadge({ satisfied, finding }: { satisfied: boolean; finding?: Recon
 /**
  * What each tool still needs, from /setup.
  *
- * A SECOND READ, and it has to be: /integrations is an ordinary read served
- * to anybody the anonymous-read posture allows, while this one is guarded in
- * full because it names the credentials a company holds. A deployment where
- * the operator has no token still gets the whole screen, minus the buttons.
+ * A SECOND READ, and it has to be: the `integrations` question answers the
+ * rows, and no question in the socket's registry answers what each tool still
+ * needs — that is `/setup`'s, a REST route, and it names the credentials a
+ * company holds. Both are an admin's (ADR-0031). A reader this one refuses —
+ * a key revoked or narrowed since the frame admitted the screen — still gets
+ * the catalogue and every row the socket gave, minus the buttons.
  */
 export function useSetup(): {
   byKey: Map<string, SetupToolState>;
@@ -1989,7 +1991,9 @@ export function useSetup(): {
   return {
     byKey: new Map((listing?.tools ?? []).map((t) => [t.key, t])),
     base: listing?.public_base_url ?? null,
-    guarded: setup.error?.unauthorized ?? false,
+    // REFUSED, by either half of the guard: no key it accepts, or a key
+    // that reaches less than `/setup`, which is an admin's (ADR-0031).
+    guarded: refusedByGuard(setup.error),
     // ANSWERED, not answered WELL. A refusal is a state the screen can render
     // honestly, with the banner and no buttons; waiting is not.
     loading: setup.loading,
@@ -2253,8 +2257,8 @@ const PASS_IDLE_POLL_MS = 60_000;
  * the keys the setup listing carries, which is that same set.
  *
  * REST, LIKE [useSetup], AND FOR THE SAME REASONS: no query in the socket's
- * registry answers anything about a pass, and `/setup` is guarded in full —
- * so a reader with no operator token is REFUSED here rather than shown an
+ * registry answers anything about a pass, and `/setup` is an admin's in full
+ * — so a reader without an admin key is REFUSED here rather than shown an
  * empty history, and `guarded` is what tells those two apart.
  */
 function useSetupRuns(kinds: string[]): {
@@ -2307,9 +2311,19 @@ function useSetupRuns(kinds: string[]): {
   return {
     runs,
     scope: answer.data?.scope ?? "",
-    guarded: answer.error?.unauthorized ?? false,
+    guarded: refusedByGuard(answer.error),
     loading: answer.loading,
   };
+}
+
+/**
+ * Whether the auth guard refused a read: no key it accepts (401), or a key
+ * that reaches less than the surface needs (403 `forbidden`). Either way the
+ * read was refused rather than answered empty, which is the one thing every
+ * `guarded` flag on this screen exists to tell apart.
+ */
+function refusedByGuard(err: RestError | null | undefined): boolean {
+  return !!err && (err.unauthorized || err.forbidden);
 }
 
 /** One shared empty history, so a panel with none keeps one identity. */
@@ -2353,7 +2367,7 @@ function useSetupRun(
   return {
     run,
     missing: answer.error?.status === 404,
-    guarded: answer.error?.unauthorized ?? false,
+    guarded: refusedByGuard(answer.error),
     loading: answer.loading,
   };
 }
@@ -2497,7 +2511,7 @@ function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
       <Card>
         <Card.Header icon={<RotateCwGlyph size="sm" />}>Provisioning passes</Card.Header>
         <span className="t-caption">
-          Reading what a pass found needs an operator token, so this is what the engine will not say
+          Reading what a pass found needs an admin key, so this is what the engine will not say
           without one.
         </span>
       </Card>
@@ -2681,7 +2695,7 @@ function PassDetail({
     return (
       <div className="int-row-note">
         <span className="int-row-note-text">
-          <span className="int-row-note-when">Reading one pass needs an operator token.</span>
+          <span className="int-row-note-when">Reading one pass needs an admin key.</span>
         </span>
       </div>
     );
@@ -3229,12 +3243,12 @@ export function Integrations({ kind }: { kind?: string }) {
       {setup.guarded && (
         <Callout variant="neutral" icon={<KeyGlyph size="md" />}>
           <span>
-            Setting an integration up needs an operator token. This screen is showing what it can
-            read without one.
+            Setting an integration up needs an admin key. This screen is showing what it can read
+            without one.
           </span>
           <span className="spacer" />
-          {/* The same door QueryState opens, for the same reason: with
-              anonymous reads allowed the socket is never refused, so a banner
+          {/* The same door QueryState opens, for the same reason: the
+              socket admits a reader who sent no key at all, so a banner
               that only NAMES the missing credential leaves the reader with
               nothing on the page that can supply it. */}
           <Button size="small" leadingIcon={<KeyGlyph size="sm" />} onClick={requestToken}>

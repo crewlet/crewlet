@@ -25,33 +25,37 @@ A few things worth knowing when deploying Crewlet:
   identities (Atlassian/GitLab/Slack tokens) are separate service accounts —
   scope them minimally; the engine never needs a personal admin token at
   runtime (provisioning CLIs do need an admin credential, once).
-- **The API's read surface is open by default.** Writes and every `/config`
-  route require a token from `api.auth.tokens`; reads do not, so `/events`,
-  `/agents/{id}/memory` and `/ws/stream` serve full LLM transcripts to anyone
-  who can reach the port. That is a reasonable default for a laptop and a
-  decision to make deliberately anywhere else — set
-  `api.auth.allow_anonymous_read: false` to require a token for reads too, and
-  never expose the API publicly with a dev-literal token.
+- **Every API key names its role, and a member key is safe to hand to a
+  teammate.** A `role: member` key reads what the company published — its
+  work, its pages, its chart, who is working on what — and acts as the person
+  it is linked to; it is refused every prompt, transcript, diary, event and
+  trace an agent produced, the spend, the configuration, the secrets and the
+  fleet. A `role: admin` key reaches all of that and can change what the
+  company does, so issue one only to the people and systems that run the
+  engine. A caller with no key reaches the company's name, mission and chart
+  (`api.auth.anonymous: public`, the default) or nothing (`none`), never a
+  member's view. Never expose the API publicly with a dev-literal key
+  (`docs/concepts/configuration.md#auth`).
 - **Only the webhook and sandbox routes need to be public.** The routes
   outside parties call — `/webhooks/*` (vendor deliveries, verified by each
   vendor's signature or shared token) and the sandbox endpoints
   `/otlp/{token}` and `/mcp/{token}` (a signed, expiring per-run token in the
-  path) — hold no operator credential. Setting `api.public.port` serves them
+  path) — hold no API key. Setting `api.public.port` serves them
   on a listener of their own and nowhere else, and every other route,
   `/config` and `/secrets` included, only on `api.port`, so a deployment can
   publish the first and keep the second private without filtering paths in a
-  proxy. The public listener requires no operator token, and answers every
-  route it does not serve with the same `404` it gives a path nothing serves,
-  whatever credential is sent — so the published socket neither reveals the
-  admin routes behind it nor answers differently to a valid token
+  proxy. The public listener requires no key, and answers every route it does
+  not serve with the same `404` it gives a path nothing serves, whatever key
+  is sent — so the published socket neither reveals the admin routes behind it
+  nor answers differently to a valid key
   (`docs/guides/deployment.md#exposing-webhooks-without-the-admin-api`).
-- **`api.auth.company_writers` prevents drift; it is not a privilege
-  boundary.** It refuses a change to a managed company document from any
-  token it does not list, but every token still writes the secret store and
+- **The role is the boundary; `api.auth.company_writers` only prevents
+  drift.** It refuses a change to a managed company document from any admin
+  key it does not list, but every admin key still writes the secret store and
   can reload, so it can rewrite any value the document references through a
-  `${VAR}` — a model key, a webhook secret, an endpoint. Do not issue a token
-  to anyone you would not let change what the company does
-  (`docs/concepts/configuration.md#managed-configuration`).
+  `${VAR}` — a model key, a webhook secret, an endpoint. Do not issue an admin
+  key to anyone you would not let change what the company does; give them a
+  member key (`docs/concepts/configuration.md#managed-configuration`).
 - **Config encryption at rest** is available and recommended when your
   company config carries secrets — see
   `docs/concepts/configuration.md#secrets`.

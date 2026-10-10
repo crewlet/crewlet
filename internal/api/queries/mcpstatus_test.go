@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/config"
@@ -222,7 +223,7 @@ func TestTheServerStatusCarriesNoCredential(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
 	queries.Register(r, mcpSources(t, mcpFleet(t)))
-	raw, err := r.Answer(t.Context(), "mcp_servers_status", nil, "founder")
+	raw, err := r.Answer(t.Context(), "mcp_servers_status", nil, asAdmin("founder"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,23 +235,23 @@ func TestTheServerStatusCarriesNoCredential(t *testing.T) {
 	}
 }
 
-// OPERATOR-ONLY: node ids, launch commands and each failure's first line are
+// AN ADMIN'S: node ids, launch commands and each failure's first line are
 // the shape of the deployment. And an unreadable lease table is an error, not
 // a fleet with no nodes.
-func TestTheServerStatusIsOperatorOnlyAndNeverGuesses(t *testing.T) {
+func TestTheServerStatusIsAnAdminsAndNeverGuesses(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
 	queries.Register(r, mcpSources(t, mcpFleet(t)))
-	if !r.RequiresOperator("mcp_servers_status") {
-		t.Fatal("mcp_servers_status is served to any caller")
+	if r.ReachOf("mcp_servers_status") != auth.ReachAdmin {
+		t.Fatal("mcp_servers_status is served below admin")
 	}
-	if _, err := r.Answer(t.Context(), "mcp_servers_status", nil, ""); !errors.Is(err, queries.ErrUnauthorized) {
+	if _, err := r.Answer(t.Context(), "mcp_servers_status", nil, nobody); !errors.Is(err, queries.ErrUnauthorized) {
 		t.Errorf("anonymous mcp_servers_status answered %v, want an authorization refusal", err)
 	}
 
 	broken := queries.NewRegistry()
 	queries.Register(broken, queries.Sources{Coord: unreadableLeases{coordmemory.New()}})
-	if _, err := broken.Answer(t.Context(), "mcp_servers_status", nil, "founder"); err == nil {
+	if _, err := broken.Answer(t.Context(), "mcp_servers_status", nil, asAdmin("founder")); err == nil {
 		t.Error("an unreadable lease table was answered as a fleet")
 	}
 }
@@ -261,7 +262,7 @@ func TestTheToolsScreenReadsWhatTheServerStatusSends(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
 	queries.Register(r, mcpSources(t, mcpFleet(t)))
-	raw, err := r.Answer(t.Context(), "mcp_servers_status", nil, "founder")
+	raw, err := r.Answer(t.Context(), "mcp_servers_status", nil, asAdmin("founder"))
 	if err != nil {
 		t.Fatal(err)
 	}

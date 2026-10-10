@@ -144,10 +144,10 @@ type probes struct {
 // Probes is the HTTP handler of a node without the ingress role: /health,
 // /ready and, where there is one, the tool bridge — and no other route.
 //
-// It is wrapped in the same guard and security headers as the full [App], so a
-// request for any other path is refused or answered 404 exactly as the full
-// surface would answer an unknown path, never served by a bare mux. Every
-// route it serves is exempt from that guard by path, as it is there.
+// It is mounted on the same kind of route table, behind the same guard and
+// security headers, as the full [App], so a request for any other path is
+// answered 404 exactly as the full surface would answer an unknown path, never
+// served by a bare mux. Every route it serves is open, as it is there.
 func Probes(opts ProbeOptions) (http.Handler, error) {
 	switch {
 	case opts.Bootstrap == nil:
@@ -164,11 +164,16 @@ func Probes(opts ProbeOptions) (http.Handler, error) {
 	if p.roles == nil {
 		p.roles = []string{}
 	}
-	mux := http.NewServeMux()
-	mux.Handle("GET /health", http.HandlerFunc(p.serveHealth))
-	mux.Handle("GET /ready", http.HandlerFunc(p.serveReady))
+	// THE SAME KIND OF TABLE AS THE APP'S, so every route here names its
+	// reach exactly as it does there: both open, for the reason they are on
+	// the full surface. No drain gate — this node serves its probes and the
+	// bridge through a drain by design.
+	guard := auth.New(opts.Bootstrap)
+	mux := newRouteTable(guard, nil)
+	mux.Handle("GET /health", auth.ReachOpen, http.HandlerFunc(p.serveHealth))
+	mux.Handle("GET /ready", auth.ReachOpen, http.HandlerFunc(p.serveReady))
 	mountBridge(mux, opts.Bridge)
-	return pagepolicy.Apply(auth.New(opts.Bootstrap).Middleware(httpjson.Mux(mux))), nil
+	return pagepolicy.Apply(guard.Middleware(httpjson.Mux(mux.mux))), nil
 }
 
 func (p *probes) serveHealth(w http.ResponseWriter, r *http.Request) {

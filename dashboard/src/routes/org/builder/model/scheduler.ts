@@ -22,14 +22,16 @@
  * STATES. `checking` while an answer for the current generation is due;
  * `clean` and `problems` for a validated draft; `conflict` when the engine
  * holds a newer revision than the draft's base (a 409, a 412, or a dry run
- * reporting a different base); `guarded` when it refused the token (401 or
- * 403); `unreachable` when the request was never answered or the engine
- * failed (status 0, or a 5xx). A draining node's `503 draining` is one of
- * those, deliberately: the drain ends, so the retry reaches a peer behind a
- * load balancer, or this node once it has restarted.
+ * reporting a different base); `guarded` when it refused the token (401);
+ * `forbidden` when it accepted a member's key on the admin's document (403
+ * `forbidden`, ADR-0031); `managed` when another system writes the document
+ * (403 `config_managed`); `unreachable` when the request was never answered
+ * or the engine failed (status 0, or a 5xx). A draining node's `503 draining`
+ * is one of those, deliberately: the drain ends, so the retry reaches a peer
+ * behind a load balancer, or this node once it has restarted.
  *
- * TWO OF THEM HALT. `conflict` and `guarded` do not change by asking again:
- * the answer to the next check is the same refusal. So a change to the draft
+ * FOUR OF THEM HALT. `conflict`, `guarded`, `forbidden` and `managed` do not
+ * change by asking again: the answer to the next check is the same refusal. So a change to the draft
  * in one of them sends nothing, and checking resumes only on a reset (a load,
  * an updated draft, a token change).
  *
@@ -89,7 +91,14 @@ export function backoffDelay(failures: number): number {
 }
 
 export type CheckStatus =
-  "checking" | "clean" | "problems" | "conflict" | "guarded" | "managed" | "unreachable";
+  | "checking"
+  | "clean"
+  | "problems"
+  | "conflict"
+  | "guarded"
+  | "forbidden"
+  | "managed"
+  | "unreachable";
 
 /**
  * Why the engine holds a revision the draft was not built on: every reason
@@ -122,6 +131,8 @@ export type CheckOutcome =
       readonly currentRevisionId: string | null;
     }
   | { readonly status: "guarded" }
+  /** The key was accepted and is a member's: the document is an admin's (ADR-0031). */
+  | { readonly status: "forbidden" }
   /** Another system manages the document, and this token is not it (ADR-0030). */
   | { readonly status: "managed"; readonly managedBy: readonly string[] }
   | { readonly status: "unreachable"; readonly detail: string };
@@ -169,6 +180,8 @@ export function classifyCheck(
   switch (refusal.kind) {
     case "guarded":
       return { status: "guarded" };
+    case "forbidden":
+      return { status: "forbidden" };
     case "managed":
       return { status: "managed", managedBy: refusal.managedBy };
     case "conflict":
@@ -263,7 +276,7 @@ export const INITIAL_CHECK: CheckState = {
   halted: false,
 };
 
-const HALTING: ReadonlySet<CheckStatus> = new Set(["conflict", "guarded", "managed"]);
+const HALTING: ReadonlySet<CheckStatus> = new Set(["conflict", "guarded", "forbidden", "managed"]);
 
 /** The next state of the check, and what to do about it. */
 export function transition(state: CheckState, event: CheckEvent): Transition {
@@ -409,7 +422,14 @@ export function saveRules(status: CheckStatus, hasChanges: boolean): SaveRules {
         review: false,
         save: false,
         waiting: false,
-        reason: "Saving needs an operator token the engine accepts.",
+        reason: "Saving needs an admin key the engine accepts.",
+      };
+    case "forbidden":
+      return {
+        review: false,
+        save: false,
+        waiting: false,
+        reason: "Saving the company's configuration is for admins.",
       };
     case "managed":
       return {

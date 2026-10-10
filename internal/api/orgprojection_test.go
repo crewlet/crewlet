@@ -86,7 +86,7 @@ var projectionOnly = map[string]string{
 // is the reasoning internal/api/setupapi's package doc records for guarding
 // even its reads: what a company has wired up, and to what, is a map of what
 // to attack. They are read with the rest of the integration picture instead,
-// through the operator-only `config` and `integrations` answers.
+// through the admin `config` and `integrations` answers.
 
 // roleFields classifies every field of config.Role.
 var roleFields = map[string]classified{

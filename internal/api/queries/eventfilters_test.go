@@ -131,7 +131,7 @@ func TestOneSeatByHandleNarrowsEventsTheAxisAndTurns(t *testing.T) {
 	if len(phases) != 1 || phases[0].ID != "s-phase" {
 		t.Errorf("phases of eng-search = %v, want s-phase alone", phases)
 	}
-	if _, err := r.Answer(t.Context(), "phases", map[string]any{"seat": "Search Engineer"}, ""); !errors.Is(err, queries.ErrBadParams) {
+	if _, err := r.Answer(t.Context(), "phases", map[string]any{"seat": "Search Engineer"}, asAdmin("ops")); !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("a role name as a seat: err %v, want bad params naming the handle", err)
 	}
 }
@@ -174,7 +174,7 @@ func TestTheTurnsThatEndedAreCountedOnceEach(t *testing.T) {
 	if got := eventIDs(t, r, map[string]any{"type": "agent_turn_completed"}); len(got) != 3 {
 		t.Errorf("no suspended filter: %v, want every completion", got)
 	}
-	if _, err := r.Answer(t.Context(), "events", map[string]any{"suspended": "yes"}, ""); !errors.Is(err, queries.ErrBadParams) {
+	if _, err := r.Answer(t.Context(), "events", map[string]any{"suspended": "yes"}, asAdmin("ops")); !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("suspended=yes: err %v, want bad params", err)
 	}
 }
@@ -221,7 +221,7 @@ func TestFailuresOnlyIsAFilterTheEngineApplies(t *testing.T) {
 	if series.Total != 1 || series.Failed != 1 {
 		t.Errorf("the axis of failures counts %d with %d failed, want 1 with 1", series.Total, series.Failed)
 	}
-	if _, err := r.Answer(t.Context(), "events", map[string]any{"failed": "1"}, ""); !errors.Is(err, queries.ErrBadParams) {
+	if _, err := r.Answer(t.Context(), "events", map[string]any{"failed": "1"}, asAdmin("ops")); !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("failed=1: err %v, want bad params", err)
 	}
 }
@@ -238,11 +238,11 @@ func TestASeatThatIsNotAHandleOrCannotBeResolvedIsRefused(t *testing.T) {
 	bare := registryOver(t, queries.Sources{Events: fleetOf(openStore(t).Events())})
 	for _, what := range []string{"events", "event_series", "turns"} {
 		params := map[string]any{"seat": "Engineer", "bucket": "hour"}
-		if _, err := r.Answer(t.Context(), what, params, ""); !errors.Is(err, queries.ErrBadParams) {
+		if _, err := r.Answer(t.Context(), what, params, asAdmin("ops")); !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("%s seat=Engineer: err = %v, want ErrBadParams", what, err)
 		}
 		params = map[string]any{"seat": "eng-search", "bucket": "hour"}
-		if _, err := bare.Answer(t.Context(), what, params, ""); !errors.Is(err, queries.ErrUnavailable) {
+		if _, err := bare.Answer(t.Context(), what, params, asAdmin("ops")); !errors.Is(err, queries.ErrUnavailable) {
 			t.Errorf("%s seat= with no company: err = %v, want ErrUnavailable", what, err)
 		}
 	}

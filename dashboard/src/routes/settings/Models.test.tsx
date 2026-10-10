@@ -115,9 +115,11 @@ const org = {
   ],
 };
 
-const OPERATOR = {
-  operator_id: "U0FOUNDER",
-  operator: true,
+const ADMIN = {
+  token_id: "U0FOUNDER",
+  role: "admin",
+  reach: "admin",
+  linked: true,
   handle: "jane",
   name: "Jane",
   kind: "human",
@@ -138,7 +140,7 @@ function mount(id?: string, { refuse = false, answer = pool() } = {}) {
   store.setConnected(true);
   const socket = new LiveSocket(store);
   const query = vi.fn((what: string) => {
-    if (what === "viewer") return Promise.resolve(OPERATOR);
+    if (what === "viewer") return Promise.resolve(ADMIN);
     if (what === "credential_pool") {
       return refuse ? Promise.reject(new QueryError("unauthorized")) : Promise.resolve(answer);
     }

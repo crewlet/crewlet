@@ -48,10 +48,10 @@ func TestARefusalWithNothingBesideTheCodeIsLeftAlone(t *testing.T) {
 	}
 }
 
-// A 403 IS THE NODE JUDGING A VALID CALLER, NOT A BAD TOKEN. Only a 401 is the
+// A 403 IS THE NODE JUDGING A VALID CALLER, NOT A BAD KEY. Only a 401 is the
 // credential: a gesture that needs an operator identity, or an act the tool
 // forbids, answers 403 with a detail that is the whole answer — and reporting
-// it as "check your token" sends the operator after the one thing that was
+// it as "check your key" sends the operator after the one thing that was
 // fine.
 func TestAForbiddenAnswerIsTheNodesRefusalNotTheToken(t *testing.T) {
 	t.Parallel()
@@ -61,8 +61,8 @@ func TestAForbiddenAnswerIsTheNodesRefusalNotTheToken(t *testing.T) {
 	if err == nil {
 		t.Fatal("a 403 was not reported as an error")
 	}
-	if strings.Contains(err.Error(), "refused the token") {
-		t.Errorf("a 403 carrying the node's own code was reported as a bad token:\n%s", err)
+	if strings.Contains(err.Error(), "refused the key") {
+		t.Errorf("a 403 carrying the node's own code was reported as a bad key:\n%s", err)
 	}
 	for _, want := range []string{"operator_required", "operator gestures"} {
 		if !strings.Contains(err.Error(), want) {
@@ -71,7 +71,28 @@ func TestAForbiddenAnswerIsTheNodesRefusalNotTheToken(t *testing.T) {
 	}
 	// The credential sentence is still the 401's.
 	if err := nodeError(http.StatusUnauthorized, []byte(`{"error":"invalid_token"}`), true); err == nil ||
-		!strings.Contains(err.Error(), "refused the token") {
-		t.Errorf("a 401 = %v, want the token refusal", err)
+		!strings.Contains(err.Error(), "refused the key") {
+		t.Errorf("a 401 = %v, want the key refusal", err)
+	}
+}
+
+// A MEMBER KEY ON AN ADMIN'S SURFACE IS A KEY OF THE WRONG ROLE, NOT A BAD ONE
+// (ADR-0031). The node knew the key and answered 403 `forbidden`, so the
+// refusal says which role the surface needs and where this command's key came
+// from — never "check your key", which sends an operator to re-type a value
+// that was accepted, and never the bare code, which names no remedy.
+func TestAMemberKeyOnAnAdminSurfaceSaysWhichKeyToSend(t *testing.T) {
+	t.Parallel()
+	err := nodeError(http.StatusForbidden, []byte(`{"error":"forbidden"}`), true)
+	if err == nil {
+		t.Fatal("a 403 was not reported as an error")
+	}
+	if strings.Contains(err.Error(), "refused the key") {
+		t.Errorf("an accepted member key was reported as a bad key:\n%s", err)
+	}
+	for _, want := range []string{"member key", "role: admin", apiTokenEnv} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %q:\n%s", want, err)
+		}
 	}
 }

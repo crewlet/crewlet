@@ -126,6 +126,8 @@ function refusalMessage(outcome: CheckOutcome): string {
       return "The engine refused the save. The problems it found are marked on the chart; fix them, then save again.";
     case "guarded":
       return "The engine refused this browser's token. Set a token it accepts, then save again.";
+    case "forbidden":
+      return "Saving the company's configuration is for admins, and this browser's key is a member's. Nothing was saved.";
     case "managed":
       return managedSentence(outcome.managedBy);
     default:

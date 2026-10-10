@@ -45,8 +45,21 @@ const MaxInFlightQueries = 4
 // case nobody handles.
 const (
 	CodeUnknownQuery = "unknown_query"
+	// CodeUnauthorized is a question that needs a key, asked by a caller
+	// who presented none the guard accepted: the remedy is to sign in.
 	CodeUnauthorized = "unauthorized"
 	CodeQueryFailed  = "query_failed"
+
+	// CodeForbidden is a question beyond what the caller's ACCEPTED key
+	// reaches (ADR-0031): a member asking an admin's question, or anybody
+	// asking for a record outside their own line. DISTINCT FROM
+	// unauthorized because the remedies are opposite — signing in again
+	// changes nothing, and a screen that said so would send a signed-in
+	// person in a circle. The same word the guard's 403 carries
+	// (`httpjson.CodeForbidden`), so a screen reads one vocabulary from a
+	// route and from a question; spelled as a literal because this
+	// package's vocabulary gate reads the literals.
+	CodeForbidden = "forbidden"
 
 	// CodeNotFound is a question this node understood, about a record it
 	// does not hold. DISTINCT FROM query_failed, because a client acts on
@@ -88,7 +101,8 @@ const (
 // query_failed.
 var (
 	ErrUnknownQuery = errors.New("stream: unknown query")
-	ErrUnauthorized = errors.New("stream: query requires an operator")
+	ErrUnauthorized = errors.New("stream: query requires a key")
+	ErrForbidden    = errors.New("stream: query is beyond this key's reach")
 	ErrNotFound     = errors.New("stream: no such record")
 	ErrBadParams    = errors.New("stream: query refused")
 	ErrUnavailable  = errors.New("stream: not available on this node yet")
@@ -162,12 +176,14 @@ func RetryAfterSeconds(hint time.Duration) int {
 	return int(HealthInterval / time.Second)
 }
 
-// Query answers one client question.
+// Query answers one client question, asked by caller.
 //
-// operatorID is empty for an unauthenticated socket. A query that needs one
-// returns [ErrUnauthorized] rather than deciding for itself what to do about
-// it, so the refusal reaches the client as a code it already handles.
-type Query func(ctx context.Context, what string, params map[string]any, operatorID string) (any, error)
+// caller is the socket's principal — anonymous for a socket opened with no
+// key — or the one a frame's own key resolved to. A question beyond caller's
+// reach returns [ErrUnauthorized] or [ErrForbidden] rather than deciding for
+// itself what to do about it, so the refusal reaches the client as a code it
+// already handles.
+type Query func(ctx context.Context, what string, params map[string]any, caller auth.Principal) (any, error)
 
 // request is one client-to-server frame.
 type request struct {
@@ -176,10 +192,10 @@ type request struct {
 	What   string         `json:"what"`
 	Params map[string]any `json:"params"`
 
-	// Token rides the FRAME rather than the handshake for the
-	// operator-only queries. A browser cannot set a header on a WebSocket
-	// constructor, and a socket opened for anonymous reads still has to be
-	// able to carry one credentialled question.
+	// Token rides the FRAME rather than the handshake for a question that
+	// needs more than the socket was opened with. A browser cannot set a
+	// header on a WebSocket constructor, and a socket opened before anybody
+	// signed in still has to be able to carry one keyed question.
 	Token string `json:"token"`
 }
 
@@ -190,11 +206,14 @@ type request struct {
 // and should: a query string appears in proxy logs.
 func Handler(guard *auth.Guard, svc *Service, query Query) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		operatorID, ok := authenticate(guard, r)
-		if !ok {
-			// REFUSED BEFORE THE UPGRADE. Accepting a credential this
-			// node rejects, purely to close it politely a moment later,
-			// would let anyone open a socket here.
+		caller, rejected := guard.Presented(r)
+		if rejected {
+			// A KEY THIS NODE REJECTS IS REFUSED BEFORE THE UPGRADE,
+			// although a caller with no key at all is admitted: a client
+			// that sent one meant to be somebody, and answering it as
+			// nobody would hide the mistake behind a dashboard that
+			// quietly shows less. Accepting the key purely to close the
+			// socket politely a moment later would let anyone open one.
 			//
 			// It is NOT "close(1008) before accept", which is what this
 			// comment used to claim and what the dashboard was written
@@ -206,7 +225,8 @@ func Handler(guard *auth.Guard, svc *Service, query Query) http.Handler {
 			// The client therefore cannot learn this from the socket at
 			// all. It re-asks over plain HTTP, where the status is
 			// visible, and this route answers a GET without an Upgrade
-			// header 401 (refused) or 426 (accepted, wrong protocol).
+			// header 401 (a key refused) or 426 (admitted, wrong
+			// protocol).
 			// That pairing is load-bearing for the dashboard's token
 			// gate — see `probeRefusal` in dashboard/src/protocol/socket.ts.
 			// Real JSON, not http.Error: that sets text/plain AND
@@ -227,33 +247,17 @@ func Handler(guard *auth.Guard, svc *Service, query Query) http.Handler {
 			log.Debug("stream_accept_failed", "error", err)
 			return
 		}
-		serveSocket(r.Context(), conn, guard, svc, query, operatorID)
+		serveSocket(r.Context(), conn, guard, svc, query, caller)
 	})
 }
 
-// authenticate resolves the socket's operator, or refuses it.
+// serveSocket runs one connection until it closes, as caller.
 //
-// The socket is guarded exactly as the equivalent HTTP read is: under anonymous
-// reads it opens without a credential, and under a closed posture it does not.
-// A token that is PRESENT and wrong is refused either way — a client that sent
-// one meant to be somebody. The credential is read by the guard's own rule,
-// the same one the middleware applied a moment earlier, so the two can never
-// disagree about where a socket's token may ride.
-func authenticate(guard *auth.Guard, r *http.Request) (string, bool) {
-	operatorID, authenticated := guard.Presented(r)
-	if authenticated {
-		return operatorID, true
-	}
-	if guard.Credential(r) != "" {
-		return "", false
-	}
-	// No credential offered. The read posture decides.
-	return "", !guard.Requires(auth.SocketPath, http.MethodGet)
-}
-
-// serveSocket runs one connection until it closes.
+// THE HANDSHAKE'S PRINCIPAL IS THE SOCKET'S, resolved by the guard's own rule
+// ([auth.Guard.Presented]) — the one the middleware applied a moment earlier —
+// so a socket and a REST call carrying the same key are the same caller.
 func serveSocket(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
-	svc *Service, query Query, operatorID string,
+	svc *Service, query Query, caller auth.Principal,
 ) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -271,7 +275,7 @@ func serveSocket(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
 	})
 
 	client.send(Push(KindSnapshot, svc.Snapshot(), time.Now().UTC()))
-	readLoop(ctx, conn, guard, client, query, operatorID)
+	readLoop(ctx, conn, guard, client, query, caller)
 
 	// Unregister closes the client's queue, which is what ends the writer.
 	svc.Hub().Unregister(client)
@@ -329,7 +333,7 @@ func writeLoop(ctx context.Context, conn *websocket.Conn, client *Client) {
 
 // readLoop handles client frames until the socket closes.
 func readLoop(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
-	client *Client, query Query, operatorID string,
+	client *Client, query Query, caller auth.Principal,
 ) {
 	// The concurrency bound, as a token pool. Queries run on their own
 	// goroutines so a store scan cannot stall the live feed, and a burst
@@ -369,7 +373,7 @@ func readLoop(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
 			go func() {
 				defer running.Done()
 				defer func() { <-slots }()
-				runQuery(ctx, guard, client, query, req, operatorID)
+				runQuery(ctx, guard, client, query, req, caller)
 			}()
 		default:
 			// Unknown kinds are ignored, which is what makes new ones
@@ -380,18 +384,20 @@ func readLoop(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
 
 // runQuery answers one question onto the client's own queue.
 func runQuery(ctx context.Context, guard *auth.Guard, client *Client, query Query,
-	req request, operatorID string,
+	req request, caller auth.Principal,
 ) {
-	// A frame-carried token upgrades THIS query only. It is how a socket
-	// opened for anonymous reads asks one operator-only question without
-	// reconnecting.
-	id := operatorID
+	// A frame-carried key upgrades THIS query only. It is how a socket
+	// opened before anybody signed in asks one keyed question without
+	// reconnecting. A key the guard does not accept changes nothing: the
+	// question is asked as the socket, and refused at its reach as the
+	// socket would be.
+	asker := caller
 	if req.Token != "" {
-		if resolved, ok := guard.Operator(req.Token); ok {
-			id = resolved
+		if resolved, ok := guard.Principal(req.Token); ok {
+			asker = resolved
 		}
 	}
-	data, err := query(ctx, req.What, req.Params, id)
+	data, err := query(ctx, req.What, req.Params, asker)
 	switch {
 	case err == nil:
 		client.send(Envelope{Kind: KindResult, ID: req.ID, What: req.What, Data: data})
@@ -399,6 +405,8 @@ func runQuery(ctx context.Context, guard *auth.Guard, client *Client, query Quer
 		client.send(queryError(req, CodeUnknownQuery))
 	case errors.Is(err, ErrUnauthorized):
 		client.send(queryError(req, CodeUnauthorized))
+	case errors.Is(err, ErrForbidden):
+		client.send(queryError(req, CodeForbidden))
 	case errors.Is(err, ErrNotFound):
 		client.send(queryError(req, CodeNotFound))
 	case errors.Is(err, ErrBadParams):
@@ -426,7 +434,7 @@ func runQuery(ctx context.Context, guard *auth.Guard, client *Client, query Quer
 	default:
 		// The reason reaches the LOG, not the client. A query failure can
 		// carry a database path or a driver's own message, and the socket
-		// is the one surface an unauthenticated reader may be holding.
+		// is open to a caller holding no key at all.
 		log.WarnContext(ctx, "stream_query_failed", "what", req.What, "error", err)
 		client.send(queryError(req, CodeQueryFailed))
 	}

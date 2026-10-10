@@ -6,7 +6,7 @@
  * The dashboard reaches the engine from `src/protocol/` and from nowhere else:
  * `rest.ts` for every REST route, `socket.ts` for the live socket and its
  * handshake probe, `api.ts` for the degraded-mode snapshot poll. What that buys
- * is everything those modules decide ONCE — the operator token on every
+ * is everything those modules decide ONCE — the stored key on every
  * request, the deadline that ends a request that never settles, a body read to
  * its end before a write counts as answered, no browser cache in front of a
  * guarded answer, and a refusal a screen can branch on. A screen that reached

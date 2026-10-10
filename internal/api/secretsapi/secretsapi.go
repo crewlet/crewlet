@@ -9,12 +9,11 @@
 // rows are fleet-wide, and the engine is the only thing that
 // can put one there.
 //
-// # Every route is guarded, reads included
+// # Every route is admin, reads included
 //
-// [github.com/crewlet/crewlet/internal/api/auth] names /secrets alongside
-// /config as a prefix that is never eligible for allow_anonymous_read. A
-// listing here says which credentials a company holds and when each last
-// changed, which is reconnaissance even without the values.
+// Every route here is mounted at [auth.ReachAdmin], as /config's are
+// (ADR-0031). A listing says which credentials a company holds and when each
+// last changed, which is reconnaissance even without the values.
 //
 // # There is exactly one route that returns a value, and it is break-glass
 //
@@ -107,18 +106,22 @@ func New(opts Options) (*Service, error) {
 }
 
 // Routes registers the surface on the API's mux.
-func (s *Service) Routes(mux httpjson.Router) {
-	mux.HandleFunc("GET /secrets", s.list)
+//
+// ADMIN, every route, the listing included (ADR-0031): which credentials a
+// company holds and when each last changed is a map of what to take, and one
+// route answers a value outright.
+func (s *Service) Routes(mux auth.Router) {
+	mux.HandleFunc("GET /secrets", auth.ReachAdmin, s.list)
 	// REKEY IS A POST, and that is what keeps it from swallowing a secret
 	// a company legitimately calls "rekey". Registration order is NOT what
 	// separates them — the mux prefers the more specific pattern whichever
 	// way round they are declared — so the method is doing the work: a
 	// GET, PUT or DELETE of that name reaches the {name} routes, and no
 	// spelling of a secret's name can reach the rekey handler.
-	mux.HandleFunc("POST /secrets/rekey", s.rekey)
-	mux.HandleFunc("GET /secrets/{name}", s.get)
-	mux.HandleFunc("PUT /secrets/{name}", s.put)
-	mux.HandleFunc("DELETE /secrets/{name}", s.delete)
+	mux.HandleFunc("POST /secrets/rekey", auth.ReachAdmin, s.rekey)
+	mux.HandleFunc("GET /secrets/{name}", auth.ReachAdmin, s.get)
+	mux.HandleFunc("PUT /secrets/{name}", auth.ReachAdmin, s.put)
+	mux.HandleFunc("DELETE /secrets/{name}", auth.ReachAdmin, s.delete)
 }
 
 // list serves GET /secrets — every name, with no values.
@@ -171,7 +174,7 @@ func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, "open the secret", err)
 		return
 	}
-	operator, _ := auth.OperatorFrom(r.Context())
+	operator := auth.PrincipalFrom(r.Context()).ID
 	log.WarnContext(r.Context(), "secret_revealed", "name", name, "operator", operator)
 	// NO-STORE, and it is not decoration: without it a value can sit in a
 	// shared proxy's cache, which is a credential leak with no log line
@@ -213,7 +216,7 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		httpjson.Refuse(w, err)
 		return
 	}
-	operator, _ := auth.OperatorFrom(r.Context())
+	operator := auth.PrincipalFrom(r.Context()).ID
 	source := r.URL.Query().Get("source")
 	if source == "" {
 		source = "api"
@@ -247,7 +250,7 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, "remove the secret", err)
 		return
 	}
-	operator, _ := auth.OperatorFrom(r.Context())
+	operator := auth.PrincipalFrom(r.Context()).ID
 	log.InfoContext(r.Context(), "secret_removed", "name", name,
 		"removed", removed, "operator", operator)
 	writeJSON(w, http.StatusOK, map[string]any{"name": name, "removed": removed})
@@ -284,7 +287,7 @@ func (s *Service) rekey(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	operator, _ := auth.OperatorFrom(r.Context())
+	operator := auth.PrincipalFrom(r.Context()).ID
 	moved, err := s.store.Rekey(r.Context(), s.keyID, operator, s.now())
 	if err != nil {
 		// THE NAMES THAT DID MOVE travel with the refusal. A partial

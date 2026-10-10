@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
-	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
@@ -117,7 +117,21 @@ func (f *fakeRuntime) ShuttingDown() bool { return f.state.ShuttingDown }
 // /config, /secrets or /setup.
 type noRoutes struct{}
 
-func (noRoutes) Routes(httpjson.Router) {}
+func (noRoutes) Routes(auth.Router) {}
+
+// stubSurface stands in for /config, /secrets or /setup: it mounts each of its
+// patterns at ADMIN reach, as the real surfaces do, behind a handler that
+// answers 204 — for the cases about a surface's door (its reach, the drain gate
+// in front of it, the preflight) rather than what is behind it.
+type stubSurface []string
+
+func (s stubSurface) Routes(mux auth.Router) {
+	for _, pattern := range s {
+		mux.Handle(pattern, auth.ReachAdmin, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		}))
+	}
+}
 
 // noAppFlow is a GitHub App completer that completes nothing.
 type noAppFlow struct{}
@@ -648,9 +662,7 @@ func TestTheProbesAreReachableWithoutAToken(t *testing.T) {
 	t.Parallel()
 	// An orchestrator has no token, and a liveness check that 401s is a
 	// liveness check that fails.
-	b := config.DefaultBootstrap()
-	b.API.Auth.AllowAnonymousRead = false
-	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
+	b := closedPosture()
 	a := newApp(t, api.Options{Bootstrap: &b, Sources: queries.Sources{Company: active()}})
 
 	for _, path := range []string{"/health", "/ready"} {
@@ -664,12 +676,29 @@ func TestTheProbesAreReachableWithoutAToken(t *testing.T) {
 
 func TestTheGuardIsMountedEvenWithNoTierA(t *testing.T) {
 	t.Parallel()
-	// Tier A supplies the posture, never the existence of a check.
-	a := newApp(t, api.Options{Bootstrap: nil})
-	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/config/revisions", nil))
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("status = %d with no Tier A, want 401", rec.Code)
+	// Tier A supplies the posture, never the existence of a check — and
+	// with no Tier A nobody opened even the public face, so a caller
+	// reaches the open routes and nothing else.
+	opts := withRequired(api.Options{})
+	opts.Bootstrap = nil
+	a, err := api.New(opts)
+	if err != nil {
+		t.Fatalf("api.New: %v", err)
+	}
+	t.Cleanup(a.Stop)
+	for _, tc := range []struct {
+		method, path string
+		want         int
+	}{
+		{http.MethodPost, "/backup", http.StatusUnauthorized},
+		{http.MethodGet, "/org", http.StatusUnauthorized},
+		{http.MethodGet, "/health", http.StatusOK},
+	} {
+		rec := httptest.NewRecorder()
+		a.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, nil))
+		if rec.Code != tc.want {
+			t.Errorf("%s %s = %d with no Tier A, want %d", tc.method, tc.path, rec.Code, tc.want)
+		}
 	}
 	if a.Guard() == nil {
 		t.Error("no guard was built")
@@ -681,8 +710,8 @@ func TestAnUnknownRouteIsNotFound(t *testing.T) {
 	a := newApp(t, api.Options{})
 	rec := httptest.NewRecorder()
 	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/nope", nil))
-	// 404 rather than 401: an anonymous read posture lets the request
-	// through the guard, and the mux then has nothing for it.
+	// 404 rather than 401: the reach is a route's, and there is no route
+	// here to have one — the mux has nothing for it.
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", rec.Code)
 	}
@@ -728,12 +757,14 @@ func TestTheNodeIDNamesTheProcessThatAnswered(t *testing.T) {
 	}
 }
 
-// closedPosture is Tier A with reads guarded, for the cases that check what
-// stays reachable anyway.
+// closedPosture is Tier A with nothing open to a caller with no key and one
+// ADMIN key, `founder` presenting "secret" — for the cases that check what
+// stays reachable anyway, and the ones that present the key to reach
+// everything.
 func closedPosture() config.Bootstrap {
 	b := config.DefaultBootstrap()
-	b.API.Auth.AllowAnonymousRead = false
-	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
+	b.API.Auth.Anonymous = config.AnonymousNone
+	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Role: config.RoleAdmin, Token: "secret"}}
 	return b
 }
 
@@ -750,12 +781,11 @@ func TestAPreflightToAGuardedRouteIsAnswered(t *testing.T) {
 	t.Parallel()
 	b := config.DefaultBootstrap()
 	b.API.Auth.AllowedOrigins = []string{"https://ops.example.com"}
-	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: "s3cret"}}
-	a := newApp(t, api.Options{Bootstrap: &b})
+	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Role: config.RoleAdmin, Token: "s3cret"}}
+	a := newApp(t, api.Options{Bootstrap: &b, Config: stubSurface{"GET /config", "PATCH /config"}})
 
-	// `/config` is one of the two prefixes never eligible for
-	// allow_anonymous_read, so it is exactly the route whose preflight the
-	// guard would answer 401.
+	// `/config` is admin in full, reads included, so it is exactly the
+	// route whose preflight the guard would answer 401.
 	r := httptest.NewRequest(http.MethodOptions, "/config", nil)
 	r.Header.Set("Origin", "https://ops.example.com")
 	r.Header.Set("Access-Control-Request-Method", "PATCH")

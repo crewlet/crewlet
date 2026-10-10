@@ -104,41 +104,81 @@ type App struct {
 	// there is none and every route is [App.ServeHTTP]'s. See [App.Public].
 	public http.Handler
 
-	// routes is every pattern mounted, in mount order. See [routeTable].
-	routes []string
+	// routes is every route mounted, in mount order. See [routeTable].
+	routes []route
 }
 
-// routeTable is the one mux every surface mounts on, keeping the pattern of
-// each route it is handed.
+// route is one mounted pattern and the reach it declared.
+type route struct {
+	Pattern string
+	Reach   auth.Reach
+}
+
+// routeTable is the one mux every surface mounts on: it puts each route behind
+// the reach the route declared ([auth.Guard.Require]) and keeps the pattern and
+// the reach of each one it is handed.
+//
+// THE REACH IS ENFORCED HERE, PER ROUTE, rather than by a list of prefixes
+// beside the mux, because a prefix list is a second table that has to agree
+// with the first: a route added outside every listed prefix was served to
+// whoever asked, transcripts included. Now a route that cannot say who may
+// reach it does not compile ([auth.Router]), and one that names a reach this
+// build does not know panics at mount.
 //
 // KEPT because the listeners split ONE table by a predicate over paths
 // ([auth.Public]), and a predicate cannot say which paths exist: a route
-// mounted under a public prefix is published and unguarded whatever it was
-// meant to be, and one an outside party calls mounted outside them is
-// unreachable the day a deployment sets api.public. Only the table can be
-// walked to catch either, and [net/http.ServeMux] does not list its own.
+// mounted under a public prefix is published to callers that hold no key
+// whatever it was meant to be, and one an outside party calls mounted outside
+// them is unreachable the day a deployment sets api.public. Only the table can
+// be walked to catch either — and the reach gate walks it for the same reason
+// — and [net/http.ServeMux] does not list its own.
 type routeTable struct {
-	mux      *http.ServeMux
-	patterns []string
+	mux   *http.ServeMux
+	guard *auth.Guard
+
+	// gate wraps every route INSIDE its reach check: the drain gate on the
+	// app's table, so a caller below a route's reach is answered 401 or 403
+	// whatever the node is doing and a drain tells them nothing a refusal
+	// would not. Nil on the probe node's table, which serves through a
+	// drain by design.
+	gate func(http.Handler) http.Handler
+
+	routes []route
 }
 
-func (t *routeTable) Handle(pattern string, handler http.Handler) {
-	t.patterns = append(t.patterns, pattern)
-	t.mux.Handle(pattern, handler)
+// newRouteTable is an empty table behind guard, every route wrapped in gate
+// when it is not nil.
+func newRouteTable(guard *auth.Guard, gate func(http.Handler) http.Handler) *routeTable {
+	return &routeTable{mux: http.NewServeMux(), guard: guard, gate: gate}
 }
 
-func (t *routeTable) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
-	t.Handle(pattern, http.HandlerFunc(handler))
+// Handle mounts handler at pattern, served only to a caller whose reach covers
+// reach.
+func (t *routeTable) Handle(pattern string, reach auth.Reach, handler http.Handler) {
+	if t.gate != nil {
+		handler = t.gate(handler)
+	}
+	// Require refuses an unknown reach by panicking, BEFORE the mux holds
+	// the route, so a misdeclared route never serves at all.
+	guarded := t.guard.Require(reach, handler)
+	t.mux.Handle(pattern, guarded)
+	t.routes = append(t.routes, route{Pattern: pattern, Reach: reach})
+}
+
+// HandleFunc is [routeTable.Handle] for a function.
+func (t *routeTable) HandleFunc(pattern string, reach auth.Reach,
+	handler func(http.ResponseWriter, *http.Request)) {
+	t.Handle(pattern, reach, http.HandlerFunc(handler))
 }
 
 // routeMounter is what the API needs of a surface it mounts and never calls
-// otherwise: its routes.
+// otherwise: its routes, each at the reach it declares.
 //
 // Declared here, by the consumer, so a test can mount an inert one without
 // standing up the store, the plane or the keyring the real surface is built
 // from.
 type routeMounter interface {
-	Routes(mux httpjson.Router)
+	Routes(mux auth.Router)
 }
 
 // Options configure the app.
@@ -163,9 +203,10 @@ type routeMounter interface {
 type Options struct {
 	// Bootstrap supplies the auth posture, and whether the public routes
 	// have a listener of their own (api.public — see [App.Public]). Nil is
-	// permitted and is not the same as absent config: the guard then
-	// refuses every write, because nobody has said who may make one, and
-	// every route is served on the one listener.
+	// permitted and is not the same as absent config: no key can then
+	// match and no anonymous posture was opened, so a caller reaches only
+	// what is open to anyone, and every route is served on the one
+	// listener.
 	//
 	// It does NOT supply the node's name. The raw `node.id` is empty on a
 	// node named through CREWLET_NODE_ID and may itself be a ${VAR}; the
@@ -260,14 +301,14 @@ type Options struct {
 	// Operator is the company's own tracker and knowledge base as ONE tool
 	// catalogue, served to the people who run it — over MCP for an
 	// operator's own AI assistant, and over the act transport for a person
-	// at the dashboard, who must hold a token bound to their seat
+	// at the dashboard, who must hold a key linked to their seat
 	// (ADR-0024). Nil serves none and both routes are ABSENT,
 	// which is the honest shape for a company on Jira and Confluence: there
 	// is nothing here it could manage.
 	//
-	// ALWAYS GUARDED — see [auth.GuardedPrefixes]. It writes to the
-	// company, and the credential's own name is what lands on each record
-	// as the author.
+	// BOTH ROUTES NEED A KEY — member reach, see [App.mountOperator]. It
+	// writes to the company, and the key's own name is what lands on each
+	// record as the author.
 	Operator *operator.Server
 
 	// Retention is the fleet's record of what the log may delete, for the
@@ -421,11 +462,17 @@ func New(opts Options) (*App, error) {
 	}
 	// WHO MAY REACH THE COMPANY, read off the guard just mounted rather than
 	// off Tier A: the guard is what decides, and a disabled one accepts no
-	// listed token (see [queries.AccessPosture]).
+	// listed key (see [queries.AccessPosture]). Each key's role comes from
+	// the same guard, so the `access` answer and the viewer name exactly the
+	// role every route is enforced against.
+	keys := make([]queries.AccessKey, 0, a.guard.Tokens())
+	for _, id := range a.guard.TokenIDs() {
+		keys = append(keys, queries.AccessKey{ID: id, Role: a.guard.RoleOf(id)})
+	}
 	sources.Access = &queries.AccessPosture{
-		TokenIDs:      a.guard.TokenIDs(),
-		Disabled:      a.guard.Disabled(),
-		AnonymousRead: a.guard.AnonymousRead(),
+		Keys:      keys,
+		Disabled:  a.guard.Disabled(),
+		Anonymous: a.guard.Anonymous(),
 	}
 	if opts.Bootstrap != nil {
 		sources.Access.AllowedOrigins = slices.Clone(opts.Bootstrap.API.Auth.AllowedOrigins)
@@ -441,22 +488,31 @@ func New(opts Options) (*App, error) {
 	a.capacity = opts.Capacity
 	a.fleetBroker = opts.FleetBroker
 
-	// ONE TABLE, keeping every pattern it is handed: see [routeTable].
-	mux := &routeTable{mux: http.NewServeMux()}
-	mux.Handle("GET /health", http.HandlerFunc(a.serveHealth))
-	mux.Handle("GET /ready", http.HandlerFunc(a.serveReady))
-	mux.Handle("GET /query/{what}", http.HandlerFunc(a.serveQuery))
+	// ONE TABLE, keeping every route it is handed and the reach each one
+	// declared: see [routeTable]. Every reach below is a decision ADR-0031's
+	// withholding rule makes, and the route gate in this package's tests
+	// holds the table to it.
+	mux := newRouteTable(a.guard, a.drainGate)
+	// The probes: an orchestrator holds no key, and a liveness check that
+	// answers 401 is a liveness check that fails.
+	mux.Handle("GET /health", auth.ReachOpen, http.HandlerFunc(a.serveHealth))
+	mux.Handle("GET /ready", auth.ReachOpen, http.HandlerFunc(a.serveReady))
+	// EVERY QUESTION BY NAME, open AS A ROUTE because it is many questions
+	// behind one pattern: the registry judges each against the reach it
+	// declared ([queries.Registry.AnswerWith]) and answers a caller below
+	// it 401 or 403 exactly as the question's named route would.
+	mux.Handle("GET /query/{what}", auth.ReachOpen, http.HandlerFunc(a.serveQuery))
 	// The NAMED read routes — the public REST API. Adapters over the same
-	// registry the generic form above reaches; see rest.go.
+	// registry the generic form above reaches, each mounted at the reach its
+	// question declared; see rest.go.
 	a.mountReads(mux)
-	// A POST, so the anonymous-read posture never opens it: copying every
-	// credential and every seat's memory to a path the caller names is not
-	// a read, whatever a laptop deployment allows.
-	mux.Handle("POST /backup", http.HandlerFunc(a.serveBackup))
-	// The three retention gestures that write. POSTs for the same reason:
-	// moving the floor the trim deletes against, stopping a machine
-	// writing and letting it write again are not reads, whatever the
-	// anonymous-read posture allows. See retention.go.
+	// ADMIN: copying every credential and every seat's memory to a path the
+	// caller names is running the engine, not reading the company.
+	mux.Handle("POST /backup", auth.ReachAdmin, http.HandlerFunc(a.serveBackup))
+	// The three retention gestures that write, and the purge: moving the
+	// floor the trim deletes against, stopping a machine writing, letting it
+	// write again and destroying a task's history are how the engine is
+	// run. See retention.go.
 	a.mountRetention(mux)
 	a.mountFiles(mux)
 	// The capacity window's own control surface. It is the one thing a
@@ -468,63 +524,64 @@ func New(opts Options) (*App, error) {
 	// what the metadata group counts, and the removal of a member that is
 	// gone for good. See fleetbroker.go.
 	a.mountFleetBroker(mux)
-	mux.Handle(auth.SocketPath, stream.Handler(a.guard, a.stream, a.answer))
+	// OPEN, because what a socket is sent is decided per question (the
+	// registry, as on REST) rather than at the door: the dashboard opens it
+	// before anybody has signed in, to ask who they are.
+	mux.Handle(auth.SocketPath, auth.ReachOpen, stream.Handler(a.guard, a.stream, a.answer))
 	// The OPERATOR surface: the same tracker and knowledge tools a seat
 	// holds, offered to a person's own assistant over MCP and to the person
-	// themself over the act transport. Under its own
-	// always-guarded prefix rather than under /mcp/, which is exempt
-	// wholesale for the sandbox bridge — see operator.MCPPath.
+	// themself over the act transport. Under its own prefix rather than
+	// under /mcp/, which is open wholesale for the sandbox bridge — see
+	// operator.MCPPath.
 	a.mountOperator(mux, opts.Operator)
-	// The dashboard shell and its assets. All four paths are exempt from
-	// the guard: the page that prompts for a token cannot itself require
-	// one, and it ships no data — every byte it renders comes from an
-	// authenticated fetch.
-	mux.Handle("GET /{$}", http.RedirectHandler("/dashboard", http.StatusFound))
-	mux.Handle("GET /dashboard", http.HandlerFunc(files.serveIndex))
-	mux.Handle("GET /favicon.ico", http.HandlerFunc(files.serveFavicon))
-	mux.Handle("GET /static/", http.HandlerFunc(files.serveStatic))
-	// The inbound edge. Exempt from the guard by prefix (see the auth
-	// package) because each route authenticates by provider credential,
-	// which is why every one of them verifies before it does anything.
+	// The dashboard shell and its assets. Open: the page that asks for a
+	// key cannot itself require one, and it ships no data — every byte it
+	// renders comes from a question judged by its own reach.
+	mux.Handle("GET /{$}", auth.ReachOpen, http.RedirectHandler("/dashboard", http.StatusFound))
+	mux.Handle("GET /dashboard", auth.ReachOpen, http.HandlerFunc(files.serveIndex))
+	mux.Handle("GET /favicon.ico", auth.ReachOpen, http.HandlerFunc(files.serveFavicon))
+	mux.Handle("GET /static/", auth.ReachOpen, http.HandlerFunc(files.serveStatic))
+	// The inbound edge. Open (see the auth package's public prefixes)
+	// because each route authenticates by provider credential, which is why
+	// every one of them verifies before it does anything.
 	if err := a.mountWebhooks(mux, opts.Inbound, now); err != nil {
 		return nil, err
 	}
-	// The SANDBOX TELEMETRY edge, exempt by the same prefix rule and for
-	// the same reason: the exporter inside a box holds no API token, and
-	// giving it one would hand a sandbox the credential that reads the
-	// whole company. Its per-run token is in the path instead.
+	// The SANDBOX TELEMETRY edge, open by the same rule and for the same
+	// reason: the exporter inside a box holds no API key, and giving it one
+	// would hand a sandbox a credential that reads the company. Its per-run
+	// token is in the path instead.
 	a.mountOTLP(mux, opts.OtelReceiver)
 	mountBridge(mux, opts.Bridge)
-	// The config surface. GUARDED in full, reads included: the auth
-	// package makes /config one of the two prefixes never eligible for
-	// allow_anonymous_read, because reading it exposes the whole company
-	// document and writing it changes the company.
+	// The config surface. ADMIN in full, reads included: reading it exposes
+	// the whole company document — every integration and every ${VAR}
+	// reference by name — and writing it changes what the company does.
 	opts.Config.Routes(mux)
-	// The other one. /secrets is how a rotation reaches a fleet at all —
-	// the coordination broker is inside the engine's process on the
-	// default topology, so no second process can write the store — and its
-	// listing alone says which credentials a company holds.
+	// /secrets is how a rotation reaches a fleet at all — the coordination
+	// broker is inside the engine's process on the default topology, so no
+	// second process can write the store — and its listing alone says
+	// which credentials a company holds. Admin, reads included.
 	opts.Secrets.Routes(mux)
-	// The third, and the newest: connecting an integration without a
-	// shell. Guarded by the same prefix rule for the same reason, and
-	// reads included — the list of which credentials a company has NOT
-	// configured is worth as much to an attacker as the ones it has.
+	// Connecting an integration without a shell. Admin, reads included —
+	// the list of which credentials a company has NOT configured is worth
+	// as much to an attacker as the ones it has.
 	opts.Setup.Routes(mux)
 	// THE BROWSER POSTURE WRAPS THE CREDENTIAL ONE, because a preflight
 	// carries no credential: the browser sends it itself, before it will
 	// attach an Authorization header to anything. Inside the guard every
-	// preflight to a guarded route answers 401 and the real request is
-	// never sent. See [auth.CORS.Middleware].
+	// preflight to a route that needs a key answers 401 and the real
+	// request is never sent. See [auth.CORS.Middleware].
 	//
 	// The security headers go on outside both, so a refusal and a preflight
 	// carry them as well as an answer does, and before routing, so the
 	// responses no handler writes deliberately (the mux's own 404 and 405,
 	// which [httpjson.Mux] answers, and the redirect from `/`, which has an
-	// HTML body) are covered without each needing to remember. A handler serving a page replaces the
-	// policy with its own.
+	// HTML body) are covered without each needing to remember. A handler
+	// serving a page replaces the policy with its own.
 	//
-	// And the drain gate sits inside all three, next to the routes it
-	// refuses: see [App.drainGate].
+	// The guard's middleware only says WHO each request is; what a route
+	// needs is refused at the route ([routeTable]), and the drain gate sits
+	// inside that, next to the handler it guards: see [App.drainGate].
 	//
 	// THE MUX'S OWN 404 AND 405 ARE JSON, like every other answer this
 	// surface writes ([httpjson.Mux]): a client reads a refusal with no
@@ -536,12 +593,12 @@ func New(opts Options) (*App, error) {
 	// ONE ROUTE TABLE AND ONE CHAIN, whatever the listeners. With a dedicated
 	// public listener (Tier A api.public) the two sockets serve the same
 	// handler behind a partition — the public one only [auth.Public]'s
-	// routes, this one everything else — so a route is mounted, guarded and
+	// routes, this one everything else — so a route is mounted, judged and
 	// drained exactly once, and which socket answers it is decided by one
 	// predicate rather than by which of two muxes somebody registered it on.
 	a.cors = auth.NewCORS(opts.Bootstrap)
-	a.routes = mux.patterns
-	chain := a.cors.Middleware(a.guard.Middleware(a.drainGate(httpjson.Mux(mux.mux))))
+	a.routes = mux.routes
+	chain := a.cors.Middleware(a.guard.Middleware(httpjson.Mux(mux.mux)))
 	if opts.Bootstrap == nil || !opts.Bootstrap.API.Public.Enabled() {
 		a.handler = pagepolicy.Apply(chain)
 		return a, nil
@@ -557,8 +614,8 @@ func New(opts Options) (*App, error) {
 // BEFORE THE GUARD, which is the point on the public side: a route this
 // listener does not serve is absent there before any credential is asked for,
 // so the socket a deployment publishes answers a missing token, a wrong one and
-// the right one alike, and cannot be used to tell a valid operator token from an
-// invalid one.
+// the right one alike, and cannot be used to tell a valid key from an invalid
+// one.
 //
 // THE PUBLIC SIDE'S 404 IS THE MUX'S OWN, byte for byte ([httpjson.NoRoute]):
 // absent as on a node whose build lacks the route. Anything more — a hint naming
@@ -667,7 +724,7 @@ type Inbound struct {
 }
 
 // mountWebhooks registers the inbound edge.
-func (a *App) mountWebhooks(mux httpjson.Router, in Inbound, now func() time.Time) error {
+func (a *App) mountWebhooks(mux auth.Router, in Inbound, now func() time.Time) error {
 	receiver, err := webhooks.New(webhooks.Options{
 		Secrets:    in.Secrets,
 		Publisher:  in.Publisher,
@@ -704,7 +761,7 @@ func (a *App) State() *livestate.LiveState { return a.state }
 func (a *App) Guard() *auth.Guard { return a.guard }
 
 // CORS returns the browser-origin posture, for the startup line that states
-// it beside the anonymous-read one.
+// it beside the anonymous posture.
 func (a *App) CORS() *auth.CORS { return a.cors }
 
 // Configured reports whether a company revision is active.
@@ -762,8 +819,8 @@ func (a *App) Queries() *queries.Registry { return a.queries }
 // wire codes would be a domain package encoding a transport's vocabulary, and
 // a transport that classified errors itself would be a second place for the
 // two to disagree about what "unauthorized" means.
-func (a *App) answer(ctx context.Context, what string, params map[string]any, operatorID string) (any, error) {
-	data, err := a.queries.Answer(ctx, what, params, operatorID)
+func (a *App) answer(ctx context.Context, what string, params map[string]any, caller auth.Principal) (any, error) {
+	data, err := a.queries.Answer(ctx, what, params, caller)
 	switch {
 	case err == nil:
 		return data, nil
@@ -771,6 +828,8 @@ func (a *App) answer(ctx context.Context, what string, params map[string]any, op
 		return nil, fmt.Errorf("%w: %s", stream.ErrUnknownQuery, what)
 	case errors.Is(err, queries.ErrUnauthorized):
 		return nil, fmt.Errorf("%w: %s", stream.ErrUnauthorized, what)
+	case errors.Is(err, queries.ErrForbidden):
+		return nil, fmt.Errorf("%w: %s", stream.ErrForbidden, what)
 	case errors.Is(err, queries.ErrNotFound):
 		return nil, fmt.Errorf("%w: %s", stream.ErrNotFound, what)
 	case errors.Is(err, queries.ErrBadParams):
@@ -806,13 +865,12 @@ func (a *App) answer(ctx context.Context, what string, params map[string]any, op
 // one implementation, not two that agree today.
 func (a *App) serveQuery(w http.ResponseWriter, r *http.Request) {
 	what := r.PathValue("what")
-	operatorID, _ := auth.OperatorFrom(r.Context())
 
 	// Params come from the query string, read through the same accessors a
 	// socket frame's JSON object goes through — which is what stops a
 	// filter being honoured on one transport and ignored on the other.
 	data, err := a.queries.AnswerWith(r.Context(), what,
-		queries.FromQuery(r.URL.Query()), operatorID)
+		queries.FromQuery(r.URL.Query()), auth.PrincipalFrom(r.Context()))
 	if err != nil {
 		writeQueryError(w, what, err)
 		return
@@ -831,6 +889,12 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": stream.CodeUnknownQuery})
 	case errors.Is(err, queries.ErrUnauthorized):
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": stream.CodeUnauthorized})
+	case errors.Is(err, queries.ErrForbidden):
+		// 403, NOT 401: the key was accepted and reaches less than the
+		// question needs, and a client told 401 would ask the person to
+		// sign in again — which changes nothing. The code is the socket
+		// frame's, so one screen reads one vocabulary on both transports.
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": stream.CodeForbidden})
 	case errors.Is(err, queries.ErrBadParams):
 		// 400 AND ITS OWN CODE. The status was already right; the code
 		// said `query_failed`, which names a fault of this node for a
@@ -858,8 +922,8 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 			map[string]string{"error": stream.CodeUnavailable})
 	default:
 		// The reason reaches the LOG, not the caller: it can carry a
-		// database path or a driver's own message, and these routes are
-		// reachable under the anonymous read posture.
+		// database path or a driver's own message, and a member — who
+		// reaches none of how the engine runs — asks most of these.
 		log.Warn("api_query_failed", "what", what, "error", err)
 		writeJSON(w, http.StatusInternalServerError,
 			map[string]string{"error": stream.CodeQueryFailed})

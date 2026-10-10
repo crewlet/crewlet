@@ -351,9 +351,9 @@ both halves. See
 
 It is **answered by the node holding the seat**, which it names (`held_by`),
 for the reason the rest of a seat's memory is: only the holder's copy is
-current. And it is a personal record, so an anonymous caller is refused it
-whatever `api.auth.allow_anonymous_read` says (see
-[Configuration § Auth](configuration.md#auth)).
+current. And it is what an agent processed — its own account of what it said
+in each thread — so it is an admin's read, refused to a member key and to a
+caller with none (see [Configuration § Auth](configuration.md#auth)).
 
 What it is not is a viewer for the thread itself. A company-wide conversations
 screen once drew the ledger that way, as a worse copy of a Slack channel or a

@@ -1,6 +1,6 @@
 /**
  * Which node holds a seat, as the seat's page and its peek both say it to a
- * reader without the operator-only fleet read.
+ * reader without the admin-only fleet read.
  *
  * IT WAS THE AGENT INSTANCE ID, which exists only while a turn runs — so an
  * idle seat THIS node held read "not running on this node" on its own page,

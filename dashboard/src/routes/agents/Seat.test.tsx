@@ -153,7 +153,14 @@ const DOCUMENT: CompanyDocument = {
   ],
 };
 
-const OPERATOR = { operator_id: "ops", operator: true, handle: "jane", name: "Jane Founder" };
+const ADMIN = {
+  token_id: "ops",
+  role: "admin",
+  reach: "admin",
+  linked: true,
+  handle: "jane",
+  name: "Jane Founder",
+};
 const EVERY_ACT = [
   "create_work_item",
   "update_work_item",
@@ -171,7 +178,7 @@ type Answer = unknown | ((params: Record<string, unknown>) => unknown);
  * reading a malformed answer.
  */
 const DEFAULTS: Record<string, unknown> = {
-  viewer: { operator_id: "", operator: false, handle: "", acts: [] },
+  viewer: { token_id: "", role: "", reach: "public", handle: "", acts: [] },
   work_items: { items: [], total_hint: 0 },
   seat_activity: { since: "", until: "", days: 7, seats: [], quantile_resolution: 0.06 },
   agent_memory: {
@@ -399,7 +406,7 @@ test("a seat's page resolves its handle and nothing else", async () => {
 // about a thing that cannot exist, and the tabs that draw them are absent.
 test("a person's profile has three tabs and asks nothing a runtime answers", async () => {
   // A BOOKMARK NAMING AN AGENT'S TAB lands on Overview rather than a blank.
-  mount("#/agents/seats/jane?tab=turns", { answers: { viewer: OPERATOR, config: DOCUMENT } });
+  mount("#/agents/seats/jane?tab=turns", { answers: { viewer: ADMIN, config: DOCUMENT } });
   await settle();
   expect(tabNames().map((n) => n?.replace(/\d+$/, ""))).toEqual(["Overview", "Work", "Settings"]);
   const selected = screen
@@ -474,7 +481,7 @@ test("Edit in org opens the org editor on this seat", async () => {
 
 test("a reader who may not act sees every action held, with the reason", async () => {
   mount("#/agents/seats/swe", {
-    answers: { viewer: { operator_id: "", operator: false, handle: "", acts: [] } },
+    answers: { viewer: { token_id: "", role: "", reach: "public", handle: "", acts: [] } },
     agents: [WORKING],
   });
   await settle();
@@ -498,7 +505,7 @@ test("Assign task finds a task, then asks why, and hands it over against the ver
   }));
   mount("#/agents/seats/swe", {
     answers: {
-      viewer: { ...OPERATOR, acts: EVERY_ACT },
+      viewer: { ...ADMIN, acts: EVERY_ACT },
       work_search: { hits, available: true, mode: "hybrid" },
       work_item: (p: Record<string, unknown>) => ({
         task: { key: p.id, version: 4, title: "PXE task 0", assignee: "cto" },
@@ -555,7 +562,7 @@ test("Assign task lists the tasks it can hand over first, and the seat's own as 
   ];
   mount("#/agents/seats/swe", {
     answers: {
-      viewer: { ...OPERATOR, acts: EVERY_ACT },
+      viewer: { ...ADMIN, acts: EVERY_ACT },
       work_search: { hits, available: true, mode: "hybrid" },
     },
     agents: [WORKING],
@@ -590,7 +597,7 @@ test("Assign task decides whose the task is from the read, not the search's answ
   const assignee: Record<string, string> = { "ENG-20": "cto", "ENG-21": "swe" };
   mount("#/agents/seats/swe", {
     answers: {
-      viewer: { ...OPERATOR, acts: EVERY_ACT },
+      viewer: { ...ADMIN, acts: EVERY_ACT },
       work_search: {
         hits: [
           { key: "ENG-20", title: "Moved away", assignee: "swe" },
@@ -641,7 +648,7 @@ async function openPause() {
 test("pausing sends stop_running only when the box is ticked", async () => {
   storeToken("t");
   mount("#/agents/seats/swe", {
-    answers: { viewer: { ...OPERATOR, acts: EVERY_ACT } },
+    answers: { viewer: { ...ADMIN, acts: EVERY_ACT } },
     agents: [WORKING],
   });
   await settle();
@@ -670,7 +677,7 @@ test("pausing sends stop_running only when the box is ticked", async () => {
 test("a pause the engine refuses keeps the dialog and says why; a pending one closes it", async () => {
   storeToken("t");
   mount("#/agents/seats/swe", {
-    answers: { viewer: { ...OPERATOR, acts: EVERY_ACT } },
+    answers: { viewer: { ...ADMIN, acts: EVERY_ACT } },
     agents: [WORKING],
   });
   await settle();
@@ -696,7 +703,7 @@ test("a pause the engine refuses keeps the dialog and says why; a pending one cl
 test("a paused seat says who paused it and why, and offers Resume", async () => {
   storeToken("t");
   mount("#/agents/seats/swe", {
-    answers: { viewer: { ...OPERATOR, acts: EVERY_ACT } },
+    answers: { viewer: { ...ADMIN, acts: EVERY_ACT } },
     agents: [
       {
         role: "SWE",
@@ -758,7 +765,7 @@ test("the phone's More holds every action but Message, and each opens what its b
   storeToken("t");
   mount("#/agents/seats/swe", {
     shell: true,
-    answers: { viewer: { ...OPERATOR, acts: EVERY_ACT } },
+    answers: { viewer: { ...ADMIN, acts: EVERY_ACT } },
     agents: [WORKING],
   });
   await settle();
@@ -837,7 +844,7 @@ test("on a paused seat the phone's bar keeps Resume and folds Message", async ()
   storeToken("t");
   mount("#/agents/seats/swe", {
     shell: true,
-    answers: { viewer: { ...OPERATOR, acts: EVERY_ACT } },
+    answers: { viewer: { ...ADMIN, acts: EVERY_ACT } },
     agents: [PAUSED_SWE],
   });
   await settle();
@@ -854,7 +861,7 @@ test("on a paused seat the phone's bar keeps Resume and folds Message", async ()
 test("a folded action is held in the menu with the reason", async () => {
   mount("#/agents/seats/swe", {
     shell: true,
-    answers: { viewer: { operator_id: "", operator: false, handle: "", acts: [] } },
+    answers: { viewer: { token_id: "", role: "", reach: "public", handle: "", acts: [] } },
     agents: [WORKING],
   });
   await settle();
@@ -1098,7 +1105,7 @@ test("the current turn names its round against the granted cap, its calls and th
 
 test("the setup card reads the chart's model and tools, and the document's own rows", async () => {
   storeToken("t");
-  mount("#/agents/seats/swe", { answers: { viewer: OPERATOR, config: DOCUMENT } });
+  mount("#/agents/seats/swe", { answers: { viewer: ADMIN, config: DOCUMENT } });
   await waitFor(() => expect(screen.getByText(/e2b · claude-code/)).toBeTruthy());
   const setup = screen.getByText("Setup").closest(".crewlet-card") as HTMLElement;
   expect(setup.textContent).toContain("anthropic-main");
@@ -1117,8 +1124,34 @@ test("without the document the setup card says whose read it is, not that nothin
   const setup = screen.getByText("Setup").closest(".crewlet-card") as HTMLElement;
   // THE PUBLIC HALF STILL DRAWS.
   expect(setup.textContent).toContain("anthropic-main");
-  expect(setup.textContent).toContain("which an operator token reads");
+  expect(setup.textContent).toContain("which an admin's key reads");
   expect(setup.textContent).not.toContain("not offered");
+});
+
+// A MEMBER'S SETTINGS TAB DRAWS THE REFUSAL THE ENGINE ANSWERS — whether it
+// was asked, or known once the viewer said who they are — never "No company
+// configuration is active", a claim about the company made from no answer.
+test("a member's Settings tab says the document is for admins", async () => {
+  storeToken("t");
+  mount("#/agents/seats/swe?tab=settings", {
+    answers: {
+      viewer: { token_id: "ada", role: "member", reach: "member", linked: true, handle: "ada" },
+      config: DOCUMENT,
+    },
+  });
+  await settle();
+  expect(screen.getAllByText(/This is for admins/).length).toBeGreaterThan(0);
+  expect(screen.queryByText("No company configuration is active")).toBeNull();
+});
+
+// AND A READER WITH NO KEY, never asked either, is told what the engine would
+// tell them rather than that no configuration is active.
+test("an anonymous reader's Settings tab draws the refusal, not an empty company", async () => {
+  mount("#/agents/seats/swe?tab=settings");
+  await settle();
+  expect(screen.getAllByText(/This answer is auth-gated/).length).toBeGreaterThan(0);
+  expect(screen.queryByText("No company configuration is active")).toBeNull();
+  expect(askedFor("config")).toEqual([]);
 });
 
 // ---------------------------------------------------------------------------
@@ -1127,12 +1160,35 @@ test("without the document the setup card says whose read it is, not that nothin
 
 test("a colleague's day is withheld with the reason, and never asked for", async () => {
   mount("#/agents/seats/jane", {
-    answers: { viewer: { operator_id: "t-cto", operator: false, handle: "cto", acts: [] } },
+    answers: {
+      viewer: {
+        token_id: "t-cto",
+        role: "member",
+        reach: "member",
+        linked: true,
+        handle: "cto",
+        acts: [],
+      },
+    },
   });
   await settle();
   expect(screen.getByText("Their day")).toBeTruthy();
-  expect(screen.getByText(/needs an operator credential/)).toBeTruthy();
+  expect(screen.getByText(/theirs, and their leads/)).toBeTruthy();
   expect(askedFor("work_person")).toEqual([]);
+});
+
+// AN ADMIN KEY GIVES NO MORE HERE (ADR-0031): a colleague's day is theirs and
+// their leads', and a key that runs the engine is not a lead's.
+test("an admin outside a colleague's line is withheld their day as well", async () => {
+  mount("#/agents/seats/jane", {
+    answers: {
+      viewer: { token_id: "ops", role: "admin", reach: "admin", linked: true, handle: "cto" },
+    },
+  });
+  await settle();
+  expect(screen.getByText(/theirs, and their leads/)).toBeTruthy();
+  expect(askedFor("work_person")).toEqual([]);
+  expect(askedFor("work_inbox").map((a) => a.params.handle)).not.toContain("jane");
 });
 
 /** Jane's queue as the engine resolves it: two of her three priorities are
@@ -1168,7 +1224,14 @@ const JANE_QUEUE = {
 test("a person's Priorities tile counts what is still open, as the Work tab does", async () => {
   mount("#/agents/seats/jane", {
     answers: {
-      viewer: { operator_id: "jane-token", handle: "jane", acts: [] },
+      viewer: {
+        token_id: "jane-token",
+        role: "member",
+        reach: "member",
+        linked: true,
+        handle: "jane",
+        acts: [],
+      },
       work_person: {
         handle: "jane",
         priorities: ["t1", "t2", "t-done"],
@@ -1216,7 +1279,15 @@ test("your own day's Waiting is the sidebar badge's count, and the day is yours"
   mount("#/agents/seats/jane", {
     shell: true,
     answers: {
-      viewer: { operator_id: "jane-token", handle: "jane", name: "Jane Founder", acts: [] },
+      viewer: {
+        token_id: "jane-token",
+        role: "member",
+        reach: "member",
+        linked: true,
+        handle: "jane",
+        name: "Jane Founder",
+        acts: [],
+      },
       work_inbox: inboxPage(50, true),
       work_person: { handle: "jane", unread: [], version: 1, held: true, complete: true },
     },
@@ -1239,10 +1310,19 @@ test("your own day's Waiting is the sidebar badge's count, and the day is yours"
   expect(screen.queryByText(/Read-only here/)).toBeNull();
 });
 
-test("an operator reading a colleague's day asks that colleague's inbox", async () => {
+test("a lead reading a report's day asks that report's inbox", async () => {
   mount("#/agents/seats/jane", {
     answers: {
-      viewer: { operator_id: "ops", operator: true, handle: "cto", acts: [] },
+      viewer: {
+        token_id: "t-cto",
+        role: "member",
+        reach: "member",
+        linked: true,
+        handle: "cto",
+        // THE ENGINE'S LINE, which is what admits the read — not the role.
+        line: ["jane"],
+        acts: [],
+      },
       work_inbox: (p: Record<string, unknown>) =>
         p.handle === "jane" ? inboxPage(7, false) : inboxPage(0, false),
       work_person: { handle: "jane", unread: [], version: 1, held: true, complete: true },
@@ -2123,7 +2203,7 @@ test("the schedules tab lists a unit schedule this seat runs, and marks one that
 // not a literal a redaction bug let through.
 test("the settings tab names a seat's credentials and prints none of their values", async () => {
   storeToken("t");
-  mount("#/agents/seats/swe?tab=settings", { answers: { viewer: OPERATOR, config: DOCUMENT } });
+  mount("#/agents/seats/swe?tab=settings", { answers: { viewer: ADMIN, config: DOCUMENT } });
   await waitFor(() => expect(screen.getByText("API_TOKEN")).toBeTruthy());
   expect(screen.getByText("AUTH_HEADER")).toBeTruthy();
   expect(screen.getByText("GITLAB_HOST")).toBeTruthy();
@@ -2152,7 +2232,7 @@ test("the settings tab names a seat's credentials and prints none of their value
 // document twice on every open.
 test("the settings tab asks for the company document once", async () => {
   storeToken("t");
-  mount("#/agents/seats/swe?tab=settings", { answers: { viewer: OPERATOR, config: DOCUMENT } });
+  mount("#/agents/seats/swe?tab=settings", { answers: { viewer: ADMIN, config: DOCUMENT } });
   await waitFor(() => expect(screen.getByText("API_TOKEN")).toBeTruthy());
   await settle();
   expect(askedFor("config")).toHaveLength(1);
@@ -2160,7 +2240,7 @@ test("the settings tab asks for the company document once", async () => {
 
 test("a person's settings carry their contacts and no model, budget or credential card", async () => {
   storeToken("t");
-  mount("#/agents/seats/jane?tab=settings", { answers: { viewer: OPERATOR, config: DOCUMENT } });
+  mount("#/agents/seats/jane?tab=settings", { answers: { viewer: ADMIN, config: DOCUMENT } });
   await waitFor(() => expect(screen.getByText("U0FOUNDER")).toBeTruthy());
   expect(screen.queryByText("Tool credentials")).toBeNull();
   expect(screen.queryByText("Model and budget")).toBeNull();
@@ -2183,7 +2263,7 @@ test("the budget rows say where the company's ceiling applies to an uncapped win
   storeToken("t");
   mount("#/agents/seats/swe?tab=settings", {
     org,
-    answers: { viewer: OPERATOR, config: DOCUMENT },
+    answers: { viewer: ADMIN, config: DOCUMENT },
   });
   await waitFor(() => expect(screen.getByText("Model and budget")).toBeTruthy());
   const card = screen.getByText("Model and budget").closest(".crewlet-card") as HTMLElement;

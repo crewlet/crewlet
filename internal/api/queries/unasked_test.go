@@ -17,7 +17,7 @@ import (
 
 // answeredMap runs one question and insists it succeeded, so a case about a
 // VALUE never quietly becomes a case about a refusal. It takes no credential,
-// for [askAsOperator]'s own reason: no case here can hand itself one by
+// for [askAsAna]'s own reason: no case here can hand itself one by
 // accident.
 func answeredMap(t *testing.T, s queries.Sources, what string,
 	params map[string]any) map[string]any {
@@ -258,26 +258,34 @@ func (s *stubMemory) Overview(_ context.Context, handles []string) (memread.Over
 	return memread.Overview{}, s.err
 }
 
-// SCOPED LIKE EVERY OTHER PER-SEAT QUESTION. A caller reads the seat their own
-// token is bound to; naming somebody else's needs an operator credential.
-func TestTheThreadLedgerIsScopedToTheCallersOwnSeat(t *testing.T) {
+// READ BY SEAT, WITH NO PERSONAL NARROWING. The conversation ledger is an
+// AGENT's — what a seat said on a surface this engine does not own — which is
+// what the machine processed (ADR-0031): the question is an admin's, names
+// the seat it is about, and has no "mine" to default to.
+func TestTheThreadLedgerIsReadBySeat(t *testing.T) {
 	t.Parallel()
 	memory := &stubMemory{}
 	s := viewerSources(t, &stubWork{})
 	s.Memory = memory
 
-	// The operator's own seat, with no handle named.
-	if _, err := askAsOperator(t, s, "conversations", nil); err != nil {
+	// Any seat, by an admin no seat links: no line is asked about.
+	if _, err := askNative(t, s, "conversations", map[string]any{"handle": "bo"}); err != nil {
 		t.Fatalf("conversations: %v", err)
 	}
-	if memory.handle != "ana" {
-		t.Errorf("the ledger was asked about %q, want the seat bound to the token", memory.handle)
+	if memory.handle != "bo" {
+		t.Errorf("the ledger was asked about %q, want the seat named", memory.handle)
 	}
 
-	// Somebody else's, with no credential at all.
+	// No seat named is a question with no subject.
 	memory.handle = ""
-	if _, err := askNative(t, s, "conversations", map[string]any{"handle": "bo"}); err == nil {
-		t.Error("an anonymous caller read another seat's threads")
+	if _, err := askAsAna(t, s, "conversations", nil); !errors.Is(err, queries.ErrBadParams) {
+		t.Errorf("conversations naming no seat = %v, want bad params", err)
+	}
+	// And a member — even the lead of the seat asked about — is refused it:
+	// a transcript is the machine's, never a person's record.
+	if _, err := askAs(t, s, "conversations", map[string]any{"handle": "bo"},
+		asMember("ops-1")); !errors.Is(err, queries.ErrForbidden) {
+		t.Errorf("a member's conversations = %v, want forbidden", err)
 	}
 	if memory.handle != "" {
 		t.Errorf("a refused read still asked the ledger about %q", memory.handle)
@@ -293,8 +301,8 @@ func TestTheNamedThreadAndThePageReachTheHolder(t *testing.T) {
 	memory := &stubMemory{}
 	s := viewerSources(t, &stubWork{})
 	s.Memory = memory
-	if _, err := askAsOperator(t, s, "conversations",
-		map[string]any{"conversation": " slack:C1 ", "limit": 7}); err != nil {
+	if _, err := askAsAna(t, s, "conversations",
+		map[string]any{"handle": "ana", "conversation": " slack:C1 ", "limit": 7}); err != nil {
 		t.Fatalf("conversations: %v", err)
 	}
 	if memory.conversation != "slack:C1" || memory.limit != 7 {
@@ -312,7 +320,7 @@ func TestAMemoryReadTheHolderCouldNotAnswerIsUnavailable(t *testing.T) {
 	s.Memory = &stubMemory{err: fmt.Errorf("%w: node-b holds ana and did not answer",
 		memread.ErrUnavailable)}
 	for _, what := range []string{"agent_memory", "conversations"} {
-		_, err := askAsOperator(t, s, what, map[string]any{"id": "ana"})
+		_, err := askAsAna(t, s, what, map[string]any{"id": "ana", "handle": "ana"})
 		if !errors.Is(err, queries.ErrUnavailable) {
 			t.Errorf("%s answered %v, want ErrUnavailable", what, err)
 		}

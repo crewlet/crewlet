@@ -95,9 +95,12 @@ func servedWhileDraining(r *http.Request) bool {
 // same chain api.port is served (see [App.Public]), so the webhook edge there
 // is refused and the sandbox edges served by exactly this rule.
 //
-// Inside the auth guard, so a credential is still the first question a guarded
-// route asks, and inside the browser posture, so a cross-origin dashboard can
-// read the refusal rather than seeing an opaque network error.
+// INSIDE EACH ROUTE'S REACH CHECK — the route table wraps every route in it
+// ([routeTable]) — so a caller below a route's reach is told 401 or 403
+// whatever the node is doing, rather than "retry later" for a refusal waiting
+// will not lift; and inside the browser posture, so a cross-origin dashboard
+// can read the refusal rather than seeing an opaque network error. A path no
+// route serves never reaches it: the mux's own 404 is not work.
 func (a *App) drainGate(next http.Handler) http.Handler {
 	retryAfter := strconv.Itoa(int(DrainRetryAfter / time.Second))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

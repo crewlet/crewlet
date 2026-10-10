@@ -157,8 +157,8 @@ func requestFor(pattern string) (method, path string) {
 
 // THE WHOLE TABLE, NOT A SAMPLE. Every route the app mounts is served on the
 // listener its path names and is absent from the other, every route on the
-// public listener asks for no operator token — its callers hold none — and the
-// set the public listener serves is exactly [publishedRoutes]. Walked from what
+// public listener is mounted OPEN — its callers hold no key — and the set the
+// public listener serves is exactly [publishedRoutes]. Walked from what
 // was mounted, so a route added under a public prefix, or one an outside party
 // calls added outside them, fails here rather than in a deployment.
 func TestEveryMountedRouteIsOnTheListenerItsPathNames(t *testing.T) {
@@ -173,15 +173,16 @@ func TestEveryMountedRouteIsOnTheListenerItsPathNames(t *testing.T) {
 		t.Fatalf("the app mounted %d routes, fewer than this file names: %v", len(routes), routes)
 	}
 	var published []string
-	for _, pattern := range routes {
+	for _, route := range routes {
+		pattern := route.Pattern
 		method, path := requestFor(pattern)
 		own, other, side := http.Handler(a), public, "api.port"
 		if auth.Public(path) {
 			published = append(published, pattern)
 			own, other, side = public, a, "the public listener"
-			if !auth.Unguarded(path) {
-				t.Errorf("%q is on the public listener and guarded: no caller "+
-					"there holds the token it asks for", pattern)
+			if route.Reach != auth.ReachOpen {
+				t.Errorf("%q is on the public listener and needs %s reach: no "+
+					"caller there holds a key", pattern, route.Reach)
 			}
 		}
 		if rec := sendTo(t, own, method, path); absent(t, rec) {
@@ -197,8 +198,8 @@ func TestEveryMountedRouteIsOnTheListenerItsPathNames(t *testing.T) {
 	want := slices.Sorted(slices.Values(publishedRoutes))
 	if !slices.Equal(published, want) {
 		t.Errorf("the public listener serves\n  %v\nwant\n  %v\nA route under a public "+
-			"prefix is published and unguarded: if outside parties call it, add it to "+
-			"publishedRoutes; if they do not, mount it elsewhere", published, want)
+			"prefix is published to callers with no key: if outside parties call it, add "+
+			"it to publishedRoutes; if they do not, mount it elsewhere", published, want)
 	}
 }
 
@@ -217,11 +218,11 @@ func TestWithoutAPublicListenerEveryRouteIsOnTheAPIPort(t *testing.T) {
 	}
 }
 
-// THE PUBLIC LISTENER NEVER LOOKS AT AN OPERATOR TOKEN. A guarded route there
-// is absent before any credential is compared, so the socket a deployment
-// publishes cannot tell a valid token from an invalid one: a missing token, a
-// wrong one and the right one all get the same 404.
-func TestThePublicListenerIsNoOracleForAnOperatorToken(t *testing.T) {
+// THE PUBLIC LISTENER NEVER LOOKS AT A KEY. A route needing one is absent there
+// before any credential is compared, so the socket a deployment publishes
+// cannot tell a valid key from an invalid one: a missing key, a wrong one and
+// the right one all get the same 404.
+func TestThePublicListenerIsNoOracleForAKey(t *testing.T) {
 	t.Parallel()
 	public := listenerApp(t, true, false).Public()
 	for _, bearer := range []string{"", "Bearer wrong", "Bearer secret"} {
@@ -322,17 +323,11 @@ func TestBothListenersDrain(t *testing.T) {
 	}
 }
 
-// EVERY PUBLIC ROUTE IS EXEMPT FROM THE GUARD. The public listener's callers
-// hold no operator token by definition, so a public prefix the guard did not
-// exempt would answer every one of them 401.
-func TestEveryPublicRouteIsUnguarded(t *testing.T) {
+// THE ROUTES THIS FILE NAMES SIT ON THE SIDE OF THE PARTITION IT SAYS, so the
+// cases above are walking the routes they claim to. That every public route is
+// mounted open is the route-reach gate's (reach_test.go).
+func TestTheNamedRoutesSitWhereThisFileSays(t *testing.T) {
 	t.Parallel()
-	for _, prefix := range auth.PublicPrefixes() {
-		if !auth.Unguarded(prefix + "x") {
-			t.Errorf("%s is public and guarded: no caller of the public listener "+
-				"holds the token it asks for", prefix)
-		}
-	}
 	for _, req := range publicRoutes {
 		if path, _, _ := strings.Cut(req.path, "?"); !auth.Public(path) {
 			t.Errorf("%s is listed as a public route and auth.Public does not say so", path)

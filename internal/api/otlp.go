@@ -18,11 +18,11 @@ import (
 //
 // # This route is deliberately reachable without the API's own auth
 //
-// It has to be: the exporter inside the box holds no API token, and giving it
-// one would be handing a sandbox the credential that reads the whole company.
-// What authenticates a request instead is the per-run, trace-scoped, expiring
-// token in its own PATH, and the auth package exempts `/otlp/` by prefix for
-// exactly that reason. So this handler verifies before it does anything, on
+// It has to be: the exporter inside the box holds no API key, and giving it
+// one would be handing a sandbox a credential that reads the company. What
+// authenticates a request instead is the per-run, trace-scoped, expiring token
+// in its own PATH, which is why the route is mounted OPEN and the auth package
+// names `/otlp/` among the public prefixes. So this handler verifies before it does anything, on
 // the same terms as the webhook edge beside it.
 
 // maxOtelBody bounds one exported payload.
@@ -39,11 +39,13 @@ const maxOtelBody = 4 << 20
 // sandbox telemetry — and the route is then ABSENT rather than answering
 // 503: an endpoint that exists and refuses everything reads to an operator
 // as broken, while one that is not there matches what the config says.
-func (a *App) mountOTLP(mux httpjson.Router, receiver *sandbox.OtelReceiver) {
+func (a *App) mountOTLP(mux auth.Router, receiver *sandbox.OtelReceiver) {
 	if receiver == nil {
 		return
 	}
-	mux.Handle("POST "+auth.OTLPPrefix+"{token}/v1/{signal}", http.HandlerFunc(
+	// OPEN: the per-run token in the path is the credential, checked by the
+	// handler before it reads a byte of the body.
+	mux.Handle("POST "+auth.OTLPPrefix+"{token}/v1/{signal}", auth.ReachOpen, http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			a.serveOTLP(w, r, receiver)
 		}))

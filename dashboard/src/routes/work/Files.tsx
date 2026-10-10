@@ -13,7 +13,7 @@
  *
  * A plain link carries no bearer token, so on an engine that guards its reads
  * it would save the refusal instead of the file. The bytes are fetched with the
- * operator's token ([rest.blob]) and handed to the browser as a blob.
+ * stored key ([rest.blob]) and handed to the browser as a blob.
  *
  * # Paged by path, as the engine pages it
  *

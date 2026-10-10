@@ -60,6 +60,7 @@ import {
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, KeyCell, StatusCell } from "~/app/frame/cells.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
+import { knownRefusal, useViewer } from "~/lib/viewer.ts";
 import { fmtBytes, fmtDateTime, fmtDuration, fmtExact, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { apiToken } from "~/protocol/authToken.ts";
@@ -113,14 +114,15 @@ const SNAPSHOT_DONORS_REQUIRED = 2;
 
 export function RetentionPanels({ thisNode }: { thisNode?: string }) {
   const now = useNow();
-  // OPERATOR-GATED, so the panel renders only when this browser holds a
-  // token — the same condition every other operator surface uses. Asking
-  // without one would refuse on every poll and paint the screen red for a
-  // reader who simply is not an operator.
-  const operator = apiToken() !== "";
+  // AN ADMIN'S ANSWER (ADR-0031), so the panel renders only for a reader the
+  // engine would answer — [knownRefusal], the condition every other admin
+  // surface uses. Asking anyway would refuse on every poll and paint the
+  // screen red for a reader who simply is not an admin; the section's own
+  // refusal above says why, once.
+  const admin = knownRefusal(useViewer(), apiToken() !== "") === null;
   const { data, loading, error, refetch } = useQuery("retention", undefined, {
     pollMs: POLL_MS,
-    enabled: operator,
+    enabled: admin,
   });
   const [gate, setGate] = useState<{ node: string; evict: boolean } | null>(null);
   // THE GESTURES STILL TO BE FINISHED, keyed by node and sign, held HERE
@@ -163,7 +165,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
     });
   }, [nodesSeen, domainsSeen, servedBy]);
 
-  if (!operator) return null;
+  if (!admin) return null;
 
   const domains = data?.domains ?? [];
   const nodes = data?.nodes ?? [];

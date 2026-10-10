@@ -154,7 +154,14 @@ export function backupRefusal(err: unknown): { field: boolean; message: string }
   if (err.unauthorized) {
     return {
       field: false,
-      message: "This token cannot take a backup. Set an operator token for this browser.",
+      message:
+        "The engine did not accept this browser's token. Set an admin's API key to take a backup.",
+    };
+  }
+  if (err.forbidden) {
+    return {
+      field: false,
+      message: "Taking a backup is for admins, and this browser's key is a member's.",
     };
   }
   if (err.status === 0) {

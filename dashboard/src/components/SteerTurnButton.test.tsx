@@ -25,10 +25,14 @@ vi.mock("~/lib/store-hooks.ts", () => ({
 vi.mock("~/lib/viewer.ts", () => ({ useViewer: vi.fn() }));
 
 const JANE: ViewerState = {
-  operatorID: "founder",
-  operator: true,
+  tokenID: "founder",
+  role: "member",
+  reach: "member",
+  admin: false,
+  linked: true,
   handle: "jane",
   name: "Jane Founder",
+  line: [],
   kind: "human",
   acts: ["steer_turn"],
   project: "",
@@ -36,8 +40,9 @@ const JANE: ViewerState = {
   anonymous: false,
   loading: false,
   asking: false,
-  configWriter: true,
+  configWriter: false,
   configManagedBy: [],
+  admins: [],
 };
 
 beforeEach(() => {

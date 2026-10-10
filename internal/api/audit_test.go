@@ -108,7 +108,8 @@ func auditedApp(t *testing.T, taker *fakeBackup) (*api.App, *recordedAudit) {
 	}
 	b := config.DefaultBootstrap()
 	b.API.Auth.Tokens = []config.APIToken{
-		{ID: "founder", Token: "founder-secret"}, {ID: "ci", Token: "ci-secret"},
+		{ID: "founder", Role: config.RoleAdmin, Token: "founder-secret"},
+		{ID: "ci", Role: config.RoleAdmin, Token: "ci-secret"},
 	}
 	a := newApp(t, api.Options{
 		Bootstrap: &b,
@@ -338,7 +339,7 @@ func TestABackupsRecordNamesItsTakerThroughTheHandedLookup(t *testing.T) {
 		},
 	}
 	b := config.DefaultBootstrap()
-	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: "founder-secret"}}
+	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Role: config.RoleAdmin, Token: "founder-secret"}}
 	audit := &recordedAudit{}
 	a := newApp(t, api.Options{
 		Bootstrap: &b,

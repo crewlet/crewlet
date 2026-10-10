@@ -1,10 +1,10 @@
 // Package webhooks is the API's inbound edge: the endpoints external systems
 // POST to, and the provider credential each one is authenticated by.
 //
-// THESE ROUTES ARE EXEMPT FROM THE API'S BEARER TOKEN, which is why every one
-// of them verifies a provider credential BEFORE the delivery is recorded,
-// broadcast or republished. That ordering is the whole security property, and
-// an earlier edge lost it twice: Slack skipped verification entirely
+// THESE ROUTES ARE OPEN — a vendor holds no key of this engine — which is why
+// every one of them verifies a provider credential BEFORE the delivery is
+// recorded, broadcast or republished. That ordering is the whole security
+// property, and an earlier edge lost it twice: Slack skipped verification entirely
 // when no secret was configured — so anyone who could reach the port could
 // publish a raw_webhook addressed at any seat, and the engine woke that agent
 // and drove a turn — while Jira and Confluence verified only inside their
@@ -37,6 +37,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
@@ -197,27 +198,29 @@ func New(opts Options) (*Receiver, error) {
 
 // Routes registers every inbound endpoint on the API's mux.
 //
-// Registered on the caller's mux rather than served from an inner one, so the
-// auth middleware that exempts /webhooks/ wraps these exactly as it wraps
-// everything else — a nested handler would put the exemption and the routes in
-// two places that have to agree.
-func (r *Receiver) Routes(mux httpjson.Router) {
-	mux.HandleFunc("POST /webhooks/github", r.github)
+// Registered on the caller's mux rather than served from an inner one, so each
+// route's reach is declared where the route is — OPEN, every one: a vendor
+// holds no key of this engine, and each route authenticates the delivery by
+// the vendor's own signature or shared token before it does anything. A nested
+// handler would put the declaration and the routes in two places that have to
+// agree.
+func (r *Receiver) Routes(mux auth.Router) {
+	mux.HandleFunc("POST /webhooks/github", auth.ReachOpen, r.github)
 	// The seat form, for an app belonging to one agent. Same handler:
 	// what differs is only whether the path names a seat.
-	mux.HandleFunc("POST /webhooks/github/{handle}", r.github)
-	mux.HandleFunc("POST /webhooks/gitlab", r.gitlab)
-	mux.HandleFunc("POST /webhooks/jira", r.jira)
-	mux.HandleFunc("POST /webhooks/datadog", r.datadog)
-	mux.HandleFunc("POST /webhooks/confluence", r.confluence)
+	mux.HandleFunc("POST /webhooks/github/{handle}", auth.ReachOpen, r.github)
+	mux.HandleFunc("POST /webhooks/gitlab", auth.ReachOpen, r.gitlab)
+	mux.HandleFunc("POST /webhooks/jira", auth.ReachOpen, r.jira)
+	mux.HandleFunc("POST /webhooks/datadog", auth.ReachOpen, r.datadog)
+	mux.HandleFunc("POST /webhooks/confluence", auth.ReachOpen, r.confluence)
 	// The Cloud form, one path per event. Registered after the bare one
 	// so a reader sees the pair together; the mux matches on the pattern,
 	// not the order.
-	mux.HandleFunc("POST /webhooks/confluence/{event}", r.confluenceCloud)
-	mux.HandleFunc("POST /webhooks/slack/{handle}", r.slack)
-	mux.HandleFunc("POST /webhooks/forge", r.forgeWebhook)
-	mux.HandleFunc("GET /webhooks/slack-oauth", slackOAuthLanding)
-	mux.HandleFunc("GET /webhooks/github-app", r.githubAppLanding)
+	mux.HandleFunc("POST /webhooks/confluence/{event}", auth.ReachOpen, r.confluenceCloud)
+	mux.HandleFunc("POST /webhooks/slack/{handle}", auth.ReachOpen, r.slack)
+	mux.HandleFunc("POST /webhooks/forge", auth.ReachOpen, r.forgeWebhook)
+	mux.HandleFunc("GET /webhooks/slack-oauth", auth.ReachOpen, slackOAuthLanding)
+	mux.HandleFunc("GET /webhooks/github-app", auth.ReachOpen, r.githubAppLanding)
 }
 
 // --- the shared pipeline ---------------------------------------------------

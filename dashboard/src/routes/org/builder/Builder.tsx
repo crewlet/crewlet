@@ -5,14 +5,15 @@
  * THE POSTURE IS WHAT THE ENGINE ANSWERS, never what the browser holds. A
  * stored token proves nothing (an engine with `api.auth.disabled` needs none,
  * and a rotated one is refused), so `GET /config` is read on mount and again
- * whenever the operator token changes, and its answer decides:
+ * whenever the stored key changes, and its answer decides:
  *
  * | `GET /config` answers                            | The builder shows |
  * |---|---|
  * | 200                                              | edit mode |
  * | 404 `no_active_revision`, no company in the org  | create mode |
  * | 404 `no_active_revision`, a company in the org   | this node has not caught up (never create mode) |
- * | 401 or 403                                       | a request for a token, worded by whether one is stored |
+ * | 401                                              | a request for a token, worded by whether one is stored |
+ * | 403 `forbidden`                                  | a member's key: editing is for admins, and who to ask |
  * | any other 404 (`no_route`), or a body not JSON    | this process does not serve the configuration |
  * | nothing (status 0)                               | the engine could not be reached |
  *
@@ -53,9 +54,9 @@ import { matchesRow } from "~/app/keymap.ts";
 import { useClickOnNothing } from "~/ui/clickOnNothing.ts";
 import { fmtDateTime, plural } from "~/lib/format.ts";
 import { useAgents, useConnection, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
-import { useManagedConfig } from "~/lib/useWriteAccess.ts";
+import { notAdminSentence, useManagedConfig } from "~/lib/useWriteAccess.ts";
 import { managedSentence } from "~/protocol/configAnswer.ts";
-import { useViewer } from "~/lib/viewer.ts";
+import { useViewer, type ViewerAdmin } from "~/lib/viewer.ts";
 import { apiToken, onTokenChanged, requestToken } from "~/protocol/index.ts";
 import type { ConfigProblem, ConfigWarning } from "~/protocol/index.ts";
 import type { Tone } from "@crewlethq/ui";
@@ -264,6 +265,8 @@ export type Posture =
   | { readonly kind: "create" }
   | { readonly kind: "behind" }
   | { readonly kind: "guarded"; readonly tokenStored: boolean }
+  /** A member's key: the engine accepted it, and the configuration is an admin's. */
+  | { readonly kind: "forbidden" }
   | { readonly kind: "unserved" }
   | { readonly kind: "unreachable"; readonly detail: string }
   | { readonly kind: "failed"; readonly detail: string };
@@ -293,7 +296,11 @@ export function postureOf(answer: HttpAnswer, org: OrgKnowledge, tokenStored: bo
     }
     return { kind: "edit", document: answer.body, revision };
   }
-  if (answer.status === 401 || answer.status === 403) return { kind: "guarded", tokenStored };
+  if (answer.status === 401) return { kind: "guarded", tokenStored };
+  // A KEY THE ENGINE ACCEPTED IS NOT A TOKEN TO REPLACE: a member's reads the
+  // company and acts as its person, and the configuration is an admin's
+  // (ADR-0031). Any other 403 names its own refusal and is shown as said.
+  if (answer.status === 403 && code === "forbidden") return { kind: "forbidden" };
   if (code === "unreadable_body") return { kind: "unserved" };
   if (answer.status === 404) {
     if (code !== "no_active_revision") return { kind: "unserved" };
@@ -343,10 +350,12 @@ function statusLook(status: CheckStatus, problems: number, tokenStored: boolean)
       return { label: "The configuration changed", tone: "warning", icon: TriangleAlertGlyph };
     case "guarded":
       return {
-        label: tokenStored ? "The engine refused the token" : "Needs an operator token",
+        label: tokenStored ? "The engine refused the key" : "Needs an admin key",
         tone: "danger",
         icon: KeyGlyph,
       };
+    case "forbidden":
+      return { label: "For admins", tone: "neutral", icon: KeyGlyph };
     case "managed":
       return { label: "Managed by another system", tone: "neutral", icon: ShieldGlyph };
   }
@@ -783,7 +792,7 @@ function BuilderScreen({
   // A refused read may be the tab changing hands: the kept draft is not
   // offered to whoever holds it next.
   useEffect(() => {
-    if (posture.kind === "guarded") forget();
+    if (posture.kind === "guarded" || posture.kind === "forbidden") forget();
   }, [posture.kind, forget]);
 
   // What a save's answer leads to. A ref, because a save outlives the render
@@ -816,7 +825,8 @@ function BuilderScreen({
   // AND IF THE ENGINE SAYS SO FIRST — a check answered `config_managed`
   // before the viewer did — the check's own answer decides the same way.
   const viewerManaged = useManagedConfig();
-  const viewerManagedBy = useViewer().configManagedBy;
+  const viewer = useViewer();
+  const viewerManagedBy = viewer.configManagedBy;
   const checkManagedBy = status === "managed" ? managedByOf(state) : null;
   const managedBy = checkManagedBy ?? (viewerManaged !== null ? viewerManagedBy : null);
   const managed = managedBy === null ? null : managedSentence(managedBy);
@@ -827,7 +837,10 @@ function BuilderScreen({
     }
     if (keeping.offer) return "a kept draft is waiting for Keep or Discard";
     if (posture.kind === "guarded" || status === "guarded") {
-      return tokenStored ? "the engine refused this browser's token" : "no operator token is set";
+      return tokenStored ? "the engine refused this browser's token" : "no admin key is set";
+    }
+    if (posture.kind === "forbidden" || status === "forbidden") {
+      return "the company's configuration is for admins";
     }
     if (status === "conflict") return "the configuration changed since this draft was started";
     if (loaded && !isBaseKeyed(state)) return "the engine has not described this company yet";
@@ -1309,7 +1322,14 @@ function BuilderScreen({
   // ---- Rendering --------------------------------------------------------------
 
   if (!loaded) {
-    return <PostureScreen posture={posture} onRetry={() => load()} onSetToken={askForToken} />;
+    return (
+      <PostureScreen
+        posture={posture}
+        admins={viewer.admins}
+        onRetry={() => load()}
+        onSetToken={askForToken}
+      />
+    );
   }
 
   const problemCount = problemsCurrent ? state.check.problems.problemCount : 0;
@@ -1595,7 +1615,15 @@ function BuilderScreen({
           >
             {tokenStored
               ? "The engine refused this browser's token. Your draft is kept on this page; set a token the engine accepts to keep editing."
-              : "Editing the organization needs an operator token. Your draft is kept on this page."}
+              : "Editing the organization needs an admin key. Your draft is kept on this page."}
+          </Callout>
+        )}
+        {(posture.kind === "forbidden" || status === "forbidden") && (
+          // NO "Set token" HERE: the key works, and is a member's. What
+          // clears it is an admin, so the callout names one.
+          <Callout variant="neutral" icon={<KeyGlyph />}>
+            Editing the organization is for admins. Your draft is kept on this page.{" "}
+            {notAdminSentence(viewer.admins)}
           </Callout>
         )}
         {posture.kind === "unreachable" && (
@@ -2099,10 +2127,13 @@ function DocumentProblems({ problems }: { problems: readonly PlacedProblem[] }) 
 
 function PostureScreen({
   posture,
+  admins,
   onRetry,
   onSetToken,
 }: {
   posture: Posture;
+  /** Who a member is told to ask (`viewer.admins`). */
+  admins: readonly ViewerAdmin[];
   onRetry: () => void;
   onSetToken: () => void;
 }) {
@@ -2132,7 +2163,7 @@ function PostureScreen({
           title={
             posture.tokenStored
               ? "The engine refused this browser's token."
-              : "Editing the organization needs an operator token."
+              : "Editing the organization needs an admin key."
           }
           description="The configuration is guarded, reads included."
           action={
@@ -2140,6 +2171,14 @@ function PostureScreen({
               Set token
             </Button>
           }
+        />
+      );
+    case "forbidden":
+      return (
+        <EmptyState
+          icon={<KeyGlyph />}
+          title="Editing the organization is for admins."
+          description={`The configuration is an admin's, reads included, and this browser's key is a member's. ${notAdminSentence(admins)}`}
         />
       );
     case "unserved":

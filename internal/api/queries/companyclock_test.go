@@ -45,7 +45,7 @@ func TestTheWorkAnswersCutTheirDayOnTheCompanysClock(t *testing.T) {
 		{"work_workload", nil, func() (time.Time, *time.Location) { return work.workloadNow, work.workloadZone }},
 	} {
 		current = company
-		if _, err := askAsOperator(t, sources, tc.what, tc.params); err != nil {
+		if _, err := askAsAna(t, sources, tc.what, tc.params); err != nil {
 			t.Fatalf("%s: %v", tc.what, err)
 		}
 		at, zone := tc.got()
@@ -61,7 +61,7 @@ func TestTheWorkAnswersCutTheirDayOnTheCompanysClock(t *testing.T) {
 		// AN APPLY THAT DROPS THE CLOCK puts the next answer on UTC —
 		// the default company's — rather than on the zone it had.
 		current = &config.Company{Name: "Acme", Roles: company.Roles}
-		if _, err := askAsOperator(t, sources, tc.what, tc.params); err != nil {
+		if _, err := askAsAna(t, sources, tc.what, tc.params); err != nil {
 			t.Fatalf("%s after the apply: %v", tc.what, err)
 		}
 		if _, zone := tc.got(); zone != time.UTC {

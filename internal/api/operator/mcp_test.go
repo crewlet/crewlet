@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
+	"github.com/crewlet/crewlet/internal/config"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -72,7 +73,7 @@ func TestEachHalfIsOfferedOnItsOwn(t *testing.T) {
 // whose author field is chosen by the writer is not an audit trail.
 func TestAnOperatorWriteCarriesTheTokensOwnLabel(t *testing.T) {
 	t.Parallel()
-	ctx := auth.WithOperator(t.Context(), "ops-bot")
+	ctx := auth.WithPrincipal(t.Context(), asAdmin("ops-bot"))
 
 	actor, err := operator.WorkActor(nil, nil)(ctx, nil)
 	if err != nil {
@@ -155,7 +156,7 @@ func TestABoundTokenCarriesTheSeatItNames(t *testing.T) {
 		return o
 	}
 
-	bound, err := operator.WorkActor(chart, nil)(auth.WithOperator(t.Context(), "founder"), nil)
+	bound, err := operator.WorkActor(chart, nil)(auth.WithPrincipal(t.Context(), asMember("founder")), nil)
 	if err != nil {
 		t.Fatalf("WorkActor: %v", err)
 	}
@@ -197,7 +198,7 @@ func TestABoundTokenCarriesTheSeatItNames(t *testing.T) {
 
 	// AN UNBOUND TOKEN IS AN ORDINARY STATE — an operator outside the org
 	// chart — and it writes under its own id exactly as before.
-	unbound, err := operator.WorkActor(chart, nil)(auth.WithOperator(t.Context(), "ci"), nil)
+	unbound, err := operator.WorkActor(chart, nil)(auth.WithPrincipal(t.Context(), asAdmin("ci")), nil)
 	if err != nil {
 		t.Fatalf("WorkActor for an unbound token: %v", err)
 	}
@@ -224,7 +225,7 @@ func TestABoundTokenCarriesTheSeatItNames(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			got, err := operator.WorkActor(none, nil)(
-				auth.WithOperator(t.Context(), "founder"), nil)
+				auth.WithPrincipal(t.Context(), asMember("founder")), nil)
 			if err != nil {
 				t.Fatalf("WorkActor: %v", err)
 			}
@@ -261,7 +262,7 @@ func TestABindingResolvesThroughTheLookupTheSurfaceIsHanded(t *testing.T) {
 		}
 		return "", false
 	}
-	ctx := auth.WithOperator(t.Context(), "founder")
+	ctx := auth.WithPrincipal(t.Context(), asMember("founder"))
 
 	bound, err := operator.WorkActor(chart, handed)(ctx, nil)
 	if err != nil {
@@ -287,7 +288,7 @@ func TestAWriteWithNoOperatorIsRefused(t *testing.T) {
 	t.Parallel()
 	for name, ctx := range map[string]context.Context{
 		"no operator on the context": context.Background(),
-		"an empty operator id":       auth.WithOperator(context.Background(), ""),
+		"an empty operator id":       auth.WithPrincipal(context.Background(), auth.Principal{Reach: auth.ReachAdmin}),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := operator.WorkActor(nil, nil)(ctx, nil); err == nil {
@@ -300,18 +301,69 @@ func TestAWriteWithNoOperatorIsRefused(t *testing.T) {
 	}
 }
 
-// THE SURFACE IS ALWAYS GUARDED, and it is the auth package that says so.
-// Mounting it under /mcp/ — which is exempt wholesale so a sandbox box with
-// no API token can reach its seat's tools — would have put a writable company
-// surface behind no credential at all.
-func TestTheOperatorSurfaceIsNeverAnonymous(t *testing.T) {
+// THE SURFACE IS NEVER ON A PUBLIC PREFIX. Mounting it under /mcp/ — which is
+// open wholesale so a sandbox box with no API key can reach its seat's tools,
+// and served on the public listener — would have put a writable company
+// surface behind no credential at all. The reach it IS mounted at is the
+// app's route table's, which the API's route gate holds at member.
+func TestTheOperatorSurfaceIsNeverOnAPublicPrefix(t *testing.T) {
 	t.Parallel()
-	if !auth.AlwaysGuarded(operator.MCPPath) {
-		t.Fatalf("%s is not on the always-guarded list, so allow_anonymous_read "+
-			"opens a surface that files work", operator.MCPPath)
+	for _, path := range []string{operator.MCPPath, operator.ActPathPrefix + "x"} {
+		if auth.Public(path) {
+			t.Errorf("%s is under a public prefix, which no caller holds a key for", path)
+		}
 	}
-	if strings.HasPrefix(operator.MCPPath, "/mcp/") {
-		t.Fatalf("%s is under the sandbox bridge's exempt prefix", operator.MCPPath)
+}
+
+// mcpStatus posts one MCP initialize request to the surface as caller, and
+// returns the status and the decoded refusal when there is one.
+func mcpStatus(t *testing.T, s *operator.Server, caller auth.Principal) (int, map[string]any) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, operator.MCPPath, strings.NewReader(
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18",`+
+			`"capabilities":{},"clientInfo":{"name":"assistant","version":"1"}}}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	rec := httptest.NewRecorder()
+	s.MCPHandler().ServeHTTP(rec, req.WithContext(auth.WithPrincipal(req.Context(), caller)))
+	var body map[string]any
+	if rec.Header().Get("Content-Type") == "application/json" {
+		_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	}
+	return rec.Code, body
+}
+
+// A MEMBER ACTS ONLY AS THE PERSON THE KEY IS LINKED TO (ADR-0031), on the
+// assistant transport as on the dashboard's: a member key no seat links is
+// refused `unbound` before the MCP session opens. A LINKED key of either role
+// is the person, and an unlinked ADMIN key acts as itself, as a CI or ops-bot
+// credential always has — so a surface that refused everybody fails here too.
+func TestAnUnlinkedMemberKeyIsRefusedTheAssistantTransport(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, operator.Options{
+		Work: builtin.WorkDeps{
+			Reader: stubWorkReader{}, Writer: stubWorkWriter,
+			Actor: operator.WorkActor(boundChart, nil),
+		},
+		Org: boundChart,
+	})
+	status, body := mcpStatus(t, s, asMember("intern"))
+	if status != http.StatusForbidden || body["error"] != string(operator.CodeUnbound) {
+		t.Fatalf("an unlinked member key answered %d %v, want 403 unbound", status, body)
+	}
+	if hint, _ := body["hint"].(string); !strings.Contains(hint, "contact.crewlet_operator_id: intern") {
+		t.Errorf("the refusal's hint %q does not name the link to make", hint)
+	}
+	for name, caller := range map[string]auth.Principal{
+		"a linked member key":   asMember("founder"),
+		"a linked admin key":    asAdmin("founder"),
+		"an unlinked admin key": asAdmin("ops-bot"),
+		"a disabled guard's caller": {ID: auth.AnonymousOperator, Role: config.RoleAdmin,
+			Reach: auth.ReachAdmin},
+	} {
+		if status, body := mcpStatus(t, s, caller); status != http.StatusOK {
+			t.Errorf("%s answered %d %v, want the session served", name, status, body)
+		}
 	}
 }
 

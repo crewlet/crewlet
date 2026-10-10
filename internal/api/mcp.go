@@ -20,11 +20,11 @@ import (
 //
 // # This route is deliberately reachable without the API's own auth
 //
-// It has to be: the MCP client inside the box holds no API token, and giving
-// it one would be handing a sandbox the credential that reads the whole
-// company. What authenticates a request instead is the per-run, expiring token
-// in its own PATH, and the auth package exempts this prefix for exactly that
-// reason. Two gates stand behind it: the signature says the token was minted
+// It has to be: the MCP client inside the box holds no API key, and giving
+// it one would be handing a sandbox a credential that reads the company. What
+// authenticates a request instead is the per-run, expiring token in its own
+// PATH, which is why the route is mounted OPEN and the auth package names this
+// prefix among the public ones. Two gates stand behind it: the signature says the token was minted
 // by this fleet, and the session map says the run it names is still going.
 //
 // # It belongs to the node that runs the seat, not to ingress
@@ -42,7 +42,7 @@ import (
 // mode — and the route is then ABSENT rather than answering 503: an endpoint
 // that exists and refuses everything reads to an operator as broken, while one
 // that is not there matches what the config says.
-func mountBridge(mux httpjson.Router, bridge *mcpbridge.Bridge) {
+func mountBridge(mux auth.Router, bridge *mcpbridge.Bridge) {
 	if bridge == nil {
 		return
 	}
@@ -51,7 +51,7 @@ func mountBridge(mux httpjson.Router, bridge *mcpbridge.Bridge) {
 	// naming one verb answers 405 to the other two — which an MCP client
 	// reports as a transport that does not support streaming rather than as
 	// a route that is registered wrong.
-	mux.Handle(mcpbridge.PathPrefix+"{token}", bridge.Handler())
+	mux.Handle(mcpbridge.PathPrefix+"{token}", auth.ReachOpen, bridge.Handler())
 	log.Info("mcp_bridge_mounted", "path", mcpbridge.PathPrefix+"{token}")
 }
 
@@ -61,10 +61,10 @@ func mountBridge(mux httpjson.Router, bridge *mcpbridge.Bridge) {
 // the bridge is served where the file says public routes are served, on every
 // node.
 //
-// It is wrapped in the same guard and security headers as the full [App], so a
-// request for any other path is refused or answered 404 exactly as the full
-// surface would answer an unknown path, never served by a bare mux. The bridge
-// route itself is exempt from the guard by prefix, as it is on the full
+// It is mounted on the same kind of route table, behind the same guard and
+// security headers, as the full [App], so a request for any other path is
+// answered 404 exactly as the full surface would answer an unknown path, never
+// served by a bare mux. The bridge route itself is open, as it is on the full
 // surface.
 //
 // A nil bridge returns nil: there is nothing for such a node to serve, and the
@@ -74,9 +74,10 @@ func BridgeOnly(bootstrap *config.Bootstrap, bridge *mcpbridge.Bridge) http.Hand
 	if bridge == nil {
 		return nil
 	}
-	mux := http.NewServeMux()
+	guard := auth.New(bootstrap)
+	mux := newRouteTable(guard, nil)
 	mountBridge(mux, bridge)
-	return pagepolicy.Apply(auth.New(bootstrap).Middleware(httpjson.Mux(mux)))
+	return pagepolicy.Apply(guard.Middleware(httpjson.Mux(mux.mux)))
 }
 
 // mountOperator registers the operator surface's transports, or says why it
@@ -87,26 +88,31 @@ func BridgeOnly(bootstrap *config.Bootstrap, bridge *mcpbridge.Bridge) http.Hand
 // ABSENT rather than answering 404 from a registered handler: an endpoint
 // that exists and lists no tools reads to an operator as broken, while one
 // that is not there matches what their config says.
-func (a *App) mountOperator(mux httpjson.Router, server *operator.Server) {
+func (a *App) mountOperator(mux auth.Router, server *operator.Server) {
 	if server == nil {
 		return
 	}
 	// EVERY METHOD, for the reason the bridge takes every method: streamable
 	// HTTP is a GET for the server-to-client stream and a DELETE to end a
 	// session.
-	mux.Handle(operator.MCPPath, server.MCPHandler())
+	//
+	// MEMBER REACH, because the catalogue is the company's own work and
+	// pages — what a member reads and writes — and nothing of how the engine
+	// runs. Who may write as whom is the handler's to decide past that: a
+	// member key no seat links is refused there, since a member acts only
+	// as the person the key is linked to (see [operator.Server.MCPHandler]).
+	mux.Handle(operator.MCPPath, auth.ReachMember, server.MCPHandler())
 	log.Info("operator_mcp_mounted", "path", operator.MCPPath,
 		"tools", server.Tools(),
-		"detail", "an operator's own AI assistant can read and write the "+
+		"detail", "a person's own AI assistant can read and write the "+
 			"company's tracker and knowledge base here, authenticated with "+
-			"an api.auth.tokens entry")
+			"a key linked to their seat or an admin key")
 	// AND THE PERSON'S OWN TRANSPORT over the same catalogue: POST only,
-	// one tool per request, admitting a token bound to a seat and nobody
-	// else (ADR-0024). Under the same always-guarded prefix, so the guard in
-	// front of it is the one in front of /operator/mcp.
-	mux.Handle(operator.ActPattern, server.ActHandler())
+	// one tool per request, admitting a key linked to a seat and nobody
+	// else (ADR-0024) — at the same reach as /operator/mcp.
+	mux.Handle(operator.ActPattern, auth.ReachMember, server.ActHandler())
 	log.Info("operator_act_mounted", "path", operator.ActPathPrefix+"{tool}",
 		"tools", server.Acts(),
 		"detail", "the dashboard writes here as the person the presented "+
-			"token is bound to by contact.crewlet_operator_id")
+			"key is linked to by contact.crewlet_operator_id")
 }

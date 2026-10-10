@@ -60,9 +60,10 @@ type seatKey struct{}
 // made BY whoever it was admitted as, so the first answer is the call's, and
 // a rebinding applies from the next call on.
 //
-// THE DISPATCH SETS IT, for every transport — the act transport's admission
-// pins it first, and the dispatch reuses that answer rather than asking
-// again. Read back by [pinnedSeat], which tells a pinned "" (an unbound
+// THE DISPATCH SETS IT, for every transport — each transport's admission pins
+// it first (the act transport's, and the MCP transport's, which refuses an
+// unlinked member key on that answer), and the dispatch reuses it rather than
+// asking again. Read back by [pinnedSeat], which tells a pinned "" (an unbound
 // caller) from no pin at all.
 func withSeat(ctx context.Context, seat string) context.Context {
 	return context.WithValue(ctx, seatKey{}, seat)
@@ -119,9 +120,9 @@ func WorkActor(chart func() *org.Organization, lookup org.EnvLookup) func(
 	context.Context, *turnctx.Turn) (builtin.Actor, error) {
 
 	return func(ctx context.Context, _ *turnctx.Turn) (builtin.Actor, error) {
-		id, ok := auth.OperatorFrom(ctx)
-		if !ok || id == "" {
-			return builtin.Actor{}, fmt.Errorf("operator: no operator on this request")
+		id := auth.PrincipalFrom(ctx).ID
+		if id == "" {
+			return builtin.Actor{}, fmt.Errorf("operator: no key on this request")
 		}
 		// THE OPERATOR'S OWN NAME IS THE HANDLE, and the kind says it
 		// is not a seat. A tracker whose author field is chosen by the
@@ -179,9 +180,9 @@ func seatFor(chart func() *org.Organization, lookup org.EnvLookup, id string) st
 // same person as two people three rows apart, and that a reader filtering on
 // a name matched half of what they did.
 func PageActor(ctx context.Context, _ *turnctx.Turn) (pages.Actor, error) {
-	id, ok := auth.OperatorFrom(ctx)
-	if !ok || id == "" {
-		return pages.Actor{}, fmt.Errorf("operator: no operator on this request")
+	id := auth.PrincipalFrom(ctx).ID
+	if id == "" {
+		return pages.Actor{}, fmt.Errorf("operator: no key on this request")
 	}
 	return pages.Actor{Handle: id, Kind: pages.AuthorOperator, OperatorID: id}, nil
 }

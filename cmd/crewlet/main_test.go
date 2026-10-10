@@ -569,12 +569,17 @@ func TestAMergedNodeSeedsItsDashboardFromItsStore(t *testing.T) {
 
 	boot := bootstrapFor(t, 0)
 	boot.API.Port = freePort(t)
+	// AN ADMIN'S KEY, because the snapshot carries every seat's call in
+	// flight, its prompt included — what the machine is processing, which no
+	// caller without an admin key is served (ADR-0031).
+	const admin = "a-snapshot-admin-key"
+	boot.API.Auth.Tokens = []config.APIToken{{ID: "ops", Role: config.RoleAdmin, Token: admin}}
 	surface, err := serveNode(t, boot, e)
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}
 	t.Cleanup(func() { surface.stop(context.Background(), logging.Get("test")) })
-	snapshot := getJSON(t, "http://127.0.0.1:"+strconv.Itoa(boot.API.Port)+"/stream/snapshot")
+	snapshot := getJSONAs(t, "http://127.0.0.1:"+strconv.Itoa(boot.API.Port)+"/stream/snapshot", admin)
 
 	listed := false
 	feed, _ := snapshot["events"].([]any)
@@ -608,7 +613,7 @@ func TestANodeNamedByTheEnvironmentAnswersAsItself(t *testing.T) {
 	e := testEngine(t)
 	boot := bootstrapFor(t, 0)
 	boot.API.Port = freePort(t)
-	boot.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: "a-test-token"}}
+	boot.API.Auth.Tokens = []config.APIToken{{ID: "ops", Role: config.RoleAdmin, Token: "a-test-token"}}
 	if boot.Node.ID != "" {
 		t.Fatalf("the bootstrap names node %q itself, so this case proves nothing",
 			boot.Node.ID)
@@ -770,11 +775,25 @@ func freePort(t *testing.T) int {
 
 func getJSON(t *testing.T, url string) map[string]any {
 	t.Helper()
+	return getJSONAs(t, url, "")
+}
+
+// getJSONAs is [getJSON] presenting key as the bearer, for a route a caller
+// with no key does not reach (ADR-0031); "" presents none.
+func getJSONAs(t *testing.T, url, key string) map[string]any {
+	t.Helper()
 	// Its own pool, for [httpxtest]'s reason.
 	probe := httpxtest.Pool(t)
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		res, err := probe.Get(url) //nolint:noctx // a test against its own listener
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
+		if err != nil {
+			t.Fatalf("request %s: %v", url, err)
+		}
+		if key != "" {
+			req.Header.Set("Authorization", "Bearer "+key)
+		}
+		res, err := probe.Do(req)
 		if err != nil {
 			time.Sleep(20 * time.Millisecond)
 			continue

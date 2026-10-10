@@ -808,8 +808,9 @@ const (
 	replayTimeout = 60 * time.Second
 
 	// replayOperator and replayToken are the founder's credential in the
-	// capture: the token's id is the operator id the founder's seat binds,
-	// which is what admits them to the act transport as a person. The seat
+	// capture: the key's id is the operator id the founder's seat binds,
+	// which is what admits them to the act transport as a person, and its
+	// role is admin because the founder runs the company she founded. The seat
 	// binds it through replayOperatorVar, a reference only the capturing
 	// node's environment resolves.
 	replayOperator    = "founder"
@@ -995,7 +996,7 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 		// is stamped in the day it is read back in ([middayZone]).
 		return doc + "\ntimezone: " + middayZone() + "\ntoken_budget: {day: 100000000}\n"
 	}, boot: func(boot *config.Bootstrap) {
-		boot.API.Auth.Tokens = []config.APIToken{{ID: replayOperator, Token: replayToken}}
+		boot.API.Auth.Tokens = []config.APIToken{{ID: replayOperator, Role: config.RoleAdmin, Token: replayToken}}
 	}, env: map[string]string{replayOperatorVar: replayOperator}})
 	zone := companyMidday(t, n.engine)
 

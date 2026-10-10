@@ -234,10 +234,10 @@ export function ItemRail({
         },
         {
           label: "Reporter",
-          // THE PERSON, NOT THE TOKEN: a task an operator token filed names
-          // the credential as its reporter — the audit trail — and the seat
-          // it was bound to beside it, which is who the activity says filed
-          // it. One person, one name on one page.
+          // THE PERSON, NOT THE KEY: a task a key filed names the credential
+          // as its reporter — the audit trail — and the seat it was bound to
+          // beside it, which is who the activity says filed it. One person,
+          // one name on one page.
           value: reporter ? (
             <SeatChip name={seatName(reporter)} handle={reporter} kind={seatKind(reporter)} />
           ) : undefined,

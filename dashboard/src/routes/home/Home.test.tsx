@@ -34,13 +34,18 @@ class InertWebSocket {
 }
 
 const JANE = {
-  operator_id: "U0FOUNDER",
-  operator: true,
+  token_id: "U0FOUNDER",
+  role: "admin",
+  reach: "admin",
+  linked: true,
   handle: "jane",
   name: "Jane Founder",
   kind: "human",
   acts: ["comment_on_work_item", "answer_run", "update_work_item", "create_work_item"],
 };
+
+/** What a member's key says about itself: the company published, never run. */
+const MEMBER = { role: "member", reach: "member", config_writer: false };
 
 const seat = (name: string, handle: string, kind: string, managers: string[] = []) => ({
   handle,
@@ -320,9 +325,9 @@ describe("the figures", () => {
   });
 
   // THE WAY IN IS OFFERED TO WHOEVER CAN SET ONE: a reader who is not an
-  // operator gets the fact, not a link to a screen that would refuse them.
+  // admin gets the fact, not a link to a screen that would refuse them.
   test("a reader who cannot set a budget is told there is none, with no way in", async () => {
-    mount({ viewer: { ...JANE, operator: false }, budget: UNCAPPED });
+    mount({ viewer: { ...JANE, ...MEMBER }, budget: UNCAPPED });
     await settle();
     const card = tile(/^Tokens · /);
     expect(card.textContent).toContain("No weekly budget");
@@ -516,7 +521,7 @@ describe("the decisions", () => {
   // on them.
   test("a stopped seat the reader cannot act on is a condition, not their decision", async () => {
     mount({
-      viewer: { ...JANE, operator: false, acts: ["comment_on_work_item"] },
+      viewer: { ...JANE, ...MEMBER, acts: ["comment_on_work_item"] },
       agents: [{ role: "DevRel", handle: "devrel", activity: "stopped", stopped_reason: "budget" }],
     });
     await settle();

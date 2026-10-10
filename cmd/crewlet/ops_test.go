@@ -140,7 +140,7 @@ func bootstrapForURL(t *testing.T, serverURL string) string {
 	dir := t.TempDir()
 	body := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n"+
 		"api:\n  host: %s\n  port: %s\n  auth:\n    tokens:\n"+
-		"      - id: ops\n        token: t0ken\n",
+		"      - id: ops\n        role: admin\n        token: t0ken\n",
 		filepath.Join(dir, "index.db"), host, port)
 	path := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {

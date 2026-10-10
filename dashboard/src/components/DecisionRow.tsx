@@ -108,8 +108,8 @@ export function seatConditionsOf(agents: readonly AgentRow[]): SeatCondition[] {
  * when they can take one of them:
  *
  *  - RAISE THE CEILING — a change to the company document, which `/config`
- *    takes from an operator's token and, where another system manages the
- *    document (ADR-0030), only from one of its writers: `mayChangeConfig`
+ *    takes from an admin key (ADR-0031) and, where another system manages
+ *    the document (ADR-0030), only from one of its writers: `mayChangeConfig`
  *    (`lib/useWriteAccess.ts`), the same answer the raise control is
  *    disabled by, so a seat is never counted as a decision whose control
  *    then refuses the reader;

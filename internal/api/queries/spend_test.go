@@ -206,7 +206,7 @@ func TestThePreviousWindowIsServedAtSevenThirtyAndNinetyDays(t *testing.T) {
 		{"days": 0},
 		{"days": "a week"},
 	} {
-		_, err := r.Answer(t.Context(), "tokens", params, "")
+		_, err := r.Answer(t.Context(), "tokens", params, asAdmin("ops"))
 		if !errors.Is(err, queries.ErrBadParams) || !errors.Is(err, tokens.ErrWindowLength) ||
 			!strings.Contains(queries.RefusalDetail(err), "days is") {
 			t.Errorf("%v: err = %v, want a refusal naming days", params, err)
@@ -222,7 +222,7 @@ func TestAWindowBeforeTheHorizonIsRefused(t *testing.T) {
 	f := newSpendFixture(t)
 	r := registryOver(t, f.sources())
 	_, err := r.Answer(t.Context(), "token_series",
-		map[string]any{"since": "2026-03-01", "until": "2026-03-10"}, "")
+		map[string]any{"since": "2026-03-01", "until": "2026-03-10"}, asAdmin("ops"))
 	if !errors.Is(err, tokens.ErrOutOfRange) || errors.Is(err, tokens.ErrWindowLength) ||
 		!strings.Contains(queries.RefusalDetail(err), "starts 2026-03-01") ||
 		!strings.Contains(queries.RefusalDetail(err), "move since") {
@@ -230,7 +230,7 @@ func TestAWindowBeforeTheHorizonIsRefused(t *testing.T) {
 	}
 	// And a custom window's previous half past the floor names days.
 	_, err = r.Answer(t.Context(), "tokens",
-		map[string]any{"since": "2026-03-29", "until": "2026-04-27", "previous": true}, "")
+		map[string]any{"since": "2026-03-29", "until": "2026-04-27", "previous": true}, asAdmin("ops"))
 	if !errors.Is(err, tokens.ErrOutOfRange) || !strings.Contains(err.Error(), "fewer days") {
 		t.Errorf("err = %v, want the previous window refused", err)
 	}
@@ -247,7 +247,7 @@ func TestALongWindowInsideTheHistoryIsRefusedForItsLength(t *testing.T) {
 	t.Parallel()
 	r := registryOver(t, newSpendFixture(t).sources())
 	_, err := r.Answer(t.Context(), "tokens",
-		map[string]any{"since": "2026-04-26", "until": "2026-09-24"}, "")
+		map[string]any{"since": "2026-04-26", "until": "2026-09-24"}, asAdmin("ops"))
 	if !errors.Is(err, queries.ErrBadParams) || !errors.Is(err, tokens.ErrWindowLength) {
 		t.Fatalf("err = %v, want a window-length refusal", err)
 	}
@@ -278,7 +278,7 @@ func TestASpendWindowItCannotReadIsRefusedNamingTheParameter(t *testing.T) {
 		{"token_series", map[string]any{"days": 1, "bucket": "hour"}, "bucket"},
 		{"token_series", map[string]any{"days": 1, "group": "turn"}, "group"},
 	} {
-		_, err := r.Answer(t.Context(), tc.what, tc.params, "")
+		_, err := r.Answer(t.Context(), tc.what, tc.params, asAdmin("ops"))
 		if !errors.Is(err, queries.ErrBadParams) || !strings.Contains(err.Error(), tc.names) {
 			t.Errorf("%s %v: err = %v, want a refusal mentioning %q", tc.what, tc.params, err, tc.names)
 		}

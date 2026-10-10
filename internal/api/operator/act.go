@@ -59,8 +59,9 @@ const MaxActBody = 2*pages.MaxBody + 64<<10
 // codes, in the idiom every route with codes of its own uses.
 const (
 	// CodeUnbound is a caller that is not a person: a disabled guard's
-	// anonymous caller, or a token no seat binds with
-	// `contact.crewlet_operator_id`. 403.
+	// anonymous caller, or a key no seat links with
+	// `contact.crewlet_operator_id`. 403. The MCP transport answers it too,
+	// to a member key no seat links.
 	CodeUnbound = httpjson.Code("unbound")
 
 	// CodeUnknownTool is a tool this company's catalogue does not serve.
@@ -210,14 +211,15 @@ func (s *Server) ActHandler() http.Handler {
 
 func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	// THE GUARD IS THE APP'S: /operator is always guarded, so a request
-	// that reaches here presented a valid token or found the guard
-	// disabled. Refused rather than trusted if it somehow did not.
-	operatorID, ok := auth.OperatorFrom(ctx)
-	if !ok || operatorID == "" {
+	// THE REACH IS THE APP'S: this route is mounted at member reach, so a
+	// request that reaches here presented an accepted key or found the
+	// guard disabled. Refused rather than trusted if it somehow did not.
+	caller := auth.PrincipalFrom(ctx)
+	operatorID := caller.ID
+	if operatorID == "" {
 		log.WarnContext(ctx, "operator_act_unguarded",
-			"detail", "a request reached the act transport with no operator on "+
-				"its context; the auth guard is not in front of it")
+			"detail", "a request reached the act transport with no principal on "+
+				"its context; the route table is not in front of it")
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 		return
 	}
@@ -293,7 +295,7 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 	// package doc and ADR-0024.
 	seat := seatFor(s.chart, s.env, operatorID)
 	if seat == "" {
-		httpjson.FailWith(w, http.StatusForbidden, CodeUnbound, unbound(name, operatorID))
+		httpjson.FailWith(w, http.StatusForbidden, CodeUnbound, unbound(name, caller))
 		return
 	}
 
@@ -387,9 +389,14 @@ func parseRequestID(raw string) (string, error) {
 
 // unbound is the refusal an act by somebody who is not a person gets, in the
 // two forms the remedies take: a disabled guard is fixed in Tier A, an
-// unbound token in the company chart.
-func unbound(tool, operatorID string) map[string]string {
-	if operatorID == auth.AnonymousOperator {
+// unlinked key in the company chart.
+//
+// THE HINT FOLLOWS THE KEY'S ROLE, because the way round the refusal does: an
+// unlinked admin key can still act as itself through /operator/mcp, and an
+// unlinked member key cannot act anywhere (ADR-0031) — telling a member to use
+// the assistant transport would send them to a second refusal.
+func unbound(tool string, caller auth.Principal) map[string]string {
+	if caller.ID == auth.AnonymousOperator {
 		return map[string]string{
 			"tool": tool,
 			"detail": "api.auth.disabled is set, so this caller was never checked " +
@@ -398,12 +405,27 @@ func unbound(tool, operatorID string) map[string]string {
 				"with contact.crewlet_operator_id on their seat",
 		}
 	}
+	hint := fmt.Sprintf("give a human seat contact.crewlet_operator_id: %s", caller.ID)
+	if caller.IsAdmin() {
+		hint += "; an unlinked admin key can still act as itself through " + MCPPath
+	}
 	return map[string]string{
 		"tool": tool,
-		"detail": fmt.Sprintf("the token %q is bound to no seat, so there is no "+
-			"person to act as", operatorID),
-		"hint": fmt.Sprintf("give a human seat contact.crewlet_operator_id: %s; "+
-			"an unbound token can still act through /operator/mcp", operatorID),
+		"detail": fmt.Sprintf("the key %q is linked to no seat, so there is no "+
+			"person to act as", caller.ID),
+		"hint": hint,
+	}
+}
+
+// unboundMember is the refusal the MCP transport gives a member key no seat
+// links: the same code as the act transport's, because it is the same fact —
+// there is no person to act as — and a member key has no other way to act.
+func unboundMember(id string) map[string]string {
+	return map[string]string{
+		"detail": fmt.Sprintf("the member key %q is linked to no seat, and a "+
+			"member acts only as the person their key is linked to", id),
+		"hint": fmt.Sprintf("give a human seat contact.crewlet_operator_id: %s, "+
+			"or connect the assistant with an admin key to act as that key", id),
 	}
 }
 

@@ -1396,7 +1396,7 @@ command line, so repeating it confirms nothing, while the key has to be looked
 up — which is the point of asking. The **reason is required** because it is the
 only thing that survives: the rows are destroyed, and the deletion marker's
 reason is the entire account of what used to be at that key. A purge is an
-**operator gesture** — a person or an operator token, never an agent and never
+**operator gesture** — made with an admin key, never by an agent and never by
 the engine — because nothing else can be asked to confirm it.
 
 It answers the same three-valued outcome every write here has. `pending` means

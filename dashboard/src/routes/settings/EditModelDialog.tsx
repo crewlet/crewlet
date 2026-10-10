@@ -5,8 +5,8 @@
  *
  * A NEW CONFIGURATION REVISION, not an act: a model is a `providers.llm`
  * entry, so the write is the entity PUT at `/config/llm-providers/{id}`
- * through `protocol/configWrite.ts`, guarded by the operator credential
- * (`useConfigWriteAccess`). It states the revision it was read from, so a
+ * through `protocol/configWrite.ts`, an admin's (`useConfigWriteAccess`,
+ * ADR-0031). It states the revision it was read from, so a
  * colleague's save in between is a conflict to re-read rather than an
  * overwrite.
  *
@@ -87,7 +87,9 @@ type SaveState =
 function refusalWords(refusal: ConfigRefusal, id: string): string {
   switch (refusal.kind) {
     case "guarded":
-      return "The engine did not take this token as an operator's, so nothing was changed.";
+      return "The engine did not accept this browser's token, so nothing was changed.";
+    case "forbidden":
+      return "Changing a model is for admins, and this browser's key is a member's — nothing was changed.";
     case "managed":
       return managedSentence(refusal.managedBy);
     case "conflict":

@@ -13,7 +13,7 @@ import type { Seat, SeatSettings } from "~/lib/seats.ts";
 import type { CompanyDocument } from "~/protocol/index.ts";
 
 /**
- * The operator-gated half of a seat, said precisely when it cannot be shown.
+ * The admin-only half of a seat, said precisely when it cannot be shown.
  *
  * `QueryState` covers a refused or failed read, which includes the guarded
  * banner with its Set token button. The three states after it are this

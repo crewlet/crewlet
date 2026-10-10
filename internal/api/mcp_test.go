@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/api/operator"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -87,17 +88,17 @@ func probe(a *api.App, method, path string) *http.Response {
 	return rec.Result()
 }
 
-// THE ACT ROUTE IS MOUNTED BESIDE THE MCP ONE, behind the same guard.
+// THE ACT ROUTE IS MOUNTED BESIDE THE MCP ONE, at the same member reach.
 //
 // What the transport does with a request is internal/api/operator's; what is
 // asserted here is the wiring the app owns: the route exists wherever the
-// operator surface does, answers POST alone, and is ALWAYS guarded — a
-// request with no token is refused by the guard before it reaches the
-// handler, whatever the read posture, because every tool it serves writes.
+// operator surface does, answers POST alone, and needs a key — a request with
+// none is refused by the guard before it reaches the handler, whatever the
+// anonymous posture opens, because every tool it serves writes.
 func TestTheActRouteIsMountedBehindTheGuard(t *testing.T) {
 	t.Parallel()
 	b := closedPosture()
-	b.API.Auth.AllowAnonymousRead = true
+	b.API.Auth.Anonymous = config.AnonymousPublic
 	a := newApp(t, api.Options{
 		Bootstrap: &b,
 		Runtime:   &fakeRuntime{},
@@ -123,8 +124,8 @@ func TestTheActRouteIsMountedBehindTheGuard(t *testing.T) {
 	if status, code := post(""); status != http.StatusUnauthorized ||
 		code != string(httpjson.CodeInvalidToken) {
 
-		t.Errorf("an act with no token answered %d %q, want the guard's 401 "+
-			"even with anonymous reads open", status, code)
+		t.Errorf("an act with no key answered %d %q, want the guard's 401 "+
+			"even with the public face open", status, code)
 	}
 	// THE HANDLER IS REACHED with a token: the read it names is refused by
 	// the transport's own rule, which only the mounted handler can answer.

@@ -73,7 +73,9 @@ afterEach(() => {
   location.hash = "";
 });
 
-async function mount(viewer: Record<string, unknown> = { operator_id: "", acts: [] }) {
+async function mount(
+  viewer: Record<string, unknown> = { token_id: "", role: "", reach: "public", acts: [] },
+) {
   const store = new Store();
   store.applyHealth(healthFrame());
   store.applyOrg(CHART_ORG);
@@ -168,26 +170,35 @@ test("pressing a card opens that seat's peek", async () => {
 
 // ADD SEAT IS NEVER HIDDEN: a reader who may not change the org sees it held,
 // with the reason.
-test("Add seat is held with its reason for a reader who is not an operator", async () => {
+test("Add seat is held with its reason for a reader who is not an admin", async () => {
   await mount();
   const add = screen.getByRole("button", { name: /Add seat/ });
   expect(add.getAttribute("aria-disabled") === "true" || add.hasAttribute("disabled")).toBe(true);
   expect(add.getAttribute("title")).toBe(ADD_SEAT_REASON);
 });
 
-test("an operator's Add seat goes to the builder, adding an agent", async () => {
-  await mount({ operator_id: "ops", operator: true, handle: "jane", acts: [] });
+test("an admin's Add seat goes to the builder, adding an agent", async () => {
+  await mount({
+    token_id: "ops",
+    role: "admin",
+    reach: "admin",
+    linked: true,
+    handle: "jane",
+    acts: [],
+  });
   const add = screen.getByRole("link", { name: /Add seat/ });
   expect(add.getAttribute("href")).toBe("#/agents/edit?add=agent");
 });
 
-// A MANAGED DOCUMENT (ADR-0030) holds Add seat for an operator whose token is
-// not one of its writers — the builder it opens would be read-only — with the
+// A MANAGED DOCUMENT (ADR-0030) holds Add seat for an admin whose key is not
+// one of its writers — the builder it opens would be read-only — with the
 // sentence that names who manages it; a writer still adds.
-test("Add seat is held with the managed sentence for an operator who is not a writer", async () => {
+test("Add seat is held with the managed sentence for an admin who is not a writer", async () => {
   await mount({
-    operator_id: "ops",
-    operator: true,
+    token_id: "ops",
+    role: "admin",
+    reach: "admin",
+    linked: true,
     handle: "jane",
     acts: [],
     config_writer: false,
@@ -199,8 +210,10 @@ test("Add seat is held with the managed sentence for an operator who is not a wr
   cleanup();
 
   await mount({
-    operator_id: "gitops",
-    operator: true,
+    token_id: "gitops",
+    role: "admin",
+    reach: "admin",
+    linked: true,
     handle: "jane",
     acts: [],
     config_writer: true,

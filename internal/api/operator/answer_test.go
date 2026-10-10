@@ -122,7 +122,7 @@ func TestAnUnboundTokenCannotAsk(t *testing.T) {
 	if status != http.StatusForbidden || answer["error"] != string(operator.CodeUnbound) {
 		t.Fatalf("an unbound token over act answered %d %v, want 403 unbound", status, answer)
 	}
-	res, served, err := s.Dispatch(auth.WithOperator(t.Context(), "ci"),
+	res, served, err := s.Dispatch(auth.WithPrincipal(t.Context(), asAdmin("ci")),
 		builtin.AnswerKnowledgeTool, map[string]any{"q": "How do we deploy?"})
 	if err != nil || !served || !res.Failed || res.Refusal != crewletmcp.RefusalForbidden {
 		t.Fatalf("an unbound token over MCP was answered: (%+v, %v, %v)", res, served, err)

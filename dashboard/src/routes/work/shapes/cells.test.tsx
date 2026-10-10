@@ -31,8 +31,10 @@ class InertWebSocket {
 }
 
 const JANE = {
-  operator_id: "U0FOUNDER",
-  operator: true,
+  token_id: "U0FOUNDER",
+  role: "admin",
+  reach: "admin",
+  linked: true,
   handle: "jane",
   name: "Jane Founder",
   kind: "human",
@@ -187,7 +189,7 @@ describe.each([
   { who: "an anonymous reader", viewer: { anonymous: true }, reason: WRITE_REASONS.anonymous },
   {
     who: "an unbound token",
-    viewer: { operator_id: "ci", operator: true, handle: "", unbound: true },
+    viewer: { token_id: "ci", role: "admin", reach: "admin", handle: "", unbound: true },
     reason: WRITE_REASONS.unbound,
   },
   {

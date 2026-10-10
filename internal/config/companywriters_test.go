@@ -8,15 +8,17 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 )
 
-// WHO MAY CHANGE THE COMPANY DOCUMENT is one reading of one list, and the
-// reading has exactly three answers worth pinning: an empty list is everybody,
-// a listed id may, and an unlisted one — the disabled guard's caller among
-// them — may not.
-func TestOnlyAListedTokenMayWriteAManagedCompany(t *testing.T) {
+// WHICH ADMIN KEYS MAY CHANGE THE COMPANY DOCUMENT is one reading of one
+// list, and the reading has exactly three answers worth pinning: an empty list
+// is every admin key, a listed id may, and an unlisted one — the disabled
+// guard's caller among them — may not. Whether the key is an admin at all is
+// the role's question, asked before this one (ADR-0031): a member key can
+// never be listed, which [TestAMemberKeyIsNeverACompanyWriter] holds.
+func TestOnlyAListedKeyMayWriteAManagedCompany(t *testing.T) {
 	t.Parallel()
 	open := config.APIAuth{}
 	if open.CompanyManaged() || !open.MayWriteCompany("founder") {
-		t.Fatal("with no company_writers the document is unmanaged and every token writes it")
+		t.Fatal("with no company_writers the document is unmanaged and every admin key writes it")
 	}
 	managed := config.APIAuth{CompanyWriters: []string{"operator"}}
 	if !managed.CompanyManaged() {
@@ -41,7 +43,8 @@ func TestACompanyWriterThatNamesNoTokenIsWarnedAbout(t *testing.T) {
 		b.Stream.StoreDir = "/var/lib/crewlet/stream"
 		b.Retention.BackupOwner = "platform-oncall"
 		b.API.Auth.Tokens = []config.APIToken{
-			{ID: "operator", Token: "a"}, {ID: "founder", Token: "b"},
+			{ID: "operator", Role: config.RoleAdmin, Token: "a"},
+			{ID: "founder", Role: config.RoleAdmin, Token: "b"},
 		}
 		return &b
 	}

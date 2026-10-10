@@ -6,7 +6,7 @@
  * of that log is out, and nothing else: never the base document, the draft
  * or the problems. The document holds contact
  * identities, emails, policies and `${VAR}` names; kept in storage it would
- * outlive the operator's token and be offered to whoever uses the tab next.
+ * outlive the key that read it and be offered to whoever uses the tab next.
  * The log refers to the company only by keys and the values its own edits
  * wrote, and on restore the base is fetched again, so what is replayed is
  * always replayed onto what the engine holds now.
@@ -27,9 +27,10 @@
  * which the builder shows as a caution: the work continues, it just will not
  * survive a reload.
  *
- * WHAT CLEARS IT: a save, a discard, a change of operator token, and a check
- * the engine refused with 401 or 403. The last two are the tab changing hands,
- * and a colleague's draft is not something to offer the next operator.
+ * WHAT CLEARS IT: a save, a discard, a change of token, and a check the
+ * engine refused for the key — no key it accepts, or a member's on the admin's
+ * document. The last two are the tab changing hands, and a colleague's draft
+ * is not something to offer the next person.
  * [persistencePlan] turns the builder's state into the one write or removal
  * that matches it.
  *

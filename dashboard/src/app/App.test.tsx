@@ -127,7 +127,7 @@ describe("the shell", () => {
     const foot = screen.getByRole("navigation", { name: "Settings" });
     expect(foot.textContent).toContain("Settings");
     // THE LOCK IS SAID, not only drawn: this reader holds no credential.
-    expect(foot.textContent).toContain("most sections need an operator credential");
+    expect(foot.textContent).toContain("most sections are for admins");
   });
 });
 
@@ -317,17 +317,17 @@ describe("routing", () => {
   });
 });
 
-// A GUARDED SECTION FOR A READER THE ENGINE SAYS HOLDS NO CREDENTIAL IS ITS
+// A GUARDED SECTION FOR A READER THE ENGINE SAYS IS NOT AN ADMIN IS ITS
 // REFUSAL AND NOTHING ELSE. Each guarded screen used to mount, ask, be refused
 // and draw the refusal as data: Nodes read "0 nodes", four tiles of 0 and "No
 // nodes are reporting", under a banner calling the refusal the last reading
 // that succeeded. Derived from the table, so a section marked guarded later is
 // held to this without anybody remembering to add it here.
-describe("a guarded section, for a reader without an operator credential", () => {
+describe("a guarded section, for a reader who is not an admin", () => {
   const settings = WORKSPACES.find((row) => row.key === "settings")!;
   const guarded = settings.sections.filter((s) => s.guarded && !s.answersRefusal);
 
-  const anonymous = { operator_id: "", operator: false };
+  const anonymous = { token_id: "", role: "", reach: "public" };
 
   test("the table still guards the sections it did", () => {
     expect(guarded.map((s) => s.key)).toEqual(
@@ -344,10 +344,7 @@ describe("a guarded section, for a reader without an operator credential", () =>
       location.hash = buildHash(section.path);
       const { view } = mountAs(Promise.resolve(anonymous));
       const content = () => view.container.querySelector(".crewlet-app-shell__content")!;
-      expect(
-        await screen.findByText(`${section.label} needs an operator credential`),
-        section.key,
-      ).toBeDefined();
+      expect(await screen.findByText(`${section.label} is for admins`), section.key).toBeDefined();
       expect(screen.getByRole("button", { name: "Set token" })).toBeDefined();
       // NOTHING THE SCREEN WOULD HAVE COUNTED: no tile, no chip in the header
       // slot, no empty state claiming the section holds nothing.
@@ -401,10 +398,7 @@ describe("a guarded section, for a reader without an operator credential", () =>
       const content = () => view.container.querySelector(".crewlet-app-shell__content")!;
       for (let i = 0; i < 8; i++) await Promise.resolve();
       await new Promise((r) => setTimeout(r, 0));
-      expect(
-        screen.queryByText(`${section.label} needs an operator credential`),
-        section.key,
-      ).toBeNull();
+      expect(screen.queryByText(`${section.label} is for admins`), section.key).toBeNull();
       expect(
         screen.queryByText(`Checking your access to ${section.label}`),
         section.key,
@@ -422,11 +416,35 @@ describe("a guarded section, for a reader without an operator credential", () =>
     vi.unstubAllGlobals();
   });
 
-  test("an operator is given the screen", async () => {
+  // A MEMBER'S KEY WORKS, so the refusal offers no token dialog — pasting the
+  // same key again changes nothing. It names the person who can open the
+  // section instead: the first admin the engine named.
+  test("a member is told the section is for admins, and which admin to ask", async () => {
+    const member = {
+      token_id: "ada",
+      role: "member",
+      reach: "member",
+      linked: true,
+      handle: "ada",
+      admins: [{ handle: "jane", name: "Jane Founder" }],
+    };
+    for (const section of guarded) {
+      location.hash = buildHash(section.path);
+      const { view } = mountAs(Promise.resolve(member));
+      expect(await screen.findByText(`${section.label} is for admins`), section.key).toBeDefined();
+      expect(view.container.textContent, section.key).toContain("ask Jane Founder");
+      expect(screen.queryByRole("button", { name: "Set token" }), section.key).toBeNull();
+      expect(view.container.querySelector(".crewlet-statcard"), section.key).toBeNull();
+      view.unmount();
+      cleanup();
+    }
+  });
+
+  test("an admin is given the screen", async () => {
     location.hash = "#/settings/nodes";
-    mountAs(Promise.resolve({ operator_id: "ops", operator: true }));
+    mountAs(Promise.resolve({ token_id: "ops", role: "admin", reach: "admin" }));
     expect(await screen.findByText(/Seat ownership is a lease/)).toBeDefined();
-    expect(screen.queryByText("Nodes needs an operator credential")).toBeNull();
+    expect(screen.queryByText("Nodes is for admins")).toBeNull();
   });
 
   // THE CHARTER IS PUBLIC, and so is the tool registry: neither is guarded.
@@ -437,7 +455,7 @@ describe("a guarded section, for a reader without an operator credential", () =>
       await Promise.resolve();
       await Promise.resolve();
       expect(view.container.textContent, path.join("/")).not.toMatch(
-        /(General|Tools) needs an operator credential/,
+        /(General|Tools) is for admins/,
       );
       view.unmount();
       cleanup();
@@ -722,7 +740,8 @@ describe("a turn watched to its end", () => {
 // AS AN OPERATOR: both are guarded sections, and the frame draws a guarded
 // section only once it knows the reader may read it.
 test("a node named `backups` keeps its page, and a domain keeps its own", async () => {
-  const operator = () => mountAs(Promise.resolve({ operator_id: "ops", operator: true }));
+  const operator = () =>
+    mountAs(Promise.resolve({ token_id: "ops", role: "admin", reach: "admin" }));
   const settle = async () => {
     for (let i = 0; i < 6; i++) await act(async () => Promise.resolve());
   };
@@ -778,8 +797,10 @@ test("the page bar's More holds the star, the link and what the screen folded", 
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
     if (what === "viewer") {
       return Promise.resolve({
-        operator_id: "U0FOUNDER",
-        operator: true,
+        token_id: "U0FOUNDER",
+        role: "admin",
+        reach: "admin",
+        linked: true,
         handle: "jane",
         name: "Jane Founder",
         kind: "human",
@@ -813,7 +834,8 @@ test("the page bar's More holds the star, the link and what the screen folded", 
     complete: true,
   };
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
-    if (what === "viewer") return Promise.resolve({ operator_id: "U0FOUNDER", operator: true });
+    if (what === "viewer")
+      return Promise.resolve({ token_id: "U0FOUNDER", role: "admin", reach: "admin" });
     if (what === "work_item") return Promise.resolve(task);
     if (what === "work_project") return Promise.resolve(project);
     return Promise.reject(new QueryError("unauthorized"));

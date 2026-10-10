@@ -33,7 +33,7 @@
  * agent seat's RESOLVED model chain and tool sources, and nothing else: a
  * seat's email, authored `llm` fields, contact identities, tool credentials,
  * integrations and schedules are read from the company document through the
- * operator-gated `config` query, which is what [seatSettings] and
+ * admin-only `config` query, which is what [seatSettings] and
  * [unitSettings] below are for.
  *
  * Resolved ONCE, into an index, and screens consume seats. Doing it per screen
@@ -46,6 +46,7 @@ import { useMemo } from "react";
 import { parseUTC, plural } from "./format.ts";
 import { useQuery } from "./useQuery.ts";
 import { useOrg } from "./store-hooks.ts";
+import { knownRefusal, useViewer } from "./viewer.ts";
 import { apiToken } from "~/protocol/index.ts";
 import { DELEGATE_TASKS, DELEGATE_TOOL, type SeatActivity } from "~/contract/wire.ts";
 import type { EngineHealth } from "~/contract/health.ts";
@@ -616,13 +617,13 @@ export type SeatSettings =
  * WHAT THIS READER CAN SAY ABOUT A SEAT'S GUARDED HALF.
  *
  * FOUR OUTCOMES, NOT A NULLABLE ROLE. The company document is behind an
- * operator token, so "this seat is not in the active revision", "you may not
+ * admin key, so "this seat is not in the active revision", "you may not
  * read it", "the read has not come back yet" and "here it is" are four
  * different facts — and a `ConfigRole | null` collapses the first three into
  * one. Every screen that did that printed the same sentence for all of them,
  * and the sentence it picked was the reader's: the seat header's MODEL fact
- * read "needs an operator token" on five of eight tabs, because those tabs
- * simply did not ask.
+ * read "needs an admin key" on five of eight tabs, because those tabs simply
+ * did not ask.
  *
  * THE ERROR IS CHECKED FIRST, and that order is the whole of it. `useQuery`
  * keeps its last good answer through a failed ask — which suits a poll and is
@@ -635,7 +636,7 @@ export type SeatReading =
   | { state: "read"; role: ConfigRole; unit: ConfigUnit | null }
   /** The revision answered and names no single seat by this name. */
   | { state: "absent" }
-  /** The engine refused the read: this reader is missing a credential. */
+  /** The engine refused the read, or would: this reader's key does not reach it. */
   | { state: "refused" }
   /** Nothing has been asked, or nothing has come back. Never a claim. */
   | { state: "unread" };
@@ -675,43 +676,43 @@ export interface SeatSetup {
  * The guarded half of one seat, for any screen that draws it: the company
  * document's entry for the seat and the four-state reading of it.
  *
- * ONE READ, ONE ORDER. The document is behind an operator token, and every
+ * ONE READ, ONE ORDER. The document is an admin's (ADR-0031), and every
  * screen that read it on its own either forgot the refusal-first order
  * [seatReading] exists for — and printed a revoked reader's model beside a
  * banner saying the answer needs a token — or collapsed "absent", "refused"
  * and "not read yet" into one sentence. The seat is resolved by its handle
  * alone, the address [seatPath] builds (`OrgIndex.byHandle`).
  *
- * A reader with no credential is never asked for: see the query below.
+ * A reader the engine would refuse is never asked: see [knownRefusal].
  */
 export function useSeatSetup(handle: string): SeatSetup {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   const seat = handle ? index.byHandle.get(handle) : undefined;
-  // NOT ASKED WITHOUT A CREDENTIAL. The document is guarded, so a browser
-  // presenting no token is refused on every ask — the answer is known before
-  // the question, and asking only puts a refusal on the wire and a
-  // `refused` banner over a page that never had a chance. Such a reader stays
-  // `unread`, which claims nothing; the screen names the credential instead.
-  // Read from the stored token rather than the `viewer` answer, which arrives
-  // a round trip later and would put the one refused request back.
-  const config = useQuery("config", undefined, { enabled: !!seat && apiToken() !== "" });
+  // NOT ASKED WHERE THE ANSWER IS KNOWN: the document is an admin's.
+  const known = knownRefusal(useViewer(), apiToken() !== "");
+  const config = useQuery("config", undefined, { enabled: !!seat && known === null });
+  // THE REFUSAL THE ENGINE WOULD ANSWER stands in for the one it was not
+  // asked for, so every panel says the same thing for both. Reported as
+  // nothing, a reader never asked read "No company configuration is active"
+  // on the Settings tab — a claim about the company made from no answer.
+  const error = known ?? config.error;
   // NOTHING FROM THE DOCUMENT BESIDE A REFUSAL: `useQuery` keeps its last good
   // answer through a failed ask, which suits a poll and is wrong for a guarded
   // read.
   const settings = useMemo<SeatSettings | null>(
-    () => (seat && config.data && !config.error ? seatSettings(config.data, seat) : null),
-    [seat, config.data, config.error],
+    () => (seat && config.data && !error ? seatSettings(config.data, seat) : null),
+    [seat, config.data, error],
   );
-  const reading = useMemo(() => seatReading(settings, config.error), [settings, config.error]);
+  const reading = useMemo(() => seatReading(settings, error), [settings, error]);
   return {
     seat,
     settings,
     reading,
     config: {
-      doc: config.error ? null : (config.data ?? null),
-      loading: config.loading,
-      error: config.error,
+      doc: error ? null : (config.data ?? null),
+      loading: known === null && config.loading,
+      error,
     },
   };
 }
@@ -728,7 +729,7 @@ export function documentUnits(doc: CompanyDocument | null | undefined): ConfigUn
 }
 
 /**
- * The document's own entry for a seat, from the operator-gated `config` answer.
+ * The document's own entry for a seat, from the admin-only `config` answer.
  *
  * Contact identities, email, the model chain, the token budget, schedules, the
  * seat's integration blocks and its tool credential names are not on the
@@ -1123,13 +1124,13 @@ export function ringOf(state: SeatState | undefined): SeatRing | undefined {
 /**
  * Which node holds a seat's lease, as far as the PUBLIC health push can say.
  *
- * WHAT EVERY READER IS TOLD, operator or not, on the profile and in the peek
+ * WHAT EVERY READER IS TOLD, admin or not, on the profile and in the peek
  * alike. `/health` is unguarded and its push reaches an anonymous tab, so a
  * node's own name and the seats it holds are already on every reader's
  * screen: withholding "this node · node-2" in one place and printing it in
  * the next was a rule nobody could state. What the push does NOT say is WHICH
- * peer holds a seat this node does not — that is the operator-only `fleet`
- * answer — so a seat held elsewhere is "another node", and an operator is
+ * peer holds a seat this node does not — that is the admin-only `fleet`
+ * answer — so a seat held elsewhere is "another node", and an admin is
  * shown the lease itself.
  *
  * IT WAS THE AGENT INSTANCE ID, which exists only while a turn runs — so an

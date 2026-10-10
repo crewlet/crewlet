@@ -31,13 +31,13 @@ func handedOnly(t *testing.T, variable, value string) func(string) (string, bool
 
 // A BINDING RESOLVES THROUGH THE LOOKUP THE NODE HANDS IN, never the process
 // environment behind it. CREWLET_ACCESS_TEST_UNSET is set in no process;
-// handed to the answer, it binds Cy to the token it names and makes Bo's
-// contact usable — on the token's row, the person's binding and the contact's
+// handed to the answer, it links Cy to the key it names and makes Bo's
+// contact usable — on the key's row, the person's binding and the contact's
 // own flag alike, because all three are one resolution and the guard that
 // admits Cy reads the same.
 func TestAccessResolvesABindingThroughTheLookupTheNodeHandsIn(t *testing.T) {
 	t.Parallel()
-	s := accessSources(t, queries.AccessPosture{TokenIDs: []string{"founder", "ci"}})
+	s := accessSources(t, queries.AccessPosture{Keys: keys("founder", "ci")})
 	s.Env = handedOnly(t, "CREWLET_ACCESS_TEST_UNSET", "ci")
 	got := askAccess(t, s)
 
@@ -45,8 +45,7 @@ func TestAccessResolvesABindingThroughTheLookupTheNodeHandsIn(t *testing.T) {
 		t.Errorf("cy binding = %q, want %q through the handed lookup", p.Binding, queries.BindingBound)
 	}
 	i := slices.IndexFunc(got.Tokens, func(tok queries.AccessToken) bool { return tok.ID == "ci" })
-	if i < 0 || got.Tokens[i].Scope != queries.ScopePerson || got.Tokens[i].Seat == nil ||
-		got.Tokens[i].Seat.Handle != "cy" {
+	if i < 0 || got.Tokens[i].Seat == nil || got.Tokens[i].Seat.Handle != "cy" {
 		t.Errorf("tokens = %+v, want ci to act as cy", got.Tokens)
 	}
 	if bo := personOf(t, got, "bo"); !slices.Contains(bo.Contacts, queries.AccessContact{
@@ -73,7 +72,7 @@ func TestTheViewerResolvesItsBindingThroughTheLookupTheNodeHandsIn(t *testing.T)
 		Env:     handedOnly(t, variable, "ops-1"),
 		Work:    work,
 	}
-	answered, err := askAsOperator(t, sources, "viewer", nil)
+	answered, err := askAsAna(t, sources, "viewer", nil)
 	got := answerMap(t, answered, err)
 	if got["handle"] != "ana" {
 		t.Errorf("handle = %v, want ana, whom the handed lookup binds to ops-1", got["handle"])
@@ -81,7 +80,7 @@ func TestTheViewerResolvesItsBindingThroughTheLookupTheNodeHandsIn(t *testing.T)
 
 	// The other way round: her inbox is read by BOTH of her names, and the
 	// credential's is the half only the handed lookup can resolve.
-	if _, err := askAsOperator(t, sources, "work_inbox", nil); err != nil {
+	if _, err := askAsAna(t, sources, "work_inbox", nil); err != nil {
 		t.Fatalf("work_inbox: %v", err)
 	}
 	wantParty(t, work.inboxQuery.Who, "ana", "ops-1")
@@ -103,7 +102,7 @@ func TestAColleagueIsFoundThroughTheLookupTheNodeHandsIn(t *testing.T) {
 		Company: func() *config.Company { return cfg },
 		Env:     handedOnly(t, variable, "U0HANDED"),
 	})
-	answered, err := r.Answer(t.Context(), "colleague", map[string]any{"q": "U0HANDED"}, "ops-1")
+	answered, err := r.Answer(t.Context(), "colleague", map[string]any{"q": "U0HANDED"}, asAdmin("ops-1"))
 	if err != nil {
 		t.Fatalf("colleague: %v", err)
 	}

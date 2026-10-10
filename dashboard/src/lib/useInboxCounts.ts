@@ -114,10 +114,10 @@ export function useInboxCounts(): InboxCounts {
  *
  * THE VIEWER'S OWN IS THE FRAME'S READING, never a second read of it — so the
  * figure on your own profile and the badge in the sidebar are one answer and
- * cannot name two numbers. Anybody else's (an operator reading a colleague's
- * day) is the same question asked of their inbox, which the engine answers
- * only for an operator; `enabled` is the caller's word that this reader may
- * ask. It used to be the length of the person record's `unread` list, which
+ * cannot name two numbers. Anybody else's (a lead reading a report's day) is
+ * the same question asked of their inbox, which the engine answers only for
+ * the leads in their line (`readsPersonOf`); `enabled` is the caller's word
+ * that this reader may ask. It used to be the length of the person record's `unread` list, which
  * is not a count at all: it holds the EXCEPTIONS below the read mark, notices
  * marked unread again, so a person with fifty waiting read "Unread 0".
  */

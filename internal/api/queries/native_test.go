@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/estate"
@@ -294,40 +295,55 @@ func (s *stubPages) Revision(_ context.Context, pageID string, version int,
 	return s.revision, s.revisionHeld, s.err
 }
 
-// personalQuestions are the five scoped by the caller's own seat — see
-// Sources.viewerParty. They refuse an anonymous caller who names somebody
-// else, so a sweep that walks every native question has to present a
-// credential for these five. Named once rather than per sweep: the set grew
-// from one to five, and each sweep that spelled it as `== "work_my_work"`
-// silently stopped covering the rest.
+// personalQuestions are the four scoped by the caller's own seat and line —
+// see Sources.viewerParty. They refuse a caller who names somebody outside
+// their line, whatever the key's role, so a sweep that walks every native
+// question asks these as a person whose line holds the one named
+// ([askAsAna]). Named once rather than per sweep: the set grew from one, and
+// each sweep that spelled it as `== "work_my_work"` silently stopped covering
+// the rest.
 var personalQuestions = map[string]bool{
-	"work_my_work":  true,
-	"work_person":   true,
-	"work_inbox":    true,
-	"conversations": true,
-	"decisions":     true,
+	"work_my_work": true,
+	"work_person":  true,
+	"work_inbox":   true,
+	"decisions":    true,
 }
 
 // askNative runs one question against a registry built from these sources,
 // returning the error rather than failing on it: every case here is about a
-// refusal, which the shared `ask` helper turns into a Fatalf.
+// refusal, which the shared `ask` helper turns into a Fatalf. It asks as an
+// ADMIN key no seat links, which every question's reach covers and no
+// personal question's line includes — so a case here is about the answer,
+// never about the reach.
 func askNative(t *testing.T, s queries.Sources, what string, params map[string]any) (any, error) {
 	t.Helper()
-	r := queries.NewRegistry()
-	queries.Register(r, s)
-	return r.Answer(t.Context(), what, params, "")
+	return askAs(t, s, what, params, asAdmin("ops"))
 }
 
-// askAsOperator is askNative with a token, for the questions RegisterOperator
-// guards. Separate rather than a parameter on the one above, so no case here
-// can hand itself a credential by accident.
-func askAsOperator(t *testing.T, s queries.Sources, what string,
+// askAsAna asks as the person Ana: the admin key `ops-1`, which every test
+// chart links to her, and which leads every other seat in [partyCompany] —
+// on the sources' own chart, or on partyCompany where they carry none. A
+// personal question is answered only about the caller and the seats in their
+// line, and a key's role adds nothing to that, so a case or a sweep about a
+// personal question's ANSWER asks as somebody whose line holds the person.
+func askAsAna(t *testing.T, s queries.Sources, what string,
 	params map[string]any) (any, error) {
 
 	t.Helper()
+	if s.Company == nil {
+		s.Company = partySources(t, nil).Company
+	}
+	return askAs(t, s, what, params, asAdmin("ops-1"))
+}
+
+// askAs is askNative as caller.
+func askAs(t *testing.T, s queries.Sources, what string, params map[string]any,
+	caller auth.Principal) (any, error) {
+
+	t.Helper()
 	r := queries.NewRegistry()
 	queries.Register(r, s)
-	return r.Answer(t.Context(), what, params, "ops-1")
+	return r.Answer(t.Context(), what, params, caller)
 }
 
 // A QUESTION WITH NO SOURCE IS UNREGISTERED, not registered-and-empty. A
@@ -709,7 +725,7 @@ func TestAReadThisNodeCannotServeYetIsUnavailableRatherThanFailed(t *testing.T) 
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Work: work})
 
-	_, err := r.Answer(t.Context(), "work_items", map[string]any{}, "")
+	_, err := r.Answer(t.Context(), "work_items", map[string]any{}, asAdmin("ops"))
 	if !errors.Is(err, queries.ErrUnavailable) {
 		t.Fatalf("a node that is behind answered %v — a read refusal that "+
 			"reaches a client as a plain failure is rendered as a broken "+
@@ -739,7 +755,7 @@ func TestARefusalWaitingCannotClearIsNotAnInvitationToRetry(t *testing.T) {
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Work: work})
 
-	_, err := r.Answer(t.Context(), "work_items", map[string]any{}, "")
+	_, err := r.Answer(t.Context(), "work_items", map[string]any{}, asAdmin("ops"))
 	if err == nil {
 		t.Fatal("a refused read answered successfully")
 	}
@@ -761,7 +777,7 @@ func TestARefusalAboutTheRequestIsNeverReclassifiedAsUnavailable(t *testing.T) {
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Work: work})
 
-	_, err := r.Answer(t.Context(), "work_items", map[string]any{}, "")
+	_, err := r.Answer(t.Context(), "work_items", map[string]any{}, asAdmin("ops"))
 	if !errors.Is(err, queries.ErrBadParams) {
 		t.Fatalf("err = %v, want ErrBadParams", err)
 	}
@@ -819,10 +835,10 @@ func TestAViewStripTakesTheContainerTheBoardTakes(t *testing.T) {
 	} {
 		t.Run(tc.raw, func(t *testing.T) {
 			w := &stubWork{}
-			// AS AN OPERATOR, because naming somebody else's
-			// handle is what the credential buys — see
+			// AS ANA, because naming a handle is a personal read
+			// and hers is in her own line — see
 			// TestAStripIsOnlyPersonalisedByAViewerTheCallerMayName.
-			if _, err := askAsOperator(t, queries.Sources{Work: w}, "work_views",
+			if _, err := askAsAna(t, queries.Sources{Work: w}, "work_views",
 				map[string]any{"container": tc.raw, "viewer": "ana"}); err != nil {
 				t.Fatalf("work_views: %v", err)
 			}
@@ -961,29 +977,30 @@ func TestAProjectDetailClassesWhatIsMissing(t *testing.T) {
 // A STRIP IS ONLY PERSONALISED BY A VIEWER THE CALLER MAY NAME.
 //
 // `viewer=` selects WHOSE pins and personal views order the strip, and nothing
-// checked it: on a node with `api.allow_anonymous_read` a reader could take
-// the handles out of `org` and page through every seat's pinned views. The
-// scope rule is the one the other personal questions take — your own, or an
-// operator credential for anybody else's.
+// checked it: a reader could take the handles out of `org` and page through
+// every seat's pinned views. The scope rule is the one the other personal
+// questions take — your own, or somebody in your line, whatever the key's
+// role.
 //
 // THE ABSENT CASE IS THE POINT OF THE SEPARATE RULE. A question ABOUT
 // somebody refuses when the caller names nobody and has no seat; a strip is
 // about a CONTAINER, so naming nobody is the shared strip, which is what the
 // sidebar and the board poll for. Refusing that would have taken the strip off
-// two screens for every reader whose token is not bound to a seat.
+// two screens for every reader whose key is not linked to a seat.
 func TestAStripIsOnlyPersonalisedByAViewerTheCallerMayName(t *testing.T) {
 	t.Parallel()
 
-	// SOMEBODY ELSE'S, with no credential: refused, and as an
-	// authorization failure rather than a bad parameter — the remedy is a
-	// different credential, not a different handle.
+	// SOMEBODY OUTSIDE THE CALLER'S LINE: refused, and as an authority
+	// failure rather than a bad parameter — and FORBIDDEN, since the key
+	// was accepted and a different one would not put the caller in that
+	// line. An admin key no seat links leads nobody.
 	w := &stubWork{}
-	if _, err := askNative(t, queries.Sources{Work: w}, "work_views",
-		map[string]any{"container": "workspace", "viewer": "ada-okonkwo"}); !errors.Is(
-		err, queries.ErrUnauthorized) {
+	if _, err := askNative(t, partySources(t, w), "work_views",
+		map[string]any{"container": "workspace", "viewer": "cy"}); !errors.Is(
+		err, queries.ErrForbidden) {
 
-		t.Errorf("an anonymous caller naming another seat's handle answered %v, "+
-			"want an authorization refusal", err)
+		t.Errorf("an unlinked admin naming another seat's handle answered %v, "+
+			"want forbidden", err)
 	}
 	// AND THE READER WAS NEVER ASKED, which is the half a refusal
 	// returned after the read would not have bought.
@@ -991,24 +1008,24 @@ func TestAStripIsOnlyPersonalisedByAViewerTheCallerMayName(t *testing.T) {
 		t.Errorf("the refused handle reached the reader as %+v", w.views.Viewer)
 	}
 
-	// AN OPERATOR NAMES ANYBODY'S: they hold the credential that writes
-	// these records in the first place.
+	// A LEAD NAMES A REPORT'S: whose pins order a strip is part of the
+	// day a lead may already read.
 	w = &stubWork{}
-	if _, err := askAsOperator(t, queries.Sources{Work: w}, "work_views",
-		map[string]any{"container": "workspace", "viewer": "ada-okonkwo"}); err != nil {
-		t.Fatalf("an operator naming a seat's handle: %v", err)
+	if _, err := askAsAna(t, partySources(t, w), "work_views",
+		map[string]any{"container": "workspace", "viewer": "cy"}); err != nil {
+		t.Fatalf("a lead naming a report's handle: %v", err)
 	}
-	if w.views.Viewer.Handle != "ada-okonkwo" {
-		t.Errorf("an operator's viewer reached the reader as %q, want ada-okonkwo",
+	if w.views.Viewer.Handle != "cy" {
+		t.Errorf("a lead's viewer reached the reader as %q, want cy",
 			w.views.Viewer.Handle)
 	}
 
-	// AND NAMING NOBODY IS STILL THE SHARED STRIP, anonymously: a real
+	// AND NAMING NOBODY IS STILL THE SHARED STRIP, whoever asks: a real
 	// answer with an empty viewer, never a refusal.
 	w = &stubWork{}
 	if _, err := askNative(t, queries.Sources{Work: w}, "work_views",
 		map[string]any{"container": "workspace"}); err != nil {
-		t.Fatalf("the shared strip, asked anonymously: %v", err)
+		t.Fatalf("the shared strip: %v", err)
 	}
 	if w.views.Viewer.Named() {
 		t.Errorf("an unnamed viewer reached the reader as %+v, want empty", w.views.Viewer)
@@ -1024,8 +1041,8 @@ func TestAStripIsOnlyPersonalisedByAViewerTheCallerMayName(t *testing.T) {
 func TestPinnedCountsReachTheReaderOnlyForAViewer(t *testing.T) {
 	t.Parallel()
 	w := &stubWork{}
-	if _, err := askAsOperator(t, queries.Sources{Work: w}, "work_views",
-		map[string]any{"container": "workspace", "viewer": "ada-okonkwo",
+	if _, err := askAsAna(t, queries.Sources{Work: w}, "work_views",
+		map[string]any{"container": "workspace", "viewer": "cy",
 			"counts": "true"}); err != nil {
 		t.Fatalf("counts for a named viewer: %v", err)
 	}
@@ -1046,8 +1063,8 @@ func TestPinnedCountsReachTheReaderOnlyForAViewer(t *testing.T) {
 	}
 
 	w = &stubWork{}
-	if _, err := askAsOperator(t, queries.Sources{Work: w}, "work_views",
-		map[string]any{"container": "workspace", "viewer": "ada-okonkwo"}); err != nil {
+	if _, err := askAsAna(t, queries.Sources{Work: w}, "work_views",
+		map[string]any{"container": "workspace", "viewer": "cy"}); err != nil {
 		t.Fatalf("a strip without counts: %v", err)
 	}
 	if w.views.Counts {
@@ -1199,10 +1216,10 @@ var sessionQuestions = []sessionQuestion{
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.workloadQuery.Level }, nil},
 	{"work_activity", "tracker", map[string]any{"container": "workspace"},
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.activityQuery.Level }, nil},
-	// OPERATOR-ONLY, and it is in this walk precisely because it
-	// is: `my_work` is somebody's whole day, and an operator
-	// reading it at a level nobody chose is the same defect with a
-	// credential in front of it.
+	// PERSONAL, and it is in this walk precisely because it is:
+	// `my_work` is somebody's whole day, and a lead reading it at a
+	// level nobody chose is the same defect with a key in front of
+	// it.
 	{"work_my_work", "tracker", map[string]any{"handle": "ana"},
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.myWorkQuery.Level }, nil},
 	{"work_inbox", "tracker", map[string]any{"handle": "ana"},
@@ -1246,7 +1263,7 @@ func TestEveryNativeQuestionResolvesTheCallersOwnLevel(t *testing.T) {
 			src := queries.Sources{Work: work, Pages: pages}
 			ask := askNative
 			if personalQuestions[tc.what] {
-				ask = askAsOperator
+				ask = askAsAna
 			}
 			if _, err := ask(t, src, tc.what, tc.args); err != nil {
 				t.Fatalf("%s: %v", tc.what, err)
@@ -1398,7 +1415,7 @@ func TestTheStalenessBoundsReachEveryQuestionThatCanHoldThem(t *testing.T) {
 			work, pages := &stubWork{}, &stubPages{}
 			ask := askNative
 			if personalQuestions[tc.what] {
-				ask = askAsOperator
+				ask = askAsAna
 			}
 			all := map[string]any{}
 			for k, v := range args {
@@ -1476,7 +1493,7 @@ func TestTheCallersFloorReachesEveryNativeQuestion(t *testing.T) {
 			t.Parallel()
 			ask := askNative
 			if personalQuestions[tc.what] {
-				ask = askAsOperator
+				ask = askAsAna
 			}
 			for _, level := range []string{"", "linearizable", "session", "stale", "consistent_prefix"} {
 				work, pages := &stubWork{}, &stubPages{}
@@ -1615,8 +1632,8 @@ func TestAnUnknownActorKindIsRefusedRatherThanFilteringToNothing(t *testing.T) {
 func TestEverySavedViewIsAskedForAViewerAndCountedOnlyForOne(t *testing.T) {
 	t.Parallel()
 	w := &stubWork{}
-	if _, err := askAsOperator(t, queries.Sources{Work: w}, "work_saved_views",
-		map[string]any{"viewer": "ada-okonkwo", "counts": "true"}); err != nil {
+	if _, err := askAsAna(t, queries.Sources{Work: w}, "work_saved_views",
+		map[string]any{"viewer": "cy", "counts": "true"}); err != nil {
 		t.Fatalf("every view, counted, for a named viewer: %v", err)
 	}
 	if !w.every.Viewer.Named() || !w.every.Counts || w.every.Now.IsZero() ||

@@ -159,13 +159,14 @@ else's work at another team is a decision about who owns it, so a **seat** may
 re-route only the work in a project it leads, or one an ancestor of it leads —
 every other seat is refused, and the refusal names the project whose lead to
 ask. A **person** acting through their own credential may re-route it: a human
-seat writing as themselves, or an API token on
+seat writing as themselves, or an API key on
 [the operator surface](#what-a-person-can-do). That is the same authority that
-declares a project's fields and orders somebody's queue, and an unbound token
-holds it too — an operator outside the org chart is still the person running
-the company. Where a token IS bound to a human seat with
-`contact.crewlet_operator_id`, the lead relation is resolved for **that
-person**, so a founder's own assistant re-routes as the founder rather than
+declares a project's fields and orders somebody's queue, and an unlinked admin
+key holds it too — an operator outside the org chart is still the person
+running the company. (An unlinked member key reaches no operator surface at
+all: a member acts only as the person the key was issued to.) Where a key IS
+linked to a human seat with `contact.crewlet_operator_id`, the lead relation is
+resolved for **that person**, so a founder's own assistant re-routes as the founder rather than
 falling back on the credential's own authority.
 
 **You rarely state either.** An item filed with no `unit` is filed into the
@@ -1468,9 +1469,10 @@ re-route work out of. See
 [A person's own state](#a-persons-own-state).
 
 **The dashboard writes through the same tools**, at `/operator/act/{tool}` —
-one tool per request, as the person your token is bound to. It admits a bound
-token and nobody else: an unbound token and a disabled guard's caller are
-refused `unbound`, and keep the MCP surface. The record is the same either way,
+one tool per request, as the person your key is linked to. It admits a linked
+key — member or admin — and nobody else: an unlinked key and a disabled
+guard's caller are refused `unbound`, and of them only an unlinked admin key
+keeps the MCP surface. The record is the same either way,
 so a change you make on screen and one your assistant makes read alike in
 every history. See the
 [API reference](../reference/api-endpoints.md#operatoract--the-dashboards-write-surface).
@@ -1926,7 +1928,7 @@ whose primary half is blank.
 **A person reads theirs at `#/inbox`**, one click from the landing screen:
 the notices `work_inbox` returns, each labelled with the one reason of
 eighteen that routed it, beside what is waiting on a decision. Which person is
-decided by the API token — it is matched against every seat's
+decided by the API key — it is matched against every seat's
 `contact.crewlet_operator_id`, so the queue is theirs rather than the
 alphabetically first seat's — and `#/me` is that same person's own work: one
 section per claim on their attention (the Queue, Asked of me, Asked by me,
@@ -2056,7 +2058,7 @@ your names, exactly as `my_work` is.
 The marks are the PERSON'S, written as that person. Every write here is
 attributed to somebody, and a write as "the dashboard" would be attributed to
 nobody — so `mark_inbox` is called either by your assistant over
-`/operator/mcp`, or through `/operator/act`, which admits only a token bound
+`/operator/mcp`, or through `/operator/act`, which admits only a key linked
 to a seat and records the write exactly as your assistant's would be. The
 screen shows what the engine recorded.
 
@@ -2223,9 +2225,9 @@ Three different gestures, and the difference matters:
 - **Purge** removes the rows. Its report comes back in **three groups**: what
   was purged, what could not be reached, and what is stale.
 
-Only the first two are a seat's. A purge is an **operator gesture** — a person
-or an operator token, never an agent and never the engine — because it is the
-one operation with no inverse and nothing else can be asked to confirm it:
+Only the first two are a seat's. A purge is an **operator gesture** — made
+with an admin key, never by an agent and never by the engine — because it is
+the one operation with no inverse and nothing else can be asked to confirm it:
 
 ```
 crewlet work purge <task-id> -project KEY -reason "why" -confirm <task-key>

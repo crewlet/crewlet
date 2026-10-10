@@ -5,23 +5,47 @@ package queries
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// The two refusals a personal question makes, told apart because the remedies
-// are different: one is a line of company configuration, the other a
-// credential.
+// The refusals a personal question makes, told apart because the remedies are
+// different: one is a line of company configuration, the other is asking
+// somebody whose line the record is in.
 var (
-	errNoSeat = fmt.Errorf("%w: this credential is not bound to a seat — give a human "+
+	errNoSeat = fmt.Errorf("%w: this key is not linked to a seat — give a human "+
 		"seat contact.crewlet_operator_id matching the api.auth token id, or name a handle",
 		ErrBadParams)
-	errNotYours = fmt.Errorf("%w: reading another seat's record needs an operator credential",
-		ErrUnauthorized)
+	errNotYoursForbidden = fmt.Errorf("%w: this record belongs to a seat outside "+
+		"your own line — a person reads their own and their reports'", ErrForbidden)
+	errNotYoursUnauthorized = fmt.Errorf("%w: reading a person's record needs a key "+
+		"linked to their seat or to a lead in their line", ErrUnauthorized)
 )
 
-// viewer answers who this socket's credential belongs to.
+// errNotYours is the refusal of a personal record outside the caller's line,
+// classed by WHO ASKED: [ErrForbidden] for a caller whose key was accepted —
+// signing in again would change nothing — and [ErrUnauthorized] for one with
+// none, whose remedy is a key.
+func errNotYours(caller auth.Principal) error {
+	if caller.Authenticated() {
+		return errNotYoursForbidden
+	}
+	return errNotYoursUnauthorized
+}
+
+// ViewerAdmin is one person who holds an admin key: the seat linked to it.
+type ViewerAdmin struct {
+	Handle string `json:"handle"`
+	Name   string `json:"name"`
+}
+
+// viewer answers who this caller is: their key, its role and reach, the
+// person it is linked to and that person's line.
 //
 // THE FRAME HAS NEVER HAD A VIEWER, and everything personal in the dashboard
 // is fiction without one: "my work" picked the alphabetically first seat,
@@ -30,28 +54,46 @@ var (
 // were never sent, and an inbox could not be anyone's.
 //
 // The resolution is a chain of two, and NEITHER STEP IS NEW: Tier A's
-// `api.auth.tokens` maps a presented credential to an operator id, and a seat
-// binds one of those ids with `contact.crewlet_operator_id`. What was missing
-// is a question that walks it.
+// `api.auth.tokens` maps a presented key to its id and ROLE, and a seat links
+// one of those ids with `contact.crewlet_operator_id`. What was missing is a
+// question that walks it.
 //
-// AN UNBOUND TOKEN IS AN ORDINARY STATE. `org.HumanContact` says so in as many
-// words, so this answers the operator id with no seat rather than an error —
-// the screen then says what to bind, which is a different thing from a screen
-// that looks broken.
+// OPEN, the one question that is: a sign-in page asks it of a caller who has
+// not signed in, and "nobody" is an answer — an empty token_id, no role, the
+// anonymous reach.
+//
+// AN UNLINKED KEY IS AN ORDINARY STATE. `org.HumanContact` says so in as many
+// words, so this answers the key and its role with no seat rather than an
+// error — the screen then says what to link, which is a different thing from a
+// screen that looks broken.
 func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
-	operatorID := operatorFrom(ctx)
+	caller := callerFrom(ctx)
 	out := map[string]any{
-		"operator_id": operatorID,
-		// WHETHER THIS CALLER MAY ASK THE GUARDED QUESTIONS, which is the
-		// same test the registry makes, answered once so a screen can draw
+		// WHICH KEY, by its label — never its value — or "" for a caller
+		// who presented none.
+		"token_id": caller.ID,
+		// WHAT IT IS FOR AND HOW FAR IT REACHES, decided once by the
+		// guard and compared against by every surface, so a screen draws
 		// a locked row rather than discovering the refusal per question.
-		"operator": operatorID != "",
-		"handle":   "",
-		"name":     "",
-		"kind":     "",
+		// Both "" / the anonymous posture's reach for nobody.
+		"role":  string(caller.Role),
+		"reach": string(caller.Reach),
+		// WHETHER A PERSON IS LINKED TO THE KEY, which is a different fact
+		// from the role: a role says what the key may read and run, the
+		// link says who it acts as.
+		"linked": false,
+		"handle": "",
+		"name":   "",
+		"kind":   "",
+		// THE SEATS IN THIS PERSON'S LINE ([org.Organization.LeadsInLine]),
+		// whose personal records they may read beside their own — the same
+		// set [Sources.viewerParty] admits, from the same derivation, so a
+		// screen offers exactly the reports the engine answers for.
+		// ALWAYS AN ARRAY.
+		"line": []string{},
 		// WHAT THIS CALLER MAY DO on the act transport, which admits a
 		// person and nobody else (ADR-0024): empty for an anonymous
-		// reader and for a token no seat binds, so a screen disables its
+		// reader and for a key no seat links, so a screen disables its
 		// write controls with the reason rather than offering a press
 		// the engine refuses. ALWAYS AN ARRAY, never null, so "may do
 		// nothing" is a value a reader can test rather than an absence.
@@ -62,25 +104,40 @@ func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 		// every team above it, owns no project, whose create is refused
 		// until one is named.
 		"project": "",
-		// WHETHER THIS CALLER MAY CHANGE THE COMPANY DOCUMENT, and who may
-		// when it is managed (ADR-0030), so a screen draws every editing
+		// WHETHER THIS CALLER MAY CHANGE THE COMPANY DOCUMENT — an admin
+		// key, and one company_writers admits when the document is
+		// managed (ADR-0030, ADR-0031) — so a screen draws every editing
 		// control disabled with the reason rather than offering a save the
-		// config surface refuses. The writers are named to an operator
-		// only: which credential can rewrite the company is the most
-		// valuable line of the `access` answer, which is operator-only for
-		// the same reason. ALWAYS AN ARRAY; empty is not managed.
-		"config_writer":     false,
+		// config surface refuses.
+		"config_writer": false,
+		// WHO MAY, when the document is managed: named to an ADMIN only,
+		// because which key can rewrite the company is the most valuable
+		// line of the `access` answer, which is admin for the same reason.
+		// ALWAYS AN ARRAY; empty is not managed.
 		"config_managed_by": []string{},
+		// WHO TO ASK for what this key does not reach: the people holding
+		// an admin key. Named to a caller with a key only — never to a
+		// stranger, who is given no name of anybody who can open the
+		// engine. ALWAYS AN ARRAY.
+		"admins": []ViewerAdmin{},
 	}
-	if operatorID != "" {
-		writers := s.companyWriters()
-		out["config_managed_by"] = writers
-		out["config_writer"] = s.Access == nil || s.Access.MayWriteCompany(operatorID)
+	if caller.Authenticated() {
+		out["config_writer"] = s.Access != nil && s.Access.MayWriteCompany(caller.ID)
+		out["admins"] = s.admins()
 	}
-	seat := s.seatForOperator(operatorID)
+	if caller.IsAdmin() {
+		out["config_managed_by"] = s.companyWriters()
+	}
+	// ONE CHART for the whole answer: [org.Organization.LeadsInLine] finds
+	// a lead by POINTER, and every read of the chart builds a new one, so a
+	// seat looked up in one and its line asked of another is a lead with no
+	// line at all.
+	organization := s.organization()
+	seat := s.seatIn(organization, caller.ID)
 	if seat == nil {
 		return out, nil
 	}
+	out["linked"] = true
 	if s.OperatorActs != nil {
 		if acts := s.OperatorActs(); acts != nil {
 			out["acts"] = acts
@@ -99,7 +156,35 @@ func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 	// operator surface's create applies (`engine.ProjectOfSeat`), so the
 	// project promised here is the project the create files into.
 	out["project"] = s.projectOf(seat.Handle())
+	if line := organization.LeadsInLine(seat); line != nil {
+		out["line"] = line
+	}
 	return out, nil
+}
+
+// admins is every human seat linked to an ADMIN key the guard accepts, in
+// handle order — never nil.
+//
+// THROUGH THE SAME LOOKUP the act transport and the `access` answer make, so a
+// person named here as an admin is one those name as one.
+func (s Sources) admins() []ViewerAdmin {
+	out := []ViewerAdmin{}
+	organization := s.organization()
+	if s.Access == nil || organization == nil {
+		return out
+	}
+	for _, key := range s.Access.Keys {
+		if key.Role != config.RoleAdmin {
+			continue
+		}
+		seat := organization.SeatByOperatorID(key.ID, s.Env)
+		if seat == nil || !seat.IsHuman() {
+			continue
+		}
+		out = append(out, ViewerAdmin{Handle: seat.Handle(), Name: seat.Name})
+	}
+	slices.SortFunc(out, func(a, b ViewerAdmin) int { return strings.Compare(a.Handle, b.Handle) })
+	return slices.CompactFunc(out, func(a, b ViewerAdmin) bool { return a.Handle == b.Handle })
 }
 
 // companyWriters is the managed document's writers, or empty — never nil.
@@ -110,9 +195,12 @@ func (s Sources) companyWriters() []string {
 	return append([]string{}, s.Access.CompanyWriters...)
 }
 
-// seatForOperator resolves the caller's operator id to a seat, or nil.
-func (s Sources) seatForOperator(operatorID string) *org.Role {
-	organization := s.organization()
+// seatIn resolves a key's id to the seat organization links it to, or nil.
+//
+// THE CHART IS AN ARGUMENT, read once by the caller, because each read builds a
+// new one and a seat is compared by pointer within the chart it came from — see
+// [Sources.viewerParty].
+func (s Sources) seatIn(organization *org.Organization, operatorID string) *org.Role {
 	if operatorID == "" || organization == nil {
 		return nil
 	}
@@ -127,17 +215,29 @@ func (s Sources) seatForOperator(operatorID string) *org.Role {
 //
 // # The scope rule, in one place because four questions share it
 //
-// A caller reads the seat their own token is bound to, and naming anybody
-// else's handle requires an operator credential. Registering these
-// operator-only instead — which is what `work_my_work` did — makes the landing
-// screen the most-gated screen in the product and the human teammate, who is
-// one of the two readers this dashboard is for, fictional.
+// A caller reads the seat their own key is linked to, and the seats in their
+// LINE — every seat whose management chain passes through theirs
+// ([org.Organization.LeadsInLine]), which is the authority a lead already
+// holds over a report's queue. Anybody else's is refused: [ErrForbidden] for a
+// caller whose key was accepted, since a different key would not change whose
+// line they are in.
+//
+// AN ADMIN KEY ADDS NOTHING HERE (ADR-0031). The role says how much of the
+// MACHINE a key reaches — transcripts, configuration, nodes — and a person's
+// inbox and day are not the machine's: an admin who is nobody's lead reads
+// their own and no one else's, exactly as a member does. The founder at the
+// root of the chart leads everybody, so the person who most needs every
+// report's day already has it, from the chart rather than from a key.
+//
+// Registering these admin instead — which is what `work_my_work` once was —
+// makes the landing screen the most-gated screen in the product and the human
+// teammate, who is one of the two readers this dashboard is for, fictional.
 //
 // # And the party, which is what the reader needs rather than a handle
 //
-// A write made through somebody's own credential is attributed to the TOKEN,
-// not to their seat, and deliberately so: a tracker whose author field is
-// chosen by the writer is not an audit trail (see internal/api/operator). The
+// A write made through somebody's own key is attributed to the KEY, not to
+// their seat, and deliberately so: a tracker whose author field is chosen by
+// the writer is not an audit trail (see internal/api/operator). The
 // consequence is that one person's rows carry two names — `jane-founder` on
 // what a colleague assigned them, `founder` on everything their own assistant
 // filed — so a personal read asked about one of them answered nothing. A
@@ -146,17 +246,21 @@ func (s Sources) seatForOperator(operatorID string) *org.Role {
 //
 // # The party belongs to the person ASKED ABOUT, not to the caller
 //
-// An operator reading a report's day gets that report's own alias, resolved
-// from the chart, rather than the credential in their own hand: whose two
-// names these are is a fact about the seat, and the caller's token has nothing
-// to do with it. That it is the caller's own id in the ordinary case falls out
-// of the same lookup rather than being a second rule.
+// A lead reading a report's day gets that report's own alias, resolved from
+// the chart, rather than the key in their own hand: whose two names these are
+// is a fact about the seat, and the caller's key has nothing to do with it.
+// That it is the caller's own id in the ordinary case falls out of the same
+// lookup rather than being a second rule.
 //
 // Returns the party to read and an error to refuse with.
 func (s Sources) viewerParty(ctx context.Context, asked string) (tracker.Party, error) {
-	operatorID := operatorFrom(ctx)
+	caller := callerFrom(ctx)
+	// ONE CHART for the lookup and the line: [org.Organization.LeadsInLine]
+	// finds a lead by POINTER, and every read of the chart builds a new one.
+	organization := s.organization()
+	seat := s.seatIn(organization, caller.ID)
 	own := ""
-	if seat := s.seatForOperator(operatorID); seat != nil {
+	if seat != nil {
 		own = seat.Handle()
 	}
 	switch {
@@ -164,24 +268,23 @@ func (s Sources) viewerParty(ctx context.Context, asked string) (tracker.Party, 
 		if own == "" {
 			// NOT AN AUTHORIZATION FAILURE. Nobody was refused: there
 			// is no person to answer about, and the remedy is a line
-			// of company configuration rather than a different
-			// credential.
+			// of company configuration rather than a different key.
 			return tracker.Party{}, errNoSeat
 		}
 		return s.partyOf(own), nil
 	case asked == own:
 		return s.partyOf(asked), nil
-	case operatorID == "":
-		return tracker.Party{}, errNotYours
+	case seat != nil && slices.Contains(organization.LeadsInLine(seat), asked):
+		// A REPORT, at any depth: the lead reads the day of somebody
+		// whose work they are answerable for.
+		return s.partyOf(asked), nil
 	}
-	// An operator reads anybody's: they hold the credential that writes
-	// these records through the operator tool server in the first place.
-	return s.partyOf(asked), nil
+	return tracker.Party{}, errNotYours(caller)
 }
 
 // partyOf is one seat and the credential bound to it.
 //
-// THROUGH THE NODE'S OWN CHAIN ([Sources.Env]), as [Sources.seatForOperator]
+// THROUGH THE NODE'S OWN CHAIN ([Sources.Env]), as [Sources.seatIn]
 // resolves the way in. The two directions go through the same resolution in
 // `org` with the same lookup, so a company cannot be bound for one and unbound
 // for the other.
@@ -200,17 +303,6 @@ func (s Sources) partyOf(handle string) tracker.Party {
 	return party
 }
 
-// viewerHandle is [Sources.viewerParty] for a question that answers about a
-// seat and reads no tracker row — the conversation ledger, whose rows are
-// written by the SEAT's own turns and carry no credential's name.
-func (s Sources) viewerHandle(ctx context.Context, asked string) (string, error) {
-	party, err := s.viewerParty(ctx, asked)
-	if err != nil {
-		return "", err
-	}
-	return party.Handle, nil
-}
-
 // viewerPins is the authority rule over the party a view STRIP is
 // personalised by.
 //
@@ -226,12 +318,12 @@ func (s Sources) viewerHandle(ctx context.Context, asked string) (string, error)
 // What is identical is the half that matters. `viewer` selected whose record
 // was read and nothing checked it, so a reader could walk the org chart and
 // page through every seat's pinned views by handle — the personal record
-// `work_person` is scoped for, on a surface `api.allow_anonymous_read` opens.
-// A scope rule three of the four personal questions follow is not a rule.
+// `work_person` is scoped for. A scope rule three of the four personal
+// questions follow is not a rule.
 //
 // AND IT CARRIES BOTH NAMES, because a saved view and a pin are both written
-// through the person's own credential: owned by the token's id, asked for
-// under the seat's, so a founder's own strip came back with neither.
+// through the person's own key: owned by the key's id, asked for under the
+// seat's, so a founder's own strip came back with neither.
 func (s Sources) viewerPins(ctx context.Context, asked string) (tracker.Party, error) {
 	if asked == "" {
 		return tracker.Party{}, nil

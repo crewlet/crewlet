@@ -64,25 +64,27 @@
 //
 // Unlike the sandbox bridge at [mcpbridge.PathPrefix], which authenticates
 // with a signed per-run token in its own path because the box inside holds no
-// API credential, this surface is reached by a person's own client and is
-// guarded by the ordinary operator bearer token — the same one /config and
-// /secrets take. It WRITES to the company, so `allow_anonymous_read` does not
-// reach it: a write is a write whatever reads are open.
+// API credential, this surface is reached by a person's own client with an
+// ordinary API key, and both transports are mounted at MEMBER reach
+// (ADR-0031): the catalogue is the company's own work and pages, which is
+// what a member reads and writes, and a caller with no key reaches neither.
 //
 // # The act transport admits a PERSON, and nobody else (ADR-0024)
 //
-// The two transports differ in exactly one rule. MCP admits any token, bound
-// or not, because an assistant connected with a CI token is a credential
-// acting as itself. The act transport — the dashboard's buttons — admits only
-// a token `contact.crewlet_operator_id` binds to a human seat, and refuses
-// every other caller `unbound`: a disabled guard's anonymous caller, and a
-// credential nobody bound. A button is pressed by somebody, and the only
-// somebody a browser session can honestly claim to be is the person the token
-// names; a write attributed to "the dashboard" would be the one actor an audit
-// cannot ask why. The attribution itself does not change — the author is still
-// the token, the kind still `operator`, and the person rides beside it as the
-// actor's seat — so an audit reads a dashboard write exactly as it reads the
-// same person's assistant. See [ActPattern].
+// The two transports differ in exactly one rule. MCP admits a key linked to a
+// human seat, as that person, and an ADMIN key no seat links, because an
+// assistant connected with a CI key is a credential acting as itself — but
+// never an unlinked MEMBER key, since a member acts only as the person the
+// key is linked to. The act transport — the dashboard's buttons — admits only
+// a key `contact.crewlet_operator_id` links to a human seat, member or admin,
+// and refuses every other caller `unbound`: a disabled guard's anonymous
+// caller, and a key nobody linked. A button is pressed by somebody, and the
+// only somebody a browser session can honestly claim to be is the person the
+// key names; a write attributed to "the dashboard" would be the one actor an
+// audit cannot ask why. The attribution itself does not change — the author
+// is still the key, the kind still `operator`, and the person rides beside it
+// as the actor's seat — so an audit reads a dashboard write exactly as it
+// reads the same person's assistant. See [ActPattern].
 //
 // # Every call that may write is audited, on both transports
 //

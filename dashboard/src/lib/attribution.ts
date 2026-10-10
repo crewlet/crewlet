@@ -3,8 +3,8 @@
  *
  * # The one thing this product can say that a tracker cannot
  *
- * Every write in this engine is attributed to somebody — a seat, a person, an
- * operator token — and carries the turn it happened in. So a properties rail
+ * Every write in this engine is attributed to somebody — a seat, a person, a
+ * key — and carries the turn it happened in. So a properties rail
  * here can say `set by ada · 3h ago · turn ↗` on the row, where Jira, Linear
  * and ClickUp can only put an actor on a feed entry and leave the reader to
  * match it up. `ObjectHeader.Fact` and `PropertiesRail.Property` were both
@@ -41,8 +41,8 @@
  *
  * # Named as the person, not the token
  *
- * An operator token's change carries `actor_seat`, the seat the token was
- * bound to, and the line names that seat — the activity beside the rail names
+ * A key's change carries `actor_seat`, the seat the key was bound to, and
+ * the line names that seat — the activity beside the rail names
  * the same change from the same field, and one person drawn two ways on one
  * page ("founder" in the rail, Jane Founder in the feed) reads as two people.
  * `actor` stays the credential on the wire, which is the audit trail.

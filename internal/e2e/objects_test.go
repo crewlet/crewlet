@@ -59,6 +59,9 @@ func download(t *testing.T, n *node, project, path string) (int, []byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A project's files are a MEMBER'S read (ADR-0031): the company's own
+	// work, never served to a caller with no key.
+	req.Header.Set("Authorization", "Bearer "+e2eOperatorToken)
 	resp, err := n.server.Client().Do(req)
 	if err != nil {
 		t.Fatalf("download: %v", err)

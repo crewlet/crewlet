@@ -3,14 +3,14 @@
 //
 // # Why it is not part of /integrations
 //
-// `GET /integrations` is registered as an ordinary read, so on the default
-// posture it serves without a token. What this surface answers is a different
-// class of thing: the NAMES of the credentials a company holds, which are
-// unset, the third-party app pages an administrator would visit, and the fields a
-// caller can write. Adding that to the anonymous-read answer would hand an
-// unauthenticated reader a map of what to attack. So it is its own prefix,
-// added to the always-guarded list beside /config and /secrets, and every
-// call here needs an operator token, reads included.
+// `GET /integrations` is a question — the reconcile status of each surface —
+// and what this surface answers is a different class of thing: the NAMES of
+// the credentials a company holds, which are unset, the third-party app pages
+// an administrator would visit, and the fields a caller can write, together
+// with the routes that write them. So it is its own prefix, mounted at admin
+// reach beside /config and /secrets (ADR-0031), and every call here needs an
+// admin key, reads included: a map of what to attack is how the engine is
+// run, never what the company published.
 //
 // # It never returns a value
 //
@@ -240,23 +240,27 @@ func New(opts Options) (*Service, error) {
 }
 
 // Routes registers the surface.
-func (s *Service) Routes(mux httpjson.Router) {
-	mux.HandleFunc("GET /setup/integrations", s.list)
-	mux.HandleFunc("GET /setup/integrations/{kind}", s.one)
-	mux.HandleFunc("POST /setup/integrations/{kind}/inputs", s.inputs)
-	mux.HandleFunc("DELETE /setup/integrations/{kind}", s.disconnect)
+//
+// ADMIN, every route, reads included (ADR-0031): which credentials a company
+// has NOT configured is worth as much to an attacker as the ones it has, and
+// every write lands in the secret store or the company document.
+func (s *Service) Routes(mux auth.Router) {
+	mux.HandleFunc("GET /setup/integrations", auth.ReachAdmin, s.list)
+	mux.HandleFunc("GET /setup/integrations/{kind}", auth.ReachAdmin, s.one)
+	mux.HandleFunc("POST /setup/integrations/{kind}/inputs", auth.ReachAdmin, s.inputs)
+	mux.HandleFunc("DELETE /setup/integrations/{kind}", auth.ReachAdmin, s.disconnect)
 	// The two that RUN something at the third-party app, and the read that follows
 	// one. See pass.go for why check and provision are one function.
-	mux.HandleFunc("POST /setup/integrations/{kind}/provision", s.provision)
-	mux.HandleFunc("POST /setup/integrations/{kind}/check", s.check)
+	mux.HandleFunc("POST /setup/integrations/{kind}/provision", auth.ReachAdmin, s.provision)
+	mux.HandleFunc("POST /setup/integrations/{kind}/check", auth.ReachAdmin, s.check)
 	// ONE AGENT'S OWN APP. Not a company-wide connect: a GitHub App is one
 	// bot identity, so an app per agent is the only way each acts as itself.
-	mux.HandleFunc("POST /setup/integrations/github/app", s.beginApp)
-	mux.HandleFunc("GET /setup/integrations/{kind}/runs/{id}", s.runByID)
+	mux.HandleFunc("POST /setup/integrations/github/app", auth.ReachAdmin, s.beginApp)
+	mux.HandleFunc("GET /setup/integrations/{kind}/runs/{id}", auth.ReachAdmin, s.runByID)
 	// The LISTING, which is what makes the route above reachable at all:
 	// nothing could name a run id, so one pass was readable only by the
 	// caller that had just started it.
-	mux.HandleFunc("GET /setup/integrations/{kind}/runs", s.runs)
+	mux.HandleFunc("GET /setup/integrations/{kind}/runs", auth.ReachAdmin, s.runs)
 }
 
 // configWriter adapts the config surface to what setup.Writer needs.
@@ -2235,8 +2239,7 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 
 // operatorOf is who the guard authenticated, or empty.
 func operatorOf(r *http.Request) string {
-	operator, _ := auth.OperatorFrom(r.Context())
-	return operator
+	return auth.PrincipalFrom(r.Context()).ID
 }
 
 // disconnectRequest is what the Disconnect dialog sends.

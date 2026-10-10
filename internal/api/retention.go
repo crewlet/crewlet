@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
-	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -32,10 +31,11 @@ import (
 //
 // # Why they are POSTs even though one of them only publishes a number
 //
-// The anonymous-read posture a laptop deployment allows must never reach any
-// of them. An acknowledgement moves the floor the trim deletes against, an
-// eviction stops a machine writing, and a readmission lets it write again —
-// none is a read, whatever the posture says.
+// Because each changes what the fleet does, and the method is what the drain
+// gate reads: a read is served through a drain and a write is refused. An
+// acknowledgement moves the floor the trim deletes against, an eviction stops
+// a machine writing, and a readmission lets it write again — none is a read.
+// Who may make them is the reach each is mounted at, which is admin.
 
 // retentionWriter is the slice of the fleet these routes need.
 //
@@ -124,7 +124,7 @@ func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	operator, _ := auth.OperatorFrom(r.Context())
+	operator := auth.PrincipalFrom(r.Context()).ID
 	point := coord.BackupPoint{
 		Owner: coord.OperatorBackupOwner,
 		At:    time.Now().UTC(),
@@ -193,18 +193,22 @@ func (a *App) generationOf(stream string) (uint32, error) {
 }
 
 // mountRetention registers the write half of the retention surface.
-func (a *App) mountRetention(mux httpjson.Router) {
-	mux.Handle("POST /work/retention/ack", http.HandlerFunc(a.serveRetentionAck))
-	mux.Handle("POST /work/retention/evict/{node}", a.gate(true))
-	mux.Handle("POST /work/retention/readmit/{node}", a.gate(false))
+//
+// ADMIN, every one: where the trim may delete to, which machine may write and
+// whether a task's whole history is destroyed are how the engine is run,
+// never what the company published.
+func (a *App) mountRetention(mux auth.Router) {
+	mux.Handle("POST /work/retention/ack", auth.ReachAdmin, http.HandlerFunc(a.serveRetentionAck))
+	mux.Handle("POST /work/retention/evict/{node}", auth.ReachAdmin, a.gate(true))
+	mux.Handle("POST /work/retention/readmit/{node}", auth.ReachAdmin, a.gate(false))
 	// THE PURGE, and it lives beside the eviction because they are the
 	// two gestures on this engine that DESTROY rather than change: one
 	// stops a machine's records applying, the other removes a task and
-	// every row it produced. Both are guarded, both echo their subject
-	// back as a confirmation, and both answer the three-valued write
-	// outcome whole.
+	// every row it produced. Both are admin, both echo their subject back
+	// as a confirmation, and both answer the three-valued write outcome
+	// whole.
 	if a.purger != nil {
-		mux.Handle("POST /work/{id}/purge", http.HandlerFunc(a.servePurge))
+		mux.Handle("POST /work/{id}/purge", auth.ReachAdmin, http.HandlerFunc(a.servePurge))
 	}
 }
 
@@ -213,7 +217,7 @@ func (a *App) mountRetention(mux httpjson.Router) {
 // # Why this route exists at all
 //
 // `tracker.Writer.PurgeTask` is the one operation in this engine with no
-// inverse, restricted in the write path to a person or an operator token — and
+// inverse, restricted in the write path to a person or an API key — and
 // nothing anywhere called it. No CLI verb, no route, no tool. So a company
 // could not destroy a task under any circumstances: an erasure request had no
 // mechanism, and a credential pasted into a task body stayed in the durable
@@ -265,10 +269,11 @@ func (a *App) servePurge(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	operator, ok := auth.OperatorFrom(r.Context())
-	if !ok || operator == "" {
-		// THE GUARD ALREADY REFUSED AN UNAUTHENTICATED CALLER, so this
-		// is the build with no operator identity on the context at all.
+	operator := auth.PrincipalFrom(r.Context()).ID
+	if operator == "" {
+		// THE ROUTE'S REACH ALREADY REFUSED A CALLER WITH NO KEY, so
+		// this is a request that reached the handler around the route
+		// table, with nobody on its context at all.
 		// The write path refuses it too, and refusing here names the
 		// reason rather than surfacing the writer's own.
 		writeJSON(w, http.StatusForbidden, map[string]string{
@@ -407,13 +412,13 @@ func (a *App) gate(evict bool) http.HandlerFunc {
 			})
 			return
 		}
-		operator, ok := auth.OperatorFrom(r.Context())
-		if !ok || operator == "" {
-			// THE GUARD ALREADY REFUSED AN UNAUTHENTICATED CALLER, so
-			// this is the build with no operator identity on the
-			// context at all — and every log's record names who ran
-			// the gesture, which is what `retention status` prints
-			// beside an eviction.
+		operator := auth.PrincipalFrom(r.Context()).ID
+		if operator == "" {
+			// THE ROUTE'S REACH ALREADY REFUSED A CALLER WITH NO KEY,
+			// so this is a request that reached the handler around the
+			// route table, with nobody on its context — and every log's
+			// record names who ran the gesture, which is what
+			// `retention status` prints beside an eviction.
 			writeJSON(w, http.StatusForbidden, map[string]string{
 				"error": "operator_required",
 				"detail": "an eviction and a readmission are operator gestures " +
@@ -486,13 +491,17 @@ type capacityRunner interface {
 // procedure requires to be stopped. Both cannot hold. What resolves it is that
 // the maintenance-mode node runs its API: these are that mode's own control
 // surface rather than the write routes the mode withholds.
-func (a *App) mountCapacity(mux httpjson.Router) {
-	mux.Handle("POST /work/retention/capacity", http.HandlerFunc(a.serveSetCapacity))
-	mux.Handle("GET /work/retention/maintenance", http.HandlerFunc(a.serveMaintenanceStatus))
-	mux.Handle("POST /work/retention/maintenance/abandon", http.HandlerFunc(a.serveAbandon))
-	mux.Handle("POST /work/retention/maintenance/exclude", http.HandlerFunc(a.serveExclude))
-	mux.Handle("GET /work/retention/reanchor", http.HandlerFunc(a.serveReanchorStatus))
-	mux.Handle("POST /work/retention/reanchor", http.HandlerFunc(a.serveReanchor))
+//
+// ADMIN, reads included: a stream's ceiling, the maintenance window and a
+// reanchor are the engine's own machinery, and the reads name the streams and
+// the nodes they are run against.
+func (a *App) mountCapacity(mux auth.Router) {
+	mux.Handle("POST /work/retention/capacity", auth.ReachAdmin, http.HandlerFunc(a.serveSetCapacity))
+	mux.Handle("GET /work/retention/maintenance", auth.ReachAdmin, http.HandlerFunc(a.serveMaintenanceStatus))
+	mux.Handle("POST /work/retention/maintenance/abandon", auth.ReachAdmin, http.HandlerFunc(a.serveAbandon))
+	mux.Handle("POST /work/retention/maintenance/exclude", auth.ReachAdmin, http.HandlerFunc(a.serveExclude))
+	mux.Handle("GET /work/retention/reanchor", auth.ReachAdmin, http.HandlerFunc(a.serveReanchorStatus))
+	mux.Handle("POST /work/retention/reanchor", auth.ReachAdmin, http.HandlerFunc(a.serveReanchor))
 }
 
 // serveReanchorStatus answers GET /work/retention/reanchor: the stream's own
@@ -558,7 +567,7 @@ func (a *App) serveReanchor(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	operator, _ := auth.OperatorFrom(r.Context())
+	operator := auth.PrincipalFrom(r.Context()).ID
 	plan, err := a.capacity.Reanchor(r.Context(), engine.ReanchorRequest{
 		Stream: stream, Confirm: confirm, By: operator,
 		Force:   r.URL.Query().Get("force") == "true",
@@ -607,7 +616,7 @@ func (a *App) serveSetCapacity(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	operator, _ := auth.OperatorFrom(r.Context())
+	operator := auth.PrincipalFrom(r.Context()).ID
 	op, err := a.capacity.SetCapacity(r.Context(), engine.CapacityRequest{
 		Stream: stream, TargetMaxBytes: target, By: operator,
 		Assert: r.URL.Query().Get("assert_excluded") == "true",
@@ -709,7 +718,7 @@ func (a *App) capacityGesture(w http.ResponseWriter, r *http.Request, what strin
 		})
 		return
 	}
-	operator, _ := auth.OperatorFrom(r.Context())
+	operator := auth.PrincipalFrom(r.Context()).ID
 	log.Info("capacity_gesture", "operator", operator, "gesture", what, "stream", stream)
 	writeJSON(w, http.StatusOK, map[string]any{"operation": operationOrNil(op)})
 }

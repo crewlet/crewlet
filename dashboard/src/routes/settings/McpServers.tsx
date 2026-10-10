@@ -11,10 +11,10 @@
  * each agent seat's `tool_sources` on the pushed org (`lib/mcpServers.ts`
  * `grantedSeats`). This component derives neither; it draws both.
  *
- * # Operator-only, and the rest of the screen is not
+ * # Admin-only, and the rest of the screen is not
  *
  * The answer names nodes, launch commands and the first line of each failure,
- * so the engine refuses it to a reader without an operator token — and that
+ * so the engine refuses it to a reader without an admin key — and that
  * refusal is drawn HERE, in this section's place, while the tool catalogue
  * around it (a push every reader gets) stays exactly as it is.
  */
@@ -286,7 +286,7 @@ export function ServerHeader({
   /** The status answer has not arrived, which is not a server that is absent. */
   loading: boolean;
   /**
-   * Why there is no status answer — refused (it is operator-only) or failed —
+   * Why there is no status answer — refused (it is admin-only) or failed —
    * or null when there is one. A reader who could not be told is not a reader
    * who was told "no such server".
    */

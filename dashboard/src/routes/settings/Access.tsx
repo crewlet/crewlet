@@ -1,7 +1,7 @@
 /**
  * Settings › People & access: the people in the chart, where agents reach
- * them, and the credentials that reach the company through this engine — and
- * as whom.
+ * them, and the keys that reach the company through this engine — how far,
+ * and as whom.
  *
  * # One join, drawn from both ends
  *
@@ -12,8 +12,17 @@
  * nobody binds looks like a pipeline's credential, and a binding with a typo
  * in it looks bound until that person presses a button and is refused. So the
  * engine answers the join (`access`) and this screen draws both lists: each
- * person with the state of their binding, and each token with the person it
- * acts as.
+ * person with the state of their binding, and each token with its role and the
+ * person it acts as.
+ *
+ * # Two facts per key, never folded into one
+ *
+ * A key's ROLE says how far it reaches — a member reads what the company
+ * published, an admin also what the machine processed and how it is run
+ * (ADR-0031) — and its LINK says who it acts as. A member key nobody links
+ * reads and acts as nobody; an admin key nobody links is a pipeline's. So the
+ * grid draws the two as two columns, and the posture above it says in words
+ * what each role and a caller with no key reach.
  *
  * # Labels, never values
  *
@@ -22,8 +31,9 @@
  * the token dialog and nowhere on a page. A contact is drawn as WRITTEN: a
  * `${VAR}` is its name, never the variable's value.
  *
- * Operator-only, like every other answer on this column: which labels the
- * guard accepts and whom each one is, is a map of which credential to take.
+ * Admin-only, like every other answer on this column: which labels the
+ * guard accepts, how far each reaches and whom each one is, is a map of which
+ * credential to take.
  */
 
 import { useMemo } from "react";
@@ -54,7 +64,8 @@ import type {
   AccessPerson,
   AccessSeat,
   AccessToken,
-  TokenScope,
+  AnonymousAccess,
+  TokenRole,
 } from "~/contract/access.ts";
 
 /**
@@ -111,16 +122,33 @@ export const BINDING_WORDS: Record<
   },
 };
 
-/** The two scopes, in words. */
-export const SCOPE_WORDS: Record<TokenScope, { label: string; hint: string }> = {
-  person: {
-    label: "Person",
-    hint: "Every guarded read and write, and acting from the dashboard as the person it is bound to.",
+/**
+ * The two roles, in words: what a key of each reaches (ADR-0031).
+ *
+ * EXHAUSTIVE OVER THE CONTRACT'S UNION, so a role the engine adds fails the
+ * typecheck here rather than drawing as nothing.
+ */
+export const ROLE_WORDS: Record<TokenRole, { label: string; hint: string }> = {
+  member: {
+    label: "Member",
+    hint: "Reads what the company published — its work, its pages, its chart — and acts from the dashboard as the person it is bound to. Never a transcript, spend, the configuration or a secret.",
   },
-  operator: {
-    label: "Operator",
-    hint: "Every guarded read and write, /config, /secrets and the operator MCP surface, under its own label. It cannot act from the dashboard: that needs a token bound to a person.",
+  admin: {
+    label: "Admin",
+    hint: "Everything a member reads, plus what the agents processed — transcripts, events, spend — and how the engine is run: /config, /secrets, /setup, nodes and backups.",
   },
+};
+
+/**
+ * What a caller presenting NO key reaches, in words — the posture
+ * `api.auth.anonymous` names.
+ *
+ * EXHAUSTIVE OVER THE CONTRACT'S UNION, for the reason [ROLE_WORDS] is.
+ */
+export const ANONYMOUS_WORDS: Record<AnonymousAccess, string> = {
+  public:
+    "A caller with no key reads the company's public face — its name, its mission and its chart — and nothing else (anonymous: public).",
+  none: "A caller with no key reads nothing of the company: the health probes and this dashboard's empty shell, and no more (anonymous: none).",
 };
 
 export function PeopleAndAccess() {
@@ -132,7 +160,8 @@ export function PeopleAndAccess() {
   const tokens = useMemo(() => data?.tokens ?? [], [data]);
   const bound = people.filter((p) => p.binding === "bound").length;
   const broken = people.filter((p) => p.binding === "unresolved" || p.binding === "no_token");
-  const personTokens = tokens.filter((t) => t.scope === "person").length;
+  const adminTokens = tokens.filter((t) => t.role === "admin").length;
+  const memberTokens = tokens.filter((t) => t.role === "member").length;
 
   return (
     <>
@@ -173,7 +202,7 @@ export function PeopleAndAccess() {
                 icon={<KeyGlyph size="xs" />}
                 label="API tokens"
                 value={tokens.length}
-                sub={`${personTokens} bound to a person`}
+                sub={`${adminTokens} admin · ${memberTokens} member`}
               />
               <StatCard
                 icon={<TriangleAlertGlyph size="xs" />}
@@ -265,7 +294,7 @@ export function PeopleAndAccess() {
                 <p className="t-body muted">
                   {data.auth.disabled
                     ? "The guard is disabled, so it accepts no token at all."
-                    : "No token is configured: every write, and all of /config and /secrets, is refused until one is added under api.auth.tokens."}
+                    : "No token is configured: nobody can act as themself or run the engine until one is added under api.auth.tokens, with its role."}
                 </p>
               </div>
             ) : (
@@ -291,16 +320,18 @@ export function PeopleAndAccess() {
                     header: "Acts as",
                     floor: "10rem",
                     sortValue: (t) => t.seat?.name ?? "",
-                    cell: (t) => <ActsAs seat={t.seat} />,
+                    cell: (t) => <ActsAs seat={t.seat} role={t.role} />,
                   },
                   {
-                    key: "scope",
-                    header: "Scope",
+                    key: "role",
+                    header: "Role",
                     shrink: true,
-                    sortValue: (t) => t.scope,
+                    sortValue: (t) => t.role,
                     cell: (t) => (
-                      <Tag appearance="outline" title={SCOPE_WORDS[t.scope].hint}>
-                        {SCOPE_WORDS[t.scope].label}
+                      // NEUTRAL FOR BOTH: the accent means where the reader
+                      // is, and a role is a fact its word carries.
+                      <Tag appearance="outline" title={ROLE_WORDS[t.role].hint}>
+                        {ROLE_WORDS[t.role].label}
                       </Tag>
                     ),
                   },
@@ -317,16 +348,22 @@ export function PeopleAndAccess() {
 }
 
 /**
- * Where tokens are declared, and the read posture beside them.
+ * Where tokens are declared, and the posture beside them, in words.
  *
  * THE KEY, NOT THE TONE'S OWN INFO MARK, as Secrets' strip does: this is about
  * where a credential lives and who can hold one.
  *
+ * THE POSTURE IS THREE SENTENCES, one per kind of caller: what a member key
+ * reaches, what an admin key adds, and what a caller with no key reaches
+ * (`api.auth.anonymous`). Each is the engine's rule stated once, so a person
+ * deciding which key to hand a teammate reads it where they read the keys.
+ *
  * WHO MAY CHANGE THE COMPANY is part of that posture (ADR-0030): a managed
  * document names its writers in Tier A beside the tokens, and this is the
- * screen an operator reads the deployment's `api.auth` on — so it says which
- * credentials write the company, and that the rest only read it. Said only
- * when it is managed: "every token may" is the default nobody configured.
+ * screen an admin reads the deployment's `api.auth` on — so it says which
+ * admin keys write the company, and that every other admin key only reads it.
+ * Said only when it is managed: "every admin key may" is the default nobody
+ * configured.
  */
 function TierACallout({ auth }: { auth: AccessAuth }) {
   const origins = auth.allowed_origins;
@@ -337,14 +374,16 @@ function TierACallout({ auth }: { auth: AccessAuth }) {
         <span>
           API tokens are declared in Tier A under <InlineCode>api.auth.tokens</InlineCode> — the
           operator&rsquo;s bootstrap file, changed by a restart, never from here. Each has an{" "}
-          <InlineCode>id</InlineCode>, recorded as the author of what it writes, and a value this
-          page never sees. A person acts as themself when their seat names that id in{" "}
-          <InlineCode>contact.crewlet_operator_id</InlineCode>.
+          <InlineCode>id</InlineCode>, recorded as the author of what it writes, a{" "}
+          <InlineCode>role</InlineCode>, and a value this page never sees. A person acts as themself
+          when their seat names that id in <InlineCode>contact.crewlet_operator_id</InlineCode>.
         </span>
         <span className="t-caption">
-          {auth.anonymous_read
-            ? "Reads are open without a token (allow_anonymous_read), except under /config, /secrets, /setup and /operator, the answers that describe the deployment (this page among them) and anything personal to one person, such as their inbox or their work."
-            : "Every read needs a token (allow_anonymous_read is off)."}{" "}
+          A member key: {lowerFirst(ROLE_WORDS.member.hint)} An admin key:{" "}
+          {lowerFirst(ROLE_WORDS.admin.hint)}
+        </span>
+        <span className="t-caption">
+          {ANONYMOUS_WORDS[auth.anonymous]}{" "}
           {origins.length
             ? `Browsers may also call from ${origins.join(", ")}.`
             : "Browsers may call from this origin only."}
@@ -352,14 +391,14 @@ function TierACallout({ auth }: { auth: AccessAuth }) {
         {writers.length > 0 && (
           <span className="t-caption">
             The company document is managed: only{" "}
-            {writers.length === 1 ? "the token" : "the tokens"}{" "}
+            {writers.length === 1 ? "the admin key" : "the admin keys"}{" "}
             {writers.map((id, i) => (
               <span key={id}>
                 {i > 0 && ", "}
                 <InlineCode>{id}</InlineCode>
               </span>
             ))}{" "}
-            may change it (<InlineCode>api.auth.company_writers</InlineCode>); every other token
+            may change it (<InlineCode>api.auth.company_writers</InlineCode>); every other admin key
             reads it, and can still rotate a credential it names.
           </span>
         )}
@@ -405,8 +444,24 @@ function Binding({ binding }: { binding: AccessBinding }) {
   );
 }
 
-/** The person a token acts as, or the plain fact that it acts as nobody. */
-function ActsAs({ seat }: { seat: AccessSeat | null }) {
-  if (!seat) return <EmptyValue label="Nobody — writes under its own label" />;
+/**
+ * The person a token acts as, or the plain fact that it acts as nobody — and
+ * what that leaves it: an admin key nobody binds still changes the
+ * configuration under its own label, and a member key nobody binds changes
+ * nothing at all, since every change a member makes is made as a person.
+ */
+function ActsAs({ seat, role }: { seat: AccessSeat | null; role: TokenRole }) {
+  if (!seat) {
+    return (
+      <EmptyValue
+        label={role === "admin" ? "Nobody — writes under its own label" : "Nobody — reads only"}
+      />
+    );
+  }
   return <SeatCell handle={seat.handle} name={seat.name} kind="human" />;
+}
+
+/** A sentence's first letter in lower case, to follow a colon. */
+function lowerFirst(text: string): string {
+  return text.charAt(0).toLowerCase() + text.slice(1);
 }

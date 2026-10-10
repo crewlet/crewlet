@@ -1,6 +1,6 @@
 /**
  * A project's files: what is kept, a page at a time, and a download that
- * carries the operator's token rather than a bare link.
+ * carries the stored key rather than a bare link.
  */
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";

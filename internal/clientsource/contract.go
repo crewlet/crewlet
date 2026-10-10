@@ -108,7 +108,9 @@ var contract = []Entry{
 	{"AccessSeat", ReadInterface, "internal/api/queries.TestTheAccessScreenReadsWhatThisAnswerSends"},
 	{"AccessPerson", ReadInterface, "internal/api/queries.TestTheAccessScreenReadsWhatThisAnswerSends"},
 	{"AccessContact", ReadInterface, "internal/api/queries.TestTheAccessScreenReadsWhatThisAnswerSends"},
-	{"TokenScope", ReadUnion, "internal/api/queries.TestTheDashboardKnowsExactlyTheAccessStates"},
+	{"TokenRole", ReadUnion, "internal/api/queries.TestTheDashboardKnowsExactlyTheAccessStates"},
+	{"AnonymousAccess", ReadUnion, "internal/api/queries.TestTheDashboardKnowsExactlyTheAccessStates"},
+	{"Reach", ReadUnion, "internal/api/queries.TestTheDashboardKnowsExactlyTheAccessStates"},
 	{"AccessBinding", ReadUnion, "internal/api/queries.TestTheDashboardKnowsExactlyTheAccessStates"},
 
 	// credentials.ts

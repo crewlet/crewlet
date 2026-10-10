@@ -106,7 +106,11 @@ class InertWebSocket {
 
 function mount(
   over: Partial<BackupsAnswer> = {},
-  { strict = false, historySeconds = (30 * 86_400) as number | null } = {},
+  {
+    strict = false,
+    historySeconds = (30 * 86_400) as number | null,
+    viewer = undefined as unknown,
+  } = {},
 ) {
   const store = new Store();
   store.applyOrg(withDerived(org) as never);
@@ -119,6 +123,7 @@ function mount(
   const socket = new LiveSocket(store);
   const query = vi.fn((what: string) => {
     if (what === "backups") return Promise.resolve({ ...answer(), ...over });
+    if (what === "viewer" && viewer !== undefined) return Promise.resolve(viewer);
     return new Promise(() => {});
   });
   (socket as unknown as { query: typeof query }).query = query;
@@ -198,7 +203,7 @@ test("the newest counted point is the engine's, and the others say why they are 
 });
 
 // EVERY REQUESTED BACKUP, WITH THE HOST THAT HOLDS IT, a failure drawn as one
-// and a bound token drawn as its person.
+// and a bound key drawn as its person, the key kept on the title.
 test("the history lists each backup with its node, its person and its outcome", async () => {
   mount();
   await settle();
@@ -211,7 +216,11 @@ test("the history lists each backup with its node, its person and its outcome", 
     .getByText("/var/backups/crewlet-20260929-0200")
     .closest(".grid-row") as HTMLElement;
   expect(within(landed).getByText("Written")).toBeTruthy();
-  expect(within(landed).getByRole("link", { name: /Jane Founder/ })).toBeTruthy();
+  expect(
+    within(landed)
+      .getByRole("link", { name: /Jane Founder/ })
+      .getAttribute("title"),
+  ).toBe("Jane Founder, through the key U0FOUNDER");
   expect(screen.getByText("Requested").closest(".crewlet-statcard")?.textContent).toMatch(
     /1 failed/,
   );
@@ -326,8 +335,8 @@ test("a directory the host cannot create is said on the field", async () => {
   expect(screen.queryByText(/api_backup_failed/)).toBeNull();
 });
 
-// A READER WITH NO TOKEN is refused the section, and the button says why.
-test("without an operator token the section is refused and the button says why", async () => {
+// A READER WITH NO KEY is refused the section, and the button says why.
+test("without a key the section is refused and the button says why", async () => {
   clearToken();
   const { query } = mount();
   await settle();
@@ -336,6 +345,20 @@ test("without an operator token the section is refused and the button says why",
   expect(
     button.getAttribute("aria-disabled") ?? String((button as HTMLButtonElement).disabled),
   ).toMatch(/true/);
+});
+
+// A MEMBER'S KEY IS REFUSED THE SECTION TOO, once the viewer has said what it
+// is: the history and the retention report are both an admin's (ADR-0031), so
+// neither is drawn — not even the answer a key in flight was already sent —
+// and the button says who it is for.
+test("a member's key is refused the backups and the retention report alike", async () => {
+  mount({}, { viewer: { token_id: "ada", role: "member", reach: "member", linked: true } });
+  await settle();
+  expect(screen.getByText(/This is for admins/)).toBeTruthy();
+  expect(screen.queryByText("Replication")).toBeNull();
+  expect(screen.getByRole("button", { name: "Take a backup" }).getAttribute("title")).toBe(
+    "Taking a backup is for admins.",
+  );
 });
 
 // CLOSING DOES NOT LOSE THE OUTCOME. The engine finishes a copy whether or not

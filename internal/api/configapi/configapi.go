@@ -1,12 +1,11 @@
 // Package configapi serves /config: the versioned company document, its
 // history, and the write path that activates a new revision.
 //
-// EVERY ROUTE HERE IS GUARDED, reads included, and that is not the usual
-// posture on this API. Reading this surface exposes the whole company
-// document — its org chart, its integrations, and the shape of every
-// credential it holds — and writing it changes the company. The auth package
-// makes /config the one prefix that is never eligible for
-// allow_anonymous_read.
+// EVERY ROUTE HERE IS ADMIN, reads included (ADR-0031). Reading this surface
+// exposes the whole company document — its org chart, its integrations, and
+// the shape of every credential it holds — and writing it changes what the
+// company does. That is how the engine is RUN, which is the side of the
+// withholding rule a member key never reaches.
 //
 // A WRITE HERE DOES NOT APPLY ANYTHING. It stores a revision and moves the
 // activation pointer; every node, including this one, applies it on its own
@@ -147,7 +146,13 @@ func New(opts Options) (*Service, error) {
 }
 
 // Routes registers the surface on the API's mux.
-func (s *Service) Routes(mux httpjson.Router) {
+//
+// ADMIN, ALL OF IT, reads included (ADR-0031): reading the document exposes
+// the whole company — every integration it wires and every ${VAR} it names —
+// and writing it changes what the company does. company_writers narrows which
+// admin keys may write it ([Service.Authorize]); it never opens it to anybody
+// below.
+func (s *Service) Routes(mux auth.Router) {
 	// ONE SUB-MUX BEHIND ONE WRAPPER, so no response under /config can be
 	// written without the Cache-Control below: not a route added later, not
 	// an error path, not the 404 or 405 this mux answers for a path or a
@@ -193,8 +198,8 @@ func (s *Service) Routes(mux httpjson.Router) {
 	// AND THOSE TWO ARE JSON, like every other answer here: see
 	// [httpjson.Mux].
 	surface := noStore(httpjson.Mux(routes))
-	mux.Handle("/config", surface)
-	mux.Handle("/config/", surface)
+	mux.Handle("/config", auth.ReachAdmin, surface)
+	mux.Handle("/config/", auth.ReachAdmin, surface)
 }
 
 // noStore marks every response it wraps as never to be stored.
@@ -203,7 +208,7 @@ func (s *Service) Routes(mux httpjson.Router) {
 // document: its org chart, its contact identities, the ${VAR} name behind every
 // credential and the shape of the rest. Answered with an ETag and no
 // Cache-Control, a browser keeps it in its HTTP disk cache, where it outlives
-// the tab, the session and the operator token that was needed to read it. An
+// the tab, the session and the admin key that was needed to read it. An
 // error body is included because it can quote the document back (a validation
 // failure names the field and the value it refused).
 //
@@ -869,12 +874,11 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 // authorOf is the operator the guard authenticated on this request, as the
 // author of the revision it writes.
 //
-// AN OPERATOR, ALWAYS: every write on this surface is made with a credential
-// a person holds — /config is always guarded — and the engine's own writes
-// reach [Service.Apply] directly, stating themselves as the node.
+// AN OPERATOR, ALWAYS: every write on this surface is made with an admin key
+// somebody holds — /config is mounted at admin reach — and the engine's own
+// writes reach [Service.Apply] directly, stating themselves as the node.
 func authorOf(r *http.Request) store.Author {
-	operator, _ := auth.OperatorFrom(r.Context())
-	return store.Author{Name: operator, Kind: store.AuthorOperator}
+	return store.Author{Name: auth.PrincipalFrom(r.Context()).ID, Kind: store.AuthorOperator}
 }
 
 // revisionSource is the source every revision this surface writes records.

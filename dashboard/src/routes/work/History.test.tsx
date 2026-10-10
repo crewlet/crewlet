@@ -173,9 +173,7 @@ test("a write an operator made is marked as one", async () => {
   expect(who[1]).not.toContain("agent");
   expect(who[2]).toContain("Ada Okonkwo");
   expect(who[2]).not.toContain("founder");
-  expect(rows[2]!.querySelector("[title]")?.getAttribute("title")).toBe(
-    "Through the token founder",
-  );
+  expect(rows[2]!.querySelector("[title]")?.getAttribute("title")).toBe("Through the key founder");
 });
 
 // A HANDLE IS THE DATABASE'S WORD FOR A PERSON, resolved through the chart
@@ -410,7 +408,14 @@ const prioritised = () =>
 test("a queue somebody else's is named as theirs", async () => {
   serving({
     work_activity: { records: [prioritised()], complete: true },
-    viewer: { operator_id: "op-1", operator: true, handle: "ada", name: "Ada Okonkwo" },
+    viewer: {
+      token_id: "op-1",
+      role: "admin",
+      reach: "admin",
+      linked: true,
+      handle: "ada",
+      name: "Ada Okonkwo",
+    },
   });
   const { container } = mount();
   await waitFor(() => expect(container.querySelector(".work-log-what")).toBeTruthy());
@@ -423,7 +428,14 @@ test("a queue somebody else's is named as theirs", async () => {
 test("a reader looking at their own queue is still addressed as themselves", async () => {
   serving({
     work_activity: { records: [prioritised()], complete: true },
-    viewer: { operator_id: "op-2", operator: true, handle: "agent-swe", name: "SWE" },
+    viewer: {
+      token_id: "op-2",
+      role: "admin",
+      reach: "admin",
+      linked: true,
+      handle: "agent-swe",
+      name: "SWE",
+    },
   });
   const { container } = mount();
   await waitFor(() =>

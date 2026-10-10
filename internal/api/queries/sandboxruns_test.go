@@ -45,7 +45,7 @@ func askRuns(t *testing.T, store queries.PendingRuns) []map[string]any {
 	t.Helper()
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Sandbox: store})
-	got, err := r.Answer(t.Context(), "sandbox_runs", nil, "")
+	got, err := r.Answer(t.Context(), "sandbox_runs", nil, asAdmin("ops"))
 	if err != nil {
 		t.Fatalf("sandbox_runs: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestARunNoChatCanAnswerSaysSo(t *testing.T) {
 func TestARegistryWithNoRunRecordDoesNotAnswerTheQuestion(t *testing.T) {
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{})
-	if _, err := r.Answer(t.Context(), "sandbox_runs", nil, ""); err == nil {
+	if _, err := r.Answer(t.Context(), "sandbox_runs", nil, asAdmin("ops")); err == nil {
 		t.Fatal("a registry with no run record answered the question")
 	}
 }
@@ -270,7 +270,7 @@ func TestAnUnreachableRunRecordIsUnavailableRatherThanFailed(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Sandbox: unreachableRuns{}})
-	if _, err := r.Answer(t.Context(), "sandbox_runs", nil, ""); !errors.Is(err, queries.ErrUnavailable) {
+	if _, err := r.Answer(t.Context(), "sandbox_runs", nil, asAdmin("ops")); !errors.Is(err, queries.ErrUnavailable) {
 		t.Fatalf("an unreachable run record answered %v, want ErrUnavailable", err)
 	}
 }
@@ -392,7 +392,7 @@ func TestSandboxRunsNarrowsToOnePersonsAudience(t *testing.T) {
 	queries.Register(r, queries.Sources{Sandbox: store, Company: func() *config.Company { return cfg }})
 	ask := func(params map[string]any) map[string]map[string]any {
 		t.Helper()
-		got, err := r.Answer(t.Context(), "sandbox_runs", params, "")
+		got, err := r.Answer(t.Context(), "sandbox_runs", params, asAdmin("ops"))
 		if err != nil {
 			t.Fatalf("sandbox_runs %v: %v", params, err)
 		}

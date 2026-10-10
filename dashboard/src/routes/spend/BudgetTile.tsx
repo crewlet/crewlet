@@ -27,8 +27,8 @@ export function BudgetTile({
   /** `null` until a node has reported the counters: see {@link OrgBudget}. */
   budget: OrgBudget | null;
   /**
-   * Whether the reader may set a ceiling: `mayChangeConfig` — an operator,
-   * and on a managed document one of its writers.
+   * Whether the reader may set a ceiling: `mayChangeConfig` — an admin, and
+   * on a managed document one of its writers.
    */
   mayConfigure: boolean;
 }) {

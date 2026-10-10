@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/config"
@@ -212,20 +213,20 @@ func TestAnUnreadableRegisterIsNotANeverBackedUpFleet(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
 	queries.Register(r, backupSources(t, register{err: errors.New("broker down")}, ""))
-	if _, err := r.Answer(t.Context(), "backups", nil, "founder"); err == nil {
+	if _, err := r.Answer(t.Context(), "backups", nil, asAdmin("founder")); err == nil {
 		t.Fatal("an unreadable register answered")
 	}
 }
 
-// OPERATOR-ONLY, and unregistered without both halves.
-func TestTheBackupsAnswerIsOperatorOnly(t *testing.T) {
+// AN ADMIN'S, and unregistered without both halves.
+func TestTheBackupsAnswerIsAnAdminsAlone(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
 	queries.Register(r, backupSources(t, fourOwners(), ""))
-	if !r.RequiresOperator("backups") {
-		t.Fatal("backups is served to any caller")
+	if r.ReachOf("backups") != auth.ReachAdmin {
+		t.Fatal("backups is served below admin")
 	}
-	if _, err := r.Answer(t.Context(), "backups", nil, ""); !errors.Is(err, queries.ErrUnauthorized) {
+	if _, err := r.Answer(t.Context(), "backups", nil, nobody); !errors.Is(err, queries.ErrUnauthorized) {
 		t.Errorf("anonymous backups answered %v, want an authorization refusal", err)
 	}
 	for name, s := range map[string]queries.Sources{
@@ -246,7 +247,7 @@ func TestTheBackupsScreenReadsWhatTheAnswerSends(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
 	queries.Register(r, backupSources(t, fourOwners(), ""))
-	raw, err := r.Answer(t.Context(), "backups", nil, "founder")
+	raw, err := r.Answer(t.Context(), "backups", nil, asAdmin("founder"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -20,7 +20,7 @@
  * serves redacted: a key written inline goes back as the mask, and the engine
  * restores it from the revision it was read from.
  *
- * Operator-only, like the rest of the column: which variable holds each
+ * Admin-only, like the rest of the column: which variable holds each
  * model's key, and when each is benched, is a map of which credential to take.
  */
 

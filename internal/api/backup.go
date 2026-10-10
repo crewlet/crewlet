@@ -59,7 +59,7 @@ func (a *App) serveBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	operator, _ := auth.OperatorFrom(r.Context())
+	operator := auth.PrincipalFrom(r.Context()).ID
 	// WithoutCancel: a backup that has begun copying should finish and
 	// leave one coherent artifact rather than a directory abandoned
 	// halfway because the client hung up. The pieces already written are

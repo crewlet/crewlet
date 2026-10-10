@@ -7,11 +7,13 @@
 
 ## The decision
 
-Tier A's `api.auth.company_writers` lists the token ids that alone may
-**change** the company document. Empty is every token, today's posture. Set,
-the document is *managed*: some other system — a GitOps pipeline, a
+Tier A's `api.auth.company_writers` lists the admin keys that alone may
+**change** the company document. Empty is every admin key, today's posture.
+Set, the document is *managed*: some other system — a GitOps pipeline, a
 Kubernetes operator rendering it from custom resources — is its source, and
-writes it with its own token.
+writes it with its own key. A member key never changes the document whatever
+the list says — `/config` and `/setup` are admin surfaces (ADR-0031) — and a
+member key listed here is refused by validation rather than promoted.
 
 Every write onto the document reaches `configapi`'s prepare, which asks
 `Service.Authorize` before it reads anything — and each HTTP route asks it
@@ -57,17 +59,18 @@ renders the company; refusing them that is an outage the setting caused.
 
 ## What this does not decide
 
-It is not a privilege boundary. It prevents silent drift between the managing
-system and the running document; it does not keep a credential from changing
-what the document does. Every token still writes the secret store and can
-reload, so a token that is not a writer can rewrite any value the document
-references through a `${VAR}` — a model's key, a webhook secret, an endpoint —
-and publish it. A deployment that needs separation must not issue tokens it
-does not trust.
+The role is the boundary; `company_writers` is drift control among admin keys.
+It prevents silent drift between the managing system and the running document;
+it does not keep an admin key from changing what the document does. Every
+admin key still writes the secret store and can reload, so an admin key that
+is not a writer can rewrite any value the document references through a
+`${VAR}` — a model's key, a webhook secret, an endpoint — and publish it. A
+deployment that needs separation gives whoever must not run the engine a
+member key (ADR-0031), never a narrower writer list.
 
-It does not decide who may READ the document — reads are unchanged — nor who
-may write the secret store, the work tracker, the knowledge base or anything
-else outside the company document. It does not stop the engine's own
+It does not decide who may READ the document — that is the role's, and the
+document is an admin's to read — nor who may write the secret store, the work
+tracker, the knowledge base or anything else outside the company document. It does not stop the engine's own
 node-authored writes, which a managing system should carry or re-derive. It
 does not make Tier A agree across a fleet: the list is per node like the rest
 of `api.auth`, and every node should carry the same one.

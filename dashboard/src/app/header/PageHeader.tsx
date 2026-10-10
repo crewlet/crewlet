@@ -411,8 +411,8 @@ function useTabFit(
  * Settings' sections, as a column of groups beside the screen.
  *
  * A GUARDED SECTION DRAWS ITS LOCK AND STAYS, for the reason the sidebar's
- * Settings row does: a section that vanished for a reader without an operator
- * credential is one they cannot know exists. A CROSS-LINK (Budgets, which
+ * Settings row does: a section that vanished for a reader who is not an admin
+ * is one they cannot know exists. A CROSS-LINK (Budgets, which
  * lives once, under Spend) draws an arrow, because pressing it leaves
  * Settings. A figure beside a section is handed in whole, in the column's own
  * two shapes (`settingsFigures.tsx` decides them and asks for what they need),
@@ -421,12 +421,13 @@ function useTabFit(
 export function SectionColumn({
   row,
   path,
-  operator,
+  admin,
   figures,
 }: {
   row: WorkspaceRow;
   path: string[];
-  operator: boolean;
+  /** Whether the reader reaches the admin sections (`viewer.admin`). */
+  admin: boolean;
   figures: Record<string, SectionFigure>;
 }) {
   // AN ADDRESS THAT NAMES NO SCREEN IS IN NO SECTION. The landing's path is
@@ -487,7 +488,7 @@ export function SectionColumn({
             <SidebarNav.Group key={g.name} label={g.name}>
               {g.sections.map((s) => {
                 const Glyph = glyphFor(s.icon);
-                const locked = s.guarded && !operator;
+                const locked = s.guarded && !admin;
                 const figure = figures[s.key];
                 return (
                   <SidebarNav.Item
@@ -501,7 +502,7 @@ export function SectionColumn({
                         {locked && (
                           <>
                             <KeyGlyph size="xs" aria-hidden="true" />
-                            <span className="sr-only">, needs an operator credential</span>
+                            <span className="sr-only">, for admins</span>
                           </>
                         )}
                         {s.elsewhere && (

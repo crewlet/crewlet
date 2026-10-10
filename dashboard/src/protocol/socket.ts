@@ -60,6 +60,7 @@ const FALLBACK_MS = 5_000;
 const QUERY_ERROR_CODES: Record<QueryErrorCode, true> = {
   unknown_query: true,
   unauthorized: true,
+  forbidden: true,
   query_failed: true,
   bad_params: true,
   not_found: true,
@@ -151,7 +152,7 @@ export class LiveSocket {
     this.store = store;
   }
 
-  /** Operator bearer token, sent on the handshake and with every query frame. */
+  /** The browser's key, sent on the handshake and with every query frame. */
   setToken(token: string): void {
     this.token = token || "";
     // A supplied credential clears the ask-once latch. The latch exists so a

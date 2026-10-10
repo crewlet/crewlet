@@ -17,7 +17,7 @@
  * # It is about WHO WAS WRITING, not about a list of people
  *
  * The two feeds narrow on `actor_kinds` rather than on a set of handles, and
- * that is the whole design: an `operator` commit carries a TOKEN's own label
+ * that is the whole design: an `operator` commit carries a KEY's own label
  * where an `agent` one carries a seat handle, so the two name spaces are
  * disjoint — and the set of people is the roster, which changes. An audit
  * assembled from handles would quietly lose every commit made by somebody who
@@ -188,9 +188,9 @@ export interface AuditEntry {
   /** `operator`, `human`, `agent`, `system` — empty where none was recorded. */
   actorKind: string;
   /**
-   * The seat an operator token was BOUND to when it wrote this, where the
-   * record carries one (the tracker's `actor_seat`). `actor` stays the token,
-   * which is the audit trail; this is the person the row draws.
+   * The seat a key was BOUND to when it wrote this, where the record carries
+   * one (the tracker's `actor_seat`). `actor` stays the key, which is the
+   * audit trail; this is the person the row draws.
    */
   actorSeat?: string;
   /** What it was done to, as a person would name it. */
@@ -298,14 +298,14 @@ function list<T>(value: T[] | null | undefined): T[] {
 /**
  * Who a row's writer IS, as the Who column draws them.
  *
- * AN OPERATOR IS A PERSON, AND A TOKEN IS NOT A SEAT. An `operator` write
- * carries the TOKEN's name as its actor, and the chart has no seat by that
- * name — so the cell drew every operator as the chart's default, the agent's
+ * A KEY'S WRITE IS A PERSON'S, AND A KEY IS NOT A SEAT. An `operator` write
+ * carries the KEY's name as its actor, and the chart has no seat by that name
+ * — so the cell drew every such writer as the chart's default, the agent's
  * squircle, and linked "maya" to a seat page that does not exist. So:
  *
- *  - a token BOUND to a person (`actorSeat`) draws that person's seat, as a
- *    person, linking to it — the token stays in the tooltip and in the CSV;
- *  - an unbound token draws the human circle and its name as PLAIN TEXT,
+ *  - a key BOUND to a person (`actorSeat`) draws that person's seat, as a
+ *    person, linking to it — the key stays in the tooltip and in the CSV;
+ *  - an unbound key draws the human circle and its name as PLAIN TEXT,
  *    since there is no page to link to;
  *  - a seat's own write takes the chart's kind, or where the chart no longer
  *    holds the seat, the kind the write was recorded under;
@@ -326,7 +326,7 @@ export function writerOf(
   if (row.actorKind === "operator") {
     if (!row.actorSeat) return { as: "token", name: row.actor };
     const seat = who(row.actorSeat);
-    // A PERSON EITHER WAY: a token is only ever bound to a person, so a seat
+    // A PERSON EITHER WAY: a key is only ever bound to a person, so a seat
     // the chart no longer holds is still drawn as one.
     return {
       as: "seat",
@@ -360,9 +360,7 @@ function WriterCell({ writer }: { writer: Writer }) {
           handle={writer.handle}
           name={writer.name}
           kind={writer.kind}
-          {...(writer.token
-            ? { title: `${writer.name}, through the operator token ${writer.token}` }
-            : {})}
+          {...(writer.token ? { title: `${writer.name}, through the key ${writer.token}` } : {})}
         />
       );
     case "token":
@@ -743,7 +741,7 @@ export function Audit() {
           <Card.Header
             icon={<FileTextGlyph size="sm" />}
             count={shown.length}
-            subtitle="Every write a person or a token made, every call they made at runtime, and every configuration revision, whoever wrote it."
+            subtitle="Every write a person or a key made, every call they made at runtime, and every configuration revision, whoever wrote it."
           >
             <Card.Title>What was done</Card.Title>
           </Card.Header>
@@ -755,7 +753,7 @@ export function Audit() {
             isFailed={(row) => row.failed === true}
             empty={{
               title: "Nothing in this window",
-              hint: "No person and no operator token wrote anything here over this range. Widen the window, or clear the filters.",
+              hint: "No person and no key wrote anything here over this range. Widen the window, or clear the filters.",
               icon: "file-text",
             }}
             loadedNote={`${shown.length} loaded`}
@@ -777,12 +775,12 @@ export function Audit() {
  */
 function useSecrets(): { rows: SecretRow[] | null } {
   // BEST EFFORT, like every other credential read on a screen that is not
-  // about credentials: an operator without the scope for `/secrets` still has
-  // an audit of everything else, and a failed read here must not take the
-  // tracker's and the wiki's rows down with it — so its refusal is simply no
-  // rows. It re-reads when a token is set, which this read never did: an
-  // operator who set one here saw the credential rows only after leaving the
-  // screen and coming back.
+  // about credentials: a read of `/secrets` that fails — a node with no
+  // keyring, a key narrowed since the screen opened — still leaves an audit
+  // of everything else, and must not take the tracker's and the wiki's rows
+  // down with it — so its refusal is simply no rows. It re-reads when a key
+  // is set, which this read never did: an admin who set one here saw the
+  // credential rows only after leaving the screen and coming back.
   const secrets = useRest(
     "/secrets",
     (signal) => rest.get("/secrets", signal) as Promise<{ secrets?: SecretRow[] } | null>,

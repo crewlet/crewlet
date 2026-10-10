@@ -38,16 +38,16 @@ import { useSearchTarget } from "~/app/searchTarget.ts";
 import { usePageMenu, useSectionCounts } from "~/app/Shell.tsx";
 import { useSchedules } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { useManagedConfig } from "~/lib/useWriteAccess.ts";
+import { notAdminSentence, useManagedConfig } from "~/lib/useWriteAccess.ts";
 import { handleLabel, type OrgIndex, type Seat } from "~/lib/seats.ts";
 import { unitPath } from "~/lib/orgchart.ts";
 
 /** How many matches the finder lists: a screenful, never the company. */
 const FIND_LIMIT = 8;
 
-/** The reason Add seat cannot be pressed by somebody who may not change the org. */
+/** The reason Add seat cannot be pressed by somebody with no key at all. */
 export const ADD_SEAT_REASON =
-  "Changing the org needs an operator token — the company configuration is guarded";
+  "Changing the org needs an admin's API key — the company configuration is an admin's";
 
 /**
  * The seats a finder term matches, best first: a name or handle that STARTS
@@ -115,14 +115,16 @@ export function AgentsHeader({
   const managed = useManagedConfig();
   const nav = useNavigator();
   // WHY ADD SEAT CANNOT BE PRESSED, or null: it opens the builder to add, so
-  // it is held exactly where the builder would open read-only — no operator
-  // credential, or a managed document this token is not a writer of
-  // (ADR-0030), with the sentence that names who manages it.
+  // it is held exactly where the builder would open read-only — no key, a
+  // member's key (with the admin to ask), or a managed document this key is
+  // not a writer of (ADR-0030), with the sentence that names who manages it.
   const held = viewer.loading
     ? "Checking your access"
-    : !viewer.operator
+    : viewer.anonymous
       ? ADD_SEAT_REASON
-      : managed;
+      : !viewer.admin
+        ? notAdminSentence(viewer.admins)
+        : managed;
   // ON A PHONE, Edit org FOLDS INTO "More": the bar keeps the finder and the
   // one action the chart invites in view, where the three side by side put
   // Add seat past the window's edge.

@@ -3,15 +3,15 @@
  *
  * # Polled only while Settings is open
  *
- * `fleet`, `retention` and `integrations` are operator-only answers with no
+ * `fleet`, `retention` and `integrations` are admin-only answers with no
  * push behind them, so a figure drawn from one is a poll. The frame is mounted
  * for the life of the tab and React will not let a hook be called
  * conditionally, so the hook runs on every screen — and a hook that polled
- * unconditionally would ask an operator's engine three questions on a timer
- * for the whole life of every tab, on screens that draw none of the answers,
- * and ask a reader without a credential three refusals on the same timer. So
- * each query is ENABLED only while the Settings column is on screen and the
- * reader holds an operator credential; everywhere else the hook asks nothing.
+ * unconditionally would ask the engine three questions on a timer for the
+ * whole life of every tab, on screens that draw none of the answers, and ask
+ * a reader who is not an admin three refusals on the same timer. So each
+ * query is ENABLED only while the Settings column is on screen and the reader
+ * is an admin; everywhere else the hook asks nothing.
  *
  * # What each figure is
  *
@@ -148,23 +148,24 @@ export function settingsFigures({
 }
 
 /**
- * The column's figures, asking the three operator answers only while `here`
- * (the Settings column is drawn) and only for an operator. See the file doc.
+ * The column's figures, asking the three admin answers only while `here`
+ * (the Settings column is drawn) and only for an admin. See the file doc.
  */
 export function useSettingsSidebar({
   here,
-  operator,
+  admin,
   health,
   published,
 }: {
   here: boolean;
-  operator: boolean;
+  /** Whether the reader reaches the admin answers (`viewer.admin`). */
+  admin: boolean;
   health: EngineHealth | null | undefined;
   /** The `fleet` answer a screen on the page already polls — see
    *  `usePublishFleet`. While one is published the column asks nothing. */
   published: { answer: FleetAnswer | null } | null;
 }): Record<string, SectionFigure> {
-  const enabled = here && operator;
+  const enabled = here && admin;
   const fleet = useQuery("fleet", undefined, {
     enabled: enabled && published === null,
     pollMs: SETTINGS_POLL_MS.fleet,

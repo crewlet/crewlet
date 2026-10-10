@@ -183,7 +183,15 @@ async function settle() {
 
 const params = (what: string) => asks.filter((a) => a.what === what).map((a) => a.params);
 
-const VIEWER = { operator_id: "op-1", operator: true, handle: "jane", name: "Jane", kind: "human" };
+const VIEWER = {
+  token_id: "op-1",
+  role: "admin",
+  reach: "admin",
+  linked: true,
+  handle: "jane",
+  name: "Jane",
+  kind: "human",
+};
 
 // THE CONTROL: a window that answered is what the hero is of, and says so in
 // the ANSWER's words — thirty days, from the answer's own `days`.
@@ -350,7 +358,7 @@ test("before the first budget report the tile waits, and offers nothing", async 
 });
 
 // NO CEILING IS SAID, AND ONLY THE READER WHO CAN SET ONE IS OFFERED TO.
-test("no monthly budget says so, and offers to set one only to an operator", async () => {
+test("no monthly budget says so, and offers to set one only to an admin", async () => {
   mount("#/spend?window=30d", <Spend />, { tokens: rollup(1), viewer: VIEWER }, (store) =>
     store.applyBudget(UNCAPPED),
   );
@@ -366,7 +374,7 @@ test("no monthly budget says so, and offers to set one only to an operator", asy
     <Spend />,
     {
       tokens: rollup(1),
-      viewer: { operator_id: "", operator: false, handle: "", name: "", kind: "" },
+      viewer: { token_id: "", role: "", reach: "public", handle: "", name: "", kind: "" },
     },
     (store) => store.applyBudget(UNCAPPED),
   );
@@ -375,8 +383,8 @@ test("no monthly budget says so, and offers to set one only to an operator", asy
   expect(screen.queryByRole("link", { name: "Set one" })).toBeNull();
 });
 
-// A MANAGED DOCUMENT (ADR-0030) IS SET WHERE IT IS MANAGED: an operator whose
-// token is not one of its writers is told there is no ceiling and offered no
+// A MANAGED DOCUMENT (ADR-0030) IS SET WHERE IT IS MANAGED: an admin whose
+// key is not one of its writers is told there is no ceiling and offered no
 // way to set one, which Spend › Budgets would only hold.
 test("on a managed document only a writer is offered to set a budget", async () => {
   mount(

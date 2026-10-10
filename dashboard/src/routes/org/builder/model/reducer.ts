@@ -165,7 +165,7 @@ export type BuilderAction =
   | { readonly type: "redo" }
   | { readonly type: "discard" }
   | { readonly type: "checked"; readonly settled: SettledCheck }
-  /** The operator token changed: the tab may have changed hands. */
+  /** The stored key changed: the tab may have changed hands. */
   | { readonly type: "tokenChanged" }
   /**
    * A save landed as `revisionId`, and `derived` is the derivation its answer
@@ -236,9 +236,9 @@ export function isBaseKeyed(state: BuilderState): boolean {
  * `null` when neither did. Keying the base from a check's answer changes
  * neither the base document nor its revision, so it asks for nothing.
  *
- * A change of operator token moves no generation and no base, and resets the
- * check all the same (every answer may differ): its owner calls the runner's
- * `reset` directly when the token changes.
+ * A change of key moves no generation and no base, and resets the check all
+ * the same (every answer may differ): its owner calls the runner's `reset`
+ * directly when the key changes.
  */
 export function checkTrigger(prev: BuilderState, next: BuilderState): "reset" | "changed" | null {
   if (
@@ -446,7 +446,10 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
           : state.check.derived;
       let next: BuilderState = {
         ...state,
-        keep: outcome.status === "guarded" ? false : state.keep,
+        // A REFUSED KEY MAY BE THE TAB CHANGING HANDS, whether the engine
+        // took no key or a member's: the draft is not kept for whoever holds
+        // the tab next.
+        keep: outcome.status === "guarded" || outcome.status === "forbidden" ? false : state.keep,
         check: {
           generation: settled.generation,
           outcome,

@@ -14,7 +14,7 @@
  * NEVER HIDDEN. Both are drawn for every reader and disabled with the reason
  * for one who cannot change the company's configuration
  * (`useConfigWriteAccess`), which is a different gate from acting in it: a
- * ceiling is a `/config` change, guarded by the operator credential.
+ * ceiling is a `/config` change, which is an admin's (ADR-0031).
  *
  * THERE IS NO RESET, and nothing here offers one. A window's `used` IS what
  * the window spent; the room comes back when it turns over on the company
@@ -107,7 +107,7 @@ function WriteStatus({ write, onReload }: { write: CeilingWrite; onReload: () =>
 // ---------------------------------------------------------------------------
 
 /**
- * One window's ceiling as a figure, and — for an operator — as a field.
+ * One window's ceiling as a figure, and — for an admin — as a field.
  *
  * WHAT IT SHOWS AFTER A SAVE is the ceiling SAVED, marked as applying, until
  * this node has applied it and the answer the screen draws carries it. Going

@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"net/url"
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/queries"
 )
 
@@ -20,9 +22,9 @@ func answersWith(v any) queries.Answer {
 func TestARegisteredQuestionIsAnswered(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
-	r.Register("events", answersWith("rows"))
+	r.Register("events", auth.ReachOpen, answersWith("rows"))
 
-	got, err := r.Answer(t.Context(), "events", nil, "")
+	got, err := r.Answer(t.Context(), "events", nil, nobody)
 	if err != nil {
 		t.Fatalf("Answer: %v", err)
 	}
@@ -34,66 +36,70 @@ func TestARegisteredQuestionIsAnswered(t *testing.T) {
 func TestAnUnregisteredQuestionIsUnknown(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
-	_, err := r.Answer(t.Context(), "nope", nil, "")
+	_, err := r.Answer(t.Context(), "nope", nil, asAdmin("ops"))
 	if !errors.Is(err, queries.ErrUnknown) {
 		t.Errorf("err = %v, want ErrUnknown", err)
 	}
-	// And it names the question: a client switching on the code still
-	// needs a log line saying which name nothing answered.
-	if err == nil || !slices.Contains([]string{"nope"}, "nope") {
-		t.Error("unreachable")
+	if err == nil || !strings.Contains(err.Error(), "nope") {
+		t.Errorf("err = %v, want it to name the question nothing answered", err)
 	}
 }
 
-func TestAnOperatorQuestionRefusesAnAnonymousCaller(t *testing.T) {
+// A QUESTION SERVES EXACTLY THE CALLERS ITS REACH COVERS, and refuses the rest
+// in two different words: `unauthorized` to a caller with no key, who should
+// sign in, and `forbidden` to one whose key was accepted and reaches less, for
+// whom signing in again would change nothing.
+func TestAQuestionServesExactlyTheCallersItsReachCovers(t *testing.T) {
 	t.Parallel()
-	// The config surface is all of them: reading it exposes the whole
-	// company document, including every ${VAR} reference by name.
+	callers := map[string]auth.Principal{
+		"nobody, anonymous none":   {Reach: auth.ReachOpen},
+		"nobody, anonymous public": nobody,
+		"a member":                 asMember("ada"),
+		"an admin":                 asAdmin("founder"),
+	}
 	r := queries.NewRegistry()
-	r.RegisterOperator("config", answersWith("the company"))
-
-	if _, err := r.Answer(t.Context(), "config", nil, ""); !errors.Is(err, queries.ErrUnauthorized) {
-		t.Errorf("err = %v, want ErrUnauthorized", err)
+	for _, reach := range auth.Reaches {
+		r.Register(string(reach), reach, answersWith("served"))
 	}
-	got, err := r.Answer(t.Context(), "config", nil, "founder")
-	if err != nil {
-		t.Fatalf("an operator was refused: %v", err)
-	}
-	if got != "the company" {
-		t.Errorf("answer = %v", got)
+	for name, caller := range callers {
+		for _, reach := range auth.Reaches {
+			got, err := r.Answer(t.Context(), string(reach), nil, caller)
+			switch {
+			case caller.Reach.Covers(reach):
+				if err != nil || got != "served" {
+					t.Errorf("%s asking a %s question = %v %v, want it served", name, reach, got, err)
+				}
+			case caller.Authenticated():
+				if !errors.Is(err, queries.ErrForbidden) {
+					t.Errorf("%s asking a %s question = %v, want forbidden", name, reach, err)
+				}
+			default:
+				if !errors.Is(err, queries.ErrUnauthorized) {
+					t.Errorf("%s asking a %s question = %v, want unauthorized", name, reach, err)
+				}
+			}
+		}
 	}
 }
 
-func TestAPublicQuestionServesAnAnonymousCaller(t *testing.T) {
+// REACHOF IS WHAT ANSWER ENFORCES. The REST route a question is served on is
+// mounted at it, so the route and the registry cannot disagree about who may
+// ask — and a name nothing answers declares no reach at all.
+func TestReachOfIsWhatAnswerEnforces(t *testing.T) {
 	t.Parallel()
-	// The counterfactual: requiring an operator everywhere would satisfy
-	// the case above and close the dashboard to the read posture that is
-	// the default.
 	r := queries.NewRegistry()
-	r.Register("events", answersWith("rows"))
-	if _, err := r.Answer(t.Context(), "events", nil, ""); err != nil {
-		t.Errorf("a public question refused an anonymous caller: %v", err)
+	r.Register("events", auth.ReachAdmin, answersWith(nil))
+	r.Register("work_items", auth.ReachMember, answersWith(nil))
+
+	for what, want := range map[string]auth.Reach{
+		"events": auth.ReachAdmin, "work_items": auth.ReachMember, "nope": "",
+	} {
+		if got := r.ReachOf(what); got != want {
+			t.Errorf("%s: reach = %q, want %q", what, got, want)
+		}
 	}
-}
-
-func TestRequiresOperatorMatchesWhatAnswerEnforces(t *testing.T) {
-	t.Parallel()
-	// A REST route makes the same decision before it calls the answer, so
-	// the two must not be able to disagree.
-	r := queries.NewRegistry()
-	r.Register("events", answersWith(nil))
-	r.RegisterOperator("config", answersWith(nil))
-
-	for what, want := range map[string]bool{"events": false, "config": true, "nope": false} {
-		if got := r.RequiresOperator(what); got != want {
-			t.Errorf("%s: requires operator = %v, want %v", what, got, want)
-		}
-		if !want {
-			continue
-		}
-		if _, err := r.Answer(t.Context(), what, nil, ""); !errors.Is(err, queries.ErrUnauthorized) {
-			t.Errorf("%s: RequiresOperator says yes but Answer let it through", what)
-		}
+	if _, err := r.Answer(t.Context(), "events", nil, asMember("ada")); !errors.Is(err, queries.ErrForbidden) {
+		t.Errorf("events: ReachOf says admin but Answer let a member through: %v", err)
 	}
 }
 
@@ -108,8 +114,8 @@ func TestRegisteringAQuestionTwicePanics(t *testing.T) {
 		}
 	}()
 	r := queries.NewRegistry()
-	r.Register("events", answersWith(nil))
-	r.Register("events", answersWith(nil))
+	r.Register("events", auth.ReachAdmin, answersWith(nil))
+	r.Register("events", auth.ReachAdmin, answersWith(nil))
 }
 
 func TestRegisteringNothingUsefulPanics(t *testing.T) {
@@ -119,8 +125,8 @@ func TestRegisteringNothingUsefulPanics(t *testing.T) {
 		run    func(*queries.Registry)
 		reason string
 	}{
-		{"no name", func(r *queries.Registry) { r.Register("", answersWith(nil)) }, "an unnamed question"},
-		{"no answer", func(r *queries.Registry) { r.Register("events", nil) }, "a question with no answer"},
+		{"no name", func(r *queries.Registry) { r.Register("", auth.ReachAdmin, answersWith(nil)) }, "an unnamed question"},
+		{"no answer", func(r *queries.Registry) { r.Register("events", auth.ReachAdmin, nil) }, "a question with no answer"},
 	} {
 		func() {
 			defer func() {
@@ -133,12 +139,46 @@ func TestRegisteringNothingUsefulPanics(t *testing.T) {
 	}
 }
 
+// A QUESTION THAT CANNOT SAY WHICH SIDE OF THE WITHHOLDING RULE IT IS ON IS
+// REFUSED AT REGISTRATION (ADR-0031), the zero reach included: served to
+// whoever asked because nobody classified it is how a transcript reaches a
+// public screen. And the counterfactual — every reach this build knows is
+// accepted — so a registry that refused everything fails here too.
+func TestARegistrationWithoutAReachPanics(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		run    func(*queries.Registry)
+		reason string
+	}{
+		{"no reach", func(r *queries.Registry) { r.Register("events", "", answersWith(nil)) }, "a question with no reach"},
+		{"an unknown reach", func(r *queries.Registry) { r.Register("events", "owner", answersWith(nil)) },
+			"a question with a reach this build does not know"},
+	} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("%s was accepted", tc.reason)
+				}
+			}()
+			tc.run(queries.NewRegistry())
+		}()
+	}
+	r := queries.NewRegistry()
+	for _, reach := range auth.Reaches {
+		r.Register(string(reach), reach, answersWith(nil))
+	}
+	if got := len(r.Names()); got != len(auth.Reaches) {
+		t.Errorf("registered %d of the %d reaches this build knows", got, len(auth.Reaches))
+	}
+}
+
 func TestTheRegistryListsWhatItAnswers(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
-	r.Register("events", answersWith(nil))
-	r.RegisterOperator("config", answersWith(nil))
-	r.Register("agent", answersWith(nil))
+	r.Register("events", auth.ReachAdmin, answersWith(nil))
+	r.Register("config", auth.ReachAdmin, answersWith(nil))
+	r.Register("agent", auth.ReachAdmin, answersWith(nil))
 
 	if got := r.Names(); !slices.Equal(got, []string{"agent", "config", "events"}) {
 		t.Errorf("names = %v, want them sorted", got)
@@ -149,10 +189,10 @@ func TestAFailingAnswerReachesTheCaller(t *testing.T) {
 	t.Parallel()
 	sentinel := errors.New("the store fell over")
 	r := queries.NewRegistry()
-	r.Register("events", func(context.Context, queries.Params) (any, error) {
+	r.Register("events", auth.ReachAdmin, func(context.Context, queries.Params) (any, error) {
 		return nil, sentinel
 	})
-	if _, err := r.Answer(t.Context(), "events", nil, ""); !errors.Is(err, sentinel) {
+	if _, err := r.Answer(t.Context(), "events", nil, asAdmin("ops")); !errors.Is(err, sentinel) {
 		t.Errorf("err = %v, want the answer's own", err)
 	}
 }

@@ -170,6 +170,10 @@ func TestBootstrapSchemaEnumsMatchTheValidators(t *testing.T) {
 		// has its own enum to drift.
 		{"LogFile", "format", strs(logging.Formats)},
 		{"LogFile", "level", strs(logging.Levels)},
+		// WHO REACHES WHAT (ADR-0031): an editor offering a role or a
+		// posture the guard does not know is a key that boots refused.
+		{"APIToken", "role", strs(TokenRoles)},
+		{"APIAuth", "anonymous", strs(AnonymousAccesses)},
 	} {
 		def, ok := defs[tc.def].(map[string]any)
 		if !ok {

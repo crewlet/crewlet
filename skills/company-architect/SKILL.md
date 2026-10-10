@@ -297,7 +297,9 @@ roles:
 
 `kind: human` seats are addressable but never spawned: no runtime, no
 inbox, no LLM. They require at least one `contact` identity and reject
-the runtime-only fields. Scope their `manages` to the top roles — a
+the runtime-only fields. `contact.crewlet_operator_id` links the seat to
+the person's API key by its `id`, so what they do from the dashboard is
+done as them. Scope their `manages` to the top roles — a
 founder managing every seat floods them. See
 [Humans in the org chart](https://docs.crewlet.ai/concepts/humans-in-the-org/).
 
@@ -373,7 +375,12 @@ When you finish, the founder should have:
 1. `company.yaml` — Tier B, validated, `${VAR}` for every secret.
 2. `crewlet.yaml` — Tier A: the store's file path (one local file this
    process owns — there is no DSN), the stream slot, `coordination.type`,
-   and the API host/port with at least one auth token. Leave the stream
+   and the API host/port with at least one key under `api.auth.tokens`.
+   Every key names its `role`, and there is no default: the founder's is
+   `role: admin` (she runs the engine — its configuration, secrets and
+   every agent's transcripts), and a key for a teammate is `role: member`
+   (the company's work, pages and chart, acting as the person it is linked
+   to). Leave the stream
    `type: embedded` with a `store_dir` and `coordination.type: local`:
    that is one node with no broker to operate and no service to point
    anything at, and it is what every company starts as. Validate it too

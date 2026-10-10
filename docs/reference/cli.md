@@ -23,11 +23,11 @@ subcommand below is served by it.
 | `crewlet retention maintenance status\|abandon\|exclude -stream NAME` | Where that window stands, who has not acknowledged, and the two gestures that act on it |
 | `crewlet retention reanchor -stream NAME -confirm <created_at> [-force] [-discard]` | Adopt a recreated stream, or a broker restored from an older copy: move that one log to its next generation, declaring every position below it comparable and safely stale, and resume its applier with no restart. A recreated log is followed from its first surviving record, a restored one from its end, and one continuing in a generation only an evicted peer held from this node's own checkpoint, that generation's records void. A restored log holding records written after the restore that this node's rows do not hold is refused unless `-discard` accepts that they are applied on no node |
 | `crewlet retention verify --restore -dir DIR` | Restore the newest artefact and open the copy. **Exits non-zero past its cadence** — the cron hook that turns a lapsed restore test into a failing check. Talks to no node |
-| `crewlet work purge <task-id> -project KEY -reason TEXT -confirm <task-key>` | Destroy a task and every row it produced, on every node. The one operation with no inverse, restricted to a person or an operator token. Its children move onto its own parent rather than being destroyed with it |
+| `crewlet work purge <task-id> -project KEY -reason TEXT -confirm <task-key>` | Destroy a task and every row it produced, on every node. The one operation with no inverse, restricted to an admin key. Its children move onto its own parent rather than being destroyed with it |
 | `crewlet objects status [config] [-json]` | Where the company's files are kept — the [object store's](../concepts/object-store.md) backend, `nats` or an S3 bucket — read from a running node, the node that ran the collector's last passes, and what each found: objects listed and deleted and unfinished uploads abandoned by the last collection; files named, **missing** and **damaged** by the last audit to finish, with those files listed. `-json` prints the fleet view's `objects` block as the node answered it |
 | `crewlet fleet broker list [config] [-json]` | The fleet broker's membership: each live node's broker kind (`member`, `leaf`, `client`, or `unknown` for a kind this build does not know) beside how the JetStream metadata group counts it — read through a member — and, in words, every disagreement: a member gone for good that the group still counts in every election, with the command that removes it |
 | `crewlet fleet broker remove <node> -confirm <node> [-force]`, or `-peer <peer> -confirm <peer>` | Stop the metadata group counting a member that is gone for good, through a live member's system account — by node id, or by the peer id `list` shows for a voter no member can name. Refused while the node holds a live presence lease as a member; `-force` is for a member wedged in a way that still renews it |
-| `crewlet seats pause <handle> [-stop] [-reason TEXT]` | Pause an agent seat: it starts no new turn, its mail waits in order and its scheduled runs are skipped. `-stop` also ends the turn it is on at its next round. As the person the token is bound to |
+| `crewlet seats pause <handle> [-stop] [-reason TEXT]` | Pause an agent seat: it starts no new turn, its mail waits in order and its scheduled runs are skipped. `-stop` also ends the turn it is on at its next round. As the person the key is linked to |
 | `crewlet seats resume <handle>` | Lift the pause; what waited is delivered first, in order |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
 | `crewlet config import <company.yaml>` | Load Tier B YAML, activate as a new `company_config` revision |
@@ -224,10 +224,10 @@ the note it prints says what publishes it to a running fleet.
 **On a managed document** — Tier A names
 [`api.auth.company_writers`](../concepts/configuration.md#managed-configuration)
 — the offline route presents no credential and is refused, naming the writers.
-Through a node, the node judges the token this command sends
-(`CREWLET_API_TOKEN` when set, else Tier A's first token): one of the writers
-imports as before, and any other is refused with `config_managed`, which the
-command prints with the token it sent.
+Through a node, the node judges the key this command sends
+(`CREWLET_API_TOKEN` when set, else Tier A's first admin key): one of the
+writers imports as before, and any other is refused with `config_managed`,
+which the command prints with where its key came from.
 
 ### `crewlet config export`
 
@@ -350,7 +350,7 @@ The remaining subcommands operate on the [secret store](../concepts/secret-store
 
 **Which store they reach depends on whether the engine is running**, and the command says which it used. The rows live on the coordination KV so every node reads them, and on the default topology that KV is inside the engine's own process — so a running node is written through its authenticated `/secrets` API, and a stopped one falls back to its own local table, which the engine migrates onto the fleet at its next start — replacing a name the fleet already holds only when the fleet's value was written earlier (see [Secret Store](../concepts/secret-store.md#operational-notes)). The engine's exclusive database lock is what tells the two apart, with a pid attached.
 
-`-api URL` names the node to write through, for running the command from a machine that is not the node. The bearer token comes from `CREWLET_API_TOKEN` when set, and otherwise from the first `api.auth.tokens` entry in the Tier A config; the token's id is recorded as the author of the write.
+`-api URL` names the node to write through, for running the command from a machine that is not the node. The bearer key comes from `CREWLET_API_TOKEN` when set, and otherwise from the first `api.auth.tokens` entry with `role: admin` in the Tier A config — `/secrets` is an admin's surface, reads included, so a config listing no admin key is refused before any request, naming the role it lacks; the key's id is recorded as the author of the write.
 
 ### `crewlet secrets set`
 
@@ -552,12 +552,14 @@ crewlet budgets show                       # usage per scope
 | Flag | Default | What it does |
 |---|---|---|
 | `-url` | the `api` block of the config named on the command line | The running node's base URL. A wildcard bind (`0.0.0.0`, `::`) becomes the loopback address, because a wildcard is not something anything can dial |
-| `-token` | `$CREWLET_API_TOKEN`, then the config's first `api.auth.tokens` entry | The bearer token, sent on the read. A node with `allow_anonymous_read` off answers nothing without one |
+| `-token` | `$CREWLET_API_TOKEN`, then the config's first `api.auth.tokens` entry with `role: admin` | The bearer key, sent on the read. The budgets are an admin's read, so a member key is refused `403 forbidden` and no key at all `401` |
 
-The environment wins over the config so an operator who exported a token
-deliberately gets that one. There is no token *default* on the command line:
-a token typed as an argument is in the shell history, in `ps`, and in any CI
-log that echoes the command.
+The environment wins over the config so an operator who exported a key
+deliberately gets that one. There is no key *default* on the command line:
+a key typed as an argument is in the shell history, in `ps`, and in any CI
+log that echoes the command. From the config it takes the first **admin** key,
+never the first key of either role: every surface the node commands reach is
+an admin's, so a member key listed first would be refused by each of them.
 
 The **ceilings** are not stored here — they come from the active company config
 (`token_budget` on the org, `role.token_budget` on a seat), so every process
@@ -862,9 +864,9 @@ Pause an agent seat, or resume it — the same `pause_seat` and `resume_seat`
 the dashboard's buttons call, over the same route
 ([`POST /operator/act/{tool}`](api-endpoints.md#operatoract--the-dashboards-write-surface)), so a pause from a
 terminal and one from a profile screen are one gesture with one record. It acts
-as the **person** your token is bound to (`contact.crewlet_operator_id` on
-their seat); a token nobody bound is refused `unbound`, and the refusal names
-the seat to bind it on.
+as the **person** your key is linked to (`contact.crewlet_operator_id` on
+their seat), member or admin alike; a key no seat links is refused `unbound`,
+and the refusal names the seat to link it on.
 
 A paused seat starts no new turn, its incoming mail waits on its inbox in
 order, and its scheduled runs are recorded `skipped_paused` rather than sent.

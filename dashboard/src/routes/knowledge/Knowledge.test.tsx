@@ -18,9 +18,10 @@
  *  - AN ADDRESS NAMING NO MODE RUNS IN ONE THE ENGINE SERVES. With no
  *    embeddings provider that is Keyword, and the search waits for the probe
  *    to say so rather than running Hybrid and reporting its degradation.
- *  - WHO FILES HERE HAS FOUR STATES, and "needs an operator token" is said
- *    only to a browser that holds none — never to an operator whose read of
- *    the company document is merely in flight.
+ *  - WHO FILES HERE HAS FIVE STATES, and "needs an admin key" is said only to
+ *    a browser that holds none — never to an admin whose read of the company
+ *    document is merely in flight, nor to a member, whose key is not the
+ *    problem.
  *  - A PHRASE PAST THE ENGINE'S SEARCH BOUND IS NOT ASKED, and the screen says
  *    why where the results would be.
  */
@@ -31,6 +32,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ContainerPeek, Knowledge } from "./Knowledge.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { SEARCH_QUERY_MAX } from "~/contract/wire.ts";
 
@@ -99,9 +101,11 @@ function mount(answer: Record<string, unknown>, containers: unknown[] = []) {
   }) as typeof socket.query;
   render(
     <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <Knowledge />
-      </Router>
+      <ViewerProvider>
+        <Router>
+          <Knowledge />
+        </Router>
+      </ViewerProvider>
     </ClientContext.Provider>,
   );
   return asked;
@@ -222,8 +226,17 @@ function pageRow(n: number) {
   };
 }
 
-/** Render the container rail; `config` undefined leaves that read in flight. */
-function mountPeek(options: { rows: number; total: number; after?: string; config?: unknown }) {
+/**
+ * Render the container rail; `config` undefined leaves that read in flight,
+ * and `viewer` undefined leaves the viewer unread, so the stored key decides.
+ */
+function mountPeek(options: {
+  rows: number;
+  total: number;
+  after?: string;
+  config?: unknown;
+  viewer?: unknown;
+}) {
   const store = new Store();
   const socket = new LiveSocket(store);
   const asked: { what: string; params: Record<string, unknown> }[] = [];
@@ -242,13 +255,17 @@ function mountPeek(options: { rows: number; total: number; after?: string; confi
       });
     if (what === "config")
       return options.config === undefined ? new Promise(() => {}) : Promise.resolve(options.config);
+    if (what === "viewer")
+      return options.viewer === undefined ? new Promise(() => {}) : Promise.resolve(options.viewer);
     return Promise.resolve({});
   }) as typeof socket.query;
   render(
     <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <ContainerPeek id="ENG" />
-      </Router>
+      <ViewerProvider>
+        <Router>
+          <ContainerPeek id="ENG" />
+        </Router>
+      </ViewerProvider>
     </ClientContext.Provider>,
   );
   return asked;
@@ -277,17 +294,30 @@ test("a container read whole says nothing about a window", async () => {
   expect(screen.getByText("creators, not editors")).toBeTruthy();
 });
 
-test("who files here: no token is told so, and a token whose read is in flight is not", async () => {
+test("who files here: no key is told so, and a key whose read is in flight is not", async () => {
   mountPeek({ rows: 1, total: 1 });
   await waitFor(() =>
-    expect(screen.getByText("Who files here needs an operator token to read")).toBeTruthy(),
+    expect(screen.getByText("Who files here needs an admin key to read")).toBeTruthy(),
   );
 
   cleanup();
   localStorage.setItem("crewlet_api_token", "tok");
   mountPeek({ rows: 1, total: 1 });
   await waitFor(() => expect(screen.getByText("Who files here is still being read")).toBeTruthy());
-  expect(screen.queryByText(/needs an operator token/)).toBeNull();
+  expect(screen.queryByText(/needs an admin key/)).toBeNull();
+
+  // A MEMBER'S KEY: the document is an admin's, so the sentence says who it
+  // is for rather than waiting on a read the engine refuses.
+  cleanup();
+  mountPeek({
+    rows: 1,
+    total: 1,
+    viewer: { token_id: "ada", role: "member", reach: "member", linked: true },
+  });
+  await waitFor(() =>
+    expect(screen.getByText("Who files here is for admins to read")).toBeTruthy(),
+  );
+  expect(screen.queryByText(/needs an admin key|still being read/)).toBeNull();
 
   cleanup();
   mountPeek({
@@ -314,9 +344,11 @@ test("an address naming no mode runs in a mode the engine serves, never a degrad
   }) as typeof socket.query;
   render(
     <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <Knowledge />
-      </Router>
+      <ViewerProvider>
+        <Router>
+          <Knowledge />
+        </Router>
+      </ViewerProvider>
     </ClientContext.Provider>,
   );
   // NOTHING RUNS BEFORE THE PROBE SAYS WHICH MODES EXIST.

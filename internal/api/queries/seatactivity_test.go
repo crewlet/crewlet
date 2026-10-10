@@ -275,7 +275,7 @@ func TestSeatActivityRefusesAWindowItCannotHold(t *testing.T) {
 	f := newSpendFixture(t)
 	r := registryOver(t, f.sources())
 	for _, days := range []int{0, tokens.MaxSpendRangeDays + 1} {
-		_, err := r.Answer(t.Context(), "seat_activity", map[string]any{"days": days}, "")
+		_, err := r.Answer(t.Context(), "seat_activity", map[string]any{"days": days}, asAdmin("ops"))
 		if !errors.Is(err, queries.ErrBadParams) || !errors.Is(err, tokens.ErrWindowLength) ||
 			!strings.Contains(queries.RefusalDetail(err), "days is") {
 			t.Errorf("days=%d: %v, want a bad-params refusal naming days", days, err)
@@ -302,7 +302,7 @@ func TestSeatActivityRefusesAHumanSeat(t *testing.T) {
 	}
 	f := &spendFixture{t: t, db: openStore(t), company: company}
 	r := registryOver(t, f.sources())
-	_, err = r.Answer(t.Context(), "seat_activity", map[string]any{"seat": "jane"}, "")
+	_, err = r.Answer(t.Context(), "seat_activity", map[string]any{"seat": "jane"}, asAdmin("ops"))
 	if !errors.Is(err, queries.ErrBadParams) || !strings.Contains(err.Error(), "Jane Founder") ||
 		!strings.Contains(err.Error(), "human seat") {
 		t.Errorf("seat=jane: %v, want a bad-params refusal naming the person", err)

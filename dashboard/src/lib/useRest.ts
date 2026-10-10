@@ -33,8 +33,8 @@
  *   read again on its own, because a 503 with no hint is a node that no wait
  *   repairs (no keyring, no surface) and re-asking it only repeats it.
  * - **A new credential is a new question.** A read re-runs whenever the
- *   operator token changes, because every route read here is guarded and the
- *   refusal a screen is showing is usually the one the new token answers.
+ *   stored key changes, because every route read here is guarded and the
+ *   refusal a screen is showing is usually the one the new key answers.
  * - **A socket that came back is a company that moved.** Where the shell's
  *   client is present, a reconnect re-reads quietly, for the reason
  *   `useQuery` re-asks on one — and it is what makes the `closed` sentence a
@@ -100,6 +100,7 @@ export interface RestResult<T> {
 export function restErrorCode(err: RestError | null): QueryErrorCode | null {
   if (!err) return null;
   if (err.unauthorized) return "unauthorized";
+  if (err.forbidden) return "forbidden";
   if (err.status === 0) return "closed";
   if (err.status === 400) return "bad_params";
   if (err.status === 404) return "not_found";

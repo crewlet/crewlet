@@ -4,11 +4,11 @@
  *
  * # Three states, and only one of them is a person
  *
- * BOUND: a token whose operator id a human seat names in
- * `contact.crewlet_operator_id`. The block is that person — their name, their
- * seat — and it links to their seat's page. UNBOUND: a token no seat claims,
- * which is ordinary (an operator's automation token is one), so the block
- * names the token and says what would bind it rather than reporting a fault.
+ * BOUND: a key whose id a human seat names in `contact.crewlet_operator_id`.
+ * The block is that person — their name, their seat — and it links to their
+ * seat's page. UNBOUND: a key no seat claims, which is ordinary (a pipeline's
+ * admin key is one), so the block names the key and says what would bind it
+ * rather than reporting a fault.
  * ANONYMOUS: no token at all; the block says so and offers to set one. Each
  * state is a sentence, never a blank avatar, because "who does the engine
  * think I am" is the question every write this dashboard makes will turn on.
@@ -51,7 +51,7 @@ export function whoLine(viewer: ViewerState, seatName: string): { name: string; 
   if (viewer.loading) return { name: "Checking who you are", detail: "Asking the engine" };
   if (viewer.anonymous) return { name: "Anonymous", detail: "No API token — reading only" };
   if (viewer.unbound) {
-    return { name: `Token ${viewer.operatorID}`, detail: "Not bound to a seat" };
+    return { name: `Token ${viewer.tokenID}`, detail: "Not bound to a seat" };
   }
   const name = viewer.name || viewer.handle;
   // THE SEAT'S ROLE AND KIND, never the handle with a bare `@`: the handle is
@@ -77,7 +77,7 @@ export function UserBlock({
   const identity = (
     <>
       <SeatAvatar
-        name={person ? who.name : viewer.anonymous ? "?" : viewer.operatorID || "?"}
+        name={person ? who.name : viewer.anonymous ? "?" : viewer.tokenID || "?"}
         size="sm"
         kind="human"
         decorative

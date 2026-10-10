@@ -441,15 +441,14 @@ func (s Sources) workItemTurns(ctx context.Context, p Params) (any, error) {
 // it knows who is looking, and `work_views` is asked for a container rather
 // than for a person.
 //
-// It used to be unchecked, on the reasoning that the whole surface is guarded
-// so the caller already holds the company's own credential and can read every
-// task, comment and page in it anyway. That reasoning has the same hole
-// [Sources.workPerson] records: `api.allow_anonymous_read` opens this surface,
-// and then `viewer=` is a free choice of whose record to read. Anybody could
-// walk the org chart — which `org` answers — and page through every seat's
-// pinned views by handle. So the parameter now takes the scope rule the other
-// personal questions take, through [Sources.viewerPins]: your own, or an
-// operator credential for anybody else's.
+// It used to be unchecked, on the reasoning that the caller already holds a key
+// that reads every task, comment and page in the company anyway. That
+// reasoning has the hole [Sources.workPerson] records: a key that reads the
+// company's work is not a key to every person's own record, and `viewer=` was
+// a free choice of whose to read. Anybody could walk the org chart — which
+// `org` answers — and page through every seat's pinned views by handle. So the
+// parameter takes the scope rule the other personal questions take, through
+// [Sources.viewerPins]: your own, or somebody in your line.
 //
 // Absent is still the SHARED strip: no pins and no personal views but the
 // shared ones, which is what a screen draws before it knows who is looking,
@@ -621,15 +620,15 @@ func (s Sources) workCatalogue(ctx context.Context, p Params) (any, error) {
 //
 // SCOPED BY [Sources.viewerParty], the same rule `work_my_work` and
 // `work_inbox` take: an absent handle is the caller's own seat, and naming
-// anybody else's needs an operator credential.
+// anybody else's needs them to be in the caller's line.
 //
-// It DEMANDED a handle and checked nothing, on the reasoning that the whole
-// surface is guarded so the caller already holds the company's credential.
-// That reasoning has a hole in it that the other two do not: `api.allow_
-// anonymous_read` opens this surface, and this answer carries the richest
-// personal record the engine keeps — somebody's unread notices, what they mean
-// to work on next, and who set that order. The parameter selected whose. A
-// scope rule two of the three personal questions follow is not a rule.
+// It DEMANDED a handle and checked nothing, on the reasoning that a caller who
+// reaches the surface already holds a key to the company. That reasoning has a
+// hole in it: this answer carries the richest personal record the engine keeps
+// — somebody's unread notices, what they mean to work on next, and who set
+// that order — and a key to the company's work is not a key to every person's.
+// The parameter selected whose. A scope rule two of the three personal
+// questions follow is not a rule.
 func (s Sources) workPerson(ctx context.Context, p Params) (any, error) {
 	who, err := s.viewerParty(ctx, strings.TrimSpace(p.String("handle")))
 	if err != nil {
@@ -1024,9 +1023,9 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 // workMyWork answers everything one person is expected to look at.
 func (s Sources) workMyWork(ctx context.Context, p Params) (any, error) {
 	// THE SAME SCOPE RULE AS THE INBOX — see [Sources.viewerParty]. This
-	// was registered operator-only and demanded a handle, which is why
-	// routes/MyWork.tsx picked the alphabetically first seat: there was no
-	// way for the screen to know whose day it was drawing.
+	// was once registered for operators only and demanded a handle, which
+	// is why routes/MyWork.tsx picked the alphabetically first seat: there
+	// was no way for the screen to know whose day it was drawing.
 	who, err := s.viewerParty(ctx, strings.TrimSpace(p.String("handle")))
 	if err != nil {
 		return nil, err

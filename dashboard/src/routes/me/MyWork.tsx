@@ -83,8 +83,8 @@
  * # Whose day it is decides the pronoun, everywhere
  *
  * Including the wake reasons and the decision lines. "You are the approver" on
- * an operator reading a report's day is a sentence about the reader, who is not
- * on the list.
+ * a lead reading a report's day is a sentence about the reader, who is not on
+ * the list.
  */
 
 import { useMemo } from "react";
@@ -101,7 +101,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, leadsInLine, seatResolvers, type OrgIndex, type Seat } from "~/lib/seats.ts";
 import { plural, relTime } from "~/lib/format.ts";
-import { useViewer } from "~/lib/viewer.ts";
+import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import { HoldWrites } from "~/lib/useWriteAccess.ts";
 import { useNow } from "~/lib/clock.ts";
 import { askedByParams, pageCount, type Scope } from "~/lib/work.ts";
@@ -188,10 +188,10 @@ export function MyWork({ section }: { section: MeSection }) {
   // This fell back to the ALPHABETICALLY FIRST SEAT, so a screen titled "My
   // work" rendered a stranger's day to everybody. The `viewer` question walks
   // the binding that has always existed: a presented token resolves to an
-  // operator id, and a seat names that id in `contact.crewlet_operator_id`.
+  // key id, and a seat names that id in `contact.crewlet_operator_id`.
   //
-  // An explicit choice still wins — an operator reading a report's day is a
-  // real thing to do, and the header says whose day it is either way.
+  // An explicit choice still wins — a lead reading a report's day is a real
+  // thing to do, and the header says whose day it is either way.
   const viewer = useViewer();
   const whose = handle || viewer.handle;
   const ownDay = whose !== "" && whose === viewer.handle;
@@ -211,14 +211,15 @@ export function MyWork({ section }: { section: MeSection }) {
   // trip per option — and it is the whole company's rather than this person's,
   // so it does not move when the day being read does.
   //
-  // POLLED ONLY WHERE THE PICKER IS DRAWN, which is the same condition: an
-  // anonymous reader is offered no picker. The FIRST read still goes out,
-  // because until the viewer answers this reader is indistinguishable from one
-  // who gets a picker. 60s is the interval both other readers of this question
-  // already take (`routes/inbox/Inbox.tsx`, `routes/agents/People.tsx`): a load
-  // is read, not watched.
+  // POLLED ONLY WHERE THE PICKER IS DRAWN, which is the same condition: a
+  // reader with no day of their own — anonymous, or a key no seat names — is
+  // offered no picker. The FIRST read still goes out, because until the viewer
+  // answers this reader is indistinguishable from one who gets a picker. 60s
+  // is the interval both other readers of this question already take
+  // (`routes/inbox/Inbox.tsx`, `routes/agents/People.tsx`): a load is read,
+  // not watched.
   const workload = useQuery("work_workload", undefined, {
-    enabled: !viewer.anonymous,
+    enabled: !viewer.anonymous && !viewer.unbound,
     pollMs: 60_000,
   });
 
@@ -347,11 +348,11 @@ export function MyWork({ section }: { section: MeSection }) {
             with paths of their own (`app/nav.ts`).
 
             NOT OFFERED TO A READER THE ENGINE WILL REFUSE. `work_my_work` and
-            `work_person` are scoped: naming anybody's handle needs a
-            credential, and a caller presenting none gets `errNotYours` — so
-            for an anonymous reader every row here is a refusal, and the empty
-            state below names the one remedy there is instead. */}
-        {!viewer.anonymous && (
+            `work_person` are scoped to the caller's own seat and its line, so
+            for a reader with no seat — anonymous, or a key no seat names —
+            every row here would be a refusal, and the empty state below names
+            the one remedy there is instead. */}
+        {viewer.linked && (
           <Select
             width="auto"
             value={whose}
@@ -362,7 +363,7 @@ export function MyWork({ section }: { section: MeSection }) {
             // page's default rather than a filter: it was violet at rest, so
             // the page always looked narrowed. Somebody else's day is.
             active={handle !== "" && handle !== viewer.handle}
-            options={whoseDayOptions(index, viewer.handle, workload.data)}
+            options={whoseDayOptions(index, viewer, workload.data)}
             // TWO LINES AN OPTION — the name, then the handle and the open
             // count — where the kit's panel is sized for six ONE-line rows.
             menuClassName="whose-day-menu"
@@ -417,7 +418,7 @@ export function MyWork({ section }: { section: MeSection }) {
           <EmptyState
             icon={<UserGlyph size={32} />}
             title="This token is not bound to a person"
-            description={`Give a human seat contact.crewlet_operator_id: ${viewer.operatorID} in the company configuration and this becomes their day. Until then, pick somebody above.`}
+            description={`Give a human seat contact.crewlet_operator_id: ${viewer.tokenID} in the company configuration and this becomes their day.`}
           />
         ) : (
           <EmptyState
@@ -653,17 +654,22 @@ function WhoseDay({
 }
 
 /**
- * The whose-day picker's rows: yours, then your line, then anybody.
+ * The whose-day picker's rows: yours, then your line — and nobody else.
  *
  * # Why it is grouped at all
  *
  * Flat and alphabetical it answered "which of the company's forty seats" with
  * forty seats, in an order that has nothing to do with the question. The two
  * days a reader actually opens are their own and one of their reports', and
- * both were somewhere in the middle of the alphabet. The line comes from the
- * chart the dashboard already holds — the ENGINE's derived reports, explicit
- * and automatic, so it matches who the company thinks reports to whom rather
- * than a second reading of `manages` in this language.
+ * both were somewhere in the middle of the alphabet.
+ *
+ * # Why it stops at the line
+ *
+ * A day is a person's own record, and the engine answers it to them and to the
+ * leads in their line and to NOBODY ELSE — an admin key included (ADR-0031).
+ * So the line is the ENGINE's own (`viewer.line`, the set it admits), never a
+ * second reading of the chart in this language, and an "Anybody" group past it
+ * would be a menu of refusals.
  *
  * # And why each row carries a count
  *
@@ -680,19 +686,17 @@ function WhoseDay({
  * where the answer is COMPLETE and did not stop at its handle cap. Short of
  * that the row says nothing at all rather than claiming an empty desk.
  *
- * # And the empty row is only for a reader with no day of their own
+ * # And there is no empty row
  *
  * `setHandle("")` writes the parameter's own fallback, which the router
  * deletes, so for a BOUND reader "Pick somebody" resolved straight back to
  * their own seat and the control re-labelled itself with their name — a row
- * that silently refuses. Their way back is the "Yours" row above. For a reader
- * whose credential names no seat it is the state they are in, and a real row
- * rather than the control's `placeholder`, because a placeholder is a label
- * over an unset value with nothing to select.
+ * that silently refuses. Their way back is the "Yours" row above, and a
+ * reader with no day of their own is offered no picker at all.
  */
 export function whoseDayOptions(
   index: OrgIndex,
-  viewerHandle: string,
+  viewer: Pick<ViewerState, "handle" | "line">,
   load: WorkloadAnswer | null | undefined,
 ): SelectOption[] {
   // THE COUNTS ARE A FACT OR THEY ARE NOTHING — see the head.
@@ -715,20 +719,15 @@ export function whoseDayOptions(
     text: `${seat.name} ${seat.handle}`,
   });
 
-  const mine = viewerHandle ? index.byHandle.get(viewerHandle) : undefined;
-  const line = mine ? mine.reports.filter((s) => s.handle !== mine.handle).sort(byName) : [];
-  const inLine = new Set(line.map((s) => s.handle));
-
-  const out: SelectOption[] = [];
-  // NO EMPTY ROW FOR A READER WITH A DAY OF THEIR OWN — see the head.
-  if (!mine) out.push({ value: "", label: "Pick somebody" });
-  if (mine) out.push(row(mine, "Yours"));
-  for (const seat of line) out.push(row(seat, "Your line"));
-  for (const seat of [...index.seats].sort(byName)) {
-    if (seat.handle === mine?.handle || inLine.has(seat.handle)) continue;
-    out.push(row(seat, "Anybody"));
-  }
-  return out;
+  const mine = viewer.handle ? index.byHandle.get(viewer.handle) : undefined;
+  if (!mine) return [];
+  // A HANDLE THE CHART NO LONGER CARRIES is left out rather than drawn bare:
+  // the viewer and the chart are two reads, and the next poll agrees.
+  const line = viewer.line
+    .map((handle) => index.byHandle.get(handle))
+    .filter((seat): seat is Seat => seat !== undefined && seat.handle !== mine.handle)
+    .sort(byName);
+  return [row(mine, "Yours"), ...line.map((seat) => row(seat, "Your line"))];
 }
 
 /**

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -56,9 +57,9 @@ const (
 	// placeholder: the model is the parent's own endpoint.
 	drainProbeKey = "sk-ant-drain-probe"
 
-	// drainProbeToken is the operator credential the child's Tier A
-	// accepts, so a write is refused for draining rather than for having
-	// no token.
+	// drainProbeToken is the admin key the child's Tier A accepts, so a
+	// write is refused for draining rather than for having no key, and an
+	// admin's read is a read.
 	drainProbeToken = "drain-probe-token"
 
 	// drainProbeSecret is a well-formed Standard-Webhooks key, the only
@@ -150,6 +151,7 @@ api:
   auth:
     tokens:
       - id: founder
+        role: admin
         token: %s
 `, filepath.Join(dir, "crewlet.db"), filepath.Join(dir, "stream"), port, drainProbeToken))
 	company := writeFile(t, dir, "company.yaml", fmt.Sprintf(`name: Acme
@@ -306,8 +308,9 @@ turn_engine:
 	if status, code := write(t, client, base+"/config"); status != http.StatusServiceUnavailable || code != "draining" {
 		t.Errorf("PUT /config answered %d %q mid-drain, want 503 draining", status, code)
 	}
-	// And a read is still a read.
-	if status, _ := probe(client, base+"/agents"); status != http.StatusOK {
+	// And a read is still a read — the roster is an admin's (it carries every
+	// seat's call in flight), so it is asked with the node's admin key.
+	if status, _ := probeAs(client, base+"/agents", drainProbeToken); status != http.StatusOK {
 		t.Errorf("GET /agents answered %d mid-drain, want 200", status)
 	}
 	if !alive() {
@@ -492,7 +495,20 @@ func drainProbeClient(t *testing.T) *http.Client {
 // probe GETs a URL once and returns its status and decoded body. Zero is a
 // request that got no answer, and [refused] one whose connection was refused.
 func probe(client *http.Client, url string) (int, map[string]any) {
-	res, err := client.Get(url) //nolint:noctx // a probe against the child's own listener
+	return probeAs(client, url, "")
+}
+
+// probeAs is [probe] presenting key as the bearer, for a route a caller with
+// no key does not reach (ADR-0031); "" presents none.
+func probeAs(client *http.Client, url, key string) (int, map[string]any) {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	if err != nil {
+		return 0, nil
+	}
+	if key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+	res, err := client.Do(req)
 	if errors.Is(err, syscall.ECONNREFUSED) {
 		return refused, nil
 	}

@@ -218,7 +218,29 @@ describe("the warnings a change introduces", () => {
 describe("one reading of a /config refusal", () => {
   test.each([
     [401, { error: "invalid_token" }, { kind: "guarded" }],
-    [403, {}, { kind: "guarded" }],
+    // A MEMBER'S KEY WAS ACCEPTED, so it is not `guarded` either: the
+    // document is an admin's (ADR-0031), and a token dialog is no remedy.
+    [403, { error: "forbidden" }, { kind: "forbidden" }],
+    // A 403 NAMING NO REACH is not read as one: the engine's own carry a
+    // code, and what it said is all there is to show.
+    [
+      403,
+      {},
+      {
+        kind: "problems",
+        problems: [
+          {
+            path: "",
+            segments: null,
+            kind: "invalid",
+            message: "The engine refused the change with status 403.",
+          },
+        ],
+        derived: null,
+        code: "",
+        hint: "",
+      },
+    ],
     // A MANAGED DOCUMENT ACCEPTED THE TOKEN, so it is not `guarded`: the
     // remedy is where the company is written, not which token is held.
     [

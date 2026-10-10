@@ -57,13 +57,17 @@ type ProjectFiles interface {
 }
 
 // mountFiles registers the byte routes, where the engine serves files.
-func (a *App) mountFiles(mux httpjson.Router) {
+//
+// MEMBER REACH, the download included: a project's files are the company's own
+// work, which a member reads and adds to, and the listing beside them is the
+// member question `work_files`.
+func (a *App) mountFiles(mux auth.Router) {
 	if a.files == nil {
 		return
 	}
-	mux.Handle("GET /work/files/{project}/{path...}", http.HandlerFunc(a.serveFileDownload))
-	mux.Handle("PUT /work/files/{project}/{path...}", http.HandlerFunc(a.serveFileUpload))
-	mux.Handle("DELETE /work/files/{project}/{path...}", http.HandlerFunc(a.serveFileRemove))
+	mux.Handle("GET /work/files/{project}/{path...}", auth.ReachMember, http.HandlerFunc(a.serveFileDownload))
+	mux.Handle("PUT /work/files/{project}/{path...}", auth.ReachMember, http.HandlerFunc(a.serveFileUpload))
+	mux.Handle("DELETE /work/files/{project}/{path...}", auth.ReachMember, http.HandlerFunc(a.serveFileRemove))
 }
 
 // filePace is how long each mebibyte of a file is given to cross the
@@ -319,8 +323,8 @@ func sendPaced(w http.ResponseWriter, src io.Reader, now func() time.Time) error
 // operatorFor is the person a file write is attributed to, answering the
 // refusal itself where the request carries none.
 func operatorFor(w http.ResponseWriter, r *http.Request) (string, bool) {
-	operator, ok := auth.OperatorFrom(r.Context())
-	if !ok || operator == "" {
+	operator := auth.PrincipalFrom(r.Context()).ID
+	if operator == "" {
 		writeJSON(w, http.StatusForbidden, map[string]string{
 			"error":  "operator_required",
 			"detail": "a file write is attributed to the person who made it, and this request carries no operator identity",
