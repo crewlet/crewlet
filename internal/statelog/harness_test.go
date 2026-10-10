@@ -73,7 +73,7 @@ func (probeDomain) NodeGate(statelog.Envelope) bool     { return false }
 
 func (probeDomain) Tables() map[string]statelog.TableClass {
 	return map[string]statelog.TableClass{
-		"probe_objects":        statelog.Replicated,
+		"probe_rows":           statelog.Replicated,
 		"probe_evictions":      statelog.Replicated,
 		"probe_ops":            statelog.Divergent,
 		"probe_log_deferred":   statelog.Local,

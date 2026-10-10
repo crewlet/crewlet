@@ -29,18 +29,14 @@ import (
 // probeApplier is a state machine whose whole job is to be observable: it
 // writes one row per record into a table the test can count.
 type probeApplier struct {
-	mu       sync.Mutex
-	applied  []statelog.Position
-	commits  int
-	rows     int
-	gate     statelog.Reason
-	gated    map[uint64]bool
-	asked    map[uint64]int
-	failAt   uint64
-	rowsPer  int
-	slowFrom uint64
-	slowFor  time.Duration
-	now      func() time.Time
+	mu      sync.Mutex
+	applied []statelog.Position
+	commits int
+	gate    statelog.Reason
+	gated   map[uint64]bool
+	asked   map[uint64]int
+	failAt  uint64
+	rowsPer int
 
 	// lockedAt is a sequence whose FIRST apply fails the way a write that
 	// lost the file's lock does, which the store answers by running the
@@ -54,7 +50,7 @@ func newProbeApplier() *probeApplier {
 
 func (a *probeApplier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record, opts statelog.ApplyOptions) (int, error) {
 	a.mu.Lock()
-	fail, per, slowFrom, slowFor := a.failAt, a.rowsPer, a.slowFrom, a.slowFor
+	fail, per := a.failAt, a.rowsPer
 	locked := a.lockedAt != 0 && rec.Position.Seq == a.lockedAt
 	if locked {
 		a.lockedAt = 0
@@ -66,14 +62,6 @@ func (a *probeApplier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Recor
 	if locked {
 		return 0, fmt.Errorf("the probe applier at sequence %d: database is locked",
 			rec.Position.Seq)
-	}
-	if slowFrom != 0 && rec.Position.Seq >= slowFrom && a.now != nil {
-		// The clock is injected, so "slow" is deterministic rather than
-		// a sleep the scheduler decides the length of.
-		a.mu.Lock()
-		a.rows += 0
-		a.mu.Unlock()
-		_ = slowFor
 	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO probe_rows (position, kind, stored_at) VALUES (?, ?, ?)
