@@ -50,11 +50,12 @@ export function collectSummary(c: ObjectCollect): string {
 export function auditSummary(f: ObjectFindings): string {
   const asked = `${fmtCount(f.referenced)} named`;
   const lost =
-    f.missing === 0 && f.damaged === 0
+    f.missing === 0 && f.damaged === 0 && f.unanswered === 0
       ? "none missing"
       : [
           f.missing > 0 ? `${fmtCount(f.missing)} missing` : "",
           f.damaged > 0 ? `${fmtCount(f.damaged)} damaged` : "",
+          f.unanswered > 0 ? `${fmtCount(f.unanswered)} unanswered` : "",
         ]
           .filter(Boolean)
           .join(", ");
@@ -146,7 +147,7 @@ export function FileStorage({ objects, now }: { objects?: FleetObjects; now: num
   }
 
   const found = reported.audit?.found;
-  const lost = (found?.missing ?? 0) + (found?.damaged ?? 0);
+  const lost = (found?.missing ?? 0) + (found?.damaged ?? 0) + (found?.unanswered ?? 0);
   const shown = found?.missing_files ?? [];
   return (
     <Card padding="none">
@@ -157,17 +158,17 @@ export function FileStorage({ objects, now }: { objects?: FleetObjects; now: num
             <div className="col gap-2">
               <span>
                 {plural(lost, "file")} cannot be read: the store does not hold{" "}
-                {lost === 1 ? "its" : "their"} bytes, or holds them wrong, after acknowledging them.
-                Check its health, and restore{" "}
-                {shown.length < lost ? `these first ${shown.length}` : "these"} from a backup or
-                upload {lost === 1 ? "it" : "them"} again.
+                {lost === 1 ? "its" : "their"} bytes, holds them wrong, or will not answer for{" "}
+                {lost === 1 ? "it" : "them"}, after acknowledging them. Check its health, and
+                restore {shown.length < lost ? `these first ${shown.length}` : "these"} from a
+                backup or upload {lost === 1 ? "it" : "them"} again.
               </span>
               <ul className="col gap-1">
                 {shown.map((m) => (
                   <li key={m.object}>
                     <InlineCode>{m.named_by}</InlineCode>{" "}
                     <span className="secondary">
-                      {m.damaged ? "damaged" : "missing"} · {m.object}
+                      {m.finding} · {m.object}
                     </span>
                   </li>
                 ))}

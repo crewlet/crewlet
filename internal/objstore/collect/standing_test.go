@@ -171,7 +171,7 @@ func TestTheAuditAsksOnlyAfterRequiredReferences(t *testing.T) {
 		t.Fatalf("Audit = %+v, %v; want the two required references asked after and "+
 			"one of them missing, and neither retired one asked after", r, err)
 	}
-	want := []MissingFile{{Object: lost.Key, NamedBy: "lost.md"}}
+	want := []MissingFile{{Object: lost.Key, NamedBy: "lost.md", Finding: FindingMissing}}
 	if r.Found == nil || !slices.Equal(r.Found.MissingFiles, want) {
 		t.Fatalf("the findings = %+v, want %+v", r.Found, want)
 	}

@@ -371,8 +371,9 @@ type Reading struct {
 	CensusLog                                    string
 
 	// ObjectsMissing is how many files' bytes the object store does not
-	// hold, or holds wrong — at another size, or under another digest — as
-	// the collector's last audit to run to its end found: on the node
+	// hold, or holds wrong — at another size, or under another digest, or
+	// as no object it can read — or would not answer for, as the
+	// collector's last audit to run to its end found: on the node
 	// holding the collector's duty, and zero on every other, since the
 	// store is one the whole fleet shares and one node's count of it is
 	// the fleet's. Files nobody can read. Any value above zero is an alarm,
@@ -758,13 +759,14 @@ var table = []rule{
 	{
 		kind: KindObjectsMissing,
 		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("%d file(s) are missing from the object store or "+
-				"damaged in it", r.ObjectsMissing), r.ObjectsMissing > 0
+			return fmt.Sprintf("%d file(s) are missing from the object store, damaged "+
+				"in it, or not answered for by it", r.ObjectsMissing), r.ObjectsMissing > 0
 		},
-		remedy: "The backend lost or changed bytes it had acknowledged: check its " +
-			"own health (the NATS bucket OBJ_crewlet_files on the data nodes, or " +
-			"the S3 bucket) and restore those files from a backup, or upload them " +
-			"again — see docs/guides/backup.md. `crewlet objects status` names them.",
+		remedy: "The backend lost or changed bytes it had acknowledged, or will not " +
+			"serve them: check its own health (the NATS bucket OBJ_crewlet_files on " +
+			"the data nodes, or the S3 bucket) and restore those files from a backup, " +
+			"or upload them again — see docs/guides/backup.md. `crewlet objects " +
+			"status` names them, and what was found of each.",
 	},
 }
 

@@ -4281,12 +4281,14 @@ a takeover, and on the same node re-claiming after its own lease lapsed.
       "referenced": 1828,
       "missing": 0,
       "damaged": 0,
+      "unanswered": 0,
       "found": {
         "at": "2026-09-01T09:00:00Z",
         "completed": true,
         "referenced": 1828,
         "missing": 0,
-        "damaged": 0
+        "damaged": 0,
+        "unanswered": 0
       }
     }
   }
@@ -4311,8 +4313,8 @@ writes.
 | `backend` | The store every node agreed on at boot: `nats` (the data nodes' replicated bucket) or `s3:<endpoint>/<bucket>/<prefix>` |
 | `node` | The data node holding the collector's duty when it ran the passes below |
 | `collect` | The last **collection**: when it ended (`at`), whether it listed the whole store and judged every object past the day's grace (`completed`), and its counts — `listed` (the objects under the engine's own namespace), `aged` (past the grace by both the store's clock and the key's own, so judged), `deleted` (no row named them), `referenced` (a row — live or retired — still did) and `abandoned` (uploads begun more than a day ago and never finished, which no listing shows). `skipped` says why it stopped judging — an estate this node could not fully read — and the counts are what it did before it stopped; `sweep_error` what kept it from abandoning unfinished uploads, which does not fail the collection (on S3, an identity without `s3:ListBucketMultipartUploads` or `s3:AbortMultipartUpload`); `error` what stopped it. Absent before the first one ends |
-| `audit` | The last **audit attempt**, which asks the store about every object a live row names — never one a [retired](../concepts/object-store.md#live-and-retired-references) row keeps for a grace: when it ended (`at`), `referenced`, `missing` (objects the store does not hold), `damaged` (objects it holds at another size, or under another digest where it keeps one, or as no object it can read at all), `completed` — false over an estate that was not complete, when the counts are floors — and `error`, what stopped it. Absent before the first one ends |
-| `audit.found` | What the last audit to **run to its end** found — the attempt above, or the one before it when that one failed, so a failed attempt never hides what was found: `at`, `completed`, `referenced`, `missing`, `damaged` and `missing_files`, the first hundred files by `named_by` that cannot be read, each `{"object", "named_by", "damaged"}` — the object's key, the file as `PROJECT/path`, and `true` where the store holds it wrong rather than not at all (absent when none). A non-zero `missing` plus `damaged` here raises [`objects_missing`](alarms.md). Absent before any audit has run to its end |
+| `audit` | The last **audit attempt**, which asks the store about every object a live row names — never one a [retired](../concepts/object-store.md#live-and-retired-references) row keeps for a grace: when it ended (`at`), `referenced`, `missing` (objects the store answered, twice, that it does not hold), `damaged` (objects it holds at another size, or under another digest where it keeps one, or as no object it can read at all), `unanswered` (objects the store failed to answer about twice while it answered for the rest), `completed` — false over an estate that was not complete, when the counts are floors — and `error`, what stopped it: an estate it could not read, or a store failing rather than refusing particular objects. Absent before the first one ends |
+| `audit.found` | What the last audit to **run to its end** found — the attempt above, or the one before it when that one failed, so a failed attempt never hides what was found: `at`, `completed`, `referenced`, `missing`, `damaged`, `unanswered` and `missing_files`, the first hundred files by `named_by` that cannot be read, each `{"object", "named_by", "finding"}` — the object's key, the file as `PROJECT/path`, and what was found of it, `missing`, `damaged` or `unanswered` (absent when none). A non-zero `missing`, `damaged` or `unanswered` here raises [`objects_missing`](alarms.md). Absent before any audit has run to its end |
 
 A collection runs hourly and an audit daily, on one data node at a time; a pass
 that fails is tried again ten minutes later.

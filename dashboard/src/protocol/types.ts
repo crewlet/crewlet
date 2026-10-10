@@ -28,7 +28,7 @@ import type { BrokerKind, FleetBrokerAnswer } from "./broker.ts";
 // every contract import in this directory: it is also built alone as
 // `protocol.js`, where the `~` alias does not exist.
 import type { BUDGET_WINDOWS } from "../contract/config.ts";
-import type { OBJECTS_STATES } from "../contract/fleet.ts";
+import type { OBJECT_FINDINGS, OBJECTS_STATES } from "../contract/fleet.ts";
 import type { BudgetState, GROUPS } from "../contract/spend.ts";
 import type { SANDBOX_TAIL_OUTCOMES } from "../contract/sandbox.ts";
 import type { LIVE_CALL_DETAIL } from "../contract/wire.ts";
@@ -1540,14 +1540,20 @@ export interface ObjectCollect {
   error?: string;
 }
 
+/**
+ * One of [OBJECT_FINDINGS]: what the audit found of a file it cannot count on
+ * reading.
+ */
+export type ObjectFinding = (typeof OBJECT_FINDINGS)[number];
+
 /** One file whose bytes the store cannot give back. */
 export interface ObjectMissingFile {
   /** The object the file's row names. */
   object: string;
   /** The file, as `PROJECT/path`. */
   named_by: string;
-  /** The store holds it with the wrong bytes, rather than not at all. */
-  damaged?: boolean;
+  /** What the audit found of it. */
+  finding: ObjectFinding;
 }
 
 /** What an audit that ran to its end found. */
@@ -1558,7 +1564,11 @@ export interface ObjectFindings {
   referenced: number;
   missing: number;
   damaged: number;
-  /** The first hundred files that cannot be read; `missing` + `damaged` is the whole count. */
+  unanswered: number;
+  /**
+   * The first hundred files that cannot be read; `missing` + `damaged` +
+   * `unanswered` is the whole count.
+   */
   missing_files?: ObjectMissingFile[];
 }
 
@@ -1570,6 +1580,7 @@ export interface ObjectAudit {
   referenced: number;
   missing: number;
   damaged: number;
+  unanswered: number;
   error?: string;
   /**
    * What the last audit to run to its end found — this attempt, or the one

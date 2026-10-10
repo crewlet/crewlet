@@ -339,14 +339,28 @@ judged against the replicated estate the data node holds:
   report says what it deleted before it stopped and why it stopped.
 - **Audit, daily.** It asks the store about every object a **live** row names,
   up to thirty-two at a time, reading the rows a page at a time. An object the
-  store does not hold (**missing** — asked about once more before it is called
-  so, at the end of the pass or, once a hundred thousand others are waiting
-  for theirs, at once) or holds at another size, or under another SHA-256
-  where the store keeps one (**damaged** — `nats` keeps one, S3 does not), or
-  holds as no object it can read at all (**damaged** too — on `nats`, metadata
-  that does not decode, which the store answers definitely rather than as a
-  failure), is a file that cannot be downloaded, and raises [`objects_missing`](#alarms)
-  naming the first hundred such files by name, as `PROJECT/path`.
+  store answers it does not hold is **missing**; one it holds at another size,
+  or under another SHA-256 where the store keeps one (`nats` keeps one, S3
+  does not), or as no object it can read at all (on `nats`, metadata that
+  does not decode, which the store answers definitely rather than as a
+  failure) is **damaged**; and one the store **fails** to answer about —
+  after its client's own retries — is **unanswered**. Anything but an answer
+  that it holds the object whole, or holds it wrong, is asked about once more
+  before it is called anything: at the end of the pass, or, once a hundred
+  thousand others are waiting for theirs, at once. Each is a file that cannot
+  be counted on to download, and raises [`objects_missing`](#alarms) naming
+  the first hundred such files by name, as `PROJECT/path`, with what was
+  found of each.
+
+  **One object is never the audit's failure.** An object the store fails to
+  answer about on both looks — an S3-compatible gateway answering one object
+  with a server error every time, say — is reported **unanswered** and the
+  audit runs to its end, once the store answers a question after it. What
+  fails an audit is the store failing: thirty-two questions in a row with
+  none answered between, or — when the audit's last questions are failures —
+  one more question about an object it had answered for failing too. A store
+  that went away mid-audit is retried ten minutes later, and none of the
+  questions it failed is taken for a finding.
 
 A pass that fails is tried again ten minutes later. The duty records each pass
 in the coordination store, so every node's [`/fleet`](../reference/api-endpoints.md#get-fleet)
@@ -433,11 +447,12 @@ deleting an object that is already gone is not an error. The decision is
 
 | Alarm | Fires when |
 |---|---|
-| `objects_missing` | the collector's last audit to run to its end found files whose object the store does not hold, or holds at the wrong size or under the wrong digest — on the node holding the collector's duty, since one node's audit of a shared store is the fleet's |
+| `objects_missing` | the collector's last audit to run to its end found files whose object the store does not hold, holds at the wrong size, under the wrong digest or as nothing it can read, or would not answer for twice while it answered for the rest — on the node holding the collector's duty, since one node's audit of a shared store is the fleet's |
 
 A missing or damaged object is a store that lost or changed bytes it
-acknowledged: check the store's own health (the `OBJ_crewlet_files` stream on
-the data nodes, or the bucket's) and restore the files the report names from a
+acknowledged, and an unanswered one a store that will not serve them: check
+the store's own health (the `OBJ_crewlet_files` stream on the data nodes, or
+the bucket's) and restore the files the report names from a
 [backup](../guides/backup.md), or upload them again.
 
 ---
@@ -538,8 +553,9 @@ dashboard draws the same under **Settings › Nodes**.
   at a time took four to seven. The S3 figures are against an in-process fake
   held that far away; no real bucket has been measured. Both bounds are on
   requests in flight rather than tuned rates: a store that slows down is asked
-  more slowly, and one that fails stops the pass with at most that many
-  requests out.
+  more slowly, and one that is failing stops the pass with at most that many
+  requests out — a collection at its first failed deletion, an audit at the
+  thirty-second failed question in a row.
 - **The estate is still whole on every data node.** Only file bytes leave it.
   Every row — a file's included — is on every data node.
 

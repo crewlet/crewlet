@@ -1453,8 +1453,8 @@ function newGateOpID(verb, node, now = Date.now(), random = (bytes) => crypto.ge
 /**
 * The fleet's broker and object store, as the engine bounds them: the kinds
 * a node's broker can be and the disagreements named between the two records
-* of its membership, how long a removal may take, and the states of the object
-* store's report.
+* of its membership, how long a removal may take, the states of the object
+* store's report, and what its audit finds of a file.
 *
 * Each is a COPY of something the engine owns, because this is a separate
 * build that cannot import a Go identifier — held to the engine's in both

@@ -657,9 +657,9 @@ func TestTheAuditFindsMissingAndDamagedFiles(t *testing.T) {
 		t.Fatalf("Audit = %+v, %v; want one missing and two damaged of four", r, err)
 	}
 	want := []MissingFile{
-		{Object: bent.Key, NamedBy: "ENG/bent.md", Damaged: true},
-		{Object: lost.Key, NamedBy: "ENG/lost.md"},
-		{Object: short.Key, NamedBy: "ENG/short.md", Damaged: true},
+		{Object: bent.Key, NamedBy: "ENG/bent.md", Finding: FindingDamaged},
+		{Object: lost.Key, NamedBy: "ENG/lost.md", Finding: FindingMissing},
+		{Object: short.Key, NamedBy: "ENG/short.md", Finding: FindingDamaged},
 	}
 	if r.Found == nil || r.Found.Missing != 1 || r.Found.Damaged != 2 ||
 		!slices.Equal(r.Found.MissingFiles, want) {
@@ -687,7 +687,7 @@ func TestANameHoldingNoReadableObjectIsDamaged(t *testing.T) {
 	if err != nil || !r.Completed || r.Referenced != 2 || r.Damaged != 1 || r.Missing != 0 {
 		t.Fatalf("Audit = %+v, %v; want it complete with the one file damaged", r, err)
 	}
-	want := []MissingFile{{Object: spoiled.Key, NamedBy: "ENG/spoiled.md", Damaged: true}}
+	want := []MissingFile{{Object: spoiled.Key, NamedBy: "ENG/spoiled.md", Finding: FindingDamaged}}
 	if r.Found == nil || r.Found.Damaged != 1 || !slices.Equal(r.Found.MissingFiles, want) {
 		t.Fatalf("the findings = %+v, want %+v", r.Found, want)
 	}
@@ -831,9 +831,11 @@ func TestAFailedAuditKeepsTheLastFindings(t *testing.T) {
 		t.Fatalf("the first audit = %+v, %v", first, err)
 	}
 	h.clock.advance(AuditInterval)
+	// EVERY QUESTION FAILS, the second look included, and the store answers
+	// none: a store that has gone away, never a file it refuses.
 	h.backend.statErr = errors.New("the broker stopped answering")
-	if _, err := h.c.Audit(t.Context()); err == nil {
-		t.Fatal("an audit whose every question failed succeeded")
+	if _, err := h.c.Audit(t.Context()); !errors.Is(err, errStoreFailing) {
+		t.Fatalf("an audit whose every question failed = %v, want errStoreFailing", err)
 	}
 	got := h.c.Status().Audit
 	if got.Error == "" || !got.At.After(first.At) {
@@ -851,7 +853,7 @@ func TestRestoreKeepsTheNewerOfEachHalf(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	at := h.clock.Now()
-	lost := MissingFile{Object: objstore.KeyAt(at), NamedBy: "ENG/lost.md"}
+	lost := MissingFile{Object: objstore.KeyAt(at), NamedBy: "ENG/lost.md", Finding: FindingMissing}
 	h.c.Restore(Status{
 		Collect: CollectionReport{Completed: true, Deleted: 3, At: at},
 		Audit: AuditReport{Completed: true, Referenced: 9, Missing: 1, At: at,
@@ -1131,11 +1133,12 @@ func TestAnAuditStoppedBeforeItsSecondLooksHasNotRunToItsEnd(t *testing.T) {
 	}
 }
 
-// A QUESTION THAT FAILS STOPS THE AUDIT WITH ITS OWN ERROR, and the audit
-// returns only once every question it asked has ended — a question to the
-// store never outlives the pass that asked it. The findings the last audit
-// made stand.
-func TestAFailedQuestionStopsTheAuditWithNothingLeftAsking(t *testing.T) {
+// A STORE THAT FAILS QUESTION AFTER QUESTION STOPS THE AUDIT, with its own
+// error, once it has failed a window of them with none answered between — and
+// the audit returns only once every question it asked has ended: a question to
+// the store never outlives the pass that asked it. The findings the last audit
+// made stand, and none of the failed questions is taken for a finding.
+func TestAStoreThatFailsQuestionAfterQuestionStopsTheAudit(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	lost := h.file("lost.md", "lost")
@@ -1151,39 +1154,141 @@ func TestAFailedQuestionStopsTheAuditWithNothingLeftAsking(t *testing.T) {
 	broke := errors.New("the store stopped answering")
 	var (
 		mu       sync.Mutex
-		answered int
+		asked    int
 		inFlight atomic.Int64
 	)
 	h.backend.onStat = func(ctx context.Context, _ string, _ int) error {
 		mu.Lock()
-		answered++
-		n := answered
+		asked++
+		n := asked
 		mu.Unlock()
-		switch {
-		case n <= 5:
+		if n <= 5 {
 			return nil
-		case n == 6:
-			return broke
 		}
 		inFlight.Add(1)
 		defer inFlight.Add(-1)
-		<-ctx.Done()
-		// A REQUEST TORN DOWN TAKES A MOMENT TO GIVE ITS SLOT BACK, so an
-		// audit that returned without waiting for its questions is caught
-		// with them still running.
-		time.Sleep(20 * time.Millisecond)
-		return ctx.Err()
+		// A REQUEST TAKES A MOMENT TO FAIL, so the questions beside the
+		// one that stops the audit are still out when it does — and an
+		// audit that returned without waiting for them is caught with them
+		// running.
+		select {
+		case <-time.After(5 * time.Millisecond):
+		case <-ctx.Done():
+			time.Sleep(20 * time.Millisecond)
+			return ctx.Err()
+		}
+		return broke
 	}
 	h.clock.advance(AuditInterval)
 	r, err := h.c.Audit(t.Context())
-	if !errors.Is(err, broke) || r.Completed || !strings.Contains(r.Error, broke.Error()) {
-		t.Fatalf("Audit = %+v, %v; want it failed with the store's own error", r, err)
+	if !errors.Is(err, broke) || !errors.Is(err, errStoreFailing) || r.Completed ||
+		!strings.Contains(r.Error, broke.Error()) {
+		t.Fatalf("Audit = %+v, %v; want it failed as a failing store, with the store's own error", r, err)
 	}
 	if n := inFlight.Load(); n != 0 {
 		t.Fatalf("%d questions were still running when the audit returned", n)
 	}
-	if r.Found == nil || r.Found.Missing != 1 || r.Found.MissingFiles[0].NamedBy != "ENG/lost.md" {
+	mu.Lock()
+	n := asked
+	mu.Unlock()
+	if n > 5+failedInARow+auditConcurrency {
+		t.Fatalf("a store that answered nothing was asked %d questions; want the audit stopped "+
+			"within a window of its run of %d", n, failedInARow)
+	}
+	if r.Found == nil || r.Found.Missing != 1 || r.Found.Unanswered != 0 ||
+		r.Found.MissingFiles[0].NamedBy != "ENG/lost.md" {
 		t.Fatalf("the findings after a failed audit = %+v; want the last whole audit's", r.Found)
+	}
+}
+
+// ONE OBJECT THE STORE KEEPS FAILING IS UNANSWERED, AND THE AUDIT RUNS TO ITS
+// END: asked once, set aside, asked again after the walk, and named. Failing
+// the audit instead never named the file, and the engine's retry ten minutes
+// later asked the store about every object before it again — every attempt of
+// every day — while the alarm kept the last audit to have finished. The store
+// answers every other question, which is what makes the failure the object's.
+func TestAnObjectTheStoreKeepsFailingIsUnanswered(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	var bad objstore.Object
+	for i := range 2*auditConcurrency + 3 {
+		o := h.file(fmt.Sprintf("%03d.md", i), fmt.Sprintf("object %d", i))
+		if i == auditConcurrency {
+			bad = o
+		}
+	}
+	refused := errors.New("InternalError: we encountered an internal error, please try again")
+	h.backend.onStat = func(_ context.Context, name string, _ int) error {
+		if name == bad.Key.Name() {
+			return refused
+		}
+		return nil
+	}
+	r, err := h.c.Audit(t.Context())
+	if err != nil || !r.Completed || r.Unanswered != 1 || r.Missing != 0 || r.Damaged != 0 {
+		t.Fatalf("Audit = %+v, %v; want it complete with the one file unanswered", r, err)
+	}
+	want := []MissingFile{{Object: bad.Key, NamedBy: fmt.Sprintf("ENG/%03d.md", auditConcurrency),
+		Finding: FindingUnanswered}}
+	if r.Found == nil || r.Found.Unanswered != 1 || r.Found.Lost() != 1 ||
+		!slices.Equal(r.Found.MissingFiles, want) {
+		t.Fatalf("the findings = %+v, want %+v", r.Found, want)
+	}
+	h.backend.mu.Lock()
+	defer h.backend.mu.Unlock()
+	for name, n := range h.backend.asks {
+		switch {
+		case name == bad.Key.Name() && n != 2:
+			t.Errorf("the failing object was asked about %d times, want a first look and one second", n)
+		case name != bad.Key.Name() && n > 2:
+			t.Errorf("%s was asked about %d times; nothing is walked again", name, n)
+		}
+	}
+}
+
+// A STORE THAT STOPS ANSWERING AS THE AUDIT ENDS FAILS IT, rather than having
+// every second look it failed then called unanswered: the store is asked once
+// more, about an object it answered for, and only an answer there says the
+// failures were the objects'. A store that answered nothing all audit is
+// failing too, however few the questions.
+func TestAStoreThatStopsAnsweringAsTheAuditEndsFailsIt(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.file("kept.md", "kept")
+	late := h.file("late.md", "an object the store has not caught up with")
+	h.backend.lagging[late.Key.Name()] = 1
+	broke := errors.New("the store went away")
+	var down atomic.Bool
+	h.backend.onStat = func(_ context.Context, name string, nth int) error {
+		if name == late.Key.Name() && nth == 2 {
+			down.Store(true)
+		}
+		if down.Load() {
+			return broke
+		}
+		return nil
+	}
+	r, err := h.c.Audit(t.Context())
+	if !errors.Is(err, errStoreFailing) || r.Completed || r.Found != nil {
+		t.Fatalf("Audit = %+v, %v; want it failed as a failing store, finding nothing", r, err)
+	}
+
+	// AND THE SAME LAST SECOND LOOK, FAILED BY A STORE STILL ANSWERING, IS
+	// THE OBJECT'S: the question after it is answered.
+	h.backend.mu.Lock()
+	h.backend.lagging[late.Key.Name()] = 1
+	clear(h.backend.asks)
+	h.backend.mu.Unlock()
+	down.Store(false)
+	h.backend.onStat = func(_ context.Context, name string, nth int) error {
+		if name == late.Key.Name() && nth == 2 {
+			return broke
+		}
+		return nil
+	}
+	r, err = h.c.Audit(t.Context())
+	if err != nil || r.Unanswered != 1 || r.Found == nil || r.Found.Unanswered != 1 {
+		t.Fatalf("Audit = %+v, %v; want the one file unanswered", r, err)
 	}
 }
 

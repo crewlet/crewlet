@@ -358,7 +358,8 @@ func (e *Engine) stopObjectCollector() {
 }
 
 // objectsReading fills the object store's half of an alarm reading: the files
-// the collector's last audit to run to its end found missing or damaged — on
+// the collector's last audit to run to its end found missing, damaged or
+// unanswered — on
 // the node holding the collector's duty, and nothing on any other, since the
 // store is one the whole fleet shares and one node's count of it is the
 // fleet's. FROM THE FINDINGS, never the last attempt: an audit that failed
@@ -380,7 +381,7 @@ func (e *Engine) objectsReading(_ time.Time, out *statelog.Reading) {
 		return
 	}
 	if found := duty.collector.Status().Audit.Found; found != nil {
-		out.ObjectsMissing = found.Missing + found.Damaged
+		out.ObjectsMissing = found.Lost()
 	}
 }
 
