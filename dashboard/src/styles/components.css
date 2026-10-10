@@ -628,17 +628,6 @@ code.inline.is-whole {
    FIELD's error: the same chip inside the setup dialog's danger banner kept
    its own quiet grey, which is the half nobody noticed. */
 
-kbd {
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-2xs);
-  background: var(--color-surface-inset);
-  border: 1px solid var(--color-border-default);
-  border-bottom-width: 2px;
-  border-radius: var(--radius-xs);
-  padding: 1px 5px;
-  color: var(--color-text-tertiary);
-}
-
 /* ---- Chart -------------------------------------------------------------- */
 
 .chart {
