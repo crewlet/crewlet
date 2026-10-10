@@ -218,12 +218,21 @@ store's objects as nothing at all. Credentials are not part of the record — tw
 nodes may reach one bucket with different keys.
 
 Moving a company from one store to the other is a migration, not a config
-change: copy every object across, stop the fleet, delete the `backend` record
+change: stop the fleet, copy every object across, delete the `backend` record
 from the `crewlet_objects` coordination bucket, and boot every node with the
-new block. The copy is of the old store's whole `files/` corner, never of a
-backup's `objects/`, which holds only the objects
+new block. **The fleet stops first** because an upload stores its object before
+it writes the row naming it: an object uploaded after a copy taken while the
+fleet still ran is named by a row and absent from the new store, and its file
+cannot be read. The copy is of the old store's whole `files/` corner, never of
+a backup's `objects/`, which holds only the objects
 [live](#live-and-retired-references) rows name and none a retired row still
 keeps for a reader catching up.
+
+Deleting the record reaches the broker from outside the engine, and so does
+the copy when either store is `nats`, so a move needs a broker that listens:
+an external NATS cluster (`stream.type: nats`). The embedded broker
+listens on no socket and the engine has no command that deletes the record, so
+a company on the embedded topology cannot move its object store.
 
 ---
 
