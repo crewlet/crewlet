@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
@@ -309,32 +310,26 @@ func EngineOperatorOptions(e *engine.Engine) operator.Options {
 	return opts
 }
 
-// engineLeads answers whether one handle leads another, walking the chart's own
-// management chain.
+// engineLeads answers whether one handle leads another: whether the handle is
+// in the actor's line, as [org.Organization.LeadsInLine] derives it — any
+// depth below them in the chart, so a founder leads everybody, along the
+// primary management chain the org chart draws.
 //
-// ANY ANCESTOR, not just the direct manager: a founder leads everybody, and an
-// authority that stopped at one level would make "a lead may set what somebody
-// in their line does next" mean "a lead may, for the people directly under
-// them" — which is not what a line is.
+// Asked of the org rather than walked here, because a lead's line is one fact
+// with more than one reader, and each reader that walked the chart itself was
+// a chance to walk a different chart.
 //
-// A HANDLE THIS BUILD CANNOT RESOLVE ANSWERS FALSE, which is the conservative
-// direction: the write is then refused unless it is the person's own.
+// A HANDLE THIS BUILD CANNOT RESOLVE ANSWERS FALSE, on either side, which is
+// the conservative direction: the write is then refused unless it is the
+// person's own. The person themselves is never in their own line.
 func engineLeads(e *engine.Engine) builtin.Leads {
 	return func(_ context.Context, actor, handle string) bool {
 		c := e.Company()
-		if c == nil || c.Org == nil || actor == "" || actor == handle {
+		if c == nil || c.Org == nil {
 			return false
 		}
-		seat := c.Org.SeatByHandle(handle)
-		if seat == nil {
-			return false
-		}
-		for _, manager := range c.Org.Ancestors(seat) {
-			if manager.Handle() == actor {
-				return true
-			}
-		}
-		return false
+		lead := c.Org.SeatByHandle(actor)
+		return lead != nil && slices.Contains(c.Org.LeadsInLine(lead), handle)
 	}
 }
 

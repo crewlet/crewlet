@@ -47,11 +47,19 @@ func (o *Organization) Reports(r *Role) []*Role {
 // config can express a cycle, and a prompt builder that looped forever on
 // one would take the whole turn with it. A cycle simply ends the chain.
 func (o *Organization) Ancestors(r *Role) []*Role {
+	return chainAbove(r, o.Manager)
+}
+
+// chainAbove is the management chain above r as managerOf answers each step,
+// under the one stopping rule [Organization.Ancestors] documents. Shared with
+// [Organization.LeadsInLine] so that a seat's line and a seat's chain are one
+// walk read in two directions rather than two walks that agree today.
+func chainAbove(r *Role, managerOf func(*Role) *Role) []*Role {
 	var out []*Role
 	seen := map[string]struct{}{r.Name: {}}
 	current := r
 	for {
-		manager := o.Manager(current)
+		manager := managerOf(current)
 		if manager == nil {
 			return out
 		}
@@ -62,6 +70,68 @@ func (o *Organization) Ancestors(r *Role) []*Role {
 		seen[manager.Name] = struct{}{}
 		current = manager
 	}
+}
+
+// LeadsInLine returns the handles of every seat in lead's LINE — every seat
+// whose management chain ([Organization.Ancestors]) passes through lead: its
+// direct reports, theirs, and so on to the bottom of the chart — in the
+// engine's own seat order ([Organization.AllRoles]). Lead is never in its own
+// line, and a nil lead has none.
+//
+// It is the ONE answer to "is this person somebody in that one's line", which
+// is the authority a lead holds over a report's queue (`set_priorities`). It
+// is defined once, here, because the copies of it disagreed: the dashboard
+// walked every manager a seat has while the engine walked the primary chain,
+// so a screen offered a lead a reorder the engine then refused.
+//
+// THE PRIMARY CHAIN, NOT EVERY MANAGER. A member reached both by an outside
+// seat managing its unit by name and by its own lead's auto-management has two
+// managers (see [Organization.autoManageByLead]), and it is in the line of the
+// one [Organization.Manager] names and of everybody above that one — not in
+// the other's. That is the line the org chart draws and the chain an identity
+// prompt and an escalation follow; a lead relation over every manager would be
+// a second chart, one the company never sees, granting writes nobody can
+// trace to a line on it.
+//
+// THROUGH manages AND UNIT LEADERSHIP ALIKE, because after
+// [Organization.Normalize] they are one list: a unit named in manages stands
+// for its seats, and a unit's lead manages the members nobody in the unit
+// already does. So a lead who wrote no manages at all still has the team they
+// lead in their line.
+//
+// ANY DEPTH, not only direct reports: a founder leads everybody, and an
+// authority that stopped one level down would make "somebody in their line"
+// mean "somebody directly under them".
+//
+// A CYCLE ENDS where [Organization.Ancestors] ends it, at the first repeat, so
+// every seat on a management loop is in every other's line and never in its
+// own, and the walk terminates.
+func (o *Organization) LeadsInLine(lead *Role) []string {
+	if lead == nil {
+		return nil
+	}
+	// [Organization.Manager] FOR EVERY SEAT AT ONCE: the first seat in
+	// AllRoles order whose manages lists a name. Asked per step, the walk
+	// below would rescan the company for every manager of every seat.
+	primary := make(map[string]*Role)
+	for candidate := range o.AllRoles() {
+		for _, name := range candidate.Manages {
+			if _, taken := primary[name]; !taken {
+				primary[name] = candidate
+			}
+		}
+	}
+	managerOf := func(r *Role) *Role { return primary[r.Name] }
+
+	// No seat is skipped as the lead itself: the chain above a seat never
+	// holds the seat, which is the stopping rule rather than a special case.
+	var out []string
+	for r := range o.AllRoles() {
+		if slices.Contains(chainAbove(r, managerOf), lead) {
+			out = append(out, r.Handle())
+		}
+	}
+	return out
 }
 
 // UnitFor returns the unit that holds r as a DIRECT member, or nil for a
