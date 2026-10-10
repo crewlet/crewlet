@@ -722,6 +722,12 @@ func TestTheFlowAndFeedReadsSearchTheirIndex(t *testing.T) {
 			Kinds: []FeedKind{FeedHandoff}}, false},
 		"a later page of one writer's hand-offs": {FeedQuery{Limit: 20, Actor: "h-7",
 			Kinds: []FeedKind{FeedHandoff}, Before: before}, true},
+		// ONE PERSON'S FEED is a residual predicate on the same walk —
+		// every arm a lookup by task — never a second order to sort by.
+		"one person's feed": {FeedQuery{Limit: 20,
+			Involving: Party{Handle: "h-7", OperatorID: "ops-7"}}, false},
+		"a later page of one person's feed": {FeedQuery{Limit: 20,
+			Involving: Party{Handle: "h-7"}, Before: before}, true},
 	} {
 		kinds := c.q.Kinds
 		if len(kinds) == 0 {

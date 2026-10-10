@@ -109,6 +109,11 @@ type FeedQuery struct {
 	// the person a bound token's commit was made for.
 	Actor string
 
+	// Involving narrows to the rows about a task one person is IN — see
+	// [involvingSQL] — under every identity their rows carry. Unnamed is
+	// the whole company.
+	Involving Party
+
 	// Before resumes a scroll; nil is the newest page.
 	Before *FeedCursor
 
@@ -325,6 +330,11 @@ func companyFeedStatement(q FeedQuery, kinds []FeedKind) (string, []any) {
 		where += " AND (h.actor = ? OR h.actor_seat = ?)"
 		args = append(args, actor, actor)
 	}
+	if q.Involving.Named() {
+		clause, involved := involvingSQL(q.Involving)
+		where += " AND " + clause
+		args = append(args, involved...)
+	}
 	args = append(args, q.Limit+1)
 	return `
 		SELECT h.id, h.subject_id, h.kind, h.fields_json, h.effective_at, h.log_seq,
@@ -338,6 +348,44 @@ func companyFeedStatement(q FeedQuery, kinds []FeedKind) (string, []any) {
 		WHERE ` + where + `
 		ORDER BY h.effective_at DESC, h.log_seq DESC
 		LIMIT ?`, args
+}
+
+// involvingSQL is the predicate a feed row passes when it is about a task the
+// person is IN, over every identity [Party.Handles] names:
+//
+//   - they FILED it — its reporter;
+//   - they OWN it — its assignee now;
+//   - they WERE ASSIGNED it by this very change — a hand-off from or to them,
+//     read off the row's own delta, which still names them once the task has
+//     moved on (and on a purged task, whose row is gone);
+//   - they ASKED or WERE ASKED something on it — an ask, open or settled, they
+//     authored or that names them, and never one somebody removed;
+//   - they WATCH it — and not muted, which is "watching, but not for me":
+//     the tracker keeps both sides, and a muted watcher reading the change
+//     they muted would be the subscription they turned off.
+//
+// Collaborators and commenters are watchers by the tracker's participants
+// rule, so they are in it through the last arm.
+//
+// A RESIDUAL PREDICATE on the same scan, like `actor=`'s, so the page is still
+// read in `tracker_history_moves_idx`'s own order and stops at its limit; each
+// arm is an index lookup by task (`tracker_watchers`' key, the thread index on
+// `tracker_comments`) or a column of the row the join already holds.
+func involvingSQL(who Party) (string, []any) {
+	ids := who.args()
+	in := "(" + placeholders(len(ids)) + ")"
+	clause := `(t.reporter IN ` + in + ` OR t.assignee IN ` + in + `
+		OR json_extract(h.fields_json, '$.assignee.from') IN ` + in + `
+		OR json_extract(h.fields_json, '$.assignee.to') IN ` + in + `
+		OR EXISTS (SELECT 1 FROM tracker_comments c WHERE c.task_id = h.subject_id
+			AND c.ask <> '' AND c.removed = 0 AND (c.ask IN ` + in + ` OR c.author IN ` + in + `))
+		OR EXISTS (SELECT 1 FROM tracker_watchers w WHERE w.task_id = h.subject_id
+			AND w.muted = 0 AND w.handle IN ` + in + `))`
+	var args []any
+	for range 7 {
+		args = append(args, ids...)
+	}
+	return clause, args
 }
 
 // classifyFeedRow files a row under the first requested kind it is, in
