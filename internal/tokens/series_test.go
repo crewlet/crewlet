@@ -322,6 +322,87 @@ func TestAUnitBandCountsItsSeatsAndARootSeatHasItsOwn(t *testing.T) {
 	}
 }
 
+func TestAUnitBandIsSplitIntoItsSeatsFromTheSameCells(t *testing.T) {
+	t.Parallel()
+	// A team's bar is drawn in its seats' shares, so the parts come from the
+	// cells that made the band: biggest first, keyed as the seat grouping
+	// keys a band, and summing to the band exactly.
+	cells := []tokens.Cell{
+		cell("2026-06-14", "dev", "execute", "sonnet", 20),
+		cell("2026-06-14", "ops", "execute", "sonnet", 4),
+		cell("2026-06-15", "dev", "review", "sonnet", 5),
+		cell("2026-06-15", "ops", "execute", "haiku", 26),
+		cell("2026-06-15", "ceo", "execute", "sonnet", 10),
+	}
+	got := tokens.BucketDaily(cells, tokens.SeriesOptions{
+		Group: tokens.GroupUnit, Range: days(t, "2026-06-14", "2026-06-15", time.UTC),
+		Units: map[string]string{"dev": "Engineering", "ops": "Engineering"},
+	})
+	rows := map[string]tokens.GroupRow{}
+	for _, row := range got.ByGroup {
+		rows[row.Group] = row
+	}
+	eng := rows["Engineering"]
+	type part struct {
+		group, handle string
+		total         int
+	}
+	var parts []part
+	sum := 0
+	for _, p := range eng.Parts {
+		parts = append(parts, part{p.Group, p.Handle, p.TotalTokens})
+		sum += p.TotalTokens
+	}
+	want := []part{{"ops", "ops", 30}, {"dev", "dev", 25}}
+	if !slices.Equal(parts, want) {
+		t.Errorf("Engineering's parts = %+v, want %+v", parts, want)
+	}
+	if sum != eng.TotalTokens {
+		t.Errorf("the parts sum to %d, and the band is %d", sum, eng.TotalTokens)
+	}
+	if root := rows["no unit"]; len(root.Parts) != 1 || root.Parts[0].Group != "ceo" {
+		t.Errorf("the root seats' band = %+v, want the one seat that spent in it", root.Parts)
+	}
+
+	// EVERY OTHER GROUPING IS UNSPLIT, and so is a residual holding several
+	// units: its parts would be seats from teams the chart does not name.
+	bySeat := tokens.BucketDaily(cells, tokens.SeriesOptions{
+		Group: tokens.GroupSeat, Range: days(t, "2026-06-14", "2026-06-15", time.UTC),
+	})
+	for _, row := range bySeat.ByGroup {
+		if row.Parts != nil {
+			t.Errorf("seat band %q has parts %+v", row.Group, row.Parts)
+		}
+	}
+	folded := tokens.BucketDaily(cells, tokens.SeriesOptions{
+		Group: tokens.GroupUnit, Range: days(t, "2026-06-14", "2026-06-15", time.UTC),
+		Units:  map[string]string{"dev": "Engineering", "ops": "Operations"},
+		Groups: 1,
+	})
+	last := folded.ByGroup[len(folded.ByGroup)-1]
+	if !last.Other || last.Parts != nil {
+		t.Errorf("residual = %+v, want an other with no parts", last)
+	}
+
+	// ON THE WIRE a part is the seat's key, its handle and its bucket, and a
+	// band without parts says nothing about them.
+	wire, err := json.Marshal(eng.Parts[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(wire), `"group":"ops","handle":"ops"`) ||
+		!strings.Contains(string(wire), `"total_tokens":30`) {
+		t.Errorf("a part marshals as %s", wire)
+	}
+	unsplit, err := json.Marshal(bySeat.ByGroup[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(unsplit), `"parts"`) {
+		t.Errorf("a band with no parts marshals them anyway: %s", unsplit)
+	}
+}
+
 func TestProviderAndSeatAreBandsOfTheirOwn(t *testing.T) {
 	t.Parallel()
 	a := cell("2026-06-14", "ceo", "execute", "sonnet", 10)

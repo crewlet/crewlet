@@ -772,9 +772,21 @@ export interface SeriesBand extends Bucket {
   handle?: string;
   /** How many seats spent in a UNIT band over the window. */
   seats?: number;
+  /**
+   * A UNIT band split by the seats that spent in it, biggest first, summing to
+   * the band. Absent on every other grouping and on the residual row.
+   */
+  parts?: SeriesPart[];
   /** The residual: every group past the chart's cap, and how many it stands for. */
   other: boolean;
   folded: number;
+}
+
+/** One seat's share of a unit band (`tokens.GroupPart`). */
+export interface SeriesPart extends Bucket {
+  /** The seat as `group: seat` keys its band: its handle, else its role. */
+  group: string;
+  handle?: string;
 }
 
 export interface SeriesPoint extends Bucket {
