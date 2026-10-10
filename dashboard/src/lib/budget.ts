@@ -11,6 +11,8 @@
  */
 
 import type { BudgetState } from "~/contract/spend.ts";
+import { companyDateLabel } from "~/lib/format.ts";
+import { dayLabelIn } from "~/lib/range.ts";
 import type { BudgetWindow } from "~/protocol/types.ts";
 
 /** How a period reads in front of "token budget": "the company's daily token
@@ -57,6 +59,59 @@ export function windowOf(
   period: BudgetWindow["period"],
 ): BudgetWindow | undefined {
   return windows?.find((w) => w.period === period);
+}
+
+// ---------------------------------------------------------------------------
+// When a window turns over
+// ---------------------------------------------------------------------------
+
+/*
+ * ON THE COMPANY'S CALENDAR, the clock every window is cut on (`timezone` on
+ * the budgets answer and the live meter, ADR-0018). A day always turns over at
+ * the company's midnight, so its reading is that midnight with the zone NAMED —
+ * a reader's own midnight may be another. A week or a month turns over on the
+ * company date its first instant falls on, which on a reader's own clock may
+ * be the evening before.
+ *
+ * ONE READING, for the caption and the sentence alike. It lived in a React
+ * component, so the attention queue — a pure module — could not reach it and
+ * printed the engine's raw `resets_at` ("2026-02-01T00:00:00Z") where every
+ * other screen said "Feb 1".
+ */
+
+/** The company date a window turns over on ("Feb 1"), or null where the
+ *  engine's instant does not parse. */
+function turnoverDate(w: BudgetWindow, zone: string | undefined): string | null {
+  const at = Date.parse(w.resets_at);
+  return Number.isFinite(at) ? companyDateLabel(dayLabelIn(at, zone)) : null;
+}
+
+/** "midnight (Asia/Tokyo)": the company's midnight, the zone named. */
+function companyMidnightWords(zone: string | undefined): string {
+  return `midnight (${zone || "UTC"})`;
+}
+
+/**
+ * When a window's allowance comes back, as a caption says it: "resets at
+ * midnight (Asia/Tokyo)" for a day, "resets Oct 1" for a week or a month.
+ * Empty where the engine's instant does not parse.
+ */
+export function resetsWords(w: BudgetWindow, zone: string | undefined): string {
+  const date = turnoverDate(w, zone);
+  if (date === null) return "";
+  return w.period === "day" ? `resets at ${companyMidnightWords(zone)}` : `resets ${date}`;
+}
+
+/**
+ * When a window turns over, as the tail of a sentence: "at midnight
+ * (Asia/Tokyo)" for a day, "on Oct 1" for a week or a month. Empty where the
+ * engine's instant does not parse, so a sentence ends rather than naming a
+ * moment nobody can read.
+ */
+export function turnsOverWords(w: BudgetWindow, zone: string | undefined): string {
+  const date = turnoverDate(w, zone);
+  if (date === null) return "";
+  return w.period === "day" ? `at ${companyMidnightWords(zone)}` : `on ${date}`;
 }
 
 // ---------------------------------------------------------------------------

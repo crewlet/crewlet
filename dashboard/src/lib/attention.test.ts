@@ -32,6 +32,7 @@ function input(over: Partial<AttentionInput> = {}): AttentionInput {
     agents: [],
     runs: [],
     budget: null,
+    zone: "UTC",
     engine: healthFrame({ configured: true }),
     connected: true,
     authRejected: false,
@@ -212,6 +213,9 @@ describe("what it surfaces", () => {
 
     const stale = attentionQueue(input({ agents: [call(new Date(now - 200_000).toISOString())] }));
     expect(stale[0]?.severity).toBe("caution");
+    // HOW LONG IT HAS BEEN QUIET, as the running-turn row says it — never the
+    // push's raw stamp, which is what this row printed.
+    expect(stale[0]?.detail).toContain("no update for 3m 20s");
     // THE ROUND A PERSON READS, which is the engine's zero-based counter plus
     // one. This row printed the raw counter, so it named a round one lower than
     // the seat card it links to — one call, two numbers, one click apart.
@@ -281,7 +285,7 @@ describe("what it surfaces", () => {
       }),
     );
     expect(item?.title).toContain("monthly");
-    expect(item?.detail).toContain("2026-02-01T00:00:00Z");
+    expect(item?.detail).toContain("wait for the month to turn over on Feb 1");
     expect(item?.at).toBe("2026-01-01T11:59:00Z");
   });
 
@@ -299,7 +303,10 @@ describe("what it surfaces", () => {
       }),
     );
     expect(items[0]?.id).toBe("seat-budget-Dev A");
-    expect(items[0]?.detail).toContain("11:59");
+    // THE GATE'S STAMP AS THE BUDGETS SCREEN SAYS IT: how long ago, a minute
+    // before `now`.
+    expect(items[0]?.detail).toContain("last refused a call 1m ago");
+    expect(items[0]?.detail).toContain("Raise the seat's daily ceiling");
   });
 
   // THE ADVICE IS ONE AN OPERATOR CAN TAKE. The counters are windowed and
@@ -312,7 +319,7 @@ describe("what it surfaces", () => {
       win({ state: "near", used: 95 }),
     ]) {
       const [item] = attentionQueue(input({ budget: meter(w) }));
-      expect(item?.detail).toContain("token_budget.day");
+      expect(item?.detail).toContain("Raise the company's daily ceiling");
       expect(item?.detail).toContain("turn over");
       expect(item?.detail).not.toMatch(/reset/i);
     }
@@ -385,6 +392,160 @@ describe("what it surfaces", () => {
       for (const [subject, phrase] of Object.entries(SUBJECTS) as [Subject, string][]) {
         if (WHERE_OF[subject] === where) expect(clause, subject).toContain(phrase);
         else expect(clause, subject).not.toContain(phrase);
+      }
+    }
+  });
+});
+
+// A ROW IS READ BY A PERSON, so every value in it is the dashboard's own
+// reading of what the engine sent. The budget rows printed a window's label
+// (`2026-W41`), its `resets_at` and `refused_at` as raw ISO instants and the
+// config key of the ceiling (`token_budget.week`); a stalled round printed the
+// push's stamp; a refused token named `api.auth.tokens` in plain prose.
+describe("what a row says", () => {
+  // THE COMPANY'S CLOCK, NOT THE BROWSER'S OR UTC. 1 January 12:00 UTC is
+  // 21:00 in Tokyo, a Thursday of ISO week 1: the week turns over at Monday's
+  // midnight in Tokyo, which is Sunday 4 January in UTC. A row reading the
+  // instant on any clock but the company's names the 4th.
+  test("a window turns over on the company's calendar, named in words", () => {
+    const week = win({
+      period: "week",
+      window: "2026-W01",
+      starts_at: "2025-12-28T15:00:00Z",
+      resets_at: "2026-01-04T15:00:00Z",
+      state: "refusing",
+      used: 1_250_000,
+      limit: 1_000_000,
+      refused_at: "2026-01-01T11:55:00Z",
+    });
+    const [item] = attentionQueue(input({ zone: "Asia/Tokyo", budget: meter(week) }));
+    expect(item?.detail).toBe(
+      "Turns are being declined at the budget gate; it last refused a call 5m ago. " +
+        "1,250,000 of 1,000,000 tokens are spent this week. " +
+        "Raise the company's weekly ceiling, or wait for the week to turn over on Jan 5.",
+    );
+  });
+
+  // A DAY TURNS OVER AT THE COMPANY'S MIDNIGHT, and the zone is named, because
+  // the reader's own midnight may be another one.
+  test("a day turns over at the company's midnight, the zone named", () => {
+    const day = win({
+      window: "2026-01-01",
+      starts_at: "2025-12-31T15:00:00Z",
+      resets_at: "2026-01-01T15:00:00Z",
+      state: "near",
+      used: 95,
+    });
+    const [item] = attentionQueue(input({ zone: "Asia/Tokyo", budget: meter(day) }));
+    expect(item?.detail).toBe(
+      "95 of 100 tokens are spent today. " +
+        "Raise the company's daily ceiling, or wait for the day to turn over at midnight (Asia/Tokyo).",
+    );
+  });
+
+  // AN INSTANT THAT DOES NOT PARSE ENDS THE SENTENCE rather than naming a
+  // moment nobody can read.
+  test("a window whose turnover is unreadable is not given one", () => {
+    const [item] = attentionQueue(
+      input({ budget: meter(win({ state: "near", used: 95, resets_at: "" })) }),
+    );
+    expect(item?.detail).toMatch(/wait for the day to turn over\.$/);
+  });
+
+  test("a draining node counts its turns in words", () => {
+    const one = attentionQueue(
+      input({ engine: healthFrame({ shutting_down: true, in_flight: 1 }) }),
+    );
+    expect(one[0]?.detail).toMatch(/^1 turn still in flight\./);
+    const three = attentionQueue(
+      input({ engine: healthFrame({ shutting_down: true, in_flight: 3 }) }),
+    );
+    expect(three[0]?.detail).toMatch(/^3 turns still in flight\./);
+  });
+
+  // THE SWEEP, over every condition at once: what is guarded is the SHAPE of
+  // a raw value, so a new sentence that interpolates one fails here whatever
+  // it is about.
+  test("no row prints a raw instant, a window label or a config key", () => {
+    const quiet = (updated: string) => ({
+      versions: ZERO_VERSIONS,
+      turn_id: "t2",
+      phase: "execute",
+      iteration: 1,
+      model: "",
+      trigger: null,
+      prompt: "",
+      prompt_messages: null,
+      response: "",
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      tool_executions: null,
+      round_num: 3,
+      rounds_used: 3,
+      in_progress: true,
+      updated_at: updated,
+    });
+    const refusing = (period: BudgetWindow["period"], window: string, resets: string) =>
+      win({
+        period,
+        window,
+        resets_at: resets,
+        state: "refusing",
+        refused_at: "2026-01-01T11:59:00Z",
+      });
+    const all = [
+      ...attentionQueue(
+        input({
+          authRejected: true,
+          engine: healthFrame({
+            configured: false,
+            posture: "shed",
+            shutting_down: true,
+            in_flight: 2,
+          }),
+          budget: meter(refusing("week", "2026-W01", "2026-01-05T00:00:00Z")),
+          agents: [
+            {
+              id: "a",
+              role: "Dev A",
+              handle: "dev-a",
+              live_call: quiet(new Date(now - 900_000).toISOString()),
+              budget: { windows: [refusing("month", "2026-01", "2026-02-01T00:00:00Z")] },
+            },
+            {
+              id: "c",
+              role: "Dev C",
+              handle: "dev-c",
+              activity: "stopped",
+              stopped_reason: "paused",
+              paused: { by: "jane-founder", at: "2026-01-01T11:00:00Z", stop_running: false },
+            },
+          ],
+        }),
+      ),
+      ...attentionQueue(input({ budget: meter(win({ state: "near", used: 95 })) })),
+    ];
+    // Every condition the sweep means to cover is in it, or a sentence
+    // dropped from the fixture would pass by not being read.
+    expect(all.map((i) => i.id).sort()).toEqual(
+      [
+        "auth",
+        "draining",
+        "org-budget",
+        "org-budget-near",
+        "posture-shed",
+        "seat-budget-Dev A",
+        "stale-Dev A-t2",
+        "stopped-Dev C",
+        "unconfigured",
+      ].sort(),
+    );
+    for (const item of all) {
+      for (const text of [item.title, item.detail]) {
+        expect(text, item.id).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
+        expect(text, item.id).not.toMatch(/\b\d{4}-(W\d{2}|\d{2})\b/);
+        expect(text, item.id).not.toMatch(/\b[a-z_]+\.[a-z_]+\b/);
       }
     }
   });

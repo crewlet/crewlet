@@ -24,6 +24,9 @@ export function useAttention(): Attention[] {
   const engine = useEngineHealth();
   const org = useOrg();
   const nameOf = useMemo(() => nameOfIn(indexOrg(org)), [org]);
+  // THE CLOCK THE WINDOWS WERE CUT ON, which the meter states beside them;
+  // the company document's own until a meter has reported.
+  const zone = budget?.timezone || org?.timezone;
   // THE DURABLE CODING RUNS, because a parked one is the longest-lived item
   // this queue has by construction — it is waiting for a person — and what the
   // row says about it is how long its box is still held, which is the pause
@@ -36,12 +39,13 @@ export function useAttention(): Attention[] {
         agents,
         runs: runs?.runs ?? [],
         budget,
+        zone,
         engine: engine ?? null,
         connected,
         authRejected,
         now,
         nameOf,
       }),
-    [agents, runs, budget, engine, connected, authRejected, now, nameOf],
+    [agents, runs, budget, zone, engine, connected, authRejected, now, nameOf],
   );
 }

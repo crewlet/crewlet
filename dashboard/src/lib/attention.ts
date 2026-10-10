@@ -23,9 +23,10 @@
  */
 
 import type { AgentRow, BudgetWindow, OrgBudget, SandboxRun } from "~/protocol/index.ts";
-import { PERIOD_ADJECTIVE, waitedOn } from "~/lib/budget.ts";
+import { PERIOD_ADJECTIVE, PERIOD_WORDS, turnsOverWords, waitedOn } from "~/lib/budget.ts";
 import type { EngineHealth } from "~/contract/health.ts";
 import type { GlyphName } from "@crewlethq/icons/glyphs";
+import { fmtElapsed, fmtExact, plural, relTime, tsKey } from "./format.ts";
 import { activityOf, roundLabel, staleness, stoppedLine, type NameOf } from "./seats.ts";
 
 export type Severity = "critical" | "caution" | "info";
@@ -168,6 +169,13 @@ export interface AttentionInput {
   runs: SandboxRun[];
   /** `null` before the first report: nothing to judge, so nothing is raised. */
   budget: OrgBudget | null;
+  /**
+   * The company's clock (`timezone` on the live meter, else `org.timezone`),
+   * which every budget window is cut on and turns over by. A row says when a
+   * window turns over on THIS clock — "at midnight (Asia/Tokyo)", "on Oct 12"
+   * — as the Budgets screen does, rather than on the browser's.
+   */
+  zone: string | undefined;
   engine: EngineHealth | null;
   connected: boolean;
   authRejected: boolean;
@@ -180,7 +188,7 @@ const ORDER: Record<Severity, number> = { critical: 0, caution: 1, info: 2 };
 
 export function attentionQueue(input: AttentionInput): Attention[] {
   const out: Attention[] = [];
-  const { agents, runs, budget, engine, connected, authRejected, now, nameOf } = input;
+  const { agents, runs, budget, zone, engine, connected, authRejected, now, nameOf } = input;
 
   // --- the engine itself ---------------------------------------------------
   if (authRejected) {
@@ -190,8 +198,11 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       subject: "engine",
       icon: "key",
       title: "The engine refused this browser's token",
+      // THE THING BY NAME, NOT ITS KEY. A row is plain text, read by whoever
+      // opened the page; the screens that point an operator at the file draw
+      // the key as code beside the field that takes the token.
       detail:
-        "Reads and writes are both blocked. Set a token matching one of the api.auth.tokens entries.",
+        "Reads and writes are both blocked. Set an API token the engine is configured to accept.",
     });
   } else if (!connected) {
     out.push({
@@ -241,7 +252,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       subject: "engine",
       icon: "power",
       title: "This node is draining",
-      detail: `${engine.in_flight ?? 0} turn(s) still in flight. Seats are released as each finishes.`,
+      detail: `${plural(engine.in_flight ?? 0, "turn")} still in flight. Seats are released as each finishes.`,
       path: ["settings", "nodes"],
     });
   }
@@ -265,7 +276,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       subject: "budget",
       icon: "coins",
       title: `The company's ${PERIOD_ADJECTIVE[orgRefusing.period]} token budget is refusing charges`,
-      detail: `${refusalWords(orgRefusing)} Raise token_budget.${orgRefusing.period}, or wait for ${orgRefusing.window} to turn over at ${orgRefusing.resets_at}.`,
+      detail: `${refusalWords(orgRefusing, now)} ${wayOut("the company's", orgRefusing, zone)}`,
       path: ["spend"],
       at: orgRefusing.refused_at,
     });
@@ -276,7 +287,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       subject: "budget",
       icon: "coins",
       title: `The company's ${PERIOD_ADJECTIVE[orgNear.period]} token budget is nearly spent`,
-      detail: `${spentWords(orgNear)} Raise token_budget.${orgNear.period}, or wait for ${orgNear.window} to turn over at ${orgNear.resets_at}.`,
+      detail: `${spentWords(orgNear)} ${wayOut("the company's", orgNear, zone)}`,
       path: ["spend"],
     });
   }
@@ -362,8 +373,10 @@ export function attentionQueue(input: AttentionInput): Attention[] {
           // helper. It printed the raw zero-based counter, so the queue named a
           // round one lower than the seat page it lands on, and "?" for the
           // opening frame — which is the case this row exists for: a first
-          // model round that never came back.
-          detail: `${call.phase} · ${roundLabel(call).text} — no update since ${call.updated_at}.`,
+          // model round that never came back. And HOW LONG IT HAS BEEN QUIET
+          // as the running-turn row says it (`quietMark`), where it printed
+          // the push's raw stamp.
+          detail: `${call.phase} · ${roundLabel(call).text} — no update for ${fmtElapsed(now - tsKey(call.updated_at))}.`,
           // THE OVERVIEW, where the seat's current turn is drawn round by
           // round — the profile's default tab, so the path alone opens it.
           path: ["agents", "seats", String(agent.handle ?? agent.id)],
@@ -384,7 +397,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         subject: "budget",
         icon: "coins",
         title: `${agent.role}'s ${PERIOD_ADJECTIVE[refusing.period]} token budget is refusing charges`,
-        detail: `${refusalWords(refusing)} Raise the seat's token_budget.${refusing.period}, or wait for ${refusing.window} to turn over at ${refusing.resets_at}.`,
+        detail: `${refusalWords(refusing, now)} ${wayOut("the seat's", refusing, zone)}`,
         // THE SETTINGS TAB, where the ceiling that refused is written beside
         // each window's live meter.
         path: ["agents", "seats", String(agent.handle ?? agent.id)],
@@ -443,16 +456,36 @@ function waitingDetail(run: SandboxRun, now: number): string {
   return `${asked} Its box is reclaimed in ${when}.`;
 }
 
+/*
+ * A BUDGET ROW IS READ, NOT PARSED. These sentences printed what the engine
+ * sends — the window's label (`2026-W41`), `resets_at` and `refused_at` as raw
+ * ISO instants, and the ceiling's config key (`token_budget.week`) — in the one
+ * row a person opens when the company stops working. Each value is now said as
+ * the Budgets screen says it: the window by its span on the company clock
+ * ("this week"), its turnover by the same helper as that screen's caption, the
+ * refusal by how long ago it was, and the ceiling by what it is.
+ */
+
 /** A refusing window in words: the gate's own stamp where it has one, and the
  *  arithmetic where the window is full but no charge has been turned away yet. */
-function refusalWords(w: BudgetWindow): string {
-  const spent = `${w.used.toLocaleString()} of ${(w.limit ?? 0).toLocaleString()} tokens in ${w.window}.`;
+function refusalWords(w: BudgetWindow, now: number): string {
   return w.refused_at
-    ? `Turns are being declined at the budget gate; last refusal ${w.refused_at}. ${spent}`
-    : `No further charge fits, so turns are being declined at the gate. ${spent}`;
+    ? `Turns are being declined at the budget gate; it last refused a call ${relTime(w.refused_at, now)}. ${spentWords(w)}`
+    : `No further charge fits, so turns are being declined at the gate. ${spentWords(w)}`;
 }
 
-/** A near window's spend in words. */
+/** A window's spend in words: "97 of 100 tokens are spent this week." */
 function spentWords(w: BudgetWindow): string {
-  return `${w.used.toLocaleString()} of ${(w.limit ?? 0).toLocaleString()} tokens in ${w.window} are spent.`;
+  return `${fmtExact(w.used)} of ${fmtExact(w.limit ?? 0)} tokens are spent ${PERIOD_WORDS[w.period]}.`;
+}
+
+/**
+ * The two ways to room in a full or nearly full window, `whose` naming the
+ * ceiling's owner ("the company's", "the seat's"): raise the ceiling, or wait
+ * for the window to turn over — never a reset, which the windowed counters do
+ * not have.
+ */
+function wayOut(whose: string, w: BudgetWindow, zone: string | undefined): string {
+  const when = turnsOverWords(w, zone);
+  return `Raise ${whose} ${PERIOD_ADJECTIVE[w.period]} ceiling, or wait for the ${w.period} to turn over${when ? ` ${when}` : ""}.`;
 }

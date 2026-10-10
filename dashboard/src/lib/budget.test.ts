@@ -2,7 +2,7 @@
 
 import { describe, expect, test } from "vitest";
 import type { BudgetWindow } from "~/protocol/types.ts";
-import { waitedOn, windowOf } from "./budget.ts";
+import { resetsWords, turnsOverWords, waitedOn, windowOf } from "./budget.ts";
 
 function w(over: Partial<BudgetWindow>): BudgetWindow {
   return {
@@ -42,6 +42,32 @@ describe("which window a scope waits on", () => {
   test("nothing in that state is nothing", () => {
     expect(waitedOn([w({ state: "near" })], "refusing")).toBeUndefined();
     expect(waitedOn(undefined, "refusing")).toBeUndefined();
+  });
+});
+
+// ON THE COMPANY'S CALENDAR. A week cut in Tokyo turns over at Monday's
+// midnight there, which is Sunday afternoon in UTC: read on any clock but the
+// company's, the date is a day early.
+describe("when a window turns over", () => {
+  const week = w({ period: "week", window: "2026-W40", resets_at: "2026-10-04T15:00:00Z" });
+  const day = w({ resets_at: "2026-09-23T15:00:00Z" });
+
+  test("a week or a month on the company date its first instant falls on", () => {
+    expect(turnsOverWords(week, "Asia/Tokyo")).toBe("on Oct 5");
+    expect(resetsWords(week, "Asia/Tokyo")).toBe("resets Oct 5");
+    expect(turnsOverWords(week, "UTC")).toBe("on Oct 4");
+  });
+
+  test("a day at the company's midnight, the zone named", () => {
+    expect(turnsOverWords(day, "Asia/Tokyo")).toBe("at midnight (Asia/Tokyo)");
+    expect(resetsWords(day, "Asia/Tokyo")).toBe("resets at midnight (Asia/Tokyo)");
+    // A COMPANY THAT WRITES NO ZONE RUNS ON UTC, and is told so.
+    expect(turnsOverWords(day, "")).toBe("at midnight (UTC)");
+  });
+
+  test("an instant that does not parse is not given a moment", () => {
+    expect(turnsOverWords(w({ resets_at: "" }), "UTC")).toBe("");
+    expect(resetsWords(w({ period: "month", resets_at: "soon" }), "UTC")).toBe("");
   });
 });
 
