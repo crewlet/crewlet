@@ -50,6 +50,7 @@ import {
 import { href, useLeaveGuard, useNavigator, useParam, useUnloadGuard } from "~/app/router.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
 import { matchesRow } from "~/app/keymap.ts";
+import { useClickOnNothing } from "~/ui/clickOnNothing.ts";
 import { fmtDateTime, plural } from "~/lib/format.ts";
 import { useAgents, useConnection, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { useManagedConfig } from "~/lib/useWriteAccess.ts";
@@ -980,6 +981,11 @@ function BuilderScreen({
     },
     [nav],
   );
+
+  // A CLICK ON NOTHING LETS THE SELECTION GO: on the empty field, the space
+  // round the table or the page under either (`ui/clickOnNothing.ts`). A
+  // selected node used to stay selected wherever the reader clicked next.
+  useClickOnNothing(selection !== null ? () => select(null) : null);
 
   // ---- Dialogs ----------------------------------------------------------------
 
