@@ -5,50 +5,137 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
-// slowBody yields one byte per read after a fixed pause, for a fixed number of
-// reads: a stream that is slow but never silent for longer than its gap.
-type slowBody struct {
-	gap   time.Duration
-	reads int
+// manualClock is a clock only the test moves, for the watchdog's timers: a
+// silence bound asserted on the wall clock is a claim about how promptly the
+// scheduler runs a goroutine, which no loaded runner keeps.
+type manualClock struct {
+	mu     sync.Mutex
+	now    time.Duration
+	timers []*manualTimer
 }
 
-func (b *slowBody) Read(p []byte) (int, error) {
-	if b.reads == 0 {
+type manualTimer struct {
+	clock *manualClock
+	at    time.Duration
+	f     func()
+	armed bool
+}
+
+func (c *manualClock) after(d time.Duration, f func()) stallTimer {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	t := &manualTimer{clock: c, at: c.now + d, f: f, armed: true}
+	c.timers = append(c.timers, t)
+	return t
+}
+
+// advance moves the clock by d and runs every armed timer whose time came.
+func (c *manualClock) advance(d time.Duration) {
+	c.mu.Lock()
+	c.now += d
+	var due []func()
+	for _, t := range c.timers {
+		if t.armed && t.at <= c.now {
+			t.armed = false
+			due = append(due, t.f)
+		}
+	}
+	c.mu.Unlock()
+	for _, f := range due {
+		f()
+	}
+}
+
+func (t *manualTimer) Reset(d time.Duration) bool {
+	t.clock.mu.Lock()
+	defer t.clock.mu.Unlock()
+	was := t.armed
+	t.at, t.armed = t.clock.now+d, true
+	return was
+}
+
+func (t *manualTimer) Stop() bool {
+	t.clock.mu.Lock()
+	defer t.clock.mu.Unlock()
+	was := t.armed
+	t.armed = false
+	return was
+}
+
+// talkingBody yields one byte per read, the clock moving by gap before each:
+// a stream that is slow but never silent for longer than its gap. Silent after
+// silentAfter reads, when that is set, for the clock's whole remaining run.
+type talkingBody struct {
+	clock       *manualClock
+	gap         time.Duration
+	reads       int
+	silentAfter int
+	served      int
+}
+
+func (b *talkingBody) Read(p []byte) (int, error) {
+	if b.served == b.reads {
 		return 0, io.EOF
 	}
-	time.Sleep(b.gap)
-	b.reads--
+	b.clock.advance(b.gap)
+	if b.silentAfter > 0 && b.served >= b.silentAfter {
+		// THE CONNECTION GOES QUIET: time passes and nothing arrives.
+		b.clock.advance(time.Hour)
+		return 0, io.ErrUnexpectedEOF
+	}
+	b.served++
 	p[0] = 'x'
 	return 1, nil
 }
 
-func (*slowBody) Close() error { return nil }
+func (*talkingBody) Close() error { return nil }
 
 // A STREAM IS BOUNDED BY ITS SILENCE, NOT ITS LENGTH: a body that keeps
-// arriving runs well past the idle bound in total and is never cut off,
+// arriving runs to four times the idle bound in total and is never cut off,
 // because each read that returns data restarts the clock.
 func TestALongStreamThatKeepsTalkingIsNeverCutOff(t *testing.T) {
 	t.Parallel()
 	const idle = 80 * time.Millisecond
-	ctx, w := WatchIdle(context.Background(), idle)
+	clock := &manualClock{}
+	ctx, w := watchIdle(context.Background(), idle, clock.after)
 	defer w.Stop()
-	body := w.Body(&slowBody{gap: idle / 4, reads: 16}) // ~4x idle in total
-	start := time.Now()
+	body := w.Body(&talkingBody{clock: clock, gap: idle / 4, reads: 16})
 	got, err := io.ReadAll(body)
 	if err != nil || len(got) != 16 {
 		t.Fatalf("read %d bytes, err %v", len(got), err)
 	}
-	if elapsed := time.Since(start); elapsed < 2*idle {
-		t.Fatalf("the body took %v, want well past the %v bound to prove it is not a total", elapsed, idle)
+	if clock.now < 2*idle {
+		t.Fatalf("the body took %v, want well past the %v bound to prove it is not a total", clock.now, idle)
 	}
 	if err := ctx.Err(); err != nil {
 		t.Fatalf("a stream that never went silent was cancelled: %v", context.Cause(ctx))
+	}
+}
+
+// AND A STREAM THAT STOPS TALKING IS CUT OFF, however long it talked first:
+// the bound is the gap since the last byte, not since the request.
+//
+// Mutation: drop the Reset in watchedBody.Read, and the stream above is cut
+// off a quarter of the way through instead.
+func TestAStreamThatGoesSilentIsCutOffAsAStall(t *testing.T) {
+	t.Parallel()
+	const idle = 80 * time.Millisecond
+	clock := &manualClock{}
+	ctx, w := watchIdle(context.Background(), idle, clock.after)
+	defer w.Stop()
+	body := w.Body(&talkingBody{clock: clock, gap: idle / 4, reads: 16, silentAfter: 12})
+	if _, err := io.ReadAll(body); err == nil {
+		t.Fatal("a body that went silent read to the end")
+	}
+	if !errors.Is(context.Cause(ctx), ErrStalled) {
+		t.Fatalf("cause = %v, want the stall", context.Cause(ctx))
 	}
 }
 

@@ -38,16 +38,41 @@ var ErrStalled = errors.New("stream went silent")
 type IdleWatchdog struct {
 	ctx    context.Context
 	cancel context.CancelCauseFunc
-	timer  *time.Timer
+	timer  stallTimer
 	idle   time.Duration
 	stall  error
 }
+
+// stallTimer is the one thing the watchdog needs of a timer: to be put off by
+// a read, and disarmed when the attempt ends. A *time.Timer is one.
+type stallTimer interface {
+	Reset(d time.Duration) bool
+	Stop() bool
+}
+
+// afterFunc arms f to run once d passes with nothing resetting it.
+//
+// A SEAM, AND ONLY FOR TIME: production is [time.AfterFunc] on the wall clock,
+// which is what a silence bound is about, and a test drives the same watchdog
+// on a clock it advances itself. Asserted on the wall clock instead, "a stream
+// that keeps talking is never cut off" was a claim about the scheduler — a
+// read 20ms after the last one, against an 80ms bound, failed on a loaded
+// runner the moment one goroutine waited its turn for 80ms.
+type afterFunc func(d time.Duration, f func()) stallTimer
+
+// wallClock is the production [afterFunc].
+func wallClock(d time.Duration, f func()) stallTimer { return time.AfterFunc(d, f) }
 
 // WatchIdle derives the attempt's context from ctx — the caller's, cancelled
 // as well once idle passes with nothing read — and the watchdog that does it.
 // A non-positive idle is a caller's bug — every stream would be declared dead
 // at once — so it panics rather than guess.
 func WatchIdle(ctx context.Context, idle time.Duration) (context.Context, *IdleWatchdog) {
+	return watchIdle(ctx, idle, wallClock)
+}
+
+// watchIdle is [WatchIdle] on the timers after makes.
+func watchIdle(ctx context.Context, idle time.Duration, after afterFunc) (context.Context, *IdleWatchdog) {
 	if idle <= 0 {
 		panic(fmt.Sprintf("httpapi.WatchIdle: idle bound must be positive, got %v", idle))
 	}
@@ -60,7 +85,7 @@ func WatchIdle(ctx context.Context, idle time.Duration) (context.Context, *IdleW
 		// is what every classifier already reads as a timeout.
 		stall: fmt.Errorf("%w: nothing arrived for %s: %w", ErrStalled, idle, context.DeadlineExceeded),
 	}
-	w.timer = time.AfterFunc(idle, func() { cancel(w.stall) })
+	w.timer = after(idle, func() { cancel(w.stall) })
 	return wctx, w
 }
 
