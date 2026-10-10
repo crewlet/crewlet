@@ -1,29 +1,32 @@
-// Package auth is the API's bearer-token guard.
+// Package auth is the API's access guard: it decides WHO a request is, and
+// refuses one that asks for more than its key reaches.
 //
-// Tier A lists the accepted tokens under api.auth.tokens. Each entry has an id,
-// recorded as the author of any write made with it, and a token resolved from
-// the environment at startup. The middleware wraps the whole mux: it extracts
-// the bearer token, compares it in constant time, and either attaches the
-// operator id to the request context or answers 401.
+// # Who a request is
 //
-// WHAT IT GUARDS IS A POLICY DECISION, NOT A FIXED PREFIX. Writes and the whole
-// of /config, /secrets, /setup and /operator always need a token — see
-// [GuardedPrefixes], which is the list, and the per-prefix rationale beside it.
-// Reads follow allow_anonymous_read, which defaults to open — [Guard.Requires]
-// is the one place that rule is written down, and both the HTTP middleware and
-// the WebSocket handshake consult it, so the two cannot end up guarded in one
-// place and open in the other. What the route rule cannot see is a QUESTION:
-// the reads that describe the deployment are refused to an anonymous caller by
-// the query registry (`RegisterOperator`) on both transports, however the
-// route that carried them was judged here, and so is somebody else's personal
-// record.
+// Tier A lists the accepted keys under api.auth.tokens. Each has an id,
+// recorded as the author of any write made with it, a ROLE — `member` or
+// `admin` — and a value resolved from the environment at startup. The
+// middleware wraps the whole mux, extracts the presented key, compares it in
+// constant time and attaches a [Principal] to the request: the key's id, its
+// role and the [Reach] that role carries. A request presenting no key is a
+// principal too, an anonymous one, whose reach is what `api.auth.anonymous`
+// opens. Every request has exactly one, so no handler has to tell "nobody
+// attached anything" from "nobody".
 //
-// The guard is mounted UNCONDITIONALLY. Mounting it only when Tier A is
-// present, while gating the /config write surface on a store being configured,
-// is two independent conditions deciding one security property — coinciding
-// only because every real caller happens to supply both. Tier A supplies the POSTURE, never the existence of
-// a check: with no tokens at all, no candidate can match, so reads serve and
-// every write and all of /config, /secrets, /setup and /operator is refused.
+// # What it may reach
+//
+// EVERY ROUTE NAMES ITS REACH where it is mounted ([Router]), and [Guard.Require]
+// refuses a caller below it before the handler runs: 401 for a caller with no
+// accepted key, 403 for one whose key is accepted and reaches less. Reach
+// replaced a list of always-guarded prefixes beside a switch that opened every
+// other read — transcripts, diaries and the event log among them — to anyone
+// who could reach the port, and a "person" key that reached everything an
+// operator key did. ADR-0031 is the decision; [Reach] states the one rule that
+// draws the line between member and admin.
+//
+// The guard is mounted UNCONDITIONALLY. Tier A supplies the POSTURE, never the
+// existence of a check: with no keys at all, no candidate can match, so every
+// caller is anonymous and is served what the anonymous posture opens.
 package auth
 
 import (
@@ -43,48 +46,6 @@ import (
 
 var log = logging.Get("api.auth")
 
-// GuardedPrefixes are the surfaces that always need a token, reads included,
-// and are never eligible for allow_anonymous_read.
-//
-//   - /config: reading it exposes the whole company document — its org chart,
-//     its integrations, the shape of every credential it holds — and writing
-//     it changes the company.
-//   - /secrets: the fleet's credential store. Even the listing, which carries
-//     no values, says which credentials a company holds and when each last
-//     changed, and one route returns a value outright.
-//   - /setup: connecting an integration. It answers with the NAMES of the
-//     credentials a company holds, which of them are unset, and the
-//     third-party app pages an administrator would visit, and it writes
-//     both the secret store and the company document. Reads included, for
-//     the same reason /secrets guards its listing: the map of what a
-//     company has not configured is worth as much to an attacker as the
-//     configuration.
-//   - /operator: the operator MCP surface, which FILES AND MOVES WORK and
-//     writes the company's own knowledge base. A write is a write whatever
-//     allow_anonymous_read opens, and it is the credential's own name that
-//     lands on each record as the author — so a request with no token has
-//     nobody to attribute the write to. It is deliberately NOT under /mcp/,
-//     which is exempt wholesale for the sandbox bridge, so a box holding no
-//     API token can reach its seat's tools: mounting a writable company
-//     surface there would have put it behind no credential at all.
-//
-// In the order the slice declares, and A LIST rather than one constant,
-// because the alternative was a second const somewhere else and a second
-// `HasPrefix` beside it — and the two would have drifted the day a third
-// surface was added, each staying self-consistent while one of them stopped
-// being consulted.
-var GuardedPrefixes = []string{"/config", "/secrets", "/setup", "/operator"}
-
-// AlwaysGuarded reports whether a path is on one of those surfaces.
-func AlwaysGuarded(path string) bool {
-	for _, prefix := range GuardedPrefixes {
-		if strings.HasPrefix(path, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
 // AnonymousOperator is the attribution recorded when auth is disabled.
 //
 // Config refuses it as a token id, so a real operator's writes can never be
@@ -95,36 +56,6 @@ func AlwaysGuarded(path string) bool {
 // reservation stopped covering what the API actually stamps.
 const AnonymousOperator = org.ReservedOperatorID
 
-// unguardedExact and unguardedPrefixes are the routes served without a bearer
-// token, because they authenticate by other means or because a client must
-// reach them to obtain a token:
-//
-//   - /health, /ready: probes. An orchestrator has no token, and a liveness
-//     check that 401s is a liveness check that fails.
-//   - /webhooks/: every one verifies a provider signature before doing
-//     anything, which is a stronger check than a shared bearer token. Includes
-//     the Slack OAuth landing page, which a browser reaches mid-install with no
-//     token in hand.
-//   - /otlp/ and /mcp/: the per-run signed token in the path IS the
-//     credential. Both are reached from INSIDE a sandbox, which is the one
-//     place the API's own token must never go — it reads the whole company,
-//     and the box is running generated code. See internal/runtoken.
-//   - the dashboard shell and its assets: the page that prompts for the token
-//     cannot itself require one. It ships no data — every byte it renders comes
-//     from an authenticated fetch.
-//
-// The split is deliberate. A PREFIX exempts everything beneath it, so only the
-// ones that genuinely have sub-paths get one, and each ends in a slash, which
-// is what stops it exempting a sibling. /health and /ready are single
-// endpoints, so they are exact: as prefixes they would silently have exempted
-// any future route merely starting with those letters — a /health-admin, a
-// /readyz-reset — on the day it was added.
-var unguardedExact = map[string]struct{}{
-	"/": {}, "/dashboard": {}, "/favicon.ico": {}, "/health": {}, "/ready": {},
-}
-
-var unguardedPrefixes = slices.Concat(publicPrefixes, []string{"/static/"})
-
 // publicPrefixes are the routes OUTSIDE PARTIES call: a vendor delivering a
 // webhook or returning a browser from its app flow, and a sandbox box exporting
 // telemetry or calling its seat's tools. None of them holds an operator
@@ -133,18 +64,16 @@ var unguardedPrefixes = slices.Concat(publicPrefixes, []string{"/static/"})
 // beyond the people who run it.
 //
 // What the dedicated public listener (Tier A api.public) serves and api.port
-// then refuses, decided by [Public] and nothing else. DERIVED INTO the guard's
-// exemptions rather than listed beside them, so a route can never be public
-// without also being exempt: the public listener is reached by callers that
-// hold no token, and a guarded route there would answer every one of them 401.
+// then refuses, decided by [Public] and nothing else. Every route under one of
+// these is mounted at [ReachOpen] — the API's route gate holds the table to
+// that — because the public listener is reached by callers that hold no key,
+// and a route there needing one would answer every one of them 401.
 //
-// The dashboard's /static/ is exempt and NOT public: it is the shell of the
-// admin surface, served where that surface is.
+// The dashboard's /static/ is open and NOT public: it is the shell of the
+// dashboard, served where the dashboard is.
 //
 // UNEXPORTED, and read outside this package only through [PublicPrefixes]'
-// copy: [unguardedPrefixes] is derived from it once, at init, so a slice
-// anybody could append to would move the partition without moving the
-// exemptions, and the guarantee above would stop holding with nothing failing.
+// copy, so no caller can append to the partition from outside it.
 var publicPrefixes = []string{WebhookPrefix, OTLPPrefix, mcpbridge.PathPrefix}
 
 // PublicPrefixes is a copy of the prefixes of the routes outside parties call.
@@ -172,26 +101,23 @@ const (
 	OTLPPrefix    = "/otlp/"
 )
 
-// readMethods are treated as reads for allow_anonymous_read.
+// readMethods are the methods that change nothing.
 var readMethods = map[string]struct{}{
 	http.MethodGet: {}, http.MethodHead: {}, http.MethodOptions: {},
 }
 
 // IsRead reports whether a method is a read: GET, HEAD or OPTIONS.
 //
-// Exported because a read is a read to more than the guard. The drain gate
-// serves reads for the same reason allow_anonymous_read may open them: a read
-// changes nothing and starts nothing, and a second list of which methods those
-// are would be a second answer to one question.
+// The drain gate serves reads because a read changes nothing and starts
+// nothing, and a second list of which methods those are would be a second
+// answer to one question.
 func IsRead(method string) bool {
 	_, ok := readMethods[strings.ToUpper(method)]
 	return ok
 }
 
-// loopbackHosts are bind addresses no other machine can reach. Anonymous reads
-// on one of these are a laptop; anonymous reads on anything else are a decision
-// somebody may not have made deliberately — which is the difference between
-// stating the posture and warning about it.
+// loopbackHosts are bind addresses no other machine can reach — which is the
+// difference, on the startup line, between a laptop and a deployment.
 var loopbackHosts = map[string]struct{}{
 	"127.0.0.1": {}, "::1": {}, "localhost": {}, "localhost6": {},
 }
@@ -204,131 +130,130 @@ func BindIsLoopback(host string) bool {
 	return ok
 }
 
-// Unguarded reports whether a path is served without a bearer token.
-//
-// A single trailing slash is normalised away before the exact set is consulted,
-// because the guard runs BEFORE routing: the mux would redirect /health/ to
-// /health, but only if the request survives long enough to be routed. Without
-// this, a load balancer configured to probe /health/ gets a 401 in the closed
-// posture and takes the node out of rotation — an outage caused by a slash.
-//
-// Only the exact set is normalised, and only by one slash. The /config guard
-// reads the raw path (/config/ starts with /config either way) and the prefix
-// exemptions already end in a slash, so nothing here can widen what is exempt
-// beyond the trailing-slash spelling of a path that was exempt already.
-func Unguarded(path string) bool {
-	if _, ok := unguardedExact[path]; ok {
-		return true
-	}
-	for _, prefix := range unguardedPrefixes {
-		if strings.HasPrefix(path, prefix) {
-			return true
-		}
-	}
-	if len(path) > 1 && strings.HasSuffix(path, "/") {
-		_, ok := unguardedExact[path[:len(path)-1]]
-		return ok
-	}
-	return false
+// Guard holds the loaded posture and answers every access question about it.
+type Guard struct {
+	// keys maps a key's id to its value and role. Empty is a real posture:
+	// no candidate can match, so every caller is anonymous.
+	keys map[string]key
+
+	// anonymous is the reach of a caller presenting no accepted key.
+	anonymous Reach
+	// posture is the Tier A value it came from, for the startup line and
+	// the `access` answer.
+	posture config.AnonymousAccess
+
+	disabled bool
 }
 
-// Guard holds the loaded posture and answers every auth question about it.
-type Guard struct {
-	// tokens maps operator id to token. Empty is a real posture: no
-	// candidate can match, so writes and /config are refused outright.
-	tokens map[string]string
-
-	disabled      bool
-	anonymousRead bool
+// key is one accepted credential.
+type key struct {
+	value string
+	role  config.TokenRole
 }
 
 // New builds the guard from Tier A.
 //
-// It does not fail. The pairings that would leave nothing reachable — no tokens
-// with anonymous reads turned off — and the reserved token id are refused by
-// config validation, which is where a `crewlet validate` on a laptop can catch
-// them rather than a process discovering them at bind time.
+// It does not fail. The pairings that would leave nothing reachable, a key
+// with no role and the reserved id are refused by config validation, which is
+// where a `crewlet validate` on a laptop can catch them rather than a process
+// discovering them at bind time.
 func New(b *config.Bootstrap) *Guard {
 	if b == nil {
-		// No Tier A at all: the posture is unset, so nothing can
-		// authenticate. Reads serve, writes are refused — the same
-		// answer as a config that lists no tokens, which is the honest
-		// reading of "nobody has said who may write".
-		return &Guard{anonymousRead: true}
+		// No Tier A at all: nobody has said who may do anything, so no
+		// key can match and a caller reaches only what is open to anyone.
+		// Not the public posture — that is something Tier A opens, and
+		// there is no Tier A to have opened it.
+		return &Guard{anonymous: ReachOpen, posture: config.AnonymousNone}
 	}
 	auth := b.API.Auth
 	if auth.Disabled {
 		log.Warn("api_auth_disabled",
-			"hint", "api.auth.disabled is true — every route, including LLM "+
-				"transcripts on /events and /agents/{id}/memory, serves without "+
-				"authentication. Never use in production.")
-		return &Guard{disabled: true, anonymousRead: auth.AllowAnonymousRead}
+			"hint", "api.auth.disabled is true — every caller is an admin, and "+
+				"every route, LLM transcripts and the secret store included, "+
+				"serves without a key. Never use in production.")
+		return &Guard{disabled: true, anonymous: ReachAdmin, posture: auth.Anonymous}
 	}
 
-	tokens := make(map[string]string, len(auth.Tokens))
+	keys := make(map[string]key, len(auth.Tokens))
 	for _, entry := range auth.Tokens {
-		tokens[entry.ID] = entry.Token
+		keys[entry.ID] = key{value: entry.Token, role: entry.Role}
 	}
-	if len(tokens) > 0 {
-		log.Info("api_auth_tokens_loaded", "count", len(tokens))
+	if len(keys) > 0 {
+		log.Info("api_auth_tokens_loaded", "count", len(keys))
 	}
-	return &Guard{tokens: tokens, anonymousRead: auth.AllowAnonymousRead}
+	return &Guard{keys: keys, anonymous: ReachOfAnonymous(auth.Anonymous), posture: auth.Anonymous}
 }
 
-// AnonymousRead reports the read posture, for the startup line that states it.
-func (g *Guard) AnonymousRead() bool { return g.anonymousRead }
+// Anonymous is the posture a caller with no key is served under, for the
+// startup line that states it and the `access` answer.
+func (g *Guard) Anonymous() config.AnonymousAccess { return g.posture }
 
 // Disabled reports whether the guard is off entirely.
 func (g *Guard) Disabled() bool { return g.disabled }
 
-// Tokens reports how many credentials are loaded, for the same startup line.
-func (g *Guard) Tokens() int { return len(g.tokens) }
+// Tokens reports how many keys are loaded, for the same startup line.
+func (g *Guard) Tokens() int { return len(g.keys) }
 
-// TokenIDs names the credentials this guard accepts, sorted — their LABELS and
-// never their values, for the `access` answer.
+// TokenIDs names the keys this guard accepts, sorted — their LABELS and never
+// their values, for the `access` answer.
 //
 // Read off the guard rather than off Tier A, because the guard is what decides:
 // a disabled guard accepts every caller as [AnonymousOperator] and no listed
-// token at all, and an answer built from the document would name credentials
-// that authenticate nobody.
+// key at all, and an answer built from the document would name keys that
+// authenticate nobody.
 func (g *Guard) TokenIDs() []string {
-	return slices.Sorted(maps.Keys(g.tokens))
+	return slices.Sorted(maps.Keys(g.keys))
 }
 
-// Operator returns the operator id a bare token authenticates as.
-//
-// THE TOKEN COMPARISON, IN ONE PLACE. The HTTP middleware and the socket
-// handshake reach it through [Guard.Presented], which peels the credential
-// off the request first, and the dashboard's WebSocket query channel calls it
-// directly, because an operator-only query arrives as a field on a socket
-// frame rather than as a header. All three therefore accept exactly the same
-// tokens, honour disabled identically, and compare in constant time.
-func (g *Guard) Operator(candidate string) (string, bool) {
+// RoleOf is the role of the key with this id, or "" for none this guard
+// accepts.
+func (g *Guard) RoleOf(id string) config.TokenRole { return g.keys[id].role }
+
+// AnonymousPrincipal is who a caller presenting no accepted key is.
+func (g *Guard) AnonymousPrincipal() Principal {
 	if g.disabled {
-		// Every caller is accepted. The explicit label is what keeps a
-		// disabled-mode write distinguishable in an audit row.
-		return AnonymousOperator, true
+		// Every caller is accepted, as an admin: the explicit label is
+		// what keeps a disabled-mode write distinguishable in an audit row.
+		return Principal{ID: AnonymousOperator, Role: config.RoleAdmin, Reach: ReachAdmin}
+	}
+	return Principal{Reach: g.anonymous}
+}
+
+// Principal returns who a bare key authenticates as.
+//
+// THE KEY COMPARISON, IN ONE PLACE. The HTTP middleware and the socket
+// handshake reach it through [Guard.Presented], which peels the key off the
+// request first, and the dashboard's socket calls it directly for a key a
+// frame presents for one question. All three therefore accept exactly the
+// same keys, honour disabled identically, and compare in constant time.
+func (g *Guard) Principal(candidate string) (Principal, bool) {
+	if g.disabled {
+		return g.AnonymousPrincipal(), true
 	}
 	// An empty candidate never authenticates, and the check is not
-	// redundant with the compare below: config refuses an empty token
+	// redundant with the compare below: config refuses an empty key
 	// value, but Bootstrap is an exported struct an embedder can build
-	// directly, and a token configured as "" would otherwise match a
+	// directly, and a key configured as "" would otherwise match a
 	// request that presented no credential at all. A total bypass, from
 	// one unset environment variable.
 	if candidate == "" {
-		return "", false
+		return Principal{}, false
 	}
-	// Every token is compared, and the loop does not stop at the first
+	// Every key is compared, and the loop does not stop at the first
 	// match: an early exit makes the time taken depend on WHICH id
 	// matched, which is exactly the leak the constant-time compare below
 	// exists to close.
 	matched := ""
-	for operatorID, expected := range g.tokens {
-		if subtle.ConstantTimeCompare([]byte(candidate), []byte(expected)) == 1 {
-			matched = operatorID
+	for id, k := range g.keys {
+		if subtle.ConstantTimeCompare([]byte(candidate), []byte(k.value)) == 1 {
+			matched = id
 		}
 	}
-	return matched, matched != ""
+	if matched == "" {
+		return Principal{}, false
+	}
+	role := g.keys[matched].role
+	return Principal{ID: matched, Role: role, Reach: ReachOfRole(role)}, true
 }
 
 // SocketPath is the dashboard's live socket, the one route whose credential
@@ -337,13 +262,13 @@ func (g *Guard) Operator(candidate string) (string, bool) {
 // spell it differently from the guard that admits it.
 const SocketPath = "/ws/stream"
 
-// Credential returns the token a request presented, or "".
+// Credential returns the key a request presented, or "".
 //
 // THE ONE PLACE A REQUEST'S CREDENTIAL IS READ. The Authorization bearer
 // header on every route; and on the socket path only, the token query
 // parameter as well, because a browser cannot set a header on a WebSocket
 // constructor and the dashboard has no other way to send one. The query is
-// read nowhere else: a token in a URL appears in proxy logs and browser
+// read nowhere else: a key in a URL appears in proxy logs and browser
 // history, which is a price worth paying for exactly one route that has no
 // alternative and for no route that has.
 //
@@ -361,94 +286,89 @@ func (g *Guard) Credential(r *http.Request) string {
 	return ""
 }
 
-// Presented returns the operator id for the credential a request presented.
+// Presented returns who a request is, and whether it presented a key the guard
+// rejected — the one case where an anonymous answer would be a lie about what
+// the caller tried to do.
 //
 // Asked even when the request carries none, because a disabled guard accepts
 // a request with no credential at all.
-func (g *Guard) Presented(r *http.Request) (string, bool) {
-	return g.Operator(g.Credential(r))
+func (g *Guard) Presented(r *http.Request) (p Principal, rejected bool) {
+	candidate := g.Credential(r)
+	if p, ok := g.Principal(candidate); ok {
+		return p, false
+	}
+	return g.AnonymousPrincipal(), candidate != ""
 }
 
-// Requires reports whether this request must carry a valid bearer token.
+// rejectedKey marks a request that presented a key this guard did not accept.
+type rejectedKey struct{}
+
+// Middleware resolves who every request is and attaches it ([PrincipalFrom]).
 //
-// The whole rule, in one function.
-//
-// allow_anonymous_read, on by default, opens READS only. What that opens is
-// worth naming rather than leaving to the reader's imagination: /events,
-// /agents/{id}/memory and /ws/stream carry full LLM transcripts — prompts, tool
-// arguments, diary entries. Turning it off closes them, and the dashboard then
-// authenticates its socket like any other client.
-func (g *Guard) Requires(path, method string) bool {
-	if Unguarded(path) {
-		return false
-	}
-	if AlwaysGuarded(path) {
-		return true
-	}
-	if g.anonymousRead {
-		return !IsRead(method)
-	}
-	return true
-}
-
-// operatorKey carries the authenticated operator id down the handler chain.
-type operatorKey struct{}
-
-// OperatorFrom returns the operator id the guard attached, if any.
-func OperatorFrom(ctx context.Context) (string, bool) {
-	id, ok := ctx.Value(operatorKey{}).(string)
-	return id, ok
-}
-
-// WithOperator attaches an operator id, for a surface that authenticates
-// outside the middleware — the WebSocket handshake, whose credential arrives on
-// the query string rather than as a header.
-func WithOperator(ctx context.Context, operatorID string) context.Context {
-	return context.WithValue(ctx, operatorKey{}, operatorID)
-}
-
-// Middleware wraps a handler with the guard.
+// IT REFUSES NOTHING ON ITS OWN: what a route needs is the route's to say, at
+// the mount ([Guard.Require]), so this cannot disagree with the table about
+// which paths are guarded. A key the guard REJECTED is remembered beside the
+// anonymous principal, so a route that needs a key answers that request 401
+// for the key it sent rather than serving an open route as though none was —
+// which it does, because an open route is open whatever was presented.
 //
 // A WebSocket upgrade is an HTTP request and passes through here like any
-// other, which is why [Guard.Credential] reads the socket's query token: this
-// used to read the header alone and leave the query to the stream handler,
-// and under a closed posture the socket then never reached that handler at
-// all. The middleware answered 401 first, and the dashboard could not
-// connect with a valid token, on the one posture whose point is that the
-// token is required.
+// other, which is why [Guard.Credential] reads the socket's query token.
 func (g *Guard) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path := r.URL.Path
-
-		// ATTRIBUTION AND AUTHORIZATION ARE DIFFERENT QUESTIONS, and the
-		// credential is resolved for both. A route that does not REQUIRE
-		// a token can still be told who presented one — which is what
-		// lets an operator-only query be answered on a surface the
-		// anonymous-read posture lets through. Skipping the resolution
-		// on an unguarded route made that unreachable: the query arrived
-		// with a valid token, no operator attached, and came back
-		// unauthorized to a caller holding the right credential.
-		operatorID, authenticated := g.Presented(r)
-		if authenticated {
-			r = r.WithContext(WithOperator(r.Context(), operatorID))
+		p, rejected := g.Presented(r)
+		ctx := WithPrincipal(r.Context(), p)
+		if rejected {
+			ctx = context.WithValue(ctx, rejectedKey{}, true)
 		}
-		if !g.Requires(path, r.Method) {
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// Require serves next only to a caller whose reach covers need.
+//
+// THE ONE ENFORCEMENT POINT FOR ROUTES. Every route is mounted through it
+// with the reach it declared, and the answer to a caller below that reach is
+// one of two:
+//
+//   - 401 invalid_token for a caller with no accepted key — sign in, or
+//     check the key you sent;
+//   - 403 forbidden for a caller whose key was accepted and reaches less —
+//     a member on an admin surface. Signing in again would change nothing.
+//
+// A reach that is not one of [Reaches] panics at mount, never at request:
+// a route that cannot say who may reach it is a wiring mistake, and serving
+// it to anybody — or to nobody — would hide that behind behaviour.
+func (g *Guard) Require(need Reach, next http.Handler) http.Handler {
+	if !need.Valid() {
+		panic("auth: a route was mounted with reach " + string(need) + ", which is not one of auth.Reaches")
+	}
+	if need == ReachOpen {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := PrincipalFrom(r.Context())
+		if p.Reach.Covers(need) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if !authenticated {
+		if !p.Authenticated() {
+			reason := "missing_key"
+			if rejected, _ := r.Context().Value(rejectedKey{}).(bool); rejected {
+				reason = "rejected_key"
+			}
 			log.Warn("api_auth_failed",
-				"route", path,
-				"reason", "missing_or_invalid_bearer",
-				// The candidate value is NEVER logged: a rejected token
-				// is still a credential, and a log is a place it would
+				"route", r.URL.Path, "reason", reason, "needs", string(need),
+				// The candidate value is NEVER logged: a rejected key is
+				// still a credential, and a log is a place it would
 				// outlive the request.
 				"remote", remoteHost(r))
 			httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 			return
 		}
-		log.Debug("api_auth_ok", "operator_id", operatorID, "route", path)
-		next.ServeHTTP(w, r)
+		log.Info("api_reach_refused",
+			"route", r.URL.Path, "token_id", p.ID, "reach", string(p.Reach), "needs", string(need))
+		httpjson.Fail(w, http.StatusForbidden, httpjson.CodeForbidden)
 	})
 }
 

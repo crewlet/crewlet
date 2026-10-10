@@ -1979,26 +1979,24 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		}
 	}
 
+	members, admins := keysByRole(app.Guard())
 	log.InfoContext(ctx, "api_listening", "addr", addr,
 		// WHERE THE ROUTES OUTSIDE PARTIES CALL ARE SERVED: empty is
 		// api.port itself, which is every deployment without api.public.
 		"public_addr", publicAddr,
-		"anonymous_read", app.Guard().AnonymousRead(),
-		"tokens", app.Guard().Tokens(),
+		// WHO REACHES WHAT, stated once at INFO (ADR-0031): what a caller
+		// with no key is served, and how many keys of each role this node
+		// accepts. No longer a warning on a reachable bind, because nothing
+		// a member or an admin reads is anonymous any more — the most a
+		// stranger reaches is the company's public face. A disabled guard
+		// still says so loudly, from the guard itself.
+		"anonymous", string(app.Guard().Anonymous()),
+		"member_keys", members, "admin_keys", admins,
+		"auth_disabled", app.Guard().Disabled(),
 		// THE BROWSER POSTURE BESIDE THE CREDENTIAL ONE. Zero is
 		// same-origin only, which is what the dashboard this process
 		// serves needs and what every other site gets.
 		"cross_origin_sites", app.CORS().Origins())
-	if app.Guard().AnonymousRead() && !auth.BindIsLoopback(boot.API.Host) {
-		// Stated rather than assumed. The read surface carries LLM
-		// transcripts, diary entries and the whole event stream, and on a
-		// bind anything else can reach that is a decision somebody may
-		// not have made deliberately.
-		log.WarnContext(ctx, "api_anonymous_read_on_a_reachable_bind",
-			"host", boot.API.Host,
-			"hint", "reads serve without a token on an address other machines "+
-				"can reach; set api.auth.allow_anonymous_read to false to close them")
-	}
 	// THE CONFIG-DERIVED SURFACES, re-sent whenever an apply changes them.
 	//
 	// The roster, the org tree and the tool catalogue all come from the
@@ -2075,6 +2073,24 @@ func serveProbes(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			"webhooks, the dashboard and the REST API are a peer's with the "+
 			"ingress role")
 	return surface, nil
+}
+
+// keysByRole counts the keys a guard accepts, by role, for the startup line.
+//
+// READ OFF THE GUARD rather than off Tier A, for the reason the `access`
+// answer is: the guard is what decides, and a disabled guard accepts no listed
+// key at all — so its line says zero of each beside `auth_disabled`, rather
+// than counting keys that authenticate nobody.
+func keysByRole(g *auth.Guard) (members, admins int) {
+	for _, id := range g.TokenIDs() {
+		switch g.RoleOf(id) {
+		case config.RoleMember:
+			members++
+		case config.RoleAdmin:
+			admins++
+		}
+	}
+	return members, admins
 }
 
 // listenAPI binds addr and serves handler on it, in the background.

@@ -6,12 +6,17 @@ import { expect, test } from "vitest";
 
 import { queryErrorCode } from "./index.ts";
 
-test.each(["unknown_query", "unauthorized", "unavailable", "not_found", "timeout", "closed"])(
-  "%s is a query error code",
-  (code) => {
-    expect(queryErrorCode(code)).toBe(code);
-  },
-);
+test.each([
+  "unknown_query",
+  "unauthorized",
+  "forbidden",
+  "unavailable",
+  "not_found",
+  "timeout",
+  "closed",
+])("%s is a query error code", (code) => {
+  expect(queryErrorCode(code)).toBe(code);
+});
 
 // NOT A CODE, NOT A BRANCH. The dashboard used to handle `no_event_store`,
 // which the engine never sent; prose a screen wrote itself is not a code

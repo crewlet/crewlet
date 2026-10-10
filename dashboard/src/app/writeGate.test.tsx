@@ -189,10 +189,14 @@ const TOOLS: Readonly<Record<keyof typeof writes, string>> = {
 const EVERY_TOOL = Object.values(TOOLS);
 
 const NOBODY: ViewerState = {
-  operatorID: "",
-  operator: false,
+  tokenID: "",
+  role: "",
+  reach: "public",
+  admin: false,
+  linked: false,
   handle: "",
   name: "",
+  line: [],
   acts: [],
   project: "",
   kind: "",
@@ -202,6 +206,7 @@ const NOBODY: ViewerState = {
   asking: false,
   configWriter: true,
   configManagedBy: [],
+  admins: [],
 };
 
 const READERS: readonly {
@@ -215,8 +220,10 @@ const READERS: readonly {
     viewer: () => ({
       ...NOBODY,
       anonymous: false,
-      operatorID: "ci",
-      operator: true,
+      tokenID: "ci",
+      role: "admin",
+      reach: "admin",
+      admin: true,
       unbound: true,
     }),
     reason: WRITE_REASONS.unbound,
@@ -226,8 +233,10 @@ const READERS: readonly {
     viewer: () => ({
       ...NOBODY,
       anonymous: false,
-      operatorID: "founder",
-      operator: true,
+      tokenID: "founder",
+      role: "member",
+      reach: "member",
+      linked: true,
       handle: "jane",
       name: "Jane Founder",
       kind: "human",
@@ -240,8 +249,10 @@ const READERS: readonly {
     viewer: (tool) => ({
       ...NOBODY,
       anonymous: false,
-      operatorID: "founder",
-      operator: true,
+      tokenID: "founder",
+      role: "member",
+      reach: "member",
+      linked: true,
       handle: "jane",
       name: "Jane Founder",
       kind: "human",

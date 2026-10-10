@@ -354,9 +354,9 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
       icon={<KeyGlyph size="md" />}
       action={
         // The banner used to say "set a token" and offer nothing that could.
-        // With anonymous reads allowed the socket is never refused, so the
-        // dialog's only other doors — a socket refusal, and the palette —
-        // both stay shut on exactly the screen that needs it.
+        // A caller with no key is never refused the socket, so the dialog's
+        // only other doors — a socket refusal, and the palette — both stay
+        // shut on exactly the screen that needs it.
         <Button size="small" variant="secondary" leadingIcon={<KeyGlyph />} onClick={requestToken}>
           Set token
         </Button>
@@ -364,6 +364,19 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
     >
       This answer is auth-gated. It needs an API token matching one of your{" "}
       <InlineCode tone="inherit">api.auth.tokens</InlineCode> entries.
+    </Callout>
+  ),
+  // A KEY THE ENGINE ACCEPTED, ON A QUESTION PAST WHAT IT REACHES (ADR-0031):
+  // a member's key asking an admin's question, or a record of a person
+  // outside the asker's own line. NO "Set token" HERE, which is the whole
+  // difference from the refusal above: the key works, and the dialog would
+  // have the reader paste it again and be refused again. What clears it is
+  // somebody whose key does reach it.
+  forbidden: (
+    <Callout variant="neutral" icon={<KeyGlyph size="md" />}>
+      This is for admins. Your key was accepted and reaches the company&rsquo;s work, pages and
+      chart, and the people in your own line — not this. Setting it again changes nothing; ask an
+      admin.
     </Callout>
   ),
   // NO `icon` ON THIS ONE, OR ON THE THREE BELOW IT. A Callout draws its

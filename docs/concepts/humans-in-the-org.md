@@ -38,7 +38,7 @@ units:
           atlassian_account_id: 5b10ac8d-...   # one ID covers Jira + Confluence
           github_login: sarahchen
           gitlab_username: sarahchen
-          crewlet_operator_id: sarah            # her api.auth.tokens[] id (Tier A)
+          crewlet_operator_id: sarah            # her key's id in api.auth.tokens (Tier A)
         availability: "CET business hours; replies within ~4h"
       - name: Engineer            # AI agent, unchanged
         goal: "Implement features and ship quality code"
@@ -54,7 +54,7 @@ units:
 | `contact.atlassian_account_id` | one identity | Atlassian Cloud account ID. One ID covers Jira assignments, Confluence `<ri:user>` mentions and webhook sender attribution on both |
 | `contact.github_login` | one identity | GitHub username: review requests, sender attribution. Lowercased |
 | `contact.gitlab_username` | one identity | GitLab username: assignment, review and mention routing, sender attribution. Lowercased |
-| `contact.crewlet_operator_id` | one identity | One of Tier A's `api.auth.tokens[].id`, which is always lowercase. Binds that credential to this seat, so a person writing through the dashboard, the REST API or the operator tool server acts as **themselves** — the item they file carries their name and wakes their colleagues. An **attribution, never an address**: the engine never sends as itself, so this id is left out of rosters and `lookup_colleague`, and a seat carrying only this one is reached through their dashboard queue rather than by an @-mention. Leaving a token unbound is ordinary — an operator outside the org chart, a pipeline — and its writes carry the token's own id as the author, with author kind `operator`, rather than being refused. One id can never be bound: `anonymous`, the attribution a disabled `api.auth` guard stamps on every caller. Binding it would make whoever reaches an unguarded engine this person, so the literal is refused naming this field, and a `${VAR}` that resolves to it binds nobody |
+| `contact.crewlet_operator_id` | one identity | One of Tier A's `api.auth.tokens[].id`, which is always lowercase. Links that key to this seat, so a person writing through the dashboard, the REST API or the operator tool server acts as **themselves** — the item they file carries their name and wakes their colleagues. The link says **who** the key is; the key's `role` says what it **reaches** — a `member` key reads the company and acts as this person, an `admin` key also runs the engine — and neither implies the other ([Configuration § Auth](configuration.md#auth)). An **attribution, never an address**: the engine never sends as itself, so this id is left out of rosters and `lookup_colleague`, and a seat carrying only this one is reached through their dashboard queue rather than by an @-mention. Leaving an admin key unlinked is ordinary — an operator outside the org chart, a pipeline — and its writes carry the key's own id as the author, with author kind `operator`, rather than being refused. An unlinked member key reads what members read and acts as nobody: the surfaces that act as a person refuse it `unbound`. One id can never be bound: `anonymous`, the attribution a disabled `api.auth` guard stamps on every caller. Binding it would make whoever reaches an unguarded engine this person, so the literal is refused naming this field, and a `${VAR}` that resolves to it binds nobody |
 | `email` | no | Indexed so a notification addressed to the address resolves to the seat. **Not** a delivery channel: no agent has an email tool by default |
 | `availability` | no | Free text rendered into a lead's roster (timezone, hours, response expectations) |
 
@@ -79,26 +79,33 @@ an agent reads says so explicitly rather than telling it to @-mention somebody
 it cannot — a message addressed to a handle that resolves to nobody reads to
 everyone else as work handed over.
 
+**Giving a teammate the dashboard** is two lines, one in each tier: a
+`role: member` key in Tier A's `api.auth.tokens`, and that key's id as
+`contact.crewlet_operator_id` on their seat. They then read the company's work,
+pages and chart, answer what is asked of them and act as themselves — and
+reach nothing an agent processed, nor the configuration, the secrets or the
+fleet. Give `role: admin` only to whoever runs the engine.
+
 **The queue is `#/inbox`**, one click from the landing screen (Home). Opening it
-with an API token resolves that token's id against every seat's
+with an API key resolves that key's id against every seat's
 `crewlet_operator_id` and shows the person it names: first what is waiting on
 their decision — the questions agents put to them, the coding runs parked on a
 question to them, a seat stopped on its budget — then their notices by the
 company's day, each with the one reason of eighteen that routed it. The row
 they open fills the pane beside the list, with the answer to it right there. A
-token bound to no seat is not an error — it is an operator outside the org
+key linked to no seat is not an error — it is an operator outside the org
 chart — and the screen says so rather than showing somebody else's queue or an
 empty one, naming the line of company configuration that would give it a
 person. `#/me` is the same person's own work, and it is absent for the same
-reason when the token names nobody.
+reason when the key names nobody.
 
 Read and snooze marks are the **person's own**, and they are written as that
 person: by their assistant over `/operator/mcp`, or from the dashboard over
-`/operator/act`, which admits a token bound to a seat and nobody else. Every
-write in this engine is attributed to somebody, and a button in a browser
-writes as the person whose token it holds — never as "the dashboard", which is
-nobody. A token bound to no seat has no inbox to mark and is refused there;
-what the screen shows is what the engine recorded.
+`/operator/act`, which admits a key linked to a seat — member or admin — and
+nobody else. Every write in this engine is attributed to somebody, and a button
+in a browser writes as the person whose key it holds — never as "the
+dashboard", which is nobody. A key linked to no seat has no inbox to mark and
+is refused there; what the screen shows is what the engine recorded.
 
 **Answering an agent's decision.** When an agent asks you to choose, the
 question arrives with its options, the one it recommends and why, and the
@@ -136,9 +143,9 @@ to come back to her: the record carries her seat beside the token that authored
 it, so work she files through her assistant wakes her colleagues and not
 her.
 
-Bind the token and your own work is on your own screen; leave it unbound and
-you are an operator outside the chart, writing under the token's own id with author kind
-`operator`, which is an ordinary state and not an error.
+Link the key and your own work is on your own screen; leave an admin key
+unlinked and you are an operator outside the chart, writing under the key's own
+id with author kind `operator`, which is an ordinary state and not an error.
 
 **Your own marks and pins are the person's, and the record still names the
 token.** *Whose* state a document holds and *who wrote it* are two different
@@ -160,10 +167,13 @@ credential's the fallback.
 
 One change that concerned you under both names is **one** notice, under the
 stronger of the two reasons — the same rule that already gives one handle one
-reason. And whoever reads somebody else's day — an operator, or an agent seat
-reading its lead's inbox or state with `work_inbox` or `get_person` — is
-handed *that* person's two names from the chart, never the credential in
-anybody's hand.
+reason. And whoever reads somebody else's day — a lead reading a person in
+their line, or an agent seat reading its lead's inbox or state with
+`work_inbox` or `get_person` — is handed *that* person's two names from the
+chart, never the credential in anybody's hand. Nobody else reads it through
+the API, an admin key included: a key's role is reach over the engine, and
+whose inbox somebody may open is the chart's
+([A lead's line](organization-model.md#a-leads-line)).
 
 **The binding is written on the seat, not on the token.** Tier A is the root of
 trust and may never read Tier B — it holds the keys to the secret store — so a
@@ -376,10 +386,16 @@ What this buys, with no further config:
 
 Two boundaries to keep in mind:
 
-- **The seat is the colleague hat, not the operator hat.** Config
-  ownership (`PUT /config`, API auth tokens, the dashboard) stays an
-  API-auth concern: the seat makes agents know you; the token makes
-  the engine obey you. Different hats, deliberately separate.
+- **The seat is the colleague hat; the key's role is the operator
+  hat — and the two really are separate.** The seat makes agents know
+  you, and linking your key to it makes the dashboard yours: your inbox,
+  your work, the decisions put to you. The role decides what else the
+  key reaches. A founder who runs the engine holds an **admin** key
+  linked to her seat — the configuration, the secrets, every agent's
+  transcripts. A teammate's seat is just as linked, and their key is a
+  **member** one: the same colleague hat, and no operator hat at all.
+  Neither implies the other, and an admin key reads nobody's inbox but
+  its own person's and their line's.
 - **Scope `manages` to the top roles.** A founder managing every unit
   by name lists every seat in those units, and root seats are searched
   first when a seat's manager is resolved, so the founder becomes the

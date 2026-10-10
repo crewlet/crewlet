@@ -326,8 +326,8 @@ test("a directory the host cannot create is said on the field", async () => {
   expect(screen.queryByText(/api_backup_failed/)).toBeNull();
 });
 
-// A READER WITH NO TOKEN is refused the section, and the button says why.
-test("without an operator token the section is refused and the button says why", async () => {
+// A READER WITH NO KEY is refused the section, and the button says why.
+test("without a key the section is refused and the button says why", async () => {
   clearToken();
   const { query } = mount();
   await settle();

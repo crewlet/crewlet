@@ -618,7 +618,7 @@ roles:
       # scripts/mattermost-dev-bootstrap.sh creates.
       mattermost_user_id: founder
       gitlab_username: jane-founder
-      # Binds the ``founder`` API token in nimbus.config.yaml to THIS
+      # Binds the ``founder`` API key in nimbus.config.yaml to THIS
       # seat, so what she files from the dashboard is filed by her and
       # wakes her colleagues by the identities above.  An attribution, not
       # an address — the engine never sends as itself, so this id is left

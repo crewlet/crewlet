@@ -5,24 +5,6 @@ import (
 	"net/http"
 )
 
-// Router is what a surface mounts its routes on: the two registration verbs of
-// [net/http.ServeMux], and nothing else.
-//
-// AN INTERFACE rather than the mux itself so the API can KEEP every pattern a
-// surface mounts. Both of a node's listeners serve one route table behind a
-// partition that is a predicate over paths, and only the table says which
-// paths exist, so the table is what the listener cases walk whole rather than
-// a sample somebody chose. A surface's own tests still hand it a plain
-// *http.ServeMux.
-//
-// Declared here rather than by each consumer because the API's own interface
-// over a mountable surface names it in a method signature, and two interfaces
-// with one method set are still two types there.
-type Router interface {
-	Handle(pattern string, handler http.Handler)
-	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
-}
-
 // Mux serves mux with the mux's OWN refusals answered as JSON.
 //
 // # Why it exists

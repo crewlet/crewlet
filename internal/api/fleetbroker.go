@@ -6,7 +6,6 @@ import (
 	"net/http"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
-	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -112,11 +111,14 @@ func RenderBrokerRefusal(err error) (BrokerRefusal, bool) {
 // mountFleetBroker registers the two removals. The listing is a named read
 // route over the `fleet_broker` question, so the socket's query channel and
 // REST answer it from one implementation — see rest.go.
-func (a *App) mountFleetBroker(mux httpjson.Router) {
-	mux.Handle("POST /fleet/broker/remove/{node}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+//
+// ADMIN, both: a removal changes the quorum every election in the fleet runs
+// on, which is operating the engine rather than reading the company.
+func (a *App) mountFleetBroker(mux auth.Router) {
+	mux.Handle("POST /fleet/broker/remove/{node}", auth.ReachAdmin, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		a.serveBrokerRemove(w, r, voterByNode, r.PathValue("node"))
 	}))
-	mux.Handle("POST /fleet/broker/remove-peer/{peer}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /fleet/broker/remove-peer/{peer}", auth.ReachAdmin, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		a.serveBrokerRemove(w, r, voterByPeer, r.PathValue("peer"))
 	}))
 }
@@ -164,7 +166,7 @@ func (a *App) serveBrokerRemove(w http.ResponseWriter, r *http.Request, by voter
 		})
 		return
 	}
-	operator, _ := auth.OperatorFrom(r.Context())
+	operator := auth.PrincipalFrom(r.Context()).ID
 	force := r.URL.Query().Get("force") == "true"
 	removal := by.removal(id)
 	removal.Force, removal.By = force, operator

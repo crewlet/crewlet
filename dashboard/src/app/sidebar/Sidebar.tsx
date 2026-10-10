@@ -34,9 +34,8 @@
  *
  * # Settings is never hidden
  *
- * It carries a lock for a reader without an operator credential, and stays: a
- * section that vanished when a credential is absent is indistinguishable from
- * one that does not exist.
+ * It carries a lock for a reader who is not an admin, and stays: a section
+ * that vanished for them is indistinguishable from one that does not exist.
  */
 
 import { useMemo, type ReactNode } from "react";
@@ -219,13 +218,13 @@ export function Sidebar({
                 key={ws.key}
                 label={
                   // THE LOCK IS ON THE ROW, NOT INSTEAD OF IT. General is the
-                  // charter, readable by anybody; every other section needs an
-                  // operator credential, and the lock says so before a click.
-                  !viewer.operator ? (
+                  // charter, readable by anybody; every other section is an
+                  // admin's, and the lock says so before a click.
+                  !viewer.admin ? (
                     <span className="side-locked">
                       {ws.label}
                       <KeyGlyph size="xs" aria-hidden="true" />
-                      <span className="sr-only">, most sections need an operator credential</span>
+                      <span className="sr-only">, most sections are for admins</span>
                     </span>
                   ) : (
                     ws.label

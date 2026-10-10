@@ -100,6 +100,7 @@ export interface RestResult<T> {
 export function restErrorCode(err: RestError | null): QueryErrorCode | null {
   if (!err) return null;
   if (err.unauthorized) return "unauthorized";
+  if (err.forbidden) return "forbidden";
   if (err.status === 0) return "closed";
   if (err.status === 400) return "bad_params";
   if (err.status === 404) return "not_found";

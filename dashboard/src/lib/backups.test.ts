@@ -96,9 +96,18 @@ describe("why a backup was not taken", () => {
   });
 
   test("a refused credential says what to set", () => {
-    expect(backupRefusal(new RestError(401, { error: "unauthorized" })).message).toMatch(
-      /operator token/,
+    expect(backupRefusal(new RestError(401, { error: "invalid_token" })).message).toMatch(
+      /admin's API key/,
     );
+  });
+
+  // A MEMBER'S KEY WAS ACCEPTED: the sentence is about the role, never a
+  // credential to set again — the remedy is an admin.
+  test("a member's key is told the backup is for admins", () => {
+    const refusal = backupRefusal(new RestError(403, { error: "forbidden" }));
+    expect(refusal.field).toBe(false);
+    expect(refusal.message).toMatch(/for admins/);
+    expect(refusal.message).not.toMatch(/Set /);
   });
 });
 

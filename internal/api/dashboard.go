@@ -141,9 +141,9 @@ func newAssets(tree fs.FS) *assets {
 
 // serveIndex answers the dashboard shell.
 //
-// The shell is exempt from the auth guard, and it ships NO DATA: every byte it
-// renders comes from an authenticated fetch. That is what lets the page that
-// prompts for a token load without one.
+// The shell is open to anyone, and it ships NO DATA: every byte it renders
+// comes from a question judged by its own reach. That is what lets the page
+// that asks for a key load without one.
 func (a *assets) serveIndex(w http.ResponseWriter, r *http.Request) {
 	a.serve(w, r, "dashboard/index.html")
 }

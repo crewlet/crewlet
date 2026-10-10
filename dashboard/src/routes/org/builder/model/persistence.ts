@@ -27,9 +27,10 @@
  * which the builder shows as a caution: the work continues, it just will not
  * survive a reload.
  *
- * WHAT CLEARS IT: a save, a discard, a change of operator token, and a check
- * the engine refused with 401 or 403. The last two are the tab changing hands,
- * and a colleague's draft is not something to offer the next operator.
+ * WHAT CLEARS IT: a save, a discard, a change of token, and a check the
+ * engine refused for the key — no key it accepts, or a member's on the admin's
+ * document. The last two are the tab changing hands, and a colleague's draft
+ * is not something to offer the next person.
  * [persistencePlan] turns the builder's state into the one write or removal
  * that matches it.
  *

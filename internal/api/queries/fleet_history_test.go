@@ -257,11 +257,11 @@ func TestTurnsRefusesAnUnknownSortAndACursorOnARanking(t *testing.T) {
 		{"sort": "-tokens", "before": base64.RawURLEncoding.EncodeToString(
 			[]byte("2026-09-01T00:00:00Z t-1"))},
 	} {
-		if _, err := r.Answer(t.Context(), "turns", params, ""); !errors.Is(err, queries.ErrBadParams) {
+		if _, err := r.Answer(t.Context(), "turns", params, asAdmin("ops")); !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("turns %v answered %v, want %v", params, err, queries.ErrBadParams)
 		}
 	}
-	if _, err := r.Answer(t.Context(), "turns", map[string]any{"sort": "-tokens"}, ""); err != nil {
+	if _, err := r.Answer(t.Context(), "turns", map[string]any{"sort": "-tokens"}, asAdmin("ops")); err != nil {
 		t.Errorf("a ranked page was refused: %v", err)
 	}
 }
@@ -287,7 +287,7 @@ func TestTurnsAnswersAWindowInThePast(t *testing.T) {
 	r := registryOver(t, queries.Sources{Events: fleetOf(log)})
 	got, err := r.Answer(t.Context(), "turns", map[string]any{
 		"since": bar.Format(time.RFC3339), "until": bar.Add(time.Hour).Format(time.RFC3339),
-	}, "")
+	}, asAdmin("ops"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +300,7 @@ func TestTurnsAnswersAWindowInThePast(t *testing.T) {
 		{"since": bar.Format(time.RFC3339), "until": bar.Format(time.RFC3339)},
 		{"until": "yesterday"},
 	} {
-		if _, err := r.Answer(t.Context(), "turns", params, ""); !errors.Is(err, queries.ErrBadParams) {
+		if _, err := r.Answer(t.Context(), "turns", params, asAdmin("ops")); !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("turns %v answered %v, want %v", params, err, queries.ErrBadParams)
 		}
 	}

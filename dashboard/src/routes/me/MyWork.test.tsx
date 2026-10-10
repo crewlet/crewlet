@@ -192,13 +192,19 @@ const emptyDay = {
 /** The assignments, which are the tracker's own question rather than a block. */
 const noWork = { items: [], groups: [], total_hint: 0, complete: true };
 
+/** Ada as the engine answers her: her own seat, and nobody in her line. */
 const ada = {
-  operator_id: "ops-1",
-  operator: true,
+  token_id: "ops-1",
+  role: "admin",
+  reach: "admin",
+  linked: true,
   handle: "ada",
   name: "Ada Okonkwo",
   kind: "human",
 };
+
+/** Ada leading Rui: the line the engine answers her reads for (`ledOrg`). */
+const adaLeading = { ...ada, line: ["rui"] };
 
 /** One task with the fields a row and a band are decided from. */
 function task(over: Partial<WorkSummary> = {}): WorkSummary {
@@ -281,7 +287,7 @@ test("an explicit handle names whose day it is, in the third person", async () =
 // and a line of company configuration.
 test("an unbound token says what to bind, not that something is broken", async () => {
   serving({
-    viewer: { operator_id: "ops-7", operator: true, handle: "", name: "", kind: "" },
+    viewer: { token_id: "ops-7", role: "admin", reach: "admin", handle: "", name: "", kind: "" },
   });
   mount();
   await waitFor(() => expect(screen.getByText(/not bound to a person/)).toBeTruthy());
@@ -290,7 +296,7 @@ test("an unbound token says what to bind, not that something is broken", async (
 });
 
 test("no credential at all is a different sentence from an unbound one", async () => {
-  serving({ viewer: { operator_id: "", operator: false, handle: "", name: "", kind: "" } });
+  serving({ viewer: { token_id: "", role: "", reach: "public", handle: "", name: "", kind: "" } });
   mount();
   await waitFor(() => expect(screen.getByText(/No credential is presented/)).toBeTruthy());
   expect(screen.queryByText(/not bound to a person/)).toBeNull();
@@ -331,7 +337,7 @@ test("the whose-day pill is drawn the same for both, so only the words differ", 
 test("the banner names whose day it is and links to their seat", async () => {
   location.hash = "#/me?handle=rui";
   serving({
-    viewer: ada,
+    viewer: adaLeading,
     work_my_work: { ...emptyDay, handle: "rui" },
     work_items: noWork,
     work_person: { handle: "rui", version: 1, held: true, complete: true },
@@ -951,14 +957,15 @@ async function pickerRows(): Promise<HTMLElement[]> {
   });
 }
 
-// YOURS, THEN YOUR LINE, THEN ANYBODY. Flat and alphabetical the control
+// YOURS, THEN YOUR LINE, AND NOBODY ELSE. Flat and alphabetical the control
 // answered "which of the company's seats" with every seat, in an order that
 // has nothing to do with the question — and the two days a reader opens are
-// their own and one of their reports'.
+// their own and one of their reports'. Past the line, every row would be a
+// refusal: a day is answered to its person and their leads only (ADR-0031).
 test("the picker leads with your own day, then the seats you lead", async () => {
   serving(
     {
-      viewer: ada,
+      viewer: adaLeading,
       work_my_work: emptyDay,
       work_items: noWork,
       work_workload: { rows: [], complete: true },
@@ -977,7 +984,26 @@ test("the picker leads with your own day, then the seats you lead", async () => 
   const labelled = rows.map((r) => [groupOf(r), r.textContent ?? ""] as const);
   expect(labelled.find(([, text]) => text.includes("Ada Okonkwo"))?.[0]).toBe("Yours");
   expect(labelled.find(([, text]) => text.includes("Rui Santos"))?.[0]).toBe("Your line");
-  expect(labelled.find(([, text]) => text.includes("Bo Nakamura"))?.[0]).toBe("Anybody");
+  expect(labelled.find(([, text]) => text.includes("Bo Nakamura"))).toBeUndefined();
+  expect(labelled.map(([group]) => group)).not.toContain("Anybody");
+});
+
+// THE LINE IS THE ENGINE'S, never this screen's reading of the chart: a seat
+// the chart draws under Ada but the engine does not answer her for is not
+// offered, because its day would be refused.
+test("the picker offers the line the engine answers for, not the chart's", async () => {
+  serving(
+    {
+      viewer: ada,
+      work_my_work: emptyDay,
+      work_items: noWork,
+      work_workload: { rows: [], complete: true },
+    },
+    ledOrg,
+  );
+  mount();
+  const rows = await pickerRows();
+  expect(rows.map((r) => r.textContent ?? "").some((t) => t.includes("Rui Santos"))).toBe(false);
 });
 
 // SIX PEOPLE BEFORE IT SCROLLS. Every option is two lines where the kit sizes
@@ -1022,7 +1048,7 @@ test("the picker's panel is tall enough for six of its two-line rows", async () 
 test("a picker row says how much open work is on that desk", async () => {
   serving(
     {
-      viewer: ada,
+      viewer: adaLeading,
       work_my_work: emptyDay,
       work_items: noWork,
       work_workload: { rows: [{ handle: "rui", open: 4 }], complete: true },
@@ -1036,7 +1062,7 @@ test("a picker row says how much open work is on that desk", async () => {
   expect(text("Rui Santos")).toContain("4 open items");
   // A HANDLE THE ANSWER DID NOT NAME HOLDS NOTHING, because the read returns a
   // row only for somebody with open work — a real zero rather than a gap.
-  expect(text("Bo Nakamura")).toContain("nothing open");
+  expect(text("Ada Okonkwo")).toContain("nothing open");
 });
 
 // ZERO AND UNKNOWN ARE DIFFERENT. An answer that stopped at its handle cap, or
@@ -1104,7 +1130,7 @@ test("a bound reader is offered no row that returns them where they are", async 
 // a refusal — and the screen's own sentence named that pick as the remedy.
 test("an anonymous reader gets the credential sentence, not a menu of refusals", async () => {
   const query = serving({
-    viewer: { operator_id: "", operator: false, handle: "", name: "", kind: "" },
+    viewer: { token_id: "", role: "", reach: "public", handle: "", name: "", kind: "" },
   });
   mount();
   await waitFor(() => expect(screen.getByText(/No credential is presented/)).toBeTruthy());
@@ -1117,6 +1143,18 @@ test("an anonymous reader gets the credential sentence, not a menu of refusals",
   // here would be the wrong trade.
   const asked = query.mock.calls.filter((c) => c[0] === "work_workload").length;
   expect(asked).toBe(1);
+});
+
+// AND NEITHER IS A KEY NO SEAT NAMES: it has no day of its own and no line,
+// so every row past the line rule would be a refusal — whatever its role.
+test("an unbound key gets the binding sentence, not a menu of refusals", async () => {
+  serving({
+    viewer: { token_id: "ops-7", role: "admin", reach: "admin", linked: false, handle: "" },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText(/not bound to a person/)).toBeTruthy());
+  expect(screen.queryByRole("combobox", { name: "Whose day" })).toBeNull();
+  expect(screen.queryByText(/pick somebody above/)).toBeNull();
 });
 
 // THE ORDER IS THE CONTENT, so it is DRAWN. Every other panel on this screen is
@@ -1405,12 +1443,12 @@ describe("somebody else's day", () => {
 test.each([
   [
     "an anonymous reader",
-    { operator_id: "", operator: false, handle: "", name: "", kind: "" },
+    { token_id: "", role: "", reach: "public", handle: "", name: "", kind: "" },
     WRITE_REASONS.anonymous,
   ],
   [
     "an unbound token",
-    { operator_id: "ops-7", operator: true, handle: "", name: "", kind: "" },
+    { token_id: "ops-7", role: "admin", reach: "admin", handle: "", name: "", kind: "" },
     WRITE_REASONS.unbound,
   ],
   ["a person the engine does not reorder for", { ...ada, acts: [] }, WRITE_REASONS.not_served],

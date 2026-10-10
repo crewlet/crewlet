@@ -103,7 +103,7 @@ function ok(payload: unknown): Response {
 }
 
 beforeEach(() => {
-  localStorage.setItem("crewlet_api_token", "operator-token");
+  localStorage.setItem("crewlet_api_token", "admin-key");
 });
 
 afterEach(() => {
@@ -112,7 +112,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-test("the list comes from GET /secrets, carrying the operator token", async () => {
+test("the list comes from GET /secrets, carrying the stored key", async () => {
   const spy = stubFetch((path) => (path === "/secrets" ? ok(body) : ok({})));
   render(<Secrets />);
 
@@ -121,7 +121,7 @@ test("the list comes from GET /secrets, carrying the operator token", async () =
 
   const init = spy.mock.calls[0]?.[1];
   const headers = (init?.headers ?? {}) as Record<string, string>;
-  expect(headers.Authorization).toBe("Bearer operator-token");
+  expect(headers.Authorization).toBe("Bearer admin-key");
 });
 
 // NO VALUE, EVER. The one route that returns one needs an explicit flag and
@@ -388,7 +388,7 @@ test("a read that answers after a newer one began does not overwrite it", async 
   render(<Secrets />);
   // A TOKEN ARRIVING starts the second read, which is one of the three real
   // triggers rather than a lever invented for this case.
-  storeToken("operator-token-2");
+  storeToken("admin-key-2");
   expect(await screen.findByText("GITHUB_TOKEN")).toBeTruthy();
 
   // NOW the first read answers, and the screen must ignore it.

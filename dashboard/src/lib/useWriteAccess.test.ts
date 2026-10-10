@@ -6,20 +6,24 @@
 
 import { describe, expect, test } from "vitest";
 import {
-  CONFIG_WRITE_REASONS,
   WRITE_REASONS,
   configWriteAccess,
   mayChangeConfig,
+  notAdminSentence,
   writeAccess,
 } from "./useWriteAccess.ts";
 import type { ViewerState } from "./viewer.ts";
 import { managedSentence } from "~/protocol/configAnswer.ts";
 
 const BOUND: ViewerState = {
-  operatorID: "founder",
-  operator: true,
+  tokenID: "founder",
+  role: "admin",
+  reach: "admin",
+  admin: true,
+  linked: true,
   handle: "jane",
   name: "Jane Founder",
+  line: [],
   acts: ["set_pins"],
   project: "",
   kind: "human",
@@ -29,6 +33,7 @@ const BOUND: ViewerState = {
   asking: false,
   configWriter: true,
   configManagedBy: [],
+  admins: [{ handle: "jane", name: "Jane Founder" }],
 };
 
 test.each([
@@ -36,11 +41,27 @@ test.each([
   ["nobody has said who this is", { ...BOUND, loading: true }, true, "loading"],
   [
     "no token",
-    { ...BOUND, handle: "", operatorID: "", anonymous: true, acts: [] },
+    {
+      ...BOUND,
+      handle: "",
+      tokenID: "",
+      role: "",
+      reach: "public",
+      admin: false,
+      linked: false,
+      anonymous: true,
+      acts: [],
+      admins: [],
+    },
     true,
     "anonymous",
   ],
-  ["a token no seat binds", { ...BOUND, handle: "", unbound: true, acts: [] }, true, "unbound"],
+  [
+    "a token no seat binds",
+    { ...BOUND, handle: "", linked: false, unbound: true, acts: [] },
+    true,
+    "unbound",
+  ],
   ["a change the engine does not make for this person", { ...BOUND, acts: [] }, true, "not_served"],
 ] as const)("%s", (_name, viewer, connected, block) => {
   const access = writeAccess("set_pins", viewer, connected);
@@ -80,7 +101,12 @@ test("a hold is the screen's sentence, and it ranks after everything a person ca
   });
   expect(writeAccess("set_pins", BOUND, false, hold)).toMatchObject({ block: "offline" });
   expect(
-    writeAccess("set_pins", { ...BOUND, handle: "", unbound: true, acts: [] }, true, hold),
+    writeAccess(
+      "set_pins",
+      { ...BOUND, handle: "", linked: false, unbound: true, acts: [] },
+      true,
+      hold,
+    ),
   ).toMatchObject({ block: "unbound" });
   // AND NO HOLD IS NO HOLD: the empty value of the context is `null`.
   expect(writeAccess("set_pins", BOUND, true, null).can).toBe(true);
@@ -88,10 +114,14 @@ test("a hold is the screen's sentence, and it ranks after everything a person ca
 
 describe("changing the company's configuration", () => {
   const viewer = (over: Partial<ViewerState>): ViewerState => ({
-    operatorID: "U0",
-    operator: true,
+    tokenID: "U0",
+    role: "admin",
+    reach: "admin",
+    admin: true,
+    linked: false,
     handle: "",
     name: "",
+    line: [],
     acts: [],
     kind: "",
     project: "",
@@ -101,30 +131,72 @@ describe("changing the company's configuration", () => {
     asking: false,
     configWriter: true,
     configManagedBy: [],
+    admins: [],
     ...over,
   });
-
-  // THE OPERATOR CREDENTIAL, NOT A BINDING: `/config` is guarded by the token
-  // alone, so an unbound operator token may change a ceiling it could never
-  // answer an ask with — and a bound person the engine does not take as an
-  // operator may not.
-  test("is the engine's operator answer, not the seat binding", () => {
-    expect(configWriteAccess(viewer({ unbound: true }), true)).toEqual({ can: true });
-    expect(
-      configWriteAccess(viewer({ operator: false, handle: "jane", unbound: false }), true),
-    ).toEqual({
-      can: false,
-      block: "not_operator",
-      reason: CONFIG_WRITE_REASONS.not_operator,
+  /** A teammate: a member's key, linked to their seat. */
+  const member = (over: Partial<ViewerState> = {}): ViewerState =>
+    viewer({
+      role: "member",
+      reach: "member",
+      admin: false,
+      linked: true,
+      handle: "ada",
+      unbound: false,
+      configWriter: false,
+      ...over,
     });
+
+  // THE ROLE, NOT A LINK: `/config` is an admin's surface (ADR-0031) and is
+  // not gated by a seat, so an unlinked admin key may change a ceiling it
+  // could never answer an ask with — and a linked teammate holding a
+  // member's key may not.
+  test("is the engine's admin answer, not the seat link", () => {
+    expect(configWriteAccess(viewer({ unbound: true }), true)).toEqual({ can: true });
+    expect(configWriteAccess(member(), true)).toMatchObject({ can: false, block: "not_admin" });
+  });
+
+  // A MEMBER IS HELD BY NAME. The member's key works; what stops the change
+  // is the role, and the remedy is a person — the first admin the engine
+  // named, in handle order — never a token dialog nor `api.auth.tokens`.
+  test("a member is told which admin to ask", () => {
+    const admins = [
+      { handle: "jane", name: "Jane Founder" },
+      { handle: "rui", name: "Rui Santos" },
+    ];
+    expect(configWriteAccess(member({ admins }), true)).toEqual({
+      can: false,
+      block: "not_admin",
+      reason: "Only an admin can change this — ask Jane Founder.",
+    });
+    expect(configWriteAccess(member({ admins }), true)).toMatchObject({
+      reason: notAdminSentence(admins),
+    });
+  });
+
+  // NOBODY TO NAME is still a sentence with a remedy: no person holds an
+  // admin key (a deployment's only admin key is a pipeline's), or the engine
+  // named none. A seat with no display name is asked for by its handle.
+  test("with no admin to name, a member is told to ask an admin", () => {
+    expect(configWriteAccess(member({ admins: [] }), true)).toMatchObject({
+      block: "not_admin",
+      reason: "Only an admin can change this — ask an admin.",
+    });
+    expect(notAdminSentence([{ handle: "jane", name: "" }])).toBe(
+      "Only an admin can change this — ask jane.",
+    );
   });
 
   test("in the order a person clears them", () => {
     expect(configWriteAccess(viewer({}), false)).toMatchObject({ block: "offline" });
     expect(configWriteAccess(viewer({ loading: true }), true)).toMatchObject({ block: "loading" });
-    expect(configWriteAccess(viewer({ anonymous: true, operator: false }), true)).toMatchObject({
-      block: "anonymous",
-    });
+    expect(
+      configWriteAccess(
+        viewer({ anonymous: true, tokenID: "", role: "", reach: "public", admin: false }),
+        true,
+      ),
+    ).toMatchObject({ block: "anonymous" });
+    expect(configWriteAccess(member(), true)).toMatchObject({ block: "not_admin" });
     expect(configWriteAccess(viewer({}), true, "these are Rui's")).toEqual({
       can: false,
       block: "held",
@@ -132,10 +204,10 @@ describe("changing the company's configuration", () => {
     });
   });
 
-  // A MANAGED DOCUMENT IS WRITTEN SOMEWHERE ELSE (ADR-0030): every operator but
+  // A MANAGED DOCUMENT IS WRITTEN SOMEWHERE ELSE (ADR-0030): every admin but
   // its writers is held, with the sentence naming who manages it — after the
   // reasons a person can clear here, and before a hold no screen releases.
-  test("a managed document holds every operator but its writers", () => {
+  test("a managed document holds every admin but its writers", () => {
     const managed = viewer({ configWriter: false, configManagedBy: ["gitops"] });
     expect(configWriteAccess(managed, true)).toEqual({
       can: false,
@@ -146,8 +218,8 @@ describe("changing the company's configuration", () => {
     expect(configWriteAccess(managed, true, "these are Rui's")).toMatchObject({
       block: "managed",
     });
-    expect(configWriteAccess({ ...managed, operator: false }, true)).toMatchObject({
-      block: "not_operator",
+    expect(configWriteAccess({ ...managed, admin: false, reach: "member" }, true)).toMatchObject({
+      block: "not_admin",
     });
     expect(
       configWriteAccess(viewer({ configWriter: true, configManagedBy: ["gitops"] }), true),
@@ -159,9 +231,9 @@ describe("changing the company's configuration", () => {
 
   // THE STANDING ANSWER agrees with the press-time one about WHO may write,
   // and ignores what only this moment decides — the socket, a screen's hold.
-  test("whether the reader may change the configuration at all is the operator and the writers", () => {
+  test("whether the reader may change the configuration at all is the admin and the writers", () => {
     expect(mayChangeConfig(viewer({}))).toBe(true);
-    expect(mayChangeConfig(viewer({ operator: false }))).toBe(false);
+    expect(mayChangeConfig(member())).toBe(false);
     expect(mayChangeConfig(viewer({ configWriter: false, configManagedBy: ["gitops"] }))).toBe(
       false,
     );

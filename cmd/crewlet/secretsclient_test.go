@@ -25,7 +25,7 @@ func bootWithAPI(t *testing.T, host string, port int, token string) *config.Boot
 	boot.API.Host = host
 	boot.API.Port = port
 	if token != "" {
-		boot.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: token}}
+		boot.API.Auth.Tokens = []config.APIToken{{ID: "ops", Role: config.RoleAdmin, Token: token}}
 	}
 	return &boot
 }
@@ -97,10 +97,44 @@ func TestANodeWithNoTokensSaysHowToAuthenticate(t *testing.T) {
 	}
 }
 
-// THE ENVIRONMENT WINS OVER TIER A, because the token decides ATTRIBUTION.
-// Every entry in the list authenticates, but the id is stamped as the author
-// of the write, so an operator who wants their own name on a rotation has to
-// be able to supply their own credential.
+// THE FIRST ADMIN KEY, NEVER THE FIRST KEY (ADR-0031). A member key listed
+// first reaches none of the surfaces a node command talks to — the secret
+// store, the configuration and the fleet are an admin's — so sending it would
+// be a 403 on every command, and a write it were allowed would be authored as
+// a teammate who never made it. A list with no admin key is refused before the
+// request, naming the role it lacks rather than the keys it has.
+func TestANodeCommandSendsTheFirstAdminKeyNeverAMembers(t *testing.T) {
+	t.Parallel()
+	boot := bootWithAPI(t, "127.0.0.1", 8080, "")
+	boot.API.Auth.Tokens = []config.APIToken{
+		{ID: "ada", Role: config.RoleMember, Token: "teammate-key"},
+		{ID: "ops", Role: config.RoleAdmin, Token: "admin-key"},
+		{ID: "ci", Role: config.RoleAdmin, Token: "second-admin-key"},
+	}
+	client, err := newSecretsClient(boot, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.token != "admin-key" {
+		t.Errorf("token = %q, want the first admin key", client.token)
+	}
+
+	boot.API.Auth.Tokens = boot.API.Auth.Tokens[:1]
+	_, err = newSecretsClient(boot, "")
+	if err == nil {
+		t.Fatal("a node listing only a member key was written through with it")
+	}
+	for _, want := range []string{"no admin key in api.auth.tokens", "role: admin", apiTokenEnv} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal omits %q: %v", want, err)
+		}
+	}
+}
+
+// THE ENVIRONMENT WINS OVER TIER A, because the key decides ATTRIBUTION. Any
+// admin key in the list authenticates, but the id is stamped as the author of
+// the write, so an operator who wants their own name on a rotation has to be
+// able to supply their own credential.
 func TestTheEnvironmentTokenWinsOverTierA(t *testing.T) {
 	t.Setenv(apiTokenEnv, "mine")
 	client, err := newSecretsClient(bootWithAPI(t, "127.0.0.1", 8080, "shared"), "")

@@ -70,9 +70,29 @@ export class RestError extends Error {
     this.retryAfterSeconds = retryAfterSeconds(retryAfter, Date.now());
   }
 
-  /** Whether the engine refused the credential rather than the request. */
+  /**
+   * Whether the engine refused the CREDENTIAL: none was presented, or the one
+   * presented is not a key it accepts (`401 invalid_token`). The remedy is a
+   * key.
+   */
   get unauthorized(): boolean {
-    return this.status === 401 || this.status === 403;
+    return this.status === 401;
+  }
+
+  /**
+   * Whether the engine ACCEPTED the key and refused the surface: the key
+   * reaches less than the route needs (`403 forbidden`, ADR-0031) — a
+   * member's key on an admin's surface. The remedy is an admin, never a
+   * different key typed into this browser, so a screen must not answer it
+   * with the token dialog.
+   *
+   * THE CODE AND NOT THE STATUS ALONE, because the engine answers 403 for
+   * other refusals that name their own remedy — a managed company document
+   * (`config_managed`), a key no person is linked to (`unbound`) — and each
+   * of those is read by its own code where it can arrive.
+   */
+  get forbidden(): boolean {
+    return this.status === 403 && this.code === "forbidden";
   }
 
   /**

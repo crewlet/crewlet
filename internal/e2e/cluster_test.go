@@ -381,10 +381,12 @@ func memberBootstrap(t *testing.T, relays *jetstreamtest.Relays, i, n int) (conf
 	// harness can only stand up a fleet an operator could run — which is
 	// also why [fleetSize] is three.
 	boot.Coordination.Type = config.CoordinationEmbeddedKV
-	// A TOKEN, because a write over HTTP is attributed to the operator it
+	// A KEY, because a write over HTTP is attributed to the operator it
 	// names and a member with none refuses every one — the file uploads
-	// cross the fleet through the API.
-	boot.API.Auth.Tokens = []config.APIToken{{ID: e2eOperatorID, Token: e2eOperatorToken}}
+	// cross the fleet through the API. An ADMIN key: this harness stands
+	// for whoever runs the fleet, and nothing it asks of a member is a
+	// person's to ask.
+	boot.API.Auth.Tokens = []config.APIToken{{ID: e2eOperatorID, Role: config.RoleAdmin, Token: e2eOperatorToken}}
 	return boot, nil
 }
 

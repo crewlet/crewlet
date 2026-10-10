@@ -48,10 +48,12 @@ api:
   host: "0.0.0.0"
   port: 8000
   auth:
-    tokens:
+    tokens:             # every key names its role — see Auth below
       - id: founder
+        role: admin
         token: "${CREWLET_API_TOKEN_FOUNDER}"
       - id: ops
+        role: admin
         token: "${CREWLET_API_TOKEN_OPS}"
 ```
 
@@ -569,91 +571,170 @@ The difference between the last two is the **admission rules**: authoring hygien
 
 ## Auth
 
-**Writes and the whole `/config` surface require `Authorization: Bearer
-<token>`. Reads serve without one by default.** Tokens are listed in Tier A
-under `api.auth.tokens` and resolved from env vars at API startup. The matched
-token's `id` is recorded as `created_by` on each revision the request produces,
-with `created_by_kind` `operator`, so revision history carries meaningful
-attribution (`alice`, `ci-pipeline`, `ops`) rather than generic strings — and
-says which revisions the engine wrote itself (`node`), which no token id could.
-See [the API reference](../reference/api-endpoints.md#the-config_audit-query).
-
-Reading is what a dashboard does, and the page that would prompt for a token is
-itself served unauthenticated — the page that asks for a credential cannot
-require one — so a guarded-by-default read surface puts a modal in front of
-every first load. Be clear-eyed about what open reads expose, though: `/events`,
-`/agents/{id}/memory` and `/ws/stream` carry full LLM transcripts — prompts,
-tool arguments, diary entries — to anyone who can reach the port. One line
-closes them:
+**Every key names its role, and every surface names the reach it serves.**
+Keys are listed in Tier A under `api.auth.tokens` and resolved from env vars at
+API startup. Each has an `id`, a `role` — `member` or `admin`, with no default —
+and the `token` value, and a request presents one as
+`Authorization: Bearer <key>`:
 
 ```yaml
 api:
   auth:
-    allow_anonymous_read: false   # every route needs a token
+    anonymous: public            # the default; `none` closes even the chart
     tokens:
-      - {id: founder, token: "${CREWLET_API_TOKEN_FOUNDER}"}
+      - id: founder
+        role: admin              # runs the engine
+        token: "${CREWLET_API_TOKEN_FOUNDER}"
+      - id: ada
+        role: member             # a teammate
+        token: "${CREWLET_API_TOKEN_ADA}"
 ```
 
-With reads closed the dashboard authenticates its own socket and prompts for a
-token when the engine refuses it — including a banner that says *refused*
-rather than *disconnected*, since a rejected credential is not an outage that
-resolves itself.
+The matched key's `id` is recorded as `created_by` on each revision the request
+produces, with `created_by_kind` `operator`, so revision history carries
+meaningful attribution (`alice`, `ci-pipeline`, `ops`) rather than generic
+strings — and says which revisions the engine wrote itself (`node`), which no
+key id could. See [the API reference](../reference/api-endpoints.md#the-config_audit-query).
 
-The API states which posture it took at startup: `api_listening` carries
-`anonymous_read` and the token count, and an open read posture on an `api.host`
-that is not loopback adds an `api_anonymous_read_on_a_reachable_bind` warning.
-A laptop and an internet-facing bind are not the same decision, and a warning
-that fires identically for both is one nobody reads by the third deployment.
+### What each role reaches
 
-**The guard is mounted whether or not `api.auth` is configured.** It applies one
-rule (`auth.Guard.Requires`), and what Tier A supplies is the *posture*, not the
-existence of a check. An API built with no Tier A at all therefore has no token
-that can match, which means reads serve and every write plus the whole `/config`,
-`/secrets`, `/setup` and `/operator` surfaces answer `401`. That is the only safe reading of "an app was built
-without being told who may write to it", and it removes the possibility of a
-process that serves `/config` writes with nothing in front of them.
+A request is resolved to one **reach**, and every route and every question —
+asked over REST or over the socket — names the reach it serves.
+The four are ordered, and each covers everything before it:
 
-Served **without** a token in either posture, because they authenticate by other
+| Reach | Who holds it | What it serves |
+|---|---|---|
+| `open` | anyone who can reach the port | The probes, the dashboard shell and its assets, `GET /viewer` ("who am I"), opening `/ws/stream`, and the routes outside parties call — `/webhooks/*`, `/otlp/*`, `/mcp/*` — which authenticate by their own signature or per-run token |
+| `public` | a caller with no key, while `anonymous` is `public` *(default)* | The company's public face: `GET /org`, its name, mission and chart |
+| `member` | a `role: member` key | What the company **published** — its work items, projects, views and files, its pages and knowledge search, the chart, who is working on what (each seat's activity, the schedules), and the decisions put to people — and acting as the person the key is linked to (`/operator/act`, `/operator/mcp`) |
+| `admin` | a `role: admin` key | Everything a member reaches, and what the machine **processed** — prompts, responses, tool arguments and results, narration, diaries, events, traces and spend — and how it is **run**: nodes and leases, keys, secrets, the configuration, retention and backups |
+
+That is the one rule: **members read what the company published; admins also
+read what its agents processed and how the engine runs.** The
+[API reference](../reference/api-endpoints.md#who-reaches-what) gives the reach
+of every route and question.
+
+**A record about a person is theirs.** A person's inbox, their day and their
+saved views are read by that person and by the leads whose line they are in —
+and by nobody else, whatever the key's role: an admin key is reach over the
+engine, not over somebody else's inbox. Whose line a seat is in is the
+[org chart's](organization-model.md#a-leads-line) to say.
+
+A caller below a surface's reach is refused before the surface runs, in one of
+two ways, because the two send a person to opposite places:
+
+| Answer | When | The remedy |
+|---|---|---|
+| `401 invalid_token` | No key was accepted — none was sent, or the one sent is not in `api.auth.tokens` | Sign in, or check the key |
+| `403 forbidden` | The key was accepted and reaches less — a member asking for an admin's surface | A key of the other role; signing in again changes nothing |
+
+### Choosing a role
+
+Give **`member`** to a teammate: they read the company's work, pages and chart,
+and act as themselves on the dashboard once their key is linked to their seat
+(`contact.crewlet_operator_id` — see
+[Humans in the org chart](humans-in-the-org.md#human-seat-fields)). Give
+**`admin`** to whoever runs the engine, and to the systems that do — a
+pipeline that writes the configuration, a backup job.
+
+There is **no default role**: a key without one is refused at boot, naming the
+field. Defaulting to `admin` would be the posture roles exist to end — a key
+handed to a teammate for their inbox reading the company's secret values — and
+defaulting to `member` would lock an operator's pipeline out of the
+configuration it writes on the next restart.
+
+There is **no third role**. An "owner" who edits the company document but
+cannot read the secrets is a boundary the engine cannot keep: whoever writes
+the document can point a provider's endpoint at a server of their own and keep
+the `${VAR}` its key is sent under. And a lead is not a role — being somebody's
+lead is a relation the org chart already states, and it is what the
+personal-record rule above reads.
+
+**A key no seat links** is ordinary when it is an admin key — a pipeline, an
+automation, an operator outside the chart — and acts under its own label,
+`/operator/mcp` included. An unlinked **member** key reads what members read
+and nothing personal: the two surfaces that act *as* a person, `/operator/act`
+and `/operator/mcp`, refuse it `unbound`.
+
+### What a caller with no key reaches
+
+| `api.auth.anonymous` | Reaches |
+|---|---|
+| `public` *(default)* | The company's name, mission and chart, so the dashboard's sign-in page can say which company it signs you into |
+| `none` | Nothing beyond the probes, the dashboard shell and the question "who am I" — whose answer is "nobody" |
+
+Neither reaches a member's view. Nothing an agent processed is ever served
+without a key, and a wall screen holds a member key like anybody else. The
+dashboard asks for a key on its first load; until one is set it shows what
+the anonymous posture opens and nothing more.
+
+The API states its posture at startup: `api_listening` carries `anonymous`,
+`member_keys`, `admin_keys` and `auth_disabled`. There is no warning for a
+public posture on a reachable bind, because the most a stranger reaches is the
+company's public face.
+
+**The guard is mounted whether or not `api.auth` is configured.** Every route
+is mounted through it at the reach it declares, and what Tier A supplies is the
+*posture*, not the existence of a check. An API built with no Tier A at all has
+no key that can match and no anonymous posture opened, so a caller reaches only
+what is `open` — the only safe reading of "an app was built without being told
+who may use it", and it removes the possibility of a process that serves
+`/config` with nothing in front of it.
+
+Served **without** a key in every posture, because they authenticate by other
 means or must be reachable to obtain one:
 
 | Path | Why |
 |------|-----|
-| `/health`, `/ready` | Probes. An orchestrator has no token, and a liveness check that 401s is a liveness check that fails. A single trailing slash is tolerated (`/health/`), because the guard runs before routing — so the router's redirect to the canonical path only happens if the request gets past the guard first, and a slash must never be the difference between healthy and evicted |
-| `/webhooks/*` | Each verifies its provider's HMAC before doing anything — a stronger check than a shared bearer token. Includes the Slack OAuth landing page, which a browser reaches mid-install |
+| `/health`, `/ready` | Probes. An orchestrator has no key, and a liveness check that 401s is a liveness check that fails. Probe the exact path: `/health/`, with a trailing slash, is not a route and answers `404 no_route` |
+| `/webhooks/*` | Each verifies its provider's HMAC before doing anything — a stronger check than a shared bearer key. Includes the Slack OAuth landing page, which a browser reaches mid-install |
 | | **A route whose secret is unset has nothing to verify with, so it fails closed**: `503` + `Retry-After`, never an accepted delivery. The sender retries and the delivery flows once the secret is configured — a deployment that has not set one is stalled, not damaged, and nothing unsigned is ever recorded, published, or shown on the dashboard |
-| `/otlp/*`, `/mcp/*` | The signed per-run token in the path *is* the credential. Both are reached from inside a sandbox, where the API's own token must never go |
-| `/`, `/dashboard`, `/favicon.ico`, `/static/*` | The page that prompts for a token cannot itself require one. It ships no data: every byte it renders comes from an authenticated fetch |
+| `/otlp/*`, `/mcp/*` | The signed per-run token in the path *is* the credential. Both are reached from inside a sandbox, where an API key must never go |
+| `/`, `/dashboard`, `/favicon.ico`, `/static/*` | The page that asks for a key cannot itself require one. It ships no data: every byte it renders comes from a fetch the guard judges |
+| `GET /viewer` | Who the caller is, which is what the page asking for a key needs to know first — anonymous, a key no seat links, or a linked one |
 
-`/ws/stream` follows the same rule as every other read. When reads are closed it
-needs a credential like anything else — and browsers can't set headers on a
-`WebSocket`, so it accepts `?token=…` as well as the `Authorization` header.
-Prefer the header where a client can send one, since query strings tend to land
-in proxy access logs.
+**`/ws/stream` opens for anyone** and answers each question at the asker's
+reach — the key the socket was opened with, or a key one frame presents for
+that question alone — with the socket's own `unauthorized` and `forbidden`
+codes standing for the 401 and the 403. Browsers cannot set headers on a
+`WebSocket`, so the socket accepts `?token=…` as well as the `Authorization`
+header; prefer the header where a client can send one, since query strings land
+in proxy access logs. **A key that is present and wrong is refused** with a
+`401` before the upgrade, here as everywhere: sending a key says you meant to be
+somebody, and serving you as nobody is how a revoked key goes on appearing to
+work.
 
 | Setting | Effect |
 |---------|--------|
-| `api.auth.tokens` | The accepted bearer tokens. Needed for writes, for `/config`, `/secrets`, `/setup` and `/operator`, and for the guarded reads below, whatever the read posture is |
-| `api.auth.allow_anonymous_read: true` *(default)* | `GET`/`HEAD` outside `/config`, `/secrets`, `/setup` and `/operator` serve without a token; writes and those four surfaces still require one, and so do the individual reads that describe the deployment rather than the company's work (`/fleet`, `/fleet/broker`, `/mcp-servers`, `/credential-pool`, `/integrations`, `/access`, `/backups` and `/work/retention`, and the same questions asked on `/ws/stream`) or somebody else's personal record (`/work/my-work`, `/work/people/{handle}`, `/work/inbox`, `/agents/{id}/conversations`, and `?viewer=` on `/work/views`, each naming a seat other than the caller's own) |
-| `api.auth.allow_anonymous_read: false` | Every route needs a token, `/ws/stream` included. The lockdown posture for a deployment that terminates traffic somewhere reachable |
-| `api.auth.disabled: true` | Local development only. Everything serves unauthenticated **including writes**, attribution becomes `"anonymous"`, loud `WARNING` at startup |
-| `api.auth.company_writers` | The token ids that alone may **change** the company document; empty *(default)* is every token. See [Managed configuration](#managed-configuration) |
+| `api.auth.tokens` | The accepted keys, each `{id, role, token}`. The `role` is required: `member` or `admin` |
+| `api.auth.anonymous` | What a caller with no key reaches: `public` *(default)* or `none` |
+| `api.auth.disabled: true` | Local development only. Every caller is an admin, attribution becomes `"anonymous"`, and a loud `WARNING` is logged at startup |
+| `api.auth.company_writers` | The admin keys that alone may **change** the company document; empty *(default)* is every admin key. See [Managed configuration](#managed-configuration) |
 
-Two combinations are worth calling out:
+The combinations worth calling out:
 
-- **No tokens at all** is a legitimate posture, not a misconfiguration: reads
-  serve and writes are refused outright, because no token can ever match an
-  empty list. A deployment that never writes config through the API therefore
-  has no credential to manage — strictly safer than minting one it will not use.
-- **`allow_anonymous_read: false` with no tokens** is refused at boot. It guards
-  every route behind a credential that does not exist, which is not a strict
-  posture but an outage whose only symptom is a uniform `401` that reads exactly
-  like a wrong token.
+- **No keys at all** is a legitimate posture under `anonymous: public`: a
+  caller reaches the public face and nothing else, and nothing is written
+  through the API. A deployment that never uses the API's keyed surfaces has no
+  credential to manage — strictly safer than minting one it will not use.
+- **No keys and `anonymous: none`** is refused at boot. Nothing past the
+  sign-in page would be reachable and there would be no key to sign in with —
+  an outage whose only symptom is a dashboard nobody can get past.
+- **Keys and no admin among them** is valid, and `crewlet validate` warns about
+  it: nobody can change the configuration, touch a secret, take a backup or
+  operate the fleet through the API, and the CLI's node commands have no admin
+  key to present.
+- **A member key in `company_writers`** is refused: the role is the boundary on
+  who may change the company document at all, and the list cannot widen it.
 
 **CORS** defaults to same-origin. The dashboard is served by this process so it
 needs no entry; list any other browser origin explicitly in
-`api.auth.allowed_origins`. The previous `*` default let any site a logged-in
-operator happened to visit read every endpoint, so `*` is now **refused at
-boot** rather than honoured — name each site.
+`api.auth.allowed_origins`. `*` was this field's default once, and is now
+**refused at boot** rather than honoured: it would let any site somebody visits
+read, through their browser, whatever this API serves without a key — from
+wherever that browser can reach the API, a private network included. A key is
+something the dashboard sends itself, never a cookie a browser attaches on its
+own, so no keyed surface is exposed by it. Name each site.
 
 An entry is compared against the browser's `Origin` header exactly, which is
 always `scheme://host[:port]`: an entry with no scheme, a trailing slash or a
@@ -671,11 +752,13 @@ request would never be sent. Only `Authorization` and `Content-Type` are
 permitted as request headers, and a preflight is cacheable for ten minutes —
 short enough that removing an origin takes effect within one.
 
-The auth middleware compares tokens in constant time (`crypto/subtle`).
-Failed attempts log `api_auth_failed` at WARNING (never the candidate token
-value); successes log `api_auth_ok` at DEBUG with `operator_id` and `route`.
+The guard compares keys in constant time (`crypto/subtle`). A refusal for want
+of a key logs `api_auth_failed` at WARNING, with the reach the route needs and
+whether a key was missing or rejected — never the candidate value; a valid key
+refused for reaching less logs `api_reach_refused` at INFO with `token_id`,
+`reach` and `needs`.
 
-See the [API endpoints reference](../reference/api-endpoints.md#config--live-config-management-auth-gated) for the per-route auth + status semantics.
+See the [API endpoints reference](../reference/api-endpoints.md#config--live-config-management-admin) for the per-route reach and status semantics.
 
 ### Managed configuration
 
@@ -684,7 +767,7 @@ pipeline applies it from a repository, or external tooling such as a
 Kubernetes operator renders it from custom resources and writes it on every
 reconcile. Such a system replaces the active revision with its own each time
 it runs, so an edit a person makes through the dashboard or the API lasts only
-until then — and nothing tells them. Naming the system's token as the
+until then — and nothing tells them. Naming the system's key as the
 document's only writer turns that silent loss into a refusal at the moment of
 the edit:
 
@@ -692,17 +775,19 @@ the edit:
 api:
   auth:
     tokens:
-      - {id: gitops, token: "${CREWLET_API_TOKEN_GITOPS}"}
-      - {id: founder, token: "${CREWLET_API_TOKEN_FOUNDER}"}
-    company_writers: [gitops]   # only this token may change the company document
+      - {id: gitops, role: admin, token: "${CREWLET_API_TOKEN_GITOPS}"}
+      - {id: founder, role: admin, token: "${CREWLET_API_TOKEN_FOUNDER}"}
+    company_writers: [gitops]   # only this admin key may change the company document
 ```
 
 With `company_writers` set, every write that **changes** the document refuses
-any other credential with `403 config_managed`, naming the writers and what to
-do instead. Reads are unchanged: every token still reads `/config`, its
-history and its diffs.
+any other admin key with `403 config_managed`, naming the writers and what to
+do instead. Reads are unchanged: every admin key still reads `/config`, its
+history and its diffs. A member key is not in this picture at all — `/config`,
+`/setup` and `/secrets` are admin surfaces, so it is refused `403 forbidden`
+before the list is consulted, and listing one is refused at boot.
 
-| Refused for a credential not listed | Still open to every credential |
+| Refused for an admin key not listed | Still open to every admin key |
 |---|---|
 | `PUT` and `PATCH /config`, every per-entity `PUT /config/{kind}/{id}`, `POST /config/revisions/{id}/revert`, and the `?dry_run=true` check of each — a check answers what the write would, and the write would be refused | `POST /config/reload`, which re-publishes the active document's own bytes |
 | A `/setup` connect that writes a pointer, a disconnect, and an agent's GitHub App — each refused **before** anything is sealed, queued or created at the vendor | A `/setup` submission that only rotates a value the document already names, and the provisioning pass and its check |
@@ -727,26 +812,28 @@ or Settings › Integrations: where `integrations.jira` or
 `cloud_id` and `site_url` of the site it found, and the revision is credited to
 the node (`reconcile loop`), not to the operator who pressed the button.
 
-**It prevents drift; it is not a privilege boundary.** `company_writers`
-stops a person's edit from being silently overwritten, and nothing more. Every
-token still writes the secret store and can reload, so a token that is not a
-writer can still change what the managed document *does* by rewriting a value
-it references — a model's API key, a webhook secret, or any URL or endpoint
-kept as a `${VAR}` — and publishing it with `POST /config/reload`. A
-deployment that needs to keep a credential away from the company's behaviour
-must not issue that credential a token at all.
+**It prevents drift; the role is the boundary.** `company_writers` is drift
+control among admin keys: it stops a person's edit from being silently
+overwritten, and nothing more. Every admin key still writes the secret store
+and can reload, so an admin key that is not a writer can still change what the
+managed document *does* by rewriting a value it references — a model's API
+key, a webhook secret, or any URL or endpoint kept as a `${VAR}` — and
+publishing it with `POST /config/reload`. A deployment that needs to keep
+somebody away from the company's behaviour gives them a member key, never an
+admin key with a narrower writer list.
 
 **The dashboard shows the document as managed.** The [`viewer`](../reference/api-endpoints.md#queries)
-answer says whether the caller may change the document and, to an operator,
+answer says whether the caller may change the document and, to an admin,
 who manages it; every control that writes the document is drawn disabled with
 that sentence, and the org builder opens read-only.
 
 `crewlet validate` warns about a list that is valid and almost certainly wrong:
-an id that names no token in `api.auth.tokens` (it lets nobody write), a list
-naming no configured token at all (nothing may change the document through the
+an id that names no key in `api.auth.tokens` (it lets nobody write), a list
+naming no configured key at all (nothing may change the document through the
 API — a frozen document), and `api.auth.disabled: true` beside it (every caller
 is the unauthenticated one, which no list can name). An empty, mixed-case,
-repeated or reserved (`anonymous`) entry is refused outright. The list is per
+repeated or reserved (`anonymous`) entry is refused outright, and so is one
+naming a member key. The list is per
 node, like the rest of `api.auth`: give every node the same one.
 
 To take the document back, remove `company_writers` from every node's Tier A

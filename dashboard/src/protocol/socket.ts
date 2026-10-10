@@ -60,6 +60,7 @@ const FALLBACK_MS = 5_000;
 const QUERY_ERROR_CODES: Record<QueryErrorCode, true> = {
   unknown_query: true,
   unauthorized: true,
+  forbidden: true,
   query_failed: true,
   bad_params: true,
   not_found: true,

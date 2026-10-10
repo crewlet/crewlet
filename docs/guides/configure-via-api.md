@@ -6,7 +6,7 @@ Every request below assumes:
 
 ```bash
 export CREWLET_URL="http://localhost"   # examples/nimbus.config.yaml binds the embedded API on port 80
-export TOKEN="$CREWLET_API_TOKEN_FOUNDER"   # matches api.auth.tokens[].token in crewlet.yaml
+export TOKEN="$CREWLET_API_TOKEN_FOUNDER"   # an api.auth.tokens[] key with role: admin in crewlet.yaml
 export AUTH="Authorization: Bearer $TOKEN"
 ```
 
@@ -275,23 +275,23 @@ custom resources — that system runs exactly these requests with its own token,
 and it replaces whatever is active each time it reconciles. A person's edit
 made in between lasts until then, and nothing says it was lost.
 
-Give the managing system its own token and name it as the document's only
+Give the managing system its own admin key and name it as the document's only
 writer in every node's Tier A:
 
 ```yaml
 api:
   auth:
     tokens:
-      - {id: gitops, token: "${CREWLET_API_TOKEN_GITOPS}"}
-      - {id: founder, token: "${CREWLET_API_TOKEN_FOUNDER}"}
+      - {id: gitops, role: admin, token: "${CREWLET_API_TOKEN_GITOPS}"}
+      - {id: founder, role: admin, token: "${CREWLET_API_TOKEN_FOUNDER}"}
     company_writers: [gitops]
 ```
 
 The pipeline keeps writing as above, with `Authorization: Bearer
 $CREWLET_API_TOKEN_GITOPS` and an `If-Match` on the revision it last wrote, so a
 person's reload in between is a `409` it re-reads rather than one it
-overwrites. Everyone else still reads — `GET /config`, the history, the diffs —
-and is refused a change:
+overwrites. Every other admin key still reads — `GET /config`, the history, the
+diffs — and is refused a change:
 
 ```bash
 curl -X PATCH $CREWLET_URL/config -H "$AUTH" \
@@ -329,7 +329,8 @@ classified, beside the `detail` that renders them.
 | `400` | `summary_required` | Any write with neither an `X-Summary` header nor a top-level `_summary` key in the body |
 | `400` | `invalid_query` | `dry_run` given as anything but `true` or `false` |
 | `401` | `invalid_token` | Bearer missing / wrong / wrong scheme |
-| `403` | `config_managed` | The document is [managed by another system](#when-another-system-manages-the-document) and this token is not one of `api.auth.company_writers`; `managed_by` names the writers. A write and its dry run alike |
+| `403` | `forbidden` | The key is accepted and is a `member` key: `/config` is an admin's surface, reads included |
+| `403` | `config_managed` | The document is [managed by another system](#when-another-system-manages-the-document) and this admin key is not one of `api.auth.company_writers`; `managed_by` names the writers. A write and its dry run alike |
 | `404` | `no_active_revision` | Reading `/config` before the first PUT |
 | `404` | `no_such_entity` | A per-entity `PUT` naming an id the active revision does not carry — this route never creates |
 | `404` | `no_route` | A path under `/config` this surface does not serve |

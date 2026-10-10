@@ -31,7 +31,7 @@ import { LayerHost, Skeleton, ToastProvider } from "@crewlethq/ui";
 import { useRoute } from "./router.tsx";
 import { resolve, type Resolved } from "./routes.ts";
 import { sectionOf } from "./nav.ts";
-import { OperatorRequired } from "./frame/OperatorRequired.tsx";
+import { AdminRequired } from "./frame/AdminRequired.tsx";
 import { useViewer } from "~/lib/viewer.ts";
 import { NotFound } from "~/routes/NotFound.tsx";
 import { lazyScreen, prefetchOnIdle } from "./lazyScreen.ts";
@@ -194,7 +194,7 @@ function Screen() {
   const where = resolve(route.path);
   if (!where.resolved) return <NotFound what={where.what} hint={where.hint} />;
   // A GUARDED SECTION FOR A VIEWER THE ENGINE HAS SAID CANNOT READ IT is its
-  // refusal and nothing else — see `OperatorRequired`. Only on an ANSWER, and
+  // refusal and nothing else — see `AdminRequired`. Only on an ANSWER, and
   // the first one is waited for: until it is in, the section asks nothing it
   // may be refused (a cold load of #/settings/secrets sent its guarded reads,
   // was refused, and drew the refusal, a frame before the frame knew to). A
@@ -207,7 +207,7 @@ function Screen() {
         <Skeleton variant="text" rows={4} label={`Checking your access to ${section.label}`} />
       );
     }
-    if (!viewer.loading && !viewer.operator) return <OperatorRequired what={section.label} />;
+    if (!viewer.loading && !viewer.admin) return <AdminRequired what={section.label} />;
   }
   return screenFor(where);
 }

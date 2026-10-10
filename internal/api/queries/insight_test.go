@@ -391,7 +391,7 @@ func TestAHalfCursorIsRefused(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
 	r := registryOver(t, queries.Sources{Events: fleetOf(db.Events())})
-	if _, err := r.Answer(t.Context(), "phases", map[string]any{"before_id": "x"}, ""); err == nil {
+	if _, err := r.Answer(t.Context(), "phases", map[string]any{"before_id": "x"}, asAdmin("ops")); err == nil {
 		t.Fatal("a before_id with no before_time was accepted")
 	}
 }
@@ -844,7 +844,7 @@ func TestTwoTurnsAtOneMicrosecondAreBothOnTheWalk(t *testing.T) {
 	}
 	for _, before := range []string{at.Format(time.RFC3339Nano), "not-a-cursor", "dC1h"} {
 		if _, err := registryOver(t, src).Answer(t.Context(), "turns",
-			map[string]any{"before": before}, ""); !errors.Is(err, queries.ErrBadParams) {
+			map[string]any{"before": before}, asAdmin("ops")); !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("before=%q answered %v, want bad params — a cursor no page handed out", before, err)
 		}
 	}
@@ -1183,7 +1183,7 @@ func TestKnowledgeHonoursTheModeAndCarriesItsOutcome(t *testing.T) {
 	r := queries.NewRegistry()
 	queries.Register(r, sources)
 	if _, err := r.Answer(t.Context(), "knowledge",
-		map[string]any{"q": "deploy", "mode": "meaning"}, "operator"); !errors.Is(err, queries.ErrBadParams) {
+		map[string]any{"q": "deploy", "mode": "meaning"}, asAdmin("operator")); !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("an unknown mode answered %v, want bad params", err)
 	}
 }
@@ -1224,7 +1224,7 @@ func TestALongSearchPhraseIsRefusedNamingTheLimit(t *testing.T) {
 	}
 	r := queries.NewRegistry()
 	queries.Register(r, sources)
-	_, err = r.Answer(t.Context(), "knowledge", map[string]any{"q": long}, "operator")
+	_, err = r.Answer(t.Context(), "knowledge", map[string]any{"q": long}, asAdmin("operator"))
 	refused("knowledge", err)
 	if asked != "" {
 		t.Error("knowledge: a refused phrase still reached the searcher")
@@ -1235,7 +1235,7 @@ func TestALongSearchPhraseIsRefusedNamingTheLimit(t *testing.T) {
 		"work_search", map[string]any{"q": at}); err != nil {
 		t.Errorf("work_search at the bound: %v", err)
 	}
-	if _, err := r.Answer(t.Context(), "knowledge", map[string]any{"q": at}, "operator"); err != nil {
+	if _, err := r.Answer(t.Context(), "knowledge", map[string]any{"q": at}, asAdmin("operator")); err != nil {
 		t.Errorf("knowledge at the bound: %v", err)
 	}
 }

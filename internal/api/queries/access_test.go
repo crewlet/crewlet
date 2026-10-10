@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/config"
@@ -68,7 +69,7 @@ func askAccess(t *testing.T, s queries.Sources) queries.AccessAnswer {
 	t.Helper()
 	r := queries.NewRegistry()
 	queries.Register(r, s)
-	got, err := r.Answer(t.Context(), "access", nil, "founder")
+	got, err := r.Answer(t.Context(), "access", nil, asAdmin("founder"))
 	if err != nil {
 		t.Fatalf("access: %v", err)
 	}
@@ -88,16 +89,31 @@ func personOf(t *testing.T, a queries.AccessAnswer, handle string) queries.Acces
 	return a.People[i]
 }
 
-// A TOKEN IS A PERSON EXACTLY WHEN A HUMAN SEAT BINDS IT, and the answer walks
-// the join from both ends: `founder` acts as Ana, `ci` is nobody's and reaches
-// what an operator credential reaches, and the caller's own is marked.
-func TestATokenIsAPersonExactlyWhenAHumanSeatBindsIt(t *testing.T) {
+// keys is the posture's keys: `founder` an admin, `ci` a member, and any
+// others named after them admins.
+func keys(ids ...string) []queries.AccessKey {
+	out := make([]queries.AccessKey, 0, len(ids))
+	for _, id := range ids {
+		role := config.RoleAdmin
+		if id == "ci" {
+			role = config.RoleMember
+		}
+		out = append(out, queries.AccessKey{ID: id, Role: role})
+	}
+	return out
+}
+
+// EVERY KEY NAMES ITS ROLE, AND A PERSON EXACTLY WHEN A HUMAN SEAT LINKS IT —
+// two facts, never one read as the other: `founder` is an admin key linked to
+// Ana, `ci` a member key nobody's seat links, and the caller's own is marked.
+// The answer walks the join from both ends.
+func TestEveryKeyNamesItsRoleAndThePersonItIsLinkedTo(t *testing.T) {
 	t.Parallel()
-	got := askAccess(t, accessSources(t, queries.AccessPosture{TokenIDs: []string{"founder", "ci"}}))
+	got := askAccess(t, accessSources(t, queries.AccessPosture{Keys: keys("founder", "ci")}))
 
 	want := []queries.AccessToken{
-		{ID: "ci", Scope: queries.ScopeOperator},
-		{ID: "founder", Scope: queries.ScopePerson,
+		{ID: "ci", Role: config.RoleMember},
+		{ID: "founder", Role: config.RoleAdmin,
 			Seat: &queries.AccessSeat{Handle: "ana", Name: "Ana Diaz"}, Yours: true},
 	}
 	if len(got.Tokens) != len(want) {
@@ -105,7 +121,7 @@ func TestATokenIsAPersonExactlyWhenAHumanSeatBindsIt(t *testing.T) {
 	}
 	for i := range want {
 		g, w := got.Tokens[i], want[i]
-		if g.ID != w.ID || g.Scope != w.Scope || g.Yours != w.Yours ||
+		if g.ID != w.ID || g.Role != w.Role || g.Yours != w.Yours ||
 			(g.Seat == nil) != (w.Seat == nil) || (g.Seat != nil && *g.Seat != *w.Seat) {
 			t.Errorf("token %d = %+v (seat %+v), want %+v (seat %+v)", i, g, g.Seat, w, w.Seat)
 		}
@@ -116,7 +132,7 @@ func TestATokenIsAPersonExactlyWhenAHumanSeatBindsIt(t *testing.T) {
 // unset variable, a label no token carries, and no binding at all.
 func TestEveryBindingStateIsToldApart(t *testing.T) {
 	t.Parallel()
-	got := askAccess(t, accessSources(t, queries.AccessPosture{TokenIDs: []string{"founder", "ci"}}))
+	got := askAccess(t, accessSources(t, queries.AccessPosture{Keys: keys("founder", "ci")}))
 
 	for handle, want := range map[string]queries.AccessBinding{
 		"ana": queries.BindingBound,
@@ -147,7 +163,7 @@ func TestEveryBindingStateIsToldApart(t *testing.T) {
 // binding is not among them, because it is an attribution and never an address.
 func TestContactsAreTheConfiguredFieldsWithoutTheBinding(t *testing.T) {
 	t.Parallel()
-	got := askAccess(t, accessSources(t, queries.AccessPosture{TokenIDs: []string{"founder"}}))
+	got := askAccess(t, accessSources(t, queries.AccessPosture{Keys: keys("founder")}))
 
 	ana := personOf(t, got, "ana")
 	if ana.Email != "ana@example.com" || ana.Availability != "weekdays" {
@@ -171,8 +187,9 @@ func TestContactsAreTheConfiguredFieldsWithoutTheBinding(t *testing.T) {
 // a document the guard is not enforcing.
 func TestADisabledGuardBindsNobody(t *testing.T) {
 	t.Parallel()
-	got := askAccess(t, accessSources(t, queries.AccessPosture{Disabled: true, AnonymousRead: true}))
-	if !got.Auth.Disabled || !got.Auth.AnonymousRead {
+	got := askAccess(t, accessSources(t, queries.AccessPosture{Disabled: true,
+		Anonymous: config.AnonymousPublic}))
+	if !got.Auth.Disabled || got.Auth.Anonymous != config.AnonymousPublic {
 		t.Errorf("auth = %+v, want the posture as given", got.Auth)
 	}
 	if got.Tokens == nil || len(got.Tokens) != 0 {
@@ -184,33 +201,37 @@ func TestADisabledGuardBindsNobody(t *testing.T) {
 }
 
 // THE MANAGED POSTURE IS PART OF THE AUTH ANSWER (ADR-0030): the writers in
-// Tier A's order, and an empty list — never null — when every token may change
-// the company document, which is a posture too.
+// Tier A's order, and an empty list — never null — when every admin key may
+// change the company document, which is a posture too.
 func TestTheAuthAnswerNamesTheCompanyWriters(t *testing.T) {
 	t.Parallel()
 	managed := askAccess(t, accessSources(t, queries.AccessPosture{
-		TokenIDs: []string{"founder", "gitops", "ci"}, CompanyWriters: []string{"gitops", "ci"},
+		Keys: keys("founder", "gitops", "ci"), CompanyWriters: []string{"gitops", "ci"},
 	}))
 	if !slices.Equal(managed.Auth.CompanyWriters, []string{"gitops", "ci"}) {
 		t.Errorf("company_writers = %v, want [gitops ci] as Tier A orders them", managed.Auth.CompanyWriters)
 	}
-	open := askAccess(t, accessSources(t, queries.AccessPosture{TokenIDs: []string{"founder"}}))
+	open := askAccess(t, accessSources(t, queries.AccessPosture{Keys: keys("founder")}))
 	if open.Auth.CompanyWriters == nil || len(open.Auth.CompanyWriters) != 0 {
 		t.Errorf("company_writers unset = %#v, want an empty list", open.Auth.CompanyWriters)
 	}
 }
 
-// ANONYMOUS IS REFUSED: the labels and who each one is are a map of which
-// credential to take.
-func TestAccessIsOperatorOnly(t *testing.T) {
+// ACCESS IS AN ADMIN'S: the labels, what each reaches and who each one is are a
+// map of which credential to take — refused to a caller with no key, and
+// FORBIDDEN to a member, whose key a teammate holds.
+func TestAccessIsAnAdminsAlone(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
-	queries.Register(r, accessSources(t, queries.AccessPosture{TokenIDs: []string{"founder"}}))
-	if !r.RequiresOperator("access") {
-		t.Fatal("access is served to any caller")
+	queries.Register(r, accessSources(t, queries.AccessPosture{Keys: keys("founder", "ci")}))
+	if got := r.ReachOf("access"); got != auth.ReachAdmin {
+		t.Fatalf("access is registered at %q, want admin", got)
 	}
-	if _, err := r.Answer(t.Context(), "access", nil, ""); !errors.Is(err, queries.ErrUnauthorized) {
+	if _, err := r.Answer(t.Context(), "access", nil, nobody); !errors.Is(err, queries.ErrUnauthorized) {
 		t.Errorf("anonymous access answered %v, want an authorization refusal", err)
+	}
+	if _, err := r.Answer(t.Context(), "access", nil, asMember("ci")); !errors.Is(err, queries.ErrForbidden) {
+		t.Errorf("a member's access answered %v, want forbidden", err)
 	}
 	// And a node given no posture does not register it at all.
 	bare := queries.NewRegistry()
@@ -223,12 +244,12 @@ func TestAccessIsOperatorOnly(t *testing.T) {
 // THE PEOPLE SCREEN READS WHAT THIS ANSWER SENDS, every shape held both ways.
 func TestTheAccessScreenReadsWhatThisAnswerSends(t *testing.T) {
 	t.Parallel()
-	posture := queries.AccessPosture{TokenIDs: []string{"founder", "ci"},
-		AnonymousRead: true, AllowedOrigins: []string{"https://example.com"},
-		CompanyWriters: []string{"ci"}}
+	posture := queries.AccessPosture{Keys: keys("founder", "gitops", "ci"),
+		Anonymous: config.AnonymousPublic, AllowedOrigins: []string{"https://example.com"},
+		CompanyWriters: []string{"gitops"}}
 	r := queries.NewRegistry()
 	queries.Register(r, accessSources(t, posture))
-	raw, err := r.Answer(t.Context(), "access", nil, "founder")
+	raw, err := r.Answer(t.Context(), "access", nil, asAdmin("founder"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,14 +274,16 @@ func TestTheAccessScreenReadsWhatThisAnswerSends(t *testing.T) {
 	holdShape(t, "AccessContact", contacts, false)
 }
 
-// THE DASHBOARD KNOWS EXACTLY THE SCOPES AND BINDING STATES THE ENGINE SENDS: a
+// THE DASHBOARD KNOWS EXACTLY THE ROLES AND BINDING STATES THE ENGINE SENDS: a
 // state it has no words for draws as nothing, and one the engine never sends is
 // a branch nothing reaches.
 func TestTheDashboardKnowsExactlyTheAccessStates(t *testing.T) {
 	t.Parallel()
 	for name, engine := range map[string][]string{
-		"TokenScope":    stringsOf(queries.TokenScopes),
-		"AccessBinding": stringsOf(queries.AccessBindings),
+		"TokenRole":       stringsOf(config.TokenRoles),
+		"AnonymousAccess": stringsOf(config.AnonymousAccesses),
+		"Reach":           stringsOf(auth.Reaches),
+		"AccessBinding":   stringsOf(queries.AccessBindings),
 	} {
 		got, err := clientsource.Union(clientsource.Tree(t), name)
 		if err != nil {
@@ -270,11 +293,6 @@ func TestTheDashboardKnowsExactlyTheAccessStates(t *testing.T) {
 		want := slices.Sorted(slices.Values(engine))
 		if !slices.Equal(got, want) {
 			t.Errorf("the dashboard's %s is %v; the engine sends %v", name, got, want)
-		}
-	}
-	for _, s := range queries.TokenScopes {
-		if !s.Valid() {
-			t.Errorf("scope %q is listed and not valid", s)
 		}
 	}
 	for _, b := range queries.AccessBindings {

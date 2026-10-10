@@ -4,7 +4,7 @@
 //
 // # Why it matters here more than on most servers
 //
-// The operator token that writes /config and /secrets lives in the dashboard
+// The admin key that writes /config and /secrets lives in the dashboard
 // origin's localStorage. Anything that runs script on that origin can read it,
 // and the engine serves three kinds of HTML there: the dashboard shell, the
 // GitHub App landing page and the Slack OAuth landing page. The two landing

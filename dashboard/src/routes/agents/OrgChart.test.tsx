@@ -73,7 +73,9 @@ afterEach(() => {
   location.hash = "";
 });
 
-async function mount(viewer: Record<string, unknown> = { operator_id: "", acts: [] }) {
+async function mount(
+  viewer: Record<string, unknown> = { token_id: "", role: "", reach: "public", acts: [] },
+) {
   const store = new Store();
   store.applyHealth(healthFrame());
   store.applyOrg(CHART_ORG);
@@ -176,7 +178,14 @@ test("Add seat is held with its reason for a reader who is not an operator", asy
 });
 
 test("an operator's Add seat goes to the builder, adding an agent", async () => {
-  await mount({ operator_id: "ops", operator: true, handle: "jane", acts: [] });
+  await mount({
+    token_id: "ops",
+    role: "admin",
+    reach: "admin",
+    linked: true,
+    handle: "jane",
+    acts: [],
+  });
   const add = screen.getByRole("link", { name: /Add seat/ });
   expect(add.getAttribute("href")).toBe("#/agents/edit?add=agent");
 });
@@ -186,8 +195,10 @@ test("an operator's Add seat goes to the builder, adding an agent", async () => 
 // sentence that names who manages it; a writer still adds.
 test("Add seat is held with the managed sentence for an operator who is not a writer", async () => {
   await mount({
-    operator_id: "ops",
-    operator: true,
+    token_id: "ops",
+    role: "admin",
+    reach: "admin",
+    linked: true,
     handle: "jane",
     acts: [],
     config_writer: false,
@@ -199,8 +210,10 @@ test("Add seat is held with the managed sentence for an operator who is not a wr
   cleanup();
 
   await mount({
-    operator_id: "gitops",
-    operator: true,
+    token_id: "gitops",
+    role: "admin",
+    reach: "admin",
+    linked: true,
     handle: "jane",
     acts: [],
     config_writer: true,

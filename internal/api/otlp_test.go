@@ -180,12 +180,10 @@ func TestWithNoReceiverTheRouteIsAbsent(t *testing.T) {
 	}
 }
 
-// closedToReads is a bootstrap that requires a token for EVERYTHING the
-// exemptions do not cover — unlike [guarded], whose anonymous reads would
-// make the assertion above pass for the wrong reason.
+// closedToReads is a bootstrap that opens nothing to a caller with no key
+// beyond the open routes — unlike [guarded], whose public posture would make
+// an assertion about what stays reachable pass for the wrong reason.
 func closedToReads() *config.Bootstrap {
-	b := config.DefaultBootstrap()
-	b.API.Auth.AllowAnonymousRead = false
-	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
+	b := closedPosture()
 	return &b
 }

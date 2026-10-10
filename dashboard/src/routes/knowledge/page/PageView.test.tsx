@@ -39,8 +39,10 @@ const NOW = Date.parse("2026-09-25T00:00:00Z");
 const ID = "0b6f5a4e-6a41-4b6e-9d8c-3f1e2d4c5b6a";
 
 const JANE = {
-  operator_id: "U0FOUNDER",
-  operator: true,
+  token_id: "U0FOUNDER",
+  role: "admin",
+  reach: "admin",
+  linked: true,
   handle: "jane",
   name: "Jane Founder",
   kind: "human",
@@ -560,12 +562,12 @@ test("only an exact repeat of the title on the first line is dropped", () => {
 test.each([
   [
     "an anonymous reader",
-    { operator_id: "", operator: false, handle: "", name: "", acts: [], anonymous: true },
+    { token_id: "", role: "", reach: "public", handle: "", name: "", acts: [], anonymous: true },
     WRITE_REASONS.anonymous,
   ],
   [
     "an unbound token",
-    { operator_id: "U0OPS", operator: true, handle: "", name: "", acts: [] },
+    { token_id: "U0OPS", role: "admin", reach: "admin", handle: "", name: "", acts: [] },
     WRITE_REASONS.unbound,
   ],
   ["a person the engine does not serve", { ...JANE, acts: [] }, WRITE_REASONS.not_served],

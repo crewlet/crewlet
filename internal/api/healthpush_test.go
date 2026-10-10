@@ -18,6 +18,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/stream"
@@ -136,7 +137,7 @@ func TestTheHealthPushIsTheWholeEnvelope(t *testing.T) {
 // GET /health is a probe and unguarded, and the push reaches an anonymous
 // tab, so what it says about the fleet and the alarm table is a number and
 // one name. Which nodes hold what, and what each alarm measured, are the
-// operator-only `fleet` and `work_retention` answers.
+// admin `fleet` and `retention` answers.
 //
 // Mutation: carry the alarms' details or the node rows on the envelope, and
 // this fails.
@@ -306,11 +307,11 @@ func TestAWedgedPresenceReadDoesNotHangTheProbes(t *testing.T) {
 func TestTheSocketUnavailableFrameCarriesTheSameRetryHintAsREST(t *testing.T) {
 	t.Parallel()
 	a := seededApp(t, nil)
-	a.Queries().Register("behind", func(context.Context, queries.Params) (any, error) {
+	a.Queries().Register("behind", auth.ReachOpen, func(context.Context, queries.Params) (any, error) {
 		return nil, fmt.Errorf("%w: %w", queries.ErrUnavailable,
 			&statelog.Refused{Code: statelog.RefuseBehind, RetryAfter: 12400 * time.Millisecond})
 	})
-	a.Queries().Register("blip", func(context.Context, queries.Params) (any, error) {
+	a.Queries().Register("blip", auth.ReachOpen, func(context.Context, queries.Params) (any, error) {
 		return nil, fmt.Errorf("%w: store unreachable", queries.ErrUnavailable)
 	})
 

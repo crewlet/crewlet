@@ -81,8 +81,49 @@ func (v *vault) get(name string) (string, bool) {
 	return value, ok
 }
 
-type surface struct {
+// mounted is the API's route table as this suite needs it: every route on a
+// plain mux, behind no guard — enforcing a route's reach is the app's route
+// table's, which its own gate walks — and the reach each route declared, which
+// [TestEverySetupRouteIsAnAdminsAlone] holds.
+type mounted struct {
 	mux     *http.ServeMux
+	reaches map[string]auth.Reach
+}
+
+func newMounted() *mounted {
+	return &mounted{mux: http.NewServeMux(), reaches: map[string]auth.Reach{}}
+}
+
+func (m *mounted) Handle(pattern string, reach auth.Reach, h http.Handler) {
+	m.reaches[pattern] = reach
+	m.mux.Handle(pattern, h)
+}
+
+func (m *mounted) HandleFunc(pattern string, reach auth.Reach, h func(http.ResponseWriter, *http.Request)) {
+	m.Handle(pattern, reach, http.HandlerFunc(h))
+}
+
+func (m *mounted) ServeHTTP(w http.ResponseWriter, r *http.Request) { m.mux.ServeHTTP(w, r) }
+
+// EVERY ROUTE ON /setup IS AN ADMIN'S, reads included (ADR-0031): which
+// credentials a company has not configured is a map of what to attack, and
+// every write lands in the secret store or the company document.
+func TestEverySetupRouteIsAnAdminsAlone(t *testing.T) {
+	t.Parallel()
+	mux := newMounted()
+	newService(t, setupapi.Options{}).Routes(mux)
+	if len(mux.reaches) == 0 {
+		t.Fatal("the surface mounted nothing, so this asserts nothing")
+	}
+	for pattern, reach := range mux.reaches {
+		if reach != auth.ReachAdmin {
+			t.Errorf("%s is mounted at %q, want admin", pattern, reach)
+		}
+	}
+}
+
+type surface struct {
+	mux     *mounted
 	config  *configapi.Service
 	vault   *vault
 	company func() *config.Company
@@ -228,7 +269,7 @@ func newManagedSurface(t *testing.T, apps map[string]string, writers ...string) 
 	cfg, db := newConfigSurface(t, writers...)
 	v := &vault{}
 	s := &surface{
-		mux: http.NewServeMux(), config: cfg, vault: v, configs: db.Configs(),
+		mux: newMounted(), config: cfg, vault: v, configs: db.Configs(),
 		status: &statusStore{},
 	}
 	// THE ACTIVE DOCUMENT, read fresh on every call, the same way the
@@ -261,13 +302,14 @@ func (s *surface) do(t *testing.T, method, path, body string, headers map[string
 	return s.doAs(t, "", method, path, body, headers)
 }
 
-// doAs is do carrying the operator id the guard would have attached; "" is
+// doAs is do carrying the admin key the guard would have attached; "" is
 // none, which is what every case that is not about who asks sends.
 func (s *surface) doAs(t *testing.T, operator, method, path, body string, headers map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	if operator != "" {
-		req = req.WithContext(auth.WithOperator(req.Context(), operator))
+		req = req.WithContext(auth.WithPrincipal(req.Context(),
+			auth.Principal{ID: operator, Role: config.RoleAdmin, Reach: auth.ReachAdmin}))
 	}
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
@@ -924,7 +966,7 @@ func (s *surface) withPass(
 		wired = append(wired, pass)
 	}
 	runner := setup.NewRunner(wired, nil, func() time.Time { return pinned })
-	s.mux = http.NewServeMux()
+	s.mux = newMounted()
 	s.status = status
 	s.setup = newService(t, setupapi.Options{
 		Company: s.company, Config: s.config, Secrets: s.vault,

@@ -201,13 +201,15 @@ const status: McpServersStatusAnswer = {
 };
 
 const OPERATOR = {
-  operator_id: "U0FOUNDER",
-  operator: true,
+  token_id: "U0FOUNDER",
+  role: "admin",
+  reach: "admin",
+  linked: true,
   handle: "jane",
   name: "Jane",
   kind: "human",
 };
-const READER = { operator_id: "", operator: false, handle: "", name: "", kind: "" };
+const READER = { token_id: "", role: "", reach: "public", handle: "", name: "", kind: "" };
 
 class InertWebSocket {
   static CONNECTING = 0;

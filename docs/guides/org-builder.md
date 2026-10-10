@@ -19,9 +19,10 @@ under [Editing a node](#editing-a-node), field by field.
 
 ## Opening the builder
 
-The configuration is guarded, reads included, so the builder needs what any
-other configuration client needs: an operator token the engine accepts
-(unless the node runs with `api.auth.disabled`). What the builder shows is
+The configuration is an admin's, reads included, so the builder needs what any
+other configuration client needs: an admin key the engine accepts (unless the
+node runs with `api.auth.disabled`). A member key is refused `403 forbidden`
+by the configuration surface, whatever the browser shows. What the builder shows is
 decided from what the engine answers, never from whether the browser holds a
 token:
 
@@ -46,10 +47,10 @@ written by a refused save, so there is nothing to settle afterwards.
 When another system [manages the company
 document](../concepts/configuration.md#managed-configuration) — Tier A names
 its writers in `api.auth.company_writers` — the builder opens read-only for
-every other token: the organization is drawn, every editing control is
+every other admin key: the organization is drawn, every editing control is
 disabled, and a callout says who manages it. Change the company at its source
 and let that system write it. The org chart's **Add seat** is disabled with the
-same sentence. A writer's token edits as usual.
+same sentence. A writer's key edits as usual.
 
 ### Arriving from a link
 
@@ -79,7 +80,7 @@ reached from the node's **Open seat**, say), opens that node's editor, since
 the builder cannot tell that address from a link somebody sent you. A link
 naming a node the draft does not hold selects nothing and opens nothing.
 
-Changing the operator token while a draft is open keeps the draft. The
+Changing the key while a draft is open keeps the draft. The
 builder reads the configuration again and checks the draft under the new
 token; if the engine refuses it, editing pauses until a token it accepts is
 set.

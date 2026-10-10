@@ -65,6 +65,7 @@ import {
   suggestDir,
 } from "~/lib/backups.ts";
 import { apiToken } from "~/protocol/index.ts";
+import { knownRefusal, useViewer } from "~/lib/viewer.ts";
 import type { BackupPointRow, BackupRunRow, BackupsAnswer } from "~/contract/backups.ts";
 import { RetentionPanels } from "./Retention.tsx";
 import { DomainScreen } from "./Domain.tsx";
@@ -74,16 +75,24 @@ import { TakeBackupDialog } from "./TakeBackupDialog.tsx";
  *  and a copy this page took re-reads the answer the moment it lands. */
 const BACKUPS_POLL_MS = 60_000;
 
+/** Why Take a backup cannot be pressed, by the refusal the engine would give. */
+const TAKE_REFUSED = {
+  unauthorized: "Taking a backup needs an admin's API key.",
+  forbidden: "Taking a backup is for admins.",
+} as const;
+
 export function Backups({ domain }: { domain?: string }) {
   const health = useEngineHealth();
   const [taking, setTaking] = useState(false);
-  // THE SECTION IS OPERATOR-SCOPED AND SAYS SO. Every answer below refuses a
-  // reader with no token, and a page of its own that drew nothing would be a
-  // blank screen under a heading that promises backups.
-  const operator = apiToken() !== "";
+  // THE SECTION IS AN ADMIN'S AND SAYS SO. Every answer below refuses a
+  // reader who is not an admin, and a page of its own that drew nothing would
+  // be a blank screen under a heading that promises backups — so a refusal
+  // known before the question is drawn as the engine would draw it, and the
+  // question is not asked ([knownRefusal]).
+  const refused = knownRefusal(useViewer(), apiToken() !== "");
   const backups = useQuery("backups", undefined, {
     pollMs: BACKUPS_POLL_MS,
-    enabled: operator && domain === undefined,
+    enabled: refused === null && domain === undefined,
   });
   if (domain !== undefined) return <DomainScreen key={domain} name={domain} />;
   const node = health?.node;
@@ -94,8 +103,8 @@ export function Backups({ domain }: { domain?: string }) {
           variant="primary"
           size="small"
           leadingIcon={<PlusGlyph />}
-          disabledReason={operator ? undefined : "Taking a backup needs an operator token."}
-          title={operator ? undefined : "Taking a backup needs an operator token."}
+          disabledReason={refused === null ? undefined : TAKE_REFUSED[refused]}
+          title={refused === null ? undefined : TAKE_REFUSED[refused]}
           onClick={() => setTaking(true)}
         >
           Take a backup
@@ -105,7 +114,7 @@ export function Backups({ domain }: { domain?: string }) {
         What this fleet has backed up, and each state-log domain&rsquo;s trim — which waits for the
         slowest node and for the newest backup that covers it.
       </PageNote>
-      <QueryState error={operator ? null : "unauthorized"} loading={false}>
+      <QueryState error={refused} loading={false}>
         <QueryState error={backups.error} loading={backups.loading && !backups.data}>
           {backups.data ? (
             <BackupRecord answer={backups.data} />

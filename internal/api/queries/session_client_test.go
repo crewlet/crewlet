@@ -115,7 +115,7 @@ func askFloorless(t *testing.T, kind string) (any, error) {
 	}
 	ask := askNative
 	if personalQuestions[kind] {
-		ask = askAsOperator
+		ask = askAsAna
 	}
 	return ask(t, queries.Sources{Work: work, Pages: pages}, kind, params)
 }

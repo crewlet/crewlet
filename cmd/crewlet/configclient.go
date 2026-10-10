@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
 )
@@ -162,16 +163,20 @@ func (c *configClient) refusal(status int, contentType string, raw []byte) error
 		// missing rather than something under it.
 		return missingSurface(c.base, "/config", body.Error)
 	case status == http.StatusUnauthorized:
-		return fmt.Errorf("%s refused the bearer token: set %s to one of its "+
-			"api.auth.tokens", c.base, apiTokenEnv)
+		return fmt.Errorf("%s refused the key: set %s to one of its "+
+			"api.auth.tokens with role: admin", c.base, apiTokenEnv)
+	case status == http.StatusForbidden && body.Error == string(httpjson.CodeForbidden):
+		// A MEMBER KEY: accepted, and the company configuration is an
+		// admin's surface, reads included (ADR-0031).
+		return fmt.Errorf("%s accepted the key, but it is a member key and the "+
+			"company configuration is an admin's: %s", c.base, adminKeySource)
 	case status == http.StatusConflict && body.Error == "revision_advanced":
 		return lostRace(c.base, body.Current, body.Stored)
 	case status == http.StatusForbidden && body.Error == string(configapi.CodeConfigManaged):
-		// THE CREDENTIAL IS VALID AND NOT A WRITER, so the remedy is which
-		// token this command sent, and the refusal says where it came from.
-		return fmt.Errorf("%s refused the import: %s\n  %s\n  (this command "+
-			"authenticated with %s when it is set, else the first of Tier A's "+
-			"api.auth.tokens)", c.base, body.Detail, body.Hint, apiTokenEnv)
+		// THE KEY IS AN ADMIN'S AND NOT A WRITER, so the remedy is which key
+		// this command sent, and the refusal says where it came from.
+		return fmt.Errorf("%s refused the import: %s\n  %s\n  (%s)",
+			c.base, body.Detail, body.Hint, adminKeySource)
 	}
 	msg := body.Error
 	if msg == "" {

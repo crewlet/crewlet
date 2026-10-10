@@ -116,8 +116,10 @@ const org = {
 };
 
 const OPERATOR = {
-  operator_id: "U0FOUNDER",
-  operator: true,
+  token_id: "U0FOUNDER",
+  role: "admin",
+  reach: "admin",
+  linked: true,
   handle: "jane",
   name: "Jane",
   kind: "human",

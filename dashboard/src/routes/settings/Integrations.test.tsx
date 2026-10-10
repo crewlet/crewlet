@@ -663,7 +663,7 @@ test("a tool with no form behind it is learned about, not connected", () => {
   const nothing = entryState(slack, rowsOf(), rolled("slack", "not_in_use", "Not in use"));
   expect(kindOf(nothing, [], false, [], false)).toBe("learn");
   expect(kindOf(nothing, [], false, [], true)).toBe("connect");
-  expect(formBlocked([], true)).toMatch(/operator token/);
+  expect(formBlocked([], true)).toMatch(/needs an admin key/);
   expect(formBlocked([], false)).toMatch(/no form to open/);
   expect(formBlocked([{}], true)).toBeUndefined();
 });

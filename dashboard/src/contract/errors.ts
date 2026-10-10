@@ -10,7 +10,16 @@
  */
 export type QueryErrorCode =
   | "unknown_query"
+  /** The question needs a key and the caller presented none the engine
+   *  accepted. The remedy is to sign in. */
   | "unauthorized"
+  /** The caller's key WAS accepted and reaches less than the question needs
+   *  (ADR-0031): a member asking an admin's question, or anybody asking for
+   *  a person's record outside their own line. DISTINCT FROM `unauthorized`
+   *  because the remedies are opposite — signing in again changes nothing,
+   *  and a screen that offered it would send a signed-in person in a
+   *  circle. The guard's REST refusal carries the same word with a 403. */
+  | "forbidden"
   | "query_failed"
   /** This node understood the question and REFUSED it: a parameter missing,
    *  malformed, or outside the set the field accepts. The caller's fault, not

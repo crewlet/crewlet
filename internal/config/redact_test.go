@@ -562,8 +562,9 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 	exemptFields := map[string]string{
 		"Bootstrap.Secrets": "the keyring block; its key ids are labels, and " +
 			"SecretKey.Material is tagged",
-		"APIAuth.Tokens": "a list of {id, token}; the id is the label writes " +
-			"are attributed to, and APIToken.Token is tagged",
+		"APIAuth.Tokens": "a list of {id, role, token}; the id is the label " +
+			"writes are attributed to, the role is what the key is for, and " +
+			"APIToken.Token is tagged",
 		"Stream.Credentials": "a PATH to a NATS credentials file, not the " +
 			"material at it",
 	}

@@ -78,7 +78,7 @@ func nodeClientFor(args []string, name string, stderr io.Writer, extra func(*fla
 	addr := fs.String("url", "",
 		"the running node's base URL; empty takes it from the config's api block")
 	token := fs.String("token", "",
-		"bearer token; empty takes "+apiTokenEnv+", then the config's first token")
+		"bearer token; empty takes "+apiTokenEnv+", then the config's first admin key")
 	if extra != nil {
 		extra(fs)
 	}
@@ -368,18 +368,25 @@ func nodeError(status int, body []byte, sentToken bool) error {
 		// throw away.
 		refusal.msg = withRefusalDetail("the node accepted the token but it is "+
 			"bound to no person, and this gesture is made by one", payload.Detail, payload.Hint)
+	case status == http.StatusForbidden && payload.Error == string(httpjson.CodeForbidden):
+		// THE KEY IS VALID AND REACHES LESS (ADR-0031): a member key on an
+		// admin's surface. Not a credential to check — the node knew it —
+		// but a key of the wrong role, so the remedy is which key this
+		// command sends.
+		refusal.msg = "the node accepted the key, but it is a member key and " +
+			"this is an admin's surface: " + adminKeySource
 	case status == http.StatusUnauthorized:
 		// THE CREDENTIAL ITSELF, and only a 401 says so: every guard that
-		// refuses a token answers 401 `invalid_token`. A 403 is the node
-		// judging a VALID caller — an act the tool forbids, a gesture that
-		// needs an operator identity — and its detail is the whole answer,
-		// so it falls through to the default below rather than being
-		// reported as a token to check.
+		// refuses a key answers 401 `invalid_token`. A 403 is the node
+		// judging a VALID caller — a key that reaches less, an act the tool
+		// forbids, a gesture made by a person — so it is never reported as a
+		// key to check.
 		if !sentToken {
-			return errors.New("the node refused the request and no token was sent: " +
+			return errors.New("the node refused the request and no key was sent: " +
+				"the config names no api.auth.tokens entry with role: admin, so " +
 				"export " + apiTokenEnv + ", or pass -token")
 		}
-		return errors.New("the node refused the token: check it against the " +
+		return errors.New("the node refused the key: check it against the " +
 			"api.auth.tokens entry you meant to use")
 	case status == http.StatusServiceUnavailable:
 		// TWO DIFFERENT FACTS on this surface: a node built without the

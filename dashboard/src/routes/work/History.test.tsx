@@ -410,7 +410,14 @@ const prioritised = () =>
 test("a queue somebody else's is named as theirs", async () => {
   serving({
     work_activity: { records: [prioritised()], complete: true },
-    viewer: { operator_id: "op-1", operator: true, handle: "ada", name: "Ada Okonkwo" },
+    viewer: {
+      token_id: "op-1",
+      role: "admin",
+      reach: "admin",
+      linked: true,
+      handle: "ada",
+      name: "Ada Okonkwo",
+    },
   });
   const { container } = mount();
   await waitFor(() => expect(container.querySelector(".work-log-what")).toBeTruthy());
@@ -423,7 +430,14 @@ test("a queue somebody else's is named as theirs", async () => {
 test("a reader looking at their own queue is still addressed as themselves", async () => {
   serving({
     work_activity: { records: [prioritised()], complete: true },
-    viewer: { operator_id: "op-2", operator: true, handle: "agent-swe", name: "SWE" },
+    viewer: {
+      token_id: "op-2",
+      role: "admin",
+      reach: "admin",
+      linked: true,
+      handle: "agent-swe",
+      name: "SWE",
+    },
   });
   const { container } = mount();
   await waitFor(() =>

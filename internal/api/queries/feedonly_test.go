@@ -60,7 +60,7 @@ func TestTheActivityViewsAskForTheFeedsRowsAlone(t *testing.T) {
 	if whole.Total != len(stored) {
 		t.Errorf("the axis counts %d, want every stored row (%d)", whole.Total, len(stored))
 	}
-	if _, err := r.Answer(t.Context(), "events", map[string]any{"feed_only": "yes"}, ""); !errors.Is(err, queries.ErrBadParams) {
+	if _, err := r.Answer(t.Context(), "events", map[string]any{"feed_only": "yes"}, asAdmin("ops")); !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("feed_only=yes: err %v, want bad params", err)
 	}
 }

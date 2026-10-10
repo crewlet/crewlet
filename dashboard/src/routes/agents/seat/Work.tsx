@@ -4,8 +4,8 @@
  * TWO HALVES, AND THEY ARE NOT THE SAME READ. The list is `work_items
  * {assignee}`, which is ungated: every reader of this page gets it, and it is
  * the floor. The blocks under it are `work_my_work`, which the engine scopes
- * to the caller's own seat, so they arrive for a person reading their own
- * page and for an operator and for nobody else. One tab, because the
+ * to the caller's own seat and line, so they arrive for a person reading their
+ * own page and for the leads in their line and for nobody else. One tab, because the
  * question a reader has is "what is this seat doing", and the answer is
  * simply fuller when they are entitled to more of it.
  *
@@ -29,7 +29,7 @@ import {
 } from "~/components/work.tsx";
 import { HoldWrites } from "~/lib/useWriteAccess.ts";
 import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
-import { useViewer } from "~/lib/viewer.ts";
+import { readsPersonOf, useViewer } from "~/lib/viewer.ts";
 import type { Seat } from "~/lib/seats.ts";
 import type { WorkItemsAnswer } from "~/protocol/index.ts";
 
@@ -48,7 +48,7 @@ export function Work({
   const viewer = useViewer();
   // THE SEVEN CLAIMS, and only where the reader may have them — the same
   // rule the person record follows.
-  const mayRead = viewer.operator || (viewer.handle !== "" && viewer.handle === handle);
+  const mayRead = readsPersonOf(viewer, handle);
   const mine = useQuery(
     "work_my_work",
     { handle },
@@ -156,8 +156,8 @@ export function Work({
       ) : (
         <p className="t-caption">
           Their own queue — what they mean to do first, the questions put to them and their
-          checklist items on other seats&apos; tasks — is theirs to read. An operator credential, or
-          their own, shows it here.
+          checklist items on other seats&apos; tasks — is theirs, and their leads&apos;, to read.
+          Their own key, or a lead&apos;s in their line, shows it here.
         </p>
       )}
     </div>

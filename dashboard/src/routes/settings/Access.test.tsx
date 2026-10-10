@@ -12,7 +12,7 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test } from "vitest";
 
-import { PeopleAndAccess, BINDING_WORDS } from "./Access.tsx";
+import { PeopleAndAccess, ANONYMOUS_WORDS, BINDING_WORDS, ROLE_WORDS } from "./Access.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, QueryError, Store, storeToken } from "~/protocol/index.ts";
@@ -31,10 +31,11 @@ class InertWebSocket {
 const HELD = "held-token-value-8Hq2";
 
 const answer: AccessAnswer = {
-  auth: { disabled: false, anonymous_read: true, allowed_origins: [], company_writers: [] },
+  auth: { disabled: false, anonymous: "public", allowed_origins: [], company_writers: [] },
   tokens: [
-    { id: "ci", scope: "operator", seat: null, yours: false },
-    { id: "founder", scope: "person", seat: { handle: "ana", name: "Ana Diaz" }, yours: true },
+    { id: "ci", role: "admin", seat: null, yours: false },
+    { id: "founder", role: "admin", seat: { handle: "ana", name: "Ana Diaz" }, yours: true },
+    { id: "kiosk", role: "member", seat: null, yours: false },
   ],
   people: [
     {
@@ -111,14 +112,22 @@ test("no credential's value is rendered, not even the one this browser holds", a
   expect(screen.getByText("yours")).toBeDefined();
 });
 
-test("a token acts as the person who binds it, and a token nobody binds acts as nobody", async () => {
+// THE ROLE AND THE LINK ARE TWO FACTS, drawn as two columns: the role says
+// how far a key reaches, the link who it acts as. An admin key nobody binds
+// still writes the configuration under its own label; a member key nobody
+// binds writes nothing, because a member changes things only as a person.
+test("a token shows its role beside the person it acts as, or nobody", async () => {
   mount(async (what) => (what === "access" ? answer : null));
-  // The token row names the seat it acts as; the one nobody binds says so.
   const founder = (await screen.findByText("yours")).closest(".grid-row") as HTMLElement;
   expect(within(founder).getByText("Ana Diaz")).toBeDefined();
-  expect(within(founder).getByText("Person")).toBeDefined();
+  expect(within(founder).getByText(ROLE_WORDS.admin.label)).toBeDefined();
   const ci = screen.getByText(/Nobody — writes under its own label/).closest(".grid-row");
-  expect(within(ci as HTMLElement).getByText("Operator")).toBeDefined();
+  expect(within(ci as HTMLElement).getByText(ROLE_WORDS.admin.label)).toBeDefined();
+  const kiosk = screen.getByText(/Nobody — reads only/).closest(".grid-row");
+  expect(within(kiosk as HTMLElement).getByText(ROLE_WORDS.member.label)).toBeDefined();
+  // AND THE COUNT says how many of each the guard accepts.
+  const tile = screen.getByText("2 admin · 1 member").closest(".crewlet-statcard") as HTMLElement;
+  expect(within(tile).getByText("API tokens")).toBeDefined();
 });
 
 test("each binding failure reads as its own state, with the binding as written", async () => {
@@ -146,7 +155,7 @@ test("a disabled guard is said out loud", async () => {
 
 // A MANAGED DOCUMENT (ADR-0030) IS PART OF THE POSTURE: the writers are named
 // where the deployment's api.auth is read, and nothing is said when every
-// token may write.
+// admin key may write.
 test("a managed document names its writers beside the tokens", async () => {
   mount(async (what) =>
     what === "access"
@@ -155,7 +164,7 @@ test("a managed document names its writers beside the tokens", async () => {
   );
   const line = (await screen.findByText(/The company document is managed/)).closest("span");
   expect(line?.textContent).toMatch(
-    /only the tokens gitops, ci may change it \(api\.auth\.company_writers\)/,
+    /only the admin keys gitops, ci may change it \(api\.auth\.company_writers\)/,
   );
   cleanup();
 
@@ -164,21 +173,32 @@ test("a managed document names its writers beside the tokens", async () => {
   expect(screen.queryByText(/The company document is managed/)).toBeNull();
 });
 
-// THE OPEN POSTURE IS NOT "EVERY READ BUT THREE PREFIXES". Anonymous read
-// opens reads, and the guard still refuses an anonymous caller all four of its
-// always-guarded prefixes (`auth.GuardedPrefixes`), every operator-only answer
-// — this page's own among them — and anything personal to one person. The line
-// named three prefixes and nothing else, so it told an operator that the
-// operator surface and this map of credentials were readable by anyone who
-// could reach the port.
-test("the open read posture names everything that still needs a token", async () => {
-  mount(async (what) => (what === "access" ? answer : null));
-  const line = (await screen.findByText(/\(allow_anonymous_read\)/)).textContent ?? "";
-  for (const prefix of ["/config", "/secrets", "/setup", "/operator"]) {
-    expect(line).toContain(prefix);
-  }
-  expect(line).toMatch(/describe the deployment \(this page among them\)/);
-  expect(line).toMatch(/personal to one person/);
+// THE POSTURE IS SAID IN WORDS, one sentence per kind of caller: what a member
+// key reaches, what an admin key adds, and what a caller with no key reaches
+// under THIS deployment's `api.auth.anonymous` — the one a person deciding
+// which key to hand a teammate has to read beside the keys.
+test.each(["public", "none"] as const)(
+  "the posture says what each role and a caller with no key reach (anonymous: %s)",
+  async (anonymous) => {
+    mount(async (what) =>
+      what === "access" ? { ...answer, auth: { ...answer.auth, anonymous } } : null,
+    );
+    const said = (await screen.findByText(ANONYMOUS_WORDS[anonymous], { exact: false }))
+      .textContent;
+    expect(said).toContain(`(anonymous: ${anonymous})`);
+    const roles = screen.getByText(/A member key:/).textContent ?? "";
+    expect(roles).toMatch(/what the company published/);
+    expect(roles).toMatch(/An admin key: everything a member reads/);
+    for (const surface of ["/config", "/secrets", "/setup"]) expect(roles).toContain(surface);
+  },
+);
+
+// AND THE TWO POSTURES ARE TWO SENTENCES: a stranger reading the chart and a
+// stranger reading nothing are not to be told apart by a reader squinting.
+test("the two anonymous postures say different things", () => {
+  expect(ANONYMOUS_WORDS.public).not.toBe(ANONYMOUS_WORDS.none);
+  expect(ANONYMOUS_WORDS.public).toMatch(/chart/);
+  expect(ANONYMOUS_WORDS.none).toMatch(/nothing of the company/);
 });
 
 test("a refused reader sees the refusal alone — no tiles, no empty lists", async () => {

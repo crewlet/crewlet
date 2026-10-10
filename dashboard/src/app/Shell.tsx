@@ -459,11 +459,11 @@ function Frame({ children }: { children: ReactNode }) {
   });
 
   // THE SETTINGS COLUMN'S FIGURES — the health push the frame already holds,
-  // and three operator answers asked only while the column is on screen. See
+  // and three admin answers asked only while the column is on screen. See
   // `sidebar/settingsFigures.tsx`.
   const figures = useSettingsSidebar({
     here: row?.renderer === "column",
-    operator: viewer.operator,
+    admin: viewer.admin,
     health: engine,
     published: publishedFleet,
   });
@@ -531,12 +531,7 @@ function Frame({ children }: { children: ReactNode }) {
                   <KnowledgeTree />
                 </ColumnBoundary>
               ) : (
-                <SectionColumn
-                  row={row}
-                  path={route.path}
-                  operator={viewer.operator}
-                  figures={figures}
-                />
+                <SectionColumn row={row} path={route.path} admin={viewer.admin} figures={figures} />
               )}
               <div className="section-body">{screen}</div>
             </div>

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/config"
@@ -94,7 +95,7 @@ func answer(t *testing.T, s queries.Sources, what string, params map[string]any)
 	}
 	r := queries.NewRegistry()
 	queries.Register(r, s)
-	data, err := r.Answer(t.Context(), what, params, "operator")
+	data, err := r.Answer(t.Context(), what, params, asAdmin("operator"))
 	if err != nil {
 		t.Fatalf("%s: %v", what, err)
 	}
@@ -530,24 +531,23 @@ func TestFleetNamesTheRolesNobodyIsRunning(t *testing.T) {
 	}
 }
 
-// EVERY ANSWER SETTINGS DRAWS NEEDS AN OPERATOR CREDENTIAL.
+// EVERY ANSWER SETTINGS DRAWS NEEDS AN ADMIN KEY.
 //
 // The dashboard's rail marks all five Admin destinations `guarded: true`: it
-// draws a lock on the row and its palette says "needs a token". That flag is
-// presentation — the only thing that actually refuses is this registry — and
-// `fleet` was registered public while its siblings were operator-only, so the
-// client promised a guard the server did not keep. On a node with
-// `api.allow_anonymous_read` an anonymous GET read the node ids, which node
-// held which seat, the lease epochs and the rollout's progress.
+// draws a lock on the row. That flag is presentation — the only thing that
+// actually refuses is this registry — and `fleet` was once registered public
+// while its siblings were not, so the client promised a guard the server did
+// not keep, and anybody could read the node ids, which node held which seat,
+// the lease epochs and the rollout's progress.
 //
 // The two here are the two this registry gates by these sources;
-// Configuration's four are [TestTheConfigQueryIsOperatorOnly] and Credentials
-// is `/secrets`, a prefix guarded whole. Named rather than derived, because
+// Configuration's four are [TestTheConfigQueryIsAnAdminsAlone] and
+// Credentials is `/secrets`, a surface mounted admin whole. Named rather than derived, because
 // the mapping from a screen to the question it asks lives in each screen's own
 // `useQuery` call and no gate can see across the two languages — so the
 // registration check below is what stops this list going quiet: a name nothing
 // registers fails rather than passing as "gated".
-func TestTheAdminWorkspacesAnswersAreOperatorOnly(t *testing.T) {
+func TestTheAdminWorkspacesAnswersAreAnAdminsAlone(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
 	r := queries.NewRegistry()
@@ -564,11 +564,11 @@ func TestTheAdminWorkspacesAnswersAreOperatorOnly(t *testing.T) {
 			t.Errorf("%s is not registered, so this case asserts nothing about it", what)
 			continue
 		}
-		if !r.RequiresOperator(what) {
+		if r.ReachOf(what) != auth.ReachAdmin {
 			t.Errorf("%s is an Admin answer the rail locks, but the registry "+
-				"serves it to any caller", what)
+				"serves it below admin", what)
 		}
-		if _, err := r.Answer(t.Context(), what, nil, ""); !errors.Is(
+		if _, err := r.Answer(t.Context(), what, nil, nobody); !errors.Is(
 			err, queries.ErrUnauthorized) {
 
 			t.Errorf("%s answered %v without a credential, want an "+
@@ -592,7 +592,7 @@ func TestAnUnreachableLeaseTableIsUnavailableRatherThanFailed(t *testing.T) {
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Coord: faulty, NodeID: "node-a"})
 
-	_, err := r.Answer(t.Context(), "fleet", nil, "op-1")
+	_, err := r.Answer(t.Context(), "fleet", nil, asAdmin("op-1"))
 	if !errors.Is(err, queries.ErrUnavailable) {
 		t.Fatalf("an unreachable lease table answered %v, want ErrUnavailable", err)
 	}
@@ -612,7 +612,7 @@ func TestACoordinationFailureThatIsNotAnOutageIsNotRetried(t *testing.T) {
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Coord: faulty})
 
-	_, err := r.Answer(t.Context(), "fleet", nil, "op-1")
+	_, err := r.Answer(t.Context(), "fleet", nil, asAdmin("op-1"))
 	if err == nil {
 		t.Fatal("a failed read answered successfully")
 	}
@@ -632,7 +632,7 @@ func TestAQuestionWithNoSourceIsUnknownRatherThanEmpty(t *testing.T) {
 		"fleet", "schedules", "integrations", "conversations",
 		"agent_memory", "config", "config_audit", "config_diff",
 	} {
-		if _, err := r.Answer(t.Context(), what, nil, "operator"); err == nil {
+		if _, err := r.Answer(t.Context(), what, nil, asAdmin("operator")); err == nil {
 			t.Errorf("%s answered from a registry with no source for it", what)
 		}
 	}
@@ -648,7 +648,7 @@ func TestAgentMemoryNeedsASeat(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Memory: &stubMemory{}})
-	if _, err := r.Answer(t.Context(), "agent_memory", nil, "operator"); err == nil {
+	if _, err := r.Answer(t.Context(), "agent_memory", nil, asAdmin("operator")); err == nil {
 		t.Fatal("an agent_memory query with no id was answered")
 	}
 }
@@ -768,7 +768,7 @@ func TestAnUnreadableLeaseTableFailsTheFleetQuery(t *testing.T) {
 		Coord:  brokenCoord(errors.New("store down")),
 		NodeID: "node-a",
 	})
-	if _, err := r.Answer(t.Context(), "fleet", nil, "operator"); err == nil {
+	if _, err := r.Answer(t.Context(), "fleet", nil, asAdmin("operator")); err == nil {
 		t.Fatal("an unreadable lease table answered a fleet")
 	}
 }

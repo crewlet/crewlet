@@ -64,8 +64,8 @@ afterEach(() => {
 function mount(hash: string) {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   location.hash = hash;
-  // The builder reads the GUARDED configuration, so it needs an operator
-  // token before it will ask for anything at all.
+  // The builder reads the GUARDED configuration, so it needs an admin key
+  // before it will ask for anything at all.
   storeToken("t");
   new Engine(company()).install();
   const store = new Store();

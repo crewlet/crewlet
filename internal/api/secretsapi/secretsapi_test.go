@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -33,8 +34,38 @@ func cipherFor(t *testing.T, ids ...string) secrets.Cipher {
 	return c
 }
 
-// surface builds the routes over a memory fleet, with an operator attached
-// the way the guard attaches one.
+// mounted is the API's route table as this suite needs it: every route on a
+// plain mux, behind no guard — enforcing a route's reach is the app's route
+// table's, which its own gate walks — and the reach each route declared, which
+// [TestEverySecretsRouteIsAnAdminsAlone] holds.
+type mounted struct {
+	mux     *http.ServeMux
+	reaches map[string]auth.Reach
+}
+
+func newMounted() *mounted {
+	return &mounted{mux: http.NewServeMux(), reaches: map[string]auth.Reach{}}
+}
+
+func (m *mounted) Handle(pattern string, reach auth.Reach, h http.Handler) {
+	m.reaches[pattern] = reach
+	m.mux.Handle(pattern, h)
+}
+
+func (m *mounted) HandleFunc(pattern string, reach auth.Reach, h func(http.ResponseWriter, *http.Request)) {
+	m.Handle(pattern, reach, http.HandlerFunc(h))
+}
+
+// asOps serves mux as the admin key `ops`, attached the way the guard
+// attaches one.
+func asOps(mux *mounted) http.Handler {
+	ops := auth.Principal{ID: "ops", Role: config.RoleAdmin, Reach: auth.ReachAdmin}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mux.mux.ServeHTTP(w, r.WithContext(auth.WithPrincipal(r.Context(), ops)))
+	})
+}
+
+// surface builds the routes over a memory fleet, as the admin key `ops`.
 func surface(t *testing.T, cipher secrets.Cipher, keyID string) (http.Handler, coord.Fleet) {
 	t.Helper()
 	fleet := coordmem.NewFleet()
@@ -42,11 +73,26 @@ func surface(t *testing.T, cipher secrets.Cipher, keyID string) (http.Handler, c
 		Fleet: fleet, Cipher: cipher, ActiveKeyID: keyID,
 		Now: func() time.Time { return clock },
 	})
-	mux := http.NewServeMux()
+	mux := newMounted()
 	svc.Routes(mux)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mux.ServeHTTP(w, r.WithContext(auth.WithOperator(r.Context(), "ops")))
-	}), fleet
+	return asOps(mux), fleet
+}
+
+// EVERY ROUTE ON /secrets IS AN ADMIN'S, the listing included (ADR-0031):
+// which credentials a company holds is a map of what to take, and one route
+// answers a value outright.
+func TestEverySecretsRouteIsAnAdminsAlone(t *testing.T) {
+	t.Parallel()
+	mux := newMounted()
+	newService(t, secretsapi.Options{Fleet: coordmem.NewFleet()}).Routes(mux)
+	if len(mux.reaches) == 0 {
+		t.Fatal("the surface mounted nothing, so this asserts nothing")
+	}
+	for pattern, reach := range mux.reaches {
+		if reach != auth.ReachAdmin {
+			t.Errorf("%s is mounted at %q, want admin", pattern, reach)
+		}
+	}
 }
 
 // newService builds the surface, failing the test on a wiring mistake.
@@ -233,24 +279,20 @@ func TestAnOversizedValueIsRefused(t *testing.T) {
 func TestRekeyMovesTheStaleRowsAndNamesThem(t *testing.T) {
 	t.Parallel()
 	fleet := coordmem.NewFleet()
-	mux := http.NewServeMux()
+	mux := newMounted()
 	newService(t, secretsapi.Options{
 		Fleet: fleet, Cipher: cipherFor(t, "k1", "k2"), ActiveKeyID: "k1",
 		Now: func() time.Time { return clock },
 	}).Routes(mux)
-	old := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mux.ServeHTTP(w, r.WithContext(auth.WithOperator(r.Context(), "ops")))
-	})
+	old := asOps(mux)
 	call(t, old, http.MethodPut, "/secrets/A", "one")
 
-	rotated := http.NewServeMux()
+	rotated := newMounted()
 	newService(t, secretsapi.Options{
 		Fleet: fleet, Cipher: cipherFor(t, "k2", "k1"), ActiveKeyID: "k2",
 		Now: func() time.Time { return clock },
 	}).Routes(rotated)
-	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rotated.ServeHTTP(w, r.WithContext(auth.WithOperator(r.Context(), "ops")))
-	})
+	h := asOps(rotated)
 
 	code, body := call(t, h, http.MethodPost, "/secrets/rekey", "")
 	if code != http.StatusOK || !strings.Contains(body, `"moved":["A"]`) {

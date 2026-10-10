@@ -14,6 +14,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -65,8 +66,38 @@ roles:
 `
 
 // surface is the service plus everything a test needs to look at.
-type surface struct {
+// mounted is the API's route table as this suite needs it: every route on a
+// plain mux, behind no guard — enforcing a route's reach is the app's route
+// table's, which its own gate walks — and the reach each route declared, which
+// [TestEveryConfigRouteIsAnAdminsAlone] holds.
+type mounted struct {
 	mux     *http.ServeMux
+	reaches map[string]auth.Reach
+}
+
+func newMounted() *mounted {
+	return &mounted{mux: http.NewServeMux(), reaches: map[string]auth.Reach{}}
+}
+
+func (m *mounted) Handle(pattern string, reach auth.Reach, h http.Handler) {
+	m.reaches[pattern] = reach
+	m.mux.Handle(pattern, h)
+}
+
+func (m *mounted) HandleFunc(pattern string, reach auth.Reach, h func(http.ResponseWriter, *http.Request)) {
+	m.Handle(pattern, reach, http.HandlerFunc(h))
+}
+
+func (m *mounted) ServeHTTP(w http.ResponseWriter, r *http.Request) { m.mux.ServeHTTP(w, r) }
+
+// asAdmin is the principal an admin key named id carries, as the guard would
+// attach it.
+func asAdmin(id string) auth.Principal {
+	return auth.Principal{ID: id, Role: config.RoleAdmin, Reach: auth.ReachAdmin}
+}
+
+type surface struct {
+	mux     *mounted
 	configs *store.Configs
 	db      *store.DB
 	plane   coord.Plane
@@ -87,7 +118,7 @@ func newSurfaceWith(t *testing.T, mutate func(*configapi.Options)) *surface {
 	t.Cleanup(func() { _ = db.Close() })
 
 	s := &surface{
-		mux: http.NewServeMux(), configs: db.Configs(), db: db,
+		mux: newMounted(), configs: db.Configs(), db: db,
 		plane: coordmemory.NewFleet(),
 	}
 	opts := configapi.Options{
@@ -1571,5 +1602,22 @@ func TestReferencesCarriesTheDocumentsOwnValidator(t *testing.T) {
 		map[string]string{"If-None-Match": tag})
 	if again.Code != http.StatusNotModified {
 		t.Fatalf("status = %d, want 304: %s", again.Code, again.Body)
+	}
+}
+
+// EVERY ROUTE ON /config IS AN ADMIN'S, reads included (ADR-0031): reading the
+// document exposes every integration and every ${VAR} it names, and writing
+// it changes what the company does. A member key — one a teammate holds —
+// reaches none of it.
+func TestEveryConfigRouteIsAnAdminsAlone(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	if len(s.mux.reaches) == 0 {
+		t.Fatal("the surface mounted nothing, so this asserts nothing")
+	}
+	for pattern, reach := range s.mux.reaches {
+		if reach != auth.ReachAdmin {
+			t.Errorf("%s is mounted at %q, want admin", pattern, reach)
+		}
 	}
 }

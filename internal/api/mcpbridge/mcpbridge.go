@@ -63,8 +63,9 @@ var log = logging.Get("api.mcpbridge")
 // PathPrefix is the route this bridge is mounted under.
 //
 // A constant because THREE places must agree: the mux that registers it, the
-// auth package that exempts it (the box holds no API token — that is the whole
-// point), and the endpoint the engine hands the box. Written out three times
+// auth package that names it among the public prefixes, mounted open (the box
+// holds no API key — that is the whole point), and the endpoint the engine
+// hands the box. Written out three times
 // it drifts, and the failure is a box whose every tool call answers 401 with
 // nothing in the config looking wrong.
 const PathPrefix = "/mcp/"
@@ -469,8 +470,8 @@ func (b *Bridge) Handler() http.Handler {
 		token := r.PathValue("token")
 		if s, runID, reason := b.resolve(token); s == nil {
 			// LEVELLED BY WHO COULD HAVE CAUSED IT, not by how it reads.
-			// This route is deliberately exempt from authentication (the
-			// box holds no API token — see [PathPrefix]), so a line
+			// This route is deliberately open to a caller with no API
+			// key (the box holds none — see [PathPrefix]), so a line
 			// written for every bad token is a line anyone who can reach
 			// the engine can write without limit. Only the half that
 			// takes the signing key to produce is a warning.

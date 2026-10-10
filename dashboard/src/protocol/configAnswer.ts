@@ -38,8 +38,16 @@ export type ConfigConflictReason =
 
 /** What a refusal from the configuration surface means. */
 export type ConfigRefusal =
-  /** The credential was refused: this surface is guarded in full. */
+  /** `401`: no key the engine accepts was presented — this surface needs
+   *  one, reads included. The remedy is a key. */
   | { readonly kind: "guarded" }
+  /**
+   * `403 forbidden`: the key was ACCEPTED and is a member's, and the company
+   * document is an admin's to read and change (ADR-0031). Nothing was
+   * stored, and no other key typed into this browser is the remedy unless
+   * it is an admin's — so it is never answered with the token dialog alone.
+   */
+  | { readonly kind: "forbidden" }
   /**
    * `403 config_managed`: the credential was ACCEPTED and is not one the
    * deployment lets change the company document — another system manages
@@ -115,7 +123,12 @@ export function classifyConfigRefusal(answer: ConfigAnswer): ConfigRefusal {
       : [];
     return { kind: "managed", managedBy };
   }
-  if (answer.status === 401 || answer.status === 403) return { kind: "guarded" };
+  if (answer.status === 401) return { kind: "guarded" };
+  // A KEY THE ENGINE ACCEPTED AND THE SURFACE REFUSED: a member's, on the
+  // admin's surface. The code and not the status, because a 403 carrying any
+  // other code is a different refusal — `config_managed` above — and one that
+  // names no reach is read below with whatever it said.
+  if (answer.status === 403 && code === "forbidden") return { kind: "forbidden" };
   if (answer.status === 409 || answer.status === 412) {
     const reason: ConfigConflictReason =
       code === "no_active_revision"

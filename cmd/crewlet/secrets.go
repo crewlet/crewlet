@@ -71,8 +71,9 @@ Flags:
 
 A running engine holds its database, so these commands go through its
 authenticated /secrets surface — which is what puts a value on every node.
-Export CREWLET_API_TOKEN to authenticate as a specific operator; without it
-the first api.auth.tokens entry in the Tier A config is used.
+The secret store is an admin's surface: export CREWLET_API_TOKEN to
+authenticate with a specific admin key; without it the first api.auth.tokens
+entry with role: admin in the Tier A config is used.
 `
 
 func runSecrets(args []string, stdout, stderr io.Writer) error {

@@ -183,7 +183,15 @@ async function settle() {
 
 const params = (what: string) => asks.filter((a) => a.what === what).map((a) => a.params);
 
-const VIEWER = { operator_id: "op-1", operator: true, handle: "jane", name: "Jane", kind: "human" };
+const VIEWER = {
+  token_id: "op-1",
+  role: "admin",
+  reach: "admin",
+  linked: true,
+  handle: "jane",
+  name: "Jane",
+  kind: "human",
+};
 
 // THE CONTROL: a window that answered is what the hero is of, and says so in
 // the ANSWER's words — thirty days, from the answer's own `days`.
@@ -366,7 +374,7 @@ test("no monthly budget says so, and offers to set one only to an operator", asy
     <Spend />,
     {
       tokens: rollup(1),
-      viewer: { operator_id: "", operator: false, handle: "", name: "", kind: "" },
+      viewer: { token_id: "", role: "", reach: "public", handle: "", name: "", kind: "" },
     },
     (store) => store.applyBudget(UNCAPPED),
   );

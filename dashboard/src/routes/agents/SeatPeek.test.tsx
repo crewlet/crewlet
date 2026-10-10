@@ -144,10 +144,12 @@ async function mount(
   return { asked: asked.filter((w) => w !== "viewer") };
 }
 
-const ANONYMOUS = { operator_id: "", acts: [] };
+const ANONYMOUS = { token_id: "", role: "", reach: "public", acts: [] };
 const OPERATOR = {
-  operator_id: "ops",
-  operator: true,
+  token_id: "ops",
+  role: "admin",
+  reach: "admin",
+  linked: true,
   handle: "jane",
   name: "Jane Founder",
   acts: ["create_work_item"],
@@ -279,7 +281,7 @@ test("a seat with no budget of its own under a capped company names the company'
 // cannot act, and pressable for one who can.
 test.each([
   ["anonymous", ANONYMOUS, WRITE_REASONS.anonymous],
-  ["unbound", { operator_id: "ci", acts: [] }, WRITE_REASONS.unbound],
+  ["unbound", { token_id: "ci", role: "member", reach: "member", acts: [] }, WRITE_REASONS.unbound],
   ["not served", { ...OPERATOR, acts: [] }, WRITE_REASONS.not_served],
 ])("Message is held with the reason for a reader who is %s", async (_, viewer, reason) => {
   await mount(viewer);

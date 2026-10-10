@@ -67,7 +67,9 @@ type AddState =
 function addRefusalWords(refusal: ConfigRefusal, name: string): string {
   switch (refusal.kind) {
     case "guarded":
-      return "The engine did not take this token as an operator's, so the server was not added.";
+      return "The engine did not accept this browser's token, so the server was not added.";
+    case "forbidden":
+      return "Adding a server is for admins, and this browser's key is a member's — the server was not added.";
     case "managed":
       return managedSentence(refusal.managedBy);
     case "conflict":

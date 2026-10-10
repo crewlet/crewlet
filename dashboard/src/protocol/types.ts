@@ -32,7 +32,7 @@ import type { OBJECTS_STATES } from "../contract/fleet.ts";
 import type { BudgetState, GROUPS } from "../contract/spend.ts";
 import type { SANDBOX_TAIL_OUTCOMES } from "../contract/sandbox.ts";
 import type { LIVE_CALL_DETAIL } from "../contract/wire.ts";
-import type { AccessAnswer } from "../contract/access.ts";
+import type { AccessAnswer, Reach, TokenRole } from "../contract/access.ts";
 import type { McpServersStatusAnswer } from "../contract/mcp.ts";
 import type { CredentialPoolAnswer } from "../contract/credentials.ts";
 import type { Coverage } from "../contract/coverage.ts";
@@ -4236,33 +4236,57 @@ export interface TurnsAnswer {
   coverage?: Coverage;
 }
 
-/** Who the presented credential belongs to — see `lib/viewer.ts`. */
+/** One person holding an admin key: the human seat linked to it. */
+export interface ViewerAdmin {
+  handle: string;
+  name: string;
+}
+
+/** Who the presented key belongs to — see `lib/viewer.ts`. */
 export interface Viewer {
-  /** The operator id the token resolves to, or "" for an anonymous caller. */
-  operator_id: string;
-  /** Whether this caller may ask the operator-gated questions. */
-  operator: boolean;
-  /** The seat whose `contact.crewlet_operator_id` names that id, or "".
-   *  UNBOUND IS AN ORDINARY STATE, not a misconfiguration. */
+  /** The id of the key the caller presented (`api.auth.tokens[].id`), or ""
+   *  for a caller who presented none. Never the key's value. */
+  token_id: string;
+  /** What that key is for, or "" for an anonymous caller (ADR-0031). */
+  role: TokenRole | "";
+  /** How far this caller reaches — the guard's own answer, which every
+   *  question and route is compared against. The anonymous posture's reach
+   *  for a caller with no key. */
+  reach: Reach;
+  /** Whether a human seat links this key (`contact.crewlet_operator_id`).
+   *  A DIFFERENT FACT from the role: the role says what the key reaches, the
+   *  link says who it acts as. UNLINKED IS AN ORDINARY STATE, not a
+   *  misconfiguration. */
+  linked: boolean;
+  /** The seat linked to the key, or "". */
   handle: string;
   name: string;
   kind: string;
+  /** The handles in this person's line (`org.LeadsInLine`) — whose personal
+   *  records they may read beside their own. Empty for a caller no seat
+   *  links. ALWAYS AN ARRAY. */
+  line: string[];
   /** The tools `POST /operator/act/{tool}` serves this caller: every write
-   *  the operator catalogue holds for a token bound to a seat, and EMPTY for
-   *  an anonymous or unbound caller, who may not act (ADR-0024). */
+   *  the operator catalogue holds for a key linked to a seat, and EMPTY for
+   *  an anonymous or unlinked caller, who may not act (ADR-0024). */
   acts: string[];
   /** The project this person's create lands in when it names none — the
    *  engine's own default for their seat, which `create_work_item` applies.
    *  "" when their team and every team above it owns none. */
   project: string;
-  /** Whether this caller's credential may CHANGE the company document.
-   *  False for an anonymous caller, and for every credential a managed
-   *  document's `api.auth.company_writers` does not list (ADR-0030). */
+  /** Whether this caller's key may CHANGE the company document: an admin
+   *  key, and on a managed document one `api.auth.company_writers` lists
+   *  (ADR-0030). False for an anonymous caller and for every member. */
   config_writer: boolean;
-  /** The token ids that alone may change a managed company document — who
-   *  manages it — and EMPTY when it is not managed. Named to an operator
-   *  only; an anonymous caller is told none. */
+  /** The admin keys that alone may change a managed company document — who
+   *  manages it — and EMPTY when it is not managed. Named to an admin only;
+   *  everybody else is told none. */
   config_managed_by: string[];
+  /** The people holding an admin key, in handle order — who to ask for what
+   *  this key does not reach. Named to a caller with a key only: anonymous is
+   *  told nobody, because no admin is ever named to a stranger. ALWAYS AN
+   *  ARRAY. */
+  admins: ViewerAdmin[];
 }
 
 /** One seat a name could mean, and why. */

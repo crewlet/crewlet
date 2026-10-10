@@ -87,7 +87,9 @@ type SaveState =
 function refusalWords(refusal: ConfigRefusal, id: string): string {
   switch (refusal.kind) {
     case "guarded":
-      return "The engine did not take this token as an operator's, so nothing was changed.";
+      return "The engine did not accept this browser's token, so nothing was changed.";
+    case "forbidden":
+      return "Changing a model is for admins, and this browser's key is a member's — nothing was changed.";
     case "managed":
       return managedSentence(refusal.managedBy);
     case "conflict":

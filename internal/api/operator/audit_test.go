@@ -74,7 +74,7 @@ func TestBothTransportsAuditAWriteAndNeitherAuditsARead(t *testing.T) {
 		t.Fatalf("the act answered %d", status)
 	}
 
-	sess := dialOperator(t, s, "founder")
+	sess := dialOperator(t, s, asMember("founder"))
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	if _, err := sess.CallTool(ctx, &mcp.CallToolParams{
@@ -153,7 +153,7 @@ func TestBothTransportsResolveABindingThroughTheSurfacesLookup(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	if _, err := dialOperator(t, s, "founder").CallTool(ctx, &mcp.CallToolParams{
+	if _, err := dialOperator(t, s, asMember("founder")).CallTool(ctx, &mcp.CallToolParams{
 		Name:      tracker.CreateWorkItemTool,
 		Arguments: map[string]any{"title": "Rotate the signing key", "project": "ENG"},
 	}); err != nil {
@@ -191,7 +191,7 @@ func TestASurfaceWithToolsAndNoAuditIsRefused(t *testing.T) {
 func TestAnAuditRecordOutlivesItsRequest(t *testing.T) {
 	t.Parallel()
 	audit := &auditLog{}
-	ctx, cancel := context.WithCancel(auth.WithOperator(t.Context(), "founder"))
+	ctx, cancel := context.WithCancel(auth.WithPrincipal(t.Context(), asMember("founder")))
 	cancel()
 	operator.Audit(ctx, audit, types.NewOperatorActed(types.OperatorActed{
 		OperatorID: "founder", Tool: tracker.CreateWorkItemTool, Outcome: types.AuditUnknown,
@@ -310,7 +310,7 @@ func TestACallIsMadeAndAuditedAsTheSeatItWasAdmittedAs(t *testing.T) {
 			case types.TransportMCP:
 				ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 				defer cancel()
-				if _, err := dialOperator(t, s, "founder").CallTool(ctx, &mcp.CallToolParams{
+				if _, err := dialOperator(t, s, asMember("founder")).CallTool(ctx, &mcp.CallToolParams{
 					Name: tracker.CreateWorkItemTool, Arguments: createArgs(),
 				}); err != nil {
 					t.Fatalf("create over MCP: %v", err)

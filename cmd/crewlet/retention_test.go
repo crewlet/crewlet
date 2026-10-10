@@ -946,7 +946,7 @@ func TestReadmittingANodeBelowTheFloorIsRefused(t *testing.T) {
 	e := testEngine(t)
 	boot := bootstrapFor(t, 0)
 	boot.API.Port = freePort(t)
-	boot.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: "a-test-token"}}
+	boot.API.Auth.Tokens = []config.APIToken{{ID: "ops", Role: config.RoleAdmin, Token: "a-test-token"}}
 	surface, err := serveNode(t, boot, e)
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
