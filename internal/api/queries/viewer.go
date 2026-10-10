@@ -95,8 +95,10 @@ func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 		// person and nobody else (ADR-0024): empty for an anonymous
 		// reader and for a key no seat links, so a screen disables its
 		// write controls with the reason rather than offering a press
-		// the engine refuses. ALWAYS AN ARRAY, never null, so "may do
-		// nothing" is a value a reader can test rather than an absence.
+		// the engine refuses — and, for a member, without the tools
+		// served to an admin's key alone. ALWAYS AN ARRAY, never null, so
+		// "may do nothing" is a value a reader can test rather than an
+		// absence.
 		"acts": []string{},
 		// WHERE THIS PERSON'S CREATE LANDS when it names no project — the
 		// project `create_work_item` defaults a person's create to, from
@@ -139,7 +141,9 @@ func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 	}
 	out["linked"] = true
 	if s.OperatorActs != nil {
-		if acts := s.OperatorActs(); acts != nil {
+		// AT THE CALLER'S OWN REACH, the one the act transport's
+		// dispatch judges every press by.
+		if acts := s.OperatorActs(caller.Reach); acts != nil {
 			out["acts"] = acts
 		}
 	}

@@ -2,9 +2,28 @@ package operator
 
 import (
 	"context"
+	"maps"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/tools"
 )
+
+// NewCatalogue builds a catalogue over tools a test makes, and answers only
+// whether it was refused.
+func NewCatalogue(callables []tools.Callable) error {
+	_, err := newCatalogue(callables)
+	return err
+}
+
+// DeclaredReach is the reach table, a copy.
+func DeclaredReach() map[string]auth.Reach { return maps.Clone(toolReach) }
+
+// ReachOf is the reach one served tool is called at, and false for a name the
+// catalogue does not hold.
+func (s *Server) ReachOf(name string) (auth.Reach, bool) {
+	reach, ok := s.catalogue.reach[name]
+	return reach, ok
+}
 
 // Dispatch is the catalogue's own dispatch — the path every transport takes
 // into a tool — so a test can hold a transport's answer against it.

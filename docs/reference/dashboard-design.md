@@ -2831,7 +2831,10 @@ read-only; writes and credentials travel over REST. A token no seat binds, and
 every caller while the guard is disabled, is refused `unbound`, and
 `viewer.acts` is empty for exactly those callers — which is what a screen
 reads to disable a control and say why, rather than offer a press the engine
-refuses.
+refuses. For everybody else it is the catalogue's writes at the key's own
+reach, so a member's list leaves out what the engine serves to an admin's key
+alone, and each row of `contract/actions.ts` names that reach beside its
+scope.
 
 ### A write control is never hidden
 
@@ -2843,7 +2846,7 @@ nobody else, so the same words are the button's `title` while it is held — a
 pointer resting on it sees why — and a screen reader, which reads a described
 button's description rather than its title, hears it once. A form whose
 primary action is held also writes the reason on the page beside it (the New
-task sheet's foot), because neither reaches a touch screen. The five reasons,
+task sheet's foot), because neither reaches a touch screen. The six reasons,
 in the order you clear them:
 
 | You are | The control says |
@@ -2852,6 +2855,7 @@ in the order you clear them:
 | Not yet known | Checking who you are before anything can be changed. |
 | Anonymous | Set an API token to act — every change is recorded under your name. |
 | An unbound token | This token is not bound to a person — set contact.crewlet_operator_id on your seat to act as yourself. |
+| A member, and the change is an admin's | Only an admin can change this — ask Jane Founder. (The first admin the engine names; "ask an admin" where it names none.) |
 | A person the engine does not make this change for | This engine does not make this change for you. |
 
 **One press at a time, by every way in.** A write control refuses a press
@@ -2871,9 +2875,19 @@ version, still go.
 A change is **never queued**: a write sent when the connection came back would
 be one you walked away from believing it had happened, onto a company that may
 have moved since. `viewer.acts` is the engine's own list of what it makes for
-you, and the last row is read from it, never guessed from a tool's name — a
-company whose tracker is Jira has no native writer, and its task page shows
-Assign disabled rather than a button the engine refuses.
+you, and the last two rows are read from it, never guessed from a tool's name —
+a company whose tracker is Jira has no native writer, and its task page shows
+Assign disabled rather than a button the engine refuses. Of a change missing
+from it, the row's own `reach` says which of the two it is: an admin's change
+held from a member names who to ask, and only one the engine makes for nobody
+here says it does not make it.
+
+**Whose it is to change is the engine's to say.** Past the role, which object
+you may act on — whose queue you may order, whose project's settings you may
+change — is decided by the tool from the org chart when it has read the
+object, and a press it refuses comes back `forbidden` with the engine's own
+sentence. The control draws that sentence as it stands, beside itself, because
+the engine is the one that knows who may.
 
 ### Writes are confirmed, not optimistic
 

@@ -528,8 +528,8 @@ func TestAReadToolIsRefusedOnTheActTransport(t *testing.T) {
 	if status != http.StatusBadRequest || answer["error"] != string(operator.CodeReadOnlyTool) {
 		t.Fatalf("a read answered %d %v, want 400 read_only_tool", status, answer)
 	}
-	if slices.Contains(s.Acts(), tracker.ListWorkItemsTool) {
-		t.Errorf("the act list %v offers a read", s.Acts())
+	if slices.Contains(s.Acts(auth.ReachMember), tracker.ListWorkItemsTool) {
+		t.Errorf("the act list %v offers a read", s.Acts(auth.ReachMember))
 	}
 	// AND A NAME THE CATALOGUE DOES NOT HOLD IS NOT FOUND, rather than
 	// resolved to something near it.

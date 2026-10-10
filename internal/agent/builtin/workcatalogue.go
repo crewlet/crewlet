@@ -23,10 +23,11 @@ import (
 // came to sit beside `bug` in companies whose engines did not check. Telling
 // the model what exists is cheaper than refusing it repeatedly.
 //
-// Writing is the OPERATOR's alone. A declaration is the company's vocabulary:
-// a seat adding a type to make its own create succeed is a seat editing the
-// rules it is being judged by, and the refusal it was working around is the
-// signal a person needs to see.
+// Writing is an ADMIN's alone: no seat's registry holds it, and the operator
+// surface serves it to an admin's key only (ADR-0031). A declaration is the
+// company's vocabulary: a seat adding a type to make its own create succeed is
+// a seat editing the rules it is being judged by, and the refusal it was
+// working around is the signal a person needs to see.
 
 // CatalogueWriter is the tracker write side these tools need.
 type CatalogueWriter interface {

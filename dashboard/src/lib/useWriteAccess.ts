@@ -9,7 +9,7 @@
  * here, is drawn for everybody, and is DISABLED with the reason when it cannot
  * act: the sentence is the instruction.
  *
- * SIX REASONS, in the order a person has to clear them:
+ * SEVEN REASONS, in the order a person has to clear them:
  *
  *  - OFFLINE — the socket is down. A change is never queued for later: a
  *    queued write is one the person has walked away from believing it
@@ -18,6 +18,9 @@
  *  - ANONYMOUS — no token, so there is no name to record the change under;
  *  - UNBOUND — a token no seat binds: a credential, not a person, and the
  *    dashboard acts only as a person (ADR-0024);
+ *  - NOT ADMIN — the change is served to an admin's key alone (its row's
+ *    `reach`, ADR-0031) and this person holds a member's: the key works,
+ *    and the remedy is a person, so the sentence names the admin to ask;
  *  - NOT SERVED — the engine does not make this change for this person at
  *    all (a company whose tracker is Jira has no native writer): `viewer.acts`
  *    is the engine's own list, never a guess from the tool's name;
@@ -29,16 +32,24 @@
  *    it is one the person can clear on this screen and this one is a fact
  *    about what the screen is showing — and the SENTENCE is the screen's,
  *    since only the screen knows whose record it is.
+ *
+ * WHICH OBJECT A PERSON MAY ACT ON is none of these: whose queue they may
+ * order, whose project's settings they may change, is the tool's own rule
+ * over the chart, decided when the engine has read the object. Its refusal
+ * comes back `forbidden` with the engine's own sentence, which the control
+ * draws as it is (`contract/errors.ts`), because the engine is the one that
+ * knows who may.
  */
 
 import { createContext, createElement, useContext, type ReactNode } from "react";
 import { useConnection } from "./store-hooks.ts";
 import { adminToAsk, useViewer, type ViewerAdmin, type ViewerState } from "./viewer.ts";
-import type { ActionTool } from "~/protocol/act.ts";
+import { actionReach, type ActionReach, type ActionTool } from "~/protocol/act.ts";
 import { managedSentence } from "~/protocol/configAnswer.ts";
 
 /** Why a control cannot act, as a value a test can name. */
-export type WriteBlock = "offline" | "loading" | "anonymous" | "unbound" | "not_served" | "held";
+export type WriteBlock =
+  "offline" | "loading" | "anonymous" | "unbound" | "not_admin" | "not_served" | "held";
 
 export type WriteAccess =
   | {
@@ -53,9 +64,10 @@ export type WriteAccess =
 /**
  * The sentence each block is shown as, second person, with its remedy — every
  * block but [HoldWrites]', whose sentence the holding screen writes, because it
- * names whose record is on screen.
+ * names whose record is on screen, and `not_admin`, which names the admin to
+ * ask ([notAdminSentence]).
  */
-export const WRITE_REASONS: Readonly<Record<Exclude<WriteBlock, "held">, string>> = {
+export const WRITE_REASONS: Readonly<Record<Exclude<WriteBlock, "held" | "not_admin">, string>> = {
   offline: "Offline — reconnect to make changes. Nothing is queued while you are away.",
   loading: "Checking who you are before anything can be changed.",
   anonymous: "Set an API token to act — every change is recorded under your name.",
@@ -71,8 +83,10 @@ export function writeAccess(
   connected: boolean,
   /** The hold the nearest [HoldWrites] placed, or null where none is. */
   held: string | null = null,
+  /** Who the engine serves this change to — its row's own unless a test asks. */
+  reach: ActionReach = actionReach(tool),
 ): WriteAccess {
-  const blocked = (block: Exclude<WriteBlock, "held">): WriteAccess => ({
+  const blocked = (block: Exclude<WriteBlock, "held" | "not_admin">): WriteAccess => ({
     can: false,
     block,
     reason: WRITE_REASONS[block],
@@ -81,7 +95,16 @@ export function writeAccess(
   if (viewer.loading) return blocked("loading");
   if (viewer.anonymous) return blocked("anonymous");
   if (viewer.unbound || viewer.handle === "") return blocked("unbound");
-  if (!viewer.acts.includes(tool)) return blocked("not_served");
+  if (!viewer.acts.includes(tool)) {
+    // A MEMBER'S KEY AND AN ADMIN'S CHANGE: the engine leaves it out of
+    // this person's `acts` for their role, not because it does not make
+    // it — so "this engine does not make this change" would be untrue, and
+    // the remedy is a person.
+    if (reach === "admin" && !viewer.admin) {
+      return { can: false, block: "not_admin", reason: notAdminSentence(viewer.admins) };
+    }
+    return blocked("not_served");
+  }
   if (held) return { can: false, block: "held", reason: held };
   return { can: true, as: viewer.handle, acts: viewer.acts };
 }
@@ -164,12 +187,14 @@ export const CONFIG_WRITE_REASONS: Readonly<
 };
 
 /**
- * Why a MEMBER may not change the company's configuration, naming who can.
+ * Why a MEMBER may not change the company's configuration — or make a change
+ * the engine serves to an admin's key alone ([writeAccess]) — naming who can.
  *
  * REACHABLE, AND THE COMMON CASE for a teammate: a member's key reads the
  * company and acts as its person, and the configuration is an admin's
  * (ADR-0031). So the sentence is not about this browser's key, which works —
- * it names the person to ask ([adminToAsk]).
+ * it names the person to ask ([adminToAsk]). ONE SENTENCE for both, because
+ * to the person reading it they are one fact: this is an admin's to change.
  */
 export function notAdminSentence(admins: readonly ViewerAdmin[]): string {
   return `Only an admin can change this — ask ${adminToAsk(admins)}.`;

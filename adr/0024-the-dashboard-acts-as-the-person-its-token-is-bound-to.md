@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/api/operator`
-- **Enforced-by:** `internal/api/operator.TestAnActWriteRecordsTheTokenAsAuthorAndTheBoundSeat`, `internal/api/operator.TestAnUnboundOrAnonymousCallerCannotAct`, `internal/api/operator.TestACallIsMadeAndAuditedAsTheSeatItWasAdmittedAs`, `internal/api/operator.TestAnUnlinkedMemberKeyIsRefusedTheAssistantTransport`
+- **Enforced-by:** `internal/api/operator.TestAnActWriteRecordsTheTokenAsAuthorAndTheBoundSeat`, `internal/api/operator.TestAnUnboundOrAnonymousCallerCannotAct`, `internal/api/operator.TestACallIsMadeAndAuditedAsTheSeatItWasAdmittedAs`, `internal/api/operator.TestAnUnlinkedMemberKeyIsRefusedTheAssistantTransport`, `internal/api/operator.TestAToolPastTheCallersReachIsRefusedAndAudited`, `internal/api/operator.TestActsAnswersEachReachWhatItMayCall`
 - **Measured:** the largest legal page is 512 KiB of text, and a page of nothing but quotes, backslashes and newlines is 1 MiB once `JSON.stringify` has escaped it — so the act body is capped at twice the page plus 64 KiB for the envelope (`operator.MaxActBody`, 1 114 112 bytes), and a cap at the page's own size refused a page the store accepts.
 - **Cost-when-tried:** the dashboard wrote nothing, on the argument that a browser form would write as "the dashboard", an actor no audit can ask why. Every change was a pre-filled tool call a person copied into an assistant connected to `/operator/mcp` — a gesture of four steps for "mark this read", checked by a test that each call named a real tool and never by anybody pressing it; the Inbox, the priorities list and the board each showed state no control on screen could change.
 - **Tag-status:** unreleased
@@ -32,8 +32,19 @@ the token so an id names only that credential's own writes. A retry after an
 `unknown` is therefore the first attempt's operations, never new ones.
 
 The socket stays read-only. `viewer.acts` names the tools the transport would
-serve this caller — empty unless bound — so a screen enables exactly the
-controls a press of would be served, and disables the rest with the reason.
+serve this caller — empty unless bound, and at the caller's own reach — so a
+screen enables exactly the controls a press of would be served, and disables
+the rest with the reason.
+
+Every catalogue tool names the reach it is served at (ADR-0031) in the
+catalogue's one table, and the dispatch BOTH transports share refuses a caller
+below it `forbidden`, naming who may, before the tool runs — audited, with the
+role the key held, like any other call. Every tool is a member's but the
+company's catalogue of task types and fields, which an admin's: it is held by
+no seat in the chart, so no rule over the chart could say who else may change
+it. A refusal at the transport would be a refusal one transport forgets, and
+an assistant connected with a member's key is listed only what that key may
+call.
 
 ## Why the obvious alternative is wrong
 
@@ -59,5 +70,7 @@ It does not decide what the dashboard renders for a write in flight, how it
 confirms one, or which queries it refetches — that is the dashboard's, over the
 outcome and position the answer carries. It does not move `/config`,
 `/secrets`, `/setup` or `/backup`, which are admin surfaces of their own
-(ADR-0031). And it does not change who may do what once admitted: every
-authority rule is the tool's, exactly as on `/operator/mcp`.
+(ADR-0031). And past the reach a tool is served at, it does not decide who
+may act on what: whose queue a person may order, whose project's settings
+they may change is the tool's own rule over the chart, exactly as on
+`/operator/mcp`, because only the tool has read the object.

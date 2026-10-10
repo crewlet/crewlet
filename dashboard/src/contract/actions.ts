@@ -25,14 +25,21 @@
  *  - `scope` — `person` for a change any bound person makes to the company's
  *    work in their own name, `company` for one that rewrites what every seat's
  *    tracker means (a project's settings, the catalogue), which a screen
- *    offers only where it says so.
+ *    offers only where it says so. The BLAST RADIUS of a press;
+ *  - `reach` — who may press it at all (ADR-0031): `member` for what a
+ *    member's key acts on as its person, `admin` for what runs the company,
+ *    which the engine serves to an admin's key alone. A different question
+ *    from `scope`: a project's settings are a `company` change its lead
+ *    makes, so `company` is not therefore `admin`. Which OBJECT a person may
+ *    act on — whose seat, whose queue — is the tool's own rule over the
+ *    chart, and its refusal names who may (`forbidden`).
  *
  * HELD AGAINST THE REAL CATALOGUE by `internal/api/operator`'s
  * `TestEveryActionTheDashboardTakesIsOneTheActTransportServes`: every tool is
  * served by the act transport and is not a read, every argument is one its
- * schema takes, every required one is present, and every scope is the
- * engine's. A renamed argument in Go is a red build here rather than a button
- * that is refused `invalid` the first time somebody presses it.
+ * schema takes, every required one is present, and every scope and reach is
+ * the engine's. A renamed argument in Go is a red build here rather than a
+ * button that is refused `invalid` the first time somebody presses it.
  */
 export const ACTIONS = {
   create_work_item: {
@@ -63,6 +70,7 @@ export const ACTIONS = {
     domain: "tracker",
     refreshes: ["work_search"],
     scope: "person",
+    reach: "member",
   },
   answer_knowledge: {
     // A WRITE THAT CHANGES NOTHING, because it SPENDS: one model call per
@@ -72,6 +80,7 @@ export const ACTIONS = {
     domain: null,
     refreshes: [],
     scope: "person",
+    reach: "member",
   },
   update_work_item: {
     // `linked` AND `linked_pages` ARE THE INBOX COMPOSER'S "Link a task" and
@@ -104,12 +113,14 @@ export const ACTIONS = {
     domain: "tracker",
     refreshes: ["work_search"],
     scope: "person",
+    reach: "member",
   },
   restore_work_item: {
     args: ["item"],
     domain: "tracker",
     refreshes: ["work_search"],
     scope: "person",
+    reach: "member",
   },
   write_project: {
     // "EDIT PROJECT" on a project's page: the lead's target date. A project's
@@ -120,12 +131,14 @@ export const ACTIONS = {
     domain: "tracker",
     refreshes: [],
     scope: "company",
+    reach: "member",
   },
   set_pins: {
     args: ["views", "favorites"],
     domain: "tracker",
     refreshes: [],
     scope: "person",
+    reach: "member",
   },
   set_priorities: {
     // MY WORK'S REORDER: a row of somebody's priorities dragged, or moved
@@ -138,6 +151,7 @@ export const ACTIONS = {
     domain: "tracker",
     refreshes: [],
     scope: "person",
+    reach: "member",
   },
   comment_on_work_item: {
     // A DECISION ANSWERED IN PLACE: the option button sends the choice as an
@@ -153,6 +167,7 @@ export const ACTIONS = {
     domain: "tracker",
     refreshes: [],
     scope: "person",
+    reach: "member",
   },
   answer_run: {
     // A PARKED CODING RUN ANSWERED BY ITS TURN. It lands on the seat's
@@ -162,6 +177,7 @@ export const ACTIONS = {
     domain: null,
     refreshes: ["sandbox_runs", "decisions"],
     scope: "person",
+    reach: "member",
   },
   pause_seat: {
     // A SEAT'S PROFILE PAUSES IT: its mail waits, its schedules are skipped,
@@ -173,6 +189,7 @@ export const ACTIONS = {
     domain: null,
     refreshes: [],
     scope: "person",
+    reach: "member",
   },
   resume_seat: {
     // AND RESUMES IT: the mail that waited is delivered first, in order.
@@ -180,6 +197,7 @@ export const ACTIONS = {
     domain: null,
     refreshes: [],
     scope: "person",
+    reach: "member",
   },
   steer_turn: {
     // STEER ON THE TURN TRACE: a note to a turn running now, read at its
@@ -190,6 +208,7 @@ export const ACTIONS = {
     domain: null,
     refreshes: ["turn"],
     scope: "person",
+    reach: "member",
   },
   write_page: {
     // "SAVE AS A PAGE" in the Inbox's composer: what the person wrote becomes
@@ -203,6 +222,7 @@ export const ACTIONS = {
     domain: "pages",
     refreshes: ["knowledge"],
     scope: "person",
+    reach: "member",
   },
   save_page: {
     // "EDIT" ON A PAGE: the body the person rewrote, saved against the
@@ -213,6 +233,7 @@ export const ACTIONS = {
     domain: "pages",
     refreshes: ["knowledge"],
     scope: "person",
+    reach: "member",
   },
   comment_on_page: {
     // A PAGE'S THREAD: a remark, or a reply to one (`reply_to`).
@@ -220,6 +241,7 @@ export const ACTIONS = {
     domain: "pages",
     refreshes: [],
     scope: "person",
+    reach: "member",
   },
   place_work_item: {
     // A BOARD DRAG: the card dropped `before` a neighbour, or `after` the last
@@ -229,6 +251,7 @@ export const ACTIONS = {
     domain: "tracker",
     refreshes: ["work_search"],
     scope: "person",
+    reach: "member",
   },
   save_work_view: {
     // "+ VIEW": the query on screen, saved under a name on this container,
@@ -237,11 +260,13 @@ export const ACTIONS = {
     domain: "tracker",
     refreshes: [],
     scope: "person",
+    reach: "member",
   },
   mark_inbox: {
     args: ["read", "unread", "snooze", "unsnooze", "read_through"],
     domain: "tracker",
     refreshes: [],
     scope: "person",
+    reach: "member",
   },
 } as const;

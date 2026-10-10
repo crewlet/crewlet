@@ -112,7 +112,10 @@ func (a *App) mountOperator(mux auth.Router, server *operator.Server) {
 	// else (ADR-0024) — at the same reach as /operator/mcp.
 	mux.Handle(operator.ActPattern, auth.ReachMember, server.ActHandler())
 	log.Info("operator_act_mounted", "path", operator.ActPathPrefix+"{tool}",
-		"tools", server.Acts(),
+		// EACH TOOL AT THE REACH IT IS SERVED: a member key is offered the
+		// first list, and an admin key the second.
+		"member_tools", server.Acts(auth.ReachMember),
+		"admin_tools", server.Acts(auth.ReachAdmin),
 		"detail", "the dashboard writes here as the person the presented "+
 			"key is linked to by contact.crewlet_operator_id")
 }

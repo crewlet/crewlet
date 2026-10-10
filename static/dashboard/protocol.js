@@ -1584,14 +1584,21 @@ var BROKER_REMOVE_TIMEOUT_MS = 185e3;
 *  - `scope` — `person` for a change any bound person makes to the company's
 *    work in their own name, `company` for one that rewrites what every seat's
 *    tracker means (a project's settings, the catalogue), which a screen
-*    offers only where it says so.
+*    offers only where it says so. The BLAST RADIUS of a press;
+*  - `reach` — who may press it at all (ADR-0031): `member` for what a
+*    member's key acts on as its person, `admin` for what runs the company,
+*    which the engine serves to an admin's key alone. A different question
+*    from `scope`: a project's settings are a `company` change its lead
+*    makes, so `company` is not therefore `admin`. Which OBJECT a person may
+*    act on — whose seat, whose queue — is the tool's own rule over the
+*    chart, and its refusal names who may (`forbidden`).
 *
 * HELD AGAINST THE REAL CATALOGUE by `internal/api/operator`'s
 * `TestEveryActionTheDashboardTakesIsOneTheActTransportServes`: every tool is
 * served by the act transport and is not a read, every argument is one its
-* schema takes, every required one is present, and every scope is the
-* engine's. A renamed argument in Go is a red build here rather than a button
-* that is refused `invalid` the first time somebody presses it.
+* schema takes, every required one is present, and every scope and reach is
+* the engine's. A renamed argument in Go is a red build here rather than a
+* button that is refused `invalid` the first time somebody presses it.
 */
 var ACTIONS = {
 	create_work_item: {
@@ -1610,13 +1617,15 @@ var ACTIONS = {
 		],
 		domain: "tracker",
 		refreshes: ["work_search"],
-		scope: "person"
+		scope: "person",
+		reach: "member"
 	},
 	answer_knowledge: {
 		args: ["q"],
 		domain: null,
 		refreshes: [],
-		scope: "person"
+		scope: "person",
+		reach: "member"
 	},
 	update_work_item: {
 		args: [
@@ -1641,25 +1650,29 @@ var ACTIONS = {
 		],
 		domain: "tracker",
 		refreshes: ["work_search"],
-		scope: "person"
+		scope: "person",
+		reach: "member"
 	},
 	restore_work_item: {
 		args: ["item"],
 		domain: "tracker",
 		refreshes: ["work_search"],
-		scope: "person"
+		scope: "person",
+		reach: "member"
 	},
 	write_project: {
 		args: ["project", "target_date"],
 		domain: "tracker",
 		refreshes: [],
-		scope: "company"
+		scope: "company",
+		reach: "member"
 	},
 	set_pins: {
 		args: ["views", "favorites"],
 		domain: "tracker",
 		refreshes: [],
-		scope: "person"
+		scope: "person",
+		reach: "member"
 	},
 	set_priorities: {
 		args: [
@@ -1669,7 +1682,8 @@ var ACTIONS = {
 		],
 		domain: "tracker",
 		refreshes: [],
-		scope: "person"
+		scope: "person",
+		reach: "member"
 	},
 	comment_on_work_item: {
 		args: [
@@ -1683,13 +1697,15 @@ var ACTIONS = {
 		],
 		domain: "tracker",
 		refreshes: [],
-		scope: "person"
+		scope: "person",
+		reach: "member"
 	},
 	answer_run: {
 		args: ["turn_id", "answer"],
 		domain: null,
 		refreshes: ["sandbox_runs", "decisions"],
-		scope: "person"
+		scope: "person",
+		reach: "member"
 	},
 	pause_seat: {
 		args: [
@@ -1699,19 +1715,22 @@ var ACTIONS = {
 		],
 		domain: null,
 		refreshes: [],
-		scope: "person"
+		scope: "person",
+		reach: "member"
 	},
 	resume_seat: {
 		args: ["handle"],
 		domain: null,
 		refreshes: [],
-		scope: "person"
+		scope: "person",
+		reach: "member"
 	},
 	steer_turn: {
 		args: ["turn_id", "note"],
 		domain: null,
 		refreshes: ["turn"],
-		scope: "person"
+		scope: "person",
+		reach: "member"
 	},
 	write_page: {
 		args: [
@@ -1722,7 +1741,8 @@ var ACTIONS = {
 		],
 		domain: "pages",
 		refreshes: ["knowledge"],
-		scope: "person"
+		scope: "person",
+		reach: "member"
 	},
 	save_page: {
 		args: [
@@ -1733,7 +1753,8 @@ var ACTIONS = {
 		],
 		domain: "pages",
 		refreshes: ["knowledge"],
-		scope: "person"
+		scope: "person",
+		reach: "member"
 	},
 	comment_on_page: {
 		args: [
@@ -1743,7 +1764,8 @@ var ACTIONS = {
 		],
 		domain: "pages",
 		refreshes: [],
-		scope: "person"
+		scope: "person",
+		reach: "member"
 	},
 	place_work_item: {
 		args: [
@@ -1755,7 +1777,8 @@ var ACTIONS = {
 		],
 		domain: "tracker",
 		refreshes: ["work_search"],
-		scope: "person"
+		scope: "person",
+		reach: "member"
 	},
 	save_work_view: {
 		args: [
@@ -1767,7 +1790,8 @@ var ACTIONS = {
 		],
 		domain: "tracker",
 		refreshes: [],
-		scope: "person"
+		scope: "person",
+		reach: "member"
 	},
 	mark_inbox: {
 		args: [
@@ -1779,7 +1803,8 @@ var ACTIONS = {
 		],
 		domain: "tracker",
 		refreshes: [],
-		scope: "person"
+		scope: "person",
+		reach: "member"
 	}
 };
 //#endregion

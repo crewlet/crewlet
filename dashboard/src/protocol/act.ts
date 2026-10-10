@@ -52,14 +52,35 @@ export type ActionArgs<T extends ActionTool> = {
 /** A refusal the act transport can answer with. */
 export type ActErrorCode = keyof typeof ACT_ERRORS;
 
+/**
+ * Who may make a change (ADR-0031): what a member's key acts on as its
+ * person, or what runs the company, served to an admin's key alone. The two
+ * keyed reaches — the act transport is mounted at member reach, so nothing
+ * below it is ever a row's.
+ */
+export type ActionReach = "member" | "admin";
+
 // EVERY ROW'S DOMAIN IS A LOG A READ CAN WAIT ON, checked by the compiler: a
 // domain spelled wrong in the table would raise a floor no question reads.
+// AND EVERY ROW'S REACH IS ONE OF THE TWO, so a reach spelled wrong is a type
+// error here rather than a control that reads every viewer as below it.
 const ROWS: {
   readonly [T in ActionTool]: {
     readonly domain: SessionDomain | null;
     readonly refreshes: readonly string[];
+    readonly reach: ActionReach;
   };
 } = ACTIONS;
+
+/**
+ * The reach a change is served at — the engine's own, held to it by
+ * `TestEveryActionTheDashboardTakesIsOneTheActTransportServes` — which tells a
+ * press a member's key is not served apart from one the engine does not make
+ * for anybody here.
+ */
+export function actionReach(tool: ActionTool): ActionReach {
+  return ROWS[tool].reach;
+}
 
 /** What a change came to. */
 export type ActResult =

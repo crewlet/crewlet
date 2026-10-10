@@ -174,7 +174,7 @@ node means nothing was done.
 | `GET` | `/pages` | The company's own knowledge base: a filtered listing. Served only where `knowledge.backend` is `native` |
 | `GET` | `/pages/{id}` | One page with its body, comments, revision metadata, children and ancestor breadcrumb. `{id}` is the id, or `CONTAINER/Title` — the title matches the way the fleet CLAIMED it, so case and runs of whitespace are ignored and `ENG/deploy runbook` reaches a page called "Deploy  Runbook" |
 | `GET` | `/containers` | Every knowledge container this node knows about, with how many pages each holds. The engine materialises one per `space:` the org chart names, plus the two reserved ones, on every config apply; each carries `chart_epoch`, the activation its name and purpose were last written from (Unix milliseconds), so a configuration activated earlier never overwrites them |
-| `GET` | `/viewer` | **Who is asking**, served to anyone (`open`). The presented key's id, its role and the reach it carries, and the seat that links it — a human seat naming that id in `contact.crewlet_operator_id`. Three distinct states, and a caller must tell them apart: no key at all, a key no seat links, and a linked one. An unlinked key is an **ordinary state**, not an error — the remedy is a line of company configuration, so the id is answered with no seat rather than refused. `acts` names the tools [`/operator/act`](#operatoract--the-dashboards-write-surface) would serve this caller: the catalogue's writes for a linked key, and an empty list for anybody else. `config_writer` is whether this key may change the company document, and `config_managed_by` who may when [another system manages it](../concepts/configuration.md#managed-configuration) — named to an admin only. `admins` is who to ask for what this key does not reach — the people whose seats link an admin key — and is empty for a caller with no key. The full shape is the [`viewer` question](#the-viewer-answer) |
+| `GET` | `/viewer` | **Who is asking**, served to anyone (`open`). The presented key's id, its role and the reach it carries, and the seat that links it — a human seat naming that id in `contact.crewlet_operator_id`. Three distinct states, and a caller must tell them apart: no key at all, a key no seat links, and a linked one. An unlinked key is an **ordinary state**, not an error — the remedy is a line of company configuration, so the id is answered with no seat rather than refused. `acts` names the tools [`/operator/act`](#operatoract--the-dashboards-write-surface) would serve this caller: the catalogue's writes at the key's own reach for a linked key, and an empty list for anybody else. `config_writer` is whether this key may change the company document, and `config_managed_by` who may when [another system manages it](../concepts/configuration.md#managed-configuration) — named to an admin only. `admins` is who to ask for what this key does not reach — the people whose seats link an admin key — and is empty for a caller with no key. The full shape is the [`viewer` question](#the-viewer-answer) |
 | `GET` | `/stream/snapshot` | Dashboard initial-state bundle, served from the in-memory projection and assembled for the caller's reach exactly as the socket's handshake is (REST fallback for the WebSocket) |
 | `WS`  | `/ws/stream` | Live dashboard stream — agents, events, LLM invocations, health |
 | `GET` | `/dashboard` | Dashboard shell (`/` redirects here; `/static/{path}` serves its assets) |
@@ -2042,12 +2042,16 @@ Each carries `source: "operator"` on the envelope, so
 token's own name (`operator_id`), with `actor_seat` naming the person the token
 is bound to by `contact.crewlet_operator_id` (absent for a token nobody bound)
 — the seat the call was made as, resolved once for the call, so a config apply
-landing while it ran never makes the record name a different person.
+landing while it ran never makes the record name a different person. An
+`operator_acted` record also carries the `key_role` the key held when it called —
+`member` or `admin` — because roles live in each node's Tier A and change on a
+restart, and a call refused for reaching past its role reads as a bug to
+anybody who looks the key up later.
 Both are filed under `lifecycle`.
 
 ```json
 {"type": "operator_acted", "source": "operator",
- "operator_id": "founder", "actor_seat": "jane-founder",
+ "operator_id": "founder", "actor_seat": "jane-founder", "key_role": "member",
  "transport": "act", "tool": "update_work_item",
  "request_id": "0192f1a4-9b2d-7e51-8c3a-6d7e8f9a0b1c",
  "outcome": "applied", "position": "CREWLET_TRACKER_LOG@1:4711"}
@@ -2615,7 +2619,7 @@ asking. It is what the dashboard asks first, before anybody has signed in, and
 | `linked` | Whether a human seat links this key with `contact.crewlet_operator_id`. A different fact from the role: the role says what the key reaches, the link says who it acts as |
 | `handle`, `name`, `kind` | That seat, when linked; `""` otherwise |
 | `line` | The handles in that seat's [line](../concepts/organization-model.md#a-leads-line) — whose personal records this caller may read beside their own, from the derivation the personal questions use. **Always an array**; `[]` unless linked |
-| `acts` | The tools [`/operator/act`](#operatoract--the-dashboards-write-surface) would serve this caller: the catalogue's writes for a linked key, `[]` for anybody else. Always an array |
+| `acts` | The tools [`/operator/act`](#operatoract--the-dashboards-write-surface) would serve this caller: the catalogue's writes for a linked key, less what is [served to an admin alone](#who-may-call-which-tool) when the key is a member's; `[]` for anybody else. Always an array |
 | `project` | Where this person's `create_work_item` lands when it names none — the engine's own default for their seat (the seat's project, else its unit's, else the nearest ancestor's), so a screen offering "Create task" says where rather than working out a second answer; `""` when there is none, and a create must name one |
 | `config_writer` | Whether this key may change the company document: an admin key, and one a managed document's `api.auth.company_writers` lists. False for a member key and for a caller with none |
 | `config_managed_by` | That list, named to an **admin** only — which key can rewrite the company is the line of `access` most worth stealing — and `[]` to everybody else and when the document is not managed, so a screen draws every editing control disabled with who manages it rather than offering a save the engine refuses |
@@ -2972,6 +2976,26 @@ transport's code for the same fact, `{error: "unbound", detail, hint}`, and its
 act under that key's own label. The link is resolved on every request, so a
 configuration that unlinks the key mid-session refuses its next call.
 
+### Who may call which tool
+
+Every tool in the catalogue is served at a **reach** ([ADR-0031](https://github.com/crewlet/crewlet/blob/main/adr/0031-a-key-names-its-reach.md)),
+declared beside it in one table and checked in the one dispatch both
+transports share — so this endpoint and
+[`/operator/act`](#operatoract--the-dashboards-write-surface) cannot disagree
+about it. Every tool is `member` but one: `write_work_catalogue`, the
+company's own vocabulary of task types and custom fields, is `admin`, because
+no seat in the chart holds it and so no rule over the chart could say who else
+may change it. An assistant connected with a member's key is **listed** only
+the tools that key may call; a call past the key's reach — by name, or from a
+session opened under another key — is refused `forbidden` before the tool
+runs, its sentence naming who may (`Only an admin can call …`), and audited
+like any other call, with the key's role.
+
+The reach says who may call a tool at all. **Which object** a caller may act
+on — whose queue they may order, whose project's settings they may change —
+is the tool's own rule over the org chart, checked when it has read the object
+and refused `forbidden`.
+
 Point any MCP client at it:
 
 ```json
@@ -2991,7 +3015,9 @@ Point any MCP client at it:
 The **same tools a seat holds**, not a parallel implementation: `list_work_items`,
 `get_work_item`, `create_work_item`, `update_work_item`, `comment_on_work_item`,
 `merge_work_item`, `move_work_item`, `search_work_items`, `get_work_catalogue`, `list_projects`, `describe_project`, `write_project`,
-`task_activity`, `my_work`,
+`task_activity`, `my_work`, a project's files (`list_project_files`,
+`read_project_file`, `write_project_file`, `remove_project_file`, where the
+node has an object store),
 `list_pages`, `get_page`, `write_page`, `save_page`, `comment_on_page`, and
 `search_knowledge`. A schema, a default, a trimmed field and the wording of a
 refusal are each written once — two copies of "file an item" drift on exactly
@@ -3405,8 +3431,10 @@ every caller while `api.auth.disabled` is set: a caller the guard never checked
 is nobody, and a change here is made by somebody. An unlinked admin key keeps
 `/operator/mcp`, where a credential acting as itself is ordinary; an unlinked
 member key does not, for the reason it is refused here. `GET /viewer`'s `acts` names what this route would serve
-the caller, and is empty for exactly the callers it refuses, so a screen can
-disable a control with the reason rather than offer a press that fails.
+the caller — at the key's own [reach](#who-may-call-which-tool), so a member is
+not offered what only an admin may call — and is empty for exactly the callers
+it refuses, so a screen can disable a control with the reason rather than offer
+a press that fails.
 
 **Who the write is attributed to does not change.** The author is the key,
 the kind `operator`, and the linked seat rides beside it as the person whose own
