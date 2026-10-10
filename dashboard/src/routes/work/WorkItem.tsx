@@ -62,7 +62,7 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import { usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { refToken } from "~/app/frame/objects.ts";
-import { usePageLabels, usePageMenu } from "~/app/Shell.tsx";
+import { usePageLabels, usePageMenu } from "~/app/page.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { useMediaQuery } from "~/lib/media.ts";

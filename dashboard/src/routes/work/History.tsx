@@ -62,7 +62,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { href, useParam } from "~/app/router.tsx";
-import { usePageCoverage } from "~/app/Shell.tsx";
+import { usePageCoverage } from "~/app/page.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Coverage, type CoverageFacts } from "~/components/work.tsx";
 import { Button, Card, EmptyValue, Select, Skeleton, Tag } from "@crewlethq/ui";

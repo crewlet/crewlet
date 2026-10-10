@@ -24,7 +24,7 @@ import {
 // refused feedback. See the report.
 import { CopyButton } from "~/ui/primitives.tsx";
 import { PropertiesRail, type Property } from "~/app/frame/PropertiesRail.tsx";
-import { usePageLabels } from "~/app/Shell.tsx";
+import { usePageLabels } from "~/app/page.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
 import { useQuery } from "~/lib/useQuery.ts";

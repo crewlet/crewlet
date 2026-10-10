@@ -66,7 +66,7 @@ import { fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import type { Page, PageDetail, PageRevision, PageSummary } from "~/protocol/index.ts";
-import { usePageLabels } from "~/app/Shell.tsx";
+import { usePageLabels } from "~/app/page.tsx";
 import { usePagedPages } from "./usePagedPages.ts";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 

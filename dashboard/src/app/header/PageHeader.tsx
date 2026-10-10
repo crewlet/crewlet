@@ -31,7 +31,7 @@
  * # A figure on a tab is the screen's
  *
  * A section's count is published by the screen that has it (`useSectionCounts`
- * in `Shell.tsx`), because only that screen knows whether the number is a
+ * in `page.tsx`), because only that screen knows whether the number is a
  * total, a floor or not yet known; the header draws what it is given and draws
  * nothing for a section the screen did not count.
  */

@@ -159,7 +159,7 @@ import type {
   TurnStage,
   WorkItemRef,
 } from "~/protocol/index.ts";
-import { usePageLabels, usePageMenu } from "~/app/Shell.tsx";
+import { usePageLabels, usePageMenu } from "~/app/page.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { menuHold, useWriteAccess } from "~/lib/useWriteAccess.ts";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";

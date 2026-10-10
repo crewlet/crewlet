@@ -32,7 +32,7 @@ import {
 import { useNow } from "~/lib/clock.ts";
 import type { EventRecord } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { usePageLabels } from "~/app/Shell.tsx";
+import { usePageLabels } from "~/app/page.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 
 /** One drawn row: an event, at the depth of the span that carried it. */

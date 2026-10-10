@@ -38,7 +38,7 @@ import { useMemo, type ReactNode } from "react";
 import { href, useNavigator } from "~/app/router.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
-import { usePageCoverage, usePageLabels } from "~/app/Shell.tsx";
+import { usePageCoverage, usePageLabels } from "~/app/page.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
