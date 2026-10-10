@@ -222,7 +222,7 @@ COMPANY ?=
 .PHONY: help build crewlet install fmt tidy schema metrics-doc alarms-doc derived gate-answer objects-answer broker-answer \
         dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint \
         check fmt-check tidy-check signoff-check signoff-test vet lint test test-norace test-cross test-solo \
-        require-npm \
+        require-npm bench \
         mattermost-up mattermost-down \
         gitlab-up gitlab-down \
         snapshot clean require-node
@@ -488,12 +488,12 @@ test: ## the suite, minus the packages that run alone (ci: test (race))
 # effect: cmd/go runs compile, link and test actions on ONE pool of -p workers,
 # so every package in the half's dependency tree compiled one at a time before
 # the first test started. On CI that was 266s of a 992s step running no test
-# at all. So the half is compiled FIRST at the default -p by SOLO_PREBUILD,
-# which starts no test binary and so forms no cluster, and the -p 1 run finds
-# every compile in the build cache. Measured from a cold cache (4 vCPUs, the
-# machine shared): 423s serial, against 144s for the prebuild plus 19s for a
-# -p 1 run left with seven links and the seven generated test mains, which is
-# all it compiles.
+# at all. So the half is compiled FIRST at the default -p by PREBUILD, which
+# starts no test binary and so forms no cluster, and the -p 1 run finds every
+# compile in the build cache. Every other run at -p 1 (`bench`) is prebuilt
+# the same way. Measured from a cold cache (4 vCPUs, the machine shared): 423s
+# serial, against 144s for the prebuild plus 19s for a -p 1 run left with
+# seven links and the seven generated test mains, which is all it compiles.
 #
 # `go list -export` rather than `go test -c -o /dev/null`, which leaves the run
 # exactly the same work but LINKS every binary in the prebuild too — and its
@@ -513,11 +513,14 @@ test: ## the suite, minus the packages that run alone (ci: test (race))
 # the probe package (and failed it), plus the other's test main and link. The
 # flag changes how a load error is REPORTED and nothing about what is
 # compiled, so the action IDs are the run's either way.
-SOLO_PREBUILD = $(GO) list -e -export -test -deps $(1) -f '{{.ImportPath}}' $(SOLO_PKGS) > /dev/null
+#
+# $(1) is the flags that change what is compiled — the run's own, so the two
+# share action IDs — and $(2) the packages.
+PREBUILD = $(GO) list -e -export -test -deps $(1) -f '{{.ImportPath}}' $(2) > /dev/null
 
 test-solo: require-node ## the packages that need a runner to themselves (ci: end-to-end gates)
 	@test -n "$(SOLO_PKGS)" || { echo "the solo partition printed no packages; internal/solo/partition said why above (go list failing, or no package importing internal/solo)" >&2; exit 1; }
-	$(call SOLO_PREBUILD,$(GOTESTBUILD))
+	$(call PREBUILD,$(GOTESTBUILD),$(SOLO_PKGS))
 	$(SKIPGATE) -- $(GOTEST) -json -p 1 $(SOLO_PKGS)
 
 # The suite without the detector. It is roughly twice as fast and it is NOT
@@ -544,7 +547,7 @@ test-norace: require-node ## the full suite without -race (faster; not a gate)
 	echo "==> parallel partition"; \
 	$(GO) test $(GOTESTRUN) $(PARALLEL_PKGS) || status=1; \
 	echo "==> solo partition"; \
-	{ $(call SOLO_PREBUILD,) && $(GO) test $(GOTESTRUN) -p 1 $(SOLO_PKGS); } || status=1; \
+	{ $(call PREBUILD,,$(SOLO_PKGS)) && $(GO) test $(GOTESTRUN) -p 1 $(SOLO_PKGS); } || status=1; \
 	exit $$status
 
 # Every target reports in one run rather than stopping at the first failure —
@@ -591,6 +594,54 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 	  echo "  Install any current node, as ci.yml does, and re-run."; \
 	  exit 1; \
 	} >&2
+
+##@ Benchmarks — measurements, never a gate
+
+# THE BENCHMARKS THE DESIGN'S CAPACITY FIGURES COME FROM, so each figure is
+# measured rather than derived: the object store on every backend
+# (objstoretest.Bench, the broker's bucket at three replicas among them, and
+# the SHA-256 floor under every verified byte), an arbitrated write end to end
+# and the applier's drain (internal/statelog), and the store's own drain
+# (internal/store). Each package's doc records what it measured, and on what
+# machine.
+#
+# NOT A GATE, AND NO CI JOB RUNS IT: a benchmark on a shared runner measures
+# the runner's neighbours, and a gate on figures that noisy is one somebody
+# turns off. Compare two trees on one idle machine instead — BENCH_COUNT=6 on
+# each, then benchstat (golang.org/x/perf/cmd/benchstat).
+#
+# -p 1: one package's binary at a time. Two measuring at once measure each
+# other, and internal/statelog and internal/objstore/natsobj/replicated stand up
+# three-member clusters, which is what internal/solo exists to keep alone.
+# Compiled first at full -p by PREBUILD, for test-solo's reason.
+# -run '^$': -bench alone runs every test as well.
+# No -race: the detector multiplies costs unevenly, so a figure taken under it
+# describes the detector.
+# -v: a SKIPPED benchmark prints nothing without it. The real-bucket arm skips
+# unless CREWLET_BENCH_S3_BUCKET names a bucket (internal/objstore/s3obj's
+# package doc), and an arm that silently did not run reads as one that
+# measured nothing worth showing. Not through skipgate, for the same reason:
+# an allowance there would make that skip silent again.
+# BENCH_TIME 3s: the 128 MiB cases take most of a second an operation, so at
+# go's default of one second they are one or two operations whose first-touch
+# page faults are the figure; at three they are several.
+# BENCH_TIMEOUT is a hang detector, as TEST_TIMEOUT is. The longest package,
+# internal/statelog with every arm, takes minutes at BENCH_COUNT=1 on four
+# vCPUs, so six counts fit many times over; a real bucket's arm is bounded by
+# its link.
+BENCH_PKGS    ?= ./internal/objstore ./internal/objstore/memobj \
+                 ./internal/objstore/natsobj ./internal/objstore/natsobj/replicated \
+                 ./internal/objstore/s3obj ./internal/statelog ./internal/store
+BENCH_PATTERN ?= .
+BENCH_TIME    ?= 3s
+BENCH_COUNT   ?= 1
+BENCH_TIMEOUT ?= 2h
+
+bench: ## measure the object store and the state log's write path (not a gate)
+	$(call PREBUILD,,$(BENCH_PKGS))
+	$(GO) test -run '^$$' -bench '$(BENCH_PATTERN)' -benchmem \
+	  -benchtime $(BENCH_TIME) -count $(BENCH_COUNT) -timeout $(BENCH_TIMEOUT) \
+	  -p 1 -v $(BENCH_PKGS)
 
 ##@ Local vendor loops
 

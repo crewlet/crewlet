@@ -55,12 +55,13 @@ and answering it in pieces is how a push goes red on the piece you skipped.
 `make help` lists the rest.
 
 Every target runs the command [`ci.yml`](.github/workflows/ci.yml) runs, with
-the same flags. The two test jobs call `make` directly, so for those there is
-one command rather than a copy. For every other job nothing asserts the two
-have not drifted — a test did, and it was dropped — so a convenience target
-that quietly loses `-race` would report a pass CI does not honour and nothing
-else would notice. Change a target and its `ci.yml` step together, and read
-both. `make check` is:
+the same flags — `make bench` excepted, which has no CI job (see
+[Benchmarks](#benchmarks)). The two test jobs call `make` directly, so for
+those there is one command rather than a copy. For every other job nothing
+asserts the two have not drifted — a test did, and it was dropped — so a
+convenience target that quietly loses `-race` would report a pass CI does not
+honour and nothing else would notice. Change a target and its `ci.yml` step
+together, and read both. `make check` is:
 
 ```bash
 files="$(go run ./internal/sourcetree/gofiles)" && gofmt -l $files  # formatting — prints the files that need it
@@ -472,6 +473,50 @@ states with their reasons:
   behind a post — and each of those orders is held by a case of its own. An
   absence read after a fixed sleep holds only for as long as the sleep
   happened to be long enough.
+
+### Benchmarks
+
+```bash
+make bench
+```
+
+runs the benchmarks the design's capacity figures come from, so each figure is
+measured rather than derived: the object store on every backend
+(`objstoretest.Bench` — the broker's bucket at three replicas, and an S3 fake
+a provider's round trip away, among them — and the SHA-256 rate under every
+verified byte), one arbitrated write end to end and the applier's drain
+(`internal/statelog`), and the store's own drain (`internal/store`).
+
+It is **not a gate, and no CI job runs it**. A benchmark on a shared runner
+measures the runner's neighbours, and a gate on figures that noisy is one
+somebody turns off. To compare two trees, run `make bench BENCH_COUNT=6` on
+each, on one idle machine, and read the two outputs with
+[benchstat](https://pkg.go.dev/golang.org/x/perf/cmd/benchstat).
+
+| Variable | Default | What it sets |
+|---|---|---|
+| `BENCH_PKGS` | `internal/objstore`, its three backends, `internal/objstore/natsobj/replicated`, `internal/statelog`, `internal/store` | which packages are measured |
+| `BENCH_PATTERN` | `.` | `-bench`, e.g. `Backend/via=member` |
+| `BENCH_TIME` | `3s` | `-benchtime` |
+| `BENCH_COUNT` | `1` | `-count` |
+| `BENCH_TIMEOUT` | `2h` | `-timeout`, a hang detector |
+
+The packages run one at a time (`-p 1`) and without the race detector, and the
+output is verbose (`-v`), because a skipped benchmark prints nothing otherwise
+— the real-bucket arm of `internal/objstore/s3obj` skips unless
+`CREWLET_BENCH_S3_BUCKET` names a bucket, and that package's doc lists the
+variables that do.
+
+**A figure the design argues from is recorded in the package doc of what it
+measures**, with the machine it was measured on — its CPUs and model, and
+whether it has SHA instructions, since every verified byte is hashed — the
+toolchain and the versions of the dependencies it ran through. A new object
+store backend runs `objstoretest.Bench` from a `BenchmarkBackend` of its own,
+as it runs `objstoretest.Run` from `TestContract`; its factory hands each case
+an empty store and takes away what the case put there — a backend the run
+starts goes with it, and one that outlives the run (a real bucket) gives each
+case a prefix of its own and `objstoretest.Clear`s it, since the suite's
+populations run to a hundred thousand objects and it deletes nothing itself.
 
 ## Project conventions
 
