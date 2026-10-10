@@ -61,7 +61,6 @@ func TestTheProjectionIsSafeToReadWhileItIsWritten(t *testing.T) {
 				s.AgentOverlay("Seat-0")
 				s.SeededFrom()
 				s.OverlayRows([]string{"Seat-0", "Seat-1"})
-				s.RuntimeIDFor("Seat-1")
 				s.MergeAgents([]map[string]any{{"handle": "Seat-2"}, {"handle": "Seat-3"}})
 			}
 		})

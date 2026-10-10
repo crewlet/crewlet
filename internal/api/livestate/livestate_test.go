@@ -86,11 +86,8 @@ func TestASpawnMarksIdleAndRecordsTheRuntimeID(t *testing.T) {
 	if got.RuntimeID != "a-1" {
 		t.Errorf("runtime id = %q, want a-1", got.RuntimeID)
 	}
-	if s.RuntimeIDFor("Lead") != "a-1" {
-		t.Error("RuntimeIDFor disagrees with the overlay")
-	}
-	if s.RuntimeIDFor("Nobody") != "" {
-		t.Error("a role with no live entry reported a runtime id")
+	if o := s.AgentOverlay("Nobody"); o != nil {
+		t.Errorf("a seat with no live entry has an overlay %+v", o)
 	}
 }
 

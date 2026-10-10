@@ -533,7 +533,7 @@ func TestAnEventWithNoAgentIDKeepsTheKnownRuntimeID(t *testing.T) {
 	s.Apply(env("agent_phase_started", map[string]any{"role": "Lead", "agent_handle": "Lead", "task_id": "t-1"},
 		at("2026-06-14T12:01:00Z")))
 
-	if got := s.RuntimeIDFor("Lead"); got != "a-1" {
+	if got := overlayOf(t, s, "Lead").RuntimeID; got != "a-1" {
 		t.Errorf("runtime id = %q, want it kept across an event that carries none", got)
 	}
 }
@@ -547,7 +547,7 @@ func TestAProgressRoundWithNoAgentIDKeepsTheKnownOne(t *testing.T) {
 		map[string]any{"role": "Lead", "agent_handle": "Lead", "turn_id": "tn-1", "phase": "plan", "round_num": 0},
 		streamOnly, at("2026-06-14T12:01:00Z")))
 
-	if got := s.RuntimeIDFor("Lead"); got != "a-1" {
+	if got := overlayOf(t, s, "Lead").RuntimeID; got != "a-1" {
 		t.Errorf("runtime id = %q, want it kept", got)
 	}
 }
