@@ -44,6 +44,13 @@ var ErrNoDeadline = errors.New("objstore: a read must carry a deadline")
 // listed, an upload still in flight among them.
 var ErrUndated = errors.New("objstore: the backend listed an entry with no date")
 
+// ErrUnordered is a ranged listing ([Ranged]) the backend cannot give in name
+// order: an S3 Express directory bucket, which lists its keys in no order at
+// all, or a store caught handing a name back out of order ([Store.ListKeys]).
+// The caller asks about each name instead — an answer the order was not kept
+// in would have every name past the first stray read as absent.
+var ErrUnordered = errors.New("objstore: the backend cannot list a range of names in order")
+
 // Info is one object a backend holds, as it reports it.
 type Info struct {
 	// Name is the object's name, verbatim — what it was put under.
@@ -206,6 +213,34 @@ type Backend interface {
 	// object it is about to complete). The collector abandons only an
 	// upload begun longer ago than any upload is allowed to take.
 	Abandon(ctx context.Context, p Pending) error
+}
+
+// Ranged is a [Backend] that can also list a RANGE of its names in order: an
+// S3 bucket, whose listing is in the byte order of its keys and answers a
+// thousand of them a request.
+//
+// AN OPTIONAL HALF OF THE CONTRACT, because only some stores keep their names
+// in order — the broker's object store lists in the order its metadata was
+// written — and it exists for one reason: the audit asks the store about every
+// object a live row names, and the rows are walked in key order, so on a store
+// that lists in order one listing of a range answers what a stat of each object
+// in it would, at a request a page of names rather than one an object.
+// Declared HERE, beside the contract, rather than by the consumer alone,
+// because two packages hold it to one meaning — the suite that certifies it
+// (objstoretest, which also refuses a backend that implements it uncertified)
+// and the store that reads it ([Store.ListKeys]) — and two declarations would
+// be two contracts nothing held together.
+type Ranged interface {
+	Backend
+
+	// ListRange hands visit every object whose name sorts, as bytes, after
+	// after and at or before through — after "" from the first — in that
+	// order, each once, stopping at the first error visit returns. What it
+	// hands on is what [Backend.List] would, an entry it cannot date
+	// included: left out, and the listing then fails with [ErrUndated]. A
+	// store this backend cannot list in order answers [ErrUnordered], before
+	// it has visited anything.
+	ListRange(ctx context.Context, after, through string, visit func(Info) error) error
 }
 
 // CheckRead refuses the reads every backend refuses: a negative offset, an

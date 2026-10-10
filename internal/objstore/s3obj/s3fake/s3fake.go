@@ -1,8 +1,9 @@
 // Package s3fake is an in-process S3 endpoint for tests: the calls the object
 // store makes — head bucket; put, get (whole or ranged), head and delete an
-// object; a paged ListObjectsV2; a multipart upload's start, parts,
-// completion and abandonment; and a paged listing of the uploads begun and
-// not finished — over one bucket, path-style.
+// object; a paged ListObjectsV2, from a start-after or not; a multipart
+// upload's start, parts, completion and abandonment; and a paged listing of
+// the uploads begun and not finished — over one bucket, path-style, counting
+// the requests of each kind it answers ([Server.RequestsOf]).
 //
 // It checks no signature and keeps no versions; it exists so the S3 backend
 // runs the object store's conformance suite on a test machine with no network
@@ -77,7 +78,10 @@ type Server struct {
 	// ([Server.MostPartsAtOnce]).
 	partsNow, mostParts atomic.Int64
 
-	mu      sync.Mutex
+	mu sync.Mutex
+	// asked is how many requests of each kind the bucket has answered
+	// ([Server.RequestsOf]).
+	asked   map[string]int
 	objects map[string]object
 	// sorted is every key objects holds, in order, for a listing to page
 	// through; nil once a write has changed the keys since it was built.
@@ -177,6 +181,26 @@ func (s *Server) partArrived() func() {
 		most = s.mostParts.Load()
 	}
 	return func() { s.partsNow.Add(-1) }
+}
+
+// RequestsOf is how many requests of one kind the bucket has answered — the
+// operation's name in the API: "HeadObject", "GetObject", "PutObject",
+// "DeleteObject", "ListObjectsV2", "HeadBucket" and the multipart calls — so a
+// test can count what a pass cost.
+func (s *Server) RequestsOf(op string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.asked[op]
+}
+
+// count records one request of op.
+func (s *Server) count(op string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.asked == nil {
+		s.asked = map[string]int{}
+	}
+	s.asked[op]++
 }
 
 // Keys is every key the bucket holds, sorted.
@@ -290,6 +314,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
+	s.count(operation(r.Method, key, q))
 	switch {
 	case key == "" && r.Method == http.MethodHead:
 		w.WriteHeader(http.StatusOK)
@@ -351,6 +376,30 @@ func (s *Server) wait(r *http.Request) bool {
 	case <-r.Context().Done():
 		return false
 	}
+}
+
+// operation names a request as the API does, reading the query first for the
+// same reason [Server.serve] routes on it.
+func operation(method, key string, q map[string][]string) string {
+	has := func(k string) bool { _, ok := q[k]; return ok }
+	switch {
+	case key == "" && method == http.MethodHead:
+		return "HeadBucket"
+	case key == "" && has("uploads"):
+		return "ListMultipartUploads"
+	case key == "":
+		return "ListObjectsV2"
+	case method == http.MethodPost && has("uploads"):
+		return "CreateMultipartUpload"
+	case method == http.MethodPut && has("uploadId"):
+		return "UploadPart"
+	case method == http.MethodPost && has("uploadId"):
+		return "CompleteMultipartUpload"
+	case method == http.MethodDelete && has("uploadId"):
+		return "AbortMultipartUpload"
+	}
+	return map[string]string{http.MethodPut: "PutObject", http.MethodGet: "GetObject",
+		http.MethodHead: "HeadObject", http.MethodDelete: "DeleteObject"}[method]
 }
 
 // get answers an object, or the range of it a Range header asks for — and
@@ -598,7 +647,12 @@ type listItem struct {
 
 func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	// A CONTINUATION TOKEN WINS OVER start-after, as S3 has it: the token
+	// carries the place the first page's start-after began from.
 	prefix, after := q.Get("prefix"), q.Get("continuation-token")
+	if after == "" {
+		after = q.Get("start-after")
+	}
 	pageSize := s.PageSize
 	if pageSize <= 0 {
 		pageSize = defaultPageSize

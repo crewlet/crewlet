@@ -373,6 +373,51 @@ func (s *Store) Stat(ctx context.Context, k Key) (Info, error) {
 	return info, nil
 }
 
+// Ranged reports whether the store's backend can list a range of its names in
+// order ([Ranged]) — whether [Store.ListKeys] can answer at all.
+func (s *Store) Ranged() bool {
+	_, ok := s.backend.(Ranged)
+	return ok
+}
+
+// ListKeys hands visit every object the store holds whose key comes after
+// after — the zero key: from the first — and at or before through, in key
+// order ([Key.Compare]), with what the backend lists of it; a name in the range
+// that is not a key the store would have written is passed over, as the
+// collector passes it over.
+//
+// THE ORDER IS CHECKED, NOT TRUSTED: a backend that hands back a name at or
+// before one it already handed back, or outside the range, fails the listing
+// with [ErrUnordered] — every caller reads an object missing from a range as
+// one the store does not hold, so a listing that broke its order would have
+// it read objects the store holds as lost. A backend that is not [Ranged]
+// answers ErrUnordered at once.
+func (s *Store) ListKeys(ctx context.Context, after, through Key, visit func(Key, Info) error) error {
+	r, ok := s.backend.(Ranged)
+	if !ok {
+		return fmt.Errorf("%w: this backend keeps no order", ErrUnordered)
+	}
+	// EVERY KEY'S NAME SORTS AFTER THE NAMESPACE ITSELF, which is a proper
+	// prefix of it — so from there is from the first key, past every name
+	// outside the namespace that sorts before it.
+	prev := namespace
+	if !after.IsZero() {
+		prev = after.Name()
+	}
+	last := through.Name()
+	return r.ListRange(ctx, prev, last, func(info Info) error {
+		if info.Name <= prev || info.Name > last {
+			return fmt.Errorf("%w: %q came after %q, in a listing through %q",
+				ErrUnordered, info.Name, prev, last)
+		}
+		prev = info.Name
+		if k, err := KeyOfName(info.Name); err == nil {
+			return visit(k, info)
+		}
+		return nil
+	})
+}
+
 // Delete removes k's object. Deleting what is not there is not an error.
 func (s *Store) Delete(ctx context.Context, k Key) error {
 	if err := s.backend.Delete(ctx, k.Name()); err != nil {

@@ -766,6 +766,73 @@ func (b *Backend) List(ctx context.Context, visit func(objstore.Info) error) err
 		"an S3-compatible gateway must date the objects it lists for the collector to delete one")
 }
 
+// ListRange implements [objstore.Ranged]: ListObjectsV2 from StartAfter, a
+// page of a thousand keys at a time, until a key passes through.
+//
+// IN THE BYTE ORDER OF THE KEYS, which is how a general-purpose bucket lists
+// them — and with the prefix common to every key, the order of the names. A
+// DIRECTORY BUCKET (S3 Express One Zone, whose names end in `--x-s3`) lists in
+// no order and takes no StartAfter, so it answers [objstore.ErrUnordered]
+// without a request, and its caller asks about each object instead.
+//
+// The page that passes through is read whole, up to a thousand keys past it:
+// S3 has no end to a range, so ending one costs at most that. A range holding
+// more names than a page costs a request for each page it spans, which is why
+// the audit cuts its ranges short of one.
+func (b *Backend) ListRange(ctx context.Context, after, through string, visit func(objstore.Info) error) error {
+	if strings.HasSuffix(b.bucket, directoryBucketSuffix) {
+		return fmt.Errorf("%w: %q is a directory bucket, which lists in no order",
+			objstore.ErrUnordered, b.bucket)
+	}
+	in := &s3.ListObjectsV2Input{Bucket: aws.String(b.bucket), Prefix: aws.String(b.prefix)}
+	if after != "" {
+		in.StartAfter = aws.String(b.key(after))
+	}
+	last := b.key(through)
+	pages := s3.NewListObjectsV2Paginator(b.client, in)
+	var undated undatedCount
+	for pages.HasMorePages() {
+		page, err := call(ctx, callBudget, func(ctx context.Context) (*s3.ListObjectsV2Output, error) {
+			return pages.NextPage(ctx)
+		})
+		if err != nil {
+			return fmt.Errorf("s3obj: list %q after %q: %w", b.prefix, after, err)
+		}
+		for _, obj := range page.Contents {
+			key := aws.ToString(obj.Key)
+			if key > last {
+				return undated.err("objects", "LastModified",
+					"an S3-compatible gateway must date the objects it lists")
+			}
+			if obj.LastModified == nil {
+				undated.add(key)
+				continue
+			}
+			if err := visit(objstore.Info{
+				Name:    strings.TrimPrefix(key, b.prefix),
+				Size:    aws.ToInt64(obj.Size),
+				Written: obj.LastModified.UTC(),
+			}); err != nil {
+				return err
+			}
+		}
+		// A PAGE ENDING ON THE RANGE'S LAST NAME ends the range: asking for
+		// the next page to learn so is a request for nothing. A range holding
+		// fewer names than a page — the audit cuts its ranges to — ends inside
+		// its first page, on the first key past it.
+		if n := len(page.Contents); n > 0 && aws.ToString(page.Contents[n-1].Key) >= last {
+			break
+		}
+	}
+	return undated.err("objects", "LastModified",
+		"an S3-compatible gateway must date the objects it lists")
+}
+
+// directoryBucketSuffix is what every S3 Express One Zone bucket's name ends
+// in — which is how one is known without a request, and how the SDK itself
+// knows to sign its requests with S3 Express's own session.
+const directoryBucketSuffix = "--x-s3"
+
 // undatedCount is the entries one listing left out because the bucket gave
 // no date for them — see [objstore.ErrUndated] for why they are left out
 // rather than handed on dated at the zero time.

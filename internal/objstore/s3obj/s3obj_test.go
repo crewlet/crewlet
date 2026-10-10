@@ -104,7 +104,7 @@ func TestContract(t *testing.T) {
 		b := open(t, srv, "crewlet/")
 		servers.Store(objstore.Backend(b), srv)
 		return b
-	}, objstoretest.Options{Piece: part,
+	}, objstoretest.Options{Piece: part, Ranged: true,
 		// A MULTIPART UPLOAD BEGUN AND NEVER COMPLETED, under the
 		// prefix: what a process killed mid-upload leaves, named by
 		// what follows the prefix.
@@ -669,4 +669,26 @@ func trustBundle(t testing.TB, srv *s3fake.Server) string {
 		t.Fatal(err)
 	}
 	return bundle
+}
+
+// A DIRECTORY BUCKET LISTS IN NO ORDER, SO ITS RANGES ARE REFUSED, unasked:
+// an S3 Express One Zone bucket — every one named `…--x-s3` — answers a
+// listing in no order and takes no StartAfter, and a range read from it would
+// have every object past the first stray read as absent. Its caller asks
+// about each object instead.
+func TestADirectoryBucketsRangesAreUnordered(t *testing.T) {
+	t.Parallel()
+	srv := s3fake.Start(t, "files")
+	b := open(t, srv, "crewlet/")
+	s3obj.Rebucket(b, "files--usw2-az1--x-s3")
+	err := b.ListRange(t.Context(), "", "files/z", func(objstore.Info) error {
+		t.Error("a directory bucket's range listed an object")
+		return nil
+	})
+	if !errors.Is(err, objstore.ErrUnordered) {
+		t.Fatalf("ListRange on a directory bucket = %v, want ErrUnordered", err)
+	}
+	if n := srv.RequestsOf("ListObjectsV2"); n != 0 {
+		t.Fatalf("refusing a directory bucket's range cost %d listings, want none", n)
+	}
 }

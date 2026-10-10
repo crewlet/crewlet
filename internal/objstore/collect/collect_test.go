@@ -32,6 +32,9 @@ type fakeSource struct {
 	incompleteAfter int
 	judged          int
 	barriers        int
+	// pageRead, when set, is called as each page of a walk is read, with
+	// the source's lock held.
+	pageRead func()
 }
 
 func (s *fakeSource) Name() string { return "tracker" }
@@ -60,17 +63,50 @@ func (s *fakeSource) Referenced(_ context.Context, among []objstore.Key,
 	return out, !s.incomplete, nil
 }
 
-func (s *fakeSource) EachRequired(_ context.Context, _ statelog.Position, visit func(Reference) error) (bool, error) {
-	s.mu.Lock()
-	named := slices.Collect(maps.Values(s.named))
-	incomplete := s.incomplete
-	s.mu.Unlock()
-	for _, ref := range named {
-		if err := visit(ref); err != nil {
-			return false, err
+// Required is one walk over every reference the source names, in key order, a
+// page of [eachPage] at a time — read when the walk is asked, as an estate's
+// is, so a reference named after the walk began and before its page is read is
+// in it.
+func (s *fakeSource) Required(statelog.Position) []Walk {
+	return []Walk{&fakeWalk{s: s}}
+}
+
+// fakeWalk is a [fakeSource]'s walk, keyset-paged on the key as a table's is.
+type fakeWalk struct {
+	s     *fakeSource
+	after objstore.Key
+	begun bool
+	done  bool
+}
+
+func (w *fakeWalk) Next(context.Context) ([]Reference, bool, error) {
+	w.s.mu.Lock()
+	defer w.s.mu.Unlock()
+	if w.done {
+		return nil, !w.s.incomplete, nil
+	}
+	if w.s.pageRead != nil {
+		w.s.pageRead()
+	}
+	var page []Reference
+	for _, ref := range slices.SortedFunc(maps.Values(w.s.named), func(a, b Reference) int {
+		return a.Object.Key.Compare(b.Object.Key)
+	}) {
+		if w.begun && ref.Object.Key.Compare(w.after) <= 0 {
+			continue
+		}
+		page = append(page, ref)
+		if len(page) == eachPage {
+			break
 		}
 	}
-	return !incomplete, nil
+	if len(page) < eachPage {
+		w.done = true
+	}
+	if len(page) > 0 {
+		w.after, w.begun = page[len(page)-1].Object.Key, true
+	}
+	return page, !w.s.incomplete, nil
 }
 
 // name records a row naming o, owned by the file at path.
@@ -108,8 +144,14 @@ func (c *clock) advance(d time.Duration) {
 // backend is the twin with what a real backend has and the twin does not:
 // uploads begun and never finished, a store that answers "not found" for an
 // object it has not caught up with yet, and one whose questions fail.
+//
+// IT KEEPS NO ORDER — the twin's ranged listing is not promoted through the
+// interface it is held by — so the audit asks it about each object, as it asks
+// the broker's object store; a case auditing a store that lists ranges wraps it
+// in a [ranged].
 type backend struct {
-	*memobj.Backend
+	objstore.Backend
+	mem *memobj.Backend
 
 	mu         sync.Mutex
 	pending    []objstore.Pending
@@ -200,6 +242,9 @@ func (b *backend) Delete(ctx context.Context, name string) error {
 	return b.Backend.Delete(ctx, name)
 }
 
+// Corrupt replaces name's bytes, keeping its digest — [memobj.Backend.Corrupt].
+func (b *backend) Corrupt(name string, data []byte) { b.mem.Corrupt(name, data) }
+
 func (b *backend) begin(p objstore.Pending) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -231,7 +276,8 @@ type harness struct {
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	clk := &clock{now: time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)}
-	b := &backend{Backend: memobj.NewAt(clk.Now), lagging: map[string]int{}, asks: map[string]int{}}
+	mem := memobj.NewAt(clk.Now)
+	b := &backend{Backend: mem, mem: mem, lagging: map[string]int{}, asks: map[string]int{}}
 	store, err := objstore.NewStoreAt(b, clk.Now)
 	if err != nil {
 		t.Fatal(err)
@@ -716,37 +762,87 @@ func TestALaggingNotFoundIsNotMissing(t *testing.T) {
 	}
 }
 
-// THE SECOND LOOK HOLDS AT MOST ITS LIMIT, oldest first: a push past it hands
-// back the oldest, and a drain hands back the rest in the order they came.
+// THE SECOND LOOK HOLDS AT MOST ITS LIMIT OF REFERENCES, oldest first, a
+// reference or a range at a time: a push past it hands back the oldest entries
+// until what is held fits — a range counting every reference it holds — and a
+// drain hands back the rest in the order they came. An entry handed back is
+// cleared from the array behind the queue, so the queue never keeps what it no
+// longer counts reachable.
 func TestTheSecondLookQueueHoldsAtMostItsLimit(t *testing.T) {
 	t.Parallel()
 	ref := func(i int) Reference { return Reference{NamedBy: fmt.Sprintf("ENG/%d.md", i)} }
+	one := func(i int) lookAgain { return lookAgain{ref: ref(i)} }
+	span := func(from, to int) lookAgain {
+		l := lookAgain{refs: []Reference{}}
+		for i := from; i <= to; i++ {
+			l.refs = append(l.refs, ref(i))
+		}
+		return l
+	}
+	names := func(ls []lookAgain) []string {
+		var out []string
+		for _, l := range ls {
+			if l.refs == nil {
+				out = append(out, l.ref.NamedBy)
+				continue
+			}
+			out = append(out, fmt.Sprintf("%s..%s", l.refs[0].NamedBy, l.refs[len(l.refs)-1].NamedBy))
+		}
+		return out
+	}
 	q := suspects{limit: 3}
 	for i := 1; i <= 7; i++ {
-		due, over := q.push(ref(i))
+		due := q.push(one(i))
 		switch {
-		case i <= 3 && over:
-			t.Fatalf("push %d handed back %q while the queue had room", i, due.NamedBy)
-		case i > 3 && (!over || due != ref(i-3)):
-			t.Fatalf("push %d handed back %q (%v), want the oldest, %q", i, due.NamedBy, over, ref(i-3).NamedBy)
+		case i <= 3 && len(due) != 0:
+			t.Fatalf("push %d handed back %v while the queue had room", i, names(due))
+		case i > 3 && !slices.Equal(names(due), names([]lookAgain{one(i - 3)})):
+			t.Fatalf("push %d handed back %v, want the oldest, %q", i, names(due), ref(i-3).NamedBy)
 		}
-		if len(q.held) > 3 {
-			t.Fatalf("after push %d the queue holds %d, past its limit of 3", i, len(q.held))
+		if q.held > 3 {
+			t.Fatalf("after push %d the queue holds %d, past its limit of 3", i, q.held)
 		}
 	}
-	if got, want := q.drain(), []Reference{ref(5), ref(6), ref(7)}; !slices.Equal(got, want) {
+	// A RANGE COUNTS EVERY REFERENCE IT HOLDS: two of them push out the two
+	// oldest references, and the next reference the range itself.
+	if due := q.push(span(10, 11)); !slices.Equal(names(due), []string{"ENG/5.md", "ENG/6.md"}) {
+		t.Fatalf("a range of two handed back %v, want the two oldest references", names(due))
+	}
+	if due := q.push(one(12)); !slices.Equal(names(due), []string{"ENG/7.md"}) {
+		t.Fatalf("a reference after the range handed back %v, want the oldest", names(due))
+	}
+	if due := q.push(one(13)); !slices.Equal(names(due), []string{"ENG/10.md..ENG/11.md"}) {
+		t.Fatalf("a reference past the limit handed back %v, want the range", names(due))
+	}
+	for i, l := range q.queue[:cap(q.queue)] {
+		if i >= q.head && i < len(q.queue) {
+			continue // held
+		}
+		if l.refs != nil || l.ref != (Reference{}) {
+			t.Fatalf("slot %d, handed back, is still reachable from the queue's array: %v", i, names([]lookAgain{l}))
+		}
+	}
+	if got, want := names(q.drain()), []string{"ENG/12.md", "ENG/13.md"}; !slices.Equal(got, want) {
 		t.Fatalf("drain = %v, want %v", got, want)
 	}
-	if rest := q.drain(); len(rest) != 0 {
-		t.Fatalf("a drained queue still holds %v", rest)
+	if rest := q.drain(); len(rest) != 0 || q.held != 0 {
+		t.Fatalf("a drained queue still holds %v (%d)", names(rest), q.held)
+	}
+	// A LONE RANGE PAST THE LIMIT IS HELD rather than looked at again the
+	// moment its first look failed, and the next push hands it back.
+	if due := q.push(span(20, 24)); len(due) != 0 {
+		t.Fatalf("a lone range past the limit was handed back at once: %v", names(due))
+	}
+	if due := q.push(one(25)); !slices.Equal(names(due), []string{"ENG/20.md..ENG/24.md"}) {
+		t.Fatalf("the push after a range past the limit handed back %v, want the range", names(due))
 	}
 	// A LIMIT BELOW ONE HOLDS ONE rather than dropping what it is handed.
-	one := suspects{}
-	if _, over := one.push(ref(1)); over {
+	unset := suspects{}
+	if due := unset.push(one(1)); len(due) != 0 {
 		t.Fatal("a queue with no limit set dropped the first reference it was handed")
 	}
-	if due, over := one.push(ref(2)); !over || due != ref(1) {
-		t.Fatalf("a queue with no limit set handed back %q (%v), want the first", due.NamedBy, over)
+	if due := unset.push(one(2)); !slices.Equal(names(due), []string{"ENG/1.md"}) {
+		t.Fatalf("a queue with no limit set handed back %v, want the first", names(due))
 	}
 }
 

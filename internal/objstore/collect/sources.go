@@ -33,18 +33,34 @@ type Source interface {
 	// that might refer to an object.
 	Referenced(ctx context.Context, among []objstore.Key, at statelog.Position) (map[objstore.Key]struct{}, bool, error)
 
-	// EachRequired hands every reference the domain holds in a REQUIRED
-	// table to visit — never a retired one's, whose object the company is
-	// not owed (ADR-0033) — read no earlier than at, and reports whether
-	// the walk was COMPLETE. visit is NEVER CALLED INSIDE A READ of the
-	// estate: it asks the backend about each, a round trip a read's
-	// connection must not be held across. And it may BLOCK — the audit's
-	// does while its questions are at their bound — so a walk reads its
-	// next page only once every visit of the last has returned.
+	// Required is a walk of each of the domain's REQUIRED tables — never a
+	// retired one's, whose objects the company is not owed (ADR-0033) —
+	// read no earlier than at, each in KEY ORDER ([objstore.Key.Compare]).
+	//
+	// IN KEY ORDER because the audit merges every walk into one ordered
+	// stream of references, and a store that lists its names in order is
+	// then asked about a range of them at once rather than about each.
 	//
 	// NAMED FOR WHAT IT LEAVES OUT, beside a Referenced that leaves out
-	// nothing: a reader seeing a bare Each would take it for every table.
-	EachRequired(ctx context.Context, at statelog.Position, visit func(Reference) error) (bool, error)
+	// nothing: a reader seeing a bare Walks would take it for every table.
+	Required(at statelog.Position) []Walk
+}
+
+// Walk is one required table's references, in key order, a keyset page at a
+// time.
+type Walk interface {
+	// Next is the walk's next page — at most a page of references, every
+	// key after the last page's, in key order; none once the walk has
+	// ended — and whether the read answering it was COMPLETE: false while
+	// this node holds a record it could not apply that might refer to an
+	// object.
+	//
+	// EACH PAGE IS ONE READ OF THE ESTATE, ENDED BEFORE NEXT RETURNS, so
+	// nothing a caller does with a page — the audit's questions to the
+	// backend, round trips a read's connection must not be held across —
+	// happens inside a read, and the next page is read only when the caller
+	// asks for it.
+	Next(ctx context.Context) ([]Reference, bool, error)
 }
 
 // Reference is one row naming an object: the object as the row records it, and
@@ -199,57 +215,68 @@ func (s *tableSource) Referenced(ctx context.Context, among []objstore.Key,
 
 // eachPage is how many references one read of a walk reads: a page of the
 // declaration's keyset ([objstore.ReferenceTable.ReferencesAfter]), held in
-// memory between its read and its visits.
+// memory between its read and its use.
 //
 // FIVE HUNDRED, the size of the collector's own batch ([judgeBatch]): a page
 // is a few hundred bytes a row, and a smaller one is more reads for no memory
 // anybody needed back.
 const eachPage = judgeBatch
 
-// EachRequired walks every REQUIRED table of the domain a keyset page at a
-// time, EACH PAGE IN A READ OF ITS OWN and visited after that read has ended,
-// the next page read only once every visit of this one has returned — see
-// [Source.EachRequired]. The walk is complete only where every read was:
-// each is no earlier than at, so a record the node could not apply at any of
-// them is seen. With no required table it reads nothing and is complete.
-func (s *tableSource) EachRequired(ctx context.Context, at statelog.Position,
-	visit func(Reference) error) (bool, error) {
-
-	complete := true
+// Required is a [tableWalk] of each REQUIRED table of the domain — see
+// [Source.Required]. With no required table it is none, and the audit has
+// nothing of this domain to ask about.
+func (s *tableSource) Required(at statelog.Position) []Walk {
+	out := make([]Walk, 0, len(s.required))
 	for _, t := range s.required {
-		query, err := t.ReferencesAfter(eachPage)
-		if err != nil {
-			return false, err
-		}
-		for after := ""; ; {
-			var page []Reference
-			whole, err := s.estate.Read(ctx, at, func(tx *sql.Tx) error {
-				rows, err := tx.QueryContext(ctx, query, after)
-				if err != nil {
-					return fmt.Errorf("read the objects %s names: %w", t.Table, err)
-				}
-				defer func() { _ = rows.Close() }()
-				return t.ScanReferences(rows, func(obj objstore.Object, namedBy string) error {
-					page = append(page, Reference{Object: obj, NamedBy: namedBy})
-					return nil
-				})
-			})
-			if err != nil {
-				return false, err
-			}
-			complete = complete && whole
-			for _, ref := range page {
-				if err := visit(ref); err != nil {
-					return false, err
-				}
-			}
-			if len(page) < eachPage {
-				break
-			}
-			after = page[len(page)-1].Object.Key.String()
-		}
+		out = append(out, &tableWalk{estate: s.estate, table: t, at: at})
 	}
-	return complete, nil
+	return out
+}
+
+// tableWalk is one required table's keyset walk ([Walk]): each page in a read
+// of its own, no earlier than at, so a record the node could not apply at any
+// of them is seen.
+type tableWalk struct {
+	estate Estate
+	table  objstore.ReferenceTable
+	at     statelog.Position
+
+	// after is the last key handed back, and done set once a page came
+	// back short — there is nothing after it.
+	after string
+	done  bool
+}
+
+func (w *tableWalk) Next(ctx context.Context) ([]Reference, bool, error) {
+	if w.done {
+		return nil, true, nil
+	}
+	query, err := w.table.ReferencesAfter(eachPage)
+	if err != nil {
+		return nil, false, err
+	}
+	var page []Reference
+	whole, err := w.estate.Read(ctx, w.at, func(tx *sql.Tx) error {
+		rows, qerr := tx.QueryContext(ctx, query, w.after)
+		if qerr != nil {
+			return fmt.Errorf("read the objects %s names: %w", w.table.Table, qerr)
+		}
+		defer func() { _ = rows.Close() }()
+		return w.table.ScanReferences(rows, func(obj objstore.Object, namedBy string) error {
+			page = append(page, Reference{Object: obj, NamedBy: namedBy})
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	if len(page) < eachPage {
+		w.done = true
+	}
+	if len(page) > 0 {
+		w.after = page[len(page)-1].Object.Key.String()
+	}
+	return page, whole, nil
 }
 
 // view is what one pass read the references at: a floor per source.

@@ -214,11 +214,11 @@ promises, and its size is the provider's problem rather than any node's disk.
   shared profile, a web identity token or the instance's role.
 - **The identity needs six permissions** on the bucket and its objects under
   the prefix: `s3:PutObject` (a single upload, and every step of one in parts),
-  `s3:GetObject`, `s3:DeleteObject`, `s3:ListBucket` (the check at boot and the
-  collector's listing), and `s3:ListBucketMultipartUploads` and
-  `s3:AbortMultipartUpload` (finding and aborting unfinished uploads). Without
-  the last two, uploads still work and the collector reports what it could
-  not sweep as `sweep_error`.
+  `s3:GetObject`, `s3:DeleteObject`, `s3:ListBucket` (the check at boot, the
+  collector's listing and the audit's listings of ranges), and
+  `s3:ListBucketMultipartUploads` and `s3:AbortMultipartUpload` (finding and
+  aborting unfinished uploads). Without the last two, uploads still work and
+  the collector reports what it could not sweep as `sweep_error`.
 - **A private CA** is read from `AWS_CA_BUNDLE`, added to the system roots for
   the bucket's requests only.
 - **Reach the bucket over `https`.** Over plain `http` the S3 signature covers
@@ -338,19 +338,27 @@ judged against the replicated estate the data node holds:
   — **stops deleting**: a row it could not read may name any object, and the
   report says what it deleted before it stopped and why it stopped.
 - **Audit, daily.** It asks the store about every object a **live** row names,
-  up to thirty-two at a time, reading the rows a page at a time. An object the
-  store answers it does not hold is **missing**; one it holds at another size,
-  or under another SHA-256 where the store keeps one (`nats` keeps one, S3
-  does not), or as no object it can read at all (on `nats`, metadata that
-  does not decode, which the store answers definitely rather than as a
-  failure) is **damaged**; and one the store **fails** to answer about —
-  after its client's own retries — is **unanswered**. Anything but an answer
-  that it holds the object whole, or holds it wrong, is asked about once more
-  before it is called anything: at the end of the pass, or, once a hundred
-  thousand others are waiting for theirs, at once. Each is a file that cannot
-  be counted on to download, and raises [`objects_missing`](#alarms) naming
-  the first hundred such files by name, as `PROJECT/path`, with what was
-  found of each.
+  up to thirty-two questions at a time, reading the rows a page at a time in
+  key order. On S3 a question is a **listing of a range**: the nine hundred
+  rows next in key order span a range of the bucket's keys, and one listing of
+  it answers what a HEAD of each object would. A listing request answers a
+  thousand keys, and the hundred left over are room for the objects in the
+  range no live row names, so a range fits one request and an audit costs a
+  request per nine hundred objects; only an object a listing passes over is
+  then asked about by name. On `nats`, whose listing keeps no order — and on an S3 Express
+  directory bucket, which lists in none — a question is about one object. An
+  object the store answers it does not hold is **missing**; one it holds at
+  another size, or under another SHA-256 where the store keeps one (`nats`
+  keeps one, S3 does not), or as no object it can read at all (on `nats`,
+  metadata that does not decode, which the store answers definitely rather
+  than as a failure) is **damaged**; and one the store **fails** to answer
+  about — after its client's own retries — is **unanswered**. Anything but an
+  answer that it holds the object whole, or holds it wrong, is asked about
+  once more before it is called anything: at the end of the pass, or, once a
+  hundred thousand others are waiting for theirs, at once. Each is a file that
+  cannot be counted on to download, and raises [`objects_missing`](#alarms)
+  naming the first hundred such files by name, as `PROJECT/path`, with what
+  was found of each.
 
   **One object is never the audit's failure.** An object the store fails to
   answer about on both looks — an S3-compatible gateway answering one object
@@ -360,7 +368,12 @@ judged against the replicated estate the data node holds:
   none answered between, or — when the audit's last questions are failures —
   one more question about an object it had answered for failing too. A store
   that went away mid-audit is retried ten minutes later, and none of the
-  questions it failed is taken for a finding.
+  questions it failed is taken for a finding. On S3 a **listing that fails** —
+  once the client's retries are spent, which is what a bucket throttling the
+  prefix makes of it — is set aside with the range it was for, and that range
+  is listed **once more** at the end of the pass rather than asked about object
+  by object: only what that listing passes over is then asked about by name,
+  and a range whose second listing fails too is unanswered, file by file.
 
 A pass that fails is tried again ten minutes later. The duty records each pass
 in the coordination store, so every node's [`/fleet`](../reference/api-endpoints.md#get-fleet)
@@ -529,33 +542,47 @@ dashboard draws the same under **Settings › Nodes**.
   bytes.
 - **The collector lists the whole store.** A listing streams rather than
   holding the inventory in memory, and judges it 500 keys to a query against
-  an index on the file row's object column, so a pass over a few million
-  objects takes minutes, once an hour, on one node. The audit reads the live
-  rows a page at a time and asks the store about them outside every read, so
-  it never holds a read of the estate open across the store's round trips; a
-  retired row costs it nothing, and costs a backup on `s3` no request.
+  an index on the file row's object column, once an hour, on one node. The
+  audit reads the live rows a page at a time, every table's merged into one
+  key order, and asks the store about them outside every read, so it never
+  holds a read of the estate open across the store's round trips; a retired
+  row costs it nothing, and costs a backup on `s3` no request.
+- **An audit on S3 costs a listing request per nine hundred objects.** Its
+  ranges tile the bucket's `files/` keys, so the audit lists that corner once:
+  two million objects are about 2,200 `ListObjectsV2` requests a day where a
+  HEAD of each was two million, and a HEAD only for an object a listing passed
+  over. A range is cut a tenth short of the thousand keys a request lists, so
+  the objects in it that no live row names — a few in a thousand among keys
+  older than a day — still fit one request; among the last day's keys, which
+  hold every upload not yet named and every version of a file rewritten that
+  day, a range may take two, and those are a day of uploads rather than the
+  whole store. The S3 backend's benchmark listed 31,400–33,000 names a second
+  from a bucket 20 ms away and 15,600–16,900 from one 50 ms away, one listing
+  at a time, so those requests are one to two minutes of listing. On `nats`
+  it is still a read from the bucket stream's leader per object.
 - **The collector asks the store in parallel, and no harder.** The audit keeps
-  up to 32 questions out to the store at once, so it asks 32 divided by the
-  store's mean latency a second, over the engine's own warm connections, and
-  inside the 5,500 reads a second AWS documents for a prefix unless a question
-  averages under 6 ms. Against a bucket held 20 ms away the S3 backend's
-  benchmark answered 1,380–1,450 HEADs a second with 32 out, and about 610 at
-  50 ms, where one at a time answers 47 and 19: two million objects are 23–24
-  minutes and 55 rather than twelve hours and twenty-nine. A collection keeps
-  up to 16 deletions out, a quarter of the 3,500 writes a second AWS documents
-  for a prefix only if a deletion averages under 18 ms, which leaves the rest
-  to the company's uploads. On `nats` a question is a read from the bucket
-  stream's leader and a deletion three requests to it, two of them replicated
-  writes; the backend's own benchmark answered 15,000–19,000 questions a
-  second with 32 out on a member's own client, against 4,800–8,600 one at a
-  time, and 5,600–23,400 against 2,100–2,800 from a follower at three
-  replicas — about two minutes for two million objects on a member, where one
-  at a time took four to seven. The S3 figures are against an in-process fake
-  held that far away; no real bucket has been measured. Both bounds are on
-  requests in flight rather than tuned rates: a store that slows down is asked
-  more slowly, and one that is failing stops the pass with at most that many
-  requests out — a collection at its first failed deletion, an audit at the
-  thirty-second failed question in a row.
+  up to 32 questions out to the store at once — a listing of a range on S3, a
+  stat of an object on `nats` and on an S3 directory bucket — so it asks 32
+  divided by the store's mean latency a second, over the engine's own warm
+  connections, and inside the 5,500 reads a second AWS documents for a prefix
+  unless a question averages under 6 ms. Asked by HEAD, a bucket 20 ms away
+  answered 1,380–1,450 a second with 32 out in the S3 backend's benchmark, and
+  one 50 ms away about 610, where one at a time answers 47 and 19: two million
+  objects are 23–24 minutes and 55 rather than twelve hours and twenty-nine. A
+  collection keeps up to 16 deletions out, a quarter of the 3,500 writes a
+  second AWS documents for a prefix only if a deletion averages under 18 ms,
+  which leaves the rest to the company's uploads. On `nats` a question is a
+  read from the bucket stream's leader and a deletion three requests to it,
+  two of them replicated writes; the backend's own benchmark answered
+  15,000–19,000 questions a second with 32 out on a member's own client,
+  against 4,800–8,600 one at a time, and 5,600–23,400 against 2,100–2,800 from
+  a follower at three replicas — about two minutes for two million objects on
+  a member, where one at a time took four to seven. The S3 figures are against
+  an in-process fake held that far away; no real bucket has been measured.
+  Both bounds are on requests in flight rather than tuned rates: a store that
+  slows down is asked more slowly, and one that is failing stops the pass with
+  at most that many requests out — a collection at its first failed deletion,
+  an audit at the thirty-second failed question in a row.
 - **The estate is still whole on every data node.** Only file bytes leave it.
   Every row — a file's included — is on every data node.
 
