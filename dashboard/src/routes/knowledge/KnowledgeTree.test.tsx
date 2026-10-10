@@ -196,7 +196,9 @@ test("a search from the tree carries its phrase and mode to the search screen", 
 test("a level is read in windows of 500 and never cut silently", async () => {
   const asked = mount({
     knowledge: everyMode,
-    containers: () => ({ containers: [{ key: "ENG", name: "Engineering", pages: 700 }] }),
+    containers: () => ({
+      containers: [{ key: "ENG", name: "Engineering", pages: 700, owners: [] }],
+    }),
     pages: (params) =>
       params.after
         ? {
@@ -267,7 +269,7 @@ test("the page being read opens its space and its ancestors", async () => {
   location.hash = "#/knowledge/pages/0f0f0f0f-1111-4222-8333-444455556666";
   const asked = mount({
     knowledge: everyMode,
-    containers: () => ({ containers: [{ key: "ENG", name: "Engineering", pages: 3 }] }),
+    containers: () => ({ containers: [{ key: "ENG", name: "Engineering", pages: 3, owners: [] }] }),
     page: () => ({
       page: { id: "0f0f0f0f-1111-4222-8333-444455556666", container: "ENG", title: "Provisioner" },
       revision: 1,
@@ -317,71 +319,48 @@ test("a company on a vendor wiki is told there is no tree here, not shown an err
   await waitFor(() => expect(screen.getByText(/no tree to browse here/)).toBeTruthy());
 });
 
-test("who files into a space: five states, each its own sentence", async () => {
-  const eng = () => ({ containers: [{ key: "ENG", name: "Engineering", pages: 3 }] });
+// WHO FILES INTO A SPACE IS THE ENGINE'S ANSWER ON THE CONTAINER: no company
+// document is asked for, a member reads it as an admin does, a space no unit
+// names says so, and a unit's project is DRAWN where the key does not name it.
+test("who files into a space is the container's own answer", async () => {
+  const eng = (owners: unknown[]) => () => ({
+    containers: [{ key: "ENG", name: "Engineering", pages: 3, owners }],
+  });
   const key = () => screen.getByText("ENG").closest(".ktree-key")!.textContent;
 
-  // NO TOKEN: nothing is asked, and the sentence says why.
-  let asked = mount({ knowledge: everyMode, containers: eng });
-  await waitFor(() => expect(screen.getByText("ENG")).toBeTruthy());
-  expect(key()).toMatch(/needs an admin key to read/);
-  expect(asked.some((a) => a.what === "config")).toBe(false);
-
-  // A TOKEN AND A READ IN FLIGHT: not "needs a token".
-  cleanup();
-  localStorage.setItem("crewlet_api_token", "tok");
-  asked = mount({ knowledge: everyMode, containers: eng, config: () => new Promise(() => {}) });
-  await waitFor(() => expect(screen.getByText("ENG")).toBeTruthy());
-  expect(key()).toMatch(/still being read/);
-  expect(key()).not.toMatch(/needs an admin key/);
-  expect(asked.some((a) => a.what === "config")).toBe(true);
-
-  // REFUSED.
-  cleanup();
-  mount({
+  const asked = mount({
     knowledge: everyMode,
-    containers: eng,
-    config: () => Promise.reject(new Error("unauthorized")),
-  });
-  await waitFor(() => expect(key()).toMatch(/could not be read with this token/));
-
-  // A MEMBER'S KEY: the document is an admin's (ADR-0031), and another key is
-  // not the remedy — whether the viewer said so or the engine answered it.
-  cleanup();
-  mount({
-    knowledge: everyMode,
-    containers: eng,
+    containers: eng([
+      { unit: { key: "plat", name: "Core platform", resolved: true }, lead: {}, project: "PLAT" },
+    ]),
     viewer: () => ({ token_id: "ada", role: "member", reach: "member", linked: true }),
   });
-  await waitFor(() => expect(key()).toMatch(/is for admins to read/));
-  expect(key()).not.toMatch(/with this token/);
-  cleanup();
-  mount({
-    knowledge: everyMode,
-    containers: eng,
-    config: () => Promise.reject(new Error("forbidden")),
-  });
-  await waitFor(() => expect(key()).toMatch(/is for admins to read/));
-
-  // READ: the unit, and its project DRAWN where the key does not name it.
-  cleanup();
-  mount({
-    knowledge: everyMode,
-    containers: eng,
-    config: () => ({ units: [{ name: "Core platform", space: "eng", project: "PLAT" }] }),
-  });
   await waitFor(() => expect(key()).toMatch(/Filed by Core platform, whose work is in PLAT/));
+  expect(asked.some((a) => a.what === "config")).toBe(false);
   const proj = document.querySelector(".ktree-proj");
   expect(proj?.textContent).toBe("tracker project PLAT");
   expect(proj?.querySelector(".sr-only")).toBeTruthy();
+
+  cleanup();
+  mount({ knowledge: everyMode, containers: eng([]) });
+  await waitFor(() => expect(key()).toMatch(/No unit names this space/));
 });
 
 test("a project the space key already names is not drawn twice", async () => {
-  localStorage.setItem("crewlet_api_token", "tok");
   mount({
     knowledge: everyMode,
-    containers: () => ({ containers: [{ key: "ENG", name: "Engineering", pages: 3 }] }),
-    config: () => ({ units: [{ name: "Engineering", space: "ENG", project: "ENG" }] }),
+    containers: () => ({
+      containers: [
+        {
+          key: "ENG",
+          name: "Engineering",
+          pages: 3,
+          owners: [
+            { unit: { key: "eng", name: "Engineering", resolved: true }, lead: {}, project: "ENG" },
+          ],
+        },
+      ],
+    }),
   });
   await waitFor(() =>
     expect(screen.getByText("ENG").closest(".ktree-key")!.textContent).toMatch(/Filed by/),
@@ -395,7 +374,9 @@ test("on a phone the spaces fold, so no tree stands above the page being read", 
     location.hash = "#/knowledge/pages/0f0f0f0f-1111-4222-8333-444455556666";
     const asked = mount({
       knowledge: everyMode,
-      containers: () => ({ containers: [{ key: "ENG", name: "Engineering", pages: 3 }] }),
+      containers: () => ({
+        containers: [{ key: "ENG", name: "Engineering", pages: 3, owners: [] }],
+      }),
       page: () => ({
         page: {
           id: "0f0f0f0f-1111-4222-8333-444455556666",
@@ -454,7 +435,9 @@ test("above a phone the spaces are always drawn", async () => {
   try {
     mount({
       knowledge: everyMode,
-      containers: () => ({ containers: [{ key: "ENG", name: "Engineering", pages: 3 }] }),
+      containers: () => ({
+        containers: [{ key: "ENG", name: "Engineering", pages: 3, owners: [] }],
+      }),
     });
     await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
     expect(screen.queryByRole("button", { name: /^Spaces/ })).toBeNull();

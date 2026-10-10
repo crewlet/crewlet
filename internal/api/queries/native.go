@@ -747,18 +747,6 @@ func (s Sources) pageList(ctx context.Context, p Params) (any, error) {
 	return out, nil
 }
 
-func (s Sources) containers(ctx context.Context, p Params) (any, error) {
-	fresh, err := freshness(p)
-	if err != nil {
-		return nil, err
-	}
-	list, err := s.Pages.Containers(ctx, fresh)
-	if err != nil {
-		return nil, err
-	}
-	return map[string]any{"containers": list}, nil
-}
-
 // ---- shared ------------------------------------------------------------ //
 
 // splitList reads a comma-separated filter.

@@ -76,7 +76,7 @@ import { SEARCH_MODES, asSearchMode, defaultSearchMode, modeUnavailable } from "
 import { STORAGE_KEYS } from "~/lib/storage.ts";
 import type { PageContainer, PageSummary, SearchMode } from "~/protocol/index.ts";
 import { usePagedPages } from "./usePagedPages.ts";
-import { otherProjects, ownerSentence, useSpaceOwners, type SpaceOwners } from "./spaceOwners.ts";
+import { otherProjects, ownerSentence, spaceOwners } from "./spaceOwners.ts";
 
 /**
  * What the tree lists: the pages a person reads. Drafts are listed because a
@@ -300,7 +300,6 @@ function Spaces({
 }) {
   const bodyID = useId();
   const containers = useQuery("containers", undefined, { pollMs: TREE_POLL_MS });
-  const owners = useSpaceOwners();
   const spaces = useMemo(
     () =>
       [...(containers.data?.containers ?? [])].sort((a, b) =>
@@ -337,7 +336,6 @@ function Spaces({
           <SpaceRow
             key={space.key}
             space={space}
-            owners={owners(space.key)}
             open={open}
             toggle={toggle}
             currentPage={currentPage}
@@ -460,14 +458,12 @@ function SectionRow({
 
 function SpaceRow({
   space,
-  owners,
   open,
   toggle,
   currentPage,
   current,
 }: {
   space: PageContainer;
-  owners: SpaceOwners;
   open: Set<string>;
   toggle: (node: string) => void;
   currentPage: string;
@@ -477,6 +473,7 @@ function SpaceRow({
   const expanded = open.has(node);
   const childrenID = useId();
   const label = space.name || space.key;
+  const owners = spaceOwners(space);
   const who = ownerSentence(owners);
   const projects = otherProjects(owners, space.key);
   return (

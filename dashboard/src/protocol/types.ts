@@ -3228,6 +3228,18 @@ export interface PageContainer {
    *  container rather than stored on it: the document is what a writer wrote,
    *  and a count on it would have every page create rewrite its container. */
   pages: number;
+  /** Every unit whose `space:` names this container, in the chart's order —
+   *  resolved by the engine the way a project's `unit` is, so a member reads
+   *  who files here without the company document. `[]` when no unit does. */
+  owners: PageContainerOwner[];
+}
+
+/** One unit that writes into a knowledge container. */
+export interface PageContainerOwner {
+  unit: WorkUnitRef;
+  lead: WorkLeadRef;
+  /** The tracker project the unit files work in; absent when it names none. */
+  project?: string;
 }
 
 export interface PageComment {

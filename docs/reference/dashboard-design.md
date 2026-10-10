@@ -5530,13 +5530,13 @@ pages in it.
   it no longer claims "no local copy", which was true only of Confluence.
 - **A search that did not run** says which of `no_company`, `no_backend`,
   `no_scope` or `building` it was, with the remedy that reason names.
-- **The spaces** are listed with each space's key; the unit that files into
-  one and the tracker project it works in are named for a reader who may read
-  the company document, in five states — read (which may be "no unit names
-  it"), no key held, a member's key ("for admins to read"), read in flight,
-  refused — and "needs an admin key" is said only to a browser that holds
-  none: never to an admin whose read is merely in flight, nor to a member,
-  whose key is not the problem. A project the space's key does not
+- **The spaces** are listed with each space's key; the units that file into
+  one and the tracker project each works in are named from the space's own
+  `owners` on the `containers` answer — the engine's resolution against the
+  running chart, read by every reader of the space, a member included — and
+  "no unit names it" where none does. They used to come from the company
+  document, an admin's read, so a member's tree said "for admins to read"
+  about which team a space belongs to. A project the space's key does not
   already name is drawn beside it as a dashed key, not only in a tooltip.
   A space opens onto its top level (`pages{container, roots}`) and a page that
   holds pages onto its children (`pages{parent}`), each read in windows of 500

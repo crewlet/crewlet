@@ -62,7 +62,7 @@ import type { KnowledgeAnswer, PageContainer, PageSummary } from "~/protocol/ind
 // the reader just opened and one of the three forgets the middle button.
 import { PageLink } from "./Pages.tsx";
 import { PAGES_WINDOW } from "./usePagedPages.ts";
-import { ownerSentence, useSpaceOwners, type SpaceOwners } from "./spaceOwners.ts";
+import { spaceOwners } from "./spaceOwners.ts";
 import { plainText } from "~/lib/markdown.ts";
 
 export function Knowledge() {
@@ -408,7 +408,6 @@ function containerFacts({
   newest,
   capped,
   unread,
-  owners,
   now,
 }: {
   container: PageContainer;
@@ -418,16 +417,12 @@ function containerFacts({
   capped: boolean;
   /** The page list has not answered — it is still in flight, or it failed. */
   unread: boolean;
-  /**
-   * Who files into this container, in the four states `spaceOwners.ts` names:
-   * `space` is guarded, so a reader without the company document does not know
-   * who files here, and an empty list would say nobody does.
-   */
-  owners: SpaceOwners;
   now: number;
 }): Fact[] {
-  const units = owners.state === "read" ? owners.units : null;
-  const lead = units?.[0];
+  // WHO FILES HERE, as the engine answers it on the container itself
+  // (`spaceOwners.ts`).
+  const units = spaceOwners(container);
+  const lead = units[0];
   return [
     // A COUNT, and ZERO IS A REAL ONE: a container exists from the first write
     // into it, so one whose pages have all been trashed is a state an operator
@@ -456,24 +451,21 @@ function containerFacts({
       note: capped ? "newest of the pages this read returned" : undefined,
     },
     {
-      // WHO WRITES HERE, from the CONFIG rather than from the pages: a unit's
+      // WHO WRITES HERE, from the CHART rather than from the pages: a unit's
       // `space:` is what sends its seats' pages into this container, so it
       // answers the question even for a container nobody has written in yet.
       // The panel below answers the other half — who actually has.
       label: "Filed by",
-      // THE STATE'S OWN SENTENCE while there is no list: "needs a token" said
-      // to an operator whose read is merely in flight is false.
-      value: !units ? (
-        <EmptyValue label={ownerSentence(owners)} />
-      ) : units.length > 0 ? (
-        units.map((u) => u.name).join(", ")
-      ) : (
-        <EmptyValue label="No unit names this container in its space:" />
-      ),
+      value:
+        units.length > 0 ? (
+          units.map((u) => u.name).join(", ")
+        ) : (
+          <EmptyValue label="No unit names this container in its space:" />
+        ),
       // A LINK ONLY WHERE THERE IS ONE PLACE TO GO. Two units filing into one
       // container is legal and happens — a shared space — and a fact line that
       // linked the first of them would be a link that is right half the time.
-      path: units?.length === 1 && lead ? ["agents", "teams", lead.name] : undefined,
+      path: units.length === 1 && lead ? ["agents", "teams", lead.name] : undefined,
     },
     { label: "Created", value: <DateCell at={container.created_at} now={now} /> },
   ];
@@ -539,14 +531,6 @@ export function ContainerPeek({ id }: { id: string }) {
   // more than it returned, or by handing back a cursor to the next window.
   // False until there IS an answer, since nothing has been read to qualify.
   const capped = Boolean(list.data && (list.data.after || (total ?? 0) > recent.length));
-  // WHO FILES HERE IS GUARDED. A unit's `space:` is the knowledge container
-  // it owns, and `internal/api/orgprojection_test.go` classifies it as guarded
-  // ("a knowledge container key: where this unit's pages are written"), so the
-  // anonymous org projection carries none of it and this is read from the
-  // company document — in the four states `spaceOwners.ts` names, the tree's
-  // own, because "no unit files here" is a fact about the company and an
-  // unread document is not evidence for it.
-  const owners = useSpaceOwners({ enabled: id !== "" })(id);
 
   return (
     <>
@@ -573,7 +557,6 @@ export function ContainerPeek({ id }: { id: string }) {
                   newest: recent[0]?.updated_at,
                   capped,
                   unread: !list.data,
-                  owners,
                   now,
                 })}
               />
