@@ -2,7 +2,7 @@
 
 import { describe, expect, test } from "vitest";
 import type { BudgetWindow } from "~/protocol/types.ts";
-import { resetsWords, turnsOverWords, waitedOn, windowOf } from "./budget.ts";
+import { resetsWords, turnsOverWords, waitedOn, windowName, windowOf } from "./budget.ts";
 
 function w(over: Partial<BudgetWindow>): BudgetWindow {
   return {
@@ -68,6 +68,22 @@ describe("when a window turns over", () => {
   test("an instant that does not parse is not given a moment", () => {
     expect(turnsOverWords(w({ resets_at: "" }), "UTC")).toBe("");
     expect(resetsWords(w({ period: "month", resets_at: "soon" }), "UTC")).toBe("");
+  });
+});
+
+// THE ENGINE'S LABEL IS ALREADY THE COMPANY'S CALENDAR, so it is drawn as
+// that date, week or month, and never re-read from an instant on a clock.
+describe("naming a window", () => {
+  test("a day, a week and a month in words", () => {
+    expect(windowName(w({}))).toBe("Sep 23");
+    expect(windowName(w({ period: "week", window: "2026-W09" }))).toBe("Week 9");
+    expect(windowName(w({ period: "week", window: "2026-W40" }))).toBe("Week 40");
+    expect(windowName(w({ period: "month", window: "2026-09" }))).toBe("September");
+  });
+
+  test("a label that does not parse is drawn as it came", () => {
+    expect(windowName(w({ period: "week", window: "soon" }))).toBe("soon");
+    expect(windowName(w({ period: "month", window: "2026-13" }))).toBe("2026-13");
   });
 });
 

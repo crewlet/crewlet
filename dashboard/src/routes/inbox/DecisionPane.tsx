@@ -41,9 +41,9 @@ import { holdLine, ReassignItem, type SeatCondition } from "~/components/Decisio
 import { RaiseBudgetButton } from "~/components/budgetWrite.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { PERIOD_ADJECTIVE } from "~/lib/budget.ts";
+import { PERIOD_ADJECTIVE, PERIOD_WORDS, turnsOverWords } from "~/lib/budget.ts";
 import { plainText, renderMarkdown, safeHref } from "~/lib/markdown.ts";
-import { fmtDateTime, humanize, relTime } from "~/lib/format.ts";
+import { fmtDateTime, fmtExact, humanize, relTime } from "~/lib/format.ts";
 import { reasonPhrase, reasonWhy } from "~/lib/reasons.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
 import type { Attention } from "~/lib/attention.ts";
@@ -217,7 +217,7 @@ function OpenPane({
           body = <RunBody run={row.subject.run} who={who} now={now} />;
           break;
         case "seat":
-          body = <SeatBody seat={row.subject.seat} who={who} now={now} />;
+          body = <SeatBody seat={row.subject.seat} who={who} now={now} zone={zone} />;
           break;
       }
       break;
@@ -592,10 +592,21 @@ function RunBody({ run, who, now }: { run: SandboxRun; who: Who | null; now: num
   );
 }
 
-function SeatBody({ seat, who, now }: { seat: SeatCondition; who: Who | null; now: number }) {
+function SeatBody({
+  seat,
+  who,
+  now,
+  zone,
+}: {
+  seat: SeatCondition;
+  who: Who | null;
+  now: number;
+  zone: string | undefined;
+}) {
   const name = who?.name ?? seat.row.role;
   const item = seat.row.turn?.work_item ?? seat.row.live_call?.work_item ?? null;
   const w = seat.window;
+  const when = w ? turnsOverWords(w, zone) : "";
   return (
     <>
       <div className="inbox-pane-head">
@@ -614,8 +625,11 @@ function SeatBody({ seat, who, now }: { seat: SeatCondition; who: Who | null; no
       </div>
       <div className="inbox-pane-card">
         <p>
+          {/* THE WINDOW BY ITS SPAN, AND ITS TURNOVER ON THE COMPANY CLOCK, as
+              the queue's row and the Budgets screen say them — it printed
+              the engine's label (`2026-W41`) here. */}
           {w
-            ? `${w.used.toLocaleString()} of ${(w.limit ?? 0).toLocaleString()} tokens are spent in ${w.window}, so the engine turns this seat's charges away until ${fmtDateTime(w.resets_at)}.`
+            ? `${fmtExact(w.used)} of ${fmtExact(w.limit ?? 0)} tokens are spent ${PERIOD_WORDS[w.period]}, so the engine turns this seat's charges away until the ${w.period} turns over${when ? ` ${when}` : ""}.`
             : "The engine turns this seat's charges away until its budget window resets."}
         </p>
         <p className="t-caption">

@@ -51,7 +51,15 @@ import { UserGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { MessageSeatButton } from "~/components/writes.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { fmtCount, fmtElapsed, fmtMinute, fmtTime, plural, readerDay } from "~/lib/format.ts";
+import {
+  fmtCount,
+  fmtElapsed,
+  fmtExact,
+  fmtMinute,
+  fmtTime,
+  plural,
+  readerDay,
+} from "~/lib/format.ts";
 import { useAgents, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -74,7 +82,7 @@ import type { AgentRow, BudgetWindow, LiveCall, LiveTurn } from "~/protocol/type
 import { useSandboxes } from "~/lib/store-hooks.ts";
 import { turnIdOf, watchHref } from "~/lib/turns.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
-import { PERIOD_WORDS } from "~/lib/budget.ts";
+import { PERIOD_WORDS, resetsWords, windowName } from "~/lib/budget.ts";
 import { renderInline } from "~/lib/markdown.ts";
 import { companyCeilings, liveRow, seatRun } from "./seat/profile.ts";
 
@@ -89,12 +97,21 @@ export function toolSourceLabel(source: string): string {
 
 /**
  * The label and figure of one capped window: "Budget this week" and
- * "630k of 1M · resets Mon 00:00".
+ * "630k of 1M · resets Oct 5".
+ *
+ * WHEN IT RESETS ON THE COMPANY'S CALENDAR (`zone`), as the Budgets screen
+ * captions the same window. It was the instant on the READER's clock, to the
+ * minute, so a week cut in Tokyo read "resets Oct 04, 2026, 17:00" to a reader
+ * in Berlin — a turnover nobody's calendar names.
  */
-export function budgetLine(w: BudgetWindow): { label: string; figure: string } {
+export function budgetLine(
+  w: BudgetWindow,
+  zone: string | undefined,
+): { label: string; figure: string } {
+  const resets = resetsWords(w, zone);
   return {
     label: `Budget ${PERIOD_WORDS[w.period]}`,
-    figure: `${fmtCount(w.used)} of ${fmtCount(w.limit ?? 0)} · resets ${fmtMinute(w.resets_at)}`,
+    figure: `${fmtCount(w.used)} of ${fmtCount(w.limit ?? 0)}${resets ? ` · ${resets}` : ""}`,
   };
 }
 
@@ -297,7 +314,7 @@ function SeatPeekBody({
 
             {windows.length ? (
               windows.map((w) => {
-                const line = budgetLine(w);
+                const line = budgetLine(w, org?.timezone);
                 return (
                   <BudgetFact key={w.period} window={w} label={line.label} figure={line.figure} />
                 );
@@ -407,13 +424,15 @@ function BudgetFact({
       <dd className="seat-peek-budget">
         <span className="t-num">{figure}</span>
         {/* THE ENGINE'S STATE, never a threshold of ours (`lib/budget.ts`). */}
+        {/* WHICH WINDOW, IN WORDS: "Budget this week, Week 18". It carried
+            the engine's own label (`2031-W18`), read aloud as digits. */}
         <Meter
           hideLabel
-          label={`${label}, ${w.window}`}
+          label={`${label}, ${windowName(w)}`}
           value={w.used}
           max={w.limit ?? 0}
           state={w.state}
-          valueText={`${w.used.toLocaleString()} of ${(w.limit ?? 0).toLocaleString()} tokens`}
+          valueText={`${fmtExact(w.used)} of ${fmtExact(w.limit ?? 0)} tokens`}
         />
       </dd>
     </>

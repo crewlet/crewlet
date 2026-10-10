@@ -229,8 +229,20 @@ test("each capped window is labelled with its own period", async () => {
   expect(screen.getByText("Budget this month")).toBeTruthy();
   expect(screen.queryByText("Budget this week")).toBeNull();
   for (const period of ["day", "week", "month"] as const) {
-    expect(budgetLine(window_(period, 1, 2)).label).toBe(`Budget ${PERIOD_WORDS[period]}`);
+    expect(budgetLine(window_(period, 1, 2), "UTC").label).toBe(`Budget ${PERIOD_WORDS[period]}`);
   }
+});
+
+// WHEN IT RESETS IS THE COMPANY'S DATE, as the Budgets screen captions it. A
+// week cut in Tokyo turns over at Monday's midnight there — Sunday afternoon
+// in UTC — and the figure printed that instant on the reader's clock, to the
+// minute.
+test("a window resets on the company's calendar", () => {
+  const week = { ...window_("week", 630_000, 1_000_000), resets_at: "2031-05-04T15:00:00Z" };
+  expect(budgetLine(week, "Asia/Tokyo").figure).toBe("630k of 1M · resets May 5");
+  expect(budgetLine(window_("day", 1, 2), "Asia/Tokyo").figure).toBe(
+    "1 of 2 · resets at midnight (Asia/Tokyo)",
+  );
 });
 
 test("a seat nothing caps says so", async () => {

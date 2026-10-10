@@ -2232,7 +2232,9 @@ tinted by the state — the line, how long the turn has run, "Turn 2 · round 7 
 (`work_item_turns`) — then Reports to, Model (the phase chain from the public
 projection and the model serving the call in flight), one row per capped
 budget window labelled by its own period ("Budget today", "Budget this week")
-with a meter in the engine's state, or "No seat budget — the company's applies"
+with a meter in the engine's state and when it resets on the company's
+calendar ("630k of 1M · resets Oct 5", "resets at midnight (Asia/Tokyo)" for a
+day, as Spend › Budgets captions it), or "No seat budget — the company's applies"
 where only the company's ceilings bind it ("No budget" where nothing does),
 Running on (the node that holds the lease and since when for an operator;
 every other reader reads what the public health push says — this node by name,
