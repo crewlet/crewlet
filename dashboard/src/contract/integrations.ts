@@ -10,6 +10,20 @@
 
 import type { Coverage } from "./coverage.ts";
 
+/**
+ * Who has to act for a surface's phase to end, from `integration.Actors`, held
+ * by `internal/integration.TestTheDashboardKnowsExactlyTheActors`. `""` is
+ * nobody: a ready surface names no actor.
+ *
+ * TWO PEOPLE, KEPT APART BY NAME. `vendor_admin` is a person AT THE
+ * THIRD-PARTY APP — a Slack workspace admin, a GitHub organization owner —
+ * and `admin` is the company's own admin, whose fix is in this deployment's
+ * configuration. The bare word belongs to the company, because "admin" is a
+ * role a person holds here; a value that spelled the vendor's person the same
+ * way would send the company's admin to a console they may hold no account on.
+ */
+export type ReconcileActor = "" | "engine" | "provider" | "vendor_admin" | "admin";
+
 /** One observation a reconcile pass made that is not "fine". */
 export interface ReconcileFinding {
   kind: string;
@@ -42,7 +56,7 @@ export interface ReconcileFinding {
    * never as ready.
    */
   phase?: string;
-  actor?: string;
+  actor?: ReconcileActor;
   /**
    * Everything this finding is about, when there are many and `subject`
    * cannot name them all.
@@ -75,7 +89,12 @@ export interface ReconcileFinding {
  * that the surface is healthy.
  */
 export interface ReconcileStatus {
-  /** unconfigured | awaiting_admin | provisioning | activating | degraded | ready */
+  /**
+   * disconnecting | unconfigured | awaiting_admin | provisioning | activating
+   * | degraded | ready. `awaiting_admin` awaits the VENDOR's admin — its actor
+   * is always `vendor_admin` — and keeps its name because the phase words are
+   * the control plane's.
+   */
   phase: string;
   /**
    * The phase in a reader's words, from [integration.Phase.Label] in Go.
@@ -92,8 +111,8 @@ export interface ReconcileStatus {
    * the stored phase is still whatever the last reconcile concluded.
    */
   disconnecting?: boolean;
-  /** "" | engine | provider | admin | operator — who has to act. */
-  actor?: string;
+  /** Who has to act for the phase to end. */
+  actor?: ReconcileActor;
   detail?: string;
   action_url?: string;
   /** settled | waiting | blocked */

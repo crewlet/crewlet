@@ -1435,9 +1435,9 @@ func TestTheCheckIntervalDoesNotChangeTheOtherWaits(t *testing.T) {
 	if row.Report.Phase == PhaseReady {
 		t.Fatalf("the fixture settled, so this case asserts nothing: %+v", row.Report)
 	}
-	if !row.NextAttemptAt.Equal(now.Add(DefaultSchedule.AdminBase)) {
-		t.Fatalf("the next attempt is %s, want the admin cadence at %s",
-			row.NextAttemptAt, now.Add(DefaultSchedule.AdminBase))
+	if !row.NextAttemptAt.Equal(now.Add(DefaultSchedule.VendorAdminBase)) {
+		t.Fatalf("the next attempt is %s, want the vendor-admin cadence at %s",
+			row.NextAttemptAt, now.Add(DefaultSchedule.VendorAdminBase))
 	}
 }
 
@@ -1469,12 +1469,12 @@ func TestAnUnsetCheckIntervalTakesTheDefault(t *testing.T) {
 
 // A PERSON WHO JUST DID THE THING THE CARD ASKED FOR OUTRANKS THE BACKOFF.
 //
-// The admin cadence is a backoff from fifteen seconds to ten minutes, and
-// what it is backing off from is asking somebody to act at their third-party
-// app. So the instant they DO it is the instant the wait is longest and least
-// deserved: measured at a GitHub App installed in about eight seconds,
-// followed by several minutes of a card still asking for the install,
-// reloaded by hand, read as the install not having worked.
+// The vendor-admin cadence is a backoff from fifteen seconds to ten minutes,
+// and what it is backing off from is asking somebody to act at their
+// third-party app. So the instant they DO it is the instant the wait is
+// longest and least deserved: measured at a GitHub App installed in about
+// eight seconds, followed by several minutes of a card still asking for the
+// install, reloaded by hand, read as the install not having worked.
 //
 // Refresh says LOOK NOW and nothing else. It carries no installation id and
 // makes no claim, so the pass that follows is the ordinary verified one —

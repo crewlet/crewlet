@@ -126,7 +126,7 @@ func (r *Result) Findings() []integration.Finding {
 		// A SKIPPED TARGET IS NOT A BLOCK. An archived repository emits
 		// no events, so it has nothing to hook rather than a hook that
 		// failed — see [HookOutcome]. Reported as a block it parked the
-		// company in PhaseDegraded, retried on the admin backoff for
+		// company in PhaseDegraded, retried on the vendor-admin backoff for
 		// ever, over a repository that is finished.
 		if !hook.Blocks() {
 			continue

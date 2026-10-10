@@ -20,10 +20,10 @@ import (
 // every fault is a third-party app briefly unreachable. That reasoning is exactly
 // backwards for a refusal: the third-party app answered, and it will answer the same
 // way on every subsequent pass until a person changes the credential. The
-// screen told an operator the engine was working on it while the only action
-// that could fix it was theirs, and the dashboard drew it in the neutral tone
-// it reserves for work in flight.
-func TestARefusedCredentialIsTheOperatorsToFix(t *testing.T) {
+// screen told the company's admin the engine was working on it while the only
+// action that could fix it was theirs, and the dashboard drew it in the
+// neutral tone it reserves for work in flight.
+func TestARefusedCredentialIsTheAdminsToFix(t *testing.T) {
 	now := time.Now().UTC()
 	refused := fmt.Errorf("jira: GET /rest/api/3/myself: %w",
 		Reject(errors.New("401: Client must be authenticated"), 401))
@@ -36,9 +36,9 @@ func TestARefusedCredentialIsTheOperatorsToFix(t *testing.T) {
 		t.Errorf("phase = %q, want %q: a credential the third-party app refuses means this deployment cannot talk to the surface at all",
 			got.Report.Phase, PhaseUnconfigured)
 	}
-	if got.Report.Actor != ActorOperator {
+	if got.Report.Actor != ActorAdmin {
 		t.Errorf("actor = %q, want %q: no retry fixes a token the third-party app will not accept",
-			got.Report.Actor, ActorOperator)
+			got.Report.Actor, ActorAdmin)
 	}
 	if len(got.Findings) != 1 || got.Findings[0].Kind != FindingCredentialRejected {
 		t.Errorf("findings = %+v, want one %q", got.Findings, FindingCredentialRejected)
@@ -61,7 +61,7 @@ func TestAnUnreachableVendorIsStillAWait(t *testing.T) {
 
 // The status rule is one rule, and the statuses that are NOT refusals matter
 // as much as the ones that are: a rate limit and a 5xx both clear on their
-// own, and reporting either as the operator's job sends somebody to rotate a
+// own, and reporting either as the admin's job sends somebody to rotate a
 // working credential.
 func TestOnlyAuthStatusesAreRefusals(t *testing.T) {
 	base := errors.New("boom")
@@ -167,7 +167,7 @@ func TestAskingForATeardownDropsWhatTheLastPassFound(t *testing.T) {
 		Attempts:      4,
 		NextAttemptAt: time.Now().Add(9 * time.Minute),
 		Report: Report{
-			Phase: PhaseDegraded, Actor: ActorAdmin,
+			Phase: PhaseDegraded, Actor: ActorVendorAdmin,
 			Detail: "re-enable it at Datadog: this pass will not",
 		},
 	}

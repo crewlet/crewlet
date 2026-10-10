@@ -445,8 +445,8 @@ func (c *passConverger) Reconcile(ctx context.Context) ([]integration.Finding, e
 // resolveSeats, this node's wiring through its registry — so a seat whose
 // lookup fails produces two findings about one fact, and they do not even
 // agree about who has to act: the tracker's classifies as degraded and owed
-// by an ADMIN, the wiring's as provisioning and owed by the ENGINE. The
-// engine's outranks the admin's, so the card put "the engine is working on
+// by a VENDOR ADMIN, the wiring's as provisioning and owed by the ENGINE. The
+// engine's outranks the vendor admin's, so the card put "the engine is working on
 // it" in the headline and "a person must act at Atlassian" underneath it,
 // about one seat, for one transient reason.
 //

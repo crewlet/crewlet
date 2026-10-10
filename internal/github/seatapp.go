@@ -311,7 +311,7 @@ func (r *SeatAppResult) reconcileSeat(
 		// FOUND AND NOT WRITTEN DOWN. The click has been made; what
 		// failed is this engine's own write, so nothing an operator does
 		// at GitHub changes it and the install link would be wrong
-		// advice. Degraded and owed by an admin, because a store that
+		// advice. Degraded and owed by a person, because a store that
 		// keeps refusing this write is a fault somebody has to look at —
 		// and until it lands, every pass re-reads the same installation
 		// and the seat mints no token.

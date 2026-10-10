@@ -277,7 +277,7 @@ func personFindingsAreActionable(t TB, r Reconciler) {
 // suite it replaced did for all seven.
 //
 // So the world has to prove itself first. At least one finding, and at least
-// one a PERSON owes, because the cases below are about what an operator is
+// one a PERSON owes, because the cases below are about what a person is
 // told and a world whose only finding is "the third-party app is still
 // applying a grant" tells them nothing.
 func outstandingWorldReports(t TB, r Reconciler) {
@@ -296,7 +296,7 @@ func outstandingWorldReports(t TB, r Reconciler) {
 		}
 	}
 	t.Fatalf("the outstanding world reported %d finding(s) and none is owed by "+
-		"a person, so the case that checks what an operator is told has "+
+		"a person, so the case that checks what a person is told has "+
 		"nothing to check", len(findings))
 }
 

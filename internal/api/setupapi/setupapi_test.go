@@ -1023,7 +1023,7 @@ func TestAProvisionPassGetsASinkAndABase(t *testing.T) {
 // been: every vendor gates its registration on having one. The address is a
 // FACT, and withholding it made a check report the wrong one. A vendor reads
 // an empty base as "this deployment has no public base URL" and emits
-// ingress_blocked against integrations.public_base_url owed by an admin, and
+// ingress_blocked against integrations.public_base_url owed by a person, and
 // a check persists its findings through the same fold the loop uses — so
 // pressing Check on a healthy company wrote "every monitor that fires reaches
 // nobody" into the live status row and flipped the card to Action required

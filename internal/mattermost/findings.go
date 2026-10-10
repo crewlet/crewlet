@@ -69,9 +69,9 @@ func (r *Result) Findings() []integration.Finding {
 
 	// AND AN AGENT SOMEBODY DEACTIVATED AT MATTERMOST.
 	//
-	// identity_failed, owed to an ADMIN: the bot exists, it cannot sign in,
-	// and nothing this engine does will change that — re-enabling it is
-	// exactly the gesture it must not reverse, because a person made it on
+	// identity_failed, owed to a Mattermost ADMIN: the bot exists, it cannot
+	// sign in, and nothing this engine does will change that — re-enabling it
+	// is exactly the gesture it must not reverse, because a person made it on
 	// purpose. Said once per seat, because each is its own decision.
 	//
 	// It used to be reversed instead, silently and on every tick. See
@@ -91,10 +91,10 @@ func (r *Result) Findings() []integration.Finding {
 
 	// AND THE INSTANCE'S OWN SWITCHES, which no credential can get past.
 	//
-	// The ADMIN's, not the operator's: what has to happen is in somebody's
-	// System Console, which is what [integration.FindingApprovalRequired]
-	// names — a capability a person has to turn on at the third-party app
-	// before this engine can use it.
+	// A Mattermost ADMIN's, not the company admin's: what has to happen is
+	// in somebody's System Console, which is what
+	// [integration.FindingApprovalRequired] names — a capability a person has
+	// to turn on at the third-party app before this engine can use it.
 	for _, setting := range r.Disabled {
 		out = append(out, integration.Finding{
 			Kind:    integration.FindingApprovalRequired,

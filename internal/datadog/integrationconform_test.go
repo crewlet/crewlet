@@ -647,7 +647,7 @@ func convergedDatadog(t *testing.T, tb integrationtest.TB) *datadogWorld {
 //     back on has precisely this organization. The pass reports it and
 //     deliberately does not re-enable it, because undoing somebody's
 //     decommission is their decision, which is also what makes it stable
-//     here. It reads as identity_failed, owed by an admin.
+//     here. It reads as identity_failed, owed by a Datadog admin.
 //   - THIS DEPLOYMENT HAS NO PUBLIC BASE URL, so there is no address to point
 //     a webhook at and every monitor this company has fires into nothing. It
 //     is the fault an alerting integration is worst at showing, because

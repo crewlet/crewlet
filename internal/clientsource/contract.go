@@ -182,6 +182,7 @@ var contract = []Entry{
 	{"ReconcileFinding", ReadInterface, "internal/api/queries.TestTheIntegrationsRoomReadsWhatThisAnswerSends"},
 	{"IntegrationTool", ReadInterface, "internal/api/queries.TestTheIntegrationsRoomReadsWhatThisAnswerSends"},
 	{"IntegrationToolState", ReadUnion, "internal/integration.TestTheDashboardKnowsExactlyTheRollupStates"},
+	{"ReconcileActor", ReadUnion, "internal/integration.TestTheDashboardKnowsExactlyTheActors"},
 	{"INTEGRATION_TOOLS", ReadLiteral, "internal/integration.TestTheDashboardGroupsSurfacesAsTheEngineDoes"},
 
 	// memory.ts

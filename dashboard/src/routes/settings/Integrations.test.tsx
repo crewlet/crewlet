@@ -88,7 +88,7 @@ test("a blocked surface says what to do", () => {
     <Reconcile
       status={{
         phase: "degraded",
-        actor: "admin",
+        actor: "vendor_admin",
         detail: "swe has no Jira account, so no issue reaches it",
         action_url: "https://jira.example.com/admin",
         findings: [{ kind: "identity_failed", subject: "swe" }],
@@ -119,7 +119,7 @@ test("a finding the engine will not act on links to the app by name", () => {
       appName="Datadog"
       status={{
         phase: "degraded",
-        actor: "admin",
+        actor: "vendor_admin",
         detail: "sre's Datadog service account is disabled and was not disabled by this engine",
         findings: [
           {
@@ -137,20 +137,20 @@ test("a finding the engine will not act on links to the app by name", () => {
   expect(link.textContent).toContain("Datadog");
 });
 
-// AN OPERATOR'S OWN FINDING NAMES NO PLACE.
+// THE COMPANY ADMIN'S OWN FINDING NAMES NO PLACE.
 //
 // It read "you, in the company configuration", which named a place this
 // screen IS: the note sits inside the card whose Settings control opens the
 // very form the fix is made in, so it sent a reader looking elsewhere for
 // what was already in front of them. The finding's own sentence says what to
-// change, and the admin's clause stays because the third-party app is
-// genuinely somewhere else.
-test("a finding the operator owns carries no place to go", () => {
+// change. (The vendor admin's clause went too, for the reason the first case
+// above gives: the sentence already names which app.)
+test("a finding the company's admin owns carries no place to go", () => {
   render(
     <Reconcile
       status={{
         phase: "unconfigured",
-        actor: "operator",
+        actor: "admin",
         detail: "the webhook secret resolved to nothing",
       }}
     />,
@@ -167,7 +167,7 @@ test("the findings the phase was not derived from are still reachable", () => {
     <Reconcile
       status={{
         phase: "degraded",
-        actor: "admin",
+        actor: "vendor_admin",
         // THE REPORT'S DETAIL IS THE WINNING FINDING'S. Classify copies it,
         // which is what makes matching by identity possible at all.
         detail: "ceo needs maintainer",
@@ -195,7 +195,7 @@ test("the headline finding is matched by identity, not by position", () => {
     <Reconcile
       status={{
         phase: "unconfigured",
-        actor: "operator",
+        actor: "admin",
         detail: "the organization credential was refused",
         findings: [
           { kind: "grant_excess", subject: "ceo", detail: "ceo holds owner on api-gateway" },
@@ -222,7 +222,7 @@ test("a report counting its own kind still matches its finding", () => {
     <Reconcile
       status={{
         phase: "degraded",
-        actor: "admin",
+        actor: "vendor_admin",
         detail: "ceo needs maintainer (and 1 more)",
         findings: [
           { kind: "grant_short", subject: "ceo", detail: "ceo needs maintainer" },
@@ -418,7 +418,7 @@ test("a card's header says what the tool is, not what is wrong with it", () => {
     secret_usable: false,
     reconcile: {
       phase: "awaiting_admin",
-      actor: "admin",
+      actor: "vendor_admin",
       detail: "sre-lead has no GitHub App of its own",
     },
   });
@@ -531,7 +531,7 @@ test("the action follows the state", () => {
     rowsOf({
       key: "jira",
       configured: true,
-      reconcile: { phase: "degraded", actor: "admin", detail: "x" },
+      reconcile: { phase: "degraded", actor: "vendor_admin", detail: "x" },
     }),
     rolled("atlassian", "attention", "Action required", "x"),
   );
@@ -1855,14 +1855,14 @@ test("an advisory finding leaves the agent badged ready", () => {
           configured: true,
           reconcile: {
             phase: "ready",
-            actor: "admin",
+            actor: "vendor_admin",
             findings: [
               {
                 kind: "grant_excess",
                 subject: "sre-lead",
                 detail: "sre-lead holds more access than its role asks for",
                 phase: "ready",
-                actor: "admin",
+                actor: "vendor_admin",
               },
             ],
           },
@@ -1908,12 +1908,12 @@ test("a finding of a kind and phase this build does not know still un-readies th
           configured: true,
           reconcile: {
             phase: "degraded",
-            actor: "admin",
+            actor: "vendor_admin",
             findings: [
               {
                 kind: "something_newer",
                 phase: "something_newer",
-                actor: "admin",
+                actor: "vendor_admin",
                 subject: "sre-lead",
                 detail: "unknown",
               },
@@ -1957,7 +1957,7 @@ test("a finding renders its problem, subjects and remedy as separate parts", () 
       appName="GitHub"
       status={{
         phase: "awaiting_admin",
-        actor: "admin",
+        actor: "vendor_admin",
         detail: "4 agents have no GitHub App of their own",
         findings: [
           {

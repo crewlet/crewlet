@@ -2102,7 +2102,7 @@ var integrationCases = []fleetCase{
 		// marshals a phase, an actor, a sentence and a findings list into
 		// it, and a backend that re-encoded on the way through would
 		// hand the reader a document its producer never wrote.
-		const status = `{"kind":"gitlab","report":{"phase":"degraded","actor":"admin"}}`
+		const status = `{"kind":"gitlab","report":{"phase":"degraded","actor":"vendor_admin"}}`
 		h.putIntegration("gitlab", status)
 
 		got := h.integrations()

@@ -148,7 +148,7 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 		// reasoning is right about the PERMISSION and wrong about the FACT:
 		// a vendor reads an empty base as "this deployment has no public
 		// base URL" and reports ingress_blocked against
-		// integrations.public_base_url, owed by an admin — and `check`
+		// integrations.public_base_url, owed by a person — and `check`
 		// persists its findings through the same fold the loop uses. So
 		// pressing Check on a perfectly healthy company wrote "every
 		// monitor that fires reaches nobody" into the live status row and

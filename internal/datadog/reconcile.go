@@ -87,8 +87,8 @@ type Result struct {
 	// is a colleague at that app with history attached, and deleting one
 	// because a handle changed is not a decision a timer makes. It is an
 	// ADVISORY — [integration.FindingRegistrationOrphaned] is phase-ready,
-	// owed to an admin — so it says so without holding the surface out of
-	// Ready.
+	// owed to a Datadog admin — so it says so without holding the surface
+	// out of Ready.
 	Orphaned []User
 
 	// Notes are the caveats: a seat whose key is a literal, a role the
@@ -811,9 +811,9 @@ func (r *Result) Findings() []integration.Finding {
 	//
 	// AN ADVISORY, so it does not hold the surface out of Ready.
 	// [integration.FindingRegistrationOrphaned]'s verdict is phase-ready
-	// and admin-owed: nothing is broken, and nothing this engine runs will
-	// ever change it, so reporting it as a wait would leave somebody
-	// watching a retry that has nothing to retry.
+	// and owed to a Datadog admin: nothing is broken, and nothing this
+	// engine runs will ever change it, so reporting it as a wait would leave
+	// somebody watching a retry that has nothing to retry.
 	if len(r.Orphaned) > 0 {
 		addresses := make([]string, 0, len(r.Orphaned))
 		for _, user := range r.Orphaned {

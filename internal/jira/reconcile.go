@@ -342,7 +342,7 @@ func reconcile(ctx context.Context, opts Options) (*Result, error) {
 	if err != nil {
 		// The probe exists to fail here rather than midway, so what it
 		// reports has to say WHICH kind of failure it was: a refused
-		// credential is the operator's to fix and never clears on its
+		// credential is the company admin's to fix and never clears on its
 		// own, where an unreachable third-party app clears without anybody.
 		rejected := integration.Reject(err, Status(err))
 		return nil, fmt.Errorf(
@@ -386,8 +386,8 @@ func reconcile(ctx context.Context, opts Options) (*Result, error) {
 // The same rule checkProjects states below, applied to the half of the walk
 // that did not have it. Every lookup failure became the same empty Account,
 // which [Result.Findings] renders as `identity_failed` — "this seat has no
-// Jira account", owed by an ADMIN and never clearing on its own. That is a
-// true statement about a token the instance refused with a 401, and a
+// Jira account", owed by a Jira ADMIN and never clearing on its own. That is
+// a true statement about a token the instance refused with a 401, and a
 // fabrication about an instance that did not answer at all: one blip, or one
 // node shutting down mid-pass, reported every credentialled seat as an
 // account somebody has to go and create, and reported it with the transport

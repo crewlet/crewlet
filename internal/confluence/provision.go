@@ -269,7 +269,8 @@ func reconcileCloud(ctx context.Context, opts Options, base string, res *Result)
 	// unreachable code. And the two answers are opposite to the loop: an
 	// error is a FAULT, which Observe reports as the engine working on it
 	// and retries on the waiting backoff for ever, where an ingress block
-	// is degraded and owed by the admin who can grant the permission.
+	// is degraded and owed by the Confluence admin who can grant the
+	// permission.
 	//
 	// So a refusal is recorded per event and the walk continues, which is
 	// what the sibling github.ensureRepoWebhook does and what this file's
@@ -368,7 +369,7 @@ func refusal(err error) string {
 // — which is what the comment above this file's loop argues for. A context
 // that has been cancelled or has run out of time refuses all eight
 // identically, and recording it eight times says the instance blocked eight
-// event classes. FindingIngressBlocked is degraded and owed by an
+// event classes. FindingIngressBlocked is degraded and owed by a Confluence
 // ADMINISTRATOR, so that answer sends somebody to grant a permission that was
 // never missing, over a node that was merely shutting down.
 //
@@ -403,10 +404,10 @@ const dataCenterHookEvent = "all"
 // out of [Reconcile] as a FAULT. The two answers are opposite to the loop:
 // integration.Classify reads a fault as the engine still working on it and
 // retries it on the waiting backoff for ever, where FindingIngressBlocked is
-// degraded and owed by the ADMINISTRATOR who can grant that permission. So
-// the one person who could fix it was never told, on the deployment where it
-// is most likely — a self-hosted instance whose admin rights are somebody
-// else's to give.
+// degraded and owed by the Confluence ADMINISTRATOR who can grant that
+// permission. So the one person who could fix it was never told, on the
+// deployment where it is most likely — a self-hosted instance whose admin
+// rights are somebody else's to give.
 //
 // It is also worse here than on Cloud, and the finding says so: Cloud
 // registers one hook per event, so a refusal costs that event class alone,

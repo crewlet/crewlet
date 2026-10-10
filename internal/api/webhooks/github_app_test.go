@@ -205,8 +205,8 @@ func TestTheInstallArrivalStillNamesTheSeatAndTheWait(t *testing.T) {
 
 // THE INSTALL ARRIVAL ASKS THE LOOP TO LOOK NOW.
 //
-// Writing nothing was right and waiting was not. The admin cadence is a
-// backoff from fifteen seconds to ten minutes, and what it backs off from is
+// Writing nothing was right and waiting was not. The vendor-admin cadence is
+// a backoff from fifteen seconds to ten minutes, and what it backs off from is
 // asking a person to act at their third-party app — so the instant they do it
 // is the instant the wait is longest. Measured: an install finished in about
 // eight seconds, then minutes of a card still asking for it, reloaded by hand,

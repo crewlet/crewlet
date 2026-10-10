@@ -92,7 +92,7 @@ func TestADisabledInstanceSettingIsReportedToTheLoop(t *testing.T) {
 				t.Errorf("subject = %q, want the key somebody searches the "+
 					"System Console for", got.Subject)
 			}
-			if _, actor := got.Kind.Verdict(); actor != integration.ActorAdmin {
+			if _, actor := got.Kind.Verdict(); actor != integration.ActorVendorAdmin {
 				t.Errorf("owed by %s; the switch is in somebody's System "+
 					"Console, not in this deployment's config", actor)
 			}

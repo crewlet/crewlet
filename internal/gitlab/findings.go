@@ -107,8 +107,8 @@ func (r *Result) Findings() []integration.Finding {
 	// disconnect-then-reconnect leaves behind, because GitLab's
 	// service-account delete blocks rather than erases.
 	//
-	// identity_failed, and owed by an ADMIN: nothing this engine holds can
-	// undo it. Unblocking is an instance-admin route and the ordinary
+	// identity_failed, and owed by a GitLab ADMIN: nothing this engine holds
+	// can undo it. Unblocking is an instance-admin route and the ordinary
 	// deployment provisions with a group Owner token, so the honest answer
 	// is the account's name, the state GitLab reports, and the page where
 	// somebody who can change it goes.

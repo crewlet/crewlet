@@ -972,8 +972,8 @@ func TestACancelledCloudPassOverAConvergedSiteReportsAFaultRatherThanHealth(t *t
 // A per-event refusal is recorded and the walk carries on, which is right
 // when Confluence refused that registration. A dead context refuses all eight
 // identically, and recording it eight times reports FindingIngressBlocked —
-// degraded, owed by an ADMINISTRATOR — so a node shutting down sent somebody
-// to grant a permission that was never missing.
+// degraded, owed by a Confluence ADMINISTRATOR — so a node shutting down sent
+// somebody to grant a permission that was never missing.
 func TestACancelledCloudPassDoesNotBlameTheInstance(t *testing.T) {
 	t.Parallel()
 	for _, when := range []struct {
@@ -1077,10 +1077,10 @@ func TestAValueMintedBeforeAFailureIsStillFlushed(t *testing.T) {
 // Confluence Administrator global permission gets here — came out of
 // Reconcile as a fault. The loop reads a fault as the engine still working on
 // it and retries it on the waiting backoff for ever; FindingIngressBlocked is
-// degraded and owed by the ADMINISTRATOR who can grant that permission. So on
-// the deployment where missing admin rights are most likely, the one person
-// who could fix it was never told. The Cloud half of this same file has
-// answered correctly since it was written.
+// degraded and owed by the Confluence ADMINISTRATOR who can grant that
+// permission. So on the deployment where missing admin rights are most
+// likely, the one person who could fix it was never told. The Cloud half of
+// this same file has answered correctly since it was written.
 func TestARefusedDataCenterRegistrationIsBlockedIngressRatherThanAFault(t *testing.T) {
 	t.Parallel()
 	site := newCloudSite(t)

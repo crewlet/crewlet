@@ -85,6 +85,7 @@ import {
   type IntegrationRow,
   type IntegrationTool,
   type IntegrationToolState,
+  type ReconcileActor,
   type ReconcileFinding,
   type ReconcileStatus,
 } from "~/contract/integrations.ts";
@@ -265,25 +266,28 @@ export function phaseTone(phase: string): Tone {
 }
 
 /** Who has to act, phrased for the person reading it. */
-function actorLabel(actor: string | undefined): string {
+function actorLabel(actor: ReconcileActor | undefined): string {
   switch (actor) {
     case "engine":
       return "the engine is working on it";
     case "provider":
       return "the third-party app is applying it";
-    // THE ADMIN IS UNLABELLED TOO, on the same reasoning as the operator
-    // below. "you, at the third-party app" named a place the finding's own
-    // sentence already names — and names better, because it says WHICH app
-    // and what to do there — so the clause was a second, vaguer copy of the
-    // instruction sitting beside it.
+    // THE VENDOR'S ADMIN IS UNLABELLED TOO, on the same reasoning as the
+    // company's below. "you, at the third-party app" named a place the
+    // finding's own sentence already names — and names better, because it
+    // says WHICH app and what to do there, to a Slack workspace admin or a
+    // GitHub organization owner — so the clause was a second, vaguer copy of
+    // the instruction sitting beside it.
+    case "vendor_admin":
+      return "";
+    // THE COMPANY'S ADMIN IS UNLABELLED, and deliberately. "you, in the
+    // company configuration" named a place this screen IS: the note sits
+    // inside the card whose Settings control opens the very form the fix is
+    // made in, so it sent a reader looking elsewhere for what was already in
+    // front of them. The finding's own sentence says what to change; where is
+    // not a second fact worth a clause.
     case "admin":
       return "";
-    // THE OPERATOR IS UNLABELLED, and deliberately. "you, in the company
-    // configuration" named a place this screen IS: the note sits inside the
-    // card whose Settings control opens the very form the fix is made in, so
-    // it sent a reader looking elsewhere for what was already in front of
-    // them. The finding's own sentence says what to change; where is not a
-    // second fact worth a clause.
     default:
       return "";
   }

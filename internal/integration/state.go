@@ -366,11 +366,12 @@ func Observe(state State, kind Kind, findings []Finding, err error, now time.Tim
 	// the engine carried a count of ten into the wait for a PERSON and
 	// started it at the ceiling.
 	//
-	// That is the one cadence where the ceiling is wrong. The brisk admin
-	// interval exists so an operator who installs an app "sees provisioning
-	// continue without pressing anything", and inherited attempts skipped it
-	// entirely: the fast retries never happened, and the operator watched a
-	// screen that would not move for ten minutes.
+	// That is the one cadence where the ceiling is wrong. The brisk
+	// vendor-admin interval exists so somebody who installs an app at the
+	// vendor "sees provisioning continue without pressing anything", and
+	// inherited attempts skipped it entirely: the fast retries never
+	// happened, and they watched a screen that would not move for ten
+	// minutes.
 	if CadenceOf(state.Report) != was {
 		state.Attempts = min(state.Attempts, 1)
 	}
