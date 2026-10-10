@@ -464,7 +464,7 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 	case project == "":
 		return WriteResult{}, fmt.Errorf("tracker: a purge on task %s names no "+
 			"project", id)
-	case w.ActorKind != AuthorHuman && w.ActorKind != AuthorOperator:
+	case !w.ActorKind.Person():
 		// A PERSON OR A TOKEN, never an agent and never the engine: this
 		// is the one operation with no inverse, and the confirmation
 		// that licenses it is a person's.

@@ -15,11 +15,11 @@ import (
 // The operator surface's two identity questions on the WORK tools, which are
 // different questions with different answers.
 //
-// WHO MAY ACT is [builtin.Actor.Record] and [tracker.AuthorKind.Person]: a
-// lead relation is between two people in the org chart, and a token is in no
-// chart at all — so a lookup asked about the credential matches nobody however
-// the company is arranged, and a person acting through their own credential
-// carries an authority of their own beside it.
+// WHO MAY ACT is [builtin.Actor.Record] and [builtin.Actor.Admin]: a lead
+// relation is between two people in the org chart, and a token is in no chart
+// at all — so a lookup asked about the credential matches nobody however the
+// company is arranged, and an admin's key carries an authority of its own
+// beside it.
 //
 // WHOSE RECORD a gesture is about is [builtin.Actor.Record] again — a watch is
 // an ADDRESS, and the party registry resolves seats.
@@ -133,34 +133,51 @@ func TestABoundOperatorRoutesTheWorkTheirSeatLeads(t *testing.T) {
 	}
 }
 
-// AND A PERSON'S OWN CREDENTIAL CARRIES THE AUTHORITY WITHOUT ONE.
+// AND AN ADMIN'S KEY CARRIES THE AUTHORITY WITHOUT ONE — AND NOTHING ELSE DOES.
 //
-// The second arm, and it is the same pair `write_project` and `set_priorities`
-// resolve: a human at the dashboard and an operator token are both a PERSON
-// acting through their own credential, which [tracker.AuthorKind.Person] is
-// the predicate for. Without it a token nobody bound — a founder who never
-// wrote `contact.crewlet_operator_id`, an operator outside the chart — could
-// not re-route anything at all, because no ancestor walk can ever reach a
-// credential.
-func TestAPersonsOwnCredentialMayRerouteWithNoLeadRelation(t *testing.T) {
+// The second arm, and it is the same pair `write_project` resolves: an ADMIN's
+// key ([builtin.Actor.Admin]), whose reach is how the company is run, of which
+// where its work is filed is part (ADR-0031). Without it a key nobody linked —
+// a pipeline, an operator outside the chart — could not re-route anything at
+// all, because no ancestor walk can ever reach a credential.
+//
+// THE KIND OF WRITER IS NOT AN ARM. This used to admit every writer through a
+// person's own credential ([tracker.AuthorKind.Person]), from when every key
+// was an operator's; once a key could be a member's, every teammate could
+// point any team's work somewhere else. A member's key, and a person's seat,
+// that lead nothing are refused, naming who may.
+func TestOnlyAnAdminMayRerouteWithNoLeadRelation(t *testing.T) {
 	t.Parallel()
-	for name, actor := range map[string]func(
-		context.Context, *turnctx.Turn) (builtin.Actor, error){
-
-		"an unbound token":     unboundOperator,
-		"a human at the board": humanAtTheDashboard,
+	for name, tc := range map[string]struct {
+		actor   func(context.Context, *turnctx.Turn) (builtin.Actor, error)
+		allowed bool
+	}{
+		"an unlinked admin key": {unboundOperator, true},
+		"a member's linked key": {boundOperator, false},
+		"a human at the board":  {humanAtTheDashboard, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			trk := newFakeTracker()
 			// THE LOOKUP ANSWERS FALSE FOR EVERYBODY, so what admits
-			// the write is the person arm and nothing else.
+			// the write is the admin arm and nothing else.
 			spy := &leadSpy{handle: "nobody", project: "NONE"}
-			reg := operatorSurface(t, trk, actor, spy.leads)
+			reg := operatorSurface(t, trk, tc.actor, spy.leads)
 
-			if got := callNoTurn(t, reg, builtin.UpdateWorkItemTool, map[string]any{
+			got := callNoTurn(t, reg, builtin.UpdateWorkItemTool, map[string]any{
 				"item": "ENG-1", "routing_unit": "PLATFORM",
-			}); got.Failed {
+			})
+			if !tc.allowed {
+				if !got.Failed || got.Refusal != tools.RefusalForbidden ||
+					!strings.Contains(got.Output, "Only the lead of ENG or an admin") {
+					t.Fatalf("%s re-routed with no lead relation: %+v", name, got)
+				}
+				if len(trk.patched) != 0 {
+					t.Errorf("%s's refused re-route wrote %+v", name, trk.patched)
+				}
+				return
+			}
+			if got.Failed {
 				t.Fatalf("%s was refused the re-route: %s", name, got.Output)
 			}
 			if len(trk.patched) != 1 || trk.patched[0].RoutingUnit == nil {

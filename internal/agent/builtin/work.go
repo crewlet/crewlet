@@ -2527,22 +2527,21 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// task that still has an assignee.
 	if raw, held := args["routing_unit"]; held {
 		unit := strings.TrimSpace(argString(map[string]any{"v": raw}, "v"))
-		// EITHER AUTHORITY IS ENOUGH, and the operator half is why the
-		// lookup is not the whole answer: it resolves a lead from the ORG
-		// CHART by handle, and an operator's actor carries the TOKEN's own
-		// name. Asked about [Actor.Handle] it therefore answered false for
-		// every operator, a bound founder included, and the one surface a
-		// person re-routes from could not use the verb at all. Asked about
-		// [Actor.Record] it is the person behind the credential, and
-		// [tracker.AuthorKind.Person] is the arm for a human at the
-		// dashboard and for the token nobody bound — the same pair
-		// `write_project` resolves, for the same reason.
+		// EITHER AUTHORITY IS ENOUGH: the project's lead, from the ORG
+		// CHART — asked about [Actor.Record], the person behind the
+		// credential, since a token's own name is in no chart — or an
+		// ADMIN's key ([Actor.Admin]), the same pair `write_project`
+		// resolves, for the same reason: where the company's work is
+		// filed is part of how it is run, and an unlinked admin key leads
+		// nothing. A member's key is held to the chart; it used to be
+		// admitted as "a person's own credential", which let every
+		// teammate re-route any team's work.
 		lead := t.leads != nil && t.leads(ctx, actor.Record(), before.Task.Project)
-		if !lead && !actor.Kind.Person() {
-			return refused(tools.RefusalForbidden, fmt.Sprintf("Pointing %s at a different team is the "+
-				"lead of %s's decision, not yours. Ask them, or say in a "+
-				"comment why it belongs elsewhere.",
-				before.Task.Key, before.Task.Project)), nil
+		if !lead && !actor.Admin {
+			return refused(tools.RefusalForbidden, fmt.Sprintf("Only the lead of %s or "+
+				"an admin can point %s at a different team. Ask them, or say in "+
+				"a comment why it belongs elsewhere.",
+				before.Task.Project, before.Task.Key)), nil
 		}
 		// AND THE CHART'S OWN KEY IS WHAT LANDS, for the reason the
 		// filed unit above takes it: the wake resolves the stored value

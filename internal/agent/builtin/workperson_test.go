@@ -14,28 +14,37 @@ import (
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// AN OPERATOR WRITING SOMEBODY'S PRIORITIES CARRIES THE AUTHORITY TO DO IT.
+// SOMEBODY ELSE'S QUEUE IS ORDERED BY THE LEAD RELATION AND NOTHING ELSE.
 //
-// This is the wiring that decided whether the `prioritised` wake could fire at
-// all. `set_priorities` is registered on the operator MCP alone, and an
-// operator's actor is an API TOKEN's name — never a handle in the org chart —
-// so the lead lookup can never match it. With the tool sending only `Lead`,
-// the writer refused every cross-person write through the only surface that
-// exists, and omitting the handle silently wrote a person record for the
-// token instead of for a person.
-func TestAnOperatorCarriesTheAuthorityToWriteAPersonsPriorities(t *testing.T) {
+// The tool resolves the one authority the tracker's gate asks — whether the
+// person behind the key leads the handle being written, asked of the seat the
+// key is linked to ([builtin.Actor.Record]) — and hands it over as the whole of
+// the authority. WHAT THE KEY IS ADDS NOTHING: an admin's key reaches no
+// further into a person's own record than a member's (ADR-0031), and a writer
+// that leads nobody is refused exactly as a seat is. The arm this replaced
+// admitted every writer through a person's own credential, from when every key
+// was an operator's, and once a key could be a member's it let every teammate
+// re-order the founder's day.
+func TestOnlyTheLeadRelationIsAuthorityOverSomebodysQueue(t *testing.T) {
 	t.Parallel()
+	leads := func(_ context.Context, actor, handle string) bool {
+		return actor == "jane" && handle == "alice"
+	}
 	for name, tc := range map[string]struct {
-		kind       tracker.AuthorKind
-		wantPerson bool
+		actor builtin.Actor
+		lead  bool
 	}{
-		"an operator token": {tracker.AuthorOperator, true},
-		"a human":           {tracker.AuthorHuman, true},
-		// A SEAT CARRIES NEITHER unless it genuinely leads the handle,
-		// which the lead seam answers separately.
-		"a seat": {tracker.AuthorAgent, false},
+		"a person who leads them, through their own key": {builtin.Actor{Handle: "jane-key",
+			Kind: tracker.AuthorOperator, OperatorID: "jane-key", Seat: "jane"}, true},
+		"a member's key whose person leads nobody": {builtin.Actor{Handle: "rui-key",
+			Kind: tracker.AuthorOperator, OperatorID: "rui-key", Seat: "rui"}, false},
+		"an admin's key that leads nobody": {builtin.Actor{Handle: "ops",
+			Kind: tracker.AuthorOperator, OperatorID: "ops", Admin: true}, false},
+		"an admin whose person leads nobody": {builtin.Actor{Handle: "rui-key",
+			Kind: tracker.AuthorOperator, OperatorID: "rui-key", Seat: "rui", Admin: true}, false},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			person := &personSpy{}
 			reg := tools.NewRegistry()
 			for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
@@ -44,9 +53,10 @@ func TestAnOperatorCarriesTheAuthorityToWriteAPersonsPriorities(t *testing.T) {
 					Writer:       newFakeTracker().as,
 					PersonWriter: func(builtin.Actor) builtin.PersonWriter { return person },
 					Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
-						return builtin.Actor{Handle: "ops", Kind: tc.kind}, nil
+						return tc.actor, nil
 					},
 				},
+				Leads: leads,
 			}) {
 				if err := reg.Register(tool, tools.OriginBuiltin); err != nil {
 					t.Fatalf("register %s: %v", tool.Name(), err)
@@ -56,13 +66,12 @@ func TestAnOperatorCarriesTheAuthorityToWriteAPersonsPriorities(t *testing.T) {
 				"handle": "alice", "items": []any{"ENG-1"},
 			})
 			if got.Failed {
-				t.Fatalf("set_priorities failed: %q", got.Output)
+				t.Fatalf("set_priorities failed before the writer's gate: %q", got.Output)
 			}
-			if person.authority.Person != tc.wantPerson {
-				t.Errorf("authority.Person = %v, want %v — %s writing "+
-					"somebody else's queue reaches the writer's gate with "+
-					"this and nothing else",
-					person.authority.Person, tc.wantPerson, name)
+			if want := (tracker.PersonAuthority{Lead: tc.lead}); person.authority != want {
+				t.Errorf("the writer's gate was handed %+v, want %+v — %s writing "+
+					"alice's queue reaches it with this and nothing else",
+					person.authority, want, name)
 			}
 		})
 	}
@@ -332,10 +341,12 @@ func boundOperator(context.Context, *turnctx.Turn) (builtin.Actor, error) {
 }
 
 // unboundOperator is a token nobody is bound to — a pipeline, an operator
-// outside the org chart. An ordinary state, and not an error.
+// outside the org chart. An ordinary state, and not an error. An ADMIN's key,
+// because only one may act unbound: a member acts only as the person their key
+// is linked to, and is refused `unbound` at the surface before any tool runs.
 func unboundOperator(context.Context, *turnctx.Turn) (builtin.Actor, error) {
 	return builtin.Actor{
-		Handle: "ci", Kind: tracker.AuthorOperator, OperatorID: "ci",
+		Handle: "ci", Kind: tracker.AuthorOperator, OperatorID: "ci", Admin: true,
 	}, nil
 }
 

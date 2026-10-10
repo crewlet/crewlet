@@ -131,8 +131,8 @@ a planning meeting, and an instant would have to invent the hour and the zone
 that day ends in.
 
 - It is the **lead's**, set with `write_project(target_date: "2026-12-18")` by
-  the project's lead or a person acting through their own credential, and
-  refused for any other seat. It is not chart-owned: a config apply that
+  the project's lead (or anybody above them) or an admin, and refused for
+  anybody else. It is not chart-owned: a config apply that
   renames the project carries the target through untouched.
 - Given an **instant** instead, the write stores the day that instant falls on
   on the company's clock and says so in the answer's `warnings`. Anything that
@@ -154,20 +154,22 @@ Every item carries two units, and they answer different questions.
   the filed unit and moves when somebody re-routes the item
   (`update_work_item` with `routing_unit`).
 
-**Re-routing is the project lead's, or a person's own.** Pointing somebody
-else's work at another team is a decision about who owns it, so a **seat** may
-re-route only the work in a project it leads, or one an ancestor of it leads —
-every other seat is refused, and the refusal names the project whose lead to
-ask. A **person** acting through their own credential may re-route it: a human
-seat writing as themselves, or an API key on
-[the operator surface](#what-a-person-can-do). That is the same authority that
-declares a project's fields and orders somebody's queue, and an unlinked admin
-key holds it too — an operator outside the org chart is still the person
-running the company. (An unlinked member key reaches no operator surface at
-all: a member acts only as the person the key was issued to.) Where a key IS
-linked to a human seat with `contact.crewlet_operator_id`, the lead relation is
-resolved for **that person**, so a founder's own assistant re-routes as the founder rather than
-falling back on the credential's own authority.
+**Re-routing is the project lead's, or an admin's.** Pointing somebody
+else's work at another team is a decision about who owns it, so it is made by
+the lead of the item's project, or by anybody above that lead — a **seat** or a
+**person** alike — and every other writer is refused, the refusal naming the
+project whose lead to ask. Where a key on
+[the operator surface](#what-a-person-can-do) is linked to a human seat with
+`contact.crewlet_operator_id`, the lead relation is resolved for **that
+person**, so a founder's own assistant re-routes as the founder. Past the
+chart, an **admin's** key may re-route any work — where the company's work is
+filed is part of how it is run, and an unlinked admin key, a pipeline or an
+operator outside the chart, leads nothing — and that is the same authority
+that declares a project's fields. A **member's** key carries nothing past its
+person's place in the chart: being a person in the company does not make every
+team's work theirs to point elsewhere. (An unlinked member key reaches no
+operator surface at all: a member acts only as the person the key was issued
+to.)
 
 **You rarely state either.** An item filed with no `unit` is filed into the
 team that owns its project — the one the org chart gave the project — so a
@@ -955,16 +957,16 @@ over the project's [files](#a-projects-files):
 | `list_work_items` | the query surface above, filtered any way a view can be — and every row filtered **on its own**, whatever a named view's own shape says: the grammar's `collapsed` default makes the filter a predicate on the ROOT and lets its whole subtree ride along unfiltered, which draws a board and misreports a list. An item's subtasks are asked for with `parent`, which that mode never applied to — including `preset=my_queue`, which is the seat's own open work. Beside the obvious filters it takes `type`, `priority`, `parent` (an item's subtasks), `reporter`, `watcher`, `unit`, the three date keys (`due`, `updated`, `created`), `sort`, `cursor` for the next page, and **`field_filters`** keyed by field slug — which is how a seat reaches the custom fields its company declares |
 | `get_work_item` | one task with its recent comments, history, links and **custom fields**. `include` narrows to the parts you need; `comments_cursor` pages back through a long thread; **`comment`** answers one comment by id and nothing else. **Nothing in the answer is cut**: every comment on a thread page is whole — a page holds as many as fit 16 KiB, at least one, and `comments_cursor` continues exactly where it stopped — and the description is whole too. The description is one of the `include` parts (`body`, `comments`, `history`, `links`, `fields`; all five by default), so that each part on its own always fits one answer: a read that names other parts says the description was left out and how large it is, rather than handing over an item that reads as having none. Each field value comes back with the slug, name and type that explain it, and says when it is **hidden** (its declaration was archived), **foreign** (mirrored in from another tracker) or **undeclared** (a value this company explains nowhere) |
 | `create_work_item` | file a task or a subtask. It lands in `todo` unless `status` names another — a board lane's **+** files into that lane in the one record, and an unknown status is refused by name. Left without an `assignee` it goes to the project's **default assignee** (the lead's `write_project` setting, read inside the create itself), and lands in triage — where the project's lead is told — only when the project names none, or names a seat that has since left the chart, which the answer's `warnings` say; the answer's `assignee` is who it was filed to. `fields` sets custom fields by **slug**, and the create is refused naming any the project requires and this call leaves out. It also takes the four **scheduling** arguments below, and `ask` (with an optional `decision`) to file the item **as a question** — see [Asking for a decision](#asking-for-a-decision) |
-| `update_work_item` | change any field, with an optional `if_match`. `routing_unit` points the item at another team and is the project **lead's or a person's own** — see [Which team an item belongs to](#which-team-an-item-belongs-to). `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked` and `linked_pages` arguments are **set-valued** — see below — and `fields` sets custom fields by slug, checked against each field's own declaration. It takes the four **scheduling** arguments too, where `null` on any of them CLEARS it. An `assignee` may carry a **`reason`** — one line, at most 500 characters, that the new assignee is woken with and the item's history shows beside the hand-off; a `reason` without an `assignee` is refused, because the explanation of any other change is a comment. **`checklist`** makes one change to the item's checklists — see [Checklists](#checklists) |
+| `update_work_item` | change any field, with an optional `if_match`. `routing_unit` points the item at another team and is the project **lead's or an admin's** — see [Which team an item belongs to](#which-team-an-item-belongs-to). `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked` and `linked_pages` arguments are **set-valued** — see below — and `fields` sets custom fields by slug, checked against each field's own declaration. It takes the four **scheduling** arguments too, where `null` on any of them CLEARS it. An `assignee` may carry a **`reason`** — one line, at most 500 characters, that the new assignee is woken with and the item's history shows beside the hand-off; a `reason` without an `assignee` is refused, because the explanation of any other change is a comment. **`checklist`** makes one change to the item's checklists — see [Checklists](#checklists) |
 | `create_work_item` and `update_work_item` | both take `fields`, keyed by field **slug** — see "What a field value may be" above |
 | `comment_on_work_item` | add to the thread, optionally as a **question** somebody owes an answer to (`ask`, with a `decision` when they have to choose) or as the **answer** that closes one (`answers`, with a `choice` naming an option — `body` is then optional) |
 | `search_work_items` | find an item by what it **says** — ranked over every item's title *and description*, which no filter reaches. `list_work_items`' own `text` is a substring of the key or title and cannot see a description at all, so the two are different questions: one narrows a board, the other ranks a corpus. It ranks `hybrid` — the words and, where the company has an embeddings provider, the meaning, fused (see [Search](search.md#three-modes-and-what-an-answer-says-it-served)). Its `text` is at most 400 bytes, the bound every search shares, and a longer one is refused naming the limit rather than cut. A node still building its index says so rather than answering empty, because "there is nothing" is what gets a duplicate filed, and an answer over part of the fleet carries a `partial` sentence for the same reason |
 | `merge_work_item` | fold a duplicate into the item that survives: the duplicate is linked to it, its **subtasks are re-parented onto it** (`move_subtasks`, true unless you say otherwise), and the duplicate is closed as `cancelled`. Nothing is destroyed and both histories stay readable. Closing a duplicate by hand instead leaves its subtasks under a closed parent, where nobody finds them. A subtask in the trash stays under the duplicate, where a restore finds it — a removed item is frozen. A merge that stops part-way (its node died, or the stream refused an append) is finished by the `tracker` duty on its first pass (every 15 minutes) after the merge's claim has lapsed — a minute after its holder's last heartbeat — so never beside a merge that is still running; a duplicate that is itself in the trash waits for its restore. A merge that would re-parent subtasks onto an item in **another project** is refused before it starts — a subtask under an item in another project is drawn under it on neither board — so move the duplicate first with `move_work_item` (its subtasks go with it), or merge with `move_subtasks: false` |
-| `move_work_item` | move a top-level item, with everything under it, to another project: each task in the subtree is re-keyed there (ENG-7 becomes OPS-3) with its old key still resolving, the tags the subtree carries are declared in the new project (a label the new project already gives a different tag refuses the move, naming both, before anything is written), and the people on the item are told. The item's project **lead's or a person's own**, as `routing_unit` is. A subtask does not move on its own — move its root. A move that stops part-way is finished by the same call, or by the `tracker` duty (see [how a move is carried out](#what-a-project-row-carries-about-its-work)) |
+| `move_work_item` | move a top-level item, with everything under it, to another project: each task in the subtree is re-keyed there (ENG-7 becomes OPS-3) with its old key still resolving, the tags the subtree carries are declared in the new project (a label the new project already gives a different tag refuses the move, naming both, before anything is written), and the people on the item are told. The item's project **lead's or an admin's**, as `routing_unit` is. A subtask does not move on its own — move its root. A move that stops part-way is finished by the same call, or by the `tracker` duty (see [how a move is carried out](#what-a-project-row-carries-about-its-work)) |
 | `get_work_catalogue` | the types a task may be and the fields it may carry |
 | `list_projects` | every project work is filed into, with how much work each holds — `task_counts` is `{todo, active, done, closed}`, so waiting work and started work are two numbers — when its work last changed and who changed it, its `target_date`, and who leads it. `archived` picks the set — `false` (the default) for the live ones, `only` for the retired ones alone, `true` for both — and `sort` orders the whole company before the page is taken (`key`, `name`, `unit`, `todo`, `active`, `done`, `closed`, `last_change`, `target`, each with an optional leading `-`), so `-todo` is where the pile actually is rather than the biggest of the fifty keys that sort first. A seat's answer carries **50** and says `total` beside `truncated` — narrow with `q` or `unit` — because a tool answer is read out of the turn's own context window |
 | `describe_project` | one project in full: the six statuses with what each means, the types it files, the fields grouped by which type they apply to (required first, with their options), its tags and its lead. Omitting the project means the seat's own |
-| `write_project` | a project's own settings. Declaring a **tag** is open to every seat; renaming or archiving one, declaring project fields, setting the default assignee and setting the **target date** are the project **lead's or a person's own**; archiving the project takes a person specifically |
+| `write_project` | a project's own settings. Declaring a **tag** is open to every seat; renaming or archiving one, declaring project fields, setting the default assignee and setting the **target date** are the project **lead's or an admin's**; archiving the project takes an admin specifically |
 | `task_activity` | what HAPPENED, in the order the log made it happen: every change to one task or one project, with who made it and exactly which fields moved |
 | `my_work` | everything this seat is expected to look at, in one call — see below |
 | `list_project_files` | a project's files in path order, a page at a time; `folder` narrows to the paths under one |
@@ -1121,9 +1123,11 @@ answer if there was no way to look them up first.
 one facet: declaring a tag. A project's name, purpose and owning unit are
 **chart-owned** — written by the epoch apply from the org chart and by nothing
 else — so nothing writes them here at all; its field declarations, its
-default assignee and its target date are the **lead's**, and archiving the project
-itself takes a person's own credential. Every one of those is gated inside the
-verb, and each refusal names who can.
+default assignee and its target date are the **lead's** (or an admin's), and
+archiving the project itself takes an **admin's** key: a project holds the
+company's tasks, and putting one out of circulation is a decision about the
+company rather than about how one team files its work. Every one of those is
+gated inside the verb, and each refusal names who can.
 
 The **default assignee** is who a task filed into the project with nobody named
 goes to — every create reads it inside its own snapshot, beside the archived
@@ -1437,8 +1441,9 @@ screens rather than one:
   unit has none, so the line says which unit owns it instead. A project nothing
   has been filed into says so and offers **New task**, rather than showing an
   empty list. **Edit project** sets or clears the target date
-  (`write_project{target_date}`) — the project's lead may, and so may a person
-  acting as themselves; a seat that does not lead the project is refused.
+  (`write_project{target_date}`) — the project's lead may, and so may anybody
+  above them or an admin; anybody else is refused, and the refusal names who
+  may.
 - **Search** (`#/work/search`) ranks the company's work against a phrase —
   **Hybrid** (the default: words and meaning, each ranked and then fused),
   **Keyword** (the words, BM25) or **Meaning** (`semantic`: what the text is
@@ -1778,7 +1783,7 @@ authorities over them — which is why they are three separate writes.
 |---|---|
 | **inbox** — read, unread, snoozed, and how far you have read | only on behalf of the person whose it is |
 | **pins** — pinned views and starred things | the same |
-| **queue** — the order you mean to work in | yours, **or** a lead's for somebody in their line, a human's, or an operator's |
+| **queue** — the order you mean to work in | yours, **or** a lead's for somebody in their line |
 
 Somebody else marking your work read is the one thing an inbox must never
 allow: the item is then gone from the only place you would have looked for it,
@@ -1786,10 +1791,11 @@ and nothing anywhere says who removed it. A pin is the same rule for the
 plainer reason — one somebody else can set is one that moves under you.
 
 The **queue is the exception**, and deliberately: telling somebody what to do
-next is what a lead is for. A **seat** is the one party that may not write
-somebody else's — an agent re-ordering a colleague's list is a hand-off in
-disguise, and it bypasses the guarded take and the reassignment budget that a
-real hand-off goes through.
+next is what a lead is for. Nobody else may — not a seat, where an agent
+re-ordering a colleague's list is a hand-off in disguise that bypasses the
+guarded take and the reassignment budget a real hand-off goes through, and not
+a person who leads nobody above them, whatever their key: a queue is part of a
+person's own record, which an admin's key reaches no further than a member's.
 
 Somebody else's write is **stamped** with who made it, so a person who starts
 the day on work they did not choose can see who chose it, and their own next

@@ -13,7 +13,7 @@ import (
 )
 
 // A CROSS-PROJECT MOVE CAN BE STARTED — by the lead of the item's project, or
-// by a person.
+// by an admin.
 //
 // The tracker's move carried a subtree, re-keyed it, left its old keys
 // resolving, marked a stopped walk and had a duty to finish one; and no tool,
@@ -36,7 +36,7 @@ func moveRegistry(t *testing.T, trk *fakeTracker, lead bool) *tools.Registry {
 	return reg
 }
 
-func TestAMoveIsTheItemsProjectLeadsOrAPersons(t *testing.T) {
+func TestAMoveIsTheItemsProjectLeadsOrAnAdmins(t *testing.T) {
 	t.Parallel()
 
 	t.Run("a seat that does not lead the project", func(t *testing.T) {
@@ -83,7 +83,7 @@ func TestAMoveIsTheItemsProjectLeadsOrAPersons(t *testing.T) {
 		}
 	})
 
-	t.Run("a person", func(t *testing.T) {
+	t.Run("an admin's key", func(t *testing.T) {
 		t.Parallel()
 		trk := newFakeTracker()
 		reg := tools.NewRegistry()
@@ -98,10 +98,38 @@ func TestAMoveIsTheItemsProjectLeadsOrAPersons(t *testing.T) {
 		got := callNoTurn(t, reg, tracker.MoveWorkItemTool,
 			map[string]any{"item": "ENG-1", "project": "OPS"})
 		if got.Failed {
-			t.Fatalf("an operator's move failed: %s", got.Output)
+			t.Fatalf("an admin's move failed: %s", got.Output)
 		}
 		if _, held := answerOf(t, got)["op_id"]; !held {
-			t.Error("an operator's move answers no op_id to finish it under")
+			t.Error("an admin's move answers no op_id to finish it under")
+		}
+	})
+
+	// A MEMBER'S KEY IS HELD TO THE CHART: being a person in the company
+	// does not make every team's board theirs to empty. It used to be
+	// admitted as "a person's own credential", from when every key was an
+	// operator's.
+	t.Run("a member's key whose person leads nothing", func(t *testing.T) {
+		t.Parallel()
+		trk := newFakeTracker()
+		reg := tools.NewRegistry()
+		for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
+			Work: builtin.WorkDeps{Reader: trk, Writer: trk.as, Moves: trk.moves,
+				Actor: boundOperator},
+			LeadsProject: func(context.Context, string, string) bool { return false },
+		}) {
+			if err := reg.Register(tool, tools.OriginBuiltin); err != nil {
+				t.Fatalf("register %s: %v", tool.Name(), err)
+			}
+		}
+		got := callNoTurn(t, reg, tracker.MoveWorkItemTool,
+			map[string]any{"item": "ENG-1", "project": "OPS"})
+		if !got.Failed || got.Refusal != tools.RefusalForbidden ||
+			!strings.Contains(got.Output, "Only the lead of ENG or an admin") {
+			t.Errorf("a member who leads nothing moved an item: %+v", got)
+		}
+		if len(trk.moved) != 0 {
+			t.Errorf("the refused move reached the tracker %d time(s)", len(trk.moved))
 		}
 	})
 }

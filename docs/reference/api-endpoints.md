@@ -3088,13 +3088,16 @@ you about it. An unlinked admin key is an operator outside the chart and writes
 its own record under its own id, which is ordinary. See
 [Humans in the org](../concepts/humans-in-the-org.md).
 
-A person's own credential also carries an **authority of its own**, bound or
-not, and it is the same one a human seat writing from the dashboard has: a
-re-route, a project's field declarations and somebody else's queue are open to
-a person where they are a lead's alone for a seat. A lead relation is between
-two people in the org chart, and a token nobody bound is in no chart — so
-without it an operator could not re-route the work they own, and with it the
-company's own credential is never locked out of its own tracker.
+Past the chart, an **admin's** key carries an authority of its own, bound or
+not: a re-route, a cross-project move, a project's field declarations, tags
+and target date, and archiving a project are open to an admin where they are
+a lead's alone for everybody else — they are how the company's work is filed,
+which is part of how it is run (ADR-0031), and a key nobody linked is in no
+chart, so without it a pipeline could never touch them. A **member's** key
+carries nothing past its person's place in the chart, and **nobody's** key
+carries anything over somebody else's queue: a person's queue is ordered by
+them and by the leads whose line they are in, an admin included, exactly as
+their inbox is read.
 
 The three person writes take **moves, not lists**, and each is resolved against
 the person's record as the write finds it — so two screens writing at once both

@@ -135,13 +135,12 @@ type TagAuthority struct {
 	// no chart.
 	Lead bool
 
-	// Operator reports whether the actor is acting through a person's own
-	// credential rather than as a seat, and is authority here in its own
-	// right — [ProjectAuthority] carries the same pair for the same
-	// reason. An operator is not a seat, so the chart lookup that resolves
-	// `Lead` answers false for one, and a gate on the lead alone refused
-	// every rename and archive the founder's own surface asked for.
-	Operator bool
+	// Admin reports whether the actor's credential holds the ADMIN role,
+	// and is authority here in its own right — [ProjectAuthority] carries
+	// the same pair for the same reason: an unlinked admin key (a
+	// pipeline, an operator outside the chart) leads nothing, and a gate on
+	// the lead alone refused every rename and archive it asked for.
+	Admin bool
 }
 
 // WriteTags applies one edit to a project's tag set.
@@ -160,15 +159,15 @@ func (w *Writer) WriteTags(ctx context.Context, opID, project string,
 	case edit.Empty():
 		return WriteResult{}, invalid("a tag edit of %s adds, "+
 			"renames and archives nothing", project)
-	case !authority.Lead && !authority.Operator &&
+	case !authority.Lead && !authority.Admin &&
 		(len(edit.Rename) > 0 || len(edit.Archive) > 0):
 		// THE REFUSAL NAMES WHO CAN, because a seat that hit it was
 		// tidying up and the answer is "ask the lead" rather than
 		// "you cannot".
-		return WriteResult{}, forbidden("renaming or archiving a tag of %s is "+
-			"the project lead's, or a person's own — it changes the word on "+
-			"every task already filed under it, and takes a filter off "+
-			"everybody's board. Adding a tag is open to every seat", project)
+		return WriteResult{}, forbidden("only %s's lead or an admin can rename "+
+			"or archive its tags — it changes the word on every task already "+
+			"filed under it, and takes a filter off everybody's board. Adding a "+
+			"tag is open to everybody", project)
 	}
 	subject := TagsSubject(project)
 	scope := ScopeSet{Subject: true, Container: project}

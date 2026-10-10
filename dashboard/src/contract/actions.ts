@@ -126,7 +126,7 @@ export const ACTIONS = {
     // "EDIT PROJECT" on a project's page: the lead's target date. A project's
     // settings are what every seat's tracker reads, so this is a COMPANY
     // write, offered only on the project's own page — and the engine decides
-    // who may make it (the project's lead, or a person acting as themselves).
+    // who may make it (the project's lead or anybody above them, or an admin).
     args: ["project", "target_date"],
     domain: "tracker",
     refreshes: [],

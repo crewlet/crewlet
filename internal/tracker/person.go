@@ -78,35 +78,27 @@ import (
 // A VALUE RATHER THAN A BOOL on the writer, because "may I set this person's
 // priorities" is a question about a PAIR — who is asking and about whom — and
 // the answer for one pair says nothing about another.
+//
+// # The lead relation and nothing else
+//
+// A person's queue is theirs and their leads' to order — the one cross-person
+// authority the chart gives — and no credential adds to it. There was a
+// second arm, `Person`, that let any actor writing through a person's own
+// credential order ANYBODY's queue, written when every API key was an
+// operator's; once a key could be a member's (ADR-0031), it let every
+// teammate re-order the founder's day. The bound person's own lead relation
+// is resolved by the caller for the seat the key is linked to, so a founder
+// ordering a report's queue through their own key is a lead like any other;
+// and an admin's key is reach over the engine, not over somebody else's
+// record, which the API's personal questions already hold (`viewerParty`).
+// A SEAT is the party this mostly refuses: an agent re-ordering a colleague's
+// list is a hand-off in disguise, bypassing the guarded take and the
+// reassignment budget.
 type PersonAuthority struct {
 	// Lead reports whether the actor leads the handle being written.
 	// Resolved by the caller from the org chart, because this package has
 	// no chart.
 	Lead bool
-
-	// Person reports an actor acting as a HUMAN or through a person's own
-	// credential, rather than as a seat.
-	//
-	// # Why this is a second authority rather than a special case of Lead
-	//
-	// Because it is a different question, and the chart cannot answer it.
-	// An operator's actor is an API TOKEN's name — it is not a handle in
-	// the chart, so no ancestor walk can ever match it, and `Lead` is
-	// false for every operator by construction.
-	//
-	// Without it the ONE shipped surface for this verb could not use it.
-	// `set_priorities` is registered on the operator MCP alone; an
-	// operator could therefore never satisfy `own || Lead`, so a founder
-	// re-ordering an agent's queue through the only tool that exists got
-	// "<token> is not <handle> and does not lead them" every time — while
-	// omitting the handle silently wrote a PERSON RECORD FOR THE TOKEN.
-	//
-	// The rule this restores is the design's own: a person's priorities
-	// are written by the owner, by lead-or-above, by a human, or by an
-	// operator. A SEAT is the one party that may not, which is the whole
-	// point — an agent re-ordering a colleague's list is a hand-off in
-	// disguise, bypassing the guarded take and the reassignment budget.
-	Person bool
 }
 
 // MaxSnoozeAhead bounds how far into the future an item may be snoozed.
@@ -416,13 +408,14 @@ func (w *Writer) WritePriorities(ctx context.Context, opID, handle string,
 	// notified that they had been given instructions by themselves.
 	own := w.Record() == handle
 	switch {
-	case !own && !authority.Lead && !authority.Person:
-		return WriteResult{}, forbidden("%s is a seat, is not %s and does not "+
-			"lead them, so it cannot set what %s does next — an agent "+
-			"re-ordering a colleague's list is a hand-off in disguise, and it "+
-			"bypasses the guarded take and the reassignment budget. A lead, a "+
-			"human or an operator may",
-			w.Actor, handle, handle)
+	case !own && !authority.Lead:
+		return WriteResult{}, forbidden("%s is not %s and does not lead them, "+
+			"so it cannot set what %s does next — a queue is ordered by its "+
+			"owner and by the leads whose line it is in, and an agent "+
+			"re-ordering a colleague's list is a hand-off in disguise that "+
+			"bypasses the guarded take and the reassignment budget. Only %s or "+
+			"one of their leads may",
+			w.Actor, handle, handle, handle)
 	case len(priorities) > MaxPriorities:
 		return WriteResult{}, invalid("%s's priority list carries "+
 			"%d items and the maximum is %d — a list longer than that is not "+

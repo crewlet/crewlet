@@ -44,7 +44,7 @@ eighteen in full.
 | `update_work_item` | Move it — status, assignee (with an optional `reason` the new assignee reads), priority, labels, links, one checklist change — with an optional `if_match` that refuses on a concurrent edit |
 | `comment_on_work_item` | Post to the thread. Mentions wake the seats they name; the turn's own key makes a re-run turn post once. `ask` puts a question to somebody and `decision` structures it as options; `answers` with `choice` answers one |
 | `merge_work_item` | Fold a duplicate into the item that survives — linked, its subtasks re-parented, and closed as `cancelled` |
-| `move_work_item` | Move a top-level item and its subtasks to another project, re-keyed there with the old keys still resolving — the project lead's or a person's own |
+| `move_work_item` | Move a top-level item and its subtasks to another project, re-keyed there with the old keys still resolving — the project lead's or an admin's |
 | `search_work_items` | Find an item by what it says, ranked over titles and descriptions |
 | `list_project_files` | A project's files — reports, specs, notes — in path order, a page at a time |
 | `read_project_file` | One file's text, a page at a time from an offset; bytes as base64 on request |

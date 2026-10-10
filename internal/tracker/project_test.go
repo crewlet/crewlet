@@ -41,10 +41,12 @@ func TestProjectPolicyIsTheLeads(t *testing.T) {
 	}
 }
 
-// TestArchivingAProjectTakesAPerson is the second gate, and it is named
+// TestArchivingAProjectTakesAnAdmin is the second gate, and it is named
 // separately because a lead who hits it DOES have authority over the other
-// three facets — "no" would send them looking in the wrong place.
-func TestArchivingAProjectTakesAPerson(t *testing.T) {
+// three facets — "no" would send them looking in the wrong place. Taking a
+// project out of circulation is a decision about the company rather than about
+// how one team files its work, so it is an admin's (ADR-0031).
+func TestArchivingAProjectTakesAnAdmin(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	archived := true
@@ -53,15 +55,15 @@ func TestArchivingAProjectTakesAPerson(t *testing.T) {
 	_, err := r.writer.WriteProject(t.Context(), "op-lead-archive", "ENG", edit,
 		tracker.ProjectAuthority{Lead: true})
 	if err == nil {
-		t.Fatal("a lead archived a project without a person's credential")
+		t.Fatal("a lead archived a project without an admin's key")
 	}
-	if !strings.Contains(err.Error(), "credential") {
-		t.Fatalf("the refusal does not say what is missing: %v", err)
+	if !strings.Contains(err.Error(), "only an admin can archive ENG") {
+		t.Fatalf("the refusal does not say who may: %v", err)
 	}
-	if _, err := r.writer.WriteProject(t.Context(), "op-operator-archive", "ENG",
-		edit, tracker.ProjectAuthority{Lead: true, Operator: true}); err != nil {
+	if _, err := r.writer.WriteProject(t.Context(), "op-admin-archive", "ENG",
+		edit, tracker.ProjectAuthority{Admin: true}); err != nil {
 
-		t.Fatalf("an operator could not archive a project: %v", err)
+		t.Fatalf("an admin could not archive a project: %v", err)
 	}
 	r.drain()
 
@@ -326,49 +328,48 @@ func TestProjectEditNamesAnUnknownProject(t *testing.T) {
 	}
 }
 
-// AN OPERATOR IS NOT A SEAT, and the gate that admitted only the lead refused
-// the one actor the whole operator surface exists for.
+// AN ADMIN IS AUTHORITY OVER A PROJECT'S POLICY BESIDE ITS LEAD, and a writer
+// that is neither is refused, told both ways in.
 //
-// It was reachable rather than theoretical: `/operator/mcp` resolves the lead
-// from the ORG CHART by handle and an operator token carries its own name
-// rather than a seat's, so the lookup answered false and `write_project` was
-// refused for every operator in every company — including the founder
-// declaring the fields a project files work under. The archive gate below it
-// already expected an operator, which is what made the hole visible: a person
-// could take a project out of circulation and could not say how its work was
-// filed.
-func TestAPersonsOwnCredentialIsAuthorityOverAProjectsPolicy(t *testing.T) {
+// The second arm is the admin ROLE (ADR-0031), not any person's credential: a
+// project's policy is part of how the company is run, and an admin key nobody
+// linked to a seat leads nothing in the chart, so without the arm a pipeline
+// could not declare the fields a project files work under. It used to be
+// granted to every actor writing through a person's own credential, from when
+// every key was an operator's — and once a key could be a member's, every
+// teammate could redeclare any project's fields.
+func TestAnAdminIsAuthorityOverAProjectsPolicy(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	who := "alice"
 	edit := tracker.ProjectEdit{DefaultAssignee: &who}
 
 	if _, err := r.writer.WriteProject(t.Context(), "op-operator", "ENG", edit,
-		tracker.ProjectAuthority{Operator: true}); err != nil {
+		tracker.ProjectAuthority{Admin: true}); err != nil {
 
-		t.Fatalf("an operator who does not lead ENG could not set its "+
+		t.Fatalf("an admin who does not lead ENG could not set its "+
 			"policy: %v", err)
 	}
 	r.drain()
 	if got := r.project(tracker.ProjectDetailQuery{Project: "ENG"}); got.DefaultAssignee != who {
 		t.Fatalf("default assignee = %q, want %q", got.DefaultAssignee, who)
 	}
-	// AND THE REFUSAL STILL NAMES BOTH WAYS IN, for the seat that is
-	// neither: "ask the lead" is the useful answer, and so is "or a person".
+	// AND THE REFUSAL NAMES BOTH WAYS IN, for the writer that is neither —
+	// a seat, or a member's key that leads nothing: "ask the lead" is the
+	// useful answer, and so is "or an admin".
 	_, err := r.writer.WriteProject(t.Context(), "op-seat", "ENG", edit,
 		tracker.ProjectAuthority{})
 	if err == nil {
-		t.Fatal("a seat that neither leads ENG nor holds a person's " +
-			"credential set its policy")
+		t.Fatal("a writer that neither leads ENG nor holds an admin's key set its policy")
 	}
-	if !strings.Contains(err.Error(), "person's own") {
-		t.Errorf("the refusal does not name the other way in: %v", err)
+	if !strings.Contains(err.Error(), "only ENG's lead or an admin") {
+		t.Errorf("the refusal does not name both ways in: %v", err)
 	}
 }
 
 // AND THE SAME FOR A TAG, which is the same gate one object over: renaming or
 // archiving a tag changes the word on every task already filed under it.
-func TestAPersonsOwnCredentialMayRenameATag(t *testing.T) {
+func TestAnAdminMayRenameATag(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	if _, err := r.writer.WriteTags(t.Context(), "op-add", "ENG",
@@ -383,13 +384,13 @@ func TestAPersonsOwnCredentialMayRenameATag(t *testing.T) {
 	if _, err := r.writer.WriteTags(t.Context(), "op-seat-rename", "ENG",
 		rename, tracker.TagAuthority{}); err == nil {
 
-		t.Fatal("a seat that neither leads ENG nor holds a person's " +
-			"credential renamed one of its tags")
+		t.Fatal("a writer that neither leads ENG nor holds an admin's key " +
+			"renamed one of its tags")
 	}
-	if _, err := r.writer.WriteTags(t.Context(), "op-operator-rename", "ENG",
-		rename, tracker.TagAuthority{Operator: true}); err != nil {
+	if _, err := r.writer.WriteTags(t.Context(), "op-admin-rename", "ENG",
+		rename, tracker.TagAuthority{Admin: true}); err != nil {
 
-		t.Fatalf("an operator could not rename a tag: %v", err)
+		t.Fatalf("an admin could not rename a tag: %v", err)
 	}
 }
 

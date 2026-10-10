@@ -28,14 +28,14 @@ import (
 // existed, and so did the documentation of what it leaves behind when it
 // stops part of the way through; nothing could start one.
 //
-// # Why it is a lead's, or a person's
+// # Why it is a lead's, or an admin's
 //
 // Moving work to another project hands it to another team's board, which is
 // the decision `routing_unit` already puts behind the project's LEAD — a
 // re-route is this without the re-key. The same two arms apply for the same
 // reasons: the lead of the project the item is in, asked about the person
-// behind the credential ([Actor.Record]), or a person acting through their own
-// credential ([tracker.AuthorKind.Person]).
+// behind the credential ([Actor.Record]), or an admin's key ([Actor.Admin]),
+// since where the company's work is filed is part of how it is run.
 //
 // A MOVE INTO THE PROJECT THE ITEM IS ALREADY IN takes neither: it moves
 // nothing, and it is how the retry an unknown or a stopped move prescribes
@@ -134,11 +134,10 @@ func (t *moveWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		from = replacedKey(before.Task)
 	} else {
 		lead := t.leads != nil && t.leads(ctx, actor.Record(), before.Task.Project)
-		if !lead && !actor.Kind.Person() {
-			return refused(tools.RefusalForbidden, fmt.Sprintf("Moving %s out of %s is the lead of %s's "+
-				"decision, not yours. Ask them, or say in a comment where it "+
-				"belongs.", before.Task.Key, before.Task.Project,
-				before.Task.Project)), nil
+		if !lead && !actor.Admin {
+			return refused(tools.RefusalForbidden, fmt.Sprintf("Only the lead of %s or "+
+				"an admin can move %s out of it. Ask them, or say in a comment "+
+				"where it belongs.", before.Task.Project, before.Task.Key)), nil
 		}
 	}
 

@@ -50,7 +50,7 @@ var ErrReassignmentBudget = errors.New("tracker: this task has been handed on to
 
 // ErrForbidden reports a write this ACTOR may not make, whatever it carries:
 // somebody else's inbox, pins or priority list, a view protected for its owner,
-// a project's policy or tag vocabulary without the lead's or a person's own
+// a project's policy or tag vocabulary without the lead's or an admin's
 // authority.
 //
 // ITS OWN SENTINEL, and not the [statelog.ErrConflict] several of these used
@@ -1138,14 +1138,14 @@ func settleWatch(current Task, patch TaskPatch) (TaskPatch, error) {
 // an idempotent retry looks like, and charging it would let a redelivered
 // record exhaust a budget nobody used.
 func (w *Writer) chargeHandOff(current Task, patch TaskPatch) (TaskPatch, error) {
-	switch w.ActorKind {
-	case AuthorHuman, AuthorOperator:
+	switch {
+	case w.ActorKind.Person():
 		if current.Reassignments != 0 {
 			reset := 0
 			patch.Reassignments = &reset
 		}
 		return patch, nil
-	case AuthorAgent:
+	case w.ActorKind == AuthorAgent:
 		if patch.Assignee == nil || *patch.Assignee == current.Assignee {
 			return patch, nil
 		}
