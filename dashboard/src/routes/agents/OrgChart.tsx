@@ -359,7 +359,7 @@ export function OrgChart() {
           // node keeps the chart's neutral surface.
           cardTone={(id) => {
             const seat = chart.seats.get(id);
-            return seat ? seatTone(seat.kind) : undefined;
+            return seat ? seatTone(seat.kind, seat.avatar) : undefined;
           }}
           nodes={chart.nodes}
           cards={cards}
@@ -523,6 +523,7 @@ function SeatRowCell({
         name={seat.name}
         size="sm"
         kind={human ? "human" : "agent"}
+        avatar={seat.avatar}
         {...(ring ? { ring } : {})}
         decorative
       />
@@ -784,7 +785,7 @@ function SeatNode({
         }}
       >
         <OrgNodeLabel
-          {...seatMark(seat.kind)}
+          {...seatMark(seat.kind, seat.avatar)}
           name={seat.name}
           caption={
             state === undefined ? (

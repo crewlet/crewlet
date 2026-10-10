@@ -3,11 +3,13 @@
  *
  * What these protect: the name starts free and a taken name offers the next
  * free one with the rule that makes names unique; what is added lands at the
- * end of the parent's list under a key minted for it, as the kind chosen; and
- * a refusal keeps the dialog open instead of adding nothing silently.
+ * end of the parent's list under a key minted for it, as the kind chosen; an
+ * agent is added wearing the look it was suggested or given, and nothing else
+ * wears one; and a refusal keeps the dialog open instead of adding nothing
+ * silently.
  */
 
-import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { AddNodeDialog } from "./AddNodeDialog.tsx";
 import { isMintedKey } from "./model/keys.ts";
@@ -52,6 +54,44 @@ test("an agent seat is added at the end of its unit under a minted key, with a n
   });
   expect(op?.type === "addSeat" && isMintedKey(op.key)).toBe(true);
   expect(view.onClose).toHaveBeenCalledTimes(1);
+});
+
+test("an agent is added wearing the look it was suggested: a character no agent wears yet", () => {
+  // Every agent in the fixture chose nothing, so each is drawn as the Crewlet,
+  // and six of them have moved the colour once round the six.
+  const view = open(keyedState(fixtureCompany()), "unit:Sales");
+  expect(screen.getByRole("radio", { name: "Hexlet", checked: true })).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: "Add agent seat" }));
+  const op = view.state().log.ops[0];
+  expect(op?.type === "addSeat" && op.data.avatar).toEqual({
+    character: "hexlet",
+    color: "purple",
+  });
+});
+
+test("an agent is added wearing the character and colour its author chose", () => {
+  const view = open(keyedState(fixtureCompany()), "unit:Sales");
+  fireEvent.click(screen.getByRole("radio", { name: "Foxlet" }));
+  fireEvent.click(
+    within(screen.getByRole("radiogroup", { name: "Color" })).getByRole("radio", { name: "Rose" }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Add agent seat" }));
+  const op = view.state().log.ops[0];
+  expect(op?.type === "addSeat" && op.data.avatar).toEqual({ character: "foxlet", color: "rose" });
+});
+
+test("a person and a unit are offered no look and added without one", () => {
+  for (const kind of ["human", "unit"] as const) {
+    const view = open(keyedState(fixtureCompany()), null, kind);
+    expect(screen.queryByRole("radiogroup", { name: "Character" }), kind).toBeNull();
+    expect(screen.queryByRole("radiogroup", { name: "Color" }), kind).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: kind === "human" ? "Add human seat" : "Add unit" }),
+    );
+    const op = view.state().log.ops[0];
+    expect(op && "data" in op && "avatar" in op.data, kind).toBe(false);
+    cleanup();
+  }
 });
 
 test("a taken name offers the next free one, with the rule that makes names unique", () => {

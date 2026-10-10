@@ -81,6 +81,7 @@ function ToolSkills() {
   );
   const name = (handle: string) => index.byHandle.get(handle)?.name ?? handle;
   const kindOf = (handle: string) => index.byHandle.get(handle)?.kind;
+  const avatarOf = (handle: string) => index.byHandle.get(handle)?.avatar;
   const loads = (row: PageSummary): SkillLoad[] | null =>
     listing.loadedBy ? (listing.loadedBy[row.id] ?? []) : null;
 
@@ -131,7 +132,7 @@ function ToolSkills() {
                       decorative
                       members={who.map((x) => ({
                         id: x.handle,
-                        ...seatBadge(name(x.handle), kindOf(x.handle)),
+                        ...seatBadge(name(x.handle), kindOf(x.handle), avatarOf(x.handle)),
                       }))}
                     />
                     <span className="truncate">

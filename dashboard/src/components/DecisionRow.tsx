@@ -37,6 +37,7 @@ import { firstLine } from "~/lib/format.ts";
 import { useMemo, type ReactNode } from "react";
 import { EMPTY_VALUE } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
+import type { AgentAvatar } from "~/lib/avatar.ts";
 import { href } from "~/app/router.tsx";
 import { RaiseBudgetButton } from "./budgetWrite.tsx";
 import { AnswerAskButtons, AnswerRunButton, AssignButton, ReplyAskButton } from "./writes.tsx";
@@ -244,7 +245,7 @@ function Row({
   line,
   actions,
 }: {
-  who: { name: string; kind: "agent" | "human" };
+  who: { name: string; kind: "agent" | "human"; avatar?: AgentAvatar | null };
   ring: "warning" | "danger";
   title: ReactNode;
   sub: ReactNode;
@@ -253,7 +254,7 @@ function Row({
 }) {
   return (
     <li className="decision-row">
-      <SeatAvatar name={who.name} kind={who.kind} ring={ring} size="md" />
+      <SeatAvatar name={who.name} kind={who.kind} avatar={who.avatar} ring={ring} size="md" />
       <div className="decision-body">
         <span className="decision-title">{title}</span>
         <span className="decision-sub">{sub}</span>
@@ -264,9 +265,12 @@ function Row({
   );
 }
 
-function seatOf(index: OrgIndex, handle: string): { name: string; kind: "agent" | "human" } {
+function seatOf(
+  index: OrgIndex,
+  handle: string,
+): { name: string; kind: "agent" | "human"; avatar: AgentAvatar | null } {
   const seat = index.byHandle.get(handle);
-  return { name: seat?.name ?? handle, kind: seat?.kind ?? "agent" };
+  return { name: seat?.name ?? handle, kind: seat?.kind ?? "agent", avatar: seat?.avatar ?? null };
 }
 
 /** A key, in the mono face every key is drawn in, linking to its item. */

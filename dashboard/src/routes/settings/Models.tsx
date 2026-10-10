@@ -505,7 +505,12 @@ function ModelPage({
                 floor: "10rem",
                 sortValue: (u) => u.seat.name,
                 cell: (u) => (
-                  <SeatCell handle={u.seat.handle} name={u.seat.name} kind={u.seat.kind} />
+                  <SeatCell
+                    handle={u.seat.handle}
+                    name={u.seat.name}
+                    kind={u.seat.kind}
+                    avatar={u.seat.avatar}
+                  />
                 ),
               },
               {

@@ -17,6 +17,14 @@
  * circle, and the word is their name. A name that is nothing but the word
  * keeps it, since an empty name draws the kit's anonymous badge instead.
  *
+ * # An agent is drawn as itself
+ *
+ * An agent seat carries the Crewlet character and the colour it was given
+ * ([AgentAvatar], off the org the engine publishes), and its badge draws that
+ * character on a plate of that colour in place of its initials. A badge handed
+ * no avatar (a seat the chart no longer holds, a name with no seat behind it)
+ * keeps the initials, and a person is always drawn as themself.
+ *
  * # What a reader hears is still the whole name
  *
  * The kit derives a badge's accessible name from the same `name` its initials
@@ -27,7 +35,8 @@
  */
 
 import type { ComponentProps } from "react";
-import { Avatar } from "@crewlethq/ui";
+import { Avatar, type AvatarStackMember } from "@crewlethq/ui";
+import type { AgentAvatar } from "~/lib/avatar.ts";
 
 /** The words an agent's name leads with that its squircle already says. */
 const KIND_WORD = /^agent(?:[\s._-]+)(?=\S)/i;
@@ -46,14 +55,30 @@ export function badgeName(name: string, kind: "human" | "agent"): string {
 
 type AvatarProps = ComponentProps<typeof Avatar>;
 
-/** A seat's badge. Takes the kit Avatar's props; `name` and `kind` are required. */
+/**
+ * A seat's badge. Takes the kit Avatar's props; `name` and `kind` are
+ * required, and `avatar` is how an agent is drawn where the chart holds one.
+ */
 export function SeatAvatar({
   name,
   kind,
+  avatar,
   decorative,
   ...rest
-}: Omit<AvatarProps, "name" | "kind"> & { name: string; kind: "human" | "agent" }) {
-  const badge = <Avatar {...rest} name={badgeName(name, kind)} kind={kind} decorative />;
+}: Omit<AvatarProps, "name" | "kind" | "character" | "hue"> & {
+  name: string;
+  kind: "human" | "agent";
+  avatar?: AgentAvatar | null | undefined;
+}) {
+  const badge = (
+    <Avatar
+      {...rest}
+      {...faceOf(kind, avatar)}
+      name={badgeName(name, kind)}
+      kind={kind}
+      decorative
+    />
+  );
   if (decorative) return badge;
   return (
     <span className="seat-avatar" role="img" aria-label={`${name} avatar`}>
@@ -62,16 +87,25 @@ export function SeatAvatar({
   );
 }
 
+/** The kit's character and hue for an agent drawn as itself; nothing for anybody else. */
+function faceOf(
+  kind: "human" | "agent",
+  avatar: AgentAvatar | null | undefined,
+): Pick<AvatarProps, "character" | "hue"> {
+  return kind === "agent" && avatar ? { character: avatar.character, hue: avatar.color } : {};
+}
+
 /**
- * The badge a kit component draws for a seat itself — `OrgLabel`'s `avatar` —
- * from the seat's name and the kind the chart holds. A kind the chart does not
- * hold takes the agent's squircle, the kit's own default: the engine runs
- * agents, and a person is always declared.
+ * The badge a kit component draws for a seat itself (an `AvatarStack`'s
+ * member) from the seat's name, the kind the chart holds and how an agent is
+ * drawn. A kind the chart does not hold takes the agent's squircle, the kit's
+ * own default: the engine runs agents, and a person is always declared.
  */
 export function seatBadge(
   name: string,
   kind: string | undefined,
-): { name: string; kind: "human" | "agent" } {
+  avatar?: AgentAvatar | null,
+): Pick<AvatarStackMember, "name" | "kind" | "character" | "hue"> & { kind: "human" | "agent" } {
   const k = kind === "human" ? "human" : "agent";
-  return { name: badgeName(name, k), kind: k };
+  return { name: badgeName(name, k), kind: k, ...faceOf(k, avatar) };
 }

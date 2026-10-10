@@ -703,6 +703,7 @@ function projectFacts(detail: WorkProjectDetail, chrome?: RowChrome): HeaderFact
           name={chrome?.seatName?.(detail.lead.handle) ?? detail.lead.handle}
           handle={detail.lead.handle}
           kind={chrome?.seatKind?.(detail.lead.handle)}
+          avatar={chrome?.seatAvatar?.(detail.lead.handle)}
         />
       ) : (
         <span className="muted">nobody</span>

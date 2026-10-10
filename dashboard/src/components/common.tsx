@@ -42,6 +42,7 @@ import {
   type Seat,
   type SeatKind,
 } from "~/lib/seats.ts";
+import type { AgentAvatar } from "~/lib/avatar.ts";
 import type { AgentRow, FeedRow } from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 
@@ -50,6 +51,7 @@ export function SeatChip({
   name,
   handle,
   kind,
+  avatar,
   size = "sm",
 }: {
   name: string;
@@ -64,6 +66,8 @@ export function SeatChip({
    * returns now, which is one spread and cannot be half-applied.
    */
   kind?: SeatKind;
+  /** How an agent is drawn, where the chart holds the seat: also off [seatLookup]. */
+  avatar?: AgentAvatar | null | undefined;
   size?: "sm" | "md";
 }) {
   const target = handle || name;
@@ -83,7 +87,13 @@ export function SeatChip({
           squircle — the engine runs agents, and a person is always declared.
           `decorative` because the name is printed immediately beside it —
           without it the row reads "Ada Lovelace avatar, Ada Lovelace". */}
-      <SeatAvatar name={name} size={size} kind={kind === "human" ? "human" : "agent"} decorative />
+      <SeatAvatar
+        name={name}
+        size={size}
+        kind={kind === "human" ? "human" : "agent"}
+        avatar={avatar}
+        decorative
+      />
       <span className="truncate">{name}</span>
     </a>
   );
@@ -131,6 +141,7 @@ export function SeatCard({
           name={seat.name}
           size="lg"
           kind={seat.kind === "human" ? "human" : "agent"}
+          avatar={seat.avatar}
           {...(tone ? { ring: tone } : {})}
           decorative
         />

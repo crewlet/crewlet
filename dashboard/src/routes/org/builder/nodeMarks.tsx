@@ -48,9 +48,9 @@ export function nodeGlyphKind(view: NodeView): NodeGlyphKind {
   return view.kind === "human" ? "human" : "agent";
 }
 
-/** The hue a node is drawn in: an agent seat's, or none. */
+/** The hue a node is drawn in: an agent seat's own colour, or none. */
 export function nodeTone(view: NodeView | undefined): TreeCardTone | undefined {
-  return view?.type === "seat" ? seatTone(view.kind) : undefined;
+  return view?.type === "seat" ? seatTone(view.kind, view.avatar) : undefined;
 }
 
 /** A seat's handle as written beside its name, or what stands in for one not reported yet. */

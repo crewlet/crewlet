@@ -21,12 +21,11 @@
 
 import type { KeyboardEvent, ReactNode } from "react";
 import { seatPath } from "~/lib/seats.ts";
-import { leadName, leadPill, leadSentenceOf } from "~/ui/orgNodes.tsx";
+import { NodeGlyph, leadName, leadPill, leadSentenceOf } from "~/ui/orgNodes.tsx";
 import type { AddKind, BuilderApi } from "./BuilderContext.tsx";
 import type { NodeView, SeatView, Structure, UnitView } from "./chartModel.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
 import type { Reorder } from "./reorder.ts";
-import { CrewletIcon } from "@crewlethq/icons";
 import {
   NetworkGlyph,
   ArrowDownGlyph,
@@ -36,7 +35,6 @@ import {
   PencilGlyph,
   FolderInputGlyph,
   UserGlyph,
-  BotGlyph,
 } from "@crewlethq/icons/glyphs";
 import { Kbd, isApplePlatform, type AddPillSection, type MenuEntry } from "@crewlethq/ui";
 
@@ -69,7 +67,7 @@ const deleteKey = () => (isApplePlatform() ? "Backspace" : "Delete");
  */
 const ADD_CHOICES: readonly { kind: AddKind; label: string; icon: ReactNode }[] = [
   { kind: "unit", label: "Add unit", icon: <NetworkGlyph /> },
-  { kind: "agent", label: "Add agent seat", icon: <CrewletIcon /> },
+  { kind: "agent", label: "Add agent seat", icon: <NodeGlyph kind="agent" /> },
   { kind: "human", label: "Add human seat", icon: <UserGlyph /> },
 ];
 
@@ -176,7 +174,7 @@ export function nodeMenu(api: BuilderApi, view: NodeView, open: OpenScreen): Men
     {
       key: "kind",
       label: view.kind === "human" ? "Change to agent seat" : "Change to human seat",
-      icon: view.kind === "human" ? <BotGlyph /> : <UserGlyph />,
+      icon: view.kind === "human" ? <NodeGlyph kind="agent" /> : <UserGlyph />,
       disabled: api.readOnly,
       onSelect: () => api.openChangeKind(view.key),
     },

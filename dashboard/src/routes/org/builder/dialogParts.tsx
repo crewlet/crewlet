@@ -28,7 +28,17 @@ import { CONTACT_IDENTITIES } from "./model/templates.ts";
 import type { PlacedProblem, ProblemLink } from "./model/problems.ts";
 import { strandedSentence, type StrandedSchedule } from "./preflight.ts";
 import { TOOL_NAMES, workingNote, type Tool } from "./nodeFacts.ts";
-import { Callout, FormField, InlineCode, Input, SegmentedControl } from "@crewlethq/ui";
+import {
+  Callout,
+  CharacterPicker,
+  FormField,
+  HuePicker,
+  InlineCode,
+  Input,
+  SegmentedControl,
+} from "@crewlethq/ui";
+import { AVATAR_CHARACTERS } from "~/contract/avatar.ts";
+import type { AgentAvatar } from "~/lib/avatar.ts";
 
 /** How deep an [EditorSection] sits inside others; 0 for one directly in a drawer or dialog. */
 const SectionDepth = createContext(0);
@@ -335,6 +345,55 @@ export function UnitTypeField({
         />
       )}
     </FormField>
+  );
+}
+
+/**
+ * How an agent seat is drawn: its Crewlet character and its colour, chosen
+ * here when the seat is added and in its editor after.
+ *
+ * TWO FIELDS, ONE PICTURE. The character grid draws every option in the
+ * colour chosen below it, so the grid is a preview of the agent it will be,
+ * and the colour row names each colour in words rather than asking for a
+ * swatch to be told apart. The characters offered are the contract's list,
+ * which the engine admits and the design system draws, both held by gates.
+ */
+export function AvatarField({
+  value,
+  onChange,
+  disabled = false,
+  characterError,
+  colorError,
+}: {
+  value: AgentAvatar;
+  onChange: (next: AgentAvatar) => void;
+  disabled?: boolean;
+  /** What the last check said about the character or the block. */
+  characterError?: string | undefined;
+  /** What the last check said about the colour. */
+  colorError?: string | undefined;
+}) {
+  return (
+    <div className="col gap-3">
+      <FormField label="Character" as="fieldset" error={characterError}>
+        <CharacterPicker
+          label="Character"
+          characters={AVATAR_CHARACTERS}
+          value={value.character}
+          hue={value.color}
+          disabled={disabled}
+          onValueChange={(character) => onChange({ ...value, character })}
+        />
+      </FormField>
+      <FormField label="Color" as="fieldset" error={colorError}>
+        <HuePicker
+          label="Color"
+          value={value.color}
+          disabled={disabled}
+          onValueChange={(color) => onChange({ ...value, color })}
+        />
+      </FormField>
+    </div>
   );
 }
 

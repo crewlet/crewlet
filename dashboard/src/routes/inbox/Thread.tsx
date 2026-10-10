@@ -203,6 +203,7 @@ function ThreadEntry({
       <SeatAvatar
         name={who?.name ?? comment.author}
         kind={who?.kind ?? "agent"}
+        avatar={who?.avatar}
         size={26}
         decorative
       />

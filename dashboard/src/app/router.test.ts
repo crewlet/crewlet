@@ -28,7 +28,15 @@ import {
   workspaceOf,
   workspaceRow,
 } from "./nav.ts";
-import { crumbsFor, titleOf } from "./crumbs.ts";
+import {
+  avatarLabel,
+  crumbsFor,
+  seatAvatarKey,
+  seatKindKey,
+  titleOf,
+  turnHandleKey,
+  turnSeatKey,
+} from "./crumbs.ts";
 import { CONTAINER_SHAPE, ITEM_KEY_SHAPE, KEY_SHAPE, resolve, resolves } from "./routes.ts";
 import { segmentsOf } from "~/test/routes.ts";
 
@@ -448,6 +456,34 @@ describe("the breadcrumb", () => {
     expect(named[named.length - 1]?.mono, "a name is not an identifier").toBeFalsy();
     const unit = crumbsFor(["agents", "teams", "Platform"]);
     expect(unit[unit.length - 1]?.mono, "a unit is addressed by its own name").toBeFalsy();
+  });
+
+  // A SEAT'S BADGE IN THE TRAIL IS THE ONE ITS PAGE DRAWS: an agent wears
+  // the character and colour its page published, on its own crumb and on the
+  // seat crumb of each of its turns, and a crumb with nothing published keeps
+  // the kit's defaults rather than a character the crumb made up.
+  test("an agent's crumb wears the character and colour its page published", () => {
+    const avatar = { character: "foxlet", color: "rose" } as const;
+    const labels = {
+      "agent-cto": "CTO",
+      [seatKindKey("agent-cto")]: "agent",
+      [seatAvatarKey("agent-cto")]: avatarLabel(avatar),
+    };
+    const seat = crumbsFor(["agents", "seats", "agent-cto"], labels);
+    expect(seat[seat.length - 1]?.seat).toEqual({ name: "CTO", kind: "agent", avatar });
+
+    const bare = crumbsFor(["agents", "seats", "agent-cto"], {
+      "agent-cto": "CTO",
+      [seatKindKey("agent-cto")]: "agent",
+    });
+    expect(bare[bare.length - 1]?.seat?.avatar).toBeUndefined();
+
+    const turn = crumbsFor(["live", "turns", "t-1"], {
+      [turnSeatKey("t-1")]: "CTO",
+      [turnHandleKey("t-1")]: "agent-cto",
+      [seatAvatarKey("agent-cto")]: avatarLabel(avatar),
+    });
+    expect(turn.find((c) => c.seat)?.seat).toEqual({ name: "CTO", kind: "agent", avatar });
   });
 
   // A SEGMENT THAT IS ITS OBJECT'S NAME IS DRAWN AS ONE. A node, a secret, a

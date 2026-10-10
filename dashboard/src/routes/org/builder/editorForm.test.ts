@@ -340,6 +340,34 @@ describe("a seat", () => {
       { type: "updateUnit", target: "unit:Ops", set: [{ path: ["space"], value: "OPS" }] },
     ]);
   });
+  // HOW AN AGENT IS DRAWN is written a half at a time, so a change of colour
+  // leaves the character to whatever the document says, its default included.
+  test("an agent's profile icon writes only the half that changed; a person has none", () => {
+    const initial = seatForm(dev(), "");
+    expect(initial.avatar).toEqual({ character: "crewlet", color: "purple" });
+    const recoloured = { ...initial, avatar: { character: "crewlet", color: "amber" } as const };
+    expect(seatParts("seat:dev", dev(), initial, recoloured, { editableHandle: false })).toEqual([
+      {
+        type: "updateSeat",
+        target: "seat:dev",
+        set: [{ path: ["avatar", "color"], value: "amber" }],
+      },
+    ]);
+    const redrawn = { ...initial, avatar: { character: "octlet", color: "blue" } as const };
+    expect(seatParts("seat:dev", dev(), initial, redrawn, { editableHandle: false })).toEqual([
+      {
+        type: "updateSeat",
+        target: "seat:dev",
+        set: [
+          { path: ["avatar", "character"], value: "octlet" },
+          { path: ["avatar", "color"], value: "blue" },
+        ],
+      },
+    ]);
+
+    const person: ConfigRole = { name: "Dev", kind: "human", contact: { github_login: "dev" } };
+    expect(seatForm(person, "").avatar).toBeNull();
+  });
 });
 
 describe("a unit and the company", () => {

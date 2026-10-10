@@ -295,6 +295,7 @@ function Band({
                   handle={bar.row.assignee}
                   seatName={chrome.seatName}
                   seatKind={chrome.seatKind}
+                  seatAvatar={chrome.seatAvatar}
                 />
               </a>
             ))}

@@ -376,6 +376,7 @@ function ToolBody({ name }: { name: string }) {
                   name={seat.name}
                   handle={seat.handle}
                   kind={seat.kind}
+                  avatar={seat.avatar}
                 />
               ))}
             </div>

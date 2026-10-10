@@ -100,7 +100,7 @@ export function LiveTurnRow({ row, index, now }: { row: AgentRow; index: OrgInde
   const doing = liveDoing(row, now, seat);
   const body = (
     <>
-      <SeatAvatar name={name} kind="agent" ring="info" size="sm" />
+      <SeatAvatar name={name} kind="agent" avatar={seat?.avatar} ring="info" size="sm" />
       <span className="live-body">
         <span className="live-head">
           <span className="live-name">{name}</span>

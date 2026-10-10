@@ -75,6 +75,7 @@ import { glyphFor } from "~/ui/glyph.tsx";
 import { SeatAvatar, seatBadge } from "~/ui/SeatAvatar.tsx";
 import { MaxStars, starredIn, useStarred, useToggleStar, type Star } from "~/lib/starred.ts";
 import { useAgents } from "~/lib/store-hooks.ts";
+import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { plural } from "~/lib/format.ts";
 import { useScrollEdges } from "~/lib/useScrollEdges.ts";
 import { foldTabs } from "../frame/tabFit.ts";
@@ -171,6 +172,7 @@ export function PageHeader({
  */
 export function WorkingNow() {
   const agents = useAgents();
+  const badgeOf = useSeatBadgeOf();
   const working = agents.filter((a) => a.activity === "working");
   if (working.length === 0) return null;
   return (
@@ -184,7 +186,7 @@ export function WorkingNow() {
         // here beside `SW` everywhere else the seat is drawn.
         members={working.map((a) => ({
           id: a.id,
-          ...seatBadge(a.role, "agent"),
+          ...seatBadge(a.role, "agent", badgeOf(a.handle || a.role).avatar),
           ring: "info" as const,
         }))}
       />
@@ -590,6 +592,7 @@ export function Breadcrumb({ crumbs }: { crumbs: Crumb[] }) {
               <SeatAvatar
                 name={crumb.seat.name}
                 kind={crumb.seat.kind}
+                avatar={crumb.seat.avatar}
                 size="xs"
                 decorative
                 className="crumb-seat"

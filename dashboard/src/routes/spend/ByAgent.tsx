@@ -143,6 +143,7 @@ export function ByAgent({
                     name={badge.name}
                     size="xs"
                     kind={badge.kind === "human" ? "human" : "agent"}
+                    avatar={badge.avatar}
                     ring={ring}
                     decorative
                   />

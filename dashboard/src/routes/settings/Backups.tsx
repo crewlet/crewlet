@@ -340,6 +340,7 @@ export function BackupRecord({ answer }: { answer: BackupsAnswer }) {
                     handle={r.actor_seat}
                     name={seat.name}
                     kind={seat.kind ?? "human"}
+                    avatar={seat.avatar}
                     title={`${seat.name}, through the operator token ${r.operator}`}
                   />
                 );

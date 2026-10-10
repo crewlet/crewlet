@@ -340,6 +340,7 @@ export function CommandPalette({
         <SeatAvatar
           name={seat.name}
           kind={seat.kind}
+          avatar={seat.avatar}
           size="xs"
           ring={seat.kind === "agent" ? ringOf(state) : undefined}
           decorative
@@ -552,6 +553,7 @@ export function CommandPalette({
           <SeatAvatar
             name={name}
             kind="agent"
+            avatar={seat?.avatar}
             size="xs"
             ring={ringOf(activityOf(row))}
             decorative

@@ -8,6 +8,7 @@
  * who is told instead: the page's watchers, and anybody @-mentioned.
  */
 
+import type { SeatBadge } from "~/lib/seats.ts";
 import { useId, useState } from "react";
 import { Button, Textarea } from "@crewlethq/ui";
 import { MessageSquareGlyph, XGlyph } from "@crewlethq/icons/glyphs";
@@ -18,7 +19,7 @@ import { fmtDateTime, relTime } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import type { PageComment } from "~/protocol/index.ts";
 
-type Who = (handle: string) => { name: string; kind?: "agent" | "human" };
+type Who = (handle: string) => SeatBadge;
 
 export function PageComments({
   pageID,

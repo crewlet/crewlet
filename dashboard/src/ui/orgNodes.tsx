@@ -21,7 +21,8 @@ import {
   type TreeCardContext,
   type TreeCardTone,
 } from "@crewlethq/ui";
-import { CrewletIcon } from "@crewlethq/icons";
+import { CrewletCharacter } from "@crewlethq/icons/characters";
+import { DEFAULT_AVATAR, type AgentAvatar, type AvatarCharacter } from "~/lib/avatar.ts";
 import {
   BuildingComplexGlyph,
   ChevronDownGlyph,
@@ -149,42 +150,63 @@ export type NodeGlyphKind = "company" | "unit" | "agent" | "human";
  * step leaves the air the boundary needs to read as a boundary. A caller that
  * says a size still gets it.
  */
-export function NodeGlyph({ kind, size }: { kind: NodeGlyphKind; size?: GlyphSize }) {
+export function NodeGlyph({
+  kind,
+  size,
+  character,
+}: {
+  kind: NodeGlyphKind;
+  size?: GlyphSize;
+  /** The Crewlet character an agent is drawn as; the original where it names none. */
+  character?: AvatarCharacter;
+}) {
   if (kind === "company") return <BuildingComplexGlyph size={size} />;
   if (kind === "unit") return <NetworkGlyph size={size} />;
   if (kind === "human") return <UserGlyph size={size ?? "sm"} />;
   const side = cssLength(size);
-  return <CrewletIcon width={side} height={side} />;
+  // COMPACT, because a node's mark is drawn at a glyph's size, where the
+  // keyline and the visor gap would be hairlines a screen blurs.
+  return (
+    <CrewletCharacter
+      character={character ?? DEFAULT_AVATAR.character}
+      detail="compact"
+      width={side}
+      height={side}
+    />
+  );
 }
 
 /**
- * The hue an agent seat is drawn in, on a chart's node and a table's row, as
- * the console chart draws one: in its scheme, purple by default. A seat here
- * carries no scheme of its own, so every agent takes the default, and a
- * person, a unit and the company stay on the chart's neutral surface.
+ * The hue an agent seat is drawn in, on a chart's node and a table's row: the
+ * colour its author chose for it ([AgentAvatar]), purple where it names none.
+ * It is the same colour as the seat's avatar everywhere else, so an agent is
+ * one colour wherever it appears; a person, a unit and the company stay on
+ * the chart's neutral surface.
  */
-export const AGENT_TONE: TreeCardTone = "purple";
-
-/** The hue a seat of this kind is drawn in: an agent's, or none. */
-export function seatTone(kind: string | undefined): TreeCardTone | undefined {
-  return kind === "human" ? undefined : AGENT_TONE;
+export function seatTone(
+  kind: string | undefined,
+  avatar: AgentAvatar | null | undefined,
+): TreeCardTone | undefined {
+  return kind === "human" ? undefined : (avatar ?? DEFAULT_AVATAR).color;
 }
 
 /**
- * The mark a seat leads with, in a chart's node or a table's row, as the
- * console chart draws one: the Crewlet figure for an agent, at the size a node
- * gives the thing the chart is about, and a person inside a dashed ring for a
- * human. A row draws the figure without its ring, which the design system
- * decides.
+ * The mark a seat leads with, in a chart's node or a table's row: an agent's
+ * own Crewlet character, at the size a node gives the thing the chart is
+ * about, and a person inside a dashed ring for a human. A row draws the
+ * character without its ring, which the design system decides.
  */
-export function seatMark(kind: string | undefined): {
+export function seatMark(
+  kind: string | undefined,
+  avatar: AgentAvatar | null | undefined,
+): {
   icon: ReactNode;
   iconSize: "md" | "lg";
   iconRing: boolean;
 } {
   const human = kind === "human";
   return {
-    icon: <NodeGlyph kind={human ? "human" : "agent"} />,
+    icon: <NodeGlyph kind={human ? "human" : "agent"} character={avatar?.character} />,
     iconSize: human ? "md" : "lg",
     iconRing: human,
   };

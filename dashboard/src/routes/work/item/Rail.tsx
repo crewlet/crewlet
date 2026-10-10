@@ -123,6 +123,7 @@ export function ItemRail({
   const can = Boolean(edits?.can);
   const seatName = chrome.seatName ?? ((h: string) => h);
   const seatKind = chrome.seatKind ?? (() => undefined);
+  const seatAvatar = chrome.seatAvatar ?? (() => undefined);
   const setBy = useMemo(() => attribution(detail.history), [detail.history]);
   const reporter = detail.reporter_seat || item.reporter;
   // NAMED THE WAY THE ROWS BESIDE IT NAME PEOPLE: the change log carries a
@@ -208,6 +209,7 @@ export function ItemRail({
                     name={seatName(item.assignee)}
                     handle={item.assignee}
                     kind={seatKind(item.assignee)}
+                    avatar={seatAvatar(item.assignee)}
                   />
                   <Tag appearance="outline" size="xs">
                     {seatKind(item.assignee) === "human" ? "person" : "agent"}
@@ -239,7 +241,12 @@ export function ItemRail({
           // it was bound to beside it, which is who the activity says filed
           // it. One person, one name on one page.
           value: reporter ? (
-            <SeatChip name={seatName(reporter)} handle={reporter} kind={seatKind(reporter)} />
+            <SeatChip
+              name={seatName(reporter)}
+              handle={reporter}
+              kind={seatKind(reporter)}
+              avatar={seatAvatar(reporter)}
+            />
           ) : undefined,
           setBy: by("reporter"),
         },
@@ -1004,6 +1011,7 @@ function Watching({ detail, chrome }: { detail: WorkItemDetail; chrome: RowChrom
               <SeatAvatar
                 name={seatName(handle)}
                 kind={chrome.seatKind?.(handle) === "human" ? "human" : "agent"}
+                avatar={chrome.seatAvatar?.(handle)}
                 size="xs"
               />
             </span>

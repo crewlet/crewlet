@@ -55,7 +55,13 @@ import {
   UserGlyph,
 } from "@crewlethq/icons/glyphs";
 import { href, useNavigator } from "~/app/router.tsx";
-import { seatKindKey, seatPlaceKey, seatUnitKey } from "~/app/crumbs.ts";
+import {
+  avatarLabel,
+  seatAvatarKey,
+  seatKindKey,
+  seatPlaceKey,
+  seatUnitKey,
+} from "~/app/crumbs.ts";
 import { ObjectTabs } from "~/app/frame/ObjectTabs.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
@@ -131,6 +137,7 @@ export function SeatScreen({ handle }: { handle: string }) {
       ? {
           [handle]: seat.name,
           [seatKindKey(handle)]: human ? "human" : "agent",
+          ...(seat.avatar ? { [seatAvatarKey(handle)]: avatarLabel(seat.avatar) } : {}),
           ...(seat.unit
             ? { [seatUnitKey(handle)]: seat.unit.name, [seatPlaceKey(handle)]: unitPath(seat.unit) }
             : {}),
@@ -402,6 +409,7 @@ function SeatHead({ seat, agent }: { seat: Seat; agent: AgentRow | undefined }) 
       <SeatAvatar
         name={seat.name}
         kind={human ? "human" : "agent"}
+        avatar={seat.avatar}
         size={60}
         {...(ring ? { ring } : {})}
         decorative

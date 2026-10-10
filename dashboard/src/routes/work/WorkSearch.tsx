@@ -335,7 +335,14 @@ export function WorkSearch() {
                 // through the chart before showing it.
                 cell: (r) => {
                   const who = r.assignee ? index.byHandle.get(r.assignee) : undefined;
-                  return <SeatCell handle={r.assignee} name={who?.name} kind={who?.kind} />;
+                  return (
+                    <SeatCell
+                      handle={r.assignee}
+                      name={who?.name}
+                      kind={who?.kind}
+                      avatar={who?.avatar}
+                    />
+                  );
                 },
               },
             ]}
