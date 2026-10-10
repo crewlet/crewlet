@@ -1182,8 +1182,10 @@ export function nameOfIn(index: OrgIndex): NameOf {
 /** Why a stopped seat cannot take work, in a sentence, keyed on the engine's reason. */
 export function stoppedLine(row: AgentRow | null | undefined, nameOf: NameOf = AS_WRITTEN): string {
   switch (row?.stopped_reason) {
-    case "paused":
-      return row.paused?.by ? `paused by ${nameOf(row.paused.by)}` : "paused";
+    case "paused": {
+      const by = pauserOf(row);
+      return by ? `paused by ${nameOf(by)}` : "paused";
+    }
     case "unplaced":
       return "not placed on any node";
     case "budget":
@@ -1193,6 +1195,30 @@ export function stoppedLine(row: AgentRow | null | undefined, nameOf: NameOf = A
     default:
       return "stopped";
   }
+}
+
+/**
+ * Who paused a seat, by handle, or "" where nobody did or a credential no seat
+ * binds did.
+ *
+ * READ FROM EITHER ROW THE ENGINE SENDS (ADR-0031): an admin's socket is sent
+ * the whole pause — who, when, why — as `paused`, and a member's the person
+ * alone as `paused_by`, because the reason a pause was given is the same for
+ * both and the record of it is not. Reading only `paused` drew every pause on
+ * a member's screen as "Paused" with nobody behind it.
+ */
+export function pauserOf(row: AgentRow | null | undefined): string {
+  return row?.paused?.by ?? row?.paused_by ?? "";
+}
+
+/**
+ * When a seat was paused, or "" where the row does not say: the pause's own
+ * instant on an admin's row, and on a member's the instant its state began —
+ * which, for a paused seat, is the pause.
+ */
+export function pausedAt(row: AgentRow | null | undefined): string {
+  if (row?.paused?.at) return row.paused.at;
+  return row?.stopped_reason === "paused" ? (row.since ?? "") : "";
 }
 
 /**
@@ -1220,8 +1246,10 @@ export function labelOf(
     case "stopped":
       switch (row?.stopped_reason) {
         case "paused": {
-          const by = row.paused?.by ? `Paused by ${nameOf(row.paused.by)}` : "Paused";
-          const since = row.paused?.at ? shortAge(row.paused.at, now) : "";
+          const pauser = pauserOf(row);
+          const at = pausedAt(row);
+          const by = pauser ? `Paused by ${nameOf(pauser)}` : "Paused";
+          const since = at ? shortAge(at, now) : "";
           return since ? `${by} · ${since}` : by;
         }
         case "unplaced":

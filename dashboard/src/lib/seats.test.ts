@@ -23,6 +23,7 @@ import {
   handleLabel,
   indexOrg,
   labelOf,
+  pausedAt,
   leadsInLine,
   liveOnItems,
   roundLabel,
@@ -533,6 +534,32 @@ describe("what a seat is doing", () => {
         now,
       ),
     ).toBe("Stopped");
+  });
+
+  test("a member's row names the pauser and the pause's age too", () => {
+    // A MEMBER IS SENT THE PAUSER ALONE (ADR-0031): `paused_by`, with no
+    // `paused` record — and the instant the seat's state began, which for a
+    // paused seat is the pause. Reading `paused` alone drew every pause on a
+    // member's screen as "Paused", with nobody behind it and no age.
+    const member = {
+      id: "a",
+      handle: "a",
+      role: "Dev A",
+      activity: "stopped" as const,
+      stopped_reason: "paused" as const,
+      paused_by: "jane-founder",
+      since: "2026-01-01T11:48:00Z",
+    };
+    const nameOf = (key: string) => (key === "jane-founder" ? "Jane Founder" : key);
+    expect(labelOf(member, now, nameOf)).toBe("Paused by Jane Founder · 12m");
+    expect(stoppedLine(member, nameOf)).toBe("paused by Jane Founder");
+    expect(stateLine(member, { now, nameOf })).toBe("Paused by Jane Founder · 12m");
+    // A CREDENTIAL NO SEAT BINDS paused it: the engine sends null, and the
+    // line says only that the seat is paused, and for how long.
+    expect(labelOf({ ...member, paused_by: null }, now, nameOf)).toBe("Paused · 12m");
+    // AND `since` IS THE PAUSE'S ONLY WHILE THE SEAT IS PAUSED: a working
+    // seat's `since` is when it started working, never an age of a pause.
+    expect(pausedAt({ ...member, activity: "working", stopped_reason: null })).toBe("");
   });
 
   test("a state line describes the engine's state and never invents one", () => {
