@@ -343,7 +343,7 @@ function TierACallout({ auth }: { auth: AccessAuth }) {
         </span>
         <span className="t-caption">
           {auth.anonymous_read
-            ? "Reads outside /config, /secrets and /setup are open without a token (allow_anonymous_read)."
+            ? "Reads are open without a token (allow_anonymous_read), except under /config, /secrets, /setup and /operator, the answers that describe the deployment (this page among them) and anything personal to one person, such as their inbox or their work."
             : "Every read needs a token (allow_anonymous_read is off)."}{" "}
           {origins.length
             ? `Browsers may also call from ${origins.join(", ")}.`
