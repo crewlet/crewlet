@@ -201,6 +201,28 @@ describe("what a change came to", () => {
     });
   });
 
+  // WHO MAY IS THE ENGINE'S TO SAY: a press on somebody else's seat, turn or
+  // run is refused by the tool that read it, in a sentence naming the people
+  // who may — and only the engine knows them, so the dashboard shows it as
+  // it stands rather than a "you can't" of its own.
+  test("a refusal naming who may is shown in the engine's own words", async () => {
+    const detail =
+      "Only Jane Founder or an admin can pause Agent SWE: whether a seat works is " +
+      "decided by the people it reports to, or by an admin. Nothing was changed.";
+    stub(async () => json({ error: "forbidden", tool: "pause_seat", detail }, 403));
+    const result = await act(
+      "pause_seat",
+      { handle: "agent-swe" },
+      { floors: new SessionFloors() },
+    );
+    expect(result).toMatchObject({
+      kind: "refused",
+      code: "forbidden",
+      sentence: detail,
+      retryable: false,
+    });
+  });
+
   test("a stale version is shown in the dashboard's words", async () => {
     stub(async () =>
       json({ error: "stale_version", tool: "update_work_item", detail: "if_match 3 ≠ 4" }, 409),

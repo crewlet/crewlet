@@ -47,9 +47,12 @@ type pauseRig struct {
 	tools map[string]tools.Callable
 }
 
+// newPauseRig is the pause tools as person, over a chart in which both people
+// these cases pause as — jane and omar — lead agent-cto, so the cases are about
+// what a pause does; who may make one is seatauthority_test.go's.
 func newPauseRig(t *testing.T, store builtin.SeatPauseStore, person string) *pauseRig {
 	t.Helper()
-	o := organization(t)
+	o := ledChart(t)
 	pub := &announced{}
 	rig := &pauseRig{pub: pub, tools: map[string]tools.Callable{}}
 	if s, ok := store.(coord.SeatPauses); ok {
@@ -187,7 +190,7 @@ func TestAPauseNamesAnAgentSeatAndALine(t *testing.T) {
 	}{
 		"no handle":       {map[string]any{}, tools.RefusalInvalid},
 		"no such seat":    {map[string]any{"handle": "nobody"}, tools.RefusalNotFound},
-		"a person's seat": {map[string]any{"handle": "founder"}, tools.RefusalNotFound},
+		"a person's seat": {map[string]any{"handle": "rui"}, tools.RefusalNotFound},
 		"a long reason": {map[string]any{"handle": "agent-cto",
 			"reason": string(make([]rune, builtin.MaxPauseReasonRunes+1))}, tools.RefusalInvalid},
 	} {

@@ -104,6 +104,9 @@ func EngineOperatorOptions(e *engine.Engine) operator.Options {
 			Queue:   e.Backends().Queue,
 		},
 		Actor: operator.WorkActor(opts.Org, opts.Env),
+		// THE CHART, to name who a question was put to when somebody else's
+		// answer is refused.
+		Org: opts.Org,
 	}
 	// AND A SEAT IS PAUSED OR RESUMED from here, on every node: the pause
 	// is the fleet's record, and each node holding or later acquiring the
@@ -118,11 +121,20 @@ func EngineOperatorOptions(e *engine.Engine) operator.Options {
 	// AND A NOTE REACHES A RUNNING TURN from here, on every node: it is
 	// scattered to the fleet and answered by the node running the turn,
 	// which is the only one that can hand it to the turn's next round.
+	//
+	// WHO MAY SEND ONE is decided here first, from the chart and from the
+	// item the turn is charged to — read through this node's estate router
+	// like every other operator read, so a node whose copy is out of service
+	// asks a peer rather than refusing a person who follows the item.
+	reader, readable := engine.OperatorWork(e)
 	opts.Steer = builtin.SteerDeps{
 		Asker: e.Backends().Queue,
 		Actor: operator.WorkActor(opts.Org, opts.Env),
+		Org:   opts.Org,
 	}
-	reader, readable := engine.OperatorWork(e)
+	if readable {
+		opts.Steer.Items = reader
+	}
 	writer, writable := engine.OperatorWorkWriter(e)
 	if readable && writable {
 		opts.Work = builtin.WorkDeps{

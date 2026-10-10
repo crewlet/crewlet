@@ -375,7 +375,9 @@ nothing is wrong with the node when a ceiling does its job.
 
 A person can **pause** a seat — from its profile, from their own assistant
 through the operator catalogue, or with `crewlet seats pause` — and resume it
-later. While it is paused the seat starts no new turn, its incoming mail waits
+later. Whether a seat works is decided by the people it reports to — anybody
+whose [line](organization-model.md#a-leads-line) it is in, so a founder at the
+root may pause any — and by an admin; anybody else is refused, naming who may. While it is paused the seat starts no new turn, its incoming mail waits
 on its inbox in order, and its scheduled runs are skipped. The turn it is on
 finishes first, unless the pause also asked to **stop** it (`stop_running`), in
 which case that turn ends at its next round.
@@ -430,7 +432,9 @@ stateDiagram-v2
 
 Short of stopping a turn, a person can **steer** it: send a note that the turn
 reads at its next round boundary and keeps to for the rest of the turn — from
-the live view, or from their own assistant with `steer_turn`. The note travels
+the live view, or from their own assistant with `steer_turn` — if they lead
+the seat, own, filed or follow the work item the turn is on, or hold an admin's
+key. The note travels
 on an ephemeral scatter to every node; the node running the turn is the one
 that answers, and the turn's own record says what became of it
 (`agent_turn_steered`: `delivered` at the round that read it, or `expired` when

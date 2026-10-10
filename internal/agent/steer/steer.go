@@ -40,7 +40,9 @@
 // already took is answered [StatusAccepted] and adds nothing: the note's id is
 // the person's request id, so a retry after an answer that was lost in transit
 // is the same note, and a turn that read the same instruction twice would act
-// on it twice.
+// on it twice. A fifth answer, [StatusRunning], is not an offer's at all: it is
+// what a node says to a request that only asked what the turn is (wire.go),
+// which the asker reads before deciding whether this person may steer it.
 package steer
 
 import (
@@ -90,11 +92,17 @@ const (
 	// StatusUnsupported — the turn runs where no round boundary is the
 	// engine's: an executor running as a coding CLI's own agentic loop.
 	StatusUnsupported Status = "unsupported"
+
+	// StatusRunning — the answer to a DESCRIBE (see wire.go): the turn is
+	// running on the answering node, which took nothing. A box never
+	// answers it; an offer is answered by one of the four above.
+	StatusRunning Status = "running"
 )
 
 // Statuses is every answer this build gives, in the order a reader's table
 // lists them.
-var Statuses = []Status{StatusAccepted, StatusFull, StatusClosed, StatusUnsupported}
+var Statuses = []Status{StatusAccepted, StatusFull, StatusClosed, StatusUnsupported,
+	StatusRunning}
 
 // Valid reports whether a status off the wire is one this build knows. A newer
 // peer may answer one it does not, and that must arrive as a value a caller

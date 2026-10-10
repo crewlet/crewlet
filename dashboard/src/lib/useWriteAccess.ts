@@ -33,10 +33,11 @@
  *    about what the screen is showing — and the SENTENCE is the screen's,
  *    since only the screen knows whose record it is.
  *
- * WHICH OBJECT A PERSON MAY ACT ON is none of these: whose queue they may
- * order, whose project's settings they may change, is the tool's own rule
- * over the chart, decided when the engine has read the object. Its refusal
- * comes back `forbidden` with the engine's own sentence, which the control
+ * WHICH OBJECT A PERSON MAY ACT ON is none of these: whose seat they may
+ * pause, whose run's question they may answer, whose queue they may order, is
+ * the tool's own rule over the chart, decided when the engine has read the
+ * object. Its refusal comes back `forbidden` with the engine's own sentence —
+ * "Only Jane Founder or an admin can pause Agent SWE" — which the control
  * draws as it is (`contract/errors.ts`), because the engine is the one that
  * knows who may.
  */

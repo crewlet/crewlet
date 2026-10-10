@@ -120,7 +120,8 @@ func WorkActor(chart func() *org.Organization, lookup org.EnvLookup) func(
 	context.Context, *turnctx.Turn) (builtin.Actor, error) {
 
 	return func(ctx context.Context, _ *turnctx.Turn) (builtin.Actor, error) {
-		id := auth.PrincipalFrom(ctx).ID
+		caller := auth.PrincipalFrom(ctx)
+		id := caller.ID
 		if id == "" {
 			return builtin.Actor{}, fmt.Errorf("operator: no key on this request")
 		}
@@ -128,8 +129,14 @@ func WorkActor(chart func() *org.Organization, lookup org.EnvLookup) func(
 		// is not a seat. A tracker whose author field is chosen by the
 		// writer is not an audit trail, so there is deliberately no way
 		// for a caller to name a seat to act as.
+		//
+		// AND WHETHER THE KEY IS AN ADMIN'S, off the same principal the
+		// guard resolved — the one authority a tool grants past the chart
+		// ([builtin.Actor.Admin]). Read here, beside the credential it is a
+		// fact about, so no tool reaches for the request on its own.
 		actor := builtin.Actor{
 			Handle: id, Kind: tracker.AuthorOperator, OperatorID: id,
+			Admin: caller.IsAdmin(),
 		}
 		if seat, pinned := pinnedSeat(ctx); pinned {
 			actor.Seat = seat

@@ -2992,9 +2992,11 @@ runs, its sentence naming who may (`Only an admin can call …`), and audited
 like any other call, with the key's role.
 
 The reach says who may call a tool at all. **Which object** a caller may act
-on — whose queue they may order, whose project's settings they may change —
-is the tool's own rule over the org chart, checked when it has read the object
-and refused `forbidden`.
+on — whose seat they may pause, whose turn they may steer, which run's
+question they may answer, whose queue they may order, whose project's settings
+they may change — is the tool's own rule over the org chart, checked when it
+has read the object and refused `forbidden`, the seat tools' sentences naming
+who may.
 
 Point any MCP client at it:
 
@@ -3202,8 +3204,20 @@ outcome is a delivery the broker never confirmed; answering again is
 harmless, because whichever copy arrives second finds that question no longer
 waiting.
 
+**It is answered by whoever it was put to.** The run's question was put to
+somebody when it parked — its requester, a manager, a team, a colleague by
+name, resolved against the chart and listed as the run's `audience_handles` —
+and that person answers it, under either of their names (their seat, or the
+key their own rows carry), as does an **admin**. Anybody else, a lead of the
+seat included, is refused `forbidden` with a sentence naming who it was put
+to ("Only Rui Santos or an admin can answer the question Agent SWE's coding run
+is waiting on…"), and nothing is delivered: an answer from somebody the run
+did not ask resumes it on a guess. It is the same rule that lists a run among
+the [`decisions`](#queries) waiting on a person, so nobody is shown a
+question they would then be refused the answer to.
+
 It refuses `not_running` for a run that is not waiting for an answer, or has no
-record at all (a run that ended has none). It is
+record at all (a run that ended has none), and `forbidden` as above. It is
 served on every company, native backends or not: the run record is the
 fleet's, and a company on Jira runs coding agents too.
 
@@ -3233,10 +3247,20 @@ announced once, as `seat_paused` or `seat_resumed`, by the caller whose
 compare-and-set won. `unknown` is a write the store may or may not have taken,
 and a retry is safe.
 
+**Who may.** Whether a seat works is decided by the people it reports to —
+anybody whose [line](../concepts/organization-model.md#a-leads-line) it is in,
+at any depth, so a founder at the root may pause any seat — and by an
+**admin**, who runs the engine its agents run on. Anybody else is refused
+`forbidden`, with a sentence naming the people above the seat, nearest first,
+and an admin ("Only Omar Lead, Jane Founder, or an admin can pause Agent
+CTO…"); an agent between them is not named, since no agent holds the tool.
+Pausing and resuming are one authority, so a seat one person stopped is never
+stuck behind them.
+
 They refuse `not_found` for a handle that names no agent seat (a person's seat
-takes no work a pause could hold), `invalid` for a reason past its bound,
-and `conflict` after losing four compare-and-sets in a row to other changes to
-the same pause.
+takes no work a pause could hold), `forbidden` as above, `invalid` for a
+reason past its bound, and `conflict` after losing four compare-and-sets in a
+row to other changes to the same pause.
 
 ### Steering a running turn
 
@@ -3262,11 +3286,29 @@ one note however often it is sent.
 back is indistinguishable from none, so the note may have been taken; sending it
 again is safe for that reason.
 
-It refuses `not_running` for a turn that has ended or parked, `conflict` for one
-already holding five notes it has not read yet (once it reads them, the note may
-be sent again), `steer_unsupported` for a turn whose executor runs as a coding
-CLI's own agentic loop — its rounds are the CLI's, and the engine has no round
-boundary to hand a note to — and `invalid` for an empty or oversized note.
+**Who may.** A note redirects work in flight, so it is for the people that
+work answers to: the people the turn's **seat** reports to (anybody whose
+[line](../concepts/organization-model.md#a-leads-line) it is in), the people on
+the **work item** the turn is charged to — whoever owns it, filed it or follows
+it without having muted it, under either of their names — and an **admin**.
+Both halves are facts about the turn, which runs on another node, so a caller
+who is not an admin is checked first: the fleet is asked what the turn is (its
+seat and its item) without offering it anything, this node decides from its
+own chart and tracker, and only then is the note offered. Anybody else is
+refused `forbidden` before anything is sent, naming who may ("Only Omar Lead,
+Jane Founder, whoever owns, filed or follows ENG-42, or an admin can steer
+Agent SWE's turn…"). A turn charged to an item in another tracker names only
+its seat's leads and an admin — there is nobody else this node could check.
+
+It refuses `not_running` for a turn that has ended or parked, `forbidden` as
+above, `conflict` for one already holding five notes it has not read yet (once
+it reads them, the note may be sent again), `steer_unsupported` for a turn whose
+executor runs as a coding CLI's own agentic loop — its rounds are the CLI's, and
+the engine has no round boundary to hand a note to — and `invalid` for an empty
+or oversized note. Whose turn it is that could not be checked — no node
+described it inside two seconds, or the item could not be read — is
+`unavailable`, with nothing sent: try again, and a turn that no longer runs
+anywhere will keep answering it.
 
 ### Answering a question from the company's knowledge
 

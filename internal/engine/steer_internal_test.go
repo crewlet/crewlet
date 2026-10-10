@@ -69,7 +69,7 @@ func TestOnlyTheSeatHolderAnswersASteer(t *testing.T) {
 		t.Cleanup(func() { _ = stop(context.Background()) })
 	}
 	box := steer.New()
-	running.register("run-1", "swe", box)
+	running.register("run-1", "swe", nil, box)
 
 	got := ask(t, other, "run-1", 0)
 	if len(got) != 1 {
@@ -94,7 +94,7 @@ func TestOnlyTheSeatHolderAnswersASteer(t *testing.T) {
 func TestAnEndedTurnIsAnsweredClosedForAWhile(t *testing.T) {
 	t.Parallel()
 	d := newSteerDesk()
-	d.register("run-1", "swe", steer.New())
+	d.register("run-1", "swe", nil, steer.New())
 	d.close("run-1")
 	status, handle, err := d.offer("run-1", steer.Note{ID: "n", Text: "x"})
 	if err != nil || status != steer.StatusClosed || handle != "swe" {
@@ -102,7 +102,7 @@ func TestAnEndedTurnIsAnsweredClosedForAWhile(t *testing.T) {
 	}
 	for i := range steerClosedMemory {
 		id := "later-" + string(rune('a'+i%26)) + string(rune('a'+i/26))
-		d.register(id, "swe", steer.New())
+		d.register(id, "swe", nil, steer.New())
 		d.close(id)
 	}
 	if _, _, err := d.offer("run-1", steer.Note{ID: "n", Text: "x"}); err == nil {
@@ -112,6 +112,122 @@ func TestAnEndedTurnIsAnsweredClosedForAWhile(t *testing.T) {
 	if len(d.closed) != steerClosedMemory || len(d.order) != steerClosedMemory {
 		t.Errorf("the desk remembers %d/%d ended turns, want %d", len(d.closed), len(d.order),
 			steerClosedMemory)
+	}
+}
+
+// describeOf asks the desk what a turn is, the way steer_turn does before it
+// offers anything.
+func describeOf(t *testing.T, d *steerDesk, turnID string) (steer.Reply, error) {
+	t.Helper()
+	raw, err := json.Marshal(steer.Request{Version: steer.WireVersion, TurnID: turnID, Describe: true})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	answer, err := d.answer(t.Context(), raw)
+	if err != nil {
+		return steer.Reply{}, err
+	}
+	var reply steer.Reply
+	if err := json.Unmarshal(answer, &reply); err != nil {
+		t.Fatalf("an unreadable reply: %v", err)
+	}
+	return reply, nil
+}
+
+// A DESCRIBE SAYS WHAT A TURN IS AND TAKES NOTHING.
+//
+// steer_turn asks it before offering a note, because who may steer a turn
+// depends on the seat it runs and the item it is charged to — and the asker
+// knows neither. It must not be an offer by another name: a note handed to a
+// turn before anybody decided its sender may send it is the steer the rule
+// exists to refuse. And an ended turn is still described, as closed, for the
+// reason an offer to one is answered closed rather than not at all.
+func TestADescribeSaysWhatATurnIsAndTakesNothing(t *testing.T) {
+	t.Parallel()
+	d := newSteerDesk()
+	item := &types.WorkItem{Backend: types.WorkNative, ID: "task-42", Key: "ENG-42", Project: "ENG"}
+	box := steer.New()
+	d.register("run-1", "swe", item, box)
+
+	got, err := describeOf(t, d, "run-1")
+	if err != nil || got.Status != steer.StatusRunning || got.AgentHandle != "swe" ||
+		got.WorkItem == nil || *got.WorkItem != *item {
+
+		t.Fatalf("a running turn is described %+v (%v), want running, its seat and its item", got, err)
+	}
+	if notes := box.Drain(); len(notes) != 0 {
+		t.Errorf("a describe handed the turn %+v", notes)
+	}
+
+	d.register("run-2", "qa", nil, steer.New())
+	if got, err := describeOf(t, d, "run-2"); err != nil || got.WorkItem != nil {
+		t.Errorf("a turn charged to nothing is described %+v (%v), want no item", got, err)
+	}
+
+	d.close("run-1")
+	if got, err := describeOf(t, d, "run-1"); err != nil || got.Status != steer.StatusClosed ||
+		got.AgentHandle != "swe" {
+		t.Errorf("an ended turn is described %+v (%v), want closed", got, err)
+	}
+	if _, err := describeOf(t, d, "run-unknown"); err == nil {
+		t.Error("a turn this node never ran was described rather than left unanswered")
+	}
+}
+
+// describingProvider has a person's tool ask what the turn is while its first
+// model call is in flight, and then fails that call.
+type describingProvider struct {
+	desk  *steerDesk
+	runID string
+	got   chan steer.Reply
+}
+
+func (describingProvider) Model() string { return "describing" }
+
+func (p describingProvider) Complete(ctx context.Context, _ llm.Request) (*llm.Completion, error) {
+	raw, _ := json.Marshal(steer.Request{Version: steer.WireVersion, TurnID: p.runID, Describe: true})
+	answer, err := p.desk.answer(ctx, raw)
+	if err != nil {
+		return nil, err
+	}
+	var reply steer.Reply
+	if err := json.Unmarshal(answer, &reply); err != nil {
+		return nil, err
+	}
+	p.got <- reply
+	return nil, &llm.Error{Kind: llm.KindFatal, Provider: "test", Model: "describing"}
+}
+
+// A TURN IS DESCRIBED WITH THE ITEM IT IS CHARGED TO — the one dispatch
+// resolved for it (ADR-0022), here a colleague's ask made from ENG-42 — because
+// that is the item a person who owns, filed or follows it may steer the turn
+// by. Filed with the box rather than looked up when asked, so the authority a
+// note is judged by is the charge the turn's own records carry.
+func TestATurnIsDescribedWithTheItemItIsChargedTo(t *testing.T) {
+	t.Parallel()
+	desk := newSteerDesk()
+	provider := describingProvider{desk: desk, runID: "run-1", got: make(chan steer.Reply, 1)}
+	e, _ := starting(t, modelsOf(t, provider))
+	e.steers = desk
+	item := &types.WorkItem{Backend: types.WorkNative, ID: "task-42", Key: "ENG-42", Project: "ENG"}
+	ask := events.New(types.A2ARequest{
+		ChannelID: "ch-1", Requester: "qa", SenderRole: "QA", Content: "is ENG-42 safe to ship?",
+		WorkItem: item, WorkItemBasis: types.BasisTrigger,
+	}, events.TraceContext{})
+	if _, err := e.runTurn(t.Context(), Request{
+		RunID: "run-1", Handle: "swe", WorkKey: "wk-1", Events: []*events.Event{ask},
+	}); err == nil {
+		t.Fatal("the turn succeeded; this case needs one whose model call fails")
+	}
+	select {
+	case got := <-provider.got:
+		if got.Status != steer.StatusRunning || got.AgentHandle != "swe" ||
+			got.WorkItem == nil || got.WorkItem.ID != item.ID {
+			t.Errorf("the running turn is described %+v, want running on swe, charged to %s",
+				got, item.Key)
+		}
+	default:
+		t.Fatal("the turn never reached its model call, so nothing described it")
 	}
 }
 
@@ -130,7 +246,7 @@ func TestAnAgentRuntimeTurnRefusesSteer(t *testing.T) {
 		t.Fatal("a native turn's box refuses notes")
 	}
 	d := newSteerDesk()
-	d.register("run-1", "swe", steerBox(launcherStub{}))
+	d.register("run-1", "swe", nil, steerBox(launcherStub{}))
 	status, _, err := d.offer("run-1", steer.Note{ID: "n", Text: "x"})
 	if err != nil || status != steer.StatusUnsupported {
 		t.Errorf("an agent-runtime turn answered (%s, %v), want unsupported", status, err)

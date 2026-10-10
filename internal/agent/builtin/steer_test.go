@@ -10,20 +10,22 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// fleetAsker answers a scattered note from a scripted set of replies, and
-// records what it was asked.
+// fleetAsker answers a scattered note from a scripted set of replies — and a
+// describe of the turn from another — and records what it was asked.
 type fleetAsker struct {
-	replies []steer.Reply
-	raw     [][]byte
-	err     error
-	asked   []steer.Request
-	subject string
-	want    int
+	replies   []steer.Reply
+	described []steer.Reply
+	raw       [][]byte
+	err       error
+	asked     []steer.Request
+	subject   string
+	want      int
 }
 
 func (a *fleetAsker) Ask(_ context.Context, subject string, request []byte, want int) ([][]byte, error) {
@@ -36,8 +38,12 @@ func (a *fleetAsker) Ask(_ context.Context, subject string, request []byte, want
 	if a.err != nil {
 		return nil, a.err
 	}
+	answers := a.replies
+	if req.Describe {
+		answers = a.described
+	}
 	out := append([][]byte(nil), a.raw...)
-	for _, r := range a.replies {
+	for _, r := range answers {
 		b, _ := json.Marshal(r)
 		out = append(out, b)
 	}
@@ -46,13 +52,18 @@ func (a *fleetAsker) Ask(_ context.Context, subject string, request []byte, want
 
 // steerTool is steer_turn on the operator catalogue, with the actor carrying
 // the operation the caller's transport named for the call — its note's id.
+//
+// AN ADMIN'S KEY, so these cases are about what becomes of a note and nothing
+// else: who may send one is seatauthority_test.go's, and an admin's note is
+// offered without describing the turn first.
 func steerTool(t *testing.T, asker builtin.FleetAsker, operation string) tools.Callable {
 	t.Helper()
+	o := organization(t)
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
 		Steer: builtin.SteerDeps{Asker: asker, Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
 			return builtin.Actor{Handle: "founder-token", Kind: tracker.AuthorOperator,
-				Seat: "founder", Operation: operation}, nil
-		}},
+				Seat: "founder", Operation: operation, Admin: true}, nil
+		}, Org: func() *org.Organization { return o }},
 	}) {
 		if tool.Name() == builtin.SteerTurnTool {
 			return tool

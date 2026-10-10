@@ -131,16 +131,12 @@ func (s Sources) sandboxRuns(ctx context.Context, p Params) (any, error) {
 // or is being resumed with it keeps the audience it was asked of, and listing
 // it would put a question the person already answered back in front of them.
 // The home screen's decisions read the same set ([sandbox.Awaiting]).
+//
+// WHO IT WAS PUT TO is the run's own rule ([sandbox.PendingRun.AskedOf]), the
+// one `answer_run` admits an answer by — so a person is never shown a question
+// they would then be refused the answer to.
 func putTo(run sandbox.PendingRun, who []string) bool {
-	if !slices.Contains(sandbox.Awaiting, run.Status) {
-		return false
-	}
-	for _, handle := range run.AudienceHandles {
-		if slices.Contains(who, handle) {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(sandbox.Awaiting, run.Status) && run.AskedOf(who)
 }
 
 func serialiseRun(run sandbox.PendingRun) map[string]any {

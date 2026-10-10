@@ -395,6 +395,19 @@ type Actor struct {
 	// operator MCP walks it with `org.Organization.SeatByOperatorID`.
 	Seat string
 
+	// Admin is whether the credential behind this actor holds the ADMIN
+	// role (ADR-0031): reach over how the company and its agents are RUN,
+	// which a person's place in the chart does not give them. It is the
+	// one authority a tool grants past the chart — an admin may pause any
+	// seat, steer any turn, answer any parked run — and it is never a
+	// person's: it says nothing about whose inbox or queue they may read,
+	// which stays the chart's. False for a seat and for a member's key.
+	//
+	// Set by the surface that resolved the credential, because this
+	// package holds no key: the operator surface reads it off the
+	// request's principal (`operator.WorkActor`).
+	Admin bool
+
 	// TurnID is the RUN that produced this write — provenance, so an
 	// audit can walk from an item back to the execution that wrote it.
 	TurnID string

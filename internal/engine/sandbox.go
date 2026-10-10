@@ -726,7 +726,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// Open once the segment is certain to run, for the reason its start is
 	// announced only now; closed the moment it returns, as on the dispatch
 	// path, with the defer as the backstop.
-	closeSteer := e.openSteer(in.Run.TurnID, in.Turn.Handle(), box, r)
+	closeSteer := e.openSteer(in.Run.TurnID, in.Turn.Handle(), tel.workItem, box, r)
 	defer closeSteer(ctx)
 	// NO WALL-CLOCK CAP ON A RESUME. The cap bounds the turn a fire started;
 	// a detached sandbox run can legitimately outlive it, and the resumed

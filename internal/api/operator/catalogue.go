@@ -78,9 +78,9 @@
 // about it. A tool with no declared reach is refused by [New], as a question
 // with none panics at its registration: there is no default to fall through
 // to. What the reach does NOT decide is which object a caller may act on —
-// whose queue they may order, whose project's settings they may change —
-// which every tool decides for itself from the chart, because only the tool
-// has read the object.
+// whose seat they may pause, whose turn they may steer, whose queue they may
+// order — which every tool decides for itself from the chart, because only the
+// tool has read the object.
 //
 // # The act transport admits a PERSON, and nobody else (ADR-0024)
 //
