@@ -230,6 +230,7 @@ const (
 	KindPoolStarved         Kind = "pool_starved"
 	KindCensusDrift         Kind = "census_drift"
 	KindObjectsMissing      Kind = "objects_missing"
+	KindAuthDiverged        Kind = "auth_diverged"
 )
 
 // Reading is everything an alarm evaluation looks at, gathered once per tick.
@@ -379,6 +380,15 @@ type Reading struct {
 	// for the gated record's reason: there is no threshold below which a
 	// file that cannot be opened is acceptable.
 	ObjectsMissing int
+
+	// AuthDiverged is the live nodes serving the API grouped by the key
+	// table each holds — every group a definite disagreement with another,
+	// each a list of node ids — and nil when no two of them disagree. A
+	// FLEET-WIDE fact, so every node that reads presence reports the same
+	// one. It is computed by placement, which this package cannot import,
+	// and handed in already grouped; the population — which nodes are live
+	// — is the caller's, and it is the threshold.
+	AuthDiverged [][]string
 }
 
 // Alarm is one condition currently true on this node.
@@ -765,6 +775,44 @@ var table = []rule{
 			"own health (the NATS bucket OBJ_crewlet_files on the data nodes, or " +
 			"the S3 bucket) and restore those files from a backup, or upload them " +
 			"again — see docs/guides/backup.md. `crewlet objects status` names them.",
+	},
+	{
+		// THE THRESHOLD IS PRESENCE'S (ADR-0015). Which nodes are compared
+		// is which nodes hold a live presence lease, so a node counts while
+		// it is live and stops counting when its lease lapses — the lease
+		// TTL, the same decision placement divides the seats by. The alarm
+		// has no clock of its own: a divergence is one the instant two live
+		// nodes hold it, and a node that has gone stops holding it up within
+		// one TTL.
+		//
+		// AN ALARM, NOT A REFUSAL. A rolling key rotation passes through
+		// exactly this state by construction — each node is restarted with
+		// the new table while its peers still hold the old one — so a node
+		// that refused to serve, or to start, beside a peer with another
+		// table would turn every rotation into an outage, and a fleet could
+		// rotate a key only by stopping all of it. It is the posture the
+		// configuration rollout already takes: every node says what it
+		// holds, and lag alone never sheds.
+		kind: KindAuthDiverged,
+		fires: func(r Reading) (string, bool) {
+			if len(r.AuthDiverged) < 2 {
+				return "", false
+			}
+			groups := make([]string, len(r.AuthDiverged))
+			for i, ids := range r.AuthDiverged {
+				groups[i] = "{" + strings.Join(ids, ", ") + "}"
+			}
+			return fmt.Sprintf("the live nodes serving the API judge keys by %d "+
+				"different tables: %s", len(r.AuthDiverged), strings.Join(groups, " against ")), true
+		},
+		remedy: "Give every node that serves the API the same `api.auth` — the same " +
+			"keys under the same ids, each with the same role and value, and the same " +
+			"`anonymous`, `disabled` and `company_writers` — and restart the nodes " +
+			"that differ. Settings › Nodes and `GET /fleet` show which node holds " +
+			"which table against the one answering. Until they agree a key can reach " +
+			"more through one node than through another: a member's key on one node " +
+			"may be an admin's on the next. Mid-way through a rolling key rotation " +
+			"this is expected and clears when the last node restarts.",
 	},
 }
 

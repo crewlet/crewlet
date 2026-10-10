@@ -2,7 +2,8 @@
 // constraint share: what a process is willing to do (node.roles, node.labels)
 // and where a seat is allowed to run (role.placement).
 //
-// It imports nothing from the engine but coord, so the config layer that
+// It imports nothing from the engine but coord, and secrets for the one
+// fingerprint a profile carries ([AuthDigest]), so the config layer that
 // PARSES this vocabulary and the seat host that DECIDES with it can both
 // depend on it. Two layers that disagree about a name never raise — they
 // quietly do different things, which is the same reason the topic grammar
@@ -353,6 +354,13 @@ type NodeProfile struct {
 	// serving every seat it holds, so its share is not free: counting it
 	// out would have its peers report a group it is serving as unplaceable.
 	Withdrawn bool
+
+	// Auth is which keys the node's API admits and what each reaches, as a
+	// fingerprint its peers compare without learning any of them — see
+	// [AuthDigest] for why it rides here. Configuration rather than live
+	// state, and fallible to derive (a keyring that will not decode), so the
+	// engine adds it to the profile config.Bootstrap.Profile builds.
+	Auth AuthDigest
 }
 
 // HeldKey is where a presence row carries [NodeProfile.Held].
@@ -414,6 +422,12 @@ func (n NodeProfile) Meta() map[string]any {
 	if n.Broker.Valid() {
 		meta["broker"] = string(n.Broker)
 	}
+	// ONLY WHERE THE NODE SERVES THE API: absent is the one way to say it
+	// admits nobody by a table, for the reason the broker is absent when
+	// unknown.
+	if n.Auth.Serves {
+		meta[AuthDigestKey] = n.Auth.meta()
+	}
 	return meta
 }
 
@@ -441,6 +455,7 @@ func FromMeta(nodeID string, meta map[string]any) NodeProfile {
 		// the reading a build that never wrote the key gives: the node is
 		// counted, and the worst that costs is the share it leaves free.
 		Withdrawn: meta[WithdrawnKey] == true,
+		Auth:      authFromMeta(meta[AuthDigestKey]),
 	}
 }
 

@@ -414,7 +414,10 @@ type Engine struct {
 	// profile is what this node declared it does: whether it claims
 	// seats, serves inbound traffic, and runs the fleet's singleton
 	// duties. Held because the duty gate reads it on every claim — see
-	// duty.go for why the lease alone is not the whole answer.
+	// duty.go for why the lease alone is not the whole answer — and
+	// because the `auth_diverged` alarm compares the fleet against what
+	// THIS process admits rather than against its own presence row, which
+	// for a lease TTL after a restart is still the previous process's.
 	profile placement.NodeProfile
 
 	// learning is the loops of the background passes no turn drives:
@@ -866,6 +869,16 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	}
 	incarnation := config.NewIncarnation(nodeID)
 
+	// WHAT THIS NODE IS, as its peers will read it off its presence — built
+	// ONCE, here, with nothing open, because one of its facts can fail: the
+	// fingerprint of the key table its API admits is taken under the Tier A
+	// keyring ([config.Bootstrap.AuthDigest]), and a keyring that will not
+	// decode is a boot that cannot seal anything either.
+	profile := opts.Bootstrap.Profile(nodeID)
+	if profile.Auth, err = opts.Bootstrap.AuthDigest(nodeID); err != nil {
+		return nil, fmt.Errorf("engine: secrets keyring: %w", err)
+	}
+
 	// Only what this engine OPENED does it close. A caller that supplied
 	// backends keeps their lifetime, and must supply all four: see
 	// [Backends.Complete] for why a partial set is refused rather than run.
@@ -907,8 +920,8 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// parses the roles with the validator that already refused an
 		// unknown one at load, derives the broker kind from the stream
 		// block, and is what the fleet view reads a peer's presence row
-		// back through.
-		profile:  opts.Bootstrap.Profile(nodeID),
+		// back through — with the fingerprint of its key table, above.
+		profile:  profile,
 		backends: backends, ownsBackends: ownsBackends,
 		onboarded: runner.NewLatch(), skills: skills.NewRegistry(),
 		rewrites: compact.NewCache(),

@@ -1499,7 +1499,12 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// a bridged session is a live tool surface in the process that opened it,
 	// so a seats node running an agent-mode seat is the only node its box can
 	// reach. See [api.Probes].
-	if !boot.Profile(nodeID).RunsIngress() {
+	//
+	// THROUGH THE ONE PREDICATE ([config.Bootstrap.ServesAPI]) that the
+	// node's presence publishes its key table's fingerprint by, so no node
+	// serves a table its peers cannot compare, and none is compared over keys
+	// nobody can present to it.
+	if !boot.ServesAPI() {
 		return serveProbes(ctx, boot, e, reconciler, log)
 	}
 	// The config surface is the caller's, built before this function so a

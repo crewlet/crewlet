@@ -616,6 +616,12 @@ The consequences worth stating plainly:
 - **`history_partial`** — history reads are coming back without a node: it
   did not answer inside the fleet read budget. Every such answer names the
   node in its `coverage`.
+- **`auth_diverged`** — two live nodes that serve the API judge keys by
+  different `api.auth` tables, so a key may reach more through one of them.
+  Give every such node the same keys, roles and values and restart the odd
+  ones; mid-way through a rolling key rotation it is expected and clears when
+  the last node restarts. See
+  [Every node that serves the API holds the same keys](../concepts/configuration.md#every-node-that-serves-the-api-holds-the-same-keys).
 - **`/health`** carries this node's seats, its in-flight count and its
   config posture; the dashboard's **Settings › Nodes** screen puts every node's
   side by side, with seat ownership and per-node config epoch.
