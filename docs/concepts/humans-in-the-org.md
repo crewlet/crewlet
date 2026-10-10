@@ -442,6 +442,11 @@ A seat's kind is ordinary configuration, applied like any other change
 - Contact and availability edits take effect with the next epoch: every
   apply builds a new party registry and reconciles the human contact IDs
   into it.
+- A person sets **their own availability** with their own member key —
+  `PATCH /config/roles/{handle}` with `{"availability": "…"}` on the seat
+  their key is linked to — and nothing else on the seat; contact ids, the
+  email and the operator binding stay an admin's. See
+  [A person sets their own availability](configuration.md#a-person-sets-their-own-availability).
 
 ## Identity Resolution (party registry)
 

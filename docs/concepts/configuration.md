@@ -606,7 +606,7 @@ reach it serves. The four are ordered, and each covers everything before it:
 |---|---|---|
 | `open` | anyone who can reach the port | The probes, the dashboard shell and its assets, `GET /viewer` ("who am I"), opening `/ws/stream`, and the routes outside parties call — `/webhooks/*`, `/otlp/*`, `/mcp/*` — which authenticate by their own signature or per-run token |
 | `public` | a caller with no key, while `anonymous` is `public` *(default)* | The company's public face: `GET /org`, its name, mission and chart |
-| `member` | a `role: member` key | What the company **published** — its work items, projects, views and files, its pages and knowledge search, the chart, who is working on what (each seat's activity, the schedules), and the decisions put to people — and acting as the person the key is linked to (`/operator/act`, `/operator/mcp`) |
+| `member` | a `role: member` key | What the company **published** — its work items, projects, views and files, its pages and knowledge search, the chart, who is working on what (each seat's activity, the schedules), and the decisions put to people — and acting as the person the key is linked to (`/operator/act`, `/operator/mcp`), including setting [their own availability](#a-person-sets-their-own-availability) |
 | `admin` | a `role: admin` key | Everything a member reaches, and what the machine **processed** — prompts, responses, tool arguments and results, narration, diaries, events, traces and spend — and how it is **run**: nodes and leases, keys, secrets, the configuration, retention and backups |
 
 That is the one rule: **members read what the company published; admins also
@@ -671,6 +671,36 @@ automation, an operator outside the chart — and acts under its own label,
 `/operator/mcp` included. An unlinked **member** key reads what members read
 and nothing personal: the two surfaces that act *as* a person, `/operator/act`
 and `/operator/mcp`, refuse it `unbound`.
+
+### A person sets their own availability
+
+The company document is how the engine is run, so every write onto it is an
+admin's — with one exception. A seat's `availability` is a line a person
+writes about themselves ("CET mornings; replies within ~4h"), rendered into
+every roster a colleague reads before waiting on them, and the one person who
+knows it should not have to ask an admin to edit the company to change it.
+
+So a **member** key may write its own seat's availability:
+
+```bash
+curl -X PATCH $CREWLET_URL/config/roles/ana \
+  -H "Authorization: Bearer $ANA_KEY" -H "X-Summary: Ana's availability" \
+  -d '{"availability": "Mornings only; replies within a day"}'
+```
+
+and nothing else. The write is judged on the revision it lands on: the seat
+must be the one whose `contact.crewlet_operator_id` names the key (resolved
+through this node's own secret chain, a `${VAR}` binding included), and the
+seat it leaves must be the seat it found with only `availability` moved —
+whether it was sent as a `PATCH` or as a whole seat by `PUT`. Anything past
+that — another seat, the email, a contact id, the binding itself — is `403
+forbidden` with nothing stored. Contact ids and the binding stay an admin's
+because they are how the engine attributes a person and reaches them: a key
+that could rewrite its own binding could bind itself to somebody else's seat.
+The revision is attributed to the key like every other write, and a
+[managed](#managed-configuration) document refuses it `config_managed` like
+every other write too. The seat's *read* (`GET /config/roles/{handle}`) stays an
+admin's: it carries the contact ids.
 
 ### What a caller with no key reaches
 

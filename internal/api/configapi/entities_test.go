@@ -244,32 +244,30 @@ func TestAnEntityWriteNeedsASummary(t *testing.T) {
 	}
 }
 
-// GET AND PUT ARE THE VERBS ON AN ENTITY PATH, and the refusal of the rest has
-// to be legible.
+// GET, PUT AND PATCH ARE THE VERBS ON AN ENTITY PATH, and the refusal of the
+// rest has to be legible.
 //
 // The previous engine served DELETE here, so an operator carrying those
-// scripts forward will send one. They get 405 with an Allow header naming PUT
-// — a *routing* answer rather than a handler that 404s or, worse, one that
-// quietly succeeds having done nothing.
+// scripts forward will send one. They get 405 with an Allow header naming the
+// verbs the path has — a *routing* answer rather than a handler that 404s or,
+// worse, one that quietly succeeds having done nothing.
 //
 // Removal is a full-document edit on purpose: deleting a seat strands its
 // mailbox and its in-flight work, and
 // deleting a provider silently repoints every role that named it. Both belong
 // in a document somebody looked at. docs/guides/configure-via-api.md states
 // this status code, which is why it is asserted rather than assumed.
-func TestAnEntityPathRefusesEveryVerbButGetAndPut(t *testing.T) {
+func TestAnEntityPathRefusesEveryVerbButGetPutAndPatch(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t, nil)
 	s.seed(t, companyDoc, nil)
 
 	for _, kind := range configapi.EntityKinds() {
-		for _, method := range []string{
-			http.MethodDelete, http.MethodPost, http.MethodPatch,
-		} {
+		for _, method := range []string{http.MethodDelete, http.MethodPost} {
 			res := s.do(t, method, "/config/"+kind+"/ceo", "", nil)
 			if res.Code != http.StatusMethodNotAllowed {
 				t.Errorf("%s /config/%s/ceo = %d, want 405 — an entity path serves "+
-					"GET and PUT, and any other answer leaves an operator "+
+					"GET, PUT and PATCH, and any other answer leaves an operator "+
 					"guessing whether the write happened", method, kind, res.Code)
 				continue
 			}
@@ -277,7 +275,7 @@ func TestAnEntityPathRefusesEveryVerbButGetAndPut(t *testing.T) {
 			// it is the whole value of answering 405 rather than 404: it
 			// names what would have worked.
 			allow := res.Header().Get("Allow")
-			for _, verb := range []string{http.MethodGet, http.MethodPut} {
+			for _, verb := range []string{http.MethodGet, http.MethodPut, http.MethodPatch} {
 				if !strings.Contains(allow, verb) {
 					t.Errorf("%s /config/%s/ceo: Allow = %q, which does not name "+
 						"%s — a verb this path has", method, kind, allow, verb)

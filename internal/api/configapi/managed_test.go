@@ -68,6 +68,10 @@ func everyWritePath(first string) map[string]writePath {
 		"PUT /config/roles/{id}": {
 			method: http.MethodPut, path: "/config/roles/cto", body: seat, headers: summary,
 		},
+		"PATCH /config/roles/{id}": {
+			method: http.MethodPatch, path: "/config/roles/cto", body: `{"goal":"ship it"}`,
+			headers: summary,
+		},
 		"POST /config/revisions/{id}/revert": {
 			method: http.MethodPost, path: "/config/revisions/" + first + "/revert",
 		},
@@ -135,6 +139,9 @@ func TestAManagedRefusalComesBeforeTheRequestIsRead(t *testing.T) {
 		},
 		"PUT /config/roles/{id} with no summary": {
 			method: http.MethodPut, path: "/config/roles/cto", body: `{"name":"CTO"}`,
+		},
+		"PATCH /config/roles/{id} with no summary": {
+			method: http.MethodPatch, path: "/config/roles/cto", body: `{"goal":"x"}`,
 		},
 		"revert to a revision that does not exist": {
 			method: http.MethodPost, path: "/config/revisions/no-such-revision/revert",

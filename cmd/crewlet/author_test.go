@@ -97,6 +97,7 @@ func TestTheEnginesConfigWriterWritesAsTheNode(t *testing.T) {
 		// A DEPLOYMENT THE SEEDED COMPANY CAN RUN ON: its native backends
 		// keep their logs on the stream, which needs a store directory.
 		Bootstrap: &config.Bootstrap{Stream: config.Stream{StoreDir: t.TempDir()}},
+		Env:       func(string) (string, bool) { return "", false },
 	})
 	if err != nil {
 		t.Fatalf("configapi.New: %v", err)

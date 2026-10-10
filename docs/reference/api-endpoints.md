@@ -225,8 +225,8 @@ and `forbidden` (see [Queries](#queries)).
 |---|---|
 | `open` | `/health`, `/ready`; the dashboard shell — `/` (a redirect), `/dashboard`, `/favicon.ico`, `/static/*`; `GET /viewer`; opening `WS /ws/stream`; `GET /query/{what}`, which judges each question by its own reach; and the routes outside parties call — `/webhooks/*`, `/otlp/*` and `/mcp/*` — which authenticate by a provider signature or a signed per-run token instead of a key |
 | `public` | `GET /org`, the company's classified public projection |
-| `member` | The REST route of every member question below — `/work` and everything under it but the retention gestures and the purge, `/turns/stories` and one story under it, `/pages` and its sub-routes, `/containers`, `/feed`, `/agents/activity`, `/schedules`; `GET /agents` and `GET /stream/snapshot`, each answering the caller's own reach's variant; reading, writing and removing a project's files under `/work/files`; `POST /operator/act/{tool}` and `/operator/mcp`, which act **as the person the key is linked to** and refuse an unlinked member key `unbound` |
-| `admin` | `/config` and everything under it, reads included; `/secrets`; `/setup`; `POST /backup`; `/work/retention` and every retention, capacity and reanchor gesture under it; `POST /work/{id}/purge`; `/fleet` and `/fleet/broker`, with the broker removals; `GET /tools`; and the REST route of every admin question below — `/agents/{id}` and its memory, episodes and conversations, `/events` and everything under it, `/turns` (but not `/turns/stories`), `/tokens/*`, `/budgets`, `/sandbox-runs`, `/schedules/…/runs`, `/integrations`, `/access`, `/mcp-servers`, `/credential-pool`, `/backups` |
+| `member` | `PUT` and `PATCH /config/roles/{handle}`, to set the availability of the caller's own seat and nothing else (see [below](#a-persons-own-availability)); the REST route of every member question below — `/work` and everything under it but the retention gestures and the purge, `/turns/stories` and one story under it, `/pages` and its sub-routes, `/containers`, `/feed`, `/agents/activity`, `/schedules`; `GET /agents` and `GET /stream/snapshot`, each answering the caller's own reach's variant; reading, writing and removing a project's files under `/work/files`; `POST /operator/act/{tool}` and `/operator/mcp`, which act **as the person the key is linked to** and refuse an unlinked member key `unbound` |
+| `admin` | `/config` and everything under it, reads included, but a member's own availability; `/secrets`; `/setup`; `POST /backup`; `/work/retention` and every retention, capacity and reanchor gesture under it; `POST /work/{id}/purge`; `/fleet` and `/fleet/broker`, with the broker removals; `GET /tools`; and the REST route of every admin question below — `/agents/{id}` and its memory, episodes and conversations, `/events` and everything under it, `/turns` (but not `/turns/stories`), `/tokens/*`, `/budgets`, `/sandbox-runs`, `/schedules/…/runs`, `/integrations`, `/access`, `/mcp-servers`, `/credential-pool`, `/backups` |
 
 **Three routes answer each caller per reach**, the same variants the socket
 pushes: `GET /org` serves each field of the chart at its own reach, and
@@ -370,7 +370,11 @@ consumer.
 
 ### `/config/*` — live config management (admin)
 
-Every `/config/*` route is an **admin's**, reads included: it needs `Authorization: Bearer <key>` naming a `role: admin` key in Tier A's `api.auth.tokens`. No key is `401 invalid_token`; a member key is `403 forbidden` — reading the document exposes every integration and every `${VAR}` reference by name, and writing it changes what the company does. See the [Configuration concept doc](../concepts/configuration.md#auth) for the full auth model.
+Every `/config/*` route is an **admin's**, reads included, but one: it needs `Authorization: Bearer <key>` naming a `role: admin` key in Tier A's `api.auth.tokens`. No key is `401 invalid_token`; a member key is `403 forbidden` — reading the document exposes every integration and every `${VAR}` reference by name, and writing it changes what the company does. See the [Configuration concept doc](../concepts/configuration.md#auth) for the full auth model.
+
+#### A person's own availability
+
+The one exception: `PUT` and `PATCH /config/roles/{handle}` are served to a **member** key too, for one write — the `availability` of the seat whose `contact.crewlet_operator_id` names that key. Both conditions are judged on the revision the write lands on, and on what the write CHANGES rather than on which keys it sent: the seat it leaves must be the seat it found with only `availability` moved, so `{"availability": "Mornings only"}` sent as a `PATCH` and the whole seat sent back by `PUT` with only that line different are the same write. Another seat, a key no seat links, any other field — the email, a contact id, the binding itself — and any other collection are `403 forbidden`, with a `detail` naming which and nothing stored. The binding is resolved through the node's own secret chain, so a seat bound through `${VAR}` is its person's. The write is otherwise every entity write: `X-Summary` is required, the revision is attributed to the key, `?dry_run=true` checks it, and a [managed](../concepts/configuration.md#managed-configuration) document refuses it `config_managed`. Reading the seat stays an admin's — it carries the contact ids.
 
 **A managed document refuses every other writer.** When Tier A lists
 `api.auth.company_writers`, only those admin keys may change the document:
@@ -560,7 +564,7 @@ Independently of any header, every write names the revision it derived from as t
 
 #### Per-entity read and write
 
-Four collections, `GET` and `PUT`:
+Four collections, `GET`, `PUT` and `PATCH`:
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -569,8 +573,9 @@ Four collections, `GET` and `PUT`:
 | `PUT` | `/config/units/{name}` | Replace one org unit |
 | `PUT` | `/config/llm-providers/{key}` | Replace one named LLM provider; with `If-None-Match: *`, add one under that key |
 | `PUT` | `/config/mcp-servers/{name}` | Replace one MCP server entry; with `If-None-Match: *`, add one after every server already declared |
+| `PATCH` | `/config/{kind}/{id}` | A JSON Merge Patch (RFC 7396) over ONE entity — `{"goal": "Ship the platform"}` changes a seat's goal and nothing else, `null` removes a field, an array replaces the entity's array whole. Otherwise the write a `PUT` makes: the merged entity is read as a `PUT` body is (a misspelt key is `400 invalid_body` at its place, a changed identity `400 identity_mismatch`), validated with the whole company, and takes `?dry_run=true`, `X-Summary` and `If-Match`. It edits an entity that exists: an empty patch is `400 invalid_patch`, and `If-None-Match` is `400 patch_creates_nothing`, since a create says what the whole entity is |
 
-Any other method is `405` with an `Allow` header naming `GET, PUT`. There is no `DELETE` — removal is a full-document edit, for the reasons below.
+Any other method is `405` with an `Allow` header naming `GET, PATCH, PUT`. There is no `DELETE` — removal is a full-document edit, for the reasons below.
 
 Why these exist beside the whole-document write: `PUT /config` makes every edit
 a company-wide one. A founder renaming one seat's goal sends back a document
@@ -700,7 +705,7 @@ On a `409`, re-read `/config` and send the edit again.
 - `201 Created`: a write produced a new revision; the body is `{"revision_id", "epoch", "warnings", "derived"}` (see [What a write answers](#what-a-write-answers)). A per-entity write, a reload and a revert return this too: each created one revision.
 - `400 Bad Request`: `invalid_body`, `invalid_patch` or `validation_error`, each with `detail` (the field path and what to change) and [`problems`](#refusals-carry-located-problems); `summary_required` when a write has neither an `X-Summary` header nor a `_summary` body key; `invalid_query` when `dry_run` is anything but `true` or `false`; `identity_mismatch` when a per-entity body renames what the path addresses
 - `401 Unauthorized`: missing or invalid bearer key (`{"error": "invalid_token"}`)
-- `403 Forbidden`: `forbidden` when the key is accepted and is a `member` key — every `/config` route, reads included, is an admin's; `config_managed` when `api.auth.company_writers` names the document's writers and this admin key is not one of them, with `managed_by`, `detail` and `hint` — a write and its dry run alike; never a read or a reload
+- `403 Forbidden`: `forbidden` when the key is accepted and is a `member` key — every `/config` route, reads included, is an admin's, but a member's own availability, which is `forbidden` too past its rule (another seat, another field, an unlinked key); `config_managed` when `api.auth.company_writers` names the document's writers and this admin key is not one of them, with `managed_by`, `detail` and `hint` — a write and its dry run alike; never a read or a reload
 - `404 Not Found`: a revision that is not there, `no_active_revision` on a read before the first write, `no_such_entity` on a per-entity write naming an id the active revision does not carry, or `no_route` for a path under `/config` this surface does not serve
 - `405 Method Not Allowed`: `method_not_allowed` for a `/config` path under a method it does not take, with `Allow`
 - `409 Conflict`: `revision_advanced` (a stale `If-Match`, or a race with a concurrent writer) or `no_active_revision` (a `PATCH` or a per-entity write on an unconfigured node, or a reload)

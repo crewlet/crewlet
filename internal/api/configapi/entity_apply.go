@@ -2,6 +2,7 @@ package configapi
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -57,7 +58,7 @@ func (e *EntityError) Unwrap() error { return e.Err }
 
 // ApplyEntity splices one entity into the active revision and activates it.
 func (s *Service) ApplyEntity(ctx context.Context, req ApplyEntityRequest) (Applied, error) {
-	d, err := entityDraft(req.Kind, req.ID, asText(req.Body), req.Expect, false)
+	d, err := entityDraft(req.Kind, req.ID, entityWrite{body: asText(req.Body)}, req.Expect)
 	if err != nil {
 		return Applied{}, err
 	}
@@ -69,18 +70,37 @@ func (s *Service) ApplyEntity(ctx context.Context, req ApplyEntityRequest) (Appl
 	return s.commit(ctx, prepared, req.Summary)
 }
 
-// entityDraft replaces the entity of one kind under one id — or, with create,
-// adds one under an id the collection does not carry yet.
+// entityWrite is one write to one entity: what was sent, and how it is read.
+type entityWrite struct {
+	// body is the entity whole — or, with patch, a JSON Merge Patch over it.
+	body submitted
+	// patch reads body as a merge patch over the entity as it stands.
+	//
+	// OVER THIS BUILD'S ENCODING of the entity, which is the shape a PUT
+	// body takes: the merged object is then read exactly as a PUT's body is
+	// — strictly, so a key the patch misspelt is refused at its place — and
+	// spliced the same way, so what the stored element carries that this
+	// build cannot represent is kept ([spliceStored]) whichever verb wrote.
+	patch bool
+	// create adds the entity rather than replacing one (`If-None-Match: *`).
+	create bool
+	// self holds a caller below admin to the availability of their own
+	// seat (selfservice.go); nil for an admin and for the engine's writes.
+	self *selfService
+}
+
+// entityDraft replaces the entity of one kind under one id — or, with
+// create, adds one under an id the collection does not carry yet.
 //
 // Nothing to splice into is refused rather than treated as an empty company:
 // building the first revision out of one seat is not what this write is for.
-func entityDraft(kind, id string, body submitted, expect string, create bool) (draft, error) {
+func entityDraft(kind, id string, write entityWrite, expect string) (draft, error) {
 	access, ok := entityKinds[kind]
 	if !ok {
 		return draft{}, &EntityError{Err: fmt.Errorf("%w: %q (want one of %v)",
 			ErrUnknownEntityKind, kind, EntityKinds())}
 	}
-	if create && access.create == nil {
+	if write.create && access.create == nil {
 		return draft{}, &EntityError{Err: fmt.Errorf("%w: %s", ErrNotCreatable, kind)}
 	}
 	return draft{
@@ -97,11 +117,40 @@ func entityDraft(kind, id string, body submitted, expect string, create bool) (d
 			if err != nil {
 				return nil, nil, fmt.Errorf("configapi: decode the active revision: %w", err)
 			}
-			write := access.replace
-			if create {
-				write = access.create
+			// WHOSE SEAT, judged on the document the write is built on and
+			// will land on — see selfservice.go.
+			if write.self != nil {
+				if refused := write.self.owns(spliced, kind, id); refused != nil {
+					return nil, nil, &EntityError{Err: refused}
+				}
 			}
-			if refused := write(spliced, id, body); refused != nil {
+			body := write.body
+			// THE ENTITY AS IT STANDS, encoded before the splice replaces
+			// it: what a patch merges over, and what a member's write is
+			// compared against.
+			var found []byte
+			if write.patch || write.self != nil {
+				current, held := access.find(spliced, id)
+				if !held {
+					return nil, nil, &EntityError{Err: fmt.Errorf("%w: %s/%s",
+						ErrNoSuchEntity, kind, id)}
+				}
+				if found, err = json.Marshal(current); err != nil {
+					return nil, nil, fmt.Errorf("configapi: encode %s/%s: %w", kind, id, err)
+				}
+			}
+			if write.patch {
+				merged, refused := patchedEntity(found, write.body.text)
+				if refused != nil {
+					return nil, nil, &PatchError{Err: refused}
+				}
+				body = asText(merged)
+			}
+			splice := access.replace
+			if write.create {
+				splice = access.create
+			}
+			if refused := splice(spliced, id, body); refused != nil {
 				return nil, nil, &EntityError{Err: refused}
 			}
 			// The masks the caller was shown come back as the values they
@@ -110,11 +159,42 @@ func entityDraft(kind, id string, body submitted, expect string, create bool) (d
 			// is restored: it was never shown, so it holds no mask.
 			spliced.RestoreRedacted(b.prior)
 			entity, _ := access.find(spliced, id)
-			document, err := spliceStored(b.document, access, id, entity, create)
+			// AND WHAT IT CHANGED, judged after the restore, so a mask
+			// sent back as it was shown is the value it stands for rather
+			// than a change.
+			if write.self != nil {
+				if refused := onlyAvailability(found, entity); refused != nil {
+					return nil, nil, &EntityError{Err: refused}
+				}
+			}
+			document, err := spliceStored(b.document, access, id, entity, write.create)
 			if err != nil {
 				return nil, nil, err
 			}
 			return spliced, document, nil
 		},
 	}, nil
+}
+
+// patchedEntity merges a JSON Merge Patch (RFC 7396) over one entity's
+// encoding, and answers the merged entity's.
+//
+// THE PATCH IS READ AS THE DOCUMENT PATCH IS ([readPatch]): an object, never
+// empty, and `null` removes a field. An array in it replaces the entity's
+// array whole, which on one entity is the only reading there is — a seat's
+// `manages` list has no members a patch could address.
+func patchedEntity(current, patch []byte) ([]byte, error) {
+	target, err := decodeTree(current)
+	if err != nil {
+		return nil, fmt.Errorf("configapi: decode the entity: %w", err)
+	}
+	overlay, err := readPatch(patch)
+	if err != nil {
+		return nil, err
+	}
+	merged, err := json.Marshal(mergePatch(target, overlay))
+	if err != nil {
+		return nil, fmt.Errorf("configapi: encode the patched entity: %w", err)
+	}
+	return merged, nil
 }

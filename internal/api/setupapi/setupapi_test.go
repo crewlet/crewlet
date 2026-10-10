@@ -153,6 +153,7 @@ func newConfigSurface(t *testing.T, writers ...string) (*configapi.Service, *sto
 			Stream: config.Stream{StoreDir: t.TempDir()},
 			API:    config.API{Auth: config.APIAuth{CompanyWriters: writers}},
 		},
+		Env: func(string) (string, bool) { return "", false },
 		Now: func() time.Time { return pinned },
 	})
 	if err != nil {
