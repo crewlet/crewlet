@@ -164,6 +164,38 @@ test("a grid with no row link renders no overlay at all", () => {
   expect(screen.queryAllByRole("link")).toHaveLength(0);
 });
 
+// A ROW WHOSE OBJECT HAS NO PAGE OPENS NOTHING. A spend row for a seat the
+// chart no longer holds names no handle, and a peek addressed by its role name
+// instead opened "No seat called" — or another seat whose handle that spelled.
+// Such a row is drawn, and is neither a link nor a button, and Enter on it
+// activates nothing, while its neighbours keep both.
+test("a row with no page of its own is drawn, and neither links nor activates", () => {
+  const seen: string[] = [];
+  const { container } = render(
+    <Router>
+      <DataGrid<Row>
+        rows={ROWS}
+        rowKey={(r) => r.id}
+        rowHref={(r) => (r.id === "one" ? undefined : `#/live/turns/${r.id}`)}
+        onRowActivate={(r) => seen.push(r.id)}
+        columns={[{ key: "id", header: "Id", cell: (r) => r.id }]}
+      />
+    </Router>,
+  );
+  const rows = container.querySelectorAll<HTMLElement>(".grid-row");
+  expect(rows[0]!.querySelector("a")).toBeNull();
+  expect(rows[0]!.getAttribute("role")).toBeNull();
+  expect(rows[0]!.getAttribute("tabindex")).toBeNull();
+  fireEvent.click(rows[0]!);
+  expect(rows[1]!.querySelector("a.row-link")?.getAttribute("href")).toBe("#/live/turns/two");
+  fireEvent.keyDown(window, { key: "j" });
+  fireEvent.keyDown(window, { key: "Enter" });
+  expect(seen).toEqual([]);
+  fireEvent.keyDown(window, { key: "j" });
+  fireEvent.keyDown(window, { key: "Enter" });
+  expect(seen).toEqual(["two"]);
+});
+
 /**
  * AND THE KEYBOARD BELONGS TO ONE GRID AT A TIME.
  *

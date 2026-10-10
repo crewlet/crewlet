@@ -369,6 +369,28 @@ const WORKING: Partial<AgentRow> = {
 };
 
 // ---------------------------------------------------------------------------
+// The address
+// ---------------------------------------------------------------------------
+
+// A SEAT IS ADDRESSED BY ITS HANDLE ALONE. Its role name is only the first
+// seat called that, its runtime id is derived from the handle, and the handle
+// in another case is another string — each lands on the page that names what
+// it was given, never on a seat it happens to resemble.
+test("a seat's page resolves its handle and nothing else", async () => {
+  for (const address of ["SWE", "a-swe", "Swe"]) {
+    mount(`#/agents/seats/${address}`, { agents: [WORKING] });
+    await settle();
+    expect(screen.getByText(`No seat called “${address}”`), address).toBeTruthy();
+    expect(screen.queryAllByRole("tab"), address).toEqual([]);
+    cleanup();
+  }
+  mount("#/agents/seats/swe", { agents: [WORKING] });
+  await settle();
+  expect(screen.queryByText(/No seat called/)).toBeNull();
+  expect(tabNames()).toHaveLength(6);
+});
+
+// ---------------------------------------------------------------------------
 // The tabs a kind has
 // ---------------------------------------------------------------------------
 

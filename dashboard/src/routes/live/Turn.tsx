@@ -837,7 +837,7 @@ export function turnFacts(
           {
             label: "Seat",
             value: view.role ? (
-              <SeatChip name={view.role} handle={view.handle || view.role} kind="agent" />
+              <SeatChip name={view.role} handle={view.handle} kind="agent" />
             ) : (
               "the engine"
             ),

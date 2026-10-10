@@ -2275,6 +2275,17 @@ budget", "Not placed", "Idle"); under it the line that places the seat
 head's own rule. The trail reads **Agents › Engineering · Core › SWE**: the
 unit is a way to its team, and the seat's crumb wears its badge.
 
+**A seat is addressed by its handle and nothing else.** The page and the
+seat's peek (`peek=seat:{handle}`) resolve the handle the engine derived, and
+only that: a seat's name is no address, since it finds only the first seat of
+that name; nor is its runtime id, which is derived from the handle; nor is the
+handle typed in another case. Each of those lands on "No seat called …", which
+names what it was given. A surface that holds a seat whose handle it does not
+know offers no link to it rather than one spelled another way — a spend row
+for a seat the chart no longer holds, a live row for a seat the roster has not
+listed yet, and an org-editor seat that declares no handle before the engine
+has described the company.
+
 **The kind decides the tabs.** An agent has Overview, Work, Turns, Memory,
 Schedules and Settings; a person has Overview, Work and Settings. Turns, Memory
 and Schedules are properties of a RUNTIME, and the engine never spawns a
@@ -5656,7 +5667,9 @@ export.
   ended turn. A PERSON the auxiliary model spent for (`person: true` — their
   questions answered with `answer_knowledge`, and the background passes of a
   unit they lead) is a row of their own, keyed by their handle, and says in its
-  turns and per-turn cells that a person takes no turns. A row opens the seat in the peek; on a phone a seat is one
+  turns and per-turn cells that a person takes no turns. A row opens the seat in
+  the peek, by its handle; a row for a seat the chart no longer holds carries
+  none, since the engine leaves it blank rather than guess, and opens nothing. On a phone a seat is one
   compact row — name, tokens and share, then turns · today · per turn, each
   with its unit. **Recent turns by tokens** goes to `#/live/turns?sort=-tokens`
   over the same window where the turn list has it (a quarter goes to its thirty
@@ -6671,7 +6684,8 @@ while the screen binds the real chart, table, editor and dialogs, and
   tab stops of its own, and they are the card's and the row's own list
   (`nodeActions.nodeMenu`) rather than a copy: the same entries, order, names
   and icons, Edit reports included. Open seat is offered only for a seat the
-  saved company has. A node's key can move under whatever holds it: the first
+  saved company has, and by the handle it runs under: a seat that declares
+  none has one only once the first check has described the company. A node's key can move under whatever holds it: the first
   check keys a loaded base by the engine's handles, and a save keys the nodes
   it created. The reducer lists what moved (`state.rekeyed`), and the
   selection and an open dialog read their node through that list in the very

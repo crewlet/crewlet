@@ -547,6 +547,40 @@ test("with no seat's day capped the budget column is not drawn, and the caption 
   expect(screen.getByText(/no seat has a daily token ceiling/)).toBeTruthy();
 });
 
+// A ROW FOR A SEAT THE CHART NO LONGER HOLDS OPENS NOTHING. The engine leaves
+// its handle blank rather than guess one, and a peek addressed by its role name
+// instead opened "No seat called" — or whichever seat's handle the name
+// spelled. The row is drawn with its spend; the seat with a handle still peeks.
+test("by agent draws a row with no handle, and opens no peek from it", async () => {
+  const ceo = {
+    ...bucket(1_000),
+    role: "CEO",
+    handle: "ceo",
+    agent_id: "a-ceo",
+    by_phase: {},
+    turns: 4,
+  };
+  const gone = {
+    ...bucket(500),
+    role: "Retired Analyst",
+    handle: "",
+    agent_id: "a-gone",
+    by_phase: {},
+    turns: 2,
+  };
+  mount("#/spend?window=30d", <Spend />, {
+    tokens: rollup(1_500, { by_agent: [ceo, gone] }),
+    viewer: VIEWER,
+  });
+  await settle();
+  const rows = [...document.querySelectorAll<HTMLElement>("[data-row-index]")];
+  const goneRow = rows.find((r) => within(r).queryByText("Retired Analyst"))!;
+  expect(goneRow.querySelector("a.row-link")).toBeNull();
+  expect(goneRow.getAttribute("role")).toBeNull();
+  const ceoRow = rows.find((r) => within(r).queryByText("CEO"))!;
+  expect(ceoRow.querySelector("a.row-link")?.getAttribute("href")).toBe("#/agents/seats/ceo");
+});
+
 // "AND N MORE" IS ITS OWN ELEMENT, apart from the names: the column is one
 // line, and cut as one sentence the count went first — three names then read
 // as everybody who used the entry.

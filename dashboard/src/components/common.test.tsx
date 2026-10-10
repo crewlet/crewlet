@@ -20,7 +20,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import { Tag } from "@crewlethq/ui";
 
-import { QueryState, SeatCard } from "./common.tsx";
+import { QueryState, SeatCard, SeatChip } from "./common.tsx";
 import { drawnClasses } from "~/testing.tsx";
 import type { Seat } from "~/lib/seats.ts";
 import type { AgentRow, LiveCall } from "~/protocol/index.ts";
@@ -106,15 +106,24 @@ test("a seat two rounds in reads as its third round", () => {
   expect(screen.getByText("round 3")).toBeTruthy();
 });
 
-test("a seat card links through seatPath, so an empty handle still reaches a page", () => {
-  const { container } = render(
-    <SeatCard seat={seat({ handle: "" })} agent={undefined} nameOf={(k) => k} />,
-  );
-  // `#/agents/seats/` opens nothing. The seat screen resolves a NAME as well
-  // as a handle, which is why `seatPath` exists and why the peek this card sits
-  // under has always fallen back; the href had not.
-  expect(container.querySelector("a.seat-card")!.getAttribute("href")).toBe(
-    "#/agents/seats/Ada%20Lovelace",
+// A SEAT IS LINKED BY ITS HANDLE, the one address its page resolves — never by
+// its name, which the page answers with "No seat called".
+test("a seat card links its page by handle", () => {
+  const { container } = render(<SeatCard seat={seat()} agent={undefined} nameOf={(k) => k} />);
+  expect(container.querySelector("a.seat-card")!.getAttribute("href")).toBe("#/agents/seats/ada");
+});
+
+// AND A CHIP WITH NO HANDLE IS THE NAME ALONE: spelled with the name instead,
+// its link opened "No seat called" — or, where the name spelled another seat's
+// handle, that seat.
+test("a seat chip links by handle, and with none links nowhere", () => {
+  const bare = render(<SeatChip name="Ada Lovelace" />);
+  expect(bare.container.querySelector("a")).toBeNull();
+  expect(screen.getByText("Ada Lovelace")).toBeTruthy();
+  cleanup();
+  const linked = render(<SeatChip name="Ada Lovelace" handle="ada" />);
+  expect(linked.container.querySelector("a.seat-chip")!.getAttribute("href")).toBe(
+    "#/agents/seats/ada",
   );
 });
 

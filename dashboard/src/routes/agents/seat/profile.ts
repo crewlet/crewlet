@@ -8,7 +8,7 @@ import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import { PERIOD_WORDS } from "~/lib/budget.ts";
 import { fmtCount, tsKey } from "~/lib/format.ts";
 import { callWords } from "~/lib/turnsteps.ts";
-import { activityOf, roundOf, type OrgIndex, type Seat, type SeatState } from "~/lib/seats.ts";
+import { activityOf, roundOf, type Seat, type SeatState } from "~/lib/seats.ts";
 import type {
   AgentRow,
   BudgetWindow,
@@ -56,44 +56,26 @@ export const TAB_LABELS: Readonly<Record<SeatTab, string>> = {
 // ---------------------------------------------------------------------------
 
 /**
- * The seat a handle names, resolved the ONE way.
+ * The live row for a seat: the row carrying its handle, which the URL that
+ * opened the seat named too (`OrgIndex.byHandle` is the only way a seat's
+ * address resolves).
  *
- * Three lookups rather than one, because a handle reaches this screen spelled
- * three ways: a link built from the roster carries the handle, a link built
- * from a config field carries the ROLE NAME (`seatPath` addresses a document
- * entry that declares no handle by name), and a pasted URL carries whatever
- * somebody typed.
- */
-export function findSeat(index: OrgIndex, handle: string): Seat | null {
-  return (
-    index.byHandle.get(handle) ??
-    index.byName.get(handle) ??
-    [...index.byHandle.values()].find((s) => s.handle.toLowerCase() === handle.toLowerCase()) ??
-    null
-  );
-}
-
-/**
- * The live row for a seat, matched every way the roster and the overlay agree.
- *
- * BY IDENTITY FIRST, THE ROLE NAME ONLY AFTER. The handle — the one the URL
- * carried, or the resolved seat's own, since a link minted from a config field
- * addresses a seat by name — and the row's id name exactly one seat; a role
- * name is what two unit seats stamped from one template share. One predicate
- * over all three took the FIRST row that matched any of them, so a sibling
- * listed earlier under the same role name was this seat's row while its own,
- * matched by handle, sat later in the roster unread.
+ * THE ROLE NAME ONLY FOR A ROW WITH NO HANDLE. The live overlay is keyed by
+ * role, and one for a role the roster does not list yet — a seat a revision
+ * has just added — is appended as a row carrying nothing else, so its name
+ * is all there is to match it by. A row carrying ANOTHER handle is another
+ * seat's whatever its role says: a role name is what two unit seats stamped
+ * from one template share, and matched on it, a sibling listed earlier was
+ * drawn as this seat.
  */
 export function liveRow(
   agents: readonly AgentRow[],
-  handle: string,
-  seat: Seat | null,
+  seat: Seat | null | undefined,
 ): AgentRow | undefined {
-  const own = seat?.handle ?? "";
+  if (!seat) return undefined;
   return (
-    agents.find(
-      (a) => a.handle === handle || a.id === handle || (own !== "" && a.handle === own),
-    ) ?? (seat?.name ? agents.find((a) => a.role === seat.name) : undefined)
+    agents.find((a) => a.handle === seat.handle) ??
+    agents.find((a) => !a.handle && a.role === seat.name)
   );
 }
 

@@ -12,9 +12,19 @@
  */
 
 import { describe, expect, test } from "vitest";
-import type { LeadView, UnitView } from "./chartModel.ts";
-import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
-import { leadChipLabel, leadLabel, leadSentence } from "./nodeActions.tsx";
+import type { BuilderApi } from "./BuilderContext.tsx";
+import {
+  chartInputs,
+  structure,
+  type LeadView,
+  type SeatView,
+  type UnitView,
+} from "./chartModel.ts";
+import { COMPANY_KEY, seatKey, seatPathKey, type NodeKey } from "./model/keys.ts";
+import { INITIAL_BUILDER, type BuilderState } from "./model/reducer.ts";
+import { fixtureCompany } from "./model/testkit.ts";
+import { leadChipLabel, leadLabel, leadSentence, nodeMenu } from "./nodeActions.tsx";
+import { recheck, run } from "./testState.ts";
 
 /** A unit with the lead answer under test and nothing else that matters here. */
 function unit(lead: LeadView | null | undefined): UnitView {
@@ -98,5 +108,37 @@ describe("a unit's lead, as a screen reader hears it", () => {
     expect(leadSentence(unit(led("VP Engineering")))).toBe("Lead: VP Engineering.");
     expect(leadSentence(unit(null))).toBe("No lead.");
     expect(leadSentence(unit(undefined))).toBe("Lead after the check.");
+  });
+});
+
+describe("a saved seat's screen", () => {
+  /** Where the node's "Open seat" goes, or `undefined` where none is offered. */
+  const screenOf = (state: BuilderState, key: NodeKey): string[] | undefined => {
+    const view = structure(chartInputs(state)).nodes.get(key) as SeatView;
+    let opened: string[] | undefined;
+    const entries = nodeMenu({ readOnly: false } as BuilderApi, view, (path) => {
+      opened = path;
+    });
+    const open = entries.find((e) => e.key === "open") as { onSelect?: () => void } | undefined;
+    open?.onSelect?.();
+    return opened;
+  };
+
+  /*
+   * BY THE HANDLE ALONE, which is all a seat's page resolves. Before the
+   * engine has described the company, a seat declaring no handle is keyed by
+   * its path and its handle is unknown — and it was offered a screen spelled
+   * with its NAME, which the page answers "No seat called". The first check
+   * names the handle, and the screen is offered by it.
+   */
+  test("is offered by the handle the engine derived, and not before it has", () => {
+    const loaded = run(INITIAL_BUILDER, {
+      type: "load",
+      mode: "edit",
+      document: fixtureCompany(),
+      revision: "rev-1",
+    });
+    expect(screenOf(loaded, seatPathKey("roles[0]"))).toBeUndefined();
+    expect(screenOf(recheck(loaded), seatKey("ceo"))).toEqual(["agents", "seats", "ceo"]);
   });
 });

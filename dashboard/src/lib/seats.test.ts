@@ -247,12 +247,11 @@ describe("the engine's hierarchy", () => {
     expect(index.byName.get("Dev A")?.key).toBe("dev-a");
   });
 
-  // A LINK STILL REACHES A SEAT ADDRESSED FROM A DOCUMENT ENTRY THAT DECLARES
-  // NO HANDLE: the seat screen resolves a name as well as a handle, and the
-  // rule lives in one place.
-  test("a seat is addressed by its handle, or by name where none is known", () => {
+  // A SEAT'S ADDRESS IS THE HANDLE THE ENGINE DERIVED, even for a document
+  // entry that declares none: the page resolves a handle and nothing else.
+  test("a seat is addressed by its handle, never by its name", () => {
     expect(seatPath(index.byName.get("Dev A")!)).toEqual(["agents", "seats", "dev-a"]);
-    expect(seatPath({ handle: "", name: "Dev A" })).toEqual(["agents", "seats", "Dev A"]);
+    expect(index.byHandle.get("Dev A")).toBeUndefined();
   });
 
   // ONLY THE ENGINE KNOWS WHERE A ROOT SEAT SITS. The document wrote Designer

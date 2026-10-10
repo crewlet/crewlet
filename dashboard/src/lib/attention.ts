@@ -186,6 +186,18 @@ export interface AttentionInput {
 
 const ORDER: Record<Severity, number> = { critical: 0, caution: 1, info: 2 };
 
+/**
+ * Where a seat's row points: its page, by the handle it runs under — and
+ * nowhere for a row that carries none. The live overlay is keyed by role, and
+ * one for a seat a revision has just added is appended before the roster
+ * names its handle, with the ROLE NAME as its `id`; a seat's page resolves a
+ * handle and nothing else (`OrgIndex.byHandle`), so that id was a link to "No
+ * seat called". The roster's next push gives the row its handle.
+ */
+function seatPage(agent: AgentRow): Pick<Attention, "path"> {
+  return agent.handle ? { path: ["agents", "seats", agent.handle] } : {};
+}
+
 export function attentionQueue(input: AttentionInput): Attention[] {
   const out: Attention[] = [];
   const { agents, runs, budget, zone, engine, connected, authRejected, now, nameOf } = input;
@@ -329,7 +341,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         icon: "triangle-alert",
         title: `${agent.role} stopped: ${agent.last_error.kind || "error"}`,
         detail: agent.last_error.message || "The seat stopped and has not done work since.",
-        path: ["agents", "seats", String(agent.handle ?? agent.id)],
+        ...seatPage(agent),
         at: agent.last_error.at,
         who: String(agent.handle ?? agent.role),
       });
@@ -346,7 +358,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         icon: "pause",
         title: `${agent.role} is stopped`,
         detail: `The seat cannot take work: ${stoppedLine(agent, nameOf)}.`,
-        path: ["agents", "seats", String(agent.handle ?? agent.id)],
+        ...seatPage(agent),
         // WHEN A PERSON PAUSED IT, where one did: the instant the condition
         // began, which is what orders it among the rest and what its row's
         // age says.
@@ -379,7 +391,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
           detail: `${call.phase} · ${roundLabel(call).text} — no update for ${fmtElapsed(now - tsKey(call.updated_at))}.`,
           // THE OVERVIEW, where the seat's current turn is drawn round by
           // round — the profile's default tab, so the path alone opens it.
-          path: ["agents", "seats", String(agent.handle ?? agent.id)],
+          ...seatPage(agent),
           at: call.updated_at,
           who: String(agent.handle ?? agent.role),
         });
@@ -400,7 +412,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         detail: `${refusalWords(refusing, now)} ${wayOut("the seat's", refusing, zone)}`,
         // THE SETTINGS TAB, where the ceiling that refused is written beside
         // each window's live meter.
-        path: ["agents", "seats", String(agent.handle ?? agent.id)],
+        ...seatPage(agent),
         query: { tab: "settings" },
         at: refusing.refused_at,
       });
