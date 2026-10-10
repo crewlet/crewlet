@@ -255,7 +255,7 @@ func (f FindingKind) Verdict() (Phase, Actor) {
 		// a tool reads it.
 		return PhaseReady, ActorAdmin
 	case FindingApprovalRequired:
-		return PhaseAwaitingAdmin, ActorVendorAdmin
+		return PhaseAwaitingVendorAdmin, ActorVendorAdmin
 	case FindingIngressBlocked:
 		return PhaseDegraded, ActorVendorAdmin
 	case FindingIngressPending:

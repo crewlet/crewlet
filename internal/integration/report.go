@@ -24,18 +24,21 @@ const (
 	// phase because it is not an integration.
 	PhaseUnconfigured Phase = "unconfigured"
 
-	// PhaseAwaitingAdmin means a person must install or approve something
-	// at the third-party app before the engine can act: a Slack app a workspace
-	// administrator has to approve, a GitHub App installation, the
-	// Atlassian Forge app. The engine cannot do it and retrying does not
+	// PhaseAwaitingVendorAdmin means a person must install or approve
+	// something at the third-party app before the engine can act: a Slack app
+	// a workspace administrator has to approve, a GitHub App installation,
+	// the Atlassian Forge app. The engine cannot do it and retrying does not
 	// help, but it resumes on its own the moment they finish.
 	//
-	// The admin it awaits is the VENDOR's — its actor is [ActorVendorAdmin],
-	// never the company's [ActorAdmin]. The wire value is not renamed to
-	// match because it is not this engine's alone: it is the control plane's
-	// phase vocabulary (see [Phase.Label]), and the actor beside it is what
-	// says whose admin.
-	PhaseAwaitingAdmin Phase = "awaiting_admin"
+	// THE VENDOR'S ADMIN, SAID IN THE VALUE. Its actor is always
+	// [ActorVendorAdmin], and the bare word belongs to the company: a phase
+	// that awaited a bare "admin" beside an actor spelled `admin` read as the
+	// company's admin being awaited, which is the one person this phase
+	// never waits for. It kept that spelling for a while on the reasoning
+	// that the value was the control plane's — but what the two consoles
+	// share is the LABEL (see [Phase.Label]), which is unchanged, not this
+	// stored value, which no other product reads.
+	PhaseAwaitingVendorAdmin Phase = "awaiting_vendor_admin"
 
 	// PhaseProvisioning means the engine is creating identities. Its own
 	// work, and the next pass carries it forward.
@@ -75,9 +78,13 @@ const (
 //
 // THE WORDS ARE THE CONTROL PLANE'S, so one company reads the same status
 // whichever console it is looking at. backlet's ReconcilePhase and this one
-// are the same vocabulary with two names, and its console renders them as
-// below; anything else here would mean an integration that says "activating"
-// in one product and something else in the other.
+// are the same stations, and its console renders them as below; anything
+// else here would mean an integration that says "Waiting for the provider" in
+// one product and something else in the other. What the two share is these
+// LABELS and nothing on the wire: no other product reads this engine's stored
+// value, which is why one of them may say more than its counterpart does —
+// [PhaseAwaitingVendorAdmin] names whose admin it awaits, and still reads
+// "Action needed".
 //
 // ONE of backlet's phases has no counterpart here, and it is not an omission:
 // `disconnected` is a tenant who has not connected an integration yet, which
@@ -98,7 +105,7 @@ func (p Phase) Label() string {
 		// Agents are working and somebody has to act, which is the one
 		// case where the count of what is broken is not the point.
 		return "Action required"
-	case PhaseAwaitingAdmin:
+	case PhaseAwaitingVendorAdmin:
 		return "Action needed"
 	case PhaseProvisioning:
 		return "Setting up agents"
@@ -131,7 +138,7 @@ var Phases = []Phase{
 	// being removed invites a reader to act on something that is going
 	// away, which is the same precedence the console gives it.
 	PhaseDisconnecting,
-	PhaseUnconfigured, PhaseAwaitingAdmin, PhaseProvisioning,
+	PhaseUnconfigured, PhaseAwaitingVendorAdmin, PhaseProvisioning,
 	PhaseActivating, PhaseDegraded, PhaseReady,
 }
 

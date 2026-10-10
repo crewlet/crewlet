@@ -261,7 +261,7 @@ func TestOutcomeTurnsOnTheActorNotThePhase(t *testing.T) {
 		{"degraded on the engine", Report{Phase: PhaseDegraded, Actor: ActorEngine}, OutcomeWaiting},
 		{"activating on the vendor", Report{Phase: PhaseActivating, Actor: ActorProvider}, OutcomeWaiting},
 		{"provisioning", Report{Phase: PhaseProvisioning, Actor: ActorEngine}, OutcomeWaiting},
-		{"awaiting a vendor admin", Report{Phase: PhaseAwaitingAdmin, Actor: ActorVendorAdmin}, OutcomeBlocked},
+		{"awaiting a vendor admin", Report{Phase: PhaseAwaitingVendorAdmin, Actor: ActorVendorAdmin}, OutcomeBlocked},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
