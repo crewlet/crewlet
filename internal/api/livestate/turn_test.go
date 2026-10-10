@@ -8,7 +8,7 @@ import (
 
 // turnPayload is one event of turn `turnID` on the Lead seat.
 func turnPayload(turnID string, over map[string]any) map[string]any {
-	return with(map[string]any{"role": "Lead", "agent_id": "a-1", "turn_id": turnID}, over)
+	return with(map[string]any{"role": "Lead", "agent_handle": "Lead", "agent_id": "a-1", "turn_id": turnID}, over)
 }
 
 func TestATurnIsWorkingFromItsStartEvent(t *testing.T) {
@@ -16,7 +16,7 @@ func TestATurnIsWorkingFromItsStartEvent(t *testing.T) {
 	// The start is published before the prefetch, which is work: a seat that
 	// read as idle until its first phase read as idle with a wake in hand.
 	s := livestate.New()
-	s.Apply(env("agent_spawned", map[string]any{"role": "Lead"}, at("2026-06-14T11:00:00Z")))
+	s.Apply(env("agent_spawned", map[string]any{"role": "Lead", "agent_handle": "Lead"}, at("2026-06-14T11:00:00Z")))
 	change := s.Apply(env("agent_turn_started", turnPayload("tn-1", map[string]any{
 		"node":            "core-1",
 		"started_at":      "2026-06-14T11:59:59.5Z",
@@ -216,7 +216,7 @@ func TestTheOverlayAlwaysCarriesTheTurnKeys(t *testing.T) {
 	// The client MERGES a pushed row over the one it holds, so a key left
 	// out reads as unchanged: a finished turn would stay on the card.
 	s := livestate.New()
-	s.Apply(env("agent_spawned", map[string]any{"role": "Lead"}))
+	s.Apply(env("agent_spawned", map[string]any{"role": "Lead", "agent_handle": "Lead"}))
 	rows := s.OverlayRows([]string{"Lead"})
 	if len(rows) != 1 {
 		t.Fatalf("rows = %+v", rows)

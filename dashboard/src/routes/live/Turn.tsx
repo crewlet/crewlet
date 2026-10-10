@@ -616,7 +616,14 @@ export function useTurnView(turnId: string): TurnView {
           liveCall?.work_item ??
           null) as WorkItemRef | null);
   const role = phases[0]?.role ?? (rec.summary?.actor || str(opened, "role"));
-  const seat = seatRow ?? agents.find((a) => a.role === role);
+  // THE SEAT BY ITS HANDLE, which the turn's own records name: a role name is
+  // a label two seats can share, and found by it this page drew the other
+  // seat's pause and live state on this turn.
+  const handle =
+    str(opened, "agent_handle") ||
+    str(rec.summary, "agent_handle") ||
+    str(rec.learning, "agent_handle");
+  const seat = seatRow ?? (handle ? agents.find((a) => a.handle === handle) : undefined);
   const startedAt =
     tsKey(str(opened, "started_at")) ||
     (seatRow?.turn?.turn_id === turnId ? tsKey(seatRow.turn.started_at) : 0);
@@ -659,7 +666,7 @@ export function useTurnView(turnId: string): TurnView {
     parked: stage === "parked",
     overlay: connected,
     startedAt,
-    handle: seat?.handle ?? str(opened, "agent_handle"),
+    handle: seat?.handle ?? handle,
     paused: !!seat?.paused,
     liveCall,
     phases,

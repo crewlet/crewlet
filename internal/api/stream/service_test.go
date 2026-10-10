@@ -113,7 +113,7 @@ func TestIngestPushesTheResultOfApplyingAnEvent(t *testing.T) {
 	// the raw event stream. Every tab used to keep its own copy of the
 	// projection, and each drifted its own way.
 	s, c := newService(t, stream.Options{})
-	s.Ingest(envelope("agent_phase_started", map[string]any{"role": "Lead", "turn_id": "tn-1"}))
+	s.Ingest(envelope("agent_phase_started", map[string]any{"role": "Lead", "agent_handle": "Lead", "turn_id": "tn-1"}))
 
 	got := drain(c)
 	var agents *stream.Envelope
@@ -140,7 +140,7 @@ func TestIngestPushesTheResultOfApplyingAnEvent(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("rows = %d, want the one seat that moved", len(rows))
 	}
-	if got := rows[0]["role"]; got != "Lead" {
+	if got := rows[0]["handle"]; got != "Lead" {
 		t.Errorf("row role = %v; the client keys on this field and drops a "+
 			"row without it", got)
 	}
@@ -214,10 +214,10 @@ func TestAReconcilePushesTheSeatsItMoved(t *testing.T) {
 	drain(c)
 
 	s.ReconcileSandboxes([]livestate.SandboxRecord{{Entry: livestate.SandboxEntry{
-		TurnID: "tn-1", Role: "Coder", Status: livestate.SandboxAwaiting,
+		TurnID: "tn-1", Role: "Coder", AgentHandle: "Coder", Status: livestate.SandboxAwaiting,
 	}}}, clock)
 	rows := agentRows(t, drain(c))
-	if len(rows) != 1 || rows[0]["role"] != "Coder" || rows[0]["activity"] != livestate.ActivityNeeds {
+	if len(rows) != 1 || rows[0]["handle"] != "Coder" || rows[0]["activity"] != livestate.ActivityNeeds {
 		t.Errorf("pushed = %v, want the seat needing somebody", rows)
 	}
 }
@@ -244,7 +244,7 @@ func TestTheEventArrivesBeforeItsConsequences(t *testing.T) {
 	// A derived push arriving before the event that caused it would
 	// briefly show a consequence with no cause in the feed beside it.
 	s, c := newService(t, stream.Options{})
-	s.Ingest(envelope("agent_phase_started", map[string]any{"role": "Lead", "task_id": "t-1"}))
+	s.Ingest(envelope("agent_phase_started", map[string]any{"role": "Lead", "agent_handle": "Lead", "task_id": "t-1"}))
 
 	kinds := kindsOf(c)
 	if len(kinds) < 2 {
@@ -264,7 +264,7 @@ func TestAStreamOnlyEventPushesNoFeedRow(t *testing.T) {
 	s.Ingest(livestate.Envelope{
 		ID: "e1", Type: "agent_turn_progress", Timestamp: "2026-06-14T12:00:00Z",
 		Payload: map[string]any{
-			"role": "Lead", "turn_id": "tn-1", "phase": "plan", "round_num": 0,
+			"role": "Lead", "agent_handle": "Lead", "turn_id": "tn-1", "phase": "plan", "round_num": 0,
 		},
 	})
 	kinds := kindsOf(c)
@@ -297,7 +297,7 @@ func TestSandboxAndBudgetPushTheirOwnKinds(t *testing.T) {
 	s, c := newService(t, stream.Options{})
 
 	s.Ingest(envelope("sandbox_run_started", map[string]any{
-		"turn_id": "tn-1", "role": "Coder",
+		"turn_id": "tn-1", "role": "Coder", "agent_handle": "Coder",
 	}))
 	if kinds := kindsOf(c); !contains(kinds, stream.KindSandboxes) {
 		t.Errorf("kinds = %v, want a sandboxes push", kinds)
@@ -323,7 +323,7 @@ func TestAReconcilePushesTheSandboxSetOnlyWhenItMoved(t *testing.T) {
 	t.Parallel()
 	s, c := newService(t, stream.Options{})
 	record := livestate.SandboxRecord{Entry: livestate.SandboxEntry{
-		TurnID: "tn-1", Role: "Coder", Status: livestate.SandboxRunning,
+		TurnID: "tn-1", Role: "Coder", AgentHandle: "Coder", Status: livestate.SandboxRunning,
 	}}
 	s.ReconcileSandboxes([]livestate.SandboxRecord{record}, clock)
 	if kinds := kindsOf(c); !slices.Equal(kinds, []stream.Kind{stream.KindSandboxes}) {
@@ -344,7 +344,7 @@ func TestSpendIsFoldedOnTheTickAndNotOnThePublishPath(t *testing.T) {
 	// per phase instead of one every tick.
 	s, c := newService(t, stream.Options{HealthInterval: 10 * time.Millisecond})
 	s.Ingest(envelope("agent_phase_completed", map[string]any{
-		"role": "Lead", "phase": "plan", "model": "m-1",
+		"role": "Lead", "agent_handle": "Lead", "phase": "plan", "model": "m-1",
 		"input_tokens": 6, "output_tokens": 4, "total_tokens": 10,
 	}))
 	if kinds := kindsOf(c); contains(kinds, stream.KindTokens) {
@@ -408,7 +408,7 @@ func TestARecordAgeingOutPushesTheRollupOnTheTick(t *testing.T) {
 		HealthInterval: 10 * time.Millisecond,
 	})
 	s.Ingest(envelope("agent_phase_completed", map[string]any{
-		"role": "Lead", "phase": "plan", "model": "m-1", "total_tokens": 10,
+		"role": "Lead", "agent_handle": "Lead", "phase": "plan", "model": "m-1", "total_tokens": 10,
 	}))
 	s.StartHealthTicks(t.Context())
 	if rollup := awaitRollup(t, c); rollup.Totals.TotalTokens != 10 {
@@ -461,7 +461,7 @@ func TestASnapshotIsBuiltFromMemoryAlone(t *testing.T) {
 	// thirty-day scan per tab, and would lose any call mid-flight while it
 	// did.
 	s, _ := newService(t, stream.Options{})
-	s.Ingest(envelope("agent_phase_started", map[string]any{"role": "Lead", "task_id": "t-1"}))
+	s.Ingest(envelope("agent_phase_started", map[string]any{"role": "Lead", "agent_handle": "Lead", "task_id": "t-1"}))
 
 	snap := s.Snapshot()
 	for _, key := range []string{"health", "agents", "events", "sandboxes", "tokens", "budget"} {

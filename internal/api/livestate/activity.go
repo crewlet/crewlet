@@ -136,11 +136,11 @@ const providerFailure = "llm_unavailable"
 // placement, runs, a company budget and therefore a state.
 //
 // Called under s.mu.
-func (s *LiveState) stateOf(role string, agent *agentLive) seatState {
+func (s *LiveState) stateOf(handle string, agent *agentLive) seatState {
 	if agent != nil && agent.turn != nil && agent.turn.Stage != StageParked {
 		return seatState{activity: ActivityWorking}
 	}
-	running, waiting := s.runsOf(role)
+	running, waiting := s.runsOf(handle)
 	// A PARKED TURN IS NOT WORK OF ITS OWN: its run is, and the run's
 	// record says whether that run is running, waiting on somebody or gone.
 	// Reading the park as working would keep a seat busy for good over a
@@ -159,7 +159,7 @@ func (s *LiveState) stateOf(role string, agent *agentLive) seatState {
 	switch {
 	case agent != nil && agent.paused != nil:
 		return stopped(StoppedPaused)
-	case s.unplaced(role):
+	case s.unplaced(handle):
 		return stopped(StoppedUnplaced)
 	case agent != nil && agent.budget != nil && refusing(agent.budget.Windows, s.clock()),
 		s.budget != nil && refusing(s.budget.Org.Windows, s.clock()):
@@ -174,19 +174,19 @@ func (s *LiveState) stateOf(role string, agent *agentLive) seatState {
 // node holding it. A seat the read did not list — before any read, or one the
 // company no longer has — is not claimed either way: "no node holds it" is a
 // fact about a seat the lease table was asked about.
-func (s *LiveState) unplaced(role string) bool {
-	held, listed := s.placement[role]
+func (s *LiveState) unplaced(handle string) bool {
+	held, listed := s.placement[handle]
 	return listed && !held
 }
 
 // runsOf reports whether the seat has a coding run in flight and whether it has
 // one waiting on a person, from the running-runs set.
-func (s *LiveState) runsOf(role string) (running, waiting bool) {
-	if role == "" {
+func (s *LiveState) runsOf(handle string) (running, waiting bool) {
+	if handle == "" {
 		return false, false
 	}
 	for _, held := range s.sandboxes {
-		if held.entry.Role != role {
+		if held.entry.AgentHandle != handle {
 			continue
 		}
 		switch held.entry.Status {
@@ -222,22 +222,22 @@ func refusing(windows []WindowMeter, now time.Time) bool {
 	return false
 }
 
-// knownRoles is every role the projection can state a seat for: the company's
-// agent seats as the last placement named them, every seat an event named, and
-// every seat a run in flight belongs to.
+// knownSeats is the handle of every seat the projection can state: the
+// company's agent seats as the last placement named them, every seat an event
+// named, and every seat a run in flight belongs to.
 //
 // Called under s.mu.
-func (s *LiveState) knownRoles() map[string]struct{} {
+func (s *LiveState) knownSeats() map[string]struct{} {
 	out := make(map[string]struct{}, len(s.agents)+len(s.placement))
-	for role := range s.placement {
-		out[role] = struct{}{}
+	for handle := range s.placement {
+		out[handle] = struct{}{}
 	}
-	for role := range s.agents {
-		out[role] = struct{}{}
+	for handle := range s.agents {
+		out[handle] = struct{}{}
 	}
 	for _, held := range s.sandboxes {
-		if held.entry.Role != "" {
-			out[held.entry.Role] = struct{}{}
+		if held.entry.AgentHandle != "" {
+			out[held.entry.AgentHandle] = struct{}{}
 		}
 	}
 	return out
@@ -248,10 +248,10 @@ func (s *LiveState) knownRoles() map[string]struct{} {
 //
 // Called under s.mu.
 func (s *LiveState) states() map[string]seatState {
-	roles := s.knownRoles()
-	out := make(map[string]seatState, len(roles))
-	for role := range roles {
-		out[role] = s.stateOf(role, s.agents[role])
+	seats := s.knownSeats()
+	out := make(map[string]seatState, len(seats))
+	for handle := range seats {
+		out[handle] = s.stateOf(handle, s.agents[handle])
 	}
 	return out
 }
@@ -259,28 +259,28 @@ func (s *LiveState) states() map[string]seatState {
 // noteMoved marks every seat whose state differs from `before` as moved.
 //
 // ONLY A SEAT THE COMPANY HAS, or one the events already gave an entry: a run
-// or a meter can name a role the last placement read did not list — a seat a
-// revision removed — and minting an entry for it would push a row the client
-// appends as a new card. A seat of the company's that has no entry yet is given
+// or a meter can name a seat the last placement read did not list — a seat a
+// revision removed — and minting an entry for it would push a row for a seat
+// no roster carries. A seat of the company's that has no entry yet is given
 // one, so its row is pushed rather than skipped.
 //
 // Called under s.mu.
 func (s *LiveState) noteMoved(before map[string]seatState, change *Change) {
-	for role, now := range s.states() {
-		if was, ok := before[role]; ok && was == now {
+	for handle, now := range s.states() {
+		if was, ok := before[handle]; ok && was == now {
 			continue
 		}
-		if _, ours := s.placement[role]; !ours && s.agents[role] == nil {
+		if _, ours := s.placement[handle]; !ours && s.agents[handle] == nil {
 			continue
 		}
-		s.ensureAgent(role)
-		change.agentMoved(role)
+		s.ensureAgent(handle)
+		change.agentMoved(handle)
 	}
 }
 
 // SetPlacement lands a read of which of the company's agent seats some node in
-// the fleet holds, keyed by role: every agent seat in the company, true where a
-// node holds it. It replaces the previous read whole — a seat the company no
+// the fleet holds, keyed by handle: every agent seat in the company, true where
+// a node holds it. It replaces the previous read whole — a seat the company no
 // longer has is no longer a seat anything is placed for — and reports the seats
 // whose state it moved.
 //
@@ -292,9 +292,9 @@ func (s *LiveState) SetPlacement(placed map[string]bool) Change {
 	defer s.mu.Unlock()
 	before := s.states()
 	next := make(map[string]bool, len(placed))
-	for role, held := range placed {
-		if role != "" {
-			next[role] = held
+	for handle, held := range placed {
+		if handle != "" {
+			next[handle] = held
 		}
 	}
 	s.placement = next

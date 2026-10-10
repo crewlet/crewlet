@@ -41,7 +41,7 @@ func TestAgentPhasesStopAtTheSameFloorEveryOtherReadDoes(t *testing.T) {
 		}
 	}
 
-	got, _, err := log.AgentPhases(t.Context(), "", "Lead", nil, time.Now())
+	got, _, err := log.AgentPhases(t.Context(), "agent-lead", nil, time.Now())
 	if err != nil {
 		t.Fatalf("AgentPhases: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestAPageOfExactlyTheHistorySaysItIsTheLast(t *testing.T) {
 		if err := log.Append(t.Context(), store.EventRecord{
 			ID: id, Type: "agent_phase_completed", Source: "Lead",
 			Category: "agent", Time: now.Add(-time.Duration(i+1) * time.Second), Actor: "Lead",
-			Tags:    map[string]string{"agent_role": "Lead", "turn_id": id},
+			Tags:    map[string]string{"agent_role": "Lead", "agent_id": "agent-lead", "turn_id": id},
 			Payload: []byte(`{"turn_id":"` + id + `","phase":"execute","role":"Lead"}`),
 		}); err != nil {
 			t.Fatalf("append %s: %v", id, err)
@@ -94,7 +94,7 @@ func TestAPageOfExactlyTheHistorySaysItIsTheLast(t *testing.T) {
 		add(i)
 	}
 
-	seat, more, err := log.AgentPhases(t.Context(), "", "Lead", nil, time.Now())
+	seat, more, err := log.AgentPhases(t.Context(), "agent-lead", nil, time.Now())
 	if err != nil {
 		t.Fatalf("AgentPhases: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestAPageOfExactlyTheHistorySaysItIsTheLast(t *testing.T) {
 
 	// ONE MORE, and every read says so — and still answers only its page.
 	add(store.AgentPhaseLimit)
-	seat, more, err = log.AgentPhases(t.Context(), "", "Lead", nil, time.Now())
+	seat, more, err = log.AgentPhases(t.Context(), "agent-lead", nil, time.Now())
 	if err != nil || len(seat) != store.AgentPhaseLimit || !more {
 		t.Errorf("a seat with a page and one: %d rows, more=%v, err %v; want %d and true",
 			len(seat), more, err, store.AgentPhaseLimit)
@@ -145,13 +145,16 @@ func TestAPageOfExactlyTheHistorySaysItIsTheLast(t *testing.T) {
 	}
 }
 
-// THE COMPANY'S PHASES NARROW TO ONE SEAT BY ITS ID, NEVER ITS ROLE NAME.
+// THE COMPANY'S PHASES, AND ONE SEAT'S OWN, NARROW TO THE SEAT BY ITS ID, NEVER
+// ITS ROLE NAME.
 //
 // Two unit seats stamped from one template share a role name, so a filter on
 // it answered "this seat's phases" with both seats' — the Live screen's
-// `seat=` handed over as a role, and the other seat's rounds in the list.
+// `seat=` handed over as a role, and the other seat's rounds in the list; and
+// the seat page's history matched the name beside the id, so it listed both.
 //
-// Mutation: filter on `agent_role` again, and the twin's phase is listed.
+// Mutation: filter either read on `agent_role` again, and the twin's phase is
+// listed.
 func TestCompanyPhasesNarrowToOneSeatByItsID(t *testing.T) {
 	t.Parallel()
 	log := open(t).Events()
@@ -178,6 +181,14 @@ func TestCompanyPhasesNarrowToOneSeatByItsID(t *testing.T) {
 	all, _, err := log.Phases(t.Context(), "", 0, nil, time.Now())
 	if err != nil || len(all) != 2 {
 		t.Errorf("the company's phases = %d (err %v), want both", len(all), err)
+	}
+	own, more, err := log.AgentPhases(t.Context(), "agent-eng-b", nil, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(own) != 1 || own[0].ID != "p-1" || more {
+		t.Errorf("seat b's own history = %v (more=%v), want only p-1 — its twin shares the role name",
+			idsOf(own), more)
 	}
 }
 

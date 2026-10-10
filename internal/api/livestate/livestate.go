@@ -2,7 +2,7 @@
 // is doing right now.
 //
 // It consumes the engine event stream — the same feed the WebSocket fan-out
-// reads — and maintains, per agent role: the seat's live state, the TURN it is
+// reads — and maintains, per agent seat: the seat's live state, the TURN it is
 // on and the stage of it (context, a phase, or parked on a coding run), the
 // last turn it ended, its current phase and iteration, its live token meter,
 // and the IN-FLIGHT LLM call. Beside the seats it keeps the coding runs in
@@ -24,6 +24,15 @@
 // NO PER-READ DATABASE SCAN. Re-deriving seat state from a thirty-day event
 // scan on every /agents request, every snapshot and every WebSocket connect
 // does not scale. Here it is maintained incrementally and read in O(1).
+//
+// A SEAT IS ITS HANDLE. Every map here is keyed on the handle every seat event
+// carries (`agent_handle`), never on the role name beside it: a name is a label
+// two seats can share — the duplicate-name rule is an admission rule, so a
+// stored revision, or one a newer node admitted, runs with a collision — and a
+// projection keyed on it gave one of the two seats the other's live state and
+// the other none. The roster rows the overlay is merged onto, the placement read
+// and the client's merge are keyed the same way, so nothing in between has to
+// translate.
 //
 // ORDERING. The events arrive over a broker that guarantees order only within a
 // topic, and different event types are different topics. Every state transition
@@ -166,7 +175,7 @@ var sandboxEvents = map[string]struct{}{
 
 // agentLive is the incrementally-maintained state of one seat.
 type agentLive struct {
-	role      string
+	handle    string
 	runtimeID string
 
 	currentPhase     string
@@ -336,7 +345,7 @@ type LiveState struct {
 	budget *OrgBudget
 
 	// placement is which of the company's agent seats some node holds,
-	// keyed by role, as the last read of the seat leases found it — nil
+	// keyed by handle, as the last read of the seat leases found it — nil
 	// until one lands. See [LiveState.SetPlacement].
 	placement map[string]bool
 
@@ -420,53 +429,53 @@ func (s *LiveState) MergeAgents(static []map[string]any) []map[string]any {
 		for k, v := range row {
 			merged[k] = v
 		}
-		role, _ := row["role"].(string)
-		mergeOverlay(merged, s.overlayOf(role))
+		handle, _ := row["handle"].(string)
+		mergeOverlay(merged, s.overlayOf(handle))
 		out = append(out, merged)
 	}
 	return out
 }
 
-// OverlayRows renders the live overlays for the named roles as the wire rows
-// the `agents` push carries: one object per seat, with its role INSIDE it.
+// OverlayRows renders the live overlays for the named seats as the wire rows
+// the `agents` push carries: one object per seat, with its handle INSIDE it.
 //
-// A LIST, and the role in the row, because that is what the client reads —
-// store.js does `rows.map(r => [r.role, r])` behind an `Array.isArray` guard,
-// so a map keyed by role is not merely a different spelling of the same thing:
-// it fails the guard and the push is DISCARDED, silently, every time. Measured
+// A LIST, and the handle in the row, because that is what the client reads —
+// its store merges `rows` by `handle` behind an `Array.isArray` guard, so a
+// map keyed by seat is not merely a different spelling of the same thing: it
+// fails the guard and the push is DISCARDED, silently, every time. Measured
 // end to end (internal/e2e): a full turn ran, four agents pushes went out per
 // phase, and the seat stayed idle on the dashboard from start to finish.
 //
 // The client is the compatibility reference and wins any disagreement about a
 // frame's shape. This is that rule applied.
 //
-// A role with no live state is SKIPPED rather than sent as an empty overlay:
+// A seat with no live state is SKIPPED rather than sent as an empty overlay:
 // the client merges these onto its existing rows, so a blank one would erase
 // the state of a seat that simply had not changed.
-func (s *LiveState) OverlayRows(roles []string) []map[string]any {
+func (s *LiveState) OverlayRows(handles []string) []map[string]any {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	out := make([]map[string]any, 0, len(roles))
-	for _, role := range roles {
-		if s.agents[role] == nil {
+	out := make([]map[string]any, 0, len(handles))
+	for _, handle := range handles {
+		if s.agents[handle] == nil {
 			continue
 		}
-		row := map[string]any{"role": role}
-		mergeOverlay(row, s.overlayOf(role))
+		row := map[string]any{"handle": handle}
+		mergeOverlay(row, s.overlayOf(handle))
 		out = append(out, row)
 	}
 	return out
 }
 
-// AgentOverlay returns the live overlay for one role, or nil.
-func (s *LiveState) AgentOverlay(role string) *Overlay {
+// AgentOverlay returns the live overlay for one seat, by handle, or nil.
+func (s *LiveState) AgentOverlay(handle string) *Overlay {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.agents[role] == nil {
+	if s.agents[handle] == nil {
 		return nil
 	}
-	o := s.overlayOf(role)
+	o := s.overlayOf(handle)
 	return &o
 }
 
@@ -474,23 +483,23 @@ func (s *LiveState) AgentOverlay(role string) *Overlay {
 // over them. A seat with no live entry has zero fields and a state all the same.
 //
 // Called under s.mu.
-func (s *LiveState) overlayOf(role string) Overlay {
-	agent := s.agents[role]
+func (s *LiveState) overlayOf(handle string) Overlay {
+	agent := s.agents[handle]
 	var o Overlay
 	if agent != nil {
 		o = agent.overlay()
 	}
-	st := s.stateOf(role, agent)
+	st := s.stateOf(handle, agent)
 	o.Activity = st.activity
 	o.StoppedReason = st.stoppedReason()
 	return o
 }
 
-// RuntimeIDFor returns the running instance id for a role, or "".
-func (s *LiveState) RuntimeIDFor(role string) string {
+// RuntimeIDFor returns the running instance id for a seat, or "".
+func (s *LiveState) RuntimeIDFor(handle string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if live := s.agents[role]; live != nil {
+	if live := s.agents[handle]; live != nil {
 		return live.runtimeID
 	}
 	return ""
@@ -563,8 +572,8 @@ func (s *LiveState) Apply(env *Envelope) (change Change) {
 	// The in-flight call is stream-only: update it, but never let it into
 	// the persisted-event buffer.
 	if env.Type == "agent_turn_progress" {
-		if role := s.applyProgress(*env, payload); role != "" {
-			change.agentMoved(role)
+		if handle := s.applyProgress(*env, payload); handle != "" {
+			change.agentMoved(handle)
 		}
 		return change
 	}
@@ -598,7 +607,7 @@ func (s *LiveState) Apply(env *Envelope) (change Change) {
 		s.applySandbox(*env, payload)
 		change.Sandboxes = true
 		if env.Type == "sandbox_run_failed" && s.endLostRun(*env, payload) {
-			change.agentMoved(str(payload, "role", "agent_role"))
+			change.agentMoved(str(payload, "agent_handle"))
 		}
 		s.noteMoved(before, &change)
 		return change
@@ -612,28 +621,28 @@ func (s *LiveState) Apply(env *Envelope) (change Change) {
 		change.Tokens = s.foldSpend(*env, payload)
 	}
 
-	role := str(payload, "role", "agent_role")
-	if role == "" {
+	handle := str(payload, "agent_handle")
+	if handle == "" {
 		return change
 	}
-	agent := s.ensureAgent(role)
+	agent := s.ensureAgent(handle)
 	if id := str(payload, "agent_id"); id != "" {
 		agent.runtimeID = id
 	}
 	// THE SEAT'S STATE IS A PUSH OF ITS OWN: an event can move it without
 	// moving any field it is derived from that the checks below compare —
 	// a failure hold that lifts, a turn that starts.
-	before := s.stateOf(role, agent)
+	before := s.stateOf(handle, agent)
 	defer func() {
-		if s.stateOf(role, agent) != before {
-			change.agentMoved(role)
+		if s.stateOf(handle, agent) != before {
+			change.agentMoved(handle)
 		}
 	}()
 
 	// A PERSON'S PAUSE, on its own guard: it moves nothing else about the
 	// seat, and nothing else moves it.
 	if s.applyPause(agent, *env, payload) {
-		change.agentMoved(role)
+		change.agentMoved(handle)
 		return change
 	}
 
@@ -641,10 +650,10 @@ func (s *LiveState) Apply(env *Envelope) (change Change) {
 	// below discards as older than the seat's newest (a completion that
 	// lost a race to the next turn's first phase) still ended its turn.
 	if s.applyTurnEvent(agent, *env, payload) {
-		change.agentMoved(role)
+		change.agentMoved(handle)
 	}
 	if s.applyState(agent, *env, payload) {
-		change.agentMoved(role)
+		change.agentMoved(handle)
 	}
 	return change
 }
@@ -836,7 +845,8 @@ func (s *LiveState) endTurn(agent *agentLive, turnID string) {
 	s.clearCall(agent)
 }
 
-// ensureAgent returns the live entry for a role, creating an empty one.
+// ensureAgent returns the live entry for a seat, by handle, creating an empty
+// one.
 //
 // AN EMPTY ENTRY CLAIMS NOTHING of its own. Several things create one without
 // saying anything about whether the seat is running — a meter report names
@@ -846,11 +856,11 @@ func (s *LiveState) endTurn(agent *agentLive, turnID string) {
 // "offline", and a merged overlay OVERWRITES the roster's row, so the first
 // meter report after a boot turned every capped seat this node was serving
 // from idle to offline on every open dashboard until the seat next took a turn.
-func (s *LiveState) ensureAgent(role string) *agentLive {
-	agent := s.agents[role]
+func (s *LiveState) ensureAgent(handle string) *agentLive {
+	agent := s.agents[handle]
 	if agent == nil {
-		agent = &agentLive{role: role}
-		s.agents[role] = agent
+		agent = &agentLive{handle: handle}
+		s.agents[handle] = agent
 	}
 	return agent
 }

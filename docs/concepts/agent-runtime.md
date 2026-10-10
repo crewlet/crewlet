@@ -36,6 +36,8 @@ For a seat with direct reports, the executor prompt includes a **team roster**: 
 
 The engine keeps no per-seat state machine in the turn path. What a seat is doing is computed by the live projection (`internal/api/livestate`) that every node serving the API holds, and it is served as **one word per seat** — `activity` — on every seat row: the handshake snapshot's, [`GET /agents`](../reference/api-endpoints.md#what-the-handshake-snapshot-carries) and every `agents` push. The dashboard maps the word to a colour and a label and derives nothing itself, so no two screens can disagree about a seat.
 
+The projection keys every seat on its **handle**, which every event that moves a seat carries as `agent_handle` — never on its role name, which is a label two seats can share: unique seat names are an admission rule, so a stored revision, or one a newer node admitted, runs with a collision, and a view keyed on the name gave one of the two seats both seats' live state and the other none.
+
 | `activity` | When | `stopped_reason` |
 |---|---|---|
 | `working` | A turn is running on the seat (from `agent_turn_started`, so the prefetch counts as work), or a [coding run](code-sandbox.md) it launched is `launching` or `running`. | `null` |

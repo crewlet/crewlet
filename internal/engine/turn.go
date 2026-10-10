@@ -981,7 +981,7 @@ func (d *Dispatcher) noteBreach(ctx context.Context, handle string, req Request,
 		return
 	}
 	role, agentID := d.Identify(handle)
-	if rec := panicBreach(role, agentID, req.RunID, req.WorkKey, triggerTrace(req.Events), panicked); rec != nil {
+	if rec := panicBreach(handle, role, agentID, req.RunID, req.WorkKey, triggerTrace(req.Events), panicked); rec != nil {
 		d.Observe(ctx, rec)
 	}
 }
@@ -998,7 +998,7 @@ func (d *Dispatcher) noteBreach(ctx context.Context, handle string, req Request,
 // the turn id's slot — the shape from before ADR-0017 split the two — so the
 // breach of a turn that died joined no turn at all, least of all the one whose
 // start said it had begun.
-func panicBreach(role, agentID, runID, workKey string, trace events.TraceContext,
+func panicBreach(handle, role, agentID, runID, workKey string, trace events.TraceContext,
 	panicked *turn.PanicError,
 ) *events.Event {
 	if role == "" {
@@ -1007,12 +1007,13 @@ func panicBreach(role, agentID, runID, workKey string, trace events.TraceContext
 		return nil
 	}
 	rec := events.New(types.TurnGuardBreach{
-		Agent:    agentID,
-		RoleName: role,
-		Kind:     types.GuardUnhandledException,
-		Detail:   events.ClipDiagnostic(panicked.Error()),
-		TurnID:   runID,
-		WorkKey:  workKey,
+		Agent:       agentID,
+		AgentHandle: handle,
+		RoleName:    role,
+		Kind:        types.GuardUnhandledException,
+		Detail:      events.ClipDiagnostic(panicked.Error()),
+		TurnID:      runID,
+		WorkKey:     workKey,
 	}, trace)
 	// SOURCED AS THE SEAT, as every turn-level event is (see
 	// [Engine.publishEvent]): a consumer with no other attribution renders

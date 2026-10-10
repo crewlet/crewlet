@@ -14,7 +14,7 @@ import (
 
 func stateOf(t *testing.T, s *livestate.LiveState, role string) (livestate.Activity, livestate.StoppedReason) {
 	t.Helper()
-	rows := s.MergeAgents([]map[string]any{{"role": role}})
+	rows := s.MergeAgents([]map[string]any{{"handle": role}})
 	activity, _ := rows[0]["activity"].(livestate.Activity)
 	if !activity.Valid() {
 		t.Fatalf("seat %q carries activity %#v, which is not a word of the vocabulary", role, rows[0]["activity"])
@@ -41,11 +41,12 @@ func wantState(t *testing.T, s *livestate.LiveState, role string, activity lives
 	}
 }
 
-// codingRun is one run as the durable record states it.
-func codingRun(turnID, role string, status livestate.SandboxStatus, started time.Time) livestate.SandboxRecord {
+// codingRun is one run as the durable record states it, launched by the seat
+// whose handle is given.
+func codingRun(turnID, handle string, status livestate.SandboxStatus, started time.Time) livestate.SandboxRecord {
 	return livestate.SandboxRecord{
 		Entry: livestate.SandboxEntry{
-			TurnID: turnID, Role: role, AgentHandle: "coder", Status: status,
+			TurnID: turnID, Role: handle, AgentHandle: handle, Status: status,
 			StartedAt: started.Format(time.RFC3339Nano),
 		},
 		LaunchID:  "l-" + turnID,
@@ -80,7 +81,7 @@ func TestNeedsIsReadFromTheRunRecordNotTheParkedTurn(t *testing.T) {
 	s := sandboxState(t)
 	s.SetPlacement(map[string]bool{"Coder": true})
 	s.Apply(env("agent_turn_completed", map[string]any{
-		"role": "Coder", "turn_id": "tn-1", "suspended": true,
+		"role": "Coder", "agent_handle": "Coder", "turn_id": "tn-1", "suspended": true,
 	}))
 	s.ReconcileSandboxes([]livestate.SandboxRecord{
 		codingRun("tn-1", "Coder", livestate.SandboxRunning, fixtureNow.Add(-time.Minute)),
@@ -143,7 +144,7 @@ func TestARefusingBudgetWindowStopsTheSeat(t *testing.T) {
 	s.SetPlacement(map[string]bool{"Lead": true, "Coder": true})
 
 	own := meterReport("m-1", 1, map[string]any{
-		"role": "Lead", "agent_id": "a-1", "handle": "lead",
+		"role": "Lead", "agent_id": "a-1", "handle": "Lead",
 		"windows": []any{dayWindow(400, 400, "2026-06-14T12:00:00Z")},
 	})
 	s.Apply(env("budget_meters", own, streamOnly))
@@ -171,10 +172,10 @@ func TestAPausedSeatIsStoppedOnceItsTurnEnds(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
 	s.Apply(env("agent_phase_started", map[string]any{
-		"role": "CTO", "turn_id": "tn-1", "phase": "execute",
+		"role": "CTO", "agent_handle": "CTO", "turn_id": "tn-1", "phase": "execute",
 	}, at("2026-06-14T11:58:00Z"), id("ph")))
 	change := s.Apply(env("seat_paused", map[string]any{
-		"role": "CTO", "paused_by": "jane-token", "paused_at": "2026-06-14T11:59:00Z",
+		"role": "CTO", "agent_handle": "CTO", "paused_by": "jane-token", "paused_at": "2026-06-14T11:59:00Z",
 	}, at("2026-06-14T11:59:00Z"), id("p1")))
 	wantState(t, s, "CTO", livestate.ActivityWorking, "")
 	if o := overlayOf(t, s, "CTO"); o.Paused == nil {
@@ -184,11 +185,11 @@ func TestAPausedSeatIsStoppedOnceItsTurnEnds(t *testing.T) {
 		t.Error("the pause did not push the seat")
 	}
 
-	s.Apply(env("agent_turn_completed", map[string]any{"role": "CTO", "turn_id": "tn-1"},
+	s.Apply(env("agent_turn_completed", map[string]any{"role": "CTO", "agent_handle": "CTO", "turn_id": "tn-1"},
 		at("2026-06-14T12:00:00Z"), id("tc")))
 	wantState(t, s, "CTO", livestate.ActivityStopped, livestate.StoppedPaused)
 
-	s.Apply(env("seat_resumed", map[string]any{"role": "CTO"}, at("2026-06-14T12:05:00Z"), id("r1")))
+	s.Apply(env("seat_resumed", map[string]any{"role": "CTO", "agent_handle": "CTO"}, at("2026-06-14T12:05:00Z"), id("r1")))
 	wantState(t, s, "CTO", livestate.ActivityIdle, "")
 }
 
@@ -197,11 +198,11 @@ func TestAPausedSeatIsStoppedOnceItsTurnEnds(t *testing.T) {
 func TestAFailedLastTurnLeavesTheSeatIdle(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
-	base := map[string]any{"role": "Lead", "turn_id": "tn-1", "phase": "execute", "iteration": 0}
+	base := map[string]any{"role": "Lead", "agent_handle": "Lead", "turn_id": "tn-1", "phase": "execute", "iteration": 0}
 	s.Apply(env("agent_phase_started", base))
 	s.Apply(env("agent_phase_completed", with(base, map[string]any{"failed": true, "error": "boom"}),
 		at("2026-06-14T12:00:05Z"), id("pc")))
-	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead", "turn_id": "tn-1"},
+	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead", "agent_handle": "Lead", "turn_id": "tn-1"},
 		at("2026-06-14T12:00:06Z"), id("tc")))
 
 	wantState(t, s, "Lead", livestate.ActivityIdle, "")
@@ -219,11 +220,11 @@ func TestAFailedLastTurnLeavesTheSeatIdle(t *testing.T) {
 func TestTheStoppedReasonsTakeTheirPrecedence(t *testing.T) {
 	t.Parallel()
 	s := sandboxState(t)
-	s.Apply(env("llm_unavailable", map[string]any{"role": "Lead"}, id("u")))
+	s.Apply(env("llm_unavailable", map[string]any{"role": "Lead", "agent_handle": "Lead"}, id("u")))
 	wantState(t, s, "Lead", livestate.ActivityStopped, livestate.StoppedProvider)
 
 	own := meterReport("m-1", 1, map[string]any{
-		"role": "Lead", "agent_id": "a-1", "handle": "lead",
+		"role": "Lead", "agent_id": "a-1", "handle": "Lead",
 		"windows": []any{dayWindow(400, 400, "2026-06-14T12:00:00Z")},
 	})
 	s.Apply(env("budget_meters", own, streamOnly, at("2026-06-14T12:00:00Z")))
@@ -232,11 +233,11 @@ func TestTheStoppedReasonsTakeTheirPrecedence(t *testing.T) {
 	s.SetPlacement(map[string]bool{"Lead": false})
 	wantState(t, s, "Lead", livestate.ActivityStopped, livestate.StoppedUnplaced)
 
-	s.Apply(env("seat_paused", map[string]any{"role": "Lead", "paused_by": "jane"}, id("p")))
+	s.Apply(env("seat_paused", map[string]any{"role": "Lead", "agent_handle": "Lead", "paused_by": "jane"}, id("p")))
 	wantState(t, s, "Lead", livestate.ActivityStopped, livestate.StoppedPaused)
 
 	// And work outranks every stop.
-	s.Apply(env("agent_turn_started", map[string]any{"role": "Lead", "turn_id": "tn-9"},
+	s.Apply(env("agent_turn_started", map[string]any{"role": "Lead", "agent_handle": "Lead", "turn_id": "tn-9"},
 		at("2026-06-14T12:10:00Z"), id("ts")))
 	wantState(t, s, "Lead", livestate.ActivityWorking, "")
 }
@@ -269,7 +270,7 @@ func TestAReconcileThatMovesARunPushesItsSeat(t *testing.T) {
 func TestTheStoppedReasonIsAlwaysOnTheRow(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
-	s.Apply(env("agent_phase_started", map[string]any{"role": "Lead", "turn_id": "tn-1"}))
+	s.Apply(env("agent_phase_started", map[string]any{"role": "Lead", "agent_handle": "Lead", "turn_id": "tn-1"}))
 	rows := s.OverlayRows([]string{"Lead"})
 	reason, present := rows[0]["stopped_reason"]
 	if !present {

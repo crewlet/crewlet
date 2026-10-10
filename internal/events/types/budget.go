@@ -28,8 +28,10 @@ const (
 // type is a failure BY TYPE: a refused charge is a failure whatever the
 // payload says.
 type BudgetExhausted struct {
-	Agent    string `json:"agent_id"`
-	RoleName string `json:"role"`
+	Agent string `json:"agent_id"`
+	// AgentHandle is the seat's identity — see [AgentPhaseStarted.AgentHandle].
+	AgentHandle string `json:"agent_handle"`
+	RoleName    string `json:"role"`
 	// TurnID is the RUN whose charge was refused, and WorkKey the unit of
 	// work behind it. Neither was here, and this is one of the three types
 	// a seat goes AFK on — so the only failure record that could be

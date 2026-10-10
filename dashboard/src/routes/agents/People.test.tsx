@@ -30,6 +30,7 @@ import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { rosterOf } from "~/test/seats.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -55,7 +56,7 @@ function mount(org?: OrgProjection, agents?: unknown[]) {
   const store = new Store();
   store.applyHealth(healthFrame());
   if (org) store.applyOrg(org);
-  if (agents) store.applyAgents(agents);
+  if (agents) rosterOf(store, agents as never);
   const socket = new LiveSocket(store);
   (
     socket as unknown as {

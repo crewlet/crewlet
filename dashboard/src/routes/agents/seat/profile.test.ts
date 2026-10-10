@@ -62,10 +62,14 @@ describe("which live row is the seat's", () => {
     expect(liveRow(agents, seat)?.id).toBe("b");
   });
 
-  test("a row the engine named no handle on is matched by role, and only then", () => {
-    expect(liveRow([row("a", "SWE", "")], seat)?.id).toBe("a");
-    expect(liveRow([row("a", "CTO", "")], seat)).toBeUndefined();
-    expect(liveRow([row("a", "SWE", "")], null)).toBeUndefined();
+  // THE ROLE NAME IS NEVER READ, not even for a row that names no handle: a
+  // row is merged by its handle, so one without is no seat's.
+  //
+  // Mutation: fall back to the role name for a handle-less row, and the first
+  // case finds it.
+  test("a row naming no handle is no seat's, whatever its role", () => {
+    expect(liveRow([row("a", "SWE", "")], seat)).toBeUndefined();
+    expect(liveRow([row("a", "SWE", "swe-platform")], null)).toBeUndefined();
   });
 
   // AND NEVER A SIBLING'S BY ITS ROLE: while the seat's own row is not listed
@@ -75,8 +79,8 @@ describe("which live row is the seat's", () => {
     expect(liveRow([row("a", "SWE", "swe-core")], seat)).toBeUndefined();
   });
 
-  // THE ROW'S `id` IS NO SECOND ADDRESS: a row the overlay appended carries
-  // its role name there, so matching on it was the role name by another door.
+  // THE ROW'S `id` IS NO SECOND ADDRESS: the handle is the one the overlay
+  // is merged by, so matching on the id would be a second key beside it.
   test("a row is the seat's by its handle, never by an id that spells the handle", () => {
     expect(liveRow([row("swe-platform", "CTO", "")], seat)).toBeUndefined();
   });

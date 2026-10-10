@@ -24,6 +24,7 @@ import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
+import { rosterOf } from "~/test/seats.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -277,7 +278,7 @@ test("a seat's log asks for that seat and shows only its live rows", async () =>
       ],
     }),
   );
-  store.applyAgents([
+  rosterOf(store, [
     { role: "SWE", handle: "swe", agent_id: "a-swe" },
     { role: "CTO", handle: "cto", agent_id: "a-cto" },
   ]);

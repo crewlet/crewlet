@@ -273,10 +273,10 @@ export type StateCounts = Record<SeatActivity, number>;
  */
 export function stateCounts(index: OrgIndex, agents: readonly AgentRow[]): StateCounts {
   const counts: StateCounts = { working: 0, needs: 0, stopped: 0, idle: 0 };
-  const byRole = new Map(agents.map((a) => [a.role, a]));
+  const byHandle = new Map(agents.map((a) => [a.handle, a]));
   for (const seat of index.seats) {
     if (seat.kind === "human") continue;
-    const activity = byRole.get(seat.name)?.activity;
+    const activity = byHandle.get(seat.handle)?.activity;
     if (activity && activity in counts) counts[activity] += 1;
   }
   return counts;

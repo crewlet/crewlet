@@ -102,8 +102,8 @@ func agentOrganization(company func() *config.Company) *org.Organization {
 }
 
 // placement reads which of the company's agent seats some node in the fleet
-// holds, keyed by role — the input the seat-state vocabulary's
-// `stopped`/`unplaced` is computed from.
+// holds, keyed by handle — the input the seat-state vocabulary's
+// `stopped`/`unplaced` is computed from, keyed as the lease itself is.
 //
 // FROM THE SEAT LEASES, which every node reads alike, rather than from which
 // seats THIS node runs: a seat a peer holds is placed. This node's own seats
@@ -138,7 +138,7 @@ func placement(ctx context.Context, company func() *config.Company, leases coord
 	out := map[string]bool{}
 	for role := range organization.AllRoles() {
 		if _, ok := organization.AgentIDFor(role); ok {
-			out[role.Name] = held[role.Handle()]
+			out[role.Handle()] = held[role.Handle()]
 		}
 	}
 	return out, nil

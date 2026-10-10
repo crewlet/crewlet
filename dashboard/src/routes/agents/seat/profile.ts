@@ -60,23 +60,16 @@ export const TAB_LABELS: Readonly<Record<SeatTab, string>> = {
  * opened the seat named too (`OrgIndex.byHandle` is the only way a seat's
  * address resolves).
  *
- * THE ROLE NAME ONLY FOR A ROW WITH NO HANDLE. The live overlay is keyed by
- * role, and one for a role the roster does not list yet — a seat a revision
- * has just added — is appended as a row carrying nothing else, so its name
- * is all there is to match it by. A row carrying ANOTHER handle is another
- * seat's whatever its role says: a role name is what two unit seats stamped
- * from one template share, and matched on it, a sibling listed earlier was
- * drawn as this seat.
+ * BY THE HANDLE ALONE, the key every row and every overlay carries. A role
+ * name is what two unit seats stamped from one template share, and matched on
+ * it a sibling listed earlier was drawn as this seat.
  */
 export function liveRow(
   agents: readonly AgentRow[],
   seat: Seat | null | undefined,
 ): AgentRow | undefined {
   if (!seat) return undefined;
-  return (
-    agents.find((a) => a.handle === seat.handle) ??
-    agents.find((a) => !a.handle && a.role === seat.name)
-  );
+  return agents.find((a) => a.handle === seat.handle);
 }
 
 /**

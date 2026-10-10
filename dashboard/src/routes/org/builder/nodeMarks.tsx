@@ -157,16 +157,18 @@ export function managerLabel(manager: string | null | undefined): string {
 }
 
 /**
- * The live state of a saved agent seat. Looked up by the handle and name the
- * SAVED company gives it, because that is what the running seat is called
- * until this draft is saved and applied.
+ * The live state of a saved agent seat. Looked up by the handle the SAVED
+ * company gives it, because that is what the running seat is called until this
+ * draft is saved and applied — and by the handle ALONE, never the name: a name
+ * two seats share would draw the other seat's state on this one.
  */
 export function LiveState({ api, view }: { api: BuilderApi; view: SeatView }) {
-  if (!view.running || !view.saved) return null;
-  const { handle, name } = view.saved;
-  const agent =
-    (handle ? api.agents.find((a) => a.handle === handle) : undefined) ??
-    api.agents.find((a) => a.role === name);
+  // NOTHING WHILE THE HANDLE IS UNKNOWN: a seat keyed by its path until the
+  // engine reports it has no row to read yet, and "offline" would say the
+  // engine had looked and found it down.
+  if (!view.running || !view.saved?.handle) return null;
+  const { handle } = view.saved;
+  const agent = api.agents.find((a) => a.handle === handle);
   return (
     <span className="bnode-state">
       <StateBadge agent={agent} />

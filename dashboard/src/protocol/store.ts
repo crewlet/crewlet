@@ -323,21 +323,31 @@ export class Store {
   }
 
   /**
-   * Changed seat overlays, keyed by role — and the roles whose live call this
-   * tab now holds behind what the push describes, which the socket fetches
-   * whole (`mergeLiveCall`).
+   * Changed seat overlays, keyed by HANDLE — and the handles of the seats whose
+   * live call this tab now holds behind what the push describes, which the
+   * socket fetches whole (`mergeLiveCall`).
+   *
+   * THE HANDLE, NEVER THE NAME: two seats can share a role name, and a merge
+   * keyed on it gave one of them both seats' pushes and the other none.
+   *
+   * A PUSH FOR A SEAT THE ROSTER DOES NOT CARRY IS DROPPED. The roster — the
+   * snapshot, the `seats` push an apply sends — is what says which seats
+   * exist, and it carries each seat's live state merged; an overlay is only
+   * what a seat it lists is doing. Appended, a straggler about a seat a
+   * revision had just removed put its card back after the `seats` push that
+   * removed it, where nothing took it away again.
    */
-  applyAgents(rows: (Overlay & { role: string })[] | unknown): string[] {
+  applyAgents(rows: (Overlay & { handle: string })[] | unknown): string[] {
     // `Array.isArray` is load-bearing. The server sent this as an object keyed
-    // by role once; every push was silently discarded and seats rendered idle
+    // by seat once; every push was silently discarded and seats rendered idle
     // for the whole of a turn, with both sides' own suites green. That is the
     // bug internal/e2e/golden_test.go exists to catch.
     if (!Array.isArray(rows) || rows.length === 0) return [];
     const stale: string[] = [];
     const merge = (
-      held: AgentRow | undefined,
-      patch: Overlay & { role: string },
-    ): Overlay & { role: string } => {
+      held: AgentRow,
+      patch: Overlay & { handle: string },
+    ): Overlay & { handle: string } => {
       if (!("live_call" in patch)) return patch;
       const heldSeq = held?.live_call_seq ?? 0;
       const patchSeq = patch.live_call_seq;
@@ -347,27 +357,23 @@ export class Store {
         // push generated earlier). Keep the held call and its sequence; the
         // push's other fields — status, turn — are ordered on the wire and
         // still apply.
-        return { ...patch, live_call: held?.live_call ?? null, live_call_seq: heldSeq };
+        return { ...patch, live_call: held.live_call ?? null, live_call_seq: heldSeq };
       }
-      const { call, stale: behind } = mergeLiveCall(held?.live_call, patch.live_call);
-      if (behind) stale.push(patch.role);
+      const { call, stale: behind } = mergeLiveCall(held.live_call, patch.live_call);
+      if (behind) stale.push(patch.handle);
       return { ...patch, live_call: call, live_call_seq: patchSeq ?? heldSeq };
     };
-    const byRole = new Map<string, Overlay & { role: string }>(
-      (rows as (Overlay & { role: string })[]).map((r) => [r.role, r]),
+    const byHandle = new Map<string, Overlay & { handle: string }>(
+      (rows as (Overlay & { handle: string })[]).map((r) => [r.handle, r]),
     );
+    let moved = false;
     this.state.agents = this.state.agents.map((a) => {
-      const patch = byRole.get(a.role);
+      const patch = byHandle.get(a.handle);
       if (!patch) return a;
-      byRole.delete(a.role);
+      moved = true;
       return { ...a, ...merge(a, patch) };
     });
-    // A seat the roster does not carry yet (a role added by a live revision)
-    // still belongs on screen.
-    for (const row of byRole.values()) {
-      this.state.agents = [...this.state.agents, { id: row.role, ...merge(undefined, row) }];
-    }
-    this.emit("agents");
+    if (moved) this.emit("agents");
     return stale;
   }
 
@@ -397,11 +403,11 @@ export class Store {
    * was behind while this answer was out (`LiveSocket.fetchCalls`).
    */
   applyLiveCall(answer: LiveCallAnswer | null | undefined): boolean {
-    if (!answer || typeof answer.role !== "string") return true;
+    if (!answer || typeof answer.handle !== "string") return true;
     let moved = false;
     let current = true;
     this.state.agents = this.state.agents.map((a) => {
-      if (a.role !== answer.role) return a;
+      if (a.handle !== answer.handle) return a;
       const heldSeq = a.live_call_seq ?? 0;
       const seq = answer.live_call_seq;
       if (seq >= heldSeq) {
@@ -425,17 +431,17 @@ export class Store {
   /**
    * The complete seat list, replacing what is on screen.
    *
-   * Distinct from `applyAgents`, which merges changed overlays by role: a merge
-   * cannot express a deletion, so a revision that removes a role would leave
-   * its card rendered until the next reload.
+   * Distinct from `applyAgents`, which merges changed overlays by handle: a
+   * merge cannot express a deletion, so a revision that removes a seat would
+   * leave its card rendered until the next reload.
    */
   applySeats(rows: AgentRow[] | unknown): void {
     if (!Array.isArray(rows)) return;
     // Keep the live overlay each seat already carries — the config payload is
     // static config and knows nothing about what a seat is doing right now.
-    const live = new Map(this.state.agents.map((a) => [a.role, a]));
+    const live = new Map(this.state.agents.map((a) => [a.handle, a]));
     this.state.agents = (rows as AgentRow[]).map((row) => {
-      const current = live.get(row.role);
+      const current = live.get(row.handle);
       return current ? { ...current, ...row } : row;
     });
     this.emit("agents");

@@ -448,12 +448,14 @@ describe("what a seat is doing", () => {
     // The client used to fold the running-runs panel into the seat's state
     // itself, three different ways on three screens. The engine now serves
     // one word per seat — its runs included — and this reads it unchanged.
-    expect(activityOf({ id: "a", role: "Dev A", activity: "working" })).toBe("working");
-    expect(activityOf({ id: "a", role: "Dev A", activity: "needs" })).toBe("needs");
-    expect(activityOf({ id: "a", role: "Dev A", activity: "idle" })).toBe("idle");
+    expect(activityOf({ id: "a", handle: "a", role: "Dev A", activity: "working" })).toBe(
+      "working",
+    );
+    expect(activityOf({ id: "a", handle: "a", role: "Dev A", activity: "needs" })).toBe("needs");
+    expect(activityOf({ id: "a", handle: "a", role: "Dev A", activity: "idle" })).toBe("idle");
     // No row from the engine yet is its own answer, never a guess.
     expect(activityOf(undefined)).toBe("offline");
-    expect(activityOf({ id: "a", role: "Dev A" })).toBe("offline");
+    expect(activityOf({ id: "a", handle: "a", role: "Dev A" })).toBe("offline");
   });
 
   test("colour is STATE and an idle seat gets none", () => {
@@ -475,16 +477,22 @@ describe("what a seat is doing", () => {
   });
 
   test("a label is the engine's words, with the reason and the pauser", () => {
-    expect(labelOf({ id: "a", role: "Dev A", activity: "working" }, now)).toBe("Working");
-    expect(labelOf({ id: "a", role: "Dev A", activity: "idle" }, now)).toBe("Idle");
+    expect(labelOf({ id: "a", handle: "a", role: "Dev A", activity: "working" }, now)).toBe(
+      "Working",
+    );
+    expect(labelOf({ id: "a", handle: "a", role: "Dev A", activity: "idle" }, now)).toBe("Idle");
     expect(labelOf(undefined, now)).toBe("No state from the engine yet");
     expect(
-      labelOf({ id: "a", role: "Dev A", activity: "stopped", stopped_reason: "budget" }, now),
+      labelOf(
+        { id: "a", handle: "a", role: "Dev A", activity: "stopped", stopped_reason: "budget" },
+        now,
+      ),
     ).toBe("Stopped · budget");
     expect(
       labelOf(
         {
           id: "a",
+          handle: "a",
           role: "Dev A",
           activity: "stopped",
           stopped_reason: "paused",
@@ -499,6 +507,7 @@ describe("what a seat is doing", () => {
     // token's own name — is drawn as it came.
     const paused = {
       id: "a",
+      handle: "a",
       role: "Dev A",
       activity: "stopped" as const,
       stopped_reason: "paused" as const,
@@ -514,7 +523,13 @@ describe("what a seat is doing", () => {
     // A reason this build does not know draws the word, never a guess.
     expect(
       labelOf(
-        { id: "a", role: "Dev A", activity: "stopped", stopped_reason: "later" as never },
+        {
+          id: "a",
+          handle: "a",
+          role: "Dev A",
+          activity: "stopped",
+          stopped_reason: "later" as never,
+        },
         now,
       ),
     ).toBe("Stopped");
@@ -525,6 +540,7 @@ describe("what a seat is doing", () => {
       stateLine(
         {
           id: "a",
+          handle: "a",
           role: "Dev A",
           activity: "working",
           current_phase: "execute",
@@ -539,6 +555,7 @@ describe("what a seat is doing", () => {
       stateLine(
         {
           id: "a",
+          handle: "a",
           role: "Dev A",
           activity: "working",
           current_phase: "execute",
@@ -559,7 +576,7 @@ describe("what a seat is doing", () => {
     expect(delegating('{"tasks": "three"}')).toBe("Executing ENG-405");
     expect(
       stateLine(
-        { id: "a", role: "Dev A", activity: "stopped", stopped_reason: "unplaced" },
+        { id: "a", handle: "a", role: "Dev A", activity: "stopped", stopped_reason: "unplaced" },
         { now },
       ),
     ).toBe("Not placed on any node");
@@ -567,6 +584,7 @@ describe("what a seat is doing", () => {
       stateLine(
         {
           id: "a",
+          handle: "a",
           role: "Dev A",
           activity: "idle",
           last_turn: { ended_at: "2026-01-01T11:36:00Z" } as never,
@@ -587,6 +605,7 @@ describe("what a seat is doing", () => {
       stateLine(
         {
           id: "a",
+          handle: "a",
           role: "Dev A",
           activity: "working",
           current_phase: "execute",
@@ -597,7 +616,13 @@ describe("what a seat is doing", () => {
     ).toBe("Coding run on ENG-9");
     expect(
       labelOf(
-        { id: "a", role: "Dev A", activity: "needs", turn: { stage: "parked" } as never },
+        {
+          id: "a",
+          handle: "a",
+          role: "Dev A",
+          activity: "needs",
+          turn: { stage: "parked" } as never,
+        },
         now,
       ),
     ).toBe("Needs you · run parked");
@@ -967,6 +992,7 @@ test("a turn's item key is its call's, then its turn's, else none", () => {
   const row = (call: string, turn: string) =>
     ({
       id: "a",
+      handle: "a",
       role: "SWE",
       live_call: call ? { turn_id: "t", work_item: item(call), work_key: "slack:x" } : null,
       turn: turn ? { turn_id: "t", work_item: item(turn) } : null,

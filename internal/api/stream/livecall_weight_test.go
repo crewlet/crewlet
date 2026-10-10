@@ -65,7 +65,8 @@ func buildLongPhase() ([]livestate.Envelope, error) {
 		if failed != nil {
 			return
 		}
-		p.Agent, p.RoleName, p.TurnID, p.Phase, p.Iteration = "agent-1", "Lead", "turn-1", "execute", 0
+		p.Agent, p.AgentHandle, p.RoleName = "agent-1", "Lead", "Lead"
+		p.TurnID, p.Phase, p.Iteration = "turn-1", "execute", 0
 		p.Model, p.MaxRounds, p.RoundCeiling = "claude-sonnet-4-5", 40, 60
 		raw, err := json.Marshal(p)
 		if err != nil {
@@ -330,7 +331,7 @@ func TestATabThatMissedACallsClearingIsToldItIsBehind(t *testing.T) {
 	}
 	s.Ingest(livestate.Envelope{
 		ID: "checkpoint", Type: "agent_phase_completed", Timestamp: checkpoint.Add(time.Second).Format(time.RFC3339Nano),
-		Category: "task", Payload: map[string]any{"role": "Lead", "turn_id": "turn-1", "phase": "execute", "iteration": float64(0)},
+		Category: "task", Payload: map[string]any{"role": "Lead", "agent_handle": "Lead", "turn_id": "turn-1", "phase": "execute", "iteration": float64(0)},
 	})
 	resumed := frames[2*len(frames)/3:]
 	s.Ingest(resumed[0])

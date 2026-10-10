@@ -24,6 +24,7 @@ import { PHASE_PAGE } from "./RecentPhases.tsx";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { rosterOf } from "~/test/seats.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -112,7 +113,7 @@ function mount({
   const store = new Store();
   store.applyHealth(healthFrame());
   store.applyOrg(withDerived(ORG) as never);
-  store.applyAgents(agents as never);
+  rosterOf(store, agents as never);
   const socket = new LiveSocket(store);
   const asked: { kind: string; params: Record<string, unknown> }[] = [];
   const base: Record<string, Answer> = {

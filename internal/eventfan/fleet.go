@@ -609,18 +609,18 @@ func (f *Fleet) Phases(ctx context.Context, agentID string, limit int, before *s
 // the fleet rebalances — so its history is on every node that ever held it,
 // and the seat page read from one node showed only the turns since the last
 // move.
-func (f *Fleet) SeatPhases(ctx context.Context, agentID, role string, before *store.Cursor) (Listing, Coverage, error) {
+func (f *Fleet) SeatPhases(ctx context.Context, agentID string, before *store.Cursor) (Listing, Coverage, error) {
 	started := time.Now()
-	if agentID == "" && role == "" {
+	if agentID == "" {
 		// A SEAT NOBODY CAN NAME is a question with no answer, not one
 		// with an empty one — the store says so the same way.
 		return Listing{}, solo(f.Self), nil
 	}
 	at := f.now()
-	p := phasesParams{AgentID: agentID, Role: role, Before: cursorOf(before), At: at}
+	p := phasesParams{AgentID: agentID, Before: cursorOf(before), At: at}
 	g, err := gather(ctx, f, QuestionSeatPhases, p, nil,
 		func(ctx context.Context) (listPart, error) {
-			rows, more, err := f.Local.AgentPhases(ctx, agentID, role, before, at)
+			rows, more, err := f.Local.AgentPhases(ctx, agentID, before, at)
 			return listPart{Rows: rows, Full: more}, err
 		})
 	if err != nil {

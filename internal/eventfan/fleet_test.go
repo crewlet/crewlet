@@ -597,7 +597,7 @@ func TestAPeerOnAnotherProtocolIsNamedOnEveryQuestion(t *testing.T) {
 			mineOnly(t, got.Rows)
 			named(t, c)
 		}
-		got, c, err := fan.SeatPhases(t.Context(), "", "Lead", nil)
+		got, c, err := fan.SeatPhases(t.Context(), "agent-a", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -865,7 +865,7 @@ func TestEveryHistoryQuestionIsAskedAtTheAskersInstant(t *testing.T) {
 		Time: horizon.Add(time.Minute), TraceID: "tr-edge"})
 	appendTo(t, b, store.EventRecord{ID: "b-phase", Type: "agent_phase_completed", Category: "task",
 		Time: horizon.Add(2 * time.Minute), TraceID: "tr-edge",
-		Tags:  map[string]string{"turn_id": "t-edge", "agent_role": "Lead"},
+		Tags:  map[string]string{"turn_id": "t-edge", "agent_role": "Lead", "agent_id": "agent-lead"},
 		Spend: &store.Spend{Phase: "execute", Model: "m", TurnID: "t-edge", TotalTokens: 30}})
 	completionOn(t, b, "b-done", "t-edge", horizon.Add(3*time.Minute))
 	// The work, naming the seat, on the node that held it.
@@ -943,7 +943,7 @@ func TestEveryHistoryQuestionIsAskedAtTheAskersInstant(t *testing.T) {
 		}
 	})
 	t.Run("seat_phases", func(t *testing.T) {
-		got, c, err := fan.SeatPhases(t.Context(), "", "Lead", nil)
+		got, c, err := fan.SeatPhases(t.Context(), "agent-lead", nil)
 		if err != nil {
 			t.Fatal(err)
 		}

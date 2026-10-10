@@ -266,15 +266,22 @@ export function People() {
   const rows = useMemo<Row[]>(() => {
     const matches = (...fields: (string | undefined)[]) =>
       !needle || fields.some((f) => f?.toLowerCase().includes(needle));
-    const inChart = new Set(index.seats.map((s) => s.name));
-    const byRole = new Map(agents.map((a) => [a.role, a]));
+    // BY HANDLE, the seat's identity — a role name is a label two seats can
+    // share, and matched on it one seat's row carried the other's state.
+    const inChart = new Set(index.seats.map((s) => s.handle));
+    const byHandle = new Map(agents.map((a) => [a.handle, a]));
     const out: Row[] = [
       ...index.seats
         .filter((s) => matches(s.name, s.handle, s.goal, s.unit?.name))
-        .map((seat) => ({ key: seat.key, name: seat.name, seat, agent: byRole.get(seat.name) })),
+        .map((seat) => ({
+          key: seat.key,
+          name: seat.name,
+          seat,
+          agent: byHandle.get(seat.handle),
+        })),
       ...agents
-        .filter((a) => !inChart.has(a.role) && matches(a.role, a.handle))
-        .map((agent) => ({ key: `removed:${agent.role}`, name: agent.role, seat: null, agent })),
+        .filter((a) => !inChart.has(a.handle) && matches(a.role, a.handle))
+        .map((agent) => ({ key: `removed:${agent.handle}`, name: agent.role, seat: null, agent })),
     ];
     // By NAME. Never by a field that a live push moves.
     return out.sort((a, b) => a.name.localeCompare(b.name));

@@ -716,19 +716,13 @@ func Register(r *Registry, s Sources) {
 
 // agent answers one seat's live state.
 func (s Sources) agent(ctx context.Context, p Params) (any, error) {
-	// EITHER NAME, and the seat may be addressed by handle or by role.
-	//
-	// The dashboard sends `id`, carrying the handle — `query("agent", {id})`
-	// from the seat page, and /agents/{id} from the REST table — while the
-	// projection keys its overlays by ROLE NAME, which is what the engine's
-	// `agents` push carries. Reading only `role` meant every seat page
-	// answered 400 and rendered its error state; the client is the
-	// compatibility reference for a frame's shape, so the answer
-	// takes what the client sends and resolves it.
-	seat := firstOf(p.String("id"), p.String("role"))
-	role := s.roleOf(seat)
-	if role == "" {
-		return nil, fmt.Errorf("%w: agent needs a handle or a role", ErrBadParams)
+	// BY HANDLE, the seat's identity, which is what the dashboard sends as
+	// `id` — `query("agent", {id})` from the seat page and /agents/{id} from
+	// the REST table — and what the projection keys its overlays on. Never
+	// by role name: two seats can share one (see livestate's package doc).
+	handle := p.String("id")
+	if handle == "" {
+		return nil, fmt.Errorf("%w: agent needs a seat's handle (id)", ErrBadParams)
 	}
 	// LIVE STATE AND HISTORY, which are two different sources and always
 	// were: the projection holds the call in flight, the event store holds
@@ -742,9 +736,12 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 	// configured and never spawned is exactly that, and a 404 there would
 	// make a healthy new company look broken. Its history is answered the
 	// same way.
-	history, next, coverage := s.phaseHistory(ctx, seat, role, p)
+	history, next, coverage := s.phaseHistory(ctx, handle, p)
 	answer := map[string]any{
-		"role": role,
+		"handle": handle,
+		// The seat's NAME, for display: a label resolved from the handle,
+		// and the handle itself where the company no longer has the seat.
+		"role": s.nameOf(handle),
 		"live": nil,
 		// The rows are `store.EventRecord`s, PAYLOAD NESTED — the same
 		// shape `event`, `trace` and `turn` answer with. They used to be
@@ -769,13 +766,13 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 	// a seat that has never run as one that has. It marshals to null either
 	// way, so the client never saw it and only a Go caller would — which is
 	// exactly the kind of trap that survives until something depends on it.
-	if overlay := s.State.AgentOverlay(role); overlay != nil {
+	if overlay := s.State.AgentOverlay(handle); overlay != nil {
 		answer["live"] = overlay
 	}
 	return answer, nil
 }
 
-// liveCall answers `live_call{role}`: the seat's in-flight call with every
+// liveCall answers `live_call{handle}`: the seat's in-flight call with every
 // field, and the version of each, or null while it has none.
 //
 // The REPAIR for an `agents` push the socket dropped. A push leaves out a heavy
@@ -785,17 +782,17 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 // whole here. A seat the projection has not seen is answered null like one
 // between calls: either way there is nothing in flight.
 func (s Sources) liveCall(_ context.Context, p Params) (any, error) {
-	role := s.roleOf(firstOf(p.String("role"), p.String("id")))
-	if role == "" {
-		return nil, fmt.Errorf("%w: live_call needs a role or a handle", ErrBadParams)
+	handle := p.String("handle")
+	if handle == "" {
+		return nil, fmt.Errorf("%w: live_call needs a seat's handle", ErrBadParams)
 	}
 	// live_call_seq orders this answer against the `agents` pushes for the
 	// same seat: the answer runs on its own goroutine and can be delivered
 	// after a push generated later (a clear, a new call), so the tab drops
 	// an answer whose sequence is behind what it has applied. Always carried,
 	// a null call included — see [livestate.Overlay.LiveCallSeq].
-	answer := map[string]any{"role": role, "live_call": nil, "live_call_seq": 0}
-	if overlay := s.State.AgentOverlay(role); overlay != nil {
+	answer := map[string]any{"handle": handle, "live_call": nil, "live_call_seq": 0}
+	if overlay := s.State.AgentOverlay(handle); overlay != nil {
 		answer["live_call_seq"] = overlay.LiveCallSeq
 		if overlay.LiveCall != nil {
 			answer["live_call"] = overlay.LiveCall
@@ -820,7 +817,7 @@ func (s Sources) liveCall(_ context.Context, p Params) (any, error) {
 // envelope rather than inside it. The payload's price rides along, since the
 // row is the record as stored, and the dashboard reads none of it (rule 19 in
 // docs/reference/dashboard-design.md).
-func (s Sources) phaseHistory(ctx context.Context, seat, role string, p Params) ([]store.EventRecord, string, *eventfan.Coverage) {
+func (s Sources) phaseHistory(ctx context.Context, seat string, p Params) ([]store.EventRecord, string, *eventfan.Coverage) {
 	if s.Events == nil {
 		return []store.EventRecord{}, "", nil
 	}
@@ -835,7 +832,7 @@ func (s Sources) phaseHistory(ctx context.Context, seat, role string, p Params) 
 		// over a bad query parameter would turn a paging bug into no
 		// screen at all.
 	}
-	listing, coverage, err := s.Events.SeatPhases(ctx, s.agentIDOf(seat), role, before)
+	listing, coverage, err := s.Events.SeatPhases(ctx, s.agentIDOf(seat), before)
 	if err != nil {
 		log.WarnContext(ctx, "agent_history_unavailable", "seat", seat, "error", err)
 		return []store.EventRecord{}, "", nil
@@ -874,29 +871,26 @@ func firstOf(values ...string) string {
 	return ""
 }
 
-// roleOf resolves a seat identifier to the ROLE NAME the projection keys on.
-//
-// A handle resolves through the org; anything else is passed through as a role
-// name, so a caller that already had one is unaffected. An unknown identifier
-// comes back unchanged rather than empty: the answer for a seat the projection
-// has never seen is a live-state-free row, not an error, and a company that
-// renamed a role should not turn a bookmarked page into a failure.
-func (s Sources) roleOf(id string) string {
-	if id == "" || s.Company == nil {
-		return id
+// nameOf is a seat's NAME, for display: its role name where the company has
+// the seat, and the handle itself otherwise — a seat a revision removed still
+// answers a bookmarked page with what the projection and the history hold,
+// rather than a failure.
+func (s Sources) nameOf(handle string) string {
+	if handle == "" || s.Company == nil {
+		return handle
 	}
 	company := s.Company()
 	if company == nil {
-		return id
+		return handle
 	}
 	organization, err := company.Organization()
 	if err != nil {
-		return id
+		return handle
 	}
-	if role := organization.AgentSeatByHandle(id); role != nil {
+	if role := organization.AgentSeatByHandle(handle); role != nil {
 		return role.Name
 	}
-	return id
+	return handle
 }
 
 // events answers a page of the log.

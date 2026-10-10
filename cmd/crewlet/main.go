@@ -1398,9 +1398,9 @@ func shutdownListener(ctx context.Context, server *http.Server, listener string,
 // exists to stop.
 const apiShutdownGrace = 5 * time.Second
 
-// seedPauses puts every paused seat on the live projection, named by the role
-// the projection keys seats by. A pause whose seat the company no longer has
-// is skipped: the apply that removed the seat clears it.
+// seedPauses puts every paused seat on the live projection, named by the handle
+// both the record and the projection key seats by. A pause whose seat the
+// company no longer has is skipped: the apply that removed the seat clears it.
 func seedPauses(ctx context.Context, e *engine.Engine, live *livestate.LiveState) error {
 	pauses, err := e.Backends().Fleet.ListSeatPauses(ctx)
 	if err != nil {
@@ -1416,7 +1416,7 @@ func seedPauses(ctx context.Context, e *engine.Engine, live *livestate.LiveState
 		if seat == nil {
 			continue
 		}
-		seeds = append(seeds, livestate.SeedPause{Role: seat.Name, Paused: livestate.Paused{
+		seeds = append(seeds, livestate.SeedPause{Handle: p.Handle, Paused: livestate.Paused{
 			By: firstNonEmpty(p.Seat, p.By), At: p.At.UTC().Format(time.RFC3339),
 			Reason: p.Reason, StopRunning: p.StopRunning,
 		}})
@@ -1919,7 +1919,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// published, so a seed read from this one alone showed a restarted node
 	// only its own share of the company.
 	seedCtx, cancelSeed := context.WithTimeout(ctx, projectionSeedBudget)
-	err = observe.Seed(seedCtx, e.History(), companyConfig(e).AgentRoles(), app.Stream().State())
+	err = observe.Seed(seedCtx, e.History(), companyConfig(e).AgentSeats(), app.Stream().State())
 	if err != nil {
 		// NOT FATAL, and said out loud rather than swallowed: what a
 		// failed seed costs is a feed, a spend window and a seat's last

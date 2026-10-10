@@ -210,9 +210,19 @@ var Store = class {
 		this.emit(...ALL_DATA_SLICES);
 	}
 	/**
-	* Changed seat overlays, keyed by role — and the roles whose live call this
-	* tab now holds behind what the push describes, which the socket fetches
-	* whole (`mergeLiveCall`).
+	* Changed seat overlays, keyed by HANDLE — and the handles of the seats whose
+	* live call this tab now holds behind what the push describes, which the
+	* socket fetches whole (`mergeLiveCall`).
+	*
+	* THE HANDLE, NEVER THE NAME: two seats can share a role name, and a merge
+	* keyed on it gave one of them both seats' pushes and the other none.
+	*
+	* A PUSH FOR A SEAT THE ROSTER DOES NOT CARRY IS DROPPED. The roster — the
+	* snapshot, the `seats` push an apply sends — is what says which seats
+	* exist, and it carries each seat's live state merged; an overlay is only
+	* what a seat it lists is doing. Appended, a straggler about a seat a
+	* revision had just removed put its card back after the `seats` push that
+	* removed it, where nothing took it away again.
 	*/
 	applyAgents(rows) {
 		if (!Array.isArray(rows) || rows.length === 0) return [];
@@ -223,32 +233,29 @@ var Store = class {
 			const patchSeq = patch.live_call_seq;
 			if (patchSeq !== void 0 && patchSeq < heldSeq) return {
 				...patch,
-				live_call: held?.live_call ?? null,
+				live_call: held.live_call ?? null,
 				live_call_seq: heldSeq
 			};
-			const { call, stale: behind } = mergeLiveCall(held?.live_call, patch.live_call);
-			if (behind) stale.push(patch.role);
+			const { call, stale: behind } = mergeLiveCall(held.live_call, patch.live_call);
+			if (behind) stale.push(patch.handle);
 			return {
 				...patch,
 				live_call: call,
 				live_call_seq: patchSeq ?? heldSeq
 			};
 		};
-		const byRole = new Map(rows.map((r) => [r.role, r]));
+		const byHandle = new Map(rows.map((r) => [r.handle, r]));
+		let moved = false;
 		this.state.agents = this.state.agents.map((a) => {
-			const patch = byRole.get(a.role);
+			const patch = byHandle.get(a.handle);
 			if (!patch) return a;
-			byRole.delete(a.role);
+			moved = true;
 			return {
 				...a,
 				...merge(a, patch)
 			};
 		});
-		for (const row of byRole.values()) this.state.agents = [...this.state.agents, {
-			id: row.role,
-			...merge(void 0, row)
-		}];
-		this.emit("agents");
+		if (moved) this.emit("agents");
 		return stale;
 	}
 	/**
@@ -277,11 +284,11 @@ var Store = class {
 	* was behind while this answer was out (`LiveSocket.fetchCalls`).
 	*/
 	applyLiveCall(answer) {
-		if (!answer || typeof answer.role !== "string") return true;
+		if (!answer || typeof answer.handle !== "string") return true;
 		let moved = false;
 		let current = true;
 		this.state.agents = this.state.agents.map((a) => {
-			if (a.role !== answer.role) return a;
+			if (a.handle !== answer.handle) return a;
 			const heldSeq = a.live_call_seq ?? 0;
 			const seq = answer.live_call_seq;
 			if (seq >= heldSeq) {
@@ -307,15 +314,15 @@ var Store = class {
 	/**
 	* The complete seat list, replacing what is on screen.
 	*
-	* Distinct from `applyAgents`, which merges changed overlays by role: a merge
-	* cannot express a deletion, so a revision that removes a role would leave
-	* its card rendered until the next reload.
+	* Distinct from `applyAgents`, which merges changed overlays by handle: a
+	* merge cannot express a deletion, so a revision that removes a seat would
+	* leave its card rendered until the next reload.
 	*/
 	applySeats(rows) {
 		if (!Array.isArray(rows)) return;
-		const live = new Map(this.state.agents.map((a) => [a.role, a]));
+		const live = new Map(this.state.agents.map((a) => [a.handle, a]));
 		this.state.agents = rows.map((row) => {
-			const current = live.get(row.role);
+			const current = live.get(row.handle);
 			return current ? {
 				...current,
 				...row
@@ -911,17 +918,17 @@ var LiveSocket = class {
 	* the seat's next push, which a frozen failed call or a long round never
 	* sends. An answer at or past them holds everything they named, and ends it.
 	*/
-	fetchCalls(roles) {
-		for (const role of roles) {
-			if (this.fetchingCalls.has(role)) {
-				this.fetchingCalls.set(role, true);
+	fetchCalls(handles) {
+		for (const handle of handles) {
+			if (this.fetchingCalls.has(handle)) {
+				this.fetchingCalls.set(handle, true);
 				continue;
 			}
-			this.fetchingCalls.set(role, false);
-			this.query("live_call", { role }).then((answer) => this.store.applyLiveCall(answer), () => false).then((current) => {
-				const again = this.fetchingCalls.get(role) ?? false;
-				this.fetchingCalls.delete(role);
-				if (again && !current) this.fetchCalls([role]);
+			this.fetchingCalls.set(handle, false);
+			this.query("live_call", { handle }).then((answer) => this.store.applyLiveCall(answer), () => false).then((current) => {
+				const again = this.fetchingCalls.get(handle) ?? false;
+				this.fetchingCalls.delete(handle);
+				if (again && !current) this.fetchCalls([handle]);
 			});
 		}
 	}

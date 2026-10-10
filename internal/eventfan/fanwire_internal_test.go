@@ -32,7 +32,7 @@ func TestAQuestionWithNoInstantIsRefused(t *testing.T) {
 		QuestionTurn:                 idParams{ID: "t"},
 		QuestionTurns:                turnsParams{SinceDays: 7},
 		QuestionPhases:               phasesParams{Limit: 10},
-		QuestionSeatPhases:           phasesParams{Role: "PM"},
+		QuestionSeatPhases:           phasesParams{AgentID: "agent-pm"},
 		QuestionTraceRows:            traceRowsParams{TraceIDs: []string{"t"}, Limit: 10},
 		QuestionPhaseTokens:          phaseTokenParams{},
 		QuestionNotificationOutcomes: outcomeParams{},

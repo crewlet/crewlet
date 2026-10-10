@@ -413,25 +413,27 @@ func (e emitter) started(ctx context.Context, ph phase.Phase, iteration int,
 		return
 	}
 	e.publish(ctx, events.New(types.AgentPhaseStarted{
-		Agent:     e.turn.AgentID,
-		RoleName:  e.role,
-		TurnID:    e.turn.RunID,
-		WorkKey:   e.turn.WorkKey,
-		Iteration: iteration,
-		Phase:     types.Phase(ph),
-		Trigger:   e.turn.Trigger,
-		WorkItem:  e.workItem(),
+		Agent:       e.turn.AgentID,
+		AgentHandle: e.handle,
+		RoleName:    e.role,
+		TurnID:      e.turn.RunID,
+		WorkKey:     e.turn.WorkKey,
+		Iteration:   iteration,
+		Phase:       types.Phase(ph),
+		Trigger:     e.turn.Trigger,
+		WorkItem:    e.workItem(),
 	}, e.traceFor(ctx)))
 
 	e.publish(ctx, events.New(types.AgentTurnProgress{
-		Agent:     e.turn.AgentID,
-		RoleName:  e.role,
-		TurnID:    e.turn.RunID,
-		WorkKey:   e.turn.WorkKey,
-		Phase:     types.Phase(ph),
-		Iteration: iteration,
-		Trigger:   e.turn.Trigger,
-		Prompt:    user.Text,
+		Agent:       e.turn.AgentID,
+		AgentHandle: e.handle,
+		RoleName:    e.role,
+		TurnID:      e.turn.RunID,
+		WorkKey:     e.turn.WorkKey,
+		Phase:       types.Phase(ph),
+		Iteration:   iteration,
+		Trigger:     e.turn.Trigger,
+		Prompt:      user.Text,
 		// EACH MESSAGE WITH ITS OUTLINE, so the live view draws the
 		// prompt's parts from the frame that assembled them rather than
 		// from the text's own headings — see [types.PromptSection].
@@ -816,14 +818,15 @@ func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, re
 		return
 	}
 	e.publish(ctx, events.New(types.AgentTurnProgress{
-		Agent:     e.turn.AgentID,
-		RoleName:  e.role,
-		TurnID:    e.turn.RunID,
-		WorkKey:   e.turn.WorkKey,
-		Phase:     types.Phase(ph),
-		Iteration: iteration,
-		Model:     res.Model,
-		Trigger:   e.turn.Trigger,
+		Agent:       e.turn.AgentID,
+		AgentHandle: e.handle,
+		RoleName:    e.role,
+		TurnID:      e.turn.RunID,
+		WorkKey:     e.turn.WorkKey,
+		Phase:       types.Phase(ph),
+		Iteration:   iteration,
+		Model:       res.Model,
+		Trigger:     e.turn.Trigger,
 		// NO PROMPT. It is sent once, on the opening frame, and the live
 		// projection carries it forward from there — exactly as it already
 		// carries the trigger.
@@ -958,11 +961,12 @@ func (e emitter) judged(ctx context.Context, host phase.Phase, iteration, hostRo
 		verdict = "extend"
 	}
 	e.publish(ctx, events.New(types.AgentPhaseCompleted{
-		Agent:    e.turn.AgentID,
-		RoleName: e.role,
-		TurnID:   e.turn.RunID,
-		WorkKey:  e.turn.WorkKey,
-		Phase:    types.PhaseJudge,
+		Agent:       e.turn.AgentID,
+		AgentHandle: e.handle,
+		RoleName:    e.role,
+		TurnID:      e.turn.RunID,
+		WorkKey:     e.turn.WorkKey,
+		Phase:       types.PhaseJudge,
 		// NESTED under the phase that asked, which is what the dashboard's
 		// grouping already expects of every non-turn phase.
 		HostPhase:     types.Phase(host),
@@ -1027,11 +1031,12 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 	}
 	hostRound, _ := toolloop.CallRound(ctx)
 	ev := types.AgentPhaseCompleted{
-		Agent:    e.turn.AgentID,
-		RoleName: e.role,
-		TurnID:   e.turn.RunID,
-		WorkKey:  e.turn.WorkKey,
-		Phase:    types.PhaseSubagent,
+		Agent:       e.turn.AgentID,
+		AgentHandle: e.handle,
+		RoleName:    e.role,
+		TurnID:      e.turn.RunID,
+		WorkKey:     e.turn.WorkKey,
+		Phase:       types.PhaseSubagent,
 		// THE ROUND THIS RAN IN, and it was left at zero.
 		//
 		// A phase's identity is (turn, phase, iteration) plus the task id
@@ -1135,6 +1140,7 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 	}
 	ev := types.AgentPhaseCompleted{
 		Agent:            e.turn.AgentID,
+		AgentHandle:      e.handle,
 		RoleName:         e.role,
 		TurnID:           e.turn.RunID,
 		WorkKey:          e.turn.WorkKey,

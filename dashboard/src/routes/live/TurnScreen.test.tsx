@@ -23,6 +23,7 @@ import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { EventRecord, TurnAnswer } from "~/protocol/index.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { rosterOf } from "~/test/seats.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -885,13 +886,13 @@ test("this turn's reflection sentinel refetches the turn, another turn's does no
 /** Mount over a seat whose live overlay places it on this turn, at `stage`. */
 function onTurn(stage: "phase" | "parked") {
   const store = new Store();
-  store.applyAgents([
+  rosterOf(store, [
     {
       role: "CEO",
       handle: "ceo",
-      turn: { turn_id: TURN, started_at: "2026-09-13T10:00:00Z", stage },
+      turn: { turn_id: TURN, started_at: "2026-09-13T10:00:00Z", stage } as never,
     },
-  ] as never);
+  ]);
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
     what === "turn"
@@ -1016,7 +1017,7 @@ test("a watch link's tab is one the page has", () => {
 test("a watch link lands on the transcript with the running phase open", async () => {
   location.hash = watchHref(TURN);
   const store = new Store();
-  store.applyAgents([runningSeat("review")] as never);
+  rosterOf(store, [runningSeat("review")] as never);
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
     what === "turn"
@@ -1051,7 +1052,7 @@ test("a watch link lands on the transcript with the running phase open", async (
 function mountWatching(seat: Record<string, unknown>, events: EventRecord[], tail?: unknown) {
   location.hash = watchHref(TURN);
   const store = new Store();
-  store.applyAgents([seat] as never);
+  rosterOf(store, [seat] as never);
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
     what === "turn"

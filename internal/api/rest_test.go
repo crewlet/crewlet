@@ -191,17 +191,20 @@ func TestThePathValueOverridesTheQueryString(t *testing.T) {
 // THE SEAT PAGE'S IDENTIFIER RESOLVES. The dashboard holds one identifier per
 // seat — the handle — and sends it as `id`. The answer used to read only
 // `role`, so every seat page answered 400 and rendered its error state.
+//
+// AND A ROLE NAME IS NOT ONE: two seats can share a name, so a seat asked for
+// by it is refused by name rather than answered as whichever seat it found.
 func TestASeatIsAddressableByTheIdentifierTheClientHolds(t *testing.T) {
 	t.Parallel()
 	a := restApp(t)
 
 	// The handle, which is what a roster row's id is.
-	if code, body := getAs(t, a, "/query/agent?id=ceo"); code != http.StatusOK || body["role"] != "CEO" {
+	if code, body := getAs(t, a, "/query/agent?id=ceo"); code != http.StatusOK ||
+		body["role"] != "CEO" || body["handle"] != "ceo" {
 		t.Errorf("asking by handle = %d %v, want the seat", code, body)
 	}
-	// The role name still works, for a caller that already had one.
-	if code, body := getAs(t, a, "/query/agent?role=CEO"); code != http.StatusOK || body["role"] != "CEO" {
-		t.Errorf("asking by role = %d %v, want the seat", code, body)
+	if code, body := getAs(t, a, "/query/agent?role=CEO"); code != http.StatusBadRequest {
+		t.Errorf("asking by role = %d %v, want a refusal naming the handle", code, body)
 	}
 	// And the roster hands out exactly that identifier.
 	for _, row := range rows(t, a.Stream().Snapshot()["agents"]) {

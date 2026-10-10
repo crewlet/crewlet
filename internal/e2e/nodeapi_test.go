@@ -247,7 +247,7 @@ func wireAPI(
 	// warned about, as cmd/crewlet does: a seed that cannot read the fleet it
 	// was just built beside is a broken case, not a degraded node.
 	seedCtx, cancelSeed := context.WithTimeout(ctx, seedBudget)
-	err = observe.Seed(seedCtx, e.History(), company().AgentRoles(), app.Stream().State())
+	err = observe.Seed(seedCtx, e.History(), company().AgentSeats(), app.Stream().State())
 	cancelSeed()
 	if err != nil {
 		return fail("seed the live projection", err)

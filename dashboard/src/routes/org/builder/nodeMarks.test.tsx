@@ -73,17 +73,19 @@ describe("a seat's live state", () => {
   });
 
   /*
-   * AND BY THE SAVED NAME when no handle was ever reported, which is what a
-   * company written without handles gives every seat.
+   * NEVER BY THE NAME. A seat whose handle the engine has not reported is keyed
+   * by its path until it does, and its live state waits with it: a row found by
+   * the saved NAME is any seat of that name — two can share one — so it drew a
+   * namesake's state on this seat.
    */
-  test("falls back to the saved name when the seat runs under no handle", () => {
-    render(
+  test("borrows no namesake's state while the seat's handle is unknown", () => {
+    const { container } = render(
       <LiveState
-        api={api([agent({ handle: undefined, role: "Dev", activity: "stopped" })])}
+        api={api([agent({ handle: "dev-2", role: "Dev", activity: "stopped" })])}
         view={seat({ saved: { handle: undefined, name: "Dev" }, handle: undefined })}
       />,
     );
-    expect(screen.getByText("stopped")).toBeDefined();
+    expect(container.textContent).toBe("");
   });
 
   /*

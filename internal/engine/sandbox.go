@@ -446,7 +446,7 @@ func (e *Engine) resumePanicked(ctx context.Context, run sandbox.PendingRun, pan
 		}
 	}
 	trace := events.TraceContext{TraceID: run.TraceID, SpanID: run.SpanID}
-	if breach := panicBreach(role, agentID, run.TurnID, run.WorkKey, trace, panicked); breach != nil {
+	if breach := panicBreach(run.AgentHandle, role, agentID, run.TurnID, run.WorkKey, trace, panicked); breach != nil {
 		e.observe(ctx, breach)
 	}
 	return fmt.Errorf("%w (%s): %w", sandbox.ErrResumeAbandoned, turn.AbandonedPanicked, panicked)
@@ -2096,8 +2096,9 @@ func (e *Engine) prepareHeldSeats(ctx context.Context, rt *sandboxRuntime) {
 // is in [events.Category]'s map. What reads them is the live seat state, where
 // "this seat is running here now" is exactly the question.
 //
-// THE ROLE, NOT THE HANDLE, because every other event the projection keys on
-// carries the role name and a seat under two spellings is two rows.
+// THE HANDLE, THE ROLE AND THE DERIVED ID, as every other seat event carries
+// them: the projection keys a seat on its handle, and an announcement that
+// named it any other way would be a second row for the same seat.
 func (e *Engine) publishSeatLifecycle(ctx context.Context, handle string,
 	payload events.Payload) {
 
@@ -2108,17 +2109,18 @@ func (e *Engine) publishSeatLifecycle(ctx context.Context, handle string,
 	if role == nil {
 		// A HANDLE THIS EPOCH NO LONGER HAS, which is the ordinary way a
 		// seat is released: the revision that removed it is already
-		// current. There is no role to key the row on, and inventing one
-		// from the handle would make a second row for the same seat.
+		// current, so no roster lists it and there is no row for its
+		// release to move — and no role to name it by.
 		return
 	}
+	agentID := e.seatAgentID(role)
 	var ev *events.Event
 	switch p := payload.(type) {
 	case types.AgentSpawned:
-		p.RoleName, p.Agent = role.Name, handle
+		p.RoleName, p.Agent, p.AgentHandle = role.Name, agentID, handle
 		ev = events.New(p, tracing.TraceOf(ctx))
 	case types.AgentTerminated:
-		p.RoleName, p.Agent = role.Name, handle
+		p.RoleName, p.Agent, p.AgentHandle = role.Name, agentID, handle
 		ev = events.New(p, tracing.TraceOf(ctx))
 	default:
 		return

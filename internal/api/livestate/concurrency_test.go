@@ -25,7 +25,7 @@ func TestTheProjectionIsSafeToReadWhileItIsWritten(t *testing.T) {
 		wg.Go(func() {
 			role := fmt.Sprintf("Seat-%d", w)
 			base := map[string]any{
-				"role": role, "turn_id": "tn-1", "phase": "plan", "iteration": 0,
+				"role": role, "agent_handle": role, "turn_id": "tn-1", "phase": "plan", "iteration": 0,
 			}
 			for i := range 50 {
 				s.Apply(env("agent_turn_started", base, id(fmt.Sprint("s", w, i))))
@@ -36,15 +36,15 @@ func TestTheProjectionIsSafeToReadWhileItIsWritten(t *testing.T) {
 				s.Apply(env("agent_turn_completed",
 					with(base, map[string]any{"total_tokens": 1}), id(fmt.Sprint("t", w, i))))
 				s.Apply(env("sandbox_run_started",
-					map[string]any{"turn_id": fmt.Sprint("sb", w, i), "role": role}))
+					map[string]any{"turn_id": fmt.Sprint("sb", w, i), "role": role, "agent_handle": role}))
 				s.Apply(env("sandbox_run_failed",
-					map[string]any{"turn_id": fmt.Sprint("sb", w, i), "role": role}))
+					map[string]any{"turn_id": fmt.Sprint("sb", w, i), "role": role, "agent_handle": role}))
 				s.ReconcileSandboxes([]livestate.SandboxRecord{{Entry: livestate.SandboxEntry{
 					TurnID: fmt.Sprint("rec", w, i), Role: role, Status: livestate.SandboxRunning,
 				}}}, time.Now())
-				s.Seed(livestate.History{Turns: []store.Turn{{
-					TurnID: fmt.Sprint("seed", w, i), AgentRole: role, Complete: true,
-				}}})
+				s.Seed(livestate.History{Turns: map[string][]store.Turn{role: {{
+					TurnID: fmt.Sprint("seed", w, i), Complete: true,
+				}}}})
 				s.Apply(env("budget_meters",
 					meterReport("m-1", w*100+i, seatMeter(role, i, 100)), streamOnly))
 			}
@@ -62,7 +62,7 @@ func TestTheProjectionIsSafeToReadWhileItIsWritten(t *testing.T) {
 				s.SeededFrom()
 				s.OverlayRows([]string{"Seat-0", "Seat-1"})
 				s.RuntimeIDFor("Seat-1")
-				s.MergeAgents([]map[string]any{{"role": "Seat-2"}, {"role": "Seat-3"}})
+				s.MergeAgents([]map[string]any{{"handle": "Seat-2"}, {"handle": "Seat-3"}})
 			}
 		})
 	}

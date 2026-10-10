@@ -28,6 +28,7 @@ import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { rosterOf } from "~/test/seats.ts";
 
 const had = Object.getOwnPropertyDescriptor(navigator, "clipboard");
 
@@ -236,16 +237,19 @@ describe("the breadcrumb", () => {
 describe("who is working", () => {
   function mount(working: boolean | undefined) {
     const store = new Store();
-    store.applyAgents([
+    rosterOf(store, [
       {
-        id: "a1",
         role: "Agent SWE",
+        handle: "agent-swe",
         activity: "working",
-        live_call: { work_item: { key: "ENG-1", project: "ENG" }, versions: ZERO_VERSIONS },
+        live_call: {
+          work_item: { key: "ENG-1", project: "ENG" },
+          versions: ZERO_VERSIONS,
+        } as never,
       },
-      { id: "a2", role: "SRE", activity: "working" },
-      { id: "a4", role: "CTO", activity: "idle" },
-    ] as never);
+      { role: "SRE", activity: "working" },
+      { role: "CTO", activity: "idle" },
+    ]);
     const socket = new LiveSocket(store);
     return render(
       <Router>
@@ -280,7 +284,7 @@ describe("who is working", () => {
 
   test("nobody working draws nothing, even where it is asked for", () => {
     const store = new Store();
-    store.applyAgents([{ id: "a4", role: "CTO", activity: "idle" }] as never);
+    rosterOf(store, [{ role: "CTO", activity: "idle" }]);
     const { container } = render(
       <Router>
         <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>

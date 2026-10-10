@@ -482,22 +482,22 @@ export class LiveSocket {
    * the seat's next push, which a frozen failed call or a long round never
    * sends. An answer at or past them holds everything they named, and ends it.
    */
-  private fetchCalls(roles: string[]): void {
-    for (const role of roles) {
-      if (this.fetchingCalls.has(role)) {
-        this.fetchingCalls.set(role, true);
+  private fetchCalls(handles: string[]): void {
+    for (const handle of handles) {
+      if (this.fetchingCalls.has(handle)) {
+        this.fetchingCalls.set(handle, true);
         continue;
       }
-      this.fetchingCalls.set(role, false);
-      this.query("live_call", { role })
+      this.fetchingCalls.set(handle, false);
+      this.query("live_call", { handle })
         .then(
           (answer) => this.store.applyLiveCall(answer),
           () => false,
         )
         .then((current) => {
-          const again = this.fetchingCalls.get(role) ?? false;
-          this.fetchingCalls.delete(role);
-          if (again && !current) this.fetchCalls([role]);
+          const again = this.fetchingCalls.get(handle) ?? false;
+          this.fetchingCalls.delete(handle);
+          if (again && !current) this.fetchCalls([handle]);
         });
     }
   }

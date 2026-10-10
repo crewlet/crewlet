@@ -187,15 +187,12 @@ export interface AttentionInput {
 const ORDER: Record<Severity, number> = { critical: 0, caution: 1, info: 2 };
 
 /**
- * Where a seat's row points: its page, by the handle it runs under — and
- * nowhere for a row that carries none. The live overlay is keyed by role, and
- * one for a seat a revision has just added is appended before the roster
- * names its handle, with the ROLE NAME as its `id`; a seat's page resolves a
- * handle and nothing else (`OrgIndex.byHandle`), so that id was a link to "No
- * seat called". The roster's next push gives the row its handle.
+ * Where a seat's row points: its page, by the handle it runs under — the key
+ * every row carries and the one address a seat's page resolves
+ * (`OrgIndex.byHandle`).
  */
 function seatPage(agent: AgentRow): Pick<Attention, "path"> {
-  return agent.handle ? { path: ["agents", "seats", agent.handle] } : {};
+  return { path: ["agents", "seats", agent.handle] };
 }
 
 export function attentionQueue(input: AttentionInput): Attention[] {
@@ -343,7 +340,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         detail: agent.last_error.message || "The seat stopped and has not done work since.",
         ...seatPage(agent),
         at: agent.last_error.at,
-        who: String(agent.handle ?? agent.role),
+        who: agent.handle,
       });
       continue;
     }
@@ -363,7 +360,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         // began, which is what orders it among the rest and what its row's
         // age says.
         ...(agent.paused?.at ? { at: agent.paused.at } : {}),
-        who: String(agent.handle ?? agent.role),
+        who: agent.handle,
       });
       continue;
     }
@@ -393,7 +390,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
           // round — the profile's default tab, so the path alone opens it.
           ...seatPage(agent),
           at: call.updated_at,
-          who: String(agent.handle ?? agent.role),
+          who: agent.handle,
         });
       }
     }

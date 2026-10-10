@@ -147,7 +147,7 @@ func TestSeedingDoesNotCountWhatTheStreamAlreadyApplied(t *testing.T) {
 	s := seededState(t)
 	live := phaseSpend("p1", "2026-06-14T11:45:00Z", 40)
 	s.Apply(live)
-	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead"},
+	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead", "agent_handle": "Lead"},
 		id("e1"), at("2026-06-14T11:45:00Z")))
 
 	s.Seed(livestate.History{
@@ -215,7 +215,7 @@ func TestAnEventTheSeedAlreadyListedIsListedOnceWhenItStreams(t *testing.T) {
 func TestSeededRowsAreOrderedAgainstLiveOnes(t *testing.T) {
 	t.Parallel()
 	s := seededState(t)
-	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead"},
+	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead", "agent_handle": "Lead"},
 		id("live"), at("2026-06-14T11:59:00Z")))
 	s.Seed(livestate.History{Events: []livestate.FeedRow{
 		storedRow("old", "2026-06-14T09:00:00Z"),
@@ -342,15 +342,19 @@ func TestSeedSetsEachSeatsLastTurnAndAParkedOne(t *testing.T) {
 	s := seededState(t)
 	base := time.Date(2026, 6, 14, 10, 0, 0, 0, time.UTC)
 	item := &types.WorkItem{Backend: "native", ID: "t-1", Key: "ENG-1"}
-	change := s.Seed(livestate.History{Turns: []store.Turn{
-		{TurnID: "old", AgentRole: "Lead", StartedAt: base, EndedAt: base.Add(time.Minute), Complete: true},
-		{TurnID: "newer", AgentRole: "Lead", StartedAt: base.Add(time.Hour),
-			EndedAt: base.Add(time.Hour + time.Minute), Complete: true, Failed: true},
-		// Running or died: nobody can say which from the store.
-		{TurnID: "unfinished", AgentRole: "Lead", StartedAt: base.Add(2 * time.Hour),
-			EndedAt: base.Add(2 * time.Hour)},
-		{TurnID: "waiting", AgentRole: "Coder", StartedAt: base, EndedAt: base.Add(time.Minute),
-			Parked: true, WorkItem: item},
+	change := s.Seed(livestate.History{Turns: map[string][]store.Turn{
+		"Lead": {
+			{TurnID: "old", AgentRole: "Lead", StartedAt: base, EndedAt: base.Add(time.Minute), Complete: true},
+			{TurnID: "newer", AgentRole: "Lead", StartedAt: base.Add(time.Hour),
+				EndedAt: base.Add(time.Hour + time.Minute), Complete: true, Failed: true},
+			// Running or died: nobody can say which from the store.
+			{TurnID: "unfinished", AgentRole: "Lead", StartedAt: base.Add(2 * time.Hour),
+				EndedAt: base.Add(2 * time.Hour)},
+		},
+		"Coder": {
+			{TurnID: "waiting", AgentRole: "Coder", StartedAt: base, EndedAt: base.Add(time.Minute),
+				Parked: true, WorkItem: item},
+		},
 	}})
 	if _, ok := change.Agents["Lead"]; !ok {
 		t.Error("seeding a last turn did not report the seat as moved")
@@ -387,13 +391,39 @@ func TestSeedDoesNotOverwriteWhatTheStreamAlreadySaid(t *testing.T) {
 	// The caller subscribes first and reads second, so the stream can land
 	// a newer turn before the seed does.
 	s := seededState(t)
-	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead", "turn_id": "live"},
+	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead", "agent_handle": "Lead", "turn_id": "live"},
 		at("2026-06-14T11:59:00Z")))
 	base := time.Date(2026, 6, 14, 10, 0, 0, 0, time.UTC)
-	s.Seed(livestate.History{Turns: []store.Turn{
-		{TurnID: "stored", AgentRole: "Lead", StartedAt: base, EndedAt: base, Complete: true},
+	s.Seed(livestate.History{Turns: map[string][]store.Turn{
+		"Lead": {{TurnID: "stored", AgentRole: "Lead", StartedAt: base, EndedAt: base, Complete: true}},
 	}})
 	if last := overlayOf(t, s, "Lead").LastTurn; last == nil || last.TurnID != "live" {
 		t.Errorf("last turn = %+v, want the stream's newer one kept", last)
+	}
+}
+
+// TWO SEATS OF ONE NAME ARE SEEDED APART.
+//
+// A stored turn names its seat by role name and derived id, and the seed used
+// to group by the name — so two unit seats stamped from one template, which
+// share it, were seeded from one list and each was handed the newest turn of
+// either. The reader keys each seat's turns by the handle it asked for.
+//
+// Mutation: seed each seat from every list handed in — what grouping by the
+// shared name amounted to — and both seats carry run-b.
+func TestTwoSeatsOfOneNameAreSeededApart(t *testing.T) {
+	t.Parallel()
+	s := seededState(t)
+	base := time.Date(2026, 6, 14, 10, 0, 0, 0, time.UTC)
+	s.Seed(livestate.History{Turns: map[string][]store.Turn{
+		"eng-a": {{TurnID: "run-a", AgentRole: "Engineer", AgentID: "id-a",
+			StartedAt: base, EndedAt: base.Add(time.Minute), Complete: true}},
+		"eng-b": {{TurnID: "run-b", AgentRole: "Engineer", AgentID: "id-b",
+			StartedAt: base.Add(time.Hour), EndedAt: base.Add(time.Hour + time.Minute), Complete: true}},
+	}})
+	for handle, want := range map[string]string{"eng-a": "run-a", "eng-b": "run-b"} {
+		if last := overlayOf(t, s, handle).LastTurn; last == nil || last.TurnID != want {
+			t.Errorf("%s's last turn = %+v, want %s — its namesake's turn is not its own", handle, last, want)
+		}
 	}
 }

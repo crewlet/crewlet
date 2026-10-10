@@ -1410,9 +1410,6 @@ type PhaseTokenQuery struct {
 	Since time.Time
 	Until time.Time
 
-	// AgentRole restricts the rollup to one seat. Empty is the whole org.
-	AgentRole string
-
 	// Limit keeps only the newest Limit records of the window. Zero or less
 	// is the WHOLE window, and that is what a rollup must ask for: see the
 	// note below on why the rollup has no row cap, since a total folded from
@@ -1594,31 +1591,26 @@ const agentPhaseOrderSQL = ` ORDER BY event_time DESC, event_id DESC LIMIT ?`
 // is the query that makes a live screen slow — and a boolean on the
 // shared query type would put that mistake one keystroke away.
 //
-// Matched on EITHER identifier, because a caller holds whichever the seat page
-// gave it: the roster carries the handle-derived agent id and the projection
-// keys on the role name. Both are promoted columns, so neither is a scan.
+// Matched on the seat's DERIVED AGENT ID alone, the one identifier no other
+// seat carries: every phase record names it, and it is a promoted column. It
+// used to match the role name as well, and a name is a label two seats can
+// share — the duplicate-name rule is an admission rule — so a seat page listed
+// both seats' calls as one history.
 //
 // agent_phase_completed only. That is the durable record — the prompts, the
 // response, the tools, the tokens — while agent_turn_progress is stream-only
 // by design, so history here is exactly the calls that finished.
 //
 // more reports that the seat holds phases past this page — see [pastPage].
-func (l *EventLog) AgentPhases(ctx context.Context, agentID, agentRole string, before *Cursor, at time.Time) (rows []EventRecord, more bool, err error) {
-	if agentID == "" && agentRole == "" {
+func (l *EventLog) AgentPhases(ctx context.Context, agentID string, before *Cursor, at time.Time) (rows []EventRecord, more bool, err error) {
+	// A SEAT NOBODY CAN NAME is a question with no answer, never "every
+	// seat": an empty id bound below would match every row that carries
+	// none.
+	if agentID == "" {
 		return nil, false, nil
 	}
-	query := agentPhaseSQL
-	args := []any{EncodeTime(askedAt(at).Add(-EventHistory))}
-	// ONLY THE IDENTIFIERS THE CALLER ACTUALLY HAS.
-	//
-	// It was `(agent_id = ? OR agent_role = ?)` with both bound
-	// unconditionally, so an EMPTY one matched every row that carries
-	// none: a handle the roster could not resolve to a role asked for that
-	// seat's phases and was answered every non-agent event in the window.
-	// The guard above catches only the case where BOTH are empty.
-	clause, ids := seatClause(agentID, agentRole)
-	query += clause
-	args = append(args, ids...)
+	query := agentPhaseSQL + ` AND agent_id = ?`
+	args := []any{EncodeTime(askedAt(at).Add(-EventHistory)), agentID}
 	if before != nil && before.ID != "" {
 		query += agentPhaseCursorSQL
 		args = append(args, EncodeTime(before.Time), before.ID)
@@ -1631,30 +1623,6 @@ func (l *EventLog) AgentPhases(ctx context.Context, agentID, agentRole string, b
 	}
 	rows, more = pastPage(rows, AgentPhaseLimit)
 	return rows, more, nil
-}
-
-// seatClause narrows to a seat by whichever identifier the caller holds.
-//
-// A caller passes the handle-derived agent id, the role name, or both — the
-// roster carries one and the projection keys on the other — and binding an
-// EMPTY one is how a filter turns into a match on every row that has none.
-// Returns an empty clause when the caller holds neither, which its own callers
-// treat as "no seat named" rather than "every seat".
-func seatClause(agentID, agentRole string) (string, []any) {
-	var terms []string
-	var args []any
-	if agentID != "" {
-		terms = append(terms, "agent_id = ?")
-		args = append(args, agentID)
-	}
-	if agentRole != "" {
-		terms = append(terms, "agent_role = ?")
-		args = append(args, agentRole)
-	}
-	if len(terms) == 0 {
-		return "", nil
-	}
-	return " AND (" + strings.Join(terms, " OR ") + ")", args
 }
 
 // phasesSQL is AgentPhases without the seat filter.
@@ -1759,10 +1727,6 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens
 	// window headed "counted through now" is a number with no window.
 	sql := phaseTokenSQL + " AND event_time < ?"
 	args := []any{EncodeTime(since), EncodeTime(until)}
-	if q.AgentRole != "" {
-		sql += " AND agent_role = ?"
-		args = append(args, q.AgentRole)
-	}
 	if q.Before != nil {
 		sql += " AND (event_time, event_id) < (?, ?)"
 		args = append(args, EncodeTime(q.Before.Time), q.Before.ID)

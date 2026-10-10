@@ -176,7 +176,7 @@ func TestBothTransportsAnswerTheSameQuestionIdentically(t *testing.T) {
 		rest   url.Values
 		socket map[string]any
 	}{
-		{"agent", url.Values{"role": {"Lead"}}, map[string]any{"role": "Lead"}},
+		{"agent", url.Values{"id": {"lead"}}, map[string]any{"id": "lead"}},
 		{"events", url.Values{"limit": {"3"}}, map[string]any{"limit": float64(3)}},
 		{"events", url.Values{"actor": {"Lead"}}, map[string]any{"actor": "Lead"}},
 		{"trace", url.Values{"trace_id": {"tr-1"}}, map[string]any{"trace_id": "tr-1"}},
