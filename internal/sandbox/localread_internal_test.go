@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"net"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -13,9 +14,16 @@ import (
 // run as included (permissions would not: root reads past them).
 func TestALocalFileThatCannotBeOpenedIsAnError(t *testing.T) {
 	t.Parallel()
-	// A one-letter name, because a socket's path is bounded to about a
-	// hundred bytes and the directory is already named for this test.
-	dir := t.TempDir()
+	// NOT UNDER t.TempDir, whose directory is named for this test: a socket's
+	// path is bounded (104 bytes on macOS, 108 on Linux), and the test's name
+	// under macOS's per-user temporary directory already runs past it, so
+	// the listen failed there before the case was reached. A short directory
+	// of its own and a one-letter name stay inside the bound on both.
+	dir, err := os.MkdirTemp("", "sock") //nolint:usetesting // t.TempDir is named for the test, past a socket path's bound
+	if err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	sock := filepath.Join(dir, "s")
 	l, err := net.Listen("unix", sock)
 	if err != nil {
