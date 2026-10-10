@@ -53,14 +53,16 @@ import (
 // only way a node that has applied a million records avoids a million
 // redeliveries on every restart.
 //
-// # And why seat admission waits on EVERY registered domain
+// # And why seat admission waits on the domains a seat depends on
 //
 // A seat whose mailbox attached before its node's tracker was established
 // would answer "there is no such task" to its own tools — which is an answer
 // it acts on, by filing a duplicate or abandoning work it was told to do. That
 // gate is per DOMAIN and not per node: a domain whose health does not gate
-// admission says so itself ([statelog.Domain.ReadinessInput]), which is how
-// the vector domain's coverage number stays a number rather than an outage.
+// admission says so itself ([statelog.Domain.GatesSeatAdmission]), which is
+// how the vector domain's coverage number stays a number rather than an
+// outage. Whether a domain's copy is WRONG is a different question, asked of
+// every domain ([stateLog.judgeCopy], ADR-0031).
 
 // domainHost is the broker as this node's state log needs it.
 //
@@ -1257,7 +1259,7 @@ func (s *stateLog) readerFor(domain statelog.Domain, spec statelog.StreamSpec,
 		// [stateLog.run] ends with the domain the health describes,
 		// which is what stops a probe outliving its own apply loop.
 		Health: func() statelog.Health {
-			h, err := s.health(s.run, running)
+			h, err := s.health(s.run, running, s.readFloors(s.run))
 			if err != nil {
 				// AN UNREADABLE TERM REFUSES rather than serving. The
 				// health read reaches the broker and coordination, and
@@ -1342,11 +1344,52 @@ func (s *stateLog) readerFor(domain statelog.Domain, spec statelog.StreamSpec,
 // the error: this is the one check where failing open is a lost update rather
 // than a duplicate.
 func (s *stateLog) trimFloor(ctx context.Context, domain string, generation uint32) (uint64, error) {
-	floors, err := s.fleet.Floors(ctx)
+	return s.readFloors(ctx).floor(domain, generation)
+}
+
+// publishedFloors is ONE read of the fleet's published trim floors, for every
+// domain a caller judges at one instant — or why it could not be read.
+//
+// ONE READ PER PASS, NEVER ONE PER DOMAIN. The register is a certified listing
+// of a coordination bucket — the bucket's own pass, its key index and a leader
+// read of every key the pass lost — so a pass that judges every domain's copy
+// ([stateLog.judgeCopy], ADR-0031) and read it once per domain would pay that
+// listing four times a second on every data node to learn one fact four
+// times. Every domain's floor is a row of the same register, read at the same
+// instant.
+type publishedFloors struct {
+	floors []coord.TrimFloor
+	err    error
+
+	// at is when the read landed — what a health built from it stamps its
+	// floor with ([statelog.Floor.ReadAt]), since that is the instant the
+	// floor was known, however long after it the health was assembled.
+	at time.Time
+}
+
+// readFloors reads the published floors once.
+func (s *stateLog) readFloors(ctx context.Context) publishedFloors {
+	return readFloorsOf(ctx, s.fleet)
+}
+
+// readFloorsOf reads fleet's published floors once — the one read every
+// caller's [publishedFloors] comes from, whichever handle on the fleet it
+// holds.
+func readFloorsOf(ctx context.Context, fleet coord.Fleet) publishedFloors {
+	floors, err := fleet.Floors(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("engine: read the fleet's published trim floors: %w", err)
+		return publishedFloors{err: fmt.Errorf("engine: read the fleet's published trim floors: %w", err)}
 	}
-	return floorFor(floors, domain, generation)
+	return publishedFloors{floors: floors, at: time.Now()}
+}
+
+// floor is domain's floor at generation out of this read ([floorFor]); a
+// register nobody could read is the error, which refuses.
+func (p publishedFloors) floor(domain string, generation uint32) (uint64, error) {
+	if p.err != nil {
+		return 0, p.err
+	}
+	return floorFor(p.floors, domain, generation)
 }
 
 // floorOf is [stateLog.trimFloor] for one domain, as a write fence reads it:
@@ -1610,66 +1653,117 @@ func (s *stateLog) logDiverged(ctx context.Context, domain string, runner *state
 }
 
 // Established reports whether every domain whose health gates seat admission
-// has one.
+// ([statelog.Domain.GatesSeatAdmission]) has one.
 //
 // PER DOMAIN, from the domain's own declaration. A compacted domain's gap is a
-// coverage number rather than a fault, so shedding a company's seats for one
-// would be the outage the number exists to avoid — and stating it on the
+// coverage number rather than a fault, so withholding a company's seats for
+// one would be the outage the number exists to avoid — and stating it on the
 // domain is what keeps that a property of the domain rather than a list
-// somewhere of the ones to skip.
+// somewhere of the ones to skip. This is ADMISSION only; whether a copy is
+// WRONG is asked of every domain ([stateLog.judgeCopy], ADR-0031).
 func (s *stateLog) Established(ctx context.Context, strict bool) (bool, statelog.ReadRefusal) {
 	if s == nil {
 		return true, ""
 	}
-	for _, running := range s.running() {
-		if !running.domain.ReadinessInput() {
-			continue
-		}
-		health, err := s.health(ctx, running)
-		if err != nil {
+	gating := slices.DeleteFunc(s.running(), func(running *runningLog) bool {
+		return !running.domain.GatesSeatAdmission()
+	})
+	for _, read := range s.readHealths(ctx, gating) {
+		if read.err != nil {
 			return false, statelog.RefuseBrokerUnreachable
 		}
-		if ok, refusal := health.Established(strict); !ok {
+		if ok, refusal := read.health.Established(strict); !ok {
 			return false, refusal
 		}
 	}
 	return true, ""
 }
 
-// copyVerdict is what the estate's router reads of this node's copy of the
-// estate: whether it is WRONG ([stateLog.judgeCopy] says what that means) and,
-// if not, whether it answers requests now.
-type copyVerdict struct {
-	// fault names the first log whose copy is wrong — or [shutEstate],
-	// where the estate's file is not open at all — empty for a copy that
-	// is not.
-	fault string
-
-	// answers is [statelog.Health.Answers] over every log whose health
-	// judges the copy, and refusal the first refusal where it is false —
-	// [statelog.RefuseBrokerUnreachable] for a log whose health could not
-	// be read.
-	answers bool
-	refusal statelog.ReadRefusal
+// healthRead is one domain's health as one reading assembled it, or why it
+// could not be.
+type healthRead struct {
+	running *runningLog
+	health  statelog.Health
+	err     error
 }
 
-// shutEstate is the fault a copy whose file is not open is judged by: no log
-// is to blame, the whole copy is.
-const shutEstate = "estate"
+// readHealths reads every one of runs' health AT ONCE, beside ONE read of the
+// published floors ([stateLog.readFloors]) — in runs' order.
+func (s *stateLog) readHealths(ctx context.Context, runs []*runningLog) []healthRead {
+	return readHealthsWith(ctx, runs, s.readFloors, s.observe)
+}
 
-// judgeCopy judges this node's copy of the estate from ONE reading of each of
-// its logs' health: every reading costs the broker a request per log, and the
-// two questions are asked of the same instant. A LOG WHOSE HEALTH COULD NOT BE
-// READ is not a fault, for the reason below, and it is not an answer either.
+// readHealthsWith is [stateLog.readHealths] over its two reads, separated so
+// the concurrency is exercised without a broker.
 //
-// # What makes a copy WRONG
+// # Every log on its own, and the floors beside them
 //
-// A copy that is wrong is one this node takes OUT OF SERVICE while its seats
-// keep running and read the estate from the other data nodes
-// ([localEstate.For]).
+// Each log is its own stream with its own raft group, and its health is a
+// request to that group's leader. Read one after another inside one deadline,
+// a log whose group did not answer — mid-election, its leader lost — spent the
+// whole of it, and every log read after it failed at once on the expired
+// context: a vectors stream with no leader left the knowledge base's health
+// UNREAD, which keeps whatever verdict it last had, so a pages fault starting
+// meanwhile went unseen for as long as the vectors group stayed down —
+// ADR-0031's isolation broken by the order of a loop. Read at once, a log that
+// does not answer is unread on its own, and a reading takes the slowest one
+// round trip rather than the sum of them.
 //
-// # This is a different question from Established, and the difference is what
-// # separates waiting from not serving
+// THE FLOORS ARE READ BESIDE THE LOGS rather than before them, because a
+// health needs its floor only at the end ([floored]): read first, a slow
+// coordination listing left the logs' requests less of the deadline. Every
+// health in the reading is built from that one read of the register — the
+// listing is the costly half, and every domain's floor is a row of it.
+func readHealthsWith(ctx context.Context, runs []*runningLog,
+	readFloors func(context.Context) publishedFloors,
+	observe func(context.Context, *runningLog) (statelog.Health, error)) []healthRead {
+
+	floors := make(chan publishedFloors, 1)
+	go func() { floors <- readFloors(ctx) }()
+	out := make([]healthRead, len(runs))
+	var wg sync.WaitGroup
+	for i, running := range runs {
+		wg.Go(func() {
+			// EACH INTO ITS OWN SLOT, so one log's answer — or its
+			// silence — touches no other's.
+			h, err := observe(ctx, running)
+			out[i] = healthRead{running: running, health: h, err: err}
+		})
+	}
+	wg.Wait()
+	read := <-floors
+	for i := range out {
+		if out[i].err != nil {
+			continue
+		}
+		out[i].health, out[i].err = floored(out[i].health, out[i].running.domain.Name(), read)
+	}
+	return out
+}
+
+// judgeCopy judges this node's copy of every domain from ONE reading of each
+// of its logs' health and ONE read of the published floors, all at once
+// ([stateLog.readHealths]): every reading costs the broker a request per log,
+// and the questions are asked of the same instant. A LOG WHOSE HEALTH COULD
+// NOT BE READ is not a fault, for the reason below, and it is not an answer
+// either — and it is that log's alone: one log's silent group leaves no other
+// domain unread.
+//
+// # Every domain, each on its own
+//
+// EVERY REGISTERED DOMAIN IS JUDGED, whatever it declares — ADR-0031. A
+// domain's copy that is wrong is one this node takes OUT OF SERVICE for that
+// domain's operations alone ([localEstate.For]): they go to the other data
+// nodes, while every other domain's copy keeps answering here and the node
+// keeps its seats. Which domains a SEAT depends on is the domain's own
+// declaration ([statelog.Domain.GatesSeatAdmission]), and it decides only
+// what the SEAT copy is ([estate.SeatCopy]): admission, and whether the
+// node's seats need its view of the fleet to be routed. It never decided
+// whether a copy is judged — when one declaration answered both, the vectors
+// and usage copies escaped the judgement and a wrong one was served for ever,
+// while a fault in the knowledge base sent every tracker call to a peer.
+//
+// # What makes a copy WRONG, which is not what makes it wait
 //
 // [stateLog.Established] gates ADMISSION: a node mid-hydration keeps what it
 // holds and claims nothing new, which is right, because its rows are merely
@@ -1683,9 +1777,7 @@ const shutEstate = "estate"
 //   - the node is BELOW THE LOG, so records it never applied have been
 //     deleted and its rows have a hole nothing will fill — a node that is
 //     only below the published trim floor, whose missing records the log
-//     still holds, is replaying them and is behind rather than wrong — and a
-//     floor NOBODY COULD READ for four heartbeats takes the same branch as
-//     below, because an unread floor is not a floor that is satisfied;
+//     still holds, is replaying them and is behind rather than wrong;
 //   - its checkpoint names A STREAM THAT IS NOT THIS ONE, a log deleted and
 //     rebuilt under it, so its rows are keyed to a history that is gone;
 //   - the applied prefix is STALLED, so the node owes progress it has not
@@ -1705,16 +1797,27 @@ const shutEstate = "estate"
 //
 // Whatever reads this must also ACT on it — the `deferred_old` alarm once told
 // an operator "its seats move at 30m" about a node nothing ever moved. What
-// the answer does now is take the node's copy out of service, which the alarms
-// say.
+// the answer does now is take that domain's copy out of service, which the
+// alarms say.
 //
 // A DOMAIN WHOSE HEALTH CANNOT BE READ IS NOT WRONG. An unreachable broker is
 // the outage during which a company most needs its copies to keep answering,
 // and taking one out of service on an unread number is the failure mode
-// `unknown` exists throughout this package to prevent.
+// `unknown` exists throughout this package to prevent. Such a domain is
+// marked UNREAD, and the verdict that stores this reading keeps what it held
+// for it ([copyVerdict.carried]) — a published floor nobody could read is one
+// such reading, for every domain at once, while every read the node serves
+// refuses until it can be read.
 func (s *stateLog) judgeCopy(ctx context.Context) copyVerdict {
-	out := copyVerdict{answers: true}
+	out := copyVerdict{domains: map[string]domainVerdict{}}
 	if s == nil {
+		// NO STATE LOG, NOTHING TO JUDGE: every domain this build
+		// registers is sound and answering, which is what a runtime with
+		// no log to fall behind on is.
+		for _, domain := range registeredDomains() {
+			out.domains[domain.Name()] = domainVerdict{answers: true,
+				gates: domain.GatesSeatAdmission()}
+		}
 		return out
 	}
 	// A FILE THAT IS NOT OPEN IS A COPY THAT CANNOT ANSWER AT ALL — lost to
@@ -1727,38 +1830,51 @@ func (s *stateLog) judgeCopy(ctx context.Context) copyVerdict {
 	// have answered them.
 	if s.db != nil {
 		if _, err := s.db.ReplicatedDB(); err != nil {
-			return copyVerdict{fault: shutEstate}
+			return copyVerdict{shut: true}
 		}
 	}
-	now := time.Now()
-	for _, running := range s.running() {
-		if !running.domain.ReadinessInput() {
-			continue
+	return judgeReads(time.Now(), s.readHealths(ctx, s.running()))
+}
+
+// judgeReads is each domain's verdict out of one reading of the logs' health
+// ([stateLog.readHealths]) at now — a domain whose health was not read is
+// UNREAD, for [stateLog.judgeCopy]'s reason, and on its own.
+func judgeReads(now time.Time, reads []healthRead) copyVerdict {
+	out := copyVerdict{domains: make(map[string]domainVerdict, len(reads))}
+	for _, read := range reads {
+		running := read.running
+		d := domainVerdict{gates: running.domain.GatesSeatAdmission()}
+		if read.err != nil {
+			d.unread = true
+		} else {
+			d.why = read.health.Fault(now, running.progress.deferredSinceValue())
+			d.wrong = d.why != ""
+			d.answers, _ = read.health.Answers()
 		}
-		health, err := s.health(ctx, running)
-		if err != nil {
-			if out.answers {
-				out.answers, out.refusal = false, statelog.RefuseBrokerUnreachable
-			}
-			continue
-		}
-		if out.fault == "" && !health.Healthy(now, running.progress.deferredSinceValue()) {
-			out.fault = running.domain.Name()
-		}
-		if !out.answers {
-			continue
-		}
-		if ok, refusal := health.Answers(); !ok {
-			out.answers, out.refusal = false, refusal
-		}
+		out.domains[running.domain.Name()] = d
 	}
 	return out
 }
 
 // health assembles one domain's readiness from the four places it lives: this
 // node's own checkpoint, its consumer's backlog, the stream's own bounds, and
-// the fleet's published floor.
-func (s *stateLog) health(ctx context.Context, running *runningLog) (statelog.Health, error) {
+// the fleet's published floor — out of floors, the caller's one read of the
+// register for every domain it asks about at this instant
+// ([stateLog.readFloors]).
+func (s *stateLog) health(ctx context.Context, running *runningLog,
+	floors publishedFloors) (statelog.Health, error) {
+	health, err := s.observe(ctx, running)
+	if err != nil {
+		return health, err
+	}
+	return floored(health, running.domain.Name(), floors)
+}
+
+// observe is every term of one domain's health but its floor: the checkpoint,
+// the applier's own state, the eviction row and the stream's bounds — the half
+// a reading can take before the published floors land ([readHealthsWith]).
+// [floored] completes it.
+func (s *stateLog) observe(ctx context.Context, running *runningLog) (statelog.Health, error) {
 	now := time.Now()
 	at := running.runner.Committed()
 	health := statelog.Health{Position: at, AppliedThrough: at.Seq}
@@ -1855,9 +1971,21 @@ func (s *stateLog) health(ctx context.Context, running *runningLog) (statelog.He
 	// stalled since" half of the field: rows frozen for the stall grace
 	// stopped being a whole state the moment they stopped moving.
 	health.Drained = running.runner.Drained() && !health.Stalled
-	floor, err := s.trimFloor(ctx, running.domain.Name(), at.Generation)
+	return health, nil
+}
+
+// floored completes an [stateLog.observe]d health with domain's floor out of
+// floors: the published floor, and the four-valued state its checkpoint is in
+// against it and against the stream's first record.
+func floored(health statelog.Health, domain string, floors publishedFloors) (statelog.Health, error) {
+	at := health.Position
+	floor, err := floors.floor(domain, at.Generation)
 	if err != nil {
 		return health, err
+	}
+	first := uint64(0)
+	if health.FirstSeq != nil {
+		first = *health.FirstSeq
 	}
 	health.TrimFloor = &floor
 	// THE FOUR-VALUED FLOOR, stamped with the instant it was read. Both
@@ -1870,7 +1998,7 @@ func (s *stateLog) health(ctx context.Context, running *runningLog) (statelog.He
 	// a possibly-non-authoritative member, and a stale one is LOWER than
 	// the truth, so trusting it downward is how a node below the real
 	// floor keeps serving.
-	health.Floor = statelog.Floor{State: statelog.FloorOK, ReadAt: now}
+	health.Floor = statelog.Floor{State: statelog.FloorOK, ReadAt: floors.at}
 	// BELOW MEANS THE NEXT RECORD THIS NODE NEEDS MAY BE GONE: the one at
 	// checkpoint+1. A checkpoint one below the higher of the floor and the
 	// first surviving sequence has applied everything that was, or may yet
@@ -2864,7 +2992,7 @@ func (s *stateLog) registered() map[string]statelog.Registered {
 		// no caller's context to inherit — and [stateLog.run] is the one
 		// that ends when the domain being vouched for does.
 		entry.Health = func() statelog.Health {
-			health, err := s.health(s.run, running)
+			health, err := s.health(s.run, running, s.readFloors(s.run))
 			if err != nil {
 				// AN UNREADABLE HEALTH IS NOT A HEALTHY ONE: the zero
 				// value has Drained false, an unread floor and no
@@ -2881,23 +3009,24 @@ func (s *stateLog) registered() map[string]statelog.Registered {
 
 // Status is what this node reports about each domain's apply loop.
 //
-// PER DOMAIN, and every registered one appears — including the domains whose
-// health does NOT gate seat admission. The gate and the report answer
-// different questions: the gate asks whether a seat may attach, and the vector
-// domain deliberately answers "that is not mine to say"; the report asks how
-// far along this node's copies are, which is a fact about every one of them.
-// A domain missing from the count is one an operator cannot see falling
-// behind.
+// PER DOMAIN, and every registered one appears — including the domains that
+// do NOT gate seat admission. The gate and the report answer different
+// questions: admission asks whether a seat may attach, which only the domains
+// a seat depends on can withhold ([statelog.Domain.GatesSeatAdmission]); the
+// report asks how far along this node's copies are, which is a fact about
+// every one of them. A domain missing from the count is one an operator
+// cannot see falling behind.
 func (s *stateLog) Status(ctx context.Context) []ReplicationStatus {
 	if s == nil {
 		return nil
 	}
 	held := s.running()
 	out := make([]ReplicationStatus, 0, len(held))
+	floors := s.readFloors(ctx)
 	for _, running := range held {
 		name := running.domain.Name()
 		row := ReplicationStatus{Name: name, Kind: "domain"}
-		health, err := s.health(ctx, running)
+		health, err := s.health(ctx, running, floors)
 		switch {
 		case err != nil:
 			// UNREADABLE IS NOT READY. The alternative reads as a
@@ -3998,6 +4127,7 @@ func (s *stateLog) positionGauges(ctx context.Context, row coord.NodePositions) 
 	if s.metrics == nil {
 		return
 	}
+	floors := s.readFloors(ctx)
 	for name, at := range row.Domains {
 		attrs := metrics.Attrs{"domain": name}
 		s.metrics.Set(metrics.StatelogAppliedThrough, float64(at.AppliedThrough), attrs)
@@ -4015,7 +4145,7 @@ func (s *stateLog) positionGauges(ctx context.Context, row coord.NodePositions) 
 		// can say.
 		s.metrics.Set(metrics.StatelogDrainCommitsPerSecond,
 			running.runner.Commits(), attrs)
-		health, err := s.health(ctx, running)
+		health, err := s.health(ctx, running, floors)
 		if err != nil || health.Lag == nil {
 			// UNREADABLE IS NOT ZERO, and a gauge has no third
 			// value — so the lag gauges are left at whatever they

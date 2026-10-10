@@ -203,14 +203,16 @@ func (Domain) ScopeIndex() string { return "pages_log_deferred_scope" }
 // OpsTable is contract 3's first layer: what this node has already applied.
 func (Domain) OpsTable() string { return "pages_ops" }
 
-// ReadinessInput reports that this domain's health gates seat admission.
+// GatesSeatAdmission reports that a seat depends on this domain's copy.
 //
-// TRUE, for the tracker's reason: a strict replay's stall is a FAULT rather
-// than a coverage number. A node behind on the pages log serves a page body
-// that is simply wrong — an older paragraph presented as the current one —
-// where a node behind on a compacted domain serves an answer that is merely
-// less complete and says so.
-func (Domain) ReadinessInput() bool { return true }
+// TRUE, for the tracker's reason: every seat's tools read this log on every
+// turn, and a strict replay's stall is a FAULT rather than a coverage number.
+// A node behind on the pages log serves a page body that is simply wrong — an
+// older paragraph presented as the current one — where a node behind on a
+// compacted domain serves an answer that is merely less complete and says so.
+// Its copy is judged like every domain's, and a wrong one goes out of service
+// for the knowledge base's operations alone — ADR-0031.
+func (Domain) GatesSeatAdmission() bool { return true }
 
 // ClaimsIdentity reports that every node's Replicated tables must be
 // byte-identical.

@@ -57,9 +57,11 @@ import (
 // unhealthy.
 //
 // The gate is per DOMAIN rather than per node, from each domain's own
-// declaration: a compacted domain's gap is a coverage number rather than a
-// fault, so taking a copy out of service for one would be the outage the number
-// exists to avoid.
+// declaration ([statelog.Domain.GatesSeatAdmission]): a compacted domain's gap
+// is a coverage number rather than a fault, so withholding seats for one would
+// be the outage the number exists to avoid. And the copy verdict is per domain
+// too, for every domain (ADR-0031): a domain's copy that is WRONG goes out of
+// service for its own operations, whatever it declares about seats.
 
 // native holds this node's native-backend runtime.
 //
@@ -605,10 +607,11 @@ func (n *native) shutdown(ctx context.Context) {
 // and a node merely inside the trim floor still serves rows that are behind,
 // which a seat attaching to it acts on — and otherwise the first data node
 // that answers, which admits only once its own copy is established: the same
-// gate, one hop away. A node whose own copy is WRONG serves nothing
-// ([localEstate.For]), so it is admitted on a sound data node's word, like a
-// node that holds no data. Both halves the company runs natively must be
-// served there, since a seat's tools reach both.
+// gate, one hop away. A node whose copy of a domain that gates seats is WRONG
+// serves no seat copy ([estate.SeatCopy], [localEstate.For]), so it is admitted
+// on a sound data node's word, like a node that holds no data; a wrong copy of
+// any other domain withholds nothing (ADR-0031). Both halves the company runs
+// natively must be served there, since a seat's tools reach both.
 //
 // AND THE ROUTER'S VIEW MUST HAVE LISTED THE FLEET AT LEAST ONCE — not answer
 // now: a node that answers from its own copy asks no view, and one that must
@@ -664,10 +667,11 @@ func (e *Engine) nativeHalves() (runTracker, wiki, ok bool) {
 // checkpoint on another stream, a stalled prefix, a record held past the
 // deferral grace — because a seat left running on one answered its own tools
 // out of a copy the fleet had abandoned. The router makes that the copy's
-// problem and not the seats': a wrong copy goes out of service
-// ([localEstate.For]), so every call this node's seats make is answered by a
-// data node whose copy is sound, exactly as a node holding no data is
-// answered. Moving the seats instead cost each of them its processes and its
+// problem and not the seats': a domain's wrong copy goes out of service for
+// that domain's operations ([localEstate.For], ADR-0031), so every call this
+// node's seats make on that domain is answered by a data node whose copy is
+// sound, exactly as a node holding no data is answered. Moving the seats
+// instead cost each of them its processes and its
 // memory to be served by the very same peers — and on a single node it stopped
 // the company, which is still what happens: an estate no data node serves
 // refuses its calls, saying so.
@@ -676,8 +680,11 @@ func (e *Engine) nativeHalves() (runTracker, wiki, ok bool) {
 //
 // A node that answers from its OWN copy needs nothing else to route its seats'
 // calls — the router asks this node first and asks nobody where it answers —
-// so every data node whose copy is sound keeps its seats whatever its view of
-// the fleet says. Any other node routes by the watched presence view, and a
+// so every data node whose seat copy is sound ([estate.SeatCopy]) keeps its
+// seats whatever its view of the fleet says. Only a domain that gates seats
+// makes the node's seats depend on its view: a wrong copy of any other domain
+// costs that domain's calls a peer, never the seats. Any other node routes by
+// the watched presence view, and a
 // view that answers unknown ([coord.LeaseView.Leases]) and last listed longer
 // ago than [statelog.FloorCacheStale] — the age past which nothing may decide
 // from a cached coordination fact, so no node sheds sooner than any other
@@ -1870,7 +1877,7 @@ func (e *Engine) pageHalves() (builtin.PageReader, builtin.PageWriter,
 //
 // THE ROUTER'S, ON EVERY NODE, exactly as a seat's tools are handed it
 // ([Engine.trackerHalves]), and never this node's own copy read directly. Read
-// directly, a data node whose copy was out of service — wrong rather than
+// directly, a data node whose tracker copy was out of service — wrong rather than
 // behind, or its file shut — sent its own seats' calls to a peer's copy and
 // went on answering its operator from the one it had stopped serving: a board,
 // a person's inbox or a purge read off rows the node itself would not vouch
@@ -1920,7 +1927,7 @@ func OperatorPageWriter(e *Engine) (estate.Pages, bool) {
 // applied at — the router's session floor, which a surface's write raises so
 // its own next read sees it ([estate.Router.Await]) — the same wait a seat's
 // tools are handed, and for the same reason: this node's own applier is not the
-// one that answers once its copy is out of service.
+// one that answers once its copy of that domain is out of service.
 func (e *Engine) AwaitEstate(ctx context.Context, at statelog.Position) error {
 	if e.router == nil {
 		return nil

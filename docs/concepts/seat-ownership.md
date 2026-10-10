@@ -111,28 +111,31 @@ That also gives the right answer during a database blip. The lease row is untouc
 ## A copy that is behind, and a copy that is wrong
 
 A data node answers its seats out of its own copy of the company's records —
-the tracker and the knowledge base, applied from the shared log into this
-node's database (see [Replication](../guides/replication.md)) — through the
-same router every node's seats use. That copy can be in two quite different
-bad states, and the engine treats them as opposites.
+the tracker, the knowledge base, the search vectors and the usage history, each
+applied from its own log into this node's database (see
+[Replication](../guides/replication.md)) — through the same router every node's
+seats use. Each log's copy can be in two quite different bad states, and the
+engine treats them as opposites, one log at a time
+([ADR-0031](https://github.com/crewlet/crewlet/blob/main/adr/0031-a-domains-fault-takes-only-its-own-copy-out-of-service.md)).
 
 | | What it means | What the node does |
 |---|---|---|
-| **Behind** | Records are on the log that this node has not applied yet. It is catching up, and it will. | **Keeps every seat it holds**, and claims no new ones until it is level. The sweep logs `seat_claims_withheld` at debug, and the fleet view counts how many of this node's replication loops are current |
-| **Wrong** | The copy cannot become current by applying more records | **Takes its copy out of service and keeps every seat.** Its seats' calls go to the other data nodes, exactly as a node holding no data is served, and other nodes asking it are told its copy is `out_of_service`. The node logs `estate_copy_not_served` when the copy goes out of service, and serves again once a reading finds the copy sound |
+| **Behind** | Records are on the log that this node has not applied yet. It is catching up, and it will. | **Keeps every seat it holds**, and claims no new ones until its copies of the tracker and the knowledge base are level — the logs a seat's tools read every turn; being behind on another log withholds nothing. The sweep logs `seat_claims_withheld` at debug, and the fleet view counts how many of this node's replication loops are current |
+| **Wrong** | The copy cannot become current by applying more records | **Takes that log's copy out of service and keeps every seat.** Calls on that log's records go to the other data nodes, exactly as a node holding no data is served, its other logs' copies keep serving, and other nodes asking it for that log are told its copy is `out_of_service`. The node logs `estate_copy_not_served` naming the `domain` and the `reason` — the fault that holds: `evicted`, `below_floor`, `wrong_stream`, `stalled` or `deferred` — when a copy goes out of service, and serves it again once a reading finds the copy sound |
 
-Six states are *wrong*, and each is a fact about the rows rather than about how
+Six states are *wrong*, each a fact about one log's rows rather than about how
 far along they are:
 
 - the applier has **stopped** at a record it cannot apply;
 - the node has been **evicted** from the fleet, so its peers drop everything it
   writes;
 - its rows are **below the log** — records it never applied have been
-  deleted, and the hole will never fill. A floor that has been *unreadable* for
-  four heartbeats counts here too: an unread floor is not a floor that is
-  satisfied. A node that is only below the published trim floor, while the log
-  still holds every record it lacks, is not here: it is replaying them, which
-  is *behind*;
+  deleted, and the hole will never fill. A node that is only below the
+  published trim floor, while the log still holds every record it lacks, is
+  not here: it is replaying them, which is *behind*. Nor is a floor nobody can
+  read: every read the node serves refuses until it can be read (the
+  `floor_unknown` [alarm](../reference/alarms.md)), and the copy keeps the
+  verdict it last had, because an unread number is not a fault;
 - its checkpoint names **a stream that is not this one**, which is a log
   deleted and rebuilt underneath it (`crewlet retention reanchor` is the
   repair) — or a history that log no longer continues from, because a peer
@@ -162,12 +165,14 @@ call is refused naming the estate nobody serves, which is the right trade
 for rows that are wrong — the alternative is agents acting on them.
 
 What a node does give its seats back for is not being able to **route** at
-all: its seats' calls need another data node — it holds no data, or its own
-copy is out of service — while its view of who serves the estate has been
-unreadable for longer than the 60-second bound every cached coordination fact
-is held to (`unserviceable`, `seats_shed_unserviceable`). A data node whose
-copy is sound answers from it without the view, and keeps its seats whatever
-the view says. The release is voluntary, like a rebalance: the
+all: its seats' calls need another data node — it holds no data, or its copy of
+the tracker or the knowledge base is out of service — while its view of who
+serves the estate has been unreadable for longer than the 60-second bound every
+cached coordination fact is held to (`unserviceable`,
+`seats_shed_unserviceable`). A data node whose copies of those two are sound
+answers from them without the view, and keeps its seats whatever the view says;
+a copy of any other log being out of service costs that log's calls a peer and
+never the seats. The release is voluntary, like a rebalance: the
 in-flight turn finishes, and the seat leaves when it goes idle. While it
 lasts the node is **withdrawn** from placement and says so on its presence
 row, so its peers divide the seats without it and take them up, and a seat

@@ -142,7 +142,7 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 	}
 	health := func() statelog.Health {
 		t.Helper()
-		h, err := s.health(t.Context(), running)
+		h, err := s.health(t.Context(), running, s.readFloors(t.Context()))
 		if err != nil {
 			t.Fatalf("health: %v", err)
 		}
@@ -227,15 +227,23 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 		t.Fatal("the node admits seats while below the log")
 	}
 	// A COPY WITH A HOLE IN IT GOES OUT OF SERVICE, and the node keeps its
-	// seats: every call they make goes to a data node whose copy is sound —
-	// on this node alone there is none, so it is refused as an estate
-	// nobody serves — and moving them would hand them to a peer asking the
-	// same data nodes.
+	// seats: every call they make on the tracker goes to a data node whose
+	// copy is sound — on this node alone there is none, so it is refused as
+	// an estate nobody serves — and moving them would hand them to a peer
+	// asking the same data nodes. ONLY THE TRACKER'S: the knowledge base's
+	// copy has no hole and keeps serving, while the seat copy — which the
+	// tracker is part of — goes with it (ADR-0031).
 	waitUntil(t, 5*time.Second, "the copy below the log to go out of service",
 		func() bool {
-			_, serves := e.local.For(t.Context())
+			_, serves := e.local.For(t.Context(), tracker.Domain{}.Name())
 			return !serves
 		})
+	if _, serves := e.local.For(t.Context(), pages.Domain{}.Name()); !serves {
+		t.Fatal("a tracker copy below its log took the knowledge base's copy out of service")
+	}
+	if _, serves := e.local.For(t.Context(), estate.SeatCopy); serves {
+		t.Fatal("a tracker copy below its log left the seat copy in service")
+	}
 	if ok, reason := e.SeatsServiceable(); !ok {
 		t.Fatalf("the node shed its seats over a copy below the log (%s) — a "+
 			"wrong copy goes out of service, and the seats stay", reason)
@@ -393,7 +401,7 @@ func TestTheRecoveryPathDrawsItsLineAtTheNextRecord(t *testing.T) {
 	// exercises.
 	floorOf := func(checkpoint uint64) statelog.FloorState {
 		t.Helper()
-		h, err := s.health(t.Context(), running)
+		h, err := s.health(t.Context(), running, s.readFloors(t.Context()))
 		if err != nil {
 			t.Fatalf("health: %v", err)
 		}

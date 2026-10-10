@@ -21,7 +21,7 @@ type peerCopy struct {
 	purged []estate.Actor
 }
 
-func (p *peerCopy) For(context.Context) (estate.Backend, bool) {
+func (p *peerCopy) For(context.Context, string) (estate.Backend, bool) {
 	return estate.Backend{
 		Tracker: peerBoard{}, Pages: peerPages{},
 		Writer: func(a estate.Actor) estate.TrackerWriter {
@@ -74,8 +74,10 @@ func (twoDataNodes) Unanswered(string)          {}
 // node whose copy was out of service — wrong rather than behind, or its file
 // shut — sent its seats' calls to a peer and went on answering its operator
 // from the copy it had stopped serving, or refused outright where the file was
-// shut. Here this node's copy is wrong, and every surface is answered by the
-// peer — the operator's own writes included, attributed to the operator.
+// shut. Here this node's copies of the tracker and of the knowledge base are
+// both wrong, and every surface is answered by the peer — the operator's own
+// writes included, attributed to the operator. (A wrong copy of one domain
+// sends only that domain's surfaces to a peer — ADR-0031.)
 func TestTheOperatorsSurfacesAreAnsweredThroughTheRouter(t *testing.T) {
 	t.Parallel()
 	broker := memory.NewBroker()
@@ -100,9 +102,9 @@ func TestTheOperatorsSurfacesAreAnsweredThroughTheRouter(t *testing.T) {
 		writer: &tracker.Writer{}, pages: &pages.Store{}})
 	e.local = localWith(e, time.Now, func(context.Context, *native) copyVerdict {
 		if faulted.Load() {
-			return copyVerdict{fault: "tracker", answers: true}
+			return wrongOn(trackerName, pagesName)
 		}
-		return copyVerdict{answers: true}
+		return soundCopy()
 	})
 	router, err := estate.NewRouter(estate.RouterOptions{
 		Self: "data-self", Queue: start(), Placement: twoDataNodes{},
@@ -113,7 +115,7 @@ func TestTheOperatorsSurfacesAreAnsweredThroughTheRouter(t *testing.T) {
 	}
 	e.router = router
 	faulted.Store(true)
-	if _, ok := judged(t.Context(), e.local); ok {
+	if _, ok := judged(t.Context(), e.local, trackerName); ok {
 		t.Fatal("the premise: this node's wrong copy is still served")
 	}
 

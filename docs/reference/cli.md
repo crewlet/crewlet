@@ -1009,7 +1009,8 @@ whole estate, so one command reaches every log.
 The gesture is **judged once, before either log is written**. A node that still
 holds a live presence lease is refused with `409 eviction_refused` — it is
 still reaching the fleet and almost certainly running, and an eviction would
-drop everything it writes and take its copy out of service. Stop it and wait
+drop everything it writes and take its copies of the logs it is evicted from
+out of service. Stop it and wait
 for its `LIVE` column in `crewlet retention status` to read `no`, or pass
 `-force` for a node wedged in a way that still renews its lease — the refusal
 prints both. A node

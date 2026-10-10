@@ -102,7 +102,7 @@ func TestANodeBehindOnItsLogKeepsTheSeatsItHolds(t *testing.T) {
 		t.Fatalf("the barrier landed at %d, want %d", seq, at.Seq+1)
 	}
 
-	health, err := s.health(t.Context(), running)
+	health, err := s.health(t.Context(), running, s.readFloors(t.Context()))
 	if err != nil {
 		t.Fatalf("health: %v", err)
 	}
@@ -141,13 +141,13 @@ func TestANodeBehindOnItsLogKeepsTheSeatsItHolds(t *testing.T) {
 	// of the same instant, disagreeing the same way. Judged otherwise, every
 	// request another node sent it would go to whichever peer happened to be
 	// level, and a single node's own seats would wait for the lagging pass.
-	if v := s.judgeCopy(t.Context()); v.fault != "" || !v.answers {
+	if v := s.judgeCopy(t.Context()); !v.serves(running.domain.Name()) || !v.answers(running.domain.Name()) {
 		t.Fatalf("a copy one record behind is judged %+v, want sound and answering", v)
 	}
 	e.local.mu.Lock()
 	e.local.slot = verdictSlot{} // judged afresh, at this instant
 	e.local.mu.Unlock()
-	served, serves := e.local.For(t.Context())
+	served, serves := e.local.For(t.Context(), running.domain.Name())
 	switch {
 	case !serves:
 		t.Fatal("a copy one record behind is not served")

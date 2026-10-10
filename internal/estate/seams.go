@@ -14,7 +14,8 @@ import (
 )
 
 // The asking half: the seams every node's tools are handed, each answered by a
-// data node whose copy of the estate serves — this one where it does.
+// data node whose copy of the operation's domain serves — this one where it
+// does (ADR-0031).
 //
 // Each method has the signature of the in-process one it stands in for, so
 // the tool layer is handed these on every node and cannot tell which node

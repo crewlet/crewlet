@@ -176,10 +176,12 @@ func (Domain) ScopeIndex() string { return "usage_log_deferred_scope" }
 // fleet, not for a caller. The framework asserts that pairing.
 func (Domain) OpsTable() string { return "" }
 
-// ReadinessInput reports that this domain's health does NOT gate seat
-// admission: a node behind on usage answers spend a flush late, which is a
-// coverage number and never a reason to move a company's seats.
-func (Domain) ReadinessInput() bool { return false }
+// GatesSeatAdmission reports that a seat does NOT depend on this domain's
+// copy: a node behind on usage answers spend a flush late, which is a coverage
+// number and never a reason to withhold or move a company's seats. Its copy is
+// still judged, and a wrong one — not one that is behind — goes out of service
+// on its own, its seats untouched — ADR-0031.
+func (Domain) GatesSeatAdmission() bool { return false }
 
 // ClaimsIdentity reports that two nodes at one checkpoint are NOT asserted to
 // hold the same rows, because per-node coverage differs by construction.

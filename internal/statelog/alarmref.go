@@ -50,7 +50,8 @@ var alarmMeaning = map[Kind]string{
 		"growing toward its ceiling.",
 	KindDeferredOld: "This node has been holding records it cannot apply for " +
 		"longer than the deferral grace. It no longer serves its copy of the " +
-		"estate; its seats read the estate from the other data nodes.",
+		"log holding them; that log's operations are answered by the other data " +
+		"nodes.",
 	KindFloorUnknown: "The trim floor has been unreadable for four " +
 		"heartbeats, so every read on this node refuses.",
 	KindPrefetchSlow: "Turn-start context assembly is over its budget. Every " +

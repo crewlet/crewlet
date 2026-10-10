@@ -42,15 +42,19 @@ type Placement interface {
 
 // LocalBackends is this data node's own copy of the estate.
 type LocalBackends interface {
-	// For is the backend over this node's copy, or false when the copy is
-	// OUT OF SERVICE right now: wrong rather than behind, so the node
-	// answers nothing from it while its seats read the estate from the
-	// other data nodes.
+	// For is the backend over this node's copy of DOMAIN, or false while
+	// that copy is OUT OF SERVICE: wrong rather than behind, so the node
+	// answers none of that domain's operations from it while its seats'
+	// calls on it go to the other data nodes. Another domain's fault is not
+	// this one's — every other domain's copy keeps serving (ADR-0031).
+	// [SeatCopy] asks for the copy a SEAT is served by.
+	//
+	// The backend's [Backend.Answers] is that domain's own.
 	//
 	// It takes a context because what a copy may answer is read from the
-	// log's broker ([Backend.Answers]); an implementation answers from a
-	// verdict it refreshes, never with a broker round trip per request.
-	For(ctx context.Context) (Backend, bool)
+	// log's broker; an implementation answers from a verdict it refreshes,
+	// never with a broker round trip per request.
+	For(ctx context.Context, domain string) (Backend, bool)
 }
 
 // RouterOptions are a router's dependencies.
@@ -86,21 +90,26 @@ type RouterOptions struct {
 // # One per node, on every node
 //
 // A node without the `data` role holds nothing and asks for everything; a data
-// node answers its own seats from its own copy, and asks a peer only while
-// that copy is out of service or cannot take the request. Both are the same
+// node answers its own seats from its own copy, and asks a peer only while its
+// copy of the operation's domain is out of service (ADR-0031) or cannot take
+// the request. Both are the same
 // router, so a tool behaves identically on either, and the path a data node
 // takes to its own copy is the path it takes to a peer's, floors included.
 //
 // # The order data nodes are asked in
 //
-// This node first, where its copy serves. Then the node that answered last
-// (sticky: its applier is the one most likely to have this node's writes),
-// then [rendezvous.Order] keyed on this node's own id, with every node that
-// recently went silent last. The rendezvous order picks an asker's FIRST data
-// node and every node it fails over to, spread evenly across the data nodes —
+// This node first, where its copy serves. Then the node that answered the
+// operation's domain last (sticky, per domain: its applier of that domain is
+// the one most likely to have this node's writes), then [rendezvous.Order]
+// keyed on this node's own id — with every node that recently answered that
+// its copy of the domain is out of service after the rest, and every node
+// that recently went silent last ([Router.order]). The rendezvous order picks
+// an asker's FIRST data node and every node it fails over to, spread evenly
+// across the data nodes —
 // so the askers of a node that goes silent scatter over the survivors rather
 // than fall on one neighbour — but not where an asker STAYS: it keeps asking
-// the sticky node until that node goes silent. So a data node that joins is
+// a domain's sticky node until that node goes silent or says its copy of the
+// domain is out of service. So a data node that joins is
 // asked only by askers with no sticky node yet or whose sticky node goes
 // silent, and after a rolling restart each restarted node's askers stay where
 // they failed over to. A node that ran nothing is passed over by every class
@@ -121,15 +130,22 @@ type Router struct {
 	readBudget, writeBudget, admissionBudget time.Duration
 
 	mu sync.Mutex
-	// sticky is the node that answered last — asked first next time.
-	sticky string
+	// sticky is, per domain, the node that answered that domain's operation
+	// last — asked first for it next time.
+	sticky map[string]string
 	// suspect is when each node that went unanswered may be asked first
 	// again.
 	suspect map[string]time.Time
+	// passedOver is when each node that answered `out_of_service` for a
+	// domain may be asked ahead of the rest for it again.
+	passedOver map[nodeCopy]time.Time
 	// admitted caches a REMOTE node's answer to the admission question —
 	// see [Router.Serves] — nil until one has been asked.
 	admitted *admission
 }
+
+// nodeCopy is one node's copy of one domain.
+type nodeCopy struct{ node, domain string }
 
 // admission is one cached answer to [Router.Serves].
 type admission struct {
@@ -160,7 +176,8 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 		self: opts.Self, queue: opts.Queue, placement: opts.Placement,
 		local: opts.Local, session: opts.Session, seams: opts.Seams, now: now,
 		readBudget: ReadAttempt, writeBudget: writeAttempt, admissionBudget: admissionAsk,
-		suspect: map[string]time.Time{},
+		sticky: map[string]string{}, suspect: map[string]time.Time{},
+		passedOver: map[nodeCopy]time.Time{},
 	}, nil
 }
 
@@ -188,6 +205,16 @@ const writeAttempt = 60 * time.Second
 // died leaves the placement when its lease lapses, and until then every
 // request that asked it first would wait out a whole attempt. Asked last
 // instead, it costs one attempt per router rather than one per request.
+//
+// AND IT IS HOW LONG A NODE THAT ANSWERED `out_of_service` FOR A DOMAIN IS
+// ASKED LAST FOR THAT DOMAIN ([Router.markOutOfService]). A copy goes out of
+// service for minutes at the least — until an eviction is lifted, a snapshot
+// is adopted, an upgrade decodes what it held — so asked first, it cost every
+// operation on the domain a round trip that ran nothing; asked last, a copy
+// that recovers inside the window is asked last meanwhile, never not asked.
+// One window rather than two, because the remedy is the same — a node not
+// worth asking first — and a second number would be a second opinion about
+// how long that lasts.
 const suspectFor = 30 * time.Second
 
 // admissionTrust is how long a remote data node's answer to the admission
@@ -296,8 +323,8 @@ func call[A, R any](ctx context.Context, r *Router, o op[A, R], actor *Actor, ar
 
 // ErrUnserved is an operation no data node ran: every node the asker's view
 // named — this node among them where it holds the estate — answered that its
-// copy is out of service, could not run it, was behind, or did not answer at
-// all.
+// copy of the operation's domain is out of service, could not run it, was
+// behind, or did not answer at all.
 //
 // NEVER A FALSE "NOT FOUND". An operation nobody answered for is refused
 // saying so, because a read reported as empty would say the company has none
@@ -389,7 +416,7 @@ func (r *Router) route(ctx context.Context, spec *opSpec, actor *Actor, x exchan
 		}
 		return nil, fmt.Errorf("estate: %s: read who holds the estate: %w", spec.name, err)
 	}
-	for _, node := range r.order(nodes) {
+	for _, node := range r.order(spec.domain, nodes) {
 		rep, answered, err := r.askFor(ctx, spec, actor, x, node, budget, false)
 		if err != nil {
 			return nil, err
@@ -455,8 +482,12 @@ func (r *Router) tryLocal(ctx context.Context, spec *opSpec, x exchange, acceptL
 	if r.local == nil {
 		return nil, false, nil
 	}
-	b, ok := r.local.For(ctx)
+	b, ok := r.local.For(ctx, spec.domain)
 	if !ok {
+		// SAID, like every other node that ran nothing: an estate nobody
+		// serves names why this node's own copy was passed over, which
+		// on a single data node is the whole of the answer.
+		w.note("%s: %s", r.self, outOfService(spec.domain))
 		return nil, false, nil
 	}
 	b.ServerSeams = r.seams
@@ -518,13 +549,16 @@ func (r *Router) settle(spec *opSpec, x exchange, node string, rep reply, w *wal
 	value any, final bool, err error) {
 
 	if rep.Unserved != "" {
-		if rep.Unserved == unservedLagging {
+		switch rep.Unserved {
+		case unservedLagging:
 			w.lagging = append(w.lagging, node)
+		case unservedOutOfService:
+			r.markOutOfService(node, spec.domain)
 		}
 		w.note("%s: %s", node, rep.Detail)
 		return nil, false, nil
 	}
-	r.markAnswered(node)
+	r.markAnswered(node, spec.domain)
 	if rep.Err != nil {
 		failure := decodeError(rep.Err)
 		if unvouched(spec, nil, failure) {
@@ -638,18 +672,33 @@ func (r *Router) ask(ctx context.Context, node string, req request, budget time.
 	return rep, true, nil
 }
 
-// order is the order the data nodes are asked in: STICKY first, SUSPECT last,
-// and [rendezvous.Order] on this node's own id within each class — kept by a
-// STABLE sort, so the classes only move nodes between them — and never this
-// node, which the router asks in-process or not at all.
-func (r *Router) order(nodes []string) []string {
+// order is the order the data nodes are asked in for an operation on domain:
+// that domain's STICKY node first, then the rest, then every node that
+// answered `out_of_service` for that domain inside [suspectFor], and every
+// SUSPECT node last — [rendezvous.Order] on this node's own id within each
+// class, kept by a STABLE sort, so the classes only move nodes between them —
+// and never this node, which the router asks in-process or not at all.
+//
+// # Per domain, because the appliers are
+//
+// A node is sticky for the reason its applier is the one most likely to have
+// this node's writes, and each domain has its own applier — and since a fault
+// takes only its own domain's copy out of service (ADR-0031), a node can serve
+// one domain and not another. One sticky node for every domain made a router
+// on a node without data, between a peer whose tracker copy was out and one
+// whose knowledge base was, CHASE ITS TAIL: a tracker call asked the first,
+// was answered by the second and made it sticky; the next page call asked the
+// second, was answered by the first and made it sticky back — every call paid
+// a round trip that ran nothing, and a third node serving both was never asked
+// first at all.
+func (r *Router) order(domain string, nodes []string) []string {
 	// rendezvous.Order hands back a slice of its own, so the placement's
 	// listing is never the one trimmed or sorted here; and removing members
 	// from its answer leaves the rest in rendezvous order.
 	nodes = slices.DeleteFunc(rendezvous.Order(r.self, nodes),
 		func(n string) bool { return n == r.self || n == "" })
 	r.mu.Lock()
-	sticky := r.sticky
+	sticky := r.sticky[domain]
 	now := r.now()
 	suspect := map[string]bool{}
 	for n, until := range r.suspect {
@@ -659,24 +708,28 @@ func (r *Router) order(nodes []string) []string {
 			delete(r.suspect, n)
 		}
 	}
+	passedOver := map[string]bool{}
+	for c, until := range r.passedOver {
+		switch {
+		case !now.Before(until):
+			delete(r.passedOver, c)
+		case c.domain == domain:
+			passedOver[c.node] = true
+		}
+	}
 	r.mu.Unlock()
-	slices.SortStableFunc(nodes, func(a, b string) int {
-		// SUSPECT LAST, then STICKY FIRST; between them the rendezvous
-		// order stands, because the sort is stable.
-		if suspect[a] != suspect[b] {
-			if suspect[a] {
-				return 1
-			}
-			return -1
+	class := func(n string) int {
+		switch {
+		case suspect[n]:
+			return 3
+		case passedOver[n]:
+			return 2
+		case n == sticky:
+			return 0
 		}
-		if (a == sticky) != (b == sticky) {
-			if a == sticky {
-				return -1
-			}
-			return 1
-		}
-		return 0
-	})
+		return 1
+	}
+	slices.SortStableFunc(nodes, func(a, b string) int { return class(a) - class(b) })
 	return nodes
 }
 
@@ -690,11 +743,16 @@ func attemptContext(ctx context.Context, budget time.Duration) (context.Context,
 	return context.WithTimeout(ctx, budget)
 }
 
+// markSuspect asks node last for every domain for [suspectFor], and takes away
+// every domain's sticky place it held: a node that said nothing is no node to
+// stay on.
 func (r *Router) markSuspect(node string) {
 	r.mu.Lock()
 	r.suspect[node] = r.now().Add(suspectFor)
-	if r.sticky == node {
-		r.sticky = ""
+	for domain, sticky := range r.sticky {
+		if sticky == node {
+			delete(r.sticky, domain)
+		}
 	}
 	r.mu.Unlock()
 	// OUTSIDE THE LOCK: the placement is somebody else's, and a request
@@ -702,11 +760,26 @@ func (r *Router) markSuspect(node string) {
 	r.placement.Unanswered(node)
 }
 
-func (r *Router) markAnswered(node string) {
+// markOutOfService asks node last for domain's operations for [suspectFor]:
+// its copy of that domain is out of service (ADR-0031), and every other
+// domain's place it holds stays — so does the node, which answered.
+func (r *Router) markOutOfService(node, domain string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.sticky = node
+	r.passedOver[nodeCopy{node: node, domain: domain}] = r.now().Add(suspectFor)
+	if r.sticky[domain] == node {
+		delete(r.sticky, domain)
+	}
+}
+
+// markAnswered makes node the one asked first for domain's operations: it ran
+// one, so its copy of that domain serves.
+func (r *Router) markAnswered(node, domain string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sticky[domain] = node
 	delete(r.suspect, node)
+	delete(r.passedOver, nodeCopy{node: node, domain: domain})
 }
 
 // unvouched reports an idempotent write's answer that is NOT final: an
@@ -775,11 +848,13 @@ func findResults(v reflect.Value, out []statelog.Result) []statelog.Result {
 // answer is the local one and is never passed over for a peer's: a node whose
 // own copy is one record behind withholds its claims, because a seat attaching
 // to it would act on rows that are behind. Where it does not — a node without
-// data, or one whose copy is out of service — it is the first data node that
-// answers, and that answer is trusted for [admissionTrust].
+// data, or one whose copy of a domain that gates seats is out of service
+// ([SeatCopy]) — it is the first data node that answers, and that answer is
+// trusted for [admissionTrust]. A wrong copy of any other domain is not the
+// seat's copy, and admission stays local over it (ADR-0031).
 func (r *Router) Serves(ctx context.Context) (tracker, pages bool, err error) {
 	if r.local != nil {
-		if b, ok := r.local.For(ctx); ok {
+		if b, ok := r.local.For(ctx, SeatCopy); ok {
 			if b.Admits != nil && !b.Admits(ctx) {
 				return false, false, nil
 			}

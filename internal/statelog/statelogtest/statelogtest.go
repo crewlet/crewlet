@@ -15,9 +15,13 @@
 // the node that wrote it and the generation it was decided in,
 // the evictions a domain that claims identity must be able to list — because
 // the trim counts nodes per log, and a log whose evictions nothing reads
-// counts an evicted node for ever — and the node gate that is the domain's
-// own eviction and nothing else, because a write flagged one is excused the
-// fences and the reserve every other write is held to.
+// counts an evicted node for ever — the node gate that is the domain's own
+// eviction and nothing else, because a write flagged one is excused the fences
+// and the reserve every other write is held to — and the domain that gates
+// seat admission, which must replay strictly, because a compacted domain's gap
+// is a coverage number that would otherwise withhold every seat claim on a
+// node. Whether a domain's copy is JUDGED is not a declaration and has no case
+// here: every domain's is (ADR-0031).
 //
 // # Bringing up a new domain: if a case fails, suspect the case
 //

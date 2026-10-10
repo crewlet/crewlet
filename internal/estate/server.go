@@ -23,7 +23,8 @@ type Server interface {
 }
 
 // Serve makes this node answer the fleet on its own subject, from its own copy
-// of the estate — and `out_of_service` while that copy is wrong.
+// of the estate — and `out_of_service` for the operations of a domain whose
+// copy is wrong (ADR-0031).
 //
 // EVERY DATA NODE SERVES, whether or not any other node asks yet, and from
 // BEFORE its runtime is up: a node joins without anybody reconfiguring the
@@ -79,14 +80,13 @@ func (s server) answer(ctx context.Context, raw []byte) []byte {
 		ctx, cancel = context.WithDeadline(ctx, req.Deadline)
 		defer cancel()
 	}
-	b, serves := s.local.For(ctx)
+	b, serves := s.local.For(ctx, spec.domain)
 	if !serves {
 		// NOTHING RAN, so every class moves on — a page write
 		// included, whose never-repeat rule is about a request that
 		// may have run.
 		out.Unserved = unservedOutOfService
-		out.Detail = fmt.Sprintf("%s's copy of the estate is out of service — "+
-			"wrong rather than behind, so it answers nothing until it recovers", s.self)
+		out.Detail = s.self + "'s " + outOfService(spec.domain)
 		return encodeReply(out)
 	}
 	reason, detail, obsolete := ready(ctx, s.self, spec, b, req.Floors, req.AcceptLagging)
@@ -144,9 +144,11 @@ func (s server) answer(ctx context.Context, raw []byte) []byte {
 // hold what it answers to what the caller must see. See [Router.route].
 //
 // A FLOOR ON ANOTHER DOMAIN'S LOG IS NOT WAITED FOR, though the estate carries
-// every domain's log: no operation reads another domain's rows — each domain's
-// tables are written by its own applier alone — so a floor there buys
-// nothing, and costs a refusal whenever THAT log's applier lags. The seat a
+// every domain's log: no operation reads another domain's rows at a position —
+// each domain's tables are written by its own applier alone, and the one
+// cross-domain read, a search's semantic half over the vectors, is of an index
+// no position describes — so a floor there buys nothing, and costs a refusal
+// whenever THAT log's applier lags. The seat a
 // page comment woke would otherwise hold every tracker read and write its node
 // routes until the pages applier reached the comment, and be refused them
 // `behind` while that applier was faulted. This node's own router never sends
@@ -156,10 +158,10 @@ func ready(ctx context.Context, self string, spec *opSpec, b Backend, floors []s
 	acceptLagging bool) (reason unservedReason, detail string, obsolete []statelog.Position) {
 
 	if !spec.ungated && !acceptLagging && b.Answers != nil && !b.Answers(ctx) {
-		return unservedLagging, fmt.Sprintf("%s's copy of the estate lags its logs — it "+
-			"has not drained them since it started, or has fallen past the snapshot "+
-			"slack of their ends — so it answers only when no data node whose copy "+
-			"does not lag takes the request", self), nil
+		return unservedLagging, fmt.Sprintf("%s's copy of %s lags its log — it has "+
+			"not drained it since it started, or has fallen past the snapshot slack "+
+			"of its end — so it answers only when no data node whose copy does not "+
+			"lag takes the request", self, spec.domain), nil
 	}
 	if spec.floorStream == "" || b.Committed == nil {
 		return "", "", nil

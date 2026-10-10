@@ -120,12 +120,28 @@ type Domain interface {
 	// landed.
 	OpsTable() string
 
-	// ReadinessInput reports whether this domain's health gates seat
-	// admission. A strictly ordered domain's stall is a fault; a
-	// compacted domain's gap is a coverage number, and taking a copy
-	// out of service for one would be the outage the number exists to
-	// avoid.
-	ReadinessInput() bool
+	// GatesSeatAdmission reports whether a SEAT depends on this domain's
+	// copy: whether a node admits a seat only once this domain's copy is
+	// established at a lag of zero ([Health.Established], strict), and
+	// whether this copy going out of service leaves the node's seats routed
+	// through its peers — so that a node which then cannot name a peer
+	// gives them up.
+	//
+	// IT DOES NOT DECIDE WHETHER THE COPY IS JUDGED. Every domain's copy is
+	// judged ([Health.Healthy]) and a wrong one goes out of service for
+	// that domain's operations alone, whatever this answers — ADR-0031. The
+	// one declaration that used to answer both questions let a domain that
+	// did not gate seats escape the judgement too, so a wrong copy of it was
+	// served for ever.
+	//
+	// TRUE for a domain a seat's tools read on every turn, where a seat
+	// attached to a copy that is behind answers "there is no such item"
+	// about work it was just handed. FALSE for a compacted domain, whose gap
+	// is a coverage number rather than a fault — statelogtest refuses one
+	// that answers true — and for any domain whose lag must not withhold
+	// every seat claim on a node: a busy log a seat rarely reads is an
+	// outage of the whole company bought to protect one tool.
+	GatesSeatAdmission() bool
 
 	// ClaimsIdentity reports whether two nodes at one checkpoint are
 	// ASSERTED to hold byte-identical Replicated tables.

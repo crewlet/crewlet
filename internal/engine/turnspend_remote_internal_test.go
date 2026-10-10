@@ -139,7 +139,7 @@ type servedEstate struct {
 	backend estate.Backend
 }
 
-func (s *servedEstate) For(context.Context) (estate.Backend, bool) {
+func (s *servedEstate) For(context.Context, string) (estate.Backend, bool) {
 	return s.backend, true
 }
 

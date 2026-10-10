@@ -57,8 +57,11 @@ type fakeNode struct {
 	failWith error
 	written  statelog.Position
 
-	// outOfService is a node whose copy is wrong, so it serves nothing.
-	outOfService bool
+	// outOfService is a node whose copy of every domain is wrong, so it
+	// serves nothing; outOfServiceOn names one domain's copy (or the seat
+	// copy, [SeatCopy]) that is.
+	outOfService   bool
+	outOfServiceOn map[string]bool
 
 	// notAdmitting is a copy that serves requests and admits no seat.
 	notAdmitting bool
@@ -81,6 +84,10 @@ type fakeNode struct {
 	// one: waited for until the asker's deadline, where a node that is
 	// simply gone is known to have answered nothing.
 	hang chan struct{}
+
+	// requests is every request that reached this node over the broker,
+	// whatever it answered — run, refused or silent.
+	requests int
 }
 
 func (f *fakeNode) note(op string) {
@@ -222,13 +229,18 @@ func (f *fakeNode) backend() Backend {
 	}
 }
 
-// For implements [LocalBackends]: this node's copy serves unless it was told
-// it is out of service.
-func (f *fakeNode) For(context.Context) (Backend, bool) {
+// For implements [LocalBackends]: this node's copy of domain serves unless it
+// was told that copy, or every copy, is out of service. Its SEAT copy is out
+// whenever its tracker's or its knowledge base's is, which is what the engine's
+// own domains declare: both gate seat admission.
+func (f *fakeNode) For(_ context.Context, domain string) (Backend, bool) {
 	f.mu.Lock()
-	outOfService := f.outOfService
+	out := f.outOfService || f.outOfServiceOn[domain]
+	if domain == SeatCopy {
+		out = out || f.outOfServiceOn[trackerDomain] || f.outOfServiceOn[pagesDomain]
+	}
 	f.mu.Unlock()
-	if outOfService {
+	if out {
 		return Backend{}, false
 	}
 	return f.backend(), true
@@ -344,6 +356,7 @@ type silencer struct {
 func (s silencer) Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error) {
 	return s.q.Serve(ctx, subject, func(ctx context.Context, raw []byte) ([]byte, error) {
 		s.node.mu.Lock()
+		s.node.requests++
 		silent, hang, refusesLagging := s.node.silent, s.node.hang, s.node.refusesLagging
 		s.node.mu.Unlock()
 		if refusesLagging {
@@ -377,7 +390,7 @@ func chartOf(string) tracker.Units { return &namedChart{} }
 func (f *fleet) first(t *testing.T, r *Router) (string, *fakeNode) {
 	t.Helper()
 	nodes, _ := f.placement.Holders()
-	ordered := r.order(nodes)
+	ordered := r.order(trackerDomain, nodes)
 	if len(ordered) == 0 {
 		t.Fatalf("no node to ask among %v", nodes)
 	}
@@ -569,7 +582,8 @@ func TestAWritesPositionIsTheNextReadsFloor(t *testing.T) {
 }
 
 // A FLOOR ON ANOTHER DOMAIN'S LOG NEVER HOLDS AN OPERATION, though the estate
-// carries both logs: no operation reads another domain's rows, so a seat a
+// carries both logs: no operation reads another domain's rows at a position,
+// so a seat a
 // page change woke — its trigger a floor on the pages log — reads and writes
 // the tracker on a node whose pages applier is stuck exactly as before it was
 // woken, and only the knowledge base's own operations wait for that applier.
@@ -1122,18 +1136,111 @@ func TestTheRouterAsksInTheRendezvousOrderOfItsOwnID(t *testing.T) {
 	listed := slices.Clone(held)
 	want := rendezvous.Order("agent-2", []string{"data-a", "data-b", "data-c", "data-d"})
 
-	if got := r.order(held); !slices.Equal(got, want) {
+	if got := r.order(trackerDomain, held); !slices.Equal(got, want) {
 		t.Fatalf("agent-2 asks %q, want the rendezvous order of its own id %q", got, want)
 	}
 	if !slices.Equal(held, listed) {
 		t.Fatalf("ordering rewrote the placement's own listing %q to %q", listed, held)
 	}
 
-	r.markAnswered(want[3])
+	r.markAnswered(want[3], trackerDomain)
 	r.markSuspect(want[0])
-	if got, w := r.order(held), []string{want[3], want[1], want[2], want[0]}; !slices.Equal(got, w) {
+	if got, w := r.order(trackerDomain, held), []string{want[3], want[1], want[2], want[0]}; !slices.Equal(got, w) {
 		t.Fatalf("with %s answered last and %s silent, agent-2 asks %q, want %q", want[3],
 			want[0], got, w)
+	}
+
+	// PER DOMAIN: the tracker's sticky node is nobody's for the knowledge
+	// base, and a node whose copy of the tracker said it is out of service
+	// goes after every other live node — for the tracker alone.
+	r.markOutOfService(want[1], trackerDomain)
+	if got, w := r.order(trackerDomain, held), []string{want[3], want[2], want[1], want[0]}; !slices.Equal(got, w) {
+		t.Fatalf("with %s's tracker copy out of service, agent-2 asks %q for the tracker, "+
+			"want %q", want[1], got, w)
+	}
+	if got, w := r.order(pagesDomain, held), []string{want[1], want[2], want[3], want[0]}; !slices.Equal(got, w) {
+		t.Fatalf("agent-2 asks %q for the knowledge base, want %q — the tracker's sticky "+
+			"node and its copy out of service moved the knowledge base's order", got, w)
+	}
+	// AND THE PASS LAPSES: after the window the node is back in its place.
+	r.now = func() time.Time { return time.Now().Add(2 * suspectFor) }
+	if got, w := r.order(trackerDomain, held), []string{want[3], want[0], want[1], want[2]}; !slices.Equal(got, w) {
+		t.Fatalf("after the window agent-2 asks %q for the tracker, want %q", got, w)
+	}
+}
+
+// A NODE OUT OF SERVICE FOR ONE DOMAIN IS NO REASON TO CHASE ANOTHER — ADR-0031.
+//
+// A router on a node without data, between a peer whose tracker copy is out
+// of service and one whose knowledge base is, alternates tracker and
+// knowledge-base calls. Each domain settles on a node whose copy of IT serves,
+// so after each domain's first call every call reaches a serving node on its
+// first ask. With one sticky node for every domain, the two calls made each
+// other's server sticky in turn, and every call paid a round trip that ran
+// nothing.
+func TestEachDomainSettlesOnANodeWhoseCopyOfItServes(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a", "data-b", "data-c")
+	r := f.router(t, "agent-1", nil)
+	o := rendezvous.Order("agent-1", []string{"data-a", "data-b", "data-c"})
+	f.nodes[o[0]].set(func(n *fakeNode) { n.outOfServiceOn = map[string]bool{trackerDomain: true} })
+	f.nodes[o[1]].set(func(n *fakeNode) { n.outOfServiceOn = map[string]bool{pagesDomain: true} })
+	requests := func() int {
+		total := 0
+		for _, n := range f.nodes {
+			n.mu.Lock()
+			total += n.requests
+			n.mu.Unlock()
+		}
+		return total
+	}
+	work := func() {
+		t.Helper()
+		if _, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+			t.Fatalf("tasks: %v", err)
+		}
+	}
+	wiki := func() {
+		t.Helper()
+		if found := r.Knowledge().Search(t.Context(), knowledge.Query{Text: "runbook"}); len(found.Hits) != 1 {
+			t.Fatalf("search = %+v", found)
+		}
+	}
+	work()
+	wiki()
+	for i := range 6 {
+		before := requests()
+		if i%2 == 0 {
+			work()
+		} else {
+			wiki()
+		}
+		if asked := requests() - before; asked != 1 {
+			t.Fatalf("call %d asked %d nodes — it should reach a node whose copy of its "+
+				"domain serves on its first ask", i, asked)
+		}
+	}
+
+	// AND ONCE A DOMAIN'S STICKY NODE IS GONE, the node that said its copy is
+	// out of service is asked after the rest rather than first again: the
+	// tracker call that finds its sticky node silent goes on to the one node
+	// left whose tracker copy serves, past the rendezvous winner whose copy
+	// does not.
+	f.nodes[o[1]].set(func(n *fakeNode) { n.silent = true })
+	winner := f.nodes[o[0]]
+	winner.mu.Lock()
+	asked := winner.requests
+	winner.mu.Unlock()
+	work()
+	winner.mu.Lock()
+	asked = winner.requests - asked
+	winner.mu.Unlock()
+	if asked != 0 {
+		t.Fatalf("the tracker call asked %s, whose tracker copy said it is out of service, "+
+			"%d times once its sticky node went silent", o[0], asked)
+	}
+	if !f.nodes[o[2]].askedFor("tasks") {
+		t.Fatal("the one node left whose tracker copy serves was never asked")
 	}
 }
 
@@ -1223,6 +1330,89 @@ func TestACopyOutOfServiceRunsNothing(t *testing.T) {
 	}
 }
 
+// A FAULT IN ONE DOMAIN'S COPY ROUTES ONLY THAT DOMAIN'S OPERATIONS — ADR-0031.
+//
+// A node whose tracker copy is wrong sends its seats' tracker calls to a peer
+// and still answers their knowledge-base calls from its own pages, and a peer
+// asking it is told `out_of_service` for the tracker's operations alone,
+// naming the domain. When one copy took every domain out of service, a
+// knowledge-base applier halted on one page sent every tracker call the
+// node's seats made to another node — and on a single node refused them all.
+func TestAFaultInOneDomainRoutesOnlyThatDomainsOperations(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a", "data-b")
+	local := &fakeNode{name: "data-self", units: chartOf("self"),
+		outOfServiceOn: map[string]bool{trackerDomain: true}}
+	r := f.router(t, "data-self", local)
+
+	written, err := r.WriterAs(swe).CreateTask(t.Context(), "op-t", tracker.Task{Project: "ENG"}, nil)
+	if err != nil || written.Key != "ENG-1" {
+		t.Fatalf("create = (%+v, %v)", written, err)
+	}
+	if local.askedFor("create") {
+		t.Fatal("a tracker copy out of service ran a tracker write")
+	}
+	ran := 0
+	for _, n := range f.nodes {
+		ran += len(n.ops())
+	}
+	if ran != 1 {
+		t.Fatalf("%d peers ran the write, want exactly one", ran)
+	}
+
+	// THE KNOWLEDGE BASE'S OPERATIONS ARE ANSWERED HERE: its copy is sound.
+	found := r.Knowledge().Search(t.Context(), knowledge.Query{Text: "runbook"})
+	if len(found.Hits) != 1 || found.Hits[0].Title != "found on data-self" {
+		t.Fatalf("a knowledge search on a node whose knowledge base serves = %+v, "+
+			"want this node's own answer", found)
+	}
+	for _, n := range f.nodes {
+		if n.askedFor("search") {
+			t.Fatalf("%s was asked a knowledge search this node's own copy serves", n.name)
+		}
+	}
+
+	// AND A PEER ASKING IS TOLD SO, PER DOMAIN.
+	peer := f.nodes["data-a"]
+	peer.set(func(n *fakeNode) { n.outOfServiceOn = map[string]bool{trackerDomain: true} })
+	q := f.start(t)
+	ask := func(op string) reply {
+		t.Helper()
+		raw, err := json.Marshal(request{Op: op})
+		if err != nil {
+			t.Fatal(err)
+		}
+		replies, err := q.Ask(t.Context(), Subject(peer.name), raw, 1)
+		var rep reply
+		if err != nil || len(replies) != 1 || json.Unmarshal(replies[0], &rep) != nil {
+			t.Fatalf("ask %s = (%d replies, %v)", op, len(replies), err)
+		}
+		return rep
+	}
+	if rep := ask(opTasks.spec.name); rep.Unserved != unservedOutOfService ||
+		rep.Result != nil || !strings.Contains(rep.Detail, "its copy of "+trackerDomain) {
+		t.Fatalf("a tracker read of a node whose tracker copy is wrong answered %+v, "+
+			"want %q naming the tracker", rep, unservedOutOfService)
+	}
+	if rep := ask(opKnowledgeSearch.spec.name); rep.Unserved != "" || rep.Err != nil ||
+		rep.Result == nil {
+		t.Fatalf("a knowledge search of a node whose knowledge base is sound answered %+v, "+
+			"want it run", rep)
+	}
+
+	// AND ON A SINGLE NODE, WHAT AN UNSERVED ESTATE SAYS NAMES THE COPY.
+	solo := newFleet(t)
+	alone := solo.router(t, "data-self", &fakeNode{name: "data-self", units: chartOf("self"),
+		outOfServiceOn: map[string]bool{trackerDomain: true}})
+	_, err = alone.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+	var unserved *ErrUnserved
+	if !errors.As(err, &unserved) ||
+		!strings.Contains(unserved.Detail, "data-self: its copy of "+trackerDomain) {
+		t.Fatalf("a single node whose tracker copy is wrong answered %v — want an "+
+			"unserved estate that names this node's own copy", err)
+	}
+}
+
 // AN UNVOUCHED ANSWER IS NOT FINAL FOR AN IDEMPOTENT WRITE: the answering
 // holder's ledger cannot say whether the operation landed, and another
 // holder's may. So the next holder is asked under the same operation id, and
@@ -1299,8 +1489,19 @@ func TestAdmissionAsksTheCopyThatWillServeTheSeat(t *testing.T) {
 		t.Fatal("a peer was asked for a node whose own copy serves")
 	}
 
-	// A COPY OUT OF SERVICE is asked of a data node whose copy serves.
-	local.set(func(n *fakeNode) { n.outOfService = true })
+	// A WRONG COPY OF A DOMAIN NO SEAT DEPENDS ON IS NOT THE SEAT'S COPY:
+	// admission stays here, and a peer is not asked (ADR-0031).
+	local.set(func(n *fakeNode) { n.outOfServiceOn = map[string]bool{"vectors": true} })
+	if trackerServed, _, err = r.Serves(t.Context()); err != nil || trackerServed {
+		t.Fatalf("a node whose own seat copy admits no seat was admitted on a peer's "+
+			"word over a fault in a domain no seat depends on (%v, %v)", trackerServed, err)
+	}
+	if peer.askedFor("admits") {
+		t.Fatal("a peer was asked for a node whose seat copy serves")
+	}
+
+	// A SEAT COPY OUT OF SERVICE is asked of a data node whose copy serves.
+	local.set(func(n *fakeNode) { n.outOfServiceOn = map[string]bool{SeatCopy: true} })
 	trackerServed, _, err = r.Serves(t.Context())
 	if err != nil || !trackerServed {
 		t.Fatalf("a node served by a peer was not admitted (%v, %v)", trackerServed, err)

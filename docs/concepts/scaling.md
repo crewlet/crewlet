@@ -102,14 +102,15 @@ The replicated estate is one estate, and every data node holds the whole of it.
 Every node, with `data` or without, still reaches it through one **router**,
 and a seat's tools behave the same on either kind of node. So do the operator's surfaces: the API's tracker and
 knowledge-base routes, a project's file rows and the operator's own MCP go
-through the same router, so a data node whose copy is out of service answers
-its operator from a peer's copy, exactly as it answers its seats.
+through the same router, so a data node whose copy of the tracker or the
+knowledge base is out of service answers its operator from a peer's copy,
+exactly as it answers its seats.
 
 ```mermaid
 flowchart TD
-    op[A seat's tool call,<br/>or an operator's request] --> local{Is this a data node<br/>whose copy is in service?}
+    op[A seat's tool call,<br/>or an operator's request] --> local{Is this a data node whose copy of the<br/>operation's log is in service?}
     local -- yes --> own[Answer from this node's own copy,<br/>after its floors]
-    local -- no --> order[Ask the live data nodes in order:<br/>last to answer, rendezvous, silent ones last]
+    local -- no --> order[Ask the live data nodes in order:<br/>last to answer that log, rendezvous,<br/>out of service for that log, silent ones last]
     own -- behind its floor, or lagging its logs --> order
     order --> reply{The data node's answer}
     reply -- ran it --> done[The answer]
@@ -122,26 +123,36 @@ flowchart TD
 ```
 
 - **This node first, where it is a data node.** A data node answers its own
-  seats' calls from its own copy, in-process, and asks nobody — unless that
-  copy is **out of service**: wrong rather than behind (an applier stopped,
-  the node evicted, its rows below the log), in which case its seats' calls
-  go to the other data nodes and it keeps every seat.
-- **Otherwise the data nodes, in order**: the node that last answered, then a
-  rendezvous order keyed on the asking node's own id, with a node that went
-  silent in the last thirty seconds asked last. The rendezvous order picks an
+  seats' calls from its own copy, in-process, and asks nobody — unless its
+  copy of that operation's log is **out of service**: wrong rather than behind
+  (an applier stopped, the node evicted, its rows below the log), in which case
+  only that log's calls go to the other data nodes — its other logs' copies
+  keep answering here — and it keeps every seat
+  ([ADR-0031](https://github.com/crewlet/crewlet/blob/main/adr/0031-a-domains-fault-takes-only-its-own-copy-out-of-service.md)).
+- **Otherwise the data nodes, in order**: the node that last answered an
+  operation on that log, then a rendezvous order keyed on the asking node's own
+  id — with a node that said in the last thirty seconds that its copy of that
+  log is out of service asked after the rest, and a node that went silent in
+  the last thirty seconds asked last. Each log has its own last answerer,
+  because each has its own applier and a node can serve one log and not
+  another: one answerer for every log made an asker between a node whose
+  tracker copy was out and one whose knowledge base was swap between them on
+  every call, paying a round trip that ran nothing each time. The rendezvous order picks an
   asker's first data node and every node it fails over to, spread evenly
   across the data nodes the fleet's presence names however those nodes are
   named (`node-0` … `node-4`, a StatefulSet's ordinals), so the askers of a
   node that goes silent scatter over the others rather than all landing on
   one. It does not decide where an asker stays: an asker keeps asking the node
-  that last answered until that node goes silent. So the spread is where
+  that last answered that log until that node goes silent or says its copy of
+  the log is out of service. So the spread is where
   askers *start*, not where they settle — a data node that joins is asked only
   by askers with no such node yet or whose node went silent, and after a
   rolling restart each restarted node's askers stay on the node they failed
   over to.
 - **A node that ran nothing is passed over, whatever the operation**: one whose
-  copy is out of service (`out_of_service`), whose copy lags its logs (asked
-  again last), or that is behind the caller's floor. What may be repeated once
+  copy of the operation's log is out of service (`out_of_service`), whose copy
+  of it lags that log (asked again last), or that is behind the caller's floor.
+  What may be repeated once
   a node *may* have run a write is the operation's own rule: a tracker write
   moves on under the same operation id, a knowledge-base write that went
   unanswered is reported as unknown and never sent twice, and a tracker write

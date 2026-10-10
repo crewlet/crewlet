@@ -467,9 +467,9 @@ adopts a snapshot from a node in the new generation, **on its own**:
   which stops its applier before anything of the new generation is applied.
 - From then until the adoption lands it refuses that domain's reads and writes
   as `wrong_stream`, logs `statelog_generation_passed` naming both generations,
-  and stops serving the estate — its seats stay, and read it from the
-  other data nodes — whether or not its own readings of the log look
-  wrong. On a broker restored from an older copy, a node whose checkpoint was
+  and takes its copy of that domain out of service — its seats stay, and that
+  domain's operations go to the other data nodes — whether or not its own
+  readings of the log look wrong. On a broker restored from an older copy, a node whose checkpoint was
   below the restored end sees nothing wrong at all, which is why the fleet's
   generation is what decides it rather than the log.
 - It adopts through the join above, asking for an artefact at the new
@@ -576,7 +576,8 @@ it.
 It is **judged once, before anything is written**: a node that still holds a
 live presence lease is refused, because it is still reaching the fleet and
 almost certainly running — an eviction would drop everything it writes and
-take its copy out of service. Stop it and wait for its `LIVE` column in
+take its copies of the logs it is evicted from out of service. Stop it and wait
+for its `LIVE` column in
 `crewlet retention status` to read `no`; `-force` overrides the refusal for a node wedged in a way
 that still renews its lease. A refusal writes nothing to either log. If this
 node cannot read the presence leases at all — a coordination fault — the
@@ -1048,8 +1049,9 @@ The engine detects this from the stream's own **creation instant**, which the
 broker reports and every applier compares at boot against the instant its
 checkpoint was committed under. On a difference the applier **stops** rather
 than resuming — the log line names both instants and this verb — the node's
-reads and writes refuse `wrong_stream` with that reason, it stops serving the
-estate — its seats read it from a peer — and `crewlet retention status` leads with `NOT READY <domain>:
+reads and writes refuse `wrong_stream` with that reason, it takes its copy of
+that domain out of service — that domain's operations go to a peer, and its
+seats stay — and `crewlet retention status` leads with `NOT READY <domain>:
 wrong_stream (recreated) — …` carrying the same sentence, both instants
 included (the dashboard shows the same refusal above the domain's block). A checkpoint past the log's end is caught as `wrong_stream` too,
 because a position the log has never reached is a position on another stream.
@@ -1198,8 +1200,9 @@ creation instant arrives in both answers. Nothing else can see it — a rebuilt
 stream comes back at generation 0 counting from 1, so once it has published
 past the node's checkpoint every sequence term reads healthy while the node
 applies a different history into rows keyed by the old one. The node logs
-`statelog_stream_recreated` with both instants, stops serving the estate —
-its seats stay, and read it from the other data nodes — and refuses
+`statelog_stream_recreated` with both instants, takes its copy of that domain
+out of service — its seats stay, and that domain's operations go to the other
+data nodes — and refuses
 every read and every write of that domain with `wrong_stream` until that stream
 is re-anchored, and it applies nothing from the rebuilt stream into rows keyed
 to the old one.

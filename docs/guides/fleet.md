@@ -290,8 +290,8 @@ node's own copy of the estate directly — the API's retention report, capacity,
 reanchor, eviction and backup surfaces, the scheduler, the trim — so Tier A
 refuses either without `data`, naming the field and why. (The API's tracker and knowledge-base
 routes and the operator's MCP do not: they go through the same router a seat's
-tools do, so a data node whose copy is out of service answers its operator from
-a peer's copy, as it answers its seats.) Its seats use exactly the tools a data
+tools do, so a data node whose copy of the tracker or the knowledge base is out
+of service answers its operator from a peer's copy, as it answers its seats.) Its seats use exactly the tools a data
 node's seats do, and each of those tools asks a data node over the broker:
 
 - **Reads and writes** go to a data node — any data node, since every one
@@ -321,8 +321,9 @@ node's seats do, and each of those tools asks a data node over the broker:
   queues nothing, so a stateless leaf is not asked
   ([who has to acknowledge](retention.md#who-has-to-acknowledge)).
 
-Seat admission on a stateless node asks a data node whether its copy is level
-with its logs, so a stateless node claims no seat until one is. While no data
+Seat admission on a stateless node asks a data node whether its copies of the
+tracker and the knowledge base are level with their logs, so a stateless node
+claims no seat until one is. While no data
 node answers, its seats' tracker and knowledge tools fail saying so, and
 `fleet_role_unmanned` names `data` if no live node holds it.
 
