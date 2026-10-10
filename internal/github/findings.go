@@ -46,10 +46,12 @@ func (r *Result) Findings() []integration.Finding {
 	//
 	// ONCE rather than per target, because there is nothing per-target
 	// about it: no address means no hook anywhere, and one sentence naming
-	// the field is the whole of what an operator has to do.
+	// the field is the whole of what an operator has to do — an operator
+	// of THIS deployment, since the field is its own, which is why it is a
+	// config fault and not the GitHub admin's ingress block it was.
 	if r.NoIngress != "" {
 		out = append(out, integration.Finding{
-			Kind:    integration.FindingIngressBlocked,
+			Kind:    integration.FindingConfigFault,
 			Subject: "integrations.public_base_url",
 			Detail:  r.NoIngress,
 		})
@@ -58,16 +60,15 @@ func (r *Result) Findings() []integration.Finding {
 	// AND NO KEY TO SIGN WITH IS THE OTHER WAY TO HAVE NO INGRESS, said
 	// against the field that fixes it.
 	//
-	// INGRESS RATHER THAN CREDENTIAL, on Jira's reasoning: a webhook secret
-	// is not how this engine authenticates AT GitHub — it is what makes a
-	// delivery verifiable when it arrives here, and a route with nothing to
-	// verify with answers 503. It is also what [Requirements] declares:
-	// `webhook_secret` says Blocks: FindingIngressBlocked, and that
-	// declaration is the join the setup screen uses to offer the field that
-	// clears this.
+	// A CONFIG FAULT on Jira's reasoning: both ways out — a keyring in the
+	// bootstrap file, a value under the variable the document names — are
+	// this deployment's, and nobody at GitHub can supply either. It is also
+	// what [Requirements] declares: `webhook_secret` says Blocks:
+	// FindingConfigFault, and that declaration is the join the setup screen
+	// uses to offer the field that clears this.
 	if r.NoKeyring {
 		out = append(out, integration.Finding{
-			Kind:    integration.FindingIngressBlocked,
+			Kind:    integration.FindingConfigFault,
 			Subject: "integrations.github.webhook_secret",
 			Detail: "no webhook was registered because this deployment has no " +
 				"secret to sign deliveries with and this node has no keyring " +
@@ -88,9 +89,13 @@ func (r *Result) Findings() []integration.Finding {
 	// nothing and writes nothing, and it said so in NOTES, which are not
 	// findings — so a surface that had authenticated with nobody reported
 	// READY with an empty finding list. See [Result.NoRegistrar].
+	//
+	// A CONFIG FAULT, because both ways out are this company's own document:
+	// set the token, or stop asking for hooks it would register. A GitHub
+	// organization owner can mint a token and cannot put it here.
 	if r.NoRegistrar != "" {
 		out = append(out, integration.Finding{
-			Kind:    integration.FindingIngressBlocked,
+			Kind:    integration.FindingConfigFault,
 			Subject: "integrations.github.token",
 			Detail:  r.NoRegistrar,
 		})
@@ -156,17 +161,30 @@ func (r *Result) Findings() []integration.Finding {
 	// false statement, true only of a seat with no app either, which this
 	// run cannot see and [ReconcileSeatApps] reports on.
 	for _, seat := range r.Seats {
-		if !seat.Refused() {
-			continue
+		switch {
+		case seat.Outcome == IdentityUnset:
+			// A SLOT THAT NAMES NOTHING was never shown to GitHub, so
+			// nobody there can fix it: the variable it names is this
+			// deployment's to set, or the entry its to drop. It was
+			// identity_failed, which sent a GitHub organization owner to
+			// look for a credential problem in a value that never left
+			// this company's document.
+			out = append(out, integration.Finding{
+				Kind:    integration.FindingConfigFault,
+				Subject: seat.Handle,
+				Detail: fmt.Sprintf("%s's own GitHub credential is empty, so every "+
+					"call its tools make is refused: %s", seat.Handle, seat.Reason),
+			})
+		case seat.Refused():
+			out = append(out, integration.Finding{
+				Kind:    integration.FindingIdentityFailed,
+				Subject: seat.Handle,
+				Detail: fmt.Sprintf("%s's own GitHub credential does not authenticate, "+
+					"so every call its tools make is refused and anything routed on "+
+					"that account reaches nobody: %s",
+					seat.Handle, detailOr(seat.Reason, "this run recorded no reason")),
+			})
 		}
-		out = append(out, integration.Finding{
-			Kind:    integration.FindingIdentityFailed,
-			Subject: seat.Handle,
-			Detail: fmt.Sprintf("%s's own GitHub credential does not authenticate, "+
-				"so every call its tools make is refused and anything routed on "+
-				"that account reaches nobody: %s",
-				seat.Handle, detailOr(seat.Reason, "its credential resolved to nothing")),
-		})
 	}
 	return out
 }

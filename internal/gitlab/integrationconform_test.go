@@ -347,15 +347,12 @@ func TestTheOutstandingWorldIsBlockedOnAPerson(t *testing.T) {
 		t.Fatalf("findings = %+v, want exactly the blocked delivery path", findings)
 	}
 	got := findings[0]
-	if got.Kind != integration.FindingIngressBlocked {
-		t.Errorf("kind = %q, want %q", got.Kind, integration.FindingIngressBlocked)
-	}
 	if got.Subject != "integrations.public_base_url" {
 		t.Errorf("subject = %q, want the setting a person has to fill in", got.Subject)
 	}
-	if _, actor := got.Kind.Verdict(); !actor.WaitsOnAPerson() {
-		t.Errorf("the finding is owed by %s, so nobody is being asked to act", actor)
-	}
+	// AND THAT PERSON IS THE COMPANY'S ADMIN, asked about hourly: the
+	// address is this deployment's own setting.
+	integrationtest.AssertConfigFault(t, got)
 	// AND THE REST OF THE PASS WORKED, which is what makes this an
 	// outstanding world rather than a broken one: the seats were
 	// provisioned, so the only thing missing really is the delivery path.

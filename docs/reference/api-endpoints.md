@@ -982,7 +982,11 @@ this process. `resolved` is `null` for a field the document leaves empty,
 since there is nothing to resolve.
 `blocks` names the [reconcile finding](../concepts/integration-reconcile.md)
 that this input being absent produces, which is what lets a row reporting
-`credential_missing` offer exactly the fields that clear it.
+`credential_missing` offer exactly the fields that clear it. Every field here
+is this deployment's own configuration, so what it blocks is never a finding
+somebody settles at the third-party app — a missing credential and a
+`config_fault` are the company admin's — and a field whose absence no finding
+reports blocks nothing.
 
 `mintable` means the engine can generate the value, so nobody should be asked
 to invent it. **No route here ever returns a credential.**
@@ -1181,7 +1185,7 @@ A check **does** get `integrations.public_base_url`, and the `409
 no_public_base_url` refusal above is the writing route's alone. Withholding
 the address from a check made it report the wrong fact: a vendor handed no
 base reads that as *this deployment has no inbound address* and reports
-`ingress_blocked` owed by a person — and a check records its findings through
+a `config_fault` owed by a person — and a check records its findings through
 the same fold as everything else, so pressing Check on a healthy company wrote
 "every monitor that fires reaches nobody" into the live status row and flipped
 the card to **Action required** over a value that was already set. Supplying

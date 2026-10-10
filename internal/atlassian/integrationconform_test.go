@@ -538,7 +538,7 @@ func convergedAtlassian(
 			tb.Fatalf("the pass that converges the world failed: %v", err)
 		}
 		if !slices.ContainsFunc(findings, func(f integration.Finding) bool {
-			return f.Kind != integration.FindingGrantShort
+			return f.Kind != integration.FindingConfigFault
 		}) {
 			break
 		}
@@ -546,7 +546,7 @@ func convergedAtlassian(
 	for _, f := range findings {
 		// A NOTE ABOUT A SEAT THE COMPANY PROVISIONS BY HAND SURVIVES
 		// CONVERGENCE — no pass can clear it — and nothing else may.
-		if f.Kind != integration.FindingGrantShort {
+		if f.Kind != integration.FindingConfigFault {
 			tb.Fatalf("the world is not converged: the seeding pass reported %+v", findings)
 		}
 	}
@@ -766,13 +766,17 @@ func TestTheAtlassianReconcilerMeetsTheContract(t *testing.T) {
 				// seats report as having no account because they genuinely
 				// have none, and the two notes survive from the plan.
 				what: "a node with no keyring", keyring: false,
+				// The keyring and the two notes are this deployment's own
+				// configuration, so all three are config faults owed by the
+				// company's admin; the seats with no account are the
+				// engine's, which is what the keyring is in the way of.
 				kinds: []integration.FindingKind{
-					integration.FindingCredentialMissing,
+					integration.FindingConfigFault,
 					integration.FindingIdentityMissing,
 					integration.FindingIdentityMissing,
 					integration.FindingIdentityMissing,
-					integration.FindingGrantShort,
-					integration.FindingGrantShort,
+					integration.FindingConfigFault,
+					integration.FindingConfigFault,
 				},
 			},
 		},

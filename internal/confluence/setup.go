@@ -145,7 +145,7 @@ func Requirements(
 			Required:   false,
 			Mintable:   true,
 			Help:       "Cloud signs nothing, so this token in the URL is the whole check.",
-			Blocks:     integration.FindingIngressBlocked,
+			Blocks:     integration.FindingConfigFault,
 		},
 		{
 			Field:      "webhook_secret",
@@ -156,7 +156,7 @@ func Requirements(
 			Required:   false,
 			Mintable:   true,
 			Help:       "Data Center signs every delivery, and the engine checks it against this.",
-			Blocks:     integration.FindingIngressBlocked,
+			Blocks:     integration.FindingConfigFault,
 		},
 		{
 			Field:  "site_url",

@@ -87,6 +87,7 @@ import {
   type IntegrationToolState,
   type ReconcileActor,
   type ReconcileFinding,
+  type ReconcileFindingKind,
   type ReconcilePhase,
   type ReconcileStatus,
 } from "~/contract/integrations.ts";
@@ -1026,9 +1027,14 @@ const LEARN: TileAction = { kind: "learn", label: "Learn more" };
  * revision re-activated — which is what Rotate token opens.
  *
  * NOT `credential_missing`: nothing is held to rotate, and the form's own
- * empty field is what Continue already opens.
+ * empty field is what Continue already opens. Nor `config_fault`: what it
+ * names is an address, a keyring or a slot in this deployment's configuration,
+ * which a new token does not change.
+ *
+ * Built from the contract's `ReconcileFindingKind`, so a kind the engine
+ * renamed is a compile error here rather than a button that never appears.
  */
-export const ROTATE_FINDINGS: ReadonlySet<string> = new Set([
+export const ROTATE_FINDINGS: ReadonlySet<string> = new Set<ReconcileFindingKind>([
   "credential_expiring",
   "credential_rejected",
 ]);

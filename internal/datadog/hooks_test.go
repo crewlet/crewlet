@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/datadog"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/integration/integrationtest"
 )
 
 const (
@@ -294,9 +295,11 @@ func TestNoPublicBaseRegistersNothing(t *testing.T) {
 // read only the failure beside it, so a pass that registered no webhook AT
 // ALL reported nothing: the loop classified Datadog Ready over an inbound
 // path that did not exist, which is the shape this package's own doc calls
-// strictly worse than an integration that is switched off. It is
-// FindingIngressBlocked and its subject is the field to set, because that
-// subject is what a status row offers somebody to type into.
+// strictly worse than an integration that is switched off. It is a config
+// fault, the company admin's, and its subject is the field to set, because
+// that subject is what a status row offers somebody to type into. Filed as an
+// ingress block it was the Datadog admin's, asked about again from fifteen
+// seconds on, for a field only this deployment can set.
 func TestNoPublicBaseIsReportedRatherThanNoted(t *testing.T) {
 	t.Parallel()
 	reg := newRegion(t)
@@ -313,9 +316,7 @@ func TestNoPublicBaseIsReportedRatherThanNoted(t *testing.T) {
 	if len(findings) != 1 {
 		t.Fatalf("findings = %+v, want the unregistered webhook reported", findings)
 	}
-	if findings[0].Kind != integration.FindingIngressBlocked {
-		t.Errorf("kind = %q, want ingress_blocked", findings[0].Kind)
-	}
+	integrationtest.AssertConfigFault(t, findings[0])
 	if findings[0].Subject != "integrations.public_base_url" {
 		t.Errorf("subject = %q, want the field an operator has to set",
 			findings[0].Subject)

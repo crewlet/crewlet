@@ -677,19 +677,24 @@ func (r *Result) Findings() []integration.Finding {
 	}
 	var out []integration.Finding
 
-	// NOTHING TO AUTHENTICATE A DELIVERY WITH IS AN INGRESS BLOCK, said
+	// NOTHING TO AUTHENTICATE A DELIVERY WITH IS A CONFIG FAULT, said
 	// against the field that fixes it — and which field that is depends on
 	// the deployment, because the two halves authenticate differently:
 	// Cloud signs nothing at all and the token in the URL is the whole
 	// check, while Data Center signs every delivery against a secret. See
 	// the package doc in setup.go.
+	//
+	// THE COMPANY ADMIN'S, because both ways out — a keyring in the
+	// bootstrap file, a value under the variable the document names — are
+	// this deployment's. As an ingress block it was a Confluence admin's,
+	// asked about from fifteen seconds on.
 	if r.NoKeyring {
 		field := "integrations.confluence.webhook_secret"
 		if r.Deployment == Cloud {
 			field = "integrations.confluence.webhook_token"
 		}
 		out = append(out, integration.Finding{
-			Kind:    integration.FindingIngressBlocked,
+			Kind:    integration.FindingConfigFault,
 			Subject: field,
 			Detail: "no webhook was registered because this deployment has " +
 				"nothing to authenticate a delivery with and this node has no " +

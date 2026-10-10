@@ -31,16 +31,17 @@ func (r *Result) Findings() []integration.Finding {
 	// JIRA_WEBHOOK_SECRET had its Jira pass fault on every tick for ever
 	// while the dashboard reported the engine working on it.
 	//
-	// INGRESS RATHER THAN CREDENTIAL, because a Jira signing secret is not
-	// how this engine authenticates AT Jira — it is what makes a delivery
-	// verifiable when it arrives here, and a route with nothing to verify
-	// with answers 503. It is also what [Requirements] declares:
-	// `webhook_secret` says Blocks: FindingIngressBlocked, and that
-	// declaration is the join the setup screen uses to offer the field
-	// that clears this finding.
+	// A CONFIG FAULT, because both ways out are this deployment's own
+	// configuration — a keyring in the bootstrap file, or a value under the
+	// variable the company document names — and nobody at Jira can supply
+	// either. It was an ingress block, which put it on a Jira admin and
+	// asked again from fifteen seconds on. Named against the field rather
+	// than the keyring because that is what [Requirements] declares:
+	// `webhook_secret` says Blocks: FindingConfigFault, and that declaration
+	// is the join the setup screen uses to offer the field that clears it.
 	if r.NoKeyring {
 		out = append(out, integration.Finding{
-			Kind:    integration.FindingIngressBlocked,
+			Kind:    integration.FindingConfigFault,
 			Subject: "integrations.jira.webhook_secret",
 			Detail: "no webhook was registered because this deployment has no " +
 				"secret to sign deliveries with and this node has no keyring " +
@@ -72,10 +73,11 @@ func (r *Result) Findings() []integration.Finding {
 	// integrations block, with ingress left "to the subcommand that has
 	// the URL". It is `integrations.public_base_url`, and the reconcile
 	// loop feeds it into every pass — so the silence meant a Data Center
-	// company that never set it saw Jira reported Ready.
+	// company that never set it saw Jira reported Ready. And it is a
+	// field of this deployment's, so the company admin's to set.
 	if r.NoIngress != "" {
 		out = append(out, integration.Finding{
-			Kind:    integration.FindingIngressBlocked,
+			Kind:    integration.FindingConfigFault,
 			Subject: "integrations.public_base_url",
 			Detail:  r.NoIngress,
 		})
@@ -111,15 +113,25 @@ func (r *Result) Findings() []integration.Finding {
 		// which is the one finding this command exists to surface.
 		//
 		// A PERSON'S, and that is still right for everything that reaches
-		// here: a credential the instance refuses outside the grant window
-		// is one somebody has to look at, and a seat with no credential on
-		// a company whose Atlassian organization is not provisioning is a
-		// person's to supply. (This used to say "nothing here can create an
-		// Atlassian account", which internal/atlassian has done since the
-		// loop started provisioning — and [integration.ConvergeOrder] runs
-		// it FIRST precisely so it can.)
+		// here — but WHICH person turns on whether Jira was asked at all.
+		// (This used to say "nothing here can create an Atlassian account",
+		// which internal/atlassian has done since the loop started
+		// provisioning — and [integration.ConvergeOrder] runs it FIRST
+		// precisely so it can.)
+		kind := integration.FindingIdentityFailed
+		if !seat.Refused {
+			// NOTHING WAS ASKED: the seat holds no credential under its
+			// mcp_env, or one no client could be built from. That is this
+			// deployment's own configuration, the company admin's to fill
+			// — it was filed on an Atlassian admin, who can change nothing
+			// in this company's document, and asked again from fifteen
+			// seconds on. A credential Jira REFUSED outside the grant
+			// window stays the vendor's: the account at Atlassian is what
+			// somebody has to look at.
+			kind = integration.FindingConfigFault
+		}
 		out = append(out, integration.Finding{
-			Kind:    integration.FindingIdentityFailed,
+			Kind:    kind,
 			Subject: seat.Handle,
 			Detail: fmt.Sprintf("%s has no Jira account, so no issue reaches it: %s",
 				seat.Handle, reasonOr(seat.Reason, "its credential resolved to nothing")),
@@ -146,6 +158,14 @@ func (r *Result) Findings() []integration.Finding {
 			// about a project key. A routing path that will not fix
 			// itself, owed by the Jira admin who can grant the permission
 			// or correct the key, is FindingIngressBlocked.
+			//
+			// AND NOT A CONFIG FAULT, although the key is the company
+			// document's: Jira's one 404 cannot say which half it is, and
+			// the vendor's cadence is the one that serves both. A key
+			// corrected in the document applies a revision, which
+			// reconciles at once whatever the cadence; a Browse grant made
+			// at Jira is seen only by asking again soon, which the flat
+			// hour of a config fault would not.
 			out = append(out, integration.Finding{
 				Kind:    integration.FindingIngressBlocked,
 				Subject: project.Key,

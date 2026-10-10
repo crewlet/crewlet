@@ -52,7 +52,12 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 			// credential_missing, so a row reporting a group token
 			// this engine could not resolve offered the instance URL
 			// as the field that clears it.
-			Blocks: integration.FindingIngressBlocked,
+			//
+			// AND IT BLOCKS NOTHING, because no finding reports it absent:
+			// a pass with no instance to talk to raises before it observes
+			// anything, which is a fault rather than a finding. It claimed
+			// the ingress block next, which is a refusal at GitLab and was
+			// never this field's.
 		},
 		{
 			Field:      "signing_secret",
@@ -74,7 +79,13 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 			Shape:  setup.ShapeSigningKey,
 			Help:   "Signs every delivery, and has a shape, so the engine generates it.",
 			Format: "whsec_ then standard base64 of a 32-byte key",
-			Blocks: integration.FindingCredentialMissing,
+			// A CONFIG FAULT, as the other vendors' webhook secrets declare:
+			// an absent value is minted wherever there is a keyring to seal
+			// it into, so the only thing its absence ever produces is
+			// [Result.NoKeyring] — this deployment's own configuration. It
+			// claimed credential_missing, which the access token below is
+			// the only field here that clears.
+			Blocks: integration.FindingConfigFault,
 		},
 		{
 			Field:      "provisioning.group",
@@ -88,7 +99,9 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 			// several pages the form meant.
 			Help: "Find your [top-level group](https://gitlab.com/dashboard/groups). " +
 				"Each Crewlet agent becomes a service account inside it.",
-			Blocks: integration.FindingIngressBlocked,
+			// BLOCKS NOTHING, for the instance address's reason: a group
+			// the pass cannot find stops it with a fault before anything
+			// is observed, so no finding names this field.
 		},
 		{
 			Field:      "token",

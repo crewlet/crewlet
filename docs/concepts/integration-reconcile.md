@@ -16,10 +16,11 @@ A pass produces **findings**, and a finding is one observation that is not "fine
 | `credential_rejected` | The credential resolved and the third-party app refused it: a revoked token, a rotated key, an account that lost its access. |
 | `credential_expiring` | A credential that works today and stops on a date the third-party app has already published, inside the **14-day** warning window (`integration.ExpiryWarning`). The finding carries the date in `expires_at`. GitLab is the case: every seat's token is minted and replaced by the pass itself, but the group Owner token the pass runs on was pasted in by a person, nothing rotates it, and the day it lapses every pass is refused. So each pass reads its own token's `expires_at` (`GET /personal_access_tokens/self`, GitLab 15.5+) and warns while there are still two weekly looks left to act on it. An advisory — the integration is ready — owned by an **admin**, the company's own, because the replacement is a value in this deployment's secret store. A GitLab that cannot say (an older instance, a credential that is not an access token) leaves a note and no finding. |
 | `approval_required` | A person must install or approve something at the third-party app. |
-| `ingress_blocked` | Deliveries cannot reach this engine, and it will not fix itself. |
+| `config_fault` | This deployment's **own** configuration stands in the way, and nothing at the third-party app can change it: no `integrations.public_base_url` for a webhook to point at; no `secrets.keys` to seal a minted secret or token into; a seat whose `mcp_env` names no credential, or one whose `${VAR}` resolves to nothing, or a slot that is not a whole `${VAR}` a minted token could be written to; a value this engine's own sealed store would not read or keep; something the pass discovered that this node could not write into the company document. Owed by the company's **admin** and asked about hourly. These were filed at the vendor — the address and the keyring as `ingress_blocked`, an empty seat as `identity_failed`, a slot as `grant_short` — which sent the vendor's admin to change somebody else's configuration and asked again from fifteen seconds on; and the keyring was `credential_missing` on other surfaces, which read *Failed* over a credential that was never the problem. |
+| `ingress_blocked` | The third-party app will not let deliveries reach this engine, and it will not fix itself: a webhook the credential may not register, a plan with no group hooks, a project or repository the credential may not see. |
 | `ingress_pending` | The delivery path is not established yet; the next pass tries again. |
 | `identity_missing` | A seat has no account at the third-party app yet. |
-| `identity_failed` | A seat's account could not be created or its credential was refused. |
+| `identity_failed` | The third-party app would not create a seat's account, refused its credential, or holds it disabled. A seat with no credential to try is a `config_fault` instead. |
 | `grant_pending` | The third-party app accepted access and has not applied it yet. Atlassian is the case to picture, twice: an invitation is accepted immediately and the account appears in the organization's directory some time later, so the grant this engine just made reads back as *no such user*; and once the account **is** granted, Jira and Confluence go on refusing its brand-new credential for about a minute with a 401 that is byte for byte what a wrong credential looks like. Both are a wait, not a failure — reported as one, the first sent operators looking for a broken organization key while the invite was in flight, and the second told them an Atlassian admin had to act on an agent that worked a minute later. See [When a new account is still coming up](#when-a-new-account-is-still-coming-up). |
 | `unknown_tier` | The company document names something the third-party app does not have. |
 | `grant_short` | A seat holds less access than its role asks for. |
@@ -244,7 +245,7 @@ GET /query/integrations
   "reconcile": {
     "phase": "degraded",
     "phase_label": "Action required",
-    "actor": "vendor_admin",
+    "actor": "admin",
     "detail": "swe has no Jira account, so no issue reaches it: no credential under mcp_env.atlassian",
     "action_url": "",
     "outcome": "blocked",
@@ -254,7 +255,7 @@ GET /query/integrations
     "settled_at": "2026-03-01T09:14:00Z",
     "next_attempt_at": "2026-03-01T13:00:00Z",
     "findings": [
-      { "kind": "identity_failed", "subject": "swe", "detail": "...", "action_url": "" }
+      { "kind": "config_fault", "subject": "swe", "detail": "...", "action_url": "" }
     ]
   }
 }

@@ -182,6 +182,7 @@ var contract = []Entry{
 	{"IntegrationToolState", ReadUnion, "internal/integration.TestTheDashboardKnowsExactlyTheRollupStates"},
 	{"ReconcileActor", ReadUnion, "internal/integration.TestTheDashboardKnowsExactlyTheActors"},
 	{"ReconcilePhase", ReadUnion, "internal/integration.TestTheDashboardKnowsExactlyThePhases"},
+	{"ReconcileFindingKind", ReadUnion, "internal/integration.TestTheDashboardKnowsExactlyTheFindingKinds"},
 	{"INTEGRATION_TOOLS", ReadLiteral, "internal/integration.TestTheDashboardGroupsSurfacesAsTheEngineDoes"},
 
 	// memory.ts

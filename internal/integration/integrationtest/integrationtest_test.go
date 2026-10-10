@@ -54,6 +54,12 @@ func TestACompliantReconcilerPasses(t *testing.T) {
 
 // And a world carrying several findings passes too, including one nobody has
 // to act on beside one somebody does.
+//
+// THE CONFIG FAULT IS HERE ON PURPOSE. Its verdict is exactly the one a kind
+// this build cannot read is given — degraded, the company admin's — so a
+// "known kind" clause that inferred membership from the verdict would refuse
+// every vendor reporting one. This is what holds that clause to the closed
+// set instead.
 func TestACompliantReconcilerWithFindingsPasses(t *testing.T) {
 	writes := 0
 	integrationtest.Run(t, integrationtest.Reconciler{
@@ -64,6 +70,14 @@ func TestACompliantReconcilerWithFindingsPasses(t *testing.T) {
 				Detail: "ceo needs maintainer",
 			},
 			integration.Finding{Kind: integration.FindingGrantPending, Subject: "cto"},
+			integration.Finding{
+				Kind: integration.FindingConfigFault, Subject: "integrations.public_base_url",
+				Detail: "integrations.public_base_url is unset",
+			},
+			integration.Finding{
+				Kind: integration.FindingConfigFault, Subject: "secrets.keys",
+				Detail: "this node has no keyring",
+			},
 		),
 		Mutations: func() int { return writes },
 	})
@@ -170,6 +184,35 @@ func violations() []violation {
 				Outstanding: world(integration.Finding{
 					Kind: integration.FindingKind("pager_rota_stale"), Subject: "ceo",
 					Detail: "read the peer's logs",
+				}),
+				Mutations: func() int { return 0 },
+			},
+		},
+		{
+			// THE SHAPE THIS CLAUSE WAS WRITTEN FOR: an address this
+			// deployment never set, filed as the vendor refusing a hook.
+			name:   "an unset public base URL owed at the vendor",
+			clause: "a finding naming this deployment's configuration is the company admin's",
+			rec: integrationtest.Reconciler{
+				Converged: func(integrationtest.TB) integration.Reconciler { return compliant{} },
+				Outstanding: world(integration.Finding{
+					Kind: integration.FindingIngressBlocked, Subject: "integrations.public_base_url",
+					Detail: "integrations.public_base_url is unset",
+				}),
+				Mutations: func() int { return 0 },
+			},
+		},
+		{
+			// AND THE TIER A HALF: the keyring is the bootstrap file's,
+			// and it was a credential finding on some vendors and an
+			// ingress block on others.
+			name:   "a missing keyring owed at the vendor",
+			clause: "a finding naming this deployment's configuration is the company admin's",
+			rec: integrationtest.Reconciler{
+				Converged: func(integrationtest.TB) integration.Reconciler { return compliant{} },
+				Outstanding: world(integration.Finding{
+					Kind: integration.FindingIdentityFailed, Subject: "secrets.keys",
+					Detail: "this node has no keyring",
 				}),
 				Mutations: func() int { return 0 },
 			},
@@ -301,6 +344,37 @@ func (r *recorder) Fatalf(format string, args ...any) {
 
 // errStop unwinds a case that called Fatalf.
 var errStop = errors.New("integrationtest: the case stopped")
+
+// THE CONFIG-FAULT ASSERTION CAN FAIL, on each of its halves.
+//
+// Every vendor's test of a finding about this deployment's own configuration
+// goes through it, so a body that stopped checking would leave all of them
+// green over a finding filed on the vendor's admin again — the exact thing
+// they are there to catch.
+func TestAssertConfigFaultRefusesWhatIsNotOne(t *testing.T) {
+	t.Parallel()
+	pass := &recorder{}
+	integrationtest.AssertConfigFault(pass, integration.Finding{
+		Kind: integration.FindingConfigFault, Subject: "integrations.public_base_url",
+	})
+	if pass.failed {
+		t.Fatalf("a config fault was refused: %v", pass.log)
+	}
+	for _, kind := range []integration.FindingKind{
+		// The vendor's admin, on the vendor backoff: the shape it replaced.
+		integration.FindingIngressBlocked,
+		integration.FindingIdentityFailed,
+		// The company's admin, hourly, and still not this kind: a field
+		// offered by Blocks joins on the kind, so the kind is checked too.
+		integration.FindingCredentialMissing,
+	} {
+		got := &recorder{}
+		integrationtest.AssertConfigFault(got, integration.Finding{Kind: kind, Subject: "x"})
+		if !got.failed {
+			t.Errorf("%s passed as a config fault", kind)
+		}
+	}
+}
 
 // EVERY CASE MUST PASS A COMPLIANT RECONCILER. Without this a case that
 // failed unconditionally would satisfy the violation tests above while

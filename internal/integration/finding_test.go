@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/clientsource"
 )
 
 // knownKinds is every finding kind this build defines, in no particular
@@ -24,6 +26,7 @@ var knownKinds = []FindingKind{
 	FindingCredentialRejected,
 	FindingCredentialExpiring,
 	FindingApprovalRequired,
+	FindingConfigFault,
 	FindingIngressBlocked,
 	FindingIngressPending,
 	FindingIdentityMissing,
@@ -325,6 +328,9 @@ func TestTheSeverityOrderIsPinned(t *testing.T) {
 		FindingCredentialMissing,
 		FindingCredentialRejected,
 		FindingApprovalRequired,
+		// This deployment's own configuration ahead of the vendor refusing a
+		// hook: an address nobody set is why no hook could be registered.
+		FindingConfigFault,
 		FindingIngressBlocked,
 		FindingIngressPending,
 		FindingIdentityMissing,
@@ -411,5 +417,115 @@ func TestPromoteLeavesAnOrderedListAlone(t *testing.T) {
 	}
 	if len(Promote(nil)) != 0 {
 		t.Error("Promote invented a finding from nothing")
+	}
+}
+
+// THE CLOSED SET IS ONE LIST, and it is the one Valid reads.
+//
+// The test's own list above is deliberately written by hand, so a kind added
+// without deciding where it ranks fails here; the package's list is what a
+// suite and the dashboard are held to. They must be the same set, and the
+// package's must be in rank order, or "worst first" is a claim nothing keeps.
+func TestFindingKindsIsTheClosedSet(t *testing.T) {
+	t.Parallel()
+	got := slices.Clone(FindingKinds)
+	want := slices.Clone(knownKinds)
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("FindingKinds is %q, the kinds this package defines are %q", got, want)
+	}
+	for i := 1; i < len(FindingKinds); i++ {
+		if FindingKinds[i-1].severity() >= FindingKinds[i].severity() {
+			t.Errorf("FindingKinds puts %s before %s, which outranks it",
+				FindingKinds[i-1], FindingKinds[i])
+		}
+	}
+	for _, kind := range knownKinds {
+		if !kind.Valid() {
+			t.Errorf("%s is defined here and is not Valid", kind)
+		}
+	}
+	if FindingKind("a kind a newer build found").Valid() {
+		t.Error("a kind this build does not define is Valid")
+	}
+}
+
+// The dashboard declares the finding kinds it can be sent, and a screen keys
+// an action on them: the tile's Rotate token reads the two credential kinds,
+// so a kind renamed here and left behind there is a button that silently never
+// appears — and nothing else would fail.
+func TestTheDashboardKnowsExactlyTheFindingKinds(t *testing.T) {
+	t.Parallel()
+	got, err := clientsource.Union(clientsource.Tree(t), "ReconcileFindingKind")
+	if err != nil {
+		t.Fatalf("%v — this gate cannot run without the client's declaration", err)
+	}
+	want := make([]string, 0, len(FindingKinds))
+	for _, k := range FindingKinds {
+		want = append(want, string(k))
+	}
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("the dashboard's ReconcileFindingKind is %q; the engine sends %q", got, want)
+	}
+}
+
+// EVERY KIND THIS BUILD DEFINES HAS A SENTENCE OF ITS OWN.
+//
+// The fallback is for a word from a newer node, and it prints the wire value
+// because that is all it has. A defined kind reaching it is a person reading
+// `coverage_partial` in prose, which is what the coverage note did until it
+// had a case.
+func TestEveryKnownKindHasASentenceOfItsOwn(t *testing.T) {
+	t.Parallel()
+	for _, kind := range knownKinds {
+		if got := kind.sentence(""); strings.Contains(got, string(kind)) {
+			t.Errorf("%s falls back to the unknown-kind sentence %q", kind, got)
+		}
+	}
+}
+
+// A FAULT IN THIS DEPLOYMENT'S OWN CONFIGURATION IS THE COMPANY ADMIN'S, AND
+// IS ASKED ABOUT HOURLY.
+//
+// What it replaced was filed at the vendor: an unset public base URL and a
+// missing keyring were ingress_blocked, a seat with no credential was
+// identity_failed, both owed by the VENDOR's admin and re-asked from fifteen
+// seconds on — sending a Jira admin to edit this company's bootstrap file,
+// and spending requests every few seconds on a value only an edit here can
+// supply. Pinned on all three halves the report carries: who, how it is
+// treated, and how long the loop waits.
+func TestAConfigFaultIsTheCompanyAdminsAndWaitsTheHour(t *testing.T) {
+	t.Parallel()
+	report := Classify([]Finding{{
+		Kind: FindingConfigFault, Subject: "integrations.public_base_url",
+		Detail: "integrations.public_base_url is unset",
+	}})
+	if report.Phase != PhaseDegraded || report.Actor != ActorAdmin {
+		t.Fatalf("a config fault classifies as %s/%s, want degraded owed by the company's admin",
+			report.Phase, report.Actor)
+	}
+	if report.Outcome() != OutcomeBlocked {
+		t.Errorf("a config fault is %q, want blocked on a person", report.Outcome())
+	}
+	if got := CadenceOf(report); got != CadenceAdmin {
+		t.Errorf("a config fault waits on the %q cadence, want %q", got, CadenceAdmin)
+	}
+	for _, attempts := range []int{1, 2, 10} {
+		if got := DefaultSchedule.Next(report, attempts); got != DefaultSchedule.Admin {
+			t.Errorf("after %d attempts a config fault waits %s, want the flat %s",
+				attempts, got, DefaultSchedule.Admin)
+		}
+	}
+	// AND IT IS THE HEADLINE OVER THE HOOK IT EXPLAINS. A pass that found
+	// no address and a refused hook reports the address.
+	both := Classify([]Finding{
+		{Kind: FindingIngressBlocked, Subject: "ENG", Detail: "ENG answered 404"},
+		{Kind: FindingConfigFault, Subject: "integrations.public_base_url", Detail: "unset"},
+	})
+	if both.Actor != ActorAdmin || both.Detail != "unset" {
+		t.Errorf("an ingress block outranked the config fault behind it: %+v", both)
 	}
 }

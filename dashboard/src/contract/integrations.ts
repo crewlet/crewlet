@@ -46,8 +46,41 @@ export type ReconcilePhase =
   | "degraded"
   | "ready";
 
+/**
+ * What a reconcile pass can find, from `integration.FindingKinds`, held by
+ * `internal/integration.TestTheDashboardKnowsExactlyTheFindingKinds`.
+ *
+ * A screen that keys on a kind (the tile's Rotate token reads the credential
+ * ones) names it through this union, so a kind the engine renamed is a compile
+ * error rather than a button that silently never appears. `config_fault` is a
+ * fault in THIS deployment's own configuration — an address, a keyring, a
+ * seat's credential slot — owed by the company's `admin`; what the vendor's
+ * admin owes is `approval_required`, `ingress_blocked`, `identity_failed`,
+ * `grant_short` and the two vendor advisories.
+ *
+ * A finding's `kind` stays a `string`: a newer node can report a kind this
+ * build does not know, and that is a value to render, never an error.
+ */
+export type ReconcileFindingKind =
+  | "credential_missing"
+  | "credential_rejected"
+  | "approval_required"
+  | "config_fault"
+  | "ingress_blocked"
+  | "ingress_pending"
+  | "identity_missing"
+  | "identity_failed"
+  | "grant_pending"
+  | "unknown_tier"
+  | "grant_short"
+  | "credential_expiring"
+  | "grant_excess"
+  | "registration_orphaned"
+  | "coverage_partial";
+
 /** One observation a reconcile pass made that is not "fine". */
 export interface ReconcileFinding {
+  /** A `ReconcileFindingKind`, or one a newer node wrote — see that type. */
   kind: string;
   subject?: string;
   /**
@@ -68,8 +101,9 @@ export interface ReconcileFinding {
    * (integration.FindingKind.Verdict) rather than from a second copy of the
    * closed set kept here.
    *
-   * Two kinds are advisory — their phase is `ready`: something the engine did
-   * not do and cannot undo, on an integration that is working. A reader that
+   * Four kinds are advisory — their phase is `ready`: a note on an integration
+   * that is working (`credential_expiring`, `grant_excess`,
+   * `registration_orphaned`, `coverage_partial`). A reader that
    * treats every finding as a fault reports those as broken; one that keeps
    * its own list of which kinds are advisory reports a kind it has not heard
    * of as fine, which is worse. Optional because a setup pass's own findings

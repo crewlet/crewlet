@@ -82,6 +82,7 @@ func Cases() []Case {
 		{"two passes over an unchanged world agree", passesAgree},
 		{"an outstanding world actually reports something", outstandingWorldReports},
 		{"every finding is a kind this build knows", findingsAreKnown},
+		{"a finding naming this deployment's configuration is the company admin's", configFindingsAreTheCompanyAdmins},
 		{"a finding a person must act on says what to do", personFindingsAreActionable},
 		{"two passes over an outstanding world agree", outstandingPassesAgree},
 		{"a cancelled pass reports a fault rather than health", cancelledPassIsAFault},
@@ -228,19 +229,85 @@ func passesAgree(t TB, r Reconciler) {
 }
 
 // A third-party app reports what it observed in the shared vocabulary and does not get
-// to invent an eighth kind: an unknown one classifies as degraded with a
+// to invent a kind of its own: an unknown one classifies as degraded with a
 // sentence nobody can act on.
+//
+// ASKED OF THE CLOSED SET, never inferred from the verdict. This compared each
+// kind's verdict with the one an unknown kind gets and exempted the unknown
+// tier by name, because a defined kind may share that verdict — and the config
+// fault does too, so the inference would have refused every vendor that
+// reports one.
 func findingsAreKnown(t TB, r Reconciler) {
 	findings, err := r.Outstanding(t).Reconcile(context.Background())
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	for _, f := range findings {
-		phase, actor := f.Kind.Verdict()
-		unknownPhase, unknownActor := integration.FindingKind("no such kind").Verdict()
-		if phase == unknownPhase && actor == unknownActor &&
-			f.Kind != integration.FindingUnknownTier {
+		if !f.Kind.Valid() {
 			t.Errorf("finding kind %q is not one this build knows", f.Kind)
+		}
+	}
+}
+
+// A FINDING THAT NAMES THIS DEPLOYMENT'S OWN CONFIGURATION IS THE COMPANY
+// ADMIN'S.
+//
+// Its subject is the field to change — `integrations.public_base_url`,
+// `secrets.keys`, `integrations.jira.webhook_secret` — and nobody at the
+// third-party app can change any of them. Filed at the vendor, those findings
+// sent the vendor's admin to edit this company's configuration and were asked
+// about again from fifteen seconds on; the subject is what the vendor itself
+// wrote, so it is the one thing this suite can read to catch it.
+func configFindingsAreTheCompanyAdmins(t TB, r Reconciler) {
+	findings, err := r.Outstanding(t).Reconcile(context.Background())
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	for _, f := range findings {
+		if !namesConfiguration(f.Subject) {
+			continue
+		}
+		if _, actor := f.Kind.Verdict(); actor != integration.ActorAdmin {
+			t.Errorf("%s finding on %q names this deployment's own configuration "+
+				"and is owed by %q, not the company's admin", f.Kind, f.Subject, actor)
+		}
+	}
+}
+
+// namesConfiguration reports a finding subject that is a path into THIS
+// DEPLOYMENT's own configuration: a Tier B field under `integrations.`, or
+// the Tier A keyring. A seat handle, a project key, a repository or a vendor's
+// own setting (`ServiceSettings.EnableBotAccountCreation`) is not one.
+func namesConfiguration(subject string) bool {
+	return strings.HasPrefix(subject, "integrations.") || subject == "secrets.keys"
+}
+
+// AssertConfigFault fails unless f is a fault in this deployment's own
+// configuration: a [integration.FindingConfigFault], owed — reported on its
+// own — by the COMPANY's admin, and re-asked on the flat hourly cadence
+// rather than the vendor-admin backoff.
+//
+// For a vendor's own tests, which build the one state that produces such a
+// finding and need to say more than the suite can: the suite sees only the
+// outstanding world it is handed, and a seat whose missing credential is
+// named by its handle is invisible to the subject rule above.
+func AssertConfigFault(t TB, f integration.Finding) {
+	t.Helper()
+	if f.Kind != integration.FindingConfigFault {
+		t.Errorf("%s on %q: want %s — this deployment's own configuration is "+
+			"what has to change", f.Kind, f.Subject, integration.FindingConfigFault)
+	}
+	report := integration.Classify([]integration.Finding{f})
+	if report.Actor != integration.ActorAdmin {
+		t.Errorf("%s on %q is owed by %q, want the company's admin",
+			f.Kind, f.Subject, report.Actor)
+	}
+	schedule := integration.DefaultSchedule
+	for _, attempts := range []int{1, 5} {
+		if got := schedule.Next(report, attempts); got != schedule.Admin {
+			t.Errorf("%s on %q is asked again after %s on attempt %d, want the "+
+				"flat %s a configuration edit waits on", f.Kind, f.Subject, got,
+				attempts, schedule.Admin)
 		}
 	}
 }

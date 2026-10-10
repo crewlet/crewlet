@@ -35,9 +35,14 @@ func (r *Result) Findings() []integration.Finding {
 	// here creates an ACCOUNT and then a token on it, so a node with
 	// nowhere to seal the token must not create the account either — see
 	// [provision.CanMint].
+	//
+	// A CONFIG FAULT — the bootstrap file's keyring — not the missing
+	// credential it was filed as, which is a ${VAR} pointing at nothing,
+	// reads as Failed and offered the administrator token as the field
+	// that clears it.
 	if r.NoKeyring {
 		return append(out, integration.Finding{
-			Kind:    integration.FindingCredentialMissing,
+			Kind:    integration.FindingConfigFault,
 			Subject: "secrets.keys",
 			Detail: "this node has no keyring, so a token minted for a seat " +
 				"could not be sealed and no account was created — set " +

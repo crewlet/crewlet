@@ -1066,7 +1066,7 @@ func TestAProvisionPassGetsASinkAndABase(t *testing.T) {
 // been: every vendor gates its registration on having one. The address is a
 // FACT, and withholding it made a check report the wrong one. A vendor reads
 // an empty base as "this deployment has no public base URL" and emits
-// ingress_blocked against integrations.public_base_url owed by a person, and
+// a config fault against integrations.public_base_url owed by a person, and
 // a check persists its findings through the same fold the loop uses — so
 // pressing Check on a healthy company wrote "every monitor that fires reaches
 // nobody" into the live status row and flipped the card to Action required
@@ -1873,6 +1873,52 @@ func TestACredentialFindingIsClearedByACredentialField(t *testing.T) {
 					"reporting one offers nothing that clears it", tc.kind)
 			}
 		})
+	}
+}
+
+// NO FIELD OF THIS DEPLOYMENT'S CONFIGURATION CLEARS A FINDING OWED AT THE
+// VENDOR.
+//
+// Every requirement a setup form asks for is a value in this company's own
+// configuration, so whatever its absence produces is something the company's
+// admin fixes here — a config fault, a missing credential — never a step a
+// person takes at the third-party app. Nine fields claimed the ingress block,
+// which is the vendor admin's: four webhook secrets whose absence on a node
+// with no keyring is this deployment's to fix, the GitHub organization token,
+// and four fields — an instance address, a group, an organization, a fallback
+// seat — whose absence no finding reports at all. A declared kind this build
+// does not know is a join to nothing, so it is refused too.
+func TestNoSetupFieldClearsAFindingOwedAtTheVendor(t *testing.T) {
+	t.Parallel()
+	resolve := func(string) (string, bool) { return "", false }
+	forms := map[string][]setup.Requirement{
+		"atlassian":        atlassian.Requirements(nil, resolve),
+		"confluence cloud": confluence.Requirements(nil, true, resolve),
+		"confluence dc":    confluence.Requirements(nil, false, resolve),
+		"datadog":          datadog.Requirements(nil, resolve),
+		"github":           github.Requirements(nil, resolve),
+		"gitlab":           gitlab.Requirements(nil, resolve),
+		"jira cloud":       jira.Requirements(nil, true, resolve),
+		"jira dc":          jira.Requirements(nil, false, resolve),
+		"mattermost":       mattermost.Requirements(nil, resolve),
+		"slack":            slack.Requirements("ceo", nil, resolve),
+	}
+	for form, reqs := range forms {
+		for _, req := range reqs {
+			if req.Blocks == "" {
+				continue
+			}
+			if !req.Blocks.Valid() {
+				t.Errorf("%s.%s blocks %q, which is not a finding this build reports",
+					form, req.Field, req.Blocks)
+				continue
+			}
+			if _, actor := req.Blocks.Verdict(); actor == integration.ActorVendorAdmin {
+				t.Errorf("%s.%s blocks %s, which is owed by the vendor's admin — "+
+					"but the field is this deployment's configuration, and nobody "+
+					"at the vendor can set it", form, req.Field, req.Blocks)
+			}
+		}
 	}
 }
 

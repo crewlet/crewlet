@@ -148,7 +148,7 @@ func Requirements(
 			// running the setup pass registers the hook with this value.
 			Mintable: true,
 			Help:     "Signs every delivery, on both deployments.",
-			Blocks:   integration.FindingIngressBlocked,
+			Blocks:   integration.FindingConfigFault,
 		},
 		{
 			Field:  "site_url",

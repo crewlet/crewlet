@@ -12,9 +12,11 @@ import (
 // converge seven different surfaces, but what they can find is the same short
 // list every time: nothing to authenticate with, an app nobody installed, a
 // delivery path that goes nowhere, a seat with no account, a grant the third-party app
-// has not applied, a grant that is too small, a grant that is too large. A
+// has not applied, a grant that is too small, a grant that is too large — and
+// this deployment's own configuration standing in the way of all of them. A
 // third-party app contributes WHICH of these it found and about what; it does not get
-// to invent an eighth, and it does not get to decide what any of them means.
+// to invent another, and it does not get to decide what any of them means.
+// [FindingKinds] is the set, and [FindingKind.Valid] asks it.
 type FindingKind string
 
 const (
@@ -57,10 +59,43 @@ const (
 	// approve at the third-party app. ActionURL carries where.
 	FindingApprovalRequired FindingKind = "approval_required"
 
-	// FindingIngressBlocked is a delivery path that cannot be established
-	// and will not fix itself: a webhook the credential may not register,
-	// a plan that does not offer group hooks, no public base URL to point
-	// at.
+	// FindingConfigFault is THIS DEPLOYMENT'S OWN CONFIGURATION standing
+	// between an integration and working, in a way nothing at the
+	// third-party app can change: no `integrations.public_base_url` for a
+	// webhook to point at, no `secrets.keys` to seal a minted secret or
+	// token into, a seat's `mcp_env` naming a credential that resolves to
+	// nothing or that no pass can write, a sealed value this engine cannot
+	// read back, a discovery this node could not write into the company
+	// document. [Finding.Subject] names the field to change where there is
+	// one.
+	//
+	// The company ADMIN's, re-checked on the flat hourly cadence
+	// ([Schedule.Admin]), because the fix is an edit here and nobody at the
+	// vendor is about to make it — and an edit to the company document
+	// applies a revision, which reconciles every surface at once rather than
+	// waiting that hour out.
+	//
+	// IT EXISTS BECAUSE THESE WERE FILED AT THE VENDOR. An unset public base
+	// URL or a missing keyring was ingress_blocked, and a seat with no
+	// credential was identity_failed — both owed by the VENDOR's admin and
+	// retried on the vendor-admin backoff — so a card sent a Jira admin to
+	// fix this company's bootstrap file and asked again every fifteen
+	// seconds for a value only an edit here could supply. The same keyring
+	// was credential_missing on other surfaces, which read as Failed over a
+	// credential that was never the problem; and a document this node could
+	// not write was a short grant. One kind for one fact, whichever
+	// third-party app it is about: the company's configuration is the fix.
+	FindingConfigFault FindingKind = "config_fault"
+
+	// FindingIngressBlocked is a delivery path the THIRD-PARTY APP will not
+	// let this engine establish, and that will not fix itself: a webhook the
+	// credential may not register, a plan that does not offer group hooks, a
+	// project or repository the credential may not see.
+	//
+	// AT THE VENDOR, which is what separates it from [FindingConfigFault].
+	// A delivery path missing because this deployment has no address to give
+	// or no keyring to sign with is this deployment's to fix, and filing it
+	// here sent the vendor's admin to change somebody else's configuration.
 	FindingIngressBlocked FindingKind = "ingress_blocked"
 
 	// FindingIngressPending is a delivery path the pass could not finish
@@ -71,7 +106,11 @@ const (
 	// The engine's own work.
 	FindingIdentityMissing FindingKind = "identity_missing"
 
-	// FindingIdentityFailed is a seat whose account could not be created.
+	// FindingIdentityFailed is a seat whose account the THIRD-PARTY APP
+	// would not create or will not let authenticate: a create it refused, a
+	// credential it rejects, an account somebody disabled there. A seat
+	// that holds no credential to try is not this — its configuration is
+	// what is missing, which is [FindingConfigFault].
 	FindingIdentityFailed FindingKind = "identity_failed"
 
 	// FindingGrantPending is access the third-party app accepted and has not applied
@@ -136,6 +175,36 @@ const (
 	FindingCoveragePartial FindingKind = "coverage_partial"
 )
 
+// FindingKinds is the closed set, worst first by [FindingKind.severity].
+//
+// What [FindingKind.Valid] asks, and what the dashboard's own declaration is
+// held to. It is the ONLY test of membership: a kind's verdict cannot be one,
+// because a kind this build defines may legitimately share its verdict with
+// the one an unknown kind gets — the config fault and the unknown tier are
+// both degraded and the company admin's, which is also exactly what a word
+// from a newer node is told.
+var FindingKinds = []FindingKind{
+	FindingCredentialMissing,
+	FindingCredentialRejected,
+	FindingApprovalRequired,
+	FindingConfigFault,
+	FindingIngressBlocked,
+	FindingIngressPending,
+	FindingIdentityMissing,
+	FindingIdentityFailed,
+	FindingGrantPending,
+	FindingUnknownTier,
+	FindingGrantShort,
+	FindingCredentialExpiring,
+	FindingGrantExcess,
+	FindingRegistrationOrphaned,
+	FindingCoveragePartial,
+}
+
+// Valid reports whether f is a kind this build defines. A kind a newer peer
+// wrote is a value, not a panic — see [FindingKind.Verdict]'s default.
+func (f FindingKind) Valid() bool { return slices.Contains(FindingKinds, f) }
+
 // severity ranks the kinds from "nothing works" to "everything works, with a
 // note". [Classify] reports the lowest-ranked kind present.
 //
@@ -187,20 +256,27 @@ func (f FindingKind) severity() int {
 		return 1
 	case FindingApprovalRequired:
 		return 2
-	case FindingIngressBlocked:
+	case FindingConfigFault:
+		// WHERE THE INGRESS BLOCK SAT FOR MOST OF WHAT IT TOOK OVER, and
+		// directly ahead of it: an address nobody set or a keyring nobody
+		// installed is WHY no hook could be registered, so when a pass
+		// finds both the cause is the headline. Behind an outstanding
+		// approval, which is where those findings already stood.
 		return 3
-	case FindingIngressPending:
+	case FindingIngressBlocked:
 		return 4
-	case FindingIdentityMissing:
+	case FindingIngressPending:
 		return 5
-	case FindingIdentityFailed:
+	case FindingIdentityMissing:
 		return 6
-	case FindingGrantPending:
+	case FindingIdentityFailed:
 		return 7
-	case FindingUnknownTier:
+	case FindingGrantPending:
 		return 8
-	case FindingGrantShort:
+	case FindingUnknownTier:
 		return 9
+	case FindingGrantShort:
+		return 10
 	case FindingCredentialExpiring:
 		// THE FIRST ADVISORY, and the reason is the whole comment above:
 		// its verdict is ready, so anything it outranks is a problem it
@@ -208,22 +284,22 @@ func (f FindingKind) severity() int {
 		// a kind this build cannot read. First among the notes because it
 		// is the only one with a date on it: the others are loose ends,
 		// and this one becomes an outage if nobody reads it.
-		return 11
+		return 12
 	case FindingGrantExcess:
 		// Beneath the expiring credential: a spare permission is a note
 		// that stays a note.
-		return 12
+		return 13
 	case FindingRegistrationOrphaned:
 		// Beneath the excess grant. Both report ready; this one is the
 		// more purely informational of the two, because what it names is
 		// still working.
-		return 13
+		return 14
 	case FindingCoveragePartial:
 		// LAST OF ALL, because it is the only one naming nothing wrong.
 		// The two above it are loose ends somebody may want to tidy; this
 		// is a decision already taken, reported so a reader does not have
 		// to infer it from silence. Anything else present outranks it.
-		return 14
+		return 15
 	default:
 		// A kind this build does not know, ranked ABOVE the advisory and
 		// below every real problem. A peer on a newer build can write one
@@ -231,7 +307,7 @@ func (f FindingKind) severity() int {
 		// ranking it worst would let an older node report a healthy
 		// company as broken, and ranking it below the advisory would let
 		// one spare permission hide a finding this binary cannot read.
-		return 10
+		return 11
 	}
 }
 
@@ -256,6 +332,15 @@ func (f FindingKind) Verdict() (Phase, Actor) {
 		return PhaseReady, ActorAdmin
 	case FindingApprovalRequired:
 		return PhaseAwaitingVendorAdmin, ActorVendorAdmin
+	case FindingConfigFault:
+		// DEGRADED, the phase the ingress block and the failed identity it
+		// took over already carried: the integration is up and something
+		// a person must change is in the way. Not unconfigured, whose label
+		// is Failed and which means the credential itself is missing or
+		// refused. And the company ADMIN's — the field is in this
+		// deployment's configuration, so nothing at the third-party app
+		// changes it and the vendor-admin backoff would only ask again.
+		return PhaseDegraded, ActorAdmin
 	case FindingIngressBlocked:
 		return PhaseDegraded, ActorVendorAdmin
 	case FindingIngressPending:
@@ -320,6 +405,11 @@ func (f FindingKind) sentence(subject string) string {
 		// which vendor it is about, and a bare "an administrator" reads as
 		// the company's own admin, who may hold no account there at all.
 		return "the third-party app's admin must approve this integration" + about
+	case FindingConfigFault:
+		// THIS deployment's, said so, for the reason the approval sentence
+		// names its admin: without it a reader cannot tell whose
+		// configuration is meant, and the vendor's is the wrong guess.
+		return "this deployment's own configuration needs a change" + about
 	case FindingIngressBlocked:
 		return "events cannot be delivered to this engine" + about
 	case FindingIngressPending:
@@ -338,6 +428,11 @@ func (f FindingKind) sentence(subject string) string {
 		return "an agent holds more access than its role asks for" + about
 	case FindingRegistrationOrphaned:
 		return "this engine registered something that it no longer manages" + about
+	case FindingCoveragePartial:
+		// It had no sentence of its own, so a coverage note with no detail
+		// came out as the unknown-kind fallback — its wire value in prose,
+		// read by a person, about a kind this build defines.
+		return "this integration works over less than it could reach" + about
 	default:
 		return "this integration reported " + string(f) + about
 	}

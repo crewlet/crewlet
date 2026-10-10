@@ -124,12 +124,25 @@ func (p *atlassianPass) Run(ctx context.Context, in setup.PassInput) ([]integrat
 		return nil, fmt.Errorf("engine: atlassian pass: %w", err)
 	}
 	findings := res.Findings()
-	if note := p.recordSite(ctx, company, res.Site, provision.CanMint(in.Sink)); note != "" {
-		findings = append(findings, integration.Finding{
-			Kind: integration.FindingGrantShort, Detail: note,
-		})
+	if f := siteNotRecorded(p.recordSite(ctx, company, res.Site, provision.CanMint(in.Sink))); f != nil {
+		findings = append(findings, *f)
 	}
 	return findings, nil
+}
+
+// siteNotRecorded is the finding for a discovered site [atlassianPass.recordSite]
+// could not write down, or nil when it said nothing.
+//
+// A CONFIG FAULT: what failed is writing the site into this company's own
+// document, and the fix is that document — set the cloud ids the note names,
+// or give this node a config surface. It was a short grant, which sent an
+// Atlassian admin looking for access nobody at Atlassian is withholding, on
+// the vendor-admin backoff.
+func siteNotRecorded(note string) *integration.Finding {
+	if note == "" {
+		return nil
+	}
+	return &integration.Finding{Kind: integration.FindingConfigFault, Detail: note}
 }
 
 // recordSite writes the site this pass discovered into the two product
@@ -482,9 +495,15 @@ func (p *datadogPass) Run(ctx context.Context, in setup.PassInput) ([]integratio
 	// FINDING rather than a fault: it is a fact about what this company
 	// has written down, and a pass that could not build a client has
 	// observed nothing rather than failed to look.
+	//
+	// A CONFIG FAULT, named by its field: a region is this deployment's
+	// configuration and not a credential, and as a missing credential it
+	// read Failed and offered the API and application keys — which are
+	// set — as the fields that clear it.
 	if !datadog.KnownSite(cfg.Provisioning.Site) {
 		return []integration.Finding{{
-			Kind: integration.FindingCredentialMissing,
+			Kind:    integration.FindingConfigFault,
+			Subject: "integrations.datadog.provisioning.site",
 			Detail: "integrations.datadog.provisioning.site is not a region " +
 				"Datadog serves, so no call can be built from it",
 		}}, nil

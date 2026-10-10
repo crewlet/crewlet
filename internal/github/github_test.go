@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/integration/integrationtest"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
@@ -1341,6 +1342,10 @@ func TestASeatThatNamesNoCredentialIsNotAFinding(t *testing.T) {
 // A slot the operator wrote and nothing came out of is a variable somebody
 // has to set: this seat's tools authenticate as nobody until they do, and
 // GitHub says so only at the call site.
+//
+// AND THAT SOMEBODY IS THE COMPANY'S ADMIN. GitHub was never shown anything,
+// so nobody there can fix it; it was identity_failed, owed by a GitHub
+// organization owner and asked about again from fifteen seconds on.
 func TestASeatWhoseNamedCredentialResolvesToNothingIsAFinding(t *testing.T) {
 	t.Parallel()
 	client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
@@ -1366,8 +1371,12 @@ func TestASeatWhoseNamedCredentialResolvesToNothingIsAFinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	findings := res.Findings()
-	if len(findings) != 1 || findings[0].Kind != integration.FindingIdentityFailed {
+	if len(findings) != 1 || findings[0].Subject != "sre-lead" {
 		t.Fatalf("findings = %+v, want the named-and-empty credential reported", findings)
+	}
+	integrationtest.AssertConfigFault(t, findings[0])
+	if len(res.Seats) != 1 || res.Seats[0].Outcome != github.IdentityUnset || res.Seats[0].Refused() {
+		t.Errorf("seats = %+v, want the seat unset rather than refused at GitHub", res.Seats)
 	}
 	// NAMING THE FIELD, which is the whole of what an operator does about
 	// it — and never the value, because one way to reach this line is a
@@ -1864,8 +1873,8 @@ func TestAPassWithNoOrgTokenStillReportsAMissingPublicBase(t *testing.T) {
 		t.Fatalf("a pass with no credential failed: %v", err)
 	}
 	findings := res.Findings()
-	if len(findings) != 1 || findings[0].Kind != integration.FindingIngressBlocked {
-		t.Fatalf("findings = %+v, want one ingress block on the public base", findings)
+	if len(findings) != 1 {
+		t.Fatalf("findings = %+v, want one finding on the public base", findings)
 	}
 	// NAMING THE FIELD, because that is the whole of what an operator does
 	// about it.
@@ -1873,6 +1882,7 @@ func TestAPassWithNoOrgTokenStillReportsAMissingPublicBase(t *testing.T) {
 		t.Errorf("the finding's subject is %q, which is not the field to set",
 			findings[0].Subject)
 	}
+	integrationtest.AssertConfigFault(t, findings[0])
 }
 
 // AN ARCHIVED REPOSITORY IS NOT AN INGRESS BLOCK.
@@ -1916,24 +1926,24 @@ func TestARefusedWebhookIsStillAFinding(t *testing.T) {
 	}
 }
 
-// A RUN WITH NO ADDRESS TO DELIVER TO IS AN INGRESS BLOCK, said once.
+// A RUN WITH NO ADDRESS TO DELIVER TO IS A CONFIG FAULT, said once.
 //
 // Nothing at GitHub can reach a deployment whose public base is unset, and
 // the pass registers no hooks at all — which was silence, so Classify saw no
 // findings and reported the integration Ready. The comment justifying that
 // silence said the URL "is not on the integrations block today"; it is
 // integrations.public_base_url, and the reconcile loop feeds it into every
-// pass.
-func TestARunWithNoPublicBaseReportsIngressBlocked(t *testing.T) {
+// pass. And it is this deployment's field, so the company admin's: as an
+// ingress block it was a GitHub organization owner's, asked about again from
+// fifteen seconds on.
+func TestARunWithNoPublicBaseIsAConfigFault(t *testing.T) {
 	t.Parallel()
 	res := &github.Result{NoIngress: "integrations.public_base_url is unset"}
 	got := res.Findings()
 	if len(got) != 1 {
 		t.Fatalf("got %d finding(s), want exactly one: %+v", len(got), got)
 	}
-	if got[0].Kind != integration.FindingIngressBlocked {
-		t.Errorf("kind = %q, want %q", got[0].Kind, integration.FindingIngressBlocked)
-	}
+	integrationtest.AssertConfigFault(t, got[0])
 	if got[0].Subject != "integrations.public_base_url" {
 		t.Errorf("subject = %q; the finding must name the field to set", got[0].Subject)
 	}

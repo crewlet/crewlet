@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/integration/integrationtest"
 )
 
 // A SURFACE THAT COULD NOT REGISTER WHAT IT WAS ASKED FOR DOES NOT REPORT
@@ -47,10 +48,11 @@ func TestAPassWithNoCredentialToRegisterWithReportsIt(t *testing.T) {
 			continue
 		}
 		found = true
-		if f.Kind != integration.FindingIngressBlocked {
-			t.Errorf("reported as %s, want ingress_blocked: the company asked "+
-				"for a hook and there is nothing to register one with", f.Kind)
-		}
+		// The company asked for a hook and there is nothing to register one
+		// with — and both ways out are its own document, so the company
+		// admin's, asked about hourly, rather than a GitHub admin's ingress
+		// block asked about from fifteen seconds on.
+		integrationtest.AssertConfigFault(t, f)
 		// THE ORGANIZATION IT ASKED ABOUT, so an operator knows which
 		// request went unanswered rather than only that one did.
 		if !strings.Contains(f.Detail, "crewbed") {
@@ -297,8 +299,9 @@ func TestTheRecommendedCoverageReportsNothingOutstanding(t *testing.T) {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	for _, f := range res.Findings() {
-		if f.Kind == integration.FindingIngressBlocked {
-			t.Errorf("the recommended arrangement reports %s:\n%s", f.Kind, f.Detail)
+		if f.Subject == "integrations.github.token" {
+			t.Errorf("the recommended arrangement asks for the organization "+
+				"token (%s):\n%s", f.Kind, f.Detail)
 		}
 		if phase, _ := f.Kind.Verdict(); phase != integration.PhaseReady {
 			t.Errorf("a finding with phase %s holds the surface out of ready "+
@@ -445,7 +448,7 @@ func TestTheOldDefaultIsReportedAsCoverageNotAsABlock(t *testing.T) {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	for _, f := range res.Findings() {
-		if f.Kind == integration.FindingIngressBlocked {
+		if phase, _ := f.Kind.Verdict(); phase != integration.PhaseReady {
 			t.Errorf("a company whose agents are receiving events reports %s "+
 				"and is held out of ready:\n%s", f.Kind, f.Detail)
 		}
@@ -474,8 +477,9 @@ func TestTheOldDefaultIsReportedAsCoverageNotAsABlock(t *testing.T) {
 	}
 	var blocked bool
 	for _, f := range bare.Findings() {
-		if f.Kind == integration.FindingIngressBlocked {
+		if f.Subject == "integrations.github.token" {
 			blocked = true
+			integrationtest.AssertConfigFault(t, f)
 		}
 	}
 	if !blocked {

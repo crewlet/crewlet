@@ -77,13 +77,14 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 			// value minted here, and nobody has to copy anything.
 			Mintable: true,
 			Help:     "Signs every delivery. Without it the route refuses all of them.",
-			// INGRESS, NOT CREDENTIAL, which jira and confluence already
-			// declare for the same field. It said credential_missing, and
-			// this pass emits that kind nowhere for the webhook secret —
-			// every ingress state it reports is ingress_blocked — so the
-			// join was dangling and the screen offered this field for
+			// A CONFIG FAULT, NOT A CREDENTIAL, which jira and confluence
+			// declare for the same field: what an absent value produces on a
+			// node with no keyring to mint one is [Result.NoKeyring], and
+			// that is this deployment's to fix. It said credential_missing
+			// once, which this pass emits nowhere for the webhook secret, so
+			// the join was dangling and the screen offered this field for
 			// nothing that could ever ask for it.
-			Blocks: integration.FindingIngressBlocked,
+			Blocks: integration.FindingConfigFault,
 		},
 		{
 			Field: "url",
@@ -105,7 +106,11 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 			ConfigPath: "integrations.github.provisioning.org",
 			Required:   true,
 			Help:       "The organization whose repositories these agents work in.",
-			Blocks:     integration.FindingIngressBlocked,
+			// BLOCKS NOTHING, because no finding reports it absent: a pass
+			// with no organization takes the only installation each app
+			// has, and a hook that demands one is refused by the config
+			// validator before any pass runs. It claimed the ingress block,
+			// which is a refusal at GitHub and was never this field's.
 		},
 		{
 			Field:      "provisioning.org_webhook",
@@ -184,7 +189,9 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 			Help: "GitHub only lets a user token register an organization-wide " +
 				"hook, and it needs the admin:org_hook scope. No app can carry " +
 				"this, however it is installed.",
-			Blocks: integration.FindingIngressBlocked,
+			// [Result.NoRegistrar]: a hook the company asked for and no
+			// token to register it with, which is its own configuration.
+			Blocks: integration.FindingConfigFault,
 		},
 	}
 

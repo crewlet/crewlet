@@ -86,6 +86,7 @@ func TestTheBareAdminIsTheCompanys(t *testing.T) {
 		FindingCredentialExpiring:   ActorAdmin,
 		FindingUnknownTier:          ActorAdmin,
 		FindingCoveragePartial:      ActorAdmin,
+		FindingConfigFault:          ActorAdmin,
 		FindingApprovalRequired:     ActorVendorAdmin,
 		FindingIngressBlocked:       ActorVendorAdmin,
 		FindingIdentityFailed:       ActorVendorAdmin,

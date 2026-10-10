@@ -315,8 +315,16 @@ func (r *SeatAppResult) reconcileSeat(
 		// keeps refusing this write is a fault somebody has to look at —
 		// and until it lands, every pass re-reads the same installation
 		// and the seat mints no token.
+		//
+		// THE COMPANY ADMIN'S CONFIG FAULT, not the GitHub admin's failed
+		// identity it was: the write that failed is to this company's own
+		// document — a node with no config surface wired, a revision the
+		// store refused — and the person who can look at why is whoever
+		// runs this deployment. Asked again on the hourly cadence, and at
+		// once on any applied revision, which is also what a concurrent
+		// edit that beat this write produces.
 		r.Findings = append(r.Findings, integration.Finding{
-			Kind:    integration.FindingIdentityFailed,
+			Kind:    integration.FindingConfigFault,
 			Subject: seat.Handle,
 			Detail:  notRecorded.detail(seat.Handle),
 		})

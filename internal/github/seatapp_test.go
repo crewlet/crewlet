@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/integration/integrationtest"
 )
 
 func kinds(findings []integration.Finding) []string {
@@ -294,11 +295,11 @@ func TestAnInstallationThatCannotBeRecordedSaysSo(t *testing.T) {
 		t.Fatalf("findings = %+v, want exactly one", res.Findings)
 	}
 	got := res.Findings[0]
-	if got.Kind != integration.FindingIdentityFailed {
-		t.Errorf("kind = %q, want %q — the click was made, so this is not "+
-			"something an operator does at GitHub",
-			got.Kind, integration.FindingIdentityFailed)
-	}
+	// THE COMPANY ADMIN'S, asked about hourly: the click was made, so this
+	// is not something anybody does at GitHub — what failed is this
+	// engine's write into its own company document, and it was filed on a
+	// GitHub organization owner as a failed identity.
+	integrationtest.AssertConfigFault(t, got)
 	if strings.Contains(got.Detail, "nothing has installed it") {
 		t.Errorf("the finding claims nobody installed the app: %q", got.Detail)
 	}
