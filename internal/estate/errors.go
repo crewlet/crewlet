@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // ErrOutcomeUnknown is a write that was sent and never answered, of a kind a
@@ -117,6 +118,8 @@ var typedKinds = []typedKind{
 
 	{"pages.ErrFutureVersion", reflect.TypeFor[*pages.ErrFutureVersion]()},
 	{"pages.ErrUnknownVersion", reflect.TypeFor[pages.ErrUnknownVersion]()},
+
+	{"usage.ErrFutureVersion", reflect.TypeFor[*usage.ErrFutureVersion]()},
 
 	{"statelog.ErrSkipped", reflect.TypeFor[*statelog.ErrSkipped]()},
 	{"statelog.EvictionRefusal", reflect.TypeFor[*statelog.EvictionRefusal]()},

@@ -151,7 +151,7 @@ func wireAPI(
 	// live member.
 	sources := queries.Sources{
 		Events:  e.History(),
-		Usage:   e.UsageEstate(),
+		Usage:   e.UsageReads(),
 		Company: company,
 		// AND WHAT A `${VAR}` IN ITS CHART RESOLVES TO, through the node's
 		// own chain as cmd/crewlet wires it: a node here is HANDED its

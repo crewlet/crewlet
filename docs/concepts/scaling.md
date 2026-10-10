@@ -101,10 +101,14 @@ and [ADR-0025](https://github.com/crewlet/crewlet/blob/main/adr/0025-a-node-with
 The replicated estate is one estate, and every data node holds the whole of it.
 Every node, with `data` or without, still reaches it through one **router**,
 and a seat's tools behave the same on either kind of node. So do the operator's surfaces: the API's tracker and
-knowledge-base routes, a project's file rows and the operator's own MCP go
-through the same router, so a data node whose copy of the tracker or the
-knowledge base is out of service answers its operator from a peer's copy,
-exactly as it answers its seats.
+knowledge-base routes, its spend and activity reads, a project's file rows and
+the operator's own MCP go through the same router, so a data node whose copy of
+the tracker, the knowledge base or the usage log is out of service answers its
+operator from a peer's copy, exactly as it answers its seats. A peer's answer to
+a long window of usage arrives in pages of about 2 MiB, each cut only between
+two records, so a screen over ninety days is never one message; a data node
+answering from its own copy reads the window whole, in one transaction, since
+no message carries that answer.
 
 ```mermaid
 flowchart TD

@@ -57,44 +57,8 @@ func (q SpendQuery) check() error {
 // the fleet. The labels are the company's own (`2026-09-23`), which sort as
 // strings — so the range is a seek on the leading column of every key.
 func Spend(ctx context.Context, estate Estate, q SpendQuery) ([]SpendRow, error) {
-	if err := q.check(); err != nil {
-		return nil, err
-	}
-	var out []SpendRow
-	err := estate.Read(ctx, func(tx *sql.Tx) error {
-		// The seat filter is an `= ?` OR an empty argument, rather than
-		// two query texts: one statement, and a narrowed read seeks the
-		// same day range and drops the other seats' rows on the way.
-		rows, err := tx.QueryContext(ctx, `
-			SELECT t.day, t.node, t.agent_id,
-			       COALESCE(h.handle, ''), COALESCE(h.role, ''),
-			       t.phase, t.worker, t.model, t.provider_key,
-			       t.input, t.output, t.cache_read, t.cache_write, t.total, t.calls
-			  FROM usage_tokens t
-			  LEFT JOIN usage_turns h
-			    ON h.day = t.day AND h.node = t.node AND h.agent_id = t.agent_id
-			 WHERE t.day >= ? AND t.day <= ? AND (? = '' OR t.agent_id = ?)
-			 ORDER BY t.day, t.node, t.agent_id, t.phase, t.worker, t.model, t.provider_key`,
-			q.From, q.To, q.AgentID, q.AgentID)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			var r SpendRow
-			if err := rows.Scan(&r.Day, &r.Node, &r.AgentID, &r.Handle, &r.Role,
-				&r.Phase, &r.Worker, &r.Model, &r.ProviderKey, &r.Input, &r.Output,
-				&r.CacheRead, &r.CacheWrite, &r.Total, &r.Calls); err != nil {
-				return err
-			}
-			out = append(out, r)
-		}
-		return rows.Err()
-	})
-	if err != nil {
-		return nil, fmt.Errorf("usage: read the spend for %s..%s: %w", q.From, q.To, err)
-	}
-	return out, nil
+	page, err := SpendPage(ctx, estate, q, nil, 0)
+	return page.Rows, err
 }
 
 // TurnsRow is one node's head row for one seat on one day: its name as that
@@ -113,35 +77,8 @@ type TurnsRow struct {
 // model call (a turn that failed before its first round) ended a turn, and a
 // per-seat table that dropped it would say the seat did nothing.
 func SeatTurns(ctx context.Context, estate Estate, q SpendQuery) ([]TurnsRow, error) {
-	if err := q.check(); err != nil {
-		return nil, err
-	}
-	var out []TurnsRow
-	err := estate.Read(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `
-			SELECT day, node, agent_id, handle, role, turns, failed
-			  FROM usage_turns
-			 WHERE day >= ? AND day <= ? AND (? = '' OR agent_id = ?)
-			 ORDER BY day, node, agent_id`,
-			q.From, q.To, q.AgentID, q.AgentID)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			var r TurnsRow
-			if err := rows.Scan(&r.Day, &r.Node, &r.AgentID, &r.Handle, &r.Role,
-				&r.Turns, &r.Failed); err != nil {
-				return err
-			}
-			out = append(out, r)
-		}
-		return rows.Err()
-	})
-	if err != nil {
-		return nil, fmt.Errorf("usage: read the turns for %s..%s: %w", q.From, q.To, err)
-	}
-	return out, nil
+	page, err := SeatTurnsPage(ctx, estate, q, nil, 0)
+	return page.Rows, err
 }
 
 // PersonRow is one spend cell of one node's day for one PERSON: the human seat
@@ -163,37 +100,8 @@ type PersonQuery struct {
 // q.From..q.To, inclusive, in (day, node, person, cell) order — the half of a
 // named spend window no seat's row carries, since a person has no agent id.
 func PersonSpend(ctx context.Context, estate Estate, q PersonQuery) ([]PersonRow, error) {
-	if err := (SpendQuery{From: q.From, To: q.To}).check(); err != nil {
-		return nil, err
-	}
-	var out []PersonRow
-	err := estate.Read(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `
-			SELECT day, node, person, role, phase, worker, model, provider_key,
-			       input, output, cache_read, cache_write, total, calls
-			  FROM usage_person_tokens
-			 WHERE day >= ? AND day <= ? AND (? = '' OR person = ?)
-			 ORDER BY day, node, person, phase, worker, model, provider_key`,
-			q.From, q.To, q.Person, q.Person)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			var r PersonRow
-			if err := rows.Scan(&r.Day, &r.Node, &r.Person, &r.Role, &r.Phase, &r.Worker,
-				&r.Model, &r.ProviderKey, &r.Input, &r.Output, &r.CacheRead,
-				&r.CacheWrite, &r.Total, &r.Calls); err != nil {
-				return err
-			}
-			out = append(out, r)
-		}
-		return rows.Err()
-	})
-	if err != nil {
-		return nil, fmt.Errorf("usage: read the people's spend for %s..%s: %w", q.From, q.To, err)
-	}
-	return out, nil
+	page, err := PersonSpendPage(ctx, estate, q, nil, 0)
+	return page.Rows, err
 }
 
 // SeatDay is one node's whole head row for one seat on one day, with the
@@ -222,79 +130,35 @@ type SeatDay struct {
 // SeatDays reads every node's head row for the company days q.From..q.To,
 // inclusive, in (day, node, seat) order, each with its day's token total.
 //
-// TWO STATEMENTS IN ONE TRANSACTION rather than a join: the head row is the
-// record's guard and every seat record writes one, so a token total without a
-// head row cannot exist, and summing the spend cells per (day, node, seat) in
-// its own GROUP BY keeps the head read a plain seek on `usage_turns`' key. Both
-// read the same snapshot, so the pair is one state of the estate.
+// TWO STATEMENTS IN ONE TRANSACTION rather than a join, per page
+// ([SeatDaysPage]): the head row is the record's guard and every seat record
+// writes one, so a token total without a head row cannot exist, and summing
+// the spend cells per (day, node, seat) in its own GROUP BY keeps the head read
+// a plain seek on `usage_turns`' key. Both read the same snapshot, so the pair
+// is one state of the estate.
 func SeatDays(ctx context.Context, estate Estate, q SpendQuery) ([]SeatDay, error) {
-	if err := q.check(); err != nil {
-		return nil, err
+	page, err := SeatDaysPage(ctx, estate, q, nil, 0)
+	return page.Rows, err
+}
+
+// scanSeatDay reads one head row of company day day, as [SeatDaysPage]'s
+// statement selects it.
+func scanSeatDay(rows *sql.Rows, day string) (SeatDay, error) {
+	r := SeatDay{Day: day}
+	var hist string
+	var lastEnded int64
+	if err := rows.Scan(&r.Node, &r.AgentID, &r.Handle, &r.Role,
+		&r.Turns, &r.Failed, &r.Reviewed, &r.FirstPass, &r.SentBack,
+		&hist, &lastEnded); err != nil {
+		return r, err
 	}
-	var out []SeatDay
-	err := estate.Read(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `
-			SELECT day, node, agent_id, handle, role, turns, failed, reviewed,
-			       first_pass, sent_back, duration_hist, last_ended_at
-			  FROM usage_turns
-			 WHERE day >= ? AND day <= ? AND (? = '' OR agent_id = ?)
-			 ORDER BY day, node, agent_id`,
-			q.From, q.To, q.AgentID, q.AgentID)
-		if err != nil {
-			return err
-		}
-		at := map[[3]string]int{}
-		err = func() error {
-			defer func() { _ = rows.Close() }()
-			for rows.Next() {
-				var r SeatDay
-				var hist string
-				var lastEnded int64
-				if scanErr := rows.Scan(&r.Day, &r.Node, &r.AgentID, &r.Handle, &r.Role,
-					&r.Turns, &r.Failed, &r.Reviewed, &r.FirstPass, &r.SentBack,
-					&hist, &lastEnded); scanErr != nil {
-					return scanErr
-				}
-				if histErr := r.Durations.UnmarshalJSON([]byte(hist)); histErr != nil {
-					return fmt.Errorf("the histogram of %s/%s/%s: %w", r.Day, r.Node, r.AgentID, histErr)
-				}
-				if lastEnded != 0 {
-					r.LastEndedAt = store.DecodeTime(lastEnded)
-				}
-				at[[3]string{r.Day, r.Node, r.AgentID}] = len(out)
-				out = append(out, r)
-			}
-			return rows.Err()
-		}()
-		if err != nil {
-			return err
-		}
-		sums, err := tx.QueryContext(ctx, `
-			SELECT day, node, agent_id, SUM(total)
-			  FROM usage_tokens
-			 WHERE day >= ? AND day <= ? AND (? = '' OR agent_id = ?)
-			 GROUP BY day, node, agent_id`,
-			q.From, q.To, q.AgentID, q.AgentID)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = sums.Close() }()
-		for sums.Next() {
-			var day, node, agent string
-			var total int64
-			if err := sums.Scan(&day, &node, &agent, &total); err != nil {
-				return err
-			}
-			if i, ok := at[[3]string{day, node, agent}]; ok {
-				out[i].Tokens = total
-			}
-		}
-		return sums.Err()
-	})
-	if err != nil {
-		return nil, fmt.Errorf("usage: read the seat days for %s..%s: %w", q.From, q.To, err)
+	if err := r.Durations.UnmarshalJSON([]byte(hist)); err != nil {
+		return r, fmt.Errorf("the histogram of %s/%s/%s: %w", r.Day, r.Node, r.AgentID, err)
 	}
-	return out, nil
+	if lastEnded != 0 {
+		r.LastEndedAt = store.DecodeTime(lastEnded)
+	}
+	return r, nil
 }
 
 // ScheduleRun is one schedule fire some node dispatched, as the company feed

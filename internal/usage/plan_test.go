@@ -1,0 +1,101 @@
+package usage_test
+
+import (
+	"database/sql"
+	"maps"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/crewlet/crewlet/internal/usage"
+)
+
+// EVERY PAGED STATEMENT SEEKS ITS KEY AND STREAMS — the plan gate behind "a
+// page pays for its own rows".
+//
+// A paged read stops reading where its page ends ([usage.Fill]), and that saves
+// something only if the statement it stops had not already read further: a
+// statement whose plan SORTS hands back its first row after reading every row
+// it matches, and one that seeks a range wider than its key reads whatever the
+// keyset filters out. Both were the case — one statement over the whole window,
+// a seek on its days, a join and a sorter — so every page of a window paid for
+// the window from its resumption to the end: walked in nineteen pages, a
+// ninety-day spend window cost 2.5 whole reads, where it costs 1.1 now
+// (BenchmarkAUsageWindowInPages, recorded in the package doc).
+//
+// So every statement a page issues, in the shape a page that resumes INSIDE
+// its key issues it, is explained over a seeded window, and each must seek its
+// leading key — a company day with `day = ?`, a page id from the day it resumes
+// on, a day's index head for the walk's next day — with no sorter and no
+// temporary tree anywhere in its plan: rows come back in the read's order as
+// the index holds them, so a statement stopped at a page's end has read that
+// page's rows and at most the one key's it resumed in.
+//
+// A wall-clock ratio of a paged walk to the whole read cannot hold this in a
+// test, which is why the gate reads the plan: at a window a test can seed
+// (twelve days, two nodes, sixteen seats) the old statements walked at 1.3 to
+// 1.7 times the whole read under the race detector — whose per-row cost in the
+// driver hides the engine's — exactly as the new ones did, and at about 3
+// times without it. The re-reading shows at a company's size, and the plan
+// that causes it shows at any size.
+func TestEveryPagedStatementSeeksItsKeyAndStreams(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	shape := company{days: 12, nodes: 2, seats: 16, people: 4, cells: 3, pages: 4}
+	shape.seed(t, db)
+	day := shape.span().From
+	statements := usage.PagedStatements(day, "node-01", "seat-0007", "person-02", "page-002")
+	ctx := t.Context()
+	err := db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		for _, name := range slices.Sorted(maps.Keys(statements)) {
+			s := statements[name]
+			plan := explain(t, tx, s.Text, s.Args)
+			seek := "(day=?)"
+			switch {
+			case strings.HasPrefix(name, "the next day of"):
+				seek = "AND day<=?)"
+			case strings.HasPrefix(name, "a page's reads"):
+				seek = "USING INDEX usage_reads_page_idx (page_id=? AND day>=? AND day<=?)"
+			}
+			if !strings.Contains(plan[0], "SEARCH") || !strings.Contains(plan[0], seek) {
+				t.Errorf("%s does not seek its key %s:\n%s", name, seek, strings.Join(plan, "\n"))
+			}
+			for _, step := range plan {
+				if strings.Contains(step, "SORTER") || strings.Contains(step, "TEMP B-TREE") {
+					t.Errorf("%s sorts before it hands back a row — a page that stops it "+
+						"has read past its own rows:\n%s", name, strings.Join(plan, "\n"))
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// explain is statement's plan, a step a line.
+func explain(t *testing.T, tx *sql.Tx, statement string, args []any) []string {
+	t.Helper()
+	rows, err := tx.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+statement, args...)
+	if err != nil {
+		t.Fatalf("EXPLAIN QUERY PLAN:\n%s\n%v", statement, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var plan []string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(plan) == 0 {
+		t.Fatalf("no plan for:\n%s", statement)
+	}
+	return plan
+}

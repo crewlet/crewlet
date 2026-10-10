@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"math"
 	"reflect"
 	"slices"
 	"strings"
@@ -21,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // The streams of the tracker's and the knowledge base's logs, as a floor names
@@ -65,6 +68,16 @@ type fakeNode struct {
 
 	// notAdmitting is a copy that serves requests and admits no seat.
 	notAdmitting bool
+
+	// spend is the usage spend this node pages out, 64 rows a page at any
+	// budget and every row at none, where it is set; spendAfters is every
+	// group a page of it was asked after, and spendBudgets the budget each
+	// page was asked at; and stuckPages answers every page ending where it
+	// began.
+	spend        []usage.SpendRow
+	spendAfters  []usage.Group
+	spendBudgets []int
+	stuckPages   bool
 
 	// unvouched answers every create `unknown`, unvouched by its ledger,
 	// and refusal answers every create with itself.
@@ -183,10 +196,74 @@ func (f *fakeNode) Answer(_ context.Context, q knowledge.Query) (knowledge.Resul
 
 func (f *fakeNode) Building(context.Context) bool { return false }
 
+// fakeUsage is a node's usage half: every read answers one page of one row
+// naming the node, so a case can tell which copy answered — except the spend
+// of a node given rows of it to page ([fakeNode.spend]).
+type fakeUsage struct{ *fakeNode }
+
+func (f fakeUsage) SpendPage(_ context.Context, q usage.SpendQuery, after usage.Group,
+	budget int) (usage.Page[usage.SpendRow], error) {
+
+	f.note("usage.spend")
+	f.mu.Lock()
+	f.spendAfters = append(f.spendAfters, after)
+	f.spendBudgets = append(f.spendBudgets, budget)
+	rows, stuck := f.spend, f.stuckPages
+	f.mu.Unlock()
+	switch {
+	case stuck:
+		return usage.Page[usage.SpendRow]{Rows: []usage.SpendRow{{Day: q.From, Node: f.name}},
+			Next: after}, nil
+	case rows == nil:
+		return onePage(usage.SpendRow{Day: q.From, Node: f.name}), nil
+	}
+	// SIXTY-FOUR ROWS A PAGE whatever the budget, every row its own group:
+	// the asker must follow the pages it is handed, not compute them. No
+	// budget is the whole read, as usage.Fill has it.
+	var page usage.Page[usage.SpendRow]
+	for _, r := range rows {
+		if !after.Before(r.Group()) {
+			continue
+		}
+		if budget > 0 && len(page.Rows) == 64 {
+			page.Next = page.Rows[63].Group()
+			return page, nil
+		}
+		page.Rows = append(page.Rows, r)
+	}
+	page.Done = true
+	return page, nil
+}
+
+// onePage is a paged read's only page.
+func onePage[R any](rows ...R) usage.Page[R] { return usage.Page[R]{Rows: rows, Done: true} }
+
+func (f fakeUsage) SeatTurnsPage(context.Context, usage.SpendQuery, usage.Group, int) (usage.Page[usage.TurnsRow], error) {
+	return onePage(usage.TurnsRow{Node: f.name}), nil
+}
+
+func (f fakeUsage) PersonSpendPage(context.Context, usage.PersonQuery, usage.Group, int) (usage.Page[usage.PersonRow], error) {
+	return onePage(usage.PersonRow{Node: f.name}), nil
+}
+
+func (f fakeUsage) SeatDaysPage(context.Context, usage.SpendQuery, usage.Group, int) (usage.Page[usage.SeatDay], error) {
+	return onePage(usage.SeatDay{Node: f.name}), nil
+}
+
+func (f fakeUsage) ScheduleRuns(context.Context, usage.ScheduleRunsQuery) ([]usage.ScheduleRun, bool, error) {
+	return []usage.ScheduleRun{{Node: f.name}}, true, nil
+}
+
+func (f fakeUsage) PageReadsPage(context.Context, usage.PageReadsQuery, usage.Group, int) (usage.Page[usage.PageRead], error) {
+	return onePage(usage.PageRead{Node: f.name}), nil
+}
+
+func (f fakeUsage) ReadsElided(context.Context, string, string) (int64, error) { return 3, nil }
+
 // backend is this node as a [Backend] over its copy of the estate.
 func (f *fakeNode) backend() Backend {
 	return Backend{
-		Tracker: f, PageWriter: f, Knowledge: f,
+		Tracker: f, PageWriter: f, Knowledge: f, Usage: fakeUsage{f},
 		Writer: func(a Actor) TrackerWriter {
 			f.mu.Lock()
 			f.actors = append(f.actors, a)
@@ -1410,6 +1487,241 @@ func TestAFaultInOneDomainRoutesOnlyThatDomainsOperations(t *testing.T) {
 		!strings.Contains(unserved.Detail, "data-self: its copy of "+trackerDomain) {
 		t.Fatalf("a single node whose tracker copy is wrong answered %v — want an "+
 			"unserved estate that names this node's own copy", err)
+	}
+}
+
+// A WRONG USAGE COPY ANSWERS NO SPEND SCREEN — ADR-0031. The usage domain's
+// reads cross like every other domain's: a node whose usage copy is out of
+// service answers its operator's spend and activity screens from a peer's
+// copy, while its tracker reads are still its own; and every one of the
+// domain's reads, its two-valued page of schedule runs included, arrives
+// whole. Read straight off the node's own estate, they were answered from the
+// very copy the node had stopped serving.
+func TestAWrongUsageCopyAnswersNoSpendScreen(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a", "data-b")
+	local := &fakeNode{name: "data-self", units: chartOf("self"),
+		outOfServiceOn: map[string]bool{usageDomain: true}}
+	r := f.router(t, "data-self", local)
+
+	rows, err := r.Usage().Spend(t.Context(), usage.SpendQuery{From: "2026-10-01", To: "2026-10-01"})
+	if err != nil || len(rows) != 1 || rows[0].Node == "data-self" || rows[0].Day != "2026-10-01" {
+		t.Fatalf("spend on a node whose usage copy is wrong = (%+v, %v), want a peer's rows", rows, err)
+	}
+	if local.askedFor("usage.spend") {
+		t.Fatal("a usage copy out of service answered a spend read")
+	}
+	if _, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil ||
+		!local.askedFor("tasks") {
+		t.Fatalf("a wrong usage copy moved the tracker's reads off this node (%v)", err)
+	}
+
+	u := r.Usage()
+	ctx := t.Context()
+	runs, more, err := u.ScheduleRuns(ctx, usage.ScheduleRunsQuery{Limit: 1})
+	if err != nil || len(runs) != 1 || !more {
+		t.Fatalf("schedule runs = (%+v, %v, %v), want a page and more", runs, more, err)
+	}
+	elided, err := u.ReadsElided(ctx, "2026-10-01", "2026-10-02")
+	if err != nil || elided != 3 {
+		t.Fatalf("reads elided = (%d, %v), want 3", elided, err)
+	}
+	for name, read := range map[string]func() (int, error){
+		"seat turns": func() (int, error) {
+			out, err := u.SeatTurns(ctx, usage.SpendQuery{})
+			return len(out), err
+		},
+		"person spend": func() (int, error) {
+			out, err := u.PersonSpend(ctx, usage.PersonQuery{})
+			return len(out), err
+		},
+		"seat days": func() (int, error) {
+			out, err := u.SeatDays(ctx, usage.SpendQuery{})
+			return len(out), err
+		},
+		"page reads": func() (int, error) {
+			out, err := u.PageReads(ctx, usage.PageReadsQuery{})
+			return len(out), err
+		},
+	} {
+		if n, err := read(); err != nil || n != 1 {
+			t.Errorf("%s = (%d rows, %v), want one", name, n, err)
+		}
+	}
+}
+
+// A ROUTED USAGE READ ARRIVES WHOLE, IN PAGES. A window of spend is more than
+// one message carries, so a peer answers it a page at a time and the asker
+// asks again after the group each page ended on — here a thousand rows paged
+// sixty-four at a time by a peer that chose that size itself: every row
+// arrives, in order, each page asked after the one before it, and the node
+// whose usage copy is out of service is never asked.
+func TestARoutedUsageReadArrivesWholeInPages(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a", "data-b")
+	var spend []usage.SpendRow
+	for i := range 1000 {
+		spend = append(spend, usage.SpendRow{Day: "2026-10-01", Node: "data-a",
+			AgentID: fmt.Sprintf("seat-%04d", i)})
+	}
+	for _, name := range []string{"data-a", "data-b"} {
+		f.nodes[name].set(func(n *fakeNode) { n.spend = spend })
+	}
+	local := &fakeNode{name: "data-self", units: chartOf("self"),
+		outOfServiceOn: map[string]bool{usageDomain: true}}
+	r := f.router(t, "data-self", local)
+
+	rows, err := r.Usage().Spend(t.Context(), usage.SpendQuery{From: "2026-10-01", To: "2026-10-01"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.EqualFunc(rows, spend, func(a, b usage.SpendRow) bool { return a.AgentID == b.AgentID }) {
+		t.Fatalf("the read arrived as %d rows, want the %d the peer holds, in order", len(rows), len(spend))
+	}
+	var afters []usage.Group
+	for _, name := range []string{"data-a", "data-b"} {
+		n := f.nodes[name]
+		n.mu.Lock()
+		afters = append(afters, n.spendAfters...)
+		n.mu.Unlock()
+	}
+	if len(afters) < 16 {
+		t.Fatalf("the read took %d page(s) of a peer paging sixty-four rows at a time", len(afters))
+	}
+	slices.SortFunc(afters, func(a, b usage.Group) int {
+		switch {
+		case a.Before(b):
+			return -1
+		case b.Before(a):
+			return 1
+		}
+		return 0
+	})
+	for i, after := range afters {
+		if want := i * 64; (i == 0) != (len(after) == 0) || i > 0 && after[2] != spend[want-1].AgentID {
+			t.Fatalf("page %d was asked after %v, want after the row the page before it ended on", i, after)
+		}
+	}
+	if local.askedFor("usage.spend") {
+		t.Fatal("a usage copy out of service answered a page")
+	}
+}
+
+// A USAGE READ THIS NODE ANSWERS ITSELF IS ONE PAGE, and one a peer answers is
+// paged at the wire's budget. Nothing carries an in-process answer, so paging
+// it bought nothing and cost a transaction, a snapshot and an encoding of
+// every row a page; a peer's answer crosses one message, so it is paged. Here
+// the same thousand rows, read on a data node whose usage copy serves and
+// then on one whose copy is out of service: the first asks its own copy once,
+// with no budget, and never a peer; the second asks the peer page after page,
+// each at the wire's budget, and never its own copy.
+func TestAUsageReadThisNodeAnswersIsOnePageAndAPeersIsPaged(t *testing.T) {
+	t.Parallel()
+	var spend []usage.SpendRow
+	for i := range 1000 {
+		spend = append(spend, usage.SpendRow{Day: "2026-10-01", Node: "data-a",
+			AgentID: fmt.Sprintf("seat-%04d", i)})
+	}
+	q := usage.SpendQuery{From: "2026-10-01", To: "2026-10-01"}
+
+	f := newFleet(t, "data-a")
+	f.nodes["data-a"].set(func(n *fakeNode) { n.spend = spend })
+	local := &fakeNode{name: "data-self", units: chartOf("self"), spend: spend}
+	rows, err := f.router(t, "data-self", local).Usage().Spend(t.Context(), q)
+	if err != nil || len(rows) != len(spend) {
+		t.Fatalf("this node's own read = (%d rows, %v), want all %d", len(rows), err, len(spend))
+	}
+	local.mu.Lock()
+	budgets := slices.Clone(local.spendBudgets)
+	local.mu.Unlock()
+	if !slices.Equal(budgets, []int{0}) {
+		t.Fatalf("this node answered itself at budgets %v, want one unbounded page", budgets)
+	}
+	if f.nodes["data-a"].askedFor("usage.spend") {
+		t.Fatal("a read this node's copy answers was asked of a peer")
+	}
+
+	wrong := &fakeNode{name: "data-wrong", units: chartOf("self"), spend: spend,
+		outOfServiceOn: map[string]bool{usageDomain: true}}
+	rows, err = f.router(t, "data-wrong", wrong).Usage().Spend(t.Context(), q)
+	if err != nil || len(rows) != len(spend) {
+		t.Fatalf("a peer's read = (%d rows, %v), want all %d", len(rows), err, len(spend))
+	}
+	peer := f.nodes["data-a"]
+	peer.mu.Lock()
+	budgets = slices.Clone(peer.spendBudgets)
+	peer.mu.Unlock()
+	if len(budgets) < 16 || slices.ContainsFunc(budgets, func(b int) bool { return b != usagePageBytes }) {
+		t.Fatalf("the peer answered at budgets %v, want every page at the wire's %d", budgets, usagePageBytes)
+	}
+	if wrong.askedFor("usage.spend") {
+		t.Fatal("a usage copy out of service answered a page")
+	}
+}
+
+// A USAGE PAGE THAT DOES NOT ADVANCE IS REFUSED rather than asked again: a node
+// paging by another rule — or a fault that hands back where it began — would
+// otherwise keep a screen's read looping for ever.
+func TestAUsagePageThatDoesNotAdvanceIsRefused(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a")
+	f.nodes["data-a"].set(func(n *fakeNode) { n.stuckPages = true })
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	_, err := f.client.Usage().Spend(ctx, usage.SpendQuery{From: "2026-10-01", To: "2026-10-01"})
+	if err == nil || ctx.Err() != nil || !strings.Contains(err.Error(), "pages by another rule") {
+		t.Fatalf("a page that ended where it began: %v (deadline: %v), want it refused naming the rule",
+			err, ctx.Err())
+	}
+}
+
+// A USAGE PAGE FITS ONE MESSAGE at its worst: a page of the skill readers'
+// rows cut at [usagePageBytes], every string at its longest and every query
+// the longest a search accepts spelled in the bytes JSON escapes to six, and
+// every group padded to [usage.ReadsPerSeatDay] rows — more than any group of
+// that read holds, since a group is one page's entries in one seat-day record
+// and the record carries at most that many. Wrapped as a reply it is under
+// the message the transport carries. A spend group is bounded the same way,
+// by the record that wrote it being one message.
+func TestAUsagePageFitsOneMessage(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 9, 23, 23, 59, 59, 999_999_999, time.UTC)
+	long := func(c string, n int) string { return strings.Repeat(c, n) }
+	row := func(seat int) usage.PageRead {
+		return usage.PageRead{PageID: long("p", 64), Day: "2026-09-23", Node: long("n", 64),
+			AgentID: fmt.Sprintf("%036d", seat), Handle: long("h", 64), Role: long("r", 128),
+			Backend: "confluence", Via: "skill_injected", Count: math.MaxInt64, LastAt: at,
+			LastTurnID: long("t", 36), LastWorkKey: long("w", 36),
+			LastQuery: long("<", knowledge.MaxQueryBytes)}
+	}
+	// EVERY GROUP FULL, so whichever one straddles the budget — the one a
+	// page may run past it by — is as large as a group of this read gets.
+	seq := func(yield func(usage.PageRead, error) bool) {
+		for seat := 0; ; seat++ {
+			for range usage.ReadsPerSeatDay {
+				if !yield(row(seat), nil) {
+					return
+				}
+			}
+		}
+	}
+	page, err := usage.Fill(usagePageBytes, usage.PageRead.Group, seq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := encodeResult(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := encodeReply(reply{Node: "data-a", Result: result})
+	var decoded reply
+	if err := json.Unmarshal(raw, &decoded); err != nil || decoded.Err != nil || len(decoded.Result) == 0 {
+		t.Fatalf("a page at the budget did not cross as a result: %+v (%v)", decoded.Err, err)
+	}
+	t.Logf("a usage page at its worst is %d bytes of a %d-byte message", len(raw), queue.MaxPayloadBytes)
+	if len(raw) >= queue.MaxPayloadBytes {
+		t.Fatalf("a usage page at its worst is %d bytes, past the %d a message carries",
+			len(raw), queue.MaxPayloadBytes)
 	}
 }
 

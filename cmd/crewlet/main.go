@@ -1665,9 +1665,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Events: e.History(),
 			// EVERY NODE'S company days, for every named spend window
 			// and its series — the replicated usage domain (ADR-0020),
-			// resolved per read so an adoption's reopened estate is the
-			// one answered from.
-			Usage: e.UsageEstate(),
+			// through the estate's router, so a node whose usage copy is
+			// out of service answers from a peer's (ADR-0031).
+			Usage: e.UsageReads(),
 			// Read through the ENGINE's epoch rather than a captured
 			// company: an apply replaces it, and a screen bound to the
 			// one this process booted on would describe a company that

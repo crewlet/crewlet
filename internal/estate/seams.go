@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // The asking half: the seams every node's tools are handed, each answered by a
@@ -542,4 +543,89 @@ func notSearched() knowledge.Result {
 func (k Knowledge) Building(ctx context.Context) bool {
 	building, err := call(ctx, k.r, opKnowledgeBuilding, nil, struct{}{})
 	return err == nil && building
+}
+
+// Usage is the usage domain's reads (ADR-0020), answered by a data node whose
+// usage copy is in service — this node's own where it is one (ADR-0031).
+type Usage struct{ r *Router }
+
+// Usage answers the usage domain.
+func (r *Router) Usage() Usage { return Usage{r: r} }
+
+// Spend answers every node's spend cells over a range of company days.
+func (u Usage) Spend(ctx context.Context, q usage.SpendQuery) ([]usage.SpendRow, error) {
+	return allPages(ctx, func(ctx context.Context, after usage.Group) (usage.Page[usage.SpendRow], error) {
+		return call(ctx, u.r, opUsageSpend, nil, usagePageArgs[usage.SpendQuery]{Query: q, After: after})
+	})
+}
+
+// SeatTurns answers every node's turn counts over a range of company days.
+func (u Usage) SeatTurns(ctx context.Context, q usage.SpendQuery) ([]usage.TurnsRow, error) {
+	return allPages(ctx, func(ctx context.Context, after usage.Group) (usage.Page[usage.TurnsRow], error) {
+		return call(ctx, u.r, opUsageSeatTurns, nil, usagePageArgs[usage.SpendQuery]{Query: q, After: after})
+	})
+}
+
+// PersonSpend answers every node's spend for people over a range of company
+// days.
+func (u Usage) PersonSpend(ctx context.Context, q usage.PersonQuery) ([]usage.PersonRow, error) {
+	return allPages(ctx, func(ctx context.Context, after usage.Group) (usage.Page[usage.PersonRow], error) {
+		return call(ctx, u.r, opUsagePersonSpend, nil, usagePageArgs[usage.PersonQuery]{Query: q, After: after})
+	})
+}
+
+// SeatDays answers every node's head rows over a range of company days.
+func (u Usage) SeatDays(ctx context.Context, q usage.SpendQuery) ([]usage.SeatDay, error) {
+	return allPages(ctx, func(ctx context.Context, after usage.Group) (usage.Page[usage.SeatDay], error) {
+		return call(ctx, u.r, opUsageSeatDays, nil, usagePageArgs[usage.SpendQuery]{Query: q, After: after})
+	})
+}
+
+// ScheduleRuns answers one page of every node's schedule fires, and whether
+// there are more.
+func (u Usage) ScheduleRuns(ctx context.Context, q usage.ScheduleRunsQuery) (
+	[]usage.ScheduleRun, bool, error) {
+	page, err := call(ctx, u.r, opUsageScheduleRuns, nil, q)
+	return page.Runs, page.More, err
+}
+
+// PageReads answers every node's reads of some pages over a range of company
+// days.
+func (u Usage) PageReads(ctx context.Context, q usage.PageReadsQuery) ([]usage.PageRead, error) {
+	return allPages(ctx, func(ctx context.Context, after usage.Group) (usage.Page[usage.PageRead], error) {
+		return call(ctx, u.r, opUsagePageReads, nil, usagePageArgs[usage.PageReadsQuery]{Query: q, After: after})
+	})
+}
+
+// allPages reads every page of one paged read, in order — each page its own
+// routed call, so a failover between pages resumes on another data node from
+// the same group, since every data node pages by the one rule ([usage.Fill]).
+// A page that does not end AFTER the one before it is refused: a node paging
+// another way would otherwise loop for ever.
+func allPages[R any](ctx context.Context,
+	page func(ctx context.Context, after usage.Group) (usage.Page[R], error)) ([]R, error) {
+
+	var out []R
+	var after usage.Group
+	for {
+		p, err := page(ctx, after)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p.Rows...)
+		if p.Done {
+			return out, nil
+		}
+		if !after.Before(p.Next) {
+			return nil, fmt.Errorf("estate: a usage page ended at %v, which is not after %v — "+
+				"the answering node pages by another rule", p.Next, after)
+		}
+		after = p.Next
+	}
+}
+
+// ReadsElided answers how many reads the per-seat-day cap dropped over a range
+// of company days, on every node.
+func (u Usage) ReadsElided(ctx context.Context, from, to string) (int64, error) {
+	return call(ctx, u.r, opUsageReadsElided, nil, readsElidedArgs{From: from, To: to})
 }

@@ -566,7 +566,14 @@ current value of each object and nothing before it, a gap is a coverage number
 rather than a fault, and neither gates a node's seats or claims that two nodes
 hold identical rows — but each copy is still judged, and one that is wrong
 rather than behind (its applier stopped, its rows below its log) goes out of
-service on its own, with nothing else on the node.
+service on its own, with nothing else on the node: the spend and activity
+screens a wrong usage copy would have drawn are answered from a peer's, and a
+search ranks without the vectors a wrong vectors copy holds, saying so. A
+peer's answer to a long window arrives in pages of about 2 MiB, each cut only
+between two records, so a screen over ninety days is never one message; a node
+whose own usage copy serves reads the window whole, in one transaction. Either
+way each statement reads one company day — or, for a page's readers, one page
+— so a page costs its own rows and not the window's.
 
 | Domain | Stream | One subject per | Written by | Kept for |
 |---|---|---|---|---|

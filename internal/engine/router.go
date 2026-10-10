@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // THE ESTATE'S ROUTER, ON EVERY NODE.
@@ -192,13 +193,15 @@ type heldVerdict struct {
 // every one of them its processes and its memory to be served by the very
 // same peers.
 //
-// A COPY WITH NO RUNTIME YET — a data node that booted with no company — is
-// served with no halves, so every operation on it is answered "no native
-// backend here" and moves on, while the node still answers for it.
+// A COPY WITH NO RUNTIME — a data node that booted with no company, or whose
+// company runs no state log — is served with the one half the estate holds
+// without one, the usage domain's rows ([Engine.estateBackend]), and every
+// other operation on it is answered "no native backend here" and moves on,
+// while the node still answers for it.
 func (l *localEstate) For(ctx context.Context, domain string) (estate.Backend, bool) {
 	n := l.e.native.Load()
 	if n == nil {
-		return estate.Backend{}, true
+		return l.e.estateBackend(nil), true
 	}
 	v := l.verdict(ctx, n)
 	if !v.serves(domain) {
@@ -346,7 +349,15 @@ func (l *localEstate) refresh(ctx context.Context, n *native, done chan struct{}
 }
 
 // estateBackend is this data node's answer for its copy of the estate: the
-// whole native runtime.
+// whole native runtime, or — where none runs — the usage domain's reads alone.
+//
+// THE USAGE DOMAIN'S ROWS ARE THE ESTATE'S, read off the file a data node
+// holds open from boot whatever its company runs ([HoldsEstate]), never the
+// runtime's: a company on vendors for both its tracker and its knowledge base
+// runs no state log and so no runtime, and with the reads tied to one every
+// data node answered every spend, activity and readers screen "no native
+// backend here", so the router refused each as an estate nobody served — a
+// 503 asking the screen to retry what no retry could ever answer.
 //
 // WRITES ONLY WHILE THIS NODE PUBLISHES. A node restarted into a maintenance
 // mode is the evidence a capacity operation is established from, and a write
@@ -354,15 +365,17 @@ func (l *localEstate) refresh(ctx context.Context, n *native, done chan struct{}
 // out — so its writers are absent ([Engine.writeSide] hands none out) and
 // every write is answered "not here".
 func (e *Engine) estateBackend(n *native) estate.Backend {
-	b := estate.Backend{
-		Committed: e.WaitCommitted,
-		Admits: func(ctx context.Context) bool {
-			ok, refusal := n.log.Established(ctx, true)
-			if !ok && refusal != "" {
-				log.DebugContext(ctx, "seat_admission_withheld", "reason", string(refusal))
-			}
-			return ok
-		},
+	b := estate.Backend{Usage: usage.Reader{Estate: e.usageEstate()}}
+	if n == nil {
+		return b
+	}
+	b.Committed = e.WaitCommitted
+	b.Admits = func(ctx context.Context) bool {
+		ok, refusal := n.log.Established(ctx, true)
+		if !ok && refusal != "" {
+			log.DebugContext(ctx, "seat_admission_withheld", "reason", string(refusal))
+		}
+		return ok
 	}
 	if n.trackerReader != nil {
 		b.Tracker = n.trackerReader

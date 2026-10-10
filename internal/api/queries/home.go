@@ -501,7 +501,7 @@ func (s Sources) feedSchedules(ctx context.Context, actor, position string,
 		}
 		q.BeforeAt, q.BeforeKey = when, key
 	}
-	runs, more, err := usage.ScheduleRuns(ctx, s.Usage, q)
+	runs, more, err := s.Usage.ScheduleRuns(ctx, q)
 	if err != nil {
 		return src, err
 	}

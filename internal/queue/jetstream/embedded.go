@@ -1030,10 +1030,11 @@ var ErrPayloadCeiling = errors.New("jetstream: the broker's max_payload is " +
 // one setting that fixes it can be named.
 //
 // WHAT REACHES THE NUMBER is an event (a state-log record among them) and the
-// answers nodes give each other on the ephemeral verbs: the estate router's
-// gather batches (internal/estate), the fleet turn-detail scatter
-// (internal/eventfan) and the memory read (internal/learning/memread) each
-// fill an answer up to [queue.MaxPayloadBytes]. Below the contract those
+// answers nodes give each other on the ephemeral verbs: the fleet turn-detail
+// scatter (internal/eventfan), the memory read (internal/learning/memread) and
+// the estate router's answers (internal/estate) — its paged usage reads cut at
+// a quarter of the message — each fill an answer up to
+// [queue.MaxPayloadBytes]. Below the contract those
 // answers fail too, so lowering it is never a matter of events alone. A
 // company's files cross the same broker, but in messages of 128 KiB
 // (internal/objstore/natsobj), which any server's default carries, so they

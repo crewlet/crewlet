@@ -15,10 +15,10 @@
 // and SERVES it over the broker ([Serve]), and every node's tools are handed
 // facades of one [Router], which answers in-process where this node's copy
 // serves and asks another data node otherwise. So are the operator's surfaces
-// — the API's tracker and knowledge-base routes and the operator's own MCP —
-// for the reason a data node's own seats are: read straight off the node's
-// copy, a node whose copy of a domain was out of service answered its operator
-// from the very copy it had stopped serving its seats from.
+// — the API's tracker, knowledge-base and usage reads and the operator's own
+// MCP — for the reason a data node's own seats are: read straight off the
+// node's copy, a node whose copy of a domain was out of service answered its
+// operator from the very copy it had stopped serving its seats from.
 //
 // # One subject per serving node, never a scatter
 //

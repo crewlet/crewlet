@@ -204,7 +204,7 @@ func (s Sources) page(ctx context.Context, p Params) (any, error) {
 	out := PageAnswer{Detail: detail}
 	if detail.Skill && s.Usage != nil {
 		window := tokens.LastDays(PageReadsMaxDays, s.clock(), s.zone())
-		rows, err := usage.PageReads(ctx, s.Usage, usage.PageReadsQuery{
+		rows, err := s.Usage.PageReads(ctx, usage.PageReadsQuery{
 			PageIDs: []string{detail.Page.ID}, From: window.First.Label, To: window.Last.Label,
 			Vias: names(skillVias)})
 		if err != nil {
@@ -244,12 +244,12 @@ func (s Sources) pageReads(ctx context.Context, p Params) (any, error) {
 	}
 	now, loc := s.clock(), s.zone()
 	window := tokens.LastDays(days, now, loc)
-	rows, err := usage.PageReads(ctx, s.Usage, usage.PageReadsQuery{
+	rows, err := s.Usage.PageReads(ctx, usage.PageReadsQuery{
 		PageIDs: []string{page}, From: window.First.Label, To: window.Last.Label, Vias: names(readVias)})
 	if err != nil {
 		return nil, usageErr(err)
 	}
-	elided, err := usage.ReadsElided(ctx, s.Usage, window.First.Label, window.Last.Label)
+	elided, err := s.Usage.ReadsElided(ctx, window.First.Label, window.Last.Label)
 	if err != nil {
 		return nil, usageErr(err)
 	}
@@ -366,7 +366,7 @@ func (s Sources) skillLoads(ctx context.Context, listed []pages.Summary) (map[st
 	for i, p := range listed {
 		ids[i] = p.ID
 	}
-	rows, err := usage.PageReads(ctx, s.Usage, usage.PageReadsQuery{
+	rows, err := s.Usage.PageReads(ctx, usage.PageReadsQuery{
 		PageIDs: ids, From: window.First.Label, To: window.Last.Label, Vias: names(skillVias)})
 	if err != nil {
 		return nil, usageErr(err)
