@@ -115,6 +115,24 @@
 // up from the fleet's record ([Collector.Restore]), so a broker that stopped
 // answering mid-audit, or a holder that went away, never clears an alarm about
 // files the store has lost.
+//
+// # How long an audit takes
+//
+// THE AUDIT ASKS ONE OBJECT AT A TIME, each question answered before the next
+// is sent, so it lasts one backend round trip per referenced object — which
+// each backend's package doc records as `make bench` measured it, across a
+// store of ten thousand objects. For a company of two million objects:
+//
+//   - the broker's bucket answered a solo fleet's node 4,800–8,600 times a
+//     second, and a follower of a three-member fleet, which asks the stream's
+//     leader across a route, 2,100–2,800: four to seven minutes, and twelve to
+//     sixteen;
+//   - an S3 bucket answers in its round trip, 47 a second at 20 ms and 19 at
+//     50: twelve hours, and twenty-nine — the second longer than the
+//     [AuditInterval] between audits.
+//
+// Asked 32 at a time, the same S3 bucket answered 1,380–1,450 and about 610 a
+// second: 23–24 minutes, and 55.
 package collect
 
 import (

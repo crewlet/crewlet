@@ -3,9 +3,13 @@ package s3obj_test
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"encoding/pem"
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"sync"
 	"testing"
@@ -32,17 +36,32 @@ import (
 // ([TestEveryFileTheTrackerKeepsFitsOneUploadOfPartsS3Takes]).
 const part = 64 << 10
 
+// open is the backend over srv at the parts every case here runs at.
 func open(t *testing.T, srv *s3fake.Server, prefix string) *s3obj.Backend {
 	t.Helper()
-	b, err := s3obj.Open(t.Context(), s3obj.Config{
-		Endpoint: srv.URL, Region: "us-east-1", Bucket: "files", Prefix: prefix,
-		PathStyle: true, AccessKeyID: "AKIAEXAMPLE", SecretAccessKey: "example-secret",
-	})
+	b := openFake(t, srv, prefix)
+	s3obj.CutParts(b, part)
+	return b
+}
+
+// openFake is the backend over srv as [s3obj.Open] builds it, at the
+// production [s3obj.PartBytes] — what the benchmarks measure.
+func openFake(t testing.TB, srv *s3fake.Server, prefix string) *s3obj.Backend {
+	t.Helper()
+	b, err := s3obj.Open(t.Context(), fakeConfig(srv, prefix))
 	if err != nil {
 		t.Fatalf("open the bucket: %v", err)
 	}
-	s3obj.CutParts(b, part)
 	return b
+}
+
+// fakeConfig is how a backend reaches srv: path-style, at the region the fake
+// ignores, with credentials it never checks.
+func fakeConfig(srv *s3fake.Server, prefix string) s3obj.Config {
+	return s3obj.Config{
+		Endpoint: srv.URL, Region: "us-east-1", Bucket: "files", Prefix: prefix,
+		PathStyle: true, AccessKeyID: "AKIAEXAMPLE", SecretAccessKey: "example-secret",
+	}
 }
 
 // EVERY FILE THE TRACKER KEEPS FITS ONE UPLOAD OF PARTS S3 TAKES — the
@@ -393,4 +412,60 @@ func (s *secondCrossingReader) Read(p []byte) (int, error) {
 	n, err := s.r.Read(p)
 	s.read += int64(n)
 	return n, err
+}
+
+// A BUCKET BEHIND A PRIVATE CERTIFICATE AUTHORITY IS REACHED THROUGH
+// AWS_CA_BUNDLE, and refused without it.
+//
+// What the bundle reaches is [s3obj.Open]'s own client — the engine's shared
+// transport with the bundle added to its roots for the bucket's requests only
+// — which no other case runs, because every other case reaches its fake over
+// plain http. It is also what the benchmark's https arm rests on: a bucket on
+// loopback with a certificate of its own, as real S3 is reached over TLS.
+//
+// NOT PARALLEL, because it sets the environment, and the process's
+// environment is what Open reads the bundle from. The refused half takes a
+// couple of seconds: the SDK retries a handshake that failed.
+func TestABucketBehindAPrivateAuthorityIsReachedThroughItsBundle(t *testing.T) {
+	srv := s3fake.StartTLS(t, "files")
+
+	t.Setenv("AWS_CA_BUNDLE", "")
+	_, err := s3obj.Open(t.Context(), fakeConfig(srv, "crewlet/"))
+	var unverified *tls.CertificateVerificationError
+	if !errors.As(err, &unverified) {
+		t.Fatalf("Open with no bundle = %v; want the bucket's certificate refused", err)
+	}
+
+	t.Setenv("AWS_CA_BUNDLE", trustBundle(t, srv))
+	b, err := s3obj.Open(t.Context(), fakeConfig(srv, "crewlet/"))
+	if err != nil {
+		t.Fatalf("Open with the bucket's authority in AWS_CA_BUNDLE: %v", err)
+	}
+	data := []byte("behind a private authority")
+	if err := b.Put(t.Context(), "files/tls", bytes.NewReader(data), objstore.PutMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	r, err := b.Get(ctx, "files/tls", 0, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if got, err := io.ReadAll(r); err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("read back %q, %v; want %q", got, err, data)
+	}
+}
+
+// trustBundle writes srv's certificate as a PEM bundle and answers its path —
+// what an operator points AWS_CA_BUNDLE at for a bucket behind an authority of
+// their own.
+func trustBundle(t testing.TB, srv *s3fake.Server) string {
+	t.Helper()
+	bundle := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(bundle, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE",
+		Bytes: srv.Certificate().Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return bundle
 }

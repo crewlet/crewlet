@@ -191,6 +191,10 @@ promises, and its size is the provider's problem rather than any node's disk.
   not sweep as `sweep_error`.
 - **A private CA** is read from `AWS_CA_BUNDLE`, added to the system roots for
   the bucket's requests only.
+- **Reach the bucket over `https`.** Over plain `http` the S3 signature covers
+  the request body, so the node hashes every uploaded byte a second time —
+  measured, uploads ran a third slower on a CPU without SHA instructions, and
+  up to a fifth slower on one with them.
 - **The bucket is checked at boot.** A node that cannot reach it, or whose
   credentials it refuses, does not start — a node that started anyway would
   accept an upload it could not store.
@@ -278,6 +282,9 @@ read of an object, so a page deep into a large file first walks the headers of
 every 128 KiB message before it — a few dozen bytes each rather than the bytes
 themselves, but still work that grows with the page's offset. A seat reads
 pages near the start of a file far more often than pages a gibibyte in.
+Measured, a 64 KiB page at a random offset of a 128 MiB file took 32–36 ms on
+`nats`; on `s3` the node's side of the one request took about half a
+millisecond, before the provider's own first-byte latency.
 
 ---
 
@@ -403,7 +410,12 @@ Take **`s3`** when:
 - the company already keeps its data in a bucket it backs up, versions or
   replicates across regions on its own terms;
 - the fleet's broker is an external NATS cluster whose operators would rather
-  not hold files.
+  not hold files;
+- nodes without `data` will move large files — such a node reaches the
+  broker's bucket across its leaf link, where whole reads measured about half
+  a member's rate;
+- seats will read pages deep into large files — on `nats` a page costs a walk
+  to its offset, on `s3` one ranged request wherever it is.
 
 **A versioned bucket keeps every object the collector deletes**, as a
 noncurrent version, for as long as the bucket's own rules say — and every
@@ -446,6 +458,11 @@ dashboard draws the same under **Settings › Nodes**.
   members; it does not add space for files.
 - **`s3`: the bucket's.** Capacity and throughput are the provider's; each node
   pays only the requests its own uploads and downloads make.
+- **A verified byte costs a hash on the node.** Every upload and every
+  download is SHA-256'd by the node that serves it, so one stream runs no
+  faster than that node hashes — measured at 1.3 GB/s on a CPU with SHA
+  instructions and 324–353 MB/s on one without — whichever backend holds the
+  bytes.
 - **The collector lists the whole store.** A listing streams rather than
   holding the inventory in memory, and judges it 500 keys to a query against
   an index on the file row's object column, so a pass over a few million

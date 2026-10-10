@@ -12,6 +12,13 @@
 // that a listing visits every name it holds — verbatim, once, however slowly
 // it is read — and that an upload begun and never finished, which no listing
 // of the names shows, is found and removed by the two verbs that exist for it.
+//
+// And ONE BENCHMARK SUITE ([Bench]) every backend runs from a
+// `BenchmarkBackend` of its own, as it runs [Run] from `TestContract`: the
+// figures the design argues from are measured through the same calls on every
+// backend, so two backends' figures differ by the backend and nothing else.
+// Each backend's package doc keeps what it measured, on what machine;
+// `make bench` measures again.
 package objstoretest
 
 import (

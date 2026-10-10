@@ -42,6 +42,28 @@
 // end of a file whose content is not the one recorded: a download of a
 // damaged object ends short of its Content-Length rather than whole.
 //
+// # What checking every byte costs, measured
+//
+// A put hashes every byte it stores and a read every byte it hands out, once
+// each, so ONE STREAM'S VERIFIED THROUGHPUT IS BOUNDED BY THE NODE'S SHA-256
+// RATE, whatever the backend — and a verified read costs the backend's stream
+// plus that hash, byte for byte, since the two run one after the other.
+// `make bench` measures it (internal/objstore/objstoretest's Bench; each
+// backend's package doc keeps its own figures). On four vCPUs of a KVM Intel
+// Xeon at 2.1 GHz with SHA instructions, Go 1.27.2, 2026-10-10: SHA-256
+// itself ran at 1.27–1.33 GB/s (BenchmarkHashOf); a verified whole read of
+// 16 MiB at 536–621 MB/s from the broker's member and from the S3 fake over
+// https, where the same backends' unverified streams ran at 776–1,423 MB/s;
+// and eight verified reads at once at 1.2–1.7 GB/s together. On four vCPUs of
+// a Xeon WITHOUT SHA instructions BenchmarkHashOf measured 324–353 MB/s, and
+// every verified stream there is held to that. Every read figure here, and in
+// each backend's doc, is WARM — of an object written moments before, read
+// from memory rather than from a disk or a provider's colder storage — so it
+// is the most a read gets rather than what every read does. Either way
+// [MiBPace]'s floor, about 35 KB/s, is four orders of magnitude under one
+// healthy stream, and eight downloads at 60 MB/s each spend under half of one
+// core on hashing — about one and a third on a CPU without the instructions.
+//
 // # The inventory is the estate
 //
 // Which objects SHOULD exist is not a list this package keeps: every row that
