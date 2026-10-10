@@ -250,7 +250,8 @@ type WorkDeps struct {
 	// credential in anybody's hand. The tools that ask it — `get_person`,
 	// `work_inbox` and a named `list_work_views` viewer — are the operator
 	// surface's, and each is held to whose record the caller may read
-	// before it asks ([readsRecordOf]).
+	// before it asks ([readsRecordOf]); no seat holds one, so the seat
+	// surface leaves this nil.
 	//
 	// Nil answers the handle alone, which is the honest state for a
 	// surface with no chart loaded.
