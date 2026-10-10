@@ -354,7 +354,8 @@ func sortLost(lost []LostObject) {
 // checkStreamObjects asks the store, once the stream snapshot is taken, for
 // every object a required table of the copy names, and records as lost what it
 // answers it does not hold — or holds as other bytes than the row records, by
-// the size and the digest the backend keeps.
+// the size and the digest the backend keeps, or as no object it can read at all
+// ([objstore.ErrCorrupt]).
 //
 // AFTER THE SNAPSHOT, and that order is what makes a present answer mean the
 // snapshot holds it: the copy is taken before the streams, and the collector
@@ -375,7 +376,7 @@ func checkStreamObjects(ctx context.Context, art *ObjectArtifact, refs []referen
 	for _, ref := range refs {
 		info, err := objs.Stat(ctx, ref.object.Key)
 		switch {
-		case errors.Is(err, objstore.ErrNotFound),
+		case errors.Is(err, objstore.ErrNotFound), errors.Is(err, objstore.ErrCorrupt),
 			err == nil && (info.Size != ref.object.Size ||
 				(info.Digest != "" && info.Digest != ref.object.Hash)):
 			art.Lost = append(art.Lost, LostObject{Object: ref.object.Key, NamedBy: ref.namedBy})

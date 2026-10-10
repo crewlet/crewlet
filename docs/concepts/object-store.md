@@ -342,8 +342,10 @@ judged against the replicated estate the data node holds:
   store does not hold (**missing** — asked about once more before it is called
   so, at the end of the pass or, once a hundred thousand others are waiting
   for theirs, at once) or holds at another size, or under another SHA-256
-  where the store keeps one (**damaged** — `nats` keeps one, S3 does not), is
-  a file that cannot be downloaded, and raises [`objects_missing`](#alarms)
+  where the store keeps one (**damaged** — `nats` keeps one, S3 does not), or
+  holds as no object it can read at all (**damaged** too — on `nats`, metadata
+  that does not decode, which the store answers definitely rather than as a
+  failure), is a file that cannot be downloaded, and raises [`objects_missing`](#alarms)
   naming the first hundred such files by name, as `PROJECT/path`.
 
 A pass that fails is tried again ten minutes later. The duty records each pass

@@ -667,6 +667,37 @@ func TestTheAuditFindsMissingAndDamagedFiles(t *testing.T) {
 	}
 }
 
+// A NAME THE STORE HOLDS NO READABLE OBJECT UNDER IS DAMAGED, ON ONE ANSWER:
+// the store said so definitely ([objstore.ErrCorrupt]) — metadata that does
+// not decode, on the broker — and asking again reads the same. Taken for a
+// failure, it stopped every audit at that object and never named the file,
+// and each retry asked the whole store again up to it.
+func TestANameHoldingNoReadableObjectIsDamaged(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.file("kept.md", "kept")
+	spoiled := h.file("spoiled.md", "bytes the store can no longer read")
+	h.backend.onStat = func(_ context.Context, name string, _ int) error {
+		if name == spoiled.Key.Name() {
+			return fmt.Errorf("%w: its metadata does not decode", objstore.ErrCorrupt)
+		}
+		return nil
+	}
+	r, err := h.c.Audit(t.Context())
+	if err != nil || !r.Completed || r.Referenced != 2 || r.Damaged != 1 || r.Missing != 0 {
+		t.Fatalf("Audit = %+v, %v; want it complete with the one file damaged", r, err)
+	}
+	want := []MissingFile{{Object: spoiled.Key, NamedBy: "ENG/spoiled.md", Damaged: true}}
+	if r.Found == nil || r.Found.Damaged != 1 || !slices.Equal(r.Found.MissingFiles, want) {
+		t.Fatalf("the findings = %+v, want %+v", r.Found, want)
+	}
+	h.backend.mu.Lock()
+	defer h.backend.mu.Unlock()
+	if n := h.backend.asks[spoiled.Key.Name()]; n != 1 {
+		t.Fatalf("the spoiled name was asked about %d times; a definite answer needs no second look", n)
+	}
+}
+
 // A STORE THAT HAD NOT CAUGHT UP IS NOT ONE THAT LOST THE OBJECT: a "not found"
 // is asked again at the end of the pass before the object is called missing.
 func TestALaggingNotFoundIsNotMissing(t *testing.T) {

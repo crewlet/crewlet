@@ -97,10 +97,11 @@
 // pass, or sooner once [maxSuspects] others are waiting for theirs, so a store
 // that lost everything never has the audit hold the whole inventory) and one
 // it holds at another size, or under another digest where the backend keeps
-// one (DAMAGED). Both are files the company cannot read: the
-// `objects_missing` alarm and the list `crewlet objects status` prints, each
-// named as the file that holds it, since a person restores files rather
-// than keys. A durable backend loses nothing, so a non-zero count is the
+// one, or as no object it can read at all — objstore.ErrCorrupt, a definite
+// answer that needs no second look (DAMAGED). Both are files the company
+// cannot read: the `objects_missing` alarm and the list `crewlet objects
+// status` prints, each named as the file that holds it, since a person
+// restores files rather than keys. A durable backend loses nothing, so a non-zero count is the
 // backend failing at the one thing it is for. A retired reference is never
 // asked after: the company has let its object go, and a store that lost it
 // lost nothing anybody can miss.
@@ -718,10 +719,15 @@ func (c *Collector) audit(ctx context.Context, r *AuditReport) ([]MissingFile, e
 		switch {
 		case errors.Is(err, objstore.ErrNotFound):
 			return false, nil
+		case errors.Is(err, objstore.ErrCorrupt):
+			// HELD, AND NO OBJECT ANYBODY CAN READ: a definite answer, as
+			// damaged as a wrong digest — never a failure, which would stop
+			// every audit on it without ever naming the file.
 		case err != nil:
 			return false, fmt.Errorf("ask the store for %s: %w", ref.Object.Key, err)
 		}
-		if info.Size != ref.Object.Size || (info.Digest != "" && info.Digest != ref.Object.Hash) {
+		if err != nil || info.Size != ref.Object.Size ||
+			(info.Digest != "" && info.Digest != ref.Object.Hash) {
 			mu.Lock()
 			r.Damaged++
 			note(ref, true)

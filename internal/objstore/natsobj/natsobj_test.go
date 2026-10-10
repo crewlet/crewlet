@@ -44,6 +44,7 @@ var suite = objstoretest.Options{
 	Piece:      natsobj.MessageBytes,
 	Digest:     true,
 	Unfinished: unfinished,
+	Spoil:      spoil,
 }
 
 // clients is the client each backend a case opened was opened on, so the
@@ -69,6 +70,22 @@ func unfinished(t *testing.T, b objstore.Backend) objstore.Pending {
 		}
 	}
 	return objstore.Pending{ID: nuid}
+}
+
+// spoil leaves under name what no get could read: metadata that does not
+// decode, published over whatever name held — as a client of the bucket's
+// documented format writing garbage, or a disk returning it, would.
+func spoil(t *testing.T, b objstore.Backend, name string) {
+	t.Helper()
+	c, ok := clients.Load(b)
+	if !ok {
+		t.Fatal("the backend was not opened through open()")
+	}
+	subject := "$O." + natsobj.Bucket + ".M." + base64.URLEncoding.EncodeToString([]byte(name))
+	if _, err := c.(jetstream.JetStream).Publish(t.Context(), subject,
+		[]byte("not an object's metadata")); err != nil {
+		t.Fatalf("spoil %s: %v", name, err)
+	}
 }
 
 // THE BROKER'S OWN OBJECT STORE PASSES THE SUITE, on a member's own client.
@@ -216,7 +233,8 @@ func TestAReadWhoseConsumerIsLostFinishesOnItsReplacement(t *testing.T) {
 // A LISTING ENDS EVEN WHEN THE NEWEST METADATA CANNOT BE READ. The library's
 // own watch learns it has seen everything only from a message it decoded, so
 // one that ended on garbage never finished — and the collector, whose context
-// has no deadline, waited on it for ever.
+// has no deadline, waited on it for ever. And it hands the garbled name on,
+// holding nothing, so the collector can judge and clear it like any other.
 func TestAListingEndsPastMetadataItCannotRead(t *testing.T) {
 	t.Parallel()
 	client := memberClient(t)
@@ -230,15 +248,31 @@ func TestAListingEndsPastMetadataItCannotRead(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
-	var names []string
+	listed := map[string]objstore.Info{}
 	if err := b.List(ctx, func(info objstore.Info) error {
-		names = append(names, info.Name)
+		listed[info.Name] = info
 		return nil
 	}); err != nil {
 		t.Fatalf("a listing ending on unreadable metadata: %v", err)
 	}
-	if len(names) != 1 || names[0] != "readable" {
-		t.Fatalf("listed %q, want the one readable object", names)
+	if len(listed) != 2 || listed["readable"].Size != 1 || listed["garbled"].Size != 0 ||
+		listed["garbled"].Written.IsZero() {
+		t.Fatalf("listed %+v, want the readable object and the garbled name, dated and "+
+			"holding nothing", listed)
+	}
+	// THE SUBJECT A NAME IS SPELLED IN IS NOT ALWAYS ONE: metadata on a
+	// subject that decodes to no name is stepped over, and the listing still
+	// ends.
+	if _, err := client.Publish(t.Context(), "$O."+natsobj.Bucket+".M.!",
+		[]byte("on no name at all")); err != nil {
+		t.Fatal(err)
+	}
+	clear(listed)
+	if err := b.List(ctx, func(info objstore.Info) error {
+		listed[info.Name] = info
+		return nil
+	}); err != nil || len(listed) != 2 {
+		t.Fatalf("a listing past metadata on a subject spelling no name = %+v, %v", listed, err)
 	}
 	// AND IT LEAVES NO CONSUMER BEHIND for the broker to reap later: a
 	// collection lists the bucket every hour.

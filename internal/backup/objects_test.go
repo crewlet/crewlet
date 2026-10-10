@@ -333,12 +333,14 @@ func TestABackupDoesNotCarryBytesThatAreNotTheRows(t *testing.T) {
 // snapshot is taken, recording what the store does not hold — or holds as
 // other bytes — as lost: a NATS backup used to count the references and check
 // none of them, so an object the collector deleted before the snapshot was
-// simply absent from it, and the manifest said nothing.
+// simply absent from it, and the manifest said nothing. A name the store
+// holds no readable object under is lost too: the store answers it as corrupt,
+// definitely, and refusing the backup over it would refuse every one after.
 func TestABackupOfObjectsInAStreamAsksTheStoreForEach(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
 	files, backend := filesStore(t)
-	held := upload(t, files, "one file", "another", "a third")
+	held := upload(t, files, "one file", "another", "a third", "a fourth")
 	filesNaming(t, db, held...)
 	if err := files.Delete(t.Context(), held[1].object.Key); err != nil {
 		t.Fatal(err)
@@ -350,7 +352,13 @@ func TestABackupOfObjectsInAStreamAsksTheStoreForEach(t *testing.T) {
 	svc := build(t, backup.Options{
 		Store: db, Estate: backup.HoldsReplicated, NodeID: "n", Holds: fleet, Backups: fleet,
 		Now: func() time.Time { return clock },
-		Objects: &backup.Objects{Stream: "OBJ_crewlet_files", Stat: files.Stat,
+		Objects: &backup.Objects{Stream: "OBJ_crewlet_files",
+			Stat: func(ctx context.Context, k objstore.Key) (objstore.Info, error) {
+				if k == held[3].object.Key {
+					return objstore.Info{}, fmt.Errorf("%w: its metadata does not decode", objstore.ErrCorrupt)
+				}
+				return files.Stat(ctx, k)
+			},
 			Open: func(context.Context, objstore.Object) (io.ReadCloser, error) {
 				t.Error("an object was read although the stream snapshot carries it")
 				return nil, errors.New("not expected")
@@ -363,11 +371,11 @@ func TestABackupOfObjectsInAStreamAsksTheStoreForEach(t *testing.T) {
 	}
 	o := manifest.Objects
 	if o == nil || o.Stream != "OBJ_crewlet_files" || o.Objects != 1 || o.Dir != "" ||
-		len(o.Lost) != 2 {
-		t.Fatalf("manifest objects = %+v, want the stream named, one object held and two lost", o)
+		len(o.Lost) != 3 {
+		t.Fatalf("manifest objects = %+v, want the stream named, one object held and three lost", o)
 	}
 	for _, lost := range o.Lost {
-		if lost.Object != held[1].object.Key && lost.Object != held[2].object.Key {
+		if lost.Object == held[0].object.Key {
 			t.Errorf("%s was recorded lost and the store holds it whole", lost.Object)
 		}
 	}
