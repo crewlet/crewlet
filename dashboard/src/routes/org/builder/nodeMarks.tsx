@@ -37,6 +37,7 @@ import { StateBadge } from "~/components/common.tsx";
 import { plural } from "~/lib/format.ts";
 import type { BuilderApi } from "./BuilderContext.tsx";
 import type { NodeView, ReportingItem, SeatView, UnitView } from "./chartModel.ts";
+import type { TreeCardTone } from "@crewlethq/ui";
 import { CrewletIcon } from "@crewlethq/icons";
 import {
   NetworkGlyph,
@@ -109,6 +110,39 @@ export function NodeGlyph({ kind, size }: { kind: NodeGlyphKind; size?: GlyphSiz
   if (kind === "human") return <UserGlyph size={size ?? "sm"} />;
   const side = cssLength(size);
   return <CrewletIcon width={side} height={side} />;
+}
+
+/**
+ * The hue an agent seat is drawn in, on a chart's card and a table's row, as
+ * the console chart draws one: in its scheme, purple by default. A seat here
+ * carries no scheme of its own, so every agent takes the default, and a
+ * person, a unit and the company stay on the chart's neutral surface.
+ */
+export const AGENT_TONE: TreeCardTone = "purple";
+
+/** The hue a node is drawn in: an agent seat's, or none. */
+export function nodeTone(view: NodeView | undefined): TreeCardTone | undefined {
+  return view?.type === "seat" && view.kind !== "human" ? AGENT_TONE : undefined;
+}
+
+/**
+ * The mark a seat leads with, in a chart's card or a table's row, as the
+ * console chart draws one: the Crewlet figure for an agent, at the size a node
+ * gives the thing the chart is about, and a person inside a dashed ring for a
+ * human. A row draws the figure without its ring, which the design system
+ * decides.
+ */
+export function seatMark(kind: string | undefined): {
+  icon: ReactNode;
+  iconSize: "md" | "lg";
+  iconRing: boolean;
+} {
+  const human = kind === "human";
+  return {
+    icon: <NodeGlyph kind={human ? "human" : "agent"} />,
+    iconSize: human ? "md" : "lg",
+    iconRing: human,
+  };
 }
 
 /** A seat's handle as written beside its name, or what stands in for one not reported yet. */

@@ -899,15 +899,11 @@
      zoom the whole chart lost beside the peek. */
   --crewlet-tree-canvas-card-width: 11.5rem;
 }
-/* THE FIELD IS DOTTED, as the approved chart draws it: a surface that pans
-   says so before anybody drags it. The dot is the strong hairline's ink in
-   both themes, and it stays where it is while the cards move over it. Two
-   classes, so it outranks the kit's own ground whichever order the two
-   stylesheets are bundled in; a longhand, so the kit's ground colour stays. */
+/* NO FRAME OF ITS OWN: the field runs to the sheet's edges (see `.oc`). Its
+   dots are the design system's (`ground="dotted"` on the chart). Two classes,
+   so it outranks the kit's own frame whichever order the two stylesheets are
+   bundled in. */
 .oc-canvas .crewlet-canvas {
-  background-image: radial-gradient(var(--color-border-strong) 1px, transparent 1.2px);
-  background-size: var(--spacing-5) var(--spacing-5);
-  /* No frame of its own: the field runs to the sheet's edges (see `.oc`). */
   border: 0;
   border-radius: 0;
 }

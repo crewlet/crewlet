@@ -544,7 +544,7 @@ const ALLOWED: Allowed[] = [
   },
   {
     name: "crewlet-canvas",
-    why: "uilet's Canvas writes it on the canvas's root, inside the TreeCanvas the live org chart draws. styles/screens.css dots its ground inside `.oc-canvas`, as the approved chart draws the field a reader pans; the kit paints the ground and nothing on it. Another rule about OUR composition of the package's component.",
+    why: "uilet's Canvas writes it on the canvas's root, inside the TreeCanvas the live org chart draws. styles/screens.css takes its frame away inside `.oc-canvas`, so the field runs to the sheet's edges as the approved chart draws it; the dots on that field are the kit's own `ground=\"dotted\"`. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {

@@ -275,6 +275,9 @@ export function OrgChart() {
             ref={view}
             label="Org chart"
             labels={CANVAS_LABELS}
+            // THE FIELD IS DOTTED, as the approved chart draws it: a surface
+            // that pans says so before anybody drags it.
+            ground="dotted"
             connector="elbow"
             nodes={chart.nodes}
             cards={cards}

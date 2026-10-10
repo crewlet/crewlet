@@ -126,6 +126,8 @@ import {
 } from "./nodeActions.tsx";
 import {
   NodeGlyph,
+  nodeTone,
+  seatMark,
   ReportingMarks,
   SeatMarks,
   UnitMarks,
@@ -157,6 +159,7 @@ import {
   TreeCanvas,
   type TreeCanvasHandle,
   type TreeCardContext,
+  type TreeCardTone,
   type TreeCardInput,
   type TreeComposing,
   type TreeInput,
@@ -164,7 +167,6 @@ import {
   type TreeModel,
   VisuallyHidden,
 } from "@crewlethq/ui";
-import { seatBadge } from "~/ui/SeatAvatar.tsx";
 import { CANVAS_LABELS, largestRoot, useLegibleFirstView } from "~/ui/canvasView.ts";
 
 /**
@@ -347,6 +349,7 @@ function StructureChart({
       nodes={structure.tree}
       cards={cards}
       cardOf={(id) => id}
+      cardTone={(id) => nodeTone(structure.nodes.get(id))}
       onNodeKey={onNodeKey}
       /*
        * ALT WITH AN ARROW MOVES A NODE among the siblings it is drawn beside,
@@ -458,6 +461,7 @@ function ReportingChart({
       nodes={chart.tree}
       cards={cards}
       cardOf={(id) => id}
+      cardTone={(id) => nodeTone(seatOf(id))}
       onNodeKey={onNodeKey}
       isNode={(id) => seatOf(id) !== undefined}
       hasNodeMenu={(id) => seatOf(id) !== undefined}
@@ -509,6 +513,7 @@ function Chart({
   hasNodeMenu,
   isNode,
   overlay,
+  cardTone,
 }: {
   label: string;
   chrome: Chrome;
@@ -526,6 +531,8 @@ function Chart({
   /** Whether an id names a node of the draft, which is what a selection can hold. */
   isNode: (id: string) => boolean;
   overlay?: ReactNode;
+  /** The hue a card and the branch into it are drawn in: an agent seat's, or none. */
+  cardTone: (id: string) => TreeCardTone | undefined;
 }) {
   const api = useBuilder();
   const view = useRef<TreeCanvasHandle>(null);
@@ -587,14 +594,19 @@ function Chart({
         // THE LABELS THE FLOOR PRESSES BY (`ui/canvasView.ts`).
         labels={CANVAS_LABELS}
         appearance="node"
+        // THE SAME DOTTED FIELD AS THE LIVE CHART, so the chart a reader edits
+        // and the one they watch are drawn on one ground, and the field says
+        // it pans before anybody drags it.
+        ground="dotted"
         // THE DESIGN SYSTEM'S OWN CONNECTOR, named rather than defaulted so
         // the choice is on the page: this chart drew the console's single
         // cubic once, and beside the live chart's elbows the two charts of
         // one organization read as two products.
         connector="elbow"
-        // AND NO `cardTone`: every node is the chart's neutral surface — see
-        // the module note. The design system tints a card and the branch
-        // arriving at it only when asked, so asking for nothing is the rule.
+        // AN AGENT SEAT IS TONED, as the console chart draws one, and every
+        // other node keeps the chart's neutral surface. The design system
+        // tints the card and the branch arriving at it together.
+        cardTone={cardTone}
         nodes={nodes}
         cards={cards}
         cardOf={cardOf}
@@ -659,12 +671,12 @@ function StructureCard({
       <>
         <div {...card.item(id)} title={seatTitle(view)}>
           <OrgNodeLabel
-            // A SEAT LEADS WITH ITS BADGE, and the badge's outline is who
-            // holds it: a person's circle, an agent's squircle. That is the
-            // one cue — the card is the same solid card for both, and the
-            // dashed edge a person's seat used to wear now means only "a place
-            // nothing fills yet".
-            avatar={seatBadge(view.name, view.kind)}
+            // A SEAT LEADS WITH ITS MARK, as the console chart draws it: the
+            // Crewlet figure on an agent's toned card, a person inside a
+            // dashed ring on the neutral one. The card's own edge stays solid
+            // for both, since a dashed card means only "a place nothing fills
+            // yet".
+            {...seatMark(view.kind)}
             name={view.name}
             caption={seatKindLabel(view)}
             captionMarks={<SeatMarks view={view} />}
@@ -780,7 +792,7 @@ function ReportingCard({
     <>
       <div {...card.item(item.id)} title={title}>
         <OrgNodeLabel
-          avatar={seatBadge(item.name, item.kind)}
+          {...seatMark(item.kind)}
           name={item.name}
           caption={seatKindLabel(item)}
           captionMarks={<ReportingMarks item={item} />}
