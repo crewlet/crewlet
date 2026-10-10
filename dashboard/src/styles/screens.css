@@ -8335,11 +8335,19 @@ a.live-row:focus-visible {
   overflow-y: auto;
   border-right: 1px solid var(--color-border-default);
 }
+/* THE SCOPE AND THE WAITING LINE share the head, and at the list's 340px floor
+   a floor figure ("50+ notices waiting on you") beside "Unread 50+" does not
+   fit on one line — so the line wraps under the scope WHOLE rather than
+   squeezing the control or breaking mid-phrase. */
 .inbox-list-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--spacing-2);
+  gap: var(--spacing-1) var(--spacing-2);
   padding: 0 var(--spacing-4) var(--spacing-1);
+}
+.inbox-waiting {
+  white-space: nowrap;
 }
 .inbox-chips {
   display: flex;

@@ -539,7 +539,7 @@ what it knows and what it spent, and the machine last.
 | Row | Route | Figure |
 |---|---|---|
 | **Home** | `#/home` | — |
-| **Inbox** | `#/inbox` | the accent **badge**: unread notices under a reason the person's record counts as PRIMARY — the only filled figure in the chrome. Not every unread notice: most of a busy company's are things it merely told you, nobody answers those, and a count that never reaches zero reads as a broken counter. Asked of the engine as `unread` + `primary_only` over one page, so a page that fills is drawn as a floor ("50+") |
+| **Inbox** | `#/inbox` | the accent **badge**: unread notices under a reason the person's record counts as PRIMARY — the only filled figure in the chrome. Not every unread notice: most of a busy company's are things it merely told you, nobody answers those, and a count that never reaches zero reads as a broken counter. Asked of the engine as `unread` + `primary_only` over one page, so a page that fills is drawn as a floor ("50+"). Asked ONCE, by the frame, and read under ONE name — "notices waiting on you" — by every surface that says it: the badge, the line beside the Inbox's scope and the Waiting tile on your own day. Never "unread": on the Inbox that word is the Unread option's count, every unread notice it lists, and two numbers under one word on one screen is a counter nobody can trust |
 | **My work** | `#/me` | the open work assigned to you — the SAME figure the Queue tab carries on your own day, read once by the frame for both, so the row and the tab can never name two numbers. The engine's own total, counted in full rather than the length of a page and written as a floor ("200+") where the count stopped at its ceiling; nothing on you draws no figure. The questions put to you are counted on their own tab (Asked of me) and each reached you as an Inbox notice |
 | **Work** | `#/work` | — |
 | **Agents** | `#/agents` | — |
@@ -683,11 +683,12 @@ props: a **badge** is how many things are waiting on the reader, and a
 did not answer is absent, never a zero.
 
 **Who the reader is, and how much is waiting on them, are read ONCE.** The
-frame asks both — the `viewer` and the Inbox count — and the sidebar, Home's
-status line and the Inbox's own band all draw that one answer. Each of them
-asking for itself was a standing query per surface: several of the socket's
-four query slots held before a screen's first read could run, and the badge
-and the sentence beside it polled on separate minutes and could name two
+frame asks both — the `viewer` and the Inbox count — and every surface that
+says either draws that one answer: the count in the sidebar's badge, in the
+line beside the Inbox's scope and in the Waiting tile on your own day. Each of
+them asking for itself was a standing query per surface: several of the
+socket's four query slots held before a screen's first read could run, and the
+badge and the figure beside it polled on separate minutes and could name two
 numbers. A surface mounted outside the frame is refused rather than handed a
 read of its own, because that fallback would bring the per-surface reads back
 without a sound.
@@ -1898,6 +1899,20 @@ the group it read as a fact about all three — and it is the page's, so where
 the page stopped with more behind it the option says `50+` and its title says
 the engine answers fifty at a time.
 
+**Two figures, two names.** Unread lists every unread notice — what waits on
+the person and what they were only told — so its count is every unread notice.
+The sidebar's badge counts only the first half (see [the sidebar](#the-sidebar)),
+and with Unread the screen's only figure, the badge said 3 over "Unread 12" and
+nothing said which was right. Both are, so both are drawn: beside the scope,
+"3 notices waiting on you" — the badge's figure in the badge's own words, read
+from the FRAME's one reading rather than asked again, and never counted from
+this page's primary notices, which say nothing at all once the page fills with
+notices that merely informed. It sits beside the group rather than in an option
+because it IS a fact about all three: what waits on you does not change with
+the scope you read it in. Its title says what it counts and that the rest of
+Unread is what you were only told; nothing waiting draws no line, as it draws
+no badge.
+
 **The chips are four questions of the list** — Decisions (every row that is
 not a notice), Reviews (the asks put to the person as `approver`), Mentions
 and Assigned — and they narrow the rows LOADED. Where that is every row their
@@ -2344,13 +2359,14 @@ push says, this node by name or "another node", which the seat's peek says
 too; and Edit), **Memory** (the holder's counted totals and its newest
 reflection) and **Schedules**. A person's Overview is **Their day** — or
 **Your day**, with the way to your Inbox and My work, on your own — with the
-unread notices waiting on them (the inbox's own count, the sidebar badge's
-reading on your own day, "50+" past a page), their priorities — the engine's
-count of what on the list is still open, the figure My work and their Work tab
-read, never the stored list's length, which still names a task they finished
-until their next reorder — and who set them, and pinned views, for the person
-and an operator, and withheld with that sentence for anybody else; their open
-work; and About.
+notices waiting on them (the **Waiting** tile: the badge's count asked of their
+inbox, the sidebar badge's own reading on your own day, "50+" past a page, and
+never called "Unread", which on the Inbox is every unread notice), their
+priorities — the engine's count of what on the list is still open, the figure
+My work and their Work tab read, never the stored list's length, which still
+names a task they finished until their next reorder — and who set them, and
+pinned views, for the person and an operator, and withheld with that sentence
+for anybody else; their open work; and About.
 
 **Turns** is the seat's own turns (`turns{seat}`, every node, over the thirty
 days the event store keeps, a page of fifty at a time with "Load older turns"

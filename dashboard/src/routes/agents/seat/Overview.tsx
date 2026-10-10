@@ -68,7 +68,7 @@ import { useEngineHealth, useOrg, useSandboxes, useSchedules } from "~/lib/store
 import { turnSteps } from "~/lib/turnsteps.ts";
 import { turnIdOf, watchHref } from "~/lib/turns.ts";
 import { useClipped } from "~/lib/useClipped.ts";
-import { inboxFigure, useInboxCountsOf } from "~/lib/useInboxCounts.ts";
+import { inboxFigure, useInboxCountsOf, waitingWords } from "~/lib/useInboxCounts.ts";
 import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
 import { apiToken } from "~/protocol/index.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -949,9 +949,10 @@ function HumanOverview({ seat, index, work, nameOf, now }: OverviewProps) {
     { handle: seat.handle },
     { enabled: mayRead && seat.handle !== "", pollMs: 60_000 },
   );
-  // WHAT IS WAITING ON THEM is the inbox's own count — the sidebar badge's
-  // reading when it is the viewer's own day — never the person record's
-  // `unread`, which holds only the EXCEPTIONS below their read mark.
+  // WHAT IS WAITING ON THEM is the badge's count asked of their inbox — the
+  // sidebar badge's own reading when it is the viewer's own day — never the
+  // person record's `unread`, which holds only the EXCEPTIONS below their read
+  // mark.
   const inbox = useInboxCountsOf(seat.handle, mayRead);
   // WHAT THEY MEAN TO DO FIRST, COUNTED BY THE ENGINE: the resolved list's
   // total, the figure My work and this profile's Work tab both read. The
@@ -998,13 +999,16 @@ function HumanOverview({ seat, index, work, nameOf, now }: OverviewProps) {
               {person.data && (
                 <StatGroup columns={3}>
                   <StatCard
-                    label="Unread"
+                    // WAITING, NEVER "UNREAD": on the Inbox, Unread is every
+                    // unread notice, a larger number, and this is the badge's
+                    // figure under the badge's words (`waitingWords`).
+                    label="Waiting"
                     loading={inbox.waiting === null}
                     value={inboxFigure(inbox)}
                     sub={
                       person.data.due?.length
-                        ? `waiting on ${who} · ${plural(person.data.due.length, "snoozed notice")} now due`
-                        : `waiting on ${who}`
+                        ? `${waitingWords(inbox, who)} · ${plural(person.data.due.length, "snoozed notice")} now due`
+                        : waitingWords(inbox, who)
                     }
                   />
                   <StatCard
