@@ -70,6 +70,16 @@ type Record struct {
 	AgentID   string `json:"agent_id"`
 	AgentRole string `json:"agent_role"`
 
+	// Handle is the AGENT SEAT the record was spent by, as its event named
+	// it (`agent_handle`), and what the live fold keys a seat's row and a
+	// turn's on. AgentRole is the seat's NAME, a label two seats can share:
+	// unique seat names are an admission rule, so a stored revision, or one
+	// a newer node admitted, runs with a collision — and a fold keyed on the
+	// name filed both seats' spend under one row, linked to whichever seat
+	// the name resolved to first. Empty on a person's record, which names
+	// the person in Person instead.
+	Handle string `json:"agent_handle"`
+
 	// Person is the PERSON an auxiliary record was spent for — the handle
 	// of the human seat a person's question was asked from, or of the one
 	// leading a unit whose pass ran on its chain — and empty on every other
@@ -311,6 +321,11 @@ type WorkerRow struct {
 
 // AgentRow is one seat's spend, split by phase.
 //
+// ONE ROW PER SEAT IDENTITY, never per name: the live window keys it on the
+// seat's Handle ([Aggregate]) and a named one on its AgentID ([FoldDaily]),
+// and Role is only what the newest record called it. Two seats sharing a name
+// are two rows.
+//
 // ByPhase is a MAP here and a list at the top level, and the difference is the
 // consumers': the top-level list is rendered in token order as a bar, while
 // this one is indexed per column of a matrix — `a.by_phase[p]` — so a list
@@ -433,11 +448,6 @@ type Rollup struct {
 
 // Options tune one aggregation.
 type Options struct {
-	// Handles maps a role name to its agent handle, so a per-agent row can
-	// link back to that seat. Absent leaves the handle blank rather than
-	// guessing one — a wrong link is worse than no link.
-	Handles map[string]string
-
 	// Since and Until are recorded on the rollup as the window it
 	// describes. The caller does the filtering; this only reports it.
 	//
@@ -459,23 +469,30 @@ type Options struct {
 // Every bucket is a sum and every instant a min or a max, so no figure here
 // depends on the order the records are handed over in.
 //
-// Every value that NAMES something — a seat's agent id, a person's role, a
-// turn's agent id, work key and role — is the LAST one a record carried, and a
-// record carrying none leaves it be. Never the FIRST: a turn whose first record
-// in window order came without its work key was listed with none, and the same
-// records handed over the other way round named it.
+// A SEAT IS KEYED ON ITS HANDLE, the identity every record names it by, and a
+// person on their own handle apart from every seat ([Record.Person]). Never on
+// the role: a role is a name two seats can share, and keyed on it two seats'
+// spend was one row under one handle. A record naming no handle is filed under
+// none — a row with no link — rather than under a name it might share.
+//
+// Every value that NAMES something — a seat's or a person's agent id and role,
+// a turn's handle, agent id, work key and role — is the LAST one a record
+// carried, and a record carrying none leaves it be. Never the FIRST: a turn
+// whose first record in window order came without its work key was listed with
+// none, and the same records handed over the other way round named it.
 //
 // For a turn that is no choice at all: a run is one turn of one seat, on one
 // configuration, for one unit of work, so every record of it that names one of
-// these names the same one, and the order cannot change the answer. For a seat's
-// agent id and a person's role it is the point — the id is derived from the
-// org's name and the seat's handle and a role is a name, so a rename changes
-// either, the current one is what a row must show, and only the order can say
-// which one is current. What production hands this is the live projection's
-// window: undateable records first, then the rest in the order they age out —
-// oldest stamp first, one stamped ahead in its arrival's place, whatever order
-// they arrived in — so the value kept is the one the newest record carries, as
-// a named window's seat is named by its newest day ([FoldDaily]).
+// these names the same one, and the order cannot change the answer. For a
+// seat's agent id and role it is the point — the id is derived from the org's
+// name and the seat's handle and a role is a name, so a rename of either
+// changes it while the handle keeps the row, the current one is what a row must
+// show, and only the order can say which one is current. What production hands
+// this is the live projection's window: undateable records first, then the
+// rest in the order they age out — oldest stamp first, one stamped ahead in its
+// arrival's place, whatever order they arrived in — so the value kept is the
+// one the newest record carries, as a named window's seat is named by its
+// newest day ([FoldDaily]).
 func Aggregate(records []Record, opts Options) Rollup {
 	limit := opts.RecentTurns
 	switch {
@@ -517,16 +534,13 @@ func Aggregate(records []Record, opts Options) Rollup {
 		out.Totals.add(r)
 		bucketFor(byPhase, phase).add(r)
 		bucketFor(byModel, model).add(r)
-		// The seat a provider row names is its HANDLE where the org has
-		// one, which is what every other surface links by, and the role
-		// otherwise — a name, never a blank entry in "used by". A person
-		// is named by their own handle.
-		seat := opts.Handles[role]
+		// The seat a provider row names is its HANDLE, which is what every
+		// other surface links by, named by the rule a named window's cells
+		// are ([seatName]) — a name, never a blank entry in "used by". A
+		// person is named by their own handle.
+		seat := seatName(r.Handle, r.AgentRole, r.AgentID)
 		if r.Person != "" {
 			seat = r.Person
-		}
-		if seat == "" {
-			seat = role
 		}
 		providers.add(r.ProviderKey, model, seat, Bucket{}.plus(r))
 		// Keyed on the PAIR, not on the worker alone: Worker is set only
@@ -536,11 +550,11 @@ func Aggregate(records []Record, opts Options) Rollup {
 			bucketFor(byWorker, r.Worker).add(r)
 		}
 
-		// A PERSON IS KEYED APART from every seat, by their own handle: a
-		// person's record names no agent role of its own, only the role of
-		// their seat, and a seat's row keyed on that role would take a
-		// person's spend as the seat's.
-		key, handle := role, opts.Handles[role]
+		// A SEAT BY ITS HANDLE (see Aggregate), and a PERSON APART from
+		// every seat by theirs: a person's record names no agent seat, so
+		// its Handle is empty, and keyed as a seat is every person would
+		// share one row with each record that named no seat at all.
+		key, handle := r.Handle, r.Handle
 		if r.Person != "" {
 			key, handle = personKey(r.Person), r.Person
 		}
@@ -557,12 +571,11 @@ func Aggregate(records []Record, opts Options) Rollup {
 		if r.AgentID != "" {
 			agent.AgentID = r.AgentID
 		}
-		// And the latest ROLE: a seat's row is keyed on its role, so this
-		// changes nothing there, but a person's is keyed on their handle and
-		// names their seat's role, which a rename changes — named by the
-		// first record, a person renamed mid-window kept the name they
-		// started it with here while a named window ([FoldDaily]) gave the
-		// newest, and a first record carrying no role left them "unknown".
+		// And the latest ROLE: every row is keyed on a handle and names a
+		// role, which a rename changes — named by the first record, a seat
+		// or a person renamed mid-window kept the name they started it with
+		// here while a named window ([FoldDaily]) gave the newest, and a
+		// first record carrying no role left them "unknown".
 		if r.AgentRole != "" {
 			agent.Role = r.AgentRole
 		}
@@ -580,7 +593,7 @@ func Aggregate(records []Record, opts Options) Rollup {
 		turn := byTurn[r.TurnID]
 		if turn == nil {
 			turn = &TurnRow{
-				TurnID: r.TurnID, Role: role, Handle: opts.Handles[role],
+				TurnID: r.TurnID, Role: role, Handle: r.Handle,
 				StartedAt: r.Timestamp, EndedAt: r.Timestamp,
 				ByPhase: map[string]*Bucket{},
 			}
@@ -593,8 +606,11 @@ func Aggregate(records []Record, opts Options) Rollup {
 		if r.WorkKey != "" {
 			turn.WorkKey = r.WorkKey
 		}
+		if r.Handle != "" {
+			turn.Handle = r.Handle
+		}
 		if r.AgentRole != "" {
-			turn.Role, turn.Handle = r.AgentRole, opts.Handles[r.AgentRole]
+			turn.Role = r.AgentRole
 		}
 		if r.AgentID != "" {
 			turn.AgentID = r.AgentID
@@ -636,7 +652,7 @@ func Aggregate(records []Record, opts Options) Rollup {
 	byTokensThen(out.ByPhase, func(r PhaseRow) (int, string) { return r.TotalTokens, r.Phase })
 	byTokensThen(out.ByModel, func(r ModelRow) (int, string) { return r.TotalTokens, r.Model })
 	byTokensThen(out.ByWorker, func(r WorkerRow) (int, string) { return r.TotalTokens, r.Worker })
-	byTokensThen(out.ByAgent, func(r AgentRow) (int, string) { return r.TotalTokens, agentTie(r, r.Role) })
+	byTokensThen(out.ByAgent, func(r AgentRow) (int, string) { return r.TotalTokens, agentTie(r, r.Handle) })
 
 	// Turns are NEWEST FIRST, not biggest first: the table is a tail of
 	// recent activity, and ordering it by size would pin one expensive
@@ -723,17 +739,16 @@ func ranked(m map[string]int) []string {
 }
 
 // personKey is a person's key in a per-seat fold: apart from every seat's,
-// whose keys are roles and agent ids, neither of which contains a NUL.
+// whose keys are handles and agent ids, neither of which contains a NUL.
 func personKey(handle string) string { return "person\x00" + handle }
 
 // agentTie is what equal-total rows of a per-seat fold are ordered by: the key
-// the fold filed the row under — seat, the fold's own key for a seat (a role on
-// the live window, an agent id on a named one) — or the person's.
+// the fold filed the row under — seat, the fold's own key for a seat (a handle
+// on the live window, an agent id on a named one) — or the person's.
 //
 // NEVER THE SEAT'S KEY ALONE: every person row on a named window carries one
-// empty agent id and two people of one role share a role, so two people with
-// equal totals compared equal and came back in Go's randomised map order —
-// which [byTokensThen] exists to stop.
+// empty agent id, so two people with equal totals compared equal and came back
+// in Go's randomised map order — which [byTokensThen] exists to stop.
 func agentTie(r AgentRow, seat string) string {
 	if r.Person {
 		return personKey(r.Handle)

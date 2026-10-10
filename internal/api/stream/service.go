@@ -54,11 +54,6 @@ type Service struct {
 	// health is consulted by the shared tick.
 	health HealthFunc
 
-	// handles maps a role to its agent handle, for the per-agent rollup's
-	// cross-links. It answers an empty map while no company is active,
-	// which leaves them blank.
-	handles HandleFunc
-
 	// rosterRows, org, tools and schedules are the config-derived
 	// surfaces. See Options.
 	rosterRows func() []map[string]any
@@ -94,9 +89,6 @@ type Service struct {
 	done    chan struct{}
 }
 
-// HandleFunc answers the role-to-handle map the per-agent rollup links with.
-type HandleFunc func() map[string]string
-
 // PlacementFunc reads which of the company's agent seats some node in the fleet
 // holds, keyed by handle: every agent seat in the company, true where a node
 // holds it. An error is a read that did not happen, never "none are held".
@@ -104,18 +96,13 @@ type PlacementFunc func() (map[string]bool, error)
 
 // Options configure a service.
 //
-// Health, Handles, Roster, Org, Tools and Schedules are REQUIRED, and
+// Health, Roster, Org, Tools, Schedules and Placement are REQUIRED, and
 // [NewService] refuses a missing one by name. Each is something the engine
 // beside the API always answers, so a missing one is a wiring mistake, and
 // serving around it would push a confident answer where there is none: a
 // health frame reading "ok", an empty catalogue, an organization with no seats.
 type Options struct {
 	Health HealthFunc
-
-	// Handles supplies the role-to-handle map. An empty map leaves each
-	// row's handle blank rather than guessing one: a wrong link is worse
-	// than no link.
-	Handles HandleFunc
 
 	// Roster, Org and Tools are the three surfaces the dashboard renders
 	// from CONFIGURATION rather than from anything that has happened.
@@ -126,9 +113,8 @@ type Options struct {
 	// the live overlay onto a static roster of nil — an empty list, every
 	// connect, for ever on a company whose model was not answering.
 	//
-	// Functions, not values, for the same reason Handles is one: an apply
-	// replaces the company, and a roster captured at boot would keep
-	// showing a role a revision deleted.
+	// Functions, not values: an apply replaces the company, and a roster
+	// captured at boot would keep showing a role a revision deleted.
 	//
 	// Org answers `any` because its shape is an explicit public type owned
 	// by package api (the classified org projection), and api imports this
@@ -178,7 +164,6 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 		absent bool
 	}{
 		{"Health", opts.Health == nil},
-		{"Handles", opts.Handles == nil},
 		{"Roster", opts.Roster == nil},
 		{"Org", opts.Org == nil},
 		{"Tools", opts.Tools == nil},
@@ -198,7 +183,6 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 		hub:        NewHub(),
 		state:      state,
 		health:     opts.Health,
-		handles:    opts.Handles,
 		rosterRows: opts.Roster,
 		org:        opts.Org,
 		tools:      opts.Tools,
@@ -604,9 +588,8 @@ func (s *Service) TokenRollup() tokens.Rollup {
 	// its window on its own clock and names the two instants it cut it at.
 	window := s.state.Spend()
 	return tokens.Aggregate(window.Records, tokens.Options{
-		Handles: s.handles(),
-		Since:   window.Since,
-		Until:   window.Until,
+		Since: window.Since,
+		Until: window.Until,
 	})
 }
 

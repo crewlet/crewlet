@@ -396,13 +396,9 @@ func New(opts Options) (*App, error) {
 	var err error
 	a.stream, err = stream.NewService(state, stream.Options{
 		Health: a.streamHealth,
-		// Read through the SOURCES rather than captured, for the same
-		// reason every other read here is: a config apply replaces the
-		// company, and a map captured at boot would keep cross-linking a
-		// renamed seat to the handle it used to have.
-		Handles: opts.Sources.RoleHandles,
-		// The three config-derived surfaces, read live for the same
-		// reason Handles is: an apply replaces the company.
+		// The three config-derived surfaces, read through the SOURCES
+		// rather than captured, for the reason every other read here is:
+		// a config apply replaces the company.
 		Roster: func() []map[string]any { return roster(opts.Sources.Company) },
 		Org:    func(reach auth.Reach) any { return orgProjection(opts.Sources.Company, reach) },
 		Tools:  func() []map[string]any { return toolRows(opts.Runtime) },

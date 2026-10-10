@@ -756,6 +756,9 @@ export interface ModelRow extends Bucket {
 export interface WorkerRow extends Bucket {
   worker: string;
 }
+/** One seat's spend. ONE ROW PER SEAT, never per name — the live window keys it
+ *  on `handle`, a named one on `agent_id` — so two seats sharing a `role` are
+ *  two rows, each linked by its own `handle`. */
 export interface AgentSpendRow extends Bucket {
   role: string;
   handle: string;
@@ -797,6 +800,8 @@ export interface TurnSpendRow extends Bucket {
   /** The unit of work this run was an attempt at, absent when it had none. */
   work_key?: string;
   role: string;
+  /** The seat that ran it, as its records name it — never looked up by `role`,
+   *  which two seats can share. */
   handle: string;
   agent_id: string;
   started_at: string;

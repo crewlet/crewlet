@@ -662,6 +662,78 @@ func TestALiveRowAndASeededRowNameTheSameSeat(t *testing.T) {
 	}
 }
 
+// A SEAT'S SPEND IS ITS OWN ROW, LIVE OR SEEDED, keyed on the handle every
+// record names it by.
+//
+// Two seats may share a name — unique seat names are an admission rule, so a
+// stored revision, or one a newer node admitted, runs with a collision — and
+// the live spend window filed them under that name: one row, both seats' spend.
+// Both producers of that window hand the fold the handle now: the projection
+// off the envelope, and the store off the column a restarted process seeds
+// from. Each seat here spends through a phase and through the auxiliary model.
+//
+// Mutation: drop `agent_handle` from the store's promoted tags, and the seeded
+// window is one row; drop the projection's read of it, and the live one is.
+func TestASeatsSpendIsItsOwnRowLiveOrSeeded(t *testing.T) {
+	t.Parallel()
+	log := openStore(t).Events()
+	at := time.Now().UTC().Add(-time.Minute)
+	var evs []*events.Event
+	for i, handle := range []string{"eng-a", "eng-b"} {
+		spent := 100 * (i + 1)
+		evs = append(evs,
+			events.New(types.AgentPhaseCompleted{
+				RoleName: "Engineer", AgentHandle: handle, Agent: "id-" + handle,
+				TurnID: "tn-" + handle, Phase: types.PhaseExecute, Model: "claude-sonnet-5",
+				TotalTokens: spent, InputTokens: spent,
+			}, events.TraceContext{}),
+			events.New(types.AuxiliarySpend{
+				RoleName: "Engineer", AgentHandle: handle, Agent: "id-" + handle,
+				TurnID: "tn-" + handle, Stage: types.AuxStageTurn, Purpose: types.AuxMemoryFilter,
+				Model: "claude-haiku-4-5", Calls: 1, TotalTokens: i + 1, InputTokens: i + 1,
+			}, events.TraceContext{}))
+	}
+	live := livestate.New()
+	for _, ev := range evs {
+		ev.Source, ev.Timestamp = "Engineer", at
+		env, ok := observe.Envelope(ev)
+		if !ok {
+			t.Fatalf("%s did not render as a live envelope", ev.Type)
+		}
+		live.Apply(&env)
+		rec, ok := observe.Record(ev)
+		if !ok {
+			t.Fatalf("%s did not render as a store row", ev.Type)
+		}
+		if err := log.Append(t.Context(), rec); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	seeded := livestate.New()
+	if err := observe.Seed(t.Context(), eventfan.Solo("node-1", log), nil, seeded); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	for window, state := range map[string]*livestate.LiveState{"live": live, "seeded": seeded} {
+		rollup := tokens.Aggregate(state.SpendRecords(), tokens.Options{})
+		seats := map[string]tokens.AgentRow{}
+		for _, a := range rollup.ByAgent {
+			seats[a.Handle] = a
+		}
+		if len(rollup.ByAgent) != 2 || seats["eng-a"].TotalTokens != 101 ||
+			seats["eng-b"].TotalTokens != 202 {
+			t.Errorf("%s by_agent = %+v, want eng-a's 101 and eng-b's 202 apart", window, rollup.ByAgent)
+		}
+		turns := map[string]string{}
+		for _, turn := range rollup.ByTurn {
+			turns[turn.TurnID] = turn.Handle
+		}
+		if turns["tn-eng-a"] != "eng-a" || turns["tn-eng-b"] != "eng-b" {
+			t.Errorf("%s turns link to %v, want each to the seat that ran it", window, turns)
+		}
+	}
+}
+
 // AN A2A ROW NAMES ITS CHANNEL, LIVE OR SEEDED, BY THE STORE'S OWN RULE.
 //
 // The event log narrows to one agent-to-agent channel (`channel=`) — the link

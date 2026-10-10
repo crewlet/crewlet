@@ -114,10 +114,8 @@ func TestTheLiveRollupAnswersProvidersToo(t *testing.T) {
 	a := rec("CEO", "execute", "sonnet", "t1", "2026-06-14T12:00:00Z", 60, 20)
 	a.ProviderKey = "anthropic"
 	b := rec("Dev", "execute", "haiku", "t2", "2026-06-14T12:01:00Z", 5, 5)
-	b.ProviderKey = "anthropic"
-	got := tokens.Aggregate([]tokens.Record{a, b}, tokens.Options{
-		Handles: map[string]string{"CEO": "ceo"}, Since: since, Until: until,
-	})
+	b.ProviderKey, b.Handle = "anthropic", ""
+	got := tokens.Aggregate([]tokens.Record{a, b}, tokens.Options{Since: since, Until: until})
 	if len(got.ByProvider) != 1 {
 		t.Fatalf("by_provider = %+v", got.ByProvider)
 	}

@@ -2,16 +2,20 @@ package tokens_test
 
 import (
 	"encoding/json"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/tokens"
 )
 
+// rec is a phase record of the seat named role, whose handle is the role
+// lowered — what every record names its seat by, as `agent_handle`.
 func rec(role, phase, model, turn, at string, in, out int) tokens.Record {
 	return tokens.Record{
 		EventID: at + role + phase, Timestamp: at,
-		AgentRole: role, AgentID: "id-" + role,
+		AgentRole: role, AgentID: "id-" + role, Handle: strings.ToLower(role),
 		Phase: phase, Model: model, TurnID: turn,
 		InputTokens: in, OutputTokens: out, TotalTokens: in + out, Calls: 1,
 	}
@@ -23,7 +27,7 @@ func TestOneTurnFoldsIntoEveryDimension(t *testing.T) {
 		rec("CEO", "onboarding", "sonnet", "t1", "2026-06-14T12:00:00Z", 60, 20),
 		rec("CEO", "execute", "sonnet", "t1", "2026-06-14T12:00:05Z", 90, 30),
 		rec("CEO", "review", "haiku", "t1", "2026-06-14T12:00:09Z", 40, 10),
-	}, tokens.Options{Handles: map[string]string{"CEO": "ceo"}, Since: since, Until: until})
+	}, tokens.Options{Since: since, Until: until})
 
 	if got.Totals.TotalTokens != 250 || got.Totals.Calls != 3 {
 		t.Errorf("totals = %+v", got.Totals)
@@ -44,6 +48,9 @@ func TestOneTurnFoldsIntoEveryDimension(t *testing.T) {
 		t.Fatalf("by_turn = %+v", got.ByTurn)
 	}
 	turn := got.ByTurn[0]
+	if turn.Handle != "ceo" || turn.AgentID != "id-CEO" {
+		t.Errorf("turn = %s/%s, want the seat its records name", turn.Handle, turn.AgentID)
+	}
 	if turn.StartedAt != "2026-06-14T12:00:00Z" || turn.EndedAt != "2026-06-14T12:00:09Z" {
 		t.Errorf("turn bounds = %s..%s, want the earliest and latest phase",
 			turn.StartedAt, turn.EndedAt)
@@ -55,18 +62,19 @@ func TestOneTurnFoldsIntoEveryDimension(t *testing.T) {
 
 func TestOrderOfArrivalDoesNotChangeTheAnswer(t *testing.T) {
 	t.Parallel()
-	// Every figure is a sum, a min or a max, and a turn's work key and role are
-	// one value on every record of the run that names them, so the same
-	// records handed over in any order fold to the same rollup — and a figure
-	// or a name that depended on the order would move when nothing it counts
-	// had. Each turn here has a record naming neither its work key nor (t2) its
-	// role, handed over first one way and last the other, which is what tells
-	// a field filled from whichever record carries it from one taken off the
-	// first. A seat's agent id is order-dependent by design, latest wins, so
-	// each role here keeps one.
+	// Every figure is a sum, a min or a max, and a turn's work key, role and
+	// handle are one value on every record of the run that names them, so the
+	// same records handed over in any order fold to the same rollup — and a
+	// figure or a name that depended on the order would move when nothing it
+	// counts had. Each turn here has a record naming neither its work key nor
+	// (t2) its role or its handle, handed over first one way and last the
+	// other, which is what tells a field filled from whichever record carries
+	// it from one taken off the first. A seat's agent id is order-dependent by
+	// design, latest wins, so each seat here keeps one.
 	//
-	// Mutation: take a turn's work key, or its role, from its first record
-	// only, and the forward order lists t1 with no key and t2 as "unknown".
+	// Mutation: take a turn's work key, its role or its handle from its first
+	// record only, and the forward order lists t1 with no key and t2 as
+	// "unknown", linked nowhere.
 	keyless := rec("CEO", "onboarding", "sonnet", "t1", "2026-06-14T12:00:00Z", 60, 20)
 	keyed := rec("CEO", "execute", "sonnet", "t1", "2026-06-14T12:00:05Z", 90, 30)
 	keyed.WorkKey = "wk-1"
@@ -76,7 +84,7 @@ func TestOrderOfArrivalDoesNotChangeTheAnswer(t *testing.T) {
 	cto.WorkKey = "wk-2"
 	forward := []tokens.Record{keyless, keyed, roleless, cto}
 	backward := []tokens.Record{cto, roleless, keyed, keyless}
-	opts := tokens.Options{Handles: map[string]string{"CEO": "ceo", "CTO": "cto"}}
+	opts := tokens.Options{}
 
 	want := map[string]tokens.TurnRow{
 		"t1": {WorkKey: "wk-1", Role: "CEO", Handle: "ceo"},
@@ -100,6 +108,75 @@ func TestOrderOfArrivalDoesNotChangeTheAnswer(t *testing.T) {
 	}
 	if string(answers[0]) != string(answers[1]) {
 		t.Errorf("the rollup depends on arrival order:\n%s\n%s", answers[0], answers[1])
+	}
+}
+
+// TWO SEATS OF ONE NAME ARE TWO ROWS, each under its own handle.
+//
+// A seat's name is a label two seats can share — unique seat names are an
+// admission rule, so a stored revision, or one a newer node admitted, runs with
+// a collision — and its handle is its identity. Keyed on the name, the live
+// window summed both seats' spend into one row, linked it to whichever seat a
+// role-to-handle map named, and listed one seat as the only one leaning on
+// their provider entry.
+//
+// Mutation: key the per-seat row on AgentRole, and the two seats are one row
+// of 330; name a provider row's seat by the role, and "used by" is one name.
+func TestTwoSeatsOfOneNameKeepTheirOwnSpend(t *testing.T) {
+	t.Parallel()
+	seat := func(handle, turn, at string, total int) tokens.Record {
+		r := rec("Engineer", "execute", "sonnet", turn, at, total, 0)
+		r.Handle, r.AgentID, r.ProviderKey = handle, "id-"+handle, "anthropic"
+		r.EventID += handle
+		return r
+	}
+	got := tokens.Aggregate([]tokens.Record{
+		seat("eng-a", "t-a", "2026-06-14T12:00:00Z", 300),
+		seat("eng-b", "t-b", "2026-06-14T12:00:05Z", 30),
+	}, tokens.Options{Since: since, Until: until})
+
+	byHandle := map[string]tokens.AgentRow{}
+	for _, a := range got.ByAgent {
+		byHandle[a.Handle] = a
+	}
+	if len(got.ByAgent) != 2 {
+		t.Fatalf("by_agent = %+v, want one row for each seat named Engineer", got.ByAgent)
+	}
+	for handle, want := range map[string]int{"eng-a": 300, "eng-b": 30} {
+		a := byHandle[handle]
+		if a.TotalTokens != want || a.AgentID != "id-"+handle || a.Role != "Engineer" {
+			t.Errorf("%s = %+v, want its own %d under its own id", handle, a, want)
+		}
+	}
+	turns := map[string]string{}
+	for _, turn := range got.ByTurn {
+		turns[turn.TurnID] = turn.Handle
+	}
+	if turns["t-a"] != "eng-a" || turns["t-b"] != "eng-b" {
+		t.Errorf("turns link to %v, want each to the seat that ran it", turns)
+	}
+	if len(got.ByProvider) != 1 || !slices.Equal(got.ByProvider[0].Seats, []string{"eng-a", "eng-b"}) ||
+		got.ByProvider[0].SeatsTotal != 2 {
+		t.Errorf("by_provider = %+v, want both seats leaning on the entry", got.ByProvider)
+	}
+}
+
+// A SEAT RENAMED INSIDE THE WINDOW IS ONE ROW, under its newest name — as a
+// named window's is ([FoldDaily]). Its handle is what it is, and a rename
+// changes only what it is called.
+//
+// Mutation: key the per-seat row on AgentRole, and the seat is two rows.
+func TestASeatRenamedInsideTheWindowIsOneRowUnderItsNewestName(t *testing.T) {
+	t.Parallel()
+	older := rec("Lead", "execute", "sonnet", "t1", "2026-06-14T11:00:00Z", 10, 0)
+	newer := rec("Tech Lead", "execute", "sonnet", "t2", "2026-06-14T12:00:00Z", 20, 0)
+	newer.Handle, newer.AgentID = older.Handle, older.AgentID
+	got := tokens.Aggregate([]tokens.Record{older, newer}, tokens.Options{Since: since, Until: until})
+	if len(got.ByAgent) != 1 {
+		t.Fatalf("by_agent = %+v, want the one seat", got.ByAgent)
+	}
+	if a := got.ByAgent[0]; a.Handle != "lead" || a.Role != "Tech Lead" || a.TotalTokens != 30 {
+		t.Errorf("by_agent = %+v, want lead's 30 named Tech Lead", a)
 	}
 }
 
@@ -292,7 +369,7 @@ func TestTheWireKeysAreTheOnesTheClientReads(t *testing.T) {
 	// a renamed field here is a blank panel there, with no error anywhere.
 	raw, _ := json.Marshal(tokens.Aggregate([]tokens.Record{
 		rec("CEO", "onboarding", "sonnet", "t1", "2026-06-14T12:00:00Z", 60, 20),
-	}, tokens.Options{Handles: map[string]string{"CEO": "ceo"}, Since: since, Until: until}))
+	}, tokens.Options{Since: since, Until: until}))
 
 	var body map[string]any
 	if err := json.Unmarshal(raw, &body); err != nil {
@@ -436,7 +513,7 @@ func TestTwoRunsOfOneTriggerAreTwoLinkableRows(t *testing.T) {
 	second.WorkKey = "wk-1"
 
 	got := tokens.Aggregate([]tokens.Record{first, second},
-		tokens.Options{Handles: map[string]string{"CEO": "ceo"}, Since: since, Until: until})
+		tokens.Options{Since: since, Until: until})
 
 	if len(got.ByTurn) != 2 {
 		t.Fatalf("by_turn = %d rows, want one per run: %+v", len(got.ByTurn), got.ByTurn)

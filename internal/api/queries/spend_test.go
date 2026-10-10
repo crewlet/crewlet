@@ -342,26 +342,41 @@ func TestTheSeriesIsCutInCompanyWeeksAndFoldsPhasesIntoFourBands(t *testing.T) {
 	}
 }
 
-// A UNIT SEAT HAS A HANDLE IN THE ROLLUP. The handle map walked the company's
-// ROOT roles only, so every seat inside a unit rolled up with an empty handle
-// and its row linked nowhere.
-func TestAUnitSeatHasAHandleInTheRollup(t *testing.T) {
+// THE LIVE WINDOW KEYS A SEAT ON THE HANDLE ITS RECORDS NAME, through the
+// question the REST route and the socket both answer. Two seats sharing a name
+// — a revision a newer node admitted runs with one — were one row keyed on the
+// name, their spend summed and both linked to whichever seat a map from role
+// name to handle named, and a turn of either seat linked there too.
+//
+// Mutation: drop the handle the projection reads off a spend record, and the
+// two seats are one row linked nowhere.
+func TestTheLiveRollupKeepsTwoSeatsOfOneNameApart(t *testing.T) {
 	t.Parallel()
-	f := newSpendFixture(t)
-	sources := f.sources()
-	sources.State.Apply(&livestate.Envelope{
-		ID: "p1", Type: "agent_phase_completed",
-		Timestamp: spendNow.Add(-time.Minute).Format(time.RFC3339Nano),
-		Category:  "agent", Payload: map[string]any{
-			"role": "Site Reliability", "phase": "execute", "total_tokens": 9,
-		},
-	})
-	got := rollupOf(t, registryOver(t, sources), nil)
-	if len(got.ByAgent) != 1 || got.ByAgent[0].Handle != "sre" {
-		t.Errorf("by_agent = %+v, want the unit seat under its handle sre", got.ByAgent)
+	sources := newSpendFixture(t).sources()
+	for i, handle := range []string{"eng-a", "eng-b"} {
+		sources.State.Apply(&livestate.Envelope{
+			ID: "p-" + handle, Type: "agent_phase_completed",
+			Timestamp: spendNow.Add(-time.Minute).Format(time.RFC3339Nano),
+			Category:  "agent", Payload: map[string]any{
+				"role": "Engineer", "agent_handle": handle, "agent_id": "id-" + handle,
+				"turn_id": "t-" + handle, "phase": "execute", "total_tokens": 10 * (i + 1),
+			},
+		})
 	}
-	if handles := sources.RoleHandles(); handles["Site Reliability"] != "sre" || handles["Lead"] != "lead" {
-		t.Errorf("handles = %v, want every seat in the chart", handles)
+	got := rollupOf(t, registryOver(t, sources), nil)
+	seats := map[string]int{}
+	for _, a := range got.ByAgent {
+		seats[a.Handle] = a.TotalTokens
+	}
+	if len(got.ByAgent) != 2 || seats["eng-a"] != 10 || seats["eng-b"] != 20 {
+		t.Errorf("by_agent = %+v, want eng-a's 10 and eng-b's 20 apart", got.ByAgent)
+	}
+	turns := map[string]string{}
+	for _, turn := range got.ByTurn {
+		turns[turn.TurnID] = turn.Handle
+	}
+	if turns["t-eng-a"] != "eng-a" || turns["t-eng-b"] != "eng-b" {
+		t.Errorf("turns link to %v, want each to the seat that ran it", turns)
 	}
 }
 
