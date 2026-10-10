@@ -40,6 +40,10 @@ func renderObjectsScenarios(t *testing.T) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
+	refused, err := objstore.ParseKey("0199b4f6-0000-7000-8000-00000000e5f6")
+	if err != nil {
+		t.Fatal(err)
+	}
 	audited := objectsAt.Add(-3 * time.Hour)
 	clean := engine.CollectionReport{
 		Node: "data-a", Backend: "s3:https://s3.example.com/files/acme/",
@@ -51,14 +55,15 @@ func renderObjectsScenarios(t *testing.T) []byte {
 		},
 	}
 	findings := &collect.AuditFindings{At: audited, Completed: true, Referenced: 1828,
-		Missing: 1, Damaged: 1, MissingFiles: []collect.MissingFile{
-			{Object: lost, NamedBy: "ENG/reports/q3 plan.md"},
-			{Object: bent, NamedBy: "OPS/runbooks/restore.md", Damaged: true},
+		Missing: 1, Damaged: 1, Unanswered: 1, MissingFiles: []collect.MissingFile{
+			{Object: lost, NamedBy: "ENG/reports/q3 plan.md", Finding: collect.FindingMissing},
+			{Object: refused, NamedBy: "LEGAL/contracts/msa.pdf", Finding: collect.FindingUnanswered},
+			{Object: bent, NamedBy: "OPS/runbooks/restore.md", Finding: collect.FindingDamaged},
 		}}
 	missing := clean
 	missing.Backend = "nats"
 	missing.Status.Audit = collect.AuditReport{Completed: true, Referenced: 1828,
-		Missing: 1, Damaged: 1, At: audited, Found: findings}
+		Missing: 1, Damaged: 1, Unanswered: 1, At: audited, Found: findings}
 	// AN AUDIT THAT FAILED AFTER ONE THAT FOUND SOMETHING: the attempt and
 	// its error, and the findings it did not replace.
 	failed := missing
@@ -153,6 +158,23 @@ func TestTheDashboardKnowsEveryObjectsState(t *testing.T) {
 		states = append(states, string(s))
 	}
 	holdStrings(t, clientsource.Tree(t), "OBJECTS_STATES", states, "objects state")
+}
+
+// THE DASHBOARD KNOWS EVERY FINDING AN AUDIT MAKES OF A FILE, and no other: the
+// card types each file it lists by its finding, so one the engine adds and the
+// card does not name is a file typed as something it is not, and the three
+// send an operator to three different places — a backup, the store's own
+// repair, the store's health.
+func TestTheDashboardKnowsEveryObjectFinding(t *testing.T) {
+	t.Parallel()
+	var findings []string
+	for _, f := range collect.Findings() {
+		if !f.Valid() {
+			t.Fatalf("Findings lists %q, which Valid refuses", f)
+		}
+		findings = append(findings, string(f))
+	}
+	holdStrings(t, clientsource.Tree(t), "OBJECT_FINDINGS", findings, "audit finding")
 }
 
 // exampleUnder is the first JSON example in the section a heading opens, decoded.

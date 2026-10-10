@@ -383,17 +383,18 @@ func TestAnUnknownClaimKeepsTheAlarm(t *testing.T) {
 	}
 
 	// Another node held the duty meanwhile, and its audit found two files
-	// lost.
+	// lost: one the store does not hold, and one it would not answer for —
+	// which the alarm counts as surely.
 	now := time.Now()
 	lost := []collect.MissingFile{
-		{Object: source.k, NamedBy: "ENG/lost.md"},
-		{Object: objstore.KeyAt(now), NamedBy: "ENG/also-lost.md"},
+		{Object: source.k, NamedBy: "ENG/lost.md", Finding: collect.FindingMissing},
+		{Object: objstore.KeyAt(now), NamedBy: "ENG/also-lost.md", Finding: collect.FindingUnanswered},
 	}
 	raw, err := json.Marshal(collectionReport{Node: "data-b", Backend: "nats", Status: collect.Status{
 		Collect: collect.CollectionReport{Completed: true, At: now.Add(-2 * collect.CollectInterval)},
-		Audit: collect.AuditReport{Completed: true, Referenced: 2, Missing: 2, At: now,
+		Audit: collect.AuditReport{Completed: true, Referenced: 2, Missing: 1, Unanswered: 1, At: now,
 			Found: &collect.AuditFindings{At: now, Completed: true, Referenced: 2,
-				Missing: 2, MissingFiles: lost}},
+				Missing: 1, Unanswered: 1, MissingFiles: lost}},
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -419,7 +420,7 @@ func TestAnUnknownClaimKeepsTheAlarm(t *testing.T) {
 	if rec.Node != "data-a" {
 		t.Fatalf("the due collection recorded %q's report, want this node's", rec.Node)
 	}
-	if f := rec.Status.Audit.Found; f == nil || f.Missing != 2 || len(f.MissingFiles) != 2 {
+	if f := rec.Status.Audit.Found; f == nil || f.Missing != 1 || f.Unanswered != 1 || len(f.MissingFiles) != 2 {
 		t.Fatalf("the pass after an unknown claim recorded findings %+v; "+
 			"want the two files the holder in between found lost", f)
 	}

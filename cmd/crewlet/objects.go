@@ -72,10 +72,13 @@ type objectsFindingView struct {
 	Referenced   int       `json:"referenced"`
 	Missing      int       `json:"missing"`
 	Damaged      int       `json:"damaged"`
+	Unanswered   int       `json:"unanswered"`
 	MissingFiles []struct {
 		Object  string `json:"object"`
 		NamedBy string `json:"named_by"`
-		Damaged bool   `json:"damaged"`
+		// Finding is printed as the node spelled it: a finding a later
+		// build adds reads as itself rather than as one of these.
+		Finding string `json:"finding"`
 	} `json:"missing_files"`
 }
 
@@ -152,22 +155,20 @@ func renderObjects(w io.Writer, v objectsView) error {
 			a.At.Format(time.RFC3339), a.Error)
 	default:
 		f := a.Found
-		fmt.Fprintf(&b, "Last audit:        %s — %d files named, %d missing, %d damaged%s\n",
-			f.At.Format(time.RFC3339), f.Referenced, f.Missing, f.Damaged, passNote(f.Completed, "", ""))
+		fmt.Fprintf(&b, "Last audit:        %s — %d files named, %d missing, %d damaged, %d unanswered%s\n",
+			f.At.Format(time.RFC3339), f.Referenced, f.Missing, f.Damaged, f.Unanswered,
+			passNote(f.Completed, "", ""))
 		if a.Error != "" && a.At.After(f.At) {
 			fmt.Fprintf(&b, "                   a later audit, at %s, stopped: %s\n",
 				a.At.Format(time.RFC3339), a.Error)
 		}
-		if lost := f.Missing + f.Damaged; lost > 0 {
+		if lost := f.Missing + f.Damaged + f.Unanswered; lost > 0 {
 			fmt.Fprintf(&b, "\n%d file(s) cannot be read: the store does not hold their bytes, "+
-				"or holds them wrong. Restore them from a backup (docs/guides/backup.md), or "+
-				"upload them again:\n", lost)
+				"holds them wrong, or would not answer for them while it answered for the "+
+				"rest. Check the store's health, and restore them from a backup "+
+				"(docs/guides/backup.md) or upload them again:\n", lost)
 			for _, m := range f.MissingFiles {
-				what := "missing"
-				if m.Damaged {
-					what = "damaged"
-				}
-				fmt.Fprintf(&b, "  %s (%s, object %s)\n", m.NamedBy, what, m.Object)
+				fmt.Fprintf(&b, "  %s (%s, object %s)\n", m.NamedBy, m.Finding, m.Object)
 			}
 			if shown := len(f.MissingFiles); shown < lost {
 				fmt.Fprintf(&b, "  … and %d more\n", lost-shown)

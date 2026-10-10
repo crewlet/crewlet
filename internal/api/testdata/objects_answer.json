@@ -19,6 +19,7 @@
         "referenced": 412,
         "missing": 0,
         "damaged": 0,
+        "unanswered": 0,
         "error": "objstore/collect: ask the store for a key: the bucket did not answer",
         "found": {
           "at": "2026-09-01T09:00:00Z",
@@ -26,15 +27,22 @@
           "referenced": 1828,
           "missing": 1,
           "damaged": 1,
+          "unanswered": 1,
           "missing_files": [
             {
               "object": "0199b4f6-0000-7000-8000-00000000a1b2",
-              "named_by": "ENG/reports/q3 plan.md"
+              "named_by": "ENG/reports/q3 plan.md",
+              "finding": "missing"
+            },
+            {
+              "object": "0199b4f6-0000-7000-8000-00000000e5f6",
+              "named_by": "LEGAL/contracts/msa.pdf",
+              "finding": "unanswered"
             },
             {
               "object": "0199b4f6-0000-7000-8000-00000000c3d4",
               "named_by": "OPS/runbooks/restore.md",
-              "damaged": true
+              "finding": "damaged"
             }
           ]
         }
@@ -59,21 +67,29 @@
         "referenced": 1828,
         "missing": 1,
         "damaged": 1,
+        "unanswered": 1,
         "found": {
           "at": "2026-09-01T09:00:00Z",
           "completed": true,
           "referenced": 1828,
           "missing": 1,
           "damaged": 1,
+          "unanswered": 1,
           "missing_files": [
             {
               "object": "0199b4f6-0000-7000-8000-00000000a1b2",
-              "named_by": "ENG/reports/q3 plan.md"
+              "named_by": "ENG/reports/q3 plan.md",
+              "finding": "missing"
+            },
+            {
+              "object": "0199b4f6-0000-7000-8000-00000000e5f6",
+              "named_by": "LEGAL/contracts/msa.pdf",
+              "finding": "unanswered"
             },
             {
               "object": "0199b4f6-0000-7000-8000-00000000c3d4",
               "named_by": "OPS/runbooks/restore.md",
-              "damaged": true
+              "finding": "damaged"
             }
           ]
         }
@@ -101,12 +117,14 @@
         "referenced": 1828,
         "missing": 0,
         "damaged": 0,
+        "unanswered": 0,
         "found": {
           "at": "2026-09-01T09:00:00Z",
           "completed": true,
           "referenced": 1828,
           "missing": 0,
-          "damaged": 0
+          "damaged": 0,
+          "unanswered": 0
         }
       }
     },

@@ -92,19 +92,44 @@
 //
 // Every object a REQUIRED table names should be in the backend, whole — a
 // file's record is written only after its object is stored. The audit asks the
-// backend for each one and finds two things: an object it does not hold
-// (MISSING, asked about once more before it is called so — at the end of the
-// pass, or sooner once [maxSuspects] others are waiting for theirs, so a store
-// that lost everything never has the audit hold the whole inventory) and one
-// it holds at another size, or under another digest where the backend keeps
-// one, or as no object it can read at all — objstore.ErrCorrupt, a definite
-// answer that needs no second look (DAMAGED). Both are files the company
-// cannot read: the `objects_missing` alarm and the list `crewlet objects
-// status` prints, each named as the file that holds it, since a person
-// restores files rather than keys. A durable backend loses nothing, so a non-zero count is the
-// backend failing at the one thing it is for. A retired reference is never
-// asked after: the company has let its object go, and a store that lost it
-// lost nothing anybody can miss.
+// backend for each one and finds three things ([Finding]):
+//
+//   - MISSING: an object the store answers it does not hold, on two looks.
+//   - DAMAGED: one it holds at another size, or under another digest where the
+//     backend keeps one, or as no object it can read at all —
+//     objstore.ErrCorrupt, a definite answer that needs no second look.
+//   - UNANSWERED: one the store FAILED to answer about, on two looks, while it
+//     answered the audit's other questions.
+//
+// All three are files the company cannot count on reading: the
+// `objects_missing` alarm and the list `crewlet objects status` prints, each
+// named as the file that holds it, since a person restores files rather than
+// keys. A durable backend loses nothing, so a non-zero count is the backend
+// failing at the one thing it is for. A retired reference is never asked
+// after: the company has let its object go, and a store that lost it lost
+// nothing anybody can miss.
+//
+// THE SECOND LOOK comes at the end of the pass — or sooner, once
+// [maxSuspects] others are waiting for theirs, so a store that lost everything
+// never has the audit hold the whole inventory — for every object whose first
+// look was not definite: "not found" from a store that may not have caught up
+// with an upload yet, and a question the store failed. Only the second look's
+// answer is the finding.
+//
+// ONE OBJECT IS NEVER THE AUDIT'S FAILURE. A question the store fails — after
+// its client's own retries — is set aside for its second look rather than
+// failing the audit, and an object the store fails both times is UNANSWERED
+// once the store answers a question after it: an S3-compatible gateway that
+// answers one object with a server error every time, or refuses it, is one
+// the company cannot read the file from, and an audit that failed instead
+// never named it — every day it stopped there, and each retry asked the store
+// about every object before it again. What fails an audit is the STORE
+// failing: [failedInARow] questions failed with none answered between, which
+// a store that has gone away does to the first window of questions it is
+// sent — or, when the audit's last questions are failures nothing answered
+// after, one more question about an object the store had answered for failing
+// too ([auditor.confirm]), so a store that went away as the walk ended is
+// never taken for one refusing each object it was asked about last.
 //
 // THE ESTATE IS READ A PAGE AT A TIME, BY ONE GOROUTINE, AND THE BACKEND IS
 // ASKED OUTSIDE EVERY READ — up to [auditConcurrency] questions at once while
@@ -131,12 +156,14 @@
 //
 // THE BOUNDS ARE CLOSED LOOPS, never a rate: a request goes out only when one
 // in flight has been answered, so a store that slows down is asked more slowly
-// by itself, and one that fails stops the pass at its first failure with at
-// most the bound outstanding — and the pass returns only once every request it
-// made has ended. Neither is configurable: a closed loop already adapts to a
-// store that answers slowly, and an operator has no better number than the
-// one the shared transport keeps warm connections for
-// (httpx.MaxIdleConnsPerHost, which the audit's bound is held to by a test).
+// by itself, and one that fails stops the pass with at most the bound
+// outstanding — a collection at its first failed deletion, an audit at the
+// store's [failedInARow]th failed question with none answered between — and
+// the pass returns only once every request it made has ended. Neither is
+// configurable: a closed loop already adapts to a store that answers slowly,
+// and an operator has no better number than the one the shared transport
+// keeps warm connections for (httpx.MaxIdleConnsPerHost, which the audit's
+// bound is held to by a test).
 //
 // ONLY THE STORE'S REQUESTS ARE PARALLEL. The estate is read by one goroutine
 // — the walk, and each batch the collection judges — because a read holds one
@@ -226,7 +253,8 @@ const judgeBatch = 500
 // AND NO MORE, because the bound is what keeps the store from being flooded:
 // a question goes out only when one of the thirty-two has been answered, so a
 // store that slows down is asked more slowly by itself, and one that fails
-// stops the audit at its first failure with at most thirty-two questions out.
+// stops the audit at its [failedInARow]th failure in a row with at most
+// thirty-two questions out.
 //
 //   - S3 documents at least 5,500 GET and HEAD requests a second per
 //     partitioned prefix, and every object the engine writes is under one
@@ -271,6 +299,22 @@ const auditConcurrency = 32
 // a time a collection's deletions are round trips in a row; sixteen out divide
 // that by sixteen.
 const deleteConcurrency = 16
+
+// failedInARow is how many questions in a row the store may fail, with none
+// answered between, before the audit stops as a store failing rather than
+// one refusing particular objects.
+//
+// THE AUDIT'S OWN BOUND, thirty-two. A store that has gone away fails every
+// question the audit has out, so its first full window of answers stops the
+// audit — with no more than the window asked in vain, and none of them taken
+// for a finding: a failed audit's counts never reach [AuditReport.Found]. A
+// store answering its other questions while it fails some breaks the run at
+// every answer, and the objects it fails are set aside for their second look
+// instead. Smaller, a run of failures as short as the requests that were in
+// flight when a store hiccupped would stop an audit that could have run to its
+// end; larger, a store that is down would be sent more than one window of
+// questions it cannot answer.
+const failedInARow = auditConcurrency
 
 // MissingShown is how many unreadable files a status names: the counts are
 // always whole, and the list — the first by name — is what an operator
@@ -346,12 +390,14 @@ type AuditReport struct {
 	// Completed is whether the attempt asked about every object the
 	// estate's required tables name, in an estate that was complete;
 	// Referenced how many it asked about, Missing how many the store does
-	// not hold and Damaged how many it holds wrong — floors, for an
+	// not hold, Damaged how many it holds wrong and Unanswered how many it
+	// failed to answer about on both looks ([Finding]) — floors, for an
 	// attempt that did not complete.
 	Completed  bool `json:"completed"`
 	Referenced int  `json:"referenced"`
 	Missing    int  `json:"missing"`
 	Damaged    int  `json:"damaged"`
+	Unanswered int  `json:"unanswered"`
 
 	// At is when the attempt ended, and Error what stopped it.
 	At    time.Time `json:"at"`
@@ -372,18 +418,56 @@ type AuditFindings struct {
 	Completed bool      `json:"completed"`
 
 	// Referenced is how many objects its required tables named; Missing
-	// how many of them the store does not hold, and Damaged how many it
-	// holds at another size, or under another digest where it keeps one.
+	// how many of them the store does not hold, Damaged how many it holds
+	// at another size, or under another digest where it keeps one, or as no
+	// object it can read, and Unanswered how many it failed to answer
+	// about on both looks ([Finding]).
 	Referenced int `json:"referenced"`
 	Missing    int `json:"missing"`
 	Damaged    int `json:"damaged"`
+	Unanswered int `json:"unanswered"`
 
 	// MissingFiles names the [MissingShown] files that come first by name
-	// (NamedBy, then the key) among those that cannot be read, missing and
-	// damaged alike — by name rather than by when the audit found them,
-	// which its questions running at once leave to chance.
+	// (NamedBy, then the key) among those that cannot be read, whatever
+	// was found of each — by name rather than by when the audit found
+	// them, which its questions running at once leave to chance.
 	MissingFiles []MissingFile `json:"missing_files,omitempty"`
 }
+
+// Lost is how many files the findings say cannot be read: what the
+// `objects_missing` alarm counts and a status lists.
+func (f *AuditFindings) Lost() int { return f.Missing + f.Damaged + f.Unanswered }
+
+// Finding is what the audit found of a file it cannot count on reading.
+//
+// ONE OF THREE, never a pair of flags: each sends an operator somewhere
+// different — a backup for a missing file, the store's own repair for a
+// damaged one, the store's health for one it would not answer about — and two
+// flags would spell a fourth case that means nothing.
+type Finding string
+
+const (
+	// FindingMissing is an object the store answered, on both looks, that
+	// it does not hold.
+	FindingMissing Finding = "missing"
+	// FindingDamaged is one it holds at another size, or under another
+	// digest where it keeps one, or as no object it can read at all.
+	FindingDamaged Finding = "damaged"
+	// FindingUnanswered is one the store failed to answer about on both
+	// looks, the walk apart, while it answered the audit's other
+	// questions.
+	FindingUnanswered Finding = "unanswered"
+)
+
+// Findings is every finding an audit makes, in the order the dashboard's copy
+// lists them (`OBJECT_FINDINGS`) — one list, so the engine's idea of the set
+// and the one a gate holds the screen to cannot part.
+func Findings() []Finding {
+	return []Finding{FindingMissing, FindingDamaged, FindingUnanswered}
+}
+
+// Valid reports whether f is one of the three findings.
+func (f Finding) Valid() bool { return slices.Contains(Findings(), f) }
 
 // MissingFile is one file whose bytes the store cannot give back.
 type MissingFile struct {
@@ -392,9 +476,8 @@ type MissingFile struct {
 	// NamedBy is the file, as its row's owner columns spell it — a
 	// project and a path, `ENG/reports/q3.md`.
 	NamedBy string `json:"named_by"`
-	// Damaged is set where the store holds the object with the wrong
-	// bytes, and unset where it holds nothing at all.
-	Damaged bool `json:"damaged,omitempty"`
+	// Finding is what the audit found of it.
+	Finding Finding `json:"finding"`
 }
 
 // clone is f with a list of its own.
@@ -675,15 +758,16 @@ func (c *Collector) Audit(ctx context.Context) (AuditReport, error) {
 		r.Found = c.status.Audit.Found.clone()
 	} else {
 		r.Found = &AuditFindings{At: r.At, Completed: r.Completed, Referenced: r.Referenced,
-			Missing: r.Missing, Damaged: r.Damaged, MissingFiles: files}
+			Missing: r.Missing, Damaged: r.Damaged, Unanswered: r.Unanswered, MissingFiles: files}
 	}
 	c.status.Audit = r
 	c.mu.Unlock()
-	if r.Missing > 0 || r.Damaged > 0 || err != nil {
+	if r.Missing > 0 || r.Damaged > 0 || r.Unanswered > 0 || err != nil {
 		log.WarnContext(ctx, "objects_audited", "referenced", r.Referenced,
-			"missing", r.Missing, "damaged", r.Damaged, "completed", r.Completed,
-			"error", r.Error,
-			"detail", "objects the company's files are kept in are missing or damaged in the object store")
+			"missing", r.Missing, "damaged", r.Damaged, "unanswered", r.Unanswered,
+			"completed", r.Completed, "error", r.Error,
+			"detail", "objects the company's files are kept in are missing or damaged in the "+
+				"object store, or the store would not answer for them")
 	}
 	return r, err
 }
@@ -693,87 +777,14 @@ func (c *Collector) audit(ctx context.Context, r *AuditReport) ([]MissingFile, e
 	if err != nil {
 		return nil, err
 	}
-	var (
-		// mu guards what the questions write, from up to
-		// [auditConcurrency] goroutines at once: the counts of what is
-		// missing and damaged, the files shown, and the suspects.
-		mu    sync.Mutex
-		shown []MissingFile
-		// q is the references the store answered "not found" for, asked
-		// about again once the walk is over — or sooner, once
-		// [maxSuspects] others are waiting for theirs: a store that had
-		// not caught up with an object a moment ago — a bucket that lists
-		// a new object late — is not one that lost it.
-		q        = suspects{limit: c.suspectsHeld}
-		complete = true
-	)
-	// note shows ref among the files that cannot be read if it is among the
-	// first [MissingShown] by name. Called with mu held.
-	note := func(ref Reference, damaged bool) {
-		shown = showFirst(shown, MissingFile{Object: ref.Object.Key, NamedBy: ref.NamedBy, Damaged: damaged})
-	}
-	// judge is the store's answer about one reference: missing (false),
-	// or held and checked against the row.
-	judge := func(ctx context.Context, ref Reference) (bool, error) {
-		info, err := c.opts.Store.Stat(ctx, ref.Object.Key)
-		switch {
-		case errors.Is(err, objstore.ErrNotFound):
-			return false, nil
-		case errors.Is(err, objstore.ErrCorrupt):
-			// HELD, AND NO OBJECT ANYBODY CAN READ: a definite answer, as
-			// damaged as a wrong digest — never a failure, which would stop
-			// every audit on it without ever naming the file.
-		case err != nil:
-			return false, fmt.Errorf("ask the store for %s: %w", ref.Object.Key, err)
-		}
-		if err != nil || info.Size != ref.Object.Size ||
-			(info.Digest != "" && info.Digest != ref.Object.Hash) {
-			mu.Lock()
-			r.Damaged++
-			note(ref, true)
-			mu.Unlock()
-		}
-		return true, nil
-	}
-	// recheck is a suspect's second look: missing once the store has not
-	// found it twice.
-	recheck := func(ctx context.Context, ref Reference) error {
-		held, err := judge(ctx, ref)
-		if err != nil || held {
-			return err
-		}
-		mu.Lock()
-		r.Missing++
-		note(ref, false)
-		mu.Unlock()
-		return nil
-	}
-	// firstLook is one reference's first question. A suspect it pushes out
-	// of the queue gets its second look here, in the slot this question
-	// already holds — never in a slot of its own, which the walk may be
-	// waiting on.
-	firstLook := func(ctx context.Context, source string, ref Reference) error {
-		held, err := judge(ctx, ref)
-		if err != nil {
-			return fmt.Errorf("audit %s's references: %w", source, err)
-		}
-		if held {
-			return nil
-		}
-		mu.Lock()
-		due, over := q.push(ref)
-		mu.Unlock()
-		if !over {
-			return nil
-		}
-		return recheck(ctx, due)
-	}
+	a := &auditor{store: c.opts.Store, r: r, q: suspects{limit: c.suspectsHeld}}
+	complete := true
 
 	// THE WALK READS THE ESTATE ON THIS GOROUTINE ALONE and hands each
 	// reference to a question, at most [auditConcurrency] of them out at
 	// once: a visit waits for a free slot, so the walk reads its next page
 	// only once the questions have caught up with this one, and a question
-	// that fails ends actx, which stops the walk at its next visit.
+	// that stops the audit ends actx, which stops the walk at its next visit.
 	asks, actx := errgroup.WithContext(ctx)
 	asks.SetLimit(auditConcurrency)
 	var walkErr error
@@ -785,10 +796,15 @@ func (c *Collector) audit(ctx context.Context, r *AuditReport) ([]MissingFile, e
 		// inventory in memory for nothing.
 		whole, err := s.EachRequired(actx, v[i], func(ref Reference) error {
 			if aerr := actx.Err(); aerr != nil {
-				return aerr // a question failed: walk no further
+				return aerr // the audit is stopping: walk no further
 			}
 			r.Referenced++
-			asks.Go(func() error { return firstLook(actx, source, ref) })
+			asks.Go(func() error {
+				if err := a.first(actx, ref); err != nil {
+					return fmt.Errorf("audit %s's references: %w", source, err)
+				}
+				return nil
+			})
 			return nil
 		})
 		if err != nil {
@@ -797,8 +813,9 @@ func (c *Collector) audit(ctx context.Context, r *AuditReport) ([]MissingFile, e
 		}
 		complete = complete && whole
 	}
-	// ON EVERY PATH, so no question outlives the pass. A question that failed
-	// is the root of a walk that stopped for it, so it is the one reported.
+	// ON EVERY PATH, so no question outlives the pass. A question that
+	// stopped the audit is the root of a walk that stopped for it, so it is
+	// the one reported.
 	if err := asks.Wait(); err != nil {
 		return nil, fmt.Errorf("objstore/collect: %w", err)
 	}
@@ -809,13 +826,16 @@ func (c *Collector) audit(ctx context.Context, r *AuditReport) ([]MissingFile, e
 	// own: the walk's group ended its context with its Wait.
 	again, gctx := errgroup.WithContext(ctx)
 	again.SetLimit(auditConcurrency)
-	for _, ref := range q.drain() {
+	for _, ref := range a.q.drain() {
 		if gctx.Err() != nil {
 			break // the audit is stopping: ask no more
 		}
-		again.Go(func() error { return recheck(gctx, ref) })
+		again.Go(func() error { return a.second(gctx, ref) })
 	}
 	if err := again.Wait(); err != nil {
+		return nil, fmt.Errorf("objstore/collect: %w", err)
+	}
+	if err := a.confirm(ctx); err != nil {
 		return nil, fmt.Errorf("objstore/collect: %w", err)
 	}
 	// AN AUDIT WHOSE CONTEXT ENDED HAS NOT RUN TO ITS END, however its
@@ -828,7 +848,211 @@ func (c *Collector) audit(ctx context.Context, r *AuditReport) ([]MissingFile, e
 		return nil, fmt.Errorf("objstore/collect: %w", context.Cause(ctx))
 	}
 	r.Completed = complete
-	return shown, nil
+	return a.shown, nil
+}
+
+// auditor is one audit's questions: what they found, and what the store's
+// answers say of the store.
+type auditor struct {
+	store *objstore.Store
+
+	// mu guards everything below, written by up to [auditConcurrency]
+	// questions at once.
+	mu sync.Mutex
+	// r is the attempt's report, whose counts the questions keep.
+	r *AuditReport
+	// shown is the files shown, in [compareShown]'s order.
+	shown []MissingFile
+	// q is the references waiting for their second look ([suspects]).
+	q suspects
+	// failing is how many questions in a row the store has failed, with
+	// none answered between ([failedInARow]).
+	failing int
+	// unconfirmed is the references whose second look the store failed
+	// since it last answered a question: UNANSWERED once it answers one
+	// after them, which says it was answering. Fewer than [failedInARow],
+	// since that many failures in a row stop the audit.
+	unconfirmed []Reference
+	// settled is the last reference the store's answer finished with —
+	// never one still waiting for a look, so never one of unconfirmed —
+	// which [auditor.confirm] asks about again.
+	settled    Reference
+	hasSettled bool
+}
+
+// answer is what one question to the store found of one reference.
+type answer int
+
+const (
+	// held: the store holds the object as its row records it.
+	held answer = iota
+	// damaged: the store holds it wrong, or as no object it can read.
+	damaged
+	// absent: the store answered that it holds nothing under the name.
+	absent
+	// unanswered: the store failed to answer.
+	unanswered
+)
+
+// errStoreFailing is an audit the store stopped by failing rather than by
+// refusing particular objects: [failedInARow] questions in a row with none
+// answered between, or the questions at the audit's end and then one about an
+// object it had answered for.
+var errStoreFailing = errors.New("the object store is failing, rather than refusing particular objects")
+
+// look asks the store about ref once. A failure is an answer like any other —
+// [unanswered] — until it is the store's [failedInARow]th in a row, which is
+// the audit's error; so is the audit's context ending, which is never the
+// store's failure. Any other answer says the store is answering, which
+// confirms every second look it failed since the last one.
+func (a *auditor) look(ctx context.Context, ref Reference) (answer, error) {
+	info, err := a.store.Stat(ctx, ref.Object.Key)
+	var got answer
+	switch {
+	case errors.Is(err, objstore.ErrNotFound):
+		got = absent
+	case errors.Is(err, objstore.ErrCorrupt):
+		// HELD, AND NO OBJECT ANYBODY CAN READ: a definite answer, as
+		// damaged as a wrong digest.
+		got = damaged
+	case err != nil && ctx.Err() != nil:
+		return 0, err
+	case err != nil:
+		a.mu.Lock()
+		a.failing++
+		run := a.failing
+		a.mu.Unlock()
+		if run >= failedInARow {
+			return 0, fmt.Errorf("%w: it failed %d questions in a row, answering none between — "+
+				"the last, asking for %s: %w", errStoreFailing, run, ref.Object.Key, err)
+		}
+		return unanswered, nil
+	case info.Size != ref.Object.Size || (info.Digest != "" && info.Digest != ref.Object.Hash):
+		got = damaged
+	default:
+		got = held
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.failing = 0
+	for _, u := range a.unconfirmed {
+		a.foundLocked(u, FindingUnanswered)
+	}
+	a.unconfirmed = a.unconfirmed[:0]
+	return got, nil
+}
+
+// first is ref's first look. Only a definite answer — held, or damaged — is
+// taken as it stands; the rest wait for a second look, and one pushed out of
+// the queue by ref gets it here, in the slot this question already holds —
+// never in a slot of its own, which the walk may be waiting on.
+func (a *auditor) first(ctx context.Context, ref Reference) error {
+	got, err := a.look(ctx, ref)
+	switch {
+	case err != nil:
+		return err
+	case got == held:
+		a.settle(ref)
+		return nil
+	case got == damaged:
+		a.settle(ref)
+		a.found(ref, FindingDamaged)
+		return nil
+	}
+	a.mu.Lock()
+	due, over := a.q.push(ref)
+	a.mu.Unlock()
+	if !over {
+		return nil
+	}
+	return a.second(ctx, due)
+}
+
+// second is ref's second look, whose answer is the finding — but for a
+// failure, which is UNANSWERED only once the store answers after it
+// ([auditor.unconfirmed]).
+func (a *auditor) second(ctx context.Context, ref Reference) error {
+	got, err := a.look(ctx, ref)
+	switch {
+	case err != nil:
+		return err
+	case got == unanswered:
+		a.mu.Lock()
+		a.unconfirmed = append(a.unconfirmed, ref)
+		a.mu.Unlock()
+		return nil
+	case got == damaged:
+		a.found(ref, FindingDamaged)
+	case got == absent:
+		a.found(ref, FindingMissing)
+	}
+	a.settle(ref)
+	return nil
+}
+
+// settle records that the store's answer finished with ref.
+func (a *auditor) settle(ref Reference) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.settled, a.hasSettled = ref, true
+}
+
+// confirm settles the second looks the store failed after its last answer,
+// once every question has ended: it asks again about the last object the
+// store's answer finished with — never one of those waiting, whose own failure
+// would say nothing of the store — and an answer says the store was answering,
+// so those objects are UNANSWERED, while a failure, or a store that finished
+// none all audit, says it is failing, which is the audit's error rather than
+// a finding about each object.
+//
+// ONE QUESTION, ASKED ONLY WHEN SOMETHING WAITS ON IT: without it, the second
+// looks are the audit's last questions, and a store that went away just then
+// would have every one of them called unanswered for a day — while an
+// object the store refuses every time would, as the last second look, never
+// be confirmed at all.
+func (a *auditor) confirm(ctx context.Context) error {
+	a.mu.Lock()
+	waiting, probe, ok := len(a.unconfirmed), a.settled, a.hasSettled
+	a.mu.Unlock()
+	switch {
+	case waiting == 0:
+		return nil
+	case !ok:
+		return fmt.Errorf("%w: it failed the audit's last %d questions, and gave no answer "+
+			"that finished with any object", errStoreFailing, waiting)
+	}
+	if _, err := a.look(ctx, probe); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	still := len(a.unconfirmed)
+	a.mu.Unlock()
+	if still > 0 {
+		return fmt.Errorf("%w: it failed the audit's last %d questions, and then one about %s, "+
+			"which it had answered", errStoreFailing, waiting, probe.Object.Key)
+	}
+	return nil
+}
+
+// found counts what the audit found of ref, and shows ref among the files that
+// cannot be read if it is among the first [MissingShown] by name.
+func (a *auditor) found(ref Reference, f Finding) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.foundLocked(ref, f)
+}
+
+// foundLocked is [auditor.found] with mu held.
+func (a *auditor) foundLocked(ref Reference, f Finding) {
+	switch f {
+	case FindingMissing:
+		a.r.Missing++
+	case FindingDamaged:
+		a.r.Damaged++
+	case FindingUnanswered:
+		a.r.Unanswered++
+	}
+	a.shown = showFirst(a.shown, MissingFile{Object: ref.Object.Key, NamedBy: ref.NamedBy, Finding: f})
 }
 
 // compareShown is the order the files that cannot be read are shown in: by the
@@ -855,9 +1079,10 @@ func showFirst(shown []MissingFile, f MissingFile) []MissingFile {
 	return shown
 }
 
-// suspects is the references the store answered "not found" for, waiting for
-// their second look: a queue of at most limit — a limit below one holds one —
-// so the oldest is the one handed back when a push would pass it.
+// suspects is the references whose first look was not definite — the store
+// answered "not found", or failed to answer — waiting for their second look: a
+// queue of at most limit — a limit below one holds one — so the oldest is the
+// one handed back when a push would pass it.
 //
 // A RING ONCE FULL rather than a slice re-sliced from the front, so what it
 // holds is exactly the limit: re-slicing keeps the references it handed back

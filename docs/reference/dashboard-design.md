@@ -5955,13 +5955,13 @@ company's files are in — the fleet's own NATS bucket, or the S3 bucket it name
 collection and the daily audit) with when it ran and what it found: the
 objects a collection deleted because no file names them and the unfinished
 uploads it abandoned; the files an
-audit asked about and how many were missing or damaged. It reads
+audit asked about and how many were missing, damaged or unanswered. It reads
 the fleet's record rather than this node, so it says the same thing whichever
 node served the screen. **Files that cannot be read** are the one reading an
-operator opens it for: when the last audit to run to its end found any missing
-or damaged, a danger callout above the passes names the first of them — each
-file, whether it is missing or damaged, and its object — to restore from a
-backup or upload again; an audit that failed after it is said in its row and
+operator opens it for: when the last audit to run to its end found any missing,
+damaged or unanswered, a danger callout above the passes names the first of
+them — each file, which of the three was found of it, and its object — to
+restore from a backup or upload again; an audit that failed after it is said in its row and
 never clears the callout. A collection that stopped judging keeps what it
 deleted first in its row, and a sweep of unfinished uploads the store refused
 is a warning naming the permissions an S3 identity needs. A record the coordination store would not give up is said as that, not

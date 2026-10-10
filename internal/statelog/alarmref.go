@@ -90,9 +90,11 @@ var alarmMeaning = map[Kind]string{
 		"so every sizing decision under it is stale.",
 	KindObjectsMissing: "Some of the company's files cannot be read: the " +
 		"collector's last audit asked the object store for every file's bytes, " +
-		"and some were not there, or were there at the wrong size or under the " +
-		"wrong digest. Those files cannot be downloaded or read until they are " +
-		"restored.",
+		"and some were not there, or were there at the wrong size, under the " +
+		"wrong digest or as nothing the store can read, or the store failed to " +
+		"answer for them twice while it answered for the rest. Those files " +
+		"cannot be downloaded or read until they are restored, or the store " +
+		"serves them again.",
 }
 
 const alarmHeader = `# Alarms

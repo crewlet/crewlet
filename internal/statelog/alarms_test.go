@@ -154,10 +154,10 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 				CensusLog: "tracker@tracker.007"},
 			"on tracker@tracker.007 against the 1000",
 		},
-		"files the object store lost or damaged": {
+		"files the object store lost, damaged or will not answer for": {
 			statelog.KindObjectsMissing,
 			statelog.Reading{ObjectsMissing: 2},
-			"2 file(s) are missing from the object store or damaged in it",
+			"2 file(s) are missing from the object store, damaged in it, or not answered for by it",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

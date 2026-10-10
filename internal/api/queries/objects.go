@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/objstore/collect"
 )
 
 // The fleet view's object-store block: where the company's files are kept,
@@ -98,6 +99,7 @@ type ObjectAudit struct {
 	Referenced int             `json:"referenced"`
 	Missing    int             `json:"missing"`
 	Damaged    int             `json:"damaged"`
+	Unanswered int             `json:"unanswered"`
 	Error      string          `json:"error,omitempty"`
 	Found      *ObjectFindings `json:"found,omitempty"`
 }
@@ -109,14 +111,16 @@ type ObjectFindings struct {
 	Referenced   int                 `json:"referenced"`
 	Missing      int                 `json:"missing"`
 	Damaged      int                 `json:"damaged"`
+	Unanswered   int                 `json:"unanswered"`
 	MissingFiles []ObjectMissingFile `json:"missing_files,omitempty"`
 }
 
-// ObjectMissingFile is one file whose bytes the store cannot give back.
+// ObjectMissingFile is one file whose bytes the store cannot give back, and
+// what the audit found of it.
 type ObjectMissingFile struct {
-	Object  objstore.Key `json:"object"`
-	NamedBy string       `json:"named_by"`
-	Damaged bool         `json:"damaged,omitempty"`
+	Object  objstore.Key    `json:"object"`
+	NamedBy string          `json:"named_by"`
+	Finding collect.Finding `json:"finding"`
 }
 
 // RenderObjects is the one rendering of the collector's record.
@@ -133,14 +137,14 @@ func RenderObjects(r engine.CollectionReport) FleetObjects {
 	if a := r.Status.Audit; !a.At.IsZero() {
 		out.Audit = &ObjectAudit{
 			At: a.At, Completed: a.Completed, Referenced: a.Referenced,
-			Missing: a.Missing, Damaged: a.Damaged, Error: a.Error,
+			Missing: a.Missing, Damaged: a.Damaged, Unanswered: a.Unanswered, Error: a.Error,
 		}
 		if f := a.Found; f != nil {
 			found := &ObjectFindings{At: f.At, Completed: f.Completed, Referenced: f.Referenced,
-				Missing: f.Missing, Damaged: f.Damaged}
+				Missing: f.Missing, Damaged: f.Damaged, Unanswered: f.Unanswered}
 			for _, m := range f.MissingFiles {
 				found.MissingFiles = append(found.MissingFiles,
-					ObjectMissingFile{Object: m.Object, NamedBy: m.NamedBy, Damaged: m.Damaged})
+					ObjectMissingFile{Object: m.Object, NamedBy: m.NamedBy, Finding: m.Finding})
 			}
 			out.Audit.Found = found
 		}
