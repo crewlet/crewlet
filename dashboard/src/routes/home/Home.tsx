@@ -32,7 +32,7 @@
 import { useMemo } from "react";
 import { SegmentedControl } from "@crewlethq/ui";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { useWorkingNow } from "~/app/Shell.tsx";
+import { useWorkingNow } from "~/app/page.tsx";
 import { NewTaskButton } from "~/components/NewTaskButton.tsx";
 import { href, useParam } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";

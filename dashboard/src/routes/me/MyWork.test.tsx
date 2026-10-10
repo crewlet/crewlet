@@ -30,7 +30,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { MyWork } from "./MyWork.tsx";
 import { Router } from "~/app/router.tsx";
-import { usePageCoverage, useSectionCounts } from "~/app/Shell.tsx";
+import { usePageCoverage, useSectionCounts } from "~/app/page.tsx";
 import type { MeSection } from "~/app/routes.ts";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import type { QueryName, WorkSummary } from "~/protocol/index.ts";
@@ -47,7 +47,7 @@ import { withDerived } from "~/test/org.ts";
 //
 // AND ITS SECTION FIGURES, for the same reason: the tabs that draw them are
 // the page header's, so what the screen hands the frame is what it claims.
-vi.mock("~/app/Shell.tsx", () => ({
+vi.mock("~/app/page.tsx", () => ({
   usePageCoverage: vi.fn(),
   usePageMenu: vi.fn(),
   useSectionCounts: vi.fn(),

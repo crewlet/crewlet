@@ -45,7 +45,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { href, useRoute } from "~/app/router.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
-import { usePageCoverage, usePageLabels, usePageMenu } from "~/app/Shell.tsx";
+import { usePageCoverage, usePageLabels, usePageMenu } from "~/app/page.tsx";
 import { PageActions, PageLenses } from "~/app/frame/PageActions.tsx";
 import { EditProjectButton } from "~/components/writes.tsx";
 import { NewTaskButton } from "~/components/NewTaskButton.tsx";

@@ -55,7 +55,7 @@ import { Callout } from "@crewlethq/ui";
 import { CheckGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator, useParam } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { usePageCoverage } from "~/app/Shell.tsx";
+import { usePageCoverage } from "~/app/page.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
 import { useKeymap } from "~/app/keymap.ts";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";

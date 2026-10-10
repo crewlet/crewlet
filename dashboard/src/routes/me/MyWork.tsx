@@ -91,7 +91,7 @@ import { useMemo } from "react";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import type { MeSection } from "~/app/routes.ts";
 import { QueryState, SeatChip } from "~/components/common.tsx";
-import { usePageCoverage, usePageMenu, useSectionCounts } from "~/app/Shell.tsx";
+import { usePageCoverage, usePageMenu, useSectionCounts } from "~/app/page.tsx";
 import { ChecklistClaims, Coverage, RowList, type RowChrome } from "~/components/work.tsx";
 import { AskList, decisionsHref } from "~/components/DecisionRow.tsx";
 import { Callout, EmptyState, Select, Skeleton, Tag, type SelectOption } from "@crewlethq/ui";

@@ -53,7 +53,7 @@ import {
 } from "~/lib/seats.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
-import { usePageLabels } from "~/app/Shell.tsx";
+import { usePageLabels } from "~/app/page.tsx";
 import { PreviousRevisionNote } from "~/routes/org/builder/AfterSaveStrip.tsx";
 import { AgentsHeader, useAgentsCounts } from "./header.tsx";
 

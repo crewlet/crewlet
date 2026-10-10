@@ -32,7 +32,7 @@ import { useMemo, type ReactNode } from "react";
 import { Callout, Card, EmptyState, EmptyValue } from "@crewlethq/ui";
 import { BrainGlyph, CircleAlertGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
-import { usePageLabels } from "~/app/Shell.tsx";
+import { usePageLabels } from "~/app/page.tsx";
 import { seatKindKey } from "~/app/crumbs.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, NumberCell, SeatLabel } from "~/app/frame/cells.tsx";

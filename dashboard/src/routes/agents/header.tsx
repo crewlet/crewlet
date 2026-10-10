@@ -35,7 +35,7 @@ import { href, useNavigator } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { usePeekControls, usePeek } from "~/app/frame/DetailRail.tsx";
 import { useSearchTarget } from "~/app/searchTarget.ts";
-import { usePageMenu, useSectionCounts } from "~/app/Shell.tsx";
+import { usePageMenu, useSectionCounts } from "~/app/page.tsx";
 import { useSchedules } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { notAdminSentence, useManagedConfig } from "~/lib/useWriteAccess.ts";
