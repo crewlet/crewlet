@@ -7,7 +7,15 @@
  * in `ui/`, and they are built only from `ui/` components and tokens.
  */
 
-import { createContext, useContext, useId, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { cx } from "@crewlethq/ui";
 import type { HumanContactKey } from "~/protocol/index.ts";
 import { href } from "~/app/router.tsx";
@@ -20,7 +28,7 @@ import { CONTACT_IDENTITIES } from "./model/templates.ts";
 import type { PlacedProblem, ProblemLink } from "./model/problems.ts";
 import { strandedSentence, type StrandedSchedule } from "./preflight.ts";
 import { TOOL_NAMES, workingNote, type Tool } from "./nodeFacts.ts";
-import { Callout, Combobox, FormField, InlineCode } from "@crewlethq/ui";
+import { Callout, FormField, InlineCode, Input, SegmentedControl } from "@crewlethq/ui";
 
 /** How deep an [EditorSection] sits inside others; 0 for one directly in a drawer or dialog. */
 const SectionDepth = createContext(0);
@@ -232,20 +240,36 @@ export const UNIT_TYPES = [
 ] as const;
 
 /**
+ * The value the Custom chip stands for in the row. Never a unit type, so a
+ * type somebody types (even "custom") is never read as the chip itself.
+ */
+const CUSTOM_TYPE = "\u0000custom";
+
+/** The engine's name for the type a unit that names none is run as. */
+const DEFAULT_UNIT_TYPE = "team";
+
+const typeLabel = (type: string) => type.charAt(0).toUpperCase() + type.slice(1);
+
+/**
  * A unit's type: one of the engine's well-known names, or anything else.
  *
- * ONE CONTROL, WHICH IS WHAT THE VALUE IS. This used to be a select whose
- * "Custom type" option revealed a SECOND full-width labelled field under it,
- * so a custom type cost two stacked controls for one string, and the list
- * carried both "Team (the default)" and "Team", which read as two answers.
- * The console draws one row of pills where the Custom pill turns into a box
- * IN ITS OWN PLACE; the same idea here is a field that offers the nine names
- * and takes whatever is typed, because that is exactly what the engine
- * accepts.
+ * ONE ROW OF CHIPS, which is the console's own drawing of this field: a chip
+ * per name the engine knows, the chosen one filled, and a Custom chip that
+ * opens a box of the reader's own IN THE ROW, after it, rather than a second
+ * labelled field stacked under the first. The box was a combobox that offered
+ * the nine names behind a click and a prefix, so a reader had to know a type
+ * existed to be offered it; a row of chips says every answer at once.
  *
- * EMPTY IS THE ENGINE'S DEFAULT, `team` (`org.propagateDownward`), and the
- * placeholder and the help line say so rather than a row in the list
- * standing in for it.
+ * EMPTY IS THE ENGINE'S DEFAULT, `team` (`org.propagateDownward`), so a unit
+ * that names no type is drawn with Team chosen, which is what the engine runs
+ * it as: the chosen chip says it, and no help line under the row repeats it.
+ * Choosing Custom empties the value until something is typed, so what the
+ * row shows and what is saved never differ.
+ *
+ * CHOSEN ON PURPOSE, NOT IN PASSING: the arrows move along the row and Enter
+ * or Space chooses, because choosing Custom puts the reader in its box, and a
+ * row that chose as the arrows moved would pull them out of the row each time
+ * they passed it.
  */
 export function UnitTypeField({
   value,
@@ -258,48 +282,56 @@ export function UnitTypeField({
   error?: string;
   disabled?: boolean;
 }) {
-  const id = useId();
-  const [open, setOpen] = useState(false);
-  // WHAT IS OFFERED IS THE CALLER'S QUESTION, and here it is a prefix of what
-  // has been typed: somebody typing "te" is naming a type, not searching. An
-  // exact match offers the whole list again, so the field can be reopened to
-  // change an answer rather than offering the one already given.
   const typed = value.trim().toLowerCase();
-  const exact = (UNIT_TYPES as readonly string[]).includes(typed);
-  const options = UNIT_TYPES.filter((type) => typed === "" || exact || type.startsWith(typed)).map(
-    (type) => ({ value: type, label: type.charAt(0).toUpperCase() + type.slice(1) }),
-  );
+  const known = (UNIT_TYPES as readonly string[]).includes(typed);
+  const [customOpen, setCustomOpen] = useState(!known && typed !== "");
+  const custom = customOpen || (!known && typed !== "");
+  const [focusBox, setFocusBox] = useState(false);
+  const box = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!focusBox) return;
+    box.current?.focus();
+    setFocusBox(false);
+  }, [focusBox]);
+
   return (
-    <FormField
-      htmlFor={id}
-      label="Type"
-      helper="Informational: the engine runs every unit type the same way. Left empty it is team, the engine's own default."
-      error={error}
-    >
-      {(field) => (
-        <Combobox
-          id={field.id}
-          label="Unit types"
-          value={value}
-          placeholder="team"
-          disabled={disabled ?? false}
-          error={field.invalid}
-          aria-describedby={field.describedBy}
-          open={open && options.length > 0}
-          onOpenChange={setOpen}
-          options={options}
+    <FormField as="fieldset" label="Type" error={error}>
+      {() => (
+        <SegmentedControl
+          label="Unit type"
+          semantics="radio"
+          activate="manual"
+          activateHint={null}
+          layout="chips"
+          value={custom ? CUSTOM_TYPE : known ? typed : DEFAULT_UNIT_TYPE}
+          options={[
+            ...UNIT_TYPES.map((type) => ({ value: type, label: typeLabel(type), disabled })),
+            { value: CUSTOM_TYPE, label: "Custom", disabled },
+          ]}
           onValueChange={(next) => {
+            if (next === CUSTOM_TYPE) {
+              if (!custom) onChange("");
+              setCustomOpen(true);
+              setFocusBox(true);
+              return;
+            }
+            setCustomOpen(false);
             onChange(next);
-            setOpen(true);
           }}
-          // Focus AND a press: the list is what the field is for, so reaching
-          // the field by either route offers it.
-          onFocus={() => setOpen(true)}
-          onClick={() => setOpen(true)}
-          // Closed on the way out, and after the press that chose a name:
-          // blur fires before the list's own mousedown, so the choice is
-          // taken on mousedown rather than on click.
-          onBlur={() => setOpen(false)}
+          trailing={
+            custom ? (
+              <Input
+                ref={box}
+                inputSize="sm"
+                width="xs"
+                aria-label="Custom type"
+                placeholder="Custom type"
+                value={known ? "" : value}
+                disabled={disabled}
+                onChange={(event) => onChange(event.target.value)}
+              />
+            ) : null
+          }
         />
       )}
     </FormField>

@@ -77,7 +77,7 @@ test("a unit is added with its type at the company root; its names are checked a
   fireEvent.change(nameBox(), { target: { value: "Sales" } });
   expect(screen.getByRole("button", { name: "Use Sales 2" })).toBeDefined();
   fireEvent.change(nameBox(), { target: { value: "Legal" } });
-  pick(screen.getByLabelText("Type"), "Department");
+  fireEvent.click(screen.getByRole("radio", { name: "Department" }));
   fireEvent.click(screen.getByRole("button", { name: "Add unit" }));
   expect(view.state().log.ops[0]).toMatchObject({
     type: "addUnit",
