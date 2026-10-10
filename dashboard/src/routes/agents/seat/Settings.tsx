@@ -101,7 +101,8 @@ export function Settings({
   const edit = href(["agents", "edit"], { seat: seat.handle });
   // THE COMPANY'S CEILINGS, as written on the public chart: a seat with none
   // of its own in a window is still bound by the company's there.
-  const company = useOrg()?.token_budget;
+  const org = useOrg();
+  const company = org?.token_budget;
   const state = (children: ReactNode) => (
     <SettingsState
       error={config.error}
@@ -241,7 +242,11 @@ export function Settings({
               whether or not the document could be read. */}
           {agent?.budget?.windows?.length ? (
             <div className="prof-meters">
-              <WindowMeters windows={agent.budget.windows} whose={`${seat.name}'s`} />
+              <WindowMeters
+                windows={agent.budget.windows}
+                whose={`${seat.name}'s`}
+                zone={org?.timezone}
+              />
             </div>
           ) : null}
         </Card>

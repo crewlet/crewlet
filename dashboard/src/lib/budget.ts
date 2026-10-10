@@ -61,6 +61,31 @@ export function windowOf(
   return windows?.find((w) => w.period === period);
 }
 
+/**
+ * The label a window's span carries — `Sep 29`, `Week 40`, `September` — read
+ * off the engine's own label (`2026-09-29`, `2026-W40`, `2026-09`).
+ *
+ * THE LABEL IS ALREADY THE COMPANY'S CALENDAR, so it is drawn as that date,
+ * week or month and never re-derived from an instant on anybody's clock. A
+ * label that does not parse is drawn as it came, as [companyDateLabel] draws
+ * one.
+ */
+export function windowName(w: BudgetWindow): string {
+  if (w.period === "day") return companyDateLabel(w.window);
+  if (w.period === "week") {
+    const week = /^\d{4}-W(\d{2})$/.exec(w.window);
+    return week ? `Week ${Number(week[1])}` : w.window;
+  }
+  // Mid-month at UTC, formatted in UTC: no zone can move it into a neighbour.
+  // The month is checked rather than handed to `Date.UTC`, which rolls a 13th
+  // over into January.
+  const month = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(w.window);
+  if (!month) return w.window;
+  return new Intl.DateTimeFormat(undefined, { month: "long", timeZone: "UTC" }).format(
+    Date.UTC(Number(month[1]), Number(month[2]) - 1, 15),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // When a window turns over
 // ---------------------------------------------------------------------------

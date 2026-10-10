@@ -56,10 +56,16 @@ import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { CeilingEditor } from "~/components/budgetWrite.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
-import { PERIOD_ADJECTIVE, resetsWords, turnsOverWords, windowOf } from "~/lib/budget.ts";
+import {
+  PERIOD_ADJECTIVE,
+  resetsWords,
+  turnsOverWords,
+  windowName,
+  windowOf,
+} from "~/lib/budget.ts";
 import type { CeilingScope, Period } from "~/lib/ceilings.ts";
 import { useNow } from "~/lib/clock.ts";
-import { companyDateLabel, fmtCount, fmtExact, relTime } from "~/lib/format.ts";
+import { fmtCount, fmtExact, relTime } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
@@ -86,16 +92,6 @@ function stateWords(w: BudgetWindow): string {
     : w.state === "near"
       ? "nearly spent"
       : "within the ceiling";
-}
-
-/** The label a window's span carries: `Sep 29`, `Week 40`, `September`. */
-function windowName(w: BudgetWindow, zone: string): string {
-  if (w.period === "day") return companyDateLabel(w.window);
-  if (w.period === "week") return `Week ${w.window.slice(-2).replace(/^0/, "")}`;
-  const starts = Date.parse(w.starts_at);
-  return Number.isFinite(starts)
-    ? new Date(starts).toLocaleDateString(undefined, { month: "long", timeZone: zone || "UTC" })
-    : w.window;
 }
 
 /**
@@ -136,7 +132,7 @@ function CompanyWindow({
     <section className="budget-tile" aria-label={`The company ${HEADING[period].toLowerCase()}`}>
       <div className="budget-tile-head">
         <span className="budget-tile-title">{HEADING[period]}</span>
-        {w && <span className="t-caption muted">{windowName(w, zone)}</span>}
+        {w && <span className="t-caption muted">{windowName(w)}</span>}
       </div>
       {w ? (
         <>

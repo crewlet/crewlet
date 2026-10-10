@@ -551,6 +551,44 @@ describe("the pane", () => {
     expect(screen.getByText("Also posts to Slack #leadership")).toBeTruthy();
   });
 
+  // THE WINDOW AS EVERY OTHER SCREEN SAYS IT: by its span, turning over on the
+  // company clock. The pane printed the engine's label (`2026-W39`).
+  test("a seat stopped on its budget names the window in words", async () => {
+    location.hash = "#/inbox?row=seat%3Adevrel";
+    mount({
+      agents: [
+        {
+          id: "devrel",
+          role: "DevRel",
+          handle: "devrel",
+          activity: "stopped",
+          stopped_reason: "budget",
+          budget: {
+            windows: [
+              {
+                period: "week",
+                window: "2026-W39",
+                starts_at: "2026-09-21T00:00:00Z",
+                resets_at: "2026-09-28T00:00:00Z",
+                used: 1_200_000,
+                limit: 1_000_000,
+                state: "refusing",
+                refused_at: "2026-09-22T09:00:00Z",
+              },
+            ],
+          },
+        },
+      ],
+    });
+    await settle();
+    expect(
+      screen.getByText(
+        "1,200,000 of 1,000,000 tokens are spent this week, so the engine turns this seat's charges away until the week turns over on Sep 28.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/2026-W39/)).toBeNull();
+  });
+
   test("Done marks the one notice read and never sends the whole inbox", async () => {
     location.hash = "#/inbox?row=r-2";
     mount({ answers: { work_inbox: inboxOf([notice("r-1"), notice("r-2")]) } });
